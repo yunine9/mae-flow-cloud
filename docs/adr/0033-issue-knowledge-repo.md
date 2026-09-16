@@ -12,11 +12,11 @@
 **口径**:
 
 - 配置:配置中心新页签「知识仓」,仅管理员可见可写——配置中心"全员维护"哲学的第一条例外,理由:强制全局影响所有人的所有会话,是运营决策不是团队协作资产。单仓配置,存单值。
-- 装载:进 prep_repo 前宿主克隆(与 pull_repo 同一平台函数、同一宿主凭据通道,触发者不同),落 repo/<仓名>/ 平铺,不另立目录(仓平等布局不变);会话台账单独记 kind=knowledge,四道闸按这笔账识别它。
+- 装载:进 prep_repo 前宿主克隆(与 pull_repo 同一平台函数、同一宿主凭据通道,触发者不同),落 repo/<仓名>/ 平铺,不另立目录(仓平等布局不变)。装载事实住会话状态单独的 knowledge_repo 账,与关联仓台账(repo_urls)**分账而非加 kind 标记**:repo_urls 是裸地址数组,per-repo 加 kind 要造结构,而"不在关联仓台账"这一个缺席事实已让四道闸(create_mr/push_branch 的 locateRepo、工作区 diff 的 materialRepos、修复分支切换、pull_repo 登记合并)天然拒绝它——不需要正向标记,契约钉住全部口径同源 issueRepoWorkspaces,分叉即测试红。
 - 只读边界:不进关联仓清单、不进 MR 台账(create_mr 按台账拒绝)、不切修复分支(保持自己默认分支)、工作区变更视图(聚合与逐仓切片同口径,materials.ts 的 materialRepos 通道)排除。
-- 提示词:三处共用 leading word「知识仓」——开场 repoLines 指针行(带"只读参考"标注)、analyze 与 fix 的 briefs 提醒(缺领域事实先翻目录;检索优先级:业务模块名 > 缩写 > 现象关键词;引用写文件路径进证据链)。文案落 assets/issue-prompts/ 与 briefs.md,仓名由代码按会话事实拼;拉取失败的会话三处整行不注入——不给 AI 指一个不存在的路径。
+- 提示词:三处共用 leading word「知识仓」——开场 repoLines 指针行(带"只读参考"标注)、**进 analyze 与进 fix 的交接提醒**(随 fixedAdvanceNotice 注入,文案住 notices 资产的 advance.knowledge_remind 锚点;落交接词而非阶段简报 briefs:拍板语义是"进入阶段时提醒一次",交接词正是进入时刻,briefs 每回合重复注入是上下文成本换重复)(检索优先级:业务模块名 > 缩写 > 现象关键词;引用写文件路径进证据链)。文案落 assets/issue-prompts/,仓名由代码按会话事实拼({{name}} 插值);拉取失败的会话三处整行不注入——不给 AI 指一个不存在的路径。
 - 范围:仅问题流(有单五阶段与无单三节点);需求流不装载。「业务知识」词条两源地图扩为三源(资产库、仓内 docs、知识仓)。
 
-**落地**:待实现,四块——①配置中心页签(管理员可见性 + 存取);②预拉与只读边界(开工前置克隆、kind=knowledge 记账、create_mr/修复分支/变更视图三处排除、fail-open 事件);③提示词接线(repoLines 指针行 + 两处 briefs + 失败不注入);④测试(预拉时序、四道闸、失败跳过、文案注入条件)。
+**落地**(2026-09-16,commit 9445f52):四块随本 ADR 同 commit 落地——①配置(knowledgeRepoConfig 纯模块 + /knowledge-repo 路由 admin 闸 + 配置中心「知识仓」页签仅管理员);②预拉与只读边界(pump 登记首轮开场词组装前 ensureKnowledgeRepo、state.knowledge_repo 分账、交付链缺席闸 + 口径契约钉、fail-open 转移账);③提示词(开场指针行 + 交接提醒,skipped 整行不注入);④测试(tests/knowledgeRepo.test.ts,配置/预拉/只读边界/路由 403/契约钉)。
 
 曾考虑:(a) Agent 经 pull_repo 自拉——漏拉无兜底、且 pull_repo 入场即关联仓(可改可交付),语义错位,否;(b) 独立只读目录(.mae-flow-work/knowledge-repo/,仿 host-skills)——拍板要与其他仓平行同场,仓平等布局优先,否;(c) 文件系统级只读(只读挂载/权限位)——容器与预热编译挂载链复杂化,而误改本无出口,否;(d) fail-closed 举卡——知识缺席不是只有人做得到的事,定位可无知识照走,否;(e) 多仓列表——单仓够用,列表是猜测性扩容,真要多仓再加一项配置即可,否。

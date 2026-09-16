@@ -255,12 +255,18 @@ function repoLines(state: IssueSessionState): string {
   return `- 代码仓(平铺在 repo/ 下,使用工作区相对路径):\n${lines.join("\n")}`;
 }
 
-/** 知识仓指针行(#286,ADR-0033):只在装载成功(ready)在场——skipped
+/** 知识仓装载成功的会话判定:指针行与交接提醒共用的唯一门(#286)——
+ * skipped 一律不注入,不给 AI 指一个不存在的路径。 */
+function knowledgeReady(state: IssueSessionState): boolean {
+  return state.knowledge_repo?.status === "ready";
+}
+
+/** 知识仓指针行(#286,ADR-0033):只在装载成功在场——skipped
  * 不注入,不给 AI 指一个不存在的路径。只读语义由交付链切割保证(不在
  * 关联仓台账),这里声明给 AI 是行为引导,不是安全边界。 */
 function knowledgeRepoLine(state: IssueSessionState): string {
-  const knowledge = state.knowledge_repo;
-  if (!knowledge || knowledge.status !== "ready") return "";
+  if (!knowledgeReady(state)) return "";
+  const knowledge = state.knowledge_repo!;
   return `- 知识仓: repo/${knowledge.name}/(只读参考——团队领域知识统一治理仓,`
     + "缺领域事实先翻它的目录;不可修改、不可交付)";
 }
@@ -369,7 +375,7 @@ export function fixedAdvanceNotice(
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
   const knowledge = state.knowledge_repo;
-  const remindKnowledge = knowledge?.status === "ready"
+  const remindKnowledge = knowledge && knowledgeReady(state)
     && (current === "analyze" || current === "fix")
     ? [promptCopy("notices", "advance.knowledge_remind",
       { name: knowledge.name })]

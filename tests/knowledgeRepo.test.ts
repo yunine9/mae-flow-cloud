@@ -346,6 +346,12 @@ test("契约钉:交付与 diff 口径必须同源于 issueRepoWorkspaces", () =>
     resolve("src/issueFlow/state.ts"), "utf-8");
   assert.match(stateSource, /knowledge_repo\?:/,
     "知识仓装载账住在会话状态上,与关联仓台账分账");
+  const serviceSource = readFileSync(
+    resolve("src/issueFlow/service.ts"), "utf-8");
+  assert.match(serviceSource,
+    /await this\.ensureKnowledgeRepo\(live\);\s*\n\s*\/\/ 2026-08-28 拍板/,
+    "开工前置时序钉:pump 登记首轮 body 里、开场词组装之前调用——"
+      + "「平台拉完才交给 Agent」是 ADR-0033 的拍板语义,调用点被删即红");
 });
 
 // ---- ③ 提示词接线:开场指针行、交接提醒、失败不注入 ----
@@ -446,4 +452,70 @@ test("契约钉:知识仓提示词文案住资产,锚点与取用处同commit", 
   const prompt = readFileSync(resolve("src/issueFlow/prompt.ts"), "utf-8");
   assert.match(prompt, /advance\.knowledge_remind/,
     "取用处锚点与资产锚点同名");
+});
+
+// ---- 路由权限(真服务直调,先例 auth.test.ts 的 createTaskServer 形态) ----
+
+import { createServer } from "node:http";
+import { createTaskServer } from "../src/server.ts";
+import { TaskService } from "../src/taskService.ts";
+import { LocalAuth } from "../src/auth.ts";
+import type { AddressInfo } from "node:net";
+
+test("路由:知识仓配置仅管理员——developer 403,admin 读写清三态", async () => {
+  const dir = mfcTemp("mfc-knowledge-repo-route-");
+  const authFile = join(dir, "auth.json");
+  const auth = new LocalAuth(authFile);
+  auth.bootstrapAdmin("admin", "admin-password-1");
+  auth.createUser("dev", "dev-password-1", "developer");
+  const service = new TaskService({
+    dataDir: join(dir, "tasks"), provider: "test", model: "test",
+    modelsJson: {}, maxConcurrent: 0,
+  });
+  const server = createTaskServer(service, { auth });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  const base = `http://127.0.0.1:${port}`;
+  async function login(username: string, password: string): Promise<string> {
+    const response = await fetch(`${base}/auth/login`, {
+      method: "POST", body: JSON.stringify({ username, password }),
+    });
+    assert.equal(response.status, 200);
+    return response.headers.get("set-cookie")!.split(";")[0];
+  }
+  const knowledgeUrl = "https://codehub.example.com/team/domain-knowledge.git";
+  try {
+    const devCookie = await login("dev", "dev-password-1");
+    const denied = await fetch(`${base}/knowledge-repo`, {
+      method: "PUT", headers: { cookie: devCookie,
+        "content-type": "application/json" },
+      body: JSON.stringify({ url: knowledgeUrl }),
+    });
+    assert.equal(denied.status, 403, "developer 写:403");
+    assert.equal((await fetch(`${base}/knowledge-repo`,
+      { headers: { cookie: devCookie } })).status, 403,
+      "developer 读:同样 403(页签仅管理员,API 兜同闸)");
+
+    const adminCookie = await login("admin", "admin-password-1");
+    assert.equal((await fetch(`${base}/knowledge-repo`,
+      { headers: { cookie: adminCookie } })).status, 200, "admin 读:200");
+    const saved = await fetch(`${base}/knowledge-repo`, {
+      method: "PUT", headers: { cookie: adminCookie,
+        "content-type": "application/json" },
+      body: JSON.stringify({ url: knowledgeUrl }),
+    });
+    assert.equal(saved.status, 200);
+    const savedBody = await saved.json() as { config: { url: string } };
+    assert.deepEqual(savedBody.config, { url: knowledgeUrl });
+    const removed = await fetch(`${base}/knowledge-repo`, {
+      method: "DELETE", headers: { cookie: adminCookie },
+    });
+    assert.deepEqual(await removed.json() as { ok: true }, { ok: true });
+    const cleared = await (await fetch(`${base}/knowledge-repo`,
+      { headers: { cookie: adminCookie } })).json() as { config: unknown };
+    assert.equal(cleared.config, null, "清除后读回 null(缺席语义)");
+  } finally {
+    server.close();
+    await service.shutdown().catch(() => undefined);
+  }
 });

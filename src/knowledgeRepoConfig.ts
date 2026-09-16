@@ -33,12 +33,17 @@ export function readKnowledgeRepoConfig(
   return { url: (data as { url: string }).url };
 }
 
+/** scp/ssh 形态(git@host:path):validateRepoUrl 会把它误当本地路径
+ * resolve 放行——运行期有克隆失败回执兜底,配置期存进必败地址只会在
+ * 每个会话撒失败事件,保存口单独打回这一种已知必败形态;除此之外与
+ * 拉仓同一把尺,不造第二真相。 */
+function isScpForm(input: string): boolean {
+  return input.includes("@") && !/:\//.test(input);
+}
+
 /** 覆盖式单值保存;打回时不留半截配置(先验证后写盘)。
  * 校验比拉仓运行期严一档(先例:saveProductVersion 配置期跑
- * git check-ref-format):validateRepoUrl 会把 scp 形态(git@host:path)
- * 当本地路径 resolve 放行——运行期有克隆失败回执兜底,配置期存进一个
- * 必败地址只会在每个会话撒失败事件,所以在保存口早打回;除此之外与
- * 拉仓同一把尺,不造第二真相。 */
+ * git check-ref-format)。 */
 export function saveKnowledgeRepoConfig(
   dataDir: string,
   rawUrl: string,
@@ -52,7 +57,7 @@ export function saveKnowledgeRepoConfig(
     throw new KnowledgeRepoConfigError(
       `知识仓地址无效:${reason}(与问题拉仓同一把尺,只收 HTTPS 或本地路径)`);
   }
-  if (url !== input.trim() && input.includes("@") && !/:\//.test(input)) {
+  if (url !== input.trim() && isScpForm(input)) {
     throw new KnowledgeRepoConfigError(
       "知识仓地址无效:不支持 ssh/scp 形态(git@host:path),"
         + "请改用 HTTPS 地址");
