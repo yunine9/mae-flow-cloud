@@ -13625,6 +13625,28 @@ export class TaskService {
       acceptPipeline: (sha, run) => this.acceptPipelineRun(task, sha, run, actionEpoch, !this.pipelineCanTakeOver(task)),
       syncFeedback: () => this.syncFeedbackStoreFromKernel(task),
       deferAnnotation: (id, revision, actor, reason) => { this.verifyAnnotation(task.summary.id, id, actor, false, { revision, outcome: "deferred", reason }); },
+      syncBranch: async (branch, target) => {
+        if (!this.current(task, actionEpoch)) throw new TaskControlError("任务执行权已变化");
+        const cwd = task.cwd!;
+        const currentBranch = String(runSafeWorktreeGit(cwd, ["branch", "--show-current"]).stdout).trim();
+        if (currentBranch !== branch || branch === target) throw new TaskControlError("当前分支与任务绑定不符");
+        const unresolved = String(runSafeWorktreeGit(cwd, ["diff", "--name-only", "--diff-filter=U"]).stdout).trim();
+        if (unresolved) return `当前已有冲突，请先解决并 git add、git commit，再调用 sync_branch：\n${unresolved}\n保留双方必要改动，不确定业务取舍时询问责任人，不要直接选一边。`;
+        const dirty = String(runSafeWorktreeGit(cwd, ["status", "--porcelain", "--untracked-files=no"]).stdout).trim();
+        if (dirty) throw new TaskControlError("请先提交当前修改再同步；宿主不会重置或暂存覆盖你的工作");
+        let result = "";
+        for (const ref of [branch, target]) {
+          let prepared = false;
+          const sha = String(runSafeWorktreeGit(cwd, ["rev-parse", "HEAD"]).stdout).trim();
+          await this.dispatchConflictRepair(task, sha, undefined, actionEpoch, {
+            target: ref, allowMissing: ref === branch,
+            ready: (message) => { prepared = true; result = message; },
+          });
+          if (!prepared) throw new TaskControlError(task.summary.detail || "分支同步未完成");
+          if (String(runSafeWorktreeGit(cwd, ["diff", "--name-only", "--diff-filter=U"]).stdout).trim()) return result;
+        }
+        return `${result}\n已同步远端任务分支与目标分支。继续原目标；执行受影响的编译与 UT（C++ 按项目约定执行 UT 编译），确认双方行为后再请求 push，更新原 MR。不要把旧 SHA 的验证结果当成本次验证。`;
+      },
       cloneReference: async url => {
         const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
         try { return await this.cloneRepo(join(task.cwd!, ".mae-flow-work", "reference-repos"), sandbox,
@@ -18739,14 +18761,16 @@ export class TaskService {
     sha: string,
     max: number | undefined,
     epoch: number,
+    sync?: { target: string; allowMissing?: boolean; ready(message: string): void },
   ): Promise<boolean> {
     if (!this.current(task, epoch)) return true;
-    const delivery = task.summary.delivery!;
-    const target = delivery.target_branch;
+    const delivery = task.summary.delivery ?? (task.summary.delivery = {});
+    const target = sync?.target ?? delivery.target_branch;
     if (!task.cwd || !target) return true;
-    const loop = delivery.loop
+    const loop: NonNullable<NonNullable<TaskSummary["delivery"]>["loop"]> = sync
+      ? { round: 0, max, state: "repairing" } : delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (loop.kind === "conflict" && loop.last_sha === sha) {
+    if (!sync && loop.kind === "conflict" && loop.last_sha === sha) {
       loop.state = "halted";
       const diagnosis = (task.lastReply ?? "").trim();
       if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
@@ -18823,6 +18847,11 @@ export class TaskService {
         this.persist(task);
         return true;
       }
+      if (sync?.allowMissing) {
+        const remote = await git("ls-remote", "--exit-code", "--heads", remoteUrl, `refs/heads/${target}`);
+        if (remote.status === 2) { sync.ready("任务分支尚未推送，继续同步目标分支"); return true; }
+        if (remote.status !== 0) throw new TaskControlError("无法查询远端任务分支，请检查网络和凭据后重试");
+      }
       const fetched = await git(
         "fetch", "--no-tags", "--no-recurse-submodules", remoteUrl,
         `+refs/heads/${target}:refs/remotes/origin/${target}`);
@@ -18832,12 +18861,14 @@ export class TaskService {
         this.persist(task);
         return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
       }
+      if (!this.current(task, epoch)) return true;
       const beforeMerge = String(
         (await git("rev-parse", "HEAD")).stdout || "").trim();
       const merged = await git("merge", "--no-edit", `origin/${target}`);
       if (merged.status === 0) {
         const afterMerge = String(
           (await git("rev-parse", "HEAD")).stdout || "").trim();
+        if (sync) { sync.ready(`已同步 origin/${target}；未自动推送。`); return true; }
         if (beforeMerge && afterMerge === beforeMerge) {
           // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
           // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
@@ -18897,6 +18928,13 @@ export class TaskService {
         this.persist(task);
         return true;
       }
+      const repairMessage = [
+        `宿主已准备与 origin/${target} 的真实合并冲突：`, ...conflicted,
+        "读取冲突双方实现、提交历史和调用方，保留双方必要改动；普通代码冲突自行解决，不要无脑选 ours/theirs。业务意图矛盾且证据不足时才向责任人说明取舍。",
+        "逐个修改冲突文件，git add 后 git commit 完成合并；不要 rebase、force push 或丢弃无关修改。",
+        "解决后再次调用 task_control sync_branch 完成剩余同步，再执行受影响的编译、UT 和集成验证；失败继续修复，不复用旧 SHA 的成功。最后用 task_control push 更新原 MR，不另建 MR。",
+      ].join("\n");
+      if (sync) { sync.ready(repairMessage); return true; }
       try {
         this.openFeedbackBatch(task, "conflict", conflicted.map((file) => ({
           id: `conflict:${sha}:${target}:${file}`,
@@ -18919,19 +18957,7 @@ export class TaskService {
       loop.round = 0; // 冲突触发同样清零 CI 重试
       loop.last_sha = sha;
       loop.state = "repairing";
-      this.enqueueRepair(task,
-        [
-          `当前目标是解决 MR 与目标分支 ${target} 的冲突；较新的责任人要求可调整目标:`,
-          `- 宿主已在安全 Git 沙箱中准备 origin/${target} 的真实冲突现场,`,
-          `  冲突标记(<<<<<<< ======= >>>>>>>)位于:`,
-          ...conflicted.map((file) => `  ${file}`),
-          `- 逐个文件解决:保留双方必要改动,把标记删干净;拿不准语义时`
-          + `读两边的提交历史(git log)再定,不许无脑选一边。`,
-          `- 解完 git add 全部冲突文件,git commit 完成合并提交`
-          + `(用默认合并信息即可)。不要读取或索要个人 Git 令牌；可用`
-          + ` task_control push 请求宿主在释放会话后推送。`,
-          `- 不要 rebase、不要 force push、不要动无关文件。`,
-        ].join("\n"),
+      this.enqueueRepair(task, repairMessage,
         `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
       return true;
     } finally {

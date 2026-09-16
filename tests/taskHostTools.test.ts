@@ -745,3 +745,59 @@ test("推送成功恢复清除旧调整使命，保留独立新需求与失败�
   assert.match(hostResumeMission(stale, "成功", "责任人新目标", completed), /责任人新目标/);
   assert.doesNotMatch(hostResumeMission(stale, "成功", "责任人新目标", completed), /用户要求调整推送/);
 });
+
+test("主动同步排队后先释放 Agent，只回传结果而不推送", async t => {
+  const s = scene(t);
+  s.host.syncBranch = async (branch, target) => {
+    assert.deepEqual(s.facts, ["released"]);
+    assert.equal(branch, "work"); assert.equal(target, "main");
+    return "已同步，继续编译 UT";
+  };
+  await queueTaskHostOperation(s.host, "sync-one", { action: "sync_branch", reason: "接入最新公共接口" });
+  await finishTaskHostOperation(s.host);
+  const op = new TaskHostLedger(s.host.summary).read().operations[0];
+  assert.equal(op.state, "succeeded");
+  assert.deepEqual(s.facts, ["released"]);
+  assert.equal(s.resumed(), 1);
+});
+
+test("主动同步真实 Git：无 MR 时合并目标、保留冲突、解决后续同步，不自动推送", async t => {
+  const s = scene(t);
+  s.git("push", s.remote, "main", "work");
+  s.git("checkout", "main");
+  writeFileSync(join(s.host.cwd!, "main.txt"), "upstream\n");
+  s.git("add", "main.txt"); s.git("commit", "-qm", "target update"); s.git("push", s.remote, "main");
+  s.git("checkout", "work");
+  const task = { cwd: s.host.cwd, summary: s.host.summary, controlEpoch: 0 };
+  const runtime = (s.service as any).taskHostRuntime(task) as TaskHostRuntime;
+  const message = await runtime.syncBranch!("work", "main");
+  assert.match(message, /真实合并冲突/);
+  assert.match(readFileSync(join(s.host.cwd!, "main.txt"), "utf8"), /<<<<<<</);
+  assert.ok(existsSync(join(s.host.cwd!, ".git", "MERGE_HEAD")));
+  assert.equal(s.host.summary.delivery?.loop, undefined, "主动同步不冒充 MR 修复循环");
+  assert.match(await runtime.syncBranch!("work", "main"), /当前已有冲突/);
+  writeFileSync(join(s.host.cwd!, "main.txt"), "fixed B\nupstream\n");
+  s.git("add", "main.txt"); s.git("commit", "--no-edit");
+  assert.match(await runtime.syncBranch!("work", "main"), /已同步远端任务分支与目标分支/);
+  const remoteHead = s.git("ls-remote", s.remote, "refs/heads/work").split(/\s/)[0];
+  assert.notEqual(remoteHead, s.git("rev-parse", "HEAD"), "同步不能自动推送");
+  writeFileSync(join(s.host.cwd!, "main.txt"), "unfinished\n");
+  await assert.rejects(runtime.syncBranch!("work", "main"), /先提交当前修改/);
+  assert.equal(readFileSync(join(s.host.cwd!, "main.txt"), "utf8"), "unfinished\n");
+});
+
+test("主动同步首次未推分支可以继续；远端任务分支冲突同样交给 Agent", async t => {
+  const s = scene(t);
+  s.git("push", s.remote, "main");
+  const task = { cwd: s.host.cwd, summary: s.host.summary, controlEpoch: 0 };
+  const runtime = (s.service as any).taskHostRuntime(task) as TaskHostRuntime;
+  assert.match(await runtime.syncBranch!("work", "main"), /已同步远端任务分支与目标分支/);
+  const localHead = s.git("rev-parse", "HEAD");
+  s.git("checkout", "-b", "other", "main");
+  writeFileSync(join(s.host.cwd!, "main.txt"), "remote colleague\n");
+  s.git("add", "main.txt"); s.git("commit", "-qm", "colleague");
+  s.git("push", s.remote, "HEAD:refs/heads/work"); s.git("checkout", "work");
+  assert.match(await runtime.syncBranch!("work", "main"), /origin\/work.*真实合并冲突/);
+  assert.equal(s.git("rev-parse", "HEAD"), localHead);
+  assert.match(readFileSync(join(s.host.cwd!, "main.txt"), "utf8"), /remote colleague/);
+});
