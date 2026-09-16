@@ -31,14 +31,17 @@ export interface MrDiscussionsCredential {
 
 /** 检视回复出站信箱的一条投递(问题域简版,票 03)。两条不变量:
  * Idempotency-Key=id 稳定防重放;expected_sha 绑定起草时的推送收据,
- * SHA 漂移绝不投递——不能借另一版代码说"已修"。 */
+ * SHA 漂移绝不投递——不能借另一版代码说"已修"。缺席 expected_sha
+ * =不主张代码已改(责任人答复,ADR-0032),投递不做版本核对。 */
 export interface MrReviewReplyOutboxItem {
   id: string;
   repo: string;
   discussion_id: string;
   body: string;
   resolve: boolean;
-  expected_sha: string;
+  expected_sha?: string;
+  /** 装箱人;缺席=Agent 草稿,责任人在场时记归属账号。 */
+  author?: string;
   status: "pending" | "delivered" | "failed";
   attempts: number;
   last_error?: string;

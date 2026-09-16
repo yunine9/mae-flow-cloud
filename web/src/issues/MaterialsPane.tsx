@@ -51,6 +51,10 @@ import { Button } from "@/components/ui/button";
 import { cn } from "cn";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
+import { splitDiffByRepo } from "./perRepo";
+
+/** 仓无改动时的空态口径(分段视图与聚焦视图同句,单一来源)。 */
+const EMPTY_REPO_DIFF_NOTE = "该仓当前没有可展示的改动。";
 
 /** 分析报告的文件名(与服务端 documents.ts 的常量镜像:前端不拼路径,
  * 只认这一份报告)。 */
@@ -656,17 +660,31 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
               onClick={() => setDiffRepo(name)}>{name}</button>
           ))}
         </div>}
-        <div className="ws-doc">
-          {activeDiff
-            ? <GitDiff text={activeDiff} hideKey={detail.id} embeddedBrowser />
-            : <div className="utility-note">
-                {diffRepo
-                  ? (repoDiff === undefined
-                    ? "正在读取该仓变更…"
-                    : "该仓当前没有可展示的改动。")
-                  : "工作区当前没有改动。"}
-              </div>}
-        </div>
+        {!diffRepo && diffRepos.length > 1
+          // 聚合视图按仓分段(ADR-0032 口径的多仓呈现):用服务端自己
+          // 的分段标记切片,仓头落段,标记行不进 diff 正文;单仓与药丸
+          // 聚焦视图不分段,保持原样。
+          ? splitDiffByRepo(activeDiff).map(({ name, diff }, index) => (
+            <section key={name || `repo-${index}`} className="mb-3 last:mb-0">
+              <h3 className="m-0 mb-1.5 text-[13px] font-semibold text-muted-foreground">{name}</h3>
+              <div className="ws-doc">
+                {diff
+                  ? <GitDiff text={diff} hideKey={detail.id} embeddedBrowser />
+                  : <div className="utility-note">{EMPTY_REPO_DIFF_NOTE}</div>}
+              </div>
+            </section>
+          ))
+          : <div className="ws-doc">
+              {activeDiff
+                ? <GitDiff text={activeDiff} hideKey={detail.id} embeddedBrowser />
+                : <div className="utility-note">
+                    {diffRepo
+                      ? (repoDiff === undefined
+                        ? "正在读取该仓变更…"
+                        : EMPTY_REPO_DIFF_NOTE)
+                      : "工作区当前没有改动。"}
+                  </div>}
+            </div>}
       </>}
     {view === "dts" && <div className="ws-doc">
       {dtsDetail ? <>

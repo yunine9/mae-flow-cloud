@@ -1354,7 +1354,7 @@ export function App() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
-                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
+                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
                     登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
                 <IssueNavGroup view="issues" current={view} admin
@@ -1395,7 +1395,7 @@ export function App() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
-                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队问题" badge={issueWaitingCount} />
+                <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产

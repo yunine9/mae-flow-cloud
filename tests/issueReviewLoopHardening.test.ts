@@ -253,3 +253,74 @@ test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常投递
     await scene.stop();
   }
 });
+
+test("责任人答复直达 CodeHub:入信箱不绑版本,投递后转 addressed 归因责任人", async () => {
+  const scene = await reviewFixture({
+    seed: { id: "O1", body: "建议补充单元测试覆盖超时分支" },
+  });
+  try {
+    const store = reviewStore(scene.issueDir);
+    await until(() => store.list().some(item => item.external_review),
+      "外部意见同步为批注");
+    const note = store.list().find(item => item.external_review)!;
+    // 当前推送收据存在:答复不绑它(不主张代码已改),重推也不作废。
+    assert.equal(scene.service.get(scene.id).pushes!.length > 0, true);
+    scene.service.updateExternalReview(scene.id, note.id,
+      { reply: "这条按设计如此,已补充说明文档" });
+    const o1 = scene.platform.discussions.find((item) => item.id === "O1")!;
+    await until(() => JSON.stringify(o1.replies).includes("按设计如此"),
+      "责任人答复发布到平台讨论");
+    await until(() =>
+      (scene.recordOf("O1")?.status ?? "") === "addressed",
+    "投递成功转 addressed");
+    assert.match(scene.recordOf("O1")!.resolution ?? "", /责任人 dev 已回复/);
+    assert.doesNotMatch(scene.recordOf("O1")!.resolution ?? "", /Agent 已回复/);
+    const outbox = JSON.parse(
+      readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf-8"));
+    const item = outbox.items.find((entry: any) =>
+      entry.discussion_id === "O1");
+    assert.equal(item.author, "dev");
+    assert.equal(item.expected_sha ?? "", "", "答复不绑推送收据");
+  } finally {
+    await scene.stop();
+  }
+});
+
+test("全部合入后停止追踪新意见,在途回复照常投递", async () => {
+  const scene = await reviewFixture({
+    seed: { id: "M1", body: "建议增加重试" },
+  });
+  try {
+    const store = reviewStore(scene.issueDir);
+    await until(() => store.list().some(item => item.external_review),
+      "首条同步");
+    // 在途回复:直写信箱一条绑当前收据的 pending(与 AI 装箱同构)。
+    const currentSha = scene.service.get(scene.id).pushes!.at(-1)!.sha;
+    writeFileSync(join(scene.issueDir, "mr-review-outbox.json"),
+      JSON.stringify({ items: [{
+        id: "mrr-m1", repo: scene.origin, discussion_id: "M1",
+        body: "已增加重试", resolve: false, expected_sha: currentSha,
+        status: "pending", attempts: 0,
+        created_at: new Date().toISOString(),
+      }] }));
+    scene.platform.settleMr(
+      scene.service.get(scene.id).mrs![0]!.branch, "merged");
+    // fixture 按住流水线 running,mr_green 不收口,合入监看未点火——
+    // 用归档核对同款的现扫通道完成首次观测,merged_at 才进账。
+    assert.equal((await scene.service.mergeStatus(scene.id)).all_merged,
+      true, "合入事实已观测");
+    const m1 = scene.platform.discussions.find((item) => item.id === "M1")!;
+    await until(() => m1.replies.length > 0, "合入后在途回复仍投递");
+    // 合入后到达的意见不再追踪(账保留,监看不再拉新)。
+    scene.platform.seedDiscussion({
+      id: "M2", body: "合入后的新报告", file: "b.cpp", line: 2,
+      severity: "major", author: "检视人老王",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.equal(store.list().filter(item =>
+      item.external_review?.discussion_id === "M2").length, 0,
+      "合入后新意见不追踪");
+  } finally {
+    await scene.stop();
+  }
+});
