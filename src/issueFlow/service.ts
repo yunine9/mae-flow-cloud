@@ -1,4 +1,5 @@
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
+import { postMrDiscussionReply } from "../mrDiscussionReply.ts";
 import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
@@ -4139,7 +4140,17 @@ export class IssueFlowService {
     const note = store.list().find(item => item.id === reviewId);
     if (!note?.external_review) throw new IssueControlError("MR 批注不存在");
     if (input.context !== undefined) return store.saveAgentContext(reviewId, live.state.account, input.context);
-    if (input.reply !== undefined) return store.replyAsOwner(reviewId, live.state.account, input.reply, true);
+    if (input.reply !== undefined) {
+      const updated = store.replyAsOwner(reviewId, live.state.account, input.reply, true);
+      this.enqueueOwnerMrReply(live, note.external_review.discussion_id, input.reply);
+      // 立即投一拍:首发不依赖监看环是否在场(监看只在 mr_green+有 MR
+      // 时活着);投递失败留在信箱,监看在场时下一拍自动重试。
+      void this.flushMrReviewReplies(live)
+        .catch((error) =>
+          this.log(`[issue-flow] ${live.id} 责任人答复即时投递失败(信箱留痕重试): `
+            + String(error instanceof Error ? error.message : error)));
+      return updated;
+    }
     if (input.resolve) return store.resolveAsOwner(reviewId, live.state.account, { revision: note.rework ?? 0, outcome: "not_adopted", reason: "责任人在工作台自行闭环" });
     throw new IssueControlError("请选择补充、答复或本地闭环");
   }
@@ -4765,8 +4776,12 @@ export class IssueFlowService {
           "检视监看已退出(终态/关停/无 MR),未投递的回复作废");
         return;
       }
-      // 验绿后仍发现新增意见，由责任人决定是否批量交办。
-      {
+      // 验绿后仍发现新增意见，由责任人决定是否批量交办。全部 MR
+      // 合入后停止追踪新意见(ADR-0032):账保留展示,在途回复照常
+      // 投完,监看留到终态/关停再撤(退出清算兜底)。
+      const allMerged = live.state.mrs.length > 0
+        && live.state.mrs.every((mr) => Boolean(mr.merged_at));
+      if (!allMerged) {
         for (const mr of live.state.mrs) {
           const fetched = await fetchMrDiscussions({
             platformUrl: this.options.platformUrl!,
@@ -4970,13 +4985,16 @@ export class IssueFlowService {
     const credential = this.options.gitCredential?.(live.state.account);
     let dirty = false;
     for (const item of pending) {
+      // 版本核对只对绑定了收据的回复生效;责任人答复不主张代码已改,
+      // 不绑收据,重推也不作废(ADR-0032)。
+      const boundSha = item.expected_sha ?? "";
       const receipt = live.state.pushes
         ?.find((push) => push.repo === item.repo)?.sha ?? "";
-      if (!receipt || receipt !== item.expected_sha) {
+      if (boundSha && (!receipt || receipt !== boundSha)) {
         item.status = "failed";
         item.last_error = !receipt
           ? "该仓没有推送收据,回复作废——重推后请重写回复草稿"
-          : `代码已更新(回复绑定 ${item.expected_sha.slice(0, 12)},`
+          : `代码已更新(回复绑定 ${boundSha.slice(0, 12)},`
             + `当前推送 ${receipt.slice(0, 12)})——请针对当前代码重写回复草稿`;
         dirty = true;
         this.log(`[issue-flow] ${live.id} 检视回复作废(${item.discussion_id}): `
@@ -5000,34 +5018,29 @@ export class IssueFlowService {
       }
       item.attempts += 1;
       try {
-        const response = await fetch(
-          `${platformUrl.replace(/\/+$/, "")}/mr/discussions/`
-          + `${encodeURIComponent(item.discussion_id)}/reply`, {
-            method: "POST",
-            headers: {
-              ...pipelineHeaders(credential),
-              "content-type": "application/json",
-              "Idempotency-Key": item.id,
-            },
-            body: JSON.stringify({
-              repo: item.repo,
-              body: item.body,
-              resolve: item.resolve,
-              idempotency_key: item.id,
-            }),
-          });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await postMrDiscussionReply({
+          platformUrl,
+          discussionId: item.discussion_id,
+          repo: item.repo,
+          body: item.body,
+          resolve: item.resolve,
+          idempotencyKey: item.id,
+          headers: pipelineHeaders(credential),
+        });
         item.status = "delivered";
         item.delivered_at = new Date().toISOString();
         delete item.last_error;
         dirty = true;
         this.log(`[issue-flow] ${live.id} 检视回复已发布(${item.discussion_id})`);
-        // 记账分家(②-Q3):投递成功只代表"Agent 已回复",检视人核验
-        // 前不算了结;账失败不回滚投递事实(平台已有回复)。
+        // 记账分家(②-Q3):投递成功只代表"已回复",检视人核验
+        // 前不算了结;账失败不回滚投递事实(平台已有回复)。归因按
+        // 装箱人分家:责任人在场答复制为责任人,AI 草稿制为 Agent。
         try {
           this.feedbackStore(live).resolve(
             `mr-discussion:${item.repo}:${item.discussion_id}`,
-            "addressed", "Agent 已回复,待检视人核验");
+            "addressed", item.author
+              ? `责任人 ${item.author} 已回复,待检视人核验`
+              : "Agent 已回复,待检视人核验");
         } catch (error) {
           this.log(`[issue-flow] ${live.id} 检视回复入账失败(投递事实保留): `
             + String(error instanceof Error ? error.message : error));
@@ -5039,6 +5052,45 @@ export class IssueFlowService {
       }
     }
     if (dirty) this.writeMrReviewOutbox(live, outbox);
+  }
+
+  /** 责任人答复直达 CodeHub(ADR-0032):经出站信箱原样发布,复用
+   *  AI 回复同一条投递路(共享投递原语+幂等键)。不主张代码已改——
+   *  不绑推送收据,重推不作废;批注侧本地答复账(replyAsOwner)与
+   *  远端投递分家,投递失败留痕重试,不回滚批注。一条意见至多一次
+   *  责任人答复由批注层把关,这里不做去重。 */
+  private enqueueOwnerMrReply(
+    live: LiveIssue, discussionId: string, body: string,
+  ): void {
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    const record = this.feedbackStore(live).list().find(
+      (row) => row.source === "mr_discussion"
+        && row.source_id === discussionId);
+    if (!record) {
+      this.log(`[issue-flow] ${live.id} 责任人答复找不到意见账`
+        + `(${discussionId}),仅保留本地批注`);
+      return;
+    }
+    const repo = record.id.slice(
+      "mr-discussion:".length,
+      record.id.length - discussionId.length - 1);
+    const outbox = this.readMrReviewOutbox(live);
+    outbox.items.push({
+      id: `mrr-${randomUUID()}`,
+      repo,
+      discussion_id: discussionId,
+      body: trimmed,
+      // 答复不代点已解决(spec 17:闭环核验权在检视人)——resolveDiscussions
+      // 旋钮只作用于 AI 草稿,责任人的话更不能替检视人 closure。
+      resolve: false,
+      status: "pending",
+      attempts: 0,
+      author: live.state.account,
+      created_at: new Date().toISOString(),
+    });
+    this.writeMrReviewOutbox(live, outbox);
+    this.log(`[issue-flow] ${live.id} 责任人答复待发布(${discussionId})`);
   }
 
   private readMrReviewOutbox(live: LiveIssue): {

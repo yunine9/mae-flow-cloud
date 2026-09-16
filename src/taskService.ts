@@ -6,6 +6,7 @@ import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { applyEarlyStart, previewEarlyStart, refreshDependencyQueue, concurrentTicketConflict, scheduledGraphDependencies, runnableQueueIndex, dependencyScheduleContext, type DependencyAdjustment, type EarlyStartInput } from "./dependencyScheduling.ts";
 import { resumePrePushVerification } from "./prepushRecovery.ts";
 import { fetchMrDiscussions, observeMrDiscussions, discussionRevision, discussionKey, type DiscussionItem, type DiscussionFetch } from "./mrDiscussions.ts";
+import { postMrDiscussionReply } from "./mrDiscussionReply.ts";
 import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, mergedIncludesLocalHead, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
 import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
@@ -19198,24 +19199,17 @@ export class TaskService {
       }
       try {
         outbox.markAttempt(item.id);
-        const response = await fetch(
-          `${platformUrl}/mr/discussions/${
-            encodeURIComponent(item.payload.discussion_id)}/reply`, {
-            method: "POST",
-            signal: budget,
-            headers: {
-              ...this.platformIdentity(task),
-              "Idempotency-Key": item.id,
-            },
-            body: JSON.stringify({
-              repo: item.payload.repo,
-              mr: item.payload.mr ?? task.summary.delivery?.mr_id,
-              body: item.payload.body,
-              resolve: item.payload.resolve,
-              idempotency_key: item.id,
-            }),
-          });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        await postMrDiscussionReply({
+          platformUrl,
+          discussionId: item.payload.discussion_id,
+          repo: item.payload.repo,
+          body: item.payload.body,
+          resolve: item.payload.resolve,
+          idempotencyKey: item.id,
+          mr: item.payload.mr ?? task.summary.delivery?.mr_id,
+          headers: this.platformIdentity(task),
+          signal: budget,
+        });
         outbox.markDelivered(item.id);
         this.bypass(task, "投影动作", this.options.projection?.recordAction({
           taskId: task.summary.id,

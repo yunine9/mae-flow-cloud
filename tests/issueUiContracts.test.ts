@@ -1754,3 +1754,15 @@ test("AI 润色退役反钉(#272,ADR-0030):入口与通路不回潮", () => {
   assert.doesNotMatch(registration, /润色|polish/i);
   assert.doesNotMatch(issueFlow, /AI 润色|polish-description/);
 });
+
+test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图不分段(ADR-0032)", () => {
+  const pane = readFileSync(resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
+  // 多仓默认视图按仓分段展示(用户拍板"工作区变更按代码仓分开显示"):
+  // 切片用 perRepo 的 splitDiffByRepo(服务端分段标记唯一权威),仓头
+  // 落段、标记行不进 diff 正文;单仓与药丸聚焦视图保持单块渲染。
+  assert.match(pane, /!diffRepo && diffRepos\.length > 1/);
+  assert.match(pane, /splitDiffByRepo\(activeDiff\)\.map/);
+  assert.match(pane, /from "\.\/perRepo"/);
+  assert.equal((pane.match(/该仓当前没有可展示的改动/g) ?? []).length >= 2,
+    true, "分段与单块的空态口径同句");
+});
