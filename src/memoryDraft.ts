@@ -104,7 +104,7 @@ export function renderDirectoryDigestFallback(
   const rest = rows.length - head.length;
   return [
     ...head,
-    rest > 0 ? `- 另有 ${rest} 条,用 corpus_search 带 path_prefix=${dir || "."} 查明细。` : "",
+    rest > 0 ? `- 另有 ${rest} 条,用 knowledge search 描述 ${dir || "当前工作"} 的具体问题查明细。` : "",
   ].filter(Boolean).join("\n");
 }
 

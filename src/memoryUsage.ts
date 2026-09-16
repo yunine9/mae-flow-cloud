@@ -21,7 +21,7 @@ export function recordMemoryUsage(context: {
     try {
       const kind = event.moment === "search" || event.moment === "expand"
         ? event.moment : "push";
-      for (const id of event.ids) {
+      for (const id of event.ids.filter(id => id.startsWith("c-"))) {
         context.store().ledger.append({ kind, id, task: context.taskId,
           note: event.moment === "edit" ? event.dir : event.phase ?? event.moment });
       }

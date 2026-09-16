@@ -2,6 +2,7 @@
 import importlib.util
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("sidecar", Path(__file__).parents[1] / "harness/memsearch-sidecar.py")
@@ -10,7 +11,7 @@ spec.loader.exec_module(module)
 
 
 class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
-    async def test_platform_and_repo_are_searched_separately_and_filtered(self):
+    async def test_platform_and_repo_share_one_eligible_candidate_set(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             records = []
@@ -25,20 +26,25 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
                 records.append({"source": str(path), "score": 1, "content": ident})
             calls = []
 
+            async def index_document(index, path):
+                return 1
+
+            async def retrieve(index, query, sources, limit):
+                calls.append(set(sources))
+                return [{**row, "semantic_score": .8} for row in records if row["source"] in sources]
+
             class Index:
-                async def search(self, query, top_k, source_prefix):
-                    calls.append(str(source_prefix))
-                    # Simulate a prefix index, including the a/ab collision.
-                    return [row for row in records if row["source"].startswith(str(source_prefix))]
+                pass
 
             sidecar = module.Sidecar.__new__(module.Sidecar)
             sidecar.corpus = root
             sidecar.ms = Index()
-            result = await sidecar.search({"query": "current evidence", "repo": "a"})
-            self.assertEqual({hit["id"] for hit in result["hits"]}, {"c-a-111", "c-c-333"})
-            self.assertEqual(calls, [str(root / "a"), str(root / "_platform")])
-            result = await sidecar.search({"query": "current evidence", "repo": "a", "path_prefix": "different"})
-            self.assertEqual([hit["id"] for hit in result["hits"]], ["c-c-333"])
+            with patch.object(module, "retrieve", retrieve), patch.object(module, "index_document", index_document):
+                result = await sidecar.search({"query": "current evidence", "repo": "a"})
+                self.assertEqual({hit["id"] for hit in result["hits"]}, {"c-a-111", "c-c-333"})
+                self.assertEqual(calls, [{records[0]["source"], records[2]["source"]}])
+                result = await sidecar.search({"query": "current evidence", "repo": "a", "path_prefix": "different"})
+                self.assertEqual([hit["id"] for hit in result["hits"]], ["c-c-333"])
 
     async def test_unaccepted_legacy_and_revoked_hits_do_not_escape_or_get_reindexed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -51,9 +57,6 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             indexed = []
 
             class Index:
-                async def search(self, query, top_k, source_prefix):
-                    return records
-
                 async def index_file(self, path):
                     indexed.append(path.name)
                     return 1
@@ -61,8 +64,13 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             sidecar = module.Sidecar.__new__(module.Sidecar)
             sidecar.corpus = root
             sidecar.ms = Index()
-            self.assertEqual([h["id"] for h in (await sidecar.search({"query": "retry"}))["hits"]], ["c-a-222"])
-            self.assertEqual((await sidecar.reindex({}))["chunks"], 1)
+            async def retrieve(index, query, sources, limit):
+                return [{**row, "semantic_score": .8} for row in records if row["source"] in sources]
+            async def index_document(index, path):
+                return await index.index_file(path)
+            with patch.object(module, "retrieve", retrieve), patch.object(module, "index_document", index_document):
+                self.assertEqual([h["id"] for h in (await sidecar.search({"query": "retry"}))["hits"]], ["c-a-222"])
+                self.assertEqual((await sidecar.reindex({}))["chunks"], 0)
             self.assertEqual(indexed, ["c-a-222.md"])
             self.assertEqual((await sidecar.ingest({"path": str(root / "c-a-111.md")}))["chunks"], 0)
             with self.assertRaises(ValueError):

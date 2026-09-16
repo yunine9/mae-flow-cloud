@@ -76,9 +76,9 @@ test("下一任务实际上下文只收到采纳后的结论及例外；缓存�
     api.memorySidecar = { available: true, search: async () => { searches++; return [{ id: row.id, snippet: "旧的错误建议", score: 1 }]; },
       ingest: async () => true, stop() {} };
     const tools = api.memoryTools(consumer);
-    const expand = tools.find((tool: any) => tool.name === "corpus_expand");
+    const expand = tools.find((tool: any) => tool.name === "knowledge");
     assert.deepEqual(await api.memorySearch(consumer, { query: "超时" }), []);
-    assert.match((await expand.execute("before", { memory_id: row.id })).content[0].text, /取不到/);
+    assert.match((await expand.execute("before", { action: "read", id: row.id })).content[0].text, /取不到/);
     const accepted = service.reviewTaskMemory(owner, row.id, "alice", { decision: "accepted", revision: 1,
       scope: "platform", trigger: "有副作用的接口超时时", conclusion: "先核对幂等保障。\n\n适用例外：纯读取请求。" });
     assert.equal(task.summary.status, originalStatus, "采纳不推进或暂停任务");
@@ -93,7 +93,7 @@ test("下一任务实际上下文只收到采纳后的结论及例外；缓存�
     assert.deepEqual(await hook(output), messages, "已注入的临时上下文也被清除");
     assert.equal(searches, before, "验证的是缓存命中路径");
     assert.deepEqual(await api.memorySearch(consumer, { query: "重试" }), []);
-    assert.match((await expand.execute("after", { memory_id: row.id })).content[0].text, /取不到/);
+    assert.match((await expand.execute("after", { action: "read", id: row.id })).content[0].text, /取不到/);
     assert.ok(service.readMemoryInsight(row.id), "不采纳不是删除证据");
   } finally { await service.shutdown(); rmSync(dataDir, { recursive: true, force: true }); }
 });

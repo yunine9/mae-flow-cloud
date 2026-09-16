@@ -46,6 +46,7 @@ export const DEFAULT_MEMORY_BUDGETS: MemorySidecarBudgets = {
 export interface MemorySearchHit {
   id: string;
   score: number;
+  semantic_score?: number;
   heading?: string;
   snippet?: string;
   file?: string;
@@ -235,9 +236,11 @@ export class MemorySidecar {
 
   async search(input: {
     query: string; repo: string; pathPrefix?: string; limit?: number;
+    sources?: Array<{ id: string; path: string }>;
   }): Promise<MemorySearchHit[] | undefined> {
     const reply = await this.request({
       op: "search", query: input.query, repo: input.repo,
+      ...(input.sources ? { sources: input.sources } : {}),
       path_prefix: input.pathPrefix ?? "", limit: Math.min(input.limit ?? 8, 20),
     }, this.budgets.searchMs);
     if (!reply || reply.error || !Array.isArray(reply.hits)) return undefined;

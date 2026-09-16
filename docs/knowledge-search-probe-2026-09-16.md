@@ -4,7 +4,7 @@
 
 继续使用 memsearch 可行，但不能将现有 corpus_search 简单改名后当作完整方案交付。先修正统一候选排序、模块知识接入、版本适用信息和检索分数解释，再做工具、提示词与治理 UI 的完整实现。
 
-本次只增加可复现诊断脚本和报告，没有修改生产检索路径、知识库或部署。不是完整功能验收，也没有验证 Agent 是否实际遵守检索提示词。
+第一轮穿刺只增加可复现诊断脚本和报告，没有修改生产检索路径、知识库或部署；后续核心实现和复测见文末。不是完整功能验收，也没有验证 Agent 是否实际遵守检索提示词。
 
 ## 环境与复现
 
@@ -61,3 +61,27 @@ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 HF_HUB_OFFLINE=1 \
 5. 工具将结果表达为候选，不把 RRF 分数暴露成可信度。Agent 根据适用条件决定使用或不使用。自动补充更应克制，不能把所有 top-k 正文强塞进上下文。
 6. 不立即加重排模型或固定阈值；用更多带人工相关性标注的真实问题比较后再决定。
 7. 统一工具和行动前检索提示词仍需端到端验证：中途出现新问题能否调用、展开、正确使用；检索不可用时能否继续任务。不得新增“未检索不准行动”的阻塞机制。
+
+## 后续核心优化与复测（同日）
+
+已实现统一 `knowledge` 工具，接入当前已发布工程资料、当前仓库关联模块资料和已采纳经验。取代新会话的两个旧检索工具；保留经验写入入口，自动记忆补充也使用修正后的候选集合与底层排序。
+
+实测中新增发现：memsearch 默认会丢弃只有标题的段落，经验的“适用场景”标题因此可能没有进入向量。已改为短经验完整索引（含适用场景和例外），长文片段携带主题，且剔除审计 frontmatter。真实统一工具测试先抓到“回调问题排出告警资料”的失败，修正后在原样例通过，没有降低预期排名。
+
+本地第二批新增不同问法和无答案问题，总计 21 个查询：17 个相关问题的正确资料均在前五条，其中 16 个首位命中；4 个无答案问题均返回空。含糊的“流水线配置不一致”仍不是首位命中，不能声称完全消除误召回。两份仓库真实技能文档经优化后的侧车首位命中，并按文档去重。
+
+本轮版本与模块测试通过 Cloud 提供明确候选清单；不是 memsearch 自动理解并确认了版本。实际 TypeScript → sidecar → 模型 → 工具回包另有真件测试，覆盖自动发现关联模块、产品版本排除、经验搜索、停用与离线全文读取。
+
+默认 BGE-M3 模型使用余弦 0.50 作为保守噪声下限，代码标识符的准确命中可以保留；此值是小样本初步校准，不是生产准确率保证，其他模型不能照搬。中文 BM25 分词尚未改变；中文能力由本机语义模型承担。本轮没有更换模型、增加重排模型，也没有修改生产部署。
+
+新增测试复现：
+
+```bash
+NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
+  MFC_MEMSEARCH_PYTHON="$PWD/.local/memsearch-venv/bin/python" \
+  node --import tsx --test tests/knowledgeSearch.test.ts tests/memorySidecar.test.ts \
+  tests/memoryAdoption.test.ts tests/memoryPhase3.test.ts tests/memoryContext.test.ts \
+  tests/memoryConversation.test.ts
+python3 -m unittest discover -s tests -p 'test_memory_platform.py'
+python3 -m unittest discover -s tests -p 'test_knowledge_retrieval.py'
+```

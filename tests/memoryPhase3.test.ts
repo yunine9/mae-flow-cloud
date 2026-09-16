@@ -106,7 +106,7 @@ test("起草解析:只认形状对的 JSON;摘要必须引用真实 id、不超 
   assert.match(parseDirectoryDigest(`- 有人要求过黑名单在开关前(${rows[0].id})`, rows) ?? "", /开关前/);
   assert.equal(parseDirectoryDigest(Array(13).fill(`- x (${rows[0].id})`).join("\n"), rows), undefined);
   const fallback = renderDirectoryDigestFallback("src/filter", [...rows, ...rows, ...rows]);
-  assert.match(fallback, /另有 1 条,用 corpus_search 带 path_prefix=src\/filter/);
+  assert.match(fallback, /另有 1 条,用 knowledge search 描述 src\/filter/);
 });
 
 test("权重:人判 > 流水线;一年减半;返工减得比命中加得狠;general 略重", () => {
@@ -403,13 +403,13 @@ test("Agent 无 sidecar 也能写记忆并展开；归属和来源由宿主固�
   assert.equal(records[0].judged_by, "agent");
   assert.equal(records[0].evidence, "agent:call-memory-1");
   assert.equal(records[0].drafting, false);
-  const expand = tools.find(tool => tool.name === "corpus_expand");
-  assert.match((await expand.execute("pending", { memory_id: records[0].id })).content[0].text, /取不到/);
+  const expand = tools.find(tool => tool.name === "knowledge");
+  assert.match((await expand.execute("pending", { action: "read", id: records[0].id })).content[0].text, /取不到/);
   svc.reviewTaskMemory(id, records[0].id, "本地用户", { decision: "accepted", revision: records[0].revision ?? 1 });
-  const result = await expand.execute("expand-1", { memory_id: records[0].id });
+  const result = await expand.execute("expand-1", { action: "read", id: records[0].id });
   assert.match(result.content[0].text, /先加载仓库环境脚本/);
   internal.summary.repo_url = "git@example.com:demo/other.git";
-  const denied = await expand.execute("expand-2", { memory_id: records[0].id });
+  const denied = await expand.execute("expand-2", { action: "read", id: records[0].id });
   assert.match(denied.content[0].text, /取不到/);
 });
 
@@ -445,10 +445,10 @@ test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general
     assert.match(briefing, /核对平台工具链约定/);
     const hits = await api.memorySearch(internal, { query: "工具链" });
     assert.deepEqual(hits.map((hit: any) => hit.id), [platform.id]);
-    const expand = api.memoryTools(internal).find((tool: any) => tool.name === "corpus_expand");
-    assert.match((await expand.execute("expand-platform", { memory_id: platform.id })).content[0].text,
+    const expand = api.memoryTools(internal).find((tool: any) => tool.name === "knowledge");
+    assert.match((await expand.execute("expand-platform", { action: "read", id: platform.id })).content[0].text,
       /核对平台工具链约定/);
-    assert.match((await expand.execute("expand-retired", { memory_id: retired.id })).content[0].text, /取不到/);
+    assert.match((await expand.execute("expand-retired", { action: "read", id: retired.id })).content[0].text, /取不到/);
     const usage = svc.listTaskMemoryUsage(internal.summary.id);
     assert.ok(usage.some(row => row.moment === "context" && String(row.query).includes("证书失效")));
   } finally { await svc.shutdown(); }

@@ -28,6 +28,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from knowledge_retrieval import retrieve, index_document
+
 
 def log(message: str) -> None:
     sys.stderr.write(f"[memsearch-sidecar] {message}\n")
@@ -63,7 +66,7 @@ def read_front(path: Path) -> dict:
         key, _, value = line.partition(":")
         key = key.strip()
         value = value.strip()
-        if key in ("repo", "judged_by", "source", "scope", "at", "task", "phase", "review_status"):
+        if key in ("repo", "judged_by", "source", "scope", "at", "task", "phase", "review_status", "knowledge_id", "asset_status"):
             front[key] = json.loads(value) if value.startswith('"') else value
         elif key == "paths":
             try:
@@ -104,18 +107,37 @@ class Sidecar:
             raise ValueError("只索引语料目录里的文件")
         if not path.is_file():
             raise ValueError(f"文件不存在: {path}")
-        if read_front(path).get("review_status") != "accepted":
+        if not self.indexable(path):
             return {"ok": True, "chunks": 0}
-        count = await self.ms.index_file(path)
+        count = await self.ensure_indexed(path)
         return {"ok": True, "chunks": count}
 
     async def reindex(self, _req: dict) -> dict:
         # 候选留档不参与向量索引。旧索引命中仍由搜索和 Cloud 正本过滤。
         count = 0
         for path in self.corpus.rglob("*.md"):
-            if "_archive" not in path.relative_to(self.corpus).parts and read_front(path).get("review_status") == "accepted":
-                count += await self.ms.index_file(path)
+            if self.indexable(path):
+                count += await self.ensure_indexed(path)
         return {"ok": True, "chunks": count}
+
+    async def ensure_indexed(self, path: Path) -> int:
+        stat = path.stat()
+        fingerprint = (stat.st_mtime_ns, stat.st_size)
+        cache = getattr(self, "_indexed_files", {})
+        if cache.get(str(path)) == fingerprint:
+            return 0
+        count = await index_document(self.ms, path)
+        cache[str(path)] = fingerprint
+        self._indexed_files = cache
+        return count
+
+    def indexable(self, path: Path) -> bool:
+        resolved = path.resolve()
+        if not resolved.is_relative_to(self.corpus) or "_archive" in resolved.relative_to(self.corpus).parts:
+            return False
+        front = read_front(resolved)
+        return front.get("review_status") == "accepted" or (
+            bool(front.get("knowledge_id")) and front.get("asset_status") == "published")
 
     async def search(self, req: dict) -> dict:
         query = str(req.get("query", "")).strip()
@@ -123,43 +145,52 @@ class Sidecar:
             raise ValueError("query 不能为空")
         limit = max(1, min(int(req.get("limit", 8) or 8), 20))
         repo = str(req.get("repo", "")).strip()
-        prefix = self.corpus / repo if repo else self.corpus
-        # 一条记忆切成两三块,按块取 top_k 再按记忆归并,所以多取几块。
-        rows = await self.ms.search(query, top_k=limit * 3, source_prefix=prefix)
-        platform = self.corpus / "_platform"
-        if repo and platform.exists() and platform != prefix:
-            rows += await self.ms.search(query, top_k=limit * 3, source_prefix=platform)
         path_prefix = str(req.get("path_prefix", "")).strip()
-        merged: dict[str, dict] = {}
+        sources = {}
+        # Cloud supplies an exact, currently eligible catalog for unified search.
+        # Legacy clients use the same retrieval engine with memory-only scope.
+        supplied = req.get("sources")
+        if supplied is not None and not isinstance(supplied, list):
+            raise ValueError("sources 必须是数组")
+        paths = [Path(item["path"]) for item in supplied] if supplied is not None else self.corpus.rglob("*.md")
+        supplied_ids = {str(Path(item["path"]).resolve()): item["id"] for item in supplied or []}
+        for path in paths:
+            path = path.resolve()
+            if not path.is_file() or not self.indexable(path):
+                continue
+            front = read_front(path)
+            ident = front.get("knowledge_id") or memory_id_of(str(path))
+            if not ident:
+                continue
+            if supplied is not None:
+                if supplied_ids.get(str(path)) != ident:
+                    continue
+            else:
+                if front.get("knowledge_id"):
+                    continue
+                if repo and front.get("repo") != repo and front.get("scope") != "platform":
+                    continue
+                if path_prefix and front.get("scope") != "platform" and not any(
+                    str(p).startswith(path_prefix) for p in front.get("paths", [])
+                ):
+                    continue
+            sources[str(path)] = {"id": ident, **front}
+        for source in sources:
+            await self.ensure_indexed(Path(source))
+        rows = await retrieve(self.ms, query, sources, limit)
+        hits = []
         for row in rows:
-            source = str(row.get("source", ""))
-            memory_id = memory_id_of(source)
-            if not memory_id:
+            source = row["source"]
+            # Recheck current status, not just index metadata.
+            if not self.indexable(Path(source)):
                 continue
-            front = read_front(Path(source))
-            if front.get("review_status") != "accepted":
-                continue
-            if repo and front.get("repo") != repo and front.get("scope") != "platform":
-                continue
-            if path_prefix and front.get("scope") != "platform" and not any(
-                str(p).startswith(path_prefix) for p in front.get("paths", [])
-            ):
-                continue
-            current = merged.get(memory_id)
-            score = float(row.get("score", 0.0))
-            if current is None or score > current["score"]:
-                merged[memory_id] = {
-                    "id": memory_id,
-                    "score": score,
-                    "heading": row.get("heading", ""),
-                    "snippet": str(row.get("content", ""))[:400],
-                    "file": source,
-                    "chunk_hash": row.get("chunk_hash", ""),
-                    **{k: front[k] for k in ("repo", "judged_by", "source", "scope",
-                                              "at", "task", "paths", "line", "phase")
-                       if k in front},
-                }
-        hits = sorted(merged.values(), key=lambda h: -h["score"])[:limit]
+            front = sources[source]
+            hits.append({
+                **{k: front[k] for k in ("id", "repo", "judged_by", "scope", "at", "task", "paths", "line", "phase") if k in front},
+                "score": row["score"], "semantic_score": row["semantic_score"],
+                "heading": row.get("heading", ""), "snippet": str(row.get("content", ""))[:1200],
+                "file": source, "chunk_hash": row.get("chunk_hash", ""),
+            })
         return {"ok": True, "hits": hits}
 
     async def expand(self, req: dict) -> dict:

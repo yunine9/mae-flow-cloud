@@ -109,6 +109,8 @@ import {
 } from "./memoryDraft.ts";
 import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
+import { KnowledgeSearch } from "./knowledgeSearch.ts";
+import { createKnowledgeTool } from "./knowledgeTools.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
@@ -5506,7 +5508,11 @@ export class TaskService {
     input: { query: string; pathPrefix?: string; limit?: number },
   ): Promise<MemorySearchHit[] | undefined> {
     if (!this.memorySidecar) return undefined;
-    const hits = await this.memorySidecar.search({ ...input, repo: this.memoryRepo(task) });
+    const store = this.memories(), repo = this.memoryRepo(task);
+    const sources = store.list().filter(row => memoryAccessible(row, repo)
+      && (!input.pathPrefix || row.scope === "platform" || row.paths.some(path => path.startsWith(input.pathPrefix!))))
+      .map(row => ({ id: row.id, path: join(store.root, row.file) }));
+    const hits = await this.memorySidecar.search({ ...input, repo, sources });
     if (!hits) return undefined;
     return resolveMemoryHits(hits, id => this.memories().find(id), this.memoryRepo(task));
   }
@@ -5695,8 +5701,10 @@ export class TaskService {
     this.bypass(undefined, "任务泵", this.pump());
   }
 
+  private knowledgeSearch?: KnowledgeSearch;
+
   private memoryTools(task: TaskState): unknown[] | undefined {
-    return createMemoryTools({
+    const memoryTools = createMemoryTools({
       repo: this.memoryRepo(task),
       search: (input) => this.memorySearch(task, input),
       expand: async (id) => {
@@ -5708,6 +5716,19 @@ export class TaskService {
         task: task.summary.id, evidence: `agent:${callId}`, author: "Agent" }),
       onUse: (event) => this.logMemoryUsage(task, event),
     });
+    // Persisted sessions may still contain calls to the old tool names. Keep
+    // aliases there, without advertising them as a second search workflow.
+    const legacy = task.resume ? memoryTools.filter(tool => tool.name !== "corpus_write")
+      .map(tool => ({ ...tool, promptSnippet: undefined, promptGuidelines: [],
+        description: `历史会话兼容入口；新的检索和展开请使用 knowledge。${tool.description}` })) : [];
+    return [...legacy, ...memoryTools.filter(tool => tool.name === "corpus_write"), createKnowledgeTool({
+      service: () => this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar),
+      context: () => ({ repo: this.memoryRepo(task),
+        repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
+        moduleIds: (task.summary.business_modules ?? []).map(module => module.id),
+        productVersion: task.summary.product_version }),
+      onUse: event => this.logMemoryUsage(task, event),
+    })];
   }
 
   private logMemoryUsage(task: TaskState, event: MemoryUsageEvent): void {
