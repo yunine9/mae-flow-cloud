@@ -1,8 +1,14 @@
 /** 在宿主接入层连接演示状态与全屏，保留固定版本的上游文件不变。 */
-export function withArchifyPresentation(html: string): string {
+export function withArchifyPresentation(html: string, nodeDetails = false): string {
   const bridge = `<script>
 (() => {
   const root = document.documentElement;
+  const sendNode = event => {
+    const node = event.target.closest?.('[data-node-id]');
+    if (node) parent.postMessage({type:'mfc:archify-node', id:node.getAttribute('data-node-id')}, '*');
+  };
+  document.addEventListener('click', sendNode);
+  document.addEventListener('keydown', event => { if(event.key==='Enter'||event.key===' ') sendNode(event); });
   const presentation = window.Archify && window.Archify.presentation;
   if (!presentation) return;
   const active = () => root.getAttribute('data-present') === 'true';
@@ -35,5 +41,5 @@ export function withArchifyPresentation(html: string): string {
   });
 })();
 </script>`;
-  return html.replace(/<\/body>/i, bridge + '</body>');
+  return html.replace(/<\/head>/i, (nodeDetails ? '<style>.cards{display:none!important}html:not([data-present="true"]) #focus-chip{display:none!important}</style>' : '') + '</head>').replace(/<\/body>/i, bridge + '</body>');
 }

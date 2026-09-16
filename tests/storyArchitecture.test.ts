@@ -162,3 +162,16 @@ test("架构页只采用独立 Archify 产物，Story 中的 PlantUML 与旧 Arc
   assert.match(result.warnings.join("\n"), /旧版 Archify/);
   assert.equal(storyArchitecture("```plantuml\n```\n").warnings.length, 0);
 });
+
+
+test("节点详情按真实节点投影，局部查看不是新增交付任务，旧图仍可读", () => {
+  const story = "# Story";
+  const result = storyArchitecture(story, artifact(story, [{id:"overview",view:"logical",source,nodes:[
+    {id:"sync", responsibility:"同步订单", interfaces:"订单 → 回执"},
+    {id:"invented",responsibility:"不存在的节点"},
+  ]}, {id:"local",view:"logical",source,overview_id:"overview",focus_node:"sync"}]));
+  assert.equal(result.diagrams[0].nodes?.length,1);
+  assert.equal(result.diagrams[0].nodes?.[0].responsibility,"同步订单");
+  assert.equal(result.diagrams[1].overview_id,"archify-overview");
+  assert.equal(storyArchitecture(story,artifact(story)).diagrams[0].nodes?.[0].name,"同步与校验");
+});

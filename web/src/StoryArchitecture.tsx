@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { withArchifyPresentation } from "./archifyPresentation";
 import { storyViewCoverage, type StoryViewCoverage } from "../../src/storyViewCoverage";
 import { storyViewTitles } from "./storyViewTitles";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { ArchitectureNode } from "../../src/architectureDetails";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/Empty";
 
 interface Projection {
   revision: string; renderer: string; warnings: string[];
-  diagrams: Array<{ id: string; title: string; type: string; renderer?: string; line?: number; view?: StoryViewCoverage["id"] }>;
+  diagrams: Array<{ id: string; title: string; type: string; renderer?: string; line?: number; view?: StoryViewCoverage["id"]; nodes?: ArchitectureNode[]; overview_id?: string; focus_node?: string }>;
   views?: StoryViewCoverage[];
 }
 interface GenerationJob { started_at?: string; progress?: string; kind?: string }
@@ -92,7 +92,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     return () => { controller.abort(); clearTimeout(timer); };
   }, [base, pulse]);
   useEffect(() => {
-    const requested = projection?.diagrams.find((item) => item.line === requestedLine);
+    const requested = requestedLine === undefined ? undefined : projection?.diagrams.find((item) => item.line === requestedLine);
     if (requested) {
       setSelected(requested.id);
       const line = requested.line!;
@@ -108,14 +108,24 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
   const availableViews = views.filter((item) => projection?.diagrams.some((diagram) => diagramView(diagram) === item.id));
   const view = availableViews.find((item) => item.id === activeView) ?? availableViews[0];
   const diagrams = view ? projection?.diagrams.filter((item) => diagramView(item) === view.id) ?? [] : [];
-  const diagram = diagrams.find((item) => item.id === selected) ?? diagrams[0];
+  const parentOf = (item: Projection["diagrams"][number]) => diagrams.find(root => root.id !== item.id && !root.overview_id && root.id === item.overview_id && root.nodes?.some(n => n.id === item.focus_node));
+  const roots = diagrams.filter(item => !parentOf(item));
+  const diagram = diagrams.find((item) => item.id === selected) ?? roots[0];
+  const parent = diagram && parentOf(diagram);
+  const overview = parent ?? diagram;
+  const detailScope = `${base}/${projection?.revision}/${overview?.id}`;
+  const [nodeSelection, setNodeSelection] = useState<{scope:string; id:string}>();
+  const node = nodeSelection?.scope === detailScope ? overview?.nodes?.find(n => n.id === nodeSelection.id) : undefined;
+  const related = node && diagrams.find(item => item.overview_id === overview?.id && item.focus_node === node.id);
   const key = `${base}/${projection?.revision}/${diagram?.id}/${pulse}`;
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       // 沙箱图的 origin 是 null，只接受当前 iframe 的窗口，忽略其他页面/旧图。
-      if (!frame.current || event.source !== frame.current.contentWindow
-        || event.data?.type !== "mfc:archify-presentation") return;
-      setPresenting(event.data.active === true ? key : "");
+      if (!frame.current || event.source !== frame.current.contentWindow) return;
+      if (event.data?.type === "mfc:archify-node" && typeof event.data.id === "string"
+        && diagram?.nodes?.some(n => n.id === event.data.id)) {
+        setNodeSelection({scope:detailScope, id:event.data.id});
+      } else if (event.data?.type === "mfc:archify-presentation") setPresenting(event.data.active === true ? key : "");
     };
     const onEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || presenting !== key) return;
@@ -125,7 +135,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     window.addEventListener("message", onMessage);
     window.addEventListener("keydown", onEscape);
     return () => { window.removeEventListener("message", onMessage); window.removeEventListener("keydown", onEscape); };
-  }, [key, presenting]);
+  }, [key, presenting, detailScope, diagram]);
   useEffect(() => {
     if (!diagram || !projection) return;
     const controller = new AbortController();
@@ -134,7 +144,7 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     ).then((result) => {
       if (!controller.signal.aborted) setRendered({ key, ...result,
         error: result.error || (!result.html ? "渲染器未返回图像" : undefined),
-        html: result.html ? withArchifyPresentation(result.html) : undefined });
+        html: result.html ? withArchifyPresentation(result.html, !!diagram.nodes?.length) : undefined });
     }).catch((reason) => {
       if (!controller.signal.aborted) setRendered({ key, error: reason instanceof Error ? reason.message : String(reason) });
     });
@@ -179,39 +189,25 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
       {requestedLine !== undefined && !projection.diagrams.some((item) => item.line === requestedLine) &&
         <p className="text-xs text-attention [overflow-wrap:anywhere]" role="status">原图位置已变化或图源无法读取，请选择下方图名，或返回 Story 查看。</p>}
       {availableViews.length > 0 ? <>
-      {/* (#210)两套手搓 role=tablist 换 base-ui Tabs 原语:视角页签
-          (story-view-coverage)与图页签(diagram)嵌套两层,键盘箭头、
-          roving tabindex 归原语;选中态由 aria-selected 驱动的旧皮肤
-          CSS 原样生效,计数/标题文案原样。外层面板由原手写
-          role=tabpanel 的 section 换成 TabsPanel(同位复用,值跟随
-          当前视角,内容随派生状态重渲染,iframe 仍由 key 控制重挂)。 */}
-      <Tabs value={view?.id ?? null} className="contents"
-        onValueChange={(value) => { setActiveView(String(value)); setSelected(""); }}>
-        <TabsList variant="line" aria-label="已有架构图"
-          className="mt-5 grid h-auto w-full grid-cols-[repeat(auto-fit,minmax(160px,1fr))] justify-start gap-0 border-b border-line p-0">
-          {availableViews.map((item) => <TabsTrigger key={item.id} value={item.id}
-            className="grid h-auto min-w-0 justify-items-start gap-[5px] rounded-none border-0 border-b-2 border-transparent bg-transparent px-2.5 pb-3.5 pt-3 text-left after:hidden aria-selected:border-primary aria-selected:bg-surface-soft"
-            title={item.label}>
-            <strong className="text-sm leading-normal text-text [text-wrap:balance]">{storyViewTitles[item.id]}</strong>
-            <span className="text-[11px] text-muted-foreground">{projection.diagrams.filter((diagram) => diagramView(diagram) === item.id).length} 张</span>
-          </TabsTrigger>)}
-        </TabsList>
-        {view && <TabsContent value={view.id} className="pt-[18px]"
-          aria-label={view.label}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2.5"><strong className="text-[15px]">{storyViewTitles[view.id]}</strong><span className="text-[11px] text-muted-foreground">{view.label}{diagrams.length > 0 && ` · ${diagrams.length} 张图`}</span></div>
-            <div className="flex flex-wrap gap-3.5">
-              <button type="button" className="cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline" onClick={() => onOpenView ? onOpenView(view.id) : onOpenStory()}>设计与意见 ↗</button>
-            </div>
-          </div>
-          {diagrams.length > 0 && <Tabs value={diagram?.id ?? null} className="contents"
-            onValueChange={(value) => { if (value !== null) setSelected(String(value)); }}>
-            <TabsList aria-label={`${storyViewTitles[view.id]}的图片`}
-              className="mb-3 h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-lg border border-border bg-muted/60 p-1">
-              {diagrams.map((item) => <TabsTrigger key={item.id} value={item.id}
-                className="h-auto flex-none px-3 py-1.5 text-xs">{item.title}</TabsTrigger>)}
-            </TabsList>
-          </Tabs>}
+      <div className="my-4 flex flex-wrap items-center gap-3 text-sm">
+        {availableViews.length > 1 && <label className="flex items-center gap-2">设计视角
+          <select className={btn} aria-label="设计视角" value={view?.id} onChange={e => {setActiveView(e.target.value);setSelected("");}}>
+            {availableViews.map(item=><option key={item.id} value={item.id}>{storyViewTitles[item.id]}</option>)}
+          </select></label>}
+        {roots.length > 1 && <label className="flex items-center gap-2">设计图
+          <select className={btn} aria-label="设计图" value={overview?.id} onChange={e=>setSelected(e.target.value)}>
+            {roots.map(item=><option key={item.id} value={item.id}>{item.title}</option>)}
+          </select></label>}
+        <span className="text-muted-foreground">{parent ? `当前范围：${diagram.title}及直接关联` : "当前范围：总览"}</span>
+        {parent && <button className={btn} onClick={()=>setSelected(overview!.id)}>返回总览</button>}
+        {!!overview?.nodes?.length && <label className="ml-auto flex items-center gap-2">查看职责
+          <select className={btn} aria-label="选择节点查看职责" value={node?.id ?? ""} onChange={e=>setNodeSelection({scope:detailScope,id:e.target.value})}>
+            <option value="">点击图中节点，或在此选择</option>
+            {overview.nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+          </select></label>}
+      </div>
+      <div className={node ? "grid grid-cols-[minmax(0,1fr)_320px] items-start gap-4" : "min-w-0"}>
+        <div className="min-w-0">
           {current?.error ? <div className="rounded-[10px] border border-line p-4 leading-[1.7] [&_details]:mt-3 [&_summary]:cursor-pointer [&_summary]:text-muted-foreground [&_pre]:max-h-70 [&_pre]:overflow-auto [&_pre]:whitespace-pre-wrap [&_pre]:text-xs [overflow-wrap:anywhere]">
             <p role="status">这张图暂时无法展示。请在完整 Story 中批注反馈；图源修订后会自动更新。</p>
             <button type="button" className="mt-1 cursor-pointer border-0 bg-transparent p-0 text-xs text-primary hover:underline" onClick={onOpenStory}>打开 Story 提意见</button>
@@ -222,8 +218,21 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
               : "block h-[max(560px,65vh)] w-full rounded-[10px] border border-line bg-[#101620] max-[600px]:h-[65vh] max-[600px]:min-h-[460px]"}
             allow="fullscreen *" allowFullScreen sandbox="allow-scripts allow-downloads" referrerPolicy="no-referrer" />
             : <p className="grid min-h-80 place-items-center text-[13px] text-muted-foreground" role="status">正在生成架构图…</p>}
-        </TabsContent>}
-      </Tabs></> : <Empty className="min-h-[280px]">
+        </div>
+        {node && <aside aria-label="节点职责详情" className="rounded-xl border border-line bg-surface p-4 text-[15px] leading-relaxed">
+          <div className="flex items-start justify-between gap-3"><h3 className="text-lg font-semibold">{node.name}</h3><button className={btn} aria-label="关闭节点详情" onClick={()=>setNodeSelection(undefined)}>关闭</button></div>
+          {node.summary && <p className="mt-3 text-primary">{node.summary}</p>}
+          <h4 className="mt-5 font-semibold">具体职责</h4>
+          <p className="mt-2 whitespace-pre-wrap break-words">{node.responsibility || "当前图源未提供详细职责，请查看 Story 中的设计说明。"}</p>
+          {node.interfaces && <><h4 className="mt-5 font-semibold">输入与输出</h4><p className="mt-2 whitespace-pre-wrap break-words">{node.interfaces}</p></>}
+          {!!node.relationships.length && <><h4 className="mt-5 font-semibold">与谁协作</h4><ul className="mt-2 space-y-2">{node.relationships.map((r,i)=><li key={i}>{r}</li>)}</ul></>}
+          {related && <button className={btn + " mt-4"} onClick={()=>setSelected(related.id)}>只看相关关系</button>}
+          {node.acceptance && <details className="mt-5 border-t border-line pt-3"><summary className="cursor-pointer">验收要求</summary><p className="mt-2 whitespace-pre-wrap break-words">{node.acceptance}</p></details>}
+          {node.evidence && <details className="mt-4 border-t border-line pt-3"><summary className="cursor-pointer">设计依据</summary><p className="mt-2 whitespace-pre-wrap break-words">{node.evidence}</p></details>}
+          <button className={btn + " mt-5"} onClick={()=>onOpenView && view ? onOpenView(view.id) : onOpenStory()}>查看 Story 设计 ↗</button>
+        </aside>}
+      </div>
+      </> : <Empty className="min-h-[280px]">
         <EmptyMedia className="text-3xl font-light text-muted-foreground">◇</EmptyMedia>
         <EmptyTitle>尚无可展示的架构图</EmptyTitle>
         <EmptyDescription>平台尚未成功生成 Archify 图；完整 PlantUML 设计请在 Story 中查看。</EmptyDescription>

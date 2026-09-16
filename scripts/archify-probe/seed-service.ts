@@ -16,13 +16,13 @@ if(!refresh){const auth=new LocalAuth(join(root,'auth.json'));auth.bootstrapAdmi
 const data=classifyStoryFixture(JSON.parse(readFileSync(join(out,'fast-1.json'),'utf8')));
 const story=readFileSync(join(out,'input.md'),'utf8');
 const overview=await compile(data,out);overview.cards=[];
-const diagrams=[{id:'overview',view:'development',source:{...overview,meta:{...overview.meta,title:'全部模块与协作关系'}}}];
+const diagrams: any[]=[{id:'overview',view:'development',nodes:data.modules,source:{...overview,meta:{...overview.meta,title:'全部模块与协作关系'}}}];
 for(const m of data.modules){
  const neighbors=new Set([m.id,...data.relations.filter((e:any)=>e.from===m.id||e.to===m.id).flatMap((e:any)=>[e.from,e.to])]);
  const source=await compile({...data,title:m.name,modules:data.modules.filter((x:any)=>neighbors.has(x.id)),relations:data.relations.filter((e:any)=>neighbors.has(e.from)&&neighbors.has(e.to))},out);
  // One concise selected-module card, never repeat all modules as a wall of text.
  source.cards=[{dot:moduleDot(m.type),title:m.name+' · 具体工作',items:[m.responsibility,m.interfaces]}];
- diagrams.push({id:m.id,view:'development',source});
+ diagrams.push({id:m.id,view:'development',overview_id:'overview',focus_node:m.id,nodes:data.modules,source});
 }
 if(!refresh) writeFileSync(join(artifactDir,'story.md'),story);
 writeFileSync(join(artifactDir,'architecture.json'),JSON.stringify({schema_version:1,story_sha256:createHash('sha256').update(story).digest('hex'),diagrams},null,2));

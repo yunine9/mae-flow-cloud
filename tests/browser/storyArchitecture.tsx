@@ -25,7 +25,7 @@ window.fetch = async (input, options) => {
   if (mode === "error") return new Response(JSON.stringify({ error: "Story 读取失败" }), { status: 500 });
   return new Response(JSON.stringify({ revision, renderer: "10722002", warnings: [],
     views: storyViewCoverage("| 物理视图 | 不涉及 | 沿用现有部署，本次无部署变更 |\n## 逻辑视图\n```plantuml\nclass Order\n```"),
-    diagrams: mode === "empty" ? [] : [{ id: "diagram-1", title: `版本 ${revision}`, type: "architecture", view: "logical", line: 7 }] }));
+    diagrams: mode === "empty" ? [] : [{ id: "diagram-1", title: `版本 ${revision}`, type: "architecture", view: "logical", line: 7, nodes:[{id:"sync",name:"订单模块",summary:"同步订单",responsibility:"校验并同步订单",interfaces:"读取订单，输出同步结果",relationships:[]}] }] }));
 };
 function Harness() { return <StoryArchitecture taskId="task" canUpdate onOpenStory={() => { opened = true; }} />; }
 const root = createRoot(document.getElementById("app")!);
@@ -44,7 +44,17 @@ async function run() {
   const frame = document.querySelector("iframe")!;
   if (!frame.srcdoc.includes("新版订单模块") || frame.srcdoc.includes("旧版订单模块")) throw Error("迟到的旧图覆盖新图");
   if (frame.getAttribute("sandbox") !== "allow-scripts allow-downloads") throw Error("iframe 隔离丢失");
-  if (document.querySelectorAll('[aria-label="已有架构图"] [role="tab"]').length !== 1) throw Error("缺图视角仍生成了空页签");
+  if (document.querySelector('[aria-label="设计视角"]')) throw Error("单个视角仍显示重复导航");
+  window.dispatchEvent(new MessageEvent('message',{source:window,data:{type:'mfc:archify-node',id:'sync'}}));
+  await pause(40);
+  if(document.querySelector('aside')) throw Error('其他窗口伪造节点选择');
+  const before = requests;
+  window.dispatchEvent(new MessageEvent('message',{source:frame.contentWindow,data:{type:'mfc:archify-node',id:'sync'}}));
+  await until(()=>!!document.querySelector('aside'), '点击节点没有职责详情');
+  if(!document.querySelector('aside')!.textContent!.includes('校验并同步订单')) throw Error('职责正文丢失');
+  if(document.querySelector('iframe')!==frame || requests!==before) throw Error('点节点重新加载或切换了图');
+  document.querySelector<HTMLButtonElement>('[aria-label="关闭节点详情"]')!.click();
+  await until(()=>!document.querySelector('aside'), '详情无法关闭');
   if (document.body.textContent!.includes("沿用现有部署")) throw Error("无图的物理覆盖说明挤进了架构页");
   mode = "render-error"; refresh();
   const failureDetails = () => [...document.querySelectorAll("details")]
