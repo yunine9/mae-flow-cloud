@@ -111,6 +111,7 @@ import { MemorySidecar, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
 import { KnowledgeSearch } from "./knowledgeSearch.ts";
 import { createKnowledgeTool } from "./knowledgeTools.ts";
+import { DELIVERY_SPLIT_GUIDANCE } from "./deliverySplitGuidance.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { projectKernelFeedback } from "./feedbackProjection.ts";
 import { readTaskHostDocument } from "./taskHostDocuments.ts";
@@ -20275,11 +20276,8 @@ export class TaskService {
         + "并给出你建议的切法;用户可以给方向、指定某块归谁,也可以答"
         + "「你看着切」。协作者可能在这张卡上批注插话,他们的意见随决定"
         + "一起到达,必须逐条消化。",
-      "第四步:生成全局 Story 并按功能模块拆分。整体分析、按仓组织交付、仓内按功能模块拆分。"
-        + "根据需要先安排公共契约、骨架和基础设施任务，明确接口声明、共享数据语义、装配和构建验证；"
-        + "后续每个功能模块包含完整接口接入、业务逻辑和测试，不默认按所有接口→所有逻辑→统一补测拆任务。"
-        + "独立验证不等于零依赖；契约明确后可基于替身先做，真实联调缺口单列。"
-        + "跨语言契约可先落 OpenAPI 等定义；骨架编译通过只证明准备工作，不表示业务功能已验证。",
+      "第四步:生成全局 Story 并划分交付单元。整体分析、按仓组织交付，仓内根据功能边界和真实依赖决定粒度。",
+      DELIVERY_SPLIT_GUIDANCE,
       `沿用原 Story 模板，保留既有章节编号、自检表和结构，不追加 CHAIN 或流程附录。模板：\n${
         this.requirementStoryTemplate()}`,
       "4+1 是主任务分析的核心：客户场景与验收贯通全需求；逻辑模型含功能模块、关键类图和仓库/组件映射；"
