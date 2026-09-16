@@ -9608,7 +9608,8 @@ export class TaskService {
             || dependsOn(left.id, right.id) || dependsOn(right.id, left.id)) continue;
         const leftTicket = ticketOverrides?.[left.id] ?? left.ticket ?? task.summary.ticket;
         const rightTicket = ticketOverrides?.[right.id] ?? right.ticket ?? task.summary.ticket;
-        if (leftTicket && leftTicket === rightTicket) {
+        // 已建单任务沿用持久化的执行安排，不因新建单规则阻断旧任务材料恢复。
+        if (graph.stage !== "confirmed" && leftTicket && leftTicket === rightTicket) {
           throw new TaskControlError(`同仓并行单元「${left.scope?.name ?? left.name}」与「${right.scope?.name ?? right.name}」不能共用 AR ${leftTicket}，请填写不同单号；只有真实依赖才应安排串行`);
         }
       }
