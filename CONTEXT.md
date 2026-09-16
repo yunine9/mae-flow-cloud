@@ -140,8 +140,8 @@ _Avoid_: 批注(需求流的词)、与 MR 检视意见混称(那条检视代码,
 _Avoid_: AI 自落版本文件(issue-analysis.r2.md 之类,已否);「分析报告2」式页签名(已否)
 
 **回合前压缩**:
-问题会话续聊回合把话递进在场会话前的上下文压缩(2026-09-11)。唯一安全位在 resumeTurnBody:挂起通道(问题卡原地续跑)与重启重建(新上下文)结构性不压。两条触发路:①分析→修复边界(analysis_confirm 确认)必压一次,不受阈值管辖;②事件量阈值(管理页旋钮 issue_compact_every_events / 部署旗 --issue-compact-every-events,缺省 0=关)——events.jsonl 增量是上下文增长的诚实代理(与需求侧 compactEveryEvents 同一纪律)。两路都 fail-open:压不动回合照走。边界的报告指针(路径+修改方案要点)钉进确认推进通知词走必达通道——pi 的手动压缩在单回合历史上不带自定义锚(split-turn 路),指针不能指望摘要。
-_Avoid_: 把超限自愈(turnWithOverflowRepair,上下文撑爆后的一次性补救)说成回合前压缩(那是兜底,这是节奏)
+问题会话续聊回合把话递进在场会话前的上下文压缩(2026-09-11)。唯一安全位在 resumeTurnBody:挂起通道(问题卡原地续跑)与重启重建(新上下文)结构性不压。两条触发路:①分析→修复边界(analysis_confirm 确认)必压一次,不受阈值管辖;②事件量阈值(管理页旋钮 issue_compact_every_events / 部署旗 --issue-compact-every-events,部署缺省 400≈一扇网关窗的事件量——issue-64 实测约 420 条撑满一窗,#285 拍板零配置即开;显式 0=关)——events.jsonl 增量是上下文增长的诚实代理(与需求侧 compactEveryEvents 同一纪律)。两路都 fail-open:压不动回合照走。边界的报告指针(路径+修改方案要点)钉进确认推进通知词走必达通道——pi 的手动压缩在单回合历史上不带自定义锚(split-turn 路),指针不能指望摘要。
+_Avoid_: 把超限自愈(turnWithOverflowRepair,上下文撑爆后的补救)说成回合前压缩(那是兜底,这是节奏);超限自愈预算"同一场连续超限只补一次、翻篇(补救重试不再超限)即归还"(2026-09-16 #285,issue-64 二爆冤死复盘),不是整条会话只救一次
 
 **现场回收**:
 磁盘治理(2026-09-11 拍板):终态(取消/归档)问题单的 `repo/` 代码现场由每日清扫器整树删除,取消/归档当场也回收;idle 单的构建产物(target/build/node_modules/depend)在 mtime 冷却 ≥48h 后单独回收,源码与 .git 保留。**failed 全豁免**(可恢复态,手动转取消是其出口);suspended 等转正,不碰。过程记录(issue.json/事件账/分析报告/拉取日志/登记截图)永不回收——历史会话照常可看。双旋钮独立:issue_repo_reclaim(整仓开/关)、issue_build_products_cooldown_hours(产物冷却期,0=关)。回收过的单子返工时,回合提示词带"首次编译为全量"预告,不走预热。
