@@ -4,17 +4,20 @@
 #
 # 两个 job:
 # - gate(阻塞):typecheck + web 构建 + 秒级契约,红即挡;
-# - full-suite(阻塞,2026-09-14 起):全量 npm test 按 3 分片
+# - full-suite(阻塞,2026-09-14 起):全量 npm run test:full 按 3 分片
 #   并行跑(文件名哈希分桶,无需维护清单),红即挡。存量已知红已于
 #   2026-09-14 清零(隔离标记全摘,归因见
-#   docs/test-suite-efficiency-2026-09-11.md)。
+#   docs/test-suite-efficiency-2026-09-11.md)。本地 npm test 2026-09-16
+#   起默认=快层(test:fast 同义,排除 delivery/mrLoop 等重仿真族)——
+#   防止 AI/人顺手一键踩进分钟级全量与它的并发抖动;全量须显式
+#   test:full。
 #
 # CI 排除 prepushRecovery/hostPushRecovery(serve 重启恢复族):
 # 本地空闲全绿、CI 环境必挂——恢复轮对 runner 环境敏感,6 例各烧满
-# 180s 超时(18 分钟/轮,CI 时间最大单点)。覆盖不删:本地 npm test
-# 照跑;根因清理后可移出排除名单。容器真件与 PG 用例在 CI 缺镜像/
-# 缺库环境自动跳过(与本地无 docker 同款分层);内核是仓内收编
-# kernel/,无需额外 checkout。
+# 180s 超时(18 分钟/轮,CI 时间最大单点)。覆盖不删:本地
+# npm run test:full 照跑;根因清理后可移出排除名单。容器真件与 PG
+# 用例在 CI 缺镜像/缺库环境自动跳过(与本地无 docker 同款分层);内核
+# 是仓内收编 kernel/,无需额外 checkout。
 
 name: tests
 

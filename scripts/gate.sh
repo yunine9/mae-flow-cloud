@@ -34,4 +34,4 @@ npx tsx --test --test-concurrency=1 --test-timeout=60000 \
   tests/uiWorkbenchScenarios.test.ts \
   tests/requirementGraphVisible.test.ts
 
-printf '\n[gate] 通过。全量:npm test(单进程,别并行跑两份)。\n'
+printf '\n[gate] 通过。npm test=快层;全量:npm run test:full(单进程,别并行跑两份;平时交 CI 三分片)。\n'
