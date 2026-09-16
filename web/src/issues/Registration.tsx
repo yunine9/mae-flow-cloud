@@ -27,23 +27,27 @@ import {
   getBusinessModules,
   getDtsModuleBindings,
   getDtsTicketDetail,
+  listCollaborationAssignees,
   listDtsTickets,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
   type BusinessModule,
+  type CollaborationAssignee,
   type DtsModuleBindingEntry,
   type DtsTicketBrief,
   type DtsTicketDetail,
   type EnvironmentView,
   type IssueSummary,
 } from "../api";
+import { userLabel, UserPicker, type UserOption } from "../UserPicker";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
 import {
   ISSUE_DESCRIPTION_TEMPLATE, isUntouchedTemplate,
 } from "./descriptionTemplate";
+import { resolveAssignee } from "./assigneeDefault";
 import { copyIssueDescription } from "./copyIssueDescription";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
@@ -64,25 +68,34 @@ const FIELD = "grid gap-[5px] text-[13px] text-muted-foreground max-[680px]:col-
 const GROUP = "col-span-full grid gap-3 rounded-[10px] border border-line bg-surface p-3.5 max-[680px]:px-2.5 max-[680px]:py-3";
 const GROUP_BODY = "grid grid-cols-2 gap-3 max-[680px]:grid-cols-1";
 
-/** 发起前置门禁条(与需求侧 /launch-options 个人缺项同款语义):这单
- * 会碰远端仓就得先有 Git 身份——令牌管克隆/推送,邮箱管提交署名与
- * 平台归属。服务端 create 里机械拦(needRepo 判定同源),这里只把
- * 拦截面提前到表单:按钮禁用 + 指路个人设置,配完回来即解锁。
- * (#230:琥珀警示壳换工具类,动作钮换 shadcn Button。) */
-function CredentialGate({ viewer, needRepo, onNavigateProfile }: {
+/** 发起前置门禁条(ADR-0031 起查**责任人**的凭据):这单会碰远端仓,
+ *  克隆与推送都用责任人的身份——责任人没配齐就拦在表单上,服务端
+ *  create 里机械拦(判定同源)。分两种说法:责任人=自己(自登记)
+ *  指路个人设置,自己配完即解锁;责任人=他人(登记指派)点名责任人,
+ *  登记人改选已配齐的责任人或让责任人先配好。 */
+function CredentialGate({ viewer, needRepo, assignee, ready, missing,
+  onNavigateProfile }: {
   viewer: AuthUser;
   needRepo: boolean;
+  /** 当前生效的责任人(空=未指派,不出这个门)。 */
+  assignee: string;
+  /** 责任人凭据是否配齐(候选未加载完=未知,不拦)。 */
+  ready: boolean;
+  missing: string[];
   onNavigateProfile?: () => void;
 }) {
-  if (!needRepo) return null;
-  const missing: string[] = [];
-  if (!viewer.git_token_hint) missing.push("Git 令牌");
-  else if (!viewer.git_email) missing.push("个人邮箱");
-  if (!missing.length) return null;
+  if (!needRepo || !assignee || ready) return null;
+  const self = assignee === viewer.username;
+  // ready=false ⟺ missing 非空(flow=issue 口径),detail 必有内容。
+  const detail = `缺 ${missing.join(" 与 ")}`;
+  const selfMissing = missing.join(" 与 ");
   return <div className="col-span-full mb-2.5 flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
-    <span>发起前先配置<b className="text-attention">{missing.join(" 与 ")}</b>(个人设置 → 个人接入):
-      拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
-    {onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
+    {self
+      ? <span>发起前先配置<b className="text-attention">{selfMissing}</b>(个人设置 → 个人接入):
+          拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
+      : <span>责任人 <b className="text-attention">{assignee}</b>({detail})的 Git 凭据未配齐——拉取代码仓与推送提交都用责任人的身份:
+          改选已配齐的责任人,或让责任人配好后再登记。</span>}
+    {self && onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
       去个人设置配置
     </Button>}
   </div>;
@@ -217,6 +230,12 @@ function ManualRegister({
   // 从环境管理选(#150,ADR-0020):选中即定,提交只带 environment_id——
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
+  // 责任人(ADR-0031):登记完成即移交——displayed 值由 resolveAssignee
+  // 裁决:未选模块置空,选了模块且未手选自动填模块责任人(换模块跟随),
+  // 手选即冻结。候选=全部普通用户(flow=issue 口径,管理员天然不在),
+  // 模块责任人与维护者置顶带标记;登记人自己不用配 Git 凭据。
+  const [assigneeManual, setAssigneeManual] = useState("");
+  const [candidates, setCandidates] = useState<CollaborationAssignee[] | undefined>();
   const [busy, setBusy] = useState(false);
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
@@ -224,6 +243,53 @@ function ManualRegister({
   const moduleCatalog = useMemo(() => (modules ?? []).filter((module) =>
     module.status === "active" && module.repositories.length > 0), [modules]);
   const selectedModule = moduleCatalog.find((module) => module.id === moduleId);
+  // 指派候选(flow=issue 固定口径:只认 Git 令牌+邮箱,不问小鲁班
+  // 令牌)。拉取失败置空表——必填校验拦住提交,服务端门禁兜底。
+  useEffect(() => {
+    let alive = true;
+    listCollaborationAssignees("issue")
+      .then((rows) => { if (alive) setCandidates(rows); })
+      .catch(() => { if (alive) setCandidates([]); });
+    return () => { alive = false; };
+  }, []);
+  const candidateRows = candidates ?? [];
+  const candidateByUsername = useMemo(
+    () => new Map(candidateRows.map((row) => [row.username, row])),
+    [candidateRows]);
+  const selectedOwner = selectedModule?.owner;
+  const assignee = resolveAssignee({
+    manualPick: assigneeManual,
+    moduleOwner: selectedOwner,
+    ownerAssignable: Boolean(selectedOwner
+      && candidateByUsername.has(selectedOwner)),
+  });
+  // 模块责任人与维护者置顶带标记:模块相关的人一眼可见(不在候选的
+  // 管理员/停用账号跳过——候选接口本就不给)。
+  const assigneeOptions = useMemo<UserOption[]>(() => {
+    const pinned: UserOption[] = [];
+    const picked = new Set<string>();
+    for (const name of [selectedOwner, ...(selectedModule?.maintainers ?? [])]) {
+      if (!name || picked.has(name)) continue;
+      const row = candidateByUsername.get(name);
+      if (!row) continue;
+      picked.add(name);
+      pinned.push({
+        username: row.username,
+        ...(row.display_name ? { display_name: row.display_name } : {}),
+        detail: (name === selectedOwner ? "模块责任人" : "模块维护者")
+          + (row.ready ? "" : "(未配 Git 凭据)"),
+      });
+    }
+    return [...pinned, ...candidateRows
+      .filter((row) => !picked.has(row.username))
+      .map((row) => ({
+        username: row.username,
+        ...(row.display_name ? { display_name: row.display_name } : {}),
+        ...(row.ready ? {} : { detail: "未配 Git 凭据" }),
+      }))];
+  }, [candidateRows, candidateByUsername, selectedOwner, selectedModule]);
+  const assigneeReady = Boolean(assignee
+    && candidateByUsername.get(assignee)?.ready);
   useEffect(() => {
     let alive = true;
     setModules(undefined);
@@ -280,13 +346,14 @@ function ManualRegister({
     }
   }
 
-  // 个人凭据前置门禁:模块带出的仓一般是 https 远端,克隆与推送都用
-  // 发起人身份——按模块绑定判断 needRepo;全本地仓(file:// 演示库)
-  // 不拦。服务端 create 里机械拦(判定同源),这里把拦截面提前到表单。
+  // 个人凭据前置门禁(ADR-0031 起查责任人):模块带出的仓一般是
+  // https 远端,克隆与推送都用责任人的身份——按模块绑定判断 needRepo;
+  // 全本地仓(file:// 演示库)不拦。服务端 create 里机械拦(判定同源),
+  // 这里把拦截面提前到表单。
   const touchRemoteRepo = (selectedModule?.repositories ?? [])
     .some((url) => /^https?:\/\//i.test(url));
-  const credentialBlocked = touchRemoteRepo
-    && (!viewer.git_token_hint || !viewer.git_email);
+  const credentialBlocked = Boolean(assignee) && touchRemoteRepo
+    && candidates !== undefined && !assigneeReady;
 
   // 发起按钮的灰化口径(spec 验收):目录为空/未选模块/凭据缺失/提交中。
   // 字段缺内容不灰按钮——提交时逐项给友好指路文案,让人知道卡在哪。
@@ -327,6 +394,17 @@ function ManualRegister({
       onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
       return;
     }
+    if (!assignee) {
+      onError("请选择责任人——登记完成后由责任人推进;选了业务模块会自动带上模块责任人");
+      return;
+    }
+    if (touchRemoteRepo && candidates !== undefined && !assigneeReady) {
+      onError(`责任人 ${userLabel({ username: assignee,
+        ...(candidateByUsername.get(assignee)?.display_name
+          ? { display_name: candidateByUsername.get(assignee)?.display_name } : {}) })}`
+        + " 的 Git 凭据未配齐——改选已配齐的责任人,或让责任人配好后再登记");
+      return;
+    }
     setBusy(true);
     try {
       const created = await createIssue({
@@ -335,10 +413,13 @@ function ManualRegister({
         module_id: moduleId,
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
         environment: { environment_id: pickedEnv.id },
+        // 责任人(ADR-0031):登记完成即移交,归属与推进人。
+        assignee,
       });
       // 重置回模板而非空串(#273):下一条登记仍从标准格式起步,两套
       // 空态不并存。
       setTitle(""); setDescription(ISSUE_DESCRIPTION_TEMPLATE); setModuleId("");
+      setAssigneeManual("");
       clearPickedEnv();
       onCreated(created);
     } catch (reason) {
@@ -431,9 +512,25 @@ function ManualRegister({
             </Button>
           </small>}
           {catalogEmpty && <small className="col-span-full" role="alert">
-            模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来发起。
+            模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来登记。
           </small>}
         </label>
+        {/* 责任人(ADR-0031):登记完成即移交——模块责任人+维护者置顶
+            带标记,选模块自动带上,手选即冻结。不用 label 包裹:label
+            的激活转发会把点开选人框的动作转给区内首个可激活元素
+            (同描述字段的走查结论)。 */}
+        <div className={cn(FIELD, "col-span-full")}>
+          <span>责任人 <i className="font-bold not-italic text-danger">*</i></span>
+          <UserPicker value={assignee} options={assigneeOptions}
+            onChange={setAssigneeManual} ariaLabel="责任人"
+            emptyLabel="选择责任人——登记完成后由其推进" />
+          {selectedModule?.owner && <small className="text-xs leading-normal text-faint">
+            模块「{selectedModule.name}」的责任人是 {userLabel({ username: selectedModule.owner,
+              ...(candidateByUsername.get(selectedModule.owner)?.display_name
+                ? { display_name: candidateByUsername.get(selectedModule.owner)?.display_name } : {}) })},
+            未手选时自动带上
+          </small>}
+        </div>
       </div>
     </div>
     <div className={GROUP}>
@@ -455,10 +552,12 @@ function ManualRegister({
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
+      assignee={assignee} ready={assigneeReady}
+      missing={assignee ? candidateByUsername.get(assignee)?.missing ?? [] : []}
       onNavigateProfile={onNavigateProfile} />
     <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
       <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
-        {busy ? "发起中…" : "发起分析"}
+        {busy ? "登记中…" : "登记问题"}
       </Button>
     </div>
   </form>;
@@ -1136,7 +1235,7 @@ function DtsRegister({
                         <SelectTrigger
                           className="h-8 w-full text-xs"
                           aria-label={`${ticket.ticket} 所属业务模块`}
-                          title="人工预绑这张单所属的业务模块;发起分析时直接带出,AI 不再识别">
+                          title="人工预绑这张单所属的业务模块;发起处理时直接带出,AI 不再识别">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="tw-root">

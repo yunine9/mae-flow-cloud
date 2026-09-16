@@ -1608,12 +1608,14 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
   assert.doesNotMatch(associate, /issue-rail-primary/);
 });
 
-test("登记域词汇与标点体例:动词归「发起」,引号归「」,标点半角(2026-09-14 设计审查)", () => {
-  // 发起一次问题处理,域内只有一个动词「发起」(「下单」是需求域旧词,
-  // 不回流);登记页提交钮「发起分析」与 DTS 页「发起处理」同构。
+test("登记域词汇与标点体例:引号归「」,标点半角(2026-09-14 设计审查;提交钮随 ADR-0031 收口为「登记问题」)", () => {
+  // 「下单」是需求域旧词,不回流。登记页提交钮 ADR-0031 起是
+  // 「登记问题」——登记=把问题移交给责任人,不再是替自己「发起分析」;
+  // DTS 页「发起处理」自助流程原样(与「发起」家族的旧同构就此分家)。
   assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
   assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
-  assert.match(registration, /"发起中…" : "发起分析"/);
+  assert.match(registration, /"登记中…" : "登记问题"/);
+  assert.doesNotMatch(registration, /发起分析/);
   // 状态串引号用直角引号(隐藏远程单提示 + 无可拉取空态两处),不用
   // 英文直引号。
   assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
@@ -1622,6 +1624,27 @@ test("登记域词汇与标点体例:动词归「发起」,引号归「」,标�
   // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
   assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
   assert.doesNotMatch(notice, / · /);
+});
+
+test("登记页责任人指派接线(ADR-0031):选人框进表单、缺省纯函数唯一裁决、凭据门查责任人", () => {
+  // 选人搜索框进登记表单(复用 UserPicker,不手搓);缺省/冻结规则
+  // 不在组件里散写——唯一裁决在 resolveAssignee 纯函数。
+  assert.match(registration, /import \{ userLabel, UserPicker, type UserOption \} from "\.\.\/UserPicker";/);
+  assert.match(registration, /import \{ resolveAssignee \} from "\.\/assigneeDefault";/);
+  assert.match(registration, /resolveAssignee\(\{\s*manualPick: assigneeManual,/);
+  assert.match(registration,
+    /<UserPicker value=\{assignee\} options=\{assigneeOptions\}\s*onChange=\{setAssigneeManual\} ariaLabel="责任人"/);
+  // 候选走 flow=issue 固定口径(只认 Git 凭据,不问小鲁班令牌);
+  // 模块责任人+维护者置顶带标记。
+  assert.match(registration, /listCollaborationAssignees\("issue"\)/);
+  assert.match(registration, /"模块责任人"/);
+  assert.match(registration, /"模块维护者"/);
+  // 凭据门查的是责任人不是登记人:提交拦截文案点名责任人。
+  assert.match(registration, /credentialBlocked = Boolean\(assignee\)/);
+  assert.match(registration, /的 Git 凭据未配齐——改选已配齐的责任人/);
+  // 登记请求带责任人;成功后重置回缺省(手选清空,下一条重新跟模块)。
+  assert.match(registration, /assignee,\s*\}\);/);
+  assert.match(registration, /setAssigneeManual\(""\)/);
 });
 
 test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设计审查 04)", () => {
