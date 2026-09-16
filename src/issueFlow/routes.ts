@@ -94,6 +94,7 @@ import {
   readAnalysisVersion,
 } from "./analysisVersions.ts";
 import type { DtsGateway } from "./gateways.ts";
+import { DTS_FILE_ORIGIN } from "./gateways.ts";
 import { isTerminal, type IssueEnvType } from "./state.ts";
 import {
   ISSUE_IMAGE_MAX_BYTES,
@@ -591,8 +592,10 @@ export async function handleIssueRoutes(
     // Cookie),由后端下载落 staging,返回 issue-images/<hash>.<ext>
     // 引用——前端用它替换原 src。data: URL 的字节就在 src 里,前端本地
     // 转 Blob 走既有上传,不进这里;file:/// 在前端拦截,路由层仍以
-    // 协议白名单兜一道。管理员不发起问题会话,同 POST /issues 的角色
-    // 边界。
+    // 协议白名单兜一道。DTS 域的图(单据描述内嵌图被整体复制的典型
+    // 形态)裸 fetch 无凭据必 401,改走 DtsGateway.proxyFile 同源凭据
+    // 回取(#276 环境实测)。管理员不发起问题会话,同 POST /issues 的
+    // 角色边界。
     if (method === "POST" && parts[1] === "proxy-image" && parts.length === 2) {
       if (viewer?.role === "admin") {
         return done(403, { error: "管理员不发起问题会话" });
@@ -605,46 +608,67 @@ export async function handleIssueRoutes(
       if (!/^https?:\/\//i.test(url)) {
         return done(400, { error: "仅支持 http/https 图片 URL" });
       }
+      const target = new URL(url);
+      const viaDts = target.origin === DTS_FILE_ORIGIN;
+      // DTS 域必须有网关才谈得上回取;未配置按拉单同款 409 出码,
+      // 不落进下面的兜底 catch 假装成上游故障。
+      if (viaDts && !routeOptions.dts) {
+        return done(409, { error: "DTS 网关未配置,无法回取 DTS 图" });
+      }
       try {
-        const upstream = await fetch(url, {
-          signal: AbortSignal.timeout(15_000),
-          redirect: "follow",
-        });
-        if (!upstream.ok) {
-          return done(502, { error: `下载失败: HTTP ${upstream.status}` });
-        }
-        // 非图片 content-type 拒收(需认证的上游典型回 HTML 登录页):
-        // 落一张渲染不出的图不如当场失败,前端按失败丢图保文字。
-        const contentType = upstream.headers.get("content-type") ?? "";
-        if (!contentType.startsWith("image/")) {
-          return done(415, {
-            error: `URL 返回的不是图片(${contentType || "无 content-type"})`,
-          });
-        }
-        // 边读边限量:上游大小未知,不能整包 arrayBuffer 进内存。
-        const chunks: Buffer[] = [];
-        let size = 0;
-        const reader = upstream.body?.getReader();
-        if (reader) {
-          for (;;) {
-            const { done: streamed, value } = await reader.read();
-            if (streamed) break;
-            size += value.byteLength;
-            if (size > ISSUE_IMAGE_MAX_BYTES) {
-              void reader.cancel();
-              return done(413, {
-                error: `图片超过 ${
-                  Math.round(ISSUE_IMAGE_MAX_BYTES / 1024 / 1024)}MB 上限`,
-              });
-            }
-            chunks.push(Buffer.from(value));
+        let data: Buffer;
+        let contentType: string;
+        if (viaDts) {
+          // DTS 域:按单据同源凭据回取,与 GET /issues/dts-file 同一条
+          // 认证通路;未配置网关按拉单同款 409 出码,不假装能裸拉。
+          const file = await requireDts(routeOptions.dts)
+            .proxyFile(target.pathname + target.search);
+          data = file.data;
+          contentType = file.contentType;
+          if (data.length > ISSUE_IMAGE_MAX_BYTES) {
+            return done(413, {
+              error: `图片超过 ${
+                Math.round(ISSUE_IMAGE_MAX_BYTES / 1024 / 1024)}MB 上限`,
+            });
           }
+        } else {
+          const upstream = await fetch(url, {
+            signal: AbortSignal.timeout(15_000),
+            redirect: "follow",
+          });
+          if (!upstream.ok) {
+            return done(502, { error: `下载失败: HTTP ${upstream.status}` });
+          }
+          // 非图片 content-type 拒收(需认证的上游典型回 HTML 登录页):
+          // 落一张渲染不出的图不如当场失败,前端按失败丢图保文字。
+          contentType = upstream.headers.get("content-type") ?? "";
+          if (!contentType.startsWith("image/")) {
+            return done(415, {
+              error: `URL 返回的不是图片(${contentType || "无 content-type"})`,
+            });
+          }
+          // 边读边限量:上游大小未知,不能整包 arrayBuffer 进内存。
+          const chunks: Buffer[] = [];
+          let size = 0;
+          const reader = upstream.body?.getReader();
+          if (reader) {
+            for (;;) {
+              const { done: streamed, value } = await reader.read();
+              if (streamed) break;
+              size += value.byteLength;
+              if (size > ISSUE_IMAGE_MAX_BYTES) {
+                void reader.cancel();
+                return done(413, {
+                  error: `图片超过 ${
+                    Math.round(ISSUE_IMAGE_MAX_BYTES / 1024 / 1024)}MB 上限`,
+                });
+              }
+              chunks.push(Buffer.from(value));
+            }
+          }
+          data = Buffer.concat(chunks);
         }
-        const result = stageIssueImage({
-          data: Buffer.concat(chunks),
-          contentType,
-          dataDir,
-        });
+        const result = stageIssueImage({ data, contentType, dataDir });
         return done(201, { path: result.path, bytes: result.bytes });
       } catch (error) {
         return done(502, {

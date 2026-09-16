@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
 import type { IssueFlowService } from "../src/issueFlow/service.ts";
+import type { DtsGateway } from "../src/issueFlow/gateways.ts";
 import { ISSUE_IMAGE_MAX_BYTES } from "../src/issueFlow/issueImages.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -49,6 +50,7 @@ function proxyPost(
   options: {
     dataDir?: string;
     viewer?: { username: string; role?: string };
+    dts?: DtsGateway;
   } = {},
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
@@ -74,6 +76,7 @@ function proxyPost(
         issueFlow: { dataDir: options.dataDir } as unknown as IssueFlowService,
         authEnabled: false,
         viewer: options.viewer,
+        dts: options.dts,
       },
     ).catch(reject);
     request.emit("data", Buffer.from(JSON.stringify(payload)));
@@ -177,4 +180,52 @@ test("代理转存:边读边限量,超 20MiB 上限 413 且不落盘", async () 
   } finally {
     await site.close();
   }
+});
+
+// ---- DTS 域:裸 fetch 无凭据必 401(#276 环境实测),改走网关同源凭据 ----
+
+const DTS_ORIGIN = "https://dts-szv.clouddragon.huawei.com";
+
+test("代理转存:DTS 域图走网关 proxyFile 同源凭据,不裸 fetch", async () => {
+  const dataDir = mfcTemp("mfc-issue-image-proxy-");
+  const fetchedPaths: string[] = [];
+  const dts = {
+    proxyFile: async (path: string) => {
+      fetchedPaths.push(path);
+      return { data: PNG_BYTES, contentType: "image/png" };
+    },
+  } as unknown as DtsGateway;
+  const { status, body } = await proxyPost(
+    { url: `${DTS_ORIGIN}/v1/nfs/downLoadFile?filePath=%2F202608%2Fa.png` },
+    { dataDir, dts });
+  assert.equal(status, 201, `应经网关转存成功,实际 ${status}: ${body.error ?? ""}`);
+  // 网关收到的就是站内绝对路径(pathname+search),凭据由网关注入。
+  assert.deepEqual(fetchedPaths,
+    ["/v1/nfs/downLoadFile?filePath=%2F202608%2Fa.png"]);
+  assert.match(body.path, /^issue-images\/[0-9a-f]{16}\.png$/);
+  const staged = join(dataDir, "issue-image-staging", body.path.split("/")[1]);
+  assert.ok(existsSync(staged));
+});
+
+test("代理转存:DTS 域但网关未配置 → 409,不假装能裸拉", async () => {
+  const dataDir = mfcTemp("mfc-issue-image-proxy-");
+  const { status, body } = await proxyPost(
+    { url: `${DTS_ORIGIN}/v1/nfs/downLoadFile?filePath=%2F202608%2Fa.png` },
+    { dataDir });
+  assert.equal(status, 409);
+  assert.match(body.error, /DTS 网关未配置/);
+});
+
+test("代理转存:DTS 网关回取失败 → 502 带网关错误", async () => {
+  const dataDir = mfcTemp("mfc-issue-image-proxy-");
+  const dts = {
+    proxyFile: async () => {
+      throw new Error("DTS 文件代理 HTTP 401");
+    },
+  } as unknown as DtsGateway;
+  const { status, body } = await proxyPost(
+    { url: `${DTS_ORIGIN}/v1/nfs/downLoadFile?filePath=%2F202608%2Fa.png` },
+    { dataDir, dts });
+  assert.equal(status, 502);
+  assert.match(body.error, /401/);
 });
