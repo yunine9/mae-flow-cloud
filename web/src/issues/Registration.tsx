@@ -246,8 +246,8 @@ function ManualRegister({
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
       if (saved) {
         setTitle(saved.title ?? "");
-        // 空草稿(退役前留过空描述的)不回灌空串——描述框只以模板或
-        // 用户内容呈现,不出现空框(#273)。
+        // 清空过的草稿(存的是空串)回读时不回灌空串——描述框只以
+        // 模板或用户内容呈现,不出现空框(#273)。
         setDescription(saved.description || ISSUE_DESCRIPTION_TEMPLATE);
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
       }
@@ -369,7 +369,7 @@ function ManualRegister({
           <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
             onUploadImage={uploadIssueFile} onError={onError}
-            placeholderText="发生条件、影响范围、复现步骤,输入即所见;粘贴或拖拽截图自动上传并原地显示" />
+            placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />
           {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
               页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">

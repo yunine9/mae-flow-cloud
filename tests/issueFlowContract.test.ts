@@ -1009,6 +1009,22 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
   }
 });
 
+test("契约快照:润色端点已退役,POST /issues/polish-description 按未知路由 404(#272,ADR-0030)", async () => {
+  const dataDir = mfcTemp("mfc-issue-contract-polish-gone-");
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const gone = await issuePost(["issues", "polish-description"], {
+      title: "t", description: "d",
+    }, service);
+    assert.equal(gone.status, 404,
+      "退役路由不得复活成任何兜底应答——按未知路由 404 出码");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 vault;页面凭据字段不收)", async () => {
   const dataDir = mfcTemp("mfc-issue-contract5-");
   createBusinessModule(dataDir, {
