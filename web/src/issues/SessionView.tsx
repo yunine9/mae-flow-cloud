@@ -290,7 +290,7 @@ export function IssueSessionView({
     role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
     <header className="ws-head">
       <button type="button" className="ws-back" onClick={onBack}
-        title="返回我的问题(Esc)" aria-label="返回我的问题(Esc)">←</button>
+        title="返回问题列表(Esc)" aria-label="返回问题列表(Esc)">←</button>
       <div className="ws-identity">
         <strong>{detail.title}</strong>
         <div className="ws-identity-line">

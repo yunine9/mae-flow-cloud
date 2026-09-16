@@ -683,11 +683,14 @@ test("admin 只读可见问题处理(#103):角色门拆除,发起入口仅开发
     appSource.indexOf('session.role === "admin" ? <>'),
     appSource.indexOf("</> : <>"));
   assert.ok(adminNav.includes('view="issues"'), "admin 侧栏缺问题处理入口");
-  // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题分「我的/全部」。
+  // 问题板:发起界面(登记/DTS)仅开发者渲染;列表标题分「全部/两范围」
+  // (ADR-0031:我负责的=归属,我登记的=登记人,替换旧"我的问题")。
   assert.match(issueBoard,
     /viewer\.role !== "admin" && <IssueRegistration/);
   assert.match(issueBoard,
-    /viewer\.role === "admin" \? "全部问题" : "我的问题"/);
+    /viewer\.role === "admin" \? "全部问题"/);
+  assert.match(issueBoard,
+    /listScope === "reported" \? "我登记的" : "我负责的"/);
   // 会话工作台的查看模式边界不变:写口仍按归属人判定(admin 旁观不写)。
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
@@ -1624,6 +1627,19 @@ test("登记域词汇与标点体例:引号归「」,标点半角(2026-09-14 设
   // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
   assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
   assert.doesNotMatch(notice, / · /);
+});
+
+test("会话列表两范围(ADR-0031):我负责的/我登记的切换与记忆,卡片并列两端", () => {
+  // 范围进请求(reported 走 ?scope=reported,缺省按归属)、选择记忆、
+  // 管理员不设切换;卡片恒显责任人,登记人≠责任人时并列——两个范围
+  // 都能一眼看到问题的两端。
+  assert.match(issueBoard, /ISSUE_SCOPE_STORAGE_KEY = "mae-flow:issue-list-scope"/);
+  assert.match(issueBoard, /listIssues\(listScope === "reported" \? "reported" : undefined\)/);
+  assert.match(issueBoard, /aria-pressed=\{listScope === "reported"\}/);
+  assert.doesNotMatch(issueBoard, /"我的问题"/);
+  assert.match(issueBoard, /责任人 · \{issue\.account\}/);
+  assert.match(issueBoard, /登记人 · \{issue\.reporter\}/);
+  assert.match(issueBoard, /还没有登记过问题/);
 });
 
 test("登记页责任人指派接线(ADR-0031):选人框进表单、缺省纯函数唯一裁决、凭据门查责任人", () => {

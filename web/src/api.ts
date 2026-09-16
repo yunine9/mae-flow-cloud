@@ -3989,12 +3989,17 @@ async function issueFetch(
   return parseJson(response);
 }
 
-export function listIssues(): Promise<IssueSummary[]> {
-  return issueFetch("/issues").then((body) => body.issues ?? []);
+export function listIssues(
+  /** "reported":「我登记的」(ADR-0031)——按登记人过滤,测试登记
+   * 给他人的会话在这里跟踪;缺省按归属过滤(「我负责的」)。 */
+  scope?: "reported",
+): Promise<IssueSummary[]> {
+  return issueFetch(scope ? "/issues?scope=reported" : "/issues")
+    .then((body) => body.issues ?? []);
 }
 
 /** 团队看板视角:拉所有人的问题会话(?scope=all)。列表只读,
- * 详情仍按归属校验——只看标题/状态/处理人/阶段,不碰决策与材料。 */
+ * 详情仍按归属校验——只看标题/状态/责任人/阶段,不碰决策与材料。 */
 export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
 }

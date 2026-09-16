@@ -1214,7 +1214,7 @@ export function App() {
     mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
     issues: { title: "问题处理", description: session.role === "admin"
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
-      : "我的问题研究与 DTS 问题单处理：先定位，后补单，非问题也是合法结论。" },
+      : "登记问题并指派责任人，或处理指派到你名下的问题：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     knowledge: { title: "团队资产", description: "管理团队通用知识、业务模块和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
