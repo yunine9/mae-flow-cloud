@@ -5,7 +5,7 @@
  * - Git 凭据门改查责任人并点名(登记人≠责任人时文案换人称,自登记
  *   维持"你");
  * - 指派通知发给责任人(FakeLubanServer),自登记不发、登记人不收;
- * - 列表 scope=reported 按登记人过滤,与缺省「我负责的」互不混淆;
+ * - 单一列表:归属或登记人是自己,推进与跟踪同列;
  * - 存量 issue.json 无登记人字段回填=归属;挂起转正拷贝登记人。
  *
  * 行为断言走真路由(先例:issueViewMode/issueFlowContract),通知走
@@ -135,24 +135,19 @@ test("登记指派:带责任人创建——归属=责任人、登记人=登录�
       "归属账号必须是责任人,不是登记人");
     assert.equal(created.body.reporter, "tester",
       "登记人必须取自登录态,服务端不信客户端");
-    // 责任人视角看得到(缺省「我负责的」);登记人缺省看不到、
-    // scope=reported 才看得到(两范围互不混淆)。
+    // 单一列表(ADR-0031,2026-09-16 修订):归属**或**登记人是自己。
+    // 责任人看得到(归属);登记人也看得到(登记人),同列跟踪。
     const mine = await callIssueRoute("GET", ["issues"], {
       service, viewer: OWNER_VIEWER,
     });
     assert.deepEqual((mine.body.issues as Array<{ id: string }>)
       .map((row) => row.id), [created.body.id]);
-    const testerDefault = await callIssueRoute("GET", ["issues"], {
+    const testerList = await callIssueRoute("GET", ["issues"], {
       service, viewer: TESTER,
     });
-    assert.deepEqual(testerDefault.body.issues, [],
-      "登记人缺省列表(我负责的)不含登记给他人的会话");
-    const reported = await callIssueRoute("GET", ["issues"], {
-      service, viewer: TESTER, query: "?scope=reported",
-    });
-    assert.deepEqual((reported.body.issues as Array<{ id: string }>)
+    assert.deepEqual((testerList.body.issues as Array<{ id: string }>)
       .map((row) => row.id), [created.body.id],
-      "「我登记的」按登记人过滤,登记给他人的会话在这里跟踪");
+      "登记给他人的会话在登记人的「我的问题」列表里,无需切换范围");
   } finally {
     await service.shutdown().catch(() => undefined);
   }
@@ -363,7 +358,7 @@ test("登记指派:登记人进 AI 元信息——指派会话带、自登记不
     "续聊词同样带登记人(重启重建的上下文不流失)");
 });
 
-test("登记指派:列表两范围——存量回填与挂起转正都认登记人", async () => {
+test("登记指派:单一列表——存量回填与挂起转正都认登记人", async () => {
   const dataDir = mfcTemp("mfc-issue-assign-scope-");
   const base = {
     title: "播放器偶发黑屏",
@@ -386,20 +381,22 @@ test("登记指派:列表两范围——存量回填与挂起转正都认登记�
   });
   const service = makeService(dataDir);
   try {
-    const reported = await callIssueRoute("GET", ["issues"], {
-      service, viewer: TESTER, query: "?scope=reported",
-    });
-    assert.deepEqual(
-      (reported.body.issues as Array<{ id: string }>)
-        .map((row) => row.id).sort(),
-      ["issue-1", "issue-2"],
-      "「我登记的」含登记给他人的会话;老会话回填登记人=归属后也算自登记");
-    const mine = await callIssueRoute("GET", ["issues"], {
+    // 单一列表:登记人(test)能同时看到登记给 dev 的 issue-1 与自己
+    // 名下的 issue-2;老会话回填登记人=归属,同列不丢。
+    const testerList = await callIssueRoute("GET", ["issues"], {
       service, viewer: TESTER,
     });
     assert.deepEqual(
-      (mine.body.issues as Array<{ id: string }>).map((row) => row.id),
-      ["issue-2"], "「我负责的」只看归属");
+      (testerList.body.issues as Array<{ id: string }>)
+        .map((row) => row.id).sort(),
+      ["issue-1", "issue-2"],
+      "归属或登记人是自己都进列表;老会话回填登记人=归属后也在");
+    const devList = await callIssueRoute("GET", ["issues"], {
+      service, viewer: OWNER_VIEWER,
+    });
+    assert.deepEqual(
+      (devList.body.issues as Array<{ id: string }>).map((row) => row.id),
+      ["issue-1"], "dev 只看归属是自己或自己登记的");
     // 挂起转正:登记人随会话走,测试不因换会话跟丢。
     writeSession(dataDir, {
       ...base, id: "issue-3", account: "dev", reporter: "tester",

@@ -350,19 +350,11 @@ export async function handleIssueRoutes(
   try {
     if (method === "GET" && parts.length === 1) {
       // ?scope=all:团队看板视角看所有人的问题会话;缺省只看本人——
-      // 「我负责的」(归属=我)的既有行为不变。?scope=reported(ADR-0031):
-      // 「我登记的」按登记人过滤——测试登记给开发责任人的会话在这里
-      // 跟踪;自登记(归属=登记人)两个范围都出现。读没有闸:查看模式
-      // (spec: issue-session-view-mode)对登录用户全开放,两个范围都是
-      // 它的投影。
-      const scope = new URL(request.url ?? "", "http://x")
-        .searchParams.get("scope");
-      if (scope === "reported") {
-        return done(200, {
-          issues: issueFlow.listReported(String(viewer?.username ?? "")),
-        });
-      }
-      const scopeAll = scope === "all";
+      // 「我的问题」单一列表(ADR-0031,2026-09-16 修订):归属**或**
+      // 登记人是自己,登记给他人要跟踪的与名下要推进的同列。读没有闸:
+      // 查看模式(spec: issue-session-view-mode)对登录用户全开放。
+      const scopeAll = new URL(request.url ?? "", "http://x")
+        .searchParams.get("scope") === "all";
       const mine = issueFlow.list(
         viewer && viewer.role !== "admin" && !scopeAll
           ? viewer.username : undefined);
