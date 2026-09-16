@@ -5,6 +5,8 @@ import test from "node:test";
 
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const descriptionEditor = readFileSync(
+  resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
 const notice = readFileSync(
   resolve("web/src/RepositoryResourceNotice.tsx"), "utf-8");
 const editor = readFileSync(
@@ -1642,9 +1644,11 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
     /variant="ghost" size="xs"\s+className="group\/live"/);
   assert.match(registration,
     /group-hover\/live:underline group-focus-visible\/live:underline/);
-  // 上传进行态挂 role=status,与其余进行态一致。
-  assert.match(registration,
-    /role="status">截图上传中…<\/span>/);
+  // 上传进行态挂 role=status,与其余进行态一致;指示住编辑器内右上角
+  // (DescriptionEditor 自持),登记页脚不再重复一份。
+  assert.match(descriptionEditor,
+    /<span role="status"\s+className="absolute right-2 top-2[^"]*">/);
+  assert.match(descriptionEditor, /截图上传中…/);
   // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
   // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
   assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);

@@ -11,10 +11,6 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -25,15 +21,13 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Check, ChevronRight, Columns3, Copy, RotateCw, Sparkles } from "lucide-react";
+import { Check, ChevronRight, Columns3, Copy, RotateCw } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
   getDtsModuleBindings,
   getDtsTicketDetail,
-  issueImageUrl,
   listDtsTickets,
-  polishIssueDescription,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
@@ -42,12 +36,10 @@ import {
   type DtsTicketBrief,
   type DtsTicketDetail,
   type EnvironmentView,
-  type IssuePolishResult,
   type IssueSummary,
 } from "../api";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
-import { Markdown } from "../markdown";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { copyIssueDescription } from "./copyIssueDescription";
 import { prepareDtsHtml } from "./dtsHtml";
@@ -185,8 +177,7 @@ export function IssueRegistration({
     hidden={!visible}>
     <div hidden={panel !== "manual"}>
       <ManualRegister viewer={viewer} onCreated={onCreated} onError={onError}
-        onNavigateProfile={onNavigateProfile}
-        active={visible && panel === "manual"} />
+        onNavigateProfile={onNavigateProfile} />
     </div>
     <div hidden={panel !== "dts"}>
       <DtsRegister viewer={viewer} issues={issues} active={panel === "dts"}
@@ -195,53 +186,16 @@ export function IssueRegistration({
   </section>;
 }
 
-/** 润色稿驻留(ADR-0029):挂起稿(已生成、未确认/未放弃)按用户名存
- * sessionStorage——顶层页签切换会卸载整个看板,驻留在组件外才挺得过;
- * 生命周期=浏览器页签,关了即清,刷新白送存活(请求进行中刷新救不了,
- * 页面卸载杀请求)。失败回执不驻留:失败即逝,回来重按一次。 */
-function polishKey(username: string): string {
-  return `mae-flow:issue:polish:${username}`;
-}
-
-function readStoredPolish(username: string): IssuePolishResult | null {
-  try {
-    return JSON.parse(sessionStorage.getItem(polishKey(username)) ?? "null");
-  } catch { return null; }
-}
-
-function storePolish(username: string, result: IssuePolishResult): void {
-  try {
-    sessionStorage.setItem(polishKey(username), JSON.stringify(result));
-  } catch { /* 驻留是旁路,存不进就算了 */ }
-}
-
-function clearStoredPolish(username: string): void {
-  try { sessionStorage.removeItem(polishKey(username)); } catch { /* 同上 */ }
-}
-
-/** 在飞润色登记(ADR-0029):切走再切回是重挂——新实例的 polishing 从
- * false 起步,旧闭包的 setState 是空操作。把在飞请求记在组件外,重挂时
- * 恢复「润色中」并把迟到的结果接给当前实例;被新请求顶替的旧结果不再
- * 落账(最新胜出)。 */
-const inflightPolish = new Map<string, {
-  request: Promise<IssuePolishResult>;
-  superseded: boolean;
-}>();
-
 function ManualRegister({
   viewer,
   onCreated,
   onError,
   onNavigateProfile,
-  active,
 }: {
   viewer: AuthUser;
   onCreated: (issue: IssueSummary) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
-  /** 润色确认弹窗的渲染门(ADR-0029):整域可见且落在 manual 面板。
-   * 人不在登记页时挂起稿只驻留不弹,切回瞬间弹回。 */
-  active: boolean;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -259,16 +213,6 @@ function ManualRegister({
   // 服务端以选定时点的台账值快照进会话。
   const [pickedEnv, setPickedEnv] = useState<EnvironmentView | null>(null);
   const [busy, setBusy] = useState(false);
-  // AI 润色(#184):润色请求进行态 + 确认弹窗的润色稿(服务端不落库,
-  // 放弃即丢弃;挂起稿驻留 sessionStorage,ADR-0029)。建议标题在弹窗内
-  // 可改,替换时随描述一起写回。
-  const [polishing, setPolishing] = useState(false);
-  // 懒初始化从驻留读回(ADR-0029):顶层页签切换卸载看板后回来,弹窗
-  // 随面板可见即刻弹回。
-  const [polishResult, setPolishResult] = useState<IssuePolishResult | null>(
-    () => readStoredPolish(viewer.username));
-  const [adoptTitle, setAdoptTitle] = useState(
-    () => readStoredPolish(viewer.username)?.title ?? "");
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
   // 打回,不进下拉让它根本没有被选中的机会(spec #15)。
@@ -313,26 +257,6 @@ function ManualRegister({
     return () => window.clearTimeout(timer);
   }, [draftKey, title, description, moduleId]);
 
-  // 重挂接续(ADR-0029):上一实例的在飞润色由这里接回——恢复「润色中」
-  // 灰化,结果到达时落驻留并回填当前实例,弹窗随渲染门弹出。失败即逝
-  // (ADR-0029 边界):只恢复按钮,不补报错。
-  useEffect(() => {
-    const entry = inflightPolish.get(viewer.username);
-    if (!entry || entry.superseded) return;
-    setPolishing(true);
-    let alive = true;
-    entry.request
-      .then((result) => {
-        if (!alive || entry.superseded) return;
-        storePolish(viewer.username, result);
-        setAdoptTitle(result.title);
-        setPolishResult(result);
-      })
-      .catch(() => { /* 失败即逝 */ })
-      .finally(() => { if (alive) setPolishing(false); });
-    return () => { alive = false; };
-  }, [viewer.username]);
-
   // 现象描述内嵌截图(#184 票2):粘贴/拖拽由所见即所得编辑器接管——
   // 上传钩子落 staging 后返回相对引用,编辑器在光标位置插入并原地渲染。
   // 图片本体不进 description,进的只有 issue-images/ 相对引用(与
@@ -372,64 +296,6 @@ function ManualRegister({
 
   function clearPickedEnv() {
     setPickedEnv(null);
-  }
-
-  /** AI 润色(#184):把随意的 标题+描述 整理成标准提单格式。识图观察由
-   * 服务端组装(截图内容补充进润色稿);结果进确认弹窗并落驻留
-   * (ADR-0029)——替换前原稿一动不动。 */
-  async function polish() {
-    if (polishing || !description.trim()) return;
-    // 非托管图片引用当场指路(2026-09-15 实测):staging 之外的图——修复
-    // 上线前粘贴的旧草稿、拖拽进来的外部图——识图拿不到、预览也解析
-    // 不了,模型只会交回全占位模板加破图;拦在调用前把出路说清。
-    const unmanagedImage =
-      /!\[[^\]]*\]\((?!issue-images\/)[^)\s]+\)/.exec(description);
-    if (unmanagedImage) {
-      onError("描述里有非平台托管的图片引用,润色与识图都读不到它:把这张图删掉,重新用截图粘贴(或右键复制图像)后再点润色");
-      return;
-    }
-    setPolishing(true);
-    const prior = inflightPolish.get(viewer.username);
-    if (prior) prior.superseded = true;
-    const request = polishIssueDescription({
-      title: title.trim(),
-      description,
-      ...(selectedModule ? { module: selectedModule.name } : {}),
-      ...(pickedEnv ? { environment: pickedEnv.ip } : {}),
-    });
-    const entry = { request, superseded: false };
-    inflightPolish.set(viewer.username, entry);
-    try {
-      const result = await request;
-      if (!entry.superseded) {
-        // 先落驻留再回填(ADR-0029):人已切到顶层页签时组件已卸载,
-        // setState 是空操作,驻留必须自己落地,回来才读得回。
-        storePolish(viewer.username, result);
-        setAdoptTitle(result.title);
-        setPolishResult(result);
-      }
-    } catch (reason) {
-      onError(String(reason instanceof Error ? reason.message : reason));
-    } finally {
-      if (inflightPolish.get(viewer.username) === entry) {
-        inflightPolish.delete(viewer.username);
-      }
-      setPolishing(false);
-    }
-  }
-
-  /** 弃稿:关弹窗(Esc/遮罩)与「放弃」同路,驻留同步清(ADR-0029)。 */
-  function discardPolish() {
-    clearStoredPolish(viewer.username);
-    setPolishResult(null);
-  }
-
-  /** 弹窗里「替换」:标题(可改)与描述一起写回;「放弃」只关弹窗。 */
-  function adoptPolish() {
-    if (!polishResult) return;
-    if (adoptTitle.trim()) setTitle(adoptTitle.trim());
-    setDescription(polishResult.description);
-    discardPolish();
   }
 
   async function submit(event: React.FormEvent) {
@@ -481,8 +347,8 @@ function ManualRegister({
             onChange={(event) => setTitle(event.target.value)} />
         </label>
         {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
-            的动作转给区内第一个可激活元素(= 润色按钮),造成"改个描述
-            就自动润色"(2026-09-11 用户实测)。 */}
+            的动作转给区内第一个可激活元素,行为不可控(2026-09-11
+            用户实测)。 */}
         <div className={cn(FIELD, "col-span-full")}>
           <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
           <DescriptionEditor value={description} onChange={setDescription}
@@ -491,18 +357,10 @@ function ManualRegister({
           {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
               页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {/* 一键复制:AI 润色稿替换进来或手写完,想带走(贴工单/飞书)
-                都不用手选全选;空描述不可点。 */}
+            {/* 一键复制:描述写完想带走(贴工单/飞书)都不用手选全选;
+                空描述不可点。 */}
             <CopyDescriptionButton markdown={description}
               disabled={!description.trim()} variant="ghost" size="xs" />
-            {/* AI 润色(#184):主动点击才发起;描述为空不可点,润色中防重复。 */}
-            <Button type="button" variant="ghost" size="xs"
-              disabled={!description.trim() || polishing}
-              title="用 AI 把描述整理成标准提单格式(含截图内容识读)"
-              onClick={() => void polish()}>
-              <Sparkles aria-hidden />
-              {polishing ? "润色中…" : "AI 润色"}
-            </Button>
           </div>
         </div>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
@@ -587,48 +445,6 @@ function ManualRegister({
         {busy ? "发起中…" : "发起分析"}
       </Button>
     </div>
-    {/* 润色确认弹窗(#184):润色稿经预览才落地——替换前原稿一动不动;
-        「待补充」提示页面没采集到的信息,不编造(两侧渲染面均原生
-        markdown,2026-09-15 拍板)。
-        渲染门跟面板可见性走(ADR-0029):portal 到 body 的弹窗拦不住
-        父级 hidden,人不在登记页时不 gate 会跨页签跳出来;切回即弹。
-        换面板/切页签收起弹窗不清稿,弃稿只认显式动作。
-        (Dialog 本体是原语,不动;#230 只把弹窗周边的皮肤类换工具类。) */}
-    {active && polishResult && <Dialog open onOpenChange={(open) => {
-      if (!open) discardPolish();
-    }}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>AI 润色预览</DialogTitle>
-          <DialogDescription>
-            核对润色稿后选择替换或放弃;「待补充」是登记页没采集到的信息,可替换后在描述里补齐。
-          </DialogDescription>
-        </DialogHeader>
-        {polishResult.vision_note && <p className="issue-polish-note m-0 rounded-lg border border-attention/35 bg-[color-mix(in_srgb,var(--attention)_9%,var(--surface-muted))] px-2.5 py-2 text-xs text-attention" role="alert">
-          {polishResult.vision_note}
-        </p>}
-        <label className={FIELD}>
-          <span>建议标题</span>
-          <Input value={adoptTitle}
-            onChange={(event) => setAdoptTitle(event.target.value)} />
-        </label>
-        <div className="issue-polish-preview max-h-[46vh] overflow-auto rounded-lg border border-line bg-surface-muted px-3 py-2.5 text-[13px] leading-[1.65] text-text-strong [&_img]:max-h-[200px] [&_img]:max-w-full [&_img]:rounded-md" aria-label="润色后描述预览">
-          <Markdown text={polishResult.description}
-            resolveImage={(path) => issueImageUrl(path)} />
-        </div>
-        <DialogFooter>
-          {/* 复制与「放弃/替换」不在一条决策线上:可能只是要把润色稿带去
-              别处提单,不落本仓——mr-auto 与决策钮拉开成两组。 */}
-          <CopyDescriptionButton markdown={polishResult.description}
-            variant="outline" size="sm" className="sm:mr-auto" />
-          <Button type="button" variant="outline" size="sm"
-            onClick={discardPolish}>放弃</Button>
-          <Button type="button" size="sm" onClick={adoptPolish}>
-            替换原稿
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>}
   </form>;
 }
 

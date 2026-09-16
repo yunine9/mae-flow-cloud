@@ -226,9 +226,8 @@ test("既有族不漂移:404/409/材料层 400 逐分支保持", async () => {
     const badWrite = await issueCall("PUT",
       ["issues", "issue-1", "materials", "file"],
       { service, payload: { path: "x.md", content: "hi" } });
-    assert.equal(badWrite.status, 400,
-      "材料层写失败(无已克隆仓)保持 fail-open 400 带人话");
-    assert.match(badWrite.body.error, /还没有已克隆的代码仓/);
+    assert.equal(badWrite.status, 404,
+      "工作区人工修改已整体退役(ADR-0028):materials/file 写路由随迁,旧路径按未知路由 404 出码(随润色退役票顺手修钉——a629cf3 漏改)");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

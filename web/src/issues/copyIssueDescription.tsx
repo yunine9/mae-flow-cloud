@@ -26,7 +26,7 @@ function absolutizeImageRefs(markdown: string): string {
   );
 }
 
-/** 渲染稿 HTML:走与润色预览/帮助中心同一个 <Markdown> 渲染器,不另
+/** 渲染稿 HTML:走与帮助中心同一个 <Markdown> 渲染器,不另
  * 养一份 markdown→HTML 翻译。目标编辑器自带的皮肤会盖掉渲染类名,
  * 保真的是结构(标题/列表/表格/粗体/图片)。 */
 function renderedHtml(markdown: string): string {

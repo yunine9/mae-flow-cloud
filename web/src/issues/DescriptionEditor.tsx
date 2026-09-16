@@ -46,7 +46,7 @@ export function DescriptionEditor({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   // 值回路防抖:onChange 出来的序列化文本记为"内部已知",父态回灌时
-  // 只有真正外部变更(如润色替换)才 replaceAll,键入不回灌不打断光标。
+  // 只有真正外部变更(如草稿回读)才 replaceAll,键入不回灌不打断光标。
   const internalRef = useRef(value);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -130,7 +130,7 @@ export function DescriptionEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 外部值变更(润色替换回填):整体重排;内部键入不回灌。
+  // 外部值变更:整体重排;内部键入不回灌。
   useEffect(() => {
     if (value === internalRef.current) return;
     internalRef.current = value;
@@ -142,10 +142,10 @@ export function DescriptionEditor({
   // 网页右键「复制图像」粘贴兜底(milkdown 版,与 useIssueImagePaste 同款
   // 判定):Chromium 只把 <img src> 引用放 text/html、不给位图字节——
   // 不拦的话 ProseMirror 按 HTML 直插图节点,原 src(data:/https:)原样
-  // 进 description:staging 上传被绕开(登记提交、润色识图都拿不到图),
-  // 润色侧 images.length===0 静默跳过识图,稿子只剩模板(#184 实测)。
-  // 命中纯图粘贴即拦默认,异步 Clipboard API 取回位图走同一条上传钩子,
-  // 插入的仍是 issue-images/ 相对引用;带位图文件的粘贴归 upload 插件。
+  // 进 description:staging 上传被绕开,登记提交时拿不到图,引用还是
+  // 死链(#184 实测)。命中纯图粘贴即拦默认,异步 Clipboard API 取回
+  // 位图走同一条上传钩子,插入的仍是 issue-images/ 相对引用;带位图
+  // 文件的粘贴归 upload 插件。
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -190,11 +190,9 @@ export function DescriptionEditor({
 
   // #231 换装:.issue-desc-editor 家族(style.css)退役,壳/占位/灯箱与
   // ProseMirror 生成内容(节点由编辑器内部建树,类挂不上去)一律用
-  // [&_*] 任意变体直译配方——与 #230 润色预览的 [&_img]:max-h-[200px]
-  // 同一做法。
-  // 空态默认高度照 AI 润色模板估算(2026-09-15 拍板):assets/issue-prompts/
-  // polish-template.md 的标准提单渲染出来约 17 行文本 + 块间距 ≈ 500px,
-  // 空态直接给到这个高度——粘贴润色稿后框高基本不变,视觉稳定;更长的
+  // [&_*] 任意变体直译配方。
+  // 空态给足约 500px 的写作高度(2026-09-15 拍板):结构化描述模板渲染
+  // 出来约 17 行文本 + 块间距,写长后框高基本不变,视觉稳定;更长的
   // 内容长到 70vh 封顶,超出部分框内滚动,不再把整张表无限撑高。
   return <div className={cn(
     "relative [&_.ProseMirror]:min-h-[500px] [&_.ProseMirror]:max-h-[70vh] [&_.ProseMirror]:overflow-y-auto [&_.ProseMirror]:rounded-lg [&_.ProseMirror]:border [&_.ProseMirror]:border-line [&_.ProseMirror]:bg-(--surface-muted) [&_.ProseMirror]:px-2.5 [&_.ProseMirror]:py-2 [&_.ProseMirror]:text-base [&_.ProseMirror]:leading-[1.65] [&_.ProseMirror]:text-text-strong [&_.ProseMirror]:outline-none [overflow-wrap:anywhere] focus-within:[&_.ProseMirror]:border-(--accent)",
