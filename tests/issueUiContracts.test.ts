@@ -1670,3 +1670,20 @@ test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026
   assert.equal((registration.match(/\{launchLabel\}/g) ?? []).length, 1,
     "发起钮文案仅顶部一处");
 });
+
+test("描述预填模板:打开即模板,原样拦截,提交后回模板(#273,ADR-0030)", () => {
+  // 润色退役后格式合规靠预填:模板住独立常量模块,登记页三处消费——
+  // 初始态预填、提交原样拦截、提交成功重置回模板(不再重置空串)。
+  assert.match(registration, /from "\.\/descriptionTemplate"/);
+  assert.match(registration, /useState\(ISSUE_DESCRIPTION_TEMPLATE\)/);
+  assert.match(registration, /isUntouchedTemplate\(description\)/);
+  assert.match(registration, /描述还是模板原样/);
+  assert.match(registration, /setDescription\(ISSUE_DESCRIPTION_TEMPLATE\)/);
+  // 空串重置不回流:描述框只以模板或用户内容呈现。
+  assert.doesNotMatch(registration, /setDescription\(""\)/);
+});
+
+test("AI 润色退役反钉(#272,ADR-0030):入口与通路不回潮", () => {
+  assert.doesNotMatch(registration, /润色|polish/i);
+  assert.doesNotMatch(issueFlow, /AI 润色|polish-description/);
+});

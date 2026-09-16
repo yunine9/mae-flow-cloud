@@ -41,6 +41,9 @@ import {
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
+import {
+  ISSUE_DESCRIPTION_TEMPLATE, isUntouchedTemplate,
+} from "./descriptionTemplate";
 import { copyIssueDescription } from "./copyIssueDescription";
 import { prepareDtsHtml } from "./dtsHtml";
 import {
@@ -198,7 +201,9 @@ function ManualRegister({
   onNavigateProfile?: () => void;
 }) {
   const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  // 描述预填标准提单模板(#273):打开即照着填,格式合规靠阻力最小
+  // 路径(ADR-0030);不想用模板整段删掉自由书写,必填校验照旧。
+  const [description, setDescription] = useState(ISSUE_DESCRIPTION_TEMPLATE);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
   const [moduleId, setModuleId] = useState("");
@@ -241,7 +246,9 @@ function ManualRegister({
       const saved = JSON.parse(localStorage.getItem(draftKey) ?? "null");
       if (saved) {
         setTitle(saved.title ?? "");
-        setDescription(saved.description ?? "");
+        // 空草稿(退役前留过空描述的)不回灌空串——描述框只以模板或
+        // 用户内容呈现,不出现空框(#273)。
+        setDescription(saved.description || ISSUE_DESCRIPTION_TEMPLATE);
         setModuleId(typeof saved.moduleId === "string" ? saved.moduleId : "");
       }
     } catch { /* 草稿是旁路,坏了就坏了吧 */ }
@@ -309,6 +316,13 @@ function ManualRegister({
       onError("问题描述必填——发生条件、影响范围、复现步骤,写得越具体 AI 少走弯路");
       return;
     }
+    // 模板原样拦截(#273):预填后描述永不为空,空模板会绕过必填校验、
+    // 登记后白跑一轮首轮会话;字段缺内容不灰按钮的口径同样适用——提交
+    // 时给指路文案,不靠灰化猜。
+    if (isUntouchedTemplate(description)) {
+      onError("描述还是模板原样——把触发条件、操作步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
+      return;
+    }
     if (!pickedEnv) {
       onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
       return;
@@ -322,7 +336,9 @@ function ManualRegister({
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
         environment: { environment_id: pickedEnv.id },
       });
-      setTitle(""); setDescription(""); setModuleId("");
+      // 重置回模板而非空串(#273):下一条登记仍从标准格式起步,两套
+      // 空态不并存。
+      setTitle(""); setDescription(ISSUE_DESCRIPTION_TEMPLATE); setModuleId("");
       clearPickedEnv();
       onCreated(created);
     } catch (reason) {
