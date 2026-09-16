@@ -2176,7 +2176,7 @@ export function TaskWorkspace({
             && task.requirement_graph?.stage === "confirmed"
             && (task.requirement_graph.source_document === "story.md"
               || task.requirement_graph.repositories.length > 0) && (
-            <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate}
+            <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate} fileName={architectureStory?.label}
               canceled={task.status === "canceled"} onOpenTask={onOpenTask}
               onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />
           )}
