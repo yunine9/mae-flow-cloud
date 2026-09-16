@@ -400,7 +400,7 @@ function ManualRegister({
     // 登记后白跑一轮首轮会话;字段缺内容不灰按钮的口径同样适用——提交
     // 时给指路文案,不靠灰化猜。
     if (isUntouchedTemplate(description)) {
-      onError("描述还是模板原样——把触发条件、操作步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
+      onError("描述还是模板原样——把发生时间、触发步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
       return;
     }
     if (!pickedEnv) {

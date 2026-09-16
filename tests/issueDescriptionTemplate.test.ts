@@ -24,15 +24,15 @@ test("真实填写与清空都判已填", () => {
   assert.equal(isUntouchedTemplate(""), false);
   assert.equal(isUntouchedTemplate("   \n  "), false);
   assert.equal(isUntouchedTemplate(
-    ISSUE_DESCRIPTION_TEMPLATE.replace("发生时间：", "发生时间：2026/9/16 10:00")),
+    ISSUE_DESCRIPTION_TEMPLATE.replace("实际现象：", "实际现象：服务重启后持续 500")),
   false);
   assert.equal(isUntouchedTemplate(
     "## 现象\n\n服务重启后持续 500,截图如下。\n"), false);
 });
 
-test("模板含全部引导槽位:基本信息/触发条件/步骤/现象/预期结果", () => {
-  for (const slot of ["发生时间", "版本", "复现概率", "触发条件",
-    "操作步骤", "实际现象", "预期结果"]) {
+test("模板含全部引导槽位:基本信息/触发步骤/现象/预期结果", () => {
+  for (const slot of ["基本信息", "问题描述", "发生时间", "版本", "复现概率",
+    "触发步骤", "实际现象", "预期结果"]) {
     assert.match(ISSUE_DESCRIPTION_TEMPLATE, new RegExp(slot),
       `模板缺引导槽位: ${slot}`);
   }
