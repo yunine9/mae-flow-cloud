@@ -450,11 +450,13 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
   assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
   assert.match(architecture, /availableViews\.map/,
-    "架构页只为实际存在的图片生成视角页签");
-  // (#210)图名页签换 base-ui Tabs 原语:diagrams 仍逐张映射成 TabsTrigger。
-  assert.match(architecture,
-    /\{diagrams\.map\(\(item\) => <TabsTrigger key=\{item\.id\} value=\{item\.id\}/,
-    "具体图片必须由图名页签承载");
+    "架构页只为实际存在的图片提供视角选择");
+  assert.match(architecture, /aria-label="设计图"/,
+    "多张独立图使用明确的设计图选择器");
+  assert.match(architecture, /roots\.map/,
+    "局部关系图不再混进独立图导航");
+  assert.match(architecture, /aria-label="节点职责详情"/,
+    "节点职责在独立详情区可见");
   assert.match(architecture, /job\.errorKind === "architecture" && job\.error && <details/,
     "架构图生成错误只在架构页以内展示，并默认折叠");
   assert.match(architecture, /架构图暂时无法读取[\s\S]{0,300}?<details/,
