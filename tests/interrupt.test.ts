@@ -148,7 +148,10 @@ test("插话与接管边界:暂停不得伪造已读，恢复后必须补送", a
     const saved = JSON.parse(readFileSync(
       join(dataDir, id, "task.json"), "utf-8"));
     assert.equal(saved.pending_main_steers.length, 1);
-    assert.match(saved.pending_main_steers[0], /^\[责任人指令编号 [^\]]+\]\n这条补充必须在交还后继续处理$/);
+    // 恢复补送的正文以责任人指令开头,后接新交办工作指引
+    // (concurrentWorkPrompt 随插话捎带,指引插话不含该块时补上)。
+    assert.match(saved.pending_main_steers[0], /^\[责任人指令编号 [^\]]+\]\n这条补充必须在交还后继续处理/);
+    assert.match(saved.pending_main_steers[0], /^\[处理新交办与当前工作\]$/m);
 
     await service.shutdown();
     const recovered = new TaskService({

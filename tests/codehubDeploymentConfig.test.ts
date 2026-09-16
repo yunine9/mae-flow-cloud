@@ -76,7 +76,8 @@ test("deployment discussion query uses CodeHub review list and flattens the firs
     notes: [{
       updated_at: "2026-09-12T09:30:00Z",
       id: 12345,
-      file_path: "src/Service.cpp", line: 42,
+      diff_file: "src/Service.cpp",
+      position: { new_line: 42 },
       author: { username: "w30009735", name: "显示名不能代替账号" },
       body: "虚拟化场景应执行 queryENE.sh 获取等效数",
     }],
@@ -84,9 +85,9 @@ test("deployment discussion query uses CodeHub review list and flattens the firs
   assert.deepEqual(config.mr_discussions.command, [
     "codehub-cli", "mr", "review", "list", "--host", "yellow",
     "--project", "{repo}", "{mr}", "--token", "{token}",
-    "--format", "json", "-k",
+    "--format", "json", "--limit", "100", "-k",
   ]);
-  assert.equal(config.mr_discussions.timeout_s, 15);
+  assert.equal(config.mr_discussions.timeout_s, 30);
   assert.deepEqual(config.mr_discussions.items, { json: "" });
   await fixture("mr_discussions", raw, async (adapter) => {
     const result = await adapter.handle("GET", "/mr/discussions", query, {}, {});

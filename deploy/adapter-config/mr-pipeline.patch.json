@@ -179,6 +179,8 @@
       "{token}",
       "--format",
       "json",
+      "--limit",
+      "100",
       "-k"
     ],
     "fields": {
@@ -189,10 +191,10 @@
         "json": "notes.0.updated_at"
       },
       "file": {
-        "json": "notes.0.file_path"
+        "json": "notes.0.diff_file"
       },
       "line": {
-        "json": "notes.0.line"
+        "json": "notes.0.position.new_line"
       },
       "author": {
         "json": "notes.0.author.username"
@@ -207,7 +209,7 @@
         "json": "severity"
       }
     },
-    "timeout_s": 15,
+    "timeout_s": 30,
     "items": {
       "json": ""
     }
@@ -256,5 +258,53 @@
     "mr_sha": {
       "json": "sha"
     }
+  },
+  "discussion_reply": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "review",
+      "reply",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "{mr}",
+      "{id}",
+      "--body",
+      "{body}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--no-cache",
+      "-k"
+    ],
+    "timeout_s": 15,
+    "note_id": {
+      "json": "id"
+    },
+    "idempotency_no_cli_key": true
+  },
+  "discussion_resolve": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "review",
+      "resolve",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "{mr}",
+      "{id}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--no-cache",
+      "-k"
+    ],
+    "timeout_s": 15
   }
 }

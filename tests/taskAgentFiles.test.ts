@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createRequirementAnalysisGateContract } from "../src/requirementAnalysisGate.ts";
 import { GateService } from "../src/gateService.ts";
 import { prepareReviewReplyFile, taskAgentMaterialInstructions } from "../src/taskAgentFiles.ts";
+import { observeMrDiscussions } from "../src/mrDiscussions.ts";
 import { TaskService } from "../src/taskService.ts";
 import type { SemanticEvent } from "../src/semanticEvents.ts";
 
@@ -76,7 +77,7 @@ test("持续检视反馈批次的派单路径与服务端消费路径一致，�
   }
 });
 
-test("MR 派单与收回回复保持挂载 inode，保留需求图片及另一条检视回执", async () => {
+test("远端意见同步与回复草稿准备保持挂载 inode，保留需求图片及另一条检视回执", async () => {
   const service: any = new TaskService({
     dataDir: mkdtempSync(join(tmpdir(), "mfc-review-mount-")),
     provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
@@ -91,21 +92,22 @@ test("MR 派单与收回回复保持挂载 inode，保留需求图片及另一�
     writeFileSync(asset, "input-image");
     writeFileSync(receipts, "existing-receipt");
     const directoryInode = statSync(reviews).ino;
-    task.summary.delivery = {};
+    // 确认制(ADR-0032):远端意见只观察入账不派单,reviews 目录与其
+    // 既有资产(需求图片、其他回执)原样保留,不换 inode。
     task.summary.repo_url = "https://example.invalid/repo.git";
-    task.cwd = summary.workspace;
-    service.fetchDiscussions = async () => ({ kind: "available",
-      items: [{ id: "review-1", body: "检查空值", revision: 1 }] });
-    service.openFeedbackBatch = () => undefined;
-    service.enqueueRepair = (_task: unknown, mission: string) => { task.mission = mission; };
-    assert.equal(await service.dispatchReviewRepair(task, 20, task.controlEpoch), "dispatched");
+    observeMrDiscussions(summary.workspace, "a".repeat(40),
+      [{ id: "review-1", body: "检查空值", revision: 1 }]);
     assert.equal(statSync(reviews).ino, directoryInode);
     assert.equal(readFileSync(asset, "utf-8"), "input-image");
     assert.equal(readFileSync(receipts, "utf-8"), "existing-receipt");
     const replies = prepareReviewReplyFile(summary.workspace);
-    assert.ok(task.mission.includes(JSON.stringify(replies)));
     const replyInode = statSync(replies).ino;
     writeFileSync(replies, "[review-1]\n已补充空值处理及检验。");
+    task.summary.delivery = {
+      sha: "a".repeat(40),
+      loop: { kind: "review", review_ids: "review-1:r1" },
+    };
+    task.cwd = summary.workspace;
     service.prePushRevision = async () => ({ sha: "a".repeat(40) });
     assert.deepEqual(await service.stageReviewReplies(task), { ok: true });
     assert.equal(statSync(replies).ino, replyInode);

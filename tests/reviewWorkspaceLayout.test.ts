@@ -15,8 +15,9 @@ const materialsPane = readFileSync(
 
 test("内容页签与阅读检视工具是独立区域，检视仍随时可开关", () => {
   // #207 页签迁 base-ui Tabs 后 role=tablist 归原语,.ws-source-switch
-  // 皮肤类仍挂在 TabsList 上——锚点改钉现 DOM。
-  const tabsStart = workspace.indexOf('className="ws-source-switch h-auto"');
+  // 皮肤类仍挂在 TabsList 上——锚点改钉现 DOM(justify-start 随左对齐
+  // 换装加入,锚串跟随)。
+  const tabsStart = workspace.indexOf('className="ws-source-switch h-auto justify-start"');
   const toolsStart = workspace.indexOf('className="ws-material-tools"');
   assert.ok(tabsStart > 0 && toolsStart > tabsStart);
   const tabs = workspace.slice(tabsStart, toolsStart);

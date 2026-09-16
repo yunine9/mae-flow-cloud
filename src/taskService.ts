@@ -15997,13 +15997,16 @@ export class TaskService {
         base_sha: comparisonBase,
       };
     } catch (error) {
-      // 老任务/本地仓没有远端目标引用时，仅在线性历史中沿用任务起点。
-      // 已合入其他分支却无法确定 MR 基点时，不能把全量历史误判为违规。
+      // 老任务/本地仓没有目标分支配置或远端目标引用时，仅在线性历史中
+      // 沿用任务起点；两种缺失对“无基点可比”是同一回事。历史里已有
+      // 合并提交（已合入其他分支）却无法确定 MR 基点时，不能把全量历史
+      // 误判为违规，也不许静默回退，fail-closed 交人核对。
       const merges = await runSafeWorktreeGitAsync(task.cwd,
         ["rev-list", "--merges", `${snapshot.baseline}..${snapshot.head}`],
         { timeoutMs: 30_000 });
       if (merges.status !== 0 || String(merges.stdout ?? "").trim()
-          || !(error instanceof Error) || error.message !== "目标 ref 不存在") {
+          || !(error instanceof Error)
+          || !["目标分支缺失", "目标 ref 不存在"].includes(error.message)) {
         throw new TaskControlError(`无法确定交付差异范围：${String(error)}。请核对目标分支引用；未修改交付授权或代码。`);
       }
       return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
