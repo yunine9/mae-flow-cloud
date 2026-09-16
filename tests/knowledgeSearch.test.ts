@@ -79,7 +79,8 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
   const dir = mkdtempSync(join(tmpdir(), "knowledge-real-"));
   const sidecar = new MemorySidecar({ python, script: join(process.cwd(), "harness/memsearch-sidecar.py"),
     corpusDir: join(dir, "corpus"), milvusPath: join(dir, "index.db"),
-    env: { HF_HUB_OFFLINE: "1", NO_PROXY: "localhost,127.0.0.1", no_proxy: "localhost,127.0.0.1" } });
+    env: { HF_HUB_OFFLINE: "1", HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9",
+      NO_PROXY: "corp.example", no_proxy: "internal.example" } });
   try {
     const ids = seed(dir);
     const store = new MemoryStore(dir);

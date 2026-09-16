@@ -103,6 +103,11 @@ export class MemorySidecar {
       ...(options.model ? ["--model", options.model] : []),
     ];
     const env = { ...process.env, ...(options.env ?? {}) };
+    // Milvus Lite uses local gRPC. Desktop proxy settings must not route that
+    // connection outside the machine; preserve all existing bypass entries.
+    const noProxy = [...new Set([env.NO_PROXY ?? "", env.no_proxy ?? "", "localhost,127.0.0.1,::1"]
+      .flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean))].join(",");
+    env.NO_PROXY = env.no_proxy = noProxy;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = options.spawnProcess

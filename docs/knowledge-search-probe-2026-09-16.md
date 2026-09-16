@@ -85,3 +85,5 @@ NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
 python3 -m unittest discover -s tests -p 'test_memory_platform.py'
 python3 -m unittest discover -s tests -p 'test_knowledge_retrieval.py'
 ```
+
+本机代理兼容补充：Cloud 拉起侧车时，已自动在子进程的 NO_PROXY/no_proxy 中合并本机地址与原有排除项，不修改全局代理。真件工具测试刻意配置不可用代理且只保留企业域名排除项，仍能启动和检索；诊断脚本直接运行 Python 时继续使用上述命令的显式环境设置。

@@ -7,6 +7,7 @@
  * 没有就**显式 skip 并明说**,有就跑 health/ingest/search/expand 一遍。
  */
 
+import { spawn } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -149,4 +150,23 @@ test("真 memsearch sidecar:health/ingest/search/expand 一遍(venv 缺席则显
   } finally {
     sidecar.stop();
   }
+});
+
+
+test("本机检索连接绕过代理，并保留使用方已有的代理排除项", async () => {
+  const { dataDir } = corpusWith(0);
+  const supplied = { NO_PROXY: "corp.example", no_proxy: "internal.example", HTTPS_PROXY: "http://127.0.0.1:9" };
+  let captured: NodeJS.ProcessEnv | undefined;
+  const sidecar = new MemorySidecar({ python: process.execPath, script: STUB,
+    corpusDir: join(dataDir, "corpus"), milvusPath: join(dataDir, "index.db"), env: supplied,
+    spawnProcess: (command, args, env) => { captured = env; return spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] }); } });
+  try {
+    assert.equal(await sidecar.start(), true);
+    assert.equal(captured?.NO_PROXY, captured?.no_proxy);
+    for (const host of ["corp.example", "internal.example", "localhost", "127.0.0.1", "::1"]) {
+      assert.ok(captured?.NO_PROXY?.split(",").includes(host));
+    }
+    assert.equal(captured?.HTTPS_PROXY, supplied.HTTPS_PROXY);
+    assert.equal(supplied.no_proxy, "internal.example", "只修改子进程环境，不改调用方配置");
+  } finally { sidecar.stop(); }
 });
