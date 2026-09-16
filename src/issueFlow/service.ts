@@ -1012,20 +1012,16 @@ export class IssueFlowService {
 
   // ---- 查询 ----
 
+  /** 「我的问题」(ADR-0031,2026-09-16 修订为单一列表):归属**或**
+   * 登记人是登录账号——名下要推进的、登记给他人要跟踪的,一张列表;
+   * 自登记两个条件同真,只出现一次。account 缺席=不过滤(团队看板与
+   * 管理员视角,scope=all 同款)。 */
   list(account?: string): IssueSummary[] {
     const rows = [...this.live.values()].map((item) => this.project(item));
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
-    return account ? rows.filter((row) => row.account === account) : rows;
-  }
-
-  /** 「我登记的」(ADR-0031):按登记人过滤——测试登记给他人的会话在
-   * 这里跟踪;自登记会话归属=登记人,两个范围都出现。排序与 list()
-   * 同尺(新登记在前)。 */
-  listReported(reporter: string): IssueSummary[] {
-    const rows = [...this.live.values()].map((item) => this.project(item));
-    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
-    return reporter
-      ? rows.filter((row) => row.reporter === reporter)
+    return account
+      ? rows.filter((row) =>
+          row.account === account || row.reporter === account)
       : rows;
   }
 

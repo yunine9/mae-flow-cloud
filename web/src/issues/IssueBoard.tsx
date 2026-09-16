@@ -6,8 +6,8 @@
  * 会话工作台在 SessionView.tsx,材料页签在 MaterialsPane.tsx,现场
  * 页签在 EventsPane.tsx,协作流在 IssueConversationStream.tsx,
  * 决策卡在 IssueDecisionCard.tsx。页面两块:上方登记(手工登记/DTS
- * 列表),下方会话列表两范围(「我负责的/我登记的」,ADR-0031);点开
- * 进入会话工作台(studio 骨架:头部进度 + 左栏五标签 + 右栏协作对话框;
+ * 列表),下方「我的问题」单一列表(归属或登记人是自己,ADR-0031);
+ * 点开进入会话工作台(studio 骨架:头部进度 + 左栏五标签 + 右栏协作对话框;
  * 旧右栏 NEXT ACTION 侧栏已随 #127 拆除)。前端不推断状态:一切文案
  * 来自 /issues API 镜像。
  */
@@ -46,11 +46,6 @@ import {
  * 选「等你答复」时两者一起命中。 */
 type IssueListFilter = "active" | IssueStatus | "all";
 const ISSUE_FILTER_STORAGE_KEY = "mae-flow:issue-list-filter";
-/** 列表范围(ADR-0031):「我负责的」=归属是我(原「我的问题」),
- * 「我登记的」=登记人是我——测试登记给开发责任人的会话在这里跟踪;
- * 自登记两边都出现。选择记忆,与状态筛选同款纪律。 */
-type IssueListScope = "mine" | "reported";
-const ISSUE_SCOPE_STORAGE_KEY = "mae-flow:issue-list-scope";
 const ISSUE_FILTER_STATUSES: IssueStatus[] = [
   "waiting_user", "running", "queued", "suspended", "failed",
   "archived", "canceled",
@@ -66,13 +61,6 @@ function readIssueListFilter(): IssueListFilter {
     }
   } catch { /* localStorage 不可用(隐私模式等)就回默认,不拦列表 */ }
   return "active";
-}
-
-function readIssueListScope(): IssueListScope {
-  try {
-    return localStorage.getItem(ISSUE_SCOPE_STORAGE_KEY) === "reported"
-      ? "reported" : "mine";
-  } catch { return "mine"; }
 }
 
 /** 问题处理导航的子页签(2026-09-11 拍板,spec #171):问题会话是缺省
@@ -111,16 +99,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   const [detailRetry, setDetailRetry] = useState(0);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<IssueListFilter>(readIssueListFilter);
-  // 范围(ADR-0031):管理员恒看全部,不设切换;开发/测试二选一。
-  const [listScope, setListScope] = useState<IssueListScope>(readIssueListScope);
 
   const changeStatusFilter = (next: IssueListFilter) => {
     setStatusFilter(next);
     try { localStorage.setItem(ISSUE_FILTER_STORAGE_KEY, next); } catch { /* 同上,存不进就算了 */ }
-  };
-  const changeListScope = (next: IssueListScope) => {
-    setListScope(next);
-    try { localStorage.setItem(ISSUE_SCOPE_STORAGE_KEY, next); } catch { /* 同上 */ }
   };
 
   // 聚合徽章(与任务侧"当前任务"同款语义):待答复置前,需介入报警。
@@ -148,12 +130,11 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           : issue.status === statusFilter);
 
   const refreshList = () => {
-    // 范围进请求(ADR-0031):缺省按归属(「我负责的」),reported 按
-    // 登记人(「我登记的」);管理员不带参(看全部)。范围切换重挂轮询。
-    void listIssues(listScope === "reported" ? "reported" : undefined)
-      .then(setIssues).catch(() => undefined);
+    // 单一列表(ADR-0031,2026-09-16 修订):服务端按「归属或登记人是
+    // 自己」过滤,名下要推进的与登记给他人要跟踪的同列。
+    void listIssues().then(setIssues).catch(() => undefined);
   };
-  useEffect(() => startVisiblePolling(refreshList, 5000, document), [listScope]);
+  useEffect(() => startVisiblePolling(refreshList, 5000, document), []);
 
   // 打开会话时跟读详情;列表照常低频轮询。openId 变化即清旧 detail
   // (上一会话的内容不许顶在新 URL 下),detailRetry 并入依赖——同一张
@@ -275,28 +256,11 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       hidden={childTab !== "sessions"}
       className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-3">
       <div className="mb-3 flex items-baseline justify-between gap-4 max-[680px]:flex-col max-[680px]:items-stretch">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。
-              范围切换(ADR-0031):我负责的/我登记的——测试在前者通常
-              为空,切一次即记住;管理员恒看全部不设切换。 */}
-          <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题"
-            : listScope === "reported" ? "我登记的" : "我负责的"}</h2>
-          {viewer.role !== "admin" && <span className="inline-flex items-center gap-1.5">
-            <Button type="button" size="xs" variant="ghost"
-              className={cn("h-auto px-1.5 py-0.5 font-normal underline-offset-2",
-                listScope === "mine"
-                  ? "font-semibold text-text-strong underline"
-                  : "text-muted-foreground hover:underline")}
-              aria-pressed={listScope === "mine"}
-              onClick={() => changeListScope("mine")}>我负责的</Button>
-            <Button type="button" size="xs" variant="ghost"
-              className={cn("h-auto px-1.5 py-0.5 font-normal underline-offset-2",
-                listScope === "reported"
-                  ? "font-semibold text-text-strong underline"
-                  : "text-muted-foreground hover:underline")}
-              aria-pressed={listScope === "reported"}
-              onClick={() => changeListScope("reported")}>我登记的</Button>
-          </span>}
+              单一列表(ADR-0031,2026-09-16 修订):归属或登记人是自己,
+              名下的与登记给别人的同列,卡上两端标注可辨。 */}
+          <h2 id="issue-mine-title">{viewer.role === "admin" ? "全部问题" : "我的问题"}</h2>
         </div>
         {/* 聚合徽章与任务侧"当前任务"同款语义:待答复置前,需介入报警。 */}
         <span className="flex flex-wrap items-center justify-end gap-3">
@@ -351,12 +315,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       {issues.length === 0
         ? <Empty className="min-h-40 border">
             <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
-            <EmptyTitle>{viewer.role === "admin" ? "团队还没有问题会话" : listScope === "reported" ? "还没有登记过问题" : "还没有负责的问题"}</EmptyTitle>
+            <EmptyTitle>{viewer.role === "admin" ? "团队还没有问题会话" : "还没有问题会话"}</EmptyTitle>
             <EmptyDescription>{viewer.role === "admin"
               ? "开发成员从各自的问题处理页登记后,这里会汇总全员会话供查看。"
-              : listScope === "reported"
-                ? "从上方「问题登记」登记问题并指派责任人,登记完即可撒手;这里按登记人跟踪进展。"
-                : "从上方「问题登记」登记问题并指派责任人,或从 DTS 拉取问题单发起处理;研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
+              : "从上方「问题登记」登记问题并指派责任人,或从 DTS 拉取问题单发起处理;自己登记给别人的和名下推进的都在这里,研究结论是非问题也可以直接归档收口。"}</EmptyDescription>
           </Empty>
         : visibleIssues.length === 0
           ? <Empty className="min-h-40 border">
@@ -470,7 +432,7 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
         <strong className="task-title line-clamp-1">{issue.title}</strong>
         <span className="task-ownership">
           {/* 责任人(ADR-0031):归属=推进人;登记人≠责任人时并列展示
-              ——两个范围(我负责的/我登记的)都能一眼看到问题的两端。 */}
+              ——推进与跟踪两个视角都能一眼看到问题的两端。 */}
           <span>责任人 · {issue.account}</span>
           {issue.reporter && issue.reporter !== issue.account
             && <span>登记人 · {issue.reporter}</span>}
