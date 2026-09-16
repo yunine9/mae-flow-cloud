@@ -658,7 +658,7 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
         </div>}
         <div className="ws-doc">
           {activeDiff
-            ? <GitDiff text={activeDiff} hideKey={detail.id} />
+            ? <GitDiff text={activeDiff} hideKey={detail.id} embeddedBrowser />
             : <div className="utility-note">
                 {diffRepo
                   ? (repoDiff === undefined

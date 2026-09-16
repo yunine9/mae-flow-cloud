@@ -1089,11 +1089,11 @@ export function GitDiff({
             <div className={GIT.totals} aria-label="变更统计">
               <b className={GIT.totalPlus}>+{additions}</b><b className={GIT.totalMinus}>−{deletions}</b>
             </div>
-            <Button type="button" variant="outline" size="sm"
+            {!embeddedBrowser && <Button type="button" variant="outline" size="sm"
               onClick={() => setFocused(true)}>
               <svg viewBox="0 0 18 18" aria-hidden className="size-3.5 fill-none stroke-current stroke-[1.35]"><path d="M6.5 3H3v3.5M11.5 3H15v3.5M6.5 15H3v-3.5M11.5 15H15v-3.5" /></svg>
               专注审阅
-            </Button>
+            </Button>}
           </div>
         </header>
       )}

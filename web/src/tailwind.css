@@ -2577,8 +2577,7 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 
 /* 材料级全屏：不另造一份阅读器，原节点只改变布局，因此当前文档、
- * 文件选择和滚动位置都原样保留。代码差异里的“专注审阅”仍负责更深
- * 一层的逐文件双栏检视。 */
+ * 文件选择和滚动位置都原样保留。代码差异直接嵌入材料区，统一使用此全屏入口。 */
 .workspace-overlay.materials-fullscreen > .ws-head, .workspace-overlay.materials-fullscreen > .ws-progress, .workspace-overlay.materials-fullscreen > .task-control-feedback { display: none; }
 .workspace-overlay.materials-fullscreen .ws-body{
   grid-template-columns: minmax(0, 1fr);
