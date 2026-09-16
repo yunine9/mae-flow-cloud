@@ -1763,6 +1763,8 @@ test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图
   assert.match(pane, /!diffRepo && diffRepos\.length > 1/);
   assert.match(pane, /splitDiffByRepo\(activeDiff\)\.map/);
   assert.match(pane, /from "\.\/perRepo"/);
-  assert.equal((pane.match(/该仓当前没有可展示的改动/g) ?? []).length >= 2,
-    true, "分段与单块的空态口径同句");
+  // 空态口径单一来源:常量一处定义、分段与聚焦两处消费。
+  assert.match(pane, /const EMPTY_REPO_DIFF_NOTE = "该仓当前没有可展示的改动。"/);
+  assert.equal((pane.match(/EMPTY_REPO_DIFF_NOTE/g) ?? []).length, 3,
+    "常量定义+两处消费,空态文案不得再写第三份字面量");
 });
