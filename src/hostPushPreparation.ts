@@ -13,7 +13,7 @@ export async function prepareHostPush(host: Pick<TaskHostRuntime, "cwd" | "summa
   }
   const outcome = await absorb(operation.branch!);
   host.assertActive();
-  if (outcome === "blocked") throw new Error(host.summary.delivery?.stalled ?? "远端分支同步失败，请处理冲突后重新推送");
+  if (outcome === "blocked") throw new Error(host.summary.delivery?.stalled ?? host.summary.detail ?? "远端分支同步失败，请调用 sync_branch 处理冲突后重新推送");
   // 自动交付与工具推送使用同一范围处理，且必须在同步之后、确认之前。
   await reconcile();
   host.assertActive();

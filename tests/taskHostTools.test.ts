@@ -801,3 +801,31 @@ test("主动同步首次未推分支可以继续；远端任务分支冲突同�
   assert.equal(s.git("rev-parse", "HEAD"), localHead);
   assert.match(readFileSync(join(s.host.cwd!, "main.txt"), "utf8"), /remote colleague/);
 });
+
+test("push 前接续发生冲突：不直接喊人，回传 sync_branch 解冲突后再推送", async t => {
+  const s = scene(t);
+  (s.service as any).options.host = {};
+  s.git("push", s.remote, "main", "work");
+  const published = s.git("rev-parse", "HEAD");
+  s.host.summary.delivery = { sha: published };
+  s.git("checkout", "-b", "colleague");
+  writeFileSync(join(s.host.cwd!, "main.txt"), "colleague update\n");
+  s.git("add", "main.txt"); s.git("commit", "-qm", "colleague update");
+  s.git("push", s.remote, "HEAD:refs/heads/work");
+  s.git("checkout", "work");
+  writeFileSync(join(s.host.cwd!, "main.txt"), "my new update\n");
+  s.git("add", "main.txt"); s.git("commit", "-qm", "my update");
+  const task = { cwd: s.host.cwd, summary: s.host.summary, controlEpoch: 0 };
+  const result = await (s.service as any).absorbForeignRemoteCommits(task, "work", false);
+  assert.equal(result, "blocked");
+  assert.match(s.host.summary.detail!, /sync_branch/);
+  assert.equal(s.host.summary.delivery.stalled, undefined);
+  assert.equal(readFileSync(join(s.host.cwd!, "main.txt"), "utf8"), "my new update\n", "失败的 rebase 还原现场");
+  const runtime = (s.service as any).taskHostRuntime(task) as TaskHostRuntime;
+  assert.match(await runtime.syncBranch!("work", "main"), /真实合并冲突/);
+  writeFileSync(join(s.host.cwd!, "main.txt"), "my new update\ncolleague update\n");
+  s.git("add", "main.txt"); s.git("commit", "--no-edit");
+  assert.match(await runtime.syncBranch!("work", "main"), /已同步远端任务分支与目标分支/);
+  s.git("push", s.remote, "work");
+  assert.equal(s.git("ls-remote", s.remote, "refs/heads/work").split(/\s/)[0], s.git("rev-parse", "HEAD"));
+});

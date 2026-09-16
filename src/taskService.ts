@@ -13578,7 +13578,7 @@ export class TaskService {
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
       preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
-        operation, branch => this.absorbForeignRemoteCommits(task, branch), async () => {
+        operation, branch => this.absorbForeignRemoteCommits(task, branch, false), async () => {
           if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") {
             throw new TaskControlError(task.summary.detail ?? "无法整理已确认的交付范围");
           }
@@ -18648,6 +18648,7 @@ export class TaskService {
   private async absorbForeignRemoteCommits(
     task: TaskState,
     branch: string,
+    dispatchRepair = true,
   ): Promise<"ok" | "absorbed" | "blocked"> {
     if (!this.options.host || !task.cwd) return "ok";
     const cwd = task.cwd;
@@ -18728,6 +18729,13 @@ export class TaskService {
         return "ok";
       }
       if (outcome.kind === "blocked") {
+        if (outcome.conflicts?.length) {
+          const message = `远端任务分支存在代码冲突，已还原接续现场。请先调用 task_control(action="sync_branch") 准备真实合并冲突，自行解决并提交，完成同步及编译、UT 后重新请求 push；不要重复直接推送。涉及文件：${outcome.conflicts.join("、")}`;
+          task.summary.detail = message;
+          this.persist(task);
+          if (dispatchRepair) this.enqueueRepair(task, message, "远端分支冲突，Agent 同步解决中");
+          return "blocked";
+        }
         this.markVerificationStalled(task, outcome.reason, "safety");
         return "blocked";
       }
