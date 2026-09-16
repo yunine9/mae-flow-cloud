@@ -20,7 +20,18 @@ async function read<T>(path: string, signal: AbortSignal): Promise<T> {
 }
 
 /** Story 与平台图源由服务端绑定版本；这里只保存选择状态，不显示过期图。 */
-export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView, canUpdate = false, flush = false }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void; canUpdate?: boolean; /** 任务工作台 chain 视图挂载:去 padding、交出滚动(贴边豁免,滚动归 ws-doc)。 */ flush?: boolean }) {
+export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenView, onAnnotate, canUpdate = false, flush = false }: { taskId: string; onOpenStory(): void; requestedLine?: number; onOpenView?(id: string): void; onAnnotate?(note: string): Promise<void>; canUpdate?: boolean; /** 任务工作台 chain 视图挂载:去 padding、交出滚动(贴边豁免,滚动归 ws-doc)。 */ flush?: boolean }) {
+  const [commentOpen, setCommentOpen] = useState(false);
+  const [comment, setComment] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
+  const [commentError, setCommentError] = useState("");
+  async function saveComment() {
+    if (!onAnnotate || !comment.trim() || commentBusy) return;
+    setCommentBusy(true); setCommentError("");
+    try { await onAnnotate(comment.trim()); setComment(""); setCommentOpen(false); }
+    catch (reason) { setCommentError(reason instanceof Error ? reason.message : "保存失败，请重试"); }
+    finally { setCommentBusy(false); }
+  }
   const [projection, setProjection] = useState<Projection>();
   const [selected, setSelected] = useState("");
   const [activeView, setActiveView] = useState("logical");
@@ -164,11 +175,19 @@ export function StoryArchitecture({ taskId, onOpenStory, requestedLine, onOpenVi
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div><strong className="text-[18px]">架构图</strong><p className="text-xs leading-[1.7] text-muted-foreground">这里只展示已经生成的图；完整 4+1 设计与未涉及原因请阅读 Story</p></div>
       <div className="flex flex-wrap gap-2">
+        {onAnnotate && <button type="button" className={btn} onClick={() => setCommentOpen(true)}>对架构设计提批注</button>}
         <button type="button" className={btn} onClick={onOpenStory}>阅读完整 Story ↗</button>
         {canUpdate && <button type="button" className={btn} onClick={() => void updateArchitecture()} disabled={submitting || job.busy}
           aria-label="更新架构图" title="根据当前 Story 生成或更新架构图">{submitting || job.busy ? "更新中…" : "↻"}</button>}
       </div>
     </header>
+    {commentOpen && <form className="my-4 rounded-lg border border-line bg-surface p-4" onSubmit={event => {event.preventDefault(); void saveComment();}}>
+      <label className="block text-sm font-semibold" htmlFor="architecture-comment">对整体模块划分、职责或协作关系的意见</label>
+      <textarea id="architecture-comment" autoFocus className="mt-2 min-h-24 w-full rounded-md border border-line bg-surface p-3 text-[15px]" value={comment} onChange={event=>setComment(event.target.value)} disabled={commentBusy} />
+      <p className="my-2 text-xs leading-relaxed text-muted-foreground">保存后进入检视意见，统一提交给 Agent。修改 Story 后需更新架构图；新版图与职责生成后页面会自动刷新。</p>
+      {commentError && <p role="alert" className="my-2 text-sm text-danger">{commentError}</p>}
+      <div className="flex gap-2"><button type="submit" className={btn} disabled={commentBusy || !comment.trim()}>{commentBusy ? "保存中…" : "保存批注"}</button><button type="button" className={btn} disabled={commentBusy} onClick={()=>setCommentOpen(false)}>取消</button></div>
+    </form>}
     {job.busy && <p className="flex flex-wrap items-baseline gap-x-4 gap-y-2 text-[13px] text-muted-foreground" role="status" aria-live="polite">
       <span>{job.detail?.progress || (job.detail?.kind === "architecture" ? "Agent 正在更新架构图" : "Story 正在更新，请稍候")}</span>
       {job.detail?.started_at && Number.isFinite(Date.parse(job.detail.started_at)) && <small aria-live="off">

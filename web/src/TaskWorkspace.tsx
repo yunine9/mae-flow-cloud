@@ -75,6 +75,7 @@ import {
   getConversation,
   deleteHistoryTask,
   listAnnotations,
+  addAnnotation,
   listArtifactChangeDirectory,
   listArtifacts,
   listCommitters,
@@ -2296,7 +2297,18 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
-              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine}
+                onAnnotate={canContributeReview && canCreateAnnotation && architectureStoryName ? async (note) => {
+                  const result = await addAnnotation(task.id, {
+                    artifact: architectureStoryName, file: architectureStory?.label ?? architectureStoryName,
+                    line: 0, anchor: "架构设计整体意见（针对全文，不定位到某一行）", kind: "doc", route: "agent",
+                    note: `对架构设计的整体批注：${note}\n\n请根据意见修改 Story，并同步更新架构图与模块职责说明。`,
+                  });
+                  if (result.error) throw new Error(result.error);
+                  setNotesPulse(tick => tick + 1);
+                  if (result.annotation) openAnnotationReview([result.annotation.id]);
+                } : undefined}
+                onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>
