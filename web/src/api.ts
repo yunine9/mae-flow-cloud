@@ -4048,16 +4048,22 @@ export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
 }
 
-/** 一次通过率(口径:CONTEXT「一次通过率」词条)。服务端全台账聚合,
- * rate 为 null 表示分母为 0(还没有有单终态会话),前端显示 —。 */
-export interface IssuePassRate {
-  passed: number;
+/** 一次率二轴(口径:CONTEXT「一次修复成功率」「一次定位成功率」词条)。
+ * 服务端全台账聚合,分母=完成交付;rate 为 null 表示分母 0(还没有
+ * 完成交付的会话),前端显示 —。 */
+export interface IssueOnceRate {
   total: number;
-  rate: number | null;
-  per_session: { id: string; reviews: number; first_pass: boolean }[];
+  /** 一次定位成功率:分析报告版本数 ≤1。 */
+  localization: { passed: number; rate: number | null };
+  /** 一次修复成功率:从未验证未通过。 */
+  repair: { passed: number; rate: number | null };
+  per_session: {
+    id: string; reviews: number;
+    localization_pass: boolean; repair_pass: boolean;
+  }[];
 }
 
-export function getIssuePassRate(): Promise<IssuePassRate> {
+export function getIssueOnceRates(): Promise<IssueOnceRate> {
   return issueFetch("/issues/stats");
 }
 
