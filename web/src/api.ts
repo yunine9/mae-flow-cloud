@@ -3989,6 +3989,19 @@ export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
 }
 
+/** 一次通过率(口径:CONTEXT「一次通过率」词条)。服务端全台账聚合,
+ * rate 为 null 表示分母为 0(还没有有单终态会话),前端显示 —。 */
+export interface IssuePassRate {
+  passed: number;
+  total: number;
+  rate: number | null;
+  per_session: { id: string; reviews: number; first_pass: boolean }[];
+}
+
+export function getIssuePassRate(): Promise<IssuePassRate> {
+  return issueFetch("/issues/stats");
+}
+
 export function getIssue(id: string): Promise<IssueDetail> {
   return issueFetch(`/issues/${encodeURIComponent(id)}`);
 }

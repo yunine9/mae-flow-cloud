@@ -27,9 +27,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getBuildInfo, getIssuePassRate, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
-  type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
+  type AuthUser, type IssuePassRate, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import type { IssueChildTab } from "./issues/IssueBoard";
@@ -711,6 +711,9 @@ export function App() {
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
+  // 一次通过率(团队问题页签统计块):旁栏数据,拿不到保留上次结果,
+  // 缺席时统计格显示 —(与问题列表同一条 allSettled 容错纪律)。
+  const [issuePassRate, setIssuePassRate] = useState<IssuePassRate>();
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
@@ -908,13 +911,17 @@ export function App() {
         // 问题是旁栏,哪一路失败就保留上次结果。原来 Promise.all 捆在一起,
         // 问题流没启用的部署(试跑器现场、最小部署)/issues 一律 404,整页永远
         // "数据更新中断、尚未取得任务数据"(2026-09-06 用户在演练现场实锤)。
-        const [tasksResult, reviewsResult, issuesResult] = await Promise.allSettled([
-          listTasks(), listMyReviews(), listAllIssues(),
-        ]);
+        const [tasksResult, reviewsResult, issuesResult, passRateResult]
+          = await Promise.allSettled([
+            listTasks(), listMyReviews(), listAllIssues(), getIssuePassRate(),
+          ]);
         if (tasksResult.status === "rejected") throw tasksResult.reason;
         setTasks(tasksResult.value.sort(byUrgency));
         if (reviewsResult.status === "fulfilled") setMyReviews(reviewsResult.value);
         if (issuesResult.status === "fulfilled") setTeamIssues(issuesResult.value);
+        if (passRateResult.status === "fulfilled") {
+          setIssuePassRate(passRateResult.value);
+        }
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
@@ -1469,7 +1476,8 @@ export function App() {
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
             {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
-              <TeamIssueWorld issues={teamIssues} onOpenIssue={openIssueSession} />
+              <TeamIssueWorld issues={teamIssues} passRate={issuePassRate}
+                onOpenIssue={openIssueSession} />
             </TabsContent> : <TabsContent value="archive" className="contents">
               <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
             </TabsContent>}

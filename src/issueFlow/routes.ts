@@ -561,6 +561,13 @@ export async function handleIssueRoutes(
       }
     }
 
+    // 一次通过率(团队问题页签统计块):全平台有单终态会话的聚合,
+    // 口径见 CONTEXT「一次通过率」词条;读开放与列表同权(查看模式)。
+    // 字面路由必须住在 :id 捕获之前,不然 "stats" 会被当会话 id。
+    if (method === "GET" && parts[1] === "stats" && parts.length === 2) {
+      return done(200, issueFlow.passRate());
+    }
+
     const id = parts[1];
     if (!id) return done(404, { error: "未知问题接口" });
     // 查看模式:这里不再有整体归属闸——GET(概要/时间线/材料/事件/

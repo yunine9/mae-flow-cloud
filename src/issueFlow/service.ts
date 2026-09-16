@@ -92,6 +92,8 @@ import {
   saveState,
   shouldNudgeFixed,
   summarize,
+  VERIFY_FAIL_NOTE_PREFIX,
+  VERIFY_PASS_NOTE,
   type FixedStage,
   type IssueBusinessKnowledge,
   type IssueBusinessKnowledgeEntry,
@@ -182,6 +184,10 @@ import {
   materializeIssueSkills,
   type IssueEnvCredentials,
 } from "./prompt.ts";
+import { issuePassRate,
+  type IssuePassRateFacts,
+  type IssuePassRateSummary,
+} from "./passRate.ts";
 import { promptCopy } from "./promptCopy.ts";
 import {
   orderAnnotations,
@@ -1000,6 +1006,29 @@ export class IssueFlowService {
     const rows = [...this.live.values()].map((item) => this.project(item));
     rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
     return account ? rows.filter((row) => row.account === account) : rows;
+  }
+
+  /** 一次通过率(口径:CONTEXT「一次通过率」词条,分类在 passRate.ts
+   * 纯函数)。判定事实全从现成账取,零新记账:验证失败按转移账的平台
+   * 文案前缀计(VERIFY_FAIL_NOTE_PREFIX,写入点在本服务 env_verify
+   * fail 分派),检视批次按 reviews 账本的 sent/issue_review 操作计。
+   * 枚举与 list() 同源(live 全集,重启恢复时装载),终态会话照常在。 */
+  passRate(): IssuePassRateSummary {
+    const rows: IssuePassRateFacts[] = [...this.live.values()].map(
+      (live) => ({
+        id: live.id,
+        ticket: live.state.ticket,
+        status: live.state.status,
+        verify_fail_count: (live.state.transitions ?? []).filter(
+          (transition) => transition.note.startsWith(VERIFY_FAIL_NOTE_PREFIX),
+        ).length,
+        review_count: reviewStore(live.root).history().filter(
+          (operation) =>
+            operation.op === "sent" && operation.via === "issue_review",
+        ).length,
+      }),
+    );
+    return issuePassRate(rows);
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -3538,7 +3567,7 @@ export class IssueFlowService {
 
     if (verdict === "pass") {
       // env_verify 通过:本阶段收尾,待手动归档。
-      fixedComplete(state, "用户环境验证通过,待归档收口");
+      fixedComplete(state, VERIFY_PASS_NOTE);
       state.status = "idle";
       state.stage_note = "环境验证通过——确认 MR 合入后可归档收口";
       saveState(live.root, state);
@@ -3548,7 +3577,8 @@ export class IssueFlowService {
     if (verdict === "fail") {
       // env_verify 不通过:回退问题分析(轮次+1,回退细节在 fixedRollback)。
       const reason = notes || decision;
-      fixedRollback(state, `用户环境验证发现问题:${reason.split("\n")[0]}`);
+      fixedRollback(state,
+        `${VERIFY_FAIL_NOTE_PREFIX}:${reason.split("\n")[0]}`);
       saveState(live.root, state);
       this.continueTurn(live, fixedAdvanceNotice(state,
         promptCopy("notices", "gate.verify.fail", {
