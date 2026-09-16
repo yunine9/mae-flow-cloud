@@ -600,7 +600,8 @@ export interface IssueFlowOptions {
   maxConcurrentTurns?: number;
   /** 回合前压缩的事件量阈值部署缺省(--issue-compact-every-events):
    *  续聊回合先读管理页运行时旋钮 issue_compact_every_events,缺席才
-   *  用这里;两边都缺省 0=关,行为与现状全等。分析→修复边界的必压
+   *  用这里;两边都缺省 0=关(生产恒传部署旗,缺省 400——#285 拍板,
+   *  0 兜底只覆盖测试/直构形态)。分析→修复边界的必压
    *  不受阈值管辖。 */
   compactEveryEvents?: number;
   /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
@@ -1984,7 +1985,8 @@ export class IssueFlowService {
    *  (startResume 恢复原生上下文，由 Pi 容量保护)不经过这里。两路:
    *  - 边界路(analysis_confirm 确认进 fix):必压,不受阈值管辖;
    *  - 阈值路:管理页旋钮 issue_compact_every_events 优先,缺席退
-   *    部署旗 compactEveryEvents,再缺省 0=关,行为与现状全等。
+   *    部署旗 compactEveryEvents,再缺省 0=关(部署旗缺省 400 由
+   *    serve 层给出,#285 拍板;0 兜底只覆盖测试/直构形态)。
    *  两路都 fail-open:压不动回合照走(压缩是旁路,不是流程)。 */
   private async maybeCompactContinuation(
     live: LiveIssue,

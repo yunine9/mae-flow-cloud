@@ -938,8 +938,9 @@ async function main(): Promise<void> {
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "10"),
     // 回合前压缩的事件量阈值(管理页旋钮 issue_compact_every_events 的
-    // 部署缺省):0=关,续聊回合行为与现状全等。
-    compactEveryEvents: Number(flag("--issue-compact-every-events") ?? "0"),
+    // 部署缺省):缺省 400(#285 拍板——issue-64 实测约 420 条事件≈一扇
+    // 网关窗,掐在撞墙前压,部署零配置即开);显式 0=关。
+    compactEveryEvents: Number(flag("--issue-compact-every-events") ?? "400"),
     // 环境预热与需求侧同条件启用(host + 统一任务容器):拉仓收口进
     // analyze 时后台编译基线、焐热分仓缓存,修复阶段少一次全量冷启。
     // fail-open 旁路,缺席(测试/无隔离形态)不预热,行为照旧。
