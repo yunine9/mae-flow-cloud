@@ -1666,7 +1666,7 @@ test("环境台账快照(#150):登记收 environment_id——服务端解密快�
     }, "tester");
     // 快照与手填字段互斥:同给 400,不烧会话号。
     const mixed = await issuePost(["issues"], {
-      account: "dev", title: "互斥打回",
+      account: "dev", title: "互斥打回", assignee: "dev",
       environment: { environment_id: explicit.id, hosts: ["10.9.9.9"] },
     }, service);
     assert.equal(mixed.status, 400);

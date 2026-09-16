@@ -450,7 +450,15 @@ function rootVaultRow(
 }
 
 export interface IssueCreateInput {
+  /** 发起登记的登录账号(登记人的缺省来源;路由层从登录态取)。 */
   account: string;
+  /** 责任人(ADR-0031):会话归属账号,登记后的推进人;缺席=自登记
+   * (归属=登记人)。显式指派时校验存在且非管理员,Git 凭据按责任人
+   * 现查——拉仓/提交/推送都用责任人的身份。 */
+  assignee?: string;
+  /** 登记人(ADR-0031,通常是测试):路由层从登录态取,服务端不信任
+   * 客户端改写;缺席=自登记。登记人≠责任人时登记完成发指派通知。 */
+  reporter?: string;
   title: string;
   description?: string;
   source?: IssueSource;
@@ -558,6 +566,10 @@ export interface IssueFlowOptions {
    * 非问题)+纯选项问答卡代答+env 闸不举+直推。流水线人工事实闸任何
    * 档都等人。回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
   interventionTier?: (account?: string) => IssueInterventionTier;
+  /** 账号角色查询(ADR-0031 指派校验):账号不存在或已停用返回
+   * undefined。回调缺席=裸构造(测试世界无身份体系),按缺席即放行
+   * 的既有纪律处理;生产接线(serve)恒注入,门恒生效。 */
+  userRole?: (username: string) => "admin" | "developer" | undefined;
   gitCredential?: (account: string) =>
     (GitCredential & { email?: string }) | undefined;
   opsTools?: IssueOpsTools;
@@ -1008,6 +1020,17 @@ export class IssueFlowService {
     return account ? rows.filter((row) => row.account === account) : rows;
   }
 
+  /** 「我登记的」(ADR-0031):按登记人过滤——测试登记给他人的会话在
+   * 这里跟踪;自登记会话归属=登记人,两个范围都出现。排序与 list()
+   * 同尺(新登记在前)。 */
+  listReported(reporter: string): IssueSummary[] {
+    const rows = [...this.live.values()].map((item) => this.project(item));
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    return reporter
+      ? rows.filter((row) => row.reporter === reporter)
+      : rows;
+  }
+
   /** 一次通过率(口径:CONTEXT「一次通过率」词条,分类在 passRate.ts
    * 纯函数)。判定事实全从现成账取,零新记账:验证失败按转移账的平台
    * 文案前缀计(VERIFY_FAIL_NOTE_PREFIX,写入点在本服务 env_verify
@@ -1203,8 +1226,28 @@ export class IssueFlowService {
   // ---- 登记 ----
 
   create(input: IssueCreateInput): IssueSummary {
-    const account = input.account?.trim();
-    if (!account) throw new IssueControlError("缺少归属账号(工号)");
+    const creator = input.account?.trim();
+    if (!creator) throw new IssueControlError("缺少登记账号(工号)");
+    // 登记人=发起登记的登录用户;归属=责任人,显式指派优先,缺席=
+    // 自登记(ADR-0031)。同账号+同单号去重、写闸、闸口通知、Git 身份、
+    // 介入档位全部继续挂归属账号——责任人换了人,机制语义自动跟着换人。
+    const reporter = input.reporter?.trim() || creator;
+    const account = input.assignee?.trim() || creator;
+    // 指派校验只在角色回调在场时生效(缺席=裸构造,测试世界无身份
+    // 体系,按缺席即放行的既有纪律);生产接线(serve)恒注入,门恒生效。
+    if (input.assignee?.trim() && account !== creator
+        && this.options.userRole) {
+      const role = this.options.userRole(account);
+      if (!role) {
+        throw new IssueControlError(
+          `责任人 ${account} 不存在或已停用,请回登记页重新选择`);
+      }
+      if (role === "admin") {
+        throw new IssueControlError(
+          `责任人不能是管理员账号 ${account}:管理员不写问题会话,`
+            + "指派了也没有人能推进,请改选开发责任人");
+      }
+    }
     const title = input.title?.trim() ?? "";
     // 长度上限已按用户拍板(2026-08-28)去掉:标题只要求必填,长标题
     // 由各消费面(列表卡/通知)自行单行截断;MR 标题遇平台限制再说。
@@ -1279,7 +1322,9 @@ export class IssueFlowService {
     // 必须配齐 Git 令牌与署名邮箱。免仓发起曾借"登记期无仓可查"绕过
     // 这道门,用户进了工作台才在拉仓期撞上报错;现在门关在发起按钮上。
     // 拉仓期 requireGitIdentity 仍逐仓复查,双保险各守各的口。
-    this.requireGitAccount(account);
+    // ADR-0031:门查的是**责任人**——推代码的是责任人,不是登记人
+    // (测试通常没配 Git 凭据);自登记两号同一,文案维持"你"。
+    this.requireGitAccount(account, reporter);
     // 四件套校验先行: mkdir/占号之前打回,半截登记不落任何盘。快照
     // (environment_id)与手填都先解析过同一把尺——解析即完成互斥校验
     // 与台账取值,登记烧号之前一切打回。
@@ -1311,6 +1356,7 @@ export class IssueFlowService {
     const state: IssueSessionState = {
       id,
       account,
+      reporter,
       created_at: now,
       updated_at: now,
       title,
@@ -1349,6 +1395,20 @@ export class IssueFlowService {
       controlEpoch: 0,
     });
     this.log(`[issue-flow] ${id} 已登记(${ticket ?? "无单号"},固定流程): ${title}`);
+    // 指派通知(ADR-0031):登记人≠责任人时一次性送达——登记完成即
+    // 移交,开发责任人由此接到问题。旁路 fail-open:通知失败只留痕,
+    // 登记照常成立、流程照走(与等待卡通知同款纪律)。
+    if (reporter !== account && this.options.notifier) {
+      this.options.notifier.notifyAssignment({
+        taskId: id,
+        account,
+        reporter,
+        title,
+        link: this.issueLink(id),
+      }).catch((error) =>
+        this.log(`[issue-flow] ${id} 指派通知失败(旁路,流程照走): `
+          + String(error)));
+    }
     void this.pump();
     return summarize(state);
   }
@@ -1367,21 +1427,30 @@ export class IssueFlowService {
    *  没配齐就别进工作台。此前免仓发起(2026-08-28)在登记期无仓可查而
    *  放行,第二道门(拉仓期)才撞,用户已进工作台才见 git 报错,观感即
    *  "内部报错"。gitCredential 回调缺席=裸构造(测试世界无身份体系),
-   *  按缺席即放行的既有纪律处理;生产接线(serve)恒在,门恒生效。 */
-  private requireGitAccount(account: string): void {
+   *  按缺席即放行的既有纪律处理;生产接线(serve)恒在,门恒生效。
+   *  ADR-0031:登记人≠责任人时门查的是责任人,文案点名责任人而非
+   *  "你"——看到报错的是登记人,他要能把话准确带到。 */
+  private requireGitAccount(account: string, reporter?: string): void {
     // 回调缺席=裸构造(测试世界无身份体系),按缺席即放行的既有纪律
     // 处理;生产接线(serve)恒注入回调,门恒生效。
     if (!this.options.gitCredential) return;
+    const assigned = reporter !== undefined && reporter !== account;
     const credential = this.options.gitCredential(account);
     if (!credential) {
-      throw new IssueControlError(
-        "Git 令牌未配置(个人设置 → 个人接入):拉取代码仓、提交与推送"
-          + "都用你的身份——配好令牌后再发起问题会话");
+      throw new IssueControlError(assigned
+        ? `责任人 ${account} 的 Git 令牌未配置(个人设置 → 个人接入):`
+            + "拉取代码仓、提交与推送都用责任人的身份——请责任人配好令牌,"
+            + "或改选已配齐的责任人后再登记"
+        : "Git 令牌未配置(个人设置 → 个人接入):拉取代码仓、提交与推送"
+            + "都用你的身份——配好令牌后再发起问题会话");
     }
     if (!credential.email) {
-      throw new IssueControlError(
-        "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
-          + "归属都按邮箱对人——配好邮箱后再发起问题会话");
+      throw new IssueControlError(assigned
+        ? `责任人 ${account} 的个人邮箱未配置(个人设置 → 个人接入):`
+            + "Git 提交署名与平台归属都按邮箱对人——请责任人配好邮箱,"
+            + "或改选已配齐的责任人后再登记"
+        : "个人邮箱未配置(个人设置 → 个人接入):Git 提交署名与平台"
+            + "归属都按邮箱对人——配好邮箱后再发起问题会话");
     }
   }
 
@@ -5644,6 +5713,9 @@ export class IssueFlowService {
     const converted: IssueSessionState = {
       id: newId,
       account: state.account,
+      // 登记人随会话走(ADR-0031):转正是同一问题的转正,登记视角
+      // 的跟踪列表不该在此换会话时把测试跟丢。
+      reporter: state.reporter,
       created_at: now,
       updated_at: now,
       title: state.title,

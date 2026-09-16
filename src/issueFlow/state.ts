@@ -344,7 +344,14 @@ export interface IssueMrGateRecord {
 
 export interface IssueSessionState {
   id: string;
+  /** 归属账号=问题责任人(ADR-0031):写操作的唯一闸口,闸口通知、
+   * Git 提交身份、介入档位、同账号+同单号去重都跟它走。登记时指派,
+   * 缺省=登记人(自登记)。 */
   account: string;
+  /** 登记人(ADR-0031,通常是测试):登记完成即撒手,对会话只读,
+   * 靠「我登记的」列表跟踪;登记人≠归属时凭它过滤出登记视角的列表。
+   * 缺席=指派机制之前的老会话(自登记),loadState 回填=归属账号。 */
+  reporter?: string;
   created_at: string;
   updated_at: string;
   title: string;
@@ -609,6 +616,9 @@ export function loadState(root: string): IssueSessionState | undefined {
   }
   delete (state as { push?: unknown }).push;
   delete (state as { mr?: unknown }).mr;
+  // 登记人回填(ADR-0031):指派机制之前的老会话都是"登记即归属"
+  // (自登记),读盘时补齐,消费方(listReported/投影)不用两头兜底。
+  state.reporter ??= state.account;
   // 流水线账迁移:老单数 pipeline 读进来挂到当时首个仓(repo_url
   // 兼容别名)名下。
   const legacyPipeline = (state as { pipeline?: IssuePipelineWatch }).pipeline;

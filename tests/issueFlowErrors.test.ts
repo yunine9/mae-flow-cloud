@@ -221,7 +221,9 @@ test("既有族不漂移:404/409/材料层 400 逐分支保持", async () => {
 
     const noTitle = await issueCall("POST", ["issues"], { service, payload: {} });
     assert.equal(noTitle.status, 409);
-    assert.match(noTitle.body.error, /归属账号/);
+    // ADR-0031:手工登记必填责任人——指派校验是登记的第一道门,
+    // 空payload首先撞的是它而不是登记账号缺失。
+    assert.match(noTitle.body.error, /指名责任人/);
 
     const badWrite = await issueCall("PUT",
       ["issues", "issue-1", "materials", "file"],

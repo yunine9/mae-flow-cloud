@@ -898,6 +898,9 @@ async function main(): Promise<void> {
     // 只停在分析报告,一档全自动;缺省二档。
     interventionTier: (account) => auth.issueInterventionTier(account),
     gitCredential: (account) => auth.gitCredential(account),
+    // 登记指派校验(ADR-0031):责任人是存在的普通开发账号才放行——
+    // 管理员不写问题会话,指派即造死会话。
+    userRole: (username) => auth.roleOf(username),
     opsToolsDir: existsSync(join(goToolsDir, process.platform === "win32"
       ? "fetch-logs.exe" : "fetch-logs-linux-amd64"))
       ? goToolsDir

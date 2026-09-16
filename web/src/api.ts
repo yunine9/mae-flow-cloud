@@ -3742,7 +3742,11 @@ export interface IssueGateCard {
 
 export interface IssueSummary {
   id: string;
+  /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
   account: string;
+  /** 登记人(ADR-0031,通常是测试):登记完成即撒手只读跟踪;缺席=
+   * 指派机制前的老会话(服务端读盘即补齐=归属)。 */
+  reporter?: string;
   created_at: string;
   updated_at: string;
   title: string;
@@ -4047,6 +4051,9 @@ export function createIssue(input: {
    * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
   module_id?: string;
   environment?: IssueRegistrationEnvironment;
+  /** 责任人(ADR-0031):登记完成后问题的归属与推进人;登记人=当前
+   * 登录用户由服务端取,客户端不传。 */
+  assignee?: string;
 }): Promise<IssueSummary> {
   return issueFetch("/issues", {
     method: "POST",

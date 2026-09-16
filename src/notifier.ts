@@ -50,6 +50,8 @@ export interface NotificationTemplates {
   outcome?: string;
   /** Committer 检视邀请。 */
   review?: string;
+  /** 问题登记指派(ADR-0031):测试登记问题指派责任人时的一次性通知。 */
+  assigned?: string;
 }
 
 /** 各类别占位符白名单。构造期校验:模板里出现表外名字=配错,
@@ -60,6 +62,7 @@ const TEMPLATE_VARIABLES: Record<keyof NotificationTemplates, string[]> = {
   waiting: ["task_id", "subject", "step", "stage", "summary", "account", "link"],
   outcome: ["task_id", "status", "summary", "account", "link"],
   review: ["task_id", "summary", "account", "sender_account", "link"],
+  assigned: ["reporter", "title", "account", "link"],
 };
 
 /** 默认模板=引入模板机制前的固定文案,一字不差:不配置就是零变化。 */
@@ -67,6 +70,9 @@ const DEFAULT_TEMPLATES: Required<NotificationTemplates> = {
   waiting: "【Mae-Flow】{subject} 等你决定\n阶段：{stage}\n{summary}",
   outcome: "【Mae-Flow】{summary}\n任务 {task_id}",
   review: "【Mae-Flow】任务 {task_id} 邀请你检视：{summary}",
+  assigned:
+    "【Mae-Flow】{reporter} 登记了问题「{title}」并指派你为责任人\n"
+    + "打开链接查看分析进展:{link}",
 };
 
 /** 合并默认值并校验占位符。写错变量名的模板投出去,用户看到的
@@ -401,6 +407,48 @@ export class Notifier {
         task_id: input.taskId,
         status: input.status,
         summary: input.summary,
+        account: input.account,
+        link: input.link,
+      })),
+      attempts: 0,
+      delivered: false,
+      settled: false,
+      last_error: "",
+    };
+    this.records.set(key, record);
+    await this.deliverTracked(record);
+    return record;
+  }
+
+  /** 登记指派通知(ADR-0031):测试登记问题并指派责任人时一次性送达。
+   * 同问题幂等(恢复重放不重发);投递失败由调用方旁路,不改登记结果。 */
+  async notifyAssignment(input: {
+    taskId: string;
+    /** 责任人:问题登记后的归属与推进人,通知收件人。 */
+    account: string;
+    /** 登记人(通常是测试):通知里点名是谁递来的问题。 */
+    reporter: string;
+    title: string;
+    link: string;
+  }): Promise<NotifyRecord> {
+    const key = `${input.taskId}:assigned`;
+    const existing = this.records.get(key);
+    if (existing) {
+      await this.deliverTracked(existing);
+      return existing;
+    }
+    const summary =
+      `${input.reporter} 登记了问题「${input.title}」并指派你为责任人`;
+    const record: NotifyRecord = {
+      waiting_id: key,
+      task_id: input.taskId,
+      account: input.account,
+      step: "assigned",
+      summary,
+      link: input.link,
+      text: withPluginActivationNotice(renderTemplate(this.templates.assigned, {
+        reporter: input.reporter,
+        title: input.title,
         account: input.account,
         link: input.link,
       })),

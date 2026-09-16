@@ -370,6 +370,8 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
+      // 登记人(ADR-0031):自登记=归属,始终过线。
+      reporter: "dev",
       created_at: "2026-08-28T00:00:00Z",
       updated_at: "2026-08-28T00:00:00Z",
       title: "登录超时",
@@ -889,6 +891,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
+      // 登记人(ADR-0031):自登记=归属,始终过线。
+      reporter: "dev",
       created_at: "2026-08-28T00:00:00Z",
       updated_at: "2026-08-28T00:00:00Z",
       title: "偶发黑屏",
@@ -1037,11 +1041,11 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
   try {
     // 门禁过线:无单缺模块 / 缺后台密码,409 带人话直出。
     const noModule = await issuePost(
-      ["issues"], { account: "dev", title: "下单超时" }, service);
+      ["issues"], { account: "dev", title: "下单超时", assignee: "dev" }, service);
     assert.equal(noModule.status, 409);
     assert.match(noModule.body.error, /必须指定业务模块/);
     const noBackend = await issuePost(["issues"], {
-      account: "dev", title: "下单超时", module_id: "pay-core",
+      account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
         backend_password: "",
@@ -1053,7 +1057,7 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
     // 全量过线:环境回执只有引用与非密元信息,密码本体永不过线;
     // 页面凭据已废弃(2026-09-10)——递了也不收,回执不出。
     const created = await issuePost(["issues"], {
-      account: "dev", title: "下单超时", module_id: "pay-core",
+      account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
       environment: {
         hosts: ["10.0.0.8"],
         page_account: "ops",
@@ -1094,7 +1098,7 @@ test("契约快照:检视意见投影(意见号 seq 过线;reviews+checks 全形
   });
   try {
     const created = await issuePost(["issues"], {
-      account: "dev", title: "下单超时", module_id: "pay-core",
+      account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
       environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
     }, service);
     assert.equal(created.status, 201);
