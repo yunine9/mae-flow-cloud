@@ -22,7 +22,12 @@ export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
     className={`task-overview-row status-${status}${child ? " is-child" : ""}${focused ? " focused" : ""}`}>
     <button type="button" className="task-overview-open" onClick={onOpen}
       aria-label={`打开${issue ? "问题" : "任务"}工作台：${title}`}>
-      <span className="task-overview-id" title={`${ticket ?? ""} ${id}`}>{ticket || id}</span>
+      {issue
+        ? <span className="task-overview-id" title={`${ticket ?? ""} ${id}`}>{ticket || id}</span>
+        : <span className="task-overview-id" title={ticket ? `Task ID：${id}；AR：${ticket}` : `Task ID：${id}`}>
+          <code>{id}</code>
+          {ticket && <small>{ticket}</small>}
+        </span>}
       <strong className="task-overview-title" title={title}>{child && <small>子任务 · </small>}{issue && <small>问题 · </small>}{title}</strong>
       <span className={`task-overview-status ${status}`} title={detail || statusLabel}><i aria-hidden />{statusLabel}</span>
       <span className="task-overview-owner" title={`负责人：${owner ?? "未分配"}`}><PersonName account={owner} /></span>
