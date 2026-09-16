@@ -324,7 +324,7 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
   }
 });
 
-test("没配专用模型或模型角色不存在时，模板待采纳但不声称正在整理", async () => {
+test("主模型不可用时保留模板；旧专用模型配置不改变行为", async () => {
   for (const options of [{}, { memoryDraftModel: { provider: "missing", model: "missing" } }]) {
     const { svc } = fakeService(options);
     try {
@@ -466,5 +466,37 @@ test("模型前台遇到侧车未就绪时不启动或等待冷启动", async ()
     assert.deepEqual(await api.taskMemoryContext(internal)(messages), messages);
     assert.equal(calls, 0);
     assert.equal(svc.listTaskMemoryUsage(internal.summary.id).at(-1)?.status, "unavailable");
+  } finally { await svc.shutdown(); }
+});
+
+
+test("经验整理跟随任务主模型，未指定时跟随平台主模型；旧专用配置不分流", async t => {
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const calls: Array<{ provider: string; model: string; messages: any[] }> = [];
+  t.mock.method(ModelRuntime, "create", async () => ({
+    getModel: (provider: string, model: string) => ({ provider, id: model }),
+    completeSimple: async (model: any, context: any) => {
+      calls.push({ provider: model.provider, model: model.id, messages: context.messages });
+      return { content: [{ type: "text", text: JSON.stringify({ trigger: "调整过滤顺序时", scope: "general", conclusion: "先确认业务优先级，再调整过滤顺序。" }) }] };
+    },
+  }) as any);
+  const { svc } = fakeService({ provider: "main", model: "default", modelsJson: {
+    providers: { main: { models: [{ id: "first-not-selected" }, { id: "default" }, { id: "chosen" }] } },
+  }, memoryDraftModel: { provider: "obsolete", model: "ignored" } });
+  try {
+    const { id, internal } = liveTask(svc);
+    internal.summary.model_choice = { provider: "main", model: "chosen" };
+    const first = (svc as any).recordMemory(internal, { ...base, task: id });
+    await svc.flushMemoryDrafts();
+    assert.equal(svc.listTaskMemories(id).find(row => row.id === first.id)?.draft, "model");
+    delete internal.summary.model_choice;
+    (svc as any).recordMemory(internal, { ...base, task: id });
+    await svc.flushMemoryDrafts();
+    assert.deepEqual(calls.map(c => [c.provider, c.model]), [["main", "chosen"], ["main", "default"]]);
+    assert.ok(calls.every(c => c.messages.length === 1), "只发送本条经验材料，不携带主会话历史");
+    assert.equal(internal.summary.status, "running");
+    (svc as any).recordMemory(internal, { ...base, task: id, source: "agent_note" });
+    await svc.flushMemoryDrafts();
+    assert.equal(calls.length, 2, "主动记录不额外提炼");
   } finally { await svc.shutdown(); }
 });

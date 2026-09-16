@@ -776,7 +776,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | luban-template-waiting / -outcome / -review | 内置默认文案 | 通知正文模板，`{占位符}` 按类别白名单，词汇表与用法见 [`docs/luban-notification-templates.md`](./luban-notification-templates.md)；配错占位符拒绝启动 |
 | pg | 无 | 投影(纯旁路) |
 | memsearch | 无 | 任务记忆检索旁路:memsearch venv 的 python 路径。不配则没有语义检索与 corpus_search,只剩索引级开局推送;宿主进程拉子进程,任务容器不需要 python/memsearch(设计稿 `docs/knowledge-memory-design.md` §7/§11,预留 RSS 2.5 GB) |
-| memory-draft-provider / memory-draft-model | 无 | 记忆起草与目录摘要用的专用便宜模型角色,必须同时配且在 models.json 里真有;不配就不起草只留模板。刻意不回落到任务模型 |
+| memory-draft-provider / memory-draft-model | 已废弃 | 兼容旧启动命令但忽略；经验整理自动使用任务当前主模型，无需另配 |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
 | isolate-volume | 无 | 部署只读配置/CA 等额外挂载(可重复) |
@@ -894,7 +894,6 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   --build-slots 1 \
   --pg postgresql://<用户>@<PG地址>/<库名> \
   --memsearch /srv/mae-flow/memsearch-venv/bin/python \
-  --memory-draft-provider <网关名> --memory-draft-model <便宜模型> \
   --data /var/lib/mae-flow-cloud --port 8787
 ```
 
@@ -915,9 +914,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
 - **资源**:sidecar 常驻 RSS 内网实测 1.2 GB(macOS 本机 2.0 GB),预留 2.5 GB;
   模型冷加载内网 2.8 s,ready 预算 60 s。索引 `milvus.db` 与语料 `corpus/`
   都在 `--data` 目录下,受同一备份与回收纪律;索引删了可从 md 重建。
-- **起草角色**:`--memory-draft-provider/--memory-draft-model` 必须同时给,且在
-  models.json 里真有;选便宜的模型——每条闭环记忆一次单发、90 s 预算(旁路,不在主会话路上),目录
-  摘要同款。刻意不回落到任务模型(旁路不抢主会话额度)。
+- **经验整理**：自动使用任务当前主模型；任务未单独指定时使用平台主模型，无需额外配置。
+  每条符合条件的闭环候选只发一次独立短请求，无工具、90 s 预算，不带主会话历史；
+  失败保留候选，不重试、不阻塞任务。旧 memory-draft 参数被忽略，不会切到另一模型。
 - **容器**:整条链路在宿主进程里(sidecar 是宿主拉的子进程、起草是宿主发的
   调用、corpus_search 是宿主进程内的工具),任务容器和 `--isolate-image`
   不需要 python/memsearch/语料,镜像不用动。

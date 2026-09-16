@@ -1305,10 +1305,7 @@ export interface TaskServiceOptions {
     model?: string;
     env?: NodeJS.ProcessEnv;
   };
-  /** 记忆起草/目录摘要用的**专用便宜模型角色**(§5"一次便宜的模型调用")。
-   * 不配就不起草:模板保留、不追加版本。刻意不回落到任务模型——起草是旁路,
-   * 不该和主会话抢同一个模型的额度;而且测试的剧本模型按场次应答,旁路
-   * 多问一句就把主会话下一幕吃掉了(mrLoop 两条用例实锤,2026-09-03)。 */
+  /** @deprecated 兼容旧调用方；经验整理始终使用任务主模型，此配置不再生效。 */
   memoryDraftModel?: { provider: string; model: string };
   /** 测试注入:替换真实的单发调用。 */
   memoryDrafter?: (prompt: { system: string; user: string }) => Promise<string>;
@@ -5803,12 +5800,15 @@ export class TaskService {
     }
   }
 
-  /** 单发起草用哪个模型:注入的假件 > 专用角色;没配就 undefined(不起草)。
-   * 角色必须在生效的 models.json 里真有,配置漂移时宁可不起草。 */
-  private memoryDrafter(_task: TaskState)
+  /** 使用任务当前主模型；独立短请求，不共享主会话上下文或工具。 */
+  private memoryDrafter(task: TaskState)
     : ((prompt: { system: string; user: string }) => Promise<string>) | undefined {
     if (this.options.memoryDrafter) return this.options.memoryDrafter;
-    const model = this.options.memoryDraftModel;
+    const override = this.options.settings?.models() ?? {};
+    const model = {
+      provider: task.summary.model_choice?.provider ?? override.provider ?? this.options.provider,
+      model: task.summary.model_choice?.model ?? override.model ?? this.options.model,
+    };
     if (!model?.provider || !model.model) return undefined;
     const known = (this.activeModelsJson() as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;
