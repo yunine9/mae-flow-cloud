@@ -208,7 +208,7 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   const picker = readFileSync(
     join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
   assert.doesNotMatch(picker, /duplicateTicketOf|单号与「.*」重复/,
-    "同仓单元已由平台串行，同一 AR 不应在分工卡上报重复");
+    "串行单元可以复用 AR，分工卡不按单号重复误判，由宿主结合依赖判断");
 
   // #227:ws-decision 死家族退役,原"右栏底部让开提问题浮钮"的 84px 死白
   // 一并删除——浮钮现在在工作台打开期间整体收起(studio 规则),画布自己

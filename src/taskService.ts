@@ -5593,7 +5593,7 @@ export class TaskService {
         "",
         `选「${SPLIT_PROPOSAL_ACCEPT}」:当前编码会话终止,以只读分析现场重新启动,`
         + "走澄清→改动面盘点→划分方向卡→拆分方案→确认→按单元建子任务;"
-        + "单号在确认卡上逐单元填,同仓单元默认串行，可在待启动子任务上提前开始。",
+        + "单号在确认卡上逐单元填,按分析确认的真实依赖启动；同仓独立单元可并行并须使用不同 AR，“提前开始”仅用于后续调整。",
         `选「${SPLIT_PROPOSAL_DECLINE}」:Agent 原地继续,按一个任务做完,不再提议。`,
       ].join("\n"),
     });
@@ -9564,7 +9564,7 @@ export class TaskService {
     if (!artifact?.content.trim()) {
       throw new NotFoundError("全局设计正文尚未生成，请先让 Agent 补齐 Story");
     }
-    // 同仓串行顺序在下方计算；参考路径不参与权限或计划确认。
+    // 执行顺序由显式依赖计算；参考路径不参与权限或计划确认。
     // 下单免了单号的分析单,确认是单号的最后收口:每个单元必须有
     // 真单号(覆盖值或已分工保存的),否则子任务建出来内核没法派生
     // 分支。不查这里,撞分支校验会拿任务 id 兜底,报出"同单号"这种
@@ -9579,9 +9579,7 @@ export class TaskService {
           + "单号——下单时未填单号的需求,确认拆分时逐单元补齐");
       }
     }
-    // 同仓单元默认通过下方依赖边串行：上游 MR 合入后，下游从最新基线
-    // 启动。同一责任人和 AR 可以沿用同一远端分支，后一次推送是基于已
-    // 合入祖先的快进；每个子任务仍有独立 delivery/MR 状态。
+    // 真实前置合入后从最新基线启动；无依赖的单元各自分支、MR 并行。
     const ids = new Set(graph.repositories.map((repository) => repository.id));
     const prerequisites = new Map<string, string[]>();
     for (const id of ids) prerequisites.set(id, []);
@@ -9600,19 +9598,20 @@ export class TaskService {
       if (!ready.length) throw new NotFoundError("仓库依赖存在循环，不能生成任务");
       ready.forEach((id) => { remaining.delete(id); order.push(id); });
     }
-    // 同仓多单元默认串行；建单后责任人可用“提前开始”调整。按拓扑序
-    // 给同仓相邻单元补隐式前置边。在拓扑序**之后**补而不是之前:
-    // 补边方向与显式依赖同向,不可能制造环;若按图产物的数组序补,
-    // 与显式边矛盾时会把合法图误判成循环。
-    const lastUnitByUrl = new Map<string, string>();
-    for (const unitId of order) {
-      const repository = graph.repositories.find((item) => item.id === unitId)!;
-      const previous = lastUnitByUrl.get(repository.url);
-      if (previous) {
-        const current = prerequisites.get(unitId)!;
-        if (!current.includes(previous)) current.push(previous);
+    // 只执行已确认的真实依赖；同仓不能自动推导串行。
+    const dependsOn = (from: string, target: string): boolean =>
+      (prerequisites.get(from) ?? []).some(id => id === target || dependsOn(id, target));
+    for (let i = 0; i < graph.repositories.length; i++) {
+      const left = graph.repositories[i];
+      for (const right of graph.repositories.slice(i + 1)) {
+        if (repositoryIdentity(left.url) !== repositoryIdentity(right.url)
+            || dependsOn(left.id, right.id) || dependsOn(right.id, left.id)) continue;
+        const leftTicket = ticketOverrides?.[left.id] ?? left.ticket ?? task.summary.ticket;
+        const rightTicket = ticketOverrides?.[right.id] ?? right.ticket ?? task.summary.ticket;
+        if (leftTicket && leftTicket === rightTicket) {
+          throw new TaskControlError(`同仓并行单元「${left.scope?.name ?? left.name}」与「${right.scope?.name ?? right.name}」不能共用 AR ${leftTicket}，请填写不同单号；只有真实依赖才应安排串行`);
+        }
       }
-      lastUnitByUrl.set(repository.url, unitId);
     }
     return { graph, order, incoming: prerequisites };
   }
@@ -20306,7 +20305,7 @@ export class TaskService {
         + "Story 的模块职责表以交付单元 id 为第一列，每个模块独占一行，便于从分工卡定位到详细说明；详细设计仍按既有模板展开。"
         + "不是允许修改的白名单；不因计划外文件要求放行。局部兼容调整可自主完成并说明，影响验收或其他模块时优先沟通。"
         + "dependencies 只写确实必须等待前置交付的边；只有契约依赖、可以基于替身先做的关系写入 Story，"
-        + "不要全部转换成合入等待。没有硬依赖写空数组，不允许执行依赖循环；同仓默认串行不代表业务上必须串行，可由责任人通过“提前开始”调整，不要仅因同仓添加依赖。"
+        + "不要全部转换成合入等待。没有硬依赖写空数组，不允许执行依赖循环；同仓也只按真实依赖安排执行；先最小公共基础、再独立模块并行，不要仅因同仓添加依赖。边界不清时先解决不确定性或说明具体等待原因。"
         + "平台沿用现有版本和摘要一致性检查；送审后修改须换修订并同步两份产物，不新增 hook 或测试用例门禁。",
       "方案写完后必须调用 AskUserQuestion。存在模块交付单元时，请用户选择"
         + "「需要修改」或「确认并生成任务」；如果所有候选仓都无需修改，"

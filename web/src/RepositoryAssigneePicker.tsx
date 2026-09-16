@@ -20,12 +20,10 @@ export const EMPTY_REPOSITORY_ASSIGNEE_SELECTION: RepositoryAssigneeSelection = 
   assignments: {}, tickets: {}, ready: false, loading: true,
 };
 
-/** 无依赖不等于同时执行：展示必须尊重平台当前的同仓串行规则。 */
+/** 分组来自真实依赖；仓库相同不额外改变执行顺序。 */
 export function assignmentStageLabel(stage: ReadonlyArray<{ url: string }>, index: number): string {
-  if (stage.length <= 1) return `第 ${index + 1} 步 · ${index === 0 ? "先做" : "接着做"}`;
-  const repositories = new Set(stage.map((item) => item.url));
-  return `第 ${index + 1} 组 · ${repositories.size === 1 ? "同仓依次执行"
-    : repositories.size < stage.length ? "不同仓可并行" : "可并行"}`;
+  return stage.length <= 1 ? `第 ${index + 1} 步 · ${index === 0 ? "先做" : "接着做"}`
+    : `第 ${index + 1} 组 · 可并行`;
 }
 
 export function RepositoryAssigneePicker({
