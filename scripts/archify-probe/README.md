@@ -1,0 +1,22 @@
+# Archify 本地生成实验
+
+实验入口，不修改生产提示词、任务状态或 vendor 渲染器。使用配置中真实模型 API，产生费用；不要提交模型凭据。
+
+```bash
+npm install --prefix .local/archify-probe --no-audit --no-fund elkjs@0.12.0
+node --import tsx scripts/archify-probe/run.ts
+node --import tsx scripts/archify-probe/view.ts
+python3 -m http.server 8846 --bind 127.0.0.1 --directory .local/archify-probe
+```
+
+访问 http://127.0.0.1:8846 。默认读取 `.local/models.json` 的 glm provider 第一个模型及 `docs/overall-story.md`。可用 ARCHIFY_MODELS、ARCHIFY_PROVIDER、ARCHIFY_MODEL、ARCHIFY_INPUT、ARCHIFY_PROBE_OUT 覆盖。输出目录需要上述本地 elkjs 安装。
+
+一次调用原生 Archify 提示词，三次独立调用结构化内容提示词，共四个并发模型请求。该实验不是生产 Agent 完整工具会话的基准，也不是严格串行延迟 A/B。保留全部模型原文、JSON、图源、渲染错误及耗时，不向模型自动重试。原生提示词提供实际 schema 和示例；结构化内容采用 ELK 布局，再交给未修改的 Archify 渲染器。尚未保证任意拓扑的稳定性。
+
+修改编译器后可以运行 `node --import tsx scripts/archify-probe/run.ts rerender`，仅重放已保存输出，不调用模型。原始 results.json 保留首轮结果；rerender-results.json 记录后续布局结果，不能把后续成功冒充首次成功。
+
+预览的模块详情由模型输出提供，包括可核对的原文引用；渲染成功不代表内容通过人工设计审查。预览中的验收内容是设计要求，不是已执行的测试结果。
+
+补充命令：`run.ts fast` 另发三次模型请求，要求字段精炼以减少重复内容；`stress.ts` 不调用模型，验证长链、菱形、循环和扇出汇合四种构造图。渲染重放按顺序执行，避免实验自身触发宿主同时只允许两份渲染的忙碌返回。
+
+预览保留总览，并按所选模块展示其直接协作方；这是显式标注的局部视图，全部模块及关系仍可切回查看。长职责、接口、验收、依据按需展开，不再铺成长文卡墙。样式适配只作用于实验 HTML，不改 vendor。该实验只验证 architecture 类型，不覆盖其他四种图型。
