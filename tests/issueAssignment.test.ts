@@ -24,6 +24,7 @@ import {
   handleIssueRoutes,
   type IssueViewer,
 } from "../src/issueFlow/routes.ts";
+import { issueFixedOpeningPrompt, issueResumePrompt } from "../src/issueFlow/prompt.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { mfcTemp } from "./mfcTmp.ts";
@@ -336,6 +337,30 @@ test("登记指派:小鲁班通知发给责任人;自登记不发、登记人不
     await service.shutdown().catch(() => undefined);
     await luban.stop();
   }
+});
+
+test("登记指派:登记人进 AI 元信息——指派会话带、自登记不带", async () => {
+  // 元信息是开场词/续聊词/get_issue_meta 三处的同一事实源
+  // (issueRegistrationMeta 单源):这里钉提示词块的最小事实,
+  // 工具返回随同一对象自动带上。
+  const base = {
+    id: "issue-9", account: "dev", reporter: "tester",
+    title: "播放器偶发黑屏", description: "重启后黑屏",
+    source: "manual" as const,
+    created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T01:00:00Z",
+    stage_note: "", stage_at: "2026-09-01T01:00:00Z",
+    status: "running" as const, stage: "analyze" as const,
+    scenario: "no_ticket" as const,
+  };
+  const assigned = issueFixedOpeningPrompt(base);
+  assert.match(assigned, /- 登记人: tester/,
+    "指派会话的开场词点名登记人:现象描述出自其视角");
+  assert.match(assigned, /- 工号: dev/);
+  const self = issueFixedOpeningPrompt({ ...base, reporter: "dev" });
+  assert.doesNotMatch(self, /登记人/,
+    "自登记两号同一,元信息不赘述登记人");
+  assert.match(issueResumePrompt({ ...base }, "继续"), /- 登记人: tester/,
+    "续聊词同样带登记人(重启重建的上下文不流失)");
 });
 
 test("登记指派:列表两范围——存量回填与挂起转正都认登记人", async () => {
