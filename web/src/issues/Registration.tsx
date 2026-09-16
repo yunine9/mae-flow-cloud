@@ -73,27 +73,29 @@ const GROUP_BODY = "grid grid-cols-2 gap-3 max-[680px]:grid-cols-1";
  *  create 里机械拦(判定同源)。分两种说法:责任人=自己(自登记)
  *  指路个人设置,自己配完即解锁;责任人=他人(登记指派)点名责任人,
  *  登记人改选已配齐的责任人或让责任人先配好。 */
-function CredentialGate({ viewer, needRepo, assignee, ready, missing,
-  onNavigateProfile }: {
+function CredentialGate({ viewer, needRepo, assignee, readyKnown, ready,
+  missing, onNavigateProfile }: {
   viewer: AuthUser;
   needRepo: boolean;
   /** 当前生效的责任人(空=未指派,不出这个门)。 */
   assignee: string;
-  /** 责任人凭据是否配齐(候选未加载完=未知,不拦)。 */
+  /** 就绪状态是否已知:候选没加载完/拉取失败/所选人不在候选里,都是
+   * 未知——未知不出这个门(不谎报"未配齐"),服务端门禁兜底。 */
+  readyKnown: boolean;
+  /** 责任人凭据是否配齐(仅在已知时有意义)。 */
   ready: boolean;
   missing: string[];
   onNavigateProfile?: () => void;
 }) {
-  if (!needRepo || !assignee || ready) return null;
+  if (!needRepo || !assignee || !readyKnown || ready) return null;
   const self = assignee === viewer.username;
-  // ready=false ⟺ missing 非空(flow=issue 口径),detail 必有内容。
-  const detail = `缺 ${missing.join(" 与 ")}`;
-  const selfMissing = missing.join(" 与 ");
+  // 走到这 ready=false ⟺ missing 非空(flow=issue 口径),detail 必有内容。
+  const missingText = missing.join(" 与 ");
   return <div className="col-span-full mb-2.5 flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
     {self
-      ? <span>发起前先配置<b className="text-attention">{selfMissing}</b>(个人设置 → 个人接入):
+      ? <span>发起前先配置<b className="text-attention">{missingText}</b>(个人设置 → 个人接入):
           拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
-      : <span>责任人 <b className="text-attention">{assignee}</b>({detail})的 Git 凭据未配齐——拉取代码仓与推送提交都用责任人的身份:
+      : <span>责任人 <b className="text-attention">{assignee}</b>(缺 {missingText})的 Git 凭据未配齐——拉取代码仓与推送提交都用责任人的身份:
           改选已配齐的责任人,或让责任人配好后再登记。</span>}
     {self && onNavigateProfile && <Button type="button" size="sm" onClick={onNavigateProfile}>
       去个人设置配置
@@ -288,8 +290,17 @@ function ManualRegister({
         ...(row.ready ? {} : { detail: "未配 Git 凭据" }),
       }))];
   }, [candidateRows, candidateByUsername, selectedOwner, selectedModule]);
-  const assigneeReady = Boolean(assignee
-    && candidateByUsername.get(assignee)?.ready);
+  // 就绪三态:候选在册才谈配没配齐——候选没加载完/拉取失败/所选人
+  // 不在册(管理员、目录失败)都是未知,门与提交拦截不出场,服务端
+  // 门禁兜底,不谎报「未配齐」。
+  const assigneeReadyKnown = Boolean(assignee && candidateByUsername.has(assignee));
+  const assigneeReady = candidateByUsername.get(assignee)?.ready === true;
+  /** 候选在册则「姓名(工号)」,不在册只显工号。 */
+  const candidateLabel = (username: string): string => {
+    const row = candidateByUsername.get(username);
+    return userLabel({ username,
+      ...(row?.display_name ? { display_name: row.display_name } : {}) });
+  };
   useEffect(() => {
     let alive = true;
     setModules(undefined);
@@ -353,7 +364,7 @@ function ManualRegister({
   const touchRemoteRepo = (selectedModule?.repositories ?? [])
     .some((url) => /^https?:\/\//i.test(url));
   const credentialBlocked = Boolean(assignee) && touchRemoteRepo
-    && candidates !== undefined && !assigneeReady;
+    && assigneeReadyKnown && !assigneeReady;
 
   // 发起按钮的灰化口径(spec 验收):目录为空/未选模块/凭据缺失/提交中。
   // 字段缺内容不灰按钮——提交时逐项给友好指路文案,让人知道卡在哪。
@@ -398,11 +409,9 @@ function ManualRegister({
       onError("请选择责任人——登记完成后由责任人推进;选了业务模块会自动带上模块责任人");
       return;
     }
-    if (touchRemoteRepo && candidates !== undefined && !assigneeReady) {
-      onError(`责任人 ${userLabel({ username: assignee,
-        ...(candidateByUsername.get(assignee)?.display_name
-          ? { display_name: candidateByUsername.get(assignee)?.display_name } : {}) })}`
-        + " 的 Git 凭据未配齐——改选已配齐的责任人,或让责任人配好后再登记");
+    if (touchRemoteRepo && assigneeReadyKnown && !assigneeReady) {
+      onError(`责任人 ${candidateLabel(assignee)}` +
+        " 的 Git 凭据未配齐——改选已配齐的责任人,或让责任人配好后再登记");
       return;
     }
     setBusy(true);
@@ -525,9 +534,7 @@ function ManualRegister({
             onChange={setAssigneeManual} ariaLabel="责任人"
             emptyLabel="选择责任人——登记完成后由其推进" />
           {selectedModule?.owner && <small className="text-xs leading-normal text-faint">
-            模块「{selectedModule.name}」的责任人是 {userLabel({ username: selectedModule.owner,
-              ...(candidateByUsername.get(selectedModule.owner)?.display_name
-                ? { display_name: candidateByUsername.get(selectedModule.owner)?.display_name } : {}) })},
+            模块「{selectedModule.name}」的责任人是 {candidateLabel(selectedModule.owner)},
             未手选时自动带上
           </small>}
         </div>
@@ -552,7 +559,7 @@ function ManualRegister({
       </div>
     </div>
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
-      assignee={assignee} ready={assigneeReady}
+      assignee={assignee} readyKnown={assigneeReadyKnown} ready={assigneeReady}
       missing={assignee ? candidateByUsername.get(assignee)?.missing ?? [] : []}
       onNavigateProfile={onNavigateProfile} />
     <div className="col-span-full flex items-center gap-3.5 max-[680px]:flex-col max-[680px]:items-stretch">
