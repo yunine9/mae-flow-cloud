@@ -366,6 +366,19 @@ export interface IssueSessionState {
   /** 全部目标代码仓(2026-08-28 拍板:彼此平等,都可读可改),克隆
    * 平铺在 repo/<仓名>/,由 Agent 调 pull_repo 逐个拉取。 */
   repo_urls?: string[];
+  /** 知识仓装载账(#286,ADR-0033):配置中心管理员指定的全局领域知识
+   * 仓,开工前置由平台克隆为只读参考件(可研读,不可修改、不可交付)。
+   * URL **不进** repo_urls——不在关联仓台账这一个事实,就是交付链全部
+   * 闸(locateRepo/create_mr/push_branch、工作区 diff 的 materialRepos、
+   * 修复分支切换)天然拒绝它的根基;这里只记装载事实,供提示词注入与
+   * 现场复盘。不上 wire(工作台无消费面,现场经转移账可见)。 */
+  knowledge_repo?: {
+    url: string;
+    name: string;
+    status: "ready" | "skipped";
+    note?: string;
+    at: string;
+  };
   baseline?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
@@ -531,10 +544,18 @@ export function normalizeIssueRepos(
   return unique;
 }
 
+/** 仓名派生的唯一真相:地址末段去 .git。issueRepoWorkspaces 与知识仓
+ * 装载(#286)共用——知识仓的撞名判定依赖两处同名同源,分叉即漏闸。 */
+export function repoNameOf(url: string): string {
+  const tail = url.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  return tail.replace(/\.git$/i, "") || "repo";
+}
+
 /** 会话登记仓 → 工作区克隆路径:全部平铺 repo/<仓名>/(2026-08-28
  * 拍板:仓平等——废除主仓 repo/ + 参考仓 ref/ 的等级布局,单仓多仓
  * 同构)。仓名取地址末段去 .git,重名追加序号;克隆一律由 Agent 调
- * pull_repo 工具发起,平台不自动克隆。 */
+ * pull_repo 工具发起,平台不自动克隆。知识仓(#286)不在本口径:
+ * 它的 URL 不进 repo_urls,装载走 service.ensureKnowledgeRepo。 */
 export function issueRepoWorkspaces(
   state: IssueSessionState,
   workspaceRoot: string,
@@ -544,8 +565,7 @@ export function issueRepoWorkspaces(
     : state.repo_url ? [state.repo_url] : [];
   const taken = new Set<string>();
   return repoUrls.map((url) => {
-    const tail = url.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
-    const name = tail.replace(/\.git$/i, "") || "repo";
+    const name = repoNameOf(url);
     let candidate = name;
     let serial = 2;
     while (taken.has(candidate)) candidate = `${name}-${serial++}`;
@@ -572,6 +592,9 @@ export function summarize(state: IssueSessionState): IssueSummary {
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
     parked_notices: _parkedNotices,
+    // knowledge_repo(知识仓装载账,#286)同罪同罚:工作台无消费面,
+    // 现场经转移账可见;上 wire 要先补前端镜像与样例,不白送。
+    knowledge_repo: _knowledgeRepo,
     ...rest } = state;
   return {
     ...rest,

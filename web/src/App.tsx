@@ -1600,7 +1600,7 @@ export function App() {
         {view === "users" && session.role === "admin"
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
-        {view === "environments" && <ConfigurationCenter />}
+        {view === "environments" && <ConfigurationCenter admin={session.role === "admin"} />}
         {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
           <HelpCenter viewer={session}
             initialArticleId={helpArticleId}

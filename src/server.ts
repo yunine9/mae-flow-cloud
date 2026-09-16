@@ -1,5 +1,6 @@
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
+import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
@@ -1067,6 +1068,7 @@ export function createTaskServer(
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "product-versions"
+        || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates"
         || parts[0] === "workflow-assets"
@@ -1433,6 +1435,33 @@ export function createTaskServer(
           }
           if (request.method === "DELETE" && parts.length === 2) {
             deleteProductVersion(dataDir, decodeURIComponent(parts[1]));
+            return json(response, 200, { ok: true });
+          }
+          return json(response, 405, { error: "不支持的配置操作" });
+        } catch (error) { return json(response, 400, { error: humanError(error) }); }
+      }
+
+      // 知识仓(#286,ADR-0033):配置中心唯一的管理员专属页签——强制
+      // 全局影响所有人的所有会话,是运营决策不是团队协作资产,读写都过
+      // admin 闸(非管理员 403:前端页签本就不渲染,这是直连 API 的兜闸)。
+      if (parts[0] === "knowledge-repo") {
+        const admin = !options.auth || viewer?.role === "admin";
+        if (!admin) {
+          return json(response, 403, { error: "知识仓配置仅管理员可维护" });
+        }
+        const dataDir = service.options.dataDir;
+        try {
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200,
+              { config: readKnowledgeRepoConfig(dataDir) ?? null });
+          }
+          if (request.method === "PUT" && parts.length === 1) {
+            const body = await readBody(request);
+            return json(response, 200,
+              { config: saveKnowledgeRepoConfig(dataDir, body.url) });
+          }
+          if (request.method === "DELETE" && parts.length === 1) {
+            clearKnowledgeRepoConfig(dataDir);
             return json(response, 200, { ok: true });
           }
           return json(response, 405, { error: "不支持的配置操作" });

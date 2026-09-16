@@ -255,6 +255,16 @@ function repoLines(state: IssueSessionState): string {
   return `- 代码仓(平铺在 repo/ 下,使用工作区相对路径):\n${lines.join("\n")}`;
 }
 
+/** 知识仓指针行(#286,ADR-0033):只在装载成功(ready)在场——skipped
+ * 不注入,不给 AI 指一个不存在的路径。只读语义由交付链切割保证(不在
+ * 关联仓台账),这里声明给 AI 是行为引导,不是安全边界。 */
+function knowledgeRepoLine(state: IssueSessionState): string {
+  const knowledge = state.knowledge_repo;
+  if (!knowledge || knowledge.status !== "ready") return "";
+  return `- 知识仓: repo/${knowledge.name}/(只读参考——团队领域知识统一治理仓,`
+    + "缺领域事实先翻它的目录;不可修改、不可交付)";
+}
+
 /** 阶段名(固定流程词表;无场景的存量现场按原始键兜底显示)。 */
 export function stageLabelOf(state: IssueSessionState): string {
   return state.scenario
@@ -332,6 +342,7 @@ export function issueFixedOpeningPrompt(
       : []),
     repoLines(state)
       || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
+    knowledgeRepoLine(state),
     ...(scenario === "ticket" && state.ticket
       ? [`- 修复分支 master_${state.account}_${state.ticket}`]
       : []),
@@ -348,17 +359,26 @@ export function issueFixedOpeningPrompt(
   ].filter(Boolean).join("\n\n");
 }
 
-/** 固定流程的平台推进通知(continueWith 注入):带上下文的阶段交接词。 */
+/** 固定流程的平台推进通知(continueWith 注入):带上下文的阶段交接词。
+ * 知识仓交接提醒(#286)随词注入:进分析/进修复各一次(拍板:开场
+ * 指针行之外,分析、修改两处再提醒);未装载(skipped)不提醒。 */
 export function fixedAdvanceNotice(
   state: IssueSessionState,
   message: string,
 ): string {
   const scenario = state.scenario ?? "ticket";
   const current = state.stage as FixedStage;
+  const knowledge = state.knowledge_repo;
+  const remindKnowledge = knowledge?.status === "ready"
+    && (current === "analyze" || current === "fix")
+    ? [promptCopy("notices", "advance.knowledge_remind",
+      { name: knowledge.name })]
+    : [];
   return [
     `平台通知: ${message}`,
     ...stageBriefLines(scenario, current,
       promptCopy("briefs", `stage.${current}`)),
+    ...remindKnowledge,
   ].join("\n");
 }
 

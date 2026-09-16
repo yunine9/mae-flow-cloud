@@ -93,6 +93,7 @@ import {
   MAX_ISSUE_REPOS,
   normalizeIssueRepos,
   recordTransition,
+  repoNameOf,
   saveState,
   shouldNudgeFixed,
   summarize,
@@ -146,6 +147,7 @@ import {
   validateRepoUrl,
   type GitCredential,
 } from "./issueGit.ts";
+import { readKnowledgeRepoConfig } from "../knowledgeRepoConfig.ts";
 import {
   readBusinessModule,
   type BusinessModule,
@@ -2028,6 +2030,12 @@ export class IssueFlowService {
       live.resumeMessage = undefined;
       this.beginTurn(live, async () => {
         if (resumeMessage) return this.resumeTurnBody(live, resumeMessage);
+        // 知识仓开工前置(#286,ADR-0033):平台拉完才把会话交给 Agent
+        // ——首轮回合体里、开场词组装之前克隆到位,确定性归平台不走
+        // pull_repo(自报推进下"仓拉没拉齐"归 AI 裁量,知识仓不在其列;
+        // 与货架 skill 快照、业务知识定格同属知识装载线)。重启续跑不
+        // 重拉:首轮已定局;存量会话无此账=未配置时代,不追溯。
+        await this.ensureKnowledgeRepo(live);
         // 2026-08-28 拍板:克隆不再是回合前的自动动作——登记的仓由
         // Agent 在「拉取代码仓」阶段调 pull_repo 逐个落地(开场词有令)。
         const driver = await this.openDriver(live);
@@ -2037,6 +2045,73 @@ export class IssueFlowService {
           replay,
         ].filter(Boolean).join("\n\n")));
       });
+    }
+  }
+
+  /** 知识仓开工前置装载(#286,ADR-0033):配置中心管理员指定的全局
+   * 领域知识仓,在开场词组装前克隆到 repo/<仓名>/(平铺同场)。只读
+   * 参考件:URL 不进 repo_urls——交付、diff、修复分支全部因"不在关联
+   * 仓台账"天然拒绝(仓名派生与撞名判定与关联仓同源 repoNameOf);
+   * 推送加固由 cloneRepository 内置。fail-open:克隆失败、仓名撞名、
+   * 配置损坏都记 skipped 留痕后照走,定位不因知识缺席停摆;会话内
+   * 定局不重试,改配置从下一个会话生效(开工时点快照)。 */
+  private async ensureKnowledgeRepo(live: LiveIssue): Promise<void> {
+    const { state } = live;
+    if (state.knowledge_repo) return;
+    let configured: { url: string } | undefined;
+    try {
+      configured = readKnowledgeRepoConfig(this.options.dataDir);
+    } catch (error) {
+      this.log(`[issue-flow] ${live.id} 知识仓配置不可用,按未配置走: `
+        + String(error));
+      return;
+    }
+    if (!configured) return;
+    const url = configured.url;
+    const name = repoNameOf(url);
+    const skip = async (note: string) => {
+      state.knowledge_repo = {
+        url, name, status: "skipped", note,
+        at: new Date().toISOString(),
+      };
+      recordTransition(state, {
+        source: "platform", stage: state.stage,
+        note: `知识仓未装载: ${note}`,
+      });
+      saveState(live.root, state);
+    };
+    const taken = new Set(issueRepoWorkspaces(state, live.root)
+      .map((repo) => repo.dir.split(/[\\/]/).at(-1) ?? ""));
+    if (taken.has(name)) return skip(`仓名 ${name} 与关联仓撞名`);
+    const target = join(live.root, "repo", name);
+    try {
+      this.log(`[issue-flow] ${live.id} 知识仓装载: ${url}`);
+      await cloneRepository({
+        dataDir: this.options.dataDir,
+        targetDir: target,
+        repoUrl: url,
+        credential: this.options.gitCredential?.(state.account),
+      });
+      // 克隆在容器起来之前落盘;属主修正如 pull_repo 收口(幂等,属主
+      // 已对时零写入),容器内只读读取不受属主问题干扰。
+      repairContainerCloneOwnership({
+        workspace: live.root,
+        dir: target,
+        user: this.options.isolation?.user,
+        runtime: this.options.ownershipRuntime,
+      });
+      state.knowledge_repo = {
+        url, name, status: "ready", at: new Date().toISOString(),
+      };
+      recordTransition(state, {
+        source: "platform", stage: state.stage,
+        note: `知识仓已装载(只读参考): repo/${name}/`,
+      });
+      saveState(live.root, state);
+    } catch (error) {
+      this.log(`[issue-flow] ${live.id} 知识仓装载失败(跳过,流程照走): `
+        + String(error));
+      return skip(`克隆失败: ${String(error).slice(0, 200)}`);
     }
   }
 
