@@ -60,7 +60,7 @@ test("架构图可从无到有并更新，失败保留旧图，正文和确认�
       assert.equal(job.before, before);
       const event = {} as import("../src/semanticEvents.ts").SemanticEvent;
       assert.equal(overallStoryGate(job.root, true)("Write", "story.md", event)?.action, "deny");
-      assert.equal(overallStoryGate(job.root, true)("Write", "architecture.json", event)?.action, "allow");
+      assert.equal(overallStoryGate(job.root, true)("Write", "architecture.semantic.json", event)?.action, "allow");
       assert.match(overallStoryMission(job), /整个 story.md/);
       writeFileSync(join(job.root, "architecture.json"), JSON.stringify({ schema_version: 1, diagrams: [{
         id: "module", view: "logical", source: { schema_version: 1, diagram_type: "architecture", meta: { title },
@@ -309,7 +309,7 @@ test("文件边界禁止链接逃逸；缺失或歧义的子任务 Story 不被�
     const contract = overallStoryGate("/workspace");
     const gate = (tool: string, value: string) => contract(tool, value, {} as import("../src/semanticEvents.ts").SemanticEvent);
     assert.equal(gate("Write", "story.md")?.action, "allow");
-    assert.equal(gate("Write", "architecture.json")?.action, "allow");
+    assert.equal(gate("Write", "architecture.semantic.json")?.action, "allow");
     for (const path of ["inputs/requirement.md", "../story.md", "/tmp/escape"]) assert.equal(gate("Write", path)?.action, "deny");
     assert.equal(gate("Bash", "pwd")?.action, "deny");
   } finally { f.dispose(); }
@@ -320,7 +320,10 @@ test("真实文档会话沿用内核 Story 模板并单独生成平台图源，�
   const model = new ScriptedModelServer([
     { tool: { name: "read", input: { path: "inputs/template.md" } } },
     { tool: { name: "write", input: { path: "story.md", content: "# 整体 Story\n待补充接口 Story" } } },
-    { tool: { name: "write", input: { path: "architecture.json", content: '{"schema_version":1,"diagrams":[]}' } } },
+    { tool: { name: "write", input: { path: "architecture.semantic.json", content: JSON.stringify({ schema_version: 1,
+      title: "整体模块协作", modules: [{ id: "story", name: "整体 Story", type: "external",
+        summary: "提供跨模块设计依据", responsibility: "记录整体设计", interfaces: "Story 文档",
+        acceptance: "责任人可检视", evidence: "整体 Story" }], relations: [] }) } } },
     { text: "整理完成，缺少接口子任务 Story。" },
   ]);
   await model.start();
@@ -330,30 +333,28 @@ test("真实文档会话沿用内核 Story 模板并单独生成平台图源，�
         kernelRoot: KERNEL_ROOT, model: { provider: "maeflow", model: "scripted-v1" }, models: model.modelsJson() });
       assert.equal(readFileSync(join(job.root, "inputs/template.md"), "utf8"), readFileSync(join(KERNEL_ROOT, "skills/mae-flow/assets/STORY-TEMPLATE.md"), "utf8"));
       assert.match(overallStoryMission(job), /无权修改子任务/);
-      assert.match(overallStoryMission(job), /不得把 Archify JSON 写进 story\.md/);
+      assert.match(overallStoryMission(job), /不要生成 Archify 字段、坐标、尺寸、端口或折线/);
     });
     f.coordinator.generate("parent", "owner"); await f.coordinator.settled("parent");
     assert.equal(f.coordinator.status("parent").error, undefined);
     assert.match(readCurrentStory(f.task.summary.workspace), /整体 Story/);
     const architecture = JSON.parse(readCurrentStoryArchitecture(f.task.summary.workspace)!);
     assert.match(architecture.story_sha256, /^[a-f0-9]{64}$/);
-    assert.deepEqual(architecture.diagrams, []);
+    assert.equal(architecture.diagrams.length, 1);
     assert.ok(new EventLog(join(f.task.summary.workspace, "events.jsonl")).replay().some((e) => e.kind === "tool_requested"));
   } finally { await model.stop(); f.dispose(); }
 });
 
-test("架构更新真实会话在渲染失败后继续修复并发布，Story 保持不变", async () => {
+test("架构更新真实会话只生成语义，程序布局一次发布且 Story 保持不变", async () => {
   const f = fixture();
-  const valid = JSON.stringify({ schema_version: 1, diagrams: [{ id: "api", view: "logical", source: {
-    schema_version: 1, diagram_type: "architecture", meta: { title: "订单模块" },
-    components: [{ id: "api", type: "backend", label: "API", pos: [40, 40], size: [180, 64] }], connections: [],
-  } }] });
+  const semantic = JSON.stringify({ schema_version: 1, title: "订单模块", modules: [
+    { id: "api", name: "订单 API", type: "backend", summary: "处理订单",
+      responsibility: "受理订单", interfaces: "订单接口", acceptance: "可以创建订单", evidence: "订单模块负责处理订单" },
+  ], relations: [] });
   const model = new ScriptedModelServer([
-    { tool: { name: "read", input: { path: "inputs/archify/README.md" } } },
-    { tool: { name: "write", input: { path: "architecture.json", content: "bad json" } } },
-    { text: "初稿完成" },
-    { tool: { name: "write", input: { path: "architecture.json", content: valid } } },
-    { text: "已按诊断修复" },
+    { tool: { name: "read", input: { path: "story.md" } } },
+    { tool: { name: "write", input: { path: "architecture.semantic.json", content: semantic } } },
+    { text: "语义提炼完成" },
   ], "scripted-v1", { linear: true });
   await model.start();
   try {
@@ -365,6 +366,22 @@ test("架构更新真实会话在渲染失败后继续修复并发布，Story �
     assert.match(readCurrentStoryArchitecture(f.task.summary.workspace)!, /订单模块/);
     assert.equal(readCurrentStory(f.task.summary.workspace), "# Story\n订单模块负责处理订单");
   } finally { await f.coordinator.shutdown(); await model.stop(); f.dispose(); }
+});
+
+test("分析阶段的架构语义由宿主布局并真实渲染后随 Story 发布", async () => {
+  const f = fixture();
+  try {
+    const semantic = JSON.stringify({ schema_version: 1, title: "订单协作", modules: [
+      { id: "ui", name: "订单界面", type: "frontend", summary: "提交订单" },
+      { id: "api", name: "订单服务", type: "backend", summary: "处理订单" },
+    ], relations: [{ from: "ui", to: "api", label: "提交订单" }] });
+    f.coordinator.adoptAnalysis("parent", "# Story\n订单界面向订单服务提交订单", "owner", undefined, semantic);
+    assert.equal(f.coordinator.status("parent").job?.kind, "architecture");
+    await f.coordinator.settled("parent");
+    assert.equal(f.coordinator.status("parent").error, undefined);
+    const architecture = JSON.parse(readCurrentStoryArchitecture(f.task.summary.workspace)!);
+    assert.equal(architecture.diagrams[0].source.meta.views[0].label, "订单界面 → 订单服务");
+  } finally { await f.coordinator.shutdown(); f.dispose(); }
 });
 
 test("TaskService 转交整体 Story：completed 可提交，普通原文仍禁止、重复提交幂等", async () => {

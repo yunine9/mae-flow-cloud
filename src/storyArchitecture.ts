@@ -1,3 +1,4 @@
+import { architectureNodes, type ArchitectureNode } from './architectureDetails.ts';
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,12 +8,13 @@ export const ARCHIFY_TYPES = ["architecture", "workflow", "sequence", "dataflow"
 export type ArchifyType = typeof ARCHIFY_TYPES[number];
 export const ARCHIFY_SOURCE_LIMIT = 256 * 1024;
 export type StoryDiagram = { id: string; title: string; line?: number; view: StoryViewId;
+  nodes?: ArchitectureNode[]; overview_id?: string; focus_node?: string;
   renderer: "archify"; type: ArchifyType; source: Record<string, unknown> };
 export interface StoryArchitecture {
   revision: string; diagrams: StoryDiagram[]; warnings: string[];
   views: StoryViewCoverage[];
 }
-interface ArchifyArtifactDiagram { id?: unknown; view?: unknown; story_line?: unknown; source?: unknown }
+interface ArchifyArtifactDiagram { id?: unknown; view?: unknown; story_line?: unknown; source?: unknown; nodes?: unknown; overview_id?: unknown; focus_node?: unknown }
 
 /** Story 只提供版本和 4+1 定位；架构页仅消费平台内部 Archify 产物。 */
 export function storyArchitecture(story: string, archifyArtifact?: string): StoryArchitecture {
@@ -63,7 +65,11 @@ function appendArchifyArtifact(result: StoryArchitecture, story: string, text: s
         const storyLine = Number.isInteger(item.story_line) && Number(item.story_line) > 0 ? Number(item.story_line) : undefined;
         result.diagrams.push({ id, view: item.view as StoryViewId, line: storyLine,
           title: typeof source.meta?.title === "string" ? source.meta.title : `架构图 ${index + 1}`,
-          renderer: "archify", type: source.diagram_type as ArchifyType, source });
+          renderer: "archify", type: source.diagram_type as ArchifyType, source,
+          nodes: architectureNodes(source, item.nodes),
+          ...(typeof item.overview_id === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(item.overview_id) && typeof item.focus_node === "string"
+            ? {overview_id: `archify-${item.overview_id}`, focus_node: item.focus_node} : {}),
+        });
       } catch (error) {
         result.warnings.push(`平台架构产物第 ${index + 1} 张图：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -121,6 +127,7 @@ export function archifyArtifactGuidance(path: string, references = "archify-refe
     "先通读整个 Story，根据需求场景、模块职责、接口契约、依赖及运行部署关系组织架构图；不能只把某张 PlantUML 翻译成 Archify。已有图源只作参考，以全文设计为准。",
     `读取 ${references.replace(/\/?$/, "/")}README.md、对应 schema 和示例，为 Archify 能准确表达且确实需要展示的设计生成图；类图等不支持的内容只留在 Story 的 PlantUML 中，不冒充受支持类型。`,
     "产物格式：{\"schema_version\":1,\"story_sha256\":\"story.md 的真实 SHA-256\",\"diagrams\":[{\"id\":\"稳定短标识\",\"view\":\"logical|development|process|physical|scenarios\",\"story_line\":对应设计在 Story 中的起始行,\"source\":{Archify 原生 JSON}}]}。没有适合 Archify 的图时仍写空 diagrams 数组。",
+    "architecture 图可在每个 diagrams 项中附 nodes 数组（与 source 同级）：[{id, responsibility, interfaces, acceptance, evidence}]。id 必须对应 source.components 的真实节点，说明具体职责、输入输出、验收与 Story 依据；资料节点说明用途和来源，不当作交付子任务。只依据设计填写，不补造。不要为每个节点重复生成一张图；局部图仅在确有必要时附 overview_id（总览图 id）和 focus_node（节点 id），它们是查看范围，不是子任务。",
     "source 必含 schema_version、diagram_type、meta.title；中文设置 meta.locale=zh-CN。只支持 architecture/workflow/sequence/dataflow/lifecycle，不得使用 brand、repository、sources 外部读取字段。",
     "选图按设计内容：模块依赖用 architecture，业务分支用 workflow，调用顺序用 sequence，数据转换用 dataflow，状态迁移用 lifecycle。view 表示 4+1 设计视角，不等于图类型；只选能准确表达全文设计的图。",
     hostValidation ? "平台负责实际渲染并绑定 story_sha256（可省略此字段，无需计算哈希）；写好图源后结束本轮，收到错误反馈时在原图源中修复。不要运行命令或写临时文件，不靠删除失败图规避验证。" : "每张图须与 Story 的职责、契约和交互一致。提交前使用固定离线渲染器实际试渲染并修复布局问题；无法成功渲染的图从 diagrams 中删除并如实报告，不生成空占位图。",

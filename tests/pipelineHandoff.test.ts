@@ -24,6 +24,20 @@ test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果
   assert.equal(summary.delivery.pipeline, "success");
 });
 
+test("推送增量起点随新推送前进，同版本重试及重启恢复不清空", () => {
+  let summary: any = { delivery: {} };
+  const push = (sha: string) => projectPushReceipt(summary, { sha, ref: "refs/heads/work", remote: "origin" });
+  push("first");
+  assert.equal(summary.delivery.last_push_base_sha, undefined);
+  push("second");
+  assert.equal(summary.delivery.last_push_base_sha, "first");
+  summary = JSON.parse(JSON.stringify(summary));
+  push("second");
+  assert.equal(summary.delivery.last_push_base_sha, "first");
+  push("third");
+  assert.equal(summary.delivery.last_push_base_sha, "second");
+});
+
 test("绿灯后的旧流水线反馈不派会话，混合批次中的检视意见仍接续处理", async t => {
   const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "promoted-pipeline-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   t.after(() => service.shutdown());

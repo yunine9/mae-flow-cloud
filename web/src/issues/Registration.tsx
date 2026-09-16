@@ -1,3 +1,4 @@
+import { ProductVersionPicker } from "../ProductVersionPicker";
 import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
 /**
  * 登记域:发起问题会话的两个页签(登记问题 / DTS 列表)。
@@ -221,6 +222,7 @@ function ManualRegister({
   const [description, setDescription] = useState(ISSUE_DESCRIPTION_TEMPLATE);
   // 业务模块必选(spec #15):仓的唯一来源是模块绑定——手填仓、自由
   // 文本模块与 DTS 单号一并废除,无单场景只有一个入口:选模块。
+  const [productVersion, setProductVersion] = useState("");
   const [moduleId, setModuleId] = useState("");
   const [modules, setModules] = useState<BusinessModule[] | undefined>();
   const [moduleLoadError, setModuleLoadError] = useState("");
@@ -305,7 +307,7 @@ function ManualRegister({
     let alive = true;
     setModules(undefined);
     setModuleLoadError("");
-    // 加载失败和空目录是两种事实:前者给重试,后者指路团队资产。两种
+    // 加载失败和空目录是两种事实:前者给重试,后者指路配置中心。两种
     // 情况都不回退手填仓(spec #15:仓的唯一权威是模块绑定)。
     getBusinessModules()
       .then((catalog) => { if (alive) setModules(catalog.modules); })
@@ -420,6 +422,7 @@ function ManualRegister({
         title: title.trim(),
         description: description.trim(),
         module_id: moduleId,
+        product_version: productVersion || undefined,
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
         environment: { environment_id: pickedEnv.id },
         // 责任人(ADR-0031):登记完成即移交,归属与推进人。
@@ -471,7 +474,9 @@ function ManualRegister({
         </div>
         {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
             收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
-            要增删仓去「团队资产 → 业务模块」维护绑定,登记页不改。 */}
+            要增删仓去「配置中心 → 模块与代码仓」维护绑定,登记页不改。 */}
+        <ProductVersionPicker value={productVersion}
+          onChange={version => setProductVersion(version)} />
         <label className={cn(FIELD, "col-span-full")}>
           <span>业务模块 <i className="font-bold not-italic text-danger">*</i></span>
           <span className="issue-module-wrap group/mod relative grid gap-1.5">
@@ -521,7 +526,7 @@ function ManualRegister({
             </Button>
           </small>}
           {catalogEmpty && <small className="col-span-full" role="alert">
-            模块目录为空——先到「团队资产 → 业务模块」登记并绑定代码仓,再回来登记。
+            模块目录为空——先到「配置中心 → 模块与代码仓」登记并绑定代码仓,再回来登记。
           </small>}
         </label>
         {/* 责任人(ADR-0031):登记完成即移交——模块责任人+维护者置顶
@@ -588,6 +593,7 @@ function DtsRegister({
   onError: (message: string) => void;
   onOpenIssue?: (issueId: string) => void;
 }) {
+  const [productVersion, setProductVersion] = useState("");
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
   const [dtsMock, setDtsMock] = useState(false);
@@ -921,6 +927,7 @@ function DtsRegister({
           const created = await createIssue({
             title: ticket?.title || ticketNo,
             source: "dts",
+            product_version: productVersion || undefined,
             ticket: ticketNo,
             description: ticket?.title || undefined,
             ...(binding ? { module_id: binding.module_id } : {}),
@@ -959,6 +966,10 @@ function DtsRegister({
       DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
+    <div className="max-w-md">
+      <ProductVersionPicker value={productVersion} onChange={version => setProductVersion(version)} />
+      <p className="mt-1 text-sm text-muted-foreground">批量发起可统一选择版本；未选择时，按单据版本精确匹配配置中心，未匹配则沿用问题流程原有基线处理。</p>
+    </div>
     {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
         (2026-09-13 表头化,与环境管理台账同范式,旧「版本过滤」
         按钮随迁移退役)。 */}

@@ -1,3 +1,4 @@
+import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
 import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
@@ -69,12 +70,12 @@ import {
 } from "@/components/ui/dialog";
 import { XIcon } from "lucide-react";
 import {
-  addAnnotation,
   completeReview,
   controlTask,
   getConversation,
   deleteHistoryTask,
   listAnnotations,
+  addAnnotation,
   listArtifactChangeDirectory,
   listArtifacts,
   listCommitters,
@@ -84,6 +85,8 @@ import {
   readArtifact,
   readArtifactFileDiff,
   readPushReviewDiff,
+  readDiffReview,
+  type PushReviewPresentation,
   readRequirementRevision,
   repairStopped,
   requestCommitterReview,
@@ -425,33 +428,14 @@ const FEEDBACK_BADGE: Record<FeedbackRecord["status"], ComponentProps<typeof Bad
 /** 一份来源的意见列表,竖排、正文原样换行、Agent 的回复单独成块——
  * 和批注卡片同一套版式,放进「检视意见」里不违和。
  * #227 换装:feedback-* 皮肤类退役,改 shadcn Badge/Button + 工具类。 */
-export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
+export function FeedbackList({ kicker, title, hint, items, mrUrl }: {
   kicker: string;
   title: string;
   hint?: string;
   items: FeedbackRecord[];
   /** CodeHub 意见给一个回到 MR 的入口;讨论级链接平台不给,只到 MR。 */
   mrUrl?: string;
-  /** 把一条外部意见转成工作台批注草稿(走现有批注链路补充给 Agent)。
-   * 返回错误文案;成功返回 undefined。 */
-  onConvert?: (item: FeedbackRecord) => Promise<string | undefined>;
 }) {
-
-  const [converting, setConverting] = useState("");
-  const [notices, setNotices] = useState<Record<string, string>>({});
-  async function convert(item: FeedbackRecord) {
-    if (!onConvert || converting) return;
-    setConverting(item.id);
-    try {
-      const error = await onConvert(item);
-      setNotices((current) => ({
-        ...current,
-        [item.id]: error ?? "已生成工作台批注草稿，在上方「来自 Cloud 工作台的检视意见」里补充后提交。",
-      }));
-    } finally {
-      setConverting("");
-    }
-  }
   return <section className="grid gap-2 rounded-xl border border-line bg-surface p-3" aria-label={title}>
     <header className="flex flex-wrap items-start justify-between gap-3">
       <div className="grid min-w-0 gap-0.5">
@@ -474,7 +458,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             : <code className="font-mono text-xs text-faint">未指向具体文件</code>}
           <Badge variant={FEEDBACK_BADGE[item.status]}>{feedbackStatusLabel(item)}</Badge>
         </div>
-        <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-text">{item.summary}</p>
+        <ReviewBody text={item.summary} />
         {item.resolution && <div className="grid gap-1 border-l-2 border-l-line-strong pl-2.5">
           <strong className="text-xs text-text-strong">{item.source === "mr_discussion" ? "Agent 回复" : "处理结果"}</strong>
           <p className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere] text-muted-foreground">{item.resolution}</p>
@@ -485,19 +469,9 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
             {item.author && ` · 检视人 ${item.author}`}
             {` · ${relativeTime(item.updated_at) || item.updated_at}`}
           </small>
-          {onConvert && !feedbackEnded(item) && !notices[item.id] && (
-            <Button type="button" variant="outline" size="xs"
-              disabled={converting === item.id}
-              title="把这条意见变成你的工作台批注草稿,可以补一句自己的话再提交给 Agent"
-              onClick={() => void convert(item)}>
-              {converting === item.id ? "生成中…" : "转成工作台批注"}
-            </Button>
-          )}
+
         </div>
-        {notices[item.id] && <p role="status"
-          className="m-0 rounded-md bg-accent-soft px-2.5 py-1.5 text-xs leading-relaxed text-ink">
-          {notices[item.id]}
-        </p>}
+
       </li>)}
     </ol>
   </section>;
@@ -505,7 +479,7 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl, onConvert }: {
 
 /** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
 export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
-  const active = feedback.some(item => !feedbackEnded(item));
+  const active = feedback.filter(item => !feedbackEnded(item)).length;
   return <section className="grid gap-2.5" aria-label="持续检视反馈明细">
     <header className="flex items-center justify-between gap-3">
       <span className="flex items-baseline gap-2">
@@ -595,13 +569,12 @@ export function TaskWorkspace({
   const recommendedMaterialView = task.waiting?.recommended_view
     ?? (task.parent_task_id ? "doc"
       : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
-  // push_review 是一份绑定 HEAD 的阅读导航，不是 cloud_push_confirm
-  // 私有组件。流水线/批注返工的持续检视卡同样会把 recommended_view
-  // 指向 diff；把它按中文/步骤名挡掉，会退回普通产物并把真实变更显示
-  // 成 0。审批权仍由 waiting + delivery_selection 单独判断。
-  const pushReview = (needsDeliverySelection(task.waiting)
+  // 审批导航与只读浏览分开：没有待办也可从任务历史计算增量范围。
+  const approvalReview = (needsDeliverySelection(task.waiting)
       || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
+  const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
+  const pushReview = (browsingReview?.taskId === task.id ? browsingReview.review : undefined) ?? approvalReview;
   const [items, setItems] = useState<ArtifactMeta[]>();
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
@@ -672,6 +645,7 @@ export function TaskWorkspace({
   );
   const [diffScope, setDiffScope] = useState<"changes" | "full">(
     pushReview?.has_focused_changes ? "changes" : "full");
+  const scopedDiff = Boolean(pushReview && (approvalReview || diffScope === "changes"));
   const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
@@ -900,6 +874,17 @@ export function TaskWorkspace({
     setDiffScope(pushReview?.has_focused_changes ? "changes" : "full");
     setDiffReviewRequest(0);
   }, [task.id]);
+
+  useEffect(() => {
+    if (materialView !== "diff") return;
+    let alive = true;
+    void readDiffReview(task.id).then(review => {
+      if (!alive) return;
+      setBrowsingReview(previous => previous?.taskId === task.id
+        && JSON.stringify(previous.review) === JSON.stringify(review) ? previous : { taskId: task.id, review });
+    }).catch(() => { /* 元数据暂不可用时保留阅读，不改变任务状态。 */ });
+    return () => { alive = false; };
+  }, [task.id, materialView, livePulse, materialReload, approvalReview]);
 
   useEffect(() => {
     if (!pushReview) {
@@ -1206,7 +1191,7 @@ export function TaskWorkspace({
     if (!active) return;
     let alive = true;
     setMaterialReadError("");
-    const pushDiffActive = Boolean(pushReview
+    const pushDiffActive = Boolean(scopedDiff
       && items?.find((item) => item.name === active)?.kind === "diff");
     const lazyWorkspaceDiff = !pushDiffActive
       && activeArtifactForRead?.kind === "diff"
@@ -1214,7 +1199,7 @@ export function TaskWorkspace({
     // 同一份材料后台更新时保留正文、选区和滚动位置；切文件才显示加载态。
     // 原来每 5 秒把差异正文换成“正在读取”，连未变化的文件也会闪一下。
     const readKey = JSON.stringify([task.id, active, pushDiffActive
-      ? [diffScope, pushReview?.head_sha, task.waiting?.waiting_id]
+      ? [diffScope, pushReview?.base_sha, pushReview?.head_sha, task.waiting?.waiting_id]
       : lazyWorkspaceDiff ? requestedDiffPath : activeUntrackedDirectoryKey]);
     const opening = loadedMaterialKey.current !== readKey;
     // 差异内部换文件只替换正文，保留文件树、分栏宽度及检视选择。
@@ -1278,7 +1263,7 @@ export function TaskWorkspace({
       setDiffFileLoading(false);
     });
     return () => { alive = false; };
-  }, [task.id, active, livePulse, materialReload, diffScope, pushReview?.head_sha,
+  }, [task.id, active, livePulse, materialReload, diffScope, scopedDiff, pushReview?.base_sha, pushReview?.head_sha,
     task.waiting?.waiting_id,
     activeArtifactForRead?.kind, requestedDiffPath,
     activeUntrackedDirectoryKey]);
@@ -1536,11 +1521,9 @@ export function TaskWorkspace({
     : [];
   // 检视意见里除了工作台批注,还列 CodeHub 检视意见与机器检视结果。
   // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
-  const codehubFeedback = (task.feedback ?? [])
-    .filter((item) => item.source === "mr_discussion");
   const machineFeedback = (task.feedback ?? [])
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
-  const reviewRecordCount = notes.length + codehubFeedback.length
+  const reviewRecordCount = notes.length
     + machineFeedback.length;
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
@@ -1566,38 +1549,11 @@ export function TaskWorkspace({
     closureOf(item.id)?.bucket ?? "agent";
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
   for (const item of notes) reviewCounts[noteCategory(item)] += 1;
-  for (const item of [...codehubFeedback, ...machineFeedback]) {
+  for (const item of machineFeedback) {
     reviewCounts[feedbackCategory(item)] += 1;
   }
-  const filteredCodehub = reviewFilter === "all" ? codehubFeedback
-    : codehubFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
   const filteredMachine = reviewFilter === "all" ? machineFeedback
     : machineFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
-  /** CodeHub 意见转成工作台批注草稿:锚点用意见编号(平台不给原文快照),
-   * 定位靠文件行号;正文带上出处,人可以再补一句自己的话。 */
-  async function convertFeedbackToAnnotation(
-    item: FeedbackRecord,
-  ): Promise<string | undefined> {
-    const materials = items ?? [];
-    const diffArtifact = materials.find((artifact) => artifact.kind === "diff")?.name;
-    const artifact = materials.find((artifact) => artifact.name === item.file)?.name
-      ?? diffArtifact ?? item.file ?? materials[0]?.name;
-    if (!artifact) return "当前任务还没有可批注的材料，暂时转不成批注。";
-    const origin = `CodeHub 检视意见 #${item.source_id}${
-      item.author ? `（${item.author}）` : ""}`;
-    const result = await addAnnotation(task.id, {
-      artifact,
-      file: item.file ?? artifact,
-      line: item.line ?? 0,
-      anchor: origin,
-      note: `【转自 ${origin}】\n${item.summary}`,
-      kind: "code",
-    });
-    if (result.error) return `转成批注失败：${result.error}`;
-    setNotesPulse((tick) => tick + 1);
-    onChanged();
-    return undefined;
-  }
   useEffect(() => {
     if (reviewPanelOpen) {
       const feedback = workspaceRoot.current?.querySelector<HTMLElement>("#ws-review-canvas");
@@ -1870,14 +1826,6 @@ export function TaskWorkspace({
             在原文、产出文档或代码上圈选，即可原位写下反馈。
           </div>
         )}
-        {filteredCodehub.length > 0 && <FeedbackList
-          kicker="CODEHUB REVIEW"
-          title="来自 CodeHub 的检视意见"
-          hint="MR 检视人在 CodeHub 留下的讨论。Agent 逐条修改或说明后把回复发回 MR，由检视人在 MR 里确认闭环。"
-          items={filteredCodehub}
-          mrUrl={task.delivery?.mr_url}
-          onConvert={canContributeReview && canCreateAnnotation
-            ? convertFeedbackToAnnotation : undefined} />}
         {filteredMachine.length > 0 && <FeedbackList
           kicker="AUTOMATED GATES"
           title="来自流水线与机器门禁的告警"
@@ -1897,7 +1845,7 @@ export function TaskWorkspace({
     >
       <header className="ws-head" ref={headRef}>
         <Button type="button" variant="outline" size="sm"
-          className="gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
+          className="ws-back-button gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
           aria-label="返回列表" onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden className="size-3.5"><path d="m12.5 5-5 5 5 5" /></svg>
           <span>返回列表</span>
@@ -1918,8 +1866,8 @@ export function TaskWorkspace({
               textClassName="max-[640px]:hidden">
               {statusText(task)}
             </TaskStatusBadge>
-            <Button type="button" variant="link" size="sm"
-              className="h-auto gap-0.5 px-0 text-xs text-muted-foreground hover:text-text-strong"
+            <Button type="button" variant="outline" size="sm"
+              className="gap-1"
               aria-haspopup="dialog"
               onClick={() => setTaskInspector("details")}>任务详情 <span aria-hidden>↗</span></Button>
             <WaitBadge task={task} personal={canOperate} className="max-[900px]:hidden" />
@@ -2069,7 +2017,7 @@ export function TaskWorkspace({
                     else if (value === "execution") selectWorkspaceView("execution");
                   }}>
                 <TabsList variant="line" aria-label="工作区内容"
-                    className="ws-source-switch h-auto">
+                    className="ws-source-switch h-auto justify-start">
                   {task.parent_task_id ? <>
                     {/* 子任务的文档树里任务书只是默认选中的第一份(还有整体拆分方案、
                         spec/decisions/grill……),页签名得说整体,不能拿其中一项当名字
@@ -2228,7 +2176,7 @@ export function TaskWorkspace({
             && task.requirement_graph?.stage === "confirmed"
             && (task.requirement_graph.source_document === "story.md"
               || task.requirement_graph.repositories.length > 0) && (
-            <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate}
+            <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate} fileName={architectureStory?.label}
               canceled={task.status === "canceled"} onOpenTask={onOpenTask}
               onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />
           )}
@@ -2349,7 +2297,18 @@ export function TaskWorkspace({
               </Annotatable>
             ) : materialView === "chain" ? (
               // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
-              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine} onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
+              <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine}
+                onAnnotate={canContributeReview && canCreateAnnotation && architectureStoryName ? async (note) => {
+                  const result = await addAnnotation(task.id, {
+                    artifact: architectureStoryName, file: architectureStory?.label ?? architectureStoryName,
+                    line: 0, anchor: "架构设计整体意见（针对全文，不定位到某一行）", kind: "doc", route: "agent",
+                    note: `对架构设计的整体批注：${note}\n\n请根据意见修改 Story，并同步更新架构图与模块职责说明。`,
+                  });
+                  if (result.error) throw new Error(result.error);
+                  setNotesPulse(tick => tick + 1);
+                  if (result.annotation) openAnnotationReview([result.annotation.id]);
+                } : undefined}
+                onOpenView={(id) => openModuleStory(`view:${id}`)} onOpenStory={() => {
                 openMaterial("doc"); if (architectureStoryName) setActive(architectureStoryName);
               }} />
             ) : <>
@@ -2383,7 +2342,7 @@ export function TaskWorkspace({
                         setDiffScope("full");
                       }}>
                       <strong className="text-[13px] font-medium">全部改动</strong>
-                      <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前待推送代码</span>
+                      <span className={cn("text-xs", diffScope === "full" ? "opacity-75" : "text-muted-foreground")}>从任务起点到当前代码</span>
                     </Button>
                   </> : (
                     // 只有一个范围时不是"可切换":按钮外观点了没反应,
@@ -2391,12 +2350,12 @@ export function TaskWorkspace({
                     <div role="note"
                       className="inline-flex h-8 min-w-0 cursor-default items-center gap-1.5 rounded-full border border-ink bg-ink px-3 text-ink-fg">
                       <strong className="text-[13px] font-medium">全部改动</strong>
-                      <span className="text-xs opacity-75">从任务起点到当前待推送代码;本轮没有可单看的增量修改</span>
+                      <span className="text-xs opacity-75">从任务起点到当前代码;本轮没有可单看的增量修改</span>
                     </div>
                   )}
                   <p className="m-0 min-w-[240px] flex-1 text-[13px] text-muted-foreground">{diffScope === "changes"
-                    ? "这里只看这次处理产生的变化，方便快速复检；最终授权仍绑定当前完整待推送版本。"
-                    : "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。"}</p>
+                    ? "这里只看这次处理产生的变化；浏览代码不会发起推送或要求再次确认。"
+                    : approvalReview ? "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。" : "这里查看任务的全部改动，包括尚未提交的工作区修改。"}</p>
                 </div>
               )}
               {unavailable && <div className="utility-note">{unavailable}</div>}
@@ -2407,7 +2366,7 @@ export function TaskWorkspace({
               {materialView === "diff" && pushReview
                 && pushDiffState.kind === "error" && (
                 <div className="utility-note" role="alert">
-                  <strong>{pushDiffState.expired
+                  <strong>{!approvalReview ? "代码差异暂不可用，请刷新重试" : pushDiffState.expired
                     ? "这版代码已失效，暂不能确认推送"
                     : "代码检视暂不可用，暂不能确认推送"}</strong>
                   <span>{pushDiffState.message}</span>
@@ -2438,14 +2397,14 @@ export function TaskWorkspace({
                   ? <GitDiff text={content} branch={branch} embeddedBrowser
                       annotationLocation={pendingLocation?.view === "diff"
                         ? { file: pendingLocation.item.file, request: pendingLocation.request } : undefined}
-                      manifest={!pushReview ? activeMeta?.change_files : undefined}
-                      untrackedDirectories={!pushReview
+                      manifest={!scopedDiff ? activeMeta?.change_files : undefined}
+                      untrackedDirectories={!scopedDiff
                         ? activeMeta?.untracked_directories : undefined}
-                      onDirectoryLoad={!pushReview
+                      onDirectoryLoad={!scopedDiff
                         ? (path, offset) => listArtifactChangeDirectory(
                             task.id, path, offset)
                         : undefined}
-                      onFileSelect={!pushReview ? setSelectedDiffPath : undefined}
+                      onFileSelect={!scopedDiff ? setSelectedDiffPath : undefined}
                       activeFileLoading={diffFileLoading}
                       activeFileError={diffFileError}
                       hideKey={task.id}
@@ -2657,6 +2616,7 @@ export function TaskWorkspace({
           />
           {chainReview && decides ? null : canCollaborate || decides ? (
             <Composer task={task}
+              isOwner={viewerUsername === (task.luban_account ?? "本地用户")}
               crossRepository={Boolean(task.parent_task_id)}
               steerOnly={task.requirement_graph?.stage === "analysis"}
               decisionDock={Boolean(waiting) && decides}

@@ -96,6 +96,8 @@ export function buildService(
 ): TaskService {
   return new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
+    // 主流程剧本按次序消费；经验旁路使用独立假响应，不消耗下一幕。
+    memoryDrafter: async () => JSON.stringify({ trigger: "修改交付代码时", scope: "one_off", conclusion: "测试候选，待人工确认。" }),
     log: process.env.DEBUG_CONTINUOUS_REVIEW ? console.error : undefined,
     host: { kernelRoot: KERNEL_ROOT, repoPath: platform.barePath,
             python: "python3", continuousReview: true },

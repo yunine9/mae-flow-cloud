@@ -1,227 +1,124 @@
-/**
- * 任务记忆总览(只读)。docs/knowledge-memory-design.md §9「可见不可管」:
- * 这里没有编辑、没有删除、没有审核——记忆由闭环自动产生、由台账自动排序
- * 和沉底;人能看到"记了什么、谁被推过、谁真被用、谁返工了、谁沉底了",
- * 想撤自己圈的那条,回任务页去撤。
- */
-
+/** 经验沉淀的唯一审查入口：候选留档、人工采纳与使用足迹集中展示。 */
 import { useEffect, useMemo, useState } from "react";
-import { cn } from "cn";
-import { memoryPreparation, memorySearchPresentation } from "./memoryPresentation";
-import {
-  getMemoryInsights, readMemoryInsight,
-  type MemoryInsightRow, type MemoryInsights,
-} from "./api";
-import {
-  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Empty, EmptyDescription } from "@/components/Empty";
+import { getMemoryInsights, readMemoryInsight, createMemoryDraft, type MemoryInsights, type MemoryRecord } from "./api";
+import { memoryPreparation, memorySearchPresentation, memoryReviewFocus } from "./memoryPresentation";
+import { MemoryReviewEditor } from "./MemoryReviewEditor";
+import { Button } from "./components/ui/button";
+import { Textarea } from "./components/ui/textarea";
+import { Input } from "./components/ui/input";
+import { confirmDialog } from "./ConfirmDialog";
 
-const SOURCE = {
-  agent_note: "Agent 主动记录", annotation: "检视意见闭环", prepush_fix: "Build-Fix 修好", user_note: "人圈选记下",
-} as const;
-const SCOPE = { one_off: "一次性", local: "局部", general: "通用" } as const;
-
-function day(value?: string): string {
-  if (!value) return "";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString([], {
-    year: "2-digit", month: "2-digit", day: "2-digit",
-  });
-}
-
+const scopes = { local: "本仓相关位置", general: "本仓通用", platform: "跨仓通用", one_off: "仅检索参考" };
 export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => void }) {
   const [insights, setInsights] = useState<MemoryInsights>();
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [repo, setRepo] = useState("");
-  const [scope, setScope] = useState("");
-  const [source, setSource] = useState("");
-  const [withGone, setWithGone] = useState(false);
-  const [needle, setNeedle] = useState("");
-  const [open, setOpen] = useState<{ id: string; content: string }>();
-
-  async function load() {
-    setLoading(true);
-    try {
-      setInsights(await getMemoryInsights());
-      setError("");
-    } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "读取记忆总览失败");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [focusError, setFocusError] = useState("");
+  const [tab, setTab] = useState("pending");
+  const [scopeFilter, setScopeFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [sourceTask, setSourceTask] = useState(() => new URLSearchParams(location.search).get("source_task") ?? "");
+  const [selected, setSelected] = useState<{ record: MemoryRecord; content: string }>();
+  const [dirty, setDirty] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newTitle, setNewTitle] = useState("");
+  const [newBody, setNewBody] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(0);
+  async function load() { setInsights(await getMemoryInsights()); setError(""); }
   useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 60_000);
-    return () => window.clearInterval(timer);
+    let alive = true;
+    const refresh = () => getMemoryInsights().then(value => { if (alive) { setInsights(value); setError(""); } })
+      .catch(reason => { if (alive) setError(String(reason)); });
+    void refresh(); const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 15_000);
+    return () => { alive = false; window.clearInterval(timer); };
   }, []);
-
-  const rows = useMemo(() => {
-    const all = insights?.memories ?? [];
-    const query = needle.trim();
-    return all.filter((row) =>
-      (!repo || row.repo === repo)
-      && (!scope || row.scope === scope)
-      && (!source || row.source === source)
-      && (withGone || (!row.archived && !row.withdrawn && !row.superseded_by))
-      && (!query || `${row.trigger}${row.conclusion}${row.paths.join(" ")}`.includes(query)))
-      .slice(0, 200);
-  }, [insights, repo, scope, source, withGone, needle]);
-
-  const totals = useMemo(() => {
-    const repos = insights?.repos ?? [];
-    const sum = (key: keyof typeof repos[number]) =>
-      repos.reduce((acc, item) => acc + Number(item[key] ?? 0), 0);
-    return {
-      active: sum("active"), one_off: sum("one_off"), archived: sum("archived"),
-      pushes: sum("pushes"), hits: sum("hits"), reworks: sum("reworks"),
-    };
-  }, [insights]);
-
-  async function toggle(row: MemoryInsightRow) {
-    if (open?.id === row.id) { setOpen(undefined); return; }
-    const found = await readMemoryInsight(row.id);
-    if (found) setOpen({ id: row.id, content: found.content });
+  useEffect(() => {
+    const id = memoryReviewFocus(location.search);
+    if (!id) return;
+    let alive = true;
+    setOpening(true);
+    void readMemoryInsight(id).then(value => {
+      if (!alive) return;
+      if (!value) throw new Error("这条经验已不可用，请在列表中查看其他记录");
+      setSelected(value);
+      setTab(value.record.archived || value.record.withdrawn || value.record.superseded_by ? "all"
+        : value.record.review?.status === "accepted" ? "accepted"
+        : value.record.review?.status === "rejected" ? "rejected" : value.record.can_review ? "pending" : "all");
+    }).catch(reason => { if (alive) setFocusError(String(reason)); })
+      .finally(() => { if (alive) setOpening(false); });
+    return () => { alive = false; };
+  }, []);
+  function clearFocus() {
+    const url = new URL(location.href); url.searchParams.delete("memory_id");
+    history.replaceState(history.state, "", url);
+    setSelected(undefined); setDirty(false); setFocusError("");
   }
-
-  const searchStatus = memorySearchPresentation(insights?.sidecar, Boolean(error));
-  const chipTone = searchStatus.state === "ready"
-    ? "border-success/35 bg-success/10 text-success"
-    : searchStatus.state === "unavailable"
-      ? "border-attention/35 bg-attention/10 text-attention"
-      : "border-line bg-surface-2 text-muted-foreground";
-
-  return <section className="grid gap-3.5" aria-labelledby="memory-board-title">
-    <header className="flex min-h-[92px] items-center justify-between gap-6 border-b border-line
-      bg-gradient-to-br from-surface-2 to-surface px-[21px] py-[18px]">
-      <div><h2 id="memory-board-title" className="text-[21px] font-bold text-text-strong">任务记忆</h2>
-        <p className="border-t border-line bg-surface-2 px-5 py-2.5 text-[13px] leading-[1.5] text-faint">
-          平台不建知识库，只记住自己干过的活：闭环的检视意见、修好的构建失败、人圈选记下的约定，
-          自动落成记忆，下一单改到同一处时推给 Agent。这里只看不管——排序和沉底由台账自动完成。
-        </p></div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={cn("rounded-full border px-2 py-[3px] text-[13px]", chipTone)} title={searchStatus.title}>
-          {searchStatus.label}
-        </span>
-        {!!insights?.drafting && <span className="rounded-full border border-line bg-surface-2 px-2 py-[3px] text-[13px] text-muted-foreground">整理中 {insights.drafting}</span>}
-        <span className="flex flex-none items-center gap-2.5">
-          <button type="button"
-            className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-primary/25
-              bg-surface px-2.5 text-[13px] font-bold text-primary hover:border-primary hover:bg-primary/10
-              disabled:cursor-wait disabled:opacity-55"
-            onClick={() => void load()}
-            disabled={loading} aria-label="刷新记忆总览">{loading ? "刷新中…" : "刷新"}</button>
-        </span>
-      </div>
+  const rows = useMemo(() => (insights?.memories ?? []).filter(row => (tab === "all" || tab === "rejected" || (!row.withdrawn && !row.superseded_by && !row.archived))
+    && (scopeFilter === "all" || (scopeFilter === "module" ? !!row.module : scopeFilter === "platform" ? !row.module && row.scope === "platform" : !row.module && row.scope !== "platform"))
+    && (!sourceTask || row.task === sourceTask)
+    && (tab === "all" || (tab === "rejected" ? row.archived || row.withdrawn || row.superseded_by || row.review?.status === "rejected" : (row.review?.status ?? "pending") === tab))
+    && (tab !== "pending" || row.can_review)
+    && (!query.trim() || `${row.trigger} ${row.conclusion} ${row.repo}`.includes(query.trim()))), [insights, sourceTask, tab, query, scopeFilter]);
+  const pending = (insights?.memories ?? []).filter(row => row.can_review && !row.withdrawn && !row.superseded_by && !row.archived && (row.review?.status ?? "pending") === "pending").length;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 10) - 1));
+  async function dismiss() { if (dirty && !await confirmDialog({ title: "尚未保存的编辑将被放弃，继续吗？", danger: true })) return; clearFocus(); }
+  async function open(id: string) {
+    if (opening) return;
+    setOpening(true); setError("");
+    try { const value = await readMemoryInsight(id); if (!value) throw new Error("记录已不可用，请刷新"); setSelected(value); setDirty(false); setFocusError("");
+      const url = new URL(location.href); url.searchParams.set("memory_id", id); history.replaceState(history.state, "", url); }
+    catch (reason) { setError(String(reason)); } finally { setOpening(false); }
+  }
+  return <section className="grid gap-4 rounded-xl border border-border bg-surface p-5" aria-label="经验沉淀">
+    <header className="flex items-start justify-between gap-4">
+      <div><h2 className="text-xl font-semibold">经验沉淀</h2>
+        <p className="mt-1 text-sm text-muted-foreground">待确认草稿 → 人工采纳后供 Agent 检索 → 停用后保留历史。团队成员共同维护，全程留痕。</p></div>
+      {selected ? <Button variant="outline" onClick={dismiss}>返回经验列表</Button>
+        : <div className="flex gap-2"><Button variant="outline" onClick={() => void load().catch(reason => setError(String(reason)))}>刷新</Button><Button onClick={() => setCreating(!creating)}>新增经验</Button></div>}
     </header>
-    {error && !insights && <div className="m-5 flex min-h-[110px] flex-col items-start gap-[13px] rounded-[11px]
-      border border-dashed border-danger/30 bg-danger/10 p-5 text-danger" role="alert">
-      <strong className="text-[13.5px] text-text-strong">读不到记忆总览</strong><span className="text-[13px] text-muted-foreground">{error}</span></div>}
-    <div className="grid grid-cols-6 gap-2 max-[900px]:grid-cols-3" aria-label="记忆总览摘要">
-      <div className="grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5"><strong className="text-xl text-text-strong">{totals.active}</strong><span className="text-[13px] text-muted-foreground">在用</span></div>
-      <div className="grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5"><strong className="text-xl text-text-strong">{totals.one_off}</strong><span className="text-[13px] text-muted-foreground">一次性（只进检索）</span></div>
-      <div className="grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5"><strong className="text-xl text-text-strong">{totals.archived}</strong><span className="text-[13px] text-muted-foreground">已沉底</span></div>
-      <div className="grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5"><strong className="text-xl text-text-strong">{totals.pushes}</strong><span className="text-[13px] text-muted-foreground">推送次数</span></div>
-      <div className="grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5"><strong className="text-xl text-text-strong">{totals.hits}</strong><span className="text-[13px] text-muted-foreground">Agent 命中</span></div>
-      <div className={cn("grid gap-0.5 rounded-[10px] border border-line bg-surface px-3 py-2.5", totals.reworks && "[&>strong]:text-attention")}><strong className="text-xl text-text-strong">{totals.reworks}</strong><span className="text-[13px] text-muted-foreground">推后返工</span></div>
-    </div>
-    <div className="flex flex-wrap items-center gap-2">
-      <Select value={repo}
-        items={[{ value: "", label: "全部仓库" },
-          ...(insights?.repos ?? []).map((item) => ({
-            value: item.repo, label: `${item.repo}（${item.active} 在用）`,
-          }))]}
-        onValueChange={(value) => setRepo(value ?? "")}>
-        <SelectTrigger aria-label="按仓库筛选"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="">全部仓库</SelectItem>
-            {(insights?.repos ?? []).map((item) => <SelectItem key={item.repo} value={item.repo}>
-              {item.repo}（{item.active} 在用）</SelectItem>)}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <Select value={scope}
-        items={[{ value: "", label: "全部范围" },
-          ...Object.entries(SCOPE).map(([key, label]) => ({ value: key, label }))]}
-        onValueChange={(value) => setScope(value ?? "")}>
-        <SelectTrigger aria-label="按范围筛选"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="">全部范围</SelectItem>
-            {Object.entries(SCOPE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <Select value={source}
-        items={[{ value: "", label: "全部来源" },
-          ...Object.entries(SOURCE).map(([key, label]) => ({ value: key, label }))]}
-        onValueChange={(value) => setSource(value ?? "")}>
-        <SelectTrigger aria-label="按来源筛选"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem value="">全部来源</SelectItem>
-            {Object.entries(SOURCE).map(([key, label]) => <SelectItem key={key} value={key}>{label}</SelectItem>)}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <Input className="w-56" value={needle} onChange={(event) => setNeedle(event.target.value)}
-        placeholder="按触发条件、结论或路径找" aria-label="搜索记忆" />
-      <label className="flex items-center gap-2 text-[13px] text-muted-foreground"><Checkbox checked={withGone}
-        onCheckedChange={(checked) => setWithGone(checked)} />含已沉底 / 撤回 / 被覆盖</label>
-    </div>
-    {rows.length ? <ol className="m-0 grid list-none gap-2 p-0">
-      {rows.map((row) => {
-        const gone = row.archived || row.withdrawn || !!row.superseded_by;
-        const preparation = memoryPreparation(row);
-        return <li key={row.id} className={cn("rounded-[10px] border border-line bg-surface", gone && "opacity-60")}>
-          <button type="button" aria-expanded={open?.id === row.id}
-            className="grid w-full cursor-pointer grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5
-              border-0 bg-transparent p-3 text-left font-[inherit] text-inherit hover:bg-surface-2
-              max-[900px]:grid-cols-[28px_minmax(0,1fr)]"
-            onClick={() => void toggle(row)}>
-            <i aria-hidden className={cn("grid size-[26px] place-items-center rounded-[7px] text-xs font-bold not-italic",
-              row.source === "prepush_fix" ? "bg-attention/10 text-attention"
-                : row.source === "user_note" ? "bg-success/10 text-success" : "bg-primary/10 text-primary")}>
-              {["user_note", "agent_note"].includes(row.source) ? "记" : row.source === "prepush_fix" ? "修" : "议"}</i>
-            <span className="grid min-w-0 gap-[3px]">
-              <strong className="flex flex-wrap items-center gap-1.5 text-text-strong">{row.trigger}
-                <b className={cn("rounded border px-1.5 py-px text-xs font-semibold",
-                  row.scope === "general" ? "border-success/30 bg-success/10 text-success"
-                    : row.scope === "one_off" ? "border-attention/30 bg-attention/10 text-attention"
-                      : "border-line bg-surface-2 text-muted-foreground")}>{SCOPE[row.scope]}</b>
-                {row.source !== "user_note"
-                  && <b className="rounded border border-line bg-surface-2 px-1.5 py-px text-xs font-semibold text-muted-foreground" title={preparation.title}>{preparation.label}</b>}
-                {row.archived && <b className="rounded border border-line bg-surface-2 px-1.5 py-px text-xs font-semibold text-faint" title={row.archive_reason}>已沉底</b>}
-                {row.withdrawn && <b className="rounded border border-line bg-surface-2 px-1.5 py-px text-xs font-semibold text-faint">已撤回</b>}
-                {row.superseded_by && <b className="rounded border border-line bg-surface-2 px-1.5 py-px text-xs font-semibold text-faint">被覆盖</b>}
-              </strong>
-              <em className="not-italic leading-[1.5] text-text">{row.conclusion}</em>
-              <small className="text-[13px] text-muted-foreground">{row.repo} · {SOURCE[row.source]} · {row.judged_by === "human" ? "人确认" : row.judged_by === "agent" ? "Agent 记录" : "流水线"}
-                {row.paths[0] ? ` · ${row.paths[0]}${row.line ? `:${row.line}` : ""}` : ""}
-                {` · ${day(row.at)}`}
-              </small>
-            </span>
-            <span className="flex gap-1.5 whitespace-nowrap max-[900px]:col-start-2" title={`权重 ${row.weight}${row.last_used ? ` · 最近用于 ${day(row.last_used)}` : ""}`}>
-              <b className="rounded bg-surface-2 px-1.5 py-0.5 text-[13px] font-medium text-muted-foreground">推 {row.pushes}</b>
-              <b className="rounded bg-surface-2 px-1.5 py-0.5 text-[13px] font-medium text-muted-foreground">命中 {row.hits}</b>
-              <b className={cn("rounded bg-surface-2 px-1.5 py-0.5 text-[13px] font-medium text-muted-foreground", row.reworks && "bg-attention/10 text-attention")}>返工 {row.reworks}</b>
-            </span>
-          </button>
-          <div className="px-3 pb-2 pl-[50px]">
-            <button type="button" className="cursor-pointer border-0 bg-none p-0 text-[13px] text-primary" onClick={() => onOpenTask?.(row.task)}>
-              来自任务 {row.task}</button>
-          </div>
-          {open?.id === row.id && <pre className="m-0 whitespace-pre-wrap break-words border-t border-dashed border-line
-            pb-3 pl-[47px] pr-3 pt-2.5 text-xs leading-[1.55] text-muted-foreground">{open.content}</pre>}
-        </li>;
-      })}
-    </ol> : <Empty className="mx-5 my-5 min-h-[110px] border" role="status">
-      <EmptyDescription>{insights ? "还没有符合条件的记忆。闭环的检视意见、修好的构建失败和圈选「记为记忆」会自动落在这里。" : "加载中…"}</EmptyDescription>
-    </Empty>}
+    {creating && <form className="grid gap-3 rounded-lg border bg-muted/20 p-4" onSubmit={event => {
+      event.preventDefault(); if (saving) return; setSaving(true);
+      void createMemoryDraft(newTitle, newBody).then(async row => { setCreating(false); setNewTitle(""); setNewBody(""); setTab("pending"); await load(); await open(row.id); })
+        .catch(reason => setError(String(reason))).finally(() => setSaving(false));
+    }}><h3 className="font-semibold">新增经验草稿</h3><Input aria-label="经验标题" placeholder="什么情况下使用（最多80字）" maxLength={80} value={newTitle} onChange={e => setNewTitle(e.target.value)} />
+      <Textarea aria-label="经验内容" rows={4} placeholder="记录做法、依据与适用例外，保存后可继续完善范围并采纳。" value={newBody} onChange={e => setNewBody(e.target.value)} />
+      <div className="flex gap-2"><Button type="submit" disabled={saving || !newTitle.trim() || !newBody.trim()}>保存并审查</Button><Button type="button" variant="outline" onClick={() => setCreating(false)}>取消</Button></div></form>}
+    {(error || focusError) && <p role="alert" className="text-sm text-destructive">{focusError || error}</p>}
+      <div className="flex items-center gap-2" aria-label="经验状态">
+        {[["pending", `待确认 ${pending}`], ["accepted", "已采纳"], ["rejected", "已停用"], ["all", "全部记录"]].map(([value, label]) =>
+          <Button key={value} variant={tab === value ? "default" : "outline"} size="sm" onClick={async () => { if (dirty && !await confirmDialog({ title: "放弃尚未保存的修改？", danger: true })) return; clearFocus(); setTab(value); setPage(0); }}>{label}</Button>)}
+      </div>
+      <div className="flex items-center gap-3"><Input className="max-w-lg" aria-label="搜索经验" placeholder="搜索经验、代码仓" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
+        <select aria-label="筛选复用范围" className="rounded-md border bg-surface p-2 text-sm" value={scopeFilter} onChange={e => { setScopeFilter(e.target.value); setPage(0); }}><option value="all">全部范围</option><option value="platform">平台通用</option><option value="module">业务模块</option><option value="repo">代码仓</option></select>
+        {sourceTask && <Button variant="outline" size="sm" onClick={() => { setSourceTask(""); setPage(0); const url = new URL(location.href); url.searchParams.delete("source_task"); history.replaceState(history.state, "", url); }}>{sourceTask} · 清除来源筛选</Button>}
+        <span className="ml-auto text-sm text-muted-foreground">{memorySearchPresentation(insights?.sidecar).label}</span></div>
+    {selected ? <>
+      <div className="flex items-center justify-between rounded-md bg-muted p-3 text-sm"><span>{selected.record.trigger} · {memoryPreparation(selected.record).label}</span>
+        {selected.record.task && <Button variant="outline" size="sm" onClick={() => { if (onOpenTask) onOpenTask(selected.record.task); else location.assign(`/work/${encodeURIComponent(selected.record.task)}`); }}>查看来源任务 {selected.record.task}</Button>}</div>
+      <div className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-4">
+      <aside className="grid max-h-[min(650px,65vh)] gap-2 overflow-auto rounded-xl border border-border bg-muted/30 p-3" aria-label="经验候选列表">
+        <h3 className="p-2 font-semibold">{tab === "pending" ? `待确认 · ${pending}` : "经验列表"}</h3>
+        {rows.map(row => <Button key={row.id} variant={row.id === selected.record.id ? "secondary" : "ghost"}
+          className="h-auto min-h-16 justify-start whitespace-normal p-3 text-left" disabled={opening}
+          onClick={async () => { if (row.id !== selected.record.id && (!dirty || await confirmDialog({ title: "切换候选将放弃尚未保存的编辑，继续吗？", danger: true }))) void open(row.id); }}>
+          <span><span className="line-clamp-2">{row.trigger}</span><span className="mt-1 block text-sm font-normal text-muted-foreground">{row.task} · {row.repo}</span></span>
+        </Button>)}
+      </aside>
+      <MemoryReviewEditor key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
+        onDirty={setDirty} onDismiss={dismiss} onChanged={async () => { setDirty(false); await load(); const updated = await readMemoryInsight(selected.record.id); if (updated) { setSelected(updated); setTab(updated.record.review?.status ?? "pending"); } }} />
+      </div>
+      <details className="text-sm"><summary className="cursor-pointer">完整留档与来源标识</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3">{selected.content}</pre></details>
+    </> : <>
+      <div className="grid gap-2">{rows.slice(currentPage * 10, (currentPage + 1) * 10).map(row => <article key={row.id} className="flex items-center justify-between gap-4 rounded-lg border border-border p-4">
+        <div className="min-w-0"><h3 className="text-base font-medium">{row.trigger}</h3><p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{row.conclusion}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{row.task || "手工新增"} · {row.module ? `模块：${row.module}` : scopes[row.scope]}{row.scope !== "platform" && !row.module ? ` · ${row.repo}` : ""} · {row.archived ? "已归档" : row.withdrawn || row.superseded_by ? "已撤回" : memoryPreparation(row).label}</p>
+          {row.review?.status === "accepted" && <p className="mt-1 text-sm text-muted-foreground">已提供 {row.pushes} 次 · 检索/展开 {row.hits} 次；这些数字不代表质量提升</p>}</div>
+        <Button variant="outline" className="shrink-0" disabled={opening} onClick={() => void open(row.id)}>{row.can_review && !row.archived && !row.withdrawn && !row.superseded_by && row.review?.status !== "accepted" ? "查看并审查" : "查看经验"}</Button>
+      </article>)}</div>
+      {!rows.length && <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{!insights ? "正在加载…" : "当前没有符合条件的记录"}</p>}
+      {rows.length > 10 && <div className="flex items-center justify-end gap-3 text-sm"><Button variant="outline" size="sm" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>上一页</Button>
+        {currentPage + 1} / {Math.ceil(rows.length / 10)}<Button variant="outline" size="sm" disabled={(currentPage + 1) * 10 >= rows.length} onClick={() => setPage(currentPage + 1)}>下一页</Button></div>}
+    </>}
   </section>;
 }

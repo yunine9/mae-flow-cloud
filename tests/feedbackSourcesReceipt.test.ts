@@ -442,10 +442,10 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
     assert.equal(readState(cwd).delivery_loop.published, undefined);
     assert.equal(api.recordActiveFeedbackResult(internal), undefined,
       "首次结果登记无需推送收据，必须发生在交付之前");
-    assert.ok(attestations().some((args) => args.includes("--active-batch")),
-      "首次登记前仍核验活动批次");
+    assert.ok(attestations().some((args) => args.includes("--feedback-loop")),
+      "首次登记前核验反馈事实");
     assert.ok(attestations().some((args) => args.includes("--lifecycle")),
-      "登记写入新状态后仍重新核验完整生命周期");
+      "登记写入新状态后仍重新核验反馈事实");
     const originalBatch = readState(cwd).delivery_loop.batches[0];
     assert.equal(originalBatch.result_head, resultHead);
 
@@ -458,6 +458,12 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
       { sha: publishedHead, ref: "refs/heads/feature", remote: "origin" });
     const published = readState(cwd);
     assert.equal(published.delivery_loop.published.sha, publishedHead);
+    // 内核正常推进或其他事实更新，不应让已登记结果、提示词和索引消失。
+    published.current = "external_verify";
+    published.user_intervention = { updated: true };
+    writeFileSync(statePath, JSON.stringify(published));
+    assert.equal(api.activeKernelFeedback(internal)?.items.length, 1,
+      "步骤推进后提示词仍能读取活动反馈");
     for (let replay = 0; replay < 2; replay++) {
       const before = attestations().length;
       assert.equal(api.recordActiveFeedbackResult(internal), undefined);

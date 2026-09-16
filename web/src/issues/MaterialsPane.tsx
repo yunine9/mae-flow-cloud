@@ -45,7 +45,6 @@ import {
 import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
 import { GitDiff } from "../GitDiff";
-import { confirmDialog } from "../ConfirmDialog";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,7 +72,7 @@ const NOTE_HEAD = "m-0 text-[13px] font-bold text-muted-foreground";
  * 纸面(已提交意见不再标记在 live 上,行尾只剩草稿),冻结版只读、
  * 该批提交意见的锚点标记画在它的冻结版上。
  * 检视(ADR-0007):报告按行悬停圈注意见(交互与需求流批注同一套),
- * 草稿攒在正文下方、一次提交触发整体回退重跑。写口(行尾圈注、草稿
+ * 草稿攒在正文下方、一次提交交给当前会话结合处理。写口(行尾圈注、草稿
  * 编辑、提交)只在归属操作权(canOperate)下渲染;已提交意见清单是
  * 纯读面,登录只读访问者也可见(spec #259 story 23),文档照读。 */
 function IssueAnalysisReport({ detail, canOperate }: {
@@ -265,12 +264,11 @@ function IssueAnalysisReport({ detail, canOperate }: {
   }
 
   // 检视入口的会话级门槛(与服务端 requireReviewable 同口径的显示面):
-  // 未终态、无转正继承段(转正继承的报告不可检视)、检视回合未在进行中
+  // 未终态、无转正继承段(转正继承的报告不可检视)；运行中仍可追加意见
   // (#98 单路径化:不再按模式判定,一切会话都是固定流程)。后端仍逐项
   // 把门,这里只管把按钮放对位置。
   const reviewEnabled = !["archived", "canceled", "failed"].includes(detail.status)
-    && !detail.stage_states?.some((state) => state === "inherited")
-    && detail.review_active !== true;
+    && !detail.stage_states?.some((state) => state === "inherited");
 
   // 版本页签的选中态(#262):""=最新版。最新版是干净纸面——已提交
   // (sent)的意见不再画在 live 上,行尾只剩草稿标记;冻结版(该批意见
@@ -278,7 +276,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
   // 纯只读(Annotatable enabled=false 只剩标记层,无任何写口)。
   const viewingLatest = !versions.some(
     (entry) => entry.name === activeName && !entry.latest);
-  const drafts = reviews.filter((item) => item.status === "draft");
+  const drafts = reviews.filter((item) => !item.external_review && item.status === "draft");
   const frozenReviews = viewingLatest ? [] : reviews.filter((item) =>
     versions.find((entry) => entry.name === activeName)?.review_ids
       .includes(item.id) ?? false);
@@ -371,7 +369,7 @@ function IssueAnalysisReport({ detail, canOperate }: {
             (spec #259 story 23,服务端本就登录可读);草稿/提交写口
             在面板内收闸。只随最新版出现——冻结版是历史纸面,不收新
             意见(#262)。 */}
-        <IssueReviewPanel detail={detail} reviews={reviews}
+        <IssueReviewPanel detail={detail} reviews={reviews.filter(item => !item.external_review)}
           checks={checks} reviewEnabled={reviewEnabled}
           canOperate={canOperate}
           onReload={() => void loadReviews()} onLocate={(item) => void locate(item)} />
@@ -459,7 +457,7 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const id = detail.id;
-  const drafts = reviews.filter((item) => item.status === "draft");
+  const drafts = reviews.filter((item) => !item.external_review && item.status === "draft");
   const sent = reviews.filter((item) => item.status === "sent");
   const checkOf = (reviewId: string) =>
     checks.find((check) => check.id === reviewId);
@@ -477,19 +475,10 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
   }
 
   async function submit() {
-    if (!await confirmDialog({
-      title: `提交 ${drafts.length} 条检视意见并重跑分析`,
-      message: <ul>
-        <li>当前等你回答的问题卡(如有)将作废</li>
-        <li>工作流从「问题分析」重新执行，其后阶段标记重做(轮次 +1)</li>
-        <li>已申报的 UT/流水线/MR 账作废；分支与 MR 延用，同分支追加修复</li>
-      </ul>,
-      confirmLabel: "提交并重跑",
-    })) return;
     setBusy(true);
     try {
-      await sendIssueReviews(id);
-      setNote("检视意见已提交,工作流已回退到「问题分析」,AI 正在按意见修订。");
+      const result = await sendIssueReviews(id);
+      setNote(result.stage_note || "修改意见已接收；结合当前工作处理，完成后请核对修订内容。");
       onReload();
     } catch (reason) {
       setNote(String(reason instanceof Error ? reason.message : reason));
@@ -500,12 +489,12 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
 
   return <div className="flex flex-col gap-3">
     {detail.review_active && <div className="utility-note">
-      上一轮检视意见已提交,AI 正在按意见修订分析报告;修订重新提交后这里恢复圈注。
+      已有修改意见提交给 Agent；还可以继续补充并交办，不必等上一批结束。
     </div>}
     {canOperate && drafts.length === 0 && sent.length === 0 && <Empty className="border py-4.5">
       <EmptyTitle>还没有检视意见</EmptyTitle>
       <EmptyDescription>把鼠标停在上方报告要提意见的那一行,点行尾的 ✎ 记一条;
-      攒多条后在这里一次提交——AI 会按意见修订报告,并从「问题分析」重新执行。</EmptyDescription>
+      攒多条后在这里一次提交；Agent 会结合当前工作处理，不必等当前阶段结束。</EmptyDescription>
     </Empty>}
     {note && <div className="utility-note">{note}</div>}
     {canOperate && drafts.length > 0 && <section>
@@ -517,14 +506,12 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
       </ul>
       <div className="mt-2 flex items-center gap-2.5">
         <Button type="button" size="sm"
-          disabled={busy || !reviewEnabled || detail.status === "running"}
+          disabled={busy || !reviewEnabled}
           title={!reviewEnabled
-            ? "当前会话状态不能提交检视(转正继承/检视回合进行中/会话已结束)"
-            : detail.status === "running"
-              ? "AI 正在运行——等它停机或举卡等你时再提交"
-              : "提交后工作流从问题分析重新执行"}
+            ? "当前会话已结束或报告为转正继承，不能提交修改意见"
+            : "结合当前工作处理；等人时随答复送达，不自动回退整个流程"}
           onClick={() => void submit()}>
-          {busy ? "提交中…" : `提交 ${drafts.length} 条意见并重跑分析`}
+          {busy ? "提交中…" : `提交 ${drafts.length} 条修改意见`}
         </Button>
       </div>
     </section>}
@@ -671,7 +658,7 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
         </div>}
         <div className="ws-doc">
           {activeDiff
-            ? <GitDiff text={activeDiff} hideKey={detail.id} />
+            ? <GitDiff text={activeDiff} hideKey={detail.id} embeddedBrowser />
             : <div className="utility-note">
                 {diffRepo
                   ? (repoDiff === undefined

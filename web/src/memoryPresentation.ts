@@ -5,28 +5,23 @@ export function memorySearchPresentation(
   if (failed) return { state: "unknown", label: "检索状态读取失败", title: "暂时无法确认检索状态，请刷新重试。" };
   if (sidecar === "ready") return { state: sidecar, label: "语义检索在线", title: "Agent 可按语义查找相关任务记忆。" };
   if (sidecar === "unavailable") return { state: sidecar, label: "语义检索暂不可用", title: "检索已启用但尚未就绪或运行异常；记忆记录仍保留。" };
-  if (sidecar === "absent") return { state: sidecar, label: "语义检索未启用", title: "当前服务未配置语义检索；记忆仍可记录、浏览和按索引推送。启用请联系管理员。" };
+  if (sidecar === "absent") return { state: sidecar, label: "语义检索未启用", title: "当前服务未配置语义检索；候选仍可记录、审查；采纳后的经验可按 ID 展开，自动推荐需启用语义检索。启用请联系管理员。" };
   return { state: "unknown", label: "正在读取检索状态…", title: "等待服务返回检索状态。" };
 }
 
-/** 模板/模型描述记录如何形成；只有服务端的在途作业事实代表“正在整理”。 */
+/** 形成来源与复用资格分开；只有明确采纳事实代表可复用。 */
 export function memoryPreparation(row: {
-  source: string;
-  draft?: "template" | "model" | "failed";
-  drafting?: boolean;
+  source: string; draft?: "template" | "model" | "failed"; drafting?: boolean;
+  review?: { status: "pending" | "accepted" | "rejected" };
 }): { label: string; title: string } {
-  if (row.source === "agent_note") return { label: "已记录", title: "Agent 主动保存的经验，未经人工或流水线确认。" };
-  if (row.source === "user_note") {
-    return { label: "已记录", title: "已按你写下的内容入库，无需模型整理。" };
-  }
-  if (row.drafting) {
-    return { label: "整理中", title: "记忆已入库；模型正在整理触发条件和适用范围，不影响使用。" };
-  }
-  if (row.draft === "model") {
-    return { label: "已整理", title: "记忆已入库，触发条件和适用范围已由模型整理。" };
-  }
-  if (row.draft === "failed") {
-    return { label: "整理失败", title: "模型整理失败，已保留模板记录，仍可用于检索和推送。" };
-  }
-  return { label: "已记录", title: "已按模板入库，可用于检索和推送；当前没有模型整理作业。" };
+  if (row.review?.status === "accepted") return { label: "已采纳", title: "已由团队成员确认内容与范围，可用于检索和复用。" };
+  if (row.review?.status === "rejected") return { label: "已停用", title: "保留来源记录，不用于检索或自动注入。" };
+  if (row.drafting) return { label: "整理中 · 待确认", title: "模型正在整理候选，采纳后才能复用；不影响任务继续。" };
+  return { label: "待确认", title: row.draft === "failed" ? "整理失败，原记录保留；可人工修订后采纳。" : "尚无明确采纳记录。查看依据、结论及适用范围后再决定，不默认复用。" };
+}
+
+/** 对话回执直达具体候选；地址只用于导航，不改变审查权限。 */
+export function memoryReviewFocus(search: string): string | undefined {
+  const id = new URLSearchParams(search).get("memory_id");
+  return id && /^c-[a-z0-9]+-[a-f0-9]+$/.test(id) ? id : undefined;
 }

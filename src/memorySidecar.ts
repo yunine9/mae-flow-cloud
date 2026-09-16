@@ -40,12 +40,13 @@ export interface MemorySidecarBudgets {
 }
 
 export const DEFAULT_MEMORY_BUDGETS: MemorySidecarBudgets = {
-  healthMs: 500, ingestMs: 5_000, searchMs: 1_500, expandMs: 1_000, bootMs: 60_000,
+  healthMs: 500, ingestMs: 5_000, searchMs: 3_000, expandMs: 1_000, bootMs: 60_000,
 };
 
 export interface MemorySearchHit {
   id: string;
   score: number;
+  semantic_score?: number;
   heading?: string;
   snippet?: string;
   file?: string;
@@ -81,6 +82,8 @@ export class MemorySidecar {
     this.budgets = { ...DEFAULT_MEMORY_BUDGETS, ...(options.budgets ?? {}) };
   }
 
+  get searchBudgetMs(): number { return this.budgets.searchMs; }
+
   get available(): boolean {
     return this.ready && !!this.child && !this.stopped;
   }
@@ -102,6 +105,11 @@ export class MemorySidecar {
       ...(options.model ? ["--model", options.model] : []),
     ];
     const env = { ...process.env, ...(options.env ?? {}) };
+    // Milvus Lite uses local gRPC. Desktop proxy settings must not route that
+    // connection outside the machine; preserve all existing bypass entries.
+    const noProxy = [...new Set([env.NO_PROXY ?? "", env.no_proxy ?? "", "localhost,127.0.0.1,::1"]
+      .flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean))].join(",");
+    env.NO_PROXY = env.no_proxy = noProxy;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = options.spawnProcess
@@ -235,9 +243,11 @@ export class MemorySidecar {
 
   async search(input: {
     query: string; repo: string; pathPrefix?: string; limit?: number;
+    sources?: Array<{ id: string; path: string }>;
   }): Promise<MemorySearchHit[] | undefined> {
     const reply = await this.request({
       op: "search", query: input.query, repo: input.repo,
+      ...(input.sources ? { sources: input.sources } : {}),
       path_prefix: input.pathPrefix ?? "", limit: Math.min(input.limit ?? 8, 20),
     }, this.budgets.searchMs);
     if (!reply || reply.error || !Array.isArray(reply.hits)) return undefined;

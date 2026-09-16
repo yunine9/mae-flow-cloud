@@ -464,19 +464,19 @@ export function IssueConversationStream({
           key: item.id, who: "you", name: nameOf(owner), ts: item.ts,
           tag: <em className={cn(CONV.tag,
             item.delivered ? CONV.tagTone.ok : CONV.tagTone.att)}>
-            {item.delivered ? "已读取" : "待读取"}
+            {item.delivered ? "已读取" : "已接收 · 待读取"}
           </em>,
           children: <p className={CONV.answer}>{item.text}</p>,
         });
       case "review":
-        // 检视提交 = 整体打回重跑分析(ADR-0007):count 条修订意见随事件
-        // 入账。渲染对齐任务侧批注批次卡(conv-lead 导语 + 正文)。
+        // 新交办结合当前工作处理；旧事件保留当时的整体回退事实。
         return message({
           key: item.id, who: isViewer ? "person" : "you",
           name: isViewer ? (owner || "归属人") : "你", ts: item.ts,
-          tag: <em className={cn(CONV.tag, CONV.tagTone.neutral)}>整体打回</em>,
+          tag: <em className={cn(CONV.tag, CONV.tagTone.neutral)}>{item.delivery_mode === "incremental" ? "批量交办" : "整体打回"}</em>,
           children: <>
             <p className={CONV.lead}>提交了 {item.count} 条检视意见给 Agent</p>
+            {item.receipt && <p className={CONV.notes}>{item.receipt}</p>}
             <p className={CONV.answer}>{item.text}</p>
           </>,
         });
@@ -826,7 +826,7 @@ function IssueCollaborationComposer({
         {steer ? "说给 Agent · 插话" : "说给 Agent · 续聊"}
       </span>
       <span className="ws-composer-hint">
-        {steer ? "不打断当前步骤,Agent 下一步执行前送达"
+        {steer ? "现在就能交办；当前工具结束后读取，结合正在做的工作处理"
           : "会话空闲中,补充信息或调整方向后 AI 会接着推进"}
       </span>
       {/* 人工接管入口(2026-09-07 走查拍板):运行/空闲都可发起——打断

@@ -23,7 +23,7 @@ import { getPipelineStatus, triggerPipeline, type PipelineCredential, type Pipel
 import { createMergeRequest } from "./mrClient.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
 
-const HOST_ACTIONS = ["set_target", "defer_feedback", "restore_delivery_paths", "push", "create_mr", "retry_verification", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
+const HOST_ACTIONS = ["set_target", "defer_feedback", "restore_delivery_paths", "push", "create_mr", "retry_verification", "sync_branch", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
 export type HostAction = typeof HOST_ACTIONS[number];
 export interface HostRequest {
   action: HostAction;
@@ -148,6 +148,7 @@ export interface TaskHostRuntime {
   /** false 表示仅记录提前验证，调用者继续原目标；true/旧接口 void 表示交付接管。 */
   acceptPipeline(sha: string, run?: PipelineRun): Promise<boolean | void>;
   syncFeedback(): void;
+  syncBranch?(branch: string, target: string): Promise<string>;
   cloneReference?(url: string): Promise<string>;
   collaborate?(text: string): Promise<unknown>;
   deferAnnotation?(id: string, revision: number, actor: string, reason: string): void;
@@ -203,6 +204,7 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
   }
   if (!input.reason.trim()) throw new Error("请说明本次操作的目的");
   if (input.action === "stop_verification" && !host.stopVerification) throw new Error("当前部署未提供验证停止接口");
+  if (input.action === "sync_branch" && !host.syncBranch) throw new Error("当前部署未提供分支同步能力");
   if (input.action === "pull_repo") {
     if (!host.cloneReference || !input.repo) throw new Error("缺少关联仓地址或当前部署未提供拉仓能力");
     const known = new Set([host.summary.repo_url, ...(host.summary.repositories ?? []),
@@ -222,7 +224,7 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
     if (!input.paths?.length) throw new Error("请指定要恢复交付的文件路径");
   }
   const operation: HostOperation = { id, input, state: "queued", at: new Date().toISOString() };
-  if (input.action === "push" || input.action === "create_mr") {
+  if (input.action === "push" || input.action === "create_mr" || input.action === "sync_branch") {
     const state = kernelState(host);
     const branch = String(state.config?.["分支名"] ?? ""), baseline = String(host.summary.delivery?.target_branch ?? host.summary.baseline ?? state.config?.["基线分支"] ?? "");
     const current = String(runSafeWorktreeGit(host.cwd!, ["branch", "--show-current"], { timeoutMs: 10000 }).stdout ?? "").trim();
@@ -233,8 +235,6 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
       || (boundBranch && boundBranch !== branch)) throw new Error("只能发布当前任务已绑定的工作分支");
     const snapshot = await deliveryChangeSnapshot(host.cwd!);
     if (!snapshot) throw new Error("无法确定本次提交 SHA");
-    const excluded = new Set(host.summary.delivery_selection?.excluded_paths ?? []);
-    if (snapshot.committed_paths.some(path => excluded.has(path))) throw new Error("提交包含此前排除的文件；若责任人要求恢复，请引用原始指令调用 restore_delivery_paths，再推送");
     operation.sha = snapshot.head;
     operation.branch = branch;
     operation.target_branch = baseline;
@@ -396,6 +396,8 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         operation.result = `已创建 MR：${receipt.url}；未宣告验证通过或任务完成。`;
       }
       host.watch();
+    } else if (input.action === "sync_branch") {
+      operation.result = await host.syncBranch!(operation.branch!, operation.target_branch!);
     } else if (input.action === "pull_repo") {
       operation.result = `关联仓已就绪：${await host.cloneReference!(input.repo!)}。用于本任务分析，不改变交付仓或分支。`;
     } else if (input.action === "trigger_pipeline") {
@@ -446,6 +448,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     operation.result = safeMessage(host, error);
   }
   ledger.update(operation);
+  // 范围整理已明确停下时保留诊断，不再派 Agent 重试同一次推送。
+  if (operation.input.action === "push" && operation.state === "failed"
+      && host.summary.status === "failed") return true;
   // A canceled/taken-over task retains receipts but must never resume itself.
   try { host.assertActive(); } catch { return true; }
   try { host.resume(`[宿主操作 ${operation.id} ${operation.state}]\n${operation.result}\n按当前目标继续；失败不代表旧问题已通过。`, target, operation); }
@@ -582,11 +587,11 @@ export function createTaskHostTools(host: TaskHostRuntime) {
             collaboration: host.collaborate ? "task_collaborate" : "未配置", acceptance: "责任人最终验收不由 Agent 代签",
             kernel_configured: Boolean(host.kernel), platform_configured: Boolean(host.platformUrl) } };
       }) }),
-    defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE,
+    defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE + " 更新当前任务分支请用 sync_branch：先提交本地修改，再请求同步，结束本轮等待宿主结果；宿主拉取远端任务分支与目标分支，有冲突时由你读取双方上下文、解决并提交。同步后执行受影响的编译与 UT，再走原 push/MR 流程。pull_repo 只克隆关联仓。",
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
         paths: Type.Optional(Type.Array(Type.String(), { description: "恢复交付时指定原清单内的准确文件路径" })),
-        target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支由 push 自动同步远端。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
+        target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支用 sync_branch 同步。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),
     defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。可在编码中提前验证，宿主监听结果并续接尚未完成的工作。尚无运行记录不等于验证失败，不要反复触发或修复旧 SHA 告警。",

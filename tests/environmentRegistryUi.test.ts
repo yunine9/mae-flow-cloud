@@ -32,32 +32,31 @@ test("环境管理:侧栏导航入口存在,且按团队资源分组(不进 admi
   for (const [branch, source] of [["admin", adminNav], ["developer", devNav]] as const) {
     assert.ok(source.includes('<NavButton view="environments"'),
       `${branch} 侧栏缺少环境管理入口`);
-    assert.ok(source.includes('label="环境管理"'), `${branch} 入口文案缺失`);
+    assert.ok(source.includes('label="配置中心"'), `${branch} 入口文案缺失`);
   }
   // 台账是全局团队资源:admin 在「管理视角」组(与团队资产并列),
   // 排在 admin 专属的「系统管理」组之前;开发在「团队信息」组。
   // (锚随 2026-09-11 侧栏迁 shadcn Sidebar 更新:app-shell 的 admin-tools
   //  壳类退场,系统管理组现在以组标签「系统管理」锚定。)
-  assert.ok(adminNav.indexOf("环境管理") > adminNav.indexOf("管理视角")
-    && adminNav.indexOf("环境管理") < adminNav.indexOf("系统管理"),
+  assert.ok(adminNav.indexOf("配置中心") > adminNav.indexOf("管理视角")
+    && adminNav.indexOf("配置中心") < adminNav.indexOf("系统管理"),
     "admin 侧环境管理应在管理视角组、系统管理之前");
-  assert.ok(devNav.indexOf("环境管理") > devNav.indexOf("团队信息"),
+  assert.ok(devNav.indexOf("配置中心") > devNav.indexOf("团队信息"),
     "开发侧环境管理应归团队信息组");
 });
 
 test("环境管理:/environments 深链与视图接线(进可直达、后退真切页)", () => {
-  assert.match(app, /\/\^\\\/environments\\\/\?\$\/\.test\(location\.pathname\)/,
-    "缺少 /environments 路径匹配");
+  assert.ok(app.includes('(?:environments|configuration)'), "新配置中心与旧环境深链均可直达");
   assert.match(app, /if \(readEnvironmentRoute\(\)\) return "environments";/,
     "深链未接入 initialView(登录/刷新后应直达页签)");
   assert.match(app,
-    /history\.pushState\(appHistoryState\("environments"\), "", "\/environments"\)/,
+    /history\.pushState\(appHistoryState\("environments"\), "", "\/configuration"\)/,
     "进页签应 pushState 换地址(可复制、可后退)");
   assert.match(app, /const syncEnvironmentRoute = \(event: PopStateEvent\) =>/,
     "浏览器前进/后退要真的切页(popstate 同步)");
-  assert.match(app, /\{view === "environments" && <EnvironmentRegistry \/>\}/,
+  assert.match(app, /\{view === "environments" && <ConfigurationCenter \/>\}/,
     "主区缺少环境管理视图渲染");
-  assert.match(app, /import \{ EnvironmentRegistry \} from "\.\/EnvironmentRegistry";/);
+  assert.match(app, /import \{ ConfigurationCenter \} from "\.\/ConfigurationCenter";/);
 });
 
 test("环境管理:页面是新 Tailwind 轨道——tw-root 归一、零 css import、零硬编码色值", () => {

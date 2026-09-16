@@ -43,7 +43,7 @@ export type ForeignCommitOutcome =
     /** `<短 SHA> <标题>`,只用于对人和对 Agent 披露。 */
     subjects: string[];
   }
-  | { kind: "blocked"; reason: string };
+  | { kind: "blocked"; reason: string; conflicts?: string[] };
 
 const short = (sha: string) => sha.slice(0, 7);
 
@@ -171,6 +171,7 @@ export async function absorbForeignBranchCommits(input: {
     await worktree(["rebase", "--abort"]);
     return {
       kind: "blocked",
+      ...(conflicted.length ? { conflicts: conflicted } : {}),
       reason: `本任务的提交接不到分支上的外来提交之后(${
         conflicted.length ? `冲突文件:${conflicted.slice(0, 10).join("、")}`
           : brief(rebased)});已还原现场并停止推送,请人工处理冲突。`,

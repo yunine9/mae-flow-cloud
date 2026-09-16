@@ -358,3 +358,21 @@ test("服务级冒烟:真实会话的协作流有回合回放,在场闸投影为
     await model.stop();
   }
 });
+
+test("插话入队不冒充已读取，界面只展示用户原话；批量交办保留接收说明", () => {
+  const body = "请改两行\n[内部处理指引]";
+  const events = [ev("user_message", { text: body, display: "请改两行", via: "interrupt" }),
+    ev("review_submitted", { count: 2, text: "两条意见", mode: "incremental", receipt: "已接收，结合当前工作处理" })];
+  const pending = issueConversation(events, { pendingSteers: [body] }).items;
+  assert.equal(pending[0].kind, "steer");
+  if (pending[0].kind === "steer") {
+    assert.equal(pending[0].delivered, false);
+    assert.equal(pending[0].text, "请改两行");
+  }
+  if (pending[1].kind === "review") {
+    assert.equal(pending[1].delivery_mode, "incremental");
+    assert.match(pending[1].receipt!, /已接收/);
+  } else assert.fail("缺少批量交办条目");
+  const consumed = issueConversation(events, { pendingSteers: [] }).items[0];
+  assert.equal(consumed.kind === "steer" && consumed.delivered, true);
+});

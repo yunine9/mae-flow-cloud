@@ -66,7 +66,7 @@ test("手工登记区分目录失败与空目录，并提供重试和真实必�
   // 提交时给指路文案。
   assert.match(registration, /请从环境管理选择网管环境/);
   assert.doesNotMatch(registration, /页面账号 <i|页面密码 <i|envPageAccount/);
-  assert.match(registration, /团队资产 → 业务模块/);
+  assert.match(registration, /配置中心 → 模块与代码仓/);
   // 模块带仓不占版面(2026-08-31 拍板):常驻仓清单移除,选中后悬停
   // 弹悬浮卡列出将拉取的仓(键盘聚焦同样弹出);要增删仓去团队资产。
   assert.doesNotMatch(registration, /将拉取的代码仓/);
@@ -323,11 +323,11 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
     ["MaterialsPane", materialsPane]] as const) {
     assert.doesNotMatch(source, /window\.confirm\(/,
       `${name} 不得再用浏览器原生确认框`);
-    assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
+    if (name === "SessionView") assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
   }
   assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
   assert.match(sessionView, /title: "归档会话"/);
-  assert.match(materialsPane, /title: `提交 \$\{drafts\.length\} 条检视意见并重跑分析`/);
+  assert.doesNotMatch(materialsPane, /条检视意见并重跑分析|disabled=\{busy \|\| !reviewEnabled \|\| detail.status === "running"\}/);
   // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
   // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
   assert.match(app,
@@ -545,7 +545,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 面放宽,写边界不变。)行尾圈注写口仍在,同样收闸(reviewEnabled+
   // canOperate 才给 Annotatable)。
   assert.match(materials,
-    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\}[\s\S]*?canOperate=\{canOperate\}/);
+    /<IssueReviewPanel detail=\{detail\} reviews=\{reviews\.filter\(item => !item\.external_review\)\}[\s\S]*?canOperate=\{canOperate\}/);
   assert.match(materials,
     /reviewEnabled && canOperate\s*\?\s*<Annotatable/);
 });

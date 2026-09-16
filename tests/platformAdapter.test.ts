@@ -388,6 +388,30 @@ test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决
     "POST", "/mr/discussions/d-legacy/reply", new URLSearchParams(),
     { repo: "r", body: "旧调用无幂等键" }, {});
   assert.equal(compatible.status, 200, "无动作键的旧调用保持兼容");
+
+  // codehub-cli 这类 CLI 不支持幂等键参数时，配 idempotency_no_cli_key=true
+  // 降级:不要求模板引用 {idempotency_key}，靠 outbox delivered 防重放。
+  // 模板带 --no-cache 避免缓存层假成功。不设时仍 fail-closed(上面已测)。
+  const downgradePath = join(dir, "adapter-downgrade-reply.json");
+  writeFileSync(downgradePath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: { command: ["node", cli, "mr"],
+      url: { json: "data.web_url" } },
+    pipeline_trigger: { command: ["node", cli, "trigger"],
+      status: { const: "running" } },
+    pipeline_status: { command: ["node", cli, "status"],
+      runs: { json: "data.runs" }, status: { json: "state" } },
+    discussion_reply: {
+      command: ["node", cli, "note", "--no-cache", "--id", "{id}",
+        "--body", "{body}", "--token", "{token}"],
+      idempotency_no_cli_key: true,
+    },
+  }));
+  const downgrade = new PlatformAdapter(downgradePath, () => {});
+  const down = await downgrade.handle(
+    "POST", "/mr/discussions/d-down/reply", new URLSearchParams(),
+    { repo: "r", body: "CLI 无幂等键降级", idempotency_key: "stable-key" }, {});
+  assert.equal(down.status, 200, "idempotency_no_cli_key=true 时降级放行");
 });
 
 test("配置坏了拒绝启动;引用 {token} 但两头都没有=502", async () => {

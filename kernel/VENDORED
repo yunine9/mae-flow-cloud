@@ -1,5 +1,5 @@
-来源: mae-flow@8dbbfd09c474c0d96a3c904c32f825b90ef80627
+来源: mae-flow@e70659fd3d8e10b84c86a31bf00890da43d5db9c
 分支: cloud/workflow-customization
 基线: mae-flow@ad5b92af3e19766558dbca476389dda5cd80d076
-收编时间: 2026-09-13
+收编时间: 2026-09-14
 纪律: 此目录是快照,不许手改;更新跑 harness/sync-kernel.sh

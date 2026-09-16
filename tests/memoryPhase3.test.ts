@@ -106,7 +106,7 @@ test("起草解析:只认形状对的 JSON;摘要必须引用真实 id、不超 
   assert.match(parseDirectoryDigest(`- 有人要求过黑名单在开关前(${rows[0].id})`, rows) ?? "", /开关前/);
   assert.equal(parseDirectoryDigest(Array(13).fill(`- x (${rows[0].id})`).join("\n"), rows), undefined);
   const fallback = renderDirectoryDigestFallback("src/filter", [...rows, ...rows, ...rows]);
-  assert.match(fallback, /另有 1 条,用 corpus_search 带 path_prefix=src\/filter/);
+  assert.match(fallback, /另有 1 条,用 knowledge search 描述 src\/filter/);
 });
 
 test("权重:人判 > 流水线;一年减半;返工减得比命中加得狠;general 略重", () => {
@@ -162,7 +162,9 @@ test("服务起草:闭环记忆入库后异步补一版;user_note 不过起草;�
     const other = liveTask(svc, "另一单");
     const ids = (svc as any).memoryCandidates(other.internal).map((row: any) => row.id);
     assert.ok(!ids.includes(drafted.id), "一次性只进全文检索");
-    assert.ok(ids.includes(kept.id));
+    assert.ok(!ids.includes(kept.id), "失败模板也需人工采纳");
+    svc.reviewTaskMemory(id, kept.id, "本地用户", { decision: "accepted", revision: kept.revision ?? 1 });
+    assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === kept.id));
   } finally {
     await svc.shutdown();
   }
@@ -174,11 +176,9 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     const store = new MemoryStore(dataDir);
     const a = store.record({ ...base, conclusion: "A:黑名单在开关前" });
     const b = store.record({ ...base, evidence: "e2", conclusion: "B:另一条同文件的" });
+    for (const row of [a, b]) store.review(row.id, "owner", { decision: "accepted", revision: row.revision ?? 1 });
     const { id, internal, steered } = liveTask(svc);
-    (svc as any).maybePushPhaseMemories(internal, "定规格");
-    (svc as any).maybePushPhaseMemories(internal, "写代码");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(steered.length, 1);
+    (svc as any).logMemoryUsage(internal, { moment: "context", ids: [a.id, b.id], query: "当前代码" });
     const stats = store.ledger.stats();
     assert.equal(stats.get(a.id)?.pushes, 1);
     assert.equal(stats.get(b.id)?.pushes, 1);
@@ -204,6 +204,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
 
     // 没推过的第三条现在排最前(返工把前两条压下去了)
     const c = store.record({ ...base, evidence: "e3", conclusion: "C:没推过的" });
+    store.review(c.id, "owner", { decision: "accepted", revision: 1 });
     const ranked = (svc as any).memoryCandidates(internal).map((row: any) => row.id);
     assert.equal(ranked[0], c.id);
 
@@ -222,7 +223,7 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     const timeline = buildTimeline(internal.summary.workspace, internal.cwd);
     const memoryEntries = timeline.filter((entry) => entry.kind === "memory");
     assert.equal(memoryEntries.length, 1);
-    assert.match(memoryEntries[0].title, /进入「写代码」推送 2 条记忆/);
+    assert.match(memoryEntries[0].title, /本轮提供 2 条相关记忆/);
   } finally {
     await svc.shutdown();
   }
@@ -241,6 +242,7 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
     const idle = store.record({ ...base, conclusion: "一年没人用" });
     const lost = store.record({ ...base, evidence: "e2", conclusion: "失锚半年" });
     const alive = store.record({ ...base, evidence: "e3", conclusion: "最近推过" });
+    for (const row of [idle, lost, alive]) store.review(row.id, "owner", { decision: "accepted", revision: 1 });
     const now = Date.now() + 400 * DAY;
     store.ledger.append({ kind: "unanchored", id: lost.id,
       at: new Date(Date.now() - 200 * DAY).toISOString() });
@@ -273,83 +275,12 @@ test("沉底:一年没人用的、失锚半年的挪进 _archive;不删、还能
   }
 });
 
-test("目录摘要层:同目录超 15 条推摘要不推明细;按成员缓存;模型摘要要引用真实 id", async () => {
-  let drafts = 0;
-  const { svc, dataDir } = fakeService({
-    memoryDrafter: async (prompt: { user: string }) => {
-      drafts += 1;
-      const id = prompt.user.match(/c-[a-z0-9]+-[a-f0-9]+/)![0];
-      return `- 有人多次要求黑名单判断在渠道开关之前(${id})\n- 加渠道要同步 registry.xml(${id})`;
-    },
-  });
-  try {
-    const store = new MemoryStore(dataDir);
-    for (let index = 0; index < 16; index += 1) {
-      store.record({ ...base, evidence: `e${index}`, conclusion: `结论 ${index}` });
-    }
-    const first = liveTask(svc);
-    (svc as any).onMemoryFileIntent(first.internal, "src/filter/FilterEngine.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(first.steered.length, 1);
-    assert.match(first.steered[0].text, /攒了 16 条历史记忆,先看摘要/);
-    assert.match(first.steered[0].text, /有人多次要求黑名单判断/);
-    assert.match(first.steered[0].text, /path_prefix=src\/filter/);
-    assert.equal(first.steered[0].extra.memory_ids.length, 16);
-    assert.equal(drafts, 1);
-    const usage = svc.listTaskMemoryUsage(first.id);
-    assert.equal(usage[0].digest, true);
-    const cache = join(store.root, "_digests", "notify-service");
-    assert.ok(existsSync(cache));
-
-    // 另一单、同目录、成员没变:直接用缓存,不再叫模型
-    const second = liveTask(svc, "第二单");
-    (svc as any).onMemoryFileIntent(second.internal, "src/filter/Other.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(second.steered.length, 1);
-    assert.equal(drafts, 1, "成员集合没变就复用缓存");
-
-    // 成员变了(多一条)→ 重做
-    store.record({ ...base, evidence: "e-new", conclusion: "新的一条" });
-    const third = liveTask(svc, "第三单");
-    (svc as any).onMemoryFileIntent(third.internal, "src/filter/Third.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(drafts, 2);
-
-    // 时间线里是"推送目录摘要"
-    const timeline = buildTimeline(first.internal.summary.workspace, first.internal.cwd);
-    assert.match(timeline.find((entry) => entry.kind === "memory")!.title, /推送目录摘要\(16 条\)/);
-  } finally {
-    await svc.shutdown();
-  }
-});
-
-test("目录摘要:没有模型时用确定性兜底,也缓存", async () => {
-  const { svc, dataDir } = fakeService();
-  try {
-    const store = new MemoryStore(dataDir);
-    for (let index = 0; index < 17; index += 1) {
-      store.record({ ...base, evidence: `e${index}`, conclusion: `结论 ${index}` });
-    }
-    const { internal, steered } = liveTask(svc);
-    (svc as any).onMemoryFileIntent(internal, "src/filter/FilterEngine.java");
-    await new Promise((tick) => setTimeout(tick, 200));
-    assert.equal(steered.length, 1);
-    assert.match(steered[0].text, /另有 12 条,用 corpus_search/);
-  } finally {
-    await svc.shutdown();
-  }
-});
-
-test("可见不可管:效能页记忆页签没有任何改动入口", () => {
-  // 只看 JSX,不看文件头注释——注释里正是在说"这里没有编辑没有删除"。
-  const board = readFileSync(resolve(process.cwd(), "web/src/MemoryBoard.tsx"), "utf-8")
-    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  for (const word of ["撤回</button>", "删除", "编辑", "审核", "method: \"POST\""]) {
-    assert.ok(!board.includes(word), `记忆总览不该有「${word}」`);
-  }
-  assert.ok(board.includes("getMemoryInsights") && board.includes("readMemoryInsight"));
-  const app = readFileSync(resolve(process.cwd(), "web/src/App.tsx"), "utf-8");
-  assert.ok(app.includes('"memories"') && app.includes("<MemoryBoard"), "团队资产多一个只读页签");
+test("经验审查集中于团队资产，任务页只提供导航，不散落审批入口", () => {
+  const board = readFileSync(resolve(process.cwd(), "web/src/MemoryBoard.tsx"), "utf8");
+  assert.match(board, /MemoryReviewEditor/);
+  const footprint = readFileSync(resolve(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf8");
+  assert.match(footprint, /experience=1/);
+  assert.doesNotMatch(footprint, /MemoryReviewEditor|reviewTaskMemory/);
 });
 
 test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并重建索引后搜不到(venv 缺席则 skip)", async (t) => {
@@ -375,6 +306,9 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
     assert.equal(await sidecar.ingest(join(store.root, other.file)), true);
     const next = store.finalizeDraft(record.id, {
       trigger: "调整过滤器里判断先后顺序时", scope: "general", state: "model" });
+    store.review(next.id, "owner", { decision: "accepted", revision: next.revision ?? 1 });
+    store.review(other.id, "owner", { decision: "accepted", revision: other.revision ?? 1 });
+    assert.equal(await sidecar.ingest(join(store.root, other.file)), true);
     assert.equal(await sidecar.ingest(join(store.root, next.file)), true);
     const hits = await sidecar.search({ query: "过滤器判断先后顺序", repo: "notify-service" });
     assert.equal(hits?.[0]?.id, record.id, "按起草后的新说法能搜到");
@@ -390,7 +324,7 @@ test("真 memsearch:起草改标题后再入库能按新说法搜到;归档并�
   }
 });
 
-test("没配专用模型或模型角色不存在时，模板已可用但不声称正在整理", async () => {
+test("主模型不可用时保留模板；旧专用模型配置不改变行为", async () => {
   for (const options of [{}, { memoryDraftModel: { provider: "missing", model: "missing" } }]) {
     const { svc } = fakeService(options);
     try {
@@ -404,6 +338,8 @@ test("没配专用模型或模型角色不存在时，模板已可用但不声�
       assert.equal(svc.listTaskMemories(id)[0].drafting, false);
       assert.ok(svc.readTaskMemory(id, record.id)?.content.includes(base.conclusion));
       const other = liveTask(svc, "另一单");
+      assert.ok(!(svc as any).memoryCandidates(other.internal).some((row: any) => row.id === record.id));
+      svc.reviewTaskMemory(id, record.id, "本地用户", { decision: "accepted", revision: record.revision ?? 1 });
       assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === record.id));
     } finally { await svc.shutdown(); }
   }
@@ -467,10 +403,100 @@ test("Agent 无 sidecar 也能写记忆并展开；归属和来源由宿主固�
   assert.equal(records[0].judged_by, "agent");
   assert.equal(records[0].evidence, "agent:call-memory-1");
   assert.equal(records[0].drafting, false);
-  const expand = tools.find(tool => tool.name === "corpus_expand");
-  const result = await expand.execute("expand-1", { memory_id: records[0].id });
+  const expand = tools.find(tool => tool.name === "knowledge");
+  assert.match((await expand.execute("pending", { action: "read", id: records[0].id })).content[0].text, /取不到/);
+  svc.reviewTaskMemory(id, records[0].id, "本地用户", { decision: "accepted", revision: records[0].revision ?? 1 });
+  const result = await expand.execute("expand-1", { action: "read", id: records[0].id });
   assert.match(result.content[0].text, /先加载仓库环境脚本/);
   internal.summary.repo_url = "git@example.com:demo/other.git";
-  const denied = await expand.execute("expand-2", { memory_id: records[0].id });
+  const denied = await expand.execute("expand-2", { action: "read", id: records[0].id });
   assert.match(denied.content[0].text, /取不到/);
+});
+
+test("平台记忆跨仓推送和展开，当前使命驱动检索，旧 general 不扩大范围", async () => {
+  const { svc } = fakeService();
+  const api = svc as any;
+  try {
+    const { internal } = liveTask(svc);
+    const store = api.memories() as MemoryStore;
+    const platform = store.record({ ...base, source: "agent_note", judged_by: "agent",
+      scope: "platform", repo: "other-repo", paths: ["absent/in/this/repo"],
+      trigger: "多仓共用工具链报错时", conclusion: "核对平台工具链约定" });
+    const local = store.record({ ...base, scope: "general", repo: "other-repo" });
+    const retired = store.record({ ...base, scope: "platform", source: "user_note", author: "owner" });
+    for (const row of [platform, local, retired]) store.review(row.id, "owner", { decision: "accepted", revision: 1 });
+    store.withdraw(retired.id, "owner");
+    assert.ok(platform.file.startsWith("_platform/"));
+    assert.equal(platform.repo, "other-repo", "保留原始来源仓库");
+    assert.ok(api.memoryCandidates(internal).some((row: any) => row.id === platform.id));
+    assert.ok(!api.memoryCandidates(internal).some((row: any) => row.id === local.id));
+    const queries: string[] = [];
+    api.memorySidecar = { available: true, search: async (input: any) => {
+      queries.push(input.query);
+      return [platform, local, retired].map(row => ({ id: row.id, score: 1, snippet: "过期索引内容" }));
+    }, stop() {} };
+    internal.mission = "当前处理平台工具链证书失效";
+    internal.pendingMainSteers = ["责任人补充：使用新版工具链"];
+    const messages = await api.taskMemoryContext(internal)([{role: "user", content: "继续当前工作"}]);
+    const briefing = messages.at(-1).content;
+    assert.match(queries[0], /证书失效/);
+    assert.match(queries[0], /新版工具链/);
+    assert.match(briefing, /平台通用.*Agent 记录/);
+    assert.match(briefing, /核对平台工具链约定/);
+    const hits = await api.memorySearch(internal, { query: "工具链" });
+    assert.deepEqual(hits.map((hit: any) => hit.id), [platform.id]);
+    const expand = api.memoryTools(internal).find((tool: any) => tool.name === "knowledge");
+    assert.match((await expand.execute("expand-platform", { action: "read", id: platform.id })).content[0].text,
+      /核对平台工具链约定/);
+    assert.match((await expand.execute("expand-retired", { action: "read", id: retired.id })).content[0].text, /取不到/);
+    const usage = svc.listTaskMemoryUsage(internal.summary.id);
+    assert.ok(usage.some(row => row.moment === "context" && String(row.query).includes("证书失效")));
+  } finally { await svc.shutdown(); }
+});
+
+test("模型前台遇到侧车未就绪时不启动或等待冷启动", async () => {
+  const { svc } = fakeService();
+  const api = svc as any;
+  try {
+    const { internal } = liveTask(svc);
+    let calls = 0;
+    api.memorySidecar = { available: false, start: async () => { calls++; return false; },
+      search: async () => { calls++; return []; }, stop() {} };
+    const messages = [{role: "user", content: "开始工作"}];
+    assert.deepEqual(await api.taskMemoryContext(internal)(messages), messages);
+    assert.equal(calls, 0);
+    assert.equal(svc.listTaskMemoryUsage(internal.summary.id).at(-1)?.status, "unavailable");
+  } finally { await svc.shutdown(); }
+});
+
+
+test("经验整理跟随任务主模型，未指定时跟随平台主模型；旧专用配置不分流", async t => {
+  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
+  const calls: Array<{ provider: string; model: string; messages: any[] }> = [];
+  t.mock.method(ModelRuntime, "create", async () => ({
+    getModel: (provider: string, model: string) => ({ provider, id: model }),
+    completeSimple: async (model: any, context: any) => {
+      calls.push({ provider: model.provider, model: model.id, messages: context.messages });
+      return { content: [{ type: "text", text: JSON.stringify({ trigger: "调整过滤顺序时", scope: "general", conclusion: "先确认业务优先级，再调整过滤顺序。" }) }] };
+    },
+  }) as any);
+  const { svc } = fakeService({ provider: "main", model: "default", modelsJson: {
+    providers: { main: { models: [{ id: "first-not-selected" }, { id: "default" }, { id: "chosen" }] } },
+  }, memoryDraftModel: { provider: "obsolete", model: "ignored" } });
+  try {
+    const { id, internal } = liveTask(svc);
+    internal.summary.model_choice = { provider: "main", model: "chosen" };
+    const first = (svc as any).recordMemory(internal, { ...base, task: id });
+    await svc.flushMemoryDrafts();
+    assert.equal(svc.listTaskMemories(id).find(row => row.id === first.id)?.draft, "model");
+    delete internal.summary.model_choice;
+    (svc as any).recordMemory(internal, { ...base, task: id });
+    await svc.flushMemoryDrafts();
+    assert.deepEqual(calls.map(c => [c.provider, c.model]), [["main", "chosen"], ["main", "default"]]);
+    assert.ok(calls.every(c => c.messages.length === 1), "只发送本条经验材料，不携带主会话历史");
+    assert.equal(internal.summary.status, "running");
+    (svc as any).recordMemory(internal, { ...base, task: id, source: "agent_note" });
+    await svc.flushMemoryDrafts();
+    assert.equal(calls.length, 2, "主动记录不额外提炼");
+  } finally { await svc.shutdown(); }
 });

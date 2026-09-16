@@ -14,6 +14,8 @@ export function validPushReceipt(value: unknown): value is NonNullable<NonNullab
 export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
   const previous = summary.delivery;
   summary.delivery = { ...previous, git_push: receipt, sha: receipt.sha,
+    ...(previous?.git_push?.sha && previous.git_push.sha !== receipt.sha
+      ? { last_push_base_sha: previous.git_push.sha } : {}),
     ...(previous?.sha !== receipt.sha ? {
       pipeline: undefined, pipeline_background: undefined, checks: undefined, attested: undefined,
       evidence_gap: undefined, verify_deadline: undefined, waiting_on: undefined,

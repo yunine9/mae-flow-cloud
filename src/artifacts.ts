@@ -330,7 +330,7 @@ function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
   try {
     const overall = currentStoryFile(taskMaterialRoot);
     if (overall) definitions.push({ file: overall, name: OVERALL_STORY_ARTIFACT,
-      label: "整体 Story", purpose: "overall_story" });
+      label: basename(overall), purpose: "overall_story" });
   } catch { /* 独立文档损坏不能让其他任务材料消失，错误由整体 Story 状态接口报告。 */ }
   const docs: DocEntry[] = [];
   for (const definition of definitions) {
@@ -371,7 +371,7 @@ function collectReadableDocs(
       workspace.splice(workspace.indexOf(draft), 1);
       if (!sources.publishedStory && !materials.some((doc) => doc.meta.name === OVERALL_STORY_ARTIFACT)) {
         materials.push({ ...draft, meta: { ...draft.meta, name: OVERALL_STORY_ARTIFACT,
-          label: "全局 Story", purpose: "overall_story" } });
+          label: draft.meta.label, purpose: "overall_story" } });
       }
     }
   }

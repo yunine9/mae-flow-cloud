@@ -208,7 +208,7 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   const picker = readFileSync(
     join(process.cwd(), "web/src/RepositoryAssigneePicker.tsx"), "utf8");
   assert.doesNotMatch(picker, /duplicateTicketOf|单号与「.*」重复/,
-    "同仓单元已由平台串行，同一 AR 不应在分工卡上报重复");
+    "串行单元可以复用 AR，分工卡不按单号重复误判，由宿主结合依赖判断");
 
   // #227:ws-decision 死家族退役,原"右栏底部让开提问题浮钮"的 84px 死白
   // 一并删除——浮钮现在在工作台打开期间整体收起(studio 规则),画布自己
@@ -245,7 +245,7 @@ test("工作台打开期间收起提问题浮钮,检视画布自己滚动", () =
   assert.doesNotMatch(css + studio, /padding: 12px 12px 84px/, "躲避浮钮的死白不许回来");
 });
 
-test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作台批注", () => {
+test("检视意见顶部有处理归属筛选条,MR 意见自动同步为批注", () => {
   // (#210)手搓 role=tablist 换 base-ui Tabs 原语;#227 换装后筛选条的
   // .review-filter 皮肤类退役,胶囊档位改由 TabsList/TabsTrigger 工具类
   // 承担,筛选语义与档位词表原样。
@@ -254,9 +254,7 @@ test("检视意见顶部有处理归属筛选条,CodeHub 意见可转成工作�
   assert.match(workspace, /\["agent", "待处理／核验"\]/);
   assert.match(workspace, /\["closed", "已完成"\]/);
   assert.match(workspace, /filter=\{inline \? "all" : reviewFilter\}/, "批注面板吃同一个筛选档");
-  assert.match(workspace, /onConvert=\{canContributeReview && canCreateAnnotation/,
-    "转批注沿用批注创建权限");
-  assert.match(workspace, /【转自 \$\{origin\}】/);
+  assert.doesNotMatch(workspace, /onConvert=|convertFeedbackToAnnotation/, "已自动同步，不再要求手动转批注");
   const panel = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
   // 分档口径只有一处:服务端 feedbackPolicy 下发 bucket,面板照分。
@@ -312,25 +310,23 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   assert.doesNotMatch(workspace, /feedbackDigest/,
     "入口不应再堆一行解释性文案");
   assert.match(workspace, /function FeedbackList/);
-  assert.match(workspace, /title="来自 CodeHub 的检视意见"/);
-  assert.match(workspace, /item\.source === "mr_discussion"\)/);
-  assert.match(workspace, /mrUrl=\{task\.delivery\?\.mr_url\}/,
-    "CodeHub 意见列表要给回到 MR 的入口");
+  assert.doesNotMatch(workspace, /title="来自 CodeHub 的检视意见"/, "同一意见不重复展成长列表");
   assert.match(workspace, /title="来自流水线与机器门禁的告警"/);
   // 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与机器门禁
   // (用户实锤:第一节只叫"批注"时读不出它就是 Cloud 平台上的检视意见)。
   const panelSource = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
-  assert.match(panelSource, /<strong>来自 Cloud 工作台的检视意见<\/strong>/);
+  assert.match(panelSource, /<strong>检视批注<\/strong>/);
   assert.match(workspace, /item\.source !== "mr_discussion" && item\.source !== "workspace"/,
     "工作台批注已由批注卡片承载,不重复列");
   assert.match(readFileSync(join(process.cwd(), "web/src/feedbackPresentation.ts"), "utf8"), /已回复，等检视人确认/);
   assert.match(workspace, /检视人 \$\{item\.author\}/);
-  // #227 换装:.feedback-list/.feedback-body 皮肤类退役,正文原样换行的
-  // 契约由工具类(whitespace-pre-wrap)直接钉在意见正文上。
-  assert.match(workspace,
-    /className="m-0 whitespace-pre-wrap \[overflow-wrap:anywhere\] text-text">\{item\.summary\}/,
-    "意见正文原样换行,不再单行省略");
+  assert.match(workspace, /<ReviewBody text=\{item.summary\}/, "机器报告也复用长正文折叠");
+  assert.match(panelSource, /<ReviewBody text=/, "MR 与工作台原文使用统一正文组件");
+  const body = readFileSync(join(process.cwd(), "web/src/ReviewBody.tsx"), "utf8");
+  assert.match(body, /<details/);
+  assert.match(body, /max-h-\[480px\].*overflow-auto/);
+  assert.match(body, />\{text\}<\/div>/, "展开保留完整原文，不只存摘要");
   assert.doesNotMatch(css, /\.feedback-list\s*\{/);
   assert.doesNotMatch(css, /\.feedback-body\s*\{/);
   assert.doesNotMatch(css, /\.feedback-groups\s*\{/,
@@ -410,7 +406,7 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
     /useState<CollaborationMode>\(\s*steerOnly \|\| task\.status === "running" \? "steer" : "assistant"/,
     "默认档不许按状态硬猜");
   assert.match(box,
-    /task\.status !== "running" && assistant\.availability\.available\s*\? "assistant" : "steer"/);
+    /!canSteer && assistant\.availability\.available\s*\? "assistant" : "steer"/);
   assert.match(box, /modePicked\.current = true/, "人点过档位后不再替他换");
   assert.doesNotMatch(box, /: "主任务暂停时，请切到“开发助手”直接处理代码现场"\}/);
   assert.match(box, /steerDisabledReason\?\.title \?\? "主任务当前未运行"/);
@@ -454,11 +450,13 @@ test("架构页只展示独立 Archify 图，意见回到 Story；Story PlantUML
   assert.match(architecture, /onClick=\{onOpenStory\}>阅读完整 Story/);
   assert.match(architecture, /onClick=\{onOpenStory\}>打开 Story 提意见/);
   assert.match(architecture, /availableViews\.map/,
-    "架构页只为实际存在的图片生成视角页签");
-  // (#210)图名页签换 base-ui Tabs 原语:diagrams 仍逐张映射成 TabsTrigger。
-  assert.match(architecture,
-    /\{diagrams\.map\(\(item\) => <TabsTrigger key=\{item\.id\} value=\{item\.id\}/,
-    "具体图片必须由图名页签承载");
+    "架构页只为实际存在的图片提供视角选择");
+  assert.match(architecture, /aria-label="设计图"/,
+    "多张独立图使用明确的设计图选择器");
+  assert.match(architecture, /roots\.map/,
+    "局部关系图不再混进独立图导航");
+  assert.match(architecture, /aria-label="节点职责详情"/,
+    "节点职责在独立详情区可见");
   assert.match(architecture, /job\.errorKind === "architecture" && job\.error && <details/,
     "架构图生成错误只在架构页以内展示，并默认折叠");
   assert.match(architecture, /架构图暂时无法读取[\s\S]{0,300}?<details/,
@@ -508,9 +506,9 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   // #226 去 legacy:"这单记下的"记忆卡随 knowledge-memories 类退役改为
   // 工具类卡壳;契约锚转向 aria-labelledby(仍是同一块记忆区)。
   assert.match(footprint, /aria-labelledby="knowledge-memories-title"/);
-  assert.match(footprint, /这单记下的/);
-  assert.match(footprint, /withdrawTaskMemory\(taskId, record\.id\)/, "只读 + 撤回,没有编辑");
-  assert.doesNotMatch(footprint, /editMemory|updateMemory/, "记忆没有编辑面");
+  assert.match(footprint, /查看经验沉淀/);
+  assert.match(footprint, /experience=1/);
+  assert.doesNotMatch(footprint, /reviewTaskMemory|withdrawTaskMemory/, "审查操作集中于团队资产");
   const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
   // 2026-09-03 第二期(1553e0d)把任务页的沉淀入口连同导航条数一起砍掉:
   // 记忆只在"这单用到的知识"里只读可见,导航不再自带计数。
@@ -527,17 +525,12 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
 
 test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
-  // 主会话:记忆工具 + 拆分提议工具一起挂,首改目录提醒同处;开发助手只挂
-  // 记忆工具(它不是主任务,不能提议拆分);Build-Fix 不挂(不是跟人协作的会话)。
-  assert.match(service, /extraTools: \[\.\.\.\(this\.memoryTools\(task\) \?\? \[\]\), \.\.\.this\.splitTools\(task\), \.\.\.createTaskHostTools\(this\.taskHostRuntime\(task, epoch\)\)\],\s*onFileMutationIntent: \(path\) => this\.onMemoryFileIntent\(task, path\)/,
-    "主会话同时挂检索工具、拆分提议与首改目录提醒");
-  assert.equal((service.match(/extraTools: this\.memoryTools\(task\)/g) ?? []).length, 1,
-    "开发助手只挂记忆工具");
-  assert.match(service, /this\.maybePushPhaseMemories\(task, progress\.current_phase\)/,
-    "阶段切换推送挂在进度读取处");
-  assert.match(service, /via: "memory_push"/, "推送不算人的插话");
+  assert.equal((service.match(/memoryContext: \(\) => this\.taskMemoryContext\(task\)/g) ?? []).length, 2,
+    "主会话与开发助手通过独立工厂接入每轮记忆");
+  assert.doesNotMatch(service, /maybePushPhaseMemories|onMemoryFileIntent|memoryBriefing/,
+    "旧阶段、目录、开局推送路径已收掉");
   const driver = readFileSync(join(process.cwd(), "src/sessionDriver.ts"), "utf-8");
-  assert.match(driver, /onFileMutationIntent\?: \(path: string, tool: string\) => void/);
+  assert.match(driver, /pi.on\("context"/);
   const tools = readFileSync(join(process.cwd(), "src/memoryTools.ts"), "utf-8");
   assert.match(tools, /name: "corpus_search"/);
   assert.doesNotMatch(tools, /repo: Type\./, "repo 由宿主固定,Agent 传不了");

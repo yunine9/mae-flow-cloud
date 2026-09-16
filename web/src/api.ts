@@ -967,6 +967,7 @@ export interface TaskSummary {
   feedback_error?: string;
   /** 仓内 Skill 与代码交付使用同一基线。 */
   baseline?: string;
+  product_version?: string;
   /** 新任务复用时沿用的交付方式与修复预算。 */
   lane?: string;
   repair_rounds?: number;
@@ -1050,6 +1051,8 @@ export interface TaskSummary {
     last_error?: string;
   };
   delivery?: {
+    /** 最近一次推送的起点，仅用于代码增量展示。 */
+    last_push_base_sha?: string;
     mr_url?: string;
     mr_state?: string;
     merged_sha?: string;
@@ -1552,8 +1555,8 @@ export async function createBusinessModule(input: {
   id: string;
   name: string;
   description: string;
-  owner: string;
-  maintainers: string[];
+  owner?: string;
+  maintainers?: string[];
   repositories: string[];
 }): Promise<BusinessModule> {
   const response = await fetch("/business-modules", {
@@ -2270,6 +2273,7 @@ export async function createTask(
     lane?: string;
     ticket?: string;
     baseline?: string;
+    productVersion?: string;
     model?: { provider: string; model: string };
     repairRounds?: number;
     taskInstructions?: string;
@@ -2310,6 +2314,7 @@ export async function createTask(
       lane: extras?.lane?.trim() || undefined,
       ticket: extras?.ticket || undefined,
       baseline: extras?.baseline || undefined,
+      product_version: extras?.productVersion || undefined,
       model: extras?.model,
       repair_rounds: extras?.repairRounds,
       task_instructions: extras?.taskInstructions?.trim() || undefined,
@@ -2697,6 +2702,7 @@ export async function uploadAnnotationAsset(
 }
 
 export interface Annotation {
+  external_review?: { scope: string; discussion_id: string; content_key: string; mr_url?: string };
   id: string;
   author: string;
   created_at: string;
@@ -2830,10 +2836,22 @@ export async function addAnnotation(
 
 /** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
 export interface MemoryRecord {
+  can_review?: boolean;
+  source_repo?: string;
+  module?: string;
+  product_versions?: string[];
+  merged_into?: string;
+  maintenance_note?: string;
+  edited_by?: string;
+  edited_at?: string;
+  basis?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] };
+  review?: { status: "pending" | "accepted" | "rejected"; by?: string; at?: string;
+    original?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] } };
+
   id: string;
   source: "annotation" | "prepush_fix" | "user_note" | "agent_note";
   judged_by: "human" | "pipeline" | "agent";
-  scope: "one_off" | "local" | "general";
+  scope: "one_off" | "local" | "general" | "platform";
   repo: string;
   paths: string[];
   line?: number;
@@ -2865,6 +2883,11 @@ export interface MemoryRepoInsight {
   one_off: number; pushes: number; hits: number; reworks: number;
 }
 export interface MemoryInsightRow {
+  module?: string;
+  product_versions?: string[];
+  merged_into?: string;
+  can_review?: boolean;
+  review?: MemoryRecord["review"];
   id: string; repo: string; trigger: string; conclusion: string;
   source: MemoryRecord["source"]; judged_by: MemoryRecord["judged_by"];
   scope: MemoryRecord["scope"]; draft: "template" | "model" | "failed";
@@ -2899,7 +2922,8 @@ export interface MemoryUsageRow {
   /** 首改目录时推的是目录摘要而不是逐条。 */
   digest?: boolean;
   ts: string;
-  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context";
+  status?: "ready" | "unavailable";
   ids: string[];
   query?: string;
   phase?: string;
@@ -2909,6 +2933,15 @@ export interface MemoryUsageRow {
 export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRow[]> {
   const response = await fetch(`/tasks/${taskId}/memories/usage`);
   if (!response.ok) return [];
+  return parseJson(response);
+}
+
+export async function reviewTaskMemory(taskId: string, record: MemoryRecord,
+  input: { decision: "pending" | "accepted" | "rejected"; module?: string; product_versions?: string[]; repo?: string; merged_into?: string; note?: string; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(record.id)}/review`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, revision: record.revision ?? 1 }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
 
@@ -2954,6 +2987,13 @@ export async function dropAnnotation(
     return { error: String(body.error ?? `HTTP ${response.status}`) };
   }
   return {};
+}
+
+export async function supplementAnnotation(taskId: string, annotationId: string, context: string): Promise<{ error?: string }> {
+  const response = await fetch(`/tasks/${taskId}/annotations/${encodeURIComponent(annotationId)}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ context }),
+  });
+  return response.ok ? {} : await errorBody(response);
 }
 
 export async function editAnnotation(
@@ -3555,8 +3595,16 @@ export async function listArtifactChangeDirectory(
   return await response.json() as ArtifactChangeDirectoryPage;
 }
 
+/** 只读浏览导航，不依赖待审批卡。 */
+export async function readDiffReview(taskId: string): Promise<PushReviewPresentation | undefined> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/diff-review`);
+  if (!response.ok) throw new Error(`读取代码比较范围失败：HTTP ${response.status}`);
+  const body = await parseJson<{ review?: PushReviewPresentation | null }>(response);
+  return body.review ?? undefined;
+}
+
 /** push 检视只允许二选一：看这次处理，或看从任务基线起的完整交付。
- * Git revision 都由服务端从当前卡片取，页面不传 ref。 */
+ * Git revision 由服务端从任务历史选取，页面不传 ref，也不要求有审批卡。 */
 export async function readPushReviewDiff(
   taskId: string,
   scope: "changes" | "full",
@@ -3761,6 +3809,7 @@ export interface IssueSummary {
   module_id?: string;
   /** 登记基线(分支/tag 等起点说明;问题流登记表单未暴露)。 */
   baseline?: string;
+  product_version?: string;
   /** 登记时带的网管环境(地址列表与 vault 引用;密码只存服务端,永不上线)。
    * root_credential_ref 只在独立 root 密码显式存在时在场(ADR-0020:继承
    * 后台密码的会话不落独立凭据)。environment_source_ip 在场=本环境来自
@@ -4051,6 +4100,7 @@ export function createIssue(input: {
   /** 多仓登记(模块带仓是常态):全部关联仓彼此平等,哪些交付由 AI 裁决。 */
   repo_urls?: string[];
   baseline?: string;
+  product_version?: string;
   module?: string;
   /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。
    * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
@@ -4453,6 +4503,11 @@ export async function getIssueAnalysisVersion(
 /** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
  * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
 export interface IssueReview {
+  external_review?: Annotation["external_review"];
+  agent_context?: Annotation["agent_context"];
+  agent_assigned?: boolean;
+  owner_reply?: Annotation["owner_reply"];
+  resolution?: Annotation["resolution"];
   quote?: string;
   line_end?: number;
   id: string;
@@ -4516,9 +4571,15 @@ export function dropIssueReview(id: string, reviewId: string): Promise<IssueRevi
 }
 
 /** 提交检视:整体回退到问题分析(有后果,页面层先轻量确认)。 */
-export function sendIssueReviews(id: string): Promise<IssueSummary> {
+export function updateIssueReview(id: string, reviewId: string, body: { context?: string; reply?: string; resolve?: boolean }): Promise<IssueReview> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/${encodeURIComponent(reviewId)}`, {
+    method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+  });
+}
+
+export function sendIssueReviews(id: string, ids?: string[]): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/send`, {
-    method: "POST",
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }),
   });
 }
 
@@ -4757,7 +4818,7 @@ export type IssueConversationItem =
       delivered: boolean;
     }
   | {
-      kind: "review"; id: string; ts: string;
+      kind: "review"; id: string; ts: string; receipt?: string; delivery_mode?: "incremental";
       count: number; text: string;
     }
   | {
@@ -4927,6 +4988,30 @@ export async function startTaskEarly(taskId: string, input: EarlyStartInput): Pr
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/early-start`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export interface ProductVersion { id: string; version: string; branch: string }
+export function productVersionRequest(method?: "GET"): Promise<{ versions: ProductVersion[] }>;
+export function productVersionRequest(method: "POST" | "PUT", row: Partial<ProductVersion>): Promise<ProductVersion>;
+export function productVersionRequest(method: "DELETE", row: Partial<ProductVersion>): Promise<{ ok: true }>;
+export async function productVersionRequest(method = "GET", row?: Partial<ProductVersion>): Promise<unknown> {
+  const response = await fetch(`/product-versions${row?.id ? `/${encodeURIComponent(row.id)}` : ""}`, {
+    method, headers: { "content-type": "application/json" },
+    ...(method !== "GET" && method !== "DELETE" ? { body: JSON.stringify(row) } : {}),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+export async function createMemoryDraft(trigger: string, conclusion: string): Promise<MemoryRecord> {
+  const response = await fetch("/memory-insights", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ trigger, conclusion }) });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+export async function memoryHistory(id: string): Promise<MemoryRecord[]> {
+  const response = await fetch(`/memory-insights/${encodeURIComponent(id)}/history`);
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

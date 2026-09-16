@@ -17,6 +17,8 @@ import type { AddressInfo } from "node:net";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { projectPushReceipt } from "../src/pipelineHandoff.ts";
+import { TaskHostLedger } from "../src/taskHostTools.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 
 async function until<T>(probe: () => T | undefined, what: string): Promise<T> {
@@ -368,6 +370,66 @@ test("push 检视 HTTP 入口展示最新代码，同文件新 HEAD 不制造第
     const staleBody = await stale.json() as { content?: unknown };
     assert.match(String(staleBody.content), /export const late = 1/);
     assert.equal(service.get(id)!.waiting?.waiting_id, first.waiting_id, "读取 Diff 不触发审批");
+
+    // 审批卡已消费/自动续推：增量阅读仍可用，不依赖 push_review 残留。
+    const reviewedHead = internal.summary.delivery!.push_review!.head_sha;
+    delete internal.summary.waiting;
+    delete internal.summary.delivery!.push_review;
+    internal.summary.delivery!.last_reviewed_head = reviewedHead;
+    for (const status of ["running", "verifying", "await_merge", "completed"] as const) {
+      internal.summary.status = status;
+      const before = structuredClone(internal.summary);
+      const navigation = await fetch(`${base}/tasks/${id}/diff-review`);
+      assert.equal(navigation.status, 200);
+      const { review } = await navigation.json() as any;
+      assert.equal(review.has_focused_changes, true, `${status} 无审批卡也提供切换范围`);
+      assert.equal(review.base_sha, reviewedHead);
+      const delta = await fetch(`${base}/tasks/${id}/push-review-diff?scope=changes`);
+      assert.equal(delta.status, 200);
+      const { content } = await delta.json() as any;
+      assert.match(content, /export const late = 1/);
+      assert.doesNotMatch(content, /export const value = 0/, "增量不退化为任务全量");
+      assert.deepEqual(internal.summary, before, "只读浏览不生成待办、不修改授权或推进状态");
+    }
+
+    const publish = () => projectPushReceipt(internal.summary, {
+      sha: repo.git("rev-parse", "HEAD"), ref: "refs/heads/master_bot_REQ1", remote: "origin",
+    });
+    publish();
+    const previousPush = repo.git("rev-parse", "HEAD");
+    for (const n of [2, 3]) {
+      writeFileSync(join(repo.cwd, "src", "repair.ts"), `export const late = ${n};\n`);
+      repo.git("add", "src/repair.ts");
+      repo.git("commit", "--quiet", "-m", `repair round commit ${n}`);
+    }
+    const verifyLatest = async () => {
+      const review = await service.diffReview(id);
+      assert.equal(review?.base_sha, previousPush, "只看最新一轮，不用早期审批起点");
+      const response = await fetch(`${base}/tasks/${id}/push-review-diff?scope=changes`);
+      const { content } = await response.json() as any;
+      assert.match(content, /-export const late = 1/);
+      assert.match(content, /\+export const late = 3/);
+      assert.doesNotMatch(content, /feature\.ts/, "已交付的早期改动不再次累计");
+    };
+    await verifyLatest(); // 待推送一轮包含两次提交，不能简单取 HEAD^。
+    publish();
+    await verifyLatest(); // 推送完成后仍展示刚才这一轮。
+    publish();
+    await verifyLatest(); // 相同 SHA 重试不丢起点。
+    repo.git("update-ref", "refs/remotes/origin/master", reviewedHead);
+    await verifyLatest(); // 目标分支推进不能用全量覆盖增量。
+    delete internal.summary.delivery!.last_push_base_sha;
+    new TaskHostLedger(internal.summary).write({ instructions: [], operations:
+      [previousPush, repo.git("rev-parse", "HEAD")].map((sha, i) => ({
+        id: `push-${i}`, at: new Date().toISOString(), state: "succeeded" as const,
+        input: { action: "push" as const, reason: "test" },
+        push_receipt: { sha, ref: "refs/heads/master_bot_REQ1", remote: "origin" },
+      })) });
+    await verifyLatest(); // 旧任务利用既有推送记录恢复，无需重新推送。
+    new TaskHostLedger(internal.summary).write({ instructions: [], operations: [] });
+    assert.equal((await service.diffReview(id))?.has_focused_changes, false,
+      "历史范围缺失时诚实展示全量，不用古老审批点伪造增量");
+
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
     await model.stop();

@@ -134,6 +134,12 @@ interface CommandSpec {
    * 的 resolve 要的是 note id 而不是讨论 id(能力核对报告 D3),
    * 从 reply 命令的输出里抽出来,喂给 discussion_resolve 的 {note_id}。 */
   note_id?: Extract;
+  /** CLI 不支持幂等键参数时(codehub-cli mr review reply 无 --idempotency-key),
+   * 设 true 降级:不要求模板引用 {idempotency_key}，靠宿主 outbox 的
+   * delivered 标记防重放(重启丢 outbox 除外)。模板应带 --no-cache
+   * 避免缓存层假成功。不设时(默认)模板必须引用 {idempotency_key}，
+   * 否则 platformAdapter 拒绝执行(fail-closed 防重复发言)。 */
+  idempotency_no_cli_key?: boolean;
 }
 
 /** 列表型端点(门禁/讨论/材料):items 指到数组,fields 逐字段抽。 */
@@ -882,16 +888,20 @@ export class PlatformAdapter {
         }
         const values = this.values(
           { ...body, id: decodeURIComponent(replyMatch[1]) }, headers);
+        // 宿主 outbox 带了 idempotency_key 时，模板必须引用它——否则
+        // "远端成功、本地未落 delivered"的重放会重复发言。codehub-cli
+        // 这类 CLI 没有幂等键参数时，配 idempotency_no_cli_key=true
+        // 降级：靠 outbox 的 delivered 标记防重放（重启丢 outbox 除外），
+        // 不靠 CLI 幂等。模板仍应带 --no-cache 避免缓存层假成功。
         if (values.idempotency_key
             && !spec.command.some((part) =>
-              part.includes("{idempotency_key}"))) {
-          // 宿主 outbox 已经提供稳定动作键时，旧模板若吞掉它就无法
-          // 封住“远端成功、本地未落账”的重放窗口。宁可让本次保持
-          // pending 等管理员修配置，也不能悄悄执行一个非幂等回复。
+              part.includes("{idempotency_key}"))
+            && !spec.idempotency_no_cli_key) {
           throw new AdapterError(
             "discussion_reply 收到了 idempotency_key，但命令模板未引用 "
             + "{idempotency_key}；已拒绝非幂等投递，请把该占位符传给"
-            + "平台支持的幂等请求头或稳定键参数");
+            + "平台支持的幂等请求头或稳定键参数，"
+            + "或在配置里设 idempotency_no_cli_key=true 降级为 outbox 防重放");
         }
         const stdout = await this.run(spec, values);
         // 回复与"标已解决"是两个调用(报告 D3)。宿主默认不代

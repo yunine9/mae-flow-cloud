@@ -1,44 +1,20 @@
 /**
- * 任务记忆(语料库,docs/knowledge-memory-design.md)。
- *
- * 平台不建知识库,只记住自己干过的活:一个被人或权威来源关掉的环
- * (闭环的检视意见、失败后修好的 Build-Fix、人圈选「记为记忆」),
- * 自动落成一条记录,下一单改到同一处时再喂给 Agent。
- *
- * 三条纪律,设计期钉死:
- * - **md 是正本,索引只是索引**。每条记录一个 Markdown 文件,frontmatter
- *   放定位键,正文固定「什么情况下 / 原文 / 问题 / 结论」四段——memsearch
- *   按标题切块,搜到哪块都带着标题能读懂,expand 一次就是整条。索引
- *   (milvus.db)删了从这些文件重建。
- * - **只追加不改写**。要改就追加一条带 supersedes 的新记录,撤回也是
- *   追加(结论为空)。多人环境里就地覆盖等于替别人做主。
- * - **记忆是短句,不是文档**。单条正文 2000 字封顶,超了拒收并指路
- *   Skill 货架——长的东西有它自己的家,往记忆里塞整段规范就是在建第二
- *   个知识库。
- *
- * 第三期加的三样,都不破上面三条:
- * - **起草收尾**:trigger/scope 先用模板落盘,模型起草回来后在同一条记录上
- *   补全(md 改标题、索引追加一行 revision+1)。这不是"改写别人",是平台
- *   自己那条记录几秒内的收尾——人写的原文/问题/结论一个字不动。
- * - **台账**(ledger.jsonl):推送、检索、返工、失锚、归档,每件事一行,
- *   只追加。排序权重与沉底判断都从这里算,md 正本不背这些账。
- * - **沉底归档**:失锚太久或年头久且从未命中的,md 挪进 _archive/,不进
- *   索引但文件仍在;台账记一行,list 读侧派生 archived。不删。
- *
- * 这里不做检索(sidecar 的事),不做任何面向人的编辑面。
+ * 经验候选与人工采纳。闭环或主动记录先留档，只有明确采纳后才参与复用。
+ * 原始依据和每次修订保留在追加索引中，Markdown 是当前全文与向量重建来源。
+ * 人工确认只影响复用资格，不改变任务状态；抽象方法由 memoryDraft 提示词指导。
  */
 
 import { randomBytes } from "node:crypto";
 import {
-  appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync,
+  unlinkSync, appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync,
 } from "node:fs";
 import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type MemorySource = "annotation" | "prepush_fix" | "user_note" | "agent_note";
 export type MemoryJudge = "human" | "pipeline" | "agent";
-/** one_off 只进全文检索;local/general 才进推送与目录摘要(§5)。 */
-export type MemoryScope = "one_off" | "local" | "general";
+/** one_off 只检索；local/general 为仓内经验，platform 明确跨仓。 */
+export type MemoryScope = "one_off" | "local" | "general" | "platform";
 
 export const MEMORY_DIR = "corpus";
 export const MEMORY_ARCHIVE_DIR = "_archive";
@@ -59,6 +35,8 @@ export interface MemoryInput {
   paths: string[];
   line?: number;
   module?: string;
+  product_versions?: string[];
+  source_repo?: string;
   /** 内核七段词表之一;来源决定,不猜。 */
   phase?: string;
   task: string;
@@ -74,7 +52,33 @@ export interface MemoryInput {
   supersedes?: string;
 }
 
+export interface MemoryReview {
+  status: "pending" | "accepted" | "rejected";
+  by?: string;
+  at?: string;
+  /** 首次人工处置前的候选原文，供复核而非运行时使用。 */
+  original?: { trigger: string; conclusion: string; scope: MemoryScope };
+}
+export interface MemoryReviewInput {
+  decision: "pending" | "accepted" | "rejected";
+  module?: string;
+  product_versions?: string[];
+  merged_into?: string;
+  repo?: string;
+  note?: string;
+  revision: number;
+  trigger?: string;
+  conclusion?: string;
+  scope?: MemoryScope;
+}
 export interface MemoryRecord extends MemoryInput {
+  review?: MemoryReview;
+  edited_by?: string;
+  edited_at?: string;
+  merged_into?: string;
+  maintenance_note?: string;
+  basis?: { trigger: string; conclusion: string; scope: MemoryScope };
+
   id: string;
   at: string;
   /** 相对 corpus/ 的 md 路径。 */
@@ -179,11 +183,13 @@ export function renderMemoryMarkdown(record: MemoryRecord): string {
     ["source", record.source],
     ["judged_by", record.judged_by],
     ["scope", record.scope],
+    ["review_status", record.review?.status ?? "pending"],
     ["repo", yamlScalar(record.repo)],
     ["paths", `[${record.paths.map(yamlScalar).join(", ")}]`],
     ...(record.line ? [["line", String(record.line)] as [string, string]] : []),
     ...(record.module ? [["module", yamlScalar(record.module)] as [string, string]] : []),
     ...(record.phase ? [["phase", yamlScalar(record.phase)] as [string, string]] : []),
+    ...(record.product_versions?.length ? [["product_versions", JSON.stringify(record.product_versions)] as [string, string]] : []),
     ["task", yamlScalar(record.task)],
     ["evidence", yamlScalar(record.evidence)],
     ...(record.author ? [["author", yamlScalar(record.author)] as [string, string]] : []),
@@ -222,11 +228,12 @@ export class MemoryStore {
    * 定位键不能空。不判断质量——质量靠排序,不靠门口的人(§5)。 */
   record(input: MemoryInput, options: { withdrawn?: boolean } = {}): MemoryRecord {
     const trigger = String(input.trigger ?? "").trim();
-    if (!trigger) throw new MemoryError("记忆缺少「什么情况下」");
+    if (!trigger || trigger.length > MEMORY_TRIGGER_LIMIT) throw new MemoryError("请填写触发条件（最多 80 字）");
     const conclusion = String(input.conclusion ?? "").trim();
     if (!conclusion && !options.withdrawn) throw new MemoryError("记忆缺少结论");
+    if (!["one_off", "local", "general", "platform"].includes(input.scope)) throw new MemoryError("未知记忆范围");
     if (!String(input.repo ?? "").trim()) throw new MemoryError("记忆缺少仓库");
-    if (!String(input.task ?? "").trim()) throw new MemoryError("记忆缺少任务号");
+    if (!String(input.task ?? "").trim() && !(input.source === "user_note" && input.evidence === "manual")) throw new MemoryError("记忆缺少任务号");
     const body = [trigger, input.quote ?? "", input.problem ?? "", conclusion]
       .join("\n").length;
     if (body > MEMORY_BODY_LIMIT) {
@@ -237,10 +244,12 @@ export class MemoryStore {
     const at = new Date().toISOString();
     const id = `c-${Date.now().toString(36)}-${randomBytes(3).toString("hex")}`;
     const repo = repoSlug(input.repo) === input.repo ? input.repo : repoSlug(input.repo);
-    const file = join(repo, at.slice(0, 7), `${id}.md`);
+    const file = join(input.scope === "platform" ? "_platform" : repo, at.slice(0, 7), `${id}.md`);
     const record: MemoryRecord = {
       ...input,
-      repo,
+      review: { status: "pending" },
+      basis: { trigger, conclusion, scope: input.scope },
+      repo, source_repo: repo,
       paths: [...new Set((input.paths ?? []).map((path) => String(path).trim())
         .filter(Boolean))],
       trigger,
@@ -254,7 +263,7 @@ export class MemoryStore {
     if (!contained(this.root, absolute)) {
       throw new MemoryError("记忆路径越出语料目录");
     }
-    mkdirSync(join(this.root, repo, at.slice(0, 7)), { recursive: true });
+    mkdirSync(dirname(absolute), { recursive: true });
     writeFileSync(absolute, renderMemoryMarkdown(record), "utf-8");
     // 索引行先于 md 不行(读到索引找不到文件),md 先于索引可以(多一个
     // 没人引用的文件,重建索引时照样收进去)。
@@ -296,12 +305,12 @@ export class MemoryStore {
    * 且只做一次——起草不是编辑面,不给任何人第二次机会改别人的记录。 */
   finalizeDraft(
     id: string,
-    draft: { trigger?: string; scope?: MemoryScope; state: MemoryDraftState },
+    draft: { trigger?: string; scope?: MemoryScope; conclusion?: string; state: MemoryDraftState },
   ): MemoryRecord {
     const found = this.find(id);
     if (!found) throw new MemoryError(`记忆 ${id} 不存在`);
-    if (found.withdrawn || found.superseded_by || found.archived) {
-      throw new MemoryError("这条记忆已撤回、覆盖或归档,不再起草");
+    if (found.edited_by || found.withdrawn || found.superseded_by || found.archived || (found.review?.status ?? "pending") !== "pending") {
+      throw new MemoryError("这条记忆已处置，不再由模型改写");
     }
     if ((found.draft ?? "template") !== "template") {
       throw new MemoryError("这条记忆已经起草收尾过");
@@ -311,10 +320,12 @@ export class MemoryStore {
       ...found,
       ...(draft.state === "model" && trigger
         ? { trigger: trigger.slice(0, MEMORY_TRIGGER_LIMIT) } : {}),
-      ...(draft.state === "model" && draft.scope ? { scope: draft.scope } : {}),
+      ...(draft.state === "model" && draft.scope && found.scope !== "platform" ? { scope: draft.scope } : {}),
+      ...(draft.state === "model" && draft.conclusion?.trim() ? { conclusion: draft.conclusion.trim() } : {}),
       draft: draft.state,
       revision: (found.revision ?? 1) + 1,
     };
+    if ([next.trigger, next.quote ?? "", next.problem ?? "", next.conclusion].join("\n").length > MEMORY_BODY_LIMIT) throw new MemoryError("提炼结果过长，保留原候选");
     delete next.superseded_by;
     delete next.archived;
     delete next.archive_reason;
@@ -323,6 +334,62 @@ export class MemoryStore {
     writeFileSync(absolute, renderMemoryMarkdown(next), "utf-8");
     appendFileSync(this.indexPath, JSON.stringify(next) + "\n", "utf-8");
     return next;
+  }
+
+  /** 采纳只改变复用资格，不改变任务执行或原始证据。旧记录无采纳事实时也待确认。 */
+  review(id: string, by: string, input: MemoryReviewInput): MemoryRecord {
+    const found = this.find(id);
+    if (!found || found.withdrawn || found.superseded_by) throw new MemoryError("记忆不存在或已撤回");
+    if (!by.trim()) throw new MemoryError("缺少确认人");
+    if (input.revision !== (found.revision ?? 1)) throw new MemoryError("候选内容已更新，请重新查看后确认");
+    if (!["pending", "accepted", "rejected"].includes(input.decision)) throw new MemoryError("请选择采纳或不采纳");
+    const trigger = String(input.trigger ?? found.trigger).trim();
+    const conclusion = String(input.conclusion ?? found.conclusion).trim();
+    const scope = input.scope ?? found.scope;
+    if (input.decision !== "rejected") {
+      if (!trigger || !conclusion || trigger.length > MEMORY_TRIGGER_LIMIT) throw new MemoryError("请填写触发条件（最多 80 字）与经验结论");
+      if (!["one_off", "local", "general", "platform"].includes(scope)) throw new MemoryError("未知记忆范围");
+      if ([trigger, found.quote ?? "", found.problem ?? "", conclusion].join("\n").length > MEMORY_BODY_LIMIT) throw new MemoryError("经验超过 2000 字，请缩短或整理为 Skill");
+    }
+    if (input.repo !== undefined && !String(input.repo).trim()) throw new MemoryError("请选择适用代码仓");
+    if (input.product_versions !== undefined && (!Array.isArray(input.product_versions) || input.product_versions.some(v => typeof v !== "string" || !v.trim()))) throw new MemoryError("适用版本必须是非空文本列表");
+    if (input.merged_into) {
+      const target = this.find(input.merged_into);
+      if (!target || target.id === id || !memoryAccessible(target, target.repo, target.module ? [target.module] : [], target.product_versions?.[0])) throw new MemoryError("请选择另一条已采纳的有效经验作为合并目标");
+      if (input.decision !== "rejected") throw new MemoryError("合并来源必须停用");
+    }
+    const next: MemoryRecord = { ...found,
+      ...(input.decision !== "rejected" ? { trigger, conclusion, scope } : {}),
+      source_repo: found.source_repo ?? found.repo,
+      repo: input.repo === undefined ? found.repo : repoSlug(String(input.repo).trim()),
+      module: input.module === undefined ? found.module : String(input.module).trim() || undefined,
+      product_versions: input.product_versions === undefined ? found.product_versions : input.product_versions,
+      edited_by: by, edited_at: new Date().toISOString(),
+      maintenance_note: input.note === undefined ? found.maintenance_note : String(input.note).trim(),
+      merged_into: input.merged_into || undefined,
+      review: { status: input.decision, by, at: new Date().toISOString(),
+        original: found.review?.original ?? { trigger: found.trigger, conclusion: found.conclusion, scope: found.scope } },
+      revision: (found.revision ?? 1) + 1,
+    };
+    if (!next.repo) throw new MemoryError("请选择适用代码仓");
+    delete next.archived; delete next.archive_reason;
+    next.file = join(next.scope === "platform" ? "_platform" : next.repo, next.at.slice(0, 7), `${next.id}.md`);
+    const path = resolve(this.root, next.file);
+    if (!contained(this.root, path)) throw new MemoryError("记忆路径越出语料目录");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, renderMemoryMarkdown(next), "utf8");
+    appendFileSync(this.indexPath, JSON.stringify(next) + "\n", "utf8");
+    if (found.archived) this.ledger.append({ kind: "restore", id, note: `由 ${by} 恢复为${input.decision}` });
+    if (found.file !== next.file) {
+      const previous = resolve(this.root, found.file);
+      // 当前版本已经落账；旧索引残留仍由 Cloud 当前记录过滤，清理失败不回滚采纳。
+      try { if (contained(this.root, previous) && existsSync(previous)) unlinkSync(previous); } catch { /* 下次维护可清理旧副本 */ }
+    }
+    return next;
+  }
+
+  history(id: string): MemoryRecord[] {
+    return readJsonlRows<MemoryRecord>(this.indexPath).filter(row => row.id === id);
   }
 
   /** 沉底:md 挪进 _archive/ 同路径,台账记一行。不删、不改索引行;
@@ -360,7 +427,7 @@ export class MemoryStore {
     for (const row of this.list()) {
       if (row.archived || row.withdrawn || row.superseded_by) continue;
       const own = stats.get(row.id) ?? EMPTY_STATS;
-      const ageDays = (now - new Date(row.at).getTime()) / DAY_MS;
+      const ageDays = (now - new Date(row.edited_at ?? row.at).getTime()) / DAY_MS;
       let reason = "";
       if (own.unanchored_since
           && (now - new Date(own.unanchored_since).getTime()) / DAY_MS >= unanchoredDays) {
@@ -451,7 +518,7 @@ export class MemoryLedger {
         case "unanchored": own.unanchored_since ??= row.at; break;
         case "archive": own.archived_at = row.at; own.archive_reason = row.note; break;
         case "restore":
-          own.archived_at = undefined; own.archive_reason = undefined; break;
+          own.archived_at = undefined; own.archive_reason = undefined; own.unanchored_since = undefined; break;
         default: break;
       }
       out.set(row.id, own);
@@ -474,6 +541,13 @@ export interface MemoryRepoInsight {
 }
 
 export interface MemoryInsightRow {
+  module?: string;
+  product_versions?: string[];
+  review?: MemoryReview;
+  edited_by?: string;
+  edited_at?: string;
+  merged_into?: string;
+  maintenance_note?: string;
   id: string;
   repo: string;
   trigger: string;
@@ -505,4 +579,12 @@ export interface MemoryInsights {
   sidecar: "ready" | "unavailable" | "absent";
   repos: MemoryRepoInsight[];
   memories: MemoryInsightRow[];
+}
+
+/** 来源仓库保留用于追溯；只有明确的平台范围可跨仓使用。 */
+export function memoryAccessible(row: MemoryRecord, repo: string, modules: string[] = [], productVersion?: string): boolean {
+  return row.review?.status === "accepted" && !row.withdrawn && !row.superseded_by && !row.archived
+    && !row.merged_into
+    && (!row.product_versions?.length || !productVersion || row.product_versions.includes(productVersion))
+    && (row.module ? modules.includes(row.module) : row.repo === repo || row.scope === "platform");
 }

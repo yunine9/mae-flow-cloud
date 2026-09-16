@@ -594,13 +594,9 @@ async function main(): Promise<void> {
   const isolateImage = flag("--isolate-image");
   // 任务记忆检索旁路(docs/knowledge-memory-design.md §7):给 venv 的
   // python 就起常驻 sidecar;不给则只有索引级的开局推送,任务照跑。
-  // 记忆起草/目录摘要的专用便宜模型角色(设计稿 §5):不配就不起草,只留模板。
-  // 刻意不回落到任务模型——旁路不和主会话抢额度,也不吃剧本模型的下一幕。
-  const memoryDraftProvider = flag("--memory-draft-provider")?.trim();
-  const memoryDraftModel = flag("--memory-draft-model")?.trim();
-  if (!!memoryDraftProvider !== !!memoryDraftModel) {
-    console.error("[serve] --memory-draft-provider 与 --memory-draft-model 必须同时配置");
-    process.exit(2);
+  // 旧启动命令继续可用；经验整理统一跟随任务主模型。
+  if (flag("--memory-draft-provider") || flag("--memory-draft-model")) {
+    console.warn("[serve] memory-draft 配置已废弃并忽略，经验整理使用任务主模型");
   }
   const memsearchPython = flag("--memsearch");
   if (memsearchPython && !existsSync(memsearchPython)) {
@@ -986,8 +982,6 @@ async function main(): Promise<void> {
   const service = new TaskService({
     dataDir, provider, model, modelsJson, maxConcurrent, settings,
     deploymentRuntime,
-    ...(memoryDraftProvider && memoryDraftModel
-      ? { memoryDraftModel: { provider: memoryDraftProvider, model: memoryDraftModel } } : {}),
     ...(memsearchPython ? { memory: {
       python: memsearchPython,
       script: join(REPO_ROOT, "harness", "memsearch-sidecar.py"),

@@ -58,7 +58,7 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
         responsibility: "过滤模块实现",
         scope: { name: "过滤实现" } },
     ],
-    dependencies: [],
+    dependencies: [{ dependent: "unit-filter", prerequisite: "unit-contract", reason: "依赖公共契约落地" }],
   };
   const chainBody = "# 单仓拆分方案\n契约先行,过滤在后。\n";
   const artifacts = storyArtifacts(chainBody, graphDefinition);
@@ -148,7 +148,7 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
     parentState.summary.waiting = revisedReview;
     (service as any).sealRequirementGraphReview(parentState, revisedReview);
 
-    // 两个同仓单元由平台补串行边，可以由同一责任人共用同一 AR。
+    // 两个同仓单元有明确公共契约依赖，可以由同一责任人共用同一 AR。
     const confirmed = await service.confirmRequirementGraph(parent.id, {
       repository_assignees: {
         "unit-contract": "cloudbot", "unit-filter": "cloudbot",
@@ -163,14 +163,12 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
     assert.equal(graph.stage, "confirmed");
     const contractChild = service.get(graph.repositories[0].task_id!)!;
     const filterChild = service.get(graph.repositories[1].task_id!)!;
-    // 子任务交付链由别的端到端覆盖,立即取消免得误消费剧本场景。
+    assert.deepEqual(filterChild.blocked_by, [contractChild.id],
+      "真实公共契约依赖在建单时保留");
+    assert.equal(contractChild.blocked_by, undefined);
     await service.cancel(contractChild.id, "tester");
     await service.cancel(filterChild.id, "tester");
 
-    // 串行纪律:图里没写任何显式边,平台按拓扑序补隐式前置边。
-    assert.deepEqual(filterChild.blocked_by, [contractChild.id],
-      "同仓第二个单元必须等第一个合入");
-    assert.equal(contractChild.blocked_by, undefined);
     assert.equal(contractChild.delivery_scope, undefined);
     assert.equal(filterChild.delivery_scope, undefined);
     assert.equal(graph.source_document, "story.md");
@@ -504,8 +502,8 @@ test("单号延后:勾分析拆分下单免单号,确认卡逐单元补齐后才
     assert.match(readFileSync(
       join(dataDir, first.id, "unit-brief.md"), "utf-8"),
     /AR 单号：REQ2026090201/);
-    assert.deepEqual(second.blocked_by, [first.id],
-      "免单号路径不改串行纪律");
+    assert.deepEqual(second.blocked_by ?? [], [],
+      "独立 AR 的无依赖同仓单元不应增加等待");
   } finally {
     await model.stop();
   }

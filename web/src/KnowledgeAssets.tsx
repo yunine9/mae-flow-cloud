@@ -278,12 +278,14 @@ function TrailRow({ children }: { children: ReactNode }) {
   </li>;
 }
 
-export function KnowledgeAssetsWorkspace({ admin, initialAsset,
+export function KnowledgeAssetsWorkspace({ initialAsset,
   onOpenTask }: {
-  admin: boolean;
+  admin?: boolean;
   initialAsset?: KnowledgeAssetFocus;
   onOpenTask: (taskId: string) => void;
 }) {
+  // 团队知识基于信任共同维护；登录边界由服务端保留。
+  const canManageKnowledge = true;
   const skillFocus: SkillAssetFocus | undefined =
     initialAsset?.kind === "skill" ? initialAsset : undefined;
   const engineeringFocus: EngineeringAssetFocus | undefined =
@@ -566,7 +568,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
   const submitPackage = () => pending && void run(async () => {
     const metadata = skillMetadataInput(uploadClassification);
     if (!metadata) return;
-    if (admin) {
+    if (canManageKnowledge) {
       await uploadSkill(uploadName, pending.files, metadata);
       finishUpload(`已上架 ${uploadName}，下一个匹配的任务即可装载。`);
       return;
@@ -581,7 +583,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
     if (!metadata) return;
     const files: SkillUploadFile[] = [
       { path: "SKILL.md", content_base64: encodeText(draftText) }];
-    if (admin) {
+    if (canManageKnowledge) {
       await uploadSkill(uploadName, files, metadata);
       finishUpload(`已上架 ${uploadName}，下一个匹配的任务即可装载。`);
       return;
@@ -591,7 +593,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
       + "管理员审核通过后即上架生效。");
   });
 
-  const canManageCandidate = (candidate: KnowledgeCandidateRecord) => admin
+  const canManageCandidate = (candidate: KnowledgeCandidateRecord) => canManageKnowledge
     || candidate.nature === "business"
       && candidate.business_module_ids.every((id) =>
         businessModules.find((module) => module.id === id)?.can_manage);
@@ -768,7 +770,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
         <Button type="button" size="sm"
           variant={selection.kind === "upload" ? "secondary" : "default"}
           aria-pressed={selection.kind === "upload"} onClick={openUpload}>
-          {admin ? "上架 Skill" : "提交 Skill"}</Button>
+          {canManageKnowledge ? "上架 Skill" : "提交 Skill"}</Button>
       </div>
     </div>
 
@@ -848,9 +850,9 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
           {segment === "shelf" && !visibleSkills.length && !loading
             && <Empty className="border p-4"><EmptyDescription>{skills.length
               ? "当前筛选下没有 Skill；换个性质或清空搜索。"
-              : shelf && !shelf.root_exists && !admin
+              : shelf && !shelf.root_exists && !canManageKnowledge
                 ? "本部署尚未放置 Skill 形态知识。管理员上架后，匹配的新任务即可使用。"
-                : `货架是空的——${admin
+                : `货架是空的——${canManageKnowledge
                   ? "点右上「上架 Skill」传入含 SKILL.md 的技能包。"
                   : "管理员上架后,新任务即自动装载。"}`}</EmptyDescription></Empty>}
 
@@ -931,7 +933,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
         </Empty>}
 
         {selection.kind === "upload" && <UploadPane
-          admin={admin} busy={busy}
+          admin={canManageKnowledge} busy={busy}
           modules={businessModules}
           classification={uploadClassification}
           onClassification={setUploadClassification}
@@ -984,7 +986,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
 
         {selection.kind === "skill" && selectedSkill && <SkillDetail
           skill={selectedSkill} directory={selection.directory}
-          admin={admin} busy={busy} modules={businessModules}
+          admin={canManageKnowledge} busy={busy} modules={businessModules}
           tab={detailTab} onTab={setDetailTab}
           document={document}
           documentReady={documentFor === selection.directory}
@@ -1098,7 +1100,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
               <dd className="font-mono text-sm break-all text-text">{
                 selectedSubmission.reject_reason}</dd></div>}
           </dl>
-          {admin && selectedSubmission.status === "pending" && <div
+          {canManageKnowledge && selectedSubmission.status === "pending" && <div
             className="flex flex-wrap items-center gap-2">
             {rejectFor === selectedSubmission.id ? <>
               <Input type="text" className="min-w-55 flex-1" placeholder="驳回原因(可留空)"
@@ -1212,7 +1214,7 @@ export function KnowledgeAssetsWorkspace({ admin, initialAsset,
       onChange={(event) => {
         void pickFiles(event.target.files); event.target.value = "";
       }} />
-    {admin && <input ref={updateInputRef} type="file" multiple hidden
+    {canManageKnowledge && <input ref={updateInputRef} type="file" multiple hidden
       {...({ webkitdirectory: "" } as object)}
       onChange={(event) => {
         void pickFiles(event.target.files, updateTargetRef.current);

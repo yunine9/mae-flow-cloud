@@ -299,6 +299,10 @@ function fromMemoryUsage(workspace: string): TimelineEntry[] {
     let title = "";
     let detail: string | undefined;
     switch (moment) {
+      case "context":
+        title = row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : `本轮提供 ${count} 条相关记忆`;
+        detail = clip(row.query, 80) || undefined;
+        break;
       case "launch":
         title = `开局推送 ${count} 条任务记忆`;
         break;

@@ -639,7 +639,7 @@ function invokeAfterRevisionConflict(input: Parameters<typeof invoke>[0]):
 }
 
 /** 整份生命周期(current、活动批次、流水线事实、接管记录)必须与某张
- * 真实宿主收据精确一致——用于宣布 ready/completed 与重建反馈索引。 */
+ * 真实宿主收据精确一致——只用于宣布 ready/completed。 */
 export function trustedKernelHostLifecycle(input: {
   host: KernelDeliveryHost;
   cwd: string;
@@ -652,6 +652,16 @@ export function trustedKernelHostLifecycle(input: {
     state: input.state,
     lifecycle: input.actions,
   }).lifecycle;
+}
+
+/** 反馈读取、结果收口和索引恢复只消费反馈事实，不依赖工作步骤或流水线状态。 */
+export function trustedKernelHostFeedback(input: {
+  host: KernelDeliveryHost;
+  cwd: string;
+  actions: KernelHostAction[];
+  state?: Record<string, any>;
+}): boolean {
+  return attestKernelHost({ ...input, lifecycle: input.actions, feedbackLoop: true }).feedbackLoop;
 }
 
 /**

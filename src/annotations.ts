@@ -1,3 +1,4 @@
+import type { ExternalReviewSource } from "./externalReviewInbox.ts";
 /**
  * 检视批注:在材料上圈出问题,攒成模型一次就能落地的清单。
  *
@@ -94,6 +95,7 @@ export interface AnnotationResolution {
 }
 
 export interface Annotation {
+  external_review?: ExternalReviewSource;
   id: string;
   author: string;
   created_at: string;
@@ -177,6 +179,7 @@ export interface Annotation {
 }
 
 export interface AnnotationInput {
+  external_review?: ExternalReviewSource;
   author: string;
   artifact: string;
   file: string;
@@ -207,6 +210,7 @@ type Operation =
   | { op: "drop"; id: string; by?: string }
   | { op: "sent"; ids: string[]; via: SentVia; at: string; by?: string }
   | { op: "respond"; id: string; response: AnnotationResponse }
+  | { op: "agent_context"; id: string; by: string; at: string; text: string }
   | { op: "route_agent"; id: string; by: string; at: string; context?: string }
   /** via 只在责任人直接接住 draft 并答复时出现，使“接收 + 答复”成为
    * 一条原子台账操作；旧记录缺少 via 时仍按原语义回放。 */
@@ -258,10 +262,15 @@ export class AnnotationStore {
         byId.set(operation.record.id, operation.record);
         continue;
       }
+      if (operation.op === "agent_context") {
+        const found = byId.get(operation.id);
+        if (found) found.agent_context = operation.text ? { text: operation.text, by: operation.by, at: operation.at, revision: found.rework ?? 0 } : undefined;
+        continue;
+      }
       if (operation.op === "route_agent") {
         const found = byId.get(operation.id);
         if (found) { found.route = "agent"; found.status = "draft"; found.agent_assigned = true; found.needs_owner_closure = true;
-          found.agent_context = operation.context ? { text: operation.context, by: operation.by, at: operation.at, revision: found.rework ?? 0 } : undefined; }
+          if (operation.context) found.agent_context = { text: operation.context, by: operation.by, at: operation.at, revision: found.rework ?? 0 }; }
         continue;
       }
       if (operation.op === "owner_resolution") {
@@ -483,6 +492,7 @@ export class AnnotationStore {
       author: String(input.author ?? "").trim() || "未署名",
       created_at: new Date().toISOString(),
       artifact,
+      ...(input.external_review ? { external_review: input.external_review } : {}),
       file: String(input.file ?? "").trim() || artifact,
       line,
       anchor,
@@ -708,7 +718,7 @@ export class AnnotationStore {
           && found.resolution.reason === decision.reason.trim()) return found;
       throw new AnnotationError("这条意见已处置，请刷新查看记录");
     }
-    if (found.status !== "sent" && !(found.status === "draft" && found.needs_owner_closure)) {
+    if (found.status !== "sent" && !(found.status === "draft" && (found.needs_owner_closure || found.external_review))) {
       throw new AnnotationError("这条意见尚未提交或已经闭环");
     }
     if (!["fixed", "not_adopted", "deferred", "accepted_risk"].includes(decision.outcome)) {
@@ -720,6 +730,14 @@ export class AnnotationStore {
     }
     this.append({ op: "owner_resolution", id, resolution: { ...decision, reason, by, at: new Date().toISOString() } });
     return this.list().find((item) => item.id === id)!;
+  }
+
+  saveAgentContext(id: string, by: string, text: string): Annotation {
+    const found = this.list().find(item => item.id === id);
+    if (!found || !pendingReviewAnnotation(found) || found.agent_assigned) throw new AnnotationError("意见已交办或已闭环，请另行补充新意见");
+    if (text.trim().length > 4000) throw new AnnotationError("补充说明最多 4000 字");
+    this.append({ op: "agent_context", id, by, at: new Date().toISOString(), text: text.trim() });
+    return this.list().find(item => item.id === id)!;
   }
 
   assignToAgent(id: string, by: string, context = ""): void {

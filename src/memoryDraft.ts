@@ -1,16 +1,6 @@
 /**
- * 记忆的起草与目录摘要(docs/knowledge-memory-design.md §5、§8-3)。
- *
- * 两个便宜的单发模型调用,都无工具、都带预算、都有确定性兜底:
- * - **起草 trigger/scope**:入库那一刻先用模板落盘,这里事后补一句更像人话
- *   的「什么情况下」,并判断范围:one_off(这单特有,只进全文检索)/
- *   local(同一处再改时有用)/ general(全仓通用)。依据不只是意见原文,
- *   还有回执与改动路径——只看原文分不出"这次手滑"和"这里的规矩"。
- * - **目录摘要**:一个目录攒到十几条记忆后,首改目录时把 15 条全推等于没推;
- *   压成一段摘要,明细留给 corpus_search。缓存按成员 id 集合命中。
- *
- * 解析纪律:模型输出不合形状一律按失败处理,模板/确定性兜底顶上;
- * 绝不把一段自由文本当 scope 塞进索引。
+ * 旁路提炼可复用的经验草稿。模型只建议结论与范围，不替人采纳；失败保留原始候选。
+ * 目录摘要工具保留供现有调用方使用，不改变任务运行。
  */
 
 import type { MemoryRecord, MemoryScope } from "./taskMemory.ts";
@@ -23,19 +13,26 @@ export const MEMORY_DIGEST_BUDGET_MS = 90_000;
 /** 单目录超过这个数就推摘要不推明细(§13)。 */
 export const MEMORY_DIGEST_THRESHOLD = 15;
 
-const SCOPES: MemoryScope[] = ["one_off", "local", "general"];
+const SCOPES: MemoryScope[] = ["one_off", "local", "general", "platform"];
 
 export function buildMemoryDraftPrompt(record: MemoryRecord): { system: string; user: string } {
   const system = [
-    "你在为一个软件团队的任务记忆库做整理。一条记忆是一个已经闭环的事实:",
-    "有人在代码或文档的某处提了意见,Agent 改了,人确认通过;或者构建失败后修好了。",
-    "你要做两件事,只回 JSON,不要解释:",
+    "你在为软件团队从任务记录中提炼可复用经验。输入是一次处理的来源材料，不自动证明结论正确或可推广。",
+    "整理为待人工确认的经验候选，不是已经成立的规范。只回 JSON:",
+    "conclusion 提炼可复用做法、证据依据和适用例外；不能只复述‘已修复’。证据不足时明确缺什么，不凭一次绿灯推导普遍结论。",
+    "提炼步骤：先辨认被纠正的判断或缺失的知识，再解释为什么会错、什么条件下应如何判断；最后检验换一个仓库或业务对象是否仍成立。",
+    "适度抽象：将订单名、任务号、文件名等偶然细节留在来源证据中；结论优先表达可迁移的因果关系、判断方法和行动。保留会改变结论的技术或业务前提，不能把业务规则泛化为全平台规则。",
+    "例如：不要只记‘修正订单服务的重试’，可提炼为‘调用有外部副作用的接口超时时，先核对幂等保障或查询操作结果，再决定重试；纯读取或已保证幂等的调用不适用同样限制’。这只是抽象方式示例，不是所有候选的内容模板。",
+    "避免‘注意质量、充分测试’等无法指导下一次行动的空话；没有可复用因果或足够依据就保留 one_off，不强行总结大道理。",
+    "conclusion 用简短正文描述做法与依据；另起一段以‘适用例外：’写明前提、边界或缺失证据，方便人审查。",
+    "不要把个人偏好当作普遍质量规则。区分缺业务知识、缺上下文与执行失误。不要编造修改、测试或验证结果。",
     '{"trigger": "<什么情况下该想起这条,一句话,动作锚定,不超过 40 字>",',
-    ' "scope": "one_off" | "local" | "general"}',
+    ' "scope": "one_off" | "local" | "general" | "platform", "conclusion": "<提炼结论、依据与例外，尽量 300 字以内>"}',
     "scope 判断标准:",
     "- one_off:只对这一单成立(如临时数据、这次的手滑、与需求绑定的取舍),下一单改到同一处也用不上。",
     "- local:改到同一个文件/目录时才有用(这里的约定、这块的坑)。",
     "- general:改这个仓库任何地方都可能用到的规矩(命名、提交、依赖、安全底线)。",
+    "- platform:不依赖当前仓特殊条件的跨仓工程经验，只是范围建议，仍需人工采纳。",
     "拿不准时选 local。trigger 用中文,以「改/加/修/写…时」这类动作开头。",
   ].join("\n");
   const user = [
@@ -51,7 +48,7 @@ export function buildMemoryDraftPrompt(record: MemoryRecord): { system: string; 
 }
 
 /** 模型回复 → {trigger, scope};形状不对返回 undefined,调用方按起草失败处理。 */
-export function parseMemoryDraft(text: string): { trigger: string; scope: MemoryScope } | undefined {
+export function parseMemoryDraft(text: string): { trigger: string; scope: MemoryScope; conclusion?: string } | undefined {
   const match = String(text ?? "").match(/\{[\s\S]*\}/);
   if (!match) return undefined;
   let parsed: unknown;
@@ -66,7 +63,9 @@ export function parseMemoryDraft(text: string): { trigger: string; scope: Memory
   const scope = (parsed as { scope?: unknown }).scope;
   if (!trigger || trigger.length > MEMORY_TRIGGER_LIMIT) return undefined;
   if (!SCOPES.includes(scope as MemoryScope)) return undefined;
-  return { trigger, scope: scope as MemoryScope };
+  const conclusion = (parsed as { conclusion?: unknown }).conclusion;
+  if (conclusion !== undefined && (typeof conclusion !== "string" || !conclusion.trim() || conclusion.length > 1200)) return undefined;
+  return { trigger, scope: scope as MemoryScope, ...(typeof conclusion === "string" ? { conclusion: conclusion.trim() } : {}) };
 }
 
 /** 摘要缓存键:成员 id 集合的稳定串。成员变了就重做,没变就复用。 */
@@ -105,7 +104,7 @@ export function renderDirectoryDigestFallback(
   const rest = rows.length - head.length;
   return [
     ...head,
-    rest > 0 ? `- 另有 ${rest} 条,用 corpus_search 带 path_prefix=${dir || "."} 查明细。` : "",
+    rest > 0 ? `- 另有 ${rest} 条,用 knowledge search 描述 ${dir || "当前工作"} 的具体问题查明细。` : "",
   ].filter(Boolean).join("\n");
 }
 

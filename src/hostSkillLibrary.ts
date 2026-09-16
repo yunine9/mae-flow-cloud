@@ -329,9 +329,12 @@ function archiveLive(
     ? sha256(readFileSync(skillFile)) : "";
   const { files, bytes } = packageStats(live);
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
-  const versionId = `${stamp}-${digest.slice(0, 12)}`;
+  let versionId = `${stamp}-${digest.slice(0, 12)}`;
   const versionRoot = join(dataDir, VERSIONS_DIR, directory);
   mkdirSync(versionRoot, { recursive: true });
+  // 同一秒可被多位成员连续维护；相同正文仍需分别保留操作快照。
+  let sequence = 0;
+  while (existsSync(join(versionRoot, versionId))) versionId = `${stamp}-${digest.slice(0, 12)}-${++sequence}`;
   const record: SkillVersionRecord = {
     version_id: versionId,
     archived_at: new Date().toISOString(),
@@ -865,7 +868,7 @@ export function rollbackHostSkill(
 ): Promise<SkillOperationRecord> {
   return serialized(() => {
     assertDirectoryName(directory);
-    if (!/^[0-9TZ]+-[0-9a-f]{12}$/.test(versionId)) {
+    if (!/^[0-9TZ]+-[0-9a-f]{12}(?:-[1-9][0-9]*)?$/.test(versionId)) {
       throw new SkillLibraryError(`版本号不合法: ${versionId}`);
     }
     const versionDir = join(dataDir, VERSIONS_DIR, directory, versionId);

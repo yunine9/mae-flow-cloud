@@ -17,7 +17,7 @@ from .host_capability import (
     host_managed_continuous_review, verify_host_proof)
 from .host_receipts import (
     attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
-    save_with_host_proof, trusted_active_batch, trusted_current_lifecycle,
+    save_with_host_proof, trusted_active_batch, trusted_feedback_loop,
     trusted_pipeline_projection)
 from .selection_reconcile import reconcile_selection
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
@@ -61,13 +61,22 @@ def _text(value, name, limit=4000, required=True):
     return result
 
 def _loop(state):
-    loop = state.setdefault("delivery_loop", {
-        "schema": STATE_SCHEMA,
-        "delivery_round": 0,
-        "active_batch_id": "",
-        "batches": [],
-        "close_events": [],
-    })
+    # delivery_loop 可能是 None(老任务、首次推送前还没开过反馈批次)。
+    # setdefault 只在 key 不存在时写默认值,key 存在但值是 None 时不覆盖——
+    # 不处理 None 的话,后续 loop.get("schema") 直接 AttributeError,整条
+    # delivery 链死。None 跟"不存在"语义一致,都表示还没初始化。
+    loop = state.get("delivery_loop")
+    if loop is None:
+        loop = {
+            "schema": STATE_SCHEMA,
+            "delivery_round": 0,
+            "active_batch_id": "",
+            "batches": [],
+            "close_events": [],
+        }
+        state["delivery_loop"] = loop
+    elif not isinstance(loop, dict):
+        _die("delivery_loop 状态损坏")
     if loop.get("schema") != STATE_SCHEMA:
         _die("delivery_loop 状态版本不受支持")
     loop.setdefault("delivery_round", 0)
@@ -188,16 +197,10 @@ def _open(flow, state, args):
     _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     if host_managed_continuous_review():
-        existing_loop = state.get("delivery_loop")
-        active_id = (str(existing_loop.get("active_batch_id") or "")
-                     if isinstance(existing_loop, dict) else "")
-        predecessor_ok = (trusted_active_batch(state, (
-            "feedback-open", "feedback-result", "pipeline-record",
-            "selection-reconcile"))
-            if active_id
-            else trusted_current_lifecycle(state, (
-                "pipeline-record", "feedback-open", "feedback-result",
-                "intervention-reconcile", "selection-reconcile")))
+        # 开批只消费反馈调度事实；工作步骤、流水线、接管状态不是前置条件。
+        predecessor_ok = trusted_feedback_loop(state, (
+            "pipeline-record", "feedback-open", "feedback-result",
+            "intervention-reconcile", "selection-reconcile"))
         # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
         # 升级、迁移前的现场),这条命令本身就是第一环;这时还要求"先有
         # 前驱收据"等于宣布这单的反馈永远打不开,且无命令可补。
@@ -403,11 +406,10 @@ def _result(flow, state, args):
     proof_nonce = _verify_host_proof(state, args, "feedback-result", payload)
     _capability(state)
     if host_managed_continuous_review():
-        # A successfully closed batch has no active writer. Its signed final
-        # lifecycle is the predecessor for replay, not a missing active batch.
-        checker = (trusted_active_batch if (state.get("delivery_loop") or {}).get("active_batch_id")
-                   else trusted_current_lifecycle)
-        if not checker(state, ("feedback-open", "pipeline-record", "feedback-result", "selection-reconcile")):
+        # 活动批次与关闭后的重放统一核验反馈事实，不依赖 current。
+        if not trusted_feedback_loop(state, (
+                "feedback-open", "pipeline-record", "feedback-result",
+                "selection-reconcile", "intervention-reconcile")):
             _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)

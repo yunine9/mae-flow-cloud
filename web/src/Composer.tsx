@@ -77,6 +77,7 @@ export function takeoverActiveOf(assistant: DeveloperAssistantView): boolean {
 
 export function Composer({
   task,
+  isOwner,
   steerOnly = false,
   decisionDock = false,
   dockContext,
@@ -86,6 +87,8 @@ export function Composer({
   crossRepository = false,
 }: {
   task: TaskSummary;
+  /** 只有主责任人能把已停下的主会话从验证/待合入/失败现场恢复。 */
+  isOwner: boolean;
   /** 跨仓子任务:多一档「通知所有子任务」。原来是流末尾一个单独的折叠工具块,
    * 和输入区两套皮、两种口吻(2026-09-06 用户:"为什么不放在下面那个里面
    * 平行"),现在与「说给 Agent」「我来接手」并列成第三档。 */
@@ -158,6 +161,12 @@ export function Composer({
   }, [task.id, steerOnly]);
 
   const takeoverActive = takeoverActiveOf(assistant);
+  // 与服务端 interrupt 的 ownerMayResume 对齐：运行中允许协作者插话；
+  // 已进入宿主验证、等待合入或失败现场时，只允许责任人恢复主 Agent。
+  const resumesMainTask = isOwner
+    && ["verifying", "await_merge", "failed"].includes(task.status);
+  const canSteer = (task.status === "running" || resumesMainTask)
+    && !takeoverActive;
   useEffect(() => { setDecisionToolsOpen(false); }, [task.waiting?.waiting_id]);
   useEffect(() => {
     if (takeoverActive) setMode("assistant");
@@ -167,9 +176,9 @@ export function Composer({
   // 服务端快照(首轮拉取前一律按不可用算),人点过档位就不动了。
   useEffect(() => {
     if (modePicked.current || steerOnly) return;
-    setMode(task.status !== "running" && assistant.availability.available
+    setMode(!canSteer && assistant.availability.available
       ? "assistant" : "steer");
-  }, [task.status, assistant.availability.available, steerOnly]);
+  }, [canSteer, assistant.availability.available, steerOnly]);
 
   // 助手回复和工具结果分别来自快照与事件账。隐藏页不轮询。
   useEffect(() => {
@@ -300,15 +309,29 @@ export function Composer({
 
   const assistantWorking = ["acquiring", "working", "returning", "running"]
     .includes(assistant.state);
-  const canSteer = task.status === "running" && !takeoverActive;
   // @ 引用比纯文字宽:等人决定/排队时引用也有明确送达路径(决定
   // continuation / 并入使命),纯文字仍按原契约走决定卡。
   const canSteerKnowledge = !takeoverActive
-    && ["running", "queued", "waiting_for_human"].includes(task.status);
+    && (["running", "queued", "waiting_for_human"].includes(task.status)
+      || resumesMainTask);
   const refDeliveryHint = task.status === "running"
     ? "本轮工具调用结束后送达"
     : task.status === "queued" ? "任务启动时并入使命"
+    : resumesMainTask ? "恢复任务时并入使命"
     : "随下一次决定一起送达";
+  const steerEnabledCopy = resumesMainTask ? {
+    title: "让 Agent 继续处理",
+    detail: task.status === "await_merge"
+      ? "发送后恢复当前任务，Agent 按新要求继续修改；仍使用原分支和 MR。"
+      : task.status === "verifying"
+        ? "发送后停止当前验证并恢复 Agent，按新要求继续处理。"
+        : "发送后从当前现场恢复 Agent，继续处理你的新要求。",
+    placeholder: "说明需要继续处理什么，也可以说“帮我沉淀这条经验”",
+  } : {
+    title: "捎一句给正在跑的 Agent",
+    detail: "现在就能交办；当前工具结束后读取，结合正在做的工作处理",
+    placeholder: "补充开发要求，也可以说“帮我沉淀这条经验”",
+  };
   const steerDisabledReason = canSteer ? undefined
     : takeoverActive ? {
         title: "现在由你操作中",
@@ -334,7 +357,11 @@ export function Composer({
       }
     : task.status === "await_merge" ? {
         title: "当前正在等待合入",
-        detail: "代码和验证已经收口,请前往合入操作;此时没有运行中的主 Agent 接收补充。",
+        detail: "只有任务责任人可以补充新要求并恢复 Agent；其他人可在材料上提检视意见。",
+      }
+    : task.status === "failed" ? {
+        title: "当前任务已停下",
+        detail: "只有任务责任人可以从当前现场恢复 Agent 继续处理。",
       }
     : task.status === "queued" ? {
         title: "主任务还在排队",
@@ -424,10 +451,10 @@ export function Composer({
         ) : (
           <>
             <span className={`ws-composer-mode ${canSteer ? "active" : "quiet"}`}>
-              {canSteer ? "捎一句给正在跑的 Agent" : steerDisabledReason?.title ?? "主任务当前未运行"}
+              {canSteer ? steerEnabledCopy.title : steerDisabledReason?.title ?? "主任务当前未运行"}
             </span>
             <span className="ws-composer-hint">
-              {canSteer ? "不打断当前命令,模型读到后继续按流程推进"
+              {canSteer ? steerEnabledCopy.detail
                 : refs.length > 0 && canSteerKnowledge ? refDeliveryHint
                 : steerDisabledReason?.detail}
             </span>
@@ -441,7 +468,7 @@ export function Composer({
 
       {showSync && (
         <>
-          <Textarea id={`sync-${task.id}`} className="min-h-13 resize-y bg-surface"
+          <Textarea id={`sync-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={syncText} disabled={syncBusy} rows={3}
             placeholder="说清楚:哪个接口或约定变了,影响什么,哪里还需要谁确认…"
             onChange={(event) => { setSyncText(event.target.value); if (syncFeedback) setSyncFeedback(""); }}
@@ -468,12 +495,12 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <Textarea id={`steer-${task.id}`} className="min-h-13 resize-y bg-surface"
+          <Textarea id={`steer-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}
             placeholder={canSteer
-              ? "例如:掩码保留后四位,不要处理区号"
+              ? steerEnabledCopy.placeholder
               : refs.length > 0 && canSteerKnowledge
                 ? `可以再补一句说明;${refDeliveryHint}`
               : steerOnly && task.status === "waiting_for_human"
@@ -637,7 +664,7 @@ export function Composer({
             </div>
           )}
 
-          <Textarea id={`assistant-${task.id}`} className="min-h-13 resize-y bg-surface font-mono text-sm"
+          <Textarea id={`assistant-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface font-mono text-sm"
             value={assistantText}
             disabled={assistantRequestBusy || !assistantAvailable
               || assistant.state === "returning"}

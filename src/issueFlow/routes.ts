@@ -1,3 +1,4 @@
+import { listProductVersions } from "../configurationCenter.ts";
 /**
  * 问题流 HTTP 路由(/issues/*)。
  *
@@ -36,7 +37,7 @@
  *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/reviews          → 检视面板(意见+锚点检测+回合标记)
  *   POST /issues/:id/reviews          → 记一条检视草稿(悬停圈注)
- *   POST /issues/:id/reviews/send     → 提交检视(整体回退到问题分析)
+ *   POST /issues/:id/reviews/send     → 提交修改意见(结合当前工作处理)
  *   DELETE /issues/:id/reviews/:rid   → 移除一条意见(软删留痕)
  *   GET  /issues/:id/export           → 现场记录导出(单文件 Markdown:
  *                                      事件流逐字 + 台账,复盘用)
@@ -391,16 +392,24 @@ export async function handleIssueRoutes(
       // sFeatureNoName/sModuleNoName 与模块库做匹配;唯一高置信命中时
       // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
       let autoModuleId: string | undefined;
-      if (source === "dts" && ticket && !body.module_id && routeOptions.dts) {
+      let productVersion = String(body.product_version ?? "").trim();
+      let dtsVersion: string | undefined;
+      if (source === "dts" && ticket && routeOptions.dts
+          && (!body.module_id || !productVersion)) {
         try {
           const detail = await routeOptions.dts.detail(ticket);
-          autoModuleId = matchDtsToModule(
+          dtsVersion = detail.version;
+          if (!body.module_id) autoModuleId = matchDtsToModule(
             detail.featureName, detail.moduleName,
             routeOptions.issueFlow?.dataDir ?? "",
           );
         } catch {
           // 匹配失败不阻断发起,留给 Agent 处理。
         }
+      }
+      if (!productVersion && dtsVersion) {
+        productVersion = listProductVersions(issueFlow.dataDir)
+          .find(row => row.version === dtsVersion)?.version ?? "";
       }
       // 环境段(#150,ADR-0020 快照语义):environment_id 在场即从台账
       // 快照——前端永远没有密码,值由服务端解密取用;与手填字段互斥,
@@ -450,6 +459,7 @@ export async function handleIssueRoutes(
         ...(Array.isArray(body.repo_urls)
           ? { repoUrls: body.repo_urls.map(String) } : {}),
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
+        ...(productVersion ? { productVersion } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
         // 人工显式选的模块(DTS 预绑/登记页)带锁;服务端 matchDtsToModule
         // 的自动匹配是机器猜测,不带锁(其命中只在人工未选时生效)。
@@ -855,7 +865,17 @@ export async function handleIssueRoutes(
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
         return done(403, { error: "只有归属人能提交检视" });
       }
-      return done(200, issueFlow.submitReviews(id));
+      const body = await readBody(request);
+      return done(200, issueFlow.submitReviews(id, Array.isArray(body.ids) ? body.ids.map(String) : undefined));
+    }
+    if (method === "PATCH" && parts[2] === "reviews" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) return done(403, { error: "只有归属人能处理意见" });
+      const body = await readBody(request);
+      return done(200, issueFlow.updateExternalReview(id, decodeURIComponent(parts[3]), {
+        ...(typeof body.context === "string" ? { context: body.context } : {}),
+        ...(typeof body.reply === "string" ? { reply: body.reply } : {}),
+        ...(body.resolve === true ? { resolve: true } : {}),
+      }));
     }
     if (method === "DELETE" && parts[2] === "reviews" && parts.length === 4) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {

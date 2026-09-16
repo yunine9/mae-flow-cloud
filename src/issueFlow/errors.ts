@@ -30,6 +30,7 @@
  *     的既有码(不漂移)。
  */
 
+import { ConfigurationInputError } from "../configurationCenter.ts";
 import { StateConflictError } from "../humanGate.ts";
 
 // ---- 错误族声明 ----
@@ -72,6 +73,9 @@ export interface HttpError {
 /** 域错误 → {状态码, 对外消息};未登记的族返回 undefined,由调用方
  * 决定兜底(路由层原样上抛交服务器 500)。纯函数,可直接单测。 */
 export function toHttpError(error: unknown): HttpError | undefined {
+  if (error instanceof ConfigurationInputError) {
+    return { status: 400, message: error.message };
+  }
   if (error instanceof IssueNotFoundError) {
     return { status: 404, message: error.message };
   }

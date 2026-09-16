@@ -38,6 +38,36 @@ class PublishedFeedbackTests(unittest.TestCase):
         self.assertTrue(json.loads(output.getvalue())["idempotent"])
         save.assert_not_called()
 
+    def test_first_push_with_uninitialized_delivery_loop_passes_trusted_check(self):
+        # task-22 实测 bug:首次推送时 delivery_loop 还是 None,收据里封的是
+        # 空 {} 的 digest;record_publication 先调 _loop() 把它初始化成完整
+        # 结构,再查 trusted_feedback_loop,新 digest 跟收据旧 digest 对不上,
+        # 永远 die。修法:_loop() 移到 trusted 检查之后。
+        fresh = "b" * 40
+        value = {"current": "external_verify", "history": [],
+                 # delivery_loop 是 None——首次推送、还没开过反馈批次
+                 "delivery_loop": None}
+        payload = {"receipt": {
+            "sha": fresh, "ref": "refs/heads/task", "remote": "origin"}}
+        output = io.StringIO()
+
+        def trusted_before_initialization(state, _actions):
+            self.assertIsNone(state["delivery_loop"])
+            return True
+
+        with mock.patch.object(delivery, "_capability"), \
+                mock.patch.object(host_receipts, "has_host_receipt", return_value=True), \
+                mock.patch.object(host_receipts, "trusted_feedback_loop", side_effect=trusted_before_initialization), \
+                mock.patch.object(host_receipts, "save_with_host_proof") as save, \
+                mock.patch.object(delivery, "_head", return_value=fresh), \
+                contextlib.redirect_stdout(output):
+            record_publication(value, payload, {})
+        result = json.loads(output.getvalue())
+        self.assertFalse(result["idempotent"])
+        save.assert_called_once_with(value, {})
+        # _loop() 通过后才初始化,published 写进去了
+        self.assertEqual(fresh, value["delivery_loop"]["published"]["sha"])
+
     def test_mixed_batch_receipt_requires_human_but_not_retired_ci(self):
         old, fresh = "a" * 40, "b" * 40
         active = {"batch_id": "mixed", "base_sha": fresh, "status": "repairing", "items": [

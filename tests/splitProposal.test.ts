@@ -84,7 +84,7 @@ const PROPOSAL = {
   suggested_units: ["契约骨架:接口与注册占位", "过滤实现"],
 };
 
-test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启→确认卡两单元→串行子任务", async () => {
+test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启→确认卡两单元→同仓并行子任务", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-split-proposal-"));
   const repo = makeRepo(dataDir);
   const ticket = "REQ2026090301";
@@ -235,7 +235,11 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     assert.ok(inherited.records.some((item: any) => item.kind === "decision"
       && item.actor === "cloudbot" && item.text.includes(ACCEPT)), "人工答复原文与身份必须一同传递");
 
-    // 人确认:单号逐单元定(父单号不下传),同仓两单元串行。
+    assert.throws(() => internal.requirementGraphPlan(internal.tasks.get(parent.id),
+      { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
+      { "unit-contract": "REQ-SAME", "unit-filter": "REQ-SAME" }),
+      /同仓并行.*不能共用 AR/, "分析确认阶段就发现并行分支单号冲突");
+    // 人确认:单号逐单元定(父单号不下传),同仓无依赖单元并行。
     const confirmed = await service.confirmRequirementGraph(parent.id, {
       repository_assignees: { "unit-contract": "cloudbot", "unit-filter": "cloudbot" },
       repository_tickets: { "unit-contract": "REQ2026090302", "unit-filter": "REQ2026090303" },
@@ -246,8 +250,8 @@ test("提议拆分→决定卡→责任人选拆:掐会话、按分析单重启�
     const filterChild = service.get(graph.repositories[1].task_id!)!;
     await service.cancel(contractChild.id, "tester");
     await service.cancel(filterChild.id, "tester");
-    assert.deepEqual(filterChild.blocked_by, [contractChild.id],
-      "同仓第二个单元必须等第一个合入(串行不变)");
+    assert.deepEqual(filterChild.blocked_by ?? [], [],
+      "同仓无依赖单元不应被补入串行等待");
     assert.equal(contractChild.ticket, "REQ2026090302");
     assert.equal(internal.splitTools(internal.tasks.get(filterChild.id)).length, 0,
       "子任务不挂 propose_split");

@@ -6,15 +6,12 @@ import { Empty, EmptyDescription } from "@/components/Empty";
 import { OverlayDialog } from "./WarmupPanel";
 import { KnowledgeSource } from "./KnowledgeSource";
 import { knowledgeOrigin } from "./knowledgeOrigin";
-import { memoryPreparation } from "./memoryPresentation";
 import { cn } from "cn";
 import {
   syncTaskSkills,
   listTaskMemories,
   listTaskMemoryUsage,
-  readTaskMemory,
   type MemoryUsageRow,
-  withdrawTaskMemory,
   type MemoryRecord,
   interruptTask,
   type KnowledgeAction,
@@ -105,8 +102,6 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
   // 不逐条在文档上打标——文档太多,标满了反而看不见(用户拍板)。
   const [memories, setMemories] = useState<MemoryRecord[]>([]);
   const [memoryUsage, setMemoryUsage] = useState<MemoryUsageRow[]>([]);
-  const [memoryOpen, setMemoryOpen] = useState<{ id: string; content: string }>();
-  const [memoryBusy, setMemoryBusy] = useState(false);
   useEffect(() => {
     let alive = true;
     const load = () => {
@@ -117,20 +112,6 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
     const timer = setInterval(load, 15_000);
     return () => { alive = false; clearInterval(timer); };
   }, [taskId]);
-  async function openMemory(record: MemoryRecord) {
-    if (memoryOpen?.id === record.id) { setMemoryOpen(undefined); return; }
-    const found = await readTaskMemory(taskId, record.id);
-    if (found) setMemoryOpen({ id: record.id, content: found.content });
-  }
-  async function withdrawMemory(record: MemoryRecord) {
-    if (memoryBusy) return;
-    setMemoryBusy(true);
-    setFeedback("");
-    const result = await withdrawTaskMemory(taskId, record.id);
-    setMemoryBusy(false);
-    if (result.error) { setFeedback(result.error); return; }
-    setMemories(await listTaskMemories(taskId));
-  }
   const [busy, setBusy] = useState(false);
   const consumed = usage?.resources.filter((item) =>
     item.loaded_count > 0 || item.read_count > 0) ?? [];
@@ -170,7 +151,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
         id="knowledge-footprint-title" className="text-[15px]
         text-foreground">
         本任务知识</strong>
-        <p className="m-0 text-sm/relaxed text-muted-foreground">看见本任务可用与实际消费的知识，可中途提醒 Agent 用某一条；沉淀不在这里做——闭环的意见和修复会自动记成下面的记忆。</p></div>
+        <p className="m-0 text-sm/relaxed text-muted-foreground">看见本任务可用与实际消费的知识，可中途提醒 Agent 用某一条；闭环意见和修复会形成候选；责任人确认结论与范围后才作为经验复用。</p></div>
       <div className="flex items-center gap-2" aria-label="知识消费摘要">
         <span className="grid min-w-[62px] gap-px rounded-[9px] border
           border-line bg-muted px-2 py-1.5 text-center"><strong
@@ -227,64 +208,11 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
       </div>
     </OverlayDialog>}
 
-    <section aria-labelledby="knowledge-memories-title"
-      className="mx-3.5 mb-3.5 rounded-lg border border-line bg-surface p-3.5">
-      <header className="flex items-start justify-between gap-3">
-        <div className="grid gap-0.5"><strong id="knowledge-memories-title"
-          className="text-base font-semibold text-foreground">这单记下的</strong>
-          <small className="text-sm/relaxed text-muted-foreground">闭环的检视意见、修好的构建失败、你圈选记下的，都会自动落在这里；只读，圈错了可撤回。</small></div>
-        <Badge variant="merge">{memories.filter((item) => !item.withdrawn && !item.superseded_by).length} 条</Badge>
-      </header>
-      {feedback && <div className="mt-2"><Feedback>{feedback}</Feedback></div>}
-      {memories.length ? <ol className="mt-2.5 grid list-none gap-1.5 p-0">
-        {memories.filter((item) => !item.withdrawn).map((item) => {
-          const gone = !!item.superseded_by;
-          const preparation = memoryPreparation(item);
-          return <li key={item.id}
-            className={cn("relative rounded-[9px] border border-line bg-muted",
-              gone && "opacity-55")}>
-            <button type="button" aria-expanded={memoryOpen?.id === item.id}
-              className={cn("grid w-full grid-cols-[26px_minmax(0,1fr)] gap-2.5",
-                "p-2.5 text-left", !gone && "cursor-pointer")}
-              onClick={() => void openMemory(item)}>
-              <MemoryMark tone={["user_note", "agent_note"].includes(item.source)
-                ? "success" : item.source === "prepush_fix"
-                  ? "attention" : "default"}>
-                {["user_note", "agent_note"].includes(item.source) ? "记"
-                  : item.source === "prepush_fix" ? "修" : "议"}
-              </MemoryMark>
-              <span className="grid min-w-0 gap-0.5">
-                <strong className="flex flex-wrap items-center gap-1.5
-                  text-[13.5px] text-foreground">{item.trigger}
-                  {item.source !== "user_note" && <Badge variant={
-                    item.scope === "general" ? "success"
-                      : item.scope === "one_off" ? "warning" : "neutral"}
-                    title={preparation.title}>
-                    {item.scope === "one_off" ? "一次性" : item.scope === "general" ? "通用" : "局部"}
-                    {`·${preparation.label}`}</Badge>}
-                  {item.archived && <Badge variant="neutral"
-                    title={item.archive_reason}>已沉底</Badge>}
-                </strong>
-                <em className="text-[13px] not-italic leading-normal
-                  text-text">{gone ? "已撤回" : item.conclusion}</em>
-                <small className="text-sm text-faint">{item.source === "agent_note" ? "Agent 主动记录" : item.source === "user_note" ? `${item.author ?? "有人"} 圈选记下`
-                  : item.source === "prepush_fix" ? "Build-Fix 失败后修好"
-                    : "检视意见闭环"}
-                  {item.paths[0] ? ` · ${item.paths[0]}${item.line ? `:${item.line}` : ""}` : ""}
-                  {` · ${time(item.at)}`}</small>
-              </span>
-            </button>
-            {memoryOpen?.id === item.id && <pre className="m-0 break-words
-              border-t border-dashed border-line py-2.5 pl-12 pr-3 text-xs/relaxed
-              whitespace-pre-wrap text-muted-foreground">{memoryOpen.content}</pre>}
-            {item.source === "user_note" && !gone && <Button type="button"
-              variant="outline" size="xs"
-              className="absolute top-2 right-2.5" disabled={memoryBusy}
-              onClick={() => void withdrawMemory(item)}>撤回</Button>}
-          </li>;
-        })}
-      </ol> : <Empty className="mb-3.5 border p-3">
-        <EmptyDescription>还没有记下任何东西。检视意见闭环、Build-Fix 修好失败，或在材料上圈选「记为记忆」后会出现在这里。</EmptyDescription></Empty>}
+    <section aria-labelledby="knowledge-memories-title" className="mx-3.5 mb-3.5 rounded-lg border border-line bg-surface p-3.5">
+      <strong id="knowledge-memories-title" className="text-base">经验沉淀</strong>
+      <p className="my-2 text-sm text-muted-foreground">自动整理 {memories.filter(item => !item.withdrawn && !item.superseded_by).length} 条记录，
+        其中 {memories.filter(item => !item.withdrawn && !item.superseded_by && (item.review?.status ?? "pending") === "pending").length} 条待确认。不影响任务继续。</p>
+      <a className="inline-flex rounded-md border border-border px-3 py-2 text-sm font-medium text-primary" href={`/?experience=1&source_task=${encodeURIComponent(taskId)}`}>查看经验沉淀</a>
     </section>
     <section aria-labelledby="knowledge-memory-usage-title"
       className="mx-3.5 mb-3.5 rounded-lg border border-line bg-surface p-3.5">
@@ -302,12 +230,12 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             text-left">
             <MemoryMark tone={row.moment === "search" || row.moment === "expand"
               ? "plain" : "default"}>
-              {row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
+              {row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
                 : row.moment === "edit" ? "改" : row.moment === "search" ? "查" : "展"}
             </MemoryMark>
             <span className="grid min-w-0 gap-0.5">
               <strong className="flex flex-wrap items-center gap-1.5
-                text-[13.5px] text-foreground">{row.moment === "launch" ? "开局推送"
+                text-[13.5px] text-foreground">{row.moment === "context" ? (row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
                 : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
                   : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时${row.digest ? "推送目录摘要" : "提醒"}`
                     : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`

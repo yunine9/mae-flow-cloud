@@ -153,7 +153,7 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
       owner: "dev", repositories: [origin],
     }, "tester");
     updateBusinessModule(dataDir, archived.id,
-      { status: "archived" }, "tester", true, true);
+      { status: "archived" }, "tester");
     // 零仓模块是存量脏数据(保存口已强制至少一仓),登记同样机械打回。
     mkdirSync(join(dataDir, "business-modules", "empty-mod"), { recursive: true });
     writeFileSync(

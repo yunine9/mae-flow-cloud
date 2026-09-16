@@ -168,12 +168,11 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     assert.equal(service.get(created.id).status !== "failed", true,
       "拉取失败不拖垮会话");
 
-    // ── 票 02:注入。平台通知把意见清单喂给 AI(不举卡),修复回合照剧本跑。 ──
-    await until(() =>
-      JSON.stringify(model.requests).includes("mr-review-replies.json"),
-    "注入通知到达模型");
-    assert.match(JSON.stringify(model.requests), /连接池没有超时回收/,
-      "通知携带意见正文清单");
+    // 原始意见只同步待判断批注，责任人交办前不通知模型。
+    assert.equal(JSON.stringify(model.requests).includes("mr-review-replies.json"), false);
+    // 显式准备已授权的回复草稿，继续验证原有 outbox 投递。
+    writeFileSync(join(dataDir, "issues", created.id, "mr-review-replies.json"),
+      JSON.stringify([{ discussion_id: "D1", body: "已修复连接池回收" }]));
 
     // ── 票 03:草稿 → 出站信箱 → 投递 CodeHub。 ──
     const d1Discussion = platform.discussions.find((item) => item.id === "D1")!;
@@ -221,8 +220,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     await until(() => d2.replies.length > 0, "重写草稿后 D2 投递");
     assert.match(d2.replies.at(-1)!, /重写/);
 
-    // 收口即停(票 01 范围边界):验绿收口后监看退出,收口后的新意见
-    // 不再追——修它的责任在 T2 的门禁注入,不在发现器。
+    // 验绿后仍发现迟到意见，责任人在托管期间不会漏掉新报告。
     const pushedSha = service.get(created.id).pushes!.at(-1)!.sha;
     platform.finishPipeline(pushedSha, "success");
     await until(() => {
@@ -233,11 +231,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       id: "D4", file: "src/Late.java", line: 1,
       author: "迟到检视人", body: "收口后才提的意见",
     });
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    assert.equal(
-      (service.get(created.id).feedback ?? [])
-        .filter((record) => record.source_id === "D4").length, 0,
-      "收口后监看应已退出,不再落账");
+    await until(() => (service.get(created.id).feedback ?? []).some(record => record.source_id === "D4"), "验绿后的新报告仍落账");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -309,11 +303,11 @@ test("关自动修(repair_rounds=0):检视意见标待人工,不注入模型", a
     await until(() => {
       const record = (service.get(created.id).feedback ?? [])
         .find((item) => item.source_id === "D1");
-      return record?.status === "needs_human";
+      return record?.status === "open";
     }, "意见标待人工");
     const record = (service.get(created.id).feedback ?? [])
       .find((item) => item.source_id === "D1")!;
-    assert.match(record.resolution ?? "", /repair_rounds=0/);
+    assert.equal(record.status, "open", "原始观察仍保留，是否自动修不影响外部意见待判断语义");
     // 不注入:模型从未收到检视意见通知(以草稿文件指引为标记——开场词
     // 与简报里"检视意见"一词本就常见,不能当注入证据)。
     assert.equal(

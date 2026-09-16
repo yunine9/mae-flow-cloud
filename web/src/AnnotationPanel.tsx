@@ -1,3 +1,5 @@
+import { ReviewBody } from "./ReviewBody";
+import { supplementAnnotation } from "./api";
 import { OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 /**
  * 批注清单:记录批注内容、提交状态和原位置变化。
@@ -163,6 +165,8 @@ export function AnnotationPanel({
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [contextId, setContextId] = useState("");
+  const [contextText, setContextText] = useState("");
   const [editingId, setEditingId] = useState("");
   const [editingNote, setEditingNote] = useState("");
   const [mutationBusy, setMutationBusy] = useState("");
@@ -382,11 +386,8 @@ export function AnnotationPanel({
              onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="annot-panel-head">
         <div>
-          {/* 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与
-              机器门禁。原来只叫"批注",和第二节并排时读不出它就是"Cloud
-              平台上的检视意见"(用户实锤)。 */}
-          <span>工作台批注</span>
-          <strong>来自 Cloud 工作台的检视意见</strong>
+          <span>工作台与 MR</span>
+          <strong>检视批注</strong>
         </div>
         <div className="annot-panel-summary-side">
           <div className="annot-panel-counts">
@@ -562,7 +563,7 @@ export function AnnotationPanel({
                     <span>提的意见 · {relativeTime(item.created_at)}</span>
 
                   </div>
-                  <p>{item.note || "（只记了原文，没另写一句）"}</p>
+                  <ReviewBody text={item.note || "（只记了原文，没另写一句）"} />
                   {item.images && item.images.length > 0 && (
                     <div className="annot-images" aria-label="批注附图">
                       {item.images.map((image) => (
@@ -575,7 +576,7 @@ export function AnnotationPanel({
                   )}
                   {/* 圈的原文跟在意见下面、一行截断:它是"指着哪儿"的补充,整段留在
                       title 里,点位置也能直接回到那一行。 */}
-                  {(item.quote || item.anchor) && <blockquote
+                  {!item.external_review && (item.quote || item.anchor) && <blockquote
                     className={`annot-anchor${item.quote ? " has-quote" : ""}`}
                     title={item.quote ?? item.anchor}>
                     <span>圈的原文</span>{item.quote ?? item.anchor}
@@ -619,6 +620,10 @@ export function AnnotationPanel({
                   )}
                 </div>
               )}
+              {item.external_review && <div className="mt-2 flex items-center gap-3 text-sm text-muted-foreground">
+                <span>来自 MR · 讨论 #{item.external_review.discussion_id} · 本地处理不代表远端已解决</span>
+                {item.external_review.mr_url && /^https?:\/\//.test(item.external_review.mr_url) && <a className="rounded-md border border-border px-2 py-1 font-medium text-ink hover:bg-muted" href={item.external_review.mr_url} target="_blank" rel="noreferrer">打开 MR</a>}
+              </div>}
               {item.agent_context?.revision === (item.rework ?? 0) && <p className="mt-2 text-sm text-muted-foreground">责任人补充：{item.agent_context!.text}</p>}
               {item.owner_reply && (
                 <div className="annot-owner-reply">
@@ -631,9 +636,21 @@ export function AnnotationPanel({
                 </div>
               )}
               <div className="tw-root flex flex-wrap items-center gap-2 pt-3">
-              {closure.can_edit && !editing && (
+              {closure.can_edit && !item.external_review && !editing && (
                 <Button type="button" size="sm" variant="ghost" disabled={!!mutationBusy}
                   onClick={() => { setEditingId(item.id); setEditingNote(item.note); }}>修改 / 补充</Button>
+              )}
+              {closure.owner_controlled && closure.can_route && !item.owner_reply && !item.resolution && !item.agent_assigned && (
+                contextId === item.id ? <div className="w-full rounded-md border border-border bg-muted/30 p-3">
+                  <Textarea rows={3} value={contextText} placeholder="补充你希望怎么改；保留检视原文，保存后统一批量交办"
+                    onChange={event => setContextText(event.target.value)} />
+                  <Button variant="ghost" size="sm" onClick={() => setContextId("")}>取消</Button>
+                  <Button size="sm" disabled={!!mutationBusy} onClick={() => void mutateAnnotation(item.id, async () => {
+                    const result = await supplementAnnotation(taskId, item.id, contextText);
+                    if (!result.error) setContextId("");
+                    return result;
+                  })}>保存要求</Button>
+                </div> : <Button variant="outline" size="sm" onClick={() => { setContextId(item.id); setContextText(item.agent_context?.text ?? ""); }}>补充修改要求</Button>
               )}
               {closure.owner_controlled && closure.can_route && !item.resolution && !item.owner_reply
                 && (item.status === "draft" || item.sent_via === "owner_pending") && (

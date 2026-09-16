@@ -1,6 +1,7 @@
 import { StateConflictError } from "./humanGate.ts";
 import { bindArchifyArtifact, storyArchitecture } from "./storyArchitecture.ts";
 import { renderArchify } from "./archifyRender.ts";
+import { compileSemanticArchitecture } from "./semanticArchitecture.ts";
 import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { requirementDiff } from "./documentDiff.ts";
 import { readStoryOutput } from "./overallStoryAgent.ts";
@@ -82,7 +83,8 @@ export class OverallStoryCoordinator<T extends Owner> {
     && (task.summary.requirement_graph.source_document === "story.md"
       || Boolean(task.summary.requirement_graph.repositories.length)); }
   /** 分析 Agent 的 Story 直接进入现有版本库，不再等待子任务后另写汇总。 */
-  adoptAnalysis(id: string, content: string, by: string, architecture?: string): void {
+  adoptAnalysis(id: string, content: string, by: string, architecture?: string,
+    semanticArchitecture?: string): void {
     const task = this.owner(id);
     if (this.active.has(id)) throw new TaskControlError("整体 Story 正在更新，请稍后重试");
     const state = this.recover(task);
@@ -112,6 +114,38 @@ export class OverallStoryCoordinator<T extends Owner> {
     state.confirmed = { revision, by, at: new Date().toISOString() };
     writeStoryState(task.summary.workspace, state);
     this.options.published?.(task, content, revision);
+    if (!architecture?.trim() && semanticArchitecture?.trim()) {
+      const controller = new AbortController();
+      const promise = Promise.resolve().then(async () => {
+        const artifact = await compileSemanticArchitecture(content, semanticArchitecture);
+        const projection = storyArchitecture(content, artifact);
+        const errors = projection.warnings.filter((message) => message.startsWith("平台架构产物"));
+        for (const diagram of projection.diagrams) {
+          const rendered = await renderArchify(diagram.source);
+          if (!rendered.html || rendered.error) errors.push(rendered.error || "架构图渲染失败");
+        }
+        if (!projection.diagrams.length || errors.length) throw new Error(errors.join("；") || "未生成可展示的架构图");
+        if (controller.signal.aborted || this.stopped || this.options.task(id) !== task) return;
+        const current = readStoryState(task.summary.workspace);
+        if (current.current !== revision) return;
+        writeFileSync(storyRevisionPath(task.summary.workspace, revision, "architecture.json"),
+          artifact, { mode: 0o600 });
+        current.job = undefined; current.error = undefined; current.error_kind = undefined;
+        writeStoryState(task.summary.workspace, current);
+      }).catch((error) => {
+        if (this.options.task(id) !== task || !existsSync(task.summary.workspace)) return;
+        const current = readStoryState(task.summary.workspace);
+        if (current.current !== revision) return;
+        current.job = undefined; current.error_kind = "architecture";
+        current.error = `架构语义编译失败：${error instanceof Error ? error.message : String(error)}`;
+        writeStoryState(task.summary.workspace, current);
+      }).finally(() => { this.active.delete(id); });
+      const current = readStoryState(task.summary.workspace);
+      current.job = { id: revision, by, started_at: new Date().toISOString(),
+        kind: "architecture", progress: "正在程序化布局模块协作图" };
+      writeStoryState(task.summary.workspace, current);
+      this.active.set(id, { promise, controller });
+    }
   }
   private mutable(task: T) {
     if (task.summary.parent_task_id) throw new TaskControlError("请在主任务中生成、更新或确认整体 Story");

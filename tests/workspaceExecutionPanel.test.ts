@@ -135,6 +135,28 @@ test("补充给主任务置灰时明确解释原因，而不是只留一个灰�
   assert.match(composer, /: steerDisabledReason\?\.detail\}/);
 });
 
+test("责任人可从验证、等待合入和失败现场继续 Agent，协作者仍受权限约束", () => {
+  assert.match(workspace,
+    /isOwner=\{viewerUsername === \(task\.luban_account \?\? "本地用户"\)\}/,
+    "Composer 必须拿到精确责任人身份，不能把管理员或协作者当责任人");
+  assert.match(composer,
+    /const resumesMainTask = isOwner\s*&& \["verifying", "await_merge", "failed"\]\.includes\(task\.status\)/);
+  assert.match(composer,
+    /const canSteer = \(task\.status === "running" \|\| resumesMainTask\)/,
+    "前端可用范围须与服务端 ownerMayResume 对齐");
+  assert.match(composer, /发送后恢复当前任务，Agent 按新要求继续修改；仍使用原分支和 MR/);
+  assert.match(composer, /setMode\(!canSteer && assistant\.availability\.available/,
+    "可直接恢复主 Agent 时不能默认切到开发助手");
+});
+
+test("右栏长输入只在输入框内部滚动，不得挤没上方会话流", () => {
+  const boundedInputs = composer.match(
+    /className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface/g,
+  ) ?? [];
+  assert.equal(boundedInputs.length, 3,
+    "插话、跨仓同步和开发助手输入框都必须有最大高度与内部滚动");
+});
+
 test("责任人能在终态任务上看到删除入口，并必须二次确认", () => {
   assert.match(workspace,
     /const deletable = canOperate && \["completed", "failed", "canceled"\]/);
@@ -275,4 +297,32 @@ test("需求确认复用标准决定卡，并收成一个明确的通过按钮",
     "确认按钮不应再次夹带批注，批注要先独立交给文档 Agent 闭环");
   assert.doesNotMatch(workspace, /编辑需求原文|保存修改/,
     "人工只提检视意见，不与 Agent 同时编辑需求正本");
+});
+
+
+test("增量浏览独立于审批卡，完整浏览保留按文件加载", () => {
+  assert.match(workspace, /readDiffReview\(task.id\)/);
+  assert.match(workspace, /const pushReview = \(browsingReview.*\?\? approvalReview/);
+  assert.match(workspace, /manifest=\{!scopedDiff/);
+  assert.match(workspace, /task.status === "waiting_for_human"[^]*needsDeliverySelection\(task.waiting\)/,
+    "只读浏览不会开放交付勾选");
+});
+
+
+test("任务详情及子页使用居中弹窗，跳转入口保留按钮外观", () => {
+  const inspector = readFileSync(resolve("web/src/TaskInspector.tsx"), "utf8");
+  assert.match(inspector, /<DialogContent/);
+  assert.doesNotMatch(inspector, /SheetContent|variant="link"/);
+  assert.match(inspector, /max-h-\[calc\(100dvh-2rem\)\]/);
+  assert.match(inspector, /overflow-y-auto/);
+  assert.match(inspector, /render=\{<a href=\{task.delivery.mr_url\}/);
+});
+
+test("带文字返回按钮占独立网格，窄窗口材料工具允许换行", () => {
+  const css = readFileSync(resolve("web/src/tailwind.css"), "utf8");
+  assert.match(workspace, /className="ws-back-button /);
+  assert.match(css, /:is\(\.ws-back, \.ws-back-button\) \{ grid-area: back/);
+  assert.doesNotMatch(css, /grid-template-columns: (?:30|36)px minmax/);
+  assert.match(css, /\.ws-material-toolbar \{[^}]*flex-wrap: wrap/);
+  assert.match(workspace, /ws-source-switch h-auto justify-start/);
 });

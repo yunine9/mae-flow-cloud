@@ -4,7 +4,8 @@ import { join } from "node:path";
 import type { MemoryStore } from "./taskMemory.ts";
 
 export interface MemoryUsageEvent {
-  moment: "launch" | "phase" | "edit" | "search" | "expand";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context";
+  status?: "ready" | "unavailable";
   ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
 }
 export function recordMemoryUsage(context: {
@@ -20,7 +21,7 @@ export function recordMemoryUsage(context: {
     try {
       const kind = event.moment === "search" || event.moment === "expand"
         ? event.moment : "push";
-      for (const id of event.ids) {
+      for (const id of event.ids.filter(id => id.startsWith("c-"))) {
         context.store().ledger.append({ kind, id, task: context.taskId,
           note: event.moment === "edit" ? event.dir : event.phase ?? event.moment });
       }
