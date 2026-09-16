@@ -1,14 +1,17 @@
 /** Builds a local preview using the unchanged Archify renderer plus module details. */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+import { classifyStoryFixture } from './moduleRoles.ts';
 import { compile } from './compile.ts';
 import { renderArchify } from '../../src/archifyRender.ts';
 const out=resolve(process.env.ARCHIFY_PROBE_OUT || '.local/archify-probe');
 const names=['fast-1','fast-2','fast-3','semantic-1','semantic-2','semantic-3'];
-const records=names.filter(n=>existsSync(join(out,`${n}.html`))).map(name=>({name,data:JSON.parse(readFileSync(join(out,`${name}.json`),'utf8')),result:JSON.parse(readFileSync(join(out,`${name}.result.json`),'utf8'))}));
+const records=names.filter(n=>existsSync(join(out,`${n}.html`))).map(name=>({name,data:name==='fast-1'?classifyStoryFixture(JSON.parse(readFileSync(join(out,`${name}.json`),'utf8'))):JSON.parse(readFileSync(join(out,`${name}.json`),'utf8')),result:JSON.parse(readFileSync(join(out,`${name}.result.json`),'utf8'))}));
 const decorate=(html:string)=>html.replace('</head>',`<style>.cards{display:none!important}.container{max-width:none!important}.diagram-container{min-height:530px}svg [data-node-label]{font-size:18px}svg [data-detail-anchor]{font-size:18px}svg text[data-detail="context"]{font-size:12px}</style></head>`).replace('</body>',`<script>document.addEventListener('click',e=>{const n=e.target.closest('[data-node-id]');if(n)parent.postMessage({kind:'module',id:n.dataset.nodeId},'*')});</script></body>`);
 for(const r of records){
- writeFileSync(join(out,`${r.name}.interactive.html`),decorate(readFileSync(join(out,`${r.name}.html`),'utf8')));
+ const overview=await renderArchify(await compile(r.data,out));
+ if(!overview.html) throw Error('Overview render failed: '+overview.error);
+ writeFileSync(join(out,`${r.name}.interactive.html`),decorate(overview.html));
  for(const m of r.data.modules){
    const ids=new Set([m.id,...r.data.relations.filter((e:any)=>e.from===m.id||e.to===m.id).flatMap((e:any)=>[e.from,e.to])]);
    const subset={...r.data,title:m.name+' · 直接协作关系',modules:r.data.modules.filter((x:any)=>ids.has(x.id)),relations:r.data.relations.filter((e:any)=>ids.has(e.from)&&ids.has(e.to))};

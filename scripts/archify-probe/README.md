@@ -29,3 +29,7 @@ MAE_FLOW_UI_FIXTURE_MODE=1 node --import tsx src/serve.ts --data .local/archify-
 ```
 
 登录 `http://127.0.0.1:8850/work/task-1`（dev / mae-flow-demo），打开“架构图”。这是实际服务与正式前端，任务为明确标注的本地样本；不启动开发 Agent。使用生成过的 `fast-1.json` 和原始输入创建任务材料，宿主真实读取、核验并渲染。总览与模块局部图使用现有图标签切换，每个局部图只保留当前模块的两条简短说明。实验页的右侧联动尚未接入正式组件。目录已存在时拒绝覆盖；不要对其他服务数据目录运行。不要将这个本地演示账号部署到生产。
+
+模块 `type` 由语义生成阶段按实际职责给出，转换器保留它，使用 Archify 原生类型色和同语义图例；缺失类型标注“类型待明确”，不再全当后端。现有 fast-1 原始 GLM 输出没有类型，因此使用 moduleRoles.ts 中依据文档核对的样本分类，保留原始输出不改写。文档/模板为资料依赖，文件版本存储归入持久存储；不把意见回传臆断成消息队列。
+
+更新已经启动的隔离样本图源：`node --import tsx scripts/archify-probe/seed-service.ts --refresh-architecture`。只覆盖该固定本地 fixture 的架构产物，保留账号和任务状态。
