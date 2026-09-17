@@ -106,7 +106,7 @@ function MappingList({ kind }: { kind: string }) {
         const input = { name: edit.name, description: edit.description?.trim() || edit.name,
           repositories: edit.value.split("\n").map(v => v.trim()).filter(Boolean), status: edit.status };
         if (edit.id) await updateBusinessModule(edit.id, input);
-        else await createBusinessModule({ ...input, id: `module-${crypto.randomUUID()}` });
+        else await createBusinessModule(input);
       } else await productVersionRequest(edit.id ? "PUT" : "POST", { id: edit.id, version: edit.name, branch: edit.value });
       setEdit(undefined); await refresh();
     } catch (e) { setError(message(e)); } finally { setBusy(false); }

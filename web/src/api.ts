@@ -1554,7 +1554,7 @@ export async function getBusinessModules(): Promise<BusinessModuleCatalog> {
 }
 
 export async function createBusinessModule(input: {
-  id: string;
+  id?: string;
   name: string;
   description: string;
   owner?: string;

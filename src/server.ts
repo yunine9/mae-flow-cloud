@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -1510,7 +1511,7 @@ export function createTaskServer(
               ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
             return json(response, 201, view(createBusinessModule(dataDir, {
-              id: String(body.id ?? ""),
+              id: String(body.id ?? `module-${randomUUID()}`),
               name: String(body.name ?? ""),
               description: String(body.description ?? ""),
               owner,
