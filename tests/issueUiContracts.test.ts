@@ -791,25 +791,29 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
     "push_branch 描述不得再教 UT——单源在 fix 简报,双写必漂移");
 });
 
-// ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签)
+// ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签;
+// ---- 2026-09-17 ADR-0027 修订:「MR 检视」收编上方批注面板成第六签)
 // ---- 材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
 
-test("左栏五标签:顺序固定、元信息默认、DTS 无单隐藏,旧顶层页签引用清零", () => {
+test("左栏六标签:顺序固定、元信息默认、DTS 无单隐藏、MR 检视有批注才现身,旧顶层引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 五标签一次成表(ADR-0027:逐仓交付退役融合进元信息,对话现场降
-  // 末位),顺序即规格:元信息(会话名片,兼默认签)在首位,DTS 单据
-  // 第二,对话现场降末位——一签一名,不得改名换序。
+  // 六标签一次成表(ADR-0027 五签定局 + 2026-09-17 修订增「MR 检视」),
+  // 顺序即规格:元信息(会话名片,兼默认签)在首位,DTS 单据第二,
+  // 对话现场降末位、MR 检视垫后——一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
     ["meta:元信息", "dts:DTS单据", "doc:分析报告",
-      "changes:工作区变更", "events:对话现场"]);
-  // DTS 签条件渲染:无单场景整个隐藏(从禁用+tooltip 升级,屏蔽即诚实)。
+      "changes:工作区变更", "events:对话现场", "reviews:MR 检视"]);
+  // DTS 签条件渲染:无单场景整个隐藏(从禁用+tooltip 升级,屏蔽即诚实);
+  // 「MR 检视」签有批注才现身(正被看着时即便清空也留)。
   assert.match(sessionView,
-    /filter\(\(\{ key \}\) => key !== "dts" \|\| detail\.ticket\)/);
+    /filter\(\(\{ key \}\) => \(key !== "dts" \|\| detail\.ticket\)/);
+  assert.match(sessionView,
+    /&& \(key !== "reviews" \|\| showReviewsTab\)/);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
   // (#210)手搓 role=tablist 换原语:键盘箭头、roving tabindex 归原语。
@@ -823,15 +827,20 @@ test("左栏五标签:顺序固定、元信息默认、DTS 无单隐藏,旧顶�
   assert.match(sessionView, /setTab\("meta"\);\s*\n\s*\}, \[detail\.id\]\);/);
   // 分析报告在库的脉冲点挂「分析报告」页签(报告是主交付物,入口要
   // 找得到;#260 起页签即报告本身,旧右栏"分析报告已产出"CTA 已随
-  // #127 侧栏拆除一并退场)。
+  // #127 侧栏拆除一并退场)。「MR 检视」签同款引导:有待判断批注就挂点
+  // (轮询在会话层常驻,页签没开也数得出)。
   assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
+  assert.match(sessionView, /key === "reviews" && reviewsPending > 0/);
+  // 持续检视面板退役(2026-09-17):问题流反馈账只写流水线与 MR 讨论,
+  // 流水线不再上屏(要看去 CodeHub)、MR 讨论本就不进面板,面板恒空。
+  assert.doesNotMatch(sessionView, /FeedbackPanel/);
   // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
   assert.doesNotMatch(sessionView, /IssuePaneTabs/);
   assert.doesNotMatch(sessionView, /"materials"/);
   assert.doesNotMatch(sessionView, /materialsView/);
 });
 
-test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
+test("左栏六标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
@@ -860,8 +869,8 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
   // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
   assert.ok(
-    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 5,
-    "五个页签各需一枚 --workspace-tab-color");
+    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 6,
+    "六个页签各需一枚 --workspace-tab-color");
   assert.doesNotMatch(css, /\.issue-workspace/);
 });
 

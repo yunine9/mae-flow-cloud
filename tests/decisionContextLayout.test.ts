@@ -290,7 +290,9 @@ test("进度词表只在内核一份,前端不再自带阶段名;反馈按来源
     /\["配置与需求", "方案", "开发", "持续检视", "已合入"\]/);
   assert.doesNotMatch(workspace, /"已受理", "需求理解"/);
   assert.match(workspace, /current_phase: "尚未进入阶段"/);
-  assert.match(workspace, /function FeedbackPanel/);
+  // FeedbackPanel 已随 2026-09-17 退役(唯一使用方问题会话收编页签);
+  // 反馈按来源逐条展示的契约由任务侧检视画布在用的 FeedbackList 承接。
+  assert.match(workspace, /function FeedbackList/);
   assert.match(workspace, /FEEDBACK_SOURCE_LABEL/);
   assert.match(workspace, /item\.summary/,
     "界面必须展示反馈正文，不能只给数量");

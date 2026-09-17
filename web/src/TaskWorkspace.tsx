@@ -1,7 +1,7 @@
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
-import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
+import { feedbackCategory, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
 import { pendingReviewAnnotation } from "../../src/reviewDecisionContract";
 import { PersonName } from "./People";
 import { RefreshMrButton } from "./RefreshMrButton";
@@ -403,14 +403,6 @@ const FEEDBACK_SOURCE_LABEL: Record<FeedbackSource, string> = {
   push_confirmation: "推送前复检",
 };
 
-function groupFeedback(feedback: FeedbackRecord[]) {
-  const grouped = new Map<FeedbackSource, FeedbackRecord[]>();
-  for (const item of feedback) {
-    grouped.set(item.source, [...(grouped.get(item.source) ?? []), item]);
-  }
-  return [...grouped];
-}
-
 /** 意见状态徽标词表(#227 换装:原 .feedback-state.{status} 色板收编为
  * Badge variant;needs_human/awaiting 压在人或检视人手里=warning)。 */
 const FEEDBACK_BADGE: Record<FeedbackRecord["status"], ComponentProps<typeof Badge>["variant"]> = {
@@ -478,25 +470,10 @@ export function FeedbackList({ kicker, title, hint, items, mrUrl }: {
   </section>;
 }
 
-/** 缺陷单等没有「检视意见」弹层的页面用:按来源分节的完整列表。 */
-export function FeedbackPanel({ feedback }: { feedback: FeedbackRecord[] }) {
-  const active = feedback.filter(item => !feedbackEnded(item)).length;
-  return <section className="grid gap-2.5" aria-label="持续检视反馈明细">
-    <header className="flex items-center justify-between gap-3">
-      <span className="flex items-baseline gap-2">
-        <strong className="text-[13px] text-text-strong">持续检视</strong>
-        <small className="text-xs text-muted-foreground">同一个任务、分支和 MR</small>
-      </span>
-      <Badge variant={active ? "warning" : "success"}>
-        {active ? `${active} 条进行中` : feedbackSummary(feedback)}
-      </Badge>
-    </header>
-    {groupFeedback(feedback).map(([source, items]) => (
-      <FeedbackList key={source} kicker="持续检视"
-        title={FEEDBACK_SOURCE_LABEL[source]} items={items} />
-    ))}
-  </section>;
-}
+/** 缺陷单等没有「检视意见」弹层的页面用的按来源分节列表(FeedbackPanel)
+ *  已随 2026-09-17 退役:唯一使用方问题会话把 MR 检视批注收编成页签、
+ *  持续检视面板随流水线显示面撤除恒空,整块退场;FeedbackList 留给
+ *  任务侧检视画布的机器门禁告警节。 */
 
 /** 进度只有一个来源:任务 API 的 progress(服务端按内核 flow/phases.json
  * 一份词表给出,没有内核脉冲时也由服务端按状态占位)。前端不再自带任何
