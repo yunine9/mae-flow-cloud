@@ -129,7 +129,7 @@ function restoredRepositoryTechnologies(
       repository,
       technologies: item.technologies.filter((technology): technology is string =>
         typeof technology === "string").slice(0, 50),
-      confirmed: item.confirmed === true,
+      confirmed: item.technologies.some(technology => typeof technology === "string" && technology.length > 0),
       ...(typeof item.remembered === "boolean"
         ? { remembered: item.remembered } : {}),
     }];
@@ -329,6 +329,7 @@ export function LaunchWorkspace({
   const [documentLoading, setDocumentLoading] = useState(false);
   const [draggingDocument, setDraggingDocument] = useState(false);
   const [businessModuleId, setBusinessModuleId] = useState(validDraft?.businessModuleId ?? "");
+  const [moduleRefreshError, setModuleRefreshError] = useState("");
   const [title, setTitle] = useState(validDraft?.title ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -541,6 +542,33 @@ export function LaunchWorkspace({
       if (alive) setOptionsLoading(false);
     });
     return () => { alive = false; };
+  }, []);
+
+  // 配置中心另页打开，保留本页所有草稿和附件；返回时只刷新模块目录。
+  useEffect(() => {
+    let alive = true;
+    let request = 0;
+    const refreshModules = () => {
+      if (document.visibilityState === "hidden") return;
+      const current = ++request;
+      void getLaunchOptions().then(result => {
+        if (alive && current === request) {
+          setOptions(previous => previous ? { ...previous, business_modules: result.business_modules } : previous);
+          setModuleRefreshError("");
+        }
+      }).catch(() => {
+        if (alive && current === request) setModuleRefreshError("模块目录刷新失败，请点击刷新模块重试。");
+      });
+    };
+    window.addEventListener("focus", refreshModules);
+    document.addEventListener("visibilitychange", refreshModules);
+    window.addEventListener("refresh-business-modules", refreshModules);
+    return () => {
+      alive = false;
+      window.removeEventListener("focus", refreshModules);
+      document.removeEventListener("visibilitychange", refreshModules);
+      window.removeEventListener("refresh-business-modules", refreshModules);
+    };
   }, []);
 
   useEffect(() => {
@@ -1289,6 +1317,14 @@ export function LaunchWorkspace({
                     </select>
                     {!businessModules.length && <span className="mt-1 block text-sm text-muted-foreground">暂无业务模块，请先到配置中心创建。</span>}
                   </label>
+                  <div className="mt-2 flex items-center gap-3 text-sm">
+                    <a href="/configuration?tab=modules" target="_blank" rel="noopener noreferrer"
+                      className="text-primary underline" onClick={() => persistDraft(false)}>没有合适的模块？去配置中心新建 ↗</a>
+                    <button type="button" className="text-primary underline"
+                      onClick={() => window.dispatchEvent(new Event("refresh-business-modules"))}>刷新模块</button>
+                    <span className="text-muted-foreground">原页草稿保留，返回后自动刷新</span>
+                  </div>
+                  {moduleRefreshError && <p role="status" className="mt-1 text-sm text-danger">{moduleRefreshError}</p>}
                   {businessModules.length > 0 && <details
                     className="group mt-3 overflow-hidden rounded-lg border border-line bg-surface">
                     <summary className="grid min-h-[50px] grid-cols-[minmax(0,1fr)_auto_17px] cursor-pointer list-none items-center gap-[9px] px-[11px] py-[9px] [&::-webkit-details-marker]:hidden">
@@ -1689,7 +1725,7 @@ export function LaunchWorkspace({
                   : repositoryTicketBlocked
                     ? "请补齐逐仓 AR 单号"
                   : repositoryTechnologyBlocked
-                    ? "请确认仓库技术栈"
+                    ? "请选择仓库技术栈"
                   : repositoryProbeBlocked
                     ? repositoryProbeLoading || !repositoryProbeSettled
                       ? "正在检查代码仓"
@@ -1727,7 +1763,7 @@ export function LaunchWorkspace({
                     : repositoryTicketBlocked
                       ? "逐仓单号未完成"
                     : repositoryTechnologyBlocked
-                      ? "技术栈未确认"
+                      ? "请选择技术栈"
                     : repositoryProbeBlocked
                       ? repositoryProbeLoading || !repositoryProbeSettled
                         ? "检查仓库中"
