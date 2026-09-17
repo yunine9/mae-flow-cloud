@@ -1,6 +1,7 @@
+import { Markdown } from "./markdown";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { useEffect, useRef, useState } from "react";
-import { FileText, Search, Upload, ChevronRight, RefreshCw, MoreHorizontal } from "lucide-react";
+import { FileText, Search, Upload, RefreshCw, MoreHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -17,7 +18,7 @@ export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeA
   const [doc, setDoc] = useState<KnowledgeDocument>(), [error, setError] = useState("");
   const [kind, setKind] = useState("all");
   const [filter, setFilter] = useState("all"), [term, setTerm] = useState("");
-  const [tab, setTab] = useState("search"), [query, setQuery] = useState("");
+  const [tab, setTab] = useState("content"), [query, setQuery] = useState("");
   const [trial, setTrial] = useState<TrialResult>(), [hit, setHit] = useState<ChapterHit>();
   const [busy, setBusy] = useState(false), [form, setForm] = useState<"upload" | "edit" | "replace">();
   const [modules, setModules] = useState<BusinessModule[]>([]);
@@ -67,18 +68,20 @@ export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeA
   const lines = doc?.content?.split("\n") ?? [];
   const validHit = hit?.revision === doc?.revision ? hit : undefined;
   return <div className="knowledge-documents">
-    <header className="kd-toolbar"><h2>知识库</h2><Button onClick={() => setForm("upload")}><Upload size={18} /> 上传知识</Button></header>
+    <header className="kd-toolbar">
+      <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder="搜索知识名称" value={term} onChange={e => setTerm(e.target.value)} /></div>
+      <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+        <Select value={kind} onValueChange={value => setKind(value ?? "all")} items={[{value:"all",label:"全部类型"},{value:"document",label:"文档"},{value:"skill",label:"Skill"},{value:"rule",label:"规则"},{value:"example",label:"示例"},{value:"experience",label:"已采纳经验"}]}><SelectTrigger aria-label="知识类型" className="kd-type-select"><SelectValue /></SelectTrigger><SelectContent>{[["all","全部类型"],["document","文档"],["skill","Skill"],["rule","规则"],["example","示例"],["experience","已采纳经验"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+      <Button className="kd-add" onClick={() => setForm("upload")}><Upload size={18} /> 添加知识</Button>
+    </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
     <div className="kd-layout">
-      <aside className="kd-library">
-        <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder="搜索文档" value={term} onChange={e => setTerm(e.target.value)} /></div>
-        <nav className="kd-filters" aria-label="知识范围">{[["all", "全部"], ["platform", "平台通用"], ["module", "业务模块"], ["repository", "代码仓"]].map(([key, text]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{text}</button>)}</nav>
-        <Select value={kind} onValueChange={value => setKind(value ?? "all")} items={[{value:"all",label:"全部类型"},{value:"document",label:"文档"},{value:"skill",label:"Skill"},{value:"rule",label:"规则"},{value:"example",label:"示例"},{value:"experience",label:"已采纳经验"}]}><SelectTrigger aria-label="知识类型" className="w-full mb-3"><SelectValue /></SelectTrigger><SelectContent>{[["all","全部类型"],["document","文档"],["skill","Skill"],["rule","规则"],["example","示例"],["experience","已采纳经验"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+      <aside className="kd-library"><div className="kd-list-heading">团队知识 <span>{visible.length}</span></div>
         <div className="kd-doc-list">{visible.map(item => <button key={item.id} className={`kd-doc-row ${selected === item.id ? "selected" : ""}`} onClick={() => setSelected(item.id)}>
           <FileText size={29} className="kd-file-icon" /><span className="kd-doc-info"><strong title={item.title}>{item.title}</strong><small>{scopeLabel(item)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
           <span className={`kd-status ${item.indexing?.state}`}>{labels[item.indexing?.state ?? "queued"]}</span>
         </button>)}{!visible.length && <div className="kd-empty">{rows.length ? "没有匹配的文档" : "上传一份手册，开始积累可复用知识。"}</div>}</div>
-        <p className="kd-library-tip">上传后自动整理，无需逐段确认</p>
+
       </aside>
       <section className="kd-detail">{!doc ? <div className="kd-empty">{selected ? "正在读取文档…" : "选择文档，查看内容或试搜知识"}</div> : <>
         <header className="kd-doc-header"><div><h2>{doc.title}</h2><div className="kd-tags"><span>{scopeLabel(doc)}</span>{doc.technologies.map(v => <span key={v}>{languageLabel(v)}</span>)}<span>{doc.product_versions.join("、") || "所有版本"}</span><span className={`kd-status ${status?.state}`}>{labels[status?.state ?? "queued"]}</span></div></div>
@@ -86,13 +89,13 @@ export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeA
         <div className="kd-meta">{status?.state === "ready" ? `${status.sections === undefined ? "索引已就绪" : `已整理 ${status.sections} 个章节`} · 原始文档保持不变` : status?.state === "failed" ? status.error : status?.state === "disabled" ? "已停用，不再用于 Agent 检索" : "后台正在准备知识索引，可先阅读原文"}
           {status?.state === "failed" && <Button variant="outline" size="sm" onClick={() => void documentRequest(`/${encodeURIComponent(selected)}/retry`, {}).then(refresh).catch(e => setError(e.message))}><RefreshCw size={14} /> 重试</Button>}</div>
         {doc.source && <div className="kd-source"><span title={doc.source.repository}>来自 {doc.source.repository} · {doc.source.branch} · {doc.source.path} · {doc.source.revision.slice(0, 8)}</span><Button variant="outline" size="sm" disabled={busy} onClick={() => void update({ repository_import: doc.source })}>从仓库更新</Button></div>}
-        <nav className="kd-tabs">{[["content", "文档内容"], ["search", "试搜这份知识"], ...(!doc.external ? [["history", "修改记录"]] : [])].map(([key, text]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{text}</button>)}</nav>
+        <nav className="kd-tabs">{[["content", "阅读文档"], ["search", "试搜知识"], ...(!doc.external ? [["history", "修改记录"]] : [])].map(([key, text]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{text}</button>)}</nav>
         {tab === "search" && <><form className="kd-trial-query" onSubmit={e => { e.preventDefault(); void search(); }}><div className="kd-search-input"><Search size={20} /><Input aria-label="试搜问题" placeholder="例如：写入文件后，应该由谁关闭文件？" value={query} onChange={e => setQuery(e.target.value)} /></div><Button type="submit" disabled={busy || !query.trim() || !doc.active}>{busy ? "检索中…" : "试搜"}</Button></form>
           {trial?.warnings.length ? <p role="status" className="kd-warning">{trial.available ? trial.warnings.join("；") : "知识索引尚未准备好或检索服务暂不可用。原文已保存，可先查看文档内容，稍后再试搜。"}</p> : null}
-          <div className="kd-results"><aside><strong>{trial ? trial.available ? `找到 ${trial.hits.length} 个相关章节` : "暂不能检索" : "相关章节"}</strong>{trial?.hits.map((item, i) => <button key={`${item.start_line}-${i}`} className={hit === item ? "active" : ""} onClick={() => setHit(item)}><span><b>{item.heading?.split(" > ").at(-1) || doc.title}</b><small>第 {item.start_line ?? 1}–{item.end_line ?? "?"} 行</small></span><ChevronRight size={17} /></button>)}{trial?.available && !trial.hits.length && <p className="kd-empty">没有找到相关章节，试试更具体的问题。</p>}</aside>
-            <article className="kd-reader">{validHit ? <><header><div><h3>{validHit.heading?.split(" > ").at(-1)}</h3><small>原文第 {validHit.start_line ?? 1}–{validHit.end_line ?? lines.length} 行</small></div><Button variant="ghost" onClick={() => setTab("content")}>查看完整文档 ↗</Button></header><div className="kd-lines">{lines.slice((validHit.start_line ?? 1) - 1, validHit.end_line).map((line, i) => <div key={i}><span>{(validHit.start_line ?? 1) + i}</span><pre>{line || " "}</pre></div>)}</div></> : <div className="kd-empty">{hit ? "文档已更新，请重新试搜" : "输入一个真实问题，查看命中的规则与原文。"}</div>}</article></div>
-          <p className="kd-footnote">Agent 通过 knowledge 工具检索，并按需读取命中章节。</p></>}
-        {tab === "content" && <div className="kd-full-content"><pre>{doc.content}</pre></div>}
+          <div className="kd-results"><aside><strong>{trial ? trial.available ? `找到 ${trial.hits.length} 个相关章节` : "暂不能检索" : "相关章节"}</strong>{trial?.hits.map((item, i) => <button key={`${item.start_line}-${i}`} className={hit === item ? "active" : ""} onClick={() => setHit(item)}><span><b>{item.heading?.split(" > ").at(-1) || doc.title}</b><small>第 {item.start_line ?? 1}–{item.end_line ?? "?"} 行</small></span></button>)}{trial?.available && !trial.hits.length && <p className="kd-empty">没有找到相关章节，试试更具体的问题。</p>}</aside>
+            <article className="kd-reader">{validHit ? <><header><div><small>{validHit.heading}</small><small>原文第 {validHit.start_line ?? 1}–{validHit.end_line ?? lines.length} 行</small></div><Button variant="ghost" onClick={() => setTab("content")}>查看完整文档 ↗</Button></header><Markdown text={lines.slice((validHit.start_line ?? 1) - 1, validHit.end_line).join("\n")} /></> : <div className="kd-empty">{hit ? "文档已更新，请重新试搜" : "输入一个真实问题，查看命中的规则与原文。"}</div>}</article></div>
+</>}
+        {tab === "content" && <div className="kd-full-content"><Markdown text={doc.content ?? ""} /></div>}
         {tab === "history" && <div className="kd-history">{[...doc.history].reverse().map((entry, i) => <div key={i}><strong>{entry.action}</strong><span>{entry.operator}</span><time>{new Date(entry.at).toLocaleString()}</time></div>)}</div>}
       </>}</section>
     </div>

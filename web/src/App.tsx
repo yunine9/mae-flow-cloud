@@ -1431,9 +1431,15 @@ export function App() {
       <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
         (dtsWide || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
-        <div>
+        <div className={view === "knowledge" ? "team-assets-heading" : undefined}>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
-          <p className={cn("m-0 text-sm text-(--muted)", view === "mine" && "flex flex-wrap items-center gap-2")}>{view === "mine" && <span className="font-mono text-sm font-medium leading-[1.4] text-(--muted) after:ml-2 after:content-['·'] after:text-(--faint)"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p>
+          {view === "knowledge" ? <>
+          <nav className="team-assets-tabs" aria-label="团队资产类型">
+            <button type="button" className={["documents", "knowledge", "modules"].includes(teamAssetTab) ? "active" : ""} onClick={() => selectTeamAssetTab("documents")}><strong>知识库</strong></button>
+            <button type="button" className={teamAssetTab === "memories" ? "active" : ""} onClick={() => selectTeamAssetTab("memories")}><strong>经验沉淀</strong></button>
+          </nav><div className="team-assets-secondary"><button type="button" className={teamAssetTab === "workflows" ? "active" : ""} onClick={() => selectTeamAssetTab("workflows")}>工作流</button><button type="button" className={teamAssetTab === "insights" ? "active" : ""} onClick={() => selectTeamAssetTab("insights")}>使用效能</button></div>
+          </> : <p className={cn("m-0 text-sm text-(--muted)", view === "mine" && "flex flex-wrap items-center gap-2")}>{view === "mine" && <span className="font-mono text-sm font-medium leading-[1.4] text-(--muted) after:ml-2 after:content-['·'] after:text-(--faint)"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p>}
+
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
           {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
@@ -1504,11 +1510,6 @@ export function App() {
         </section>}
 
         {view === "knowledge" && <section className="team-assets-workspace">
-          <nav className="team-assets-tabs" aria-label="团队资产类型">
-            <button type="button" className={["documents", "knowledge", "modules"].includes(teamAssetTab) ? "active" : ""} onClick={() => selectTeamAssetTab("documents")}><strong>知识库</strong></button>
-            <button type="button" className={teamAssetTab === "memories" ? "active" : ""} onClick={() => selectTeamAssetTab("memories")}><strong>经验沉淀</strong></button>
-            <div className="ml-auto flex gap-2"><button type="button" className={teamAssetTab === "workflows" ? "active" : ""} onClick={() => selectTeamAssetTab("workflows")}>工作流</button><button type="button" className={teamAssetTab === "insights" ? "active" : ""} onClick={() => selectTeamAssetTab("insights")}>使用效能</button></div>
-          </nav>
           {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectTeamAssetTab("documents")}>← 返回知识库</Button>}
           {teamAssetTab === "documents" ? <KnowledgeDocuments onManage={focus => {
             if (!focus) { selectTeamAssetTab("memories"); return; }
