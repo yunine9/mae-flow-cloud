@@ -1357,7 +1357,7 @@ export function App() {
             <SidebarGroupLabel>管理视角</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
+                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" />
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 {/* 问题处理对 admin 只读开放(#103):子页签只留「问题会话」,
                     登记入口不渲染;会话工作台自动落查看模式(写口仅归属人)。 */}
@@ -1399,7 +1399,7 @@ export function App() {
             <SidebarGroupLabel>团队信息</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" badge={waitingCount} />
+                <NavButton view="team" current={view} onSelect={selectView} label="团队需求" />
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
