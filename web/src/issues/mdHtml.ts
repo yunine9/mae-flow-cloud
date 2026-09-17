@@ -21,6 +21,7 @@ export function markdownToEditorHtml(
     .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,
       (_m, alt: string, src: string) =>
         `<img src="${resolveImage ? resolveImage(src) : src}" alt="${alt}">`)
+    .replace(/\\([.!?:;,()\[\]()_*#>\-])/g, "$1")
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
