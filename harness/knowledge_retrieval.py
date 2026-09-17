@@ -14,7 +14,7 @@ BGE_MODEL = "gpahal/bge-m3-onnx-int8"
 BGE_NOISE_FLOOR = 0.50
 
 
-async def retrieve(ms, query, sources, limit):
+async def retrieve(ms, query, sources, limit, sections=False):
     if not sources:
         return []
     vector = (await ms._embedder.embed([query]))[0]
@@ -25,7 +25,7 @@ async def retrieve(ms, query, sources, limit):
     # index records can consume the candidate budget. JSON escapes filter values.
     expression = "source in " + json.dumps(list(sources), ensure_ascii=False)
     depth = max(40, limit * 8)
-    fields = ["source", "content", "heading", "chunk_hash"]
+    fields = ["source", "content", "heading", "chunk_hash", "start_line", "end_line"]
     def search(field, data, metric):
         rows = store._client.search(
             collection_name=store._collection, data=[data], anns_field=field,
@@ -51,8 +51,11 @@ async def retrieve(ms, query, sources, limit):
                 seen.add(source)
                 result.append(row)
         return result
-    dense = first_per_source(dense)
-    keyword = first_per_source(keyword)
+    if not sections:
+        dense = first_per_source(dense)
+        keyword = first_per_source(keyword)
+    def result_key(entity):
+        return entity.get("chunk_hash", entity["source"]) if sections else entity["source"]
     # Exact code identifiers/flags survive a weak semantic score; ordinary
     # words and version numbers do not qualify as identifier evidence.
     anchors = [token for token in re.findall(r"[A-Za-z_][A-Za-z0-9_:.-]*", query)
@@ -61,6 +64,15 @@ async def retrieve(ms, query, sources, limit):
     def exact_identifier(entity):
         return any(re.search(r"(?<![\w])" + re.escape(token) + r"(?![\w])", entity.get("content", ""))
                    for token in anchors)
+    words = [word.lower() for word in re.findall(r"[A-Za-z_][A-Za-z0-9_:.-]*", query)
+             if len(word) >= 3 and word.lower() not in {"cpp", "java", "the", "and", "for", "what", "how", "can", "use", "should", "with", "are"}]
+    cjk_pairs = {part[i:i+2] for part in re.findall(r"[\u3400-\u9fff]+", query)
+                 for i in range(len(part)-1)}
+    def meaningful_keyword(entity):
+        content = entity.get("content", "").lower()
+        return (exact_identifier(entity)
+                or any(re.search(r"(?<![\w])" + re.escape(word) + r"(?![\w])", content) for word in words)
+                or any(pair in content for pair in cjk_pairs))
     candidates = {}
     for rank, hit in enumerate(dense, 1):
         entity = hit["entity"]
@@ -69,17 +81,19 @@ async def retrieve(ms, query, sources, limit):
             continue
         if ms._embedder.model_name == BGE_MODEL and score < BGE_NOISE_FLOOR and not exact_identifier(entity):
             continue
-        key = entity["source"]
+        key = result_key(entity)
         candidates[key] = {**entity, "semantic_score": score, "score": 1 / (60 + rank)}
     # Keyword ranking supplements surviving semantic candidates. A BM25 match on
     # a common term alone must not revive unrelated advice rejected above.
     for rank, hit in enumerate(keyword, 1):
-        key = hit["entity"]["source"]
+        if sections and not meaningful_keyword(hit["entity"]):
+            continue
+        key = result_key(hit["entity"])
         if key not in candidates and exact_identifier(hit["entity"]):
             candidates[key] = {**hit["entity"], "semantic_score": 0.0, "score": 0.0}
         if key in candidates:
             candidates[key]["score"] += 1 / (60 + rank)
-    hits = [hit for source, hit in candidates.items() if source in sources]
+    hits = [hit for hit in candidates.values() if hit["source"] in sources]
     return sorted(hits, key=lambda row: (-row["score"], -row["semantic_score"], row["source"]))[:limit]
 
 
@@ -92,7 +106,8 @@ async def index_document(ms, path):
     'check validity'. Keep short experiences whole, and prefix document chunks
     with their subject. Original Markdown stays untouched.
     """
-    from memsearch.chunker import Chunk, chunk_markdown, compute_chunk_id
+    from memsearch.chunker import Chunk, compute_chunk_id
+    from knowledge_chunks import split_markdown
     text = path.read_text(encoding="utf-8")
     body = re.sub(r"\A---\r?\n.*?\r?\n---(?:\r?\n|$)", "", text, count=1, flags=re.S)
     title_match = re.search(r"^#\s+(.+)$", body, re.M)
@@ -102,16 +117,19 @@ async def index_document(ms, path):
         chunks = [Chunk(content=f"适用场景：{title}\n{body}", source=source,
                         heading=title, heading_level=1, start_line=1, end_line=len(text.splitlines()))]
     else:
-        chunks = [Chunk(content=f"资料主题：{title}\n{c.content}", source=source,
-                        heading=c.heading or title, heading_level=c.heading_level,
+        chunks = [Chunk(content=f"资料主题：{title}\n章节：{c.heading}\n{c.content}", source=source,
+                        heading=c.heading or title, heading_level=1,
                         start_line=c.start_line, end_line=c.end_line)
-                  for c in chunk_markdown(body, source=source)]
+                  for c in split_markdown(text)]
     model = ms._embedder.model_name
     old = ms._store.hashes_by_source(source)
     def ident(chunk):
         return compute_chunk_id(chunk.source, chunk.start_line, chunk.end_line, chunk.content_hash, model)
     current = {ident(c) for c in chunks}
-    count = await ms._embed_and_store([c for c in chunks if ident(c) not in old])
+    # Similar lengths share a model batch, avoiding padding every short rule to
+    # the longest example in its original document order. IDs/order are stable.
+    pending = sorted((c for c in chunks if ident(c) not in old), key=lambda c: len(c.content))
+    count = await ms._embed_and_store(pending)
     # Only remove old chunks after replacement has been successfully indexed.
     stale = old - current
     if stale:

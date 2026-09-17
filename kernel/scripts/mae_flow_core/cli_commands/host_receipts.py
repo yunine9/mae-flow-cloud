@@ -319,18 +319,26 @@ def has_receipt_for(state, action):
     return False
 
 
-def has_host_receipt(state):
-    """Whether this task has ever produced a host receipt at all.
+def verify_feedback_facts(state):
+    """Validate existing feedback facts, not whether some host once ran.
 
-    第一条宿主动作必须有权开链。收据落在 Agent 够不着的信任根里
-    (0600、工作区之外),"一份都没有"只可能是"这个任务还没发生过宿主
-    动作"——老任务升级、迁移前的现场、刚建的任务——不可能是 Agent 把
-    它们删干净了。要求"开链之前先有链"只会把宿主自己锁在门外:反馈
-    永远打不开,而且没有任何命令能补开第一环。
+    Empty recovered tasks have no feedback facts to endorse. A historical close
+    (or any other receipt) must not force them to recreate an obsolete chain.
+    Nonempty loops still need authentic backing: otherwise publication could
+    re-sign forged results or silently dropped human feedback. A close receipt
+    seals those facts just as other host actions do; it is not a permanent lock.
+    Owner target/defer rollback is checked separately by host_capability before
+    this function, including when somebody clears the entire loop.
     """
-    for _authority, _record in _scan_receipts(state):
-        return True
-    return False
+    loop = state.get("delivery_loop")
+    if loop is None:
+        return
+    if isinstance(loop, dict) and not any(
+            value for key, value in loop.items()
+            if key not in ("schema", "delivery_round")):
+        return
+    if not trusted_feedback_loop(state):
+        _die("现有反馈事实与宿主收据不一致，拒绝重新签署被改写的反馈")
 
 
 def trusted_current_lifecycle(state, actions):
@@ -360,8 +368,10 @@ def trusted_pipeline_projection(state, projection):
     return False
 
 
-def trusted_feedback_loop(state, actions):
-    """Scheduling survives legitimate workflow movement, but not loop edits."""
+def trusted_feedback_loop(state):
+    """Feedback facts survive workflow movement and close; never endorse edits."""
+    actions = ("feedback-open", "feedback-result", "pipeline-record", "close",
+               "selection-reconcile", "intervention-reconcile")
     wanted = _digest(state.get("delivery_loop"))
     for authority, record in _scan_receipts(state):
         stored = record.get("projection")
@@ -443,7 +453,7 @@ def attest_host_receipts(state, args):
                          if active else None),
     }
     if getattr(args, "feedback_loop", False):
-        record["feedback_loop"] = trusted_feedback_loop(snapshot, lifecycle)
+        record["feedback_loop"] = trusted_feedback_loop(snapshot)
     print(json.dumps(record, ensure_ascii=False))
     return record
 

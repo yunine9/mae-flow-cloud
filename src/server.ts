@@ -1,3 +1,5 @@
+import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
+import { randomUUID } from "node:crypto";
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -403,6 +405,12 @@ export function createTaskServer(
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
+        && ["knowledge-candidates", "business-modules", "skills", "memories"].includes(parts[0])) {
+      response.once("finish", () => {
+        if (response.statusCode < 300) service.prepareKnowledgeIndex?.();
+      });
+    }
     try {
       if (options.startup && request.method === "GET" && url.pathname === "/health") {
         return json(response, options.startup.state === "ready" ? 200 : 503,
@@ -1070,6 +1078,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
+        || url.pathname === "/delivery-analytics"
         || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
@@ -1077,7 +1086,7 @@ export function createTaskServer(
         || parts[0] === "product-versions"
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
-        || parts[0] === "knowledge-candidates"
+        || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
         || parts[0] === "workflow-assets"
         || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
@@ -1111,6 +1120,9 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      if (request.method === "GET" && url.pathname === "/delivery-analytics") {
+        return json(response, 200, service.deliveryAnalysis(url.searchParams.get("refresh") === "1"));
       }
       // 登录成员共同维护经验；修改只影响知识复用，不授予任务操作权限。
       if (parts[0] === "memory-insights") {
@@ -1241,6 +1253,7 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
+      if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-candidates") {
         const operator = viewer?.username ?? "本地部署";
         const admin = !options.auth || viewer?.role === "admin";
@@ -1512,7 +1525,7 @@ export function createTaskServer(
               ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
             return json(response, 201, view(createBusinessModule(dataDir, {
-              id: String(body.id ?? ""),
+              id: String(body.id ?? `module-${randomUUID()}`),
               name: String(body.name ?? ""),
               description: String(body.description ?? ""),
               owner,
@@ -2093,6 +2106,8 @@ export function createTaskServer(
               + "管理员负责配置平台、管理账号与兜底控制",
           });
         }
+        const businessModuleId = typeof body.business_module_id === "string" ? body.business_module_id.trim() : "";
+        if (!businessModuleId) return json(response, 400, { error: "请选择所属业务模块" });
         // 任务归属人=登录者本人(不许替别人下单);无鉴权形态(本地
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
@@ -2311,6 +2326,7 @@ export function createTaskServer(
               selectedRepositorySkillIds,
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
+              businessModuleId,
               repositoryProfiles,
               requireRepositoryProfiles: requestedRepositories.length > 0,
               knowledgePreviewDigest,
@@ -2330,6 +2346,12 @@ export function createTaskServer(
           return json(response, 409, {
             error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
           });
+        }
+        if (request.method === "PUT" && parts.length === 3 && parts[2] === "business-module") {
+          const body = await readBody(request);
+          if (typeof body.module_id !== "string") return json(response, 400, { error: "module_id 必须为字符串" });
+          try { return json(response, 200, service.setBusinessModule(id, body.module_id, viewer?.username ?? "本地部署")); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "GET" && parts.length === 2) {
           const task = service.get(id);

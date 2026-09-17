@@ -1,3 +1,4 @@
+import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
 import { feedbackCategory, feedbackEnded, feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
@@ -1858,6 +1859,7 @@ export function TaskWorkspace({
           </strong>
           <div className="ws-identity-line">
             <code title="平台内部编号">{task.id}</code>
+            {!task.parent_task_id && <RequirementBusinessModule task={task} onChanged={onChanged} />}
             {/* 身份行徽标:#216 收编为 Badge;≤640px 沿用原 .pill 窄屏
                 行为(收成一颗放大的点,文字隐藏)。 */}
             <TaskStatusBadge status={task.status}
@@ -2062,6 +2064,7 @@ export function TaskWorkspace({
                 </TabsList>
               </Tabs>
               <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
+                {materialView === "diff" && <a className="materials-fullscreen-toggle" href={`/?deliveryAnalysis=1&deliveryTask=${encodeURIComponent(task.id)}`} target="_blank" rel="noreferrer">交付分析 ↗</a>}
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
                   aria-label="检视意见" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"

@@ -165,6 +165,23 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     });
     assert.equal(memberCreate.status, 201);
     assert.equal((await memberCreate.json() as { owner: string }).owner, "owner");
+    // 内网 HTTP 页面无需浏览器 crypto.randomUUID，省略 ID 由服务端生成。
+    const generatedIds: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const generated = await fetch(`${base}/business-modules`, {
+        method: "POST", headers: { cookie: owner },
+        body: JSON.stringify({ name: "配置中心模块", description: "HTTP 创建",
+          repositories: ["https://code.example/pay.git"] }),
+      });
+      assert.equal(generated.status, 201);
+      const module = await generated.json() as { id: string; owner: string };
+      assert.match(module.id, /^module-[0-9a-f-]{36}$/);
+      assert.equal(module.owner, "owner");
+      generatedIds.push(module.id);
+      assert.equal((await fetch(`${base}/business-modules/${module.id}`,
+        { headers: { cookie: owner } })).status, 200);
+    }
+    assert.notEqual(generatedIds[0], generatedIds[1]);
     const created = await fetch(`${base}/business-modules`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ id: "pay", name: "支付", description: "支付域",

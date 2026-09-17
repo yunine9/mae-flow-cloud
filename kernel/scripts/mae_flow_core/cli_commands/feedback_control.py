@@ -26,15 +26,12 @@ def control_feedback(state, payload, proof_nonce):
         _capability, _die, _history, _loop, _promote, _text, _head,
         STATE_SCHEMA)
     from .host_receipts import (
-        has_host_receipt, trusted_feedback_loop, save_with_host_proof)
+        verify_feedback_facts, save_with_host_proof)
     from mae_flow_core.quality.external_repair import (
         clear_feedback_authorization, issue_feedback_authorization)
 
     _capability(state)
-    if has_host_receipt(state) and not trusted_feedback_loop(state, (
-            "feedback-open", "feedback-result", "pipeline-record",
-            "selection-reconcile", "intervention-reconcile")):
-        _die("调整目标前的反馈生命周期缺少宿主收据")
+    verify_feedback_facts(state)
     if state.get("current") in ("config_confirm", "workflow_select",
                                 "branch_create", "end"):
         _die("任务尚未建立执行现场或已经结束，不能调整修复目标")

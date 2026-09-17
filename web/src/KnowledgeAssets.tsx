@@ -15,6 +15,7 @@
  * 双栏各自限高滚动用 max-[1080px]: 变体直接表达(旧 @media 块同删)。
  */
 
+import { Markdown } from "./markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
@@ -278,8 +279,10 @@ function TrailRow({ children }: { children: ReactNode }) {
   </li>;
 }
 
-export function KnowledgeAssetsWorkspace({ initialAsset,
+export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initialUpload = false,
   onOpenTask }: {
+  embedded?: boolean;
+  initialUpload?: boolean;
   admin?: boolean;
   initialAsset?: KnowledgeAssetFocus;
   onOpenTask: (taskId: string) => void;
@@ -305,7 +308,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
 
   // ---- 导航 ----
   const [segment, setSegment] = useState<Segment>("shelf");
-  const [selection, setSelection] = useState<Selection>({ kind: "none" });
+  const [selection, setSelection] = useState<Selection>(initialUpload ? { kind: "upload" } : { kind: "none" });
   const [detailTab, setDetailTab] = useState<DetailTab>("document");
   const [search, setSearch] = useState("");
   const [natureFilter, setNatureFilter] =
@@ -455,6 +458,11 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
     if (!skill) {
       setError("要核对的团队 Skill 已下线或不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
       setSelection({ kind: "none" });
+      return;
+    }
+    if (embedded) {
+      setSelection({kind:"skill",directory:skillFocus.directory});
+      void loadDocument(skillFocus.directory);
       return;
     }
     const packageDigest = packageDigestOf(skill);
@@ -711,8 +719,8 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
   const columnShell = "sticky top-3.5 max-h-[calc(100vh-210px)] min-w-0"
     + " max-[1080px]:static max-[1080px]:max-h-none";
 
-  return <section className="flex flex-col gap-2.5" aria-label="知识资产管理">
-    <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-lg
+  return <section className={cn("flex flex-col gap-2.5", embedded && "kd-native-maintenance")} aria-label="知识资产管理">
+    {!embedded && <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 rounded-lg
       border border-line bg-surface p-2 shadow-(--shadow-xs)">
       <div className="relative flex min-w-52 flex-[1_1_240px] items-center">
         <SearchIcon aria-hidden className="pointer-events-none absolute
@@ -772,7 +780,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
           aria-pressed={selection.kind === "upload"} onClick={openUpload}>
           {canManageKnowledge ? "上架 Skill" : "提交 Skill"}</Button>
       </div>
-    </div>
+    </div>}
 
     {error && <Alert variant="destructive" role="alert">{error}</Alert>}
     {note && <Alert role="status">{note}
@@ -782,9 +790,8 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
       {shelf.warnings.map((warning) => <p key={warning} className="m-0.5">⚠ {warning}</p>)}
     </Alert>}
 
-    <div className="grid grid-cols-[minmax(260px,340px)_minmax(0,1fr)]
-      items-start gap-3.5 max-[1080px]:grid-cols-1">
-      <div className={cn(columnShell, "flex flex-col overflow-hidden",
+    <div className={embedded ? "min-w-0" : "grid grid-cols-[minmax(260px,340px)_minmax(0,1fr)] items-start gap-3.5 max-[1080px]:grid-cols-1"}>
+      {!embedded && <div className={cn(columnShell, "flex flex-col overflow-hidden",
         "rounded-lg border border-line bg-surface shadow-(--shadow-xs)")}>
         <nav className="flex gap-0.5 border-b border-line px-1.5 pt-1.5"
           aria-label="资产阶段">
@@ -921,9 +928,9 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
           {segment === "candidates" && !visibleCandidates.length && !loading
             && <Empty className="border p-4"><EmptyDescription>还没有任务沉淀候选。开发者可在任务页提交，不会自动发布。</EmptyDescription></Empty>}
         </div>
-      </div>
+      </div>}
 
-      <div className={cn(columnShell, "overflow-y-auto rounded-lg border",
+      <div className={embedded ? "min-w-0" : cn(columnShell, "overflow-y-auto rounded-lg border",
         "border-line bg-surface shadow-(--shadow-xs)")}>
         {selection.kind === "none" && <Empty className="min-h-60 p-7">
           <EmptyMedia variant="icon"><PanelLeftIcon aria-hidden /></EmptyMedia>
@@ -985,13 +992,13 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
         </Empty>}
 
         {selection.kind === "skill" && selectedSkill && <SkillDetail
-          skill={selectedSkill} directory={selection.directory}
+          skill={selectedSkill} directory={selection.directory} embedded={embedded}
           admin={canManageKnowledge} busy={busy} modules={businessModules}
           tab={detailTab} onTab={setDetailTab}
           document={document}
           documentReady={documentFor === selection.directory}
           blocked={documentFor !== selection.directory && !!error}
-          focus={skillFocus?.directory === selection.directory
+          focus={!embedded && skillFocus?.directory === selection.directory
             ? skillFocus : undefined}
           versions={versionsFor === selection.directory ? versions : undefined}
           onVersions={() => openVersions(selection.directory)}
@@ -1224,12 +1231,13 @@ export function KnowledgeAssetsWorkspace({ initialAsset,
 }
 
 /** Skill 详情。四个子页共用一个头,切页不改变面板高度。 */
-function SkillDetail({ skill, directory, admin, busy, modules, tab, onTab,
+function SkillDetail({ skill, directory, embedded = false, admin, busy, modules, tab, onTab,
   document, documentReady, blocked, focus, versions, onVersions, onRollback,
   revisions, onRevisions, revisionOpen, revisionDetail, onRevisionOpen,
   distilling, onDistill, onAdopt, onDiscard, metadataDraft, onMetadataDraft,
   onOpenMetadata, onSaveMetadata, onUpdate, confirmOffline, onOffline }: {
   skill: SkillEntry;
+  embedded?: boolean;
   directory: string;
   admin: boolean;
   busy: boolean;
@@ -1280,7 +1288,7 @@ function SkillDetail({ skill, directory, admin, busy, modules, tab, onTab,
       repositories={skill.repositories}
       technologies={skill.technologies} modules={modules} />
 
-    <dl className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))]
+    {!embedded && <dl className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))]
       gap-x-4 gap-y-2 rounded-md bg-muted p-2.5">
       <div className="grid min-w-0 gap-0.5"><dt className="text-xs font-bold
         text-faint">正文版本</dt>
@@ -1298,7 +1306,7 @@ function SkillDetail({ skill, directory, admin, busy, modules, tab, onTab,
           verified ? "text-success" : blocked ? "text-danger"
             : "text-attention")}>{verified ? "已对拍"
           : blocked ? "版本不符" : "正在对拍"}</dd></div>}
-    </dl>
+    </dl>}
 
     {effect && effect.provided_tasks > 0 && <div className="flex flex-wrap
       gap-2">
@@ -1336,7 +1344,7 @@ function SkillDetail({ skill, directory, admin, busy, modules, tab, onTab,
     <nav className="flex gap-0.5 border-b border-line" aria-label="Skill 详情视图">
       {([ ["document", "全文"], ["versions", "历史版本"],
         ["revisions", `修订候选${skill.candidates ? `（${skill.candidates}）` : ""}`],
-        ...(admin ? [[ "metadata", "知识属性" ] as [DetailTab, string]] : []),
+        ...(admin ? [[ "metadata", "适用范围" ] as [DetailTab, string]] : []),
       ] as Array<[DetailTab, string]>).map(([value, label]) =>
         <button type="button" key={value}
           className={cn("-mb-px inline-flex min-h-8 items-center border-b-2",
@@ -1354,7 +1362,7 @@ function SkillDetail({ skill, directory, admin, busy, modules, tab, onTab,
 
     {tab === "document" && <div className="grid gap-2.5">
       {document && documentReady
-        ? <DocBlock>{document.content}</DocBlock>
+        ? <Markdown text={document.content} />
         : blocked
           ? <p className="text-sm/relaxed text-muted-foreground">已停止展开——原因见上方提示。这项不会以"同一版本"呈现。</p>
           : <p className="flex items-center gap-2 text-sm

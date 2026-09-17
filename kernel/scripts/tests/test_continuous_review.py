@@ -148,7 +148,7 @@ class DeliveryCommandTests(TempProject):
         payload = {"operation_id": "op-1", "target": "先处理 B", "actor": "owner",
                    "request_id": "message-1", "reason": "A 暂缓"}
         payload.update(changes)
-        with mock.patch.object(host_receipts, "has_host_receipt", return_value=False), \
+        with mock.patch.object(host_receipts, "verify_feedback_facts"), \
                 mock.patch.object(host_receipts, "save_with_host_proof"), \
                 contextlib.redirect_stdout(io.StringIO()):
             control_feedback(value, payload, {})

@@ -424,3 +424,25 @@ export async function discoverRepositorySkills(
     rmSync(temporaryRoot, { recursive: true, force: true });
   }
 }
+
+/** Read one Markdown blob without checking out or executing repository content. */
+export async function readRepositoryKnowledgeFile(options: DiscoverRepositorySkillsOptions & { path: string }) {
+  if (!repositoryIsSafe(options.repository) || !baselineIsSafe(options.baseline) || !helperIsSafe(options.credentialHelper)) throw new Error("仓库或分支格式不正确");
+  if (!options.path.split("/").every(safePathSegment) || !/\.md$/i.test(options.path)) throw new Error("请指定仓库内的 Markdown 文件路径");
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-import-"));
+  const deadline = Date.now() + 60_000;
+  const auth = options.credentialHelper ? [...(options.credentialArgs ?? []), ...gitAuthArgs(options.credentialHelper)] : [];
+  try {
+    await runGit(["-c", "core.hooksPath=/dev/null", ...auth, "clone", "--quiet", "--no-checkout", "--no-local", "--depth=1", "--", options.repository, join(dir, "repo")], { deadline, env: options.credentialEnv });
+    const cwd = join(dir, "repo");
+    await runGit([...auth, "fetch", "--quiet", "--depth=1", "origin", options.baseline || "HEAD"], { cwd, deadline, env: options.credentialEnv });
+    const revision = (await runGit(["rev-parse", "--verify", "FETCH_HEAD^{commit}"], { cwd, deadline })).toString().trim();
+    const rows = parseTree(await runGit(["--literal-pathspecs", "ls-tree", "-z", revision, "--", options.path], { cwd, deadline }));
+    const entry = rows.find(row => row.name === options.path && row.type === "blob" && ["100644", "100755"].includes(row.mode));
+    if (!entry) throw new Error("指定文件不存在或不是普通 Markdown 文件");
+    const bytes = await runGit(["cat-file", "blob", entry.oid], { cwd, deadline, maxBuffer: 2 * 1024 * 1024 });
+    return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes), revision };
+  } catch {
+    throw new Error("读取仓库文件失败，请检查仓库、分支、文件路径和个人 Git 凭据（仅支持 UTF-8 Markdown，最大 2 MiB）");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}

@@ -109,7 +109,8 @@ test("仓库技术栈是新任务必填项，直接跟随交付仓且不能藏�
     "技术栈选择应在交付定位中先出现，不能藏进按需配置");
   assert.match(source, /repositoryTechnologyBlocked/);
   assert.match(source, /每个代码仓至少选择一种技术栈/);
-  assert.match(pickerSource, /必须确认/);
+  assert.match(pickerSource, /选择即生效，无需再次确认/);
+  assert.doesNotMatch(pickerSource, /确认技术栈<\/button>/);
   assert.doesNotMatch(pickerSource, /暂不确定，也继续/);
   assert.match(pickerSource, /本单仍采用你刚选的结果/);
 });

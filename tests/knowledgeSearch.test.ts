@@ -7,6 +7,7 @@ import { createBusinessModule, publishBusinessKnowledgeAsset, archiveBusinessKno
 import { createKnowledgeCandidate, decideKnowledgeCandidate } from "../src/knowledgeCandidates.ts";
 import { collectSearchableKnowledge, KnowledgeSearch, knowledgeProductVersions } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
+import { knowledgeDocumentCatalog } from "../src/knowledgeDocumentCatalog.ts";
 import { MemorySidecar } from "../src/memorySidecar.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
 
@@ -89,6 +90,7 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     store.review(row.id, "owner", { decision: "accepted", revision: 1 });
     assert.equal(await sidecar.start(), true);
     const service = new KnowledgeSearch(dir, sidecar);
+    await service.prepare();
     const tool: any = createKnowledgeTool({ service: () => service, context: () => context });
     const module = await tool.execute("module", { action: "search", query: "告警重复事件如何去重" });
     assert.ok((module.details as any).hits?.some((h: any) => h.id === "module:alarm:dedup"), JSON.stringify(module));
@@ -99,6 +101,7 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     assert.equal(callback.hits[0]?.id, row.id, JSON.stringify(callback));
     const updated = store.review(row.id, "teammate", { decision: "accepted", revision: store.find(row.id)!.revision!,
       module: "alarm", product_versions: ["2.7B"], conclusion: "先核对回调生命周期。弱引用需判空；共享所有权场景保留强引用。" });
+    await service.prepare();
     const revised = await service.search(context, "回调还没结束对象就释放了怎么办");
     assert.ok(revised.hits.some(hit => hit.id === row.id));
     assert.match(JSON.stringify(service.read(context, row.id)), /共享所有权/);
@@ -146,7 +149,7 @@ test("检索指引进入实际 PI 系统提示词，提供统一工具名及简�
 });
 
 
-test("Skill 从当前生效包读取，更新和删除后不复活发布回执的旧正文", () => {
+test("Skill 管理读原生包；knowledge 不索引、不检索、不读取 Skill 或旧发布收据", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-"));
   try {
     const record = createKnowledgeCandidate(dir, { source_task_id: "task-1", title: "构建指南", summary: "构建方法",
@@ -156,7 +159,13 @@ test("Skill 从当前生效包读取，更新和删除后不复活发布回执�
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "SKILL.md"), "---\nname: build-guide\ndescription: 首次构建\nknowledge_nature: engineering\ntechnologies: [cpp]\n---\n# 构建指南\n当前正确做法\n");
     const service = new KnowledgeSearch(dir);
-    assert.match(service.read(context, "skill:build-guide/SKILL.md")!.content, /当前正确做法/);
+    assert.equal(service.read(context, "skill:build-guide/SKILL.md"), undefined);
+    assert.match(knowledgeDocumentCatalog(dir).documents.find(d => d.id === "skill:build-guide/SKILL.md")!.content, /当前正确做法/);
+    let ingested = 0;
+    const search = new KnowledgeSearch(dir, {ingest:async()=>{ingested++;return true;}, search:async()=>[{id:"skill:build-guide/SKILL.md",score:1}]} as any);
+    await search.prepare();
+    assert.equal(ingested,0,"包括后台 prepare 也不索引技能包");
+    assert.deepEqual((await search.search(context,"首次构建")).hits,[],"旧索引命中不能复活技能条目");
     assert.equal(service.read(context, `team:${record.id}`), undefined);
     rmSync(root, { recursive: true });
     assert.equal(service.read(context, "skill:build-guide/SKILL.md"), undefined);
@@ -181,4 +190,73 @@ test("新任务只宣传统一检索，恢复的旧会话保留工具名兼容�
       assert.deepEqual(legacy.promptGuidelines, []);
     }
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("搜索保留章节原文行号，read 定位规则和例外并拒绝旧版本位置", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-lines-"));
+  try {
+    const ids = seed(dir);
+    const fake = { ingest: async () => true, searchBudgetMs: 3000, search: async ({ sources }: any) => {
+      const file = sources.find((source: any) => source.id === ids.current).path;
+      const { readFileSync } = await import("node:fs");
+      const lines = readFileSync(file, "utf8").split("\n");
+      const line = lines.findIndex(row => row.includes("配置 request_timeout_seconds")) + 1;
+      return [{ id: ids.current, score: 1, heading: "手册 > 超时", start_line: line, end_line: line, snippet: "单位秒" },
+        { id: ids.current, score: 1, heading: "索引元数据", start_line: 5, end_line: 9 }];
+    } } as unknown as MemorySidecar;
+    const service = new KnowledgeSearch(dir, fake);
+    await service.prepare();
+    const hits = (await service.search(context, "超时")).hits;
+    assert.equal(hits.length, 1, "镜像元数据不能显示成原文第 1–? 行");
+    const hit = hits[0];
+    assert.equal(hit.start_line, 4);
+    assert.equal(hit.end_line, 4);
+    const tool: any = createKnowledgeTool({ service: () => service, context: () => context });
+    const result = await tool.execute("read", { action: "read", id: hit.id, start_line: hit.start_line, end_line: hit.end_line, revision: hit.revision });
+    assert.match(result.content[0].text, /4: 配置 request_timeout_seconds/);
+    const stale = await tool.execute("old", { action: "read", id: hit.id, revision: "old" });
+    assert.match(stale.content[0].text, /文档已更新/);
+    const invalid = await tool.execute("invalid", { action: "read", id: hit.id, start_line: 1000 });
+    assert.match(invalid.content[0].text, /读取范围无效/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("单份手册索引慢时已就绪知识仍可检索，并明确说明范围未完整", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-partial-"));
+  let finish!: (value: boolean) => void;
+  const waiting = new Promise<boolean>(resolve => { finish = resolve; });
+  let calls = 0;
+  try {
+    seed(dir);
+    const fake = { ingest: async () => ++calls === 1 ? true : waiting,
+      search: async ({ sources }: any) => {
+        assert.equal(sources.length, 1);
+        return [{ id: sources[0].id, score: 1, snippet: "已就绪内容" }];
+      } } as unknown as MemorySidecar;
+    const service = new KnowledgeSearch(dir, fake);
+    const result = await service.search(context, "超时");
+    assert.equal(result.available, true);
+    assert.equal(result.hits.length, 1);
+    assert.match(result.warnings.join(""), /不是完整知识范围/);
+  } finally { finish(true); rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("模块 Skill 留在管理目录和原生加载路径，不进入 knowledge", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-module-skill-"));
+  try {
+    createBusinessModule(dir, { id: "alarm", name: "告警", description: "告警管理", owner: "owner", repositories: context.repositories }, "owner");
+    publishBusinessKnowledgeAsset(dir, "alarm", { id: "check", title: "告警检查", summary: "检查告警", when_to_use: "检查告警时", form: "skill", content: "# 告警检查\n核对告警来源。" }, "owner");
+    assert.equal(collectSearchableKnowledge(dir, context, true).assets.length, 0);
+    const doc = knowledgeDocumentCatalog(dir).documents.find(d => d.id === "module:alarm:check");
+    assert.equal(doc?.form, "skill");
+    assert.equal(new KnowledgeSearch(dir).read(context, "module:alarm:check"), undefined);
+    const { snapshotBusinessModules, materializeBusinessModuleKnowledge } = await import("../src/businessModuleRuntime.ts");
+    const workspace = join(dir, "task-1");
+    mkdirSync(workspace, { recursive: true });
+    const selected = snapshotBusinessModules({ dataDir: dir, taskWorkspace: workspace, moduleIds: ["alarm"], repositories: context.repositories });
+    const runtime = materializeBusinessModuleKnowledge({ selected, taskWorkspace: workspace, runtimeWorkspace: workspace });
+    assert.equal(runtime.skill_paths.length, 1);
+    assert.match(runtime.skill_paths[0], /SKILL\.md$/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
