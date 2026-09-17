@@ -218,8 +218,8 @@ export async function putPersonalPushConfirmation(
   return parseJson(response);
 }
 
-/** 问题处理介入档位(ADR-0019 按流剥离):一档全自动、二档仅分析
- * 报告(缺省)、三档全程把控。现读现判、切换即刻生效,不追溯已
+/** 问题处理介入档位(ADR-0019 按流剥离):一档全自动、二档优先报告
+ * (缺省)、三档优先对齐。现读现判、切换即刻生效,不追溯已
  * 挂起的卡,没有需求侧月光的预览/清扫动作。 */
 export async function putIssueInterventionTier(
   tier: "1" | "2" | "3",
@@ -3780,9 +3780,6 @@ export type IssueGateKind =
   // 2026-08-28:代码仓缺口不再走平台闸(pull_repo 工具化);
   // 网管环境缺配置(拉日志/换库现场补配)仍由工具现场举。
   | "env_needed"
-  // 推送前过目闸(ADR-0009):push_branch 的交付轴硬闸,不绑阶段;
-  // 卡带服务端生成的变更摘要(context 字段),确认产一次性令牌。
-  | "push_confirm"
   // skill 圈选闸(ADR-0011):分析入口的多选闸,月光关档举起;
   // 勾选清单走 selection 专用口,码表只有「都不用」单码。
   | "skill_select"
@@ -4014,7 +4011,6 @@ export interface IssueWaitingCard {
   answers?: Record<string, string>;
   notes?: string;
   resolved_at?: string;
-  reminders?: number;
 }
 
 export interface IssueDetail extends IssueSummary {
@@ -4633,7 +4629,9 @@ export function dropIssueReview(id: string, reviewId: string): Promise<IssueRevi
 }
 
 /** 提交检视:整体回退到问题分析(有后果,页面层先轻量确认)。 */
-export function updateIssueReview(id: string, reviewId: string, body: { context?: string; reply?: string; resolve?: boolean }): Promise<IssueReview> {
+/** resolve_remote=随 reply 在 CodeHub 的讨论串代点已解决(仅 reply
+ *  有效,2026-09-18 拍板);本地闭环已随 2026-09-18 走查退役。 */
+export function updateIssueReview(id: string, reviewId: string, body: { context?: string; reply?: string; resolve_remote?: boolean }): Promise<IssueReview> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/${encodeURIComponent(reviewId)}`, {
     method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });

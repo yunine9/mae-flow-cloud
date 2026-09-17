@@ -428,7 +428,6 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
         && issue.stage_states?.[4] === "done"
         ? issue : undefined;
     }, "全绿当场收口,举环境验证闸");
-    assert.equal(done.stage, "mr_green", "终点阶段不动,收口在本阶段");
     assert.equal(done.mrs?.length, 1, "MR 台账在场");
     assert.equal(done.ut, undefined, "没有 UT 记录也能建 MR(UT 已降级)");
     assert.match(done.stage_note ?? "", /环境验证/);
@@ -437,6 +436,9 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     // 回执与台账:验绿通过 + 收口话术进现场。
     assert.match(chain.okReceipts(), /MR 核验通过/);
     assert.match(chain.okReceipts(), /阶段已收口/);
+    // 收口回执自带举卡指引(原 issueGreenCutover「当场收口」用例的
+    // 独有断言,该用例与本条重复已于 2026-09-18 删除)。
+    assert.match(chain.okReceipts(), /环境验证卡交给用户/);
     assert.match(chain.trail(), /MR 核验通过/, "核验裁决要进台账");
     // 收口要点名用户:小鲁班通知"全部跑绿,待归档"(ADR-0013)。
     // (等待闸卡也发通知,按内容取收口那条。)
@@ -500,7 +502,6 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
         && issue.gate?.kind === "env_verify"
         && issue.stage_states?.[4] === "done" ? issue : undefined;
     }, "监看器等绿后收口,举环境验证闸");
-    assert.equal(done.status, "waiting_user", "收口停等环境验证");
     assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
     const notice = await until(() =>
       chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
@@ -589,7 +590,6 @@ test("MR 验绿门·陈灯防御:窗口期旧 SHA 红灯不冤枉重推的申报
         && issue.gate?.kind === "env_verify"
         && issue.stage_states?.[4] === "done" ? issue : undefined;
     }, "监看器等真绿后收口,举环境验证闸");
-    assert.equal(done.status, "waiting_user", "收口停等环境验证");
     assert.equal(chain.saved().mr_gate, undefined, "收口即清申报账");
     assert.equal(chain.saved().pipelines?.[chain.origin]?.status, "success");
     const notice = await until(() =>

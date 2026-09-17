@@ -44,3 +44,39 @@ export async function postMrDiscussionReply(
     });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
 }
+
+/** 仅标已解决、不跟帖(2026-09-18,问题流「忽略」用):CodeHub 的
+ * 回复与 resolve 是两个调用,这里走适配层独立的 resolve 端点——部署
+ * 的 discussion_resolve 模板须按讨论 id({id})解析,不依赖答复输出
+ * 里的 note id。 */
+export interface MrDiscussionResolveRequest {
+  platformUrl: string;
+  discussionId: string;
+  repo: string;
+  idempotencyKey: string;
+  mr?: string | number;
+  headers: Record<string, string>;
+  signal?: AbortSignal;
+}
+
+export async function postMrDiscussionResolve(
+  request: MrDiscussionResolveRequest,
+): Promise<void> {
+  const response = await fetch(
+    `${request.platformUrl.replace(/\/+$/, "")}/mr/discussions/`
+      + `${encodeURIComponent(request.discussionId)}/resolve`, {
+      method: "POST",
+      ...(request.signal ? { signal: request.signal } : {}),
+      headers: {
+        ...request.headers,
+        "content-type": "application/json",
+        "Idempotency-Key": request.idempotencyKey,
+      },
+      body: JSON.stringify({
+        repo: request.repo,
+        ...(request.mr !== undefined ? { mr: request.mr } : {}),
+        idempotency_key: request.idempotencyKey,
+      }),
+    });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+}

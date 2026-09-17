@@ -167,6 +167,10 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     }, "抖动恢复后 D3 落账");
     assert.equal(service.get(created.id).status !== "failed", true,
       "拉取失败不拖垮会话");
+    // 原始观察待判断语义(原「关自动修」用例的独有断言,该用例与
+    // 本条重复已于 2026-09-18 删除):意见同步后 status=open。
+    assert.equal((service.get(created.id).feedback ?? [])
+      .find((item) => item.source_id === "D1")?.status, "open");
 
     // 原始意见只同步待判断批注，责任人交办前不通知模型。
     assert.equal(JSON.stringify(model.requests).includes("mr-review-replies.json"), false);
@@ -239,86 +243,6 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
   }
 });
 
-test("关自动修(repair_rounds=0):检视意见标待人工,不注入模型", async () => {
-  const dataDir = mfcTemp("mfc-issue-disc-ro-");
-  const platform = new FakeGitPlatform();
-  platform.nextPipelineStatus = "running";
-  const sourceDir = join(dataDir, "source");
-  execFileSync("git", ["init", "-q", sourceDir]);
-  execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
-    "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
-  const origin = platform.initBare(sourceDir, dataDir);
-  await platform.start();
-  platform.seedDiscussion({
-    id: "D1", author: "检视人老王", body: "这里的连接池没有超时回收",
-  });
-  const script: Scene[] = [
-    { tool: { name: "dts_get_ticket", input: {} } },
-    { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
-    { tool: { name: "pull_repo", input: { url: origin } } },
-    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
-    { tool: { name: "bash", input: { command: report() } } },
-    { tool: { name: "submit_analysis",
-      input: { summary: "根因=连接池耗尽" } } },
-    { text: "分析报告已提交,等待用户确认。" },
-    { tool: { name: "complete_stage", input: { note: "修复完成" } } },
-    { tool: { name: "bash", input: { command:
-      `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '[${TICKET}][fix] 修复'` } } },
-    { tool: { name: "push_branch", input: {} } },
-    { tool: { name: "create_mr", input: {} } },
-    { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
-    { text: "MR 已申报。" },
-  ];
-  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
-  await model.start();
-  const service = new IssueFlowService({
-    dataDir,
-    provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    settings: {
-      models: () => ({}),
-      runtime: () => ({
-        poll_interval_s: 1, poll_timeout_s: 120,
-        repair_rounds: 0,
-      }),
-    },
-    dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
-  });
-  try {
-    const created = service.create({
-      account: "dev", title: "登录超时", ticket: TICKET,
-      source: "dts", repoUrl: origin,
-    });
-    await until(() => {
-      const snapshot = service.get(created.id);
-      return snapshot.status === "waiting_user"
-        && snapshot.gate?.kind === "analysis_confirm";
-    }, "分析确认闸收口");
-    service.answer(created.id, {
-      state_version: service.get(created.id).gate!.state_version,
-      code: "confirm",
-    });
-    await until(() => {
-      const record = (service.get(created.id).feedback ?? [])
-        .find((item) => item.source_id === "D1");
-      return record?.status === "open";
-    }, "意见标待人工");
-    const record = (service.get(created.id).feedback ?? [])
-      .find((item) => item.source_id === "D1")!;
-    assert.equal(record.status, "open", "原始观察仍保留，是否自动修不影响外部意见待判断语义");
-    // 不注入:模型从未收到检视意见通知(以草稿文件指引为标记——开场词
-    // 与简报里"检视意见"一词本就常见,不能当注入证据)。
-    assert.equal(
-      JSON.stringify(model.requests).includes("mr-review-replies.json"),
-      false, "关自动修时不得把意见清单喂给模型");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    await platform.stop();
-  }
-});
 
 test("discussions 客户端:可用/未配置/坏响应/网络失败四态,fail-open 上浮原因", async () => {
   // 200 正常形状 → available。

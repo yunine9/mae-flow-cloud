@@ -54,7 +54,6 @@ function waitingRecord(taskId: string, questions: unknown[]) {
     notes: "",
     created_at: new Date().toISOString(),
     resolved_at: "",
-    reminders: 0,
   };
 }
 

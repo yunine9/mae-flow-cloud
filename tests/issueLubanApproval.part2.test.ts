@@ -157,7 +157,7 @@ test("多来源合并:需求任务与问题卡同册,回复各归各家", async 
       call_id: "call-1",
       question: { questions: [{ question: "Diff 通过吗?", options: ["通过", "打回"] }] },
       state_version: 1, status: "waiting", decision: "", notes: "",
-      created_at: "2026-09-02T00:00:00.000Z", resolved_at: "", reminders: 0,
+      created_at: "2026-09-02T00:00:00.000Z", resolved_at: "",
     },
   }];
   const fakeService: LubanApprovalService = {

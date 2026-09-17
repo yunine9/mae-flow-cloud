@@ -936,7 +936,7 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.updateExternalReview(id, decodeURIComponent(parts[3]), {
         ...(typeof body.context === "string" ? { context: body.context } : {}),
         ...(typeof body.reply === "string" ? { reply: body.reply } : {}),
-        ...(body.resolve === true ? { resolve: true } : {}),
+        ...(body.resolve_remote === true ? { resolve_remote: true } : {}),
       }));
     }
     if (method === "DELETE" && parts[2] === "reviews" && parts.length === 4) {

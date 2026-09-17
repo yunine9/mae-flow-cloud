@@ -274,14 +274,14 @@ test("单卡互斥:平台闸或 Agent 卡在场,raise_gate 一律拒绝不叠加
       started_at: "", deadline: "", round: 1 },
   });
   gated.gate = {
-    id: "gate-x", kind: "push_confirm", state_version: 1,
+    id: "gate-x", kind: "analysis_confirm", state_version: 1,
     created_at: new Date().toISOString(),
-    question: { questions: [{ question: "过目推送?", options: [] }] },
+    question: { questions: [{ question: "确认分析报告?", options: [] }] },
   } as IssueSessionState["gate"];
   await assert.rejects(
     directRaiseTool({ state: gated }).execute("a", { kind: "env_verify" }),
     /平台闸.*作答|作答.*平台闸/s, "闸在场不许再举");
-  assert.equal(gated.gate!.kind, "push_confirm", "原闸不被顶掉");
+  assert.equal(gated.gate!.kind, "analysis_confirm", "原闸不被顶掉");
 
   const carded = raiseState({}, {
     [ALPHA]: { sha: SHA, status: "success", watching: false,

@@ -278,10 +278,10 @@ const INTERVENTION_PRESETS = [
 const ISSUE_INTERVENTION_TIERS = [
   { key: "1", title: "全自动", isDefault: false,
     detail: "零介入 · 一路跑到 MR 变绿才提醒" },
-  { key: "2", title: "仅分析报告", isDefault: true,
+  { key: "2", title: "优先报告", isDefault: true,
     detail: "只在报告检视停一次 · 其余直达变绿" },
-  { key: "3", title: "全程把控", isDefault: false,
-    detail: "对齐、结论、环境、推送过目全保留" },
+  { key: "3", title: "优先对齐", isDefault: false,
+    detail: "主动对齐、结论确认、环境闸全保留" },
 ] as const;
 
 // 介入档位卡(#228 工具类化):选中=accent 描边+soft 底,左 icon 盒反色;
@@ -419,7 +419,7 @@ function IssueInterventionSetting({
         ? "问题处理已切到全自动:不再向你提问,一路跑到 MR 变绿(或办不了停下)才提醒你"
         : applied === "2"
           ? "问题处理只在分析报告检视时停一次,其余直达变绿"
-          : "问题处理恢复全程把控:现象对齐、结论确认、环境闸、推送过目全保留");
+          : "问题处理恢复优先对齐:现象对齐、结论确认、环境闸全保留");
       await onChanged({ issue_intervention_tier: applied });
     } catch (cause) {
       setNote(String((cause as Error).message ?? cause));

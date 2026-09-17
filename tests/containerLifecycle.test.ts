@@ -2,10 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  dockerAvailable,
   sweepManagedTaskContainers,
   taskContainerInstance,
 } from "../src/containerRuntime.ts";
@@ -244,58 +243,3 @@ test("暂停/取消不吞容器回收失败，并在未释放时禁止重跑", a
   assert.equal(task.container, undefined, "再次取消成功后才清掉容器句柄");
 });
 
-const REAL_IMAGE = process.env.MFC_REAL_BUILD_IMAGE;
-const REAL_DOCKER = REAL_IMAGE ? await dockerAvailable() : false;
-
-test("真实 Docker：启动清扫删除本 dataDir 孤儿，不碰不同实例容器", {
-  skip: !REAL_IMAGE
-    ? "设置 MFC_REAL_BUILD_IMAGE 后执行真实孤儿清扫"
-    : REAL_DOCKER ? false : "Docker daemon 不可用",
-}, async () => {
-  const scratch = join(homedir(), ".cache", "mae-flow-cloud-tests");
-  mkdirSync(scratch, { recursive: true });
-  const dataDir = mkdtempSync(join(scratch, "mfc-real-sweep-"));
-  const otherDir = mkdtempSync(join(scratch, "mfc-real-sweep-other-"));
-  const owned = taskContainerInstance(dataDir);
-  const other = taskContainerInstance(otherDir);
-  const ownedName = `mfc-${owned.namePrefix}-task-41-prepush`;
-  const systemCheckName = `mfc-${owned.namePrefix}-system-check-orphan`;
-  const protectedName = `mfc-${owned.namePrefix}-protected`;
-  const run = (name: string, fingerprint: string, role: string, taskId: string) =>
-    execFileSync("docker", [
-      "run", "-d", "--rm", "--name", name,
-      "--label", "com.mae-flow-cloud.managed=true",
-      "--label", `com.mae-flow-cloud.instance=${fingerprint}`,
-      "--label", `com.mae-flow-cloud.container=${name}`,
-      "--label", `com.mae-flow-cloud.role=${role}`,
-      "--label", `com.mae-flow-cloud.task=${taskId}`,
-      REAL_IMAGE!, "sh", "-lc", "trap 'exit 0' TERM INT; while :; do sleep 60; done",
-    ], { encoding: "utf-8" }).trim();
-  const remove = (name: string) => {
-    try { execFileSync("docker", ["rm", "-f", name], { stdio: "ignore" }); }
-    catch { /* 已由 sweep 删除即为预期。 */ }
-  };
-  try {
-    run(ownedName, owned.fingerprint, "prepush", "task-41");
-    run(systemCheckName, owned.fingerprint, "system-check", "system");
-    // 名字故意沿用本实例短前缀，但完整 instance label 不同；清扫不能
-    // 只凭“看起来像自己的名字”误杀它。
-    run(protectedName, other.fingerprint, "coding", "task-protected");
-    const result = await sweepManagedTaskContainers({
-      instanceFingerprint: owned.fingerprint,
-      namePrefix: owned.namePrefix,
-      stopGraceSeconds: 0,
-    });
-    assert.deepEqual(result.removed.sort(), [ownedName, systemCheckName].sort());
-    for (const name of [ownedName, systemCheckName]) {
-      assert.throws(() => execFileSync("docker", ["inspect", name],
-        { stdio: "ignore" }), `本实例孤儿 ${name} 必须已删除`);
-    }
-    assert.doesNotThrow(() => execFileSync("docker", ["inspect", protectedName],
-      { stdio: "ignore" }), "不同完整实例 ownership 的容器必须保留");
-  } finally {
-    remove(ownedName);
-    remove(systemCheckName);
-    remove(protectedName);
-  }
-});

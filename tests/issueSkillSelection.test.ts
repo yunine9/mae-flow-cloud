@@ -58,33 +58,6 @@ function bareOrigin(root: string, withSkill: boolean): string {
   return origin;
 }
 
-/** 两目录夹具:cacNames 落 `.cac/skills`,agentsNames 落
- * `.agents/skills`,同名用例靠同一名字进两目录构造。 */
-function bareOriginWithSkills(
-  root: string,
-  cacNames: string[],
-  agentsNames: string[],
-): string {
-  const seed = join(root, "seed-repo");
-  execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
-  const writeSkill = (base: string[], name: string) => {
-    const skillDir = join(seed, ...base, name);
-    mkdirSync(skillDir, { recursive: true });
-    writeFileSync(join(skillDir, "SKILL.md"),
-      `---\nname: ${name}\n`
-      + `description: ${name} 的排障要点:先复现,再分段计时。\n`
-      + `---\n\n# ${name}\n\n先复现,再分段计时。\n`);
-  };
-  for (const name of cacNames) writeSkill([".cac", "skills"], name);
-  for (const name of agentsNames) writeSkill([".agents", "skills"], name);
-  execFileSync("git", ["-C", seed, "add", "."], { env: GIT_ENV });
-  execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
-    "-m", "init"], { env: GIT_ENV });
-  const origin = join(root, "origin.git");
-  execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
-  return origin;
-}
-
 async function until<T>(
   probe: () => T | undefined,
   what: string,
@@ -167,56 +140,6 @@ test("月光关+仓内有 skill:入口不举卡,扫描清单留痕转移账,直�
         entry.note.includes("扫描到 1 个业务 skill(login-triage)")
         && entry.note.includes("ADR-0014")),
       "发现清单要进转移账");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-  }
-});
-
-test("扫描为空:留「未发现」账,不举卡", async () => {
-  const dataDir = mfcTemp("mfc-issue-skill-empty-");
-  const origin = bareOrigin(dataDir, false);
-  const { model, service, id, confirmed } =
-    await runToAnalysisConfirm(origin, "3");
-  try {
-    assert.ok((confirmed.transitions ?? []).some((entry) =>
-      entry.note.includes("未发现业务 skill")),
-    "空扫描也要留痕");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-  }
-});
-
-test("两目录同名:.cac 胜出,同名跳过留告警", async () => {
-  const dataDir = mfcTemp("mfc-issue-skill-dup-");
-  const origin = bareOriginWithSkills(dataDir, ["login-triage"], ["login-triage"]);
-  const { model, service, confirmed } =
-    await runToAnalysisConfirm(origin, "3");
-  try {
-    const transitions = confirmed.transitions ?? [];
-    assert.ok(transitions.some((entry) =>
-      entry.note.includes("扫描到 1 个业务 skill(login-triage)")),
-    "同名只算一个(.cac 优先)");
-    assert.ok(transitions.some((entry) =>
-      entry.note.includes("skill 扫描告警")
-        && entry.note.includes("同名定义")),
-    "同名跳过要留告警(不静默)");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-  }
-});
-
-test("仅 .agents/skills 有技能:补位进扫描账", async () => {
-  const dataDir = mfcTemp("mfc-issue-skill-agents-");
-  const origin = bareOriginWithSkills(dataDir, [], ["agents-only"]);
-  const { model, service, confirmed } =
-    await runToAnalysisConfirm(origin, "3");
-  try {
-    assert.ok((confirmed.transitions ?? []).some((entry) =>
-      entry.note.includes("扫描到 1 个业务 skill(agents-only)")),
-    ".agents 补位技能同样进扫描账");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

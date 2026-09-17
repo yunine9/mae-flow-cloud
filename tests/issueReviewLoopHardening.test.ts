@@ -159,7 +159,6 @@ test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自
   try {
     await until(() => Boolean(scene.recordOf("F1")), "F1 落反馈账");
     const outboxPath = join(scene.issueDir, "mr-review-outbox.json");
-    const currentSha = scene.service.get(scene.id).pushes!.at(-1)!.sha;
     // 直写信箱构造"绑定旧提交"的 pending(与真实漂移同构)。
     writeFileSync(outboxPath, JSON.stringify({ items: [{
       id: "mrr-drift-1", repo: scene.origin, discussion_id: "F1",
@@ -183,7 +182,6 @@ test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自
     await until(() =>
       (scene.recordOf("F1")?.status ?? "") === "addressed",
     "投递成功转 addressed(Agent 已回复,待检视人核验)");
-    assert.equal(currentSha.length, 40);
   } finally {
     await scene.stop();
   }
@@ -281,6 +279,58 @@ test("责任人答复直达 CodeHub:入信箱不绑版本,投递后转 addressed
       entry.discussion_id === "O1");
     assert.equal(item.author, "dev");
     assert.equal(item.expected_sha ?? "", "", "答复不绑推送收据");
+  } finally {
+    await scene.stop();
+  }
+});
+
+test("责任人答复勾选代点已解决:远端讨论标 resolved(2026-09-18 拍板)", async () => {
+  const scene = await reviewFixture({
+    seed: { id: "O1", body: "建议补充单元测试覆盖超时分支" },
+  });
+  try {
+    const store = reviewStore(scene.issueDir);
+    await until(() => store.list().some(item => item.external_review),
+      "外部意见同步为批注");
+    const note = store.list().find(item => item.external_review)!;
+    scene.service.updateExternalReview(scene.id, note.id,
+      { reply: "已按建议补充超时分支的单元测试", resolve_remote: true });
+    const o1 = scene.platform.discussions.find((item) => item.id === "O1")!;
+    await until(() => o1.resolved, "讨论在 CodeHub 标记已解决");
+    await until(() =>
+      (scene.recordOf("O1")?.status ?? "") === "addressed",
+    "投递成功本地转 addressed");
+    const outbox = JSON.parse(
+      readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf-8"));
+    const item = outbox.items.find((entry: any) =>
+      entry.discussion_id === "O1");
+    assert.equal(item.resolve, true, "信箱记录勾选了代点已解决");
+    assert.equal(item.author, "dev");
+  } finally {
+    await scene.stop();
+  }
+});
+
+test("忽略意见:本地软删,远端讨论代点已解决(2026-09-18 拍板)", async () => {
+  const scene = await reviewFixture({
+    seed: { id: "O1", body: "建议补充单元测试覆盖超时分支" },
+  });
+  try {
+    const store = reviewStore(scene.issueDir);
+    await until(() => store.list().some(item => item.external_review),
+      "外部意见同步为批注");
+    const note = store.list().find(item => item.external_review)!;
+    scene.service.dropReview(scene.id, note.id);
+    const o1 = scene.platform.discussions.find((item) => item.id === "O1")!;
+    await until(() => o1.resolved, "讨论在 CodeHub 标记已解决");
+    assert.equal(store.visible().some(item => item.id === note.id), false,
+      "忽略后本地不再露面");
+    const outbox = JSON.parse(
+      readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf-8"));
+    const item = outbox.items.find((entry: any) =>
+      entry.discussion_id === "O1");
+    assert.equal(item.resolve_only, true, "信箱记录仅标已解决,不跟帖");
+    assert.equal(item.status, "delivered");
   } finally {
     await scene.stop();
   }

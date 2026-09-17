@@ -40,15 +40,6 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 用户对分析结论提出意见,回到「{{stage}}」阶段:{{decision}}{{supplement}}
 请继续查证,完善 issue-analysis.md 后重新 submit_analysis 提交结论。
 
-## gate.push.grant
-
-用户已看过本次变更并确认推送(推送确认)。令牌已生效——请重新调用 push_branch 完成推送(令牌用一次就失效,之后的每次推送都会重新发卡确认)。{{supplement}}
-
-## gate.push.hold
-
-用户选择暂不推送,本次变更未获放行:{{decision}}{{supplement}}
-请不要推送——先按用户意见调整,调整好后再重新发起推送确认。
-
 ## gate.verify.fail
 
 用户在环境验证发现问题,已退回「问题分析」阶段(第 {{round}} 轮)。{{reason}}

@@ -37,8 +37,12 @@ export interface MrReviewReplyOutboxItem {
   id: string;
   repo: string;
   discussion_id: string;
+  /** resolve_only=true 时必须为空串:不跟帖,只代点已解决。 */
   body: string;
   resolve: boolean;
+  /** 仅标已解决(2026-09-18「忽略」):走适配层独立 resolve 端点,
+   * 不发答复;expected_sha 恒空(不主张代码已改,不做版本核对)。 */
+  resolve_only?: boolean;
   expected_sha?: string;
   /** 装箱人;缺席=Agent 草稿,责任人在场时记归属账号。 */
   author?: string;

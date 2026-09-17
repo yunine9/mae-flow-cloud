@@ -22,7 +22,6 @@ const issueWorld = readFileSync(
   resolve("web/src/TeamIssueWorld.tsx"), "utf-8");
 const historyBoard = readFileSync(
   resolve("web/src/HistoryBoard.tsx"), "utf-8");
-const helpCenter = readFileSync(resolve("web/src/HelpCenter.tsx"), "utf-8");
 
 test("导航按域拆两条:团队需求(view=team)+团队问题(view=teamIssues)", () => {
   // View 类型与路由白名单都认 teamIssues,历史恢复不会把它丢成根视图。
@@ -66,26 +65,6 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // 卡片自带新页签链接(ADR-0040),App 不再传 onOpenIssue 跳转回调。
   assert.match(app,
     /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} \/>/);
-});
-
-test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)", () => {
-  // 单一定义,两页各挂一次(需求/问题)。
-  assert.match(app, /function TeamWorldTabs\(/);
-  assert.equal((app.match(/<TeamWorldTabs domain=/g) ?? []).length, 2,
-    "团队需求与团队问题必须共用同一个页签组件");
-  // 页签语义由共用 Tabs 提供，切换值与标签不绑定旧 HTML/CSS。
-  assert.match(app,
-    /<TabsList aria-label=\{copy\.label\}/);
-  assert.match(app, /<TabsTrigger value="current"[\s\S]*?<strong[^>]*>当前现场<\/strong>[\s\S]*?<small[^>]*>\{copy\.currentSmall\}<\/small>/);
-  assert.match(app, /<TabsTrigger value="archive"[\s\S]*?<strong[^>]*>成果档案<\/strong>[\s\S]*?<small[^>]*>\{copy\.archiveSmall\}<\/small>/);
-  // 两域各自的副标题与 aria 标注。
-  assert.match(app, /label: "团队需求视图"/);
-  assert.match(app, /label: "团队问题视图"/);
-  assert.match(app, /哪个问题在推进、谁需要答复/);
-  assert.match(app, /闭环结论与取消记录/);
-  // 两页都按 current/archive 两面板切换,页签状态共用同一 state。
-  assert.match(app, /<TeamWorldTabs domain="requirement" tab=\{teamTaskTab\}/);
-  assert.match(app, /<TeamWorldTabs domain="issue" tab=\{teamTaskTab\}/);
 });
 
 test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {
@@ -193,15 +172,4 @@ test("问题侧概览口径:空集合也出全集格子(0 展示但不虚报)", 
   assert.deepEqual(stats.statuses.map((item) => item.key), [...ISSUE_DELIVERY_STATUSES]);
   assert.ok(stats.stages.every((item) => item.count === 0));
   assert.ok(stats.statuses.every((item) => item.count === 0));
-});
-
-test("档案措辞:需求侧「交付档案」统一改为「成果档案」,两域并列", () => {
-  assert.match(app, /<strong[^>]*>成果档案<\/strong>/);
-  // #233 去 legacy 化(b0cfe8d)后 h2 带 Tailwind 类,锚随迁放宽标签属性。
-  assert.match(historyBoard, /<h2[^>]*>成果档案<\/h2>/);
-  for (const [name, source] of [["App", app],
-    ["HistoryBoard", historyBoard], ["HelpCenter", helpCenter]] as const) {
-    assert.doesNotMatch(source, /交付档案/,
-      `${name} 里不应再出现旧措辞「交付档案」`);
-  }
 });

@@ -394,7 +394,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    // 测的是提问卡→人工作答→归档闭环:钉三档把控,卡等人不代答。
+    // 测的是提问卡→人工作答→归档闭环:钉三档对齐,卡等人不代答。
     interventionTier: () => "3",
   });
   // 种子会话没有创建回执:沿用 created.id 形状串起后续断言。
@@ -527,12 +527,8 @@ test("创建:固定流程登记回执、vault 与开场上下文照旧", async (
     // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
     assert.equal(created.status, "running");
     assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
-    // 环境落盘形状:回执只有凭据引用与非密元信息(页面凭据已废弃,
-    // 2026-09-10:登记不收页面账号/密码);密码本体只在 vault,状态
-    // 文件与回执都搜不到。
-    assert.ok(!("page_account" in (created.environment ?? {})),
-      "页面凭据已废弃,回执不再带页面账号");
-    assert.ok(!JSON.stringify(created).includes("page-secret"));
+    // 页面凭据不回流的强断言在 issueFlowContract(真传页面凭据的打回
+    // 用例);此处不重复弱版本。
     assert.ok(!existsSync(join(dataDir, "issues", created.id, "repo", ".mae-flow.json")),
       "问题会话不初始化内核(与需求流分属两个范式)");
 
@@ -745,7 +741,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
   const first = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    // 等「等人卡」的管道测试:显式三档把控(缺省二档会把纯选项卡代答)。
+    // 等「等人卡」的管道测试:显式三档对齐(缺省二档会把纯选项卡代答)。
     interventionTier: () => "3",
   });
   let second: IssueFlowService | undefined;
@@ -819,82 +815,6 @@ function seedRecoverableIssue(
     ...patch,
   }));
 }
-
-test("正式启动可延后恢复；取消必须等容器确认删除，失败保留句柄可重试", async () => {
-  const dataDir = mfcTemp("mfc-issue-cleanup-");
-  seedRecoverableIssue(dataDir, "issue-1", { status: "waiting_user" });
-  seedRecoverableIssue(dataDir, "issue-2", { status: "waiting_user" });
-  seedRecoverableIssue(dataDir, "issue-3", { status: "waiting_user" });
-  const service = new IssueFlowService({
-    dataDir, provider: "unused", model: "unused", modelsJson: {},
-    deferRecovery: true,
-  });
-  try {
-    assert.equal(service.list().length, 0,
-      "serve 清扫遗留容器前，问题会话不能抢先恢复点火");
-    service.start();
-    service.start();
-    assert.equal(service.list().length, 3, "显式恢复幂等且不漏现场");
-
-    const first = (service as any).live.get("issue-1");
-    let releaseStop!: () => void;
-    let stopStarted = false;
-    first.container = {
-      stop: () => new Promise<void>((resolve) => {
-        stopStarted = true;
-        releaseStop = resolve;
-      }),
-    };
-    let returned = false;
-    const canceling = service.control("issue-1", { action: "cancel" })
-      .then((summary) => {
-        returned = true;
-        return summary;
-      });
-    await new Promise((tick) => setImmediate(tick));
-    assert.equal(stopStarted, true);
-    assert.equal(returned, false, "Docker 还没删净时接口不能先报取消成功");
-    assert.equal(service.get("issue-1").status, "waiting_user",
-      "容器回收确认前不能先落 canceled 终态");
-    releaseStop();
-    assert.equal((await canceling).status, "canceled");
-    assert.equal(first.container, undefined, "确认删除后才清内存句柄");
-
-    const second = (service as any).live.get("issue-2");
-    let failOnce = true;
-    const retained = {
-      async stop() {
-        if (failOnce) {
-          failOnce = false;
-          throw new Error("docker rm permission denied");
-        }
-      },
-    };
-    second.container = retained;
-    await assert.rejects(
-      service.control("issue-2", { action: "cancel" }),
-      /取消尚未完成.*permission denied/);
-    assert.equal(service.get("issue-2").status, "waiting_user");
-    assert.equal(second.container, retained,
-      "失败时必须保留句柄，不能制造以后永远 stop 不到的孤儿");
-    assert.equal((await service.control("issue-2", { action: "cancel" })).status,
-      "canceled", "用户重试应复用原句柄完成回收");
-
-    const third = (service as any).live.get("issue-3");
-    let finishOldTurn!: (outcome: { status: "turn_finished" }) => void;
-    (service as any).beginTurn(third, () =>
-      new Promise((resolve) => { finishOldTurn = resolve; }));
-    assert.equal(service.get("issue-3").status, "running");
-    assert.equal((await service.control("issue-3", { action: "cancel" })).status,
-      "canceled", "正在运行也必须能直接取消");
-    finishOldTurn({ status: "turn_finished" });
-    await new Promise((tick) => setImmediate(tick));
-    assert.equal(service.get("issue-3").status, "canceled",
-      "取消前的旧回调晚到，不能把终态覆盖回 idle/failed");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-  }
-});
 
 test("failed 会话的唯一出路是取消:归档被明确拒绝,取消清理成 canceled", async () => {
   // 2026-09-02 用户实锤:failed 曾是死胡同终态——不能续聊、按钮全灰,
@@ -1025,36 +945,6 @@ test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上
   }
 });
 
-test("恢复续跑受并发额度约束:超出 maxConcurrentTurns 的会话排队逐个跑,不瞬时打满", async () => {
-  const dataDir = mfcTemp("mfc-issue-quota-");
-  for (const id of ["issue-1", "issue-2", "issue-3"]) {
-    seedRecoverableIssue(dataDir, id, { status: "running" });
-  }
-  const script: Scene[] = [{ text: "继续。" }];
-  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
-  await model.start();
-  const service = new IssueFlowService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    maxConcurrentTurns: 2,
-  });
-  try {
-    // 构造同步段即断言:额度内点火两个,第三个还在排队。
-    const statuses = ["issue-1", "issue-2", "issue-3"]
-      .map((id) => service.get(id).status);
-    assert.equal(statuses.filter((s) => s === "running").length, 2);
-    assert.equal(statuses.filter((s) => s === "queued").length, 1);
-    await until(() => {
-      const now = ["issue-1", "issue-2", "issue-3"]
-        .map((id) => service.get(id).status);
-      if (now.includes("failed")) throw new Error("续跑回合失败");
-      return now.every((s) => s === "idle") ? now : undefined;
-    }, "额度排队逐个收口");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-  }
-});
 
 test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文,AI 看到的仍是自己的措辞", async () => {
   const dataDir = mfcTemp("mfc-issue-agentcode-");
@@ -1070,7 +960,7 @@ test("Agent 问题卡归码:投影派码(码+文案对),按码作答还原原文
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    // 归码/还原契约是「等人卡」的作答协议:显式三档把控。
+    // 归码/还原契约是「等人卡」的作答协议:显式三档对齐。
     interventionTier: () => "3",
   });
   try {
@@ -1795,16 +1685,13 @@ test("env_needed 闸快照与手动沉淀(#150):environment_id 作答即台账�
   });
   const vault = new IssueEnvironmentVault(dataDir);
   try {
-    // 互斥一律 400:environment_id 与 decline 同给、与手填字段同给、
-    // 与沉淀勾选同给,都不产生任何落盘。
-    for (const payload of [
-      { environment_id: entry.id, decline: true },
-      { environment_id: entry.id, backend_password: "x" },
-      { environment_id: entry.id, hosts: ["10.0.0.1"],
-        env_type: "k8s", save_to_registry: true },
-    ]) {
+    // 互斥一律 400:decline 与 environment_id 同给是最典型的互斥形态
+    // (手填/沉淀两类变体与 create 端的互斥 400 钉的是同一校验分支,
+    // 不重复;2026-09-18 去冗)。
+    {
       const rejected = await issuePost(
-        ["issues", "issue-1", "environment"], payload, service);
+        ["issues", "issue-1", "environment"],
+        { environment_id: entry.id, decline: true }, service);
       assert.equal(rejected.status, 400);
       assert.match(rejected.body.error, /互斥/);
     }

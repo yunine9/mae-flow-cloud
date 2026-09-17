@@ -138,7 +138,7 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
   const dataDir = mfcTemp("mfc-issue-mr-");
   const origin = bareOriginAt(dataDir, "origin.git");
   const service = new IssueFlowService({
-    // 端到端要等确认卡/问题卡:显式三档把控(缺省二档会代答纯选项卡)。
+    // 端到端要等确认卡/问题卡:显式三档对齐(缺省二档会代答纯选项卡)。
     interventionTier: () => "3",
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: {},
@@ -267,7 +267,7 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
-    // 端到端要等确认卡/问题卡:显式三档把控(缺省二档会代答纯选项卡)。
+    // 端到端要等确认卡/问题卡:显式三档对齐(缺省二档会代答纯选项卡)。
     interventionTier: () => "3",
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
@@ -413,7 +413,7 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService({
-    // 端到端要等确认卡/问题卡:显式三档把控(缺省二档会代答纯选项卡)。
+    // 端到端要等确认卡/问题卡:显式三档对齐(缺省二档会代答纯选项卡)。
     interventionTier: () => "3",
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),

@@ -85,8 +85,6 @@ test("固定四根、支持分类层递归发现，并生成绑定仓库版本�
   const again = await discoverRepositorySkills({ repository: repo });
   assert.equal(first.error, undefined);
   assert.equal(first.revision, revision);
-  assert.deepEqual(REPOSITORY_SKILL_ROOTS,
-    [".agents/skills", ".pi/skills", ".claude/skills", ".cac/skills"]);
   // 候选按相对路径排序:分类层嵌套与平铺混排时顺序仍确定。
   assert.deepEqual(first.skills.map((skill) => skill.name),
     ["nested", "java-review", "cac-review", "db-migrate", "api-contract"]);

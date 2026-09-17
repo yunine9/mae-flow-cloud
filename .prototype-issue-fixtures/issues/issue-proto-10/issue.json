@@ -1,0 +1,22 @@
+{
+  "id": "issue-proto-10",
+  "account": "dev",
+  "reporter": "admin",
+  "created_at": "2026-09-17T16:57:00.758Z",
+  "updated_at": "2026-09-17T17:27:00.758Z",
+  "title": "更换闪存片后加密启动校验失败",
+  "description": "按特性分类原型的样本会话。",
+  "source": "dts",
+  "ticket": "DTS-2026-91800",
+  "repo_url": "https://git.example.com/proto/device-firmware.git",
+  "repo_urls": [
+    "https://git.example.com/proto/device-firmware.git"
+  ],
+  "module": "安全特性-加密启动",
+  "module_id": "proto-sec",
+  "status": "failed",
+  "stage": "analyze",
+  "stage_note": "原型样本现场",
+  "stage_at": "2026-09-17T17:27:00.758Z",
+  "round": 1
+}

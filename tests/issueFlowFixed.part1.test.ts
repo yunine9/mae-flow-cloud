@@ -531,7 +531,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    // 转正两段式要等确认卡:显式三档把控(缺省二档会代答纯选项卡)。
+    // 转正两段式要等确认卡:显式三档对齐(缺省二档会代答纯选项卡)。
     interventionTier: () => "3",
   });
   try {
@@ -792,7 +792,7 @@ test("工读类放宽(2026-08-28):request_env 全程可调,dts_get_ticket 重查
     dataRoot: "/tmp/data",
     persist: () => undefined,
     dts: new MockDtsGateway(),
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
     pullRepo: async (url) => ({
       dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
@@ -1393,7 +1393,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     const ctx: IssueToolContext = {
       state, workspace: "/tmp/ws", dataRoot: dataDir,
       persist: () => undefined,
-      // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+      // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
       interventionTier: () => "3",
       pullRepo: async (url) => {
         pulled.push(url);
@@ -1462,7 +1462,7 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     persist: () => undefined,
     ops: fakeOps,
     environmentPassword: () => undefined,
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
     pullRepo: async (url) => ({
       dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
@@ -1497,7 +1497,7 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
   });
   try {
@@ -1562,7 +1562,7 @@ test("环境形态贯通:登记/配置卡选定入状态与转移账,非法值�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
   });
   try {
@@ -1625,7 +1625,7 @@ test("环境拒绝(票 93):拒绝=清闸回落 idle+转移账带理由+平台回
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
   });
   try {
@@ -1738,7 +1738,7 @@ test("环境拒绝解锢(票 93):拒绝后配置环境清除拒绝台账,request
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     opsTools: fakeOps,
-    // env 闸照举的档位前提:三档把控(一/二档不举,ADR-0019)。
+    // env 闸照举的档位前提:三档对齐(一/二档不举,ADR-0019)。
     interventionTier: () => "3",
   });
   try {

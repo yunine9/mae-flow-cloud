@@ -65,7 +65,7 @@ test("修复轮中途举卡:读回执、认出确认项就自动交卷;歧义题
       internal.summary.waiting = {
         waiting_id: `${id}:c`, task_id: id, step, call_id: "c",
         question: { questions }, state_version: 1, status: "waiting",
-        decision: "", notes: "", created_at: "", resolved_at: "", reminders: 0,
+        decision: "", notes: "", created_at: "", resolved_at: "",
       };
       internal.summary.status = "waiting_for_human";
     };

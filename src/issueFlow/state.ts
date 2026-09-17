@@ -156,10 +156,8 @@ export type IssueGateKind =
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
   | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
-  | "push_confirm"     // 推送前过目(ADR-0009):push_branch 的交付轴硬闸,
-                       // 确认产一次性令牌放行一次推送;不绑阶段。
   | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
-                       // 把控档由归属人圈定业务仓 skill 必读集合;
+                       // 对齐档由归属人圈定业务仓 skill 必读集合;
                        // 作答走 selection 专用口(与 env_needed 表单同款)。
   | "pipeline_unfixable" // 流水线不可修告警(2026-09-01,票 03):红灯失败项
                          // 全是不可自动修复的工具告警——人在交付平台处理/
@@ -452,25 +450,6 @@ export interface IssueSessionState {
   /** MR 验绿门的申报账(受理路):complete_stage 申报时流水线在跑则
    * 记账停等,监看器全绿后凭它在场放行(见 IssueMrGateRecord)。 */
   mr_gate?: IssueMrGateRecord;
-  /** 一次性推送确认令牌(ADR-0009):push_confirm 闸答「确认推送」时
-   * 写入(带确认时刻与决策留痕),push_branch 成功即消费(删除)——
-   * 下一次推送重新过目,防盲签。head=过目那一刻的分支 tip:确认的
-   * 对象是"当时看到的那份变更",重推时 tip 变了(过目后又有新提交)
-   * 令牌即作废重新举卡。force/remote 是强制覆盖(同单重跑,2026-09-11
-   * 增补)的过目语义:force=确认的卡是"强制覆盖远端同名分支"卡——
-   * 普通卡确认过的令牌放不了强制覆盖,反之强制卡确认过的重推不再
-   * 要求带参;remote=举强制卡时远端同名分支的 tip,推送以租赁式
-   * (--force-with-lease)按它核对——确认后远端又动了即作废重举。
-   * 随 issue.json 持久化,重启恢复路径(recover)不清它:已过目的
-   * 确认不因重启要求重复点。summarize 不上 wire(与 mr_gate 同为
-   * 流程机制状态,前端镜像没有这个字段)。 */
-  push_token?: {
-    at: string;
-    decision: string;
-    head?: string;
-    force?: boolean;
-    remote?: string;
-  };
   /** 人工接管标记(2026-09-07 走查拍板):字段在场=AI 已暂停、人工作业
    * 中——接管即打断 AI 当前回合(abort 只掐回合,现场保留),状态定格
    * idle;期间的人工操作以 via=takeover 的 user_message 记事件账,交还
@@ -478,16 +457,6 @@ export interface IssueSessionState {
    * 账本收集接管期记录的时间下界)。催办谓词对它让路(见
    * shouldNudgeFixed):人工驾驶中平台不催。 */
   takeover?: { at: string; by: string };
-  /** 举 push_confirm 闸时记下的待推送 tip(过目对象的身份):确认时
-   * 并进 push_token.head。不上 wire,与 push_token 同罪同罚。 */
-  push_review_head?: string;
-  /** 举的是强制覆盖卡(远端同名分支将被覆盖,同单重跑场景):确认时
-   * 并进 push_token.force。不上 wire,与 push_token 同罪同罚。 */
-  push_review_force?: boolean;
-  /** 举强制覆盖卡时探测的远端同名分支 tip(覆盖对象的身份):确认时
-   * 并进 push_token.remote,推送时按它做租赁式核对。不上 wire,与
-   * push_token 同罪同罚。 */
-  push_review_remote?: string;
   /** 本回合已用催办次数(模型提前收嘴的自动续跑)。每个新回合起点清零;
    * 落在状态里是为了重启后不重复催办。 */
   nudges?: number;
@@ -578,17 +547,12 @@ export function issueRepoWorkspaces(
 export function summarize(state: IssueSessionState): IssueSummary {
   // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
   // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
-  // 先补 web/src/api.ts 镜像与样例。push_token(推送过目的一次性
-  // 令牌)与 push_review_head(举闸时记的过目对象 tip)同罪同罚:
-  // 它们的效力只在服务端 push_branch 消费口,不是前端要渲染的状态。
-  // env_declined(环境拒绝台账,票 93)同理:效力只在服务端工具层
-  // (同 scope 不再举闸),前端镜像没有这个字段。warmup(环境预热
-  // 收据)2026-09-10 起上 wire(对齐清单⑤):前端要判"预热在跑/结果"
-  // 决定直播面板;build-notes 仍由修复 Agent 从文件系统读,不走投影。
-  const { mr_gate: _gate, push_token: _pushToken,
-    push_review_head: _pushReviewHead,
-    push_review_force: _pushReviewForce,
-    push_review_remote: _pushReviewRemote,
+  // 先补 web/src/api.ts 镜像与样例。env_declined(环境拒绝台账,票 93)
+  // 同理:效力只在服务端工具层(同 scope 不再举闸),前端镜像没有
+  // 这个字段。warmup(环境预热收据)2026-09-10 起上 wire(对齐清单⑤):
+  // 前端要判"预热在跑/结果"决定直播面板;build-notes 仍由修复 Agent
+  // 从文件系统读,不走投影。
+  const { mr_gate: _gate,
     env_declined: _envDeclined,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
@@ -657,6 +621,17 @@ export function loadState(root: string): IssueSessionState | undefined {
   const legacyConclusion = state.conclusion as { kind?: string } | undefined;
   if (legacyConclusion?.kind === "fixed") legacyConclusion.kind = "delivered";
   else if (legacyConclusion?.kind === "converted") legacyConclusion.kind = "issue";
+  // 推送过目闸退役(2026-09-17,ADR-0009 增补):全部介入档位推送
+  // 直推,机制整体拆除。存量盘上的卡与令牌是死账——闸不剥会落进
+  // rework 裁决(回流分析)错伤现场,令牌不再有任何消费口;等人空壳
+  // 的续跑由 recover() 处理。
+  if ((state.gate as { kind?: string } | undefined)?.kind === "push_confirm") {
+    delete state.gate;
+  }
+  delete (state as { push_token?: unknown }).push_token;
+  delete (state as { push_review_head?: unknown }).push_review_head;
+  delete (state as { push_review_force?: unknown }).push_review_force;
+  delete (state as { push_review_remote?: unknown }).push_review_remote;
   return state;
 }
 
@@ -729,7 +704,6 @@ const GATE_NAMES: Record<IssueGateKind, string> = {
   conclude: "结论确认",
   env_verify: "环境验证",
   env_needed: "网管环境配置",
-  push_confirm: "推送确认",
   skill_select: "skill 圈选",
   pipeline_unfixable: "流水线不可修告警",
   pipeline_evidence: "流水线报错回灌",

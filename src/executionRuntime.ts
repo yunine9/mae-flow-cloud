@@ -908,7 +908,7 @@ async function main(): Promise<void> {
     // resolve 归检视人(与需求交付同一面旗,2026-09-08 问题流接入)。
     ...(resolveDiscussions ? { resolveDiscussions } : {}),
     // 问题处理介入档位(ADR-0019,个人设置按流剥离,现读现判):闸
-    // 策略、提示词节奏与推送过目全部由档位派生——三档全程把控,二档
+    // 策略、提示词节奏与推送过目全部由档位派生——三档优先对齐,二档
     // 只停在分析报告,一档全自动;缺省二档。
     interventionTier: (account) => auth.issueInterventionTier(account),
     gitCredential: (account) => auth.gitCredential(account),

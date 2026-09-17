@@ -248,7 +248,7 @@ test("介入档位:问题处理缺省二档,存取稀疏落盘,需求侧轴不�
   const auth = new LocalAuth(file);
   auth.bootstrapAdmin("admin", "administrator-pass");
   auth.createUser("alice", "alice-password-1", "developer");
-  // 缺省二档(仅分析报告),无账号/禁用账号也按缺省。
+  // 缺省二档(优先报告),无账号/禁用账号也按缺省。
   assert.equal(auth.issueInterventionTier("alice"), "2");
   assert.equal(auth.issueInterventionTier(undefined), "2");
   // 设一档/三档落盘,重启后保持。

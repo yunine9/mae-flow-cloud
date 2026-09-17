@@ -4,7 +4,7 @@
  *   non_issue+高置信(闭环无下游闸,分级保守);二档的停靠点恰是这些
  *   闸,永不代答;缺省(回调缺席)=二档;
  * - Agent 卡(AskUserQuestion):一/二档自动 + 纯选项题卡按推荐项整卡
- *   代答,开放题/混卡/检视回合/三档把控整卡等人(ADR-0006 口径);
+ *   代答,开放题/混卡/检视回合/三档对齐整卡等人(ADR-0006 口径);
  * - 作答走 answer() 同一裁决通道:现场账、阶段推进与真人作答同款;
  * - 提示层:开场词/续聊词按介入档位渲染三种「介入节奏」。
  *
@@ -278,18 +278,18 @@ test("一档全自动:无单 non_issue 且自报高置信,自动闭环归档", a
   }
 });
 
-test("一档分级不满足(是问题/缺置信度)与三档把控,结论闸一律等真人", async () => {
+test("一档分级不满足(是问题/缺置信度)与三档对齐,结论闸一律等真人", async () => {
   const dataDir = mfcTemp("mfc-issue-tier-guard-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 三种都不代答:是问题(挂起后果重)/没自报置信度(宁人工勿猜)/
-  // 三档把控(停靠点就在结论)。
+  // 三档对齐(停靠点就在结论)。
   const cases: Array<{ label: string; tier?: "1" | "3"; conclusion:
     "issue" | "non_issue"; confidence?: "high" | "medium" | "low" }> = [
     { label: "是问题必人工", tier: "1", conclusion: "issue",
       confidence: "high" },
     { label: "缺置信度不代答", tier: "1", conclusion: "non_issue" },
-    { label: "三档把控不代答", tier: "3", conclusion: "non_issue",
+    { label: "三档对齐不代答", tier: "3", conclusion: "non_issue",
       confidence: "high" },
   ];
   for (const item of cases) {
@@ -346,20 +346,20 @@ test("提示层:开场词与续聊词按介入档位渲染三种节奏", () => {
   assert.match(full, /介入节奏\(全自动档\)/,
     "一档:不问、不简报、报告会被自动确认");
   assert.match(full, /无需补充即可执行/);
-  assert.match(report, /介入节奏\(仅分析报告档\)/,
+  assert.match(report, /介入节奏\(优先报告档\)/,
     "二档:报告是唯一停靠点");
   assert.match(report, /等用户检视/);
-  assert.match(guard, /介入节奏\(全程把控档\)/, "三档:主动问与对齐");
+  assert.match(guard, /介入节奏\(优先对齐档\)/, "三档:主动问与对齐");
   assert.doesNotMatch(guard, /自动确认/);
   const resumeFull = issueResumePrompt(state, "继续", {}, { tier: "1" });
   const resumeReport = issueResumePrompt(state, "继续", {}, { tier: "2" });
   const resumeGuard = issueResumePrompt(state, "继续", {}, { tier: "3" });
   assert.match(resumeFull, /介入节奏:全自动档/);
-  assert.match(resumeReport, /介入节奏:仅分析报告档/);
-  assert.match(resumeGuard, /介入节奏:全程把控档/);
+  assert.match(resumeReport, /介入节奏:优先报告档/);
+  assert.match(resumeGuard, /介入节奏:优先对齐档/);
 });
 
-test("grilling 触发链:把控档节奏文本常驻点名方法,简报反问条款让位档位", () => {
+test("grilling 触发链:对齐档节奏文本常驻点名方法,简报反问条款让位档位", () => {
   // 病根(2026-09-11 诊断):vendor grilling 的索引描述是"用户发起"
   // 口径,AI 自发对齐匹配不到渐进发现;常驻触发位只剩介入节奏文本与
   // AskUserQuestion 工具描述(模型决定问的那一刻必读)。
@@ -368,18 +368,18 @@ test("grilling 触发链:把控档节奏文本常驻点名方法,简报反问条
     title: "登录超时", description: "", account: "dev", ticket: TICKET,
   } as unknown as IssueSessionState;
   const guard = issueFixedOpeningPrompt(state, {}, { tier: "3" });
-  assert.match(guard, /grilling/, "把控档节奏文本要点名 grilling(常驻触发位)");
+  assert.match(guard, /grilling/, "对齐档节奏文本要点名 grilling(常驻触发位)");
   assert.match(guard, /skills\/grilling\/SKILL\.md/, "点名要带可达路径");
   assert.match(issueResumePrompt(state, "继续", {}, { tier: "3" }),
     /grilling/, "续聊重建的上下文同样要点名");
   assert.doesNotMatch(issueFixedOpeningPrompt(state, {}, { tier: "1" }),
-    /skills\/grilling\/SKILL\.md/, "不问的档位不给方法路径——方法论地图的裸点名可留,方法骨架与路径归把控档");
+    /skills\/grilling\/SKILL\.md/, "不问的档位不给方法路径——方法论地图的裸点名可留,方法骨架与路径归对齐档");
   assert.doesNotMatch(issueFixedOpeningPrompt(state, {}, { tier: "2" }),
     /skills\/grilling\/SKILL\.md/);
-  // 简报是无档公共文案:反问条款必须让位给档位,不得与把控档顶牛。
+  // 简报是无档公共文案:反问条款必须让位给档位,不得与对齐档顶牛。
   const analyzeBrief = promptCopy("briefs", "stage.analyze");
   assert.doesNotMatch(analyzeBrief, /能自行推断的不要问/,
-    "tier 无关的'不要问'是把控档的对立面");
+    "tier 无关的'不要问'是对齐档的对立面");
   assert.match(analyzeBrief, /介入节奏/, "问不问交给档位文本裁决");
   // 次级拦截点:问题会话的 AskUserQuestion 描述带 grilling 指路,
   // 任务会话不带(该技能不在任务工作区物化)。
@@ -492,7 +492,7 @@ test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续�
   }
 });
 
-test("自动档:开放题卡与混卡整卡等人,不做半卡代答;三档把控同样等人", async () => {
+test("自动档:开放题卡与混卡整卡等人,不做半卡代答;三档对齐同样等人", async () => {
   const cases: Array<{
     label: string;
     tier?: "1" | "3";
@@ -513,7 +513,7 @@ test("自动档:开放题卡与混卡整卡等人,不做半卡代答;三档把�
       }, { question: "补充说明?" }],
     },
     {
-      label: "三档把控",
+      label: "三档对齐",
       tier: "3",
       questions: [{
         question: "采用哪个修复方案?",
@@ -655,7 +655,7 @@ test("自动档:检视重写窗口中的 Agent 卡永不代答(ADR-0007 口径�
   }
 });
 
-test("三档把控:平台闸在场,Agent 问题卡被单卡互斥拒落,只有闸等真人", async () => {
+test("三档对齐:平台闸在场,Agent 问题卡被单卡互斥拒落,只有闸等真人", async () => {
   const dataDir = mfcTemp("mfc-issue-tier-gate-");
   // 同一回合先举 env_needed 闸(拉日志缺网管环境,request_env 如实失败),
   // 再调 AskUserQuestion:ADR-0024 单卡互斥——闸在场时问题卡被宿主拦下
@@ -677,7 +677,7 @@ test("三档把控:平台闸在场,Agent 问题卡被单卡互斥拒落,只有�
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
     // opsTools 在场才会走到「缺网管环境举 env_needed 闸」这一步;
-    // 三档把控 env 闸照举(一/二档不举,见 env 闸档位旁路)。
+    // 三档对齐 env 闸照举(一/二档不举,见 env 闸档位旁路)。
     opsTools: {
       async buildDeploy() { return { summary: "测试假件" }; },
     },
@@ -697,7 +697,7 @@ test("三档把控:平台闸在场,Agent 问题卡被单卡互斥拒落,只有�
     // 自然无人代答——现读现判。
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(service.get(created.id).gate?.kind, "env_needed",
-      "env 闸原地等人(三档把控照举)");
+      "env 闸原地等人(三档对齐照举)");
     assert.ok(!existsSync(join(dataDir, "issues", created.id, "waiting.json")),
       "Agent 问题卡未落盘(单卡互斥,闸优先)");
     assert.doesNotMatch(
@@ -723,7 +723,7 @@ test("档位中途切换:已挂起的卡不追溯代答(只在卡落地时判定
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
   const dataDir = mfcTemp("mfc-issue-tier-retro-");
-  // 档位做成可翻转的:卡落地时三档把控,落地后切一档——追溯与否看这张测试。
+  // 档位做成可翻转的:卡落地时三档对齐,落地后切一档——追溯与否看这张测试。
   let tier: "1" | "3" = "3";
   const service = new IssueFlowService({
     ...baseOptions(dataDir, model),
@@ -737,7 +737,7 @@ test("档位中途切换:已挂起的卡不追溯代答(只在卡落地时判定
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" ? issue : undefined;
-    }, "三档把控:卡落地等真人");
+    }, "三档对齐:卡落地等真人");
     // 现读现判的边界:档位切换只对后续到达的卡生效,已挂起的卡不追溯
     // 代答(与需求流同口径——代答只发生在卡到达的那一刻)。
     tier = "1";

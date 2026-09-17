@@ -29,7 +29,6 @@ npx tsx --test --test-concurrency=1 --test-timeout=60000 \
   tests/apiMirrorContract.test.ts \
   tests/taskFocusContract.test.ts \
   tests/stallPolicy.test.ts \
-  tests/prepushEvidenceContract.test.ts \
   tests/decisionContextLayout.test.ts \
   tests/uiWorkbenchScenarios.test.ts \
   tests/requirementGraphVisible.test.ts

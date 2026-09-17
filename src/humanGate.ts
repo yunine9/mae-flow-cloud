@@ -40,7 +40,6 @@ export interface WaitingRecord {
   notes: string;
   created_at: string;
   resolved_at: string;
-  reminders: number;
   /** 同一 HTTP 请求的稳定指纹。网络重试只有完全相同才幂等返回；
    * 不同决定仍严格执行先到生效。旧记录缺席时保持原有冲突语义。 */
   request_digest?: string;
@@ -107,7 +106,6 @@ export class HumanGate {
       notes: "",
       created_at: now(),
       resolved_at: "",
-      reminders: 0,
     };
     store.records[waitingId] = record;
     this.save(store);
