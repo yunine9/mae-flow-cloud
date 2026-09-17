@@ -418,7 +418,13 @@ export function createTaskServer(
         "mae_flow_session",
       );
       const viewer = options.auth?.sessionUser(sessionToken);
-      if (viewer) service.observeLinkBase(requestBaseUrl(request));
+      if (viewer) {
+        // 两侧通知深链都靠真实访问入口兜底:需求侧 /work 与问题侧
+        // /issues 同款自学,--public-url 缺席时不能只剩路径后缀。
+        const linkBase = requestBaseUrl(request);
+        service.observeLinkBase(linkBase);
+        options.issueFlow?.observeLinkBase(linkBase);
+      }
 
       // 小鲁班插件回调使用独立固定 Token，不依赖浏览器 Cookie。插件
       // 只获得这一个纯文本入口，绝不能借它穿透成通用任务 API。
