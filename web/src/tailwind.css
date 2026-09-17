@@ -7625,7 +7625,6 @@ body:has(.workspace-studio) .wish-quick-fab {
 .delivery-filters select, .delivery-filters input { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px 12px; max-width: 320px; }
 .delivery-filters input { flex: 1; min-width: 230px; margin-left: auto; }
 .delivery-scope { font-size: 14px; }
-.delivery-top-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 20px; }
 .delivery-card { padding: 22px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
 .delivery-card h2 { margin: 0 0 20px; color: var(--text-strong); font-size: 18px; font-weight: 650; }
 .delivery-card h2 > span { color: var(--muted); font-size: 14px; font-weight: 400; margin-left: 12px; }
@@ -7637,14 +7636,8 @@ body:has(.workspace-studio) .wish-quick-fab {
 .delivery-donut-center span { font-size: 13px; color: var(--muted); }
 .delivery-legend { display: grid; gap: 18px; flex: 1; min-width: 270px; }
 .delivery-legend > div { display: grid; grid-template-columns: 9px 1fr auto 52px; align-items: center; gap: 9px; font-size: 14px; }
-.delivery-legend i, .delivery-rework-legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+.delivery-legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
 .delivery-legend small { color: var(--muted); text-align: right; }
-.delivery-rework-total { display: flex; align-items: baseline; gap: 10px; margin: 20px 0 24px; }
-.delivery-rework-total strong { font-size: 38px; color: var(--text-strong); }
-.delivery-rework-total span { color: var(--muted); }
-.delivery-stacked { height: 12px; border-radius: 8px; overflow: hidden; background: var(--line); display: flex; margin-bottom: 18px; }
-.delivery-rework-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 14px; }
-.delivery-rework-legend span { display: flex; align-items: center; gap: 7px; }
 .delivery-muted { font-size: 13px; line-height: 1.7; margin: 16px 0 0; }
 .delivery-note { background: var(--canvas); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 20px; font-size: 14px; color: var(--muted); line-height: 1.7; }
 .delivery-pagination { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 18px; }
