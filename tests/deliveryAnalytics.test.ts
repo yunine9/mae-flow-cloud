@@ -94,7 +94,7 @@ test("并行流水线与检视有明确CI依据归流水线；首个文档提交
   assert.equal(repairOrigin({ round: 1, state: "repairing", kind: "conflict" }), "review");
 });
 
-test("历史改写不重定义首次提交；缺少合入前快照不造零值；采集失败不改变任务", async t => {
+test("历史改写不重定义首次提交；合入后可用任务基线补算；采集失败不改变任务", async t => {
   const f = fixture(t); f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
   f.publish(first); await collectDeliveryCode(f.summary, f.cwd, first);
   f.git("reset", "--soft", f.base); const head = f.commit("rewritten first"); f.publish(head);
@@ -103,7 +103,8 @@ test("历史改写不重定义首次提交；缺少合入前快照不造零值�
   assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined);
   const other = { ...f.summary, id: "task-2", workspace: join(f.dir, "task-2") };
   f.git("update-ref", "refs/remotes/origin/main", head);
-  await assert.rejects(collectDeliveryCode(other, f.cwd, head), /缺少合入前/);
+  const recovered = await collectDeliveryCode(other, f.cwd, head);
+  assert.equal(recovered.base, f.base); assert.equal(recovered.retained.first, 1);
 });
 
 test("父任务和问题单不重复纳入；缺失证据不参与平均；汇总按代码行加权", async t => {
@@ -347,4 +348,23 @@ test("无修复迹象暂计首轮；正式反馈记录优先；单纯收到意�
   result = await collectDeliveryCode(f.summary, f.cwd, second);
   assert.deepEqual(result.initial_implementation, { end: first, basis: "repair_record" });
   assert.deepEqual(result.retained, { first: 1, review: 1, pipeline: 0, other: 0 });
+});
+
+
+test("task-5：首次取样已有责任人直接推送，合入后仍计算真实分支交付", async t => {
+  const f = fixture(t);
+  f.write("service.cpp", "int a = 1;\nint b = 2;\n"); const published = f.commit("主体实现");
+  f.publish(published);
+  f.write("service.cpp", "int a = 3;\nint b = 2;\n"); const ownerHead = f.commit("修改静态清理");
+  Object.assign(f.summary.delivery!, { foreign_commits: { base_sha: ownerHead, count: 46 }, merged_sha: ownerHead, mr_state: "merged" });
+  f.summary.status = "completed";
+  f.git("update-ref", "refs/remotes/origin/main", ownerHead);
+  const metric = await collectDeliveryCode(f.summary, f.cwd, published);
+  assert.equal(metric.head, ownerHead); assert.equal(metric.published_head, published);
+  assert.deepEqual(metric.retained, { first: 1, review: 1, pipeline: 0, other: 0 });
+  assert.equal(aggregateDelivery(buildDeliveryAnalysis([f.summary]).rows).firstPercent, 50);
+  const again = await collectDeliveryCode(f.summary, f.cwd, published);
+  assert.deepEqual(again.retained, metric.retained);
+  f.publish(f.base);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined);
 });

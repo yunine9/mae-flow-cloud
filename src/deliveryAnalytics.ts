@@ -43,7 +43,7 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([7, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([8, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, summary.delivery?.merged_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
@@ -93,7 +93,14 @@ export async function awaitDeliveryAnalytics(): Promise<void> { await lane; }
 export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
   const attribution = attributionKey(summary, cwd);
   const previous = read(summary)?.metric;
-  if (!previous && summary.delivery?.foreign_commits) throw new Error("首次取样前已混入外来提交，无法确认本任务首次提交");
+  const publishedHead = head;
+  const foreign = summary.delivery?.foreign_commits?.base_sha;
+  // A direct owner push can be the actual merged source. Do not mistake a
+  // squash/target merge commit for it; require the recorded branch tip.
+  if (foreign && foreign === summary.delivery?.merged_sha && /^[a-f0-9]{40,64}$/.test(foreign)) {
+    try { await analyticsGit(cwd, ["merge-base", "--is-ancestor", head, foreign]); head = foreign; }
+    catch { /* keep the available published source */ }
+  }
   const taskBase = await frozenTaskBaseline(cwd);
   if (!taskBase) throw new Error("缺少任务创建时的 Git 基线，无法识别首次提交");
   const target = summary.delivery?.target_branch;
@@ -101,12 +108,15 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   await analyticsGit(cwd, ["check-ref-format", `refs/remotes/origin/${target}`]);
   // A same-source refresh must retain the pre-merge comparison base, including
   // after fast-forward/squash merge or a target branch update.
-  const base = previous?.head === head ? previous.base
+  let base = previous?.head === head ? previous.base
     : (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim();
-  if (base === head) throw new Error("目标分支已包含交付版本，缺少合入前统计快照；不倒推历史占比");
+  if (base === head) base = taskBase;
   const origins: Record<string, CodeOrigin> = Object.fromEntries((previous?.commits ?? []).map(c => [c.sha, c.origin]));
   const evidence: Record<string, string[]> = Object.fromEntries((previous?.commits ?? []).filter(c => c.origin_evidence).map(c => [c.sha, c.origin_evidence!]));
-  const fallback = await intervalOrigins(cwd, head, [currentInterval(summary, head)]);
+  const fallback = await intervalOrigins(cwd, head, [currentInterval(summary, head),
+    ...(head !== publishedHead ? [{ base: publishedHead, head, origin: "review" as const,
+      evidence: "平台推送之后的分支直接修改" }] : []),
+  ]);
   for (const [sha, origin] of Object.entries(fallback.origins)) {
     if (!origins[sha] || origins[sha] === "other" || evidence[sha]?.some(text => text.startsWith("推断："))) { origins[sha] = origin; evidence[sha] = fallback.evidence[sha]; }
   }
@@ -125,6 +135,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
       ...Object.keys(fallback.origins), ...Object.keys(published.origins), ...Object.keys(historical.origins),
       ...(previous?.initial_implementation?.basis === "repair_record" ? previous.commits.filter(c => c.origin !== "first").map(c => c.sha) : []),
     ])] });
+  metric.published_head = publishedHead;
   for (const commit of metric.commits) {
     if (commit.origin_evidence) { origins[commit.sha] = commit.origin; evidence[commit.sha] = commit.origin_evidence; }
   }
@@ -143,7 +154,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
       : evidence[commit.sha] ?? commit.origin_evidence ?? [commit.origin === "other"
         ? "缺少覆盖该提交的修复区间证据" : "此前推送快照保留的分类"];
   }
-  save(summary, { version: 1, head, metric, intervals: read(summary)?.intervals,
+  save(summary, { version: 1, head: publishedHead, metric, intervals: read(summary)?.intervals,
     attribution });
   return metric;
 }
@@ -159,7 +170,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
       // Statistics describe the confirmed pushed source, which must still match.
-      const metric = head && stored?.metric?.head === head && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
+      const metric = head && stored?.metric && (stored.metric.published_head ?? stored.metric.head) === head && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
       if (metric) {
         for (const counts of [metric.retained, metric.rework]) {
           counts.review += counts.other; counts.other = 0;

@@ -13,6 +13,7 @@ export interface DeliveryCommitMetric {
 export interface DeliveryCodeMetric {
   version: 1;
   head: string;
+  published_head?: string;
   base: string;
   first: string;
   initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" };
