@@ -51,14 +51,14 @@ export async function calculateDeliveryCode(input: {
   // Rewritten first commit must not silently become the new 'first'.
   await run(["merge-base", "--is-ancestor", first, head]);
   const origins = { ...input.origins };
-  const origin = (sha: string): CodeOrigin => sha === first ? "first" : origins[sha] ?? "other";
+  const origin = (sha: string): CodeOrigin => sha === first ? "first" : origins[sha] ?? (input.infer_unattributed ? "review" : "other");
   const metric: DeliveryCodeMetric = { version: 1, head, base, first,
     collected_at: new Date().toISOString(), retained: emptyOrigins(), rework: emptyOrigins(),
     deleted: 0, excluded_files: 0, commits: [] };
   for (const sha of hashes) {
     const [at, ...message] = (await run(["show", "-s", "--format=%cI%n%B", sha])).trim().split("\n");
-    const inferred = input.infer_unattributed && origin(sha) === "other"
-      ? inferCommitOrigin(message.join("\n")) : undefined;
+    const guess = input.infer_unattributed && sha !== first ? inferCommitOrigin(message.join("\n")) : undefined;
+    const inferred = guess && origin(sha) !== "pipeline" && (guess.origin === "pipeline" || !origins[sha] || origin(sha) === "other") ? guess : undefined;
     if (inferred) origins[sha] = inferred.origin;
     const nums = numstat(await run(["diff", "--numstat", "-z", "--find-renames", `${sha}^`, sha, "--"]));
     let additions = 0, deletions = 0;

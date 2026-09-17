@@ -28,11 +28,10 @@ export function historicalRepairIntervals(cwd: string, taskId: string): RepairIn
     return batches.flatMap(batch => {
       if (batch?.task_id !== taskId || !Array.isArray(batch.items) || !batch.items.length) return [];
       const sources = new Set(batch.items.map((item: { source?: string }) => item?.source));
-      const origin = sources.has("workspace") || sources.has("mr_discussion") ? "review"
-        : sources.has("pipeline") ? "pipeline" : "other";
+      const origin = sources.has("pipeline") ? "pipeline" : "review";
       // verified_sha alone is only a later validation result, not a repair end.
       const head = batch.result_digest ? batch.result_head
-        : origin === "pipeline" ? batch.superseded_by_push : undefined;
+        : sources.size === 1 && sources.has("pipeline") ? batch.superseded_by_push : undefined;
       const interval: RepairInterval = { base: batch.base_sha, head, origin,
         evidence: `${origin === "pipeline" ? "流水线" : origin === "review" ? "检视" : "其他"}反馈批次 ${batch.batch_id}` };
       return validInterval(interval) ? [interval] : [];
@@ -61,6 +60,6 @@ export async function intervalOrigins(cwd: string, head: string, intervals: Repa
     }
   }
   const origins: Record<string, CodeOrigin> = {};
-  for (const [commit, set] of categories) origins[commit] = set.has("review") ? "review" : set.has("pipeline") ? "pipeline" : "other";
+  for (const [commit, set] of categories) origins[commit] = set.has("pipeline") ? "pipeline" : "review";
   return { origins, evidence };
 }

@@ -32,18 +32,18 @@ function save(task: Task, record: StoredAnalysis): void {
 }
 
 /** Only a bounded, explicitly identified repair interval receives a reason.
- * Concurrent CI + human feedback is counted as review; missing intervals can use labelled inference. */
+ * Explicit CI evidence takes priority; missing intervals can use labelled inference. */
 export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"]): CodeOrigin {
-  if (loop?.kind === "ci") return loop.workspace_review_pending || loop.workspace_review_recheck_required ? "review" : "pipeline";
+  if (loop?.kind === "ci") return "pipeline";
   if (loop?.kind === "review") return "review";
-  return "other";
+  return "review";
 }
 
 // Cache the evidence used, not just the code version. Old snapshots are upgraded
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([4, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([6, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
@@ -114,9 +114,12 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   Object.assign(origins, published.origins);
   const historical = await intervalOrigins(cwd, head, historicalRepairIntervals(cwd, summary.id));
   // Completed feedback facts are more specific than the mutable current loop.
-  // Overlapping CI/review batches count as review, independent of read order.
+  // Explicit pipeline evidence takes priority over review/default attribution.
   Object.assign(origins, historical.origins);
   Object.assign(evidence, published.evidence, historical.evidence);
+  for (const source of [fallback, published, historical]) {
+    for (const [sha, origin] of Object.entries(source.origins)) if (origin === "pipeline") { origins[sha] = "pipeline"; evidence[sha] = source.evidence[sha]; }
+  }
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins,
     infer_unattributed: true });
   for (const commit of metric.commits) {
@@ -127,7 +130,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     const commits = new Map(previous.commits.map(c => [c.sha, c]));
     for (const commit of metric.commits) commits.set(commit.sha, commit);
     metric.commits = [...commits.values()];
-    for (const commit of metric.commits) if (commit.sha !== metric.first && origins[commit.sha]) commit.origin = origins[commit.sha];
+    for (const commit of metric.commits) if (commit.sha !== metric.first) commit.origin = origins[commit.sha] === "pipeline" ? "pipeline" : "review";
     metric.rework = emptyOrigins();
     for (const commit of metric.commits) if (commit.sha !== metric.first) metric.rework[commit.origin] += commit.additions + commit.deletions;
   }
@@ -152,7 +155,16 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
       // Statistics describe the confirmed pushed source, which must still match.
-      const metric = head && stored?.metric?.head === head ? stored.metric : undefined;
+      const metric = head && stored?.metric?.head === head ? structuredClone(stored.metric) : undefined;
+      if (metric) {
+        for (const counts of [metric.retained, metric.rework]) {
+          counts.review += counts.other; counts.other = 0;
+        }
+        for (const commit of metric.commits) if (commit.origin === "other") {
+          commit.origin = "review";
+          commit.origin_evidence = ["按统计口径：未明确识别为流水线修复，归检视修改"];
+        }
+      }
       return { id: task.id, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
         repo: cleanRepository(task.repo_url ?? ""), modules: (task.business_modules ?? []).map(m => m.name),

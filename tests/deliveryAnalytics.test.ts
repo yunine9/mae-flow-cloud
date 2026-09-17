@@ -84,14 +84,14 @@ test("修改已存在文件后重命名只计真实变化；删除、文档、�
   assert.equal(final.deleted, 1);
 });
 
-test("并行流水线与检视归检视；首个文档提交不会被换成首个代码提交", async t => {
+test("并行流水线与检视有明确CI依据归流水线；首个文档提交不会被换成首个代码提交", async t => {
   const f = fixture(t); f.write("README.md", "first docs\n"); const first = f.commit("docs");
   f.publish(first); await collectDeliveryCode(f.summary, f.cwd, first);
   f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "ci", last_sha: first, workspace_review_pending: true };
   f.write("feature.cpp", "int a = 1;\n"); const head = f.commit("CI fix but really mixed"); f.publish(head);
   const metric = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(metric.first, first); assert.equal(metric.retained.review, 1); assert.equal(metric.retained.first, 0);
-  assert.equal(repairOrigin({ round: 1, state: "repairing", kind: "conflict" }), "other");
+  assert.equal(metric.first, first); assert.equal(metric.retained.pipeline, 1); assert.equal(metric.retained.first, 0);
+  assert.equal(repairOrigin({ round: 1, state: "repairing", kind: "conflict" }), "review");
 });
 
 test("历史改写不重定义首次提交；缺少合入前快照不造零值；采集失败不改变任务", async t => {
@@ -142,11 +142,11 @@ test("漏采推送仍按修复起点归因，不把更早的未知提交归入�
   f.publish(first); await collectDeliveryCode(f.summary, f.cwd, first);
   f.write("feature.cpp", "int a = 2;\n"); const unsampled = f.commit("unknown");
   f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: unsampled };
-  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("fix"); f.publish(head);
+  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("change"); f.publish(head);
   const result = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(result.commits.find(c => c.sha === unsampled)?.origin, "other");
+  assert.equal(result.commits.find(c => c.sha === unsampled)?.origin, "review");
   assert.equal(result.commits.find(c => c.sha === head)?.origin, "review");
-  assert.deepEqual(result.rework, { first: 0, pipeline: 0, review: 2, other: 2 });
+  assert.deepEqual(result.rework, { first: 0, pipeline: 0, review: 4, other: 0 });
   const fresh = { ...f.summary, id: "task-fresh" };
   const withoutSnapshot = await collectDeliveryCode(fresh, f.cwd, head);
   assert.deepEqual(withoutSnapshot.retained, result.retained, "归因不要求曾采集上轮快照");
@@ -155,9 +155,9 @@ test("漏采推送仍按修复起点归因，不把更早的未知提交归入�
 test("同一源版本的新证据自动更新缓存，合入后仍沿用采集基线，刷新不重复计数", async t => {
   const f = fixture(t);
   f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
-  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("fix"); f.publish(head);
+  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("change"); f.publish(head);
   observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
-  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained.other, 1);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained.review, 1);
   f.git("update-ref", "refs/remotes/origin/main", head);
   f.summary.delivery!.loop = { round: 1, state: "merged", kind: "ci", last_sha: first };
   observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
@@ -182,10 +182,10 @@ test("同一源版本的新证据自动更新缓存，合入后仍沿用采集�
 test("无效修复锚不使统计失败，已识别的历史原因不被后来轮次覆盖", async t => {
   const f = fixture(t);
   f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
-  f.write("feature.cpp", "int a = 2;\n"); const ci = f.commit("fix"); f.publish(ci);
+  f.write("feature.cpp", "int a = 2;\n"); const ci = f.commit("change"); f.publish(ci);
   f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "ci", last_sha: first };
   await collectDeliveryCode(f.summary, f.cwd, ci);
-  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("fix again"); f.publish(head);
+  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("change again"); f.publish(head);
   f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: first };
   const result = await collectDeliveryCode(f.summary, f.cwd, head);
   assert.equal(result.commits.find(c => c.sha === ci)?.origin, "pipeline");
@@ -195,7 +195,7 @@ test("无效修复锚不使统计失败，已识别的历史原因不被后来�
   for (const anchor of [unrelated, "a".repeat(40), "not-a-sha"]) {
     f.summary.delivery!.loop!.last_sha = anchor;
     const isolated = await collectDeliveryCode({ ...f.summary, id: `task-${anchor}` }, f.cwd, head);
-    assert.equal(isolated.retained.other, 1);
+    assert.equal(isolated.retained.review, 1);
   }
 });
 
@@ -224,7 +224,7 @@ test("15 个提交：仅最后轮次在 loop 中，历史批次仍完整恢复�
   const head = commits[14]; f.publish(head);
   f.summary.delivery!.loop = { round: 3, state: "merged", kind: "review", last_sha: commits[13] };
   const before = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(before.commits.filter(c => c.origin === "other").length, 13);
+  assert.equal(before.commits.filter(c => c.origin === "review").length, 14);
   const batch = (id: string, base: string, end: string, source: string) => ({
     task_id: f.summary.id, batch_id: id, base_sha: base, result_head: end,
     result_digest: "recorded", items: [{ source }], status: "closed",
@@ -256,9 +256,9 @@ test("推送时先保存区间，Git 采集失败后仍能恢复多轮；重复�
   assert.deepEqual(result.rework, { first: 0, pipeline: 2, review: 2, other: 0 });
 });
 
-test("反馈区间交叠归检视；其他任务、仅验证通过、未处理批次不能冒充修复证据", async t => {
+test("反馈区间交叠有明确CI依据归流水线；其他任务、仅验证通过、未处理批次不能冒充修复证据", async t => {
   const f = fixture(t); f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
-  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("fix"); f.publish(head);
+  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("change"); f.publish(head);
   f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "review", last_sha: first };
   const batch = { task_id: f.summary.id, batch_id: "ci", base_sha: first, result_head: head,
     result_digest: "recorded", items: [{ source: "pipeline" }], status: "closed" };
@@ -266,7 +266,7 @@ test("反馈区间交叠归检视；其他任务、仅验证通过、未处理�
     step_heads: { branch_create: f.base }, delivery_loop: { batches } }));
   writeBatches([batch, { ...batch, batch_id: "review", items: [{ source: "workspace" }] }]);
   const mixed = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(mixed.retained.review, 1); assert.equal(mixed.commits[1].origin_evidence!.length, 2);
+  assert.equal(mixed.retained.pipeline, 1); assert.equal(mixed.commits[1].origin_evidence!.length, 2);
   writeBatches([{ ...batch, task_id: "another-task" },
     { ...batch, result_digest: undefined, result_head: undefined, verified_sha: head },
     { ...batch, result_digest: undefined, status: "queued" }]);
@@ -288,9 +288,9 @@ test("缺少历史记录时按提交说明推断，最终代码来源与累计�
   f.write("e.cpp", "int e = 1;\n"); const head = f.commit("新增功能"); f.publish(head);
   const result = await collectDeliveryCode(f.summary, f.cwd, head);
   assert.equal(result.first, first);
-  assert.deepEqual(result.commits.map(c => c.origin), ["first", "review", "pipeline", "pipeline", "review", "other"]);
-  assert.deepEqual(result.retained, { first: 0, review: 2, pipeline: 2, other: 1 });
-  assert.deepEqual(result.rework, { first: 0, review: 3, pipeline: 2, other: 1 });
+  assert.deepEqual(result.commits.map(c => c.origin), ["first", "review", "pipeline", "pipeline", "pipeline", "review"]);
+  assert.deepEqual(result.retained, { first: 0, review: 2, pipeline: 3, other: 0 });
+  assert.deepEqual(result.rework, { first: 0, review: 3, pipeline: 3, other: 0 });
   assert.match(result.commits[1].origin_evidence!.join(" "), /推断/);
   const again = await collectDeliveryCode(f.summary, f.cwd, head);
   assert.deepEqual(again.retained, result.retained); assert.deepEqual(again.rework, result.rework);
@@ -298,14 +298,14 @@ test("缺少历史记录时按提交说明推断，最终代码来源与累计�
 });
 
 
-test("提交推断识别明确修复线索；泛化修改不乱分类，两类线索统一归检视", () => {
-  for (const text of ["按检视意见删除IR接口token", "address review feedback", "按评审意见修复CodeCheck"]) {
+test("提交推断识别明确修复线索；普通修正默认归检视，两类线索有明确CI依据归流水线", () => {
+  for (const text of ["按检视意见删除IR接口token", "address review feedback", "fix", "调整实现", "补单测"]) {
     assert.equal(inferCommitOrigin(text)?.origin, "review", text);
   }
-  for (const text of ["移除GTEST_SKIP", "修复CodeCheck行宽", "补单测修复DT覆盖率", "fix build failure"]) {
+  for (const text of ["按评审意见修复CodeCheck", "移除GTEST_SKIP", "修复CodeCheck行宽", "补单测修复DT覆盖率", "fix build failure"]) {
     assert.equal(inferCommitOrigin(text)?.origin, "pipeline", text);
   }
-  for (const text of ["fix", "补单测", "新增CodeCheck报告展示", "新增业务功能"]) {
-    assert.equal(inferCommitOrigin(text), undefined, text);
+  for (const text of ["新增CodeCheck报告展示", "新增业务功能"]) {
+    assert.equal(inferCommitOrigin(text)?.origin, "review", text);
   }
 });
