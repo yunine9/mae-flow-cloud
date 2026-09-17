@@ -106,8 +106,8 @@ test("任务摘要:服务端 TaskSummary 的每个字段都在 api.ts 镜像里"
 // ---- 或在下表写明"问题域 wire 为什么不出它"。
 
 /** 服务端 Annotation 有、IssueReview 刻意不镜像的字段(全是需求流闭环/
- * 协作检视的形状,问题域不存在这些通道;问题域闭环靠修订版报告的
- * 「检视意见回应」段与分析确认卡的整体把关,ADR-0007/ADR-0025)。 */
+ * 协作检视的形状,问题域不存在这些通道;问题域闭环靠意见处的逐条
+ * respond 回复(ADR-0036)与分析确认卡的整体把关,ADR-0007/ADR-0025)。 */
 const REVIEW_NOT_MIRRORED = new Set<string>([
   "route",              // 需求流的路由(owner_reply/decision/memory);问题域恒 agent
   "assignee",           // 责任人指派;问题会话没有协作检视
@@ -115,7 +115,8 @@ const REVIEW_NOT_MIRRORED = new Set<string>([
   "sent_by",            // 问题域提交 markSent 不带 by,投影恒缺席
   "agent_assigned",     // 需求流交接锁
   "agent_context",      // 责任人转交补充说明
-  "response",           // Agent 逐条回执;问题域不落逐条回执
+  "response",           // 已镜像,但镜像整体复用 Annotation["response"] 引用
+                        // (ADR-0035 起随回复型意见出),子字段不逐个展开,按前缀豁免
   "owner_reply",        // 责任人原话记账
   "verified_at",        // 逐条确认是需求流闭环;问题域整卡确认
   "verified_by",

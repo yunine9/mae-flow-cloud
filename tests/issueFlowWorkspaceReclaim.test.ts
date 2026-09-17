@@ -156,7 +156,7 @@ test("终态但未过保留期:原样(给查看模式/复盘留窗口)", () => {
   const dataDir = newDataDir();
   const root = sessionRoot(dataDir, "issue-1", {
     status: "archived",
-    conclusion: { kind: "fixed", summary: "刚收口", at: daysAgo(3) },
+    conclusion: { kind: "delivered", summary: "刚收口", at: daysAgo(3) },
   });
   const before = readdirSync(root).sort();
   const summary = reclaimIssueWorkspaces({
@@ -222,7 +222,7 @@ test("issues/ 下的软链接不许绕过边界:realpath 在外面就一个字�
   const outside = mfcTemp("mfc-issue-outside-");
   writeFileSync(join(outside, "issue.json"), JSON.stringify({
     id: "issue-9", status: "archived",
-    conclusion: { kind: "fixed", summary: "", at: daysAgo(20) },
+    conclusion: { kind: "delivered", summary: "", at: daysAgo(20) },
     updated_at: daysAgo(20),
   }));
   mkdirSync(join(outside, "repo"), { recursive: true });

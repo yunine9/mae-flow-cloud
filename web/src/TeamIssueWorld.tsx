@@ -54,12 +54,10 @@ function inScope(issue: IssueSummary, scope: IssueScope, now: number): boolean {
 }
 
 /** 档案结论词表(镜像 IssueBoard 的 issueConclusionText 词汇,档案格
- * 只按 conclusion.kind 分桶,不展开"未合入"细分——统计格要短标签)。 */
+ * 只按 conclusion.kind 分桶——词表收敛后只有三档,ADR-0037)。 */
 const CONCLUSION_TILES = [
   { kind: "", label: "全部闭环", tone: "neutral" },
   { kind: "delivered", label: "已交付", tone: "success" },
-  { kind: "converted", label: "已转正", tone: "success" },
-  { kind: "fixed", label: "已修复", tone: "active" },
   { kind: "issue", label: "问题成立", tone: "attention" },
   { kind: "non_issue", label: "非问题", tone: "neutral" },
   { kind: "canceled", label: "已取消", tone: "danger" },
@@ -291,7 +289,7 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
           <EmptyDescription>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</EmptyDescription>
         </Empty>
       : <>
-        <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-4" aria-label="问题闭环结论统计">
+        <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-5" aria-label="问题闭环结论统计">
           {CONCLUSION_TILES.map((tile) => (
             <div key={tile.kind || "all"}
               className={`flex min-h-[94px] flex-col justify-between rounded-lg border border-line bg-surface px-[15px] py-3.5 shadow-xs ${METRIC_TONE[tile.tone]}`}>

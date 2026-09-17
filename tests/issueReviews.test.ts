@@ -11,8 +11,9 @@
  *   时由 snapshotAnalysisVersion 落 reviews/ 子目录,不混进过程文档
  *   清单);没有草稿返回空(服务层据此打回);
  * - 渲染:护栏原文沿用 annotations.ts 的契约,清单按意见号升序编排、
- *   序号 = 意见号(「意见N」,不再批次内 1..N 重编号),修订版报告
- *   开头要有「检视意见回应」段的护栏要求,收尾指回 submit_analysis。
+ *   序号 = 意见号(「意见N」,不再批次内 1..N 重编号),逐条 respond
+ *   交代的护栏要求(ADR-0036:检视回复落账在意见处,报告不带应答段),
+ *   收尾指回 submit_analysis。
  */
 
 import { test } from "node:test";
@@ -221,7 +222,7 @@ test("意见清单跨批次按意见号升序(#261,ADR-0025):乱序输入也按�
     `意见${batchOne.seq} 必须排在意见${batchTwo.seq} 之前(跨批次不倒挂)`);
 });
 
-test("意见清单按意见号编排(#261):序号=意见号而非批次内重编号;回应段护栏原文在", () => {
+test("意见清单按意见号编排(#261):序号=意见号而非批次内重编号;逐条 respond 交代护栏在(ADR-0036)", () => {
   const root = workspace();
   const first = addReview(root, {
     author: "dev", line: 3, anchor: "根因:重试无上限", note: "加重试上限",
@@ -234,13 +235,15 @@ test("意见清单按意见号编排(#261):序号=意见号而非批次内重编
   assert.match(text, new RegExp(`意见1\\. \\[${first.id}\\] 历史第 3 行`),
     "序号 = 意见号,跨批次唯一定位");
   assert.match(text, new RegExp(`意见2\\. \\[${second.id}\\] 历史第 5 行`));
-  // 回应段落点(ADR-0025,软性章节):修订版报告开头,按意见号逐条
-  // 答复,未采纳/仅是提问也要给交代,不许漏号。
-  assert.match(text, /「检视意见回应」/);
-  assert.match(text, /按意见号逐条答复/);
+  // 逐条交代落账在意见处(ADR-0036):修订后 respond_review 交代,
+  // 未采纳/仅是提问也要给交代,不许漏号;报告正文不带应答段。
+  assert.match(text, /respond_review/);
   assert.match(text, /改了什么\/答了什么/);
   assert.match(text, /未被采纳或仅是提问/);
   assert.match(text, /不许漏号/);
+  // 应答段指令已删;护栏只反向点名禁写(不写进报告),不再要求加段。
+  assert.doesNotMatch(text, /开头加一段「检视意见回应」/);
+  assert.match(text, /不写「检视意见回应」/);
   // 既有护栏与收尾不回退(第几轮/重新提交)。
   assert.match(text, /第 2 轮/);
   assert.match(text, /重新 submit_analysis/);

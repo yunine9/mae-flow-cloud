@@ -7,6 +7,10 @@ import { Textarea } from "../components/ui/textarea";
 export function IssueExternalReviewPanel({ id, canOperate }: { id: string; canOperate: boolean }) {
   const [items, setItems] = useState<IssueReview[]>([]);
   const [message, setMessage] = useState("");
+  // 轮询断连单独记:下次轮询成功即清;不混入 message——那是操作回执/报错,不能被 5s 轮询冲掉。
+  // 断连多半偶发(休眠唤醒后的死连接、服务重启半拍),下一拍自愈,给状态
+  // 不给浏览器原文——「TypeError: Failed to fetch」是噪声不是信息。
+  const [pollError, setPollError] = useState("");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<{ id: string; mode: "context" | "reply"; text: string }>();
   const [page, setPage] = useState(0);
@@ -14,8 +18,8 @@ export function IssueExternalReviewPanel({ id, canOperate }: { id: string; canOp
   async function load() { const result = await getIssueReviews(id); setItems(result.reviews.filter(item => item.external_review)); }
   useEffect(() => {
     let alive = true;
-    const refresh = () => getIssueReviews(id).then(result => { if (alive) setItems(result.reviews.filter(item => item.external_review)); })
-      .catch(error => { if (alive) setMessage(String(error)); });
+    const refresh = () => getIssueReviews(id).then(result => { if (alive) { setItems(result.reviews.filter(item => item.external_review)); setPollError(""); } })
+      .catch(() => { if (alive) setPollError("检视批注暂时读不到，稍后自动重试。"); });
     void refresh();
     const timer = window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
     return () => { alive = false; window.clearInterval(timer); };
@@ -32,6 +36,8 @@ export function IssueExternalReviewPanel({ id, canOperate }: { id: string; canOp
   const shown = items.filter(item => done(item) === closed);
   const pages = Math.max(1, Math.ceil(shown.length / 8));
   const current = Math.min(page, pages - 1);
+  // 空面板不为断连提示单独现身:一条批注都没有时,断连行无处安放也无
+  // 信息量(协作流的断连提示兜底),安静等下一拍;已有批注时提示行照画。
   if (!items.length && !message) return null;
   return <section className="grid gap-3 rounded-xl border border-border bg-surface p-4" aria-label="MR 检视批注">
     <header className="flex items-center justify-between gap-3">
@@ -46,7 +52,7 @@ export function IssueExternalReviewPanel({ id, canOperate }: { id: string; canOp
       <Button size="sm" variant={!closed ? "default" : "outline"} onClick={() => { setClosed(false); setPage(0); }}>待判断与处理中</Button>
       <Button size="sm" variant={closed ? "default" : "outline"} onClick={() => { setClosed(true); setPage(0); }}>本地已闭环</Button>
     </div>
-    {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
+    {(message || pollError) && <p role="status" className="text-sm text-muted-foreground">{message || pollError}</p>}
     {shown.slice(current * 8, (current + 1) * 8).map(item => <article key={item.id} className="grid gap-3 rounded-lg border border-border p-3">
       <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
         <span>{item.author} · {item.file}{item.line ? `:${item.line}` : ""}</span>

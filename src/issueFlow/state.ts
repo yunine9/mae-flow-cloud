@@ -91,10 +91,8 @@ export interface StageTransition {
 
 export type IssueConclusionKind =
   | "non_issue"   // 非问题(误报/需求误解/无法复现)
-  | "fixed"       // 已修复(可能未走 MR,如仅换库验证)
-  | "delivered"   // 已修复并提交 MR
-  | "issue"       // 问题成立(无单挂起后未转正即收口)
-  | "converted";  // 已关联单号转正为新会话(本会话到此为止)
+  | "delivered"   // 修复完成即交付(合入与否看 mrs 账,不进结论,ADR-0037)
+  | "issue";      // 问题成立(含挂起后关联单号转正的收口,血缘见 converted_to)
 
 export interface IssueEnvironmentConfig {
   /** 环境引用(vault 里的 id);凭据永不进状态文件。 */
@@ -650,6 +648,12 @@ export function loadState(root: string): IssueSessionState | undefined {
     state.pipelines = { [state.repo_url ?? ""]: legacyPipeline };
   }
   delete (state as { pipeline?: unknown }).pipeline;
+  // 结论词表收敛(ADR-0037):fixed 并入 delivered(修复完成即交付,
+  // 合入与否看 mrs 账)、converted 并入 issue(转正=问题成立+开新会话,
+  // 血缘 converted_from/to 保留)。读侧归一,统计与展示不认旧词。
+  const legacyConclusion = state.conclusion as { kind?: string } | undefined;
+  if (legacyConclusion?.kind === "fixed") legacyConclusion.kind = "delivered";
+  else if (legacyConclusion?.kind === "converted") legacyConclusion.kind = "issue";
   return state;
 }
 

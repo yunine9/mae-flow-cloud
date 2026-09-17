@@ -16,7 +16,8 @@ export interface IssueOnceRateFacts {
   /** 单号:空=无单流程,不参与统计。 */
   ticket?: string;
   status: IssueStatus;
-  /** 结论 kind:完成交付=delivered(全部 MR 合入的归档,ADR-0034)。 */
+  /** 结论 kind:完成交付=delivered(修复完成归档;合入与否不进结论,
+   * ADR-0037)。 */
   conclusion_kind?: IssueConclusionKind;
   /** 环境验证卡答「验证发现问题」的次数。 */
   verify_fail_count: number;

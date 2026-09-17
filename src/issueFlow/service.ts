@@ -4417,20 +4417,14 @@ export class IssueFlowService {
     if (input.action === "cancel") {
       live.state.status = "canceled";
     } else {
-      // 竞态核对(ADR-0022):监看循环之外现扫一次平台事实——防
-      // "点归档瞬间平台恰好合入"的窗口错账;平台不可得则沿用上次
-      // 观测,不堵归档(软闸)。
-      if (live.state.mrs?.length) await this.syncMergeFacts(live);
-      // 结论按合入事实记(ADR-0022,软闸):全部 MR merged 才是
-      // delivered;建了 MR 未全合=已推送未合入(fixed)。挂起转正、
-      // 纯推送、纯分析的语义不变。
-      const mrs = live.state.mrs ?? [];
-      const allMerged = mrs.length > 0
-        && mrs.every((mr) => Boolean(mr.merged_at));
+      // 结论词表收敛后只有三档(ADR-0037):修复完成即 delivered
+      // (合入与否看 mrs 账,归档瞬间不再复核合入——那道竞态核对
+      // 只为 delivered/fixed 细分服务,细分没了,核对一并退役);
+      // 挂起会话=问题成立;其余按非问题收口。
       const kind = input.kind
         ?? (live.state.status === "suspended" ? "issue"
-          : allMerged ? "delivered"
-          : mrs.length || live.state.pushes?.length ? "fixed" : "non_issue");
+          : live.state.mrs?.length || live.state.pushes?.length
+            ? "delivered" : "non_issue");
       live.state.conclusion = {
         kind,
         summary: input.summary?.trim() || live.state.last_reply
@@ -5793,8 +5787,9 @@ export class IssueFlowService {
 
   /** 两段式:不带 confirm → 只做 DTS 存在性校验并把单据详情给用户
    * 过目;带 confirm → 转正:新会话继承工作区与分析报告直接进「问题
-   * 修改」,旧会话归档(结论 converted)。同用户+同单号至多一个活跃
-   * 会话。转正后不可逆——单号是新会话的身份(分支名/MR/台账都带)。 */
+   * 修改」,旧会话归档(结论 issue,血缘 converted_to)。同用户+同单号
+   * 至多一个活跃会话。转正后不可逆——单号是新会话的身份(分支名/MR/
+   * 台账都带)。 */
   async associate(id: string, input: {
     ticket: string;
     confirm?: boolean;
@@ -5961,9 +5956,10 @@ export class IssueFlowService {
       humanGate: new HumanGate(join(newRoot, "waiting.json")),
       controlEpoch: 0,
     });
-    // 旧会话收口(不经 control:结论与链接有专属语义)。
+    // 旧会话收口(不经 control:结论与链接有专属语义)。转正的本质
+    // 是问题成立+开新会话,结论按 issue 记,血缘留 converted_to(ADR-0037)。
     state.conclusion = {
-      kind: "converted",
+      kind: "issue",
       summary: `已关联单号 ${ticket},转正为 ${newId}`,
       at: now,
     };

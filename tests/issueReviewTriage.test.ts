@@ -7,8 +7,11 @@
  *   版本数不变、analysis_confirm 闸保持原样(不是二次确认)、流程照常
  *   可推进;
  * - 含修改型批次:declare_review_rework 触发原回退链路(轮次+1、
- *   reviews/ 出新快照、意见清单重注入、submit_analysis 后确认卡照旧);
- * - 混合批次:按修改型处理,回复型意见也逐条 respond。
+ *   reviews/ 出新快照、意见清单重注入),重写后修改型意见逐条 respond
+ *   交代、报告不带「检视意见回应」段(ADR-0036),submit_analysis 后
+ *   确认卡照旧;
+ * - 混合批次:按修改型处理,回复型意见在分诊回合逐条 respond,修改型
+ *   意见在重写后逐条 respond。
  */
 
 import test from "node:test";
@@ -190,11 +193,15 @@ test("含修改型批次:declare_review_rework 触发整体回退重写——轮
       reviews: [{ seq: 1 }],
       reason: "证据链缺口必须补测,方案要连带修订",
     } } });
+    // 重写版是干净纸面(ADR-0036):应答不进报告,交代走 respond_review。
     model.script.push({ tool: { name: "bash", input: { command:
       "cat > issue-analysis.md <<'EOF'\n"
-      + "# 检视意见回应\n意见1:已补连接池监控证据并修订方案。\n"
       + REPORT_V1.replace("连接池耗尽。", "连接池耗尽(已补监控证据)。")
       + "EOF" } } });
+    model.script.push({ tool: { name: "respond_review", input: {
+      items: [{ review: 1, reply: "已补连接池打满时的监控证据,方案同步修订为监控告警+提前回收。",
+        outcome: "fixed", evidence: ["证据链:连接池监控日志"] }],
+    } } });
     model.script.push({ tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽(已补证据)" } } });
     model.script.push({ text: "修订版已重新提交,等待确认。" });
@@ -222,13 +229,21 @@ test("含修改型批次:declare_review_rework 触发整体回退重写——轮
     assert.ok((state.transitions as Array<{ note: string }>).some((item) =>
       /第 2 轮:用户检视分析报告/.test(item.note)),
       "回退转移账带轮次与措辞族");
+    // 检视回复落账在意见处(ADR-0036):修改型意见重写后逐条 respond,
+    // 报告本身不带应答段。
+    const answered = service.listReviews(id).reviews
+      .find((item) => item.seq === 1)?.response;
+    assert.equal(answered?.outcome, "fixed", "修改型意见重写后逐条 respond 交代");
+    assert.match(answered?.summary ?? "", /监控证据/);
+    assert.equal(readFileSync(join(root, ANALYSIS_DOC_NAME), "utf-8")
+      .includes("检视意见回应"), false, "重写版报告不带「检视意见回应」段");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });
 
-test("混合批次:按修改型回退重写,回复型意见也逐条 respond 落账", async () => {
+test("混合批次:按修改型回退重写,回复型在分诊回合逐条 respond,修改型在重写后逐条 respond 交代", async () => {
   const { service, model, id, root } = await bootToConfirmGate();
   try {
     service.addReview(id, {
@@ -243,11 +258,16 @@ test("混合批次:按修改型回退重写,回复型意见也逐条 respond 落
     model.script.push({ tool: { name: "declare_review_rework", input: {
       reviews: [{ seq: 2 }], reason: "方案本身要改,须整份重写",
     } } });
+    // 修改型意见不在分诊回合冒充已回复:respond 在申报与重写之后
+    // (linear 剧本按请求序取幕,顺序即回合时序);报告是干净纸面。
     model.script.push({ tool: { name: "bash", input: { command:
       "cat > issue-analysis.md <<'EOF'\n"
-      + "# 检视意见回应\n意见1:已答复连接池规格。\n意见2:方案已改为扩容+回收。\n"
       + REPORT_V1.replace("超时回收。", "连接池扩容+超时回收。")
       + "EOF" } } });
+    model.script.push({ tool: { name: "respond_review", input: {
+      items: [{ review: 2, reply: "方案已改为连接池扩容+超时回收双管齐下。",
+        outcome: "fixed", evidence: ["修改方案:扩容+回收"] }],
+    } } });
     model.script.push({ tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案已扩容" } } });
     model.script.push({ text: "混合批处理完,等待确认。" });
@@ -261,8 +281,10 @@ test("混合批次:按修改型回退重写,回复型意见也逐条 respond 落
     const reviews = service.listReviews(id).reviews;
     assert.equal(reviews.find((item) => item.seq === 1)?.response?.outcome,
       "not_fixed", "回复型意见在混合批次里也逐条 respond");
-    assert.equal(reviews.find((item) => item.seq === 2)?.response, undefined,
-      "修改型意见走回应段与版本,不在分诊回合冒充已回复");
+    assert.equal(reviews.find((item) => item.seq === 2)?.response?.outcome,
+      "fixed", "修改型意见在重写后逐条 respond 交代(ADR-0036)");
+    assert.equal(readFileSync(join(root, ANALYSIS_DOC_NAME), "utf-8")
+      .includes("检视意见回应"), false, "重写版报告不带「检视意见回应」段");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -300,7 +322,7 @@ test("提交检视不再即时快照:两批提交零快照;申报时刻冻结的
   assert.deepEqual(versions[1].review_ids, [], "最新版是干净纸面");
 });
 
-test("分诊渲染:triage 版意见清单不再预设重写(无回应段/无 submit_analysis 收尾),修改版契约原文不变", () => {
+test("分诊渲染:triage 版意见清单不预设重写(无重写契约);修改版改为逐条 respond 交代,报告不带应答段(ADR-0036)", () => {
   const root = mfcTemp("mfc-issue-triage-render-");
   writeFileSync(join(root, ANALYSIS_DOC_NAME), "# 报告\n\n根因:重试无上限。\n");
   const first = addReview(root, {
@@ -312,12 +334,18 @@ test("分诊渲染:triage 版意见清单不再预设重写(无回应段/无 sub
   const sent = submitReviews(root);
   assert.equal(sent.length, 2);
 
-  // 修改版(默认):回应段护栏与 submit_analysis 收尾在——修改型重写的
-  // 正式通道不删(ADR-0035 红线)。
+  // 修改版(默认):逐条 respond 交代护栏与 submit_analysis 收尾在
+  // (ADR-0036),报告正文不再要应答段。
   const rework = renderReviewNotes([second, first], "登录超时", 2);
-  assert.match(rework, /「检视意见回应」/);
+  assert.match(rework, /respond_review/);
+  assert.match(rework, /不许漏号/);
+  assert.match(rework, /已回复过的不必重发/);
+  assert.match(rework, /保持干净纸面/);
   assert.match(rework, /重新 submit_analysis/);
   assert.match(rework, /第 2 轮/);
+  // 应答段指令已删(ADR-0036),护栏只反向点名禁写。
+  assert.doesNotMatch(rework, /开头加一段「检视意见回应」/);
+  assert.match(rework, /不写「检视意见回应」/);
 
   // 分诊版:清单与定位护栏在,重写契约让位分诊准则(在提示词资产里)。
   const triage = renderReviewNotes([second, first], "登录超时", 1, "triage");

@@ -232,11 +232,12 @@ export function IssueConversationStream({
     getIssueConversation(id).then((next) => {
       if (ticket !== sequence.current) return;
       setView({ items: next.items, truncated: next.truncated, loaded: true });
-    }).catch((cause) => {
+    }).catch(() => {
       if (ticket !== sequence.current) return;
+      // 轮询断连多半偶发(休眠唤醒的死连接、服务重启半拍),下一拍自愈;
+      // 给状态不给浏览器原文——「Failed to fetch」是噪声不是信息。
       setView((current) => ({ ...current, loaded: true,
-        unavailable: `协作流暂时读不到(${cause instanceof Error
-          ? cause.message : String(cause)}),稍后自动重试。` }));
+        unavailable: "协作流暂时读不到，稍后自动重试。" }));
     });
   }, []);
 
