@@ -6,7 +6,7 @@ import { frozenTaskBaseline } from "./artifacts.ts";
 import { analyticsGit, calculateDeliveryCode } from "./deliveryAnalyticsGit.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
-interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string }
+interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string }
 type Task = Pick<TaskSummary, "id" | "workspace">;
 type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin">;
 function location(task: Task): string {
@@ -38,6 +38,13 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
   return "other";
 }
 
+// Cache the evidence used, not just the code version. Old snapshots are upgraded
+// once and late repair evidence can update an already sampled push.
+function attributionKey(summary: CollectionTask): string {
+  const loop = summary.delivery?.loop;
+  return JSON.stringify([2, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha]);
+}
+
 const pending = new Map<string, Promise<void>>();
 let lane: Promise<void> = Promise.resolve();
 /** Best-effort observer, single Git worker across tasks. Never awaited by the
@@ -46,13 +53,14 @@ export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefine
   if (!cwd || !/^[a-f0-9]{40,64}$/.test(head) || summary.origin === "issue") return;
   const snapshot: CollectionTask = { id: summary.id, workspace: summary.workspace,
     origin: summary.origin, delivery: structuredClone(summary.delivery) };
-  const key = `${location(summary)}:${head}`;
+  const attribution = attributionKey(snapshot);
+  const key = `${location(summary)}:${head}:${attribution}`;
   const saved = read(summary);
-  if (pending.has(key) || saved?.head === head && (saved.metric?.head === head || !retry)) return;
+  if (pending.has(key) || saved?.head === head && saved.attribution === attribution && !retry) return;
   const job = lane.then(async () => {
     try { await collectDeliveryCode(snapshot, cwd, head); }
     catch (error) {
-      try { save(snapshot, { version: 1, head, metric: read(snapshot)?.metric, error: error instanceof Error ? error.message : "统计暂不可用" }); } catch { /* read-side only */ }
+      try { save(snapshot, { version: 1, head, metric: read(snapshot)?.metric, attribution, error: error instanceof Error ? error.message : "统计暂不可用" }); } catch { /* read-side only */ }
     }
   }).finally(() => pending.delete(key));
   pending.set(key, job);
@@ -62,26 +70,38 @@ export async function awaitDeliveryAnalytics(): Promise<void> { await lane; }
 
 export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
   const previous = read(summary)?.metric;
-  if (previous?.head === head) return previous;
   if (!previous && summary.delivery?.foreign_commits) throw new Error("首次取样前已混入外来提交，无法确认本任务首次提交");
   const taskBase = await frozenTaskBaseline(cwd);
   if (!taskBase) throw new Error("缺少任务创建时的 Git 基线，无法识别首次提交");
   const target = summary.delivery?.target_branch;
   if (!target) throw new Error("缺少 MR 目标分支，无法确定交付范围");
   await analyticsGit(cwd, ["check-ref-format", `refs/remotes/origin/${target}`]);
-  const base = (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim();
+  // A same-source refresh must retain the pre-merge comparison base, including
+  // after fast-forward/squash merge or a target branch update.
+  const base = previous?.head === head ? previous.base
+    : (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim();
   if (base === head) throw new Error("目标分支已包含交付版本，缺少合入前统计快照；不倒推历史占比");
   const origins: Record<string, CodeOrigin> = Object.fromEntries((previous?.commits ?? []).map(c => [c.sha, c.origin]));
   const loop = summary.delivery?.loop;
   const category = repairOrigin(loop);
-  // A prior observed push and the platform's repair anchor must agree. A missing
-  // interval or rewritten history is not evidence for a repair attribution.
-  if (previous && loop?.last_sha === previous.head && category !== "other") {
-    await analyticsGit(cwd, ["merge-base", "--is-ancestor", previous.head, head]);
+  // The repair anchor bounds the evidence; sampling cadence is irrelevant.
+  // A missing/rebased anchor only loses attribution, never the entire metric.
+  const anchor = loop?.last_sha;
+  let validAnchor = false;
+  if (anchor && /^[a-f0-9]{40,64}$/.test(anchor) && category !== "other") {
+    try {
+      await analyticsGit(cwd, ["merge-base", "--is-ancestor", anchor, head]);
+      validAnchor = true;
+    } catch { /* no usable repair interval */ }
+  }
+  if (validAnchor) {
     const foreign = summary.delivery?.foreign_commits?.base_sha;
-    const changed = (await analyticsGit(cwd, ["rev-list", "--first-parent", "--no-merges", `${previous.head}..${head}`, `^${base}`,
+    const changed = (await analyticsGit(cwd, ["rev-list", "--first-parent", "--no-merges", `${anchor}..${head}`, `^${base}`,
       ...(foreign && /^[a-f0-9]{40,64}$/.test(foreign) ? [`^${foreign}`] : [])])).trim().split("\n").filter(Boolean);
-    for (const sha of changed) origins[sha] = category;
+    for (const sha of changed) {
+      // Previously evidenced rounds must not be relabelled by a later round.
+      if (!origins[sha] || origins[sha] === "other") origins[sha] = category;
+    }
   }
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins });
   // Preserve cumulative events even if the target has absorbed an earlier part.
@@ -92,7 +112,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     metric.rework = emptyOrigins();
     for (const commit of metric.commits) if (commit.sha !== metric.first) metric.rework[commit.origin] += commit.additions + commit.deletions;
   }
-  save(summary, { version: 1, head, metric });
+  save(summary, { version: 1, head, metric, attribution: attributionKey(summary) });
   return metric;
 }
 
@@ -105,14 +125,15 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
     .map(task => {
       const stored = read(task), head = task.delivery?.git_push?.sha;
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
-      const finalMatches = !merged || task.delivery?.merged_sha === head;
-      const metric = finalMatches && head && stored?.metric?.head === head ? stored.metric : undefined;
+      // merged_sha identifies the target commit (different after squash/rebase).
+      // Statistics describe the confirmed pushed source, which must still match.
+      const metric = head && stored?.metric?.head === head ? stored.metric : undefined;
       return { id: task.id, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
         repo: cleanRepository(task.repo_url ?? ""), modules: (task.business_modules ?? []).map(m => m.name),
         merged,
         at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
-        unavailable: metric ? undefined : !finalMatches ? "最终合入版本与统计快照不一致，未计入正式汇总" : stored?.head === head && stored?.error ? stored.error
+        unavailable: metric ? undefined : stored?.head === head && stored?.error ? stored.error
           : head ? "尚无本次推送的统计快照；历史任务不会猜测归因" : "尚未推送代码" };
     }) };
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -114,8 +114,8 @@ test("父任务和问题单不重复纳入；缺失证据不参与平均；汇�
     { ...f.summary, id: "issue-task", origin: "issue" }, { ...f.summary, id: "task-missing" }]);
   assert.deepEqual(report.rows.map(r => r.id), ["task-1", "task-missing"]);
   const total = aggregateDelivery(report.rows); assert.equal(total.available, 1); assert.equal(total.tasks, 2); assert.equal(total.firstPercent, 100);
-  f.summary.delivery!.merged_sha = f.base;
-  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined, "a different final source must not reuse stale statistics");
+  f.publish(f.base);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined, "a different pushed source must not reuse stale statistics");
 });
 
 test("API 需登录，普通团队成员可读，响应与程序化统计一致", async t => {
@@ -133,4 +133,83 @@ test("API 需登录，普通团队成员可读，响应与程序化统计一致"
   const cookie = response.headers.get("set-cookie")!.split(";")[0];
   const result = await fetch(`${url}/delivery-analytics`, { headers: { cookie } });
   assert.equal(result.status, 200); assert.deepEqual(await result.json(), JSON.parse(JSON.stringify(expected)));
+});
+
+test("漏采推送仍按修复起点归因，不把更早的未知提交归入本轮", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.publish(first); await collectDeliveryCode(f.summary, f.cwd, first);
+  f.write("feature.cpp", "int a = 2;\n"); const unsampled = f.commit("unknown");
+  f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: unsampled };
+  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("fix"); f.publish(head);
+  const result = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(result.commits.find(c => c.sha === unsampled)?.origin, "other");
+  assert.equal(result.commits.find(c => c.sha === head)?.origin, "review");
+  assert.deepEqual(result.rework, { first: 0, pipeline: 0, review: 2, other: 2 });
+  const fresh = { ...f.summary, id: "task-fresh" };
+  const withoutSnapshot = await collectDeliveryCode(fresh, f.cwd, head);
+  assert.deepEqual(withoutSnapshot.retained, result.retained, "归因不要求曾采集上轮快照");
+});
+
+test("同一源版本的新证据自动更新缓存，合入后仍沿用采集基线，刷新不重复计数", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("fix"); f.publish(head);
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained.other, 1);
+  f.git("update-ref", "refs/remotes/origin/main", head);
+  f.summary.delivery!.loop = { round: 1, state: "merged", kind: "ci", last_sha: first };
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  const corrected = buildDeliveryAnalysis([f.summary]).rows[0].metric!;
+  assert.equal(corrected.retained.pipeline, 1); assert.equal(corrected.rework.pipeline, 2);
+  assert.equal(corrected.base, f.base);
+  const cacheDir = join(f.dir, ".delivery-analysis");
+  const cachePath = join(cacheDir, readdirSync(cacheDir).find(name => name.endsWith(".json"))!);
+  const legacy = JSON.parse(readFileSync(cachePath, "utf8"));
+  delete legacy.attribution;
+  legacy.metric.commits.find((c: { sha: string }) => c.sha === head).origin = "other";
+  legacy.metric.retained = { first: 0, pipeline: 0, review: 0, other: 1 };
+  writeFileSync(cachePath, JSON.stringify(legacy));
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric!.retained.pipeline, 1, "旧版缓存自动升级");
+  observeDeliveryCode(f.summary, f.cwd, head, true); await awaitDeliveryAnalytics();
+  const refreshed = buildDeliveryAnalysis([f.summary]).rows[0].metric!;
+  assert.deepEqual(refreshed.rework, corrected.rework);
+  assert.equal(refreshed.commits.length, 2);
+});
+
+test("无效修复锚不使统计失败，已识别的历史原因不被后来轮次覆盖", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.write("feature.cpp", "int a = 2;\n"); const ci = f.commit("fix"); f.publish(ci);
+  f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "ci", last_sha: first };
+  await collectDeliveryCode(f.summary, f.cwd, ci);
+  f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("fix again"); f.publish(head);
+  f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: first };
+  const result = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(result.commits.find(c => c.sha === ci)?.origin, "pipeline");
+  assert.equal(result.commits.find(c => c.sha === head)?.origin, "review");
+  f.git("checkout", "main"); f.write("other.cpp", "int other = 1;\n"); const unrelated = f.commit("unrelated");
+  f.git("checkout", "task");
+  for (const anchor of [unrelated, "a".repeat(40), "not-a-sha"]) {
+    f.summary.delivery!.loop!.last_sha = anchor;
+    const isolated = await collectDeliveryCode({ ...f.summary, id: `task-${anchor}` }, f.cwd, head);
+    assert.equal(isolated.retained.other, 1);
+  }
+});
+
+test("真实 squash 合入目标 SHA 不等于源 SHA，仍计入汇总；旧源快照不冒充新推送", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "int a = 1;\n"); f.commit("first");
+  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("second"); f.publish(head);
+  await collectDeliveryCode(f.summary, f.cwd, head);
+  f.git("checkout", "main"); f.git("merge", "--squash", "task"); const merged = f.commit("squashed delivery");
+  assert.notEqual(merged, head);
+  f.summary.status = "completed";
+  Object.assign(f.summary.delivery!, { mr_state: "merged", merged_sha: merged });
+  assert.equal(aggregateDelivery(buildDeliveryAnalysis([f.summary]).rows).available, 1);
+  rmSync(f.cwd, { recursive: true });
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric!.head, head);
+  f.publish(merged);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined);
 });
