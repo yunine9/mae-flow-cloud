@@ -566,12 +566,13 @@ test("自动档:开放题卡与混卡整卡等人,不做半卡代答;三档把�
   }
 });
 
-test("自动档:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)", async () => {
+test("自动档:检视重写窗口中的 Agent 卡永不代答(ADR-0007 口径延伸;ADR-0035 起窗口=修改型申报之后)", async () => {
   const dataDir = mfcTemp("mfc-issue-tier-review-");
   const origin = bareOrigin(dataDir);
   seedModule(dataDir, origin);
   // 线性剧本按请求数推进幕:cardA(代答续跑)→ 三幕文本(两次催办耗尽
-  // 转 idle)→ 第 5 个请求正好落在检视回合的续聊上,举出 cardB。
+  // 转 idle)→ 第 5 个请求落在分诊回合上,申报修改置 review_active;
+  // 第 6 个请求在重写窗口里举出 cardB。
   const script: Scene[] = [
     { tool: { name: "AskUserQuestion", input: {
       questions: [{
@@ -583,9 +584,13 @@ test("自动档:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
     { text: "第一轮按推荐项处理。" },
     { text: "继续推进。" },
     { text: "第一轮收尾。" },
+    { tool: { name: "declare_review_rework", input: {
+      reviews: [{ seq: 1 }],
+      reason: "意见要求补证据并改方向,须整份重写",
+    } } },
     { tool: { name: "AskUserQuestion", input: {
       questions: [{
-        question: "检视回合:修订按哪个方向落?",
+        question: "检视重写:修订按哪个方向落?",
         options: ["方向一:收紧超时阈值", "方向二:改用重试"],
         recommended: "方向一:收紧超时阈值",
       }],
@@ -610,34 +615,40 @@ test("自动档:检视回合中的 Agent 卡永不代答(ADR-0007 口径延伸)"
     const [firstCard] = waitingRecords(dataDir, created.id);
     assert.equal(firstCard.status, "resolved",
       "前置事实:检视前的纯选项题卡确实被自动档代答了");
-    // 提交检视 = 整体回退,review_active 置位;续跑回合里 Agent 举 cardB。
+    // 提交检视 = 分诊递词(不回退、不置 review_active);AI 申报修改
+    // (declare_review_rework)才置 review_active 并回退——重写窗口里
+    // 的 Agent 卡永不代答。
     service.addReview(created.id, {
       line: 1, anchor: "第一轮按推荐项处理。",
-      note: "请补充日志时间窗的证据",
+      note: "请补充日志时间窗的证据,并修订方向",
     });
     service.submitReviews(created.id);
+    await until(() => {
+      const issue = service.get(created.id);
+      return issue.stage === "analyze" && issue.round === 2 ? issue : undefined;
+    }, "修改型申报触发回退重写(轮次+1)");
     const reviewCard = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
-    }, "检视回合的 Agent 卡落地等真人");
+    }, "检视重写回合的 Agent 卡落地等真人");
     assert.ok(
-      JSON.stringify(reviewCard.waiting?.question ?? "").includes("检视回合"),
-      "在场的是检视回合举的新卡");
+      JSON.stringify(reviewCard.waiting?.question ?? "").includes("检视重写"),
+      "在场的是检视重写回合举的新卡");
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(service.get(created.id).status, "waiting_user",
-      "检视回合的卡整段跳过代答");
+      "检视重写回合的卡整段跳过代答");
     const records = waitingRecords(dataDir, created.id);
     const secondCard = records.find((record) =>
       String((record.question as { questions?: Array<{ question?: string }> })
-        ?.questions?.[0]?.question ?? "").includes("检视回合"));
-    assert.ok(secondCard, "检视回合的卡在场");
+        ?.questions?.[0]?.question ?? "").includes("检视重写"));
+    assert.ok(secondCard, "检视重写回合的卡在场");
     assert.equal(secondCard!.status, "waiting", "卡未被代答");
     assert.equal(
       records.filter((record) =>
         String(record.notes ?? "").includes("介入档位免审批自动作答")).length,
       1,
-      "全程只有检视前那一卡被代答,检视回合的卡不追溯");
+      "全程只有检视前那一卡被代答,重写窗口的卡不追溯");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
