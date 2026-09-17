@@ -723,6 +723,7 @@ export function App() {
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
+  const [knowledgeCategory, setKnowledgeCategory] = useState<"documents" | "skills">("documents");
   const [knowledgeUploadRequest, setKnowledgeUploadRequest] = useState(0);
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
     new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : readKnowledgeAssetFocus() ? "knowledge" : "documents");
@@ -1445,7 +1446,7 @@ export function App() {
 
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
-          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />添加知识</Button>}
+          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加文档"}</Button>}
           {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
           {relevantWaiting > 0 && view !== "users" && view !== "settings" && (
             <div className="flex h-8 items-center gap-2 whitespace-nowrap rounded-[8px] border border-(--attention)/10 bg-(--attention-soft) pl-[9px] pr-2.5 text-sm font-medium text-(--attention)">
@@ -1515,7 +1516,7 @@ export function App() {
 
         {view === "knowledge" && <section className="team-assets-workspace">
           {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectTeamAssetTab("documents")}>← 返回知识库</Button>}
-          {teamAssetTab === "documents" ? <KnowledgeDocuments uploadRequest={knowledgeUploadRequest} onManage={focus => {
+          {teamAssetTab === "documents" ? <KnowledgeDocuments onOpenTask={taskId => { const target = tasks.find(task => task.id === taskId); if (target) openArtifacts(target); else location.assign(`/work/${encodeURIComponent(taskId)}`); }} category={knowledgeCategory} onCategoryChange={setKnowledgeCategory} uploadRequest={knowledgeUploadRequest} onManage={focus => {
             if (!focus) { selectTeamAssetTab("memories"); return; }
             setKnowledgeFocus(focus); selectTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
           }} /> : teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace

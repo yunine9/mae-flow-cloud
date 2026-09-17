@@ -10,7 +10,7 @@ export function createKnowledgeTool(options: {
   const reply = (text: string, details: object = {}) => ({ content: [{ type: "text" as const, text }], details });
   return defineTool({
     name: "knowledge", label: "检索团队知识",
-    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 返回候选及适用条件，read 按 id 展开正文。候选不是权威答案，核对产品版本和例外后使用。索引不可用时继续工作，不阻塞任务。",
+    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 返回候选及适用条件，read 按 id 展开正文。Skill 不在本工具中检索，通过会话已有技能目录按需加载。候选不是权威答案，核对产品版本和例外后使用。索引不可用时继续工作，不阻塞任务。",
     promptSnippet: "knowledge: search 查团队、模块、仓库知识及已采纳经验；read 展开正文。",
     promptGuidelines: [
       "修改代码、配置、编写设计或执行构建之前，用 knowledge(action=search, query=具体问题) 检索相关规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本，不只搜‘C++’或‘开发规范’。",

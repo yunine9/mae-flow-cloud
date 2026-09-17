@@ -11,7 +11,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       const catalog = knowledgeDocumentCatalog(dir);
       const documents = catalog.documents.map(({ content, ...doc }) => {
         const asset = catalog.assets.find(a => a.id === doc.id);
-        return { ...doc, lines: content.split("\n").length, indexing: !doc.active ? { state: "disabled" }
+        return { ...doc, lines: content.split("\n").length, indexing: doc.form === "skill" ? { state: "native" } : !doc.active ? { state: "disabled" }
           : asset ? service.getKnowledgeSearch().documentStatus(asset) : { state: "failed", error: "适用模块已停用，请调整范围。" } };
       });
       return json(response, 200, { documents });
@@ -24,11 +24,11 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
     if (request.method === "POST" && id && parts[2] === "search") {
       const body = await readBody(request, 8192), query = String(body.query ?? "").trim();
       if (!query || query.length > 4000) throw new Error("请输入具体问题（最多 4000 字）");
-      if (!knowledgeDocumentCatalog(dir).documents.some(d => d.id === id && d.active)) throw new Error("知识已停用或不存在");
+      if (!knowledgeDocumentCatalog(dir).documents.some(d => d.id === id && d.active && d.form !== "skill")) throw new Error("该资料不可检索；Skill 通过原生技能机制加载");
       return json(response, 200, await service.getKnowledgeSearch().searchDocument(id, query));
     }
     if (request.method === "POST" && id && parts[2] === "retry") {
-      if (!knowledgeDocumentCatalog(dir).documents.some(d => d.id === id && d.active)) throw new Error("知识已停用或不存在");
+      if (!knowledgeDocumentCatalog(dir).documents.some(d => d.id === id && d.active && d.form !== "skill")) throw new Error("知识已停用或不存在");
       service.prepareKnowledgeIndex();
       return json(response, 202, { ok: true });
     }

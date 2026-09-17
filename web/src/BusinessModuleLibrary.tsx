@@ -329,3 +329,15 @@ export function BusinessModuleLibrary({ initialAsset }: {
     </div>
   </section>;
 }
+
+
+/** 知识库内直接复用原资产编辑器，不切换到模块管理页面。 */
+export function BusinessAssetEditor({moduleId,assetId,onDone}:{moduleId:string;assetId:string;onDone:()=>void}) {
+  const [module,setModule]=useState<BusinessModule>();
+  const [content,setContent]=useState<string>();
+  const [error,setError]=useState("");
+  useEffect(()=>{let live=true;void Promise.all([getBusinessModules(),getBusinessKnowledgeAsset(moduleId,assetId)]).then(([catalog,doc])=>{if(live){const target=catalog.modules.find(m=>m.id===moduleId);if(!target?.assets.some(a=>a.id===assetId)){setError("资料已不存在，请刷新列表");return;}setModule(target);setContent(doc.content);}}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[moduleId,assetId]);
+  if(error)return <Alert variant="destructive">{error}</Alert>;
+  const asset=module?.assets.find(a=>a.id===assetId);
+  return module && asset && content !== undefined ? <AssetEditor module={module} asset={asset} initialContent={content} onSaved={onDone} onCancel={onDone}/> : <p>正在读取资料…</p>;
+}

@@ -7,7 +7,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "
 import { join } from "node:path";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import { listKnowledgeCandidateCatalog } from "./knowledgeCandidates.ts";
-import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
@@ -82,23 +81,8 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
         ? `适用技术：${row.technologies.join("、")}` : ""].filter(Boolean).join("；"),
       content: row.content, revision: row.digest, productVersions: knowledgeProductVersions(row.content) });
   }
-  // A skill candidate is a publication receipt, not the live package. Read the
-  // current shelf so edits/removal cannot resurrect the old submitted contents.
-  const shelf = listHostSkillShelf(dataDir);
-  warnings.push(...shelf.warnings);
-  for (const skill of shelf.skills) {
-    if (!skill.loadable || skill.nature === "unclassified" || !matchesRepos(skill.repositories)
-        || (skill.business_module_ids.length && !skill.business_module_ids.some(id => moduleIds.has(id)))) continue;
-    try {
-      const content = readFileSync(join(dataDir, "skills", skill.path), "utf8");
-      assets.push({ id: `skill:${skill.path}`, title: skill.name, kind: "skill", scope: "团队 Skill",
-        summary: skill.description, whenToUse: [skill.description, skill.technologies.length
-          ? `适用技术：${skill.technologies.join("、")}` : ""].filter(Boolean).join("；"),
-        content, revision: skill.package_digest, productVersions: knowledgeProductVersions(content) });
-    } catch { warnings.push(`团队 Skill ${skill.name} 暂不可读`); }
-  }
   for (const module of modules) for (const asset of module.assets) {
-    if (asset.status !== "published" || !matchesRepos(asset.repositories)) continue;
+    if (asset.status !== "published" || asset.form === "skill" || !matchesRepos(asset.repositories)) continue;
     // Published business candidates are materialized in their module. Do not
     // offer a stale duplicate copy from the submission record.
     try {
