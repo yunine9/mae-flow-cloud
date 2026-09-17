@@ -604,19 +604,21 @@ function ManualRegister({
 /* ---------- DTS 列表列宽拖拽(2026-09-17) ---------- */
 
 type DtsColKey =
-  | "select" | "ticket" | "title" | "version" | "status" | "launch" | "module";
+  | "select" | "ticket" | "title" | "version" | "branch" | "status"
+  | "launch" | "module";
 
 /** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号/
  *  状态原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
  *  列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
 const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
-  select: 112, ticket: 190, version: 256, status: 88, launch: 96, module: 224,
+  select: 112, ticket: 190, version: 256, branch: 216, status: 88,
+  launch: 96, module: 224,
 };
 /** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号,状态列要放
  *  得下徽标)。 */
 const DTS_COL_MIN: Record<DtsColKey, number> = {
-  select: 96, ticket: 150, title: 160, version: 140, status: 72, launch: 88,
-  module: 160,
+  select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,
+  launch: 88, module: 160,
 };
 /** 列宽记忆(全用户共用一份:列宽是屏幕偏好不是业务数据,不按人分)。 */
 const DTS_COL_WIDTHS_KEY = "mae-flow:dts-col-widths";
@@ -745,7 +747,9 @@ function DtsRegister({
   onError: (message: string) => void;
   onOpenIssue?: (issueId: string) => void;
 }) {
-  const [productVersion, setProductVersion] = useState("");
+  // 产品版本选择框已随分支匹配退役(ADR-0038):分支由每张单的版本号
+  // 按配置中心映射推导(服务端单点匹配,列表逐单带 branch),不再有
+  // 全局选择;手工登记表单(无单据版本可推导)仍保留自己的选择框。
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
   // 协助处理(2026-09-17):名下视角可切换——默认看自己,选人后看别人
   // 名下的单(工具栏人员选择框)。换的是读侧视角,不发所有权:发起后
@@ -954,6 +958,9 @@ function DtsRegister({
         title: detail.title,
         severity: detail.severity,
         version: detail.version,
+        // 远程查单入列也带分支匹配结果(服务端详情同源补齐),否则
+        // 绕过列表的单子在分支列全员误报「未配置分支」。
+        branch: detail.branch,
         url: detail.url,
         description: detail.description,
         // 状态不带入列,可拉取判定(isActionableDts)会把远程命中的单
@@ -983,11 +990,12 @@ function DtsRegister({
     showLaunched, shownLiveByTicket]);
 
   // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
-  // 过滤划范围,发起过滤里已发起的行勾选禁用,不在全选之列。可勾行全
-  // 中时点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在
-  // 展示列表里,保持原样,发起时照常带上。
+  // 过滤划范围,发起过滤里已发起的行、未配置分支的行(ADR-0038,禁
+  // 发起)勾选禁用,不在全选之列。可勾行全中时点击整体取消,部分或
+  // 全无时一键勾满。已勾选但被过滤掉的单不在展示列表里,保持原样,
+  // 发起时照常带上。
   const selectableTickets = display
-    .filter((t) => !mineLiveByTicket.has(t.ticket))
+    .filter((t) => !mineLiveByTicket.has(t.ticket) && !!t.branch)
     .map((t) => t.ticket);
   const displayedSelectedCount =
     selectableTickets.filter((no) => selected.includes(no)).length;
@@ -1160,7 +1168,8 @@ function DtsRegister({
           const created = await createIssue({
             title: ticket?.title || ticketNo,
             source: "dts",
-            product_version: productVersion || undefined,
+            // 分支不随请求携带(ADR-0038):服务端按单据版本包含匹配
+            // 配置中心,未配置直接 400——前端勾选闸只是第一道。
             ticket: ticketNo,
             description: ticket?.title || undefined,
             ...(binding ? { module_id: binding.module_id } : {}),
@@ -1199,10 +1208,6 @@ function DtsRegister({
       DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-    <div className="max-w-md">
-      <ProductVersionPicker value={productVersion} onChange={version => setProductVersion(version)} />
-      <p className="mt-1 text-sm text-muted-foreground">批量发起可统一选择版本；未选择时，按单据版本精确匹配配置中心，未匹配则沿用问题流程原有基线处理。</p>
-    </div>
     {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
         (2026-09-13 表头化,与环境管理台账同范式,旧「版本过滤」
         按钮随迁移退役)。 */}
@@ -1311,6 +1316,7 @@ function DtsRegister({
               {renderCol("ticket")}
               {renderCol("title")}
               {renderCol("version")}
+              {renderCol("branch")}
               {renderCol("status")}
               {renderCol("launch")}
               {moduleCol && renderCol("module")}
@@ -1398,6 +1404,16 @@ function DtsRegister({
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
+                {/* 分支列(ADR-0038):服务端按「单据版本包含配置版本,
+                    多命中取最长」逐单带出;未命中给「未配置分支,前往
+                    配置」深链配置中心版本与分支页签,该行禁发起。 */}
+                <TableHead className="relative">
+                  分支
+                  <DtsColResizeHandle colKey="branch" label="分支"
+                    width={dtsColWidth("branch")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>
                 <TableHead className="relative">
                   状态
                   <DtsColResizeHandle colKey="status" label="状态"
@@ -1468,15 +1484,17 @@ function DtsRegister({
                     ? `已发起:会话 ${liveIssue.id} 进行中`
                     : `已发起:${liveIssue.account} 的会话 ${liveIssue.id} 进行中`)
                   : "";
-                const colCount = moduleCol ? 8 : 7;
+                const colCount = moduleCol ? 9 : 8;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
                       ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
-                        disabled={!!mineLive}
-                        title={mineLive ? `${liveTip},不可重复发起` : undefined}
+                        disabled={!!mineLive || !ticket.branch}
+                        title={mineLive ? `${liveTip},不可重复发起`
+                          : !ticket.branch ? "未配置分支,不可发起——点分支列的「前往配置」补映射"
+                          : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
                           checked
@@ -1513,6 +1531,17 @@ function DtsRegister({
                         title={ticket.version}>
                         {ticket.version || "—"}
                       </span>
+                    </TableCell>
+                    <TableCell className="max-w-0 text-sm">
+                      {ticket.branch
+                        ? <span className="block truncate font-mono text-xs"
+                            title={ticket.branch}>{ticket.branch}</span>
+                        : <a className="text-xs text-destructive underline
+                            underline-offset-2 hover:underline"
+                            href="/configuration?tab=versions"
+                            title="单据版本没有匹配到配置中心的版本与分支映射,配置后即可发起">
+                            未配置分支,前往配置
+                          </a>}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {ticket.status

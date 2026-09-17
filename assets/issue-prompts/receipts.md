@@ -9,10 +9,6 @@
 拉仓指引——
 {{stage_brief}}
 
-## pull.baseline_miss
-
-注意: 该仓没有基线分支 {{baseline}},修复分支未创建、停在其默认分支——请核实基线是否正确,拿不准就用 AskUserQuestion 问用户。
-
 ## pull.remote_branch_warn
 
 遗留警报: 远端已存在同名修复分支 {{branch}}@{{remote}},与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留。放着不管 push_branch 会被拒(非快进)。请用 AskUserQuestion 请用户拍板处置:在代码平台删除远端旧分支后重推,还是沿用旧分支。

@@ -135,14 +135,14 @@ export interface IssueToolContext {
   startWarmup?: () => void;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
-   * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
-   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。 */
+   * 建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
+   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。
+   * 基线分支在远端缺失时整次失败抛错(ADR-0038),不降级默认分支。 */
   pullRepo(url: string): Promise<{
     dir: string;
     cloned: boolean;
     branch?: string;
     head: string;
-    baselineMiss?: string;
     remoteBranch?: string;
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
@@ -415,8 +415,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Pull Repository",
     description:
       "把一个代码仓加入会话并克隆到 repo/<仓名>/(宿主带凭据执行,你只见"
-      + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带尝试创建修复分支 "
-      + "master_<工号>_<单号>(基线分支不存在时不建,如实回报由你裁决)。"
+      + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带创建修复分支 "
+      + "master_<工号>_<单号>;基线分支在远端不存在时拉仓整次失败,如实"
+      + "向用户报告,不要在别的分支上继续。"
       + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。",
     parameters: Type.Object({
       url: Type.String({
@@ -437,10 +438,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             : ""}`,
       });
       ctx.persist();
-      const baselineNote = facts.baselineMiss
-        ? "\n" + promptCopy("receipts", "pull.baseline_miss",
-          { baseline: facts.baselineMiss })
-        : "";
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
       // 自报)。拉取阶段的回执带注册表简报指引:还有仓继续拉,拉齐了
       // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
@@ -459,7 +456,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             remote: facts.remoteBranch,
           })
           : ""}`
-        + `${baselineNote}${guide}`);
+        + `${guide}`);
     },
   }));
 

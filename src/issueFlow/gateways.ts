@@ -300,6 +300,9 @@ export interface DtsTicketBrief {
   status?: string;
   /** B 版本(DTS 字段 sProdBNoName);R 版本不用。 */
   version?: string;
+  /** 分支匹配结果(ADR-0038):路由层按配置中心映射补齐,网关不产;
+   * 未命中配置时不加字段,前端按「未配置分支」呈现。 */
+  branch?: string;
   severity?: string;
   submitter?: string;
   url?: string;
@@ -314,6 +317,8 @@ export interface DtsTicketDetail {
   description?: string;
   severity?: string;
   version?: string;
+  /** 分支匹配结果(ADR-0038):路由层补齐,同列表;远程查单入列也带。 */
+  branch?: string;
   url?: string;
   submitter?: string;
   /** 状态名(batchQueryTicket 的 dtsStatusName,需 fields 显式请求)。

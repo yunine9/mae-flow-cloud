@@ -2130,13 +2130,14 @@ export class IssueFlowService {
   /** 拉仓(pull_repo 工具的宿主实现;2026-08-28 拍板:克隆是 Agent 的
    * 显式动作,平台只代劳凭据与机械步骤)。登记合并 → 带凭据克隆到
    * repo/<仓名>/ →(有单场景)切好修复分支。回执只含事实;基线分支
-   * 缺失不炸——如实报 baselineMiss 退回默认分支,由 Agent 裁决。 */
+   * 在远端缺失即硬失败(ADR-0038):退回默认分支会把修复悄悄送上
+   * 错误的版本线,如实抛错让 Agent 上报、停在拉仓阶段。 */
   private async pullRepoFor(
     live: LiveIssue,
     rawUrl: string,
   ): Promise<{
     dir: string; cloned: boolean; branch?: string;
-    head: string; baselineMiss?: string;
+    head: string;
   }> {
     const { state } = live;
     const url = validateRepoUrl(rawUrl);
@@ -2148,7 +2149,6 @@ export class IssueFlowService {
     state.repo_url ??= merged[0];
     const repo = issueRepoWorkspaces(state, live.root)
       .find((item) => item.url === url)!;
-    let baselineMiss: string | undefined;
     const cloned = !existsSync(join(repo.dir, ".git"));
     if (cloned) {
       this.log(`[issue-flow] ${live.id} 拉仓: ${url}`);
@@ -2165,12 +2165,11 @@ export class IssueFlowService {
         });
       } catch (error) {
         if (!state.baseline) throw error;
-        // 基线分支可能不存在(参考 Q7 拍板):退回默认分支克隆,
-        // 事实回报,不替 Agent 拍板。
-        baselineMiss = state.baseline;
-        this.log(`[issue-flow] ${live.id} 基线 ${state.baseline} 不可用,`
-          + `退回默认分支克隆 ${url}: ${String(error)}`);
-        await cloneRepository(common);
+        // 基线分支缺失是硬失败(ADR-0038):不退默认分支继续。
+        throw new Error(
+          `基线分支 ${state.baseline} 在远端不存在(或不可取),拉仓失败:`
+          + `请到配置中心核对版本→分支映射,修正后重新拉取。原始错误: `
+          + String(error).slice(0, 200));
       }
     }
     if (this.options.isolation && isMaeRepository(url)) {
@@ -2180,10 +2179,9 @@ export class IssueFlowService {
       if (live.container?.isAlive) await live.container.exec(MAE_CONTAINER_BOOTSTRAP, live.root,
         { onData: () => {}, timeout: 30 });
     }
-    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名);
-    // 基线缺失时不建分支,让 Agent 先裁决基线对不对。
+    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名)。
     let branch: string | undefined;
-    if (!baselineMiss && state.scenario === "ticket" && state.ticket) {
+    if (state.scenario === "ticket" && state.ticket) {
       branch = expectedBranch(state);
       await ensureBranch({
         dataDir: this.options.dataDir,
@@ -2217,7 +2215,6 @@ export class IssueFlowService {
       cloned,
       ...(branch ? { branch } : {}),
       head,
-      ...(baselineMiss ? { baselineMiss } : {}),
       ...(remoteBranch ? { remoteBranch } : {}),
     };
   }

@@ -53,3 +53,21 @@ export function resolveProductBranch(dataDir: string, version: unknown, fallback
   if (!row) throw new ConfigurationInputError(`版本「${name}」未在配置中心配置，请刷新并重新选择`);
   return row.branch;
 }
+
+/** 分支匹配(ADR-0038):单据版本字符串**包含**配置版本即命中(大小写
+ * 敏感),多命中取最长——更长的配置段是更具体的命中;无命中返回
+ * undefined,由调用方决定展示「未配置分支」还是拒绝发起。 */
+export function matchProductVersion(
+  rows: ProductVersion[], version: string | undefined,
+): ProductVersion | undefined {
+  const name = String(version ?? "").trim();
+  if (!name) return undefined;
+  let best: ProductVersion | undefined;
+  for (const row of rows) {
+    if (name.includes(row.version)
+        && (best === undefined || row.version.length > best.version.length)) {
+      best = row;
+    }
+  }
+  return best;
+}

@@ -3977,6 +3977,9 @@ export interface DtsTicketBrief {
   title: string;
   status?: string;
   version?: string;
+  /** 分支匹配结果(ADR-0038):服务端按配置中心映射逐单补齐;未命中
+   * 配置时不带,页面按「未配置分支」呈现并禁止发起。 */
+  branch?: string;
   severity?: string;
   submitter?: string;
   url?: string;
@@ -3992,6 +3995,8 @@ export interface DtsTicketDetail {
   description?: string;
   severity?: string;
   version?: string;
+  /** 分支匹配结果(ADR-0038):同列表;远程查单入列也带。 */
+  branch?: string;
   url?: string;
   submitter?: string;
   /** 状态名:远程查单入列要靠它过"开发人员实施修改"可拉取判定。 */

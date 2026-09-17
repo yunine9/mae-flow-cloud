@@ -154,9 +154,10 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration, /已发起\(进行中\)/);
   assert.match(registration,
     /selectedVersions\.length > 0 \|\| launchFilterActive/);
-  // 已发起的行:我名下的勾选禁用(悬停说明),徽标可点跳进该会话;
+  // 已发起的行:我名下的勾选禁用(悬停说明);未配置分支的行同样禁
+  // (ADR-0038,禁发起双闸的前端一侧)。徽标可点跳进该会话;
   // 全选只作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
-  assert.match(registration, /disabled=\{!!mineLive\}/);
+  assert.match(registration, /disabled=\{!!mineLive \|\| !ticket\.branch\}/);
   assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
   assert.match(registration, /const selectableTickets = display/);
   assert.match(registration,
@@ -1841,9 +1842,10 @@ test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动
   assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
   assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
   // 默认宽沿用迁表现行值(w-28/w-64/w-24/w-56),单号/状态给足内容定值;
-  // 拖动下限防内容打架。列存在性由 DTS_COL_MIN 收口,少一列即测试红。
+  // 分支列随分支匹配入列(ADR-0038)。拖动下限防内容打架。列存在性由
+  // DTS_COL_MIN 收口,少一列即测试红。
   assert.match(registration,
-    /select: 112, ticket: 190, version: 256, status: 88, launch: 96, module: 224/);
+    /select: 112, ticket: 190, version: 256, branch: 216, status: 88,\s*\n\s*launch: 96, module: 224/);
   assert.match(registration,
-    /select: 96, ticket: 150, title: 160, version: 140, status: 72, launch: 88/);
+    /select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,\s*\n\s*launch: 88/);
 });
