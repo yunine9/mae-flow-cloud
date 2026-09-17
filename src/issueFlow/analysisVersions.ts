@@ -2,9 +2,11 @@
  * 分析报告版本投影(#262,ADR-0025):「初版 / 修订N」页签的数据面。
  *
  * 版本是**平台的记账行为,AI 零感知**——不教版本概念、不改
- * issue-analysis.md 文件名契约、不新增快照:快照本来就在检视提交时
- * 落账(reviews.ts 的 submitReviews 把当时的报告整份复制进 reviews/,
- * 文件名 `issue-analysis@<时间戳>.md`),这里只做读侧推导:
+ * issue-analysis.md 文件名契约、不新增快照:快照在修改型申报触发
+ * 整体回退重写时落账(ADR-0035 起提交检视不再冻结,纯回复型批次
+ * 不出版本;写侧是 reviews.ts 的 snapshotAnalysisVersion,把当时的
+ * 报告整份复制进 reviews/,文件名 `issue-analysis@<时间戳>.md`),
+ * 这里只做读侧推导:
  *
  * - 第 j 份快照 = 第 j 批意见提交时冻结的版本 v_j;live 文件恒为
  *   最新版 v_m(它还在被 AI 续写,是唯一的"活"版本槽)。
@@ -13,8 +15,9 @@
  * - 去重:内容相同的相邻版本不出两条(快照=live 说明 AI 还没修订完,
  *   修订版尚不存在;两份快照相同说明那次修订零改动)——重复出条只会
  *   让页签上出现内容一模一样的假版本。
- * - 非检视通道(补充意见等)的报告重写不产生新版本:快照只在检视
- *   提交时发生,live 的中间态永远只占"最新版"这一个槽,不会被冻结。
+ * - 非检视通道(补充意见等)与纯回复型批次不产生新版本:快照只在
+ *   修改型申报时发生(ADR-0035),live 的中间态永远只占"最新版"
+ *   这一个槽,不会被冻结。
  * - 每版带该批提交的意见 id(sent_at 落在相邻两次快照时刻之间的即
  *   该批):冻结版的锚点标记靠它画,历史会话的旧快照同账自然可读,
  *   不做迁移。
@@ -30,7 +33,7 @@ import { ANALYSIS_DOC_NAME } from "./documents.ts";
 import { REVIEWS_DIR, reviewStore } from "./reviews.ts";
 
 /** reviews/ 内分析报告快照的文件名形状(写侧在 reviews.ts 的
- * submitReviews:`issue-analysis@r<base36 毫秒>.md`)。 */
+ * snapshotAnalysisVersion:`issue-analysis@r<base36 毫秒>.md`)。 */
 const SNAPSHOT_PATTERN = /^issue-analysis@[^/\\]+\.md$/;
 /** 从快照文件名解析冻结时刻(base36 毫秒);解析不了退回 mtime。 */
 const SNAPSHOT_STAMP = /^issue-analysis@r([0-9a-z]+)\.md$/;
@@ -127,7 +130,8 @@ function readBounded(path: string): { content: string; truncated: boolean } | un
 }
 
 /** 已提交的意见按 sent_at 落批:sent_at 落在 [本次快照时刻, 下次快照
- * 时刻) 即第 j 批(快照与 markSent 同一个提交动作,前者略早毫秒级)。
+ * 时刻) 即第 j 批(ADR-0035 起送出在先、冻结在后,快照名取批次最早
+ * 送出时刻——写侧 snapshotAnalysisVersion 保证窗口不错批)。
  * 推导与快照去重共用一份原始时间序,去重折掉的快照批次并入幸存条目。 */
 function sentReviewIds(root: string, snapshots: SnapshotFile[]): string[][] {
   const batches: string[][] = snapshots.map(() => []);

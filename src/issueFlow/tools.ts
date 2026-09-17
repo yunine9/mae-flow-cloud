@@ -37,6 +37,7 @@ import {
   FIXED_STAGE_LABELS,
   fixedAdvance,
   fixedComplete,
+  fixedRollback,
   fixedStageIndex,
   MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
@@ -72,6 +73,12 @@ import {
   syncTicketImages,
 } from "./ticketImages.ts";
 import { issueRegistrationMeta } from "./prompt.ts";
+import {
+  outstandingReviewBatch,
+  renderReviewNotes,
+  reviewStore,
+  snapshotAnalysisVersion,
+} from "./reviews.ts";
 import {
   currentBranch,
   currentHead,
@@ -1249,6 +1256,146 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         return ok(promptCopy("receipts", scenario === "no_ticket"
           ? "analysis.submitted.no_ticket"
           : "analysis.submitted.ticket"));
+      },
+    }));
+
+    // ---- 检视分诊(ADR-0035):意见递给 AI 逐条自判回复型/修改型 ----
+    // 回复型(澄清/追问/确认)由 respond_review 在意见处回复,原地闭环;
+    // 含修改型的批次由 declare_review_rework 申报,平台执行原整体回退
+    // 链路(此刻才冻结版本快照)。两工具全程可调(见 stageRegistry)。
+
+    /** 按意见号或台账 id 定位一条已送出的检视意见;定位不到如实打回,
+     * 不给 AI 拿幻觉意见号落账的口子。 */
+    const locateSentReview = (reference: number | string) => {
+      const store = reviewStore(ctx.workspace);
+      const items = store.list().filter((item) =>
+        item.status === "sent" && item.sent_via === "issue_review");
+      const match = typeof reference === "number" || /^\d+$/.test(String(reference))
+        ? items.find((item) => item.seq === Math.trunc(Number(reference)))
+        : items.find((item) => item.id === String(reference).trim());
+      if (!match) {
+        const known = items.map((item) => `意见${item.seq}`).join("、") || "无";
+        fail(`检视意见 ${reference} 不在本批待处理意见里(可引用:${known})。`
+          + "按意见清单里的「意见N」引用,不要凭空编号");
+      }
+      return match;
+    };
+
+    tools.push(defineTool({
+      name: "respond_review",
+      label: "Respond To Review",
+      description:
+        "对检视意见逐条回复(检视分诊的回复型闭环):按意见号对每条意见"
+        + "给出回复文本,平台落账后在检视意见面板对该意见下可见。回复型"
+        + "意见(澄清、追问、确认语义)用它原地闭环——不回退、不改报告、"
+        + "不出版本。outcome 按语义选:needs_clarification=要用户补充说明;"
+        + "not_fixed=解释说明/确认无需改动;fixed=确已按意见改动(附依据)。"
+        + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报。",
+      parameters: Type.Object({
+        items: Type.Array(Type.Object({
+          review: Type.Union([Type.Number(), Type.String()], {
+            description: "意见号(清单里的「意见N」的 N)或台账 id",
+          }),
+          reply: Type.String({
+            description: "给用户的回复原文(完整话,不是\"已知悉\")",
+          }),
+          outcome: Type.Union([
+            Type.Literal("fixed"),
+            Type.Literal("not_fixed"),
+            Type.Literal("needs_clarification"),
+          ], { description: "处理结果:fixed=已按意见改动/not_fixed=无需改动"
+            + "/needs_clarification=要用户补充说明" }),
+          evidence: Type.Optional(Type.Array(Type.String(), {
+            description: "依据(改动的文件/位置);纯答复可空",
+          })),
+        }), { description: "逐条回复清单,一次可回多条" }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        const entries = Array.isArray(params.items) ? params.items : [];
+        if (!entries.length) fail("items 不能为空:至少回复一条检视意见");
+        const store = reviewStore(ctx.workspace);
+        const receipts: string[] = [];
+        for (const entry of entries) {
+          const target = locateSentReview(entry.review);
+          const reply = String(entry.reply ?? "").trim();
+          if (!reply) fail(`意见${target.seq} 的回复不能为空:要给用户完整话`);
+          store.respond(target.id, {
+            outcome: entry.outcome,
+            summary: reply,
+            evidence: Array.isArray(entry.evidence)
+              ? entry.evidence.map((item: unknown) => String(item)) : [],
+          });
+          receipts.push(`意见${target.seq}:已回复落账`);
+        }
+        return ok(`已逐条回复 ${receipts.length} 条检视意见`
+          + `(用户在检视意见面板可见):\n${receipts.join("\n")}\n`
+          + "本批若还有需要改动报告内容的修改型意见,先回复完再调 "
+          + "declare_review_rework;全批都是回复型就到此为止,不要重写报告。");
+      },
+    }));
+
+    tools.push(defineTool({
+      name: "declare_review_rework",
+      label: "Declare Review Rework",
+      description:
+        "检视分诊的修改申报入口:本批检视意见里有需要改动分析报告内容本身"
+        + "的修改型意见时,先对回复型意见逐条 respond_review,再调它申报。"
+        + "平台会整体回退重写(回退问题分析、轮次+1、冻结被检视的报告"
+        + "版本),并把意见清单重新注入;之后按清单修订报告、开头加「检视"
+        + "意见回应」段、重新 submit_analysis,确认卡照旧交用户。纯回复型"
+        + "批次(澄清/追问/确认,无需改动报告)禁止调用。",
+      parameters: Type.Object({
+        reviews: Type.Array(Type.Object({
+          seq: Type.Number({
+            description: "判定为修改型的意见号(清单里的「意见N」的 N)",
+          }),
+        }), { description: "修改型意见号清单" }),
+        reason: Type.String({
+          description: "一句话:为什么这些意见必须回退重写而非原地答复",
+        }),
+      }),
+      async execute(_toolCallId: string, params: any) {
+        const batch = outstandingReviewBatch(ctx.workspace);
+        if (!batch.length) {
+          fail("没有待分诊的检视意见:没有已送出的检视意见可申报修改");
+        }
+        const wanted: number[] = [...new Set(
+          (Array.isArray(params.reviews) ? params.reviews : [])
+            .map((item: any) => Math.trunc(Number(item?.seq)))
+            .filter((seq: unknown) => Number.isFinite(seq)),
+        )] as number[];
+        if (!wanted.length) {
+          fail("reviews 不能为空:列出判定为修改型的意见号(意见N 的 N)");
+        }
+        const reason = String(params.reason ?? "").trim();
+        if (!reason) fail("reason 不能为空:说清为什么必须回退重写");
+        const unique = [...new Set(wanted)];
+        // 申报对象必须是本批待分诊的意见:更早批次的意见已锚在自己的
+        // 冻结版上,拿历史意见号申报是幻觉引用,如实打回。
+        const batchSeqs = new Set(batch.map((item) => item.seq));
+        const known = batch.map((item) => `意见${item.seq}`).join("、") || "无";
+        for (const seq of unique) {
+          if (!batchSeqs.has(seq)) {
+            fail(`意见${seq} 不在本批待处理意见里(本批:${known})。`
+              + "按意见清单里的「意见N」引用,不要凭空编号");
+          }
+        }
+        // 版本快照在申报时刻冻结(ADR-0035):送出在先、冻结在后,快照
+        // 名用批次送出时刻命名,读侧批次窗口才把意见对回它锚定的版本。
+        snapshotAnalysisVersion(ctx.workspace);
+        // 原整体回退链路照旧(ADR-0007):回退问题分析、轮次+1、其后
+        // 阶段标 redo、申报账作废;检视回合标记随回退置位。
+        fixedRollback(ctx.state,
+          `用户检视分析报告,提交 ${batch.length} 条修订意见,`
+            + `其中 ${unique.length} 条修改型需回退重写:${reason}`);
+        ctx.state.review_active = true;
+        ctx.persist();
+        // 意见清单重注入(修改版契约:回应段护栏+submit_analysis 收尾)
+        // ——AI 据此整份重写,重写完重新举确认卡。
+        return ok(`已申报修改:平台已整体回退问题分析(第 ${ctx.state.round} 轮),`
+          + "被检视报告已冻结版本。请按以下意见清单修订报告:\n\n"
+          + renderReviewNotes(batch, ctx.state.title ?? "分析报告",
+            ctx.state.round ?? 1));
       },
     }));
 

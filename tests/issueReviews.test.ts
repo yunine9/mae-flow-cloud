@@ -7,8 +7,9 @@
  * - 锚点检测:gone = 已被改动的唯一判据,moved 只是漂移;读不到
  *   报告按 hit 放行(fail-open,检测绝不挡人);只服务草稿
  *   (ADR-0025「新版干净纸面」),sent 意见不再检测;
- * - 提交:草稿标记送出,被检视报告留版本快照(子目录,不混进过程
- *   文档清单);没有草稿返回空(服务层据此打回);
+ * - 提交:草稿标记送出(ADR-0035:提交不再冻结版本快照,申报修改
+ *   时由 snapshotAnalysisVersion 落 reviews/ 子目录,不混进过程文档
+ *   清单);没有草稿返回空(服务层据此打回);
  * - 渲染:护栏原文沿用 annotations.ts 的契约,清单按意见号升序编排、
  *   序号 = 意见号(「意见N」,不再批次内 1..N 重编号),修订版报告
  *   开头要有「检视意见回应」段的护栏要求,收尾指回 submit_analysis。
@@ -31,6 +32,7 @@ import {
   dropReview,
   renderReviewNotes,
   reviewStore,
+  snapshotAnalysisVersion,
   submitReviews,
 } from "../src/issueFlow/reviews.ts";
 import {
@@ -105,7 +107,7 @@ test("锚点检测:没动=hit;重写原文消失=gone(已被改动的唯一判�
   assert.deepEqual(anchorChecks(submitted), [], "sent 意见不再漂移检测");
 });
 
-test("提交检视:草稿标记送出;报告版本快照落在子目录、不混进过程文档清单;无草稿返回空", () => {
+test("提交检视:草稿标记送出;提交不再冻结版本(ADR-0035),申报修改时快照落子目录、不混进过程文档清单;无草稿返回空", () => {
   const root = workspace();
   addReview(root, {
     author: "dev", line: 3, anchor: "根因:重试无上限", note: "加重试上限",
@@ -119,8 +121,13 @@ test("提交检视:草稿标记送出;报告版本快照落在子目录、不混
   assert.equal(sent[0].line <= sent[1].line, true, "清单按行号升序");
   assert.equal(reviewStore(root).drafts().length, 0);
 
-  // 版本快照(ADR-0007 Q10):意见锚定的原文永远可对照;子目录避开
-  // 顶层 .md 扫描,过程文档页签不见它。
+  // 提交不再伴快照(ADR-0035:纯回复型批次不出版本)——快照时机迁到
+  // 修改型申报(snapshotAnalysisVersion)。
+  assert.equal(existsSync(join(root, "reviews")), false, "提交不出快照");
+
+  // 申报修改时冻结:快照落 reviews/ 子目录,避开顶层 .md 扫描,
+  // 过程文档页签不见它。
+  snapshotAnalysisVersion(root);
   const snapDir = join(root, "reviews");
   assert.ok(existsSync(snapDir));
   assert.ok(readdirSync(snapDir).some((name) => name.startsWith("issue-analysis@")));
