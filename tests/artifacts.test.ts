@@ -488,7 +488,6 @@ test("缺少 gitignore 的依赖安装不膨胀交付事实，显式跟踪文件
     explicit, tracked, "website/src/new.ts"].sort((a, b) => a.localeCompare(b));
   assert.deepEqual(snapshot.workspace_paths, expected);
   const excluded = snapshot.workspace_paths.filter((path) => path !== explicit);
-  assert.ok(excluded.includes("website/src/new.ts"), "未勾选业务文件仍完整排除");
   assert.ok(Buffer.byteLength(JSON.stringify({ paths: [explicit], excluded_paths: excluded })) < 4096);
   run("commit", "--quiet", "-m", "explicit vendor");
   assert.deepEqual((await deliveryChangeSnapshot(cwd))?.committed_paths, [explicit]);

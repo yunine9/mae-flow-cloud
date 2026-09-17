@@ -32,6 +32,15 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import {
+  IssuePrototypeSwitcher,
+  moduleOf,
+  PrototypeVariantCells,
+  PrototypeVariantDrilldown,
+  PrototypeVariantLedger,
+  PrototypeVariantMatrix,
+  usePrototypeVariant,
+} from "./TeamIssueWorld.prototype";
 
 /** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
 type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
@@ -84,8 +93,15 @@ export function TeamIssueWorld({ issues, onceRates }: {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<IssueScope>("all");
   const [owner, setOwner] = useState("");
-  /** 概览格筛选:"p:<阶段>" | "s:<状态>"(空=不筛),与需求侧阶段/状态格同机制。 */
+  /** 概览格筛选:"p:<阶段>" | "s:<状态>" | "f:<特性>"(空=不筛),与
+   * 需求侧阶段/状态格同机制;f: 前缀来自按特性分类原型(变体 A/B,
+   * 与阶段/状态格同属单选格语义)。 */
   const [cell, setCell] = useState("");
+  /** 特性钻取(按特性分类原型变体 C):独立于单选格,与阶段/状态格
+   * 叠加生效;空=全部特性。胜出变体定稿后此状态随之定型或删除。 */
+  const [feature, setFeature] = useState("");
+  /** 原型变体(仅 dev + ?variant=A|B|C;生产恒 null=默认概览)。 */
+  const variant = usePrototypeVariant();
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
 
@@ -120,8 +136,11 @@ export function TeamIssueWorld({ issues, onceRates }: {
         if (!(status === "waiting_user"
           ? issue.status === "waiting_user" || issue.status === "idle"
           : issue.status === status)) return false;
+      } else if (cell.startsWith("f:")) {
+        if (moduleOf(issue) !== cell.slice(2)) return false;
       } else if (issue.stage !== cell.slice(2)) return false;
     }
+    if (feature && moduleOf(issue) !== feature) return false;
     if (scope !== "all" && !inScope(issue, scope, now)) return false;
     if (owner && issue.account !== owner) return false;
     if (needle) {
@@ -131,8 +150,8 @@ export function TeamIssueWorld({ issues, onceRates }: {
     }
     return true;
     // now 刻意不进依赖:筛选语义跟渲染帧走,与需求侧同款(每次渲染重算)。
-  }), [active, cell, scope, owner, needle]);
-  const anyFilter = Boolean(cell || query || scope !== "all" || owner);
+  }), [active, cell, feature, scope, owner, needle]);
+  const anyFilter = Boolean(cell || feature || query || scope !== "all" || owner);
 
   /** 点概览格:选中/取消 + 联动滚动到队列(与需求侧 selectPhase 同款)。 */
   function selectCell(next: string) {
@@ -162,7 +181,18 @@ export function TeamIssueWorld({ issues, onceRates }: {
   );
 
   return <>
-    <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
+    {/* 按特性分类原型(仅 dev + ?variant=A|B|C 现身,生产恒走默认概览;
+        胜出变体定稿后折入默认概览并删除 TeamIssueWorld.prototype.tsx)。 */}
+    {variant === "A" && <PrototypeVariantCells issues={issues} stats={stats}
+      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
+    {variant === "B" && <PrototypeVariantMatrix issues={issues} stats={stats}
+      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
+    {variant === "C" && <PrototypeVariantDrilldown issues={issues}
+      onceRates={onceRates} feature={feature} onSelectFeature={setFeature}
+      cell={cell} onSelectCell={selectCell} />}
+    {variant === "D" && <PrototypeVariantLedger issues={issues} stats={stats}
+      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
+    {!variant && <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
       <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
         <div className="grid min-w-0 gap-[3px]">
           <h2 className="m-0 text-lg text-text-strong">问题处理概览</h2>
@@ -201,7 +231,8 @@ export function TeamIssueWorld({ issues, onceRates }: {
           </div>
         </section>
       </div>
-    </section>
+    </section>}
+    {variant && <IssuePrototypeSwitcher current={variant} />}
 
     <section className="mt-1" id="team-issue-queue" ref={queueRef}
       aria-labelledby="team-issue-queue-title">
@@ -241,7 +272,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
         </Select>
         {anyFilter && <button type="button"
           className="h-[34px] cursor-pointer rounded-[7px] border-0 bg-primary/10 px-[11px] text-[13px] font-bold text-primary"
-          onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
+          onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); setFeature(""); }}>
           清除筛选</button>}
       </div>
       {visible.length === 0 && <Empty className="py-11" role="status">

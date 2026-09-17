@@ -88,7 +88,8 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 预算)重启后正确结算;vault 取回与三路终态清理;takeover 落盘可续;
 saveState 原子写+serve 实例锁防双进程;决定卡/reply 双击被状态闸+同步
 beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
-(push_confirm 三档才举是 ADR-0009 刻意保留);权限面 18 写路由全 own()
+(push_confirm 三档才举是 ADR-0009 刻意保留——2026-09-17 起该闸已退役,
+见 ADR-0009 增补);权限面 18 写路由全 own()
 +admin 403。
 
 **本轮修复(带测试,tests/issueTerminalHardening)**:

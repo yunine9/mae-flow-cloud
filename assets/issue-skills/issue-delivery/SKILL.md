@@ -26,7 +26,7 @@ metadata:
 
 `git push` 在容器里被禁用,推送用 `push_branch`(不受阶段限制),多仓改过的仓各自调,`repo` 传该仓地址。
 
-同单重跑撞远端遗留分支时推送被 non-fast-forward 拒绝(回执会点名):确认是本单上次遗留后带 `force: true` 重推覆盖;用户开着「推送前过目」时平台会举强制覆盖确认卡,等作答再推,重推不必再带 force。该分支已有 MR 的,覆盖后原 MR 自动更新,不重复建。拿不准是不是本单遗留,先 AskUserQuestion 核对。
+同单重跑撞远端遗留分支时推送被 non-fast-forward 拒绝(回执会点名):确认是本单上次遗留后带 `force: true` 重推覆盖(平台按租赁式核对远端旧 tip,不盲盖)。该分支已有 MR 的,覆盖后原 MR 自动更新,不重复建。拿不准是不是本单遗留,先 AskUserQuestion 核对。
 
 ## 4. 提 MR
 

@@ -832,7 +832,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    // 契约快照的是"等人"的问题卡形状:钉三档把控,卡不被档位代答。
+    // 契约快照的是"等人"的问题卡形状:钉三档对齐,卡不被档位代答。
     interventionTier: () => "3",
   });
   try {
@@ -887,7 +887,6 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       answers: undefined,
       notes: "",
       resolved_at: "",
-      reminders: 0,
     };
     assertWireShape(waitingSample, detail.body.waiting, "Agent 卡 .waiting");
 

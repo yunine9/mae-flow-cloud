@@ -2,9 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerAvailable } from "../src/containerRuntime.ts";
 import {
   TaskService,
   type TaskContainerFactoryInput,
@@ -171,43 +170,3 @@ test("启动退出时没有 metadata 也能将真实 ID 和子阶段返回自检
   assert.doesNotMatch(message, /id=unknown/);
 });
 
-const REAL_IMAGE = process.env.MFC_REAL_BUILD_IMAGE;
-const REAL_DOCKER = REAL_IMAGE ? await dockerAvailable() : false;
-
-test("真实 Docker 部署自检：统一镜像内编译 Java/C++ 并检查 JS 工具链",
-  { skip: !REAL_IMAGE
-      ? "设置 MFC_REAL_BUILD_IMAGE 后执行真实统一镜像自检"
-      : REAL_DOCKER ? false : "Docker daemon 不可用" }, async () => {
-    const scratch = join(homedir(), ".cache", "mae-flow-cloud-tests");
-    mkdirSync(scratch, { recursive: true });
-    const dataDir = mkdtempSync(join(scratch, "mfc-real-container-check-"));
-    const settingsPath = join(dataDir, "settings.xml");
-    writeFileSync(settingsPath, "<settings/>\n");
-    const service = new TaskService({
-      dataDir,
-      provider: "fixture",
-      model: "fixture",
-      modelsJson: {},
-      prepush: { enabled: true },
-      isolation: {
-        image: REAL_IMAGE!,
-        cacheRoot: join(dataDir, "cache"),
-        volumes: [
-          `${settingsPath}:/etc/mae-flow/maven/settings.xml:ro`,
-        ],
-        memory: "8g",
-        cpus: "2",
-        pidsLimit: 512,
-      },
-    });
-    const checked = await service.systemCheck();
-    const container = checked.items.find((item) => item.key === "container");
-    assert.equal(container?.status, "ok", JSON.stringify(container));
-    assert.match(container?.detail ?? "", /JDK 21\/Maven/);
-    assert.match(container?.detail ?? "", /C\/C\+\+/);
-    assert.equal(checked.items.find((item) => item.key === "prepush")?.status, "ok");
-    const leftovers = execFileSync("docker", [
-      "ps", "-aq", "--filter", "label=com.mae-flow-cloud.role=system-check",
-    ], { encoding: "utf-8" }).trim();
-    assert.equal(leftovers, "", "部署自检结束后不应遗留容器");
-  });

@@ -1,0 +1,32 @@
+[
+  {
+    "ticket": "DTS-2026-9001",
+    "title": "【DEV·调试】dafung-web 订单导出大数据量超时",
+    "status": "开发人员实施修改",
+    "version": "V100R025C10SPC010B009",
+    "severity": "严重",
+    "submitter": "debugger",
+    "description": "<p>订单中心导出 10 万行时网关 504,小数据量正常。关联仓 dafung-web,后台服务 order-export。</p>",
+    "content": "【DEV·调试单】dafung-web 订单导出超时\n\n现象: 导出 10 万行时网关 504,千行以内正常。\n关联仓: dafung-web(业务模块「调试示例业务」已绑定,直接拉仓即可)\n后台服务: order-export(可用技能 issue-ops 抓日志,--service order-export)\n初步定位: 怀疑同步全量加载后串行渲染,等待分析会话定位。"
+  },
+  {
+    "ticket": "DTS-2026-9002",
+    "title": "【DEV·调试】scotland-yard-gd 案件看板轮询报 500",
+    "status": "开发人员实施修改",
+    "version": "V100R025C10SPC010B009",
+    "severity": "一般",
+    "submitter": "debugger",
+    "description": "<p>案件看板页每 5 秒轮询接口偶发 500。关联仓 scotland-yard-gd,后台服务 case-board。</p>",
+    "content": "【DEV·调试单】scotland-yard-gd 案件看板轮询 500\n\n现象: 看板页轮询接口偶发 500,重启后恢复一段时间。\n关联仓: scotland-yard-gd(业务模块「调试示例业务」已绑定)\n后台服务: case-board(可用技能 issue-ops 抓日志,--service case-board)\n初步定位: 疑似连接池耗尽,等待分析会话定位。"
+  },
+  {
+    "ticket": "DTS-2026-9003",
+    "title": "【DEV·调试】双仓联动:通知模板变量渲染错位",
+    "status": "开发人员实施修改",
+    "version": "V100R025C10SPC010B011",
+    "severity": "一般",
+    "submitter": "debugger",
+    "description": "<p>通知模板变量渲染错位,前端占位与后端字段名不一致。涉及 dafung-web 与 scotland-yard-gd 两个仓,后台服务 notify-render。</p>",
+    "content": "【DEV·调试单】通知模板变量渲染错位(双仓)\n\n现象: 通知正文里 {{userName}} 原样露出,变量没被替换。\n关联仓: dafung-web 与 scotland-yard-gd(业务模块「调试示例业务」已绑定,两个仓都要看)\n后台服务: notify-render(可用技能 issue-ops 抓日志,--service notify-render)\n初步定位: 前后端字段名不对齐,等待分析会话定位。"
+  }
+]

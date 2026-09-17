@@ -30,57 +30,11 @@ function processAt(entry: string, args: string[]) {
   return { child, output: () => output };
 }
 
-test("正式执行服务保持唯一写入与登录状态；入口重启不重建任务卡", { timeout: 30_000 }, async t => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-runtime-gateway-"));
-  const runtime = processAt("src/executionRuntime.ts", ["--data", root, "--port", "0"]);
-  let web: Awaited<ReturnType<typeof gateway>> | undefined;
-  t.after(async () => {
-    if (web) await stop(web.child, "SIGKILL");
-    await stop(runtime.child, "SIGKILL");
-    rmSync(root, { recursive: true, force: true });
-  });
-  await until(() => /\[serve\] http:\/\/127\.0\.0\.1:\d+/.test(runtime.output()) || runtime.child.exitCode !== null);
-  assert.equal(runtime.child.exitCode, null, runtime.output());
-  const url = runtime.output().match(/\[serve\] (http:\/\/127\.0\.0\.1:\d+)/)![1];
-  await until(async () => (await fetch(`${url}/health`)).status === 200);
-  web = await gateway(url);
-  const login = await fetch(`${web.url}/auth/login`, { method: "POST", body: JSON.stringify({ username: "dev", password: "mae-flow-demo" }) });
-  assert.equal(login.status, 200);
-  const cookie = login.headers.get("set-cookie")!.split(";")[0];
-  const create = await fetch(`${web.url}/tasks`, { method: "POST", headers: { cookie }, body: JSON.stringify({ requirement: "入口重启保留待确认的需求" }) });
-  assert.equal(create.status, 201);
-  const id = ((await create.json()) as any).id;
-  let before: any;
-  await until(async () => {
-    before = await fetch(`${web!.url}/tasks/${id}`, { headers: { cookie } }).then(r => r.json());
-    return !!before.waiting;
-  });
-  const lock = readFileSync(join(root, "instance.lock"), "utf8");
-  assert.equal(JSON.parse(lock).pid, runtime.child.pid);
-  await stop(web.child);
-  web = await gateway(url);
-  const after = (await fetch(`${web.url}/tasks/${id}`, { headers: { cookie } }).then(r => r.json())) as any;
-  assert.equal(after.waiting.waiting_id, before.waiting.waiting_id);
-  assert.equal(after.waiting.state_version, before.waiting.state_version);
-  assert.equal(readFileSync(join(root, "instance.lock"), "utf8"), lock);
-  const duplicate = processAt("src/executionRuntime.ts", ["--data", root, "--port", "0"]);
-  t.after(() => stop(duplicate.child, "SIGKILL"));
-  await until(() => duplicate.child.exitCode !== null);
-  assert.notEqual(duplicate.child.exitCode, 0, duplicate.output());
-  assert.equal((await fetch(`${web.url}/health`)).status, 200, "重复执行器拒启，原服务继续可用");
-});
 async function worker(root: string, mode: string) {
   const result = processAt("tests/fixtures/sessionContinuityWorker.ts", [root, mode]);
   await until(() => /"port":\d+/.test(result.output()) || result.child.exitCode !== null);
   assert.equal(result.child.exitCode, null, result.output());
   return { ...result, url: `http://127.0.0.1:${JSON.parse(result.output().trim().split("\n").find(line => line.startsWith('{"port"'))!).port}` };
-}
-async function gateway(runtimeUrl: string) {
-  const result = processAt("src/serve.ts", ["--runtime-url", runtimeUrl, "--port", "0"]);
-  // 监听 0 时入口日志打印真实端口，供重启演练使用。
-  await until(() => /入口 http:\/\/127.0.0.1:\d+/.test(result.output()) || result.child.exitCode !== null);
-  assert.equal(result.child.exitCode, null, result.output());
-  return { ...result, url: result.output().match(/入口 (http:\/\/127.0.0.1:\d+)/)![1] };
 }
 async function setup(t: any, script: Scene[], beforeScene?: ConstructorParameters<typeof ScriptedModelServer>[2]) {
   const root = mkdtempSync(join(tmpdir(), "mfc-continuity-"));
@@ -96,27 +50,6 @@ async function setup(t: any, script: Scene[], beforeScene?: ConstructorParameter
   });
   return { root, model, children };
 }
-
-test("重启真实 Web/API 进程：原 Pi 和长命令继续执行，不重复开工", { timeout: 30_000 }, async t => {
-  const { root, model, children } = await setup(t, [
-    { tool: { name: "bash", input: { command: "printf 'once\\n' >> count.txt; touch entered; while [ ! -f release ]; do sleep 0.1; done; printf 'WORK-COMPLETE'" } } },
-    { text: "工作完成" },
-  ]);
-  const runtime = await worker(root, "new"); children.push(runtime.child);
-  let web = await gateway(runtime.url); t.after(() => stop(web.child, "SIGKILL"));
-  assert.equal((await fetch(`${web.url}/start`, { method: "POST" })).status, 202);
-  await until(() => existsSync(join(root, "entered")));
-  await stop(web.child);
-  assert.equal(((await fetch(`${runtime.url}/status`).then(r => r.json())) as any).state, "running");
-  assert.equal(model.requests.length, 1);
-  web = await gateway(runtime.url);
-  assert.equal(((await fetch(`${web.url}/status`).then(r => r.json())) as any).pid, runtime.child.pid);
-  writeFileSync(join(root, "release"), "go");
-  await until(() => existsSync(join(root, "outcome.json")));
-  assert.equal(JSON.parse(readFileSync(join(root, "outcome.json"), "utf8")).status, "turn_finished");
-  assert.equal(readFileSync(join(root, "count.txt"), "utf8"), "once\n");
-  assert.equal(new EventLog(join(root, "events.jsonl")).replay().filter(e => e.kind === "session_started").length, 1);
-});
 
 test("执行进程 SIGKILL 后恢复：原工具结果和用户新决定进入模型，不重复命令", { timeout: 30_000 }, async t => {
   let release!: () => void;

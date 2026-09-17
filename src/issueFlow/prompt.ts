@@ -303,8 +303,8 @@ export function issueFixedOpeningPrompt(
   state: IssueSessionState,
   credentials: IssueEnvCredentials = {},
   /** 介入档位的节奏渲染(ADR-0019,现读现判):一档=全自动(报告
-   * 会被代答确认);二档=仅分析报告(报告是唯一停靠点);三档=全程
-   * 把控,主动问与对齐(ADR-0006)。 */
+   * 会被代答确认);二档=优先报告(报告是唯一停靠点);三档=优先
+   * 对齐,主动问与对齐(ADR-0006)。 */
   options: { tier?: IssueInterventionTier; blockedPaths?: string[] } = {},
 ): string {
   const scenario = state.scenario ?? "ticket";

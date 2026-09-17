@@ -37,7 +37,7 @@ function waiting(
     step: "delivery_review", call_id: "call-1",
     question: { questions }, context: "编译与 UT 已通过，请核对本轮改动。",
     state_version: version, status: "waiting", decision: "", notes: "",
-    created_at: "2026-08-23T00:00:00.000Z", resolved_at: "", reminders: 0,
+    created_at: "2026-08-23T00:00:00.000Z", resolved_at: "",
   };
 }
 

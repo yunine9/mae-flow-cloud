@@ -250,27 +250,16 @@ test("环境保险箱注释与真实 AI 口令契约一致", () => {
 });
 
 
-test("推送过目闸(push_confirm):前端闸种镜像与变更摘要渲染兼容", () => {  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
-  const stageRegistry = readFileSync(
-    resolve("src/issueFlow/stageRegistry.ts"), "utf-8");
-  const issueFlowDoc = readFileSync(resolve("docs/issue-flow.md"), "utf-8");
-  // 前端闸种联合类型要有 push_confirm(镜像不同步=契约对账当场红的教训)。
-  assert.match(apiTypes, /\|\s*"push_confirm"/,
-    "web/src/api.ts 的 IssueGateKind 缺 push_confirm 镜像");
-  // 码表:服务端注册表的选项与推荐(ADR-0004 徽标按 recommended 画)。
-  assert.match(stageRegistry,
-    /push_confirm:\s*\{[\s\S]*?code:\s*"push",\s*label:\s*"确认推送"/);
-  assert.match(stageRegistry,
-    /push_confirm:\s*\{[\s\S]*?recommended:\s*"push"/);
-  // 闸卡:推送过目卡的 context(服务端生成的变更摘要)要走既有
-  // 决策背景块渲染,标签按内容如实叫「变更摘要」。
-  assert.match(decisions, /gate_kind === "push_confirm"\s*\?\s*"变更摘要"/);
+test("决策卡壳:决策背景块与 AI 推荐徽标(闸种无关的渲染契约)", () => {
   // #231 改锚:决策背景壳换 DecisionContext 工具类组件(家族 CSS 退役)。
   assert.match(decisions, /<DecisionContext label=\{contextLabel\}/);
   assert.match(decisions,
     /suggested && <Badge variant="warning" className="ml-1\.5 align-middle">AI 推荐<\/Badge>/);
-  // 档案:issue-flow.md 的闸种清单要带上这道闸。
-  assert.match(issueFlowDoc, /push_confirm|推送前过目/);
+  // 推送过目闸已整体退役(2026-09-17,ADR-0009 增补):前端闸种镜像
+  // 不再认 push_confirm——再出现就是镜像回潮。
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.doesNotMatch(apiTypes, /\|\s*"push_confirm"/,
+    "web/src/api.ts 的 IssueGateKind 不应再有 push_confirm");
 });
 
 test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、作答协议与查看模式收闸", () => {
@@ -295,9 +284,9 @@ test("流水线红灯人工闸(pipeline_unfixable/pipeline_evidence):卡面、�
     /pipeline_unfixable:\s*\{[\s\S]*?code:\s*"resume",\s*label:\s*"已在平台处理\/豁免,重新监看"/);
   assert.match(stageRegistry,
     /pipeline_evidence:\s*\{[\s\S]*?code:\s*"supply",\s*label:\s*"已粘贴报错原文,继续修复"/);
-  // 月光守卫落在月光判定之前(与 push_confirm 同款守卫位)。
+  // 月光守卫落在月光判定之前(任何介入档位都只等真人)。
   assert.match(issueService,
-    /if \(gate\.kind === "push_confirm"\) return;[\s\S]*?if \(gate\.kind === "skill_select"\) return;[\s\S]*?if \(gate\.kind === "pipeline_unfixable"\) return;[\s\S]*?if \(gate\.kind === "pipeline_evidence"\) return;/);
+    /if \(gate\.kind === "skill_select"\) return;[\s\S]*?if \(gate\.kind === "pipeline_unfixable"\) return;[\s\S]*?if \(gate\.kind === "pipeline_evidence"\) return;/);
   // 决策卡:两种新闸各有一条卡面分支(共用 PipelineGateCard 组件),
   // 证据卡是自由文本主通道(空文本不可提交),作答提交按码走协议。
   assert.match(decisions, /gate_kind === "pipeline_unfixable"/);
@@ -1711,24 +1700,6 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
   assert.match(associate,
     /<Button type="button" className="w-full"[\s\S]{0,220}确认转正\(继承分析报告,进入问题修改\)\s*<\/Button>/);
   assert.doesNotMatch(associate, /issue-rail-primary/);
-});
-
-test("登记域词汇与标点体例:引号归「」,标点半角(2026-09-14 设计审查;提交钮随 ADR-0031 收口为「登记问题」)", () => {
-  // 「下单」是需求域旧词,不回流。登记页提交钮 ADR-0031 起是
-  // 「登记问题」——登记=把问题移交给责任人,不再是替自己「发起分析」;
-  // DTS 页「发起处理」自助流程原样(与「发起」家族的旧同构就此分家)。
-  assert.doesNotMatch(registration, /下单|开始分析|DEV·/);
-  assert.doesNotMatch(notice, /下单|／| · |，|：|（/);
-  assert.match(registration, /"登记中…" : "登记问题"/);
-  assert.doesNotMatch(registration, /发起分析/);
-  // 状态串引号用直角引号(隐藏远程单提示 + 无可拉取空态两处),不用
-  // 英文直引号。
-  assert.match(registration, /「\{DTS_ACTIONABLE_STATUS\}」/);
-  assert.doesNotMatch(registration, /"\{DTS_ACTIONABLE_STATUS\}"/);
-  // 资源屏蔽提示:说明与动作分离,说明句不带间隔号挂动作(动作是
-  // 独立的「查看详情」钮,见设计审查 04 的提示条锚)。
-  assert.match(notice, /条规则屏蔽仓库 Skill\/指令文件/);
-  assert.doesNotMatch(notice, / · /);
 });
 
 test("会话列表单一口径(ADR-0031,2026-09-16 修订):归属或登记人是自己,卡片并列两端", () => {

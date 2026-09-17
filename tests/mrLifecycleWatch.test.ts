@@ -158,7 +158,9 @@ for (const action of ["cancel", "replace"] as const) {
   });
 }
 
-for (const status of ['running', 'paused', 'await_merge']) {
+// 2026-09-18 去冗:await_merge 迭代与下方「新讨论只同步入账(ADR-0032)」
+// 用例同 status 同机制且后者断言更严(waiting_on 空),从循环中移除。
+for (const status of ['running', 'paused']) {
   test(`${status} 持续收集远端意见，合入以平台结果收口(意见只入批注,不自动派修)`, async t => {
     const { service, task, remote } = await fixture(t);
     const { FeedbackStore } = await import('../src/feedbackStore.ts');

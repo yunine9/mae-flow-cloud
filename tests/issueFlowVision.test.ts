@@ -161,7 +161,7 @@ test("视觉端点连败两次熔断:第三召不再打端点并回文本,回合
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
     vision: { provider: "vision", model: "vision-v1" },
-    // 卡要留给人工作答(手动 answer 驱动识图/熔断):钉三档把控。
+    // 卡要留给人工作答(手动 answer 驱动识图/熔断):钉三档对齐。
     interventionTier: () => "3",
   });
   try {

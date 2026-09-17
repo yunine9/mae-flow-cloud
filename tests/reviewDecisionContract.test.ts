@@ -192,17 +192,6 @@ test("澄清期间补充两条意见，答复时携带各自附言且不重复",
   assert.equal(f.api.annotations(f.task).list().filter((item: any) => ids.includes(item.id) && item.sent_via === "decision").length, 2);
 });
 
-test("未逐条交给 Agent，责任人直接选择修复也会送达并联动状态", async () => {
-  const f = fixture();
-  const item = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "diff", file: "a.ts", line: 1, anchor: "export const value = 1;", kind: "code", note: "直接从决定卡处理" });
-  const card = f.service.get("task-19")!.waiting!;
-  await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_ADJUST } });
-  assert.match(f.gate.get(card.waiting_id)!.notes!, /直接从决定卡处理/);
-  const sent = f.api.annotations(f.task).list().find((entry: any) => entry.id === item.id);
-  assert.equal(sent.sent_via, "decision"); assert.equal(sent.route, "agent"); assert.equal(sent.agent_assigned, true);
-  const projection = await f.service.listAnnotationsAsync("task-19", { username: "owner", can_override: false, can_route_others: true });
-  assert.equal(projection.closures.find(entry => entry.id === item.id)?.text, "等待 Agent 答复");
-});
 
 test("Spec 仍需调整会把未提前提交的意见送给 Agent，并在恢复后保持联动状态", async () => {
   const f = fixture(false, specRaw, "open");

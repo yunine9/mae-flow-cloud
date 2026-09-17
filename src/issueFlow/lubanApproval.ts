@@ -295,7 +295,6 @@ export class IssueFlowLubanApproval implements LubanApprovalService {
         notes: "",
         created_at: created,
         resolved_at: "",
-        reminders: 0,
       },
     };
   }

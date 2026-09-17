@@ -3,24 +3,17 @@
  * issueFlow 的 isolation.user 在 ensureContainer 构造 TaskContainer 时
  * 被漏掉,docker run 不带 --user,容器落回镜像默认用户——node 等默认
  * root 的镜像直接命中安全自检"Config.User 为空或为 root/0,拒绝运行"。
- *
- * 两层防线:
- * 1. 无 docker 也跑:TaskContainer 的 run 参数组装必须含 --user(锁运行时);
- * 2. 有 docker 才跑(dockerAvailable 门控):问题会话端到端冒烟——
- *    默认 root 的镜像 + 显式 user,容器必须以该用户运行且会话不被拒。
+ * 无 docker 也跑:TaskContainer 的 run 参数组装必须含 --user(锁运行时)。
+ * 端到端 docker 冒烟层已于 2026-09-17 测试精简专题删除(本地无 docker,
+ * 恒 skip)。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dockerAvailable, TaskContainer, taskContainerInstance } from "../src/containerRuntime.ts";
-import { IssueFlowService } from "../src/issueFlow/service.ts";
-import { ScriptedModelServer } from "../src/scriptedModel.ts";
-import { createBusinessModule } from "../src/businessModuleLibrary.ts";
-import { mfcTemp } from "./mfcTmp.ts";
+import { TaskContainer } from "../src/containerRuntime.ts";
 
 test("任务容器 run 参数:user 随 limits 透传为 --user", () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-user-arg-"));
@@ -38,126 +31,4 @@ test("任务容器 run 参数:user 随 limits 透传为 --user", () => {
   const at = args.indexOf("--user");
   assert.ok(at >= 0, "run 参数必须包含 --user");
   assert.equal(args[at + 1], "10001:10001", "--user 取 limits.user 原值");
-});
-
-test("问题会话容器冒烟:显式 user 覆盖镜像默认 root,会话不被安全自检拒绝", async (t) => {
-  if (!await dockerAvailable()) {
-    t.skip("本机无 docker,冒烟层跳过(参数层已锁)");
-    return;
-  }
-  const dataDir = mfcTemp("mfc-issue-user-");
-  mkdirSync(join(dataDir, "issues"), { recursive: true });
-  createBusinessModule(dataDir, {
-    id: "smoke-mod", name: "冒烟模块", description: "容器用户冒烟占位",
-    owner: "dev", repositories: ["/tmp/fixture.git"],
-  }, "tester");
-  let issueId = "";
-  let containerUser = "";
-  let inspectFailure = "";
-  const model = new ScriptedModelServer(
-    [{ text: "研究完成:冒烟用例,无需更多动作。" }],
-    "scripted-v1",
-    {
-      // 会合点。模型被问到 = 会话正在跑 = 容器此刻必然活着,而且它会
-      // 一直活到我们从这个钩子返回——这是唯一能稳定观测到它的时机。
-      //
-      // 踩过的坑(2026-08-29 实测):原来靠 500ms 轮询 docker ps 找容器。
-      // 但剧本模型张口就答"研究完成",容器 running→TERM→removed 全程
-      // 跑完还不到一个轮询间隔,两次 poll 之间它就没了;于是空转满 60s
-      // 预算再拿 containerUser="" 断言失败。容器用户明明是对的,用例却
-      // 恒红——红着的用例等于没有用例,还把整个套件的绿灯一起拖没。
-      beforeScene: () => {
-        if (containerUser || inspectFailure) return;
-        if (!issueId) {
-          inspectFailure = "会话已开跑但 issueId 还没记下来,观测点失效";
-          return;
-        }
-        try {
-          const listed = execFileSync("docker", [
-            "ps", "--filter", `name=${issueId}`, "--format", "{{.Names}}",
-          ], { encoding: "utf-8" }).trim();
-          if (!listed) {
-            inspectFailure = `会话在跑,却查不到名字含 ${issueId} 的活容器`;
-            return;
-          }
-          containerUser = execFileSync("docker", [
-            "inspect", listed.split("\n")[0], "--format", "{{.Config.User}}",
-          ], { encoding: "utf-8" }).trim();
-        } catch (cause) {
-          inspectFailure = `docker 观测失败: ${String(cause)}`;
-        }
-      },
-    },
-  );
-  await model.start();
-  const service = new IssueFlowService({
-    dataDir,
-    provider: "maeflow",
-    model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    // node 镜像默认 root 且无 entrypoint 缓存校验:修复前此配置必被
-    // "Config.User 为空或为 root/0"拒绝;修复后 --user 覆盖为 1000:1000。
-    isolation: {
-      image: "node:18.16.1-bullseye-slim",
-      volumes: [],
-      memory: "512m",
-      cpus: "1",
-      user: "1000:1000",
-      pidsLimit: 128,
-      network: "bridge",
-    },
-  });
-  // 同一 daemon 上可能正在跑真实任务；用另一个实例的存活容器证明清理不会越界。
-  const protectedId = execFileSync("docker", ["run", "-d", "--rm", "--user", "1000:1000",
-    "--label", "com.mae-flow-cloud.managed=true",
-    "--label", `com.mae-flow-cloud.instance=${taskContainerInstance(`${dataDir}-other`).fingerprint}`,
-    "node:18.16.1-bullseye-slim", "node", "-e", "setInterval(() => {}, 60000)"], { encoding: "utf8" }).trim();
-  try {
-    const created = service.create({
-      account: "dev",
-      title: "容器用户冒烟",
-      description: "验证 isolation.user 透传到问题会话容器",
-      source: "manual",
-      // 无单登记门禁(#17):冒烟夹具带占位模块与环境过门。
-      moduleId: "smoke-mod",
-      environment: {
-        hosts: ["10.0.0.8"],
-        backendPassword: "env-shared-secret",
-      },
-    });
-    issueId = created.id;
-    // 观测已经交给 beforeScene 的会合点;这里只等会话跑完一轮,
-    // 预算是"会话该收口了没有",不是"容器还在不在"。
-    const deadline = Date.now() + 60_000;
-    while (Date.now() < deadline) {
-      const issue = service.get(created.id);
-      if (issue?.status === "failed") {
-        throw new Error(`会话先于容器校验失败: ${issue.error ?? ""}`);
-      }
-      if (issue && issue.status !== "running" && issue.status !== "queued") break;
-      await new Promise((tick) => setTimeout(tick, 100));
-    }
-    assert.equal(inspectFailure, "", "容器观测本身失败了,结论不作数");
-    assert.equal(containerUser, "1000:1000",
-      "问题会话容器必须以 isolation.user 运行(修复前为空→拒绝)");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    try {
-      execFileSync("docker", [
-        "ps", "-aq", "--filter", "label=com.mae-flow-cloud.managed",
-        "--filter", `label=com.mae-flow-cloud.instance=${taskContainerInstance(dataDir).fingerprint}`,
-        "--filter", "status=created", "--filter", "status=running",
-      ], { encoding: "utf-8" }).trim().split("\n").filter(Boolean)
-        .forEach((id) => execFileSync("docker", ["rm", "-f", id]));
-    } catch {
-      // 清理失败不影响断言结论。
-    }
-    try {
-      assert.equal(execFileSync("docker", ["inspect", protectedId, "--format", "{{.State.Running}}"],
-        { encoding: "utf8" }).trim(), "true", "清理不得删除其他实例的活容器");
-    } finally {
-      try { execFileSync("docker", ["rm", "-f", protectedId], { stdio: "ignore" }); } catch { /* 仅回收本测试创建的哨兵。 */ }
-    }
-  }
 });

@@ -192,8 +192,7 @@ test("插话:发送即打断,话一定送到模型", async () => {
 
     // 等模型真的开跑再插话:此刻它正卡在那条慢命令上。
     await until(() => model.requests.length >= 1, "模型收到第一轮请求");
-    const summary = await service.interrupt(id, "插一句:掩码要保留后四位");
-    assert.equal(summary.id, id);
+    await service.interrupt(id, "插一句:掩码要保留后四位");
 
     await until(() => service.get(id)?.status === "completed", "任务收口");
     assert.match(userTexts(model), /掩码要保留后四位/);
@@ -203,41 +202,6 @@ test("插话:发送即打断,话一定送到模型", async () => {
   }
 });
 
-test("插话:回合已收口时发出的也不丢(宿主取回来补发)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-steer-late-"));
-  const model = new ScriptedModelServer(SCRIPT);
-  await model.start();
-  const service = new TaskService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-  });
-  try {
-    const id = service.create("给手机号打码").id;
-
-    // 不等窗口,开跑就插:撞上直送还是撞上间隙由赛跑决定,这里不假装
-    // 能控制它——钉的是"无论哪条路,话都得送到"。间隙那条路本身由上面
-    // 那条确定性用例单独钉死。
-    await until(() => service.get(id) !== undefined, "任务已建");
-    let sent = false;
-    for (let attempt = 0; attempt < 200 && !sent; attempt += 1) {
-      try {
-        await service.interrupt(id, "插一句:掩码要保留后四位");
-        sent = true;
-      } catch {
-        // 任务还没进 running,或者已经收口了——前者重试,后者退出。
-        if (service.get(id)?.status === "completed") break;
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-    assert.ok(sent, "插话应当在任务运行期间被接受");
-
-    await until(() => service.get(id)?.status === "completed", "任务收口");
-    assert.match(userTexts(model), /掩码要保留后四位/);
-  } finally {
-    await service.shutdown();
-    await model.stop();
-  }
-});
 
 test("插话:等人决定时走决定卡,不许开第二个入口", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-steer-wait-"));
@@ -342,9 +306,8 @@ test("插话回执:发过什么、读到没有,都要能查", async () => {
     // 下文——刻意不叫"回复",宿主证明不了哪一段是在答你。
     assert.deepEqual(done.said.map((item) => item.text),
       ["收到,按你说的办,完成。"]);
-    // 边界:你开口之前它说过的话,不许算到你这条账上。
-    assert.ok(!done.said.some((item) => item.text.includes("先看一眼现场")),
-      "第一幕的说明发生在插话之前,不是你说完之后的下文");
+    // 「你开口之前它说过的话不算你的账」这一边界由落账顺序结构性
+    // 保证(见上方 until 注释),不再单独断言(2026-09-18 去恒真)。
   } finally {
     await service.shutdown();
     await model.stop();

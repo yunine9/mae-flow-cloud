@@ -17,3 +17,9 @@
 - **覆盖用租赁式核对,不用裸 --force**:推送前 ls-remote 探远端同名分支 tip,`--force-with-lease=ref:tip` 推;强制卡场景以确认时记下的远端 tip(`token.remote`)为期望值,推送时对不上即抛 IssuePushStaleRemoteError——令牌作废、自动重举强制卡,把本地 tip 的防盲签立场扩展到远端 tip(确认后他人又推了,确认对象就变了)。
 - **non-fast-forward 拒收回执指路 force=true**(替代"请用户去平台删分支"),含"已有 MR 时覆盖后原 MR 随之更新,勿重复创建"的提醒;分支名单门禁(master_工号_单号)不变,force 也只能落在本单名下。
 - 曾考虑:force 无视过目设置一律举闸——否,用户拍板强制推送与普通推送暂时视为一样,遵循用户配置,用户不希望手动确认时就自动执行;独立的 delete_remote_branch 工具——否,删除不可逆且误删面更大,租赁式 force 每个环节都有复核。
+
+## 2026-09-17 增补:问题侧整体退役(全程把控也直推)
+
+拍板:问题处理流程的所有介入档位(含三档「全程把控」)推送分支一律直推,push_confirm 闸不再举起——过目闸此后唯一的实际作用是给每次推送加一次人工点击,与"流程不能显著提升质量时为速度让步"的取舍相悖(分支名单门禁 `master_<工号>_<单号>` 不变,推送只落本单名下;MR 合入仍永远人工;force 覆盖的租赁式核对保留,不盲盖)。机制整体拆除:闸种、一次性令牌、举闸时的过目镜像(push_review_*)、grant_push/hold_push 裁决、代答守卫、前端镜像与提示词文案全部移除;pushChangeSummary/remoteBranchTip/IssuePushStaleRemoteError 随唯一消费者一并收掉。
+
+存量迁移:盘上挂着推送卡的会话,loadState 剥卡与令牌(落进 rework 裁决会错伤现场),recover 对"等人但无闸无 Agent 卡"的空壳重新入队自动续跑——AI 重试 push_branch 即直推成功。需求交付侧的「推送前过目」个人设置是另一套实现(taskPushConfirmation),原样保留,不受本增补影响。

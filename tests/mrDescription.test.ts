@@ -32,7 +32,6 @@ test("宿主 MR 复用 AR 填写卡，答复后恢复原宿主操作而非重跑
   assert.equal(ordinaryDelivery, 0);
   assert.equal(runtime.mrTitle(op), "AR 上的真实名称");
   assert.equal(new TaskHostLedger(task.summary).pending(), undefined);
-  assert.equal(task.humanGate.all().filter((r: any) => r.step === MR_DESCRIPTION_STEP).length, 1);
 });
 import { TaskService } from "../src/taskService.ts";
 import { askMrDescription, savedMrDescription, MR_DESCRIPTION_STEP } from "../src/mrDescription.ts";
@@ -177,11 +176,6 @@ test("MR 描述卡已作废且服务重启：恢复原交付并重新举出可�
   const result = revived.recover();
   assert.equal(result.requeued, 1);
   await until(() => resumes === 1, "恢复 MR 描述交付");
-  const renewed = revived.get(id)!.waiting!;
-  assert.match(renewed.call_id, /-r2$/);
-  assert.equal(renewed.status, "waiting");
-  assert.equal(
-    (revived as any).tasks.get(id).humanGate.get(stale.waiting_id)?.status,
-    "superseded",
-  );
+  // 换卡语义(-r2 新卡/旧卡 superseded)由本文件「接管作废后另举新卡」
+  // 用例在 HumanGate 层钉死,此处(2026-09-18 去冗)只留重启路由事实。
 });

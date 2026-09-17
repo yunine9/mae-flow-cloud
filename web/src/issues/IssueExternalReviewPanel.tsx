@@ -20,6 +20,15 @@ export function externalReviewDone(item: IssueReview): boolean {
   return !!item.resolution || !!item.owner_reply || item.status === "verified";
 }
 
+/** 批注归属仓:external_review.scope 由同步侧拼成 `仓名:iid或链接`
+ * (issueFlow/service 同步 MR 讨论处),取首个冒号前即仓名;旧账缺席时
+ * 落「未知仓」兜底,分组不崩。多仓会话的批注天生分属不同 MR。 */
+export function reviewRepo(item: IssueReview): string {
+  const scope = item.external_review?.scope ?? "";
+  const cut = scope.indexOf(":");
+  return cut > 0 ? scope.slice(0, cut) : "未知仓";
+}
+
 /** 检视批注轮询(5s 可见轮询)提升到会话层:「MR 检视」页签的在场
  * (有批注才现身)与脉冲点(有待判断)靠这份账,页签没开时也得轮。
  * 断连单独记态、下一拍自愈即清;不混入操作回执,也不给浏览器原文——
@@ -67,7 +76,7 @@ export function IssueExternalReviewPanel({ issueId, items, pollError, refresh, c
 }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState<{ id: string; mode: "context" | "reply"; text: string }>();
+  const [editing, setEditing] = useState<{ id: string; mode: "context" | "reply"; text: string; resolveRemote: boolean }>();
   const [closed, setClosed] = useState(false);
   async function run(action: () => Promise<unknown>) {
     if (busy) return;
@@ -80,6 +89,15 @@ export function IssueExternalReviewPanel({ issueId, items, pollError, refresh, c
   const pending = items.filter(item => !done(item) && item.status === "draft" && !item.agent_assigned);
   const doneCount = items.filter(done).length;
   const shown = items.filter(item => done(item) === closed);
+  // 按仓分组(多仓流程,2026-09-18 走查):保持首次出现序,组内维持
+  // 原排序;本签条目全带 external_review,仓信息齐,旧账落「未知仓」。
+  const repoGroups: Array<[string, IssueReview[]]> = [];
+  for (const item of shown) {
+    const repo = reviewRepo(item);
+    const bucket = repoGroups.find(([name]) => name === repo);
+    if (bucket) bucket[1].push(item);
+    else repoGroups.push([repo, [item]]);
+  }
   if (!items.length) {
     return <p className="m-0 px-1 py-6 text-center text-[13px] text-muted-foreground">还没有 MR 检视批注。</p>;
   }
@@ -102,49 +120,61 @@ export function IssueExternalReviewPanel({ issueId, items, pollError, refresh, c
         setMessage(result.stage_note || "已批量交办");
       })}>提交 {pending.length} 条修改意见</Button>}
     </div>
-    <p className="m-0 text-xs leading-relaxed text-muted-foreground">责任人先判断，再批量交办；本地答复、闭环或删除不代表远端讨论已解决。</p>
+    <p className="m-0 text-xs leading-relaxed text-muted-foreground">责任人先判断：Agent处理连同补充要求批量交办；自行答复可勾选同时在 CodeHub 标已解决；忽略也会代点已解决。远端以 CodeHub 为准。</p>
     {(message || pollError) && <p role="status" className="m-0 text-xs text-muted-foreground">{message || pollError}</p>}
     {!shown.length && <p className="m-0 px-1 py-3 text-[13px] text-muted-foreground">这一档下没有批注。</p>}
-    <ol className="m-0 flex list-none flex-col gap-2 p-0">
-      {shown.map(item => {
-        const status = done(item) ? { label: "本地已处理", tone: "neutral" as const }
-          : item.agent_assigned ? { label: "已交办 · 待核对结果", tone: "info" as const }
-          : { label: "待你判断", tone: "warning" as const };
-        return <li key={item.id} className="grid gap-1.5 rounded-lg bg-surface-2 p-2.5 text-[13px]">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <code className="font-mono text-xs text-muted-foreground">{item.author} · {item.file}{item.line ? `:${item.line}` : ""}</code>
-            <Badge variant={status.tone}>{status.label}</Badge>
-          </div>
-          <ReviewBody text={item.note} />
-          {item.agent_context && <p className="m-0 whitespace-pre-wrap border-l-2 border-l-line-strong pl-2.5 text-xs text-muted-foreground">责任人补充:{item.agent_context.text}</p>}
-          {item.owner_reply && <p className="m-0 whitespace-pre-wrap border-l-2 border-l-line-strong pl-2.5 text-xs text-muted-foreground">自行答复:{item.owner_reply.text}</p>}
-          <div className="flex flex-wrap items-center gap-1.5">
-            {item.external_review?.mr_url && /^https?:\/\//.test(item.external_review.mr_url)
-              && <a className="text-xs text-ink underline underline-offset-2 hover:text-ink-hover"
-                href={item.external_review.mr_url} target="_blank" rel="noreferrer">打开 MR</a>}
-            {canOperate && !done(item) && !item.agent_assigned && <>
-              <Button size="sm" variant="ghost" className={REVIEW_ACTION}
-                onClick={() => setEditing({ id: item.id, mode: "context", text: item.agent_context?.text ?? "" })}>补充修改要求</Button>
-              <Button size="sm" variant="ghost" className={REVIEW_ACTION}
-                onClick={() => setEditing({ id: item.id, mode: "reply", text: "" })}>自行答复</Button>
-              <Button size="sm" variant="ghost" className={REVIEW_ACTION} disabled={busy}
-                onClick={() => void run(() => dropIssueReview(issueId, item.id))}>删除</Button>
-            </>}
-            {canOperate && !item.resolution && <Button size="sm" variant="outline" className={cn(REVIEW_ACTION, "px-2")} disabled={busy}
-              onClick={() => void run(() => updateIssueReview(issueId, item.id, { resolve: true }))}>本地闭环</Button>}
-          </div>
-          {editing?.id === item.id && <div className="grid gap-1.5">
-            <Textarea rows={2} className="min-h-0 bg-surface text-[13px]" value={editing.text}
-              onChange={event => setEditing({ ...editing, text: event.target.value })}
-              placeholder={editing.mode === "context" ? "保存要求后，再统一批量交办；不会自动启动 Agent" : "写下你的处理说明，不会发到远端 MR"} />
-            <div className="flex gap-1.5">
-              <Button size="sm" className={cn(REVIEW_ACTION, "px-2")} disabled={busy || (editing.mode === "reply" && !editing.text.trim())}
-                onClick={() => void run(() => updateIssueReview(issueId, item.id, { [editing.mode]: editing.text }))}>保存</Button>
-              <Button size="sm" variant="ghost" className={cn(REVIEW_ACTION, "px-2")} onClick={() => setEditing(undefined)}>取消</Button>
+    {repoGroups.map(([repo, repoItems]) => <div key={repo} className="grid gap-2">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-xs font-bold tracking-wide text-ink">{repo}</span>
+        <i className="rounded-full bg-surface-3 px-2 py-0.5 not-italic text-xs text-muted-foreground">{repoItems.length} 条</i>
+      </div>
+      <ol className="m-0 flex list-none flex-col gap-2 p-0">
+        {repoItems.map(item => {
+          const status = done(item) ? { label: "本地已处理", tone: "neutral" as const }
+            : item.agent_assigned ? { label: "已交办 · 待核对结果", tone: "info" as const }
+            : { label: "待你判断", tone: "warning" as const };
+          return <li key={item.id} className="grid gap-1.5 rounded-lg bg-surface-2 p-2.5 text-[13px]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <code className="font-mono text-xs text-muted-foreground">{item.author} · {item.file}{item.line ? `:${item.line}` : ""}</code>
+              <Badge variant={status.tone}>{status.label}</Badge>
             </div>
-          </div>}
-        </li>;
-      })}
-    </ol>
+            <ReviewBody text={item.note} />
+            {item.agent_context && <p className="m-0 whitespace-pre-wrap border-l-2 border-l-line-strong pl-2.5 text-xs text-muted-foreground">责任人补充:{item.agent_context.text}</p>}
+            {item.owner_reply && <p className="m-0 whitespace-pre-wrap border-l-2 border-l-line-strong pl-2.5 text-xs text-muted-foreground">自行答复:{item.owner_reply.text}</p>}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {item.external_review?.mr_url && /^https?:\/\//.test(item.external_review.mr_url)
+                && <a className="text-xs text-ink underline underline-offset-2 hover:text-ink-hover"
+                  href={item.external_review.mr_url} target="_blank" rel="noreferrer">打开 MR</a>}
+              {canOperate && !done(item) && !item.agent_assigned && <>
+                <Button size="sm" variant="ghost" className={REVIEW_ACTION}
+                  onClick={() => setEditing({ id: item.id, mode: "context", text: item.agent_context?.text ?? "", resolveRemote: false })}>Agent处理</Button>
+                <Button size="sm" variant="ghost" className={REVIEW_ACTION}
+                  onClick={() => setEditing({ id: item.id, mode: "reply", text: "", resolveRemote: false })}>自行答复</Button>
+                <Button size="sm" variant="ghost" className={REVIEW_ACTION} disabled={busy}
+                  title="本地忽略并留痕，同时在 CodeHub 把这条讨论标记为已解决"
+                  onClick={() => void run(() => dropIssueReview(issueId, item.id))}>忽略</Button>
+              </>}
+            </div>
+            {editing?.id === item.id && <div className="grid gap-1.5">
+              <Textarea rows={2} className="min-h-0 bg-surface text-[13px]" value={editing.text}
+                onChange={event => setEditing({ ...editing, text: event.target.value })}
+                placeholder={editing.mode === "context" ? "保存要求后，再统一批量交办；不会自动启动 Agent" : "写下你的处理说明，不会发到远端 MR"} />
+              {editing.mode === "reply" && <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <input type="checkbox" className="accent-primary" checked={editing.resolveRemote}
+                  onChange={event => setEditing({ ...editing, resolveRemote: event.target.checked })} />
+                同时在 CodeHub 把这条讨论标记为已解决
+              </label>}
+              <div className="flex gap-1.5">
+                <Button size="sm" className={cn(REVIEW_ACTION, "px-2")} disabled={busy || (editing.mode === "reply" && !editing.text.trim())}
+                  onClick={() => void run(() => updateIssueReview(issueId, item.id, editing.mode === "reply"
+                    ? { reply: editing.text, ...(editing.resolveRemote ? { resolve_remote: true } : {}) }
+                    : { [editing.mode]: editing.text }))}>保存</Button>
+                <Button size="sm" variant="ghost" className={cn(REVIEW_ACTION, "px-2")} onClick={() => setEditing(undefined)}>取消</Button>
+              </div>
+            </div>}
+          </li>;
+        })}
+      </ol>
+    </div>)}
   </section>;
 }

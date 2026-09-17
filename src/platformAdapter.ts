@@ -921,6 +921,25 @@ export class PlatformAdapter {
         return { status: 200, payload: { ok: true, resolved } };
       }
     }
+    {
+      // 仅标已解决、不跟帖(2026-09-18,问题流「忽略」用):与 reply 的
+      // 差别是没有答复输出,拿不到 note id——部署的 discussion_resolve
+      // 模板要按讨论 id({id})解析才能走这条路;按 {note_id} 写的旧
+      // 模板只服务"答复带 resolve"的老路,走这里会拿空 note id,如实
+      // 404 提示。宿主仍不主动调它,只在宿主动作明确要求时执行。
+      const resolveMatch = path.match(/^\/mr\/discussions\/([^/]+)\/resolve$/);
+      if (method === "POST" && resolveMatch) {
+        const spec = this.config.discussion_resolve;
+        if (!spec) {
+          return { status: 404,
+                   payload: { error: "未配置 discussion_resolve" } };
+        }
+        await this.run(spec, this.values(
+          { id: decodeURIComponent(resolveMatch[1]),
+            repo: String(body.repo ?? "") }, headers));
+        return { status: 200, payload: { ok: true, resolved: true } };
+      }
+    }
     if (method === "GET" && path === "/pipeline/artifacts") {
       if (!this.config.pipeline_artifacts) {
         return { status: 404,

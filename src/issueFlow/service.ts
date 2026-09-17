@@ -1,5 +1,5 @@
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
-import { postMrDiscussionReply } from "../mrDiscussionReply.ts";
+import { postMrDiscussionReply, postMrDiscussionResolve } from "../mrDiscussionReply.ts";
 import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
@@ -569,12 +569,13 @@ export interface IssueFlowOptions {
    *  明确允许的部署才开。 */
   resolveDiscussions?: boolean;
   /** 问题处理介入档位(ADR-0019,个人设置按流剥离):三档缺省二档,
-   * 按会话归属人现读现判,闸策略/提示词节奏/推送过目全部由档位派生——
-   * 三档「全程把控」=guard 提示词+环境闸与推送过目照旧;二档「仅分析
-   * 报告」=唯一停靠点是分析结论确认卡(检视循环),env 闸不举、直推;
-   * 一档「全自动」=确认类闸代答(analysis_confirm 全量/conclude 高置信
-   * 非问题)+纯选项问答卡代答+env 闸不举+直推。流水线人工事实闸任何
-   * 档都等人。回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
+   * 按会话归属人现读现判,闸策略/提示词节奏全部由档位派生——三档
+   * 「优先对齐」=guard 提示词+环境闸照旧;二档「优先报告」=唯一
+   * 停靠点是分析结论确认卡(检视循环),env 闸不举;一档「全自动」=
+   * 确认类闸代答(analysis_confirm 全量/conclude 高置信非问题)+纯选项
+   * 问答卡代答+env 闸不举。流水线人工事实闸任何档都等人。推送分支
+   * 任何档都直推(2026-09-17 推送过目退役,ADR-0009 增补)。
+   * 回调缺席=缺省二档(裸构造/测试形态与产品缺省一致)。 */
   interventionTier?: (account?: string) => IssueInterventionTier;
   /** 账号角色查询(ADR-0031 指派校验):账号不存在或已停用返回
    * undefined。回调缺席=裸构造(测试世界无身份体系),按缺席即放行
@@ -909,6 +910,18 @@ export class IssueFlowService {
       // 隔离只救邻居不救自己:该目录跳过并大声记账,列表可见的「现场
       // 损坏」投影另行拍板(见票)。
       let state: IssueSessionState | undefined;
+      // 推送过目闸退役(2026-09-17,ADR-0009 增补):盘上等这张卡的
+      // 会话要在 loadState 剥卡**之前**认领——剥卡后"等人无卡"的空壳
+      // 无法与其他现场区分,不能把整个形态卷进自动续跑。原文解析失败
+      // 不在此处理会,loadState 的隔离纪律兜底。
+      let hadLegacyPushGate = false;
+      try {
+        const raw = JSON.parse(readFileSync(join(root, "issue.json"),
+          "utf-8")) as { gate?: { kind?: string } };
+        hadLegacyPushGate = raw.gate?.kind === "push_confirm";
+      } catch {
+        hadLegacyPushGate = false;
+      }
       try {
         state = loadState(root);
       } catch (error) {
@@ -920,15 +933,22 @@ export class IssueFlowService {
       if (!state) continue;
       if (interruptWarmupReceipt(state.warmup)) saveState(root, state);
       // 旧值按字符串比(interrupted 已不在词表里,类型层面不认它)。
+      const humanGate = new HumanGate(join(root, "waiting.json"));
       const diskStatus: string = state.status;
-      const resuming = diskStatus === "running" || diskStatus === "interrupted";
+      // 退役推送卡的等人空壳:loadState 已剥卡,重新入队让 AI 续跑,
+      // 推送直推不再等确认(只认认领过的现场,其他等人会话原样不动)。
+      const retiredPushWait = diskStatus === "waiting_user" && hadLegacyPushGate;
+      const resuming = diskStatus === "running" || diskStatus === "interrupted"
+        || retiredPushWait;
       if (resuming) {
         state.status = "queued";
         // 阶段语境(stage/note)原样保留:续聊提示词的「最近阶段」
         // 靠它把现场交给重建的上下文;重启事实走转移台账与开场通知。
         recordTransition(state, {
           source: "platform",
-          note: "服务重启,重新入队,平台自动续跑",
+          note: retiredPushWait
+            ? "推送确认卡已退役:推送不再需要人工确认,自动续跑"
+            : "服务重启,重新入队,平台自动续跑",
         });
         saveState(root, state);
         requeued += 1;
@@ -937,7 +957,7 @@ export class IssueFlowService {
       }
       const live: LiveIssue = {
         id: state.id, root, state,
-        humanGate: new HumanGate(join(root, "waiting.json")),
+        humanGate,
         controlEpoch: 0,
         // 崩溃回灌(遗留洞 A-H1):作答落账后、送达模型前崩溃,恢复
         // 回合只带重启通知会把人的决定整条丢掉——末条事件恰是人的
@@ -2393,7 +2413,7 @@ export class IssueFlowService {
     if (state.status === "waiting_user") {
       // 代答在即的卡不发可行动卡通知(判据与代答同尺,见 willAutoAnswer)
       // ——告知义务由代答自带的「已代答」收口通知承担;真人闸、开放题
-      // 卡、三档把控照常通知。
+      // 卡、三档对齐照常通知。
       if (!this.willAutoAnswer(live)) this.notifyWaitingCard(live);
       this.maybeAutoAnswerGate(live);
       // 闸缺席才轮到 Agent 卡(闸优先,两路互斥不重复作答)。
@@ -2446,7 +2466,7 @@ export class IssueFlowService {
   }
 
   /** 自动节奏(提示词少问/不简报、纯选项问答卡按推荐整卡代答):
-   * 一/二档自动,三档「全程把控」不自动。 */
+   * 一/二档自动,三档「优先对齐」不自动。 */
   private autoModeOn(live: LiveIssue): boolean {
     return this.tierOf(live) !== "3";
   }
@@ -2641,8 +2661,7 @@ export class IssueFlowService {
    * 只代答"确认类"闸——analysis_confirm 全量(推荐码表定死 confirm);
    * conclude 仅提案 non_issue 且自报高置信(闭环无下游闸,分级保守)。
    * env_needed/env_verify 问的是用户的事实(环境配置/验证结果),一/
-   * 二档根本不举、三档等人,永不代答;push_confirm 三档「全程把控」
-   * 才举,同样永不代答(ADR-0009);pipeline_unfixable/pipeline_evidence
+   * 二档根本不举、三档等人,永不代答;pipeline_unfixable/pipeline_evidence
    * 问的是"人是否已在交付平台处理/豁免"与"报错原文"——都是只有人
    * 拿得到的人工事实(票 03),任何档位永不代答。
    * 作答 defer 到回合收口(turning 释放)之后,走 answer() 同一裁决
@@ -2708,11 +2727,6 @@ export class IssueFlowService {
     const { state } = live;
     const gate = state.gate;
     if (!gate) return;
-    // push_confirm 永不代答(ADR-0009,显式裁定):推送过目是用户
-    // 选「全程把控」时要的"我要亲自看一眼"——更具体的意志赢过档位的
-    // 免审批。守卫放在档位判定之前:这条路径连"读档位"都不必,过目卡
-    // 在任何介入档位都只等真人。
-    if (gate.kind === "push_confirm") return;
     // skill_select 永不代答(ADR-0011;闸本身已被 ADR-0014 封存):
     // 这里显式守卫,防任何档位把已挂起的圈选卡追溯代答掉。
     if (gate.kind === "skill_select") return;
@@ -2723,7 +2737,7 @@ export class IssueFlowService {
     // 流水线人工闸永不代答(票 03):不可修卡问的是"人处理/豁免了没"
     // ——答"已处理"就是人工事实声明,机器代答等于替人声明平台侧
     // 已处理;证据回灌卡的报错原文只有人粘贴得出来。两类都放在档位
-    // 判定之前,任何介入档位都只等真人(与 push_confirm 同款守卫位)。
+    // 判定之前,任何介入档位都只等真人。
     if (gate.kind === "pipeline_unfixable") return;
     if (gate.kind === "pipeline_evidence") return;
     // 一档「全自动」才代答确认类闸(ADR-0019);二档的停靠点恰是
@@ -2782,7 +2796,7 @@ export class IssueFlowService {
   private maybeAutoAnswerAgentCard(live: LiveIssue): void {
     const { state } = live;
     if (state.gate) return;
-    // 一/二档自动(ADR-0019):纯选项问答卡按推荐整卡代答,三档把控等人。
+    // 一/二档自动(ADR-0019):纯选项问答卡按推荐整卡代答,三档对齐等人。
     if (!this.autoModeOn(live)) return;
     if (state.review_active === true) return;
     const record = live.humanGate.pending()[0];
@@ -3368,9 +3382,6 @@ export class IssueFlowService {
       },
       gitCredential: () =>
         this.options.gitCredential?.(live.state.account),
-      // 推送前过目(ADR-0019 档位派生,现读现判):只有三档「全程
-      // 把控」过目,一/二档直推;改档即刻生效。
-      pushConfirmation: () => this.tierOf(live) === "3",
       // 介入档位现值:env 闸的举卡条件之一(一/二档不向用户索取环境,
       // 缺口写进分析报告,见 tools 侧守卫)。
       interventionTier: () => this.tierOf(live),
@@ -3786,48 +3797,6 @@ export class IssueFlowService {
           round: state.round ?? 1,
           reason: supplement || `\n用户描述: ${reason}`,
         })));
-      return summarize(state);
-    }
-
-    if (verdict === "grant_push") {
-      // push_confirm 确认(ADR-0009):一次性令牌写入会话状态(带确认
-      // 时刻与决策留痕,并记下举闸时的分支 tip 作为过目对象的身份——
-      // 重推时 tip 变了令牌即作废重举),随 issue.json 持久化,recover
-      // 不清它。闸已在上面落掉、原阶段续跑——Agent 重试 push_branch 即
-      // 放行,成功后令牌被消费,再推重新过目(每次过目,防盲签)。
-      // 强制覆盖卡(2026-09-11 增补)多带两样:force=确认的是"强制
-      // 覆盖远端同名分支"卡(普通卡确认过的令牌放不了强制覆盖),
-      // remote=举卡时远端旧分支 tip——推送按它做租赁式核对,确认后
-      // 远端又动了即作废重举。
-      state.push_token = {
-        at: new Date().toISOString(),
-        decision,
-        ...(state.push_review_head
-          ? { head: state.push_review_head } : {}),
-        ...(state.push_review_force ? { force: true } : {}),
-        ...(state.push_review_remote
-          ? { remote: state.push_review_remote } : {}),
-      };
-      delete state.push_review_head;
-      delete state.push_review_force;
-      delete state.push_review_remote;
-      saveState(live.root, state);
-      this.continueTurn(live,
-        promptCopy("notices", "gate.push.grant", { supplement }));
-      return summarize(state);
-    }
-
-    if (verdict === "hold_push") {
-      // 暂不推送(含自由作答):不产令牌,原阶段续跑。决策与意见已在
-      // 上面入账(human_decision 事件+转移账),Agent 能看到用户意见。
-      // 举闸镜像(head/force/remote)一并清掉:没换来令牌,留着只会
-      // 让下一张卡捡到旧语义。
-      delete state.push_review_head;
-      delete state.push_review_force;
-      delete state.push_review_remote;
-      saveState(live.root, state);
-      this.continueTurn(live,
-        promptCopy("notices", "gate.push.hold", { decision, supplement }));
       return summarize(state);
     }
 
@@ -4251,16 +4220,26 @@ export class IssueFlowService {
     });
   }
 
-  /** 移除一条意见(账本软删,jsonl 留痕)。 */
+  /** 移除一条意见(账本软删,jsonl 留痕)。带外部讨论的,顺手在
+   * CodeHub 标已解决(2026-09-18 拍板:忽略=本地扔 + 远端了结)。 */
   dropReview(id: string, reviewId: string): Annotation {
     const live = this.require(id);
     const item = reviewStore(live.root).list().find(note => note.id === reviewId);
-    if (!item?.external_review) this.requireReviewable(live);
-    else if (isTerminal(live.state.status) || item.agent_assigned) throw new IssueControlError("意见已交办或会话已结束");
-    return reviewStore(live.root).drop(reviewId, live.state.account, true);
+    const external = item?.external_review;
+    if (!external) this.requireReviewable(live);
+    else if (isTerminal(live.state.status) || item?.agent_assigned) throw new IssueControlError("意见已交办或会话已结束");
+    const dropped = reviewStore(live.root).drop(reviewId, live.state.account, true);
+    if (external) {
+      this.enqueueOwnerMrResolve(live, external.discussion_id);
+      void this.flushMrReviewReplies(live)
+        .catch((error) =>
+          this.log(`[issue-flow] ${live.id} 忽略意见的远端标解决投递失败(信箱留痕重试): `
+            + String(error instanceof Error ? error.message : error)));
+    }
+    return dropped;
   }
 
-  updateExternalReview(id: string, reviewId: string, input: { context?: string; reply?: string; resolve?: boolean }): Annotation {
+  updateExternalReview(id: string, reviewId: string, input: { context?: string; reply?: string; resolve_remote?: boolean }): Annotation {
     const live = this.require(id);
     if (isTerminal(live.state.status)) throw new IssueControlError("会话已结束");
     const store = reviewStore(live.root);
@@ -4269,7 +4248,8 @@ export class IssueFlowService {
     if (input.context !== undefined) return store.saveAgentContext(reviewId, live.state.account, input.context);
     if (input.reply !== undefined) {
       const updated = store.replyAsOwner(reviewId, live.state.account, input.reply, true);
-      this.enqueueOwnerMrReply(live, note.external_review.discussion_id, input.reply);
+      this.enqueueOwnerMrReply(live, note.external_review.discussion_id, input.reply,
+        input.resolve_remote === true);
       // 立即投一拍:首发不依赖监看环是否在场(监看只在 mr_green+有 MR
       // 时活着);投递失败留在信箱,监看在场时下一拍自动重试。
       void this.flushMrReviewReplies(live)
@@ -4278,8 +4258,7 @@ export class IssueFlowService {
             + String(error instanceof Error ? error.message : error)));
       return updated;
     }
-    if (input.resolve) return store.resolveAsOwner(reviewId, live.state.account, { revision: note.rework ?? 0, outcome: "not_adopted", reason: "责任人在工作台自行闭环" });
-    throw new IssueControlError("请选择补充、答复或本地闭环");
+    throw new IssueControlError("请选择补充要求或自行答复");
   }
 
   /** 提交检视(ADR-0035 检视分诊):意见送出后交 AI 逐条自判回复型/
@@ -5237,6 +5216,23 @@ export class IssueFlowService {
       }
       item.attempts += 1;
       try {
+        if (item.resolve_only) {
+          // 仅标已解决(「忽略」的远端半边):不跟帖,投递即到头,
+          // 没有回复式的事后记账——本地账在忽略时已软删。
+          await postMrDiscussionResolve({
+            platformUrl,
+            discussionId: item.discussion_id,
+            repo: item.repo,
+            idempotencyKey: item.id,
+            headers: pipelineHeaders(credential),
+          });
+          item.status = "delivered";
+          item.delivered_at = new Date().toISOString();
+          delete item.last_error;
+          dirty = true;
+          this.log(`[issue-flow] ${live.id} 检视讨论已标已解决(${item.discussion_id})`);
+          continue;
+        }
         await postMrDiscussionReply({
           platformUrl,
           discussionId: item.discussion_id,
@@ -5280,6 +5276,7 @@ export class IssueFlowService {
    *  责任人答复由批注层把关,这里不做去重。 */
   private enqueueOwnerMrReply(
     live: LiveIssue, discussionId: string, body: string,
+    resolveRemote = false,
   ): void {
     const trimmed = body.trim();
     if (!trimmed) return;
@@ -5300,9 +5297,9 @@ export class IssueFlowService {
       repo,
       discussion_id: discussionId,
       body: trimmed,
-      // 答复不代点已解决(spec 17:闭环核验权在检视人)——resolveDiscussions
-      // 旋钮只作用于 AI 草稿,责任人的话更不能替检视人 closure。
-      resolve: false,
+      // 2026-09-18 拍板:责任人可勾选随答复代点已解决,默认不点——
+      // 取代 spec 17 的"答复一律不代 resolve";是否真解决了,远端为准。
+      resolve: resolveRemote,
       status: "pending",
       attempts: 0,
       author: live.state.account,
@@ -5310,6 +5307,38 @@ export class IssueFlowService {
     });
     this.writeMrReviewOutbox(live, outbox);
     this.log(`[issue-flow] ${live.id} 责任人答复待发布(${discussionId})`);
+  }
+
+  /** 「忽略」的远端半边(2026-09-18):仅在 CodeHub 标已解决,不跟帖。
+   * 走同一信箱拿重试与留痕;找不到意见账(旧账无 mr_discussion 记录)
+   * 就没有仓信息可投,静默跳过——本地忽略不受影响。 */
+  private enqueueOwnerMrResolve(live: LiveIssue, discussionId: string): void {
+    const record = this.feedbackStore(live).list().find(
+      (row) => row.source === "mr_discussion"
+        && row.source_id === discussionId);
+    if (!record) {
+      this.log(`[issue-flow] ${live.id} 忽略意见找不到意见账(${discussionId}),`
+        + "仅本地忽略");
+      return;
+    }
+    const repo = record.id.slice(
+      "mr-discussion:".length,
+      record.id.length - discussionId.length - 1);
+    const outbox = this.readMrReviewOutbox(live);
+    outbox.items.push({
+      id: `mrr-${randomUUID()}`,
+      repo,
+      discussion_id: discussionId,
+      body: "",
+      resolve: false,
+      resolve_only: true,
+      status: "pending",
+      attempts: 0,
+      author: live.state.account,
+      created_at: new Date().toISOString(),
+    });
+    this.writeMrReviewOutbox(live, outbox);
+    this.log(`[issue-flow] ${live.id} 忽略意见待代点已解决(${discussionId})`);
   }
 
   private readMrReviewOutbox(live: LiveIssue): {

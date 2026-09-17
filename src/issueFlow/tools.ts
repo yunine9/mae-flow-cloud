@@ -81,15 +81,10 @@ import {
 } from "./reviews.ts";
 import {
   currentBranch,
-  currentHead,
   dirtyWorktree,
-  pushChangeSummary,
   pushFromIssueWorkspace,
   remoteBranchState,
-  remoteBranchTip,
-  IssuePushStaleRemoteError,
   type GitCredential,
-  type PushReceipt,
 } from "./issueGit.ts";
 import { createMergeRequest } from "../mrClient.ts";
 
@@ -112,10 +107,6 @@ export interface IssueToolContext {
    * 继承后台密码的会话为 undefined(root 与后台密码相同,不重复出)。 */
   rootPassword?(): string | undefined;
   gitCredential?(): GitCredential | undefined;
-  /** 推送前过目(ADR-0019 档位派生,现读现判):开着(=三档「全程
-   * 把控」)时 push_branch 没有一次确认令牌即拒绝并举 push_confirm
-   * 闸。回调缺席=直推(裸构造兼容缺省)。 */
-  pushConfirmation?: () => boolean;
   /** 介入档位现值(ADR-0019,现读现判):env 闸的举卡条件——一/
    * 二档不向用户索取环境,缺口写进分析报告;缺席按缺省二档。 */
   interventionTier?: () => IssueInterventionTier;
@@ -851,14 +842,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // ---- 推送(自问题修改阶段起;机械单号门禁全程同在) ----
 
   // issue-14 推送反复失败收口(2026-09-10):执行器会并行跑同一消息里
-  // 的多个工具调用(生产实测同毫秒双 push_branch)。一次性令牌是会话
-  // 级单例,并发交错读删要么 TypeError 崩溃、要么一次确认放行两次
-  // 推送(过目闸被绕过)——两个都不可接受。三道收口:①在途互斥,推送
-  // 串行化,并发第二个直接打回;②过目卡已在等作答时快速打回——
-  // state.gate 是单卡槽,重举会顶掉用户还没答的那张,连环重举正是
-  // 循环被拦的放大器;③令牌读快照——检查与使用之间有 await,快照
-  // 防令牌被并发消费后读空崩溃。多仓节奏=逐仓「举卡→等作答→推本仓
-  // →下一仓」,节奏教给回执(push.*)与工具说明。
+  // 的多个工具调用(生产实测同毫秒双 push_branch)。在途互斥把推送
+  // 串行化,并发第二个直接打回;多仓节奏=逐仓推送,节奏教给回执
+  // (push.busy)与工具说明。
   let pushInFlight = false;
   const runPush = async (params: any) => {
     gateStage("push_branch");
@@ -877,113 +863,21 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         { expected, branch }));
     }
     // 强制覆盖意图(2026-09-11 增补):同单重跑撞远端遗留分支时 AI
-    // 主动申报。意图本身不构成授权——过目开着时必须走强制覆盖卡
-    // (令牌带 force 才放行);过目关着与普通推送同权直推(拍板:
-    // 强制推送不搞独立于个人设置的额外确认)。
-    const wantForce = params.force === true;
+    // 主动申报。覆盖按租赁式核对远端同名分支 tip(issueGit 侧),
+    // 对不上即拒——不盲盖。
+    const force = params.force === true;
     // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
     // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
     // 出厂,不如在这里点破并给出该做的事。
     const dirty = await dirtyWorktree(repo.dir);
-    // 推送前过目闸(ADR-0009,交付轴):现读现判个人设置——关/回调
-    // 缺席=直推(现状不变);开着就要有有效的一次性确认令牌才碰
-    // git push,否则举起 push_confirm 闸(卡带服务端现查仓库生成的
-    // 变更摘要,不靠 Agent 自报)并拒收。与阶段门禁(gateStage)正交:
-    // 那道门管"什么阶段能推",这道管"推之前给不给人过目"。
-    // 拒绝与 raiseEnvNeededGate 同款收口:工具如实
-    // 失败让模型结束回合,waiting_user 由 settle 在回合终点定格。
-    // 令牌绑定过目那一刻的分支 tip(push_review_head→push_token.head):
-    // 确认之后又有新提交,重推对不上 tip 即作废重举——人看过的是
-    // 哪份变更,放行的就是哪份,防盲签才是完整的。
-    const raisePushReviewGate = async (why: string, force = false) => {
-      const summary = await pushChangeSummary({
+    const receipt = await pushFromIssueWorkspace({
+      dataDir: ctx.dataRoot,
       repoDir: repo.dir,
-      ...(state.baseline ? { baseline: state.baseline } : {}),
+      repoUrl: repo.url,
+      branch,
+      credential: ctx.gitCredential?.(),
+      ...(force ? { force: true } : {}),
     });
-    const head = await currentHead(repo.dir);
-    if (head) state.push_review_head = head;
-    else delete state.push_review_head;
-    // 强制覆盖卡多记"覆盖对象身份"(远端旧 tip,2026-09-11 增补):
-    // 取不到一样举卡,只是卡面不带远端指向——闸的作用是"停下等人",
-    // 不是"读懂仓库"(与 pushChangeSummary 同一哲学)。
-    let remoteTip: string | undefined;
-    if (force) {
-      remoteTip = await remoteBranchTip({
-        dataDir: ctx.dataRoot,
-        repoUrl: repo.url,
-        branch,
-        credential: ctx.gitCredential?.(),
-      });
-      state.push_review_force = true;
-      if (remoteTip) state.push_review_remote = remoteTip;
-      else delete state.push_review_remote;
-    } else {
-      delete state.push_review_force;
-      delete state.push_review_remote;
-    }
-    raiseGate(
-      ctx.state,
-      "push_confirm",
-      force
-        ? `推送前过目:${why}本次推送将强制覆盖远端同名分支${remoteTip ? `(当前指向 ${remoteTip.slice(0, 8)}…,同单重跑场景)` : "(远端暂无同名分支,本次实际为新建)"},请过目后确认`
-        : `推送前过目:${why}以下变更将推送到远端,请过目后确认`,
-      undefined,
-      summary,
-    );
-    ctx.persist();
-    fail(promptCopy("receipts",
-      force ? "push.review.force" : "push.review.raised", {
-      lead: why ? `${why.replace(/,$/, "")}——已重新` : "",
-    }));
-  };
-    if (ctx.pushConfirmation?.() === true) {
-      const token = state.push_token;
-      if (!token || (wantForce && token.force !== true)) {
-        // 无令牌举卡;或令牌不含强制语义(2026-09-11 增补:force 的
-        // 授权来自令牌,不来自参数——普通卡确认过的放不了强制覆盖,
-        // 反向强制卡确认过的重推不必再带参)。旧令牌作废重举,确认
-        // 作答会写新令牌。
-        if (token) delete state.push_token;
-        await raisePushReviewGate(
-          token ? "上次确认未含强制覆盖," : "", wantForce);
-      } else {
-        const head = await currentHead(repo.dir);
-        if (token.head && head && head !== token.head) {
-          delete state.push_token;
-          await raisePushReviewGate("分支在上次确认后又有新提交,",
-            token.force === true);
-        }
-      }
-    }
-    const force = wantForce || state.push_token?.force === true;
-    let receipt: PushReceipt;
-    try {
-      receipt = await pushFromIssueWorkspace({
-        dataDir: ctx.dataRoot,
-        repoDir: repo.dir,
-        repoUrl: repo.url,
-        branch,
-        credential: ctx.gitCredential?.(),
-        // 令牌带强制语义即按强制执行(重推不要求再带 force 参数);
-        // 过目确认时记的远端旧 tip 一并交下去做租赁式核对。
-        ...(force ? { force: true } : {}),
-        ...(force && state.push_token?.remote
-          ? { expectedRemoteTip: state.push_token.remote }
-          : {}),
-      });
-    } catch (error) {
-      if (error instanceof IssuePushStaleRemoteError) {
-        // 覆盖对象变了(远端 tip 与过目确认时不一致):令牌作废,自动
-        // 重举强制卡让用户对新的远端状态再过目——不透原文让 AI 猜。
-        delete state.push_token;
-        await raisePushReviewGate("远端分支在过目确认后又有变动,", true);
-      }
-      throw error;
-    }
-    // 令牌一次性(ADR-0009):成功即消费,下次推送重新过目(防盲签
-    // ——变更变了就要再看)。留痕进转移账,盘上不留已消费的令牌。
-    const reviewed = Boolean(state.push_token);
-    delete state.push_token;
     // 按仓记账(一仓一分支):重推同仓覆盖旧账,不同仓各记各的。
     const pushes = state.pushes ??= [];
     const record = {
@@ -995,8 +889,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     recordTransition(state, {
       source: "platform",
       note: `分支已推送 ${repo.url} ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
-        + (receipt.forced ? "(强制覆盖远端同名分支)" : "")
-        + (reviewed ? "(推送确认令牌已用掉)" : ""),
+        + (receipt.forced ? "(强制覆盖远端同名分支)" : ""),
     });
     ctx.persist();
     return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
@@ -1009,11 +902,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "把当前修复分支经宿主推送到远端(容器里 git push 被禁用,推送一律"
       + "走本工具)。平台机械校验:会话已绑定单号、分支名为 "
-      + "master_<工号>_<单号>;多仓交付逐仓串行推送,过目确认也是逐仓"
-      + "一次。推送后返回 SHA。force=true 强制覆盖远端同名分支:仅用于"
-      + "同单重跑、远端旧分支是本单上次运行遗留的场景(普通推送被"
-      + "non-fast-forward 拒绝时回执会指路);覆盖按租赁式核对远端旧"
-      + "tip,过目开启时举强制覆盖确认卡。",
+      + "master_<工号>_<单号>;多仓交付逐仓串行推送,推送后返回 SHA。"
+      + "force=true 强制覆盖远端同名分支:仅用于同单重跑、远端旧分支是"
+      + "本单上次运行遗留的场景(普通推送被 non-fast-forward 拒绝时回执"
+      + "会指路);覆盖按租赁式核对远端旧 tip,不盲盖。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -1026,16 +918,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       force: Type.Optional(Type.Boolean({
         description:
           "强制推送:覆盖远端同名分支(仅同单重跑、旧分支是本单上次"
-          + "运行遗留时用;覆盖前按租赁式核对远端旧 tip,过目开启时"
-          + "举强制覆盖确认卡,答「暂不推送」即放弃)",
+          + "运行遗留时用;覆盖前按租赁式核对远端旧 tip)",
       })),
     }),
     async execute(_toolCallId: string, params: any) {
       if (pushInFlight) fail(promptCopy("receipts", "push.busy"));
-      if (ctx.pushConfirmation?.() === true
-        && ctx.state.gate?.kind === "push_confirm") {
-        fail(promptCopy("receipts", "push.gate_pending"));
-      }
       pushInFlight = true;
       try {
         return await runPush(params);

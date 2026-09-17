@@ -12,12 +12,11 @@
 #   防止 AI/人顺手一键踩进分钟级全量与它的并发抖动;全量须显式
 #   test:full。
 #
-# CI 排除 prepushRecovery/hostPushRecovery(serve 重启恢复族):
-# 本地空闲全绿、CI 环境必挂——恢复轮对 runner 环境敏感,6 例各烧满
-# 180s 超时(18 分钟/轮,CI 时间最大单点)。覆盖不删:本地
-# npm run test:full 照跑;根因清理后可移出排除名单。容器真件与 PG
-# 用例在 CI 缺镜像/缺库环境自动跳过(与本地无 docker 同款分层);内核
-# 是仓内收编 kernel/,无需额外 checkout。
+# 2026-09-18 测试精简专题(docs/test-cost-leaderboard-2026-09-18.md):
+# 删 33 个环境不可跑/退役/低性价比测试文件,本地快层墙钟 ~30min→185s;
+# 原 prepushRecovery/hostPushRecovery 排除项随文件删除一并移除。
+# 容器真件与 PG 用例在 CI 缺镜像/缺库环境自动跳过(与本地无 docker
+# 同款分层);内核是仓内收编 kernel/,无需额外 checkout。
 
 name: tests
 
@@ -79,9 +78,6 @@ jobs:
           SHARDS=3
           IDX=${{ matrix.shard }}
           for f in tests/*.test.ts; do
-            case "$f" in
-              *prepushRecovery*|*hostPushRecovery*) continue ;;
-            esac
             h=$(basename "$f" | cksum | cut -d' ' -f1)
             (( h % SHARDS == IDX )) && printf '%s\n' "$f"
           done > shard-files.txt

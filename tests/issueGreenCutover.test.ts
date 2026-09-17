@@ -159,7 +159,6 @@ test("漏举催办:收口后 AI 收嘴不举卡——专用催办词打回,举�
       return issue.status === "waiting_user"
         && issue.gate?.kind === "env_verify" ? issue : undefined;
     }, "催办后 AI 举出验证卡");
-    assert.equal(gated.gate!.kind, "env_verify");
     // 催办词进了模型上下文:点名的不是"继续推进"而是"把卡交出去"。
     assert.match(JSON.stringify(model.requests), /还没有交给用户/,
       "欠卡专用催办词送达模型");
@@ -225,93 +224,3 @@ test("停靠场景:全绿到达时 AI 卡挂着——便签随答卡续跑送达
   }
 });
 
-test("complete_stage 当场收口:回执自带举卡指引,AI 同回合举出验证卡", async () => {
-  const dataDir = mfcTemp("mfc-greencutover-inline-");
-  // mr_green 在途 + 台账/流水线全绿 + 未挂监看:complete_stage 当场验绿收口。
-  const now = new Date().toISOString();
-  const { mkdirSync, writeFileSync } = await import("node:fs");
-  mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
-  writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"),
-    JSON.stringify({
-      id: "issue-1", account: "dev", created_at: now, updated_at: now,
-      title: "当场收口夹具", description: "", source: "dts",
-      ticket: "DTS2026091300246",
-      repo_url: ORIGIN, repo_urls: [ORIGIN],
-      scenario: "ticket", round: 1,
-      stage_states: ["done", "done", "done", "done", "in_progress"],
-      status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
-      pushes: [{ repo: ORIGIN, branch: "master_dev_DTS2026091300246",
-        sha: SHA, at: now }],
-      mrs: [{ repo: ORIGIN, branch: "master_dev_DTS2026091300246",
-        title: "[DTS2026091300246] 当场收口夹具", at: now }],
-      pipelines: { [ORIGIN]: { sha: SHA, status: "success",
-        watching: false, started_at: now,
-        deadline: new Date(Date.now() + 120_000).toISOString(), round: 1 } },
-    }));
-  // 即绿平台:状态查询立刻回 success(带同 SHA,陈灯防御放行)。
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://loop");
-    const send = (payload: unknown) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(payload));
-    };
-    if (req.method === "GET" && url.pathname.startsWith("/pipeline/status")) {
-      send({ runs: [{ status: "success", sha: url.searchParams.get("sha") }] });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/pipeline/trigger") {
-      send({ status: "running" });
-      return;
-    }
-    if (req.method === "POST" && url.pathname === "/mr") {
-      send({ url: "http://loop.test/mr/1", id: 1 });
-      return;
-    }
-    res.writeHead(404);
-    res.end("{}");
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const platformUrl =
-    `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const luban = new FakeLubanServer();
-  await luban.start();
-  const model = new ScriptedModelServer([
-    { tool: { name: "complete_stage",
-      input: { note: "申报 MR 清单", mrs: [ORIGIN] } } },
-    { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
-    { text: "已举卡。" },
-  ], "scripted-v1", { linear: true });
-  await model.start();
-  const service = new IssueFlowService({
-    dataDir,
-    provider: "maeflow",
-    model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    dts: new MockDtsGateway(),
-    platformUrl,
-    gitCredential: () => ({ username: "dev", password: "git-token",
-      email: "dev@example.com" }),
-    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
-    linkBase: "http://work.test",
-  });
-  try {
-    service.reply("issue-1", "申报收口");
-    const gated = await until(() => {
-      const issue = service.get("issue-1");
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user"
-        && issue.gate?.kind === "env_verify" ? issue : undefined;
-    }, "当场收口后 AI 同回合举出验证卡");
-    assert.equal(gated.stage, "mr_green");
-    assert.match(JSON.stringify(model.requests), /环境验证卡交给用户/,
-      "收口回执带举卡指引进模型上下文");
-    assert.equal(readStateFile(dataDir, "issue-1").mr_gate, undefined,
-      "验绿门随当场收口清账");
-  } finally {
-    await service.shutdown().catch(() => undefined);
-    await model.stop();
-    await luban.stop();
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});

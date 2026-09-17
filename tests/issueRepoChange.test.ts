@@ -147,14 +147,19 @@ function userTexts(model: ScriptedModelServer): string {
 test("终态守卫:archived/canceled/failed 会话拒绝调整仓清单(死信防线)", async () => {
   const dataDir = mfcTemp("mfc-issue-repochange-terminal-");
   const alpha = "https://git.example.com/org/alpha.git";
-  for (const status of ["archived", "canceled", "failed"]) {
-    const id = seedIssue(dataDir, {
+  // 2026-09-18 三服务合一去冗:三个终态种子先落盘,一个服务一次恢复
+  // 全加载;requestRepoChanges 是同步打回,不耗模型回合。
+  const statuses = ["archived", "canceled", "failed"];
+  const ids = statuses.map((status) =>
+    seedIssue(dataDir, {
       id: `issue-${status}`, repoUrls: [alpha], status,
-    });
-    const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
-    await model.start();
-    const service = new IssueFlowService(baseOptions(dataDir, model));
-    try {
+    }));
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService(baseOptions(dataDir, model));
+  try {
+    for (const [index, id] of ids.entries()) {
+      const status = statuses[index];
       assert.throws(
         () => service.requestRepoChanges(id, {
           add: ["https://git.example.com/org/beta.git"], remove: [],
@@ -169,10 +174,10 @@ test("终态守卫:archived/canceled/failed 会话拒绝调整仓清单(死信�
       assert.ok(!(state.transitions ?? []).some((entry) =>
         /用户调整会话仓清单/.test(entry.note ?? "")),
         `${status} 被拒提交不得留痕`);
-    } finally {
-      void service.shutdown().catch(() => undefined);
-      void model.stop();
     }
+  } finally {
+    void service.shutdown().catch(() => undefined);
+    void model.stop();
   }
 });
 

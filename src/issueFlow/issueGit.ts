@@ -408,11 +408,6 @@ export interface PushReceipt {
   forced?: boolean;
 }
 
-/** 强制覆盖的租赁核对失败(2026-09-11 增补):过目确认时记的远端
- * tip 与推送时实测不一致——覆盖对象变了,确认作废。单独成类是给
- * 工具层认领重举闸用的,不吃字符串匹配。 */
-export class IssuePushStaleRemoteError extends Error {}
-
 /** 宿主唯一一次传输:从工作区经 safeGit 只读视图读对象,在临时 bare
  * 仓里 push 到显式远端,再 ls-remote 复核 SHA。分支名单由调用方
  * (单号门禁)先行校验,这里只管传输与复核的可靠性。
@@ -420,10 +415,7 @@ export class IssuePushStaleRemoteError extends Error {}
  * force(同单重跑强制覆盖,2026-09-11 增补):不用裸 --force,而是先
  * ls-remote 探远端同名分支 tip,再 --force-with-lease=ref:tip 推——
  * 探测到推送之间远端又动了(他人/另一会话推送),租赁核对失败拒推,
- * 不会盲盖。expectedRemoteTip 是过目确认时记的旧 tip(强制卡场景):
- * 推送前先核对它,对不上直接抛 IssuePushStaleRemoteError(确认对象
- * 变了,作废重举),把"人看过的是哪份远端,放行的就是哪份"从本地
- * tip 扩到远端 tip。远端还没有同名分支时无从覆盖,按普通推送走。 */
+ * 不会盲盖。远端还没有同名分支时无从覆盖,按普通推送走。 */
 export async function pushFromIssueWorkspace(options: {
   dataDir: string;
   repoDir: string;
@@ -431,7 +423,6 @@ export async function pushFromIssueWorkspace(options: {
   branch: string;
   credential?: GitCredential;
   force?: boolean;
-  expectedRemoteTip?: string;
 }): Promise<PushReceipt> {
   if (!existsSync(join(options.repoDir, ".git"))) {
     throw new Error(`代码克隆不存在: ${options.repoDir}`);
@@ -481,15 +472,7 @@ export async function pushFromIssueWorkspace(options: {
     let forceLease: string[] = [];
     if (options.force === true) {
       const remoteTip = await probeRemoteTip();
-      if (options.expectedRemoteTip) {
-        if (remoteTip !== options.expectedRemoteTip) {
-          throw new IssuePushStaleRemoteError(
-            `远端同名分支在过目确认后又有变动(确认时 ${options.expectedRemoteTip.slice(0, 8)}…`
-            + `,现在 ${remoteTip ? remoteTip.slice(0, 8) : "缺失"})——覆盖对象变了,`
-            + "请重新发起 force=true 推送,让用户对新的远端状态再过目一次。");
-        }
-        forceLease = [`--force-with-lease=${ref}:${options.expectedRemoteTip}`];
-      } else if (remoteTip) {
+      if (remoteTip) {
         forceLease = [`--force-with-lease=${ref}:${remoteTip}`];
       }
       // 远端还没有同名分支:无从覆盖,按普通推送走(不带租赁参数)。
@@ -507,8 +490,8 @@ export async function pushFromIssueWorkspace(options: {
       // 同单重跑撞远端遗留分支(2026-08-28 事故):分支名带单号,上次
       // 停止的运行推过同名分支,本地从基线另起必然非快进。光透 git
       // 原文等于让 AI 猜——点名原因与处置(2026-09-11 增补:处置从
-      // "请用户去平台删远端分支"改为指路 force=true 重推,过目闸保
-      // 证覆盖前用户知情;强制尝试被拒则提示核对远端,不教盲目重试)。
+      // "请用户去平台删远端分支"改为指路 force=true 重推,租赁式核对
+      // 保证不盲盖;强制尝试被拒则提示核对远端,不教盲目重试)。
       const rejected = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
         .test(`${stderrText}\n${stdoutText}`);
       const staleBranch = !rejected ? "" : options.force === true
@@ -516,8 +499,7 @@ export async function pushFromIssueWorkspace(options: {
           + "限制——先与用户核对远端分支状态再决定,不要盲目重试。"
         : " 远端同名分支已存在且非快进(常见于同单重跑:上次运行推过"
           + "该分支)——确认是本单遗留后带 force=true 重推即可覆盖"
-          + "(过目开启时会举强制覆盖确认卡;该分支已有 MR 时覆盖后"
-          + "原 MR 随之更新,不要重复创建)。";
+          + "(该分支已有 MR 时覆盖后原 MR 随之更新,不要重复创建)。";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
         ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
@@ -542,9 +524,8 @@ export async function pushFromIssueWorkspace(options: {
 
 /** 远端探针的可区分形态(#240 删除门禁):reachable=false = 网络/凭据
  * 问题,远端状态不可判定;reachable=true 且 tip 缺席 = 远端确认没有
- * 同名分支。remoteBranchTip 把这两种都折叠成 undefined——过目卡场景
- * 容忍(卡照样举,闸的作用是"停下等人",与 pushChangeSummary 同一
- * 哲学);删除门禁不容忍(宁误拦不误放),必须分得清这两种事实。 */
+ * 同名分支。删除门禁不容忍"查不到"(宁误拦不误放),必须分得清
+ * 这两种事实。 */
 export interface RemoteBranchState {
   /** ls-remote 成功 = 远端可达;此刻 tip 字段有意义(缺席=分支不存在)。 */
   reachable: boolean;
@@ -577,63 +558,5 @@ export async function remoteBranchState(options: {
       : { reachable: true };
   } finally {
     sandbox.cleanup();
-  }
-}
-
-/** 远端同名分支的当前 tip(强制覆盖过目卡的"覆盖对象身份"):取不到
- * (网络/权限/分支不存在)返回 undefined——卡照样举,只是不带远端
- * 指向。可区分形态见 remoteBranchState(删除门禁用),本函数保持
- * 既有调用方(raisePushReviewGate)的 undefined 容忍语义不变。 */
-export async function remoteBranchTip(options: {
-  dataDir: string;
-  repoUrl: string;
-  branch: string;
-  credential?: GitCredential;
-}): Promise<string | undefined> {
-  return (await remoteBranchState(options)).tip;
-}
-
-/** 推送过目闸的变更摘要(ADR-0009:服务端举闸时生成,不靠 Agent 自报
- * ——过目不是走过场,人看的是仓里的既成事实)。内容=当前分支相对
- * 基线的 diff --stat + 最近几条提交题。基线按候选逐个试(登记带的
- * baseline 优先,再退 master/main);全都不通就退化为提交题列表。
- * 摘要是给人过目的上下文,不是门禁事实——任何一步取不到都不 fail,
- * 空摘要的卡照样举:闸的作用是"停下等人",不是"读懂仓库"。 */
-export async function pushChangeSummary(options: {
-  repoDir: string;
-  baseline?: string;
-}): Promise<string> {
-  const view = createSafeGitView(options.repoDir);
-  try {
-    const env = view.environment();
-    const run = (args: string[]) => runGit(["--no-pager", ...args], {
-      cwd: options.repoDir, env, timeoutMs: 10_000,
-    });
-    const log = await run(["log", "--format=%s", "-3"]);
-    const subjects = log.code === 0
-      ? log.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
-      : [];
-    const subjectBlock = subjects.length
-      ? `\n\n最近提交:\n${subjects.map((line) => `- ${line}`).join("\n")}`
-      : "";
-    const candidates = [
-      ...(options.baseline
-        ? [`origin/${options.baseline}`, options.baseline]
-        : []),
-      "origin/master", "master", "origin/main", "main",
-    ];
-    for (const candidate of candidates) {
-      const diff = await run(
-        ["diff", "--stat", "--no-color", `${candidate}...HEAD`]);
-      if (diff.code !== 0) continue;
-      const lines = diff.stdout.trim().split("\n").filter(Boolean);
-      if (!lines.length) break; // 基线通了但无差异:没有 diff 可看,给提交题
-      const stat = lines.slice(0, 40).join("\n")
-        + (lines.length > 40 ? `\n…共 ${lines.length} 行` : "");
-      return `变更摘要(相对 ${candidate}):\n${stat}${subjectBlock}`;
-    }
-    return subjectBlock || "(变更摘要不可得:仓里读不到基线差异与提交历史)";
-  } finally {
-    view.cleanup();
   }
 }

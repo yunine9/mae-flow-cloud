@@ -1,0 +1,27 @@
+{
+  "id": "issue-proto-09",
+  "account": "reviewer",
+  "reporter": "admin",
+  "created_at": "2026-09-13T17:22:00.758Z",
+  "updated_at": "2026-09-13T17:52:00.758Z",
+  "title": "会议室场景多人说话时降噪过度",
+  "description": "按特性分类原型的样本会话。",
+  "source": "dts",
+  "ticket": "DTS-2026-91388",
+  "repo_url": "https://git.example.com/proto/device-firmware.git",
+  "repo_urls": [
+    "https://git.example.com/proto/device-firmware.git"
+  ],
+  "module": "语音特性-降噪",
+  "module_id": "proto-nr",
+  "status": "archived",
+  "stage": "conclude",
+  "stage_note": "原型样本现场",
+  "stage_at": "2026-09-13T17:52:00.758Z",
+  "round": 1,
+  "conclusion": {
+    "kind": "issue",
+    "summary": "确认为算法局限,转需求单跟踪。",
+    "at": "2026-09-13T17:52:00.758Z"
+  }
+}

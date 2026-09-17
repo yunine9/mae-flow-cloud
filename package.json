@@ -19,7 +19,8 @@
     "serve": "tsx src/serve.ts",
     "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts",
-    "runtime": "tsx src/executionRuntime.ts"
+    "runtime": "tsx src/executionRuntime.ts",
+    "test:affected": "tsx scripts/affected-tests.ts"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.84.1",

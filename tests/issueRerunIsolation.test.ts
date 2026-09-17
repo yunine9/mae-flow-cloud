@@ -190,9 +190,10 @@ test("推送撞远端遗留同名分支:失败信息点名非快进与处置建�
       assert.match(error.message, /非快进/);
       assert.match(error.message, /上次运行|同单重跑/);
       // 处置指路 force=true(2026-09-11 增补):AI 能自持完成覆盖,
-      // 过目闸保证用户知情;不再让用户去平台手删远端分支。
+      // 不让用户去平台手删远端分支;过目闸已退役(2026-09-17),
+      // 提醒只保留"已有 MR 随覆盖更新"。
       assert.match(error.message, /force=true/);
-      assert.match(error.message, /强制覆盖确认卡/);
+      assert.match(error.message, /已有 MR/);
       return true;
     },
     "非快进失败要带人话:原因(同单重跑遗留)+ 处置方向");

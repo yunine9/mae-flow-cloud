@@ -276,6 +276,18 @@ export class FakeGitPlatform {
             }
           } else if (request.method === "POST" && replyMatch) {
             reply(200, this.replyDiscussion(replyMatch[1], body));
+          } else if (request.method === "POST"
+              && /^\/mr\/discussions\/([^/]+)\/resolve$/.test(url.pathname)) {
+            // 仅标已解决、不跟帖(问题流「忽略」,2026-09-18)。
+            const id = decodeURIComponent(url.pathname.match(
+              /^\/mr\/discussions\/([^/]+)\/resolve$/)![1]);
+            const discussion = this.discussions.find(
+              (item) => item.id === id);
+            if (!discussion) reply(404, { error: "讨论不存在" });
+            else {
+              discussion.resolved = true;
+              reply(200, { ok: true, resolved: true });
+            }
           } else if (request.method === "GET"
               && url.pathname === "/pipeline/artifacts") {
             reply(200, { files: this.artifacts });

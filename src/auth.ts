@@ -37,7 +37,7 @@ export interface AuthUser {
   committer?: boolean;
 }
 
-/** 问题处理介入档位(ADR-0019):三档,缺省二档「仅分析报告」。
+/** 问题处理介入档位(ADR-0019):三档,缺省二档「优先报告」。
  * 需求侧的月光/推送过目两轴在问题侧退役,由这一根旋钮替代。 */
 export type IssueInterventionTier = "1" | "2" | "3";
 
@@ -99,7 +99,7 @@ interface StoredUser extends AuthUser {
    * 侧没有独立开关——过目并进介入档位定义(ADR-0019)。 */
   push_confirmation?: boolean;
   /** 问题处理的介入档位(v2 按流剥离,2026-09-09 拍板):三档,缺省
-   * 二档「仅分析报告」,全员从二档起步不继承需求侧。稀疏存储:二档
+   * 二档「优先报告」,全员从二档起步不继承需求侧。稀疏存储:二档
    * 即缺省不落盘,只落显式的 1/3。 */
   issue_intervention_tier?: IssueInterventionTier;
 }
