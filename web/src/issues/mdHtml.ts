@@ -39,7 +39,7 @@ export function markdownToEditorHtml(
     out.push(`<p>${para.map(inline).join("<br>")}</p>`);
     para = [];
   };
-  for (const line of markdown.split("\n")) {
+  for (const line of markdown.replace(/\r\n?/g, "\n").split("\n")) {
     if (/^```/.test(line.trim())) {
       closeList();
       flushPara();
@@ -55,8 +55,8 @@ export function markdownToEditorHtml(
       continue;
     }
     const heading = /^(#{1,3})\s+(.*)$/.exec(line);
-    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
-    const ordered = /^\s*\d+\.\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+    const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
     if (heading || bullet || ordered || line.trim() === "" || /^>\s?/.test(line)) {
       flushPara();
     }
