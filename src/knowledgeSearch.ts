@@ -11,6 +11,7 @@ import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
+import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
 export interface KnowledgeContext {
   repo: string;
@@ -58,6 +59,14 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const modules = catalog.modules.filter(m => m.status === "active"
     && (all || context.moduleIds.includes(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r)))));
   const moduleIds = new Set(modules.map(m => m.id));
+  for (const doc of listKnowledgeDocuments(dataDir)) {
+    if (!doc.active || !matchesRepos(doc.repositories)
+        || (doc.module_ids.length && !doc.module_ids.some(id => moduleIds.has(id)))) continue;
+    assets.push({ id: doc.id, title: doc.title, kind: "document", scope: doc.scope === "platform" ? "平台通用"
+      : doc.scope === "module" ? `业务模块：${doc.module_ids.join("、")}` : `代码仓：${doc.repositories.join("、")}`,
+      summary: doc.when_to_use, whenToUse: [doc.when_to_use, doc.technologies.join("、")].filter(Boolean).join("；"),
+      content: doc.content, revision: doc.revision, productVersions: doc.product_versions });
+  }
   const candidates = listKnowledgeCandidateCatalog(dataDir);
   warnings.push(...candidates.warnings);
   for (const row of candidates.candidates) {
@@ -136,9 +145,22 @@ export class KnowledgeSearch {
   private indexed = new Map<string, string>();
   private indexing = new Map<string, Promise<boolean>>();
   private indexQueue: Promise<unknown> = Promise.resolve();
+  private states = new Map<string, { key: string; state: "queued" | "indexing" | "failed"; error?: string }>();
   constructor(private dataDir: string, private sidecar?: MemorySidecar) {}
 
   catalog(context: KnowledgeContext) { return collectSearchableKnowledge(this.dataDir, context); }
+
+  documentStatus(asset: SearchableKnowledge) {
+    const path = this.mirror(asset), key = this.indexKey(path);
+    if (this.indexed.get(path) === key) return { state: "ready", sections: this.sidecar?.indexedSections?.(path) };
+    if (!this.sidecar) return { state: "failed", error: "知识检索服务未配置，原文已保存。" };
+    const state = this.states.get(path);
+    return state?.key === key ? state : { state: "queued" };
+  }
+
+  async searchDocument(id: string, query: string) {
+    return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 5, id);
+  }
 
   /** Background preparation after publication/startup; search still scopes the catalog. */
   async prepare(): Promise<void> {
@@ -149,9 +171,13 @@ export class KnowledgeSearch {
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
-  async search(context: KnowledgeContext, query: string, limit = 5): Promise<KnowledgeSearchResult> {
+  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string): Promise<KnowledgeSearchResult> {
     if (!this.sidecar) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
-    const catalog = this.catalog(context);
+    const readCatalog = () => {
+      const value = onlyId ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
+      return onlyId ? { ...value, assets: value.assets.filter(a => a.id === onlyId) } : value;
+    };
+    const catalog = readCatalog();
     const sources = catalog.assets.map(asset => ({ id: asset.id, path: this.mirror(asset) }));
     if (!sources.length) return { available: true, hits: [], warnings: catalog.warnings };
     // One shared in-flight index per document revision; no duplicate
@@ -163,13 +189,15 @@ export class KnowledgeSearch {
     const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000);
     if (!hits) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     // A document may have been edited/withdrawn during asynchronous indexing.
-    const current = new Map(this.catalog(context).assets.map(asset => [asset.id, asset]));
+    const current = new Map(readCatalog().assets.map(asset => [asset.id, asset]));
     const searched = new Map(catalog.assets.map(asset => [asset.id, asset]));
     return { available: true as const, warnings: [...catalog.warnings, ...(!ready ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
       const asset = current.get(hit.id), prior = searched.get(hit.id);
       if (!asset || !prior || asset.content !== prior.content || asset.revision !== prior.revision) return [];
       const path = sources.find(source => source.id === asset.id)?.path;
       const offset = path && !asset.path ? readFileSync(path, "utf8").split("\n").length - asset.content.split("\n").length : 0;
+      // Mirror metadata helps retrieval but is not a chapter in the original.
+      if (hit.end_line !== undefined && hit.end_line <= offset) return [];
       const start = hit.start_line ? Math.max(1, hit.start_line - offset) : undefined;
       const end = hit.end_line ? Math.min(asset.content.split("\n").length, hit.end_line - offset) : undefined;
       return [{ id: asset.id, title: asset.title, kind: asset.kind, scope: asset.scope,
@@ -216,8 +244,14 @@ export class KnowledgeSearch {
     if (this.indexed.get(path) === key) return Promise.resolve(true);
     const existing = this.indexing.get(key);
     if (existing) return existing;
-    const job = this.indexQueue.then(() => this.sidecar!.ingest(path, 600_000)).then(ok => { if (ok) this.indexed.set(path, key); return ok; })
-      .catch(() => false).finally(() => this.indexing.delete(key));
+    this.states.set(path, { key, state: "queued" });
+    const job = this.indexQueue.then(() => {
+      this.states.set(path, { key, state: "indexing" });
+      return this.sidecar!.ingest(path, 600_000);
+    }).then(ok => { if (ok) this.indexed.set(path, key);
+      else this.states.set(path, { key, state: "failed", error: "索引未完成，请确认检索服务可用后重试。" }); return ok; })
+      .catch(() => { this.states.set(path, { key, state: "failed", error: "索引失败，原文已保存，可重试。" }); return false; })
+      .finally(() => this.indexing.delete(key));
     this.indexQueue = job;
     this.indexing.set(key, job);
     return job;

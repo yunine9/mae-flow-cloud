@@ -395,6 +395,7 @@ import {
 } from "./launchKnowledgePreview.ts";
 import {
   discoverRepositorySkills,
+  readRepositoryKnowledgeFile,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
 } from "./repositorySkills.ts";
@@ -5744,6 +5745,18 @@ export class TaskService {
   }
 
   private knowledgeSearch?: KnowledgeSearch;
+  getKnowledgeSearch(): KnowledgeSearch {
+    return this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar);
+  }
+
+  async importKnowledgeFile(repository: string, baseline: string, path: string, account?: string) {
+    if (!/^https?:\/\//i.test(repository) || repository.length > 2048) throw new Error("请填写 CodeHub 的 HTTP/HTTPS 仓库地址");
+    validateRepositoryAddress(repository);
+    const prepared = this.prepareHostGitSandbox(this.options.gitCredential?.(account));
+    try { return await readRepositoryKnowledgeFile({ repository, baseline, path,
+      credentialHelper: prepared?.helper, credentialArgs: prepared?.args, credentialEnv: prepared?.env }); }
+    finally { this.cleanupHostGitCredential(prepared); }
+  }
   private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;
 
   prepareKnowledgeIndex(): void {

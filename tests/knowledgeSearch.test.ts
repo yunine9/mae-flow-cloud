@@ -194,11 +194,14 @@ test("搜索保留章节原文行号，read 定位规则和例外并拒绝旧版
       const { readFileSync } = await import("node:fs");
       const lines = readFileSync(file, "utf8").split("\n");
       const line = lines.findIndex(row => row.includes("配置 request_timeout_seconds")) + 1;
-      return [{ id: ids.current, score: 1, heading: "手册 > 超时", start_line: line, end_line: line, snippet: "单位秒" }];
+      return [{ id: ids.current, score: 1, heading: "手册 > 超时", start_line: line, end_line: line, snippet: "单位秒" },
+        { id: ids.current, score: 1, heading: "索引元数据", start_line: 5, end_line: 9 }];
     } } as unknown as MemorySidecar;
     const service = new KnowledgeSearch(dir, fake);
     await service.prepare();
-    const hit = (await service.search(context, "超时")).hits[0];
+    const hits = (await service.search(context, "超时")).hits;
+    assert.equal(hits.length, 1, "镜像元数据不能显示成原文第 1–? 行");
+    const hit = hits[0];
     assert.equal(hit.start_line, 4);
     assert.equal(hit.end_line, 4);
     const tool: any = createKnowledgeTool({ service: () => service, context: () => context });

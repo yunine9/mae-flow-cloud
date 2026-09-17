@@ -1,3 +1,4 @@
+import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
 import { randomUUID } from "node:crypto";
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
@@ -1079,7 +1080,7 @@ export function createTaskServer(
         || parts[0] === "product-versions"
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
-        || parts[0] === "knowledge-candidates"
+        || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
         || parts[0] === "workflow-assets"
         || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
@@ -1246,6 +1247,7 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
+      if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-candidates") {
         const operator = viewer?.username ?? "本地部署";
         const admin = !options.auth || viewer?.role === "admin";

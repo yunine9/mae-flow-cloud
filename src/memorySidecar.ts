@@ -78,6 +78,8 @@ export class MemorySidecar {
   private readonly pending = new Map<number, Pending>();
   private restarts = 0;
   private stopped = false;
+  private sectionCounts = new Map<string, number>();
+  indexedSections(path: string): number | undefined { return this.sectionCounts.get(path); }
   private readonly budgets: MemorySidecarBudgets;
 
   constructor(private readonly options: MemorySidecarOptions) {
@@ -238,6 +240,7 @@ export class MemorySidecar {
   /** 单条入库;失败只记日志——正本已经在 md 里,索引晚点重建也不丢。 */
   async ingest(path: string, budgetMs = this.budgets.ingestMs): Promise<boolean> {
     const reply = await this.request({ op: "ingest", path }, budgetMs);
+    if (reply?.ok && typeof reply.sections === "number") this.sectionCounts.set(path, reply.sections);
     if (reply?.error) this.options.log?.(`记忆索引失败 ${path}: ${String(reply.error)}`);
     return reply?.ok === true;
   }

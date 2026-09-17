@@ -1,3 +1,4 @@
+import { KnowledgeDocuments } from "./KnowledgeDocuments";
 import { PeopleProvider, PersonName, usePersonName } from "./People";
 import { DeliveryAnalytics } from "./DeliveryAnalytics";
 /**
@@ -105,13 +106,13 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights" | "memories";
+type TeamAssetTab = "documents" | "knowledge" | "modules" | "workflows" | "insights" | "memories";
 
 const APP_VIEWS = new Set<View>([
   "team", "teamIssues", "mine", "issues", "profile", "users", "settings",
   "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
 ]);
-const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
+const TEAM_ASSET_TABS = new Set<TeamAssetTab>(["documents",
   "knowledge", "modules", "workflows", "insights", "memories",
 ]);
 
@@ -236,7 +237,7 @@ export function resolveWorkspaceTarget(
 
 function initialView(user: AuthUser): View {
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
-  if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
+  if (new URLSearchParams(location.search).get("experience") === "1" || new URLSearchParams(location.search).has("knowledgeDocuments")) return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
@@ -723,7 +724,7 @@ export function App() {
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
-    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
+    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : readKnowledgeAssetFocus() ? "knowledge" : "documents");
   const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
     readKnowledgeAssetFocus,
   );
@@ -1428,7 +1429,7 @@ export function App() {
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
     <div className="min-h-screen min-w-0 bg-(--canvas)">
       <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
-        (dtsWide || (view === "knowledge" && teamAssetTab === "memories")) ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
@@ -1462,7 +1463,7 @@ export function App() {
       </header>
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
-        (dtsWide || (view === "knowledge" && teamAssetTab === "memories")) ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
@@ -1504,33 +1505,15 @@ export function App() {
 
         {view === "knowledge" && <section className="team-assets-workspace">
           <nav className="team-assets-tabs" aria-label="团队资产类型">
-            <button type="button" className={teamAssetTab === "knowledge" ? "active" : ""}
-              aria-pressed={teamAssetTab === "knowledge"}
-              onClick={() => selectTeamAssetTab("knowledge")}>
-              <strong>知识资产</strong><small>团队共用的文档、技能和规则，Agent 干活时会用到</small>
-            </button>
-            <button type="button" className={teamAssetTab === "modules" ? "active" : ""}
-              aria-pressed={teamAssetTab === "modules"}
-              onClick={() => selectTeamAssetTab("modules")}>
-              <strong>模块知识</strong><small>按配置中心的模块上传和维护知识</small>
-            </button>
-            <button type="button" className={teamAssetTab === "workflows" ? "active" : ""}
-              aria-pressed={teamAssetTab === "workflows"}
-              onClick={() => selectTeamAssetTab("workflows")}>
-              <strong>工作流</strong><small>给每个阶段配好 Agent 能用的能力，存成方案反复用</small>
-            </button>
-            <button type="button" className={teamAssetTab === "insights" ? "active" : ""}
-              aria-pressed={teamAssetTab === "insights"}
-              onClick={() => selectTeamAssetTab("insights")}>
-              <strong>使用效能</strong><small>谁真被读、谁选而未用，以及下一步改哪里</small>
-            </button>
-            <button type="button" className={teamAssetTab === "memories" ? "active" : ""}
-              aria-pressed={teamAssetTab === "memories"}
-              onClick={() => selectTeamAssetTab("memories")}>
-              <strong>经验沉淀</strong><small>集中确认经验候选，采纳后跨任务复用</small>
-            </button>
+            <button type="button" className={["documents", "knowledge", "modules"].includes(teamAssetTab) ? "active" : ""} onClick={() => selectTeamAssetTab("documents")}><strong>知识库</strong></button>
+            <button type="button" className={teamAssetTab === "memories" ? "active" : ""} onClick={() => selectTeamAssetTab("memories")}><strong>经验沉淀</strong></button>
+            <div className="ml-auto flex gap-2"><button type="button" className={teamAssetTab === "workflows" ? "active" : ""} onClick={() => selectTeamAssetTab("workflows")}>工作流</button><button type="button" className={teamAssetTab === "insights" ? "active" : ""} onClick={() => selectTeamAssetTab("insights")}>使用效能</button></div>
           </nav>
-          {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
+          {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectTeamAssetTab("documents")}>← 返回知识库</Button>}
+          {teamAssetTab === "documents" ? <KnowledgeDocuments onManage={focus => {
+            if (!focus) { selectTeamAssetTab("memories"); return; }
+            setKnowledgeFocus(focus); selectTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
+          }} /> : teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
             initialAsset={knowledgeFocus}
             onOpenTask={(taskId) => {

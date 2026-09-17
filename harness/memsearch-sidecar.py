@@ -110,7 +110,7 @@ class Sidecar:
         if not self.indexable(path):
             return {"ok": True, "chunks": 0}
         count = await self.ensure_indexed(path)
-        return {"ok": True, "chunks": count}
+        return {"ok": True, "chunks": count, "sections": len(self.ms._store.hashes_by_source(str(path)))}
 
     async def reindex(self, _req: dict) -> dict:
         # 候选留档不参与向量索引。旧索引命中仍由搜索和 Cloud 正本过滤。
