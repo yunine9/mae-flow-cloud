@@ -44,8 +44,9 @@ const report = () =>
 
 /** 一路开到 mr_green 验绿收口的现场:假平台+剧本+服务三件套。
  *  流水线保持默认 success:申报即走即时验绿收口路(通知+合入监听
- *  都在这一路点火)。 */
-async function greenFixture() {
+ *  都在这一路点火)。stopAtVerifyCard=true 时停在环境验证卡未答
+ *  现场(测「未答卡+合入=自动归档」的验证通过语义)。 */
+async function greenFixture(opts: { stopAtVerifyCard?: boolean } = {}) {
   const dataDir = mfcTemp("mfc-issue-merge-");
   const platform = new FakeGitPlatform();
   const sourceDir = join(dataDir, "source");
@@ -114,14 +115,24 @@ async function greenFixture() {
     return snapshot.status === "waiting_user"
       && snapshot.gate?.kind === "env_verify";
   }, "mr_green 验绿后环境验证闸");
+  if (opts.stopAtVerifyCard) {
+    return {
+      id: created.id, service, platform, luban, model,
+      stop: async () => {
+        await service.shutdown();
+        await model.stop();
+        await platform.stop();
+        await luban.stop();
+      },
+    };
+  }
   const envVersion = service.get(created.id).gate!.state_version;
   service.answer(created.id, { state_version: envVersion, code: "pass" });
   await until(() => {
     const snapshot = service.get(created.id);
-    // 等环境闸作答收口(idle):竞态测试要立刻 control，回合进行中
-    // (turning)会被 control 正确拒绝。
+    // 等环境闸作答收口(idle 待合入):自动归档由合入监看接管。
     return snapshot.stage_note
-      === "环境验证通过——确认 MR 合入后可归档收口"
+      === "环境验证通过——等待 MR 合入,合入后自动归档收口"
       && snapshot.status === "idle";
   }, "环境验证通过后待合入");
   return {
@@ -138,7 +149,7 @@ async function greenFixture() {
 const lubanText = (luban: FakeLubanServer) =>
   luban.messages.map((item) => JSON.stringify(item)).join("\n");
 
-test("合入事实:全合入通知一次,mergeStatus 现扫,归档按事实记 delivered", async () => {
+test("合入事实:全合入自动归档(ADR-0034),结论 delivered,通知一次", async () => {
   const scene = await greenFixture();
   try {
     // 尚未合入:快照 opened,不算全合。
@@ -146,13 +157,15 @@ test("合入事实:全合入通知一次,mergeStatus 现扫,归档按事实记 d
     assert.equal(before.all_merged, false);
     assert.equal(before.mrs[0].state, "opened");
 
-    // 平台合入 → 监看一拍内记账、换 note、通知。
+    // 平台合入 → 监看一拍内记账、自动归档(不再等人类点归档)。
     const branch = scene.service.get(scene.id).mrs![0].branch;
     scene.platform.settleMr(branch, "merged");
-    await until(() =>
-      scene.service.get(scene.id).stage_note === "全部 MR 已合入——可归档收口",
-    "合入事实入账");
-    const mr = scene.service.get(scene.id).mrs![0];
+    await until(() => scene.service.get(scene.id).status === "archived",
+      "合入自动归档");
+    const final = scene.service.get(scene.id);
+    assert.equal(final.conclusion?.kind, "delivered",
+      "自动归档结论=delivered");
+    const mr = final.mrs![0];
     assert.ok(mr.merged_at, "记账 merged_at(首次观测)");
     assert.match(mr.merged_sha ?? "", /^[0-9a-f]{40}$/,
       "merged_sha 照平台返回记");
@@ -160,38 +173,32 @@ test("合入事实:全合入通知一次,mergeStatus 现扫,归档按事实记 d
     // 轮询继续跑,通知不重发、账不翻倍。
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const notes = lubanText(scene.luban)
-      .split("\n").filter((line) => line.includes("全部 MR 已合入"));
-    assert.equal(notes.length, 1, "全合入通知只发一次");
-
-    const status = await scene.service.mergeStatus(scene.id);
-    assert.equal(status.all_merged, true);
-    assert.equal(status.mrs[0].state, "merged");
-
-    // 归档(软闸):结论按合入事实记 delivered。
-    const summary = await scene.service.control(scene.id,
-      { action: "archive" });
-    assert.equal(summary.conclusion?.kind, "delivered");
+      .split("\n").filter((line) => line.includes("自动归档"));
+    assert.equal(notes.length, 1, "自动归档通知只发一次");
   } finally {
     await scene.stop();
   }
 });
 
-test("归档竞态核对:监看未拍先,现扫兜住刚发生的合入", async () => {
-  const scene = await greenFixture();
+test("未答验证卡时合入:自动归档=验证通过语义,闸随终态清面", async () => {
+  const scene = await greenFixture({ stopAtVerifyCard: true });
   try {
+    assert.equal(scene.service.get(scene.id).gate?.kind, "env_verify",
+      "现场:环境验证卡待答");
     const branch = scene.service.get(scene.id).mrs![0].branch;
     scene.platform.settleMr(branch, "merged");
-    // 不等监听循环,立刻归档——control 内的竞态核对必须兜住这次合入。
-    const summary = await scene.service.control(scene.id,
-      { action: "archive" });
-    assert.equal(summary.conclusion?.kind, "delivered",
-      "点归档瞬间发生的合入不得记成 fixed");
+    await until(() => scene.service.get(scene.id).status === "archived",
+      "未答卡合入自动归档");
+    const final = scene.service.get(scene.id);
+    assert.equal(final.conclusion?.kind, "delivered",
+      "未答卡+合入=验证通过(ADR-0034)");
+    assert.equal(final.gate, undefined, "验证卡随终态清面,不残留");
   } finally {
     await scene.stop();
   }
 });
 
-test("MR 被关闭:通知给出路,归档软闸不堵、结论记 fixed", async () => {
+test("MR 被关闭:通知给出路;有单手动归档被拒,取消仍可达", async () => {
   const scene = await greenFixture();
   try {
     const branch = scene.service.get(scene.id).mrs![0].branch;
@@ -204,14 +211,15 @@ test("MR 被关闭:通知给出路,归档软闸不堵、结论记 fixed", async 
     assert.equal(lubanText(scene.luban).includes("有 MR 被关闭"), true,
       "关闭通知带返工出路");
 
-    const status = await scene.service.mergeStatus(scene.id);
-    assert.equal(status.mrs[0].state, "closed");
-    assert.equal(status.all_merged, false);
-
-    // 软闸:人看着事实拍板归档,不堵;结论=已推送未合入。
-    const summary = await scene.service.control(scene.id,
-      { action: "archive" });
-    assert.equal(summary.conclusion?.kind, "fixed");
+    // ADR-0034:有单不再手动归档——被关闭的 MR 不算交付,人只能
+    // 续聊返工或取消。
+    await assert.rejects(
+      () => scene.service.control(scene.id, { action: "archive" }),
+      /不再手动归档/,
+    );
+    const canceled = await scene.service.control(scene.id,
+      { action: "cancel" });
+    assert.equal(canceled.status, "canceled");
   } finally {
     await scene.stop();
   }

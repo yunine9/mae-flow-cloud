@@ -797,7 +797,7 @@ export function fixedAdvance(
 /** 环境验证闸两版转移账文案(2026-09-16 起是统计协议,不是随手文案:
  * 一次率二轴聚合(一次修复成功率)按失败前缀从转移账取验证事实,改
  * 文案必须连这里一起改;写入点在 service 的 env_verify pass/fail 分派)。 */
-export const VERIFY_PASS_NOTE = "用户环境验证通过,待归档收口";
+export const VERIFY_PASS_NOTE = "用户环境验证通过,待合入自动归档";
 export const VERIFY_FAIL_NOTE_PREFIX = "用户环境验证发现问题";
 
 /** 当前阶段收尾(不再前进):换库验证通过后的终态用。 */

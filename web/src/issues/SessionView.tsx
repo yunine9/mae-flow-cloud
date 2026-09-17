@@ -27,7 +27,6 @@ import {
   controlIssue,
   fixedStageList,
   getIssue,
-  issueMergeStatus,
   issueStageText,
   replyIssue,
   resumeIssueTakeover,
@@ -239,28 +238,14 @@ export function IssueSessionView({
       setBusy(false);
     }
   }
+  // 归档门禁(ADR-0034):有单会话不渲染归档按钮——交付出口只有
+  // 「全部 MR 合入自动归档」;无单仅在结论后(挂起待转正)可归,
+  // 结论前禁用并说明,要放弃走终止会话。
+  const manualArchiveAllowed = detail.scenario !== "ticket";
   async function archive() {
-    let message = "归档后会话收口不可续聊，凭据将清理。";
-    // 合入事实摆明(ADR-0022):有 MR 的会话先现扫一次平台事实,结论
-    // 按合入记账——全合入=已交付,未全合=已推送未合入。平台暂不可得
-    // 不堵归档(软闸),用通用文案;服务端归档时仍会核对。
-    if (detail.mrs?.length) {
-      try {
-        const status = await issueMergeStatus(detail.id);
-        const lines = status.mrs.map((mr) => {
-          const name = mr.repo.split("/").pop() || mr.repo;
-          return mr.state === "merged"
-            ? `✓ 已合入 ${name}${mr.merged_sha ? `（${mr.merged_sha.slice(0, 8)}）` : ""}`
-            : mr.state === "closed"
-              ? `✗ 被关闭 ${name}——可续聊返工，或直接归档`
-              : `… 合入中 ${name}`;
-        });
-        message = `归档后会话收口不可续聊，凭据将清理。\n逐仓 MR 合入状态：\n${lines.join("\n")}\n结论将记为：${status.all_merged ? "已交付（全部 MR 已合入）" : "已修复（推送/建 MR 未全部合入）"}`;
-      } catch { /* 平台暂不可得:软闸不堵,交服务端归档时核对 */ }
-    }
     if (!await confirmDialog({
       title: "归档会话",
-      message,
+      message: "归档后会话收口不可续聊，凭据将清理。",
       confirmLabel: "归档",
     })) return;
     void perform(() => controlIssue(detail.id, { action: "archive" }));
@@ -349,14 +334,15 @@ export function IssueSessionView({
             anchor.remove();
           }}>导出现场记录</Button>
         {/* 归档/终止(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
-            确认语义、按状态禁用与 failed 例外(失败没有结论可归档,只能
-            终止清理)原样保留;都是写操作,查看模式整组不渲染。 */}
+            确认语义;归档按 ADR-0034 门禁——有单不渲染(合入自动归档),
+            无单结论后可用;终止都是写操作,查看模式整组不渲染。 */}
         {canOperate && <>
-          <Button type="button" variant="outline" size="sm" disabled={busy
-            || ["archived", "canceled", "failed"].includes(detail.status)}
-            title={detail.status === "failed"
-              ? "失败的会话没有结论可归档——用「终止会话」清理" : undefined}
-            onClick={archive}>归档收口</Button>
+          {manualArchiveAllowed && <Button type="button" variant="outline"
+            size="sm" disabled={busy || detail.status !== "suspended"}
+            title={detail.status !== "suspended"
+              ? "给出结论（是问题挂起/非问题闭环）后才能归档；要放弃请终止会话"
+              : undefined}
+            onClick={archive}>归档收口</Button>}
           <Button type="button" variant="destructive" size="sm" disabled={busy
             || ["archived", "canceled"].includes(detail.status)}
             onClick={cancelSession}>终止会话</Button>
