@@ -2092,6 +2092,8 @@ export function createTaskServer(
               + "管理员负责配置平台、管理账号与兜底控制",
           });
         }
+        const businessModuleId = typeof body.business_module_id === "string" ? body.business_module_id.trim() : "";
+        if (!businessModuleId) return json(response, 400, { error: "请选择所属业务模块" });
         // 任务归属人=登录者本人(不许替别人下单);无鉴权形态(本地
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
@@ -2310,7 +2312,7 @@ export function createTaskServer(
               selectedRepositorySkillIds,
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
-              businessModuleId: typeof body.business_module_id === "string" ? body.business_module_id : undefined,
+              businessModuleId,
               repositoryProfiles,
               requireRepositoryProfiles: requestedRepositories.length > 0,
               knowledgePreviewDigest,

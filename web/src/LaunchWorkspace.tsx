@@ -862,6 +862,10 @@ export function LaunchWorkspace({
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim() || !requirement.trim() || submitting || blocked) return;
+    if (!businessModules.some(module => module.id === businessModuleId)) {
+      setError("请选择所属业务模块；暂无模块时，请先到配置中心创建");
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
@@ -1277,12 +1281,13 @@ export function LaunchWorkspace({
                     </div>
                   )}
                   <label className="mt-3 block">
-                    <span className={FIELD_LABEL}>所属业务模块</span>
-                    <select className="h-10 w-full rounded-md border border-line bg-surface px-3 text-base"
+                    <span className={FIELD_LABEL}>所属业务模块（必填）</span>
+                    <select required className="h-10 w-full rounded-md border border-line bg-surface px-3 text-base"
                       value={businessModuleId} onChange={event => setBusinessModuleId(event.target.value)}>
-                      <option value="">选择业务模块（可稍后补充）</option>
+                      <option value="">请选择所属业务模块</option>
                       {businessModules.map(module => <option key={module.id} value={module.id}>{module.name}</option>)}
                     </select>
+                    {!businessModules.length && <span className="mt-1 block text-sm text-muted-foreground">暂无业务模块，请先到配置中心创建。</span>}
                   </label>
                   {businessModules.length > 0 && <details
                     className="group mt-3 overflow-hidden rounded-lg border border-line bg-surface">

@@ -52,6 +52,16 @@ test("普通非责任人成员可修改所属模块，匿名不能修改", async
   assert.equal((await fetch(url, request)).status, 401);
   const login = await fetch(`${base}/auth/login`, { method: "POST", body: JSON.stringify({ username: "member", password: "test-password" }) });
   const cookie = login.headers.get("set-cookie")!.split(";")[0];
+  for (const moduleId of [undefined, "", "   "]) {
+    const rejected = await fetch(`${base}/tasks`, { method: "POST", headers: { cookie },
+      body: JSON.stringify({ requirement: "新需求", business_module_id: moduleId }) });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json() as { error: string }).error, /请选择所属业务模块/);
+  }
+  const created = await fetch(`${base}/tasks`, { method: "POST", headers: { cookie },
+    body: JSON.stringify({ requirement: "有归属的新需求", business_module_id: "alarm" }) });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json() as TaskSummary).business_module?.id, "alarm");
   const response = await fetch(url, { ...request, headers: { cookie } });
   assert.equal(response.status, 200);
   const result = await response.json() as TaskSummary;
