@@ -154,6 +154,7 @@ import {
 } from "../businessModuleLibrary.ts";
 import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { type ModelsSettings } from "../settings.ts";
+import { resolveModelConfig, type ModelLane } from "../modelResolution.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import { createContainerBashOperations } from "./containerBash.ts";
 import { applyDebugIssueSkillPatch } from "./debugIssue.ts";
@@ -2850,12 +2851,29 @@ export class IssueFlowService {
         String(error)}`));
   }
 
-  private modelChoice(): { provider: string; model: string; json: Record<string, unknown> } {
-    const fromSettings = this.options.settings?.models() ?? {};
+  /** 网关解析咽喉(ADR-0039,需求侧同款):settings 压部署参数;
+   *  operator=问题责任人(归属账号),白名单命中时整体换装 Beta。
+   *  不传 operator=平台口径(视觉校验等平台职能用它)。 */
+  private modelChoice(operator?: string): {
+    lane: ModelLane;
+    provider: string;
+    model: string;
+    json: Record<string, unknown>;
+  } {
+    const resolved = resolveModelConfig({
+      settings: this.options.settings,
+      deployment: {
+        modelsJson: this.options.modelsJson,
+        provider: this.options.provider,
+        model: this.options.model,
+      },
+      operator,
+    });
     return {
-      provider: fromSettings.provider ?? this.options.provider,
-      model: fromSettings.model ?? this.options.model,
-      json: fromSettings.json ?? this.options.modelsJson,
+      lane: resolved.lane,
+      provider: resolved.provider ?? this.options.provider,
+      model: resolved.model ?? this.options.model,
+      json: resolved.json,
     };
   }
 
@@ -3208,7 +3226,7 @@ export class IssueFlowService {
     mkdirSync(agentDir, { recursive: true });
     // build-notes 目录宿主预建,预热专员只写放行的那个文件。
     mkdirSync(join(live.root, ".mae-flow-work"), { recursive: true });
-    const model = this.modelChoice();
+    const model = this.modelChoice(live.state.account);
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(model.json), { mode: 0o600 });
     const driver = await CloudSession.create({
@@ -3304,7 +3322,7 @@ export class IssueFlowService {
     if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     const agentDir = join(live.root, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
-    const model = this.modelChoice();
+    const model = this.modelChoice(live.state.account);
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), {
       mode: 0o600,
     });
