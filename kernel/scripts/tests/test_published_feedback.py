@@ -30,7 +30,6 @@ class PublishedFeedbackTests(unittest.TestCase):
             "sha": sha, "ref": "refs/heads/task", "remote": "origin"}}
         output = io.StringIO()
         with mock.patch.object(delivery, "_capability"), \
-                mock.patch.object(host_receipts, "has_host_receipt", return_value=True), \
                 mock.patch.object(host_receipts, "trusted_feedback_loop", return_value=False), \
                 mock.patch.object(host_receipts, "save_with_host_proof") as save, \
                 contextlib.redirect_stdout(output):
@@ -51,13 +50,12 @@ class PublishedFeedbackTests(unittest.TestCase):
             "sha": fresh, "ref": "refs/heads/task", "remote": "origin"}}
         output = io.StringIO()
 
-        def trusted_before_initialization(state, _actions):
+        def trusted_before_initialization(state):
             self.assertIsNone(state["delivery_loop"])
             return True
 
         with mock.patch.object(delivery, "_capability"), \
-                mock.patch.object(host_receipts, "has_host_receipt", return_value=True), \
-                mock.patch.object(host_receipts, "trusted_feedback_loop", side_effect=trusted_before_initialization), \
+                mock.patch.object(host_receipts, "verify_feedback_facts", side_effect=trusted_before_initialization), \
                 mock.patch.object(host_receipts, "save_with_host_proof") as save, \
                 mock.patch.object(delivery, "_head", return_value=fresh), \
                 contextlib.redirect_stdout(output):
@@ -103,7 +101,7 @@ class PublishedFeedbackTests(unittest.TestCase):
                          "delivery_loop": {"schema": delivery.STATE_SCHEMA, "active_batch_id": "batch", "batches": [active]}}
                 quality = copy.deepcopy(value["quality"])
                 with mock.patch.object(delivery, "_capability"), mock.patch.object(delivery, "_head", return_value=fresh), \
-                        mock.patch.object(host_receipts, "has_host_receipt", return_value=False), \
+                        mock.patch.object(host_receipts, "verify_feedback_facts"), \
                         mock.patch.object(host_receipts, "save_with_host_proof"), contextlib.redirect_stdout(io.StringIO()):
                     payload = {"receipt": {"sha": fresh, "ref": "refs/heads/task", "remote": "origin"}}
                     record_publication(value, payload, {})

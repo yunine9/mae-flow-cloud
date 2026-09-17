@@ -658,10 +658,9 @@ export function trustedKernelHostLifecycle(input: {
 export function trustedKernelHostFeedback(input: {
   host: KernelDeliveryHost;
   cwd: string;
-  actions: KernelHostAction[];
   state?: Record<string, any>;
 }): boolean {
-  return attestKernelHost({ ...input, lifecycle: input.actions, feedbackLoop: true }).feedbackLoop;
+  return attestKernelHost({ ...input, feedbackLoop: true }).feedbackLoop;
 }
 
 /**

@@ -16,11 +16,15 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdir
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  closeKernelDelivery,
+  controlKernelFeedback,
+  recordKernelPublishedPush,
   KERNEL_UNAVAILABLE,
   KernelUnavailableError,
   openKernelFeedback,
   reconcileKernelDeliverySelection,
   recordKernelFeedbackResult,
+  trustedKernelHostFeedback,
   trustedKernelHostActiveBatch,
   trustedKernelHostLifecycle,
 } from "../src/kernelDelivery.ts";
@@ -34,7 +38,7 @@ const GIT_ENV = {
   GIT_COMMITTER_NAME: "attest", GIT_COMMITTER_EMAIL: "attest@example.com",
 };
 
-function watchingTask(label: string) {
+function watchingTask(label: string, seal = true) {
   const data = mkdtempSync(join(tmpdir(), "mfc-attest-"));
   const workspace = join(data, `task-${label}`);
   const cwd = join(workspace, "repo");
@@ -60,7 +64,7 @@ function watchingTask(label: string) {
     history: [], initial_dirty: [],
   }));
   const taskId = `task-${label}`;
-  sealPipelineLifecycle({ cwd, workspace, taskId, kernelRoot: KERNEL_ROOT });
+  if (seal) sealPipelineLifecycle({ cwd, workspace, taskId, kernelRoot: KERNEL_ROOT });
   return { workspace, cwd, head, taskId };
 }
 
@@ -281,11 +285,12 @@ test("task-20: 反馈开批只依赖反馈事实，不依赖步骤或其他投�
     items: [{ id: "review-one", source: "mr_discussion" as const, source_id: "one",
       source_revision: 0, kind: "code_review", summary: "补齐分支", verification: "reviewer" }] };
   for (const tampered of [
-    { ...moved, delivery_loop: {} },
+    { ...moved, delivery_loop: { schema: "mae-flow-delivery-loop/1",
+      batches: [{ batch_id: "forged", status: "closed" }] } },
   ]) {
     writeFileSync(path, JSON.stringify(tampered));
     assert.throws(() => openKernelFeedback({ host: HOST, cwd, workspace, batch }),
-      /打开反馈前的持续检视生命周期没有宿主收据/);
+      /现有反馈事实与宿主收据不一致/);
   }
   writeFileSync(path, JSON.stringify(moved));
   assert.equal(trustedKernelHostLifecycle({ host: HOST, cwd,
@@ -315,3 +320,46 @@ test("task-20: 反馈开批只依赖反馈事实，不依赖步骤或其他投�
   assert.deepEqual(readState(cwd).delivery_loop.batches[0], originalBatch,
     "无活动批次时的结果重放也允许正常步骤变化，不重写结果");
 });
+
+// task-26: historical close must neither lock an empty recovered task nor make
+// retained, authentic feedback unusable. Exercise each first host action.
+for (const seal of [false, true]) for (const reset of [false, true]) {
+  for (const action of ["published", "control", "open"] as const) {
+    test(`close 后恢复：${seal ? "含历史流水线" : "仅 close 收据"}/${reset ? "清空反馈" : "保留反馈"}/${action}`, () => {
+      const { cwd, workspace, taskId, head } = watchingTask(`reopen-${seal}-${reset}-${action}`, seal);
+      closeKernelDelivery({ host: HOST, cwd, workspace, taskId, sha: head, eventId: "old-merge" });
+      const state = readState(cwd);
+      assert.equal(state.current, "end");
+      state.current = "delivery_review";
+      if (reset) state.delivery_loop = { schema: "mae-flow-delivery-loop/1",
+        batches: [], active_batch_id: "", published: null, close_events: [], delivery_round: 0 };
+      writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify(state));
+      if (!reset) assert.equal(trustedKernelHostFeedback({ host: HOST, cwd, state }), true,
+        "close 可证明保留的反馈事实，步骤恢复不撤销事实");
+      const quality = structuredClone(state.quality);
+      const input = { host: HOST, cwd, workspace, taskId };
+      if (action === "control") {
+        controlKernelFeedback({ ...input, operationId: "new-target", target: "继续处理新要求",
+          actor: "owner", requestId: "new-request", reason: "责任人恢复任务" });
+        assert.equal(readState(cwd).delivery_loop.target.target, "继续处理新要求");
+      } else if (action === "open") {
+        openKernelFeedback({ ...input, batch: { schema: "mae-flow-feedback-batch/1",
+          batch_id: "new-review", task_id: taskId, base_sha: head, opened_at: new Date().toISOString(),
+          items: [{ id: "new-comment", source: "workspace", source_id: "new-comment",
+            source_revision: 0, kind: "code_review", summary: "修复恢复后的问题", verification: "reviewer" }] } });
+        assert.equal(readState(cwd).delivery_loop.active_batch_id, "new-review");
+      }
+      writeFileSync(join(cwd, "main.ts"), "export const ready = false;\n");
+      execFileSync("git", ["-C", cwd, "commit", "-qam", "new revision"], { env: GIT_ENV });
+      const sha = execFileSync("git", ["-C", cwd, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+      assert.notEqual(sha, head);
+      const publication = { ...input, receipt: { sha, ref: "refs/heads/feature", remote: "origin" } };
+      recordKernelPublishedPush(publication);
+      const published = readState(cwd);
+      assert.equal(published.delivery_loop.published.sha, sha);
+      assert.deepEqual(published.quality, quality, "推送不为新 SHA 制造绿灯");
+      recordKernelPublishedPush(publication);
+      assert.deepEqual(readState(cwd), published, "恢复/重试登记同一推送仍幂等");
+    });
+  }
+}

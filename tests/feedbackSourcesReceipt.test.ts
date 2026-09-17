@@ -468,8 +468,8 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
       "首次结果登记无需推送收据，必须发生在交付之前");
     assert.ok(attestations().some((args) => args.includes("--feedback-loop")),
       "首次登记前核验反馈事实");
-    assert.ok(attestations().some((args) => args.includes("--lifecycle")),
-      "登记写入新状态后仍重新核验反馈事实");
+    assert.equal(attestations().filter((args) => args.includes("--feedback-loop")).length, 2,
+      "登记前后各核验一次反馈事实，不再传递流程动作白名单");
     const originalBatch = readState(cwd).delivery_loop.batches[0];
     assert.equal(originalBatch.result_head, resultHead);
 
