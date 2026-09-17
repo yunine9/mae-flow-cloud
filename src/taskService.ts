@@ -1,4 +1,5 @@
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
+import { buildDeliveryAnalysis, observeDeliveryCode } from "./deliveryAnalytics.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
@@ -2657,6 +2658,12 @@ export class TaskService {
     return [...this.tasks.values()]
       .map((task) => this.project(task))
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  deliveryAnalysis(retry = false) {
+    for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
+      observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
+    return buildDeliveryAnalysis([...this.tasks.values()].map(task => task.summary));
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
@@ -16670,6 +16677,7 @@ export class TaskService {
    * MR 成功≠完成:流水线过了才"等待合入",否则停在"验证中"。
    * 交付失败不吞:原因写进 summary.delivery,任务保持 completed。 */
   private recordPublishedPush(task: TaskState, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
+    observeDeliveryCode(task.summary, task.cwd, receipt.sha);
     if (this.options.host && task.cwd && this.continuousReviewTask(task)) recordKernelPublishedPush({
       host: this.options.host, cwd: task.cwd, workspace: task.summary.workspace, taskId: task.summary.id, receipt });
     this.syncFeedbackStoreFromKernel(task, true);

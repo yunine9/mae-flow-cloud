@@ -20,6 +20,7 @@ const apiPrefixes = [
   "/knowledge",
   "/knowledge-candidates",
   "/knowledge-insights",
+  "/delivery-analytics",
   "/launch-knowledge-preview",
   "/launch-options",
   "/memory-insights",

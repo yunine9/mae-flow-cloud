@@ -1064,6 +1064,7 @@ export function createTaskServer(
         url.pathname === "/history" || parts[0] === "tasks"
         || url.pathname === "/launch-knowledge-preview"
         || url.pathname === "/knowledge-insights"
+        || url.pathname === "/delivery-analytics"
         || url.pathname.startsWith("/memory-insights")
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
@@ -1105,6 +1106,9 @@ export function createTaskServer(
       // 会被当成前端资源并返回 404。只读口径与团队任务可见性一致。
       if (request.method === "GET" && url.pathname === "/knowledge-insights") {
         return json(response, 200, service.knowledgeInsights());
+      }
+      if (request.method === "GET" && url.pathname === "/delivery-analytics") {
+        return json(response, 200, service.deliveryAnalysis(url.searchParams.get("refresh") === "1"));
       }
       // 登录成员共同维护经验；修改只影响知识复用，不授予任务操作权限。
       if (parts[0] === "memory-insights") {

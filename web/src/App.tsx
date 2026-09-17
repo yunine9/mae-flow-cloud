@@ -1,4 +1,5 @@
 import { PeopleProvider, PersonName, usePersonName } from "./People";
+import { DeliveryAnalytics } from "./DeliveryAnalytics";
 /**
  * 管理员默认看团队全局，开发默认直达我的需求；
  * 登录身份决定任务归属与操作权限，任务事实仍来自服务端。
@@ -99,7 +100,7 @@ const HelpCenter = lazy(() =>
 // 只装需求)与团队问题(teamIssues,只装问题会话);页内领域切换器随
 // 之退场,问题处理(issues)仍是个人操作台,与"我的需求"对位。
 type View = "team" | "teamIssues" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "knowledge" | "wishes" | "help" | "environments";
+  | "settings" | "knowledge" | "wishes" | "help" | "environments" | "deliveryAnalysis";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -108,7 +109,7 @@ type TeamAssetTab = "knowledge" | "modules" | "workflows" | "insights" | "memori
 
 const APP_VIEWS = new Set<View>([
   "team", "teamIssues", "mine", "issues", "profile", "users", "settings",
-  "knowledge", "wishes", "help", "environments",
+  "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>([
   "knowledge", "modules", "workflows", "insights", "memories",
@@ -234,6 +235,7 @@ export function resolveWorkspaceTarget(
 }
 
 function initialView(user: AuthUser): View {
+  if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
   if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
@@ -571,6 +573,7 @@ function BrandMark({ className }: { className?: string }) {
 }
 
 function NavIcon({ name }: { name: View }) {
+  if (name === "deliveryAnalysis") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4 19V5M4 19h16M8 15v-4M12 15V7M16 15v-6" /></svg>;
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "teamIssues") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="13.5" r="4.25" /><path d="M12 9.25V6.5M7 11 5.25 9.5M17 11l1.75-1.5M6.25 16.5H4M20 16.5h-2.25M8 18.5 6.5 20M16 18.5l1.5 1.5" /></svg>;
   if (name === "mine") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="8" r="3.25" /><path d="M5.5 19.25c.65-3.45 2.82-5.25 6.5-5.25s5.85 1.8 6.5 5.25" /></svg>;
@@ -1225,6 +1228,7 @@ export function App() {
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
     environments: { title: "配置中心", description: "统一维护环境与基础映射，供需求、问题单和团队资产直接使用。" },
+    deliveryAnalysis: { title: "交付分析", description: "从首次提交到最终合入，看清代码保留与后续返工。" },
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
   // 问题处理域页头随子页签换文案(spec #171 评审拍板):整域的静态说明
@@ -1362,6 +1366,7 @@ export function App() {
                   onSelect={selectView} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+                <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
                     管理),与团队资产同进「管理视角」组。 */}
                 <NavButton view="environments" current={view} onSelect={selectView} label="配置中心" />
@@ -1398,6 +1403,7 @@ export function App() {
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+                <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
                     同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}
                 <NavButton view="environments" current={view} onSelect={selectView} label="配置中心" />
@@ -1601,6 +1607,7 @@ export function App() {
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
         {view === "environments" && <ConfigurationCenter admin={session.role === "admin"} />}
+        {view === "deliveryAnalysis" && <DeliveryAnalytics />}
         {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
           <HelpCenter viewer={session}
             initialArticleId={helpArticleId}
