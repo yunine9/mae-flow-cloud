@@ -2866,8 +2866,10 @@ export class IssueFlowService {
         modelsJson: this.options.modelsJson,
         provider: this.options.provider,
         model: this.options.model,
+        vision: this.options.vision,
       },
       operator,
+      log: (message) => this.log(`[issue-flow] ${message}`),
     });
     return {
       lane: resolved.lane,
@@ -3323,6 +3325,8 @@ export class IssueFlowService {
     const agentDir = join(live.root, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
     const model = this.modelChoice(live.state.account);
+    // 网关标记记主会话的解析结果(ADR-0039),随下次 saveState 落盘。
+    live.state.model_lane = model.lane;
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), {
       mode: 0o600,
     });

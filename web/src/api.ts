@@ -923,6 +923,9 @@ export interface TaskSummary {
   last_progress_at?: string;
   completed_at?: string;
   token_usage?: TaskTokenUsage;
+  /** 最近一次主会话解析到的网关通道(ADR-0039):platform=平台网关,
+   * beta=Beta 网关(白名单成员);缺席=标记尚未写(老任务/未启动)。 */
+  model_lane?: "platform" | "beta";
   /** 执行队列位次(1 起,服务端投影):排队的单要能回答"排到哪了"。 */
   queue_position?: number;
   /** 开发助手正占有主现场(paused 期间):恢复入口是"交还主任务"。 */
@@ -3353,6 +3356,18 @@ export interface SettingsView {
       key_hint?: string;
     };
   };
+  /** Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 人员白名单;
+   * enabled=false(名单为空)时配置保留但通道停用,全员走平台网关。 */
+  models_beta: {
+    configured: boolean;
+    enabled: boolean;
+    provider?: string;
+    model?: string;
+    url?: string;
+    api?: string;
+    key_hint?: string;
+    members: string[];
+  };
   /** 未设置覆盖时实际采用的服务默认值，不让管理员猜启动参数。 */
   defaults: {
     runtime: {
@@ -3455,7 +3470,7 @@ export async function reclaimUnusedBuildCaches(): Promise<BuildCacheReclaimResul
 }
 
 async function putSettings(
-  section: "runtime" | "models" | "vision" | "execution-policy",
+  section: "runtime" | "models" | "models-beta" | "vision" | "execution-policy",
   body: unknown,
 ): Promise<SettingsView> {
   const response = await fetch(`/settings/${section}`, {
@@ -3486,6 +3501,34 @@ export function putModelsSettings(body: {
   api?: string;
 }): Promise<SettingsView> {
   return putSettings("models", body);
+}
+
+/** Beta 网关保存(ADR-0039):连接四字段口径同平台网关(密钥留空=
+ * 沿用已存),members 是白名单全量替换(空数组=通道停用)。 */
+export function putModelsBetaSettings(body: {
+  url?: string;
+  api_key?: string;
+  model?: string;
+  api?: string;
+  members?: string[];
+}): Promise<SettingsView> {
+  return putSettings("models-beta", body);
+}
+
+/** Beta 网关连通性测试(ADR-0039):只测 Beta 自己的配置,不回落
+ * 部署默认;密钥留空沿用已存。 */
+export async function postModelsBetaCheck(body: {
+  url?: string;
+  api_key?: string;
+  model?: string;
+  api?: string;
+}): Promise<SystemCheckResult> {
+  const response = await fetch("/settings/models-beta/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
 }
 
 /** 模型网关连通性测试:发送一条真实问答请求,返回网络连通/模型问答
@@ -3796,6 +3839,9 @@ export interface IssueSummary {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
   account: string;
+  /** 最近一次会话启动解析到的网关通道(ADR-0039):platform=平台
+   * 网关,beta=Beta 网关(责任人站在白名单);缺席=老会话/未启动。 */
+  model_lane?: "platform" | "beta";
   /** 登记人(ADR-0031,通常是测试):登记完成即撒手只读跟踪;缺席=
    * 指派机制前的老会话(服务端读盘即补齐=归属)。 */
   reporter?: string;

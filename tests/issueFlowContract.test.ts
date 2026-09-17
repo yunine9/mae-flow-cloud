@@ -371,6 +371,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
+      // 网关通道标记(ADR-0039):platform=平台网关,主会话启动即报到;
+      // 老会话/未启动缺席。
+      model_lane: "platform",
       // 登记人(ADR-0031):自登记=归属,始终过线。
       reporter: "dev",
       created_at: "2026-08-28T00:00:00Z",
@@ -892,6 +895,9 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
     const summarySample: IssueSummary = {
       id: created.id,
       account: "dev",
+      // 网关通道标记(ADR-0039):platform=平台网关,主会话启动即报到;
+      // 老会话/未启动缺席。
+      model_lane: "platform",
       // 登记人(ADR-0031):自登记=归属,始终过线。
       reporter: "dev",
       created_at: "2026-08-28T00:00:00Z",

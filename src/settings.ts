@@ -72,6 +72,18 @@ export interface ModelsSettings {
   vision?: { provider: string; model: string };
 }
 
+/** Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 人员白名单。
+ *  白名单成员名下任务的模型调用整体走这套;没有 vision 角色绑定
+ *  (视觉恒走平台网关,解析器把平台 vision 的 provider 条目并进
+ *  Beta 现场 json,保证 Beta 会话照样能解析视觉模型)。 */
+export interface ModelsBetaSettings {
+  json?: Record<string, unknown>;
+  provider?: string;
+  model?: string;
+  /** 白名单成员(账号名)。空数组/缺席=Beta 通道停用,全员走平台。 */
+  members?: string[];
+}
+
 export interface ExecutionPolicySettings {
   blocked_repository_resources?: string[];
   /** 新任务采用并固定；运行中与历史任务不漂移。编译为 workflow_profile
@@ -83,6 +95,7 @@ export interface ExecutionPolicySettings {
 interface Stored {
   runtime?: RuntimeKnobs;
   models?: ModelsSettings;
+  models_beta?: ModelsBetaSettings;
   execution_policy?: ExecutionPolicySettings;
 }
 
@@ -90,6 +103,17 @@ export class SettingsError extends Error {}
 
 function mask(secret: string): string {
   return secret.length <= 4 ? "••••" : `••••${secret.slice(-4)}`;
+}
+
+/** Beta 白名单成员归一:trim、去空、去重;非数组一律空(通道停用)。 */
+function normalizeMembers(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const name = String(item ?? "").trim();
+    if (name) seen.add(name);
+  }
+  return [...seen];
 }
 
 /** 数值项校验:只收非负有限数。"无限等待"不是合法取值——预算的
@@ -153,6 +177,77 @@ export class RuntimeSettings {
 
   executionPolicy(): ExecutionPolicySettings {
     return this.load().execution_policy ?? {};
+  }
+
+  /** Beta 网关(ADR-0039)。缺席=没配过。 */
+  modelsBeta(): ModelsBetaSettings {
+    return this.load().models_beta ?? {};
+  }
+
+  /** Beta 网关保存。连接四字段与 updateModels 同口径(留空=沿用已存,
+   *  校验同款);members 是白名单全量替换,空数组=通道停用但配置保留。 */
+  updateModelsBeta(patch: {
+    url?: unknown;
+    api_key?: unknown;
+    model?: unknown;
+    api?: unknown;
+    members?: unknown;
+  }): void {
+    const current = this.modelsBeta();
+    const members = "members" in patch
+      ? normalizeMembers(patch.members)
+      : current.members;
+    if (patch.url === undefined && patch.api_key === undefined
+        && patch.model === undefined && patch.api === undefined) {
+      this.save({ ...this.load(), models_beta: { ...current, members } });
+      return;
+    }
+    const existingProviders = (current.json as {
+      providers?: Record<string, any>;
+    } | undefined)?.providers ?? {};
+    const provider = current.provider || Object.keys(existingProviders)[0]
+      || "maeflow-beta";
+    const existing = existingProviders[provider] ?? {};
+    const url = patch.url === undefined
+      ? String(existing.baseUrl ?? "").trim() : String(patch.url).trim();
+    const suppliedKey = patch.api_key === undefined
+      ? "" : String(patch.api_key).trim();
+    const apiKey = suppliedKey || String(existing.apiKey ?? "").trim();
+    const model = patch.model === undefined
+      ? String(current.model ?? existing.models?.[0]?.id ?? "").trim()
+      : String(patch.model).trim();
+    const FORM_API = new Set(["openai-completions", "anthropic-messages"]);
+    let api = existing.api;
+    if (patch.api !== undefined) {
+      api = String(patch.api).trim();
+      if (!FORM_API.has(api)) {
+        throw new SettingsError(
+          "接口格式只能是 OpenAI Chat 或 Anthropic Messages");
+      }
+    }
+    if (api === undefined || api === null || api === "") {
+      api = "openai-completions";
+    }
+    if (!url || !apiKey || !model) {
+      throw new SettingsError("请完整填写 Beta 网关地址、API Key 和模型名称");
+    }
+    try { void new URL(url); } catch {
+      throw new SettingsError(`Beta 网关地址不是合法 URL: ${url}`);
+    }
+    const previousModel = (existing.models ?? []).find(
+      (item: { id?: string }) => item?.id === model) ?? {};
+    const configuredModels = upsertModel(existing.models, model,
+      { ...previousModel, id: model });
+    const json = { providers: { ...existingProviders, [provider]: {
+      ...existing,
+      baseUrl: url,
+      api,
+      apiKey,
+      models: configuredModels,
+    } } };
+    this.save({ ...this.load(), models_beta: {
+      ...current, json, provider, model, members,
+    } });
   }
 
   updateExecutionPolicy(patch: Record<string, unknown>): void {
@@ -404,6 +499,10 @@ export class RuntimeSettings {
               providers: Array<{ name: string; models: string[]; key_hint?: string }>;
               vision: { configured: boolean; provider?: string; model?: string;
                 url?: string; api?: string; key_hint?: string } };
+    models_beta: { configured: boolean; enabled: boolean;
+              provider?: string; model?: string;
+              url?: string; api?: string; key_hint?: string;
+              members: string[] };
   } {
     const models = this.models();
     const providers = Object.entries(
@@ -422,6 +521,15 @@ export class RuntimeSettings {
     const visionSpec = ((models.json as {
       providers?: Record<string, any>;
     } | undefined)?.providers ?? {})[models.vision?.provider ?? ""];
+    const beta = this.modelsBeta();
+    const betaProviders = (beta.json as {
+      providers?: Record<string, any>;
+    } | undefined)?.providers ?? {};
+    const betaProvider = beta.provider
+      || Object.keys(betaProviders)[0];
+    const betaSpec = betaProviders[betaProvider ?? ""] ?? {};
+    const betaConfigured = !!betaSpec?.baseUrl && !!betaSpec?.apiKey
+      && !!beta.model;
     return {
       runtime: this.runtime(),
       execution_policy: this.executionPolicy(),
@@ -446,6 +554,17 @@ export class RuntimeSettings {
           key_hint: visionSpec?.apiKey
             ? mask(String(visionSpec.apiKey)) : undefined,
         },
+      },
+      models_beta: {
+        configured: betaConfigured,
+        enabled: betaConfigured && (beta.members?.length ?? 0) > 0,
+        provider: betaProvider || undefined,
+        model: beta.model,
+        url: betaSpec?.baseUrl ? String(betaSpec.baseUrl) : undefined,
+        api: betaSpec?.api ? String(betaSpec.api) : undefined,
+        key_hint: betaSpec?.apiKey
+          ? mask(String(betaSpec.apiKey)) : undefined,
+        members: [...(beta.members ?? [])],
       },
     };
   }

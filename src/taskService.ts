@@ -1092,6 +1092,10 @@ export interface TaskSummary {
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
+  /** 最近一次主会话启动解析到的网关通道(ADR-0039):platform=平台
+   * 网关,beta=Beta 网关(白名单成员)。fail-open 回落不回改本标记;
+   * 精确消耗看 token_usage 与网关侧账。 */
+  model_lane?: "platform" | "beta";
   /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
   repair_rounds?: number;
   /** 代码仓执行约定已完成首次解析并固定进 workflow_profile.supplements;
@@ -3864,6 +3868,7 @@ export class TaskService {
       execution_plan: executionPlan,
       ...(planAlerts.length ? { execution_plan_alerts: planAlerts } : {}),
       token_usage: tokenUsageSnapshot(task.tokenUsage),
+      model_lane: summary.model_lane,
       waiting: summary.waiting
         ? {
             ...summary.waiting,
@@ -6870,8 +6875,9 @@ export class TaskService {
    *
    * `model` 字段仍然返回当前生效的那一个——不是给人选,是给界面显示
    * "这单会用谁跑",让人心里有数。 */
-  launchOptions(): {
-    /** 当前生效的模型(展示用,下单表单不提供选择)。 */
+  launchOptions(account?: string): {
+    /** 当前生效的模型(展示用,下单表单不提供选择;白名单成员展示
+     * Beta 网关,ADR-0039)。 */
     model?: { provider: string; model: string };
     /** 当前默认修复轮；缺省仍明确返回平台兜底 20。 */
     repair_rounds?: number;
@@ -6923,7 +6929,13 @@ export class TaskService {
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
     needs: { git_token: boolean; luban_token: boolean };
   } {
-    const active = this.activeModelChoice();
+    // 表单要展示的"这单会用谁跑":白名单成员显示 Beta 网关的模型
+    // (ADR-0039),其余人显示平台网关现选。仍是展示位,不给选。
+    const laneResolved = account ? this.resolvedModels(account) : undefined;
+    const active = laneResolved?.lane === "beta" && laneResolved.provider
+      && laneResolved.model
+      ? { provider: laneResolved.provider, model: laneResolved.model }
+      : this.activeModelChoice();
     const blockers: Array<
       { key: string; label: string; where: "admin" | "me" }> = [];
     let businessModules: Array<{
@@ -7086,8 +7098,10 @@ export class TaskService {
         modelsJson: this.options.modelsJson,
         provider: this.options.provider,
         model: this.options.model,
+        vision: this.options.vision,
       },
       operator,
+      log: (message) => this.options.log?.(message),
     });
   }
 
@@ -13776,6 +13790,11 @@ export class TaskService {
       // 模型网关热改边界:在这里生效——每个新会话起时现读设置,
       // 在跑的会话不换血(管理页如实写明了这一条)。
       const modelBundle = this.sessionModels(task);
+      if (task.summary.model_lane !== modelBundle.lane) {
+        // 网关标记记主会话的解析结果(ADR-0039);下次 persist 随
+        // task.json 落盘,排障与 Beta 配额审计的依据。
+        task.summary.model_lane = modelBundle.lane;
+      }
       writeFileSync(
         join(agentDir, "models.json"),
         JSON.stringify(modelBundle.json));

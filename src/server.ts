@@ -890,6 +890,12 @@ export function createTaskServer(
             settings.updateModels(await readBody(request));
             return json(response, 200, settingsView());
           }
+          // Beta 网关(ADR-0039):admin 配的第二套同形模型接入 + 白名单。
+          // members 全量替换,空数组=通道停用但配置保留;密钥留空=沿用。
+          if (request.method === "PUT" && parts[1] === "models-beta") {
+            settings.updateModelsBeta(await readBody(request));
+            return json(response, 200, settingsView());
+          }
           // 模型网关连通性测试:表单草稿优先,留空回落已存配置/部署
           // 默认(密钥"留空=沿用"与保存同口径)。与部署自检的分工:
           // 自检只读不外发;这里管理员主动发起一次真实外发请求。
@@ -898,6 +904,15 @@ export function createTaskServer(
             const body = await readBody(request);
             const target = resolveGatewayTarget(body, settings.models(),
               service.options.modelsJson as Record<string, unknown> | undefined);
+            return json(response, 200, await checkModelGateway(target));
+          }
+          // Beta 网关连通性测试(ADR-0039):只测 Beta 自己的配置,
+          // 不回落部署默认——"没得测"就该明说,不拿平台网关凑数。
+          if (request.method === "POST" && parts[1] === "models-beta"
+              && parts[2] === "check") {
+            const body = await readBody(request);
+            const target = resolveGatewayTarget(body, settings.modelsBeta(),
+              undefined);
             return json(response, 200, await checkModelGateway(target));
           }
           if (request.method === "PUT" && parts[1] === "vision") {
@@ -1006,7 +1021,9 @@ export function createTaskServer(
         if (options.auth && !viewer) {
           return json(response, 401, { error: "请先登录" });
         }
-        const launch = service.launchOptions();
+        // 表单展示的"这单会用谁跑"按登录人解析:白名单成员显示 Beta
+        // 网关(ADR-0039);无认证部署 viewer 缺席=平台口径。
+        const launch = service.launchOptions(viewer?.username);
         return json(response, 200, {
           ...launch,
           blockers: [...launch.blockers, ...personalBlockers(viewer)],
