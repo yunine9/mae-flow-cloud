@@ -4310,12 +4310,14 @@ export function issueMergeStatus(id: string): Promise<IssueMergeStatus> {
   });
 }
 
-export async function listDtsTickets(): Promise<{
+export async function listDtsTickets(owner?: string): Promise<{
   tickets: DtsTicketBrief[];
   /** 外部开发模式(--dts-mock):单据为模拟数据,页面要挂 DEV 徽标。 */
   mock: boolean;
 }> {
-  const body = await issueFetch("/issues/dts");
+  // owner 缺省查本人;传了即协助视角(?owner= 指名看谁名下的单)。
+  const body = await issueFetch(owner
+    ? `/issues/dts?owner=${encodeURIComponent(owner)}` : "/issues/dts");
   return { tickets: body.tickets ?? [], mock: body.mock === true };
 }
 

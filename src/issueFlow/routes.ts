@@ -469,8 +469,13 @@ export async function handleIssueRoutes(
         return done(403, { error: "管理员不处理问题单" });
       }
       // 直连 DTS 网关(收窄票 #7):服务不再转手拉单。
+      // 协助处理(2026-09-17):?owner= 指名看谁名下的单,缺省仍是本人。
+      // 读侧换视角不发所有权——发起后的会话归属仍=登录发起人;会话
+      // 列表读本就全员开放(?scope=all),这里同尺不另设闸。
+      const owner = new URL(request.url ?? "", "http://x")
+        .searchParams.get("owner")?.trim() ?? "";
       const tickets = await requireDts(routeOptions.dts)
-        .listByOwner(String(viewer?.username ?? ""));
+        .listByOwner(owner || String(viewer?.username ?? ""));
       return done(200, { tickets, mock: routeOptions.dts?.mock === true });
     }
 

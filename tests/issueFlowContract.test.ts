@@ -101,11 +101,12 @@ function issueGet(
   parts: string[],
   service?: IssueFlowService,
   extraRouteOptions?: Record<string, unknown>,
+  url?: string,
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
     let status = 0;
     void handleIssueRoutes(
-      { method: "GET" } as any,
+      { method: "GET", url } as any,
       {
         writeHead: (code: number) => {
           status = code;
@@ -1008,6 +1009,43 @@ test("契约快照:DTS 列表与单据详情投影(全字段假网关)", async (
       service, { dts: new FullFieldDtsGateway() });
     assert.equal(detail.status, 200);
     assertWireShape(detailSample, detail.body, "GET /issues/dts/:ticket");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("DTS 列表 ?owner=:协助视角指名拉单,缺省/空参回落登录人", async () => {
+  // 只看路由把哪个账号递给网关(协助处理 2026-09-17):?owner= 原样
+  // 透传,读侧换视角不发所有权;403 仍只留给管理员。
+  const seen: string[] = [];
+  const capturing: DtsGateway = {
+    listByOwner: async (account) => {
+      seen.push(account);
+      return [];
+    },
+    detail: async () => {
+      throw new Error("本测试只看拉单路由");
+    },
+    proxyFile: async () => {
+      throw new Error("本测试只看拉单路由");
+    },
+  };
+  const service = new IssueFlowService({
+    dataDir: mfcTemp("mfc-issue-dts-owner-"),
+    provider: "p", model: "m", modelsJson: {},
+  });
+  const viewer = { username: "alice", role: "developer" };
+  try {
+    await issueGet(["issues", "dts"], service,
+      { dts: capturing, viewer }, "/issues/dts");
+    await issueGet(["issues", "dts"], service,
+      { dts: capturing, viewer }, "/issues/dts?owner=bob");
+    await issueGet(["issues", "dts"], service,
+      { dts: capturing, viewer }, "/issues/dts?owner=");
+    await issueGet(["issues", "dts"], service,
+      { dts: capturing, viewer }, "/issues/dts?owner=%20%20");
+    assert.deepEqual(seen, ["alice", "bob", "alice", "alice"],
+      "?owner= 必须透传给网关,缺省与空白值回落登录人");
   } finally {
     await service.shutdown().catch(() => undefined);
   }
