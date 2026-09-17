@@ -75,12 +75,11 @@ const METRIC_TONE = {
   danger: "text-danger",
 } as const;
 
-export function TeamIssueWorld({ issues, onceRates, onOpenIssue }: {
+export function TeamIssueWorld({ issues, onceRates }: {
   issues: IssueSummary[];
   /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
    * 缺席=统计暂不可用(接口失败/问题流未启用),统计格显示 —。 */
   onceRates?: IssueOnceRate;
-  onOpenIssue: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<IssueScope>("all");
@@ -250,8 +249,7 @@ export function TeamIssueWorld({ issues, onceRates, onOpenIssue }: {
         <EmptyDescription>{anyFilter ? "换关键词或清除筛选再看，会话没有丢。" : "登记问题或从 DTS 拉单后，现场会出现在这里。"}</EmptyDescription>
       </Empty>}
       <div className="grid gap-2">{visible.map((issue) => (
-        <TeamIssueCard key={issue.id} issue={issue}
-          onOpen={() => onOpenIssue(issue.id)} />
+        <TeamIssueCard key={issue.id} issue={issue} />
       ))}</div>
     </section>
   </>;
@@ -261,9 +259,8 @@ export function TeamIssueWorld({ issues, onceRates, onOpenIssue }: {
  * ——history-board + history-intro + history-metrics + 空态同款
  * board-empty;行仍用 TeamIssueCard,需求侧档案是逐任务表格行、问题侧
  * 是会话卡,内容差异,版式同构)。 */
-export function TeamIssueArchive({ issues, onOpenIssue }: {
+export function TeamIssueArchive({ issues }: {
   issues: IssueSummary[];
-  onOpenIssue: (id: string) => void;
 }) {
   // 成果档案·问题闭环:conclusion 维度归档统计(已闭环 + 已取消)。
   const closed = useMemo(() => issues.filter((issue) =>
@@ -300,8 +297,7 @@ export function TeamIssueArchive({ issues, onOpenIssue }: {
           ))}
         </div>
         <div className="grid gap-2">{closed.map((issue) => (
-          <TeamIssueCard key={issue.id} issue={issue}
-            onOpen={() => onOpenIssue(issue.id)} />
+          <TeamIssueCard key={issue.id} issue={issue} />
         ))}</div>
       </>}
   </section>;

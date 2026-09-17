@@ -1172,10 +1172,11 @@ export function App() {
       setTargetRoute({ taskId: task.id, reviewId: "" });
     }
   };
-  /** 问题工作台开/关的唯一写入口,服务三处:Board 列表点卡与页内切会话、
-   * 「返回列表」、团队看板问题卡跳转。App 层快照与 URL 一次写齐,守住
-   * 不变量:issueRouteId 非空 ⇔ 当前 URL 是 /issues/:id——Board 卸载重挂
-   * 时拿到的 initialOpenId 永远与地址栏一致,不再有"陈旧快照顶回来"。 */
+  /** 页内切会话的唯一写入口(ADR-0040):应用内卡片一律新页签打开
+   * /issues/:id(链接自带 URL,不经这里),这里只服务工作台内的会话
+   * 内换题——挂起转正切到新会话,当前页签直切不新开。App 层快照与
+   * URL 一次写齐,守住不变量:issueRouteId 非空 ⇔ 当前 URL 是
+   * /issues/:id。 */
   const openIssueSession = (id: string) => {
     setView("issues");
     setIssueRouteId(id);
@@ -1187,17 +1188,27 @@ export function App() {
         "", next);
     }
   };
-  /** 把滞留在 /issues/X 的 URL 就地归位到根路径并清 App 层快照
-   *  (toState 记录归位后所在视图)。裸 /issues(问题登记入站深链)离开
-   * 问题处理时同样归位——该地址只是别名,不与视图脱钩滞留地址栏。
-   * 关工作台与切页签守门共用这一份。 */
+  /** 关工作台回列表(ADR-0040):pushState 到裸 /issues——问题处理
+   * 列表的正典地址,浏览器后退可回到本工作台;不用脚本关页签
+   * (脚本只能关自己开出的页签,URL 直开的页签关不掉,行为会不一致)。
+   * 离开问题处理域的归位守门(normalizeIssueRoute)另走一路,见
+   * leaveIssueRoute。 */
+  const closeIssueSession = () => {
+    history.pushState(appHistoryState("issues", undefined, "sessions"),
+      "", "/issues");
+    setIssueRouteId("");
+  };
+  /** 离开问题处理域的归位守门:URL 滞留在 /issues/X(工作台深链)或裸
+   * /issues(问题登记入站深链)时,就地 replaceState 回根路径并清快照
+   * (toState 记录归位后所在视图)——该地址只是别名,不与视图脱钩滞留
+   * 地址栏。与 closeIssueSession(工作台内回列表,pushState 留历史)
+   * 分工:这里管"点侧栏走了",那里管"从工作台回列表"。 */
   const normalizeIssueRoute = (target: View) => {
     if (!readIssueRoute() && !/^\/issues\/?$/.test(location.pathname)) return;
     history.replaceState(appHistoryState(target,
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
     setIssueRouteId("");
   };
-  const closeIssueSession = () => normalizeIssueRoute("issues");
   const openRelatedTask = (taskId: string) => {
     const related = tasks.find((task) => task.id === taskId);
     if (related) openArtifacts(related);
@@ -1243,7 +1254,7 @@ export function App() {
       description: "拉取名下处于可实施状态的问题单;勾选多张可批量发起,每单一个独立工作流。" },
     sessions: { title: "问题会话", description: session.role === "admin"
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
-      : "你的问题会话进展一览;点开进入工作台,分析报告检视与返工都在这里。" },
+      : "你的问题会话进展一览;点开在新页签进入工作台,分析报告检视与返工都在这里,可同时开着多个问题。" },
   };
   const viewHeader = view === "issues"
     ? issueChildHeaders[activeIssueChild]
@@ -1272,7 +1283,9 @@ export function App() {
     if (issueRouteId) closeIssueSession();
     if (view !== "issues") {
       selectView("issues");
-    } else if (location.pathname === "/") {
+    } else if (location.pathname === "/" || location.pathname === "/issues") {
+      // 根路径或裸 /issues(工作台回列表/登记入站深链后的落点):原地
+      // 改写快照,前进/后退还原到最新选择——/issues 不再推新历史项。
       history.replaceState(appHistoryState("issues", undefined, tab), "",
         location.pathname + location.search);
     }
@@ -1506,10 +1519,9 @@ export function App() {
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
             {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
-              <TeamIssueWorld issues={teamIssues} onceRates={issueOnceRates}
-                onOpenIssue={openIssueSession} />
+              <TeamIssueWorld issues={teamIssues} onceRates={issueOnceRates} />
             </TabsContent> : <TabsContent value="archive" className="contents">
-              <TeamIssueArchive issues={teamIssues} onOpenIssue={openIssueSession} />
+              <TeamIssueArchive issues={teamIssues} />
             </TabsContent>}
           </TeamWorldTabs>
         </section>}

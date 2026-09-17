@@ -98,7 +98,8 @@ export function IssueSessionView({
   onListRefresh: () => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
-  /** 转正等场景直接跳到另一个会话(如新生的有单会话)。 */
+  /** 页内切会话(ADR-0040):挂起转正切到新生的有单会话,当前页签
+   * 直切不新开。 */
   onOpenIssue: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -119,9 +120,20 @@ export function IssueSessionView({
     setTab("meta");
   }, [detail.id]);
 
+  // 页签标题(ADR-0040):工作台独占浏览器页签,标题钉成单号/标题
+  // (无单用会话标题)——多开时每个页签可辨识;卸载还原默认标题。
   useEffect(() => {
-    // 会话视图是全屏工作台(与任务侧 workspace-overlay 同款):锁页面
-    // 滚动,Escape 直接回到列表——现场面积优先,少一次瞄准返回钮。
+    const previous = document.title;
+    document.title = detail.ticket
+      ? `${detail.ticket} · ${detail.title}`
+      : detail.title;
+    return () => { document.title = previous; };
+  }, [detail.ticket, detail.title]);
+
+  useEffect(() => {
+    // 工作台是 /issues/:id 的页面形态(ADR-0040,workspace-overlay 全屏
+    // 骨架原样):锁页面滚动,Escape 直接回到列表——现场面积优先,
+    // 少一次瞄准返回钮。
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (event: KeyboardEvent) => {
@@ -276,9 +288,9 @@ export function IssueSessionView({
 
   // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
-  // 右 ws-side 协作)。#231 换装:原 .issue-workspace 家族(问题域主题
-  // 变量 + 拉伸契约)整族退役——主题变量直译成根上的工具类,拉伸契约
-  // 直译到各分区(左栏 section 与 ws-evidence),同构不再依赖跨页皮肤。
+  // 右 ws-side 协作)。ADR-0040 起是 /issues/:id 的页面形态(不再是叠在
+  // 列表上的弹层):模态语义退役,视觉骨架(全屏 fixed)原样——同构
+  // 不再依赖跨页皮肤。
   // 左栏已按 #123 拍平成六个一级标签,右栏是 #124 的协作对话框(会话
   // 流+输入区);旧 NEXT ACTION 侧栏已按 #127 拆除。
   return <section
@@ -287,7 +299,7 @@ export function IssueSessionView({
       // 问题域主题:studio 组件在问题工作台内一律取问题域变量,同构不同色。
       "[--studio-accent:var(--accent)] [--studio-tint:var(--accent-soft)] [--workspace-tab-color:var(--accent)]",
     )}
-    role="dialog" aria-modal="true" aria-label={`问题会话:${detail.title}`}>
+    aria-label={`问题会话:${detail.title}`}>
     <header className="ws-head">
       <button type="button" className="ws-back" onClick={onBack}
         title="返回问题列表(Esc)" aria-label="返回问题列表(Esc)">←</button>

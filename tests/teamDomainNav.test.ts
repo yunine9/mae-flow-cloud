@@ -62,8 +62,10 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // 问题会话的团队全景有且只有一个家:「团队问题」页签页。
   // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
   assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
-  // onceRates 是 #290 票4 一次率二轴统计的取数(服务端聚合,组件只渲染)。
-  assert.match(app, /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\}\n                onOpenIssue=\{openIssueSession\} \/>/);
+  // onceRates 是 #290 票4 一次率二轴统计的取数(服务端聚合,组件只渲染);
+  // 卡片自带新页签链接(ADR-0040),App 不再传 onOpenIssue 跳转回调。
+  assert.match(app,
+    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} \/>/);
 });
 
 test("两域页签同构:同一 TeamWorldTabs 组件,防版式漂移(2026-09-11)", () => {
@@ -132,8 +134,8 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
   const worldBody = issueWorld.split("/** 成果档案·问题闭环")[0];
   assert.doesNotMatch(worldBody, /history-board/,
     "TeamIssueWorld 本体只出概览+现场;档案必须由页签面板 TeamIssueArchive 承载");
-  assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\}/);
-  assert.match(app, /<TeamIssueArchive issues=\{teamIssues\} onOpenIssue=\{openIssueSession\} \/>/);
+  assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\} \/>/);
+  assert.match(app, /<TeamIssueArchive issues=\{teamIssues\} \/>/);
 });
 
 test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格计数正确", () => {

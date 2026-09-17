@@ -7,9 +7,10 @@
  * 页签在 EventsPane.tsx,协作流在 IssueConversationStream.tsx,
  * 决策卡在 IssueDecisionCard.tsx。页面两块:上方登记(手工登记/DTS
  * 列表),下方「我的问题」单一列表(归属或登记人是自己,ADR-0031);
- * 点开进入会话工作台(studio 骨架:头部进度 + 左栏五标签 + 右栏协作对话框;
- * 旧右栏 NEXT ACTION 侧栏已随 #127 拆除)。前端不推断状态:一切文案
- * 来自 /issues API 镜像。
+ * 点开卡片以新页签进入会话工作台(ADR-0040:多开是问题处理的常态,
+ * 页内 overlay 通道退役,工作台只以 /issues/:id 深链形态存在——本
+ * 组件在该 URL 下整页渲染工作台,studio 骨架:头部进度 + 左栏六标签
+ * + 右栏协作对话框)。前端不推断状态:一切文案来自 /issues API 镜像。
  */
 import { useEffect, useState } from "react";
 import {
@@ -29,6 +30,7 @@ import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
 import { repoName } from "./perRepo";
 import { dtsTicketUrl } from "./dtsTicket";
+import { issueSessionPath } from "./issueLink";
 import { IssueRegistration } from "./Registration";
 import { IssueStatusBadge } from "../StatusBadge";
 import { IssueFixedProgress, IssueSessionView } from "./SessionView";
@@ -72,13 +74,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   onOpenIssue, onCloseIssue, childTab, onChildTabChange }: {
   viewer: AuthUser;
   onNavigateProfile?: () => void;
-  /** 深链 /issues/:id 带进来的会话(小鲁班通知点开即达):作 openId 初值,
-   * 浏览器后退/前进时也同步过来。初值由 App 层按当前 URL 对表后下发。 */
+  /** 深链 /issues/:id 带进来的会话(通知点开、新页签打开即达):作
+   * openId 唯一来源,浏览器后退/前进时也同步过来。App 层按当前 URL
+   * 对表后下发;列表点卡不再走这里——卡片是纯链接,新页签自己带 URL。 */
   initialOpenId?: string;
-  /** 写穿归一:点卡/页内切会话与「返回列表」都交给 App 层统一写
-   * issueRouteId + URL(pushState/replaceState),本组件不再直接操作
-   * history——App 快照、Board openId、URL 三处状态由此保持一致。 */
+  /** 页内切会话(挂起转正切新会话):App 层统一写 issueRouteId + URL,
+   * 本组件不直接操作 history。 */
   onOpenIssue: (id: string) => void;
+  /** 返回列表(Esc/返回钮):URL 归位交给 App 层统一写。 */
   onCloseIssue: () => void;
   /** 当前子页签(App 持有并持久化;admin 恒为 sessions)。 */
   childTab: IssueChildTab;
@@ -87,15 +90,15 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
-  // App 快照是工作台开关的唯一真相:URL 侧关闭(点子页签离开、浏览器
-  // 后退)同步收掉本地 openId,导航与右侧内容不错位。
+  // App 快照是工作台开关的唯一真相:URL 侧变化(挂起转正页内切会话、
+  // 浏览器后退/前进)同步过来,导航与右侧内容不错位。
   useEffect(() => { setOpenId(initialOpenId); }, [initialOpenId]);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
-  /** 详情拉取是否失败过(当前 openId):失败只置横幅不清输入,加载
-   * 指示停转;再点同一张卡由 detailRetry 强制重试。 */
+  /** 详情拉取是否失败过(当前 openId):失败页给重试入口,加载指示
+   * 停转;重试由 detailRetry 强制重跑。 */
   const [detailFailed, setDetailFailed] = useState(false);
-  /** 详情强制重试计数:openIssue 点到同一张卡时 +1,并入详情 effect
-   * 依赖——effect 只靠 [openId] 时同卡重复点击不会重跑,也就无从重试。 */
+  /** 详情强制重试计数:重试钮 +1 并入详情 effect 依赖——effect 只靠
+   * [openId] 时同 id 重试不会重跑。 */
   const [detailRetry, setDetailRetry] = useState(0);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState<IssueListFilter>(readIssueListFilter);
@@ -136,10 +139,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   };
   useEffect(() => startVisiblePolling(refreshList, 5000, document), []);
 
-  // 打开会话时跟读详情;列表照常低频轮询。openId 变化即清旧 detail
-  // (上一会话的内容不许顶在新 URL 下),detailRetry 并入依赖——同一张
-  // 卡重复点击也强制重拉。失败只置横幅 + detailFailed(加载指示停转),
-  // 用户再点同卡即重试。
+  // URL 指向工作台时跟读详情;列表照常低频轮询。openId 变化即清旧
+  // detail(上一会话的内容不许顶在新 URL 下),detailRetry 并入依赖
+  // ——失败页的重试钮也靠它强制重拉。失败置 detailFailed 停转加载
+  // 指示,错误面在工作台门内自渲染。
   useEffect(() => {
     if (!openId) {
       setDetail(undefined);
@@ -168,53 +171,49 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     void getIssue(openId).then(setDetail).catch(() => undefined);
   }, 10000, document), [openId]);
 
-  // 浏览器后退/前进时同步 URL → openId(与任务侧 popstate 同步同款)。
-  // pushState 不触发 popstate,只有用户手动后退/前进才走这里,不会反馈循环。
-  useEffect(() => {
-    const sync = () => {
-      const match = location.pathname.match(/^\/issues\/([^/]+)\/?$/);
-      let next = "";
-      if (match) {
-        try { next = decodeURIComponent(match[1]); }
-        catch { next = match[1]; } // 坏编码按字面当 id:后端会 404,交给错误横幅
-      }
-      setOpenId((current) => current === next ? current : next);
-    };
-    addEventListener("popstate", sync);
-    return () => removeEventListener("popstate", sync);
-  }, []);
-
-  /** 打开会话:设本地 state,URL 与 App 层快照交给 onOpenIssue 统一写。
-   * 点到已打开的同一张卡不静默返回——上一轮详情可能拉取失败
-   * (effect 依赖里没有"点击"这个输入,自己不会重跑),强制重试一次。 */
-  const openIssue = (id: string) => {
-    if (id === openId) {
-      setDetailRetry((count) => count + 1);
-    }
-    setOpenId(id);
-    onOpenIssue(id);
-  };
-
   /** 返回列表:清本地 state,URL 归位交给 onCloseIssue 统一写。 */
   const backToList = () => {
     setOpenId("");
     setDetail(undefined);
+    setError("");
     onCloseIssue();
   };
 
-  // 渲染门要求内容匹配:URL 指向的会话与已加载的 detail 必须是同一个,
-  // 否则宁可回列表显示加载态——根绝"URL 是 Y、页面渲染的是 X"的错位。
-  if (openId && detail?.id === openId) {
-    return <IssueSessionView
-      detail={detail}
-      viewerUsername={viewer.username}
-      onBack={backToList}
-      onChanged={(next) => setDetail(next)}
-      onListRefresh={refreshList}
-      onError={setError}
-      onNavigateProfile={onNavigateProfile}
-      onOpenIssue={openIssue}
-    />;
+  // 渲染门(ADR-0040:工作台是 /issues/:id 的页面形态,不再叠在列表上):
+  // URL 指向一个会话时整页只有工作台——内容匹配才渲染(根绝"URL 是 Y、
+  // 页面渲染的是 X"的错位),详情在路上给加载态,拉取失败给重试与返回。
+  if (openId) {
+    if (detail?.id === openId) {
+      return <IssueSessionView
+        detail={detail}
+        viewerUsername={viewer.username}
+        onBack={backToList}
+        onChanged={(next) => setDetail(next)}
+        onListRefresh={refreshList}
+        onError={setError}
+        onNavigateProfile={onNavigateProfile}
+        onOpenIssue={onOpenIssue}
+      />;
+    }
+    if (detailFailed) {
+      return <section role="alert"
+        className="flex min-h-[70vh] flex-col items-center justify-center gap-4 px-6 text-center">
+        <p className="max-w-xl text-sm text-danger">
+          打不开这个会话:{error || "会话不存在或已被删除"}。链接可能已过期。
+        </p>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm"
+            onClick={() => setDetailRetry((count) => count + 1)}>重试</Button>
+          <Button type="button" variant="outline" size="sm"
+            onClick={backToList}>返回问题列表</Button>
+        </div>
+      </section>;
+    }
+    return <section role="status"
+      className="flex min-h-[70vh] items-center justify-center gap-2 text-sm text-muted-foreground">
+      <Spinner aria-hidden className="size-3 shrink-0" />
+      <span>正在打开问题工作台…</span>
+    </section>;
   }
 
   return <div className="grid gap-[18px]">
@@ -244,11 +243,14 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       issues={issues}
       visible={childTab !== "sessions"}
       panel={childTab === "dts" ? "dts" : "manual"}
-      onCreated={(created) => {
+      // 登记成功后的进台方式分两路(ADR-0040):手工登记不自动跳
+      // (成功提示里给「打开工作台」链接,登记完成即撒手),只刷列表;
+      // DTS 发起(单张/批量同路)当前页切到「问题会话」子页签看新会话。
+      onRegistered={refreshList}
+      onLaunched={() => {
         refreshList();
-        openIssue(created.id);
+        onChildTabChange?.("sessions");
       }}
-      onOpenIssue={openIssue}
       onError={setError}
       onNavigateProfile={onNavigateProfile}
     />}
@@ -303,15 +305,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               已收起 {issues.length - visibleIssues.length} 个</span>}
         </span>
       </div>
-      {/* 打开过渡态:openId 已设而匹配的详情未到(首次拉取中或重试中)
-          时在列表位置给出明确指示,不再无声停在列表;失败后停转让位给
-          顶部错误横幅,再点同一张卡即可重试。 */}
-      {openId && detail?.id !== openId && !detailFailed
-        && <div role="status"
-          className="flex items-center gap-2 pb-0.5 pl-0.5 pt-2.5 text-sm text-muted-foreground">
-          <Spinner aria-hidden className="size-3 shrink-0" />
-          <span>正在打开问题工作台…</span>
-        </div>}
+      {/* 打开过渡态已随页内 overlay 通道退役(ADR-0040):点卡开新页签,
+          加载/失败态由 /issues/:id 页面形态自己承担(见上方渲染门)。 */}
       {issues.length === 0
         ? <Empty className="min-h-40 border">
             <EmptyMedia className="text-2xl font-light text-muted-foreground" aria-hidden>✓</EmptyMedia>
@@ -333,8 +328,6 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
             {visibleIssues.map((issue) => <IssueCard
               key={issue.id}
               issue={issue}
-              active={openId === issue.id}
-              onOpen={() => { openIssue(issue.id); }}
               onSettled={refreshList}
             />)}
           </div>}
@@ -342,17 +335,18 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   </div>;
 }
 
-/** 问题列表卡(2026-09-11 拍板):点击整卡直达问题工作台——列表不再
- * 就地展开(现场直播/耗时卡点随展开移除,现场只在工作台看),右侧无
- * 展开箭头,meta 行只留直达终止(2026-09-08)与 MR/推送事实。
+/** 问题列表卡(2026-09-11 拍板整卡直达;ADR-0040 起直达改为新页签):
+ * 整卡是一枚拉伸锚点(absolute inset-0 盖满卡面,target="_blank" 打开
+ * /issues/:id)——列表不再就地展开(现场直播/耗时卡点随展开移除,现场
+ * 只在工作台看),右侧无展开箭头,meta 行只留直达终止(2026-09-08)与
+ * MR/推送事实。卡内的 DTS 单号链接与终止/MR 动作以 relative z-10 浮在
+ * 拉伸锚点上方:兄弟不嵌套(锚点嵌锚点是非法 HTML),点击各走各的门。
  * 皮肤换 shadcn Card + Tailwind 令牌工具类,与需求侧 task-card 骨架
  * 分道(混合列表口子一并撤销);内部行(overline/焦点行/阶段条)沿用
  * 既有独立类,issue-card-large 类保留作问题域胶囊配色与等待光效的
  * 锚点。焦点行只复述 API 字段(stage/round/stage_note),前端不推断状态。 */
-function IssueCard({ issue, active, onOpen, onSettled }: {
+function IssueCard({ issue, onSettled }: {
   issue: IssueSummary;
-  active?: boolean;
-  onOpen: () => void;
   /** 终止成功后通知列表刷新(2026-09-08:列表卡直达终止,不再进工作台)。 */
   onSettled?: () => void;
 }) {
@@ -401,25 +395,27 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
       `status-${issue.status}`,
       "relative overflow-hidden rounded-lg",
       "transition-colors hover:border-line-strong",
-      // 边框色互斥二选一(cn 无 tailwind-merge,同类工具类不能共存,
-      // 谁赢看 emit 序):focused 用强线,常态用常规线。
-      active ? "border-text-strong" : "border-line",
+      "border-line",
     )}>
+    {/* 拉伸锚点(ADR-0040):整卡去问题工作台,新页签打开;排在卡内
+        第一个,Tab 序先于单号/终止/MR 等卡内动作。 */}
+    <a className="absolute inset-0 z-[1]"
+      href={issueSessionPath(issue.id)}
+      target="_blank" rel="noreferrer"
+      aria-label={`在新页签打开问题工作台:${issue.title}`}
+      title="在新页签打开问题工作台" />
     <span aria-hidden className={cn("absolute inset-y-0 left-0 w-[3px]", railClass)} />
-    <button type="button" className="task-summary" onClick={onOpen}
-      title="进入问题工作台">
+    <div className="task-summary">
       <span className="task-summary-body">
         <span className="task-overline">
-          {/* 单号直达 DTS 门户:React 走 DOM API 建树,a 嵌在 button 里
-              可用(HTML 解析禁令只管字符串建档);stopPropagation 拦住
-              冒泡,点单号不会顺带打开工作台。链接皮(主色+悬停下划线)
-              与登记页 DTS 列表同款——纯文字外观看不出能点。 */}
+          {/* 单号直达 DTS 门户:relative z-10 浮在拉伸锚点上方(兄弟
+              关系,各点各的,无需拦事件);链接皮(主色+
+              悬停下划线)与登记页 DTS 列表同款——纯文字外观看不出能点。 */}
           {issue.ticket
-            ? <a className="task-ticket text-primary underline-offset-2
-                hover:underline" href={dtsTicketUrl(issue.ticket)}
+            ? <a className="task-ticket relative z-10 text-primary
+                underline-offset-2 hover:underline" href={dtsTicketUrl(issue.ticket)}
                 target="_blank" rel="noreferrer"
-                title={`在 DTS 门户打开 ${issue.ticket}`}
-                onClick={(event) => event.stopPropagation()}>
+                title={`在 DTS 门户打开 ${issue.ticket}`}>
               {issue.ticket}
             </a>
             : <span className="task-ticket empty">未绑单</span>}
@@ -450,9 +446,11 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
         </span>
         <IssueFixedProgress issue={issue} />
       </span>
-    </button>
+    </div>
 
-    <div className="task-meta">
+    {/* meta 行整体浮在拉伸锚点上方:终止钮与 MR 链接可点,信息文字
+        吞掉点击(与旧形态一致——点 meta 文字不开工作台)。 */}
+    <div className="task-meta relative z-10">
       {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
           工作台头部「终止会话」同款。终态卡不渲染。 */}
       {terminatable && <Button type="button" variant="ghost" size="sm"
