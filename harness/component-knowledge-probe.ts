@@ -1,0 +1,46 @@
+/** Local real-model probe. Uses synthetic manuals and an isolated workspace; never production tasks. */
+import { mkdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { CloudSession } from "../src/sessionDriver.ts";
+import { MemorySidecar } from "../src/memorySidecar.ts";
+import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
+import { createKnowledgeTool } from "../src/knowledgeTools.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { EventLog } from "../src/semanticEvents.ts";
+import { TranscriptStore } from "../src/transcriptStore.ts";
+import { GateService } from "../src/gateService.ts";
+import { HumanGate } from "../src/humanGate.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+const root = resolve(process.env.COMPONENT_PROBE_OUT || ".local/component-knowledge-probe");
+mkdirSync(root,{recursive:true});
+const out = mkdtempSync(join(root,"run-"));
+const workspace = join(out,"repo"), data = join(out,"data");
+mkdirSync(workspace,{recursive:true});mkdirSync(data,{recursive:true});
+const agentDir = mkdtempSync(join(tmpdir(),"component-probe-model-"));
+const modelsJson = JSON.parse(readFileSync(process.env.COMPONENT_MODELS || ".local/models.json","utf8"));
+const provider = process.env.COMPONENT_PROVIDER || "glm";
+const model = process.env.COMPONENT_MODEL || modelsJson.providers[provider].models[0].id;
+writeFileSync(join(agentDir,"models.json"),JSON.stringify(modelsJson),{mode:0o600});
+const repo = "https://example.invalid/fixture/export.git";
+createBusinessModule(data,{id:"export",name:"报表导出",description:"探针专用",owner:"probe",repositories:[repo]},"probe");
+saveKnowledgeDocument(data,{title:"探针平台文件组件.md",technologies:["cpp"],content:"# C++ 文件写入规范\n## 文件输出\n本探针项目写文件使用 AcmeFileWriter，禁止 std::ofstream 和 fopen。open 返回 bool；成功后 write 返回 bool；创建者在成功或失败路径都调用 close，借用者不得关闭。接口声明在 file_api.hpp。此为测试用虚构组件，不是生产规范。"},"probe");
+saveKnowledgeDocument(data,{title:"探针网元查询.md",scope:"module",module_ids:["export"],content:"# 导出网元配置\n使用 NeConfig::getName(int neId)，返回 std::optional<std::string>。为空时返回明确错误，不把空字符串当作成功结果。头文件 ne_config.hpp。仅适用本探针。"},"probe");
+writeFileSync(join(workspace,"file_api.hpp"),'#include <string>\nclass AcmeFileWriter { public: bool open(const std::string& path); bool write(const std::string& text); void close(); };\n');
+writeFileSync(join(workspace,"ne_config.hpp"),'#include <optional>\n#include <string>\nclass NeConfig { public: static std::optional<std::string> getName(int neId); };\n');
+writeFileSync(join(workspace,"implementation.md"),'# 实施计划\n\n## 已确认任务\n给定网元 ID，将网元名称导出到指定文件，失败返回明确错误。\n\n## 验证\n保留正常、查询失败、打开失败、写入失败四项测试。\n');
+const sidecar = new MemorySidecar({python:resolve(process.env.MFC_MEMSEARCH_PYTHON || ".local/memsearch-venv/bin/python"),script:resolve("harness/memsearch-sidecar.py"),corpusDir:data,milvusPath:join(data,"index.db"),provider:"onnx",model:"gpahal/bge-m3-onnx-int8",env:{HF_HUB_OFFLINE:"1"},budgets:{bootMs:60000,ingestMs:120000,searchMs:10000}});
+let session: CloudSession | undefined, timer: ReturnType<typeof setTimeout> | undefined;
+try {
+ if (!await sidecar.start()) throw new Error("知识侧车未就绪");
+ const search = new KnowledgeSearch(data,sidecar);await search.prepare();
+ const events = new EventLog(join(out,"events.jsonl"));
+ const uses: unknown[]=[];
+ const tool = createKnowledgeTool({service:()=>search,context:()=>({repo:"export",repositories:[repo],moduleIds:["export"],productVersion:"2.7B"}),onUse:e=>uses.push(e)});
+ session = await CloudSession.create({taskId:"component-probe",workspace,agentDir,provider,model,eventLog:events,transcript:new TranscriptStore(join(out,"transcript.jsonl"),"main"),gate:new GateService({workspace,cwd:workspace}),humanGate:new HumanGate(join(out,"waiting.json")),extraTools:[tool],allowedTools:["read","write","edit","Task","knowledge"]});
+ timer=setTimeout(()=>void session?.abort(),240000);
+ const result=await session.start(`${process.env.COMPONENT_PROBE_DELEGATE === "1" ? "请把组件与规范分析交给组件子 Agent，待其返回后核对计划。" : ""}仅完善 ${join(workspace,"implementation.md")} 的实施计划，先不要写业务代码。需求：C++ 导出功能，根据网元 ID 查询名称并写入文件；仓库 ${repo}，业务模块 报表导出，产品版本 2.7B。相关 API 声明路径：${join(workspace,"file_api.hpp")} 和 ${join(workspace,"ne_config.hpp")}。保留已确认任务与验证项，明确实际组件选择、异常处理及知识来源。所有文件操作限当前工作区，不访问工作区之外。`);
+ const report={model,status:result.status,knowledge_calls:uses,children:events.replay().filter(e=>e.kind==="agent_spawned"||e.kind==="agent_finished").map(e=>({kind:e.kind,type:e.payload.agent_type,lifecycle:e.payload.lifecycle})),plan:readFileSync(join(workspace,"implementation.md"),"utf8")};
+ writeFileSync(join(out,"report.json"),JSON.stringify(report,null,2));
+ console.log(JSON.stringify({model,status:result.status,knowledge_calls:uses.length,children:report.children.length,report:join(out,"report.json")}));
+} finally {clearTimeout(timer);session?.dispose();sidecar.stop();rmSync(agentDir,{recursive:true,force:true});}

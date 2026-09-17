@@ -1,3 +1,4 @@
+import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
 import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
 /**
@@ -1048,7 +1049,7 @@ export class CloudSession {
     sessionId: string;
     customTools: unknown[];
     /** 缺省继承驱动级 extraTools(主会话形态);子 Agent 派发时必须传
-     *  []——complete_stage/push_branch 这类业务工具只能存在于主会话,
+     *  仅继承只读 knowledge——complete_stage/push_branch 这类业务工具只能存在于主会话,
      *  否则模型派个平行会话就能绕过主上下文推进阶段机(2026-09-06)。 */
     extraTools?: unknown[];
   }) {
@@ -1767,9 +1768,11 @@ export class CloudSession {
     return defineTool({
       name: "Task",
       label: "Dispatch Agent",
+      promptGuidelines: childKnowledgeTools(this.options.extraTools).length ? [COMPONENT_PLANNING_GUIDANCE] : [],
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
-        "子 Agent 不能提问、不能再派子 Agent。",
+        "子 Agent 不能提问、不能再派子 Agent。" +
+        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型与规范分析请派发 component-knowledge-agent，任务卡提供计划路径与代码入口。" : ""),
       parameters: Type.Object({
         subagent_type: Type.String({
           description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",
@@ -1850,11 +1853,13 @@ export class CloudSession {
           this.refusalTool(childId, "Task",
             "Task", "Dispatch Agent", refusal),
         ],
-        // 阶段推进、推送、交付类工具只归主会话。
-        extraTools: [],
+        // 复用同一知识上下文；阶段推进、推送和知识写入仍只归主会话。
+        extraTools: childKnowledgeTools(this.options.extraTools),
       });
       this.childSessions.set(childId, child);
-      await child.prompt(String(params.prompt ?? ""));
+      await child.prompt([String(params.prompt ?? ""),
+        ...(params.subagent_type === COMPONENT_ANALYST ? [COMPONENT_ANALYST_MISSION] : []),
+      ].join("\n\n"));
     } catch (error) {
       lifecycle = child ? "interrupted" : "failed";
       setupError = String(error);

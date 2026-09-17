@@ -110,7 +110,7 @@ test("子 Agent 派发:Task 落账不阻断主流程,业务工具不进子会话
     assert.match(events, /"lifecycle":"returned"/,
       "子 Agent 正常收口(非中断)");
 
-    // 结构性边界:子会话 extraTools 为空(sessionDriver 强制),业务
+    // 结构性边界:子会话仅可继承只读 knowledge(sessionDriver 限定),业务
     // 工具调用只可能来自主会话——事件账里 complete_stage 的调用次数
     // 等于剧本里的 1 次(若子会话能看到业务工具,模型剧本顺序错乱会
     // 在此显式暴露)。
