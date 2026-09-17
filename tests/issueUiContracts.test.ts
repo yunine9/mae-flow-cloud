@@ -1817,3 +1817,33 @@ test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图
   assert.equal((pane.match(/EMPTY_REPO_DIFF_NOTE/g) ?? []).length, 3,
     "常量定义+两处消费,空态文案不得再写第三份字面量");
 });
+
+test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动记忆在 localStorage(2026-09-17)", () => {
+  // 布局底盘:定宽布局 + colgroup(表头 w-* 退役,宽度只有一处来源);
+  // 标题列不进默认宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
+  assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed">/);
+  for (const col of ["select", "ticket", "title", "version", "status", "launch"]) {
+    assert.match(registration, new RegExp(`\\{renderCol\\("${col}"\\)\\}`));
+  }
+  assert.match(registration, /\{moduleCol && renderCol\("module"\)\}/);
+  assert.match(registration, /<col style=\{\{ width: 48 \}\} \/>/);
+  assert.doesNotMatch(registration, /<TableHead className="w-\d+"/,
+    "列宽收口 colgroup,表头不得再挂 w-* 定宽");
+  // 把手:role=separator 可聚焦,pointer capture 拖动,双击/Enter 回默认,
+  // 方向键微调;拖动中直写 <col> 免整表重渲,松手才 commit。
+  assert.match(registration, /function DtsColResizeHandle\(/);
+  assert.match(registration, /role="separator"/);
+  assert.match(registration, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(registration, /onDoubleClick=\{\(event\) => \{\s*event\.preventDefault\(\);\s*onReset\(colKey\);/);
+  assert.match(registration, /onPreview\(colKey, px\)/);
+  // 记忆:全用户共用一份(mae-flow:dts-col-widths),空表回删 key。
+  assert.match(registration, /mae-flow:dts-col-widths/);
+  assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
+  assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
+  // 默认宽沿用迁表现行值(w-28/w-64/w-24/w-56),单号/状态给足内容定值;
+  // 拖动下限防内容打架。列存在性由 DTS_COL_MIN 收口,少一列即测试红。
+  assert.match(registration,
+    /select: 112, ticket: 190, version: 256, status: 88, launch: 96, module: 224/);
+  assert.match(registration,
+    /select: 96, ticket: 150, title: 160, version: 140, status: 72, launch: 88/);
+});

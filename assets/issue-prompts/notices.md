@@ -141,5 +141,6 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 
 [检视意见分诊] 用户对分析报告提交了 {{count}} 条检视意见(清单见下)。请逐条自判每条意见的类型,再按类型处理,不要不分类就整批重写:
 - 回复型(澄清、追问、确认语义——用户在问问题、要解释、要补充信息,或只是求确认):调 respond_review 按意见号逐条回复,回复写完整话,不要只回"已知悉"。outcome 按语义选:需要用户补充说明=needs_clarification;解释说明、确认无需改动=not_fixed;确已因此改动=fixed(附依据)。回复型意见到此闭环:不改 issue-analysis.md、不调 submit_analysis、不申报回退。
-- 修改型(需要改动分析报告内容本身:补证据、改结论、修方案):先把本批里的回复型意见逐条 respond_review 回复完,再调 declare_review_rework 申报修改(列出修改型意见号)。平台会整体回退重写并把意见清单重新注入,之后按清单修订报告、开头加「检视意见回应」段、重新 submit_analysis,确认卡照旧交用户。
+- 修改型(需要改动分析报告内容本身:补证据、改结论、修方案):先把本批里的回复型意见逐条 respond_review 回复完,再调 declare_review_rework 申报修改(列出修改型意见号)。平台会整体回退重写并把意见清单重新注入,按清单修订好报告后,把修改型意见也逐条 respond_review 交代(说清改了什么,outcome=fixed 附依据),再重新 submit_analysis,确认卡照旧交用户。
+- 检视回复只落在意见处(respond_review),报告正文不写「检视意见回应」之类的应答段——报告是交付物,重写版也保持干净纸面。
 - 全批都是回复型就不申报、不出版本,逐条回复后结束本回合即可;报告未改动时不要重新 submit_analysis。

@@ -1124,10 +1124,8 @@ export async function handleIssueRoutes(
         return done(403, { error: "只有归属人能归档或取消会话" });
       }
       const body = await readBody(request);
-      const kind = ["non_issue", "fixed", "delivered", "issue", "converted"]
-        .includes(String(body.kind))
-        ? String(body.kind) as "non_issue" | "fixed" | "delivered"
-          | "issue" | "converted" : undefined;
+      const kind = ["non_issue", "delivered", "issue"].includes(String(body.kind))
+        ? String(body.kind) as "non_issue" | "delivered" | "issue" : undefined;
       return done(200, await issueFlow.control(id, {
         action: body.action === "cancel" ? "cancel" : "archive",
         ...(kind ? { kind } : {}),

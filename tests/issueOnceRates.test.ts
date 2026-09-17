@@ -2,8 +2,7 @@
  * 一次率二轴统计(#290 票4,口径:CONTEXT「一次修复成功率」「一次定位
  * 成功率」词条,2026-09-17)。两层钉死:
  * 1. 分类纯函数:分母=完成交付(有单+已归档+结论 delivered)——无单、
- *    非归档、归档但结论非 delivered(取消/失败/误报/未合入手动归档)
- *    一律不进;定位轴=报告版本数 ≤1(ADR-0032 起版本只随修改型检视
+ *    非归档、归档但结论非 delivered(取消/失败/误报)一律不进;定位轴=报告版本数 ≤1(ADR-0032 起版本只随修改型检视
  *    增长,与检视批次数脱钩);修复轴=从未验证未通过(转移账平台文案
  *    前缀计数);检视批次逐条记账、不影响两轴判定。
  * 2. 真路由直调:GET /issues/stats 从服务台账聚合出同一口径(手搓
@@ -65,7 +64,6 @@ test("纯函数:分母=完成交付;无单/非归档/结论非 delivered 全部�
     facts({ id: "idle", status: "idle" }),
     facts({ id: "no-conclusion", conclusion_kind: undefined }),
     facts({ id: "non-issue", conclusion_kind: "non_issue" }),
-    facts({ id: "fixed-not-merged", conclusion_kind: "fixed" }),
     facts({ id: "keep", review_count: 2 }),
   ]);
   assert.equal(summary.total, 1);
@@ -154,7 +152,8 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
     status: "archived",
     conclusion: { kind: "non_issue", summary: "误报",
       at: "2026-09-01T10:00:00Z" } });
-  // 存量未合入的手动归档(ADR-0022:建了 MR 未全合=fixed)不是完成交付。
+  // 存量未合入的手动归档:旧账记 fixed(ADR-0022 时代的口径),读侧
+  // 归一为 delivered(ADR-0037)——修复完成即交付,照进分母。
   seedSession(dataDir, { id: "issue-g", ticket: "DTS202609000006",
     status: "archived",
     conclusion: { kind: "fixed", summary: "已推送未合入",
@@ -181,17 +180,18 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
       { issueFlow: service, authEnabled: false },
     );
     assert.equal(status, 200);
-    assert.equal(body.total, 3,
-      "分母=a/b/c;取消 d、误报 e、无单 f、未合入手动归档 g 都不是完成交付");
-    assert.deepEqual(body.localization, { passed: 1, rate: 33.3 },
-      "只有一版报告的 issue-a 一次定位");
-    assert.deepEqual(body.repair, { passed: 2, rate: 66.7 },
-      "a/c 零验证失败;b 答过一次验证未通过");
+    assert.equal(body.total, 4,
+      "分母=a/b/c/g;g 的存量 fixed 旧账读侧归一为 delivered,取消 d、"
+      + "误报 e、无单 f 不进");
+    assert.deepEqual(body.localization, { passed: 2, rate: 50 },
+      "一版报告的 issue-a/g 一次定位;b 两版、c 三版不是");
+    assert.deepEqual(body.repair, { passed: 3, rate: 75 },
+      "a/c/g 零验证失败;b 答过一次验证未通过");
     const rows = body.per_session as Array<
       { id: string; reviews: number }>;
     assert.equal(rows.find((row) => row.id === "issue-b")?.reviews, 2,
       "检视批次从 reviews 账本 sent/issue_review 计,能力不回退");
-    assert.equal(rows.length, 3, "逐会话明细只含分母会话");
+    assert.equal(rows.length, 4, "逐会话明细只含分母会话");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

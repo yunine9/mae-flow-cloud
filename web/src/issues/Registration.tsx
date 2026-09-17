@@ -8,7 +8,10 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  * DTS 文本/版本/候选纯函数在 dtsText.ts,单据 HTML 的图片代理重写与
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment, useCallback, useEffect, useMemo, useRef, useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -598,6 +601,132 @@ function ManualRegister({
   </form>;
 }
 
+/* ---------- DTS 列表列宽拖拽(2026-09-17) ---------- */
+
+type DtsColKey =
+  | "select" | "ticket" | "title" | "version" | "status" | "launch" | "module";
+
+/** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号/
+ *  状态原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
+ *  列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
+const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
+  select: 112, ticket: 190, version: 256, status: 88, launch: 96, module: 224,
+};
+/** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号,状态列要放
+ *  得下徽标)。 */
+const DTS_COL_MIN: Record<DtsColKey, number> = {
+  select: 96, ticket: 150, title: 160, version: 140, status: 72, launch: 88,
+  module: 160,
+};
+/** 列宽记忆(全用户共用一份:列宽是屏幕偏好不是业务数据,不按人分)。 */
+const DTS_COL_WIDTHS_KEY = "mae-flow:dts-col-widths";
+
+const clampDtsColWidth = (key: DtsColKey, px: number) =>
+  Math.max(DTS_COL_MIN[key], Math.round(px));
+
+function loadDtsColWidths(): Partial<Record<DtsColKey, number>> {
+  try {
+    const raw = localStorage.getItem(DTS_COL_WIDTHS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<Record<DtsColKey, number>> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key in DTS_COL_MIN && typeof value === "number"
+        && Number.isFinite(value)) {
+        out[key as DtsColKey] = value;
+      }
+    }
+    return out;
+  } catch { return {}; }
+}
+
+/** 列宽拖拽把手:贴表头右缘的透明窄条。pointer capture 拖动,方向键
+ *  微调(Shift 大步),双击/Enter 恢复默认。拖动过程宽度直接写进对应
+ *  <col>(免整表重渲),松手才由父级落状态并记忆。起点取表头实测宽
+ *  ——标题列弹性无定宽,也从真实渲染宽起步。 */
+function DtsColResizeHandle({ colKey, label, width, onPreview, onCommit,
+  onReset }: {
+  colKey: DtsColKey;
+  label: string;
+  /** 当前生效宽度(标题列默认弹性无定宽时缺省:aria 与键盘调整以表头
+   *  实测宽度为基准)。 */
+  width?: number;
+  onPreview: (key: DtsColKey, px: number) => void;
+  onCommit: (key: DtsColKey, px: number) => void;
+  onReset: (key: DtsColKey) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startWidth: number } | undefined>(
+    undefined);
+  const dragWidth = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return undefined;
+    return clampDtsColWidth(colKey, drag.startWidth + event.clientX - drag.startX);
+  };
+  const endDrag = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const px = dragWidth(event);
+    dragRef.current = undefined;
+    setDragging(false);
+    document.body.style.userSelect = "";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (px !== undefined) onCommit(colKey, px);
+  };
+  const headWidth = (current: EventTarget & Element) =>
+    current.closest("th")?.getBoundingClientRect().width ?? width ?? 200;
+  return <span
+    role="separator"
+    aria-orientation="vertical"
+    tabIndex={0}
+    aria-label={`调整「${label}」列宽:拖动或按左右方向键,双击恢复默认`}
+    {...(width !== undefined ? { "aria-valuenow": Math.round(width) } : {})}
+    data-dragging={dragging || undefined}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = {
+        startX: event.clientX,
+        startWidth: headWidth(event.currentTarget),
+      };
+      setDragging(true);
+      // 拖动途经文字会起选区,按住期间全局禁选,松手还原。
+      document.body.style.userSelect = "none";
+    }}
+    onPointerMove={(event) => {
+      const px = dragWidth(event);
+      if (px !== undefined) onPreview(colKey, px);
+    }}
+    onPointerUp={endDrag}
+    onPointerCancel={endDrag}
+    onDoubleClick={(event) => {
+      event.preventDefault();
+      onReset(colKey);
+    }}
+    onKeyDown={(event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const step = (event.key === "ArrowLeft" ? -1 : 1)
+          * (event.shiftKey ? 48 : 16);
+        onCommit(colKey,
+          clampDtsColWidth(colKey, headWidth(event.currentTarget) + step));
+      } else if (event.key === "Enter" || event.key === "Home") {
+        event.preventDefault();
+        onReset(colKey);
+      }
+    }}
+    className={cn(
+      "absolute inset-y-0 -right-1 z-10 w-2.5 cursor-col-resize touch-none",
+      "outline-none",
+      "after:absolute after:inset-y-0.5 after:left-1/2 after:w-px",
+      "after:-translate-x-1/2 after:bg-primary after:opacity-0",
+      "after:transition-opacity hover:after:opacity-60",
+      "focus-visible:after:opacity-60 data-[dragging]:after:opacity-100",
+    )}
+  />;
+}
+
 function DtsRegister({
   viewer,
   issues,
@@ -658,6 +787,45 @@ function DtsRegister({
     .filter((module) => module.status === "active"
       && module.repositories.length > 0),
   [modules]);
+
+  // 列宽拖拽(2026-09-17):除展开钮外全列可拖。用户改过的列记进
+  // localStorage(会话启动读一次,改即写);没改的列用默认宽,标题列
+  // 保持弹性吃剩余宽——初览观感与迁表时一致。拖动中宽度直写 <col>
+  // (免整表重渲),松手才落状态。
+  const [colWidths, setColWidths] = useState<Partial<Record<DtsColKey, number>>>(
+    loadDtsColWidths);
+  const colEls = useRef<Partial<Record<DtsColKey, HTMLTableColElement>>>({});
+  useEffect(() => {
+    try {
+      if (Object.keys(colWidths).length > 0) {
+        localStorage.setItem(DTS_COL_WIDTHS_KEY, JSON.stringify(colWidths));
+      } else {
+        localStorage.removeItem(DTS_COL_WIDTHS_KEY);
+      }
+    } catch { /* 隐私模式等存不了:会话内仍生效 */ }
+  }, [colWidths]);
+  const dtsColWidth = (key: DtsColKey): number | undefined =>
+    colWidths[key] ?? DTS_COL_DEFAULT[key as Exclude<DtsColKey, "title">];
+  const previewColWidth = useCallback((key: DtsColKey, px: number) => {
+    const col = colEls.current[key];
+    if (col) col.style.width = `${px}px`;
+  }, []);
+  const commitColWidth = useCallback((key: DtsColKey, px: number) => {
+    setColWidths((prev) => ({ ...prev, [key]: clampDtsColWidth(key, px) }));
+  }, []);
+  const resetColWidth = useCallback((key: DtsColKey) => {
+    setColWidths((prev) => {
+      if (!(key in prev)) return prev;
+      const { [key]: _dropped, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+  const renderCol = (key: DtsColKey) => {
+    const px = dtsColWidth(key);
+    return <col key={key}
+      ref={(el) => { colEls.current[key] = el ?? undefined; }}
+      style={px !== undefined ? { width: px } : undefined} />;
+  };
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;列头过滤叠加其上。
   const [query, setQuery] = useState("");
@@ -1133,10 +1301,24 @@ function DtsRegister({
           {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
               旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
               在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
-          <Table aria-label="名下问题单">
+          {/* 列宽拖拽(2026-09-17):table-fixed + colgroup 定宽,宽度
+              来源只有 colgroup 一处(th 上的 w-* 退役);标题列不给宽,
+              吃掉剩余宽度。把手贴各列表头右缘,列宽拖完记忆在
+              localStorage(mae-flow:dts-col-widths),双击把手回默认。 */}
+          <Table aria-label="名下问题单" className="table-fixed">
+            <colgroup>
+              {renderCol("select")}
+              {renderCol("ticket")}
+              {renderCol("title")}
+              {renderCol("version")}
+              {renderCol("status")}
+              {renderCol("launch")}
+              {moduleCol && renderCol("module")}
+              <col style={{ width: 48 }} />
+            </colgroup>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-28">
+                <TableHead className="relative">
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
                       checked={selectableTickets.length > 0
@@ -1149,8 +1331,12 @@ function DtsRegister({
                       已选 {displayedSelectedCount} / {selectableTickets.length} 张
                     </span>
                   </div>
+                  <DtsColResizeHandle colKey="select" label="勾选"
+                    width={dtsColWidth("select")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead>
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     单号
                     <HeaderFilter label="单号" active={!!ticketFilter.trim()}
@@ -1162,8 +1348,12 @@ function DtsRegister({
                         onChange={(event) => setTicketFilter(event.target.value)} />}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="ticket" label="单号"
+                    width={dtsColWidth("ticket")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead className="w-full">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     标题
                     <HeaderFilter label="标题" active={!!titleFilter.trim()}
@@ -1175,12 +1365,16 @@ function DtsRegister({
                         onChange={(event) => setTitleFilter(event.target.value)} />}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="title" label="标题"
+                    width={dtsColWidth("title")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
                 {/* 版本列(2026-09-13 表头化):展示含 B 版构建号的完整
                     版本(截断后悬停可见全串),过滤只认版本组——漏斗
                     弹层沿旧「版本过滤」的分组清单(勾组带全组 B 版),
                     44px 触控目标由选项行 min-h-11 保留。 */}
-                <TableHead className="w-64">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     版本
                     {versions.length > 0 && <HeaderFilter label="版本" contentClassName="w-72"
@@ -1199,12 +1393,22 @@ function DtsRegister({
                       </div>}
                     </HeaderFilter>}
                   </span>
+                  <DtsColResizeHandle colKey="version" label="版本"
+                    width={dtsColWidth("version")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead>状态</TableHead>
+                <TableHead className="relative">
+                  状态
+                  <DtsColResizeHandle colKey="status" label="状态"
+                    width={dtsColWidth("status")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>
                 {/* 发起状态列(2026-09-14):本平台有没有发起过——判定
                     与发起拦截同尺(liveIssueFor 一处口径),漏斗默认只
                     看未发起;徽标可点,跳进该单名下的进行中会话。 */}
-                <TableHead className="w-24">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     发起状态
                     <HeaderFilter label="发起状态" active={launchFilterActive}
@@ -1228,9 +1432,19 @@ function DtsRegister({
                       </div>}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="launch" label="发起状态"
+                    width={dtsColWidth("launch")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
-                <TableHead className="w-12" />
+                {moduleCol && <TableHead className="relative">
+                  所属模块
+                  <DtsColResizeHandle colKey="module" label="所属模块"
+                    width={dtsColWidth("module")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>}
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1269,12 +1483,14 @@ function DtsRegister({
                             ? [...current, ticket.ticket]
                             : current.filter((item) => item !== ticket.ticket))} />
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">
+                    <TableCell className="whitespace-nowrap overflow-hidden">
                       {/* 单号独立成格(勾选在首格):拖选复制单号不会误
                           勾选——单号是绑单/推送分支名的关键操作对象,
                           复制是高频动作。 */}
                       {/* 单号直达 DTS 门户(a { color: inherit } 全局兜底,
                           外观与原文字一致;新开页签,不带走列表现场)。 */}
+                      {/* overflow-hidden:列宽拖窄后「远程」徽标裁在格内,
+                          不横溢进标题列(table-fixed 格宽即硬宽)。 */}
                       <a className="issue-dts-ticket font-mono text-sm
                         font-medium text-primary underline-offset-2
                         hover:underline"

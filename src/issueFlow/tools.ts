@@ -1290,7 +1290,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + "意见(澄清、追问、确认语义)用它原地闭环——不回退、不改报告、"
         + "不出版本。outcome 按语义选:needs_clarification=要用户补充说明;"
         + "not_fixed=解释说明/确认无需改动;fixed=确已按意见改动(附依据)。"
-        + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报。",
+        + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报;"
+        + "修改型批次在重写完成后,也用它对本批意见逐条交代(改了什么,"
+        + "outcome=fixed 附依据)再重新 submit_analysis——报告正文不写"
+        + "应答段,检视回复只落在意见处。",
       parameters: Type.Object({
         items: Type.Array(Type.Object({
           review: Type.Union([Type.Number(), Type.String()], {
@@ -1329,8 +1332,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         return ok(`已逐条回复 ${receipts.length} 条检视意见`
           + `(用户在检视意见面板可见):\n${receipts.join("\n")}\n`
-          + "本批若还有需要改动报告内容的修改型意见,先回复完再调 "
-          + "declare_review_rework;全批都是回复型就到此为止,不要重写报告。");
+          + "分诊回合里本批还有修改型意见的,先回复完再调 declare_review_rework;"
+          + "重写回合里逐条交代完的,调 submit_analysis 重新提交;"
+          + "其余情况到此为止,不要重写报告。");
       },
     }));
 
@@ -1341,9 +1345,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         "检视分诊的修改申报入口:本批检视意见里有需要改动分析报告内容本身"
         + "的修改型意见时,先对回复型意见逐条 respond_review,再调它申报。"
         + "平台会整体回退重写(回退问题分析、轮次+1、冻结被检视的报告"
-        + "版本),并把意见清单重新注入;之后按清单修订报告、开头加「检视"
-        + "意见回应」段、重新 submit_analysis,确认卡照旧交用户。纯回复型"
-        + "批次(澄清/追问/确认,无需改动报告)禁止调用。",
+        + "版本),并把意见清单重新注入;之后按清单修订报告,对本批意见"
+        + "逐条 respond_review 交代(报告正文不写应答段),再重新 "
+        + "submit_analysis,确认卡照旧交用户。纯回复型批次(澄清/追问/"
+        + "确认,无需改动报告)禁止调用。",
       parameters: Type.Object({
         reviews: Type.Array(Type.Object({
           seq: Type.Number({
@@ -1390,8 +1395,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + `其中 ${unique.length} 条修改型需回退重写:${reason}`);
         ctx.state.review_active = true;
         ctx.persist();
-        // 意见清单重注入(修改版契约:回应段护栏+submit_analysis 收尾)
-        // ——AI 据此整份重写,重写完重新举确认卡。
+        // 意见清单重注入(修改版契约:逐条 respond 交代+submit_analysis
+        // 收尾)——AI 据此整份重写,重写完重新举确认卡。
         return ok(`已申报修改:平台已整体回退问题分析(第 ${ctx.state.round} 轮),`
           + "被检视报告已冻结版本。请按以下意见清单修订报告:\n\n"
           + renderReviewNotes(batch, ctx.state.title ?? "分析报告",

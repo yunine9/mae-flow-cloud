@@ -15,8 +15,9 @@ import { renderAnnotations } from "../annotations.ts";
  * 的 respond 操作,对齐需求侧批注回复的呈现),原地闭环:不回退、
  * 不重跑、不出版本、不再举确认卡;含修改型的批次才由 AI 申报
  * (declare_review_rework)触发整体回退重写(ADR-0007 链路),版本
- * 快照在申报时刻冻结。锚点徽标(reanchor 白送,只服务草稿:ADR-0025)
- * 与新版报告上的整体把关照旧。
+ * 快照在申报时刻冻结,重写完成后修改型意见同样逐条 respond 交代
+ * (ADR-0036:检视回复一律落账在意见处,报告不带应答段)。锚点徽标
+ * (reanchor 白送,只服务草稿:ADR-0025)与新版报告上的整体把关照旧。
  */
 
 import { existsSync, mkdirSync, readFileSync, copyFileSync, readdirSync } from "node:fs";
@@ -184,12 +185,13 @@ export function snapshotAnalysisVersion(root: string): void {
 /**
  * 渲染成给模型的意见清单。护栏与 annotations.ts 的 renderAnnotations
  * 同一份契约原文(逐条落实/只改这些/以原文定位/逐条回话);差异有三:
- * 抬头(单文档、意见数量)、问题域独有的「检视意见回应」段要求
- * (ADR-0025:修订版报告开头按意见号逐条答复,软性章节,不进五章节
- * 机械门票)与收尾(修订完重新 submit_analysis)。
+ * 抬头(单文档、意见数量)、问题域独有的逐条 respond 交代要求
+ * (ADR-0036:回复一律经 respond_review 落账在意见处,报告正文不带
+ * 应答段)与收尾(交代完重新 submit_analysis)。
  *
  * mode(ADR-0035 检视分诊):"rework"(默认)= 修改型重写的正式通道,
- * 契约原文不变;"triage" = 提交检视时随清单递给 AI 的分诊版——不预设
+ * 交代契约随 ADR-0036 收敛为逐条 respond;"triage" = 提交检视时随清单
+ * 递给 AI 的分诊版——不预设
  * 整批重写,判断准则与 respond_review/declare_review_rework 用法在
  * 提示词资产(notices.review.triage),这里只保留抬头、共用的定位
  * 护栏与带号清单。
@@ -235,12 +237,12 @@ export function renderReviewNotes(
   );
   if (mode === "rework") {
     lines.push(
-      "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
-      // 意见号回应段(#261,ADR-0025):修订版报告开头按意见号逐条答复。
-      // 靠提示词护栏执行,不进 submit_analysis 的五章节机械门票。
-      "- 修订版报告的开头加一段「检视意见回应」:按意见号逐条答复,"
-        + "写清每条改了什么/答了什么。未被采纳或仅是提问的意见也要逐条"
-        + "给交代,不许漏号。",
+      // 逐条交代落账在意见处(ADR-0036):报告是交付物,不带应答段。
+      "- 修订后对本批意见逐条调 respond_review 交代:改了什么/答了什么,"
+        + "未被采纳或仅是提问的意见也要逐条给交代,不许漏号;分诊回合里"
+        + "已回复过的不必重发。有哪条你认为不该改,说明理由,别默默跳过。",
+      "- 报告正文不写「检视意见回应」之类的应答段:检视回复只落在"
+        + "意见处,重写版保持干净纸面。",
       "",
     );
   } else {
@@ -259,7 +261,7 @@ export function renderReviewNotes(
   }
   lines.push("");
   if (mode === "rework") {
-    lines.push("修订完成后重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
+    lines.push("逐条交代完再重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
   }
   return lines.join("\n");
 }

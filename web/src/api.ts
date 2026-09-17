@@ -3897,7 +3897,7 @@ export interface IssueSummary {
   /** 本回合已用催办次数(服务端催办预算账;前端暂不消费)。 */
   nudges?: number;
   conclusion?: {
-    kind: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
+    kind: "non_issue" | "delivered" | "issue";
     summary: string;
     at: string;
   };
@@ -4287,7 +4287,7 @@ export function associateIssueTicket(id: string, input: {
 
 export function controlIssue(id: string, input: {
   action: "cancel" | "archive";
-  kind?: "non_issue" | "fixed" | "delivered" | "issue" | "converted";
+  kind?: "non_issue" | "delivered" | "issue";
   summary?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {

@@ -597,7 +597,8 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
       "env-shared-secret", "后台凭据在新会话解出");
     const old = service.get(created.id);
     assert.equal(old.status, "archived");
-    assert.equal(old.conclusion?.kind, "converted");
+    assert.equal(old.conclusion?.kind, "issue",
+      "转正收口按问题成立记,血缘见 converted_to(ADR-0037)");
     assert.equal(old.converted_to, converted!.id);
     assert.equal(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)), false,
@@ -917,7 +918,7 @@ test("MockDtsGateway:确定性单据集,已知单给罐头详情,未知单 fail-
   const gateway = new MockDtsGateway();
   assert.equal(gateway.mock, true, "模拟网关必须自带 DEV 标记(列表 API 挂徽标用)");
   const list = await gateway.listByOwner("y00965296");
-  assert.equal(list.length, 9, "九个确定性测试单");
+  assert.equal(list.length, 10, "十个确定性测试单");
   assert.ok(list.every((item) => item.title.startsWith("【DEV·模拟】")),
     "标题打 DEV 标,列表里一眼认出模拟单");
   assert.ok(list.every((item) => item.ticket.startsWith("DTS-2026-")));

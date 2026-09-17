@@ -121,7 +121,9 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
     /flex items-center justify-between gap-6 rounded-xl border border-line\s*\n\s*bg-surface px-6 py-\[22px\] shadow-xs/,
     "档案头卡与 HistoryBoard 同配方");
   assert.match(issueWorld, /<h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环<\/h2>/);
-  assert.match(issueWorld, /grid grid-cols-2 gap-2\.5 min-\[1081px\]:grid-cols-4/);
+  // 结论词表收敛后五格(全部闭环/已交付/问题成立/非问题/已取消,
+  // ADR-0037),宽屏一行排下。
+  assert.match(issueWorld, /grid grid-cols-2 gap-2\.5 min-\[1081px\]:grid-cols-5/);
   assert.match(issueWorld, /flex min-h-\[94px\] flex-col justify-between rounded-lg border border-line bg-surface px-\[15px\] py-3\.5 shadow-xs/,
     "结论指标瓦片与 HistoryBoard 指标瓦片同配方");
   assert.match(issueWorld, /<EmptyTitle>还没有闭环的问题会话<\/EmptyTitle>/);
