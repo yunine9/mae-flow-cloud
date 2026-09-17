@@ -30,6 +30,7 @@ writeFileSync(join(workspace,"file_api.hpp"),'#include <string>\nclass AcmeFileW
 writeFileSync(join(workspace,"ne_config.hpp"),'#include <optional>\n#include <string>\nclass NeConfig { public: static std::optional<std::string> getName(int neId); };\n');
 writeFileSync(join(workspace,"implementation.md"),'# 实施计划\n\n## 已确认任务\n给定网元 ID，将网元名称导出到指定文件，失败返回明确错误。\n\n## 验证\n保留正常、查询失败、打开失败、写入失败四项测试。\n');
 const sidecar = new MemorySidecar({python:resolve(process.env.MFC_MEMSEARCH_PYTHON || ".local/memsearch-venv/bin/python"),script:resolve("harness/memsearch-sidecar.py"),corpusDir:data,milvusPath:join(data,"index.db"),provider:"onnx",model:"gpahal/bge-m3-onnx-int8",env:{HF_HUB_OFFLINE:"1"},budgets:{bootMs:60000,ingestMs:120000,searchMs:10000}});
+let timedOut = false;
 let session: CloudSession | undefined, timer: ReturnType<typeof setTimeout> | undefined;
 try {
  if (!await sidecar.start()) throw new Error("知识侧车未就绪");
@@ -38,9 +39,9 @@ try {
  const uses: unknown[]=[];
  const tool = createKnowledgeTool({service:()=>search,context:()=>({repo:"export",repositories:[repo],moduleIds:["export"],productVersion:"2.7B"}),onUse:e=>uses.push(e)});
  session = await CloudSession.create({taskId:"component-probe",workspace,agentDir,provider,model,eventLog:events,transcript:new TranscriptStore(join(out,"transcript.jsonl"),"main"),gate:new GateService({workspace,cwd:workspace}),humanGate:new HumanGate(join(out,"waiting.json")),extraTools:[tool],allowedTools:["read","write","edit","Task","knowledge"]});
- timer=setTimeout(()=>void session?.abort(),240000);
+ timer=setTimeout(()=>{ timedOut=true; void session?.abort(); },240000);
  const result=await session.start(`${process.env.COMPONENT_PROBE_DELEGATE === "1" ? "请把组件与规范分析交给组件子 Agent，待其返回后核对计划。" : ""}仅完善 ${join(workspace,"implementation.md")} 的实施计划，先不要写业务代码。需求：C++ 导出功能，根据网元 ID 查询名称并写入文件；仓库 ${repo}，业务模块 报表导出，产品版本 2.7B。相关 API 声明路径：${join(workspace,"file_api.hpp")} 和 ${join(workspace,"ne_config.hpp")}。保留已确认任务与验证项，明确实际组件选择、异常处理及知识来源。所有文件操作限当前工作区，不访问工作区之外。`);
- const report={model,status:result.status,knowledge_calls:uses,children:events.replay().filter(e=>e.kind==="agent_spawned"||e.kind==="agent_finished").map(e=>({kind:e.kind,type:e.payload.agent_type,lifecycle:e.payload.lifecycle})),plan:readFileSync(join(workspace,"implementation.md"),"utf8")};
+ const report={model,status:result.status,timed_out:timedOut,knowledge_calls:uses,children:events.replay().filter(e=>e.kind==="agent_spawned"||e.kind==="agent_finished").map(e=>({kind:e.kind,type:e.payload.agent_type,lifecycle:e.payload.lifecycle})),plan:readFileSync(join(workspace,"implementation.md"),"utf8")};
  writeFileSync(join(out,"report.json"),JSON.stringify(report,null,2));
- console.log(JSON.stringify({model,status:result.status,knowledge_calls:uses.length,children:report.children.length,report:join(out,"report.json")}));
+ console.log(JSON.stringify({model,status:result.status,timed_out:timedOut,knowledge_calls:uses.length,children:report.children.length,report:join(out,"report.json")}));
 } finally {clearTimeout(timer);session?.dispose();sidecar.stop();rmSync(agentDir,{recursive:true,force:true});}
