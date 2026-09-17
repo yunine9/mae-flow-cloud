@@ -1,3 +1,4 @@
+import { inferCommitOrigin } from "./deliveryOriginInference.ts";
 import { runSafeWorktreeGitAsync } from "./safeGit.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
@@ -31,6 +32,7 @@ export async function analyticsGit(cwd: string, args: string[]): Promise<string>
 export async function calculateDeliveryCode(input: {
   cwd: string; base: string; head: string; first?: string; task_base?: string;
   origins?: Record<string, CodeOrigin>;
+  infer_unattributed?: boolean;
 }): Promise<DeliveryCodeMetric> {
   const { cwd, base, head } = input;
   if (![base, head, ...(input.first ? [input.first] : []), ...(input.task_base ? [input.task_base] : [])].every(sha => SHA.test(sha))) throw new Error("缺少完整的统计版本");
@@ -48,19 +50,23 @@ export async function calculateDeliveryCode(input: {
   if (!first) throw new Error("没有可统计的非合并提交");
   // Rewritten first commit must not silently become the new 'first'.
   await run(["merge-base", "--is-ancestor", first, head]);
-  const origin = (sha: string): CodeOrigin => sha === first ? "first" : input.origins?.[sha] ?? "other";
+  const origins = { ...input.origins };
+  const origin = (sha: string): CodeOrigin => sha === first ? "first" : origins[sha] ?? "other";
   const metric: DeliveryCodeMetric = { version: 1, head, base, first,
     collected_at: new Date().toISOString(), retained: emptyOrigins(), rework: emptyOrigins(),
     deleted: 0, excluded_files: 0, commits: [] };
   for (const sha of hashes) {
-    const [at, ...subject] = (await run(["show", "-s", "--format=%cI%n%s", sha])).trim().split("\n");
+    const [at, ...message] = (await run(["show", "-s", "--format=%cI%n%B", sha])).trim().split("\n");
+    const inferred = input.infer_unattributed && origin(sha) === "other"
+      ? inferCommitOrigin(message.join("\n")) : undefined;
+    if (inferred) origins[sha] = inferred.origin;
     const nums = numstat(await run(["diff", "--numstat", "-z", "--find-renames", `${sha}^`, sha, "--"]));
     let additions = 0, deletions = 0;
     for (const entry of nums) {
       if (analyticsCodePath(entry.path)) { additions += entry.added; deletions += entry.removed; }
     }
     const category = origin(sha);
-    metric.commits.push({ sha, at, subject: subject.join(" "), origin: category, additions, deletions });
+    metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(inferred ? { origin_evidence: inferred.evidence } : {}) });
     if (sha !== first) metric.rework[category] += additions + deletions;
   }
   const paths = numstat(await run(["diff", "--numstat", "--find-renames", "-z", base, head, "--"]));

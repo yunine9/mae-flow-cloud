@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
+import { inferCommitOrigin } from "../src/deliveryOriginInference.ts";
 import { calculateDeliveryCode } from "../src/deliveryAnalyticsGit.ts";
 import { collectDeliveryCode, buildDeliveryAnalysis, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin, recordDeliveryPublication } from "../src/deliveryAnalytics.ts";
 import { aggregateDelivery } from "../src/deliveryAnalyticsSummary.ts";
@@ -83,13 +84,13 @@ test("修改已存在文件后重命名只计真实变化；删除、文档、�
   assert.equal(final.deleted, 1);
 });
 
-test("混合修复或缺少前轮证据不猜归因；首个文档提交不会被换成首个代码提交", async t => {
+test("并行流水线与检视归检视；首个文档提交不会被换成首个代码提交", async t => {
   const f = fixture(t); f.write("README.md", "first docs\n"); const first = f.commit("docs");
   f.publish(first); await collectDeliveryCode(f.summary, f.cwd, first);
   f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "ci", last_sha: first, workspace_review_pending: true };
   f.write("feature.cpp", "int a = 1;\n"); const head = f.commit("CI fix but really mixed"); f.publish(head);
   const metric = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(metric.first, first); assert.equal(metric.retained.other, 1); assert.equal(metric.retained.first, 0);
+  assert.equal(metric.first, first); assert.equal(metric.retained.review, 1); assert.equal(metric.retained.first, 0);
   assert.equal(repairOrigin({ round: 1, state: "repairing", kind: "conflict" }), "other");
 });
 
@@ -255,7 +256,7 @@ test("推送时先保存区间，Git 采集失败后仍能恢复多轮；重复�
   assert.deepEqual(result.rework, { first: 0, pipeline: 2, review: 2, other: 0 });
 });
 
-test("反馈区间交叠归混合；其他任务、仅验证通过、未处理批次不能冒充修复证据", async t => {
+test("反馈区间交叠归检视；其他任务、仅验证通过、未处理批次不能冒充修复证据", async t => {
   const f = fixture(t); f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
   f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("fix"); f.publish(head);
   f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "review", last_sha: first };
@@ -265,7 +266,7 @@ test("反馈区间交叠归混合；其他任务、仅验证通过、未处理�
     step_heads: { branch_create: f.base }, delivery_loop: { batches } }));
   writeBatches([batch, { ...batch, batch_id: "review", items: [{ source: "workspace" }] }]);
   const mixed = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(mixed.retained.other, 1); assert.equal(mixed.commits[1].origin_evidence!.length, 2);
+  assert.equal(mixed.retained.review, 1); assert.equal(mixed.commits[1].origin_evidence!.length, 2);
   writeBatches([{ ...batch, task_id: "another-task" },
     { ...batch, result_digest: undefined, result_head: undefined, verified_sha: head },
     { ...batch, result_digest: undefined, status: "queued" }]);
@@ -274,4 +275,37 @@ test("反馈区间交叠归混合；其他任务、仅验证通过、未处理�
   writeBatches([{ ...batch, result_digest: undefined, result_head: undefined, superseded_by_push: head }]);
   const published = await collectDeliveryCode({ ...f.summary, workspace: join(f.dir, "published-task") }, f.cwd, head);
   assert.equal(published.retained.pipeline, 1, "被本次发布替代的流水线反馈保留修复区间");
+});
+
+
+test("缺少历史记录时按提交说明推断，最终代码来源与累计修改同步更新", async t => {
+  const f = fixture(t);
+  f.write("a.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.write("a.cpp", "int a = 2;\n"); f.commit("按检视意见删除IR接口token");
+  f.write("b.cpp", "int b = 1;\n"); f.commit("修复CodeCheck行宽");
+  f.write("c.cpp", "int c = 1;\n"); f.commit("补单测修复DT覆盖率");
+  f.write("d.cpp", "int d = 1;\n"); f.commit("调整实现\n\nAddress review feedback and fix CodeCheck warnings");
+  f.write("e.cpp", "int e = 1;\n"); const head = f.commit("新增功能"); f.publish(head);
+  const result = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(result.first, first);
+  assert.deepEqual(result.commits.map(c => c.origin), ["first", "review", "pipeline", "pipeline", "review", "other"]);
+  assert.deepEqual(result.retained, { first: 0, review: 2, pipeline: 2, other: 1 });
+  assert.deepEqual(result.rework, { first: 0, review: 3, pipeline: 2, other: 1 });
+  assert.match(result.commits[1].origin_evidence!.join(" "), /推断/);
+  const again = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.deepEqual(again.retained, result.retained); assert.deepEqual(again.rework, result.rework);
+  assert.match(again.commits[1].origin_evidence!.join(" "), /推断/);
+});
+
+
+test("提交推断识别明确修复线索；泛化修改不乱分类，两类线索统一归检视", () => {
+  for (const text of ["按检视意见删除IR接口token", "address review feedback", "按评审意见修复CodeCheck"]) {
+    assert.equal(inferCommitOrigin(text)?.origin, "review", text);
+  }
+  for (const text of ["移除GTEST_SKIP", "修复CodeCheck行宽", "补单测修复DT覆盖率", "fix build failure"]) {
+    assert.equal(inferCommitOrigin(text)?.origin, "pipeline", text);
+  }
+  for (const text of ["fix", "补单测", "新增CodeCheck报告展示", "新增业务功能"]) {
+    assert.equal(inferCommitOrigin(text), undefined, text);
+  }
 });

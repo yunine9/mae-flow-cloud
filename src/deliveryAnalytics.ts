@@ -32,9 +32,9 @@ function save(task: Task, record: StoredAnalysis): void {
 }
 
 /** Only a bounded, explicitly identified repair interval receives a reason.
- * Concurrent CI + human feedback remains mixed; commit messages are never used. */
+ * Concurrent CI + human feedback is counted as review; missing intervals can use labelled inference. */
 export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"]): CodeOrigin {
-  if (loop?.kind === "ci" && !loop.workspace_review_pending && !loop.workspace_review_recheck_required) return "pipeline";
+  if (loop?.kind === "ci") return loop.workspace_review_pending || loop.workspace_review_recheck_required ? "review" : "pipeline";
   if (loop?.kind === "review") return "review";
   return "other";
 }
@@ -43,12 +43,12 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([3, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([4, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
   return { base: summary.delivery?.loop?.last_sha ?? "", head, origin: repairOrigin(summary.delivery?.loop) as RepairInterval["origin"],
-    foreign: summary.delivery?.foreign_commits?.base_sha, evidence: `${repairOrigin(summary.delivery?.loop) === "pipeline" ? "流水线" : repairOrigin(summary.delivery?.loop) === "review" ? "检视" : "混合或其他"}修复轮次 ${summary.delivery?.loop?.round ?? ""}` };
+    foreign: summary.delivery?.foreign_commits?.base_sha, evidence: `${repairOrigin(summary.delivery?.loop) === "pipeline" ? "流水线" : repairOrigin(summary.delivery?.loop) === "review" ? "检视" : "其他"}修复轮次 ${summary.delivery?.loop?.round ?? ""}` };
 }
 
 /** Persist the small attribution fact before starting best-effort Git work.
@@ -108,16 +108,20 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
   const evidence: Record<string, string[]> = Object.fromEntries((previous?.commits ?? []).filter(c => c.origin_evidence).map(c => [c.sha, c.origin_evidence!]));
   const fallback = await intervalOrigins(cwd, head, [currentInterval(summary, head)]);
   for (const [sha, origin] of Object.entries(fallback.origins)) {
-    if (!origins[sha] || origins[sha] === "other") { origins[sha] = origin; evidence[sha] = fallback.evidence[sha]; }
+    if (!origins[sha] || origins[sha] === "other" || evidence[sha]?.some(text => text.startsWith("推断："))) { origins[sha] = origin; evidence[sha] = fallback.evidence[sha]; }
   }
   const published = await intervalOrigins(cwd, head, read(summary)?.intervals ?? []);
   Object.assign(origins, published.origins);
   const historical = await intervalOrigins(cwd, head, historicalRepairIntervals(cwd, summary.id));
   // Completed feedback facts are more specific than the mutable current loop.
-  // Overlapping CI/review batches remain mixed, independent of read order.
+  // Overlapping CI/review batches count as review, independent of read order.
   Object.assign(origins, historical.origins);
   Object.assign(evidence, published.evidence, historical.evidence);
-  const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins });
+  const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins,
+    infer_unattributed: true });
+  for (const commit of metric.commits) {
+    if (commit.origin_evidence) { origins[commit.sha] = commit.origin; evidence[commit.sha] = commit.origin_evidence; }
+  }
   // Preserve cumulative events even if the target has absorbed an earlier part.
   if (previous) {
     const commits = new Map(previous.commits.map(c => [c.sha, c]));
