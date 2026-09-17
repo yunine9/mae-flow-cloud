@@ -9,6 +9,10 @@ const descriptionEditor = readFileSync(
   resolve("web/src/issues/DescriptionEditor.tsx"), "utf-8");
 const imagePaste = readFileSync(
   resolve("web/src/issues/useIssueImagePaste.ts"), "utf-8");
+const richTextEditor = readFileSync(
+  resolve("web/src/issues/RichTextEditor.tsx"), "utf-8");
+const editorChoice = readFileSync(
+  resolve("web/src/issues/descriptionEditorChoice.ts"), "utf-8");
 const issueRoutes = readFileSync(
   resolve("src/issueFlow/routes.ts"), "utf-8");
 const notice = readFileSync(
@@ -1718,6 +1722,22 @@ test("外部图片粘贴按 src 协议三路转存,Clipboard 死路不回潮(#27
   // 外链转存(data: 直传与 http(s) 代理)也计入上传进行态浮层。
   assert.match(descriptionEditor, /trackPending/);
   assert.match(descriptionEditor, /trackUpload\(pasteImageFile\(blob\)\)/);
+});
+
+test("登记描述编辑器选型:Quill 壳 + 恒 markdown 存储,可回退(#271)", () => {
+  // 选型常量单点:翻转即回退 milkdown,存储零迁移——两壳同一契约。
+  assert.match(editorChoice, /USE_RICH_TEXT_DESCRIPTION_EDITOR = true/);
+  assert.match(registration, /USE_RICH_TEXT_DESCRIPTION_EDITOR\s*\n?\s*\? <RichTextEditor/);
+  // Quill 只是输入壳:进出各一次 md↔HTML 转换,粘贴拦截随行(#276)。
+  assert.match(richTextEditor, /markdownToEditorHtml/);
+  assert.match(richTextEditor, /editorHtmlToMarkdown/);
+  assert.match(richTextEditor, /dangerouslyPasteHTML/);
+  assert.doesNotMatch(richTextEditor, /navigator\.clipboard/);
+  assert.match(richTextEditor, /classifyExternalImageSrc|isHostedImageSrc/);
+  assert.match(richTextEditor, /proxyIssueImage/);
+  // 上传进行态浮层契约随壳迁移(role=status + 截图上传中…)。
+  assert.match(richTextEditor, /role="status"/);
+  assert.match(richTextEditor, /截图上传中…/);
 });
 
 test("DTS 发起单入口唯一:顶部一枚发起钮,浮动发起条退役(2026-09-15)", () => {
