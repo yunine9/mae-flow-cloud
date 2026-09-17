@@ -211,7 +211,11 @@ export function RichTextEditor({
     "relative [&_.ql-toolbar]:rounded-lg [&_.ql-toolbar]:border-line",
     "[&_.ql-container]:rounded-b-lg [&_.ql-container]:border [&_.ql-container]:border-line",
     "[&_.ql-editor]:min-h-[500px] [&_.ql-editor]:max-h-[70vh] [&_.ql-editor]:overflow-y-auto",
-    "[&_.ql-editor]:text-base [&_.ql-editor]:leading-[1.65] [&_.ql-editor.ql-empty::before]:text-faint")}>
+    "[&_.ql-editor]:text-base [&_.ql-editor]:leading-[1.65] [&_.ql-editor.ql-empty::before]:text-faint"
+    // Tailwind preflight 清零了标题/段落自带外边距,Quill 不补——块间距在此定:
+    // 没有它标题与段落全部贴死(#271 实测丑态)。
+    + " [&_h1]:mt-3 [&_h1]:mb-2 [&_h2]:mt-2.5 [&_h2]:mb-1.5 [&_h3]:mt-2 [&_h3]:mb-1"
+    + " [&_p]:my-1.5 [&_li]:my-0.5 [&_blockquote]:my-2 [&_pre]:my-2")}>
     <div ref={rootRef} />
     {pendingUploads > 0 && <span role="status"
       className="absolute right-2 top-12 z-10 flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
