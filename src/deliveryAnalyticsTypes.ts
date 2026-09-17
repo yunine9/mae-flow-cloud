@@ -6,6 +6,7 @@ export interface DeliveryCommitMetric {
   subject: string;
   at: string;
   origin: CodeOrigin;
+  origin_evidence?: string[];
   additions: number;
   deletions: number;
 }

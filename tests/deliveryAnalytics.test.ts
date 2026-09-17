@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { calculateDeliveryCode } from "../src/deliveryAnalyticsGit.ts";
-import { collectDeliveryCode, buildDeliveryAnalysis, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin } from "../src/deliveryAnalytics.ts";
+import { collectDeliveryCode, buildDeliveryAnalysis, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin, recordDeliveryPublication } from "../src/deliveryAnalytics.ts";
 import { aggregateDelivery } from "../src/deliveryAnalyticsSummary.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
@@ -212,4 +212,66 @@ test("真实 squash 合入目标 SHA 不等于源 SHA，仍计入汇总；旧源
   assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric!.head, head);
   f.publish(merged);
   assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined);
+});
+
+
+test("15 个提交：仅最后轮次在 loop 中，历史批次仍完整恢复前几轮分类", async t => {
+  const f = fixture(t), commits: string[] = [];
+  for (let i = 0; i < 15; i++) {
+    f.write("feature.cpp", `int a = ${i};\n`); commits.push(f.commit(`commit ${i}`));
+  }
+  const head = commits[14]; f.publish(head);
+  f.summary.delivery!.loop = { round: 3, state: "merged", kind: "review", last_sha: commits[13] };
+  const before = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(before.commits.filter(c => c.origin === "other").length, 13);
+  const batch = (id: string, base: string, end: string, source: string) => ({
+    task_id: f.summary.id, batch_id: id, base_sha: base, result_head: end,
+    result_digest: "recorded", items: [{ source }], status: "closed",
+  });
+  f.write(".mae-flow.json", JSON.stringify({ step_heads: { branch_create: f.base }, delivery_loop: { batches: [
+    batch("review-1", commits[0], commits[3], "mr_discussion"),
+    batch("ci-1", commits[3], commits[10], "pipeline"),
+    batch("review-2", commits[10], commits[13], "workspace"),
+  ] } }));
+  observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
+  const result = buildDeliveryAnalysis([f.summary]).rows[0].metric!;
+  assert.deepEqual(result.commits.map(c => c.origin), ["first", ...Array(3).fill("review"), ...Array(7).fill("pipeline"), ...Array(4).fill("review")]);
+  assert.deepEqual(result.rework, { first: 0, pipeline: 14, review: 14, other: 0 });
+  assert.match(result.commits[1].origin_evidence!.join(" "), /review-1/);
+});
+
+test("推送时先保存区间，Git 采集失败后仍能恢复多轮；重复登记不重复计数", async t => {
+  const f = fixture(t); f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.write("feature.cpp", "int a = 2;\n"); const ci = f.commit("ci"); f.publish(ci);
+  f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "ci", last_sha: first };
+  recordDeliveryPublication(f.summary, join(f.dir, "missing"), ci); await awaitDeliveryAnalytics();
+  f.write("feature.cpp", "int a = 3;\n"); const review = f.commit("review"); f.publish(review);
+  f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: ci };
+  recordDeliveryPublication(f.summary, undefined, review);
+  recordDeliveryPublication(f.summary, undefined, review);
+  delete f.summary.delivery!.loop;
+  const result = await collectDeliveryCode(f.summary, f.cwd, review);
+  assert.deepEqual(result.commits.map(c => c.origin), ["first", "pipeline", "review"]);
+  assert.deepEqual(result.rework, { first: 0, pipeline: 2, review: 2, other: 0 });
+});
+
+test("反馈区间交叠归混合；其他任务、仅验证通过、未处理批次不能冒充修复证据", async t => {
+  const f = fixture(t); f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
+  f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("fix"); f.publish(head);
+  f.summary.delivery!.loop = { round: 1, state: "repairing", kind: "review", last_sha: first };
+  const batch = { task_id: f.summary.id, batch_id: "ci", base_sha: first, result_head: head,
+    result_digest: "recorded", items: [{ source: "pipeline" }], status: "closed" };
+  const writeBatches = (batches: unknown[]) => f.write(".mae-flow.json", JSON.stringify({
+    step_heads: { branch_create: f.base }, delivery_loop: { batches } }));
+  writeBatches([batch, { ...batch, batch_id: "review", items: [{ source: "workspace" }] }]);
+  const mixed = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(mixed.retained.other, 1); assert.equal(mixed.commits[1].origin_evidence!.length, 2);
+  writeBatches([{ ...batch, task_id: "another-task" },
+    { ...batch, result_digest: undefined, result_head: undefined, verified_sha: head },
+    { ...batch, result_digest: undefined, status: "queued" }]);
+  const ignored = await collectDeliveryCode({ ...f.summary, workspace: join(f.dir, "fresh-task") }, f.cwd, head);
+  assert.equal(ignored.retained.review, 1);
+  writeBatches([{ ...batch, result_digest: undefined, result_head: undefined, superseded_by_push: head }]);
+  const published = await collectDeliveryCode({ ...f.summary, workspace: join(f.dir, "published-task") }, f.cwd, head);
+  assert.equal(published.retained.pipeline, 1, "被本次发布替代的流水线反馈保留修复区间");
 });

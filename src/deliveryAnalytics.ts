@@ -2,11 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { TaskSummary } from "./taskService.ts";
+import { feedbackStamp, historicalRepairIntervals, intervalOrigins, validInterval, type RepairInterval } from "./deliveryAttribution.ts";
 import { frozenTaskBaseline } from "./artifacts.ts";
 import { analyticsGit, calculateDeliveryCode } from "./deliveryAnalyticsGit.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
-interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string }
+interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[] }
 type Task = Pick<TaskSummary, "id" | "workspace">;
 type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin">;
 function location(task: Task): string {
@@ -40,9 +41,30 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 
 // Cache the evidence used, not just the code version. Old snapshots are upgraded
 // once and late repair evidence can update an already sampled push.
-function attributionKey(summary: CollectionTask): string {
+function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([2, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha]);
+  return JSON.stringify([3, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
+}
+
+function currentInterval(summary: CollectionTask, head: string): RepairInterval {
+  return { base: summary.delivery?.loop?.last_sha ?? "", head, origin: repairOrigin(summary.delivery?.loop) as RepairInterval["origin"],
+    foreign: summary.delivery?.foreign_commits?.base_sha, evidence: `${repairOrigin(summary.delivery?.loop) === "pipeline" ? "流水线" : repairOrigin(summary.delivery?.loop) === "review" ? "检视" : "混合或其他"}修复轮次 ${summary.delivery?.loop?.round ?? ""}` };
+}
+
+/** Persist the small attribution fact before starting best-effort Git work.
+ * A process restart or failed sampler must not erase previous repair rounds. */
+export function recordDeliveryPublication(summary: TaskSummary, cwd: string | undefined, head: string): void {
+  if (summary.origin === "issue") return;
+  try {
+    const saved = read(summary);
+    const interval = currentInterval(summary, head);
+    if (validInterval(interval)) {
+      const intervals = [...(saved?.intervals ?? [])];
+      if (!intervals.some(i => JSON.stringify(i) === JSON.stringify(interval))) intervals.push(interval);
+      save(summary, { version: 1, head: saved?.head ?? head, ...saved, intervals });
+    }
+  } catch { /* Analytics must never block a real push. */ }
+  observeDeliveryCode(summary, cwd, head, true);
 }
 
 const pending = new Map<string, Promise<void>>();
@@ -53,14 +75,14 @@ export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefine
   if (!cwd || !/^[a-f0-9]{40,64}$/.test(head) || summary.origin === "issue") return;
   const snapshot: CollectionTask = { id: summary.id, workspace: summary.workspace,
     origin: summary.origin, delivery: structuredClone(summary.delivery) };
-  const attribution = attributionKey(snapshot);
+  const attribution = attributionKey(snapshot, cwd);
   const key = `${location(summary)}:${head}:${attribution}`;
   const saved = read(summary);
   if (pending.has(key) || saved?.head === head && saved.attribution === attribution && !retry) return;
   const job = lane.then(async () => {
     try { await collectDeliveryCode(snapshot, cwd, head); }
     catch (error) {
-      try { save(snapshot, { version: 1, head, metric: read(snapshot)?.metric, attribution, error: error instanceof Error ? error.message : "统计暂不可用" }); } catch { /* read-side only */ }
+      try { save(snapshot, { ...read(snapshot), version: 1, head, attribution, error: error instanceof Error ? error.message : "统计暂不可用" }); } catch { /* read-side only */ }
     }
   }).finally(() => pending.delete(key));
   pending.set(key, job);
@@ -69,6 +91,7 @@ export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefine
 export async function awaitDeliveryAnalytics(): Promise<void> { await lane; }
 
 export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
+  const attribution = attributionKey(summary, cwd);
   const previous = read(summary)?.metric;
   if (!previous && summary.delivery?.foreign_commits) throw new Error("首次取样前已混入外来提交，无法确认本任务首次提交");
   const taskBase = await frozenTaskBaseline(cwd);
@@ -82,37 +105,35 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     : (await analyticsGit(cwd, ["merge-base", "--all", head, `refs/remotes/origin/${target}`])).trim();
   if (base === head) throw new Error("目标分支已包含交付版本，缺少合入前统计快照；不倒推历史占比");
   const origins: Record<string, CodeOrigin> = Object.fromEntries((previous?.commits ?? []).map(c => [c.sha, c.origin]));
-  const loop = summary.delivery?.loop;
-  const category = repairOrigin(loop);
-  // The repair anchor bounds the evidence; sampling cadence is irrelevant.
-  // A missing/rebased anchor only loses attribution, never the entire metric.
-  const anchor = loop?.last_sha;
-  let validAnchor = false;
-  if (anchor && /^[a-f0-9]{40,64}$/.test(anchor) && category !== "other") {
-    try {
-      await analyticsGit(cwd, ["merge-base", "--is-ancestor", anchor, head]);
-      validAnchor = true;
-    } catch { /* no usable repair interval */ }
+  const evidence: Record<string, string[]> = Object.fromEntries((previous?.commits ?? []).filter(c => c.origin_evidence).map(c => [c.sha, c.origin_evidence!]));
+  const fallback = await intervalOrigins(cwd, head, [currentInterval(summary, head)]);
+  for (const [sha, origin] of Object.entries(fallback.origins)) {
+    if (!origins[sha] || origins[sha] === "other") { origins[sha] = origin; evidence[sha] = fallback.evidence[sha]; }
   }
-  if (validAnchor) {
-    const foreign = summary.delivery?.foreign_commits?.base_sha;
-    const changed = (await analyticsGit(cwd, ["rev-list", "--first-parent", "--no-merges", `${anchor}..${head}`, `^${base}`,
-      ...(foreign && /^[a-f0-9]{40,64}$/.test(foreign) ? [`^${foreign}`] : [])])).trim().split("\n").filter(Boolean);
-    for (const sha of changed) {
-      // Previously evidenced rounds must not be relabelled by a later round.
-      if (!origins[sha] || origins[sha] === "other") origins[sha] = category;
-    }
-  }
+  const published = await intervalOrigins(cwd, head, read(summary)?.intervals ?? []);
+  Object.assign(origins, published.origins);
+  const historical = await intervalOrigins(cwd, head, historicalRepairIntervals(cwd, summary.id));
+  // Completed feedback facts are more specific than the mutable current loop.
+  // Overlapping CI/review batches remain mixed, independent of read order.
+  Object.assign(origins, historical.origins);
+  Object.assign(evidence, published.evidence, historical.evidence);
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins });
   // Preserve cumulative events even if the target has absorbed an earlier part.
   if (previous) {
     const commits = new Map(previous.commits.map(c => [c.sha, c]));
     for (const commit of metric.commits) commits.set(commit.sha, commit);
     metric.commits = [...commits.values()];
+    for (const commit of metric.commits) if (commit.sha !== metric.first && origins[commit.sha]) commit.origin = origins[commit.sha];
     metric.rework = emptyOrigins();
     for (const commit of metric.commits) if (commit.sha !== metric.first) metric.rework[commit.origin] += commit.additions + commit.deletions;
   }
-  save(summary, { version: 1, head, metric, attribution: attributionKey(summary) });
+  for (const commit of metric.commits) {
+    commit.origin_evidence = commit.sha === metric.first ? ["任务基线后的首个非合并提交"]
+      : evidence[commit.sha] ?? commit.origin_evidence ?? [commit.origin === "other"
+        ? "缺少覆盖该提交的修复区间证据" : "此前推送快照保留的分类"];
+  }
+  save(summary, { version: 1, head, metric, intervals: read(summary)?.intervals,
+    attribution });
   return metric;
 }
 
