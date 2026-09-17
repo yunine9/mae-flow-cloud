@@ -59,6 +59,18 @@ test("matchProductVersion:包含命中,多命中取最长,未命中与无版本�
   assert.equal(matchProductVersion([], B_VERSION), undefined);
 });
 
+test("mock 详情必须携带版本:发起的分支硬闸按 detail.version 解析基线", async () => {
+  // 回归钉(8787 实测):mock 列表带版本、详情不带,列上明明有分支,
+  // 发起却被硬闸以「未能读取单据版本」打回——详情与列表必须同源。
+  const dts = new MockDtsGateway();
+  const briefs = await dts.listByOwner("dev");
+  const withVersion = briefs.find(t => t.version);
+  assert.ok(withVersion?.version, "mock 数据集里应有带版本的单");
+  const detail = await dts.detail(withVersion.ticket);
+  assert.equal(detail.version, withVersion.version,
+    "detail.version 必须与列表同源(分支硬闸的解析输入)");
+});
+
 test("HTTP:列表与详情逐单带分支(最长命中),未配置的单不带分支字段", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-branch-http-"));
   const auth = new LocalAuth(join(dir, "auth.json"));

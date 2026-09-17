@@ -657,11 +657,15 @@ export class MockDtsGateway implements DtsGateway {
     const known = loadMockTickets(this.source).find((item) => item.ticket === ticket);
     if (known) {
       this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
+      // version 必须随详情走:发起的分支硬闸按单据版本解析基线
+      // (ADR-0038),列表有、详情没有就会"列上带分支、发起却说
+      // 读不到版本"的精神分裂。
       if (known.content) {
         return {
           ticket: known.ticket,
           title: known.title,
           status: known.status,
+          ...(known.version ? { version: known.version } : {}),
           ...(known.description ? { description: known.description } : {}),
           content: known.content,
         };
@@ -670,6 +674,7 @@ export class MockDtsGateway implements DtsGateway {
         ticket: known.ticket,
         title: known.title,
         status: known.status,
+        ...(known.version ? { version: known.version } : {}),
         content:
           `【MOCK 单据】${known.title}\n\n`
           + `单号: ${known.ticket}\n状态: ${known.status ?? "打开"}\n`
