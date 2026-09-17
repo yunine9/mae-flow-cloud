@@ -155,20 +155,23 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration,
     /selectedVersions\.length > 0 \|\| launchFilterActive/);
   // 已发起的行:我名下的勾选禁用(悬停说明);未配置分支的行同样禁
-  // (ADR-0038,禁发起双闸的前端一侧)。徽标可点跳进该会话;
-  // 全选只作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  // (ADR-0038,禁发起双闸的前端一侧)。徽标是新页签链接(ADR-0040),
+  // 直接开该单名下的进行中会话;全选只作用于可勾行。刷新回默认态
+  // (打开/刷新 = 只看未发起)。
   assert.match(registration, /disabled=\{!!mineLive \|\| !ticket\.branch\}/);
-  assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
+  assert.match(registration,
+    /href=\{issueSessionPath\(liveIssue\.id\)\}\s*\n?\s*target="_blank" rel="noreferrer"/);
   assert.match(registration, /const selectableTickets = display/);
   assert.match(registration,
     /setShowUnlaunched\(true\);\s*\n\s*setShowLaunched\(false\);/);
   // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
-  // button 不许回流(徽标走 ui/button 包装层,#256 收编纪律)。
+  // button 不许回流(徽标是等价复刻 ghost/xs 盒感的锚点,ADR-0040
+  // 新页签链接,不再是按钮)。
   assert.match(registration, /function isLiveIssue\(/);
   assert.match(registration, /const mineLiveByTicket = useMemo/);
   assert.doesNotMatch(registration, /hover:opacity-75/);
   assert.match(registration,
-    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},\$\{mineLive \? "点击打开" : "点击查看"\}`\}/);
+    /className="group\/live inline-flex h-6 items-center[\s\S]{0,400}title=\{`\$\{liveTip\},\$\{mineLive \? "点击打开" : "点击查看"\}`\}/);
   // 协助处理(2026-09-17):名下视角可切换——默认自己,?owner= 指名
   // 看别人名下;发起后归属仍是登录人。徽标/过滤认展示名册(协助视角
   // =全团队,?scope=all 读侧同尺开放),拦截仍只认我的名册(接管正是
@@ -181,9 +184,12 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
     "拉单必须带当前视角的名下账号(?owner= 透传)");
   assert.match(registration,
     /const shownLiveByTicket = assistMode \? teamLiveByTicket : mineLiveByTicket/);
-  // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
+  // IssueBoard 贯通(ADR-0040):登记成功两路回调——手工登记只刷列表
+  // (成功提示里给「打开工作台」链接),DTS 发起刷列表并切「问题会话」
+  // 子页签;onOpenIssue 深链机制不再服务徽标/点卡(卡片即链接)。
   assert.match(issueBoard,
-    /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);
+    /<IssueRegistration[\s\S]{0,600}onRegistered=\{refreshList\}/);
+  assert.match(issueBoard, /onChildTabChange\?\.\("sessions"\)/);
 });
 
 test("问题卡单选组支持读屏分组和方向键 roving focus", () => {
@@ -700,14 +706,15 @@ test("团队看板问题卡片入口行为不变:点击即进,不含归属判断
     resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
   const overviewRow = readFileSync(
     resolve("web/src/TaskOverviewRow.tsx"), "utf-8");
-  // 入口语义(spec 拍板):纯 onOpen 回调,文案与行为不因身份变化;
-  // 非归属人点开即达,查看模式在会话工作台内部呈现,卡片不做归属裁剪。
-  // 卡片已收敛为 TaskOverviewRow 单形态(与任务行同款,整行可点即进)。
-  assert.match(teamCard, /onOpen: \(\) => void/);
+  // 入口语义(spec 拍板;ADR-0040 起新页签直达):卡片自带链接,文案与
+  // 行为不因身份变化;非归属人点开即达,查看模式在会话工作台内部呈现,
+  // 卡片不做归属裁剪。卡片已收敛为 TaskOverviewRow 单形态(与任务行
+  // 同款版式;问题行是 href 锚点、任务行仍是 onOpen 按钮)。
   assert.match(teamCard, /<TaskOverviewRow issue /);
-  assert.match(teamCard, /onOpen=\{onOpen\}/);
-  assert.match(overviewRow, /onClick=\{onOpen\}/);
-  assert.match(overviewRow, /打开\$\{issue \? "问题" : "任务"\}工作台/);
+  assert.match(teamCard, /href=\{issueSessionPath\(issue\.id\)\} \/>/);
+  assert.match(overviewRow, /onClick: onOpen/, "任务行仍走按钮页内打开");
+  assert.match(overviewRow,
+    /const openLabel = `打开\$\{issue \? "问题" : "任务"\}工作台：\$\{title\}`;/);
   // 固化现状:卡片不出现任何身份/归属判断(陈列 issue.account 不算判断)。
   assert.doesNotMatch(teamCard, /canOperate|isOwner|viewerUsername|viewer\.|username/);
 });
@@ -1378,15 +1385,23 @@ test("登记页从环境管理选(#150;只选不手填):常驻快选/提交 envi
   assert.match(registration, /请从环境管理选择网管环境/);
 });
 
-test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役(2026-09-11)", () => {
+test("问题列表卡:整卡新页签直达工作台(ADR-0040),展开态与逐卡轮询退役", () => {
   const ui = readFileSync(resolve("web/src/components/ui/card.tsx"), "utf-8");
-  // 整卡=进工作台的按钮(summary 按钮改语义,不再带 aria-expanded 开关),
-  // 悬停提示去向;展开体/展开箭头/展开状态机清零。
+  // 整卡=拉伸锚点(absolute inset-0 盖满卡面,新页签打开 /issues/:id):
+  // 路径单源 issueLink.ts;task-summary 退为布局容器,不再承载点击。
+  // 展开体/展开箭头/展开状态机清零。
   assert.match(issueBoard,
-    /<button type="button" className="task-summary" onClick=\{onOpen\}/);
-  assert.match(issueBoard, /title="进入问题工作台"/);
+    /<a className="absolute inset-0 z-\[1\]"\s*\r?\n\s*href=\{issueSessionPath\(issue\.id\)\}/);
+  assert.match(issueBoard, /title="在新页签打开问题工作台"/);
+  assert.match(issueBoard, /import \{ issueSessionPath \} from "\.\/issueLink";/);
+  assert.match(issueBoard, /<div className="task-summary">/);
   assert.doesNotMatch(issueBoard,
     /aria-expanded|setExpanded|task-detail-body|task-chevron/);
+  // 卡内动作与拉伸锚点是兄弟关系(锚点嵌锚点是非法 HTML):单号链接
+  // 与 meta 行以 z-10 浮在锚点上方,stopPropagation 随按钮壳退役。
+  assert.match(issueBoard, /task-ticket relative z-10/);
+  assert.match(issueBoard, /className="task-meta relative z-10"/);
+  assert.doesNotMatch(issueBoard, /stopPropagation/);
   // 文字入口「进入问题工作台」删除——点击即达,不留第二入口;
   // 直达终止(2026-09-08)保留,终态卡不渲染终止钮的口径不变。
   assert.doesNotMatch(issueBoard, /panel-link/);
@@ -1422,6 +1437,42 @@ test("问题列表卡:点击整卡直达工作台,展开态与逐卡轮询退役
   assert.match(ui, /rounded-lg border border-solid/);
 });
 
+test("问题工作台独立页签(ADR-0040):入口一律新页签,页内 overlay 退役", () => {
+  const sessionView = readFileSync(
+    resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const issueLink = readFileSync(
+    resolve("web/src/issues/issueLink.ts"), "utf-8");
+  const teamIssueCard = readFileSync(
+    resolve("web/src/issues/TeamIssueCard.tsx"), "utf-8");
+  // 深链路径单源:issueLink.ts 是前端唯一拼写处(卡片/徽标/团队卡同吃)。
+  assert.match(issueLink,
+    /\/issues\/\$\{encodeURIComponent\(id\)\}/);
+  // 工作台是页面不再是弹层:dialog/aria-modal 语义退役;页签标题钉成
+  // 单号/标题(无单用会话标题),多开页签可辨识。
+  assert.doesNotMatch(sessionView, /role="dialog"|aria-modal/);
+  assert.match(sessionView,
+    /document\.title = detail\.ticket\s*\r?\n\s*\? `\$\{detail\.ticket\} · \$\{detail\.title\}`\s*\r?\n\s*: detail\.title;/);
+  // App 层:openIssueSession 收窄为页内切会话(挂起转正),closeIssueSession
+  // pushState 裸 /issues 留历史(浏览器后退回工作台),不依赖 window.close。
+  assert.match(appSource,
+    /const closeIssueSession = \(\) => \{\s*\r?\n\s*history\.pushState\(appHistoryState\("issues", undefined, "sessions"\),\s*\r?\n\s*"", "\/issues"\);/);
+  assert.doesNotMatch(appSource, /window\.close\(\)/);
+  // 团队问题卡:整行即新页签链接,不再回调跳转。
+  assert.match(teamIssueCard,
+    /href=\{issueSessionPath\(issue\.id\)\} \/>/);
+  assert.doesNotMatch(teamIssueCard, /onOpen/);
+  // 渲染门页面形态:URL 指向会话时整页只有工作台——加载态/失败态
+  // (重试 + 返回)自渲染,列表不再叠在底下当背景。
+  assert.match(issueBoard, /if \(openId\) \{/);
+  assert.match(issueBoard, /正在打开问题工作台…/);
+  assert.match(issueBoard, /onClick=\{\(\) => setDetailRetry\(\(count\) => count \+ 1\)\}>重试/);
+  // 登记成功不自动跳(异步回调 window.open 会被弹窗拦截器杀掉):
+  // 手工登记成功提示给「打开工作台」链接(新页签)。
+  assert.match(registration,
+    /href=\{issueSessionPath\(lastCreated\.id\)\}/);
+  assert.match(registration, /打开工作台 ↗/);
+});
+
 test("DTS 单号在两个列表里都是门户超链接", () => {
   // URL 构造器单源:dtsTicket.ts 是前端唯一拼写处;示例即用户给的
   // 真实门户地址形态,拼错一个字符就该红。
@@ -1433,10 +1484,11 @@ test("DTS 单号在两个列表里都是门户超链接", () => {
   assert.match(registration,
     /href=\{dtsTicketUrl\(ticket\.ticket\)\}\s*target="_blank" rel="noreferrer"/);
   assert.match(registration, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
-  // 问题会话列表卡:单号在 task-summary 按钮内,必须 stopPropagation
-  // 拦冒泡——点单号开 DTS,不能顺带打开工作台。
+  // 问题会话列表卡:单号链接与整卡拉伸锚点是兄弟(ADR-0040),单号
+  // relative z-10 浮在锚点上方——点单号开 DTS,拉伸锚点不接事件,
+  // 无需也不再有 stopPropagation。
   assert.match(issueBoard,
-    /href=\{dtsTicketUrl\(issue\.ticket\)\}[\s\S]{0,120}onClick=\{\(event\) => event\.stopPropagation\(\)\}/);
+    /task-ticket relative z-10[\s\S]{0,120}href=\{dtsTicketUrl\(issue\.ticket\)\}/);
   assert.match(issueBoard, /import \{ dtsTicketUrl \} from "\.\/dtsTicket";/);
 });
 
@@ -1724,10 +1776,12 @@ test("资源屏蔽提示条跨全列、样式走工具类轨道(2026-09-14 设�
 test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长链断行(2026-09-14 设计审查 02)", () => {
   // 徽标是静态胶囊,悬停底色辨不出可点:内层文字挂与单号链接同款的
   // hover 下划线,键盘聚焦同款(focus-visible);下划线挂行内文字盒,
-  // 不依赖穿透 inline-flex。焦点环由 Button 基类 focus-visible:ring
-  // 自带(域内所有钮共享),此处锚结构钩子防 group/live 脱落。
+  // 不依赖穿透 inline-flex。ADR-0040 起徽标整体是新页签锚点(等价复刻
+  // ghost/xs 盒感 + 自带 focus-visible:ring 锚点类),group/live 结构
+  // 钩子防脱落。
   assert.match(registration,
-    /variant="ghost" size="xs"\s+className="group\/live"/);
+    /className="group\/live inline-flex h-6 items-center/);
+  assert.match(registration, /focus-visible:ring-3 focus-visible:ring-ring\/50/);
   assert.match(registration,
     /group-hover\/live:underline group-focus-visible\/live:underline/);
   // 上传进行态挂 role=status,与其余进行态一致;指示住编辑器内右上角

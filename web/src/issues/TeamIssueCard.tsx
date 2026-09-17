@@ -4,15 +4,14 @@
  * EventsPane),不破坏问题处理页的懒加载分包。
  *
  * 与 TaskCard 共用 task-overview-row class,列表混排视觉一致;
- * 整行可点,点击由父级接管(切到问题处理 tab + 设路由)。
+ * 整行是新页签链接(ADR-0040):打开问题工作台不再页内跳转,
+ * 团队页现场不被带走。
  */
 import { TaskOverviewRow } from "../TaskOverviewRow";
 import { ISSUE_STATUS_TEXT, issueStageText, type IssueSummary } from "../api";
+import { issueSessionPath } from "./issueLink";
 
-export function TeamIssueCard({ issue, onOpen }: {
-  issue: IssueSummary;
-  onOpen: () => void;
-}) {
+export function TeamIssueCard({ issue }: { issue: IssueSummary }) {
   const stageLine = [
     issueStageText(issue),
     issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
@@ -20,5 +19,6 @@ export function TeamIssueCard({ issue, onOpen }: {
   ].join("");
   return <TaskOverviewRow issue id={issue.id} ticket={issue.ticket}
     title={issue.title} status={issue.status} statusLabel={ISSUE_STATUS_TEXT[issue.status]}
-    owner={issue.account} updatedAt={issue.updated_at} detail={stageLine} onOpen={onOpen} />;
+    owner={issue.account} updatedAt={issue.updated_at} detail={stageLine}
+    href={issueSessionPath(issue.id)} />;
 }
