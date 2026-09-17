@@ -10,12 +10,16 @@ import { renderAnnotations } from "../annotations.ts";
  * 是唯一的分叉点:单文档、无逐文件分组,护栏原文沿用(它们是
  * 对着弱模型踩出来的契约,不在这儿各写各的)。
  *
- * 闭环刻意从简(ADR-0007):不做逐条回执与逐条裁决——锚点徽标
- * (reanchor 白送,只服务草稿:ADR-0025)+ 修订后的新版报告 +
- * 分析确认卡上的整体把关。
+ * 闭环(ADR-0035 检视分诊):意见递给 AI 逐条自判回复型/修改型——
+ * 回复型(澄清、追问、确认语义)在意见处 respond 回复(AnnotationStore
+ * 的 respond 操作,对齐需求侧批注回复的呈现),原地闭环:不回退、
+ * 不重跑、不出版本、不再举确认卡;含修改型的批次才由 AI 申报
+ * (declare_review_rework)触发整体回退重写(ADR-0007 链路),版本
+ * 快照在申报时刻冻结。锚点徽标(reanchor 白送,只服务草稿:ADR-0025)
+ * 与新版报告上的整体把关照旧。
  */
 
-import { existsSync, mkdirSync, readFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, copyFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AnnotationStore,
@@ -106,27 +110,14 @@ export function anchorChecks(root: string): AnchorCheck[] {
     artifact === ANALYSIS_DOC_NAME ? text : undefined);
 }
 
-/** 提交检视:草稿清单 + 送出标记 + 被检视报告的版本快照。 */
+/** 提交检视:草稿清单 + 送出标记。版本快照不在这里(ADR-0035):
+ * 提交不再无条件伴重写,快照时机迁到修改型申报触发整体回退时
+ * (snapshotAnalysisVersion),纯回复型批次不出版本。 */
 export function submitReviews(root: string, ids?: string[]): Annotation[] {
   const store = reviewStore(root);
   const drafts = store.list().filter(item => pendingReviewAnnotation(item)
     && (ids ? ids.includes(item.id) : !item.external_review));
   if (!drafts.length) return [];
-  if (existsSync(join(root, ANALYSIS_DOC_NAME))) {
-    // 版本快照(ADR-0007 Q10):agent 修订会整份重写报告,快照让意见
-    // 锚定的原文永远可对照。写不进不挡提交(fail-open,意见本身带
-    // 原文快照,损失的只是全文对照)。
-    try {
-      mkdirSync(join(root, REVIEWS_DIR), { recursive: true });
-      copyFileSync(
-        join(root, ANALYSIS_DOC_NAME),
-        join(root, REVIEWS_DIR,
-          `issue-analysis@r${Date.now().toString(36)}.md`),
-      );
-    } catch {
-      // 快照失败不挡检视。
-    }
-  }
   for (const item of drafts) if (item.external_review) store.assignToAgent(item.id, item.assignee ?? item.author);
   store.markSent(drafts.map((item) => item.id), "issue_review");
   // 送出态从台账重放取(不手拼字段):账本是唯一真相。
@@ -135,18 +126,79 @@ export function submitReviews(root: string, ids?: string[]): Annotation[] {
     .filter((item) => sentIds.has(item.id)));
 }
 
+/** reviews/ 内既有快照的最新冻结时刻(读自己写出的文件名时间戳;
+ * 目录不存在=0)。批次边界与读侧(analysisVersions.ts)同一形状。 */
+function lastSnapshotStampMs(root: string): number {
+  let floor = 0;
+  try {
+    for (const entry of readdirSync(join(root, REVIEWS_DIR), { withFileTypes: true })) {
+      const stamp = entry.isFile()
+        ? /^issue-analysis@r([0-9a-z]+)\.md$/.exec(entry.name) : null;
+      if (stamp) floor = Math.max(floor, Number.parseInt(stamp[1], 36));
+    }
+  } catch {
+    // reviews/ 还不存在:floor=0,首批意见全部待覆盖。
+  }
+  return floor;
+}
+
+/** 当前检视批:已送出且未被任何快照覆盖的意见(送出时刻晚于最新
+ * 快照时刻)。申报修改的「回退重写」以它为对象;更早批次的意见已
+ * 锚在自己的冻结版上,不再混进新一轮清单。 */
+export function outstandingReviewBatch(root: string): Annotation[] {
+  const floor = lastSnapshotStampMs(root);
+  return reviewStore(root).list().filter((item) =>
+    item.status === "sent" && item.sent_via === "issue_review"
+    && Date.parse(String(item.sent_at ?? "")) > floor);
+}
+
+/** 版本快照——修改型申报触发整体回退重写时冻结(ADR-0035)。文件名
+ * 时刻取当前批最早的送出时刻:读侧批次推导(sent_at 落在相邻快照
+ * 时刻之间即该批)在新时机(送出在先、冻结在后)与旧时机(提交即
+ * 冻结)下都把意见对回它锚定的那一版;报告不在场不落,写失败不挡
+ * 申报(fail-open,意见自带原文快照,损失的只是全文对照)。 */
+export function snapshotAnalysisVersion(root: string): void {
+  if (!existsSync(join(root, ANALYSIS_DOC_NAME))) return;
+  const batch = outstandingReviewBatch(root);
+  let stampMs = Number.NaN;
+  for (const item of batch) {
+    const at = Date.parse(String(item.sent_at ?? ""));
+    if (Number.isFinite(at)
+        && (Number.isNaN(stampMs) || at < stampMs)) {
+      stampMs = at;
+    }
+  }
+  if (Number.isNaN(stampMs)) stampMs = Date.now();
+  try {
+    mkdirSync(join(root, REVIEWS_DIR), { recursive: true });
+    copyFileSync(
+      join(root, ANALYSIS_DOC_NAME),
+      join(root, REVIEWS_DIR,
+        `issue-analysis@r${stampMs.toString(36)}.md`),
+    );
+  } catch {
+    // 快照失败不挡申报。
+  }
+}
+
 /**
  * 渲染成给模型的意见清单。护栏与 annotations.ts 的 renderAnnotations
  * 同一份契约原文(逐条落实/只改这些/以原文定位/逐条回话);差异有三:
  * 抬头(单文档、意见数量)、问题域独有的「检视意见回应」段要求
  * (ADR-0025:修订版报告开头按意见号逐条答复,软性章节,不进五章节
  * 机械门票)与收尾(修订完重新 submit_analysis)。
+ *
+ * mode(ADR-0035 检视分诊):"rework"(默认)= 修改型重写的正式通道,
+ * 契约原文不变;"triage" = 提交检视时随清单递给 AI 的分诊版——不预设
+ * 整批重写,判断准则与 respond_review/declare_review_rework 用法在
+ * 提示词资产(notices.review.triage),这里只保留抬头、共用的定位
+ * 护栏与带号清单。
  */
 export function renderReviewNotes(
   items: Annotation[],
   title: string,
   round: number,
-  incremental = false,
+  mode: "rework" | "triage" = "rework",
 ): string {
   if (items.some(item => item.external_review)) return renderAnnotations(items, title)
     + "\n这些是责任人明确选择的修改意见。按责任人补充要求处理，只回应本批；未选的外部报告不构成修复任务。本地处理不自动代表远端 resolve。";
@@ -161,22 +213,39 @@ export function renderReviewNotes(
     return item as Annotation & { seq: number };
   }).sort((left, right) => left.seq - right.seq);
   const lines: string[] = [
-    `这是我人工检视《${title}》分析报告(issue-analysis.md)的结果,`
-      + `共 ${ordered.length} 条意见。这是第 ${round} 轮分析——请按意见修订报告与方案。`,
-    "",
-    "几点要求:",
-    "- 这是检视结论,不是征求意见。逐条落实,不要只回复\"已知悉\"。",
-    "- 只按这些意见修订。确实要连带改别处,先说清为什么,再动。",
-    "- 行号仅为历史参考。每条修改前读取当前文件，以原文为准定位，结合批注时上下文核对；处理上一条后重新核对后续位置，不沿用旧行号。",
-    "- 找不到原文或匹配多处时先检查当前实现；无法确认就说明，不猜位置、不把原文消失当作已修复，可继续处理其他意见。",
-    "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
-    // 意见号回应段(#261,ADR-0025):修订版报告开头按意见号逐条答复。
-    // 靠提示词护栏执行,不进 submit_analysis 的五章节机械门票。
-    "- 修订版报告的开头加一段「检视意见回应」:按意见号逐条答复,"
-      + "写清每条改了什么/答了什么。未被采纳或仅是提问的意见也要逐条"
-      + "给交代,不许漏号。",
+    mode === "triage"
+      ? `这是我人工检视《${title}》分析报告(issue-analysis.md)的结果,`
+        + `共 ${ordered.length} 条意见。请先逐条分诊再动手,不要不分类`
+        + "就整批重写。"
+      : `这是我人工检视《${title}》分析报告(issue-analysis.md)的结果,`
+        + `共 ${ordered.length} 条意见。这是第 ${round} 轮分析——请按意见修订报告与方案。`,
     "",
   ];
+  if (mode === "rework") {
+    lines.push(
+      "几点要求:",
+      "- 这是检视结论,不是征求意见。逐条落实,不要只回复\"已知悉\"。",
+      "- 只按这些意见修订。确实要连带改别处,先说清为什么,再动。",
+    );
+  }
+  lines.push(
+    // 定位护栏两版共用:分诊回合里 respond 也要按原文核对意见。
+    "- 行号仅为历史参考。每条修改前读取当前文件，以原文为准定位，结合批注时上下文核对；处理上一条后重新核对后续位置，不沿用旧行号。",
+    "- 找不到原文或匹配多处时先检查当前实现；无法确认就说明，不猜位置、不把原文消失当作已修复，可继续处理其他意见。",
+  );
+  if (mode === "rework") {
+    lines.push(
+      "- 逐条回我改了什么。有哪条你认为不该改,说明理由,别默默跳过。",
+      // 意见号回应段(#261,ADR-0025):修订版报告开头按意见号逐条答复。
+      // 靠提示词护栏执行,不进 submit_analysis 的五章节机械门票。
+      "- 修订版报告的开头加一段「检视意见回应」:按意见号逐条答复,"
+        + "写清每条改了什么/答了什么。未被采纳或仅是提问的意见也要逐条"
+        + "给交代,不许漏号。",
+      "",
+    );
+  } else {
+    lines.push("");
+  }
   // 清单序号 = 意见号(#261):展示与 AI 引用统一用「意见N」,不再是批次
   // 内 1..N 重新编号——号跨批次连续,带号的回应才能在整个会话内唯一定位。
   for (const item of ordered) {
@@ -189,8 +258,8 @@ export function renderReviewNotes(
     lines.push(`   要求:${item.note}`);
   }
   lines.push("");
-  lines.push(incremental
-    ? "结合当前工作处理本批意见。只在确实需要重新提交分析结论时使用 submit_analysis；报告措辞或局部修改不要求重跑整个流程。逐条说明处理结果和必要的验证。"
-    : "修订完成后重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
+  if (mode === "rework") {
+    lines.push("修订完成后重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
+  }
   return lines.join("\n");
 }

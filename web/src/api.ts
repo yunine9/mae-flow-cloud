@@ -4501,14 +4501,18 @@ export async function getIssueAnalysisVersion(
 
 // ---- 检视(分析报告正文下方的检视区;ADR-0007,服务端 reviews.ts) ----
 
-/** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;response/
- * verified 等逐条闭环字段是需求流闭环的,问题域不出,故不镜)。 */
+/** 服务端 Annotation 的 wire 镜像(问题域只用 doc 一类;verified 等
+ * 逐条裁决字段是需求流闭环的,问题域不出,故不镜;response 自
+ * ADR-0035 检视分诊起随回复型意见出)。 */
 export interface IssueReview {
   external_review?: Annotation["external_review"];
   agent_context?: Annotation["agent_context"];
   agent_assigned?: boolean;
   owner_reply?: Annotation["owner_reply"];
   resolution?: Annotation["resolution"];
+  /** AI 的逐条回复(ADR-0035):回复型意见由 respond_review 原地答复,
+   * 检视面板在该意见下只读呈现(需求侧批注回复同款体验)。 */
+  response?: Annotation["response"];
   quote?: string;
   line_end?: number;
   id: string;

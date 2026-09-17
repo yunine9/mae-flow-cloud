@@ -210,10 +210,13 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
 
 // 调查、测试取证和阶段性交付是通用能力;移除仓(#240)跟随用户指派,
 // 全程可调(门禁在工具层:模块绑定仓/远端分支在/不可判定三类机械拒)。
-// 阶段只组织出口,不禁止工具。无单仍不交付代码;仓、分支、真实推送
-// 和用户已选择的过目策略仍由工具核对。
+// 检视分诊(ADR-0035):respond_review/declare_review_rework 同样全程
+// 可调——意见可能在任何阶段送达,分诊不受阶段门禁管辖(提交通道本就
+// 运行中交办,#284)。阶段只组织出口,不禁止工具。无单仍不交付代码;
+// 仓、分支、真实推送和用户已选择的过目策略仍由工具核对。
 for (const spec of Object.values(FIXED_STAGE_SPECS)) {
-  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut", "push_branch", "create_mr"]) {
+  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut", "push_branch", "create_mr",
+    "respond_review", "declare_review_rework"]) {
     if (!spec.tools.some(tool => tool.name === name)) spec.tools = [...spec.tools, { name }];
   }
 }

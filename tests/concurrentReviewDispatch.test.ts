@@ -39,7 +39,10 @@ test("运行中连续批量交办：立即 steer，批次不混入未来草稿�
   assert.match(result.stage_note, /已接收 1 条/);
   assert.equal(messages.length, 1);
   assert.match(messages[0], /修改两行代码/);
-  assert.match(messages[0], /独立调查和只读检查可并行/);
+  // ADR-0035 检视分诊:意见递给 AI 时带分诊准则(回复型 respond、
+  // 修改型申报),不再无条件按"结合当前工作修改"处理。
+  assert.match(messages[0], /检视意见分诊/);
+  assert.match(messages[0], /respond_review/);
   add(service, "第二批：补充一条 UT");
   assert.doesNotMatch(messages[0], /第二批/);
   service.submitReviews(live.id);

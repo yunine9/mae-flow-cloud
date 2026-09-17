@@ -587,6 +587,28 @@ test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id �
   assert.doesNotMatch(reviewCard, /item\.id/);
 });
 
+// ---- 检视分诊(ADR-0035):AI 的逐条回复落账后在该意见下只读呈现,
+// ---- 需求侧批注回复同款体验;纯读面,不挂归属条件。
+
+test("检视意见面板呈现 AI 回复(ADR-0035):response 只读块挂意见卡下,结果词与回复原文在", () => {
+  const reviewCard = materials.slice(
+    materials.indexOf("function reviewOutcomeLabel"),
+    materials.indexOf("function IssueReviewPanel"));
+  // 回复块挂在 item.response 在场时;回复原文(不是"已处理"三字糊弄)
+  // 是主内容,evidence 只作补充行。
+  assert.match(reviewCard, /\{item\.response && <div/);
+  assert.match(reviewCard, /Agent 的回复/);
+  assert.match(reviewCard, /\{item\.response\.summary\}/);
+  assert.match(reviewCard, /依据 \{item\.response\.evidence\.join\("；"\)\}/);
+  // 结果词与需求侧同话术(response 是机器事实,不是验收)。
+  assert.match(reviewCard, /"已处理"/);
+  assert.match(reviewCard, /"没有修改"/);
+  assert.match(reviewCard, /"需要你补充说明"/);
+  // wire 镜像带 response 字段(ADR-0035 起问题域随回复型意见出)。
+  const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.match(api, /response\?: Annotation\["response"\]/);
+});
+
 // ---- 新版干净纸面(ADR-0025):漂移检测与徽标只服务草稿;sent 意见
 // ---- 锚在自己批次的冻结版上,冻结文本永不漂移,不再带漂移徽标。
 

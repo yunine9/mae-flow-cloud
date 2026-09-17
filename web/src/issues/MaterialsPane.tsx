@@ -416,6 +416,14 @@ function IssueReviewBadge({ check }: { check?: IssueReviewCheck }) {
     原文仍在</Badge>;
 }
 
+/** AI 回执的结果词(与需求侧 AnnotationPanel 同一话术:response 是
+ * 机器事实,不是验收——验收仍是确认卡上的整体裁决)。 */
+function reviewOutcomeLabel(outcome: NonNullable<IssueReview["response"]>["outcome"]): string {
+  if (outcome === "fixed") return "已处理";
+  if (outcome === "not_fixed") return "没有修改";
+  return "需要你补充说明";
+}
+
 function IssueReviewItem({ item, check, onLocate, onRemove }: {
   item: IssueReview;
   check?: IssueReviewCheck;
@@ -440,6 +448,18 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
     </div>
     <blockquote className="my-1 border-l-[3px] border-line pl-2 text-muted-foreground [overflow-wrap:anywhere]">针对 {item.anchor}</blockquote>
     <p className="m-0 text-text-strong [overflow-wrap:anywhere]">{item.note}</p>
+    {/* AI 的逐条回复(ADR-0035 检视分诊):回复型意见由 respond_review
+        原地答复并落账,这里只读呈现——需求侧批注回复同款体验,已提交
+        清单是纯读面,登录访问者都可见。 */}
+    {item.response && <div className="mt-1.5 rounded-md border border-line bg-surface p-2">
+      <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+        <span className="font-bold text-text-strong">Agent 的回复</span>
+        <em className="not-italic">{reviewOutcomeLabel(item.response.outcome)}</em>
+        <time className="text-faint">{formatLocalDateTime(item.response.responded_at, { seconds: true })}</time>
+      </div>
+      <p className="m-0 mt-1 text-[13px] leading-[1.7] text-text-strong [overflow-wrap:anywhere]">{item.response.summary}</p>
+      {item.response.evidence.length > 0 && <p className="m-0 mt-0.5 text-xs text-faint [overflow-wrap:anywhere]">依据 {item.response.evidence.join("；")}</p>}
+    </div>}
   </li>;
 }
 

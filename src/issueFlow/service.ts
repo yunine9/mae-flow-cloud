@@ -4233,7 +4233,13 @@ export class IssueFlowService {
     throw new IssueControlError("请选择补充、答复或本地闭环");
   }
 
-  /** 人工批注按提交时快照交办，不因意见到达回退整个流程。 */
+  /** 提交检视(ADR-0035 检视分诊):意见送出后交 AI 逐条自判回复型/
+   * 修改型。提交只做三件事——意见标记送出、作废挂起的 Agent 问题卡
+   * (平台闸不动作废)、意见清单连同分诊准则递给 AI。不再整体回退、
+   * 不再置 review_active、不再冻结版本快照:纯回复型批次由 respond_review
+   * 原地闭环(不回退、不重跑、不出版本、不再举确认卡),含修改型才由
+   * declare_review_rework 触发原回退链路(快照在申报时刻冻结)。
+   * 落账 review_submitted 事件——协作流里"这批意见何时送的"靠它。 */
   submitReviews(id: string, ids?: string[]): IssueSummary {
     const live = this.require(id);
     const { state } = live;
@@ -4247,23 +4253,51 @@ export class IssueFlowService {
       throw new IssueControlError("没有待提交的检视意见");
     }
     const sent = submitReviewLedger(live.root, ids);
-    const notes = renderReviewNotes(sent, state.title, state.round ?? 1, true);
-    const message = [concurrentWorkPrompt(), notes].join("\n\n");
-    // 分析阶段仍由责任人确认修订结论；它不再禁止继续追加意见。
-    if (fixedStageIndex(state.scenario!, state.stage as FixedStage)
-        <= fixedStageIndex(state.scenario!, "analyze")) state.review_active = true;
-    const waiting = state.status === "waiting_user";
+    // 挂起的 Agent 问题卡先作废(有账的撤下,不是替用户作答);冲突
+    // 说明卡刚被答过/状态已变,如实打回。平台闸(分析确认/结论确认等)
+    // 保持原样不动——分诊不是裁决,待确认状态不因插话消失。
+    let supersededCard = false;
+    const pendingCard = live.humanGate?.pending()[0];
+    if (pendingCard) {
+      try {
+        live.humanGate.supersede(pendingCard.waiting_id, {
+          stateVersion: pendingCard.state_version,
+          notes: "用户提交检视意见,本卡作废,意见随分诊回合处理",
+        });
+        supersededCard = true;
+      } catch {
+        throw new IssueControlError("问题卡状态已变化,请刷新后重试");
+      }
+    }
+    const notes = renderReviewNotes(sent, state.title, state.round ?? 1, "triage");
+    const message = [
+      promptCopy("notices", "review.triage", { count: sent.length }),
+      notes,
+    ].join("\n\n");
+    // 报告确认类闸挂起 = 用户在确认前插话:开分诊回合把意见递给 AI,
+    // 闸保持原样,回合收口仍回等待确认(报告没变,不是二次确认)。
+    const reportGatePending = state.status === "waiting_user"
+      && (state.gate?.kind === "analysis_confirm"
+        || state.gate?.kind === "conclude");
     const receipt = state.status === "queued"
-      ? `已接收 ${sent.length} 条修改意见；随任务启动一起送达，不用重复提交。`
-      : waiting
-      ? `已接收 ${sent.length} 条修改意见；当前问题答复后一起送达，不用重复提交。`
-      : `已接收 ${sent.length} 条修改意见；Agent 会在当前工具结束后读取并结合处理。`;
+      ? `已接收 ${sent.length} 条检视意见；随任务启动一起送达，不用重复提交。`
+      : state.status === "waiting_user" && !reportGatePending && !supersededCard
+      ? `已接收 ${sent.length} 条检视意见；当前问题答复后一起送达，不用重复提交。`
+      : `已接收 ${sent.length} 条检视意见；AI 逐条分诊：回复型直接答复，修改型才回退重写。`;
     state.stage_note = receipt;
     saveState(live.root, state);
     this.appendSessionEvent(live, "review_submitted", {
       count: sent.length, text: notes, receipt, mode: "incremental",
     });
-    this.startPlatformTurn(live, message);
+    if ((reportGatePending || supersededCard) && !this.turning.has(live.id)) {
+      // 等待的理由已消失(闸前的插话要当场答/卡已作废):开分诊回合。
+      // 回合仍忙的窄窗口(卡刚落地未收口)不抢方向盘,走 steer 随行。
+      this.continueTurn(live, message);
+    } else {
+      // 运行中 steer 进当回合(#284 通道不变);排队/接管/非报告闸的
+      // 等待态停靠随行;空闲开新回合——投递咽喉同一。
+      this.startPlatformTurn(live, message);
+    }
     state.stage_note = receipt;
     saveState(live.root, state);
     return summarize(state);
