@@ -3718,10 +3718,11 @@ export class IssueFlowService {
     }
 
     if (verdict === "pass") {
-      // env_verify 通过:本阶段收尾,待手动归档。
+      // env_verify 通过:本阶段收尾,等合入——合入后自动归档(ADR-0034),
+      // 不再有「待归档」人工停靠。
       fixedComplete(state, VERIFY_PASS_NOTE);
       state.status = "idle";
-      state.stage_note = "环境验证通过——确认 MR 合入后可归档收口";
+      state.stage_note = "环境验证通过——等待 MR 合入,合入后自动归档收口";
       saveState(live.root, state);
       return summarize(state);
     }
@@ -4305,6 +4306,24 @@ export class IssueFlowService {
     if (this.turning.has(live.id) && input.action !== "cancel") {
       throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
     }
+    if (input.action === "archive") {
+      // 归档门禁(ADR-0034):有单会话的交付出口只有「全部 MR 合入
+      // 自动归档」,手动归档退役——它防不了错,还让任务终态含糊
+      // (没合入也能归掉)。无单会话给出结论前同样不归:结论只可能
+      // 来自 conclude 卡,挂起待转正是唯一可手动归档的无单现场。
+      const ticketed = Boolean(live.state.ticket?.trim())
+        || live.state.scenario === "ticket";
+      if (ticketed) {
+        throw new IssueControlError(
+          "有单会话不再手动归档：全部 MR 合入后自动归档收口"
+            + "（ADR-0034）；要放弃这单请取消会话");
+      }
+      if (live.state.status !== "suspended") {
+        throw new IssueControlError(
+          "无单会话给出结论（是问题挂起/非问题闭环）前不能归档"
+            + "；要放弃请取消会话");
+      }
+    }
     // 先停净再写终态。过去先清 live.container、异步 stop，接口已经回了
     // “取消成功”但 Docker 仍在；失败后也没有句柄可重试。
     const previousStatus = live.state.status;
@@ -4722,7 +4741,11 @@ export class IssueFlowService {
           || live.state.stage !== "mr_green" || !live.state.mrs?.length) {
         return;
       }
-      await this.syncMergeFacts(live);
+      const { all_merged } = await this.syncMergeFacts(live);
+      // 合入即归档(ADR-0034):全合入的有单会话在这里自动收口,不再
+      // 等人类点归档。验证 pass 后 stage 仍是 mr_green,轮询自然继续
+      // 覆盖「pass 后等待合入」窗口;回退(阶段离开 mr_green)即退出。
+      if (all_merged) this.autoArchiveDelivered(live);
       await new Promise<void>((done) => {
         const timer = setTimeout(done, pollMs);
         timer.unref?.();
@@ -4773,11 +4796,10 @@ export class IssueFlowService {
     const allMerged = mrs.length > 0 && mrs.every((mr) => Boolean(mr.merged_at));
     const anyClosed = mrs.some((mr) => Boolean(mr.closed_at));
     if (allMerged && !state.merge_noted) {
+      // 合入已入账标记。通知与收口由 autoArchiveDelivered 接管
+      // (ADR-0034):不再有「可归档收口」的人工停靠。
       state.merge_noted = true;
-      state.stage_note = "全部 MR 已合入——可归档收口";
       changed = true;
-      this.notifyMergeFact(live,
-        `全部 MR 已合入(${mrs.length} 个)——可归档收口`);
     }
     if (anyClosed && !state.mr_closed_noted) {
       state.mr_closed_noted = true;
@@ -4787,6 +4809,49 @@ export class IssueFlowService {
     }
     if (changed) saveState(live.root, state);
     return { all_merged: allMerged };
+  }
+
+  /** 合入即归档(ADR-0034):全部 MR merged 的有单会话自动收口,结论
+   * delivered;自动归档=验证通过——环境验证卡已答 pass 的自然衔接,
+   * 未答的随终态清面,统计口径视为认可(问的是「交付完成没有」,合入
+   * 事实即答案)。守闸器判据不受扰:终态被排除,pass 后停靠说明已换
+   * 口径。回合在飞不抢(下一拍再试);回退中的会话阶段已离开 mr_green,
+   * 轮询退出,到不了这里。 */
+  private autoArchiveDelivered(live: LiveIssue): void {
+    const state = live.state;
+    if (isTerminal(state.status) || this.turning.has(live.id)) return;
+    if (state.scenario !== "ticket") return;
+    const mrs = state.mrs ?? [];
+    if (!mrs.length || !mrs.every((mr) => Boolean(mr.merged_at))) return;
+    const verifySettled = this.mrGreenClosed(state)
+      || state.gate?.kind === "env_verify";
+    if (!verifySettled) return;
+    state.conclusion = {
+      kind: "delivered",
+      summary: state.last_reply || state.stage_note || "(无补充说明)",
+      at: new Date().toISOString(),
+    };
+    state.status = "archived";
+    fixedComplete(state, "全部 MR 合入,自动归档收口");
+    delete state.gate;
+    saveState(live.root, state);
+    for (const record of live.humanGate.pending()) {
+      try {
+        live.humanGate.supersede(record.waiting_id, {
+          stateVersion: record.state_version,
+          notes: "会话已自动归档,待办作废",
+        });
+      } catch (error) {
+        this.log(`[issue-flow] ${live.id} 自动归档作废待办 `
+          + `${record.waiting_id} 失败: `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }
+    this.releaseDriver(live);
+    this.stopContainerInBackground(live, "交付完成自动归档");
+    this.notifyMergeFact(live,
+      `全部 MR 已合入(${mrs.length} 个)——已自动归档收口,交付完成`);
+    this.log(`[issue-flow] ${live.id} 全部 MR 合入,自动归档收口`);
   }
 
   private notifyMergeFact(live: LiveIssue, summary: string): void {
@@ -5541,7 +5606,7 @@ export class IssueFlowService {
         summary: `${this.issueSubject(live)}:MR 已全绿收口`
           + `(${new Date(closedAt).toISOString()}),但超过阈值仍没有`
           + "环境验证卡——可能漏举。请到问题单查看:必要时发「继续」"
-          + "让 Agent 补举验证卡,或确认后直接归档/取消",
+          + "让 Agent 补举验证卡,或验证后取消会话",
         link: this.issueLink(live.id),
       }).catch((error) =>
         this.log(`[issue-flow] ${live.id} 守闸报警投递失败(旁路,`

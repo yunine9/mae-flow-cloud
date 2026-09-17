@@ -32,6 +32,7 @@
     "web",
     "kernel",
     ".pilot",
+    "tests/issueDescriptionMdHtml.test.ts",
     "tests/issueFlowContract.test.ts",
     "tests/rootErrorBoundary.test.ts",
     "tests/uiDialogSmoke.test.ts",
