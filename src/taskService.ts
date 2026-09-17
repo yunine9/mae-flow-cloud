@@ -13107,7 +13107,6 @@ export class TaskService {
       if (!this.options.host || !trustedKernelHostFeedback({
         host: this.options.host,
         cwd: task.cwd,
-        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"],
         state,
       })) return undefined;
       return {
@@ -13147,8 +13146,6 @@ export class TaskService {
       if (!verifiedState && !trustedKernelHostFeedback({
         host: this.options.host,
         cwd: task.cwd,
-        actions: ["feedback-open", "feedback-result", "pipeline-record", "close",
-          "selection-reconcile", "intervention-reconcile"],
         state,
       })) {
         throw new Error("内核反馈事实缺少 Cloud 宿主权威收据");
@@ -18356,7 +18353,6 @@ export class TaskService {
     try {
       if (!trustedKernelHostFeedback({
         host, cwd: task.cwd, state,
-        actions: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"],
       })) {
         return `反馈批次 ${batchId} 缺少 Cloud 宿主权威收据，已拒绝使用可篡改状态`;
       }

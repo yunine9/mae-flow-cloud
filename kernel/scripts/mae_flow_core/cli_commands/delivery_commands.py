@@ -16,8 +16,8 @@ from mae_flow_core.workflow.execution_contract import continuous_review_enabled
 from .host_capability import (
     host_managed_continuous_review, verify_host_proof)
 from .host_receipts import (
-    attest_host_receipts, external_facts, has_host_receipt, has_receipt_for,
-    save_with_host_proof, trusted_active_batch, trusted_feedback_loop,
+    attest_host_receipts, external_facts, verify_feedback_facts, has_receipt_for,
+    save_with_host_proof, trusted_active_batch,
     trusted_pipeline_projection)
 from .selection_reconcile import reconcile_selection
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
@@ -197,15 +197,7 @@ def _open(flow, state, args):
     _capability(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     if host_managed_continuous_review():
-        # 开批只消费反馈调度事实；工作步骤、流水线、接管状态不是前置条件。
-        predecessor_ok = trusted_feedback_loop(state, (
-            "pipeline-record", "feedback-open", "feedback-result",
-            "intervention-reconcile", "selection-reconcile"))
-        # 有链才查链。一份收据都没有 = 这一单还没发生过宿主动作(老任务
-        # 升级、迁移前的现场),这条命令本身就是第一环;这时还要求"先有
-        # 前驱收据"等于宣布这单的反馈永远打不开,且无命令可补。
-        if not predecessor_ok and has_host_receipt(state):
-            _die("打开反馈前的持续检视生命周期没有宿主收据，拒绝接着可篡改状态推进")
+        verify_feedback_facts(state)
     loop = _loop(state)
     previous = _batch(loop, batch_id)
     if previous is not None:
@@ -406,11 +398,7 @@ def _result(flow, state, args):
     proof_nonce = _verify_host_proof(state, args, "feedback-result", payload)
     _capability(state)
     if host_managed_continuous_review():
-        # 活动批次与关闭后的重放统一核验反馈事实，不依赖 current。
-        if not trusted_feedback_loop(state, (
-                "feedback-open", "pipeline-record", "feedback-result",
-                "selection-reconcile", "intervention-reconcile")):
-            _die("登记结果前的反馈生命周期没有宿主收据，拒绝接着可篡改状态推进")
+        verify_feedback_facts(state)
     batch_id = _text(payload.get("batch_id"), "batch_id", 200)
     loop = _loop(state)
     batch = _batch(loop, batch_id)

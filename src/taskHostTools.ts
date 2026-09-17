@@ -170,8 +170,7 @@ export function taskDeferredFeedback(host: Pick<TaskHostRuntime, "cwd" | "kernel
   if (!existsSync(path)) return {};
   const state = kernelState(host);
   if (!state.delivery_loop?.deferred_feedback) return {};
-  if (!attestKernelHost({ host: host.kernel, cwd: host.cwd, state, feedbackLoop: true,
-    lifecycle: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"] }).feedbackLoop) {
+  if (!attestKernelHost({ host: host.kernel, cwd: host.cwd, state, feedbackLoop: true }).feedbackLoop) {
     throw new Error("目标调整的内核记录尚未通过宿主收据核对");
   }
   return state.delivery_loop.deferred_feedback;
@@ -542,8 +541,7 @@ export function taskHostGoal(host: TaskHostRuntime): string {
   const state = kernelState(host);
   const target = state.delivery_loop?.target;
   if (!target) return operations;
-  if (!attestKernelHost({ host: host.kernel, cwd: host.cwd, state, feedbackLoop: true,
-    lifecycle: ["feedback-open", "feedback-result", "pipeline-record", "selection-reconcile", "intervention-reconcile"] }).feedbackLoop) throw new Error("当前目标记录未通过宿主收据核对");
+  if (!attestKernelHost({ host: host.kernel, cwd: host.cwd, state, feedbackLoop: true }).feedbackLoop) throw new Error("当前目标记录未通过宿主收据核对");
   const source = inputs.findIndex(row => row.id === target.request_id);
   const newer = source < 0 || source < inputs.length - 1;
   return `${operations}\n[${newer ? "先前执行目标，需结合后续答复判断是否仍适用" : "执行目标摘要，不替代需求决定"}] ${target.target}\n来源指令：${target.request_id}；这是 Agent 登记的概括，不能据此重新解释用户原话。无关目标可保留，明确被新答复推翻的内容先同步文档再实施。已暂缓的反馈不自动恢复。`;
