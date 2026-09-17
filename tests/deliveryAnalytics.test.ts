@@ -144,9 +144,9 @@ test("漏采推送仍按修复起点归因，不把更早的未知提交归入�
   f.summary.delivery!.loop = { round: 2, state: "repairing", kind: "review", last_sha: unsampled };
   f.write("feature.cpp", "int a = 3;\n"); const head = f.commit("change"); f.publish(head);
   const result = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(result.commits.find(c => c.sha === unsampled)?.origin, "review");
+  assert.equal(result.commits.find(c => c.sha === unsampled)?.origin, "first");
   assert.equal(result.commits.find(c => c.sha === head)?.origin, "review");
-  assert.deepEqual(result.rework, { first: 0, pipeline: 0, review: 4, other: 0 });
+  assert.deepEqual(result.rework, { first: 0, pipeline: 0, review: 2, other: 0 });
   const fresh = { ...f.summary, id: "task-fresh" };
   const withoutSnapshot = await collectDeliveryCode(fresh, f.cwd, head);
   assert.deepEqual(withoutSnapshot.retained, result.retained, "归因不要求曾采集上轮快照");
@@ -157,7 +157,7 @@ test("同一源版本的新证据自动更新缓存，合入后仍沿用采集�
   f.write("feature.cpp", "int a = 1;\n"); const first = f.commit("first");
   f.write("feature.cpp", "int a = 2;\n"); const head = f.commit("change"); f.publish(head);
   observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
-  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained.review, 1);
+  assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric?.retained.first, 1);
   f.git("update-ref", "refs/remotes/origin/main", head);
   f.summary.delivery!.loop = { round: 1, state: "merged", kind: "ci", last_sha: first };
   observeDeliveryCode(f.summary, f.cwd, head); await awaitDeliveryAnalytics();
@@ -195,7 +195,7 @@ test("无效修复锚不使统计失败，已识别的历史原因不被后来�
   for (const anchor of [unrelated, "a".repeat(40), "not-a-sha"]) {
     f.summary.delivery!.loop!.last_sha = anchor;
     const isolated = await collectDeliveryCode({ ...f.summary, id: `task-${anchor}` }, f.cwd, head);
-    assert.equal(isolated.retained.review, 1);
+    assert.equal(isolated.retained.first, 1);
   }
 });
 
@@ -224,7 +224,7 @@ test("15 个提交：仅最后轮次在 loop 中，历史批次仍完整恢复�
   const head = commits[14]; f.publish(head);
   f.summary.delivery!.loop = { round: 3, state: "merged", kind: "review", last_sha: commits[13] };
   const before = await collectDeliveryCode(f.summary, f.cwd, head);
-  assert.equal(before.commits.filter(c => c.origin === "review").length, 14);
+  assert.equal(before.commits.filter(c => c.origin === "first").length, 14);
   const batch = (id: string, base: string, end: string, source: string) => ({
     task_id: f.summary.id, batch_id: id, base_sha: base, result_head: end,
     result_digest: "recorded", items: [{ source }], status: "closed",
@@ -308,4 +308,43 @@ test("提交推断识别明确修复线索；普通修正默认归检视，两�
   for (const text of ["新增CodeCheck报告展示", "新增业务功能"]) {
     assert.equal(inferCommitOrigin(text)?.origin, "review", text);
   }
+});
+
+
+test("task-6：配置先提交、多次实现和文档整理均为首轮，仅末次CodeCheck为修复", async t => {
+  const f = fixture(t);
+  f.write("app_define.json", "{}\n"); const first = f.commit("配置订阅");
+  f.write("service.java", "class A {}\nclass B {}\nclass C {}\n"); f.commit("实现接口与分页");
+  f.write("docs.md", "knowledge\n"); f.commit("归档知识");
+  f.write("urls.java", "class URLs {}\n"); f.commit("跨仓通知同步");
+  f.write("docs.md", "more knowledge\n"); f.commit("归档跨仓知识");
+  f.write("delivery.md", "checklist\n"); f.commit("交付清单整理");
+  f.git("rm", "delivery.md"); const initialEnd = f.commit("撤出越界文件");
+  f.write("service.java", "class A { /* fixed */ }\nclass B {}\nclass C {}\n");
+  const head = f.commit("修复CodeCheck告警"); f.publish(head);
+  const result = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(result.first, first);
+  assert.deepEqual(result.initial_implementation, { end: initialEnd, basis: "commit_message" });
+  assert.deepEqual(result.commits.map(c => c.origin), [...Array(7).fill("first"), "pipeline"]);
+  assert.deepEqual(result.retained, { first: 3, pipeline: 1, review: 0, other: 0 });
+  assert.equal(aggregateDelivery(buildDeliveryAnalysis([f.summary]).rows).firstPercent, 75);
+});
+
+test("无修复迹象暂计首轮；正式反馈记录优先；单纯收到意见不切断首轮", async t => {
+  const f = fixture(t);
+  f.write("a.cpp", "int a = 1;\n"); const first = f.commit("新增接口");
+  f.write("b.cpp", "int b = 1;\n"); const second = f.commit("补单测"); f.publish(second);
+  let result = await collectDeliveryCode(f.summary, f.cwd, second);
+  assert.equal(result.retained.first, 2); assert.equal(result.initial_implementation?.basis, "no_repair_found");
+  const batch = { task_id: f.summary.id, batch_id: "review", base_sha: first,
+    items: [{ source: "workspace" }], status: "queued" };
+  const writeState = (record: unknown) => f.write(".mae-flow.json", JSON.stringify({
+    step_heads: { branch_create: f.base }, delivery_loop: { batches: [record] } }));
+  writeState(batch);
+  result = await collectDeliveryCode(f.summary, f.cwd, second);
+  assert.equal(result.retained.first, 2);
+  writeState({ ...batch, status: "closed", result_digest: "recorded", result_head: second });
+  result = await collectDeliveryCode(f.summary, f.cwd, second);
+  assert.deepEqual(result.initial_implementation, { end: first, basis: "repair_record" });
+  assert.deepEqual(result.retained, { first: 1, review: 1, pipeline: 0, other: 0 });
 });

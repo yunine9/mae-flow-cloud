@@ -33,6 +33,7 @@ export async function calculateDeliveryCode(input: {
   cwd: string; base: string; head: string; first?: string; task_base?: string;
   origins?: Record<string, CodeOrigin>;
   infer_unattributed?: boolean;
+  repair_commits?: string[];
 }): Promise<DeliveryCodeMetric> {
   const { cwd, base, head } = input;
   if (![base, head, ...(input.first ? [input.first] : []), ...(input.task_base ? [input.task_base] : [])].every(sha => SHA.test(sha))) throw new Error("缺少完整的统计版本");
@@ -50,14 +51,36 @@ export async function calculateDeliveryCode(input: {
   if (!first) throw new Error("没有可统计的非合并提交");
   // Rewritten first commit must not silently become the new 'first'.
   await run(["merge-base", "--is-ancestor", first, head]);
+  const messages = new Map<string, string[]>();
+  for (const sha of hashes) messages.set(sha, (await run(["show", "-s", "--format=%cI%n%B", sha])).trim().split("\n"));
+  const repairCommits = new Set(input.repair_commits);
+  let boundary = hashes.findIndex(sha => repairCommits.has(sha));
+  // The target may already have absorbed earlier repair commits. They still
+  // establish that the remaining source commits are after the initial phase.
+  if (boundary < 0 && hashes.length) {
+    for (const sha of repairCommits) {
+      if (!SHA.test(sha)) continue;
+      try { await run(["merge-base", "--is-ancestor", sha, hashes[0]]); boundary = 0; break; }
+      catch { /* unrelated or unavailable historical record */ }
+    }
+  }
+  let basis: "repair_record" | "commit_message" | "no_repair_found" = "repair_record";
+  if (boundary < 0) {
+    basis = "commit_message";
+    boundary = hashes.findIndex(sha => inferCommitOrigin(messages.get(sha)!.slice(1).join("\n"))?.explicitRepair);
+  }
+  if (boundary < 0) { boundary = hashes.length; basis = "no_repair_found"; }
+  const initial = new Set(input.infer_unattributed ? hashes.slice(0, boundary) : [first]);
   const origins = { ...input.origins };
-  const origin = (sha: string): CodeOrigin => sha === first ? "first" : origins[sha] ?? (input.infer_unattributed ? "review" : "other");
+  const origin = (sha: string): CodeOrigin => initial.has(sha) ? "first"
+    : origins[sha] === "first" ? "review" : origins[sha] ?? (input.infer_unattributed ? "review" : "other");
   const metric: DeliveryCodeMetric = { version: 1, head, base, first,
+    ...(input.infer_unattributed ? { initial_implementation: { end: hashes[boundary - 1], basis } } : {}),
     collected_at: new Date().toISOString(), retained: emptyOrigins(), rework: emptyOrigins(),
     deleted: 0, excluded_files: 0, commits: [] };
   for (const sha of hashes) {
-    const [at, ...message] = (await run(["show", "-s", "--format=%cI%n%B", sha])).trim().split("\n");
-    const guess = input.infer_unattributed && sha !== first ? inferCommitOrigin(message.join("\n")) : undefined;
+    const [at, ...message] = messages.get(sha)!;
+    const guess = input.infer_unattributed && !initial.has(sha) ? inferCommitOrigin(message.join("\n")) : undefined;
     const inferred = guess && origin(sha) !== "pipeline" && (guess.origin === "pipeline" || !origins[sha] || origin(sha) === "other") ? guess : undefined;
     if (inferred) origins[sha] = inferred.origin;
     const nums = numstat(await run(["diff", "--numstat", "-z", "--find-renames", `${sha}^`, sha, "--"]));
@@ -67,7 +90,7 @@ export async function calculateDeliveryCode(input: {
     }
     const category = origin(sha);
     metric.commits.push({ sha, at, subject: message[0] ?? "", origin: category, additions, deletions, ...(inferred ? { origin_evidence: inferred.evidence } : {}) });
-    if (sha !== first) metric.rework[category] += additions + deletions;
+    if (category !== "first") metric.rework[category] += additions + deletions;
   }
   const paths = numstat(await run(["diff", "--numstat", "--find-renames", "-z", base, head, "--"]));
   if (paths.length > 1000) throw new Error("文件超过单任务统计预算，未计入统计");

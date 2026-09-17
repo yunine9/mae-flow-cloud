@@ -43,7 +43,7 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([6, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([7, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
@@ -121,7 +121,10 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     for (const [sha, origin] of Object.entries(source.origins)) if (origin === "pipeline") { origins[sha] = "pipeline"; evidence[sha] = source.evidence[sha]; }
   }
   const metric = await calculateDeliveryCode({ cwd, base, head, task_base: taskBase, first: previous?.first, origins,
-    infer_unattributed: true });
+    infer_unattributed: true, repair_commits: [...new Set([
+      ...Object.keys(fallback.origins), ...Object.keys(published.origins), ...Object.keys(historical.origins),
+      ...(previous?.initial_implementation?.basis === "repair_record" ? previous.commits.filter(c => c.origin !== "first").map(c => c.sha) : []),
+    ])] });
   for (const commit of metric.commits) {
     if (commit.origin_evidence) { origins[commit.sha] = commit.origin; evidence[commit.sha] = commit.origin_evidence; }
   }
@@ -130,12 +133,13 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
     const commits = new Map(previous.commits.map(c => [c.sha, c]));
     for (const commit of metric.commits) commits.set(commit.sha, commit);
     metric.commits = [...commits.values()];
-    for (const commit of metric.commits) if (commit.sha !== metric.first) commit.origin = origins[commit.sha] === "pipeline" ? "pipeline" : "review";
     metric.rework = emptyOrigins();
-    for (const commit of metric.commits) if (commit.sha !== metric.first) metric.rework[commit.origin] += commit.additions + commit.deletions;
+    for (const commit of metric.commits) if (commit.origin !== "first") metric.rework[commit.origin] += commit.additions + commit.deletions;
   }
   for (const commit of metric.commits) {
-    commit.origin_evidence = commit.sha === metric.first ? ["任务基线后的首个非合并提交"]
+    commit.origin_evidence = commit.origin === "first" ? [metric.initial_implementation?.basis === "repair_record"
+      ? "首轮实现：首次实际修复区间之前的提交" : metric.initial_implementation?.basis === "commit_message"
+        ? "推断：首次明确修复提交之前的首轮实现" : "推断：未发现修复记录或明确修复提交，暂计首轮实现"]
       : evidence[commit.sha] ?? commit.origin_evidence ?? [commit.origin === "other"
         ? "缺少覆盖该提交的修复区间证据" : "此前推送快照保留的分类"];
   }
@@ -155,7 +159,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
       // Statistics describe the confirmed pushed source, which must still match.
-      const metric = head && stored?.metric?.head === head ? structuredClone(stored.metric) : undefined;
+      const metric = head && stored?.metric?.head === head && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
       if (metric) {
         for (const counts of [metric.retained, metric.rework]) {
           counts.review += counts.other; counts.other = 0;
@@ -170,7 +174,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
         repo: cleanRepository(task.repo_url ?? ""), modules: (task.business_modules ?? []).map(m => m.name),
         merged,
         at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
-        unavailable: metric ? undefined : stored?.head === head && stored?.error ? stored.error
+        unavailable: metric ? undefined : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === head && stored?.error ? stored.error
           : head ? "尚无本次推送的统计快照；历史任务不会猜测归因" : "尚未推送代码" };
     }) };
 }

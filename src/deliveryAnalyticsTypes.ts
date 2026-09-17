@@ -15,6 +15,7 @@ export interface DeliveryCodeMetric {
   head: string;
   base: string;
   first: string;
+  initial_implementation?: { end?: string; basis: "repair_record" | "commit_message" | "no_repair_found" };
   collected_at: string;
   retained: OriginCounts;
   rework: OriginCounts;
