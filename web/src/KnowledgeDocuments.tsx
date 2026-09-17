@@ -13,7 +13,7 @@ import type { KnowledgeAssetFocus } from "./knowledgeNavigation";
 const labels: Record<string, string> = { queued: "等待整理", indexing: "正在整理", ready: "可检索", failed: "整理失败", disabled: "已停用" };
 const scopeLabel = (doc: KnowledgeDocument) => doc.scope_label || ({ platform: "平台通用", module: "业务模块", repository: "代码仓" })[doc.scope];
 const languageLabel = knowledgeLanguageLabel;
-export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeAssetFocus) => void }) {
+export function KnowledgeDocuments({ onManage, uploadRequest = 0 }: { uploadRequest?: number; onManage: (focus?: KnowledgeAssetFocus) => void }) {
   const [rows, setRows] = useState<KnowledgeDocument[]>([]), [selected, setSelected] = useState("");
   const [doc, setDoc] = useState<KnowledgeDocument>(), [error, setError] = useState("");
   const [kind, setKind] = useState("all");
@@ -21,6 +21,10 @@ export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeA
   const [tab, setTab] = useState("content"), [query, setQuery] = useState("");
   const [trial, setTrial] = useState<TrialResult>(), [hit, setHit] = useState<ChapterHit>();
   const [busy, setBusy] = useState(false), [form, setForm] = useState<"upload" | "edit" | "replace">();
+  const lastUploadRequest = useRef(uploadRequest);
+  useEffect(() => {
+    if (uploadRequest !== lastUploadRequest.current) { setForm("upload"); lastUploadRequest.current = uploadRequest; }
+  }, [uploadRequest]);
   const [modules, setModules] = useState<BusinessModule[]>([]);
   const request = useRef(0), selectedRef = useRef(selected); selectedRef.current = selected;
   async function refresh() {
@@ -72,7 +76,6 @@ export function KnowledgeDocuments({ onManage }: { onManage: (focus?: KnowledgeA
       <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder="搜索知识名称" value={term} onChange={e => setTerm(e.target.value)} /></div>
       <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
         <Select value={kind} onValueChange={value => setKind(value ?? "all")} items={[{value:"all",label:"全部类型"},{value:"document",label:"文档"},{value:"skill",label:"Skill"},{value:"rule",label:"规则"},{value:"example",label:"示例"},{value:"experience",label:"已采纳经验"}]}><SelectTrigger aria-label="知识类型" className="kd-type-select"><SelectValue /></SelectTrigger><SelectContent>{[["all","全部类型"],["document","文档"],["skill","Skill"],["rule","规则"],["example","示例"],["experience","已采纳经验"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
-      <Button className="kd-add" onClick={() => setForm("upload")}><Upload size={18} /> 添加知识</Button>
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
     <div className="kd-layout">
