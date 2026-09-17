@@ -154,9 +154,9 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration, /已发起\(进行中\)/);
   assert.match(registration,
     /selectedVersions\.length > 0 \|\| launchFilterActive/);
-  // 已发起的行:勾选禁用(悬停说明),徽标可点跳进该会话;全选只
-  // 作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
-  assert.match(registration, /disabled=\{!!liveIssue\}/);
+  // 已发起的行:我名下的勾选禁用(悬停说明),徽标可点跳进该会话;
+  // 全选只作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  assert.match(registration, /disabled=\{!!mineLive\}/);
   assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
   assert.match(registration, /const selectableTickets = display/);
   assert.match(registration,
@@ -164,10 +164,22 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
   // button 不许回流(徽标走 ui/button 包装层,#256 收编纪律)。
   assert.match(registration, /function isLiveIssue\(/);
-  assert.match(registration, /const liveIssueByTicket = useMemo/);
+  assert.match(registration, /const mineLiveByTicket = useMemo/);
   assert.doesNotMatch(registration, /hover:opacity-75/);
   assert.match(registration,
-    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},点击打开`\}/);
+    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},\$\{mineLive \? "点击打开" : "点击查看"\}`\}/);
+  // 协助处理(2026-09-17):名下视角可切换——默认自己,?owner= 指名
+  // 看别人名下;发起后归属仍是登录人。徽标/过滤认展示名册(协助视角
+  // =全团队,?scope=all 读侧同尺开放),拦截仍只认我的名册(接管正是
+  // 协助的用法,分支按发起人隔离)。
+  assert.match(registration,
+    /const \[owner, setOwner\] = useState\(viewer\.username\)/);
+  assert.match(registration, /const assistMode = owner !== viewer\.username/);
+  assert.match(registration, /ariaLabel="查看谁名下的问题单"/);
+  assert.match(registration, /listDtsTickets\(account\)/,
+    "拉单必须带当前视角的名下账号(?owner= 透传)");
+  assert.match(registration,
+    /const shownLiveByTicket = assistMode \? teamLiveByTicket : mineLiveByTicket/);
   // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
   assert.match(issueBoard,
     /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);
