@@ -5,8 +5,11 @@
  * - analysis_confirm 确认进 fix 的续聊前必压一次,锚点钉住分析报告
  *   落盘路径与「修改方案」章节要点(不受阈值管辖);
  * - 其余续聊回合只看事件量阈值旋钮 issue_compact_every_events:
- *   缺省 0=关,行为与现状全等;到阈值压通用锚(不带报告指针);
- * - 压缩 fail-open:模型端压不动,回合照走,单子不判死。
+ *   显式 0=关;部署缺省 400(serve 层旗标,#285 拍板)不在这条
+ *   测试链上——服务直构两缺席时回退 0;
+ * - 压缩 fail-open:模型端压不动,回合照走,单子不判死;
+ * - 超限自愈预算翻篇归还:第二次撑爆仍压仍活(#285,issue-64
+ *   二爆被一次性 flag 冤死的复盘)。
  *
  * 挂起通道(resumeWithDecision)与重启重建(startResume)结构性不
  * 经过咽喉(resumeTurnBody 的 continueWith 之前),这里不再单测。
@@ -266,10 +269,13 @@ test("阈值旋钮:非边界续聊到阈值压通用锚,不带报告指针", asy
   }
 });
 
-test("缺省关:旋钮缺席时续聊回合不产生任何压缩请求(行为与现状全等)", async () => {
+test("显式 0=关:旋钮置 0 时续聊回合不产生任何压缩请求", async () => {
   const dataDir = mfcTemp("mfc-issue-compact-off-");
-  // 无压缩干预的剧本:补充意见回流后直接演二轮修订。
-  const h = await atAnalysisGate(dataDir, noKnob,
+  // 无压缩干预的剧本:补充意见回流后直接演二轮修订。(部署缺省已是
+  // 400——#285 拍板;服务直构的 0 兜底只覆盖测试形态,这里钉的是
+  // "0 关得掉"。)
+  const h = await atAnalysisGate(dataDir,
+    () => ({ issue_compact_every_events: 0 }),
     (origin) => [...firstRoundScenes(origin), ...revisionScenes]);
   const { service, model, id } = h;
   try {
@@ -280,7 +286,7 @@ test("缺省关:旋钮缺席时续聊回合不产生任何压缩请求(行为与
     });
     await nextAnalysisGate(h);
     assert.equal(compactionRequests(model).length, 0,
-      "旋钮缺席:一个压缩请求都不许有");
+      "旋钮置 0:一个压缩请求都不许有");
   } finally {
     await model.stop();
   }
@@ -300,6 +306,56 @@ test("阈值未到:事件增量没越线的续聊不压", async () => {
     });
     await nextAnalysisGate(h);
     assert.equal(compactionRequests(model).length, 0);
+  } finally {
+    await model.stop();
+  }
+});
+
+test("超限自愈翻篇归还:第二次撑爆仍压仍活,不再一次性判死(#285)", async () => {
+  const dataDir = mfcTemp("mfc-issue-overflow-reset-");
+  // issue-64 复盘:一爆自愈成功后 overflowRepaired 不复位,数小时后
+  // 的二爆不试压缩直接判死。两轮补充都带大输入(用户侧大材料,让
+  // 历史值得压,也保证二轮时 pi 的手动压缩不被"会话太小"前置拒),
+  // 各撞一次网关超限。pi 对 input too long 不重试(不可重试类错误),
+  // failWith 配额 1 恰好只吞掉续聊首投;剧本每轮是:失败(不耗幕)
+  // →压缩摘要幕→重试的修订三幕。
+  const bigNotes = "补充:核对连接池监控曲线。附网管日志摘录(测试填充):\n"
+    + "日志行 x".repeat(20_000);
+  const h = await atAnalysisGate(dataDir, noKnob,
+    (origin) => [
+      ...firstRoundScenes(origin),
+      { text: "(一爆自愈:压缩摘要幕)" },
+      ...revisionScenes,
+      { text: "(二爆自愈:压缩摘要幕)" },
+      ...revisionScenes,
+    ]);
+  const { service, model, id } = h;
+  const overflow = "input too long, exceed max input length, "
+    + "max input length is 169984, current input length is 176871";
+  try {
+    model.failWith(overflow, 1);
+    service.answer(id, {
+      state_version: h.gateVersion, code: "supplement", notes: bigNotes,
+    });
+    const gate2 = await nextAnalysisGate(h);
+    assert.equal(compactionRequests(model).length, 1,
+      "一爆:压缩自愈一次,续聊照走");
+    model.failWith(overflow, 1);
+    service.answer(id, {
+      state_version: gate2.gate!.state_version,
+      code: "supplement",
+      notes: bigNotes.replace("核对连接池", "二轮:核对连接池"),
+    });
+    await until(() => {
+      const issue = service.get(id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm"
+        && issue.gate.state_version > gate2.gate!.state_version
+        ? issue : undefined;
+    }, "三轮分析确认闸(二爆仍自愈)");
+    assert.equal(compactionRequests(model).length, 2,
+      "二爆:预算已翻篇归还,仍压缩自愈(旧行为这里不试压缩直接判死)");
   } finally {
     await model.stop();
   }

@@ -791,10 +791,11 @@ export function createTaskServer(
                 issue_max_turns: options.issueFlow?.options.maxConcurrentTurns
                   ?? 10,
                 // 问题流回合前压缩的事件量阈值缺省
-                // (--issue-compact-every-events);0=关。实际生效值还可能
-                // 被管理页运行时旋钮 issue_compact_every_events 覆盖。
+                // (--issue-compact-every-events,部署缺省 400;显式 0=关)。
+                // 实际生效值还可能被管理页运行时旋钮
+                // issue_compact_every_events 覆盖。
                 issue_compact_every_events:
-                  options.issueFlow?.options.compactEveryEvents ?? 0,
+                  options.issueFlow?.options.compactEveryEvents ?? 400,
                 // 终态现场回收缺省开(磁盘治理票 01),管理页旋钮
                 // issue_repo_reclaim 可关;构建产物冷却期缺省 48h(票 03)。
                 // 缺省值从 service 导入,两处不许漂移。

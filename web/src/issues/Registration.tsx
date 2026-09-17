@@ -45,6 +45,8 @@ import { userLabel, UserPicker, type UserOption } from "../UserPicker";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
+import { RichTextEditor } from "./RichTextEditor";
+import { USE_RICH_TEXT_DESCRIPTION_EDITOR } from "./descriptionEditorChoice";
 import {
   ISSUE_DESCRIPTION_TEMPLATE, isUntouchedTemplate,
 } from "./descriptionTemplate";
@@ -460,9 +462,15 @@ function ManualRegister({
             用户实测)。 */}
         <div className={cn(FIELD, "col-span-full")}>
           <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
-          <DescriptionEditor value={description} onChange={setDescription}
-            onUploadImage={uploadIssueFile} onError={onError}
-            placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />
+          {/* 选型在 descriptionEditorChoice:两壳同一 markdown 契约,
+              翻转常量重新构建即回退,存储零迁移(#271)。 */}
+          {USE_RICH_TEXT_DESCRIPTION_EDITOR
+            ? <RichTextEditor value={description} onChange={setDescription}
+              onUploadImage={uploadIssueFile} onError={onError}
+              placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />
+            : <DescriptionEditor value={description} onChange={setDescription}
+              onUploadImage={uploadIssueFile} onError={onError}
+              placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />}
           {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
               页脚不再重复一份。 */}
           <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">

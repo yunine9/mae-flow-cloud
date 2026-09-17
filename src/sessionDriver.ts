@@ -478,8 +478,10 @@ export class CloudSession {
   private turnActivity = 0;
   private turnError = "";
   private turnTerminalError = "";
-  /** 上下文超限只自愈一次(整条会话计):压完还爆是单轮输入本身过大,
-   * 再压是空转——按预算纪律,补救必须有次数上限。 */
+  /** 同一场连续超限只自愈一次:压完还爆说明撑爆的不是历史而是单轮
+   * 输入本身,再压是空转——按预算纪律,补救必须有次数上限。补救
+   * 翻篇(重试不再超限)即归还预算:issue-64 那种隔了数小时新积累的
+   * 第二次超限仍要能自愈,不能整条会话只救一次。 */
   private overflowRepaired = false;
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
@@ -722,7 +724,9 @@ export class CloudSession {
   }
 
   /** 发一条用户消息并跑完本轮,统一收口判定。announce=false 的重投
-   *  (忙撞让一拍那次)不再记一遍用户消息账——首投已经记过。 */
+   *  (忙撞让一拍那次)不再记一遍用户消息账——首投已经记过。
+   *  失败在这里只产出 Outcome 不落终态事件:补救链(自愈/重投)可能
+   *  把它救活,确认不再补救才由 settle 落账。 */
   private promptTurn(userMessage: string, announce = true): Promise<Outcome> {
     if (announce) {
       this.emit("user_message", this.sessionId, { text: userMessage });
@@ -736,37 +740,39 @@ export class CloudSession {
       .then(() => this.turnOutcome())
       .catch((error): Outcome => {
         const detail = userFacingModelFailure(String(error));
-        this.emit("session_ended", this.sessionId, {
-          reason: "failed", detail,
-        });
         return { status: "session_ended", reason: "failed", detail };
       });
     return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
   }
 
+  /** 终态落账的唯一咽喉:确认不再补救的失败才把 session_ended 写进
+   *  事件账——提前落账会把救活的会话在账上记死(issue-64 一爆自愈
+   *  成功,events.jsonl 却躺着一条 session_ended,#285 复盘)。只管
+   *  事件账的时机,Outcome 本身不受影响。 */
+  private settle(outcome: Outcome): Outcome {
+    if (outcome.status === "session_ended") {
+      this.emit("session_ended", this.sessionId, {
+        reason: outcome.reason ?? "failed", detail: outcome.detail,
+      });
+    }
+    return outcome;
+  }
+
   /** 回合收口:零活动+模型层错误 = 会话失败(把 pi 吞掉的 API 错误
-   * 亮出来);零活动无错误 = 空转回合(交上层催办);否则正常收轮。 */
+   *  亮出来);零活动无错误 = 空转回合(交上层催办);否则正常收轮。
+   *  失败只产出 Outcome,终态事件由 settle 在确认不再补救后落账。 */
   private async turnOutcome(): Promise<Outcome> {
     const kernelFailure = await this.flushKernel();
     if (kernelFailure) {
       const detail = `内核授权或证据登记未可靠落盘: ${kernelFailure}`;
-      this.emit("session_ended", this.sessionId, {
-        reason: "failed", detail,
-      });
       return { status: "session_ended", reason: "failed", detail };
     }
     if (!this.turnActivity && this.turnError) {
       const detail = userFacingModelFailure(this.turnError);
-      this.emit("session_ended", this.sessionId, {
-        reason: "failed", detail,
-      });
       return { status: "session_ended", reason: "failed", detail };
     }
     if (this.turnTerminalError) {
       const detail = this.turnTerminalError;
-      this.emit("session_ended", this.sessionId, {
-        reason: "failed", detail,
-      });
       return { status: "session_ended", reason: "failed", detail };
     }
     const reason = this.turnActivity ? "end_turn" : "empty_turn";
@@ -867,11 +873,11 @@ export class CloudSession {
       outcome = await this.turnWithOverflowRepair(
         outputTruncationRepairNotice(attempt));
     }
-    return outcome;
+    return this.settle(outcome);
   }
 
   /**
-   * 上下文撑爆的自愈:压一次,原样重发,只补救一次。
+   * 上下文撑爆的自愈:压一次,原样重发,同一场连续超限只补救一次。
    *
    * 为什么必须在这一层做:窗口是网关说了算的(内网实测 169984),而
    * pi 的自动压缩按它自己估的窗口走——网关比它以为的小,硬报错就漏
@@ -879,8 +885,11 @@ export class CloudSession {
    * 没吐、一个工具都没调,所以原样重发是安全的,不会重做已完成的事。
    *
    * 三条边界(都是红线的直接推论):
-   * - **只补救一次**。压完还爆说明不是"历史太长"而是单轮输入本身
-   *   过大(比如一次贴进来一个巨型文件),再压也没用,如实失败;
+   * - **同一场连续超限只补救一次**。补救的重试仍超限,说明不是
+   *   "历史太长"而是单轮输入本身过大(比如一次贴进来一个巨型文件),
+   *   再压也没用,如实失败;重试翻篇(不再超限)即归还预算,之后
+   *   新积累的超限照样自愈(issue-64 复盘:一爆自愈后隔 3 小时的
+   *   二爆被整条会话只救一次的旧 flag 冤死);
    * - **压不动就如实失败**,不假装恢复;
    * - 判据从严(见 looksLikeContextOverflow):别的错误一律原样上抛,
    *   压缩不是万能兜底。
@@ -893,7 +902,8 @@ export class CloudSession {
     }
     if (this.overflowRepaired) {
       this.options.log?.(
-        `任务 ${this.options.taskId} 压缩后仍超限,如实失败(单轮输入过大?)`);
+        `任务 ${this.options.taskId} 上次压缩自愈的补救仍超限,`
+        + `不再重试,如实失败(单轮输入过大?)`);
       return outcome;
     }
     this.overflowRepaired = true;
@@ -912,7 +922,16 @@ export class CloudSession {
           + `长日志整段塞进了会话)`,
       };
     }
-    return this.promptTurn(userMessage);
+    const retry = await this.promptTurn(userMessage);
+    // 翻篇归还:补救的重试不再超限,说明撑爆的是"当时的历史"而非
+    // 单轮输入本身——预算归还,后续新积累的超限照样自愈(issue-64
+    // 第二爆被一次性 flag 冤死的复盘,2026-09-16 #285)。重试仍超限
+    // 则预算保持占用,下一场直接如实失败,不空转。
+    if (!(retry.status === "session_ended"
+        && looksLikeContextOverflow(retry.detail ?? ""))) {
+      this.overflowRepaired = false;
+    }
+    return retry;
   }
 
   /** 宿主在某个自定义工具里举卡等人(拆分提议):记录由宿主建好,这里只
@@ -976,7 +995,9 @@ export class CloudSession {
     this.waitingRecord = undefined;
     this.waitingSignal = deferred<Outcome>();
     resolver(answerText);
-    return Promise.race([this.pendingTurn!, this.waitingSignal.promise]);
+    const outcome = await Promise.race(
+      [this.pendingTurn!, this.waitingSignal.promise]);
+    return this.settle(outcome);
   }
 
   /** 主动压缩(用户关切:长编码阶段注意力漂移)。只许在回合间隙

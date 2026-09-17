@@ -678,11 +678,12 @@ export async function handleIssueRoutes(
       }
     }
 
-    // 一次通过率(团队问题页签统计块):全平台有单终态会话的聚合,
-    // 口径见 CONTEXT「一次通过率」词条;读开放与列表同权(查看模式)。
-    // 字面路由必须住在 :id 捕获之前,不然 "stats" 会被当会话 id。
+    // 一次率二轴(团队问题页签统计块):完成交付会话的聚合,
+    // 口径见 CONTEXT「一次修复成功率」「一次定位成功率」词条;读开放
+    // 与列表同权(查看模式)。字面路由必须住在 :id 捕获之前,
+    // 不然 "stats" 会被当会话 id。
     if (method === "GET" && parts[1] === "stats" && parts.length === 2) {
-      return done(200, issueFlow.passRate());
+      return done(200, issueFlow.onceRates());
     }
 
     const id = parts[1];

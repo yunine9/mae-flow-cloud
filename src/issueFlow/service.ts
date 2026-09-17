@@ -190,10 +190,12 @@ import {
   materializeIssueSkills,
   type IssueEnvCredentials,
 } from "./prompt.ts";
-import { issuePassRate,
-  type IssuePassRateFacts,
-  type IssuePassRateSummary,
-} from "./passRate.ts";
+import {
+  issueOnceRates,
+  type IssueOnceRateFacts,
+  type IssueOnceRateSummary,
+} from "./onceRates.ts";
+import { listAnalysisVersions } from "./analysisVersions.ts";
 import { promptCopy } from "./promptCopy.ts";
 import {
   orderAnnotations,
@@ -600,7 +602,8 @@ export interface IssueFlowOptions {
   maxConcurrentTurns?: number;
   /** 回合前压缩的事件量阈值部署缺省(--issue-compact-every-events):
    *  续聊回合先读管理页运行时旋钮 issue_compact_every_events,缺席才
-   *  用这里;两边都缺省 0=关,行为与现状全等。分析→修复边界的必压
+   *  用这里;两边都缺省 0=关(生产恒传部署旗,缺省 400——#285 拍板,
+   *  0 兜底只覆盖测试/直构形态)。分析→修复边界的必压
    *  不受阈值管辖。 */
   compactEveryEvents?: number;
   /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
@@ -1027,27 +1030,30 @@ export class IssueFlowService {
       : rows;
   }
 
-  /** 一次通过率(口径:CONTEXT「一次通过率」词条,分类在 passRate.ts
-   * 纯函数)。判定事实全从现成账取,零新记账:验证失败按转移账的平台
-   * 文案前缀计(VERIFY_FAIL_NOTE_PREFIX,写入点在本服务 env_verify
-   * fail 分派),检视批次按 reviews 账本的 sent/issue_review 操作计。
-   * 枚举与 list() 同源(live 全集,重启恢复时装载),终态会话照常在。 */
-  passRate(): IssuePassRateSummary {
-    const rows: IssuePassRateFacts[] = [...this.live.values()].map(
+  /** 一次率二轴(口径:CONTEXT「一次修复成功率」「一次定位成功率」
+   * 词条,分类在 onceRates.ts 纯函数)。判定事实全从现成账取,零新
+   * 记账:验证失败按转移账的平台文案前缀计(VERIFY_FAIL_NOTE_PREFIX,
+   * 写入点在本服务 env_verify fail 分派),报告版本数读分析报告版本账
+   * (listAnalysisVersions),检视批次按 reviews 账本的 sent/issue_review
+   * 操作计。枚举与 list() 同源(live 全集,重启恢复时装载)。 */
+  onceRates(): IssueOnceRateSummary {
+    const rows: IssueOnceRateFacts[] = [...this.live.values()].map(
       (live) => ({
         id: live.id,
         ticket: live.state.ticket,
         status: live.state.status,
+        conclusion_kind: live.state.conclusion?.kind,
         verify_fail_count: (live.state.transitions ?? []).filter(
           (transition) => transition.note.startsWith(VERIFY_FAIL_NOTE_PREFIX),
         ).length,
+        report_version_count: listAnalysisVersions(live.root).length,
         review_count: reviewStore(live.root).history().filter(
           (operation) =>
             operation.op === "sent" && operation.via === "issue_review",
         ).length,
       }),
     );
-    return issuePassRate(rows);
+    return issueOnceRates(rows);
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -1984,7 +1990,8 @@ export class IssueFlowService {
    *  (startResume 恢复原生上下文，由 Pi 容量保护)不经过这里。两路:
    *  - 边界路(analysis_confirm 确认进 fix):必压,不受阈值管辖;
    *  - 阈值路:管理页旋钮 issue_compact_every_events 优先,缺席退
-   *    部署旗 compactEveryEvents,再缺省 0=关,行为与现状全等。
+   *    部署旗 compactEveryEvents,再缺省 0=关(部署旗缺省 400 由
+   *    serve 层给出,#285 拍板;0 兜底只覆盖测试/直构形态)。
    *  两路都 fail-open:压不动回合照走(压缩是旁路,不是流程)。 */
   private async maybeCompactContinuation(
     live: LiveIssue,

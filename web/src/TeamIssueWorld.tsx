@@ -20,7 +20,7 @@ import {
   ISSUE_STATUS_TEXT,
   issueStageText,
   type FixedIssueStage,
-  type IssuePassRate,
+  type IssueOnceRate,
   type IssueStatus,
   type IssueSummary,
 } from "./api";
@@ -77,11 +77,11 @@ const METRIC_TONE = {
   danger: "text-danger",
 } as const;
 
-export function TeamIssueWorld({ issues, passRate, onOpenIssue }: {
+export function TeamIssueWorld({ issues, onceRates, onOpenIssue }: {
   issues: IssueSummary[];
-  /** 一次通过率(服务端 /issues/stats 聚合,前端零计算只渲染);
+  /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
    * 缺席=统计暂不可用(接口失败/问题流未启用),统计格显示 —。 */
-  passRate?: IssuePassRate;
+  onceRates?: IssueOnceRate;
   onOpenIssue: (id: string) => void;
 }) {
   const [query, setQuery] = useState("");
@@ -101,14 +101,19 @@ export function TeamIssueWorld({ issues, passRate, onOpenIssue }: {
   const owners = useMemo(() =>
     [...new Set(active.map((issue) => issue.account))], [active]);
 
-  // 一次通过率瓦片:数字只来自端点(rate=null=分母 0,显示 —);
+  // 一次率二轴瓦片:数字只来自端点(rate=null=分母 0,显示 —);
   // hover 给分子/分母与口径一句话(与既有 title 提示同款,不养弹层)。
-  const passRateText = passRate?.rate == null ? "—" : `${passRate.rate}%`;
-  const passRateTitle = passRate
-    ? `一次通过 ${passRate.passed} / 有单终态 ${passRate.total}`
-      + "——验证卡答过「验证发现问题」、取消或失败的会话不算一次通过；"
-      + "检视回退不影响；无单与进行中会话不参与统计。"
-    : "一次通过率统计暂不可用";
+  const rateText = (rate: number | null | undefined): string =>
+    rate == null ? "—" : `${rate}%`;
+  const onceRateTitle = (axis: "localization" | "repair"): string => {
+    if (!onceRates) return "一次率统计暂不可用";
+    const passed = onceRates[axis].passed;
+    return axis === "localization"
+      ? `一次定位 ${passed} / 完成交付 ${onceRates.total}`
+        + "——分析报告只生成一版即一次定位；检视提出修改会生成新版本。"
+      : `一次修复 ${passed} / 完成交付 ${onceRates.total}`
+        + "——点过「验证发现问题」即非一次修复。";
+  };
 
   const needle = query.trim().toLocaleLowerCase();
   const visible = useMemo(() => active.filter((issue) => {
@@ -167,7 +172,7 @@ export function TeamIssueWorld({ issues, passRate, onOpenIssue }: {
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
-          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次通过率 ${passRateText}`}>
+          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}`}>
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
@@ -178,7 +183,9 @@ export function TeamIssueWorld({ issues, passRate, onOpenIssue }: {
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.closed}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已闭环</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
-          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={passRateTitle}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{passRateText}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次通过率</small></span>
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("localization")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.localization.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次定位成功率</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("repair")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.repair.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次修复成功率</small></span>
         </div>
       </header>
       <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
