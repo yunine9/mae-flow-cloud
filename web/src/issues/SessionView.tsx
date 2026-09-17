@@ -120,15 +120,14 @@ export function IssueSessionView({
     setTab("meta");
   }, [detail.id]);
 
-  // 页签标题(ADR-0040):工作台独占浏览器页签,标题钉成单号/标题
-  // (无单用会话标题)——多开时每个页签可辨识;卸载还原默认标题。
+  // 页签标题(ADR-0040):工作台独占浏览器页签,标题钉成会话标题——
+  // 不带单号(2026-09-18 修订:单号记不住,多开辨识靠标题),卸载还原
+  // 默认标题。
   useEffect(() => {
     const previous = document.title;
-    document.title = detail.ticket
-      ? `${detail.ticket} · ${detail.title}`
-      : detail.title;
+    document.title = detail.title;
     return () => { document.title = previous; };
-  }, [detail.ticket, detail.title]);
+  }, [detail.title]);
 
   useEffect(() => {
     // 工作台是 /issues/:id 的页面形态(ADR-0040,workspace-overlay 全屏

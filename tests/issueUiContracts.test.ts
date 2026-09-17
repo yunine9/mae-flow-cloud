@@ -1448,10 +1448,10 @@ test("问题工作台独立页签(ADR-0040):入口一律新页签,页内 overlay
   assert.match(issueLink,
     /\/issues\/\$\{encodeURIComponent\(id\)\}/);
   // 工作台是页面不再是弹层:dialog/aria-modal 语义退役;页签标题钉成
-  // 单号/标题(无单用会话标题),多开页签可辨识。
+  // 会话标题(2026-09-18 修订:不带单号——记不住,辨识靠标题),多开
+  // 页签可辨识。
   assert.doesNotMatch(sessionView, /role="dialog"|aria-modal/);
-  assert.match(sessionView,
-    /document\.title = detail\.ticket\s*\r?\n\s*\? `\$\{detail\.ticket\} · \$\{detail\.title\}`\s*\r?\n\s*: detail\.title;/);
+  assert.match(sessionView, /document\.title = detail\.title;/);
   // App 层:openIssueSession 收窄为页内切会话(挂起转正),closeIssueSession
   // pushState 裸 /issues 留历史(浏览器后退回工作台),不依赖 window.close。
   assert.match(appSource,
