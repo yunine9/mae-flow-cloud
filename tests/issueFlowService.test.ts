@@ -372,8 +372,14 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
       recommended: "确认归档",
     }] } } },
     { text: "研究完成:结论为非问题,证据已写入 issue-analysis.md,建议归档。" },
+    { tool: { name: "submit_analysis", input: { conclusion: "non_issue",
+      summary: "非问题:测试环境时钟漂移导致的误报。" } } },
+    { text: "结论已提交:非问题,等待用户确认收口。" },
   ];
-  const model = new ScriptedModelServer(script);
+  // linear:剧本逐请求推进——text 场景后还有 submit_analysis 收口场景,
+  // 非 linear 会停在最后一个场景反复早收嘴,收口场景永远得不到消费。
+  const model = new ScriptedModelServer(script, "scripted-v1",
+    { linear: true });
   await model.start();
   // 固定流程种子(无单三节点,分析阶段收口待命):恢复管线点火,
   // 测的是提问卡→作答→归档这条多轮闭环,不依赖创建回执。
@@ -424,15 +430,18 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.ok(thread.some((message) => message.role === "decision"),
     "用户决定应入账");
 
-    // 续聊通道:idle 后用户还能继续说话。
-    const resumed = service.reply(created.id, "补充:同类现象上周也出现过");
+    // 续聊通道:idle 后用户还能继续说话。续聊轮消费 submit_analysis
+    // 场景:结论 non_issue 举起 conclude 卡(ADR-0034,无单收口走
+    // 结论卡,结论前手动归档已退役)。
+    const resumed = service.reply(created.id, "补充:同类现象上周也出现过,那就收口吧");
     assert.equal(resumed.status, "running");
-    await until(() => {
+    const concludeCard = await until(() => {
       const issue = service.get(created.id);
-      return issue.status === "idle" || issue.status === "failed" ? issue : undefined;
-    }, "续聊回合收口", 10_000).then((issue) => {
-      assert.notEqual(issue.status, "failed", issue.error);
-    });
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      // 举卡在回合内落账,等状态落到 waiting_user 再作答。
+      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
+        ? issue : undefined;
+    }, "结论确认卡", 10_000);
 
     // 视图旁路(真路由形状):多轮闭环完成后,「耗时与卡点」与过程文档
     // 都应能直接出结论——等待段配对、决策计数、issue-analysis.md 全文。
@@ -460,8 +469,10 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     assert.equal((await issueGet(
       ["issues", "issue-999", "documents"], service)).status, 404);
 
-    const archived = await service.control(created.id, {
-      action: "archive", kind: "non_issue", summary: "误报,时钟漂移",
+    // ADR-0034:作答结论卡即闭环归档。
+    const archived = await service.answer(created.id, {
+      state_version: concludeCard.gate!.state_version,
+      code: "non_issue",
     });
     assert.equal(archived.status, "archived");
     assert.equal(archived.conclusion?.kind, "non_issue");
@@ -469,7 +480,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
     const sources = archived.transitions?.map((entry) => entry.source) ?? [];
     assert.ok(sources.includes("platform"), "平台动作要入转移账");
     assert.equal(archived.transitions?.at(-1)?.source, "platform");
-    assert.equal(archived.transitions?.at(-1)?.stage, "analyze",
+    assert.equal(archived.transitions?.at(-1)?.stage, "conclude",
       "归档收口落在场景路线自己的词表里");
     assert.equal(existsSync(
       join(dataDir, ".issue-environments", `${created.id}.json`)), false,
