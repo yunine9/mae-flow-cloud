@@ -615,7 +615,9 @@ export interface IssueFlowOptions {
    * 问题流的启动依赖。 */
   notifier?: Notifier;
   /** 通知链接的对外入口(--public-url):深链落到问题会话工作台
-   * /issues/<id>,与需求侧 /work/<id> 同一地位。 */
+   *  /issues/<id>,与需求侧 /work/<id> 同一地位。缺席时从已登录
+   *  用户的实际请求 Host 学到内网入口(observeLinkBase),不再
+   *  默认写死 127.0.0.1,也不出只剩路径后缀的死链。 */
   linkBase?: string;
   isolation?: IssueIsolation;
   /** 环境预热编译(需求侧 warmupAgent 的问题流移植,2026-09-04):
@@ -856,6 +858,9 @@ export class IssueFlowService {
   private turnSeq = 0;
   private recoveryStarted = false;
   private shuttingDown = false;
+  /** 从已登录用户请求 Host 学到的通知入口(--public-url 缺席时的
+   *  兜底,与需求侧 TaskService 同款)。 */
+  private observedLinkBase?: string;
   /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
   readonly dataDir: string;
 
@@ -2454,9 +2459,33 @@ export class IssueFlowService {
     return this.tierOf(live) === "1";
   }
 
-  /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。 */
+  /** 从这次 HTTP 请求学内网入口(--public-url 缺席时通知深链的唯一
+   *  完整地址来源;与需求侧 TaskService.observeLinkBase 同款纪律):
+   *  回环地址永不入账——它只对本机成立,发给别人就是死链;管理员在
+   *  服务器本机或经 SSH 隧道登录一次,不该把全体人的通知地址带沟里,
+   *  学过的可用地址也不许被回环访问冲掉。解析不了的地址不入账。 */
+  observeLinkBase(base: string | undefined): void {
+    if (this.options.linkBase || !base) return;
+    try {
+      const host = new URL(base).hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1"
+          || host === "::1" || host === "[::1]") {
+        return;
+      }
+    } catch {
+      return;
+    }
+    this.observedLinkBase = base.replace(/\/+$/, "");
+  }
+
+  private notificationLinkBase(): string | undefined {
+    return this.options.linkBase ?? this.observedLinkBase;
+  }
+
+  /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。
+   *  linkBase 缺席时回落从请求 Host 学到的入口,不再只剩路径后缀。 */
   private issueLink(issueId: string): string {
-    return `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+    return `${(this.notificationLinkBase() ?? "").replace(/\/+$/, "")}`
       + `/issues/${encodeURIComponent(issueId)}`;
   }
 
