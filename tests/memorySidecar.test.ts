@@ -97,6 +97,20 @@ test("预算:search 超预算返回 undefined 而不是挂着;进程死了按需
   }
 });
 
+test("停止旁路立即结束在途长预算请求，不遗留等待或重拉进程", async () => {
+  const { dataDir } = corpusWith(0);
+  const sidecar = stub(dataDir, { STUB_SLOW_SEARCH: "1" }, { searchMs: 600_000 });
+  assert.equal(await sidecar.start(), true);
+  const pending = sidecar.search({ query: "x", repo: "r" });
+  await new Promise(resolve => setImmediate(resolve));
+  sidecar.stop();
+  const timeout = setTimeout(() => assert.fail("stop 未结束请求"), 1000);
+  try {
+    assert.equal(await pending, undefined);
+    assert.equal(await sidecar.start(), false);
+  } finally { clearTimeout(timeout); sidecar.stop(); }
+});
+
 test("工具:corpus_search 结果封顶带 id/判定者/位置;expand 形状校验;足迹回调", async () => {
   const { dataDir, ids } = corpusWith(2);
   const sidecar = stub(dataDir);

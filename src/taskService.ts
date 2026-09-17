@@ -2051,8 +2051,10 @@ export class TaskService {
         env: options.memory.env,
         log: options.log,
       });
-      void this.memorySidecar.start().then((ok) => options.log?.(
-        ok ? "任务记忆检索旁路已就绪" : "任务记忆检索旁路未就绪,开局推送退回索引级"));
+      void this.memorySidecar.start().then((ok) => {
+        options.log?.(ok ? "任务记忆检索旁路已就绪" : "任务记忆检索旁路未就绪,开局推送退回索引级");
+        if (ok) this.prepareKnowledgeIndex();
+      });
     }
     // 沉底扫描(§6):起服务后稍等一会儿做一次,之后每天一次。旁路,
     // 失败只记日志;只碰一年以上从未用过、或失锚半年以上的记录。
@@ -2424,6 +2426,7 @@ export class TaskService {
    * 业务状态；下次启动仍由 recover 按原来的 task.json 续跑。
    */
   async shutdown(): Promise<void> {
+    clearTimeout(this.knowledgePrepareTimer);
     this.memorySidecar?.stop();
     if (this.memorySweepTimer) clearTimeout(this.memorySweepTimer);
     if (this.shutdownPromise) return this.shutdownPromise;
@@ -5741,6 +5744,17 @@ export class TaskService {
   }
 
   private knowledgeSearch?: KnowledgeSearch;
+  private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;
+
+  prepareKnowledgeIndex(): void {
+    if (!this.memorySidecar || this.shuttingDown) return;
+    clearTimeout(this.knowledgePrepareTimer);
+    this.knowledgePrepareTimer = setTimeout(() => {
+      const search = this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar);
+      void search.prepare().catch(error => this.options.log?.(`知识预索引失败：${String(error)}`));
+    }, 250);
+    this.knowledgePrepareTimer.unref?.();
+  }
 
   private memoryTools(task: TaskState): unknown[] | undefined {
     const memoryTools = createMemoryTools({

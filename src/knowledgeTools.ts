@@ -15,7 +15,7 @@ export function createKnowledgeTool(options: {
     promptGuidelines: [
       "修改代码、配置、编写设计或执行构建之前，用 knowledge(action=search, query=具体问题) 检索相关规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本，不只搜‘C++’或‘开发规范’。",
       "例如：准备改异步回调，搜索‘C++ 异步回调 对象销毁 生命周期’；后来发现需要改 YAML，再搜索‘该配置用途 YAML 修改规范’。准备首次构建，搜索‘该仓库 C++ 首次构建 UT 依赖 命令’。",
-      "先看适用条件、来源和版本；需要完整依据时用 knowledge(action=read, id=搜索结果ID)。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
+      "先看适用条件、来源和版本；需要完整依据时用 knowledge(action=read, id=搜索结果ID, start_line=命中起始行, end_line=命中结束行, revision=结果版本) 直接读取命中章节，保留规则、示例和例外。结果提示后续行时按需继续读取。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
       "检索结果只是候选：不匹配当前仓库、产品版本或适用条件的不要套用，不因排名第一就视为正确。未声明产品版本时核对正文；不能把文档修订号当成适用产品版本。知识不覆盖当前用户明确要求，不代替实际验证。",
       "没有相关结果或检索暂不可用，按代码和现有证据继续，不反复空查或等待。发现知识与现场冲突时说明冲突，不擅自改写已采纳结论。",
     ],
@@ -24,8 +24,10 @@ export function createKnowledgeTool(options: {
       query: Type.Optional(Type.String({ maxLength: 4000 })),
       id: Type.Optional(Type.String({ maxLength: 200 })),
       start_line: Type.Optional(Type.Integer({ minimum: 1 })),
+      end_line: Type.Optional(Type.Integer({ minimum: 1 })),
+      revision: Type.Optional(Type.String()),
     }),
-    async execute(_callId: string, input: { action: string; query?: string; id?: string; start_line?: number }) {
+    async execute(_callId: string, input: { action: string; query?: string; id?: string; start_line?: number; end_line?: number; revision?: string }) {
       try {
         const service = options.service();
         if (!service) return reply("知识检索暂不可用；继续当前任务，不反复重试等待。");
@@ -39,18 +41,32 @@ export function createKnowledgeTool(options: {
           if (!result.available) return reply(result.warnings.join("；"), { available: false });
           if (!result.hits.length) return reply("未找到足够相关的知识；继续根据现场证据工作，不代表相关知识一定不存在。" + warning, { available: true, hits: [] });
           return reply("以下是候选知识，不是已验证适用的答案。核对条件，必要时用 knowledge read 展开正文。\n"
-            + result.hits.map(hit => `- (${hit.id}) ${hit.title}\n  ${hit.scope}；${hit.versionNote}\n  适用条件：${hit.whenToUse}\n  摘要：${hit.summary}`).join("\n") + warning, result);
+            + result.hits.map(hit => `- (${hit.id}) ${hit.title}\n  ${hit.scope}；${hit.versionNote}\n  章节：${hit.heading ?? hit.title}；原文行：${hit.start_line ?? 1}-${hit.end_line ?? "未定位"}；revision=${hit.revision}\n  适用条件：${hit.whenToUse}\n  摘要：${hit.summary}`).join("\n") + warning, result);
         }
         if (input.action !== "read" || !input.id) return reply("read 需要提供搜索结果中的 id。");
         const asset = service.read(context, input.id);
         if (!asset) return reply("该知识取不到：已停用、已不适用于当前任务或不存在；不要沿用旧结论。");
-        const start = Math.max(1, input.start_line ?? 1), lines = asset.content.split("\n");
+        if (input.revision && input.revision !== asset.revision) return reply("文档已更新，请重新 search 定位章节，不沿用旧版本行号。");
+        const lines = asset.content.split("\n");
+        const start = Math.max(1, input.start_line ?? 1);
+        if (start > lines.length || (input.end_line !== undefined && input.end_line < start)) {
+          return reply(`读取范围无效；该文档共 ${lines.length} 行，请使用搜索返回的原文行号。`);
+        }
+        const end = Math.min(lines.length, input.end_line ?? start + 119, start + 599);
+        const selected: string[] = [];
+        let size = 0;
+        for (let i = start - 1; i < end; i++) {
+          const line = `${i + 1}: ${lines[i]}`;
+          if (size + line.length > 24000 && selected.length) break;
+          selected.push(line); size += line.length;
+        }
+        const next = start + selected.length;
         options.onUse?.({ moment: "expand", ids: [asset.id] });
         return reply(`${asset.title}\n范围：${asset.scope}\n文档修订：${asset.revision}（不是产品版本）\n`
           + `产品版本：${asset.productVersions.join("、") || "未单独声明，请核对正文"}\n`
           + `适用条件：${asset.whenToUse}\n共 ${lines.length} 行，从 ${start} 行开始：\n`
-          + lines.slice(start - 1, start + 119).map((line, i) => `${start + i}: ${line}`).join("\n").slice(0, 16000),
-          { id: asset.id, revision: asset.revision, total_lines: lines.length, start_line: start });
+          + selected.join("\n") + (next <= lines.length ? `\n后续原文从第 ${next} 行继续读取；勿把未读取的例外当作不存在。` : ""),
+          { id: asset.id, revision: asset.revision, total_lines: lines.length, start_line: start, end_line: next - 1, next_line: next <= lines.length ? next : undefined });
       } catch {
         return reply("知识读取暂不可用；继续当前任务，不反复重试等待。");
       }

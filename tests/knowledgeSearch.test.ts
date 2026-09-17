@@ -89,6 +89,7 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     store.review(row.id, "owner", { decision: "accepted", revision: 1 });
     assert.equal(await sidecar.start(), true);
     const service = new KnowledgeSearch(dir, sidecar);
+    await service.prepare();
     const tool: any = createKnowledgeTool({ service: () => service, context: () => context });
     const module = await tool.execute("module", { action: "search", query: "告警重复事件如何去重" });
     assert.ok((module.details as any).hits?.some((h: any) => h.id === "module:alarm:dedup"), JSON.stringify(module));
@@ -99,6 +100,7 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     assert.equal(callback.hits[0]?.id, row.id, JSON.stringify(callback));
     const updated = store.review(row.id, "teammate", { decision: "accepted", revision: store.find(row.id)!.revision!,
       module: "alarm", product_versions: ["2.7B"], conclusion: "先核对回调生命周期。弱引用需判空；共享所有权场景保留强引用。" });
+    await service.prepare();
     const revised = await service.search(context, "回调还没结束对象就释放了怎么办");
     assert.ok(revised.hits.some(hit => hit.id === row.id));
     assert.match(JSON.stringify(service.read(context, row.id)), /共享所有权/);
@@ -181,4 +183,50 @@ test("新任务只宣传统一检索，恢复的旧会话保留工具名兼容�
       assert.deepEqual(legacy.promptGuidelines, []);
     }
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("搜索保留章节原文行号，read 定位规则和例外并拒绝旧版本位置", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-lines-"));
+  try {
+    const ids = seed(dir);
+    const fake = { ingest: async () => true, searchBudgetMs: 3000, search: async ({ sources }: any) => {
+      const file = sources.find((source: any) => source.id === ids.current).path;
+      const { readFileSync } = await import("node:fs");
+      const lines = readFileSync(file, "utf8").split("\n");
+      const line = lines.findIndex(row => row.includes("配置 request_timeout_seconds")) + 1;
+      return [{ id: ids.current, score: 1, heading: "手册 > 超时", start_line: line, end_line: line, snippet: "单位秒" }];
+    } } as unknown as MemorySidecar;
+    const service = new KnowledgeSearch(dir, fake);
+    await service.prepare();
+    const hit = (await service.search(context, "超时")).hits[0];
+    assert.equal(hit.start_line, 4);
+    assert.equal(hit.end_line, 4);
+    const tool: any = createKnowledgeTool({ service: () => service, context: () => context });
+    const result = await tool.execute("read", { action: "read", id: hit.id, start_line: hit.start_line, end_line: hit.end_line, revision: hit.revision });
+    assert.match(result.content[0].text, /4: 配置 request_timeout_seconds/);
+    const stale = await tool.execute("old", { action: "read", id: hit.id, revision: "old" });
+    assert.match(stale.content[0].text, /文档已更新/);
+    const invalid = await tool.execute("invalid", { action: "read", id: hit.id, start_line: 1000 });
+    assert.match(invalid.content[0].text, /读取范围无效/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("单份手册索引慢时已就绪知识仍可检索，并明确说明范围未完整", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-partial-"));
+  let finish!: (value: boolean) => void;
+  const waiting = new Promise<boolean>(resolve => { finish = resolve; });
+  let calls = 0;
+  try {
+    seed(dir);
+    const fake = { ingest: async () => ++calls === 1 ? true : waiting,
+      search: async ({ sources }: any) => {
+        assert.equal(sources.length, 1);
+        return [{ id: sources[0].id, score: 1, snippet: "已就绪内容" }];
+      } } as unknown as MemorySidecar;
+    const service = new KnowledgeSearch(dir, fake);
+    const result = await service.search(context, "超时");
+    assert.equal(result.available, true);
+    assert.equal(result.hits.length, 1);
+    assert.match(result.warnings.join(""), /不是完整知识范围/);
+  } finally { finish(true); rmSync(dir, { recursive: true, force: true }); }
 });

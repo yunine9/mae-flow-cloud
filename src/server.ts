@@ -404,6 +404,12 @@ export function createTaskServer(
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
+        && ["knowledge-candidates", "business-modules", "skills", "memories"].includes(parts[0])) {
+      response.once("finish", () => {
+        if (response.statusCode < 300) service.prepareKnowledgeIndex?.();
+      });
+    }
     try {
       if (options.startup && request.method === "GET" && url.pathname === "/health") {
         return json(response, options.startup.state === "ready" ? 200 : 503,

@@ -44,19 +44,19 @@ export function knowledgeProductVersions(content: string): string[] {
   } catch { return []; }
 }
 
-export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext): {
+export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false): {
   assets: SearchableKnowledge[]; warnings: string[];
 } {
   const assets: SearchableKnowledge[] = [];
   const warnings: string[] = [];
   const repos = new Set(context.repositories.map(repositoryIdentity));
-  const matchesRepos = (values: string[]) => !values.length || values.some(r => repos.has(repositoryIdentity(r)));
+  const matchesRepos = (values: string[]) => all || !values.length || values.some(r => repos.has(repositoryIdentity(r)));
   const catalog = listBusinessModules(dataDir);
   warnings.push(...catalog.warnings);
   // Module relationships can be discovered from current repository mapping even
   // if the task did not know the module at creation time.
   const modules = catalog.modules.filter(m => m.status === "active"
-    && (context.moduleIds.includes(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r)))));
+    && (all || context.moduleIds.includes(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r)))));
   const moduleIds = new Set(modules.map(m => m.id));
   const candidates = listKnowledgeCandidateCatalog(dataDir);
   warnings.push(...candidates.warnings);
@@ -101,7 +101,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   }
   const store = new MemoryStore(dataDir);
   for (const row of store.list()) {
-    if (![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
+    if (all ? row.review?.status !== "accepted" : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
     const content = store.read(row.id);
     if (!content) continue;
     assets.push({ id: row.id, title: row.trigger, kind: "experience",
@@ -120,6 +120,9 @@ export interface KnowledgeHit {
   id: string; title: string; kind: SearchableKnowledge["kind"]; scope: string;
   revision: string; productVersions: string[]; whenToUse: string;
   summary: string | undefined; versionNote: string;
+  heading?: string;
+  start_line?: number;
+  end_line?: number;
 }
 export interface KnowledgeSearchResult { available: boolean; hits: KnowledgeHit[]; warnings: string[] }
 
@@ -137,6 +140,15 @@ export class KnowledgeSearch {
 
   catalog(context: KnowledgeContext) { return collectSearchableKnowledge(this.dataDir, context); }
 
+  /** Background preparation after publication/startup; search still scopes the catalog. */
+  async prepare(): Promise<void> {
+    if (!this.sidecar) return;
+    const catalog = collectSearchableKnowledge(this.dataDir, { repo: "", repositories: [], moduleIds: [] }, true);
+    const results = await Promise.all(catalog.assets.map(asset => this.ensureIndexed(this.mirror(asset))));
+    const failed = results.filter(ok => !ok).length;
+    if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
+  }
+
   async search(context: KnowledgeContext, query: string, limit = 5): Promise<KnowledgeSearchResult> {
     if (!this.sidecar) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     const catalog = this.catalog(context);
@@ -146,16 +158,22 @@ export class KnowledgeSearch {
     // index jobs on repeated questions. The caller has a bounded wait below.
     const jobs = sources.map(source => this.ensureIndexed(source.path));
     const ready = await within(Promise.all(jobs).then(values => values.every(Boolean)), 1200);
-    if (!ready) return { available: false as const, hits: [], warnings: ["相关知识索引正在准备或暂不可用；继续当前任务，不等待或反复重试。"] };
-    const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources }), 1500);
+    const searchable = sources.filter(source => this.indexed.get(source.path) === this.indexKey(source.path));
+    if (!searchable.length) return { available: false as const, hits: [], warnings: ["相关知识索引正在准备或暂不可用；继续当前任务，不等待或反复重试。"] };
+    const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000);
     if (!hits) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     // A document may have been edited/withdrawn during asynchronous indexing.
     const current = new Map(this.catalog(context).assets.map(asset => [asset.id, asset]));
     const searched = new Map(catalog.assets.map(asset => [asset.id, asset]));
-    return { available: true as const, warnings: catalog.warnings, hits: hits.flatMap(hit => {
+    return { available: true as const, warnings: [...catalog.warnings, ...(!ready ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
       const asset = current.get(hit.id), prior = searched.get(hit.id);
       if (!asset || !prior || asset.content !== prior.content || asset.revision !== prior.revision) return [];
+      const path = sources.find(source => source.id === asset.id)?.path;
+      const offset = path && !asset.path ? readFileSync(path, "utf8").split("\n").length - asset.content.split("\n").length : 0;
+      const start = hit.start_line ? Math.max(1, hit.start_line - offset) : undefined;
+      const end = hit.end_line ? Math.min(asset.content.split("\n").length, hit.end_line - offset) : undefined;
       return [{ id: asset.id, title: asset.title, kind: asset.kind, scope: asset.scope,
+        heading: hit.heading, start_line: start, end_line: end && end >= (start ?? 1) ? end : undefined,
         revision: asset.revision, productVersions: asset.productVersions,
         whenToUse: asset.whenToUse, summary: asset.kind === "experience" ? asset.summary : hit.snippet,
         versionNote: asset.productVersions.length ? `适用产品版本：${asset.productVersions.join("、")}`
@@ -170,8 +188,12 @@ export class KnowledgeSearch {
   private mirror(asset: SearchableKnowledge): string {
     // Memory already has its authoritative Markdown; don't duplicate it.
     if (asset.path) return asset.path;
+    // Metadata is already represented above the body. Blank its original lines
+    // in the disposable mirror so YAML separators cannot become Setext headings.
+    const body = asset.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,
+      block => block.replace(/[^\n]/g, ""));
     const text = `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n`
-      + `# ${asset.title}\n\n适用范围：${asset.scope}\n适用条件：${asset.whenToUse}\n${asset.summary}\n\n${asset.content}`;
+      + `# ${asset.title}\n\n适用范围：${asset.scope}\n适用条件：${asset.whenToUse}\n${asset.summary}\n\n${body}`;
     const hash = createHash("sha256").update(asset.id).digest("hex");
     const root = join(this.dataDir, "corpus", "_knowledge");
     const path = join(root, `${hash}.md`);
@@ -184,13 +206,17 @@ export class KnowledgeSearch {
     return path;
   }
 
+  private indexKey(path: string): string {
+    return path + ":" + createHash("sha256").update(readFileSync(path)).digest("hex");
+  }
+
   private ensureIndexed(path: string): Promise<boolean> {
     // Includes contents: edits to a memory at the same path need reindexing.
-    const key = path + ":" + createHash("sha256").update(readFileSync(path)).digest("hex");
+    const key = this.indexKey(path);
     if (this.indexed.get(path) === key) return Promise.resolve(true);
     const existing = this.indexing.get(key);
     if (existing) return existing;
-    const job = this.indexQueue.then(() => this.sidecar!.ingest(path)).then(ok => { if (ok) this.indexed.set(path, key); return ok; })
+    const job = this.indexQueue.then(() => this.sidecar!.ingest(path, 600_000)).then(ok => { if (ok) this.indexed.set(path, key); return ok; })
       .catch(() => false).finally(() => this.indexing.delete(key));
     this.indexQueue = job;
     this.indexing.set(key, job);

@@ -177,7 +177,7 @@ class Sidecar:
             sources[str(path)] = {"id": ident, **front}
         for source in sources:
             await self.ensure_indexed(Path(source))
-        rows = await retrieve(self.ms, query, sources, limit)
+        rows = await retrieve(self.ms, query, sources, limit, sections=supplied is not None)
         hits = []
         for row in rows:
             source = row["source"]
@@ -188,6 +188,7 @@ class Sidecar:
             hits.append({
                 **{k: front[k] for k in ("id", "repo", "judged_by", "scope", "at", "task", "paths", "line", "phase") if k in front},
                 "score": row["score"], "semantic_score": row["semantic_score"],
+                "start_line": row.get("start_line"), "end_line": row.get("end_line"),
                 "heading": row.get("heading", ""), "snippet": str(row.get("content", ""))[:1200],
                 "file": source, "chunk_hash": row.get("chunk_hash", ""),
             })
