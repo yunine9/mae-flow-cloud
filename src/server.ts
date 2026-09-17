@@ -2309,6 +2309,7 @@ export function createTaskServer(
               selectedRepositorySkillIds,
               selectedHostSkillPaths,
               selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
+              businessModuleId: typeof body.business_module_id === "string" ? body.business_module_id : undefined,
               repositoryProfiles,
               requireRepositoryProfiles: requestedRepositories.length > 0,
               knowledgePreviewDigest,
@@ -2328,6 +2329,12 @@ export function createTaskServer(
           return json(response, 409, {
             error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
           });
+        }
+        if (request.method === "PUT" && parts.length === 3 && parts[2] === "business-module") {
+          const body = await readBody(request);
+          if (typeof body.module_id !== "string") return json(response, 400, { error: "module_id 必须为字符串" });
+          try { return json(response, 200, service.setBusinessModule(id, body.module_id, viewer?.username ?? "本地部署")); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "GET" && parts.length === 2) {
           const task = service.get(id);

@@ -956,6 +956,8 @@ export interface TaskSummary {
   team_skills?: HostSkillShelfEntry[];
   /** 创建任务时固定的业务模块与知识版本；正文不进入任务摘要。 */
   business_modules?: SelectedBusinessModule[];
+  business_module?: { id: string; name: string };
+  business_module_history?: Array<{ at: string; by: string; from?: { id: string; name: string }; to?: { id: string; name: string } }>;
   engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
     digest: string; bytes: number; snapshot_path: string;
   }>;
@@ -2282,6 +2284,7 @@ export async function createTask(
     repositorySkillCatalogToken?: string;
     selectedRepositorySkillIds?: string[];
     selectedBusinessModuleIds?: string[];
+    businessModuleId?: string;
     knowledgePreviewDigest?: string;
     repositoryProfiles?: Array<Pick<RepositoryProfile,
       "repository" | "technologies" | "confirmed">>;
@@ -2325,6 +2328,7 @@ export async function createTask(
       selected_repository_skill_ids:
         extras?.selectedRepositorySkillIds,
       selected_business_module_ids: extras?.selectedBusinessModuleIds,
+      business_module_id: extras?.businessModuleId,
       knowledge_preview_digest: extras?.knowledgePreviewDigest,
       repository_profiles: extras?.repositoryProfiles,
     }),

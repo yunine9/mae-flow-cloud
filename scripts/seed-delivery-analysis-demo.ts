@@ -5,21 +5,25 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { LocalAuth } from "../src/auth.ts";
 import { collectDeliveryCode } from "../src/deliveryAnalytics.ts";
 import type { TaskSummary } from "../src/taskService.ts";
 
-const data = resolve(".e2e-fixtures/delivery-analysis");
+const data = resolve(process.argv[2] ?? ".e2e-fixtures/delivery-analysis");
 if (existsSync(data)) throw new Error(`演示目录已存在，请沿用或手工移走：${data}`);
 mkdirSync(data, { recursive: true });
 new LocalAuth(join(data, "auth.json")).bootstrapAdmin("admin", "mae-flow-demo");
+for (const [id, name] of [["alarm", "告警管理"], ["platform", "平台配置"]]) {
+  createBusinessModule(data, { id, name, description: "本地演示模块", owner: "admin", repositories: ["https://code.example/team/mae-demo.git"] }, "admin");
+}
 const date = (days: number) => new Date(Date.now() - days * 86400000).toISOString();
 function persist(summary: TaskSummary, cwd?: string) {
   mkdirSync(summary.workspace, { recursive: true });
   writeFileSync(join(summary.workspace, "task.json"), JSON.stringify({ summary, cwd }));
 }
 persist({ id: "task-1", title: "统一告警检索能力", requirement: "统一告警检索能力", status: "completed", ui_fixture: true,
-  workspace: join(data, "task-1"), created_at: date(28), completed_at: date(7) } as TaskSummary);
+  business_module: { id: "alarm", name: "告警管理" }, workspace: join(data, "task-1"), created_at: date(28), completed_at: date(7) } as TaskSummary);
 for (const [id, title, parent, days, firstSize, ciCount, reviewCount, otherCount] of [
   [2, "告警查询服务与分页接口", "task-1", 21, 160, 12, 8, 4],
   [3, "告警工作台筛选与结果展示", "task-1", 7, 120, 4, 10, 3],
@@ -34,7 +38,7 @@ for (const [id, title, parent, days, firstSize, ciCount, reviewCount, otherCount
   writeFileSync(join(cwd, ".mae-flow.json"), JSON.stringify({ step_heads: { branch_create: base } }));
   const summary = { id: `task-${id}`, title, requirement: title, parent_task_id: parent, ui_fixture: true, status: "await_merge", workspace,
     created_at: date(days + 2), completed_at: date(days), repo_url: "https://code.example/team/mae-demo.git",
-    business_modules: [{ id: "demo", name: "告警与工作台" }], delivery: { target_branch: "main", source_branch: `feature/task-${id}` } } as TaskSummary;
+    business_module: parent ? undefined : { id: "platform", name: "平台配置" }, delivery: { target_branch: "main", source_branch: `feature/task-${id}` } } as TaskSummary;
   const lines = Array.from({ length: firstSize }, (_, i) => `export const value${i} = ${i};`);
   async function publish(message: string) {
     writeFileSync(join(cwd, "feature.ts"), lines.join("\n") + "\n"); git("add", "."); git("commit", "-m", message);

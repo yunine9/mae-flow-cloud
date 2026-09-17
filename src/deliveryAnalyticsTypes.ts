@@ -31,6 +31,7 @@ export interface DeliveryAnalysisRow {
   parent_title?: string;
   repo: string;
   modules: string[];
+  business_module?: { id: string; name: string };
   merged: boolean;
   at: string;
   mr_url?: string;

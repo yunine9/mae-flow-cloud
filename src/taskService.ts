@@ -1038,6 +1038,9 @@ export interface TaskSummary {
    * 适用场景和任务内路径目录交给 Agent，正文必须按需读取；模块后来
    * 更新不会改写运行中或历史任务。 */
   business_modules?: SelectedBusinessModule[];
+  /** Single requirement ownership for reporting; children read their root parent. */
+  business_module?: { id: string; name: string };
+  business_module_history?: Array<{ at: string; by: string; from?: { id: string; name: string }; to?: { id: string; name: string } }>;
   /** 下单时匹配/选择并固定的团队工程知识（Skill 由团队 Skill 货架承载）。 */
   engineering_knowledge?: SelectedEngineeringKnowledge[];
   /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
@@ -2660,10 +2663,32 @@ export class TaskService {
       .sort((a, b) => b.created_at.localeCompare(a.created_at));
   }
 
+  private requireBusinessModule(id: string): { id: string; name: string } {
+    const module = listBusinessModules(this.options.dataDir).modules.find(m => m.id === id && m.status === "active");
+    if (!module) throw new TaskControlError("请选择配置中心中有效的业务模块");
+    return { id: module.id, name: module.name };
+  }
+
+  setBusinessModule(id: string, moduleId: string, actor: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new TaskControlError("任务不存在");
+    if (task.summary.parent_task_id) throw new TaskControlError("请到主任务修改所属业务模块，子任务自动使用主任务归属");
+    if (task.summary.origin === "issue") throw new TaskControlError("此入口用于需求业务模块归属");
+    const next = moduleId ? this.requireBusinessModule(moduleId) : undefined;
+    const previous = task.summary.business_module;
+    if (previous?.id !== next?.id) {
+      task.summary.business_module_history = [...(task.summary.business_module_history ?? []),
+        { at: new Date().toISOString(), by: actor, from: previous, to: next }];
+      task.summary.business_module = next;
+      this.persist(task);
+    }
+    return this.get(id)!;
+  }
+
   deliveryAnalysis(retry = false) {
     for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
       observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
-    return buildDeliveryAnalysis([...this.tasks.values()].map(task => task.summary));
+    return buildDeliveryAnalysis([...this.tasks.values()].map(task => task.summary), listBusinessModules(this.options.dataDir).modules);
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
@@ -7368,6 +7393,7 @@ export class TaskService {
       /** 普通下单只提交正式模块 ID；服务端在创建现场时固定当时的已发布
        * 资产版本与正文快照，浏览器不能自报内容。 */
       selectedBusinessModuleIds?: string[];
+      businessModuleId?: string;
       /** 前端首次人工确认并由服务端验过的技术画像；知识旁路字段。 */
       repositoryProfiles?: RepositoryProfile[];
       /** 普通新下单开启：每个仓必须有非空技术画像。内部拆单/
@@ -7705,6 +7731,8 @@ export class TaskService {
         || this.tasks.has(id) || existsSync(join(this.options.dataDir, id)))) {
       throw new TaskControlError(`任务 ${id} 不能安全地原位重建`);
     }
+    const businessModule = options.businessModuleId ? this.requireBusinessModule(options.businessModuleId) : undefined;
+    if (businessModule && options.parentTaskId) throw new TaskControlError("子任务统一使用主任务所属业务模块");
     const workspace = join(this.options.dataDir, id);
     let workflowProfileWarning = options.workflowProfileWarning;
     let workflowProfile = options.workflowProfile
@@ -7939,6 +7967,8 @@ export class TaskService {
       repository_skills: repositorySkills,
       team_skills: teamSkills.length ? teamSkills : undefined,
       business_modules: businessModules.length ? businessModules : undefined,
+      business_module: businessModule,
+      business_module_history: businessModule ? [{ at: new Date().toISOString(), by: options.account ?? "本地部署", to: businessModule }] : undefined,
       engineering_knowledge: engineeringKnowledge.length
         ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
@@ -9356,6 +9386,7 @@ export class TaskService {
       repositorySkills: preserveUndefinedRepositorySkills
         ? undefined
         : source.repository_skills!.map((item) => ({ ...item })),
+      businessModuleId: source.parent_task_id ? undefined : source.business_module?.id,
       businessModules: (source.business_modules ?? []).map((module) => ({
         ...module,
         assets: module.assets.map((asset) => ({ ...asset })),

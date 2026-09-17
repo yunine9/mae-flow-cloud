@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 import { inferCommitOrigin } from "../src/deliveryOriginInference.ts";
 import { calculateDeliveryCode } from "../src/deliveryAnalyticsGit.ts";
 import { collectDeliveryCode, buildDeliveryAnalysis, observeDeliveryCode, awaitDeliveryAnalytics, repairOrigin, recordDeliveryPublication } from "../src/deliveryAnalytics.ts";
-import { aggregateDelivery } from "../src/deliveryAnalyticsSummary.ts";
+import { aggregateDelivery, aggregateDeliveryModules } from "../src/deliveryAnalyticsSummary.ts";
 import { TaskService, type TaskSummary } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
@@ -327,8 +327,8 @@ test("task-6：配置先提交、多次实现和文档整理均为首轮，仅�
   assert.equal(result.first, first);
   assert.deepEqual(result.initial_implementation, { end: initialEnd, basis: "commit_message" });
   assert.deepEqual(result.commits.map(c => c.origin), [...Array(7).fill("first"), "pipeline"]);
-  assert.deepEqual(result.retained, { first: 3, pipeline: 1, review: 0, other: 0 });
-  assert.equal(aggregateDelivery(buildDeliveryAnalysis([f.summary]).rows).firstPercent, 75);
+  assert.deepEqual(result.retained, { first: 4, pipeline: 1, review: 0, other: 0 });
+  assert.equal(aggregateDelivery(buildDeliveryAnalysis([f.summary]).rows).firstPercent, 80);
 });
 
 test("无修复迹象暂计首轮；正式反馈记录优先；单纯收到意见不切断首轮", async t => {
@@ -367,4 +367,47 @@ test("task-5：首次取样已有责任人直接推送，合入后仍计算真�
   assert.deepEqual(again.retained, metric.retained);
   f.publish(f.base);
   assert.equal(buildDeliveryAnalysis([f.summary]).rows[0].metric, undefined);
+});
+
+
+test("模块分布只看根需求归属，忽略子任务知识模块；父任务不重复计数", async t => {
+  const f = fixture(t); f.write("code.cpp", "int a = 1;\nint b = 2;\n");
+  const head = f.commit("实现"); f.publish(head); await collectDeliveryCode(f.summary, f.cwd, head);
+  f.summary.status = "completed"; f.summary.delivery!.mr_state = "merged";
+  f.summary.parent_task_id = "parent";
+  f.summary.business_module = { id: "wrong", name: "子任务遗留归属" };
+  const parent = { ...f.summary, id: "parent", parent_task_id: undefined, business_module: { id: "alarm", name: "旧名称" } };
+  const standalone = { ...f.summary, id: "solo", parent_task_id: undefined, business_module: undefined };
+  await collectDeliveryCode(standalone, f.cwd, head);
+  let report = buildDeliveryAnalysis([f.summary, parent, standalone], [{ id: "alarm", name: "告警模块" }]);
+  assert.equal(report.rows.length, 2);
+  assert.deepEqual(report.rows[0].business_module, { id: "alarm", name: "告警模块" });
+  let groups = aggregateDeliveryModules([...report.rows, report.rows[0]]);
+  assert.equal(groups.length, 2); assert.ok(groups.every(group => group.lines === 2 && group.percent === 50));
+  parent.business_module = { id: "report", name: "报表模块" };
+  report = buildDeliveryAnalysis([f.summary, parent, standalone]);
+  groups = aggregateDeliveryModules(report.rows);
+  assert.ok(groups.some(group => group.id === "report" && group.percent === 50));
+  report.rows[1].merged = false;
+  assert.equal(aggregateDeliveryModules(report.rows)[0].percent, 100);
+});
+
+
+test("task-12：纯JSON配置修改正常统计，Markdown与二进制不进入行数", async t => {
+  const f = fixture(t);
+  f.write("febs.json", '{"menu": "old"}\n{"license": "old"}\n'); const first = f.commit("配置菜单和权限");
+  f.write("febs.json", '{"menu": "new"}\n{"license": "new"}\n');
+  f.write("notes.md", "do not count\n");
+  writeFileSync(join(f.cwd, "icon.bin"), Buffer.from([0, 1, 2, 0, 3]));
+  const head = f.commit("按检视意见修改配置"); f.publish(head);
+  const result = await collectDeliveryCode(f.summary, f.cwd, head);
+  assert.equal(result.first, first);
+  assert.deepEqual(result.retained, { first: 0, pipeline: 0, review: 2, other: 0 });
+  assert.equal(result.commits[1].additions, 2); assert.equal(result.commits[1].deletions, 2);
+  for (const path of ["deploy.yaml", "config.xml", "settings.ini", "Dockerfile", "package-lock.json"]) {
+    f.write(path, "text delivery\n");
+  }
+  const next = f.commit("调整配置");
+  const final = await collectDeliveryCode(f.summary, f.cwd, next);
+  assert.equal(Object.values(final.retained).reduce((a, b) => a + b, 0), 7);
 });

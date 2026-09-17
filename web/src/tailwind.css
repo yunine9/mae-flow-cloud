@@ -7625,6 +7625,15 @@ body:has(.workspace-studio) .wish-quick-fab {
 .delivery-filters select, .delivery-filters input { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px 12px; max-width: 320px; }
 .delivery-filters input { flex: 1; min-width: 230px; margin-left: auto; }
 .delivery-scope { font-size: 14px; }
+.delivery-overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+.delivery-module-bars { display: grid; gap: 16px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
+.delivery-module-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 16px; padding: 8px; text-align: left; border-radius: 8px; cursor: pointer; }
+.delivery-module-row:hover, .delivery-module-row[aria-pressed="true"] { background: var(--canvas); }
+.delivery-module-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; }
+.delivery-module-row > strong { color: #0d9488; }
+.delivery-module-row > span:last-child { color: var(--muted); font-size: 14px; }
+.delivery-module-track { height: 10px; align-self: center; background: var(--line); border-radius: 6px; overflow: hidden; }
+.delivery-module-track > span { display: block; height: 100%; background: #0d9488; border-radius: inherit; }
 .delivery-card { padding: 22px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; min-width: 0; }
 .delivery-card h2 { margin: 0 0 20px; color: var(--text-strong); font-size: 18px; font-weight: 650; }
 .delivery-card h2 > span { color: var(--muted); font-size: 14px; font-weight: 400; margin-left: 12px; }

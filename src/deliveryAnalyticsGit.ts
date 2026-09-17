@@ -14,12 +14,13 @@ function numstat(raw: string): Array<{ added: number; removed: number; path: str
   }
   return entries;
 }
-/** Deliberately explicit code scope: documents, configuration, locks and generated
- * artifacts are outside the denominator. Tests are code and remain included. */
+/** Delivery text includes source, configuration and extensionless scripts.
+ * Git numstat filters binary files; exclude Markdown and obvious runtime/build noise. */
 export function analyticsCodePath(path: string): boolean {
   return !/(^|\/)(?:node_modules|vendor|dist|build|target|generated|\.mae-flow|\.git)(\/|$)/i.test(path)
-    && !/(?:\.min\.[cm]?js|\.g\.(?:cs|dart)|\.generated\.[^.]+|\.pb\.(?:cc|h|go)|_pb2\.py)$/i.test(path)
-    && /\.(?:c|cc|cpp|cxx|h|hh|hpp|hxx|java|kt|kts|js|jsx|mjs|cjs|ts|tsx|py|go|rs|cs|swift|scala|rb|php|vue|svelte|sql|sh|bash|ps1|lua|pl|ex|exs|erl|hrl|dart|m|mm|css|scss|less)$/i.test(path);
+    && !/(^|\/)\.mae-flow(?:[.-][^/]*)?$/i.test(path)
+    && !/\.(?:md|markdown|mdx)$/i.test(path)
+    && !/(?:\.min\.[cm]?js|\.g\.(?:cs|dart)|\.generated\.[^.]+|\.pb\.(?:cc|h|go)|_pb2\.py)$/i.test(path);
 }
 
 export async function analyticsGit(cwd: string, args: string[]): Promise<string> {

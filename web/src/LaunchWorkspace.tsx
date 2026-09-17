@@ -71,6 +71,7 @@ type LaunchDraft = {
   repairRounds: string;
   taskInstructions?: string;
   selectedBusinessModuleIds?: string[];
+  businessModuleId?: string;
   moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
   repositoryTechnologies?: RepositoryTechnologyDraft[];
@@ -327,6 +328,7 @@ export function LaunchWorkspace({
     useState<RequirementBundleDraft>();
   const [documentLoading, setDocumentLoading] = useState(false);
   const [draggingDocument, setDraggingDocument] = useState(false);
+  const [businessModuleId, setBusinessModuleId] = useState(validDraft?.businessModuleId ?? "");
   const [title, setTitle] = useState(validDraft?.title ?? "");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -677,7 +679,7 @@ export function LaunchWorkspace({
     lane,
     repairRounds,
     taskInstructions,
-    selectedBusinessModuleIds,
+    selectedBusinessModuleIds, businessModuleId,
     moduleSelectionTouched,
     workflowSelection,
     repositoryTechnologies: repositoryTechnologies.map((item) => ({
@@ -703,7 +705,7 @@ export function LaunchWorkspace({
   }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
     collaborators, ticket,
     baseline, productVersion, lane, repairRounds, taskInstructions,
-    selectedBusinessModuleIds, moduleSelectionTouched,
+    selectedBusinessModuleIds, businessModuleId, moduleSelectionTouched,
     workflowSelection, repositoryTechnologies, requirementBundle,
     requirementBundleDraftName,
     session.username]);
@@ -896,7 +898,7 @@ export function LaunchWorkspace({
           taskInstructions: workflowSelection
             ? undefined : taskInstructions.trim() || undefined,
           workflowSelection,
-          selectedBusinessModuleIds,
+          selectedBusinessModuleIds, businessModuleId,
           knowledgePreviewDigest: knowledgePreview?.selection_digest,
           // 团队通用知识不由下单人逐项治理。字段始终缺席，服务端按
           // 仓库、技术栈和业务模块在创建现场自动匹配并固定版本。
@@ -1274,10 +1276,18 @@ export function LaunchWorkspace({
                       )}
                     </div>
                   )}
+                  <label className="mt-3 block">
+                    <span className={FIELD_LABEL}>所属业务模块</span>
+                    <select className="h-10 w-full rounded-md border border-line bg-surface px-3 text-base"
+                      value={businessModuleId} onChange={event => setBusinessModuleId(event.target.value)}>
+                      <option value="">选择业务模块（可稍后补充）</option>
+                      {businessModules.map(module => <option key={module.id} value={module.id}>{module.name}</option>)}
+                    </select>
+                  </label>
                   {businessModules.length > 0 && <details
                     className="group mt-3 overflow-hidden rounded-lg border border-line bg-surface">
                     <summary className="grid min-h-[50px] grid-cols-[minmax(0,1fr)_auto_17px] cursor-pointer list-none items-center gap-[9px] px-[11px] py-[9px] [&::-webkit-details-marker]:hidden">
-                      <span className="grid min-w-0 gap-0.5"><strong className="text-xs text-text-strong">业务模块</strong><small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
+                      <span className="grid min-w-0 gap-0.5"><strong className="text-xs text-text-strong">模块知识范围</strong><small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
                         {selectedBusinessModuleIds.length
                           ? selectedBusinessModuleIds.map((id) =>
                               businessModules.find((item) => item.id === id)?.name)

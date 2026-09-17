@@ -43,7 +43,7 @@ export function repairOrigin(loop: NonNullable<TaskSummary["delivery"]>["loop"])
 // once and late repair evidence can update an already sampled push.
 function attributionKey(summary: CollectionTask, cwd: string): string {
   const loop = summary.delivery?.loop;
-  return JSON.stringify([8, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, summary.delivery?.merged_sha, feedbackStamp(cwd)]);
+  return JSON.stringify([9, loop?.last_sha, repairOrigin(loop), summary.delivery?.foreign_commits?.base_sha, summary.delivery?.merged_sha, feedbackStamp(cwd)]);
 }
 
 function currentInterval(summary: CollectionTask, head: string): RepairInterval {
@@ -160,12 +160,21 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
 }
 
 /** No Git work in an HTTP request; unavailable history stays visibly unavailable. */
-export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisReport {
+export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id: string; name: string }> = []): DeliveryAnalysisReport {
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  const moduleNames = new Map(modules.map(module => [module.id, module.name]));
   const parentIds = new Set(tasks.map(t => t.parent_task_id).filter(Boolean));
   const names = new Map(tasks.map(t => [t.id, t.title || t.requirement.split("\n")[0]]));
   return { generated_at: new Date().toISOString(), rows: tasks
     .filter(task => task.origin !== "issue" && !parentIds.has(task.id))
     .map(task => {
+      let root: TaskSummary | undefined = task;
+      const visited = new Set<string>();
+      while (root?.parent_task_id && !visited.has(root.id)) {
+        visited.add(root.id); root = byId.get(root.parent_task_id);
+      }
+      const assigned = root && !root.parent_task_id ? root.business_module : undefined;
+      const businessModule = assigned ? { id: assigned.id, name: moduleNames.get(assigned.id) ?? assigned.name } : undefined;
       const stored = read(task), head = task.delivery?.git_push?.sha;
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
@@ -182,7 +191,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[]): DeliveryAnalysisRep
       }
       return { id: task.id, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
-        repo: cleanRepository(task.repo_url ?? ""), modules: (task.business_modules ?? []).map(m => m.name),
+        repo: cleanRepository(task.repo_url ?? ""), modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
         merged,
         at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
         unavailable: metric ? undefined : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === head && stored?.error ? stored.error
