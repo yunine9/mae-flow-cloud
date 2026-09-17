@@ -1,4 +1,6 @@
-import { listProductVersions } from "../configurationCenter.ts";
+import {
+  listProductVersions, matchProductVersion, type ProductVersion,
+} from "../configurationCenter.ts";
 /**
  * 问题流 HTTP 路由(/issues/*)。
  *
@@ -246,6 +248,25 @@ function requireDts(dts: DtsGateway | undefined): DtsGateway {
   return dts;
 }
 
+/** 分支匹配的配置读取(ADR-0038):配置文件损坏时按"零配置"处理——
+ * 列表分支列全体按未配置呈现,发起全部拒绝,不为坏配置炸掉拉单页。 */
+function configuredVersionRows(dataDir: string) {
+  try {
+    return listProductVersions(dataDir);
+  } catch {
+    return [];
+  }
+}
+
+/** 给单据补分支(列表与详情同源):按分支匹配口径(单据版本包含配置
+ * 版本,多命中取最长)解析;未命中不加字段,前端按「未配置分支」呈现。 */
+function withDtsBranch<T extends { version?: string }>(
+  rows: ProductVersion[], ticket: T,
+): T {
+  const row = matchProductVersion(rows, ticket.version);
+  return row ? { ...ticket, branch: row.branch } : ticket;
+}
+
 /** DTS 单据自动匹配业务模块:用 sFeatureNoName / sModuleNoName 拆出
  * 关键词,与模块库的 name/id/description 做匹配。唯一高置信命中时
  * 返回模块 ID;多候选或零候选返回 undefined(留给 Agent 后续处理)。 */
@@ -400,9 +421,21 @@ export async function handleIssueRoutes(
           // 匹配失败不阻断发起,留给 Agent 处理。
         }
       }
-      if (!productVersion && dtsVersion) {
-        productVersion = listProductVersions(issueFlow.dataDir)
-          .find(row => row.version === dtsVersion)?.version ?? "";
+      // 分支匹配(ADR-0038):DTS 发起没有显式选版本时,按单据版本
+      // 包含匹配配置中心带出分支;未命中即拒——分支是逐单强制项,
+      // "未匹配沿用原基线"的静默兜底已随列表选择框退役。读不到版本
+      // (网关缺席/详情失败/单据无版本)同尺拒绝:没有分支就不发车。
+      if (!productVersion && source === "dts") {
+        const row = matchProductVersion(
+          configuredVersionRows(issueFlow.dataDir), dtsVersion);
+        if (!row) {
+          return done(400, {
+            error: `单据版本未配置分支:${dtsVersion
+              ? `版本「${dtsVersion}」没有匹配到配置中心的版本与分支映射`
+              : "未能读取单据版本"}。请到配置中心「版本与分支」维护后再发起`,
+          });
+        }
+        productVersion = row.version;
       }
       // 环境段(#150,ADR-0020 快照语义):environment_id 在场即从台账
       // 快照——前端永远没有密码,值由服务端解密取用;与手填字段互斥,
@@ -469,8 +502,17 @@ export async function handleIssueRoutes(
         return done(403, { error: "管理员不处理问题单" });
       }
       // 直连 DTS 网关(收窄票 #7):服务不再转手拉单。
-      const tickets = await requireDts(routeOptions.dts)
-        .listByOwner(String(viewer?.username ?? ""));
+      // 协助处理(2026-09-17):?owner= 指名看谁名下的单,缺省仍是本人。
+      // 读侧换视角不发所有权——发起后的会话归属仍=登录发起人;会话
+      // 列表读本就全员开放(?scope=all),这里同尺不另设闸。
+      const owner = new URL(request.url ?? "", "http://x")
+        .searchParams.get("owner")?.trim() ?? "";
+      // 分支列数据源(ADR-0038):匹配在后端单点,列表逐单带出——
+      // 前端纯展示,列显示与发起解析永不漂移。
+      const versionRows = configuredVersionRows(issueFlow.dataDir);
+      const tickets = (await requireDts(routeOptions.dts)
+        .listByOwner(owner || String(viewer?.username ?? "")))
+        .map(ticket => withDtsBranch(versionRows, ticket));
       return done(200, { tickets, mock: routeOptions.dts?.mock === true });
     }
 
@@ -481,8 +523,11 @@ export async function handleIssueRoutes(
       }
       const ticket = decodeURIComponent(parts[2]);
       if (!ticket) return done(400, { error: "缺少问题单号" });
+      // 详情与列表同源补分支(ADR-0038):远程查单入列的单子,分支列
+      // 不因绕过列表而缺席。
       const detail = await requireDts(routeOptions.dts).detail(ticket);
-      return done(200, detail);
+      return done(200, withDtsBranch(
+        configuredVersionRows(issueFlow.dataDir), detail));
     }
 
     // 单号→模块人工预绑(spec #57):团队共享事实,登录即可读写——
@@ -1119,10 +1164,8 @@ export async function handleIssueRoutes(
         return done(403, { error: "只有归属人能归档或取消会话" });
       }
       const body = await readBody(request);
-      const kind = ["non_issue", "fixed", "delivered", "issue", "converted"]
-        .includes(String(body.kind))
-        ? String(body.kind) as "non_issue" | "fixed" | "delivered"
-          | "issue" | "converted" : undefined;
+      const kind = ["non_issue", "delivered", "issue"].includes(String(body.kind))
+        ? String(body.kind) as "non_issue" | "delivered" | "issue" : undefined;
       return done(200, await issueFlow.control(id, {
         action: body.action === "cancel" ? "cancel" : "archive",
         ...(kind ? { kind } : {}),

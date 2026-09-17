@@ -154,9 +154,10 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration, /已发起\(进行中\)/);
   assert.match(registration,
     /selectedVersions\.length > 0 \|\| launchFilterActive/);
-  // 已发起的行:勾选禁用(悬停说明),徽标可点跳进该会话;全选只
-  // 作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
-  assert.match(registration, /disabled=\{!!liveIssue\}/);
+  // 已发起的行:我名下的勾选禁用(悬停说明);未配置分支的行同样禁
+  // (ADR-0038,禁发起双闸的前端一侧)。徽标可点跳进该会话;
+  // 全选只作用于可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  assert.match(registration, /disabled=\{!!mineLive \|\| !ticket\.branch\}/);
   assert.match(registration, /onOpenIssue\?\.\(liveIssue\.id\)/);
   assert.match(registration, /const selectableTickets = display/);
   assert.match(registration,
@@ -164,10 +165,22 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
   // button 不许回流(徽标走 ui/button 包装层,#256 收编纪律)。
   assert.match(registration, /function isLiveIssue\(/);
-  assert.match(registration, /const liveIssueByTicket = useMemo/);
+  assert.match(registration, /const mineLiveByTicket = useMemo/);
   assert.doesNotMatch(registration, /hover:opacity-75/);
   assert.match(registration,
-    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},点击打开`\}/);
+    /<Button type="button" variant="ghost" size="xs"[\s\S]{0,80}title=\{`\$\{liveTip\},\$\{mineLive \? "点击打开" : "点击查看"\}`\}/);
+  // 协助处理(2026-09-17):名下视角可切换——默认自己,?owner= 指名
+  // 看别人名下;发起后归属仍是登录人。徽标/过滤认展示名册(协助视角
+  // =全团队,?scope=all 读侧同尺开放),拦截仍只认我的名册(接管正是
+  // 协助的用法,分支按发起人隔离)。
+  assert.match(registration,
+    /const \[owner, setOwner\] = useState\(viewer\.username\)/);
+  assert.match(registration, /const assistMode = owner !== viewer\.username/);
+  assert.match(registration, /ariaLabel="查看谁名下的问题单"/);
+  assert.match(registration, /listDtsTickets\(account\)/,
+    "拉单必须带当前视角的名下账号(?owner= 透传)");
+  assert.match(registration,
+    /const shownLiveByTicket = assistMode \? teamLiveByTicket : mineLiveByTicket/);
   // IssueBoard 贯通:徽标点击走 openIssue 深链机制(与发起成功跳会话同路)。
   assert.match(issueBoard,
     /<IssueRegistration[\s\S]{0,500}onOpenIssue=\{openIssue\}/);
@@ -778,25 +791,29 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
     "push_branch 描述不得再教 UT——单源在 fix 简报,双写必漂移");
 });
 
-// ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签)
+// ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签;
+// ---- 2026-09-17 ADR-0027 修订:「MR 检视」收编上方批注面板成第六签)
 // ---- 材料拍平 + 对话现场升格(ADR-0018 左栏对齐)----
 
-test("左栏五标签:顺序固定、元信息默认、DTS 无单隐藏,旧顶层页签引用清零", () => {
+test("左栏六标签:顺序固定、元信息默认、DTS 无单隐藏、MR 检视有批注才现身,旧顶层引用清零", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
-  // 五标签一次成表(ADR-0027:逐仓交付退役融合进元信息,对话现场降
-  // 末位),顺序即规格:元信息(会话名片,兼默认签)在首位,DTS 单据
-  // 第二,对话现场降末位——一签一名,不得改名换序。
+  // 六标签一次成表(ADR-0027 五签定局 + 2026-09-17 修订增「MR 检视」),
+  // 顺序即规格:元信息(会话名片,兼默认签)在首位,DTS 单据第二,
+  // 对话现场降末位、MR 检视垫后——一签一名,不得改名换序。
   const table = sessionView.match(
     /const ISSUE_MAIN_TABS = \[([\s\S]*?)\] as const;/)?.[1] ?? "";
   assert.deepEqual(
     [...table.matchAll(/key: "([a-z]+)", label: "([^"]+)"/g)]
       .map(([, key, label]) => `${key}:${label}`),
     ["meta:元信息", "dts:DTS单据", "doc:分析报告",
-      "changes:工作区变更", "events:对话现场"]);
-  // DTS 签条件渲染:无单场景整个隐藏(从禁用+tooltip 升级,屏蔽即诚实)。
+      "changes:工作区变更", "events:对话现场", "reviews:MR 检视"]);
+  // DTS 签条件渲染:无单场景整个隐藏(从禁用+tooltip 升级,屏蔽即诚实);
+  // 「MR 检视」签有批注才现身(正被看着时即便清空也留)。
   assert.match(sessionView,
-    /filter\(\(\{ key \}\) => key !== "dts" \|\| detail\.ticket\)/);
+    /filter\(\(\{ key \}\) => \(key !== "dts" \|\| detail\.ticket\)/);
+  assert.match(sessionView,
+    /&& \(key !== "reviews" \|\| showReviewsTab\)/);
   // 页签条是任务侧左栏同款:ws-pane-head > ws-source-switch(皮肤类
   // 原样挂 base-ui TabsList),激活签走 data-active + " on" 皮肤类。
   // (#210)手搓 role=tablist 换原语:键盘箭头、roving tabindex 归原语。
@@ -810,15 +827,20 @@ test("左栏五标签:顺序固定、元信息默认、DTS 无单隐藏,旧顶�
   assert.match(sessionView, /setTab\("meta"\);\s*\n\s*\}, \[detail\.id\]\);/);
   // 分析报告在库的脉冲点挂「分析报告」页签(报告是主交付物,入口要
   // 找得到;#260 起页签即报告本身,旧右栏"分析报告已产出"CTA 已随
-  // #127 侧栏拆除一并退场)。
+  // #127 侧栏拆除一并退场)。「MR 检视」签同款引导:有待判断批注就挂点
+  // (轮询在会话层常驻,页签没开也数得出)。
   assert.match(sessionView, /key === "doc" && detail\.has_analysis/);
+  assert.match(sessionView, /key === "reviews" && reviewsPending > 0/);
+  // 持续检视面板退役(2026-09-17):问题流反馈账只写流水线与 MR 讨论,
+  // 流水线不再上屏(要看去 CodeHub)、MR 讨论本就不进面板,面板恒空。
+  assert.doesNotMatch(sessionView, /FeedbackPanel/);
   // 拆除项引用清零:旧顶层页签组件、"materials"页签值与材料子视图状态。
   assert.doesNotMatch(sessionView, /IssuePaneTabs/);
   assert.doesNotMatch(sessionView, /"materials"/);
   assert.doesNotMatch(sessionView, /materialsView/);
 });
 
-test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
+test("左栏六标签(#123):材料面板免壳直渲,页签一签一色走问题域变量", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   // 面板壳(ws-pane-head + ws-source-switch)随拍平拆除:MaterialsPane
@@ -847,8 +869,8 @@ test("左栏五标签(#123):材料面板免壳直渲,页签一签一色走问题
   // 规则,随家族退役后色值直译成 ISSUE_MAIN_TABS 各签自带的变量工具类,
   // 激活态边/底/字仍走该变量(TabsTrigger 的 data-active: 工具类)。
   assert.ok(
-    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 5,
-    "五个页签各需一枚 --workspace-tab-color");
+    (sessionView.match(/--workspace-tab-color:#/g) ?? []).length >= 6,
+    "六个页签各需一枚 --workspace-tab-color");
   assert.doesNotMatch(css, /\.issue-workspace/);
 });
 
@@ -1804,4 +1826,35 @@ test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图
   assert.match(pane, /const EMPTY_REPO_DIFF_NOTE = "该仓当前没有可展示的改动。"/);
   assert.equal((pane.match(/EMPTY_REPO_DIFF_NOTE/g) ?? []).length, 3,
     "常量定义+两处消费,空态文案不得再写第三份字面量");
+});
+
+test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动记忆在 localStorage(2026-09-17)", () => {
+  // 布局底盘:定宽布局 + colgroup(表头 w-* 退役,宽度只有一处来源);
+  // 标题列不进默认宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
+  assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed">/);
+  for (const col of ["select", "ticket", "title", "version", "status", "launch"]) {
+    assert.match(registration, new RegExp(`\\{renderCol\\("${col}"\\)\\}`));
+  }
+  assert.match(registration, /\{moduleCol && renderCol\("module"\)\}/);
+  assert.match(registration, /<col style=\{\{ width: 48 \}\} \/>/);
+  assert.doesNotMatch(registration, /<TableHead className="w-\d+"/,
+    "列宽收口 colgroup,表头不得再挂 w-* 定宽");
+  // 把手:role=separator 可聚焦,pointer capture 拖动,双击/Enter 回默认,
+  // 方向键微调;拖动中直写 <col> 免整表重渲,松手才 commit。
+  assert.match(registration, /function DtsColResizeHandle\(/);
+  assert.match(registration, /role="separator"/);
+  assert.match(registration, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(registration, /onDoubleClick=\{\(event\) => \{\s*event\.preventDefault\(\);\s*onReset\(colKey\);/);
+  assert.match(registration, /onPreview\(colKey, px\)/);
+  // 记忆:全用户共用一份(mae-flow:dts-col-widths),空表回删 key。
+  assert.match(registration, /mae-flow:dts-col-widths/);
+  assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
+  assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
+  // 默认宽沿用迁表现行值(w-28/w-64/w-24/w-56),单号/状态给足内容定值;
+  // 分支列随分支匹配入列(ADR-0038)。拖动下限防内容打架。列存在性由
+  // DTS_COL_MIN 收口,少一列即测试红。
+  assert.match(registration,
+    /select: 112, ticket: 190, version: 256, branch: 216, status: 88,\s*\n\s*launch: 96, module: 224/);
+  assert.match(registration,
+    /select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,\s*\n\s*launch: 88/);
 });

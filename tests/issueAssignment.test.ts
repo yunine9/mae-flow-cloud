@@ -334,6 +334,67 @@ test("登记指派:小鲁班通知发给责任人;自登记不发、登记人不
   }
 });
 
+test("登记指派:--public-url 缺席时从请求 Host 学通知入口,回环不入账", async () => {
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const dataDir = mfcTemp("mfc-issue-assign-observe-link-");
+  createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "收单与清结算",
+    owner: "dev", repositories: ["/tmp/fixture.git"],
+  }, "tester");
+  const service = makeService(dataDir, {
+    notifier: new Notifier({
+      endpoint: luban.endpoint, backoffMs: [0],
+    }),
+    // 故意不配 linkBase:与生产缺省部署同形态,深链全靠自学兜底
+    // (与需求侧 TaskService.observeLinkBase 对齐,2026-09)。
+  });
+  try {
+    // 有个用户从内网地址登录过,服务学到这个入口。
+    service.observeLinkBase("http://10.30.1.5:8080");
+    const first = await callIssueRoute("POST", ["issues"], {
+      service,
+      viewer: TESTER,
+      payload: {
+        title: "下单超时", assignee: "dev", module_id: "pay-core",
+        environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
+      },
+    });
+    assert.equal(first.status, 201);
+    const assigned = await until(
+      () => luban.messages.find((message) =>
+        message.account === "dev") as
+        { account: string; text: string; link: string } | undefined,
+      "责任人收到指派通知");
+    assert.equal(assigned.link,
+      `http://10.30.1.5:8080/issues/${first.body.id}`,
+      "没配 --public-url 也有完整深链,不再只剩 /issues/<id> 后缀");
+    // 服务器本机或 SSH 隧道的回环访问不得冲掉学过的可用地址。
+    service.observeLinkBase("http://127.0.0.1:9999");
+    const second = await callIssueRoute("POST", ["issues"], {
+      service,
+      viewer: TESTER,
+      payload: {
+        title: "导出失败", assignee: "dev", module_id: "pay-core",
+        environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
+      },
+    });
+    assert.equal(second.status, 201);
+    const secondAssigned = await until(
+      () => luban.messages.find((message) =>
+        message.account === "dev"
+        && String(message.link).includes(String(second.body.id))) as
+        { account: string; text: string; link: string } | undefined,
+      "第二个问题的指派通知");
+    assert.equal(secondAssigned.link,
+      `http://10.30.1.5:8080/issues/${second.body.id}`,
+      "回环访问不覆盖学过的入口");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await luban.stop();
+  }
+});
+
 test("登记指派:登记人进 AI 元信息——指派会话带、自登记不带", async () => {
   // 元信息是开场词/续聊词/get_issue_meta 三处的同一事实源
   // (issueRegistrationMeta 单源):这里钉提示词块的最小事实,

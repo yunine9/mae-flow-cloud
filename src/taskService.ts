@@ -315,6 +315,7 @@ import {
 } from "./containerOwnership.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
 import type { RuntimeSettings } from "./settings.ts";
+import { resolveModelConfig, type ResolvedModelConfig } from "./modelResolution.ts";
 import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
 import {
   onlyUnfixableToolFailures,
@@ -1091,6 +1092,10 @@ export interface TaskSummary {
   /** 下单时选的模型;缺席=跟随服务当前默认(设置层/部署层)。
    * 记在任务上是为了两件事:重启续跑不漂移、页面能说清"谁跑的"。 */
   model_choice?: { provider: string; model: string };
+  /** 最近一次主会话启动解析到的网关通道(ADR-0039):platform=平台
+   * 网关,beta=Beta 网关(白名单成员)。fail-open 回落不回改本标记;
+   * 精确消耗看 token_usage 与网关侧账。 */
+  model_lane?: "platform" | "beta";
   /** 下单时的修复轮预算;缺席=跟随服务当前默认。0=本单关掉修复环。 */
   repair_rounds?: number;
   /** 代码仓执行约定已完成首次解析并固定进 workflow_profile.supplements;
@@ -2028,13 +2033,16 @@ export class TaskService {
         throw new TaskControlError("模型或内核 Story 模板未配置，暂时无法生成整体 Story");
       }
     },
-    run: (task, job) => runOverallStorySession(task, job, {
-      taskId: task.summary.id, workspace: task.summary.workspace,
-      kernelRoot: this.options.host!.kernelRoot, requirementDocument: task.summary.requirement_document,
-      model: task.summary.model_choice ?? this.activeModelChoice()!, models: this.activeModelsJson(),
-      vision: this.taskVision(task), onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
-      log: this.options.log,
-    }),
+    run: (task, job) => {
+      const modelBundle = this.sessionModels(task, "auto");
+      return runOverallStorySession(task, job, {
+        taskId: task.summary.id, workspace: task.summary.workspace,
+        kernelRoot: this.options.host!.kernelRoot, requirementDocument: task.summary.requirement_document,
+        model: modelBundle.choice!, models: modelBundle.json,
+        vision: this.taskVision(task), onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
+        log: this.options.log,
+      });
+    },
   });
 
   constructor(readonly options: TaskServiceOptions) {
@@ -2898,9 +2906,8 @@ export class TaskService {
       const agentDir = join(root, "pi-agent");
       mkdirSync(agentDir, { recursive: true });
       this.hardenAgentGitBoundary(agentDir, cloneDir);
-      const modelOverride = this.options.settings?.models() ?? {};
       writeFileSync(join(agentDir, "models.json"),
-        JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+        JSON.stringify(this.resolvedModels().json));
       // 隔离模式:提取会话与任务同纪律,Bash 进专属容器(role 已入
       // 清扫白名单,kill -9 后启动清扫认得它)。
       if (this.options.isolation) {
@@ -3122,7 +3129,8 @@ export class TaskService {
         || waiting?.step !== CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       throw new TaskControlError("当前已经不在需求确认阶段");
     }
-    const model = task.summary.model_choice ?? this.activeModelChoice();
+    const modelBundle = this.sessionModels(task, "auto");
+    const model = modelBundle.choice;
     if (!model) throw new TaskControlError("模型网关未配置，Agent 暂时无法修改需求文档");
     const revisionId = randomUUID();
     task.summary.requirement_revision = {
@@ -3148,7 +3156,7 @@ export class TaskService {
       mkdirSync(agentDir, { recursive: true });
       this.hardenAgentGitBoundary(agentDir);
       writeFileSync(join(agentDir, "models.json"),
-        JSON.stringify(this.activeModelsJson()), { mode: 0o600 });
+        JSON.stringify(modelBundle.json), { mode: 0o600 });
       driver = await CloudSession.create({
         taskId: task.summary.id,
         workspace: reviewRoot,
@@ -3860,6 +3868,7 @@ export class TaskService {
       execution_plan: executionPlan,
       ...(planAlerts.length ? { execution_plan_alerts: planAlerts } : {}),
       token_usage: tokenUsageSnapshot(task.tokenUsage),
+      model_lane: summary.model_lane,
       waiting: summary.waiting
         ? {
             ...summary.waiting,
@@ -4534,9 +4543,9 @@ export class TaskService {
     this.hardenAgentGitBoundary(agentDir, task.cwd);
     // 同 prepush:build-notes 目录宿主预建,Agent 只写放行的那个文件。
     mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
-    const modelOverride = this.options.settings?.models() ?? {};
+    const modelBundle = this.sessionModels(task);
     writeFileSync(join(agentDir, "models.json"),
-      JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+      JSON.stringify(modelBundle.json));
     const runRoot = join(task.summary.workspace, "warmup");
     mkdirSync(runRoot, { recursive: true });
     const eventLog = new EventLog(join(runRoot, "events.jsonl"));
@@ -4562,10 +4571,8 @@ export class TaskService {
       repositorySkillPaths: [],
       repositorySkillResources: [],
       knowledgeTrace: this.knowledgeTrace(task, task.cwd),
-      provider: task.summary.model_choice?.provider
-        ?? modelOverride.provider ?? this.options.provider,
-      model: task.summary.model_choice?.model
-        ?? modelOverride.model ?? this.options.model,
+      provider: modelBundle.choice?.provider ?? this.options.provider,
+      model: modelBundle.choice?.model ?? this.options.model,
       eventLog,
       transcript,
       gate: new GateService({
@@ -5866,20 +5873,17 @@ export class TaskService {
   private memoryDrafter(task: TaskState)
     : ((prompt: { system: string; user: string }) => Promise<string>) | undefined {
     if (this.options.memoryDrafter) return this.options.memoryDrafter;
-    const override = this.options.settings?.models() ?? {};
-    const model = {
-      provider: task.summary.model_choice?.provider ?? override.provider ?? this.options.provider,
-      model: task.summary.model_choice?.model ?? override.model ?? this.options.model,
-    };
-    if (!model?.provider || !model.model) return undefined;
-    const known = (this.activeModelsJson() as {
+    const modelBundle = this.sessionModels(task);
+    const choice = modelBundle.choice;
+    if (!choice) return undefined;
+    const known = (modelBundle.json as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;
-    }).providers?.[model.provider]?.models?.some((item) => String(item?.id ?? "") === model.model);
+    }).providers?.[choice.provider]?.models?.some((item) => String(item?.id ?? "") === choice.model);
     if (!known) return undefined;
     return (prompt) => draftWithModel({
-      modelsJson: this.activeModelsJson(),
-      provider: model.provider,
-      model: model.model,
+      modelsJson: modelBundle.json,
+      provider: choice.provider,
+      model: choice.model,
       system: prompt.system,
       user: prompt.user,
       timeoutMs: MEMORY_DRAFT_BUDGET_MS,
@@ -6871,8 +6875,9 @@ export class TaskService {
    *
    * `model` 字段仍然返回当前生效的那一个——不是给人选,是给界面显示
    * "这单会用谁跑",让人心里有数。 */
-  launchOptions(): {
-    /** 当前生效的模型(展示用,下单表单不提供选择)。 */
+  launchOptions(account?: string): {
+    /** 当前生效的模型(展示用,下单表单不提供选择;白名单成员展示
+     * Beta 网关,ADR-0039)。 */
     model?: { provider: string; model: string };
     /** 当前默认修复轮；缺省仍明确返回平台兜底 20。 */
     repair_rounds?: number;
@@ -6924,7 +6929,13 @@ export class TaskService {
     /** 本部署要不要这两把个人令牌(由形态决定,见下方注释)。 */
     needs: { git_token: boolean; luban_token: boolean };
   } {
-    const active = this.activeModelChoice();
+    // 表单要展示的"这单会用谁跑":白名单成员显示 Beta 网关的模型
+    // (ADR-0039),其余人显示平台网关现选。仍是展示位,不给选。
+    const laneResolved = account ? this.resolvedModels(account) : undefined;
+    const active = laneResolved?.lane === "beta" && laneResolved.provider
+      && laneResolved.model
+      ? { provider: laneResolved.provider, model: laneResolved.model }
+      : this.activeModelChoice();
     const blockers: Array<
       { key: string; label: string; where: "admin" | "me" }> = [];
     let businessModules: Array<{
@@ -7074,6 +7085,49 @@ export class TaskService {
       .map((item) => String(item?.id ?? "")).filter(Boolean);
     const model = override.model || listed[0] || this.options.model;
     return provider && model ? { provider, model } : undefined;
+  }
+
+  /** 网关解析咽喉(ADR-0039):「settings 压部署参数」的唯一合并点,
+   *  会话启动点一律从这拿现场 models.json 与 provider/model,不许再
+   *  各自内联一条 fallback 链——散弹式漏站(主会话换了网关、摘要
+   *  还走老网关)就是这么来的。operator=任务归属人,缺席=平台口径。 */
+  private resolvedModels(operator?: string): ResolvedModelConfig {
+    return resolveModelConfig({
+      settings: this.options.settings,
+      deployment: {
+        modelsJson: this.options.modelsJson,
+        provider: this.options.provider,
+        model: this.options.model,
+        vision: this.options.vision,
+      },
+      operator,
+      log: (message) => this.options.log?.(message),
+    });
+  }
+
+  /** 本任务会话应用的整套模型配置:任务级 model_choice(下单冻结)>
+   *  解析咽喉;Beta 白名单命中时 model_choice 让位,模型以 Beta 配置
+   *  为准(ADR-0039)。原九处内联链有两种口味,这里保持各自等价:
+   *  - plain(主会话/预热/摘要起草/prepush/开发助手):字段链到底,
+   *    设置层没配就用部署参数,不做 models.json 首项兜底;
+   *  - auto(需求修订/整体 Story):沿用 activeModelChoice 的首项
+   *    兜底("贴完 models.json 就能用")。 */
+  private sessionModels(task: TaskState, flavor: "plain" | "auto" = "plain"):
+    ResolvedModelConfig & { choice?: { provider: string; model: string } } {
+    const resolved = this.resolvedModels(task.summary.luban_account);
+    if (resolved.lane === "beta") {
+      return { ...resolved,
+        choice: resolved.provider && resolved.model
+          ? { provider: resolved.provider, model: resolved.model }
+          : undefined };
+    }
+    const choice = task.summary.model_choice
+      ?? (flavor === "auto"
+        ? this.activeModelChoice()
+        : (resolved.provider && resolved.model
+            ? { provider: resolved.provider, model: resolved.model }
+            : undefined));
+    return { ...resolved, choice };
   }
 
   /**
@@ -12276,9 +12330,9 @@ export class TaskService {
       const agentDir = join(workspace, "pi-agent");
       mkdirSync(agentDir, { recursive: true });
       this.hardenAgentGitBoundary(agentDir, task.cwd);
-      const modelOverride = this.options.settings?.models() ?? {};
+      const modelBundle = this.sessionModels(task);
       writeFileSync(join(agentDir, "models.json"),
-        JSON.stringify(modelOverride.json ?? this.options.modelsJson), {
+        JSON.stringify(modelBundle.json), {
           mode: 0o600,
         });
 
@@ -12344,10 +12398,8 @@ export class TaskService {
         businessModuleKnowledge,
         engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
-        provider: task.summary.model_choice?.provider
-          ?? modelOverride.provider ?? this.options.provider,
-        model: task.summary.model_choice?.model
-          ?? modelOverride.model ?? this.options.model,
+        provider: modelBundle.choice?.provider ?? this.options.provider,
+        model: modelBundle.choice?.model ?? this.options.model,
         eventLog,
         transcript: new TranscriptStore(
           join(transcriptRoot, "transcript.jsonl"),
@@ -13737,10 +13789,15 @@ export class TaskService {
       this.hardenAgentGitBoundary(agentDir);
       // 模型网关热改边界:在这里生效——每个新会话起时现读设置,
       // 在跑的会话不换血(管理页如实写明了这一条)。
-      const modelOverride = this.options.settings?.models() ?? {};
+      const modelBundle = this.sessionModels(task);
+      if (task.summary.model_lane !== modelBundle.lane) {
+        // 网关标记记主会话的解析结果(ADR-0039);下次 persist 随
+        // task.json 落盘,排障与 Beta 配额审计的依据。
+        task.summary.model_lane = modelBundle.lane;
+      }
       writeFileSync(
         join(agentDir, "models.json"),
-        JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+        JSON.stringify(modelBundle.json));
       // 个人 Git 身份每次启动现读。用户名/邮箱只用于 commit 署名；
       // token 仅在宿主 clone/push 的同步窗口进入 0700 临时目录，绝不
       // 进入 agentDir、仓库配置或 Agent 会话。
@@ -14409,12 +14466,12 @@ export class TaskService {
         compactAnchor: () => this.kernelAnchor(task),
         onTokenUsage: (sample) => this.recordTaskTokenUsage(task, sample),
         vision: this.taskVision(task),
-        // 任务级选择 > 设置层默认 > 部署默认;任务级的记在 summary 上,
-        // 重启续跑/会话重建都不漂移(设置层后来改了也不影响本单)。
-        provider: task.summary.model_choice?.provider
-          ?? modelOverride.provider ?? this.options.provider,
-        model: task.summary.model_choice?.model
-          ?? modelOverride.model ?? this.options.model,
+        // 任务级选择 > 解析咽喉(设置层默认 > 部署默认);任务级的记在
+        // summary 上,重启续跑/会话重建都不漂移(设置层后来改了也不影响
+        // 本单);Beta 白名单命中时模型以 Beta 为准,model_choice 让位
+        // (ADR-0039)。
+        provider: modelBundle.choice?.provider ?? this.options.provider,
+        model: modelBundle.choice?.model ?? this.options.model,
         eventLog: new EventLog(
           join(workspace, "events.jsonl"),
           (event) => this.bypass(
@@ -15361,9 +15418,9 @@ export class TaskService {
     // build-notes 的目录由宿主预建:安全层只放行那一个文件,mkdir
     // .mae-flow-work 本身会被拦——使命让写、闸不让建目录,Agent 没出路。
     mkdirSync(join(task.cwd, ".mae-flow-work"), { recursive: true });
-    const modelOverride = this.options.settings?.models() ?? {};
+    const modelBundle = this.sessionModels(task);
     writeFileSync(join(agentDir, "models.json"),
-      JSON.stringify(modelOverride.json ?? this.options.modelsJson));
+      JSON.stringify(modelBundle.json));
 
     let repositorySkillPaths: string[] = [];
     let repositorySkillResources: Array<KnowledgeResourceRef & {
@@ -15573,10 +15630,8 @@ export class TaskService {
         repositorySkillPaths,
         repositorySkillResources,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
-        provider: task.summary.model_choice?.provider
-          ?? modelOverride.provider ?? this.options.provider,
-        model: task.summary.model_choice?.model
-          ?? modelOverride.model ?? this.options.model,
+        provider: modelBundle.choice?.provider ?? this.options.provider,
+        model: modelBundle.choice?.model ?? this.options.model,
         eventLog,
         transcript,
         gate: new GateService({

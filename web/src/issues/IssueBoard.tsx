@@ -485,12 +485,10 @@ function IssueCard({ issue, active, onOpen, onSettled }: {
 }
 
 function issueConclusionText(issue: IssueSummary): string {
+  // 词表收敛后只有三档(ADR-0037):修复完成即 delivered,合入与否
+  // 看 mrs 账,不再有"已修复未合入"细分。
   const kind = issue.conclusion?.kind;
-  // 口径按合入事实(ADR-0022):delivered=全部 MR 已合入才记;
-  // 建了 MR 未全合的 fixed 显示"已修复未合入",纯推送的显示"已修复"。
   return kind === "non_issue" ? "非问题"
-    : kind === "delivered" ? "已交付"
-    : kind === "converted" ? "已转正"
     : kind === "issue" ? "问题成立"
-    : issue.mrs?.length ? "已修复未合入" : "已修复";
+    : "已交付";
 }

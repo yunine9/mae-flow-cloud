@@ -154,6 +154,7 @@ import {
 } from "../businessModuleLibrary.ts";
 import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { type ModelsSettings } from "../settings.ts";
+import { resolveModelConfig, type ModelLane } from "../modelResolution.ts";
 import { createGoOpsTools, type ContainerExec, type IssueOpsTools } from "./opsTools.ts";
 import { createContainerBashOperations } from "./containerBash.ts";
 import { applyDebugIssueSkillPatch } from "./debugIssue.ts";
@@ -615,7 +616,9 @@ export interface IssueFlowOptions {
    * 问题流的启动依赖。 */
   notifier?: Notifier;
   /** 通知链接的对外入口(--public-url):深链落到问题会话工作台
-   * /issues/<id>,与需求侧 /work/<id> 同一地位。 */
+   *  /issues/<id>,与需求侧 /work/<id> 同一地位。缺席时从已登录
+   *  用户的实际请求 Host 学到内网入口(observeLinkBase),不再
+   *  默认写死 127.0.0.1,也不出只剩路径后缀的死链。 */
   linkBase?: string;
   isolation?: IssueIsolation;
   /** 环境预热编译(需求侧 warmupAgent 的问题流移植,2026-09-04):
@@ -856,6 +859,9 @@ export class IssueFlowService {
   private turnSeq = 0;
   private recoveryStarted = false;
   private shuttingDown = false;
+  /** 从已登录用户请求 Host 学到的通知入口(--public-url 缺席时的
+   *  兜底,与需求侧 TaskService 同款)。 */
+  private observedLinkBase?: string;
   /** 数据目录(业务模块库等子系统的根),供路由层读取。 */
   readonly dataDir: string;
 
@@ -2125,13 +2131,14 @@ export class IssueFlowService {
   /** 拉仓(pull_repo 工具的宿主实现;2026-08-28 拍板:克隆是 Agent 的
    * 显式动作,平台只代劳凭据与机械步骤)。登记合并 → 带凭据克隆到
    * repo/<仓名>/ →(有单场景)切好修复分支。回执只含事实;基线分支
-   * 缺失不炸——如实报 baselineMiss 退回默认分支,由 Agent 裁决。 */
+   * 在远端缺失即硬失败(ADR-0038):退回默认分支会把修复悄悄送上
+   * 错误的版本线,如实抛错让 Agent 上报、停在拉仓阶段。 */
   private async pullRepoFor(
     live: LiveIssue,
     rawUrl: string,
   ): Promise<{
     dir: string; cloned: boolean; branch?: string;
-    head: string; baselineMiss?: string;
+    head: string;
   }> {
     const { state } = live;
     const url = validateRepoUrl(rawUrl);
@@ -2143,7 +2150,6 @@ export class IssueFlowService {
     state.repo_url ??= merged[0];
     const repo = issueRepoWorkspaces(state, live.root)
       .find((item) => item.url === url)!;
-    let baselineMiss: string | undefined;
     const cloned = !existsSync(join(repo.dir, ".git"));
     if (cloned) {
       this.log(`[issue-flow] ${live.id} 拉仓: ${url}`);
@@ -2160,12 +2166,11 @@ export class IssueFlowService {
         });
       } catch (error) {
         if (!state.baseline) throw error;
-        // 基线分支可能不存在(参考 Q7 拍板):退回默认分支克隆,
-        // 事实回报,不替 Agent 拍板。
-        baselineMiss = state.baseline;
-        this.log(`[issue-flow] ${live.id} 基线 ${state.baseline} 不可用,`
-          + `退回默认分支克隆 ${url}: ${String(error)}`);
-        await cloneRepository(common);
+        // 基线分支缺失是硬失败(ADR-0038):不退默认分支继续。
+        throw new Error(
+          `基线分支 ${state.baseline} 在远端不存在(或不可取),拉仓失败:`
+          + `请到配置中心核对版本→分支映射,修正后重新拉取。原始错误: `
+          + String(error).slice(0, 200));
       }
     }
     if (this.options.isolation && isMaeRepository(url)) {
@@ -2175,10 +2180,9 @@ export class IssueFlowService {
       if (live.container?.isAlive) await live.container.exec(MAE_CONTAINER_BOOTSTRAP, live.root,
         { onData: () => {}, timeout: 30 });
     }
-    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名);
-    // 基线缺失时不建分支,让 Agent 先裁决基线对不对。
+    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名)。
     let branch: string | undefined;
-    if (!baselineMiss && state.scenario === "ticket" && state.ticket) {
+    if (state.scenario === "ticket" && state.ticket) {
       branch = expectedBranch(state);
       await ensureBranch({
         dataDir: this.options.dataDir,
@@ -2212,7 +2216,6 @@ export class IssueFlowService {
       cloned,
       ...(branch ? { branch } : {}),
       head,
-      ...(baselineMiss ? { baselineMiss } : {}),
       ...(remoteBranch ? { remoteBranch } : {}),
     };
   }
@@ -2454,9 +2457,33 @@ export class IssueFlowService {
     return this.tierOf(live) === "1";
   }
 
-  /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。 */
+  /** 从这次 HTTP 请求学内网入口(--public-url 缺席时通知深链的唯一
+   *  完整地址来源;与需求侧 TaskService.observeLinkBase 同款纪律):
+   *  回环地址永不入账——它只对本机成立,发给别人就是死链;管理员在
+   *  服务器本机或经 SSH 隧道登录一次,不该把全体人的通知地址带沟里,
+   *  学过的可用地址也不许被回环访问冲掉。解析不了的地址不入账。 */
+  observeLinkBase(base: string | undefined): void {
+    if (this.options.linkBase || !base) return;
+    try {
+      const host = new URL(base).hostname.toLowerCase();
+      if (host === "localhost" || host === "127.0.0.1"
+          || host === "::1" || host === "[::1]") {
+        return;
+      }
+    } catch {
+      return;
+    }
+    this.observedLinkBase = base.replace(/\/+$/, "");
+  }
+
+  private notificationLinkBase(): string | undefined {
+    return this.options.linkBase ?? this.observedLinkBase;
+  }
+
+  /** 会话工作台深链(等待卡/代答的小鲁班通知共用;尾部斜杠归一)。
+   *  linkBase 缺席时回落从请求 Host 学到的入口,不再只剩路径后缀。 */
   private issueLink(issueId: string): string {
-    return `${(this.options.linkBase ?? "").replace(/\/+$/, "")}`
+    return `${(this.notificationLinkBase() ?? "").replace(/\/+$/, "")}`
       + `/issues/${encodeURIComponent(issueId)}`;
   }
 
@@ -2824,12 +2851,31 @@ export class IssueFlowService {
         String(error)}`));
   }
 
-  private modelChoice(): { provider: string; model: string; json: Record<string, unknown> } {
-    const fromSettings = this.options.settings?.models() ?? {};
+  /** 网关解析咽喉(ADR-0039,需求侧同款):settings 压部署参数;
+   *  operator=问题责任人(归属账号),白名单命中时整体换装 Beta。
+   *  不传 operator=平台口径(视觉校验等平台职能用它)。 */
+  private modelChoice(operator?: string): {
+    lane: ModelLane;
+    provider: string;
+    model: string;
+    json: Record<string, unknown>;
+  } {
+    const resolved = resolveModelConfig({
+      settings: this.options.settings,
+      deployment: {
+        modelsJson: this.options.modelsJson,
+        provider: this.options.provider,
+        model: this.options.model,
+        vision: this.options.vision,
+      },
+      operator,
+      log: (message) => this.log(`[issue-flow] ${message}`),
+    });
     return {
-      provider: fromSettings.provider ?? this.options.provider,
-      model: fromSettings.model ?? this.options.model,
-      json: fromSettings.json ?? this.options.modelsJson,
+      lane: resolved.lane,
+      provider: resolved.provider ?? this.options.provider,
+      model: resolved.model ?? this.options.model,
+      json: resolved.json,
     };
   }
 
@@ -3182,7 +3228,7 @@ export class IssueFlowService {
     mkdirSync(agentDir, { recursive: true });
     // build-notes 目录宿主预建,预热专员只写放行的那个文件。
     mkdirSync(join(live.root, ".mae-flow-work"), { recursive: true });
-    const model = this.modelChoice();
+    const model = this.modelChoice(live.state.account);
     writeFileSync(join(agentDir, "models.json"),
       JSON.stringify(model.json), { mode: 0o600 });
     const driver = await CloudSession.create({
@@ -3278,7 +3324,9 @@ export class IssueFlowService {
     if (this.shuttingDown || live.controlEpoch !== epoch) throw new IssueControlError("会话已停止");
     const agentDir = join(live.root, "pi-agent");
     mkdirSync(agentDir, { recursive: true });
-    const model = this.modelChoice();
+    const model = this.modelChoice(live.state.account);
+    // 网关标记记主会话的解析结果(ADR-0039),随下次 saveState 落盘。
+    live.state.model_lane = model.lane;
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), {
       mode: 0o600,
     });
@@ -4388,20 +4436,14 @@ export class IssueFlowService {
     if (input.action === "cancel") {
       live.state.status = "canceled";
     } else {
-      // 竞态核对(ADR-0022):监看循环之外现扫一次平台事实——防
-      // "点归档瞬间平台恰好合入"的窗口错账;平台不可得则沿用上次
-      // 观测,不堵归档(软闸)。
-      if (live.state.mrs?.length) await this.syncMergeFacts(live);
-      // 结论按合入事实记(ADR-0022,软闸):全部 MR merged 才是
-      // delivered;建了 MR 未全合=已推送未合入(fixed)。挂起转正、
-      // 纯推送、纯分析的语义不变。
-      const mrs = live.state.mrs ?? [];
-      const allMerged = mrs.length > 0
-        && mrs.every((mr) => Boolean(mr.merged_at));
+      // 结论词表收敛后只有三档(ADR-0037):修复完成即 delivered
+      // (合入与否看 mrs 账,归档瞬间不再复核合入——那道竞态核对
+      // 只为 delivered/fixed 细分服务,细分没了,核对一并退役);
+      // 挂起会话=问题成立;其余按非问题收口。
       const kind = input.kind
         ?? (live.state.status === "suspended" ? "issue"
-          : allMerged ? "delivered"
-          : mrs.length || live.state.pushes?.length ? "fixed" : "non_issue");
+          : live.state.mrs?.length || live.state.pushes?.length
+            ? "delivered" : "non_issue");
       live.state.conclusion = {
         kind,
         summary: input.summary?.trim() || live.state.last_reply
@@ -5764,8 +5806,9 @@ export class IssueFlowService {
 
   /** 两段式:不带 confirm → 只做 DTS 存在性校验并把单据详情给用户
    * 过目;带 confirm → 转正:新会话继承工作区与分析报告直接进「问题
-   * 修改」,旧会话归档(结论 converted)。同用户+同单号至多一个活跃
-   * 会话。转正后不可逆——单号是新会话的身份(分支名/MR/台账都带)。 */
+   * 修改」,旧会话归档(结论 issue,血缘 converted_to)。同用户+同单号
+   * 至多一个活跃会话。转正后不可逆——单号是新会话的身份(分支名/MR/
+   * 台账都带)。 */
   async associate(id: string, input: {
     ticket: string;
     confirm?: boolean;
@@ -5932,9 +5975,10 @@ export class IssueFlowService {
       humanGate: new HumanGate(join(newRoot, "waiting.json")),
       controlEpoch: 0,
     });
-    // 旧会话收口(不经 control:结论与链接有专属语义)。
+    // 旧会话收口(不经 control:结论与链接有专属语义)。转正的本质
+    // 是问题成立+开新会话,结论按 issue 记,血缘留 converted_to(ADR-0037)。
     state.conclusion = {
-      kind: "converted",
+      kind: "issue",
       summary: `已关联单号 ${ticket},转正为 ${newId}`,
       at: now,
     };

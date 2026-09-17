@@ -8,7 +8,10 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  * DTS 文本/版本/候选纯函数在 dtsText.ts,单据 HTML 的图片代理重写与
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment, useCallback, useEffect, useMemo, useRef, useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -28,8 +31,10 @@ import {
   getBusinessModules,
   getDtsModuleBindings,
   getDtsTicketDetail,
+  listAllIssues,
   listCollaborationAssignees,
   listDtsTickets,
+  listPeople,
   putDtsModuleBinding,
   uploadIssueImage,
   type AuthUser,
@@ -40,6 +45,7 @@ import {
   type DtsTicketDetail,
   type EnvironmentView,
   type IssueSummary,
+  type PersonIdentity,
 } from "../api";
 import { userLabel, UserPicker, type UserOption } from "../UserPicker";
 import { EnvironmentPicker } from "../EnvironmentPicker";
@@ -163,6 +169,18 @@ function isLiveIssue(item: IssueSummary): boolean {
 function liveIssueFor(issues: IssueSummary[], ticketNo: string):
   IssueSummary | undefined {
   return issues.find((item) => item.ticket === ticketNo && isLiveIssue(item));
+}
+
+/** 进行中会话按单索引:徽标/过滤/拦截共吃一份,免得各自全表扫。 */
+function liveIssuesByTicket(rows: IssueSummary[]):
+  Map<string, IssueSummary> {
+  const map = new Map<string, IssueSummary>();
+  rows.forEach((item) => {
+    if (item.ticket && isLiveIssue(item) && !map.has(item.ticket)) {
+      map.set(item.ticket, item);
+    }
+  });
+  return map;
 }
 
 export function IssueRegistration({
@@ -583,6 +601,134 @@ function ManualRegister({
   </form>;
 }
 
+/* ---------- DTS 列表列宽拖拽(2026-09-17) ---------- */
+
+type DtsColKey =
+  | "select" | "ticket" | "title" | "version" | "branch" | "status"
+  | "launch" | "module";
+
+/** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号/
+ *  状态原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
+ *  列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
+const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
+  select: 112, ticket: 190, version: 256, branch: 216, status: 88,
+  launch: 96, module: 224,
+};
+/** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号,状态列要放
+ *  得下徽标)。 */
+const DTS_COL_MIN: Record<DtsColKey, number> = {
+  select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,
+  launch: 88, module: 160,
+};
+/** 列宽记忆(全用户共用一份:列宽是屏幕偏好不是业务数据,不按人分)。 */
+const DTS_COL_WIDTHS_KEY = "mae-flow:dts-col-widths";
+
+const clampDtsColWidth = (key: DtsColKey, px: number) =>
+  Math.max(DTS_COL_MIN[key], Math.round(px));
+
+function loadDtsColWidths(): Partial<Record<DtsColKey, number>> {
+  try {
+    const raw = localStorage.getItem(DTS_COL_WIDTHS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Partial<Record<DtsColKey, number>> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key in DTS_COL_MIN && typeof value === "number"
+        && Number.isFinite(value)) {
+        out[key as DtsColKey] = value;
+      }
+    }
+    return out;
+  } catch { return {}; }
+}
+
+/** 列宽拖拽把手:贴表头右缘的透明窄条。pointer capture 拖动,方向键
+ *  微调(Shift 大步),双击/Enter 恢复默认。拖动过程宽度直接写进对应
+ *  <col>(免整表重渲),松手才由父级落状态并记忆。起点取表头实测宽
+ *  ——标题列弹性无定宽,也从真实渲染宽起步。 */
+function DtsColResizeHandle({ colKey, label, width, onPreview, onCommit,
+  onReset }: {
+  colKey: DtsColKey;
+  label: string;
+  /** 当前生效宽度(标题列默认弹性无定宽时缺省:aria 与键盘调整以表头
+   *  实测宽度为基准)。 */
+  width?: number;
+  onPreview: (key: DtsColKey, px: number) => void;
+  onCommit: (key: DtsColKey, px: number) => void;
+  onReset: (key: DtsColKey) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startWidth: number } | undefined>(
+    undefined);
+  const dragWidth = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return undefined;
+    return clampDtsColWidth(colKey, drag.startWidth + event.clientX - drag.startX);
+  };
+  const endDrag = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const px = dragWidth(event);
+    dragRef.current = undefined;
+    setDragging(false);
+    document.body.style.userSelect = "";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (px !== undefined) onCommit(colKey, px);
+  };
+  const headWidth = (current: EventTarget & Element) =>
+    current.closest("th")?.getBoundingClientRect().width ?? width ?? 200;
+  return <span
+    role="separator"
+    aria-orientation="vertical"
+    tabIndex={0}
+    aria-label={`调整「${label}」列宽:拖动或按左右方向键,双击恢复默认`}
+    {...(width !== undefined ? { "aria-valuenow": Math.round(width) } : {})}
+    data-dragging={dragging || undefined}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragRef.current = {
+        startX: event.clientX,
+        startWidth: headWidth(event.currentTarget),
+      };
+      setDragging(true);
+      // 拖动途经文字会起选区,按住期间全局禁选,松手还原。
+      document.body.style.userSelect = "none";
+    }}
+    onPointerMove={(event) => {
+      const px = dragWidth(event);
+      if (px !== undefined) onPreview(colKey, px);
+    }}
+    onPointerUp={endDrag}
+    onPointerCancel={endDrag}
+    onDoubleClick={(event) => {
+      event.preventDefault();
+      onReset(colKey);
+    }}
+    onKeyDown={(event) => {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const step = (event.key === "ArrowLeft" ? -1 : 1)
+          * (event.shiftKey ? 48 : 16);
+        onCommit(colKey,
+          clampDtsColWidth(colKey, headWidth(event.currentTarget) + step));
+      } else if (event.key === "Enter" || event.key === "Home") {
+        event.preventDefault();
+        onReset(colKey);
+      }
+    }}
+    className={cn(
+      "absolute inset-y-0 -right-1 z-10 w-2.5 cursor-col-resize touch-none",
+      "outline-none",
+      "after:absolute after:inset-y-0.5 after:left-1/2 after:w-px",
+      "after:-translate-x-1/2 after:bg-primary after:opacity-0",
+      "after:transition-opacity hover:after:opacity-60",
+      "focus-visible:after:opacity-60 data-[dragging]:after:opacity-100",
+    )}
+  />;
+}
+
 function DtsRegister({
   viewer,
   issues,
@@ -601,8 +747,23 @@ function DtsRegister({
   onError: (message: string) => void;
   onOpenIssue?: (issueId: string) => void;
 }) {
-  const [productVersion, setProductVersion] = useState("");
+  // 产品版本选择框已随分支匹配退役(ADR-0038):分支由每张单的版本号
+  // 按配置中心映射推导(服务端单点匹配,列表逐单带 branch),不再有
+  // 全局选择;手工登记表单(无单据版本可推导)仍保留自己的选择框。
   const [tickets, setTickets] = useState<DtsTicketBrief[] | undefined>();
+  // 协助处理(2026-09-17):名下视角可切换——默认看自己,选人后看别人
+  // 名下的单(工具栏人员选择框)。换的是读侧视角,不发所有权:发起后
+  // 的会话归属仍是登录人(分支名 master_{发起人}_{单号} 各归各,与对方
+  // 已发起的会话互不打架),接管对方单子就从这里发起。
+  const [owner, setOwner] = useState(viewer.username);
+  const assistMode = owner !== viewer.username;
+  // 人员候选来自 /auth/people(全员只读身份字段);没加载到就只有自己
+  // 可选(选择框退化为摆设但不挡用)。
+  const [people, setPeople] = useState<PersonIdentity[]>();
+  // 协助视角的「发起状态」要认全团队会话:自己的会话列表只含归属或
+  // 登记人是自己的,对方发起过的单在里面对不上号。?scope=all 读侧
+  // 全员开放;回到自己名下即弃,不多占一份状态。
+  const [teamIssues, setTeamIssues] = useState<IssueSummary[]>();
   // 外部开发模式(--dts-mock):单据为模拟数据,页签挂 DEV 徽标防误认。
   const [dtsMock, setDtsMock] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -631,6 +792,45 @@ function DtsRegister({
       && module.repositories.length > 0),
   [modules]);
 
+  // 列宽拖拽(2026-09-17):除展开钮外全列可拖。用户改过的列记进
+  // localStorage(会话启动读一次,改即写);没改的列用默认宽,标题列
+  // 保持弹性吃剩余宽——初览观感与迁表时一致。拖动中宽度直写 <col>
+  // (免整表重渲),松手才落状态。
+  const [colWidths, setColWidths] = useState<Partial<Record<DtsColKey, number>>>(
+    loadDtsColWidths);
+  const colEls = useRef<Partial<Record<DtsColKey, HTMLTableColElement>>>({});
+  useEffect(() => {
+    try {
+      if (Object.keys(colWidths).length > 0) {
+        localStorage.setItem(DTS_COL_WIDTHS_KEY, JSON.stringify(colWidths));
+      } else {
+        localStorage.removeItem(DTS_COL_WIDTHS_KEY);
+      }
+    } catch { /* 隐私模式等存不了:会话内仍生效 */ }
+  }, [colWidths]);
+  const dtsColWidth = (key: DtsColKey): number | undefined =>
+    colWidths[key] ?? DTS_COL_DEFAULT[key as Exclude<DtsColKey, "title">];
+  const previewColWidth = useCallback((key: DtsColKey, px: number) => {
+    const col = colEls.current[key];
+    if (col) col.style.width = `${px}px`;
+  }, []);
+  const commitColWidth = useCallback((key: DtsColKey, px: number) => {
+    setColWidths((prev) => ({ ...prev, [key]: clampDtsColWidth(key, px) }));
+  }, []);
+  const resetColWidth = useCallback((key: DtsColKey) => {
+    setColWidths((prev) => {
+      if (!(key in prev)) return prev;
+      const { [key]: _dropped, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+  const renderCol = (key: DtsColKey) => {
+    const px = dtsColWidth(key);
+    return <col key={key}
+      ref={(el) => { colEls.current[key] = el ?? undefined; }}
+      style={px !== undefined ? { width: px } : undefined} />;
+  };
+
   // 模糊搜索:单号/标题/版本,大小写不敏感;列头过滤叠加其上。
   const [query, setQuery] = useState("");
   const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
@@ -645,17 +845,16 @@ function DtsRegister({
   const [showUnlaunched, setShowUnlaunched] = useState(true);
   const [showLaunched, setShowLaunched] = useState(false);
   const launchFilterActive = !showUnlaunched || !showLaunched;
-  // 名下进行中会话按单索引:发起过滤、全选可勾行、逐行徽标/禁用同吃
-  // 一份,免得各自全表扫;口径仍是 isLiveIssue 一处。
-  const liveIssueByTicket = useMemo(() => {
-    const map = new Map<string, IssueSummary>();
-    issues.forEach((item) => {
-      if (item.ticket && isLiveIssue(item) && !map.has(item.ticket)) {
-        map.set(item.ticket, item);
-      }
-    });
-    return map;
-  }, [issues]);
+  // 进行中会话按单索引,两本名册各管一摊(口径都是 isLiveIssue 一处):
+  // - 我的名册(issues):发起拦截与勾选禁用的唯一依据——同账号+同单号
+  //   至多一个进行中(服务端 create 同尺兜底);
+  // - 协助视角的名册(teamIssues):只喂徽标与发起过滤,不拦发起——
+  //   对方已开了头正是接管的常见时机,分支按发起人隔离不冲突。
+  const mineLiveByTicket = useMemo(() => liveIssuesByTicket(issues), [issues]);
+  const teamLiveByTicket = useMemo(
+    () => liveIssuesByTicket(teamIssues ?? []), [teamIssues]);
+  // 徽标与发起过滤看展示口径:自己名下=我的会话;协助视角=全团队。
+  const shownLiveByTicket = assistMode ? teamLiveByTicket : mineLiveByTicket;
   // 可发起的单 = 状态为"开发人员实施修改"的;其余状态不展示。
   const actionable = useMemo(() =>
     tickets?.filter(isActionableDts) ?? undefined, [tickets]);
@@ -759,6 +958,9 @@ function DtsRegister({
         title: detail.title,
         severity: detail.severity,
         version: detail.version,
+        // 远程查单入列也带分支匹配结果(服务端详情同源补齐),否则
+        // 绕过列表的单子在分支列全员误报「未配置分支」。
+        branch: detail.branch,
         url: detail.url,
         description: detail.description,
         // 状态不带入列,可拉取判定(isActionableDts)会把远程命中的单
@@ -782,17 +984,18 @@ function DtsRegister({
       isActionableDts(r) && !list.some((item) => item.ticket === r.ticket));
     const merged = [...list, ...extra];
     if (!launchFilterActive) return merged;
-    return merged.filter((t) => liveIssueByTicket.has(t.ticket)
+    return merged.filter((t) => shownLiveByTicket.has(t.ticket)
       ? showLaunched : showUnlaunched);
   }, [versionFiltered, remoteTickets, launchFilterActive, showUnlaunched,
-    showLaunched, liveIssueByTicket]);
+    showLaunched, shownLiveByTicket]);
 
   // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
-  // 过滤划范围,发起过滤里已发起的行勾选禁用,不在全选之列。可勾行全
-  // 中时点击整体取消,部分或全无时一键勾满。已勾选但被过滤掉的单不在
-  // 展示列表里,保持原样,发起时照常带上。
+  // 过滤划范围,发起过滤里已发起的行、未配置分支的行(ADR-0038,禁
+  // 发起)勾选禁用,不在全选之列。可勾行全中时点击整体取消,部分或
+  // 全无时一键勾满。已勾选但被过滤掉的单不在展示列表里,保持原样,
+  // 发起时照常带上。
   const selectableTickets = display
-    .filter((t) => !liveIssueByTicket.has(t.ticket))
+    .filter((t) => !mineLiveByTicket.has(t.ticket) && !!t.branch)
     .map((t) => t.ticket);
   const displayedSelectedCount =
     selectableTickets.filter((no) => selected.includes(no)).length;
@@ -813,7 +1016,10 @@ function DtsRegister({
   const [detailCache, setDetailCache] = useState<Record<string, DtsTicketDetail>>({});
   const [detailLoading, setDetailLoading] = useState(false);
 
-  async function load() {
+  async function load(target?: string) {
+    // 换人发起的重拉带着新名下进同一函数:target 在场以它为准,绕开
+    // setState 后旧闭包读不到新值的时序。
+    const account = target ?? owner;
     setLoading(true);
     setNote("");
     setQuery("");
@@ -825,7 +1031,7 @@ function DtsRegister({
     setShowLaunched(false);
     setExpandedTicket(null);
     try {
-      const result = await listDtsTickets();
+      const result = await listDtsTickets(account);
       setTickets(result.tickets);
       setDtsMock(result.mock);
     } catch (reason) {
@@ -834,7 +1040,33 @@ function DtsRegister({
     } finally {
       setLoading(false);
     }
+    // 协助视角另拉全团队会话判「已发起」;自己名下用父层列表,不多拉。
+    if (account !== viewer.username) {
+      void listAllIssues().then(setTeamIssues)
+        .catch(() => setTeamIssues([]));
+    } else {
+      setTeamIssues(undefined);
+    }
   }
+
+  /** 换视角:清空现场(勾选/搜索/过滤都在 load 里重置)再拉新名下。 */
+  function pickOwner(next: string) {
+    if (next === owner) return;
+    setOwner(next);
+    void load(next);
+  }
+
+  // 人员候选:全员名单没到就只剩自己可选(选择框退化为摆设不挡用)。
+  const ownerOptions: UserOption[] = useMemo(() => {
+    const rows = people ?? [{
+      username: viewer.username,
+      ...(viewer.display_name ? { display_name: viewer.display_name } : {}),
+    }];
+    return rows.map(({ username, display_name }) =>
+      ({ username, display_name }));
+  }, [people, viewer.username, viewer.display_name]);
+  const ownerLabel = userLabel(ownerOptions.find((option) =>
+    option.username === owner) ?? { username: owner });
 
   // 首次激活自动拉取:点开「DTS 列表」直接见列表,不再多一次点击;
   // 之后列表靠「刷新」手动更新(面板常驻,换页签不清状态)。绑定映射
@@ -848,6 +1080,7 @@ function DtsRegister({
     void getBusinessModules()
       .then((catalog) => setModules(catalog.modules))
       .catch(() => setModules([]));
+    void listPeople().then(setPeople).catch(() => setPeople(undefined));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
@@ -935,7 +1168,8 @@ function DtsRegister({
           const created = await createIssue({
             title: ticket?.title || ticketNo,
             source: "dts",
-            product_version: productVersion || undefined,
+            // 分支不随请求携带(ADR-0038):服务端按单据版本包含匹配
+            // 配置中心,未配置直接 400——前端勾选闸只是第一道。
             ticket: ticketNo,
             description: ticket?.title || undefined,
             ...(binding ? { module_id: binding.module_id } : {}),
@@ -974,14 +1208,17 @@ function DtsRegister({
       DEV 模拟 DTS:外部开发模式,单据为本地模拟数据(--dts-mock),
       不是真实问题单;流程与真实模式完全一致。
     </p>}
-    <div className="max-w-md">
-      <ProductVersionPicker value={productVersion} onChange={version => setProductVersion(version)} />
-      <p className="mt-1 text-sm text-muted-foreground">批量发起可统一选择版本；未选择时，按单据版本精确匹配配置中心，未匹配则沿用问题流程原有基线处理。</p>
-    </div>
     {/* 工具栏:搜索居左,刷新/主操作居右;筛选住各列表头的漏斗
         (2026-09-13 表头化,与环境管理台账同范式,旧「版本过滤」
         按钮随迁移退役)。 */}
     <div className="flex flex-wrap items-center gap-2">
+      {/* 名下视角切换(2026-09-17 协助处理):默认自己,选人看别人名下
+          的单;几十人直接搜索(UserPicker 同款 combobox)。发起后的
+          会话仍归属自己,提示条在工具栏下说清。 */}
+      <div className="w-44">
+        <UserPicker value={owner} options={ownerOptions} ariaLabel="查看谁名下的问题单"
+          onChange={pickOwner} placeholder="搜索姓名或工号" />
+      </div>
       <Input type="search" className="h-9 w-full sm:w-80" value={query}
         aria-label="搜索问题单"
         placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
@@ -1018,8 +1255,8 @@ function DtsRegister({
         </span>}
       <div className="grow" />
       {note && <span className="text-xs text-muted-foreground" role="status">{note}</span>}
-      <Button variant="outline" size="sm" onClick={load} disabled={loading}
-        title="重新拉取名下问题单(勾选与搜索会重置)">
+      <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}
+        title={`重新拉取 ${ownerLabel} 名下问题单(勾选与搜索会重置)`}>
         <RotateCw aria-hidden className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
         {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}
       </Button>
@@ -1028,8 +1265,14 @@ function DtsRegister({
         {launchLabel}
       </Button>
     </div>
+    {assistMode && <p className="rounded-md border border-line bg-muted/40
+      px-3 py-2 text-xs leading-normal text-muted-foreground" role="note">
+      正在查看 <b className="font-medium text-foreground">{ownerLabel}</b>
+      名下的单子。发起处理的会话归属你自己名下推进(分支按发起人隔离,
+      不动对方已发起的会话);别人发起过的单标「进行中」,点开是查看模式。
+    </p>}
     {tickets === undefined && loading && <p className="text-sm text-muted-foreground">
-      正在拉取 {viewer.username} 名下的问题单…
+      正在拉取 {ownerLabel} 名下的问题单…
     </p>}
     {hiddenRemote.length > 0 && <p className="rounded-md border border-line
       bg-muted/40 px-3 py-2 text-xs text-muted-foreground" role="note">
@@ -1063,10 +1306,25 @@ function DtsRegister({
           {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
               旧 div 行布局退役,样式允许变更)。单号独立成格:勾选 checkbox
               在首格,拖选复制单号不会误勾选。子树挂 tw-root 走新轨道。 */}
-          <Table aria-label="名下问题单">
+          {/* 列宽拖拽(2026-09-17):table-fixed + colgroup 定宽,宽度
+              来源只有 colgroup 一处(th 上的 w-* 退役);标题列不给宽,
+              吃掉剩余宽度。把手贴各列表头右缘,列宽拖完记忆在
+              localStorage(mae-flow:dts-col-widths),双击把手回默认。 */}
+          <Table aria-label="名下问题单" className="table-fixed">
+            <colgroup>
+              {renderCol("select")}
+              {renderCol("ticket")}
+              {renderCol("title")}
+              {renderCol("version")}
+              {renderCol("branch")}
+              {renderCol("status")}
+              {renderCol("launch")}
+              {moduleCol && renderCol("module")}
+              <col style={{ width: 48 }} />
+            </colgroup>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-28">
+                <TableHead className="relative">
                   <div className="flex items-center gap-2">
                     <Checkbox aria-label="全选展示中的问题单"
                       checked={selectableTickets.length > 0
@@ -1079,8 +1337,12 @@ function DtsRegister({
                       已选 {displayedSelectedCount} / {selectableTickets.length} 张
                     </span>
                   </div>
+                  <DtsColResizeHandle colKey="select" label="勾选"
+                    width={dtsColWidth("select")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead>
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     单号
                     <HeaderFilter label="单号" active={!!ticketFilter.trim()}
@@ -1092,8 +1354,12 @@ function DtsRegister({
                         onChange={(event) => setTicketFilter(event.target.value)} />}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="ticket" label="单号"
+                    width={dtsColWidth("ticket")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead className="w-full">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     标题
                     <HeaderFilter label="标题" active={!!titleFilter.trim()}
@@ -1105,12 +1371,16 @@ function DtsRegister({
                         onChange={(event) => setTitleFilter(event.target.value)} />}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="title" label="标题"
+                    width={dtsColWidth("title")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
                 {/* 版本列(2026-09-13 表头化):展示含 B 版构建号的完整
                     版本(截断后悬停可见全串),过滤只认版本组——漏斗
                     弹层沿旧「版本过滤」的分组清单(勾组带全组 B 版),
                     44px 触控目标由选项行 min-h-11 保留。 */}
-                <TableHead className="w-64">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     版本
                     {versions.length > 0 && <HeaderFilter label="版本" contentClassName="w-72"
@@ -1129,12 +1399,32 @@ function DtsRegister({
                       </div>}
                     </HeaderFilter>}
                   </span>
+                  <DtsColResizeHandle colKey="version" label="版本"
+                    width={dtsColWidth("version")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead>状态</TableHead>
+                {/* 分支列(ADR-0038):服务端按「单据版本包含配置版本,
+                    多命中取最长」逐单带出;未命中给「未配置分支,前往
+                    配置」深链配置中心版本与分支页签,该行禁发起。 */}
+                <TableHead className="relative">
+                  分支
+                  <DtsColResizeHandle colKey="branch" label="分支"
+                    width={dtsColWidth("branch")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>
+                <TableHead className="relative">
+                  状态
+                  <DtsColResizeHandle colKey="status" label="状态"
+                    width={dtsColWidth("status")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>
                 {/* 发起状态列(2026-09-14):本平台有没有发起过——判定
                     与发起拦截同尺(liveIssueFor 一处口径),漏斗默认只
                     看未发起;徽标可点,跳进该单名下的进行中会话。 */}
-                <TableHead className="w-24">
+                <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     发起状态
                     <HeaderFilter label="发起状态" active={launchFilterActive}
@@ -1158,9 +1448,19 @@ function DtsRegister({
                       </div>}
                     </HeaderFilter>
                   </span>
+                  <DtsColResizeHandle colKey="launch" label="发起状态"
+                    width={dtsColWidth("launch")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                {moduleCol && <TableHead className="w-56">所属模块</TableHead>}
-                <TableHead className="w-12" />
+                {moduleCol && <TableHead className="relative">
+                  所属模块
+                  <DtsColResizeHandle colKey="module" label="所属模块"
+                    width={dtsColWidth("module")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>}
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1171,32 +1471,44 @@ function DtsRegister({
                 const detail = detailCache[ticket.ticket];
                 const detailId =
                   `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
-                // 发起状态判定(与拦截同尺,走按单索引):有进行中会话
-                // 即已发起——勾选禁用、徽标跳转、默认过滤都认它。
-                const liveIssue = liveIssueByTicket.get(ticket.ticket);
+                // 发起状态两本账(2026-09-17 协助视角):拦截认我的名册
+                // (同账号+同单号至多一个进行中,与服务端 create 同尺);
+                // 徽标认展示名册——协助视角下别人发起过的单也标「进行中」,
+                // 点开是查看模式,但勾选不禁、发起不拦(接管正是协助的
+                // 用法,分支按发起人隔离不冲突)。
+                const mineLive = mineLiveByTicket.get(ticket.ticket);
+                const liveIssue = mineLive
+                  ?? shownLiveByTicket.get(ticket.ticket);
                 const liveTip = liveIssue
-                  ? `已发起:会话 ${liveIssue.id} 进行中` : "";
-                const colCount = moduleCol ? 8 : 7;
+                  ? (liveIssue.account === viewer.username
+                    ? `已发起:会话 ${liveIssue.id} 进行中`
+                    : `已发起:${liveIssue.account} 的会话 ${liveIssue.id} 进行中`)
+                  : "";
+                const colCount = moduleCol ? 9 : 8;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
                       ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
-                        disabled={!!liveIssue}
-                        title={liveIssue ? `${liveTip},不可重复发起` : undefined}
+                        disabled={!!mineLive || !ticket.branch}
+                        title={mineLive ? `${liveTip},不可重复发起`
+                          : !ticket.branch ? "未配置分支,不可发起——点分支列的「前往配置」补映射"
+                          : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
                           checked
                             ? [...current, ticket.ticket]
                             : current.filter((item) => item !== ticket.ticket))} />
                     </TableCell>
-                    <TableCell className="whitespace-nowrap">
+                    <TableCell className="whitespace-nowrap overflow-hidden">
                       {/* 单号独立成格(勾选在首格):拖选复制单号不会误
                           勾选——单号是绑单/推送分支名的关键操作对象,
                           复制是高频动作。 */}
                       {/* 单号直达 DTS 门户(a { color: inherit } 全局兜底,
                           外观与原文字一致;新开页签,不带走列表现场)。 */}
+                      {/* overflow-hidden:列宽拖窄后「远程」徽标裁在格内,
+                          不横溢进标题列(table-fixed 格宽即硬宽)。 */}
                       <a className="issue-dts-ticket font-mono text-sm
                         font-medium text-primary underline-offset-2
                         hover:underline"
@@ -1220,6 +1532,17 @@ function DtsRegister({
                         {ticket.version || "—"}
                       </span>
                     </TableCell>
+                    <TableCell className="max-w-0 text-sm">
+                      {ticket.branch
+                        ? <span className="block truncate font-mono text-xs"
+                            title={ticket.branch}>{ticket.branch}</span>
+                        : <a className="text-xs text-destructive underline
+                            underline-offset-2 hover:underline"
+                            href="/configuration?tab=versions"
+                            title="单据版本没有匹配到配置中心的版本与分支映射,配置后即可发起">
+                            未配置分支,前往配置
+                          </a>}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {ticket.status
                         && <Badge variant="secondary">{ticket.status}</Badge>}
@@ -1228,8 +1551,8 @@ function DtsRegister({
                       {liveIssue
                         ? <Button type="button" variant="ghost" size="xs"
                             className="group/live"
-                            title={`${liveTip},点击打开`}
-                            aria-label={`打开 ${ticket.ticket} 的进行中会话`}
+                            title={`${liveTip},${mineLive ? "点击打开" : "点击查看"}`}
+                            aria-label={`${mineLive ? "打开" : "查看"} ${ticket.ticket} 的进行中会话`}
                             onClick={() => onOpenIssue?.(liveIssue.id)}>
                           <Badge>
                             {/* 徽标本体是静态胶囊(2026-09-14 设计审查:
@@ -1337,9 +1660,13 @@ function DtsRegister({
     </>}
     {tickets && tickets.length === 0 && <div className="flex flex-col items-center
       gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">
-      <p className="text-base font-medium">你的名下当前没有问题单</p>
+      <p className="text-base font-medium">
+        {assistMode ? `${ownerLabel} 名下当前没有问题单` : "你的名下当前没有问题单"}
+      </p>
       <p className="max-w-md text-sm text-muted-foreground">
-        有新单落到你名下后,点「刷新」拉取;发起过的单在「问题会话」页签可见。
+        {assistMode
+          ? "换回自己或选其他成员查看;发起处理会话归属你自己名下推进。"
+          : "有新单落到你名下后,点「刷新」拉取;发起过的单在「问题会话」页签可见。"}
       </p>
     </div>}
     {tickets && tickets.length > 0 && (actionable?.length ?? 0) === 0

@@ -300,6 +300,9 @@ export interface DtsTicketBrief {
   status?: string;
   /** B 版本(DTS 字段 sProdBNoName);R 版本不用。 */
   version?: string;
+  /** 分支匹配结果(ADR-0038):路由层按配置中心映射补齐,网关不产;
+   * 未命中配置时不加字段,前端按「未配置分支」呈现。 */
+  branch?: string;
   severity?: string;
   submitter?: string;
   url?: string;
@@ -314,6 +317,8 @@ export interface DtsTicketDetail {
   description?: string;
   severity?: string;
   version?: string;
+  /** 分支匹配结果(ADR-0038):路由层补齐,同列表;远程查单入列也带。 */
+  branch?: string;
   url?: string;
   submitter?: string;
   /** 状态名(batchQueryTicket 的 dtsStatusName,需 fields 显式请求)。
@@ -652,11 +657,15 @@ export class MockDtsGateway implements DtsGateway {
     const known = loadMockTickets(this.source).find((item) => item.ticket === ticket);
     if (known) {
       this.log?.(`[dts-mock] detail(${ticket}) → 已知单`);
+      // version 必须随详情走:发起的分支硬闸按单据版本解析基线
+      // (ADR-0038),列表有、详情没有就会"列上带分支、发起却说
+      // 读不到版本"的精神分裂。
       if (known.content) {
         return {
           ticket: known.ticket,
           title: known.title,
           status: known.status,
+          ...(known.version ? { version: known.version } : {}),
           ...(known.description ? { description: known.description } : {}),
           content: known.content,
         };
@@ -665,6 +674,7 @@ export class MockDtsGateway implements DtsGateway {
         ticket: known.ticket,
         title: known.title,
         status: known.status,
+        ...(known.version ? { version: known.version } : {}),
         content:
           `【MOCK 单据】${known.title}\n\n`
           + `单号: ${known.ticket}\n状态: ${known.status ?? "打开"}\n`

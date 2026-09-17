@@ -1,14 +1,15 @@
-import { IssueExternalReviewPanel } from "./IssueExternalReviewPanel";
+import { IssueExternalReviewPanel, externalReviewDone, useIssueReviews } from "./IssueExternalReviewPanel";
 /**
  * 会话域:会话工作台全屏视图(头部 / 阶段线 / 逐仓交付 / 耗时卡点 / 双栏)。
  *
  * 从 IssueBoard.tsx 原文搬移(spec #2 按域拆分,纯搬移零行为变化):
  * 工作台无条件画固定流程计划线(IssueFixedProgress,列表卡也复用;
  * #98 单路径化:不再感知"模式",自由旅程线已删)。左栏(#123 拍平)
- * 是五个一级标签直排——页签条在本文件,四个材料子视图内容免壳直渲自
- * MaterialsPane.tsx、现场直播在 EventsPane.tsx。右栏旧 NEXT ACTION 侧栏
- * 已随 #127 整体拆除:归档/终止入头部控件区、挂起转正卡入协作流顶部、
- * 状态说明由头部徽标与协作流承载。
+ * 是六个一级标签直排——页签条在本文件,材料子视图内容免壳直渲自
+ * MaterialsPane.tsx、现场直播在 EventsPane.tsx、MR 检视批注在
+ * IssueExternalReviewPanel.tsx(2026-09-17 收编第六签,ADR-0027 修订)。
+ * 右栏旧 NEXT ACTION 侧栏已随 #127 整体拆除:归档/终止入头部控件区、
+ * 挂起转正卡入协作流顶部、状态说明由头部徽标与协作流承载。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
@@ -47,18 +48,21 @@ import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
 import { IssueEventsPane } from "./EventsPane";
 import { IssueMetaPane } from "./MetaPane";
-import { FeedbackPanel } from "../TaskWorkspace";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IssueStatusBadge } from "../StatusBadge";
 import { cn } from "cn";
 
-/** 左栏五个一级标签(ADR-0027 五签定局:逐仓交付退役融合进元信息的
- * 关联仓行;对话现场降末位、默认签改元信息——右栏协作流常驻直播兜住
- * 「看现场」的刚需,右栏工具步骤的「对话现场」跳转按钮是完整事件流
- * 的唯一入口;DTS 单据签无单整体隐藏,#239 起「元信息」居首)。页签条
- * 复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
+/** 左栏六个一级标签(ADR-0027 五签定局,2026-09-17 修订增第六签):
+ * 「MR 检视」收编原页签容器上方的 MR 检视批注面板(挤占首屏,走查拍板
+ * 下场),有批注才现身、有待判断挂脉冲点——持续检视面板随流水线显示面
+ * 撤除同步退役(问题流反馈账只写流水线与 MR 讨论,前者不再上屏、后者
+ * 本就不在面板里,面板恒空);流水线本身要看去 CodeHub。其余五签与
+ * ADR-0027 定局一致:对话现场降末位、默认签改元信息——右栏协作流常驻
+ * 直播兜住「看现场」的刚需,右栏工具步骤的「对话现场」跳转按钮是完整
+ * 事件流的唯一入口;DTS 单据签无单整体隐藏,#239 起「元信息」居首)。
+ * 页签条复用任务侧 ws-pane-head > ws-source-switch 同构,一签一色走
  * --workspace-tab-color(#231 换装:色值直译成各签自带的变量工具类,
  * 字面量在此便于 Tailwind 拾取)。 */
 const ISSUE_MAIN_TABS = [
@@ -67,6 +71,7 @@ const ISSUE_MAIN_TABS = [
   { key: "doc", label: "分析报告", tone: "[--workspace-tab-color:#20a28f]" },
   { key: "changes", label: "工作区变更", tone: "[--workspace-tab-color:#3b83d5]" },
   { key: "events", label: "对话现场", tone: "[--workspace-tab-color:#7566df]" },
+  { key: "reviews", label: "MR 检视", tone: "[--workspace-tab-color:#c2554f]" },
 ] as const;
 type IssueMainTab = (typeof ISSUE_MAIN_TABS)[number]["key"];
 
@@ -135,6 +140,15 @@ export function IssueSessionView({
   // 的差异:那边管理员可操作,这边明说不写)。viewer 缺席(auth 关闭的
   // 演示形态)按可操作处理,保持既有行为。
   const canOperate = !viewerUsername || viewerUsername === detail.account;
+
+  // MR 检视批注的账(5s 可见轮询)在会话层常驻:「MR 检视」页签的
+  // 在场与脉冲点靠它,页签没开也要轮(ADR-0027 修订,2026-09-17)。
+  const reviews = useIssueReviews(detail.id);
+  const reviewsPending = reviews.items
+    .filter(item => !externalReviewDone(item)
+      && item.status === "draft" && !item.agent_assigned).length;
+  // 「MR 检视」签有批注才现身;正被看着时即便批注清空也留(空态自己说)。
+  const showReviewsTab = reviews.items.length > 0 || tab === "reviews";
 
   async function perform(action: () => Promise<unknown>): Promise<boolean> {
     if (busy) return false;
@@ -371,14 +385,13 @@ export function IssueSessionView({
               className="h-auto px-0 font-bold text-danger underline underline-offset-2 hover:text-danger"
               onClick={onNavigateProfile}>去个人设置配置令牌</Button>}
         </div>}
-        {/* 逐仓交付已收编为「逐仓交付」页签(2026-09-07 走查拍板:上方
-            不再放大卡区,信息尽可能收进页签圈);检视反馈仅在库时显示。 */}
-        <IssueExternalReviewPanel id={detail.id} canOperate={canOperate} />
-        {Boolean(detail.feedback?.some(item => item.source !== "mr_discussion"))
-          && <FeedbackPanel feedback={detail.feedback!.filter(item => item.source !== "mr_discussion")} />}
+        {/* 逐仓交付已收编页签(ADR-0027)、MR 检视批注已收编「MR 检视」
+            页签、持续检视面板已退役(2026-09-17 走查拍板:上方不再放大
+            卡区,流水线要看去 CodeHub)——横幅之下直达页签区。 */}
 
-        {/* 左栏内容(#123 拍平 + #127 走查反馈):六个一级标签直排——
-            对话现场(默认入口)放首位,逐仓交付收编为末签。页签条是
+        {/* 左栏内容(#123 拍平 + ADR-0027 五签定局 + 2026-09-17 修订
+            第六签):一级标签直排,元信息(默认入口)居首、MR 检视垫后。
+            页签条是
             任务侧左栏同款 ws-pane-head > ws-source-switch(role=tablist),
             页签一签一色走各签自带的 --workspace-tab-color(#231 换装)。
             #231 换装:左栏拉伸契约(issueWorkspaceLayout)原住在
@@ -410,19 +423,22 @@ export function IssueSessionView({
               <TabsList variant="line" aria-label="会话工作区内容"
                 className="ws-source-switch h-auto justify-start">
                 {/* DTS 单据签无单整体隐藏(ADR-0027:屏蔽即诚实,原
-                    禁用+tooltip 的死钮退役);其余各签恒在。 */}
+                    禁用+tooltip 的死钮退役);「MR 检视」签有批注才现身
+                    (正被看着时即便清空也留,免得脚下视图塌掉);其余各签恒在。 */}
                 {ISSUE_MAIN_TABS
-                  .filter(({ key }) => key !== "dts" || detail.ticket)
+                  .filter(({ key }) => (key !== "dts" || detail.ticket)
+                    && (key !== "reviews" || showReviewsTab))
                   .map(({ key, label, tone }) => (
                   <TabsTrigger key={key} value={key}
                     className={`h-auto flex-none ${tone} data-active:text-[color:color-mix(in_srgb,var(--workspace-tab-color)_62%,var(--text-strong))] data-active:border-[color:color-mix(in_srgb,var(--workspace-tab-color)_34%,var(--line))] data-active:bg-[color:color-mix(in_srgb,var(--workspace-tab-color)_9%,var(--surface))]${tab === key ? " on" : ""}`}>
                     <span>{label}</span>
                     {/* 分析报告在库:「分析报告」页签挂脉冲点——报告是主
                         交付物,入口要找得到(原材料页签的同一引导,随升格
-                        迁来);#231 换装:原 issue-workspace 的圆点定尺/
-                        染色列直译成点上的工具类,动画仍由共享 .ws-tab-dot
-                        承担。 */}
-                    {key === "doc" && detail.has_analysis
+                        迁来);「MR 检视」签同款引导,有待判断批注就挂点
+                        (#231 换装:原 issue-workspace 的圆点定尺/染色列
+                        直译成点上的工具类,动画仍由共享 .ws-tab-dot 承担)。 */}
+                    {(key === "doc" && detail.has_analysis
+                      || key === "reviews" && reviewsPending > 0)
                       && <i aria-hidden
                         className="ws-tab-dot size-[7px] min-w-0 rounded-full bg-(--workspace-tab-color) p-0" />}
                   </TabsTrigger>
@@ -440,7 +456,12 @@ export function IssueSessionView({
             {tab === "meta" && <TabsContent value="meta" className="contents">
               <IssueMetaPane detail={detail} canOperate={canOperate} />
             </TabsContent>}
-            {tab !== "events" && tab !== "meta"
+            {tab === "reviews" && <TabsContent value="reviews" className="contents">
+              <IssueExternalReviewPanel issueId={detail.id}
+                items={reviews.items} pollError={reviews.pollError}
+                refresh={reviews.refresh} canOperate={canOperate} />
+            </TabsContent>}
+            {tab !== "events" && tab !== "meta" && tab !== "reviews"
               && <TabsContent value={tab} className="contents">
               <IssueMaterialsPane detail={detail} view={tab}
                 canOperate={canOperate} />

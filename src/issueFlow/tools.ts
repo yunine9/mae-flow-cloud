@@ -135,14 +135,14 @@ export interface IssueToolContext {
   startWarmup?: () => void;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
-   * 尽力建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
-   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。 */
+   * 建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
+   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。
+   * 基线分支在远端缺失时整次失败抛错(ADR-0038),不降级默认分支。 */
   pullRepo(url: string): Promise<{
     dir: string;
     cloned: boolean;
     branch?: string;
     head: string;
-    baselineMiss?: string;
     remoteBranch?: string;
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
@@ -415,8 +415,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Pull Repository",
     description:
       "把一个代码仓加入会话并克隆到 repo/<仓名>/(宿主带凭据执行,你只见"
-      + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带尝试创建修复分支 "
-      + "master_<工号>_<单号>(基线分支不存在时不建,如实回报由你裁决)。"
+      + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带创建修复分支 "
+      + "master_<工号>_<单号>;基线分支在远端不存在时拉仓整次失败,如实"
+      + "向用户报告,不要在别的分支上继续。"
       + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。",
     parameters: Type.Object({
       url: Type.String({
@@ -437,10 +438,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             : ""}`,
       });
       ctx.persist();
-      const baselineNote = facts.baselineMiss
-        ? "\n" + promptCopy("receipts", "pull.baseline_miss",
-          { baseline: facts.baselineMiss })
-        : "";
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
       // 自报)。拉取阶段的回执带注册表简报指引:还有仓继续拉,拉齐了
       // complete_stage 收口;其余阶段的补仓只回事实,不催收口。
@@ -459,7 +456,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             remote: facts.remoteBranch,
           })
           : ""}`
-        + `${baselineNote}${guide}`);
+        + `${guide}`);
     },
   }));
 
@@ -1290,7 +1287,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + "意见(澄清、追问、确认语义)用它原地闭环——不回退、不改报告、"
         + "不出版本。outcome 按语义选:needs_clarification=要用户补充说明;"
         + "not_fixed=解释说明/确认无需改动;fixed=确已按意见改动(附依据)。"
-        + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报。",
+        + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报;"
+        + "修改型批次在重写完成后,也用它对本批意见逐条交代(改了什么,"
+        + "outcome=fixed 附依据)再重新 submit_analysis——报告正文不写"
+        + "应答段,检视回复只落在意见处。",
       parameters: Type.Object({
         items: Type.Array(Type.Object({
           review: Type.Union([Type.Number(), Type.String()], {
@@ -1329,8 +1329,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         }
         return ok(`已逐条回复 ${receipts.length} 条检视意见`
           + `(用户在检视意见面板可见):\n${receipts.join("\n")}\n`
-          + "本批若还有需要改动报告内容的修改型意见,先回复完再调 "
-          + "declare_review_rework;全批都是回复型就到此为止,不要重写报告。");
+          + "分诊回合里本批还有修改型意见的,先回复完再调 declare_review_rework;"
+          + "重写回合里逐条交代完的,调 submit_analysis 重新提交;"
+          + "其余情况到此为止,不要重写报告。");
       },
     }));
 
@@ -1341,9 +1342,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         "检视分诊的修改申报入口:本批检视意见里有需要改动分析报告内容本身"
         + "的修改型意见时,先对回复型意见逐条 respond_review,再调它申报。"
         + "平台会整体回退重写(回退问题分析、轮次+1、冻结被检视的报告"
-        + "版本),并把意见清单重新注入;之后按清单修订报告、开头加「检视"
-        + "意见回应」段、重新 submit_analysis,确认卡照旧交用户。纯回复型"
-        + "批次(澄清/追问/确认,无需改动报告)禁止调用。",
+        + "版本),并把意见清单重新注入;之后按清单修订报告,对本批意见"
+        + "逐条 respond_review 交代(报告正文不写应答段),再重新 "
+        + "submit_analysis,确认卡照旧交用户。纯回复型批次(澄清/追问/"
+        + "确认,无需改动报告)禁止调用。",
       parameters: Type.Object({
         reviews: Type.Array(Type.Object({
           seq: Type.Number({
@@ -1390,8 +1392,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + `其中 ${unique.length} 条修改型需回退重写:${reason}`);
         ctx.state.review_active = true;
         ctx.persist();
-        // 意见清单重注入(修改版契约:回应段护栏+submit_analysis 收尾)
-        // ——AI 据此整份重写,重写完重新举确认卡。
+        // 意见清单重注入(修改版契约:逐条 respond 交代+submit_analysis
+        // 收尾)——AI 据此整份重写,重写完重新举确认卡。
         return ok(`已申报修改:平台已整体回退问题分析(第 ${ctx.state.round} 轮),`
           + "被检视报告已冻结版本。请按以下意见清单修订报告:\n\n"
           + renderReviewNotes(batch, ctx.state.title ?? "分析报告",

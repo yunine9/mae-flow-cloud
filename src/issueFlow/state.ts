@@ -91,10 +91,8 @@ export interface StageTransition {
 
 export type IssueConclusionKind =
   | "non_issue"   // 非问题(误报/需求误解/无法复现)
-  | "fixed"       // 已修复(可能未走 MR,如仅换库验证)
-  | "delivered"   // 已修复并提交 MR
-  | "issue"       // 问题成立(无单挂起后未转正即收口)
-  | "converted";  // 已关联单号转正为新会话(本会话到此为止)
+  | "delivered"   // 修复完成即交付(合入与否看 mrs 账,不进结论,ADR-0037)
+  | "issue";      // 问题成立(含挂起后关联单号转正的收口,血缘见 converted_to)
 
 export interface IssueEnvironmentConfig {
   /** 环境引用(vault 里的 id);凭据永不进状态文件。 */
@@ -348,6 +346,9 @@ export interface IssueSessionState {
    * Git 提交身份、介入档位、同账号+同单号去重都跟它走。登记时指派,
    * 缺省=登记人(自登记)。 */
   account: string;
+  /** 最近一次会话启动解析到的网关通道(ADR-0039):platform=平台
+   * 网关,beta=Beta 网关(责任人站在白名单)。fail-open 回落不回改。 */
+  model_lane?: "platform" | "beta";
   /** 登记人(ADR-0031,通常是测试):登记完成即撒手,对会话只读,
    * 靠「我登记的」列表跟踪;登记人≠归属时凭它过滤出登记视角的列表。
    * 缺席=指派机制之前的老会话(自登记),loadState 回填=归属账号。 */
@@ -650,6 +651,12 @@ export function loadState(root: string): IssueSessionState | undefined {
     state.pipelines = { [state.repo_url ?? ""]: legacyPipeline };
   }
   delete (state as { pipeline?: unknown }).pipeline;
+  // 结论词表收敛(ADR-0037):fixed 并入 delivered(修复完成即交付,
+  // 合入与否看 mrs 账)、converted 并入 issue(转正=问题成立+开新会话,
+  // 血缘 converted_from/to 保留)。读侧归一,统计与展示不认旧词。
+  const legacyConclusion = state.conclusion as { kind?: string } | undefined;
+  if (legacyConclusion?.kind === "fixed") legacyConclusion.kind = "delivered";
+  else if (legacyConclusion?.kind === "converted") legacyConclusion.kind = "issue";
   return state;
 }
 

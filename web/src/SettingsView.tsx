@@ -13,8 +13,11 @@ import {
   getBuildCacheStatus,
   getSettings,
   getSystemCheck,
+  listPeople,
+  postModelsBetaCheck,
   postModelsCheck,
   putExecutionPolicySettings,
+  putModelsBetaSettings,
   putModelsSettings,
   putRuntimeSettings,
   putVisionSettings,
@@ -31,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { UserPicker, userLabel } from "./UserPicker";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -549,6 +553,160 @@ function ModelsCard({ view, onSaved }: {
   </div>;
 }
 
+function BetaModelsCard({ view, onSaved }: {
+  view: Settings; onSaved: (next: Settings) => void;
+}) {
+  const beta = view.models_beta;
+  const [apiFormat, setApiFormat] = useState(beta.api ?? "openai-completions");
+  const [url, setUrl] = useState(beta.url ?? "");
+  const [apiKey, setApiKey] = useState("");
+  const [model, setModel] = useState(beta.model ?? "");
+  const [members, setMembers] = useState<string[]>(beta.members);
+  const [people, setPeople] = useState<Array<{ username: string; display_name?: string }>>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useMessage();
+  const [testing, setTesting] = useState(false);
+  const [checkResult, setCheckResult] = useState<SystemCheckResult>();
+  const [checkError, setCheckError] = useState("");
+
+  useEffect(() => {
+    listPeople().then((rows) => setPeople(rows.map((row) => ({
+      username: row.username, display_name: row.display_name,
+    })))).catch(() => setPeople([]));
+  }, []);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true); setMessage(null);
+    try {
+      onSaved(await putModelsBetaSettings({
+        url: url.trim(),
+        api_key: apiKey.trim(),
+        model: model.trim(),
+        api: apiFormat,
+        members,
+      }));
+      setApiKey("");
+      setMessage({ kind: "success",
+        text: "已保存;名单内成员的下一个新会话走 Beta 网关,在跑的会话不受影响。可点「测试连通」验证。" });
+    } catch (error) {
+      setMessage({ kind: "error", text: String((error as Error).message ?? error) });
+    } finally { setBusy(false); }
+  }
+
+  // 测的是当前表单值;密钥留空时服务端沿用已存的,与保存口径一致。
+  async function runCheck() {
+    setTesting(true); setCheckError(""); setCheckResult(undefined);
+    try {
+      setCheckResult(await postModelsBetaCheck({
+        url: url.trim() || undefined,
+        api_key: apiKey.trim() || undefined,
+        model: model.trim() || undefined,
+        api: apiFormat,
+      }));
+    } catch (cause) {
+      setCheckError(String((cause as Error).message ?? cause));
+    } finally { setTesting(false); }
+  }
+
+  function removeMember(username: string) {
+    setMembers(members.filter((item) => item !== username));
+  }
+
+  return <div id="settings-models-beta" className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
+    <div className="bg-surface-2 p-7 text-muted-foreground">
+      <h2 className="mb-2 text-[17px] font-bold text-text-strong">Beta 网关</h2>
+      <p className="m-0 text-sm leading-[1.7]">给白名单成员换用另一套模型的第二配置,口径与「模型网关」完全一致:名单内成员名下任务的模型调用整体走这里,其余人走平台网关。API Key 保存后不会回显明文。</p>
+      <span className={cn("mt-3.5 inline-flex w-fit items-center gap-1.5 rounded-full border px-[9px] py-[5px] text-[13px] font-bold",
+        beta.enabled
+          ? "border-success/25 bg-success/10 text-success"
+          : beta.configured
+            ? "border-attention/25 bg-attention/10 text-attention"
+            : "border-line bg-surface-2 text-muted-foreground")}>
+        <i aria-hidden className="size-1.5 rounded-full bg-current" />{beta.enabled
+          ? `已启用 · ${beta.members.length} 名成员${beta.key_hint ? ` · Key ${beta.key_hint}` : ""}`
+          : beta.configured
+            ? "已配置,名单为空(通道停用)"
+            : "尚未配置"}
+      </span>
+    </div>
+    <form className="grid content-start gap-[15px] p-[26px]" onSubmit={submit}>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">Beta 网关地址</span>
+        <Input value={url} type="url" required spellCheck={false}
+          placeholder={apiFormat === "anthropic-messages"
+            ? "例如：https://model-gateway.internal/api/anthropic"
+            : "例如：https://model-gateway.internal/v1"}
+          onChange={(event) => setUrl(event.target.value)} />
+      </label>
+      <label className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">API Key</span>
+        <Input value={apiKey} type="password" autoComplete="new-password"
+          required={!beta.configured}
+          placeholder={beta.configured
+            ? `已保存 ${beta.key_hint ?? "密钥"}，留空保持不变`
+            : "请输入 Beta 网关 API Key"}
+          onChange={(event) => setApiKey(event.target.value)} />
+      </label>
+      <label className={fieldWrapClass}>
+        <span className="text-[13px] font-medium text-muted-foreground">模型名称</span>
+        <Input value={model} required spellCheck={false}
+          placeholder="例如：glm-5.1"
+          onChange={(event) => setModel(event.target.value)} />
+      </label>
+      <label className={fieldWrapClass}>
+        <span className="text-[13px] font-medium text-muted-foreground">接口格式</span>
+        <Select value={apiFormat}
+          items={[{ value: "openai-completions", label: "OpenAI Chat" }, { value: "anthropic-messages", label: "Anthropic" }]}
+          onValueChange={(value) => setApiFormat(value ?? "openai-completions")}>
+          <SelectTrigger className="w-full" aria-label="接口格式"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectItem value="openai-completions">OpenAI Chat</SelectItem>
+              <SelectItem value="anthropic-messages">Anthropic</SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+      </label>
+      <div className={cn("col-span-full", fieldWrapClass)}>
+        <span className="text-[13px] font-medium text-muted-foreground">白名单成员(名单内成员的任务走 Beta,清空即停用)</span>
+        {members.length > 0 && <div className="flex flex-wrap gap-1.5">
+          {members.map((username) => <span key={username}
+            className="inline-flex items-center gap-1 rounded-full border border-line bg-surface-2 px-2.5 py-1 text-[13px]">
+            {userLabel(people.find((item) => item.username === username) ?? { username })}
+            <button type="button" aria-label={`移除 ${username}`}
+              className="text-muted-foreground hover:text-danger"
+              onClick={() => removeMember(username)}>×</button>
+          </span>)}
+        </div>}
+        <UserPicker value="" options={people}
+          onChange={(username) => setMembers(members.includes(username)
+            ? members : [...members, username])}
+          ariaLabel="添加白名单成员" emptyLabel="添加成员…" />
+      </div>
+      <div className="col-span-full flex items-center gap-2.5">
+        <Button type="submit" disabled={busy || testing}>
+          {busy ? "正在保存…" : "保存 Beta 网关"}</Button>
+        <Button type="button" variant="outline" disabled={busy || testing} onClick={() => void runCheck()}>
+          {testing ? "测试中…" : "测试连通"}</Button>
+      </div>
+      <small className="text-[13px] leading-normal text-muted-foreground">测试使用当前表单值向 Beta 网关发送一条极小请求(密钥留空时沿用已保存的)。Beta 运行期故障会自动回落平台网关,好不好靠这里点验。</small>
+      <Feedback message={message} />
+      {checkError && <div className="rounded-lg bg-danger/10 px-2.5 py-2 text-[13px] text-danger">{checkError}</div>}
+      {testing && !checkResult && !checkError
+        && <div className="text-sm text-muted-foreground">正在连通网关并等待模型回复…</div>}
+      {checkResult && <>
+        <Badge variant={CHECK_VARIANT[checkResult.overall]}>
+          <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current" />
+          {checkResult.overall === "ok"
+            ? "网络与模型问答均正常" : "存在问题，见下方明细"}
+        </Badge>
+        <CheckItems result={checkResult} />
+      </>}
+    </form>
+  </div>;
+}
+
 function VisionModelsCard({ view, onSaved }: {
   view: Settings; onSaved: (next: Settings) => void;
 }) {
@@ -762,6 +920,9 @@ export function SettingsBoard() {
       setCheckError(nextError);
     }} />
     <ModelsCard key={`m${view.models.url}:${view.models.model}:${view.models.key_hint}`}
+      view={view} onSaved={setView} />
+    <BetaModelsCard
+      key={`b${view.models_beta.url}:${view.models_beta.model}:${view.models_beta.key_hint}:${view.models_beta.members.join(",")}`}
       view={view} onSaved={setView} />
     <VisionModelsCard
       key={`v${view.models.vision.url}:${view.models.vision.model}:${view.models.vision.key_hint}`}
