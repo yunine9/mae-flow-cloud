@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -76,6 +77,8 @@ export function ComponentResearch({
     [scope, setScope] = useState("platform"),
     [module, setModule] = useState(""),
     [repos, setRepos] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("all");
   const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
@@ -156,19 +159,13 @@ export function ComponentResearch({
     url.searchParams.set("componentResearch", id);
     history.replaceState(history.state, "", url);
   }
-  async function start(refresh = false) {
+  async function start() {
     setBusy(true);
     setError("");
     try {
       const r = await componentRequest<ComponentResearchRecord>(
         "/component-research",
-        refresh && current
-          ? {
-              language: current.language,
-              topic: current.topic,
-              refresh: true,
-            }
-          : { language, topic },
+        { language, topic },
       );
       await load();
       setDetail(r);
@@ -179,11 +176,21 @@ export function ComponentResearch({
       setBusy(false);
     }
   }
+  async function manage(action: "stop" | "delete" | "retry") {
+    if (!current) return;
+    setBusy(true); setError("");
+    try {
+      const result = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}/${action}`, {});
+      if (action === "delete") { setDeleting(false); setDetail(undefined); selectRecord("history"); }
+      else { setDetail(result); selectRecord(result.id); }
+      await load();
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  }
   return (
     <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-white p-6" aria-label="源码萃取工作区">
         <header className="flex items-center gap-4 border-b border-line pb-4">
           <Button variant="outline" onClick={onClose}>{focused ? "← 返回文档" : "← 返回知识库"}</Button>
-          <h2 className="text-xl font-semibold">{focused ? "本篇文档的萃取过程" : "源码萃取"}</h2>
+          <h2 className="text-xl font-semibold">{focused ? "本篇文档的萃取过程" : "萃取任务"}</h2>
           {!focused && <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>}
         </header>
         <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[280px_1fr]"} min-h-0 flex-1 gap-5`}>
@@ -195,10 +202,10 @@ export function ComponentResearch({
                 setError("");
               }}
             >
-              ＋ 发起萃取
+              ＋ 新建萃取任务
             </Button>
-            <h3 className="mb-3 font-semibold">萃取记录</h3>
-            {records.map((r) => (
+            <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
+            {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
               <button
                 key={r.id}
                 className={`mb-2 w-full rounded-lg border p-3 text-left ${selected === r.id ? "border-primary bg-primary/5" : "border-line"}`}
@@ -212,7 +219,7 @@ export function ComponentResearch({
                 <span className="mt-2 block text-sm text-muted-foreground">
                   {knowledgeLanguageLabel(r.language)} · {r.components?.length ?? 1} 个组件仓
                 </span>
-                <span className="mt-1 block text-sm">{r.stage}</span>
+                <span className="mt-1 block text-sm">{r.stage}</span><time className="mt-1 block text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</time>
               </button>
             ))}
             {!records.length && (
@@ -226,47 +233,23 @@ export function ComponentResearch({
               </p>
             )}
             {!selected || selected === "history" ? <div className="p-8 text-muted-foreground">选择一条萃取记录查看进度与草稿，或发起新的萃取。</div> : selected !== "new" && !current ? <p className="p-8" role="status">正在加载萃取记录…</p> : !current ? (
-              <div className="mx-auto grid max-w-2xl gap-5 py-4">
-                <h2 className="text-xl font-semibold">
-                  从真实源码中提炼开发范式
-                </h2>
-                <p className="text-muted-foreground">
-                  选定语言与具体问题。后台阅读组件实现、检索真实调用，生成带来源的
-                  Markdown 草稿。
-                </p>
-                <Choice label="萃取语言" value={language} onChange={setLanguage}
-                  items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
-                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `自动覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
-                <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
-                <label className="grid gap-2">
-                  研究主题
-                  <Textarea
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
-                  />
-                </label>
-                <Button
-                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || !topic.trim()}
-                  onClick={() => void start()}
-                >
-                  {busy ? "发起中…" : "开始后台萃取"}
-                </Button>
-              </div>
+              <p className="p-8 text-muted-foreground">在左侧选择任务，查看进度、来源证据和草稿。</p>
             ) : (
               <>
                 <header className="mb-5">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-xl font-semibold">{current.topic}</h2>
-                    {!focused && ["done", "failed"].includes(current.status) && (
+                    {!focused && ["done", "failed", "cancelled"].includes(current.status) && (
                       <Button
                         variant="outline"
                         disabled={busy}
-                        onClick={() => void start(true)}
+                        onClick={() => void manage("retry")}
                       >
-                        重新萃取
+                        {current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
                       </Button>
                     )}
+                    {!focused && ["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
+                    {!focused && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
                   </div>
                   <p className="mt-2 text-muted-foreground">
                     {current.components?.length ?? 1} 个组件仓 ·{" "}
@@ -430,6 +413,41 @@ export function ComponentResearch({
             )}
           </main>
         </div>
+
+      <Dialog open={selected === "new"} onOpenChange={open => { if (!open) selectRecord("history"); }}>
+        <DialogContent className="tw-root sm:max-w-[640px] max-h-[85vh] overflow-auto">
+          <DialogHeader><DialogTitle>新建萃取任务</DialogTitle></DialogHeader>
+          {error && <p role="alert" className="text-danger">{error}</p>}
+              <div className="mx-auto grid max-w-2xl gap-5 py-4">
+                <h2 className="text-xl font-semibold">
+                  从真实源码中提炼开发范式
+                </h2>
+                <p className="text-muted-foreground">
+                  选定语言与具体问题。后台阅读组件实现、检索真实调用，生成带来源的
+                  Markdown 草稿。
+                </p>
+                <Choice label="萃取语言" value={language} onChange={setLanguage}
+                  items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
+                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `自动覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
+                <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
+                <label className="grid gap-2">
+                  研究主题
+                  <Textarea
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
+                  />
+                </label>
+                <Button
+                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || !topic.trim()}
+                  onClick={() => void start()}
+                >
+                  {busy ? "发起中…" : "开始后台萃取"}
+                </Button>
+              </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除萃取任务？</DialogTitle></DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<p>正在执行的任务会停止。已经采纳的知识文档和来源记录会保留。</p><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleting(false)}>取消</Button><Button disabled={busy} onClick={() => void manage("delete")}>确认删除</Button></div></DialogContent></Dialog>
     </section>
   );
 }

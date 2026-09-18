@@ -29,7 +29,9 @@ export interface ResearchRecord {
   topic: string;
   operator: string;
   key: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  deleted_at?: string;
+  deleted_by?: string;
   created_at: string;
   finished_at?: string;
   stage: string;
@@ -83,6 +85,7 @@ export class ComponentResearch {
   }
   list(summaryOnly = false) {
     return [...this.records.values()]
+      .filter(r => !r.deleted_at)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((r) =>
         structuredClone(
@@ -113,7 +116,7 @@ export class ComponentResearch {
       .reverse()
       .find(
         (r) =>
-          r.key === key && r.operator === operator && r.status !== "failed",
+          r.key === key && r.operator === operator && !r.deleted_at && !["failed", "cancelled"].includes(r.status),
       );
     if (previous && (!input.refresh || previous.status !== "done"))
       return structuredClone(previous);
@@ -166,12 +169,13 @@ export class ComponentResearch {
               record: structuredClone(record),
               root: this.root(record.id),
               signal: controller.signal,
-              update: (patch) => this.update(record, patch),
+              update: (patch) => { if (!record.deleted_at && record.status !== "cancelled") this.update(record, patch); },
               evidence: (item) => {
                 record.evidence.push({ at: new Date().toISOString(), ...item });
                 this.update(record, {});
               },
             });
+            if (record.deleted_at || record.status === "cancelled") return;
             if (controller.signal.aborted) throw new Error("萃取已停止");
             if (!draft.trim()) throw new Error("模型未产出草稿");
             scanForSecrets("组件知识草稿.md", Buffer.from(draft));
@@ -182,6 +186,7 @@ export class ComponentResearch {
               finished_at: new Date().toISOString(),
             });
           } catch (error) {
+            if (record.deleted_at || record.status === "cancelled") return;
             this.update(record, {
               status: "failed",
               stage: "萃取失败",
@@ -197,9 +202,30 @@ export class ComponentResearch {
       this.running.set(record.id, { controller, work });
     }
   }
+  stop(id: string) {
+    const record = this.records.get(id);
+    if (!record || record.deleted_at) throw new Error("萃取任务不存在");
+    if (["queued", "running"].includes(record.status)) {
+      this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()});
+      this.running.get(id)?.controller.abort();
+    }
+    return this.get(id);
+  }
+  remove(id: string, operator: string) {
+    this.stop(id);
+    const record = this.records.get(id)!;
+    // Preserve provenance of adopted knowledge; hide the task from management lists.
+    this.update(record, {deleted_at:new Date().toISOString(), deleted_by:operator});
+    return { deleted: true };
+  }
+  retry(id: string, operator: string) {
+    const record = this.get(id);
+    if (record.deleted_at) throw new Error("萃取任务已删除");
+    return this.start({language:record.language, topic:record.topic, refresh:true}, operator);
+  }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
-    if (!record || record.status !== "done") throw new Error("请等待草稿生成");
+    if (!record || record.deleted_at || record.status !== "done") throw new Error("请等待草稿生成");
     if (record.document_id)
       return readKnowledgeDocument(this.dir, record.document_id);
     const content = String(input.content ?? record.draft ?? "");

@@ -31,6 +31,10 @@ export async function componentResearchRoute(
         );
     } else {
       const research = service.getComponentResearch();
+      if (request.method === "POST" && parts[1] && ["stop", "delete", "retry"].includes(parts[2])) {
+        const result = parts[2] === "stop" ? research.stop(parts[1]) : parts[2] === "delete" ? research.remove(parts[1], operator) : research.retry(parts[1], operator);
+        return json(response, 200, result);
+      }
       if (request.method === "GET")
         return json(
           response,

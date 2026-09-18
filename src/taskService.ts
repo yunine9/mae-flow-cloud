@@ -1464,6 +1464,8 @@ export interface TaskServiceOptions {
   /** 运行时设置覆盖(管理页):并发/修复轮/轮询/通知/模型网关。
    * 部署配置是底,这层是热改;各消费点即时读,生效边界见 settings.ts。 */
   settings?: RuntimeSettings;
+  /** System credential fallback for read-only component source fetches only. */
+  platformGitCredential?: () => { username: string; password: string } | undefined;
   /** 按任务归属人取个人 Git 凭据(serve 接 LocalAuth.gitCredential)。
    * 有凭据→只在宿主 clone/push 的短生命周期 helper 中使用；Agent
    * 目录与仓库配置永远不落 token/helper。没有→维持部署级访问方式
@@ -5768,7 +5770,7 @@ export class TaskService {
   }
   private componentSourceLocks = new Map<string, Promise<unknown>>();
   private async componentResearchSource(component: ComponentRepository, operator: string) {
-    const identity = this.options.gitCredential?.(operator);
+    const identity = this.options.gitCredential?.(operator) ?? this.options.platformGitCredential?.();
     const key = createHash("sha256").update(JSON.stringify([operator, identity, component.repository, component.branch])).digest("hex");
     const root = join(this.options.dataDir, "component-source-cache", key);
     const previous = this.componentSourceLocks.get(key) ?? Promise.resolve();
@@ -5777,7 +5779,7 @@ export class TaskService {
       try {
         mkdirSync(root, { recursive: true });
         const git = async (args: string[]) => { const result = await runGitProcess([...sandbox.args, ...args], { cwd: root, env: sandbox.env, timeoutMs: 90_000 });
-          if (result.status !== 0) throw new Error("组件源码同步失败，请检查仓库、分支和个人 Git 凭据"); return result.stdout.trim(); };
+          if (result.status !== 0) throw new Error("组件源码同步失败，请检查仓库、分支及个人或系统 Git 凭据"); return result.stdout.trim(); };
         if (!existsSync(join(root, "HEAD"))) await git(["init", "--bare"]);
         await git(["fetch", "--depth=1", "--no-tags", component.repository, `refs/heads/${component.branch}`]);
         const revision = await git(["rev-parse", "FETCH_HEAD^{commit}"]);

@@ -330,7 +330,12 @@ test("源码缓存增量同步、同仓准备串行，旧研究仍能读取固�
     model: "test",
     modelsJson: {},
     maxConcurrent: 0,
+    gitCredential: account => account === "bob" ? {username:"bob",password:"fixture-personal"} : undefined,
+    platformGitCredential: () => ({username:"oauth2",password:"fixture-system"}),
   });
+  const identities: any[] = [];
+  const originalSandbox = (service as any).prepareHostGitSandbox.bind(service);
+  (service as any).prepareHostGitSandbox = (identity: any) => { identities.push(identity); return originalSandbox(identity); };
   try {
     const component = {
       ...config,
@@ -362,6 +367,8 @@ test("源码缓存增量同步、同仓准备串行，旧研究仍能读取固�
       "bob",
     );
     assert.notEqual(bob.root, a.root);
+    assert.equal(identities[0].username, "oauth2", "无个人凭据时只读同步使用系统账号");
+    assert.equal(identities.at(-1).username, "bob", "个人凭据优先");
   } finally {
     await service.shutdown();
     rmSync(dir, { recursive: true, force: true });
@@ -480,4 +487,39 @@ test("跨组件读取按 ID 路由、固定版本且延迟准备，证据保留�
     assert.equal(evidence[0].repository, components[1].repository);
     assert.equal(evidence[0].revision, revision);
   } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+test("停止和删除不会被迟到结果复活；删除保留已采纳知识，失败可以重试", async () => {
+  const dir = temporary();
+  saveComponentRepository(dir, config, "alice");
+  let release!: () => void;
+  const hold = new Promise<void>(r => release = r);
+  const research = new ComponentResearch(dir, async input => {
+    if (input.record.topic === "慢任务") { await hold; input.update({stage:"迟到更新"}); }
+    if (input.record.topic === "失败") throw new Error("测试失败");
+    return "# 组件范式\n测试内容";
+  });
+  try {
+    const slow = research.start({language:"cpp",topic:"慢任务"}, "alice");
+    await until(() => research.get(slow.id).status === "running");
+    research.stop(slow.id);
+    release();
+    await new Promise(r => setTimeout(r, 30));
+    assert.equal(research.get(slow.id).status, "cancelled");
+    assert.equal(research.get(slow.id).stage, "已停止");
+    research.remove(slow.id, "bob");
+    assert.ok(!research.list().some(r => r.id === slow.id));
+    assert.equal(research.get(slow.id).deleted_by, "bob");
+    const fail = research.start({language:"cpp",topic:"失败"}, "alice");
+    await until(() => research.get(fail.id).status === "failed");
+    assert.notEqual(research.retry(fail.id, "alice").id, fail.id);
+    const done = research.start({language:"cpp",topic:"完成"}, "alice");
+    await until(() => research.get(done.id).status === "done");
+    const doc = research.adopt(done.id, {scope:"platform"}, "alice");
+    research.remove(done.id, "bob");
+    assert.ok(research.get(done.id).draft, "来源追溯保留");
+    const {readKnowledgeDocument} = await import("../src/knowledgeDocuments.ts");
+    assert.equal(readKnowledgeDocument(dir, doc.id).id, doc.id);
+    assert.throws(() => research.retry(done.id,"alice"), /删除/);
+  } finally { release(); await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
 });
