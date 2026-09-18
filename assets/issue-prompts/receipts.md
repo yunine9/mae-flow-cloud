@@ -101,7 +101,7 @@ MR 核验通过({{repos}}):全部 MR 流水线跑绿,「提交 MR·跑绿」阶�
 
 MR 核验不通过:有流水线未跑绿,还不能申报完成。
 {{details}}
-处置:修复后同分支 push_branch、重建 MR(create_mr),再调 complete_stage 重新申报。
+处置:修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看),再调 complete_stage 重新申报。
 
 ## mrgate.awaiting
 
