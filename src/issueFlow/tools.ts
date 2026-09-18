@@ -138,6 +138,10 @@ export interface IssueToolContext {
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
   onMrCreated?(repo: string): void;
+  /** push_branch 成功落账后上报(issue-72):修复环"同分支再推,
+   *  MR 自动跟新提交"不重建 MR,监看重挂的点火不能只挂在 create_mr
+   *  上——宿主按仓决定是否重挂(见 service 侧接线)。 */
+  onBranchPushed?(repo: string): void;
   /** mr_green 即时收口的用户通知(complete_stage 验绿当场全绿/空清单
    * 时调;监看器滞后收口的通知在 service 侧,不经这里)。 */
   notifyMrGreen?(): void;
@@ -892,6 +896,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + (receipt.forced ? "(强制覆盖远端同名分支)" : ""),
     });
     ctx.persist();
+    // 推送事实上报:已有 MR 的仓由宿主按新 SHA 重挂流水线监看。
+    ctx.onBranchPushed?.(repo.url);
     return ok(`已推送 ${receipt.branch} @ ${receipt.sha.slice(0, 12)}`
       + `(仓 ${repo.url})${receipt.forced ? "(强制覆盖远端同名分支)" : ""}`
       + `${dirty.length ? `；工作区另有 ${dirty.length} 条未提交改动，未包含在本次推送` : ""}`);

@@ -6,6 +6,11 @@
 用户作答」这句举卡指引散在 green.deliver / nudge.env_verify_owed 与
 receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 锚点是给不同场景的独立协议口,刻意不合并。
+同步护栏②:「同分支 push_branch(已有 MR 自动跟新提交,平台按新提交
+重新监看)」这句修复口径散在 red.deliver.guidance / gate.evidence.tail /
+mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
+——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
+点火),动这句先核对机制还在。
 -->
 
 ## nudge.body
@@ -61,7 +66,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 ## gate.evidence.tail
 
 失败产物(若已镜像)在会话工作区 pipeline/ 目录,可用 Bash 读全文。
-请按原文修复后同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看。
+请按原文修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看;尚未建过 MR 的仓再 create_mr)。
 
 ## env.configured
 
@@ -101,7 +106,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 
 平台通知: CodeHub MR 收到 {{count}} 条检视意见,请逐条处理:
 {{list}}
-逐条修复后,在同一修复分支追加提交,用 push_branch 重推、create_mr 重建 MR,再调 complete_stage 重新申报验绿。每条处理完,把回复写进工作区文件 mr-review-replies.json(JSON 数组,元素形如 {"discussion_id": "意见id", "body": "回复正文"}),平台会代为发布回 CodeHub。
+逐条修复后,在同一修复分支追加提交,用 push_branch 重推(已有 MR 自动跟新提交,平台按新提交重新监看),再调 complete_stage 重新申报验绿。每条处理完,把回复写进工作区文件 mr-review-replies.json(JSON 数组,元素形如 {"discussion_id": "意见id", "body": "回复正文"}),平台会代为发布回 CodeHub。
 
 ## pipeline.green.remind
 
@@ -109,7 +114,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 
 ## pipeline.green.others_red
 
-平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch 再 create_mr。
+平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看)。
 
 ## red.deliver.header
 
@@ -118,7 +123,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 ## red.deliver.guidance
 
 处置三选一,按证据判断:
-- 报错可定位:直接修复,修完同分支 push_branch 再 create_mr(同一 MR 会自动跟新提交),平台会重新监看;
+- 报错可定位:直接修复,修完同分支 push_branch——已有 MR 自动跟新提交,平台按新提交重新监看流水线;尚未建过 MR 的仓先 create_mr;
 - 报错原文有缺口、无法定位:不要猜改,调 raise_gate(kind=pipeline_evidence, repo={{repo}}),把缺口维度与原因写进 supplement,请用户把平台上的报错原文粘贴进卡作答;
 - 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
 举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。

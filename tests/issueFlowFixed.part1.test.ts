@@ -2311,6 +2311,17 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
   };
   await platform.start();
   seedMrGreenWatch(dataDir, origin);
+  // 种子夹具是七阶段历史形状:mr_green 的现行索引(4)在旧数组里是
+  // done,会被判"已收口"挡住申报提醒分支。对齐现行五阶段(mr_green
+  // 进行中),重看跑绿才能走进「提醒重新申报」的既有结算。
+  {
+    const statePath = join(dataDir, "issues", "issue-1", "issue.json");
+    const seededState = JSON.parse(readFileSync(statePath, "utf-8")) as {
+      stage_states: string[];
+    };
+    seededState.stage_states = ["done", "done", "done", "done", "in_progress"];
+    writeFileSync(statePath, JSON.stringify(seededState));
+  }
   const luban = new FakeLubanServer();
   await luban.start();
   // 剧本(#247):红灯事实投递开回合,AI 判断红灯全部来自平台侧工具
