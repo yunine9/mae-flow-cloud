@@ -41,3 +41,10 @@ changes-*/
 # 均落在 <dataDir>(开发时为仓根),属机器本地生成物
 .environment-registry/
 instance.lock
+
+# 本机打包产物不进仓(mfc-deploy.tar.gz / ops-tools.7z 曾搭车误提交,2026-09-18 移除)
+/*.tar.gz
+/*.7z
+
+# video-agent-kit 插件的机器本地标记(内容指向本机插件缓存路径)
+.video_agent/
