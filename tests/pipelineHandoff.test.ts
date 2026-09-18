@@ -78,7 +78,7 @@ test("恢复已绿任务先核销流水线，不能抢先派反馈或重跑交�
   assert.deepEqual(calls, ["new:success"]);
 });
 
-test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 再失败刹车，迟到旧结果不影响新版本", async t => {
+test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 继续修复，迟到旧结果不影响新版本", async t => {
   const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "ci-anchor-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   t.after(() => service.shutdown());
   const task = service.create("CI 修复");
@@ -97,8 +97,9 @@ test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 再失败刹�
   assert.match(opened[0], /^new:/);
   assert.equal(state.summary.delivery.loop.state, "repairing");
   await service.dispatchCiRepair(state, "new", "same failure", 20, state.controlEpoch);
-  assert.equal(state.summary.delivery.loop.state, "halted");
-  assert.equal(state.summary.delivery.loop.round, 2);
+  assert.equal(state.summary.delivery.loop.state, "repairing");
+  assert.equal(state.summary.delivery.loop.round, 3);
+  assert.match(state.mission, /先检查 git status/);
   projectPushReceipt(state.summary, { sha: "newer", ref: "work", remote: "origin" });
   const before = JSON.stringify(state.summary.delivery);
   await service.dispatchCiRepair(state, "new", "late failure", 20, state.controlEpoch);
@@ -218,4 +219,28 @@ for (const status of ["success", "failed"] as const) test(`登记 ${status} 期�
   assert.equal(state.summary.delivery.sha, "new");
   assert.equal(state.summary.status, "verifying");
   assert.equal(state.summary.delivery.pipeline, undefined);
+});
+
+for (const dirty of [false, true]) test(`交付 SHA 不变且工作区${dirty ? "有" : "无"}改动：按预算续跑而非推断放弃`, async t => {
+  const {writeFileSync} = await import("node:fs");
+  const dir = mkdtempSync(join(tmpdir(), "ci-unfinished-"));
+  const service: any = new TaskService({dataDir:dir,provider:"test",model:"test",modelsJson:{},maxConcurrent:0});
+  t.after(() => service.shutdown());
+  const summary = service.create("补 UT 未完成");
+  const state = service.tasks.get(summary.id);
+  state.cwd = summary.workspace;
+  if(dirty) writeFileSync(join(state.cwd,"UnfinishedTest.java"), "class UnfinishedTest {}\n");
+  state.summary.status = "verifying";
+  state.summary.delivery = {sha:"same",loop:{kind:"ci",last_sha:"same",state:"verifying",round:1,max:2}};
+  state.lastReply = "现在继续补测试";
+  service.mirrorPipelineArtifacts = async () => [];
+  service.openFeedbackBatch = () => {};
+  await service.dispatchCiRepair(state,"same","UT coverage 68.25% expected 75%",2,state.controlEpoch);
+  assert.equal(state.summary.status,"queued");
+  assert.equal(state.summary.delivery.loop.state,"repairing");
+  assert.match(state.mission,/未推送提交/);
+  assert.match(state.mission,/AskUserQuestion/);
+  if(dirty) assert.equal(readFileSync(join(state.cwd,"UnfinishedTest.java"),"utf8"),"class UnfinishedTest {}\n");
+  await service.dispatchCiRepair(state,"same","UT coverage 68.25% expected 75%",2,state.controlEpoch);
+  assert.equal(state.summary.delivery.loop.state,"exhausted", "既有预算仍能终止反复空转");
 });

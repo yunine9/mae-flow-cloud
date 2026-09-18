@@ -1224,7 +1224,7 @@ export interface TaskSummary {
      * (检视>冲突>CI,同时多项只修最高优先级那一路——冲突不解 CI
      * 白跑);round 只数 CI 修复(检视/冲突触发时清零,流程性问题
      * 不许耗掉代码修复的额度);max 默认 20,数字=可配手刹。
-     * 真正的收敛刹车按类分:CI/冲突=同 SHA 不二修(没新提交即停),
+     * CI 按已配置轮数预算收敛，不用交付 SHA 推断 Agent 已放弃；冲突保留独立恢复规则，
      * 检视=同一批讨论 id 修过一轮仍未解决即停;加上提示词里的
      * "原地打转必须换思路或出诊断"。
      * diagnosis=修复会话停下时留给人的话(缺什么、去哪配)。 */
@@ -6381,9 +6381,7 @@ export class TaskService {
         task.summary.delivery!.waiting_on = undefined;
         const loop = task.summary.delivery?.loop;
         if (loop?.kind === "ci" && loop.last_sha === gap.sha) {
-          // 部分证据派修后，会话可能在人工回灌到达前因“缺信息且无新
-          // 提交”停下。同 SHA 刹车防的是拿同一份输入空转，不该挡住
-          // 新到的人类证据。把它作为原修复轮的续段重开，round 不加一。
+          // 人工补证作为原修复轮的续段，恢复派单不额外消耗一轮预算。
           loop.last_sha = undefined;
           loop.round = Math.max(0, loop.round - 1);
           loop.state = "verifying";
@@ -17415,7 +17413,7 @@ export class TaskService {
     delivery.mr_state = "验证中";
     delivery.waiting_on = undefined;
     // 三层覆盖:任务 > 设置 > 部署；全部缺席用平台兜底 20，0 = 关。
-    // 同 SHA/同反馈无进展仍是更早的主收敛刹车，预算只是最后出口。
+    // CI 按配置预算收敛；未推送不代表会话已完成或放弃。
     const max = this.repairBudget(task);
     // repairRounds=0 = 关掉修复环:保持旧语义(红灯留痕请人工),不记环账。
     if (max === 0 && !delivery.loop) {
@@ -17445,7 +17443,7 @@ export class TaskService {
       return;
     }
     // 没有可派的修复路(门禁不可得,或可修门禁都在等人):按旧语义
-    // 走 CI 修复——流水线红是实锤,同 SHA 刹车会兜住原地打转。
+    // 走 CI 修复——流水线红是事实，继续修复仍受配置预算约束。
     await this.dispatchCiRepair(task, sha, log, max, epoch);
   }
 
@@ -17579,7 +17577,7 @@ export class TaskService {
     }));
   }
 
-  /** CI 修复派单(修复环的老主路):同 SHA 不二修、轮数预算、
+  /** CI 修复派单:保留轮数预算，不从交付 SHA 推断修复是否完成、
    * 分诊+定位使命。唯一会累加 round 的一路——检视/冲突是流程性
    * 问题,不许耗掉代码修复的额度。 */
   private async dispatchCiRepair(
@@ -17612,18 +17610,15 @@ export class TaskService {
       this.notifyRepairStopped(task);
       return;
     }
-    const existingLoop = delivery.loop;
-    if (existingLoop?.kind === "ci" && existingLoop.last_sha === sha) {
-      // 修复会话没产生新提交 = 会话自己判了"改代码解决不了"。
-      // 它的收口发言就是诊断(缺什么、去哪配),原文带给人,
-      // 别让人拿着一句"已停"再去翻日志猜。
-      existingLoop.state = "halted";
-      const diagnosis = (task.lastReply ?? "").trim();
-      if (diagnosis) existingLoop.diagnosis = diagnosis.slice(0, 2000);
-      delivery.pipeline = "failed(自动修复已停,需人工)";
-      task.summary.detail = diagnosis
-        ? `自动修复停下,修复会话的诊断:${diagnosis.slice(0, 600)}`
-        : "修复会话未产生新提交,流水线仍红,请人工查看流水线日志";
+    const continuingSameDelivery = delivery.loop?.kind === "ci" && delivery.loop.last_sha === sha;
+    const priorLoop = delivery.loop;
+    if (priorLoop && priorLoop.max !== undefined && priorLoop.round >= priorLoop.max) {
+      const loop = priorLoop;
+      loop.state = "exhausted";
+      if (task.lastReply?.trim()) loop.diagnosis = task.lastReply.trim().slice(0, 2000);
+      delivery.pipeline = `failed(${loop.max} 轮修复预算用完,请人工)`;
+      task.summary.detail =
+        `${loop.max} 轮修复预算用完,流水线仍红,请人工` + (loop.diagnosis ? `；最近会话记录：${loop.diagnosis.slice(0, 600)}` : "");
       this.persist(task);
       this.notifyRepairStopped(task);
       return;
@@ -17744,15 +17739,6 @@ export class TaskService {
 
     const loop = delivery.loop
       ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (loop.max !== undefined && loop.round >= loop.max) {
-      loop.state = "exhausted";
-      delivery.pipeline = `failed(${loop.max} 轮修复预算用完,请人工)`;
-      task.summary.detail =
-        `${loop.max} 轮修复预算用完,流水线仍红,请人工`;
-      this.persist(task);
-      this.notifyRepairStopped(task);
-      return;
-    }
     loop.round += 1;
     loop.last_sha = sha;
     loop.kind = "ci";
@@ -17801,7 +17787,9 @@ export class TaskService {
       ].some((tool) => unfixableSet.has(tool.toLowerCase())));
     task.mission = [
       `当前目标是处理本轮流水线失败(${roundText}修复)；较新的责任人要求可调整目标或逐条暂缓:`,
-      ...(loop.round > 1 ? [
+      ...(continuingSameDelivery ? [
+        "- 上轮会话已结束，但交付版本尚未更新；这仍是原版本的失败记录，不是对未提交修改的新验证。先检查 git status、git diff 和未推送提交，接着完成已有修改、必要验证、commit 和 task_control push，不要重做已完成工作或覆盖现场。没有工作区改动也可能还在定位，继续依据已有证据处理。",
+      ] : loop.round > 1 ? [
         `- 上一轮修复后流水线仍红，这是新一轮权威结果；`
           + `先对比本轮证据与上轮改动，判断是原因未解决、新回归还是证据变化，`
           + `不要无分析地重复上一轮做法。`,
@@ -17846,8 +17834,7 @@ export class TaskService {
         `- 证据纪律:只修你能在工作区自证的问题(通读代码找得到、`
         + `lightcheck 报得出的,并写明依据);自证不了的不许猜改碰运气`
         + `——把"平台未提供失败日志,适配层需补 log 原文与`
-        + ` pipeline_artifacts 端点"写成诊断,不提交,系统会带着你的`
-        + `诊断如实停下请人工,这比猜改一轮更有价值。`,
+        + ` pipeline_artifacts 端点"写成诊断，通过 AskUserQuestion 举卡请求补充证据，不做猜测性提交。`,
       ] : [
         `- 分支上提交 ${sha} 的权威流水线结果是 failed。失败详情(平台原文):`,
         loop.failure,
@@ -17895,9 +17882,7 @@ export class TaskService {
       + `别的都不要动,顺手的重构、无关的优化一律不做。`,
       `- 诊断出口:凡不是本仓代码能修的(外部平台的配置、权限、环境、`
       + `流水线自身的问题),那一类不要硬改碰运气;若所有问题都不可修,`
-      + `不要提交,把诊断写清楚:缺什么、要去哪配、配好之后如何重跑`
-      + `——没有新提交时系统会带着你的诊断如实停下请人工,`
-      + `这是正确结局之一,不是失败。`,
+      + `不要为了产生新 SHA 凑提交；通过 AskUserQuestion 明确举卡，说明缺什么、要去哪配、配好之后如何重跑。不要仅结束会话或不提交来表达需要人工处理。`,
       // 插话纪律(内网实锤):一轮修复被"补文档章节"的插话整轮占满,
       // 没碰流水线也没提交,刹车把它的文档汇报当成了诊断——人看着
       // "自动修复已停"配一段章节标题,完全接不上。插话照办是对的
@@ -20689,7 +20674,7 @@ export class TaskService {
       ? (loop.diagnosis
           ? `修复会话判断需人工处理:${loop.diagnosis.slice(0, 200)}`
           : "修复会话未产生新提交,请人工查看流水线日志")
-      : `${loop.max} 轮修复预算用完,流水线仍红`;
+      : `${loop.max} 轮修复预算用完,流水线仍红` + (loop.diagnosis ? `；最近会话记录:${loop.diagnosis.slice(0, 200)}` : "");
     this.bypass(task, "修复停摆通知", notifier.notifyOutcome({
       taskId: task.summary.id,
       account,

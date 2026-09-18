@@ -263,7 +263,7 @@ selftest 拿到真实门禁集(19 项)**,九项之外多这十项,分类与文�
 
 ## 6. 三类修复会话的差别(宿主实现)
 
-三者共用现有的修复环机械(另起会话、一次提交一次 push、同 SHA 不二修、
+三者共用现有的修复环机械(另起会话、提交后 push、
 诊断出口),差别只在使命文案与准备动作:
 
 | | 准备动作(宿主做) | 使命附加内容 | 收尾额外动作 |
@@ -392,7 +392,7 @@ npm run adapter -- --config adapter.json --selftest
 | Q7 | 单仓/多仓 | 试点单仓;多仓路由(repo 字段)已在契约里,配置层面扩 |
 | Q8 | token 兼任 push 凭据 | ✅ 同一个 token,但框架用 `https://oauth2:{token}@host` 形式(用户名固定 `oauth2`);push 本身被代理 504 挡住未走通(缺口①),部署手册有对策 |
 | Q9 | 等审批表现 | 已实现:waiting_on 说清卡在哪 + 幂等通知归属人(同一批等待只响一次) |
-| Q10 | maxRetries=20 | 维持本仓语义:默认不限轮、可配手刹,收敛靠同 SHA 刹车 |
+| Q10 | maxRetries=20 | CI 默认 20 轮，可配预算；同交付 SHA 允许接续未完成工作 |
 
 补充实证(不在问题清单里但影响契约的):
 - **A2 幂等**:CLI 重复建报 stderr `Another open merge request already
