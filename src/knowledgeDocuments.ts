@@ -9,6 +9,7 @@ export interface KnowledgeDocument {
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
   when_to_use: string; active: boolean; revision: string;
   source?: { repository: string; branch: string; path: string; revision: string };
+  research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string };
   history: Array<{ at: string; operator: string; action: string }>;
 }
 const root = (dir: string) => join(dir, "knowledge-documents");
@@ -47,6 +48,7 @@ export function saveKnowledgeDocument(dir: string, input: Record<string, unknown
   const fields = { title, content, scope: scope as KnowledgeDocument["scope"], module_ids, repositories,
     technologies: normalizeKnowledgeLanguages(merged.technologies ?? []), product_versions: strings(merged.product_versions ?? []),
     when_to_use: String(merged.when_to_use ?? "").trim().slice(0, 1000), active: merged.active !== false,
+    research_source: merged.research_source as KnowledgeDocument["research_source"],
     source: merged.source as KnowledgeDocument["source"] };
   const revision = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
   if (previous?.revision === revision) return previous;

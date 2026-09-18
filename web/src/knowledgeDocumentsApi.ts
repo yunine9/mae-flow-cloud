@@ -5,6 +5,7 @@ export interface KnowledgeDocument {
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
   when_to_use: string; active: boolean; revision: string;
   source?: { repository: string; branch: string; path: string; revision: string };
+  research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string };
   history: Array<{ at: string; operator: string; action: string }>;
   indexing?: { state: string; sections?: number; error?: string }; lines?: number;
 }

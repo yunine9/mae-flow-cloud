@@ -1,3 +1,4 @@
+import { ComponentResearch } from "./ComponentResearch";
 import { KnowledgeTrial } from "./KnowledgeTrial";
 import { KnowledgeRepositoryTree } from "./KnowledgeRepositoryTree";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
@@ -24,6 +25,7 @@ const repositoryLabel = (source: NonNullable<KnowledgeDocument["source"]>) => {
 };
 const languageLabel = knowledgeLanguageLabel;
 export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, category, onCategoryChange }: { category: "documents" | "skills"; onCategoryChange: (category: "documents" | "skills") => void; uploadRequest?: number; onOpenTask: (taskId: string) => void; onManage: (focus?: KnowledgeAssetFocus) => void }) {
+  const [researchOpen,setResearchOpen]=useState(new URLSearchParams(location.search).has("componentResearch"));
   const [nativeUpload, setNativeUpload] = useState(false);
   const [editingExternal, setEditingExternal] = useState(false);
   const [rows, setRows] = useState<KnowledgeDocument[]>([]), [selected, setSelected] = useState("");
@@ -78,6 +80,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
       <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder={category === "skills" ? "搜索 Skill 名称" : "搜索文档名称"} value={term} onChange={e => setTerm(e.target.value)} /></div>
       <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
 
+      {category === "documents" && <Button variant="outline" onClick={()=>setResearchOpen(true)}>萃取知识</Button>}
       <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
@@ -93,7 +96,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
 
       </aside>
       <section className="kd-detail">{nativeUpload ? <><Button variant="ghost" onClick={() => setNativeUpload(false)}>← 返回 Skill</Button><KnowledgeAssetsWorkspace key="native-upload" embedded initialUpload onOpenTask={onOpenTask} /></> : doc?.focus?.kind === "skill" ? <KnowledgeAssetsWorkspace key={doc.id} embedded initialAsset={doc.focus} onOpenTask={onOpenTask} /> : editingExternal && doc?.focus ? <><Button variant="ghost" onClick={() => { setEditingExternal(false); void refresh(); }}>← 返回阅读</Button>{doc.focus.kind === "business" ? <BusinessAssetEditor moduleId={doc.focus.moduleId} assetId={doc.focus.assetId} onDone={() => { setEditingExternal(false); void refresh(); void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(doc.id)}`).then(setDoc).catch(e=>setError(e.message)); }} /> : <KnowledgeAssetsWorkspace embedded initialAsset={doc.focus} onOpenTask={onOpenTask} />}</> : !doc ? <div className="kd-empty">{selected ? "正在读取文档…" : category === "skills" ? "选择 Skill，查看说明或维护技能包" : "选择文档，查看内容或试搜知识"}</div> : <>
-        <header className="kd-doc-header"><div><h2>{doc.title}</h2><div className="kd-tags"><span>{scopeLabel(doc, modules)}</span>{doc.technologies.map(v => <span key={v}>{languageLabel(v)}</span>)}<span>{doc.product_versions.join("、") || "所有版本"}</span><span className={`kd-status ${status?.state}`}>{labels[status?.state ?? "queued"]}</span></div></div>
+        <header className="kd-doc-header"><div><h2>{doc.title}</h2>{doc.research_source && <a className="text-sm text-primary underline" href={`/?knowledgeDocuments=1&componentResearch=${encodeURIComponent(doc.research_source.job_id)}`}>查看萃取来源与研究记录 ↗</a>}<div className="kd-tags"><span>{scopeLabel(doc, modules)}</span>{doc.technologies.map(v => <span key={v}>{languageLabel(v)}</span>)}<span>{doc.product_versions.join("、") || "所有版本"}</span><span className={`kd-status ${status?.state}`}>{labels[status?.state ?? "queued"]}</span></div></div>
           <div className="kd-actions">{doc.external ? <Button variant="outline" onClick={() => doc.focus ? setEditingExternal(true) : onManage() }>{doc.focus ? "编辑资料" : "审查经验"}</Button> : <><Button variant="outline" onClick={() => setForm("edit")}>编辑适用范围</Button><Button variant="outline" onClick={() => setForm("replace")}>替换文档</Button><DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" aria-label="更多文档操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled={busy} onClick={() => void update({ active: !doc.active })}>{doc.active ? "停用文档" : "启用文档"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></>}</div></header>
         {doc.form !== "skill" && <div className="kd-meta">{status?.state === "ready" ? `${status.sections === undefined ? "索引已就绪" : `已整理 ${status.sections} 个章节`} · 原始文档保持不变` : status?.state === "failed" ? status.error : status?.state === "disabled" ? "已停用，不再用于 Agent 检索" : "后台正在准备知识索引，可先阅读原文"}
           {status?.state === "failed" && <Button variant="outline" size="sm" onClick={() => void documentRequest(`/${encodeURIComponent(selected)}/retry`, {}).then(refresh).catch(e => setError(e.message))}><RefreshCw size={14} /> 重试</Button>}</div>}
@@ -103,6 +106,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
         {tab === "history" && <div className="kd-history">{[...doc.history].reverse().map((entry, i) => <div key={i}><strong>{entry.action}</strong><span>{entry.operator}</span><time>{new Date(entry.at).toLocaleString()}</time></div>)}</div>}
       </>}</section>
     </div>
+    <ComponentResearch open={researchOpen} onClose={()=>{setResearchOpen(false);const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);}} onAdopt={id=>{const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);setResearchOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");void refresh();setSelected(id);}} />
     <KnowledgeTrial open={trialOpen} onClose={()=>setTrialOpen(false)} onOpenDocument={id=>{setTrialOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");setTab("content");setSelected(id);}} />
     {form && <DocumentForm mode={form} doc={form === "upload" ? undefined : doc} modules={modules} onClose={() => setForm(undefined)} onSaved={async saved => { setForm(undefined); await refresh(); setSelected(saved.id); setDoc(saved);  }} />}
   </div>;

@@ -1,3 +1,6 @@
+import { ComponentResearch } from "./componentResearch.ts";
+import { runComponentResearch } from "./componentResearchAgent.ts";
+import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
 import { buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
@@ -2450,7 +2453,8 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() }];
+      }> = [{ taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+        { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
@@ -5751,6 +5755,35 @@ export class TaskService {
     this.bypass(undefined, "任务泵", this.pump());
   }
 
+  private componentResearch?: ComponentResearch;
+  getComponentResearch(): ComponentResearch {
+    return this.componentResearch ??= new ComponentResearch(this.options.dataDir, input => runComponentResearch(input, {
+      model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
+      source: (component, operator) => this.componentResearchSource(component, operator),
+    }), () => this.prepareKnowledgeIndex());
+  }
+  private componentSourceLocks = new Map<string, Promise<unknown>>();
+  private async componentResearchSource(component: ComponentRepository, operator: string) {
+    const identity = this.options.gitCredential?.(operator);
+    const key = createHash("sha256").update(JSON.stringify([operator, identity, component.repository, component.branch])).digest("hex");
+    const root = join(this.options.dataDir, "component-source-cache", key);
+    const previous = this.componentSourceLocks.get(key) ?? Promise.resolve();
+    const work = previous.catch(() => undefined).then(async () => {
+      const sandbox = this.prepareHostGitSandbox(identity);
+      try {
+        mkdirSync(root, { recursive: true });
+        const git = async (args: string[]) => { const result = await runGitProcess([...sandbox.args, ...args], { cwd: root, env: sandbox.env, timeoutMs: 90_000 });
+          if (result.status !== 0) throw new Error("组件源码同步失败，请检查仓库、分支和个人 Git 凭据"); return result.stdout.trim(); };
+        if (!existsSync(join(root, "HEAD"))) await git(["init", "--bare"]);
+        await git(["fetch", "--depth=1", "--no-tags", component.repository, `refs/heads/${component.branch}`]);
+        const revision = await git(["rev-parse", "FETCH_HEAD^{commit}"]);
+        return { root, revision };
+      } finally { this.cleanupHostGitCredential(sandbox); }
+    });
+    this.componentSourceLocks.set(key, work);
+    try { return await work; } finally { if (this.componentSourceLocks.get(key) === work) this.componentSourceLocks.delete(key); }
+  }
+
   private knowledgeSearch?: KnowledgeSearch;
   getKnowledgeSearch(): KnowledgeSearch {
     return this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar);
@@ -5812,6 +5845,8 @@ export class TaskService {
           return module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id); })(),
         productVersion: task.summary.product_version }),
       onUse: event => this.logMemoryUsage(task, event),
+      research: () => this.getComponentResearch(),
+      researchOperator: () => task.summary.luban_account ?? "本地部署",
     })];
   }
 
