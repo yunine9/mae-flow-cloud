@@ -143,6 +143,14 @@ test('批量接口保留来源、同名不同目录独立、再次导入更新�
   assert.equal(first.documents.length,2);assert.equal(first.errors.length,1);assert.notEqual(first.documents[0].id,first.documents[1].id);
   const second=await(await post('/repository-import',body)).json() as any;assert.deepEqual(second.documents.map((d:any)=>d.id),first.documents.map((d:any)=>d.id));
   assert.equal(second.documents[0].source.path,'a/readme.md');
+  for (const extra of [{repository:'https://another.example.com/docs.git'},{branch:'release'}]) {
+    const separate=await(await post('/repository-import',{...body,...extra,paths:['a/readme.md']})).json() as any;
+    assert.notEqual(separate.documents[0].id,first.documents[0].id,'仓库或分支不同也不能覆盖');
+  }
+  createBusinessModule(dir,{id:'a',name:'模块A',description:'A',owner:'owner',repositories:context.repositories},'owner');
+  const scoped=await(await post('/repository-import',{...body,paths:['a/readme.md'],scope:'module',module_ids:['a']})).json() as any;
+  assert.notEqual(scoped.documents[0].id,first.documents[0].id,'同来源不同模块范围分别维护');
+
   assert.match(collectSearchableKnowledge(dir,context).assets[0].whenToUse,/readme\.md/);
   assert.equal((await post('/repository-import',{...body,revision:undefined})).status,400);
  }finally{await service.shutdown();await new Promise<void>(r=>server.close(()=>r()));rmSync(dir,{recursive:true,force:true});}

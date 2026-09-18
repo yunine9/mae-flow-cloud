@@ -39,8 +39,7 @@ export function KnowledgeRepositoryTree({paths,selected,onChange}:{paths:string[
   const current = all.get(folder) ?? root, term=query.trim().toLowerCase();
   const rows = useMemo(()=> (term ? [...all.values()].filter(n=>n.path && n.path.toLowerCase().includes(term)) : [...current.children.values()])
     .sort((a,b)=>Number(a.file)-Number(b.file)||a.name.localeCompare(b.name)),[all,current,term]);
-  function toggle(node:Node,checked:boolean) {
-    const files = node.file ? [node.path] : paths.filter(p=>!node.path || p.startsWith(node.path+"/"));
+  function toggleFiles(files:string[],checked:boolean) {
     const next = new Set(selected);
     for(const file of files) checked ? next.add(file) : next.delete(file);
     onChange([...next]);
@@ -49,13 +48,15 @@ export function KnowledgeRepositoryTree({paths,selected,onChange}:{paths:string[
   function check(node:Node) {
     const count=selectedCounts.get(node.path)??0;
     return <Checkbox aria-label={`选择 ${node.path || "仓库全部文档"}`} checked={!!node.count && count===node.count}
-      indeterminate={count>0 && count<node.count} onCheckedChange={value=>toggle(node,value)} />;
+      indeterminate={count>0 && count<node.count} onCheckedChange={value=>toggleFiles(node.file ? [node.path] : paths.filter(p=>!node.path || p.startsWith(node.path+"/")),value)} />;
   }
+  const matchedFiles = term ? paths.filter(p=>p.toLowerCase().includes(term)) : [];
+  const matchedSelected = matchedFiles.filter(p=>selected.includes(p)).length;
   const parts=folder ? folder.split("/") : [];
   return <div className="kd-repository-tree">
     <div className="kd-tree-search"><Search size={17}/><Input aria-label="搜索仓内文档路径" placeholder="搜索文件名或完整路径（整个仓库）" value={query} onChange={e=>setQuery(e.target.value)}/></div>
     <div className="kd-tree-navigation"><Button type="button" size="sm" variant="ghost" aria-label="返回上级目录" disabled={!folder} onClick={()=>open(parts.slice(0,-1).join("/"))}><ArrowLeft size={16}/></Button><div className="kd-tree-breadcrumbs" ref={crumbs}><button type="button" onClick={()=>open("")}>根目录</button>{parts.map((name,index)=><span key={index}><ChevronRight size={14}/><button type="button" title={parts.slice(0,index+1).join("/")} onClick={()=>open(parts.slice(0,index+1).join("/"))}>{name}</button></span>)}</div></div>
-    <div className="kd-tree-total">{check(current)}<span>{term ? "当前目录全选" : "全选当前目录"} · {current.count} 篇</span><strong>已选 {selected.length} 篇</strong>{!!selected.length && <button type="button" onClick={()=>onChange([])}>清空</button>}</div>
+    <div className="kd-tree-total">{term ? <Checkbox aria-label="选择全部搜索结果" checked={!!matchedFiles.length && matchedSelected===matchedFiles.length} indeterminate={matchedSelected>0 && matchedSelected<matchedFiles.length} onCheckedChange={value=>toggleFiles(matchedFiles,value)}/> : check(current)}<span>{term ? "全选搜索结果" : "全选当前目录"} · {term ? matchedFiles.length : current.count} 篇</span><strong>已选 {selected.length} 篇</strong>{!!selected.length && <button type="button" onClick={()=>onChange([])}>清空</button>}</div>
     <div className="kd-tree-scroll">{rows.slice(0,limit).map(node=><div className="kd-tree-row" key={node.path}>
       {check(node)}{node.file ? <FileText size={18}/> : <Folder size={18}/>}
       {node.file ? <span className="kd-tree-name" title={node.path}>{term ? node.path : node.name}</span> : <button type="button" className="kd-tree-name" title={node.path} onClick={()=>open(node.path)}>{term ? node.path : node.name}</button>}
