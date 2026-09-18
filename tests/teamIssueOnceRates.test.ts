@@ -33,9 +33,10 @@ test("App:一次率是独立旁栏路,失败保留上次结果并下传组件", 
 
 test("TeamIssueWorld:两块统计格在概览行,口径 tooltip 含拍板要素,前端零计算", () => {
   // 组件只渲染端点数字:rate=null(分母 0)或数据缺席都显示 —。
+  // rateText 提到模块层(2026-09-18):特性总账表一次率列复用同一 formatter。
   assert.match(teamIssueWorld, /onceRates\?: IssueOnceRate;/);
   assert.match(teamIssueWorld,
-    /const rateText = \(rate: number \| null \| undefined\): string =>\n    rate == null \? "—" : `\$\{rate\}%`;/);
+    /const rateText = \(rate: number \| null \| undefined\): string =>\n\s*rate == null \? "—" : `\$\{rate\}%`;/);
   // 定位轴口径:分子/分母、版本事实、检视修改出版本。
   assert.match(teamIssueWorld, /一次定位 \$\{passed\} \/ 完成交付 \$\{onceRates\.total\}/);
   assert.match(teamIssueWorld, /分析报告只生成一版即一次定位/);
