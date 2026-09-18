@@ -183,6 +183,51 @@ test("重启补挂:监看账落后于推送账的死表现场(issue-72 形态)�
   }
 });
 
+test("重启补挂·监看缺席:回退轮清表(fixedRollback)后的现场同样自愈", async () => {
+  const dataDir = mfcTemp("mfc-issue-restart-absent-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = { log: "BUILD FAILURE: 回退轮重推编译失败" };
+  await platform.start();
+  const sha = "7".repeat(40);
+  // fixedRollback 整表删 state.pipelines、延用 MR 记录:现场只剩
+  // 推送账与 MR,监看缺席。重启后按推送账 SHA 补挂,红灯照常派修。
+  seedLaggingState({ dataDir, origin, pushedSha: sha, watchSha: sha });
+  const path = join(dataDir, "issues", "issue-1", "issue.json");
+  const state = JSON.parse(readFileSync(path, "utf-8")) as Record<string, any>;
+  delete state.pipelines;
+  writeFileSync(path, JSON.stringify(state));
+  const model = new ScriptedModelServer([
+    { text: "收到,按报错修。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: gitCred,
+  });
+  try {
+    await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "监看缺席现场补挂后红灯派修");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "修复回合收口");
+    const watch = settled.pipelines?.[origin];
+    assert.equal(watch?.sha, sha, "按推送账补挂起表");
+    assert.equal(watch?.reds, 1, "缺席起表从干净红灯账起算");
+    assert.equal(watch?.last_repair_sha, sha, "派修记账");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+  }
+});
+
 test("重启不重放:同 SHA 已结算的死表不补挂、不轮询(不扰动刹车账)", async () => {
   const dataDir = mfcTemp("mfc-issue-restart-idle-");
   const origin = bareOrigin(dataDir);

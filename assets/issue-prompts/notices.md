@@ -6,6 +6,11 @@
 用户作答」这句举卡指引散在 green.deliver / nudge.env_verify_owed 与
 receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 锚点是给不同场景的独立协议口,刻意不合并。
+同步护栏②:「同分支 push_branch(已有 MR 自动跟新提交,平台按新提交
+重新监看)」这句修复口径散在 red.deliver.guidance / gate.evidence.tail /
+mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
+——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
+点火),动这句先核对机制还在。
 -->
 
 ## nudge.body

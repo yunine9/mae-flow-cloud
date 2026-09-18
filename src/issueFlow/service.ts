@@ -998,10 +998,10 @@ export class IssueFlowService {
       }
       if (staleRetryLedger) saveState(root, state);
       // 监看账落后于推送账就补挂(issue-72 死表现场的重启自愈):有
-      // MR 的仓,监看缺席或 SHA 严格落后于推送账,说明推送后点火丢失
-      // (修复环不重建 MR/进程崩溃窗口)——按推送账新 SHA 重挂。同
-      // SHA 已结算的不碰:重放红结算会扰动同提交刹车账。放在续表循环
-      // 之后,补挂换掉的新账不会被旧循环重复盯。
+      // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后点火丢失
+      // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
+      // 重挂。同 SHA 已结算的不碰:重放红结算会扰动同提交刹车账。放在
+      // 续表循环之后,补挂换掉的新账不会被旧循环重复盯。
       if (!isTerminal(state.status)) {
         for (const mr of state.mrs ?? []) {
           const pushed = state.pushes
