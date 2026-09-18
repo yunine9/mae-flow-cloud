@@ -14,6 +14,8 @@ import {
   ISSUE_DELIVERY_STATUSES,
   ISSUE_DELIVERY_STAGES,
   issueDeliveryBreakdown,
+  issueFeatureOnceRates,
+  issueFeatureRows,
 } from "../web/src/teamOps.ts";
 
 const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
@@ -172,4 +174,47 @@ test("问题侧概览口径:空集合也出全集格子(0 展示但不虚报)", 
   assert.deepEqual(stats.statuses.map((item) => item.key), [...ISSUE_DELIVERY_STATUSES]);
   assert.ok(stats.stages.every((item) => item.count === 0));
   assert.ok(stats.statuses.every((item) => item.count === 0));
+});
+
+test("特性总账表(2026-09-18 拍板):首行总账默认收起,展开逐特性对比,f: 行筛选进队列", () => {
+  // 概览里的表锚点:收起态只有总账行,展开开关与特性行点击各有其锚。
+  assert.match(issueWorld, /aria-label="特性总账"/);
+  assert.match(issueWorld, /aria-expanded=\{open\}/,
+    "展开元素带 aria-expanded,首行=全部特性总账");
+  assert.match(issueWorld, /issueFeatureRows\(issues\)/,
+    "特性口径与概览同源(teamOps 聚合,组件零计算)");
+  assert.match(issueWorld,
+    /onClick=\{\(\) => onSelectCell\(`f:\$\{row\.module\}`\)\}/,
+    "特性行点击走概览格筛选(f:<module>),与阶段/状态格同语义");
+  // 口径:按业务模块聚合复用 issueDeliveryBreakdown,canceled 不计,
+  // module 空白归「未分类」;排序=处理中降序→总数降序→名称。
+  const rows = issueFeatureRows([
+    { status: "running", module: "语音特性-降噪" },
+    { status: "waiting_user", module: "语音特性-降噪" },
+    { status: "archived", module: "语音特性-降噪" },
+    { status: "failed", module: "无线特性-漫游切换" },
+    { status: "canceled", module: "无线特性-漫游切换" },
+    { status: "archived" },
+  ]);
+  assert.deepEqual(rows, [
+    { module: "语音特性-降噪", active: 2, waiting: 1, failed: 0, closed: 1, total: 3 },
+    { module: "无线特性-漫游切换", active: 1, waiting: 0, failed: 1, closed: 0, total: 1 },
+    { module: "未分类", active: 0, waiting: 0, failed: 0, closed: 1, total: 1 },
+  ]);
+  // 每特性一次率:per_session 明细按会话归特性,分母 0 显示 —(null)。
+  assert.match(issueWorld, /issueFeatureOnceRates\(/,
+    "总账表一次定位/一次修复两列与头部瓦片同源(端点 per_session)");
+  const once = issueFeatureOnceRates(
+    rows.map((row) => ({ id: row.module, module: row.module })),
+    [
+      { id: "语音特性-降噪", localization_pass: false, repair_pass: true },
+      { id: "语音特性-降噪", localization_pass: true, repair_pass: false },
+      { id: "无线特性-漫游切换", localization_pass: true, repair_pass: true },
+    ],
+  );
+  assert.deepEqual(once.get("语音特性-降噪"),
+    { total: 2, localization: 50, repair: 50 });
+  assert.deepEqual(once.get("无线特性-漫游切换"),
+    { total: 1, localization: 100, repair: 100 });
+  assert.equal(once.get("未分类"), undefined, "无完成交付会话的特性不出列值");
 });
