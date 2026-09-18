@@ -997,6 +997,23 @@ export class IssueFlowService {
         }
       }
       if (staleRetryLedger) saveState(root, state);
+      // 监看账落后于推送账就补挂(issue-72 死表现场的重启自愈):有
+      // MR 的仓,监看缺席或 SHA 严格落后于推送账,说明推送后点火丢失
+      // (修复环不重建 MR/进程崩溃窗口)——按推送账新 SHA 重挂。同
+      // SHA 已结算的不碰:重放红结算会扰动同提交刹车账。放在续表循环
+      // 之后,补挂换掉的新账不会被旧循环重复盯。
+      if (!isTerminal(state.status)) {
+        for (const mr of state.mrs ?? []) {
+          const pushed = state.pushes
+            ?.find((item) => item.repo === mr.repo)?.sha;
+          const watch = state.pipelines?.[mr.repo];
+          if (pushed && (!watch || watch.sha !== pushed)) {
+            this.log(`[issue-flow] ${state.id} 监看账落后于推送账`
+              + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
+            this.armPipelineWatch(live, mr.repo);
+          }
+        }
+      }
       // 重启清扫(H6):等人会话里够格代答的闸重判一次(免审批档位
       // 不因重启漏答);非等人的会话不该还有挂着的人问卡——崩溃前没
       // 走完的定格作废留痕,别留一张永远答不了的卡占列表。
@@ -3402,6 +3419,15 @@ export class IssueFlowService {
       pullRepo: (url: string) => service.pullRepoFor(live, url),
       // 固定流程:MR 建成→对该仓启动流水线监看(多仓各自挂表)。
       onMrCreated: (repo: string) => service.armPipelineWatch(live, repo),
+      // 推送即点火(issue-72):修复环"同分支再推,MR 自动跟新提交"
+      // 不重建 MR,监看重挂不能只挂在 create_mr 上——该仓已有 MR 就按
+      // 推送账新 SHA 重挂(幂等),申报门陈灯受理承诺的"等监看器拿
+      // 新 run 真终态"才有表可等。尚无 MR 的仓不挂,保持"有 MR 才监看"。
+      onBranchPushed: (repo: string) => {
+        if (live.state.mrs?.some((mr) => mr.repo === repo)) {
+          service.armPipelineWatch(live, repo);
+        }
+      },
       // mr_green 即时收口(complete_stage 验绿当场全绿/空清单):平台
       // 不再代举验证卡(#246,ADR-0024)——只点火合入事实监看;验证卡
       // 由 AI 凭收口回执里的指引自己经 raise_gate 举出。监看器滞后
@@ -5416,11 +5442,15 @@ export class IssueFlowService {
           promptCopy("notices", "pipeline.green.remind", {
             repos: mrs.map((mr) => mr.repo).join(", "),
           }));
-      } else if (!anyWatching && mrs.length > 0) {
+      } else if (!allGreen && !anyWatching && mrs.length > 0) {
         // 有 MR 未绿且没表在跑:那就是失败了,带回失败项让 AI 修。
         saveState(live.root, state);
         this.startPlatformTurn(live,
           promptCopy("notices", "pipeline.green.others_red", { repo }));
+      } else {
+        // 全绿但收口点已过(归档前返工的跟进提交跑绿):账定格即毕,
+        // 不重发收口,也不误报"其他仓红灯"。
+        saveState(live.root, state);
       }
       return;
     }
