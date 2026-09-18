@@ -9,7 +9,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { KNOWLEDGE_LANGUAGE_OPTIONS, knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
   componentRequest,
   type ComponentRepository,
@@ -76,8 +76,10 @@ export function ComponentResearch({
     [scope, setScope] = useState("platform"),
     [module, setModule] = useState(""),
     [repos, setRepos] = useState("");
+  const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
+  const matchingComponents = components.filter(c => c.enabled && c.languages.includes(language));
   const load = async () => {
     const result = await componentRequest<{
       records: ComponentResearchRecord[];
@@ -102,7 +104,7 @@ export function ComponentResearch({
       "/component-repositories",
     )
       .then((r) => {
-        if (active) setComponents(r.components);
+        if (active) { setComponents(r.components); setComponentsLoaded(true); }
       })
       .catch((e) => setError(e.message));
     void getBusinessModules()
@@ -233,8 +235,8 @@ export function ComponentResearch({
                   Markdown 草稿。
                 </p>
                 <Choice label="萃取语言" value={language} onChange={setLanguage}
-                  items={[...new Set(components.filter(c => c.enabled).flatMap(c => c.languages))].map(l => ({value: l, label: knowledgeLanguageLabel(l)}))} />
-                <p className="text-muted-foreground">{language ? `自动覆盖 ${components.filter(c => c.enabled && c.languages.includes(language)).length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
+                  items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
+                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `自动覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
                 <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
                 <label className="grid gap-2">
                   研究主题
@@ -245,7 +247,7 @@ export function ComponentResearch({
                   />
                 </label>
                 <Button
-                  disabled={busy || !language || !topic.trim()}
+                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || !topic.trim()}
                   onClick={() => void start()}
                 >
                   {busy ? "发起中…" : "开始后台萃取"}
