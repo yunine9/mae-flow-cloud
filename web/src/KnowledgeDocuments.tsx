@@ -1,3 +1,4 @@
+import { KnowledgeRepositoryTree } from "./KnowledgeRepositoryTree";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { BusinessAssetEditor } from "./BusinessModuleLibrary";
 import { Markdown } from "./markdown";
@@ -54,7 +55,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   }, [selected]);
   useEffect(() => { setNativeUpload(false); setEditingExternal(false); }, [category]);
   const row = rows.find(value => value.id === selected), status = row?.indexing;
-  const visible = rows.filter(r => (filter === "all" || r.scope === filter) && (category === "skills" ? r.form === "skill" : r.form !== "skill") && r.title.toLowerCase().includes(term.toLowerCase()));
+  const visible = rows.filter(r => (filter === "all" || r.scope === filter) && (category === "skills" ? r.form === "skill" : r.form !== "skill") && `${r.title} ${r.source?.path ?? ""} ${r.source?.repository ?? ""}`.toLowerCase().includes(term.toLowerCase()));
   useEffect(() => {
     setSelected(id => visible.some(item => item.id === id) ? id : visible[0]?.id || "");
   }, [rows, category, filter, term]);
@@ -95,7 +96,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
         <button type="button" aria-pressed={category === "skills"} onClick={() => onCategoryChange("skills")}><Blocks size={18} />Skill<span>{rows.filter(r => r.form === "skill").length}</span></button>
       </nav>
         <div className="kd-doc-list">{visible.map(item => <button key={item.id} className={`kd-doc-row ${selected === item.id ? "selected" : ""}`} onClick={() => setSelected(item.id)}>
-          {item.form === "skill" ? <Blocks size={29} className="kd-file-icon" /> : <FileText size={29} className="kd-file-icon" />}<span className="kd-doc-info"><strong title={item.title}>{item.title}</strong><small>{scopeLabel(item)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
+          {item.form === "skill" ? <Blocks size={29} className="kd-file-icon" /> : <FileText size={29} className="kd-file-icon" />}<span className="kd-doc-info"><strong title={item.title}>{item.title}</strong>{item.source && <small title={`${item.source.repository} · ${item.source.branch} · ${item.source.path}`}>{item.source.path}</small>}<small>{scopeLabel(item)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
           <span className={`kd-status ${item.indexing?.state}`}>{labels[item.indexing?.state ?? "queued"]}</span>
         </button>)}{!visible.length && <div className="kd-empty">{category === "skills" ? "暂无匹配的 Skill，可通过右上角添加。" : "暂无匹配的文档，可上传手册或从仓库导入。"}</div>}</div>
 
@@ -127,6 +128,17 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
   const [repositories, setRepositories] = useState(doc?.repositories.join("\n") ?? ""), [language, setLanguage] = useState(doc?.technologies ?? []);
   const [versions, setVersions] = useState(doc?.product_versions ?? []), [when, setWhen] = useState(doc?.when_to_use ?? "");
   const [repo, setRepo] = useState(doc?.source?.repository ?? ""), [branch, setBranch] = useState(doc?.source?.branch ?? "master"), [path, setPath] = useState(doc?.source?.path ?? "");
+  const [tree, setTree] = useState<{revision:string;paths:string[]}>();
+  const [chosen, setChosen] = useState<string[]>([]);
+  const treeEpoch = useRef(0);
+  useEffect(() => { treeEpoch.current++; setTree(undefined); setChosen([]); }, [repo,branch]);
+  async function browse() {
+    const epoch = ++treeEpoch.current;
+    setBusy(true); setError("");
+    try { const result = await documentRequest<{revision:string;paths:string[]}>("/repository-tree",{repository:repo,branch});
+      if (epoch === treeEpoch.current) { setTree(result); setChosen([]); if (!result.paths.length) setError("此分支没有可导入的 Markdown 文档（Skill 包单独维护）"); }
+    } catch(e) { if(epoch===treeEpoch.current)setError((e as Error).message); } finally {setBusy(false);}
+  }
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [versionOptions, setVersionOptions] = useState<string[]>(doc?.product_versions ?? []);
   useEffect(() => { void productVersionRequest().then(r => setVersionOptions([...new Set([...(doc?.product_versions ?? []), ...r.versions.map(v => v.version)])])).catch(e => setError(e.message)); }, []);
@@ -137,6 +149,16 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
       if (mode !== "edit" && source === "upload" && content === undefined) throw new Error("请选择 Markdown 文件");
       const body = { title, scope, module_ids: moduleIds, repositories: split(repositories), technologies: language, product_versions: versions, when_to_use: when,
         ...(mode === "edit" ? {} : source === "repository" ? { repository_import: { repository: repo, branch, path } } : { content }) };
+      if (mode === "upload" && source === "repository") {
+        if (!tree || !chosen.length) throw new Error("请读取文件树并勾选文档或文件夹");
+        if (chosen.length > 200) throw new Error("每批最多导入 200 篇，请分批选择");
+        const result = await documentRequest<{documents:KnowledgeDocument[];errors:Array<{path:string;error:string}>}>("/repository-import",{
+          ...body,repository:repo,branch,revision:tree.revision,paths:chosen,
+        });
+        if (result.errors.length) { setChosen(result.errors.map(e=>e.path)); setError(`已导入 ${result.documents.length} 篇；以下文件未导入：\n${result.errors.map(e=>`${e.path}：${e.error}`).join("\n")}`); }
+        else if(result.documents[0]) onSaved(result.documents[0]);
+        return;
+      }
       onSaved(await documentRequest<KnowledgeDocument>(doc ? `/${encodeURIComponent(doc.id)}` : "", body));
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
@@ -144,8 +166,11 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
     <form onSubmit={e => { e.preventDefault(); void save(); }}>
       {mode !== "edit" && <><nav className="kd-source-tabs"><button type="button" className={source === "upload" ? "active" : ""} onClick={() => setSource("upload")}>直接上传</button><button type="button" className={source === "repository" ? "active" : ""} onClick={() => setSource("repository")}>从 CodeHub 仓库导入</button></nav>
         {source === "upload" ? <label className="kd-dropzone"><Upload size={25} /><strong>{filename || "选择 Markdown 文档"}</strong><span>UTF-8 · .md · 最大 2 MiB</span><input aria-label="选择 Markdown 文档" type="file" accept=".md,text/markdown" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; try { if (file.name.toLowerCase() === "skill.md") throw new Error("Skill 请在 Skill 页签上传完整技能包，不作为知识文档导入"); if (file.size > 2 * 1024 * 1024 || !/\.md$/i.test(file.name)) throw new Error("请选择 2 MiB 以内的 Markdown 文件"); const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()); setContent(text); setFilename(file.name); if (!doc) setTitle(file.name); setError(""); } catch (e) { setContent(undefined); setFilename(""); setError((e as Error).message); } }} /></label>
-          : <div className="kd-repo-fields"><label>CodeHub 仓库地址<Input required value={repo} onChange={e => setRepo(e.target.value)} placeholder="https://codehub.example.com/team/repo.git" /></label><div className="kd-form-two"><label>分支<Input required value={branch} onChange={e => setBranch(e.target.value)} /></label><label>仓内文件路径<Input required value={path} onChange={e => { setPath(e.target.value); if (!doc) setTitle(e.target.value.split("/").at(-1) ?? ""); }} placeholder="docs/cpp/file-guide.md" /></label></div><small>使用你已配置的个人 Git 凭据，只读取指定文件。</small></div>}</>}
-      <label>文档名称<Input required value={title} onChange={e => setTitle(e.target.value)} /></label>
+          : <div className="kd-repo-fields"><label>CodeHub 仓库地址<Input required value={repo} onChange={e => setRepo(e.target.value)} placeholder="https://codehub.example.com/team/repo.git" /></label><label>分支<Input required value={branch} onChange={e => setBranch(e.target.value)} /></label>
+            {mode === "replace" ? <label>仓内文件路径<Input required value={path} onChange={e=>setPath(e.target.value)} /></label> : <><Button type="button" variant="outline" disabled={busy || !repo.trim() || !branch.trim()} onClick={()=>void browse()}>{busy ? "正在读取…" : "读取文件树"}</Button>{tree && <KnowledgeRepositoryTree paths={tree.paths} selected={chosen} onChange={setChosen}/>}</>}
+            <small>勾选文件夹会选中其中全部 Markdown 文档。保留完整路径，同名文件分别保存；Skill 包不导入。每批最多 200 篇。</small></div>}</>}
+
+      {!(mode === "upload" && source === "repository") && <label>文档名称<Input required value={title} onChange={e => setTitle(e.target.value)} /></label>}
       <label>适用范围<Select value={scope} onValueChange={value => setScope(value ?? "platform")} items={[{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"特定代码仓"}]}><SelectTrigger aria-label="适用范围" className="w-full h-10! text-base"><SelectValue /></SelectTrigger><SelectContent>{[["platform","平台通用"],["module","业务模块"],["repository","特定代码仓"]].map(([key,text]) => <SelectItem key={key} value={key}>{text}</SelectItem>)}</SelectContent></Select></label>
       {scope === "module" && <div><DocumentMultiSelect label="业务模块" value={moduleIds} onChange={setModuleIds} options={modules.filter(m => m.status === "active").map(m => ({value:m.id,label:m.name}))} placeholder="选择业务模块（可多选）" />{!modules.some(m => m.status === "active") && <a href="/configuration?tab=modules" target="_blank" rel="noreferrer">去配置中心新建模块 ↗</a>}</div>}
       {scope === "repository" && <label>适用仓库地址（每行一个）<textarea required rows={2} value={repositories} onChange={e => setRepositories(e.target.value)} /></label>}

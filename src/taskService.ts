@@ -396,7 +396,7 @@ import {
 } from "./launchKnowledgePreview.ts";
 import {
   discoverRepositorySkills,
-  readRepositoryKnowledgeFile,
+  readRepositoryKnowledgeFile, readRepositoryKnowledgeTree,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
 } from "./repositorySkills.ts";
@@ -5764,6 +5764,15 @@ export class TaskService {
       credentialHelper: prepared?.helper, credentialArgs: prepared?.args, credentialEnv: prepared?.env }); }
     finally { this.cleanupHostGitCredential(prepared); }
   }
+  async importKnowledgeTree(repository: string, baseline: string, paths: string[] | undefined, account?: string) {
+    if (!/^https?:\/\//i.test(repository) || repository.length > 2048) throw new Error("请填写 CodeHub 的 HTTP/HTTPS 仓库地址");
+    validateRepositoryAddress(repository);
+    if (new URL(repository).password) throw new Error("仓库地址请勿包含密码或令牌");
+    const prepared = this.prepareHostGitSandbox(this.options.gitCredential?.(account));
+    try { return await readRepositoryKnowledgeTree({ repository, baseline, paths,
+      credentialHelper: prepared?.helper, credentialArgs: prepared?.args, credentialEnv: prepared?.env }); }
+    finally { this.cleanupHostGitCredential(prepared); }
+  }
   private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;
 
   prepareKnowledgeIndex(): void {
@@ -5798,7 +5807,9 @@ export class TaskService {
       service: () => this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar),
       context: () => ({ repo: this.memoryRepo(task),
         repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
-        moduleIds: (task.summary.business_modules ?? []).map(module => module.id),
+        moduleIds: (() => { const module = task.summary.business_module
+          ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+          return module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id); })(),
         productVersion: task.summary.product_version }),
       onUse: event => this.logMemoryUsage(task, event),
     })];

@@ -446,3 +446,38 @@ export async function readRepositoryKnowledgeFile(options: DiscoverRepositorySki
     throw new Error("读取仓库文件失败，请检查仓库、分支、文件路径和个人 Git 凭据（仅支持 UTF-8 Markdown，最大 2 MiB）");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+
+/** One immutable tree for browsing or a whole selection; never checkout/run files. */
+export async function readRepositoryKnowledgeTree(options: DiscoverRepositorySkillsOptions & { paths?: string[] }) {
+  if (!repositoryIsSafe(options.repository) || !baselineIsSafe(options.baseline) || !helperIsSafe(options.credentialHelper)) throw new Error("仓库或分支格式不正确");
+  if (options.paths && (!options.paths.length || options.paths.length > 200 || options.paths.some(p => !p.split("/").every(safePathSegment)))) throw new Error("请选择 1–200 个文档");
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-tree-")), cwd = join(dir, "repo");
+  const deadline = Date.now() + 120_000;
+  const auth = options.credentialHelper ? [...(options.credentialArgs ?? []), ...gitAuthArgs(options.credentialHelper)] : [];
+  try {
+    await runGit(["-c", "core.hooksPath=/dev/null", ...auth, "clone", "--quiet", "--no-checkout", "--no-local", "--depth=1", "--", options.repository, cwd], { deadline, env: options.credentialEnv });
+    await runGit([...auth, "fetch", "--quiet", "--depth=1", "origin", options.baseline || "HEAD"], { cwd, deadline, env: options.credentialEnv });
+    const revision = (await runGit(["rev-parse", "--verify", "FETCH_HEAD^{commit}"], { cwd, deadline })).toString().trim();
+    const entries = parseTree(await runGit(["ls-tree", "-r", "-z", revision], {cwd, deadline, maxBuffer: 16 * 1024 * 1024}));
+    const skillRoots = entries.filter(e => /(^|\/)SKILL\.md$/i.test(e.name)).map(e => e.name.slice(0, -8));
+    const eligible = entries.filter(e => e.type === "blob" && ["100644", "100755"].includes(e.mode)
+      && /\.md$/i.test(e.name) && e.name.split("/").every(safePathSegment)
+      && !skillRoots.some(root => e.name.startsWith(root)));
+    const files: Array<{path:string;content:string}> = [], errors: Array<{path:string;error:string}> = [];
+    let total = 0;
+    for (const path of [...new Set(options.paths ?? [])]) {
+      const entry = eligible.find(e => e.name === path);
+      if (!entry) { errors.push({path,error:"文件不存在、不是普通 Markdown，或属于 Skill 包"}); continue; }
+      try {
+        const bytes = await runGit(["cat-file", "blob", entry.oid], {cwd,deadline,maxBuffer:2*1024*1024});
+        total += bytes.length;
+        if (total > 32*1024*1024) throw new Error("本批内容超过 32 MiB，请分批导入");
+        const content = new TextDecoder("utf-8", {fatal:true}).decode(bytes);
+        if (!content.trim() || content.includes("\0")) throw new Error("空文档或二进制文件");
+        files.push({path,content});
+      } catch { errors.push({path,error: total > 32*1024*1024 ? "本批超过 32 MiB，请分批导入" : "无法读取非空 UTF-8 文档（单文件最大 2 MiB）"}); }
+    }
+    return {revision,paths:eligible.map(e=>e.name),files,errors};
+  } catch { throw new Error("读取仓库失败，请检查仓库、分支和个人 Git 凭据后重试"); }
+  finally { rmSync(dir,{recursive:true,force:true}); }
+}

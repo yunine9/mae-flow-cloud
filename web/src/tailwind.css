@@ -7757,3 +7757,15 @@ body:has(.workspace-studio) .wish-quick-fab {
 .kd-native-maintenance > div > div > div { padding:0; }
 .kd-native-maintenance .md { font-size:16px;line-height:1.85; }
 .kd-native-maintenance button { min-height:36px;font-size:15px; }
+
+.kd-repository-tree { border:1px solid var(--line);border-radius:8px; }
+.kd-tree-total,.kd-repository-tree summary,.kd-tree-file { display:flex;align-items:center;gap:12px;padding:8px 12px;font-size:15px; }
+.kd-tree-total { border-bottom:1px solid var(--line); }
+.kd-tree-scroll { max-height:280px;overflow:auto; }
+.kd-tree-children { margin-left:22px;border-left:1px solid var(--line); }
+.kd-repository-tree summary { cursor:pointer;font-weight:600; }
+.kd-repository-tree summary::before { content:'▸'; }
+.kd-repository-tree details[open]>summary::before { content:'▾'; }
+.kd-repository-tree summary small { margin-left:auto;color:var(--text-faint); }
+.kd-tree-file span { overflow-wrap:anywhere; }
+.kd-error { white-space:pre-line; }

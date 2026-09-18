@@ -1,12 +1,38 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
-import { readKnowledgeDocument, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
+import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
 
 export async function knowledgeDocumentRoute(request: IncomingMessage, response: ServerResponse, parts: string[], service: TaskService,
   operator: string, readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
+    if (request.method === "POST" && ["repository-tree", "repository-import"].includes(id ?? "")) {
+      const body = await readBody(request, 256 * 1024);
+      const { repository, branch, revision, paths } = body;
+      if (typeof repository !== "string" || typeof branch !== "string" || !branch.trim()) throw new Error("请填写仓库与分支");
+      const importing = id === "repository-import";
+      if (importing && (typeof revision !== "string" || !/^[a-f0-9]{40,64}$/.test(revision)
+        || !Array.isArray(paths) || paths.some(p => typeof p !== "string"))) throw new Error("请先读取文件树并勾选文档");
+      const tree = await service.importKnowledgeTree(repository.trim(), importing ? revision : branch.trim(), importing ? paths : undefined, operator);
+      if (!importing) return json(response, 200, { revision: tree.revision, paths: tree.paths });
+      const documents: KnowledgeDocument[] = [], errors = [...tree.errors];
+      const same = (a: string[] = [], b: string[] = []) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+      for (const entry of tree.files) {
+        try {
+          // Same source and applicability updates in place; same basename elsewhere stays separate.
+          const previous = listKnowledgeDocuments(dir).find(d => d.source?.repository === repository.trim()
+            && d.source.branch === branch.trim() && d.source.path === entry.path && d.scope === (body.scope ?? "platform")
+            && same(d.module_ids, body.scope === "module" ? body.module_ids : [])
+            && same(d.repositories, body.scope === "repository" ? body.repositories : [])
+            && same(d.technologies, body.technologies) && same(d.product_versions, body.product_versions));
+          documents.push(saveKnowledgeDocument(dir, { ...body, title: entry.path.split("/").at(-1), content: entry.content,
+            source: { repository: repository.trim(), branch: branch.trim(), path: entry.path, revision: tree.revision } }, operator, previous?.id));
+        } catch (error) { errors.push({path:entry.path,error:error instanceof Error ? error.message : "保存失败"}); }
+      }
+      service.prepareKnowledgeIndex();
+      return json(response, 200, { documents, errors });
+    }
     if (request.method === "GET" && !id) {
       const catalog = knowledgeDocumentCatalog(dir);
       const documents = catalog.documents.map(({ content, ...doc }) => {

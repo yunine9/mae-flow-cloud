@@ -53,17 +53,20 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const matchesRepos = (values: string[]) => all || !values.length || values.some(r => repos.has(repositoryIdentity(r)));
   const catalog = listBusinessModules(dataDir);
   warnings.push(...catalog.warnings);
-  // Module relationships can be discovered from current repository mapping even
-  // if the task did not know the module at creation time.
-  const modules = catalog.modules.filter(m => m.status === "active"
-    && (all || context.moduleIds.includes(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r)))));
+  const activeModules = catalog.modules.filter(m => m.status === "active");
+  const mapped = activeModules.filter(m => m.repositories.some(r => repos.has(repositoryIdentity(r))));
+  const explicit = new Set(context.moduleIds);
+  // A shared repository is not evidence that two business modules share rules.
+  const modules = all ? activeModules : explicit.size
+    ? activeModules.filter(m => explicit.has(m.id)) : mapped.length === 1 ? mapped : [];
+  if (!all && !explicit.size && mapped.length > 1) warnings.push("仓库关联多个业务模块，未自动混用模块知识；请先明确本任务的业务模块。");
   const moduleIds = new Set(modules.map(m => m.id));
   for (const doc of listKnowledgeDocuments(dataDir)) {
     if (!doc.active || !matchesRepos(doc.repositories)
         || (doc.module_ids.length && !doc.module_ids.some(id => moduleIds.has(id)))) continue;
     assets.push({ id: doc.id, title: doc.title, kind: "document", scope: doc.scope === "platform" ? "平台通用"
       : doc.scope === "module" ? `业务模块：${doc.module_ids.join("、")}` : `代码仓：${doc.repositories.join("、")}`,
-      summary: doc.when_to_use, whenToUse: [doc.when_to_use, doc.technologies.join("、")].filter(Boolean).join("；"),
+      summary: doc.when_to_use, whenToUse: [doc.when_to_use, doc.technologies.join("、"), doc.source ? `来源：${doc.source.repository} · ${doc.source.branch} · ${doc.source.path}` : ""].filter(Boolean).join("；"),
       content: doc.content, revision: doc.revision, productVersions: doc.product_versions });
   }
   const candidates = listKnowledgeCandidateCatalog(dataDir);
