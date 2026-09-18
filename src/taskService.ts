@@ -461,6 +461,9 @@ export type DecoratedHostSkillShelf = HostSkillShelf & {
     & { effect?: HostSkillEffect; candidates: number }>;
 };
 import {
+  PrePushCommands,
+  unfinishedPrePushTools,
+  recordInterruptedPrePushTools,
   buildFixScopeReview,
   createPrePushGateContract,
   parsePrePushAgentReport,
@@ -15572,9 +15575,13 @@ export class TaskService {
       if (abortController.signal.aborted) finish();
       else abortController.signal.addEventListener("abort", finish, { once: true });
     });
+    const commands = new PrePushCommands();
     const waitForTurn = (turn: Promise<Outcome>) =>
       Promise.race([
-        turn,
+        turn.then(async (outcome) => {
+          await commands.drain();
+          return outcome;
+        }),
         interrupted,
         infrastructureFailed.then((): Outcome => ({
           status: "session_ended",
@@ -15754,10 +15761,10 @@ export class TaskService {
                 execOptions.timeout,
                 executionBudget,
               );
-              const result = await container.exec(command, dir, {
+              const result = await commands.run(() => container.exec(command, dir, {
                 ...execOptions,
                 timeout,
-              });
+              }));
               if (contentIdentity) {
                 repeatGuard.record(contentIdentity, command, result.exitCode);
               }
@@ -15814,6 +15821,13 @@ export class TaskService {
             status: "infrastructure_failure",
             sha: (await this.prePushRevision(task)).sha,
             message: outcome.detail ?? outcome.reason ?? "Build-Fix 会话异常结束",
+          });
+        }
+        if (unfinishedPrePushTools(eventLog.replay()).length) {
+          return withExecution({
+            status: "infrastructure_failure",
+            sha: request.sha,
+            message: "Build-Fix 会话已结束，但工具没有可靠完成记录；已停止本轮，请重试继续验证，不能视为 UT 通过",
           });
         }
         const report = parsePrePushAgentReport(driver.finalReply());
@@ -15884,11 +15898,14 @@ export class TaskService {
       clearTimeout(attemptTimer);
       if (driver && task.driver === driver) task.driver = undefined;
       if (task.prepushAbort === abortController) task.prepushAbort = undefined;
-      driver?.dispose();
-      if (task.container === container) task.container = undefined;
-      // 这是业务执行面的硬边界：无论模型成功、失败、暂停还是异常，
-      // 都等容器真正退出后才允许宿主进入 push。
-      await container.stop();
+      try {
+        driver?.dispose();
+      } finally {
+        // 即使会话清理失败，也必须等待容器停止，避免下一轮并发写工作区。
+        await container.stop();
+        if (task.container === container) task.container = undefined;
+      }
+      recordInterruptedPrePushTools(eventLog);
     }
   }
 
@@ -15923,142 +15940,162 @@ export class TaskService {
     task.summary.detail = state.message;
     this.persist(task);
 
-    const deliverySnapshot = await deliveryChangeSnapshot(task.cwd!);
-    const changeScope = buildFixScopeReview(
-      deliverySnapshot?.committed_paths ?? []);
-    const request: PrePushRunRequest = {
-      taskId: task.summary.id,
-      workspace: task.cwd!,
-      sha: initialRevision.sha,
-      round: state.round,
-      requirement: requirementContext(
-        task.summary.requirement,
-        task.summary.requirement_document,
-        AGENT_REQUIREMENT_DOCUMENT,
-      ),
-      branch,
-      baseline,
-      commitConvention: this.effectiveCommitConvention(),
-      ...(changeScope ? { changeScope } : {}),
-      ...(task.summary.delivery?.foreign_commits?.count ? {
-        foreignCommits: {
-          count: task.summary.delivery.foreign_commits.count,
-          subjects: [...task.summary.delivery.foreign_commits.subjects],
-        },
-      } : {}),
-      ...(task.summary.delivery_selection ? {
-        deliverySelection: {
-          paths: [...task.summary.delivery_selection.paths],
-          excludedPaths: [...task.summary.delivery_selection.excluded_paths],
-        },
-      } : {}),
-    };
-    let result: PrePushRunResult;
-    const releaseBuildSlot = await this.acquirePrePushBuildSlot(task, epoch);
-    if (!releaseBuildSlot || !this.current(task, epoch)) {
-      releaseBuildSlot?.();
-      return false;
-    }
+    let interruption = "Build-Fix 本轮已中断，请重试继续验证";
     try {
-      result = await (this.options.prepush?.runner
-        ?? ((input) => this.runCloudPrePushAgent(
-          task, input, epoch, attemptId)))(request);
-    } catch (error) {
-      result = {
-        status: "infrastructure_failure",
-        sha: (await this.prePushRevision(task)).sha,
-        message: `Build-Fix 执行失败: ${String(error)}`,
+      const deliverySnapshot = await deliveryChangeSnapshot(task.cwd!);
+      const changeScope = buildFixScopeReview(
+        deliverySnapshot?.committed_paths ?? []);
+      const request: PrePushRunRequest = {
+        taskId: task.summary.id,
+        workspace: task.cwd!,
+        sha: initialRevision.sha,
+        round: state.round,
+        requirement: requirementContext(
+          task.summary.requirement,
+          task.summary.requirement_document,
+          AGENT_REQUIREMENT_DOCUMENT,
+        ),
+        branch,
+        baseline,
+        commitConvention: this.effectiveCommitConvention(),
+        ...(changeScope ? { changeScope } : {}),
+        ...(task.summary.delivery?.foreign_commits?.count ? {
+          foreignCommits: {
+            count: task.summary.delivery.foreign_commits.count,
+            subjects: [...task.summary.delivery.foreign_commits.subjects],
+          },
+        } : {}),
+        ...(task.summary.delivery_selection ? {
+          deliverySelection: {
+            paths: [...task.summary.delivery_selection.paths],
+            excludedPaths: [...task.summary.delivery_selection.excluded_paths],
+          },
+        } : {}),
       };
-    } finally {
-      releaseBuildSlot();
-    }
-    if (!this.current(task, epoch)) return false;
-
-    const finalRevision = await this.prePushRevision(task);
-    if (state.sha !== finalRevision.sha
-        || state.workspace_fingerprint !== finalRevision.workspace_fingerprint) {
-      state = observePrePushRevision(
-        state, finalRevision, new Date().toISOString());
-      state = beginPrePushAttempt(
-        state, new Date().toISOString(), attemptId);
-    }
-    if (result.sha !== finalRevision.sha) {
-      result = {
-        status: "infrastructure_failure",
-        sha: finalRevision.sha,
-        message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
-          + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
-      };
-    }
-    // 记忆用:这轮之前的持久化状态。失败过(有 issue 或正在修)又通过了,
-    // 才是"踩过坑并爬出来",值得记;一次过的不记(§4:没人判过它对)。
-    const priorPrePush = task.summary.delivery?.prepush;
-    state = recordPrePushReport(
-      state, attemptId, this.prePushDomainReport(result),
-      new Date().toISOString());
-    if (state.state === "passed" && result.execution) {
-      state = attestPrePushExecution(state, result.execution);
-    }
-    this.setPrePushState(task, state);
-    const passed = Boolean(getReusablePushReceipt(state, finalRevision));
-    if (passed && priorPrePush
-        && (priorPrePush.issue || priorPrePush.state === "repairing")) {
-      try {
-        this.recordMemory(task,
-          this.prePushFixMemory(task, priorPrePush, result, finalRevision.sha));
-      } catch (error) {
-        this.options.log?.(
-          `任务 ${task.summary.id} Build-Fix 记忆入库失败: ${String(error)}`);
-      }
-    }
-    if (passed) {
-      task.summary.status = previousStatus;
-      task.summary.detail = "Build-Fix 已通过，等待最终人工检视";
-      if (task.summary.delivery) delete task.summary.delivery.skipped;
-    } else if (result.status === "code_failure"
-        && this.options.host?.continuousReview) {
-      try {
-        this.openFeedbackBatch(task, "build_fix", [{
-          id: `build-fix:${finalRevision.sha}:${state.round}`,
-          source: "build_fix",
-          source_id: `${finalRevision.sha}:${state.round}`,
-          source_revision: state.round,
-          kind: "quality_failure",
-          summary: state.message.slice(0, 1000),
-          material: resolve(task.summary.workspace, "prepush",
-            `round-${state.round}-${finalRevision.sha.slice(0, 12)}`),
-          verification: "build_fix",
-        }]);
-        if (!dispatchRepair) { task.summary.status = previousStatus; this.persist(task); return false; }
-        this.enqueueRepair(task, [
-          "Build-Fix 已完成有限自修，但仍有可定位的代码问题。",
-          state.message,
-          "该问题已作为当前任务的反馈批次登记。先执行 current，依据本轮",
-          "Build-Fix 事件与收据继续修复；始终沿用当前代码现场和交付对象。",
-        ].join("\n"), "Build-Fix 反馈已进入持续检视，正在继续修复");
+      let result: PrePushRunResult;
+      const releaseBuildSlot = await this.acquirePrePushBuildSlot(task, epoch);
+      if (!releaseBuildSlot || !this.current(task, epoch)) {
+        releaseBuildSlot?.();
         return false;
+      }
+      try {
+        result = await (this.options.prepush?.runner
+          ?? ((input) => this.runCloudPrePushAgent(
+            task, input, epoch, attemptId)))(request);
       } catch (error) {
+        result = {
+          status: "infrastructure_failure",
+          sha: (await this.prePushRevision(task)).sha,
+          message: `Build-Fix 执行失败: ${String(error)}`,
+        };
+      } finally {
+        releaseBuildSlot();
+      }
+      if (!this.current(task, epoch)) return false;
+
+      const finalRevision = await this.prePushRevision(task);
+      if (state.sha !== finalRevision.sha
+          || state.workspace_fingerprint !== finalRevision.workspace_fingerprint) {
+        state = observePrePushRevision(
+          state, finalRevision, new Date().toISOString());
+        state = beginPrePushAttempt(
+          state, new Date().toISOString(), attemptId);
+      }
+      if (result.sha !== finalRevision.sha) {
+        result = {
+          status: "infrastructure_failure",
+          sha: finalRevision.sha,
+          message: `验证结果绑定 ${result.sha.slice(0, 12)}，但当前 HEAD 是 `
+            + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
+        };
+      }
+      // 记忆用:这轮之前的持久化状态。失败过(有 issue 或正在修)又通过了,
+      // 才是"踩过坑并爬出来",值得记;一次过的不记(§4:没人判过它对)。
+      const priorPrePush = task.summary.delivery?.prepush;
+      state = recordPrePushReport(
+        state, attemptId, this.prePushDomainReport(result),
+        new Date().toISOString());
+      if (state.state === "passed" && result.execution) {
+        state = attestPrePushExecution(state, result.execution);
+      }
+      this.setPrePushState(task, state);
+      const passed = Boolean(getReusablePushReceipt(state, finalRevision));
+      if (passed && priorPrePush
+          && (priorPrePush.issue || priorPrePush.state === "repairing")) {
+        try {
+          this.recordMemory(task,
+            this.prePushFixMemory(task, priorPrePush, result, finalRevision.sha));
+        } catch (error) {
+          this.options.log?.(
+            `任务 ${task.summary.id} Build-Fix 记忆入库失败: ${String(error)}`);
+        }
+      }
+      if (passed) {
+        task.summary.status = previousStatus;
+        task.summary.detail = "Build-Fix 已通过，等待最终人工检视";
+        if (task.summary.delivery) delete task.summary.delivery.skipped;
+      } else if (result.status === "code_failure"
+          && this.options.host?.continuousReview) {
+        try {
+          this.openFeedbackBatch(task, "build_fix", [{
+            id: `build-fix:${finalRevision.sha}:${state.round}`,
+            source: "build_fix",
+            source_id: `${finalRevision.sha}:${state.round}`,
+            source_revision: state.round,
+            kind: "quality_failure",
+            summary: state.message.slice(0, 1000),
+            material: resolve(task.summary.workspace, "prepush",
+              `round-${state.round}-${finalRevision.sha.slice(0, 12)}`),
+            verification: "build_fix",
+          }]);
+          if (!dispatchRepair) { task.summary.status = previousStatus; this.persist(task); return false; }
+          this.enqueueRepair(task, [
+            "Build-Fix 已完成有限自修，但仍有可定位的代码问题。",
+            state.message,
+            "该问题已作为当前任务的反馈批次登记。先执行 current，依据本轮",
+            "Build-Fix 事件与收据继续修复；始终沿用当前代码现场和交付对象。",
+          ].join("\n"), "Build-Fix 反馈已进入持续检视，正在继续修复");
+          return false;
+        } catch (error) {
+          task.summary.status = "failed";
+          task.summary.detail = `Build-Fix 未通过，且反馈批次登记失败：${String(error)}`;
+          task.summary.delivery = {
+            ...task.summary.delivery,
+            skipped: task.summary.detail,
+          };
+        }
+      } else {
         task.summary.status = "failed";
-        task.summary.detail = `Build-Fix 未通过，且反馈批次登记失败：${String(error)}`;
+        task.summary.detail = `Build-Fix 未通过：${state.message}`;
         task.summary.delivery = {
           ...task.summary.delivery,
           skipped: task.summary.detail,
         };
       }
-    } else {
-      task.summary.status = "failed";
-      task.summary.detail = `Build-Fix 未通过：${state.message}`;
-      task.summary.delivery = {
-        ...task.summary.delivery,
-        skipped: task.summary.detail,
-      };
-    }
-    this.persist(task);
-    if (task.pauseRequested && this.current(task, epoch)) {
-      await this.finishPause(task, previousStatus);
+      this.persist(task);
+      if (task.pauseRequested && this.current(task, epoch)) {
+        await this.finishPause(task, previousStatus);
+        return false;
+      }
+      return passed;
+    } catch (error) {
+      interruption = `Build-Fix 执行中断：${String(error)}`;
+      if (this.current(task, epoch)) {
+        task.summary.status = "failed";
+        task.summary.detail = interruption;
+      }
       return false;
+    } finally {
+      // 所有准备、执行、取结果及取消出口共用收口；不覆盖用户决定或新一轮。
+      const live = task.summary.delivery?.prepush;
+      if (live?.active_attempt?.id === attemptId) {
+        this.setPrePushState(task, recordPrePushReport(live, attemptId, {
+          compile: { outcome: "infrastructure_failure", message: interruption },
+          unit_test: { outcome: "not_run", message: interruption },
+        }, new Date().toISOString()));
+        this.persist(task);
+      }
     }
-    return passed;
   }
 
   private async preparePush(
