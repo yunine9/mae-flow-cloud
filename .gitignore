@@ -33,3 +33,11 @@ changes-*/
 
 # 本机部署脚本不进入代码仓
 /scripts/deploy.sh
+
+# 原型脚手架(2026-09-18 曾随 621bb2fe 误提交,PR#313 已从 main 清除)
+.prototype-issue-fixtures/
+
+# 运行时状态:环境台账密封目录(src/environmentRegistry.ts)与实例锁(src/instanceLock.ts),
+# 均落在 <dataDir>(开发时为仓根),属机器本地生成物
+.environment-registry/
+instance.lock
