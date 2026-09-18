@@ -1,3 +1,4 @@
+import { KnowledgeTrial } from "./KnowledgeTrial";
 import { KnowledgeRepositoryTree } from "./KnowledgeRepositoryTree";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { BusinessAssetEditor } from "./BusinessModuleLibrary";
@@ -9,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getBusinessModules, productVersionRequest, type BusinessModule } from "./api";
-import { documentRequest, type KnowledgeDocument, type TrialResult, type ChapterHit } from "./knowledgeDocumentsApi";
+import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { KNOWLEDGE_LANGUAGE_OPTIONS, knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { KnowledgeAssetFocus } from "./knowledgeNavigation";
@@ -28,8 +29,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   const [rows, setRows] = useState<KnowledgeDocument[]>([]), [selected, setSelected] = useState("");
   const [doc, setDoc] = useState<KnowledgeDocument>(), [error, setError] = useState("");
   const [filter, setFilter] = useState("all"), [term, setTerm] = useState("");
-  const [tab, setTab] = useState("content"), [query, setQuery] = useState("");
-  const [trial, setTrial] = useState<TrialResult>(), [hit, setHit] = useState<ChapterHit>();
+  const [tab, setTab] = useState("content"), [trialOpen, setTrialOpen] = useState(false);
   const [busy, setBusy] = useState(false), [form, setForm] = useState<"upload" | "edit" | "replace">();
   const lastUploadRequest = useRef(uploadRequest);
   useEffect(() => {
@@ -54,7 +54,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   }, []);
   useEffect(() => {
     const version = ++request.current;
-    setDoc(undefined); setTrial(undefined); setHit(undefined); setError(""); setEditingExternal(false); setNativeUpload(false);
+    setDoc(undefined);  setError(""); setEditingExternal(false); setNativeUpload(false);
     if (selected) void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(selected)}`).then(value => {
       if (request.current === version) { setDoc(value); if (value.form === "skill") setTab("content"); }
     }).catch(e => { if (request.current === version) setError(e.message); });
@@ -65,35 +65,20 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   useEffect(() => {
     setSelected(id => visible.some(item => item.id === id) ? id : visible[0]?.id || "");
   }, [rows, category, filter, term]);
-  async function search() {
-    if (!selected || !query.trim()) return;
-    const version = ++request.current;
-    setBusy(true); setError(""); setTrial(undefined); setHit(undefined);
-    try {
-      const result = await documentRequest<TrialResult>(`/${encodeURIComponent(selected)}/search`, { query });
-      if (version === request.current) {
-        const current = await documentRequest<KnowledgeDocument>(`/${encodeURIComponent(selected)}`);
-        if (version !== request.current) return;
-        setDoc(current); setTrial(result); setHit(result.hits.find(h => h.revision === current.revision));
-      }
-    } catch (e) { if (version === request.current) setError((e as Error).message); }
-    finally { setBusy(false); }
-  }
   async function update(body: unknown) {
     const id = selected; setBusy(true); setError("");
     try {
       const saved = await documentRequest<KnowledgeDocument>(`/${encodeURIComponent(id)}`, body);
-      if (selectedRef.current === id) { setDoc(saved); setTrial(undefined); setHit(undefined); }
+      if (selectedRef.current === id) { setDoc(saved);  }
       await refresh();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  const lines = doc?.content?.split("\n") ?? [];
-  const validHit = hit?.revision === doc?.revision ? hit : undefined;
   return <div className="knowledge-documents">
     <header className="kd-toolbar">
       <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder={category === "skills" ? "搜索 Skill 名称" : "搜索文档名称"} value={term} onChange={e => setTerm(e.target.value)} /></div>
       <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
 
+      <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
     <div className="kd-layout">
@@ -113,17 +98,13 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
         {doc.form !== "skill" && <div className="kd-meta">{status?.state === "ready" ? `${status.sections === undefined ? "索引已就绪" : `已整理 ${status.sections} 个章节`} · 原始文档保持不变` : status?.state === "failed" ? status.error : status?.state === "disabled" ? "已停用，不再用于 Agent 检索" : "后台正在准备知识索引，可先阅读原文"}
           {status?.state === "failed" && <Button variant="outline" size="sm" onClick={() => void documentRequest(`/${encodeURIComponent(selected)}/retry`, {}).then(refresh).catch(e => setError(e.message))}><RefreshCw size={14} /> 重试</Button>}</div>}
         {doc.source && <div className="kd-source"><span title={doc.source.repository}>来自 {doc.source.repository} · {doc.source.branch} · {doc.source.path} · {doc.source.revision.slice(0, 8)}</span><Button variant="outline" size="sm" disabled={busy} onClick={() => void update({ repository_import: doc.source })}>从仓库更新</Button></div>}
-        <nav className="kd-tabs">{[["content", doc.form === "skill" ? "Skill 说明" : "阅读文档"], ...(doc.form === "skill" ? [] : [["search", "试搜知识"]]), ...(!doc.external ? [["history", "修改记录"]] : [])].map(([key, text]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{text}</button>)}</nav>
-        {tab === "search" && doc.form !== "skill" && <><form className="kd-trial-query" onSubmit={e => { e.preventDefault(); void search(); }}><div className="kd-search-input"><Search size={20} /><Input aria-label="试搜问题" placeholder="例如：写入文件后，应该由谁关闭文件？" value={query} onChange={e => setQuery(e.target.value)} /></div><Button type="submit" disabled={busy || !query.trim() || !doc.active}>{busy ? "检索中…" : "试搜"}</Button></form>
-          {trial?.warnings.length ? <p role="status" className="kd-warning">{trial.available ? trial.warnings.join("；") : "知识索引尚未准备好或检索服务暂不可用。原文已保存，可先查看文档内容，稍后再试搜。"}</p> : null}
-          <div className="kd-results"><aside><strong>{trial ? trial.available ? `找到 ${trial.hits.length} 个相关章节` : "暂不能检索" : "相关章节"}</strong>{trial?.hits.map((item, i) => <button key={`${item.start_line}-${i}`} className={hit === item ? "active" : ""} onClick={() => setHit(item)}><span><b>{item.heading?.split(" > ").at(-1) || doc.title}</b><small>第 {item.start_line ?? 1}–{item.end_line ?? "?"} 行</small></span></button>)}{trial?.available && !trial.hits.length && <p className="kd-empty">没有找到相关章节，试试更具体的问题。</p>}</aside>
-            <article className="kd-reader">{validHit ? <><header><div><small>{validHit.heading}</small><small>原文第 {validHit.start_line ?? 1}–{validHit.end_line ?? lines.length} 行</small></div><Button variant="ghost" onClick={() => setTab("content")}>查看完整文档 ↗</Button></header><Markdown text={lines.slice((validHit.start_line ?? 1) - 1, validHit.end_line).join("\n")} /></> : <div className="kd-empty">{hit ? "文档已更新，请重新试搜" : "输入一个真实问题，查看命中的规则与原文。"}</div>}</article></div>
-</>}
+        <nav className="kd-tabs">{[["content", doc.form === "skill" ? "Skill 说明" : "阅读文档"], ...(!doc.external ? [["history", "修改记录"]] : [])].map(([key, text]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{text}</button>)}</nav>
         {tab === "content" && <div className="kd-full-content"><Markdown text={doc.content ?? ""} /></div>}
         {tab === "history" && <div className="kd-history">{[...doc.history].reverse().map((entry, i) => <div key={i}><strong>{entry.action}</strong><span>{entry.operator}</span><time>{new Date(entry.at).toLocaleString()}</time></div>)}</div>}
       </>}</section>
     </div>
-    {form && <DocumentForm mode={form} doc={form === "upload" ? undefined : doc} modules={modules} onClose={() => setForm(undefined)} onSaved={async saved => { setForm(undefined); await refresh(); setSelected(saved.id); setDoc(saved); setTrial(undefined); setHit(undefined); }} />}
+    <KnowledgeTrial open={trialOpen} onClose={()=>setTrialOpen(false)} onOpenDocument={id=>{setTrialOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");setTab("content");setSelected(id);}} />
+    {form && <DocumentForm mode={form} doc={form === "upload" ? undefined : doc} modules={modules} onClose={() => setForm(undefined)} onSaved={async saved => { setForm(undefined); await refresh(); setSelected(saved.id); setDoc(saved);  }} />}
   </div>;
 }
 

@@ -171,3 +171,23 @@ test('任务知识工具使用需求所属模块，子任务继承父任务，�
   const bad=await tool.execute('read-b',{action:'read',id:b.id});assert.doesNotMatch(bad.content[0].text,/b规则/);
  }finally{await service.shutdown();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('全局试搜跨文档及业务模块；任务检索仍保持模块隔离，停用资料与 Skill 不参与',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-global-search-'));
+ const service=new TaskService({dataDir:dir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0});
+ const server=createTaskServer(service);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
+ try {
+  for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
+  const a=saveKnowledgeDocument(dir,{title:'规范.md',content:'# A\n创建者关闭',scope:'module',module_ids:['a'],technologies:['cpp']},'owner');
+  const b=saveKnowledgeDocument(dir,{title:'规范.md',content:'# B\n借用者不关闭',scope:'module',module_ids:['b'],technologies:['java']},'owner');
+  const disabled=saveKnowledgeDocument(dir,{title:'过期规范',content:'不应检索',active:false},'owner');
+  const search=new KnowledgeSearch(dir,{ingest:async()=>true,search:async()=>[{id:a.id,score:1},{id:b.id,score:1},{id:disabled.id,score:1},{id:'skill:example/SKILL.md',score:1}]} as any);
+  service.getKnowledgeSearch=()=>search;
+  const url=`http://127.0.0.1:${(server.address() as any).port}/knowledge-documents/search`;
+  const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:'文件关闭'})});
+  assert.equal(response.status,200);const result=await response.json() as any;
+  assert.deepEqual(result.hits.map((h:any)=>h.id),[a.id,b.id]);assert.deepEqual(result.hits[1].technologies,['java']);
+  assert.deepEqual((await search.search({...context,moduleIds:['a']},'文件关闭')).hits.map(h=>h.id),[a.id]);
+  assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:''})})).status,400);
+ }finally{await service.shutdown();await new Promise<void>(r=>server.close(()=>r()));rmSync(dir,{recursive:true,force:true});}
+});

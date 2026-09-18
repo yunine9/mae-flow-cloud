@@ -97,7 +97,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   }
   const store = new MemoryStore(dataDir);
   for (const row of store.list()) {
-    if (all ? row.review?.status !== "accepted" : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
+    if (all ? !memoryAccessible(row, row.repo, row.module ? [row.module] : []) : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
     const content = store.read(row.id);
     if (!content) continue;
     assets.push({ id: row.id, title: row.trigger, kind: "experience",
@@ -149,6 +149,10 @@ export class KnowledgeSearch {
     return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 5, id);
   }
 
+  async searchLibrary(query: string) {
+    return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 10, undefined, true);
+  }
+
   /** Background preparation after publication/startup; search still scopes the catalog. */
   async prepare(): Promise<void> {
     if (!this.sidecar) return;
@@ -158,10 +162,10 @@ export class KnowledgeSearch {
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
-  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string): Promise<KnowledgeSearchResult> {
+  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string, library = false): Promise<KnowledgeSearchResult> {
     if (!this.sidecar) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     const readCatalog = () => {
-      const value = onlyId ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
+      const value = onlyId || library ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
       return onlyId ? { ...value, assets: value.assets.filter(a => a.id === onlyId) } : value;
     };
     const catalog = readCatalog();

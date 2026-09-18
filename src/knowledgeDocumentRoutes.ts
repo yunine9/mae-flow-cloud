@@ -7,6 +7,16 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   operator: string, readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
+    if (request.method === "POST" && id === "search" && parts.length === 2) {
+      const body = await readBody(request, 8192), query = String(body.query ?? "").trim();
+      if (!query || query.length > 4000) throw new Error("请输入具体问题（最多 4000 字）");
+      const result = await service.getKnowledgeSearch().searchLibrary(query);
+      const catalog = knowledgeDocumentCatalog(dir);
+      return json(response, 200, { ...result, hits: result.hits.map(hit => {
+        const doc = catalog.documents.find(d => d.id === hit.id);
+        return { ...hit, source: doc && "source" in doc ? doc.source : undefined, technologies: doc?.technologies ?? [] };
+      }) });
+    }
     if (request.method === "POST" && ["repository-tree", "repository-import"].includes(id ?? "")) {
       const body = await readBody(request, 256 * 1024);
       const { repository, branch, revision, paths } = body;
