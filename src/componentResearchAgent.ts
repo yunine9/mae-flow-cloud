@@ -114,7 +114,7 @@ export async function runComponentResearch(
   const timer = setTimeout(() => {
     timedOut = true;
     abort();
-  }, 10 * 60_000);
+  }, 60 * 60_000);
   timer.unref();
   try {
     if (input.signal.aborted) throw new Error("萃取已停止");
@@ -128,7 +128,7 @@ export async function runComponentResearch(
       ) +
       "\n先逐项评估清单与主题的相关性，名称说明不足时用 component_source 指定 component_id 搜索确认。相关组件均需查阅，不只选择第一个仓；无关仓不必通读。组件使用相同 API 名时保留差异。结果列明已研究、无关和因失败未能研究的组件，不能把部分覆盖称为全量完成。",
     );
-    if (timedOut) throw new Error("萃取超过十分钟，请缩小主题后重试");
+    if (timedOut) throw new Error("萃取超过 1 小时，已停止；可查看已有研究记录后重试");
     if (outcome.status !== "turn_finished")
       throw new Error("研究会话未正常完成，请查看执行记录后重试");
     if (!sourceRead)
