@@ -1,35 +1,66 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ChevronRight, FileText, Folder, Search } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
-interface Node { name: string; path: string; children: Map<string, Node>; file: boolean }
+interface Node { name: string; path: string; children: Map<string, Node>; file: boolean; count: number }
+const PAGE_SIZE = 80;
 export function KnowledgeRepositoryTree({paths,selected,onChange}:{paths:string[];selected:string[];onChange:(paths:string[])=>void}) {
-  const nodes = useMemo(() => {
-    const root = new Map<string,Node>();
+  const [folder,setFolder] = useState(""), [query,setQuery] = useState(""), [limit,setLimit] = useState(PAGE_SIZE);
+  const crumbs = useRef<HTMLDivElement>(null);
+  const {root,all} = useMemo(() => {
+    const root:Node = {name:"仓库根目录",path:"",children:new Map(),file:false,count:paths.length};
+    const all = new Map<string,Node>(); all.set("",root);
     for (const path of paths) {
-      let children = root;
+      let parent = root;
       const parts = path.split("/");
       parts.forEach((name,index) => {
-        if (!children.has(name)) children.set(name,{name,path:parts.slice(0,index+1).join("/"),children:new Map(),file:index===parts.length-1});
-        children = children.get(name)!.children;
+        const fullPath=parts.slice(0,index+1).join("/");
+        if (!parent.children.has(name)) {
+          const node={name,path:fullPath,children:new Map(),file:index===parts.length-1,count:0};
+          parent.children.set(name,node);all.set(fullPath,node);
+        }
+        parent = parent.children.get(name)!; parent.count++;
       });
     }
-    return root;
+    return {root,all};
   },[paths]);
-  const set = new Set(selected);
-  function toggle(files:string[],checked:boolean) {
+  const selectedCounts = useMemo(() => {
+    const counts = new Map<string,number>();
+    for(const path of selected) {
+      const parts=path.split("/");
+      parts.forEach((_,index)=>{const key=parts.slice(0,index+1).join("/");counts.set(key,(counts.get(key)??0)+1);});
+    }
+    counts.set("",selected.length);return counts;
+  },[selected]);
+  useEffect(()=>{setFolder("");setQuery("");},[paths]);
+  useEffect(()=>{setLimit(PAGE_SIZE);if(crumbs.current)crumbs.current.scrollLeft=crumbs.current.scrollWidth;},[folder,query]);
+  const current = all.get(folder) ?? root, term=query.trim().toLowerCase();
+  const rows = useMemo(()=> (term ? [...all.values()].filter(n=>n.path && n.path.toLowerCase().includes(term)) : [...current.children.values()])
+    .sort((a,b)=>Number(a.file)-Number(b.file)||a.name.localeCompare(b.name)),[all,current,term]);
+  function toggle(node:Node,checked:boolean) {
+    const files = node.file ? [node.path] : paths.filter(p=>!node.path || p.startsWith(node.path+"/"));
     const next = new Set(selected);
     for(const file of files) checked ? next.add(file) : next.delete(file);
     onChange([...next]);
   }
-  function render(node:Node) {
-    const files = node.file ? [node.path] : paths.filter(p=>p.startsWith(node.path+"/"));
-    const count = files.filter(p=>set.has(p)).length;
-    const check = <TreeCheck label={node.path} checked={count===files.length} partial={count>0 && count<files.length} onChange={checked=>toggle(files,checked)} />;
-    return node.file ? <div className="kd-tree-file" key={node.path}>{check}<span title={node.path}>{node.name}</span></div>
-      : <details key={node.path} open><summary>{check}<span>{node.name}</span><small>{files.length} 篇</small></summary><div className="kd-tree-children">{[...node.children.values()].map(render)}</div></details>;
+  function open(path:string){setFolder(path);setQuery("");}
+  function check(node:Node) {
+    const count=selectedCounts.get(node.path)??0;
+    return <Checkbox aria-label={`选择 ${node.path || "仓库全部文档"}`} checked={!!node.count && count===node.count}
+      indeterminate={count>0 && count<node.count} onCheckedChange={value=>toggle(node,value)} />;
   }
-  return <div className="kd-repository-tree"><div className="kd-tree-total"><TreeCheck label="选择全部文档" checked={selected.length===paths.length && !!paths.length} partial={!!selected.length && selected.length<paths.length} onChange={checked=>onChange(checked ? paths : [])}/><span>已选 {selected.length} / {paths.length} 篇</span></div><div className="kd-tree-scroll">{[...nodes.values()].map(render)}</div></div>;
-}
-function TreeCheck({label,checked,partial,onChange}:{label:string;checked:boolean;partial:boolean;onChange:(checked:boolean)=>void}) {
-  return <Checkbox aria-label={label} checked={checked} indeterminate={partial} onCheckedChange={value=>onChange(value)} onClick={e=>e.stopPropagation()} />;
+  const parts=folder ? folder.split("/") : [];
+  return <div className="kd-repository-tree">
+    <div className="kd-tree-search"><Search size={17}/><Input aria-label="搜索仓内文档路径" placeholder="搜索文件名或完整路径（整个仓库）" value={query} onChange={e=>setQuery(e.target.value)}/></div>
+    <div className="kd-tree-navigation"><Button type="button" size="sm" variant="ghost" aria-label="返回上级目录" disabled={!folder} onClick={()=>open(parts.slice(0,-1).join("/"))}><ArrowLeft size={16}/></Button><div className="kd-tree-breadcrumbs" ref={crumbs}><button type="button" onClick={()=>open("")}>根目录</button>{parts.map((name,index)=><span key={index}><ChevronRight size={14}/><button type="button" title={parts.slice(0,index+1).join("/")} onClick={()=>open(parts.slice(0,index+1).join("/"))}>{name}</button></span>)}</div></div>
+    <div className="kd-tree-total">{check(current)}<span>{term ? "当前目录全选" : "全选当前目录"} · {current.count} 篇</span><strong>已选 {selected.length} 篇</strong>{!!selected.length && <button type="button" onClick={()=>onChange([])}>清空</button>}</div>
+    <div className="kd-tree-scroll">{rows.slice(0,limit).map(node=><div className="kd-tree-row" key={node.path}>
+      {check(node)}{node.file ? <FileText size={18}/> : <Folder size={18}/>}
+      {node.file ? <span className="kd-tree-name" title={node.path}>{term ? node.path : node.name}</span> : <button type="button" className="kd-tree-name" title={node.path} onClick={()=>open(node.path)}>{term ? node.path : node.name}</button>}
+      {!node.file && <><small>{node.count} 篇</small><Button type="button" variant="ghost" size="sm" aria-label={`打开 ${node.path}`} onClick={()=>open(node.path)}><ChevronRight size={16}/></Button></>}
+    </div>)}{!rows.length && <p className="p-3 text-muted-foreground">没有匹配的文档或目录</p>}{rows.length>limit && <Button type="button" variant="ghost" className="w-full" onClick={()=>setLimit(limit+PAGE_SIZE)}>显示更多（已显示 {limit} / {rows.length} 项）</Button>}</div>
+    <div className="kd-tree-hint">{term ? `搜索结果 ${rows.length} 项` : `${rows.length} 个直接子项`} · 勾选文件夹包含其所有下级文档</div>
+  </div>;
 }

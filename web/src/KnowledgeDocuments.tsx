@@ -128,15 +128,16 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
   const [repositories, setRepositories] = useState(doc?.repositories.join("\n") ?? ""), [language, setLanguage] = useState(doc?.technologies ?? []);
   const [versions, setVersions] = useState(doc?.product_versions ?? []), [when, setWhen] = useState(doc?.when_to_use ?? "");
   const [repo, setRepo] = useState(doc?.source?.repository ?? ""), [branch, setBranch] = useState(doc?.source?.branch ?? "master"), [path, setPath] = useState(doc?.source?.path ?? "");
+  const [pickerOpen, setPickerOpen] = useState(false), [pickerChosen, setPickerChosen] = useState<string[]>([]);
   const [tree, setTree] = useState<{revision:string;paths:string[]}>();
   const [chosen, setChosen] = useState<string[]>([]);
   const treeEpoch = useRef(0);
-  useEffect(() => { treeEpoch.current++; setTree(undefined); setChosen([]); }, [repo,branch]);
+  useEffect(() => { treeEpoch.current++; setTree(undefined); setChosen([]); setPickerOpen(false); }, [repo,branch]);
   async function browse() {
-    const epoch = ++treeEpoch.current;
-    setBusy(true); setError("");
+    const epoch = ++treeEpoch.current, previousSelection = pickerOpen ? pickerChosen : chosen;
+    setBusy(true); setError(""); setPickerOpen(true);
     try { const result = await documentRequest<{revision:string;paths:string[]}>("/repository-tree",{repository:repo,branch});
-      if (epoch === treeEpoch.current) { setTree(result); setChosen([]); if (!result.paths.length) setError("此分支没有可导入的 Markdown 文档（Skill 包单独维护）"); }
+      if (epoch === treeEpoch.current) { setTree(result); setPickerChosen(previousSelection.filter(p=>result.paths.includes(p))); if (!result.paths.length) setError("此分支没有可导入的 Markdown 文档（Skill 包单独维护）"); }
     } catch(e) { if(epoch===treeEpoch.current)setError((e as Error).message); } finally {setBusy(false);}
   }
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -162,12 +163,12 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
       onSaved(await documentRequest<KnowledgeDocument>(doc ? `/${encodeURIComponent(doc.id)}` : "", body));
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  return <Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="kd-upload-dialog"><DialogHeader><DialogTitle>{mode === "edit" ? "编辑适用范围" : mode === "replace" ? "替换文档" : "上传知识"}</DialogTitle></DialogHeader>
+  return <><Dialog open onOpenChange={open => { if (!open && !busy) onClose(); }}><DialogContent className="kd-upload-dialog"><DialogHeader><DialogTitle>{mode === "edit" ? "编辑适用范围" : mode === "replace" ? "替换文档" : "上传知识"}</DialogTitle></DialogHeader>
     <form onSubmit={e => { e.preventDefault(); void save(); }}>
       {mode !== "edit" && <><nav className="kd-source-tabs"><button type="button" className={source === "upload" ? "active" : ""} onClick={() => setSource("upload")}>直接上传</button><button type="button" className={source === "repository" ? "active" : ""} onClick={() => setSource("repository")}>从 CodeHub 仓库导入</button></nav>
         {source === "upload" ? <label className="kd-dropzone"><Upload size={25} /><strong>{filename || "选择 Markdown 文档"}</strong><span>UTF-8 · .md · 最大 2 MiB</span><input aria-label="选择 Markdown 文档" type="file" accept=".md,text/markdown" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; try { if (file.name.toLowerCase() === "skill.md") throw new Error("Skill 请在 Skill 页签上传完整技能包，不作为知识文档导入"); if (file.size > 2 * 1024 * 1024 || !/\.md$/i.test(file.name)) throw new Error("请选择 2 MiB 以内的 Markdown 文件"); const text = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer()); setContent(text); setFilename(file.name); if (!doc) setTitle(file.name); setError(""); } catch (e) { setContent(undefined); setFilename(""); setError((e as Error).message); } }} /></label>
           : <div className="kd-repo-fields"><label>CodeHub 仓库地址<Input required value={repo} onChange={e => setRepo(e.target.value)} placeholder="https://codehub.example.com/team/repo.git" /></label><label>分支<Input required value={branch} onChange={e => setBranch(e.target.value)} /></label>
-            {mode === "replace" ? <label>仓内文件路径<Input required value={path} onChange={e=>setPath(e.target.value)} /></label> : <><Button type="button" variant="outline" disabled={busy || !repo.trim() || !branch.trim()} onClick={()=>void browse()}>{busy ? "正在读取…" : "读取文件树"}</Button>{tree && <KnowledgeRepositoryTree paths={tree.paths} selected={chosen} onChange={setChosen}/>}</>}
+            {mode === "replace" ? <label>仓内文件路径<Input required value={path} onChange={e=>setPath(e.target.value)} /></label> : <><Button type="button" variant="outline" disabled={busy || !repo.trim() || !branch.trim()} onClick={()=>{if(tree){setPickerChosen(chosen);setPickerOpen(true);}else void browse();}}>{busy ? "正在读取…" : chosen.length ? `已选 ${chosen.length} 篇 · 全屏浏览` : "全屏浏览仓库"}</Button></>}
             <small>勾选文件夹会选中其中全部 Markdown 文档。保留完整路径，同名文件分别保存；Skill 包不导入。每批最多 200 篇。</small></div>}</>}
 
       {!(mode === "upload" && source === "repository") && <label>文档名称<Input required value={title} onChange={e => setTitle(e.target.value)} /></label>}
@@ -179,7 +180,14 @@ function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; 
       {error && <p role="alert" className="kd-error">{error}</p>}
       <footer><Button type="button" variant="outline" disabled={busy} onClick={onClose}>取消</Button><Button type="submit" disabled={busy}>{busy ? source === "repository" && mode !== "edit" ? "正在读取仓库文件…" : "保存中…" : mode === "edit" ? "保存" : "保存并整理"}</Button></footer>
     </form>
-  </DialogContent></Dialog>;
+  </DialogContent></Dialog>
+    <Dialog open={pickerOpen} onOpenChange={setPickerOpen}><DialogContent className="kd-repository-picker">
+      <DialogHeader className="kd-picker-header"><DialogTitle>选择知识文档</DialogTitle><p title={`${repo} · ${branch}`}>{repo} · {branch}</p></DialogHeader>
+      <div className="kd-picker-body"><section className="kd-picker-files">{tree ? <KnowledgeRepositoryTree paths={tree.paths} selected={pickerChosen} onChange={setPickerChosen}/> : <p>{busy ? "正在读取仓库目录…" : "暂未读取到目录"}</p>}</section>
+        <aside className="kd-picker-selection"><strong>已选文档 · {pickerChosen.length}</strong><p>文件夹勾选包含所有下级文档</p><div>{pickerChosen.length ? pickerChosen.map(path=><div className="kd-picker-selected-file" key={path}><span title={path}>{path}</span><Button type="button" variant="ghost" size="sm" aria-label={`移除 ${path}`} onClick={()=>setPickerChosen(pickerChosen.filter(p=>p!==path))}>移除</Button></div>) : <p>从左侧勾选文件或文件夹</p>}</div></aside></div>
+      {error && <p role="alert" className="kd-error kd-picker-error">{error}</p>}
+      <footer className="kd-picker-footer"><span>每批最多 200 篇 · 保留仓内相对路径 · Skill 包单独维护</span><Button type="button" variant="outline" disabled={busy} onClick={()=>void browse()}>刷新目录</Button><Button type="button" variant="outline" onClick={()=>setPickerOpen(false)}>返回</Button><Button type="button" disabled={busy || !pickerChosen.length || pickerChosen.length>200} onClick={()=>{setChosen(pickerChosen);setPickerOpen(false);}}>确认选择 {pickerChosen.length} 篇</Button></footer>
+    </DialogContent></Dialog></>;
 }
 
 function DocumentMultiSelect({label,value,onChange,options,placeholder}:{label:string;value:string[];onChange:(value:string[])=>void;options:Array<{value:string;label:string}>;placeholder:string}) {
