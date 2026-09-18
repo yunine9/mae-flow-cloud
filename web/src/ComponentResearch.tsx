@@ -52,10 +52,12 @@ function Choice({
 }
 export function ComponentResearch({
   open,
+  focused = false,
   onClose,
   onAdopt,
 }: {
   open: boolean;
+  focused?: boolean;
   onClose: () => void;
   onAdopt: (id: string) => void;
 }) {
@@ -187,12 +189,12 @@ export function ComponentResearch({
   return (
     <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-white p-6" aria-label="源码萃取工作区">
         <header className="flex items-center gap-4 border-b border-line pb-4">
-          <Button variant="outline" onClick={onClose}>← 返回知识库</Button>
-          <h2 className="text-xl font-semibold">源码萃取</h2>
-          <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>
+          <Button variant="outline" onClick={onClose}>{focused ? "← 返回文档" : "← 返回知识库"}</Button>
+          <h2 className="text-xl font-semibold">{focused ? "本篇文档的萃取过程" : "源码萃取"}</h2>
+          {!focused && <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>}
         </header>
-        <div className="grid grid-cols-[280px_1fr] min-h-0 flex-1 gap-5">
-          <aside className="overflow-auto border-r border-line pr-4">
+        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[280px_1fr]"} min-h-0 flex-1 gap-5`}>
+          {!focused && <aside className="overflow-auto border-r border-line pr-4">
             <Button
               className="mb-4 w-full"
               onClick={() => {
@@ -223,7 +225,7 @@ export function ComponentResearch({
             {!records.length && (
               <p className="text-muted-foreground">暂无萃取记录</p>
             )}
-          </aside>
+          </aside>}
           <main className="min-w-0 overflow-auto pr-2 text-base">
             {error && (
               <p role="alert" className="mb-3 text-danger">
@@ -288,7 +290,7 @@ export function ComponentResearch({
                 <header className="mb-5">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="text-xl font-semibold">{current.topic}</h2>
-                    {["done", "failed"].includes(current.status) && (
+                    {!focused && ["done", "failed"].includes(current.status) && (
                       <Button
                         variant="outline"
                         disabled={busy}
@@ -312,7 +314,7 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                <details className="mb-5 rounded-lg border border-line p-4">
+                <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
                     源码范围与研究记录 · {current.evidence.length} 次工具调用
                   </summary>
