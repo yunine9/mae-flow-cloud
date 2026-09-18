@@ -64,11 +64,7 @@ export function ComponentResearch({
   const [components, setComponents] = useState<ComponentRepository[]>([]),
     [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
-  const [component, setComponent] = useState(
-      new URLSearchParams(location.search).get("component") ?? "",
-    ),
-    [language, setLanguage] = useState(""),
-    [topic, setTopic] = useState("");
+  const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
   const [selected, setSelected] = useState(
       new URLSearchParams(location.search).get("componentResearch") ?? "",
     ),
@@ -82,7 +78,6 @@ export function ComponentResearch({
     [repos, setRepos] = useState("");
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
-  const source = components.find((c) => c.id === component);
   const load = async () => {
     const result = await componentRequest<{
       records: ComponentResearchRecord[];
@@ -142,13 +137,10 @@ export function ComponentResearch({
     };
   }, [open, selected]);
   useEffect(() => {
-    setLanguage(source?.languages[0] ?? "");
-  }, [component, source?.languages.join(",")]);
-  useEffect(() => {
     setDraft(current?.draft ?? "");
     setTitle(
       current
-        ? `${current.component.name} · ${current.topic}`.slice(0, 160)
+        ? `${knowledgeLanguageLabel(current.language)} · ${current.topic}`.slice(0, 160)
         : "",
     );
     setEditing(false);
@@ -170,12 +162,11 @@ export function ComponentResearch({
         "/component-research",
         refresh && current
           ? {
-              component_id: current.component.id,
               language: current.language,
               topic: current.topic,
               refresh: true,
             }
-          : { component_id: component, language, topic },
+          : { language, topic },
       );
       await load();
       setDetail(r);
@@ -217,7 +208,7 @@ export function ComponentResearch({
               >
                 <strong className="block">{r.topic}</strong>
                 <span className="mt-2 block text-sm text-muted-foreground">
-                  {r.component.name} · {knowledgeLanguageLabel(r.language)}
+                  {knowledgeLanguageLabel(r.language)} · {r.components?.length ?? 1} 个组件仓
                 </span>
                 <span className="mt-1 block text-sm">{r.stage}</span>
               </button>
@@ -238,38 +229,13 @@ export function ComponentResearch({
                   从真实源码中提炼开发范式
                 </h2>
                 <p className="text-muted-foreground">
-                  选定组件、语言与具体问题。后台阅读组件实现、检索真实调用，生成带来源的
+                  选定语言与具体问题。后台阅读组件实现、检索真实调用，生成带来源的
                   Markdown 草稿。
                 </p>
-                <Choice
-                  label="基础组件"
-                  value={component}
-                  onChange={setComponent}
-                  items={components
-                    .filter((c) => c.enabled)
-                    .map((c) => ({ value: c.id, label: c.name }))}
-                />
-                <a
-                  className="text-primary underline"
-                  href="/configuration?tab=components"
-                >
-                  去配置中心维护基础组件仓 ↗
-                </a>
-                {source && (
-                  <p className="break-all text-sm text-muted-foreground">
-                    {source.repository} · {source.branch} ·{" "}
-                    {source.path || "根目录"}
-                  </p>
-                )}
-                <Choice
-                  label="本次萃取语言"
-                  value={language}
-                  onChange={setLanguage}
-                  items={(source?.languages ?? []).map((l) => ({
-                    value: l,
-                    label: knowledgeLanguageLabel(l),
-                  }))}
-                />
+                <Choice label="萃取语言" value={language} onChange={setLanguage}
+                  items={[...new Set(components.filter(c => c.enabled).flatMap(c => c.languages))].map(l => ({value: l, label: knowledgeLanguageLabel(l)}))} />
+                <p className="text-muted-foreground">{language ? `自动覆盖 ${components.filter(c => c.enabled && c.languages.includes(language)).length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
+                <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
                 <label className="grid gap-2">
                   研究主题
                   <Textarea
@@ -279,7 +245,7 @@ export function ComponentResearch({
                   />
                 </label>
                 <Button
-                  disabled={busy || !component || !language || !topic.trim()}
+                  disabled={busy || !language || !topic.trim()}
                   onClick={() => void start()}
                 >
                   {busy ? "发起中…" : "开始后台萃取"}
@@ -301,7 +267,7 @@ export function ComponentResearch({
                     )}
                   </div>
                   <p className="mt-2 text-muted-foreground">
-                    {current.component.name} ·{" "}
+                    {current.components?.length ?? 1} 个组件仓 ·{" "}
                     {knowledgeLanguageLabel(current.language)} ·{" "}
                     {current.operator}
                   </p>
@@ -318,13 +284,7 @@ export function ComponentResearch({
                   <summary className="cursor-pointer font-medium">
                     源码范围与研究记录 · {current.evidence.length} 次工具调用
                   </summary>
-                  <p className="mt-3 break-all text-sm">
-                    {current.component.repository} · {current.component.branch}{" "}
-                    · {current.component.path || "根目录"}
-                  </p>
-                  <p className="my-2 break-all text-sm">
-                    固定版本：{current.revision ?? "尚未同步"}
-                  </p>
+                  {(current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
                   <ol className="max-h-64 overflow-auto text-sm">
                     {current.evidence.map((e, i) => (
                       <li

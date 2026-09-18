@@ -237,3 +237,32 @@ export function codeSearchTool(onUse: (record: object) => void) {
     },
   });
 }
+
+/** One language-wide tool; checkouts are prepared only when the agent inspects a component. */
+export function languageComponentSourceTool(
+  components: import("./componentRepositories.ts").ComponentRepository[],
+  prepare: (component: import("./componentRepositories.ts").ComponentRepository) => Promise<{root: string; revision: string}>,
+  onUse: (record: Record<string, unknown>) => void,
+) {
+  const base = componentSourceTool("", "", "", onUse);
+  const sources = new Map<string, Promise<{root: string; revision: string}>>();
+  return defineTool({
+    ...base,
+    description: "按 component_id 只读本次语言范围内的组件源码；list/search/read。未提供 ID 时仅在一个组件仓时自动选择。",
+    parameters: Type.Object({ ...base.parameters.properties, component_id: Type.Optional(Type.String()) }),
+    async execute(id: string, input: any, signal, onUpdate, context) {
+      const component = components.find(c => c.id === input.component_id) ?? (!input.component_id && components.length === 1 ? components[0] : undefined);
+      if (!component) return reply("请指定本次组件清单中的 component_id");
+      try {
+        if (!sources.has(component.id)) sources.set(component.id, prepare(component));
+        const source = await sources.get(component.id)!;
+        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository })).execute(id, input, signal, onUpdate, context);
+      } catch (error) {
+        sources.delete(component.id);
+        const message = error instanceof Error ? error.message : "源码准备失败";
+        onUse({ tool: "component_source", action: input.action, component_id: component.id, repository: component.repository, status: "failed", error: message });
+        return reply(message);
+      }
+    },
+  });
+}

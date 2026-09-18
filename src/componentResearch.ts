@@ -23,6 +23,8 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 export interface ResearchRecord {
   id: string;
   component: ComponentRepository;
+  components?: ComponentRepository[];
+  revisions?: Record<string, string>;
   language: string;
   topic: string;
   operator: string;
@@ -38,7 +40,7 @@ export interface ResearchRecord {
   evidence: Array<Record<string, unknown>>;
 }
 export interface ResearchInput {
-  component_id: string;
+  component_id?: string;
   language: string;
   topic: string;
   refresh?: boolean;
@@ -95,18 +97,15 @@ export class ComponentResearch {
   }
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
-    const component = componentRepositories(this.dir).find(
-      (c) => c.id === input.component_id && c.enabled,
-    );
-    if (!component) throw new Error("请先在配置中心启用基础组件仓");
     const language = normalizeKnowledgeLanguages([input.language])[0];
-    if (!component.languages.includes(language))
-      throw new Error("请选择该组件支持的语言");
+    const components = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
+    if (!components.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
+    const component = components[0]; // Legacy records retain their single component; new jobs cover the language registry.
     const topic = String(input.topic ?? "").trim();
     if (!topic || topic.length > 1000)
       throw new Error("请填写具体萃取主题，最多 1000 字");
     const key = JSON.stringify([
-      componentKey(component),
+      components.map(componentKey).sort(),
       language,
       topic.replace(/\s+/g, " ").toLowerCase(),
     ]);
@@ -126,6 +125,7 @@ export class ComponentResearch {
     const record: ResearchRecord = {
       id: `cr-${randomUUID()}`,
       component,
+      components,
       language,
       topic,
       operator,
@@ -210,7 +210,7 @@ export class ComponentResearch {
         ...input,
         title:
           input.title ??
-          `${record.component.name} · ${record.topic}`.slice(0, 160),
+          `${record.language} · ${record.topic}`.slice(0, 160),
         content,
         technologies: [record.language],
         research_source: {
@@ -219,10 +219,11 @@ export class ComponentResearch {
           branch: record.component.branch,
           path: record.component.path,
           revision: record.revision,
+          components: record.components?.map(c => ({id:c.id, repository:c.repository, branch:c.branch, path:c.path, revision:record.revisions?.[c.id]})),
         },
         when_to_use:
           input.when_to_use ??
-          `${record.component.name} / ${record.language} / ${record.topic}`,
+          `${record.language} / ${record.topic}`,
         active: true,
       },
       operator,

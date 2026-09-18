@@ -18,6 +18,7 @@ import {
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import {
   componentSourceTool,
+  languageComponentSourceTool,
   codeSearchTool,
 } from "../src/componentResearchTools.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -432,4 +433,51 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     await new Promise<void>((r) => server.close(() => r()));
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("按语言快照全部启用组件仓，忽略旧单仓输入；配置变化重新研究", async () => {
+  const dir = temporary();
+  const first = saveComponentRepository(dir, config, "alice");
+  const second = saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git", languages:["cpp"]}, "alice");
+  saveComponentRepository(dir, {...config, name:"Java组件", repository:"https://code.example/java.git", languages:["java"]}, "alice");
+  saveComponentRepository(dir, {...config, name:"停用组件", repository:"https://code.example/off.git", enabled:false}, "alice");
+  const executions: any[] = [];
+  const research = new ComponentResearch(dir, async input => { executions.push(input.record); return "# 范式"; });
+  try {
+    const job = research.start({language:"cpp", topic:"日期", component_id:first.id}, "alice");
+    assert.deepEqual(job.components?.map(c => c.id).sort(), [first.id, second.id].sort());
+    assert.equal(research.start({language:"cpp", topic:"日期"}, "alice").id, job.id);
+    await until(() => research.get(job.id).status === "done");
+    assert.equal(executions[0].components.length, 2);
+    saveComponentRepository(dir, {id:second.id, enabled:false}, "alice");
+    const next = research.start({language:"cpp", topic:"日期"}, "alice");
+    assert.notEqual(next.id, job.id);
+    assert.equal(next.components?.length, 1);
+    assert.equal(research.get(job.id).components?.length, 2, "历史范围不被当前配置覆盖");
+    assert.throws(() => research.start({language:"python",topic:"日期"}, "alice"), /语言/);
+  } finally { await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test("跨组件读取按 ID 路由、固定版本且延迟准备，证据保留仓库", async () => {
+  const dir = temporary();
+  try {
+    execFileSync("git", ["init", "-q", dir]);
+    writeFileSync(join(dir,"sample.cpp"), "void close_file() {}\n");
+    execFileSync("git", ["-C",dir,"add","."]);
+    execFileSync("git", ["-C",dir,"-c","user.name=Test","-c","user.email=test@example.com","commit","-qm","fixture"]);
+    const revision = execFileSync("git", ["-C",dir,"rev-parse","HEAD"], {encoding:"utf8"}).trim();
+    const components = ["one","two"].map(id => ({...config,id,path:"",enabled:true,description:"",repository:`https://code.example/${id}.git`}));
+    const prepared: string[] = [], evidence: any[] = [];
+    const tool = languageComponentSourceTool(components, async c => { prepared.push(c.id); return {root:dir,revision}; }, e => evidence.push(e));
+    await call(tool, {action:"read",path:"sample.cpp"});
+    assert.equal(prepared.length, 0, "多仓不能默认读第一项");
+    for (const id of ["two","one","two"]) {
+      const result = await call(tool, {action:"read",component_id:id,path:"sample.cpp"});
+      assert.match(JSON.stringify(result), /close_file/);
+    }
+    assert.deepEqual(prepared, ["two","one"]);
+    assert.deepEqual(evidence.map(e => e.component_id), ["two","one","two"]);
+    assert.equal(evidence[0].repository, components[1].repository);
+    assert.equal(evidence[0].revision, revision);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
 });

@@ -11,6 +11,8 @@ export interface ComponentRepository {
 export interface ComponentResearchRecord {
   id: string;
   component: ComponentRepository;
+  components?: ComponentRepository[];
+  revisions?: Record<string, string>;
   language: string;
   topic: string;
   operator: string;

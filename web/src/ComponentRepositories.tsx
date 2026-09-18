@@ -113,7 +113,7 @@ export function ComponentRepositories() {
                 disabled={!row.enabled}
                 onClick={() =>
                   location.assign(
-                    `/?knowledgeDocuments=1&componentResearch=new&component=${encodeURIComponent(row.id)}`,
+                    `/?knowledgeDocuments=1&componentResearch=new`,
                   )
                 }
               >
