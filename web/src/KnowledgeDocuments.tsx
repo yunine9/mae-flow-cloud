@@ -1,3 +1,4 @@
+import { KnowledgeExport } from "./KnowledgeExport";
 import { ComponentResearch } from "./ComponentResearch";
 import { KnowledgeTrial } from "./KnowledgeTrial";
 import { KnowledgeRepositoryTree } from "./KnowledgeRepositoryTree";
@@ -96,6 +97,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
       <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
 
 
+      {category === "documents" && <KnowledgeExport documents={rows} />}
       <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}

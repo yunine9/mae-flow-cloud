@@ -1,3 +1,4 @@
+import { exportKnowledge } from "./knowledgeExport.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
@@ -7,6 +8,13 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   operator: string, readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
+    if (request.method === "POST" && id === "export" && parts.length === 2) {
+      const body = await readBody(request, 256 * 1024);
+      const archive = exportKnowledge(dir, body.ids);
+      response.writeHead(200, {"Content-Type":"application/zip", "Content-Disposition":"attachment; filename=mae-knowledge.zip", "Cache-Control":"no-store", "Content-Length":archive.length});
+      response.end(archive);
+      return;
+    }
     if (request.method === "POST" && id === "search" && parts.length === 2) {
       const body = await readBody(request, 8192), query = String(body.query ?? "").trim();
       if (!query || query.length > 4000) throw new Error("请输入具体问题（最多 4000 字）");
