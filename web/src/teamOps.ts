@@ -285,3 +285,91 @@ export function issueDeliveryBreakdown(
   };
 }
 
+/** 特性(业务模块)归类键:module 空白归「未分类」。DTS 拉单时特性/
+ * 模块名经 matchDtsToModule 折算进模块,这里只认落盘的 module 标签。 */
+export function issueFeatureKey(issue: { module?: string }): string {
+  return issue.module?.trim() || "未分类";
+}
+
+export interface IssueFeatureRow {
+  /** 特性名(业务模块标签;空白归「未分类」)。 */
+  module: string;
+  active: number;
+  waiting: number;
+  failed: number;
+  closed: number;
+  total: number;
+}
+
+/** 特性总账行(概览「特性总账表」,2026-09-18 原型拍板):按业务模块
+ * 聚合,指标复用 issueDeliveryBreakdown(与概览总数同一口径)。排序:
+ * 处理中降序 → 总数降序 → 名称,表格直接渲染不再排。 */
+export function issueFeatureRows(
+  issues: ReadonlyArray<{ status: string; module?: string }>,
+): IssueFeatureRow[] {
+  const groups = new Map<string, Array<{ status: string }>>();
+  for (const issue of issues) {
+    if (issue.status === "canceled") continue;
+    const key = issueFeatureKey(issue);
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(issue);
+    else groups.set(key, [issue]);
+  }
+  return [...groups.entries()].map(([module, items]) => {
+    const breakdown = issueDeliveryBreakdown(items);
+    return {
+      module,
+      active: breakdown.active,
+      waiting: breakdown.waiting,
+      failed: breakdown.failed,
+      closed: breakdown.closed,
+      total: breakdown.total,
+    };
+  }).sort((a, b) => b.active - a.active || b.total - a.total
+    || a.module.localeCompare(b.module, "zh-Hans-CN"));
+}
+
+export interface IssueFeatureOnceRates {
+  /** 分母:该特性完成交付的会话数(与概览头部一次率同口径)。 */
+  total: number;
+  localization: number | null;
+  repair: number | null;
+}
+
+/** 每特性一次率(特性总账表列,2026-09-18):按 stats 端点的
+ * per_session 明细(服务端已滤成完成交付全集)按会话归到特性。
+ * 分母 0 → null,前端显示 —。 */
+export function issueFeatureOnceRates(
+  issues: ReadonlyArray<{ id: string; module?: string }>,
+  perSession: ReadonlyArray<{
+    id: string;
+    localization_pass: boolean;
+    repair_pass: boolean;
+  }>,
+): Map<string, IssueFeatureOnceRates> {
+  const moduleOfId = new Map(
+    issues.map((issue) => [issue.id, issueFeatureKey(issue)]),
+  );
+  const acc = new Map<string, {
+    total: number;
+    localization: number;
+    repair: number;
+  }>();
+  for (const row of perSession) {
+    const key = moduleOfId.get(row.id);
+    if (!key) continue;
+    const bucket = acc.get(key) ?? { total: 0, localization: 0, repair: 0 };
+    bucket.total += 1;
+    if (row.localization_pass) bucket.localization += 1;
+    if (row.repair_pass) bucket.repair += 1;
+    acc.set(key, bucket);
+  }
+  const percent = (passed: number, total: number): number | null =>
+    total ? Math.round((passed / total) * 1000) / 10 : null;
+  return new Map([...acc.entries()].map(([key, bucket]) => [key, {
+    total: bucket.total,
+    localization: percent(bucket.localization, bucket.total),
+    repair: percent(bucket.repair, bucket.total),
+  }]));
+}
+

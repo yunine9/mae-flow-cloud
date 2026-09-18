@@ -9,6 +9,11 @@
  * issueDeliveryBreakdown(与需求侧 teamDeliveryBreakdown 同构口径),
  * 阶段格出注册表全集、0 计数置灰(与需求侧同规则)。
  *
+ * 特性总账表(2026-09-18 原型四稿拍板折入):首行=全部特性总账,默认
+ * 只显首行,展开逐特性一行横向对比;口径走 issueFeatureRows(按业务
+ * 模块聚合,与概览总数同一口径,module 空白归「未分类」)。特性行点击
+ * 进概览格筛选(f:<module> 前缀),与阶段/状态格同一套单选格语义。
+ *
  * 队列筛选三件套与需求侧同款(搜索/现场范围/责任人),语义按问题域
  * 映射(f637a70 确认口径):需要处理=等你答复+异常;停滞中=推进中且
  * 超过 STALE_AFTER_MS 无进展;正在推进=排队+AI 处理中;等你答复含挂起。
@@ -27,20 +32,11 @@ import {
 import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Database } from "lucide-react";
-import { STALE_AFTER_MS, issueDeliveryBreakdown } from "./teamOps";
+import { STALE_AFTER_MS, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import {
-  IssuePrototypeSwitcher,
-  moduleOf,
-  PrototypeVariantCells,
-  PrototypeVariantDrilldown,
-  PrototypeVariantLedger,
-  PrototypeVariantMatrix,
-  usePrototypeVariant,
-} from "./TeamIssueWorld.prototype";
 
 /** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
 type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
@@ -84,6 +80,99 @@ const METRIC_TONE = {
   danger: "text-danger",
 } as const;
 
+/** 一次率显示口径(瓦片与总账表列共用):null/缺席=分母 0,显示 —。 */
+const rateText = (rate: number | null | undefined): string =>
+  rate == null ? "—" : `${rate}%`;
+
+/** 特性总账表(2026-09-18 原型四稿拍板折入):首行=全部特性总账,
+ * 默认只显首行,展开逐特性一行横向对比(处理中降序,issueFeatureRows
+ * 已排好)。首行任意处或箭头按钮切换展开;特性行点击=概览格筛选
+ * (f:<module>,与阶段/状态格同一套单选格语义,联动下方现场)。
+ * 一次定位/一次修复两列与头部瓦片同口径(只数该特性完成交付会话,
+ * 分母 0 显示 —),总账行即全局两率。 */
+function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnceRates }: {
+  rows: IssueFeatureRow[];
+  stats: IssueDeliveryBreakdown;
+  cell: string;
+  onSelectCell: (next: string) => void;
+  onceRates?: IssueOnceRate;
+  featureOnceRates: Map<string, IssueFeatureOnceRates>;
+}) {
+  const [open, setOpen] = useState(false);
+  const onceCell = (rate: number | null | undefined, denominator: number) => (
+    <td className={cn("px-3 py-2 text-right tabular-nums",
+      rate == null ? "text-muted-foreground" : "font-semibold text-success")}
+      title={`分母 ${denominator} 个完成交付会话`}>{rateText(rate)}</td>
+  );
+  return <section aria-label="特性总账" className="min-w-0 overflow-hidden rounded-lg border border-line bg-surface">
+    <table className="w-full border-collapse text-[13px]">
+      <thead>
+        <tr className="border-b border-line bg-surface-2/70 text-left text-[12.5px] text-muted-foreground">
+          <th scope="col" className="px-3 py-1.5 font-semibold">特性</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">处理中</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">待答复</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">需介入</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">已闭环</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold"
+            title="一次定位成功率:分析报告只生成一版即一次定位;只数该特性完成交付会话">一次定位</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold"
+            title="一次修复成功率:环境验证零失败即一次修复;只数该特性完成交付会话">一次修复</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">合计</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr className={cn("border-b border-line/60 transition-colors",
+          rows.length > 0 && "cursor-pointer hover:bg-primary/5")}
+          onClick={() => rows.length > 0 && setOpen((value) => !value)}>
+          <td className="px-3 py-2">
+            <span className="flex items-center gap-1.5 font-semibold text-text-strong">
+              <button type="button" aria-expanded={open}
+                aria-label={open ? "收起特性明细" : `展开全部 ${rows.length} 个特性`}
+                disabled={rows.length === 0}
+                className="grid size-5 cursor-pointer place-items-center rounded text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary disabled:cursor-default disabled:opacity-40"
+                onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}>
+                <svg viewBox="0 0 16 16" aria-hidden
+                  className={cn("size-3.5 transition-transform", open && "rotate-180")}>
+                  <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor"
+                    strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              全部特性
+              <span className="text-[12px] font-normal text-muted-foreground">{rows.length} 个特性</span>
+            </span>
+          </td>
+          <td className="px-3 py-2 text-right font-semibold tabular-nums">{stats.active}</td>
+          <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.waiting > 0 && "text-attention")}>{stats.waiting}</td>
+          <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.failed > 0 && "text-danger")}>{stats.failed}</td>
+          <td className="px-3 py-2 text-right font-semibold tabular-nums text-success">{stats.closed}</td>
+          {onceCell(onceRates?.localization.rate, onceRates?.total ?? 0)}
+          {onceCell(onceRates?.repair.rate, onceRates?.total ?? 0)}
+          <td className="px-3 py-2 text-right font-semibold tabular-nums">{stats.total}</td>
+        </tr>
+        {open && rows.map((row) => {
+          const selected = cell === `f:${row.module}`;
+          const rates = featureOnceRates.get(row.module);
+          return <tr key={row.module}
+            className={cn("cursor-pointer border-b border-line/60 transition-colors last:border-b-0 hover:bg-primary/5",
+              selected && "bg-primary/10")}
+            aria-pressed={selected}
+            onClick={() => onSelectCell(`f:${row.module}`)}>
+            <td className={cn("max-w-[320px] truncate py-2 pl-10 pr-3",
+              selected ? "font-semibold text-primary" : "text-text-strong")}>{row.module}</td>
+            <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.active}</td>
+            <td className={cn("px-3 py-2 text-right tabular-nums", row.waiting > 0 && "font-semibold text-attention")}>{row.waiting}</td>
+            <td className={cn("px-3 py-2 text-right tabular-nums", row.failed > 0 && "font-semibold text-danger")}>{row.failed}</td>
+            <td className="px-3 py-2 text-right tabular-nums text-success">{row.closed}</td>
+            {onceCell(rates?.localization, rates?.total ?? 0)}
+            {onceCell(rates?.repair, rates?.total ?? 0)}
+            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{row.total}</td>
+          </tr>;
+        })}
+      </tbody>
+    </table>
+  </section>;
+}
+
 export function TeamIssueWorld({ issues, onceRates }: {
   issues: IssueSummary[];
   /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
@@ -94,18 +183,19 @@ export function TeamIssueWorld({ issues, onceRates }: {
   const [scope, setScope] = useState<IssueScope>("all");
   const [owner, setOwner] = useState("");
   /** 概览格筛选:"p:<阶段>" | "s:<状态>" | "f:<特性>"(空=不筛),与
-   * 需求侧阶段/状态格同机制;f: 前缀来自按特性分类原型(变体 A/B,
-   * 与阶段/状态格同属单选格语义)。 */
+   * 需求侧阶段/状态格同机制;f: 来自特性总账表的特性行点击(单选格
+   * 语义,与阶段/状态互斥,联动下方现场)。 */
   const [cell, setCell] = useState("");
-  /** 特性钻取(按特性分类原型变体 C):独立于单选格,与阶段/状态格
-   * 叠加生效;空=全部特性。胜出变体定稿后此状态随之定型或删除。 */
-  const [feature, setFeature] = useState("");
-  /** 原型变体(仅 dev + ?variant=A|B|C;生产恒 null=默认概览)。 */
-  const variant = usePrototypeVariant();
   const queueRef = useRef<HTMLElement>(null);
   const now = Date.now();
 
   const stats = useMemo(() => issueDeliveryBreakdown(issues), [issues]);
+  const featureRows = useMemo(() => issueFeatureRows(issues), [issues]);
+  // 每特性一次率:按 stats 端点 per_session 明细(完成交付全集)归到
+  // 特性;总账表列与头部瓦片同一口径,分母 0 显示 —。
+  const featureOnceRates = useMemo(() => issueFeatureOnceRates(
+    issues, onceRates?.per_session ?? [],
+  ), [issues, onceRates]);
   // 现场队列只收处理中的会话:已闭环/已取消都只进档案(与需求侧
   // isCurrentTeamTask 的现场口径同构)——概览格计数(active)与队列行数
   // 因此严格一致,点格见几行就是几行。
@@ -116,8 +206,6 @@ export function TeamIssueWorld({ issues, onceRates }: {
 
   // 一次率二轴瓦片:数字只来自端点(rate=null=分母 0,显示 —);
   // hover 给分子/分母与口径一句话(与既有 title 提示同款,不养弹层)。
-  const rateText = (rate: number | null | undefined): string =>
-    rate == null ? "—" : `${rate}%`;
   const onceRateTitle = (axis: "localization" | "repair"): string => {
     if (!onceRates) return "一次率统计暂不可用";
     const passed = onceRates[axis].passed;
@@ -137,10 +225,9 @@ export function TeamIssueWorld({ issues, onceRates }: {
           ? issue.status === "waiting_user" || issue.status === "idle"
           : issue.status === status)) return false;
       } else if (cell.startsWith("f:")) {
-        if (moduleOf(issue) !== cell.slice(2)) return false;
+        if (issueFeatureKey(issue) !== cell.slice(2)) return false;
       } else if (issue.stage !== cell.slice(2)) return false;
     }
-    if (feature && moduleOf(issue) !== feature) return false;
     if (scope !== "all" && !inScope(issue, scope, now)) return false;
     if (owner && issue.account !== owner) return false;
     if (needle) {
@@ -150,8 +237,8 @@ export function TeamIssueWorld({ issues, onceRates }: {
     }
     return true;
     // now 刻意不进依赖:筛选语义跟渲染帧走,与需求侧同款(每次渲染重算)。
-  }), [active, cell, feature, scope, owner, needle]);
-  const anyFilter = Boolean(cell || feature || query || scope !== "all" || owner);
+  }), [active, cell, scope, owner, needle]);
+  const anyFilter = Boolean(cell || query || scope !== "all" || owner);
 
   /** 点概览格:选中/取消 + 联动滚动到队列(与需求侧 selectPhase 同款)。 */
   function selectCell(next: string) {
@@ -181,22 +268,11 @@ export function TeamIssueWorld({ issues, onceRates }: {
   );
 
   return <>
-    {/* 按特性分类原型(仅 dev + ?variant=A|B|C 现身,生产恒走默认概览;
-        胜出变体定稿后折入默认概览并删除 TeamIssueWorld.prototype.tsx)。 */}
-    {variant === "A" && <PrototypeVariantCells issues={issues} stats={stats}
-      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
-    {variant === "B" && <PrototypeVariantMatrix issues={issues} stats={stats}
-      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
-    {variant === "C" && <PrototypeVariantDrilldown issues={issues}
-      onceRates={onceRates} feature={feature} onSelectFeature={setFeature}
-      cell={cell} onSelectCell={selectCell} />}
-    {variant === "D" && <PrototypeVariantLedger issues={issues} stats={stats}
-      onceRates={onceRates} cell={cell} onSelectCell={selectCell} />}
-    {!variant && <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
+    <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
       <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
         <div className="grid min-w-0 gap-[3px]">
           <h2 className="m-0 text-lg text-text-strong">问题处理概览</h2>
-          <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消会话仅保留在成果档案。</p>
+          <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
           aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}`}>
@@ -216,6 +292,9 @@ export function TeamIssueWorld({ issues, onceRates }: {
         </div>
       </header>
       <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
+        <FeatureLedger rows={featureRows} stats={stats} cell={cell}
+          onSelectCell={selectCell} onceRates={onceRates}
+          featureOnceRates={featureOnceRates} />
         <section aria-labelledby="issue-delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
           <div className="grid gap-0.5"><strong id="issue-delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
             <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>
@@ -231,8 +310,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
           </div>
         </section>
       </div>
-    </section>}
-    {variant && <IssuePrototypeSwitcher current={variant} />}
+    </section>
 
     <section className="mt-1" id="team-issue-queue" ref={queueRef}
       aria-labelledby="team-issue-queue-title">
@@ -272,7 +350,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
         </Select>
         {anyFilter && <button type="button"
           className="h-[34px] cursor-pointer rounded-[7px] border-0 bg-primary/10 px-[11px] text-[13px] font-bold text-primary"
-          onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); setFeature(""); }}>
+          onClick={() => { setQuery(""); setScope("all"); setOwner(""); setCell(""); }}>
           清除筛选</button>}
       </div>
       {visible.length === 0 && <Empty className="py-11" role="status">
