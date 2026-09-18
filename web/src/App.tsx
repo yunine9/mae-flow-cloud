@@ -1459,7 +1459,7 @@ export function App() {
 
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
-          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加文档"}</Button>}
+          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加知识"}</Button>}
           {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
           {relevantWaiting > 0 && view !== "users" && view !== "settings" && (
             <div className="flex h-8 items-center gap-2 whitespace-nowrap rounded-[8px] border border-(--attention)/10 bg-(--attention-soft) pl-[9px] pr-2.5 text-sm font-medium text-(--attention)">

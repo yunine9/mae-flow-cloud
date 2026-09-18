@@ -3,12 +3,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Select,
   SelectTrigger,
   SelectValue,
@@ -126,7 +120,7 @@ export function ComponentResearch({
     };
   }, [open]);
   useEffect(() => {
-    if (!open || !selected || selected === "new") return;
+    if (!open || !selected || ["new", "history"].includes(selected)) return;
     let active = true;
     const refresh = async () => {
       try {
@@ -191,16 +185,12 @@ export function ComponentResearch({
     }
   }
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) onClose();
-      }}
-    >
-      <DialogContent className="tw-root w-[1280px] sm:max-w-[94vw] h-[88vh] flex flex-col gap-4 overflow-hidden">
-        <DialogHeader>
-          <DialogTitle>组件知识萃取</DialogTitle>
-        </DialogHeader>
+    <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-white p-6" aria-label="源码萃取工作区">
+        <header className="flex items-center gap-4 border-b border-line pb-4">
+          <Button variant="outline" onClick={onClose}>← 返回知识库</Button>
+          <h2 className="text-xl font-semibold">源码萃取</h2>
+          <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>
+        </header>
         <div className="grid grid-cols-[280px_1fr] min-h-0 flex-1 gap-5">
           <aside className="overflow-auto border-r border-line pr-4">
             <Button
@@ -218,7 +208,7 @@ export function ComponentResearch({
                 key={r.id}
                 className={`mb-2 w-full rounded-lg border p-3 text-left ${selected === r.id ? "border-primary bg-primary/5" : "border-line"}`}
                 onClick={() => {
-                  setDetail(r);
+                  setDetail(undefined);
                   selectRecord(r.id);
                   setError("");
                 }}
@@ -240,7 +230,7 @@ export function ComponentResearch({
                 {error}
               </p>
             )}
-            {!current ? (
+            {!selected || selected === "history" ? <div className="p-8 text-muted-foreground">选择一条萃取记录查看进度与草稿，或发起新的萃取。</div> : selected !== "new" && !current ? <p className="p-8" role="status">正在加载萃取记录…</p> : !current ? (
               <div className="mx-auto grid max-w-2xl gap-5 py-4">
                 <h2 className="text-xl font-semibold">
                   从真实源码中提炼开发范式
@@ -476,7 +466,6 @@ export function ComponentResearch({
             )}
           </main>
         </div>
-      </DialogContent>
-    </Dialog>
+    </section>
   );
 }

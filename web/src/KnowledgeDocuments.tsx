@@ -26,6 +26,8 @@ const repositoryLabel = (source: NonNullable<KnowledgeDocument["source"]>) => {
 const languageLabel = knowledgeLanguageLabel;
 export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, category, onCategoryChange }: { category: "documents" | "skills"; onCategoryChange: (category: "documents" | "skills") => void; uploadRequest?: number; onOpenTask: (taskId: string) => void; onManage: (focus?: KnowledgeAssetFocus) => void }) {
   const [researchOpen,setResearchOpen]=useState(new URLSearchParams(location.search).has("componentResearch"));
+  const [addOpen, setAddOpen] = useState(false);
+  const [importSource, setImportSource] = useState("upload");
   const [nativeUpload, setNativeUpload] = useState(false);
   const [editingExternal, setEditingExternal] = useState(false);
   const [rows, setRows] = useState<KnowledgeDocument[]>([]), [selected, setSelected] = useState("");
@@ -38,7 +40,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
     if (uploadRequest !== lastUploadRequest.current) {
       lastUploadRequest.current = uploadRequest;
       if (category === "skills") setNativeUpload(true);
-      else setForm("upload");
+      else setAddOpen(true);
     }
   }, [uploadRequest]);
   const [modules, setModules] = useState<BusinessModule[]>([]);
@@ -75,12 +77,20 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
       await refresh();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
+  function openResearch(id: string) {
+    const url = new URL(location.href);
+    url.searchParams.set("componentResearch", id);
+    url.searchParams.delete("component");
+    history.replaceState(history.state, "", url);
+    setAddOpen(false); setResearchOpen(true);
+  }
+  if (researchOpen && !addOpen) return <><ComponentResearch open={researchOpen} onClose={()=>{setResearchOpen(false);const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);}} onAdopt={id=>{const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);setResearchOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");void refresh();setSelected(id);}} /></>;
   return <div className="knowledge-documents">
     <header className="kd-toolbar">
       <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder={category === "skills" ? "搜索 Skill 名称" : "搜索文档名称"} value={term} onChange={e => setTerm(e.target.value)} /></div>
       <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
 
-      {category === "documents" && <Button variant="outline" onClick={()=>setResearchOpen(true)}>萃取知识</Button>}
+
       <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
@@ -89,6 +99,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
         <button type="button" aria-pressed={category === "documents"} onClick={() => onCategoryChange("documents")}><FileText size={18} />文档<span>{rows.filter(r => r.form !== "skill").length}</span></button>
         <button type="button" aria-pressed={category === "skills"} onClick={() => onCategoryChange("skills")}><Blocks size={18} />Skill<span>{rows.filter(r => r.form === "skill").length}</span></button>
       </nav>
+        {category === "documents" && <Button variant="ghost" className="m-3 justify-start" onClick={() => openResearch("history")}>源码萃取记录 · 查看进度与草稿 →</Button>}
         <div className="kd-doc-list">{visible.map(item => <button key={item.id} className={`kd-doc-row ${selected === item.id ? "selected" : ""}`} onClick={() => setSelected(item.id)}>
           {item.form === "skill" ? <Blocks size={29} className="kd-file-icon" /> : <FileText size={29} className="kd-file-icon" />}<span className="kd-doc-info"><strong title={item.title}>{item.title}</strong>{item.source && <><small className="kd-source-path" title={item.source.path}>{item.source.path}</small><small className="kd-source-path" title={`${item.source.repository} · ${item.source.branch}`}>{repositoryLabel(item.source)}</small></>}<small>{scopeLabel(item, modules)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
           <span className={`kd-status ${item.indexing?.state}`}>{labels[item.indexing?.state ?? "queued"]}</span>
@@ -106,14 +117,17 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
         {tab === "history" && <div className="kd-history">{[...doc.history].reverse().map((entry, i) => <div key={i}><strong>{entry.action}</strong><span>{entry.operator}</span><time>{new Date(entry.at).toLocaleString()}</time></div>)}</div>}
       </>}</section>
     </div>
-    <ComponentResearch open={researchOpen} onClose={()=>{setResearchOpen(false);const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);}} onAdopt={id=>{const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("component");history.replaceState(history.state,"",url);setResearchOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");void refresh();setSelected(id);}} />
+
     <KnowledgeTrial open={trialOpen} onClose={()=>setTrialOpen(false)} onOpenDocument={id=>{setTrialOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");setTab("content");setSelected(id);}} />
-    {form && <DocumentForm mode={form} doc={form === "upload" ? undefined : doc} modules={modules} onClose={() => setForm(undefined)} onSaved={async saved => { setForm(undefined); await refresh(); setSelected(saved.id); setDoc(saved);  }} />}
+    <Dialog open={addOpen} onOpenChange={setAddOpen}><DialogContent className="tw-root sm:max-w-[640px]"><DialogHeader><DialogTitle>添加知识</DialogTitle></DialogHeader><div className="grid gap-3 py-3">
+      {[["upload", "上传文档", "上传已有的 Markdown 手册、规范或组件指南"], ["repository", "从 CodeHub 导入", "浏览仓库，选择文档或文件夹"], ["research", "从源码萃取", "阅读组件源码与真实调用，提炼可审查的知识草稿"]].map(([value, title, description]) => <button key={value} type="button" className="rounded-xl border border-line p-5 text-left hover:border-primary hover:bg-primary/5" onClick={() => { if (value === "research") openResearch("new"); else { setImportSource(value); setAddOpen(false); setResearchOpen(false); const url = new URL(location.href); url.searchParams.delete("componentResearch"); url.searchParams.delete("component"); history.replaceState(history.state,"",url); setForm("upload"); } }}><strong className="block text-lg">{title} →</strong><span className="mt-2 block text-muted-foreground">{description}</span></button>)}
+    </div></DialogContent></Dialog>
+    {form && <DocumentForm initialSource={importSource} mode={form} doc={form === "upload" ? undefined : doc} modules={modules} onClose={() => setForm(undefined)} onSaved={async saved => { setForm(undefined); await refresh(); setSelected(saved.id); setDoc(saved);  }} />}
   </div>;
 }
 
-function DocumentForm({ mode, doc, modules, onClose, onSaved }: { mode: string; doc?: KnowledgeDocument; modules: BusinessModule[]; onClose: () => void; onSaved: (doc: KnowledgeDocument) => void }) {
-  const [source, setSource] = useState(doc?.source ? "repository" : "upload"), [title, setTitle] = useState(doc?.title ?? "");
+function DocumentForm({ initialSource = "upload", mode, doc, modules, onClose, onSaved }: { initialSource?: string; mode: string; doc?: KnowledgeDocument; modules: BusinessModule[]; onClose: () => void; onSaved: (doc: KnowledgeDocument) => void }) {
+  const [source, setSource] = useState(doc?.source ? "repository" : initialSource), [title, setTitle] = useState(doc?.title ?? "");
   const [content, setContent] = useState<string>(), [filename, setFilename] = useState("");
   const [scope, setScope] = useState(doc?.scope ?? "platform"), [moduleIds, setModuleIds] = useState(doc?.module_ids ?? []);
   const [repositories, setRepositories] = useState(doc?.repositories.join("\n") ?? ""), [language, setLanguage] = useState(doc?.technologies ?? []);
