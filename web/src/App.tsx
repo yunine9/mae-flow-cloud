@@ -29,7 +29,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  createUser, deleteUser, getBuildInfo, getIssueOnceRates, getKnowledgeInsights, getLaunchOptions, getSession, getTask, listAllIssues, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getBuildInfo, getIssueOnceRates, getKnowledgeInsights, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
   type AuthUser, type IssueOnceRate, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
@@ -716,6 +716,10 @@ export function App() {
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
+  // 本人问题列表(GET /issues,服务端按「归属或登记人是自己」过滤,
+  // ADR-0031):只喂侧栏「问题处理」父行徽章。admin 的同名请求返回的
+  // 是全量(服务端只对非 admin 收窄),与 teamIssues 重复,故 admin 不拉。
+  const [myIssues, setMyIssues] = useState<IssueSummary[]>([]);
   // 一次率二轴(团队问题页签统计块):旁栏数据,拿不到保留上次结果,
   // 缺席时统计格显示 —(与问题列表同一条 allSettled 容错纪律)。
   const [issueOnceRates, setIssueOnceRates] = useState<IssueOnceRate>();
@@ -921,10 +925,14 @@ export function App() {
         // 问题是旁栏,哪一路失败就保留上次结果。原来 Promise.all 捆在一起,
         // 问题流没启用的部署(试跑器现场、最小部署)/issues 一律 404,整页永远
         // "数据更新中断、尚未取得任务数据"(2026-09-06 用户在演练现场实锤)。
-        const [tasksResult, reviewsResult, issuesResult, onceRatesResult]
-          = await Promise.allSettled([
-            listTasks(), listMyReviews(), listAllIssues(), getIssueOnceRates(),
-          ]);
+        // 本人问题列表也是旁栏,且只对开发成员拉:admin 的 GET /issues 返回
+        // 全量,与 scope=all 重复,徽章又不挂 admin(见 IssueNavGroup)。
+        const [tasksResult, reviewsResult, issuesResult, onceRatesResult,
+          myIssuesResult] = await Promise.allSettled([
+          listTasks(), listMyReviews(), listAllIssues(), getIssueOnceRates(),
+          session?.role === "admin"
+            ? Promise.resolve<IssueSummary[]>([]) : listIssues(),
+        ]);
         if (tasksResult.status === "rejected") throw tasksResult.reason;
         setTasks(tasksResult.value.sort(byUrgency));
         if (reviewsResult.status === "fulfilled") setMyReviews(reviewsResult.value);
@@ -932,6 +940,7 @@ export function App() {
         if (onceRatesResult.status === "fulfilled") {
           setIssueOnceRates(onceRatesResult.value);
         }
+        if (myIssuesResult.status === "fulfilled") setMyIssues(myIssuesResult.value);
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
@@ -1114,6 +1123,12 @@ export function App() {
   // 团队问题徽章与「等你答复」同口径(idle 归一进待答复,与问题处理页一致)。
   const issueWaitingCount = teamIssues.filter((issue) =>
     issue.status === "waiting_user" || issue.status === "idle").length;
+  // 「问题处理」父行徽章=名下进行中的问题数:归属或登记人是自己(GET
+  // /issues 与列表页同一份数据),未收口(非归档/非取消),与页内默认
+  // 筛选项「进行中」共用 isIssueActive 同一判定。admin 只读围观不推进
+  // 问题,不挂徽章。
+  const myActiveIssueCount = myIssues
+    .filter((issue) => isIssueActive(issue.status)).length;
   const myTasks = [...assignedToMe, ...discussingWithMe];
   const myWaiting = myTasks.filter((task) => task.status === "waiting_for_human");
   const pendingReviews = myReviews.filter((review) => review.status === "pending"
@@ -1404,7 +1419,7 @@ export function App() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <NavButton view="mine" current={view} onSelect={selectView} label="我的需求" badge={personalActionItems.length} />
-                <IssueNavGroup view="issues" current={view}
+                <IssueNavGroup view="issues" current={view} badge={myActiveIssueCount}
                   childTab={activeIssueChild} onSelectChild={selectIssueChild}
                   onSelect={selectView} />
                 <NavButton view="profile" current={view} onSelect={selectView} label="个人设置" />
@@ -1790,8 +1805,10 @@ function CommitterInbox({
  * /DTS列表/问题会话;admin 只见问题会话)。2026-09-11 迁到 Sidebar 菜单
  * 语言:父行 SidebarMenuButton,子行 SidebarMenuSub/SubButton——nova 皮
  * 与令牌桥自动生效,不再依赖 nav-item 家族与手工缩进类。进入问题处理
- * 视图自动展开(深链同理)。 */
-function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, onSelect }: {
+ * 视图自动展开(深链同理)。徽章只属开发侧:名下进行中的问题数,口径见
+ * myActiveIssueCount;admin 只读围观不挂。导出供 SSR 视觉验收渲染真件
+ * (先例:buildPersonalActionItems 为测试导出)。 */
+export function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, onSelect, badge = 0 }: {
   view: View;
   current: View;
   /** admin 只见「问题会话」子页签(不发起,登记入口不渲染)。 */
@@ -1799,6 +1816,7 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
   childTab: IssueChildTab;
   onSelectChild: (tab: IssueChildTab) => void;
   onSelect: (view: View) => void;
+  badge?: number;
 }) {
   const [open, setOpen] = useState(current === view);
   useEffect(() => {
@@ -1820,8 +1838,15 @@ function IssueNavGroup({ view, current, admin = false, childTab, onSelectChild, 
         if (next && current !== view) onSelect(view);
       }}>
       <NavIcon name={view} /><span>问题处理</span>
-      <ChevronDown aria-hidden
-        className={`ml-auto transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+      {/* 徽章珠与展开箭头编成一组靠行尾(ml-auto 落在组上):有徽章时珠
+          贴在箭头左侧,右缘与 NavButton 的行尾珠基本对齐;无徽章时组里
+          只剩箭头,行为与从前一致。珠样式与 NavButton 同款。 */}
+      <span className="ml-auto flex items-center gap-1.5">
+        {badge > 0
+          && <span className="inline-grid h-[18px] min-w-[18px] place-items-center rounded-full bg-(--attention-soft) px-[5px] text-xs font-semibold leading-none tabular-nums text-(--attention)">{badge}</span>}
+        <ChevronDown aria-hidden
+          className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+      </span>
     </SidebarMenuButton>
     {open && <SidebarMenuSub>
       {children.map((child) => {
