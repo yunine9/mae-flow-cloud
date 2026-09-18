@@ -7,11 +7,11 @@ import { Button } from "@/components/ui/button";
  * 工作台;任务行照旧按钮 + onOpen 页内打开。两种形态共用 task-overview-open
  * 版式(该类自带按钮复位,锚点直接可用),文本装饰由调用侧收口。 */
 export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
-  updatedAt, detail, child = false, focused = false, issue = false, onOpen, href,
+  updatedAt, timeLabel = "最近更新", detail, child = false, focused = false, issue = false, onOpen, href,
   attention = false, childCount = 0, parentId, parentLabel, parentTitle, onOpenParent,
 }: {
   id: string; ticket?: string; title: string; status: string; statusLabel: string;
-  owner?: string; updatedAt: string; detail?: string; child?: boolean;
+  owner?: string; updatedAt: string; timeLabel?: string; detail?: string; child?: boolean;
   focused?: boolean; issue?: boolean; onOpen?: () => void; href?: string;
   attention?: boolean;
   childCount?: number; parentId?: string; parentLabel?: string; parentTitle?: string; onOpenParent?: () => void;
@@ -40,7 +40,7 @@ export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
       <strong className="task-overview-title" title={title}>{child && <small>子任务 · </small>}{issue && <small>问题 · </small>}{title}</strong>
       <span className={`task-overview-status ${status}`} title={detail || statusLabel}><i aria-hidden />{statusLabel}</span>
       <span className="task-overview-owner" title={`负责人：${owner ?? "未分配"}`}><PersonName account={owner} /></span>
-      <time className="task-overview-time" dateTime={updatedAt} title={formatLocalDateTime(updatedAt)}>{relativeTime(updatedAt) || "刚刚"}</time>
+      <time className="task-overview-time" dateTime={updatedAt} title={`${timeLabel}：${formatLocalDateTime(updatedAt)}`}>{relativeTime(updatedAt) || "刚刚"}</time>
       <span className="task-overview-arrow" aria-hidden>›</span>
     </OpenTag>
     <span className="task-overview-relation">

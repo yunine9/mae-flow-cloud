@@ -165,7 +165,10 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
   const moduleNames = new Map(modules.map(module => [module.id, module.name]));
   const parentIds = new Set(tasks.map(t => t.parent_task_id).filter(Boolean));
   const names = new Map(tasks.map(t => [t.id, t.title || t.requirement.split("\n")[0]]));
-  return { generated_at: new Date().toISOString(), rows: tasks
+  return { generated_at: new Date().toISOString(),
+    task_tokens: tasks.filter(task => task.origin !== "issue").map(task => ({ id: task.id, parent_id: task.parent_task_id,
+      usage: task.token_usage ? { input_tokens: task.token_usage.input_tokens, output_tokens: task.token_usage.output_tokens, total_tokens: task.token_usage.total_tokens } : undefined })),
+    rows: tasks
     .filter(task => task.origin !== "issue" && !parentIds.has(task.id))
     .map(task => {
       let root: TaskSummary | undefined = task;

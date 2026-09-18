@@ -38,7 +38,12 @@ export interface DeliveryAnalysisRow {
   metric?: DeliveryCodeMetric;
   unavailable?: string;
 }
+export interface DeliveryTaskTokens {
+  id: string; parent_id?: string;
+  usage?: { input_tokens: number; output_tokens: number; total_tokens: number };
+}
 export interface DeliveryAnalysisReport {
+  task_tokens?: DeliveryTaskTokens[];
   generated_at: string;
   rows: DeliveryAnalysisRow[];
 }

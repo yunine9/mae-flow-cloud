@@ -1,3 +1,4 @@
+import { taskProgressTimestamp } from "../../src/taskProgressTime";
 import { instantMs } from "./time";
 
 /** 问题会话摘要的"自包含投影":只取适配所需的稳定字符串字段,与
@@ -158,7 +159,7 @@ export function needsAction(task: TeamTask): boolean {
 
 export function progressAgeMs(task: TeamTask, now = Date.now()): number {
   const at = instantMs(
-    task.last_progress_at ?? task.updated_at ?? task.created_at,
+    taskProgressTimestamp(task),
   );
   return Number.isFinite(at) ? Math.max(0, now - at) : 0;
 }

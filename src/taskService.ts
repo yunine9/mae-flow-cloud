@@ -1,3 +1,4 @@
+import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import { ComponentResearch } from "./componentResearch.ts";
 import { runComponentResearch } from "./componentResearchAgent.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
@@ -2704,7 +2705,7 @@ export class TaskService {
   deliveryAnalysis(retry = false) {
     for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
       observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
-    return buildDeliveryAnalysis([...this.tasks.values()].map(task => task.summary), listBusinessModules(this.options.dataDir).modules);
+    return buildDeliveryAnalysis([...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) })), listBusinessModules(this.options.dataDir).modules);
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
@@ -3858,8 +3859,7 @@ export class TaskService {
       ...(queueIndex >= 0 ? { queue_position: queueIndex + 1 } : {}),
       title: summary.title ?? taskTitle(summary.requirement),
       updated_at: summary.updated_at ?? summary.created_at,
-      last_progress_at: summary.last_progress_at
-        ?? summary.updated_at ?? summary.created_at,
+      last_progress_at: taskProgressTimestamp(summary),
       notify: record
         ? {
             delivered: record.delivered,
@@ -4391,11 +4391,15 @@ export class TaskService {
           ? Number(pulse.revision) : undefined,
         ...(milestone ? { milestone } : {}),
       };
+      if (progressAdvanced(task.progressCache, progress)) {
+        const at = Math.max(lstatSync(pulsePath).mtimeMs, milestone ? lstatSync(milestonePath).mtimeMs : 0);
+        if (at > Date.parse(task.summary.last_progress_at ?? task.summary.created_at)) {
+          task.summary.last_progress_at = new Date(at).toISOString();
+          this.writeTaskState(task);
+        }
+      }
       task.progressPulse = progressSource;
       task.progressCache = progress;
-      const now = new Date().toISOString();
-      task.summary.last_progress_at = now;
-      task.summary.updated_at = now;
       return progress;
     } catch (error) {
       this.options.log?.(
