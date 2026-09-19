@@ -8,6 +8,19 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   operator: string, readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
+    if (id === "consolidation") {
+      const manager=service.getKnowledgeConsolidation();
+      if(request.method==="GET")return json(response,200,manager.view());
+      if(request.method==="POST") {
+        const body=await readBody(request,3*1024*1024);
+        const action=parts[2];
+        if(action==="run"||action==="retry")return json(response,202,manager.start(operator));
+        if(action==="stop")return json(response,200,manager.stop());
+        if(action==="settings")return json(response,200,manager.settings(body,operator));
+        if(parts[3]&&["edit","adopt","discard","withdraw"].includes(parts[3]))return json(response,200,manager.act(action,parts[3],body,operator));
+      }
+      return json(response,404,{error:"未知知识整理操作"});
+    }
     if (request.method === "POST" && id === "export" && parts.length === 2) {
       const body = await readBody(request, 256 * 1024);
       const archive = exportKnowledge(dir, body.ids);
@@ -56,7 +69,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       const documents = catalog.documents.map(({ content, ...doc }) => {
         const asset = catalog.assets.find(a => a.id === doc.id);
         return { ...doc, lines: content.split("\n").length, indexing: doc.form === "skill" ? { state: "native" } : !doc.active ? { state: "disabled" }
-          : asset ? service.getKnowledgeSearch().documentStatus(asset) : { state: "failed", error: "适用模块已停用，请调整范围。" } };
+          : asset ? service.getKnowledgeSearch().documentStatus(asset) : catalog.sourceIds.has(doc.id) ? { state: "source", error: "原始资料保留；检索使用已采纳专题或当前有效来源。" } : { state: "failed", error: "适用模块已停用，请调整范围。" } };
       });
       return json(response, 200, { documents });
     }

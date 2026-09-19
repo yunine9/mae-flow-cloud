@@ -9,6 +9,7 @@ import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
 import { listKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 export function knowledgeDocumentCatalog(dir: string) {
   const catalog = collectSearchableKnowledge(dir, { repo: "", repositories: [], moduleIds: [] }, true);
+  const raw = collectSearchableKnowledge(dir, {repo:"",repositories:[],moduleIds:[]},true,true);
   const manuals = listKnowledgeDocuments(dir);
   const manualIds = new Set(manuals.map(d => d.id));
   // 技能仅在管理界面展示，消费仍走原生发现/加载；不进入语义索引。
@@ -30,7 +31,7 @@ export function knowledgeDocumentCatalog(dir: string) {
       } catch { /* 由原模块管理入口展示读取错误。 */ }
     }
   }
-  const external = [...catalog.assets, ...skills].filter(a => !manualIds.has(a.id)).map(asset => {
+  const external = [...new Map([...raw.assets,...catalog.assets,...skills].map(a=>[a.id,a])).values()].filter(a => !manualIds.has(a.id)).map(asset => {
     const digest = createHash("sha256").update(asset.content).digest("hex");
     const [origin, first, second] = asset.id.split(":");
     const focus = origin === "module" ? { kind: "business", moduleId: first, assetId: second, version: Number(asset.revision), digest }
@@ -38,8 +39,8 @@ export function knowledgeDocumentCatalog(dir: string) {
       : origin === "team" ? { kind: "engineering", candidateId: first, digest: asset.revision } : undefined;
     return { id: asset.id, title: asset.title, content: asset.content, revision: asset.revision,
       scope: (asset.scope.startsWith("业务模块") ? "module" : asset.scope.startsWith("代码仓") ? "repository" : "platform") as KnowledgeDocument["scope"],
-      scope_label: asset.scope, module_ids: [], repositories: [], technologies: [], product_versions: asset.productVersions,
+      scope_label: asset.scope, module_ids: asset.applicability?.modules ?? [], repositories: asset.applicability?.repositories ?? [], technologies: asset.applicability?.languages ?? [], product_versions: asset.productVersions,
       when_to_use: asset.whenToUse, active: true, history: [], form: asset.kind, external: true, focus };
   });
-  return { assets: catalog.assets, documents: [...manuals.map(d => ({ ...d, form: "document", external: false, focus: undefined, scope_label: undefined })), ...external] };
+  return { assets: catalog.assets, sourceIds: new Set(raw.assets.map(a=>a.id)), documents: [...manuals.map(d => ({ ...d, form: "document", external: false, focus: undefined, scope_label: undefined })), ...external] };
 }

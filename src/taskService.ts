@@ -1,3 +1,5 @@
+import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
+import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
 import { DeliveryExperiences } from "./deliveryExperience.ts";
 import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
@@ -2088,6 +2090,8 @@ export class TaskService {
       this.memorySweepTimer.unref?.();
     }, 30_000);
     this.memorySweepTimer.unref?.();
+    try { this.getKnowledgeConsolidation().startScheduler(); }
+    catch(error) { this.options.log?.(`知识整理暂不可用，任务照常运行：${String(error)}`); }
     // 被彻底删除的最高编号不能在重启后复用；否则旧通知/浏览器收藏会
     // 悄悄指向一张毫不相关的新任务。水位单独留在 dataDir，不属于任
     // 何任务历史，因此硬删除不会碰它。
@@ -2465,7 +2469,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "knowledge-consolidation", role: "知识整理", work: this.knowledgeConsolidation?.shutdown() ?? Promise.resolve() }, { taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -5732,6 +5736,19 @@ export class TaskService {
     this.bypass(undefined, "任务泵", this.pump());
   }
 
+  private knowledgeConsolidation?: KnowledgeConsolidation;
+  getKnowledgeConsolidation(): KnowledgeConsolidation {
+    return this.knowledgeConsolidation ??= new KnowledgeConsolidation(this.options.dataDir,
+      input => runKnowledgeConsolidationAgent(input, {choice:this.activeModelChoice(),json:this.resolvedModels().json},
+        async query => (await this.getKnowledgeSearch().searchLibrary(query)).hits.map(h=>h.id)),
+      () => this.prepareKnowledgeIndex(), this.options.log, async job => {
+        if(!this.options.notifier)return;
+        const receipt=await this.options.notifier.notifyOutcome({taskId:job.id,account:job.operator,status:"知识整理草稿已生成",
+          summary:`已整理出 ${job.topics.length} 篇专题草稿，请审查来源、适用条件和冲突，可编辑后采纳。`,
+          link:`${(this.notificationLinkBase()??"").replace(/\/$/,"")}/?knowledgeDocuments=1&knowledgeConsolidation=${job.topics[0]}`});
+        if(!receipt.delivered)throw new Error(receipt.last_error||"通知未送达");
+      });
+  }
   private componentResearch?: ComponentResearch;
   getComponentResearch(): ComponentResearch {
     return this.componentResearch ??= new ComponentResearch(this.options.dataDir, input => runComponentResearch(input, {
