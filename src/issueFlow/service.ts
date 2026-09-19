@@ -1228,14 +1228,26 @@ export class IssueFlowService {
   get(id: string): IssueSummary & {
     waiting?: WaitingRecord;
     has_analysis: boolean;
+    /** 一次结果章(会话卡片呈现):只在「有单+修复完成归档」上出——
+     *  与团队页两轴同一判定(经 onceRateFacts 终态优先读冻结快照,
+     *  口径一处两用);无单、取消、失败、非问题收口不适用,字段缺席
+     *  即不渲染,避免给没有修复旅程的会话误发「一次修复」章。 */
+    once_outcome?: IssueOnceOutcome;
   } {
     const live = this.require(id);
+    const { state } = live;
+    const onceEligible = Boolean(state.ticket?.trim())
+      && state.status === "archived"
+      && state.conclusion?.kind === "delivered";
     return {
       ...this.project(live),
       // Agent 卡选项投影时派决策码(前端认码不认文案);平台闸的卡
       // 自带 GATE_OPTIONS 的码,原样在 state.gate 里。
       waiting: withAgentOptionCodes(live.humanGate.pending()[0]),
       has_analysis: existsSync(join(live.root, "issue-analysis.md")),
+      ...(onceEligible
+        ? { once_outcome: issueOnceOutcome(this.onceRateFacts(live)) }
+        : {}),
     };
   }
 
