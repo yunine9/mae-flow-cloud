@@ -177,6 +177,7 @@ import {
   analysisSectionOf,
   createIssueTools,
   expectedBranch,
+  type IssueMrRecheck,
   type IssueToolContext,
 } from "./tools.ts";
 import {
@@ -3439,6 +3440,9 @@ export class IssueFlowService {
       notifyMrGreen: () => {
         this.watchMergeStates(live);
       },
+      // MR 状态复核(#321):验绿门与监看器终态处理共用同一私有判断
+      //(recheckMrForSettle),两边口径不漂移。
+      mrRecheck: (repo, sha) => service.recheckMrForSettle(live, repo, sha),
       // 单卡互斥②(ADR-0024):有未决 Agent 卡时 raise_gate 拒举。
       pendingAgentCard: () => live.humanGate.pending().length > 0,
       log: (message) => this.log(message),
@@ -4763,6 +4767,12 @@ export class IssueFlowService {
       }
       return true;
     };
+    // 每轮固定顺序(#321 固化):先经合入状态循环对齐检查目标,再查
+    // 流水线。两条循环各自每拍轮询、并行在跑,"先对齐、后查结果"的
+    // 顺序由两道保证成立:监看的每个启动点(建 MR、同分支再推送、
+    // 重启恢复、跟随切换本身)都先挂合入状态循环再挂流水线监看;终态
+    // 结果动手前还有一道 MR 状态复核(settlePipeline,与验绿门共用
+    // 同一判断)兜住两循环之间的窗口——顺序不依赖时序巧合。
     // 触发(假件必须显式触发;真件幂等无害)。触发响应可能已是终态。
     try {
       const first = (await triggerPipeline(call())).runs.at(-1);
@@ -5471,6 +5481,42 @@ export class IssueFlowService {
       JSON.stringify(outbox, null, 1), "utf-8");
   }
 
+  /** MR 状态复核(#321,赛跑防护):红/绿终态处理动手前与验绿门申报
+   *  放行共用这一查(一处判断、两处使用,两边口径不漂移)——与
+   *  syncMergeFacts 同一个 /mr/gates 查询,现问平台「MR 是否已合入、
+   *  源分支最新提交是哪个」。依据:旧提交的流水线被平台取消,必然是
+   *  「分支头变了/合入了」引起的,终态结果出现之后现查 MR 状态,看到
+   *  的一定是真相(issue-107)——这关上「旧提交的取消红被当成真失败
+   *  派出修复」的赛跑窗口。返回 undefined=查询不可得(平台未配置/
+   *  网络抖动/老适配层):复核是防赛跑的加法,查询失败不许变成新的
+   *  死路,调用方按既有口径继续。 */
+  private async recheckMrForSettle(
+    live: LiveIssue,
+    repo: string,
+    sha: string,
+  ): Promise<IssueMrRecheck | undefined> {
+    const mr = live.state.mrs?.find((item) => item.repo === repo);
+    if (!this.options.platformUrl || !mr) return undefined;
+    const view = await fetchMrGates({
+      platformUrl: this.options.platformUrl,
+      repo: mr.repo,
+      headers: pipelineHeaders(
+        this.options.gitCredential?.(live.state.account)),
+      delivery: {
+        source_branch: mr.branch,
+        target_branch: mr.target ?? "master",
+        ...(mr.url ? { mr_url: mr.url } : {}),
+        ...(mr.iid !== undefined ? { mr_id: mr.iid } : {}),
+      },
+    });
+    if (!view) return undefined;
+    return {
+      mrState: view.mrState,
+      ...(view.sourceSha ? { sourceSha: view.sourceSha } : {}),
+      headMoved: Boolean(view.sourceSha && view.sourceSha !== sha),
+    };
+  }
+
   private async settlePipeline(
     live: LiveIssue,
     repo: string,
@@ -5483,6 +5529,60 @@ export class IssueFlowService {
     if (isTerminal(state.status)) return;
     const watch = state.pipelines?.[repo];
     if (watch?.sha !== sha) return;
+    // ---- 最终结果动手前复核 MR 状态(#321,赛跑防护,issue-107)----
+    // 红或绿的最终结果都是「记账并触发动作」的扳机,扣扳机之前现查
+    // 一次 MR 状态(低频:每个提交只在拿到最终结果时复核一次):
+    // - 已合入:红灯不作失败处理(不派修复回合、不进修复预算账、不举
+    //   卡)——合入即交付,归档路(合入状态循环里的自动归档)接管;
+    //   绿灯照常收口,收口后归档路自然接上。
+    // - 分支头已变:这次结果整个丢弃、不触发任何动作——检查目标跟随
+    //   分支最新提交(ADR-0041,合入状态循环每拍在跑)自会接管,只记
+    //   一笔转移账。
+    // - 都对得上(或查询不可得):照常处理,与既有行为全等。
+    const recheck = await this.recheckMrForSettle(live, repo, sha);
+    // 复核是一场网络往返:期间检查目标可能已被跟随切换换走——换走了
+    // 就说明切换已接管,这次旧结果同样不作数。
+    if (state.pipelines?.[repo]?.sha !== sha) return;
+    if (recheck?.mrState === "merged" && run.status !== "success") {
+      recordTransition(state, {
+        source: "platform",
+        note: `MR 已合入,旧提交 ${sha.slice(0, 12)} 的流水线随合入取消,`
+          + `不作失败处理(${repo}),归档路接管`,
+      });
+      saveState(live.root, state);
+      this.log(`[issue-flow] ${live.id} 红灯随 MR 合入取消,不作失败处理`
+        + `(${repo})@ ${sha.slice(0, 12)}`);
+      return;
+    }
+    if (recheck?.headMoved) {
+      // 绿灯但头已变:不收口当前阶段(closeMrGreen 不调)、不引出验证
+      // 卡——分支最新提交才是会被合入的代码,旧提交的绿灯背书不了它,
+      // 把「头已变」事实作为一轮消息交给 AI。红灯但头已变:结果丢弃,
+      // 只记转移账,不派修复(新头的红灯自会按新账走完整流程)。
+      const headShort = recheck.sourceSha!.slice(0, 12);
+      if (run.status === "success") {
+        recordTransition(state, {
+          source: "platform",
+          note: `流水线绿的是旧提交 ${sha.slice(0, 12)},分支最新提交已变`
+            + `为 ${headShort}(${repo})——绿灯不作收口,检查目标跟随切换`
+            + `后按新提交继续`,
+        });
+        saveState(live.root, state);
+        this.startPlatformTurn(live, promptCopy("notices",
+          "pipeline.green.head_moved", { repo, sha: headShort }));
+      } else {
+        recordTransition(state, {
+          source: "platform",
+          note: `旧提交 ${sha.slice(0, 12)} 的流水线结果到达时,分支最新`
+            + `提交已变为 ${headShort}(${repo})——结果丢弃,不作失败处理,`
+            + `检查目标跟随切换后按新提交继续`,
+        });
+        saveState(live.root, state);
+      }
+      this.log(`[issue-flow] ${live.id} 终态结果随分支头变化丢弃(${repo})`
+        + `@ ${sha.slice(0, 12)},分支最新提交 ${headShort}`);
+      return;
+    }
     watch.status = run.status;
     watch.watching = false;
     if (run.checks) watch.checks = run.checks;

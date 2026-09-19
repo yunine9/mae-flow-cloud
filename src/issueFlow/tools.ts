@@ -88,10 +88,21 @@ import {
 } from "./issueGit.ts";
 import { createMergeRequest } from "../mrClient.ts";
 
+/** MR 状态复核结果(#321):MR 生命周期与源分支最新提交的现查事实。
+ * 验绿门(complete_stage 申报放行)与监看器终态处理共用同一判断——
+ * 一处判断、两处使用,两边口径不漂移。 */
+export interface IssueMrRecheck {
+  /** MR 平台状态(与 /mr/gates 同义:merged=已合入)。 */
+  mrState: "merged" | "closed" | "opened";
+  /** 平台带回的 MR 源分支最新提交;老适配层不带时缺席。 */
+  sourceSha?: string;
+  /** true=分支最新提交与对照提交对不上(头已变)。 */
+  headMoved: boolean;
+}
+
 export interface IssueToolContext {
   /** 活状态引用(服务持有,工具直接读)。 */
-  state: IssueSessionState;
-  /** 会话工作区根(session cwd)。 */
+  state: IssueSessionState;  /** 会话工作区根(session cwd)。 */
   workspace: string;
   /** 数据目录(凭据沙箱运行区挂这里,不进工作区)。 */
   dataRoot: string;
@@ -143,8 +154,14 @@ export interface IssueToolContext {
    *  上——宿主按仓决定是否重挂(见 service 侧接线)。 */
   onBranchPushed?(repo: string): void;
   /** mr_green 即时收口的用户通知(complete_stage 验绿当场全绿/空清单
-   * 时调;监看器滞后收口的通知在 service 侧,不经这里)。 */
+   *  时调;监看器滞后收口的通知在 service 侧,不经这里)。 */
   notifyMrGreen?(): void;
+  /** MR 状态复核(#321):现查交付平台,回答「MR 是否已合入、源分支
+   *  最新提交是哪个」。验绿门与监看器终态处理共用同一私有判断(一处
+   *  判断、两处使用)。返回 undefined=查询不可得,调用方按既有口径
+   *  继续;回调缺席(裸构造)时验绿门按推送账的提交验绿,与旧口径
+   *  一致。 */
+  mrRecheck?(repo: string, sha: string): Promise<IssueMrRecheck | undefined>;
   /** 单卡互斥②(ADR-0024):有未决的 Agent 问题卡时 raise_gate 拒举。
    * 服务侧接 humanGate.pending();缺席按无卡(裸构造兼容缺省)。 */
   pendingAgentCard?: () => boolean;
@@ -1390,19 +1407,28 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (!platformUrl) {
         fail("交付平台未配置(部署需 --platform 接适配层),无法验绿 MR 流水线");
       }
-      // 逐 MR 查最新推送 SHA 的流水线(验绿事实源,不新增按 MR id 查)。
+      // 逐 MR 查流水线(验绿事实源,不新增按 MR id 查)。验绿判据=
+      // 「分支最新提交的流水线绿」(#321,与监看器同一把尺子):先经
+      // 宿主复核 MR 状态——分支头已被平台外推送推进时,申报提交(推送
+      // 账上的)的绿灯背书不了会被合入的代码,改验分支最新提交;老提交
+      // 的结果既不背书也不定罪。复核缺席(老适配层/裸构造)按推送账的
+      // 提交验,与旧口径一致。
       const runs: Array<{ repo: string; sha: string; run: PipelineRun | { status: "not_found" } }> = [];
       const staleRepos: string[] = [];
+      const headMovedRepos: string[] = [];
       for (const record of ledger) {
         const sha = state.pushes?.find((item) => item.repo === record.repo)?.sha;
         if (!sha) {
-          fail(`仓 ${record.repo} 的 MR 缺推送记录,无法验绿:`
-            + "先对该仓 push_branch,再 create_mr,然后重新申报");
+          fail(promptCopy("receipts", "mr.verify_missing_push",
+            { repo: record.repo }));
         }
+        const recheck = await ctx.mrRecheck?.(record.repo, sha);
+        const verifySha = recheck?.sourceSha ?? sha;
+        if (verifySha !== sha) headMovedRepos.push(record.repo);
         const status = await getPipelineStatus({
           platformUrl: platformUrl!,
           repo: record.repo,
-          sha,
+          sha: verifySha,
           // 适配层状态命令模板可能引用 {mr}(2026-08-28 真实环境 502:
           // 模板变量空串渲染失败)——台账里记了 iid,带上。
           ...(record.iid ? { mr: record.iid } : {}),
@@ -1421,12 +1447,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 受理停等,等监看器拿到新 run 的真终态再裁决。run 级 sha/is_valid
         // 缺席(旧适配层)时不设防,行为与透传前一致。
         const stale = latest !== undefined
-          && ((typeof latest.sha === "string" && latest.sha && latest.sha !== sha)
+          && ((typeof latest.sha === "string" && latest.sha && latest.sha !== verifySha)
             || latest.is_valid === false);
         if (stale) staleRepos.push(record.repo);
         runs.push({
           repo: record.repo,
-          sha,
+          sha: verifySha,
           run: stale ? { status: "not_found" } : latest ?? { status: "not_found" },
         });
       }
@@ -1458,9 +1484,20 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`
           + (staleRepos.length
             ? `(过期结果已拒,按在跑停等:${staleRepos.join(", ")})`
+            : "")
+          + (headMovedRepos.length
+            ? `(分支头已变,按分支最新提交验绿:${headMovedRepos.join(", ")})`
             : ""),
       });
       ctx.persist();
+      if (headMovedRepos.length) {
+        const moved = runs.find((item) => headMovedRepos.includes(item.repo));
+        return ok(promptCopy("receipts", "mrgate.awaiting_head_moved", {
+          repos: declaredRepos.join(", "),
+          head_repos: headMovedRepos.join(", "),
+          sha: (moved?.sha ?? "").slice(0, 12),
+        }));
+      }
       return ok(promptCopy("receipts", "mrgate.awaiting", {
         repos: declaredRepos.join(", "),
       }));
