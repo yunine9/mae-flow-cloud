@@ -312,7 +312,7 @@ export function IssueSessionView({
             查看模式:归属人 {detail.account} 的会话
           </Badge>}
           <IssueStatusBadge status={detail.status}>
-            {issueStatusText(detail)}
+            {ISSUE_STATUS_TEXT[detail.status]}
           </IssueStatusBadge>
           {/* 人工接管徽标(2026-09-07 走查拍板):横幅态独立于六态——
               在场即「AI 已暂停、人工作业中」,排在状态徽标之后;紫金
