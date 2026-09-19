@@ -3710,6 +3710,12 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   failed: "异常",
 };
 
+/** 「进行中」口径:未收口(非归档/非取消)。问题处理页默认筛选项与
+ * 侧栏「问题处理」父行徽章共用这一份判定,收口状态增减时两处同源,
+ * 不许各写各的减法。 */
+export const isIssueActive = (status: IssueStatus): boolean =>
+  status !== "archived" && status !== "canceled";
+
 // ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----
 
 export type IssueScenario = "ticket" | "no_ticket";
