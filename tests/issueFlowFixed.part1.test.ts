@@ -2124,10 +2124,17 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.match(receipt, /env-shared-secret/);
   assert.deepEqual(JSON.parse(receipt), issueRegistrationMeta(state, META_CREDENTIALS));
   assert.deepEqual(JSON.parse(receipt), {
+    scenario: "ticket",
     title: "播放器偶发黑屏",
     description: "升级后偶发,重启恢复",
+    account: "dev",
     module: { id: MODULE_ID, name: "支付核心" },
-    repos: ["/tmp/x.git", "/tmp/y.git"],
+    repos: [
+      { url: "/tmp/x.git", dir: "repo/x" },
+      { url: "/tmp/y.git", dir: "repo/y" },
+    ],
+    ticket: "DTS-2026-1001",
+    repair_branch: "master_dev_DTS-2026-1001",
     environment: {
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
@@ -2139,7 +2146,8 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.equal(state.gate, undefined);
   assert.equal(state.stage, "analyze");
 
-  // 无环境会话:environment/module 键整段缺席(与工具返回风格一致)。
+  // 无环境会话:environment/module/附件/版本等键整段缺席(与工具返回
+  // 风格一致,缺席不造空壳)。
   const bareTools = createIssueTools({
     state: fixedState(), workspace: "/tmp/ws", dataRoot: "/tmp/data",
     persist: () => undefined,
@@ -2150,7 +2158,67 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
       .execute("x", {})));
   assert.equal("environment" in bare, false, "无环境不造空壳");
   assert.equal("module" in bare, false);
-  assert.deepEqual(bare.repos, ["/tmp/x.git"]);
+  assert.equal("attachments" in bare, false);
+  assert.equal("product_version" in bare, false);
+  assert.equal("baseline" in bare, false);
+  assert.equal("knowledge_repo" in bare, false);
+  assert.deepEqual(bare.repos, [{ url: "/tmp/x.git", dir: "repo/x" }]);
+});
+
+test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附件按实际在场,引用式给指针", () => {
+  const state = metaState({
+    product_version: "V5R1",
+    baseline: "master_v5r1",
+    knowledge_repo: {
+      url: "/tmp/k.git", name: "team-knowledge",
+      status: "ready", at: "2026-09-19T00:00:00Z",
+    },
+    converted_from: "issue-7",
+    description: "升级后偶发,日志见 attachments/aaaaaaaaaaaaaaaa.log",
+  });
+  const meta = issueRegistrationMeta(state, {});
+  assert.equal(meta.product_version, "V5R1");
+  assert.equal(meta.baseline, "master_v5r1");
+  assert.deepEqual(meta.knowledge_repo,
+    { name: "team-knowledge", dir: "repo/team-knowledge/" });
+  assert.equal(meta.inherited_issue, "issue-7");
+  assert.deepEqual(meta.attachments, ["attachments/aaaaaaaaaaaaaaaa.log"]);
+
+  // skipped 的知识仓不在场:不指一个不存在的路径。
+  const skipped = issueRegistrationMeta(metaState({
+    knowledge_repo: {
+      url: "/tmp/k.git", name: "team-knowledge",
+      status: "skipped", at: "2026-09-19T00:00:00Z",
+    },
+  }), {});
+  assert.equal("knowledge_repo" in skipped, false);
+  assert.equal("attachments" in skipped, false);
+});
+
+test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本行;缺省整行缺席", () => {
+  const withAll = issueFixedOpeningPrompt(metaState({
+    product_version: "V5R1",
+    baseline: "master_v5r1",
+    description: "升级后偶发,日志见 attachments/aaaaaaaaaaaaaaaa.log",
+  }));
+  assert.match(withAll, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
+  assert.match(withAll, /优先查看附件再下结论/);
+  assert.match(withAll, /产品版本: V5R1\(拉仓基线分支: master_v5r1\)/);
+
+  // 无附件无版本:两行整段缺席,不渲染空壳。
+  const plain = issueFixedOpeningPrompt(metaState());
+  assert.doesNotMatch(plain, /登记附件/);
+  assert.doesNotMatch(plain, /产品版本/);
+
+  // 续聊词同样带(重启重建的上下文不流失登记材料)。
+  const resume = issueResumePrompt(metaState({
+    product_version: "V5R1",
+    description: "见 attachments/aaaaaaaaaaaaaaaa.log",
+  }), "继续");
+  assert.match(resume, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
+  assert.match(resume, /产品版本: V5R1/);
+  const plainResume = issueResumePrompt(metaState(), "继续");
+  assert.doesNotMatch(plainResume, /登记附件/);
 });
 
 

@@ -103,6 +103,7 @@ import {
   readStagedImage,
   stageIssueImage,
 } from "./issueImages.ts";
+import { stageIssueAttachmentStream } from "./issueAttachments.ts";
 import { listBusinessModules } from "../businessModuleLibrary.ts";
 
 export interface IssueViewer {
@@ -407,6 +408,15 @@ export async function handleIssueRoutes(
       // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
       let autoModuleId: string | undefined;
       let productVersion = String(body.product_version ?? "").trim();
+      // 版本必填(2026-09-18):手工登记必须指明问题发生的版本——版本是
+      // 复现与修复的基线。与上方手工必填责任人同位同尺;DTS 来源不带,
+      // 版本由单据按配置中心映射推导(下方自动补)。
+      if (source === "manual" && !productVersion) {
+        return done(409, {
+          error: "手工登记必须选择产品版本:版本是复现与修复的基线,"
+            + "请回登记页选择后再发起",
+        });
+      }
       let dtsVersion: string | undefined;
       if (source === "dts" && ticket && routeOptions.dts
           && (!body.module_id || !productVersion)) {
@@ -629,6 +639,33 @@ export async function handleIssueRoutes(
         });
         response.end(image.data);
         return true;
+      }
+    }
+
+    // 登记附件上传(POST /issues/issue-attachment?name=<原始文件名>,
+    // raw binary 流式):日志等文件边写边算哈希落 staging,超上限中途
+    // 掐断(不为大包付整包内存),返回工作区相对路径引用
+    // (attachments/<hash>.<ext>)——前端把它以纯文本插入 description。
+    // 无回显路由:附件是给 AI 读的分析材料,人不预览。
+    // 管理员不发起问题会话,同 POST /issues 的角色边界。
+    if (parts[1] === "issue-attachment" && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不发起问题会话" });
+      }
+      const dataDir = routeOptions.issueFlow?.dataDir ?? "";
+      if (!dataDir) return done(500, { error: "数据目录未配置" });
+      if (method === "POST") {
+        const filename = new URL(request.url ?? "", "http://x")
+          .searchParams.get("name") ?? undefined;
+        try {
+          const result = await stageIssueAttachmentStream(request,
+            { dataDir, filename });
+          return done(201, { path: result.path, bytes: result.bytes });
+        } catch (error) {
+          return done(400, {
+            error: String(error instanceof Error ? error.message : error),
+          });
+        }
       }
     }
 

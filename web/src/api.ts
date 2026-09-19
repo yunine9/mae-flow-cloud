@@ -4190,6 +4190,21 @@ export async function uploadIssueImage(
   });
 }
 
+/** 登记附件上传(日志等文件,类型不限,单个 500MB 上限):原始文件名
+ * 走查询串(服务端取扩展名),字节流式落服务端 staging,返回工作区
+ * 相对路径引用(attachments/<hash>.<ext>),前端把它以纯文本插入
+ * description——附件是给 AI 读的分析材料,人不预览。 */
+export async function uploadIssueAttachment(
+  file: File,
+): Promise<{ path: string; bytes: number }> {
+  return issueFetch(
+    `/issues/issue-attachment?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    });
+}
+
 /** 外部图片代理转存(#276):粘贴的外部 <img src="https://..."> 图
  * 前端拿不到字节(跨域带不上对方站的 Cookie),交后端下载落 staging,
  * 返回 issue-images/<hash>.<ext> 引用。data: URL 不走这里(字节已在

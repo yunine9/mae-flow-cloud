@@ -194,9 +194,8 @@ function raiseEnvNeededGate(
   // 硬拒绝在先(票 93):用户已在 env_needed 卡上裁定这一用途不需要
   // 环境——具体的用户意志赢过档位的一般策略,任何档位都不再举闸纠缠。
   if (ctx.state.env_declined?.scopes.includes(scope)) {
-    fail(`用户已确认无需此操作(${ENV_SCOPE_LABELS[scope]}),`
-      + "请基于现有证据继续;确有必要可在结论中说明证据局限,"
-      + "不要再次请求环境");
+    fail(promptCopy("receipts", "env.hard_declined",
+      { scope: ENV_SCOPE_LABELS[scope] }));
   }
   // 介入档位旁路(ADR-0019):一/二档不向用户索取环境——自动/仅报告
   // 档用已有信息继续,缺口写进分析报告。这是档位免审批的硬边:提示词
@@ -322,8 +321,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       repo.url === wanted
       || repo.url.replace(/\.git$/i, "") === wanted.replace(/\.git$/i, ""));
     if (!match) {
-      fail(`会话没有登记这个代码仓: ${wanted}。`
-        + `已登记: ${repos.map((repo) => repo.url).join(", ")}`);
+      fail(promptCopy("receipts", "repo.not_registered", {
+        wanted,
+        registered: repos.map((repo) => repo.url).join(", "),
+      }));
     }
     return match;
   };
@@ -346,8 +347,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
     // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
     if (state.gate?.kind === "skill_select") {
-      fail("skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。"
-        + "请立即结束本回合,用户圈选后平台会带着必读集合开新一轮");
+      fail(promptCopy("receipts", "gate.skill_select_pending"));
     }
     const allowedStages = scenario ? stagesAllowingTool(scenario, tool) : [];
     if (scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) {
@@ -355,9 +355,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     }
     const allowed = allowedStages
       .map((stage) => FIXED_STAGE_LABELS[scenario!][stage]);
-    fail(`阶段门禁:${tool} 在当前阶段「${stageLabel()}」不开放。`
-      + `允许的阶段:${allowed.length ? allowed.join(" / ") : "无(本场景流程不含该工具)"}`
-      + `。固定流程按阶段出口推进,请先完成本阶段工作`);
+    fail(promptCopy("receipts", "gate.stage_closed", {
+      tool,
+      stage: stageLabel(),
+      allowed: allowed.length
+        ? allowed.join(" / ") : "无(本场景流程不含该工具)",
+    }));
   };
 
   // ---- 网管环境配置请求(平台机制,全程可调):日志抓取引擎已下放为
@@ -517,9 +520,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         const isBound = bound?.repositories.some((repo) =>
           repositoryIdentity(repo) === repositoryIdentity(target.url));
         if (isBound) {
-          fail(`「${target.url}」是业务模块「${bound!.name}」的绑定仓,`
-            + "模块绑定仓不可移除——如该仓确与本问题无关,"
-            + "请用户调整模块绑定后再试");
+          fail(promptCopy("receipts", "remove.bound_module", {
+            url: target.url, module: bound!.name,
+          }));
         }
       }
       // 门禁②/③(现场现查,不信缓存):远端不可判定=保守拒;同名
@@ -535,14 +538,13 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           credential: ctx.gitCredential?.(),
         });
         if (!probe.reachable) {
-          fail(`远端状态查不到(${target.url}),无法安全判定删除条件——`
-            + "请稍后重试;持续失败时请检查网络或 Git 令牌配置,"
-            + "不要跳过门禁强行移除");
+          fail(promptCopy("receipts", "remove.remote_unreachable",
+            { url: target.url }));
         }
         if (probe.tip) {
-          fail(`远端同名修复分支 ${branch} 还在(${target.url} @ `
-            + `${probe.tip.slice(0, 12)}),不可移除——请用户先在代码平台`
-            + "删除远端分支,再移除该仓");
+          fail(promptCopy("receipts", "remove.remote_branch_left", {
+            branch, url: target.url, tip: probe.tip.slice(0, 12),
+          }));
         }
       }
       // 双保险:映射目录解析后必须严格落在会话工作区内(映射已锚死,
@@ -714,19 +716,16 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // 单卡互斥(ADR-0024):任何卡在场都不许再举——两卡并存是
       // issue-53 撞车类 bug 的土壤(作答分派闸优先,Agent 卡成死卡)。
       if (ctx.state.gate) {
-        fail("已有一张平台闸在等用户作答——先等闸裁决,裁决后会开新"
-          + "回合;届时若仍需要用户拍板,再判断是否举卡。不要叠加举卡。");
+        fail(promptCopy("receipts", "raisegate.gate_pending"));
       }
       if (ctx.pendingAgentCard?.()) {
-        fail("已有一张问题卡在等用户作答——先等作答结果再继续,"
-          + "不要叠加举卡。");
+        fail(promptCopy("receipts", "raisegate.card_pending"));
       }
       const kind = String(params?.kind ?? "") as IssueGateKind;
       // 白名单即模板键集:加卡种只改一处(模板表),校验自动跟上。
       if (!(kind in RAISE_GATE_QUESTIONS)) {
-        fail("不支持的卡种:" + (kind || "(缺席)") + "。只允许 "
-          + "env_verify(环境验证)/ pipeline_unfixable(红灯人工处理)/ "
-          + "pipeline_evidence(报错原文回灌)。");
+        fail(promptCopy("receipts", "raisegate.bad_kind",
+          { kind: kind || "(缺席)" }));
       }
       if (kind === "env_verify") {
         // 前置事实:mr_green 已收口。收口只能由验绿全绿放行产生
@@ -738,9 +737,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           ? fixedStageIndex(ctx.state.scenario, "mr_green") : -1;
         if (index < 0
           || (ctx.state.stage_states?.[index] ?? "pending") !== "done") {
-          fail("「提交 MR·跑绿」阶段还没收口(申报是出口的一半)——"
-            + "先调 complete_stage 申报 MR 清单,平台验绿收口后再举"
-            + "这张卡。");
+          fail(promptCopy("receipts", "raisegate.env_verify_premature"));
         }
         raiseGate(ctx.state, "env_verify",
           RAISE_GATE_QUESTIONS.env_verify, undefined, params.supplement);
@@ -752,14 +749,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       // resume_watch 裁决重看同一提交靠它。
       const repo = String(params?.repo ?? "").trim();
       if (!repo) {
-        fail("举流水线人工卡必须带 repo(红灯所属仓,会话仓清单内"
-          + "的地址)。");
+        fail(promptCopy("receipts", "raisegate.repo_required"));
       }
       const watch = ctx.state.pipelines?.[repo];
       if (!watch || watch.status !== "failed") {
-        fail(`「${repo}」没有在案的红灯事实——人工卡要凭平台的失败`
-          + "记录举,不要凭印象。先确认该仓流水线确实红灯(平台通知,"
-          + "或重推后查状态),再举卡。");
+        fail(promptCopy("receipts", "raisegate.no_red_fact", { repo }));
       }
       raiseGate(ctx.state, kind, RAISE_GATE_QUESTIONS[kind], undefined,
         params.supplement, undefined, undefined, { repo, sha: watch.sha });
@@ -837,20 +831,25 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   }));
 
   // ---- 登记元信息(工读类:任意阶段可查;与 dts_get_ticket 分工) ----
-  // 人手工登记的输入全量(标题/现象/模块/仓/网管环境四件套),与提示词
-  // 的元信息块同出 issueRegistrationMeta 一源;网管口令按 ADR-0003 明文
-  // 返回。只读:不碰状态、不落盘、不推进阶段。
+  // 人手工登记的输入全量(标题/现象/附件/模块/仓/产品版本/网管环境
+  // 四件套/登记人与责任人)加现场指针(形态/单号/修复分支/知识仓/转正
+  // 来源),与提示词的元信息块同出 issueRegistrationMeta 一源;网管口令
+  // 按 ADR-0003 明文返回。只读:不碰状态、不落盘、不推进阶段。
 
   tools.push(defineTool({
     name: "get_issue_meta",
     label: "Get Issue Meta",
     description:
-      "获取本会话的登记元信息——手工登记时**人填的输入**全量:标题、现象"
-      + "描述、业务模块、带出的代码仓、网管环境(地址/网管后台密码/独立 "
-      + "root 密码(仅显式设置时),现场公开默认值,明文返回)。"
-      + "任意阶段都可调用,长会话里随时重查,不必翻找历史上下文。与 "
-      + "dts_get_ticket 的分工:登记元信息是人填的输入,查它用本工具;"
-      + "按单号拉 DTS 单据详情(平台拉的)用 dts_get_ticket,两者不可混用。",
+      "获取本会话的登记元信息——人填的登记输入全量与现场指针:流程形态"
+      + "(有单/无单)、标题、现象描述、登记附件(日志等文件的相对路径,"
+      + "优先查看)、业务模块、代码仓(地址与工作区路径)、产品版本与拉仓"
+      + "基线分支、单号与修复分支(有单才有)、知识仓指针、登记人与责任人"
+      + "工号、网管环境(地址/形态/后台密码/独立 root 密码(仅显式设置"
+      + "时),现场公开默认值,明文返回)。"
+      + "任意阶段都可调用,长会话里随时重查,不必翻找历史上下文。大块内容"
+      + "只给指针:知识仓给 repo/ 下的路径,附件给文件路径,内容自行读取。"
+      + "与 dts_get_ticket 的分工:登记元信息是人填的输入,查它用本工具;"
+      + "按单号拉问题单详情(平台拉的)用 dts_get_ticket,两者不可混用。",
     parameters: Type.Object({}),
     async execute() {
       const meta = issueRegistrationMeta(state, {
@@ -927,9 +926,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       "把当前修复分支经宿主推送到远端(容器里 git push 被禁用,推送一律"
       + "走本工具)。平台机械校验:会话已绑定单号、分支名为 "
       + "master_<工号>_<单号>;多仓交付逐仓串行推送,推送后返回 SHA。"
-      + "force=true 强制覆盖远端同名分支:仅用于同单重跑、远端旧分支是"
-      + "本单上次运行遗留的场景(普通推送被 non-fast-forward 拒绝时回执"
-      + "会指路);覆盖按租赁式核对远端旧 tip,不盲盖。",
+      + "force=true 强制覆盖远端同名分支:同单重跑、远端旧分支是本单上"
+      + "次运行遗留的场景(pull_repo 回执的「遗留警报」就是它)——首次"
+      + "推送即带上,不必先被 non-fast-forward 拒绝再补;覆盖按租赁式"
+      + "核对远端旧 tip,不盲盖。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -941,8 +941,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
       force: Type.Optional(Type.Boolean({
         description:
-          "强制推送:覆盖远端同名分支(仅同单重跑、旧分支是本单上次"
-          + "运行遗留时用;覆盖前按租赁式核对远端旧 tip)",
+          "强制推送:覆盖远端同名分支——同单重跑撞远端遗留分支时首次"
+          + "推送即带上,不必先被拒再补(覆盖前按租赁式核对远端旧 tip)",
       })),
     }),
     async execute(_toolCallId: string, params: any) {
@@ -1057,16 +1057,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         try {
           module = readBusinessModule(ctx.dataRoot, moduleId);
         } catch (error) {
-          fail(`业务模块 ${moduleId} 不存在或元数据不可读:`
-            + (error instanceof Error ? error.message : String(error))
-            + "。请用 lookup_modules 重新检索,或用 AskUserQuestion 问用户");
+          fail(promptCopy("receipts", "bind.module_unreadable", {
+            module_id: moduleId,
+            reason: error instanceof Error ? error.message : String(error),
+          }));
         }
         if (module.status !== "active") {
           fail(`业务模块「${module.name}」已归档,不能绑定`);
         }
         if (!module.repositories.length) {
-          fail(`业务模块「${module.name}」没有绑定代码仓——请用 AskUserQuestion`
-            + "向用户要代码仓地址");
+          fail(promptCopy("receipts", "bind.module_no_repo",
+            { module: module.name }));
         }
         // 模块仓与已登记仓合并去重(已在场的仓不动),与登记同一把尺;
         // 超上限整次打回,不留半绑定状态。
@@ -1183,8 +1184,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         : items.find((item) => item.id === String(reference).trim());
       if (!match) {
         const known = items.map((item) => `意见${item.seq}`).join("、") || "无";
-        fail(`检视意见 ${reference} 不在本批待处理意见里(可引用:${known})。`
-          + "按意见清单里的「意见N」引用,不要凭空编号");
+        fail(promptCopy("receipts", "review.unknown_ref",
+          { reference, known }));
       }
       return match;
     };
@@ -1289,8 +1290,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         const known = batch.map((item) => `意见${item.seq}`).join("、") || "无";
         for (const seq of unique) {
           if (!batchSeqs.has(seq)) {
-            fail(`意见${seq} 不在本批待处理意见里(本批:${known})。`
-              + "按意见清单里的「意见N」引用,不要凭空编号");
+            fail(promptCopy("receipts", "review.unknown_seq", { seq, known }));
           }
         }
         // 版本快照在申报时刻冻结(ADR-0035):送出在先、冻结在后,快照
@@ -1356,10 +1356,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
 
     /** MR 验绿门(mr_green 阶段的 complete_stage 契约):AI 申报的清单
      * 与台账(state.mrs,create_mr 自动记账)归一比对,少报多报都打回;
-     * 再对台账每个 MR 的最新推送 SHA 查流水线,三态裁决——全绿当场
-     * 放行、有红当场打回带失败项、在跑/无记录受理由监看器等绿放行
-     * (受理账 state.mr_gate,进 deploy_verify 当且仅当"已申报且全绿")。
-     * 裁决只认 run 归属与申报 SHA 一致的记录:过期结果(旧提交的 run)不
+     * 再对台账每个 MR 复核分支最新提交(#321,与监看器终态处理共用同一
+     * 判断)后查它的流水线,三态裁决——全绿当场放行、有红当场打回带
+     * 失败项、在跑/无记录受理由监看器等绿放行(受理账 state.mr_gate,
+     * 进 deploy_verify 当且仅当"已申报且全绿")。
+     * 裁决只认 run 归属与被验 SHA 一致的记录:过期结果(旧提交的 run)不
      * 背书也不定罪,对齐需求侧 selectTerminalRun 语义。 */
     const settleMrGate = async (
       declared: string[], note: string,

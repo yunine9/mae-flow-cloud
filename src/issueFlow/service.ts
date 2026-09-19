@@ -242,6 +242,7 @@ import {
   type PipelineArtifactText,
 } from "../pipelineEvidence.ts";
 import { syncIssueImagesToWorkspace } from "./issueImages.ts";
+import { syncIssueAttachmentsToWorkspace } from "./issueAttachments.ts";
 import { FeedbackStore, type FeedbackRecord } from "../feedbackStore.ts";
 
 // ---- 举卡作答的机器可读协议 ----
@@ -1394,6 +1395,13 @@ export class IssueFlowService {
     const descriptionText = input.description?.trim() ?? "";
     if (descriptionText) {
       syncIssueImagesToWorkspace({
+        description: descriptionText,
+        dataDir: this.options.dataDir,
+        workspace: root,
+        log: (message) => this.log(message),
+      });
+      // 登记附件(日志等):同一纪律,从 staging 复制到工作区 attachments/。
+      syncIssueAttachmentsToWorkspace({
         description: descriptionText,
         dataDir: this.options.dataDir,
         workspace: root,

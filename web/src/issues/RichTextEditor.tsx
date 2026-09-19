@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Quill from "quill";
 import "quill/dist/quill.snow.css";
-import { Loader2 } from "lucide-react";
+import { Loader2, Paperclip } from "lucide-react";
 import { issueImageUrl } from "../api";
 import { proxyIssueImage } from "../api";
 import {
@@ -45,6 +45,7 @@ export function RichTextEditor({
   value,
   onChange,
   onUploadImage,
+  onUploadAttachment,
   onError,
   placeholderText,
 }: {
@@ -55,6 +56,10 @@ export function RichTextEditor({
   /** 图片上传:落 staging,返回 issue-images/ 相对引用。上传失败由
    * 钩子自行向用户报告(编辑器只跳过该图,不代发第二遍)。 */
   onUploadImage: (file: File) => Promise<string>;
+  /** 登记附件上传(日志等非图片文件):落 staging,返回 attachments/
+   * 相对引用,编辑器在光标处插入纯文本路径——附件是给 AI 读的,不渲染
+   * 内容。缺席=该壳不支持附件(按钮不渲染、粘贴/拖拽不接管非图片)。 */
+  onUploadAttachment?: (file: File) => Promise<string>;
   /** 仅编辑器初始化失败时上报(上传路径不走这里)。 */
   onError?: (message: string) => void;
   placeholderText?: string;
@@ -68,6 +73,9 @@ export function RichTextEditor({
   onChangeRef.current = onChange;
   const uploadRef = useRef(onUploadImage);
   uploadRef.current = onUploadImage;
+  const attachmentUploadRef = useRef(onUploadAttachment);
+  attachmentUploadRef.current = onUploadAttachment;
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const errorRef = useRef(onError);
   errorRef.current = onError;
   // 上传进行态浮层:与旧编辑器同款契约(截图上传中…),位图/data:/
@@ -82,6 +90,22 @@ export function RichTextEditor({
         setPendingUploads((count) => Math.max(0, count - 1));
       }
     }, []);
+
+  // 登记附件:上传后在光标处插入纯文本路径引用(attachments/<hash>.<ext>)
+  // ——不是图片,没有嵌入对象可渲染,路径文本就是描述的一部分。
+  const uploadAndInsertAttachment = useCallback(async (file: File) => {
+    const upload = attachmentUploadRef.current;
+    if (!upload) return;
+    try {
+      const ref = await trackPending(() => upload(file));
+      const quill = quillRef.current;
+      if (!quill) return;
+      const index = quill.getSelection(true)?.index ?? quill.getLength() ?? 0;
+      quill.insertText(index, ref);
+    } catch {
+      // 上传失败的用户提示归上传钩子所有(它自己 onError);这里只跳过。
+    }
+  }, [trackPending]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -123,9 +147,10 @@ export function RichTextEditor({
     if (quill) quill.root.innerHTML = markdownToEditorHtml(value, refToSrc);
   }, [value]);
 
-  // 外部图片粘贴/拖拽转存(#276 随行):剪贴板无位图文件、text/html
-  // 带 <img> 时按 src 协议三路转存;有位图文件(截图/右键复制图像)
-  // 时直接上传。插入的永远是 issue-images/ 相对引用的预览 URL。
+  // 外部图片粘贴/拖拽转存(#276 随行)+ 登记附件随行(2026-09-19):
+  // 剪贴板/拖入的文件按类型分路——位图走截图转存嵌入预览,其余文件
+  // (日志/压缩包等)走附件上传插纯文本路径。没有附件回调的壳不接管
+  // 非图片文件(交回浏览器默认行为)。
   useEffect(() => {
     const root = quillRef.current?.root;
     if (!root) return;
@@ -137,23 +162,31 @@ export function RichTextEditor({
         // 上传失败的用户提示归上传钩子所有(它自己 onError);这里只跳过。
       }
     };
+    const uploadFiles = (files: File[]) => {
+      const index = quillRef.current?.getSelection(true)?.index
+        ?? quillRef.current?.getLength() ?? 0;
+      void (async () => {
+        for (const file of files) {
+          if (file.type.startsWith("image/")) await uploadAndInsert(file, index);
+          else await uploadAndInsertAttachment(file);
+        }
+      })();
+    };
     const transferAndPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData;
       if (!data) return;
-      const files: File[] = [];
+      const images: File[] = [];
+      const others: File[] = [];
       for (const item of Array.from(data.items)) {
-        if (item.type.startsWith("image/") && item.getAsFile()) {
-          files.push(item.getAsFile()!);
-        }
+        const file = item.getAsFile();
+        if (!file) continue;
+        if (item.type.startsWith("image/")) images.push(file);
+        else others.push(file);
       }
-      if (files.length) {
+      if (images.length || (others.length && attachmentUploadRef.current)) {
         event.preventDefault();
         event.stopPropagation();
-        const index = quillRef.current?.getSelection(true)?.index
-          ?? quillRef.current?.getLength() ?? 0;
-        void (async () => {
-          for (const file of files) await uploadAndInsert(file, index);
-        })();
+        uploadFiles([...images, ...others]);
         return;
       }
       const html = data.getData("text/html") ?? "";
@@ -204,12 +237,29 @@ export function RichTextEditor({
       })();
     };
     root.addEventListener("paste", transferAndPaste, true);
-    return () => root.removeEventListener("paste", transferAndPaste, true);
-  }, [trackPending]);
+    const handleDrop = (event: DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (!files.length) return;
+      if (!files.some((file) => file.type.startsWith("image/"))
+        && !attachmentUploadRef.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      uploadFiles(files);
+    };
+    root.addEventListener("drop", handleDrop, true);
+    return () => {
+      root.removeEventListener("paste", transferAndPaste, true);
+      root.removeEventListener("drop", handleDrop, true);
+    };
+  }, [trackPending, uploadAndInsertAttachment]);
 
   return <div className={cn(
     "relative [&_.ql-toolbar]:rounded-lg [&_.ql-toolbar]:border-line",
-    "[&_.ql-container]:rounded-b-lg [&_.ql-container]:border [&_.ql-container]:border-line",
+    // Quill 默认 .ql-container height:100%——容器占满父盒却排在工具栏
+    // 之后,底缘溢出父盒 42px(一条工具栏高),把紧跟其后的兄弟内容
+    // (描述页脚的复制按钮)盖在编辑器下面点不到;改随内容自适应。
+    // Quill 规则未分层,Tailwind 工具类在 @layer 里压不过它,须 ! 提权。
+    "[&_.ql-container]:h-auto! [&_.ql-container]:rounded-b-lg [&_.ql-container]:border [&_.ql-container]:border-line",
     "[&_.ql-editor]:min-h-[500px] [&_.ql-editor]:max-h-[70vh] [&_.ql-editor]:overflow-y-auto",
     "[&_.ql-editor]:text-base [&_.ql-editor]:leading-[1.65] [&_.ql-editor.ql-empty::before]:text-faint"
     // Tailwind preflight 清零了标题/段落自带外边距,Quill 不补——块间距在此定:
@@ -217,9 +267,30 @@ export function RichTextEditor({
     + " [&_h1]:mt-3 [&_h1]:mb-2 [&_h2]:mt-2.5 [&_h2]:mb-1.5 [&_h3]:mt-2 [&_h3]:mb-1"
     + " [&_p]:my-1.5 [&_li]:my-0.5 [&_blockquote]:my-2 [&_pre]:my-2")}>
     <div ref={rootRef} />
+    {onUploadAttachment && (
+      <>
+        {/* 登记附件入口:点选或直接把文件拖进编辑器。附件不做预览渲染
+            (人是看不懂路径之外的内容的,它们是给 AI 读的分析材料)。 */}
+        <button type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className={cn(
+            "mt-1 flex items-center gap-1.5 rounded-md border border-dashed"
+            + " border-line px-2.5 py-1 text-xs text-muted-foreground",
+            "transition-colors hover:border-foreground/30"
+            + " hover:text-foreground")}>
+          <Paperclip className="size-3.5" aria-hidden />添加附件(日志等)
+        </button>
+        <input ref={fileInputRef} type="file" multiple className="hidden"
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? []);
+            event.target.value = "";
+            for (const file of files) void uploadAndInsertAttachment(file);
+          }} />
+      </>
+    )}
     {pendingUploads > 0 && <span role="status"
       className="absolute right-2 top-12 z-10 flex items-center gap-1.5 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-muted-foreground shadow-sm">
-      <Loader2 className="size-3.5 animate-spin" aria-hidden />截图上传中…
+      <Loader2 className="size-3.5 animate-spin" aria-hidden />文件上传中…
     </span>}
   </div>;
 }

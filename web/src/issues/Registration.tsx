@@ -37,6 +37,7 @@ import {
   listPeople,
   putDtsModuleBinding,
   uploadIssueImage,
+  uploadIssueAttachment,
   type AuthUser,
   type BusinessModule,
   type CollaborationAssignee,
@@ -72,11 +73,11 @@ import { issueSessionPath } from "./issueLink";
 import { cn } from "cn";
 
 /** #230 去 legacy:登记域皮肤类换工具类。字段行是全表单共用版式,先落
- * 成一处词典;窄屏单列由 max-[680px] 变体直译旧 @media(原 680px 块随
- * 家族退役)。 */
+ *  成一处词典;窄屏单列由 max-[680px] 变体直译旧 @media(原 680px 块随
+ *  家族退役)。(2026-09-18 拍板:登记表单不再分组卡——「问题信息/
+ *  网管环境」两张内卡合并平铺进 section 网格,GROUP/GROUP_BODY 随之
+ *  退役;字段顺序:标题、描述、模块|版本、责任人|环境。) */
 const FIELD = "grid gap-[5px] text-[13px] text-muted-foreground max-[680px]:col-span-1 max-[680px]:min-w-0";
-const GROUP = "col-span-full grid gap-3 rounded-[10px] border border-line bg-surface p-3.5 max-[680px]:px-2.5 max-[680px]:py-3";
-const GROUP_BODY = "grid grid-cols-2 gap-3 max-[680px]:grid-cols-1";
 
 /** 发起前置门禁条(ADR-0031 起查**责任人**的凭据):这单会碰远端仓,
  *  克隆与推送都用责任人的身份——责任人没配齐就拦在表单上,服务端
@@ -101,7 +102,7 @@ function CredentialGate({ viewer, needRepo, assignee, readyKnown, ready,
   const self = assignee === viewer.username;
   // 走到这 ready=false ⟺ missing 非空(flow=issue 口径),detail 必有内容。
   const missingText = missing.join(" 与 ");
-  return <div className="col-span-full mb-2.5 flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
+  return <div className="col-span-full flex flex-wrap items-center justify-between gap-2.5 rounded-[10px] border border-attention/45 bg-[color-mix(in_srgb,var(--attention)_10%,var(--surface))] px-3.5 py-2.5 text-[13px] leading-normal text-attention" role="alert">
     {self
       ? <span>发起前先配置<b className="text-attention">{missingText}</b>(个人设置 → 个人接入):
           拉取代码仓与推送提交都用你的身份,配置完成即可发起。</span>
@@ -387,6 +388,21 @@ function ManualRegister({
     }
   }
 
+  // 登记附件(2026-09-19 拍板,先做无单):日志等文件点选/粘贴/拖拽
+  // 上传,落 staging 后把 attachments/ 相对路径以纯文本插进描述——登记
+  // 提交时平台复制进会话工作区,开场词单列一行引导 AI 优先查看。
+  async function uploadIssueAttachmentFile(file: File): Promise<string> {
+    try {
+      const result = await uploadIssueAttachment(file);
+      return result.path;
+    } catch (reason) {
+      const message = `附件上传失败:${
+        String(reason instanceof Error ? reason.message : reason)}`;
+      onError(message);
+      throw reason;
+    }
+  }
+
   // 个人凭据前置门禁(ADR-0031 起查责任人):模块带出的仓一般是
   // https 远端,克隆与推送都用责任人的身份——按模块绑定判断 needRepo;
   // 全本地仓(file:// 演示库)不拦。服务端 create 里机械拦(判定同源),
@@ -431,6 +447,10 @@ function ManualRegister({
       onError("描述还是模板原样——把发生时间、触发步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
       return;
     }
+    if (!productVersion) {
+      onError("请选择产品版本——版本是复现与修复的基线");
+      return;
+    }
     if (!pickedEnv) {
       onError("请从环境管理选择网管环境——搜不到就点下拉里的「新增环境」录一条");
       return;
@@ -450,7 +470,7 @@ function ManualRegister({
         title: title.trim(),
         description: description.trim(),
         module_id: moduleId,
-        product_version: productVersion || undefined,
+        product_version: productVersion,
         // 快选(#150):只带台账条目 id,值由服务端解密快照(前端零密码)。
         environment: { environment_id: pickedEnv.id },
         // 责任人(ADR-0031):登记完成即移交,归属与推进人。
@@ -476,128 +496,126 @@ function ManualRegister({
     <div className="col-span-full">
       <RepositoryResourceNotice repositories={selectedModule?.repositories ?? []} />
     </div>
-    <div className={GROUP}>
-      <span className="text-[13px] font-bold leading-tight text-primary">问题信息</span>
-      <div className={GROUP_BODY}>
-        <label className={cn(FIELD, "col-span-full")}>
-          <span>问题标题 <i className="font-bold not-italic text-danger">*</i></span>
-          <Input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
-            onChange={(event) => setTitle(event.target.value)} />
-        </label>
-        {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
-            的动作转给区内第一个可激活元素,行为不可控(2026-09-11
-            用户实测)。 */}
-        <div className={cn(FIELD, "col-span-full")}>
-          <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
-          {/* 选型在 descriptionEditorChoice:两壳同一 markdown 契约,
-              翻转常量重新构建即回退,存储零迁移(#271)。 */}
-          {USE_RICH_TEXT_DESCRIPTION_EDITOR
-            ? <RichTextEditor value={description} onChange={setDescription}
-              onUploadImage={uploadIssueFile} onError={onError}
-              placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />
-            : <DescriptionEditor value={description} onChange={setDescription}
-              onUploadImage={uploadIssueFile} onError={onError}
-              placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />}
-          {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
-              页脚不再重复一份。 */}
-          <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
-            {/* 一键复制:描述写完想带走(贴工单/飞书)都不用手选全选;
-                空描述不可点。 */}
-            <CopyDescriptionButton markdown={description}
-              disabled={!description.trim()} variant="ghost" size="xs" />
-          </div>
-        </div>
-        {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
-            收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
-            要增删仓去「配置中心 → 模块与代码仓」维护绑定,登记页不改。 */}
-        <ProductVersionPicker value={productVersion}
-          onChange={version => setProductVersion(version)} />
-        <label className={cn(FIELD, "col-span-full")}>
-          <span>业务模块 <i className="font-bold not-italic text-danger">*</i></span>
-          <span className="issue-module-wrap group/mod relative grid gap-1.5">
-            <Select value={moduleId}
-              disabled={modules === undefined || !!moduleLoadError}
-              items={[{ value: "", label: "选择业务模块——决定关联代码仓" },
-                ...moduleCatalog.map((module) => ({
-                  value: module.id,
-                  label: `${module.name}(绑 ${module.repositories.length} 个仓)`,
-                }))]}
-              onValueChange={(value) => setModuleId(value ?? "")}>
-              <SelectTrigger className="w-full" aria-label="业务模块">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="tw-root">
-                <SelectGroup>
-                  <SelectItem value="" disabled>选择业务模块——决定关联代码仓</SelectItem>
-                  {moduleCatalog.map((module) => (
-                    <SelectItem key={module.id} value={module.id}>
-                      {module.name}(绑 {module.repositories.length} 个仓)
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            {selectedModule && <>
-              <small className="cursor-help text-muted-foreground">
-                已带出 {selectedModule.repositories.length} 个代码仓,悬停查看
-              </small>
-              {/* 悬浮卡(#230 换工具类):悬停/键盘聚焦经 group 变体弹出,
-                  键盘可达性不变;短名一行放下,全地址挂 title 悬停可见。 */}
-              <span className="issue-module-tip absolute left-0 top-[calc(100%+6px)] z-40 hidden min-w-[min(440px,100%)] gap-2 rounded-[10px] border border-line bg-surface p-3 shadow-(--shadow-md) group-hover/mod:grid group-focus-within/mod:grid" role="tooltip">
-                <b className="text-text-strong">将拉取 {selectedModule.repositories.length} 个代码仓</b>
-                <ul className="m-0 grid list-none gap-1.5 p-0">
-                  {selectedModule.repositories.map((url) => (
-                    <li className="truncate rounded-lg border border-line bg-surface-muted px-2.5 py-1.5 font-mono text-xs text-text-strong" key={url} title={url}>{repoLabel(url)}</li>
-                  ))}
-                </ul>
-              </span>
-            </>}
+    <label className={cn(FIELD, "col-span-full")}>
+      <span>问题标题 <i className="font-bold not-italic text-danger">*</i></span>
+      <Input value={title} placeholder="一句话说清现象,如:播放器偶发黑屏"
+        onChange={(event) => setTitle(event.target.value)} />
+    </label>
+    {/* 描述字段不用 label 包裹:label 的激活转发会把点进编辑区
+        的动作转给区内第一个可激活元素,行为不可控(2026-09-11
+        用户实测)。 */}
+    <div className={cn(FIELD, "col-span-full")}>
+      <span>问题描述 <i className="font-bold not-italic text-danger">*</i></span>
+      {/* 选型在 descriptionEditorChoice:两壳同一 markdown 契约,
+          翻转常量重新构建即回退,存储零迁移(#271)。 */}
+      {USE_RICH_TEXT_DESCRIPTION_EDITOR
+        ? <RichTextEditor value={description} onChange={setDescription}
+          onUploadImage={uploadIssueFile}
+          onUploadAttachment={uploadIssueAttachmentFile}
+          onError={onError}
+          placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示,日志等附件拖进来或点下方按钮" />
+        : <DescriptionEditor value={description} onChange={setDescription}
+          onUploadImage={uploadIssueFile} onError={onError}
+          placeholderText="不想用模板就整段删掉,从这里自由书写;粘贴或拖拽截图自动上传并原地显示" />}
+      {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
+          页脚不再重复一份。 */}
+      <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
+        {/* 一键复制:描述写完想带走(贴工单/飞书)都不用手选全选;
+            空描述不可点。 */}
+        <CopyDescriptionButton markdown={description}
+          disabled={!description.trim()} variant="ghost" size="xs" />
+      </div>
+    </div>
+    {/* 仓不占版面(拍板 2026-08-31):选中模块即带出绑定仓,清单
+        收进悬停提示——悬停选择器或提示行就能看到将拉取哪些仓;
+        要增删仓去「配置中心 → 模块与代码仓」维护绑定,登记页不改。 */}
+    {/* 业务模块在前(决定代码仓与默认责任人),产品版本跟在其后
+        同行成对:两枚半宽选择框等宽。 */}
+    <label className={FIELD}>
+      <span>业务模块 <i className="font-bold not-italic text-danger">*</i></span>
+      <span className="issue-module-wrap group/mod relative grid gap-1.5">
+        <Select value={moduleId}
+          disabled={modules === undefined || !!moduleLoadError}
+          items={[{ value: "", label: "选择业务模块——决定关联代码仓" },
+            ...moduleCatalog.map((module) => ({
+              value: module.id,
+              label: `${module.name}(绑 ${module.repositories.length} 个仓)`,
+            }))]}
+          onValueChange={(value) => setModuleId(value ?? "")}>
+          <SelectTrigger className="w-full" aria-label="业务模块">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="tw-root">
+            <SelectGroup>
+              <SelectItem value="" disabled>选择业务模块——决定关联代码仓</SelectItem>
+              {moduleCatalog.map((module) => (
+                <SelectItem key={module.id} value={module.id}>
+                  {module.name}(绑 {module.repositories.length} 个仓)
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        {selectedModule && <>
+          <small className="cursor-help text-muted-foreground">
+            已带出 {selectedModule.repositories.length} 个代码仓,悬停查看
+          </small>
+          {/* 悬浮卡(#230 换工具类):悬停/键盘聚焦经 group 变体弹出,
+              键盘可达性不变;短名一行放下,全地址挂 title 悬停可见。 */}
+          <span className="issue-module-tip absolute left-0 top-[calc(100%+6px)] z-40 hidden min-w-[min(440px,100%)] gap-2 rounded-[10px] border border-line bg-surface p-3 shadow-(--shadow-md) group-hover/mod:grid group-focus-within/mod:grid" role="tooltip">
+            <b className="text-text-strong">将拉取 {selectedModule.repositories.length} 个代码仓</b>
+            <ul className="m-0 grid list-none gap-1.5 p-0">
+              {selectedModule.repositories.map((url) => (
+                <li className="truncate rounded-lg border border-line bg-surface-muted px-2.5 py-1.5 font-mono text-xs text-text-strong" key={url} title={url}>{repoLabel(url)}</li>
+              ))}
+            </ul>
           </span>
-          {moduleLoadError && <small className="col-span-full flex items-center justify-between gap-2.5 rounded-lg border border-destructive/35 px-2.5 py-2 text-destructive max-[680px]:flex-col max-[680px]:items-stretch" role="alert">
-            <span>业务模块加载失败:{moduleLoadError}</span>
-            <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
-              onClick={() => setModuleLoadAttempt((value) => value + 1)}>
-              重试加载
-            </Button>
-          </small>}
-          {catalogEmpty && <small className="col-span-full" role="alert">
-            模块目录为空——先到「配置中心 → 模块与代码仓」登记并绑定代码仓,再回来登记。
-          </small>}
-        </label>
-        {/* 责任人(ADR-0031):登记完成即移交——模块责任人+维护者置顶
-            带标记,选模块自动带上,手选即冻结。不用 label 包裹:label
-            的激活转发会把点开选人框的动作转给区内首个可激活元素
-            (同描述字段的走查结论)。 */}
-        <div className={cn(FIELD, "col-span-full")}>
-          <span>责任人 <i className="font-bold not-italic text-danger">*</i></span>
-          <UserPicker value={assignee} options={assigneeOptions}
-            onChange={setAssigneeManual} ariaLabel="责任人"
-            emptyLabel="选择责任人——登记完成后由其推进" />
-          {selectedModule?.owner && <small className="text-xs leading-normal text-faint">
-            模块「{selectedModule.name}」的责任人是 {candidateLabel(selectedModule.owner)},
-            未手选时自动带上
-          </small>}
-        </div>
-      </div>
+        </>}
+      </span>
+      {moduleLoadError && <small className="col-span-full flex items-center justify-between gap-2.5 rounded-lg border border-destructive/35 px-2.5 py-2 text-destructive max-[680px]:flex-col max-[680px]:items-stretch" role="alert">
+        <span>业务模块加载失败:{moduleLoadError}</span>
+        <Button type="button" variant="outline" size="sm" className="border-current text-inherit"
+          onClick={() => setModuleLoadAttempt((value) => value + 1)}>
+          重试加载
+        </Button>
+      </small>}
+      {catalogEmpty && <small className="col-span-full" role="alert">
+        模块目录为空——先到「配置中心 → 模块与代码仓」登记并绑定代码仓,再回来登记。
+      </small>}
+    </label>
+    {/* 产品版本(2026-09-18 起必选):标签与行距经 className/labelClassName
+        对齐 FIELD 版式,和旁边业务模块的字段头完全一致。 */}
+    <ProductVersionPicker value={productVersion} className={FIELD} required
+      labelClassName="text-[13px] font-normal"
+      onChange={version => setProductVersion(version)} />
+    {/* 责任人(ADR-0031):登记完成即移交——模块责任人+维护者置顶
+        带标记,选模块自动带上,手选即冻结。不用 label 包裹:label
+        的激活转发会把点开选人框的动作转给区内首个可激活元素
+        (同描述字段的走查结论)。 */}
+    <div className={FIELD}>
+      <span>责任人 <i className="font-bold not-italic text-danger">*</i></span>
+      <UserPicker value={assignee} options={assigneeOptions}
+        onChange={setAssigneeManual} ariaLabel="责任人"
+        emptyLabel="选择责任人——登记完成后由其推进" />
+      {selectedModule?.owner && <small className="text-xs leading-normal text-faint">
+        模块「{selectedModule.name}」的责任人是 {candidateLabel(selectedModule.owner)},
+        未手选时自动带上
+      </small>}
     </div>
-    <div className={GROUP}>
-      <span className="text-[13px] font-bold leading-tight text-primary">网管环境</span>
-      <div className={GROUP_BODY}>
-        {/* 从环境管理选(#150,ADR-0020;2026-09-10 走查裁定「只选不
-            手填」):可搜索下拉挑台账条目,搜不到点「新增环境」弹共用
-            表单、录完自动选中;后台密码用台账已存值(前端拿不到)。 */}
-        <div className="col-span-full">
-          <EnvironmentPicker
-            selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />
-        </div>
-        {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
-          将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
-          (以选定时为准),无需在此填写。密码不会出现在页面或事件流,
-          但会在执行问题处理时明文进入当前 AI 上下文。
-        </small>}
-
-      </div>
+    {/* 从环境管理选(#150,ADR-0020;2026-09-10 走查裁定「只选不
+        手填」):可搜索下拉挑台账条目,搜不到点「新增环境」弹共用
+        表单、录完自动选中;后台密码用台账已存值(前端拿不到)。
+        与责任人并排等宽;label 包裹同款激活转发问题,故用 div。 */}
+    <div className={FIELD}>
+      <span>网管环境 <i className="font-bold not-italic text-danger">*</i></span>
+      <EnvironmentPicker
+        selectedId={pickedEnv?.id ?? null} onPick={pickEnv} />
     </div>
+    {pickedEnv && <small className="col-span-full m-0 text-xs leading-normal text-faint max-[680px]:min-w-0" role="status">
+      将使用「环境管理」里 <span className="font-mono">{pickedEnv.ip}</span> 的已存密码
+      (以选定时为准),无需在此填写。密码不会出现在页面或事件流,
+      但会在执行问题处理时明文进入当前 AI 上下文。
+    </small>}
     <CredentialGate viewer={viewer} needRepo={touchRemoteRepo}
       assignee={assignee} readyKnown={assigneeReadyKnown} ready={assigneeReady}
       missing={assignee ? candidateByUsername.get(assignee)?.missing ?? [] : []}
