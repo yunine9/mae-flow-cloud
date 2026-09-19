@@ -102,7 +102,8 @@ export interface IssueMrRecheck {
 
 export interface IssueToolContext {
   /** 活状态引用(服务持有,工具直接读)。 */
-  state: IssueSessionState;  /** 会话工作区根(session cwd)。 */
+  state: IssueSessionState;
+  /** 会话工作区根(session cwd)。 */
   workspace: string;
   /** 数据目录(凭据沙箱运行区挂这里,不进工作区)。 */
   dataRoot: string;

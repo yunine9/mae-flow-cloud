@@ -44,6 +44,7 @@ import {
 } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
 import { fetchMrGates } from "../mrGateClient.ts";
+import type { GateView } from "../mergeWatch.ts";
 import {
   fetchMrDiscussions,
   type MrDiscussionItem,
@@ -4884,20 +4885,9 @@ export class IssueFlowService {
       return { all_merged: frozen.length > 0
         && frozen.every((mr) => Boolean(mr.merged_at)) };
     }
-    const credential = this.options.gitCredential?.(state.account);
     let changed = false;
     for (const mr of state.mrs ?? []) {
-      const view = await fetchMrGates({
-        platformUrl: this.options.platformUrl,
-        repo: mr.repo,
-        headers: pipelineHeaders(credential),
-        delivery: {
-          source_branch: mr.branch,
-          target_branch: mr.target ?? "master",
-          ...(mr.url ? { mr_url: mr.url } : {}),
-          ...(mr.iid !== undefined ? { mr_id: mr.iid } : {}),
-        },
-      });
+      const view = await this.fetchMrViewFor(live, mr);
       if (!view) continue;
       // 检查目标跟随分支最新提交(ADR-0041):平台带回的源分支最新提交
       // 与流水线检查账不一致即切换(幂等,见 followBranchHead)。本函数
@@ -5481,23 +5471,14 @@ export class IssueFlowService {
       JSON.stringify(outbox, null, 1), "utf-8");
   }
 
-  /** MR 状态复核(#321,赛跑防护):红/绿终态处理动手前与验绿门申报
-   *  放行共用这一查(一处判断、两处使用,两边口径不漂移)——与
-   *  syncMergeFacts 同一个 /mr/gates 查询,现问平台「MR 是否已合入、
-   *  源分支最新提交是哪个」。依据:旧提交的流水线被平台取消,必然是
-   *  「分支头变了/合入了」引起的,终态结果出现之后现查 MR 状态,看到
-   *  的一定是真相(issue-107)——这关上「旧提交的取消红被当成真失败
-   *  派出修复」的赛跑窗口。返回 undefined=查询不可得(平台未配置/
-   *  网络抖动/老适配层):复核是防赛跑的加法,查询失败不许变成新的
-   *  死路,调用方按既有口径继续。 */
-  private async recheckMrForSettle(
+  /** 逐仓现查 MR 平台事实(合入状态记账与终态复核共用同一查询):生命
+   *  周期状态 + 源分支最新提交编号。查询不可得返回 undefined,调用方
+   *  按各自口径处理,不在此处造死路。 */
+  private fetchMrViewFor(
     live: LiveIssue,
-    repo: string,
-    sha: string,
-  ): Promise<IssueMrRecheck | undefined> {
-    const mr = live.state.mrs?.find((item) => item.repo === repo);
-    if (!this.options.platformUrl || !mr) return undefined;
-    const view = await fetchMrGates({
+    mr: NonNullable<IssueSessionState["mrs"]>[number],
+  ): Promise<GateView | undefined> {
+    return fetchMrGates({
       platformUrl: this.options.platformUrl,
       repo: mr.repo,
       headers: pipelineHeaders(
@@ -5509,6 +5490,25 @@ export class IssueFlowService {
         ...(mr.iid !== undefined ? { mr_id: mr.iid } : {}),
       },
     });
+  }
+
+  /** MR 状态复核(#321,赛跑防护):红/绿终态处理动手前与验绿门申报
+   *  放行共用这一查(一处判断、两处使用,两边口径不漂移)——与
+   *  syncMergeFacts 同一个 /mr/gates 查询(经 fetchMrViewFor),现问
+   *  平台「MR 是否已合入、源分支最新提交是哪个」。依据:旧提交的
+   *  流水线被平台取消,必然是「分支头变了/合入了」引起的,终态结果
+   *  出现之后现查 MR 状态,看到的一定是真相(issue-107)——这关上
+   *  「旧提交的取消红被当成真失败派出修复」的赛跑窗口。返回
+   *  undefined=查询不可得(平台未配置/网络抖动/老适配层):复核是
+   *  防赛跑的加法,查询失败不许变成新的死路,调用方按既有口径继续。 */
+  private async recheckMrForSettle(
+    live: LiveIssue,
+    repo: string,
+    sha: string,
+  ): Promise<IssueMrRecheck | undefined> {
+    const mr = live.state.mrs?.find((item) => item.repo === repo);
+    if (!this.options.platformUrl || !mr) return undefined;
+    const view = await this.fetchMrViewFor(live, mr);
     if (!view) return undefined;
     return {
       mrState: view.mrState,
@@ -5532,7 +5532,7 @@ export class IssueFlowService {
     // ---- 最终结果动手前复核 MR 状态(#321,赛跑防护,issue-107)----
     // 红或绿的最终结果都是「记账并触发动作」的扳机,扣扳机之前现查
     // 一次 MR 状态(低频:每个提交只在拿到最终结果时复核一次):
-    // - 已合入:红灯不作失败处理(不派修复回合、不进修复预算账、不举
+    // - 已合入:红灯不作失败处理(不派发修复回合、不进修复预算账、不举
     //   卡)——合入即交付,归档路(合入状态循环里的自动归档)接管;
     //   绿灯照常收口,收口后归档路自然接上。
     // - 分支头已变:这次结果整个丢弃、不触发任何动作——检查目标跟随
@@ -5558,7 +5558,7 @@ export class IssueFlowService {
       // 绿灯但头已变:不收口当前阶段(closeMrGreen 不调)、不引出验证
       // 卡——分支最新提交才是会被合入的代码,旧提交的绿灯背书不了它,
       // 把「头已变」事实作为一轮消息交给 AI。红灯但头已变:结果丢弃,
-      // 只记转移账,不派修复(新头的红灯自会按新账走完整流程)。
+      // 只记转移账,不派发修复(新头的红灯自会按新账走完整流程)。
       const headShort = recheck.sourceSha!.slice(0, 12);
       if (run.status === "success") {
         recordTransition(state, {

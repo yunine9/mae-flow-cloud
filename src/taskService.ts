@@ -19244,8 +19244,11 @@ export class TaskService {
   /** 只在宿主已经拿到 push 收据后发送。单条失败只留它自己 pending；
    * 后续监控/重启继续，不重派 Agent，也不把整批误记成已回复。 */
   private reviewReplyOutboxStalled(task: TaskState): boolean {
-    return task.summary.delivery?.stalled
-      ?.startsWith("检视回复发送账不可读") === true;
+    const stalled = task.summary.delivery?.stalled;
+    // 跨版本兼容:停摆判据匹配的是持久化文本,旧版盘面写的是「投递账
+    // 不可读」(全仓用语清扫前),升级后旧现场也要能命中自愈。
+    return stalled?.startsWith("检视回复发送账不可读") === true
+      || stalled?.startsWith("检视回复投递账不可读") === true;
   }
 
   private markReviewReplyOutboxUnreadable(
@@ -19385,7 +19388,8 @@ export class TaskService {
       }
     }
     const stalled = task.summary.delivery?.stalled;
-    if (stalled?.startsWith("检视回复发送账不可读")) {
+    if (stalled?.startsWith("检视回复发送账不可读")
+      || stalled?.startsWith("检视回复投递账不可读")) {
       delete task.summary.delivery!.stalled;
       delete task.summary.delivery!.stall_class;
       if (task.summary.delivery?.waiting_on === stalled) {

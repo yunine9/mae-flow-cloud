@@ -2,9 +2,9 @@
  * 最终结果动手前复核 MR 状态(工单 #321,父单 #317,承接 #320 的
  * 检查目标跟随):
  *  1. 赛跑拦截(复核路定格):旧提交的取消红到达时分支头已变——复核
- *     发现后不派修复回合、不举卡、红灯计数不涨,只记转移账。
+ *     发现后不派发修复回合、不举卡、红灯计数不涨,只记转移账。
  *  2. 赛跑结局(自然时序):头已变的取消红无论复核路还是跟随切换路
- *     先看到,结局一致——检查目标切换接管,不派修复、计数不涨。
+ *     先看到,结局一致——检查目标切换接管,不派发修复、计数不涨。
  *  3. 已合入:红灯不作失败处理,合入状态循环下一拍自动归档(ADR-0034
  *     归档路接管,issue-107 类现场)。
  *  4. 已合入(复核路定格):绿灯照常收口——合入事实不拦收口,申报账
@@ -185,7 +185,7 @@ function readState(dataDir: string) {
     };
 }
 
-test("赛跑拦截(复核路):取消红到达时头已变——复核发现,不派修复、不举卡、计数不涨", async () => {
+test("赛跑拦截(复核路):取消红到达时头已变——复核发现,不派发修复、不举卡、计数不涨", async () => {
   const dataDir = mfcTemp("mfc-issue-recheck-race-");
   const platform = new FakeGitPlatform();
   await platform.start();
@@ -209,7 +209,7 @@ test("赛跑拦截(复核路):取消红到达时头已变——复核发现,不�
       "转移账带分支最新提交编号");
     const after = service.get("issue-1");
     const watch = after.pipelines![registered.origin];
-    assert.equal(model.requests.length, 0, "不派修复回合");
+    assert.equal(model.requests.length, 0, "不派发修复回合");
     assert.equal(after.gate, undefined, "不举卡");
     assert.equal(watch.reds ?? 0, 0, "红灯计数不涨");
     assert.equal(watch.last_repair_sha, undefined, "不进修复账");
@@ -220,7 +220,7 @@ test("赛跑拦截(复核路):取消红到达时头已变——复核发现,不�
   }
 });
 
-test("赛跑结局(自然时序):头已变的取消红不派修复,检查目标切换接管", async () => {
+test("赛跑结局(自然时序):头已变的取消红不派发修复,检查目标切换接管", async () => {
   const dataDir = mfcTemp("mfc-issue-recheck-takeover-");
   const platform = new FakeGitPlatform();
   await platform.start();
