@@ -4670,6 +4670,16 @@ export class IssueFlowService {
     const platformUrl = this.options.platformUrl;
     const sha = state.pushes?.find((item) => item.repo === repo)?.sha;
     if (!platformUrl || !sha) return;
+    // 返工轮没人启动合入状态循环(#319):这条循环原先只在 mr_green
+    // 收口和进程重启恢复时启动。环境验证不通过回退后,第二轮重新进
+    // mr_green 时既不会收口也没重启,MR 被人在平台上提前合入的事实
+    // 就一直没人记账,要等下次重启才补上。挂流水线监看的启动点(MR
+    // 建成、已有 MR 的仓再推送、重启补挂)到这里时顺手把它一并启动;
+    // 放在同 SHA 跳过判定的前面,幂等重建 MR 重复触发的重挂也能补上。
+    // 幂等依据:watchMergeStates 有单例挡板(mergeWatchers),循环
+    // 已在跑直接返回,不会出现第二条并行循环;台账上还没有 MR 记录的
+    // 会话不启动,保持「有 MR 才监看」。
+    if (state.mrs?.length) this.watchMergeStates(live);
     const watching = state.pipelines?.[repo];
     if (watching?.watching && watching.sha === sha) return;
     if (watching?.sha && watching.sha !== sha) {
