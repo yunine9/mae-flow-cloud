@@ -3841,6 +3841,16 @@ export class IssueFlowService {
       if (!watch || watch.sha !== target.sha) {
         throw new IssueControlError("流水线监看账已变化,请刷新后重试");
       }
+      // 合入短路(#318,ADR-0034):答得出「已在平台处理」,合入往往也
+      // 已在平台完成——旧提交的流水线随合入被平台取消,重看它只会再
+      // 红一次。合入账全部记了 merged_at 时,按外部事实直接归档收口,
+      // 不再重看旧提交;归档的终态/在飞守卫若挡下(罕见窗口),照原路
+      // 重看兜底,合入状态循环下一拍自会收口。
+      const mrs = state.mrs ?? [];
+      if (mrs.length && mrs.every((mr) => Boolean(mr.merged_at))) {
+        this.autoArchiveDelivered(live);
+        if (isTerminal(state.status)) return summarize(state);
+      }
       const now = Date.now();
       const { budgetMs } = this.pipelineKnobs();
       watch.status = "running";
@@ -4892,21 +4902,65 @@ export class IssueFlowService {
     return { all_merged: allMerged };
   }
 
-  /** 合入即归档(ADR-0034):全部 MR merged 的有单会话自动收口,结论
-   * delivered;自动归档=验证通过——环境验证卡已答 pass 的自然衔接,
-   * 未答的随终态清面,统计口径视为认可(问的是「交付完成没有」,合入
-   * 事实即答案)。守闸器判据不受扰:终态被排除,pass 后停靠说明已换
-   * 口径。回合在飞不抢(下一拍再试);回退中的会话阶段已离开 mr_green,
-   * 轮询退出,到不了这里。 */
+  /** 检查目标跟随分支最新提交(ADR-0041,#320):合入状态循环逐仓拿到
+   *  平台返回的 MR 源分支最新提交编号,与流水线检查账不一致即把检查
+   *  目标切过去——问题单分支按单号命名,分支上的一切皆属本单,最新
+   *  提交的流水线就是本单当前的质量信号。账面按新提交整体重置(与
+   *  resume_watch 同一清账口径):旧提交的失败计数、上轮报错与刹车账
+   *  一并作废,查询时限重新起算。新头不在本会话推送账上=平台外推送,
+   *  落 external_head 标记,红灯材料据此附"先拉最新代码、看差异再修"
+   *  的指引。幂等:账上 sha 已是它就跳过(感知点被多处共用,同一
+   *  sourceSha 只切换一次);自己推送的重挂走 armPipelineWatch,天然
+   *  清掉 external_head。返回是否发生了切换(调用方据此落盘)。 */
+  private followBranchHead(
+    live: LiveIssue,
+    repo: string,
+    sourceSha: string,
+  ): boolean {
+    const state = live.state;
+    const watch = state.pipelines?.[repo];
+    if (!watch || watch.sha === sourceSha) return false;
+    const own = state.pushes?.find((item) => item.repo === repo)?.sha;
+    const external = sourceSha !== own;
+    const now = Date.now();
+    const { budgetMs } = this.pipelineKnobs();
+    state.pipelines![repo] = {
+      sha: sourceSha,
+      status: "running",
+      watching: true,
+      started_at: new Date(now).toISOString(),
+      deadline: new Date(now + budgetMs).toISOString(),
+      round: watch.round + 1,
+      reds: 0,
+      ...(external ? { external_head: true as const } : {}),
+    };
+    recordTransition(state, {
+      source: "platform",
+      note: external
+        ? `分支头已被平台外提交 ${sourceSha.slice(0, 12)} 取代,`
+          + `检查目标跟随切换(${repo})`
+        : `分支最新提交 ${sourceSha.slice(0, 12)} 与检查账不一致,`
+          + `检查目标已对齐(${repo})`,
+    });
+    this.log(`[issue-flow] ${live.id} 检查目标跟随分支最新提交(${repo})`
+      + ` @ ${sourceSha.slice(0, 12)}${external ? "(平台外提交)" : ""}`);
+    void this.watchPipeline(live, repo, sourceSha);
+    return true;
+  }
+
+  /** 合入即归档(ADR-0034):全部 MR 合入(merged_at 全在账)的有单会话
+   *  自动收口,结论 delivered。合入是人在平台上做的决定、代码已进主干
+   *  ——合入事实就是「交付完成没有」的答案,内部账本状态不再前置否决
+   *  这个外部事实:「提交 MR·跑绿」阶段没收口、环境验证卡没答、不可修
+   *  卡还挂着,都随归档一并清面(未答的卡作废,统计口径视为认可)。
+   *  守闸器判据不受扰:终态被排除。回合在飞不抢(下一拍再试);回退中
+   *  的会话阶段已离开 mr_green,轮询退出,到不了这里。 */
   private autoArchiveDelivered(live: LiveIssue): void {
     const state = live.state;
     if (isTerminal(state.status) || this.turning.has(live.id)) return;
     if (state.scenario !== "ticket") return;
     const mrs = state.mrs ?? [];
     if (!mrs.length || !mrs.every((mr) => Boolean(mr.merged_at))) return;
-    const verifySettled = this.mrGreenClosed(state)
-      || state.gate?.kind === "env_verify";
-    if (!verifySettled) return;
     state.conclusion = {
       kind: "delivered",
       summary: state.last_reply || state.stage_note || "(无补充说明)",
