@@ -33,7 +33,7 @@ const GIT_ENV = {
   GIT_COMMITTER_NAME: "sources", GIT_COMMITTER_EMAIL: "s@example.com",
 };
 
-test("完整 MR 修复经真实推送和内核登记后由宿主投递，不再唤醒 Agent；重启不重复推送/回复", async () => {
+test("完整 MR 修复经真实推送和内核登记后由宿主发送，不再唤醒 Agent；重启不重复推送/回复", async () => {
   const s = await watchingService("review-handoff"), api = s.service as any;
   const git = (...args: string[]) => execFileSync("git", ["-C", s.cwd, ...args], { encoding: "utf8", env: GIT_ENV }).trim();
   let replies = 0, resumes = 0, watches = 0, pipelineStatus = "running";
@@ -106,7 +106,7 @@ test("跨 CI 轮次已答讨论不重复入账；新正文按新意见交办，�
         repo: "repo", mr, resolve: false, expected_sha: "a".repeat(40) });
       outbox.markDelivered(entry.id);
     }
-    // 投递台账跨 CI/检视轮次保留：已答事实的权威记录仍在账上，按仓+MR 各归各位。
+    // 发送台账跨 CI/检视轮次保留：已答事实的权威记录仍在账上，按仓+MR 各归各位。
     const delivered = outbox.list().filter((item: any) =>
       item.kind === "review_reply" && item.state === "delivered");
     assert.equal(delivered.length, 2);
@@ -115,7 +115,7 @@ test("跨 CI 轮次已答讨论不重复入账；新正文按新意见交办，�
     assert.ok(delivered.some((item: any) =>
       item.payload.discussion_id === "other" && String(item.payload.mr) === "2"));
 
-    // 外部意见一律先入待判断批注等责任人交办（cbe741e 拍板，不再自动派修）；
+    // 外部意见一律先入待判断批注等责任人交办（cbe741e 拍板，不再自动派发修复）；
     // 合入监听每轮重新拉取讨论，走的是同一条 importExternalReviews 同步。
     const store = api.annotations(s.internal);
     const scope = "https://code/mr/1";
@@ -123,7 +123,7 @@ test("跨 CI 轮次已答讨论不重复入账；新正文按新意见交办，�
       { scope, mrUrl: scope, owner: "本地用户", items });
     const [note] = observe([{ id: "done", body: "补充要求" }]);
     assert.equal(note.route, "owner_reply");
-    assert.equal(note.agent_assigned, undefined, "入账只落待判断批注，不自动派修");
+    assert.equal(note.agent_assigned, undefined, "入账只落待判断批注，不自动派发修复");
 
     // 责任人已答复后，同一讨论在等检视人点“已解决”期间反复轮询不复活。
     store.replyAsOwner(note.id, "本地用户", "已在 MR 回复中说明", true);
@@ -137,7 +137,7 @@ test("跨 CI 轮次已答讨论不重复入账；新正文按新意见交办，�
     assert.equal(observe([{ id: "other", body: "另一条意见" }]).length, 1);
     assert.equal(delivered.length, outbox.list().filter((item: any) =>
       item.kind === "review_reply" && item.state === "delivered").length,
-      "重新观察不改动投递台账");
+      "重新观察不改动发送台账");
   } finally { await s.stop(); }
 });
 

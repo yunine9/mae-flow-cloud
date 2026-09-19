@@ -381,7 +381,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   const model = new ScriptedModelServer(script, "scripted-v1",
     { linear: true });
   await model.start();
-  // 固定流程种子(无单三节点,分析阶段收口待命):恢复管线点火,
+  // 固定流程种子(无单三节点,分析阶段收口待命):恢复管线启动,
   // 测的是提问卡→作答→归档这条多轮闭环,不依赖创建回执。
   seedRecoverableIssue(dataDir, "issue-1", {
     title: "播放器偶发黑屏",
@@ -524,7 +524,7 @@ test("创建:固定流程登记回执、vault 与开场上下文照旧", async (
     assert.equal(created.stage, "prep_repo");
     assert.equal(loadState(join(dataDir, "issues", created.id))?.scenario,
       "no_ticket", "盘上 state.scenario 与回执一致");
-    // create() 即刻排入首轮研究(并发额度内同步点火,状态直奔 running)。
+    // create() 即刻排入首轮研究(并发额度内同步启动,状态直奔 running)。
     assert.equal(created.status, "running");
     assert.equal(created.ticket, undefined, "先研究后补单:创建时单号可空");
     // 页面凭据不回流的强断言在 issueFlowContract(真传页面凭据的打回
@@ -795,7 +795,7 @@ test("重启续聊:等待问题卡期间服务重启,作答仍能续上现场", 
 });
 
 /** 落一个最小可恢复的问题现场(固定流程种子:无单三节点、分析阶段
- * 已收口——恢复管线点火,收口态不牵催办/阶段机)。必须在构造服务
+ * 已收口——恢复管线启动,收口态不牵催办/阶段机)。必须在构造服务
  * 之前调用。 */
 function seedRecoverableIssue(
   dataDir: string,
@@ -871,7 +871,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
     log: (message) => logs.push(message),
   });
   try {
-    // 构造即恢复:重排队的在部署额度(2)内点火,剩下的坐额度队列;
+    // 构造即恢复:重排队的在部署额度(2)内启动,剩下的坐额度队列;
     // 等家人与挂起的原样不动。目录遍历序不定,按集合断言。
     const active = ["issue-1", "issue-2", "issue-3"]
       .map((id) => service.get(id).status).sort();
@@ -908,7 +908,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
   }
 });
 
-test("续跑点火:开场是重启平台通知,续聊提示词带当前阶段上下文,事件流留痕", async () => {
+test("续跑启动:开场是重启平台通知,续聊提示词带当前阶段上下文,事件流留痕", async () => {
   const dataDir = mfcTemp("mfc-issue-resume-");
   seedRecoverableIssue(dataDir, "issue-1", {
     title: "登录超时", status: "running",

@@ -100,7 +100,7 @@ MR 创建成功即落盘并启动监听，不等待流水线绿灯。已有 MR �
 ```
 
 与现状的关系:`monitoring` 就是现有的 `pollPipeline`,`fixing` 就是现有的
-修复环(`pipelineVerdict` → 派修复会话)。**改造是给它加信号与分叉,
+修复环(`pipelineVerdict` → 派发修复会话)。**改造是给它加信号与分叉,
 不是重写**。
 
 ---
@@ -220,7 +220,7 @@ selftest 拿到真实门禁集(19 项)**,九项之外多这十项,分类与文�
 
 | 平台原始名 | 分类 | 界面文案 |
 |---|---|---|
-| `codequality_passed` | **可修 · CI(优先级 25)** | ——(派修复,见下) |
+| `codequality_passed` | **可修 · CI(优先级 25)** | ——(派发修复,见下) |
 | `approval_approvers_required_passed` | 等人 | 等必需审批人审批 |
 | `approval_reviewers_required_passed` | 等人 | 等必需检视人检视 |
 | `committer_must_cast_two_votes_passed` | 等人 | 等提交人以外的两票 |
@@ -401,7 +401,7 @@ npm run adapter -- --config adapter.json --selftest
 - **D5 触发**:push 自动触发流水线,不需要显式 trigger——
   `pipeline_trigger` 配成查询 `actual_head_pipeline` 的只读命令 +
   `status: {"const": "running"}` 即可(§11);注意 `is_valid: false`
-  表示 MR 头上还没有有效流水线(挂着的可能是旧分支的陈灯),适配层
+  表示 MR 头上还没有有效流水线(挂着的可能是旧分支的过期结果),适配层
   这时**不要**把旧灯翻译成终态;
 - **C1 CLI 三代不兼容**:Python codehub.exe v0.4.9(已装)与设计契约
   参照的 Node codehub-cli 1.6.0 子命令/参数完全不同(如 v0.4.9 用
@@ -553,7 +553,7 @@ npm run adapter -- --config adapter.json --selftest
 或稳定键参数。宿主对同一条 outbox 动作会同时发送 `Idempotency-Key`
 请求头和 `idempotency_key` JSON 字段，适配层统一映射成该占位符；若收到
 动作键而模板未引用它，适配层会 fail-closed 返回 502，让 outbox 保持
-pending，绝不以“可能重复回复”为代价继续投递。上例使用 HTTP
+pending，绝不以“可能重复回复”为代价继续发送。上例使用 HTTP
 `Idempotency-Key`；若内网平台使用别的参数名，只替换命令参数，仍须保留
 `{idempotency_key}` 作为值。
 
@@ -601,13 +601,13 @@ pending，绝不以“可能重复回复”为代价继续投递。上例使用 
 **不可修工具前置分诊**:serve 配置加 `"unfixable-tools": ["SuperChecker"]`
 (或命令行 `--unfixable-tools SuperChecker`);CODECHECK 红灯全部来自
 名单内工具(需 checks 带 tool 证据,contract 脚本会给)时,宿主不派
-修复会话,直接如实挂"等人"——派了也是白烧一轮。判定拿不准照常派修。
+修复会话,直接如实挂"等人"——派了也是白烧一轮。判定拿不准照常派发修复。
 
 **红灯证据缺口兜底**：`checks` 负责点名红灯维度，终态摘要、结构化
 details 与 `pipeline_artifacts` 负责给出为什么红。宿主按维度判定：
 
-- 全部红灯维度均有具体证据：正常派修；
-- 只有部分维度有证据：立即派修已有证据的部分，使命明确禁止猜改缺口，
+- 全部红灯维度均有具体证据：正常派发修复；
+- 只有部分维度有证据：立即派发修复已有证据的部分，使命明确禁止猜改缺口，
   同时通知责任人；
 - 所有红灯维度都没有具体证据：先按流水线轮询预算有限重试，仍缺时停在
   `verifying`，写入 `delivery.evidence_gap`，不创建 `delivery.loop`，

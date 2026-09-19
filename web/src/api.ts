@@ -328,7 +328,7 @@ export async function putLubanToken(
   return parseJson(response);
 }
 
-/** 用已保存的个人 Token 走一遍正式小鲁班投递链路。 */
+/** 用已保存的个人 Token 走一遍正式小鲁班发送链路。 */
 export async function testLubanConnection(): Promise<{
   ok: true;
   message: string;
@@ -4227,7 +4227,7 @@ export function requestIssueRepoChanges(
 }
 
 /** 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮只递交意图——
- * 端点守卫+留痕+投递通知词,拉取由 Agent 按技能 issue-ops 执行(缺
+ * 端点守卫+留痕+发送通知词,拉取由 Agent 按技能 issue-ops 执行(缺
  * 环境走既有环境闸),平台不代拉。成功 = HTTP 2xx 会话概要;日志清单
  * 不随本调用更新,随既有 updated_at 轮询自刷。 */
 export function requestIssueLogFetch(id: string): Promise<IssueSummary> {

@@ -996,7 +996,7 @@ export function TaskWorkspace({
     publish();
     // 窄屏那档任务头是 66px 不是 70px(min-height 被媒体查询改小),差 4px
     // 就是抽屉和头之间一道背景缝。ResizeObserver 管标题换行这种"窗口没动
-    // 头却变高"的情况,window.resize 兜住它不投递回调的场合(页面不渲染时
+    // 头却变高"的情况,window.resize 兜住它不触发回调的场合(页面不渲染时
     // 观察器回调随帧一起停,实测过)——两条都只是重算一个数,重复无害。
     window.addEventListener("resize", publish);
     const observer = typeof ResizeObserver === "undefined"

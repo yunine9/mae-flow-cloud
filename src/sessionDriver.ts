@@ -955,7 +955,7 @@ export class CloudSession {
   }
 
   /** 把 Web 决定回注为 AskUserQuestion 的工具结果,继续本轮。
-   *  parkedReplay 是宿主欠着的停靠通知(#244 投递必达):拼在决定回执
+   *  parkedReplay 是宿主欠着的停靠通知(#244 发送必达):拼在决定回执
    *  之后随行送达——工具结果是模型此刻必读的文本,通知搭这条车不会被
    *  漏看;决定账(human_decision 事件)保持纯决定,不混平台通知。 */
   async resumeWithDecision(

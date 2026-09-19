@@ -3,16 +3,16 @@
  * service.requestLogFetch)契约测试。
  *
  * 设计裁定(ADR-0026,Agent 主理第二例):按钮不执行任何事——端点只
- * 守卫+留痕+投递通知词,拉取由 Agent 按技能 issue-ops 执行(缺环境走
+ * 守卫+留痕+发送通知词,拉取由 Agent 按技能 issue-ops 执行(缺环境走
  * 既有环境闸),平台不代拉。测试钉三面:
- * - 终态守卫:archived/canceled/failed 打回(终态不可续聊,投递只会
+ * - 终态守卫:archived/canceled/failed 打回(终态不可续聊,发送只会
  *   写成永不送达的死信),打回零副作用(转移账不留痕);
- * - 投递通道:startPlatformTurn 三态——空闲=开回合直送(通知进模型
+ * - 发送通道:startPlatformTurn 三态——空闲=开回合直送(通知进模型
  *   上下文,不欠账),等人=落便签(parked_notices 全文,答卡注入即清),
  *   运行中=steer 送达(话进正在跑的回合,不抢方向盘)。
  *
  * 路由 own() 闸的 403 盘点在 issueViewMode 的 WRITE_ROUTES;路由/文案/
- * 页面形状由 issueUiContracts 源码契约钉住;这里只测服务层与投递语义。
+ * 页面形状由 issueUiContracts 源码契约钉住;这里只测服务层与发送语义。
  * 断言口径:marker 串(通知词独有短语)只存在于通知词里,它在模型请求
  * 里的出现次数就是注入次数(范式照 parkedNoticeDelivery/issueRepoChange)。
  */
@@ -139,7 +139,7 @@ test("queued 守卫同构于 requestRepoChanges(终态守卫有测,queued 不单
   assert.match(body, /status === "queued"/, "queued 守卫必须在场");
 });
 
-test("空闲投递=开回合直送:通知进模型上下文,不欠账不落便签", async () => {
+test("空闲发送=开回合直送:通知进模型上下文,不欠账不落便签", async () => {
   const dataDir = mfcTemp("mfc-issue-logfetch-idle-");
   const id = seedIssue(dataDir);
   const model = new ScriptedModelServer(
@@ -154,7 +154,7 @@ test("空闲投递=开回合直送:通知进模型上下文,不欠账不落便�
       const issue = service.get(id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "投递回合收口");
+    }, "发送回合收口");
     assert.ok(userTexts(model).includes(MARKER), "通知词直送模型");
     assert.equal(readStateFile(dataDir, id).parked_notices?.length ?? 0, 0,
       "直送不欠账");
@@ -183,7 +183,7 @@ test("等人=落便签:全文进欠账队列,答卡原地续跑注入即清", as
   await model.start();
   const service = new IssueFlowService(baseOptions(dataDir, model));
   try {
-    // 点火一幕举问题卡的回合,等到挂起(范式照 parkedNoticeDelivery)。
+    // 启动一幕举问题卡的回合,等到挂起(范式照 parkedNoticeDelivery)。
     service.reply(id, "请继续推进验证");
     const waiting = await until(() => {
       const issue = service.get(id);
@@ -236,7 +236,7 @@ test("运行中=steer 送达:通知递进正在跑的回合,不抢方向盘也�
   try {
     // 等模型真的开跑(请求已发出=现场 driver 必在)再递交意图。
     await until(() => model.requests.length >= 1 ? true : undefined,
-      "重启续跑回合点火");
+      "重启续跑回合启动");
     const summary = service.requestLogFetch(id);
     assert.equal(summary.status, "running", "不打断正在跑的回合");
     // steer 送达事件(user_message via=interrupt,正文=通知词全文)。

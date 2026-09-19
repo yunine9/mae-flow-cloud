@@ -139,7 +139,7 @@ export interface IssueToolContext {
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
   onMrCreated?(repo: string): void;
   /** push_branch 成功落账后上报(issue-72):修复环"同分支再推,
-   *  MR 自动跟新提交"不重建 MR,监看重挂的点火不能只挂在 create_mr
+   *  MR 自动跟新提交"不重建 MR,监看重挂的启动不能只挂在 create_mr
    *  上——宿主按仓决定是否重挂(见 service 侧接线)。 */
   onBranchPushed?(repo: string): void;
   /** mr_green 即时收口的用户通知(complete_stage 验绿当场全绿/空清单
@@ -1341,7 +1341,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
      * 再对台账每个 MR 的最新推送 SHA 查流水线,三态裁决——全绿当场
      * 放行、有红当场打回带失败项、在跑/无记录受理由监看器等绿放行
      * (受理账 state.mr_gate,进 deploy_verify 当且仅当"已申报且全绿")。
-     * 裁决只认 run 归属与申报 SHA 一致的记录:陈灯(旧提交的 run)不
+     * 裁决只认 run 归属与申报 SHA 一致的记录:过期结果(旧提交的 run)不
      * 背书也不定罪,对齐需求侧 selectTerminalRun 语义。 */
     const settleMrGate = async (
       declared: string[], note: string,
@@ -1412,12 +1412,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 当前流水线。历史绿/红后又触发的新 run 仍在 running 时，绝不
         // 能拿旧终态提前放行或打回。
         const latest = status.runs.at(-1);
-        // 陈灯防御(#108,对齐需求侧 selectTerminalRun):平台按 MR 维度
+        // 过期结果防御(#108,对齐需求侧 selectTerminalRun):平台按 MR 维度
         // 返回流水线历史,AI 修复重推新提交(换 SHA)后立即重新申报时,
         // 新 run 注册前的窗口期内 runs.at(-1) 还是旧提交的 run——run 级
-        // sha 与申报 SHA 对不上(或 is_valid=false 的 MR 头陈灯)就是陈
-        // 灯,既不能让它给新提交背书(冒充 success),也不能拿它定罪
-        // (旧红算到新头上,申报被冤枉打回、申报账被清)。一律按在跑
+        // sha 与申报 SHA 对不上(或 is_valid=false 的 MR 头挂着过期结果)
+        // 就是过期结果,既不能让它给新提交背书(冒充 success),也不能拿
+        // 它定罪(旧红算到新头上,申报被冤枉打回、申报账被清)。一律按在跑
         // 受理停等,等监看器拿到新 run 的真终态再裁决。run 级 sha/is_valid
         // 缺席(旧适配层)时不设防,行为与透传前一致。
         const stale = latest !== undefined
@@ -1457,7 +1457,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `MR 清单已申报(${declaredRepos.length} 个),等流水线验绿`
           + (staleRepos.length
-            ? `(陈灯已拒,按在跑停等:${staleRepos.join(", ")})`
+            ? `(过期结果已拒,按在跑停等:${staleRepos.join(", ")})`
             : ""),
       });
       ctx.persist();
@@ -1515,7 +1515,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           : "";
         void (enteredAnalyze
           ? ctx.raiseSkillSelection?.() : undefined);
-        // 环境预热(2026-09-04):拉仓收口进 analyze 时点火,与主
+        // 环境预热(2026-09-04):拉仓收口进 analyze 时启动,与主
         // Agent 的分析并行。fail-open 旁路:预热自己的失败不碰流程。
         void (enteredAnalyze ? ctx.startWarmup?.() : undefined);
         ctx.persist();

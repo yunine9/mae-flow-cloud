@@ -2,7 +2,7 @@ import { requestBuildFixBeforeDelivery } from "./support/requestedBuildFix.ts";
 /**
  * MR 闭环 part 2/6:回复入队与回执:部分失败续投、Build-Fix 后入队绑 SHA、台账跨批继承、漏回执补交与只催一次。
  * 共享夹具在 tests/mrLoop.helpers.ts(拆分背景见其头注);
- * 外部意见自动派修用例已由 externalReviewInbox 与责任人交办场景替代；保留投递及人工交办回归。
+ * 外部意见自动派发修复用例已由 externalReviewInbox 与责任人交办场景替代；保留回复发送及人工交办回归。
  */
 
 import { test } from "node:test";

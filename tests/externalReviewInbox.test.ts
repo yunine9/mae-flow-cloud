@@ -61,7 +61,7 @@ test("先保存责任人要求再批量交办，原文与补充都送达；未�
   assert.equal(store.list()[2].agent_assigned, undefined);
 });
 
-test("通知每五分钟只包含新增，重建 store 不重发，投递失败下轮重试", async () => {
+test("通知每五分钟只包含新增，重建 store 不重发，发送失败下轮重试", async () => {
   const { root, store, sync, base } = scene();
   const summaries: string[] = [];
   let success = true;
@@ -81,7 +81,7 @@ test("通知每五分钟只包含新增，重建 store 不重发，投递失败�
   await send(2_500_000); assert.equal(summaries.length, 4);
 });
 
-test("MR 未解决讨论不派修且不挡 CI 修复；问题单显式交办只发送选中批次", () => {
+test("MR 未解决讨论不派发修复且不挡 CI 修复；问题单显式交办只发送选中批次", () => {
   const gates = classifyGates([{ name: "resolve_discussion_passed", passed: false }, { name: "ci_state_passed", passed: false }]);
   assert.deepEqual(gates.repairs.map(item => item.kind), ["ci"]);
   assert.match(gates.waiting.join(), /责任人/);

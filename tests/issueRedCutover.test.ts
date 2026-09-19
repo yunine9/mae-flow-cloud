@@ -1,20 +1,20 @@
 /**
  * 红灯切换(#247,ADR-0024):流水线红灯后平台不再分诊(可不可修/
  * 证据够不够)、不再代举 pipeline_unfixable / pipeline_evidence——
- * 失败事实(摘要/逐维度明细/产物镜像落点)三态投递给 AI,三路处置
+ * 失败事实(摘要/逐维度明细/产物镜像落点)三态发送给 AI,三路处置
  * 由它现场判断:直接修复 / 举报错回灌卡 / 举不可修人工卡(后两路经
  * raise_gate,平台复核红灯在案)。平台保留机械三样:同提交刹车、
- * 修复轮预算(投递回合=修复回合,派了才 +1)、留痕。证据重试窗随
- * 分诊编排退场;human_evidence 回灌不再重复计数(投递已记)。
+ * 修复轮预算(发送回合=修复回合,派了才 +1)、留痕。证据重试窗随
+ * 分诊编排退场;human_evidence 回灌不再重复计数(发送已记)。
  *
  * 五幕:
- * 1. 事实投递:无闸、材料齐全(摘要/明细/镜像/指引)、reds=1;
+ * 1. 事实发送:无闸、材料齐全(摘要/明细/镜像/指引)、reds=1;
  * 2. 证据缺口:AI 举回灌卡带 repo 定位,人贴原文注入回灌回合且
  *    reds 不重复计数;
  * 3. 不可修:AI 举人工卡,resume 作答重置监看(刹车/预算账清)重看
  *    同一提交;
  * 4. 预算耗尽:超限红灯停机不派回合,通知请人工;
- * 5. 同提交刹车:上轮投递的提交再红,停机带 AI 诊断,不再投递。
+ * 5. 同提交刹车:上轮发送的提交再红,停机带 AI 诊断,不再发送。
  */
 
 import { test } from "node:test";
@@ -85,7 +85,7 @@ function options(input: {
   };
 }
 
-test("红灯事实投递:不落闸,材料齐全进模型,投递即记一轮预算", async () => {
+test("红灯事实发送:不落闸,材料齐全进模型,发送即记一轮预算", async () => {
   const dataDir = mfcTemp("mfc-redcutover-deliver-");
   const origin = bareOrigin(dataDir);
   seedMrGreenWatch(dataDir, origin);
@@ -108,8 +108,8 @@ test("红灯事实投递:不落闸,材料齐全进模型,投递即记一轮预�
   try {
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "红灯事实投递回合点火");
-    // 材料齐全:摘要/逐维度明细/镜像产物/三路处置指引都在投递词里。
+    "红灯事实发送回合启动");
+    // 材料齐全:摘要/逐维度明细/镜像产物/三路处置指引都在发送词里。
     assert.match(requestText, /流水线未通过/);
     assert.match(requestText, /BUILD FAILURE: 模块 notify-service/);
     assert.match(requestText, /逐维度明细/);
@@ -122,10 +122,10 @@ test("红灯事实投递:不落闸,材料齐全进模型,投递即记一轮预�
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "投递回合收口");
+    }, "发送回合收口");
     assert.equal(settled.gate, undefined, "平台不代举任何卡");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "投递回合=修复回合,派了记一轮");
+      "发送回合=修复回合,派了记一轮");
     assert.equal(settled.pipelines?.[origin]?.last_repair_sha, SHA,
       "刹车账已记本轮提交");
   } finally {
@@ -180,7 +180,7 @@ test("证据缺口:AI 举回灌卡带 repo 定位;人贴原文注入回灌回合
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /ORA-01722/, "人工原文进了回灌回合");
     assert.equal(readStateFile(dataDir).pipelines?.[origin]?.reds, 1,
-      "投递已记一轮,回灌是同轮延续不重复计数");
+      "发送已记一轮,回灌是同轮延续不重复计数");
     assert.match(
       readStateFile(dataDir).pipelines?.[origin]?.last_failure_summary ?? "",
       /人工回灌的报错原文/, "刹车账改记人工回灌摘要");
@@ -248,7 +248,7 @@ test("不可修:AI 举人工处理卡;resume 作答重置监看账重看同一�
 test("预算耗尽:超限红灯停机不派回合,通知请人工", async () => {
   const dataDir = mfcTemp("mfc-redcutover-exhausted-");
   const origin = bareOrigin(dataDir);
-  // 已记一轮(reds=1)+ 预算 1:下一次红灯结算 2>1,诚实停机。
+  // 已记一轮(reds=1)+ 预算 1:下一次红灯记账 2>1,诚实停机。
   seedMrGreenWatch(dataDir, origin, { reds: 1 });
   const platform = new LoopPlatform("failed");
   await platform.start();
@@ -265,7 +265,7 @@ test("预算耗尽:超限红灯停机不派回合,通知请人工", async () => 
     }, "预算耗尽停机");
     assert.match(stopped.stage_note ?? "", /已耗尽/, "诚实停机留痕");
     assert.equal(stopped.pipelines?.[origin]?.reds, 2, "账记到 2");
-    assert.equal(model.requests.length, 0, "不再派投递回合");
+    assert.equal(model.requests.length, 0, "不再派发送回合");
     await until(() => luban.messages.length ? luban.messages : undefined,
       "停机通知发出");
     assert.match(JSON.stringify(luban.messages), /修复轮预算/,
@@ -278,7 +278,7 @@ test("预算耗尽:超限红灯停机不派回合,通知请人工", async () => 
   }
 });
 
-test("同提交刹车:上轮投递的提交再红——停机带诊断,不再投递", async () => {
+test("同提交刹车:上轮发送的提交再红——停机带诊断,不再发送", async () => {
   const dataDir = mfcTemp("mfc-redcutover-brake-");
   const origin = bareOrigin(dataDir);
   seedMrGreenWatch(dataDir, origin, { last_repair_sha: SHA });
@@ -298,7 +298,7 @@ test("同提交刹车:上轮投递的提交再红——停机带诊断,不再投
     assert.match(braked.stage_note ?? "", /没有产出新提交/, "刹车留痕");
     assert.equal(braked.pipelines?.[origin]?.reds, undefined,
       "刹车不耗预算(reds 不动)");
-    assert.equal(model.requests.length, 0, "同一份事实不再重复投递");
+    assert.equal(model.requests.length, 0, "同一份事实不再重复发送");
     await until(() => luban.messages.length ? luban.messages : undefined,
       "刹车停机通知发出");
     assert.match(JSON.stringify(luban.messages), /同一提交/,

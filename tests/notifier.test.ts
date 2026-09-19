@@ -1,5 +1,5 @@
 /**
- * 小鲁班通知语义(主 spec §9/§14.4):待办投递、失败退避重试且
+ * 小鲁班通知语义(主 spec §9/§14.4):待办送达、失败退避重试且
  * 不改流程状态、同待办不重复通知。假小鲁班收什么记什么。
  */
 
@@ -26,7 +26,7 @@ async function until<T>(
   }
 }
 
-test("投递成功:待办事实与审批链接送达账号;同待办幂等", async () => {
+test("发送成功:待办事实与审批链接送达账号;同待办幂等", async () => {
   const luban = new FakeLubanServer();
   await luban.start();
   try {
@@ -36,7 +36,7 @@ test("投递成功:待办事实与审批链接送达账号;同待办幂等", asy
       step: "delivery_review", summary: "Diff 通过吗?",
       link: "http://x/tasks/T-1",
     });
-    await until(() => (first.delivered ? true : undefined), "投递完成");
+    await until(() => (first.delivered ? true : undefined), "送达完成");
     const again = await notifier.notifyWaiting({
       waitingId: "T-1:c1", taskId: "T-1", account: "liaoxiang",
       step: "delivery_review", summary: "重复投递不应发生",
@@ -106,7 +106,7 @@ test("清空重跑会同时清除旧通知审批上下文", async () => {
   assert.equal(notifier.latestApproval("alice"), undefined);
 });
 
-test("清空重跑不让旧投递 Promise 占住同 ID 的新通知", async () => {
+test("清空重跑不让旧发送 Promise 占住同 ID 的新通知", async () => {
   const luban = new FakeLubanServer();
   await luban.start();
   try {
@@ -126,7 +126,7 @@ test("清空重跑不让旧投递 Promise 占住同 ID 的新通知", async () =
     assert.equal(fresh.delivered, true);
     assert.equal(fresh.settled, true);
     assert.equal(luban.messages.length, 2,
-      "旧请求可自然收口，但新任务必须拥有自己的投递，不能借旧 Promise 假完成");
+      "旧请求可自然收口，但新任务必须拥有自己的发送，不能借旧 Promise 假完成");
   } finally {
     await luban.stop();
   }
@@ -178,7 +178,7 @@ test("配置确认通知带出被确认内容；缺内容时禁止裸序号审�
     "缺少被确认内容时不能建立裸回复审批上下文");
 });
 
-test("投递失败:调用方可旁路调度;Promise 只返回最终投递事实", async () => {
+test("发送失败:调用方可旁路调度;Promise 只返回最终发送事实", async () => {
   const luban = new FakeLubanServer();
   await luban.start();
   luban.failFirst = 2;
@@ -304,7 +304,7 @@ test("收口通知:完成/交付说人话送达;同任务同状态幂等", async
       summary: "已提合入请求,流水线通过,等待合入:http://git/mr/1",
       link: "http://x/tasks/T-2",
     });
-    await until(() => (first.delivered ? true : undefined), "投递完成");
+    await until(() => (first.delivered ? true : undefined), "送达完成");
     const again = await notifier.notifyOutcome({
       taskId: "T-2", account: "liaoxiang", status: "await_merge",
       summary: "重复收轮不应重复通知",

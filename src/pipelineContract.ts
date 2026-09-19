@@ -149,9 +149,9 @@ export function summarizeFailedChecks(
 
 /** "不可自动修复工具"分诊(toolkit 的 UNFIXABLE_TOOLS 对齐):
  * CODECHECK 失败但产生失败的工具全部在不可修集合里(如 SuperChecker
- * ——要人工在平台上处理/豁免),派修复会话只会白烧一轮。
+ * ——要人工在平台上处理/豁免),派发修复会话只会白烧一轮。
  * 判定必须**全体**命中且证据充分:任何一个失败维度不是 CODECHECK、
- * 或缺 tool 证据、或工具不在集合里,都返回 false(照常派修)——
+ * 或缺 tool 证据、或工具不在集合里,都返回 false(照常派发修复)——
  * 拿不准时宁可多修一轮,不许把可修的红灯误判成等人。 */
 export function onlyUnfixableToolFailures(
   checks: PipelineCheck[] | undefined,
@@ -174,7 +174,7 @@ export function onlyUnfixableToolFailures(
   });
 }
 
-/** 流水线 run 的选取守卫——防陈灯的宿主级机械核验。
+/** 流水线 run 的选取守卫——防过期结果的宿主级机械核验。
  *
  * 内网对比报告(2026-08-28)实锤的头号根因:MR 头上没有效流水线时
  * 平台挂旧分支的灯(is_valid:false),或返回的 run 根本属于别的提交;
@@ -192,13 +192,13 @@ export function selectTerminalRun<T extends {
   let chosen: T | undefined;
   for (const run of runs ?? []) {
     if (run.is_valid === false) {
-      rejected.push("is_valid=false(MR 头上无有效流水线,挂的是陈灯)");
+      rejected.push("is_valid=false(MR 头上无有效流水线,挂的是过期结果)");
       continue;
     }
     const runSha = String(run.sha ?? "").trim();
     if (runSha && sha && runSha !== sha) {
       rejected.push(`run 绑定 ${runSha.slice(0, 12)} ≠ 当次提交 `
-        + `${sha.slice(0, 12)}(陈灯,拒绝背书)`);
+        + `${sha.slice(0, 12)}(过期结果,拒绝背书)`);
       continue;
     }
     if (run.status === "success" || run.status === "failed") chosen = run;

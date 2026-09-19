@@ -1,5 +1,5 @@
 /**
- * 流水线契约纯函数:防陈灯选取、结构化失败摘要、不可修工具分诊。
+ * 流水线契约纯函数:防过期结果选取、结构化失败摘要、不可修工具分诊。
  * 全部来自 2026-08-28 内网对比报告(mae-flow-cloud vs toolkit)的
  * 差距修复——修复环"一直拿不全/拿不准流水线信息"的根子。
  */
@@ -18,7 +18,7 @@ import { getPipelineStatus } from "../src/pipelineClient.ts";
 const SHA = "a".repeat(40);
 const OTHER = "b".repeat(40);
 
-test("防陈灯:is_valid=false 与绑错 SHA 的 run 一律拒收", () => {
+test("防过期结果:is_valid=false 与绑错 SHA 的 run 一律拒收", () => {
   // MR 头上无有效流水线时平台挂旧分支的灯(对比报告头号根因):
   // 旧绿灯不背书新代码,旧红灯也不许触发白烧的修复轮。
   const stale = selectTerminalRun([
@@ -28,7 +28,7 @@ test("防陈灯:is_valid=false 与绑错 SHA 的 run 一律拒收", () => {
   assert.equal(stale.run, undefined);
   assert.equal(stale.rejected.length, 2);
   assert.match(stale.rejected[0], /is_valid/);
-  assert.match(stale.rejected[1], /陈灯/);
+  assert.match(stale.rejected[1], /过期结果/);
 
   // 绑对 SHA 的终态照常选中;不带回显字段的老配置保持旧行为。
   const good = selectTerminalRun([
@@ -93,7 +93,7 @@ test("结构化失败摘要:点名 stage/job/工具与缺陷定位,超量截断"
     { dimension: "UT", status: "success" }]).length, 0);
 });
 
-test("不可修工具分诊:全体命中且有证据才成立,拿不准照常派修", () => {
+test("不可修工具分诊:全体命中且有证据才成立,拿不准照常派发修复", () => {
   const superOnly = [{
     dimension: "CODECHECK" as const, status: "failed" as const,
     tool: "SuperChecker",
@@ -102,7 +102,7 @@ test("不可修工具分诊:全体命中且有证据才成立,拿不准照常派
   // 缺 tool 证据 → 不成立(宁可多修一轮,不误判等人)。
   assert.equal(onlyUnfixableToolFailures([
     { dimension: "CODECHECK", status: "failed" }], ["superchecker"]), false);
-  // 混着可修维度 → 不成立(照常派修,使命里单独点名不可修部分)。
+  // 混着可修维度 → 不成立(照常派发修复,使命里单独点名不可修部分)。
   assert.equal(onlyUnfixableToolFailures([
     ...superOnly,
     { dimension: "COMPILE", status: "failed" },
@@ -142,7 +142,7 @@ test("client 解析透传 run 级 sha/is_valid,缺席字段不造默认值", asy
     const status = await getPipelineStatus({ platformUrl: base, sha: "b".repeat(40) });
     assert.equal(status.runs.length, 2);
     assert.equal(status.runs[0].sha, "a".repeat(40));
-    assert.equal(status.runs[0].is_valid, false, "陈灯标记要透传");
+    assert.equal(status.runs[0].is_valid, false, "过期结果标记要透传");
     assert.equal(status.runs[1].is_valid, undefined,
       "缺席的 is_valid 不造默认值(缺席=旧适配层)");
     assert.equal(status.runs[1].sha, "b".repeat(40));

@@ -628,7 +628,7 @@ export function createTaskServer(
             luban_token_hint: options.auth!.lubanTokenHint(viewer.username),
           });
         }
-        // 个人设置里的连通测试必须复用正式投递端点与本人 Token；不能
+        // 个人设置里的连通测试必须复用正式发送端点与本人 Token；不能
         // 用一条绕过认证的“假成功”测试链路误导用户。
         if (request.method === "POST" && parts[1] === "me"
             && parts[2] === "luban-test") {

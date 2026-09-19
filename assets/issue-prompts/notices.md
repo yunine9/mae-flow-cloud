@@ -10,7 +10,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 重新监看)」这句修复口径散在 red.deliver.guidance / gate.evidence.tail /
 mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 ——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
-点火),动这句先核对机制还在。
+触发启动),动这句先核对机制还在。
 -->
 
 ## nudge.body
@@ -78,7 +78,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## parked.replay
 
-以下是平台此前投递、尚未送达你的通知,请一并纳入后续判断与动作:
+以下是平台此前发出、尚未送达你的通知,请一并纳入后续判断与动作:
 
 {{items}}
 

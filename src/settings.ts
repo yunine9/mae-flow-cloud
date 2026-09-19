@@ -34,7 +34,7 @@ import {
 export interface RuntimeKnobs {
   max_concurrent?: number;
   /** 问题流回合并发额度:同时推进的问题会话回合上限(等待用户/闲置/
-   *  挂起的会话不占额度)。泵每次点火现读,改完即生效,无需重启。 */
+   *  挂起的会话不占额度)。泵每次开泵现读,改完即生效,无需重启。 */
   issue_max_turns?: number;
   /** 问题会话回合前压缩的事件量阈值:events.jsonl 增量自上次压缩每过
    *  该值,续聊回合先把上下文压一次。0 = 关(缺省);分析→修复边界

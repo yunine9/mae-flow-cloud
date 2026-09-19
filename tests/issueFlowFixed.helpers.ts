@@ -141,7 +141,7 @@ export class LoopPlatform {
   /** /pipeline/artifacts 的剧本覆盖(证据评估测试用):红灯修复链会
    *  把它镜像进会话工作区 pipeline/。缺省演一份编译失败的 build.log。 */
   firstFailureArtifacts: Array<{ name: string; text: string }> | undefined;
-  /** 陈灯影子(#107 回归):置为旧提交 SHA 时,状态查询一律回一条绑
+  /** 过期结果影子(#107 回归):置为旧提交 SHA 时,状态查询一律回一条绑
    *  旧提交的终态红 run(复现"重推换 SHA 后、新 run 注册前"的窗口
    *  期);置回 undefined 放开,恢复常规演出(新提交的真绿)。 */
   staleOldSha: string | undefined;
@@ -193,7 +193,7 @@ export class LoopPlatform {
         }
         if (request.method === "GET" && request.url?.startsWith("/pipeline/status")) {
           const sha = new URL(request.url, "http://loop").searchParams.get("sha") ?? "";
-          // 陈灯影子先于常规计数:窗口期的查询不烧"前两轮 running"
+          // 过期结果影子先于常规计数:窗口期的查询不烧"前两轮 running"
           // 的预算,放开后新 run 照常先跑两轮再出终态。
           if (this.staleOldSha) {
             send({ runs: [{ status: "failed", sha: this.staleOldSha,

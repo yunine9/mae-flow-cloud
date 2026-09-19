@@ -1116,7 +1116,7 @@ export interface TaskSummary {
   /** 新任务在创建时固定团队 Skill；旧任务缺席时才兼容读取实时货架。 */
   host_skills_pinned?: boolean;
   host_skill_snapshot_warnings?: string[];
-  /** 最近一张待办的通知投递事实(失败标红的依据,不影响流程)。 */
+  /** 最近一张待办的通知发送事实(失败标红的依据,不影响流程)。 */
   notify?: Pick<
     NotifyRecord,
     "delivered" | "settled" | "attempts" | "last_error"
@@ -1373,9 +1373,9 @@ export interface TaskServiceOptions {
      * 是越权。平台/团队明确允许代点的部署再打开。 */
     resolveDiscussions?: boolean;
     /** 不可自动修复的质量工具名单(toolkit 的 UNFIXABLE_TOOLS 对齐,
-     * 如 ["SuperChecker"]):CODECHECK 红灯全部来自这些工具时不派修复
+     * 如 ["SuperChecker"]):CODECHECK 红灯全部来自这些工具时不派发修复
      * 会话,直接如实等人——派了也是白烧一轮(2026-08-28 对比报告)。
-     * 判定要有 tool 证据且全体命中才生效,拿不准照常派修。 */
+     * 判定要有 tool 证据且全体命中才生效,拿不准照常派发修复。 */
     unfixableTools?: string[];
   };
   /** 环境预热编译专员(观测旁路)。**缺席即不启用**——serve/pilot 在
@@ -1690,7 +1690,7 @@ interface TaskState {
   /** 红灯具体报错采集的防重入锁；与绿灯核销证据不是同一条链。 */
   repairEvidenceRetryActive?: boolean;
   deliveryRecoveryActive?: boolean;
-  /** 检视回复账本投递的单飞锁；恢复、交付与合入 watcher 共用。 */
+  /** 检视回复账本发送的单飞锁；恢复、交付与合入 watcher 共用。 */
   reviewOutboxFlush?: Promise<boolean>;
   /** 环境预热的防重入锁(内存态):一任务只跑一个预热专员。 */
   warmupActive?: boolean;
@@ -3329,7 +3329,7 @@ export class TaskService {
     return this.historyMutationActive.has(id);
   }
 
-  /** 责任人主动发出的 Committer 检视邀请。邀请先落盘，再投递；通知
+  /** 责任人主动发出的 Committer 检视邀请。邀请先落盘，再发送；通知
    * 失败也不会把“有人应当检视”这个事实弄丢。 */
   async requestReview(
     id: string,
@@ -3622,7 +3622,7 @@ export class TaskService {
           suggestion: "这是部署项；成员只需在个人设置中填写自己的小鲁班 Token" }
       : notify.last_error
         ? { key: "notify", label: "消息通知", status: "warning",
-            detail: "已配置，但最近一次投递失败", suggestion: notify.last_error }
+            detail: "已配置，但最近一次发送失败", suggestion: notify.last_error }
         : { key: "notify", label: "消息通知", status: "ok",
             detail: "小鲁班通知通道已就绪" });
 
@@ -6317,7 +6317,7 @@ export class TaskService {
         ...(gap.human_dimensions ?? []), ...gap.missing_dimensions,
       ])];
       // 活的修复会话直接收到；尚未启动的队列使命原位补充；全缺证据
-      // 停在 verifying 时则重新分诊并自动派修。三种状态共用一条批注账。
+      // 停在 verifying 时则重新分诊并自动派发修复。三种状态共用一条批注账。
       if (task.summary.status === "running" && task.driver) {
         await task.driver.steer(text);
       } else if (["queued", "running"].includes(task.summary.status)
@@ -6329,7 +6329,7 @@ export class TaskService {
         task.summary.delivery!.waiting_on = undefined;
         const loop = task.summary.delivery?.loop;
         if (loop?.kind === "ci" && loop.last_sha === gap.sha) {
-          // 部分证据派修后，会话可能在人工回灌到达前因“缺信息且无新
+          // 部分证据派发修复后，会话可能在人工回灌到达前因“缺信息且无新
           // 提交”停下。同 SHA 刹车防的是拿同一份输入空转，不该挡住
           // 新到的人类证据。把它作为原修复轮的续段重开，round 不加一。
           loop.last_sha = undefined;
@@ -8518,8 +8518,8 @@ export class TaskService {
               && Number.isInteger(saved.obsolete_developer_waiting.stateVersion)
               ? saved.obsolete_developer_waiting : undefined,
           lastPersistedStatus: summary.status,
-          // 上一段进程记下的通知投递结果(含"没送到"红旗)要跟着回来,
-          // 页面才不会把投递失败演成"通知过了"。
+          // 上一段进程记下的通知发送结果(含"没送到"红旗)要跟着回来,
+          // 页面才不会把发送失败演成"通知过了"。
           notifyRecord: saved.notify_record
               && typeof saved.notify_record.waiting_id === "string"
             ? saved.notify_record as NotifyRecord : undefined,
@@ -8834,7 +8834,7 @@ export class TaskService {
         } else if (summary.status === "verifying"
             && (summary.delivery?.pipeline?.startsWith("running") || summary.delivery?.pipeline === "not_found"
               || summary.delivery?.pipeline === "查询失败，正在重试")) {
-          // 前缀匹配而非全等:预算耗尽/拒陈灯会把 pipeline 写成
+          // 前缀匹配而非全等:预算耗尽/拒过期结果会把 pipeline 写成
           // "running(轮询预算耗尽…)" 之类带注记的形态。它们语义上仍是
           // "远端在跑/该继续盯",全等匹配会把这类任务漏到下面的
           // tryDeliver 兜底里重建 MR + 同 SHA 重触发流水线
@@ -9951,7 +9951,7 @@ export class TaskService {
     };
     const recorded = syncCrossRepositoryGroup(parent, this.tasks.values(),
       (member) => { this.persist(member); this.refreshOwnerInputs(member); }, update).find((item) => item.id === update.id)!;
-    // 先落盘再并行入队，一个 Agent 的即时投递失败不影响其他任务。
+    // 先落盘再并行入队，一个 Agent 的即时发送失败不影响其他任务。
     await Promise.all([parent.summary.id, ...recorded.target_task_ids].map(async (targetId) => {
       const target = this.tasks.get(targetId);
       if (!target || target.summary.status !== "running") return;
@@ -9965,7 +9965,7 @@ export class TaskService {
         }
       } catch (cause) {
         this.options.log?.(
-          `[cross-repo-update] ${update.id} 即时投递 ${targetId} 失败，已落盘待后续注入: ${cause}`);
+          `[cross-repo-update] ${update.id} 即时发送 ${targetId} 失败，已落盘待后续注入: ${cause}`);
       }
     }));
     return recorded;
@@ -13665,7 +13665,7 @@ export class TaskService {
         this.reconcileWorkspaceFeedbackAuthority(task);
       },
       release: async () => {
-        // 换代后，旧流水线回调不能再给新目标派修；合入监听仍按任务生命周期运行。
+        // 换代后，旧流水线回调不能再给新目标派发修复；合入监听仍按任务生命周期运行。
         if (!this.current(task, actionEpoch)) throw new TaskControlError("执行权已交接");
         if (task.prepushActive || task.assistantActive) throw new TaskControlError("验证或接手会话仍占用现场，暂不能执行宿主操作");
         task.controlEpoch += 1;
@@ -13717,7 +13717,7 @@ export class TaskService {
         wait: healthy => {
           task.mission = undefined;
           task.summary.status = "verifying";
-          if (healthy) task.summary.detail = "检视修改已推送，宿主继续投递回复并验证本次提交";
+          if (healthy) task.summary.detail = "检视修改已推送，宿主继续发送回复并验证本次提交";
           task.summary.delivery!.loop!.state = "verifying";
           this.persist(task); this.ensureMergeWatch(task);
         },
@@ -14864,7 +14864,7 @@ export class TaskService {
         { headers: this.platformIdentity(task) }).then((r) => readJson(r));
       if (!this.current(task, epoch)
           || task.summary.status !== "verifying") return;
-      // 与主轮询同一道防陈灯核验:重试登记也不许拿别的提交的灯凑数。
+      // 与主轮询同一道防过期结果核验:重试登记也不许拿别的提交的灯凑数。
       const allRuns = Array.isArray(result.runs) ? result.runs : [];
       const latestRuns = allRuns.length ? [allRuns.at(-1)!] : [];
       const terminal = selectTerminalRun<Record<string, unknown> & {
@@ -16897,7 +16897,7 @@ export class TaskService {
       if (!this.current(task, epoch)) return;
       // 平台检视回复必须在已有按需验证以及交付范围机械整理全部收敛后
       // 才绑定最终 HEAD 入 outbox。此前在普通 Agent 收口时就入队，
-      // prepush 若继续修码产生新提交，回复会错误地借后一个 SHA 投递。
+      // prepush 若继续修码产生新提交，回复会错误地借后一个 SHA 发送。
       if (task.summary.delivery?.loop?.kind === "review"
           && task.summary.delivery.loop.review_source === "platform") {
         const staged = await this.stageReviewReplies(task);
@@ -16971,7 +16971,7 @@ export class TaskService {
       this.persist(task);
       scopePipelineArtifacts(join(task.summary.workspace, "pipeline"), pushReceipt.sha);
       this.recordPublishedPush(task, pushReceipt);
-      // 检视回复只能在对应代码可从远端看见后投递。部分失败保留在
+      // 检视回复只能在对应代码可从远端看见后发送。部分失败保留在
       // outbox，后续监控/重启继续；不重派 Agent、不删除失败项。
       if (!await this.flushReviewReplyOutbox(task)) {
         this.scheduleDeliveryRecovery(task, epoch);
@@ -17002,7 +17002,7 @@ export class TaskService {
         }
         if (previous.pipeline.startsWith("running") || previous.pipeline === "not_found"
             || previous.pipeline === "查询失败，正在重试") {
-          // 同 SHA 上次还挂着"运行中"(含预算耗尽/拒陈灯注记):流水线
+          // 同 SHA 上次还挂着"运行中"(含预算耗尽/拒过期结果注记):流水线
           // 大概率仍在远端跑或早已出结果只是没人盯。跌进下面的触发块
           // 就是重建 MR + 同 SHA 重触发——远端每条流水线都是钱。
           // 唯一正确动作:带新预算续轮,已终态的第一轮查询就能收口。
@@ -17267,7 +17267,7 @@ export class TaskService {
     const delivery = task.summary.delivery;
     if (!delivery) return;
     if (delivery.sha !== sha || (delivery.git_push && delivery.git_push.sha !== sha)) return;
-    // 红绿结果都先核对版本，过期红灯也只能重验，不能派修旧代码。
+    // 红绿结果都先核对版本，过期红灯也只能重验，不能派发修复旧代码。
     const attestation = await this.recordPipelineEvidence(task, sha, status, checks);
     if (!this.current(task, epoch) || task.summary.delivery?.sha !== sha
         || (task.summary.delivery.git_push && task.summary.delivery.git_push.sha !== sha)) return;
@@ -18147,8 +18147,8 @@ export class TaskService {
             link: personalTaskLink(this.notificationLinkBase(), task.summary.luban_account ?? "", task.summary.id), notifier: this.options.notifier }));
           this.refreshOwnerInputs(task);
         }
-        // 回复走已有单飞投递，平台慢响应不能拖住下一拍合入观察。
-        this.bypass(task, "检视回复投递", this.flushReviewReplyOutbox(task));
+        // 回复走已有单飞发送，平台慢响应不能拖住下一拍合入观察。
+        this.bypass(task, "检视回复发送", this.flushReviewReplyOutbox(task));
         if (this.reviewReplyOutboxStalled(task)) {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
@@ -19231,7 +19231,7 @@ export class TaskService {
     } catch (error) {
       return {
         ok: false,
-        detail: `MR 回复进入可靠投递账失败：${String(error)}。`
+        detail: `MR 回复进入可靠发送账失败：${String(error)}。`
           + "草稿仍保留，未继续 push。",
       };
     }
@@ -19241,11 +19241,11 @@ export class TaskService {
     return { ok: true };
   }
 
-  /** 只在宿主已经拿到 push 收据后投递。单条失败只留它自己 pending；
+  /** 只在宿主已经拿到 push 收据后发送。单条失败只留它自己 pending；
    * 后续监控/重启继续，不重派 Agent，也不把整批误记成已回复。 */
   private reviewReplyOutboxStalled(task: TaskState): boolean {
     return task.summary.delivery?.stalled
-      ?.startsWith("检视回复投递账不可读") === true;
+      ?.startsWith("检视回复发送账不可读") === true;
   }
 
   private markReviewReplyOutboxUnreadable(
@@ -19253,7 +19253,7 @@ export class TaskService {
     error: unknown,
   ): false {
     if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return false;
-    const detail = "检视回复投递账不可读，已停止自动回复；"
+    const detail = "检视回复发送账不可读，已停止自动回复；"
       + "请管理员修复任务现场中的 delivery-outbox.jsonl 后重试。"
       + `原因：${String(error).slice(0, 500)}`;
     task.summary.detail = detail;
@@ -19303,7 +19303,7 @@ export class TaskService {
           || ["completed", "canceled"].includes(task.summary.status)
           || task.summary.delivery?.git_push?.sha !== pushedSha) break;
       if (item.payload.expected_sha !== pushedSha) {
-        const reason = `拒绝投递：回复绑定 ${item.payload.expected_sha.slice(0, 12)}`
+        const reason = `拒绝发送：回复绑定 ${item.payload.expected_sha.slice(0, 12)}`
           + `，当前远端推送收据是 ${pushedSha.slice(0, 12)}`;
         try {
           if (item.last_error !== reason) {
@@ -19344,7 +19344,7 @@ export class TaskService {
         }));
       } catch (error) {
         try { outbox.markFailed(item.id, String(error)); } catch (ledgerError) {
-          // 其他恢复链可能已投递成功；先读账区分落账冲突与真正损坏。
+          // 其他恢复链可能已发送成功；先读账区分落账冲突与真正损坏。
           try {
             const current = outbox.list().find((one) => one.id === item.id);
             if (current?.state === "delivered") continue;
@@ -19358,7 +19358,7 @@ export class TaskService {
             item.payload.discussion_id}): ${String(error)}`);
       }
     }
-    // 迟到响应仍如实记入投递账，但不能覆盖合入/取消终态。
+    // 迟到响应仍如实记入发送账，但不能覆盖合入/取消终态。
     if (task.mergeSettlement || ["completed", "canceled"].includes(task.summary.status)) return true;
     let delivered: string[];
     try {
@@ -19385,7 +19385,7 @@ export class TaskService {
       }
     }
     const stalled = task.summary.delivery?.stalled;
-    if (stalled?.startsWith("检视回复投递账不可读")) {
+    if (stalled?.startsWith("检视回复发送账不可读")) {
       delete task.summary.delivery!.stalled;
       delete task.summary.delivery!.stall_class;
       if (task.summary.delivery?.waiting_on === stalled) {
@@ -19393,8 +19393,8 @@ export class TaskService {
       }
       if (task.summary.detail === stalled) {
         task.summary.detail = task.summary.status === "await_merge"
-          ? "检视回复投递账已恢复，继续等待 MR 检视与合入"
-          : "检视回复投递账已恢复，继续交付验证";
+          ? "检视回复发送账已恢复，继续等待 MR 检视与合入"
+          : "检视回复发送账已恢复，继续交付验证";
       }
       this.persist(task);
     }
@@ -19921,7 +19921,7 @@ export class TaskService {
     return swept;
   }
 
-  /** 待办 → 小鲁班。投递失败不改流程状态;结果回填 summary.notify
+  /** 待办 → 小鲁班。发送失败不改流程状态;结果回填 summary.notify
    * 供页面标红。未配置通知器或未填账号时静默跳过(演示模式)。 */
   private notifyWaiting(task: TaskState): void {
     const { notifier } = this.options;
@@ -19960,7 +19960,7 @@ export class TaskService {
       deliver(account, waiting.waiting_id, waiting.state_version)
         .then((record) => {
           task.notifyRecord = record;
-          // 投递结果(尤其"没送到")要活过重启:不落盘的话,重启后页面
+          // 发送结果(尤其"没送到")要活过重启:不落盘的话,重启后页面
           // 红旗消失,"通知失败"从可见事实变成不可见事实(2026-08-29
           // 部署审计实锤)。写盘失败由 writeTaskState 自己记日志,纯旁路。
           this.writeTaskState(task);
@@ -19969,7 +19969,7 @@ export class TaskService {
     // 拍板类卡只认责任人,不扰。键按人分开:通知器按 waiting_id 幂等,
     // 复用同一个键第二个人永远收不到;不带 state_version——手机短码
     // 审批只给责任人,参与人在页面上答。页面上的通知红旗只跟责任人
-    // 那条走,参与人的投递结果不覆盖它。
+    // 那条走,参与人的发送结果不覆盖它。
     if (this.ownerOnlyWaiting(waiting)) return;
     for (const participant of this.discussionParticipants(task)) {
       this.bypass(task, "讨论邀请通知",

@@ -1,5 +1,5 @@
 /**
- * MR 检视回复投递原语(需求侧与问题流共用,2026-09-16 抽取)。
+ * MR 检视回复发送原语(需求侧与问题流共用,2026-09-16 抽取)。
  *
  * 共享件只收"怎么发":端点形状、幂等键头、请求体契约、非 2xx 抛错。
  * 何时发、SHA 怎么绑、重试几票是两侧各自拍板的政策(需求侧持票等
@@ -65,7 +65,7 @@ const base = (url: string) => ({
   headers: { authorization: "Bearer t" },
 });
 
-test("投递原语:端点形状、幂等键头与请求体契约", async () => {
+test("发送原语:端点形状、幂等键头与请求体契约", async () => {
   await withCapture(async (url, captured) => {
     await postMrDiscussionReply(base(url));
     assert.equal(captured.length, 1);
@@ -84,7 +84,7 @@ test("投递原语:端点形状、幂等键头与请求体契约", async () => {
   });
 });
 
-test("投递原语:讨论 id 按路径段编码,mr 在场才出现,平台尾斜杠被剥", async () => {
+test("发送原语:讨论 id 按路径段编码,mr 在场才出现,平台尾斜杠被剥", async () => {
   await withCapture(async (url, captured) => {
     await postMrDiscussionReply({
       ...base(url), platformUrl: `${url}/`,
@@ -100,7 +100,7 @@ test("投递原语:讨论 id 按路径段编码,mr 在场才出现,平台尾斜�
   });
 });
 
-test("投递原语:自定义头透传,非 2xx 抛错带状态码", async () => {
+test("发送原语:自定义头透传,非 2xx 抛错带状态码", async () => {
   await withCapture(async (url, captured) => {
     await postMrDiscussionReply(base(url));
     assert.equal(captured[0].contentType, "application/json");

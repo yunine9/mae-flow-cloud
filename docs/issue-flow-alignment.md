@@ -27,7 +27,7 @@ fetchMrDiscussions 凭据链、state.mrs/pushes 账目。
   (合入的是 merge/squash 产物,不必等于验绿 SHA);⑦团队看板问题域
   "已交付"口径同步按 delivered(全 merged)计,fixed 单列。
 - [x] 实施(2026-09-10,c5b5b07):IssueMrRecord 增 target/merged_at/
-  merged_sha/closed_at;closeMrGreen 点火合入监看(fetchMrGates 首次接入
+  merged_sha/closed_at;closeMrGreen 启动合入监看(fetchMrGates 首次接入
   问题流,双轨:监看循环+归档竞态核对);归档软闸结论按事实记(全
   merged→delivered,未全合→fixed);POST /issues/:id/merge-status;
   归档对话框逐仓摆明;看板文案收紧(delivered=已交付);ADR-0022+
@@ -40,9 +40,9 @@ fetchMrDiscussions 凭据链、state.mrs/pushes 账目。
 stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 
 需求侧修的三类病,逐条对照:
-- 投递失败有没有重试(6ee679c:补齐 MR 回执重试);
+- 发送失败有没有重试(6ee679c:补齐 MR 回执重试);
 - 逐条回复会不会错配(6ee679c:防逐条回复错配);
-- 重启后"已投递但平台未显示"半场会不会重投(0c10f9a:隔离消费防串单/
+- 重启后"已发送但平台未显示"半场会不会重发(0c10f9a:隔离消费防串单/
   重复续跑)。
 
 问题侧已有优势:observedSha 观察基准、known-set 去重。
@@ -51,15 +51,15 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 
 - [x] 拍板(grill,2026-09-10):①recover() 续挂检视监看 + 待注入标志
   落盘化(重启不丢);②版本对不上的回复条目直接标失败("代码已更新,
-  请重写回复"),失败不挡新草稿自愈;③记账分家——回复投递成功→意见
-  转"已回复,待检视人核验"(addressed);讨论消失时按投递记录归因
+  请重写回复"),失败不挡新草稿自愈;③记账分家——回复发送成功→意见
+  转"已回复,待检视人核验"(addressed);讨论消失时按发送记录归因
   (AI resolve=true →"Agent 回复并解决",否则"检视人已解决");
   平台自身的 MR 合入规则不归我们管;④同讨论编号、版本号变了且未了结
   = 新追问,重新通知;⑤AI 一次通知后不自动再催(与需求侧"不重复续跑"
-  对齐,人是驱动源);⑥投递队列文件读不动记错误日志,行为照旧。
+  对齐,人是驱动源);⑥发送队列文件读不动记错误日志,行为照旧。
 - [x] 实施(2026-09-10):recover 续挂检视监看+标志落盘(mr-review-notify.
-  json);漂移即 failed+重挂注入自愈;投递成功→addressed、消失归因分家
-  (投递账查 resolve=true);追问=版本号变化重触发(batch_id 带版本,
+  json);漂移即 failed+重挂注入自愈;发送成功→addressed、消失归因分家
+  (发送账查 resolve=true);追问=版本号变化重触发(batch_id 带版本,
   upsert 刷新);staging 加"回合中不装箱"守卫(绑稳定 SHA);信箱损坏
   记日志+新草稿自愈重写。测试:issueReviewLoopHardening 5 场景 +
   issueMrDiscussions 漂移块改语义,回归 32/32+6/6+3/3 全绿。
@@ -85,7 +85,7 @@ stageMrReviewReplies/flushMrReviewReplies(service.ts:3824 起)。
 **判定通过(证据在代码,不复述)**:重启续跑副作用幂等(容器/克隆/
 推送/建 MR 先查后建);waiting_user 卡与 state_version 跨重启连续;
 闸通知不重复轰炸;warmup fail-open;两类 deadline(证据重试窗/流水线
-预算)重启后正确结算;vault 取回与三路终态清理;takeover 落盘可续;
+预算)重启后正确按终态处理;vault 取回与三路终态清理;takeover 落盘可续;
 saveState 原子写+serve 实例锁防双进程;决定卡/reply 双击被状态闸+同步
 beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
 (push_confirm 三档才举是 ADR-0009 刻意保留——2026-09-17 起该闸已退役,
@@ -98,7 +98,7 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
   (原可经 answer 复活已取消会话),不再给终态会话写停机 note/发催人通知;
 - C-H3:attachEnvironment 补终态/挂起守卫(防 API 级复活);
 - C-H5:armReviewNotify/flushMrReviewReplies/syncMergeFacts 终态守卫
-  (不投递、不落孤儿标记);
+  (不发送、不落孤儿标记);
 - C-H6:control 收口清面——平台闸删除、未决 Agent 卡逐条 supersede,
   终态不再投影死卡;
 - B-H4:两路档位代答通知换独立状态词"已代答"(原共用 running 幂等键,
@@ -159,7 +159,7 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
 并行会话提交 b1e9f46("剔除 #155 误卷入的协作者在途改动")时,把本清单
 ①②③④已提交(c5b5b07/5f74607/43f59ab)的 service.ts 实现整块回退
 (421 行):合入监看全套(watchMergeStates/syncMergeFacts/mergeStatus/
-notifyMrGreenClosed 点火/recover 续挂)、检视闭环六项(armReviewNotify/
+notifyMrGreenClosed 启动/recover 续挂)、检视闭环六项(armReviewNotify/
 漂移终态/归因分家/追问/回合不装箱守卫/信箱日志)、体检守卫
 (settlePipeline/raisePipelineGate/watchPipeline/attachEnvironment/
 收口清面/已代答通知词)。state.ts/tools.ts/routes.ts/web 未受影响

@@ -299,7 +299,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "MR 已创建并申报,等流水线跑绿后平台收口。" },
-    // 全绿投递回合(#246 绿灯切换):监看器收口只投递全绿事实开回合
+    // 全绿发送回合(#246 绿灯切换):监看器收口只发送全绿事实开回合
     // ——AI 经 raise_gate 举验证卡,平台不再代举。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户在环境验证。" },
@@ -467,9 +467,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
 
 test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,二轮新卡是新事件", async () => {
   // #246/ADR-0024 绿灯切换:旧「待环境验证(第 N 轮)」outcome 通道已删
-  // ——每轮全绿收口后平台只投递事实,AI 经 raise_gate 举验证卡,用户
+  // ——每轮全绿收口后平台只发送事实,AI 经 raise_gate 举验证卡,用户
   // 通知改由等待卡通道(notifyWaitingCard)承担:同卡按 waiting_id
-  // 幂等只发一次,二轮的新卡是新事件,不撞一轮的已投递记录。
+  // 幂等只发一次,二轮的新卡是新事件,不撞一轮的已发送记录。
   const dataDir = mfcTemp("mfc-issue-green-renotify-");
   const origin = bareOrigin(dataDir);
   const platform = new GreenPlatform();
@@ -485,12 +485,12 @@ test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,�
   const report = (summary: string) =>
     `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 证据链\\n日志:演示。\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
   const raiseVerifyCard: Scene[] = [
-    // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举卡。
+    // 全绿发送回合(#246):监看器收口发送事实,AI 经 raise_gate 举卡。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户验证。" },
   ];
   const script: Scene[] = [
-    // 一轮:拉单→拉仓→分析→确认→修复→推→MR→申报(全绿由平台假件结算)。
+    // 一轮:拉单→拉仓→分析→确认→修复→推→MR→申报(全绿由平台假件按终态处理)。
     { tool: { name: "dts_get_ticket", input: {} } },
     { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
@@ -586,7 +586,7 @@ test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,�
     }, "二轮全绿再举环境验证闸");
     // 回归点:二轮的新卡是新事件——再发一条等待卡通知;同卡只发一次
     // 的幂等不变(notifier 按 waiting_id 记账,每张验证卡恰一条记录,
-    // 二轮的 waiting_id 随新卡新生,不撞一轮的已投递记录)。
+    // 二轮的 waiting_id 随新卡新生,不撞一轮的已发送记录)。
     await until(() => verifyCards().length >= 2 ? true : undefined,
       "二轮验证卡通知落袋");
     assert.equal(verifyCards().length, 2, "二轮新卡必须再发一条等待卡通知");
@@ -676,7 +676,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
 
 test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定位字段)", async () => {
   /** 红灯假件:状态查询首轮即终态 failed(带不可修工具的 checks 明细),
-   *  产物端点回空清单——红灯结算只投事实,举卡由 AI 在投递回合里经
+   *  产物端点回空清单——红灯按终态处理只投事实,举卡由 AI 在发送回合里经
    *  raise_gate 完成(#247),走最短路径触达这张卡的 wire 投影。 */
   class RedPlatform {
     private server: ReturnType<typeof createServer> | undefined;
@@ -728,7 +728,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   const platform = new RedPlatform();
   await platform.start();
   // 「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,监看器重挂
-  // 表直奔红灯结算的事实投递回合(与 issueFlowFixed 的夹具同款)。
+  // 表直奔红灯事实发送回合(与 issueFlowFixed 的夹具同款)。
   const repo = origin;
   const sha = "c".repeat(40);
   const root = join(dataDir, "issues", "issue-1");
@@ -758,7 +758,7 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
       },
     },
   }));
-  // 剧本(#247):投递回合里 AI 判断红灯全部来自平台侧工具告警,经
+  // 剧本(#247):发送回合里 AI 判断红灯全部来自平台侧工具告警,经
   // raise_gate 举不可修卡——平台不再代举,红灯事实在案是唯一前置。
   const model = new ScriptedModelServer([
     { tool: { name: "raise_gate", input: {

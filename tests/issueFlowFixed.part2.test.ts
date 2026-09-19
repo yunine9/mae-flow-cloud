@@ -80,7 +80,7 @@ test("重试窗退场迁移:存量盘 evidence_retry_* 死账字段重启被 rec
 test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通知,reds 不变", async () => {
   const dataDir = mfcTemp("mfc-issue-brake-");
   const origin = bareOrigin(dataDir);
-  // 红到底:第一轮派修后,同一提交再红(重推无新提交)触发刹车。
+  // 红到底:第一轮派发修复后,同一提交再红(重推无新提交)触发刹车。
   const platform = new LoopPlatform("failed", "failed");
   platform.firstFailure = {
     log: "流水线运行失败",
@@ -112,7 +112,7 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
   const luban = new FakeLubanServer();
   await luban.start();
   const notifier = new Notifier({ endpoint: luban.endpoint, fake: true });
-  // 第一轮派修的剧本:重推同一提交+重建 MR(没有新 commit),收口
+  // 第一轮派发修复的剧本:重推同一提交+重建 MR(没有新 commit),收口
   // 发言=诊断。
   const model = new ScriptedModelServer([
     { tool: { name: "push_branch", input: {} } },
@@ -131,14 +131,14 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
     linkBase: "http://work.test",
   });
   try {
-    // 第一轮:照常派修并落刹车账。
+    // 第一轮:照常派发修复并落刹车账。
     await until(() => model.requests.length ? model.requests : undefined,
-      "第一轮派修");
+      "第一轮派发修复");
     const dispatched = await until(() => {
       const issue = service.get("issue-1");
       return issue.pipelines?.[origin]?.last_repair_sha === head
         ? issue : undefined;
-    }, "派修写入刹车账");
+    }, "派发修复写入刹车账");
     assert.equal(dispatched.pipelines?.[origin]?.reds, 1);
     // 同 SHA 再红:刹车停机——不再派第二轮,reds 不变,诊断进留痕。
     const braked = await until(() => {
@@ -153,10 +153,10 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
     await until(() => luban.messages.length ? luban.messages : undefined,
       "刹车停机通知");
     await new Promise((resolve) => setTimeout(resolve, 1_000));
-    // 线性剧本按场景计请求(3 场景=3 请求):判"没有第二轮投递"要看
-    // 请求里有没有第二轮红灯的投递词(#247:轮次词=「第 N/20 轮红灯」)。
+    // 线性剧本按场景计请求(3 场景=3 请求):判"没有第二轮发送"要看
+    // 请求里有没有第二轮红灯的发送词(#247:轮次词=「第 N/20 轮红灯」)。
     assert.doesNotMatch(JSON.stringify(model.requests), /第 2\/20 轮红灯/,
-      "刹车后不再投递第二轮修复回合");
+      "刹车后不再发送第二轮修复回合");
     assert.equal(luban.messages.length, 1, "同因只发一条");
     const text = JSON.stringify(luban.messages);
     assert.match(text, /红灯分诊夹具/, "问题标题入文案");
@@ -176,7 +176,7 @@ test("同提交刹车:修了没出新提交再红灯→停机带 AI 诊断+通�
 });
 
 
-test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮报错段与换思路纪律", async () => {
+test("同提交刹车对照:换新提交红灯照常派发修复,回合文案含上轮报错段与换思路纪律", async () => {
   const dataDir = mfcTemp("mfc-issue-brake-miss-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -187,7 +187,7 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
         message: "cannot find symbol: orderCache" }] }],
   };
   await platform.start();
-  // 上次派修的是另一个提交("d" 串):本次红灯=新提交,不刹车照常派;
+  // 上次派发修复的是另一个提交("d" 串):本次红灯=新提交,不刹车照常派;
   // 盘上预置上轮报错摘要,断言它拼进回合提示词。
   seedMrGreenWatch(dataDir, origin, {
     reds: 1,
@@ -210,8 +210,8 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
   try {
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "换新提交照常投递派修");
-    assert.match(requestText, /第 2\/20 轮红灯/, "reds 跨 SHA 累计,照常投递");
+    "换新提交照常发送派发修复");
+    assert.match(requestText, /第 2\/20 轮红灯/, "reds 跨 SHA 累计,照常发送");
     assert.match(requestText, /逐维度明细/);
     assert.match(requestText,
       new RegExp(`上一轮\\(提交 ${"d".repeat(12)}\\)红灯的报错摘要`),
@@ -239,7 +239,7 @@ test("同提交刹车对照:换新提交红灯照常派修,回合文案含上轮
 });
 
 
-test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上 wire", async () => {
+test("环境预热:拉仓收口进 analyze 时后台启动,收据落台账不上 wire", async () => {
   const dataDir = mfcTemp("mfc-issue-warmup-");
   const origin = bareOrigin(dataDir);
   const warmupWorkspaces: string[] = [];
@@ -278,7 +278,7 @@ test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上
       account: "dev", title: "列表导出超时", repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
-    // complete_stage 推进进 analyze 时点火:预热与主 Agent 并行,主流程
+    // complete_stage 推进进 analyze 时启动:预热与主 Agent 并行,主流程
     // 不等它——结论闸照常升起。
     const gate = await until(() => {
       const issue = service.get(created.id);
@@ -287,7 +287,7 @@ test("环境预热:拉仓收口进 analyze 时后台点火,收据落台账不上
         ? issue : undefined;
     }, "结论确认闸");
     await warmupStarted;
-    assert.equal(warmupWorkspaces.length, 1, "点火恰好一次");
+    assert.equal(warmupWorkspaces.length, 1, "预热恰好启动一次");
     assert.equal(warmupWorkspaces[0],
       join(dataDir, "issues", created.id), "workspace=会话工作区根");
     const receipt = await until(() => {
@@ -596,7 +596,7 @@ test("环境验证闸·通过:作答后落待归档,归档结论按合入事实"
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  // 全绿发送回合(#246):监看器收口发送事实,AI 经 raise_gate 举验证卡。
   const model = new ScriptedModelServer([
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户验证。" },
@@ -638,7 +638,7 @@ test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 red
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 全绿投递回合举卡(#246)+回退回合与两次催办吃文本幕(线性钳到末幕)。
+  // 全绿发送回合举卡(#246)+回退回合与两次催办吃文本幕(线性钳到末幕)。
   const model = new ScriptedModelServer([
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户验证。" },
@@ -677,7 +677,7 @@ test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 red
       ["done", "done", "in_progress", "redo", "redo"],
       "分析重开,修复与交付标 redo");
     assert.equal(settled.gate, undefined, "验证闸已随作答清面");
-    // 回退回合是全绿投递举卡之后的第三个请求(#246:投递+举卡在前)。
+    // 回退回合是全绿发送举卡之后的第三个请求(#246:发送+举卡在前)。
     const rollbackTurn = JSON.stringify(model.requests[2]);
     assert.match(rollbackTurn, /环境验证发现问题/, "回退事实要带给 AI");
     assert.match(rollbackTurn, /订单导出仍然超时/, "用户描述要带给 AI");
@@ -695,7 +695,7 @@ test("环境验证闸·不锁死:未作答也可直接归档(闸随终态清面)
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  // 全绿发送回合(#246):监看器收口发送事实,AI 经 raise_gate 举验证卡。
   const model = new ScriptedModelServer([
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户验证。" },
@@ -731,7 +731,7 @@ test("环境验证闸·月光不代答:一档全自动下验证卡仍只等真�
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 全绿投递回合(#246):监看器收口投递事实,AI 经 raise_gate 举验证卡。
+  // 全绿发送回合(#246):监看器收口发送事实,AI 经 raise_gate 举验证卡。
   const model = new ScriptedModelServer([
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户验证。" },

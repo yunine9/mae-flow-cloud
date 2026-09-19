@@ -38,7 +38,7 @@ systemctl start mae-flow-cloud
 | waiting_for_human(等决定) | 无感:原地继续等;已答未消费的决定自动带回重建会话 | 无 |
 | prepush 验证中 | 无感:僵尸轮自动翻新一轮(reconcileInterruptedPrePush);卡住时页面有「重试」出路 | 无 |
 | verifying + 流水线 running | 无感:按 delivery.sha 续轮,新预算 | 无 |
-| verifying + 轮询预算耗尽/拒陈灯注记 | 无感(✅ 已修):续轮不重触发。修前每次重启会重建 MR + 同 SHA 白烧一条流水线 | 无 |
+| verifying + 轮询预算耗尽/拒过期结果注记 | 无感(✅ 已修):续轮不重触发。修前每次重启会重建 MR + 同 SHA 白烧一条流水线 | 无 |
 | verifying + 证据缺口(红灯待分诊) | 无感:同 SHA 重新取证分诊 | 无 |
 | verifying + 已如实停摆(stalled) | 保持停摆(它在等人不是等机器) | 页面点「重跑」 |
 | await_merge(等合入) | 无感:watchMerge 重新武装,新预算 | 服务不重启时监控预算烧完会停盯;重启即恢复,或等下次部署 |

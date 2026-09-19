@@ -1,7 +1,7 @@
 /**
  * MR 闭环 part 1/6:检视回复闭环:讨论接口重试、显式代 resolve、答复等待检视人、outbox 恢复对 SHA。
  * 共享夹具在 tests/mrLoop.helpers.ts(拆分背景见其头注);
- * 外部意见自动派修用例已由 externalReviewInbox 与责任人交办场景替代；保留投递及人工交办回归。
+ * 外部意见自动派发修复用例已由 externalReviewInbox 与责任人交办场景替代；保留回复发送及人工交办回归。
  */
 
 import { test } from "node:test";
@@ -62,7 +62,7 @@ test("MR 讨论接口失败时明确显示自动重试，不能误报门禁全�
   }
 });
 
-test("outbox 恢复投递强制匹配 push 收据 SHA，旧版回复不能借新分支发出", async () => {
+test("outbox 恢复发送强制匹配 push 收据 SHA，旧版回复不能借新分支发出", async () => {
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.seedDiscussion({
@@ -100,7 +100,7 @@ test("outbox 恢复投递强制匹配 push 收据 SHA，旧版回复不能借新
     assert.match(blocked.last_error ?? "", /当前远端推送收据/);
 
     // 模拟重启对账恢复出这条动作真正对应的 push 收据；同一 pending
-    // 此时才允许投递，并正常落 delivered。
+    // 此时才允许发送，并正常落 delivered。
     internal.summary.delivery.git_push.sha = expectedSha;
     await (service as any).flushReviewReplyOutbox(internal);
     assert.deepEqual(platform.discussions[0].replies, ["已修复"]);
@@ -124,12 +124,12 @@ test("outbox 恢复投递强制匹配 push 收据 SHA，旧版回复不能借新
     assert.deepEqual(platform.discussions[0].replies,
       ["已修复", "并发恢复"]);
 
-    // 合法投递事实后出现完整坏行时必须 fail-closed 且把阻塞投影给人，
+    // 合法发送事实后出现完整坏行时必须 fail-closed 且把阻塞投影给人，
     // 不能只在后台 watcher 里反复抛错，让 await_merge 表面继续等合入。
     appendFileSync(outbox.path, "这不是 JSON\n", "utf-8");
     internal.summary.status = "await_merge";
     assert.equal(await (service as any).flushReviewReplyOutbox(internal), false);
-    assert.match(internal.summary.detail, /检视回复投递账不可读/);
+    assert.match(internal.summary.detail, /检视回复发送账不可读/);
     assert.match(internal.summary.delivery.stalled, /delivery-outbox\.jsonl/);
 
     writeFileSync(outbox.path,
@@ -141,9 +141,9 @@ test("outbox 恢复投递强制匹配 push 收据 SHA，旧版回复不能借新
     (service as any).scheduleDeliveryRecovery(
       internal, internal.controlEpoch);
     await until(() => internal.summary.delivery.stalled === undefined
-      && resumed === 1, "修复投递账后在同一进程自动续接交付", 5_000);
+      && resumed === 1, "修复发送账后在同一进程自动续接交付", 5_000);
     assert.equal(internal.summary.delivery.stalled, undefined);
-    assert.match(internal.summary.detail, /投递账已恢复/);
+    assert.match(internal.summary.detail, /发送账已恢复/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await platform.stop();

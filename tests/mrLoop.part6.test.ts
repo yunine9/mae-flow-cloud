@@ -56,7 +56,7 @@ test("流水线绿后仍持续监听：同一 MR 后续转红会自动修复并�
     assert.equal(late.status, 201);
 
     await until(() => service.get(id)!.delivery?.loop?.kind === "ci"
-      && service.get(id)!.status === "running", "绿后回红自动派修");
+      && service.get(id)!.status === "running", "绿后回红自动派发修复");
     await until(() => service.get(id)!.status === "await_merge"
       && service.get(id)!.delivery?.sha !== firstSha, "修复后重新绿灯");
     assert.equal(platform.pipelines.length, 3,

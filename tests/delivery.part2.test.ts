@@ -99,7 +99,7 @@ test("总体 success 但 typed UT 失败 → 按内核 RED 进入轻量修复处
     { dimension: "CODECHECK", status: "success", job: "codecheck" },
   ];
   // 总体 success 的平台不会带 failure log；具体 UT 失败从 artifacts
-  // 通道给出，正好验证宿主按维取证后才派修。
+  // 通道给出，正好验证宿主按维取证后才派发修复。
   platform.artifacts.push({
     name: "coverage_diff_notify.json",
     text: JSON.stringify({ failed_test: "NotifyServiceTest",

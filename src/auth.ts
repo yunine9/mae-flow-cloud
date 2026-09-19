@@ -368,7 +368,7 @@ export class LocalAuth {
     return maskToken(this.users.get(username)?.luban_token);
   }
 
-  /** 消费口(唯一碰明文的出口):投递通知时按发起人取发送令牌。
+  /** 消费口(唯一碰明文的出口):发送通知时按发起人取发送令牌。
    * 停用账号不给——离职/停权的人不该继续以他的身份发消息。 */
   lubanToken(username: string | undefined): string | undefined {
     if (!username) return undefined;

@@ -143,7 +143,7 @@ test("部分维度有证据时只派可见问题，缺口并行求助", async ()
   }
 });
 
-test("有限重试期间平台补出证据会自动恢复派修", async () => {
+test("有限重试期间平台补出证据会自动恢复派发修复", async () => {
   const platform = new FakeGitPlatform();
   await platform.start();
   const service: any = new TaskService({
@@ -167,7 +167,7 @@ test("有限重试期间平台补出证据会自动恢复派修", async () => {
       name: "build_error_excerpt_compile.txt",
       text: "src/main.cpp:9: fatal error: missing.hpp: No such file",
     });
-    await until(() => task.summary.status === "queued", "证据恢复后自动派修");
+    await until(() => task.summary.status === "queued", "证据恢复后自动派发修复");
     assert.equal(task.summary.delivery.loop.round, 1);
     assert.equal(task.summary.delivery.evidence_gap, undefined);
   } finally {
@@ -199,7 +199,7 @@ test("工作台批注可回灌缺失报错并自动恢复同一 SHA", async () =
       kind: "code",
     });
     await service.sendAnnotations(task.summary.id, [note.id], "liaoxiang");
-    await until(() => task.summary.status === "queued", "人工证据回灌后派修");
+    await until(() => task.summary.status === "queued", "人工证据回灌后派发修复");
     assert.equal(task.summary.delivery.loop.round, 1);
     assert.match(task.mission, /人工从工作台贴回/);
     assert.match(task.mission, /G\.FUN\.01-CPP/);
@@ -283,7 +283,7 @@ test("服务重启后从同一 SHA 继续取证，不误走 prepush 或主任务
     after.options.host = LEGACY_TEST_HOST;
     assert.deepEqual(after.recover(), { restored: 1, requeued: 0 });
     await until(() => after.get(id)?.status === "queued",
-      "重启后证据恢复并派修");
+      "重启后证据恢复并派发修复");
     assert.equal(after.get(id)?.delivery?.loop?.round, 1);
     assert.equal(after.get(id)?.detail.includes("prepush"), false);
   } finally {
@@ -292,7 +292,7 @@ test("服务重启后从同一 SHA 继续取证，不误走 prepush 或主任务
   }
 });
 
-test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺口", async () => {
+test("UT 红灯+镜像日志有 Jest 失败原文→照常派发修复，无证据缺口", async () => {
   const platform = new FakeGitPlatform();
   await platform.start();
   platform.artifacts.push({
@@ -310,7 +310,7 @@ test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺�
     ]);
     await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
     assert.equal(task.summary.status, "queued",
-      "UT 维有可定位原文,照常派修");
+      "UT 维有可定位原文,照常派发修复");
     assert.equal(task.summary.delivery.loop.round, 1);
     assert.equal(task.summary.delivery.evidence_gap, undefined,
       "证据全有时不得生成证据缺口求助");
@@ -323,7 +323,7 @@ test("UT 红灯+镜像日志有 Jest 失败原文→照常派修，无证据缺�
   }
 });
 
-test("issue-28 形态：维度错配的质量门红灯从等人工变派修", async () => {
+test("issue-28 形态：维度错配的质量门红灯从等人工变派发修复", async () => {
   const platform = new FakeGitPlatform();
   await platform.start();
   platform.artifacts.push(...issue28Artifacts());
@@ -338,7 +338,7 @@ test("issue-28 形态：维度错配的质量门红灯从等人工变派修", as
     ]);
     await service.dispatchCiRepair(task, sha, "", 2, task.controlEpoch);
     assert.equal(task.summary.status, "queued",
-      "维度错配由跨维度兜底救回,自动派修");
+      "维度错配由跨维度兜底救回,自动派发修复");
     assert.equal(task.summary.delivery.loop.round, 1);
     assert.equal(task.summary.delivery.evidence_gap, undefined,
       "不再生成证据缺口求助");

@@ -89,7 +89,7 @@ function crashedCompletion(): SemanticEvent[] {
   ];
 }
 
-test("报告已落盘但 Hook 未确认的崩溃窗口：按原 ID/时间补登记，确认后不再投递", async () => {
+test("报告已落盘但 Hook 未确认的崩溃窗口：按原 ID/时间补登记，确认后不再发送", async () => {
   const received: SemanticEvent[] = [];
   const f = await fixture([{ text: "继续" }], {
     postTool: async event => { received.push(event); },
@@ -148,7 +148,7 @@ test("真实 KernelHost → Python Hook：两个 Critic 跨宿主实例精确登
       is_error: phase === "failed", result: `${phase} report`,
     } };
     assert.equal(await host().postTool(completed), undefined);
-    assert.equal(await host().postTool(completed), undefined, "重复投递必须幂等");
+    assert.equal(await host().postTool(completed), undefined, "重复发送必须幂等");
   }
   const records = JSON.parse(readFileSync(join(workspace,
     ".mae-flow.json.agent-observations"), "utf8")).observations;

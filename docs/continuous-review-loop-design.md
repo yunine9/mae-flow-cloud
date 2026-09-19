@@ -258,7 +258,7 @@ resolution        逐条处理结果和证据
 - 同一时刻到达的可修反馈尽量合入一批，一轮把已知问题处理完，不再只修最高优先级一项后丢掉其他已知输入。
 - 人工反馈到达时，停止正在写代码的 Build-Fix/流水线修复执行权，将现有材料与人工意见合并给同一个主修复会话。
 - Agent 正在正常修改时，新反馈可以持久化后 steer；无法安全 steer 时排到下一批，不能启动第二个 writer。
-- 来源事件使用 `(source, source_id, source_revision, observed_sha)` 去重；重启和轮询不得重复派修。
+- 来源事件使用 `(source, source_id, source_revision, observed_sha)` 去重；重启和轮询不得重复派发修复。
 
 ## 6. 证据失效与复用
 

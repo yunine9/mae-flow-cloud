@@ -480,7 +480,7 @@ async function main(): Promise<void> {
   // 代点是越权;平台/团队明确允许的部署才加这个 flag。
   const resolveDiscussions = has("--resolve-discussions");
   // --unfixable-tools(配置文件里写数组):CODECHECK 红灯全部来自这些
-  // 工具(如 SuperChecker)时不派修复会话,直接如实等人——修复 Agent
+  // 工具(如 SuperChecker)时不派发修复会话,直接如实等人——修复 Agent
   // 改代码解决不了平台侧告警,派了就是白烧一轮(2026-08-28 对比报告)。
   const unfixableTools = flags("--unfixable-tools")
     .flatMap((value) => value.split(","))
@@ -901,7 +901,7 @@ async function main(): Promise<void> {
     : undefined;
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
-    // 必须等统一容器清扫完成后再恢复并点火；否则构造期恢复出的新 issue
+    // 必须等统一容器清扫完成后再恢复并启动；否则构造期恢复出的新 issue
     // 容器可能被紧随其后的“上次进程孤儿清扫”误杀。
     deferRecovery: true,
     // 检视回复发布时代点"已解决"(--resolve-discussions):默认关,
@@ -929,7 +929,7 @@ async function main(): Promise<void> {
     ...(debugSetup
       ? { debugIssue: { opsMockBinDir: debugSetup.opsMockBinDir } } : {}),
     // 不可修工具名单(--unfixable-tools,需求交付同一面旗同一语义):
-    // 问题流红灯分诊用——失败项全部落在名单内时不派修复回合,停表
+    // 问题流红灯分诊用——失败项全部落在名单内时不派发修复回合,停表
     // 请人在交付平台处理/豁免。缺席=不分诊,行为照旧。
     ...(unfixableTools.length ? { unfixableTools } : {}),
     // 视觉旁路与需求侧共用同一对旗标(--vision-provider/--vision-model):
