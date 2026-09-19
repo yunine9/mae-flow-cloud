@@ -194,8 +194,10 @@ import {
   type IssueEnvCredentials,
 } from "./prompt.ts";
 import {
+  countVerifyFailures,
   issueOnceRates,
   onceRateFactsFromSnapshot,
+  sentReviewBatches,
   type IssueOnceRateFacts,
   type IssueOnceRateSummary,
 } from "./onceRates.ts";
@@ -1114,10 +1116,11 @@ export class IssueFlowService {
    *  终态会话优先读会话目录里冻结的 metrics.json 判定事实(快、稳,
    *  调用方无感);在途会话照旧现算。快照缺失、损坏或不认识的版本
    *  自动回退现算——不报错、记一条日志,等价于没接过快照。现算口径
-   *  不变:验证失败按转移账的平台文案前缀计(VERIFY_FAIL_NOTE_PREFIX,
-   *  写入点在本服务 env_verify fail 分派),报告版本数读分析报告版本账
-   *  (listAnalysisVersions),检视批次按 reviews 账本的 sent/issue_review
-   *  操作计。枚举与 list() 同源(live 全集,重启恢复时装载)。 */
+   *  不变:验证失败与检视批次的判定由 onceRates.ts 的共享函数
+   *  (countVerifyFailures/sentReviewBatches)承担,快照投影
+   *  (metricsSnapshot.ts)与现算调同一份,口径不分家;报告版本数读
+   *  分析报告版本账(listAnalysisVersions)。枚举与 list() 同源(live
+   *  全集,重启恢复时装载)。 */
   onceRates(): IssueOnceRateSummary {
     const rows: IssueOnceRateFacts[] = [...this.live.values()].map(
       (live) => this.onceRateFacts(live),
@@ -1172,17 +1175,11 @@ export class IssueFlowService {
       ticket: live.state.ticket,
       status: live.state.status,
       conclusion_kind: live.state.conclusion?.kind,
-      // 计数用包含匹配(#328):生产记账是「第 N 轮:用户环境验证发现
-      // 问题:…」(回退统一加轮次前缀),开头匹配永远对不上;包含匹配
-      // 同时覆盖历史裸前缀旧账。
-      verify_fail_count: (live.state.transitions ?? []).filter(
-        (transition) => transition.note.includes(VERIFY_FAIL_NOTE_PREFIX),
-      ).length,
+      // 判定收在 onceRates.ts 的共享函数,与快照投影同一份(口径
+      // 注释见彼处):这里不各写各的判定。
+      verify_fail_count: countVerifyFailures(live.state.transitions ?? []),
       report_version_count: listAnalysisVersions(live.root).length,
-      review_count: reviewStore(live.root).history().filter(
-        (operation) =>
-          operation.op === "sent" && operation.via === "issue_review",
-      ).length,
+      review_count: sentReviewBatches(reviewStore(live.root).history()).length,
     };
   }
 

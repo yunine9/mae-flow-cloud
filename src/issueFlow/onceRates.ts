@@ -1,16 +1,20 @@
 /**
  * 一次率二轴聚合(2026-09-17 拍板,口径唯一权威:CONTEXT「一次修复
  * 成功率」「一次定位成功率」词条)。纯分类:输入各会话的结构化判定
- * 事实,输出分母与两轴分子/比率及逐条明细;不读盘不解析自由文本——
- * 验证失败由调用方按转移账平台文案前缀计(state.ts 的
- * VERIFY_FAIL_NOTE_PREFIX),报告版本数由调用方读分析报告版本账
- * (ADR-0032 起只随修改型检视增长),检视批次由调用方按 reviews 账本
- * 的 sent/issue_review 操作计。终态会话的判定事实也可以来自冻结快照
- * (metrics.json,ADR-0042):本模块只做纯提取与验形(见
+ * 事实,输出分母与两轴分子/比率及逐条明细;不读盘。两个判定口径
+ * (countVerifyFailures 验证未通过、sentReviewBatches 检视批次)收在
+ * 本模块导出——service.ts 的现算与 metricsSnapshot.ts 的快照投影
+ * 调同一份,口径不分家;报告版本数由调用方读分析报告版本账
+ * (ADR-0032 起只随修改型检视增长)。终态会话的判定事实也可以来自
+ * 冻结快照(metrics.json,ADR-0042):本模块只做纯提取与验形(见
  * onceRateFactsFromSnapshot),盘上读写仍归调用方。
  */
 
-import type { IssueConclusionKind, IssueStatus } from "./state.ts";
+import {
+  VERIFY_FAIL_NOTE_PREFIX,
+  type IssueConclusionKind,
+  type IssueStatus,
+} from "./state.ts";
 import {
   ISSUE_METRICS_SCHEMA_VERSION,
   type IssueMetricsSnapshot,
@@ -33,6 +37,32 @@ export interface IssueOnceRateFacts {
   review_count: number;
 }
 
+// ---- 判定口径(现算与快照投影共用这一份,口径不分家) ----
+
+/** 验证未通过次数:按转移账的平台文案计(#328)。生产记账是
+ *  「第 N 轮:用户环境验证发现问题:…」(回退统一加轮次前缀),开头
+ *  匹配永远对不上;包含匹配同时覆盖历史裸前缀旧账。 */
+export function countVerifyFailures(
+  transitions: ReadonlyArray<{ note: string }>,
+): number {
+  return transitions.filter(
+    (transition) => transition.note.includes(VERIFY_FAIL_NOTE_PREFIX),
+  ).length;
+}
+
+/** 检视批次:一次提交动作=一批,只认经检视通道(issue_review)送出的
+ *  sent 操作。返回每批的意见号清单(意见条数=各批长度合计),批次数=
+ *  数组长度。 */
+export function sentReviewBatches(
+  history: ReadonlyArray<{ op?: string; via?: string; ids?: string[] }>,
+): string[][] {
+  return history.flatMap((operation) =>
+    operation.op === "sent" && operation.via === "issue_review"
+      ? [operation.ids ?? []]
+      : [],
+  );
+}
+
 /** 从终态冻结快照(metrics.json,ADR-0042)提取一次率判定事实。
  *  快照的判定字段与现算同源(写盘时都从同一批账投影),读侧只认
  *  当前版本戳、且判定字段齐整:版本不认识、字段缺失、被手改或标了
@@ -51,12 +81,14 @@ export function onceRateFactsFromSnapshot(
     return null;
   }
   // 判定字段逐个验形:metrics.json 是盘上文件,可能缺字段、半写或
-  // 被标了「不可得」(unavailable 对象过不了数值验形)。
+  // 被标了「不可得」(unavailable 对象不是 number,过不了验形)。
   const verifyFail = snapshot.verify_fail_count;
   const reportVersions = snapshot.report_version_count;
   const reviewBatches = snapshot.reviews?.review_batches;
-  if (!Number.isFinite(verifyFail) || !Number.isFinite(reportVersions)
-    || !Number.isFinite(reviewBatches)) {
+  if (typeof verifyFail !== "number" || !Number.isFinite(verifyFail)
+    || typeof reportVersions !== "number"
+    || !Number.isFinite(reportVersions)
+    || typeof reviewBatches !== "number" || !Number.isFinite(reviewBatches)) {
     return null;
   }
   if (snapshot.ticket !== undefined && typeof snapshot.ticket !== "string") {

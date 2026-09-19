@@ -93,6 +93,8 @@ interface SeedOptions {
   unfixableGate?: boolean;
   /** 反馈账中段写一行坏 JSON(降级现场)。 */
   corruptFeedback?: boolean;
+  /** 检视账读取必炸(降级现场:目录顶替账本文件)。 */
+  corruptReviews?: boolean;
 }
 
 /** 全部种子时刻由 base 派生(分钟偏移),阶段耗时与端到端时长可精确断言。 */
@@ -194,14 +196,20 @@ function seedFacts(dataDir: string, options: SeedOptions = {}): {
     ],
   }, null, 1));
   // 检视账:两批平台检视(3 条意见)+ 一条非检视通道的送出(不计)。
-  writeFileSync(join(root, "reviews.jsonl"), [
-    JSON.stringify({ op: "sent", ids: ["an-1", "an-2"],
-      via: "issue_review", at: at(50), by: "dev" }),
-    JSON.stringify({ op: "sent", ids: ["an-3"],
-      via: "issue_review", at: at(90), by: "dev" }),
-    JSON.stringify({ op: "sent", ids: ["an-9"],
-      via: "interrupt", at: at(95), by: "dev" }),
-  ].join("\n") + "\n");
+  // 降级现场用目录顶替账本文件:账本读取对中间坏行自愈(跳过/截断),
+  // 只有读取本身炸才触发该段降级,目录是确定性的炸法(EISDIR)。
+  if (options.corruptReviews) {
+    mkdirSync(join(root, "reviews.jsonl"));
+  } else {
+    writeFileSync(join(root, "reviews.jsonl"), [
+      JSON.stringify({ op: "sent", ids: ["an-1", "an-2"],
+        via: "issue_review", at: at(50), by: "dev" }),
+      JSON.stringify({ op: "sent", ids: ["an-3"],
+        via: "issue_review", at: at(90), by: "dev" }),
+      JSON.stringify({ op: "sent", ids: ["an-9"],
+        via: "interrupt", at: at(95), by: "dev" }),
+    ].join("\n") + "\n");
+  }
   // 分析报告版本账:一份冻结快照 + 不同于快照的 live 文件 = 2 版。
   mkdirSync(join(root, "reviews"), { recursive: true });
   writeFileSync(join(root, "reviews",
@@ -338,8 +346,13 @@ test("事实投影:全部字段从现有账现算,口径分列不混算", () => 
   assert.deepEqual(snapshot.pipeline.red_light_rounds, {
     repaired: 1, canceled_by_merge: 1, discarded_on_head_move: 1,
   }, "修复/随合入取消/随头变丢弃各一轮");
-  assert.equal(snapshot.pipeline.external_head_observations, 1,
-    "外部头观测记录");
+  assert.deepEqual(snapshot.pipeline.external_head_observations, {
+    count: 1,
+    records: [{
+      sha: "9".repeat(12),
+      at: new Date(base + 66 * 60_000).toISOString(),
+    }],
+  }, "外部头观测:次数保留,明细=取代分支头的提交短码+发现时刻");
 
   assert.deepEqual(snapshot.rollbacks, {
     count: 1, reasons: [`${VERIFY_FAIL_NOTE_PREFIX}:复现仍存在`],
@@ -483,10 +496,10 @@ test("失败:模型回合失败落终态后快照生成", async () => {
 
 // ---- 3. 降级:投影中途抛错不阻塞收口 ----
 
-test("降级:反馈账损坏→取消照常完成,MR 评论列标不可得,其余照写", async () => {
+test("降级:反馈账与检视账损坏→取消照常完成,坏账各段标不可得,其余照写", async () => {
   const dataDir = mfcTemp("mfc-issue-metrics-degrade-");
   const { root, id } = seedFacts(dataDir, {
-    status: "idle", corruptFeedback: true,
+    status: "idle", corruptFeedback: true, corruptReviews: true,
   });
   const service = makeService(dataDir);
   try {
@@ -497,8 +510,14 @@ test("降级:反馈账损坏→取消照常完成,MR 评论列标不可得,其�
       "坏账的 MR 评论列标不可得");
     assert.match((snapshot.reviews.mr_comments as IssueMetricsUnavailable)
       .unavailable, /损坏|不可得/, "缺项说明原因");
-    assert.equal(snapshot.reviews.review_batches, 2, "其余段照写");
-    assert.equal(snapshot.report_version_count, 2);
+    assert.ok(isUnavailable(snapshot.reviews.review_batches),
+      "检视账读不了:批次数标不可得(不再拖垮整份快照)");
+    assert.ok(isUnavailable(snapshot.reviews.platform_review_comments),
+      "意见条数与批次数同一份检视账,一起降级");
+    assert.equal(snapshot.report_version_count, 2,
+      "版本账可读,该段照写");
+    assert.equal(snapshot.verify_fail_count, 2,
+      "转移账可读,验证未通过次数照写");
     assert.equal(snapshot.repo_count, 2);
   } finally {
     await service.shutdown().catch(() => undefined);

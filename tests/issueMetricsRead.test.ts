@@ -74,7 +74,10 @@ function seedSession(dataDir: string, spec: SeedSpec): string {
     (_, index) => ({
       at: `2026-09-01T09:${String(10 + index).padStart(2, "0")}:00Z`,
       source: "platform" as const,
-      note: `${VERIFY_FAIL_NOTE_PREFIX}:复现仍存在(${index + 1})`,
+      // 生产记账格式(#328 验收要求):回退统一加「第 N 轮:」前缀,
+      // 验证失败计数按包含匹配(共享判定 countVerifyFailures)。
+      note: `第 ${index + 1} 轮:${VERIFY_FAIL_NOTE_PREFIX}`
+        + `:复现仍存在(${index + 1})`,
     }));
   writeFileSync(join(root, "issue.json"), JSON.stringify({
     ...BASE_STATE,

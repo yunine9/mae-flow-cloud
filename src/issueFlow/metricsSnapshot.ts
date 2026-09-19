@@ -16,8 +16,10 @@
  *   (如 failed 之后又取消)不重写。
  *
  * 「提交归属」「逐推送 diff」两层(工单 #326)在归档那一刻从会话
- * 工作区(repo/ 子树)现算:前者 fetch 远端拿 MR 完整提交清单、与
- * 推送账逐提交比对标注「平台(Agent)/平台外」,后者只读本地对象
+ * 工作区(repo/ 子树)现算:前者 fetch 远端、在目标分支历史里定位
+ * 合入提交,按「合入提交的第一父..合入头」拿 MR 完整提交清单、与
+ * 推送账逐提交比对标注「平台(Agent)/平台外」(MR 提交合入后全部
+ * 可达自目标分支,直接拿目标分支画界会恒空),后者只读本地对象
  * 统计推送区间的文件数与增删行(平台推送的提交天然都在本地)。
  * 单仓取不到(现场已回收/分支被删/远端不可达/对象不可得)只降级
  * 那一仓的段,推送工具与推送账零改动。
@@ -31,11 +33,14 @@ import { FeedbackStore } from "../feedbackStore.ts";
 import { createSafeGitView, type SafeGitView } from "../safeGit.ts";
 import { listAnalysisVersions } from "./analysisVersions.ts";
 import { prepareSandbox, type GitCredential, type GitSandbox } from "./issueGit.ts";
+import {
+  countVerifyFailures,
+  sentReviewBatches,
+} from "./onceRates.ts";
 import { reviewStore } from "./reviews.ts";
 import {
   isTerminal,
   issueRepoWorkspaces,
-  VERIFY_FAIL_NOTE_PREFIX,
   type IssueMrRecord,
   type IssueSessionState,
 } from "./state.ts";
@@ -82,17 +87,20 @@ export interface IssueMetricsSnapshot {
     latest: Array<{ repo: string; branch: string; sha: string; at: string }>;
   };
   reviews: {
-    /** 平台检视意见条数(经本平台提交的批注,CONTEXT 词条口径)。 */
-    platform_review_comments: number;
-    /** 检视批次数(一次提交动作=一批;sent/issue_review 操作计)。 */
-    review_batches: number;
+    /** 平台检视意见条数(经本平台提交的批注,CONTEXT 词条口径)。
+     *  与批次数同一份检视账,账读不了时一起降级。 */
+    platform_review_comments: number | IssueMetricsUnavailable;
+    /** 检视批次数(一次提交动作=一批;判定与一次率现算共享
+     *  onceRates.sentReviewBatches,口径不分家)。 */
+    review_batches: number | IssueMetricsUnavailable;
     /** MR 评论条数(代码托管平台侧的检视讨论,反馈账 mr_discussion 记录)。 */
     mr_comments: number | IssueMetricsUnavailable;
   };
-  /** 分析报告版本数(初版=1,只随修改型检视增长;版本账现算)。 */
-  report_version_count: number;
-  /** 验证未通过次数:转移账按 VERIFY_FAIL_NOTE_PREFIX 前缀计,
-   * 与一次率(onceRates)同法,口径不分家。 */
+  /** 分析报告版本数(初版=1,只随修改型检视增长;版本账现算,
+   *  账读不了时降级)。 */
+  report_version_count: number | IssueMetricsUnavailable;
+  /** 验证未通过次数:判定与一次率现算共享 onceRates.countVerifyFailures,
+   *  口径不分家。 */
   verify_fail_count: number;
   pipeline: {
     /** 红灯各轮处置结局,三分互斥(转移账文案计)。 */
@@ -104,8 +112,12 @@ export interface IssueMetricsSnapshot {
       /** 结果随分支头变化丢弃、不作失败处理的红灯。 */
       discarded_on_head_move: number;
     };
-    /** 外部头观测记录次数(「分支头已被平台外提交取代」条目)。 */
-    external_head_observations: number;
+    /** 外部头观测(分支头被平台外推送取代的每一次发现记录):count=
+     *  次数,records=每次发现的提交号短码(账面 12 位)与时刻。 */
+    external_head_observations: {
+      count: number;
+      records: Array<{ sha: string; at: string }>;
+    };
   };
   rollbacks: {
     count: number;
@@ -148,9 +160,10 @@ export interface IssueMetricsSnapshot {
     }>;
   };
   /** 提交归属比对(工单 #326):归档时 fetch 每个 MR 的完整提交清单
-   *  (目标分支..合入头),与推送账逐提交比对标注「平台(Agent)/
-   *  平台外」;被强推顶掉的平台提交不在清单属正常(未被合入)。
-   *  单仓取不到就地降级,绝不阻塞归档。 */
+   *  (区间=合入提交的第一父..合入头;见 IssueMetricsAttributionRepoOk
+   *  的 list_basis),与推送账逐提交比对标注「平台(Agent)/平台外」;
+   *  被强推顶掉的平台提交不在清单属正常(未被合入),推送事实层
+   *  (pushes 段)仍全量保留。单仓取不到就地降级,绝不阻塞归档。 */
   commit_attribution: IssueMetricsAttributionLayer | IssueMetricsUnavailable;
   /** 逐推送 diff 统计(工单 #326):推送账相邻两笔的区间
    *  (上一笔..本笔,首笔从分支起点起算)统计文件数/增删行/
@@ -181,11 +194,15 @@ export interface IssueMetricsAttributionCommit {
 export interface IssueMetricsAttributionRepoOk {
   repo: string;
   branch: string;
-  /** 清单怎么取到:fetched_branch=fetch 远端分支现算(完备,含平台
-   *  外提交);merged_sha_local=fetch 不可得、退回账面合入头在本地
-   *  现算(平台外提交的对象不在本地,清单可能不全,如实标注)。 */
-  list_basis: "fetched_branch" | "merged_sha_local";
-  /** 目标分支..合入头,从旧到新。 */
+  /** 清单区间怎么定的:merge_commit=在目标分支历史里定位到合入提交
+   *  (父提交含合入头的那个合并提交),区间=合入提交第一父..合入头
+   *  (完备,含平台外提交);merge_base=没定位到合入提交(squash 合入
+   *  没有合并提交、快照滞后于合入),区间=与目标分支的分叉点..合入头
+   *  (合入前快照在此口径下仍完整);merged_sha_local=fetch 不可得、
+   *  退回账面合入头在本地现算(平台外提交的对象不在本地,清单可能
+   *  不全,如实标注)。 */
+  list_basis: "merge_commit" | "merge_base" | "merged_sha_local";
+  /** 清单区间(合入提交第一父或分叉点)..合入头,从旧到新。 */
   commits: IssueMetricsAttributionCommit[];
   platform_count: number;
   external_count: number;
@@ -256,8 +273,10 @@ const RED_FAILED_NOTE = "流水线失败(";
 const MERGE_CANCELED_NOTE = "MR 已合入,旧提交";
 /** 红灯随头变丢弃(9a4d5f75 加的处置结局)。 */
 const HEAD_DISCARDED_NOTE = "旧提交";
-/** 外部头观测(c12c1cf0 加的检查目标跟随条目)。 */
-const EXTERNAL_HEAD_NOTE = "分支头已被平台外提交";
+/** 外部头观测(c12c1cf0 加的检查目标跟随条目):文案是「分支头已被
+ *  平台外提交 <短码> 取代,检查目标跟随切换(<仓>)」,短码与时刻
+ *  (转移账的 at)进明细。 */
+const EXTERNAL_HEAD_COMMIT = /^分支头已被平台外提交 ([0-9a-f]{7,40}) 取代/;
 /** 回退轮次(fixedRollback 的「第 N 轮:原因」)。 */
 const ROLLBACK_NOTE = /^第 \d+ 轮:(.*)$/s;
 
@@ -595,6 +614,30 @@ function commitAttributionLayer(
   return { by_repo: byRepo };
 }
 
+/** 目标分支历史扫描上限:合入提交只在这段里找(归档紧随合入,合入
+ *  提交就在目标分支顶端附近;翻遍全史不值当)。 */
+const MERGE_SCAN_LIMIT = 2000;
+
+/** 在目标分支历史里定位把 MR 合入进来的那个合并提交:父提交(第一父
+ *  以外)含合入头即它。找不到返回 undefined——squash 合入(目标分支
+ *  上只有内容相同的一笔新提交,没有合并提交)与快照滞后于合入都属
+ *  正常,由调用方退分叉点口径。 */
+function findMergeCommit(
+  session: WorktreeGitSession,
+  targetTip: string,
+  head: string,
+): string | undefined {
+  const outcome = session.run([
+    "rev-list", "--parents", "-n", String(MERGE_SCAN_LIMIT), targetTip,
+  ]);
+  if (outcome.code !== 0) return undefined;
+  for (const line of outcome.stdout.split(/\r?\n/)) {
+    const [commit, ...parents] = line.trim().split(/\s+/);
+    if (commit && parents.slice(1).includes(head)) return commit;
+  }
+  return undefined;
+}
+
 function attributeOneMr(
   session: WorktreeGitSession,
   mr: IssueMrRecord,
@@ -605,7 +648,7 @@ function attributeOneMr(
   //    源分支头)在本地现算——合入头是平台推送的场景仍可完整归属,
   //    但平台外提交的对象不在本地,清单可能不全,list_basis 如实标注。
   let head: string | undefined;
-  let listBasis: IssueMetricsAttributionRepoOk["list_basis"] = "fetched_branch";
+  let headLocal = false;
   const fetched = fetchBranchTip(session, mr.repo, mr.branch);
   if (fetched.sha) {
     // 合入头可取时以合入头为界(分支头可能在合入后又前进)。
@@ -616,7 +659,7 @@ function attributeOneMr(
       ? resolveCommit(session, mr.merged_sha) : undefined;
     if (localHead) {
       head = localHead;
-      listBasis = "merged_sha_local";
+      headLocal = true;
     }
   }
   if (!head) throw new Error(fetched.error ?? "取不到 MR 头提交");
@@ -631,13 +674,36 @@ function attributeOneMr(
     throw new Error(`目标分支 ${target} 取不到(远端与本地引用都没有)`);
   }
 
-  // 3) 清单(目标分支..头,从旧到新)与逐提交标注:提交号对上推送账
+  // 3) 清单区间:MR 提交在非 squash 合入后全部可达自目标分支,直接拿
+  //    目标分支画界会恒空、platform/external 恒 0。先在目标分支历史里
+  //    定位合入提交,区间改「合入提交的第一父..合入头」;找不到合入
+  //    提交(squash 合入没有合并提交、快照滞后于合入)退「与目标分支
+  //    的分叉点(merge-base)..合入头」——合入前快照在这个口径下仍是
+  //    完整清单。list_basis 如实标注三种口径。
+  const mergeCommit = findMergeCommit(session, targetSha, head);
+  const mergeCommitBase = mergeCommit
+    ? resolveCommit(session, `${mergeCommit}^1`) : undefined;
+  let baseSha = mergeCommitBase;
+  if (!baseSha) {
+    const merged = session.run(["merge-base", targetSha, head]);
+    const cut = merged.code === 0
+      ? merged.stdout.trim().toLowerCase() : "";
+    baseSha = /^[0-9a-f]{40}$/.test(cut) ? cut : undefined;
+  }
+  if (!baseSha) {
+    throw new Error(`算不出清单区间(与目标分支 ${target} 没有共同祖先)`);
+  }
+  const listBasis: IssueMetricsAttributionRepoOk["list_basis"] = headLocal
+    ? "merged_sha_local"
+    : mergeCommitBase ? "merge_commit" : "merge_base";
+
+  // 4) 清单(区间..头,从旧到新)与逐提交标注:提交号对上推送账
   //    =平台(Agent);对不上=平台外。被强推顶掉的平台提交不在清单
   //    属正常(未被合入),推送事实层(pushes 段)仍全量保留。
   const listed = session.run([
     "log", "--reverse", "--no-color",
     "--format=%H%x1f%an%x1f%ae%x1f%s%x1e",
-    `${targetSha}..${head}`,
+    `${baseSha}..${head}`,
   ]);
   if (listed.code !== 0) {
     throw new Error(`读取提交清单失败:${
@@ -842,12 +908,21 @@ export function buildIssueMetricsSnapshot(
   }
 
   // 检视三口径分列(CONTEXT「平台检视意见」「MR 评论」词条口径):
-  // 批次按 sent/issue_review 操作计,意见条数是该批 ids 的合计,
-  // MR 评论按反馈账 mr_discussion 记录计。
-  const sentBatches = reviewStore(root).history().flatMap((operation) =>
-    operation.op === "sent" && operation.via === "issue_review"
-      ? [operation.ids]
-      : []);
+  // 批次与意见条数同一份检视账(sentReviewBatches,与一次率现算共享),
+  // 账读不了两列一起降级,不留半截状态;MR 评论按反馈账 mr_discussion
+  // 记录计。
+  const reviewCounts = section(() => {
+    const batches = sentReviewBatches(reviewStore(root).history());
+    return {
+      platform_review_comments:
+        batches.reduce((sum, ids) => sum + ids.length, 0),
+      review_batches: batches.length,
+    };
+  });
+  const reviewCount = (
+    key: "platform_review_comments" | "review_batches",
+  ): number | IssueMetricsUnavailable =>
+    "unavailable" in reviewCounts ? reviewCounts : reviewCounts[key];
   const mrRecords = state.mrs ?? [];
 
   const concludedAt = state.conclusion?.at ?? state.updated_at;
@@ -887,17 +962,15 @@ export function buildIssueMetricsSnapshot(
       })),
     },
     reviews: {
-      platform_review_comments: sentBatches.reduce(
-        (sum, ids) => sum + ids.length, 0),
-      review_batches: sentBatches.length,
+      platform_review_comments: reviewCount("platform_review_comments"),
+      review_batches: reviewCount("review_batches"),
       mr_comments: section(() =>
         new FeedbackStore(join(root, "feedback", "index.jsonl"))
           .list().filter((record) => record.source === "mr_discussion")
           .length),
     },
-    report_version_count: listAnalysisVersions(root).length,
-    verify_fail_count: countTransitions(
-      state, (note) => note.includes(VERIFY_FAIL_NOTE_PREFIX)),
+    report_version_count: section(() => listAnalysisVersions(root).length),
+    verify_fail_count: countVerifyFailures(transitions),
     pipeline: {
       red_light_rounds: {
         repaired: countTransitions(
@@ -909,8 +982,14 @@ export function buildIssueMetricsSnapshot(
           state, (note) => note.startsWith(HEAD_DISCARDED_NOTE)
             && note.includes("结果丢弃,不作失败处理")),
       },
-      external_head_observations: countTransitions(
-        state, (note) => note.startsWith(EXTERNAL_HEAD_NOTE)),
+      external_head_observations: (() => {
+        const records: Array<{ sha: string; at: string }> = [];
+        for (const transition of transitions) {
+          const match = EXTERNAL_HEAD_COMMIT.exec(transition.note);
+          if (match) records.push({ sha: match[1]!, at: transition.at });
+        }
+        return { count: records.length, records };
+      })(),
     },
     rollbacks: (() => {
       const reasons: string[] = [];

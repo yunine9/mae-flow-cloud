@@ -7,6 +7,9 @@
  * 1. MR 清单含平台外提交(直接往假远端分支推一笔非平台提交):
  *    归属逐提交标注正确,含「平台推送后外部续推、再被平台接着推」
  *    的中间外部提交;
+ * 1b. MR 已真实合入目标分支(非 squash):清单区间=合入提交的第一父
+ *    ..合入头——合入后 MR 提交全部可达自目标分支,拿目标分支画界
+ *    会恒空(本次收口修的缺陷);
  * 2. 逐推送 diff 数字正确:多文件、增删混合,md 与二进制不进
  *    「仅源码」行(白名单生效);
  * 3. 强推:被顶掉的平台提交不在 MR 清单,但推送事实层的记录与
@@ -231,7 +234,8 @@ test("归属比对:平台外续推的中间提交在 MR 清单里,逐提交标�
 
   const entry = attributionOk(attributionOf(snapshot).by_repo[0]!);
   assert.equal(entry.repo, origin);
-  assert.equal(entry.list_basis, "fetched_branch", "远端可 fetch,清单完备");
+  assert.equal(entry.list_basis, "merge_base",
+    "未合入:没有合入提交可定位,清单按分叉点..合入头口径");
   assert.deepEqual(entry.commits.map((commit) => commit.origin),
     ["platform", "external", "platform"],
     "平台/平台外/平台:中间外部提交在清单且标注正确");
@@ -246,6 +250,68 @@ test("归属比对:平台外续推的中间提交在 MR 清单里,逐提交标�
   const diffs = diffRepoOf(snapshot);
   assert.equal(diffs.pushes.length, 2);
   assert.equal(pushDiffOf(diffs.pushes[0]!).base_kind, "branch_start");
+});
+
+// ---- 1b. 已合入现场:清单区间=合入提交的第一父..合入头 ----
+
+test("归属比对:MR 已真实合入目标分支——清单定位合入提交,不恒空", () => {
+  const dataDir = mfcTemp("mfc-issue-attr-merged-");
+  const origin = bareOrigin(dataDir);
+  const root = join(dataDir, "issues", "issue-1");
+  const ws = seedWorkspace(root, origin);
+
+  // 平台一推。
+  commitFiles(ws, `[${TICKET}][fix] 平台提交一`, { "src/a.ts": "修复\n" });
+  const p1 = pushPlatform(ws);
+
+  // 平台外提交:另一份克隆直接推同一远端分支。
+  const external = join(dataDir, "external");
+  rawGit(["clone", "-q", origin, external]);
+  git(external, "checkout", "-q", BRANCH);
+  execFileSync("git", [
+    "-C", external, "commit", "-q", "--allow-empty",
+    "-m", "外部续推:人工补一处配置",
+  ], {
+    env: {
+      ...GIT_ENV,
+      GIT_AUTHOR_NAME: "外部同事",
+      GIT_AUTHOR_EMAIL: "ext@corp.example",
+      GIT_COMMITTER_NAME: "外部同事",
+      GIT_COMMITTER_EMAIL: "ext@corp.example",
+    },
+  });
+  git(external, "push", "-q", "origin", BRANCH);
+
+  // 平台二推:快进带上外部提交,再续一笔。
+  git(ws, "fetch", "-q", "origin");
+  git(ws, "merge", "-q", "--ff-only", `origin/${BRANCH}`);
+  commitFiles(ws, `[${TICKET}][fix] 平台提交二`, { "src/c.ts": "收尾\n" });
+  const p2 = pushPlatform(ws);
+  const externalSha = git(ws, "rev-parse", "HEAD~1");
+
+  // 真实合入:维护者克隆把修复分支非快进合入 master 并推远端——此后
+  // MR 提交全部可达自目标分支,「目标分支..合入头」口径恒空,归属必须
+  // 靠定位合入提交(第一父=合入前的 master 头)来画界。
+  const integrator = join(dataDir, "integrator");
+  rawGit(["clone", "-q", origin, integrator]);
+  git(integrator, "merge", "-q", "--no-ff", "-m", `Merge ${BRANCH}`,
+    `origin/${BRANCH}`);
+  git(integrator, "push", "-q", "origin", "master");
+
+  const state = seedState(root, origin,
+    { pushShas: [p1.slice(0, 12), p2.slice(0, 12)], mergedSha: p2 });
+  const snapshot = buildIssueMetricsSnapshot(root, state);
+
+  const entry = attributionOk(attributionOf(snapshot).by_repo[0]!);
+  assert.equal(entry.list_basis, "merge_commit",
+    "目标分支历史里定位到合入提交,区间=其第一父..合入头");
+  assert.deepEqual(entry.commits.map((commit) => commit.sha),
+    [p1, externalSha, p2], "合入后清单仍三笔全在,从旧到新");
+  assert.deepEqual(entry.commits.map((commit) => commit.origin),
+    ["platform", "external", "platform"], "合入后逐提交归属标注正确");
+  assert.equal(entry.commits[1]!.author, "外部同事", "平台外提交的作者如实记录");
+  assert.equal(entry.platform_count, 2);
+  assert.equal(entry.external_count, 1);
 });
 
 // ---- 2. 逐推送 diff:数字与源码白名单 ----
