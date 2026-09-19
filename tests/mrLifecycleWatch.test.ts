@@ -161,7 +161,7 @@ for (const action of ["cancel", "replace"] as const) {
 // 2026-09-18 去冗:await_merge 迭代与下方「新讨论只同步入账(ADR-0032)」
 // 用例同 status 同机制且后者断言更严(waiting_on 空),从循环中移除。
 for (const status of ['running', 'paused']) {
-  test(`${status} 持续收集远端意见，合入以平台结果收口(意见只入批注,不自动派修)`, async t => {
+  test(`${status} 持续收集远端意见，合入以平台结果收口(意见只入批注,不自动派发修复)`, async t => {
     const { service, task, remote } = await fixture(t);
     const { FeedbackStore } = await import('../src/feedbackStore.ts');
     task.summary.status = status;
@@ -174,7 +174,7 @@ for (const status of ['running', 'paused']) {
     const store = new FeedbackStore(join(task.summary.workspace, 'feedback', 'index.jsonl'));
     await until(() => store.list().length === 2);
     assert.ok(store.list().every(r => r.status === 'open'));
-    // 2026-09-16 确认制(ADR-0032):意见不再触发自动派修,责任人交办才有
+    // 2026-09-16 确认制(ADR-0032):意见不再触发自动派发修复,责任人交办才有
     // 修复回合;未解决讨论也不伪造合入——合入与否只认平台结果。
     remote.state = 'merged';
     await until(() => task.summary.status === 'completed');
@@ -205,7 +205,7 @@ test('新讨论只同步入账;不派 Agent,合入监听不停止(ADR-0032 确�
   (service as any).ensureMergeWatch(task);
   await until(() => new FeedbackStore(join(task.summary.workspace, 'feedback', 'index.jsonl')).list().length === 1);
   assert.equal(task.summary.status, 'await_merge');
-  // 意见到达不再有任何自动派修分支:没有"自动修复已关闭"的等待文案,
+  // 意见到达不再有任何自动派发修复分支:没有"自动修复已关闭"的等待文案,
   // 也没有预算闸——处置权完全在责任人的批注面板。
   assert.equal(task.summary.delivery.waiting_on ?? '', '');
   remote.state = 'merged';

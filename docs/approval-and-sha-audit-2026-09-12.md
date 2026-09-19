@@ -22,7 +22,7 @@
 |---|---|
 | Git 传输：hostPush、taskHostTools、pipeline push receipt | 保留实际请求/远端提交核验和原子 ref 更新。网络重试复用收据，恢复不重复传输；宿主自身同步远端不作废确认 |
 | 流水线：quality/external_verification、pipeline_commands、pipelineHandoff | 保留精确提交核验。旧绿不能核销新代码，缺失/无效结果不变绿；新结果接棒后旧流水线意见成为历史，不重派 |
-| 过期红灯裁决：TaskService.pipelineVerdict、deliveryRecovery | **发现并修复**：旧红灯曾忽略内核 STALE，继续派修旧错误；现与旧绿走同一重验路径。重试定时器也允许 STALE+failed，避免修完判定却仍卡住 |
+| 过期红灯裁决：TaskService.pipelineVerdict、deliveryRecovery | **发现并修复**：旧红灯曾忽略内核 STALE，继续派发修复旧错误；现与旧绿走同一重验路径。重试定时器也允许 STALE+failed，避免修完判定却仍卡住 |
 | 异步返回 | 核销返回后再次核对执行权和当前推送 SHA，迟到结果不能推进新版本 |
 | 本地构建/UT：prePushVerification、application/hooks/receipts | 保留实际执行输入、任务卡和源码快照身份。相同提交重试保留结果；宿主证明 tree 相同的提交说明重写可迁移 PASS；代码变化仍须真实验证，不靠人工确认伪造成功 |
 | 反馈收据：host_receipts、published_feedback | 保留签名/摘要及结果版本。结果 HEAD 与后续发布 HEAD 分别记账；发布不改写历史 result_head/result_digest，重启可补投影，不能让 Agent 伪造权威收据 |

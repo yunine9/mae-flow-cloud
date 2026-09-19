@@ -2,7 +2,7 @@
  * 会话仓清单的用户调整口(#241,POST /issues/:id/repos →
  * service.requestRepoChanges)契约测试。
  *
- * 设计裁定(spec 拍板链):端点不直改 repo_urls——只校验+留痕+投递通知,
+ * 设计裁定(spec 拍板链):端点不直改 repo_urls——只校验+留痕+发送通知,
  * 清单由 Agent 经 pull_repo(新增,幂等入列)/remove_repo(移除,#240)
  * 执行后变化。测试钉三面:
  * - 校验拦截面:全空 diff / 非 https(validateRepoUrl 还放行 file://,
@@ -12,7 +12,7 @@
  * - 端到端 tracer(范式照 issuePushConfirm:种子会话+ScriptedModelServer
  *   剧本+until 轮询+events.jsonl 断言):空闲提交增删 diff → 通知开续聊
  *   回合 → 剧本 Agent 依次 pull_repo/remove_repo → 清单终态与转移账;
- * - 投递通道:startPlatformTurn 的三态——等人=park 便签(stage_note),
+ * - 发送通道:startPlatformTurn 的三态——等人=park 便签(stage_note),
  *   运行中=steer 送达(话必须进模型上下文)。
  *
  * 管理员拒写/非归属的 403 在路由 own() 闸,不在服务层——行为级盘点
@@ -97,7 +97,7 @@ function readStateFile(dataDir: string, id: string): IssueSessionState {
     join(dataDir, "issues", id, "issue.json"), "utf-8")) as IssueSessionState;
 }
 
-/** 会话事件账(校验拦截面的零副作用断言与投递通道断言共用)。 */
+/** 会话事件账(校验拦截面的零副作用断言与发送通道断言共用)。 */
 function readEvents(dataDir: string, id: string):
   Array<{ kind: string; payload: Record<string, any> }> {
   return readFileSync(join(dataDir, "issues", id, "events.jsonl"), "utf-8")
@@ -262,7 +262,7 @@ test("超上限:现有+新增超过 8 打回(移除不抵扣——先拉后删�
         return true;
       });
     assert.equal(model.requests.length, 0, "打回不开回合");
-    // 到顶不加不减的合法边界:只移除不新增放行(校验通过,开回合投递)。
+    // 到顶不加不减的合法边界:只移除不新增放行(校验通过,开回合发送)。
     const ok = service.requestRepoChanges(id, { add: [], remove: [eight[7]] });
     assert.equal(ok.id, id);
     await until(() => {
@@ -412,7 +412,7 @@ test("端到端:空闲会话提交增删 diff → 通知开续聊回合 → Agen
 
     // 通知词两段都进模型上下文:增段指路 pull_repo、删段带拍板语义。
     await until(() => model.requests.length >= 1 ? true : undefined,
-      "通知回合点火");
+      "通知回合启动");
     const texts = userTexts(model);
     assert.ok(texts.includes(FAKE_REMOTE), `增段要带新仓地址(实际:${texts.slice(0, 400)})`);
     assert.match(texts, /补充分析该仓/);
@@ -456,7 +456,7 @@ test("端到端:空闲会话提交增删 diff → 通知开续聊回合 → Agen
   }
 });
 
-// ---- 投递通道:运行中提交=steer 送达(话必须进模型上下文) ----
+// ---- 发送通道:运行中提交=steer 送达(话必须进模型上下文) ----
 
 test("运行中提交=steer 送达:通知递进正在跑的回合,不抢方向盘也不落便签", async () => {
   const dataDir = mfcTemp("mfc-issue-repochange-steer-");
@@ -474,7 +474,7 @@ test("运行中提交=steer 送达:通知递进正在跑的回合,不抢方向�
   try {
     // 等模型真的开跑(请求已发出=现场 driver 必在)再提交调整。
     await until(() => model.requests.length >= 1 ? true : undefined,
-      "重启续跑回合点火");
+      "重启续跑回合启动");
     const summary = service.requestRepoChanges(id, {
       add: [gamma], remove: [alpha],
     });

@@ -65,7 +65,7 @@ async function startModels(mainScript: Scene[]): Promise<{
 }
 
 /** 首幕先举问题卡,给测试一个确定的窗口往会话工作区放图片(工作区
- * 目录在 create() 时才建出来,首轮点火与写文件赛跑不可靠)。 */
+ * 目录在 create() 时才建出来,首轮回合启动与写文件赛跑不可靠)。 */
 const ASK_SCENE: Scene = {
   tool: { name: "AskUserQuestion", input: { questions: [{
     question: "截图已收到,要现在识图吗?",

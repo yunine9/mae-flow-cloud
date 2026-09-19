@@ -106,7 +106,7 @@ interface CommandSpec {
   runs?: Extract;
   status_map?: Record<string, string>;
   /** run 级回显(pipeline_status 用,全部可选;2026-08-28 对比报告的
-   * 防陈灯根治):run_sha=这条 run 绑定的提交,is_valid=平台"MR 头上
+   * 防过期结果根治):run_sha=这条 run 绑定的提交,is_valid=平台"MR 头上
    * 是否有效流水线"标记。配了宿主就机械核验"结果属于当次提交",
    * 不配保持旧行为(selftest 会点名建议)。 */
   run_sha?: Extract;
@@ -347,8 +347,8 @@ function extractChecks(
 }
 
 /** is_valid 原始值 → 布尔。平台可能给布尔、"false"/"0"、大小写混杂;
- * 只有明确的否定词才判 false——半懂不懂的值当 true(拒陈灯另有
- * run_sha 核验兜底,别把有效流水线误杀成陈灯)。 */
+ * 只有明确的否定词才判 false——半懂不懂的值当 true(拒过期结果另有
+ * run_sha 核验兜底,别把有效流水线误杀成过期结果)。 */
 function parseValidity(raw: unknown): boolean {
   if (raw === false) return false;
   return !["false", "0", "no"].includes(String(raw ?? "").toLowerCase());
@@ -357,7 +357,7 @@ function parseValidity(raw: unknown): boolean {
 /** 把适配器的多条流水线统一成旧→新。现网外置配置曾长期请求
  * sort=desc；宿主升级为 runs.at(-1) 后若继续原样透传，会把最老 run
  * 当成当前事实。pipeline_id 是唯一可靠顺序键：完整时机械升序；只有
- * 明确 is_valid=false 的陈灯允许缺 id 并被放到最前。其余多 run 无法
+ * 明确 is_valid=false 的过期结果允许缺 id 并被放到最前。其余多 run 无法
  * 判断新旧，宁可让该候选失败，也不能拿历史绿灯放行。 */
 function orderStatusRuns(
   runs: Array<Record<string, unknown>>,
@@ -899,7 +899,7 @@ export class PlatformAdapter {
             && !spec.idempotency_no_cli_key) {
           throw new AdapterError(
             "discussion_reply 收到了 idempotency_key，但命令模板未引用 "
-            + "{idempotency_key}；已拒绝非幂等投递，请把该占位符传给"
+            + "{idempotency_key}；已拒绝非幂等发送，请把该占位符传给"
             + "平台支持的幂等请求头或稳定键参数，"
             + "或在配置里设 idempotency_no_cli_key=true 降级为 outbox 防重放");
         }
@@ -1033,8 +1033,8 @@ export class PlatformAdapter {
         + "(或用 contract 模式的编排脚本)，以便红灯时精确诊断");
     lines.push(statusCandidates.some((spec) => spec.contract
       || spec.run_sha || spec.is_valid)
-      ? "[配置] 防陈灯核验: ok (run_sha / is_valid 至少一路可回显)"
-      : "[建议] 防陈灯核验: 建议配置 run_sha / is_valid 回显——"
+      ? "[配置] 防过期结果核验: ok (run_sha / is_valid 至少一路可回显)"
+      : "[建议] 防过期结果核验: 建议配置 run_sha / is_valid 回显——"
         + "MR 头上无有效流水线时平台挂旧灯,宿主拿不到绑定 SHA 就"
         + "无法机械拒收(2026-08-28 对比报告头号根因)");
     const probes: Array<[string, string, URLSearchParams]> = [

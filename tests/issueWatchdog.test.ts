@@ -196,7 +196,7 @@ test("守闸阈值热改:启动时关(0),后来开到非 0——下一拍生效�
   }
 });
 
-test("守闸 fail-open:通知投递失败只留痕——不炸服务、不动会话", async () => {
+test("守闸 fail-open:通知发送失败只留痕——不炸服务、不动会话", async () => {
   const dataDir = mfcTemp("mfc-watchdog-failopen-");
   seedClosed(dataDir, "issue-1", Date.now() - 10 * 60_000);
   // 端点指向必然拒连的端口:Notifier 自身即 fail-open(deliver 从不
@@ -209,8 +209,8 @@ test("守闸 fail-open:通知投递失败只留痕——不炸服务、不动会
       notifierLog: (message) => deliveryLogs.push(message) }),
   });
   try {
-    // 等过首扫:无未捕获异常(进程不炸),投递失败在通知层留痕。
-    await until(() => deliveryLogs.some((line) => /通知投递失败/.test(line))
+    // 等过首扫:无未捕获异常(进程不炸),发送失败在通知层留痕。
+    await until(() => deliveryLogs.some((line) => /通知发送失败/.test(line))
       ? true : undefined, "通知层 fail-open 留痕");
     const state = readState(dataDir, "issue-1");
     assert.equal(state.status, "idle", "会话状态一字不动");

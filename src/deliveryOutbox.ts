@@ -1,7 +1,7 @@
 /**
  * 外部交付动作的 append-only outbox。
  *
- * Agent 产出的回复先入账，代码 push 成功后才允许投递。进程可以死在
+ * Agent 产出的回复先入账，代码 push 成功后才允许发送。进程可以死在
  * 任意一条回复前后：已成功的不会从本地账上消失，失败的保持 pending，
  * 重启继续。外部端同时收到稳定 idempotency_key，用来封住“远端成功、
  * 本地来不及记成功”这个最后的重复窗口。
@@ -242,7 +242,7 @@ export class DeliveryOutbox {
       }
       if (item.state !== "pending") {
         throw new Error(
-          `delivery outbox 第 ${index + 1} 行对已投递项重复 ${operation.op}`);
+          `delivery outbox 第 ${index + 1} 行对已发送项重复 ${operation.op}`);
       }
       if (operation.op === "attempt") {
         item.attempts += 1;
@@ -313,7 +313,7 @@ export class DeliveryOutbox {
   private requirePending(id: string): void {
     const item = this.list().find((one) => one.id === id);
     if (!item) throw new Error(`outbox 项不存在: ${id}`);
-    if (item.state === "delivered") throw new Error(`outbox 项已投递: ${id}`);
+    if (item.state === "delivered") throw new Error(`outbox 项已发送: ${id}`);
   }
 
   private append(operation: Operation): void {

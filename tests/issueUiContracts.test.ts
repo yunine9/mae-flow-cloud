@@ -1554,7 +1554,7 @@ test("元信息页签居首(#239):登记四项只读、绑定标、终态只读�
 
 // ---- 主动拉取日志(#268,ADR-0026):按钮=意图递交,Agent 主理第二例 ----
 
-test("拉取日志意图递交(#268):按钮只递意图,端点守卫+留痕+投递,平台不代拉", () => {
+test("拉取日志意图递交(#268):按钮只递意图,端点守卫+留痕+发送,平台不代拉", () => {
   const metaPane = readFileSync(
     resolve("web/src/issues/MetaPane.tsx"), "utf-8");
   const apiSource = readFileSync(resolve("web/src/api.ts"), "utf-8");

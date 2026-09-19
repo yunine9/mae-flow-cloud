@@ -1,7 +1,7 @@
 /**
  * MR 闭环 part 3/6:检视意见接续与本地 review 轮:feedback-open 沿用交付事实、未合入前反复开轮更新同一 MR。
  * 共享夹具在 tests/mrLoop.helpers.ts(拆分背景见其头注);
- * 外部意见自动派修用例已由 externalReviewInbox 与责任人交办场景替代；保留投递及人工交办回归。
+ * 外部意见自动派发修复用例已由 externalReviewInbox 与责任人交办场景替代；保留回复发送及人工交办回归。
  */
 
 import { test } from "node:test";

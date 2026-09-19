@@ -26,6 +26,7 @@ import {
 } from "../src/issueFlow/routes.ts";
 import { issueFixedOpeningPrompt, issueResumePrompt } from "../src/issueFlow/prompt.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { saveProductVersion } from "../src/configurationCenter.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -107,6 +108,9 @@ function makeService(
   dataDir: string,
   extra: Partial<ConstructorParameters<typeof IssueFlowService>[0]> = {},
 ): IssueFlowService {
+  // 版本必填(2026-09-18)且须为配置中心在册版本:夹具统一播种一枚。
+  saveProductVersion(dataDir, { version: "V100R027C10B005",
+    branch: "release/V100R027C10B005" });
   return new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
     ...extra,
@@ -125,7 +129,7 @@ test("登记指派:带责任人创建——归属=责任人、登记人=登录�
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "dev", module_id: "pay-core",
+        title: "下单超时", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -165,7 +169,7 @@ test("登记指派:手工登记缺责任人 409 人话;DTS 发起不带=自登�
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", module_id: "pay-core",
+        title: "下单超时", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -178,7 +182,7 @@ test("登记指派:手工登记缺责任人 409 人话;DTS 发起不带=自登�
       viewer: OWNER_VIEWER,
       payload: {
         title: "下单超时", source: "dts", ticket: "DTS20260901001",
-        module_id: "pay-core",
+        module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -211,7 +215,7 @@ test("登记指派:管理员/不存在的账号不能当责任人", async () => 
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "boss", module_id: "pay-core",
+        title: "下单超时", assignee: "boss", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -222,7 +226,7 @@ test("登记指派:管理员/不存在的账号不能当责任人", async () => 
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "ghost", module_id: "pay-core",
+        title: "下单超时", assignee: "ghost", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -255,7 +259,7 @@ test("登记指派:Git 凭据门查责任人并点名,自登记文案维持「�
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "dev2", module_id: "pay-core",
+        title: "下单超时", assignee: "dev2", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -269,7 +273,7 @@ test("登记指派:Git 凭据门查责任人并点名,自登记文案维持「�
       service,
       viewer: OWNER_VIEWER,
       payload: {
-        title: "下单超时", assignee: "dev", module_id: "pay-core",
+        title: "下单超时", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -301,7 +305,7 @@ test("登记指派:小鲁班通知发给责任人;自登记不发、登记人不
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "dev", module_id: "pay-core",
+        title: "下单超时", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -321,7 +325,7 @@ test("登记指派:小鲁班通知发给责任人;自登记不发、登记人不
       service,
       viewer: OWNER_VIEWER,
       payload: {
-        title: "自登记的问题", assignee: "dev", module_id: "pay-core",
+        title: "自登记的问题", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -356,7 +360,7 @@ test("登记指派:--public-url 缺席时从请求 Host 学通知入口,回环�
       service,
       viewer: TESTER,
       payload: {
-        title: "下单超时", assignee: "dev", module_id: "pay-core",
+        title: "下单超时", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });
@@ -375,7 +379,7 @@ test("登记指派:--public-url 缺席时从请求 Host 学通知入口,回环�
       service,
       viewer: TESTER,
       payload: {
-        title: "导出失败", assignee: "dev", module_id: "pay-core",
+        title: "导出失败", assignee: "dev", module_id: "pay-core", product_version: "V100R027C10B005",
         environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
       },
     });

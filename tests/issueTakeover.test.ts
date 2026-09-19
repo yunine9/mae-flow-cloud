@@ -44,7 +44,7 @@ async function until<T>(
 
 function readEvents(root: string): Array<Record<string, any>> {
   const path = join(root, "events.jsonl");
-  // 旁路纪律(与 readConversationEvents 同款):账本还没落(回合刚点火)
+  // 旁路纪律(与 readConversationEvents 同款):账本还没落(回合刚启动)
   // 给空,不炸轮询。
   if (!existsSync(path)) return [];
   return readFileSync(path, "utf-8")
@@ -130,7 +130,7 @@ test("人工接管全链:running 中接管→AI 回合中止不标 failed;人工
     assert.equal(settled.error, undefined, "被中止的回合不得留失败账");
 
     // ④ 交还:有"上一回合还在收尾"的守卫,重试到能开新回合为止;
-    //    每次撞守卫都复核接管现场没被结算路径污染。
+    //    每次撞守卫都复核接管现场没被收口路径污染。
     const deadline = Date.now() + 60_000;
     let resumed: IssueSummary | undefined;
     for (;;) {
@@ -155,7 +155,7 @@ test("人工接管全链:running 中接管→AI 回合中止不标 failed;人工
       "交还不改写阶段现场说明(语境保留给续跑回合)");
 
     // ⑤ 续跑回合的提示词:交还说明+人工记录原文都要在,给"先核实现状"
-    //    的纪律句也在。交还点火请求是第二拍(requests[1];其后还有
+    //    的纪律句也在。交还后的启动请求是第二拍(requests[1];其后还有
     //    催办续跑的请求,不能取 at(-1))。
     await until(() => model.requests.length >= 2 ? true : undefined,
       "交还请求到达模型");

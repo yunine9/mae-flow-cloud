@@ -131,7 +131,7 @@ Maven、Node/npm 与 C/C++ 工具链。CodeCheck 仍不装，最终质量结论�
 | 能力 | 外部假件 | 内网真件切换点 | 语义契约(不变) |
 | --- | --- | --- | --- |
 | 模型网关 | scriptedModel / bigmodel | `--models` 指向内网网关 models.json | Anthropic Messages + SSE;注意网关是否静默改路由模型 |
-| 小鲁班通知 | FakeLubanServer | Notifier `endpoint` + 鉴权头 | 投递失败不改流程状态;有限退避;按 waiting_id 幂等 |
+| 小鲁班通知 | FakeLubanServer | Notifier `endpoint` + 鉴权头 | 发送失败不改流程状态;有限退避;按 waiting_id 幂等 |
 | Git 服务端 | FakeGitPlatform 裸仓 | `--repo` 指向内网仓地址(克隆凭证走 git credential) | 服务端仓是唯一远端真相 |
 | MR + 流水线 | FakeGitPlatform HTTP | `delivery.platformUrl` + 鉴权 | MR 按(源→目标)幂等;流水线结果绑 SHA;验证中→等待合入 |
 
@@ -209,7 +209,7 @@ codehubcli 命令行,代码零改动。配置形状(权限 600,文件头注释�
 ```
 
 MR 闭环端点(mr_gates/mr_discussions/discussion_reply/
-pipeline_artifacts；启用 MR 持续检视时必须配置讨论查询和回复，不配会明确报查询/投递失败并重试)与按能力核对报告
+pipeline_artifacts；启用 MR 持续检视时必须配置讨论查询和回复，不配会明确报查询/发送失败并重试)与按能力核对报告
 钉出来的 adapter.json 参考填法(mergeable_state 平铺布尔、先查后建、
 两步回复/解决、MCP 日志桥),见 **docs/mr-loop-adaptation.md §3/§11**。
 检视回复默认只回复不代点"已解决"(报告 D3:resolve 归检视人);
@@ -264,7 +264,7 @@ MFC_MCP_TOKEN_REFRESH_TIMEOUT=15
 
 ### 通知:小鲁班怎么接(2026-08-18 内网实测通,端到端收到消息)
 
-契约不变:投递失败不改流程状态、按 waiting_id 幂等、有限退避。
+契约不变:发送失败不改流程状态、按 waiting_id 幂等、有限退避。
 
 小鲁班是**普通 HTTP 接口,不是 MCP**:
 
@@ -498,7 +498,7 @@ Cloud 只有一种最终质量语义，不需要管理员选择。推送前 Agen
   最终通过证据；
 - push 后保留 `external_verify`；流水线红灯进入轻量修复环，修复依据该次
   绑定 SHA 的流水线材料，新 HEAD 再走一次推送前编译+UT。
-- 红灯只在对应维度拿到可定位报错后才派修；全缺证据时先有限重试，随后
+- 红灯只在对应维度拿到可定位报错后才派发修复；全缺证据时先有限重试，随后
   由《流水线证据缺口》批注回灌或平台晚到证据自动恢复，不派盲修也不扣轮次。
 
 订单中的固定形状如下（除 `UT生成方式` 会按实际可用 Skill 选择外，不是
@@ -817,7 +817,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
   受限的文字观察结果。保存后可用系统生成的红/绿/蓝色块图做一次真实
   端到端测试；测试不读取业务图片，也不创建任务。
 
-小鲁班投递端点属于部署基础设施，只能通过部署配置维护；每位成员在
+小鲁班发送端点属于部署基础设施，只能通过部署配置维护；每位成员在
 「个人设置」中填写自己的小鲁班发送 Token。普通任务提醒发给本人；
 主动邀请检视时，用任务责任人的 Token 发给所选 Committer 工号，
 收件人无需配置 Token。管理页不再维护团队共享密钥。

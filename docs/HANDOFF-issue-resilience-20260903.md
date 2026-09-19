@@ -39,11 +39,11 @@
     （`workspaceRetentionDays()` ~7159-7166）；serve 每日清扫 `sweepStorage`（serve.ts ~989-1019）
 
 ### 问题流现状锚点（src/issueFlow/service.ts）
-- 红灯结算 `settlePipeline`（~2942-3175），开头即 `watch.watching = false`（~2952）。
+- 红灯终态处理 `settlePipeline`（~2942-3175），开头即 `watch.watching = false`（~2952）。
   内部顺序：不可修分诊（~3040-3078，举 pipeline_unfixable 闸）→ 证据评估（~3082）→
   证据全缺举 pipeline_evidence 卡（~3092-3125）→ 修复轮预算（~3127-3145，reds+1、超限停机**不发通知**）→
-  分级回合文案+派修（~3146-3174，`startPlatformTurn`）。
-- 监看循环 `watchPipeline`（~2880-2940）：trigger→轮询→终态即结算；轮询预算耗尽停表
+  分级回合文案+派发修复（~3146-3174，`startPlatformTurn`）。
+- 监看循环 `watchPipeline`（~2880-2940）：trigger→轮询→终态即按终态处理；轮询预算耗尽停表
   （~2931-2939）只写 stage_note，**不发通知**。
 - 人工回灌闸裁决 `resolveGate`：pipeline_evidence 的 supply 码（自由文本回灌，该轮才耗预算）。
 - 通知器：仅 `notifyWaitingCard`（举卡时）与月光代答后的 `notifyOutcome`（~1605、~1671）在用。
@@ -61,7 +61,7 @@
 - `tests/issueFlowFixed.test.ts`：LoopPlatform（`firstFailure`{log,checks}、`firstFailureArtifacts`
   产物剧本）、seedMrGreenWatch（预置 mr_green 监看）、ScriptedModelServer、FakeLubanServer
   （messages 断言通知）。既有红灯用例：不可修分诊举卡、证据分级点名、证据全缺举卡（~2234）、
-  UT+Jest 派修、issue-28 形态兜底派修、名单未配置照修。
+  UT+Jest 派发修复、issue-28 形态兜底派发修复、名单未配置照修。
 - 契约测试模式：issueUiContracts 源码正则（钉前端/文案用）。
 - 测试命令纪律：`npx tsx --test --test-timeout=60000（重承载 120000） --test-force-exit tests/<file>`；
   收尾全量 `npm test` + `npm run typecheck`（web 侧另 `cd web && npx tsc -b`）。
@@ -73,7 +73,7 @@
 | 1 | 放弃时通知 | 仅预算烧完/轮询超时/同提交刹车三个放弃点；幂等键防重发；开始修/修复过程不通知 | 每轮修复都通知（太吵） |
 | 2 | 盲输入闸 | 消费公共判据；只拦 checks 缺席+链接抠掉后内容不足+零产物；拦下后并入证据缺口处置 | 提示词约束（模型在"必须修"压力下劝不住） |
 | 3 | 证据重试窗 | 全缺/盲输入先进重试窗（缺省 15 分钟，旋钮可配，**0=关**回到立即举卡），到点才举卡；不耗预算；落盘续算 | 立即举卡（假卡，现状）|
-| 4 | 同提交刹车 | 红灯 SHA==上次派修 SHA→停机+会话最后发言作诊断+通知，不耗预算；派修回合带上轮报错段+换思路纪律；机制是代码、纪律是提示词 | 只靠预算兜底（现状） |
+| 4 | 同提交刹车 | 红灯 SHA==上次派发修复 SHA→停机+会话最后发言作诊断+通知，不耗预算；派发修复回合带上轮报错段+换思路纪律；机制是代码、纪律是提示词 | 只靠预算兜底（现状） |
 | 5 | 推送前 UT | **仅提示词强烈建议**全量 UT 全绿再推；不加台账闸、不上 prepush | 台账闸、容器专项验证（prepush 接入）——均已评估后放弃 |
 | 6 | 工作区回收 | 保守四保险：只清终态+保留期后+清重货留台账+容器在跑跳过；保留期复用管理页既有旋钮 | 激进清理、新增独立旋钮 |
 | 7 | 技能目录 | 问题流扩为 `.cac/skills`+`.agents/skills` 两个；`.cac` 优先，同名跳过留告警；需求流四目录不动 | pi/.claude 目录；需求流侧改造 |

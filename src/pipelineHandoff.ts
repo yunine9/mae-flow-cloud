@@ -10,7 +10,7 @@ export function validPushReceipt(value: unknown): value is NonNullable<NonNullab
 }
 
 /** 两条推送入口共用投影：新 SHA 只代表已推送，不继承旧运行的红绿灯。
- * last_sha 是上次派修锚，必须保留；在实际派出下一轮修复时才更新。 */
+ * last_sha 是上次派发修复锚，必须保留；在实际派出下一轮修复时才更新。 */
 export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>): void {
   const previous = summary.delivery;
   summary.delivery = { ...previous, git_push: receipt, sha: receipt.sha,

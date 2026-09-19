@@ -105,7 +105,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 重新申报", mrs: [origin] } } },
     { text: "已修复再推,等待流水线。" },
-    // 第 4 回合(#246 绿灯切换):流水线全绿+已申报,监看器收口只投递
+    // 第 4 回合(#246 绿灯切换):流水线全绿+已申报,监看器收口只发送
     // 全绿事实开回合——AI 经 raise_gate 举验证卡(平台不再代举)。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待用户在环境验证。" },
@@ -123,7 +123,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "二轮 MR 已申报", mrs: [origin] } } },
     { text: "二轮修复已提交,等待流水线。" },
-    // 第 7 回合(二轮流水线绿,#246):监看器收口投递全绿事实——AI 举卡。
+    // 第 7 回合(二轮流水线绿,#246):监看器收口发送全绿事实——AI 举卡。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待验证。" },
   ];
@@ -1016,7 +1016,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
   await platform.start();
-  // 全绿投递回合(#246 绿灯切换):监看器绿了收口只投递全绿事实开
+  // 全绿发送回合(#246 绿灯切换):监看器绿了收口只发送全绿事实开
   // 回合——AI 经 raise_gate 举验证卡,平台不再代举。
   const script: Scene[] = [
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
@@ -1080,7 +1080,7 @@ test("恢复:监看中的流水线重启后重新挂表,绿了自动推进", asy
 });
 
 
-test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真绿才结算", async () => {
+test("监看器过期结果防御(#107):重推换 SHA 后旧账红灯拒绝背书,真绿才落终态", async () => {
   const dataDir = mfcTemp("mfc-issue-stale-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
@@ -1093,8 +1093,8 @@ test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真�
   await model.start();
   // 用户实报(#107)的现场:声明#1 后 sha1 首轮红过,修复回合推送
   // sha2 并重挂监看;此刻平台上 sha2 的 run 还没注册,账面最新还是
-  // sha1 的红灯(staleOldSha 打开影子)。陈灯防御钉的就是这个窗口期
-  // ——裸取 runs.at(-1) 结算会把新监看账定格 failed,真绿灯没人看。
+  // sha1 的红灯(staleOldSha 打开影子)。过期结果防御钉的就是这个窗口期
+  // ——裸取 runs.at(-1) 落终态会把新监看账定格 failed,真绿灯没人看。
   const staleSha = spawnSync("git", ["--git-dir", origin, "rev-parse", "HEAD"],
     { encoding: "utf-8" }).stdout.trim();
   const tree = spawnSync("git", ["--git-dir", origin, "rev-parse", "HEAD^{tree}"],
@@ -1145,9 +1145,9 @@ test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真�
     "窗口期内至少三轮状态查询(影子未放开)", 20_000);
     const midWindow = service.get("issue-1");
     assert.equal(midWindow.pipelines?.[origin]?.status, "running",
-      "陈灯窗口期不得把监看账结算成 failed");
+      "过期结果窗口期不得把监看账落成 failed");
     assert.equal(midWindow.pipelines?.[origin]?.watching, true,
-      "陈灯窗口期监看必须还活着,真绿灯才有人看");
+      "过期结果窗口期监看必须还活着,真绿灯才有人看");
     assert.equal(midWindow.pipelines?.[origin]?.reds, 1,
       "旧账红灯不计入新提交");
     // 放开影子:新提交的真 run 注册好了,平台回复真绿。
@@ -1157,14 +1157,14 @@ test("监看器陈灯防御(#107):重推换 SHA 后旧账红灯拒绝背书,真�
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.pipelines?.[origin]?.status === "success"
         && issue.pipelines?.[origin]?.watching === false ? issue : undefined;
-    }, "放开后按真绿灯结算");
+    }, "放开后按真绿灯落终态");
     assert.equal(settled.pipelines?.[origin]?.reds, 0, "真绿清红灯账");
     const notes = (settled.transitions ?? [])
       .filter((item) => item.source === "platform").map((item) => item.note);
     assert.ok(notes.some((note) => /流水线全绿/.test(note)),
-      "转移账记的是全绿结算");
+      "转移账记的是全绿终态");
     assert.ok(!notes.some((note) => /流水线失败/.test(note)),
-      "陈灯全程不得留下失败结算");
+      "过期结果全程不得留下失败终态");
     // 全绿+未申报:开申报提醒回合,但不收口(申报半边还没过)。
     await until(() =>
       /全部 MR 流水线已跑绿/.test(JSON.stringify(model.requests))
@@ -1948,7 +1948,7 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
     { text: "先到这。" },
     { text: "又停了。" },
     { text: "还停。" },
-    // 第 2 轮:用户「继续」重新点火——预算必须从头计,不能带着上轮的 3。
+    // 第 2 轮:用户「继续」重新启动回合——预算必须从头计,不能带着上轮的 3。
     { text: "又停了。" },
     { text: "还停。" },
     { text: "收工。" },
@@ -1976,7 +1976,7 @@ test("催办预算不跨回合传染:耗尽转人工后续聊重新拿满预算,
     assert.equal(parked1.nudges, 3, "第一轮耗尽记账停在 3(超预算那次也入账)");
     assert.match(parked1.stage_note, /提前收嘴/);
 
-    // 续聊重新点火:预算清零只发生在回合入口——若预算跨回合传染,
+    // 续聊重新启动回合:预算清零只发生在回合入口——若预算跨回合传染,
     // 第一次收嘴就会直接落 idle,后面这些催办请求根本不会发生。
     const resumed = service.reply(created.id, "继续");
     assert.equal(resumed.status, "running");
@@ -2124,10 +2124,17 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.match(receipt, /env-shared-secret/);
   assert.deepEqual(JSON.parse(receipt), issueRegistrationMeta(state, META_CREDENTIALS));
   assert.deepEqual(JSON.parse(receipt), {
+    scenario: "ticket",
     title: "播放器偶发黑屏",
     description: "升级后偶发,重启恢复",
+    account: "dev",
     module: { id: MODULE_ID, name: "支付核心" },
-    repos: ["/tmp/x.git", "/tmp/y.git"],
+    repos: [
+      { url: "/tmp/x.git", dir: "repo/x" },
+      { url: "/tmp/y.git", dir: "repo/y" },
+    ],
+    ticket: "DTS-2026-1001",
+    repair_branch: "master_dev_DTS-2026-1001",
     environment: {
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
@@ -2139,7 +2146,8 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.equal(state.gate, undefined);
   assert.equal(state.stage, "analyze");
 
-  // 无环境会话:environment/module 键整段缺席(与工具返回风格一致)。
+  // 无环境会话:environment/module/附件/版本等键整段缺席(与工具返回
+  // 风格一致,缺席不造空壳)。
   const bareTools = createIssueTools({
     state: fixedState(), workspace: "/tmp/ws", dataRoot: "/tmp/data",
     persist: () => undefined,
@@ -2150,7 +2158,67 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
       .execute("x", {})));
   assert.equal("environment" in bare, false, "无环境不造空壳");
   assert.equal("module" in bare, false);
-  assert.deepEqual(bare.repos, ["/tmp/x.git"]);
+  assert.equal("attachments" in bare, false);
+  assert.equal("product_version" in bare, false);
+  assert.equal("baseline" in bare, false);
+  assert.equal("knowledge_repo" in bare, false);
+  assert.deepEqual(bare.repos, [{ url: "/tmp/x.git", dir: "repo/x" }]);
+});
+
+test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附件按实际在场,引用式给指针", () => {
+  const state = metaState({
+    product_version: "V5R1",
+    baseline: "master_v5r1",
+    knowledge_repo: {
+      url: "/tmp/k.git", name: "team-knowledge",
+      status: "ready", at: "2026-09-19T00:00:00Z",
+    },
+    converted_from: "issue-7",
+    description: "升级后偶发,日志见 attachments/aaaaaaaaaaaaaaaa.log",
+  });
+  const meta = issueRegistrationMeta(state, {});
+  assert.equal(meta.product_version, "V5R1");
+  assert.equal(meta.baseline, "master_v5r1");
+  assert.deepEqual(meta.knowledge_repo,
+    { name: "team-knowledge", dir: "repo/team-knowledge/" });
+  assert.equal(meta.inherited_issue, "issue-7");
+  assert.deepEqual(meta.attachments, ["attachments/aaaaaaaaaaaaaaaa.log"]);
+
+  // skipped 的知识仓不在场:不指一个不存在的路径。
+  const skipped = issueRegistrationMeta(metaState({
+    knowledge_repo: {
+      url: "/tmp/k.git", name: "team-knowledge",
+      status: "skipped", at: "2026-09-19T00:00:00Z",
+    },
+  }), {});
+  assert.equal("knowledge_repo" in skipped, false);
+  assert.equal("attachments" in skipped, false);
+});
+
+test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本行;缺省整行缺席", () => {
+  const withAll = issueFixedOpeningPrompt(metaState({
+    product_version: "V5R1",
+    baseline: "master_v5r1",
+    description: "升级后偶发,日志见 attachments/aaaaaaaaaaaaaaaa.log",
+  }));
+  assert.match(withAll, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
+  assert.match(withAll, /优先查看附件再下结论/);
+  assert.match(withAll, /产品版本: V5R1\(拉仓基线分支: master_v5r1\)/);
+
+  // 无附件无版本:两行整段缺席,不渲染空壳。
+  const plain = issueFixedOpeningPrompt(metaState());
+  assert.doesNotMatch(plain, /登记附件/);
+  assert.doesNotMatch(plain, /产品版本/);
+
+  // 续聊词同样带(重启重建的上下文不流失登记材料)。
+  const resume = issueResumePrompt(metaState({
+    product_version: "V5R1",
+    description: "见 attachments/aaaaaaaaaaaaaaaa.log",
+  }), "继续");
+  assert.match(resume, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
+  assert.match(resume, /产品版本: V5R1/);
+  const plainResume = issueResumePrompt(metaState(), "继续");
+  assert.doesNotMatch(plainResume, /登记附件/);
 });
 
 
@@ -2261,7 +2329,7 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
     }, "MR 提交回合收口");
     const requestsAfterMr = model.requests.length;
 
-    // ② 流水线红结算:预算 0 → 不开修复回合,留痕请人工。
+    // ② 流水线红按终态处理:预算 0 → 不开修复回合,留痕请人工。
     await until(() => {
       const issue = service.get(created.id);
       return issue.pipelines?.[origin]?.last_error?.includes("修复轮预算耗尽")
@@ -2290,14 +2358,14 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
 });
 
 // ---- 红灯切换(#247,ADR-0024):平台不再分诊、不再代举卡——失败 ----
-// ---- 事实(摘要/明细/镜像)三态投递给 AI,三路处置由它现场判断。 ----
+// ---- 事实(摘要/明细/镜像)三态发送给 AI,三路处置由它现场判断。 ----
 
 /** 落一个「MR 已申报、流水线监看中」的最小现场:构造服务即恢复,
- *  监看器重挂表直奔红灯结算——投递/举卡/停机测试不用重走全链(拉单→
- *  分析→修→推→MR 三回合),聚焦结算判定本身。watch 覆盖项供停机
+ *  监看器重挂表直奔红灯终态——发送/举卡/停机测试不用重走全链(拉单→
+ *  分析→修→推→MR 三回合),聚焦终态判定本身。watch 覆盖项供停机
  *  通知类测试预置 reds/过期 deadline(票 81),缺省维持原演出。 */
 
-test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作答后重置监看重看同 SHA", async () => {
+test("红灯不可修:AI 在发送回合举 pipeline_unfixable 卡带事实,作答后重置监看重看同 SHA", async () => {
   const dataDir = mfcTemp("mfc-issue-unfixable-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -2313,7 +2381,7 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
   seedMrGreenWatch(dataDir, origin);
   // 种子夹具是七阶段历史形状:mr_green 的现行索引(4)在旧数组里是
   // done,会被判"已收口"挡住申报提醒分支。对齐现行五阶段(mr_green
-  // 进行中),重看跑绿才能走进「提醒重新申报」的既有结算。
+  // 进行中),重看跑绿才能走进「提醒重新申报」的既有终态路径。
   {
     const statePath = join(dataDir, "issues", "issue-1", "issue.json");
     const seededState = JSON.parse(readFileSync(statePath, "utf-8")) as {
@@ -2324,7 +2392,7 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
   }
   const luban = new FakeLubanServer();
   await luban.start();
-  // 剧本(#247):红灯事实投递开回合,AI 判断红灯全部来自平台侧工具
+  // 剧本(#247):红灯事实发送开回合,AI 判断红灯全部来自平台侧工具
   // 告警,当场举不可修卡(举卡幕+文本幕);作答重看跑绿后再吃申报
   // 提醒幕。平台只投事实;名单(unfixableTools)已不参与问题流,
   // 配置在场也不影响判定。
@@ -2351,10 +2419,10 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
   });
   try {
     const sha = "c".repeat(40);
-    // 投递回合先开:失败摘要/逐维度明细/镜像落点/三路处置指引进词。
+    // 发送回合先开:失败摘要/逐维度明细/镜像落点/三路处置指引进词。
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "红灯事实投递回合点火");
+    "红灯事实发送回合启动");
     assert.match(requestText, /流水线未通过/);
     assert.match(requestText, /CodeCheck 阶段失败/);
     assert.match(requestText, /CODECHECK\(tool=SuperChecker\)/,
@@ -2379,10 +2447,10 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
     assert.match(gate.question.questions[0].question, /交付平台处理或豁免/,
       "卡面问题用注册表模板");
     assert.match(gate.context ?? "", /SuperChecker/, "AI 的事实补充随卡(context)");
-    // 投递回合=修复回合:reds 已记一轮、刹车账已落;停表留痕照旧。
+    // 发送回合=修复回合:reds 已记一轮、刹车账已落;停表留痕照旧。
     assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
     assert.equal(gated.pipelines?.[origin]?.reds, 1,
-      "投递已记一轮预算(举卡发生在投递回合里)");
+      "发送已记一轮预算(举卡发生在发送回合里)");
     assert.equal(gated.pipelines?.[origin]?.last_repair_sha, sha,
       "刹车账已记本轮提交");
     assert.equal(gated.feedback?.at(-1)?.status, "repairing",
@@ -2423,7 +2491,7 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
       "预算账归零(重看是新一轮)");
     assert.equal(rearmed.pipelines?.[origin]?.last_repair_sha, undefined,
       "刹车账清掉(重看仍红不误判同提交刹车)");
-    // 平台侧已处理(假件第二轮终态即 success):绿了走既有结算——
+    // 平台侧已处理(假件第二轮终态即 success):绿了走既有终态路径——
     // 提醒 AI 重新申报 MR 清单(申报账在红灯时已打回)。
     await until(() => {
       const issue = service.get("issue-1");
@@ -2444,7 +2512,7 @@ test("红灯不可修:AI 在投递回合举 pipeline_unfixable 卡带事实,作�
 });
 
 
-test("名单不参与问题流:unfixableTools 配置在场也不拦截——照常投递事实派修", async () => {
+test("名单不参与问题流:unfixableTools 配置在场也不拦截——照常发送事实派发修复", async () => {
   const dataDir = mfcTemp("mfc-issue-unfixable-miss-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -2477,9 +2545,9 @@ test("名单不参与问题流:unfixableTools 配置在场也不拦截——照�
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return model.requests.length ? issue : undefined;
-    }, "红灯事实投递回合派出");
+    }, "红灯事实发送回合派出");
     const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /第 1\/20 轮红灯/, "照常投递,文案带红灯轮次");
+    assert.match(requestText, /第 1\/20 轮红灯/, "照常发送,文案带红灯轮次");
     assert.match(requestText, /逐维度明细/, "事实明细给全");
     assert.match(requestText, /CODECHECK\(tool=SuperChecker\)/,
       "明细点名维度与工具");
@@ -2491,7 +2559,7 @@ test("名单不参与问题流:unfixableTools 配置在场也不拦截——照�
       return issue.status === "idle" ? issue : undefined;
     }, "修复回合收口");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "投递回合派出即记一轮预算");
+      "发送回合派出即记一轮预算");
     assert.equal(settled.feedback?.at(-1)?.status, "repairing");
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -2501,13 +2569,13 @@ test("名单不参与问题流:unfixableTools 配置在场也不拦截——照�
 });
 
 
-test("红灯不分级:部分维度缺定位→事实照全量投递,明细按维度给全,reds 记一轮", async () => {
+test("红灯不分级:部分维度缺定位→事实照全量发送,明细按维度给全,reds 记一轮", async () => {
   const dataDir = mfcTemp("mfc-issue-evidence-partial-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
     // 编译有结构化明细(可修),CodeCheck 只有汇总没定位——平台不再
-    // 区分"有证据/缺口":两边的明细都原样进投递词,判断交 AI。
+    // 区分"有证据/缺口":两边的明细都原样进发送词,判断交 AI。
     log: "流水线运行失败",
     checks: [
       { dimension: "COMPILE", status: "failed",
@@ -2535,7 +2603,7 @@ test("红灯不分级:部分维度缺定位→事实照全量投递,明细按维
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return model.requests.length ? issue : undefined;
-    }, "部分缺定位的红灯事实投递回合派出");
+    }, "部分缺定位的红灯事实发送回合派出");
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /流水线未通过/);
     assert.match(requestText, /逐维度明细/);
@@ -2553,7 +2621,7 @@ test("红灯不分级:部分维度缺定位→事实照全量投递,明细按维
       return issue.status === "idle" ? issue : undefined;
     }, "修复回合收口");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "投递即记一轮,预算照记");
+      "发送即记一轮,预算照记");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -2567,7 +2635,7 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
-    // 只有总体失败:checks 无明细——平台只投事实,缺口由 AI 在投递
+    // 只有总体失败:checks 无明细——平台只投事实,缺口由 AI 在发送
     // 回合里判断并自己举回灌卡(#247)。
     log: "流水线运行失败",
     checks: [{ dimension: "COMPILE", status: "failed" }],
@@ -2609,12 +2677,12 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
     assert.equal(gated.status, "waiting_user", "举闸即等作答");
     assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
     assert.equal(gated.pipelines?.[origin]?.reds, 1,
-      "投递回合已记一轮预算(回灌是同轮延续)");
+      "发送回合已记一轮预算(回灌是同轮延续)");
     assert.equal(gated.feedback?.at(-1)?.status, "repairing", "留痕照记");
     assert.ok(model.requests.length >= 1,
-      "投递回合在场(卡由 AI 在投递回合里举)");
+      "发送回合在场(卡由 AI 在发送回合里举)");
     // 镜像产物在场(build.log)也照镜像:内容嗅探背书/证据评估已退场,
-    // 读不读、够不够修由 AI 凭投递的事实判断。
+    // 读不读、够不够修由 AI 凭发送的事实判断。
     assert.ok(existsSync(join(dataDir, "issues", "issue-1",
       "pipeline", "build.log")), "取证镜像照做");
     // 空答复打回:码到了但原文没贴,选项标签不能冒充证据。
@@ -2624,7 +2692,7 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
     assert.equal(service.get("issue-1").gate?.kind, "pipeline_evidence",
       "打回后闸仍在场");
     // 作答(自由文本主通道,只给文本不带码也受理——码从文本在场归码):
-    // 原文作为人工证据注入回灌回合;投递已记一轮,回灌不重复计数。
+    // 原文作为人工证据注入回灌回合;发送已记一轮,回灌不重复计数。
     const pasted = "BUILD FAILURE: src/service/Order.java:88 "
       + "cannot find symbol: orderCache(人工从平台复制的原文)";
     service.answer("issue-1", { state_version: gate.state_version,
@@ -2643,7 +2711,7 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
     }, "修复回合收口");
     assert.equal(settled.gate, undefined, "闸随作答清场");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "回灌回合不重复计数(投递已记)");
+      "回灌回合不重复计数(发送已记)");
     assert.match(settled.pipelines?.[origin]?.last_failure_summary ?? "",
       /人工回灌的报错原文/, "刹车账改记人工回灌摘要");
     assert.equal(settled.feedback?.at(-1)?.status, "repairing");
@@ -2655,7 +2723,7 @@ test("红灯证据全缺:AI 举回灌卡请人贴原文,作答回灌原文且不
 });
 
 
-test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照投递指路镜像,不举卡", async () => {
+test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照发送指路镜像,不举卡", async () => {
   const dataDir = mfcTemp("mfc-issue-ut-jest-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -2663,7 +2731,7 @@ test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照投
     log: "流水线运行失败",
     checks: [{ dimension: "UT", status: "failed", tool: "build2.0" }],
   };
-  // 镜像产物是前端测试失败原文:平台把产物全文镜像进 pipeline/,投递
+  // 镜像产物是前端测试失败原文:平台把产物全文镜像进 pipeline/,发送
   // 词指路读全文——修不修得了由 AI 凭现场事实判断,不再做内容背书。
   platform.firstFailureArtifacts = [{
     name: "build_log_ut-1.txt",
@@ -2686,7 +2754,7 @@ test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照投
   try {
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "UT 红灯事实投递回合派出");
+    "UT 红灯事实发送回合派出");
     assert.match(requestText, /第 1\/20 轮红灯/);
     assert.match(requestText, /UT\(tool=build2\.0\)/,
       "UT 维在逐维度明细里点名");
@@ -2701,7 +2769,7 @@ test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照投
       return issue.status === "idle" ? issue : undefined;
     }, "修复回合收口");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "投递回合派出即记一轮预算");
+      "发送回合派出即记一轮预算");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -2710,14 +2778,14 @@ test("红灯不分级:UT 红灯+镜像日志有 Jest 失败原文→事实照投
 });
 
 
-test("红灯 issue-28 形态:维度错配的质量门红灯照常投递,摘要与镜像产物都给全", async () => {
+test("红灯 issue-28 形态:维度错配的质量门红灯照常发送,摘要与镜像产物都给全", async () => {
   const dataDir = mfcTemp("mfc-issue-issue28-");
   const origin = bareOrigin(dataDir);
   // 真实脱敏样例:构建 record 全 SUCCESS(errorInfo 拒答),红的是质量门
   // 指标(js pass rate 99.78%<100、DT 缺陷 1),Jest 原文在 build_log 里;
   // 平台把失败维度报成 CODECHECK,缺陷归属工具 build2.0 被归类到编译维。
   // #247 后平台不做内容背书/兜底评估:摘要(log)、维度明细与镜像清单
-  // 原样投递,错配怎么认、按什么修由 AI 读镜像全文现场判断。
+  // 原样发送,错配怎么认、按什么修由 AI 读镜像全文现场判断。
   const platform = new LoopPlatform("failed");
   platform.firstFailure = {
     log: "CodeCCP2.0 质量门未达标: js pass rate 99.7778 < 100, DT 缺陷 1",
@@ -2742,7 +2810,7 @@ test("红灯 issue-28 形态:维度错配的质量门红灯照常投递,摘要�
   try {
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "维度错配红灯照常投递(不再举卡)");
+    "维度错配红灯照常发送(不再举卡)");
     assert.match(requestText, /流水线未通过/);
     assert.match(requestText, /CodeCCP2\.0 质量门未达标/,
       "质量门摘要(log)原样下发");
@@ -2758,7 +2826,7 @@ test("红灯 issue-28 形态:维度错配的质量门红灯照常投递,摘要�
       return issue.status === "idle" ? issue : undefined;
     }, "修复回合收口");
     assert.equal(settled.pipelines?.[origin]?.reds, 1,
-      "投递回合照常计预算");
+      "发送回合照常计预算");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -2767,7 +2835,7 @@ test("红灯 issue-28 形态:维度错配的质量门红灯照常投递,摘要�
 });
 
 
-test("名单未配置→照常投递事实派修(名单已整体退出问题流)", async () => {
+test("名单未配置→照常发送事实派发修复(名单已整体退出问题流)", async () => {
   const dataDir = mfcTemp("mfc-issue-unfixable-none-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -2798,11 +2866,11 @@ test("名单未配置→照常投递事实派修(名单已整体退出问题流)
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return model.requests.length ? issue : undefined;
-    }, "红灯事实投递回合派出");
+    }, "红灯事实发送回合派出");
     assert.equal(service.get("issue-1").gate, undefined,
       "平台不代举卡");
     const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /第 1\/20 轮红灯/, "照常投递,文案带红灯轮次");
+    assert.match(requestText, /第 1\/20 轮红灯/, "照常发送,文案带红灯轮次");
     assert.match(requestText, /逐维度明细/);
     assert.match(requestText, /CODECHECK\(tool=SuperChecker\)/);
     const settled = await until(() => {
@@ -2832,7 +2900,7 @@ test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/�
         message: "cannot find symbol: orderCache" }] }],
   };
   await platform.start();
-  // 预算 1、reds 已 1:第一次红灯结算就到顶——停机喊人,不派回合。
+  // 预算 1、reds 已 1:第一次红灯记账就到顶——停机喊人,不派回合。
   seedMrGreenWatch(dataDir, origin, { reds: 1 });
   const luban = new FakeLubanServer();
   await luban.start();
@@ -2977,12 +3045,12 @@ test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落
 });
 
 
-test("盲输入形态:零 checks+链接式摘要+零产物→事实照投递,AI 举回灌卡请人贴原文", async () => {
+test("盲输入形态:零 checks+链接式摘要+零产物→事实照发送,AI 举回灌卡请人贴原文", async () => {
   const dataDir = mfcTemp("mfc-issue-blind-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   // 内网实锤形态:摘要=标签+链接(会话没登录态打不开),checks 缺席,
-  // 产物零镜像。#247 后平台不再机械拦:事实照投递并如实说明缺席,
+  // 产物零镜像。#247 后平台不再机械拦:事实照发送并如实说明缺席,
   // 缺口由 AI 判断、自己举 pipeline_evidence 卡请人贴原文。
   platform.firstFailure = {
     log: "FAILED stage=CodeCCP2.0 job=CodeCCP2.0  detail: "
@@ -3012,10 +3080,10 @@ test("盲输入形态:零 checks+链接式摘要+零产物→事实照投递,AI 
     linkBase: "http://work.test",
   });
   try {
-    // 投递回合先开:盲形态如实说明——逐维度明细缺席、零产物不造假。
+    // 发送回合先开:盲形态如实说明——逐维度明细缺席、零产物不造假。
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "盲输入形态的红灯事实投递回合点火");
+    "盲输入形态的红灯事实发送回合启动");
     assert.match(requestText, /流水线未通过/);
     assert.match(requestText, /FAILED stage=CodeCCP2\.0/,
       "链接式摘要原样下发");
@@ -3041,7 +3109,7 @@ test("盲输入形态:零 checks+链接式摘要+零产物→事实照投递,AI 
     assert.equal(gated.status, "waiting_user", "举闸即等作答");
     assert.equal(gated.pipelines?.[origin]?.watching, false, "监看停表");
     assert.equal(gated.pipelines?.[origin]?.reds, 1,
-      "投递回合已记一轮预算(举卡发生在投递回合里)");
+      "发送回合已记一轮预算(举卡发生在发送回合里)");
     assert.equal(gated.feedback?.at(-1)?.status, "repairing", "留痕照记");
     assert.equal(existsSync(join(dataDir, "issues", "issue-1",
       "pipeline", "build.log")), false, "零产物前提成立");
@@ -3059,9 +3127,9 @@ test("盲输入形态:零 checks+链接式摘要+零产物→事实照投递,AI 
 });
 
 /** 盲输入形态的"能修"对照组(票 81 红线的延续):三种情形必须照常
- *  投递派修零影响。各起一个独立现场,断言回合派出、无闸、reds 记一轮。 */
+ *  发送事实并派发修复,零影响。各起一个独立现场,断言回合派出、无闸、reds 记一轮。 */
 
-test("盲输入形态不误伤:摘要有真实内容/产物在场/checks 明细三种情形照常投递派修", async () => {
+test("盲输入形态不误伤:摘要有真实内容/产物在场/checks 明细三种情形照常发送派发修复", async () => {
   // ① checks 缺席但摘要有真实内容(零产物):既有默认路径,显式钉死。
   await assertRepairDispatched({
     what: "checks 缺席但摘要有真实内容",
@@ -3070,7 +3138,7 @@ test("盲输入形态不误伤:摘要有真实内容/产物在场/checks 明细�
     expect: [/流水线未通过/, /BUILD FAILURE: 模块 notify-service/,
       /\(平台未返回逐维度明细\)/],
   });
-  // ② 产物在场(哪怕摘要只是链接):镜像产物比链接可信,放行派修。
+  // ② 产物在场(哪怕摘要只是链接):镜像产物比链接可信,放行派发修复。
   await assertRepairDispatched({
     what: "产物在场(摘要只是链接)",
     firstFailure: { log: "流水线失败详情: https://loop.test/pipeline/1" },
@@ -3089,6 +3157,6 @@ test("盲输入形态不误伤:摘要有真实内容/产物在场/checks 明细�
   });
 });
 
-// ---- 同提交刹车(票 82,part2):防原地打转——红灯还是上次投递派修 ----
+// ---- 同提交刹车(票 82,part2):防原地打转——红灯还是上次派发修复 ----
 // ---- 的同一提交即停机。证据重试窗已随红灯切换(#247)整体退场。   ----
 

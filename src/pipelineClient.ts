@@ -42,9 +42,9 @@ export interface PipelineRun {
   status: "success" | "failed" | "running";
   log?: string;
   checks?: PipelineCheck[];
-  /** 适配层回传的 run 归属(陈灯防御的判断依据):sha=该 run 绑定的
-   * 提交;is_valid=false=MR 头上挂的陈灯。缺席=旧适配层/旧配置,
-   * 下游按无陈灯信息处理(行为与透传前一致)。 */
+  /** 适配层回传的 run 归属(过期结果防御的判断依据):sha=该 run 绑定的
+   * 提交;is_valid=false=MR 头上挂的过期结果。缺席=旧适配层/旧配置,
+   * 下游按无过期结果信息处理(行为与透传前一致)。 */
   sha?: string;
   is_valid?: boolean;
 }

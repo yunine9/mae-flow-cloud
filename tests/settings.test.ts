@@ -130,7 +130,7 @@ test("数值校验:无限等待没有语法;models 必须真实存在才能选",
   });
   assert.equal(settings.runtime().build_cache_retention_days, 21);
   assert.equal(settings.runtime().build_cache_max_gb, 80);
-  // 问题单并发数:≥1 的整数,现读现判(问题流泵每次点火读)。
+  // 问题单并发数:≥1 的整数,现读现判(问题流泵每次启动时读取)。
   settings.updateRuntime({ issue_max_turns: 5 });
   assert.equal(settings.runtime().issue_max_turns, 5);
   assert.throws(() => settings.updateRuntime({ issue_max_turns: 0 }),

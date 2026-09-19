@@ -111,7 +111,7 @@ test("远端意见同步与回复草稿准备保持挂载 inode，保留需求�
     service.prePushRevision = async () => ({ sha: "a".repeat(40) });
     assert.deepEqual(await service.stageReviewReplies(task), { ok: true });
     assert.equal(statSync(replies).ino, replyInode);
-    assert.equal(readFileSync(replies, "utf-8"), "", "已入投递账的草稿原地清空");
+    assert.equal(readFileSync(replies, "utf-8"), "", "已入发送账的草稿原地清空");
   } finally {
     await service.shutdown();
   }

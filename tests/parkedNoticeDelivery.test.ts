@@ -1,7 +1,7 @@
 /**
- * 停靠通知注入——投递必达(#244,ADR-0024 前置)。
+ * 停靠通知注入——发送必达(#244,ADR-0024 前置)。
  *
- * 平台事实通知的三态投递里,「等人=落便签」这一态今天只写 stage_note
+ * 平台事实通知的三态发送里,「等人=落便签」这一态今天只写 stage_note
  * (首行 120 字的显示摘要),问题卡原地续跑的上下文里模型根本看不到它
  * ——今天被平台代举掩盖,代举停掉后就是主路径上的静默断链。本票补齐:
  * 便签全文进欠账队列(parked_notices,不上 wire),续跑(答卡原地续跑/
@@ -75,7 +75,7 @@ function transcript(model: ScriptedModelServer): string {
   return JSON.stringify(model.requests);
 }
 
-/** 点火一幕举问题卡的回合,等到挂起。 */
+/** 启动一幕举问题卡的回合,等到挂起。 */
 async function parkAgentCard(
   service: IssueFlowService,
   model: ScriptedModelServer,
@@ -87,7 +87,7 @@ async function parkAgentCard(
     if (issue.status === "failed") throw new Error(issue.error ?? "failed");
     return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
   }, "Agent 问题卡挂起");
-  assert.ok(model.requests.length >= 1, "点火回合已发出模型请求");
+  assert.ok(model.requests.length >= 1, "启动回合已发出模型请求");
   return { state_version: waiting.waiting!.state_version };
 }
 
@@ -110,7 +110,7 @@ test("等人便签全文进欠账队列;答卡原地续跑注入模型上下文,
   try {
     const card = await parkAgentCard(service, model, dataDir);
 
-    // 平台通知到来(等人=park 便签)——真入口走投递三态。
+    // 平台通知到来(等人=park 便签)——真入口走发送三态。
     service.requestRepoChanges("issue-1", { add: [BETA], remove: [] });
     const parked = readStateFile(dataDir, "issue-1");
     assert.match(parked.stage_note ?? "", /代码仓/, "显示摘要(首行)照旧");
@@ -223,7 +223,7 @@ test("重启重建:欠账便签随续聊提示词送达模型(不依赖 stage_no
   }
 });
 
-test("空闲投递=开回合直送:通知进模型上下文,不欠账不落便签", async () => {
+test("空闲发送=开回合直送:通知进模型上下文,不欠账不落便签", async () => {
   const dataDir = mfcTemp("mfc-issue-parkednotice-idle-");
   seedIssue(dataDir);
   const model = new ScriptedModelServer(
@@ -236,7 +236,7 @@ test("空闲投递=开回合直送:通知进模型上下文,不欠账不落便�
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "空闲投递回合收口");
+    }, "空闲发送回合收口");
     assert.ok(transcript(model).includes("org/beta.git"), "通知直送模型");
     assert.equal(
       readStateFile(dataDir, "issue-1").parked_notices?.length ?? 0, 0,

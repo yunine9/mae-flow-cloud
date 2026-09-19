@@ -17,6 +17,7 @@ const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
 const board = readFileSync(resolve("web/src/issues/IssueBoard.tsx"), "utf-8");
 const registration = readFileSync(
   resolve("web/src/issues/Registration.tsx"), "utf-8");
+const api = readFileSync(resolve("web/src/api.ts"), "utf-8");
 const css = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 const legacyCss = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
 
@@ -139,12 +140,13 @@ test("DTS 列表子页签全宽:页面平铺屏幕,标题条同步对齐,其余�
   assert.match(app, /const dtsWide = view === "issues" && activeIssueChild === "dts";/,
     "全宽判据只认 DTS 子页签");
   // #228 换装:is-wide 修饰类退役,全宽改由条件工具类直译(max-w 二选一),
-  // 不再有 legacy css 全宽规则可钉。回忆视图(#276 后续)共享同一档全宽。
+  // 不再有 legacy css 全宽规则可钉。回忆视图(#276 后续)共享同一档全宽;
+  // 1aa3bd98 起手册(documents)与回忆(memories)两页签都放开。
   assert.match(app,
-    /\(dtsWide \|\| \(view === "knowledge" && teamAssetTab === "memories"\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
+    /\(dtsWide \|\| \(view === "knowledge" && \["memories", "documents"\]\.includes\(teamAssetTab\)\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
     "标题条随全宽切换(左边缘与内容对齐)");
   assert.match(app,
-    /main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n?\s*\(dtsWide \|\| \(view === "knowledge" && teamAssetTab === "memories"\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
+    /main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n?\s*\(dtsWide \|\| \(view === "knowledge" && \["memories", "documents"\]\.includes\(teamAssetTab\)\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
     "主区随 DTS 子页签切换");
   // 页头随子页签换文案:整域静态说明对子页签无信息量。
   assert.match(app, /issueChildHeaders/,
@@ -165,4 +167,27 @@ test("子页签区零硬编码色值:色彩一律走令牌桥(theme inline 映�
   assert.ok(!/#[0-9a-fA-F]*(?:[a-fA-F][0-9a-fA-F]*){1,4}\b/.test(nav),
     "导航区不得硬编码 hex 色值");
   assert.match(css, /--color-faint: var\(--faint\)/, "令牌桥供给 faint 色工具类");
+});
+
+test("父行徽章:开发侧挂名下进行中的问题数,与页内「进行中」同口径;admin 不挂", () => {
+  // 徽章只属开发个人工作台:admin 对问题处理只读围观(#103),不推进
+  // 问题,注意力入口是「团队DTS」的等你答复珠,父行不重复挂数。
+  const { admin, developer } = navSlices();
+  assert.match(developer,
+    /<IssueNavGroup view="issues" current=\{view\} badge=\{myActiveIssueCount\}/,
+    "开发侧父行应挂进行中计数");
+  assert.doesNotMatch(admin, /<IssueNavGroup[^>]*badge=/,
+    "admin 侧父行不挂徽章");
+  // 口径同源:「进行中」判定收口在 api.ts(isIssueActive),徽章与页内
+  // 默认筛选项共用,收口状态增减时两处不许各写各的减法。
+  assert.match(api, /export const isIssueActive/,
+    "「进行中」判定应在 api.ts 单份导出");
+  assert.match(app, /myActiveIssueCount = myIssues\s*\n?\s*\.filter\(\(issue\) => isIssueActive\(issue\.status\)\)/,
+    "徽章计数=本人问题列表过 isIssueActive");
+  assert.match(board, /isIssueActive\(issue\.status\)/,
+    "列表页「进行中」筛选与计数同用 isIssueActive");
+  // 数据同源:徽章列表走 GET /issues(归属或登记人是自己,ADR-0031),
+  // 不许前端从 scope=all 里自筛(服务端收窄规则一变两处就漂)。
+  assert.match(app, /session\?\.role === "admin"\s*\n?\s*\? Promise\.resolve<IssueSummary\[\]>\(\[\]\) : listIssues\(\)/,
+    "本人问题列表走 listIssues,admin 不拉(其 GET /issues 是全量)");
 });

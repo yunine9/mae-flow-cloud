@@ -96,7 +96,7 @@ for (const terminal of ["completed", "canceled", "settling", "new_push"]) {
   });
 }
 
-test("MR 监控在回复请求未完成时仍能发现合入，且不会重派修复", async (t) => {
+test("MR 监控在回复请求未完成时仍能发现合入，且不会重新派发修复", async (t) => {
   const f = fixture();
   let release!: (response: Response) => void;
   t.mock.method(globalThis, "fetch", () => new Promise<Response>(resolve => { release = resolve; }));

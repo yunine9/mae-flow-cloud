@@ -5,9 +5,15 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 /** 需求与问题共用配置目录；选择时仅带版本名，服务端再次解析当前映射。 */
-export function ProductVersionPicker({ value, onChange, baseline, onLegacyBranch }: {
+export function ProductVersionPicker({ value, onChange, baseline, onLegacyBranch,
+  className = "grid gap-2", labelClassName = "text-sm font-medium", required }: {
   value: string; onChange: (version: string, branch: string) => void;
   baseline?: string; onLegacyBranch?: (branch: string) => void;
+  /** 版式钩子:宿主表单用它把字段对齐到自己的字段版式(默认即原版式)。 */
+  className?: string;
+  labelClassName?: string;
+  /** 必填标记:字段头带红星(问题登记 2026-09-18 起必选)。 */
+  required?: boolean;
 }) {
   const [rows, setRows] = useState<ProductVersion[]>();
   const [error, setError] = useState("");
@@ -23,8 +29,9 @@ export function ProductVersionPicker({ value, onChange, baseline, onLegacyBranch
       onChange(selected.version, selected.branch);
     }
   }, [selected?.version, selected?.branch, baseline]);
-  return <div className="grid gap-2">
-    <span className="text-sm font-medium">产品版本</span>
+  return <div className={className}>
+    <span className={labelClassName}>产品版本
+      {required && <> <i className="font-bold not-italic text-danger">*</i></>}</span>
     <Select value={value} required={!!onLegacyBranch && !!rows?.length} disabled={!rows?.length} items={[{ value: "", label: "选择产品版本" }, ...(rows ?? []).map(row => ({ value: row.version, label: row.version }))]}
       onValueChange={v => { const row = rows?.find(r => r.version === v); onChange(row?.version ?? "", row?.branch ?? ""); }}>
       <SelectTrigger className="w-full" aria-label="产品版本"><SelectValue /></SelectTrigger>

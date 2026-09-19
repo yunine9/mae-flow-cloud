@@ -277,7 +277,7 @@ export function assessPipelineRepairEvidence(input: {
     if (name.startsWith("build_log_")) {
       // 全量日志:内容嗅探为主、record-id 归类为弱提示。并集的前提是
       // 内容有强特征——零特征的日志连映射维度也不背书(旧基线如此):
-      // 日志里没有可定位报错时,派修只会照着一份没有内容的日志猜改。
+      // 日志里没有可定位报错时,派发修复只会照着一份没有内容的日志猜改。
       const candidate = new Set(sniffDimensions(text));
       if (mapped && candidate.size) candidate.add(mapped);
       for (const dimension of candidate) {

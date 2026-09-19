@@ -174,19 +174,19 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
 
     // 原始意见只同步待判断批注，责任人交办前不通知模型。
     assert.equal(JSON.stringify(model.requests).includes("mr-review-replies.json"), false);
-    // 显式准备已授权的回复草稿，继续验证原有 outbox 投递。
+    // 显式准备已授权的回复草稿，继续验证原有 outbox 发送。
     writeFileSync(join(dataDir, "issues", created.id, "mr-review-replies.json"),
       JSON.stringify([{ discussion_id: "D1", body: "已修复连接池回收" }]));
 
-    // ── 票 03:草稿 → 出站信箱 → 投递 CodeHub。 ──
+    // ── 票 03:草稿 → 出站信箱 → 发送 CodeHub。 ──
     const d1Discussion = platform.discussions.find((item) => item.id === "D1")!;
-    await until(() => d1Discussion.replies.length > 0, "D1 回复已投递 CodeHub");
+    await until(() => d1Discussion.replies.length > 0, "D1 回复已发送 CodeHub");
     assert.match(d1Discussion.replies[0], /已修复/);
-    // 幂等:继续轮询几拍,已投递的不重发。
+    // 幂等:继续轮询几拍,已发送的不重发。
     await new Promise((resolve) => setTimeout(resolve, 1500));
     assert.equal(d1Discussion.replies.length, 1, "重放不得产生第二条回复");
 
-    // 检视人解决讨论 → 意见闭环标注(投递未带 resolve,归因=检视人)。
+    // 检视人解决讨论 → 意见闭环标注(发送未带 resolve,归因=检视人)。
     d1Discussion.resolved = true;
     await until(() => {
       const record = (service.get(created.id).feedback ?? [])
@@ -200,7 +200,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
 
     // SHA 漂移终态(检视闭环 ② 改语义):直写信箱构造"绑定旧提交"的
     // pending——版本对不上直接标失败("请重写"),不再永远 pending;
-    // 失败不挡新草稿,重写后照常投递。
+    // 失败不挡新草稿,重写后照常发送。
     const issueDir = join(dataDir, "issues", created.id);
     const outboxPath = join(issueDir, "mr-review-outbox.json");
     writeFileSync(outboxPath, JSON.stringify({ items: [{
@@ -217,11 +217,11 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       return item?.status === "failed"
         && /代码已更新|重写/.test(String(item.last_error ?? ""));
     }, "SHA 漂移直接标失败(不再永远 pending)");
-    assert.equal(d2.replies.length, 0, "漂移条目绝不投递");
-    // 失败不挡新草稿:AI 重写 D2 回复 → 新条目入箱绑当前收据 → 投递。
+    assert.equal(d2.replies.length, 0, "漂移条目绝不发送");
+    // 失败不挡新草稿:AI 重写 D2 回复 → 新条目入箱绑当前收据 → 发送。
     writeFileSync(join(issueDir, "mr-review-replies.json"),
       JSON.stringify([{ discussion_id: "D2", body: "已补监控埋点(重写)" }]));
-    await until(() => d2.replies.length > 0, "重写草稿后 D2 投递");
+    await until(() => d2.replies.length > 0, "重写草稿后 D2 发送");
     assert.match(d2.replies.at(-1)!, /重写/);
 
     // 验绿后仍发现迟到意见，责任人在托管期间不会漏掉新报告。

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "../src/pipelineHandoff.ts";
 
-test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果，上次派修锚不改", () => {
+test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果，上次派发修复锚不改", () => {
   const summary: any = { delivery: { sha: "old", pipeline: "success", checks: [{ dimension: "UT", status: "success" }],
     attested: "PASS@old", evidence_gap: { sha: "old" }, mr_url: "mr/1",
     loop: { kind: "ci", round: 2, last_sha: "old", failure: "旧失败" } } };
@@ -78,7 +78,7 @@ test("恢复已绿任务先核销流水线，不能抢先派反馈或重跑交�
   assert.deepEqual(calls, ["new:success"]);
 });
 
-test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 继续修复，迟到旧结果不影响新版本", async t => {
+test("新 SHA 首次失败正常派发修复并更新 last_sha，同 SHA 再失败刹车，迟到旧结果不影响新版本", async t => {
   const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "ci-anchor-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   t.after(() => service.shutdown());
   const task = service.create("CI 修复");
@@ -107,7 +107,7 @@ test("新 SHA 首次失败正常派修并更新 last_sha，同 SHA 继续修复�
   assert.equal(JSON.stringify(state.summary.delivery), before);
 });
 
-test("流水线触发和恢复查询只采信指定 SHA，拒绝陈灯及空查询", () => {
+test("流水线触发和恢复查询只采信指定 SHA，拒绝过期结果及空查询", () => {
   assert.equal(confirmedPipelineRun("new", { status: "failed", runs: [
     { sha: "new", status: "running" }, { sha: "old", status: "failed" },
   ] }).status, "running");
@@ -195,13 +195,13 @@ for (const status of ["success", "failed"] as const) test(`HEAD 已前进时旧 
   service.syncFeedbackStoreFromKernel = () => {};
   const retries: boolean[] = [];
   service.schedulePipelineEvidenceRetry = (_task: unknown, _sha: string, _epoch: number, stale: boolean) => retries.push(stale);
-  service.handlePipelineRed = async () => assert.fail("不应派修旧 SHA");
+  service.handlePipelineRed = async () => assert.fail("不应派发修复旧 SHA");
   await service.pipelineVerdict(state, "old", status, "旧编译错误", undefined, state.controlEpoch);
   assert.deepEqual(retries, [true]);
   assert.equal(state.summary.status, "verifying");
 });
 
-for (const status of ["success", "failed"] as const) test(`登记 ${status} 期间新推送接棒，迟到返回不派修或推进新版本`, async t => {
+for (const status of ["success", "failed"] as const) test(`登记 ${status} 期间新推送接棒，迟到返回不派发修复或推进新版本`, async t => {
   const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "late-attestation-")), provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   t.after(() => service.shutdown());
   const task = service.create("核销期间新推送");
@@ -214,7 +214,7 @@ for (const status of ["success", "failed"] as const) test(`登记 ${status} 期�
     return { verdict: status === "success" ? "PASS" : "RED" };
   };
   service.syncFeedbackStoreFromKernel = () => assert.fail("不能核销旧提交");
-  service.handlePipelineRed = async () => assert.fail("不能派修旧提交");
+  service.handlePipelineRed = async () => assert.fail("不能派发修复旧提交");
   await service.pipelineVerdict(state, "old", status, "旧结果", undefined, state.controlEpoch);
   assert.equal(state.summary.delivery.sha, "new");
   assert.equal(state.summary.status, "verifying");

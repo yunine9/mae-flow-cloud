@@ -23,7 +23,7 @@ import {
  *   GET  /issues/:id/materials/logs/archive → 拉取日志整包下载(ZIP;
  *                                      空/缺 404;读,无终态闸)
  *   POST /issues/:id/logs/fetch     → 主动拉取日志意图递交(仅归属者;
- *                                      守卫+留痕+投递通知,平台不代拉)
+ *                                      守卫+留痕+发送通知,平台不代拉)
  *   GET  /issues/:id/materials/events → 原始事件尾随(?limit=,现场页签)
  *   GET  /issues/:id/timeline         → 耗时与卡点(纯函数归纳,只读)
  *   GET  /issues/:id/documents        → 过程文档清单(分析报告+Agent 落
@@ -47,7 +47,7 @@ import {
  *   POST /issues/:id/reply            → 续聊
  *   POST /issues/:id/decision         → 问题卡作答
  *   POST /issues/:id/repos            → 调整会话仓清单(#241;只校验+
- *                                      留痕+投递通知,清单由 Agent 经
+ *                                      留痕+发送通知,清单由 Agent 经
  *                                      pull_repo/remove_repo 执行后变化)
  *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的
  *                                      作答口;decline:true=拒绝,票 93;
@@ -103,6 +103,7 @@ import {
   readStagedImage,
   stageIssueImage,
 } from "./issueImages.ts";
+import { stageIssueAttachmentStream } from "./issueAttachments.ts";
 import { listBusinessModules } from "../businessModuleLibrary.ts";
 
 export interface IssueViewer {
@@ -188,7 +189,7 @@ function streamIssueEvents(
 }
 
 /** 问题域 JSONL 尾随 SSE(主会话事件流与预热直播⑤共用):路径按拍
- *  解析——预热文件点火前不存在,先只发心跳,出现后从头重放(断线重连
+ *  解析——预热文件启动前不存在,先只发心跳,出现后从头重放(断线重连
  *  天然幂等,客户端按事件锚去重)。终态即收流。 */
 function streamIssueJsonl(
   issueFlow: IssueFlowService,
@@ -407,6 +408,15 @@ export async function handleIssueRoutes(
       // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
       let autoModuleId: string | undefined;
       let productVersion = String(body.product_version ?? "").trim();
+      // 版本必填(2026-09-18):手工登记必须指明问题发生的版本——版本是
+      // 复现与修复的基线。与上方手工必填责任人同位同尺;DTS 来源不带,
+      // 版本由单据按配置中心映射推导(下方自动补)。
+      if (source === "manual" && !productVersion) {
+        return done(409, {
+          error: "手工登记必须选择产品版本:版本是复现与修复的基线,"
+            + "请回登记页选择后再发起",
+        });
+      }
       let dtsVersion: string | undefined;
       if (source === "dts" && ticket && routeOptions.dts
           && (!body.module_id || !productVersion)) {
@@ -629,6 +639,33 @@ export async function handleIssueRoutes(
         });
         response.end(image.data);
         return true;
+      }
+    }
+
+    // 登记附件上传(POST /issues/issue-attachment?name=<原始文件名>,
+    // raw binary 流式):日志等文件边写边算哈希落 staging,超上限中途
+    // 掐断(不为大包付整包内存),返回工作区相对路径引用
+    // (attachments/<hash>.<ext>)——前端把它以纯文本插入 description。
+    // 无回显路由:附件是给 AI 读的分析材料,人不预览。
+    // 管理员不发起问题会话,同 POST /issues 的角色边界。
+    if (parts[1] === "issue-attachment" && parts.length === 2) {
+      if (viewer?.role === "admin") {
+        return done(403, { error: "管理员不发起问题会话" });
+      }
+      const dataDir = routeOptions.issueFlow?.dataDir ?? "";
+      if (!dataDir) return done(500, { error: "数据目录未配置" });
+      if (method === "POST") {
+        const filename = new URL(request.url ?? "", "http://x")
+          .searchParams.get("name") ?? undefined;
+        try {
+          const result = await stageIssueAttachmentStream(request,
+            { dataDir, filename });
+          return done(201, { path: result.path, bytes: result.bytes });
+        } catch (error) {
+          return done(400, {
+            error: String(error instanceof Error ? error.message : error),
+          });
+        }
       }
     }
 
@@ -1008,7 +1045,7 @@ export async function handleIssueRoutes(
     }
 
     // 会话仓清单调整(#241,元信息页签的仓编辑器):设计裁定=端点不直
-    // 改仓清单——只校验+留痕+投递通知,清单由 Agent 经 pull_repo(新增,
+    // 改仓清单——只校验+留痕+发送通知,清单由 Agent 经 pull_repo(新增,
     // 幂等入列)/remove_repo(移除,#240,远端分支现查)执行后变化。写闸
     // 照 reply 同款:仅归属人,管理员不写。全空 diff 在这里 400 人话打回;
     // 域校验(https/在册/模块绑定/上限)在服务层走 IssueControlError,
@@ -1030,7 +1067,7 @@ export async function handleIssueRoutes(
     }
 
     // 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮不执行任何
-    // 事——端点只守卫+留痕+投递通知词(终态/queued 由服务层打回),
+    // 事——端点只守卫+留痕+发送通知词(终态/queued 由服务层打回),
     // 拉取由 Agent 按技能 issue-ops 执行(缺环境走既有环境闸)。写闸
     // 仅归属人,与调整关联仓同款。
     if (method === "POST" && parts[2] === "logs"

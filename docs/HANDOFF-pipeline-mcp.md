@@ -39,7 +39,7 @@ pipeline_log.py 头注释。
 - **诚实清单**:验过什么没验过什么如实写(README 已知边界),失效
   记录显式勘误。烟测只证 fail-open,不能说成"取数已验证"。
 - **内核唯一权威**:不在 TS/脚本侧复刻任何流程判定;宿主对 run 的
-  机械核验(selectTerminalRun:sha 绑定 + is_valid)是防陈灯闸,
+  机械核验(selectTerminalRun:sha 绑定 + is_valid)是防过期结果闸,
   别绕过。
 - 命名:AI Review 系统叫**行云**(域名 xingyun.rnd 没错,别改回
   "星云")。
@@ -75,10 +75,10 @@ parsePipelineDefects/onlyUnfixableToolFailures)、
   红要 codecheck_detail.json 或带文件/行号的缺陷明细;UT 红要对应
   job 日志或 UT 失败明细。哪些维度红看 status/mergeable_state/
   pipeline_info;每维度证据齐不齐对 artifacts 文件名 + summary。
-- **分级处置**:①红的维度全有证据 → 正常派修;②部分有部分没有 →
-  照常派修(修看得见的),使命如实写明"X 维度红但报错缺失,已求助
+- **分级处置**:①红的维度全有证据 → 正常派发修复;②部分有部分没有 →
+  照常派发修复(修看得见的),使命如实写明"X 维度红但报错缺失,已求助
   人工",同时发小鲁班要缺的那份(修复与求助并行,不互相等);
-  ③红的维度全无证据 → 不派修(不烧轮次),waiting_on 挂等人 +
+  ③红的维度全无证据 → 不派发修复(不烧轮次),waiting_on 挂等人 +
   小鲁班(复用 unfixable-tools 前置分诊同款路径)。
 - **求助文案随缺口变**(卡片自述使命纪律):精确到维度——
   "build2.0 红了,构建日志三条降级路都失败(原因附 summary),
@@ -86,7 +86,7 @@ parsePipelineDefects/onlyUnfixableToolFailures)、
   机制不新造;贴了之后下一轮修复带上,自动恢复。
 - **两头出路,绝不无限等**:升级前先走现有 retryPipelineEvidence
   带预算重试(防网络抖动误判);挂等人期间照常轮询,后续轮次拿到
-  证据自动恢复派修,不需人工解锁。通知旁路 fail-open,小鲁班发不
+  证据自动恢复派发修复,不需人工解锁。通知旁路 fail-open,小鲁班发不
   出不影响任务状态(人从工作台也能看到卡点)。
 
 ## 未决事项(别自作主张开工)

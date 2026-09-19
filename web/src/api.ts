@@ -328,7 +328,7 @@ export async function putLubanToken(
   return parseJson(response);
 }
 
-/** 用已保存的个人 Token 走一遍正式小鲁班投递链路。 */
+/** 用已保存的个人 Token 走一遍正式小鲁班发送链路。 */
 export async function testLubanConnection(): Promise<{
   ok: true;
   message: string;
@@ -3711,6 +3711,12 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   failed: "异常",
 };
 
+/** 「进行中」口径:未收口(非归档/非取消)。问题处理页默认筛选项与
+ * 侧栏「问题处理」父行徽章共用这一份判定,收口状态增减时两处同源,
+ * 不许各写各的减法。 */
+export const isIssueActive = (status: IssueStatus): boolean =>
+  status !== "archived" && status !== "canceled";
+
 // ---- 固定流程(2026-08-27 拍板;#98 单路径化:前端不再感知"模式") ----
 
 export type IssueScenario = "ticket" | "no_ticket";
@@ -3922,6 +3928,9 @@ export interface IssueSummary {
     evidence_failure_log?: string;
     last_repair_sha?: string;
     last_failure_summary?: string;
+    /** 分支头是平台外提交(ADR-0041):字段在场=当前检查目标不是本
+     *  会话自己推的——平台按分支最新提交检查,外部推送自动跟随。 */
+    external_head?: true;
   }>;
   /** 建 MR 后与需求交付共用的持续检视索引。 */
   feedback?: FeedbackRecord[];
@@ -4182,6 +4191,21 @@ export async function uploadIssueImage(
   });
 }
 
+/** 登记附件上传(日志等文件,类型不限,单个 500MB 上限):原始文件名
+ * 走查询串(服务端取扩展名),字节流式落服务端 staging,返回工作区
+ * 相对路径引用(attachments/<hash>.<ext>),前端把它以纯文本插入
+ * description——附件是给 AI 读的分析材料,人不预览。 */
+export async function uploadIssueAttachment(
+  file: File,
+): Promise<{ path: string; bytes: number }> {
+  return issueFetch(
+    `/issues/issue-attachment?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: file,
+    });
+}
+
 /** 外部图片代理转存(#276):粘贴的外部 <img src="https://..."> 图
  * 前端拿不到字节(跨域带不上对方站的 Cookie),交后端下载落 staging,
  * 返回 issue-images/<hash>.<ext> 引用。data: URL 不走这里(字节已在
@@ -4228,7 +4252,7 @@ export function requestIssueRepoChanges(
 }
 
 /** 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮只递交意图——
- * 端点守卫+留痕+投递通知词,拉取由 Agent 按技能 issue-ops 执行(缺
+ * 端点守卫+留痕+发送通知词,拉取由 Agent 按技能 issue-ops 执行(缺
  * 环境走既有环境闸),平台不代拉。成功 = HTTP 2xx 会话概要;日志清单
  * 不随本调用更新,随既有 updated_at 轮询自刷。 */
 export function requestIssueLogFetch(id: string): Promise<IssueSummary> {

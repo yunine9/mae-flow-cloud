@@ -23,11 +23,26 @@ import {
   projectRepairStopped, projectStatusLabel, projectTaskFocus,
 } from "../src/taskFocus.ts";
 
-/** 浏览器可执行文件:缺省沿用 macOS 老路径;别的机器用环境变量指,
- * 如 WSL: MFC_VISUAL_BROWSER="/mnt/c/Program Files (x86)/Microsoft/
- * Edge/Application/msedge.exe"(Edge 同为 Chromium,无头参数通用)。 */
-const CHROME = process.env.MFC_VISUAL_BROWSER
-  ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+/** 浏览器可执行文件:环境变量优先;缺省先找 playwright 缓存里的 Linux
+ * 无头壳——WSL 上走 Windows Edge 互操作要跨 interop+9p,同页实测 8.7s
+ * 起步(2026-09-18 任务里曾达 40-80s/张),Linux 原生 0.8-1.7s/张,默认
+ * 原生。找不到再退回 macOS 老路径。要显式指到 Windows 浏览器仍走环境
+ * 变量并以 .exe 结尾(自动切 Windows 路径转换),如 MFC_VISUAL_BROWSER=
+ * "/mnt/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"。 */
+function defaultBrowser(): string {
+  const cache = `${process.env.HOME ?? ""}/.cache/ms-playwright`;
+  if (cache.startsWith("/") && existsSync(cache)) {
+    const versions = readdirSync(cache)
+      .filter((name) => /^chromium_headless_shell-\d+$/.test(name)).sort();
+    const bin = versions.length
+      ? join(cache, versions[versions.length - 1],
+        "chrome-headless-shell-linux64", "chrome-headless-shell")
+      : "";
+    if (bin && existsSync(bin)) return bin;
+  }
+  return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+}
+const CHROME = process.env.MFC_VISUAL_BROWSER ?? defaultBrowser();
 /** Windows 浏览器(经 WSL 互操作调用)看不见 /home 路径:场景目录必须
  * 放在 /mnt/<盘> 下,且传给浏览器的路径/URL 要转成 Windows 形式。 */
 const WIN_BROWSER = /\.exe$/i.test(CHROME);
