@@ -56,3 +56,20 @@ test("通知发给责任人并直达本次草稿，不改变任务状态",async(
  try {f.task.summary.luban_account="owner";const coordinator=(svc as any).deliveryExperiences;await coordinator.options(f.task).notify(3,"c-test-abc123");assert.equal(calls[0].account,"owner");assert.match(calls[0].summary,/3 条经验草稿.*尽快审核/);assert.match(calls[0].link,/experience=1&memory_id=c-test-abc123&source_task=task-1/);assert.equal(f.task.summary.status,"await_merge");}finally{await svc.shutdown();f.cleanup();}
 });
 test("草稿保存后通知失败，重启只补通知不重跑模型",async()=>{const f=fixture();let models=0,notifications=0;const options=()=>({...f.options(),notify:async()=>{notifications++;if(notifications===1)throw Error("暂时离线");}});const runner=async()=>{models++;return JSON.stringify({drafts:[draft]});};try{const service=new DeliveryExperiences(options,runner);service.capture(f.task);f.merge();service.start(f.task);await service.flush();assert.equal(f.store.list().length,1);const restarted=new DeliveryExperiences(options,runner);restarted.start(f.task);await restarted.flush();assert.equal(models,1);assert.equal(notifications,2);assert.equal(f.store.list().length,1);}finally{f.cleanup();}});
+
+test("大型需求超过八条独立经验全部保存，不因数量拒绝或截断", async () => {
+  const f = fixture();
+  const drafts = Array.from({ length: 12 }, (_, index) => ({ ...draft, trigger: `组件场景 ${index + 1} 的适用条件` }));
+  let notified = 0;
+  const service = new DeliveryExperiences(() => ({ ...f.options(), notify: async count => { notified = count; } }),
+    async () => JSON.stringify({ drafts }));
+  try {
+    service.capture(f.task); f.merge(); service.start(f.task); await service.flush();
+    assert.equal(f.store.list().length, 12);
+    assert.equal(notified, 12);
+    assert.equal(JSON.parse(readFileSync(join(f.workspace, "delivery-experience/state.json"), "utf8")).status, "completed");
+    assert.match(DELIVERY_EXPERIENCE_MISSION, /反例一/);
+    assert.match(DELIVERY_EXPERIENCE_MISSION, /正例/);
+    assert.match(DELIVERY_EXPERIENCE_MISSION, /不设条数上限/);
+  } finally { f.cleanup(); }
+});

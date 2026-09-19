@@ -14,7 +14,7 @@ const read = (path: string): any => { try { return JSON.parse(readFileSync(path,
 
 export function parseDeliveryExperiences(text: string, evidence: Set<string>, module?: string): Array<Pick<MemoryInput, "dimension" | "trigger" | "scope" | "module" | "paths" | "problem" | "conclusion"> & { evidence_ids: string[] }> {
   const parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
-  if (!Array.isArray(parsed?.drafts) || parsed.drafts.length > 8) throw new Error("经验草稿输出格式错误");
+  if (!Array.isArray(parsed?.drafts)) throw new Error("经验草稿输出格式错误");
   return parsed.drafts.map((d: any) => {
     if (!d || !MEMORY_DIMENSIONS.includes(d.dimension) || !["one_off", "local", "general", "platform"].includes(d.scope)
       || typeof d.trigger !== "string" || !d.trigger.trim() || d.trigger.length > 80
