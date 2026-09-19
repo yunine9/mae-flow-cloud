@@ -4026,6 +4026,13 @@ export interface IssueWaitingCard {
 export interface IssueDetail extends IssueSummary {
   waiting?: IssueWaitingCard;
   has_analysis: boolean;
+  /** 一次结果章(仅「有单+修复完成归档」的会话带):与团队页一次率
+   *  两轴同口径——定位=分析报告一版过,修复=环境验证零失败。无单、
+   *  取消、失败、非问题收口的会话不带此字段,界面不渲染。 */
+  once_outcome?: {
+    localization_pass: boolean;
+    repair_pass: boolean;
+  };
 }
 
 export interface DtsTicketBrief {

@@ -116,6 +116,24 @@ export interface IssueOnceRateRow {
   repair_pass: boolean;
 }
 
+/** 单会话的一次结果章(会话卡片呈现):与团队页两轴同一判定,
+ *  一处函数两处使用——卡片出章与统计口径永不漂移。 */
+export interface IssueOnceOutcome {
+  /** 一次定位:分析报告一版过(版本数 ≤1)。 */
+  localization_pass: boolean;
+  /** 一次修复:环境验证零失败(未答卡=通过)。 */
+  repair_pass: boolean;
+}
+
+export function issueOnceOutcome(
+  facts: Pick<IssueOnceRateFacts, "report_version_count" | "verify_fail_count">,
+): IssueOnceOutcome {
+  return {
+    localization_pass: facts.report_version_count <= 1,
+    repair_pass: facts.verify_fail_count === 0,
+  };
+}
+
 export interface IssueOnceRateAxis {
   passed: number;
   /** 占分母的百分数一位小数;分母 0 = null,前端显示 —。 */
@@ -148,8 +166,7 @@ export function issueOnceRates(
     if (row.conclusion_kind !== "delivered") continue;
     // 两轴各测一个裁决点:定位=报告一版过(版本账);修复=环境验证
     // 一次过(验证卡零 fail;自动归档未答卡=验证通过,不进失败计数)。
-    const localization_pass = row.report_version_count <= 1;
-    const repair_pass = row.verify_fail_count === 0;
+    const { localization_pass, repair_pass } = issueOnceOutcome(row);
     if (localization_pass) localizationPassed += 1;
     if (repair_pass) repairPassed += 1;
     per_session.push({
