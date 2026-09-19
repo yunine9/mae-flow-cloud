@@ -994,6 +994,14 @@ async function main(): Promise<void> {
     // 个人 Git 令牌(界面只写不读):任务启动时按归属人取,经
     // credential helper 注入;没配的用户走部署级访问方式。
     gitCredential: (account) => auth.gitCredential(account),
+    platformGitCredential: () => {
+      const tokenFile = flag("--codehub-token-file");
+      if (!tokenFile) return undefined;
+      try {
+        const password = readFileSync(tokenFile, "utf8").trim();
+        return password ? { username: "oauth2", password } : undefined;
+      } catch { return undefined; }
+    },
     // 月光模式(需求侧独立的「人工介入程度·需求交付」过程轴):
     // 每张卡到达时现读——开着的直行,关了的恢复审批。
     moonlight: (account) => auth.moonlightEnabled(account),

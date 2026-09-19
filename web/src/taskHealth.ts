@@ -1,5 +1,9 @@
+import { taskProgressTimestamp } from "../../src/taskProgressTime";
 export interface HealthTask {
   luban_account?: string;
+  status?: string;
+  completed_at?: string;
+  waiting?: { created_at?: string } | null;
   created_at: string;
   updated_at?: string;
   last_progress_at?: string;
@@ -39,8 +43,7 @@ export function taskHealthFacts(
     current: task.focus.headline,
     next: task.focus.next_action,
     actor: actorLabel(task, viewerUsername),
-    last_progress_at: task.last_progress_at
-      ?? task.updated_at ?? task.created_at,
+    last_progress_at: taskProgressTimestamp(task),
     needs_attention: task.focus.needs_attention,
   };
 }

@@ -1,3 +1,4 @@
+import { taskProgressTimestamp } from "../../src/taskProgressTime";
 import { pipelineLabel } from "./pipelinePresentation";
 import { confirmsRequirementGraph as confirmsChainOption } from "../../src/requirementDecisionContract";
 import { Button } from "./components/ui/button";
@@ -132,7 +133,7 @@ export function TaskCard({
       : task.status === "verifying" ? (repairStopped(task) ? "需介入" : "验证中")
       : task.status === "await_merge" ? "待合入"
       : task.status === "coordinating" ? "子任务推进" : statusText(task)}
-    owner={responsibleOf(task)} updatedAt={task.updated_at ?? task.created_at}
+    owner={responsibleOf(task)} updatedAt={taskProgressTimestamp(task)} timeLabel="最近进展"
     detail={task.focus?.next_action ?? task.detail} child={!!task.parent_task_id}
     attention={repairStopped(task)} focused={focused} onOpen={onOpenArtifacts} childCount={childCount}
     parentId={task.parent_task_id} parentLabel={parentTask?.ticket ?? task.parent_task_id}

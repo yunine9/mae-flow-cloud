@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -9,7 +9,7 @@ import { collectSearchableKnowledge, KnowledgeSearch } from '../src/knowledgeSea
 import { knowledgeDocumentCatalog } from '../src/knowledgeDocumentCatalog.ts';
 import { MemoryStore } from '../src/taskMemory.ts';
 import { createBusinessModule } from '../src/businessModuleLibrary.ts';
-import { readRepositoryKnowledgeFile } from '../src/repositorySkills.ts';
+import { readRepositoryKnowledgeFile, readRepositoryKnowledgeTree } from '../src/repositorySkills.ts';
 import { TaskService } from '../src/taskService.ts';
 import { createTaskServer } from '../src/server.ts';
 const context={repo:'repo',repositories:['https://code.example/team/repo.git'],moduleIds:[],productVersion:'2.7B'};
@@ -92,4 +92,102 @@ test('知识库汇总已采纳经验，始终读取原记录，不另复制一�
   docs=knowledgeDocumentCatalog(dir).documents;assert.match(docs[0].content,/借用句柄不释放/);
   assert.equal(docs.length,1);
  } finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+
+test('文件树和批量导入：保留同名路径、固定版本、排除 Skill 包及符号链接', async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-tree-'));
+ const git=(...args:string[])=>execFileSync('git',args,{cwd:dir,encoding:'utf8'}).trim();
+ try {
+  git('init','-q','-b','main');git('config','user.name','test');git('config','user.email','test@example.com');
+  for(const folder of ['a','b','skills/check/references'])mkdirSync(join(dir,folder),{recursive:true});
+  writeFileSync(join(dir,'a/规范.md'),'# A\n释放句柄');writeFileSync(join(dir,'b/规范.md'),'# B\n不得释放句柄');
+  writeFileSync(join(dir,'skills/check/SKILL.md'),'# Skill');writeFileSync(join(dir,'skills/check/references/example.md'),'# Reference');
+  symlinkSync('a/规范.md',join(dir,'link.md'));writeFileSync(join(dir,'empty.md'),'');
+  git('add','.');git('commit','-qm','first');
+  const tree=await readRepositoryKnowledgeTree({repository:dir,baseline:'main'});
+  assert.deepEqual(tree.paths,['a/规范.md','b/规范.md','empty.md']);
+  writeFileSync(join(dir,'a/规范.md'),'# 新版');git('commit','-qam','second');
+  const batch=await readRepositoryKnowledgeTree({repository:dir,baseline:tree.revision,paths:[...tree.paths,'link.md','skills/check/SKILL.md']});
+  assert.equal(batch.revision,tree.revision);assert.equal(batch.files.length,2);assert.equal(batch.errors.length,3);
+  assert.match(batch.files[0].content,/释放句柄/);assert.equal(batch.files[1].path,'b/规范.md');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('同仓相似模块知识不串台：明确模块优先，歧义不猜；平台知识保留',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-isolation-'));
+ try {
+  for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
+  const a=saveKnowledgeDocument(dir,{title:'规范.md',content:'创建者释放句柄',scope:'module',module_ids:['a']},'owner');
+  const b=saveKnowledgeDocument(dir,{title:'规范.md',content:'借用者不能释放句柄',scope:'module',module_ids:['b']},'owner');
+  const global=saveKnowledgeDocument(dir,{title:'通用规范',content:'检查错误码'},'owner');
+  const selected={...context,moduleIds:['a']};
+  assert.deepEqual(new Set(collectSearchableKnowledge(dir,selected).assets.map(a=>a.id)),new Set([a.id,global.id]));
+  assert.equal(new KnowledgeSearch(dir).read(selected,b.id),undefined);
+  const ambiguous=collectSearchableKnowledge(dir,context);assert.deepEqual(ambiguous.assets.map(a=>a.id),[global.id]);assert.match(ambiguous.warnings.join(''),/多个业务模块/);
+  const search=new KnowledgeSearch(dir,{ingest:async()=>true,search:async()=>[{id:b.id,score:1},{id:a.id,score:0.9}]} as any);
+  assert.deepEqual((await search.search(selected,'句柄')).hits.map(h=>h.id),[a.id],'侧车即便返回不适用文档，宿主也要过滤');
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('批量接口保留来源、同名不同目录独立、再次导入更新原记录并报告单项失败',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-batch-api-'));
+ const service=new TaskService({dataDir:dir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0});
+ service.importKnowledgeTree=async(_repo,baseline,paths)=>({revision:'a'.repeat(40),paths:['a/readme.md','b/readme.md'],files:paths?paths.filter(p=>p!=='bad.md').map(path=>({path,content:'# '+path})):[],errors:paths?.includes('bad.md')?[{path:'bad.md',error:'读取失败'}]:[]});
+ const server=createTaskServer(service);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
+ const url=`http://127.0.0.1:${(server.address() as any).port}/knowledge-documents`;
+ const post=(path:string,body:any)=>fetch(url+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+ try{
+  const body={repository:'https://example.com/docs.git',branch:'main',revision:'a'.repeat(40),paths:['a/readme.md','b/readme.md','bad.md'],scope:'platform',technologies:['cpp']};
+  const first=await(await post('/repository-import',body)).json() as any;
+  assert.equal(first.documents.length,2);assert.equal(first.errors.length,1);assert.notEqual(first.documents[0].id,first.documents[1].id);
+  const second=await(await post('/repository-import',body)).json() as any;assert.deepEqual(second.documents.map((d:any)=>d.id),first.documents.map((d:any)=>d.id));
+  assert.equal(second.documents[0].source.path,'a/readme.md');
+  for (const extra of [{repository:'https://another.example.com/docs.git'},{branch:'release'}]) {
+    const separate=await(await post('/repository-import',{...body,...extra,paths:['a/readme.md']})).json() as any;
+    assert.notEqual(separate.documents[0].id,first.documents[0].id,'仓库或分支不同也不能覆盖');
+  }
+  createBusinessModule(dir,{id:'a',name:'模块A',description:'A',owner:'owner',repositories:context.repositories},'owner');
+  const scoped=await(await post('/repository-import',{...body,paths:['a/readme.md'],scope:'module',module_ids:['a']})).json() as any;
+  assert.notEqual(scoped.documents[0].id,first.documents[0].id,'同来源不同模块范围分别维护');
+
+  assert.match(collectSearchableKnowledge(dir,context).assets[0].whenToUse,/readme\.md/);
+  assert.equal((await post('/repository-import',{...body,revision:undefined})).status,400);
+ }finally{await service.shutdown();await new Promise<void>(r=>server.close(()=>r()));rmSync(dir,{recursive:true,force:true});}
+});
+
+test('任务知识工具使用需求所属模块，子任务继承父任务，不扩大到同仓其他模块',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-task-scope-'));
+ const service=new TaskService({dataDir:dir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0});
+ try {
+  for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
+  const a=saveKnowledgeDocument(dir,{title:'a',content:'a规则',scope:'module',module_ids:['a']},'owner');
+  const b=saveKnowledgeDocument(dir,{title:'b',content:'b规则',scope:'module',module_ids:['b']},'owner');
+  const api=service as any,parent=api.tasks.get(service.create('主需求').id),child=api.tasks.get(service.create('子任务').id);
+  parent.summary.business_module={id:'a',name:'a'};child.summary.parent_task_id=parent.summary.id;
+  child.summary.business_modules=[{id:'a'},{id:'b'}];
+  const tool=api.memoryTools(child).find((t:any)=>t.name==='knowledge');
+  const good=await tool.execute('read-a',{action:'read',id:a.id});assert.match(good.content[0].text,/a规则/);
+  const bad=await tool.execute('read-b',{action:'read',id:b.id});assert.doesNotMatch(bad.content[0].text,/b规则/);
+ }finally{await service.shutdown();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('全局试搜跨文档及业务模块；任务检索仍保持模块隔离，停用资料与 Skill 不参与',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'knowledge-global-search-'));
+ const service=new TaskService({dataDir:dir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0});
+ const server=createTaskServer(service);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
+ try {
+  for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
+  const a=saveKnowledgeDocument(dir,{title:'规范.md',content:'# A\n创建者关闭',scope:'module',module_ids:['a'],technologies:['cpp']},'owner');
+  const b=saveKnowledgeDocument(dir,{title:'规范.md',content:'# B\n借用者不关闭',scope:'module',module_ids:['b'],technologies:['java']},'owner');
+  const disabled=saveKnowledgeDocument(dir,{title:'过期规范',content:'不应检索',active:false},'owner');
+  const search=new KnowledgeSearch(dir,{ingest:async()=>true,search:async()=>[{id:a.id,score:1},{id:b.id,score:1},{id:disabled.id,score:1},{id:'skill:example/SKILL.md',score:1}]} as any);
+  service.getKnowledgeSearch=()=>search;
+  const url=`http://127.0.0.1:${(server.address() as any).port}/knowledge-documents/search`;
+  const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:'文件关闭'})});
+  assert.equal(response.status,200);const result=await response.json() as any;
+  assert.deepEqual(result.hits.map((h:any)=>h.id),[a.id,b.id]);assert.deepEqual(result.hits[1].technologies,['java']);
+  assert.deepEqual((await search.search({...context,moduleIds:['a']},'文件关闭')).hits.map(h=>h.id),[a.id]);
+  assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({query:''})})).status,400);
+ }finally{await service.shutdown();await new Promise<void>(r=>server.close(()=>r()));rmSync(dir,{recursive:true,force:true});}
 });

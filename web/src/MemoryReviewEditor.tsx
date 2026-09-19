@@ -3,14 +3,17 @@ import { FileText, Sparkles, MessageSquareQuote } from "lucide-react";
 import { reviewTaskMemory, memoryHistory, getMemoryInsights, getBusinessModules, productVersionRequest, type MemoryRecord } from "./api";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Textarea } from "./components/ui/textarea";
 
 /** 边界与结论一起持久化、检索，避免推荐时遗漏限定条件。 */
 const boundaryMarker = /\n\s*适用例外[：:]/;
-export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDirty }: {
+export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDirty, stacked = false }: {
+  stacked?: boolean;
   record: MemoryRecord; taskId: string; onChanged: () => Promise<void>; onDismiss: () => void; onDirty: (dirty: boolean) => void;
 }) {
   const parts = record.conclusion.split(boundaryMarker);
+  const [dimension, setDimension] = useState(record.dimension);
   const [trigger, setTrigger] = useState(record.trigger);
   const [conclusion, setConclusion] = useState(parts[0]);
   const [exceptions, setExceptions] = useState(parts.slice(1).join("\n适用例外：").trim());
@@ -36,30 +39,30 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
   const active = !record.withdrawn && !record.superseded_by;
   const editable = record.can_review && active;
   useEffect(() => {
-    onDirty(trigger !== record.trigger || conclusion !== parts[0] || exceptions !== parts.slice(1).join("\n适用例外：").trim() || scope !== record.scope || module !== (record.module ?? "") || repo !== record.repo || JSON.stringify(versions) !== JSON.stringify(record.product_versions ?? []) || note !== (record.maintenance_note ?? ""));
-  }, [trigger, conclusion, exceptions, scope, module, repo, versions, note, record, onDirty]);
+    onDirty(dimension !== record.dimension || trigger !== record.trigger || conclusion !== parts[0] || exceptions !== parts.slice(1).join("\n适用例外：").trim() || scope !== record.scope || module !== (record.module ?? "") || repo !== record.repo || JSON.stringify(versions) !== JSON.stringify(record.product_versions ?? []) || note !== (record.maintenance_note ?? ""));
+  }, [dimension, trigger, conclusion, exceptions, scope, module, repo, versions, note, record, onDirty]);
   async function decide(decision: "pending" | "accepted" | "rejected", merged_into?: string) {
     if (busy) return;
     setBusy(true); setError("");
     try {
-      await reviewTaskMemory(taskId, record, { decision, trigger, scope, module, repo, product_versions: versions, note, merged_into,
+      await reviewTaskMemory(taskId, record, { decision, dimension, trigger, scope, module, repo, product_versions: versions, note, merged_into,
         conclusion: conclusion.trim() + (exceptions.trim() ? `\n\n适用例外：${exceptions.trim()}` : "") });
       await onChanged();
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  return <div className="grid min-w-0 grid-cols-2 items-stretch gap-4 text-[16px]">
+  return <div className={`grid min-w-0 ${stacked ? "grid-cols-1" : "grid-cols-2"} items-stretch gap-4 text-[16px]`}>
     <section className="min-w-0 rounded-xl border border-border bg-surface">
       <h3 className="flex items-center gap-2 border-b border-border p-4 font-semibold"><FileText className="size-5 text-primary" />事实与依据</h3>
       <div className="grid gap-4 p-4">
         <div className="text-sm text-muted-foreground">{record.source_repo ?? record.repo} · {record.task || "成员主动记录"}<p className="mt-1 break-all">来源标识：{record.evidence === "manual" ? "手工新增" : record.evidence}</p></div>
         {record.merged_into && <a className="rounded-md border p-3 text-primary underline" href={`/?experience=1&memory_id=${record.merged_into}`}>本条已合并停用，查看保留的目标经验</a>}
         {(record.problem || record.quote) && <div className="rounded-lg border border-border p-4">
-          <h4 className="mb-3 flex items-center gap-2 font-medium"><MessageSquareQuote className="size-4" />原始反馈</h4>
+          <h4 className="mb-3 flex items-center gap-2 font-medium"><MessageSquareQuote className="size-4" />{record.source === "delivery_review" ? "首次问题与最终修正" : "原始反馈"}</h4>
           {record.problem && <p className="whitespace-pre-wrap break-words">{record.problem}</p>}
           {record.quote && <blockquote className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap break-words border-l-2 border-primary/30 bg-muted/50 p-3 text-sm">{record.quote}</blockquote>}
         </div>}
-        <div className="rounded-lg border border-border p-4"><h4 className="mb-3 font-medium">当时记录的处理结论</h4>
+        <div className="rounded-lg border border-border p-4"><h4 className="mb-3 font-medium">{record.source === "delivery_review" ? "Agent 提炼的原始候选" : "当时记录的处理结论"}</h4>
           <p className="max-h-64 overflow-auto whitespace-pre-wrap break-words">{record.basis?.conclusion ?? record.review?.original?.conclusion ?? record.conclusion}</p>
           <p className="mt-3 text-sm text-muted-foreground">请核对依据与适用条件，证据不足可以先保存草稿。</p>
         </div>
@@ -75,7 +78,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
             {row.merged_into && <a className="text-primary underline" href={`/?experience=1&memory_id=${row.merged_into}`}>查看合并目标</a>}
             {editable && <Button variant="outline" size="sm" className="mt-2" onClick={() => {
               const old = row.conclusion.split(boundaryMarker); setTrigger(row.trigger); setConclusion(old[0]); setExceptions(old.slice(1).join("\n适用例外：").trim());
-              setScope(row.scope); setModule(row.module ?? ""); setRepo(row.repo); setVersions(row.product_versions ?? []); setNote(`恢复版本 ${row.revision ?? 1}`);
+              setDimension(row.dimension); setScope(row.scope); setModule(row.module ?? ""); setRepo(row.repo); setVersions(row.product_versions ?? []); setNote(`恢复版本 ${row.revision ?? 1}`);
             }}>载入此版本到编辑区</Button>}
           </article>)}
         </details>
@@ -84,6 +87,9 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
     <section className="min-w-0 rounded-xl border border-border bg-surface">
       <h3 className="flex items-center gap-2 border-b border-border p-4 font-semibold"><Sparkles className="size-5 text-primary" />{editable ? "经验内容 · 团队共同维护" : accepted ? "已采纳经验" : "经验记录"}</h3>
       <div className="grid gap-4 p-4">
+        {record.source === "delivery_review" && <div className="grid gap-2 font-medium">经验维度<Select value={dimension ?? ""} disabled={!editable || busy} onValueChange={value => setDimension(value as MemoryRecord["dimension"])}><SelectTrigger aria-label="经验维度"><SelectValue /></SelectTrigger><SelectContent>
+          {["业务规则与边界", "组件与接口用法", "设计与实现约束", "编码规范", "测试与验证", "分析与工作方法"].map(d => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+        </SelectContent></Select></div>}
         <label className="grid gap-2 font-medium">什么情况下使用<Input className="h-10 text-[16px] md:text-[16px]" value={trigger} disabled={!editable || busy} maxLength={80} onChange={event => setTrigger(event.target.value)} /></label>
         <label className="grid gap-2 font-medium">经验结论<Textarea className="text-[16px] font-normal md:text-[16px]" rows={4} value={conclusion} disabled={!editable || busy}
           placeholder="提炼可迁移的判断方法、做法与依据，不只复述本次修复。" onChange={event => setConclusion(event.target.value)} /></label>
@@ -111,7 +117,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
         </details>}
       </div>
     </section>
-    <footer className="sticky bottom-16 z-10 col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
+    <footer className={`sticky z-10 ${stacked ? "bottom-0" : "bottom-16 col-span-2"} flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm`}>
       <div className="text-sm text-muted-foreground"><p>团队成员均可维护，每次修改留痕；采纳后供 Agent 按范围检索。</p>
         {record.review?.by && <p>最近处理：{record.review.by} · {record.review.at ? new Date(record.review.at).toLocaleString() : ""}</p>}
         {!record.can_review && <p>当前记录只读。</p>}</div>

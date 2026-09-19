@@ -1,4 +1,4 @@
-import type { SemanticEvent } from "./semanticEvents.ts";
+import { type EventLog, type SemanticEvent } from "./semanticEvents.ts";
 import type {
   GateContract,
   GateDecision,
@@ -734,4 +734,41 @@ export function prePushMission(
       + "C++/native 仓确实找不到可用的定向入口时，可以跑全量 UT 并在 summary 写清原因；"
       + "其他生态没有定向入口时如实报 code_failure 并写清楚。任何情况下都不要以编译代替 UT。",
   ].join("\n");
+}
+
+/** A model turn ending is not a build process completion signal. */
+export class PrePushCommands {
+  private pending = new Set<Promise<unknown>>();
+  async run<T>(execute: () => Promise<T>): Promise<T> {
+    const command = execute();
+    this.pending.add(command);
+    try { return await command; }
+    finally { this.pending.delete(command); }
+  }
+  async drain(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+  }
+}
+
+export function unfinishedPrePushTools(events: SemanticEvent[]): SemanticEvent[] {
+  const pending = new Map<string, SemanticEvent>();
+  for (const event of events) {
+    const key = `${event.sessionId}:${event.payload.call_id}`;
+    if (event.kind === "tool_requested") pending.set(key, event);
+    if (event.kind === "tool_finished") pending.delete(key);
+  }
+  return [...pending.values()];
+}
+
+/** Called only after the execution container has actually stopped. */
+export function recordInterruptedPrePushTools(log: EventLog): void {
+  for (const event of unfinishedPrePushTools(log.replay())) {
+    log.append({
+      ...event, eventId: log.lastEventId() + 1,
+      ts: new Date().toISOString(), kind: "tool_finished",
+      payload: { ...event.payload, is_error: true,
+        result: "Build-Fix 会话结束且容器已停止，工具缺少可靠结果，登记为 interrupted；重试前核实现场",
+      },
+    });
+  }
 }

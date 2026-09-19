@@ -11,7 +11,7 @@ import {
 import { readAppendOnlyJsonl } from "./jsonlTailRepair.ts";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-export type MemorySource = "annotation" | "prepush_fix" | "user_note" | "agent_note";
+export type MemorySource = "annotation" | "prepush_fix" | "user_note" | "agent_note" | "delivery_review";
 export type MemoryJudge = "human" | "pipeline" | "agent";
 /** one_off 只检索；local/general 为仓内经验，platform 明确跨仓。 */
 export type MemoryScope = "one_off" | "local" | "general" | "platform";
@@ -26,7 +26,11 @@ export const MEMORY_TRIGGER_LIMIT = 80;
  * (模板保留,scope 不动)。user_note 不过起草,固定 template。 */
 export type MemoryDraftState = "template" | "model" | "failed";
 
+export const MEMORY_DIMENSIONS = ["业务规则与边界", "组件与接口用法", "设计与实现约束", "编码规范", "测试与验证", "分析与工作方法"] as const;
+export type MemoryDimension = typeof MEMORY_DIMENSIONS[number];
+
 export interface MemoryInput {
+  dimension?: MemoryDimension;
   source: MemorySource;
   judged_by: MemoryJudge;
   scope: MemoryScope;
@@ -60,6 +64,7 @@ export interface MemoryReview {
   original?: { trigger: string; conclusion: string; scope: MemoryScope };
 }
 export interface MemoryReviewInput {
+  dimension?: MemoryDimension;
   decision: "pending" | "accepted" | "rejected";
   module?: string;
   product_versions?: string[];
@@ -181,6 +186,7 @@ export function renderMemoryMarkdown(record: MemoryRecord): string {
   const front: Array<[string, string]> = [
     ["id", yamlScalar(record.id)],
     ["source", record.source],
+    ...(record.dimension ? [["dimension", yamlScalar(record.dimension)] as [string, string]] : []),
     ["judged_by", record.judged_by],
     ["scope", record.scope],
     ["review_status", record.review?.status ?? "pending"],
@@ -358,7 +364,8 @@ export class MemoryStore {
       if (!target || target.id === id || !memoryAccessible(target, target.repo, target.module ? [target.module] : [], target.product_versions?.[0])) throw new MemoryError("请选择另一条已采纳的有效经验作为合并目标");
       if (input.decision !== "rejected") throw new MemoryError("合并来源必须停用");
     }
-    const next: MemoryRecord = { ...found,
+    if (input.dimension !== undefined && !MEMORY_DIMENSIONS.includes(input.dimension)) throw new MemoryError("未知经验维度");
+    const next: MemoryRecord = { ...found, dimension: input.dimension ?? found.dimension,
       ...(input.decision !== "rejected" ? { trigger, conclusion, scope } : {}),
       source_repo: found.source_repo ?? found.repo,
       repo: input.repo === undefined ? found.repo : repoSlug(String(input.repo).trim()),

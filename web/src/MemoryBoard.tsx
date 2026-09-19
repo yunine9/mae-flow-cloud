@@ -73,7 +73,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
   return <section className="grid gap-4 rounded-xl border border-border bg-surface p-5" aria-label="经验沉淀">
     <header className="flex items-start justify-between gap-4">
       <div><h2 className="text-xl font-semibold">经验沉淀</h2>
-        <p className="mt-1 text-sm text-muted-foreground">待确认草稿 → 人工采纳后供 Agent 检索 → 停用后保留历史。团队成员共同维护，全程留痕。</p></div>
+        <p className="mt-1 text-sm text-muted-foreground">MR 合入完成后，结合检视意见和后续代码修改整理草稿；主动记录也保存在这里。修改并采纳后供 Agent 复用。</p></div>
       {selected ? <Button variant="outline" onClick={dismiss}>返回经验列表</Button>
         : <div className="flex gap-2"><Button variant="outline" onClick={() => void load().catch(reason => setError(String(reason)))}>刷新</Button><Button onClick={() => setCreating(!creating)}>新增经验</Button></div>}
     </header>
@@ -96,7 +96,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     {selected ? <>
       <div className="flex items-center justify-between rounded-md bg-muted p-3 text-sm"><span>{selected.record.trigger} · {memoryPreparation(selected.record).label}</span>
         {selected.record.task && <Button variant="outline" size="sm" onClick={() => { if (onOpenTask) onOpenTask(selected.record.task); else location.assign(`/work/${encodeURIComponent(selected.record.task)}`); }}>查看来源任务 {selected.record.task}</Button>}</div>
-      <div className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-4">
+      <div className="grid grid-cols-[minmax(260px,26%)_minmax(0,1fr)] items-start gap-4">
       <aside className="grid max-h-[min(650px,65vh)] gap-2 overflow-auto rounded-xl border border-border bg-muted/30 p-3" aria-label="经验候选列表">
         <h3 className="p-2 font-semibold">{tab === "pending" ? `待确认 · ${pending}` : "经验列表"}</h3>
         {rows.map(row => <Button key={row.id} variant={row.id === selected.record.id ? "secondary" : "ghost"}
@@ -105,7 +105,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           <span><span className="line-clamp-2">{row.trigger}</span><span className="mt-1 block text-sm font-normal text-muted-foreground">{row.task} · {row.repo}</span></span>
         </Button>)}
       </aside>
-      <MemoryReviewEditor key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
+      <MemoryReviewEditor stacked key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
         onDirty={setDirty} onDismiss={dismiss} onChanged={async () => { setDirty(false); await load(); const updated = await readMemoryInsight(selected.record.id); if (updated) { setSelected(updated); setTab(updated.record.review?.status ?? "pending"); } }} />
       </div>
       <details className="text-sm"><summary className="cursor-pointer">完整留档与来源标识</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3">{selected.content}</pre></details>

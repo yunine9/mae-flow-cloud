@@ -32,3 +32,29 @@ export function aggregateDeliveryModules(rows: DeliveryAnalysisRow[]) {
   return [...groups.values()].sort((a, b) => b.lines - a.lines || a.name.localeCompare(b.name))
     .map(group => ({ ...group, percent: total ? group.lines / total * 100 : 0 }));
 }
+
+/** Parent analysis includes its own planning and the selected children's usage.
+ * Each task ledger is counted once; absent provider data is not a measured zero. */
+export function aggregateDeliveryTokens(ids: string[], ledger: import("./deliveryAnalyticsTypes.ts").DeliveryTaskTokens[] = [], parentId?: string) {
+  const byId = new Map(ledger.map(row => [row.id, row]));
+  const selected = new Set(ids);
+  if (parentId) {
+    selected.add(parentId);
+    for (const id of ids) {
+      let parent = byId.get(id)?.parent_id;
+      const seen = new Set<string>();
+      while (parent && !seen.has(parent)) {
+        seen.add(parent); selected.add(parent);
+        if (parent === parentId) break;
+        parent = byId.get(parent)?.parent_id;
+      }
+    }
+  }
+  let input = 0, output = 0, available = 0;
+  for (const id of selected) {
+    const usage = byId.get(id)?.usage;
+    if (!usage) continue;
+    available++; input += usage.input_tokens; output += usage.output_tokens;
+  }
+  return { input, output, total: input + output, available, tasks: selected.size };
+}

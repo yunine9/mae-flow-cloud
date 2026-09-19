@@ -12,6 +12,8 @@ import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
 import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
+import { consolidateSearchCatalog, type KnowledgeApplicability } from "./knowledgeConsolidationStore.ts";
+
 export interface KnowledgeContext {
   repo: string;
   repositories: string[];
@@ -29,6 +31,7 @@ export interface SearchableKnowledge {
   revision: string;
   productVersions: string[];
   path?: string;
+  applicability?: KnowledgeApplicability;
 }
 
 /** Only explicit frontmatter metadata is machine-filtered. A version mentioned in
@@ -44,7 +47,7 @@ export function knowledgeProductVersions(content: string): string[] {
   } catch { return []; }
 }
 
-export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false): {
+export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false, raw = false): {
   assets: SearchableKnowledge[]; warnings: string[];
 } {
   const assets: SearchableKnowledge[] = [];
@@ -53,18 +56,22 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const matchesRepos = (values: string[]) => all || !values.length || values.some(r => repos.has(repositoryIdentity(r)));
   const catalog = listBusinessModules(dataDir);
   warnings.push(...catalog.warnings);
-  // Module relationships can be discovered from current repository mapping even
-  // if the task did not know the module at creation time.
-  const modules = catalog.modules.filter(m => m.status === "active"
-    && (all || context.moduleIds.includes(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r)))));
+  const activeModules = catalog.modules.filter(m => m.status === "active");
+  const mapped = activeModules.filter(m => m.repositories.some(r => repos.has(repositoryIdentity(r))));
+  const explicit = new Set(context.moduleIds);
+  // A shared repository is not evidence that two business modules share rules.
+  const modules = all ? activeModules : explicit.size
+    ? activeModules.filter(m => explicit.has(m.id)) : mapped.length === 1 ? mapped : [];
+  if (!all && !explicit.size && mapped.length > 1) warnings.push("仓库关联多个业务模块，未自动混用模块知识；请先明确本任务的业务模块。");
   const moduleIds = new Set(modules.map(m => m.id));
   for (const doc of listKnowledgeDocuments(dataDir)) {
     if (!doc.active || !matchesRepos(doc.repositories)
         || (doc.module_ids.length && !doc.module_ids.some(id => moduleIds.has(id)))) continue;
     assets.push({ id: doc.id, title: doc.title, kind: "document", scope: doc.scope === "platform" ? "平台通用"
       : doc.scope === "module" ? `业务模块：${doc.module_ids.join("、")}` : `代码仓：${doc.repositories.join("、")}`,
-      summary: doc.when_to_use, whenToUse: [doc.when_to_use, doc.technologies.join("、")].filter(Boolean).join("；"),
-      content: doc.content, revision: doc.revision, productVersions: doc.product_versions });
+      summary: doc.when_to_use, whenToUse: [doc.when_to_use, doc.technologies.join("、"), doc.source ? `来源：${doc.source.repository} · ${doc.source.branch} · ${doc.source.path}` : ""].filter(Boolean).join("；"),
+      content: doc.content, revision: doc.revision, productVersions: doc.product_versions,
+      applicability: {modules:doc.module_ids,repositories:doc.repositories,languages:doc.technologies,versions:doc.product_versions} });
   }
   const candidates = listKnowledgeCandidateCatalog(dataDir);
   warnings.push(...candidates.warnings);
@@ -79,7 +86,8 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
         : row.business_module_ids.length ? `业务模块：${row.business_module_ids.join("、")}` : "团队通用",
       summary: row.summary, whenToUse: [row.when_to_use, row.technologies.length
         ? `适用技术：${row.technologies.join("、")}` : ""].filter(Boolean).join("；"),
-      content: row.content, revision: row.digest, productVersions: knowledgeProductVersions(row.content) });
+      content: row.content, revision: row.digest, productVersions: knowledgeProductVersions(row.content),
+      applicability:{modules:row.business_module_ids,repositories:row.repositories,languages:row.technologies,versions:knowledgeProductVersions(row.content)} });
   }
   for (const module of modules) for (const asset of module.assets) {
     if (asset.status !== "published" || asset.form === "skill" || !matchesRepos(asset.repositories)) continue;
@@ -89,24 +97,27 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
       const doc = readBusinessKnowledgeAsset(dataDir, module.id, asset.id);
       assets.push({ id: `module:${module.id}:${asset.id}`, title: asset.title, kind: asset.form,
         scope: `业务模块：${module.name}`, summary: asset.summary, whenToUse: asset.when_to_use,
-        content: doc.content, revision: String(asset.version), productVersions: knowledgeProductVersions(doc.content) });
+        content: doc.content, revision: String(asset.version), productVersions: knowledgeProductVersions(doc.content),
+        applicability:{modules:[module.id],repositories:asset.repositories,languages:[],versions:knowledgeProductVersions(doc.content)} });
     } catch (error) { warnings.push(`模块资料 ${module.name}/${asset.title} 暂不可读：${String(error)}`); }
   }
   const store = new MemoryStore(dataDir);
   for (const row of store.list()) {
-    if (all ? row.review?.status !== "accepted" : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
+    if (all ? !memoryAccessible(row, row.repo, row.module ? [row.module] : []) : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
     const content = store.read(row.id);
     if (!content) continue;
     assets.push({ id: row.id, title: row.trigger, kind: "experience",
       scope: row.module ? `业务模块：${row.module}` : row.scope === "platform" ? "平台通用经验" : `代码仓：${row.repo}`,
       summary: row.conclusion, whenToUse: row.trigger, content,
       revision: String(row.revision ?? 1), productVersions: row.product_versions ?? knowledgeProductVersions(content),
-      path: join(store.root, row.file) });
+      path: join(store.root, row.file),
+      applicability:{modules:row.module?[row.module]:[],repositories:row.scope==="platform"?[]:[row.repo],languages:[],versions:row.product_versions??[],localPaths:row.scope==="local"?row.paths??[]:[]} });
   }
   // Explicit product scope narrows the current task; missing metadata remains
   // visible as unconfirmed rather than being guessed from document revisions.
-  return { assets: assets.filter(a => !context.productVersion || !a.productVersions.length
-    || a.productVersions.includes(context.productVersion)), warnings };
+  const scoped = assets.filter(a => !context.productVersion || !a.productVersions.length
+    || a.productVersions.includes(context.productVersion));
+  return {assets:raw ? scoped : consolidateSearchCatalog(dataDir,scoped),warnings};
 }
 
 export interface KnowledgeHit {
@@ -146,6 +157,10 @@ export class KnowledgeSearch {
     return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 5, id);
   }
 
+  async searchLibrary(query: string) {
+    return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 10, undefined, true);
+  }
+
   /** Background preparation after publication/startup; search still scopes the catalog. */
   async prepare(): Promise<void> {
     if (!this.sidecar) return;
@@ -155,10 +170,10 @@ export class KnowledgeSearch {
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
-  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string): Promise<KnowledgeSearchResult> {
+  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string, library = false): Promise<KnowledgeSearchResult> {
     if (!this.sidecar) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     const readCatalog = () => {
-      const value = onlyId ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
+      const value = onlyId || library ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
       return onlyId ? { ...value, assets: value.assets.filter(a => a.id === onlyId) } : value;
     };
     const catalog = readCatalog();

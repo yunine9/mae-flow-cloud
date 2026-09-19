@@ -139,7 +139,7 @@ test("圈选「记为记忆」:不发给任何人、状态直接闭环、立刻�
   }
 });
 
-test("闭环的检视意见:人圈、Agent 改、人确认三件套齐才落;not_fixed 不落", async () => {
+test("闭环保留采纳与否决事实，过程中不自动提炼经验", async () => {
   const { service: svc } = service();
   try {
     const id = svc.create("给手机号打码").id;
@@ -162,67 +162,14 @@ test("闭环的检视意见:人圈、Agent 改、人确认三件套齐才落;not
     svc.verifyAnnotation(id, fixed.id, "本地用户");
     svc.verifyAnnotation(id, notFixed.id, "本地用户", false, { revision: 0, outcome: "not_adopted", reason: "与现有约定冲突，不修改" });
     const rows = svc.listTaskMemories(id);
-    assert.equal(rows.length, 1, "只有 fixed 且确认通过的才是闭环");
-    assert.equal(rows[0].source, "annotation");
-    assert.equal(rows[0].judged_by, "human");
-    assert.equal(rows[0].problem, "掩码要保留后四位");
-    assert.equal(rows[0].conclusion, "已改为保留后四位并补了 UT");
-    assert.equal(rows[0].quote, "return raw;");
-    assert.equal(rows[0].trigger, "改 src/Mask.java 第 23 行附近时");
+    assert.equal(rows.length, 0, "过程闭环不即时生成经验，保留批注供交付后整体分析");
+    assert.equal(store.list().find(row => row.id === fixed.id)?.resolution?.outcome, "fixed");
+    assert.equal(store.list().find(row => row.id === notFixed.id)?.resolution?.outcome, "not_adopted");
   } finally {
     await svc.shutdown();
   }
 });
 
-test("Build-Fix:失败过又修好才记,改动文件来自两次 HEAD 的真实差异", async () => {
-  const { service: svc } = service();
-  try {
-    const id = svc.create("修构建").id;
-    const internal = (svc as any).tasks.get(id);
-    internal.summary.repo_url = "https://codehub.x/team/order.git";
-    const cwd = mkdtempSync(join(tmpdir(), "mfc-memory-git-"));
-    const git = (...args: string[]) => execFileSync("git", args, {
-      cwd, encoding: "utf-8",
-      env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@x",
-        GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@x" },
-    }).trim();
-    git("init", "-q", "-b", "master");
-    writeFileSync(join(cwd, "pom.xml"), "<project/>\n");
-    git("add", "pom.xml"); git("commit", "-q", "-m", "base");
-    const before = git("rev-parse", "HEAD");
-    writeFileSync(join(cwd, "pom.xml"), "<project><dep/></project>\n");
-    writeFileSync(join(cwd, "registry.xml"), "<r/>\n");
-    git("add", "."); git("commit", "-q", "-m", "fix");
-    const after = git("rev-parse", "HEAD");
-    internal.cwd = cwd;
-
-    const prior = {
-      state: "repairing", round: 2, sha: before,
-      message: "编译失败:缺少依赖", issue: {
-        kind: "code", check: "compile", message: "缺少 registry 依赖,编译失败",
-        at: new Date().toISOString(),
-      },
-    };
-    const input = (svc as any).prePushFixMemory(internal, prior, {
-      status: "passed", sha: after, message: "通过",
-      report: { status: "passed", summary: "补上 registry 依赖并注册 xml 后编译与 UT 通过",
-        compile: { command: "mvn compile", status: "passed" },
-        unit_test: { command: "mvn test", status: "passed" } },
-    }, after);
-    assert.equal(input.source, "prepush_fix");
-    assert.equal(input.judged_by, "pipeline");
-    assert.equal(input.repo, "order");
-    assert.deepEqual(input.paths, ["pom.xml", "registry.xml"]);
-    assert.equal(input.problem, "缺少 registry 依赖,编译失败");
-    assert.match(input.conclusion, /补上 registry 依赖/);
-    assert.equal(input.evidence, `prepush:${after}`);
-    const record = (svc as any).recordMemory(internal, input);
-    assert.equal(svc.listTaskMemories(id)[0].id, record.id);
-    assert.equal(svc.get(id)?.memories_recorded, 1);
-  } finally {
-    await svc.shutdown();
-  }
-});
 
 test("只圈不写的记忆:结论就是圈的那段原文", () => {
   const { service: svc } = service();

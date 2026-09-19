@@ -18,7 +18,7 @@ test("团队任务统计以紧凑摘要展示规模，并用轻量筛选拆分�
   assert.match(app, /id="delivery-stage-title"/);
   assert.match(app, /id="delivery-status-title"/);
   assert.match(app, /stats\.stages\.map/);
-  assert.match(app, /stats\.statuses\.map/);
+  assert.match(app, /stats\.statuses\.filter\(\(entry\) => entry\.count > 0 \|\| selectedStatus === entry\.key\)\.map/);
   // #233 收官:breakdown 皮肤类换装为 App.tsx 的 CELL_BASE 工具类配方。
   assert.match(app, /const CELL_BASE = "flex min-h-\[38px\][^"]*rounded-lg border border-line bg-surface px-\[11px\] py-1\.5[^"]*disabled:opacity-55"/,
     "概览格按钮配方:38px 高、8px 圆角、紧凑筛选");

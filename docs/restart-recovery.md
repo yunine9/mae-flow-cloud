@@ -45,7 +45,7 @@ systemctl start mae-flow-cloud
 | completed / failed | 无感:只重建索引 | 无 |
 | paused / pausing | pausing 安全落 paused,不擅自续跑 | 人工恢复 |
 | 问题流会话(issue) | 标记「服务重启打断」,现场保留 | 用户发一句话即续聊 |
-| 修复环(CI/检视修) | 无感:轮数与同 SHA 刹车都在派单前落盘,不重置不白送轮次 | 无 |
+| 修复环(CI/检视修) | 无感:CI 轮数预算在派单前落盘；同交付 SHA 不推断修复放弃，恢复时接续工作区 | 无 |
 
 ## 容器(重点核查过)
 

@@ -1474,7 +1474,7 @@ export function App() {
 
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
-          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加文档"}</Button>}
+          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加知识"}</Button>}
           {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
           {relevantWaiting > 0 && view !== "users" && view !== "settings" && (
             <div className="flex h-8 items-center gap-2 whitespace-nowrap rounded-[8px] border border-(--attention)/10 bg-(--attention-soft) pl-[9px] pr-2.5 text-sm font-medium text-(--attention)">
@@ -1961,7 +1961,7 @@ function UsersBoard({ me }: { me: string }) {
   return <section className="grid gap-6">
     <div className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
       <div className="bg-surface-2 p-7 text-muted-foreground">
-        
+
         <h2>添加团队成员</h2>
         <p>开发账号可以查看全部任务，但只能处理分配给自己的任务；管理员维护账号与系统配置，Committer 另行标记。</p>
       </div>
@@ -2064,12 +2064,7 @@ function UsersBoard({ me }: { me: string }) {
   </section>;
 }
 
-/** 两域共用的页签骨架(2026-09-11 排版对齐):「当前现场/成果档案」两张
- * 大卡,团队需求与团队问题两页必须用这同一个组件,防版式漂移;域差异
- * 只有副标题文案与 aria 标注。(#210)手搓 role=tablist 换 base-ui Tabs
- * 原语:面板(TabsPanel)由调用点作为 children 传入,键盘箭头、roving
- * tabindex 与页签/面板关联全部归原语;双行大卡版式用 shadcn 语义令牌
- * 重皮(网格两列,窄屏单列),文案原样。 */
+/** 团队需求与问题共用页签；键盘切换和面板关联由 Tabs 原语维护。 */
 function TeamWorldTabs({ domain, tab, onSelect, children }: {
   domain: "requirement" | "issue";
   tab: TeamTaskTab;
@@ -2083,18 +2078,9 @@ function TeamWorldTabs({ domain, tab, onSelect, children }: {
         archiveSmall: "闭环结论与取消记录" };
   return <Tabs value={tab} className="block"
     onValueChange={(value) => onSelect(value as TeamTaskTab)}>
-    <TabsList aria-label={copy.label}
-      className="mb-4.5 h-auto w-full grid grid-cols-2 gap-[5px] rounded-[13px] border border-border bg-muted/60 p-[5px] shadow-xs max-[520px]:grid-cols-1">
-      <TabsTrigger value="current"
-        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
-        <strong className="text-sm leading-tight">当前现场</strong>
-        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.currentSmall}</small>
-      </TabsTrigger>
-      <TabsTrigger value="archive"
-        className="h-auto min-h-[58px] flex-col items-start gap-[3px] rounded-[9px] border border-transparent px-3.5 py-2.5 text-left">
-        <strong className="text-sm leading-tight">成果档案</strong>
-        <small className="text-xs font-normal leading-snug text-muted-foreground">{copy.archiveSmall}</small>
-      </TabsTrigger>
+    <TabsList variant="line" aria-label={copy.label} className="page-tabs mb-6">
+      <TabsTrigger value="current" title={copy.currentSmall}>当前现场</TabsTrigger>
+      <TabsTrigger value="archive" title={copy.archiveSmall}>成果档案</TabsTrigger>
     </TabsList>
     {children}
   </Tabs>;
@@ -2279,9 +2265,9 @@ function TeamDeliveryOverview({
   return <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="团队需求统计">
     <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
       <div className="grid min-w-0 gap-[3px]">
-        
+
         <h2 className="m-0 text-lg text-text-strong">交付概览</h2>
-        <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">点击阶段或状态可筛选下方现场；已取消任务仅保留在成果档案。</p>
+
       </div>
       <div className="flex flex-none items-center gap-[18px]"
         aria-label={`需求总数 ${stats.requirements} 项（仅主任务），全部任务 ${stats.total} 项，交付中 ${stats.delivering} 项，已交付 ${stats.delivered} 项`}>
@@ -2294,7 +2280,7 @@ function TeamDeliveryOverview({
         <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.delivered}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已交付</small></span>
       </div>
     </header>
-    <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
+    {stats.delivering > 0 && <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
       <section aria-labelledby="delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
         <div className="grid gap-0.5"><strong id="delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
           <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>
@@ -2312,7 +2298,7 @@ function TeamDeliveryOverview({
         <div className="grid gap-0.5"><strong id="delivery-status-title" className="text-[13.5px] text-text-strong">任务状态</strong>
           <small className="text-[13px] text-muted-foreground">当前运行情况</small></div>
         <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(118px,1fr))] gap-[7px]">
-          {stats.statuses.map((entry) => <button type="button" key={entry.key}
+          {stats.statuses.filter((entry) => entry.count > 0 || selectedStatus === entry.key).map((entry) => <button type="button" key={entry.key}
             className={selectedStatus === entry.key ? CELL_SELECTED : CELL_BASE}
             disabled={entry.count === 0}
             aria-pressed={selectedStatus === entry.key} aria-controls="team-queue"
@@ -2323,7 +2309,7 @@ function TeamDeliveryOverview({
           {!stats.statuses.length && <div className="col-span-full text-[13px] text-faint">暂无交付中任务</div>}
         </div>
       </section>
-    </div>
+    </div>}
   </section>;
 }
 

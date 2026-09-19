@@ -65,10 +65,8 @@ test("修复环默认 20 轮兜底:三连红仍一路修到绿", async () => {
 
 
 
-test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () => {
-  // 修复会话自己判断"这红灯不该由改码解决"是合法结局(你说的
-  // "要去别的平台配 yaml"就是这类)——它的收口发言就是给人的诊断,
-  // 必须跟着刹车走到人面前,不能让人拿着一句"已停"去翻日志猜。
+test("修复环:明确预算耗尽 → 保留会话记录并通知人工", async () => {
+  // 停机依据是显式预算，不是 SHA 未变；到预算时保留最后的会话记录。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed", "failed");
@@ -90,17 +88,17 @@ test("修复环:会话没新提交 → 带诊断停下,主动喊人", async () =
       repoPath: platform.barePath,
       python: "python3",
     },
-    delivery: { platformUrl: platform.baseUrl },
+    delivery: { platformUrl: platform.baseUrl, repairRounds: 1 },
     notifier: new Notifier({ endpoint: luban.endpoint }),
   });
   try {
     const id = service.create("交付 REQ9:修复环刹车",
       { account: "liaoxiang" }).id;
     await until(() =>
-      service.get(id)!.delivery?.loop?.state === "halted", "刹车落账");
+      service.get(id)!.delivery?.loop?.state === "exhausted", "刹车落账");
     const task = service.get(id)!;
     assert.equal(task.status, "verifying", "如实停在验证中,不假装有结论");
-    assert.match(task.delivery?.pipeline ?? "", /自动修复已停/);
+    assert.match(task.delivery?.pipeline ?? "", /预算用完/);
     assert.equal(task.delivery?.loop?.round, 1, "只烧了一轮");
     // 诊断原文上浮:环账、任务详情都有"缺什么、去哪配"
     assert.match(task.delivery?.loop?.diagnosis ?? "", /sonar\.yaml/);

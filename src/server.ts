@@ -1,3 +1,4 @@
+import { componentResearchRoute } from "./componentResearchRoutes.ts";
 import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
 import { randomUUID } from "node:crypto";
 import { MemoryStore } from "./taskMemory.ts";
@@ -1100,7 +1101,7 @@ export function createTaskServer(
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
-        || parts[0] === "product-versions"
+        || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
@@ -1270,6 +1271,7 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
+      if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-candidates") {
         const operator = viewer?.username ?? "本地部署";
