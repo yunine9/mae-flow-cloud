@@ -4,6 +4,14 @@
 数据拼装段(文件清单/失败项明细/流水线描述)由代码算好经变量传入。
 -->
 
+## gate.skill_select_pending
+
+skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即结束本回合,用户圈选后平台会带着必读集合开新一轮
+
+## gate.stage_closed
+
+阶段门禁:{{tool}} 在当前阶段「{{stage}}」不开放。允许的阶段:{{allowed}}。固定流程按阶段出口推进,请先完成本阶段工作
+
 ## pull.guide.prep
 
 拉仓指引——
@@ -11,7 +19,7 @@
 
 ## pull.remote_branch_warn
 
-遗留警报: 远端已存在同名修复分支 {{branch}}@{{remote}},与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留。放着不管 push_branch 会被拒(非快进)。请用 AskUserQuestion 请用户拍板处置:在代码平台删除远端旧分支后重推,还是沿用旧分支。
+遗留警报: 远端已存在同名修复分支 {{branch}}@{{remote}},与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留,普通推送会被拒(非快进)。后续 push_branch 首次即带 force=true 覆盖即可(租赁式核对远端旧 tip;该分支已有 MR 时覆盖后原 MR 随之更新,不要重复创建),不必请用户去平台删远端分支。
 
 ## dts.module_hint
 
@@ -20,6 +28,26 @@
 ## dts.briefing
 
 单据详情已获取——通读单据后调 complete_stage 申报完成(材料到位不会自动推进)。
+
+## env.hard_declined
+
+用户已确认无需此操作({{scope}}),请基于现有证据继续;确有必要可在结论中说明证据局限,不要再次请求环境
+
+## repo.not_registered
+
+会话没有登记这个代码仓: {{wanted}}。已登记: {{registered}}
+
+## remove.bound_module
+
+「{{url}}」是业务模块「{{module}}」的绑定仓,模块绑定仓不可移除——如该仓确与本问题无关,请用户调整模块绑定后再试
+
+## remove.remote_unreachable
+
+远端状态查不到({{url}}),无法安全判定删除条件——请稍后重试;持续失败时请检查网络或 Git 令牌配置,不要跳过门禁强行移除
+
+## remove.remote_branch_left
+
+远端同名修复分支 {{branch}} 还在({{url}} @ {{tip}}),不可移除——请用户先在代码平台删除远端分支,再移除该仓
 
 ## push.no_ticket
 
@@ -40,6 +68,30 @@
 
 一次只推一个仓:已有 push_branch 在途,等它返回后再推下一个仓。多仓交付是串行节奏——逐仓「推送→下一仓」,不要在同一回合并发调用多个 push_branch
 
+## raisegate.gate_pending
+
+已有一张平台闸在等用户作答——先等闸裁决,裁决后会开新回合;届时若仍需要用户拍板,再判断是否举卡。不要叠加举卡。
+
+## raisegate.card_pending
+
+已有一张问题卡在等用户作答——先等作答结果再继续,不要叠加举卡。
+
+## raisegate.bad_kind
+
+不支持的卡种:{{kind}}。只允许 env_verify(环境验证)/ pipeline_unfixable(红灯人工处理)/ pipeline_evidence(报错原文回灌)。
+
+## raisegate.env_verify_premature
+
+「提交 MR·跑绿」阶段还没收口(申报是出口的一半)——先调 complete_stage 申报 MR 清单,平台验绿收口后再举这张卡。
+
+## raisegate.repo_required
+
+举流水线人工卡必须带 repo(红灯所属仓,会话仓清单内的地址)。
+
+## raisegate.no_red_fact
+
+「{{repo}}」没有在案的红灯事实——人工卡要凭平台的失败记录举,不要凭印象。先确认该仓流水线确实红灯(平台通知,或重推后查状态),再举卡。
+
 ## mr.no_ticket
 
 单号门禁:会话尚未绑定 DTS 单号,不能创建 MR。请用户在页面「绑定单号」后重试
@@ -47,6 +99,10 @@
 ## mr.no_push
 
 仓 {{repo}} 还没有推送记录:请先对该仓调用 push_branch,再创建 MR(一仓一 MR,改过的仓各自交付)
+
+## mr.verify_missing_push
+
+仓 {{repo}} 的 MR 缺推送记录,无法验绿:先对该仓 push_branch,再 create_mr,然后重新申报
 
 ## mr.title_missing
 
@@ -59,6 +115,14 @@
 ## bind.locked
 
 该会话的业务模块由人工预绑锁定,不能调用 bind_module 改绑。如你判断模块与单据明显不符,请用 AskUserQuestion 告知用户,由人在 DTS 列表改绑或提供代码仓地址;当前直接对已登记仓逐个 pull_repo 即可
+
+## bind.module_unreadable
+
+业务模块 {{module_id}} 不存在或元数据不可读:{{reason}}。请用 lookup_modules 重新检索,或用 AskUserQuestion 问用户
+
+## bind.module_no_repo
+
+业务模块「{{module}}」没有绑定代码仓——请用 AskUserQuestion 向用户要代码仓地址
 
 ## analysis.no_report
 
@@ -75,6 +139,14 @@
 ## analysis.submitted.ticket
 
 分析报告已提交,平台已把确认卡转给用户。请结束本回合,等用户确认后进入问题修复。
+
+## review.unknown_ref
+
+检视意见 {{reference}} 不在本批待处理意见里(可引用:{{known}})。按意见清单里的「意见N」引用,不要凭空编号
+
+## review.unknown_seq
+
+意见{{seq}} 不在本批待处理意见里(本批:{{known}})。按意见清单里的「意见N」引用,不要凭空编号
 
 ## ut.recorded
 

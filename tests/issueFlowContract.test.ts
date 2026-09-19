@@ -36,6 +36,7 @@ import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { saveProductVersion } from "../src/configurationCenter.ts";
 import type {
   DtsTicketBrief,
   DtsTicketDetail,
@@ -1078,17 +1079,29 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
     id: "pay-core", name: "支付核心", description: "收单与清结算",
     owner: "dev", repositories: ["/tmp/fixture.git"],
   }, "tester");
+  // 版本必填(2026-09-18)且须为配置中心在册版本,夹具给目录。
+  saveProductVersion(dataDir, { version: "V100R027C10B005",
+    branch: "release/V100R027C10B005" });
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
   });
   try {
     // 门禁过线:无单缺模块 / 缺后台密码,409 带人话直出。
+    // 版本必填(2026-09-18)在路由层先于服务端模块门,夹具带版本让
+    // 断言仍落在各自要验的门上。
     const noModule = await issuePost(
-      ["issues"], { account: "dev", title: "下单超时", assignee: "dev" }, service);
+      ["issues"], { account: "dev", title: "下单超时", assignee: "dev",
+        product_version: "V100R027C10B005" }, service);
     assert.equal(noModule.status, 409);
     assert.match(noModule.body.error, /必须指定业务模块/);
+    const noVersion = await issuePost(["issues"], {
+      account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
+    }, service);
+    assert.equal(noVersion.status, 409);
+    assert.match(noVersion.body.error, /必须选择产品版本/);
     const noBackend = await issuePost(["issues"], {
       account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
+      product_version: "V100R027C10B005",
       environment: {
         hosts: ["10.0.0.8"],
         backend_password: "",
@@ -1101,6 +1114,7 @@ test("契约快照:POST /issues 登记新 wire 形(环境过线、密码只进 v
     // 页面凭据已废弃(2026-09-10)——递了也不收,回执不出。
     const created = await issuePost(["issues"], {
       account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
+      product_version: "V100R027C10B005",
       environment: {
         hosts: ["10.0.0.8"],
         page_account: "ops",
@@ -1136,12 +1150,15 @@ test("契约快照:检视意见投影(意见号 seq 过线;reviews+checks 全形
     id: "pay-core", name: "支付核心", description: "收单与清结算",
     owner: "dev", repositories: ["/tmp/fixture.git"],
   }, "tester");
+  saveProductVersion(dataDir, { version: "V100R027C10B005",
+    branch: "release/V100R027C10B005" });
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
   });
   try {
     const created = await issuePost(["issues"], {
       account: "dev", title: "下单超时", assignee: "dev", module_id: "pay-core",
+      product_version: "V100R027C10B005",
       environment: { hosts: ["10.0.0.8"], backend_password: "backend-pw" },
     }, service);
     assert.equal(created.status, 201);
