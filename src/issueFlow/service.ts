@@ -195,10 +195,16 @@ import {
 } from "./prompt.ts";
 import {
   issueOnceRates,
+  onceRateFactsFromSnapshot,
   type IssueOnceRateFacts,
   type IssueOnceRateSummary,
 } from "./onceRates.ts";
 import { listAnalysisVersions } from "./analysisVersions.ts";
+import {
+  ISSUE_METRICS_FILE,
+  writeIssueMetricsSnapshot,
+  type IssueMetricsSnapshot,
+} from "./metricsSnapshot.ts";
 import { promptCopy } from "./promptCopy.ts";
 import {
   orderAnnotations,
@@ -1080,30 +1086,104 @@ export class IssueFlowService {
       : rows;
   }
 
+  /** 终态冻结快照(ADR-0042,#325):会话落终态、issue.json 落盘之后,
+   *  代码现场回收之前,把全部事实账投影计算一次,冻结成会话目录的
+   *  metrics.json。只生成一次(已在则跳过);生成与写盘的任何失败都
+   *  只记日志,绝不阻塞归档/取消/失败收口本身。 */
+  private freezeMetricsSnapshot(
+    live: Pick<LiveIssue, "root" | "id" | "state">,
+  ): void {
+    try {
+      // 提交归属层要 fetch MR 分支(#326):凭据与推送工具同源;缺席
+      // (测试裸构)按匿名尝试,取不到由快照就地降级。
+      const result = writeIssueMetricsSnapshot(live.root, live.state, {
+        fetchCredential: this.options.gitCredential?.(live.state.account),
+      });
+      if (result.skipped) return;
+      this.log(`[issue-flow] ${live.id} 终态快照已冻结`
+        + (result.degraded.length
+          ? `(缺项:${result.degraded.join("、")})` : ""));
+    } catch (error) {
+      this.log(`[issue-flow] ${live.id} 终态快照生成失败(不阻塞收口): `
+        + String(error instanceof Error ? error.message : error));
+    }
+  }
+
   /** 一次率二轴(口径:CONTEXT「一次修复成功率」「一次定位成功率」
-   * 词条,分类在 onceRates.ts 纯函数)。判定事实全从现成账取,零新
-   * 记账:验证失败按转移账的平台文案前缀计(VERIFY_FAIL_NOTE_PREFIX,
-   * 写入点在本服务 env_verify fail 分派),报告版本数读分析报告版本账
-   * (listAnalysisVersions),检视批次按 reviews 账本的 sent/issue_review
-   * 操作计。枚举与 list() 同源(live 全集,重启恢复时装载)。 */
+   *  词条,分类在 onceRates.ts 纯函数)。读侧切换(#327,ADR-0042):
+   *  终态会话优先读会话目录里冻结的 metrics.json 判定事实(快、稳,
+   *  调用方无感);在途会话照旧现算。快照缺失、损坏或不认识的版本
+   *  自动回退现算——不报错、记一条日志,等价于没接过快照。现算口径
+   *  不变:验证失败按转移账的平台文案前缀计(VERIFY_FAIL_NOTE_PREFIX,
+   *  写入点在本服务 env_verify fail 分派),报告版本数读分析报告版本账
+   *  (listAnalysisVersions),检视批次按 reviews 账本的 sent/issue_review
+   *  操作计。枚举与 list() 同源(live 全集,重启恢复时装载)。 */
   onceRates(): IssueOnceRateSummary {
     const rows: IssueOnceRateFacts[] = [...this.live.values()].map(
-      (live) => ({
-        id: live.id,
-        ticket: live.state.ticket,
-        status: live.state.status,
-        conclusion_kind: live.state.conclusion?.kind,
-        verify_fail_count: (live.state.transitions ?? []).filter(
-          (transition) => transition.note.startsWith(VERIFY_FAIL_NOTE_PREFIX),
-        ).length,
-        report_version_count: listAnalysisVersions(live.root).length,
-        review_count: reviewStore(live.root).history().filter(
-          (operation) =>
-            operation.op === "sent" && operation.via === "issue_review",
-        ).length,
-      }),
+      (live) => this.onceRateFacts(live),
     );
     return issueOnceRates(rows);
+  }
+
+  /** 单个会话的判定事实:终态先试冻结快照,拿不到再现算。 */
+  private onceRateFacts(live: LiveIssue): IssueOnceRateFacts {
+    if (isTerminal(live.state.status)) {
+      const frozen = this.frozenOnceRateFacts(live);
+      if (frozen) return frozen;
+    }
+    return this.computedOnceRateFacts(live);
+  }
+
+  /** 终态会话的冻结快照读侧:文件在、内容认、会话号对得上才采用;
+   *  任何一步不满足都返回 null 交回退,绝不抛错。 */
+  private frozenOnceRateFacts(live: LiveIssue): IssueOnceRateFacts | null {
+    const path = join(live.root, ISSUE_METRICS_FILE);
+    if (!existsSync(path)) {
+      this.log(`[issue-flow] ${live.id} 终态快照缺失,统计回退现算`);
+      return null;
+    }
+    let snapshot: IssueMetricsSnapshot;
+    try {
+      snapshot = JSON.parse(readFileSync(path, "utf-8")) as IssueMetricsSnapshot;
+    } catch (error) {
+      this.log(`[issue-flow] ${live.id} 终态快照损坏,统计回退现算: `
+        + String(error instanceof Error ? error.message : error));
+      return null;
+    }
+    if (!snapshot || typeof snapshot !== "object"
+      || snapshot.session_id !== live.id) {
+      this.log(`[issue-flow] ${live.id} 终态快照会话号对不上,`
+        + "统计回退现算");
+      return null;
+    }
+    const facts = onceRateFactsFromSnapshot(snapshot);
+    if (!facts) {
+      this.log(`[issue-flow] ${live.id} 终态快照不可用`
+        + "(版本或判定字段不认),统计回退现算");
+      return null;
+    }
+    return facts;
+  }
+
+  /** 判定事实现算(切换前的原路径,也是快照拿不到时的回退路径)。 */
+  private computedOnceRateFacts(live: LiveIssue): IssueOnceRateFacts {
+    return {
+      id: live.id,
+      ticket: live.state.ticket,
+      status: live.state.status,
+      conclusion_kind: live.state.conclusion?.kind,
+      // 计数用包含匹配(#328):生产记账是「第 N 轮:用户环境验证发现
+      // 问题:…」(回退统一加轮次前缀),开头匹配永远对不上;包含匹配
+      // 同时覆盖历史裸前缀旧账。
+      verify_fail_count: (live.state.transitions ?? []).filter(
+        (transition) => transition.note.includes(VERIFY_FAIL_NOTE_PREFIX),
+      ).length,
+      report_version_count: listAnalysisVersions(live.root).length,
+      review_count: reviewStore(live.root).history().filter(
+        (operation) =>
+          operation.op === "sent" && operation.via === "issue_review",
+      ).length,
+    };
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -2323,6 +2403,9 @@ export class IssueFlowService {
         }
       }
       saveState(live.root, live.state);
+      if (live.state.status === "failed") {
+        this.freezeMetricsSnapshot(live);
+      }
       this.log(`[issue-flow] ${live.id} 回合失败: ${detail}`);
     }
   }
@@ -2439,6 +2522,9 @@ export class IssueFlowService {
       }
     }
     saveState(live.root, live.state);
+    if (state.status === "failed") {
+      this.freezeMetricsSnapshot(live);
+    }
     // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
     // 结论后的动作与正常交还,不催人。
     if (state.status === "waiting_user") {
@@ -3800,6 +3886,7 @@ export class IssueFlowService {
       };
       state.status = "archived";
       saveState(live.root, state);
+      this.freezeMetricsSnapshot(live);
       this.releaseDriver(live);
       this.stopContainerInBackground(live, "非问题归档");
       this.vault.remove(live.id);
@@ -4505,6 +4592,8 @@ export class IssueFlowService {
           + String(error instanceof Error ? error.message : error));
       }
     }
+    // 终态快照(ADR-0042):待办作废账落定之后、现场回收之前冻结。
+    this.freezeMetricsSnapshot(live);
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
     // 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方
@@ -5013,6 +5102,8 @@ export class IssueFlowService {
           + String(error instanceof Error ? error.message : error));
       }
     }
+    // 终态快照(ADR-0042):待办作废账落定之后、现场回收之前冻结。
+    this.freezeMetricsSnapshot(live);
     this.releaseDriver(live);
     this.stopContainerInBackground(live, "交付完成自动归档");
     this.notifyMergeFact(live,
@@ -6238,6 +6329,7 @@ export class IssueFlowService {
       source: "platform", note: `关联单号 ${ticket} 转正为 ${newId},本会话收口`,
     });
     saveState(live.root, state);
+    this.freezeMetricsSnapshot(live);
     this.releaseDriver(live);
     this.stopContainerInBackground(live, "关联单号转正");
     this.vault.remove(id);
