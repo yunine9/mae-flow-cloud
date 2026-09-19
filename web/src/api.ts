@@ -3921,6 +3921,9 @@ export interface IssueSummary {
     evidence_failure_log?: string;
     last_repair_sha?: string;
     last_failure_summary?: string;
+    /** 分支头是平台外提交(ADR-0041):字段在场=当前检查目标不是本
+     *  会话自己推的——平台按分支最新提交检查,外部推送自动跟随。 */
+    external_head?: true;
   }>;
   /** 建 MR 后与需求交付共用的持续检视索引。 */
   feedback?: FeedbackRecord[];

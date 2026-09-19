@@ -998,16 +998,20 @@ export class IssueFlowService {
       }
       if (staleRetryLedger) saveState(root, state);
       // 监看账落后于推送账就补挂(issue-72 死表现场的重启自愈):有
-      // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后点火丢失
+      // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后启动的监看丢失
       // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
-      // 重挂。同 SHA 已结算的不碰:重放红结算会扰动同提交刹车账。放在
-      // 续表循环之后,补挂换掉的新账不会被旧循环重复盯。
+      // 重挂。同 SHA 已按终态处理的不碰:重放红灯终态处理会扰动同提交刹车账。
+      // external_head 的账不补挂(ADR-0041):检查目标是有意跟着平台外
+      // 提交走的,落后的推送账不是正确目标——补挂会跟检查目标跟随机制
+      // 打架(重启即来回切)。放在续表循环之后,补挂换掉的新账不会被
+      // 旧循环重复盯。
       if (!isTerminal(state.status)) {
         for (const mr of state.mrs ?? []) {
           const pushed = state.pushes
             ?.find((item) => item.repo === mr.repo)?.sha;
           const watch = state.pipelines?.[mr.repo];
-          if (pushed && (!watch || watch.sha !== pushed)) {
+          if (pushed && (!watch || (watch.sha !== pushed
+              && !watch.external_head))) {
             this.log(`[issue-flow] ${state.id} 监看账落后于推送账`
               + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
             this.armPipelineWatch(live, mr.repo);
@@ -4698,6 +4702,8 @@ export class IssueFlowService {
       // 红灯计数跨 SHA 累计(绿了才清零):修复轮预算是每仓总量,
       // 换 SHA 不重置——与需求侧修复环"同任务总量"同一口径。
       ...(watching?.reds ? { reds: watching.reds } : {}),
+      // external_head(ADR-0041)不随迁:这里挂的 sha 取自推送账,是
+      // 本会话自己推的提交——自己的推送天然不是平台外的,标记清除。
       // 刹车账跨重挂表保留(票 82):同 SHA 重推/重建 MR 后重看,刹车
       // 判据(last_repair_sha)必须活着;证据重试窗字段不随迁——新提交
       // 是新流水线,旧窗随旧提交作废。
@@ -4883,6 +4889,13 @@ export class IssueFlowService {
         },
       });
       if (!view) continue;
+      // 检查目标跟随分支最新提交(ADR-0041):平台带回的源分支最新提交
+      // 与流水线检查账不一致即切换(幂等,见 followBranchHead)。本函数
+      // 的调用方(合入状态循环、merge-status 端点)都会走到这里,切换
+      // 事实只落一次。
+      if (view.sourceSha && this.followBranchHead(live, mr.repo, view.sourceSha)) {
+        changed = true;
+      }
       const now = new Date().toISOString();
       if (view.mrState === "merged" && !mr.merged_at) {
         mr.merged_at = now;
@@ -5613,19 +5626,25 @@ export class IssueFlowService {
           + "处理后发消息继续");
       return;
     }
-    // ③ 派修记账:本轮提交与红灯摘要落账——下一轮"换新提交"红灯时
-    // 作为上轮报错拼进投递词(先写账再投递,进程死在两行之间也只是
+    // ③ 派发修复记账:本轮提交与红灯摘要落账——下一轮"换新提交"红灯时
+    // 作为上轮报错拼进发送词(先写账再发送,进程死在两行之间也只是
     // 多记一轮,不会把账记到没派过的提交头上)。
     const previousSha = watch.last_repair_sha;
     const previousSummary = watch.last_failure_summary;
     watch.last_repair_sha = sha;
     watch.last_failure_summary = pipelineFailureDigest(run, checks);
     saveState(live.root, state);
-    // ④ 失败事实投递(三态:运行中 steer/等人落便签/空闲开回合)。
+    // ④ 失败事实发送(三态:运行中 steer/等人落便签/空闲开回合)。
     // 逐维度明细与镜像产物都给全——判断交 AI,材料也交全。
     this.startPlatformTurn(live, [
       promptCopy("notices", "red.deliver.header", { repo, reds, max }),
       "",
+      // 分支头是平台外提交(ADR-0041):红灯属于别人推的提交——材料
+      // 开头先交底,修复指引让 AI 先拉最新代码、看差异再动手。
+      ...(watch.external_head
+        ? [promptCopy("notices", "red.deliver.external_head",
+            { sha: sha.slice(0, 12) }), ""]
+        : []),
       "**失败摘要**",
       "",
       describePipelineRun(run),

@@ -128,6 +128,10 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 - 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
 举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
 
+## red.deliver.external_head
+
+注意:分支最新提交 {{sha}} 不是本会话推的——分支头已被平台外的推送取代,现在检查的就是这个提交。先拉取分支最新代码、看清它与你会话内代码的差异,再决定怎么修;不要按工作区里的旧代码盲目改。
+
 
 ## advance.knowledge_remind
 
