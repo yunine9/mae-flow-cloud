@@ -195,9 +195,11 @@ import {
 } from "./prompt.ts";
 import {
   countVerifyFailures,
+  issueOnceOutcome,
   issueOnceRates,
   onceRateFactsFromSnapshot,
   sentReviewBatches,
+  type IssueOnceOutcome,
   type IssueOnceRateFacts,
   type IssueOnceRateSummary,
 } from "./onceRates.ts";
