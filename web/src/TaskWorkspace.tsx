@@ -651,6 +651,7 @@ export function TaskWorkspace({
   } | null>(null);
   const artifactTask = useRef("");
   const openedEvidenceGap = useRef("");
+  const openedDeliverySummary = useRef("");
   const [decisionFooterTarget, setDecisionFooterTarget] = useState<HTMLDivElement | null>(null);
   // 右栏会话流:服务端投影(事件账/决定账/批注账/反馈索引拼成的回合)。
   // 每 4 秒一拍,决定/插话/批注落账后立刻补取一次,不等下一拍。
@@ -1136,12 +1137,16 @@ export function TaskWorkspace({
         && openedEvidenceGap.current !== evidenceKey);
       const current = artifactTask.current === task.id && !newlyActionable
         ? active : "";
-      const next = preferredWorkspaceArtifact(
+      const summaryLink = new URLSearchParams(window.location.search).get("deliverySummary") === "1"
+        && openedDeliverySummary.current !== task.id
+        && result.items?.some(item => item.name === "task-materials/交付摘要.md");
+      const next = summaryLink ? "task-materials/交付摘要.md" : preferredWorkspaceArtifact(
         result.items ?? [], current, recommendedMaterialView,
         pipelineEvidenceNeedsHuman(task));
       artifactTask.current = task.id;
       openedEvidenceGap.current = evidenceKey;
       setActive(next);
+      if (summaryLink) { openedDeliverySummary.current = task.id; openMaterial("doc"); }
       if (next !== current && ["pipeline_evidence_gap", "delivery_unit_brief",
         "delivery_plan"].includes(result.items?.find((item) => item.name === next)
           ?.purpose ?? "")) {
@@ -1149,7 +1154,7 @@ export function TaskWorkspace({
       }
     });
     return () => { alive = false; };
-  }, [task.id, livePulse, task.delivery?.evidence_gap?.state,
+  }, [task.id, livePulse, task.updated_at, task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha, recommendedMaterialView]);
 
   const activeArtifactForRead = items?.find((item) => item.name === active);
@@ -1958,6 +1963,15 @@ export function TaskWorkspace({
       {warmupOpen && <OverlayDialog ariaLabel="开工前编译详情" title="开工前编译与准备状态" onClose={() => setWarmupOpen(false)}>
         <WarmupPanel task={task} />
       </OverlayDialog>}
+
+      {artifactTask.current === task.id && items?.some(item => item.name === "task-materials/交付摘要.md") && (
+        <section role="status" className="flex flex-none items-center justify-between gap-3 border-b border-line bg-accent-soft px-(--ws-gutter) py-2.5" aria-label="交付摘要提醒">
+          <span className="text-sm font-medium">首次交付摘要已生成 · 含改动图与测试情况</span>
+          <Button type="button" variant="outline" size="sm" onClick={() => {
+            openMaterial("doc"); setActive("task-materials/交付摘要.md");
+          }}>查看交付摘要</Button>
+        </section>
+      )}
 
       {task.feedback_error && (
         <section role="alert" className="flex-none border-b border-line bg-surface-2 px-(--ws-gutter) py-2.5">

@@ -327,6 +327,7 @@ function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
       purpose: "delivery_plan" as const,
     },
   ];
+  definitions.push({ file: "交付摘要.md", name: "task-materials/交付摘要.md", label: "交付摘要.md", purpose: undefined });
   try {
     const overall = currentStoryFile(taskMaterialRoot);
     if (overall) definitions.push({ file: overall, name: OVERALL_STORY_ARTIFACT,

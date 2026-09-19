@@ -1,3 +1,4 @@
+import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import { ComponentResearch } from "./componentResearch.ts";
 import { runComponentResearch } from "./componentResearchAgent.ts";
@@ -2032,6 +2033,10 @@ export class TaskService {
    * HTTP 前先探一次，管理页每次“重新检查”都会刷新。 */
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
 
+  private readonly deliverySummaries = new DeliverySummaries<TaskState>(task => ({
+    notifier: this.options.notifier, taskLink: personalTaskLink(this.notificationLinkBase(), task.summary.luban_account ?? "", task.summary.id),
+    model: this.sessionModels(task), onTokenUsage: sample => this.recordTaskTokenUsage(task, sample), log: this.options.log, onPublished: () => this.persist(task),
+  }));
   readonly overallStories = new OverallStoryCoordinator<TaskState>({
     task: (id) => this.tasks.get(id),
     log: (message) => this.options.log?.(message),
@@ -2459,7 +2464,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -17150,6 +17155,7 @@ export class TaskService {
         target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
       this.ensureMergeWatch(task);
+      if (!previous?.mr_url) this.deliverySummaries.start(task);
       const runKey = `pipeline:${sha}`;
       if (existingPushReceipt && !manualPipelineRetry) {
         const observed = await getPipelineStatus({ platformUrl, sha, repo: mrRequest.repo,
