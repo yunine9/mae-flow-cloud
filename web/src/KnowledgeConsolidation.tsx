@@ -1,3 +1,4 @@
+import { KnowledgeConsolidationAudit } from "./KnowledgeConsolidationAudit";
 import { useEffect, useRef, useState } from "react";
 import {
   BookOpen,
@@ -60,6 +61,7 @@ type State = Omit<ConsolidationState, "topics"> & { topics: Topic[] };
 const api = <T,>(path = "", body?: unknown) =>
   documentRequest<T>(`/consolidation${path}`, body);
 export function KnowledgeConsolidation({ onClose }: { onClose: () => void }) {
+  const [auditId, setAuditId] = useState("");
   const [data, setData] = useState<State>(),
     [selected, setSelected] = useState(
       new URLSearchParams(location.search).get("knowledgeConsolidation") ?? "",
@@ -149,6 +151,12 @@ export function KnowledgeConsolidation({ onClose }: { onClose: () => void }) {
     running = data?.jobs.find((j) => j.state === "running");
   return (
     <section className={styles.page}>
+      {auditId && (
+        <KnowledgeConsolidationAudit
+          id={auditId}
+          onClose={() => setAuditId("")}
+        />
+      )}
       <header className={styles["heading"]}>
         <div>
           <Button
@@ -251,6 +259,9 @@ export function KnowledgeConsolidation({ onClose }: { onClose: () => void }) {
                 </small>
               </div>
               <div className={styles["actions"]}>
+                <Button variant="outline" onClick={() => setAuditId(job.id)}>
+                  查看整理详情
+                </Button>
                 {job.topics.length > 0 && (
                   <Button
                     variant="outline"

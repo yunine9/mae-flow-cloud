@@ -1,3 +1,4 @@
+import { readConsolidationAudit, readConsolidationSource } from "./knowledgeConsolidationAudit.ts";
 import { exportKnowledge } from "./knowledgeExport.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
@@ -10,7 +11,14 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   try {
     if (id === "consolidation") {
       const manager=service.getKnowledgeConsolidation();
-      if(request.method==="GET")return json(response,200,manager.view());
+      if(request.method==="GET") {
+        if(parts[2]==="jobs" && parts[3]) {
+          if(parts[4]==="source"&&parts.length===7)return json(response,200,readConsolidationSource(dir,parts[3],parts[5],decodeURIComponent(parts[6])));
+          if(parts.length===4)return json(response,200,readConsolidationAudit(dir,parts[3]));
+          return json(response,404,{error:"未知记录操作"});
+        }
+        return json(response,200,manager.view());
+      }
       if(request.method==="POST") {
         const body=await readBody(request,3*1024*1024);
         const action=parts[2];

@@ -1,3 +1,5 @@
+import { saveConsolidationEvidence } from "./knowledgeConsolidationAudit.ts";
+import type { ConsolidationAuditResult } from "./knowledgeConsolidationTypes.ts";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -42,12 +44,10 @@ function proposals(
   sources: SearchableKnowledge[],
   topics: KnowledgeTopic[],
 ): Array<{ key: string; version: TopicVersion }> {
-  const parsed = JSON.parse(
-    text
-      .trim()
-      .replace(/^```(?:json)?\s*/, "")
-      .replace(/\s*```$/, ""),
-  );
+  // Models sometimes introduce the final JSON with a short explanation.
+  // Accept one explicit JSON block; retain all content/source validation below.
+  const blocks = [...text.matchAll(/^```(?:json)?\s*\n([\s\S]*?)^```\s*$/gm)];
+  const parsed = JSON.parse(blocks.length === 1 ? blocks[0][1] : text.trim());
   if (!Array.isArray(parsed.topics)) throw new Error("模型未返回专题草稿数组");
   const keys = new Set<string>();
   return parsed.topics.map((p: any) => {
@@ -105,6 +105,7 @@ function proposals(
         title: p.title.trim(),
         content: p.content,
         summary: p.summary,
+        ...(typeof p.rationale === "string" ? { rationale: p.rationale } : {}),
         sources: refs,
         conflicts: p.conflicts,
         at: now(),
@@ -175,7 +176,7 @@ export class KnowledgeConsolidation {
     // Persist the daily claim before starting; restart never repeats today's model call.
     state.lastDay = day;
     writeConsolidation(this.dir, state);
-    this.start(s.operator);
+    this.start(s.operator, "scheduled");
   }
   view() {
     const state = readConsolidation(this.dir),
@@ -217,7 +218,7 @@ export class KnowledgeConsolidation {
     writeConsolidation(this.dir, state);
     return state.settings;
   }
-  start(operator: string) {
+  start(operator: string, trigger: "manual" | "scheduled" = "manual") {
     if (this.active)
       return readConsolidation(this.dir).jobs.find(
         (j) => j.id === this.active!.id,
@@ -239,6 +240,7 @@ export class KnowledgeConsolidation {
       id: `kc-${randomUUID()}`,
       at: now(),
       operator,
+      trigger,
       state: selected.length ? "running" : "done",
       stage: selected.length
         ? "准备资料"
@@ -289,6 +291,7 @@ export class KnowledgeConsolidation {
         writeFileSync(join(root, "sources.json"), JSON.stringify(sources), {
           mode: 0o640,
         });
+        saveConsolidationEvidence(root, "before.json", existing);
         const stage = `整理范围 ${index + 1}/${groups.length} · ${sources.length} 份资料`;
         this.updateJob(id, { stage });
         const result = await this.run({
@@ -300,17 +303,25 @@ export class KnowledgeConsolidation {
         });
         signal.throwIfAborted();
         const drafts = proposals(result, sources, existing);
+        const evidence: ConsolidationAuditResult[] = drafts.map((p) => ({
+          ...p,
+          disposition: "not_applied",
+        }));
+        saveConsolidationEvidence(root, "results.json", evidence);
         const current = consolidationSources(this.dir),
           currentMap = new Map(current.map((a) => [a.id, sourceRevision(a)]));
         if (sources.some((s) => currentMap.get(s.id) !== sourceRevision(s)))
           throw new Error("整理期间来源已修改或停用；请重试，未发布过期内容");
         const state = readConsolidation(this.dir),
           job = state.jobs.find((j) => j.id === id)!;
-        for (const proposal of drafts) {
+        for (const [position, proposal] of drafts.entries()) {
+          const record = evidence[position];
           let topic = state.topics.find(
             (t) => t.group === key && t.key === proposal.key,
           );
+          record.topic_id = topic?.id;
           if (topic?.pending) {
+            record.disposition = "deferred";
             topic.needs_update = true;
             continue;
           }
@@ -318,8 +329,10 @@ export class KnowledgeConsolidation {
             topic?.published &&
             digest({ ...topic.published, at: "", operator: "" }) ===
               digest({ ...proposal.version, at: "", operator: "" })
-          )
+          ) {
+            record.disposition = "unchanged";
             continue;
+          }
           if (!topic) {
             topic = {
               id: `kg-${randomUUID()}`,
@@ -342,11 +355,14 @@ export class KnowledgeConsolidation {
             action: "生成整理草稿",
           });
           job.topics.push(topic.id);
+          record.topic_id = topic.id;
+          record.disposition = "draft";
         }
         state.groups[key] = digest(
           sources.map((s) => [s.id, sourceRevision(s)]).sort(),
         );
         writeConsolidation(this.dir, state);
+        saveConsolidationEvidence(root, "results.json", evidence);
       }
       this.updateJob(id, {
         state: "done",

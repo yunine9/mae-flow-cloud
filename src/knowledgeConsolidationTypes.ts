@@ -16,6 +16,7 @@ export interface TopicVersion {
   title: string;
   content: string;
   summary: string;
+  rationale?: string;
   sources: TopicSource[];
   conflicts: string[];
   at: string;
@@ -39,6 +40,7 @@ export interface ConsolidationJob {
   id: string;
   at: string;
   operator: string;
+  trigger?: "manual" | "scheduled";
   state: "running" | "done" | "failed" | "cancelled";
   stage: string;
   error?: string;
@@ -65,4 +67,38 @@ export interface ConsolidationState {
   groups: Record<string, string>;
   topics: KnowledgeTopic[];
   jobs: ConsolidationJob[];
+}
+
+export interface ConsolidationTrace {
+  at: string;
+  action: string;
+  id?: string;
+  query?: string;
+  offset?: number;
+  returned_ids?: string[];
+  characters?: number;
+  error?: string;
+}
+export interface ConsolidationAuditResult {
+  key: string;
+  version: TopicVersion;
+  topic_id?: string;
+  disposition: "draft" | "deferred" | "unchanged" | "not_applied";
+}
+export interface ConsolidationAuditDetail {
+  job: ConsolidationJob;
+  groups: Array<{
+    key: string;
+    scope: string;
+    sources: Array<{
+      id: string;
+      title: string;
+      revision: string;
+      characters: number;
+    }>;
+    before: KnowledgeTopic[];
+    results?: ConsolidationAuditResult[];
+    execution?: { provider: string; model: string; instruction: string };
+    actions: ConsolidationTrace[];
+  }>;
 }

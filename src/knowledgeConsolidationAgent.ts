@@ -1,3 +1,7 @@
+import {
+  recordConsolidationTrace,
+  saveConsolidationEvidence,
+} from "./knowledgeConsolidationAudit.ts";
 import { Type } from "typebox";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -19,8 +23,9 @@ export const KNOWLEDGE_CONSOLIDATION_MISSION = `你是团队知识整理 Agent�
 按根因和行动合并重复知识，章节围绕适用条件、推荐做法、示例、例外与依据组织。条数和篇幅由内容决定，没有条数上限；不为凑数量拆碎，也不为压缩数量丢失独立规则。与主题无关的原文不抄进来。
 例：三条经验分别说回调晚于对象销毁、取消订阅顺序、对象销毁后的 UT，可整理为“异步订阅的生命周期管理”，明确组件不托管生命周期这一前提，串联注册→使用→取消→销毁→验证。
 反例：“所有回调都要改为弱引用”“加强生命周期管理”——前者扩大条件，后者无法执行。网络模块的超时单位与网元模块不同，即使 API 同名，也分别标明模块/组件；不要合并为统一数值。
+每个专题用 rationale 简短说明可核对的整理依据：合并了哪些重复内容、保留了哪些不同前提、哪些内容未纳入以及原因。不要给出内部思考过程，只写读者可以对照来源验证的结论。
 每个专题引用真实 sources.id 和章节名 sections。full=true 仅当该来源所有独立有效知识都被本专题完整覆盖；部分摘取必须 false，不能为去重而声称全文覆盖。缺少可合并的知识时 topics 可以为空。
-只返回 JSON：{"topics":[{"key":"稳定专题标识，更新用已有 key","title":"专题名","summary":"何时使用","content":"完整 Markdown 正文","sources":[{"id":"真实来源ID","sections":["引用章节"],"full":false}],"conflicts":["需人工判断的矛盾，没有则空数组"]}]}。不要输出思考过程。`;
+只返回 JSON：{"topics":[{"key":"稳定专题标识，更新用已有 key","title":"专题名","summary":"何时使用","rationale":"简短整理依据与取舍","content":"完整 Markdown 正文","sources":[{"id":"真实来源ID","sections":["引用章节"],"full":false}],"conflicts":["需人工判断的矛盾，没有则空数组"]}]}。不要输出思考过程。`;
 
 export function knowledgeMaterialTool(
   input: ConsolidationInput,
@@ -46,89 +51,112 @@ export function knowledgeMaterialTool(
       args: { action: string; id?: string; query?: string; offset?: number },
     ) => {
       input.signal.throwIfAborted();
-      input.progress(
-        args.action === "read"
-          ? "阅读来源与已有专题"
-          : args.action === "search"
-            ? "查找相关知识"
-            : "梳理资料目录",
-      );
-      const rows = [
-        ...input.sources.map((s) => ({
-          id: s.id,
-          title: s.title,
-          revision: sourceRevision(s),
-          content: s.content,
-          scope: s.scope,
-          key: undefined as string | undefined,
-        })),
-        ...input.topics
-          .filter((t) => t.pending || t.published)
-          .map((t) => {
-            const v = t.pending ?? t.published!;
-            return {
-              id: t.id,
-              title: v.title,
-              content: v.content,
-              scope: t.scope,
-              key: t.key,
-              sources: v.sources,
-              pending: !!t.pending,
-            };
-          }),
-      ];
-      const offset = Math.max(0, args.offset ?? 0);
-      let result: unknown;
-      if (args.action === "read") {
-        const row = rows.find((r) => r.id === args.id);
-        if (!row) throw new Error("此来源不在本次整理范围");
-        result = {
-          ...row,
-          content: row.content.slice(offset, offset + 16000),
-          offset,
-          total: row.content.length,
+      recordConsolidationTrace(input.root, {
+        ...args,
+        action: `${args.action}:started`,
+      });
+      try {
+        input.progress(
+          args.action === "read"
+            ? "阅读来源与已有专题"
+            : args.action === "search"
+              ? "查找相关知识"
+              : "梳理资料目录",
+        );
+        const rows = [
+          ...input.sources.map((s) => ({
+            id: s.id,
+            title: s.title,
+            revision: sourceRevision(s),
+            content: s.content,
+            scope: s.scope,
+            key: undefined as string | undefined,
+          })),
+          ...input.topics
+            .filter((t) => t.pending || t.published)
+            .map((t) => {
+              const v = t.pending ?? t.published!;
+              return {
+                id: t.id,
+                title: v.title,
+                content: v.content,
+                scope: t.scope,
+                key: t.key,
+                sources: v.sources,
+                pending: !!t.pending,
+              };
+            }),
+        ];
+        const offset = Math.max(0, args.offset ?? 0);
+        let result: unknown;
+        if (args.action === "read") {
+          const row = rows.find((r) => r.id === args.id);
+          if (!row) throw new Error("此来源不在本次整理范围");
+          result = {
+            ...row,
+            content: row.content.slice(offset, offset + 16000),
+            offset,
+            total: row.content.length,
+          };
+        } else if (args.action === "search") {
+          const query = String(args.query ?? "").trim();
+          if (!query) throw new Error("请提供查询主题");
+          let ids: string[] = [];
+          try {
+            ids = (await semantic?.(query)) ?? [];
+          } catch {
+            /* Keyword and source reading remain available. */
+          }
+          const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+          const ranked = rows
+            .map((r) => ({
+              row: r,
+              score:
+                (ids.includes(r.id) ? 10 : 0) +
+                words.filter((w) =>
+                  `${r.title}\n${r.content}`.toLowerCase().includes(w),
+                ).length,
+            }))
+            .filter((v) => v.score > 0)
+            .sort((a, b) => b.score - a.score);
+          result = {
+            total: ranked.length,
+            items: ranked
+              .slice(offset, offset + 30)
+              .map(({ row: { content, ...row } }) => row),
+          };
+        } else
+          result = {
+            total: rows.length,
+            items: rows
+              .slice(offset, offset + 40)
+              .map(({ content, ...row }) => ({
+                ...row,
+                characters: content.length,
+              })),
+          };
+        const observed = result as {
+          items?: Array<{ id: string }>;
+          content?: string;
         };
-      } else if (args.action === "search") {
-        const query = String(args.query ?? "").trim();
-        if (!query) throw new Error("请提供查询主题");
-        let ids: string[] = [];
-        try {
-          ids = (await semantic?.(query)) ?? [];
-        } catch {
-          /* Keyword and source reading remain available. */
-        }
-        const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const ranked = rows
-          .map((r) => ({
-            row: r,
-            score:
-              (ids.includes(r.id) ? 10 : 0) +
-              words.filter((w) =>
-                `${r.title}\n${r.content}`.toLowerCase().includes(w),
-              ).length,
-          }))
-          .filter((v) => v.score > 0)
-          .sort((a, b) => b.score - a.score);
-        result = {
-          total: ranked.length,
-          items: ranked
-            .slice(offset, offset + 30)
-            .map(({ row: { content, ...row } }) => row),
+        recordConsolidationTrace(input.root, {
+          ...args,
+          action: `${args.action}:finished`,
+          returned_ids: observed.items?.map((r) => r.id),
+          characters: observed.content?.length,
+        });
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result) }],
+          details: {},
         };
-      } else
-        result = {
-          total: rows.length,
-          items: rows
-            .slice(offset, offset + 40)
-            .map(({ content, ...row }) => ({
-              ...row,
-              characters: content.length,
-            })),
-        };
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result) }],
-        details: {},
-      };
+      } catch (error) {
+        recordConsolidationTrace(input.root, {
+          ...args,
+          action: `${args.action}:failed`,
+          error: String(error instanceof Error ? error.message : error),
+        });
+        throw error;
+      }
     },
   };
 }
@@ -142,6 +170,11 @@ export async function runKnowledgeConsolidationAgent(
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), {
     mode: 0o600,
+  });
+  saveConsolidationEvidence(input.root, "execution.json", {
+    provider: model.choice.provider,
+    model: model.choice.model,
+    instruction: KNOWLEDGE_CONSOLIDATION_MISSION,
   });
   let driver: CloudSession | undefined;
   const abort = () => {
