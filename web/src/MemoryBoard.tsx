@@ -96,7 +96,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     {selected ? <>
       <div className="flex items-center justify-between rounded-md bg-muted p-3 text-sm"><span>{selected.record.trigger} · {memoryPreparation(selected.record).label}</span>
         {selected.record.task && <Button variant="outline" size="sm" onClick={() => { if (onOpenTask) onOpenTask(selected.record.task); else location.assign(`/work/${encodeURIComponent(selected.record.task)}`); }}>查看来源任务 {selected.record.task}</Button>}</div>
-      <div className="grid grid-cols-[220px_minmax(0,1fr)] items-start gap-4">
+      <div className="grid grid-cols-[minmax(260px,26%)_minmax(0,1fr)] items-start gap-4">
       <aside className="grid max-h-[min(650px,65vh)] gap-2 overflow-auto rounded-xl border border-border bg-muted/30 p-3" aria-label="经验候选列表">
         <h3 className="p-2 font-semibold">{tab === "pending" ? `待确认 · ${pending}` : "经验列表"}</h3>
         {rows.map(row => <Button key={row.id} variant={row.id === selected.record.id ? "secondary" : "ghost"}
@@ -105,7 +105,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
           <span><span className="line-clamp-2">{row.trigger}</span><span className="mt-1 block text-sm font-normal text-muted-foreground">{row.task} · {row.repo}</span></span>
         </Button>)}
       </aside>
-      <MemoryReviewEditor key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
+      <MemoryReviewEditor stacked key={`${selected.record.id}:${selected.record.revision ?? 1}`} taskId={selected.record.task} record={selected.record}
         onDirty={setDirty} onDismiss={dismiss} onChanged={async () => { setDirty(false); await load(); const updated = await readMemoryInsight(selected.record.id); if (updated) { setSelected(updated); setTab(updated.record.review?.status ?? "pending"); } }} />
       </div>
       <details className="text-sm"><summary className="cursor-pointer">完整留档与来源标识</summary><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3">{selected.content}</pre></details>

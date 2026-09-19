@@ -7,7 +7,8 @@ import { Textarea } from "./components/ui/textarea";
 
 /** 边界与结论一起持久化、检索，避免推荐时遗漏限定条件。 */
 const boundaryMarker = /\n\s*适用例外[：:]/;
-export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDirty }: {
+export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDirty, stacked = false }: {
+  stacked?: boolean;
   record: MemoryRecord; taskId: string; onChanged: () => Promise<void>; onDismiss: () => void; onDirty: (dirty: boolean) => void;
 }) {
   const parts = record.conclusion.split(boundaryMarker);
@@ -48,7 +49,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
-  return <div className="grid min-w-0 grid-cols-2 items-stretch gap-4 text-[16px]">
+  return <div className={`grid min-w-0 ${stacked ? "grid-cols-1" : "grid-cols-2"} items-stretch gap-4 text-[16px]`}>
     <section className="min-w-0 rounded-xl border border-border bg-surface">
       <h3 className="flex items-center gap-2 border-b border-border p-4 font-semibold"><FileText className="size-5 text-primary" />事实与依据</h3>
       <div className="grid gap-4 p-4">
@@ -111,7 +112,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
         </details>}
       </div>
     </section>
-    <footer className="sticky bottom-16 z-10 col-span-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm">
+    <footer className={`sticky z-10 ${stacked ? "bottom-0" : "bottom-16 col-span-2"} flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface p-4 shadow-sm`}>
       <div className="text-sm text-muted-foreground"><p>团队成员均可维护，每次修改留痕；采纳后供 Agent 按范围检索。</p>
         {record.review?.by && <p>最近处理：{record.review.by} · {record.review.at ? new Date(record.review.at).toLocaleString() : ""}</p>}
         {!record.can_review && <p>当前记录只读。</p>}</div>

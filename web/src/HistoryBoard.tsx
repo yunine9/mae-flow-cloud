@@ -19,7 +19,9 @@ import { confirmDialog } from "./ConfirmDialog";
 import { TaskStatusBadge } from "./StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert } from "@/components/Alert";
-import { Database } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Database, MoreHorizontal } from "lucide-react";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
@@ -106,20 +108,9 @@ export function HistoryBoard({
 
   return (
     <section className="grid gap-4">
-      <div className="flex items-center justify-between gap-6 rounded-xl border border-line
-        bg-surface px-6 py-[22px] shadow-xs">
-        <div>
-          <h2 className="text-lg font-bold text-text-strong">成果档案</h2>
-          <p className="mt-[7px] text-sm text-muted-foreground">这里保存待合入、完成、失败和取消的任务；进行中的工作回到“当前现场”查看。</p>
-        </div>
-        <button className="inline-flex h-[38px] cursor-pointer items-center gap-[7px] rounded-lg
-          border border-line-strong bg-surface px-[13px] text-[13.5px] font-bold text-text
-          hover:border-primary hover:text-primary" onClick={() => void load()}>
-          <svg viewBox="0 0 20 20" aria-hidden className="size-4 fill-none stroke-current stroke-[1.6]">
-            <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
-          </svg>
-          刷新数据
-        </button>
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-muted-foreground">{visibleEntries.length} 项记录</span>
+        <Button variant="outline" onClick={() => void load()}>刷新数据</Button>
       </div>
 
       {loading && (
@@ -131,13 +122,12 @@ export function HistoryBoard({
       )}
 
       {!loading && usingWorkspace && visibleEntries.length > 0 && (
-        <div className="-mt-2 mb-4 flex items-center gap-[11px] rounded-lg border border-primary/20
-          bg-primary/5 px-3.5 py-[11px]" role="status" title={unavailable}>
+        <div className="flex items-center gap-3 rounded-lg border border-line bg-surface px-4 py-3" role="status" title={unavailable}>
           <span aria-hidden className="grid size-[26px] flex-none place-items-center rounded-lg
             bg-surface text-base font-bold text-primary shadow-[inset_0_0_0_1px_var(--line)]">◎</span>
           <span className="grid min-w-0 gap-0.5">
             <strong className="text-[13px] text-text-strong">当前使用本服务保留的交付结果</strong>
-            <small className="text-[13px] leading-[1.45] text-muted-foreground">历史投影暂不可用；这里只展示已经形成结果的任务，恢复后会自动切换。</small>
+            <small className="sr-only">历史投影暂不可用；这里只展示已经形成结果的任务，恢复后会自动切换。</small>
           </span>
         </div>
       )}
@@ -156,10 +146,10 @@ export function HistoryBoard({
 
       {!loading && visibleEntries.length > 0 && (
         <>
-          <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-4">
+          <div className="grid grid-cols-4 divide-x divide-line rounded-xl border border-line bg-surface py-4">
             {TILES.map((tile) => (
               <div key={tile.label}
-                className={`flex min-h-[94px] flex-col justify-between rounded-lg border border-line bg-surface px-[15px] py-3.5 shadow-xs ${TONE[tile.tone]}`}>
+                className={`flex min-h-10 items-center justify-between gap-4 px-6 ${TONE[tile.tone]}`}>
                 <span className="flex items-center gap-[7px] text-[13px] font-semibold">
                   <i aria-hidden className="size-2 rounded-full bg-current" />{tile.label}</span>
                 <strong className="text-[27px] leading-none tabular-nums">
@@ -172,7 +162,7 @@ export function HistoryBoard({
           <div className="overflow-hidden rounded-lg border border-line bg-surface shadow-xs">
             <div aria-hidden className="grid items-center gap-4 border-b border-line bg-surface-2 px-[15px] py-2.5
               text-[13px] font-bold text-muted-foreground
-              [grid-template-columns:minmax(260px,2.25fr)_minmax(140px,1fr)_minmax(120px,0.8fr)_90px_100px_minmax(100px,0.7fr)]">
+              [grid-template-columns:minmax(220px,2fr)_110px_minmax(100px,1fr)_100px_100px_160px]">
               <span>任务</span>
               <span>状态</span>
               <span>交付</span>
@@ -191,9 +181,9 @@ export function HistoryBoard({
                 const canDelete = terminal && (viewer.role === "admin"
                   || entry.luban_account === viewer.username);
                 return (
-                  <div key={entry.id} className="grid min-h-[70px] items-center gap-4 border-b border-line
-                    px-[15px] py-[11px] transition-colors last:border-b-0 hover:bg-surface-2
-                    [grid-template-columns:minmax(260px,2.25fr)_minmax(140px,1fr)_minmax(120px,0.8fr)_90px_100px_minmax(100px,0.7fr)]">
+                  <div key={entry.id} className="grid min-h-[104px] items-center gap-4 border-b border-line
+                    px-5 py-5 transition-colors last:border-b-0 hover:bg-surface-2
+                    [grid-template-columns:minmax(220px,2fr)_110px_minmax(100px,1fr)_100px_100px_160px]">
                     <div className="flex min-w-0 flex-col gap-1">
                       <span className="w-fit rounded bg-surface-3 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{entry.id}</span>
                       {currentTask && onOpenTask ? (
@@ -202,10 +192,10 @@ export function HistoryBoard({
                           title={`${title} · 打开工作台`}
                           onClick={() => onOpenTask(currentTask)}
                         >
-                          <strong className="max-w-full truncate text-sm font-bold text-text-strong group-hover:text-primary">{title}</strong>
-                          <span className="text-[13px] font-semibold text-muted-foreground group-hover:text-primary">打开工作台 <i aria-hidden className="not-italic">→</i></span>
+                          <strong className="max-w-full truncate text-base font-semibold text-text-strong group-hover:text-primary">{title}</strong>
+
                         </button>
-                      ) : <strong title={title} className="truncate text-sm font-bold text-text-strong">{title}</strong>}
+                      ) : <strong title={title} className="truncate text-base font-semibold text-text-strong">{title}</strong>}
                       <TokenUsage usage={entry.token_usage} placement="history" />
                     </div>
                     <div>
@@ -230,16 +220,19 @@ export function HistoryBoard({
                     </div>
                     <div className="flex flex-col">
                       {usingWorkspace ? (
-                        <><strong className="text-[13px] text-primary">现场</strong><span className="text-[13px] text-muted-foreground">查看详情</span></>
+                        <span className="text-sm text-muted-foreground">本地记录</span>
                       ) : (
                         <><strong className="text-[15px] text-text-strong">{entry.event_count}</strong><span className="text-[13px] text-muted-foreground">个事件</span></>
                       )}
                     </div>
                     <time dateTime={entry.updated_at} className="text-[13px] text-muted-foreground">{timeAgo(entry.updated_at)}</time>
-                    <div className="flex flex-wrap justify-end gap-[5px]">
+                    <div className="flex items-center justify-end gap-2">
+                      {currentTask && onOpenTask && <Button variant="outline" className="text-primary" onClick={() => onOpenTask(currentTask)}>进入工作台</Button>}
+                      {(canRerun || canDelete) && <DropdownMenu>
+                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={`${entry.id} 更多操作`} />}><MoreHorizontal /></DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-40">
                       {canRerun && (
-                        <button type="button" disabled={Boolean(busy)}
-                          className="min-h-[30px] cursor-pointer rounded-[7px] border border-line-strong bg-surface px-[9px] text-[13px] font-bold text-text hover:border-primary hover:text-primary disabled:cursor-wait disabled:opacity-55"
+                        <DropdownMenuItem disabled={Boolean(busy)}
                           onClick={async () => {
                             if (!await confirmDialog({
                               title: "清空重跑",
@@ -265,11 +258,10 @@ export function HistoryBoard({
                             }
                           }}>
                           {busy === entry.id ? "处理中…" : "清空重跑"}
-                        </button>
+                        </DropdownMenuItem>
                       )}
                       {canDelete && (
-                        <button type="button"
-                          className="min-h-[30px] cursor-pointer rounded-[7px] border border-line-strong bg-surface px-[9px] text-[13px] font-bold text-text hover:border-danger/55 hover:text-danger disabled:cursor-wait disabled:opacity-55"
+                        <DropdownMenuItem variant="destructive"
                           disabled={Boolean(busy)} onClick={async () => {
                             if (!await confirmDialog({
                               title: "彻底删除任务",
@@ -296,9 +288,10 @@ export function HistoryBoard({
                             }
                           }}>
                           {busy === entry.id ? "删除中…" : "彻底删除"}
-                        </button>
+                        </DropdownMenuItem>
                       )}
-                      {!canRerun && !canDelete && <span className="text-[13px] text-faint">—</span>}
+                        </DropdownMenuContent>
+                      </DropdownMenu>}
                     </div>
                   </div>
                 );

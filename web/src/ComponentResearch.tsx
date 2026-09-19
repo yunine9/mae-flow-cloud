@@ -187,16 +187,14 @@ export function ComponentResearch({
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return (
-    <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-white p-6" aria-label="源码萃取工作区">
+    <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-surface p-6" aria-label="源码萃取工作区">
         <header className="flex items-center gap-4 border-b border-line pb-4">
           <Button variant="outline" onClick={onClose}>{focused ? "← 返回文档" : "← 返回知识库"}</Button>
           <h2 className="text-xl font-semibold">{focused ? "本篇文档的萃取过程" : "萃取任务"}</h2>
           {!focused && <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>}
-        </header>
-        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[280px_1fr]"} min-h-0 flex-1 gap-5`}>
-          {!focused && <aside className="overflow-auto border-r border-line pr-4">
+          {!focused && <>
             <Button
-              className="mb-4 w-full"
+              className="ml-auto shrink-0"
               onClick={() => {
                 selectRecord("new");
                 setError("");
@@ -204,6 +202,10 @@ export function ComponentResearch({
             >
               ＋ 新建萃取任务
             </Button>
+          </>}
+        </header>
+        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[minmax(280px,28%)_minmax(0,1fr)]"} min-h-0 flex-1 gap-5`}>
+          {!focused && <aside className="overflow-auto border-r border-line pr-4">
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
               <button

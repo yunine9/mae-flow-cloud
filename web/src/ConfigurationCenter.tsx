@@ -19,7 +19,7 @@ export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
     // 知识仓(#286):全局强制的运营决策,仅管理员可见可维护(ADR-0033)。
     ...(admin ? [["knowledge", "知识仓"] as [string, string]] : [])];
   return <section className="tw-root grid gap-5 text-base">
-    <nav aria-label="配置分类" className="flex gap-2 border-b border-line pb-3">
+    <nav aria-label="配置分类" className="page-tabs">
       {tabs.map(([id, label]) =>
         <Button key={id} variant={tab === id ? "default" : "ghost"}
           aria-pressed={tab === id} onClick={() => { setTab(id); history.replaceState(history.state, "", `/configuration?tab=${id}`); }}>{label}</Button>)}
