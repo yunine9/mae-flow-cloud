@@ -73,7 +73,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
   return <section className="grid gap-4 rounded-xl border border-border bg-surface p-5" aria-label="经验沉淀">
     <header className="flex items-start justify-between gap-4">
       <div><h2 className="text-xl font-semibold">经验沉淀</h2>
-        <p className="mt-1 text-sm text-muted-foreground">待确认草稿 → 人工采纳后供 Agent 检索 → 停用后保留历史。团队成员共同维护，全程留痕。</p></div>
+        <p className="mt-1 text-sm text-muted-foreground">MR 合入完成后，结合检视意见和后续代码修改整理草稿；主动记录也保存在这里。修改并采纳后供 Agent 复用。</p></div>
       {selected ? <Button variant="outline" onClick={dismiss}>返回经验列表</Button>
         : <div className="flex gap-2"><Button variant="outline" onClick={() => void load().catch(reason => setError(String(reason)))}>刷新</Button><Button onClick={() => setCreating(!creating)}>新增经验</Button></div>}
     </header>

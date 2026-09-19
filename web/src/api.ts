@@ -2843,6 +2843,7 @@ export async function addAnnotation(
 
 /** 与服务端 taskMemory.ts 同合同。正文在 md 里,列表只带这些。 */
 export interface MemoryRecord {
+  dimension?: "业务规则与边界" | "组件与接口用法" | "设计与实现约束" | "编码规范" | "测试与验证" | "分析与工作方法";
   can_review?: boolean;
   source_repo?: string;
   module?: string;
@@ -2856,7 +2857,7 @@ export interface MemoryRecord {
     original?: { trigger: string; conclusion: string; scope: MemoryRecord["scope"] } };
 
   id: string;
-  source: "annotation" | "prepush_fix" | "user_note" | "agent_note";
+  source: "annotation" | "prepush_fix" | "user_note" | "agent_note" | "delivery_review";
   judged_by: "human" | "pipeline" | "agent";
   scope: "one_off" | "local" | "general" | "platform";
   repo: string;
@@ -2944,7 +2945,7 @@ export async function listTaskMemoryUsage(taskId: string): Promise<MemoryUsageRo
 }
 
 export async function reviewTaskMemory(taskId: string, record: MemoryRecord,
-  input: { decision: "pending" | "accepted" | "rejected"; module?: string; product_versions?: string[]; repo?: string; merged_into?: string; note?: string; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
+  input: { dimension?: MemoryRecord["dimension"]; decision: "pending" | "accepted" | "rejected"; module?: string; product_versions?: string[]; repo?: string; merged_into?: string; note?: string; trigger?: string; conclusion?: string; scope?: MemoryRecord["scope"] }): Promise<MemoryRecord> {
   const response = await fetch(`/memory-insights/${encodeURIComponent(record.id)}/review`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...input, revision: record.revision ?? 1 }),
   });

@@ -125,49 +125,19 @@ test("权重:人判 > 流水线;一年减半;返工减得比命中加得狠;gene
   assert.ok(memoryWeight(fresh, { ...EMPTY_STATS, reworks: 9 }, now) >= 0.05, "有下限,不归零");
 });
 
-test("服务起草:闭环记忆入库后异步补一版;user_note 不过起草;模型出错保留模板", async () => {
-  const calls: string[] = [];
-  const { svc } = fakeService({
-    memoryDrafter: async (prompt: { user: string }) => {
-      calls.push(prompt.user);
-      if (prompt.user.includes("这次手滑")) throw new Error("模型 500");
-      return '{"trigger":"改过滤器判断顺序时","scope":"one_off"}';
-    },
-  });
+test("过程中主动记录直接保存，不调用逐条提炼模型", async () => {
+  let calls = 0;
+  const { svc } = fakeService({ memoryDrafter: async () => { calls++; return "{}"; } });
   try {
     const { id, internal } = liveTask(svc);
-    // user_note:圈选那句话就是 trigger,不起草
-    svc.addAnnotation(id, {
-      author: "alice", artifact: "本任务变更", file: "src/filter/FilterEngine.java", line: 1,
-      anchor: "x", note: "人记的", kind: "code", route: "memory",
-    });
-    const drafted = (svc as any).recordMemory(internal, { ...base, task: id });
-    const broken = (svc as any).recordMemory(internal,
-      { ...base, task: id, evidence: "e3", problem: "这次手滑" });
+    const record = (svc as any).recordMemory(internal, { ...base, task: id, source: "agent_note" });
     await svc.flushMemoryDrafts();
-    assert.equal(calls.length, 2, "user_note 不进起草");
-    const rows = svc.listTaskMemories(id);
-    const note = rows.find((row) => row.source === "user_note")!;
-    assert.equal(note.draft, undefined);
-    assert.equal(note.revision, undefined, "没起草就不追加版本");
-    const good = rows.find((row) => row.id === drafted.id)!;
-    assert.equal(good.trigger, "改过滤器判断顺序时");
-    assert.equal(good.scope, "one_off");
-    assert.equal(good.draft, "model");
-    const kept = rows.find((row) => row.id === broken.id)!;
-    assert.equal(kept.draft, "failed");
-    assert.equal(kept.trigger, base.trigger);
-    assert.equal(kept.scope, "local");
-    // one_off 的不再进推送候选(别的单看过来)
-    const other = liveTask(svc, "另一单");
-    const ids = (svc as any).memoryCandidates(other.internal).map((row: any) => row.id);
-    assert.ok(!ids.includes(drafted.id), "一次性只进全文检索");
-    assert.ok(!ids.includes(kept.id), "失败模板也需人工采纳");
-    svc.reviewTaskMemory(id, kept.id, "本地用户", { decision: "accepted", revision: kept.revision ?? 1 });
-    assert.ok((svc as any).memoryCandidates(other.internal).some((row: any) => row.id === kept.id));
-  } finally {
-    await svc.shutdown();
-  }
+    assert.equal(calls, 0);
+    assert.equal(svc.listTaskMemories(id)[0].conclusion, base.conclusion);
+    assert.equal(svc.listTaskMemories(id)[0].review?.status, "pending");
+    svc.reviewTaskMemory(id, record.id, "owner", { decision:"accepted", revision:1 });
+    assert.equal(svc.listTaskMemories(id)[0].review?.status, "accepted");
+  } finally { await svc.shutdown(); }
 });
 
 test("台账与效果账:推送记 push;推过的文件又被提意见记 rework,权重掉到后面;总览能看到", async () => {
@@ -345,33 +315,6 @@ test("主模型不可用时保留模板；旧专用模型配置不改变行为",
   }
 });
 
-test("逐条整理状态只来自真实作业，完成和失败后两处读侧都清除在途标记", async () => {
-  for (const fail of [false, true]) {
-    let release!: (value: string) => void;
-    const result = new Promise<string>((resolve) => { release = resolve; });
-    const { svc, dataDir } = fakeService({ memoryDrafter: () => result });
-    try {
-      const { id, internal } = liveTask(svc);
-      const historical = new MemoryStore(dataDir).record({ ...base, task: id });
-      const running = (svc as any).recordMemory(internal, { ...base, task: id, evidence: "active" });
-      const before = svc.memoryInsights();
-      assert.equal(before.drafting, 1);
-      assert.equal(before.memories.find((row) => row.id === historical.id)?.drafting, false);
-      assert.equal(before.memories.find((row) => row.id === running.id)?.drafting, true);
-      assert.equal(svc.listTaskMemories(id).find((row) => row.id === running.id)?.drafting, true);
-      release(fail ? "不合法回复" : '{"trigger":"改过滤器时","scope":"local"}');
-      await svc.flushMemoryDrafts();
-      assert.equal(svc.memoryInsights().drafting, 0);
-      const after = svc.listTaskMemories(id).find((row) => row.id === running.id)!;
-      assert.equal(after.drafting, false);
-      assert.equal(after.draft, fail ? "failed" : "model");
-      assert.equal(svc.memoryInsights().memories.find((row) => row.id === running.id)?.drafting, false);
-      assert.equal(after.conclusion, base.conclusion);
-      const index = readFileSync(join(dataDir, "corpus", "index.jsonl"), "utf8");
-      assert.doesNotMatch(index, /"drafting"/, "在途标记不能持久化成重启后的假作业");
-    } finally { release("结束"); await svc.shutdown(); }
-  }
-});
 
 test("重启读取已持久化的模板记忆，没有作业时仍如实显示已记录", async () => {
   const first = fakeService();
@@ -470,33 +413,17 @@ test("模型前台遇到侧车未就绪时不启动或等待冷启动", async ()
 });
 
 
-test("经验整理跟随任务主模型，未指定时跟随平台主模型；旧专用配置不分流", async t => {
-  const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-  const calls: Array<{ provider: string; model: string; messages: any[] }> = [];
-  t.mock.method(ModelRuntime, "create", async () => ({
-    getModel: (provider: string, model: string) => ({ provider, id: model }),
-    completeSimple: async (model: any, context: any) => {
-      calls.push({ provider: model.provider, model: model.id, messages: context.messages });
-      return { content: [{ type: "text", text: JSON.stringify({ trigger: "调整过滤顺序时", scope: "general", conclusion: "先确认业务优先级，再调整过滤顺序。" }) }] };
-    },
-  }) as any);
+test("交付复盘跟随任务主模型，未指定时使用平台主模型", async () => {
   const { svc } = fakeService({ provider: "main", model: "default", modelsJson: {
-    providers: { main: { models: [{ id: "first-not-selected" }, { id: "default" }, { id: "chosen" }] } },
+    providers: { main: { models: [{ id: "default" }, { id: "chosen" }] } },
   }, memoryDraftModel: { provider: "obsolete", model: "ignored" } });
   try {
-    const { id, internal } = liveTask(svc);
+    const { internal } = liveTask(svc);
     internal.summary.model_choice = { provider: "main", model: "chosen" };
-    const first = (svc as any).recordMemory(internal, { ...base, task: id });
-    await svc.flushMemoryDrafts();
-    assert.equal(svc.listTaskMemories(id).find(row => row.id === first.id)?.draft, "model");
+    const coordinator = (svc as any).deliveryExperiences;
+    assert.deepEqual(coordinator.options(internal).model.choice, {provider:"main",model:"chosen"});
     delete internal.summary.model_choice;
-    (svc as any).recordMemory(internal, { ...base, task: id });
-    await svc.flushMemoryDrafts();
-    assert.deepEqual(calls.map(c => [c.provider, c.model]), [["main", "chosen"], ["main", "default"]]);
-    assert.ok(calls.every(c => c.messages.length === 1), "只发送本条经验材料，不携带主会话历史");
+    assert.deepEqual(coordinator.options(internal).model.choice, {provider:"main",model:"default"});
     assert.equal(internal.summary.status, "running");
-    (svc as any).recordMemory(internal, { ...base, task: id, source: "agent_note" });
-    await svc.flushMemoryDrafts();
-    assert.equal(calls.length, 2, "主动记录不额外提炼");
   } finally { await svc.shutdown(); }
 });

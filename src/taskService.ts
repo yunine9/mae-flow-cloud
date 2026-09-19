@@ -1,3 +1,4 @@
+import { DeliveryExperiences } from "./deliveryExperience.ts";
 import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import { ComponentResearch } from "./componentResearch.ts";
@@ -102,18 +103,12 @@ import {
   repoSlug,
   type MemoryInput,
   type MemoryRecord,
-  type MemoryDraftState,
   type MemoryInsights,
   type MemoryRepoInsight,
   type MemoryStats,
   EMPTY_STATS,
   memoryWeight,
 } from "./taskMemory.ts";
-import {
-  MEMORY_DRAFT_BUDGET_MS,
-  buildMemoryDraftPrompt,
-  parseMemoryDraft,
-} from "./memoryDraft.ts";
 import { MemorySidecar, DEFAULT_MEMORY_BUDGETS, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
 import { KnowledgeSearch } from "./knowledgeSearch.ts";
@@ -1327,7 +1322,7 @@ export interface TaskServiceOptions {
   };
   /** @deprecated 兼容旧调用方；经验整理始终使用任务主模型，此配置不再生效。 */
   memoryDraftModel?: { provider: string; model: string };
-  /** 测试注入:替换真实的单发调用。 */
+  /** @deprecated 兼容旧调用方；过程中不再进行单条模型提炼。 */
   memoryDrafter?: (prompt: { system: string; user: string }) => Promise<string>;
   /** 可选的专用视觉模型角色。模型定义位于同一份 models.json，主 Agent
    * 仅通过 InspectImage Tool 调用它，不切换主会话模型。 */
@@ -1981,15 +1976,6 @@ function runGitProcess(
   });
 }
 
-/** 单发模型调用的硬预算:drafter 自己也有超时,这层是兜底,绝无无限等待。 */
-function withBudget<T>(promise: Promise<T>, budgetMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`超预算 ${budgetMs}ms`)), budgetMs);
-    promise.then((value) => { clearTimeout(timer); resolve(value); },
-      (error) => { clearTimeout(timer); reject(error); });
-  });
-}
-
 export class TaskService {
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
    * 通知由该次请求触发时即可带上同事能访问的内网 Host，而不是回环地址。 */
@@ -2033,6 +2019,21 @@ export class TaskService {
    * HTTP 前先探一次，管理页每次“重新检查”都会刷新。 */
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
 
+  private readonly deliveryExperiences = new DeliveryExperiences<TaskState>(task => ({
+    store: this.memories(), repo: this.memoryRepo(task),
+    module: (task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module)?.id,
+    model: this.sessionModels(task), onTokenUsage: sample => this.recordTaskTokenUsage(task, sample), log: this.options.log, onPublished: () => { task.summary.memories_recorded = this.memories().list({ task: task.summary.id }).length; this.persist(task); },
+    evidence: () => [
+      ...this.annotations(task).list().map(row => ({ ...row, id: `annotation:${row.id}` })),
+      ...new FeedbackStore(join(task.summary.workspace, "feedback/index.jsonl")).list().map(row => ({ ...row, id: `feedback:${row.id}` })),
+    ],
+    notify: async (count, firstId) => {
+      if (!this.options.notifier || !task.summary.luban_account) return;
+      await this.options.notifier.notifyOutcome({ taskId: task.summary.id, account: task.summary.luban_account,
+        status: "交付后经验草稿已生成", summary: `本次交付整理出 ${count} 条经验草稿，请尽快审核内容与适用范围，可修改后决定哪些采纳入库。`,
+        link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?experience=1&memory_id=${firstId}&source_task=${task.summary.id}` });
+    },
+  }));
   private readonly deliverySummaries = new DeliverySummaries<TaskState>(task => ({
     notifier: this.options.notifier, taskLink: personalTaskLink(this.notificationLinkBase(), task.summary.luban_account ?? "", task.summary.id),
     model: this.sessionModels(task), onTokenUsage: sample => this.recordTaskTokenUsage(task, sample), log: this.options.log, onPublished: () => this.persist(task),
@@ -2464,7 +2465,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -4796,8 +4797,6 @@ export class TaskService {
   private memoryStore?: MemoryStore;
   private memorySidecar?: MemorySidecar;
   private memorySweepTimer?: NodeJS.Timeout;
-  /** 在途的起草作业:shutdown/测试 flush 用;失败不抛,只落日志。 */
-  private readonly memoryDraftJobs = new Map<string, Promise<void>>();
 
   private memories(): MemoryStore {
     return this.memoryStore ??= new MemoryStore(this.options.dataDir);
@@ -5469,42 +5468,6 @@ export class TaskService {
     };
   }
 
-  /** 记忆来源之一:Build-Fix 失败过又修好了。报错是问题,Agent 的收口
-   * 总结是结论,改动文件从两次 HEAD 的差异来(拿不到就空着,不猜)。 */
-  private prePushFixMemory(
-    task: TaskState,
-    prior: PrePushVerificationState,
-    result: PrePushRunResult,
-    sha: string,
-  ): MemoryInput {
-    const repo = repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
-    let paths: string[] = [];
-    if (task.cwd && prior.sha && prior.sha !== sha) {
-      const diff = runSafeWorktreeGit(task.cwd,
-        ["diff", "--name-only", prior.sha, sha], { timeoutMs: 10_000 });
-      if (diff.status === 0) {
-        paths = String(diff.stdout ?? "").split("\n")
-          .map((line) => line.trim()).filter(Boolean).slice(0, 20);
-      }
-    }
-    const problem = (prior.issue?.message || prior.message || "").trim();
-    return {
-      source: "prepush_fix",
-      judged_by: "pipeline",
-      scope: "local",
-      repo,
-      paths,
-      // 阶段名只从内核镜像来(词表唯一来源纪律),没有就空着。
-      ...(task.summary.progress?.current_phase
-        ? { phase: task.summary.progress.current_phase } : {}),
-      task: task.summary.id,
-      evidence: `prepush:${sha}`,
-      trigger: `在 ${repo} 推送前构建与 UT 修复时`,
-      problem: problem.slice(0, 800),
-      conclusion: (result.report?.summary || result.message || "").trim().slice(0, 800),
-    };
-  }
-
   private taskMemoryContext(task: TaskState): (messages: any[]) => Promise<any[]> {
     return createMemoryContext({
       budgetMs: (this.memorySidecar?.searchBudgetMs ?? DEFAULT_MEMORY_BUDGETS.searchMs) + 500,
@@ -5879,7 +5842,7 @@ export class TaskService {
     const record = this.memories().record(input);
     // 索引是旁路:失败只记日志,正本已在 md 里,删索引重建也不丢。
     // 候选留档，采纳后才写入语义索引。
-    this.queueMemoryDraft(task, record);
+    // 主动记录直接保存；自动提炼仅由交付完成旁路触发。
     task.summary.memories_recorded = (task.summary.memories_recorded ?? 0) + 1;
     this.persist(task);
     this.options.log?.(
@@ -5890,7 +5853,7 @@ export class TaskService {
   listTaskMemories(id: string): MemoryRecord[] {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    return this.memories().list({ task: id }).map((row) => ({ ...row, drafting: this.memoryDraftJobs.has(row.id) }));
+    return this.memories().list({ task: id }).map((row) => ({ ...row, drafting: false }));
   }
 
   readTaskMemory(
@@ -5929,57 +5892,9 @@ export class TaskService {
     }
   }
 
-  /** 使用任务当前主模型；独立短请求，不共享主会话上下文或工具。 */
-  private memoryDrafter(task: TaskState)
-    : ((prompt: { system: string; user: string }) => Promise<string>) | undefined {
-    if (this.options.memoryDrafter) return this.options.memoryDrafter;
-    const modelBundle = this.sessionModels(task);
-    const choice = modelBundle.choice;
-    if (!choice) return undefined;
-    const known = (modelBundle.json as {
-      providers?: Record<string, { models?: Array<{ id?: string }> }>;
-    }).providers?.[choice.provider]?.models?.some((item) => String(item?.id ?? "") === choice.model);
-    if (!known) return undefined;
-    return (prompt) => draftWithModel({
-      modelsJson: modelBundle.json,
-      provider: choice.provider,
-      model: choice.model,
-      system: prompt.system,
-      user: prompt.user,
-      timeoutMs: MEMORY_DRAFT_BUDGET_MS,
-    });
-  }
-
-  /** 闭环事件异步整理；人和 Agent 主动记录的内容直接保存。 */
-  private queueMemoryDraft(task: TaskState, record: MemoryRecord): void {
-    if (record.source === "user_note" || record.source === "agent_note") return;
-    const drafter = this.memoryDrafter(task);
-    if (!drafter) return;
-    const job = (async () => {
-      let draft: { trigger: string; scope: MemoryRecord["scope"]; conclusion?: string } | undefined;
-      try {
-        draft = parseMemoryDraft(await withBudget(
-          drafter(buildMemoryDraftPrompt(record)), MEMORY_DRAFT_BUDGET_MS + 2_000));
-      } catch (error) {
-        this.options.log?.(`记忆 ${record.id} 起草失败(保留模板): ${String(error)}`);
-      }
-      const state: MemoryDraftState = draft ? "model" : "failed";
-      try {
-        const next = this.memories().finalizeDraft(record.id, { ...draft, state });
-        // 整理不等于采纳；候选不进入索引。
-        this.options.log?.(`记忆 ${record.id} 起草收尾:${state === "model"
-          ? `${next.scope} / ${next.trigger}` : "模型没给出可用草稿,保留模板"}`);
-      } catch (error) {
-        this.options.log?.(`记忆 ${record.id} 起草收尾写入失败: ${String(error)}`);
-      }
-    })();
-    this.memoryDraftJobs.set(record.id, job);
-    void job.finally(() => this.memoryDraftJobs.delete(record.id));
-  }
-
   /** 等在途起草全部落地(测试与优雅关闭用)。 */
   async flushMemoryDrafts(): Promise<void> {
-    await Promise.all([...this.memoryDraftJobs.values()]);
+    await this.deliveryExperiences.flush();
   }
 
   /** 效果账:这单推过的记忆里,路径正好是刚被人提意见的那个文件的,
@@ -6062,7 +5977,7 @@ export class TaskService {
         module: row.module, product_versions: row.product_versions, edited_by: row.edited_by, edited_at: row.edited_at, merged_into: row.merged_into, maintenance_note: row.maintenance_note,
         conclusion: row.conclusion.replace(/\s+/g, " ").slice(0, 240),
         source: row.source, judged_by: row.judged_by, scope: row.scope,
-        draft: row.draft ?? "template", drafting: this.memoryDraftJobs.has(row.id), at: row.at, task: row.task,
+        draft: row.draft ?? "template", drafting: false, at: row.at, task: row.task,
         paths: row.paths, ...(row.line ? { line: row.line } : {}),
         weight: Number(memoryWeight(row, own, now).toFixed(3)),
         pushes: own.pushes, hits: own.hits, reworks: own.reworks,
@@ -6074,7 +5989,7 @@ export class TaskService {
     }).sort((a, b) => b.weight - a.weight || b.at.localeCompare(a.at));
     return {
       generated_at: new Date(now).toISOString(),
-      drafting: this.memoryDraftJobs.size,
+      drafting: this.deliveryExperiences.activeCount,
       sidecar: this.memorySidecar
         ? (this.memorySidecar.available ? "ready" : "unavailable") : "absent",
       repos: [...repos.values()].sort((a, b) => b.total - a.total),
@@ -6215,16 +6130,7 @@ export class TaskService {
     const verified = annotations.resolveAsOwner(annotationId, by, decision ?? {
       revision: item.rework ?? 0, outcome: "fixed", reason: "",
     });
-    if ((verified.route ?? "agent") === "agent"
-        && verified.resolution?.outcome === "fixed"
-        && verified.response?.outcome === "fixed") {
-      // 闭环即入库:人圈、Agent 改、人确认三件套齐。旁路,写失败只记日志。
-      try {
-        this.recordMemory(task, this.memoryFromAnnotation(task, verified, "annotation"));
-      } catch (error) {
-        this.options.log?.(`任务 ${id} 记忆入库失败: ${String(error)}`);
-      }
-    }
+    // 闭环保留原始依据；经验统一在 MR 合入完成后提炼。
     this.resolveFeedbackRecords(task, (record) =>
       record.source === "workspace" && record.source_id === verified.id
         && record.source_revision === (verified.rework ?? 0),
@@ -8444,6 +8350,7 @@ export class TaskService {
     task.summary.updated_at = now;
     task.lastPersistedStatus = task.summary.status;
     this.writeTaskState(task, strict);
+    this.deliveryExperiences.start(task);
     if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
@@ -8601,6 +8508,7 @@ export class TaskService {
           restored += 1;
           continue;
         }
+        this.deliveryExperiences.start(task);
         if (recoverHostPushProjection(summary)) this.writeTaskState(task);
         if (!["completed", "canceled"].includes(summary.status) && validPushReceipt(summary.delivery?.git_push))
           this.recordPublishedPush(task, summary.delivery.git_push);
@@ -16014,9 +15922,6 @@ export class TaskService {
             + `${finalRevision.sha.slice(0, 12)}，拒绝复用陈旧结论`,
         };
       }
-      // 记忆用:这轮之前的持久化状态。失败过(有 issue 或正在修)又通过了,
-      // 才是"踩过坑并爬出来",值得记;一次过的不记(§4:没人判过它对)。
-      const priorPrePush = task.summary.delivery?.prepush;
       state = recordPrePushReport(
         state, attemptId, this.prePushDomainReport(result),
         new Date().toISOString());
@@ -16025,16 +15930,6 @@ export class TaskService {
       }
       this.setPrePushState(task, state);
       const passed = Boolean(getReusablePushReceipt(state, finalRevision));
-      if (passed && priorPrePush
-          && (priorPrePush.issue || priorPrePush.state === "repairing")) {
-        try {
-          this.recordMemory(task,
-            this.prePushFixMemory(task, priorPrePush, result, finalRevision.sha));
-        } catch (error) {
-          this.options.log?.(
-            `任务 ${task.summary.id} Build-Fix 记忆入库失败: ${String(error)}`);
-        }
-      }
       if (passed) {
         task.summary.status = previousStatus;
         task.summary.detail = "Build-Fix 已通过，等待最终人工检视";
@@ -17155,6 +17050,7 @@ export class TaskService {
         target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
       this.ensureMergeWatch(task);
+      this.deliveryExperiences.capture(task);
       if (!previous?.mr_url) this.deliverySummaries.start(task);
       const runKey = `pipeline:${sha}`;
       if (existingPushReceipt && !manualPipelineRetry) {
