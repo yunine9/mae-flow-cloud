@@ -6,7 +6,16 @@
 
 主线：**用可靠、易改、够快的代码，打造真正好用的工程工具。** 四个评选导向用具体设计取舍说明，不用功能数量、代码规模或开发时长证明优劣。
 
-资料：
+## 当前推荐：架构图 + 核心代码 + 实际需求
+
+- [Archify 交互架构图](mae-flow-architecture.html)：支持演示、三个讲解视角、播放和节点源码依据。
+- [架构图 PNG](mae-flow-architecture.png) / [SVG](mae-flow-architecture.svg)：投屏或插入其他材料的静态备份。
+- [代码与提示词演示清单](code-tour.md)：三段核心代码讲两分半，再打开三份真实 Markdown；明确到函数和行号。
+- [图的数据源](mae-flow.architecture.json)与[生成脚本](build-archify.mjs)：使用仓内原生 Archify 渲染器。
+
+建议：架构约一分钟，代码两分半，Markdown 一分钟，剩下时间直接演示一个熟悉的已完成需求。
+
+以下文稿保留为备用，不必全部讲完：
 
 - [演示文稿](MAE-Flow-Harness-v3.pptx)：六页，架构与流程图可编辑。
 - [架构图](02-harness.png)与[控制流程图](03-control.png)：可单独用于其他材料。

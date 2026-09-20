@@ -1,0 +1,622 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MAE Flow 核心架构",
+    "subtitle": "方法进入上下文，工具返回事实，人的决定进入后续执行",
+    "locale": "zh-CN",
+    "visual_preset": "blueprint",
+    "animation": "none",
+    "quality_profile": "standard",
+    "viewBox": [
+      1080,
+      630
+    ],
+    "repository": {
+      "url": "https://github.com/yunine9/mae-flow-cloud",
+      "revision": "b0c012e098de0b4223deee54bb22deebbb97284a",
+      "provider": "github"
+    },
+    "views": [
+      {
+        "id": "core-loop",
+        "label": "核心执行循环",
+        "focus": [
+          "methods",
+          "current",
+          "agent",
+          "done",
+          "advance",
+          "state"
+        ],
+        "note": "current 给出本步指令，Agent 执行，done 处理结果，程序推进并保存状态。"
+      },
+      {
+        "id": "safety",
+        "label": "工具与安全",
+        "focus": [
+          "agent",
+          "host",
+          "tools",
+          "safety",
+          "platform"
+        ],
+        "note": "工具执行前检查必要边界；Git、MR 和流水线状态来自真实外部结果。"
+      },
+      {
+        "id": "feedback",
+        "label": "人与交付反馈",
+        "focus": [
+          "owner",
+          "ui",
+          "feedback",
+          "agent",
+          "platform"
+        ],
+        "note": "客观失败具备条件时自动修复；MR 检视意见先由责任人选择，再交给 Agent。"
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "external": {
+          "label": "人、方法与外部资源"
+        },
+        "frontend": {
+          "label": "人工交互"
+        },
+        "backend": {
+          "label": "内核逻辑"
+        },
+        "cloud": {
+          "label": "Agent 与宿主执行"
+        },
+        "database": {
+          "label": "持久状态"
+        },
+        "security": {
+          "label": "必要安全边界"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "owner",
+      "type": "external",
+      "label": "需求责任人 / 检视人",
+      "sublabel": "目标、意见与交付取舍",
+      "pos": [
+        40,
+        62
+      ],
+      "size": [
+        180,
+        60
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Cloud 工作台",
+      "sublabel": "澄清、检视、暂停与接管",
+      "pos": [
+        545,
+        62
+      ],
+      "size": [
+        180,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/annotationSubmissionView.ts",
+          "line": 1,
+          "end_line": 38,
+          "label": "批注提交条件"
+        }
+      ]
+    },
+    {
+      "id": "feedback",
+      "type": "cloud",
+      "label": "反馈分类与处理",
+      "sublabel": "CI 修复 / 意见交人选择",
+      "pos": [
+        810,
+        62
+      ],
+      "size": [
+        200,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/mergeWatch.ts",
+          "line": 30,
+          "end_line": 50,
+          "label": "自动修复与人工处理"
+        }
+      ]
+    },
+    {
+      "id": "methods",
+      "type": "external",
+      "label": "Skill 与步骤指令",
+      "sublabel": "明确当前工作方法",
+      "pos": [
+        40,
+        195
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/skills/mae-flow/SKILL.md",
+          "line": 16,
+          "end_line": 28,
+          "label": "主执行循环"
+        },
+        {
+          "path": "kernel/flow/steps/build.md",
+          "line": 7,
+          "end_line": 15,
+          "label": "用户意图与实施"
+        }
+      ]
+    },
+    {
+      "id": "templates",
+      "type": "external",
+      "label": "角色与产物模板",
+      "sublabel": "Story / UT / 实施附录",
+      "pos": [
+        40,
+        330
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/agents/ut-generator-agent.md",
+          "line": 24,
+          "end_line": 40,
+          "label": "UT 原则与结果"
+        },
+        {
+          "path": "kernel/skills/mae-flow/assets/IMPLEMENTATION-TEMPLATE.md",
+          "line": 13,
+          "end_line": 25,
+          "label": "任务拆分原则"
+        }
+      ]
+    },
+    {
+      "id": "knowledge",
+      "type": "external",
+      "label": "知识与仓库约定",
+      "sublabel": "按需补充 Agent 上下文",
+      "pos": [
+        40,
+        465
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/sessionDriver.ts",
+          "line": 1238,
+          "end_line": 1261,
+          "label": "上下文接入"
+        }
+      ]
+    },
+    {
+      "id": "current",
+      "type": "backend",
+      "label": "current · 当前指令",
+      "sublabel": "按状态与配置组装 Markdown",
+      "pos": [
+        290,
+        195
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/scripts/mae_flow_core/cli_commands/current.py",
+          "line": 148,
+          "end_line": 193,
+          "label": "步骤提示词组装"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "cloud",
+      "label": "Agent 执行",
+      "sublabel": "理解、分析、实现与验证",
+      "pos": [
+        545,
+        195
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/sessionDriver.ts",
+          "line": 1254,
+          "end_line": 1275,
+          "label": "Pi 工具钩子接入"
+        }
+      ]
+    },
+    {
+      "id": "advance",
+      "type": "backend",
+      "label": "流程推进",
+      "sublabel": "选择下一步，追加历史",
+      "pos": [
+        290,
+        330
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/scripts/mae_flow_core/cli_commands/advancement.py",
+          "line": 123,
+          "end_line": 159,
+          "label": "推进与保存"
+        },
+        {
+          "path": "kernel/flow/flow.json",
+          "line": 61,
+          "end_line": 80,
+          "label": "步骤分支定义"
+        }
+      ]
+    },
+    {
+      "id": "done",
+      "type": "backend",
+      "label": "done · 处理结果",
+      "sublabel": "人工决定与事实核对",
+      "pos": [
+        545,
+        330
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/scripts/mae_flow_core/cli_commands/done_status.py",
+          "line": 88,
+          "end_line": 111,
+          "label": "建议与必要检查分开"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "状态持久化",
+      "sublabel": "流程位置、选择与历史",
+      "pos": [
+        290,
+        465
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/scripts/mae_flow_core/state_store.py",
+          "line": 224,
+          "end_line": 257,
+          "label": "锁、版本与原子写入"
+        }
+      ]
+    },
+    {
+      "id": "safety",
+      "type": "security",
+      "label": "工具安全判断",
+      "sublabel": "保护状态，限制危险操作",
+      "pos": [
+        545,
+        465
+      ],
+      "size": [
+        180,
+        68
+      ],
+      "sources": [
+        {
+          "path": "kernel/scripts/mae_flow_core/guard/bash.py",
+          "line": 135,
+          "end_line": 148,
+          "label": "强推边界"
+        },
+        {
+          "path": "kernel/scripts/mae_flow_core/guard/gate.py",
+          "line": 51,
+          "end_line": 68,
+          "label": "状态文件保护"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "cloud",
+      "label": "会话与内核接入",
+      "sublabel": "SessionDriver / KernelHost",
+      "pos": [
+        810,
+        195
+      ],
+      "size": [
+        200,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/kernelHost.ts",
+          "line": 1,
+          "end_line": 14,
+          "label": "事件桥接与串行调用"
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "cloud",
+      "label": "工具与平台适配",
+      "sublabel": "文件 / Bash / Git / MR",
+      "pos": [
+        810,
+        330
+      ],
+      "size": [
+        200,
+        68
+      ],
+      "sources": [
+        {
+          "path": "src/taskHostTools.ts",
+          "line": 1,
+          "end_line": 28,
+          "label": "宿主操作"
+        },
+        {
+          "path": "src/platformAdapter.ts",
+          "line": 1,
+          "end_line": 28,
+          "label": "平台适配"
+        }
+      ]
+    },
+    {
+      "id": "platform",
+      "type": "external",
+      "label": "CodeHub / CI",
+      "sublabel": "实际版本、测试与失败日志",
+      "pos": [
+        810,
+        465
+      ],
+      "size": [
+        200,
+        68
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "方法与上下文",
+      "wraps": [
+        "methods",
+        "templates",
+        "knowledge"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "核心执行循环：Agent 与 MAE Flow 内核",
+      "wraps": [
+        "current",
+        "agent",
+        "advance",
+        "done",
+        "state",
+        "safety"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "Cloud 宿主与外部系统",
+      "wraps": [
+        "host",
+        "tools",
+        "platform"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "human-input",
+      "from": "owner",
+      "to": "ui",
+      "label": "目标与决定",
+      "variant": "emphasis"
+    },
+    {
+      "id": "user-steering",
+      "from": "ui",
+      "to": "agent",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "emphasis"
+    },
+    {
+      "id": "method-injection",
+      "from": "methods",
+      "to": "current",
+      "variant": "emphasis"
+    },
+    {
+      "id": "template-use",
+      "from": "templates",
+      "to": "methods",
+      "label": "提供模板",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "variant": "dashed"
+    },
+    {
+      "id": "current-instruction",
+      "from": "current",
+      "to": "agent",
+      "label": "本步指令",
+      "variant": "emphasis"
+    },
+    {
+      "id": "agent-done",
+      "from": "agent",
+      "to": "done",
+      "label": "声明完成",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "variant": "emphasis",
+      "labelAt": [
+        635,
+        300
+      ]
+    },
+    {
+      "id": "done-advance",
+      "from": "done",
+      "to": "advance",
+      "label": "处理结果",
+      "fromSide": "left",
+      "toSide": "right",
+      "variant": "emphasis"
+    },
+    {
+      "id": "next-current",
+      "from": "advance",
+      "to": "current",
+      "label": "下一步",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "variant": "emphasis"
+    },
+    {
+      "id": "persist",
+      "from": "advance",
+      "to": "state",
+      "label": "保存状态",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        380,
+        435
+      ]
+    },
+    {
+      "id": "agent-host",
+      "from": "agent",
+      "to": "host",
+      "label": "工具请求"
+    },
+    {
+      "id": "host-tools",
+      "from": "host",
+      "to": "tools",
+      "label": "执行",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        910,
+        300
+      ]
+    },
+    {
+      "id": "tool-results",
+      "from": "tools",
+      "to": "done",
+      "label": "事实依据",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "tool-guard",
+      "from": "safety",
+      "to": "tools",
+      "fromSide": "right",
+      "toSide": "left",
+      "variant": "security"
+    },
+    {
+      "id": "platform-actions",
+      "from": "tools",
+      "to": "platform",
+      "label": "推送与查询",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        910,
+        435
+      ]
+    },
+    {
+      "id": "delivery-feedback",
+      "from": "platform",
+      "to": "feedback",
+      "label": "交付反馈",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          1048,
+          499
+        ],
+        [
+          1048,
+          92
+        ]
+      ],
+      "labelAt": [
+        1048,
+        155
+      ]
+    },
+    {
+      "id": "review-choice",
+      "from": "feedback",
+      "to": "ui",
+      "label": "意见通知",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ]
+}
