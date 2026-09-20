@@ -91,6 +91,10 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   onChildTabChange?: (tab: IssueChildTab) => void;
 }) {
   const [issues, setIssues] = useState<IssueSummary[]>([]);
+  /** DTS 发起成功的新会话(ADR-0040):「问题会话」子页签顶部的成功
+   * 横幅内容——切换子页签后用户不至对着列表猜哪张是新发起的,单号
+   * 可点直达工作台。再发起一批整体顶掉,「知道了」撤下。 */
+  const [launchedNotice, setLaunchedNotice] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
   // App 快照是工作台开关的唯一真相:URL 侧变化(挂起转正页内切会话、
   // 浏览器后退/前进)同步过来,导航与右侧内容不错位。
@@ -247,11 +251,13 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       visible={childTab !== "sessions"}
       panel={childTab === "dts" ? "dts" : "manual"}
       // 登记成功后的进台方式分两路(ADR-0040):手工登记不自动跳
-      // (成功提示里给「打开工作台」链接,登记完成即撒手),只刷列表;
-      // DTS 发起(单张/批量同路)当前页切到「问题会话」子页签看新会话。
+      // (成功横幅里给「打开问题会话」链接,登记完成即撒手),只刷
+      // 列表;DTS 发起(单张/批量同路)当前页切到「问题会话」子页签,
+      // 顶部横幅列出新会话、单号可点直达工作台。
       onRegistered={refreshList}
-      onLaunched={() => {
+      onLaunched={(created) => {
         refreshList();
+        setLaunchedNotice(created);
         onChildTabChange?.("sessions");
       }}
       onError={setError}
@@ -260,6 +266,21 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
     <section aria-labelledby="issue-mine-title"
       hidden={childTab !== "sessions"}
       className="rounded-[14px] border border-line bg-surface px-[18px] py-4 max-[680px]:px-3 max-[680px]:py-3">
+      {/* 发起成功横幅(ADR-0040):DTS 发起切过来后第一眼就能确认
+          "发起成了",单号链接新页签直达对应工作台(与卡片同款通道)。 */}
+      {launchedNotice.length > 0 && <div role="status"
+        className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] border border-success/35 bg-success-soft px-3.5 py-2.5 text-sm text-success">
+        <span>已发起 {launchedNotice.length} 个问题会话,点单号打开:</span>
+        {launchedNotice.map((item) => <a key={item.id}
+          className="font-semibold underline underline-offset-2 hover:underline"
+          href={issueSessionPath(item.id)} target="_blank" rel="noreferrer"
+          title={`打开问题工作台:${item.title}`}>
+          {item.ticket || item.id} ↗
+        </a>)}
+        <Button type="button" variant="link"
+          className="ml-auto h-auto px-0 font-normal text-success underline underline-offset-2 hover:text-success"
+          onClick={() => setLaunchedNotice([])}>知道了</Button>
+      </div>}
       <div className="mb-3 flex items-baseline justify-between gap-4 max-[680px]:flex-col max-[680px]:items-stretch">
         <div>
           {/* kicker 不再重复页首大标题「问题处理」;列表区自己只有标题。

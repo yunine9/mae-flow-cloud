@@ -185,8 +185,9 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration,
     /const shownLiveByTicket = assistMode \? teamLiveByTicket : mineLiveByTicket/);
   // IssueBoard 贯通(ADR-0040):登记成功两路回调——手工登记只刷列表
-  // (成功提示里给「打开工作台」链接),DTS 发起刷列表并切「问题会话」
-  // 子页签;onOpenIssue 深链机制不再服务徽标/点卡(卡片即链接)。
+  // (成功横幅里给「打开问题会话」链接),DTS 发起刷列表、切「问题会话」
+  // 子页签并挂新会话横幅;onOpenIssue 深链机制不再服务徽标/点卡(卡片
+  // 即链接)。
   assert.match(issueBoard,
     /<IssueRegistration[\s\S]{0,600}onRegistered=\{refreshList\}/);
   assert.match(issueBoard, /onChildTabChange\?\.\("sessions"\)/);
@@ -1457,10 +1458,11 @@ test("问题工作台独立页签(ADR-0040):入口一律新页签,页内 overlay
   assert.match(issueBoard, /正在打开问题工作台…/);
   assert.match(issueBoard, /onClick=\{\(\) => setDetailRetry\(\(count\) => count \+ 1\)\}>重试/);
   // 登记成功不自动跳(异步回调 window.open 会被弹窗拦截器杀掉):
-  // 手工登记成功提示给「打开工作台」链接(新页签)。
+  // 手工登记成功横幅给「打开问题会话」链接(新页签,2026-09-21 起小字
+  // 提示升横幅,防"以为没发起")。
   assert.match(registration,
     /href=\{issueSessionPath\(lastCreated\.id\)\}/);
-  assert.match(registration, /打开工作台 ↗/);
+  assert.match(registration, /打开问题会话 ↗/);
 });
 
 test("DTS 单号在两个列表里都是门户超链接", () => {
@@ -1679,11 +1681,12 @@ test("列表卡焦点行:task-focus 家族 utilities 直译(#256),版式与状�
 });
 
 test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动", () => {
-  // 看板错误横幅的两枚文字动作(跳设置/关提示)换 link 皮;换装后看板
-  // 裸钮只剩整卡进工作台的 task-summary(契约另锚,机构保留)。
+  // 看板错误横幅的两枚文字动作(跳设置/关提示)换 link 皮;发起成功
+  // 横幅的关提示同款收编(2026-09-21)。换装后看板裸钮只剩整卡进工作台
+  // 的 task-summary(契约另锚,机构保留)。
   assert.match(issueBoard, /variant="link"/);
-  assert.equal((issueBoard.match(/variant="link"/g) ?? []).length, 2,
-    "横幅两枚文字动作各一枚 link,不多收");
+  assert.equal((issueBoard.match(/variant="link"/g) ?? []).length, 3,
+    "横幅三枚文字动作各一枚 link,不多收");
   assert.doesNotMatch(issueBoard,
     /className="cursor-pointer underline underline-offset-2"/);
   // 会话页认证报错的补救入口同款 link 皮(修归属人凭据,查看模式不渲染)。
