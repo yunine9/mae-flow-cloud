@@ -45,7 +45,7 @@ async function until(probe: () => boolean, what: string): Promise<void> {
 const report = () =>
   `printf '%s\\n' '# 问题分析:登录超时' '一句话总结:连接池耗尽,扩容并回收。' \\
     '## 问题现象' '登录超时。' '## 问题根因' '连接池耗尽。' \\
-    '## 修改方案' '超时回收。' '## 证据链' '日志:连接池耗尽。' \\
+    '## 修改方案' '超时回收。' \\
     '## 置信度' '高:日志直接指向。' > issue-analysis.md`;
 
 /** 开到 mr_green 申报停等(流水线保持 running=发现窗口常开)的现场。

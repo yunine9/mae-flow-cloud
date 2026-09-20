@@ -35,11 +35,11 @@ async function until(probe: () => boolean, what: string): Promise<void> {
   assert.fail(`超时:${what}`);
 }
 
-/** 五章节报告(submit_analysis 的机械门票)。 */
+/** 四章节报告(submit_analysis 的机械门票)。 */
 const report = () =>
   `printf '%s\\n' '# 问题分析:登录超时' '一句话总结:连接池耗尽,扩容并回收。' \\
     '## 问题现象' '登录超时。' '## 问题根因' '连接池耗尽。' \\
-    '## 修改方案' '超时回收。' '## 证据链' '日志:连接池耗尽。' \\
+    '## 修改方案' '超时回收。' \\
     '## 置信度' '高:日志直接指向。' > issue-analysis.md`;
 
 /** 一路开到 mr_green 验绿收口的现场:假平台+剧本+服务三件套。

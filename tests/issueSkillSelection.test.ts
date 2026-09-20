@@ -82,10 +82,10 @@ function baseOptions(dataDir: string, model: ScriptedModelServer) {
   };
 }
 
-/** 五章节合规的分析报告(门票校验过得了)。 */
+/** 四章节合规的分析报告(门票校验过得了)。 */
 const REPORT = "printf '# 问题分析\n\n登录超时系网关超时配置过小,方案:调大阈值。\n"
   + "## 问题现象\n登录超时。\n## 问题根因\n会话网关超时配置过小。\n"
-  + "## 修改方案\n调大超时阈值。\n## 证据链\n网关日志时间戳。\n"
+  + "## 修改方案\n调大超时阈值。\n"
   + "## 置信度\n中:缺复现环境。\n' > issue-analysis.md";
 
 /** 拉单→拉仓→收口进 analyze 的公共前半段;最后报告+提交走完分析。 */

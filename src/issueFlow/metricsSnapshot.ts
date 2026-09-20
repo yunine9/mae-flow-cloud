@@ -102,7 +102,7 @@ export interface IssueMetricsSnapshot {
     /** MR 评论条数(代码托管平台侧的检视讨论,反馈账 mr_discussion 记录)。 */
     mr_comments: number | IssueMetricsUnavailable;
   };
-  /** 分析报告版本数(初版=1,只随修改型检视增长;版本账现算,
+  /** 分析报告版本数(初版=1,随修改型检视与验证打回增长;版本账现算,
    *  账读不了时降级)。 */
   report_version_count: number | IssueMetricsUnavailable;
   /** 验证未通过次数:判定与一次率现算共享 onceRates.countVerifyFailures,

@@ -153,11 +153,15 @@ export function outstandingReviewBatch(root: string): Annotation[] {
     && Date.parse(String(item.sent_at ?? "")) > floor);
 }
 
-/** 版本快照——修改型申报触发整体回退重写时冻结(ADR-0035)。文件名
- * 时刻取当前批最早的送出时刻:读侧批次推导(sent_at 落在相邻快照
- * 时刻之间即该批)在新时机(送出在先、冻结在后)与旧时机(提交即
- * 冻结)下都把意见对回它锚定的那一版;报告不在场不落,写失败不挡
- * 申报(fail-open,意见自带原文快照,损失的只是全文对照)。 */
+/** 版本快照——报告即将被整体重写时冻结,写侧唯一入口。两个触发源:
+ * 检视修改型申报(tools 的 declare_review_rework,ADR-0035)与验证
+ * 打回回退(service 的 env_verify fail 分派)——两者都是重写来源,
+ * 重写前的报告必须留账(AI 重写后 live 即新版)。文件名时刻取当前批
+ * 最早的送出时刻:读侧批次推导(sent_at 落在相邻快照时刻之间即该批)
+ * 在新时机(送出在先、冻结在后)与旧时机(提交即冻结)下都把意见对回
+ * 它锚定的那一版;验证打回场景无意见批,时刻落在打回当下。报告不在场
+ * 不落,写失败不挡申报/回退(fail-open,意见自带原文快照,损失的只是
+ * 全文对照)。 */
 export function snapshotAnalysisVersion(root: string): void {
   if (!existsSync(join(root, ANALYSIS_DOC_NAME))) return;
   const batch = outstandingReviewBatch(root);
@@ -178,7 +182,7 @@ export function snapshotAnalysisVersion(root: string): void {
         `issue-analysis@r${stampMs.toString(36)}.md`),
     );
   } catch {
-    // 快照失败不挡申报。
+    // 快照失败不挡申报/回退。
   }
 }
 

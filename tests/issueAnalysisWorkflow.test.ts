@@ -1,6 +1,6 @@
 /**
  * 问题分析工作流(ADR-0005)的机械面单测:
- * - submit_analysis 的报告五章节门票(missingAnalysisSections);
+ * - submit_analysis 的报告四章节门票(missingAnalysisSections);
  * - 货架 skill 的问题会话匹配口径(knowledgeMatchesIssueSession,
  *   materializeHostSkills 的 knowledgeScope="issue");
  * - 问题域知识上下文(issueKnowledgeContext)与编排层技能源
@@ -25,26 +25,25 @@ import {
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
-test("分析报告五章节门票:缺章节点名打回,齐全放行,标题级别宽容", () => {
+test("分析报告四章节门票:缺章节点名打回,齐全放行,标题级别宽容", () => {
   const full = [
     "# 问题分析:登录超时", "连接池耗尽致登录超时,方案:超时回收。",
     "## 问题现象", "压测环境登录超时",
     "## 问题根因", "连接池耗尽", "## 修改方案", "超时回收",
-    "## 证据链", "日志:pool exhausted",
     "### 置信度", "高", "",
   ].join("\n");
   assert.deepEqual(missingAnalysisSections(full), [],
-    "五章节齐全(标题级别不限)必须放行");
+    "四章节齐全(标题级别不限)必须放行");
   assert.deepEqual(
     missingAnalysisSections("# 分析\n\n根因:连接池耗尽,但没分章节。\n"),
     [...ANALYSIS_REPORT_SECTIONS],
     "章节淹没在正文里必须整单打回");
   assert.deepEqual(
-    missingAnalysisSections("# 分析\n## 问题根因\nx\n## 证据链\ny\n"),
-    ["问题现象", "修改方案", "置信度"],
+    missingAnalysisSections("# 分析\n## 问题根因\nx\n## 置信度\ny\n"),
+    ["问题现象", "修改方案"],
     "缺哪几章点名哪几章");
   assert.deepEqual(
-    missingAnalysisSections("# 分析\n正文提到结论、证据链与置信度。\n"),
+    missingAnalysisSections("# 分析\n正文提到结论、修改方案与置信度。\n"),
     [...ANALYSIS_REPORT_SECTIONS],
     "正文里出现章节名字不算数——必须撞在标题行上");
 });
@@ -161,16 +160,16 @@ test("问题域知识上下文:关联仓清单+绑定模块,无模块不造空�
   });
 });
 
-test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含五章节标题", () => {
+test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含四章节标题", () => {
   // 2026-09-11 拍板:报告模板独立成 report-template.md(issue-analysis 与
-  // guard 共用),SKILL.md 只留指针——五章节锚点跟着搬进模板文件。
+  // guard 共用),SKILL.md 只留指针——章节锚点跟着搬进模板文件。
   const body = readFileSync(
     join(SKILL_SOURCE_DIR, "issue-analysis", "SKILL.md"), "utf-8");
   const template = readFileSync(
     join(SKILL_SOURCE_DIR, "issue-analysis", "report-template.md"), "utf-8");
   assert.match(body, /^---\nname: issue-analysis\ndescription: [^\n]+\n/,
     "frontmatter 必须带 name+description(pi 靠它进技能索引)");
-  // 模板文件:五章节与写作规则的单一定义源。
+  // 模板文件:四章节与写作规则的单一定义源。
   for (const section of ANALYSIS_REPORT_SECTIONS) {
     assert.match(template, new RegExp(`^## ${section}`, "m"),
       `模板必须含「${section}」章节——工具门票与技能模板要同源`);
@@ -201,8 +200,8 @@ test("编排层技能源:issue-analysis 在源目录,报告模板独立成档含
   assert.ok(template.indexOf("一句话总结") < template.indexOf("## 问题现象"),
     "一句话总结在所有章节之前——只读首行就能拍板");
   assert.ok(template.indexOf("## 问题根因") < template.indexOf("## 修改方案")
-    && template.indexOf("## 修改方案") < template.indexOf("## 证据链"),
-    "节序=现象→根因→方案→证据链,节名即问题");
+    && template.indexOf("## 修改方案") < template.indexOf("## 置信度"),
+    "节序=现象→根因→方案→置信度,节名即问题");
   assert.match(template, /原文不进报告|原文不贴/,
     "证据指针化:日志与代码原文不进报告,出处可核即可");
   assert.match(template, /结论版/,

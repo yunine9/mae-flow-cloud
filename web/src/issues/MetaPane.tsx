@@ -225,7 +225,7 @@ export function IssueMetaPane({ detail, canOperate }: {
 
   // ---- 主动拉取(#268,ADR-0026):按钮不执行任何事,只把拉取意图
   // 递给 Agent(Agent 主理第二例,与「调整关联仓」同一递交通道)——
-  // AI 按技能 issue-ops 拉取,缺环境自然举环境闸。无日志的非终态会话
+  // AI 按技能 fetch-logs 拉取,缺环境自然举环境闸。无日志的非终态会话
   // 才出钮(有日志后被「下载日志」替代);AI 运行中不禁用——运行中
   // 点击经插话队列在当前步骤结束后送达,是正当语义。 ----
   const [requestingFetch, setRequestingFetch] = useState(false);
@@ -350,6 +350,14 @@ export function IssueMetaPane({ detail, canOperate }: {
         </span>
       </MetaField>
     </>}
+    {/* 发起备注(2026-09-20):DTS 列表随单填写、进了登记元信息的
+        指示,不是单据字段——有才渲染(老会话/没填的会话不出空行),
+        有单无单都显示(标题/描述的单据门对它不适用)。 */}
+    {detail.remark && <MetaField label="发起备注">
+      <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+        {detail.remark}
+      </span>
+    </MetaField>}
     <MetaField label="业务模块">{detail.module || UNFILLED}</MetaField>
     <MetaField label="网管环境">
       <span className="grid content-start gap-1.5">

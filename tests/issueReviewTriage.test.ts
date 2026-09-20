@@ -39,7 +39,7 @@ import {
 
 const REPORT_V1 = "# 问题分析\n\n## 问题现象\n压测登录超时。\n"
   + "## 问题根因\n连接池耗尽。\n## 修改方案\n超时回收。\n"
-  + "## 证据链\n日志:连接池耗尽。\n## 置信度\n高。\n";
+  + "\n## 置信度\n高。\n";
 
 /** 开一局跑到「分析确认闸」挂起的真服务:剧本前七幕与全链契约测试
  * 同款(拉单→拉仓→写报告→submit_analysis);后续幕由各用例续写。 */
@@ -191,7 +191,7 @@ test("含修改型批次:declare_review_rework 触发整体回退重写——轮
     });
     model.script.push({ tool: { name: "declare_review_rework", input: {
       reviews: [{ seq: 1 }],
-      reason: "证据链缺口必须补测,方案要连带修订",
+      reason: "根因依据缺口必须补测,方案要连带修订",
     } } });
     // 重写版是干净纸面(ADR-0036):应答不进报告,交代走 respond_review。
     model.script.push({ tool: { name: "bash", input: { command:
@@ -200,7 +200,7 @@ test("含修改型批次:declare_review_rework 触发整体回退重写——轮
       + "EOF" } } });
     model.script.push({ tool: { name: "respond_review", input: {
       items: [{ review: 1, reply: "已补连接池打满时的监控证据,方案同步修订为监控告警+提前回收。",
-        outcome: "fixed", evidence: ["证据链:连接池监控日志"] }],
+        outcome: "fixed", evidence: ["已核连接池打满时的监控日志,出处随文标注"] }],
     } } });
     model.script.push({ tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽(已补证据)" } } });
