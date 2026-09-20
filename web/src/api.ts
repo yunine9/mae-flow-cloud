@@ -4162,7 +4162,9 @@ export function getIssueOnceRates(): Promise<IssueOnceRate> {
 /** 首次生成占比与 90%AI生成达标率(ADR-0045,工单 #342):终态伴生
  *  快照(code-origin.json)的读侧聚合,工作量口径(增删行均计)。
  *  分母=有数据(伴生在场且有工作变更行)的完成交付会话;rate null=分母 0
- *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。 */
+ *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。字段
+ *  纪律(#353):页面常驻旧版前端,后端先行更新时本端点的响应仍会被
+ *  旧代码消费——字段加减保持可选,消费方按缺省处理,不得假设总在场。 */
 export interface IssueOnceGeneratedSessionRow {
   id: string;
   title: string;
