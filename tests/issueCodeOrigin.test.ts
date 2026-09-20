@@ -68,10 +68,16 @@ function git(dir: string, ...args: string[]): string {
   }).trim();
 }
 
-function bareOrigin(root: string, name = "origin"): string {
+function bareOrigin(root: string, name = "origin",
+  seedFiles: Record<string, string> = {}): string {
   const seed = join(root, `seed-${name}`);
   rawGit(["init", "-q", "-b", "master", seed]);
   writeFileSync(join(seed, "readme.md"), "基线\n");
+  for (const [path, content] of Object.entries(seedFiles)) {
+    const target = join(seed, path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, content);
+  }
   git(seed, "add", "-A");
   git(seed, "commit", "-q", "-m", "基线:master 起点");
   const origin = join(root, `${name}.git`);
@@ -187,7 +193,7 @@ test("返工边界:反馈先于一切推送不算边界;无反馈=全程首轮",
 
 test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
   const snapshot: IssueCodeOriginSnapshot = {
-    schema_version: 1,
+    schema_version: 2,
     generated_at: "now",
     session_id: "issue-1",
     by_repo: [
@@ -202,7 +208,7 @@ test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
   assert.equal(aggregate.pass, true);
   assert.equal(aggregateCodeOrigin(snapshot, 90).pass, false);
   const empty = aggregateCodeOrigin({
-    schema_version: 1, generated_at: "now", session_id: "x",
+    schema_version: 2, generated_at: "now", session_id: "x",
     by_repo: [{ repo: "c", branch: "d", unavailable: "不可得" }],
   } as unknown as IssueCodeOriginSnapshot);
   assert.equal(empty.total, 0);
@@ -212,7 +218,7 @@ test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
 
 // ---- 真仓夹具 ----
 
-test("单推送无反馈:全部留存行计首轮,占比 100;md 不进分母", async () => {
+test("单推送无反馈:全部工作行计首轮,占比 100;md 不进分母", async () => {
   const tmp = mfcTemp("mfc-codeorigin-");
   const root = join(tmp, "issues", "issue-1");
   const origin = bareOrigin(tmp);
@@ -239,7 +245,7 @@ function pushPlatformAfter(dir: string, files: Record<string, string>, message =
   return pushPlatform(dir);
 }
 
-test("两推送夹一次验证失败:边界前行首轮、边界后行返工", async () => {
+test("两推送夹一次验证失败:边界前工作行首轮、边界后行返工", async () => {
   const tmp = mfcTemp("mfc-codeorigin-");
   const root = join(tmp, "issues", "issue-1");
   const origin = bareOrigin(tmp);
@@ -482,3 +488,76 @@ test("backfill:缺失补算;在场跳过;支持期外不试算", async () => {
   assert.equal(enqueueCodeOrigin(staleRoot, staleState, {}, {}), false);
   assert.ok(!existsSync(join(staleRoot, ISSUE_CODE_ORIGIN_FILE)));
 });
+
+// ---- 工作量口径新增边界(T1,#343) ----
+
+test("纯删除修复正常计分:删除行计正向工作量,占比 100", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const root = join(tmp, "issues", "issue-1");
+  // 基线里预置 30 行源码,会话唯一动作是把它删掉(纯删除交付)。
+  const origin = bareOrigin(tmp, "origin", {
+    "src/legacy.ts": Array.from({ length: 30 }, (_, i) => `旧代码 ${i}`).join("\n") + "\n",
+  });
+  const dir = seedWorkspace(root, origin);
+  git(dir, "rm", "-q", "src/legacy.ts");
+  git(dir, "commit", "-q", "-m", "清理:删除废弃的 legacy 模块");
+  const sha = pushPlatform(dir);
+  const state = seedState(root, origin, {
+    events: [{ at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, sha) }],
+  });
+  const snapshot = await buildCodeOriginSnapshot(root, state);
+  const repo = repoOk(snapshot);
+  // 删除行计正向工作量:首轮 30,占比 100%——留存口径下这里是「—」。
+  assert.deepEqual(repo.lines, { first: 30, rework: 0, external: 0 });
+  assert.equal(aggregateCodeOrigin(snapshot, 90).share, 100);
+});
+
+test("多仓时点边界:边界事件后两仓的推送都计返工", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const rootA = join(tmp, "issues", "issue-1");
+  const originA = bareOrigin(tmp, "origin-a");
+  const dirA = seedWorkspaceNamed(rootA, originA, "origin-a");
+  const firstA = pushPlatformAfter(dirA, { "src/a.ts": lines(10) }, "A 仓首轮");
+  const originB = bareOrigin(tmp, "origin-b");
+  const dirB = seedWorkspaceNamed(rootA, originB, "origin-b");
+  // 反馈事件之后:A 仓修复推送与 B 仓首笔交付都晚于事件——两仓都计返工。
+  const reworkA = pushPlatformAfter(dirA, { "src/a2.ts": lines(5) }, "A 仓按意见返工");
+  const reworkB = pushPlatformAfter(dirB, { "src/b.ts": lines(5) }, "B 仓首笔交付");
+  const state = seedState(rootA, originA, {
+    events: [
+      { at: "2026-09-20T02:00:00.000Z", note: pushNote(originA, firstA) },
+      { at: "2026-09-20T03:00:00.000Z", note: pushNote(originA, reworkA) },
+      { at: "2026-09-20T03:30:00.000Z", note: pushNote(originB, reworkB) },
+    ],
+    mr: {},
+  });
+  // 检视批次送出住在检视账(reviews.jsonl),带时刻——反馈事件的来源之一。
+  writeFileSync(join(rootA, "reviews.jsonl"),
+    JSON.stringify({ op: "sent", ids: ["an-1"], via: "issue_review",
+      at: "2026-09-20T02:30:00.000Z", by: ACCOUNT }) + "\n");
+  // 多仓登记:B 仓也要进 repo_urls,工作区映射才找得到它的克隆。
+  state.repo_urls = [originA, originB];
+  writeFileSync(join(rootA, "issue.json"), JSON.stringify(state, null, 1));
+  // 边界=首个反馈事件(02:30 检视)之前最近的一笔推送(02:00 A 仓);
+  // 之后两仓的推送(03:00 A、03:30 B)按时刻一律计返工——多仓不留
+  // 「另一个仓全算首轮」的角落。
+  const snapshot = await buildCodeOriginSnapshot(rootA, state);
+  const byRepo = new Map(snapshot.by_repo.map((repo) => [repo.repo, repo]));
+  const repoA = byRepo.get(originA)!;
+  if ("unavailable" in repoA) assert.fail(repoA.unavailable);
+  assert.deepEqual(repoA.lines, { first: 10, rework: 5, external: 0 });
+  const repoB = byRepo.get(originB)!;
+  if ("unavailable" in repoB) assert.fail(repoB.unavailable);
+  // B 仓首笔推送(03:30)晚于首个反馈事件(02:30) → 整笔计返工:
+  // 时点规则下多仓不留「另一个仓全算首轮」的角落。
+  assert.deepEqual(repoB.lines, { first: 0, rework: 5, external: 0 });
+});
+
+/** 指定仓名的多仓工作区(目录名=仓名,避免两仓同名互踩)。 */
+function seedWorkspaceNamed(sessionRoot: string, origin: string, name: string)
+  : string {
+  const dir = join(sessionRoot, "repo", name);
+  rawGit(["clone", "-q", origin, dir]);
+  git(dir, "checkout", "-q", "-b", BRANCH);
+  return dir;
+}

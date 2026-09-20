@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryTaskTokens, OriginCounts } from "../../src/deliveryAnalyticsTypes";
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
-import { getIssueOnceGenerated, type IssueOnceGenerated, type IssueOnceGeneratedSessionRow } from "./api";
+import { cn } from "cn";
+import { getIssueOnceGenerated, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow } from "./api";
 import { onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
 
@@ -30,6 +31,31 @@ function AnalysisFilter({ label, value, onChange, items }: {
     </Select>
   </div>;
 }
+
+function onceDenom(stats?: IssueOnceGenerated): number {
+  // 三根过程率轴的分母=完成交付全集(stats.delivered),与占比分母
+  // (仅有数据的会话数)是两个口径,瓦片副标题各自如实。
+  return stats?.delivered ?? 0;
+}
+function sumLines(stats: IssueOnceGenerated): { first: number; total: number } {
+  let first = 0; let total = 0;
+  for (const row of stats.per_session) {
+    first += row.lines.first;
+    total += row.lines.first + row.lines.rework + row.lines.external;
+  }
+  return { first, total };
+}
+function weightedShare(stats: IssueOnceGenerated): number | null {
+  const { first, total } = sumLines(stats);
+  return total ? Math.round((first / total) * 1000) / 10 : null;
+}
+function scopeTip(stats: IssueOnceGenerated | undefined): string {
+  if (!stats) return "统计暂不可用";
+  return `分母=有数据的完成交付会话(伴生快照在场且有工作变更行):${stats.total} 个,其中 ${stats.passed} 个达标(单会话占比 ≥ ${stats.threshold_percent}%,线可配)。`
+    + `占比=首轮生成且存活到合入的变更行 ÷ 全部变更行(增删均计),返工与平台外改动都算 AI 没一次做到,多仓按行数加权。`
+    + `${stats.pending} 个会话待算、${stats.unsupported} 个早于 ${stats.supported_since} 起算日不计入、${stats.no_code} 个无源码交付不计入。`;
+}
+
 function Donut({ counts }: { counts: OriginCounts }) {
   const total = sumOrigins(counts);
   let offset = 0;
@@ -63,6 +89,7 @@ export function IssueAnalyticsTab() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState("");
   const [module, setModule] = useState("*");
+  const [dim, setDim] = useState<"feature" | "session" | "repo">("feature");
   const [selected, setSelected] = useState<string | null>(null);
   const load = async () => {
     setBusy(true); setError("");
@@ -76,53 +103,104 @@ export function IssueAnalyticsTab() {
     && (!query || `${row.id} ${row.title} ${row.module}`.toLowerCase().includes(query.toLowerCase()))),
     [stats, module, query]);
   const features = useMemo(() => onceGeneratedFeatureRows(stats?.per_session ?? []), [stats]);
+  const repos = stats?.by_repo ?? [];
   const selectedRow = stats?.per_session.find(row => row.id === selected);
-  const scopeTitle = stats
-    ? `分母=有数据的完成交付会话(伴生快照在场且留存源码行>0):${stats.total} 个,其中 ${stats.passed} 个达标(单会话占比 ≥ ${stats.threshold_percent}%,线可配)。`
-      + `占比=首轮生成且存活到合入的源码行 ÷ 全部留存源码行,返工行与平台外改的行都算 AI 没一次生成,多仓按行数加权。`
-      + `${stats.pending} 个会话待算、${stats.unsupported} 个早于 ${stats.supported_since} 起算日不计入、${stats.no_code} 个无源码交付不计入。`
-    : "";
+  const pct = (value: number | null | undefined) =>
+    value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
+  const kpi = (label: string, rate: number | null, sub: string, tip: string, good?: boolean) =>
+    <div className="rounded-[14px] border border-line bg-surface px-5 py-4">
+      <small className="mb-1.5 block text-[13px] font-semibold text-muted-foreground">{label}</small>
+      <strong className={cn("block text-[30px] leading-[1.1] tracking-[-0.03em] tabular-nums",
+        good ? "text-success" : "text-text-strong")}>{pct(rate)}</strong>
+      <span className="mt-1.5 block text-xs text-muted-foreground" title={tip}>{sub}</span>
+    </div>;
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
-    <div className="delivery-scope" title={scopeTitle}><BarChart3 size={18} />
-      <span>一次生成达标率 {percent(stats?.rate ?? null)} · 达标 {stats?.passed ?? 0}/{stats?.total ?? 0} 个有数据会话
-        {stats ? <> · 待算 {stats.pending} · 不支持期 {stats.unsupported} 个不计入</> : null}</span>
-      <small style={{ marginLeft: "auto" }}>口径与起算日期悬停查看</small>
+    <div className="delivery-scope" title={scopeTip(stats)}><BarChart3 size={18} />
+      <span>分母=有数据的完成交付会话:{stats?.total ?? 0} 个 · 待算 {stats?.pending ?? 0} · 早于 {stats?.supported_since ?? "—"} 起算日 {stats?.unsupported ?? 0} 个不计入 · 无源码交付 {stats?.no_code ?? 0} 个不计入</span>
     </div>
-    <section className="delivery-card"><h2>特性聚合 <span>按业务模块标签归组,行数加权</span></h2>
-      <div className="delivery-table-scroll"><table><thead><tr><th>特性</th><th>会话数</th><th>达标</th><th>会话达标率</th><th>一次生成占比(加权)</th><th>留存源码行</th></tr></thead>
+    <div className="grid grid-cols-[repeat(5,1fr)] gap-3.5">
+      {kpi("一次定位率", stats?.localization.rate ?? null,
+        `${stats?.localization.passed ?? 0} / ${onceDenom(stats)} 个会话 · 报告一版过`,
+        "一次定位 4 / 完成交付——分析报告只生成一版即一次定位;检视提出修改会生成新版本。")}
+      {kpi("一次验证率", stats?.verify.rate ?? null,
+        `${stats?.verify.passed ?? 0} / ${onceDenom(stats)} 个会话 · 验证不通过=0`,
+        "一次验证 = 验证不通过次数=0 即通过;未答卡=通过(合入即通过);点过「验证发现问题」即非一次。")}
+      {kpi("一次解决率", stats?.solved.rate ?? null,
+        `${stats?.solved.passed ?? 0} / ${onceDenom(stats)} 个会话 · 定位与验证双一次`,
+        "一次解决 = 报告一版过 且 验证不通过=0,两轴同时一次。")}
+      {kpi("首次生成占比", stats ? weightedShare(stats) : null,
+        `首轮 ${num(stats ? sumLines(stats).first : 0)} / 全部 ${num(stats ? sumLines(stats).total : 0)} 工作行 · 增删均计`,
+        "首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)提交计入分母——AI 没一次做到就算没做到。")}
+      {kpi("90%AI生成达标率", stats?.rate ?? null,
+        `${stats?.passed ?? 0} / ${stats?.total ?? 0} 个会话 ≥ 90%(线可配)`,
+        "单会话占比 ≥ 达标线(参数,缺省 90%)判达标;多仓会话按行数加权合成一个占比判定。", (stats?.rate ?? 0) >= 90)}
+    </div>
+    <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
+      {([["feature", "按特性"], ["session", "按会话"], ["repo", "按代码仓"]] as const).map(([key, label]) =>
+        <button key={key} type="button" aria-pressed={dim === key}
+          className={cn("border-r border-line px-5 py-2 text-sm last:border-r-0",
+            dim === key ? "bg-canvas font-semibold text-text-strong" : "text-muted-foreground hover:text-text-strong")}
+          onClick={() => setDim(key)}>{label}</button>)}
+    </div>
+    {dim === "feature" && <section className="delivery-card"><h2>按特性 <span>全部特性的交付质量对比;点特性名跳转团队DTS对应现场筛选</span></h2>
+      <div className="delivery-table-scroll"><table><thead><tr><th>特性</th><th>会话数</th><th>一次解决率</th><th>90%AI生成达标率</th><th>一次定位率</th><th>一次验证率</th><th>首次生成占比(加权)</th></tr></thead>
         <tbody>{features.map((feature: OnceGeneratedFeatureRow) => <tr key={feature.module}>
           <td><button className="delivery-task-link" aria-pressed={module === feature.module}
-            onClick={() => setModule(module === feature.module ? "*" : feature.module)}><b>{feature.module}</b></button></td>
-          <td>{feature.sessions}</td><td>{feature.passed}</td>
-          <td className="delivery-accent">{percent(feature.pass_rate)}</td>
-          <td className="delivery-accent">{percent(feature.share)}</td>
-          <td>{num(feature.total_lines)}</td>
+            onClick={() => { setModule(module === feature.module ? "*" : feature.module); }}><b>{feature.module}</b></button></td>
+          <td>{feature.sessions}</td>
+          <td className="pct">{pct(feature.solved_rate)}</td>
+          <td className="pct">{pct(feature.pass_rate)}</td>
+          <td className="pct">{pct(feature.localization_rate)}</td>
+          <td className="pct">{pct(feature.verify_rate)}</td>
+          <td className="delivery-accent pct">{pct(feature.share)}</td>
         </tr>)}</tbody></table></div>
       {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "还没有有数据的完成交付会话"}</p>}
-    </section>
-    <section className="delivery-card"><h2>会话明细 <span>点击查看每仓行归属证据</span></h2>
+      <p className="delivery-muted">排序:会话数降序 → 工作行降序。占比=首轮提交变更行 ÷ 全部提交变更行(增删均计),跨会话按工作行加权;一次定位/验证/解决按会话归属特性计。</p>
+    </section>}
+    {dim === "session" && <section className="delivery-card"><h2>按会话 <span>点击行查看该会话的行归属证据</span></h2>
       <div className="delivery-filters">
         <AnalysisFilter label="特性" value={module} onChange={setModule} items={[{ value: "*", label: "全部特性" },
           ...features.map(feature => ({ value: feature.module, label: feature.module }))]} />
         <Input aria-label="搜索会话" placeholder="搜索会话 ID、标题或特性" value={query} onChange={e => setQuery(e.target.value)} />
       </div>
-      <div className="delivery-table-scroll"><table><thead><tr><th>会话</th><th>特性</th><th>一次生成占比</th><th>达标</th><th>首轮 / 返工 / 平台外(行)</th><th>收口时间</th></tr></thead>
-        <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id}>
+      <div className="delivery-table-scroll"><table><thead><tr><th>会话</th><th>特性</th><th>一次解决</th><th>90%AI生成达标</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮 / 返工 / 平台外(工作行)</th><th>检视批次</th><th>收口时间</th></tr></thead>
+        <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id} style={{ cursor: "pointer" }} onClick={() => setSelected(row.id)}>
           <td><button className="delivery-task-link" onClick={() => setSelected(row.id)}><b>{row.id}</b><span>{row.title}</span></button></td>
           <td><button className="delivery-task-link" aria-pressed={module === row.module}
-            onClick={() => setModule(module === row.module ? "*" : row.module)}>{row.module}</button></td>
-          <td className="delivery-accent">{percent(row.share)}</td>
-          <td>{row.pass ? "达标" : "未达标"}</td>
+            onClick={e => { e.stopPropagation(); setModule(module === row.module ? "*" : row.module); }}>{row.module}</button></td>
+          <td>{row.solved_pass ? <span className="font-semibold text-success">✓</span> : <span className="font-semibold text-danger">✗</span>}</td>
+          <td>{row.pass ? <span className="font-semibold text-success">达标</span> : <span className="font-semibold text-danger">未达标</span>}</td>
+          <td>{row.localization_pass ? <span className="font-semibold text-success">✓ 一版</span> : <span title="报告多于一版">✗ 多版</span>}</td>
+          <td>{row.verify_pass ? <span className="font-semibold text-success">✓</span> : <span title="答过「验证发现问题」">✗</span>}</td>
+          <td className="delivery-accent pct">{pct(row.share)}</td>
           <td>{num(row.lines.first)} / {num(row.lines.rework)} / {num(row.lines.external)}</td>
-          <td>{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
+          <td>{row.reviews}</td>
+          <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
         </tr>)}</tbody></table></div>
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "当前条件下没有会话"}</p>}
-    </section>
+    </section>}
+    {dim === "repo" && <section className="delivery-card"><h2>按代码仓 <span>只呈现代码衍生指标;一次定位/验证/解决是会话级裁决,不设仓维度</span></h2>
+      <div className="delivery-table-scroll"><table><thead><tr><th>代码仓</th><th>涉及会话</th><th>首次生成占比(加权)</th><th>返工工作行</th><th>平台外工作行</th></tr></thead>
+        <tbody>{repos.map((repo: IssueOnceGeneratedRepoRow) => <tr key={repo.repo}>
+          <td className="wrap"><b>{repo.repo}</b></td>
+          <td>{repo.sessions}</td>
+          <td className="delivery-accent pct">{pct(repo.share)}</td>
+          <td>{num(repo.rework)}</td>
+          <td className="text-muted-foreground">{num(repo.external)}</td>
+        </tr>)}</tbody></table></div>
+      {!repos.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "还没有有数据的完成交付会话"}</p>}
+      <p className="delivery-muted">多仓会话按仓各计一次(涉及会话合计可大于会话总数);仓维度只汇总工作行与占比,过程率留在会话/特性维度。占比=该仓首轮变更行 ÷ 该仓全部变更行,跨会话求和后相除;纯删除交付正常计分。</p>
+    </section>}
+    <details className="delivery-method" style={{ marginTop: 18 }}><summary style={{ cursor: "pointer" }}>统计口径与数据边界</summary>
+      <p>分母=完成交付(有单、结论 delivered)且有统计数据(伴生快照在场且有工作变更行)的会话;待算、早于起算日期(2026-09-20)的会话不进分母。一次定位率/一次验证率/一次解决率与既有口径同源(分母=完成交付全集),呈现于 KPI 瓦片。</p>
+      <p>首次生成占比(工作量口径):每个非合并提交的变更行 = 新增行 + 删除行(删除同样计为正向工作量,源码扩展名白名单内);占比 = 首轮提交变更行 ÷ 全部提交变更行。返工边界 = 首个反馈事件(平台检视批次送出、流水线红灯进入修复、环境验证发现问题)所回应的那笔推送,其后的提交计返工;无反馈事件则全部计首轮;平台外(人工)提交计入分母。纯删除交付正常计分。多仓会话按工作行加权;达标线是参数(当前 90%)。</p>
+      <p>统计在会话收口后后台计算,稍后刷新可见;这不是代码质量评分,覆盖不足时结合会话明细解读。</p>
+    </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
       <SheetContent className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]">
-        <SheetHeader><SheetTitle>{selected} · 一次生成归属</SheetTitle>
-          <SheetDescription>{selectedRow ? `${selectedRow.title} · 占比 ${percent(selectedRow.share)}` : "行归属证据"}</SheetDescription></SheetHeader>
+        <SheetHeader><SheetTitle>{selected} · 首次生成归属</SheetTitle>
+          <SheetDescription>{selectedRow ? `${selectedRow.title} · 占比 ${pct(selectedRow.share)}` : "行归属证据"}</SheetDescription></SheetHeader>
         <div className="delivery-detail-body">{selected
           && <IssueCodeOriginPanel id={selected} threshold={stats?.threshold_percent} />}</div>
       </SheetContent>

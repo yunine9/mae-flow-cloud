@@ -363,64 +363,20 @@ export function issueFeatureRows(
     || a.module.localeCompare(b.module, "zh-Hans-CN"));
 }
 
-export interface IssueFeatureOnceRates {
-  /** 分母:该特性完成交付的会话数(与概览头部一次率同口径)。 */
-  total: number;
-  localization: number | null;
-  repair: number | null;
-}
-
-/** 每特性一次率(特性总账表列,2026-09-18):按 stats 端点的
- * per_session 明细(服务端已滤成完成交付全集)按会话归到特性。
- * 分母 0 → null,前端显示 —。 */
-export function issueFeatureOnceRates(
-  issues: ReadonlyArray<{ id: string; module?: string }>,
-  perSession: ReadonlyArray<{
-    id: string;
-    localization_pass: boolean;
-    repair_pass: boolean;
-  }>,
-): Map<string, IssueFeatureOnceRates> {
-  const moduleOfId = new Map(
-    issues.map((issue) => [issue.id, issueFeatureKey(issue)]),
-  );
-  const acc = new Map<string, {
-    total: number;
-    localization: number;
-    repair: number;
-  }>();
-  for (const row of perSession) {
-    const key = moduleOfId.get(row.id);
-    if (!key) continue;
-    const bucket = acc.get(key) ?? { total: 0, localization: 0, repair: 0 };
-    bucket.total += 1;
-    if (row.localization_pass) bucket.localization += 1;
-    if (row.repair_pass) bucket.repair += 1;
-    acc.set(key, bucket);
-  }
-  const percent = (passed: number, total: number): number | null =>
-    total ? Math.round((passed / total) * 1000) / 10 : null;
-  return new Map([...acc.entries()].map(([key, bucket]) => [key, {
-    total: bucket.total,
-    localization: percent(bucket.localization, bucket.total),
-    repair: percent(bucket.repair, bucket.total),
-  }]));
-}
-
-
-// ---- 一次生成达标率的特性聚合(ADR-0044,工单 #340:交付分析「问题
-// 处理」页签的特性视图;与 issueFeatureRows 同一归类键) ----
-
 export interface OnceGeneratedFeatureRow {
   module: string;
   /** 会话数(分母=该特性有数据的完成交付会话)。 */
   sessions: number;
-  /** 达标会话数(单会话占比 ≥ 达标线)。 */
-  passed: number;
-  /** 会话级达标率;分母 0 → null,前端显示 —。 */
+  /** 一次解决率(定位与验证双一次的会话占比)。 */
+  solved_rate: number | null;
+  /** 会话级达标率(占比 ≥ 达标线的会话占比)。 */
   pass_rate: number | null;
-  /** 行数加权的特性一次生成占比(与单会话占比同一口径:首轮行 ÷
-   *  全部留存源码行,跨会话求和后相除)。分母 0 → null。 */
+  /** 一次定位率(报告一版过)。 */
+  localization_rate: number | null;
+  /** 一次验证率(验证不通过次数=0)。 */
+  verify_rate: number | null;
+  /** 行数加权的特性首次生成占比(首轮工作行 ÷ 全部工作行,跨会话
+   *  求和后相除)。分母 0 → null。 */
   share: number | null;
   total_lines: number;
 }
@@ -434,19 +390,27 @@ export function onceGeneratedFeatureRows(
     module: string;
     share: number;
     pass: boolean;
+    localization_pass: boolean;
+    verify_pass: boolean;
+    solved_pass: boolean;
     lines: { first: number; rework: number; external: number };
   }>,
 ): OnceGeneratedFeatureRow[] {
   const groups = new Map<string, {
     sessions: number; passed: number;
+    localization: number; verify: number; solved: number;
     first: number; total: number;
   }>();
   for (const row of rows) {
     const key = row.module?.trim() || "未分类";
     const bucket = groups.get(key)
-      ?? { sessions: 0, passed: 0, first: 0, total: 0 };
+      ?? { sessions: 0, passed: 0, localization: 0, verify: 0, solved: 0,
+        first: 0, total: 0 };
     bucket.sessions += 1;
     if (row.pass) bucket.passed += 1;
+    if (row.localization_pass) bucket.localization += 1;
+    if (row.verify_pass) bucket.verify += 1;
+    if (row.solved_pass) bucket.solved += 1;
     bucket.first += row.lines.first;
     bucket.total += row.lines.first + row.lines.rework + row.lines.external;
     groups.set(key, bucket);
@@ -456,8 +420,10 @@ export function onceGeneratedFeatureRows(
   return [...groups.entries()].map(([module, bucket]) => ({
     module,
     sessions: bucket.sessions,
-    passed: bucket.passed,
+    solved_rate: percent(bucket.solved, bucket.sessions),
     pass_rate: percent(bucket.passed, bucket.sessions),
+    localization_rate: percent(bucket.localization, bucket.sessions),
+    verify_rate: percent(bucket.verify, bucket.sessions),
     share: percent(bucket.first, bucket.total),
     total_lines: bucket.total,
   })).sort((a, b) => b.sessions - a.sessions || b.total_lines - a.total_lines

@@ -212,6 +212,7 @@ import {
   ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT,
   readCodeOriginSnapshot,
   type IssueCodeOriginSnapshot,
+  type IssueOnceGeneratedRepoRow,
   type IssueOnceGeneratedSession,
   type IssueOnceGeneratedStats,
 } from "./codeOrigin.ts";
@@ -232,6 +233,7 @@ import {
   dropReview,
   renderReviewNotes,
   reviewStore,
+  snapshotAnalysisVersion,
   submitReviews as submitReviewLedger,
 } from "./reviews.ts";
 import {
@@ -494,6 +496,9 @@ export interface IssueCreateInput {
   reporter?: string;
   title: string;
   description?: string;
+  /** 发起备注(DTS 列表随单填写):原样进登记元信息,AI 开场被要求
+   * 优先读;手工登记不带。trim 后为空 = 没填,不落字段。 */
+  remark?: string;
   source?: IssueSource;
   ticket?: string;
   repoUrl?: string;
@@ -1196,11 +1201,13 @@ export class IssueFlowService {
     };
   }
 
-  /** 一次生成达标率读侧(ADR-0044,#338):终态伴生快照(code-origin.json)
+  /** 一次生成达标率读侧(ADR-0045,#342):终态伴生快照(code-origin.json)
    *  的聚合。分母=有数据(伴生在场且留存源码行>0)的完成交付会话;伴生
    *  缺席按结论时刻分「待算」(支持期内:通道在途或曾丢失,清扫器兜底)
    *  与「不支持期」(起算日期前终态,永不回填)。达标线是参数(settings
-   *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。 */
+   *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。
+   *  一次定位/验证/解决三根过程率轴与 /issues/stats 同源(this.onceRates
+   *  的既有判定),分母=完成交付全集——不随伴生在缺漂移,两处数字永一致。 */
   onceGeneratedStats(): IssueOnceGeneratedStats {
     const runtime = this.options.settings?.runtime?.();
     const configured = Number(
@@ -1209,6 +1216,20 @@ export class IssueFlowService {
     const threshold = Number.isFinite(configured) && configured > 0 && configured <= 100
       ? configured
       : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
+    // 三根过程率轴:与团队页既有一次率同一份判定(口径不分家);
+    // 解决 = 定位与验证双一次(ADR-0045 公式)。
+    const once = this.onceRates();
+    const solvedPassed = once.per_session
+      .filter((row) => row.localization_pass && row.repair_pass).length;
+    const percent = (passed: number, total: number): number | null =>
+      total ? Math.round((passed / total) * 1000) / 10 : null;
+    const localization = { passed: once.localization.passed, rate: once.localization.rate };
+    const verify = { passed: once.repair.passed, rate: once.repair.rate };
+    const solved = { passed: solvedPassed, rate: percent(solvedPassed, once.total) };
+    // 定位/验证/解决按会话布尔:per_session 明细按会话号回填,供特性表
+    // 与按会话表直接消费(无一次率明细的会话如实记 false)。
+    const axesById = new Map(once.per_session.map((row) => [row.id, row]));
+
     const sessions: IssueOnceGeneratedSession[] = [];
     let pending = 0;
     let unsupported = 0;
@@ -1230,6 +1251,7 @@ export class IssueFlowService {
         noCode += 1;
         continue;
       }
+      const axes = axesById.get(live.id);
       sessions.push({
         id: live.id,
         title: state.title,
@@ -1242,17 +1264,54 @@ export class IssueFlowService {
           rework: aggregate.rework,
           external: aggregate.external,
         },
+        localization_pass: axes?.localization_pass ?? false,
+        verify_pass: axes?.repair_pass ?? false,
+        solved_pass: axes ? axes.localization_pass && axes.repair_pass : false,
       });
     }
     sessions.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));
     const total = sessions.length;
     const passed = sessions.filter((row) => row.pass).length;
+    // 按代码仓跨会话聚合:只出代码衍生指标;多仓会话按仓各计一次。
+    const repoMap = new Map<string, IssueOnceGeneratedRepoRow>();
+    for (const live of this.live.values()) {
+      const state = live.state;
+      if (state.status !== "archived") continue;
+      if (state.conclusion?.kind !== "delivered") continue;
+      if (!state.ticket?.trim()) continue;
+      const snapshot = readCodeOriginSnapshot(live.root, live.id);
+      if (!snapshot) continue;
+      for (const repo of snapshot.by_repo) {
+        if ("unavailable" in repo) continue;
+        // 零工作行仓段(无源码交付)与 per_session 的 no_code 口径对齐:不计。
+        if (repo.lines.first + repo.lines.rework + repo.lines.external <= 0) continue;
+        const bucket = repoMap.get(repo.repo) ?? {
+          repo: repo.repo, sessions: 0,
+          first: 0, rework: 0, external: 0, total: 0, share: null,
+        };
+        bucket.sessions += 1;
+        bucket.first += repo.lines.first;
+        bucket.rework += repo.lines.rework;
+        bucket.external += repo.lines.external;
+        bucket.total = bucket.first + bucket.rework + bucket.external;
+        bucket.share = bucket.total
+          ? Math.round((bucket.first / bucket.total) * 1000) / 10
+          : null;
+        repoMap.set(repo.repo, bucket);
+      }
+    }
+    const by_repo = [...repoMap.values()].sort((a, b) =>
+      b.total - a.total || a.repo.localeCompare(b.repo, "zh-Hans-CN"));
     return {
       threshold_percent: threshold,
       supported_since: ISSUE_CODE_ORIGIN_SINCE,
       total,
       passed,
       rate: total ? Math.round((passed / total) * 1000) / 10 : null,
+      localization,
+      verify,
+      solved,
+      by_repo,
       pending,
       unsupported,
       no_code: noCode,
@@ -1595,6 +1654,7 @@ export class IssueFlowService {
       updated_at: now,
       title,
       description: input.description?.trim() ?? "",
+      ...(input.remark?.trim() ? { remark: input.remark.trim() } : {}),
       source: input.source ?? "manual",
       ...(ticket ? { ticket } : {}),
       ...(repoUrls.length
@@ -4005,7 +4065,11 @@ export class IssueFlowService {
 
     if (verdict === "fail") {
       // env_verify 不通过:回退问题分析(轮次+1,回退细节在 fixedRollback)。
+      // 打回也是报告重写的来源(与检视修改型同账):回退前把当时的报告
+      // 冻结成版本,AI 重写后 live 即新版;报告最终没改则与快照同文,
+      // 读侧去重不出假版本。报告不在场/写失败不挡回退(fail-open)。
       const reason = notes || decision;
+      snapshotAnalysisVersion(live.root);
       fixedRollback(state,
         `${VERIFY_FAIL_NOTE_PREFIX}:${reason.split("\n")[0]}`);
       saveState(live.root, state);

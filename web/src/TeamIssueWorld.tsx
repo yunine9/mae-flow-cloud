@@ -23,15 +23,13 @@ import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
-  type IssueOnceGenerated,
-  type IssueOnceRate,
   type IssueStatus,
   type IssueSummary,
 } from "./api";
 import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Database } from "lucide-react";
-import { STALE_AFTER_MS, ISSUE_DELIVERY_STAGE_BUCKETS, isIssueVerifying, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, issueStageBucketMatch, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
+import { STALE_AFTER_MS, ISSUE_DELIVERY_STAGE_BUCKETS, isIssueVerifying, issueDeliveryBreakdown, issueFeatureKey, issueFeatureRows, issueStageBucketMatch, type IssueDeliveryBreakdown, type IssueFeatureRow } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -87,29 +85,20 @@ const METRIC_TONE = {
 } as const;
 
 /** 一次率显示口径(瓦片与总账表列共用):null/缺席=分母 0,显示 —。 */
-const rateText = (rate: number | null | undefined): string =>
-  rate == null ? "—" : `${rate}%`;
-
 /** 特性总账表(2026-09-18 原型四稿拍板折入):首行=全部特性总账,
  * 默认只显首行,展开逐特性一行横向对比(处理中降序,issueFeatureRows
  * 已排好)。首行任意处或箭头按钮切换展开;特性行点击=概览格筛选
  * (f:<module>,与阶段/状态格同一套单选格语义,联动下方现场)。
- * 一次定位/一次修复两列与头部瓦片同口径(只数该特性完成交付会话,
- * 分母 0 显示 —),总账行即全局两率。 */
-function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnceRates }: {
+ * (2026-09-20 修订,ADR-0045):一次定位/一次验证/一次解决等交付质量
+ * 比率撤到交付分析「问题处理」页签,这里只留过程计数——指挥页管推进,
+ * 复盘页管质量。 */
+function FeatureLedger({ rows, stats, cell, onSelectCell }: {
   rows: IssueFeatureRow[];
   stats: IssueDeliveryBreakdown;
   cell: string;
   onSelectCell: (next: string) => void;
-  onceRates?: IssueOnceRate;
-  featureOnceRates: Map<string, IssueFeatureOnceRates>;
 }) {
   const [open, setOpen] = useState(false);
-  const onceCell = (rate: number | null | undefined, denominator: number) => (
-    <td className={cn("px-3 py-2 text-right tabular-nums",
-      rate == null ? "text-muted-foreground" : "font-semibold text-success")}
-      title={`分母 ${denominator} 个完成交付会话`}>{rateText(rate)}</td>
-  );
   return <section aria-label="特性总账" className="min-w-0 overflow-hidden rounded-lg border border-line bg-surface">
     <table className="w-full border-collapse text-[13px]">
       <thead>
@@ -119,10 +108,6 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">待答复</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">需介入</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">已闭环</th>
-          <th scope="col" className="px-3 py-1.5 text-right font-semibold"
-            title="一次定位成功率:分析报告只生成一版即一次定位;只数该特性完成交付会话">一次定位</th>
-          <th scope="col" className="px-3 py-1.5 text-right font-semibold"
-            title="一次修复成功率:环境验证零失败即一次修复;只数该特性完成交付会话">一次修复</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">合计</th>
         </tr>
       </thead>
@@ -151,13 +136,10 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
           <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.waiting > 0 && "text-attention")}>{stats.waiting}</td>
           <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.failed > 0 && "text-danger")}>{stats.failed}</td>
           <td className="px-3 py-2 text-right font-semibold tabular-nums text-success">{stats.closed}</td>
-          {onceCell(onceRates?.localization.rate, onceRates?.total ?? 0)}
-          {onceCell(onceRates?.repair.rate, onceRates?.total ?? 0)}
           <td className="px-3 py-2 text-right font-semibold tabular-nums">{stats.total}</td>
         </tr>
         {open && rows.map((row) => {
           const selected = cell === `f:${row.module}`;
-          const rates = featureOnceRates.get(row.module);
           return <tr key={row.module}
             className={cn("cursor-pointer border-b border-line/60 transition-colors last:border-b-0 hover:bg-primary/5",
               selected && "bg-primary/10")}
@@ -169,8 +151,6 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
             <td className={cn("px-3 py-2 text-right tabular-nums", row.waiting > 0 && "font-semibold text-attention")}>{row.waiting}</td>
             <td className={cn("px-3 py-2 text-right tabular-nums", row.failed > 0 && "font-semibold text-danger")}>{row.failed}</td>
             <td className="px-3 py-2 text-right tabular-nums text-success">{row.closed}</td>
-            {onceCell(rates?.localization, rates?.total ?? 0)}
-            {onceCell(rates?.repair, rates?.total ?? 0)}
             <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{row.total}</td>
           </tr>;
         })}
@@ -179,14 +159,8 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
   </section>;
 }
 
-export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
+export function TeamIssueWorld({ issues }: {
   issues: IssueSummary[];
-  /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
-   * 缺席=统计暂不可用(接口失败/问题流未启用),统计格显示 —。 */
-  onceRates?: IssueOnceRate;
-  /** 一次生成达标率(ADR-0044,服务端 /issues/once-generated 聚合):
-   * 终态伴生快照的行级归属聚合,分母=有数据的完成交付会话;缺席同上。 */
-  onceGenerated?: IssueOnceGenerated;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<IssueScope>("all");
@@ -200,11 +174,6 @@ export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
 
   const stats = useMemo(() => issueDeliveryBreakdown(issues), [issues]);
   const featureRows = useMemo(() => issueFeatureRows(issues), [issues]);
-  // 每特性一次率:按 stats 端点 per_session 明细(完成交付全集)归到
-  // 特性;总账表列与头部瓦片同一口径,分母 0 显示 —。
-  const featureOnceRates = useMemo(() => issueFeatureOnceRates(
-    issues, onceRates?.per_session ?? [],
-  ), [issues, onceRates]);
   // 现场队列只收处理中的会话:已闭环/已取消都只进档案(与需求侧
   // isCurrentTeamTask 的现场口径同构)——概览格计数(active)与队列行数
   // 因此严格一致,点格见几行就是几行。
@@ -212,31 +181,6 @@ export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
     issue.status !== "canceled" && issue.status !== "archived"), [issues]);
   const owners = useMemo(() =>
     [...new Set(active.map((issue) => issue.account))], [active]);
-
-  // 一次率二轴瓦片:数字只来自端点(rate=null=分母 0,显示 —);
-  // hover 给分子/分母与口径一句话(与既有 title 提示同款,不养弹层)。
-  const onceRateTitle = (axis: "localization" | "repair"): string => {
-    if (!onceRates) return "一次率统计暂不可用";
-    const passed = onceRates[axis].passed;
-    return axis === "localization"
-      ? `一次定位 ${passed} / 完成交付 ${onceRates.total}`
-        + "——分析报告只生成一版即一次定位；检视提出修改会生成新版本。"
-      : `一次修复 ${passed} / 完成交付 ${onceRates.total}`
-        + "——点过「验证发现问题」即非一次修复。";
-  };
-
-  // 一次生成达标率瓦片(ADR-0044):数字只来自端点;hover 的口径说明
-  // 与起算日期是规格拍板的「小问号」(与既有 title 提示同款,不养弹层)。
-  const onceGeneratedTitle = (): string => {
-    if (!onceGenerated) return "一次生成统计暂不可用";
-    return `达标 ${onceGenerated.passed} / 有数据 ${onceGenerated.total}`
-      + "——单会话占比=首轮生成且存活到合入的源码行 ÷ 全部留存源码行"
-      + "(返工行与平台外改的行都算 AI 没一次生成,多仓按行数加权),"
-      + `占比 ≥ ${onceGenerated.threshold_percent}% 判达标(线可配)。`
-      + `${onceGenerated.pending} 个会话待算、`
-      + `${onceGenerated.unsupported} 个早于 ${onceGenerated.supported_since}`
-      + " 起算日不计入;逐会话明细见交付分析「问题处理」页签。";
-  };
 
   const needle = query.trim().toLocaleLowerCase();
   const visible = useMemo(() => active.filter((issue) => {
@@ -305,11 +249,14 @@ export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
     <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
       <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
         <div className="grid min-w-0 gap-[3px]">
-          <h2 className="m-0 text-lg text-text-strong">问题处理概览</h2>
+          <h2 className="m-0 flex items-center gap-3 text-lg text-text-strong">问题处理概览
+            <a href="/deliveryAnalysis" className="text-[13px] font-normal text-primary underline-offset-2 hover:underline"
+              title="一次定位率/一次验证率/一次解决率/首次生成占比/90%AI生成达标率等交付统计已移至交付分析「问题处理」页签">交付统计 →</a>
+          </h2>
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
-          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}，一次生成达标率 ${rateText(onceGenerated?.rate)}`}>
+          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
@@ -320,17 +267,11 @@ export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{stats.closed}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">已闭环</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
-          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("localization")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.localization.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次定位成功率</small></span>
-          <i aria-hidden className="h-[30px] w-px bg-line" />
-          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("repair")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.repair.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次修复成功率</small></span>
-          <i aria-hidden className="h-[30px] w-px bg-line" />
-          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceGeneratedTitle()}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceGenerated?.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次生成达标率</small></span>
         </div>
       </header>
       <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
         <FeatureLedger rows={featureRows} stats={stats} cell={cell}
-          onSelectCell={selectCell} onceRates={onceRates}
-          featureOnceRates={featureOnceRates} />
+          onSelectCell={selectCell} />
         <section aria-labelledby="issue-delivery-stage-title" className="grid min-w-0 grid-cols-[102px_minmax(0,1fr)] items-center gap-3">
           <div className="grid gap-0.5"><strong id="issue-delivery-stage-title" className="text-[13.5px] text-text-strong">阶段</strong>
             <small className="text-[13px] text-muted-foreground">当前所处流程</small></div>

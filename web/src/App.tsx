@@ -29,9 +29,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  createUser, deleteUser, getBuildInfo, getIssueOnceGenerated, getIssueOnceRates, getKnowledgeInsights, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
-  type AuthUser, type IssueOnceGenerated, type IssueOnceRate, type IssueSummary, type TaskStatus, type TaskSummary,
+  type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
 } from "./api";
 import type { IssueChildTab } from "./issues/IssueBoard";
@@ -720,11 +720,6 @@ export function App() {
   // ADR-0031):只喂侧栏「问题处理」父行徽章。admin 的同名请求返回的
   // 是全量(服务端只对非 admin 收窄),与 teamIssues 重复,故 admin 不拉。
   const [myIssues, setMyIssues] = useState<IssueSummary[]>([]);
-  // 一次率二轴(团队问题页签统计块):旁栏数据,拿不到保留上次结果,
-  // 缺席时统计格显示 —(与问题列表同一条 allSettled 容错纪律)。
-  const [issueOnceRates, setIssueOnceRates] = useState<IssueOnceRate>();
-  // 一次生成达标率(ADR-0044):终态伴生快照的读侧聚合,同一容错纪律。
-  const [issueOnceGenerated, setIssueOnceGenerated] = useState<IssueOnceGenerated>();
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
   const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
@@ -929,23 +924,16 @@ export function App() {
         // "数据更新中断、尚未取得任务数据"(2026-09-06 用户在演练现场实锤)。
         // 本人问题列表也是旁栏,且只对开发成员拉:admin 的 GET /issues 返回
         // 全量,与 scope=all 重复,徽章又不挂 admin(见 IssueNavGroup)。
-        const [tasksResult, reviewsResult, issuesResult, onceRatesResult,
-          onceGeneratedResult, myIssuesResult] = await Promise.allSettled([
-          listTasks(), listMyReviews(), listAllIssues(), getIssueOnceRates(),
-          getIssueOnceGenerated(),
-          session?.role === "admin"
-            ? Promise.resolve<IssueSummary[]>([]) : listIssues(),
-        ]);
+        const [tasksResult, reviewsResult, issuesResult, myIssuesResult] =
+          await Promise.allSettled([
+            listTasks(), listMyReviews(), listAllIssues(),
+            session?.role === "admin"
+              ? Promise.resolve<IssueSummary[]>([]) : listIssues(),
+          ]);
         if (tasksResult.status === "rejected") throw tasksResult.reason;
         setTasks(tasksResult.value.sort(byUrgency));
         if (reviewsResult.status === "fulfilled") setMyReviews(reviewsResult.value);
         if (issuesResult.status === "fulfilled") setTeamIssues(issuesResult.value);
-        if (onceRatesResult.status === "fulfilled") {
-          setIssueOnceRates(onceRatesResult.value);
-        }
-        if (onceGeneratedResult.status === "fulfilled") {
-          setIssueOnceGenerated(onceGeneratedResult.value);
-        }
         if (myIssuesResult.status === "fulfilled") setMyIssues(myIssuesResult.value);
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
@@ -1540,7 +1528,7 @@ export function App() {
           <TeamWorldTabs domain="issue" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
             {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
-              <TeamIssueWorld issues={teamIssues} onceRates={issueOnceRates} onceGenerated={issueOnceGenerated} />
+              <TeamIssueWorld issues={teamIssues} />
             </TabsContent> : <TabsContent value="archive" className="contents">
               <TeamIssueArchive issues={teamIssues} />
             </TabsContent>}
