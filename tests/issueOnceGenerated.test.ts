@@ -121,10 +121,11 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.deepEqual(body.localization, { passed: 5, rate: 100 });
     assert.deepEqual(body.verify, { passed: 5, rate: 100 });
     assert.deepEqual(body.solved, { passed: 5, rate: 100 });
-    assert.equal(body.by_repo.length, 1, "同仓跨会话归组");
-    const repoRow = (body.by_repo as Array<{
+    const repoRows = body.by_repo as Array<{
       repo: string; sessions: number; first: number; total: number; share: number | null;
-    }>)[0]!;
+    }>;
+    assert.equal(repoRows.length, 1, "同仓跨会话归组");
+    const repoRow = repoRows[0]!;
     assert.equal(repoRow.sessions, 2, "多会话按仓各计一次");
     assert.equal(repoRow.first, 140);
     assert.equal(repoRow.total, 200);
@@ -171,28 +172,35 @@ test("路由 code-origin:伴生原样返回;缺席如实 404", async () => {
 
 test("onceGeneratedFeatureRows:归组/加权占比/达标率/排序/空白归未分类", () => {
   const rows = onceGeneratedFeatureRows([
-    { module: "网关", share: 95, pass: true,
+    { module: "网关", share: 95, pass: true, localization_pass: false,
+      verify_pass: true, solved_pass: false,
       lines: { first: 90, rework: 5, external: 5 } },
-    { module: "网关", share: 50, pass: false,
+    { module: "网关", share: 50, pass: false, localization_pass: true,
+      verify_pass: true, solved_pass: false,
       lines: { first: 50, rework: 50, external: 0 } },
-    { module: "  ", share: 100, pass: true,
+    { module: "  ", share: 100, pass: true, localization_pass: true,
+      verify_pass: true, solved_pass: true,
       lines: { first: 40, rework: 0, external: 0 } },
-    { module: "计费", share: 30, pass: false,
+    { module: "计费", share: 30, pass: false, localization_pass: true,
+      verify_pass: false, solved_pass: false,
       lines: { first: 30, rework: 60, external: 10 } },
   ]);
   assert.deepEqual(rows, [
     {
-      module: "网关", sessions: 2, passed: 1, pass_rate: 50,
+      module: "网关", sessions: 2, pass_rate: 50,
+      solved_rate: 0, localization_rate: 50, verify_rate: 100,
       share: 70, total_lines: 200,
     },
     {
-      module: "计费", sessions: 1, passed: 0, pass_rate: 0,
+      module: "计费", sessions: 1, pass_rate: 0,
+      solved_rate: 0, localization_rate: 100, verify_rate: 0,
       share: 30, total_lines: 100,
     },
     {
-      module: "未分类", sessions: 1, passed: 1, pass_rate: 100,
+      module: "未分类", sessions: 1, pass_rate: 100,
+      solved_rate: 100, localization_rate: 100, verify_rate: 100,
       share: 100, total_lines: 40,
     },
-  ], "排序:会话数降序 → 行数降序(计费 100 行在未分类 40 行前)→ 名称");
+  ], "排序:会话数降序 → 工作行降序(计费 100 行在未分类 40 行前)→ 名称;解决率=定位∧验证");
   assert.deepEqual(onceGeneratedFeatureRows([]), []);
 });
