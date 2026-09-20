@@ -589,7 +589,7 @@ export function TaskWorkspace({
   const [reviewPeople, setReviewPeople] = useState<Array<{
     username: string; display_name?: string;
   }>>([]);
-  const [reviewer, setReviewer] = useState("");
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewResult, setReviewResult] = useState("");
   const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
@@ -924,7 +924,7 @@ export function TaskWorkspace({
     void listCommitters().then((users) => {
       if (!alive) return;
       setCommitters(users);
-      setReviewer((current) => current || users[0]?.username || "");
+      setReviewers([]);
     }).catch((reason) => {
       if (alive) setReviewResult(reason instanceof Error
         ? reason.message : "Committer 名单读取失败");
@@ -942,19 +942,28 @@ export function TaskWorkspace({
   }, [canRequestReview, task.id]);
 
   async function inviteReview() {
-    if (!reviewer || reviewBusy) return;
+    if (!reviewers.length || reviewBusy) return;
     setReviewBusy(true); setReviewResult("");
     try {
-      const result = await requestCommitterReview(task.id, reviewer);
-      setReviewResult(result.delivered
-        ? `已通知 ${reviewer}`
-        : `未送达：${result.last_error || "通知服务暂无回执"}`);
-      setTaskReviews((current) => [
-        result,
-        ...current.filter((item) => item.id !== result.id),
-      ]);
-    } catch (reason) {
-      setReviewResult(reason instanceof Error ? reason.message : "邀请发送失败");
+      const selected = [...new Set(reviewers)];
+      const outcomes = await Promise.allSettled(selected.map(account => requestCommitterReview(task.id, account)));
+      const received: ReviewRequest[] = [];
+      const failed: string[] = [];
+      const messages = outcomes.map((outcome, index) => {
+        const account = selected[index];
+        const name = committers.find(user => user.username === account)?.display_name ?? account;
+        if (outcome.status === "fulfilled") {
+          received.push(outcome.value);
+          if (outcome.value.delivered) return `${name}：已通知`;
+          failed.push(account);
+          return `${name}：未送达（${outcome.value.last_error || "通知服务暂无回执"}）`;
+        }
+        failed.push(account);
+        return `${name}：${outcome.reason instanceof Error ? outcome.reason.message : "邀请发送失败"}`;
+      });
+      setTaskReviews(current => [...received, ...current.filter(item => !received.some(result => result.id === item.id))]);
+      setReviewers(failed);
+      setReviewResult(messages.join("；") + (failed.length ? "。已保留未成功的人选，可重新发送。" : ""));
     } finally { setReviewBusy(false); }
   }
 
@@ -2637,7 +2646,7 @@ export function TaskWorkspace({
         <DialogContent className="tw-root sm:max-w-[460px]">
           <DialogHeader>
             <DialogTitle>邀请 Committer 检视</DialogTitle>
-            <DialogDescription>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</DialogDescription>
+            <DialogDescription>可多选 Committer，一次发送邀请；邀请不会代替任务责任人的最终决定。</DialogDescription>
           </DialogHeader>
           <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭邀请检视"
             className="absolute top-2 right-2" />}>
@@ -2645,19 +2654,19 @@ export function TaskWorkspace({
           </DialogClose>
           <div className="workspace-invite-content">
             {committers.length > 0 ? (
-              <div className="workspace-review-invite-action">
-                <UserPicker ariaLabel="选择 Committer" value={reviewer}
+              <div className="flex flex-col gap-3">
+                <UserPicker multiple ariaLabel="选择 Committer" value={reviewers}
                   emptyLabel="请选择 Committer"
-                  options={committers} onChange={setReviewer} />
-                <Button type="button" size="sm" disabled={!reviewer || reviewBusy}
+                  options={committers} disabled={reviewBusy} onChange={setReviewers} />
+                <Button type="button" size="sm" disabled={!reviewers.length || reviewBusy}
                   onClick={() => void inviteReview()}>
-                  {reviewBusy ? "发送中…" : "发送邀请"}
+                  {reviewBusy ? "发送中…" : reviewers.length ? `发送邀请（${reviewers.length} 人）` : "发送邀请"}
                 </Button>
               </div>
             ) : <Empty className="p-2.5">
               <EmptyDescription>管理员尚未配置 Committer 名单</EmptyDescription>
             </Empty>}
-            {reviewResult && <small className="committer-result">
+            {reviewResult && <small className="committer-result" role="status">
               {reviewResult}
             </small>}
             {taskReviews.length > 0 && (

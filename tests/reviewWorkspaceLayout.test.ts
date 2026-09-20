@@ -103,8 +103,8 @@ test("邀请他人检视在任务头独立可见，不依赖打开批注面板",
   assert.match(workspace, /task\.status !== "canceled" && <Dialog open/);
   assert.match(workspace, /<DialogContent className="tw-root sm:max-w-\[460px\]">/);
   assert.match(workspace, /<DialogTitle>邀请 Committer 检视<\/DialogTitle>/);
-  assert.match(workspace, /<UserPicker ariaLabel="选择 Committer"/);
-  assert.match(workspace, /reviewBusy \? "发送中…" : "发送邀请"/);
+  assert.match(workspace, /<UserPicker multiple ariaLabel="选择 Committer"/);
+  assert.match(workspace, /发送邀请（\$\{reviewers.length\} 人）/);
 });
 
 test("人员下拉保持紧凑并悬浮展开，宽度跟随触发器", () => {

@@ -1,8 +1,8 @@
 /**
  * 人员选择（票 #211 shadcn 化）：姓名用于阅读，工号仍是身份；几十人时直接搜索。
  *
- * 对外契约不变：UserOption / userLabel / 全部 props 与 onChange(username)
- * 签名原样，消费点零改动。内部从手写组合框换成 shadcn combobox 范式 =
+ * 默认保持单选；multiple 模式接收账号数组，勾选后保留弹层以便连续选择。
+ * UserOption / userLabel 和既有单选消费点保持兼容。内部从手写组合框换成 shadcn combobox 范式 =
  * Popover + Command（cmdk，同 EnvironmentPicker #212）：开合、外点关闭、
  * Escape 交给 Popover；搜索、键盘上下选择、IME 组合期回车保护、空态交给
  * CommandInput/CommandList/CommandItem/CommandEmpty——手写的 document
@@ -12,7 +12,7 @@
  * 不可选；详情行（em）与「姓名（工号）」双行渲染原样保留。
  */
 import { useMemo, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -45,27 +45,27 @@ const userControlClass =
   + "shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] "
   + "focus-visible:ring-ring/50";
 
-export function UserPicker({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-  disabled = false,
-  placeholder = "搜索姓名或工号",
-  emptyLabel = "请选择成员",
-}: {
-  value: string;
+export function UserPicker(props: {
   options: UserOption[];
-  onChange: (username: string) => void;
   ariaLabel: string;
   disabled?: boolean;
   placeholder?: string;
   emptyLabel?: string;
-}) {
+} & ({ multiple: true; value: string[]; onChange: (usernames: string[]) => void }
+  | { multiple?: false; value: string; onChange: (username: string) => void })) {
+  const {
+    options,
+    ariaLabel,
+    disabled = false,
+    placeholder = "搜索姓名或工号",
+    emptyLabel = "请选择成员",
+  } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const selected = options.find((item) => item.username === value)
-    ?? (value ? { username: value } : undefined);
+  const selectedValues = props.multiple ? props.value : props.value ? [props.value] : [];
+  const selectedLabel = selectedValues.map(username => userLabel(
+    options.find(item => item.username === username) ?? { username },
+  )).join("、");
   const shown = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return options;
@@ -83,7 +83,7 @@ export function UserPicker({
         render={<button type="button" disabled={disabled}
           className={`${userControlClass} flex items-center justify-between gap-2 text-left`}
           aria-label={ariaLabel} aria-expanded={open}>
-          <span className="min-w-0 truncate">{selected ? userLabel(selected) : emptyLabel}</span>
+          <span className="min-w-0 truncate">{selectedLabel || emptyLabel}</span>
           <ChevronDown aria-hidden
             className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />
         </button>} />
@@ -96,9 +96,18 @@ export function UserPicker({
           <CommandList aria-label={ariaLabel} className="max-h-44">
             {shown.map((item) => <CommandItem key={item.username}
               value={item.username} disabled={item.disabled}
-              data-checked={item.username === value || undefined}
-              onSelect={() => { onChange(item.username); setOpen(false); setQuery(""); }}
+              data-checked={selectedValues.includes(item.username) || undefined}
+              onSelect={() => {
+                if (props.multiple) {
+                  props.onChange(selectedValues.includes(item.username)
+                    ? selectedValues.filter(value => value !== item.username)
+                    : [...selectedValues, item.username]);
+                } else { props.onChange(item.username); setOpen(false); setQuery(""); }
+              }}
               className="py-2">
+              {props.multiple && <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded border border-input">
+                {selectedValues.includes(item.username) && <Check className="size-3" />}
+              </span>}
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <strong className="truncate text-[12.5px] font-medium text-foreground">
                   {item.display_name ?? item.username}
