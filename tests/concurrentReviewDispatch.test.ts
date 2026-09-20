@@ -55,16 +55,29 @@ test("运行中连续批量交办：立即 steer，批次不混入未来草稿�
   assert.throws(() => service.submitReviews(live.id), /没有待提交/);
 });
 
-test("等待人答复：保留真实决定卡，十批长意见完整持久化，恢复不丢最早一批", async () => {
-  const { service, live, root, messages } = issue("waiting_user");
-  live.state.gate = { kind: "pipeline_evidence", id: "question-1" };
+test("闸挂起提交检视立即开分诊回合(#350):env_verify 卡不再停靠,闸保持原样", () => {
+  const { service, live, messages, root } = issue("waiting_user");
+  live.state.gate = { kind: "env_verify", id: "gate-1", state_version: 1,
+    created_at: new Date().toISOString(),
+    question: { questions: [{ question: "到目标环境验证修复效果", options: [] }] } };
+  add(service, "验证等待中的检视意见:先看这条");
+  const result = service.submitReviews(live.id);
+  assert.equal(messages.length, 1,
+    "env_verify 卡可能等很久,检视意见与验证互不相关,立即递给 AI 分诊");
+  assert.match(messages[0], /检视意见分诊/);
+  assert.match(result.stage_note, /逐条分诊/,
+    "回执不再是「当前问题答复后一起送达」");
+  assert.equal(live.state.gate.id, "gate-1", "闸保持原样:不作废、不清理");
+  assert.equal(loadState(root)!.parked_notices, undefined, "不停靠便签");
+});
+
+test("排队等待：十批长意见完整持久化，恢复不丢最早一批", async () => {
+  const { service, live, root } = issue("queued");
   for (let i = 0; i < 10; i++) {
     add(service, `批次${i}：${"完整原文".repeat(700)}尾部${i}`);
     service.submitReviews(live.id);
   }
-  assert.equal(messages.length, 0);
-  assert.equal(live.state.gate.id, "question-1");
-  assert.equal(live.state.status, "waiting_user");
+  assert.equal(live.state.status, "queued");
   live.state = loadState(root)!;
   assert.equal(live.state.parked_notices.length, 10);
   assert.match(live.state.parked_notices[0], /尾部0/);
