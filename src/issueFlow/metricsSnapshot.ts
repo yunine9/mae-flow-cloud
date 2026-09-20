@@ -31,12 +31,18 @@ import { join, resolve } from "node:path";
 import { durableWriteFileSync } from "../durableWrite.ts";
 import { FeedbackStore } from "../feedbackStore.ts";
 import { createSafeGitView, type SafeGitView } from "../safeGit.ts";
-import { listAnalysisVersions } from "./analysisVersions.ts";
-import { prepareSandbox, type GitCredential, type GitSandbox } from "./issueGit.ts";
 import {
   countVerifyFailures,
-  sentReviewBatches,
-} from "./onceRates.ts";
+  externalHeadObservations,
+  isRedLightCanceledByMerge,
+  isRedLightDiscardedOnHeadMove,
+  isRedLightRepaired,
+  ledgerPushes,
+  ROLLBACK_NOTE,
+  sentReviewOperations,
+} from "./ledgerFacts.ts";
+import { listAnalysisVersions } from "./analysisVersions.ts";
+import { prepareSandbox, type GitCredential, type GitSandbox } from "./issueGit.ts";
 import { reviewStore } from "./reviews.ts";
 import {
   isTerminal,
@@ -263,22 +269,8 @@ export interface IssueMetricsWriteResult {
   degraded: string[];
 }
 
-// ---- 转移账文案的匹配键(与写入点同一份词,改文案连这里一起改) ----
-
-/** 推送账:push_branch 每笔一条「分支已推送 <仓> <分支> @ <提交号>」。 */
-const PUSH_NOTE = /^分支已推送 (\S+) (\S+) @ ([0-9a-f]{7,40})/;
-/** 红灯按失败处理(进入修复分诊/停机)。 */
-const RED_FAILED_NOTE = "流水线失败(";
-/** 红灯随合入取消(9a4d5f75 加的处置结局)。 */
-const MERGE_CANCELED_NOTE = "MR 已合入,旧提交";
-/** 红灯随头变丢弃(9a4d5f75 加的处置结局)。 */
-const HEAD_DISCARDED_NOTE = "旧提交";
-/** 外部头观测(c12c1cf0 加的检查目标跟随条目):文案是「分支头已被
- *  平台外提交 <短码> 取代,检查目标跟随切换(<仓>)」,短码与时刻
- *  (转移账的 at)进明细。 */
-const EXTERNAL_HEAD_COMMIT = /^分支头已被平台外提交 ([0-9a-f]{7,40}) 取代/;
-/** 回退轮次(fixedRollback 的「第 N 轮:原因」)。 */
-const ROLLBACK_NOTE = /^第 \d+ 轮:(.*)$/s;
+// ---- 转移账文案的匹配键:统一住在 ledgerFacts(单一来源),写账文案
+// 要改连那里一起改;这里只消费判定函数与解析结果。 ----
 
 const REASON_MAX = 200;
 const DECISION_MAX = 80;
@@ -418,8 +410,9 @@ export const SOURCE_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /** 文件路径是否算源码(按扩展名白名单):无后缀、整名点文件
- *  (如 .gitignore)与白名单外的后缀都不算。 */
-function isSourcePath(path: string): boolean {
+ *  (如 .gitignore)与白名单外的后缀都不算。一次生成归属层
+ *  (codeOrigin.ts)同源消费,口径单一来源。 */
+export function isSourcePath(path: string): boolean {
   const base = path.split(/[\\/]/).pop() ?? path;
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) return false;
@@ -549,16 +542,7 @@ function fetchBranchTip(
     : { error: `fetch ${branch} 后读不到分支头` };
 }
 
-/** 转移账逐笔推送(仓、分支、提交号),账面顺序即推送顺序。 */
-function ledgerPushes(state: IssueSessionState)
-  : Array<{ repo: string; branch: string; sha: string }> {
-  const pushes: Array<{ repo: string; branch: string; sha: string }> = [];
-  for (const transition of state.transitions ?? []) {
-    const match = PUSH_NOTE.exec(transition.note);
-    if (match) pushes.push({ repo: match[1]!, branch: match[2]!, sha: match[3]! });
-  }
-  return pushes;
-}
+/** 转移账逐笔推送(仓、分支、提交号、时刻),解析在 ledgerFacts。 */
 
 function unavailableRepo(
   repo: string,
@@ -581,7 +565,7 @@ function commitAttributionLayer(
   // 平台推送全清单:转移账「分支已推送」逐笔(每仓的全部提交号,
   // 账面记前 12 位)。state.pushes 只留每仓最新一笔,数不全,不用。
   const platformPrefixes = new Map<string, Set<string>>();
-  for (const push of ledgerPushes(state)) {
+  for (const push of ledgerPushes(state.transitions ?? [])) {
     const set = platformPrefixes.get(push.repo) ?? new Set<string>();
     set.add(push.sha.toLowerCase());
     platformPrefixes.set(push.repo, set);
@@ -745,7 +729,7 @@ function perPushDiffLayer(
   const groups = new Map<string, {
     repo: string; branch: string; shas: string[];
   }>();
-  for (const push of ledgerPushes(state)) {
+  for (const push of ledgerPushes(state.transitions ?? [])) {
     const key = `${push.repo}\u0000${push.branch}`;
     const group = groups.get(key)
       ?? { repo: push.repo, branch: push.branch, shas: [] };
@@ -888,16 +872,14 @@ export function buildIssueMetricsSnapshot(
     : state.repo_url ? [state.repo_url] : [];
   const transitions = state.transitions ?? [];
 
-  // 推送次数与提交号清单:转移账逐笔计。state.pushes 只留每仓最新一笔
-  // (重推覆盖旧账),数不出次数——它是「最新收据」,不是推送历史。
+  // 推送次数与提交号清单:转移账逐笔计(解析在 ledgerFacts)。
+  // state.pushes 只留每仓最新一笔(重推覆盖旧账),数不出次数——它是
+  // 「最新收据」,不是推送历史。
   const pushByRepo = new Map<string, {
     repo: string; push_count: number;
     commits: string[]; branches: Set<string>;
   }>();
-  for (const transition of transitions) {
-    const match = PUSH_NOTE.exec(transition.note);
-    if (!match) continue;
-    const [, repo, branch, sha] = match;
+  for (const { repo, branch, sha } of ledgerPushes(state.transitions ?? [])) {
     const entry = pushByRepo.get(repo) ?? {
       repo, push_count: 0, commits: [], branches: new Set<string>(),
     };
@@ -908,14 +890,14 @@ export function buildIssueMetricsSnapshot(
   }
 
   // 检视三口径分列(CONTEXT「平台检视意见」「MR 评论」词条口径):
-  // 批次与意见条数同一份检视账(sentReviewBatches,与一次率现算共享),
-  // 账读不了两列一起降级,不留半截状态;MR 评论按反馈账 mr_discussion
-  // 记录计。
+  // 批次与意见条数同一份检视账(sentReviewOperations,与一次率现算
+  // 共享),账读不了两列一起降级,不留半截状态;MR 评论按反馈账
+  // mr_discussion 记录计。
   const reviewCounts = section(() => {
-    const batches = sentReviewBatches(reviewStore(root).history());
+    const batches = sentReviewOperations(reviewStore(root).history());
     return {
       platform_review_comments:
-        batches.reduce((sum, ids) => sum + ids.length, 0),
+        batches.reduce((sum, batch) => sum + batch.ids.length, 0),
       review_batches: batches.length,
     };
   });
@@ -973,21 +955,14 @@ export function buildIssueMetricsSnapshot(
     verify_fail_count: countVerifyFailures(transitions),
     pipeline: {
       red_light_rounds: {
-        repaired: countTransitions(
-          state, (note) => note.startsWith(RED_FAILED_NOTE)),
+        repaired: countTransitions(state, isRedLightRepaired),
         canceled_by_merge: countTransitions(
-          state, (note) => note.startsWith(MERGE_CANCELED_NOTE)
-            && note.includes("随合入取消")),
+          state, isRedLightCanceledByMerge),
         discarded_on_head_move: countTransitions(
-          state, (note) => note.startsWith(HEAD_DISCARDED_NOTE)
-            && note.includes("结果丢弃,不作失败处理")),
+          state, isRedLightDiscardedOnHeadMove),
       },
       external_head_observations: (() => {
-        const records: Array<{ sha: string; at: string }> = [];
-        for (const transition of transitions) {
-          const match = EXTERNAL_HEAD_COMMIT.exec(transition.note);
-          if (match) records.push({ sha: match[1]!, at: transition.at });
-        }
+        const records = externalHeadObservations(transitions);
         return { count: records.length, records };
       })(),
     },

@@ -2,23 +2,33 @@
  * 一次率二轴聚合(2026-09-17 拍板,口径唯一权威:CONTEXT「一次修复
  * 成功率」「一次定位成功率」词条)。纯分类:输入各会话的结构化判定
  * 事实,输出分母与两轴分子/比率及逐条明细;不读盘。两个判定口径
- * (countVerifyFailures 验证未通过、sentReviewBatches 检视批次)收在
- * 本模块导出——service.ts 的现算与 metricsSnapshot.ts 的快照投影
- * 调同一份,口径不分家;报告版本数由调用方读分析报告版本账
- * (ADR-0032 起只随修改型检视增长)。终态会话的判定事实也可以来自
- * 冻结快照(metrics.json,ADR-0042):本模块只做纯提取与验形(见
+ * (验证未通过、检视批次)的解析自 2026-09-20 起住在 ledgerFacts
+ * (转移账与检视账的共享事实投影,一次生成归属层同源消费)——本模块
+ * 转发导出保持调用方稳定,口径不分家;报告版本数由调用方读分析报告
+ * 版本账(ADR-0032 起只随修改型检视增长)。终态会话的判定事实也可以
+ * 来自冻结快照(metrics.json,ADR-0042):本模块只做纯提取与验形(见
  * onceRateFactsFromSnapshot),盘上读写仍归调用方。
  */
 
-import {
-  VERIFY_FAIL_NOTE_PREFIX,
-  type IssueConclusionKind,
-  type IssueStatus,
-} from "./state.ts";
+import type { IssueConclusionKind, IssueStatus } from "./state.ts";
+import { sentReviewOperations } from "./ledgerFacts.ts";
 import {
   ISSUE_METRICS_SCHEMA_VERSION,
   type IssueMetricsSnapshot,
 } from "./metricsSnapshot.ts";
+
+// ---- 判定口径(解析在 ledgerFacts,这里转发导出,口径不分家) ----
+
+export { countVerifyFailures } from "./ledgerFacts.ts";
+
+/** 检视批次:一次提交动作=一批,只认经检视通道(issue_review)送出的
+ *  sent 操作。返回每批的意见号清单(意见条数=各批长度合计),批次数=
+ *  数组长度。带时刻的完整投影见 ledgerFacts.sentReviewOperations。 */
+export function sentReviewBatches(
+  history: ReadonlyArray<{ op?: string; via?: string; ids?: string[] }>,
+): string[][] {
+  return sentReviewOperations(history).map((operation) => operation.ids);
+}
 
 /** 单个会话的判定事实(结构化账,判什么列什么,不携带过程细节)。 */
 export interface IssueOnceRateFacts {
@@ -35,32 +45,6 @@ export interface IssueOnceRateFacts {
   report_version_count: number;
   /** 检视提交批次数(只记账,不参与两轴判定)。 */
   review_count: number;
-}
-
-// ---- 判定口径(现算与快照投影共用这一份,口径不分家) ----
-
-/** 验证未通过次数:按转移账的平台文案计(#328)。生产记账是
- *  「第 N 轮:用户环境验证发现问题:…」(回退统一加轮次前缀),开头
- *  匹配永远对不上;包含匹配同时覆盖历史裸前缀旧账。 */
-export function countVerifyFailures(
-  transitions: ReadonlyArray<{ note: string }>,
-): number {
-  return transitions.filter(
-    (transition) => transition.note.includes(VERIFY_FAIL_NOTE_PREFIX),
-  ).length;
-}
-
-/** 检视批次:一次提交动作=一批,只认经检视通道(issue_review)送出的
- *  sent 操作。返回每批的意见号清单(意见条数=各批长度合计),批次数=
- *  数组长度。 */
-export function sentReviewBatches(
-  history: ReadonlyArray<{ op?: string; via?: string; ids?: string[] }>,
-): string[][] {
-  return history.flatMap((operation) =>
-    operation.op === "sent" && operation.via === "issue_review"
-      ? [operation.ids ?? []]
-      : [],
-  );
 }
 
 /** 从终态冻结快照(metrics.json,ADR-0042)提取一次率判定事实。
