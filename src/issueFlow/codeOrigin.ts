@@ -51,8 +51,10 @@ import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
 /** 伴生文件名(会话目录根,与 issue.json/metrics.json 同层)。 */
 export const ISSUE_CODE_ORIGIN_FILE = "code-origin.json";
 
-/** 伴生结构的版本号:归属口径(触发集/白名单/区间规则)换版时 +1。 */
-export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 1;
+/** 伴生结构的版本号:归属口径(工作量/触发集/白名单/区间规则)换版时 +1。
+ *  v2(2026-09-20):占比改工作量口径(每提交增删行均计),提交明细带
+ *  adds/dels;v1 为留存行 blame 口径,读侧按缺失处理。 */
+export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 2;
 
 /** 起算日期(支持期起点,ISO 日期):此前终态的会话永不试算、不进
  *  统计分母——清扫器判定与界面文案共用这一处常量(ADR-0044)。 */
@@ -65,7 +67,6 @@ export const ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT = 90;
 /** 挂死保险(非性能约束,ADR-0044):单命令与整层的宽松上限。 */
 const COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SESSION_BUDGET_MS = 10 * 60_000;
-const FILE_BUDGET = 1_000;
 const LINE_BUDGET = 200_000;
 const PUSH_BUDGET = 200;
 
@@ -74,8 +75,10 @@ export interface IssueCodeOriginCommit {
   subject: string;
   at: string;
   origin: "first" | "rework" | "external";
-  /** 该提交在最终留存差异中拥有的新增行数。 */
-  lines: number;
+  /** 该提交的源码新增行数。 */
+  adds: number;
+  /** 该提交的源码删除行数(与新增同权,均为正向工作量)。 */
+  dels: number;
 }
 
 export interface IssueCodeOriginRepoOk {
@@ -326,51 +329,31 @@ function unquoteGitPath(path: string): string {
     : path;
 }
 
-/** 一份最终差异的行级归属结果:新增行号 → 引入提交。 */
-async function blameAddedLines(
+/** 一个提交的工作量(源码白名单内):新增行数、删除行数(与新增同权,
+ *  均为正向工作量——删除烂代码也是活)。纯改名/纯非源码提交工作为 0。 */
+async function commitWork(
   session: AsyncWorktreeGitSession,
   budget: () => void,
-  base: string,
-  head: string,
-  path: string,
-  old: string | undefined,
-): Promise<Map<number, string>> {
+  sha: string,
+): Promise<{ adds: number; dels: number }> {
   budget();
-  const diff = await session.run([
-    "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
-    "--no-renames", "--unified=0",
-    ...(old
-      ? [`${base}:${old}`, `${head}:${path}`, "--"]
-      : [base, head, "--", unquoteGitPath(path)]),
-  ]);
-  if (diff.code !== 0) {
-    throw new Error(`读取 ${path} 的差异失败:${firstErrorLine(diff.stderr || diff.stdout)}`);
+  // show 对根提交原生按空树起算;--format= 只出 diff;增删行按扩展名
+  // 白名单过滤(与统计口径同源),二进制 numstat 记 "-" 自然不计。
+  const outcome = await session.run([
+    "--literal-pathspecs", "show", "--numstat", "--format=",
+    "--find-renames", "-z", sha]);
+  if (outcome.code !== 0) {
+    throw new Error(`读取提交 ${sha.slice(0, 12)} 工作量失败:${
+      firstErrorLine(outcome.stderr || outcome.stdout)}`);
   }
-  const ranges = [...diff.stdout.matchAll(/^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm)];
-  const added = new Set<number>();
-  for (const range of ranges) {
-    const count = Number(range[3] ?? 1);
-    const start = Number(range[2]);
-    for (let line = start; line < start + count; line++) added.add(line);
+  let adds = 0;
+  let dels = 0;
+  for (const entry of parseNumstatZ(outcome.stdout)) {
+    if (!isSourcePath(unquoteGitPath(entry.path))) continue;
+    adds += entry.added;
+    dels += entry.removed;
   }
-  const owner = new Map<number, string>();
-  if (!added.size) return owner;
-  budget();
-  const blame = await session.run(
-    ["--literal-pathspecs", "blame", "--line-porcelain", head, "--", unquoteGitPath(path)]);
-  if (blame.code !== 0) {
-    throw new Error(`blame ${path} 失败:${firstErrorLine(blame.stderr || blame.stdout)}`);
-  }
-  for (const match of blame.stdout.matchAll(/^([0-9a-f]{40,64}) \d+ (\d+)(?: \d+)?$/gm)) {
-    const line = Number(match[2]);
-    if (added.has(line) && !owner.has(line)) {
-      owner.set(line, match[1]!.toLowerCase());
-    }
-  }
-  if (owner.size !== added.size) {
-    throw new Error(`代码行溯源不完整(${path}):blame 只覆盖 ${owner.size}/${added.size} 行`);
-  }
-  return owner;
+  return { adds, dels };
 }
 
 // ---- 单仓归属 ----
@@ -379,6 +362,8 @@ interface RepoGroup {
   repo: string;
   branch: string;
   shas: string[];
+  /** 与 shas 平行的推送时刻(转移账时刻,边界按时刻应用用)。 */
+  ats: string[];
 }
 
 function groupPushes(pushes: Array<{ repo: string; branch: string; sha: string; at: string }>): RepoGroup[] {
@@ -386,8 +371,9 @@ function groupPushes(pushes: Array<{ repo: string; branch: string; sha: string; 
   for (const push of pushes) {
     const key = `${push.repo}\u0000${push.branch}`;
     const group = groups.get(key)
-      ?? { repo: push.repo, branch: push.branch, shas: [] };
+      ?? { repo: push.repo, branch: push.branch, shas: [], ats: [] };
     group.shas.push(push.sha);
+    group.ats.push(push.at);
     groups.set(key, group);
   }
   return [...groups.values()];
@@ -476,6 +462,8 @@ async function attributeOneRepo(
   //    起算。区间内的提交都算平台交付(一次推送可携带多个提交);
   //    被外部头观测记录在案的提交例外,按平台外计。区间外的提交
   //    (末笔之后等)按平台外计。
+  //    边界按时刻应用(ADR-0045):推送时刻晚于首个反馈事件时刻的
+  //    推送整笔计返工——多仓会话所有仓一致,不再按提交号匹配。
   if (group.shas.length > PUSH_BUDGET) {
     throw new Error(`推送笔数超过统计预算(${group.shas.length})`);
   }
@@ -485,9 +473,6 @@ async function attributeOneRepo(
     if (resolved) tips.push(resolved);
   }
   if (!tips.length) throw new Error("推送账里的提交对象在工作区都取不到");
-  const boundaryTip = boundary
-    ? tips.find((tip) => tip.startsWith(boundary.push_sha)) ?? null
-    : null;
   const classify = new Map<string, "first" | "rework">();
   for (let index = 0; index < tips.length; index += 1) {
     const tip = tips[index]!;
@@ -498,7 +483,8 @@ async function attributeOneRepo(
     const listed = await session.run([
       "rev-list", "--reverse", "--no-merges", range]);
     if (listed.code !== 0) continue; // 单笔对象缺失跳过,不废整仓
-    const phase = boundaryTip && index > tips.indexOf(boundaryTip) ? "rework" : "first";
+    const phase: "first" | "rework" =
+      boundary && group.ats[index]! > boundary.at ? "rework" : "first";
     for (const sha of listed.stdout.trim().split("\n").filter(Boolean)) {
       classify.set(sha.toLowerCase(), phase);
     }
@@ -510,50 +496,38 @@ async function attributeOneRepo(
     return classify.get(sha) ?? "external";
   };
 
-  // 4) 最终差异逐文件行级归属(源码白名单;删除行不进分母)。
-  budget();
-  const numstat = await session.run(
-    ["diff", "--numstat", "--find-renames", "-z", baseCut, head]);
-  if (numstat.code !== 0) {
-    throw new Error(`读取最终差异失败:${firstErrorLine(numstat.stderr || numstat.stdout)}`);
+  // 4) 工作量归属(ADR-0045):枚举统计区间内全部非合并提交,逐提交
+  //    累计 源码新增行+删除行(增删均计正向工作量),按提交桶求和;
+  //    不在任何平台推送区间内的提交(末笔尾部等)按平台外计。
+  const listed = await session.run([
+    "rev-list", "--reverse", "--no-merges", `${baseCut}..${head}`]);
+  if (listed.code !== 0) {
+    throw new Error(`读取统计区间提交失败:${
+      firstErrorLine(listed.stderr || listed.stdout)}`);
   }
-  const files = parseNumstatZ(numstat.stdout);
-  if (files.length > FILE_BUDGET) {
-    throw new Error(`文件数超过统计预算(${files.length})`);
-  }
+  const allShas = listed.stdout.trim().split("\n").filter(Boolean);
+  if (!allShas.length) throw new Error("统计区间内没有任何非合并提交");
   const lines = { first: 0, rework: 0, external: 0 };
   const commits = new Map<string, IssueCodeOriginCommit>();
-  const subjects = new Map<string, { subject: string; at: string }>();
-  let lineTotal = 0;
-  for (const entry of files) {
-    if (entry.added <= 0) continue;
-    if (!isSourcePath(unquoteGitPath(entry.path))) continue;
-    if (lineTotal + entry.added > LINE_BUDGET) {
-      throw new Error(`代码规模超过统计预算(${lineTotal + entry.added} 行)`);
+  let workTotal = 0;
+  for (const sha of allShas) {
+    budget();
+    const origin = originOf(sha);
+    const { adds, dels } = await commitWork(session, budget, sha);
+    const work = adds + dels;
+    if (work <= 0) continue; // 纯改名/纯非源码提交不占统计
+    lines[origin] += work;
+    workTotal += work;
+    if (workTotal > LINE_BUDGET) {
+      throw new Error(`代码规模超过统计预算(${workTotal} 行)`);
     }
-    const owners = await blameAddedLines(session, budget, baseCut, head,
-      unquoteGitPath(entry.path), entry.old && unquoteGitPath(entry.old));
-    for (const sha of owners.values()) {
-      const origin = originOf(sha);
-      lines[origin] += 1;
-      lineTotal += 1;
-      if (!subjects.has(sha)) {
-        const show = await session.run(
-          ["show", "-s", "--format=%cI%x1f%s", sha], 30_000);
-        const [at, subject] = (show.stdout.trim().split("\x1f"));
-        subjects.set(sha, { subject: subject ?? "", at: at ?? "" });
-      }
-      const existing = commits.get(sha);
-      if (existing) {
-        existing.lines += 1;
-      } else {
-        commits.set(sha, {
-          sha, at: subjects.get(sha)!.at,
-          subject: subjects.get(sha)!.subject,
-          origin, lines: 1,
-        });
-      }
-    }
+    const show = await session.run(
+      ["show", "-s", "--format=%cI%x1f%s", sha], 30_000);
+    const [at, subject] = show.stdout.trim().split("\x1f");
+    commits.set(sha, {
+      sha, at: at ?? "", subject: subject ?? "",
+      origin, adds, dels,
+    });
   }
   return {
     repo: group.repo,
@@ -563,7 +537,8 @@ async function attributeOneRepo(
     base: baseCut,
     boundary,
     lines,
-    commits: [...commits.values()].sort((a, b) => b.lines - a.lines),
+    commits: [...commits.values()].sort((a, b) =>
+      (b.adds + b.dels) - (a.adds + a.dels)),
   };
 }
 
