@@ -1,3 +1,4 @@
+import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
 import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
 import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
@@ -1216,6 +1217,7 @@ export class CloudSession {
         }).join(", ")}`);
     }
     const appendedSystemPrompt = [
+      GIT_COMMIT_IDENTITY_GUIDANCE,
       ...resourceBlockNotice(blockedRepositoryResources),
       ...(this.options.humanFacing && config.sessionId === this.sessionId
         ? [HUMAN_FACING_STYLE] : []),
@@ -1243,7 +1245,7 @@ export class CloudSession {
           ...repoContextFiles,
         ],
       }),
-      // 只挂在这个 driver 自己的会话上:子 Agent 的话是说给主 Agent 听的。
+      // 提交身份约束覆盖主、子与专项会话；面对人的语气只用于主会话。
       ...(appendedSystemPrompt.length ? {
         appendSystemPromptOverride: (base: string[]) => [
           ...base, ...appendedSystemPrompt,
