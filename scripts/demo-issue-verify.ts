@@ -10,9 +10,10 @@
  * 用法:npx tsx scripts/demo-issue-verify.ts [--port 8840]
  * 之后浏览器打开打印的地址,登录 dev / mae-flow-demo,
  * 问题处理 → DTS 页签选 DTS-2026-1001 → 模块选「验证闸演示」→ 登记。
- * AI 全链跑到 MR 全绿后弹出环境验证卡:答「验证通过」落待归档;
- * 答「验证发现问题」+贴截图 → 回退「问题分析」(第 2 轮),回退指令
- * 要求 AI 先与用户对齐再重写报告;也可以不答,直接归档/取消(不锁死)。
+ * AI 全链跑到 MR 全绿后弹出环境验证卡:验证没问题无需作答——MR 全部
+ * 合入即视为验证通过,自动归档收口(ADR-0043);答「验证发现问题」+贴
+ * 截图 → 回退「问题分析」(第 2 轮),回退指令要求 AI 先与用户对齐再
+ * 重写报告;不想要了直接取消(不锁死)。
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -39,7 +40,10 @@ const SCRIPT: Scene[] = [
   { tool: { name: "push_branch", input: {} } },
   { tool: { name: "create_mr", input: {} } },
   { tool: { name: "complete_stage", input: { mrs: "__REPOS__" } } },
-  { text: "MR 已申报,流水线全绿,等待环境验证结果。" },
+  // 全绿回执指引同回合举卡(#246/ADR-0024):验证卡由 AI 经 raise_gate
+  // 举出,平台不代举——漏了这幕,收口后会一直被催办「欠验证卡」。
+  { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
+  { text: "MR 已申报,流水线全绿,验证卡已交给用户。" },
 ];
 
 async function main(): Promise<void> {

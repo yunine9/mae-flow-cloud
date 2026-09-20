@@ -19,6 +19,7 @@ import {
   getIssue,
   isIssueActive,
   issueStageText,
+  issueStatusText,
   listIssues,
   type AuthUser,
   type IssueDetail,
@@ -421,7 +422,7 @@ function IssueCard({ issue, onSettled }: {
             : <span className="task-ticket empty">未绑单</span>}
           <span className="task-id" title="会话编号">{issue.id}</span>
           <IssueStatusBadge status={issue.status}>
-            {ISSUE_STATUS_TEXT[issue.status]}
+            {issueStatusText(issue)}
           </IssueStatusBadge>
           <span className="task-created">{formatLocalDateTime(issue.updated_at)}</span>
         </span>

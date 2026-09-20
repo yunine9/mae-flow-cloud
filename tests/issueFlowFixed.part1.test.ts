@@ -67,7 +67,7 @@ import {
   headSha,
 } from "./issueFlowFixed.helpers.ts";
 
-test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿收口→续聊返工→再申报→归档", async () => {
+test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿收口→发现问题回退→二轮再收口", async () => {
   const dataDir = mfcTemp("mfc-issue-fixed-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform();
@@ -250,18 +250,28 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.match(JSON.stringify(model.requests), /失败产物全文已镜像/,
       "修复回合指令应指引 AI 读镜像产物");
 
-    // ④ 收口后返工(ADR-0013):用户验证通过后再续聊说没修好,重开
-    // mr_green 继续修——不是回退,轮次账不动;修完重推,同 MR 更新后
-    // 再申报再收口(再次举验证闸)。
-    service.answer(created.id, {
-      state_version: closed1.gate!.state_version, code: "pass",
-    });
-    await until(() => service.get(created.id).status === "idle" ? 1 : undefined,
-      "验证通过后落待归档");
+    // ④ 验证发现问题(ADR-0043 后绿后返工的唯一入口——通过无需作答,
+    // 合入即通过自动归档,「验证通过后再续聊返工」的重开路已退役):
+    // 整体回退问题分析、轮次+1;二轮分析重新举闸,确认后修复重推,
+    // 同 MR 更新后再申报再收口(再次举验证闸)。
     const shaBefore = closed1.pushes![0].sha;
-    const reopened = service.reply(created.id, "并发场景仍偶发超时,继续修");
-    assert.equal(reopened.stage_states?.[4], "in_progress", "收口态续聊重开本阶段");
-    assert.equal(reopened.round, 1, "返工不是回退,轮次账不动");
+    service.answer(created.id, {
+      state_version: closed1.gate!.state_version, code: "fail",
+      notes: "并发场景仍偶发超时",
+    });
+    const secondAnalysis = await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm"
+        ? issue : undefined;
+    }, "发现问题回退,二轮分析举闸");
+    assert.equal(secondAnalysis.stage, "analyze", "回退到问题分析");
+    assert.equal(secondAnalysis.round, 2, "回退轮次+1");
+    assert.equal(secondAnalysis.stage_states?.[4], "redo", "mr_green 标重做");
+    service.answer(created.id, {
+      state_version: secondAnalysis.gate!.state_version, code: "confirm",
+    });
     const reopenedRound2 = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -269,20 +279,19 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
         && issue.gate?.kind === "env_verify"
         && issue.stage_states?.[4] === "done"
         ? issue : undefined;
-    }, "返工再申报后再次收口(再次举验证闸)");
-    assert.equal(reopenedRound2.round, 1, "第二轮仍是返工,无回退轮次");
+    }, "二轮再申报后再次收口(再次举验证闸)");
+    assert.equal(reopenedRound2.round, 2, "二轮收口轮次账不动");
     assert.equal(reopenedRound2.mrs?.[0]?.url, firstMrUrl,
-      "返工修复仍延用同一 MR");
+      "二轮修复仍延用同一 MR");
     assert.ok(reopenedRound2.pushes![0].sha !== shaBefore,
-      "返工产生新推送(同分支追加)");
+      "二轮产生新推送(同分支追加)");
 
-    // ⑤ 手动归档:MR 仅验绿、尚未合入，按实际事实记已修复。
-    const archived = await service.control(created.id, { action: "archive" });
-    assert.equal(archived.status, "archived");
-    assert.equal(archived.conclusion?.kind, "fixed");
-    assert.equal(archived.stage, "mr_green", "归档不改写固定流程阶段词表");
-    // 登记元信息进上下文(ADR-0003):网管口令是现场公开默认值,明文
-    // 随元信息块出现;平台凭据(git 令牌)的铁律不变。
+    // ⑤ 归档出口=合入即自动归档(ADR-0034):本桩无合入事实端点,
+    // 全链的合入→自动归档结论由 issueMergeFact 覆盖;此处收在二轮
+    // 验证卡在场的等待现场。登记元信息进上下文(ADR-0003):网管口令
+    // 是现场公开默认值,明文随元信息块出现;平台凭据(git 令牌)的
+    // 铁律不变。
+    assert.equal(reopenedRound2.gate?.kind, "env_verify", "二轮验证卡在场");
     const requestText = JSON.stringify(model.requests);
     assert.match(requestText, /env-shared-secret/);
     assert.doesNotMatch(requestText, /git-token/);

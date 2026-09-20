@@ -591,7 +591,7 @@ test("输出超限自愈穷尽:连续三次截断后落 idle 留话,不标 faile
 
 /** 直播一个"MR 跑绿监看中"的现场(恢复监看同款夹具,聚焦验证闸)。 */
 
-test("环境验证闸·通过:作答后落待归档,归档结论按合入事实", async () => {
+test("环境验证闸·在场:通过无需作答(合入即通过),卡只收「发现问题」", async () => {
   const dataDir = mfcTemp("mfc-issue-verify-pass-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
@@ -615,16 +615,15 @@ test("环境验证闸·通过:作答后落待归档,归档结论按合入事实"
       return issue.status === "waiting_user"
         && issue.gate?.kind === "env_verify" ? issue : undefined;
     }, "全绿举验证闸");
-    service.answer("issue-1", {
-      state_version: gated.gate!.state_version, code: "pass",
-    });
-    const idle = await until(() =>
-      service.get("issue-1").status === "idle" ? 1 : undefined, "通过后待归档");
-    assert.match(service.get("issue-1").stage_note ?? "", /归档/);
-    const archived = await service.control("issue-1", { action: "archive" });
-    assert.equal(archived.status, "archived");
-    assert.equal(archived.conclusion?.kind, "fixed",
-      "仅验绿未合入,按事实记已修复");
+    // ADR-0043:通过没有选项——沉默到合入即通过,自动归档由合入监看
+    // 接管、结论按合入事实记 delivered(合入全链见 issueMergeFact);
+    // 卡上只剩「验证发现问题」一个人工事实出口(回退路见下一测)。
+    assert.deepEqual(
+      gated.gate!.question.questions[0]!.options.map((option) => option.code),
+      ["fail"], "通过无码,卡只收「验证发现问题」");
+    assert.equal(gated.status, "waiting_user", "等待现场=验证卡在场");
+    assert.match(gated.stage_note ?? "", /待环境验证/,
+      "停机说明保持「待环境验证」口径");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -690,7 +689,7 @@ test("环境验证闸·不通过:回退问题分析,轮次+1,后续阶段标 red
 });
 
 
-test("环境验证闸·不锁死:未作答也可直接归档(闸随终态清面)", async () => {
+test("环境验证闸·不锁死:未作答也可直接取消(闸随终态清面)", async () => {
   const dataDir = mfcTemp("mfc-issue-verify-escape-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("success");
@@ -714,8 +713,11 @@ test("环境验证闸·不锁死:未作答也可直接归档(闸随终态清面)
       return issue.status === "waiting_user"
         && issue.gate?.kind === "env_verify" ? issue : undefined;
     }, "全绿举验证闸");
-    const archived = await service.control("issue-1", { action: "archive" });
-    assert.equal(archived.status, "archived", "未答验证也能归档(不锁死)");
+    // 手动归档已随 ADR-0034 退役(交付出口=合入自动归档),未答卡的
+    // 「不锁死」出口是取消——放弃这单,闸随终态清面;合入路的未答卡
+    // 清面由 issueMergeFact 覆盖。
+    const canceled = await service.control("issue-1", { action: "cancel" });
+    assert.equal(canceled.status, "canceled", "未答验证也能取消(不锁死)");
     const saved = loadState(join(dataDir, "issues", "issue-1"))!;
     assert.equal(saved.gate, undefined, "终态不携闸");
   } finally {

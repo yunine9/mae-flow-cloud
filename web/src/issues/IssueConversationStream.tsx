@@ -46,6 +46,7 @@ import {
   getIssueConversation,
   type IssueConversationItem,
   type IssueConversationSteps,
+  type IssueGateKind,
   type IssueStatus,
 } from "../api";
 import { atBottom } from "../follow";
@@ -157,6 +158,7 @@ export function IssueConversationStream({
   waiting,
   waitingId,
   waitingTs,
+  waitingKind,
   canOperate,
   busy,
   owner,
@@ -181,6 +183,9 @@ export function IssueConversationStream({
   waitingId?: string;
   /** 当前卡的举起时刻(流内投影还没轮询到时给卡座气泡的时钟兜底)。 */
   waitingTs?: string;
+  /** 当前卡的种类(平台闸的 gate_kind):卡座状态签与输入区提示按它
+   *  分派——环境验证卡等的是验证不是答复(待验证),其余卡照旧。 */
+  waitingKind?: IssueGateKind;
   /** 归属操作权(查看模式=false):false 时输入区只读,流完整可见。 */
   canOperate: boolean;
   busy: boolean;
@@ -518,7 +523,11 @@ export function IssueConversationStream({
     rows.push(render(item));
   }
 
-  const nowTag = canOperate ? "等你决定" : "等归属人决定";
+  // 环境验证卡的等待语义不同(ADR-0034:通过无需作答,合入即通过),
+  // 状态签换成「待验证」——其余卡照旧「等你决定/等归属人决定」。
+  const nowTag = !canOperate
+    ? (waitingKind === "env_verify" ? "待责任人验证" : "等归属人决定")
+    : (waitingKind === "env_verify" ? "待验证" : "等你决定");
 
   return <>
     <div className="ws-stream-shell">
@@ -585,6 +594,7 @@ export function IssueConversationStream({
       key={issueId}
       status={status}
       waiting={waiting}
+      waitingKind={waitingKind}
       canOperate={canOperate}
       busy={busy}
       owner={owner}
@@ -610,6 +620,7 @@ export function IssueConversationStream({
 function IssueCollaborationComposer({
   status,
   waiting,
+  waitingKind,
   canOperate,
   busy,
   owner,
@@ -625,6 +636,8 @@ function IssueCollaborationComposer({
 }: {
   status: IssueStatus;
   waiting: boolean;
+  /** 当前卡的种类:环境验证卡等的是验证不是答复,blocked 提示随它换。 */
+  waitingKind?: IssueGateKind;
   canOperate: boolean;
   busy: boolean;
   owner: string;
@@ -664,8 +677,17 @@ function IssueCollaborationComposer({
   const ended = ["archived", "canceled", "failed"].includes(status);
   const mode: Mode = !canOperate ? { kind: "readonly" }
     : waiting || status === "waiting_user" ? {
-        kind: "blocked", title: "等你作答",
-        hint: "卡在上方流末尾;补充说明与提交按钮就在下方,作答后一并交给 AI。",
+        kind: "blocked",
+        // 环境验证卡:等的是验证,不是作答(通过无需作答,合入即通过)。
+        ...(waitingKind === "env_verify"
+          ? {
+            title: "待验证",
+            hint: "验证卡在上方流末尾:没发现问题无需作答,MR 全部合入后本单自动归档;发现问题在卡上描述并提交。",
+          }
+          : {
+            title: "等你作答",
+            hint: "卡在上方流末尾;补充说明与提交按钮就在下方,作答后一并交给 AI。",
+          }),
       }
     : status === "queued" ? {
         kind: "blocked", title: "会话还没启动",

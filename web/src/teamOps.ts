@@ -221,14 +221,40 @@ export function median(values: number[]): number | undefined {
 
 // ---- 问题域交付概览口径(团队页领域切换,与需求侧 teamDeliveryBreakdown 同构) ----
 
-/** 问题流阶段全集(注册表镜像:有单五阶段 ∪ 无单三节点的 conclude,按
- * 流程固定顺序)。镜像源是 src/issueFlow/stageRegistry.ts 的
- * FIXED_TICKET_STAGES ∪ FIXED_NO_TICKET_STAGES(web 侧 api.ts 同源镜像);
- * 本文件刻意不 import api.ts(见文件头注释),所以这里只出键——显示名
- * 由渲染层用 api.ts 的 issueStageText 取,不让文案出现第二真相源。 */
-export const ISSUE_DELIVERY_STAGES = [
-  "dts_info", "prep_repo", "analyze", "fix", "mr_green", "conclude",
+/** 阶段格展示口径(团队页概览,2026-09-20 拍板):拉单+拉仓合并为
+ * 「准备中」,「待验证」(环境验证卡在场,ADR-0043:通过无需作答、合入
+ * 即通过)从「提交 MR·跑绿」拆出单列。键是概览格键,不是注册表阶段词
+ * ——会话进度条与列表卡仍按注册表阶段原样,只有概览格用这个合并/拆分
+ * 口径;标签就地声明(格键没有注册表词表,不造第二真相源)。 */
+export const ISSUE_DELIVERY_STAGE_BUCKETS = [
+  { key: "prep", label: "准备中", stages: ["dts_info", "prep_repo"] },
+  { key: "analyze", label: "问题分析", stages: ["analyze"] },
+  { key: "fix", label: "问题修复", stages: ["fix"] },
+  { key: "mr_green", label: "提交 MR·跑绿", stages: ["mr_green"] },
+  { key: "verifying", label: "待验证", verifying: true },
+  { key: "conclude", label: "确定结论", stages: ["conclude"] },
 ] as const;
+
+/** 「待验证」判定(概览格与现场范围共用):环境验证卡在场——卡本身就
+ * 是那个状态,不用猜阶段与停机说明。 */
+export function isIssueVerifying(issue: {
+  status: string;
+  gate?: { kind?: string } | null;
+}): boolean {
+  return issue.status === "waiting_user"
+    && issue.gate?.kind === "env_verify";
+}
+
+/** 格键 → 会话是否落格:待验证的会话只进「待验证」格,不再重复计入
+ * 「提交 MR·跑绿」——阶段格加总恒等于 active。 */
+export function issueStageBucketMatch(
+  bucket: { stages?: readonly string[]; verifying?: boolean },
+  issue: { stage?: string; status: string; gate?: { kind?: string } | null },
+): boolean {
+  if (isIssueVerifying(issue)) return bucket.verifying === true;
+  if (bucket.verifying) return false;
+  return (bucket.stages ?? []).includes(issue.stage ?? "");
+}
 
 /** 概览状态格全集(展示归一口径:idle 并入 waiting_user——2026-09-08
  * 拍板,卡片/计数/筛选同一归一;archived/canceled 是收口终态,只进
@@ -248,8 +274,9 @@ export interface IssueDeliveryBreakdown {
   failed: number;
   /** 已闭环(archived)。 */
   closed: number;
-  /** 阶段格:注册表全集,0 计数也出(渲染层置灰禁用,与需求侧"阶段格
-   * 全量出、0 禁用"同一规则)——概览始终呈现问题流的完整流程形状。 */
+  /** 阶段格:团队页合并/拆分口径全集(ISSUE_DELIVERY_STAGE_BUCKETS),
+   * 0 计数也出(渲染层置灰禁用,与需求侧"阶段格全量出、0 禁用"同一
+   * 规则)——概览始终呈现问题流的完整流程形状。 */
   stages: Array<{ key: string; count: number }>;
   /** 状态格:归一后五状态,0 计数也出(同上)。 */
   statuses: Array<{ key: string; count: number }>;
@@ -258,9 +285,14 @@ export interface IssueDeliveryBreakdown {
 /** 问题域交付概览口径:概览规模数字与阶段/状态格共用同一批会话,与
  * 需求侧 teamDeliveryBreakdown 同构(规模 × 阶段格 × 状态格,供概览格
  * 筛选联动)。输入是 IssueSummary 的稳定字段投影(自包含约束,根级
- * typecheck 不必拖进浏览器 fetch 客户端)。 */
+ * typecheck 不必拖进浏览器 fetch 客户端)——「待验证」格读 gate.kind,
+ * 投影带上闸对象。 */
 export function issueDeliveryBreakdown(
-  issues: ReadonlyArray<{ status: string; stage?: string }>,
+  issues: ReadonlyArray<{
+    status: string;
+    stage?: string;
+    gate?: { kind?: string } | null;
+  }>,
 ): IssueDeliveryBreakdown {
   const live = issues.filter((issue) => issue.status !== "canceled");
   const active = live.filter((issue) => issue.status !== "archived");
@@ -273,9 +305,10 @@ export function issueDeliveryBreakdown(
     waiting: waitingOf(active),
     failed: active.filter((issue) => issue.status === "failed").length,
     closed: live.filter((issue) => issue.status === "archived").length,
-    stages: ISSUE_DELIVERY_STAGES.map((key) => ({
-      key,
-      count: active.filter((issue) => issue.stage === key).length,
+    stages: ISSUE_DELIVERY_STAGE_BUCKETS.map((bucket) => ({
+      key: bucket.key,
+      count: active.filter((issue) => issueStageBucketMatch(bucket, issue))
+        .length,
     })),
     statuses: ISSUE_DELIVERY_STATUSES.map((key) => ({
       key,
@@ -374,3 +407,59 @@ export function issueFeatureOnceRates(
   }]));
 }
 
+
+// ---- 一次生成达标率的特性聚合(ADR-0044,工单 #340:交付分析「问题
+// 处理」页签的特性视图;与 issueFeatureRows 同一归类键) ----
+
+export interface OnceGeneratedFeatureRow {
+  module: string;
+  /** 会话数(分母=该特性有数据的完成交付会话)。 */
+  sessions: number;
+  /** 达标会话数(单会话占比 ≥ 达标线)。 */
+  passed: number;
+  /** 会话级达标率;分母 0 → null,前端显示 —。 */
+  pass_rate: number | null;
+  /** 行数加权的特性一次生成占比(与单会话占比同一口径:首轮行 ÷
+   *  全部留存源码行,跨会话求和后相除)。分母 0 → null。 */
+  share: number | null;
+  total_lines: number;
+}
+
+/** 按特性(业务模块标签,空白归「未分类」)聚合一次生成明细:输入是
+ *  once-generated 端点的 per_session(服务端已滤成分母全集)。排序:
+ *  会话数降序 → 行数降序 → 名称(与 issueFeatureRows 的排序精神
+ *  同构:处理多的特性先看)。 */
+export function onceGeneratedFeatureRows(
+  rows: ReadonlyArray<{
+    module: string;
+    share: number;
+    pass: boolean;
+    lines: { first: number; rework: number; external: number };
+  }>,
+): OnceGeneratedFeatureRow[] {
+  const groups = new Map<string, {
+    sessions: number; passed: number;
+    first: number; total: number;
+  }>();
+  for (const row of rows) {
+    const key = row.module?.trim() || "未分类";
+    const bucket = groups.get(key)
+      ?? { sessions: 0, passed: 0, first: 0, total: 0 };
+    bucket.sessions += 1;
+    if (row.pass) bucket.passed += 1;
+    bucket.first += row.lines.first;
+    bucket.total += row.lines.first + row.lines.rework + row.lines.external;
+    groups.set(key, bucket);
+  }
+  const percent = (value: number, total: number): number | null =>
+    total ? Math.round((value / total) * 1000) / 10 : null;
+  return [...groups.entries()].map(([module, bucket]) => ({
+    module,
+    sessions: bucket.sessions,
+    passed: bucket.passed,
+    pass_rate: percent(bucket.passed, bucket.sessions),
+    share: percent(bucket.first, bucket.total),
+    total_lines: bucket.total,
+  })).sort((a, b) => b.sessions - a.sessions || b.total_lines - a.total_lines
+    || a.module.localeCompare(b.module, "zh-Hans-CN"));
+}

@@ -673,9 +673,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     // (触发语境不同=部署完而非全绿,问题文案各异、选项同出注册表)
     // ——两处都在本文件,改措辞时对着看。
     env_verify:
-      "全部 MR 流水线已跑绿。请到目标环境验证修复效果:通过则可归档"
-      + "收口;发现问题请选「验证发现问题」并描述现象(补充说明支持"
-      + "粘贴截图)。未反馈也可直接归档或取消。",
+      "MR 流水线均已通过。请到目标环境验证修复效果:\n"
+      + "- 验证通过:无需作答。MR 全部合入即视为验证通过,本单自动归档收口。\n"
+      + "- 发现问题:选「验证发现问题」并描述现象(补充说明支持粘贴截图),"
+      + "再次进行问题分析。",
     pipeline_unfixable:
       "流水线红灯需要人工在交付平台处理或豁免(改代码解决不了)——"
       + "请在交付平台处理/豁免后,在本卡作答「已在平台处理/豁免,"
@@ -742,8 +743,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         raiseGate(ctx.state, "env_verify",
           RAISE_GATE_QUESTIONS.env_verify, undefined, params.supplement);
         ctx.persist();
-        return ok("已举出环境验证卡,请结束本回合等待用户作答"
-          + "——不要自行继续。");
+        return ok("已举出环境验证卡,请结束本回合等待用户验证"
+          + "(可不答——MR 全部合入即视为验证通过)——不要自行继续。");
       }
       // pipeline 两卡:红灯事实必须在平台账上在案(仓+提交定位),
       // resume_watch 裁决重看同一提交靠它。
