@@ -204,6 +204,17 @@ import {
 } from "./onceRates.ts";
 import { listAnalysisVersions } from "./analysisVersions.ts";
 import {
+  aggregateCodeOrigin,
+  backfillCodeOrigin,
+  enqueueCodeOrigin,
+  ISSUE_CODE_ORIGIN_SINCE,
+  ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT,
+  readCodeOriginSnapshot,
+  type IssueCodeOriginSnapshot,
+  type IssueOnceGeneratedSession,
+  type IssueOnceGeneratedStats,
+} from "./codeOrigin.ts";
+import {
   ISSUE_METRICS_FILE,
   writeIssueMetricsSnapshot,
   type IssueMetricsSnapshot,
@@ -1184,6 +1195,75 @@ export class IssueFlowService {
     };
   }
 
+  /** 一次生成达标率读侧(ADR-0044,#338):终态伴生快照(code-origin.json)
+   *  的聚合。分母=有数据(伴生在场且留存源码行>0)的完成交付会话;伴生
+   *  缺席按结论时刻分「待算」(支持期内:通道在途或曾丢失,清扫器兜底)
+   *  与「不支持期」(起算日期前终态,永不回填)。达标线是参数(settings
+   *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。 */
+  onceGeneratedStats(): IssueOnceGeneratedStats {
+    const runtime = this.options.settings?.runtime?.();
+    const configured = Number(
+      (runtime as Record<string, unknown> | undefined)
+        ?.issue_once_generated_threshold_percent);
+    const threshold = Number.isFinite(configured) && configured > 0 && configured <= 100
+      ? configured
+      : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
+    const sessions: IssueOnceGeneratedSession[] = [];
+    let pending = 0;
+    let unsupported = 0;
+    let noCode = 0;
+    for (const live of this.live.values()) {
+      const state = live.state;
+      if (state.status !== "archived") continue;
+      if (state.conclusion?.kind !== "delivered") continue;
+      if (!state.ticket?.trim()) continue;
+      const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
+      const snapshot = readCodeOriginSnapshot(live.root, live.id);
+      if (!snapshot) {
+        if (concludedAt.slice(0, 10) >= ISSUE_CODE_ORIGIN_SINCE) pending += 1;
+        else unsupported += 1;
+        continue;
+      }
+      const aggregate = aggregateCodeOrigin(snapshot, threshold);
+      if (!aggregate.total) {
+        noCode += 1;
+        continue;
+      }
+      sessions.push({
+        id: live.id,
+        title: state.title,
+        module: state.module?.trim() || "未分类",
+        concluded_at: concludedAt,
+        share: aggregate.share!,
+        pass: aggregate.pass === true,
+        lines: {
+          first: aggregate.first,
+          rework: aggregate.rework,
+          external: aggregate.external,
+        },
+      });
+    }
+    sessions.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));
+    const total = sessions.length;
+    const passed = sessions.filter((row) => row.pass).length;
+    return {
+      threshold_percent: threshold,
+      supported_since: ISSUE_CODE_ORIGIN_SINCE,
+      total,
+      passed,
+      rate: total ? Math.round((passed / total) * 1000) / 10 : null,
+      pending,
+      unsupported,
+      no_code: noCode,
+      per_session: sessions,
+    };
+  }
+
+  /** 单会话一次生成明细(伴生文件原样读;统计与详情同一份事实,
+   *  缺席返回 undefined 由路由 404)。 */
+  codeOriginDetail(id: string): IssueCodeOriginSnapshot | undefined {
+    const live = this.live.get(id);
+    return live ? readCodeOriginSnapshot(live.root, live.id) : undefined;
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -4598,10 +4678,22 @@ export class IssueFlowService {
     this.freezeMetricsSnapshot(live);
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
-    // 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方
-    // (不可续聊,过程记录全保留),当场后台回收——不阻塞响应(删 GB 级
-    // node_modules 可能要数秒)。旋钮关=行为与现状全等。
-    if (this.repoReclaimOn()) {
+    // 一次生成归属(ADR-0044):归档响应不等计算——伴生统计挂后台通道,
+    // 现场回收为它让路(任务收尾后再删);不入队(伴生已在/不支持期/
+    // 无仓)则照旧当场后台回收。崩溃缺口由每日清扫器兜底。
+    this.reclaimAfterCodeOrigin(live);
+    return summarize(live.state);
+  }
+
+  /** 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方
+   *  (不可续聊,过程记录全保留),后台回收——不阻塞响应(删 GB 级
+   *  node_modules 可能要数秒)。一次生成归属(ADR-0044)入队时,回收
+   *  挂在通道任务收尾之后(统计窗口与磁盘治理两全);旋钮关=不删。 */
+  private reclaimAfterCodeOrigin(
+    live: Pick<LiveIssue, "root" | "id" | "state">,
+  ): void {
+    const reclaim = (): void => {
+      if (!this.repoReclaimOn()) return;
       setImmediate(() => {
         try {
           const bytes = this.reclaimRepoDir(live.root, live.id, live.state);
@@ -4614,8 +4706,11 @@ export class IssueFlowService {
             + String(error instanceof Error ? error.message : error));
         }
       });
-    }
-    return summarize(live.state);
+    };
+    const queued = enqueueCodeOrigin(live.root, live.state, {
+      fetchCredential: this.options.gitCredential?.(live.state.account),
+    }, { onSettled: reclaim, log: (message) => this.log(message) });
+    if (!queued) reclaim();
   }
 
   // ---- 磁盘治理:终态现场回收与构建产物冷却清理(票 01/03) ----
@@ -4677,6 +4772,17 @@ export class IssueFlowService {
       try {
         if (terminal) {
           if (!reclaimOn) continue;
+          // 一次生成归属兜底(ADR-0044):现场还在而伴生缺失(进程曾在
+          // 归档与算完之间退出),回收前补算一次再删;支持期外的终态
+          // 会话不试算。通道在途的由兜底函数自己让路。
+          try {
+            await backfillCodeOrigin(root, state, {
+              fetchCredential: this.options.gitCredential?.(state.account),
+            }, (message) => this.log(message));
+          } catch (error) {
+            this.log(`[issue-flow] ${name} 一次生成归属补算异常(不阻塞回收): `
+              + String(error instanceof Error ? error.message : error));
+          }
           const size = this.reclaimRepoDir(root, name, state);
           if (size > 0) {
             reclaimed += 1;
