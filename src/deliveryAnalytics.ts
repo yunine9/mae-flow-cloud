@@ -5,6 +5,8 @@ import type { TaskSummary } from "./taskService.ts";
 import { feedbackStamp, historicalRepairIntervals, intervalOrigins, validInterval, type RepairInterval } from "./deliveryAttribution.ts";
 import { frozenTaskBaseline } from "./artifacts.ts";
 import { analyticsGit, calculateDeliveryCode } from "./deliveryAnalyticsGit.ts";
+import { repositoryIdentity } from "./knowledgeAssetModel.ts";
+import type { RepositoryProfile } from "./repositoryProfiles.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
 interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[] }
@@ -160,7 +162,7 @@ export async function collectDeliveryCode(summary: CollectionTask, cwd: string, 
 }
 
 /** No Git work in an HTTP request; unavailable history stays visibly unavailable. */
-export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id: string; name: string }> = []): DeliveryAnalysisReport {
+export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id: string; name: string }> = [], repositoryProfiles: RepositoryProfile[] = []): DeliveryAnalysisReport {
   const byId = new Map(tasks.map(task => [task.id, task]));
   const moduleNames = new Map(modules.map(module => [module.id, module.name]));
   const parentIds = new Set(tasks.map(t => t.parent_task_id).filter(Boolean));
@@ -178,6 +180,10 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       }
       const assigned = root && !root.parent_task_id ? root.business_module : undefined;
       const businessModule = assigned ? { id: assigned.id, name: moduleNames.get(assigned.id) ?? assigned.name } : undefined;
+      const repository = repositoryIdentity(task.repo_url ?? "");
+      const profile = repository ? [...(task.repository_profiles ?? []), ...repositoryProfiles]
+        .find(p => repositoryIdentity(p.repository) === repository && p.technologies.length) : undefined;
+      const languages = [...new Set(profile?.technologies ?? [])].filter(language => language !== "agnostic");
       const stored = read(task), head = task.delivery?.git_push?.sha;
       const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
@@ -194,7 +200,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       }
       return { id: task.id, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
-        repo: cleanRepository(task.repo_url ?? ""), modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
+        repo: cleanRepository(task.repo_url ?? ""), languages, modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
         merged,
         at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
         unavailable: metric ? undefined : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === head && stored?.error ? stored.error

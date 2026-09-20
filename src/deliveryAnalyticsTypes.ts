@@ -30,6 +30,8 @@ export interface DeliveryAnalysisRow {
   parent_id?: string;
   parent_title?: string;
   repo: string;
+  /** Existing repository technology labels; no source-code inference. */
+  languages?: string[];
   modules: string[];
   business_module?: { id: string; name: string };
   merged: boolean;

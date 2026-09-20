@@ -2720,7 +2720,9 @@ export class TaskService {
   deliveryAnalysis(retry = false) {
     for (const task of this.tasks.values()) if (task.summary.delivery?.git_push?.sha)
       observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
-    return buildDeliveryAnalysis([...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) })), listBusinessModules(this.options.dataDir).modules);
+    const summaries = [...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) }));
+    const profiles = resolveRepositoryProfiles(this.options.dataDir, [...new Set(summaries.map(t => t.repo_url).filter((r): r is string => !!r))]).flatMap(r => r.profile ? [r.profile] : []);
+    return buildDeliveryAnalysis(summaries, listBusinessModules(this.options.dataDir).modules, profiles);
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
