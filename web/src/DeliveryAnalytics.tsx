@@ -103,13 +103,15 @@ export function IssueAnalyticsTab() {
   const delivered = stats?.delivered ?? 0;
   const tile = (label: string, rate: number | null | undefined, sub: string, tip: string) =>
     <div className="rounded-[14px] border border-line bg-surface px-5 py-4">
-      <small className="mb-1.5 block text-[13px] text-muted-foreground">{label}</small>
+      <small className="mb-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
+        {label}{help(tip)}
+      </small>
       <strong className="block text-[32px] leading-none tracking-[-0.02em] tabular-nums text-text-strong">
         {pct(rate)}</strong>
       <span className="mt-2 block text-xs text-muted-foreground">{sub}</span>
     </div>;
   const help = (tip: string) =>
-    <span title={tip} style={{ display: "inline-flex", cursor: "help" }}>
+    <span className="help-tip" data-tip={tip}>
       <HelpCircle size={14} className="text-muted-foreground" />
     </span>;
   return <div className="grid gap-4">
@@ -120,8 +122,7 @@ export function IssueAnalyticsTab() {
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <BarChart3 size={15} />完成交付 {delivered}
         {stats && stats.pending + stats.no_code + stats.unsupported > 0 &&
-          <span title={`待算 ${stats.pending} · 无源码交付 ${stats.no_code} · 早于 ${stats.supported_since} 起算日 ${stats.unsupported} 个,均不进统计`}
-          style={{ display: "inline-flex", cursor: "help" }}><HelpCircle size={14} className="text-muted-foreground" /></span>}
+          <span className="help-tip" data-tip={`待算 ${stats.pending} · 无源码交付 ${stats.no_code} · 早于 ${stats.supported_since} 起算日 ${stats.unsupported} 个,均不进统计`}><HelpCircle size={14} className="text-muted-foreground" /></span>}
       </span>
     </div>
     <div className="grid grid-cols-[repeat(5,1fr)] gap-3.5">
