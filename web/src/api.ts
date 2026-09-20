@@ -3874,6 +3874,9 @@ export interface IssueSummary {
   updated_at: string;
   title: string;
   description: string;
+  /** 发起备注(DTS 列表随单填写):登记元信息的一部分,AI 开场被要求
+   * 优先读;缺席=发起时没填(含机制加入前的老会话)。 */
+  remark?: string;
   source: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
@@ -4156,20 +4159,46 @@ export function getIssueOnceRates(): Promise<IssueOnceRate> {
   return issueFetch("/issues/stats");
 }
 
-/** 一次生成达标率(ADR-0044,工单 #338):终态伴生快照(code-origin.json)
- *  的读侧聚合。分母=有数据(伴生在场且留存源码行>0)的完成交付会话;
- *  rate null=分母 0(前端显示 —);pending/unsupported 是口径透明度的
- *  伴随计数(待算/早于起算日期,均不进分母)。 */
+/** 首次生成占比与 90%AI生成达标率(ADR-0045,工单 #342):终态伴生
+ *  快照(code-origin.json)的读侧聚合,工作量口径(增删行均计)。
+ *  分母=有数据(伴生在场且有工作变更行)的完成交付会话;rate null=分母 0
+ *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。 */
 export interface IssueOnceGeneratedSessionRow {
   id: string;
   title: string;
   /** 特性(业务模块名标签;空白归「未分类」)。 */
   module: string;
   concluded_at: string;
-  /** 一次生成占比(百分数一位小数)。 */
+  /** 首次生成占比(百分数一位小数)。 */
   share: number;
   pass: boolean;
   lines: { first: number; rework: number; external: number };
+  /** 检视批次数(先行能力,呈现用)。 */
+  reviews: number;
+  /** 一次定位:分析报告一版过(与一次定位率同源判定)。 */
+  localization_pass: boolean;
+  /** 一次验证:验证不通过次数=0(未答卡=通过)。 */
+  verify_pass: boolean;
+  /** 一次解决:定位与验证双一次。 */
+  solved_pass: boolean;
+}
+
+/** 一根比率轴:分子与占比(分母=完成交付全集,与一次定位率同源)。 */
+export interface IssueOnceGeneratedAxis {
+  passed: number;
+  rate: number | null;
+}
+
+/** 按代码仓的跨会话聚合行(只出代码衍生指标;过程率不设仓维度)。 */
+export interface IssueOnceGeneratedRepoRow {
+  repo: string;
+  /** 涉及会话数(多仓会话按仓各计一次)。 */
+  sessions: number;
+  first: number;
+  rework: number;
+  external: number;
+  total: number;
+  share: number | null;
 }
 
 export interface IssueOnceGenerated {
@@ -4180,6 +4209,15 @@ export interface IssueOnceGenerated {
   total: number;
   passed: number;
   rate: number | null;
+  /** 完成交付会话总数(三根过程率轴的分母)。 */
+  delivered: number;
+  /** 一次定位率(报告一版过;分母=完成交付全集)。 */
+  localization: IssueOnceGeneratedAxis;
+  /** 一次验证率(验证不通过次数=0)。 */
+  verify: IssueOnceGeneratedAxis;
+  /** 一次解决率(定位与验证双一次)。 */
+  solved: IssueOnceGeneratedAxis;
+  by_repo: IssueOnceGeneratedRepoRow[];
   pending: number;
   unsupported: number;
   no_code: number;
@@ -4197,8 +4235,10 @@ export interface IssueCodeOriginCommitRow {
   subject: string;
   at: string;
   origin: "first" | "rework" | "external";
-  /** 该提交在最终留存差异中拥有的新增行数。 */
-  lines: number;
+  /** 该提交的源码新增行数。 */
+  adds: number;
+  /** 该提交的源码删除行数(与新增同权,正向工作量)。 */
+  dels: number;
 }
 
 export interface IssueCodeOriginRepoOk {
@@ -4257,6 +4297,9 @@ export type IssueRegistrationEnvironment =
 export function createIssue(input: {
   title: string;
   description?: string;
+  /** 发起备注(DTS 列表随单填写的文本输入):进登记元信息,AI 开场
+   * 被要求重点优先读;不传=没填。 */
+  remark?: string;
   source?: "manual" | "dts";
   ticket?: string;
   repo_url?: string;

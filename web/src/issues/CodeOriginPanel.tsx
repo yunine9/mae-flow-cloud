@@ -96,8 +96,8 @@ export function IssueCodeOriginPanel({ id, threshold }: {
         </span>
       )}
       <span className="text-sm text-muted-foreground">
-        首轮 {num(total.first)} 行 · 返工 {num(total.rework)} 行 · 平台外 {num(total.external)} 行
-        (平台外改的行计入分母——AI 没一次生成就算没做到)
+        首轮 {num(total.first)} 工作行 · 返工 {num(total.rework)} · 平台外 {num(total.external)}
+        (变更行=新增+删除,增删均计;平台外改动计入分母——AI 没一次做到就算没做到)
       </span>
       <span className="ml-auto text-xs text-muted-foreground">
         冻结于 {new Date(snapshot.generated_at).toLocaleString("zh-CN")}
@@ -145,7 +145,9 @@ export function IssueCodeOriginPanel({ id, threshold }: {
                 <tr className="text-muted-foreground">
                   <th className="py-1 pr-3 font-medium">提交</th>
                   <th className="py-1 pr-3 font-medium">分类</th>
-                  <th className="py-1 pr-3 font-medium">行数</th>
+                  <th className="py-1 pr-3 font-medium">+增</th>
+                  <th className="py-1 pr-3 font-medium">−删</th>
+                  <th className="py-1 pr-3 font-medium">工作行</th>
                   <th className="py-1 font-medium">说明</th>
                 </tr>
               </thead>
@@ -158,7 +160,9 @@ export function IssueCodeOriginPanel({ id, threshold }: {
                     <td className={cn("py-1 pr-3 font-semibold", ORIGIN_CLASS[commit.origin])}>
                       {ORIGIN_TEXT[commit.origin]}
                     </td>
-                    <td className="py-1 pr-3 tabular-nums">{num(commit.lines)}</td>
+                    <td className="py-1 pr-3 tabular-nums text-success">+{num(commit.adds)}</td>
+                    <td className="py-1 pr-3 tabular-nums text-danger">−{num(commit.dels)}</td>
+                    <td className="py-1 pr-3 tabular-nums">{num(commit.adds + commit.dels)}</td>
                     <td className="py-1 text-muted-foreground">{commit.subject}</td>
                   </tr>
                 ))}

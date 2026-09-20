@@ -332,8 +332,8 @@ export function IssueSessionView({
             </Badge>
             <Badge variant={detail.once_outcome.repair_pass
               ? "success" : "destructive"}
-              title="一次修复:环境验证零失败(与团队页一次修复成功率同口径)">
-              一次修复{detail.once_outcome.repair_pass ? "✓" : "✗"}
+              title="一次验证:验证不通过次数=0 即一次验证;未答卡=通过(合入即通过)">
+              一次验证{detail.once_outcome.repair_pass ? "✓" : "✗"}
             </Badge>
           </>}
           <span className="text-xs text-muted-foreground">
