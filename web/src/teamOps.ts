@@ -408,3 +408,58 @@ export function issueFeatureOnceRates(
 }
 
 
+// ---- 一次生成达标率的特性聚合(ADR-0044,工单 #340:交付分析「问题
+// 处理」页签的特性视图;与 issueFeatureRows 同一归类键) ----
+
+export interface OnceGeneratedFeatureRow {
+  module: string;
+  /** 会话数(分母=该特性有数据的完成交付会话)。 */
+  sessions: number;
+  /** 达标会话数(单会话占比 ≥ 达标线)。 */
+  passed: number;
+  /** 会话级达标率;分母 0 → null,前端显示 —。 */
+  pass_rate: number | null;
+  /** 行数加权的特性一次生成占比(与单会话占比同一口径:首轮行 ÷
+   *  全部留存源码行,跨会话求和后相除)。分母 0 → null。 */
+  share: number | null;
+  total_lines: number;
+}
+
+/** 按特性(业务模块标签,空白归「未分类」)聚合一次生成明细:输入是
+ *  once-generated 端点的 per_session(服务端已滤成分母全集)。排序:
+ *  会话数降序 → 行数降序 → 名称(与 issueFeatureRows 的排序精神
+ *  同构:处理多的特性先看)。 */
+export function onceGeneratedFeatureRows(
+  rows: ReadonlyArray<{
+    module: string;
+    share: number;
+    pass: boolean;
+    lines: { first: number; rework: number; external: number };
+  }>,
+): OnceGeneratedFeatureRow[] {
+  const groups = new Map<string, {
+    sessions: number; passed: number;
+    first: number; total: number;
+  }>();
+  for (const row of rows) {
+    const key = row.module?.trim() || "未分类";
+    const bucket = groups.get(key)
+      ?? { sessions: 0, passed: 0, first: 0, total: 0 };
+    bucket.sessions += 1;
+    if (row.pass) bucket.passed += 1;
+    bucket.first += row.lines.first;
+    bucket.total += row.lines.first + row.lines.rework + row.lines.external;
+    groups.set(key, bucket);
+  }
+  const percent = (value: number, total: number): number | null =>
+    total ? Math.round((value / total) * 1000) / 10 : null;
+  return [...groups.entries()].map(([module, bucket]) => ({
+    module,
+    sessions: bucket.sessions,
+    passed: bucket.passed,
+    pass_rate: percent(bucket.passed, bucket.sessions),
+    share: percent(bucket.first, bucket.total),
+    total_lines: bucket.total,
+  })).sort((a, b) => b.sessions - a.sessions || b.total_lines - a.total_lines
+    || a.module.localeCompare(b.module, "zh-Hans-CN"));
+}

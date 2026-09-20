@@ -65,9 +65,11 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
   assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
   // onceRates 是 #290 票4 一次率二轴统计的取数(服务端聚合,组件只渲染);
-  // 卡片自带新页签链接(ADR-0040),App 不再传 onOpenIssue 跳转回调。
+  // onceGenerated 是一次生成达标率(ADR-0044,终态伴生快照的读侧聚合),
+  // 同一条 allSettled 容错纪律;卡片自带新页签链接(ADR-0040),App 不再传
+  // onOpenIssue 跳转回调。
   assert.match(app,
-    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} \/>/);
+    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} onceGenerated=\{issueOnceGenerated\} \/>/);
 });
 
 test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {

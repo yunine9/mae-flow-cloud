@@ -23,6 +23,7 @@ import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
+  type IssueOnceGenerated,
   type IssueOnceRate,
   type IssueStatus,
   type IssueSummary,
@@ -178,11 +179,14 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
   </section>;
 }
 
-export function TeamIssueWorld({ issues, onceRates }: {
+export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
   issues: IssueSummary[];
   /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
    * 缺席=统计暂不可用(接口失败/问题流未启用),统计格显示 —。 */
   onceRates?: IssueOnceRate;
+  /** 一次生成达标率(ADR-0044,服务端 /issues/once-generated 聚合):
+   * 终态伴生快照的行级归属聚合,分母=有数据的完成交付会话;缺席同上。 */
+  onceGenerated?: IssueOnceGenerated;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<IssueScope>("all");
@@ -219,6 +223,19 @@ export function TeamIssueWorld({ issues, onceRates }: {
         + "——分析报告只生成一版即一次定位；检视提出修改会生成新版本。"
       : `一次修复 ${passed} / 完成交付 ${onceRates.total}`
         + "——点过「验证发现问题」即非一次修复。";
+  };
+
+  // 一次生成达标率瓦片(ADR-0044):数字只来自端点;hover 的口径说明
+  // 与起算日期是规格拍板的「小问号」(与既有 title 提示同款,不养弹层)。
+  const onceGeneratedTitle = (): string => {
+    if (!onceGenerated) return "一次生成统计暂不可用";
+    return `达标 ${onceGenerated.passed} / 有数据 ${onceGenerated.total}`
+      + "——单会话占比=首轮生成且存活到合入的源码行 ÷ 全部留存源码行"
+      + "(返工行与平台外改的行都算 AI 没一次生成,多仓按行数加权),"
+      + `占比 ≥ ${onceGenerated.threshold_percent}% 判达标(线可配)。`
+      + `${onceGenerated.pending} 个会话待算、`
+      + `${onceGenerated.unsupported} 个早于 ${onceGenerated.supported_since}`
+      + " 起算日不计入;逐会话明细见交付分析「问题处理」页签。";
   };
 
   const needle = query.trim().toLocaleLowerCase();
@@ -292,7 +309,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
-          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}`}>
+          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}，一次生成达标率 ${rateText(onceGenerated?.rate)}`}>
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
@@ -306,6 +323,8 @@ export function TeamIssueWorld({ issues, onceRates }: {
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("localization")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.localization.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次定位成功率</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("repair")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.repair.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次修复成功率</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceGeneratedTitle()}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceGenerated?.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次生成达标率</small></span>
         </div>
       </header>
       <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
