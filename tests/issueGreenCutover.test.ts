@@ -1,11 +1,11 @@
 /**
  * 绿灯切换(#246,ADR-0024):MR 全绿后平台不再代举 env_verify——
- * 监看器收口只投递「全绿」事实(startPlatformTurn 三态),AI 收到后
+ * 监看器收口只发送「全绿」事实(startPlatformTurn 三态),AI 收到后
  * 经 raise_gate 举验证卡;收口≠流程完成,验证卡是 mr_green 出口的
  * 后半截,欠着不举由催办机器打回(shouldNudgeFixed 出口卡未清判据)。
  *
  * 覆盖四幕:
- * 1. 监看器滞后收口(验绿门放行)→ 投递开回合 → AI 举卡 → 等待通知;
+ * 1. 监看器滞后收口(验绿门放行)→ 发送事实开回合 → AI 举卡 → 等待通知;
  * 2. 漏举催办:收口后 AI 收嘴不举卡 → 专用催办词打回 → 举出;
  * 3. 停靠场景:全绿到达时 AI 卡正挂着 → 便签 → 答卡续跑(#244 注入)
  *    → 模型见通知举卡(单卡并存不出现);
@@ -85,7 +85,7 @@ function baseOptions(dataDir: string, model: ScriptedModelServer,
   };
 }
 
-test("全绿滞后收口:不代举——投递事实开回合,AI 经 raise_gate 举验证卡", async () => {
+test("全绿滞后收口:不代举——发送事实开回合,AI 经 raise_gate 举验证卡", async () => {
   const dataDir = mfcTemp("mfc-greencutover-");
   seedGreenWatch(dataDir, ORIGIN, SHA);
   const platform = new LoopPlatform("success");
@@ -101,13 +101,13 @@ test("全绿滞后收口:不代举——投递事实开回合,AI 经 raise_gate 
   const service = new IssueFlowService(baseOptions(dataDir, model, platform,
     luban));
   try {
-    // 投递回合先点火:全绿事实进模型上下文。
+    // 发送回合先启动:全绿事实进模型上下文。
     await until(() => model.requests.length >= 1 ? true : undefined,
-      "全绿投递回合点火");
+      "全绿发送回合启动");
     assert.match(JSON.stringify(model.requests), /全部 MR 流水线已跑绿/,
       "全绿事实进模型上下文");
     assert.match(JSON.stringify(model.requests), /raise_gate/,
-      "投递词带举卡指引");
+      "发送词带举卡指引");
 
     // AI 经工具举卡:卡面/等待通知/裁决链路与代举时代同构。
     const gated = await until(() => {
@@ -198,7 +198,7 @@ test("停靠场景:全绿到达时 AI 卡挂着——便签随答卡续跑送达
       const issue = service.get("issue-1");
       return issue.status === "waiting_user" && issue.waiting ? issue : undefined;
     }, "AI 问题卡先停");
-    // 全绿落在等人窗口:投递走便签,不抢答。
+    // 全绿落在等人窗口:发送走便签,不抢答。
     await until(() => {
       const state = readStateFile(dataDir, "issue-1");
       return state.parked_notices?.length ? state : undefined;

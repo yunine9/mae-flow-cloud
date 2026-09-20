@@ -29,9 +29,10 @@ test("导航按域拆两条:团队需求(view=team)+团队问题(view=teamIssues
   // View 类型与路由白名单都认 teamIssues,历史恢复不会把它丢成根视图。
   assert.match(app, /type View = "team" \| "teamIssues"/);
   assert.match(app, /"team", "teamIssues", "mine"/);
-  // 两条导航都在,徽章各算各的域(需求等决策/问题等答复含 idle)。
+  // 两条导航都在;团队问题的徽章=等答复含 idle。团队需求行不挂数
+  // (3c7c3558 移除:等决策入口在「我的需求」,团队行再挂数珠重复无益)。
   assert.match(app,
-    /view="team" current=\{view\} onSelect=\{selectView\} label="团队需求" badge=\{waitingCount\}/);
+    /view="team" current=\{view\} onSelect=\{selectView\} label="团队需求" \/>/);
   assert.match(app,
     /view="teamIssues" current=\{view\} onSelect=\{selectView\} label="团队DTS" badge=\{issueWaitingCount\}/);
   assert.match(app,

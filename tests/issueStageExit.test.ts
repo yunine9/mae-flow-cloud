@@ -81,7 +81,7 @@ class GatePlatform {
   defaultStatus: "running" | "success" | "failed" = "running";
   /** 模拟同一 SHA 已有旧终态、随后重跑仍在进行的真实返回顺序。 */
   historicalStatus?: "success" | "failed";
-  /** 陈灯窗口(#108):>0 时,对"非首查 SHA"的状态查询返回旧 SHA 的
+  /** 过期结果窗口(#108):>0 时,对"非首查 SHA"的状态查询返回旧 SHA 的
    * 红灯 run(run 级 sha 标旧值,#106 已透传)——模拟修复重推新提交
    * 后、新 run 在平台注册前的窗口期。每命中一次自减,归零即视为
    * "新 run 已注册",后续查询回归正常路径。 */
@@ -185,7 +185,7 @@ function chainScenes(origin: string, steps: Array<string[] | Scene>): Scene[] {
     // - 当场收口(complete_stage 即全绿):紧接着的第一组 raise_gate
     //   直接放行,闸落、收口等待;
     // - 受理等绿(申报时在跑):第一组 raise_gate 被拒(未全绿,前置
-    //   校验按新契约打回),等监看器全绿后的投递回合消费第二组。
+    //   校验按新契约打回),等监看器全绿后的发送回合消费第二组。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
     { text: "已举卡等待验证。" },
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
@@ -543,7 +543,7 @@ test("MR 验绿门·只认最新 run:历史绿/红后最新 running 均不得提
   }
 });
 
-test("MR 验绿门·陈灯防御:窗口期旧 SHA 红灯不冤枉重推的申报,受理停等到真绿", async () => {
+test("MR 验绿门·过期结果防御:窗口期旧 SHA 红灯不冤枉重推的申报,受理停等到真绿", async () => {
   const chain = await startChain({
     platformStatus: "failed",
     // 真实事故形态(#108):AI 修复重推新提交(换 SHA)后立即 complete_stage
@@ -575,12 +575,12 @@ test("MR 验绿门·陈灯防御:窗口期旧 SHA 红灯不冤枉重推的申报
     const errors = chain.errorReceipts();
     assert.equal(errors.length, 1, "只有首报的真红被打回,重申报不得被打回");
     assert.match(errors[0], /BUILD FAILURE/);
-    // 受理停等:申报账在场、回执「已受理」、台账点名陈灯已拒。
+    // 受理停等:申报账在场、回执「已受理」、台账点名过期结果已拒。
     const saved = chain.saved();
     assert.equal(saved.stage, "mr_green", "受理停等,阶段不动");
     assert.deepEqual(saved.mr_gate?.mrs, [chain.origin], "窗口期重申报记了申报账");
     assert.match(chain.okReceipts(), /已受理/);
-    assert.match(chain.trail(), /陈灯/, "陈灯已拒要进台账留痕");
+    assert.match(chain.trail(), /过期结果已拒/, "过期结果已拒要进台账留痕");
     // 平台放开返回真绿(新 run 注册并跑绿):监看器收口,全链走完。
     chain.platform.defaultStatus = "success";
     const done = await until(() => {

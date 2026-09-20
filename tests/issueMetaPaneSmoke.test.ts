@@ -139,7 +139,7 @@ test("主动拉取/下载按钮(#267/#268):关态两钮全无(三态计数防闪
   assert.ok(!peer.includes("拉取日志"), "查看模式不出拉取写口(意图递交是写)");
   for (const status of ["canceled", "archived", "failed"] as const) {
     assert.ok(!render({ status }).includes("拉取日志"),
-      `${status} 终态不出拉取钮(终态投递只会写成死信)`);
+      `${status} 终态不出拉取钮(终态通知只会写成死信)`);
   }
 });
 

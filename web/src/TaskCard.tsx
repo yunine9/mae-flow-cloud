@@ -394,7 +394,7 @@ export function TaskCard({
             <Alert variant="destructive" className="mb-3">
               <AlertTitle>小鲁班通知未送达</AlertTitle>
               <AlertDescription>
-                已完成 {task.notify.attempts} 次投递仍未送达
+                已完成 {task.notify.attempts} 次发送仍未送达
                 {notifyHttpError ? `（${notifyHttpError}）` : ""}。
                 待办仍然有效，请在本页处理。
               </AlertDescription>

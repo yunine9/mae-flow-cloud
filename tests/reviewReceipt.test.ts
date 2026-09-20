@@ -39,7 +39,7 @@ test("检视完成回执:committer 点完成,发起人收到通知", async () =>
     });
     const id = service.create("回执演练").id;
     const review = await service.requestReview(id, "alice", "bob");
-    await until(() => luban.messages.length >= 1, "邀请通知投递");
+    await until(() => luban.messages.length >= 1, "邀请通知送达");
     const invites = luban.messages.length;
     const draft = service.addAnnotation(id, {
       author: "bob", artifact: "spec.md", file: "spec.md", line: 1,
@@ -58,7 +58,7 @@ test("检视完成回执:committer 点完成,发起人收到通知", async () =>
     });
     service.verifyAnnotation(id, draft.id, "本地用户", false, { revision: 0, outcome: "deferred", reason: "下次迭代补充" });
     service.completeReview(review.id, "bob");
-    await until(() => luban.messages.length > invites, "完成回执投递");
+    await until(() => luban.messages.length > invites, "完成回执送达");
     const receipt = luban.messages[luban.messages.length - 1] as
       Record<string, unknown>;
     assert.equal(receipt.account, "alice", "回执发给发起人,不是自己");

@@ -21,7 +21,7 @@ test("只接管完整系统检视目标，用户追加目标、工作台待处�
   assert.equal(canHandoffReview(undefined, summary, true), false);
 });
 
-test("阶段性推送缺回复或还有本地工作时继续 Agent；完整回复投递失败也不让 Agent 重写", async () => {
+test("阶段性推送缺回复或还有本地工作时继续 Agent；完整回复发送失败也不让 Agent 重写", async () => {
   let failure: string | undefined = "MR 逐条回复缺少：d2";
   let ready = true, eligible = true, staged = 0, completed = 0, waited = 0;
   const host = {

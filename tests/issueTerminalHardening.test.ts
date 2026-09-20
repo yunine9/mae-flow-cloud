@@ -1,6 +1,6 @@
 /**
  * 体检③④修复的回归钉(2026-09-10,ADR-0020 验收句对照产物):
- * - 高洞(C-H1/C-H2):取消落在监看迭代内,结算/举闸/预算块都不得再写
+ * - 高洞(C-H1/C-H2):取消落在监看迭代内,监看收口/举闸/预算块都不得再写
  *   已终态会话——canceled 不被覆写成 waiting_user,不发"请人工"通知;
  * - C-H3:终态(挂起同款)会话不接受补配环境(防复活);
  * - C-H6:收口清面——终态会话不再投影闸/未决卡;
@@ -109,7 +109,7 @@ async function watchFixture() {
   };
 }
 
-test("取消撞上监看迭代:终态不被结算/举闸/预算块覆写,环境补配拒绝", async () => {
+test("取消撞上监看迭代:终态不被监看收口/举闸/预算块覆写,环境补配拒绝", async () => {
   const scene = await watchFixture();
   try {
     scene.confirm();
@@ -123,7 +123,7 @@ test("取消撞上监看迭代:终态不被结算/举闸/预算块覆写,环境�
     assert.equal(scene.service.get(scene.id).status, "canceled");
     const sha = scene.service.get(scene.id).pushes!.at(-1)!.sha;
     scene.platform.finishPipeline(sha, "failed", "compile: 语义错误");
-    // 等监看循环醒来跑完这一拍(两个轮询周期):任何结算路径都不得
+    // 等监看循环醒来跑完这一拍(两个轮询周期):任何收口路径都不得
     // 把 canceled 写回 waiting_user、不得落闸、不得发"请人工"。
     await new Promise((resolve) => setTimeout(resolve, 2500));
     const after = scene.service.get(scene.id);

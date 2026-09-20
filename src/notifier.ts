@@ -2,9 +2,9 @@
  * 小鲁班通知(主 spec §9/§14.4)——内网能力的可替换模拟。
  *
  * 语义三条,真假件共同遵守:
- * 1. WAITING_FOR_HUMAN 事件投递给任务创建时填写的账号,附审批链接;
- * 2. 投递失败不改变流程状态:Web 待办仍在,后台有限退避重试并记录
- *    投递结果,页面能看到"通知没送到"这个事实(标红的依据);
+ * 1. WAITING_FOR_HUMAN 事件发送给任务创建时填写的账号,附审批链接;
+ * 2. 发送失败不改变流程状态:Web 待办仍在,后台有限退避重试并记录
+ *    发送结果,页面能看到"通知没送到"这个事实(标红的依据);
  * 3. 同一张待办不重复生成通知记录,重试只累计次数。
  *
  * 文案可模板化(部署级配置,{占位符} 词汇表见
@@ -28,7 +28,7 @@ export interface NotifyRecord {
   step: string;
   summary: string;
   link: string;
-  /** 投递正文(说人话,构造时定稿;重试只重发不重写)。 */
+  /** 发送正文(说人话,构造时定稿;重试只重发不重写)。 */
   text: string;
   attempts: number;
   delivered: boolean;
@@ -194,12 +194,12 @@ function waitingSummary(input: {
 }
 
 export interface NotifierOptions {
-  /** 小鲁班投递端点(真件=内网地址,演示=FakeLubanServer)。 */
+  /** 小鲁班发送端点(真件=内网地址,演示=FakeLubanServer)。 */
   endpoint: string;
   /** 真件鉴权头(如 Authorization)。假件不需要;值是密钥,来自
    * 权限 600 的配置文件,不落日志。 */
   headers?: Record<string, string>;
-  /** 运行时覆盖(管理页热改):每次投递现读,返回 endpoint/headers 的
+  /** 运行时覆盖(管理页热改):每次发送现读,返回 endpoint/headers 的
    * 覆盖值,没有就回落静态配置。生效边界=下一条消息。 */
   live?: () => { endpoint?: string; headers?: Record<string, string> };
   /** 发件人的通知令牌(小鲁班以令牌对应的人的身份发消息,所以
@@ -249,14 +249,14 @@ export class Notifier {
     return found ? { ...found } : undefined;
   }
 
-  /** 原位重跑或彻底删除后，旧任务通知不能继续占用幂等键。投递中的
+  /** 原位重跑或彻底删除后，旧任务通知不能继续占用幂等键。发送中的
    * Promise 只持有 record 对象，删除 Map 项后即使晚到也不会复活。 */
   purgeTask(taskId: string): number {
     let removed = 0;
     for (const [id, record] of this.records) {
       if (record.task_id !== taskId) continue;
       this.records.delete(id);
-      // 投递请求不能真正取消，但它不应阻止同 ID 的新任务启动新投递。
+      // 发送请求不能真正取消，但它不应阻止同 ID 的新任务启动新发送。
       this.pendingDeliveries.delete(id);
       removed += 1;
     }
@@ -285,7 +285,7 @@ export class Notifier {
     };
   }
 
-  /** 投递一张待办。同 waiting_id 幂等——恢复重放不重复通知。 */
+  /** 发送一张待办。同 waiting_id 幂等——恢复重放不重复通知。 */
   async notifyWaiting(input: {
     waitingId: string;
     stateVersion?: number;
@@ -421,7 +421,7 @@ export class Notifier {
   }
 
   /** 登记指派通知(ADR-0031):测试登记问题并指派责任人时一次性送达。
-   * 同问题幂等(恢复重放不重发);投递失败由调用方旁路,不改登记结果。 */
+   * 同问题幂等(恢复重放不重发);发送失败由调用方旁路,不改登记结果。 */
   async notifyAssignment(input: {
     taskId: string;
     /** 责任人:问题登记后的归属与推进人,通知收件人。 */
@@ -463,7 +463,7 @@ export class Notifier {
   }
 
   /** 责任人主动邀请 Committer 检视。与流程自动通知不同：
-   * 每次点击都是一次明确动作，因此不跨点击幂等，并等待投递结果回给界面。 */
+   * 每次点击都是一次明确动作，因此不跨点击幂等，并等待发送结果回给界面。 */
   async notifyReview(input: {
     taskId: string;
     senderAccount: string;
@@ -538,7 +538,7 @@ export class Notifier {
     return record;
   }
 
-  /** 当前生效的投递目标:运行时覆盖压过静态配置。 */
+  /** 当前生效的发送目标:运行时覆盖压过静态配置。 */
   private target(): { endpoint: string; headers: Record<string, string> } {
     const live = this.options.live?.() ?? {};
     return {
@@ -547,8 +547,8 @@ export class Notifier {
     };
   }
 
-  /** 测试投递(管理页按钮):单次、不重试、结果如实带回。
-   * 它绕开台账(records)——测试消息不是业务事实,不该混进投递记录。 */
+  /** 测试发送(管理页按钮):单次、不重试、结果如实带回。
+   * 它绕开台账(records)——测试消息不是业务事实,不该混进发送记录。 */
   async testDelivery(account: string): Promise<{ ok: boolean; error?: string }> {
     const { endpoint, headers } = this.target();
     try {
@@ -611,14 +611,14 @@ export class Notifier {
       } catch (error) {
         record.last_error = String(error);
         this.options.log?.(
-          `通知投递失败(第 ${record.attempts} 次): ${record.last_error}`);
+          `通知发送失败(第 ${record.attempts} 次): ${record.last_error}`);
       }
     }
     // 重试预算耗尽:留痕即可,流程状态一个字不动(§14.4)。
     record.settled = true;
   }
 
-  /** 同一幂等记录在并发重放时共享一次投递；所有等待者只拿最终事实。 */
+  /** 同一幂等记录在并发重放时共享一次发送；所有等待者只拿最终事实。 */
   private async deliverTracked(
     record: NotifyRecord,
     tokenAccount = record.account,
@@ -628,7 +628,7 @@ export class Notifier {
     if (!pending) {
       const started = this.deliver(record, tokenAccount);
       pending = started.finally(() => {
-        // purge 后可能已有同 ID 新投递；旧 Promise 晚到不能删掉新值。
+        // purge 后可能已有同 ID 新发送；旧 Promise 晚到不能删掉新值。
         if (this.pendingDeliveries.get(record.waiting_id) === pending) {
           this.pendingDeliveries.delete(record.waiting_id);
         }

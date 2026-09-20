@@ -473,7 +473,7 @@ test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续�
       "现场账必须记录这是系统代答,不是用户作答");
     assert.ok(events.includes("两题都按推荐处理完毕"),
       "作答后走 resumeWithDecision 续跑,剧本下一幕真的执行了");
-    // 小鲁班 outcome 通知照发:台账记录人话摘要,投递载荷带工作台链接。
+    // 小鲁班 outcome 通知照发:台账记录人话摘要,通知载荷带工作台链接。
     const outcome = await until(() =>
       notifier.list().find((item) => item.summary.includes("介入档位免审批")),
       "代答 outcome 通知落台账");
@@ -483,8 +483,8 @@ test("自动档(一/二档):纯选项题 Agent 卡按推荐项整卡代答,续�
       luban.messages.find((message) =>
         String(message.link ?? "") === `${LINK_BASE}/issues/${created.id}`
         && String(message.text ?? "").includes("介入档位免审批")),
-      "代答 outcome 通知投递到假小鲁班");
-    assert.ok(delivered, "投递载荷带链接与代答说明");
+      "代答 outcome 通知送达假小鲁班");
+    assert.ok(delivered, "通知载荷带链接与代答说明");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

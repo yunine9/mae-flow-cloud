@@ -10,7 +10,7 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 重新监看)」这句修复口径散在 red.deliver.guidance / gate.evidence.tail /
 mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 ——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
-点火),动这句先核对机制还在。
+触发启动),动这句先核对机制还在。
 -->
 
 ## nudge.body
@@ -78,7 +78,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## parked.replay
 
-以下是平台此前投递、尚未送达你的通知,请一并纳入后续判断与动作:
+以下是平台此前发出、尚未送达你的通知,请一并纳入后续判断与动作:
 
 {{items}}
 
@@ -116,6 +116,10 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看)。
 
+## pipeline.green.head_moved
+
+平台通知: 仓 {{repo}} 分支的最新提交已变为 {{sha}},刚才跑绿的提交已不是分支头——旧提交的绿灯背书不了会被合入的代码,本次不作阶段收口,环境验证卡先不举。平台会自动把检查目标切到新提交、等它的流水线结果,出新结果会另行通知;若新提交不是本会话推的,先拉取分支最新代码、看清它与你会话内代码的差异,再决定要不要跟进,不要按工作区里的旧代码继续。
+
 ## red.deliver.header
 
 平台通知: 流水线未通过(仓 {{repo}},第 {{reds}}/{{max}} 轮红灯)。失败事实如下,怎么处置由你判断——平台不再替你分诊。
@@ -127,6 +131,10 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 - 报错原文有缺口、无法定位:不要猜改,调 raise_gate(kind=pipeline_evidence, repo={{repo}}),把缺口维度与原因写进 supplement,请用户把平台上的报错原文粘贴进卡作答;
 - 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
 举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
+
+## red.deliver.external_head
+
+注意:分支最新提交 {{sha}} 不是本会话推的——分支头已被平台外的推送取代,现在检查的就是这个提交。先拉取分支最新代码、看清它与你会话内代码的差异,再决定怎么修;不要按工作区里的旧代码盲目改。
 
 
 ## advance.knowledge_remind

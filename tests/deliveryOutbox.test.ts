@@ -79,7 +79,7 @@ test("部分回复已入队时，旧讨论的回复不能拼到待发送的正�
   assert.deepEqual(result.replies, [{ id: "d-new", body: "新回复" }, { id: "d-last", body: "最后回复" }]);
 });
 
-test("outbox 中段或完整坏行 fail-closed,不得伪装成空账继续投递", () => {
+test("outbox 中段或完整坏行 fail-closed,不得伪装成空账继续发送", () => {
   const path = join(mkdtempSync(join(tmpdir(), "mfc-outbox-bad-")),
     "outbox.jsonl");
   const outbox = new DeliveryOutbox(path);
@@ -92,7 +92,7 @@ test("outbox 中段或完整坏行 fail-closed,不得伪装成空账继续投递
   assert.throws(() => new DeliveryOutbox(path).list(), /第 2 行损坏/);
   assert.throws(() => new DeliveryOutbox(path).pendingReviewReplies(),
     /第 2 行损坏/,
-  "损坏时不得返回空 pending，避免宿主误以为全部已投递");
+  "损坏时不得返回空 pending，避免宿主误以为全部已发送");
 });
 
 test("pending 回复可按当前 push SHA 过滤，旧提交不会冒充本轮已排队", () => {
@@ -110,7 +110,7 @@ test("pending 回复可按当前 push SHA 过滤，旧提交不会冒充本轮�
   assert.deepEqual(outbox.pendingReviewReplies("b".repeat(40))
     .map((item) => item.id), [current.id]);
   assert.ok(outbox.pendingReviewReplies().some((item) => item.id === old.id),
-    "旧动作仍须留在台账，不能伪造成已投递或删除审计事实");
+    "旧动作仍须留在台账，不能伪造成已发送或删除审计事实");
 });
 
 test("outbox 合法 JSON 也逐字段验真，伪 delivered 与篡改 item 均 fail-closed", () => {
@@ -127,7 +127,7 @@ test("outbox 合法 JSON 也逐字段验真，伪 delivered 与篡改 item 均 f
     ...enqueue, item: { ...enqueue.item, state: "delivered" },
   }) + "\n", "utf-8");
   assert.throws(() => new DeliveryOutbox(path).list(), /入队项无效/,
-    "enqueue 不能自报 delivered 后跳过真实投递");
+    "enqueue 不能自报 delivered 后跳过真实发送");
 
   writeFileSync(path, JSON.stringify({
     ...enqueue, item: { ...enqueue.item, id: "review-reply-forged" },
@@ -138,7 +138,7 @@ test("outbox 合法 JSON 也逐字段验真，伪 delivered 与篡改 item 均 f
   writeFileSync(path, JSON.stringify(enqueue) + "\n"
     + JSON.stringify({ op: "delivered", id: item.id }) + "\n", "utf-8");
   assert.throws(() => new DeliveryOutbox(path).list(), /delivered 操作无效/,
-    "缺时间的 delivered 不能把 pending 静默改成已投递");
+    "缺时间的 delivered 不能把 pending 静默改成已发送");
 
   assert.throws(() => outbox.enqueueReviewReply({
     discussion_id: "d-no-sha", body: "已修", repo: "repo", resolve: false,

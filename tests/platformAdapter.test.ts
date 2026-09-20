@@ -383,7 +383,7 @@ test("报告后新口子:平铺布尔门禁、先查后建、两步回复/解决
   await assert.rejects(() => legacy.handle(
     "POST", "/mr/discussions/d-legacy/reply", new URLSearchParams(),
     { repo: "r", body: "回复正文", idempotency_key: "stable-action-key" },
-    {}), /模板未引用 \{idempotency_key\}.*拒绝非幂等投递/s);
+    {}), /模板未引用 \{idempotency_key\}.*拒绝非幂等发送/s);
   const compatible = await legacy.handle(
     "POST", "/mr/discussions/d-legacy/reply", new URLSearchParams(),
     { repo: "r", body: "旧调用无幂等键" }, {});
@@ -481,7 +481,7 @@ test("降级链+contract 直通:首路挂了走次路,回显 sha/is_valid 透传
   assert.equal(result.status, 200);
   const runs = (result.payload as any).runs;
   assert.equal(runs.length, 2);
-  // 陈灯标记与 SHA 回显原样透传——机械核验在宿主(selectTerminalRun)。
+  // 过期结果标记与 SHA 回显原样透传——机械核验在宿主(selectTerminalRun)。
   assert.equal(runs[0].is_valid, false);
   assert.equal(runs[1].sha, "a".repeat(40));
   assert.equal(runs[1].pipeline_id, "88");

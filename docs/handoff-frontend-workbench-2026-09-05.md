@@ -72,7 +72,7 @@
   `workspaceExecutionPanel.test.ts`、`uiWorkbenchScenarios.test.ts`、`usabilityTweaks.test.ts`、
   `workspaceUiLogic.test.ts`。
 - Claude 内置 Browser 面板里 `document.hidden` 恒为 true，前端不轮询；注入
-  `visibilityState=visible` 才拉数据；rAF 不投递。Codex 若用别的浏览器不受影响。
+  `visibilityState=visible` 才拉数据；rAF 不触发。Codex 若用别的浏览器不受影响。
 - **五档宽度必看**：1440（明/暗）、1280、1000、800、390。用户在自己的浏览器里看，
   未说明分辨率。
 

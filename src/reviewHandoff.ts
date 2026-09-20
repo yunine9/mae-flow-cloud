@@ -37,7 +37,7 @@ export async function handoffReview(host: {
   const staged = await host.stage();
   host.assertActive();
   if (!staged.ok || !host.eligible()) return false;
-  const healthy = await host.flush(); // 网络投递由已有 outbox 监控继续，不为此重启模型。
+  const healthy = await host.flush(); // 网络发送由已有 outbox 监控继续，不为此重启模型。
   host.assertActive();
   if (!host.eligible()) return false;
   host.complete(); // 先记接管事实，重启可从同一 push 收据继续。

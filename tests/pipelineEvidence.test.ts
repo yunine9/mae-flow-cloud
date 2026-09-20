@@ -184,7 +184,7 @@ test("复合构建工具的 record 被归到编译维时，日志内容仍按 UT
 
 test("无强特征的日志不因嗅探放宽而冒充证据", () => {
   // record-id 映射在场也不行:并集的前提是内容有强特征,零特征日志
-  // 连映射维度也不背书(旧基线),否则派修只会照着一份没有内容的日志猜改。
+  // 连映射维度也不背书(旧基线),否则派发修复只会照着一份没有内容的日志猜改。
   const result = assessPipelineRepairEvidence({
     checks: [
       { dimension: "UT", status: "failed" },

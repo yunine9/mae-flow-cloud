@@ -196,3 +196,48 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
     await service.shutdown().catch(() => undefined);
   }
 });
+
+test("验证失败计数兼容生产记账格式(#328):「第 N 轮:」前缀不丢计数", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-oncerate-"));
+  const delivered = { conclusion: { kind: "delivered",
+    summary: "s", at: "2026-09-01T10:00:00Z" } };
+  // 生产真实格式:fixedRollback 统一给回退理由加「第 N 轮:」前缀,
+  // 裸前缀种子曾把开头匹配的失配遮住(一次修复成功率恒满分)。
+  const productionNote = (round: number, reason: string) => ({
+    at: "2026-09-01T09:00:00Z", source: "platform",
+    note: `第 ${round} 轮:${VERIFY_FAIL_NOTE_PREFIX}:${reason}`,
+  });
+  seedSession(dataDir, { id: "issue-prod", ticket: "DTS202609000101",
+    status: "archived", ...delivered,
+    transitions: [productionNote(2, "仍复现")] });
+  seedReport(dataDir, "issue-prod", 1);
+  seedSession(dataDir, { id: "issue-legacy", ticket: "DTS202609000102",
+    status: "archived", ...delivered,
+    transitions: [{ at: "2026-09-01T09:00:00Z", source: "platform",
+      note: `${VERIFY_FAIL_NOTE_PREFIX}:历史裸前缀旧账` }] });
+  seedReport(dataDir, "issue-legacy", 1);
+
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    let body: Record<string, unknown> = {};
+    await handleIssueRoutes(
+      { method: "GET", url: "/issues/stats" } as never,
+      {
+        writeHead: () => undefined,
+        end: (output?: string | Buffer) => {
+          body = JSON.parse(Buffer.isBuffer(output)
+            ? output.toString("utf-8") : output ?? "{}");
+        },
+      } as never,
+      ["issues", "stats"],
+      { issueFlow: service, authEnabled: false },
+    );
+    assert.equal(body.total, 2);
+    assert.deepEqual(body.repair, { passed: 0, rate: 0 },
+      "生产格式与历史裸前缀都计为验证未通过,两种账都不再恒满分");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});

@@ -44,7 +44,7 @@ test("无依赖边也广播整个需求，任一子任务都能发，排队顺�
   assert.equal(internal(source.id).driver, undefined);
 });
 
-test("运行中即时入队；暂停、等人、已结束只记录；一个投递失败不影响其他任务", async (t) => {
+test("运行中即时入队；暂停、等人、已结束只记录；一个通知发送失败不影响其他任务", async (t) => {
   const { service, parent, source, child, internal } = fixture(t);
   const calls: string[] = [];
   internal(parent.id).summary.status = "running";

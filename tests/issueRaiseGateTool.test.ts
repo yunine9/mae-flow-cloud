@@ -327,7 +327,7 @@ test("端到端:AI 举验证卡落卡即返回收口等待;闸在场 AskUserQues
     linkBase: "http://work.test",
   });
   try {
-    // 空闲会话经真实投递入口点火(开回合);剧本 AI 举卡、再试图追问。
+    // 空闲会话经真实发送入口启动(开回合);剧本 AI 举卡、再试图追问。
     service.requestRepoChanges("issue-1", { add: [BETA], remove: [] });
     const gated = await until(() => {
       const issue = service.get("issue-1");

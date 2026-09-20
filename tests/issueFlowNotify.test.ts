@@ -94,9 +94,9 @@ test("Agent 举卡等决策:通知归属用户,载荷钉死;恢复不重复,正�
     // ① 举卡 → waiting_user → 通知送达,载荷与卡一一对应。
     const record = await until(() => notifier.list()[0], "Agent 卡通知");
     // until 把 false 也当"已就绪"(非 undefined 即返回),这里必须
-    // 回传数组本身做真值探针,等投递真正落账再断言条数。
+    // 回传数组本身做真值探针,等发送真正落账再断言条数。
     await until(() => luban.messages.length >= 1 ? luban.messages : undefined,
-      "通知投递到假小鲁班");
+      "通知送达假小鲁班");
     assert.equal(record.task_id, created.id);
     assert.equal(record.account, "dev");
     assert.equal(record.waiting_id, `${created.id}:scripted-0`,

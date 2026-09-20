@@ -74,7 +74,7 @@ function baseOptions(dataDir: string, model: ScriptedModelServer): IssueFlowOpti
 }
 
 /** 推送回归现场:盘上种子一个固定流程会话(fix 阶段收口后的返工续推,
- * 阶段门禁放行 push_branch,收口态不牵催办),恢复管线点火。必须在
+ * 阶段门禁放行 push_branch,收口态不牵催办),恢复管线启动。必须在
  * 构造服务**之前**调用。 */
 function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
   const now = new Date().toISOString();

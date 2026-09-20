@@ -319,6 +319,21 @@ export function IssueSessionView({
               横幅语义收进 Badge merge 软皮。 */}
           {detail.takeover
             && <Badge variant="merge">人工接管中</Badge>}
+          {/* 一次结果章(仅修复完成归档的会话有,服务端按两轴同口径
+              判定后下发):定位=报告一版过,修复=验证零失败;绿章=一次
+              过,红章=经过返工。无单/非交付会话不带字段,自然不渲染。 */}
+          {detail.once_outcome && <>
+            <Badge variant={detail.once_outcome.localization_pass
+              ? "success" : "destructive"}
+              title="一次定位:分析报告一版过(与团队页一次定位成功率同口径)">
+              一次定位{detail.once_outcome.localization_pass ? "✓" : "✗"}
+            </Badge>
+            <Badge variant={detail.once_outcome.repair_pass
+              ? "success" : "destructive"}
+              title="一次修复:环境验证零失败(与团队页一次修复成功率同口径)">
+              一次修复{detail.once_outcome.repair_pass ? "✓" : "✗"}
+            </Badge>
+          </>}
           <span className="text-xs text-muted-foreground">
             {issueStageText(detail)}
             {detail.round && detail.round > 1 ? `(第 ${detail.round} 轮)` : ""}

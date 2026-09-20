@@ -3,7 +3,7 @@ import { getPipelineStatus, type PipelineCallBase, type PipelineRun } from "./pi
 
 /** 只观察指定提交。编码会话换代不撤销旁路监听；停止条件由宿主掌握。
  * 空查询、查询失败和真实 running 分开，不重复触发、不使用旧 SHA 结果。
- * 终态如何处理由宿主决定：提前验证只更新事实，正式交付才派修/核销。 */
+ * 终态如何处理由宿主决定：提前验证只更新事实，正式交付才派发修复/核销。 */
 export async function watchTaskPipeline(options: {
   call(): PipelineCallBase & { sha: string };
   interval: number;

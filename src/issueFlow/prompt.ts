@@ -32,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import type { IssueSessionState } from "./state.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import { issueRepoWorkspaces } from "./state.ts";
+import { extractIssueAttachmentPaths } from "./issueAttachments.ts";
 import {
   FIXED_STAGE_LABELS,
   fixedStages,
@@ -140,18 +141,43 @@ export interface IssueEnvCredentials {
   root?: string;
 }
 
-/** 登记元信息:手工登记时人填的输入全量(标题/现象/模块/带出仓/
- * 网管环境/登记人)。module/environment 只在会话真带这些信息时出现——
- * DTS 页签发起的会话环境闸还没补配,键整段缺席,不造空壳。reporter
- * 只在登记人≠责任人(登记指派,ADR-0031)时出现——AI 该知道现象
- * 描述出自谁之手,自登记两号同一不必赘述。 */
+/** 登记元信息:手工登记时人填的输入全量(标题/现象/登记附件/模块/
+ * 带出仓/产品版本/网管环境/登记人/责任人)加现场指针(流程形态/单号/
+ * 修复分支/知识仓/转正来源)。大块内容一律给引用不给本体——知识仓给
+ * 工作区路径,附件给文件路径,AI 拿指针自己读。
+ * module/environment 只在会话真带这些信息时出现——DTS 页签发起的会话
+ * 环境闸还没补配,键整段缺席,不造空壳。reporter 只在登记人≠责任人
+ * (登记指派,ADR-0031)时出现——AI 该知道现象描述出自谁之手,自登记
+ * 两号同一不必赘述。 */
 export interface IssueRegistrationMeta {
+  /** 流程形态(有单/无单):阶段路线与出口不同,工具清单随之有别。 */
+  scenario: "ticket" | "no_ticket";
   title: string;
   description: string;
   /** 登记人(ADR-0031):通常是测试,问题由其登记提交;缺席=自登记。 */
   reporter?: string;
+  /** 责任人工号:会话归属人与唯一推进者(CONTEXT.md 登记元信息词条
+   * 本就包含它,此前实现漏了,2026-09-19 补齐)。 */
+  account: string;
+  /** 登记附件(attachments/<hash>.<ext>,工作区相对路径):人随描述
+   * 上传的日志等分析材料,开场词单列一行引导优先查看;缺席=没传。 */
+  attachments?: string[];
   module?: { id: string; name: string; locked?: boolean };
-  repos: string[];
+  /** 登记仓全量:url 是克隆源,dir 是会话工作区内的落位(AI 按工作区
+   * 相对路径读代码,不必自己从地址推仓名)。 */
+  repos: Array<{ url: string; dir: string }>;
+  /** 产品版本(登记必填;DTS 发起按单据版本号经配置中心映射,手工
+   * 登记人选)与解析出的拉仓基线分支。 */
+  product_version?: string;
+  baseline?: string;
+  /** 单号与修复分支(有单才有;无单会话两键缺席)。 */
+  ticket?: string;
+  repair_branch?: string;
+  /** 知识仓指针(#286,ADR-0033):只读参考件的工作区落位,内容 AI
+   * 自己翻目录;装载未成功(skipped)缺席。 */
+  knowledge_repo?: { name: string; dir: string };
+  /** 转正来源:本会话由哪个无单挂起会话转正而来,交付账在旧会话。 */
+  inherited_issue?: string;
   environment?: {
     name: string;
     hosts: string[];
@@ -172,9 +198,18 @@ export function issueRegistrationMeta(
   credentials: IssueEnvCredentials = {},
 ): IssueRegistrationMeta {
   const env = state.environment;
+  // 工作区落位与仓一一对应(issueRepoWorkspaces 内含 repo_urls/repo_url
+  // 兼容与重名去重),剥掉可能的前导分隔符,给人看的恒是相对形态。
+  const repos = issueRepoWorkspaces(state, "").map(({ url, dir }) => ({
+    url, dir: dir.replace(/^[\\/]/, ""),
+  }));
+  const attachments = extractIssueAttachmentPaths(state.description);
   return {
+    scenario: state.scenario ?? "ticket",
     title: state.title,
     description: state.description,
+    account: state.account,
+    ...(attachments.length ? { attachments } : {}),
     ...(state.reporter && state.reporter !== state.account
       ? { reporter: state.reporter }
       : {}),
@@ -185,9 +220,23 @@ export function issueRegistrationMeta(
         ...(state.module_locked ? { locked: true } : {}),
       } }
       : {}),
-    repos: state.repo_urls?.length
-      ? [...state.repo_urls]
-      : state.repo_url ? [state.repo_url] : [],
+    repos,
+    ...(state.product_version ? { product_version: state.product_version } : {}),
+    ...(state.baseline ? { baseline: state.baseline } : {}),
+    ...(state.ticket
+      ? { ticket: state.ticket,
+        // 修复分支的派生式与 tools.ts 的 expectedBranch 一字不差
+        // (master_<工号>_<单号>):prompt.ts 不反向 import tools.ts
+        // (tools 已 import 本模块,倒边成环),故此处就地展开。
+        repair_branch: `master_${state.account}_${state.ticket}` }
+      : {}),
+    ...(knowledgeReady(state)
+      ? { knowledge_repo: {
+        name: state.knowledge_repo!.name,
+        dir: `repo/${state.knowledge_repo!.name}/`,
+      } }
+      : {}),
+    ...(state.converted_from ? { inherited_issue: state.converted_from } : {}),
     ...(env
       ? { environment: {
         name: env.name,
@@ -339,6 +388,13 @@ export function issueFixedOpeningPrompt(
   const facts = [
     `- 标题: ${meta.title}`,
     `- 描述: ${meta.description || "(无补充描述)"}`,
+    // 登记附件单列一行(2026-09-19 拍板):日志是核心分析材料,埋在
+    // 描述正文里容易被略读,单列并明确"优先查看"。
+    ...(meta.attachments?.length
+      ? [`- 登记附件: ${meta.attachments.join("、")}`
+          + "(用户上传的日志等文件,优先查看附件再下结论;"
+          + "压缩包先解压再读)"]
+      : []),
     moduleLine(meta),
     `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
     `- 工号: ${state.account}`,
@@ -346,6 +402,12 @@ export function issueFixedOpeningPrompt(
       ? [`- 登记人: ${meta.reporter}(问题由登记人登记并指派,现象描述出自其视角,` +
           "你推进过程中作答与决策的对象是责任人)"]
       : []),
+    ...(meta.product_version
+      ? [`- 产品版本: ${meta.product_version}`
+          + (meta.baseline ? `(拉仓基线分支: ${meta.baseline})` : "")]
+      : meta.baseline
+        ? [`- 拉仓基线分支: ${meta.baseline}`]
+        : []),
     repoLines(state)
       || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     knowledgeRepoLine(state),
@@ -430,6 +492,15 @@ export function issueResumePrompt(
       ? [`- 登记人: ${meta.reporter}(问题由其登记提交)`]
       : []),
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
+    // 附件与产品版本随续聊词重给(与开场词同一事实源):重启后模型
+    // 上下文是重建的,登记材料不随对话流失。
+    ...(meta.attachments?.length
+      ? [`- 登记附件: ${meta.attachments.join("、")}`
+          + "(用户上传的日志等文件,优先查看;压缩包先解压再读)"]
+      : []),
+    ...(meta.product_version
+      ? [`- 产品版本: ${meta.product_version}`]
+      : []),
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,

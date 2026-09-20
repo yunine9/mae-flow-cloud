@@ -305,7 +305,7 @@ test("目标分支前进后冲突门禁立即红;合入 409 给人话页面;补�
     assert.equal(refused.status, 409);
     const refusedHtml = await refused.text();
     assert.match(refusedHtml, /合入失败/);
-    assert.match(refusedHtml, /自动派修复|返回 MR 页/);
+    assert.match(refusedHtml, /自动派发修复|返回 MR 页/);
 
     // 任务侧合并目标分支后重推,门禁恢复绿,可正常合入。
     git(work, "fetch", "--quiet", "origin");

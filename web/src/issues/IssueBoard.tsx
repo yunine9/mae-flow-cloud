@@ -17,6 +17,7 @@ import {
   ISSUE_STATUS_TEXT,
   controlIssue,
   getIssue,
+  isIssueActive,
   issueStageText,
   listIssues,
   type AuthUser,
@@ -119,6 +120,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
   for (const issue of issues) {
     statusCounts.set(issue.status, (statusCounts.get(issue.status) ?? 0) + 1);
   }
+  // 「进行中」计数走 api 的 isIssueActive 单份口径,与侧栏父行徽章同源。
+  const activeCount = issues.filter((issue) => isIssueActive(issue.status)).length;
   // 「等你答复」选项的计数含 idle(展示归一,计数同步归一)。
   const filterOptionCount = (status: IssueStatus) =>
     status === "waiting_user"
@@ -126,8 +129,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
       : statusCounts.get(status) ?? 0;
   const visibleIssues = statusFilter === "all" ? issues
     : statusFilter === "active"
-      ? issues.filter((issue) =>
-          issue.status !== "archived" && issue.status !== "canceled")
+      ? issues.filter((issue) => isIssueActive(issue.status))
       : issues.filter((issue) => statusFilter === "waiting_user"
           ? issue.status === "waiting_user" || issue.status === "idle"
           : issue.status === statusFilter);
@@ -269,8 +271,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
           <label className="inline-flex items-center gap-1.5">
             <span className="text-[13px] font-bold text-muted-foreground">状态</span>
             <Select value={statusFilter}
-              items={[{ value: "active", label: `进行中(${issues.length - (statusCounts.get("archived") ?? 0)
-                - (statusCounts.get("canceled") ?? 0)})` },
+              items={[{ value: "active", label: `进行中(${activeCount})` },
                 ...ISSUE_FILTER_STATUSES.map((status) => ({
                   value: status, label: `${ISSUE_STATUS_TEXT[status]}(${filterOptionCount(status)})`,
                 })),
@@ -281,8 +282,7 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
               <SelectContent>
                 <SelectGroup>
                   <SelectItem value="active">
-                    进行中({issues.length - (statusCounts.get("archived") ?? 0)
-                      - (statusCounts.get("canceled") ?? 0)})
+                    进行中({activeCount})
                   </SelectItem>
                   {ISSUE_FILTER_STATUSES.map((status) => (
                     <SelectItem key={status} value={status}>

@@ -232,7 +232,7 @@ export class FakeGitPlatform {
                   `<p style=\"color:#b3261e\">${String(outcome.error ?? "")
                     .replace(/[&<>"]/g, (ch) => ({ "&": "&amp;",
                       "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!))}</p>`,
-                  "<p>任务侧门禁会在下一轮监控看到同样的红灯并自动派修复;",
+                  "<p>任务侧门禁会在下一轮监控看到同样的红灯并自动派发修复;",
                   "也可回到 MR 页刷新门禁状态。</p>",
                   `<p><a href=\"/mr/${mergeMatch[1]}\">返回 MR 页</a></p>`,
                   "</body></html>",

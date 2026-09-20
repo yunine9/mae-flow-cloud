@@ -88,7 +88,7 @@ test("空档期插话会被 pi 悄悄收下不送——宿主必须取得回来"
     assert.deepEqual(session.takeUndeliveredSteers(),
                      ["插一句:掩码要保留后四位"]);
     assert.deepEqual(session.takeUndeliveredSteers(), [],
-                     "取走即归宿主,不能留在 pi 队列里被二次投递");
+                     "取走即归宿主,不能留在 pi 队列里被重复送达");
   } finally {
     session.dispose();
     await model.stop();

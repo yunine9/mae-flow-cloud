@@ -4,8 +4,8 @@
  *   重启后已落账未注入的意见重新交给 AI;
  * - 漂移终态:版本对不上的回复条目标 failed 并重挂注入(自愈重写),
  *   不再永远 pending;
- * - 记账分家:投递成功→addressed(Agent 已回复,待检视人核验);讨论
- *   消失按投递账归因(AI resolve=true 不许记成"检视人已解决");
+ * - 记账分家:发送成功→addressed(Agent 已回复,待检视人核验);讨论
+ *   消失按发送账归因(AI resolve=true 不许记成"检视人已解决");
  * - 追问:同讨论版本号变化且未了结=新触发;
  * - 信箱损坏:记日志不崩,下一份草稿自愈重写。
  *
@@ -134,7 +134,7 @@ async function reviewFixture(options: {
   };
 }
 
-test("重启继续同步外部批注，旧待注入标志不再自动派修", async () => {
+test("重启继续同步外部批注，旧待注入标志不再自动派发修复", async () => {
   const scene = await reviewFixture({ seed: { id: "R1", body: "这里的连接池没有超时回收,存在泄漏风险" } });
   try {
     await until(() => reviewStore(scene.issueDir).list().some(item => item.external_review), "外部意见同步为批注");
@@ -152,7 +152,7 @@ test("重启继续同步外部批注，旧待注入标志不再自动派修", as
   } finally { await scene.stop(); }
 });
 
-test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自愈投递", async () => {
+test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自愈发送", async () => {
   const scene = await reviewFixture({
     seed: { id: "F1", body: "日志级别建议降为 debug" },
   });
@@ -173,15 +173,15 @@ test("漂移终态:版本对不上直接标失败并重挂注入,重写草稿自
       return item?.status === "failed"
         && /代码已更新|重写/.test(String(item.last_error ?? ""));
     }, "漂移条目标 failed(不再永远 pending)");
-    assert.equal(f1.replies.length, 0, "漂移条目绝不投递");
+    assert.equal(f1.replies.length, 0, "漂移条目绝不发送");
     // 漂移失败 → 重挂注入(AI 收到清单会重写);这里直接替 AI 重写草稿:
-    // failed 不挡新草稿,新条目绑当前收据 → 投递成功 → 记录转 addressed。
+    // failed 不挡新草稿,新条目绑当前收据 → 发送成功 → 记录转 addressed。
     writeFileSync(join(scene.issueDir, "mr-review-replies.json"),
       JSON.stringify([{ discussion_id: "F1", body: "已调整为 debug(重写)" }]));
-    await until(() => f1.replies.length > 0, "重写草稿自愈投递");
+    await until(() => f1.replies.length > 0, "重写草稿自愈发送");
     await until(() =>
       (scene.recordOf("F1")?.status ?? "") === "addressed",
-    "投递成功转 addressed(Agent 已回复,待检视人核验)");
+    "发送成功转 addressed(Agent 已回复,待检视人核验)");
   } finally {
     await scene.stop();
   }
@@ -198,10 +198,10 @@ test("归因分家:AI resolve 的讨论记『Agent 回复并解决』,检视人�
     // AI 回复(AI 视角写草稿;回合已收口,stage 绑当前收据)。
     writeFileSync(join(scene.issueDir, "mr-review-replies.json"),
       JSON.stringify([{ discussion_id: "A1", body: "已补充 3 个用例" }]));
-    await until(() => a1.replies.length > 0, "AI 回复投递(resolve=true)");
+    await until(() => a1.replies.length > 0, "AI 回复发送(resolve=true)");
     await until(() =>
       (scene.recordOf("A1")?.status ?? "") === "addressed",
-    "投递成功先转 addressed");
+    "发送成功先转 addressed");
     // resolve=true → 平台讨论被 AI 标解决 → 下一拍从清单消失 → 闭环,
     // 归因必须是 Agent,不得冒充"检视人已解决"。
     await until(() =>
@@ -231,7 +231,7 @@ test("追问作为新待判断批注，原意见本地闭环后不复活，也�
   } finally { await scene.stop(); }
 });
 
-test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常投递", async () => {
+test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常发送", async () => {
   const scene = await reviewFixture({
     seed: { id: "C1", body: "异常分支没有日志" },
   });
@@ -241,10 +241,10 @@ test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常投递
     writeFileSync(join(scene.issueDir, "mr-review-outbox.json"),
       "{ this is not json");
     const c1 = scene.platform.discussions.find((item) => item.id === "C1")!;
-    // AI 写草稿 → stage 用读到的空箱重建信箱(损坏文件被覆盖)→ 投递。
+    // AI 写草稿 → stage 用读到的空箱重建信箱(损坏文件被覆盖)→ 发送。
     writeFileSync(join(scene.issueDir, "mr-review-replies.json"),
       JSON.stringify([{ discussion_id: "C1", body: "已补充异常日志" }]));
-    await until(() => c1.replies.length > 0, "损坏后草稿照常投递(自愈)");
+    await until(() => c1.replies.length > 0, "损坏后草稿照常发送(自愈)");
     assert.equal(existsSync(join(scene.issueDir, "mr-review-replies.json")),
       false, "草稿即消费");
   } finally {
@@ -252,7 +252,7 @@ test("信箱损坏:监看不崩,下一份草稿自愈重写信箱并照常投递
   }
 });
 
-test("责任人答复直达 CodeHub:入信箱不绑版本,投递后转 addressed 归因责任人", async () => {
+test("责任人答复直达 CodeHub:入信箱不绑版本,发送后转 addressed 归因责任人", async () => {
   const scene = await reviewFixture({
     seed: { id: "O1", body: "建议补充单元测试覆盖超时分支" },
   });
@@ -270,7 +270,7 @@ test("责任人答复直达 CodeHub:入信箱不绑版本,投递后转 addressed
       "责任人答复发布到平台讨论");
     await until(() =>
       (scene.recordOf("O1")?.status ?? "") === "addressed",
-    "投递成功转 addressed");
+    "发送成功转 addressed");
     assert.match(scene.recordOf("O1")!.resolution ?? "", /责任人 dev 已回复/);
     assert.doesNotMatch(scene.recordOf("O1")!.resolution ?? "", /Agent 已回复/);
     const outbox = JSON.parse(
@@ -299,7 +299,7 @@ test("责任人答复勾选代点已解决:远端讨论标 resolved(2026-09-18 �
     await until(() => o1.resolved, "讨论在 CodeHub 标记已解决");
     await until(() =>
       (scene.recordOf("O1")?.status ?? "") === "addressed",
-    "投递成功本地转 addressed");
+      "发送成功本地转 addressed");
     const outbox = JSON.parse(
       readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf-8"));
     const item = outbox.items.find((entry: any) =>
@@ -336,7 +336,7 @@ test("忽略意见:本地软删,远端讨论代点已解决(2026-09-18 拍板)",
   }
 });
 
-test("全部合入后停止追踪新意见,在途回复照常投递", async () => {
+test("全部合入后停止追踪新意见,在途回复照常发送", async () => {
   const scene = await reviewFixture({
     seed: { id: "M1", body: "建议增加重试" },
   });
@@ -355,12 +355,12 @@ test("全部合入后停止追踪新意见,在途回复照常投递", async () =
       }] }));
     scene.platform.settleMr(
       scene.service.get(scene.id).mrs![0]!.branch, "merged");
-    // fixture 按住流水线 running,mr_green 不收口,合入监看未点火——
+    // fixture 按住流水线 running,mr_green 不收口,合入监看未启动——
     // 用归档核对同款的现扫通道完成首次观测,merged_at 才进账。
     assert.equal((await scene.service.mergeStatus(scene.id)).all_merged,
       true, "合入事实已观测");
     const m1 = scene.platform.discussions.find((item) => item.id === "M1")!;
-    await until(() => m1.replies.length > 0, "合入后在途回复仍投递");
+    await until(() => m1.replies.length > 0, "合入后在途回复仍发送");
     // 合入后到达的意见不再追踪(账保留,监看不再拉新)。
     scene.platform.seedDiscussion({
       id: "M2", body: "合入后的新报告", file: "b.cpp", line: 2,

@@ -44,7 +44,7 @@ const report = () =>
 
 /** 一路开到 mr_green 验绿收口的现场:假平台+剧本+服务三件套。
  *  流水线保持默认 success:申报即走即时验绿收口路(通知+合入监听
- *  都在这一路点火)。stopAtVerifyCard=true 时停在环境验证卡未答
+ *  都在这一路启动)。stopAtVerifyCard=true 时停在环境验证卡未答
  *  现场(测「未答卡+合入=自动归档」的验证通过语义)。 */
 async function greenFixture(opts: { stopAtVerifyCard?: boolean } = {}) {
   const dataDir = mfcTemp("mfc-issue-merge-");
@@ -109,7 +109,7 @@ async function greenFixture(opts: { stopAtVerifyCard?: boolean } = {}) {
   const gateVersion = service.get(created.id).gate!.state_version;
   service.answer(created.id, { state_version: gateVersion, code: "confirm" });
   // 全绿之后先由用户确认真实环境结果；合入事实监听与环境验证闸并行
-  // 点火。这个测试关心的是闸通过后的合入/归档，不应绕过当前流程。
+  // 启动。这个测试关心的是闸通过后的合入/归档，不应绕过当前流程。
   await until(() => {
     const snapshot = service.get(created.id);
     return snapshot.status === "waiting_user"

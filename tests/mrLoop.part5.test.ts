@@ -140,11 +140,11 @@ test("冲突门禁:宿主 merge 造真实冲突标记,会话在真冲突上解,�
   }
 });
 
-test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人话等待", async () => {
+test("内网真实门禁集(19 项):质量红要派发修复,受保护分支挂人话等待", async () => {
   // 2026-08-18 内网 selftest 第一次拿到真门禁集,比契约里的九项多十项。
   // 两件事必须钉死:
   // ①`codequality_passed` 是**改代码能解决的**(CodeCheck/CodeCC 那类),
-  //   归到等人就会让 MR 卡着没人动、任务干等到预算耗尽——必须派修复;
+  //   归到等人就会让 MR 卡着没人动、任务干等到预算耗尽——必须派发修复;
   // ②多出来的等人项要说人话:界面上"等 merged_by_user_passed"没人
   //   看得懂,而它的真实含义是"目标分支受保护,得让有权限的人点合入"。
   const platform = new FakeGitPlatform();
@@ -174,7 +174,7 @@ test("内网真实门禁集(19 项):质量红要派修复,受保护分支挂人�
     // 质量门禁红 → 派 CI 那一路修复(不是干等)
     await until(() =>
       (service.get(id)!.delivery?.loop?.kind ?? "") === "ci",
-      "质量门禁要派修复而不是挂起");
+      "质量门禁要派发修复而不是挂起");
     // 修完推新提交 → 质量门禁转绿 → 只剩"等人点合入"
     platform.humanGates.codequality_passed = true;
     await until(() =>
@@ -283,7 +283,7 @@ test("失败详情只是个链接:不派 Agent、不扣修复轮次并明确等�
       "无据时应如实等人工回灌");
     const task = service.get(id)!;
     assert.equal(task.delivery?.loop, undefined,
-      "没有派修就不能凭空产生或扣掉修复轮次");
+      "没有派发修复就不能凭空产生或扣掉修复轮次");
     assert.match(task.delivery?.waiting_on ?? "", /批注.*平台报错原文/);
     assert.deepEqual(task.delivery?.evidence_gap?.missing_dimensions,
       ["COMPILE"]);

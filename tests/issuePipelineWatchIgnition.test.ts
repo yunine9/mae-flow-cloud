@@ -1,9 +1,9 @@
 /**
- * 流水线监看点火跟随推送事实(issue-72 死锁的修复验收):
+ * 流水线监看启动跟随推送事实(issue-72 死锁的修复验收):
  * ①修复环只 push_branch 不 create_mr——推送即按新 SHA 重挂监看,
  *   绿了发申报提醒,不再无人盯表卡死;
  * ②重启续表补挂"监看账落后于推送账"的死表现场(issue-72 形态),
- *   同 SHA 已结算的不重放;
+ *   同 SHA 已按终态处理的不重放;
  * ③收口点已过(归档前返工)的跟进提交跑绿:账定格即毕,不误报
  *   "其他仓红灯"。
  */
@@ -43,7 +43,7 @@ function seedLaggingState(input: {
   const path = join(input.dataDir, "issues", "issue-1", "issue.json");
   const state = JSON.parse(readFileSync(path, "utf-8")) as Record<string, any>;
   // 种子夹具还是七阶段历史形状:换成现行五阶段(mr_green=索引 4,
-  // in_progress),绿灯结算才走"提醒申报"分支而不是已被收口的分支。
+  // in_progress),绿灯收口才走"提醒申报"分支而不是已被收口的分支。
   state.stage_states = ["done", "done", "done", "done", "in_progress"];
   state.pushes[0].sha = input.pushedSha;
   state.pipelines[input.origin].sha = input.watchSha;
@@ -55,7 +55,7 @@ function gitCred() {
   return { username: "dev", password: "git-token", email: "dev@example.com" };
 }
 
-test("修复环只推不建 MR:push_branch 即按新 SHA 重挂监看,绿灯结算发申报提醒", async () => {
+test("修复环只推不建 MR:push_branch 即按新 SHA 重挂监看,绿灯收口发申报提醒", async () => {
   const dataDir = mfcTemp("mfc-issue-push-ignition-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -92,28 +92,28 @@ test("修复环只推不建 MR:push_branch 即按新 SHA 重挂监看,绿灯结�
     gitCredential: gitCred,
   });
   try {
-    // 旧 SHA 判红 → 派修回合(第一请求)→ 剧本推送新 SHA。
+    // 旧 SHA 判红 → 派发修复回合(第一请求)→ 剧本推送新 SHA。
     await until(() => model.requests.length ? model.requests : undefined,
       "红灯修复回合派出");
     // 核心断言:推送事实本身触发重挂——监看账换到新 SHA 且在盯,
-    // 不依赖 create_mr 再点火(修复前这里永久停在旧 SHA 死表)。
+    // 不依赖 create_mr 再启动(修复前这里永久停在旧 SHA 死表)。
     const rearm = await until(() => {
       const issue = service.get("issue-1");
       const watch = issue.pipelines?.[origin];
       return watch?.sha === newSha && watch.watching ? watch : undefined;
     }, "推送即重挂新 SHA 监看");
     assert.equal(rearm.reds, 1, "红灯账跨 SHA 结转");
-    // 新 SHA 流水线跑绿:监看器结算并派申报提醒(而非无人收口)。
+    // 新 SHA 流水线跑绿:监看器按终态处理并派申报提醒(而非无人收口)。
     await until(() => {
       const issue = service.get("issue-1");
       const watch = issue.pipelines?.[origin];
       return watch?.status === "success" && !watch.watching ? issue : undefined;
-    }, "新 SHA 绿灯结算");
+    }, "新 SHA 绿灯收口");
     const requestText = await until(() => {
       const text = JSON.stringify(model.requests);
       return /已跑绿/.test(text) ? text : undefined;
     }, "申报提醒回合派出");
-    assert.match(requestText, /已跑绿/, "绿灯结算后提醒申报");
+    assert.match(requestText, /已跑绿/, "绿灯收口后提醒申报");
     assert.match(requestText, /complete_stage/, "提醒带申报动作");
     const settled = await until(() => {
       const issue = service.get("issue-1");
@@ -128,7 +128,7 @@ test("修复环只推不建 MR:push_branch 即按新 SHA 重挂监看,绿灯结�
   }
 });
 
-test("重启补挂:监看账落后于推送账的死表现场(issue-72 形态)自愈派修", async () => {
+test("重启补挂:监看账落后于推送账的死表现场(issue-72 形态)自愈派发修复", async () => {
   const dataDir = mfcTemp("mfc-issue-restart-heal-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -138,7 +138,7 @@ test("重启补挂:监看账落后于推送账的死表现场(issue-72 形态)�
   const newSha = "4".repeat(40);
   seedLaggingState({
     dataDir, origin, pushedSha: newSha, watchSha: oldSha,
-    // 旧 SHA 的红灯已派修过一轮(last_repair_sha=旧提交),死表停在
+    // 旧 SHA 的红灯已派发修复过一轮(last_repair_sha=旧提交),死表停在
     // failed/watching=false;申报受理账在——issue-72 卡死时的现场。
     watch: { status: "failed", watching: false, reds: 1,
       last_repair_sha: oldSha },
@@ -160,15 +160,15 @@ test("重启补挂:监看账落后于推送账的死表现场(issue-72 形态)�
     // 恢复即补挂新 SHA → 新流水线判红 → 修复回合照常派出。
     const requestText = await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "补挂后新 SHA 红灯派修");
-    assert.match(requestText, /第 2\/20 轮红灯/, "红灯账跨 SHA 结转后照常投递");
+    "补挂后新 SHA 红灯派发修复");
+    assert.match(requestText, /第 2\/20 轮红灯/, "红灯账跨 SHA 结转后照常发送");
     const settled = await until(() => {
       const issue = service.get("issue-1");
       return issue.status === "idle" ? issue : undefined;
     }, "修复回合收口");
     const watch = settled.pipelines?.[origin];
     assert.equal(watch?.sha, newSha, "监看账已对齐推送账");
-    assert.equal(watch?.last_repair_sha, newSha, "派修记账到新提交");
+    assert.equal(watch?.last_repair_sha, newSha, "派发修复记账到新提交");
     assert.equal(watch?.reds, 2, "新提交红灯 reds+1");
     // mr_gate 不上 wire(流程机制状态),受理账清没清从盘上读。
     const onDisk = JSON.parse(readFileSync(
@@ -191,7 +191,7 @@ test("重启补挂·监看缺席:回退轮清表(fixedRollback)后的现场同�
   await platform.start();
   const sha = "7".repeat(40);
   // fixedRollback 整表删 state.pipelines、延用 MR 记录:现场只剩
-  // 推送账与 MR,监看缺席。重启后按推送账 SHA 补挂,红灯照常派修。
+  // 推送账与 MR,监看缺席。重启后按推送账 SHA 补挂,红灯照常派发修复。
   seedLaggingState({ dataDir, origin, pushedSha: sha, watchSha: sha });
   const path = join(dataDir, "issues", "issue-1", "issue.json");
   const state = JSON.parse(readFileSync(path, "utf-8")) as Record<string, any>;
@@ -212,7 +212,7 @@ test("重启补挂·监看缺席:回退轮清表(fixedRollback)后的现场同�
   try {
     await until(() =>
       model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "监看缺席现场补挂后红灯派修");
+    "监看缺席现场补挂后红灯派发修复");
     const settled = await until(() => {
       const issue = service.get("issue-1");
       return issue.status === "idle" ? issue : undefined;
@@ -220,7 +220,7 @@ test("重启补挂·监看缺席:回退轮清表(fixedRollback)后的现场同�
     const watch = settled.pipelines?.[origin];
     assert.equal(watch?.sha, sha, "按推送账补挂起表");
     assert.equal(watch?.reds, 1, "缺席起表从干净红灯账起算");
-    assert.equal(watch?.last_repair_sha, sha, "派修记账");
+    assert.equal(watch?.last_repair_sha, sha, "派发修复记账");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -228,7 +228,7 @@ test("重启补挂·监看缺席:回退轮清表(fixedRollback)后的现场同�
   }
 });
 
-test("重启不重放:同 SHA 已结算的死表不补挂、不轮询(不扰动刹车账)", async () => {
+test("重启不重放:同 SHA 已按终态处理的死表不补挂、不轮询(不扰动刹车账)", async () => {
   const dataDir = mfcTemp("mfc-issue-restart-idle-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed", "failed");
@@ -254,10 +254,10 @@ test("重启不重放:同 SHA 已结算的死表不补挂、不轮询(不扰动�
   });
   try {
     await new Promise((resolve) => setTimeout(resolve, 2_000));
-    assert.equal(model.requests.length, 0, "已结算死表不派回合");
+    assert.equal(model.requests.length, 0, "已按终态处理的死表不派回合");
     assert.equal(platform.seen.filter((entry) =>
       entry.url.startsWith("/pipeline/status")).length, 0,
-    "已结算死表不轮询流水线");
+    "已按终态处理的死表不轮询流水线");
     const issue = service.get("issue-1");
     assert.equal(issue.pipelines?.[origin]?.watching, false, "监看账原样");
     assert.equal(issue.pipelines?.[origin]?.reds, 3, "刹车账不被重放扰动");
@@ -300,10 +300,10 @@ test("收口点已过的跟进提交跑绿:账定格即毕,不误报其他仓红
       const issue = service.get("issue-1");
       const watch = issue.pipelines?.[origin];
       return watch?.status === "success" && !watch.watching ? issue : undefined;
-    }, "跟进提交绿灯结算");
+    }, "跟进提交绿灯收口");
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     assert.equal(model.requests.length, 0,
-      "收口点已过:绿灯结算不开回合(不误报其他仓红灯)");
+      "收口点已过:绿灯收口不开回合(不误报其他仓红灯)");
     assert.equal(settled.stage, "mr_green", "阶段不被回拨");
   } finally {
     await service.shutdown().catch(() => undefined);
