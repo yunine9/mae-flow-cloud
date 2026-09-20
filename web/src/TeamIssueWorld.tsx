@@ -23,8 +23,7 @@ import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
-  issueStageText,
-  type FixedIssueStage,
+  type IssueOnceGenerated,
   type IssueOnceRate,
   type IssueStatus,
   type IssueSummary,
@@ -32,14 +31,17 @@ import {
 import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Database } from "lucide-react";
-import { STALE_AFTER_MS, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
+import { STALE_AFTER_MS, ISSUE_DELIVERY_STAGE_BUCKETS, isIssueVerifying, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, issueStageBucketMatch, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 
-/** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
-type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
+/** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。
+ *  verify 档(2026-09-19):环境验证卡在场的会话——等的是验证不是
+ *  答复(通过无需作答,MR 全部合入即视为通过,ADR-0034),从「等你
+ *  答复」里拆出来单列。 */
+type IssueScope = "all" | "action" | "stale" | "wip" | "waiting" | "verify";
 
 const SCOPE_STALE_AFTER_MS = STALE_AFTER_MS;
 
@@ -52,8 +54,12 @@ function inScope(issue: IssueSummary, scope: IssueScope, now: number): boolean {
       && now - new Date(issue.updated_at).getTime() >= SCOPE_STALE_AFTER_MS;
   }
   if (scope === "wip") return ["queued", "running"].includes(issue.status);
+  if (scope === "verify") {
+    return isIssueVerifying(issue);
+  }
   if (scope === "waiting") {
-    return ["waiting_user", "idle", "suspended"].includes(issue.status);
+    return ["waiting_user", "idle", "suspended"].includes(issue.status)
+      && !isIssueVerifying(issue);
   }
   return true;
 }
@@ -173,11 +179,14 @@ function FeatureLedger({ rows, stats, cell, onSelectCell, onceRates, featureOnce
   </section>;
 }
 
-export function TeamIssueWorld({ issues, onceRates }: {
+export function TeamIssueWorld({ issues, onceRates, onceGenerated }: {
   issues: IssueSummary[];
   /** 一次率二轴(服务端 /issues/stats 聚合,前端零计算只渲染);
    * 缺席=统计暂不可用(接口失败/问题流未启用),统计格显示 —。 */
   onceRates?: IssueOnceRate;
+  /** 一次生成达标率(ADR-0044,服务端 /issues/once-generated 聚合):
+   * 终态伴生快照的行级归属聚合,分母=有数据的完成交付会话;缺席同上。 */
+  onceGenerated?: IssueOnceGenerated;
 }) {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<IssueScope>("all");
@@ -216,6 +225,19 @@ export function TeamIssueWorld({ issues, onceRates }: {
         + "——点过「验证发现问题」即非一次修复。";
   };
 
+  // 一次生成达标率瓦片(ADR-0044):数字只来自端点;hover 的口径说明
+  // 与起算日期是规格拍板的「小问号」(与既有 title 提示同款,不养弹层)。
+  const onceGeneratedTitle = (): string => {
+    if (!onceGenerated) return "一次生成统计暂不可用";
+    return `达标 ${onceGenerated.passed} / 有数据 ${onceGenerated.total}`
+      + "——单会话占比=首轮生成且存活到合入的源码行 ÷ 全部留存源码行"
+      + "(返工行与平台外改的行都算 AI 没一次生成,多仓按行数加权),"
+      + `占比 ≥ ${onceGenerated.threshold_percent}% 判达标(线可配)。`
+      + `${onceGenerated.pending} 个会话待算、`
+      + `${onceGenerated.unsupported} 个早于 ${onceGenerated.supported_since}`
+      + " 起算日不计入;逐会话明细见交付分析「问题处理」页签。";
+  };
+
   const needle = query.trim().toLocaleLowerCase();
   const visible = useMemo(() => active.filter((issue) => {
     if (cell) {
@@ -226,7 +248,13 @@ export function TeamIssueWorld({ issues, onceRates }: {
           : issue.status === status)) return false;
       } else if (cell.startsWith("f:")) {
         if (issueFeatureKey(issue) !== cell.slice(2)) return false;
-      } else if (issue.stage !== cell.slice(2)) return false;
+      } else {
+        // 阶段格键是团队页合并/拆分口径(准备中=两阶段、待验证=卡在场),
+        // 与概览计数同一谓词,点格见几行就是几行。
+        const bucket = ISSUE_DELIVERY_STAGE_BUCKETS.find(
+          (entry) => entry.key === cell.slice(2));
+        if (!bucket || !issueStageBucketMatch(bucket, issue)) return false;
+      }
     }
     if (scope !== "all" && !inScope(issue, scope, now)) return false;
     if (owner && issue.account !== owner) return false;
@@ -248,15 +276,6 @@ export function TeamIssueWorld({ issues, onceRates }: {
     }));
   }
 
-  const stageCell = (key: string, count: number) => (
-    <button type="button" key={key}
-      className={cell === `p:${key}` ? CELL_SELECTED : CELL_BASE}
-      disabled={count === 0} aria-pressed={cell === `p:${key}`}
-      aria-controls="team-issue-queue" onClick={() => selectCell(`p:${key}`)}>
-      <span>{issueStageText({ stage: key as FixedIssueStage })}</span>
-      <strong>{count}</strong>
-    </button>
-  );
   const statusCell = (key: string, count: number) => (
     <button type="button" key={key}
       className={cell === `s:${key}` ? CELL_SELECTED : CELL_BASE}
@@ -266,6 +285,21 @@ export function TeamIssueWorld({ issues, onceRates }: {
       <strong>{count}</strong>
     </button>
   );
+  // 阶段格标签:团队页合并/拆分口径(准备中/待验证单列),就地取
+  // BUCKETS 的标签——格键不是注册表阶段词,不走 issueStageText。
+  const stageCell = (key: string, count: number) => {
+    const bucket = ISSUE_DELIVERY_STAGE_BUCKETS.find(
+      (entry) => entry.key === key);
+    return (
+      <button type="button" key={key}
+        className={cell === `p:${key}` ? CELL_SELECTED : CELL_BASE}
+        disabled={count === 0} aria-pressed={cell === `p:${key}`}
+        aria-controls="team-issue-queue" onClick={() => selectCell(`p:${key}`)}>
+        <span>{bucket?.label ?? key}</span>
+        <strong>{count}</strong>
+      </button>
+    );
+  };
 
   return <>
     <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
@@ -275,7 +309,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场；已取消会话仅保留在成果档案。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
-          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}`}>
+          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项，一次定位成功率 ${rateText(onceRates?.localization.rate)}，一次修复成功率 ${rateText(onceRates?.repair.rate)}，一次生成达标率 ${rateText(onceGenerated?.rate)}`}>
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
@@ -289,6 +323,8 @@ export function TeamIssueWorld({ issues, onceRates }: {
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("localization")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.localization.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次定位成功率</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceRateTitle("repair")}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceRates?.repair.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次修复成功率</small></span>
+          <i aria-hidden className="h-[30px] w-px bg-line" />
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title={onceGeneratedTitle()}><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-success">{rateText(onceGenerated?.rate)}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">一次生成达标率</small></span>
         </div>
       </header>
       <div className="grid gap-3 border-t border-line bg-surface-2/70 px-5 pt-[15px] pb-[18px]">
@@ -323,7 +359,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
       <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选问题现场">
         <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
         <Select value={scope}
-          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }, { value: "verify", label: "待验证" }]}
           onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
           <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -333,6 +369,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
               <SelectItem value="stale">停滞中</SelectItem>
               <SelectItem value="wip">正在推进</SelectItem>
               <SelectItem value="waiting">等你答复</SelectItem>
+              <SelectItem value="verify">待验证</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>

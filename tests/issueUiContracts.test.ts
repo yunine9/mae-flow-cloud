@@ -966,11 +966,12 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
   // 头部危险档(#231 改锚):终止钮换 Button destructive 软皮,红色
   // 危险 affordance 保留(手搓 .danger 皮随 issue-workspace 家族退役)。
   assert.ok(headControls.includes('variant="destructive"'), "终止会话必须走 destructive 档");
-  // 状态信息不丢:六态说明由头部状态徽标(ISSUE_STATUS_TEXT 全表)+
-  // 阶段行承载,不依赖已拆的侧栏状态卡。
+  // 状态信息不丢:六态说明由头部状态徽标(词表派生——issueStatusText
+  // 按在场卡把环境验证等待显示为「待验证」,ADR-0043)+ 阶段行承载,
+  // 不依赖已拆的侧栏状态卡。
   // #231 改锚:状态徽标换 IssueStatusBadge(#216 词典)、阶段行换工具类。
   assert.match(sessionView,
-    /<IssueStatusBadge status=\{detail\.status\}>\s*\n\s*\{ISSUE_STATUS_TEXT\[detail\.status\]\}\s*\n\s*<\/IssueStatusBadge>/);
+    /<IssueStatusBadge status=\{detail\.status\}>\s*\n\s*\{issueStatusText\(detail\)\}\s*\n\s*<\/IssueStatusBadge>/);
   assert.match(sessionView, /<span className="text-xs text-muted-foreground">\s*\n\s*\{issueStageText\(detail\)\}/);
   assert.match(stream, /kind: "blocked", title: "会话已结束"/,
     "终局说明由输入区承载(终局无侧栏卡后不断档)");

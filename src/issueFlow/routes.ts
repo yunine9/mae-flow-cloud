@@ -768,6 +768,27 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.onceRates());
     }
 
+    // 一次生成达标率(ADR-0044):终态伴生快照(code-origin.json)的
+    // 读侧聚合,分母三态排除口径见 service.onceGeneratedStats。字面
+    // 路由同样必须住在 :id 捕获之前;读开放与 stats 同权(查看模式)。
+    if (method === "GET" && parts[1] === "once-generated"
+      && parts.length === 2) {
+      return done(200, issueFlow.onceGeneratedStats());
+    }
+
+    // 单会话一次生成明细(伴生快照原样):会话详情下钻的证据面。
+    // 伴生缺席(未归档/未算完/早于起算日期)如实 404,不猜不补。
+    if (method === "GET" && parts[1] && parts[2] === "code-origin"
+      && parts.length === 3) {
+      const snapshot = issueFlow.codeOriginDetail(
+        decodeURIComponent(parts[1]));
+      return snapshot
+        ? done(200, snapshot)
+        : done(404, {
+          error: "该会话暂无一次生成统计(未归档、未算完或早于起算日期)",
+        });
+    }
+
     const id = parts[1];
     if (!id) return done(404, { error: "未知问题接口" });
     // 查看模式:这里不再有整体归属闸——GET(概要/时间线/材料/事件/

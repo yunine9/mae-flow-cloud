@@ -362,8 +362,10 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
     ],
   },
   env_verify: {
+    // 通过没有按钮(ADR-0034 修订,2026-09-19):MR 全部合入即视为
+    // 验证通过并自动归档——卡只收「发现问题」这一种人工事实,
+    // 沉默到合入就是通过。通过与否只有用户知道,不硬给推荐。
     options: [
-      { code: "pass", label: "验证通过" },
       { code: "fail", label: "验证发现问题(填写补充说明)" },
     ],
   },
@@ -426,8 +428,7 @@ export type GateVerdict =
   | "rework"        // 有补充意见/自由作答:留在或回流分析
   | "suspend"       // conclude+issue:挂起待关联单号
   | "archive"       // conclude+non_issue:闭环归档
-  | "pass"          // env_verify+pass:验证通过收尾
-  | "fail"          // env_verify+fail:验证不通过回退
+  | "fail"          // env_verify+fail:验证发现问题回退(通过无码——合入即通过)
   | "resume_watch"  // pipeline_unfixable+resume:重置监看账重看同一 SHA
   | "human_evidence" // pipeline_evidence+supply:原文入账,开修复回合
   | "unrecognized"; // 认不得的答复(仅 env_verify 打回,其余按补充意见)
@@ -437,8 +438,8 @@ export type GateVerdict =
  *   留在分析阶段完善重提——与旧 startsWith 前缀匹配的 else 分支一致;
  * - conclude:issue 挂起 / non_issue 闭环;其余回流分析(旧的
  *   includes 匹配同样认不得就回流);
- * - env_verify:pass 收尾 / fail 回退;认不得的原样 409(旧语义:
- *   验证闸不允许自由发挥)。 */
+ * - env_verify:fail 回退(通过没有码——MR 全部合入即视为通过,ADR-0034);
+ *   认不得的原样 409(旧语义:验证闸不允许自由发挥)。 */
 export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
   switch (kind) {
     case "analysis_confirm":
@@ -448,7 +449,6 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
       if (code === "non_issue") return "archive";
       return "rework";
     case "env_verify":
-      if (code === "pass") return "pass";
       if (code === "fail") return "fail";
       return "unrecognized";
     case "env_needed":

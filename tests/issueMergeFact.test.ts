@@ -44,9 +44,10 @@ const report = () =>
 
 /** 一路开到 mr_green 验绿收口的现场:假平台+剧本+服务三件套。
  *  流水线保持默认 success:申报即走即时验绿收口路(通知+合入监听
- *  都在这一路启动)。stopAtVerifyCard=true 时停在环境验证卡未答
- *  现场(测「未答卡+合入=自动归档」的验证通过语义)。 */
-async function greenFixture(opts: { stopAtVerifyCard?: boolean } = {}) {
+ *  都在这一路启动)。停在环境验证卡未答现场——通过无需作答
+ *  (ADR-0043:合入即通过),合入事实监听与未答卡并行,自动归档由
+ *  合入监看接管。 */
+async function greenFixture() {
   const dataDir = mfcTemp("mfc-issue-merge-");
   const platform = new FakeGitPlatform();
   const sourceDir = join(dataDir, "source");
@@ -108,33 +109,13 @@ async function greenFixture(opts: { stopAtVerifyCard?: boolean } = {}) {
   }, "分析确认闸收口");
   const gateVersion = service.get(created.id).gate!.state_version;
   service.answer(created.id, { state_version: gateVersion, code: "confirm" });
-  // 全绿之后先由用户确认真实环境结果；合入事实监听与环境验证闸并行
-  // 启动。这个测试关心的是闸通过后的合入/归档，不应绕过当前流程。
+  // 全绿之后现场停在环境验证卡:通过无需作答(ADR-0043,合入即通过),
+  // 合入事实监听与未答卡并行——测试从这里按合入事实驱动归档。
   await until(() => {
     const snapshot = service.get(created.id);
     return snapshot.status === "waiting_user"
       && snapshot.gate?.kind === "env_verify";
   }, "mr_green 验绿后环境验证闸");
-  if (opts.stopAtVerifyCard) {
-    return {
-      id: created.id, service, platform, luban, model,
-      stop: async () => {
-        await service.shutdown();
-        await model.stop();
-        await platform.stop();
-        await luban.stop();
-      },
-    };
-  }
-  const envVersion = service.get(created.id).gate!.state_version;
-  service.answer(created.id, { state_version: envVersion, code: "pass" });
-  await until(() => {
-    const snapshot = service.get(created.id);
-    // 等环境闸作答收口(idle 待合入):自动归档由合入监看接管。
-    return snapshot.stage_note
-      === "环境验证通过——等待 MR 合入,合入后自动归档收口"
-      && snapshot.status === "idle";
-  }, "环境验证通过后待合入");
   return {
     id: created.id, service, platform, luban, model,
     stop: async () => {
@@ -170,18 +151,19 @@ test("合入事实:全合入自动归档(ADR-0034),结论 delivered,通知一次
     assert.match(mr.merged_sha ?? "", /^[0-9a-f]{40}$/,
       "merged_sha 照平台返回记");
 
-    // 轮询继续跑,通知不重发、账不翻倍。
+    // 轮询继续跑,通知不重发、账不翻倍。(过滤要用结论通知的特征词:
+    // 验证卡通知的卡面文案也含「自动归档」,不能用宽词计数。)
     await new Promise((resolve) => setTimeout(resolve, 1500));
     const notes = lubanText(scene.luban)
-      .split("\n").filter((line) => line.includes("自动归档"));
-    assert.equal(notes.length, 1, "自动归档通知只发一次");
+      .split("\n").filter((line) => line.includes("已自动归档收口,交付完成"));
+    assert.equal(notes.length, 1, "自动归档结论通知只发一次");
   } finally {
     await scene.stop();
   }
 });
 
 test("未答验证卡时合入:自动归档=验证通过语义,闸随终态清面", async () => {
-  const scene = await greenFixture({ stopAtVerifyCard: true });
+  const scene = await greenFixture();
   try {
     assert.equal(scene.service.get(scene.id).gate?.kind, "env_verify",
       "现场:环境验证卡待答");

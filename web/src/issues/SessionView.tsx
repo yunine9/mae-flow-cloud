@@ -20,7 +20,6 @@ import { IssueExternalReviewPanel, externalReviewDone, useIssueReviews } from ".
 import { useEffect, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
-  ISSUE_STATUS_TEXT,
   addIssueTakeoverNote,
   answerIssue,
   associateIssueTicket,
@@ -28,6 +27,8 @@ import {
   controlIssue,
   fixedStageList,
   getIssue,
+  isIssueActive,
+  issueStatusText,
   issueStageText,
   replyIssue,
   resumeIssueTakeover,
@@ -41,6 +42,7 @@ import {
 } from "../api";
 import { confirmDialog } from "../ConfirmDialog";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
+import { IssueCodeOriginPanel } from "./CodeOriginPanel";
 import { IssueWarmupLive } from "./IssueWarmupLive";
 import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
 import { IssueDecisionCard } from "./IssueDecisionCard";
@@ -312,7 +314,7 @@ export function IssueSessionView({
             查看模式:归属人 {detail.account} 的会话
           </Badge>}
           <IssueStatusBadge status={detail.status}>
-            {ISSUE_STATUS_TEXT[detail.status]}
+            {issueStatusText(detail)}
           </IssueStatusBadge>
           {/* 人工接管徽标(2026-09-07 走查拍板):横幅态独立于六态——
               在场即「AI 已暂停、人工作业中」,排在状态徽标之后;紫金
@@ -411,6 +413,20 @@ export function IssueSessionView({
               className="h-auto px-0 font-bold text-danger underline underline-offset-2 hover:text-danger"
               onClick={onNavigateProfile}>去个人设置配置令牌</Button>}
         </div>}
+        {/* 一次生成归属(ADR-0044,#339):收口会话的证据面——最终留存
+            源码行的三分类(首轮/返工/平台外)、每仓明细与逐提交行归属;
+            伴生缺席(未算完/早于起算日)由面板如实说明,收口前不渲染。
+            默认折叠:证据面是复盘时下钻看的,不占首屏。 */}
+        {!isIssueActive(detail.status) && (
+          <details className="rounded-lg border border-line bg-surface px-4 py-3">
+            <summary className="cursor-pointer text-sm font-semibold text-text-strong">
+              一次生成归属(收口会话的代码来源统计)
+            </summary>
+            <div className="mt-3">
+              <IssueCodeOriginPanel id={detail.id} />
+            </div>
+          </details>
+        )}
         {/* 逐仓交付已收编页签(ADR-0027)、MR 检视批注已收编「MR 检视」
             页签、持续检视面板已退役(2026-09-17 走查拍板:上方不再放大
             卡区,流水线要看去 CodeHub)——横幅之下直达页签区。 */}
@@ -514,6 +530,7 @@ export function IssueSessionView({
           waiting={Boolean(waiting)}
           waitingId={waiting?.waiting_id}
           waitingTs={waiting?.created_at}
+          waitingKind={waiting?.gate_kind}
           canOperate={canOperate}
           busy={busy}
           owner={detail.account}

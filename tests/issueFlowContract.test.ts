@@ -355,16 +355,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
         && issue.stage_states?.[4] === "done"
         ? issue : undefined;
     }, "全链跑到 MR 跑绿收口,举环境验证闸");
-    // 快照取"验证通过后"的待归档态(与旧行为同形:无闸、idle)。
-    service.answer(created.id, {
-      state_version: verifyGate.gate!.state_version, code: "pass",
-    });
-    await until(() => {
-      const issue = service.get(created.id);
-      return issue.status === "idle" && issue.stage === "mr_green"
-        && issue.stage_states?.[4] === "done"
-        ? issue : undefined;
-    }, "验证通过后落待归档");
+    // 快照取"环境验证卡在场"的收口等待态(waiting_user+闸):ADR-0043
+    // 后通过无需作答(合入即通过、自动归档),不再有「答 pass 落 idle
+    // 待合入」的中间态,收口后的唯一等待现场就是这张卡。
 
     // 期望侧:按 web/src/api.ts 的 IssueSummary 手写,undefined 键 = 可选;
     // 环境对象也直接写成镜像类型的字面量——页面凭据两键让 tsc 的多属性
@@ -402,8 +395,26 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       // 本会话没绑模块 → 空台账(字段在场=已定格,entries 空=无资产)。
       skill_selection: undefined,
       business_knowledge: { at: "2026-08-28T00:00:00Z", entries: [] },
-      // 收口态没有闸:MR 验绿门放行即清,换库验证闸已封存(ADR-0013)。
-      gate: undefined,
+      // 收口等待态闸在场:环境验证卡(env_verify)——ADR-0043 起只有
+      // 「验证发现问题」一个选项(通过无需作答,合入即通过)。
+      gate: {
+        id: "gate-x",
+        kind: "env_verify",
+        state_version: 1,
+        question: { questions: [{
+          question: "MR 流水线均已通过。请到目标环境验证修复效果:…",
+          options: [
+            { code: "fail", label: "验证发现问题(填写补充说明)" },
+          ],
+          recommended: undefined,
+        }] },
+        context: undefined,
+        scope: undefined,
+        skills: undefined,
+        pipeline: undefined,
+        proposal: undefined,
+        created_at: "2026-08-28T00:00:00Z",
+      },
       ut: {
         passed: true, summary: "12/12 通过",
         log_path: undefined, round: 1, at: "2026-08-28T00:00:00Z",
@@ -425,9 +436,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       converted_from: undefined,
       converted_to: undefined,
       inherited_accounts: undefined,
-      status: "idle",
+      status: "waiting_user",
       stage: "mr_green",
-      stage_note: "环境验证通过——确认 MR 合入后可归档收口",
+      stage_note: "MR 已全绿——待环境验证:通过可归档,发现问题回退重新分析",
       stage_at: "2026-08-28T00:00:00Z",
       has_environment: true,
       nudges: undefined,
@@ -456,7 +467,8 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
 
     const detail = await issueGet(["issues", created.id], service);
     assert.equal(detail.status, 200);
-    // 收口态没有等待卡(humanGate 空、闸已清):waiting 不在场。
+    // 闸在场、Agent 等待卡不在场:waiting 是 Agent 问题卡的投影,
+    // 平台闸走 .gate(has_analysis:报告已出)。
     const detailSample: IssueDetail = { ...summarySample, waiting: undefined, has_analysis: true };
     assertWireShape(detailSample, detail.body, "GET /issues/:id");
   } finally {

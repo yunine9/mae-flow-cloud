@@ -19,7 +19,10 @@ export function IssueWaitingFacts({ waiting }: { waiting: IssueWaitingCard }) {
       ? "等归属人贴回流水线报错原文"
       : waiting.gate_kind === "env_needed"
         ? `等归属人配置网管环境(${waiting.gate_scope === "deploy" ? "换库部署" : "拉取日志"}需要)`
-        : "等归属人答复";
+        : waiting.gate_kind === "env_verify"
+          // 通过无需作答,合入即通过(ADR-0034)——等的是验证不是答复。
+          ? "等归属人验证修复效果(通过无需作答,MR 全部合入即视为通过)"
+          : "等归属人答复";
   return <div className="issue-rail-card is-waiting">
     <strong>{head}</strong>
     {waiting.context && <div className="issue-waiting-context">

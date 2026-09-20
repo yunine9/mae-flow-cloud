@@ -154,7 +154,8 @@ export interface IssuePushRecord {
 export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
-  | "env_verify"       // 换库验证:通过→待归档 / 有问题→回退问题分析
+  | "env_verify"       // 环境验证:发现问题→回退问题分析;通过无需作答
+                       // ——MR 全部合入即视为通过并自动归档(ADR-0034)
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
   | "skill_select"     // skill 圈选(ADR-0011):analyze 入口的多选闸,
                        // 对齐档由归属人圈定业务仓 skill 必读集合;
@@ -657,8 +658,9 @@ export function isTerminal(status: IssueStatus): boolean {
  * - 会话没有场景阶段(转正前的存量现场,停机合法性无从机械判定,不催);
  * - 当前阶段已收口(stage_states 里本阶段 done)——唯一例外是 mr_green
  *   欠环境验证卡(#246,ADR-0024):收口只是出口的一半,卡没交到用户
- *   手上(无闸)就停机 = 欠出口,催;验证已通过(卡已答,停机说明换成
- *   「待归档」口径)不欠,不催;
+ *   手上(无闸)就停机 = 欠出口,催。卡在场即不欠:通过无需作答
+ *   (合入即通过,ADR-0034),答卡的唯一裁决是回退,回退即离开
+ *   mr_green,不会回到这个判据上;
  * - 流水线在途(MR 已建、平台还在监看——停等流水线是出口的一部分);
  * - MR 验绿门已受理申报(mr_green 阶段 complete_stage 申报后等绿,
  *   同"停等流水线"的合法停机;推进/回退即清,不会滞留)。
@@ -780,10 +782,11 @@ export function fixedAdvance(
   recordTransition(state, { source: "platform", stage: to, note });
 }
 
-/** 环境验证闸两版转移账文案(2026-09-16 起是统计协议,不是随手文案:
+/** 环境验证闸的转移账文案(2026-09-16 起是统计协议,不是随手文案:
  * 一次率二轴聚合(一次修复成功率)按失败前缀从转移账取验证事实,改
- * 文案必须连这里一起改;写入点在 service 的 env_verify pass/fail 分派)。 */
-export const VERIFY_PASS_NOTE = "用户环境验证通过,待合入自动归档";
+ * 文案必须连这里一起改;写入点在 service 的 env_verify fail 分派。
+ * 通过没有文案也不落账——MR 全部合入即视为通过(ADR-0034,2026-09-19
+ * 起唯一通过出口),归档动作自带结论。 */
 export const VERIFY_FAIL_NOTE_PREFIX = "用户环境验证发现问题";
 
 /** 当前阶段收尾(不再前进):换库验证通过后的终态用。 */

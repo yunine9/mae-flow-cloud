@@ -12,7 +12,6 @@ import { resolve } from "node:path";
 import test from "node:test";
 import {
   ISSUE_DELIVERY_STATUSES,
-  ISSUE_DELIVERY_STAGES,
   issueDeliveryBreakdown,
   issueFeatureOnceRates,
   issueFeatureRows,
@@ -39,9 +38,10 @@ test("导航按域拆两条:团队需求(view=team)+团队问题(view=teamIssues
     /issueWaitingCount = teamIssues\.filter\(\(issue\) =>\n    issue\.status === "waiting_user" \|\| issue\.status === "idle"\)\.length/);
   // 「团队任务」作为页面名退役(源码不再出现;历史提交里留着)。
   assert.doesNotMatch(app, /团队任务/);
-  // 头部两域各有标题与一句话说明。
+  // 头部两域各有标题与一句话说明(2026-09-20:团队问题→团队DTS,
+  // 与侧栏导航标签、帮助中心词条同名)。
   assert.match(app, /team: \{ title: "团队需求"/);
-  assert.match(app, /teamIssues: \{ title: "团队问题"/);
+  assert.match(app, /teamIssues: \{ title: "团队DTS"/);
 });
 
 test("页内领域切换器退场:组件与挂载点、localStorage 键全都不在了", () => {
@@ -65,9 +65,11 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
   assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
   // onceRates 是 #290 票4 一次率二轴统计的取数(服务端聚合,组件只渲染);
-  // 卡片自带新页签链接(ADR-0040),App 不再传 onOpenIssue 跳转回调。
+  // onceGenerated 是一次生成达标率(ADR-0044,终态伴生快照的读侧聚合),
+  // 同一条 allSettled 容错纪律;卡片自带新页签链接(ADR-0040),App 不再传
+  // onOpenIssue 跳转回调。
   assert.match(app,
-    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} \/>/);
+    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} onceGenerated=\{issueOnceGenerated\} \/>/);
 });
 
 test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {
@@ -121,7 +123,8 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
 });
 
 test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格计数正确", () => {
-  const issue = (status: string, stage?: string) => ({ status, stage });
+  const issue = (status: string, stage?: string, gateKind?: string) =>
+    ({ status, stage, ...(gateKind ? { gate: { kind: gateKind } } : {}) });
   const rows = [
     issue("queued", "dts_info"),
     issue("running", "analyze"),
@@ -131,6 +134,8 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
     issue("suspended", "analyze"),
     issue("archived", "mr_green"),
     issue("canceled", "analyze"),
+    // 环境验证卡在场(ADR-0043):单列「待验证」,不重复计入 mr_green。
+    issue("waiting_user", "mr_green", "env_verify"),
   ];
   const stats = issueDeliveryBreakdown(rows);
   assert.deepEqual({
@@ -141,23 +146,24 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
     closed: stats.closed,
   }, {
     // 已取消不进总数;active 再剔除已闭环;waiting 归一含 idle。
-    total: 7, active: 6, waiting: 2, failed: 1, closed: 1,
+    total: 8, active: 7, waiting: 3, failed: 1, closed: 1,
   });
-  // 阶段格=注册表全集(有单五阶段 ∪ 无单 conclude),固定顺序,
-  // 0 计数(conclude)也在场——渲染层置灰,口径层保留全集。
+  // 阶段格=团队页合并/拆分口径(2026-09-20):拉单+拉仓合并「准备中」,
+  // 「待验证」(卡在场)从「提交 MR·跑绿」拆出;固定顺序,0 计数
+  // (conclude)也在场——渲染层置灰,口径层保留全集。
   assert.deepEqual(stats.stages, [
-    { key: "dts_info", count: 1 },
-    { key: "prep_repo", count: 1 },
+    { key: "prep", count: 2 },
     { key: "analyze", count: 2 },
     { key: "fix", count: 1 },
     { key: "mr_green", count: 1 },
+    { key: "verifying", count: 1 },
     { key: "conclude", count: 0 },
   ]);
   // 状态格=展示归一五状态(waiting_user 吸收 idle),各组加总=active。
   assert.deepEqual(stats.statuses, [
     { key: "queued", count: 1 },
     { key: "running", count: 1 },
-    { key: "waiting_user", count: 2 },
+    { key: "waiting_user", count: 3 },
     { key: "suspended", count: 1 },
     { key: "failed", count: 1 },
   ]);
@@ -170,8 +176,9 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
 test("问题侧概览口径:空集合也出全集格子(0 展示但不虚报)", () => {
   const stats = issueDeliveryBreakdown([]);
   assert.equal(stats.total, 0);
-  assert.deepEqual(stats.stages.map((item) => item.key), [...ISSUE_DELIVERY_STAGES],
-    "阶段全集来自问题流注册表镜像,空现场也摆出完整流程形状");
+  assert.deepEqual(stats.stages.map((item) => item.key),
+    ["prep", "analyze", "fix", "mr_green", "verifying", "conclude"],
+    "阶段格是团队页合并/拆分口径(准备中/待验证单列),空现场也摆出完整形状");
   assert.deepEqual(stats.statuses.map((item) => item.key), [...ISSUE_DELIVERY_STATUSES]);
   assert.ok(stats.stages.every((item) => item.count === 0));
   assert.ok(stats.statuses.every((item) => item.count === 0));

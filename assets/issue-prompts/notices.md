@@ -96,11 +96,11 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## green.deliver
 
-平台通知: 全部 MR 流水线已跑绿({{repos}})——「提交 MR·跑绿」阶段已收口。请立即调 raise_gate 工具(kind=env_verify)把环境验证卡交给用户,然后结束本回合等待用户作答,不要自行继续,也不要做其他动作。
+平台通知: 全部 MR 流水线已跑绿({{repos}})——「提交 MR·跑绿」阶段已收口。请立即调 raise_gate 工具(kind=env_verify)把环境验证卡交给用户,然后结束本回合等待用户验证(用户可不答——MR 全部合入即视为验证通过,发现问题才需要在卡上作答),不要自行继续,也不要做其他动作。
 
 ## nudge.env_verify_owed
 
-平台催办(第 {{attempt}}/{{budget}} 次): 「提交 MR·跑绿」阶段已收口、全部流水线已跑绿,但环境验证卡还没有交给用户——请立即调 raise_gate 工具(kind=env_verify)举卡,然后结束回合等待用户作答。再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
+平台催办(第 {{attempt}}/{{budget}} 次): 「提交 MR·跑绿」阶段已收口、全部流水线已跑绿,但环境验证卡还没有交给用户——请立即调 raise_gate 工具(kind=env_verify)举卡,然后结束回合等待用户验证(用户可不答——MR 全部合入即视为验证通过)。再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
 
 ## mr_review
 

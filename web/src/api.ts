@@ -3699,7 +3699,10 @@ export type IssueStatus =
 
 /** 状态的人话文案。idle 与 waiting_user 的展示已归一为「等你答复」
  * (2026-09-08 用户拍板:两者对人没差别——卡片在等或停机等继续,都是
- * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。 */
+ * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。
+ * 2026-09-19 起环境验证卡在场的等待改显「待验证」(issueStatusText
+ * 派生)——等的是验证不是答复,通过无需作答,MR 全部合入即视为
+ * 通过(ADR-0034)。 */
 export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   queued: "排队启动中",
   running: "AI 处理中",
@@ -3710,6 +3713,19 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   canceled: "已取消",
   failed: "异常",
 };
+
+/** 状态文案(按在场卡派生):环境验证卡在场时显示「待验证」——通过
+ * 无需作答(合入即通过,ADR-0034),这张卡等的不是答复;其余状态走
+ * ISSUE_STATUS_TEXT。列表与详情的 payload 都带 gate,卡面事实现成。 */
+export function issueStatusText(issue: {
+  status: IssueStatus;
+  gate?: IssueGateCard;
+}): string {
+  if (issue.status === "waiting_user" && issue.gate?.kind === "env_verify") {
+    return "待验证";
+  }
+  return ISSUE_STATUS_TEXT[issue.status];
+}
 
 /** 「进行中」口径:未收口(非归档/非取消)。问题处理页默认筛选项与
  * 侧栏「问题处理」父行徽章共用这一份判定,收口状态增减时两处同源,
@@ -4133,6 +4149,79 @@ export interface IssueOnceRate {
 
 export function getIssueOnceRates(): Promise<IssueOnceRate> {
   return issueFetch("/issues/stats");
+}
+
+/** 一次生成达标率(ADR-0044,工单 #338):终态伴生快照(code-origin.json)
+ *  的读侧聚合。分母=有数据(伴生在场且留存源码行>0)的完成交付会话;
+ *  rate null=分母 0(前端显示 —);pending/unsupported 是口径透明度的
+ *  伴随计数(待算/早于起算日期,均不进分母)。 */
+export interface IssueOnceGeneratedSessionRow {
+  id: string;
+  title: string;
+  /** 特性(业务模块名标签;空白归「未分类」)。 */
+  module: string;
+  concluded_at: string;
+  /** 一次生成占比(百分数一位小数)。 */
+  share: number;
+  pass: boolean;
+  lines: { first: number; rework: number; external: number };
+}
+
+export interface IssueOnceGenerated {
+  /** 达标线(参数,部署可调;调线不动统计逻辑)。 */
+  threshold_percent: number;
+  /** 起算日期:此前终态的会话不进统计。 */
+  supported_since: string;
+  total: number;
+  passed: number;
+  rate: number | null;
+  pending: number;
+  unsupported: number;
+  no_code: number;
+  per_session: IssueOnceGeneratedSessionRow[];
+}
+
+export function getIssueOnceGenerated(): Promise<IssueOnceGenerated> {
+  return issueFetch("/issues/once-generated");
+}
+
+/** 单会话一次生成明细(伴生快照原样,会话详情下钻的证据面)。
+ *  by_repo 两态:可得(三分类行数+逐提交证据)或「不可得」(人话理由)。 */
+export interface IssueCodeOriginCommitRow {
+  sha: string;
+  subject: string;
+  at: string;
+  origin: "first" | "rework" | "external";
+  /** 该提交在最终留存差异中拥有的新增行数。 */
+  lines: number;
+}
+
+export interface IssueCodeOriginRepoOk {
+  repo: string;
+  branch: string;
+  head: string;
+  head_basis: "merged_sha" | "mr_branch" | "local_push";
+  base: string;
+  boundary: { kind: string; at: string; push_sha: string } | null;
+  lines: { first: number; rework: number; external: number };
+  commits: IssueCodeOriginCommitRow[];
+}
+
+export interface IssueCodeOriginRepoUnavailable {
+  repo: string;
+  branch: string;
+  unavailable: string;
+}
+
+export interface IssueCodeOriginDetail {
+  schema_version: number;
+  generated_at: string;
+  session_id: string;
+  by_repo: Array<IssueCodeOriginRepoOk | IssueCodeOriginRepoUnavailable>;
+}
+
+export function getIssueCodeOrigin(id: string): Promise<IssueCodeOriginDetail> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/code-origin`);
 }
 
 export function getIssue(id: string): Promise<IssueDetail> {

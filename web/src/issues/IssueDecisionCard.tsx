@@ -639,8 +639,11 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
     }
   }
 
-  return <DecisionShell docked={Boolean(footerTarget)} label="等你答复">
-    <DecisionHead kicker="等你答复" count={`${questions.length} 个问题`} />
+  // 环境验证卡等的是验证不是答复(ADR-0043):卡壳措辞随卡种换——
+  // 通过无需作答,合入即通过;其余卡照旧「等你答复」。
+  const cardKicker = waiting.gate_kind === "env_verify" ? "待验证" : "等你答复";
+  return <DecisionShell docked={Boolean(footerTarget)} label={cardKicker}>
+    <DecisionHead kicker={cardKicker} count={`${questions.length} 个问题`} />
 
     {waiting.context && <DecisionContext label={contextLabel}
       className={cn(questions.length === 0 && footerTarget && "mb-3.5")}>
