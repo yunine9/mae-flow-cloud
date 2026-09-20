@@ -127,10 +127,39 @@ export interface IssueOnceGeneratedSession {
   /** 特性(业务模块名标签;空白归「未分类」,与需求侧特性口径同构)。 */
   module: string;
   concluded_at: string;
-  /** 一次生成占比(百分数一位小数);终态会话分母>0,不会是 null。 */
+  /** 首次生成占比(百分数一位小数);终态会话分母>0,不会是 null。 */
   share: number;
   pass: boolean;
   lines: { first: number; rework: number; external: number };
+  /** 一次定位:分析报告一版过(与 /issues/stats 同源判定)。 */
+  localization_pass: boolean;
+  /** 一次验证:环境验证零失败(未答卡=通过)。 */
+  verify_pass: boolean;
+  /** 一次解决:定位与验证双一次。 */
+  solved_pass: boolean;
+}
+
+/** 一根比率轴:分子与占比(分母=各自口径的会话数)。 */
+export interface IssueOnceGeneratedAxis {
+  passed: number;
+  /** 百分数一位小数;分母 0 = null(前端显示 —)。 */
+  rate: number | null;
+}
+
+/** 按代码仓的跨会话聚合行(只出代码衍生指标;一次定位/验证/解决是
+ *  会话级裁决,不设仓维度)。 */
+export interface IssueOnceGeneratedRepoRow {
+  repo: string;
+  /** 涉及会话数(多仓会话按仓各计一次,合计可大于会话总数)。 */
+  sessions: number;
+  /** 首轮工作行(增+删,跨会话求和)。 */
+  first: number;
+  rework: number;
+  external: number;
+  /** 工作行合计 = 首轮+返工+平台外。 */
+  total: number;
+  /** 加权占比(首轮 ÷ 全部,百分数一位小数)。 */
+  share: number | null;
 }
 
 export interface IssueOnceGeneratedStats {
@@ -143,6 +172,14 @@ export interface IssueOnceGeneratedStats {
   passed: number;
   /** 达标会话占比;分母 0 = null(前端显示 —)。 */
   rate: number | null;
+  /** 一次定位率(报告一版过):分母=完成交付会话,与 /issues/stats 同源。 */
+  localization: IssueOnceGeneratedAxis;
+  /** 一次验证率(验证不通过次数=0;未答卡=通过)。 */
+  verify: IssueOnceGeneratedAxis;
+  /** 一次解决率(定位与验证双一次)。 */
+  solved: IssueOnceGeneratedAxis;
+  /** 按代码仓跨会话聚合,工作行降序。 */
+  by_repo: IssueOnceGeneratedRepoRow[];
   /** 支持期内已终态、伴生还没算出来(通道在途或曾丢失,清扫器会兜底)。 */
   pending: number;
   /** 起算日期前终态的存量会话,永不回填。 */

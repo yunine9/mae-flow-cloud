@@ -47,7 +47,7 @@ function seedCompanion(dataDir: string, id: string, lines: {
 }): void {
   writeFileSync(join(dataDir, "issues", id, "code-origin.json"),
     JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       generated_at: "2026-09-20T11:00:00.000Z",
       session_id: id,
       by_repo: [{
@@ -116,14 +116,30 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(body.pending, 1, "issue-c 待算");
     assert.equal(body.unsupported, 1, "issue-d 早于起算日");
     assert.equal(body.no_code, 1, "issue-e 无源码交付");
+    // 三根过程率轴与 /issues/stats 同源:分母=完成交付全集(a/b/c/d/e,
+    // 不随伴生在缺漂移);种子都没有报告账与验证失败 → 双轴满分、解决满分。
+    assert.deepEqual(body.localization, { passed: 5, rate: 100 });
+    assert.deepEqual(body.verify, { passed: 5, rate: 100 });
+    assert.deepEqual(body.solved, { passed: 5, rate: 100 });
+    assert.equal(body.by_repo.length, 1, "同仓跨会话归组");
+    const repoRow = (body.by_repo as Array<{
+      repo: string; sessions: number; first: number; total: number; share: number | null;
+    }>)[0]!;
+    assert.equal(repoRow.sessions, 2, "多会话按仓各计一次");
+    assert.equal(repoRow.first, 140);
+    assert.equal(repoRow.total, 200);
+    assert.equal(repoRow.share, 70);
     const rows = body.per_session as Array<{
       id: string; module: string; share: number; pass: boolean;
+      localization_pass: boolean; verify_pass: boolean; solved_pass: boolean;
     }>;
     assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a"],
       "明细按收口时刻倒序");
     assert.equal(rows.find((row) => row.id === "issue-a")?.module, "未分类",
       "模块标签空白归「未分类」");
     assert.equal(rows.find((row) => row.id === "issue-a")?.pass, true);
+    assert.equal(rows.find((row) => row.id === "issue-a")?.solved_pass, true);
+    assert.equal(rows.find((row) => row.id === "issue-b")?.solved_pass, true);
   } finally {
     await service.shutdown().catch(() => undefined);
   }
