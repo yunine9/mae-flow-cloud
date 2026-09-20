@@ -9,7 +9,6 @@ import { StartupRecovery } from "./startupRecovery.ts";
  */
 
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -67,6 +66,7 @@ import {
 } from "./instanceLock.ts";
 import { inspectDeploymentRuntime } from "./deploymentPreflight.ts";
 import { muzzleBrokenPipes } from "./processOutput.ts";
+import { guardProcess } from "./processGuard.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..");
 
@@ -1345,28 +1345,6 @@ function warnStaleWeb(webRoot: string | undefined): void {
   } catch { /* 比不出来就不说话:提醒是旁路,不许挡启动 */ }
 }
 
-/** 进程级兜底:**一条旁路的异常不许带走整个服务**。
- *
- * Node 从 15 起,未处理的 Promise rejection 默认直接终止进程。而本仓
- * 到处是 `void this.某个旁路()` 的即发即忘(通知、投影、门禁查询、
- * 合入监控)——其中任何一条抖一下,整台服务连着所有在跑的任务一起
- * 没,这正是"旁路一律 fail-open、agent 不能因 harness 卡死"红线要
- * 禁止的事。所以:**记下来,继续服务**。
- *
- * 崩溃现场同时落盘一份(终端会滚没,而人往往只记得"它挂了"),
- * 让人能把原文带回来——诊断不该靠回忆。
- *
- * 勘误(2026-08-18 内网实测,crash.log 实锤):这个兜底的第一版
- * **自己就是一次事故**。stdout/stderr 的管道断掉后(后台起服,读端
- * 进程先退了),每一次 console 写都抛 EPIPE;record 里的 console.error
- * 又写 → 又 EPIPE → 又进 uncaughtException → 又 record——无限递归把
- * 事件循环吃死,症状是 API 全部超时、crash.log 同一毫秒刷出成对的
- * "write EPIPE",栈指向 record 自己。三层修法,缺一不可:
- * - **流上装 error 监听**(muzzleBrokenPipes):EPIPE 在源头吞掉,
- *   输出没了服务还在——这才是治本;
- * - **先落盘后上屏**:crash.log 是给人的,console 只是顺手;
- * - **重入保险**:记账过程自己出的事不再记,递归到此为止。
- */
 /** 清掉上一个进程遗留的 git 凭据现场。
  *
  * host-git/issue-git 每次动 git 都在 .runtime 下开 operation-* 私有
@@ -1413,29 +1391,6 @@ function sweepStaleGitRuntime(dataDir: string): void {
   }
 }
 
-function guardProcess(dataDir: string): void {
-  let recording = false;
-  const record = (kind: string, error: unknown) => {
-    if (recording) return; // 兜底自己出事不再兜:递归在这儿断
-    recording = true;
-    try {
-      const detail = error instanceof Error
-        ? `${error.message}\n${error.stack ?? ""}` : String(error);
-      const line = `[${new Date().toISOString()}] ${kind}: ${detail}\n`;
-      try {
-        appendFileSync(join(dataDir, "crash.log"), line);
-      } catch { /* 落盘失败不能再抛,否则就成了兜底自己把服务弄挂 */ }
-      try {
-        console.error(`[serve] ${kind}(服务继续运行,请把这段发回外网):\n`
-          + detail);
-      } catch { /* 管道断了:输出丢弃,crash.log 已经有了 */ }
-    } finally {
-      recording = false;
-    }
-  };
-  process.on("unhandledRejection", (reason) => record("未处理的异步异常", reason));
-  process.on("uncaughtException", (error) => record("未捕获异常", error));
-}
 
 main().catch((error) => {
   console.error("[serve] 启动失败:", error);
