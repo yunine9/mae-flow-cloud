@@ -1,3 +1,4 @@
+import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
 import { postMrDiscussionReply, postMrDiscussionResolve } from "../mrDiscussionReply.ts";
 import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
@@ -3561,6 +3562,10 @@ export class IssueFlowService {
           // 不再连坐销毁容器;动态取当前实例,重建后自动跟上。
           createContainerBashOperations(() => live.container)
         : undefined;
+    const identity = this.options.gitCredential?.(live.state.account);
+    for (const repo of issueRepoWorkspaces(live.state, live.root)) {
+      if (existsSync(join(repo.dir, ".git"))) await applyGitCommitIdentity(repo.dir, identity);
+    }
     const sessionOptions: import("../sessionDriver.ts").CloudSessionOptions = {
       taskId: live.id,
       workspace: live.root,

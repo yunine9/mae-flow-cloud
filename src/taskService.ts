@@ -1,3 +1,4 @@
+import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
 import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
 import { DeliveryExperiences } from "./deliveryExperience.ts";
@@ -10805,6 +10806,7 @@ export class TaskService {
         configs: [
           ["user.name", "mae-flow-cloud"],
           ["user.email", "cloud@mae-flow.local"],
+          ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account)),
         ],
       });
       if (result.status !== 0) {
@@ -13916,6 +13918,7 @@ export class TaskService {
       } else if (this.options.host) {
         if (resuming) {
           cwd = savedCwd!;
+          await applyGitCommitIdentity(cwd, gitIdentity);
         } else {
           const prepared = gitIdentity
             ? this.prepareHostGitSandbox(gitIdentity) : undefined;
@@ -14339,7 +14342,6 @@ export class TaskService {
       // regular-expression"),而那时代码早已写完,重来一遍是纯浪费。
       // 规矩必须开场就给,每个会话都带:修复会话同样要提交。
       const convention = this.effectiveCommitConvention();
-      prompt += "\n\nGit 提交身份：使用宿主已写入仓库的 user.name/user.email，直接 git commit。不要根据工号、登录名或域名拼接邮箱；不要用 git -c user.name/user.email、--author、GIT_AUTHOR_* / GIT_COMMITTER_* 或修改 git config 覆盖署名。需要核实时只读 git config --get user.name 和 git config --get user.email；缺失或可疑时如实反馈，由责任人确认正确身份，不自行补造，也不自动改写已推送历史。";
       if (!analysisOnly && convention) {
         prompt = `${prompt}\n\n提交信息规范(平台钩子会按它校验,不合规`
           + `直接拒收 push,请第一次就写对):${convention}`;
@@ -15604,6 +15606,7 @@ export class TaskService {
           message: preflight.detail,
         });
       }
+      await applyGitCommitIdentity(task.cwd, this.options.gitCredential?.(task.summary.luban_account));
       driver = await CloudSession.create({
         taskId: `${task.summary.id}:prepush:${request.round}`,
         workspace: task.cwd,
@@ -16470,6 +16473,7 @@ export class TaskService {
       configs: [
         ["user.name", "mae-flow-cloud"],
         ["user.email", "cloud@mae-flow.local"],
+        ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account)),
       ],
     });
     const exists = await git(["cat-file", "-e", `${frozen}^{commit}`]);
@@ -16589,6 +16593,7 @@ export class TaskService {
         configs: [
           ["user.name", "mae-flow-cloud"],
           ["user.email", "cloud@mae-flow.local"],
+          ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account)),
         ],
       });
       if (result.status !== 0) {
@@ -20611,17 +20616,8 @@ export class TaskService {
         ["config", "remote.origin.pushurl", "/dev/null/mae-flow-readonly"],
         { cwd: target, timeoutMs: 30_000 });
     }
-    // 署名与传输方式无关(本地路径克隆的演练也该署对名):配了就写,
-    // 邮箱没填只写名字——平台认领靠邮箱,表单里已经把话说明白。
-    // 会话重建复用旧克隆,署名改动生效边界=下一次新克隆。
-    if (identity && existsSync(join(target, ".git"))) {
-      await runGitProcess(["config", "user.name", identity.username],
-        { cwd: target, timeoutMs: 30_000 });
-      if (identity.email) {
-        await runGitProcess(["config", "user.email", identity.email],
-          { cwd: target, timeoutMs: 30_000 });
-      }
-    }
+    // 每次克隆写入个人署名；复用旧克隆时也刷新，个人邮箱更新不必重新拉仓。
+    if (existsSync(join(target, ".git"))) await applyGitCommitIdentity(target, identity);
     return target;
   }
 
