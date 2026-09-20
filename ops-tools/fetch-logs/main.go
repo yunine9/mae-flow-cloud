@@ -27,13 +27,11 @@ import (
 //	su_user    = "ossuser"（日志读取用户，切换链 login_user -> su_user）
 //	log_base   = "/var/log/oss/MAE"（日志基础目录，实际抓取 <log_base>/<服务名> 全部内容）
 type ConfigFile struct {
-	Host        string            `toml:"hosts"`         // 网管节点 IP，自动发现业务节点（主力）
-	SingleHosts []string          `toml:"single_hosts"`  // 直连指定的业务节点 IP（备选）
-	Password    string            `toml:"pwd"`
-	Services    []string          `toml:"services"`
-	LocalDir    string            `toml:"local_dir"`
-	NodeIPMap   map[string]string `toml:"node_ip_map"`   // 内部 IP→可达 IP 显式覆盖（自动解析失败时用）
-	SshJump     string            `toml:"ssh_jump"`      // 跳板机 IP，内网节点无法直连时配置
+	Host        string   `toml:"hosts"`         // 网管节点 IP，自动发现业务节点（主力）
+	SingleHosts []string `toml:"single_hosts"`  // 直连指定的业务节点 IP（备选）
+	Password    string   `toml:"pwd"`
+	Services    []string `toml:"services"`
+	LocalDir    string   `toml:"local_dir"`
 }
 
 // 固定配置常量
@@ -49,10 +47,8 @@ type FetchConfig struct {
 	Services     []string // 服务名列表，逐个抓取 <log_base>/<服务名> 下全部内容
 	LocalDir     string   // 本地保存目录（默认 local-logs，位于 exe 同目录下）
 	Timestamp    string   // 本次拉取时间戳，用于压缩包根目录命名（yyyyMMddHHmmss）
-	DiscoverHost string   // 网管节点 IP，用于自动发现业务节点
+	DiscoverHost string   // 网管节点 IP，用于自动发现业务节点 + 网管中转
 	SingleHosts  []string // 用户直连指定的业务节点 IP
-	NodeIPMap    map[string]string
-	SshJump      string // 跳板机（可达 IP），用于连接无法直连的内网节点
 }
 
 // sshPort 固定 SSH 端口（OSS 节点统一 22）。
@@ -93,7 +89,7 @@ func createDefaultConfig(filePath string) error {
 # 提示: 所有配置项都支持命令行参数直传(免维护本文件), CLI 值优先于本文件:
 #   fetch-logs --host 60.14.46.16 --host 60.14.46.17 \
 #              --service TranFmaWebsite \
-#              --pwd <密码或环境变量 FETCH_LOGS_PWD> \
+#              --pwd <密码> \
 #              --local-dir local-logs
 
 # 网管节点 IP（与 single_hosts 二选一，主力方式）
@@ -122,27 +118,16 @@ services = []
 local_dir = "local-logs"
 
 # 网管节点 IP（与 single_hosts 二选一，主力方式）
-# 工具连接网管节点，通过 ipmc_adm statusapp 自动发现运行该服务的所有后台节点，逐台抓取
+# 工具连接网管节点，通过 ipmc_adm statusapp 自动发现运行该服务的所有后台节点
+# 网管节点作为中转：经网管节点 ssh/scp 到业务节点抓取日志，再拉回本地（业务节点内部 IP 无需本机可达）
 # hosts = ""
-
-# 节点 IP 映射（可选）
-# 自动发现返回的是节点内部 IP（如 172.28.130.161），默认会自动解析大网（可达）IP；
-# 仅当自动解析失败或需固定映射时才配置。格式: "内部IP" = "可达IP"
-# [node_ip_map]
-# "172.28.130.161" = "60.14.46.16"
-
-# 跳板机 IP（可选）
-# 当后台节点为内网 IP（本机无法直连，如 172.28.130.166）时，可配置跳板机。
-# 工具会先连跳板机，再经跳板机 ssh/scp 到目标节点抓取日志。
-# 跳板机与目标节点复用 user/password 凭据（SSH 端口固定 22）。
-# ssh_jump = ""
 `
 	return os.WriteFile(filePath, []byte(content), 0644)
 }
 
 // ================= CLI 参数层（AI 友好入口） =================
 //
-// 取值优先级: CLI 显式参数 > 环境变量(仅密码, FETCH_LOGS_PWD) > config.toml。
+// 取值优先级: CLI 显式参数 > config.toml。
 // 给了任何 CLI 参数就完全不读也不写配置文件——调用方(Agent/适配器)
 // 不需要维护任何落盘状态;完全无参数运行时保留旧的 config.toml 体验
 // (缺文件自动生成模板),位置参数仍按旧语义当作配置文件路径。
@@ -165,17 +150,17 @@ func usageFetchLogs(fs *flag.FlagSet) {
   fetch-logs [config.toml路径]        # 缺省读 exe 同目录 config.toml
 
 参数:
-  --host         网管节点 IP, 自动发现运行该服务的所有后台节点(主力, 与 --single-host 二选一)
-  --single-host  目标服务器 IP, 可重复出现; 直连指定, 跳过发现(备选, 与 --host 二选一)
+  --host         网管节点 IP, 自动发现所有后台节点并经网管中转抓取(主力, 与 --single-host 二选一)
+  --single-host  目标服务器 IP, 可重复出现; 本机直连指定节点(备选, 与 --host 二选一)
   --service     服务名(抓 /var/log/oss/MAE/<服务名> 全部内容), 可重复出现
-  --pwd    sopuser/ossuser 共用密码; 缺省读环境变量 FETCH_LOGS_PWD,
-               再缺省回落 config.toml。命令行明文密码会进进程列表,
-               自动化场景建议用环境变量
+  --pwd    sopuser/ossuser 共用密码(必填, 命令行直传)
   --local-dir   本地保存目录(默认 local-logs, 相对 exe 目录)
-  --ssh-jump    跳板机 IP, 内网节点无法直连时配置(经跳板 ssh/scp 到目标)
   --help        显示本帮助
 
-优先级: CLI 参数 > 环境变量(密码) > 配置文件`)
+机制: --host 网管节点作为中转(经网管 ssh/scp 到业务节点抓日志, 业务节点内部 IP 无需本机可达)
+      --single-host 本机直连业务节点 SFTP 下载(节点 IP 本机可达时用)
+
+优先级: CLI 参数 > 配置文件`)
 	_ = fs
 }
 
@@ -193,14 +178,13 @@ func main() {
 	fs.SetOutput(io.Discard)
 	var cliSingleHosts, cliServices sliceFlag
 	var cliPwd, cliLocalDir string
-	var cliHost, cliSshJump string
+	var cliHost string
 	var showHelp bool
-	fs.StringVar(&cliHost, "host", "", "网管节点 IP, 自动发现所有后台节点(主力)")
-	fs.Var(&cliSingleHosts, "single-host", "目标服务器 IP(可重复, 直连指定, 备选)")
+	fs.StringVar(&cliHost, "host", "", "网管节点 IP, 自动发现所有后台节点并经网管中转抓取(主力)")
+	fs.Var(&cliSingleHosts, "single-host", "目标服务器 IP(可重复, 本机直连, 备选)")
 	fs.Var(&cliServices, "service", "服务名(可重复)")
 	fs.StringVar(&cliPwd, "pwd", "", "sopuser/ossuser 共用密码")
 	fs.StringVar(&cliLocalDir, "local-dir", "", "本地保存目录")
-	fs.StringVar(&cliSshJump, "ssh-jump", "", "跳板机 IP")
 	fs.BoolVar(&showHelp, "help", false, "显示用法")
 
 	// 旧用法兼容: 唯一位置参数且不是 flag → 视为配置文件路径
@@ -246,7 +230,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// CLI 显式值 > 环境变量(密码) > 配置文件
+	// CLI 显式值 > 配置文件
 	if len(cliSingleHosts) > 0 {
 		cfgFile.SingleHosts = cliSingleHosts
 	}
@@ -255,17 +239,12 @@ func main() {
 	}
 	if cliPwd != "" {
 		cfgFile.Password = cliPwd
-	} else if env := os.Getenv("FETCH_LOGS_PWD"); env != "" {
-		cfgFile.Password = env
 	}
 	if cliLocalDir != "" {
 		cfgFile.LocalDir = cliLocalDir
 	}
 	if cliHost != "" {
 		cfgFile.Host = cliHost
-	}
-	if cliSshJump != "" {
-		cfgFile.SshJump = cliSshJump
 	}
 
 	// hosts（网管节点）与 single_hosts（直连节点）二选一: 两者都空则报缺参
@@ -280,7 +259,7 @@ func main() {
 			missing = append(missing, "--service(服务名)")
 		}
 		if cfgFile.Password == "" {
-			missing = append(missing, "--pwd 或环境变量 FETCH_LOGS_PWD")
+			missing = append(missing, "--pwd")
 		}
 		logger.Error("缺少必填参数: %s", strings.Join(missing, "、"))
 		os.Exit(1)
@@ -293,8 +272,6 @@ func main() {
 		LocalDir:     cfgFile.LocalDir,
 		DiscoverHost: cfgFile.Host,
 		SingleHosts:  cfgFile.SingleHosts,
-		NodeIPMap:    cfgFile.NodeIPMap,
-		SshJump:      cfgFile.SshJump,
 	}
 
 	// 填充默认值
@@ -369,7 +346,14 @@ func fetchAll(logger *FetchLogger, cfg *FetchConfig) error {
 			defer func() { <-sem }()
 
 			logger.Info("========== 服务器 %s (%d/%d) 开始 ==========", h, idx+1, n)
-			if err := fetchFromHost(logger, cfg, h); err != nil {
+			// 分流：配了网管节点(--host)→网管中转；只有 --single-host→本机直连
+			var err error
+			if cfg.DiscoverHost != "" {
+				err = fetchFromHostViaGateway(logger, cfg, h)
+			} else {
+				err = fetchFromHost(logger, cfg, h)
+			}
+			if err != nil {
 				logger.Error("服务器 %s 抓取失败: %v", h, err)
 				errMu.Lock()
 				errs = append(errs, fmt.Sprintf("%s: %v", h, err))
@@ -453,9 +437,9 @@ func shq(s string) string {
 var ipv4Regex = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}\b`)
 
 // DiscoverNodes 连接 cfg.DiscoverHost（网管节点），对 cfg.Services 中的每个服务执行
-// ipmc_adm statusapp 查找运行该服务的节点，合并去重所有节点 IP，应用
-// cfg.NodeIPMap 翻译（内部 -> 可达），返回可达主机列表。
-// 多服务场景：任一服务发现的节点都会并入最终列表（去重）。
+// ipmc_adm statusapp 查找运行该服务的节点，合并去重所有节点 IP，返回节点列表。
+// 网管中转方案：直接用 statusapp 返回的内部 IP——网管节点与业务节点同网段，可直连内部 IP，
+// 无需解析大网 IP。多服务场景：任一服务发现的节点都会并入最终列表（去重）。
 func DiscoverNodes(logger *FetchLogger, cfg *FetchConfig) ([]string, error) {
 	logger.Info("开始发现服务 %v 所在节点（网管节点: %s）", cfg.Services, cfg.DiscoverHost)
 
@@ -477,24 +461,12 @@ func DiscoverNodes(logger *FetchLogger, cfg *FetchConfig) ([]string, error) {
 			continue
 		}
 
+		// 网管中转方案：直接用 statusapp 返回的内部 IP，网管节点能连内部 IP，无需解析大网 IP
 		for _, ip := range internal {
-			if seen[ip] {
-				continue
-			}
-			seen[ip] = true
-			target := ip
-			if mapped, ok := cfg.NodeIPMap[ip]; ok && mapped != "" {
-				target = mapped
-				logger.Info("发现节点: %s -> %s（node_ip_map 映射，服务 %s）", ip, target, service)
-			} else if reachableIP, derr := discoverNodeReachableIP(logger, cfg, ip); derr == nil {
-				target = reachableIP
-				logger.Info("发现节点: %s -> %s（自动解析大网 IP，服务 %s）", ip, target, service)
-			} else {
-				logger.Info("[警告] 节点 %s 自动解析大网 IP 失败: %v，回退使用内部 IP", ip, derr)
-			}
-			if !seen[target] {
-				seen[target] = true
-				reachable = append(reachable, target)
+			if !seen[ip] {
+				seen[ip] = true
+				reachable = append(reachable, ip)
+				logger.Info("发现节点: %s（服务 %s）", ip, service)
 			}
 		}
 	}
@@ -527,68 +499,14 @@ func parseStatusappIPs(output string) []string {
 	return ips
 }
 
-// parseBigNetIP 从 ifconfig / ip addr 输出中解析节点的"大网"（可达）IP。
-// 排除回环地址与内部 IP 本身；多个候选时优先选择与内部 IP 网段（前两段）不同的地址。
-// 无法确定唯一可达 IP 时返回 ("", false)。
-func parseBigNetIP(output, internalIP string) (string, bool) {
-	ipRe := regexp.MustCompile(`(?m)^\s*inet\s+(\d{1,3}(\.\d{1,3}){3})`)
-	internalParts := strings.Split(internalIP, ".")
-	seen := make(map[string]bool)
-	var candidates []string
-	for _, m := range ipRe.FindAllStringSubmatch(output, -1) {
-		ip := m[1]
-		// 同时执行 ifconfig 与 ip addr 时同一地址会出现两次，需去重。
-		if ip == "127.0.0.1" || ip == internalIP || seen[ip] {
-			continue
-		}
-		seen[ip] = true
-		candidates = append(candidates, ip)
-	}
-	if len(candidates) == 0 {
-		return "", false
-	}
-	if len(candidates) == 1 {
-		return candidates[0], true
-	}
-	// 多个候选：优先选择与内部 IP 前两段不同的"大网"地址
-	var bigNet []string
-	for _, c := range candidates {
-		parts := strings.Split(c, ".")
-		if (len(parts) >= 2 && len(internalParts) >= 2) && (parts[0] != internalParts[0] || parts[1] != internalParts[1]) {
-			bigNet = append(bigNet, c)
-		}
-	}
-	if len(bigNet) == 1 {
-		return bigNet[0], true
-	}
-	return "", false
-}
+// ================= 网管中转（经网管节点 ssh/scp 到业务节点） =================
 
-// discoverNodeReachableIP 经网管节点（cfg.DiscoverHost）中转，ssh 到节点内部 IP 执行
-// ifconfig/ip addr，自动解析其可达的大网 IP。
-// 复用 jumpSSHScript 的 expect 驱动方式在网管节点上发起对内部节点的 ssh。
-func discoverNodeReachableIP(logger *FetchLogger, cfg *FetchConfig, internalIP string) (string, error) {
-	if cfg.DiscoverHost == "" {
-		return "", fmt.Errorf("未配置网管节点（host），无法自动解析节点大网 IP")
-	}
-	cmd := "ifconfig; echo '===IPADDR==='; ip addr 2>/dev/null"
-	script := jumpSSHScript(cfg.Password, loginUser, internalIP, cmd)
-	output, err := sshRun(logger, cfg.DiscoverHost, sshPort, loginUser, cfg.Password, script, 60*time.Second)
-	if err != nil {
-		return "", fmt.Errorf("经网管节点查询 %s 的 ifconfig 失败: %w", internalIP, err)
-	}
-	if ip, ok := parseBigNetIP(output, internalIP); ok {
-		return ip, nil
-	}
-	return "", fmt.Errorf("无法从 %s 的 ifconfig 输出解析出大网 IP:\n%s", internalIP, output)
-}
-
-// ================= 跳板（内网节点经 ssh_jump 中转） =================
-
-// jumpSSHScript 构造在跳板机上执行的 expect 脚本：
-// 通过 ssh（交互式输入密码）在目标主机 target 上执行 targetCmd。
+// jumpSSHScript 构造在网管节点上执行的 expect 脚本：
+// 通过 ssh（交互式输入密码）在目标业务节点 target 上执行 targetCmd。
 // 说明：部分 OSS 环境禁止 direct-tcpip 隧道（nested SSH），
-// 但跳板机可用 expect 驱动系统 ssh/scp 完成对目标主机的访问。
+// 但网管节点可用 expect 驱动系统 ssh/scp 完成对业务节点的访问。
+// 末尾 lwait 捕获 spawn 进程退出码并透传给 expect——否则 ssh/scp 失败时 expect 仍 exit 0，
+// 调用方 sshRun 无法感知失败（曾导致 scp Permission denied 被误报成功）。
 func jumpSSHScript(jumpPwd, targetUser, target, targetCmd string) string {
 	return fmt.Sprintf(`expect <<'EOF'
 set timeout 900
@@ -598,12 +516,14 @@ expect {
   "yes/no" { send "yes\r"; exp_continue }
   eof
 }
+lassign [wait] _ _ _ rc
+exit $rc
 EOF`, targetUser, target, targetCmd, jumpPwd)
 }
 
-// jumpSCPScript 构造在跳板机上执行的 expect 脚本：
-// 将跳板机本地文件 localPath 通过 scp（交互式输入密码）从目标主机 remotePath 拉取到跳板机。
-// 方向：目标 -> 跳板机（下载场景）。
+// jumpSCPScriptDown 构造在网管节点上执行的 expect 脚本：
+// 经 scp（交互式输入密码）把业务节点 remotePath 的文件拉取到网管节点 localPath。
+// 方向：业务节点 -> 网管节点（下载场景）。同样透传 scp 退出码。
 func jumpSCPScriptDown(jumpPwd, targetUser, target, remotePath, localPath string) string {
 	return fmt.Sprintf(`expect <<'EOF'
 set timeout 900
@@ -613,29 +533,28 @@ expect {
   "yes/no" { send "yes\r"; exp_continue }
   eof
 }
+lassign [wait] _ _ _ rc
+exit $rc
 EOF`, targetUser, target, remotePath, localPath, jumpPwd)
 }
 
-// jumpRun 通过跳板机 cfg.SshJump 在目标主机 target 上执行 targetCmd，返回输出。
+// jumpRun 经网管节点 cfg.DiscoverHost 在目标业务节点 target 上执行 targetCmd，返回输出。
+// 用于网管中转：网管节点 ssh 到业务节点（内部 IP）执行命令。
 func jumpRun(logger *FetchLogger, cfg *FetchConfig, target, targetCmd string, timeout time.Duration) (string, error) {
 	script := jumpSSHScript(cfg.Password, loginUser, target, targetCmd)
-	return sshRun(logger, cfg.SshJump, sshPort, loginUser, cfg.Password, script, timeout)
+	return sshRun(logger, cfg.DiscoverHost, sshPort, loginUser, cfg.Password, script, timeout)
 }
 
 // ================= 每台服务器的抓取流程（非交互） =================
 
-// fetchFromHost 在单个节点 host 上抓取所有服务的日志（非交互 SSH）：
+// fetchFromHost 在单个节点 host 上抓取所有服务的日志（本机直连，非交互 SSH）：
 //  1. 以 ossuser 把 <log_base>/<服务名> 复制到 /tmp/fetch_<服务>_<时间戳> 暂存并放开读权限
 //  2. 经 SFTP（sopuser）递归下载暂存目录并打包 zip、解压、删除中间压缩包
 //  3. 以 ossuser 清理远端暂存目录
 //
-// 当 cfg.SshJump 非空时，走跳板路径：暂存/清理经跳板 ssh，下载经跳板 scp 拉取。
+// 本路径用于 --single-host 直连（节点 IP 本机可达）。网管中转路径见 fetchFromHostViaGateway。
 func fetchFromHost(logger *FetchLogger, cfg *FetchConfig, host string) error {
-	if cfg.SshJump != "" {
-		return fetchFromHostViaJump(logger, cfg, host)
-	}
-
-	logger.Info("===== 开始对节点 [%s] 抓取日志 =====", host)
+	logger.Info("===== 开始对节点 [%s] 抓取日志（本机直连）=====", host)
 
 	// 逐个服务：暂存 + 下载 + 清理
 	for _, service := range cfg.Services {
@@ -683,58 +602,64 @@ func fetchCleanupRemote(logger *FetchLogger, cfg *FetchConfig, host, stage strin
 	}
 }
 
-// fetchFromHostViaJump 通过跳板机对目标节点抓取日志：
-//  1. 经跳板 ssh 以 ossuser 暂存 <log_base>/<服务名> 到 /tmp
-//  2. 经跳板 scp 把暂存目录从目标节点拉取到跳板机，打包成 zip，再 SFTP 拉回本地
-//  3. 经跳板 ssh 以 ossuser 清理远端暂存
+// fetchFromHostViaGateway 经网管节点中转对目标业务节点抓取日志（--host 主力路径）：
+//  1. 经网管 ssh 以 ossuser 暂存 <log_base>/<服务名> 到 /tmp 并打包 tar.gz（放在业务节点 /tmp）
+//  2. 经网管 scp 把 tar.gz 从业务节点拉到网管节点 /tmp，再 SFTP 拉回本地解压
+//  3. 经网管 ssh 以 ossuser 清理业务节点暂存，并清理网管节点上的 tar
 //
-// 注意：跳板路径下无法直接对目标节点 SFTP 递归下载（nested SSH 受限），
-// 改用「目标 -> 跳板机 tar.gz -> 本地 SFTP」两跳拉取。
-func fetchFromHostViaJump(logger *FetchLogger, cfg *FetchConfig, host string) error {
-	logger.Info("===== 开始对节点 [%s] 抓取日志（跳板: %s）=====", host, cfg.SshJump)
+// 网管节点与业务节点同网段，用 statusapp 返回的内部 IP 直连即可，无需解析大网 IP。
+// 注意：网管中转下无法直接对业务节点 SFTP 递归下载（nested SSH 受限），
+// 改用「业务节点 -> 网管 tar.gz -> 本地 SFTP」两跳拉取。
+func fetchFromHostViaGateway(logger *FetchLogger, cfg *FetchConfig, host string) error {
+	logger.Info("===== 开始对节点 [%s] 抓取日志（网管中转: %s）=====", host, cfg.DiscoverHost)
 
 	for _, service := range cfg.Services {
 		srcDir := logBase + "/" + service
 		stage := fmt.Sprintf("/tmp/fetch_%s_%s_%s", service, cfg.Timestamp, host)
 		tarName := fmt.Sprintf("%s_%s_%s.tar.gz", service, cfg.Timestamp, host)
-		jumpTar := fmt.Sprintf("/tmp/%s", tarName) // 跳板机上的中间 tar（含节点 IP，避免多节点串行冲突）
+		bizTar := fmt.Sprintf("/tmp/%s", tarName)            // 业务节点上的 tar（含节点 IP，避免多节点并发冲突）
+		gwTar := fmt.Sprintf("/tmp/%s_gw", tarName)          // 网管节点上的中间 tar——必须与业务节点不同名
 		logger.Info("---------- 服务 %s 目录 %s ----------", service, srcDir)
 
-		// 1. 经跳板 ssh 以 ossuser 暂存 + 打包成 tar.gz（放在目标节点 /tmp）
-		packCmd := fmt.Sprintf("echo '%s' | su - %s -c 'rm -rf %s && mkdir -p %s && cp -rL %s/. %s/ && chmod -R a+rX %s && tar -czf %s -C %s . && rm -rf %s'",
+		// 1. 经网管 ssh 以 ossuser 暂存 + 打包成 tar.gz（放在业务节点 /tmp）
+		//    tar 打包后必须 chmod a+r：tar 文件 owner 是 ossuser（默认 -rw-r-----），
+		//    而下一步 scp 以 sopuser 身份读取——sopuser 不在 ossgroup，无读权限会 Permission denied。
+		packCmd := fmt.Sprintf("echo '%s' | su - %s -c 'rm -rf %s && mkdir -p %s && cp -rL %s/. %s/ && chmod -R a+rX %s && tar -czf %s -C %s . && chmod a+r %s && rm -rf %s'",
 			cfg.Password, suUser, shq(stage), shq(stage), shq(srcDir), shq(stage), shq(stage),
-			shq(jumpTar), shq(stage), shq(stage))
+			shq(bizTar), shq(stage), shq(bizTar), shq(stage))
 		if out, err := jumpRun(logger, cfg, host, packCmd, 600*time.Second); err != nil {
 			logger.Error("节点 [%s] 暂存/打包服务 %s 失败: %v\n输出: %s", host, service, err, out)
 			continue
 		}
-		logger.Info("[%s] 服务 %s 已打包为 %s", host, service, jumpTar)
+		logger.Info("[%s] 服务 %s 已打包为 %s", host, service, bizTar)
 
-		// 2. 目标 -> 跳板机：scp 拉取 tar 到跳板机 /tmp
-		downScript := jumpSCPScriptDown(cfg.Password, loginUser, host, jumpTar, jumpTar)
-		if _, err := sshRun(logger, cfg.SshJump, sshPort, loginUser, cfg.Password, downScript, 15*time.Minute); err != nil {
-			logger.Error("跳板机拉取 %s 失败: %v", jumpTar, err)
-			fetchCleanupRemoteViaJump(logger, cfg, host, jumpTar, stage)
+		// 2. 业务节点 -> 网管节点：scp 拉取 tar 到网管节点 /tmp
+		//    网管目标必须用不同文件名（gwTar）：部分环境网管与业务节点 /tmp 是共享存储，
+		//    源/目标同名时 scp 会把同一文件当源和目标，因 sopuser 无权写 ossuser 的文件而 Permission denied。
+		downScript := jumpSCPScriptDown(cfg.Password, loginUser, host, bizTar, gwTar)
+		if _, err := sshRun(logger, cfg.DiscoverHost, sshPort, loginUser, cfg.Password, downScript, 15*time.Minute); err != nil {
+			logger.Error("网管节点拉取 %s 失败: %v", bizTar, err)
+			fetchCleanupRemoteViaGateway(logger, cfg, host, bizTar, stage)
 			continue
 		}
-		logger.Info("已拉取到跳板机: %s", jumpTar)
+		logger.Info("已拉取到网管节点: %s", gwTar)
 
-		// 3. 跳板机 -> 本地：SFTP 下载 tar，解压成 <服务名>_<时间戳>_<节点IP>/ 目录
-		if err := downloadAndExtractTarViaJump(logger, cfg, jumpTar, service, host); err != nil {
-			logger.Error("下载/解压 %s 失败: %v", jumpTar, err)
+		// 3. 网管节点 -> 本地：SFTP 下载 tar，解压成 <服务名>_<时间戳>_<节点IP>/ 目录
+		if err := downloadAndExtractTarViaGateway(logger, cfg, gwTar, service, host); err != nil {
+			logger.Error("下载/解压 %s 失败: %v", gwTar, err)
 		}
 
-		// 4. 清理：目标节点 tar+暂存，跳板机 tar
-		fetchCleanupRemoteViaJump(logger, cfg, host, jumpTar, stage)
-		sshRun(logger, cfg.SshJump, sshPort, loginUser, cfg.Password, fmt.Sprintf("rm -f %s", shq(jumpTar)), 60*time.Second)
+		// 4. 清理：业务节点 tar+暂存（经网管 ssh），网管节点 tar（本机 ssh）
+		fetchCleanupRemoteViaGateway(logger, cfg, host, bizTar, stage)
+		sshRun(logger, cfg.DiscoverHost, sshPort, loginUser, cfg.Password, fmt.Sprintf("rm -f %s", shq(gwTar)), 60*time.Second)
 	}
 
 	logger.Info("===== 节点 [%s] 日志抓取完成 =====", host)
 	return nil
 }
 
-// fetchCleanupRemoteViaJump 经跳板 ssh 清理目标节点上的 tar 与暂存目录。
-func fetchCleanupRemoteViaJump(logger *FetchLogger, cfg *FetchConfig, host, tarPath, stage string) {
+// fetchCleanupRemoteViaGateway 经网管 ssh 清理业务节点上的 tar 与暂存目录。
+func fetchCleanupRemoteViaGateway(logger *FetchLogger, cfg *FetchConfig, host, tarPath, stage string) {
 	cleanCmd := fmt.Sprintf("echo '%s' | su - %s -c 'rm -f %s && rm -rf %s'", cfg.Password, suUser, shq(tarPath), shq(stage))
 	if _, err := jumpRun(logger, cfg, host, cleanCmd, 180*time.Second); err != nil {
 		logger.Error("清理远端 %s/%s 失败（不影响下载结果）: %v", tarPath, stage, err)
@@ -743,10 +668,10 @@ func fetchCleanupRemoteViaJump(logger *FetchLogger, cfg *FetchConfig, host, tarP
 	}
 }
 
-// downloadAndExtractTarViaJump 从跳板机 SFTP 下载 tar 到本地，解压成
+// downloadAndExtractTarViaGateway 从网管节点 SFTP 下载 tar 到本地，解压成
 // <服务名>_<时间戳>_<节点IP>/ 目录，并删除中间 tar。
 // 多节点场景：rootName 含节点 IP，每个节点独立目录，互不覆盖。
-func downloadAndExtractTarViaJump(logger *FetchLogger, cfg *FetchConfig, jumpTar, service, host string) error {
+func downloadAndExtractTarViaGateway(logger *FetchLogger, cfg *FetchConfig, jumpTar, service, host string) error {
 	rootName := service + "_" + cfg.Timestamp + "_" + host
 	stageDir := filepath.Join(cfg.LocalDir, rootName)
 	if err := os.RemoveAll(stageDir); err != nil {
@@ -756,9 +681,9 @@ func downloadAndExtractTarViaJump(logger *FetchLogger, cfg *FetchConfig, jumpTar
 		return err
 	}
 
-	// SFTP 从跳板机下载 tar 到本地临时文件
+	// SFTP 从网管节点下载 tar 到本地临时文件
 	localTar := filepath.Join(os.TempDir(), rootName+".tar.gz")
-	client, sftpClient, err := dialSftp(cfg.SshJump, sshPort, loginUser, cfg.Password)
+	client, sftpClient, err := dialSftp(cfg.DiscoverHost, sshPort, loginUser, cfg.Password)
 	if err != nil {
 		return err
 	}
@@ -837,9 +762,11 @@ func extractTarGz(tarPath, destDir string) error {
 		if err != nil {
 			return err
 		}
-		// zip-slip 防护
+		// zip-slip 防护：clean 后的目标必须在 destDir 之下（或就是 destDir 本身，如 ./ 条目）
 		target := filepath.Join(destDir, hdr.Name)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
+		cleanTarget := filepath.Clean(target)
+		cleanDest := filepath.Clean(destDir)
+		if cleanTarget != cleanDest && !strings.HasPrefix(cleanTarget, cleanDest+string(os.PathSeparator)) {
 			return fmt.Errorf("非法 tar 条目路径: %s", hdr.Name)
 		}
 		switch hdr.Typeflag {

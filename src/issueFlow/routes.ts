@@ -1096,7 +1096,7 @@ export async function handleIssueRoutes(
 
     // 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮不执行任何
     // 事——端点只守卫+留痕+发送通知词(终态/queued 由服务层打回),
-    // 拉取由 Agent 按技能 issue-ops 执行(缺环境走既有环境闸)。写闸
+    // 拉取由 Agent 按技能 fetch-logs 执行(缺环境走既有环境闸)。写闸
     // 仅归属人,与调整关联仓同款。
     if (method === "POST" && parts[2] === "logs"
         && parts[3] === "fetch" && parts.length === 4) {

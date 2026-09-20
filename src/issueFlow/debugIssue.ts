@@ -55,7 +55,7 @@ export interface DebugIssueSetup {
   dtsTicketFile: string;
   /** 罐头日志源目录(假 fetch-logs 从这里复制)。 */
   demoLogsDir: string;
-  /** 假抓日志引擎目录(会话技能物化后覆盖 skills/issue-ops/bin)。 */
+  /** 假抓日志引擎目录(会话技能物化后覆盖 skills/fetch-logs/bin)。 */
   opsMockBinDir: string;
   /** bare 镜像根目录(同时是 FakeGitPlatform 的多仓路由边界)。 */
   remotesDir: string;
@@ -91,7 +91,7 @@ async function ensureBareMirror(
 
 /** 调试单据种子:三张量身定制(单仓/单仓/双仓),状态全部落在可发起
  * 的「开发人员实施修改」。正文点名关联仓名与后台服务名——服务名与
- * 罐头日志目录一一对应,AI 按技能 issue-ops 抓取即中。 */
+ * 罐头日志目录一一对应,AI 按技能 fetch-logs 抓取即中。 */
 export const DEBUG_DTS_TICKETS = [
   {
     ticket: "DTS-2026-9001",
@@ -105,7 +105,7 @@ export const DEBUG_DTS_TICKETS = [
     content: "【DEV·调试单】dafung-web 订单导出超时\n\n"
       + "现象: 导出 10 万行时网关 504,千行以内正常。\n"
       + "关联仓: dafung-web(业务模块「调试示例业务」已绑定,直接拉仓即可)\n"
-      + "后台服务: order-export(可用技能 issue-ops 抓日志,--service order-export)\n"
+      + "后台服务: order-export(可用技能 fetch-logs 抓日志,--service order-export)\n"
       + "初步定位: 怀疑同步全量加载后串行渲染,等待分析会话定位。",
   },
   {
@@ -120,7 +120,7 @@ export const DEBUG_DTS_TICKETS = [
     content: "【DEV·调试单】scotland-yard-gd 案件看板轮询 500\n\n"
       + "现象: 看板页轮询接口偶发 500,重启后恢复一段时间。\n"
       + "关联仓: scotland-yard-gd(业务模块「调试示例业务」已绑定)\n"
-      + "后台服务: case-board(可用技能 issue-ops 抓日志,--service case-board)\n"
+      + "后台服务: case-board(可用技能 fetch-logs 抓日志,--service case-board)\n"
       + "初步定位: 疑似连接池耗尽,等待分析会话定位。",
   },
   {
@@ -136,7 +136,7 @@ export const DEBUG_DTS_TICKETS = [
       + "现象: 通知正文里 {{userName}} 原样露出,变量没被替换。\n"
       + "关联仓: dafung-web 与 scotland-yard-gd(业务模块「调试示例业务」已绑定"
       + ",两个仓都要看)\n"
-      + "后台服务: notify-render(可用技能 issue-ops 抓日志,--service notify-render)\n"
+      + "后台服务: notify-render(可用技能 fetch-logs 抓日志,--service notify-render)\n"
       + "初步定位: 前后端字段名不对齐,等待分析会话定位。",
   },
 ];
@@ -174,7 +174,7 @@ const DEMO_LOG_SERVICES: Record<string, Array<{ file: string; body: string }>> =
 const MOCK_FETCH_LOGS_TEMPLATE = `#!/usr/bin/env bash
 # [debug-issue] 假日志抓取引擎:从本机罐头目录复制,不连任何网管环境。
 # 与真引擎同款 CLI 面(--service/--local-dir,--host 一律忽略)与同一
-# 成功判据:退出码 0 且输出包含「解压完成」(技能 issue-ops 靠它判成)。
+# 成功判据:退出码 0 且输出包含「解压完成」(技能 fetch-logs 靠它判成)。
 set -u
 LOG_SOURCE={{LOG_SOURCE}}
 service=""
@@ -337,13 +337,13 @@ export async function setupDebugIssue(options: {
   };
 }
 
-/** 会话技能物化后的假引擎覆盖:只动工作区 skills/issue-ops/bin 下两个
+/** 会话技能物化后的假引擎覆盖:只动工作区 skills/fetch-logs/bin 下两个
  * wrapper(真引擎的架构二进制原样保留,不再被调用)。技能源不变,
  * 旗标缺席时本函数不存在于任何调用路径。 */
 export function applyDebugIssueSkillPatch(
   workspace: string, opsMockBinDir: string,
 ): void {
-  const binDir = join(workspace, "skills", "issue-ops", "bin");
+  const binDir = join(workspace, "skills", "fetch-logs", "bin");
   if (!existsSync(binDir)) return;
   for (const name of ["fetch-logs", "fetch-logs-k8s"]) {
     const source = join(opsMockBinDir, name);

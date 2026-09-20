@@ -237,7 +237,7 @@ test("假 fetch-logs/fetch-logs-k8s:按服务名复制,退出码 0 + 解压完�
   }
 });
 
-test("技能补丁:工作区 issue-ops 的 wrapper 被假引擎覆盖且保留执行位", async () => {
+test("技能补丁:工作区 fetch-logs 的 wrapper 被假引擎覆盖且保留执行位", async () => {
   const root = mkdtempSync(join(tmpdir(), "debug-issue-patch-"));
   try {
     const dataDir = join(root, "data");
@@ -248,7 +248,7 @@ test("技能补丁:工作区 issue-ops 的 wrapper 被假引擎覆盖且保留�
       log: () => {},
     });
     const workspace = join(root, "issue-workspace");
-    const binDir = join(workspace, "skills", "issue-ops", "bin");
+    const binDir = join(workspace, "skills", "fetch-logs", "bin");
     mkdirSync(binDir, { recursive: true });
     writeFileSync(join(binDir, "fetch-logs"), "#!/bin/sh\necho 真引擎");
     writeFileSync(join(binDir, "fetch-logs-k8s"), "#!/bin/sh\necho 真引擎");

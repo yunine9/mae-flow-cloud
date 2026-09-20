@@ -48,7 +48,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 ## gate.verify.fail
 
 用户在环境验证发现问题,已退回「问题分析」阶段(第 {{round}} 轮)。{{reason}}
-先就问题理解与修改方向与用户对齐——有疑点用 AskUserQuestion 提问,不要自行猜;对齐后再重写分析报告并 submit_analysis。
+先就问题理解与修改方向与用户对齐,按 grilling 技能(skills/grilling/SKILL.md)的设计树组织提问——先现象后方案、一轮一卡,有疑点用 AskUserQuestion 提问,不要自行猜;对齐后自行判断报告要不要修订:分析确需修正就修订,报告确实站得住就不必为改而改;无论改不改,都重新 submit_analysis 交用户过目。
 前几轮的修复还在分支上,除非新分析推翻,否则不要推倒重来。
 
 ## gate.evidence.header
@@ -70,7 +70,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## env.configured
 
-平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查登记元信息全量)。请重试刚才的操作——按技能 issue-ops 抓取日志。
+平台通知: 网管环境已配置(凭据已入 vault;调 get_issue_meta 可查登记元信息全量)。请重试刚才的操作——按技能 fetch-logs 抓取日志。
 
 ## env.refused
 
@@ -92,7 +92,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## logs.fetch
 
-平台通知: 用户请求为本会话拉取网管侧日志(元信息页签「拉取日志」按钮递交的意图,平台不代拉,执行者是你)。请按技能 issue-ops 抓取日志——先 get_issue_meta 取网管环境与凭据;缺环境就按技能调 request_env 举卡请求配置,不要猜地址或两种形态都试。若本会话此前已拉取过日志、用户又没说明要拉哪些新日志,先向用户确认再动手,避免无谓的重复拉取。
+平台通知: 用户请求为本会话拉取网管侧日志(元信息页签「拉取日志」按钮递交的意图,平台不代拉,执行者是你)。请按技能 fetch-logs 抓取日志——先 get_issue_meta 取网管环境与凭据;缺环境就按技能调 request_env 举卡请求配置,不要猜地址或两种形态都试。若本会话此前已拉取过日志、用户又没说明要拉哪些新日志,先向用户确认再动手,避免无谓的重复拉取。
 
 ## green.deliver
 
@@ -139,7 +139,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 ## advance.knowledge_remind
 
-领域知识提示:本会话装载了团队知识仓(repo/{{name}}/,只读参考)。定位与改码中遇到代码和问题描述都解释不了的领域事实(概念、机理、术语、模块职责),先翻它的目录找对应领域:优先按业务模块名检索——模块名与缩写是第一线索(如「Access」故障管理助手 → 试 FMA),其次才是现象关键词;找到就读相关知识,引用时把文件路径写进证据链;知识仓里没有,再回代码自证,不要因缺知识停工。
+领域知识提示:本会话装载了团队知识仓(repo/{{name}}/,只读参考)。定位与改码中遇到代码和问题描述都解释不了的领域事实(概念、机理、术语、模块职责),先翻它的目录找对应领域:优先按业务模块名检索——模块名与缩写是第一线索(如「Access」故障管理助手 → 试 FMA),其次才是现象关键词;找到就读相关知识,引用时把文件路径随文标注进报告;知识仓里没有,再回代码自证,不要因缺知识停工。
 
 ## review.triage
 

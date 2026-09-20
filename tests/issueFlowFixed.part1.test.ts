@@ -12,6 +12,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -19,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { listAnalysisVersions } from "../src/issueFlow/analysisVersions.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
 import { MockDtsGateway, type DtsGateway } from "../src/issueFlow/gateways.ts";
@@ -84,7 +86,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高:日志直接指向。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n现象:登录超时。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高:日志直接指向。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽,方案=超时回收" } } },
     { text: "分析报告已提交,等待用户确认。" },
@@ -259,6 +261,13 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       state_version: closed1.gate!.state_version, code: "fail",
       notes: "并发场景仍偶发超时",
     });
+    // 打回也是报告重写的来源(ADR-0045):回退前旧报告先冻结成版本,
+    // 二轮重写后 live 即新版,失败前后可对照。
+    const snapshotsAfterFail = existsSync(join(dataDir, "issues", created.id, "reviews"))
+      ? readdirSync(join(dataDir, "issues", created.id, "reviews"))
+        .filter((name) => name.startsWith("issue-analysis@")).length
+      : 0;
+    assert.equal(snapshotsAfterFail, 1, "验证打回时应冻结打回前的报告快照");
     const secondAnalysis = await until(() => {
       const issue = service.get(created.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
@@ -269,6 +278,11 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     assert.equal(secondAnalysis.stage, "analyze", "回退到问题分析");
     assert.equal(secondAnalysis.round, 2, "回退轮次+1");
     assert.equal(secondAnalysis.stage_states?.[4], "redo", "mr_green 标重做");
+    assert.deepEqual(
+      listAnalysisVersions(join(dataDir, "issues", created.id))
+        .map((entry) => entry.name),
+      ["初版", "修订1"],
+      "二轮重写后版本页签=冻结的打回前版+重写版");
     service.answer(created.id, {
       state_version: secondAnalysis.gate!.state_version, code: "confirm",
     });
@@ -310,7 +324,7 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失导致全表扫描)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高:执行计划直接指向。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失导致全表扫描)。\\n## 置信度\\n高:执行计划直接指向。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
     { text: "结论是问题,已提交等用户确认。" },
@@ -367,7 +381,7 @@ test("固定流程无单闭环:结论非问题,用户确认后自动归档", asy
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n非问题(测试环境时钟漂移)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n非问题(测试环境时钟漂移)。\\n## 置信度\\n高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "non_issue", summary: "非问题:时钟漂移误报" } } },
     { text: "结论非问题,等用户确认。" },
@@ -424,7 +438,7 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:非问题(时钟漂移误报)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:非问题(时钟漂移误报)。\\n## 置信度\\n高。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "non_issue", summary: "时钟漂移误报" } } },
     { text: "A 卡已举出。" },
@@ -433,7 +447,7 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:非问题(时钟漂移误报)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:非问题(时钟漂移误报)。\\n## 置信度\\n高。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "non_issue", summary: "时钟漂移误报" } } },
     { text: "B 卡已举出。" },
@@ -512,7 +526,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(死锁)。\\n## 证据链\\n日志:死锁栈。\\n## 置信度\\n高。\\n## 修改方案\\n调整加锁顺序。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(死锁)。\\n## 置信度\\n高。\\n## 修改方案\\n调整加锁顺序。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:死锁" } } },
     { text: "等用户确认。" },
@@ -529,7 +543,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:是问题(重复请求)\\n## 证据链\\n日志:重复入账。\\n## 置信度\\n高。\\n## 修改方案\\n幂等去重。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:是问题(重复请求)\\n## 置信度\\n高。\\n## 修改方案\\n幂等去重。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:重复请求" } } },
     { text: "等确认。" },
@@ -1235,7 +1249,7 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\n\n现象已核实。\n## 问题现象\n演示现象。\n## 问题根因\n连接池耗尽。\n## 证据链\n日志:pool exhausted。\n## 置信度\n高。\n## 修改方案\n超时回收。\n' > issue-analysis.md" } } },
+      "printf '# 分析\n\n现象已核实。\n## 问题现象\n演示现象。\n## 问题根因\n连接池耗尽。\n## 置信度\n高。\n## 修改方案\n超时回收。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
     { text: "仓已拉好,分析已提交。" },
     // 会话 B:拉单 → 收口 → 无代码改动,complete_stage 自报跳过拉仓。
@@ -1243,7 +1257,7 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
     { tool: { name: "complete_stage", input: { note: "单据已通读" } } },
     { tool: { name: "complete_stage", input: { note: "本单为配置问题,无需代码仓" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\n\n## 问题现象\n演示现象。\n## 问题根因\n配置项漂移(非代码问题)。\n## 证据链\n配置比对:超时阈值不一致。\n## 置信度\n高。\n## 修改方案\n恢复配置。\n' > issue-analysis.md" } } },
+      "printf '# 分析\n\n## 问题现象\n演示现象。\n## 问题根因\n配置项漂移(非代码问题)。\n## 置信度\n高。\n## 修改方案\n恢复配置。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "配置项漂移,非代码问题" } } },
     { text: "无仓跳过,分析已提交。" },
   ];
@@ -1347,7 +1361,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\n\n转码失败已定位。\n## 问题现象\n演示现象。\n## 问题根因\n转码线程泄漏。\n## 证据链\n日志:线程数持续增长。\n## 置信度\n高。\n## 修改方案\n释放泄漏线程。\n' > issue-analysis.md" } } },
+      "printf '# 分析\n\n转码失败已定位。\n## 问题现象\n演示现象。\n## 问题根因\n转码线程泄漏。\n## 置信度\n高。\n## 修改方案\n释放泄漏线程。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:转码线程泄漏" } } },
     { text: "模块已绑、仓已拉,分析已提交。" },
@@ -1498,7 +1512,7 @@ test("网管环境闸(2026-08-28):request_env 缺环境举 env_needed(scope=logs
     { tool: { name: "request_env", input: {} } },
     { text: "等待用户配置网管环境。" },
     { tool: { name: "request_env", input: {} } },
-    { text: "环境已配置,按技能 issue-ops 抓取日志。" },
+    { text: "环境已配置,按技能 fetch-logs 抓取日志。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -1866,7 +1880,7 @@ test("催办续跑:模型提前收嘴被推回阶段,催办词带阶段目标与
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:pool exhausted。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { text: "先研究到这,稍后继续。" },
     // 第 2 回合(平台催办):补交分析,举「结论确认」卡——合法停机。
     { tool: { name: "submit_analysis",
@@ -2184,6 +2198,7 @@ test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附
     },
     converted_from: "issue-7",
     description: "升级后偶发,日志见 attachments/aaaaaaaaaaaaaaaa.log",
+    remark: "先复现黑屏再查日志,别先动版本配置",
   });
   const meta = issueRegistrationMeta(state, {});
   assert.equal(meta.product_version, "V5R1");
@@ -2192,6 +2207,7 @@ test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附
     { name: "team-knowledge", dir: "repo/team-knowledge/" });
   assert.equal(meta.inherited_issue, "issue-7");
   assert.deepEqual(meta.attachments, ["attachments/aaaaaaaaaaaaaaaa.log"]);
+  assert.equal(meta.remark, "先复现黑屏再查日志,别先动版本配置");
 
   // skipped 的知识仓不在场:不指一个不存在的路径。
   const skipped = issueRegistrationMeta(metaState({
@@ -2202,6 +2218,8 @@ test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附
   }), {});
   assert.equal("knowledge_repo" in skipped, false);
   assert.equal("attachments" in skipped, false);
+  // 发起备注:没填整键缺席,不造空壳(2026-09-20)。
+  assert.equal("remark" in skipped, false);
 });
 
 test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本行;缺省整行缺席", () => {
@@ -2214,6 +2232,14 @@ test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本�
   assert.match(withAll, /优先查看附件再下结论/);
   assert.match(withAll, /产品版本: V5R1\(拉仓基线分支: master_v5r1\)/);
 
+  // 发起备注单列一行(2026-09-20):要求重点优先读;没填整行缺席。
+  const withRemark = issueFixedOpeningPrompt(metaState({
+    remark: "先复现黑屏再查日志",
+  }));
+  assert.match(withRemark, /发起备注: 先复现黑屏再查日志/);
+  assert.match(withRemark, /重点优先读/);
+  assert.doesNotMatch(issueFixedOpeningPrompt(metaState()), /发起备注/);
+
   // 无附件无版本:两行整段缺席,不渲染空壳。
   const plain = issueFixedOpeningPrompt(metaState());
   assert.doesNotMatch(plain, /登记附件/);
@@ -2223,11 +2249,14 @@ test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本�
   const resume = issueResumePrompt(metaState({
     product_version: "V5R1",
     description: "见 attachments/aaaaaaaaaaaaaaaa.log",
+    remark: "先复现黑屏再查日志",
   }), "继续");
   assert.match(resume, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
   assert.match(resume, /产品版本: V5R1/);
+  assert.match(resume, /发起备注: 先复现黑屏再查日志/);
   const plainResume = issueResumePrompt(metaState(), "继续");
   assert.doesNotMatch(plainResume, /登记附件/);
+  assert.doesNotMatch(plainResume, /发起备注/);
 });
 
 
@@ -2248,6 +2277,7 @@ test("登记元信息进开场上下文(service 接线):vault 解出的凭据明
     seedModule(dataDir, origin);
     const created = service.create({
       account: "dev", title: "播放器偶发黑屏",
+      remark: "先复现黑屏再查日志,别先动版本配置",
       repoUrl: origin,
       moduleId: MODULE_ID, environment: NO_TICKET_ENV,
     });
@@ -2260,6 +2290,9 @@ test("登记元信息进开场上下文(service 接线):vault 解出的凭据明
     const opening = JSON.stringify(model.requests[0]);
     assert.match(opening, /env-shared-secret/);
     assert.match(opening, /业务模块: 支付核心\(id: pay-core\)/);
+    // 发起备注随登记进开场词(service 接线),要求 AI 重点优先读。
+    assert.match(opening, /发起备注: 先复现黑屏再查日志,别先动版本配置/);
+    assert.match(opening, /重点优先读/);
     // get_issue_meta 的回执进了第二个请求(工具结果回模型),密码在场。
     const followup = JSON.stringify(model.requests[1]);
     assert.match(followup, /get_issue_meta/);
@@ -2283,7 +2316,7 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { summary: "根因=连接池耗尽" } } },
     { text: "分析报告已提交,等待用户确认。" },

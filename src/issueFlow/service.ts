@@ -619,7 +619,7 @@ export interface IssueFlowOptions {
   dts?: DtsGateway;
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
-  /** 调试形态(--debug-issue):会话技能物化后把 issue-ops 的抓日志
+  /** 调试形态(--debug-issue):会话技能物化后把 fetch-logs 的抓日志
    * wrapper 换成假引擎(罐头复制,不连网管)。旗标缺席时整个字段
    * 不在,会话行为与现状逐字节一致。 */
   debugIssue?: { opsMockBinDir: string };
@@ -1805,7 +1805,7 @@ export class IssueFlowService {
   /** 网管环境落盘的唯一路径:凭据只进 vault(AES-GCM 按会话隔离的
    * 加密文件),issue.json/公开 API/事件只有引用；随后
    * environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文。
-   * 后台凭据(both)供日志抓取(技能 issue-ops)/build_deploy 消费,独立
+   * 后台凭据(both)供日志抓取(技能 fetch-logs)/build_deploy 消费,独立
    * root 凭据(root,显式存在时)供 get_issue_meta 元信息出口,各组
    * 自成行、可分别解出。登记与 env_needed 闸作答共用本路径,秘密
    * 纪律只有一份。sourceIp 在场=本次配置来自台账快照,会话状态记下
@@ -1911,7 +1911,7 @@ export class IssueFlowService {
     const environment = this.storeEnvironment(id, resolved, sourceIp);
     state.environment = environment;
     // 解锢(票 93):配置成功即整册清除拒绝台账——用户对环境的新裁定
-    // 覆盖旧裁定,日志抓取(技能 issue-ops)/build_deploy 恢复正常举闸路径。
+    // 覆盖旧裁定,日志抓取(技能 fetch-logs)/build_deploy 恢复正常举闸路径。
     delete state.env_declined;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
@@ -2116,7 +2116,7 @@ export class IssueFlowService {
 
   /** 主动拉取日志的意图递交口(#268,POST /issues/:id/logs/fetch;
    * Agent 主理第二例,ADR-0026):按钮不执行任何事,端点只守卫+留痕+
-   * 经平台回合通道发送通知词——拉取由 Agent 按技能 issue-ops 执行,
+   * 经平台回合通道发送通知词——拉取由 Agent 按技能 fetch-logs 执行,
    * 缺环境走既有环境闸(request_env 举卡→回填→自动续拉),平台不代拉。
    * 无重复拉取门禁:排队语义下连点只是重复意图,通知词一句"已拉取过
    * 先向用户确认"兜住;无独立"已拉取"状态位,页面判定用材料清单。
@@ -2138,7 +2138,7 @@ export class IssueFlowService {
     }
     recordTransition(state, {
       source: "platform",
-      note: "用户请求拉取网管日志——拉取由 Agent 按技能 issue-ops 执行,"
+      note: "用户请求拉取网管日志——拉取由 Agent 按技能 fetch-logs 执行,"
         + "端点不代拉",
     });
     saveState(live.root, state);
@@ -3198,7 +3198,7 @@ export class IssueFlowService {
     if (!toolsDir || !this.options.isolation) return;
     const destDir = join(live.root, ".ops-tools");
     mkdirSync(destDir, { recursive: true });
-    // fetch-logs 引擎已迁为平台技能 issue-ops 的 bin(随技能整包物化),
+    // fetch-logs 引擎已迁为平台技能 fetch-logs 的 bin(随技能整包物化),
     // 这里只剩封存中的 build-deploy(ADR-0013:代码原地保留)。
     const binName = process.platform === "win32"
       ? ["build-deploy.exe"]
@@ -3618,7 +3618,7 @@ export class IssueFlowService {
       mode: 0o600,
     });
     const skillPaths = materializeIssueSkills(live.root);
-    // 调试形态(--debug-issue):物化后把 issue-ops 的抓日志 wrapper
+    // 调试形态(--debug-issue):物化后把 fetch-logs 的抓日志 wrapper
     // 换成假引擎。只在旗标在场时发生;正式形态无此调用。
     if (this.options.debugIssue) {
       applyDebugIssueSkillPatch(live.root, this.options.debugIssue.opsMockBinDir);
