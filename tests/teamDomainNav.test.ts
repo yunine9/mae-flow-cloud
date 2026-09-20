@@ -13,7 +13,6 @@ import test from "node:test";
 import {
   ISSUE_DELIVERY_STATUSES,
   issueDeliveryBreakdown,
-  issueFeatureOnceRates,
   issueFeatureRows,
 } from "../web/src/teamOps.ts";
 
@@ -64,12 +63,12 @@ test("需求板净化:TeamDashboard 只装需求任务,问题会话不再混进�
   // 问题会话的团队全景有且只有一个家:「团队问题」页签页。
   // (#228)team-tasks-workspace 壳类退役,最小宽约束直接落在 section。
   assert.match(app, /view === "teamIssues" && <section className="min-w-0">/);
-  // onceRates 是 #290 票4 一次率二轴统计的取数(服务端聚合,组件只渲染);
-  // onceGenerated 是一次生成达标率(ADR-0044,终态伴生快照的读侧聚合),
-  // 同一条 allSettled 容错纪律;卡片自带新页签链接(ADR-0040),App 不再传
-  // onOpenIssue 跳转回调。
+  // 交付质量比率(一次定位率/一次验证率/一次解决率/首次生成占比/
+  // 90%AI生成达标率,ADR-0045)已撤到交付分析「问题处理」页签:团队DTS
+  // 只装过程视野,组件不再吃统计 props;卡片自带新页签链接(ADR-0040)。
   assert.match(app,
-    /<TeamIssueWorld issues=\{teamIssues\} onceRates=\{issueOnceRates\} onceGenerated=\{issueOnceGenerated\} \/>/);
+    /<TeamIssueWorld issues=\{teamIssues\} \/>/);
+  assert.doesNotMatch(app, /issueOnceRates|issueOnceGenerated|getIssueOnceRates|getIssueOnceGenerated/);
 });
 
 test("团队问题页:概览+现场在当前面板,队列空态与需求侧同款", () => {
@@ -209,20 +208,6 @@ test("特性总账表(2026-09-18 拍板):首行总账默认收起,展开逐特�
     { module: "无线特性-漫游切换", active: 1, waiting: 0, failed: 1, closed: 0, total: 1 },
     { module: "未分类", active: 0, waiting: 0, failed: 0, closed: 1, total: 1 },
   ]);
-  // 每特性一次率:per_session 明细按会话归特性,分母 0 显示 —(null)。
-  assert.match(issueWorld, /issueFeatureOnceRates\(/,
-    "总账表一次定位/一次修复两列与头部瓦片同源(端点 per_session)");
-  const once = issueFeatureOnceRates(
-    rows.map((row) => ({ id: row.module, module: row.module })),
-    [
-      { id: "语音特性-降噪", localization_pass: false, repair_pass: true },
-      { id: "语音特性-降噪", localization_pass: true, repair_pass: false },
-      { id: "无线特性-漫游切换", localization_pass: true, repair_pass: true },
-    ],
-  );
-  assert.deepEqual(once.get("语音特性-降噪"),
-    { total: 2, localization: 50, repair: 50 });
-  assert.deepEqual(once.get("无线特性-漫游切换"),
-    { total: 1, localization: 100, repair: 100 });
-  assert.equal(once.get("未分类"), undefined, "无完成交付会话的特性不出列值");
+  // 一次定位/一次验证/一次解决等交付质量比率已撤到交付分析「问题处理」
+  // 页签(ADR-0045):总账表只留过程计数,这里不再有 per_session 归聚合。
 });
