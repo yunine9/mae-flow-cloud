@@ -312,3 +312,51 @@ test("旧单仓 Story 确认卡提交意见直接进入现有返工分支，不�
     rmSync(repo.cwd, { recursive: true, force: true });
   }
 });
+
+for (const current of ["external_verify", "end", "rework"]) {
+  test(`旧整理失败在 ${current} 重启后重跑：按实际阶段继续，不遗留旧错误`, async () => {
+    const repo = repository({ commitArtifact: true });
+    const root = mkdtempSync(join(tmpdir(), "mfc-delivery-retry-"));
+    const options = { dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+      host: { kernelRoot: kernel(), repoPath: repo.cwd },
+      delivery: { platformUrl: "http://platform.invalid" } };
+    let service = new TaskService(options);
+    try {
+      const task = service.create("整理失败后继续交付");
+      const internal = (service as any).tasks.get(task.id);
+      const baseline = repo.git("rev-parse", "HEAD^");
+      writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({ current,
+        step_heads: { branch_create: baseline }, config: { 分支名: "feature", 基线分支: "master" } }));
+      internal.cwd = repo.cwd;
+      internal.summary.status = "failed";
+      internal.summary.detail = "按已确认范围自动整理后复核未通过";
+      internal.summary.delivery = { skipped: internal.summary.detail };
+      internal.summary.delivery_selection = { paths: ["src/feature.ts"], excluded_paths: ["target/classes/Feature.class"],
+        observed_paths: ["src/feature.ts", "target/classes/Feature.class"], status: "requested",
+        waiting_id: "old-request", head: repo.git("rev-parse", "HEAD"), baseline, updated_at: new Date().toISOString() };
+      (service as any).persist(internal);
+      await service.shutdown();
+      service = new TaskService(options);
+      assert.equal(service.recover().restored, 1);
+      assert.equal((service as any).tasks.get(task.id).summary.status, "failed", "部署本身不自动推送");
+      // 只替换远端查询及无关提交文案，执行真实 retry、Git 整理及推送确认。
+      (service as any).absorbForeignRemoteCommits = async () => "unchanged";
+      (service as any).existingMergeRequestAllowsDelivery = async () => true;
+      (service as any).ensureCommitMessagePolicy = async () => "unchanged";
+      let pushes = 0;
+      (service as any).pushFromHost = async () => { pushes++; throw new Error("未经确认不能推送"); };
+      service.retry(task.id, "owner");
+      assert.equal(service.get(task.id)?.delivery?.skipped, undefined);
+      if (current === "rework") {
+        assert.equal(service.get(task.id)?.status, "queued", "可编辑阶段仍由 Agent 继续工作");
+      } else {
+        await until(() => service.get(task.id)?.waiting?.step === "cloud_push_confirm" ? true : undefined, "直接回到推送确认卡");
+        assert.equal(service.get(task.id)?.delivery_selection?.status, "requested", "重跑不伪造确认");
+        assert.equal(repo.git("diff", "--name-only", baseline, "HEAD"), "src/feature.ts");
+        assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
+        assert.equal((service as any).queue.length, 0, "不派编码 Agent 查询不存在的流水线");
+      }
+      assert.equal(pushes, 0);
+    } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); rmSync(repo.cwd, { recursive: true, force: true }); }
+  });
+}

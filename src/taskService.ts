@@ -9344,13 +9344,18 @@ export class TaskService {
     // 外部交付接口停机只需要宿主重试 MR / 流水线。旧实现把任务重新
     // 入 Agent 队列，模型醒来后只能读到 external_verify 再原样结束：
     // 用户白等一轮还多烧 token。没有修复环、没有证据缺口时，清掉
-    // 上一轮事故牌并直接踢活交付链。
-    if (status === "verifying" && delivery?.stalled
+    // 上一轮错误并直接继续交付。整理失败同样属于宿主交付失败，
+    // 不能只恢复 verifying，却让 failed 重新启动编码 Agent。
+    if (delivery && ((status === "verifying" && delivery.stalled)
+          || (status === "failed" && delivery.skipped))
         && !delivery.evidence_gap
         // 生产任务必须已经离开可编辑步骤。历史工作流以 end 表示 Agent
         // 已收口，新工作流以 external_verify 表示宿主等待；两者都只该
         // 续宿主交付。无 host 的纯交付演练没有内核状态文件。
-        && (!this.options.host || this.atHostDeliveryWait(task))) {
+        && (this.atHostDeliveryWait(task)
+          || (status === "verifying" && !this.options.host))) {
+      task.summary.status = "verifying";
+      delete task.summary.completed_at;
       delivery.pipeline = "人工重跑,待重新验证";
       delivery.stalled = undefined;
       delivery.stall_class = undefined;
@@ -9378,6 +9383,10 @@ export class TaskService {
       // 与服务日志里，当前态只保留这一轮的事实。
       task.summary.delivery.skipped = undefined;
       task.summary.delivery.waiting_on = undefined;
+    }
+    if (status === "failed" && delivery) {
+      delivery.skipped = undefined;
+      delivery.waiting_on = undefined;
     }
     task.summary.status = "queued";
     delete task.summary.completed_at;
