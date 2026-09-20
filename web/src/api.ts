@@ -4169,10 +4169,13 @@ export interface IssueOnceGeneratedSessionRow {
   /** 特性(业务模块名标签;空白归「未分类」)。 */
   module: string;
   concluded_at: string;
-  /** 首次生成占比(百分数一位小数)。 */
-  share: number;
-  pass: boolean;
-  lines: { first: number; rework: number; external: number };
+  /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
+   *  待算;unsupported=早于起算日期(不进统计)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported";
+  /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
+  share?: number;
+  pass?: boolean;
+  lines?: { first: number; rework: number; external: number };
   /** 检视批次数(先行能力,呈现用)。 */
   reviews: number;
   /** 一次定位:分析报告一版过(与一次定位率同源判定)。 */
@@ -4224,8 +4227,8 @@ export interface IssueOnceGenerated {
   per_session: IssueOnceGeneratedSessionRow[];
 }
 
-export function getIssueOnceGenerated(): Promise<IssueOnceGenerated> {
-  return issueFetch("/issues/once-generated");
+export function getIssueOnceGenerated(days?: number): Promise<IssueOnceGenerated> {
+  return issueFetch(`/issues/once-generated${days ? `?days=${days}` : ""}`);
 }
 
 /** 单会话一次生成明细(伴生快照原样,会话详情下钻的证据面)。

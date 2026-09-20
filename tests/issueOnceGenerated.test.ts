@@ -131,11 +131,13 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(repoRow.total, 200);
     assert.equal(repoRow.share, 70);
     const rows = body.per_session as Array<{
-      id: string; module: string; share: number; pass: boolean;
+      id: string; state: string; module: string; share?: number; pass?: boolean;
       localization_pass: boolean; verify_pass: boolean; solved_pass: boolean;
     }>;
-    assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a"],
-      "明细按收口时刻倒序");
+    assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a", "issue-c", "issue-e", "issue-d"],
+      "per_session 覆盖范围内全部完成交付会话,按收口时刻倒序");
+    assert.deepEqual(rows.map((row) => row.state),
+      ["ok", "ok", "pending", "no_code", "unsupported"]);
     assert.equal(rows.find((row) => row.id === "issue-a")?.module, "未分类",
       "模块标签空白归「未分类」");
     assert.equal(rows.find((row) => row.id === "issue-a")?.pass, true);

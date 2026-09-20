@@ -489,6 +489,9 @@ export async function handleIssueRoutes(
         title: String(body.title ?? ""),
         description: body.description === undefined
           ? undefined : String(body.description),
+        // 发起备注(DTS 列表随单填写):原样进登记元信息,开场词要求
+        // AI 优先读;没填不带,不造空串。
+        ...(body.remark ? { remark: String(body.remark) } : {}),
         source,
         ...(ticket ? { ticket } : {}),
         ...(body.repo_url ? { repoUrl: String(body.repo_url) } : {}),
@@ -773,7 +776,11 @@ export async function handleIssueRoutes(
     // 路由同样必须住在 :id 捕获之前;读开放与 stats 同权(查看模式)。
     if (method === "GET" && parts[1] === "once-generated"
       && parts.length === 2) {
-      return done(200, issueFlow.onceGeneratedStats());
+      // days=时间过滤(按结论时刻近 N 天;缺省=全部)。
+      const days = Number(new URL(request.url ?? "", "http://x")
+        .searchParams.get("days") ?? "");
+      return done(200, issueFlow.onceGeneratedStats(
+        Number.isFinite(days) && days > 0 ? days : undefined));
     }
 
     // 单会话一次生成明细(伴生快照原样):会话详情下钻的证据面。

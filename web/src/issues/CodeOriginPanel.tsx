@@ -115,9 +115,7 @@ export function IssueCodeOriginPanel({ id, threshold }: {
           <strong className="min-w-0 truncate text-sm text-text-strong">
             {repo.repo} · {repo.branch}
           </strong>
-          <span className="text-xs text-muted-foreground" title="统计头与区间的取得口径(ADR-0044 的 head 四级优先级)">
-            口径:{HEAD_BASIS_TEXT[repo.head_basis]}
-          </span>
+          <span className="help-tip text-xs text-muted-foreground" data-tip="统计头与区间的取得口径(ADR-0044 的 head 四级优先级)">口径:{HEAD_BASIS_TEXT[repo.head_basis]}</span>
           <span className="ml-auto text-sm tabular-nums">
             <span className="text-success">首轮 {num(repo.lines.first)}</span>
             {" · "}
