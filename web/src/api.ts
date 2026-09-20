@@ -3265,6 +3265,8 @@ export interface ArtifactMeta {
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan" | "overall_story";
+  /** 此文档来自已发布的 Story 修订，而非工作区分析稿。 */
+  story_published?: boolean;
 }
 
 export interface ArtifactChangeFile {

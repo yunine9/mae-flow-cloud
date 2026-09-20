@@ -554,6 +554,7 @@ export function TaskWorkspace({
   const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
   const pushReview = (browsingReview?.taskId === task.id ? browsingReview.review : undefined) ?? approvalReview;
   const [items, setItems] = useState<ArtifactMeta[]>();
+  const overallStoryPublished = !task.parent_task_id && !!items?.some(item => item.name === OVERALL_STORY_ARTIFACT && item.story_published);
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
@@ -1302,7 +1303,7 @@ export function TaskWorkspace({
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
   const queuedIds = queuedDecisionAnnotationIds(notes);
   const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => pendingReviewAnnotation(item)
-    && !(task.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
+    && !(overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
@@ -1568,7 +1569,6 @@ export function TaskWorkspace({
     && !(task.delivery?.mr_url
       && task.delivery.mr_state !== "已关闭"
       && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
-  const overallStoryPublished = !task.parent_task_id && task.requirement_graph?.stage === "confirmed";
   const annotationCanSend = canContributeReview
     && (task.status === "running" || task.status === "waiting_for_human"
       || Boolean(task.delivery?.evidence_gap?.missing_dimensions.length)
@@ -2176,9 +2176,7 @@ export function TaskWorkspace({
             </section>
           )}
           {materialView === "doc" && active === OVERALL_STORY_ARTIFACT && !task.parent_task_id
-            && task.requirement_graph?.stage === "confirmed"
-            && (task.requirement_graph.source_document === "story.md"
-              || task.requirement_graph.repositories.length > 0) && (
+            && overallStoryPublished && (
             <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate} fileName={architectureStory?.label}
               canceled={task.status === "canceled"} onOpenTask={onOpenTask}
               onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />

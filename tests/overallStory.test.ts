@@ -208,6 +208,7 @@ test("整体 Story 来源、缺失、版本与确认：只认文件变化，主�
     const doc = readArtifact(undefined, OVERALL_STORY_ARTIFACT, { taskMaterialRoot: f.task.summary.workspace });
     assert.match(doc!.content, /验收口径/);
     assert.equal(listArtifactDocuments(undefined, { taskMaterialRoot: f.task.summary.workspace })[0].purpose, "overall_story");
+    assert.equal(listArtifactDocuments(undefined, { taskMaterialRoot: f.task.summary.workspace })[0].story_published, true);
     f.child.summary.updated_at = new Date().toISOString();
     assert.equal(f.coordinator.status("parent").stale, false);
     writeFileSync(f.childDoc, "# Story\n新的场景");
@@ -487,3 +488,30 @@ for (const action of ["reopen", "resubmit", "edit", "resolve"] as const) {
 });
 
 }
+
+
+test("旧单仓 confirmed 且无子任务时，Story 批注交给当前任务，不要求生成汇总版本", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mfc-legacy-story-review-"));
+  const service = new TaskService({ dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  try {
+    const task = service.create("修改服务", { account: "owner", ticket: "REQ-43" });
+    const internal = (service as any).tasks.get(task.id);
+    internal.summary.requirement_graph = { stage: "confirmed", repositories: [{ id: "repo-1", name: "FMEMateService", ticket: "REQ-43" }], dependencies: [] };
+    internal.cwd = task.workspace;
+    writeFileSync(join(task.workspace, ".mae-flow.json"), "{}");
+    mkdirSync(join(task.workspace, ".mae-flow-work/REQ-43"), { recursive: true });
+    writeFileSync(join(task.workspace, ".mae-flow-work/REQ-43/story.md"), "# Story\n当前设计");
+    assert.equal(readStoryState(task.workspace).current, undefined);
+    const docs = listArtifactDocuments(task.workspace, { taskMaterialRoot: task.workspace, analysisStory: "REQ-43/story.md" });
+    assert.equal(docs.find(doc => doc.name === OVERALL_STORY_ARTIFACT)?.story_published, undefined);
+    const note = service.addAnnotation(task.id, { author: "owner", artifact: OVERALL_STORY_ARTIFACT,
+      file: "story.md", line: 2, anchor: "当前设计", note: "补充异常处理", kind: "doc" });
+    assert.deepEqual((await service.sendAnnotations(task.id, [note.id], "owner")).sent, [note.id]);
+    assert.equal(readStoryState(task.workspace).current, undefined, "不凭空生成另一份 Story");
+    const instructions = internal.pendingMainSteers.join("\n");
+    assert.match(instructions, /补充异常处理/);
+    assert.match(instructions, /实际编辑文件为 .mae-flow-work\/REQ-43\/story.md/);
+    assert.doesNotMatch(instructions, /plan_revision|story_sha256/, "普通 Story 检视不要求重新拆分任务");
+    assert.equal(service.listAnnotations(task.id).items.find(item => item.id === note.id)?.status, "sent");
+  } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
+});

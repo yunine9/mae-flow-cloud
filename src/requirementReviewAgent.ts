@@ -24,13 +24,13 @@ export const REQUIREMENT_REVIEW_SESSION_POLICY = {
 } as const;
 
 /** 分析开始后原文是输入基线；后续意见落实到分析产物或实现。 */
-export function requirementAnnotationInstructions(annotations: Annotation[], storyPath?: string): string | undefined {
+export function requirementAnnotationInstructions(annotations: Annotation[], storyPath?: string, decomposition = true): string | undefined {
   const instructions: string[] = [];
   if (annotations.some((item) => item.artifact === TASK_REQUIREMENT_ARTIFACT)) {
     instructions.push("需求文档已经确认并锁定。不要修改需求文档；请把这条"
       + "检视意见落实到当前分析产物、方案或后续实现中，并逐条说明处理结果。");
   }
-  if (annotations.some((item) => [REQUIREMENT_GRAPH_ARTIFACT, OVERALL_STORY_ARTIFACT].includes(item.artifact))) {
+  if (annotations.some((item) => item.artifact === REQUIREMENT_GRAPH_ARTIFACT || (decomposition && item.artifact === OVERALL_STORY_ARTIFACT))) {
     instructions.push("这些意见锚在模块拆分图或全局 Story 上。不要只改图或只改说明："
       + "请同步修订当前设计文档（新任务 story.md，旧现场沿用 CHAIN）与 requirement-graph.json，为两份产物换用"
       + "同一个全新 plan_revision，最后按真实字节重新计算 story_sha256（旧 CHAIN 用 chain_sha256）。"

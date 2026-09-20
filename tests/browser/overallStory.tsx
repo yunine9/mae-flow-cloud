@@ -23,7 +23,7 @@ window.fetch = async (input, init) => {
   if (path.endsWith("/overall-story/confirm")) { confirmed = true; body = status(); }
   else if (path.includes("/overall-story/revisions/")) body = { diff: "@@ -0,0 +1,2 @@\n+# 整体 Story\n+整体验收口径" };
   else if (path.endsWith("/overall-story")) { if (init?.method === "POST") generated++; body = status(); }
-  else if (path.endsWith("/artifacts")) body = generated ? [{ name: artifact, kind: "doc", purpose: "overall_story", label: "整体 Story", bytes: 200, modified_at: "2026-09-08" }] : [];
+  else if (path.endsWith("/artifacts")) body = generated ? [{ name: artifact, kind: "doc", purpose: "overall_story", story_published: true, label: "整体 Story", bytes: 200, modified_at: "2026-09-08" }] : [];
   else if (path.includes("/artifacts/")) body = { kind: "doc", content: "# 跨模块需求整体 Story\n\n## 用户场景\n\n用户提交任务后，可以在工作台查看整个需求的处理状态。\n\n## 整体验收\n\n1. 前端展示服务端返回的状态。\n2. 接口失败时保留用户输入，支持重试。\n\n## 来源\n\n用户工作台 · child-1\n\n服务接口 · child-2" };
   else if (path.endsWith("/annotations")) body = { items: [], checks: [], closures: [] };
   else if (path.endsWith("/developer-assistant")) body = { state: "idle", messages: [], tools: [], availability: { available: false, code: "not_editable", mode: "unavailable", reason: "任务已完成" } };

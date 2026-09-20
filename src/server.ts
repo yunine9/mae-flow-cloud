@@ -72,7 +72,7 @@ import { createServer, type Server } from "node:http";
 import { readTaskKnowledgeSource } from "./taskKnowledgeSource.ts";
 import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
-import { readCurrentStoryArchitecture } from "./overallStoryStore.ts";
+import { currentStoryFile, readCurrentStoryArchitecture } from "./overallStoryStore.ts";
 import { readArchitectureStory } from "./storyArchitectureSource.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
@@ -3210,8 +3210,7 @@ export function createTaskServer(
           const sources = {
             pipelineRoot: join(target.workspace, "pipeline"),
             taskMaterialRoot: target.workspace,
-            publishedStory: target.requirement_graph?.source_document === "story.md"
-              && target.requirement_graph.stage === "confirmed",
+            publishedStory: !!currentStoryFile(target.workspace),
             analysisStory: target.requirement_graph && !target.parent_task_id
               ? `${target.ticket ?? target.id}/story.md` : undefined,
           };
