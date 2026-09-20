@@ -1,3 +1,4 @@
+import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
@@ -91,7 +92,6 @@ import {
   readRequirementRevision,
   repairStopped,
   requestCommitterReview,
-  sendAnnotations,
   statusText,
   TASK_REQUIREMENT_ARTIFACT,
   REQUIREMENT_GRAPH_ARTIFACT,
@@ -582,6 +582,7 @@ export function TaskWorkspace({
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
   const [closures, setClosures] = useState<AnnotationClosure[]>([]);
+  const [annotationSubmission, setAnnotationSubmission] = useState<AnnotationSubmissionView>();
   const [reply, setReply] =
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
@@ -1279,6 +1280,7 @@ export function TaskWorkspace({
       setNotes(result.items);
       setChecks(result.checks);
       setClosures(result.closures);
+      setAnnotationSubmission(result.submission);
       setReply(result.reply);
     });
     return () => { alive = false; };
@@ -1330,7 +1332,7 @@ export function TaskWorkspace({
       return;
     }
     if (request !== locationRequest.current) return;
-    setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures);
+    setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures); setAnnotationSubmission(fresh.submission);
     if (!source && !graph) {
       setLoading(true);
       setMaterialReload(request);
@@ -1564,18 +1566,6 @@ export function TaskWorkspace({
   const canContributeReview = canOperate
     || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
-  const annotationQueueWithDecision = task.status === "waiting_for_human"
-    && !requirementAnalysisConfirmation
-    && !(task.delivery?.mr_url
-      && task.delivery.mr_state !== "已关闭"
-      && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
-  const annotationCanSend = canContributeReview
-    && (task.status === "running" || task.status === "waiting_for_human"
-      || Boolean(task.delivery?.evidence_gap?.missing_dimensions.length)
-      || (Boolean(task.delivery?.mr_url)
-        && task.delivery?.mr_state !== "已关闭"
-        && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-        && ["queued", "verifying", "await_merge", "failed"].includes(task.status)));
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
   const chainReview = !!waiting && isChainReviewWaiting(task);
@@ -1735,19 +1725,12 @@ export function TaskWorkspace({
           checks={checks}
           closures={closures}
           reply={inline ? undefined : reply}
-          canOperate={canContributeReview}
+          canOperate={viewerUsername === (task.luban_account ?? "本地用户")}
+          submission={annotationSubmission}
           taskStatus={task.status}
           overallStoryPublished={overallStoryPublished}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
-          requirementReview={requirementAnalysisConfirmation}
-          requirementRevisionRunning={task.requirement_revision?.state === "running"}
-          mergeRequestOpen={Boolean(task.delivery?.mr_url)
-            && !["completed", "canceled"].includes(task.status)
-            && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-            && task.delivery?.mr_state !== "已关闭"}
-          evidenceAwaiting={Boolean(
-            task.delivery?.evidence_gap?.missing_dimensions.length)}
           filter={inline ? "all" : reviewFilter}
           focus={inline ? undefined : reviewFocus}
           people={[
@@ -2227,8 +2210,6 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={annotationQueueWithDecision}
               >
                 <article className="requirement-source">
                   <div className="mb-5 border-b border-line pb-2.5 text-xs text-muted-foreground">
@@ -2391,8 +2372,6 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend || (overallStoryPublished && active === OVERALL_STORY_ARTIFACT && canContributeReview && task.status !== "canceled") ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={!(overallStoryPublished && active === OVERALL_STORY_ARTIFACT) && annotationQueueWithDecision}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser

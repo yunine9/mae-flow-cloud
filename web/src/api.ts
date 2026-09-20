@@ -1,3 +1,5 @@
+import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
+export type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
 export type { EarlyStartPreview } from "../../src/dependencySchedulingTypes";
 /**
@@ -2815,6 +2817,7 @@ export async function listAnnotations(
   items: Annotation[];
   checks: AnchorCheck[];
   closures: AnnotationClosure[];
+  submission?: AnnotationSubmissionView;
   /** 最后一批批注送出后,AI 在主会话说的原话(未做逐条对应)。 */
   reply?: { texts: string[]; truncated: boolean };
 }> {

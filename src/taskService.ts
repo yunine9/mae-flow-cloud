@@ -1,3 +1,4 @@
+import { annotationSubmissionView, type AnnotationSubmissionView } from "./annotationSubmissionView.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
 import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
@@ -23,7 +24,7 @@ import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
 import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
-import { submitAnnotationReviewDecision, explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
+import { annotationReviewAnswer, submitAnnotationReviewDecision, explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { historicalPipelineFeedback, observedPipelineRun, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun, validPushReceipt } from "./pipelineHandoff.ts";
@@ -5231,6 +5232,7 @@ export class TaskService {
     items: Annotation[];
     checks: AnchorCheck[];
     closures: AnnotationClosure[];
+    submission: AnnotationSubmissionView;
     reply?: { texts: string[]; truncated: boolean };
   }> {
     const task = this.tasks.get(id);
@@ -5261,7 +5263,19 @@ export class TaskService {
         ...(viewer?.person_name ? { person_name: viewer.person_name } : {}),
       },
     );
-    return { items, checks, closures, reply: this.annotationReply(task, items) };
+    return { items, checks, closures, submission: this.annotationSubmissionView(task), reply: this.annotationReply(task, items) };
+  }
+
+  private annotationSubmissionView(task: TaskState): AnnotationSubmissionView {
+    const waiting = task.summary.waiting;
+    const push = waiting && [CLOUD_PUSH_CONFIRM_STEP, "host_push_confirm"].includes(waiting.step);
+    const reviewDecision = !!waiting && !!annotationReviewAnswer(waiting.question,
+      push ? [] : stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, waiting)), !!push);
+    return annotationSubmissionView({ status: task.summary.status,
+      openMr: this.hasOpenMergeRequest(task),
+      evidenceAwaiting: !!task.summary.delivery?.evidence_gap?.missing_dimensions.length,
+      publishedStory: this.hasPublishedOverallStory(task), reviewDecision,
+      requirementReview: waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP });
   }
 
   /** 判定要用的任务侧事实。取现成字段,不猜。 */
@@ -6240,10 +6254,13 @@ export class TaskService {
     if (!picked.length) {
       return { sent: [], text: "没有待发送的检视意见" };
     }
+    const action = this.annotationSubmissionView(task)[overall.length ? "story" : "ordinary"];
+    if (!action.enabled) throw new TaskControlError(action.hint);
     if (task.summary.status === "waiting_for_human" && !overall.length && await this.submitAnnotationReviewDecision(task, picked, sender, context)) {
       const sent = this.annotations(task).list().filter(item => picked.some(note => note.id === item.id)
         && item.status !== "draft" && item.sent_via !== "owner_pending").map(item => item.id);
-      return { sent, text: renderAnnotations(picked, this.ticketOf(task)) };
+      return { sent, text: renderAnnotations(picked, this.ticketOf(task)),
+        receipt: annotationSubmissionReceipt(this.annotations(task).list(), sent, picked.length, task.summary.status) };
     }
     const delivered = await submitAnnotationWithReceipts(this.annotations(task), picked, sender, context,
       snapshot => this.deliverAgentAnnotations(task, snapshot, undefined, false, sender, backgroundRequirementReview),
@@ -11599,6 +11616,10 @@ export class TaskService {
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
       ? [...new Map([...(pushConfirmCard ? deliverableUnresolved : [...queued, ...drafts]), ...reviewDrafts].map(item => [item.id, item])).values()]
+        // 批量提交明确带了 ID 时，只发送这批新意见。此前已提交的意见仍
+        // 随会话继续，不能把另一份材料尚未提交的草稿也悄悄送出。
+        .filter(item => !input.annotation_ids?.length || input.annotation_ids.includes(item.id)
+          || (item.status === "sent" && item.sent_via !== "owner_pending"))
       // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
       // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
       : localReviewRound ? [...queued, ...drafts]

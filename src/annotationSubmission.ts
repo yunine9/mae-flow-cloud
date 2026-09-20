@@ -140,7 +140,7 @@ export function resumeQueuedAnnotationSubmission(input: {
   return true;
 }
 
-export function annotationSubmissionReceipt(items: Annotation[], sent: string[], requested: number, status: string): string | undefined {
+export function annotationSubmissionReceipt(items: Annotation[], sent: string[], requested: number, status: string): string {
   if (items.some(item => sent.includes(item.id) && item.sent_via === "queued_decision")) {
     return ["paused", "pausing"].includes(status) ? "意见已提交并排队，恢复任务后处理。"
       : "意见已排队，尚未送达；等待当前问题答复后一起送达。";
@@ -148,5 +148,6 @@ export function annotationSubmissionReceipt(items: Annotation[], sent: string[],
   return sent.length < requested
     ? "发送期间部分意见已更新或已闭环；新版本保留当前状态，请查看逐条意见。"
     : status === "running" ? `已接收 ${sent.length} 条修改意见；当前工具结束后读取并结合处理，无需等整轮结束。读取状态见工作过程，完成情况以逐条回执为准。`
-    : status === "queued" ? `已接收 ${sent.length} 条修改意见，已并入待启动的工作；启动后一起处理，无需重复提交。` : undefined;
+    : status === "queued" ? `已接收 ${sent.length} 条修改意见，已并入待启动的工作；启动后一起处理，无需重复提交。`
+    : `已接收 ${sent.length} 条修改意见，处理进展见逐条状态，无需重复提交。`;
 }

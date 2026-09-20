@@ -44,8 +44,6 @@ export function Annotatable({
   onAdded,
   onOpenAnnotations,
   renderInlineReview,
-  onSendDraft,
-  queueWithDecision = false,
   addDraft,
   children,
 }: {
@@ -63,10 +61,6 @@ export function Annotatable({
   onOpenAnnotations?: (ids: string[]) => void;
   /** Same live feedback component as the collaboration feed, scoped to this location. */
   renderInlineReview?: (ids: string[]) => React.ReactNode;
-  /** Explicit submit; saving alone never authorizes a workflow decision. */
-  onSendDraft?: (id: string) => Promise<{ error?: string; receipt?: string }>;
-  /** 普通人工决定窗口只能登记，正文随当前决定送达。 */
-  queueWithDecision?: boolean;
   /** 圈注落账的替代口(问题域检视,ADR-0007):给了就走它,不给走
    * 任务流 addAnnotation。交互两域同一套,只有提交端点不同。 */
   addDraft?: (input: {

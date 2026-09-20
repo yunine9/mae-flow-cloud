@@ -264,7 +264,11 @@ for (const paused of [false, true]) test(`统一提交修改意见消费当前 S
     f.task.summary.delivery = { prepush: beginPrePushAttempt(createPrePushVerification(
       { sha: f.head, workspace_fingerprint: "clean" }, new Date().toISOString()), new Date().toISOString(), "paused-attempt") };
   }
-  await f.service.sendAnnotations("task-19", [note.id], "owner");
+  const before = await f.service.listAnnotationsAsync("task-19");
+  assert.equal(before.submission.ordinary.enabled, true);
+  assert.match(before.submission.ordinary.hint, paused ? /恢复任务后/ : /无需再点/);
+  const submission = await f.service.sendAnnotations("task-19", [note.id], "owner");
+  assert.match(submission.receipt!, paused ? /恢复任务后/ : /已接收/);
   if (paused) {
     assert.equal(f.task.summary.status, "paused", "提交意见不得擅自恢复任务");
     assert.equal(f.api.annotations(f.task).list()[0].sent_via, "queued_decision");
@@ -291,7 +295,61 @@ test("统一提交不回答 Agent 的澄清问题，只排队附带意见", asyn
   const note = f.service.addAnnotation("task-19", { author: "owner", artifact: "spec",
     file: "spec.md", line: 1, anchor: "失败", note: "增加日志", kind: "doc" });
   const card = f.service.get("task-19")!.waiting!;
-  await f.service.sendAnnotations("task-19", [note.id], "owner");
+  const before = await f.service.listAnnotationsAsync("task-19");
+  assert.match(before.submission.ordinary.hint, /先回答当前问题/);
+  const submission = await f.service.sendAnnotations("task-19", [note.id], "owner");
+  assert.match(submission.receipt!, /尚未送达/);
   assert.equal(f.gate.get(card.waiting_id)!.status, "waiting");
   assert.equal(f.api.annotations(f.task).list()[0].sent_via, "queued_decision");
+});
+
+
+test("单独提交一份材料的意见不夹带其他未提交草稿，且只消费一次检视卡", async t => {
+  const f = fixture(false, specRaw, "open");
+  t.after(() => f.service.shutdown());
+  const add = (note: string) => f.service.addAnnotation("task-19", { author: "reviewer", artifact: "spec",
+    file: "spec.md", line: 1, anchor: "行为", note, kind: "doc" });
+  const selected = add("本次要求补充异常场景"), later = add("下一批才讨论性能要求");
+  const card = f.service.get("task-19")!.waiting!;
+  const result = await f.service.sendAnnotations("task-19", [selected.id], "owner");
+  assert.deepEqual(result.sent, [selected.id]);
+  assert.match(result.receipt!, /已接收 1 条/);
+  assert.match(f.gate.get(card.waiting_id)!.notes!, /本次要求补充异常场景/);
+  assert.doesNotMatch(f.gate.get(card.waiting_id)!.notes!, /下一批才讨论性能要求/);
+  assert.equal(f.service.listAnnotations("task-19").items.find(item => item.id === later.id)?.status, "draft");
+  await assert.rejects(f.service.sendAnnotations("task-19", [selected.id], "owner"), /已经送出/);
+});
+
+test("HTTP 提交入口：服务端说明与实际返工一致，检视人不能替责任人提交", async t => {
+  const { createTaskServer } = await import("../src/server.ts");
+  const { LocalAuth } = await import("../src/auth.ts");
+  const f = fixture(false, specRaw, "open");
+  const auth = new LocalAuth(join(f.api.options.dataDir, "auth.json"));
+  auth.bootstrapAdmin("owner", "owner-password");
+  auth.createUser("reviewer", "reviewer-password", "developer");
+  const server = createTaskServer(f.service, { auth });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(async () => { await new Promise<void>(resolve => server.close(() => resolve())); await f.service.shutdown(); });
+  const base = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+  const login = async (username: string) => (await fetch(`${base}/auth/login`, {
+    method: "POST", body: JSON.stringify({ username, password: `${username}-password` }),
+  })).headers.get("set-cookie")!.split(";")[0];
+  const owner = await login("owner"), reviewer = await login("reviewer");
+  const note = f.service.addAnnotation("task-19", { author: "reviewer", artifact: "spec",
+    file: "spec.md", line: 1, anchor: "行为", note: "补充业务失败时的反馈", kind: "doc" });
+  const url = `${base}/tasks/task-19/annotations`;
+  const before = await (await fetch(url, { headers: { cookie: owner } })).json() as { submission: { ordinary: { enabled: boolean; hint: string } } };
+  assert.equal(before.submission.ordinary.enabled, true);
+  assert.match(before.submission.ordinary.hint, /无需再点/);
+  const send = (cookie: string) => fetch(`${url}/send`, {
+    method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ ids: [note.id] }) });
+  assert.equal((await send(reviewer)).status, 403);
+  assert.equal(f.service.listAnnotations("task-19").items[0].status, "draft");
+  const response = await send(owner);
+  const result = await response.json() as { sent: string[]; receipt: string };
+  assert.equal(response.status, 200);
+  assert.deepEqual(result.sent, [note.id]);
+  assert.match(result.receipt, /已接收 1 条/);
+  assert.equal(f.task.summary.status, "queued", "直接继续修改，不再等责任人重复答卡");
+  assert.match(f.task.pendingResume.notes, /补充业务失败时的反馈/);
 });
