@@ -99,7 +99,6 @@ import {
   shouldNudgeFixed,
   summarize,
   VERIFY_FAIL_NOTE_PREFIX,
-  VERIFY_PASS_NOTE,
   type FixedStage,
   type IssueBusinessKnowledge,
   type IssueBusinessKnowledgeEntry,
@@ -195,9 +194,11 @@ import {
 } from "./prompt.ts";
 import {
   countVerifyFailures,
+  issueOnceOutcome,
   issueOnceRates,
   onceRateFactsFromSnapshot,
   sentReviewBatches,
+  type IssueOnceOutcome,
   type IssueOnceRateFacts,
   type IssueOnceRateSummary,
 } from "./onceRates.ts";
@@ -1181,6 +1182,8 @@ export class IssueFlowService {
       report_version_count: listAnalysisVersions(live.root).length,
       review_count: sentReviewBatches(reviewStore(live.root).history()).length,
     };
+  }
+
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -3915,16 +3918,6 @@ export class IssueFlowService {
       return summarize(state);
     }
 
-    if (verdict === "pass") {
-      // env_verify 通过:本阶段收尾,等合入——合入后自动归档(ADR-0034),
-      // 不再有「待归档」人工停靠。
-      fixedComplete(state, VERIFY_PASS_NOTE);
-      state.status = "idle";
-      state.stage_note = "环境验证通过——等待 MR 合入,合入后自动归档收口";
-      saveState(live.root, state);
-      return summarize(state);
-    }
-
     if (verdict === "fail") {
       // env_verify 不通过:回退问题分析(轮次+1,回退细节在 fixedRollback)。
       const reason = notes || decision;
@@ -5124,8 +5117,8 @@ export class IssueFlowService {
     void this.options.notifier?.notifyOutcome({
       taskId: live.id,
       account: live.state.account,
-      // 状态词与验绿通知("待归档")分开:小鲁班按 taskId:outcome:状态
-      // 幂等,同词会被验绿那条吞掉。
+      // 状态词与其它 outcome 通知分开:小鲁班按 taskId:outcome:状态
+      // 幂等,同词会被前一条吞掉。
       status: summary.includes("已合入") ? "已合入" : "MR被关闭",
       summary,
       link: this.issueLink(live.id),
@@ -6014,9 +6007,10 @@ export class IssueFlowService {
         continue;
       }
       // 只认「收口待验证」的现场(评审修正):停机说明精确等于收口
-      // 常量才可能欠卡。pass 裁决会把说明换成「待归档」口径——若不
-      // 区分,已验证的单子会被误报漏卡,诱使用户发「继续」经收口重开
-      // 推进返工。返工重开会把阶段标回 in_progress,也到不了这里。
+      // 常量才可能欠卡。旧现场(ADR-0043 前答过「验证通过」的存量单,
+      // 停机说明是「环境验证通过…」口径)不喊——若不区分,已验证的
+      // 单子会被误报漏卡,诱使用户发「继续」推进。返工重开会把阶段
+      // 标回 in_progress,也到不了这里。
       if (state.stage_note !== MR_GREEN_ENV_VERIFY_NOTE) continue;
       const closedAt = Date.parse(state.stage_at);
       if (!Number.isFinite(closedAt)
@@ -6099,10 +6093,12 @@ export class IssueFlowService {
     this.continueTurn(live, message);
   }
 
-  /** 平台通知的落便签口:不抢回合——首行进 stage_note(显示摘要),
-   *  全文进欠账队列(#244 发送必达):stage_note 装不下也丢不了,续跑
-   *  (答卡原地续跑/重启重建作答)时经 takeParkedNotices 注入模型
-   *  上下文。同文重复入队只记一次(监看重放/重复通知不去重会双份注入)。 */
+  /** 平台通知的落便签口:不抢回合——首行进 stage_note(显示摘要;闸卡
+   *  在场时不动 stage_note,等待语义以卡为准,便签抬头别把人引向错误
+   *  的状态),全文进欠账队列(#244 发送必达):stage_note 装不下也丢
+   *  不了,续跑(答卡原地续跑/重启重建作答)时经 takeParkedNotices
+   *  注入模型上下文。同文重复入队只记一次(监看重放/重复通知不去重
+   *  会双份注入)。 */
   private parkPlatformNotice(live: LiveIssue, message: string): void {
     const full = message;
     const queue = live.state.parked_notices ?? (live.state.parked_notices = []);
@@ -6110,7 +6106,9 @@ export class IssueFlowService {
       queue.push(full);
       // 补充要求和批注不能按长度截断，也不能用新消息覆盖尚未送达的旧要求。
     }
-    live.state.stage_note = message.split("\n")[0].slice(0, 120);
+    if (!live.state.gate) {
+      live.state.stage_note = message.split("\n")[0].slice(0, 120);
+    }
     saveState(live.root, live.state);
   }
 

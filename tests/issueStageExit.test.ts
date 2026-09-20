@@ -445,7 +445,7 @@ test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待�
     const notice = await until(() =>
       chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
       "收口通知");
-    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
+    assert.match(notice.summary ?? "", /MR 流水线均已通过/);
   } finally {
     await stopChain(chain);
   }
@@ -506,7 +506,7 @@ test("MR 验绿门·在跑受理:记申报账停等,监看器绿后自动放行"
     const notice = await until(() =>
       chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
       "滞后收口通知");
-    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
+    assert.match(notice.summary ?? "", /MR 流水线均已通过/);
   } finally {
     await stopChain(chain);
   }
@@ -595,7 +595,7 @@ test("MR 验绿门·过期结果防御:窗口期旧 SHA 红灯不冤枉重推的
     const notice = await until(() =>
       chain.notifier.list().find((record) => /归档/.test(record.summary ?? "")),
       "滞后收口通知");
-    assert.match(notice.summary ?? "", /全部 MR 流水线已跑绿/);
+    assert.match(notice.summary ?? "", /MR 流水线均已通过/);
   } finally {
     await stopChain(chain);
   }
@@ -776,7 +776,7 @@ test("push_branch 阶段性交付:未提交改动保留并明确告知，提交�
   assert.equal(state.pushes?.length, 1);
 });
 
-test("收口后返工:续聊重开 mr_green,再申报再收口;通知不重复轰炸", async () => {
+test("验证发现问题:整体回退问题分析,申报账清空可重走;通知不重复轰炸", async () => {
   const chain = await startChain({
     platformStatus: "success",
     steps: (origin) => [[origin]],
@@ -796,24 +796,19 @@ test("收口后返工:续聊重开 mr_green,再申报再收口;通知不重复�
     await until(() =>
       chain.notifier.list().find((record) => /归档|验证/.test(record.summary ?? "")),
       "第一轮收口通知");
-    // 验证通过落待归档,返工语义照旧(ADR-0013)。
-    chain.service.answer(chain.id, {
-      state_version: verifyGate.gate!.state_version, code: "pass",
+    // 验证发现问题:整体回退问题分析重新处理——ADR-0043 后绿后返工
+    // 的唯一入口(通过无需作答、合入即通过;「验证通过后再续聊说没
+    // 修好」的重开路已随 pass 选项退役)。
+    const rolled = chain.service.answer(chain.id, {
+      state_version: verifyGate.gate!.state_version, code: "fail",
+      notes: "还是超时,继续修",
     });
-    await until(() =>
-      chain.service.get(chain.id).status === "idle" ? 1 : undefined,
-      "验证通过后落待归档");
+    assert.equal(rolled.stage, "analyze", "发现问题回退问题分析");
+    assert.equal(rolled.round, 2, "回退轮次+1,不是轮次不动的重开");
+    assert.equal(rolled.stage_states?.[4], "redo", "mr_green 标重做");
+    assert.match(chain.trail(), /验证发现问题/, "回退要进转移账");
 
-    // 收口后用户说没修好:重开 mr_green 返工(不是回退,轮次账不动)。
-    const reopened = chain.service.reply(chain.id, "还是超时,继续修");
-    assert.equal(reopened.status, "running", "续聊即开新回合");
-    assert.equal(reopened.stage_states?.[4], "in_progress",
-      "收口态续聊重开本阶段");
-    assert.match(chain.trail(), /续聊返工/, "重开要进转移账");
-    assert.equal(reopened.round, 1, "返工不是回退,轮次账不动");
-
-    // 第二轮申报:剧本耗尽后由固定回执驱动——这里只断言重开态被平台
-    // 接受为进行中(验绿门允许再次申报收口,可多轮)。
+    // 第二轮走到 mr_green 时重新申报:回退已清掉验绿门申报账,不残留。
     assert.equal(chain.service.get(chain.id).mr_gate, undefined);
   } finally {
     await stopChain(chain);

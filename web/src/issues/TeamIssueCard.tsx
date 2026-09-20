@@ -8,7 +8,7 @@
  * 团队页现场不被带走。
  */
 import { TaskOverviewRow } from "../TaskOverviewRow";
-import { ISSUE_STATUS_TEXT, issueStageText, type IssueSummary } from "../api";
+import { issueStageText, issueStatusText, type IssueSummary } from "../api";
 import { issueSessionPath } from "./issueLink";
 
 export function TeamIssueCard({ issue }: { issue: IssueSummary }) {
@@ -18,7 +18,7 @@ export function TeamIssueCard({ issue }: { issue: IssueSummary }) {
     issue.stage_note ? ` · ${issue.stage_note}` : "",
   ].join("");
   return <TaskOverviewRow issue id={issue.id} ticket={issue.ticket}
-    title={issue.title} status={issue.status} statusLabel={ISSUE_STATUS_TEXT[issue.status]}
+    title={issue.title} status={issue.status} statusLabel={issueStatusText(issue)}
     owner={issue.account} updatedAt={issue.updated_at} detail={stageLine}
     href={issueSessionPath(issue.id)} />;
 }

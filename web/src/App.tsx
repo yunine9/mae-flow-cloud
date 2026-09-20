@@ -1245,7 +1245,7 @@ export function App() {
         ? "查看团队需求当前推进、负责人和阻塞风险；需要时进入任务工作台兜底。"
         : "了解团队此刻正在推进哪些需求；你的操作仍留在个人工作台。")
       : "回看已经形成结果的成果档案、MR 和事件记录。" },
-    teamIssues: { title: "团队问题", description:
+    teamIssues: { title: "团队DTS", description:
       "团队问题会话全景：概览看分布，现场看推进，成果档案看闭环；点开单个会话围观现场。" },
     mine: { title: "我的需求", description: "从发起到交付，集中推进你的每一项需求任务。" },
     issues: { title: "问题处理", description: session.role === "admin"

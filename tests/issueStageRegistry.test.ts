@@ -144,7 +144,7 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.deepEqual(GATE_OPTIONS.conclude.options.map((option) => option.code),
     ["issue", "non_issue", "supplement"]);
   assert.deepEqual(GATE_OPTIONS.env_verify.options.map((option) => option.code),
-    ["pass", "fail"]);
+    ["fail"]);
   assert.deepEqual(GATE_OPTIONS.env_needed.options.map((option) => option.code),
     ["fill"]);
   for (const [kind, table] of Object.entries(GATE_OPTIONS)) {
@@ -168,8 +168,10 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("conclude", "issue"), "suspend");
   assert.equal(gateVerdict("conclude", "non_issue"), "archive");
   assert.equal(gateVerdict("conclude", "supplement"), "rework");
-  assert.equal(gateVerdict("env_verify", "pass"), "pass");
+  // 验证闸只有「发现问题」一个码(ADR-0043:通过无码——合入即通过);
+  // 旧「pass」码随选项退役,认不得原样打回(部署在途的旧卡补点即此路)。
   assert.equal(gateVerdict("env_verify", "fail"), "fail");
+  assert.equal(gateVerdict("env_verify", "pass"), "unrecognized");
   // 认不得的答复(自由作答/乱码):报告确认与结论按补充意见处理
   // (旧协议里非确认文本的 else 分支语义),验证闸一律打回(旧 409)。
   assert.equal(gateVerdict("analysis_confirm", "确认报告,开始问题修复"), "rework",

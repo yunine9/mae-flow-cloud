@@ -356,16 +356,21 @@ test("端到端:AI 举验证卡落卡即返回收口等待;闸在场 AskUserQues
     assert.match(JSON.stringify(luban.messages), /验证/,
       "通知引导用户到卡上作答");
 
-    // 作答链路回归:新举的卡走既有 answer() 单点分派——pass 裁决
-    // 收口待归档,闸消失、状态回 idle(与监看器代举的卡同一裁决语义)。
-    service.answer("issue-1", {
+    // 作答链路回归:新举的卡走既有 answer() 单点分派——「验证发现
+    // 问题」整体回退重新分析;通过没有码(ADR-0043:合入即通过,
+    // 不再有 pass 裁决,部署在途旧卡补点 pass 走认不得的打回路)。
+    // (answer 对认不得的码同步抛错,断言要异步包裹成拒绝。)
+    await assert.rejects(async () => service.answer("issue-1", {
       state_version: gated.gate!.state_version, code: "pass",
+    }), /无法识别的验证答复/, "pass 码已随选项退役");
+    const rolled = service.answer("issue-1", {
+      state_version: gated.gate!.state_version, code: "fail",
+      notes: "环境验证仍偶现超时",
     });
-    const concluded = await until(() => {
-      const issue = service.get("issue-1");
-      return issue.status === "idle" && !issue.gate ? issue : undefined;
-    }, "pass 裁决收口待归档");
-    assert.equal(concluded.stage, "mr_green", "阶段收口不变");
+    assert.equal(rolled.stage, "analyze", "发现问题回退问题分析");
+    assert.equal(rolled.round, 2, "回退轮次+1");
+    assert.equal(rolled.gate, undefined, "闸随作答消失");
+    assert.equal(rolled.stage_states?.[4], "redo", "mr_green 标重做");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

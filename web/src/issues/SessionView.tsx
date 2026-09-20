@@ -20,7 +20,6 @@ import { IssueExternalReviewPanel, externalReviewDone, useIssueReviews } from ".
 import { useEffect, useState } from "react";
 import {
   GIT_AUTH_ERROR_TAG,
-  ISSUE_STATUS_TEXT,
   addIssueTakeoverNote,
   answerIssue,
   associateIssueTicket,
@@ -28,6 +27,7 @@ import {
   controlIssue,
   fixedStageList,
   getIssue,
+  issueStatusText,
   issueStageText,
   replyIssue,
   resumeIssueTakeover,
@@ -514,6 +514,7 @@ export function IssueSessionView({
           waiting={Boolean(waiting)}
           waitingId={waiting?.waiting_id}
           waitingTs={waiting?.created_at}
+          waitingKind={waiting?.gate_kind}
           canOperate={canOperate}
           busy={busy}
           owner={detail.account}

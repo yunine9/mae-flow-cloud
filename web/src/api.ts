@@ -3699,7 +3699,10 @@ export type IssueStatus =
 
 /** 状态的人话文案。idle 与 waiting_user 的展示已归一为「等你答复」
  * (2026-09-08 用户拍板:两者对人没差别——卡片在等或停机等继续,都是
- * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。 */
+ * 等人;聚合与筛选把它们算作一格,底层状态保持各自的行为语义)。
+ * 2026-09-19 起环境验证卡在场的等待改显「待验证」(issueStatusText
+ * 派生)——等的是验证不是答复,通过无需作答,MR 全部合入即视为
+ * 通过(ADR-0034)。 */
 export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   queued: "排队启动中",
   running: "AI 处理中",
@@ -3710,6 +3713,19 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   canceled: "已取消",
   failed: "异常",
 };
+
+/** 状态文案(按在场卡派生):环境验证卡在场时显示「待验证」——通过
+ * 无需作答(合入即通过,ADR-0034),这张卡等的不是答复;其余状态走
+ * ISSUE_STATUS_TEXT。列表与详情的 payload 都带 gate,卡面事实现成。 */
+export function issueStatusText(issue: {
+  status: IssueStatus;
+  gate?: IssueGateCard;
+}): string {
+  if (issue.status === "waiting_user" && issue.gate?.kind === "env_verify") {
+    return "待验证";
+  }
+  return ISSUE_STATUS_TEXT[issue.status];
+}
 
 /** 「进行中」口径:未收口(非归档/非取消)。问题处理页默认筛选项与
  * 侧栏「问题处理」父行徽章共用这一份判定,收口状态增减时两处同源,

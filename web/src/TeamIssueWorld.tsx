@@ -23,8 +23,6 @@ import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
 import {
   ISSUE_STATUS_TEXT,
-  issueStageText,
-  type FixedIssueStage,
   type IssueOnceRate,
   type IssueStatus,
   type IssueSummary,
@@ -32,14 +30,17 @@ import {
 import { TeamIssueCard } from "./issues/TeamIssueCard";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Database } from "lucide-react";
-import { STALE_AFTER_MS, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
+import { STALE_AFTER_MS, ISSUE_DELIVERY_STAGE_BUCKETS, isIssueVerifying, issueDeliveryBreakdown, issueFeatureKey, issueFeatureOnceRates, issueFeatureRows, issueStageBucketMatch, type IssueDeliveryBreakdown, type IssueFeatureOnceRates, type IssueFeatureRow } from "./teamOps";
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 
-/** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。 */
-type IssueScope = "all" | "action" | "stale" | "wip" | "waiting";
+/** 问题现场范围(需求侧 TeamScope 的问题域映射,选项语义见文件头)。
+ *  verify 档(2026-09-19):环境验证卡在场的会话——等的是验证不是
+ *  答复(通过无需作答,MR 全部合入即视为通过,ADR-0034),从「等你
+ *  答复」里拆出来单列。 */
+type IssueScope = "all" | "action" | "stale" | "wip" | "waiting" | "verify";
 
 const SCOPE_STALE_AFTER_MS = STALE_AFTER_MS;
 
@@ -52,8 +53,12 @@ function inScope(issue: IssueSummary, scope: IssueScope, now: number): boolean {
       && now - new Date(issue.updated_at).getTime() >= SCOPE_STALE_AFTER_MS;
   }
   if (scope === "wip") return ["queued", "running"].includes(issue.status);
+  if (scope === "verify") {
+    return isIssueVerifying(issue);
+  }
   if (scope === "waiting") {
-    return ["waiting_user", "idle", "suspended"].includes(issue.status);
+    return ["waiting_user", "idle", "suspended"].includes(issue.status)
+      && !isIssueVerifying(issue);
   }
   return true;
 }
@@ -226,7 +231,13 @@ export function TeamIssueWorld({ issues, onceRates }: {
           : issue.status === status)) return false;
       } else if (cell.startsWith("f:")) {
         if (issueFeatureKey(issue) !== cell.slice(2)) return false;
-      } else if (issue.stage !== cell.slice(2)) return false;
+      } else {
+        // 阶段格键是团队页合并/拆分口径(准备中=两阶段、待验证=卡在场),
+        // 与概览计数同一谓词,点格见几行就是几行。
+        const bucket = ISSUE_DELIVERY_STAGE_BUCKETS.find(
+          (entry) => entry.key === cell.slice(2));
+        if (!bucket || !issueStageBucketMatch(bucket, issue)) return false;
+      }
     }
     if (scope !== "all" && !inScope(issue, scope, now)) return false;
     if (owner && issue.account !== owner) return false;
@@ -248,15 +259,6 @@ export function TeamIssueWorld({ issues, onceRates }: {
     }));
   }
 
-  const stageCell = (key: string, count: number) => (
-    <button type="button" key={key}
-      className={cell === `p:${key}` ? CELL_SELECTED : CELL_BASE}
-      disabled={count === 0} aria-pressed={cell === `p:${key}`}
-      aria-controls="team-issue-queue" onClick={() => selectCell(`p:${key}`)}>
-      <span>{issueStageText({ stage: key as FixedIssueStage })}</span>
-      <strong>{count}</strong>
-    </button>
-  );
   const statusCell = (key: string, count: number) => (
     <button type="button" key={key}
       className={cell === `s:${key}` ? CELL_SELECTED : CELL_BASE}
@@ -266,6 +268,21 @@ export function TeamIssueWorld({ issues, onceRates }: {
       <strong>{count}</strong>
     </button>
   );
+  // 阶段格标签:团队页合并/拆分口径(准备中/待验证单列),就地取
+  // BUCKETS 的标签——格键不是注册表阶段词,不走 issueStageText。
+  const stageCell = (key: string, count: number) => {
+    const bucket = ISSUE_DELIVERY_STAGE_BUCKETS.find(
+      (entry) => entry.key === key);
+    return (
+      <button type="button" key={key}
+        className={cell === `p:${key}` ? CELL_SELECTED : CELL_BASE}
+        disabled={count === 0} aria-pressed={cell === `p:${key}`}
+        aria-controls="team-issue-queue" onClick={() => selectCell(`p:${key}`)}>
+        <span>{bucket?.label ?? key}</span>
+        <strong>{count}</strong>
+      </button>
+    );
+  };
 
   return <>
     <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
@@ -323,7 +340,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
       <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选问题现场">
         <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
         <Select value={scope}
-          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }]}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }, { value: "verify", label: "待验证" }]}
           onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
           <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -333,6 +350,7 @@ export function TeamIssueWorld({ issues, onceRates }: {
               <SelectItem value="stale">停滞中</SelectItem>
               <SelectItem value="wip">正在推进</SelectItem>
               <SelectItem value="waiting">等你答复</SelectItem>
+              <SelectItem value="verify">待验证</SelectItem>
             </SelectGroup>
           </SelectContent>
         </Select>
