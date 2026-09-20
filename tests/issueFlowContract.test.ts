@@ -290,7 +290,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { summary: "根因=连接池耗尽" } } },
     { text: "分析报告已提交,等待用户确认。" },
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 修复登录超时`) } } },
@@ -374,6 +374,8 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       updated_at: "2026-08-28T00:00:00Z",
       title: "登录超时",
       description: "压测环境登录超时,疑似连接池耗尽",
+      // 发起备注(DTS 列表随单填写):本会话没带,可选不设限。
+      remark: undefined,
       source: "dts",
       ticket: TICKET,
       repo_url: origin,
@@ -496,7 +498,7 @@ test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,�
   const commit = (message: string) =>
     `cd repo/origin && git -c user.name=test -c user.email=t@e commit -q --allow-empty -m '${message}'`;
   const report = (summary: string) =>
-    `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 证据链\\n日志:演示。\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
+    `printf '# 问题分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n${summary}.\\n## 置信度\\n高。\\n## 修改方案\\n演示修复。\\n' > issue-analysis.md`;
   const raiseVerifyCard: Scene[] = [
     // 全绿发送回合(#246):监看器收口发送事实,AI 经 raise_gate 举卡。
     { tool: { name: "raise_gate", input: { kind: "env_verify" } } },
@@ -623,7 +625,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失导致全表扫描)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高:执行计划直接指向。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失导致全表扫描)。\\n## 置信度\\n高:执行计划直接指向。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis", input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
     { text: "结论已提交,等待用户确认。" },
   ];
@@ -916,6 +918,8 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       updated_at: "2026-08-28T00:00:00Z",
       title: "偶发黑屏",
       description: "",
+      // 发起备注(DTS 列表随单填写):发起时不带即缺席,可选不设限。
+      remark: undefined,
       source: "manual",
       ticket: undefined,
       repo_url: undefined,

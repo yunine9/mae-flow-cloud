@@ -21,8 +21,8 @@ metadata:
 
 - 单据:`dts_get_ticket` 看处理历史,别人已排除的方向不重复;
 - 截图:工单截图已落 `ticket-images/<单号>/`,用 `inspect_image` 识图;
-- 业务知识:先查简报里的「业务知识地图」,仓内 docs/ 按技能 repo-docs;引用业务事实把文件路径写进证据链,只引自己读过的原文;
-- 日志:按技能 issue-ops 抓到 `local-logs/`,grep 报错栈与时间线,报告里只留一行关键报错+出处指针;
+- 业务知识:先查简报里的「业务知识地图」,仓内 docs/ 按技能 repo-docs;引用业务事实把文件路径随文标注进报告,只引自己读过的原文;
+- 日志:按技能 fetch-logs 抓到 `local-logs/`,grep 报错栈与时间线,报告里只留一行关键报错+出处指针;
 - 代码:`git log`/`blame` 找最近变更,多仓问题每个仓都要看;
 - 登记/环境拿不准调 `get_issue_meta` 重查。
 
@@ -34,6 +34,6 @@ metadata:
 
 ## 产出与提交
 
-报告按 `skills/issue-analysis/report-template.md` 写,各章要求与 `submit_analysis` 门票全在模板里;已知问题、一眼可定位的错误写短即可,五章节一个不少。
+报告按 `skills/issue-analysis/report-template.md` 写,各章要求与 `submit_analysis` 门票全在模板里;已知问题、一眼可定位的错误写短即可,各章节一个不少。
 
 过程节奏以开场「介入节奏」为准;月光免审批档下报告会被平台自动确认,写到无需补充即可执行。

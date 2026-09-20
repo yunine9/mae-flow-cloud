@@ -212,7 +212,7 @@ function raiseEnvNeededGate(
         + "(流水线验绿是交付终点),并在分析报告中说明未做换库部署验证"
         + "及其影响。"
       : `当前介入档位不向用户索取环境信息(${ENV_SCOPE_LABELS[scope]}),`
-        + "请用已有信息继续分析,并在分析报告的「证据链」说明这一证据局限。";
+        + "请用已有信息继续分析,并在分析报告的「置信度」说明这一证据局限。";
   }
   if (ctx.state.gate?.kind === "env_needed") {
     // 已有一张配置卡在等:幂等回报,不覆盖闸——覆盖会换 gate id,
@@ -245,16 +245,18 @@ function analysisReportPath(ctx: IssueToolContext): string {
   return join(ctx.workspace, ANALYSIS_REPORT_FILENAME);
 }
 
-/** 分析报告五章节(CONTEXT.md「分析报告」词条,模板在技能
+/** 分析报告四章节(CONTEXT.md「分析报告」词条,模板在技能
  * issue-analysis):submit_analysis 的门票从"文件在场"升级为"章节
- * 齐全"——结论必附证据是分析质量的最后防线,提示词管不住的侥幸在
- * 工具层过不去。章节按标题行匹配(1~4 级),内容长短不管:轻量
- * 路径的报告照样五章节齐全,只是每节更短。首行是一句话总结(现象→
- * 根因→方案串联),不是章节。(2026-09-03 重构:现象-根因-方案
- * 三段式解禁,下一步建议并入修改方案——从可选建议升格为 fix 阶段
- * 的执行承诺。) */
+ * 齐全",守住报告结构完整。章节按标题行匹配(1~4 级),内容长短
+ * 不管:轻量路径的报告照样四章节齐全,只是每节更短。首行是一句话
+ * 总结(现象→根因→方案串联),不是章节。(2026-09-03 重构:现象-
+ * 根因-方案三段式解禁,下一步建议并入修改方案——从可选建议升格为
+ * fix 阶段的执行承诺。2026-09-20 退役「证据链」章(ADR-0046):
+ * 报告写给用户,用户不关心证据链——取证归 AI 自证、出处随文标注,
+ * 证据局限写进置信度。)
+ * 存量五节报告是本清单的超集,照常过闸,不做迁移。 */
 export const ANALYSIS_REPORT_SECTIONS = [
-  "问题现象", "问题根因", "修改方案", "证据链", "置信度",
+  "问题现象", "问题根因", "修改方案", "置信度",
 ] as const;
 
 export function missingAnalysisSections(content: string): string[] {
@@ -364,7 +366,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   };
 
   // ---- 网管环境配置请求(平台机制,全程可调):日志抓取引擎已下放为
-  // 平台技能 issue-ops(整包自带 bin 引擎,按 SKILL.md 执行),这个工具
+  // 平台技能 fetch-logs(整包自带 bin 引擎,按 SKILL.md 执行),这个工具
   // 只剩一件事——缺网管环境时向用户举配置卡。闸本身(#93 拒绝流/
   // vault 表单/配置通知)不随工具退役,换载体继续服务。 ----
 
@@ -375,12 +377,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       "需要网管环境(抓日志等)而会话尚未配置时,调它向用户发起配置请求:"
       + "平台举出配置卡(服务器地址+网管后台密码),用户填写后平台会通知你"
       + "重试刚才的操作。登记元信息里已有网管环境(get_issue_meta 可查)"
-      + "就无需调用,按技能 issue-ops 直接抓取。",
+      + "就无需调用,按技能 fetch-logs 直接抓取。",
     parameters: Type.Object({}),
     async execute() {
       if (ctx.environmentPassword?.()) {
         return ok("网管环境已配置(get_issue_meta 可查全量),无需请求——"
-          + "按技能 issue-ops 抓取日志即可。");
+          + "按技能 fetch-logs 抓取日志即可。");
       }
       return ok(raiseEnvNeededGate(ctx, "logs"));
     },
@@ -1102,7 +1104,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       label: "Submit Analysis Report",
       description:
         "宣布问题分析完成,提交工作区根目录的 issue-analysis.md——平台以"
-        + "文件在场且五章节齐全为门票(模板与写法见技能 issue-analysis),"
+        + "文件在场且四章节齐全为门票(模板与写法见技能 issue-analysis),"
         + "缺章节直接打回。提交后确认卡转给用户:有单确认后进问题修复;"
         + "无单须给 conclusion(issue=是问题/non_issue=非问题)由用户定夺。",
       parameters: Type.Object({

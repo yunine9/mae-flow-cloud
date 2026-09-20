@@ -31,7 +31,7 @@ const SCRIPT: Scene[] = [
   { tool: { name: "pull_repo", input: {} } },
   { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
   { tool: { name: "bash", input: { command:
-    "printf '# 分析\\n\\n## 问题现象\\n导出大数据量时超时。\\n## 问题根因\\n未分页全量查询。\\n## 证据链\\n慢查询日志。\\n## 置信度\\n高。\\n## 修改方案\\n改分页批次导出。\\n' > issue-analysis.md" } } },
+    "printf '# 分析\\n\\n## 问题现象\\n导出大数据量时超时。\\n## 问题根因\\n未分页全量查询。\\n## 置信度\\n高。\\n## 修改方案\\n改分页批次导出。\\n' > issue-analysis.md" } } },
   { tool: { name: "submit_analysis",
     input: { conclusion: "issue", summary: "根因=未分页全量查询" } } },
   { tool: { name: "bash", input: { command:

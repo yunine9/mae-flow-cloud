@@ -126,7 +126,7 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 
 ## analysis.no_report
 
-分析报告还没写:先把结论版写到工作区根目录 issue-analysis.md(五章节模板见技能 issue-analysis)再提交。
+分析报告还没写:先把结论版写到工作区根目录 issue-analysis.md(章节模板见技能 issue-analysis)再提交。
 
 ## analysis.missing_sections
 

@@ -21,7 +21,7 @@ func envTestEnabled() bool {
 }
 
 // TestDiscoverNodesEnv 对真实部署的服务做自动发现验证。
-// 期望 statusapp 返回至少一个节点，且每个内部 IP 都能解析出可达 IP（或经 node_ip_map 映射）。
+// 期望 statusapp 返回至少一个节点（网管中转方案：直接用返回的内部 IP，网管节点同网段可达）。
 func TestDiscoverNodesEnv(t *testing.T) {
 	if !envTestEnabled() {
 		t.Skip("FETCH_LOGS_ENV_TEST not set; skipping env integration test")

@@ -66,7 +66,7 @@ flowchart TD
 | 平台内置内容 | `kernel/flow/`、`kernel/runtime/`、`assets/issue-skills/`、`assets/issue-prompts/`、`internal-skills/knowledge-extract/` | 运行依赖；特定参考业务仓 | 这些固定内容可恢复；问题 Skill 有明确的整包物化代码，不靠旧服务器个人目录 |
 | 团队 UT / 构建 Skill | 装载、选择、任务固定快照的代码在仓；`kernel/build-fix.skill` 包也在仓 | 旧平台上架的 java-autout、AutoUT、mae-remote-build 等实际 Skill 包及附件 | **这些名称出现在文档里不等于正文已收编。** Git 未发现 java-autout/AutoUT 实包；Cloud 实际读取 `data/skills` 和任务/仓库快照 |
 | 任务记忆与知识检索 | `taskMemory.ts`、`memoryDraft.ts`、`memorySidecar.ts`、`memoryTools.ts`、`harness/memsearch-sidecar.py` | Python venv、memsearch/ONNX/Milvus Lite 依赖、嵌入模型权重、离线缓存/包装脚本；起草模型配置 | 不是再起一个仓内自给自足的服务；语义检索缺件可退到索引级，旧语料丢了不能靠重建向量库找回 |
-| 虚拟化/K8s 抓日志 | `assets/issue-skills/issue-ops/` 含引擎/平台选择脚本；`ops-tools/fetch-logs*` 含 Go 源码与 go.mod/go.sum | 目标网管/K8s 环境、SSH/SFTP/相关权限，重编译时需 Go 和依赖源 | **这一项有源码也有 Linux 二进制**；是拉取外部日志的工具，不是日志数据备份 |
+| 虚拟化/K8s 抓日志 | `assets/issue-skills/fetch-logs/` 含引擎/平台选择脚本；`ops-tools/fetch-logs*` 含 Go 源码与 go.mod/go.sum | 目标网管/K8s 环境、SSH/SFTP/相关权限，重编译时需 Go 和依赖源 | **这一项有源码也有 Linux 二进制**；是拉取外部日志的工具，不是日志数据备份 |
 | 换库 build-deploy | `assets/ops-tools/` 含三平台产物；`src/issueFlow/opsTools.ts` 有调用实现 | 改引擎需 every-skill 外部源码仓；执行需目标环境 | **本仓没有对应 build-deploy 引擎源码，且该流程当前封存不可达**，不是当前上线必须重新启用的功能，见 ADR-0013 |
 | PlantUML 出图 | `plantumlRender.ts` + `vendor/plantuml/plantuml-mit-1.2026.8.jar` | **宿主 Java** | 不依赖 Graphviz；没有 Java 时回退展示源码。任务镜像里有 JDK 不能满足宿主出图 |
 | 需求/问题附件处理 | 需求 ZIP/Markdown 解析实现、问题材料读写/安全解压实现 | 问题压缩包解压使用**宿主 tar/unzip** | 新机须验附件上传、预览和解压；只测编辑器/Agent Bash 会漏掉宿主依赖 |
@@ -126,7 +126,7 @@ flowchart TD
 4. **记忆环境缺可复现交付件。** `docs/deploy-intranet.md` 明确指向“尚未回灌本仓”的 `docs/memsearch-deploy.md`；Git 中也确实没有该文件。未发现 ONNX 权重、venv 包、针对 memsearch 的锁定依赖清单。文档中的 memsearch 0.4.19/bge-m3 是历史部署描述，不是本次运行验证。
 5. **团队 UT Skill 不可凭文档还原。** java-autout、AutoUT 等有名称/指导引用，但没有对应完整包；`kernel/build-fix.skill` 是含 4 个正文/附件文件的独立 ZIP Skill，不是所有团队能力全集，也不是 Cloud Build-Fix 会话代码的替代品。
 6. **宿主依赖表不完整。** 除 Node/Python/Git/Docker，实际功能还使用宿主 Java（图）和 tar/unzip（问题材料）。仅验证任务容器工具链会漏掉这些。
-7. **运维 README 有过时信息。** `assets/ops-tools/README.md` 还指向已经不存在的 `src/issueEnvironmentGoAdapter.ts`，并把工具笼统归到 every-skill。实际抓日志已迁到 issue-ops Skill，且两个日志引擎的源码已收编；build-deploy 则仍只有产物且已封存。以实际调用链和 ADR-0013 为准。
+7. **运维 README 有过时信息。** `assets/ops-tools/README.md` 还指向已经不存在的 `src/issueEnvironmentGoAdapter.ts`，并把工具笼统归到 every-skill。实际抓日志已迁到 fetch-logs Skill，且两个日志引擎的源码已收编；build-deploy 则仍只有产物且已封存。以实际调用链和 ADR-0013 为准。
 8. **`mfc-deploy.tar.gz` 不是全量备份或容器镜像。** 已核对压缩包：仅含目录、`SKILL.md`、`scripts/deploy.sh`。它保留一些旧目录/服务名线索，但没有数据、依赖、镜像和生产配置文件。
 9. **当时的备份只保护部分更新场景。** 已移出代码仓的旧更新脚本只复制 `auth.json` 到同一数据目录下 `.deploy-backup` 并保留最近 5 份；不是全量业务备份，也不抵御服务器释放。未发现独立备份/还原执行件。
 10. **更新脚本依赖旧机器状态。** 固定远端、账号/路径/运行时，假定 systemd 服务已存在；还含硬编码登录凭据。新机使用新的凭据注入与经过核对的配置，不复用脚本内旧值；本报告不复制其秘密。

@@ -24,7 +24,7 @@ export function businessKnowledgeLines(
   if (!assets.length) return [];
   const lines = [
     "业务知识地图(领域事实——先查这里,与当前问题相关才读正文;"
-      + "只供业务事实,不定流程;引用业务事实时把文件路径写进证据链):",
+      + "只供业务事实,不定流程;引用业务事实时把文件路径随文标注进报告):",
     "【团队资产库】(已按绑定模块定格,只读;目录:"
       + " .mae-flow-work/business-modules/INDEX.md)",
   ];

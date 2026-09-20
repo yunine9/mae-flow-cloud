@@ -3,7 +3,7 @@
  * service.requestLogFetch)契约测试。
  *
  * 设计裁定(ADR-0026,Agent 主理第二例):按钮不执行任何事——端点只
- * 守卫+留痕+发送通知词,拉取由 Agent 按技能 issue-ops 执行(缺环境走
+ * 守卫+留痕+发送通知词,拉取由 Agent 按技能 fetch-logs 执行(缺环境走
  * 既有环境闸),平台不代拉。测试钉三面:
  * - 终态守卫:archived/canceled/failed 打回(终态不可续聊,发送只会
  *   写成永不送达的死信),打回零副作用(转移账不留痕);
@@ -143,7 +143,7 @@ test("空闲发送=开回合直送:通知进模型上下文,不欠账不落便�
   const dataDir = mfcTemp("mfc-issue-logfetch-idle-");
   const id = seedIssue(dataDir);
   const model = new ScriptedModelServer(
-    [{ text: "收到,这就按 issue-ops 技能拉取日志。" }], "scripted-v1",
+    [{ text: "收到,这就按 fetch-logs 技能拉取日志。" }], "scripted-v1",
     { linear: true });
   await model.start();
   const service = new IssueFlowService(baseOptions(dataDir, model));

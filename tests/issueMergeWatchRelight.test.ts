@@ -67,11 +67,11 @@ async function answerGate(
   service.answer(id, { state_version: version, code });
 }
 
-/** 五章节报告(submit_analysis 的机械门票)。 */
+/** 四章节报告(submit_analysis 的机械门票)。 */
 const report = () =>
   `printf '%s\\n' '# 问题分析:登录超时' '一句话总结:连接池耗尽,扩容并回收。' \\
     '## 问题现象' '登录超时。' '## 问题根因' '连接池耗尽。' \\
-    '## 修改方案' '超时回收。' '## 证据链' '日志:连接池耗尽。' \\
+    '## 修改方案' '超时回收。' \\
     '## 置信度' '高:日志直接指向。' > issue-analysis.md`;
 
 /** 建一个带 master 种子提交的裸仓远端(假平台的交付目标)。 */

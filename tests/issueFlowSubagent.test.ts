@@ -66,7 +66,7 @@ test("子 Agent 派发:Task 落账不阻断主流程,业务工具不进子会话
     } } },
     { text: "复核完成,无补充。" },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示。\\n## 问题根因\\n是问题(索引缺失)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示。\\n## 问题根因\\n是问题(索引缺失)。\\n## 置信度\\n高。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
     { text: "结论是问题,已提交等用户确认。" },

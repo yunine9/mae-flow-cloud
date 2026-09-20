@@ -22,9 +22,11 @@ Mae-Flow 云端服务:Pi(pi-mono coding agent)**进程内**集成 + Mae-Flow 内
 
 问题单处理是与需求开发不同的范式(动态研究,不是固定流水线),由
 `src/issueFlow/` 独立承载——不进内核、不依赖 taskService,可用
-`--issue-only` 单独起服(见 `docs/issue-flow.md`)。拉日志/换库用
-every-skill 的两个 Go 工具(`assets/ops-tools/`):宿主以**环境变量**
-注入共用密码(`FETCH_LOGS_PASSWORD`/`BUILD_DEPLOY_PASSWORD`)后执行。
+`--issue-only` 单独起服(见 `docs/issue-flow.md`)。拉日志引擎已迁为
+平台技能 fetch-logs(随技能物化,Agent 按技能用法直调,密码 `--pwd`
+直传,ADR-0047);换库用 every-skill 的 build-deploy
+(`assets/ops-tools/`),宿主以**环境变量**注入密码
+(`BUILD_DEPLOY_PASSWORD`)后执行。
 浏览器草稿不保存网管口令，vault 以 AES-GCM 加密落盘；为让 Agent
 操作页面、抓日志和换库，口令会以明文进入该问题会话的 AI 上下文；
 它不会出现在会话列表、状态摘要或事件流中。只能使用脱敏演示/现场专用口令，
