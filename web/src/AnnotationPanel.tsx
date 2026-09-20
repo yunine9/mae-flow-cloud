@@ -31,6 +31,7 @@ import {
   replyToAnnotation,
   sendAnnotations,
   TASK_REQUIREMENT_ARTIFACT,
+  type AnnotationSubmissionView,
   type Annotation,
   type AnchorCheck,
   type AnnotationClosure,
@@ -115,11 +116,8 @@ export function AnnotationPanel({
   taskStatus,
   reviewReady = false,
   reviewAnnotationIds = [],
-  requirementReview = false,
   overallStoryPublished = false,
-  requirementRevisionRunning = false,
-  mergeRequestOpen,
-  evidenceAwaiting = false,
+  submission,
   filter = "all",
   focus,
   people = [],
@@ -152,16 +150,10 @@ export function AnnotationPanel({
   reviewReady?: boolean;
   /** 当前工作区复检仍待闭环的意见 ID；缺席时管理员旁路按关闭处理。 */
   reviewAnnotationIds?: readonly string[];
-  /** 需求确认卡中的批注会立即驱动 Agent 修改当前需求正本。 */
-  requirementReview?: boolean;
   /** 设计发布后才使用独立 Story 会话；分析草稿仍随分析确认卡返工。 */
   overallStoryPublished?: boolean;
-  /** Agent 修改中仍接收新意见，服务端串行排队并去重。 */
-  requirementRevisionRunning?: boolean;
-  /** MR 已创建且未合入/关闭：没有活会话也能开启下一轮 review 修复。 */
-  mergeRequestOpen: boolean;
-  /** 流水线缺具体报错时，批注直接回灌证据并自动恢复，不需要活会话。 */
-  evidenceAwaiting?: boolean;
+  /** 与实际提交共用的服务端判断；页面不按任务状态另算一遍。 */
+  submission?: AnnotationSubmissionView;
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -233,19 +225,9 @@ export function AnnotationPanel({
   // 现在它是「批注与检视」弹层的正文,人点开弹层就是来看批注的,再让人
   // 多点一下标题才见内容,用户实锤"为啥默认折叠"。
   const [open, setOpen] = useState(true);
-  const running = taskStatus === "running";
-  const reviewSendable = mergeRequestOpen && [
-    "queued", "running", "verifying", "await_merge", "failed",
-  ].includes(taskStatus);
-  // 等决定期间也能提交:服务端把意见先记成团队事实(阻塞放行),正文
-  // 随下一次决定送达。检视人(批注作者≠决定人)在这窗口里从此有合法
-  // 路径,不再依赖"责任人替你带上"的假承诺(MFC-022)。
-  const queueable = taskStatus === "waiting_for_human";
-  const ordinaryCanSend = !["completed", "canceled"].includes(taskStatus)
-    && (running || evidenceAwaiting || reviewSendable || queueable || ["queued", "paused", "pausing"].includes(taskStatus));
   const isPublishedStory = (item: Annotation) => overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT;
-  const canSendItem = (item: Annotation) => isPublishedStory(item)
-    ? taskStatus !== "canceled" : ordinaryCanSend;
+  const actionFor = (item: Annotation) => submission?.[isPublishedStory(item) ? "story" : "ordinary"];
+  const canSendItem = (item: Annotation) => !!actionFor(item)?.enabled;
   const sendableDrafts = drafts.filter(canSendItem);
   const canSend = sendableDrafts.length > 0;
   const overallDrafts = sendableDrafts.filter(isPublishedStory);
@@ -437,7 +419,11 @@ export function AnnotationPanel({
       )}
       {canOperate && sendableDrafts.length > 0 && taskStatus !== "canceled" && (
         <div className="tw-root my-3 flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2.5">
-          <span className="text-sm text-muted-foreground">{sendableDrafts.length} 条待提交</span>
+          <div className="grid gap-1">
+            <strong className="text-sm">{sendableDrafts.length} 条待提交</strong>
+            {[...new Set(sendableDrafts.map(item => actionFor(item)?.hint))].map(hint =>
+              <span key={hint} className="text-sm text-muted-foreground">{hint}</span>)}
+          </div>
           <Button type="button" size="sm" disabled={busy || !canSend} onClick={() => void send()}>
             {busy ? "提交中…" : "提交修改意见"}
           </Button>
@@ -455,21 +441,17 @@ export function AnnotationPanel({
           任务已由用户停止；已有批注仍保留，但不会再触发修改。
         </p>
       )}
-      {!canOperate && drafts.length > 0
+      {!canOperate && items.some(item => item.status === "draft")
         && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
-          批注已保存在你的清单中。你目前只有记录权限；成为受邀协作者或本次检视人后，
-          才能提交给 Agent。
+          批注已保存，统一由任务责任人决定是否交给 Agent 处理。
         </p>
       )}
       {canOperate && drafts.length > 0 && !canSend
         && !["completed", "canceled"].includes(taskStatus) && (
         <p className="annot-panel-note">
-          {taskStatus === "paused" || taskStatus === "pausing"
-              ? `有 ${drafts.length} 条批注已保存。恢复任务后即可交给 Agent 继续修改。`
-              : mergeRequestOpen === false && taskStatus === "await_merge"
-                    ? "MR 当前已关闭。批注已经保存；重新打开 MR 后即可继续提交修改。"
-                : `有 ${drafts.length} 条批注待提交；当前没有可接收意见的执行会话。`}
+          {submission ? [...new Set(drafts.map(item => actionFor(item)?.hint))].join("；")
+            : "正在获取可提交状态，请稍后重试。"}
         </p>
       )}
       {submissionNotice && <p className="annot-panel-note" role="status">{submissionNotice}</p>}

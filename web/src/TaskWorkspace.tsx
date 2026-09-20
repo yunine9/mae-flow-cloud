@@ -1,3 +1,4 @@
+import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
 import { TaskEarlyStart } from "./TaskEarlyStart";
@@ -91,7 +92,6 @@ import {
   readRequirementRevision,
   repairStopped,
   requestCommitterReview,
-  sendAnnotations,
   statusText,
   TASK_REQUIREMENT_ARTIFACT,
   REQUIREMENT_GRAPH_ARTIFACT,
@@ -554,6 +554,7 @@ export function TaskWorkspace({
   const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
   const pushReview = (browsingReview?.taskId === task.id ? browsingReview.review : undefined) ?? approvalReview;
   const [items, setItems] = useState<ArtifactMeta[]>();
+  const overallStoryPublished = !task.parent_task_id && !!items?.some(item => item.name === OVERALL_STORY_ARTIFACT && item.story_published);
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
   const [materialView, setMaterialView] =
@@ -581,6 +582,7 @@ export function TaskWorkspace({
   const [checks, setChecks] = useState<AnchorCheck[]>([]);
   // 闭环结论由服务端算好(feedbackPolicy 唯一判定处),这里只搬运。
   const [closures, setClosures] = useState<AnnotationClosure[]>([]);
+  const [annotationSubmission, setAnnotationSubmission] = useState<AnnotationSubmissionView>();
   const [reply, setReply] =
     useState<{ texts: string[]; truncated: boolean } | undefined>();
   const [notesPulse, setNotesPulse] = useState(0);
@@ -589,7 +591,7 @@ export function TaskWorkspace({
   const [reviewPeople, setReviewPeople] = useState<Array<{
     username: string; display_name?: string;
   }>>([]);
-  const [reviewer, setReviewer] = useState("");
+  const [reviewers, setReviewers] = useState<string[]>([]);
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewResult, setReviewResult] = useState("");
   const [taskReviews, setTaskReviews] = useState<ReviewRequest[]>([]);
@@ -924,7 +926,7 @@ export function TaskWorkspace({
     void listCommitters().then((users) => {
       if (!alive) return;
       setCommitters(users);
-      setReviewer((current) => current || users[0]?.username || "");
+      setReviewers([]);
     }).catch((reason) => {
       if (alive) setReviewResult(reason instanceof Error
         ? reason.message : "Committer 名单读取失败");
@@ -942,19 +944,28 @@ export function TaskWorkspace({
   }, [canRequestReview, task.id]);
 
   async function inviteReview() {
-    if (!reviewer || reviewBusy) return;
+    if (!reviewers.length || reviewBusy) return;
     setReviewBusy(true); setReviewResult("");
     try {
-      const result = await requestCommitterReview(task.id, reviewer);
-      setReviewResult(result.delivered
-        ? `已通知 ${reviewer}`
-        : `未送达：${result.last_error || "通知服务暂无回执"}`);
-      setTaskReviews((current) => [
-        result,
-        ...current.filter((item) => item.id !== result.id),
-      ]);
-    } catch (reason) {
-      setReviewResult(reason instanceof Error ? reason.message : "邀请发送失败");
+      const selected = [...new Set(reviewers)];
+      const outcomes = await Promise.allSettled(selected.map(account => requestCommitterReview(task.id, account)));
+      const received: ReviewRequest[] = [];
+      const failed: string[] = [];
+      const messages = outcomes.map((outcome, index) => {
+        const account = selected[index];
+        const name = committers.find(user => user.username === account)?.display_name ?? account;
+        if (outcome.status === "fulfilled") {
+          received.push(outcome.value);
+          if (outcome.value.delivered) return `${name}：已通知`;
+          failed.push(account);
+          return `${name}：未送达（${outcome.value.last_error || "通知服务暂无回执"}）`;
+        }
+        failed.push(account);
+        return `${name}：${outcome.reason instanceof Error ? outcome.reason.message : "邀请发送失败"}`;
+      });
+      setTaskReviews(current => [...received, ...current.filter(item => !received.some(result => result.id === item.id))]);
+      setReviewers(failed);
+      setReviewResult(messages.join("；") + (failed.length ? "。已保留未成功的人选，可重新发送。" : ""));
     } finally { setReviewBusy(false); }
   }
 
@@ -1269,6 +1280,7 @@ export function TaskWorkspace({
       setNotes(result.items);
       setChecks(result.checks);
       setClosures(result.closures);
+      setAnnotationSubmission(result.submission);
       setReply(result.reply);
     });
     return () => { alive = false; };
@@ -1293,7 +1305,7 @@ export function TaskWorkspace({
   const draftIds = decisionAnnotationIds(notes, viewerUsername);
   const queuedIds = queuedDecisionAnnotationIds(notes);
   const pendingReviewIds = [...new Set([...queuedIds, ...notes.filter(item => pendingReviewAnnotation(item)
-    && !(task.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
+    && !(overallStoryPublished && item.artifact === OVERALL_STORY_ARTIFACT)).map(item => item.id)])];
 
   /** 切换材料、刷新正文与锚点，再由渲染完成后的 effect 定位。 */
   async function locate(item: Annotation) {
@@ -1320,7 +1332,7 @@ export function TaskWorkspace({
       return;
     }
     if (request !== locationRequest.current) return;
-    setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures);
+    setNotes(fresh.items); setChecks(fresh.checks); setClosures(fresh.closures); setAnnotationSubmission(fresh.submission);
     if (!source && !graph) {
       setLoading(true);
       setMaterialReload(request);
@@ -1554,19 +1566,6 @@ export function TaskWorkspace({
   const canContributeReview = canOperate
     || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
-  const annotationQueueWithDecision = task.status === "waiting_for_human"
-    && !requirementAnalysisConfirmation
-    && !(task.delivery?.mr_url
-      && task.delivery.mr_state !== "已关闭"
-      && !String(task.delivery.mr_state ?? "").startsWith("已合入"));
-  const overallStoryPublished = !task.parent_task_id && task.requirement_graph?.stage === "confirmed";
-  const annotationCanSend = canContributeReview
-    && (task.status === "running" || task.status === "waiting_for_human"
-      || Boolean(task.delivery?.evidence_gap?.missing_dimensions.length)
-      || (Boolean(task.delivery?.mr_url)
-        && task.delivery?.mr_state !== "已关闭"
-        && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-        && ["queued", "verifying", "await_merge", "failed"].includes(task.status)));
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
   const chainReview = !!waiting && isChainReviewWaiting(task);
@@ -1726,19 +1725,12 @@ export function TaskWorkspace({
           checks={checks}
           closures={closures}
           reply={inline ? undefined : reply}
-          canOperate={canContributeReview}
+          canOperate={viewerUsername === (task.luban_account ?? "本地用户")}
+          submission={annotationSubmission}
           taskStatus={task.status}
           overallStoryPublished={overallStoryPublished}
           reviewReady={workspaceReviewReady}
           reviewAnnotationIds={workspaceReviewAnnotationIds}
-          requirementReview={requirementAnalysisConfirmation}
-          requirementRevisionRunning={task.requirement_revision?.state === "running"}
-          mergeRequestOpen={Boolean(task.delivery?.mr_url)
-            && !["completed", "canceled"].includes(task.status)
-            && !String(task.delivery?.mr_state ?? "").startsWith("已合入")
-            && task.delivery?.mr_state !== "已关闭"}
-          evidenceAwaiting={Boolean(
-            task.delivery?.evidence_gap?.missing_dimensions.length)}
           filter={inline ? "all" : reviewFilter}
           focus={inline ? undefined : reviewFocus}
           people={[
@@ -2167,9 +2159,7 @@ export function TaskWorkspace({
             </section>
           )}
           {materialView === "doc" && active === OVERALL_STORY_ARTIFACT && !task.parent_task_id
-            && task.requirement_graph?.stage === "confirmed"
-            && (task.requirement_graph.source_document === "story.md"
-              || task.requirement_graph.repositories.length > 0) && (
+            && overallStoryPublished && (
             <OverallStoryTools key={task.id} taskId={task.id} canOperate={canOperate} fileName={architectureStory?.label}
               canceled={task.status === "canceled"} onOpenTask={onOpenTask}
               onUpdated={() => { setLivePulse((tick) => tick + 1); setNotesPulse((tick) => tick + 1); }} />
@@ -2220,8 +2210,6 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={annotationQueueWithDecision}
               >
                 <article className="requirement-source">
                   <div className="mb-5 border-b border-line pb-2.5 text-xs text-muted-foreground">
@@ -2384,8 +2372,6 @@ export function TaskWorkspace({
                 onAdded={() => setNotesPulse((tick) => tick + 1)}
                 onOpenAnnotations={openAnnotationReview}
                 renderInlineReview={(ids) => renderAnnotations(notes.filter((note) => ids.includes(note.id)), true)}
-                onSendDraft={annotationCanSend || (overallStoryPublished && active === OVERALL_STORY_ARTIFACT && canContributeReview && task.status !== "canceled") ? (id) => sendAnnotations(task.id, [id]) : undefined}
-                queueWithDecision={!(overallStoryPublished && active === OVERALL_STORY_ARTIFACT) && annotationQueueWithDecision}
               >
                 {materialView === "diff"
                   ? <GitDiff text={content} branch={branch} embeddedBrowser
@@ -2637,7 +2623,7 @@ export function TaskWorkspace({
         <DialogContent className="tw-root sm:max-w-[460px]">
           <DialogHeader>
             <DialogTitle>邀请 Committer 检视</DialogTitle>
-            <DialogDescription>选择一位 Committer 参与检视；邀请不会代替任务责任人的最终决定。</DialogDescription>
+            <DialogDescription>可多选 Committer，一次发送邀请；邀请不会代替任务责任人的最终决定。</DialogDescription>
           </DialogHeader>
           <DialogClose render={<Button variant="ghost" size="icon-sm" aria-label="关闭邀请检视"
             className="absolute top-2 right-2" />}>
@@ -2645,19 +2631,19 @@ export function TaskWorkspace({
           </DialogClose>
           <div className="workspace-invite-content">
             {committers.length > 0 ? (
-              <div className="workspace-review-invite-action">
-                <UserPicker ariaLabel="选择 Committer" value={reviewer}
+              <div className="flex flex-col gap-3">
+                <UserPicker multiple ariaLabel="选择 Committer" value={reviewers}
                   emptyLabel="请选择 Committer"
-                  options={committers} onChange={setReviewer} />
-                <Button type="button" size="sm" disabled={!reviewer || reviewBusy}
+                  options={committers} disabled={reviewBusy} onChange={setReviewers} />
+                <Button type="button" size="sm" disabled={!reviewers.length || reviewBusy}
                   onClick={() => void inviteReview()}>
-                  {reviewBusy ? "发送中…" : "发送邀请"}
+                  {reviewBusy ? "发送中…" : reviewers.length ? `发送邀请（${reviewers.length} 人）` : "发送邀请"}
                 </Button>
               </div>
             ) : <Empty className="p-2.5">
               <EmptyDescription>管理员尚未配置 Committer 名单</EmptyDescription>
             </Empty>}
-            {reviewResult && <small className="committer-result">
+            {reviewResult && <small className="committer-result" role="status">
               {reviewResult}
             </small>}
             {taskReviews.length > 0 && (

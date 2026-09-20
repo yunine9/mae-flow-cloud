@@ -1,3 +1,4 @@
+import { annotationSubmissionView, type AnnotationSubmissionView } from "./annotationSubmissionView.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
 import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
@@ -23,7 +24,7 @@ import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
 import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
-import { submitAnnotationReviewDecision, explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
+import { annotationReviewAnswer, submitAnnotationReviewDecision, explicitlyRequestsReviewFeedback, isReviewAdjustmentAnswer, reviewDecisionContract, pendingReviewAnnotation } from "./reviewDecisionContract.ts";
 import { recordMemoryUsage, readMemoryUsage, type MemoryUsageEvent } from "./memoryUsage.ts";
 import { resumedWarmupBaselineMatches } from "./baselineWarmup.ts";
 import { historicalPipelineFeedback, observedPipelineRun, projectPipelineRun, enterRepairVerification, projectPushReceipt, confirmedPipelineRun, validPushReceipt } from "./pipelineHandoff.ts";
@@ -42,7 +43,7 @@ import { withLiveReviewReceipts } from "./liveReviewReceipts.ts";
 import { recordTaskCreationAudit } from "./taskCreationAudit.ts";
 import { parseDocumentReviewReceipts } from "./documentReviewReceipts.ts";
 import { OverallStoryCoordinator } from "./overallStory.ts";
-import { OVERALL_STORY_ARTIFACT, readStoryState } from "./overallStoryStore.ts";
+import { OVERALL_STORY_ARTIFACT, currentStoryFile, readStoryState } from "./overallStoryStore.ts";
 import { runOverallStorySession } from "./overallStoryAgent.ts";
 import { auxiliarySessionEpoch, hasAuxiliarySessions, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "./auxiliarySessions.ts";
 /**
@@ -5118,6 +5119,10 @@ export class TaskService {
     return "dispatched";
   }
 
+  private hasPublishedOverallStory(task: TaskState): boolean {
+    return !task.summary.parent_task_id && !!currentStoryFile(task.summary.workspace);
+  }
+
   /** 批注靶子既可能是真实产物，也可能是任务快照里的需求原文。 */
   private annotationArtifactContent(
     task: TaskState,
@@ -5133,9 +5138,9 @@ export class TaskService {
     return readArtifact(root, artifact, {
       pipelineRoot: join(task.summary.workspace, "pipeline"),
       taskMaterialRoot: task.summary.workspace,
-      analysisStory: this.isRequirementAnalysis(task) ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
-      publishedStory: task.summary.requirement_graph?.source_document === "story.md"
-        && task.summary.requirement_graph.stage === "confirmed",
+      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id
+        ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
+      publishedStory: this.hasPublishedOverallStory(task),
     })?.content;
   }
 
@@ -5153,9 +5158,9 @@ export class TaskService {
     return (await readArtifactAsync(root, artifact, {
       pipelineRoot: join(task.summary.workspace, "pipeline"),
       taskMaterialRoot: task.summary.workspace,
-      analysisStory: this.isRequirementAnalysis(task) ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
-      publishedStory: task.summary.requirement_graph?.source_document === "story.md"
-        && task.summary.requirement_graph.stage === "confirmed",
+      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id
+        ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
+      publishedStory: this.hasPublishedOverallStory(task),
     }))?.content;
   }
 
@@ -5227,6 +5232,7 @@ export class TaskService {
     items: Annotation[];
     checks: AnchorCheck[];
     closures: AnnotationClosure[];
+    submission: AnnotationSubmissionView;
     reply?: { texts: string[]; truncated: boolean };
   }> {
     const task = this.tasks.get(id);
@@ -5257,7 +5263,19 @@ export class TaskService {
         ...(viewer?.person_name ? { person_name: viewer.person_name } : {}),
       },
     );
-    return { items, checks, closures, reply: this.annotationReply(task, items) };
+    return { items, checks, closures, submission: this.annotationSubmissionView(task), reply: this.annotationReply(task, items) };
+  }
+
+  private annotationSubmissionView(task: TaskState): AnnotationSubmissionView {
+    const waiting = task.summary.waiting;
+    const push = waiting && [CLOUD_PUSH_CONFIRM_STEP, "host_push_confirm"].includes(waiting.step);
+    const reviewDecision = !!waiting && !!annotationReviewAnswer(waiting.question,
+      push ? [] : stepChoiceEffects(this.options.host?.kernelRoot, this.reviewContractStep(task, waiting)), !!push);
+    return annotationSubmissionView({ status: task.summary.status,
+      openMr: this.hasOpenMergeRequest(task),
+      evidenceAwaiting: !!task.summary.delivery?.evidence_gap?.missing_dimensions.length,
+      publishedStory: this.hasPublishedOverallStory(task), reviewDecision,
+      requirementReview: waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP });
   }
 
   /** 判定要用的任务侧事实。取现成字段,不猜。 */
@@ -6040,7 +6058,7 @@ export class TaskService {
     const before = store.list().find((item) => item.id === annotationId);
     if (!before) throw new NotFoundError(`批注 ${annotationId} 不存在`);
     if (before.status === "draft" && (task.summary.status === "canceled"
-        || (task.summary.status === "completed" && before.artifact !== OVERALL_STORY_ARTIFACT))) {
+        || (task.summary.status === "completed" && !(this.hasPublishedOverallStory(task) && before.artifact === OVERALL_STORY_ARTIFACT)))) {
       throw new TaskControlError(task.summary.status === "completed"
         ? "任务已经交付，这条意见只能作为归档记录，不能再发起答复"
         : "任务已由用户停止，不能再发起答复");
@@ -6144,7 +6162,7 @@ export class TaskService {
     const annotations = this.annotations(task);
     const item = annotations.list().find((one) => one.id === annotationId);
     this.assertAnnotationOwner(task, by);
-    if (task.summary.status === "completed" && item?.artifact !== OVERALL_STORY_ARTIFACT) throw new TaskControlError("任务已归档，代码检视记录只读");
+    if (task.summary.status === "completed" && !(this.hasPublishedOverallStory(task) && item?.artifact === OVERALL_STORY_ARTIFACT)) throw new TaskControlError("任务已归档，代码检视记录只读");
     if (!item) throw new NotFoundError(`批注 ${annotationId} 不存在`);
     if (!(item.response && item.response.revision === (item.rework ?? 0)) && !(item.owner_reply && item.sent_via === "owner_pending")) throw new TaskControlError("请先交给 Agent 处理并取得处理依据，或由责任人自行答复后再确认闭环");
     const verified = annotations.resolveAsOwner(annotationId, by, decision ?? {
@@ -6175,7 +6193,7 @@ export class TaskService {
     this.assertAnnotationOwner(task, by);
     const store = this.annotations(task);
     const item = store.list().find((one) => one.id === annotationId);
-    if (task.summary.status === "completed" && item?.artifact !== OVERALL_STORY_ARTIFACT) throw new TaskControlError("任务已归档，代码检视记录只读");
+    if (task.summary.status === "completed" && !(this.hasPublishedOverallStory(task) && item?.artifact === OVERALL_STORY_ARTIFACT)) throw new TaskControlError("任务已归档，代码检视记录只读");
     let update: { line?: number; anchor?: string } | undefined;
     if (item) {
       const content = await this.annotationArtifactContentAsync(
@@ -6229,16 +6247,20 @@ export class TaskService {
       items: this.annotations(task).list(), ids, sender, owner,
       allowForeign, requirementReview,
     });
-    const overall = picked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT);
-    if (task.summary.requirement_graph?.stage === "confirmed" && overall.length && overall.length !== picked.length) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
+    const publishedStory = this.hasPublishedOverallStory(task);
+    const overall = publishedStory ? picked.filter((item) => item.artifact === OVERALL_STORY_ARTIFACT) : [];
+    if (overall.length && overall.length !== picked.length) throw new TaskControlError("请将整体 Story 与其他材料的意见分开提交");
     if (task.summary.status === "completed" && !overall.length) throw new TaskControlError("MR 已合入，任务已经结束，不能再提交批注");
     if (!picked.length) {
       return { sent: [], text: "没有待发送的检视意见" };
     }
+    const action = this.annotationSubmissionView(task)[overall.length ? "story" : "ordinary"];
+    if (!action.enabled) throw new TaskControlError(action.hint);
     if (task.summary.status === "waiting_for_human" && !overall.length && await this.submitAnnotationReviewDecision(task, picked, sender, context)) {
       const sent = this.annotations(task).list().filter(item => picked.some(note => note.id === item.id)
         && item.status !== "draft" && item.sent_via !== "owner_pending").map(item => item.id);
-      return { sent, text: renderAnnotations(picked, this.ticketOf(task)) };
+      return { sent, text: renderAnnotations(picked, this.ticketOf(task)),
+        receipt: annotationSubmissionReceipt(this.annotations(task).list(), sent, picked.length, task.summary.status) };
     }
     const delivered = await submitAnnotationWithReceipts(this.annotations(task), picked, sender, context,
       snapshot => this.deliverAgentAnnotations(task, snapshot, undefined, false, sender, backgroundRequirementReview),
@@ -6266,7 +6288,7 @@ export class TaskService {
     sentBy?: string,
     backgroundRequirementReview = false,
   ): Promise<{ sent: string[]; text: string }> {
-    if (task.summary.requirement_graph?.stage === "confirmed"
+    if (this.hasPublishedOverallStory(task)
         && picked.some((item) => item.artifact === OVERALL_STORY_ARTIFACT)) {
       return this.overallStories.submit(task.summary.id, picked, sentBy);
     }
@@ -6274,7 +6296,7 @@ export class TaskService {
       ownerDecisionContext,
       concurrentWorkPrompt(),
       renderAnnotations(picked, this.ticketOf(task)),
-      requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`),
+      requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`, this.isRequirementAnalysis(task)),
     ].filter(Boolean).join("\n\n");
     if (task.summary.status === "waiting_for_human"
         && task.summary.waiting?.step
@@ -9339,13 +9361,18 @@ export class TaskService {
     // 外部交付接口停机只需要宿主重试 MR / 流水线。旧实现把任务重新
     // 入 Agent 队列，模型醒来后只能读到 external_verify 再原样结束：
     // 用户白等一轮还多烧 token。没有修复环、没有证据缺口时，清掉
-    // 上一轮事故牌并直接踢活交付链。
-    if (status === "verifying" && delivery?.stalled
+    // 上一轮错误并直接继续交付。整理失败同样属于宿主交付失败，
+    // 不能只恢复 verifying，却让 failed 重新启动编码 Agent。
+    if (delivery && ((status === "verifying" && delivery.stalled)
+          || (status === "failed" && delivery.skipped))
         && !delivery.evidence_gap
         // 生产任务必须已经离开可编辑步骤。历史工作流以 end 表示 Agent
         // 已收口，新工作流以 external_verify 表示宿主等待；两者都只该
         // 续宿主交付。无 host 的纯交付演练没有内核状态文件。
-        && (!this.options.host || this.atHostDeliveryWait(task))) {
+        && (this.atHostDeliveryWait(task)
+          || (status === "verifying" && !this.options.host))) {
+      task.summary.status = "verifying";
+      delete task.summary.completed_at;
       delivery.pipeline = "人工重跑,待重新验证";
       delivery.stalled = undefined;
       delivery.stall_class = undefined;
@@ -9373,6 +9400,10 @@ export class TaskService {
       // 与服务日志里，当前态只保留这一轮的事实。
       task.summary.delivery.skipped = undefined;
       task.summary.delivery.waiting_on = undefined;
+    }
+    if (status === "failed" && delivery) {
+      delivery.skipped = undefined;
+      delivery.waiting_on = undefined;
     }
     task.summary.status = "queued";
     delete task.summary.completed_at;
@@ -11521,7 +11552,7 @@ export class TaskService {
     const responsibilityDrafts = (input.actor ?? task.summary.luban_account)
         === (task.summary.luban_account ?? "本地用户")
       ? this.annotations(task).pendingReview().filter(item => pendingReviewAnnotation(item)
-        && !(task.summary.requirement_graph?.stage === "confirmed"
+        && !(this.hasPublishedOverallStory(task)
           && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const unresolved = [...new Map([
       ...this.unresolvedAnnotations(task).filter((item) =>
@@ -11565,7 +11596,7 @@ export class TaskService {
     const allDrafts = this.annotations(task).pendingReview();
     const reviewDrafts = handlesFeedback && draftAuthor === (task.summary.luban_account ?? "本地用户")
       ? allDrafts.filter(item => pendingReviewAnnotation(item)
-        && !(task.summary.requirement_graph?.stage === "confirmed" && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
+        && !(this.hasPublishedOverallStory(task) && item.artifact === OVERALL_STORY_ARTIFACT)) : [];
     const ownDrafts = draftAuthor
       ? allDrafts.filter((item) => item.author === draftAuthor) : allDrafts;
     const drafts = ownDrafts.filter(pendingReviewAnnotation);
@@ -11585,6 +11616,10 @@ export class TaskService {
       // 返工会开一只全新会话，必须把 draft + sent 的全部未闭环意见
       // 都带过去，否则“提前主动送达”的意见会断在上一只 Agent 里。
       ? [...new Map([...(pushConfirmCard ? deliverableUnresolved : [...queued, ...drafts]), ...reviewDrafts].map(item => [item.id, item])).values()]
+        // 批量提交明确带了 ID 时，只发送这批新意见。此前已提交的意见仍
+        // 随会话继续，不能把另一份材料尚未提交的草稿也悄悄送出。
+        .filter(item => !input.annotation_ids?.length || input.annotation_ids.includes(item.id)
+          || (item.status === "sent" && item.sent_via !== "owner_pending"))
       // 本地 review 轮里若 Agent 因真实歧义举卡，用户在等待期间新圈的
       // 批注随这张卡一并回注；不能让人答完歧义后还要再点一次提交。
       : localReviewRound ? [...queued, ...drafts]
@@ -11599,7 +11634,7 @@ export class TaskService {
       picked.length ? renderAnnotations(picked, this.ticketOf(task)) : undefined,
       picked.length ? "以上是责任人随本次决定送出的待处理意见，请逐条处理并答复；此前联合检视的 CLEAR 不代表这些意见已解决。" : undefined,
       picked.length
-        ? requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`) : undefined,
+        ? requirementAnnotationInstructions(picked, `.mae-flow-work/${task.summary.ticket ?? task.summary.id}/story.md`, this.isRequirementAnalysis(task)) : undefined,
       // push 返工的使命里已经带了同一份回执契约,不重复。
       picked.length && !pushConfirmCard
         ? this.reviewReceiptInstructionsFor(task, picked) : undefined,
@@ -16616,12 +16651,10 @@ export class TaskService {
     const remoteFloor = foreignBase
         && (!pushedSha || await isAncestorSha(pushedSha, foreignBase))
       ? foreignBase : pushedSha;
-    const candidates = [
-      remoteFloor,
-      selection.head,
+    const candidates = remoteFloor ? [remoteFloor] : [
       contribution.base_sha,
-      // 历史刚被按定格基线重放过时,旧 push/selection SHA 都不再是
-      // HEAD 祖先;定格基线本身永远是合法的收口锚,兜在最后。
+      // 首次推送只能以 MR 基点或任务基线重组。曾被检视的本地提交
+      // 仍可能包含排除文件或平台目录，不能把 selection.head 当作干净父提交。
       await frozenTaskBaseline(cwd),
     ].map((value) => String(value ?? "").trim()).filter(Boolean);
     let anchor = "";
@@ -16634,8 +16667,8 @@ export class TaskService {
       }
     }
     if (!anchor) {
-      const detail = "检测到修复重新带入了已排除文件，但找不到最近一次已推送的"
-        + "干净提交作为自动整理锚点。未改写历史，请在代码检视中确认处理。";
+      const detail = "检测到修复重新带入了已排除文件，但找不到可靠的整理起点。"
+        + "未改写已推送历史，请在代码检视中确认处理。";
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };
@@ -16679,12 +16712,11 @@ export class TaskService {
     const preserveTarget = !await isAncestorSha(contribution.base_sha, anchor);
     const carried = (await run(["diff", "--name-only", "--no-renames", anchor, head, "--"],
       "读取本轮完整树差异")).split("\n").filter(Boolean);
-    const stagePaths = [...new Set([...carried, ...expected])]
+    const stagePaths = [...new Set(carried)]
       .filter(path => !isAgentPlatformPath(path) && !rejected.has(path))
       .sort((left, right) => left.localeCompare(right));
-    const upstreamRejected = preserveTarget
-      ? (await run(["diff", "--name-only", "--no-renames", anchor, contribution.base_sha, "--"],
-        "读取上游排除路径")).split("\n").filter(path => rejected.has(path)) : [];
+    const upstreamRejected = (await run(["diff", "--name-only", "--no-renames", anchor, contribution.base_sha, "--"],
+      "读取排除路径基线")).split("\n").filter(path => rejected.has(path));
     try {
       await run(["reset", "--mixed", anchor], "回到最近干净提交");
       if (stagePaths.length) {
@@ -16723,8 +16755,17 @@ export class TaskService {
       ? (await this.deliveryContribution(task, after)).paths : [];
     if (!after || after.added_agent_platform_paths.length
         || !samePaths(afterPaths, targetPaths)) {
-      const detail = "按已确认范围自动整理后复核未通过；平台已停止继续推送，"
-        + "请在代码检视中确认，不会让 Agent 循环尝试。";
+      const restored = await runSafeWorktreeGitAsync(cwd,
+        ["reset", "--mixed", head], { timeoutMs: 30_000 });
+      const differences = [
+        !after ? "整理后的代码现场不可读" : "",
+        after?.added_agent_platform_paths.length ? `平台目录仍在提交历史：${describeDirtyPaths(after.added_agent_platform_paths)}` : "",
+        targetPaths.some(path => !afterPaths.includes(path)) ? `缺少文件：${describeDirtyPaths(targetPaths.filter(path => !afterPaths.includes(path)))}` : "",
+        afterPaths.some(path => !targetPaths.includes(path)) ? `多出文件：${describeDirtyPaths(afterPaths.filter(path => !targetPaths.includes(path)))}` : "",
+      ].filter(Boolean).join("；");
+      const detail = `按已确认范围自动整理后复核未通过（${differences}）；`
+        + (restored.status === 0 ? "已恢复整理前的提交，工作区内容保留。" : "恢复提交失败，请检查工作区。")
+        + "尚未推送，请在代码检视中确认处理。";
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };

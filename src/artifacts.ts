@@ -114,6 +114,8 @@ export interface ArtifactMeta {
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；前端据此导航，不靠中文文件名猜语义。 */
   purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan" | "overall_story";
+  /** 此文档来自已发布的 Story 修订，而非工作区分析稿。 */
+  story_published?: boolean;
 }
 
 export type ArtifactChangeStage = "committed" | "committed_working"
@@ -352,6 +354,7 @@ function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
           bytes: info.size,
           modified_at: info.mtime.toISOString(),
           purpose: definition.purpose,
+          ...(definition.purpose === "overall_story" ? { story_published: true } : {}),
         },
       });
     } catch {

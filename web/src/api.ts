@@ -1,3 +1,5 @@
+import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
+export type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
 export type { EarlyStartPreview } from "../../src/dependencySchedulingTypes";
 /**
@@ -2815,6 +2817,7 @@ export async function listAnnotations(
   items: Annotation[];
   checks: AnchorCheck[];
   closures: AnnotationClosure[];
+  submission?: AnnotationSubmissionView;
   /** 最后一批批注送出后,AI 在主会话说的原话(未做逐条对应)。 */
   reply?: { texts: string[]; truncated: boolean };
 }> {
@@ -3265,6 +3268,8 @@ export interface ArtifactMeta {
   untracked_directories?: ArtifactChangeDirectory[];
   /** Cloud 生成材料的稳定用途；页面不应靠文件名猜业务语义。 */
   purpose?: "pipeline_evidence_gap" | "delivery_unit_brief" | "delivery_plan" | "overall_story";
+  /** 此文档来自已发布的 Story 修订，而非工作区分析稿。 */
+  story_published?: boolean;
 }
 
 export interface ArtifactChangeFile {
