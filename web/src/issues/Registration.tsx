@@ -199,12 +199,13 @@ export function IssueRegistration({
   /** 我的会话列表:DTS 批量发起的前端查重用(服务端同样机械拦);
    * 2026-09-14 起也是发起状态列/默认过滤的判定数据(liveIssueFor)。 */
   issues: IssueSummary[];
-  /** 手工登记成功(ADR-0040):不自动跳工作台——成功提示里给「打开
-   * 工作台」链接,父级只刷列表。 */
+  /** 手工登记成功(ADR-0040):不自动跳工作台——成功横幅里给「打开
+   * 问题会话」链接,父级只刷列表。 */
   onRegistered: () => void;
-  /** DTS 发起(单张/批量同路)成功:父级刷列表并切到「问题会话」
-   * 子页签看新会话(ADR-0040:批量不开 N 个页签)。 */
-  onLaunched: () => void;
+  /** DTS 发起(单张/批量同路)成功:父级刷列表、切「问题会话」子页签,
+   * 并拿新会话挂成功横幅(单号可点直达工作台;ADR-0040:批量不开
+   * N 个页签)。 */
+  onLaunched: (created: IssueSummary[]) => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
   /** 面板受控态(必传):当前面板由导航子页签决定——「问题登记/DTS列表」
@@ -267,8 +268,8 @@ function ManualRegister({
   const [candidates, setCandidates] = useState<CollaborationAssignee[] | undefined>();
   const [busy, setBusy] = useState(false);
   /** 最近一次登记成功的会话(ADR-0040):登记不自动跳工作台——异步
-   * 回调里 window.open 会被弹窗拦截器杀掉,成功提示里放「打开工作台」
-   * 链接(新页签),登记完成即撒手,再登记一条会顶掉上一条提示。 */
+   * 回调里 window.open 会被弹窗拦截器杀掉,成功横幅里放「打开问题
+   * 会话」链接(新页签),登记完成即撒手,再登记一条会顶掉上一条。 */
   const [lastCreated, setLastCreated] = useState<IssueSummary | undefined>();
   const draftKey = `mae-flow:issue:draft:${viewer.username}`;
   // 下拉只收 active 且至少绑一个仓的模块:零仓存量模块发起必被服务端
@@ -624,18 +625,19 @@ function ManualRegister({
       <Button type="submit" disabled={submitDisabled} className="max-[680px]:min-h-11 max-[680px]:w-full">
         {busy ? "登记中…" : "登记问题"}
       </Button>
-      {/* 登记成功提示(ADR-0040):不自动跳,工作台入口是链接(新页签)。 */}
-      {lastCreated && <div role="status"
-        className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
-        <span>已登记</span>
-        <strong className="truncate font-semibold text-text-strong"
-          title={lastCreated.title}>「{lastCreated.title}」</strong>
-        <span>,责任人 {lastCreated.account} 接手推进;</span>
-        <a className="font-semibold text-primary underline-offset-2 hover:underline"
-          href={issueSessionPath(lastCreated.id)}
-          target="_blank" rel="noreferrer">打开工作台 ↗</a>
-      </div>}
     </div>
+    {/* 登记成功提示(ADR-0040):不自动跳,工作台入口是链接(新页签)。
+        曾是按钮旁一行小字灰提示,被当成"没发出去";升成成功横幅并点名
+        已发起,链接即问题会话入口。再登记一条会顶掉上一条横幅。 */}
+    {lastCreated && <div role="status"
+      className="col-span-full flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] border border-success/35 bg-success-soft px-3.5 py-2.5 text-sm text-success">
+      <span>已登记并发起</span>
+      <strong className="font-semibold" title={lastCreated.title}>「{lastCreated.title}」</strong>
+      <span>,责任人 {lastCreated.account} 接手推进;点这里打开问题会话:</span>
+      <a className="font-semibold underline underline-offset-2 hover:underline"
+        href={issueSessionPath(lastCreated.id)}
+        target="_blank" rel="noreferrer">打开问题会话 ↗</a>
+    </div>}
   </form>;
 }
 
@@ -780,9 +782,9 @@ function DtsRegister({
   issues: IssueSummary[];
   /** 页签是否激活:首次激活自动拉取一次名下问题单,之后手动刷新。 */
   active: boolean;
-  /** 发起成功(单张/批量同路,ADR-0040):父级切到「问题会话」子页签
-   * 看新会话,不在本页打开工作台。 */
-  onLaunched: () => void;
+  /** 发起成功(单张/批量同路,ADR-0040):带新会话交父级——切「问题
+   * 会话」子页签挂成功横幅,不在本页打开工作台。 */
+  onLaunched: (created: IssueSummary[]) => void;
   onError: (message: string) => void;
 }) {
   // 产品版本选择框已随分支匹配退役(ADR-0038):分支由每张单的版本号
@@ -1183,15 +1185,15 @@ function DtsRegister({
 
   /** 批量发起(2026-08-28):每单一个独立工作流;逐张串行 create,
    * 单张失败不拖垮整批。已有进行中会话的单跳过并计入失败(服务端
-   * create 的同单查重也会兜一道)。结束后一条汇总横幅:成功 N 张 +
-   * 失败 M 张(单号 → 原因);有成功的切到「问题会话」子页签看新会话
-   * (ADR-0040:不在本页打开工作台,批量更不开 N 个页签)。payload 带
-   * 单号与标题;有人工预绑模块的一并带上——会话开场即带模块与仓,
-   * AI 跳过识别且被锁死不得改绑(spec #57);没绑的照旧 AI 识别。 */
+   * create 的同单查重也会兜一道)。有成功的把新会话交父级:切「问题
+   * 会话」子页签挂成功横幅(ADR-0040:不在本页打开工作台,批量更不
+   * 开 N 个页签)。payload 带单号与标题;有人工预绑模块的一并带上
+   * ——会话开场即带模块与仓,AI 跳过识别且被锁死不得改绑(spec
+   * #57);没绑的照旧 AI 识别。 */
   async function launch() {
     if (!selected.length || busy) return;
     setBusy(true);
-    const launched: string[] = [];
+    const launched: IssueSummary[] = [];
     const failures: string[] = [];
     try {
       for (const ticketNo of selected) {
@@ -1220,7 +1222,7 @@ function DtsRegister({
               ? { remark: remarks[ticketNo].trim() } : {}),
             ...(binding ? { module_id: binding.module_id } : {}),
           });
-          launched.push(created.id);
+          launched.push(created);
           // 备注已随会话落库,清掉这一单的输入——已消费的指示不残留。
           setRemarks((current) => {
             const next = { ...current };
@@ -1235,12 +1237,14 @@ function DtsRegister({
     } finally {
       setBusy(false);
     }
-    if (launched.length) onLaunched();
+    if (launched.length) onLaunched(launched);
     if (failures.length) {
-      onError(`成功 ${launched.length} 张${launched.length ? `:${launched.join("、")}` : ""};`
+      onError(`成功 ${launched.length} 张${
+        launched.length ? `:${launched.map((item) => item.id).join("、")}` : ""};`
         + `失败 ${failures.length} 张:${failures.join(";")}`);
     } else {
-      setNote(`成功发起 ${launched.length} 张:${launched.join("、")}`
+      setNote(`成功发起 ${launched.length} 张:${
+        launched.map((item) => item.id).join("、")}`
         + (selected.length > 1 ? "(每单一个独立工作流)" : ""));
       setSelected([]);
     }
