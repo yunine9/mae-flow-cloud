@@ -1426,9 +1426,7 @@ export interface TaskServiceOptions {
   /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
    * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
   projection?: PgProjection;
-  /** 主动压缩节奏:事件量每涨这么多,在下一个回合间隙以内核锚点
-   * 压缩会话(0 = 关)。被动保底(pi 自动压缩)始终开着,这里是
-   * "注意力不许飘"的主动档。 */
+  /** @deprecated 上下文由 CloudSession 按容量主动管理；保留旧调用参数兼容。 */
   compactEveryEvents?: number;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
    * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
@@ -1725,8 +1723,6 @@ interface TaskState {
    * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
    * 容器销毁仍是进程树终止的安全边界。 */
   prepushAbort?: AbortController;
-  /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
-  lastCompactAt?: number;
   /** 已自动采集过诊断包的事故键(内存态)。同一事故只落一份,
    * 重复 persist 不刷屏;文件名里的 hash 负责跨重启去重。 */
   lastDiagnosticsKey?: string;
@@ -20644,24 +20640,6 @@ export class TaskService {
     }));
   }
 
-  /** 主动压缩(用户关切:长编码阶段注意力漂移):事件量每涨
-   * compactEveryEvents,在回合间隙以内核锚点压缩会话。事件量是
-   * 上下文增长的诚实代理——不复刻 token 计数,也不猜阶段语义。 */
-  private async maybeCompact(task: TaskState): Promise<void> {
-    const every = this.options.compactEveryEvents ?? 0;
-    if (!every || !task.driver) return;
-    let level = 0;
-    try {
-      level = new EventLog(
-        join(task.summary.workspace, "events.jsonl")).lastEventId();
-    } catch {
-      return;
-    }
-    if (level - (task.lastCompactAt ?? 0) < every) return;
-    task.lastCompactAt = level;
-    await task.driver.compactAnchored(this.kernelAnchor(task));
-  }
-
   /** 压缩锚点:内核状态文件的 current/config 原文;没有内核现场
    * 就退到需求原话——锚永远来自权威,不由云端编造。 */
   private kernelAnchor(task: TaskState): string {
@@ -20900,9 +20878,6 @@ export class TaskService {
           break;
         }
         if (await this.finishHostAction(task, epoch)) break;
-        // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
-        // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。
-        await this.maybeCompact(task);
         if (!this.current(task, epoch)) break;
         if (task.pauseRequested) {
           await this.finishPause(task, "running");

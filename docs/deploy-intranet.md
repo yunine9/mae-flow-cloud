@@ -794,7 +794,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
 | max-concurrent | 2 | 并发任务数 |
 | workspace-retention-days | 14 | 现场保留期(天)。终态任务过期后回收**代码克隆等编译环境**,交付账本/事件/transcript/prepush 收据/流水线证据/批注一律保留;`0`=永不回收。只碰 completed/failed/canceled,`await_merge` 与 `verifying` 不碰 |
-| compact-every | 150 | 主动压缩节奏(事件数;0=关) |
+| compact-every | 已废弃 | 旧配置兼容；主、子、专项会话统一在模型请求前按容量主动整理，无需配置事件数 |
 | desktop-notify | false | 单机手感的桌面弹窗 |
 
 旧部署中的 `--prepush-attempt-timeout-minutes` 和

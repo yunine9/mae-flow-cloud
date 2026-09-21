@@ -22,6 +22,8 @@ export interface ScriptedSceneContext {
 
 export interface ScriptedModelOptions {
   linear?: boolean;
+  /** 上下文预算测试用；包括缓存输入，保持与网关 usage 字段一致。 */
+  usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number };
   /**
    * Test-fixture hook that runs before a scripted response is emitted.
    *
@@ -191,7 +193,7 @@ export class ScriptedModelServer {
       content: blocks,
       stop_reason: stopReason,
       stop_sequence: null,
-      usage: { input_tokens: 1, output_tokens: 1 },
+      usage: this.options.usage ?? { input_tokens: 1, output_tokens: 1 },
     });
     response
       .writeHead(200, { "content-type": "application/json" })
@@ -216,7 +218,7 @@ export class ScriptedModelServer {
         id: "msg-scripted", type: "message", role: "assistant",
         model: this.modelId, content: [], stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 1, output_tokens: 1 },
+        usage: this.options.usage ?? { input_tokens: 1, output_tokens: 1 },
       },
     });
     blocks.forEach((block, index) => {
@@ -249,7 +251,7 @@ export class ScriptedModelServer {
     emit("message_delta", {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: { output_tokens: 1 },
+      usage: { output_tokens: this.options.usage?.output_tokens ?? 1 },
     });
     emit("message_stop", { type: "message_stop" });
     response.end();

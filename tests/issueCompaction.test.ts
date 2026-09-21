@@ -1,24 +1,4 @@
-/**
- * 回合前压缩(.scratch/issue-stage-compact 两张票)的契约测试。
- *
- * 钉的机械事实:
- * - analysis_confirm 确认进 fix 的续聊前必压一次,锚点钉住分析报告
- *   落盘路径与「修改方案」章节要点(不受阈值管辖);
- * - 其余续聊回合只看事件量阈值旋钮 issue_compact_every_events:
- *   显式 0=关;部署缺省 400(serve 层旗标,#285 拍板)不在这条
- *   测试链上——服务直构两缺席时回退 0;
- * - 压缩 fail-open:模型端压不动,回合照走,单子不判死;
- * - 超限自愈预算翻篇归还:第二次撑爆仍压仍活(#285,issue-64
- *   二爆被一次性 flag 冤死的复盘)。
- *
- * 挂起通道(resumeWithDecision)与重启重建(startResume)结构性不
- * 经过咽喉(resumeTurnBody 的 continueWith 之前),这里不再单测。
- * 观测面:pi 的 compact 是一次不带工具表的真实模型请求(回合内的
- * 模型调用都带 tools)——linear 剧本要为每次压缩留一幕。
- * vendor 边界(pi 1.x 实测):单回合历史的手动压缩走 split-turn 路,
- * customInstructions 不进摘要请求——边界指针因此同时钉进确认推进
- * 通知词(必达),测试分别钉这两条通道。
- */
+/** 问题会话也使用统一容量策略，阶段切换不再强制调用第二套压缩。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -70,11 +50,7 @@ function compactionRequests(model: ScriptedModelServer) {
   return model.requests.filter((request) => !("tools" in request));
 }
 
-/** 首轮七幕:拉单→收口→拉仓→收口→写报告→提交举闸→回合结束。
- *  末幕是一大段排查全记录(~160KB):pi 的手动压缩有"会话太小不压"
- *  的前置(keepRecentTokens≈2 万估算 token),小会话会在
- *  prepareCompaction 就被拒——喂大末幕让压缩真正走到模型端,这也
- *  正是边界压缩要对抗的真实形态(过程性长输出撑爆上下文)。 */
+/** 首轮七幕；长排查记录用于验证下一次模型请求前的容量整理。 */
 function firstRoundScenes(origin: string): Scene[] {
   return [
     { tool: { name: "dts_get_ticket", input: {} } },
@@ -121,8 +97,16 @@ async function atAnalysisGate(
   scriptOf: (origin: string) => Scene[],
 ): Promise<Harness> {
   const origin = bareOrigin(dataDir);
-  const model = new ScriptedModelServer(scriptOf(origin), "scripted-v1",
-    { linear: true });
+  const scenes = scriptOf(origin);
+  let normalIndex = 0;
+  const model = new ScriptedModelServer(Array.from({ length: 100 }, () => ({ text: "结束" })), "scripted-v1", {
+    linear: true,
+    beforeScene: ({ request, index }) => {
+      model.script[index] = JSON.stringify(request.system).includes("你在整理 Coding Agent")
+        ? { text: "目标：修复登录超时。用户已确认修改方案；分析报告在 issue-analysis.md。下一步按超时回调双检方案修复，不重复拉仓和提交分析。" }
+        : scenes[Math.min(normalIndex++, scenes.length - 1)];
+    },
+  });
   await model.start();
   const service = new IssueFlowService({
     dataDir,
@@ -161,202 +145,52 @@ async function nextAnalysisGate(h: Harness) {
   }, "二轮分析确认闸");
 }
 
-test("分析→修复边界:确认后的续聊前必压一次,锚点钉住报告路径与修改方案要点", async () => {
-  const dataDir = mfcTemp("mfc-issue-compact-boundary-");
-  // 阈值旋钮缺席(缺省关):边界必压不受阈值管辖,恰好证明这一点。
-  // 压缩摘要占一幕,其后是修复回合。
-  const h = await atAnalysisGate(dataDir, noKnob,
-    (origin) => [...firstRoundScenes(origin),
-      { text: "上下文已按锚点压缩。" }, ...fixScenes]);
-  const { service, model, id } = h;
+test("分析确认后自动按容量整理，修复消息仍携带报告和修改方案", async () => {
+  const h = await atAnalysisGate(mfcTemp("mfc-issue-budget-boundary-"), noKnob,
+    (origin) => [...firstRoundScenes(origin), ...fixScenes]);
   try {
-    service.answer(id, { state_version: h.gateVersion, code: "confirm" });
-    assert.equal(service.get(id).stage, "fix", "确认即推进到修复段");
-    await until(() => {
-      const issue = service.get(id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" && issue.stage === "fix" ? issue : undefined;
-    }, "边界压缩后的修复回合收口");
-    const compactions = compactionRequests(model);
-    assert.equal(compactions.length, 1, "确认后的续聊前恰压一次");
-    // 指针走必达通道:压缩后的第一个回合请求携带推进通知词,钉住
-    // 报告路径与方案要点——单回合历史上 pi 的摘要请求不带自定义锚
-    // (split-turn 路),指针不能指望摘要。
-    const compactAt = model.requests.findIndex((r) => !("tools" in r));
-    assert.ok(compactAt >= 0, "压缩请求在场");
-    const continuation = JSON.stringify(model.requests[compactAt + 1]);
-    assert.match(continuation, /报告: [^"]*issue-analysis\.md/,
-      "推进通知词钉住报告落盘路径");
-    assert.ok(continuation.includes("修改方案要点"), "通知词含方案章节标目");
-    assert.ok(continuation.includes("超时回调改双检"), "通知词含方案要点原文");
-  } finally {
-    await model.stop();
-  }
+    h.service.answer(h.id, { state_version: h.gateVersion, code: "confirm" });
+    await until(() => h.service.get(h.id).status === "idle" ? true : undefined, "修复收口");
+    assert.equal(h.service.get(h.id).stage, "fix");
+    assert.ok(compactionRequests(h.model).length >= 1);
+    const requests = h.model.requests.filter((r) => "tools" in r);
+    assert.match(JSON.stringify(requests.at(-1)), /issue-analysis\.md/);
+    assert.match(JSON.stringify(requests.at(-1)), /超时回调.*双检/);
+  } finally { await h.model.stop(); }
 });
 
-test("边界压缩 fail-open:模型端压不动,推进照常,单子不判死", async () => {
-  const dataDir = mfcTemp("mfc-issue-compact-failopen-");
-  const h = await atAnalysisGate(dataDir, noKnob,
-    (origin) => [...firstRoundScenes(origin),
-      { text: "(被 failWith 吞掉的压缩摘要幕)" }, ...fixScenes]);
-  const { service, model, id } = h;
-  try {
-    // 让下一次模型请求(恰是边界压缩)以网关错误告终。
-    model.failWith("compact gateway exploded", 1);
-    service.answer(id, { state_version: h.gateVersion, code: "confirm" });
-    const settled = await until(() => {
-      const issue = service.get(id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" && issue.stage === "fix" ? issue : undefined;
-    }, "压缩失败后的修复回合照常收口");
-    assert.equal(settled.stage, "fix");
-    assert.equal(compactionRequests(model).length, 1, "压缩尝试确实发出过");
-  } finally {
-    await model.stop();
-  }
-});
-
-test("阈值旋钮:非边界续聊到阈值压通用锚,不带报告指针", async () => {
-  const dataDir = mfcTemp("mfc-issue-compact-threshold-");
-  // 两段补充意见回流把历史铺成多回合:第一次的补充意见带一大段日志
-  // (用户侧大输入,让历史值得压);第二次回流时历史已是多回合,pi 的
-  // 压缩走带 customInstructions 的路——通用锚("Additional focus")
-  // 应出现在第二次压缩请求里。阈值 1:两段续聊各压一次。
-  const bigNotes = "补充:核对连接池监控曲线。附网管日志摘录(测试填充):\n"
-    + "日志行 x".repeat(20_000);
-  const h = await atAnalysisGate(dataDir,
-    () => ({ issue_compact_every_events: 1 }),
-    (origin) => [
-      ...firstRoundScenes(origin),
-      { text: "(单回合压缩摘要幕,split 路无锚)" },
-      ...revisionScenes,
-      { text: "(多回合压缩摘要幕,带 Additional focus 锚)" },
-      ...revisionScenes,
-    ]);
-  const { service, model, id } = h;
-  try {
-    service.answer(id, {
-      state_version: h.gateVersion,
-      code: "supplement",
-      notes: bigNotes,
-    });
-    const gate2 = await nextAnalysisGate(h);
-    service.answer(id, {
-      state_version: gate2.gate!.state_version,
-      code: "supplement",
-      notes: "补充:二轮意见,核对回收阈值。",
-    });
-    const waitGate3 = () => until(() => {
-      const issue = service.get(id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "analysis_confirm"
-        && issue.gate.state_version > gate2.gate!.state_version ? issue : undefined;
-    }, "三轮分析确认闸");
-    await waitGate3();
-    const compactions = compactionRequests(model);
-    assert.equal(compactions.length, 2, "两段续聊各压一次(阈值 1)");
-    const bodies = compactions.map((r) => JSON.stringify(r));
-    const anchored = bodies.find((body) => body.includes("Additional focus"));
-    assert.ok(anchored, "多回合历史的压缩请求携带自定义锚");
-    assert.ok(anchored.includes("问题会话「登录超时」"), "通用锚含标题");
-    for (const body of bodies) {
-      assert.ok(!body.includes("分析报告落盘"),
-        "阈值路不带边界专用锚(报告指针是边界路专属)");
-    }
-    assert.equal(service.get(id).stage, "analyze", "补充意见留在分析阶段");
-  } finally {
-    await model.stop();
-  }
-});
-
-test("显式 0=关:旋钮置 0 时续聊回合不产生任何压缩请求", async () => {
-  const dataDir = mfcTemp("mfc-issue-compact-off-");
-  // 无压缩干预的剧本:补充意见回流后直接演二轮修订。(部署缺省已是
-  // 400——#285 拍板;服务直构的 0 兜底只覆盖测试形态,这里钉的是
-  // "0 关得掉"。)
-  const h = await atAnalysisGate(dataDir,
+test("旧旋钮设为 0 也不关闭容量保护，长材料主动整理后继续分析", async () => {
+  const h = await atAnalysisGate(mfcTemp("mfc-issue-budget-zero-"),
     () => ({ issue_compact_every_events: 0 }),
     (origin) => [...firstRoundScenes(origin), ...revisionScenes]);
-  const { service, model, id } = h;
   try {
-    service.answer(id, {
-      state_version: h.gateVersion,
-      code: "supplement",
-      notes: "补充:核对连接池监控曲线",
-    });
+    h.service.answer(h.id, { state_version: h.gateVersion, code: "supplement", notes: "核对连接池监控" });
     await nextAnalysisGate(h);
-    assert.equal(compactionRequests(model).length, 0,
-      "旋钮置 0:一个压缩请求都不许有");
-  } finally {
-    await model.stop();
-  }
+    assert.ok(compactionRequests(h.model).length >= 1);
+    assert.equal(h.service.get(h.id).stage, "analyze");
+  } finally { await h.model.stop(); }
 });
 
-test("阈值未到:事件增量没越线的续聊不压", async () => {
-  const dataDir = mfcTemp("mfc-issue-compact-below-");
-  const h = await atAnalysisGate(dataDir,
-    () => ({ issue_compact_every_events: 1_000_000 }),
-    (origin) => [...firstRoundScenes(origin), ...revisionScenes]);
-  const { service, model, id } = h;
+test("短会话不会因事件数或阶段切换多调用摘要模型", async () => {
+  const h = await atAnalysisGate(mfcTemp("mfc-issue-budget-small-"),
+    () => ({ issue_compact_every_events: 1 }),
+    (origin) => [...firstRoundScenes(origin).slice(0, -1), { text: "分析结束" }, ...fixScenes]);
   try {
-    service.answer(id, {
-      state_version: h.gateVersion,
-      code: "supplement",
-      notes: "补充:核对连接池监控曲线",
-    });
-    await nextAnalysisGate(h);
-    assert.equal(compactionRequests(model).length, 0);
-  } finally {
-    await model.stop();
-  }
+    h.service.answer(h.id, { state_version: h.gateVersion, code: "confirm" });
+    await until(() => h.service.get(h.id).status === "idle" ? true : undefined, "修复收口");
+    assert.equal(compactionRequests(h.model).length, 0);
+  } finally { await h.model.stop(); }
 });
 
-test("超限自愈翻篇归还:第二次撑爆仍压仍活,不再一次性判死(#285)", async () => {
-  const dataDir = mfcTemp("mfc-issue-overflow-reset-");
-  // issue-64 复盘:一爆自愈成功后 overflowRepaired 不复位,数小时后
-  // 的二爆不试压缩直接判死。两轮补充都带大输入(用户侧大材料,让
-  // 历史值得压,也保证二轮时 pi 的手动压缩不被"会话太小"前置拒),
-  // 各撞一次网关超限。pi 对 input too long 不重试(不可重试类错误),
-  // failWith 配额 1 恰好只吞掉续聊首投;剧本每轮是:失败(不耗幕)
-  // →压缩摘要幕→重试的修订三幕。
-  const bigNotes = "补充:核对连接池监控曲线。附网管日志摘录(测试填充):\n"
-    + "日志行 x".repeat(20_000);
-  const h = await atAnalysisGate(dataDir, noKnob,
-    (origin) => [
-      ...firstRoundScenes(origin),
-      { text: "(一爆自愈:压缩摘要幕)" },
-      ...revisionScenes,
-      { text: "(二爆自愈:压缩摘要幕)" },
-      ...revisionScenes,
-    ]);
-  const { service, model, id } = h;
-  const overflow = "input too long, exceed max input length, "
-    + "max input length is 169984, current input length is 176871";
+test("压缩模型失败：保留历史，问题流继续且不伪造成功压缩", async () => {
+  const h = await atAnalysisGate(mfcTemp("mfc-issue-budget-failure-"), noKnob,
+    (origin) => [...firstRoundScenes(origin), ...fixScenes]);
   try {
-    model.failWith(overflow, 1);
-    service.answer(id, {
-      state_version: h.gateVersion, code: "supplement", notes: bigNotes,
-    });
-    const gate2 = await nextAnalysisGate(h);
-    assert.equal(compactionRequests(model).length, 1,
-      "一爆:压缩自愈一次,续聊照走");
-    model.failWith(overflow, 1);
-    service.answer(id, {
-      state_version: gate2.gate!.state_version,
-      code: "supplement",
-      notes: bigNotes.replace("核对连接池", "二轮:核对连接池"),
-    });
-    await until(() => {
-      const issue = service.get(id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user"
-        && issue.gate?.kind === "analysis_confirm"
-        && issue.gate.state_version > gate2.gate!.state_version
-        ? issue : undefined;
-    }, "三轮分析确认闸(二爆仍自愈)");
-    assert.equal(compactionRequests(model).length, 2,
-      "二爆:预算已翻篇归还,仍压缩自愈(旧行为这里不试压缩直接判死)");
-  } finally {
-    await model.stop();
-  }
+    h.model.failWith("compact gateway exploded", 1);
+    h.service.answer(h.id, { state_version: h.gateVersion, code: "confirm" });
+    await until(() => h.service.get(h.id).status === "idle" ? true : undefined, "失败后继续");
+    assert.equal(h.service.get(h.id).stage, "fix");
+    assert.equal(compactionRequests(h.model).length, 1);
+    assert.match(JSON.stringify(h.model.requests.at(-1)), /排查过程全记录/);
+  } finally { await h.model.stop(); }
 });

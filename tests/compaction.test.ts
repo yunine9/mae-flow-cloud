@@ -1,10 +1,4 @@
-/**
- * 主动压缩语义(用户关切:长编码阶段注意力漂移):
- * - 事件量过阈值后,回合间隙触发 compact,摘要请求真实走到模型
- *   (剧本假模型扮演摘要方,回合链不断);
- * - 阈值未到不压;压缩失败 fail-open 流程照走(红线);
- * - 触发点只在 turn_finished——等待人工时绝不压(会打断挂起节点)。
- */
+/** CloudSession 兼容与错误边界；真实容量场景见 sessionCompaction.test.ts。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -25,11 +19,8 @@ async function until(
   }
 }
 
-test("事件量过阈值 → 回合间隙触发压缩;小会话被拒也不伤流程", async () => {
-  // 剧本会话很小,pi 会以 "session too small" 拒压——这不是失败,
-  // 是 fail-open 语义的一部分:触发点必须对(turn_finished),
-  // 拒压必须无害(任务照常收口)。压缩真正生效的验证在真模型
-  // 试跑里(pilot --compact-every,现场日志可见"主动压缩完成")。
+test("旧事件阈值不再强制压缩，小会话正常结束", async () => {
+  // 历史配置保留解析兼容，但事件条数不再触发额外的摘要调用。
   const script: Scene[] = [
     { text: "干了一堆活",
       tool: { name: "bash", input: { command: "echo 干活" } } },
@@ -43,7 +34,7 @@ test("事件量过阈值 → 回合间隙触发压缩;小会话被拒也不伤�
     provider: "maeflow",
     model: "scripted-v1",
     modelsJson: model.modelsJson(),
-    compactEveryEvents: 1,          // 一到间隙就该触发
+    compactEveryEvents: 1,          // 兼容旧调用，不再决定压缩
     log: (message) => logs.push(message),
   });
   try {
@@ -51,8 +42,8 @@ test("事件量过阈值 → 回合间隙触发压缩;小会话被拒也不伤�
     await until(() =>
       service.get(created.id)!.status === "completed", "任务收口");
     assert.ok(
-      logs.some((line) => line.includes("主动压缩")),
-      `压缩没被触发,日志: ${logs.join(" | ")}`);
+      !logs.some((line) => line.includes("主动压缩")),
+      `小会话不应因事件数压缩,日志: ${logs.join(" | ")}`);
   } finally {
     await model.stop();
   }
@@ -86,16 +77,8 @@ test("超限判据:认内网/各家网关的原文,别的错误一概不认", ()
   }
 });
 
-test("上下文撑爆:先压一次再重发;压不动如实失败并说清是哪种大", async () => {
-  // 内网网关窗口 169984,而 pi 的自动压缩按它自己估的窗口走——网关比
-  // 它以为的小,硬报错就漏到宿主,原来当场判死任务。现在先压一次再
-  // 原样重发(该轮零活动,重发不会重做已完成的事)。
-  //
-  // 假件会话很小,pi 会以 "session too small" 拒压(同本文件第一条
-  // 用例的老现象)——所以这里能裁的是:①自愈被触发;②压不动时如实
-  // 失败且把"多半是单轮输入过大"讲给人;③补救有上限不空转。
-  // **压缩成功后重试收口**只在真模型的大会话上成立,假件裁不了,
-  // README 已知边界如实记着,别把这条当已验证。
+test("上下文撑爆:只补救一次，压不动如实失败", async () => {
+  // 窗口配置高于网关时仍保留有限补救；极小历史没有可压缩内容，不能空转。
   const model = new ScriptedModelServer([{ text: "一步完成。" }]);
   await model.start();
   model.failWith(
