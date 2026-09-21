@@ -650,7 +650,7 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
     {!query && <section aria-label="平台全景演示" className="flex items-center justify-between gap-8 overflow-hidden rounded-2xl border border-primary/20 bg-surface px-8 py-6">
       <div className="min-w-0">
         <span className="text-xs font-bold tracking-wider text-primary">MAE FLOW · 交互式演示</span>
-        <h2 className="mt-2 mb-2 text-2xl font-bold text-text-strong">90 秒看懂：从需求交付到知识复用</h2>
+        <h2 className="mt-2 mb-2 text-2xl font-bold text-text-strong">40 秒看懂：从需求交付到知识复用</h2>
         <p className="mb-5 text-sm text-muted-foreground">跟随动画看完整闭环，自动聚焦模块并展开讲解；可随时暂停、缩放和切换。</p>
         <div className="flex gap-3">
           <Button size="lg" nativeButton={false} render={<a href="/help/platform-overview/index.html?autoplay=1" target="_blank" rel="noreferrer" />}>

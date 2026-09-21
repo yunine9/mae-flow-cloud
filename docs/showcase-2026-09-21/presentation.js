@@ -31,18 +31,18 @@ const scenes={
  philosophy:{label:'03 / DESIGN PRINCIPLES',title:'可靠、易改、够快、安全，要落实在具体取舍里。',body:'不把流程完整当作质量证明；人把握方向、Agent 执行，让真实交付成为组织能力的积累。'}
 };
 const beats=[
- ['overview',[],[], '先看全貌：两条闭环，一套工程底座。','交付闭环让需求落成真实代码；知识闭环把这次工作留下的经验，再带回下一次开发。'],
- ['delivery',['intent','design'],['delivery-0'],'把大需求拆成能推进的小目标。','先明确目标与验收，再分析职责和依赖。公共准备按需先行，可独立的任务并行推进。'],
- ['delivery',['design','develop'],['delivery-1'],'让 Agent 带着方法和知识行动。','Workflow、Skill 和适用知识进入当前工作；主会话与子任务协作，完成代码与 UT。'],
- ['delivery',['develop','verify'],['delivery-2','repair'],'质量来自真实验证，也来自人的判断。','编译、测试与流水线失败进入修复；人工及 AI 检视意见先由责任人选择，避免无休止的自动返工。'],
- ['delivery',['iterate','deliver'],['delivery-4'],'从修改代码，走到真正完成交付。','宿主连接 Git、MR 与流水线，持续观察远端结果；过程可见、可暂停、可恢复。'],
- ['knowledge',['deliver','retrospect'],['learn'],'合入之后，自动复盘为什么一次没有写对。','结合首次交付后的修改与检视意见，提炼经验草稿，让一次交付成为知识闭环的起点。'],
- ['knowledge',['retrospect','organize','adopt'],['retrospect-organize','organize-adopt'],'提炼共性，交给人审视。','不只记录某个任务怎么改；归纳适用条件、通用做法与例子，成员可以修改和采纳。'],
- ['knowledge',['adopt','assets','search'],['adopt-assets','assets-search'],'知识可管理，更要能在需要时被找到。','已采纳内容以 Markdown 保存并建立索引，按语言、模块和当前问题检索，保持来源与适用范围。'],
- ['knowledge',['search','extract','organize'],['search-extract','gap'],'已有知识不够，就从真实源码补齐。','Agent 发现组件用法缺口时，可启动后台萃取；同语言组件仓与跨仓真实用例共同支撑范式提炼。'],
- ['knowledge',['search','design','develop'],['reuse','delivery-1'],'回到开发，闭环才真正成立。','经验必须回到下一次设计与实现；定时整理让知识持续更新，而不是堆积成零散的文件。'],
- ['overview',foundation,[],'让这套能力可靠运行，也能持续修改。','Agent 协作、可维护的方法资产、任务恢复与外部工具适配，构成 MAE Flow 的工程底座。'],
- ['philosophy',[],[],'从个人提效，走向组织级 AI 工程能力。','人做关键判断，Agent 承担执行；减少无效等待，用真实交付积累可复用的团队能力。']
+ ['overview',[],[], '两条闭环，一套底座。','需求交付形成代码，知识回流支撑下次开发。'],
+ ['delivery',['intent','design'],['delivery-0'],'先拆清，再并行。','明确目标与依赖，让独立任务同时推进。'],
+ ['delivery',['design','develop'],['delivery-1'],'带着知识写代码。','Workflow、Skill 与知识支撑代码和 UT。'],
+ ['delivery',['develop','verify'],['delivery-2','repair'],'用真实结果验证。','编译、测试失败自动修；检视意见由人取舍。'],
+ ['delivery',['iterate','deliver'],['delivery-4'],'持续迭代，直到合入。','连接 Git、MR 与流水线，进度可见、可恢复。'],
+ ['knowledge',['deliver','retrospect'],['learn'],'合入后，自动复盘。','对比交付后的修改，分析为什么一次没写对。'],
+ ['knowledge',['retrospect','organize','adopt'],['retrospect-organize','organize-adopt'],'提炼共性，人来采纳。','归纳适用条件与做法，成员审视后入库。'],
+ ['knowledge',['adopt','assets','search'],['adopt-assets','assets-search'],'知识在需要时出现。','按语言、模块和当前问题检索适用知识。'],
+ ['knowledge',['search','extract','organize'],['search-extract','gap'],'缺知识，就从源码补齐。','组件源码与跨仓真实用例支撑范式萃取。'],
+ ['knowledge',['search','design','develop'],['reuse','delivery-1'],'回到开发，形成闭环。','经验用于下次实现，定时整理减少重复。'],
+ ['overview',foundation,[],'工程底座，让能力可靠。','Agent 协作、任务恢复与工具适配共同支撑。'],
+ ['philosophy',[],[],'从个人提效，到组织能力。','人做判断，Agent 执行，经验反复复用。']
 ];
 let scene='overview',playing=false,beat=-1,timer;
 const $=s=>document.querySelector(s);
@@ -52,7 +52,7 @@ const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
 function moveCamera(target){
  cancelAnimationFrame(cameraFrame);
  const from=[...camera],started=performance.now();
- function draw(now){const t=reducedMotion.matches?1:Math.min(1,(now-started)/650);const eased=1-(1-t)**3;camera=from.map((n,i)=>n+(target[i]-n)*eased);svg.setAttribute('viewBox',camera.join(' '));$('#zoom-level').textContent=`${Math.round(fullView[2]/camera[2]*100)}%`;if(t<1)cameraFrame=requestAnimationFrame(draw)}
+ function draw(now){const t=reducedMotion.matches?1:Math.min(1,(now-started)/350);const eased=1-(1-t)**3;camera=from.map((n,i)=>n+(target[i]-n)*eased);svg.setAttribute('viewBox',camera.join(' '));$('#zoom-level').textContent=`${Math.round(fullView[2]/camera[2]*100)}%`;if(t<1)cameraFrame=requestAnimationFrame(draw)}
  cameraFrame=requestAnimationFrame(draw);
 }
 function focusCamera(ids){
@@ -86,7 +86,7 @@ function clearParticles(){svg.querySelectorAll('.flow-particle').forEach(n=>n.re
 function focus(ids=[],edgeIds=[]){const selected=new Set(ids),es=new Set(edgeIds);nodes.forEach(n=>{n.classList.toggle('dim',selected.size>0&&!selected.has(n.dataset.nodeId));n.classList.toggle('active',selected.has(n.dataset.nodeId));n.setAttribute('aria-pressed',String(selected.has(n.dataset.nodeId)))});edges.forEach(e=>{const lit=es.has(e.dataset.edgeId)||(es.size===0&&selected.has(e.dataset.edgeFrom)&&selected.has(e.dataset.edgeTo));e.classList.toggle('dim',selected.size>0&&!lit);e.classList.toggle('active',lit)});clearParticles();if(playing){svg.querySelectorAll('path[data-edge-id].active').forEach(p=>{const c=p.cloneNode();for(const a of [...c.attributes])if(a.name.startsWith('data-')||a.name==='marker-end')c.removeAttribute(a.name);c.setAttribute('class','flow-particle');c.setAttribute('stroke',p.classList.contains('knowledge-edge')?'#a0f9df':'#b5eaff');p.after(c)})}}
 function stop(){playing=false;clearTimeout(timer);clearParticles();$('#play').innerHTML=`▶ <span>${beat>=0&&beat<beats.length-1?'继续播放':beat===beats.length-1?'重新播放':'一键播放'}</span>`;$('#play').setAttribute('aria-label',beat>=0&&beat<beats.length-1?'继续播放讲解':'一键播放完整讲解');$('#lecture-pause').textContent='继续';if(beat>=0)$('#auto-step').textContent=`${String(beat+1).padStart(2,'0')} / ${beats.length} · 已暂停`}
 function setScene(name,manual=true){if(manual){beat=-1;stop();clearExplanation();moveCamera(fullView)}scene=name;$('#diagram').inert=name==='philosophy';$('#diagram').setAttribute('aria-hidden',String(name==='philosophy'));$('#detail').hidden=true;$('#philosophy').hidden=name!=='philosophy';document.querySelectorAll('[data-scene]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.scene===name)));const ids=name==='delivery'?delivery:name==='knowledge'?[...knowledge,'design','deliver']:[];focus(ids);const s=scenes[name];caption(s.label,s.title,s.body);if(manual)$('#progress').style.width='12%'}
-function showBeat(index){beat=(index+beats.length)%beats.length;const [name,ids,es,title,body]=beats[beat];setScene(name,false);focus(ids,es);explainBeat(name,title,body);focusCamera(ids);caption(`${String(beat+1).padStart(2,'0')} / ${beats.length} · ${name==='knowledge'?'知识闭环':name==='delivery'?'交付闭环':name==='philosophy'?'设计思想':'全景架构'}`,title,body);$('#progress').style.width=`${(beat+1)/beats.length*100}%`;if(playing){clearTimeout(timer);timer=setTimeout(()=>{if(beat===beats.length-1)stop();else showBeat(beat+1)},7200)}}
+function showBeat(index){beat=(index+beats.length)%beats.length;const [name,ids,es,title,body]=beats[beat];setScene(name,false);focus(ids,es);explainBeat(name,title,body);focusCamera(ids);caption(`${String(beat+1).padStart(2,'0')} / ${beats.length} · ${name==='knowledge'?'知识闭环':name==='delivery'?'交付闭环':name==='philosophy'?'设计思想':'全景架构'}`,title,body);$('#progress').style.width=`${(beat+1)/beats.length*100}%`;if(playing){clearTimeout(timer);timer=setTimeout(()=>{if(beat===beats.length-1)stop();else showBeat(beat+1)},3300)}}
 function togglePlay(){if(playing){stop();return}playing=true;$('#play').innerHTML='Ⅱ <span>暂停讲解</span>';$('#play').setAttribute('aria-label','暂停讲解');showBeat(beat<0||beat===beats.length-1?0:beat)}
 document.querySelectorAll('[data-scene]').forEach(b=>b.addEventListener('click',()=>setScene(b.dataset.scene)));
 $('#play').addEventListener('click',togglePlay);
