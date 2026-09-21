@@ -74,7 +74,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -528,7 +527,8 @@ import {
   validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
-import { absorbForeignBranchCommits } from "./foreignBranchCommits.ts";
+import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
+import { TaskBranchSync, type BranchSyncRequest } from "./taskBranchSync.ts";
 import {
   classifyDeliveryFailure,
   deliveryFailureMessage,
@@ -1908,89 +1908,6 @@ function deliverySelectionNote(
   ].join("\n");
 }
 
-interface AsyncGitResult {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-  error?: Error;
-}
-
-/** 宿主网络 Git 的异步执行边界。timeout 时杀整个进程组，避免只杀 git
- * 却留下 ssh/credential 子进程；输出有界，远端异常也不能撑爆服务。 */
-function runGitProcess(
-  args: string[],
-  options: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    timeoutMs: number;
-    maxBuffer?: number;
-  },
-): Promise<AsyncGitResult> {
-  return new Promise((resolveResult) => {
-    const detached = process.platform !== "win32";
-    const child = spawn("git", args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached,
-    });
-    const maxBuffer = options.maxBuffer ?? 20 * 1024 * 1024;
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let overflow: Error | undefined;
-    let timedOut = false;
-    let spawnError: Error | undefined;
-    const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
-      const current = stream === "stdout" ? stdoutBytes : stderrBytes;
-      const remaining = maxBuffer - current;
-      if (remaining <= 0) {
-        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
-        return;
-      }
-      const kept = chunk.subarray(0, remaining);
-      target.push(kept);
-      if (stream === "stdout") stdoutBytes += kept.length;
-      else stderrBytes += kept.length;
-      if (kept.length < chunk.length) {
-        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
-      }
-    };
-    child.stdout?.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
-    child.stderr?.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
-    const killGroup = () => {
-      try {
-        if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        // 进程可能恰好已经退出。
-      }
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-    }, options.timeoutMs);
-    timer.unref?.();
-    child.once("error", (error) => {
-      spawnError = error;
-    });
-    child.once("close", (status, signal) => {
-      clearTimeout(timer);
-      resolveResult({
-        status: (spawnError || overflow || timedOut) ? null : status,
-        signal,
-        timedOut,
-        stdout: Buffer.concat(stdout).toString("utf-8"),
-        stderr: Buffer.concat(stderr).toString("utf-8"),
-        ...((spawnError ?? overflow) ? { error: spawnError ?? overflow } : {}),
-      });
-    });
-  });
-}
 
 export class TaskService {
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
@@ -19201,10 +19118,6 @@ export class TaskService {
     ].join("\n"), `收到 ${annotations.length} 条本地检视意见，正在修改当前 MR`);
   }
 
-  /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
-   * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
-   * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,交回统一的
-   * host push 链，不烧会话。刹车=同 SHA 不二修。 */
   /** 分支上的外来提交对 Agent 的披露。它们是人直接推上来的,默认可信;
    * 但任何一轮修复会话若不知情,很容易把别人的改动当成脏东西"整理"掉
    * (reset/revert/squash 都够呛),所以派单时必须点名。 */
@@ -19220,133 +19133,25 @@ export class TaskService {
     ].join("\n");
   }
 
-  /** 远端任务分支上出现了本任务没推过的提交时,把自己的提交接到它后面。
-   *
-   * 老行为是拿同一个已验证 SHA 一遍遍撞 non-fast-forward 拒收(task-40
-   * 实锤:同一条失败刷了 110 次)。外来提交只可能是人为介入,用户拍板
-   * 默认可信——不举卡、不加闸,接续后新 HEAD 照常走 Build-Fix / 推送确认
-   * / 推送这条既有链路,人该看的东西一样会看到。
-   *
-   * 探测失败(读不到远端、拉不下来)一律 fail-open:这不是新门禁,后面
-   * 真 push 会如实失败并按既有预算自愈。真正 fail-closed 的只有"历史被
-   * 改写"和"接不上",它们继续推下去只会把事情弄得更说不清。 */
-  private async absorbForeignRemoteCommits(
-    task: TaskState,
-    branch: string,
-    dispatchRepair = true,
-  ): Promise<"ok" | "absorbed" | "blocked"> {
-    if (!this.options.host || !task.cwd) return "ok";
-    const cwd = task.cwd;
-    let remoteUrl: string;
-    try {
-      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
-      if (!configured) throw new Error("任务没有权威代码仓地址");
-      validateRepositoryAddress(configured);
-      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
-          && !/^(?:https?|file):\/\//i.test(configured)
-          && !/^[a-z]:[\\/]/i.test(configured)) {
-        throw new Error("只允许 HTTPS 或本地仓传输");
-      }
-      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
-        ? configured : resolve(configured);
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(fail-open): ${String(error)}`);
-      return "ok";
-    }
-    const credential = this.options.gitCredential?.(
-      task.summary.luban_account);
-    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
-    try {
-      sandbox = this.prepareHostGitSandbox(credential);
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(Git 沙箱创建失败,fail-open): ${String(error)}`);
-      return "ok";
-    }
-    let gitView: ReturnType<typeof createSafeGitView>;
-    try {
-      gitView = createSafeGitView(cwd);
-    } catch (error) {
-      this.cleanupHostGitCredential(sandbox);
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(安全 Git 视图创建失败,fail-open): ${String(error)}`);
-      return "ok";
-    }
-    const identityName = credential?.username
-      ?? task.summary.luban_account ?? "mae-flow-cloud";
-    const identityEmail = credential?.email
-      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
-    // 与冲突修复同一套边界:fetch/rebase 看真实 refs/index/objects,
-    // config 却来自空代理 gitdir,Agent 写进 .git/config 的 hook、
-    // fsmonitor、insteadOf 都进不了这个带宿主凭据的进程。
-    const worktreeArgs = [
-      ...sandbox.args,
-      "-c", `safe.directory=${resolve(cwd)}`,
-      "-c", "core.fsmonitor=false",
-      "-c", "commit.gpgSign=false",
-      "-c", `user.name=${identityName}`,
-      "-c", `user.email=${identityEmail}`,
-    ];
-    const worktreeEnv = gitView.environment(sandbox.env);
-    try {
-      const outcome = await absorbForeignBranchCommits({
-        branch,
-        remoteUrl,
-        lastPushedSha: task.summary.delivery?.git_push?.sha
-          ?? task.summary.delivery?.sha,
-        transport: (args) => runGitProcess([...sandbox.args, ...args], {
-          timeoutMs: 60_000, env: sandbox.env,
-        }),
-        // rebase 的中间状态落在 GIT_DIR(这里是代理 gitdir)里,
-        // 所以整轮必须复用同一个 view——换一个就 abort 不回来了。
-        worktree: (args) => runGitProcess([...worktreeArgs, ...args], {
-          cwd,
-          env: worktreeEnv,
-          timeoutMs: args[0] === "fetch" || args[0] === "rebase"
-            ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
-        }),
-      });
-      if (outcome.kind === "none") return "ok";
-      if (outcome.kind === "unavailable") {
-        this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-          + `(fail-open): ${outcome.reason}`);
-        return "ok";
-      }
-      if (outcome.kind === "blocked") {
-        if (outcome.conflicts?.length) {
-          const message = `远端任务分支存在代码冲突，已还原接续现场。请先调用 task_control(action="sync_branch") 准备真实合并冲突，自行解决并提交，完成同步及编译、UT 后重新请求 push；不要重复直接推送。涉及文件：${outcome.conflicts.join("、")}`;
-          task.summary.detail = message;
-          this.persist(task);
-          if (dispatchRepair) this.enqueueRepair(task, message, "远端分支冲突，Agent 同步解决中");
-          return "blocked";
-        }
-        this.markVerificationStalled(task, outcome.reason, "safety");
-        return "blocked";
-      }
-      const previous = task.summary.delivery?.foreign_commits;
-      task.summary.delivery = {
-        ...task.summary.delivery,
-        foreign_commits: {
-          base_sha: outcome.base_sha,
-          absorbed_at: new Date().toISOString(),
-          count: (previous?.count ?? 0) + outcome.count,
-          subjects: [...outcome.subjects, ...(previous?.subjects ?? [])]
-            .slice(0, 12),
-        },
-      };
-      task.summary.detail = `分支上有 ${outcome.count} 条外来提交`
-        + "(有人直接推了代码),已把本任务的提交接到它们之后重新验证";
-      this.persist(task);
-      this.options.log?.(`任务 ${task.summary.id} 接续分支上的 `
-        + `${outcome.count} 条外来提交:${outcome.previous_head.slice(0, 12)}`
-        + ` → ${outcome.head.slice(0, 12)}(基座 ${
-          outcome.base_sha.slice(0, 12)})`);
-      return "absorbed";
-    } finally {
-      gitView.cleanup();
-      this.cleanupHostGitCredential(sandbox);
-    }
+  private branchSync(task: TaskState, epoch = task.controlEpoch): TaskBranchSync {
+    return new TaskBranchSync({
+      summary: task.summary, cwd: task.cwd, enabled: !!this.options.host,
+      defaultRepository: () => this.effectiveDefaultRepo(), validateRepository: validateRepositoryAddress,
+      credential: () => this.options.gitCredential?.(task.summary.luban_account),
+      prepareGit: credential => this.prepareHostGitSandbox(credential),
+      cleanupGit: sandbox => this.cleanupHostGitCredential(sandbox),
+      current: () => this.current(task, epoch), persist: () => this.persist(task),
+      lastReply: () => task.lastReply, feedbackBaseSha: () => this.feedbackBaseSha(task),
+      enqueueRepair: (message, detail) => this.enqueueRepair(task, message, detail),
+      stall: (message, kind) => this.markVerificationStalled(task, message, kind),
+      openFeedback: items => { this.openFeedbackBatch(task, "conflict", items); },
+      notifyStopped: () => this.notifyRepairStopped(task),
+      deliver: () => this.tryDeliver(task, epoch), log: this.options.log,
+    });
+  }
+
+  private absorbForeignRemoteCommits(task: TaskState, branch: string, dispatchRepair = true) {
+    return this.branchSync(task).absorb(branch, dispatchRepair);
   }
 
   private async observeActiveConflict(task: TaskState, view: GateView): Promise<void> {
@@ -19370,233 +19175,13 @@ export class TaskService {
     this.persist(task);
   }
 
-  /** 使用既有的可信 fetch/merge；冲突现场交给原会话继续解决。 */
-  private async syncTargetBeforePush(task: TaskState, target: string, epoch: number): Promise<void> {
-    if (!task.cwd || !target) throw new TaskControlError("缺少代码工作区或目标分支，无法在推送前同步基准分支");
-    const unresolved = () => {
-      const result = runSafeWorktreeGit(task.cwd!, ["diff", "--name-only", "--diff-filter=U"]);
-      if (result.status !== 0) throw new TaskControlError("无法检查本地合并冲突，未推送");
-      return String(result.stdout ?? "").trim();
-    };
-    const repair = "请解决冲突并 git add、git commit，调用 task_control(action=\"sync_branch\") 完成同步，执行受影响的验证后再 push；保留双方必要改动。";
-    if (unresolved()) throw new TaskControlError(`本地仍有未解决的合并冲突。${repair}`);
-    let message: string | undefined;
-    await this.dispatchConflictRepair(task, this.feedbackBaseSha(task), undefined, epoch, {
-      target, ready: value => { message = value; },
-    });
-    if (!this.current(task, epoch)) throw new TaskControlError("任务执行权已变化");
-    if (!message) throw new TaskControlError(task.summary.detail ?? "目标分支同步失败，未推送");
-    if (unresolved()) throw new TaskControlError(`${message}\n${repair}`);
+  private syncTargetBeforePush(task: TaskState, target: string, epoch: number) {
+    return this.branchSync(task, epoch).syncBeforePush(target);
   }
 
-  private async dispatchConflictRepair(
-    task: TaskState,
-    sha: string,
-    max: number | undefined,
-    epoch: number,
-    sync?: { target: string; allowMissing?: boolean; ready(message: string): void },
-  ): Promise<boolean> {
-    if (!this.current(task, epoch)) return true;
-    const delivery = task.summary.delivery ?? (task.summary.delivery = {});
-    const target = sync?.target ?? delivery.target_branch;
-    if (!task.cwd || !target) return true;
-    const loop: NonNullable<NonNullable<TaskSummary["delivery"]>["loop"]> = sync
-      ? { round: 0, max, state: "repairing" } : delivery.loop
-      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (!sync && loop.kind === "conflict" && loop.last_sha === sha) {
-      loop.state = "halted";
-      const diagnosis = (task.lastReply ?? "").trim();
-      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
-      task.summary.detail =
-        "冲突修复会话没有产生新提交,冲突仍在,请人工处理";
-      this.persist(task);
-      this.notifyRepairStopped(task);
-      return true;
-    }
-    const cwd = task.cwd;
-    let remoteUrl: string;
-    try {
-      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
-      if (!configured) throw new Error("任务没有权威代码仓地址");
-      validateRepositoryAddress(configured);
-      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
-          && !/^(?:https?|file):\/\//i.test(configured)) {
-        throw new Error("只允许 HTTPS 或本地仓传输");
-      }
-      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
-        ? configured : resolve(configured);
-    } catch (error) {
-      task.summary.detail = `冲突修复准备失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    const credential = this.options.gitCredential?.(
-      task.summary.luban_account);
-    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
-    try {
-      sandbox = this.prepareHostGitSandbox(credential);
-    } catch (error) {
-      task.summary.detail = `冲突修复 Git 沙箱创建失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    let gitView: ReturnType<typeof createSafeGitView>;
-    try {
-      gitView = createSafeGitView(cwd);
-    } catch (error) {
-      this.cleanupHostGitCredential(sandbox);
-      task.summary.detail = `冲突修复安全 Git 视图创建失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    const identityName = credential?.username
-      ?? task.summary.luban_account ?? "mae-flow-cloud";
-    const identityEmail = credential?.email
-      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
-    const worktreeArgs = [
-      ...sandbox.args,
-      "-c", `safe.directory=${resolve(cwd)}`,
-      "-c", "core.fsmonitor=false",
-      "-c", "commit.gpgSign=false",
-      "-c", `user.name=${identityName}`,
-      "-c", `user.email=${identityEmail}`,
-    ];
-    // fetch/merge 看真实 refs/index/objects，但 config 来自空代理 gitdir。
-    // 因而 Agent 写入的 fsmonitor、filter、merge driver、url.insteadOf 与
-    // credential helper 都不可能在带宿主权限/短期令牌的进程里执行。
-    const worktreeEnv = gitView.environment(sandbox.env);
-    // 异步 + 预算(2026-08-25 卡死事故同病类):fetch 走网络、merge
-    // 碰大仓索引,同步执行会把事件循环冻住整段时间。
-    const git = (...args: string[]) => runGitProcess(
-      [...worktreeArgs, ...args], {
-        cwd, env: worktreeEnv,
-        timeoutMs: args[0] === "fetch" || args[0] === "merge"
-          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
-      });
-    try {
-      const targetCheck = await git("check-ref-format", "--branch", target);
-      if (targetCheck.status !== 0) {
-        task.summary.detail = `冲突修复准备失败:目标分支名不合法 ${target}`;
-        this.persist(task);
-        return true;
-      }
-      if (sync?.allowMissing) {
-        const remote = await git("ls-remote", "--exit-code", "--heads", remoteUrl, `refs/heads/${target}`);
-        if (remote.status === 2) { sync.ready("任务分支尚未推送，继续同步目标分支"); return true; }
-        if (remote.status !== 0) throw new TaskControlError("无法查询远端任务分支，请检查网络和凭据后重试");
-      }
-      const fetched = await git(
-        "fetch", "--no-tags", "--no-recurse-submodules", remoteUrl,
-        `+refs/heads/${target}:refs/remotes/origin/${target}`);
-      if (fetched.status !== 0) {
-        task.summary.detail = `冲突修复准备失败(fetch ${target}):`
-          + `${String(fetched.stderr || "").slice(0, 300)}`;
-        this.persist(task);
-        return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
-      }
-      if (!this.current(task, epoch)) return true;
-      const beforeMerge = String(
-        (await git("rev-parse", "HEAD")).stdout || "").trim();
-      const merged = await git("merge", "--no-edit", `origin/${target}`);
-      if (merged.status === 0) {
-        const afterMerge = String(
-          (await git("rev-parse", "HEAD")).stdout || "").trim();
-        if (sync) { sync.ready(`已同步 origin/${target}；未自动推送。`); return true; }
-        if (beforeMerge && afterMerge === beforeMerge) {
-          // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
-          // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
-          // watchMerge 按原轮询节奏继续看门禁/MR。
-          task.summary.detail = "本地已无冲突，等待平台刷新冲突门禁";
-          this.persist(task);
-          return false;
-        }
-        // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
-        // host-only 推送与远端 SHA 复核，避免另开无收据旁路。
-        loop.kind = "conflict";
-        loop.last_sha = sha;
-        task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
-        this.persist(task);
-        setImmediate(() => void this.tryDeliver(task, epoch));
-        return true;
-      }
-      const conflicted = String((await git(
-        "diff", "--no-ext-diff", "--no-textconv",
-        "--name-only", "--diff-filter=U")).stdout || "")
-        .trim().split("\n").filter(Boolean);
-      if (!conflicted.length) {
-        // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
-        // 别把 agent 派进一个说不清的现场。
-        await git("merge", "--abort");
-        task.summary.detail = "merge 失败但无冲突文件,请人工:"
-          + `${String(merged.stderr || "").slice(0, 300)}`;
-        this.persist(task);
-        return true;
-      }
-      // merge 的 config 必须隔离，但冲突会话随后使用真实 `.git`。将 Git
-      // 在可信代理 gitdir 中生成的最小 merge 状态复制回真实 gitdir；
-      // index/objects/refs 本来就绑定真实仓。若目标被 Agent 换成软链，
-      // 先在代理视图里 abort，再 fail-closed，绝不跟随它写宿主文件。
-      try {
-        for (const name of [
-          "MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "ORIG_HEAD",
-        ]) {
-          const source = join(gitView.proxyGitDir, name);
-          if (!existsSync(source)) continue;
-          const sourceInfo = lstatSync(source);
-          if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) {
-            throw new Error(`代理 Git 状态 ${name} 不是普通文件`);
-          }
-          const targetPath = join(gitView.repositoryGitDir, name);
-          if (existsSync(targetPath)) {
-            const targetInfo = lstatSync(targetPath);
-            if (!targetInfo.isFile() || targetInfo.isSymbolicLink()) {
-              throw new Error(`任务 Git 状态 ${name} 不是普通文件`);
-            }
-          }
-          writeFileSync(targetPath, readFileSync(source), { mode: 0o600 });
-        }
-      } catch (error) {
-        await git("merge", "--abort");
-        task.summary.detail = `冲突现场安全落盘失败: ${String(error)}`;
-        this.persist(task);
-        return true;
-      }
-      const repairMessage = [
-        `宿主已准备与 origin/${target} 的真实合并冲突：`, ...conflicted,
-        "读取冲突双方实现、提交历史和调用方，保留双方必要改动；普通代码冲突自行解决，不要无脑选 ours/theirs。业务意图矛盾且证据不足时才向责任人说明取舍。",
-        "逐个修改冲突文件，git add 后 git commit 完成合并；不要 rebase、force push 或丢弃无关修改。",
-        "解决后再次调用 task_control sync_branch 完成剩余同步，再执行受影响的编译、UT 和集成验证；失败继续修复，不复用旧 SHA 的成功。最后用 task_control push 更新原 MR，不另建 MR。",
-      ].join("\n");
-      if (sync) { sync.ready(repairMessage); return true; }
-      try {
-        this.openFeedbackBatch(task, "conflict", conflicted.map((file) => ({
-          id: `conflict:${sha}:${target}:${file}`,
-          source: "conflict",
-          source_id: `${sha}:${target}:${file}`,
-          source_revision: 0,
-          kind: "merge_conflict",
-          summary: `与 ${target} 合并时 ${file} 发生冲突`,
-          verification: "gate",
-          file,
-        })));
-      } catch (error) {
-        await git("merge", "--abort");
-        this.markVerificationStalled(task,
-          `冲突事实已发现，但内核未能打开统一反馈批次：${String(error)}`,
-          stallClassForError(error, "contract"));
-        return true;
-      }
-      loop.kind = "conflict";
-      loop.round = 0; // 冲突触发同样清零 CI 重试
-      loop.last_sha = sha;
-      loop.state = "repairing";
-      this.enqueueRepair(task, repairMessage,
-        `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
-      return true;
-    } finally {
-      gitView.cleanup();
-      this.cleanupHostGitCredential(sandbox);
-    }
+  private dispatchConflictRepair(task: TaskState, sha: string, max: number | undefined,
+    epoch: number, sync?: BranchSyncRequest) {
+    return this.branchSync(task, epoch).repair(sha, max, sync);
   }
 
   private deliveryOutbox(task: TaskState): DeliveryOutbox {
@@ -20483,137 +20068,12 @@ export class TaskService {
     return this.clarificationRespondents(task, waiting).includes(username);
   }
 
-  /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
-   * clone 或 push 的受控调用窗口，绝不进入 agentDir，也不写进仓库
-   * config；调用方必须 finally cleanupHostGitCredential。 */
-  private prepareHostGitCredential(
-    credential: { username: string; password: string },
-  ): { dir: string; helper: string } {
-    // 可执行 helper 不能放系统 /tmp：生产宿主通常将 /tmp 挂成 noexec。
-    // 使用 Cloud 数据目录下 0700 的控制面运行目录，仍与任务工作区隔离。
-    const dir = this.createHostGitRuntimeDirectory();
-    chmodSync(dir, 0o700);
-    const file = join(dir, "credential");
-    writeFileSync(file,
-      `username=${credential.username}\npassword=${credential.password}\n`);
-    chmodSync(file, 0o600);
-    const script = join(dir, "helper.sh");
-    writeFileSync(script, [
-      "#!/bin/sh",
-      'if [ "$1" = "get" ]; then',
-      '  cat "$(dirname "$0")/credential"',
-      "fi",
-      "exit 0",
-      "",
-    ].join("\n"));
-    chmodSync(script, 0o700);
-    return { dir, helper: script };
+  private prepareHostGitSandbox(credential: { username: string; password: string } | undefined) {
+    return new HostGitSandbox(this.options.dataDir, this.options.log).prepare(credential);
   }
 
-  private cleanupHostGitCredential(
-    prepared: { dir: string } | undefined,
-  ): void {
-    if (!prepared) return;
-    try {
-      rmSync(prepared.dir, { recursive: true, force: true });
-    } catch (error) {
-      this.options.log?.(
-        `临时 Git 凭据目录清理失败 ${prepared.dir}: ${String(error)}`);
-    }
-  }
-
-  /** Host push/ls-remote 不得继承 Agent 可写的仓库配置或部署机用户配置。
-   *
-   * 工作区里的 .git/config、hooks、origin 都属于不可信输入：Agent 为了
-   * 正常开发必须能写它们，但宿主传输不能因此执行 hook、credential
-   * helper、ext remote helper，或被 url.*.insteadOf 改道。这里给一次
-   * 交付动作建全新的 HOME/全局配置/askpass 边界；真正的 push 还会从
-   * 一个临时 bare 仓发起，从物理上不读取工作区 .git/config。 */
-  private prepareHostGitSandbox(
-    credential: { username: string; password: string } | undefined,
-  ): {
-    dir: string;
-    helper?: string;
-    args: string[];
-    env: NodeJS.ProcessEnv;
-  } {
-    const prepared = credential
-      ? this.prepareHostGitCredential(credential) : undefined;
-    const dir = prepared?.dir ?? this.createHostGitRuntimeDirectory();
-    chmodSync(dir, 0o700);
-    const home = join(dir, "home");
-    const xdg = join(dir, "xdg");
-    mkdirSync(home, { mode: 0o700 });
-    mkdirSync(xdg, { mode: 0o700 });
-    const globalConfig = join(dir, "global.gitconfig");
-    const systemConfig = join(dir, "system.gitconfig");
-    writeFileSync(globalConfig, "");
-    writeFileSync(systemConfig, "");
-    chmodSync(globalConfig, 0o600);
-    chmodSync(systemConfig, 0o600);
-    const askpass = join(dir, "reject-askpass.sh");
-    writeFileSync(askpass, "#!/bin/sh\nexit 1\n");
-    chmodSync(askpass, 0o700);
-
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    // Git 的环境配置注入优先级高于文件配置。部署进程若意外带了这些
-    // 变量，不能让它们越过下面的 -c 硬边界；工作区定位类变量同理。
-    for (const key of Object.keys(env)) {
-      if (/^GIT_CONFIG$/i.test(key)
-          || /^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/i.test(key)
-          || /^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_SSH|GIT_SSH_COMMAND|GIT_PROXY_COMMAND)$/i.test(key)) {
-        delete env[key];
-      }
-    }
-    Object.assign(env, {
-      HOME: home,
-      XDG_CONFIG_HOME: xdg,
-      GIT_CONFIG_GLOBAL: globalConfig,
-      GIT_CONFIG_SYSTEM: systemConfig,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_ASKPASS: askpass,
-      SSH_ASKPASS: askpass,
-      SSH_ASKPASS_REQUIRE: "never",
-      GCM_INTERACTIVE: "Never",
-    });
-    const args = [
-      "-c", "core.hooksPath=/dev/null",
-      "-c", "protocol.ext.allow=never",
-      // 空项先清除任何低优先级 helper；个人令牌只交给本次临时 helper。
-      "-c", "credential.helper=",
-      ...(prepared ? ["-c", `credential.helper=${prepared.helper}`] : []),
-    ];
-    return { dir, helper: prepared?.helper, args, env };
-  }
-
-  /** 一次 Host Git 动作一个私有目录。拒绝符号链接，防止控制面 helper
-   * 被 Agent 或同机用户引到任务工作区；操作结束仍由既有 cleanup 删除。 */
-  private createHostGitRuntimeDirectory(): string {
-    const configuredDataRoot = resolve(this.options.dataDir);
-    mkdirSync(configuredDataRoot, { recursive: true });
-    const dataRoot = realpathSync(configuredDataRoot);
-    const runtime = join(dataRoot, ".runtime");
-    const gitRoot = join(runtime, "host-git");
-    for (const directory of [runtime, gitRoot]) {
-      if (existsSync(directory)) {
-        const stat = lstatSync(directory);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) {
-          throw new Error(`Host Git 运行目录不是可信普通目录: ${directory}`);
-        }
-      } else {
-        mkdirSync(directory, { mode: 0o700 });
-      }
-      chmodSync(directory, 0o700);
-      const actual = realpathSync(directory);
-      if (actual !== directory
-          || !(actual === dataRoot || actual.startsWith(`${dataRoot}/`))) {
-        throw new Error(`Host Git 运行目录越出 Cloud 数据目录: ${directory}`);
-      }
-    }
-    const operation = mkdtempSync(join(gitRoot, "operation-"));
-    chmodSync(operation, 0o700);
-    return operation;
+  private cleanupHostGitCredential(prepared: { dir: string } | undefined): void {
+    new HostGitSandbox(this.options.dataDir, this.options.log).cleanup(prepared);
   }
 
   /** 把 Coding Agent / 中心能力服务注入目录登记为当前 clone 的本地
