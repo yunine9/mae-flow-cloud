@@ -469,3 +469,118 @@ test("检视回复环(服务):意见处就地回复唤醒 AI 再答复——线�
     await model.stop();
   }
 });
+
+test("意见清单快照(#366):提交检视落 reviews/review-notes.md,装全部可引用意见而非仅本批;清单自带恢复源指路", async () => {
+  const { service, model, id, root } = await bootToConfirmGate();
+  try {
+    service.addReview(id, {
+      line: 4, anchor: "连接池耗尽。", note: "第一批意见:补压测数据。",
+    });
+    model.script.push({ text: "第一批收到,等一并分诊。" });
+    service.submitReviews(id);
+    await waitIssue(service, id, "第一批分诊回合收口",
+      (issue) => issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm");
+
+    const firstRound = readFileSync(
+      join(root, "reviews", "review-notes.md"), "utf-8");
+    assert.match(firstRound, /第一批意见:补压测数据/);
+    assert.match(firstRound, /reviews\/review-notes\.md/,
+      "清单渲染自带恢复源指路(#366)");
+
+    // 第二批提交后快照覆写为全集:第一批意见不丢(不是「仅当前批」)。
+    service.addReview(id, {
+      line: 5, anchor: "超时回收。", note: "第二批意见:说清回滚。",
+    });
+    model.script.push({ text: "第二批收到,等一并分诊。" });
+    service.submitReviews(id);
+    await waitIssue(service, id, "第二批分诊回合收口",
+      (issue) => issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm");
+    const full = readFileSync(
+      join(root, "reviews", "review-notes.md"), "utf-8");
+    assert.match(full, /第一批意见:补压测数据/, "跨批次意见都在快照里");
+    assert.match(full, /第二批意见:说清回滚/);
+    assert.match(full, /共 2 条意见/, "快照装全部可引用意见(意见号全集)");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("unknown_ref 回执(#366):引用不存在的意见号,打回附全部可引用意见摘要(台账 id/位置/要求)与快照指路", async () => {
+  const { service, model, id } = await bootToConfirmGate();
+  try {
+    service.addReview(id, {
+      line: 4, anchor: "连接池耗尽。", note: "为什么断定是连接池?",
+    });
+    model.script.push({ tool: { name: "respond_review", input: {
+      items: [{ review: 9, reply: "先猜一条", outcome: "not_fixed" }],
+    } } });
+    model.script.push({ text: "打回收到,不再凭空编号。" });
+    service.submitReviews(id);
+    const receipt = await until(() => {
+      const hit = model.requests.map((request) => JSON.stringify(request))
+        .find((text) => text.includes("不在可引用意见里"));
+      return hit ?? undefined;
+    }, "unknown_ref 回执回到模型");
+    assert.match(receipt, /意见1 \[an-/, "摘要带台账 id,可改用 id 精确引用");
+    assert.match(receipt, /为什么断定是连接池/, "摘要带要求原文线索");
+    assert.match(receipt, /reviews\/review-notes\.md/, "回执指路快照全文");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("unknown_seq 打回同款带正文(#366);申报成功后快照以 rework 契约覆写,轮次与注入清单一致", async () => {
+  const { service, model, id, root } = await bootToConfirmGate();
+  try {
+    service.addReview(id, {
+      line: 4, anchor: "连接池耗尽。", note: "补监控证据并修订方案",
+    });
+    model.script.push({ tool: { name: "declare_review_rework", input: {
+      reviews: [{ seq: 9 }],
+      reason: "幻觉意见号,先吃一次打回",
+    } } });
+    model.script.push({ tool: { name: "declare_review_rework", input: {
+      reviews: [{ seq: 1 }],
+      reason: "根因依据缺口必须补测,方案要连带修订",
+    } } });
+    model.script.push({ tool: { name: "bash", input: { command:
+      "cat > issue-analysis.md <<'EOF'\n"
+      + REPORT_V1.replace("连接池耗尽。", "连接池耗尽(已补监控证据)。")
+      + "EOF" } } });
+    model.script.push({ tool: { name: "respond_review", input: {
+      items: [{ review: 1, reply: "已补监控证据,方案同步修订。",
+        outcome: "fixed", evidence: ["监控日志出处随文标注"] }],
+    } } });
+    model.script.push({ tool: { name: "submit_analysis",
+      input: { summary: "根因=连接池耗尽(已补证据)" } } });
+    model.script.push({ text: "修订版已重新提交,等待确认。" });
+    service.submitReviews(id);
+
+    const receipt = await until(() => {
+      const hit = model.requests.map((request) => JSON.stringify(request))
+        .find((text) => text.includes("不在本批待分诊意见里"));
+      return hit ?? undefined;
+    }, "unknown_seq 回执回到模型");
+    assert.match(receipt, /意见1 \[an-/, "unknown_seq 同款附摘要");
+    assert.match(receipt, /reviews\/review-notes\.md/);
+
+    await waitIssue(service, id, "重写后重举确认卡",
+      (issue) => issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm");
+
+    // 幻觉申报不落版本快照;成功的申报才快照(+1)。
+    assert.equal(snapshotCount(root), 1, "版本快照只随成功申报冻结");
+    const notes = readFileSync(
+      join(root, "reviews", "review-notes.md"), "utf-8");
+    assert.match(notes, /不许漏号/, "快照已按 rework 契约覆写");
+    assert.match(notes, /第 2 轮/, "快照轮次与注入清单口径一致(回退后)");
+    assert.match(notes, /补监控证据并修订方案/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});

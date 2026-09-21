@@ -243,6 +243,7 @@ import {
   reviewStore,
   snapshotAnalysisVersion,
   submitReviews as submitReviewLedger,
+  writeReviewNotesSnapshot,
 } from "./reviews.ts";
 import {
   issueConversation,
@@ -2289,7 +2290,11 @@ export class IssueFlowService {
       const driver = await this.openDriver(live);
       return driver.startResume(issueResumePrompt(live.state, full,
         this.environmentCredentials(live),
-        { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+        {
+          tier: this.tierOf(live),
+          workspace: live.root,
+          blockedPaths: readResourceBlocks(this.options.dataDir),
+        }));
     });
   }
 
@@ -3868,7 +3873,11 @@ export class IssueFlowService {
           + (replay ? `\n\n${replay}` : "");
         return driver.startResume(issueResumePrompt(live.state, decisionText,
           this.environmentCredentials(live),
-          { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+          {
+          tier: this.tierOf(live),
+          workspace: live.root,
+          blockedPaths: readResourceBlocks(this.options.dataDir),
+        }));
       });
     });
     return summarize(live.state);
@@ -4647,6 +4656,9 @@ export class IssueFlowService {
         throw new IssueControlError("问题卡状态已变化,请刷新后重试");
       }
     }
+    // 意见清单快照(#366):全部可引用意见落盘 reviews/review-notes.md,
+    // 注入回合的正文被上下文压缩/服务重启丢掉后,AI 读文件拿回。
+    writeReviewNotesSnapshot(live.root, state.title, state.round ?? 1, "triage");
     const notes = renderReviewNotes(sent, state.title, state.round ?? 1, "triage");
     const message = [
       promptCopy("notices", "review.triage", { count: sent.length }),

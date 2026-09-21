@@ -33,6 +33,7 @@ import type { IssueSessionState } from "./state.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import { issueRepoWorkspaces } from "./state.ts";
 import { extractIssueAttachmentPaths } from "./issueAttachments.ts";
+import { REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT } from "./reviews.ts";
 import {
   FIXED_STAGE_LABELS,
   fixedStages,
@@ -532,6 +533,12 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
+    // 检视意见恢复源(#366):文件在场才指路——正文随上下文压缩即丢,
+    // 续聊重建的上下文靠这一行知道去哪拿回全部可引用意见。
+    ...(options.workspace
+      && existsSync(join(options.workspace, REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT))
+      ? [`- 检视意见:全部可引用意见的原文清单在 reviews/${REVIEW_NOTES_SNAPSHOT},引用意见前先读它,不要凭记忆或凭空编号`]
+      : []),
     ...skillSelectionLines(state, options.blockedPaths),
     ...businessKnowledgeLines(state),
     promptCopy("opening",

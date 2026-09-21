@@ -78,6 +78,7 @@ import {
   renderReviewNotes,
   reviewStore,
   snapshotAnalysisVersion,
+  writeReviewNotesSnapshot,
 } from "./reviews.ts";
 import {
   currentBranch,
@@ -1176,8 +1177,20 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     // 含修改型的批次由 declare_review_rework 申报,平台执行原整体回退
     // 链路(此刻才冻结版本快照)。两工具全程可调(见 stageRegistry)。
 
+    /** 回执里的可引用意见摘要(#366):逐条带台账 id、位置与要求线索
+     * ——上下文压缩丢了意见正文后,AI 第一次用错编号就能从回执拿到
+     * 全部意见内容,一次修正到位;quote/上下文不进回执,完整原文
+     * 指路 reviews/review-notes.md 快照。 */
+    const reviewSummaries = (items: ReturnType<ReturnType<typeof reviewStore>["list"]>) =>
+      items.map((item) => {
+        const note = String(item.note ?? "").replace(/\s+/g, " ").trim();
+        const brief = note.length > 60 ? `${note.slice(0, 60)}…` : note;
+        return `意见${item.seq} [${item.id}] ${item.file}:${item.line} — ${brief}`;
+      }).join("\n") || "无";
+
     /** 按意见号或台账 id 定位一条已送出的检视意见;定位不到如实打回,
-     * 不给 AI 拿幻觉意见号落账的口子。 */
+     * 不给 AI 拿幻觉意见号落账的口子。打回时附全部可引用意见的摘要
+     * 与快照指路(#366),不让 AI 拿着编号猜内容。 */
     const locateSentReview = (reference: number | string) => {
       const store = reviewStore(ctx.workspace);
       const items = store.list().filter((item) =>
@@ -1186,9 +1199,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         ? items.find((item) => item.seq === Math.trunc(Number(reference)))
         : items.find((item) => item.id === String(reference).trim());
       if (!match) {
-        const known = items.map((item) => `意见${item.seq}`).join("、") || "无";
         fail(promptCopy("receipts", "review.unknown_ref",
-          { reference, known }));
+          { reference, known: reviewSummaries(items) }));
       }
       return match;
     };
@@ -1293,7 +1305,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         // 申报对象必须是本批待分诊的意见:更早批次的意见已锚在自己的
         // 冻结版上,拿历史意见号申报是幻觉引用,如实打回。
         const batchSeqs = new Set(batch.map((item) => item.seq));
-        const known = batch.map((item) => `意见${item.seq}`).join("、") || "无";
+        const known = reviewSummaries(batch);
         for (const seq of unique) {
           if (!batchSeqs.has(seq)) {
             fail(promptCopy("receipts", "review.unknown_seq", { seq, known }));
@@ -1309,6 +1321,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + `其中 ${unique.length} 条修改型需回退重写:${reason}`);
         ctx.state.review_active = true;
         ctx.persist();
+        // 意见清单快照以 rework 契约覆写(#366):重写回合的清单注入
+        // 同样会被上下文压缩丢正文,恢复源跟着换版;放在回退落账后,
+        // 轮次与注入清单同口径。
+        writeReviewNotesSnapshot(ctx.workspace, ctx.state.title ?? "分析报告",
+          ctx.state.round ?? 1, "rework");
         // 意见清单重注入(修改版契约:逐条 respond 交代+submit_analysis
         // 收尾)——AI 据此整份重写,重写完重新举确认卡。
         return ok(`已申报修改:平台已整体回退问题分析(第 ${ctx.state.round} 轮),`
