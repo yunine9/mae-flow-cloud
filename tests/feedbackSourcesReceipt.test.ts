@@ -47,6 +47,7 @@ test("完整 MR 修复经真实推送和内核登记后由宿主发送，不再�
   try {
     const remote = join(s.workspace, "remote.git");
     git("init", "--bare", "-q", remote); git("checkout", "-qb", "feature");
+    git("push", "-q", remote, "master");
     s.internal.summary.repo_url = remote;
     s.internal.summary.status = "running";
     s.internal.summary.delivery = { mr_url: "https://code/mr/1", mr_id: 1,

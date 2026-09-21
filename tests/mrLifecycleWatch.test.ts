@@ -13,12 +13,12 @@ async function until(check: () => boolean) {
   assert.ok(check(), "监听应及时发现远端合入，不等 Agent 收轮");
 }
 async function fixture(t: TestContext) {
-  const remote = { state: "opened", requests: [] as string[] };
+  const remote = { state: "opened", conflict: false, sha: "human-merged-sha", requests: [] as string[] };
   const server = createServer((req, res) => {
     remote.requests.push(`${req.method} ${req.url}`);
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify({ mr_state: remote.state, sha: "human-merged-sha",
-      gates: [{ name: "ci_state_passed", passed: false }] }));
+    res.end(JSON.stringify({ mr_state: remote.state, sha: remote.sha,
+      gates: [{ name: "ci_state_passed", passed: false }, { name: "conflict_passed", passed: !remote.conflict }] }));
   });
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
   const options = {
@@ -41,6 +41,57 @@ async function fixture(t: TestContext) {
     await new Promise<void>(r => server.close(() => r()));
   });
   return { service, task, remote, create, id };
+}
+
+test("running 检视修复遇到冲突且没有流水线：通知当前 Agent 一次，保留检视任务", async t => {
+  const { service, task, remote } = await fixture(t);
+  remote.conflict = true; remote.sha = task.summary.delivery.sha;
+  task.summary.status = "running";
+  task.summary.delivery.pipeline = "not_found";
+  task.summary.delivery.loop.kind = "review";
+  task.mission = "修复四条检视意见并逐条回复";
+  const messages: string[] = [];
+  task.driver = { steer: async (message: string) => { messages.push(message); }, abort: async () => {}, dispose() {} };
+  (service as any).ensureMergeWatch(task);
+  await until(() => messages.length === 1);
+  await until(() => remote.requests.length >= 4);
+  assert.equal(messages.length, 1);
+  assert.match(messages[0], /sync_branch.*最新目标分支/);
+  assert.equal(task.mission, "修复四条检视意见并逐条回复");
+  assert.equal(task.summary.delivery.loop.kind, "review");
+  assert.equal(task.summary.status, "running");
+  remote.conflict = false;
+  await until(() => task.conflictNotice === undefined);
+  remote.conflict = true;
+  await until(() => messages.length === 2);
+});
+
+test("verifying 没有流水线也自动安排冲突修复，并停止旧验证回调", async t => {
+  const { service, task, remote } = await fixture(t);
+  remote.conflict = true; remote.sha = task.summary.delivery.sha;
+  task.summary.delivery.pipeline = "not_found";
+  const epoch = task.controlEpoch;
+  (service as any).removeFromQueue(task.summary.id);
+  (service as any).ensureMergeWatch(task);
+  await until(() => task.summary.status === "queued");
+  assert.match(task.mission, /MR 已报告.*sync_branch/);
+  assert.equal(task.controlEpoch, epoch + 1);
+  await until(() => remote.requests.length >= 4);
+  assert.equal((service as any).queue.filter((id: string) => id === task.summary.id).length, 1);
+});
+
+for (const busy of ["deliveryActive", "prepushActive", "assistantActive", "transportActive"]) {
+  test(`冲突监听不与 ${busy} 并发修改工作区，释放后自动接续`, async t => {
+    const { service, task, remote } = await fixture(t);
+    remote.conflict = true; remote.sha = task.summary.delivery.sha;
+    task[busy] = true;
+    (service as any).ensureMergeWatch(task);
+    await until(() => remote.requests.length >= 3);
+    assert.equal(task.summary.status, "verifying");
+    task[busy] = undefined;
+    await until(() => task.summary.status === "queued");
+    assert.match(task.mission, /sync_branch/);
+  });
 }
 
 test("旧 MR 未绿也启动监听：后续修复和 epoch 换轮期间人工合入立即抢占", async t => {

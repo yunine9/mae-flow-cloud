@@ -3,8 +3,7 @@
  *
  * 这里是门禁怎么分类、监控环每一拍看到平台事实后往哪走、合入/关闭/等人
  * 时台账和通知写什么。没有轮询、没有派单、没有内核调用——那些留在
- * TaskService.watchMerge/settleMergeState 的薄壳里。行为零变更:每个函数
- * 对应原方法里的一段;决策表见 tests/mergeWatch.test.ts。
+ * TaskService.watchMerge/settleMergeState 中。决策表见 tests/mergeWatch.test.ts。
  */
 
 /** 门禁项(适配层契约形状,宿主只读这些字段)。 */
@@ -118,6 +117,7 @@ export type WatchStep =
   | { kind: "settle_merged"; sourceSha?: string }
   | { kind: "settle_closed" }
   | { kind: "stall_drift"; reason: string }
+  | { kind: "repair_conflict" }
   | { kind: "inspect_gates" };
 
 export function nextWatchStep(input: {
@@ -129,8 +129,14 @@ export function nextWatchStep(input: {
   if (view.mrState === "merged") {
     return { kind: "settle_merged", sourceSha: view.sourceSha };
   }
-  // 反馈修复、Build-Fix、push 复检期间只消费真正终态 merged;门禁派单
-  // 由当前 writer 收口后的 await_merge 阶段负责,监听器不抢方向盘。
+  // 冲突可能阻止平台创建流水线，不能等待流水线结果或 await_merge。
+  // 活跃会话由调用方补充指令，不能在监听器里并发修改工作区。
+  if (["running", "queued", "verifying"].includes(input.status)
+      && view.mrState === "opened"
+      && !sourceShaDrift(input.verifiedSha, view.sourceSha).drifted
+      && view.gates.some(gate => gate.name === "conflict_passed" && !gate.passed)) {
+    return { kind: "repair_conflict" };
+  }
   if (input.status !== "await_merge") return { kind: "wait" };
   if (view.mrState === "closed") return { kind: "settle_closed" };
   const drift = sourceShaDrift(input.verifiedSha, view.sourceSha);

@@ -1695,6 +1695,9 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  /** 同一次平台冲突只补充一次指令；门禁恢复后允许通知下一次冲突。 */
+  conflictNotice?: string;
+  deliveryActive?: boolean;
   /** 交付检查和后台监听可能同时看到合入，只允许一次停止 writer / close。 */
   mergeSettlement?: Promise<void>;
   transportActive?: Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
@@ -14083,6 +14086,7 @@ export class TaskService {
       preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
         operation, branch => this.absorbForeignRemoteCommits(task, branch, false), async () => {
+          await this.syncTargetBeforePush(task, operation.target_branch!, actionEpoch);
           if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") {
             throw new TaskControlError(task.summary.detail ?? "无法整理已确认的交付范围");
           }
@@ -17210,6 +17214,16 @@ export class TaskService {
     task: TaskState,
     epoch: number,
   ): Promise<"review_reply_blocked" | undefined> {
+    if (task.deliveryActive) return;
+    task.deliveryActive = true;
+    try { return await this.performDelivery(task, epoch); }
+    finally { task.deliveryActive = false; }
+  }
+
+  private async performDelivery(
+    task: TaskState,
+    epoch: number,
+  ): Promise<"review_reply_blocked" | undefined> {
     // 多仓父任务只负责需求理解和人工检视，不产生分支/MR。
     if (this.isRequirementAnalysis(task)) return;
     if (task.prepushActive && !await task.prepushActive) return;
@@ -17288,6 +17302,17 @@ export class TaskService {
         return;
       }
       if (!this.current(task, epoch)) return;
+      try {
+        await this.syncTargetBeforePush(task, task.summary.delivery?.target_branch ?? baseline, epoch);
+      } catch (error) {
+        if (!this.current(task, epoch)) return;
+        const conflicts = runSafeWorktreeGit(task.cwd, ["diff", "--name-only", "--diff-filter=U"]);
+        // 网络或凭据故障沿用交付恢复；只有真实代码冲突才唤醒 Agent。
+        if (conflicts.status !== 0 || !String(conflicts.stdout ?? "").trim()) throw error;
+        this.enqueueRepair(task, [task.mission, String(error)].filter(Boolean).join("\n\n"),
+          "推送前分支同步未完成，继续处理后再推送");
+        return;
+      }
       // 定格基线祖先门禁必须走在一切交付动作(范围整理/推送)
       // 之前:历史脱离基线时后面每一步都在错的合同上白烧。
       const baselineGate =
@@ -18493,7 +18518,7 @@ export class TaskService {
     this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
   }
 
-  /** MR 生命周期监听：修复中也看合入事实，只有 await_merge 才按门禁派单。 */
+  /** MR 生命周期监听：冲突不依赖流水线结果，修复中也持续观察合入事实。 */
   private async watchMerge(task: TaskState, _epoch: number, deferFirst = false): Promise<void> {
     if (task.mergeWatchActive) return; // 防重入:一任务一环
     task.mergeWatchActive = true;
@@ -18527,9 +18552,7 @@ export class TaskService {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        // 往哪走由决策表定(mergeWatch.nextWatchStep):merged 任何状态下都
-        // 收口;writer 在途只看 merged,门禁派单归它收口后的 await_merge;
-        // MFC-038 源提交漂移(平台侧改写分支)立即停摆喊人。
+        // 合入事实优先；运行中的冲突补充给当前会话，其他门禁在等待合入时处理。
         let step = nextWatchStep({
           view, status: task.summary.status,
           verifiedSha: task.summary.delivery?.sha,
@@ -18537,6 +18560,12 @@ export class TaskService {
         if (step.kind === "settle_merged") {
           await this.settleMergeState(task, "merged", step.sourceSha);
           return;
+        }
+        if (!view.gates.some(gate => gate.name === "conflict_passed" && !gate.passed)) {
+          task.conflictNotice = undefined;
+        }
+        if (step.kind === "repair_conflict") {
+          await this.observeActiveConflict(task, view);
         }
         const discussions = view.mrState === "opened"
           ? await this.fetchDiscussions(task) : undefined;
@@ -18562,7 +18591,7 @@ export class TaskService {
             || ["completed", "canceled"].includes(task.summary.status)) return;
         // 查询期间用户可能接管/取消，不能沿用 await 前的派单许可。
         step = nextWatchStep({ view, status: task.summary.status, verifiedSha: task.summary.delivery?.sha });
-        if (step.kind === "wait") {
+        if (step.kind === "wait" || step.kind === "repair_conflict") {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
@@ -19318,6 +19347,46 @@ export class TaskService {
       gitView.cleanup();
       this.cleanupHostGitCredential(sandbox);
     }
+  }
+
+  private async observeActiveConflict(task: TaskState, view: GateView): Promise<void> {
+    if (this.repairBudget(task) === 0 || task.pauseRequested || task.assistantActive
+        || task.prepushActive || task.deliveryActive || task.transportActive
+        || new TaskHostLedger(task.summary).pending()) return;
+    const notice = `${view.sourceSha ?? task.summary.delivery?.sha ?? ""}:${task.summary.delivery?.target_branch ?? task.summary.baseline ?? ""}`;
+    if (task.conflictNotice === notice) return;
+    const message = "MR 已报告与目标分支存在代码冲突，平台可能因此不创建流水线。继续完成当前检视或开发目标，并在下一次 push 前调用 task_control(action=\"sync_branch\") 拉取远端任务分支与最新目标分支；按返回的真实冲突读取双方上下文、解决并提交，执行受影响的验证后更新原 MR。不要等待流水线红灯，也不要丢失当前检视意见及逐条回复。";
+    if (task.driver) {
+      await task.driver.steer(message);
+    } else if (task.summary.status === "queued" || task.summary.status === "running") {
+      task.pendingMainSteers = [...(task.pendingMainSteers ?? []), message];
+    } else if (task.summary.status === "verifying") {
+      // 使旧流水线回调失效，再复用当前任务的修复入口。
+      task.controlEpoch += 1;
+      this.enqueueRepair(task, [task.mission, message].filter(Boolean).join("\n\n"),
+        "MR 存在冲突，正在同步分支并自动修复");
+    } else return;
+    task.conflictNotice = notice;
+    this.persist(task);
+  }
+
+  /** 使用既有的可信 fetch/merge；冲突现场交给原会话继续解决。 */
+  private async syncTargetBeforePush(task: TaskState, target: string, epoch: number): Promise<void> {
+    if (!task.cwd || !target) throw new TaskControlError("缺少代码工作区或目标分支，无法在推送前同步基准分支");
+    const unresolved = () => {
+      const result = runSafeWorktreeGit(task.cwd!, ["diff", "--name-only", "--diff-filter=U"]);
+      if (result.status !== 0) throw new TaskControlError("无法检查本地合并冲突，未推送");
+      return String(result.stdout ?? "").trim();
+    };
+    const repair = "请解决冲突并 git add、git commit，调用 task_control(action=\"sync_branch\") 完成同步，执行受影响的验证后再 push；保留双方必要改动。";
+    if (unresolved()) throw new TaskControlError(`本地仍有未解决的合并冲突。${repair}`);
+    let message: string | undefined;
+    await this.dispatchConflictRepair(task, this.feedbackBaseSha(task), undefined, epoch, {
+      target, ready: value => { message = value; },
+    });
+    if (!this.current(task, epoch)) throw new TaskControlError("任务执行权已变化");
+    if (!message) throw new TaskControlError(task.summary.detail ?? "目标分支同步失败，未推送");
+    if (unresolved()) throw new TaskControlError(`${message}\n${repair}`);
   }
 
   private async dispatchConflictRepair(

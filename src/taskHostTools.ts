@@ -585,7 +585,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
             collaboration: host.collaborate ? "task_collaborate" : "未配置", acceptance: "责任人最终验收不由 Agent 代签",
             kernel_configured: Boolean(host.kernel), platform_configured: Boolean(host.platformUrl) } };
       }) }),
-    defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE + " 更新当前任务分支请用 sync_branch：先提交本地修改，再请求同步，结束本轮等待宿主结果；宿主拉取远端任务分支与目标分支，有冲突时由你读取双方上下文、解决并提交。同步后执行受影响的编译与 UT，再走原 push/MR 流程。pull_repo 只克隆关联仓。",
+    defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE + " 每次 push 前（包括首次交付、检视意见修复和流水线修复后）都先提交本地修改，再用 sync_branch 拉取并合并最新远端任务分支与目标分支，结束本轮等待宿主结果。有冲突时读取双方上下文、解决并提交，不要直接选 ours/theirs。同步后执行受影响的编译与 UT，再走原 push/MR 流程。MR 已报告冲突时主动按此处理，不等待流水线出现或失败。pull_repo 只克隆关联仓。",
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
         paths: Type.Optional(Type.Array(Type.String(), { description: "恢复交付时指定原清单内的准确文件路径" })),

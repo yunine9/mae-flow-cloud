@@ -38,12 +38,12 @@ test("源提交漂移(MFC-038):两侧都有且不同才算;缺一侧无法核对
     /指向未经本任务验证的提交 def5678.*任务记录的是 abc1234.*已暂停自动交付/);
 });
 
-test("监控环每一拍:merged 任何状态下都收口;writer 在途只看 merged;关闭/漂移/看门禁", () => {
+test("监控环每一拍：合入事实优先；非冲突门禁不打断正在执行的会话", () => {
   const gates = [gate("approvers_passed")];
   assert.deepEqual(nextWatchStep({ view: { mrState: "merged", gates, sourceSha: "a" }, status: "running", verifiedSha: "a" }),
     { kind: "settle_merged", sourceSha: "a" }, "反馈修复期间 MR 仍可能被合入,merged 是唯一被消费的终态");
   assert.deepEqual(nextWatchStep({ view: { mrState: "opened", gates }, status: "running", verifiedSha: "a" }),
-    { kind: "wait" }, "writer 在途:门禁派单归它收口后的 await_merge,监听器不抢方向盘");
+    { kind: "wait" }, "审批门禁不打断正在执行的会话");
   assert.deepEqual(nextWatchStep({ view: { mrState: "closed", gates }, status: "await_merge", verifiedSha: "a" }),
     { kind: "settle_closed" });
   const drift = nextWatchStep({ view: { mrState: "opened", gates, sourceSha: "b" }, status: "await_merge", verifiedSha: "a" });
@@ -71,6 +71,17 @@ test("合入收口的文案与写盘:在途执行者没停住要点名;未推送
     mr_state: "已合入（内核终态待对账）", waiting_on: "内核尚未到 terminal",
     detail: "MR 已合入，但不能标记完成：内核尚未到 terminal",
   });
+});
+
+test("冲突不依赖流水线或等待合入；暂停与人工决定仍被尊重", () => {
+  const view = { mrState: "opened" as const, gates: [gate("conflict_passed")], sourceSha: "a" };
+  for (const status of ["running", "queued", "verifying"]) {
+    assert.equal(nextWatchStep({ view, status, verifiedSha: "a" }).kind, "repair_conflict");
+    assert.equal(nextWatchStep({ view: { ...view, sourceSha: "b" }, status, verifiedSha: "a" }).kind, "wait");
+  }
+  for (const status of ["paused", "pausing", "waiting_for_human", "failed", "canceled"]) {
+    assert.equal(nextWatchStep({ view, status, verifiedSha: "a" }).kind, "wait");
+  }
 });
 
 test("等人名单:自动修关闭时红项交给人且去重;等待文案与通知幂等键按集合算", () => {
