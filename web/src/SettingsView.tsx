@@ -140,8 +140,6 @@ function RuntimeCard({ view, onSaved }: {
   const text = (value?: number) => value === undefined ? "" : String(value);
   const [concurrent, setConcurrent] = useState(text(runtime.max_concurrent));
   const [issueTurns, setIssueTurns] = useState(text(runtime.issue_max_turns));
-  const [issueCompact, setIssueCompact] = useState(
-    text(runtime.issue_compact_every_events));
   const [repoReclaim, setRepoReclaim] = useState(text(runtime.issue_repo_reclaim));
   const [productsCooldown, setProductsCooldown] = useState(
     text(runtime.issue_build_products_cooldown_hours));
@@ -166,7 +164,6 @@ function RuntimeCard({ view, onSaved }: {
       onSaved(await putRuntimeSettings({
         max_concurrent: concurrent.trim(),
         issue_max_turns: issueTurns.trim(),
-        issue_compact_every_events: issueCompact.trim(),
         issue_repo_reclaim: repoReclaim.trim(),
         issue_build_products_cooldown_hours: productsCooldown.trim(),
         repair_rounds: repair.trim(),
@@ -194,11 +191,6 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="问题单并发数" defaultText={`${defaults.issue_max_turns} 个`}
         note="同时推进的问题会话回合上限，改完即生效"
         value={issueTurns} onChange={setIssueTurns} />
-      <KnobField label="问题单压缩事件阈值"
-        defaultText={defaults.issue_compact_every_events === 0
-          ? "关闭" : `${defaults.issue_compact_every_events} 条`}
-        note="问题会话事件每累积该数量，续聊前压缩一次上下文；0 表示关闭（分析→修复边界仍会压缩）"
-        value={issueCompact} onChange={setIssueCompact} />
       <KnobField label="问题单现场回收"
         defaultText={defaults.issue_repo_reclaim === 0 ? "保留现场" : "开启"}
         note="取消/归档的问题单立即回收代码现场（repo），分析报告与过程记录保留；0 表示保留现场不回收"

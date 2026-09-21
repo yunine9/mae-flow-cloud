@@ -574,9 +574,7 @@ export interface IssueFlowOptions {
     runtime?(): {
       poll_interval_s?: number; poll_timeout_s?: number;
       issue_max_turns?: number;
-      /** 问题会话回合前压缩的事件量阈值:events.jsonl 增量自上次压缩
-       *  每过该值,续聊回合先把上下文压一次(缺省 0=关,与部署旗
-       *  compactEveryEvents 同一纪律)。分析→修复边界的必压不受它管辖。 */
+      /** @deprecated 兼容历史配置；上下文改由模型请求前容量策略管理。 */
       issue_compact_every_events?: number;
       /** 红灯修复轮预算(与需求侧同一旋钮,缺省 20;0=关掉自动修复)。 */
       repair_rounds?: number;
@@ -637,11 +635,7 @@ export interface IssueFlowOptions {
   /** 回合并发额度的部署缺省(--issue-max-turns):泵先读管理页运行时
    *  旋钮 issue_max_turns,缺席才用这里;两边都缺省时是 10。 */
   maxConcurrentTurns?: number;
-  /** 回合前压缩的事件量阈值部署缺省(--issue-compact-every-events):
-   *  续聊回合先读管理页运行时旋钮 issue_compact_every_events,缺席才
-   *  用这里;两边都缺省 0=关(生产恒传部署旗,缺省 400——#285 拍板,
-   *  0 兜底只覆盖测试/直构形态)。分析→修复边界的必压
-   *  不受阈值管辖。 */
+  /** @deprecated 旧部署参数兼容，不再按事件数压缩。 */
   compactEveryEvents?: number;
   /** 可选的专用视觉模型角色(与需求侧 TaskService 同形)。openDriver
    * 组装会话时按同款逻辑变成 VisionCapabilityConfig,主会话由此获得
@@ -699,9 +693,6 @@ interface LiveIssue {
    *  新号,外层回合收口见号易主即让位——互斥位与并发额度因此横跨整条
    *  延续链,而不是在催办一开始就裸奔。 */
   turnToken?: number;
-  /** 回合前压缩水位保留在内存；重启时 Pi 自带压缩摘要和容量保护，
-   *  后续续聊重新建立事件水位，不影响原生上下文恢复。 */
-  lastCompactEventId?: number;
 }
 
 export interface IssueMessage {
@@ -2275,9 +2266,8 @@ export class IssueFlowService {
   private continueTurn(
     live: LiveIssue,
     message: string,
-    opts?: { boundary?: boolean },
   ): void {
-    this.beginTurn(live, () => this.resumeTurnBody(live, message, opts));
+    this.beginTurn(live, () => this.resumeTurnBody(live, message));
   }
 
   /** 续聊/续跑共用的回合体:话递给在场 driver,或重建后以续聊提示词
@@ -2285,7 +2275,6 @@ export class IssueFlowService {
   private async resumeTurnBody(
     live: LiveIssue,
     message: string,
-    opts?: { boundary?: boolean },
   ): Promise<Outcome> {
     await this.ensureContainer(live);
     // 欠账便签随行(#244 发送必达):任何续聊形态的回合都把停靠通知
@@ -2293,8 +2282,6 @@ export class IssueFlowService {
     return this.withParkedNotices(live, async (replay) => {
       const full = replay ? `${message}\n\n${replay}` : message;
       if (live.driver) {
-        // 回合前压缩(票 01/02)的唯一安全位:话递进在场会话之前。
-        await this.maybeCompactContinuation(live, opts?.boundary === true);
         return live.driver.continueWith(full);
       }
       const driver = await this.openDriver(live);
@@ -2302,17 +2289,6 @@ export class IssueFlowService {
         this.environmentCredentials(live),
         { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
     });
-  }
-
-  /** 续聊回合的事件账水位:events.jsonl 是宿主与模型侧共用的幂等
-   *  序列,增量是上下文增长的诚实代理(与需求侧 TaskService 的
-   *  compactEveryEvents 同一判据)。读不出(账本缺失)返回 undefined。 */
-  private continuationEventLevel(live: LiveIssue): number | undefined {
-    try {
-      return new EventLog(join(live.root, "events.jsonl")).lastEventId();
-    } catch {
-      return undefined;
-    }
   }
 
   /** 分析报告指针(边界路共用):落盘路径 + 「修改方案」章节要点。
@@ -2332,52 +2308,6 @@ export class IssueFlowService {
     } catch {
       return { path, plan: "(此刻读不出,进 fix 后先重读整份报告)" };
     }
-  }
-
-  /** 分析→修复边界的专用压缩锚:在通用锚之上钉住分析报告指针——
-   *  fix 阶段要的是方案与最近错误结论,不是原始日志。注意 pi 的手动
-   *  压缩在单回合历史上走 split-turn 路,customInstructions 不进摘要
-   *  请求——所以指针同时钉进确认推进通知词(必达通道,见
-   *  resolveGate),这里只在多回合历史时生效。 */
-  private stageBoundaryAnchor(live: LiveIssue): string {
-    const pointer = this.analysisReportPointer(live);
-    return `${issueCompactAnchor(live.state)}\n`
-      + `分析报告落盘: ${pointer.path}\n修改方案要点:\n${pointer.plan}`;
-  }
-
-  /** 回合前压缩的唯一咽喉(票 01/02):只挂在续聊回合把话递进在场
-   *  会话之前——挂起通道(resumeWithDecision 原地续跑)与重启重建
-   *  (startResume 恢复原生上下文，由 Pi 容量保护)不经过这里。两路:
-   *  - 边界路(analysis_confirm 确认进 fix):必压,不受阈值管辖;
-   *  - 阈值路:管理页旋钮 issue_compact_every_events 优先,缺席退
-   *    部署旗 compactEveryEvents,再缺省 0=关(部署旗缺省 400 由
-   *    serve 层给出,#285 拍板;0 兜底只覆盖测试/直构形态)。
-   *  两路都 fail-open:压不动回合照走(压缩是旁路,不是流程)。 */
-  private async maybeCompactContinuation(
-    live: LiveIssue,
-    boundary: boolean,
-  ): Promise<void> {
-    const driver = live.driver;
-    if (!driver) return;
-    const level = this.continuationEventLevel(live);
-    let anchor: string;
-    if (boundary) {
-      anchor = this.stageBoundaryAnchor(live);
-    } else {
-      const every = this.options.settings?.runtime?.().issue_compact_every_events
-        ?? this.options.compactEveryEvents ?? 0;
-      if (!every || level === undefined
-          || level - (live.lastCompactEventId ?? 0) < every) {
-        return;
-      }
-      anchor = issueCompactAnchor(live.state);
-    }
-    // 水位先记账(含边界路):fail-open 语义下压缩失败也不在下个回合
-    // 立刻重试同一场压缩。
-    if (level !== undefined) live.lastCompactEventId = level;
-    this.log(`[issue-flow] ${live.id} `
-      + `回合前压缩(${boundary ? "分析→修复边界" : "事件阈值"})`);
-    await driver.compactAnchored(anchor);
   }
 
   /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
@@ -3846,7 +3776,11 @@ export class IssueFlowService {
       // inspect_image,主上下文只收文字结论。
       vision: this.visionCapability(live.root),
       currentStep: () => live.state.stage_note || live.state.stage,
-      compactAnchor: () => issueCompactAnchor(live.state),
+      compactAnchor: () => {
+        if (live.state.stage !== "fix") return issueCompactAnchor(live.state);
+        const pointer = this.analysisReportPointer(live);
+        return `${issueCompactAnchor(live.state)}\n分析报告: ${pointer.path}\n修改方案要点: ${pointer.plan}`;
+      },
       ...(bashOperations ? { bashOperations } : {}),
       ...(isolation?.user
         ? {
@@ -4096,7 +4030,7 @@ export class IssueFlowService {
           supplement,
           report_path: pointer.path,
           plan: pointer.plan,
-        })), { boundary: true });
+        })));
       return summarize(state);
     }
 

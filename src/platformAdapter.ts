@@ -202,6 +202,8 @@ interface AdapterConfig {
   mr_lookup?: CommandSpec;
   /** 全生命周期精确查找，不复用“只查 opened”的创建前查询。 */
   mr_discover?: CommandSpec;
+  /** 单号纠正成功后关闭旧 MR。未配置时保留旧 MR 并明确报告清理失败。 */
+  mr_close?: CommandSpec;
   pipeline_trigger: CommandSpec;
   pipeline_status: Degradable<CommandSpec>;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
@@ -777,6 +779,15 @@ export class PlatformAdapter {
       if (!Array.isArray(payload?.mrs)) throw new AdapterError("MR 查找未返回 mrs 数组");
       return { status: 200, payload };
     }
+    if (method === "POST" && path === "/mr/close") {
+      const spec = this.config.mr_close;
+      if (!spec) return { status: 404, payload: { error: "未配置 mr_close，请更新 adapter.json" } };
+      const values = this.values(body, headers);
+      const result = JSON.parse(await this.run(spec, values));
+      const state = String(result.state ?? result.mr_state ?? "");
+      if (state !== "closed") throw new AdapterError(`旧 MR 未关闭，平台返回状态：${state || "未知"}`);
+      return { status: 200, payload: { mr_state: "closed" } };
+    }
     if (method === "GET" && path === "/mr/gates") {
       const spec = this.config.mr_gates;
       if (!spec) return { status: 404, payload: { error: "未配置 mr_gates" } };
@@ -988,6 +999,7 @@ export class PlatformAdapter {
       .map((part) => part.replace(/\{token\}/g, "<token>")).join(" ");
     const sections: Array<[string, CommandSpec | undefined]> = [
       ["mr_create(只印不执行)", this.config.mr_create],
+      ["mr_close(只印不执行)", this.config.mr_close],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["mr_discover(全生命周期查找)", this.config.mr_discover],
       ["pipeline_trigger(只印不执行)", this.config.pipeline_trigger],

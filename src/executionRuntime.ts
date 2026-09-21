@@ -281,10 +281,6 @@ async function main(): Promise<void> {
   sweepStaleGitRuntime(dataDir);   // 上个进程留下的明文凭据现场(旁路)
   // 管理旋钮(主 spec §4:最大并发由管理员配置,超出排队)。
   const maxConcurrent = Number(flag("--max-concurrent") ?? 2);
-  // 主动压缩节奏(事件量为代理,回合间隙以内核锚点压缩;0=关,
-  // 被动保底 pi 自动压缩始终在)。
-  const compactEvery = Number(flag("--compact-every") ?? 150);
-
   // 管理页运行时设置先立起来:模型网关与运行参数
   // 都可能已在界面配过——boot 判定要读它。
   const settings = new RuntimeSettings(
@@ -937,10 +933,6 @@ async function main(): Promise<void> {
     ...(visionProvider && visionModel
       ? { vision: { provider: visionProvider, model: visionModel } } : {}),
     maxConcurrentTurns: Number(flag("--issue-max-turns") ?? "10"),
-    // 回合前压缩的事件量阈值(管理页旋钮 issue_compact_every_events 的
-    // 部署缺省):缺省 400(#285 拍板——issue-64 实测约 420 条事件≈一扇
-    // 网关窗,掐在撞墙前压,部署零配置即开);显式 0=关。
-    compactEveryEvents: Number(flag("--issue-compact-every-events") ?? "400"),
     // 环境预热与需求侧同条件启用(host + 统一任务容器):拉仓收口进
     // analyze 时后台编译基线、焐热分仓缓存,修复阶段少一次全量冷启。
     // fail-open 旁路,缺席(测试/无隔离形态)不预热,行为照旧。
@@ -1016,7 +1008,6 @@ async function main(): Promise<void> {
         .find((candidate) => candidate.username === account)
         ?? { ready: false, missing: ["账号不存在或不是可用开发账号"] };
     },
-    compactEveryEvents: compactEvery,
     // 2026-08-28 摘除 demoContract:那是阶段一的演示桩("rm -rf"裸子串
     // 一律拒),却一直接在生产兜底位——prepush 构建产物删除白名单放行后
     // 被它照拒,死循环还收口成 code_failure 冤枉代码。危险命令的真裁决

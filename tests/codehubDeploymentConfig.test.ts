@@ -242,3 +242,16 @@ test("existing tasks recover project iid from MR URL instead of saved global id"
     assert.equal(view?.sourceSha,sha);
   } finally { globalThis.fetch=previous; }
 });
+
+test("MR 关闭端点只接受平台实际 closed，不把 merged 或空响应当成清理成功", async () => {
+  await fixture("mr_close", { state: "closed" }, async adapter => {
+    const result = await adapter.handle("POST", "/mr/close", query, { mr: "2931", repo: "https://codehub-y.huawei.com/g/r.git" }, {});
+    assert.equal(result.status, 200);
+    assert.deepEqual(result.payload, { mr_state: "closed" });
+  });
+  for (const output of [{ state: "merged" }, {}, { state: "opened" }]) {
+    await fixture("mr_close", output, async adapter => {
+      await assert.rejects(adapter.handle("POST", "/mr/close", query, { mr: "2931" }, {}), /未关闭/);
+    });
+  }
+});

@@ -1,4 +1,9 @@
+import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
+import { correctKernelTicket } from "./kernelDelivery.ts";
+import { closeMergeRequest } from "./mrClient.ts";
+import { ticketCorrectionBlocks, prepareTicketRewrite, applyTicketRewrite, correctionJournal, validateCorrectionTicket, writeCorrectionJson, mapCorrectionReferences, migrateTicketArtifacts, type TicketCorrection, type TicketRewrite } from "./ticketCorrection.ts";
 import { annotationSubmissionView, type AnnotationSubmissionView } from "./annotationSubmissionView.ts";
+import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
 import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
@@ -32,7 +37,7 @@ import { watchTaskPipeline } from "./taskPipelineWatch.ts";
 import { getPipelineStatus, triggerPipeline, type PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
-import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
+import { confirmHostPush, PUSH_SCOPE_GUIDANCE, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { readAnalysisArchitecture, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { readAnalysisSemanticArchitecture, SEMANTIC_ARCHITECTURE_GUIDANCE } from "./semanticArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
@@ -70,7 +75,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -124,6 +128,7 @@ import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
 import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
 import { prepareHostPush } from "./hostPushPreparation.ts";
+import { deliveryCommitTree } from "./deliveryCommitTree.ts";
 import { canHandoffReview, handoffReview } from "./reviewHandoff.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
@@ -524,7 +529,8 @@ import {
   validTaskCommitSubject,
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
-import { absorbForeignBranchCommits } from "./foreignBranchCommits.ts";
+import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
+import { TaskBranchSync, type BranchSyncRequest } from "./taskBranchSync.ts";
 import {
   classifyDeliveryFailure,
   deliveryFailureMessage,
@@ -563,6 +569,7 @@ import {
 } from "./safeGit.ts";
 import {
   AGENT_PLATFORM_LOCAL_EXCLUDES,
+  AGENT_PLATFORM_ROOTS,
   FLOW_RUNTIME_LOCAL_EXCLUDES,
   AGENT_PLATFORM_PATHSPECS,
   describeAgentPlatformRoots,
@@ -832,6 +839,7 @@ function validateRepositoryAddress(candidate: string): void {
     if (parsed.username || parsed.password) {
       throw new Error("代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
     }
+    assertRepositoryCloneAddress(candidate);
   }
 }
 
@@ -1093,6 +1101,7 @@ export interface TaskSummary {
   /** 需求/问题单号(REQ/DTS)。下单就给(用户 2026-08-19 拍板),
    * 开场当事实喂给模型——配置确认不再为它开口问。 */
   ticket?: string;
+  ticket_correction?: TicketCorrection;
   /** 基线分支,默认 master(同一次拍板)。 */
   baseline?: string;
   product_version?: string;
@@ -1420,9 +1429,7 @@ export interface TaskServiceOptions {
   /** PostgreSQL 投影(主 spec §11):看板/审计/恢复引导的读侧。
    * 纯旁路——写失败不改流程,不配则一切照旧(文件即真相)。 */
   projection?: PgProjection;
-  /** 主动压缩节奏:事件量每涨这么多,在下一个回合间隙以内核锚点
-   * 压缩会话(0 = 关)。被动保底(pi 自动压缩)始终开着,这里是
-   * "注意力不许飘"的主动档。 */
+  /** @deprecated 上下文由 CloudSession 按容量主动管理；保留旧调用参数兼容。 */
   compactEveryEvents?: number;
   /** 容器隔离(设计文档):bash 命令进任务专属容器执行,镜像按
    * 试点仓选。容器起不来任务如实 failed,不静默降级回宿主。
@@ -1689,8 +1696,14 @@ interface TaskState {
   containerReopen?: Promise<TaskCommandContainer>;
   /** 合入监控环的防重入锁(内存态):一任务只挂一环。 */
   mergeWatchActive?: boolean;
+  /** 同一次平台冲突只补充一次指令；门禁恢复后允许通知下一次冲突。 */
+  conflictNotice?: string;
+  deliveryActive?: boolean;
   /** 交付检查和后台监听可能同时看到合入，只允许一次停止 writer / close。 */
   mergeSettlement?: Promise<void>;
+  transportActive?: Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
+  hostActionActive?: Promise<boolean>;
+  mrCreateActive?: ReturnType<typeof createMergeRequest>;
   /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
   pipelinePollSha?: string;
   pipelinePollEpoch?: number;
@@ -1713,8 +1726,6 @@ interface TaskState {
    * 已返回给调用方的 turn Promise 收口；这条信号用于结束宿主等待，
    * 容器销毁仍是进程树终止的安全边界。 */
   prepushAbort?: AbortController;
-  /** 上次主动压缩时的事件水位(事件量是上下文增长的诚实代理)。 */
-  lastCompactAt?: number;
   /** 已自动采集过诊断包的事故键(内存态)。同一事故只落一份,
    * 重复 persist 不刷屏;文件名里的 hash 负责跨重启去重。 */
   lastDiagnosticsKey?: string;
@@ -1896,89 +1907,6 @@ function deliverySelectionNote(
   ].join("\n");
 }
 
-interface AsyncGitResult {
-  status: number | null;
-  stdout: string;
-  stderr: string;
-  signal: NodeJS.Signals | null;
-  timedOut: boolean;
-  error?: Error;
-}
-
-/** 宿主网络 Git 的异步执行边界。timeout 时杀整个进程组，避免只杀 git
- * 却留下 ssh/credential 子进程；输出有界，远端异常也不能撑爆服务。 */
-function runGitProcess(
-  args: string[],
-  options: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    timeoutMs: number;
-    maxBuffer?: number;
-  },
-): Promise<AsyncGitResult> {
-  return new Promise((resolveResult) => {
-    const detached = process.platform !== "win32";
-    const child = spawn("git", args, {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-      detached,
-    });
-    const maxBuffer = options.maxBuffer ?? 20 * 1024 * 1024;
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let overflow: Error | undefined;
-    let timedOut = false;
-    let spawnError: Error | undefined;
-    const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
-      const current = stream === "stdout" ? stdoutBytes : stderrBytes;
-      const remaining = maxBuffer - current;
-      if (remaining <= 0) {
-        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
-        return;
-      }
-      const kept = chunk.subarray(0, remaining);
-      target.push(kept);
-      if (stream === "stdout") stdoutBytes += kept.length;
-      else stderrBytes += kept.length;
-      if (kept.length < chunk.length) {
-        overflow ??= new Error(`git ${stream} 超过 ${maxBuffer} bytes`);
-      }
-    };
-    child.stdout?.on("data", (chunk: Buffer) => append(stdout, chunk, "stdout"));
-    child.stderr?.on("data", (chunk: Buffer) => append(stderr, chunk, "stderr"));
-    const killGroup = () => {
-      try {
-        if (detached && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        // 进程可能恰好已经退出。
-      }
-    };
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killGroup();
-    }, options.timeoutMs);
-    timer.unref?.();
-    child.once("error", (error) => {
-      spawnError = error;
-    });
-    child.once("close", (status, signal) => {
-      clearTimeout(timer);
-      resolveResult({
-        status: (spawnError || overflow || timedOut) ? null : status,
-        signal,
-        timedOut,
-        stdout: Buffer.concat(stdout).toString("utf-8"),
-        stderr: Buffer.concat(stderr).toString("utf-8"),
-        ...((spawnError ?? overflow) ? { error: spawnError ?? overflow } : {}),
-      });
-    });
-  });
-}
 
 export class TaskService {
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
@@ -4057,7 +3985,8 @@ export class TaskService {
     if (!this.isRequirementAnalysis(task) || !task.cwd) return;
     const previous = task.summary.requirement_graph;
     // 已确认的图已经成为任务编排事实，不再让工作区文件反向改写它。
-    if (previous?.stage === "confirmed") return;
+    if (previous?.stage === "confirmed"
+        || task.summary.status === "coordinating") return;
     const ticket = task.summary.ticket ?? task.summary.id;
     const path = join(task.cwd, ".mae-flow-work", ticket,
       "requirement-graph.json");
@@ -8341,16 +8270,54 @@ export class TaskService {
   /** 子任务的状态变化必须回写主任务，否则“主任务完成”只能靠页面猜。
    * 主任务不再运行 Agent，只作为跨仓需求的持久汇总：所有子任务都是真
    * completed 才完成；失败/取消/暂停/等人都继续留在当前现场并点名。 */
-  private reconcileRequirementParent(parent: TaskState): void {
+  private reconcileRequirementParent(parent: TaskState, recoverLinks = false): void {
     const graph = parent.summary.requirement_graph;
-    if (!this.isRequirementAnalysis(parent) || graph?.stage !== "confirmed"
+    if (!this.isRequirementAnalysis(parent) || !graph
         || graph.repositories.length === 0
         || parent.summary.status === "canceled"
         || parent.summary.status === "failed") return;
+    // 已交给子任务的历史主单可能被展示投影覆盖，丢掉 stage/task_id。
+    // 从真实父子关系恢复，不能要求人重新审批，也不能按同仓/同 AR 猜。
+    if (graph.stage !== "confirmed" && (!recoverLinks
+        || !["coordinating", "completed"].includes(parent.summary.status))) return;
+    const actualChildren = [...this.tasks.values()].filter((child) =>
+      child.summary.parent_task_id === parent.summary.id);
+    const used = new Set(graph.repositories.map((node) => node.task_id).filter(Boolean));
+    let repaired = false;
+    for (const node of graph.repositories) {
+      // 恢复关联只在重启读完全部任务后进行，不能拿加载到一半的候选集匹配。
+      if (!recoverLinks || node.task_id) continue;
+      const sameRepository = actualChildren.filter((child) =>
+        !used.has(child.summary.id) && child.summary.repo_url === node.url);
+      const label = node.scope?.name ?? node.name;
+      const candidates = graph.repositories.filter((other) => other.url === node.url).length === 1
+        ? sameRepository : sameRepository.filter((child) => {
+          // 同仓多单元只认创建时随任务保存的任务书；标题/单号可以改，
+          // 不能用它们猜测模块归属。旧材料缺失时保留现场，不误收口。
+          try {
+            return readFileSync(join(child.summary.workspace, DELIVERY_UNIT_SOURCE), "utf8")
+              .split(/\r?\n/, 1)[0] === `# 当前单元任务书：${label}`;
+          } catch { return false; }
+        });
+      if (candidates.length !== 1) continue;
+      node.task_id = candidates[0].summary.id;
+      used.add(node.task_id);
+      repaired = true;
+    }
     const children = graph.repositories.map((repository) =>
       repository.task_id ? this.tasks.get(repository.task_id) : undefined);
-    if (children.some((child) => !child)) return;
-    const states = children as TaskState[];
+    if (children.some((child) => !child
+        || child.summary.parent_task_id !== parent.summary.id)
+        || new Set(children).size !== children.length) {
+      if (repaired) this.persist(parent, false, false);
+      return;
+    }
+    if (graph.stage !== "confirmed") {
+      graph.stage = "confirmed";
+      repaired = true;
+    }
+    // 不能只看图中幸存的映射而漏掉实际已创建的兄弟任务。
+    const states = actualChildren;
     const completed = states.filter((child) =>
       child.summary.status === "completed").length;
     const attention = states.filter((child) => [
@@ -8363,7 +8330,7 @@ export class TaskService {
       : `${completed}/${states.length} 个子任务已完成`
         + (attention ? `，${attention} 个需要处理` : "，其余正在推进");
     const previousStatus = parent.summary.status;
-    if (previousStatus === nextStatus && parent.summary.detail === nextDetail) return;
+    if (!repaired && previousStatus === nextStatus && parent.summary.detail === nextDetail) return;
     parent.summary.status = nextStatus;
     parent.summary.detail = nextDetail;
     parent.summary.waiting = undefined;
@@ -8549,6 +8516,15 @@ export class TaskService {
             && summary.ui_fixture === true) {
           this.counter = Math.max(
             this.counter, Number(name.slice("task-".length)) || 0);
+          restored += 1;
+          continue;
+        }
+        if (ticketCorrectionBlocks(summary.ticket_correction)) {
+          summary.ticket_correction!.state = "failed";
+          summary.ticket_correction!.message = "服务重启中断了纠正，请在任务详情中继续重试";
+          summary.status = "paused";
+          this.writeTaskState(task);
+          this.counter = Math.max(this.counter, Number(name.slice("task-".length)) || 0);
           restored += 1;
           continue;
         }
@@ -8900,6 +8876,10 @@ export class TaskService {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
       }
     }
+    // 全部任务加载后先恢复父子关联，再发布 Story/补任务书；不受加载顺序影响。
+    for (const task of this.tasks.values()) {
+      if (this.isRequirementAnalysis(task)) this.reconcileRequirementParent(task, true);
+    }
     // 确认建单后发布 Story 的进程中断可恢复；先加载全部子任务再同步。
     for (const task of this.tasks.values()) {
       if (task.summary.requirement_graph?.stage !== "confirmed") continue;
@@ -8923,13 +8903,6 @@ export class TaskService {
       .map((task) => task.summary.parent_task_id).filter(Boolean))) {
       const parent = this.tasks.get(parentId!);
       if (parent) this.syncCrossRepositoryUpdates(parent);
-    }
-    // 旧版本拆单时就写 completed；全部恢复后统一校正，避免把未加载子任务
-    // 当成缺失；无需一次性迁移脚本，重启即可恢复真实层级状态。
-    for (const task of this.tasks.values()) {
-      if (this.isRequirementAnalysis(task)) {
-        this.reconcileRequirementParent(task);
-      }
     }
     if (this.counter > 0) {
       try {
@@ -10137,6 +10110,11 @@ export class TaskService {
       throw new TaskControlError(
         "已确认的整体拆分方案暂时无法读取，未生成子任务；请刷新后重试");
     }
+    // 确认事实先落盘，再逐个建单。persist 的展示投影会刷新 analysis 图，
+    // 若到循环末尾才 confirmed，后续 task_id/stage 会写进被替换的旧对象。
+    // confirmed 不代表已建齐；未关联单元继续由下面的可重入建单补齐。
+    graph.stage = "confirmed";
+    this.persist(task);
     const taskIds = new Map<string, string>();
     for (const repository of graph.repositories) {
       if (repository.task_id) taskIds.set(repository.id, repository.task_id);
@@ -10599,8 +10577,7 @@ export class TaskService {
     input: DecisionSubmission,
     closesFeedback: boolean,
     /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认。确认
-     * 同时绑定 HEAD 与路径集合；任何修复生成新 HEAD 都会重新检视，
-     * 即便文件名完全没变。只有同一 HEAD 的网络重试才复用收据。 */
+     * 确认绑定文件范围；同范围后续修复沿用决定，不因 HEAD 改变重问。 */
     defaultToCommitted = false,
   ): Promise<{
     record: NonNullable<TaskSummary["delivery_selection"]>;
@@ -10624,7 +10601,7 @@ export class TaskService {
     }
     const contribution = await this.deliveryContribution(task, snapshot);
     let paths = normalizedDeliveryPaths(
-      values === "committed" ? contribution.paths : values);
+      values === "committed" ? contribution.paths : values, snapshot.workspace_paths);
     const visible = new Set(snapshot.workspace_paths);
     const unknown = paths.filter((path) => !visible.has(path));
     let vanishedNote = "";
@@ -10853,12 +10830,12 @@ export class TaskService {
         ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
       if (inBaseline.status === 0) {
         if (existsSync(absolute)) preserved.set(path, readFileSync(absolute));
-        await run(["checkout", baseline, "--", path], `回退提交内容 ${path}`);
+        await run(["checkout", baseline, "--", `:(literal)${path}`], `回退提交内容 ${path}`);
       } else {
-        await run(["rm", "--cached", "-q", "--", path], `移出索引 ${path}`);
+        await run(["rm", "--cached", "-q", "--", `:(literal)${path}`], `移出索引 ${path}`);
       }
     }
-    if (add.length) await run(["add", "--", ...add], "补入勾选文件");
+    if (add.length) await run(["add", "--", ...add.map(path => `:(literal)${path}`)], "补入勾选文件");
     const staged = await runSafeWorktreeGitAsync(cwd,
       ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
     if (staged.status !== 0) {
@@ -11146,7 +11123,7 @@ export class TaskService {
       "- 入场后先执行 current，按当前 review 步骤承接人的决定；整理这份已由人指定的清单不需要再次询问同义问题。",
       "- 领域文档可以直接编辑，也可用 domain-archive 辅助整理；不按归档凭证重新裁决人的文件选择。",
       "- 整理完成后核对实际提交内容，代码与文档无需按阶段拆分提交；",
-      `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
+      `  完成后继续现有推送与流水线验证(当前清单 ${selection.paths.length} 个文件)。${PUSH_SCOPE_GUIDANCE}`,
       // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码
       // 也不知道要写 local-receipts.json,收口时被回执门禁如实拦下,
       // 形成"改了却过不去"的死锁(e2e-picky-20260830 双复现,MFC-002)。
@@ -11209,7 +11186,7 @@ export class TaskService {
     this.persist(task);
     const pendingHost = new TaskHostLedger(task.summary).pending();
     this.bypass(task, "MR 描述卡后继续交付", pendingHost?.input.action === "create_mr"
-      ? finishTaskHostOperation(this.taskHostRuntime(task))
+      ? this.finishHostAction(task)
       : this.tryDeliver(task, task.controlEpoch));
   }
 
@@ -12677,6 +12654,305 @@ export class TaskService {
     }
   }
 
+  private async finishHostAction(task: TaskState, epoch = task.controlEpoch): Promise<boolean> {
+    if (task.hostActionActive) return task.hostActionActive;
+    const work = finishTaskHostOperation(this.taskHostRuntime(task, epoch));
+    task.hostActionActive = work;
+    try { return await work; }
+    finally { if (task.hostActionActive === work) task.hostActionActive = undefined; }
+  }
+
+  private async createDeliveryMr(task: TaskState, input: Parameters<typeof createMergeRequest>[0]): ReturnType<typeof createMergeRequest> {
+    const work = createMergeRequest(input);
+    task.mrCreateActive = work;
+    try { return await work; }
+    finally { if (task.mrCreateActive === work) task.mrCreateActive = undefined; }
+  }
+
+  /** 用户主动纠正 AR：一次程序化迁移，不调用模型、不追加检视或验证。 */
+  correctTicket(id: string, input: { ticket: string; title: string }, actor: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const ticket = input.ticket.trim(), title = input.title.trim();
+    validateCorrectionTicket(ticket, title);
+    if (task.summary.ticket_correction?.state === "running" && this.ticketCorrections.has(id)) return { ...task.summary };
+    const retry = task.summary.ticket_correction?.state !== "completed" ? task.summary.ticket_correction : undefined;
+    if (retry && (retry.ticket !== ticket || retry.title !== title)) throw new TaskControlError("请先重试完成当前单号纠正");
+    if (!retry && ["completed", "canceled", "coordinating"].includes(task.summary.status)) throw new TaskControlError("请在尚未合入的具体交付任务中纠正单号");
+    if (!retry && task.summary.ticket?.toLowerCase() === ticket.toLowerCase()) throw new TaskControlError("新单号与当前单号相同");
+    if (task.assistantActive || task.mergeSettlement) throw new TaskControlError("当前正在接管或收口，请完成后再纠正单号");
+    const correction: TicketCorrection = retry ?? { id: randomUUID(), old_ticket: task.summary.ticket ?? task.summary.id,
+      ticket, title, actor, state: "running", can_cancel: true, message: "正在停止当前写入并保留现场", at: new Date().toISOString() };
+    const path = correctionJournal(task.summary.workspace, correction.id);
+    if (!existsSync(path)) writeCorrectionJson(path, { before: structuredClone(task.summary) });
+    correction.state = "running";
+    task.summary.ticket_correction = correction;
+    if (!correction.cleanup_only) {
+      task.controlEpoch += 1;
+      this.removeFromQueue(id);
+      task.summary.status = "paused";
+      task.summary.detail = "正在纠正 AR 单号";
+    }
+    this.persist(task);
+    const work = this.performTicketCorrection(task, path).catch(error => {
+      correction.state = "failed";
+      correction.message = String(error instanceof Error ? error.message : error);
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      if (saved.projected) {
+        const resume = !correction.cleanup_only;
+        correction.cleanup_only = true;
+        correction.message = `新交付已生效，旧交付清理待重试：${correction.message}`;
+        this.persist(task);
+        if (resume) this.resumeAfterTicketCorrection(task, saved.before);
+      } else {
+        task.summary.status = "paused";
+        task.summary.detail = `单号纠正未完成：${correction.message}；在任务详情中重试`;
+        this.persist(task);
+      }
+    }).finally(() => this.ticketCorrections.delete(id));
+    this.ticketCorrections.set(id, work);
+    return { ...task.summary };
+  }
+
+  cancelTicketCorrection(id: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const correction = task.summary.ticket_correction;
+    if (!correction || correction.state !== "failed" || !correction.can_cancel || this.ticketCorrections.has(id)) {
+      throw new TaskControlError("纠正已开始修改交付，请继续重试完成，不能撤回一半的交付");
+    }
+    const path = correctionJournal(task.summary.workspace, correction.id);
+    const journal = JSON.parse(readFileSync(path, "utf8"));
+    if (journal.local || journal.pushed || journal.projected) throw new TaskControlError("已有交付变化，请继续完成纠正");
+    journal.canceled_at = new Date().toISOString(); writeCorrectionJson(path, journal);
+    task.summary.ticket_correction = undefined;
+    task.summary.control = { last_action: "pause", actor: correction.actor, at: new Date().toISOString(), paused_from: journal.before.status };
+    task.summary.detail = "已撤销尚未执行的单号纠正，原交付未变；可继续原任务";
+    this.persist(task);
+    return { ...task.summary };
+  }
+
+  private ticketCorrections = new Map<string, Promise<void>>();
+
+  private async performTicketCorrection(task: TaskState, path: string): Promise<void> {
+    const correction = task.summary.ticket_correction!;
+    const journal = JSON.parse(readFileSync(path, "utf8")) as {
+      before: TaskSummary; plan?: TicketRewrite; local?: boolean; remote_checked?: boolean; old_remote?: string;
+      pushed?: TaskSummary["delivery"]; mr?: { url: string; id?: string | number }; projected?: boolean;
+      closed?: boolean; deleted?: boolean;
+    };
+    const save = (message: string) => { correction.message = message; writeCorrectionJson(path, journal); this.persist(task); };
+    if (!correction.cleanup_only) {
+      await this.finishPause(task, journal.before.status);
+      if (task.summary.status !== "paused") throw new Error("当前写入尚未安全结束，未修改单号");
+      await task.prepushActive;
+      await Promise.allSettled([task.transportActive, task.hostActionActive, task.mrCreateActive]);
+      await task.reviewOutboxFlush;
+      // 已发送的远端请求不能撤回；收尾后的实际收据优先于点击瞬间的快照。
+      if (!journal.plan && !journal.projected) {
+        journal.before.delivery = structuredClone(task.summary.delivery);
+        save("正在核对已完成的远端操作");
+      }
+    }
+    const cwd = task.cwd;
+    const repo = task.summary.repo_url ?? this.effectiveDefaultRepo() ?? "";
+    const platformUrl = this.effectivePlatformUrl();
+    const credential = this.options.gitCredential?.(task.summary.luban_account);
+    let oldDelivery = journal.before.delivery;
+    let oldMr = oldDelivery?.mr_id ?? oldDelivery?.mr_url?.match(/(?:merge_requests|merge-requests)\/(\d+)/)?.[1];
+    let configuredBranch = "";
+    if (cwd && existsSync(join(cwd, ".mae-flow.json"))) configuredBranch = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf8")).config?.["分支名"] ?? "";
+    if (cwd && existsSync(join(cwd, ".git")) && configuredBranch && !journal.plan) {
+      const baseline = await frozenTaskBaseline(cwd)
+        ?? (await deliveryChangeSnapshot(cwd))?.baseline;
+      if (!baseline) throw new Error("未找到任务代码基线，未改写提交");
+      const currentBranch = await runSafeWorktreeGitAsync(cwd, ["symbolic-ref", "--short", "HEAD"]);
+      if (currentBranch.stdout.trim() !== configuredBranch) throw new Error("当前分支与任务分支不一致，未修改交付");
+      journal.plan = await prepareTicketRewrite(cwd, correction.old_ticket, correction.ticket, baseline);
+      save("已生成单号与提交映射，正在核对远端");
+    }
+    const plan = journal.plan;
+    if (plan && !journal.remote_checked) {
+      const shared = [...this.tasks.values()].find(other => other !== task && other.summary.repo_url === repo
+        && !["completed", "canceled"].includes(other.summary.status)
+        && (other.summary.delivery?.source_branch === plan.old_branch
+          || (oldMr !== undefined && other.summary.delivery?.mr_id === oldMr)));
+      if (shared) throw new Error(`旧分支仍被 ${shared.summary.id} 使用，不能删除其他任务的交付；请先解除共用分支`);
+      const observed = await this.remoteDeliveryHost(task, task.controlEpoch).observe(plan.old_branch);
+      journal.old_remote = observed.sha;
+      if (observed.sha) {
+        const includes = await runSafeWorktreeGitAsync(cwd!, ["merge-base", "--is-ancestor", observed.sha, plan.old_head]);
+        if (includes.status !== 0) throw new Error("旧远端分支有本地尚未包含的提交，请先同步分支后再纠正，避免遗漏他人的代码");
+      }
+      if (journal.old_remote && oldMr === undefined && !oldDelivery?.mr_url && platformUrl) {
+        const query = new URLSearchParams({ repo, source_branch: plan.old_branch, target_branch: oldDelivery?.target_branch ?? journal.before.baseline ?? "master" });
+        const response = await fetch(`${platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: this.platformIdentity(task), signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) throw new Error(`无法核对旧分支是否已有 MR（HTTP ${response.status}），未改动远端`);
+        const body = await response.json() as { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
+        if (!Array.isArray(body.mrs)) throw new Error("MR 查找结果不完整，未改动远端");
+        const opened: NonNullable<typeof body.mrs> = [];
+        for (const mr of body.mrs.filter(mr => mr.source_branch === plan.old_branch && mr.target_branch === query.get("target_branch"))) {
+          const view = await this.remoteDeliveryHost(task, task.controlEpoch).gates(mr);
+          if (view?.mrState === "opened") opened.push(mr);
+        }
+        if (opened.length > 1) throw new Error("旧分支关联多个开放 MR，请先确认对应交付");
+        if (opened[0]) {
+          oldMr = opened[0].id;
+          oldDelivery = journal.before.delivery = { ...oldDelivery, mr_id: oldMr, mr_url: opened[0].url };
+          save("已找回旧分支的 MR");
+        }
+      }
+      if (oldMr !== undefined || oldDelivery?.mr_url) {
+        const view = await fetchMrGates({ platformUrl, delivery: oldDelivery, repo, headers: this.platformIdentity(task), requireExisting: true });
+        if (!view) throw new Error("暂时无法确认旧 MR 状态，未修改远端");
+        if (view.mrState === "merged") throw new Error("旧 MR 已合入，不能按未合入任务更换单号");
+        if (oldMr === undefined) throw new Error("旧 MR 缺少可操作的标识，未修改远端");
+      }
+      journal.remote_checked = true;
+      save("远端已核对，正在切换本地单号与分支");
+    }
+    if (cwd && plan && !journal.local) {
+      correction.can_cancel = false;
+      save("正在切换本地分支");
+      await applyTicketRewrite(cwd, plan);
+      journal.local = true;
+      save("本地分支已切换，代码和未提交内容保持不变");
+    }
+    // 远端先完成新的交付，再切换平台投影和清理旧资源。
+    if (plan && journal.old_remote && !journal.pushed) {
+      const publicationSha = plan.sha_map[journal.old_remote] ?? journal.old_remote;
+      const observed = await this.remoteDeliveryHost(task, task.controlEpoch).observe(plan.branch);
+      if (observed.sha && observed.sha !== publicationSha) throw new Error("新单号分支已被其他提交占用，未覆盖远端");
+      const receipt = observed.sha === publicationSha
+        ? { sha: publicationSha, ref: `refs/heads/${plan.branch}`, remote: "origin", url: repo }
+        : await this.pushFromHostTransport(task, plan.branch, undefined, publicationSha);
+      journal.pushed = { git_push: receipt };
+      save("新分支已推送");
+    }
+    if (oldMr !== undefined && !journal.mr) {
+      if (!platformUrl || !plan || !journal.pushed) throw new Error("缺少创建新 MR 的平台配置或推送记录");
+      journal.mr = await createMergeRequest({ platformUrl, repo, sourceBranch: plan.branch,
+        targetBranch: oldDelivery?.target_branch ?? journal.before.baseline ?? "master", title: correction.title,
+        dtsNo: correction.ticket, credential });
+      save("新 MR 已创建，正在同步任务与内核引用");
+    }
+    if (!journal.projected) {
+      correction.can_cancel = false;
+      save("正在同步任务记录");
+      if (cwd) {
+        if (existsSync(join(cwd, ".mae-flow.json"))) {
+          if (!this.options.host) throw new Error("内核不可用，无法同步单号");
+          correctKernelTicket({ host: this.options.host, cwd, workspace: task.summary.workspace, taskId: task.summary.id,
+            correction: { ...correction, ...plan, old_mr_id: oldMr, old_mr_url: oldDelivery?.mr_url,
+              mr_id: journal.mr?.id, mr_url: journal.mr?.url } });
+        }
+        const orderPath = join(cwd, ".mae-flow-order.json");
+        if (existsSync(orderPath)) {
+          const order = JSON.parse(readFileSync(orderPath, "utf8"));
+          order["单号"] = correction.ticket;
+          if (plan) order["分支名"] = plan.branch;
+          writeCorrectionJson(orderPath, order);
+        }
+        migrateTicketArtifacts(cwd, correction.old_ticket, correction.ticket);
+        this.annotations(task).relocateTicketArtifacts(correction.old_ticket, correction.ticket, correction.actor);
+      }
+      const replacements = { ...plan?.sha_map, ...(plan ? { [plan.old_branch]: plan.branch,
+        [`refs/heads/${plan.old_branch}`]: `refs/heads/${plan.branch}` } : {}) };
+      task.summary.ticket = correction.ticket;
+      task.summary.delivery = mapCorrectionReferences(journal.before.delivery, replacements);
+      if (plan) task.summary.delivery = { ...task.summary.delivery, source_branch: plan.branch };
+      if (journal.pushed?.git_push) task.summary.delivery = { ...task.summary.delivery,
+        git_push: journal.pushed.git_push, sha: journal.pushed.git_push.sha };
+      if (journal.mr) task.summary.delivery = { ...task.summary.delivery, mr_url: journal.mr.url,
+        mr_id: journal.mr.id, mr_state: "opened", merged_sha: undefined };
+      const oldPrepush = journal.before.delivery?.prepush;
+      if (oldPrepush?.sha && plan?.sha_map[oldPrepush.sha]) {
+        const previous = { sha: oldPrepush.sha, workspace_fingerprint: oldPrepush.workspace_fingerprint };
+        const sha = plan.sha_map[oldPrepush.sha];
+        const next = { sha, workspace_fingerprint: createHash("sha256").update(sha).digest("hex") };
+        if (oldPrepush.state === "user_skipped" || getReusablePushReceipt(oldPrepush, previous)) {
+          task.summary.delivery!.prepush = rebindEquivalentPrePushRevision(oldPrepush, previous, next, new Date().toISOString());
+        }
+      }
+      task.summary.delivery_selection = mapCorrectionReferences(journal.before.delivery_selection, replacements);
+      // 状态投影换 SHA，原始流水线日志和旧收据留在原处供追溯。
+      const ledger = new TaskHostLedger(task.summary), data = ledger.read();
+      for (const op of data.operations) if (["queued", "running"].includes(op.state)) {
+        Object.assign(op, mapCorrectionReferences(op, replacements));
+        if (journal.mr && op.mr_receipt && op.mr_receipt.url === oldDelivery?.mr_url) op.mr_receipt = journal.mr;
+      }
+      ledger.write(data);
+      const priorDescription = journal.before.waiting;
+      if (priorDescription?.step === MR_DESCRIPTION_STEP) {
+        const prior = task.humanGate.all().find(row => row.waiting_id === priorDescription.waiting_id);
+        if (prior?.status === "waiting") task.humanGate.supersede(prior.waiting_id, {
+          stateVersion: prior.state_version, notes: "AR 单号已纠正，准确描述由本次纠正提供" });
+        task.summary.waiting = undefined;
+        if (task.pendingResume?.waiting_id === priorDescription.waiting_id) task.pendingResume = undefined;
+      }
+      const description = askMrDescription(task.humanGate, task.summary.id, correction.ticket);
+      if (description.status === "waiting") task.humanGate.resolve(description.waiting_id, {
+        stateVersion: description.state_version, decision: correction.title, decidedBy: correction.actor });
+      const parent = task.summary.parent_task_id ? this.tasks.get(task.summary.parent_task_id) : undefined;
+      if (parent?.summary.requirement_graph) {
+        for (const unit of parent.summary.requirement_graph.repositories) {
+          if (unit.task_id === task.summary.id) unit.ticket = correction.ticket;
+        }
+        this.persist(parent);
+      }
+      const instruction = `责任人已纠正 AR：${correction.old_ticket} → ${correction.ticket}。当前分支 ${plan?.branch ?? "按新单号生成"}；准确描述：${correction.title}。后续提交与交付使用新单号。代码未变，沿用已完成的编译、UT、检视和授权，不要重做。`;
+      recordTaskHostInstruction(task.summary, instruction, task.summary.luban_account);
+      task.pendingAssistantHandoff = [task.pendingAssistantHandoff, instruction].filter(Boolean).join("\n");
+      this.persist(task);
+      journal.projected = true;
+      save("单号及验证引用已同步，正在清理旧交付");
+    }
+    if (oldMr !== undefined && journal.mr && !journal.closed) {
+      await closeMergeRequest({ platformUrl: platformUrl!, repo, mr: oldMr, credential });
+      journal.closed = true;
+      save("旧 MR 已关闭");
+    }
+    if (plan && journal.old_remote && !journal.deleted) {
+      const sandbox = this.prepareHostGitSandbox(credential);
+      try {
+        const remoteUrl = /^(https?|file):\/\//i.test(repo) ? repo : resolve(repo);
+        const ref = `refs/heads/${plan.old_branch}`;
+        const staging = join(sandbox.dir, "delete.git");
+        const initialized = await runGitProcess([...sandbox.args, "init", "--bare", staging], { env: sandbox.env, timeoutMs: 30_000 });
+        if (initialized.status !== 0) throw new Error("无法准备旧分支清理");
+        const result = await runGitProcess([...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
+          `--force-with-lease=${ref}:${journal.old_remote}`, remoteUrl, `:${ref}`], { env: sandbox.env, cwd: sandbox.dir, timeoutMs: GIT_TRANSFER_TIMEOUT_MS });
+        if (result.status !== 0) {
+          const observed = await this.remoteDeliveryHost(task, task.controlEpoch).observe(plan.old_branch);
+          if (observed.sha) throw new Error("新交付已保留，但旧分支清理失败（可能有其他人追加推送），请核对后重试");
+        }
+      } finally { this.cleanupHostGitCredential(sandbox); }
+      journal.deleted = true;
+      save("旧远端分支已清理");
+    }
+    correction.state = "completed";
+    correction.message = "AR 单号已纠正，已有验证与检视结论保留";
+    this.persist(task);
+    if (!correction.cleanup_only) this.resumeAfterTicketCorrection(task, journal.before);
+  }
+
+  private resumeAfterTicketCorrection(task: TaskState, before: TaskSummary): void {
+    task.summary.status = before.status;
+    task.summary.detail = before.detail;
+    task.summary.control = before.control;
+    this.persist(task);
+    this.ensureMergeWatch(task);
+    if (before.status === "waiting_for_human" && before.waiting?.step === MR_DESCRIPTION_STEP) {
+      this.continueAfterMrDescription(task, "AR 单号与描述已纠正，继续交付");
+      return;
+    }
+    if (before.status === "verifying") this.bypass(task, "纠正后恢复监听", this.pollPipeline(task, task.controlEpoch));
+    else if (["running", "queued", "pausing"].includes(before.status)) {
+      task.summary.status = "queued"; task.resume = true;
+      this.persist(task); this.queue.push(task.summary.id); this.bypass(undefined, "任务泵", this.pump());
+    }
+  }
+
   /** 安全暂停：排队/等待人工/验证中可立即停；正在执行时只登记请求，
    * 当前工具完成并回到回合边界后再释放会话和容器。 */
   async pause(id: string, actor: string): Promise<TaskSummary> {
@@ -13170,6 +13446,7 @@ export class TaskService {
   private current(task: TaskState, epoch: number): boolean {
     return !this.shuttingDown
       && task.controlEpoch === epoch
+      && !ticketCorrectionBlocks(task.summary.ticket_correction)
       && task.summary.status !== "canceled";
   }
 
@@ -13629,7 +13906,7 @@ export class TaskService {
 
   private finishHostPushDecision(task: TaskState, waiting: WaitingRecord): void {
     const ledger = new TaskHostLedger(task.summary);
-    const operation = ledger.read().operations.find(item => item.id === waiting.call_id);
+    const operation = ledger.read().operations.find(item => item.id === waiting.call_id || item.push_waiting_id === waiting.waiting_id);
     if (!operation || operation.input.action !== "push") throw new TaskControlError("未找到待确认的推送");
     if (operation.state === "succeeded" || operation.state === "failed") return;
     // 按明确选项裁决；备注可能是审批渠道信息，不能将其当作“先调整”。
@@ -13642,10 +13919,11 @@ export class TaskService {
       task.summary.status = "running";
       task.summary.detail = "已确认，正在推送";
       this.persist(task);
-      this.bypass(task, "确认后推送", finishTaskHostOperation(this.taskHostRuntime(task)));
+      this.bypass(task, "确认后推送", this.finishHostAction(task));
     } else {
       operation.state = "failed";
       operation.result = "用户要求调整本次推送";
+      if (task.summary.delivery_selection) task.summary.delivery_selection.status = "requested";
       ledger.update(operation);
       this.enqueueRepair(task, `用户要求调整推送，请整理后重新发起：\n${Object.values(waiting.answers ?? {}).join("\n")}\n${waiting.decision}\n${waiting.notes ?? ""}`, "按用户要求调整推送");
     }
@@ -13724,6 +14002,7 @@ export class TaskService {
       preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
         operation, branch => this.absorbForeignRemoteCommits(task, branch, false), async () => {
+          await this.syncTargetBeforePush(task, operation.target_branch!, actionEpoch);
           if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") {
             throw new TaskControlError(task.summary.detail ?? "无法整理已确认的交付范围");
           }
@@ -14447,7 +14726,7 @@ export class TaskService {
           return;
         }
       }
-      if (await finishTaskHostOperation(this.taskHostRuntime(task, epoch))) return;
+      if (await this.finishHostAction(task, epoch)) return;
       if (task.summary.parent_task_id) this.startBaselineWarmup(task, epoch);
       task.driver = await CloudSession.create({
         taskId: task.summary.id,
@@ -16124,9 +16403,26 @@ export class TaskService {
     task: TaskState,
     snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
   ): Promise<{ paths: string[]; base_sha: string }> {
+    // 只修正有当前 Git 事实佐证的旧展示路径，不改状态、授权范围或 SHA。
+    const result = (paths: string[], base_sha: string) => {
+      const known = [...snapshot.workspace_paths, ...paths];
+      let changed = false;
+      const selection = task.summary.delivery_selection;
+      const lists = selection ? [selection.paths, selection.excluded_paths, selection.observed_paths] : [];
+      const review = task.summary.delivery?.push_review?.committed_paths;
+      if (review) lists.push(review);
+      for (const list of lists) {
+        if (!list) continue;
+        const restored = recoverQuotedGitPaths(list, known);
+        if (restored.some((path, i) => path !== list[i])) {
+          list.splice(0, list.length, ...restored); changed = true;
+        }
+      }
+      if (changed) this.persist(task);
+      return { paths, base_sha };
+    };
     if (!task.cwd) {
-      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
-        base_sha: snapshot.baseline! };
+      return result(normalizedDeliveryPaths(snapshot.committed_paths), snapshot.baseline!);
     }
     try {
       const state = JSON.parse(readFileSync(
@@ -16151,14 +16447,11 @@ export class TaskService {
       if (common.status !== 0 || bases.length !== 1) throw new Error("无法确定唯一的 MR 比较起点");
       const comparisonBase = bases[0]!;
       const contribution = await runSafeWorktreeGitAsync(
-        task.cwd, ["diff", "--name-only", comparisonBase, snapshot.head, "--"],
+        task.cwd, ["diff", "--name-only", "-z", comparisonBase, snapshot.head, "--"],
         { timeoutMs: 30_000 });
       if (contribution.status !== 0) throw new Error("贡献差异读取失败");
-      return {
-        paths: normalizedDeliveryPaths(
-          String(contribution.stdout ?? "").split("\n")),
-        base_sha: comparisonBase,
-      };
+      return result(normalizedDeliveryPaths(
+        gitNullPaths(String(contribution.stdout ?? ""))), comparisonBase);
     } catch (error) {
       // 老任务/本地仓没有目标分支配置或远端目标引用时，仅在线性历史中
       // 沿用任务起点；两种缺失对“无基点可比”是同一回事。历史里已有
@@ -16172,8 +16465,7 @@ export class TaskService {
           || !["目标分支缺失", "目标 ref 不存在"].includes(error.message)) {
         throw new TaskControlError(`无法确定交付差异范围：${String(error)}。请核对目标分支引用；未修改交付授权或代码。`);
       }
-      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
-        base_sha: snapshot.baseline! };
+      return result(normalizedDeliveryPaths(snapshot.committed_paths), snapshot.baseline!);
     }
   }
 
@@ -16235,6 +16527,10 @@ export class TaskService {
     let focused: DeliveryRevisionComparison | undefined;
     for (const base of [...new Set(preferred)]) {
       if (!base || base === snapshot.head) continue;
+      // 上轮推送尚未包含这次合入的目标分支时，直接两点比较会混入上游
+      // 改动。此时展示 MR 净贡献，不把 master 更新标成“本轮修复”。
+      if ((await runSafeWorktreeGitAsync(task.cwd!, ["merge-base", "--is-ancestor",
+        contribution.base_sha, base], { timeoutMs: 30_000 })).status !== 0) continue;
       focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
       if (focused) break;
     }
@@ -16388,9 +16684,7 @@ export class TaskService {
       // 词,新人在唯一的人审闸口满屏找不到入口(2026-08-30 审计)。
       "完整代码变化在「交付材料 → 工作区变更」逐文件查看;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
-      "文件树左侧勾选框决定交付范围:取消勾选=该文件不推送。确认后,"
-      + "若 Agent 继续修改并生成新 HEAD,系统会在 Build-Fix 通过后展示"
-      + "新一轮检视;完全相同的 HEAD 重试不会重复打扰。",
+      "文件树左侧勾选框决定交付范围：取消勾选的文件不推送。" + PUSH_SCOPE_GUIDANCE,
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(自基线 ${snapshot.baseline.slice(0, 12)} 起;内容以检视材料实时为准):`,
@@ -16676,72 +16970,35 @@ export class TaskService {
       return "blocked";
     }
 
-    // 排除项的本地内容原样保留，不能因它们脏着就拒绝机械整理。
-    // 索引和工作区分别核对，防止 staged/unstaged 相互抵消；关闭重命名
-    // 检测，使从排除项移到业务路径的改动仍然可见。真正的新业务文件
-    // 也需要核对，不能只看上次选择的 expected，否则会被 git add 偷带。
-    const dirtyBusiness = new Set<string>();
-    for (const cached of [[], ["--cached"]]) {
-      const dirty = await runSafeWorktreeGitAsync(cwd,
-        ["diff", ...cached, "--name-only", "--no-renames", "-z", "--"],
-        { timeoutMs: 30_000 });
-      if (dirty.status !== 0) {
-        throw new Error(`读取未提交文件失败：${String(
-          dirty.stderr || dirty.error || "").trim().slice(0, 300)}`);
-      }
-      for (const path of String(dirty.stdout ?? "").split("\0").filter(Boolean)) {
-        if (!rejected.has(path) && !isAgentPlatformPath(path)) dirtyBusiness.add(path);
-      }
-    }
-    if (dirtyBusiness.size) {
-      const detail = "检测到修复重新带入了已排除文件，同时还有未提交的业务"
-        + `改动（${describeDirtyPaths([...dirtyBusiness])}）；平台不会猜着整理或循环撞门禁。请在代码检视中确认处理。`;
-      task.summary.status = "failed";
-      task.summary.detail = detail;
-      task.summary.delivery = { ...task.summary.delivery, skipped: detail };
-      this.persist(task);
-      return "blocked";
-    }
-
-    // 平台目录即便先提交后删除，blob 仍在历史里。以干净锚重组而不是补
-    // 一个“删除提交”，才能保证远端不可达。已确认范围之外若出现真正的
-    // 新业务文件保留在 targetPaths；后面由 review 授权继承或首次确认卡
-    // 决定。这里始终只移除用户已排除项与平台目录。
-    // MR 外的上游修改也必须保留。以远端安全锚重组时，把已合入的
-    // 目标分支作为父提交保留下来，不能只暂存本任务 paths 而丢掉上游树。
+    // 只重建已提交的树，未提交/未跟踪文件不参与整理，不猜它们是否为
+    // 编译产物。保留目标分支父节点，不能把合入的上游代码算成本单新增。
     const preserveTarget = !await isAncestorSha(contribution.base_sha, anchor);
-    const carried = (await run(["diff", "--name-only", "--no-renames", anchor, head, "--"],
-      "读取本轮完整树差异")).split("\n").filter(Boolean);
-    const stagePaths = [...new Set(carried)]
-      .filter(path => !isAgentPlatformPath(path) && !rejected.has(path))
-      .sort((left, right) => left.localeCompare(right));
-    const upstreamRejected = (await run(["diff", "--name-only", "--no-renames", anchor, contribution.base_sha, "--"],
-      "读取排除路径基线")).split("\n").filter(path => rejected.has(path));
+    const restorePaths = (await run(["diff", "--name-only", "--no-renames", "-z",
+      contribution.base_sha, head, "--"], "读取排除路径差异")).split("\0")
+      .filter(path => path && (rejected.has(path) || isAgentPlatformPath(path)));
     try {
-      await run(["reset", "--mixed", anchor], "回到最近干净提交");
-      if (stagePaths.length) {
-        await run(["add", "-A", "--", ...stagePaths], "重组已确认文件");
+      const commit = await deliveryCommitTree({ cwd, head, baseline: contribution.base_sha,
+        parents: [anchor, ...(preserveTarget ? [contribution.base_sha] : [])], restorePaths,
+        configs: [["user.name", "mae-flow-cloud"], ["user.email", "cloud@mae-flow.local"],
+          ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
+        message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", "按已确认范围整理修复提交"),
+      });
+      const afterPaths = normalizedDeliveryPaths((await run(["diff", "--name-only", "-z",
+        contribution.base_sha, commit, "--"], "复核整理后的范围")).split("\0"));
+      const remainingPlatform = (await run(["log", "--format=", "--name-only", "-z", "--diff-filter=A",
+        `${contribution.base_sha}..${commit}`, "--", ...AGENT_PLATFORM_ROOTS], "复核平台目录历史"))
+        .split("\0").map(path => path.trim()).filter(isAgentPlatformPath);
+      if (remainingPlatform.length || !samePaths(afterPaths, targetPaths)) {
+        throw new Error(`整理后的范围复核未通过：${describeDirtyPaths(remainingPlatform.length
+          ? remainingPlatform : [...afterPaths.filter(path => !targetPaths.includes(path)),
+            ...targetPaths.filter(path => !afterPaths.includes(path))])}；原提交、索引与工作区均未修改`);
       }
-      if (upstreamRejected.length) {
-        await run(["restore", "--source", contribution.base_sha, "--staged", "--", ...upstreamRejected],
-          "保留上游已有的排除路径内容");
-      }
-      const hasStaged = await runSafeWorktreeGitAsync(cwd,
-        ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-      if (hasStaged.status !== 0 || preserveTarget) {
-        const tree = await run(["write-tree"], "生成整理后的文件树");
-        const commit = await run(["commit-tree", tree, "-p", anchor,
-          ...(preserveTarget ? ["-p", contribution.base_sha] : []), "-m",
-          cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
-            "按已确认推送范围收口流水线修复")], "提交整理后的修复");
-        await run(["reset", "--mixed", commit], "接续整理后的提交");
-      }
+      await run(["update-ref", "HEAD", commit, head], "接续整理后的提交");
+      // 仅撤出已明确排除的暂存项；其他文件的 staged/unstaged 状态保持原样。
+      if (restorePaths.length) await run(["restore", "--source", commit, "--staged", "--",
+        ...restorePaths.map(path => `:(literal)${path}`)], "更新排除项索引");
     } catch (error) {
-      // reset --mixed 不会破坏工作区内容；尽力把分支引用与索引恢复到
-      // 原 HEAD，失败时仍以明确诊断停下，绝不自动重试成循环。
-      await runSafeWorktreeGitAsync(cwd,
-        ["reset", "--mixed", head], { timeoutMs: 30_000 });
-      const detail = `按已确认范围自动整理失败：${String(error)}`;
+      const detail = `按已确认范围自动整理失败：${String(error)}。工作区内容保留，可查看代码并补充处理要求。`;
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };
@@ -16750,28 +17007,6 @@ export class TaskService {
     }
 
     this.registerAgentPlatformLocalExcludes(cwd, selection.excluded_paths);
-    const after = await deliveryChangeSnapshot(cwd);
-    const afterPaths = after
-      ? (await this.deliveryContribution(task, after)).paths : [];
-    if (!after || after.added_agent_platform_paths.length
-        || !samePaths(afterPaths, targetPaths)) {
-      const restored = await runSafeWorktreeGitAsync(cwd,
-        ["reset", "--mixed", head], { timeoutMs: 30_000 });
-      const differences = [
-        !after ? "整理后的代码现场不可读" : "",
-        after?.added_agent_platform_paths.length ? `平台目录仍在提交历史：${describeDirtyPaths(after.added_agent_platform_paths)}` : "",
-        targetPaths.some(path => !afterPaths.includes(path)) ? `缺少文件：${describeDirtyPaths(targetPaths.filter(path => !afterPaths.includes(path)))}` : "",
-        afterPaths.some(path => !targetPaths.includes(path)) ? `多出文件：${describeDirtyPaths(afterPaths.filter(path => !targetPaths.includes(path)))}` : "",
-      ].filter(Boolean).join("；");
-      const detail = `按已确认范围自动整理后复核未通过（${differences}）；`
-        + (restored.status === 0 ? "已恢复整理前的提交，工作区内容保留。" : "恢复提交失败，请检查工作区。")
-        + "尚未推送，请在代码检视中确认处理。";
-      task.summary.status = "failed";
-      task.summary.detail = detail;
-      task.summary.delivery = { ...task.summary.delivery, skipped: detail };
-      this.persist(task);
-      return "blocked";
-    }
     this.options.log?.(
       `任务 ${task.summary.id} 已自动移除修复重新带入的排除内容：${
         describeDirtyPaths([...new Set([...unexpected, ...platformHistory])])}`);
@@ -16848,6 +17083,16 @@ export class TaskService {
   }
 
   private async tryDeliver(
+    task: TaskState,
+    epoch: number,
+  ): Promise<"review_reply_blocked" | undefined> {
+    if (task.deliveryActive) return;
+    task.deliveryActive = true;
+    try { return await this.performDelivery(task, epoch); }
+    finally { task.deliveryActive = false; }
+  }
+
+  private async performDelivery(
     task: TaskState,
     epoch: number,
   ): Promise<"review_reply_blocked" | undefined> {
@@ -16929,6 +17174,17 @@ export class TaskService {
         return;
       }
       if (!this.current(task, epoch)) return;
+      try {
+        await this.syncTargetBeforePush(task, task.summary.delivery?.target_branch ?? baseline, epoch);
+      } catch (error) {
+        if (!this.current(task, epoch)) return;
+        const conflicts = runSafeWorktreeGit(task.cwd, ["diff", "--name-only", "--diff-filter=U"]);
+        // 网络或凭据故障沿用交付恢复；只有真实代码冲突才唤醒 Agent。
+        if (conflicts.status !== 0 || !String(conflicts.stdout ?? "").trim()) throw error;
+        this.enqueueRepair(task, [task.mission, String(error)].filter(Boolean).join("\n\n"),
+          "推送前分支同步未完成，继续处理后再推送");
+        return;
+      }
       // 定格基线祖先门禁必须走在一切交付动作(范围整理/推送)
       // 之前:历史脱离基线时后面每一步都在错的合同上白烧。
       const baselineGate =
@@ -17095,7 +17351,7 @@ export class TaskService {
                sha, startedAt: mrStarted });
       // MR 创建走公共客户端(与问题流共用同一格式):适配层负责
       // codehub CLI、单号关联与输出抽取,这里只递身份与事实。
-      const mr = await createMergeRequest({
+      const mr = await this.createDeliveryMr(task, {
         platformUrl,
         repo: mrRequest.repo ?? pushReceipt.url ?? undefined,
         sourceBranch: branch,
@@ -18134,7 +18390,7 @@ export class TaskService {
     this.bypass(task, "合入监控", this.watchMerge(task, task.controlEpoch, true));
   }
 
-  /** MR 生命周期监听：修复中也看合入事实，只有 await_merge 才按门禁派单。 */
+  /** MR 生命周期监听：冲突不依赖流水线结果，修复中也持续观察合入事实。 */
   private async watchMerge(task: TaskState, _epoch: number, deferFirst = false): Promise<void> {
     if (task.mergeWatchActive) return; // 防重入:一任务一环
     task.mergeWatchActive = true;
@@ -18151,12 +18407,14 @@ export class TaskService {
         // 人工反馈抢占 Build-Fix 会换 epoch，但 MR 仍可能在这段时间被合入；
         // 监听若随旧 epoch 退出，就再也没人停止在途 Agent 或执行 close。
         if (this.shuttingDown
+            || ticketCorrectionBlocks(task.summary.ticket_correction)
             || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)
             || (!task.summary.delivery?.mr_url && task.summary.delivery?.mr_id === undefined)) return;
         const mrKey = JSON.stringify([task.summary.delivery.mr_url, task.summary.delivery.mr_id]);
         const view = await this.fetchGates(task, true);
         if (this.shuttingDown
+            || ticketCorrectionBlocks(task.summary.ticket_correction)
             || this.tasks.get(task.summary.id) !== task
             || ["completed", "canceled"].includes(task.summary.status)) return;
         if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
@@ -18166,9 +18424,7 @@ export class TaskService {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        // 往哪走由决策表定(mergeWatch.nextWatchStep):merged 任何状态下都
-        // 收口;writer 在途只看 merged,门禁派单归它收口后的 await_merge;
-        // MFC-038 源提交漂移(平台侧改写分支)立即停摆喊人。
+        // 合入事实优先；运行中的冲突补充给当前会话，其他门禁在等待合入时处理。
         let step = nextWatchStep({
           view, status: task.summary.status,
           verifiedSha: task.summary.delivery?.sha,
@@ -18177,9 +18433,16 @@ export class TaskService {
           await this.settleMergeState(task, "merged", step.sourceSha);
           return;
         }
+        if (!view.gates.some(gate => gate.name === "conflict_passed" && !gate.passed)) {
+          task.conflictNotice = undefined;
+        }
+        if (step.kind === "repair_conflict") {
+          await this.observeActiveConflict(task, view);
+        }
         const discussions = view.mrState === "opened"
           ? await this.fetchDiscussions(task) : undefined;
         if (this.shuttingDown || this.tasks.get(task.summary.id) !== task
+            || ticketCorrectionBlocks(task.summary.ticket_correction)
             || ["completed", "canceled"].includes(task.summary.status)) return;
         if (mrKey !== JSON.stringify([task.summary.delivery?.mr_url, task.summary.delivery?.mr_id])) continue;
         if (discussions?.kind === "available") {
@@ -18200,7 +18463,7 @@ export class TaskService {
             || ["completed", "canceled"].includes(task.summary.status)) return;
         // 查询期间用户可能接管/取消，不能沿用 await 前的派单许可。
         step = nextWatchStep({ view, status: task.summary.status, verifiedSha: task.summary.delivery?.sha });
-        if (step.kind === "wait") {
+        if (step.kind === "wait" || step.kind === "repair_conflict") {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
@@ -18810,10 +19073,6 @@ export class TaskService {
     ].join("\n"), `收到 ${annotations.length} 条本地检视意见，正在修改当前 MR`);
   }
 
-  /** 冲突修复派单(批4):宿主先 merge 目标分支**故意把冲突标记留在
-   * 工作区**,让 agent 在真实冲突上下文里解,而不是凭描述想象
-   * (内网框架里最值得抄的一条)。merge 干净=没有真冲突,交回统一的
-   * host push 链，不烧会话。刹车=同 SHA 不二修。 */
   /** 分支上的外来提交对 Agent 的披露。它们是人直接推上来的,默认可信;
    * 但任何一轮修复会话若不知情,很容易把别人的改动当成脏东西"整理"掉
    * (reset/revert/squash 都够呛),所以派单时必须点名。 */
@@ -18829,343 +19088,55 @@ export class TaskService {
     ].join("\n");
   }
 
-  /** 远端任务分支上出现了本任务没推过的提交时,把自己的提交接到它后面。
-   *
-   * 老行为是拿同一个已验证 SHA 一遍遍撞 non-fast-forward 拒收(task-40
-   * 实锤:同一条失败刷了 110 次)。外来提交只可能是人为介入,用户拍板
-   * 默认可信——不举卡、不加闸,接续后新 HEAD 照常走 Build-Fix / 推送确认
-   * / 推送这条既有链路,人该看的东西一样会看到。
-   *
-   * 探测失败(读不到远端、拉不下来)一律 fail-open:这不是新门禁,后面
-   * 真 push 会如实失败并按既有预算自愈。真正 fail-closed 的只有"历史被
-   * 改写"和"接不上",它们继续推下去只会把事情弄得更说不清。 */
-  private async absorbForeignRemoteCommits(
-    task: TaskState,
-    branch: string,
-    dispatchRepair = true,
-  ): Promise<"ok" | "absorbed" | "blocked"> {
-    if (!this.options.host || !task.cwd) return "ok";
-    const cwd = task.cwd;
-    let remoteUrl: string;
-    try {
-      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
-      if (!configured) throw new Error("任务没有权威代码仓地址");
-      validateRepositoryAddress(configured);
-      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
-          && !/^(?:https?|file):\/\//i.test(configured)
-          && !/^[a-z]:[\\/]/i.test(configured)) {
-        throw new Error("只允许 HTTPS 或本地仓传输");
-      }
-      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
-        ? configured : resolve(configured);
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(fail-open): ${String(error)}`);
-      return "ok";
-    }
-    const credential = this.options.gitCredential?.(
-      task.summary.luban_account);
-    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
-    try {
-      sandbox = this.prepareHostGitSandbox(credential);
-    } catch (error) {
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(Git 沙箱创建失败,fail-open): ${String(error)}`);
-      return "ok";
-    }
-    let gitView: ReturnType<typeof createSafeGitView>;
-    try {
-      gitView = createSafeGitView(cwd);
-    } catch (error) {
-      this.cleanupHostGitCredential(sandbox);
-      this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-        + `(安全 Git 视图创建失败,fail-open): ${String(error)}`);
-      return "ok";
-    }
-    const identityName = credential?.username
-      ?? task.summary.luban_account ?? "mae-flow-cloud";
-    const identityEmail = credential?.email
-      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
-    // 与冲突修复同一套边界:fetch/rebase 看真实 refs/index/objects,
-    // config 却来自空代理 gitdir,Agent 写进 .git/config 的 hook、
-    // fsmonitor、insteadOf 都进不了这个带宿主凭据的进程。
-    const worktreeArgs = [
-      ...sandbox.args,
-      "-c", `safe.directory=${resolve(cwd)}`,
-      "-c", "core.fsmonitor=false",
-      "-c", "commit.gpgSign=false",
-      "-c", `user.name=${identityName}`,
-      "-c", `user.email=${identityEmail}`,
-    ];
-    const worktreeEnv = gitView.environment(sandbox.env);
-    try {
-      const outcome = await absorbForeignBranchCommits({
-        branch,
-        remoteUrl,
-        lastPushedSha: task.summary.delivery?.git_push?.sha
-          ?? task.summary.delivery?.sha,
-        transport: (args) => runGitProcess([...sandbox.args, ...args], {
-          timeoutMs: 60_000, env: sandbox.env,
-        }),
-        // rebase 的中间状态落在 GIT_DIR(这里是代理 gitdir)里,
-        // 所以整轮必须复用同一个 view——换一个就 abort 不回来了。
-        worktree: (args) => runGitProcess([...worktreeArgs, ...args], {
-          cwd,
-          env: worktreeEnv,
-          timeoutMs: args[0] === "fetch" || args[0] === "rebase"
-            ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
-        }),
-      });
-      if (outcome.kind === "none") return "ok";
-      if (outcome.kind === "unavailable") {
-        this.options.log?.(`任务 ${task.summary.id} 外来提交探测跳过`
-          + `(fail-open): ${outcome.reason}`);
-        return "ok";
-      }
-      if (outcome.kind === "blocked") {
-        if (outcome.conflicts?.length) {
-          const message = `远端任务分支存在代码冲突，已还原接续现场。请先调用 task_control(action="sync_branch") 准备真实合并冲突，自行解决并提交，完成同步及编译、UT 后重新请求 push；不要重复直接推送。涉及文件：${outcome.conflicts.join("、")}`;
-          task.summary.detail = message;
-          this.persist(task);
-          if (dispatchRepair) this.enqueueRepair(task, message, "远端分支冲突，Agent 同步解决中");
-          return "blocked";
-        }
-        this.markVerificationStalled(task, outcome.reason, "safety");
-        return "blocked";
-      }
-      const previous = task.summary.delivery?.foreign_commits;
-      task.summary.delivery = {
-        ...task.summary.delivery,
-        foreign_commits: {
-          base_sha: outcome.base_sha,
-          absorbed_at: new Date().toISOString(),
-          count: (previous?.count ?? 0) + outcome.count,
-          subjects: [...outcome.subjects, ...(previous?.subjects ?? [])]
-            .slice(0, 12),
-        },
-      };
-      task.summary.detail = `分支上有 ${outcome.count} 条外来提交`
-        + "(有人直接推了代码),已把本任务的提交接到它们之后重新验证";
-      this.persist(task);
-      this.options.log?.(`任务 ${task.summary.id} 接续分支上的 `
-        + `${outcome.count} 条外来提交:${outcome.previous_head.slice(0, 12)}`
-        + ` → ${outcome.head.slice(0, 12)}(基座 ${
-          outcome.base_sha.slice(0, 12)})`);
-      return "absorbed";
-    } finally {
-      gitView.cleanup();
-      this.cleanupHostGitCredential(sandbox);
-    }
+  private branchSync(task: TaskState, epoch = task.controlEpoch): TaskBranchSync {
+    return new TaskBranchSync({
+      summary: task.summary, cwd: task.cwd, enabled: !!this.options.host,
+      defaultRepository: () => this.effectiveDefaultRepo(), validateRepository: validateRepositoryAddress,
+      credential: () => this.options.gitCredential?.(task.summary.luban_account),
+      prepareGit: credential => this.prepareHostGitSandbox(credential),
+      cleanupGit: sandbox => this.cleanupHostGitCredential(sandbox),
+      current: () => this.current(task, epoch), persist: () => this.persist(task),
+      lastReply: () => task.lastReply, feedbackBaseSha: () => this.feedbackBaseSha(task),
+      enqueueRepair: (message, detail) => this.enqueueRepair(task, message, detail),
+      stall: (message, kind) => this.markVerificationStalled(task, message, kind),
+      openFeedback: items => { this.openFeedbackBatch(task, "conflict", items); },
+      notifyStopped: () => this.notifyRepairStopped(task),
+      deliver: () => this.tryDeliver(task, epoch), log: this.options.log,
+    });
   }
 
-  private async dispatchConflictRepair(
-    task: TaskState,
-    sha: string,
-    max: number | undefined,
-    epoch: number,
-    sync?: { target: string; allowMissing?: boolean; ready(message: string): void },
-  ): Promise<boolean> {
-    if (!this.current(task, epoch)) return true;
-    const delivery = task.summary.delivery ?? (task.summary.delivery = {});
-    const target = sync?.target ?? delivery.target_branch;
-    if (!task.cwd || !target) return true;
-    const loop: NonNullable<NonNullable<TaskSummary["delivery"]>["loop"]> = sync
-      ? { round: 0, max, state: "repairing" } : delivery.loop
-      ?? (delivery.loop = { round: 0, max, state: "repairing" as const });
-    if (!sync && loop.kind === "conflict" && loop.last_sha === sha) {
-      loop.state = "halted";
-      const diagnosis = (task.lastReply ?? "").trim();
-      if (diagnosis) loop.diagnosis = diagnosis.slice(0, 2000);
-      task.summary.detail =
-        "冲突修复会话没有产生新提交,冲突仍在,请人工处理";
-      this.persist(task);
-      this.notifyRepairStopped(task);
-      return true;
-    }
-    const cwd = task.cwd;
-    let remoteUrl: string;
-    try {
-      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
-      if (!configured) throw new Error("任务没有权威代码仓地址");
-      validateRepositoryAddress(configured);
-      if (/^[a-z][a-z\d+.-]*:/i.test(configured)
-          && !/^(?:https?|file):\/\//i.test(configured)) {
-        throw new Error("只允许 HTTPS 或本地仓传输");
-      }
-      remoteUrl = /^(?:https?|file):\/\//i.test(configured)
-        ? configured : resolve(configured);
-    } catch (error) {
-      task.summary.detail = `冲突修复准备失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    const credential = this.options.gitCredential?.(
-      task.summary.luban_account);
-    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]>;
-    try {
-      sandbox = this.prepareHostGitSandbox(credential);
-    } catch (error) {
-      task.summary.detail = `冲突修复 Git 沙箱创建失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    let gitView: ReturnType<typeof createSafeGitView>;
-    try {
-      gitView = createSafeGitView(cwd);
-    } catch (error) {
-      this.cleanupHostGitCredential(sandbox);
-      task.summary.detail = `冲突修复安全 Git 视图创建失败: ${String(error)}`;
-      this.persist(task);
-      return true;
-    }
-    const identityName = credential?.username
-      ?? task.summary.luban_account ?? "mae-flow-cloud";
-    const identityEmail = credential?.email
-      ?? `${identityName.replace(/[^a-zA-Z0-9_.+-]/g, "-")}@localhost`;
-    const worktreeArgs = [
-      ...sandbox.args,
-      "-c", `safe.directory=${resolve(cwd)}`,
-      "-c", "core.fsmonitor=false",
-      "-c", "commit.gpgSign=false",
-      "-c", `user.name=${identityName}`,
-      "-c", `user.email=${identityEmail}`,
-    ];
-    // fetch/merge 看真实 refs/index/objects，但 config 来自空代理 gitdir。
-    // 因而 Agent 写入的 fsmonitor、filter、merge driver、url.insteadOf 与
-    // credential helper 都不可能在带宿主权限/短期令牌的进程里执行。
-    const worktreeEnv = gitView.environment(sandbox.env);
-    // 异步 + 预算(2026-08-25 卡死事故同病类):fetch 走网络、merge
-    // 碰大仓索引,同步执行会把事件循环冻住整段时间。
-    const git = (...args: string[]) => runGitProcess(
-      [...worktreeArgs, ...args], {
-        cwd, env: worktreeEnv,
-        timeoutMs: args[0] === "fetch" || args[0] === "merge"
-          ? GIT_TRANSFER_TIMEOUT_MS : 30_000,
-      });
-    try {
-      const targetCheck = await git("check-ref-format", "--branch", target);
-      if (targetCheck.status !== 0) {
-        task.summary.detail = `冲突修复准备失败:目标分支名不合法 ${target}`;
-        this.persist(task);
-        return true;
-      }
-      if (sync?.allowMissing) {
-        const remote = await git("ls-remote", "--exit-code", "--heads", remoteUrl, `refs/heads/${target}`);
-        if (remote.status === 2) { sync.ready("任务分支尚未推送，继续同步目标分支"); return true; }
-        if (remote.status !== 0) throw new TaskControlError("无法查询远端任务分支，请检查网络和凭据后重试");
-      }
-      const fetched = await git(
-        "fetch", "--no-tags", "--no-recurse-submodules", remoteUrl,
-        `+refs/heads/${target}:refs/remotes/origin/${target}`);
-      if (fetched.status !== 0) {
-        task.summary.detail = `冲突修复准备失败(fetch ${target}):`
-          + `${String(fetched.stderr || "").slice(0, 300)}`;
-        this.persist(task);
-        return true; // 环境问题不硬闯,留痕等人(或下一轮监控重试)
-      }
-      if (!this.current(task, epoch)) return true;
-      const beforeMerge = String(
-        (await git("rev-parse", "HEAD")).stdout || "").trim();
-      const merged = await git("merge", "--no-edit", `origin/${target}`);
-      if (merged.status === 0) {
-        const afterMerge = String(
-          (await git("rev-parse", "HEAD")).stdout || "").trim();
-        if (sync) { sync.ready(`已同步 origin/${target}；未自动推送。`); return true; }
-        if (beforeMerge && afterMerge === beforeMerge) {
-          // 新提交已经包含目标分支，但平台的 conflict gate 可能还没刷新。
-          // 这不是“修复会话没有提交”：不写 last_sha、不退出监控，让
-          // watchMerge 按原轮询节奏继续看门禁/MR。
-          task.summary.detail = "本地已无冲突，等待平台刷新冲突门禁";
-          this.persist(task);
-          return false;
-        }
-        // 干净合并:没有真冲突(门禁可能滞后)。统一交给 tryDeliver 的
-        // host-only 推送与远端 SHA 复核，避免另开无收据旁路。
-        loop.kind = "conflict";
-        loop.last_sha = sha;
-        task.summary.detail = "与目标分支干净合并,等待宿主推送并触发新流水线";
-        this.persist(task);
-        setImmediate(() => void this.tryDeliver(task, epoch));
-        return true;
-      }
-      const conflicted = String((await git(
-        "diff", "--no-ext-diff", "--no-textconv",
-        "--name-only", "--diff-filter=U")).stdout || "")
-        .trim().split("\n").filter(Boolean);
-      if (!conflicted.length) {
-        // merge 失败却没有冲突文件 = 环境怪状(本地脏文件之类),
-        // 别把 agent 派进一个说不清的现场。
-        await git("merge", "--abort");
-        task.summary.detail = "merge 失败但无冲突文件,请人工:"
-          + `${String(merged.stderr || "").slice(0, 300)}`;
-        this.persist(task);
-        return true;
-      }
-      // merge 的 config 必须隔离，但冲突会话随后使用真实 `.git`。将 Git
-      // 在可信代理 gitdir 中生成的最小 merge 状态复制回真实 gitdir；
-      // index/objects/refs 本来就绑定真实仓。若目标被 Agent 换成软链，
-      // 先在代理视图里 abort，再 fail-closed，绝不跟随它写宿主文件。
-      try {
-        for (const name of [
-          "MERGE_HEAD", "MERGE_MODE", "MERGE_MSG", "ORIG_HEAD",
-        ]) {
-          const source = join(gitView.proxyGitDir, name);
-          if (!existsSync(source)) continue;
-          const sourceInfo = lstatSync(source);
-          if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) {
-            throw new Error(`代理 Git 状态 ${name} 不是普通文件`);
-          }
-          const targetPath = join(gitView.repositoryGitDir, name);
-          if (existsSync(targetPath)) {
-            const targetInfo = lstatSync(targetPath);
-            if (!targetInfo.isFile() || targetInfo.isSymbolicLink()) {
-              throw new Error(`任务 Git 状态 ${name} 不是普通文件`);
-            }
-          }
-          writeFileSync(targetPath, readFileSync(source), { mode: 0o600 });
-        }
-      } catch (error) {
-        await git("merge", "--abort");
-        task.summary.detail = `冲突现场安全落盘失败: ${String(error)}`;
-        this.persist(task);
-        return true;
-      }
-      const repairMessage = [
-        `宿主已准备与 origin/${target} 的真实合并冲突：`, ...conflicted,
-        "读取冲突双方实现、提交历史和调用方，保留双方必要改动；普通代码冲突自行解决，不要无脑选 ours/theirs。业务意图矛盾且证据不足时才向责任人说明取舍。",
-        "逐个修改冲突文件，git add 后 git commit 完成合并；不要 rebase、force push 或丢弃无关修改。",
-        "解决后再次调用 task_control sync_branch 完成剩余同步，再执行受影响的编译、UT 和集成验证；失败继续修复，不复用旧 SHA 的成功。最后用 task_control push 更新原 MR，不另建 MR。",
-      ].join("\n");
-      if (sync) { sync.ready(repairMessage); return true; }
-      try {
-        this.openFeedbackBatch(task, "conflict", conflicted.map((file) => ({
-          id: `conflict:${sha}:${target}:${file}`,
-          source: "conflict",
-          source_id: `${sha}:${target}:${file}`,
-          source_revision: 0,
-          kind: "merge_conflict",
-          summary: `与 ${target} 合并时 ${file} 发生冲突`,
-          verification: "gate",
-          file,
-        })));
-      } catch (error) {
-        await git("merge", "--abort");
-        this.markVerificationStalled(task,
-          `冲突事实已发现，但内核未能打开统一反馈批次：${String(error)}`,
-          stallClassForError(error, "contract"));
-        return true;
-      }
-      loop.kind = "conflict";
-      loop.round = 0; // 冲突触发同样清零 CI 重试
-      loop.last_sha = sha;
-      loop.state = "repairing";
-      this.enqueueRepair(task, repairMessage,
-        `与 ${target} 冲突(${conflicted.length} 个文件),专职会话解决中`);
-      return true;
-    } finally {
-      gitView.cleanup();
-      this.cleanupHostGitCredential(sandbox);
-    }
+  private absorbForeignRemoteCommits(task: TaskState, branch: string, dispatchRepair = true) {
+    return this.branchSync(task).absorb(branch, dispatchRepair);
+  }
+
+  private async observeActiveConflict(task: TaskState, view: GateView): Promise<void> {
+    if (this.repairBudget(task) === 0 || task.pauseRequested || task.assistantActive
+        || task.prepushActive || task.deliveryActive || task.transportActive
+        || new TaskHostLedger(task.summary).pending()) return;
+    const notice = `${view.sourceSha ?? task.summary.delivery?.sha ?? ""}:${task.summary.delivery?.target_branch ?? task.summary.baseline ?? ""}`;
+    if (task.conflictNotice === notice) return;
+    const message = "MR 已报告与目标分支存在代码冲突，平台可能因此不创建流水线。继续完成当前检视或开发目标，并在下一次 push 前调用 task_control(action=\"sync_branch\") 拉取远端任务分支与最新目标分支；按返回的真实冲突读取双方上下文、解决并提交，执行受影响的验证后更新原 MR。不要等待流水线红灯，也不要丢失当前检视意见及逐条回复。";
+    if (task.driver) {
+      await task.driver.steer(message);
+    } else if (task.summary.status === "queued" || task.summary.status === "running") {
+      task.pendingMainSteers = [...(task.pendingMainSteers ?? []), message];
+    } else if (task.summary.status === "verifying") {
+      // 使旧流水线回调失效，再复用当前任务的修复入口。
+      task.controlEpoch += 1;
+      this.enqueueRepair(task, [task.mission, message].filter(Boolean).join("\n\n"),
+        "MR 存在冲突，正在同步分支并自动修复");
+    } else return;
+    task.conflictNotice = notice;
+    this.persist(task);
+  }
+
+  private syncTargetBeforePush(task: TaskState, target: string, epoch: number) {
+    return this.branchSync(task, epoch).syncBeforePush(target);
+  }
+
+  private dispatchConflictRepair(task: TaskState, sha: string, max: number | undefined,
+    epoch: number, sync?: BranchSyncRequest) {
+    return this.branchSync(task, epoch).repair(sha, max, sync);
   }
 
   private deliveryOutbox(task: TaskState): DeliveryOutbox {
@@ -20052,137 +20023,12 @@ export class TaskService {
     return this.clarificationRespondents(task, waiting).includes(username);
   }
 
-  /** Host Git 动作使用的短生命周期 helper。目录/脚本仅活在一次
-   * clone 或 push 的受控调用窗口，绝不进入 agentDir，也不写进仓库
-   * config；调用方必须 finally cleanupHostGitCredential。 */
-  private prepareHostGitCredential(
-    credential: { username: string; password: string },
-  ): { dir: string; helper: string } {
-    // 可执行 helper 不能放系统 /tmp：生产宿主通常将 /tmp 挂成 noexec。
-    // 使用 Cloud 数据目录下 0700 的控制面运行目录，仍与任务工作区隔离。
-    const dir = this.createHostGitRuntimeDirectory();
-    chmodSync(dir, 0o700);
-    const file = join(dir, "credential");
-    writeFileSync(file,
-      `username=${credential.username}\npassword=${credential.password}\n`);
-    chmodSync(file, 0o600);
-    const script = join(dir, "helper.sh");
-    writeFileSync(script, [
-      "#!/bin/sh",
-      'if [ "$1" = "get" ]; then',
-      '  cat "$(dirname "$0")/credential"',
-      "fi",
-      "exit 0",
-      "",
-    ].join("\n"));
-    chmodSync(script, 0o700);
-    return { dir, helper: script };
+  private prepareHostGitSandbox(credential: { username: string; password: string } | undefined) {
+    return new HostGitSandbox(this.options.dataDir, this.options.log).prepare(credential);
   }
 
-  private cleanupHostGitCredential(
-    prepared: { dir: string } | undefined,
-  ): void {
-    if (!prepared) return;
-    try {
-      rmSync(prepared.dir, { recursive: true, force: true });
-    } catch (error) {
-      this.options.log?.(
-        `临时 Git 凭据目录清理失败 ${prepared.dir}: ${String(error)}`);
-    }
-  }
-
-  /** Host push/ls-remote 不得继承 Agent 可写的仓库配置或部署机用户配置。
-   *
-   * 工作区里的 .git/config、hooks、origin 都属于不可信输入：Agent 为了
-   * 正常开发必须能写它们，但宿主传输不能因此执行 hook、credential
-   * helper、ext remote helper，或被 url.*.insteadOf 改道。这里给一次
-   * 交付动作建全新的 HOME/全局配置/askpass 边界；真正的 push 还会从
-   * 一个临时 bare 仓发起，从物理上不读取工作区 .git/config。 */
-  private prepareHostGitSandbox(
-    credential: { username: string; password: string } | undefined,
-  ): {
-    dir: string;
-    helper?: string;
-    args: string[];
-    env: NodeJS.ProcessEnv;
-  } {
-    const prepared = credential
-      ? this.prepareHostGitCredential(credential) : undefined;
-    const dir = prepared?.dir ?? this.createHostGitRuntimeDirectory();
-    chmodSync(dir, 0o700);
-    const home = join(dir, "home");
-    const xdg = join(dir, "xdg");
-    mkdirSync(home, { mode: 0o700 });
-    mkdirSync(xdg, { mode: 0o700 });
-    const globalConfig = join(dir, "global.gitconfig");
-    const systemConfig = join(dir, "system.gitconfig");
-    writeFileSync(globalConfig, "");
-    writeFileSync(systemConfig, "");
-    chmodSync(globalConfig, 0o600);
-    chmodSync(systemConfig, 0o600);
-    const askpass = join(dir, "reject-askpass.sh");
-    writeFileSync(askpass, "#!/bin/sh\nexit 1\n");
-    chmodSync(askpass, 0o700);
-
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    // Git 的环境配置注入优先级高于文件配置。部署进程若意外带了这些
-    // 变量，不能让它们越过下面的 -c 硬边界；工作区定位类变量同理。
-    for (const key of Object.keys(env)) {
-      if (/^GIT_CONFIG$/i.test(key)
-          || /^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/i.test(key)
-          || /^(?:GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_SSH|GIT_SSH_COMMAND|GIT_PROXY_COMMAND)$/i.test(key)) {
-        delete env[key];
-      }
-    }
-    Object.assign(env, {
-      HOME: home,
-      XDG_CONFIG_HOME: xdg,
-      GIT_CONFIG_GLOBAL: globalConfig,
-      GIT_CONFIG_SYSTEM: systemConfig,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_ASKPASS: askpass,
-      SSH_ASKPASS: askpass,
-      SSH_ASKPASS_REQUIRE: "never",
-      GCM_INTERACTIVE: "Never",
-    });
-    const args = [
-      "-c", "core.hooksPath=/dev/null",
-      "-c", "protocol.ext.allow=never",
-      // 空项先清除任何低优先级 helper；个人令牌只交给本次临时 helper。
-      "-c", "credential.helper=",
-      ...(prepared ? ["-c", `credential.helper=${prepared.helper}`] : []),
-    ];
-    return { dir, helper: prepared?.helper, args, env };
-  }
-
-  /** 一次 Host Git 动作一个私有目录。拒绝符号链接，防止控制面 helper
-   * 被 Agent 或同机用户引到任务工作区；操作结束仍由既有 cleanup 删除。 */
-  private createHostGitRuntimeDirectory(): string {
-    const configuredDataRoot = resolve(this.options.dataDir);
-    mkdirSync(configuredDataRoot, { recursive: true });
-    const dataRoot = realpathSync(configuredDataRoot);
-    const runtime = join(dataRoot, ".runtime");
-    const gitRoot = join(runtime, "host-git");
-    for (const directory of [runtime, gitRoot]) {
-      if (existsSync(directory)) {
-        const stat = lstatSync(directory);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) {
-          throw new Error(`Host Git 运行目录不是可信普通目录: ${directory}`);
-        }
-      } else {
-        mkdirSync(directory, { mode: 0o700 });
-      }
-      chmodSync(directory, 0o700);
-      const actual = realpathSync(directory);
-      if (actual !== directory
-          || !(actual === dataRoot || actual.startsWith(`${dataRoot}/`))) {
-        throw new Error(`Host Git 运行目录越出 Cloud 数据目录: ${directory}`);
-      }
-    }
-    const operation = mkdtempSync(join(gitRoot, "operation-"));
-    chmodSync(operation, 0o700);
-    return operation;
+  private cleanupHostGitCredential(prepared: { dir: string } | undefined): void {
+    new HostGitSandbox(this.options.dataDir, this.options.log).cleanup(prepared);
   }
 
   /** 把 Coding Agent / 中心能力服务注入目录登记为当前 clone 的本地
@@ -20294,17 +20140,25 @@ export class TaskService {
 
   /** Agent 会话已释放后由宿主完成唯一一次传输，并立刻从远端反查 SHA。
    * 返回值既是 TaskSummary 现场，也是 `pipeline record` 的内核收据。 */
-  private async pushFromHost(
+  private async pushFromHost(task: TaskState, branch: string, expectedSha?: string): Promise<GitPushReceipt> {
+    if (task.transportActive) throw new TaskControlError("已有宿主传输正在执行");
+    const work = this.pushFromHostTransport(task, branch, expectedSha);
+    task.transportActive = work;
+    try { return await work; } finally { if (task.transportActive === work) task.transportActive = undefined; }
+  }
+
+  private async pushFromHostTransport(
     task: TaskState,
     branch: string,
     expectedSha?: string,
+    metadataOnlySha?: string,
   ): Promise<GitPushReceipt> {
     if (task.driver) {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
     }
     if (!task.cwd) throw new Error("任务没有代码工作区，不能推送");
     const deliverySnapshot = await deliveryChangeSnapshot(task.cwd);
-    if (deliverySnapshot?.added_agent_platform_paths.length) {
+    if (!metadataOnlySha && deliverySnapshot?.added_agent_platform_paths.length) {
       throw new Error(
         "安全拒绝：待推送提交历史包含 Agent 平台本地目录 "
         + describeDirtyPaths(deliverySnapshot.added_agent_platform_paths));
@@ -20353,14 +20207,14 @@ export class TaskService {
       // 只从工作区读取要交付的对象/HEAD；传输在新建 bare 仓中进行，
       // 因而工作区 hooks、origin、url.*、protocol.*、helper 全部不生效。
       const head = await worktreeGit(["rev-parse", "--verify", "HEAD"]);
-      const sha = String(head.stdout ?? "").trim();
+      const sha = metadataOnlySha ?? String(head.stdout ?? "").trim();
       if (head.status !== 0 || !sha) {
         throw new Error(`读取待推送 HEAD 失败: ${String(head.stderr ?? "")}`);
       }
       if (expectedSha && sha !== expectedSha) {
         throw new Error(
-          `安全拒绝：待推送 HEAD 已从已验证的 ${expectedSha.slice(0, 12)}`
-          + ` 变为 ${sha.slice(0, 12)}，旧确认不可复用`);
+          `传输准备后 HEAD 从 ${expectedSha.slice(0, 12)} 变为 ${sha.slice(0, 12)}，`
+          + "本次未发送；请刷新待推送提交后继续，已有文件范围确认保留");
       }
       // 提交说明属于编码指导，传输层只核对授权目标与真实 SHA。
       // 平台远端自身拒绝时仍如实回报，不在这里另设格式否决权。
@@ -20379,6 +20233,7 @@ export class TaskService {
       }
       const pushed = await runGitProcess([
         ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
+        ...(metadataOnlySha ? [`--force-with-lease=${ref}:`] : []),
         "--porcelain", remoteUrl, `${sha}:${ref}`,
       ], {
         timeoutMs: GIT_TRANSFER_TIMEOUT_MS,
@@ -20744,24 +20599,6 @@ export class TaskService {
     }));
   }
 
-  /** 主动压缩(用户关切:长编码阶段注意力漂移):事件量每涨
-   * compactEveryEvents,在回合间隙以内核锚点压缩会话。事件量是
-   * 上下文增长的诚实代理——不复刻 token 计数,也不猜阶段语义。 */
-  private async maybeCompact(task: TaskState): Promise<void> {
-    const every = this.options.compactEveryEvents ?? 0;
-    if (!every || !task.driver) return;
-    let level = 0;
-    try {
-      level = new EventLog(
-        join(task.summary.workspace, "events.jsonl")).lastEventId();
-    } catch {
-      return;
-    }
-    if (level - (task.lastCompactAt ?? 0) < every) return;
-    task.lastCompactAt = level;
-    await task.driver.compactAnchored(this.kernelAnchor(task));
-  }
-
   /** 压缩锚点:内核状态文件的 current/config 原文;没有内核现场
    * 就退到需求原话——锚永远来自权威,不由云端编造。 */
   private kernelAnchor(task: TaskState): string {
@@ -20999,10 +20836,7 @@ export class TaskService {
           await this.finishPause(task, "running");
           break;
         }
-        if (await finishTaskHostOperation(this.taskHostRuntime(task, epoch))) break;
-        // 主动压缩:回合间隙是唯一安全的压缩点(等待人工时压会
-        // 打断挂起的人工节点)。以内核锚点组织摘要,注意力不许飘。
-        await this.maybeCompact(task);
+        if (await this.finishHostAction(task, epoch)) break;
         if (!this.current(task, epoch)) break;
         if (task.pauseRequested) {
           await this.finishPause(task, "running");

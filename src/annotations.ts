@@ -202,6 +202,7 @@ export interface AnnotationInput {
 export const ANNOTATION_QUOTE_MAX = 1500;
 
 type Operation =
+  | { op: "relocate_ticket"; old_ticket: string; ticket: string; by: string; at: string }
   | { op: "add"; record: Annotation }
   | { op: "edit"; id: string; note: string; at: string; by?: string; owner_controlled?: boolean }
   | { op: "owner_resolution"; id: string; resolution: AnnotationResolution }
@@ -251,6 +252,13 @@ export class AnnotationStore {
   constructor(readonly path: string, private readonly ownerControlled = false,
     private readonly onChanged?: () => void) {}
 
+  /** 仅迁移文档位置，不改意见正文、修订号和闭环状态。旧路径保留在追加账中。 */
+  relocateTicketArtifacts(oldTicket: string, ticket: string, by: string): void {
+    if (!this.list().some(item => [item.artifact, item.file].some(path =>
+      path.includes(`.mae-flow-work/${oldTicket}/`) || path.startsWith(`${oldTicket}/`)))) return;
+    this.append({ op: "relocate_ticket", old_ticket: oldTicket, ticket, by, at: new Date().toISOString() });
+  }
+
   /** 回放得到当前状态。中段坏行跳过不炸整页(旁路 fail-open,大声
  *  记账);断写尾巴由读口自愈——崩溃半行不再吞掉下一次追加的账。 */
   list(): Annotation[] {
@@ -271,6 +279,15 @@ export class AnnotationStore {
         const found = byId.get(operation.id);
         if (found) { found.route = "agent"; found.status = "draft"; found.agent_assigned = true; found.needs_owner_closure = true;
           if (operation.context) found.agent_context = { text: operation.context, by: operation.by, at: operation.at, revision: found.rework ?? 0 }; }
+        continue;
+      }
+      if (operation.op === "relocate_ticket") {
+        for (const found of byId.values()) {
+          for (const key of ["artifact", "file"] as const) {
+            found[key] = found[key].replace(`.mae-flow-work/${operation.old_ticket}/`, `.mae-flow-work/${operation.ticket}/`);
+            if (found[key].startsWith(`${operation.old_ticket}/`)) found[key] = operation.ticket + found[key].slice(operation.old_ticket.length);
+          }
+        }
         continue;
       }
       if (operation.op === "owner_resolution") {

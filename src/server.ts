@@ -805,12 +805,7 @@ export function createTaskServer(
                 // 与 max_concurrent 同一展示口径:这里只给部署层缺省。
                 issue_max_turns: options.issueFlow?.options.maxConcurrentTurns
                   ?? 10,
-                // 问题流回合前压缩的事件量阈值缺省
-                // (--issue-compact-every-events,部署缺省 400;显式 0=关)。
-                // 实际生效值还可能被管理页运行时旋钮
-                // issue_compact_every_events 覆盖。
-                issue_compact_every_events:
-                  options.issueFlow?.options.compactEveryEvents ?? 400,
+                issue_compact_every_events: 0, // 旧客户端兼容，容量管理已自动化
                 // 终态现场回收缺省开(磁盘治理票 01),管理页旋钮
                 // issue_repo_reclaim 可关;构建产物冷却期缺省 48h(票 03)。
                 // 缺省值从 service 导入,两处不许漂移。
@@ -2126,7 +2121,13 @@ export function createTaskServer(
           });
         }
         const businessModuleId = typeof body.business_module_id === "string" ? body.business_module_id.trim() : "";
-        if (!businessModuleId) return json(response, 400, { error: "请选择所属业务模块" });
+        // 归属模块:登录下单且平台已配置模块库时必选——让用户选归属的前提
+        // 是平台真的配置了归属选项。本地单人/测试(无鉴权)与未配置模块库
+        // 的部署不卡创建,否则所有不带模块的既有脚本与测试全部 400。
+        const hasBusinessModules = listBusinessModules(service.options.dataDir).modules.length > 0;
+        if (viewer && hasBusinessModules && !businessModuleId) {
+          return json(response, 400, { error: "请选择所属业务模块" });
+        }
         // 任务归属人=登录者本人(不许替别人下单);无鉴权形态(本地
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
@@ -2361,6 +2362,11 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
+        const correction = service.get(id)?.ticket_correction;
+        if (request.method !== "GET" && parts[2] !== "correct-ticket"
+            && correction && correction.state !== "completed" && !correction.cleanup_only) {
+          return json(response, 409, { error: "单号正在纠正，请在任务详情中查看进度或重试" });
+        }
         if (request.method !== "GET" && service.historyMutationInProgress(id)) {
           return json(response, 409, {
             error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
@@ -2972,6 +2978,16 @@ export function createTaskServer(
             viewer?.username ?? target.luban_account ?? "本地用户",
             String(body.text ?? ""),
           ));
+        }
+        if (request.method === "POST" && parts[2] === "correct-ticket" && parts.length === 3) {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) return json(response, 403, { error: "只有任务责任人可以纠正单号" });
+          const body = await readBody(request);
+          if (body.action === "cancel") return json(response, 200, service.cancelTicketCorrection(id));
+          return json(response, 202, service.correctTicket(id, {
+            ticket: String(body.ticket ?? ""), title: String(body.title ?? ""),
+          }, viewer?.username ?? "本地用户"));
         }
         if (request.method === "POST"
             && ["pause", "resume", "cancel"].includes(parts[2])) {

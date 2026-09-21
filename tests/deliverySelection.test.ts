@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
+import { deliveryChangeSnapshot, readArtifact, DIFF_NAME } from "../src/artifacts.ts";
 
 async function until<T>(
   probe: () => T | undefined,
@@ -265,6 +266,76 @@ test("首次推送不能把含排除文件和平台目录历史的检视 HEAD �
   }
 });
 
+test("合入 master 的排除路径和平台目录不算本任务新增，脏文件不触发整理失败", async () => {
+  const repo = repository();
+  const { service, model, internal } = await waitingService(repo);
+  try {
+    const pushed = repo.git("rev-parse", "HEAD"), baseline = repo.git("rev-parse", "HEAD^");
+    repo.git("checkout", "-qb", "feature");
+    repo.git("checkout", "-q", "master");
+    repo.git("reset", "--hard", baseline);
+    mkdirSync(join(repo.cwd, ".claude"));
+    writeFileSync(join(repo.cwd, ".claude", "upstream.md"), "upstream skill\n");
+    writeFileSync(join(repo.cwd, "upstream.txt"), "master change\n");
+    writeFileSync(join(repo.cwd, "toolType.dat"), "original binary");
+    repo.git("add", ".claude/upstream.md", "upstream.txt", "toolType.dat");
+    repo.git("commit", "-qm", "upstream additions");
+    const upstream = repo.git("rev-parse", "HEAD");
+    repo.git("update-ref", "refs/remotes/origin/master", upstream);
+    repo.git("checkout", "-q", "feature"); repo.git("merge", "--no-edit", "master");
+    writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({
+      config: { 基线分支: "master", 分支名: "feature" }, step_heads: { branch_create: baseline },
+    }));
+    writeFileSync(join(repo.cwd, "toolType.dat"), "generated binary");
+    mkdirSync(join(repo.cwd, "imap")); writeFileSync(join(repo.cwd, "imap", "output.o"), "generated");
+    internal.summary.delivery = { target_branch: "master", git_push: { sha: pushed, ref: "refs/heads/feature", remote: "origin" } };
+    internal.summary.delivery_selection = { status: "confirmed", paths: ["src/feature.ts"],
+      excluded_paths: ["upstream.txt"], observed_paths: ["src/feature.ts"], head: pushed, baseline, waiting_id: "old", updated_at: "now" };
+    const head = repo.git("rev-parse", "HEAD");
+    const snapshot = (await deliveryChangeSnapshot(repo.cwd))!;
+    assert.deepEqual(snapshot.committed_paths, ["src/feature.ts"]);
+    assert.deepEqual(snapshot.added_agent_platform_paths, []);
+    assert.ok(!snapshot.workspace_paths.includes("upstream.txt"));
+    assert.match(readArtifact(repo.cwd, DIFF_NAME)!.content, /generated binary/);
+    assert.doesNotMatch(readArtifact(repo.cwd, DIFF_NAME)!.content, /master change|upstream skill/);
+    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+    assert.equal(await (service as any).agentPlatformChangesAllowPush(internal), true);
+    const review = await (service as any).buildPushReviewPresentation(internal, snapshot, false);
+    assert.equal(review.base_sha, upstream, "上轮 push 到 merge HEAD 的差异不能冒充本轮任务增量");
+    assert.equal(review.file_count, 1);
+    assert.equal(repo.git("rev-parse", "HEAD"), head);
+    assert.equal(readFileSync(join(repo.cwd, "imap/output.o"), "utf8"), "generated");
+  } finally { await service.shutdown(); await model.stop(); rmSync(repo.cwd, { recursive: true, force: true }); }
+});
+
+test("整理已排除提交只用提交树，不夹带或丢失业务暂存、未暂存和编译产物", async () => {
+  const repo = repository();
+  const { service, model, internal } = await waitingService(repo);
+  try {
+    const pushed = repo.git("rev-parse", "HEAD"), baseline = repo.git("rev-parse", "HEAD^");
+    internal.summary.delivery = { git_push: { sha: pushed, ref: "refs/heads/feature", remote: "origin" } };
+    internal.summary.delivery_selection = { status: "confirmed", paths: ["src/feature.ts"],
+      excluded_paths: ["target/classes/Feature.class"], observed_paths: ["src/feature.ts"], head: pushed, baseline, waiting_id: "old", updated_at: "now" };
+    writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
+    repo.git("add", "src/feature.ts", "target/classes/Feature.class"); repo.git("commit", "-qm", "repair and unwanted output");
+    writeFileSync(join(repo.cwd, "README.md"), "staged intent\n"); repo.git("add", "README.md");
+    writeFileSync(join(repo.cwd, "README.md"), "unstaged intent\n");
+    writeFileSync(join(repo.cwd, "src/feature.ts"), "uncommitted source\n");
+    writeFileSync(join(repo.cwd, "user-new.ts"), "new staged source\n"); repo.git("add", "user-new.ts");
+    mkdirSync(join(repo.cwd, "imap")); writeFileSync(join(repo.cwd, "imap/output.o"), "output");
+    const staged = repo.git("diff", "--cached");
+    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
+    assert.equal(repo.git("show", "HEAD:src/feature.ts"), "export const value = 2;");
+    assert.equal(repo.git("diff", "--cached"), staged, "业务暂存保持原样");
+    assert.equal(readFileSync(join(repo.cwd, "README.md"), "utf8"), "unstaged intent\n");
+    assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf8"), "uncommitted source\n");
+    assert.equal(readFileSync(join(repo.cwd, "imap/output.o"), "utf8"), "output");
+    assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
+    assert.equal(repo.git("ls-files", "target/classes/Feature.class"), "");
+    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+  } finally { await service.shutdown(); await model.stop(); rmSync(repo.cwd, { recursive: true, force: true }); }
+});
+
 
 test("无法清理已推送的平台目录历史时恢复原提交并报告具体路径，不留下半整理现场", async () => {
   const repo = repository();
@@ -285,7 +356,7 @@ test("无法清理已推送的平台目录历史时恢复原提交并报告具�
     assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "blocked");
     assert.equal(repo.git("rev-parse", "HEAD"), original);
     assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf8"), "export const value = 3;\n");
-    assert.match(internal.summary.detail, /已恢复整理前的提交/);
+    assert.match(internal.summary.detail, /原提交、索引与工作区均未修改/);
     assert.match(internal.summary.detail, /\.claude\/injected.md/);
     assert.equal(repo.git("merge-base", "--is-ancestor", pushed, "HEAD"), "");
   } finally {
@@ -325,6 +396,9 @@ for (const current of ["external_verify", "end", "rework"]) {
       const task = service.create("整理失败后继续交付");
       const internal = (service as any).tasks.get(task.id);
       const baseline = repo.git("rev-parse", "HEAD^");
+      // 目标分支停留在基准提交；待交付内容只能在任务分支，不能伪装成上游已有内容。
+      repo.git("checkout", "-qb", "feature");
+      repo.git("branch", "-f", "master", baseline);
       writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({ current,
         step_heads: { branch_create: baseline }, config: { 分支名: "feature", 基线分支: "master" } }));
       internal.cwd = repo.cwd;
@@ -360,3 +434,67 @@ for (const current of ["external_verify", "end", "rework"]) {
     } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); rmSync(repo.cwd, { recursive: true, force: true }); }
   });
 }
+
+for (const status of ["requested", "confirmed"] as const) {
+  test(`中文及引号路径：${status} 旧清单恢复后真实整理不再 pathspec 失败`, async () => {
+    const repo = repository({ commitArtifact: true });
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-quoted-delivery-"));
+    const service = new TaskService({ dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+    try {
+      const baseline = repo.git("rev-parse", "HEAD^");
+      const paths = ["docs/template/软件实现设计-design.md", 'src/quote"name.ts', "src/with space.ts", "src/[ab].ts"];
+      mkdirSync(join(repo.cwd, "docs/template"), { recursive: true });
+      for (const path of paths) writeFileSync(join(repo.cwd, path), "keep exactly\n");
+      repo.git("add", "--", ...paths.map(path => `:(literal)${path}`));
+      repo.git("commit", "-qm", "add non-ASCII paths");
+      repo.git("update-ref", "refs/remotes/origin/master", baseline);
+      const task = service.create("中文路径交付回归");
+      const internal = (service as any).tasks.get(task.id);
+      internal.cwd = repo.cwd;
+      internal.summary.baseline = "master";
+      const quoted = repo.git("-c", "core.quotePath=true", "diff", "--name-only", baseline, "HEAD", "--", paths[0]);
+      assert.ok(quoted.startsWith('"docs/template/\\'), "真实 Git 默认输出含八进制转义");
+      const storedPath = status === "requested" ? quoted : quoted.replace(/\\/g, "/");
+      internal.summary.delivery_selection = { status, paths: ["src/feature.ts", storedPath, ...paths.slice(1)],
+        observed_paths: [storedPath], excluded_paths: ["target/classes/Feature.class"],
+        head: repo.git("rev-parse", "HEAD"), baseline, waiting_id: "existing-card", updated_at: new Date().toISOString() };
+      const snapshot = await deliveryChangeSnapshot(repo.cwd);
+      assert.ok(snapshot);
+      for (const path of paths) assert.ok(snapshot.committed_paths.includes(path), path);
+      const contribution = await (service as any).deliveryContribution(internal, snapshot);
+      for (const path of paths) assert.ok(contribution.paths.includes(path), path);
+      assert.equal(internal.summary.delivery_selection.status, status, "修路径不伪造用户确认");
+      assert.ok(internal.summary.delivery_selection.paths.includes(paths[0]), "存量八进制路径已恢复");
+      assert.deepEqual(internal.summary.delivery_selection.observed_paths, [paths[0]]);
+      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
+      for (const path of paths) assert.equal(repo.git("show", `HEAD:${path}`), "keep exactly");
+      assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "");
+      assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
+      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+      // 确认卡明确去掉中文文档和含 glob 字符的文件，也必须按准确文件执行。
+      writeFileSync(join(repo.cwd, "src/a.ts"), "unrelated\n");
+      repo.git("add", "src/a.ts"); repo.git("commit", "-qm", "unrelated file");
+      await (service as any).applyDeliverySelectionAdjustment(internal, baseline,
+        [paths[0], "src/[ab].ts"], [], "skip", "owner");
+      assert.equal(repo.git("ls-files", "--", `:(literal)${paths[0]}`), "");
+      assert.equal(repo.git("ls-files", "--", ":(literal)src/[ab].ts"), "");
+      assert.equal(repo.git("show", "HEAD:src/a.ts"), "unrelated", "[ab] 不能按通配符误删其他文件");
+      assert.equal(readFileSync(join(repo.cwd, paths[0]), "utf8"), "keep exactly\n");
+    } finally {
+      await service.shutdown(); rmSync(repo.cwd, { recursive: true, force: true }); rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("交付快照中未提交中文重命名与箭头文件名不被展示格式破坏", async () => {
+  const repo = repository();
+  try {
+    repo.git("mv", "src/feature.ts", "src/新 名.ts");
+    writeFileSync(join(repo.cwd, 'src/a -> b"c.ts'), "new\n");
+    repo.git("add", "--", 'src/a -> b"c.ts');
+    const snapshot = await deliveryChangeSnapshot(repo.cwd);
+    assert.ok(snapshot?.workspace_paths.includes("src/新 名.ts"));
+    assert.ok(snapshot?.workspace_paths.includes('src/a -> b"c.ts'));
+    assert.ok(!snapshot?.workspace_paths.includes('b"c.ts'));
+  } finally { rmSync(repo.cwd, { recursive: true, force: true }); }
+});

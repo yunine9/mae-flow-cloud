@@ -35,6 +35,22 @@ export interface MergeRequestReceipt {
   raw: Record<string, unknown>;
 }
 
+export async function closeMergeRequest(call: {
+  platformUrl: string; repo: string; mr: string | number; credential?: MergeRequestCredential;
+}): Promise<void> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (call.credential) {
+    headers["x-mfc-git-user"] = encodeURIComponent(call.credential.username);
+    headers["x-mfc-git-token"] = encodeURIComponent(call.credential.password);
+  }
+  const response = await fetch(`${call.platformUrl.replace(/\/+$/, "")}/mr/close`, {
+    method: "POST", headers, body: JSON.stringify({ repo: call.repo, mr: call.mr }), signal: AbortSignal.timeout(45_000),
+  });
+  if (!response.ok) throw new Error(`旧 MR 关闭失败 HTTP ${response.status}：${(await response.text()).slice(0, 300)}`);
+  const result = await response.json() as { mr_state?: string };
+  if (result.mr_state !== "closed") throw new Error("平台未确认旧 MR 已关闭");
+}
+
 export async function createMergeRequest(
   call: MergeRequestCall,
 ): Promise<MergeRequestReceipt> {

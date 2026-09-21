@@ -1,3 +1,4 @@
+import { decodeGitQuotedPath, gitNullPaths, gitStatusPaths } from "./gitPaths.ts";
 import { currentStoryFile, OVERALL_STORY_ARTIFACT } from "./overallStoryStore.ts";
 /**
  * 检视产物(只读旁路):把内核留在工作区里的检视材料列出来、读出来,
@@ -524,7 +525,7 @@ function changedPaths(status: string): string[] {
       const raw = line.slice(3).trim();
       if (!raw) return [];
       const arrow = raw.split(" -> ");
-      const path = (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
+      const path = decodeGitQuotedPath(arrow[1] ?? arrow[0]);
       // 中心服务注入的是未跟踪运行资产：旧现场即使本地 exclude 缺失，
       // 也不能让它们混进检视/交付清单。已暂存或已提交的异常路径仍
       // 保留可见，交给推送硬闸明确报错，不能在 UI 里偷偷藏掉。
@@ -543,11 +544,16 @@ const ORIGIN_HEADING: Record<ChangeOrigin, string> = {
   unstaged: "未暂存(unstaged)",
 };
 
-/** 内核在建分支时记录的 HEAD 就是任务基线；旧现场没有该字段时，
- * 再退到配置的基线分支 / origin/HEAD。拿不到就保留旧的工作区口径。 */
+/** 展示和交付只比较 MR 净贡献，已合入目标分支的内容不算本任务改动。
+ * 没有远端目标引用的旧现场仍用任务起点；历史完整性另读 frozenTaskBaseline。 */
 function taskBaseline(cwd: string): string | undefined {
   try {
     const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const target = String(state?.config?.["基线分支"] ?? "").trim();
+    if (target && git(cwd, ["check-ref-format", "--branch", target]) !== undefined) {
+      const bases = git(cwd, ["merge-base", "--all", "HEAD", `refs/remotes/origin/${target}`])?.trim().split(/\s+/);
+      if (bases?.length === 1 && bases[0]) return bases[0];
+    }
     const recorded = [
       state?.step_heads?.branch_create,
       state?.step_heads?.workflow_select,
@@ -592,6 +598,11 @@ export async function frozenTaskBaseline(
 async function taskBaselineAsync(cwd: string): Promise<string | undefined> {
   try {
     const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const target = String(state?.config?.["基线分支"] ?? "").trim();
+    if (target && await gitAsync(cwd, ["check-ref-format", "--branch", target]) !== undefined) {
+      const bases = (await gitAsync(cwd, ["merge-base", "--all", "HEAD", `refs/remotes/origin/${target}`]))?.trim().split(/\s+/);
+      if (bases?.length === 1 && bases[0]) return bases[0];
+    }
     const recorded = [
       state?.step_heads?.branch_create,
       state?.step_heads?.workflow_select,
@@ -637,7 +648,7 @@ export async function deliveryChangeSnapshot(
   if (!sameRoot) return undefined;
   const [headText, status, baseline, untrackedText] = await Promise.all([
     gitAsync(cwd, ["rev-parse", "--verify", "HEAD"]),
-    gitAsync(cwd, ["status", "--porcelain", "--untracked-files=no"]),
+    gitAsync(cwd, ["status", "--porcelain", "-z", "--untracked-files=no"]),
     taskBaselineAsync(cwd),
     gitAsync(cwd, ["ls-files", "--others", "--exclude-standard", "-z",
       ...DELIVERY_UNTRACKED_EXCLUDES.map((pattern) => `--exclude=${pattern}`)]),
@@ -646,7 +657,7 @@ export async function deliveryChangeSnapshot(
   if (!head || status === undefined || untrackedText === undefined) return undefined;
   const [committedText, addedAgentText] = baseline
     ? await Promise.all([
-        gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"]),
+        gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--"]),
         // 查整个提交区间而非最终树差异：先提交注入 Skill、后续再删除，
         // 相关 blob/commit 仍会被 push，不能被最终“看起来已删”绕过。
         gitAsync(cwd, [
@@ -655,7 +666,7 @@ export async function deliveryChangeSnapshot(
         ]),
       ])
     : [undefined, undefined];
-  const committed = uniqueBusinessPaths((committedText ?? "").split("\n"));
+  const committed = uniqueBusinessPaths(gitNullPaths(committedText ?? ""));
   const addedAgentPaths = [...new Set(String(addedAgentText ?? "")
     .split("\0").map((path) => path.trim())
     .filter((path) => isAgentPlatformPath(path)))]
@@ -665,7 +676,7 @@ export async function deliveryChangeSnapshot(
     head,
     workspace_paths: uniqueBusinessPaths([
       ...committed,
-      ...changedPaths(status),
+      ...gitStatusPaths(status).map(entry => entry.path),
       ...untrackedText.split("\0").filter((path) => !isAgentPlatformPath(path)),
     ]),
     committed_paths: committed,
@@ -786,7 +797,7 @@ function statusEntries(status: string): Map<string, { x: string; y: string }> {
   for (const line of status.split("\n")) {
     if (line.length < 4 || line.startsWith("??")) continue;
     const arrow = line.slice(3).trim().split(" -> ");
-    const path = (arrow[1] ?? arrow[0]).replace(/^"|"$/g, "");
+    const path = decodeGitQuotedPath(arrow[1] ?? arrow[0]);
     if (path) entries.set(path, { x: line[0], y: line[1] });
   }
   return entries;
@@ -816,7 +827,7 @@ function numstatByPath(text: string): Map<string, {
   const stats = new Map<string, { additions: number; deletions: number }>();
   for (const line of text.split("\n")) {
     const [added, deleted, ...pathParts] = line.split("\t");
-    const path = pathParts.at(-1)?.trim();
+    const path = decodeGitQuotedPath(pathParts.join("\t").trim());
     if (!path || isFlowControlPath(path)) continue;
     const additions = Number.parseInt(added, 10);
     const deletions = Number.parseInt(deleted, 10);
@@ -858,17 +869,17 @@ async function collectDiffManifestAsync(
   if (status === undefined) return undefined;
   const [committedText, numstatText] = await Promise.all([
     baseline
-      ? gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"])
+      ? gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--"])
       : Promise.resolve(undefined),
     gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--"]),
   ]);
   const committed = new Set(uniqueBusinessPaths(
-    String(committedText ?? "").split("\n")));
+    gitNullPaths(committedText ?? "")));
   const statusLines = status.split("\n");
   const statuses = statusEntries(status);
   const untrackedLines = statusLines.filter((line) => line.startsWith("??"));
   const untrackedDirectories = uniqueBusinessPaths(untrackedLines
-    .map((line) => line.slice(3).trim())
+    .map((line) => decodeGitQuotedPath(line.slice(3).trim()))
     .filter((path) => path.endsWith("/"))
     .map((path) => path.replace(/\/$/, ""))
     .filter((path) => !isFlowControlPath(path)
@@ -924,7 +935,7 @@ function collectDiff(
   const fullContext = "--unified=999999";
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
-    .map((line) => line.slice(3).trim())
+    .map((line) => decodeGitQuotedPath(line.slice(3).trim()))
     .filter((path) => path && !isFlowControlPath(path)
       && !isAgentPlatformPath(path));
   const baseline = taskBaseline(cwd);
@@ -933,8 +944,8 @@ function collectDiff(
   if (baseline) {
     const aggregate = (git(cwd, ["diff", fullContext, baseline, "--"]) ?? "").trim();
     const committed = new Set((git(cwd,
-      ["diff", "--name-only", baseline, "HEAD", "--"]) ?? "")
-      .split("\n").filter(Boolean));
+      ["diff", "--name-only", "-z", baseline, "HEAD", "--"]) ?? "")
+      .split("\0").filter(Boolean));
     const statuses = statusEntries(status);
     const grouped = new Map<ChangeOrigin, string[]>();
     for (const chunk of diffChunks(aggregate)
@@ -993,7 +1004,7 @@ async function collectDiffAsync(
   const fullContext = "--unified=999999";
   const untracked = status.split("\n")
     .filter((line) => line.startsWith("??"))
-    .map((line) => line.slice(3).trim())
+    .map((line) => decodeGitQuotedPath(line.slice(3).trim()))
     .filter((path) => path && !isFlowControlPath(path)
       && !isAgentPlatformPath(path));
   const baseline = await taskBaselineAsync(cwd);
@@ -1002,11 +1013,11 @@ async function collectDiffAsync(
   if (baseline) {
     const [aggregateText, committedText] = await Promise.all([
       gitAsync(cwd, ["diff", fullContext, baseline, "--"]),
-      gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--"]),
+      gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--"]),
     ]);
     const aggregate = (aggregateText ?? "").trim();
     const committed = new Set((committedText ?? "")
-      .split("\n").filter(Boolean));
+      .split("\0").filter(Boolean));
     const statuses = statusEntries(status);
     const grouped = new Map<ChangeOrigin, string[]>();
     for (const chunk of diffChunks(aggregate)
@@ -1287,12 +1298,12 @@ async function changeFileAtPathAsync(
   }
   const [committedText, numstatText] = await Promise.all([
     baseline
-      ? gitAsync(cwd, ["diff", "--name-only", baseline, "HEAD", "--", wanted])
+      ? gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--", wanted])
       : Promise.resolve(undefined),
     gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--", wanted]),
   ]);
   const committed = new Set(uniqueBusinessPaths(
-    String(committedText ?? "").split("\n")));
+    gitNullPaths(committedText ?? "")));
   const statuses = statusEntries(status);
   if (!committed.has(wanted) && !statuses.has(wanted)) return undefined;
   const stat = numstatByPath(numstatText ?? "").get(wanted)

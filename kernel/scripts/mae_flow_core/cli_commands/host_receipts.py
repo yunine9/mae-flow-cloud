@@ -115,7 +115,7 @@ def host_projection(state, action, payload):
     """
     if action not in ("feedback-open", "feedback-result", "close",
                       "pipeline-record", "intervention-reconcile",
-                      "selection-reconcile"):
+                      "selection-reconcile", "ticket-correction"):
         return None
     loop = state.get("delivery_loop")
     loop = loop if isinstance(loop, dict) else None
@@ -343,9 +343,11 @@ def verify_feedback_facts(state):
 
 def trusted_current_lifecycle(state, actions):
     """Require an exact signed predecessor before another host transition."""
+    # Metadata-only host correction re-signs the same decisions for equivalent
+    # commit trees. It is an accepted successor, not a new pipeline execution.
     return any(trusted_projection(
         state, action, host_projection(state, action, {}))
-        for action in actions)
+        for action in (*actions, "ticket-correction"))
 
 
 def trusted_pipeline_projection(state, projection):
@@ -363,7 +365,8 @@ def trusted_pipeline_projection(state, projection):
                 and hmac.compare_digest(
                     str(stored.get("external_verification_digest") or ""), wanted)
                 and _valid_stored_receipt(
-                    authority, record, "pipeline-record", stored)):
+                    authority, record, str((record.get("proof") or {}).get("action")), stored)
+                and (record.get("proof") or {}).get("action") in ("pipeline-record", "ticket-correction")):
             return True
     return False
 
@@ -371,7 +374,7 @@ def trusted_pipeline_projection(state, projection):
 def trusted_feedback_loop(state):
     """Feedback facts survive workflow movement and close; never endorse edits."""
     actions = ("feedback-open", "feedback-result", "pipeline-record", "close",
-               "selection-reconcile", "intervention-reconcile")
+               "selection-reconcile", "intervention-reconcile", "ticket-correction")
     wanted = _digest(state.get("delivery_loop"))
     for authority, record in _scan_receipts(state):
         stored = record.get("projection")
@@ -404,7 +407,7 @@ def trusted_active_batch(state, actions):
         proof = record.get("proof")
         action = str((proof or {}).get("action") or "") \
             if isinstance(proof, dict) else ""
-        if (action in actions
+        if (action in (*actions, "ticket-correction")
                 and stored.get("active_batch_id") == active_id
                 and hmac.compare_digest(
                     str(stored.get("active_batch_digest") or ""), wanted)

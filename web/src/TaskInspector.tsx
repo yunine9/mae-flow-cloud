@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { correctTaskTicket, cancelTaskTicketCorrection } from "./api";
 import { PersonName } from "./People";
 import { statusText, type TaskSummary } from "./api";
 import { formatLocalDateTime } from "./time";
@@ -17,10 +20,23 @@ const titles: Record<TaskInspectorKind, string> = {
 };
 
 /** 任务详情及其子页共用居中 Dialog，保留焦点管理与 Esc 关闭。 */
-export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }: {
+export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, canOperate, onChanged }: {
+  canOperate?: boolean; onChanged?: () => void;
   task: TaskSummary; kind: TaskInspectorKind; onClose: () => void;
   onInspect: (kind: TaskInspectorKind) => void; onOpenProcess: () => void;
 }) {
+  const [editingTicket, setEditingTicket] = useState(false);
+  const [ticket, setTicket] = useState("");
+  const [title, setTitle] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const correction = task.ticket_correction;
+  const submit = async (nextTicket = ticket, nextTitle = title) => {
+    setSaving(true); setError("");
+    try { await correctTaskTicket(task.id, nextTicket, nextTitle); setEditingTicket(false); onChanged?.(); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setSaving(false); }
+  };
   const dtc = "text-xs leading-[1.6] text-muted-foreground";
   return <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
     <DialogContent showCloseButton={false} aria-describedby={undefined}
@@ -49,6 +65,26 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess }:
             {task.updated_at && <div><dt className={dtc}>最近更新</dt><dd className="mt-1 text-base leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.updated_at, { year: true })}</dd></div>}
             {task.completed_at && <div><dt className={dtc}>完成时间</dt><dd className="mt-1 text-base leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.completed_at, { year: true })}</dd></div>}
           </dl>
+          <section className="mb-5 rounded-lg border border-line p-4" aria-label="AR 单号">
+            <div className="flex items-center justify-between gap-4"><div><span className="mr-3 text-muted-foreground">AR 单号</span><code>{task.ticket || "未填写"}</code></div>
+              {canOperate && !["completed", "canceled", "coordinating"].includes(task.status) && (!correction || correction.state === "completed") &&
+                <Button variant="outline" size="sm" onClick={() => { setEditingTicket(!editingTicket); setError(""); }}>纠正单号</Button>}
+            </div>
+            {editingTicket && <form className="mt-4 grid gap-3" onSubmit={event => { event.preventDefault(); void submit(); }}>
+              <label className="grid gap-2 text-sm">正确的 AR 单号<Input value={ticket} onChange={event => setTicket(event.target.value)} placeholder="REQ…" required /></label>
+              <label className="grid gap-2 text-sm">AR 准确描述<Input value={title} onChange={event => setTitle(event.target.value)} placeholder="从 AR 单复制，将用作新 MR 的标题" required /></label>
+              <p className="m-0 text-sm text-muted-foreground">同步修改单号、分支和提交说明，保留已有验证与检视。已有 MR 时创建新 MR，成功后关闭旧 MR、删除旧远端分支；未推送时只修改本地。</p>
+              <div className="flex gap-2"><Button type="submit" disabled={saving}>{saving ? "正在提交…" : "纠正单号"}</Button><Button type="button" variant="ghost" onClick={() => setEditingTicket(false)}>取消</Button></div>
+            </form>}
+            {correction && <div className="mt-3 text-sm" role="status"><p>{correction.old_ticket} → {correction.ticket} · {correction.message}</p>
+              {canOperate && correction.state === "failed" && <Button variant="outline" size="sm" disabled={saving}
+                onClick={() => void submit(correction.ticket, correction.title)}>继续重试</Button>}
+              {canOperate && correction.state === "failed" && correction.can_cancel && <Button variant="ghost" size="sm" disabled={saving}
+                onClick={async () => { setSaving(true); try { await cancelTaskTicketCorrection(task.id); onChanged?.(); }
+                  catch (cause) { setError(String(cause)); } finally { setSaving(false); } }}>撤销本次纠正</Button>}
+            </div>}
+            {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
+          </section>
           <section className="border-t border-line py-4"><h3 className="m-0 mb-3 text-sm">进度与交付</h3>
             <dl className="m-0 grid gap-3.5">
               <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>当前步骤</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.progress?.step || task.detail || "暂无步骤记录"}</dd></div>

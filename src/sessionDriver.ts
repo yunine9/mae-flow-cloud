@@ -1,3 +1,5 @@
+import { SessionCompaction } from "./sessionCompaction.ts";
+export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
 import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
 import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
@@ -427,29 +429,6 @@ function deferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-/** 上下文撑爆的判据。各家网关文案不同,只认这几种说法的交集:
- * 内网网关实测 "input too long, exceed max input length, max input
- * length is 169984, current input length is 171308";Anthropic 系是
- * "prompt is too long"/context_length_exceeded;OpenAI 兼容网关是
- * "maximum context length"。**宁可漏判也不许误判**——把别的错误当
- * 超限去压缩,等于拿真错误当噪声吞掉(压完重试还是错,只是晚一步
- * 失败,但日志会误导人)。 */
-export function looksLikeContextOverflow(detail: string): boolean {
-  return /input too long|exceed(s)? max input length|context[_ ]length|maximum context|prompt is too long|too many tokens/i
-    .test(detail);
-}
-
-/** 主动压缩的指令模板:摘要以内核锚点为纲——注意力飘不飘,锚说了算。 */
-export function compactionInstructions(anchor: string): string {
-  return [
-    "以下是流程锚点,摘要必须围绕它组织:",
-    anchor,
-    "保留:当前步骤与其指引、已确认的配置与决策、未完成工作清单、",
-    "最近一次错误与修复结论、正在编辑文件的关键内容。",
-    "可丢弃:过程性探索、已解决问题的中间尝试、长命令输出原文(只留结论)。",
-  ].join("\n");
-}
-
 /** 环回流量强制直连:pi-ai 会跟随代理环境变量,内网 Clash 实测把
  * 127.0.0.1 的模型/桥请求劫走回 502。生产同样成立——网关走代理可以,
  * 环回不行。 */
@@ -483,11 +462,6 @@ export class CloudSession {
   private turnActivity = 0;
   private turnError = "";
   private turnTerminalError = "";
-  /** 同一场连续超限只自愈一次:压完还爆说明撑爆的不是历史而是单轮
-   * 输入本身,再压是空转——按预算纪律,补救必须有次数上限。补救
-   * 翻篇(重试不再超限)即归还预算:issue-64 那种隔了数小时新积累的
-   * 第二次超限仍要能自愈,不能整条会话只救一次。 */
-  private overflowRepaired = false;
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
   /** 各会话最近一条 assistant 消息若是模型层错误,记下原文;成功消息即清除。
@@ -763,8 +737,8 @@ export class CloudSession {
     return outcome;
   }
 
-  /** 回合收口:零活动+模型层错误 = 会话失败(把 pi 吞掉的 API 错误
-   *  亮出来);零活动无错误 = 空转回合(交上层催办);否则正常收轮。
+  /** 回合收口:最后一次模型请求失败就如实报告，不能因前面调过工具
+   *  就把中途报错当正常结束；成功续跑会清除旧错误。
    *  失败只产出 Outcome,终态事件由 settle 在确认不再补救后落账。 */
   private async turnOutcome(): Promise<Outcome> {
     const kernelFailure = await this.flushKernel();
@@ -772,7 +746,7 @@ export class CloudSession {
       const detail = `内核授权或证据登记未可靠落盘: ${kernelFailure}`;
       return { status: "session_ended", reason: "failed", detail };
     }
-    if (!this.turnActivity && this.turnError) {
+    if (this.turnError) {
       const detail = userFacingModelFailure(this.turnError);
       return { status: "session_ended", reason: "failed", detail };
     }
@@ -854,13 +828,13 @@ export class CloudSession {
   }
 
   /** 回合级自愈总口(2026-09-10,issue-12/issue-20 复盘):收尾窗口
-   *  忙撞让拍重投、输出超限截断纠偏重试,叠加在上下文超限压缩重发
-   *  (turnWithOverflowRepair)之上。三条共用一套纪律:每类只补有限次,
+   *  忙撞让拍重投、输出超限截断纠偏重试,上下文容量由请求前策略统一管理。
+   *  两条回合补救共用一套纪律:每类只补有限次,
    *  补不动就如实上抛——自愈是纠偏不是永动机,绝不停在"看起来在
    *  推进"的假循环里,也不把可恢复的失败装成会话死亡(落点语义交
    *  宿主,问题流 settle 按 looksLike* 落 idle 而非 failed)。 */
   private async turnWithRepairs(userMessage: string): Promise<Outcome> {
-    let outcome = await this.turnWithOverflowRepair(userMessage);
+    let outcome = await this.promptTurn(userMessage);
     if (outcome.status === "session_ended"
         && looksLikeBusyCollision(outcome.detail ?? "")) {
       // 首投被拒时消息没进队列,重投不会重复;仍忙就如实上交。
@@ -875,69 +849,12 @@ export class CloudSession {
           || !looksLikeOutputTruncation(outcome.detail ?? "")) break;
       this.options.log?.(`任务 ${this.options.taskId} 输出超限截断,`
         + `第 ${attempt}/${OUTPUT_TRUNCATION_RETRIES} 次纠偏重试`);
-      outcome = await this.turnWithOverflowRepair(
+      outcome = await this.promptTurn(
         outputTruncationRepairNotice(attempt));
     }
     return this.settle(outcome);
   }
 
-  /**
-   * 上下文撑爆的自愈:压一次,原样重发,同一场连续超限只补救一次。
-   *
-   * 为什么必须在这一层做:窗口是网关说了算的(内网实测 169984),而
-   * pi 的自动压缩按它自己估的窗口走——网关比它以为的小,硬报错就漏
-   * 到宿主,任务当场判死。这类失败的特点是**零活动**:模型一个字都
-   * 没吐、一个工具都没调,所以原样重发是安全的,不会重做已完成的事。
-   *
-   * 三条边界(都是红线的直接推论):
-   * - **同一场连续超限只补救一次**。补救的重试仍超限,说明不是
-   *   "历史太长"而是单轮输入本身过大(比如一次贴进来一个巨型文件),
-   *   再压也没用,如实失败;重试翻篇(不再超限)即归还预算,之后
-   *   新积累的超限照样自愈(issue-64 复盘:一爆自愈后隔 3 小时的
-   *   二爆被整条会话只救一次的旧 flag 冤死);
-   * - **压不动就如实失败**,不假装恢复;
-   * - 判据从严(见 looksLikeContextOverflow):别的错误一律原样上抛,
-   *   压缩不是万能兜底。
-   */
-  private async turnWithOverflowRepair(userMessage: string): Promise<Outcome> {
-    const outcome = await this.promptTurn(userMessage);
-    if (outcome.status !== "session_ended"
-        || !looksLikeContextOverflow(outcome.detail ?? "")) {
-      return outcome;
-    }
-    if (this.overflowRepaired) {
-      this.options.log?.(
-        `任务 ${this.options.taskId} 上次压缩自愈的补救仍超限,`
-        + `不再重试,如实失败(单轮输入过大?)`);
-      return outcome;
-    }
-    this.overflowRepaired = true;
-    this.options.log?.(
-      `任务 ${this.options.taskId} 上下文超限,按内核锚点压缩后重试一次`);
-    const anchor = this.options.compactAnchor?.()
-      ?? "(无内核现场可锚,按当前任务需求组织摘要)";
-    if (!await this.compactAnchored(anchor)) {
-      // 压不动的最常见原因是"历史本来就不长"——那就说明撑爆的是
-      // 单轮输入本身(一次贴进来的巨型文件/日志),压缩救不了。把这
-      // 句话给人,别让他对着一行网关英文猜该改什么。
-      return {
-        ...outcome,
-        detail: `${outcome.detail ?? ""}(已尝试压缩自愈但压不动:`
-          + `多半是单轮输入过大而非历史太长——检查是不是把大文件或`
-          + `长日志整段塞进了会话)`,
-      };
-    }
-    const retry = await this.promptTurn(userMessage);
-    // 翻篇归还:补救的重试不再超限,说明撑爆的是"当时的历史"而非
-    // 单轮输入本身——预算归还,后续新积累的超限照样自愈(issue-64
-    // 第二爆被一次性 flag 冤死的复盘,2026-09-16 #285)。重试仍超限
-    // 则预算保持占用,下一场直接如实失败,不空转。
-    if (!(retry.status === "session_ended"
-        && looksLikeContextOverflow(retry.detail ?? ""))) {
-      this.overflowRepaired = false;
-    }
-    return retry;
-  }
 
   /** 宿主在某个自定义工具里举卡等人(拆分提议):记录由宿主建好,这里只
    * 把会话挂在同一条决定通道上——状态切 waiting_for_human、通知、决定回注
@@ -1003,22 +920,6 @@ export class CloudSession {
     const outcome = await Promise.race(
       [this.pendingTurn!, this.waitingSignal.promise]);
     return this.settle(outcome);
-  }
-
-  /** 主动压缩(用户关切:长编码阶段注意力漂移)。只许在回合间隙
-   * 调用——pi 的 compact 会先中止进行中的 agent 运行,而"等待人工"
-   * 的挂起 Promise 也算进行中,在那儿压会把人工节点打断。
-   * 失败 fail-open:压不动就不压,流程照走(红线)。 */
-  async compactAnchored(anchor: string): Promise<boolean> {
-    try {
-      await (this.session as any).compact(compactionInstructions(anchor));
-      this.options.log?.(`任务 ${this.options.taskId} 会话主动压缩完成`);
-      return true;
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${this.options.taskId} 主动压缩失败(不影响流程): ${String(error)}`);
-      return false;
-    }
   }
 
   /** 取消任务用的硬边界：中止当前 agent 回合并等它回到 idle。
@@ -1411,9 +1312,15 @@ export class CloudSession {
       ] as any,
       sessionManager: checkpoint.manager,
     });
-    // 被动保底:接近上下文上限时 pi 自动压缩(主动压缩另有节奏,
-    // 见 compactAnchored/TaskService.maybeCompact)。
-    (session as any).setAutoCompactionEnabled?.(true);
+    const compaction = new SessionCompaction(session, this.modelRuntime!, {
+      anchor: () => this.options.compactAnchor?.() ?? "围绕当前用户需求继续工作",
+      log: (message) => this.options.log?.(`任务 ${this.options.taskId} 会话 ${config.sessionId} ${message}`),
+      onUsage: (message) => {
+        const usage = modelTokenUsageSample(message, config.sessionId);
+        if (usage) this.options.onTokenUsage?.(usage);
+      },
+    });
+    compaction.install();
     session.subscribe((event: any) => this.onSessionEvent(config.sessionId, event));
     return session;
   }
@@ -1503,6 +1410,7 @@ export class CloudSession {
         this.options.log?.(
           `任务 ${this.options.taskId} 会话 ${sessionId} 模型层错误: ${modelError.slice(0, 400)}`);
       } else {
+        if (sessionId === this.sessionId) this.turnError = "";
         this.modelErrors.delete(sessionId);
       }
       const text = (Array.isArray(message.content) ? message.content : [])

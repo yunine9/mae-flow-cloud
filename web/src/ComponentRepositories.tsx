@@ -195,6 +195,7 @@ export function ComponentRepositories() {
               <label className="grid gap-2">
                 组件说明
                 <Textarea
+                  placeholder="可说明接口及发布线索，例如重点关注 interface/、idl/，结合 sdk/pom.xml 分析；有疑点的能力也可保留供专家核对。"
                   value={edit.description ?? ""}
                   onChange={(e) =>
                     setEdit({ ...edit, description: e.target.value })

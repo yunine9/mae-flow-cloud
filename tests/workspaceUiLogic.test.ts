@@ -845,6 +845,9 @@ for (const status of ["running", "waiting_for_human", "await_merge", "paused"]) 
   const html = renderToStaticMarkup(React.createElement(Panel, {
     taskId: "task-1", viewerUsername: "owner", taskOwner: "owner", ownerControlled: true,
     canOperate: true, taskStatus: status, mergeRequestOpen: true, checks: [], onChanged() {},
+    // 49d7a2f5 起按钮可提交性由后端视图决定;单测给"可提交"视图,验证各状态文案一致。
+    submission: { ordinary: { enabled: true, hint: "提交后继续处理当前任务的修改意见。" },
+      story: { enabled: true, hint: "提交后继续处理当前任务的修改意见。" } },
     items: [annotation({ id: "pending", author: "reviewer", status: "draft", response: undefined }),
       annotation({ id: "answered", author: "reviewer", status: "draft", response: undefined,
         owner_reply: { author: "owner", text: "无需修改", replied_at: "2026-09-12" } })],

@@ -140,8 +140,10 @@ test("tailwind.css:#257 终态——退役孤儿绝迹,preflight 基座在位", 
 
 /** 终态行数棘轮:#257 收口后的真实行数钉死为天花板,后续只许更少。
  *  >2,500 的目标经证据化 recalibration 判定不可达(余量属于 Out-of-scope
- *  的生成 DOM 皮肤与领域件皮,逐段普查见 #257 收口账),本棘轮防回涨。 */
-const TAILWIND_FINAL_LINES = 7615;
+ *  的生成 DOM 皮肤与领域件皮,逐段普查见 #257 收口账),本棘轮防回涨。
+ *  7615 → 7843:5625cc98 新增 .help-tip 组件类(帮助图标即时悬停提示)
+ *  的正当余量,按本棘轮留痕条款上调。 */
+const TAILWIND_FINAL_LINES = 7843;
 const cssRaw = readFileSync(cssPath, "utf8");
 
 test("tailwind.css:终态行数棘轮——只许更少不许回涨", () => {

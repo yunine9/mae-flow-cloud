@@ -20,6 +20,7 @@ from .host_receipts import (
     save_with_host_proof, trusted_active_batch,
     trusted_pipeline_projection)
 from .selection_reconcile import reconcile_selection
+from .ticket_correction import correct_ticket
 BATCH_SCHEMA = "mae-flow-feedback-batch/1"
 RESULT_SCHEMA = "mae-flow-feedback-result/1"
 STATE_SCHEMA = "mae-flow-delivery-loop/1"
@@ -555,6 +556,9 @@ def cmd_delivery(flow, state, args):
         return reconcile_selection(state, args, load_payload=_payload,
             verify_host_proof=_verify_host_proof, capability=_capability,
             head=_head, history=_history, state_schema=STATE_SCHEMA)
+    if args.delivery_action == "ticket-correction":
+        return correct_ticket(state, args, load_payload=_payload,
+            verify_host_proof=_verify_host_proof, history=_history)
     if args.delivery_action == "close":
         return _close(flow, state, args)
     if args.delivery_action == "attest":

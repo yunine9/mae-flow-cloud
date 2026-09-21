@@ -278,7 +278,6 @@ async function main(): Promise<number> {
     prepush: { enabled: true, buildSlots: Number(flag("--build-slots", "1")) },
     // 跨仓:父任务协调 + 两个子任务,缺省 2 个并发位会让下游排队等位。
     maxConcurrent: Number(flag("--max-concurrent", crossRepo ? "3" : "2")),
-    compactEveryEvents: Number(flag("--compact-every", "150")),
     isolation: flag("--isolate-image")
       ? {
           image: flag("--isolate-image")!,

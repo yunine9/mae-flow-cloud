@@ -30,13 +30,17 @@ function strings(value: unknown, max = 20): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(v => typeof v !== "string" || v.length > 512)) throw new Error("适用范围格式不正确");
   return [...new Set(value.map(v => v.trim()).filter(Boolean))];
 }
-export function saveKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string): KnowledgeDocument {
+export function saveKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string,
+  options: { maxContentBytes?: number } = {}): KnowledgeDocument {
   const previous = id ? readKnowledgeDocument(dir, id) : undefined;
   const merged = { ...previous, ...input };
   const title = String(merged.title ?? "").trim();
   const content = String(merged.content ?? "").replace(/\r\n/g, "\n");
   if (!title || title.length > 160) throw new Error("请填写文档名称（最多 160 字）");
-  if (!content.trim() || content.includes("\0") || Buffer.byteLength(content) > 2 * 1024 * 1024) throw new Error("请上传非空 UTF-8 Markdown 文档，最大 2 MiB");
+  // 联合研究由宿主分段生成，可显式使用更大容量；普通上传保持原限制。
+  // 已保存的长文档仅调整范围或启停时，不能因上传限制而失败。
+  const maxContentBytes = Math.max(options.maxContentBytes ?? 2 * 1024 * 1024, Buffer.byteLength(previous?.content ?? ""));
+  if (!content.trim() || content.includes("\0") || Buffer.byteLength(content) > maxContentBytes) throw new Error(`请提供非空 UTF-8 Markdown 文档，最大 ${Math.ceil(maxContentBytes / 1024 / 1024)} MiB`);
   const scope = merged.scope ?? "platform";
   if (!["platform", "module", "repository"].includes(String(scope))) throw new Error("请选择适用范围");
   const module_ids = scope === "module" ? strings(merged.module_ids ?? [], 8) : [];

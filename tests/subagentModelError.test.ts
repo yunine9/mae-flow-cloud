@@ -10,7 +10,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene, type ScriptedModelOptions } from "../src/scriptedModel.ts";
@@ -60,6 +60,7 @@ async function run(
   } finally {
     session.dispose();
     await model.stop();
+    rmSync(workspace, { recursive: true, force: true });
   }
 }
 
@@ -96,4 +97,35 @@ test("子 Agent 正常返回:lifecycle 仍是 returned,最终报告原样交回"
   assert.equal(finished.payload.final_text, "CHILD-REPORT 三张 Story 卡已落盘。");
   assert.match(JSON.stringify(result.requests.at(-1)), /CHILD-REPORT/,
     "主 Agent 下一轮应拿到子 Agent 的报告原文");
+});
+
+test("主会话工具执行后再遇模型错误，也不能伪装成正常 end_turn", async () => {
+  const result = await run([
+    { tool: { name: "bash", input: { command: "echo tool-completed" } } },
+    { text: "不应执行" },
+  ], (model, requestNumber) => {
+    if (requestNumber === 1) model.failWith("insufficient_quota: 账户额度已用尽", 1);
+  });
+  assert.equal(result.outcome.status, "session_ended");
+  assert.match(result.outcome.detail ?? "", /insufficient_quota/);
+  assert.ok(result.events.some((e) => e.kind === "tool_finished"));
+  assert.ok(!result.events.some((e) => e.kind === "turn_finished"));
+});
+
+test("子 Agent 接到长材料也主动整理，主会话只派发一次并正常收到结果", async () => {
+  const result = await run([
+    { ...DISPATCH, tool: { ...DISPATCH.tool!, input: { ...DISPATCH.tool!.input,
+      prompt: "整理资料，不要修改 B。" + "很长的历史材料".repeat(25_000) } } },
+    ...Array.from({ length: 30 }, () => ({ text: "CHILD-REPORT 已整理，B 未修改。" })),
+  ], (model, requestNumber) => {
+    if (requestNumber <= 1) return;
+    if (JSON.stringify(model.requests.at(-1)?.system).includes("你在整理 Coding Agent"))
+      model.script[requestNumber - 1] = { text: "目标：整理资料；禁止修改 B；子 Agent 已派发，不要重复派发。" };
+  });
+  assert.equal(result.outcome.status, "turn_finished", result.outcome.detail);
+  const child = result.events.find((e) => e.kind === "agent_spawned");
+  assert.ok(child);
+  assert.equal(result.events.filter((e) => e.kind === "agent_spawned").length, 1);
+  assert.equal(result.events.find((e) => e.kind === "agent_finished")?.payload.lifecycle, "returned");
+  assert.ok(result.logs.some((line) => line.includes(String(child.payload.child_session_id)) && line.includes("容量预判")));
 });
