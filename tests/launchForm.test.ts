@@ -1248,6 +1248,10 @@ test("消费:任务级模型选择压过服务默认(默认是打不通的网关
 
 test("路由:没配齐令牌 409 不给下单;补齐后放行;坏参数仍 400", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-http-"));
+  createBusinessModule(dataDir, { id: "launch-domain", name: "下单测试",
+    description: "完整表单用于验证令牌检查", owner: "dev",
+    repositories: ["https://code.example/repo.git"] }, "dev");
+  const business_module_id = "launch-domain";
   const auth = new LocalAuth(join(dataDir, "auth.json"));
   auth.createUser("dev", "dev-password-11", "developer");
   const model = new ScriptedModelServer(SCRIPT);
@@ -1282,7 +1286,7 @@ test("路由:没配齐令牌 409 不给下单;补齐后放行;坏参数仍 400",
     // 后端硬拦:绕过界面直接打接口一样不给下单
     const blocked = await fetch(`${base}/tasks`, {
       method: "POST", headers: { cookie },
-      body: JSON.stringify({ requirement: "x" }),
+      body: JSON.stringify({ requirement: "x", business_module_id }),
     });
     assert.equal(blocked.status, 409);
     assert.match((await readJson(blocked)).error, /配置未完成/);
@@ -1291,20 +1295,20 @@ test("路由:没配齐令牌 409 不给下单;补齐后放行;坏参数仍 400",
     auth.setLubanToken("dev", "luban-yyyy");
     const ok = await fetch(`${base}/tasks`, {
       method: "POST", headers: { cookie },
-      body: JSON.stringify({ requirement: "配齐后下单" }),
+      body: JSON.stringify({ requirement: "配齐后下单", business_module_id }),
     });
     assert.equal(ok.status, 201);
 
     // 参数校验照旧:坏模型/负预算 400(不是 409,那是配置问题)
     const bad = await fetch(`${base}/tasks`, {
       method: "POST", headers: { cookie },
-      body: JSON.stringify({ requirement: "x",
+      body: JSON.stringify({ requirement: "x", business_module_id,
         model: { provider: "maeflow", model: "不存在" } }),
     });
     assert.equal(bad.status, 400);
     const worse = await fetch(`${base}/tasks`, {
       method: "POST", headers: { cookie },
-      body: JSON.stringify({ requirement: "x", repair_rounds: -2 }),
+      body: JSON.stringify({ requirement: "x", business_module_id, repair_rounds: -2 }),
     });
     assert.equal(worse.status, 400);
   } finally {

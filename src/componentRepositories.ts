@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 export interface ComponentRepository {
   id: string;
   name: string;
@@ -54,6 +55,7 @@ export function saveComponentRepository(
   const url = new URL(repository);
   if (url.username || url.password)
     throw new Error("仓库地址不能携带凭据，请使用个人 Git 配置");
+  assertRepositoryCloneAddress(repository);
   if (
     !branch ||
     branch.length > 255 ||

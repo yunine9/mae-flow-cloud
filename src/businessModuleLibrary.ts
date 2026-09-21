@@ -6,6 +6,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -147,6 +148,10 @@ function moduleRepositories(values: string[]): string[] {
   const unique = repositories(values);
   if (!unique.length) {
     throw new BusinessModuleError("业务模块必须至少绑定一个代码仓");
+  }
+  try { unique.forEach(assertRepositoryCloneAddress); }
+  catch (error) {
+    throw new BusinessModuleError(error instanceof Error ? error.message : "代码仓地址无效");
   }
   return unique;
 }

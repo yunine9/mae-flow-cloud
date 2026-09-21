@@ -1,4 +1,5 @@
 import { annotationSubmissionView, type AnnotationSubmissionView } from "./annotationSubmissionView.ts";
+import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
 import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
@@ -832,6 +833,7 @@ function validateRepositoryAddress(candidate: string): void {
     if (parsed.username || parsed.password) {
       throw new Error("代码仓 URL 不许携带账号密码——鉴权使用个人 CodeHub Token");
     }
+    assertRepositoryCloneAddress(candidate);
   }
 }
 
