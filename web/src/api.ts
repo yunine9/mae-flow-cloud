@@ -4188,9 +4188,11 @@ export interface IssueOnceGeneratedSessionRow {
   solved_pass: boolean;
 }
 
-/** 一根比率轴:分子与占比(分母=完成交付全集,与一次定位率同源)。 */
+/** 一根比率轴:分子、分母与占比(一次定位剔除转正会话后,分母可
+ *  与完成交付全集不同)。 */
 export interface IssueOnceGeneratedAxis {
   passed: number;
+  total: number;
   rate: number | null;
 }
 
@@ -4216,7 +4218,7 @@ export interface IssueOnceGenerated {
   rate: number | null;
   /** 完成交付会话总数(三根过程率轴的分母)。 */
   delivered: number;
-  /** 一次定位率(报告一版过;分母=完成交付全集)。 */
+  /** 一次定位率(报告一版过;分母剔除转正会话后可与 delivered 不同)。 */
   localization: IssueOnceGeneratedAxis;
   /** 一次验证率(验证不通过次数=0)。 */
   verify: IssueOnceGeneratedAxis;
@@ -4231,6 +4233,48 @@ export interface IssueOnceGenerated {
 
 export function getIssueOnceGenerated(days?: number): Promise<IssueOnceGenerated> {
   return issueFetch(`/issues/once-generated${days ? `?days=${days}` : ""}`);
+}
+
+/** 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
+ *  结论已出的会话(研究进行中与存量挂起一律不进)。 */
+export interface IssueRegistrationSessionRow {
+  id: string;
+  title: string;
+  module: string;
+  reporter: string;
+  account: string;
+  concluded_at: string;
+  conclusion: "non_issue" | "issue" | "canceled";
+  report_version_count: number;
+  localization_pass?: boolean;
+}
+
+export interface IssueRegistrationGroupRow {
+  key: string;
+  total: number;
+  non_issue: number;
+  issue_confirmed: number;
+  canceled: number;
+  localization_passed: number;
+  localization_total: number;
+  localization_rate: number | null;
+}
+
+export interface IssueRegistrationStats {
+  total: number;
+  non_issue: number;
+  issue_confirmed: number;
+  canceled: number;
+  localization: { passed: number; total: number; rate: number | null };
+  per_session: IssueRegistrationSessionRow[];
+  by_module: IssueRegistrationGroupRow[];
+  by_reporter: IssueRegistrationGroupRow[];
+}
+
+export function getIssueRegistrationStats(
+  days?: number,
+): Promise<IssueRegistrationStats> {
+  return issueFetch(`/issues/registration-stats${days ? `?days=${days}` : ""}`);
 }
 
 /** 单会话一次生成明细(伴生快照原样,会话详情下钻的证据面)。
@@ -4496,18 +4540,16 @@ export function bindIssueTicket(id: string, ticket: string): Promise<IssueSummar
   });
 }
 
-/** 挂起会话关联 DTS 单号转正(固定流程无单场景的收口)。两段式:
- * 不带 confirm → 校验单号存在并回单据详情过目;带 confirm → 转正生成
- * 新会话(继承分析报告直接进问题修改),返回 converted。 */
-export function associateIssueTicket(id: string, input: {
-  ticket: string;
-  confirm?: boolean;
-}): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/associate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(input),
-  });
+/** 提单模板(ADR-0048):确认是问题闭环会话的提单文稿原样取回。
+ *  404(非问题/取消/早期会话没有模板)返回 null,调用方据此不渲染。 */
+export async function getIssueTicketTemplate(id: string): Promise<string | null> {
+  const response = await fetch(`/issues/${encodeURIComponent(id)}/ticket-template`);
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const body = await errorBody(response);
+    throw new Error(String(body.error ?? `HTTP ${response.status}`));
+  }
+  return response.text();
 }
 
 export function controlIssue(id: string, input: {
