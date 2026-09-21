@@ -107,7 +107,7 @@ interface StoredKernelHostBinding {
 }
 
 export type KernelHostAction = "feedback-open" | "feedback-result" | "close"
-  | "pipeline-record" | "intervention-reconcile" | "selection-reconcile";
+  | "pipeline-record" | "intervention-reconcile" | "selection-reconcile" | "ticket-correction";
 
 /**
  * 与内核 `_canonical`(json.dumps sort_keys、无空格、不转义 UTF-8)逐字节
@@ -800,6 +800,16 @@ export function reconcileKernelDeliverySelection(input: {
     taskId: input.taskId, action: "selection-reconcile", payload,
     args: ["selection-reconcile", "--file", path],
   });
+}
+
+export function correctKernelTicket(input: {
+  host: KernelDeliveryHost; cwd: string; workspace: string; taskId: string;
+  correction: Record<string, unknown>;
+}): KernelDeliveryRecord {
+  const payload = { ...input.correction, schema: "mae-flow-ticket-correction/1" };
+  const path = factsPath(input.workspace, "ticket-correction", payload);
+  return invokeAfterRevisionConflict({ ...input, action: "ticket-correction", payload,
+    args: ["ticket-correction", "--file", path] });
 }
 
 export function closeKernelDelivery(input: {

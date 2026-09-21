@@ -306,5 +306,27 @@
       "-k"
     ],
     "timeout_s": 15
+  },
+  "mr_close": {
+    "command": [
+      "curl",
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--noproxy",
+      "*",
+      "--connect-timeout",
+      "5",
+      "--max-time",
+      "30",
+      "-X",
+      "PUT",
+      "-H",
+      "Private-Token: {token}",
+      "--data-urlencode",
+      "state_event=close",
+      "https://codehub-y.huawei.com/api/v4/projects/{repo_path}/merge_requests/{mr}"
+    ],
+    "timeout_s": 35
   }
 }

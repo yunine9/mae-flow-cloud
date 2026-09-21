@@ -980,6 +980,8 @@ export interface TaskSummary {
   repair_rounds?: number;
   /** 业务需求/问题单号；与平台内部 task-xx 分开显示。 */
   ticket?: string;
+  ticket_correction?: { id: string; old_ticket: string; ticket: string; title: string; actor: string;
+    state: "running" | "failed" | "completed"; message: string; at: string; can_cancel?: boolean; cleanup_only?: boolean };
   requirement_graph?: {
     stage: "analysis" | "confirmed";
     /** pending 是下单候选仓占位；只有 ready 才能据此创建模块任务。 */
@@ -5260,6 +5262,22 @@ export async function createMemoryDraft(trigger: string, conclusion: string): Pr
 }
 export async function memoryHistory(id: string): Promise<MemoryRecord[]> {
   const response = await fetch(`/memory-insights/${encodeURIComponent(id)}/history`);
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function correctTaskTicket(taskId: string, ticket: string, title: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/correct-ticket`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ticket, title }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function cancelTaskTicketCorrection(taskId: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/correct-ticket`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel" }),
+  });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

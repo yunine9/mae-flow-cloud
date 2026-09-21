@@ -1950,7 +1950,7 @@ export function TaskWorkspace({
         )}
       </header>
 
-      {taskInspector && <TaskInspector task={task} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
+      {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
       {warmupOpen && <OverlayDialog ariaLabel="开工前编译详情" title="开工前编译与准备状态" onClose={() => setWarmupOpen(false)}>
         <WarmupPanel task={task} />

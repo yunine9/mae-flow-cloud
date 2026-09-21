@@ -2361,6 +2361,11 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
+        const correction = service.get(id)?.ticket_correction;
+        if (request.method !== "GET" && parts[2] !== "correct-ticket"
+            && correction && correction.state !== "completed" && !correction.cleanup_only) {
+          return json(response, 409, { error: "单号正在纠正，请在任务详情中查看进度或重试" });
+        }
         if (request.method !== "GET" && service.historyMutationInProgress(id)) {
           return json(response, 409, {
             error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
@@ -2972,6 +2977,16 @@ export function createTaskServer(
             viewer?.username ?? target.luban_account ?? "本地用户",
             String(body.text ?? ""),
           ));
+        }
+        if (request.method === "POST" && parts[2] === "correct-ticket" && parts.length === 3) {
+          const target = service.get(id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth)) return json(response, 403, { error: "只有任务责任人可以纠正单号" });
+          const body = await readBody(request);
+          if (body.action === "cancel") return json(response, 200, service.cancelTicketCorrection(id));
+          return json(response, 202, service.correctTicket(id, {
+            ticket: String(body.ticket ?? ""), title: String(body.title ?? ""),
+          }, viewer?.username ?? "本地用户"));
         }
         if (request.method === "POST"
             && ["pause", "resume", "cancel"].includes(parts[2])) {
