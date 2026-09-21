@@ -1,7 +1,7 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
@@ -9,6 +9,7 @@ import { KernelHost } from "../src/kernelHost.ts";
 import { openKernelFeedback } from "../src/kernelDelivery.ts";
 import { queueTaskHostOperation, finishTaskHostOperation, TaskHostLedger } from "../src/taskHostTools.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
+import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 function git(cwd: string, ...args: string[]) {
@@ -60,7 +61,7 @@ function fixture(t: TestContext) {
     await finishTaskHostOperation(host);
     return new TaskHostLedger(task.summary).read().operations.find(op => op.id === id)!;
   };
-  return { root, cwd, remote, service, task, base, upstream, push };
+  return { root, cwd, remote, peer, service, task, base, upstream, push };
 }
 
 test("首次及再次 push 都包含最新基准分支；新 SHA 可登记到真实内核", async t => {
@@ -122,4 +123,30 @@ test("拉取基准分支失败时不推送，原目标保留供恢复", async t 
   assert.match(op.result!, /fetch missing-target/);
   assert.equal(git(f.remote, "branch", "--list", "feature"), "");
   assert.match(f.task.mission, /继续处理检视意见/);
+});
+
+test("同步上游平台目录后仍可带本地编译产物推送，仅 HEAD 进入原 MR 分支", async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, "feature.ts"), "export const feature = true;\n");
+  git(f.cwd, "add", "feature.ts"); git(f.cwd, "commit", "-qm", "task source");
+  const initial = git(f.cwd, "rev-parse", "HEAD");
+  mkdirSync(join(f.peer, ".claude"));
+  f.upstream(".claude/upstream.md", "upstream instructions\n");
+  const target = f.upstream("toolType.dat", "baseline binary");
+  await f.service.syncTargetBeforePush(f.task, "main", f.task.controlEpoch);
+  writeFileSync(join(f.cwd, "toolType.dat"), "local build output");
+  mkdirSync(join(f.cwd, "imap")); writeFileSync(join(f.cwd, "imap/output.o"), "object");
+  f.task.summary.delivery_selection = { status: "confirmed", head: initial, baseline: f.base,
+    paths: ["feature.ts"], observed_paths: ["feature.ts"], excluded_paths: [], waiting_id: "reviewed", updated_at: "now" };
+  const head = git(f.cwd, "rev-parse", "HEAD");
+  const op = await f.push("push-with-local-output");
+  assert.equal(op.state, "succeeded", op.result);
+  assert.equal(git(f.remote, "rev-parse", "feature"), head);
+  assert.equal(git(f.remote, "show", "feature:toolType.dat"), "baseline binary");
+  assert.equal(git(f.remote, "ls-tree", "--name-only", "feature", "imap"), "");
+  assert.equal(git(f.cwd, "merge-base", "--is-ancestor", target, head), "");
+  assert.equal(readFileSync(join(f.cwd, "toolType.dat"), "utf8"), "local build output");
+  assert.deepEqual((await deliveryChangeSnapshot(f.cwd))!.committed_paths, ["feature.ts"]);
+  const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
+  assert.equal(state.delivery_loop.published.sha, head, "真实内核接受同步后的发布 SHA");
 });

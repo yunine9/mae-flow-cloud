@@ -663,6 +663,7 @@ export function TaskWorkspace({
   const [streamFilter, setStreamFilter] = useState<StreamFilter>("all");
   const [streamThread, setStreamThread] = useState<string>();
   const [assistantView, setAssistantView] = useState<DeveloperAssistantView>();
+  const [recoveryRequest, setRecoveryRequest] = useState(0);
   const [sideWidth, setSideWidth] = useState<number | undefined>(() => {
     try {
       const saved = Number(localStorage.getItem(SIDE_WIDTH_KEY));
@@ -1661,7 +1662,12 @@ export function TaskWorkspace({
           )}
           {canOperate && !waiting && (
             <div className="grid gap-2">
-              <RetryButton taskId={task.id} onDone={onChanged} allowFromStart />
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => { setWorkspaceView("materials"); setMaterialView("diff"); }}>查看代码与未提交文件</Button>
+                <Button size="sm" variant="outline" onClick={() => setRecoveryRequest(value => value + 1)}>补充处理要求</Button>
+              </div>
+              <p className="m-0 text-xs text-muted-foreground">可先核对文件，再说明哪些保留、哪些不交付，让 Agent 从当前现场处理；只有原因已解除时才按原流程重试。</p>
+              <RetryButton taskId={task.id} onDone={onChanged} label="按原流程重试" allowFromStart />
               <DiagnosticsLink taskId={task.id} />
             </div>
           )}
@@ -1686,10 +1692,13 @@ export function TaskWorkspace({
             <p className="m-0 text-sm leading-relaxed text-muted-foreground">{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
           )}
           {canOperate && repairStopped(task) && (
-            <RetryButton taskId={task.id} onDone={onChanged}
+            <div className="grid gap-2">
+              <Button size="sm" variant="outline" className="w-fit" onClick={() => setRecoveryRequest(value => value + 1)}>补充处理要求</Button>
+              <RetryButton taskId={task.id} onDone={onChanged}
               label={task.delivery?.stalled && !task.delivery?.loop
                   && !task.delivery?.evidence_gap
-                ? "重新尝试交付" : undefined} />
+                ? "重新尝试交付" : "按原流程重试"} />
+            </div>
           )}
           {task.delivery?.stalled && <DiagnosticsLink taskId={task.id} />}
         </div>
@@ -2596,6 +2605,7 @@ export function TaskWorkspace({
           />
           {chainReview && decides ? null : canCollaborate || decides ? (
             <Composer task={task}
+              recoveryRequest={recoveryRequest}
               isOwner={viewerUsername === (task.luban_account ?? "本地用户")}
               crossRepository={Boolean(task.parent_task_id)}
               steerOnly={task.requirement_graph?.stage === "analysis"}

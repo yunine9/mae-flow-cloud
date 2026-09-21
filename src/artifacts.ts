@@ -543,11 +543,16 @@ const ORIGIN_HEADING: Record<ChangeOrigin, string> = {
   unstaged: "未暂存(unstaged)",
 };
 
-/** 内核在建分支时记录的 HEAD 就是任务基线；旧现场没有该字段时，
- * 再退到配置的基线分支 / origin/HEAD。拿不到就保留旧的工作区口径。 */
+/** 展示和交付只比较 MR 净贡献，已合入目标分支的内容不算本任务改动。
+ * 没有远端目标引用的旧现场仍用任务起点；历史完整性另读 frozenTaskBaseline。 */
 function taskBaseline(cwd: string): string | undefined {
   try {
     const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const target = String(state?.config?.["基线分支"] ?? "").trim();
+    if (target && git(cwd, ["check-ref-format", "--branch", target]) !== undefined) {
+      const bases = git(cwd, ["merge-base", "--all", "HEAD", `refs/remotes/origin/${target}`])?.trim().split(/\s+/);
+      if (bases?.length === 1 && bases[0]) return bases[0];
+    }
     const recorded = [
       state?.step_heads?.branch_create,
       state?.step_heads?.workflow_select,
@@ -592,6 +597,11 @@ export async function frozenTaskBaseline(
 async function taskBaselineAsync(cwd: string): Promise<string | undefined> {
   try {
     const state = JSON.parse(readFileSync(join(cwd, ".mae-flow.json"), "utf-8"));
+    const target = String(state?.config?.["基线分支"] ?? "").trim();
+    if (target && await gitAsync(cwd, ["check-ref-format", "--branch", target]) !== undefined) {
+      const bases = (await gitAsync(cwd, ["merge-base", "--all", "HEAD", `refs/remotes/origin/${target}`]))?.trim().split(/\s+/);
+      if (bases?.length === 1 && bases[0]) return bases[0];
+    }
     const recorded = [
       state?.step_heads?.branch_create,
       state?.step_heads?.workflow_select,

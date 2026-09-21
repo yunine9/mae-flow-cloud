@@ -38,6 +38,27 @@ const WAITING_SCRIPT: Scene[] = [
   { text: "完成。" },
 ];
 
+test("失败现场可以补充处理要求，保留原分支和 MR，不把新要求变成盲目重推", async () => {
+  const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "mfc-failed-steer-")),
+    provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  try {
+    const id = service.create("处理工作区遗留文件", { account: "owner" }).id;
+    const task = (service as any).tasks.get(id);
+    task.summary.luban_account = "owner";
+    task.summary.status = "failed";
+    task.summary.waiting = undefined;
+    task.summary.delivery = { source_branch: "feature", mr_url: "https://code.example/mr/15445", pipeline: "success" };
+    (service as any).removeFromQueue(id);
+    await assert.rejects(service.interrupt(id, "直接重推", "other"), /没有在跑的会话/);
+    const reply = await service.interrupt(id, "先核对 toolType.dat 和 imap 的来源，产物不交付；保留源码和 master 合入内容。", "owner");
+    assert.equal(reply.status, "queued");
+    assert.match(task.pendingMainSteers.join("\n"), /先核对 toolType.dat 和 imap 的来源/);
+    assert.equal(reply.delivery?.source_branch, "feature");
+    assert.equal(reply.delivery?.mr_url, "https://code.example/mr/15445");
+    assert.equal(reply.delivery?.git_push, undefined, "补充要求不直接推送");
+  } finally { await service.shutdown(); }
+});
+
 async function until(
   probe: () => boolean,
   what: string,

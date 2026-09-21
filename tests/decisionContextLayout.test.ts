@@ -13,6 +13,15 @@ const studio = readFileSync(
 const stream = readFileSync(
   join(process.cwd(), "web/src/ConversationStream.tsx"), "utf8");
 
+test("失败现场可查看代码、补充要求，入口只聚焦原对话而不自动重试", () => {
+  const composer = readFileSync(join(process.cwd(), "web/src/Composer.tsx"), "utf8");
+  assert.match(workspace, /查看代码与未提交文件/);
+  assert.match(workspace, /setRecoveryRequest\(value => value \+ 1\).*补充处理要求/);
+  assert.match(workspace, /recoveryRequest=\{recoveryRequest\}/);
+  assert.match(composer, /steerInput\.current\?\.focus\(\)/);
+  assert.match(taskCard, /查看代码并补充处理要求/);
+});
+
 test("决策背景展开后由外层真实占位，不能与后续问题重叠", () => {
   // #227(去 legacy 二期)ws-decision 死家族随旧工作台退役:style.css 里的
   // 旧工作台规则与后来的"解除高度上限"覆盖对一并删除;.waiting-context 的

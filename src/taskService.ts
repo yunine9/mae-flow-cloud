@@ -127,6 +127,7 @@ import { readTaskHostDocument } from "./taskHostDocuments.ts";
 import { collectAgentDiagnostics } from "./taskHostDiagnostics.ts";
 import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostOperation, recordTaskHostInstruction, refreshOwnerInputProjection, taskDeferredFeedback, deferredAnnotationIds, deferredPipeline, taskHostGoal, relatedHostTask, settleVerificationStop, recoverHostPushProjection, type TaskHostRuntime } from "./taskHostTools.ts";
 import { prepareHostPush } from "./hostPushPreparation.ts";
+import { deliveryCommitTree } from "./deliveryCommitTree.ts";
 import { canHandoffReview, handoffReview } from "./reviewHandoff.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
@@ -567,6 +568,7 @@ import {
 } from "./safeGit.ts";
 import {
   AGENT_PLATFORM_LOCAL_EXCLUDES,
+  AGENT_PLATFORM_ROOTS,
   FLOW_RUNTIME_LOCAL_EXCLUDES,
   AGENT_PLATFORM_PATHSPECS,
   describeAgentPlatformRoots,
@@ -16511,6 +16513,10 @@ export class TaskService {
     let focused: DeliveryRevisionComparison | undefined;
     for (const base of [...new Set(preferred)]) {
       if (!base || base === snapshot.head) continue;
+      // 上轮推送尚未包含这次合入的目标分支时，直接两点比较会混入上游
+      // 改动。此时展示 MR 净贡献，不把 master 更新标成“本轮修复”。
+      if ((await runSafeWorktreeGitAsync(task.cwd!, ["merge-base", "--is-ancestor",
+        contribution.base_sha, base], { timeoutMs: 30_000 })).status !== 0) continue;
       focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
       if (focused) break;
     }
@@ -16952,72 +16958,35 @@ export class TaskService {
       return "blocked";
     }
 
-    // 排除项的本地内容原样保留，不能因它们脏着就拒绝机械整理。
-    // 索引和工作区分别核对，防止 staged/unstaged 相互抵消；关闭重命名
-    // 检测，使从排除项移到业务路径的改动仍然可见。真正的新业务文件
-    // 也需要核对，不能只看上次选择的 expected，否则会被 git add 偷带。
-    const dirtyBusiness = new Set<string>();
-    for (const cached of [[], ["--cached"]]) {
-      const dirty = await runSafeWorktreeGitAsync(cwd,
-        ["diff", ...cached, "--name-only", "--no-renames", "-z", "--"],
-        { timeoutMs: 30_000 });
-      if (dirty.status !== 0) {
-        throw new Error(`读取未提交文件失败：${String(
-          dirty.stderr || dirty.error || "").trim().slice(0, 300)}`);
-      }
-      for (const path of String(dirty.stdout ?? "").split("\0").filter(Boolean)) {
-        if (!rejected.has(path) && !isAgentPlatformPath(path)) dirtyBusiness.add(path);
-      }
-    }
-    if (dirtyBusiness.size) {
-      const detail = "检测到修复重新带入了已排除文件，同时还有未提交的业务"
-        + `改动（${describeDirtyPaths([...dirtyBusiness])}）；平台不会猜着整理或循环撞门禁。请在代码检视中确认处理。`;
-      task.summary.status = "failed";
-      task.summary.detail = detail;
-      task.summary.delivery = { ...task.summary.delivery, skipped: detail };
-      this.persist(task);
-      return "blocked";
-    }
-
-    // 平台目录即便先提交后删除，blob 仍在历史里。以干净锚重组而不是补
-    // 一个“删除提交”，才能保证远端不可达。已确认范围之外若出现真正的
-    // 新业务文件保留在 targetPaths；后面由 review 授权继承或首次确认卡
-    // 决定。这里始终只移除用户已排除项与平台目录。
-    // MR 外的上游修改也必须保留。以远端安全锚重组时，把已合入的
-    // 目标分支作为父提交保留下来，不能只暂存本任务 paths 而丢掉上游树。
+    // 只重建已提交的树，未提交/未跟踪文件不参与整理，不猜它们是否为
+    // 编译产物。保留目标分支父节点，不能把合入的上游代码算成本单新增。
     const preserveTarget = !await isAncestorSha(contribution.base_sha, anchor);
-    const carried = (await run(["diff", "--name-only", "--no-renames", anchor, head, "--"],
-      "读取本轮完整树差异")).split("\n").filter(Boolean);
-    const stagePaths = [...new Set(carried)]
-      .filter(path => !isAgentPlatformPath(path) && !rejected.has(path))
-      .sort((left, right) => left.localeCompare(right));
-    const upstreamRejected = (await run(["diff", "--name-only", "--no-renames", anchor, contribution.base_sha, "--"],
-      "读取排除路径基线")).split("\n").filter(path => rejected.has(path));
+    const restorePaths = (await run(["diff", "--name-only", "--no-renames", "-z",
+      contribution.base_sha, head, "--"], "读取排除路径差异")).split("\0")
+      .filter(path => path && (rejected.has(path) || isAgentPlatformPath(path)));
     try {
-      await run(["reset", "--mixed", anchor], "回到最近干净提交");
-      if (stagePaths.length) {
-        await run(["add", "-A", "--", ...stagePaths], "重组已确认文件");
+      const commit = await deliveryCommitTree({ cwd, head, baseline: contribution.base_sha,
+        parents: [anchor, ...(preserveTarget ? [contribution.base_sha] : [])], restorePaths,
+        configs: [["user.name", "mae-flow-cloud"], ["user.email", "cloud@mae-flow.local"],
+          ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
+        message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", "按已确认范围整理修复提交"),
+      });
+      const afterPaths = normalizedDeliveryPaths((await run(["diff", "--name-only",
+        contribution.base_sha, commit, "--"], "复核整理后的范围")).split("\n"));
+      const remainingPlatform = (await run(["log", "--format=", "--name-only", "-z", "--diff-filter=A",
+        `${contribution.base_sha}..${commit}`, "--", ...AGENT_PLATFORM_ROOTS], "复核平台目录历史"))
+        .split("\0").map(path => path.trim()).filter(isAgentPlatformPath);
+      if (remainingPlatform.length || !samePaths(afterPaths, targetPaths)) {
+        throw new Error(`整理后的范围复核未通过：${describeDirtyPaths(remainingPlatform.length
+          ? remainingPlatform : [...afterPaths.filter(path => !targetPaths.includes(path)),
+            ...targetPaths.filter(path => !afterPaths.includes(path))])}；原提交、索引与工作区均未修改`);
       }
-      if (upstreamRejected.length) {
-        await run(["restore", "--source", contribution.base_sha, "--staged", "--", ...upstreamRejected],
-          "保留上游已有的排除路径内容");
-      }
-      const hasStaged = await runSafeWorktreeGitAsync(cwd,
-        ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-      if (hasStaged.status !== 0 || preserveTarget) {
-        const tree = await run(["write-tree"], "生成整理后的文件树");
-        const commit = await run(["commit-tree", tree, "-p", anchor,
-          ...(preserveTarget ? ["-p", contribution.base_sha] : []), "-m",
-          cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
-            "按已确认推送范围收口流水线修复")], "提交整理后的修复");
-        await run(["reset", "--mixed", commit], "接续整理后的提交");
-      }
+      await run(["update-ref", "HEAD", commit, head], "接续整理后的提交");
+      // 仅撤出已明确排除的暂存项；其他文件的 staged/unstaged 状态保持原样。
+      if (restorePaths.length) await run(["restore", "--source", commit, "--staged", "--",
+        ...restorePaths.map(path => `:(literal)${path}`)], "更新排除项索引");
     } catch (error) {
-      // reset --mixed 不会破坏工作区内容；尽力把分支引用与索引恢复到
-      // 原 HEAD，失败时仍以明确诊断停下，绝不自动重试成循环。
-      await runSafeWorktreeGitAsync(cwd,
-        ["reset", "--mixed", head], { timeoutMs: 30_000 });
-      const detail = `按已确认范围自动整理失败：${String(error)}`;
+      const detail = `按已确认范围自动整理失败：${String(error)}。工作区内容保留，可查看代码并补充处理要求。`;
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };
@@ -17026,28 +16995,6 @@ export class TaskService {
     }
 
     this.registerAgentPlatformLocalExcludes(cwd, selection.excluded_paths);
-    const after = await deliveryChangeSnapshot(cwd);
-    const afterPaths = after
-      ? (await this.deliveryContribution(task, after)).paths : [];
-    if (!after || after.added_agent_platform_paths.length
-        || !samePaths(afterPaths, targetPaths)) {
-      const restored = await runSafeWorktreeGitAsync(cwd,
-        ["reset", "--mixed", head], { timeoutMs: 30_000 });
-      const differences = [
-        !after ? "整理后的代码现场不可读" : "",
-        after?.added_agent_platform_paths.length ? `平台目录仍在提交历史：${describeDirtyPaths(after.added_agent_platform_paths)}` : "",
-        targetPaths.some(path => !afterPaths.includes(path)) ? `缺少文件：${describeDirtyPaths(targetPaths.filter(path => !afterPaths.includes(path)))}` : "",
-        afterPaths.some(path => !targetPaths.includes(path)) ? `多出文件：${describeDirtyPaths(afterPaths.filter(path => !targetPaths.includes(path)))}` : "",
-      ].filter(Boolean).join("；");
-      const detail = `按已确认范围自动整理后复核未通过（${differences}）；`
-        + (restored.status === 0 ? "已恢复整理前的提交，工作区内容保留。" : "恢复提交失败，请检查工作区。")
-        + "尚未推送，请在代码检视中确认处理。";
-      task.summary.status = "failed";
-      task.summary.detail = detail;
-      task.summary.delivery = { ...task.summary.delivery, skipped: detail };
-      this.persist(task);
-      return "blocked";
-    }
     this.options.log?.(
       `任务 ${task.summary.id} 已自动移除修复重新带入的排除内容：${
         describeDirtyPaths([...new Set([...unexpected, ...platformHistory])])}`);

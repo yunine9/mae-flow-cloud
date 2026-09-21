@@ -85,6 +85,7 @@ export function Composer({
   onChanged,
   onAssistant,
   crossRepository = false,
+  recoveryRequest = 0,
 }: {
   task: TaskSummary;
   /** 只有主责任人能把已停下的主会话从验证/待合入/失败现场恢复。 */
@@ -93,6 +94,8 @@ export function Composer({
    * 和输入区两套皮、两种口吻(2026-09-06 用户:"为什么不放在下面那个里面
    * 平行"),现在与「说给 Agent」「我来接手」并列成第三档。 */
   crossRepository?: boolean;
+  /** 失败原因旁的处理入口只聚焦输入框，不自动发送指令或重跑。 */
+  recoveryRequest?: number;
   /** 跨仓分析主任务是共享讨论室,没有可编辑的单仓代码现场。 */
   steerOnly?: boolean;
   /** 等这位读者决定:输入区让给决定卡的提交区(WaitingCard 的 footer 经
@@ -110,6 +113,17 @@ export function Composer({
   const [mode, setMode] = useState<CollaborationMode>("steer");
   const [decisionToolsOpen, setDecisionToolsOpen] = useState(false);
   const modePicked = useRef(false);
+  const steerInput = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!recoveryRequest) return;
+    modePicked.current = true;
+    setMode("steer");
+    const frame = requestAnimationFrame(() => {
+      steerInput.current?.scrollIntoView({ block: "nearest" });
+      steerInput.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [recoveryRequest]);
   const [syncText, setSyncText] = useState("");
   const [syncBusy, setSyncBusy] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState("");
@@ -495,7 +509,7 @@ export function Composer({
 
       {!showAssistant && !showSync && !decisionDock && (
         <>
-          <Textarea id={`steer-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
+          <Textarea ref={steerInput} id={`steer-${task.id}`} className="min-h-13 max-h-40 resize-y overflow-y-auto bg-surface"
             value={steerText}
             disabled={(!canSteer && !(refs.length > 0 && canSteerKnowledge))
               || steerBusy}

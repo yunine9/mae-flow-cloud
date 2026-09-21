@@ -59,7 +59,7 @@ const ROWS: Row[] = [
       "多为下单配置问题(仓库/分支/单号):修正后重新发起任务", "responsible", 95, true) },
   { branch: "failed·跑起来后失败",
     input: { status: "failed", progress: { current_phase: "build" } },
-    expect: F("blocked", "任务执行失败", "查看失败现场，处理后重跑", "responsible", 95, true) },
+    expect: F("blocked", "任务执行失败", "查看代码与未提交文件，补充处理要求；原因解除后可按原流程重试", "responsible", 95, true) },
   { branch: "paused·助手占场",
     input: { status: "paused", assistant_engaged: true },
     expect: F("blocked", "开发助手正在接管代码现场，主任务已安全暂停",

@@ -204,7 +204,7 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
       detail,
       neverStarted
         ? "多为下单配置问题(仓库/分支/单号):修正后重新发起任务"
-        : "查看失败现场，处理后重跑",
+        : "查看代码与未提交文件，补充处理要求；原因解除后可按原流程重试",
       "responsible",
       95,
       true,

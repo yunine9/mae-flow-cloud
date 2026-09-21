@@ -381,6 +381,7 @@ export function TaskCard({
             <Alert variant="destructive" className="mb-3">
               <AlertTitle>任务执行失败</AlertTitle>
               <AlertDescription>{task.detail}</AlertDescription>
+              {canOperate && onOpenArtifacts && <Button size="sm" variant="outline" className="mt-2" onClick={onOpenArtifacts}>查看代码并补充处理要求</Button>}
             </Alert>
           )}
           {task.delivery?.skipped && task.detail !== task.delivery.skipped && (

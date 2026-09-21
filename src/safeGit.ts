@@ -27,6 +27,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 export interface SafeGitOptions {
   configs?: ReadonlyArray<readonly [key: string, value: string]>;
   env?: NodeJS.ProcessEnv;
+  /** 宿主创建的临时索引；不从工作区配置或普通环境变量读取。 */
+  indexFile?: string;
   /** 仅供宿主重建 commit 对象时显式提供。普通 env 中的 GIT_AUTHOR_* /
    * GIT_COMMITTER_* 仍会被清除，避免 Agent 环境暗改宿主提交身份。 */
   commitIdentity?: SafeGitCommitIdentity;
@@ -302,7 +304,8 @@ function safeGitProcessEnvironment(
   view: SafeGitView,
   options: SafeGitOptions,
 ): NodeJS.ProcessEnv {
-  const env = view.environment(options.env);
+  const env = { ...view.environment(options.env),
+    ...(options.indexFile ? { GIT_INDEX_FILE: options.indexFile } : {}) };
   const identity = options.commitIdentity;
   if (!identity) return env;
   return {
