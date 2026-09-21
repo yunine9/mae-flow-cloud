@@ -11,3 +11,15 @@ svg rect[data-composition-frame-id="0"]{fill:#1a46601a;stroke:#416785}svg rect[d
 
 .controls #zoom-level{align-self:center;min-width:40px;text-align:center;font-size:12px;color:#94b9d4}.controls #zoom-in,.controls #zoom-out{font-size:18px;padding:4px 10px}.stage.presenting #diagram{margin-right:370px}.stage.presenting .interact-hint{display:none}#auto-explanation{position:absolute;right:22px;top:50%;transform:translateY(-50%);width:326px;padding:26px;border:1px solid #43758f;border-radius:16px;background:linear-gradient(140deg,#1a354c,#102438);box-shadow:0 16px 60px #0004}#auto-step{font-size:12px;letter-spacing:1px;color:#80d8e9}#auto-explanation h2{font-size:24px;line-height:1.55;margin:18px 0}#auto-explanation p{font-size:16px;line-height:1.95;color:#c3d6e7;margin:0}.auto-actions{display:flex;gap:10px;margin-top:24px}.auto-actions button{border:1px solid #42647d;background:#1c3d55;border-radius:8px;padding:9px 14px;font-size:14px}.auto-actions button:hover{background:#2c5470}.stage.presenting .narrative-copy{opacity:.8}#auto-explanation.arriving h2,#auto-explanation.arriving p{animation:arrive .2s ease-out}.stage.presenting #diagram>svg{overflow:hidden}
 @media(max-height:820px){.stage.presenting #diagram{margin-right:305px}#auto-explanation{right:16px;width:279px;padding:20px}#auto-explanation h2{font-size:20px;margin:12px 0}#auto-explanation p{font-size:14px;line-height:1.85}.auto-actions{margin-top:16px}.controls{gap:5px}}
+
+/* 详细讲解拥有独立阅读区域；短提要不挤压图，长正文不遮挡操作。 */
+.stage.presenting #diagram{margin-right:440px}
+.stage.presenting #philosophy{right:440px;overflow:auto}
+#auto-explanation{z-index:2;width:396px;max-height:calc(100% - 36px);display:flex;flex-direction:column;padding:24px}
+#auto-step,#auto-explanation h2,.reading-hint,.auto-actions{flex:none}
+#auto-explanation h2{font-size:22px;line-height:1.5;margin:14px 0}
+#auto-explanation #auto-body{min-height:0;overflow-y:auto;white-space:pre-line;scrollbar-width:thin;line-height:1.8;padding-right:6px}
+#auto-body:focus-visible{outline:2px solid #77d3ff;outline-offset:3px}
+.reading-hint{font-size:12px;color:#8fb3cd;margin-top:14px}
+.auto-actions{margin-top:14px}
+@media(max-height:820px){.stage.presenting #diagram{margin-right:380px}.stage.presenting #philosophy{right:380px;padding:18px}#auto-explanation{width:350px;right:15px;padding:18px;max-height:calc(100% - 24px)}#auto-explanation h2{font-size:19px;margin:10px 0}#auto-explanation #auto-body{font-size:15px;line-height:1.75}.reading-hint{margin-top:10px}.auto-actions{margin-top:10px}.stage.presenting .philosophy-title h2{font-size:22px}.stage.presenting .principles article{padding:12px}.stage.presenting .principles h3{font-size:16px}}
