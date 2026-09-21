@@ -93,11 +93,11 @@ const BUILTINS = new Set([
   "bash", "AskUserQuestion", "inspect_image", "read", "read_file",
 ]);
 
-test("技能正文不指向封存工具与已删机制(ADR-0013/五章节/#96 自由探索移除)", () => {
+test("技能正文不指向封存工具与已删机制(ADR-0013/ADR-0046/#96 自由探索移除)", () => {
   const files = skillFiles();
   assert.ok(files.length >= 3, `技能目录异常: ${files.length} 份`);
   for (const { name, text } of files) {
-    for (const banned of ["build_deploy", "换库", "四章节", "下一步建议", "deploy_verify", "report_stage", "自由探索"]) {
+    for (const banned of ["build_deploy", "换库", "四章节", "五章节", "证据链", "下一步建议", "deploy_verify", "report_stage", "自由探索"]) {
       assert.ok(!text.includes(banned),
         `技能 ${name} 含禁词「${banned}」——封存/已删机制的活表面,改技能正文`);
     }
@@ -143,7 +143,7 @@ test("技能指路真实性:skills/<名>/SKILL.md 引用必须指向真实物化
   }
 });
 
-test("整包物化:技能目录的附属物(如 issue-ops 的 bin 引擎)必须随技能落到工作区且有执行位", () => {
+test("整包物化:技能目录的附属物(如 fetch-logs 的 bin 引擎)必须随技能落到工作区且有执行位", () => {
   // 非标单文件物化的旧病回潮=技能携带的能力静默失效,按盘上真物验。
   const workspace = mkdtempSync(join(tmpdir(), "mfc-skill-materialize-"));
   const paths = materializeIssueSkills(workspace);
@@ -151,9 +151,9 @@ test("整包物化:技能目录的附属物(如 issue-ops 的 bin 引擎)必须�
   for (const path of paths) {
     assert.ok(existsSync(path), `SKILL.md 未物化: ${path}`);
   }
-  // issue-ops 的 bin 引擎:wrapper + 各架构二进制全部在场且可执行。
-  const binDir = join(workspace, "skills", "issue-ops", "bin");
-  assert.ok(existsSync(binDir), "issue-ops/bin 未随技能物化(整包拷贝失效?)");
+  // fetch-logs 的 bin 引擎:wrapper + 各架构二进制全部在场且可执行。
+  const binDir = join(workspace, "skills", "fetch-logs", "bin");
+  assert.ok(existsSync(binDir), "fetch-logs/bin 未随技能物化(整包拷贝失效?)");
   for (const entry of readdirSync(binDir)) {
     const mode = statSync(join(binDir, entry)).mode & 0o111;
     assert.ok(mode, `bin 引擎缺执行位: ${entry}`);

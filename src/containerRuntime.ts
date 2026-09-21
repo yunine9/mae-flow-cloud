@@ -785,8 +785,10 @@ export class TaskContainer {
 
     // 宿主侧 ops 工具的运维密码走特例通道:精确键名白名单,不放宽
     // SECRET_ENV 正则也不改 forwardedEnvironment 默认白名单。
+    // (拉日志引擎已迁平台技能 fetch-logs,密码 --pwd 直传不走环境
+    // 变量,ADR-0047——白名单只剩 build-deploy 的键。)
     const OPS_PRIVILEGED_KEYS = new Set([
-      "BUILD_DEPLOY_PASSWORD", "FETCH_LOGS_PASSWORD",
+      "BUILD_DEPLOY_PASSWORD",
     ]);
     const execEnvironment: Record<string, string> = {};
     for (const [key, value] of envEntries(options.env ?? {})) {

@@ -1,8 +1,8 @@
 /**
  * 问题流的宿主侧运维工具执行器(build-deploy)。
  *
- * 日志抓取引擎已迁为平台技能 issue-ops 的 bin(容器内由 Agent 直接
- * 跑,见 assets/issue-skills/issue-ops),这里只剩 build-deploy:
+ * 日志抓取引擎已迁为平台技能 fetch-logs 的 bin(容器内由 Agent 直接
+ * 跑,见 assets/issue-skills/fetch-logs),这里只剩 build-deploy:
  * 二进制来自 assets/ops-tools(every-skill 仓的 Go 产物,本仓带
  * linux-amd64/arm64/exe 三平台)。关键边界:密码经环境变量只交给
  * 子进程(BUILD_DEPLOY_PASSWORD),不落盘、不回传、不进模型上下文
@@ -44,7 +44,7 @@ export interface OpsBuildDeployRequest {
   includeLib: boolean;
 }
 
-/** 日志抓取已是平台技能 issue-ops(整包自带 bin 引擎),这里只剩
+/** 日志抓取已是平台技能 fetch-logs(整包自带 bin 引擎),这里只剩
  * build-deploy——它被 ADR-0013 封存,引擎随技能迁移前原地保留。 */
 export interface IssueOpsTools {
   buildDeploy(request: OpsBuildDeployRequest): Promise<{ summary: string }>;
@@ -127,7 +127,7 @@ function tail(text: string, limit = 2_500): string {
 /** 成功哨兵:退出码之外,以工具自己的输出作"活真干完了"的唯一证据。
  * 2026-09-02 拍板把哨兵收拢到这一处——调用方的成功判定和 runInContainer
  * 的超时守卫共用同一份真相,免得两处正则各写一份、日后各自漂移。
- * (fetch-logs 引擎已迁为平台技能 issue-ops 的 bin,哨兵随迁技能正文。) */
+ * (拉日志引擎已迁为平台技能 fetch-logs 的 bin,哨兵随迁技能正文。) */
 export const BUILD_DEPLOY_SENTINEL = /\[INFO\].*部署完成/;
 
 /** 失败报错统一拼输出尾部(stdout\nstderr 合并取尾):超时与业务失败
@@ -210,7 +210,7 @@ export function createGoOpsTools(options: {
         ...request.hosts.flatMap((host) => ["--host", host]),
       ];
       if (request.includeLib) args.push("--include-lib");
-      log?.(`[issue-ops] build-deploy: ${request.projectPath} @ `
+      log?.(`[build-deploy]: ${request.projectPath} @ `
         + `${request.hosts.join(",")}${request.includeLib ? " (含 lib)" : ""}`);
       const privilegedEnv = { BUILD_DEPLOY_PASSWORD: request.password };
       const result = containerExec

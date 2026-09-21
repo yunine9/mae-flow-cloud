@@ -619,7 +619,7 @@ export interface IssueFlowOptions {
   dts?: DtsGateway;
   /** 交付平台适配层(--platform):MR 创建与需求交付共用同一端点。 */
   platformUrl?: string;
-  /** 调试形态(--debug-issue):会话技能物化后把 issue-ops 的抓日志
+  /** 调试形态(--debug-issue):会话技能物化后把 fetch-logs 的抓日志
    * wrapper 换成假引擎(罐头复制,不连网管)。旗标缺席时整个字段
    * 不在,会话行为与现状逐字节一致。 */
   debugIssue?: { opsMockBinDir: string };
@@ -1201,14 +1201,15 @@ export class IssueFlowService {
     };
   }
 
-  /** 一次生成达标率读侧(ADR-0045,#342):终态伴生快照(code-origin.json)
-   *  的聚合。分母=有数据(伴生在场且留存源码行>0)的完成交付会话;伴生
-   *  缺席按结论时刻分「待算」(支持期内:通道在途或曾丢失,清扫器兜底)
+  /** 首次生成占比读侧(ADR-0045,#342):终态伴生快照(code-origin.json)
+   *  的聚合,days 为时间过滤(按结论时刻,近 N 天;缺省=全部)。
+   *  占比/达标分母=范围内有数据(伴生在场且有工作变更行)的完成交付会话;
+   *  伴生缺席按结论时刻分「待算」(支持期内:通道在途或曾丢失,清扫器兜底)
    *  与「不支持期」(起算日期前终态,永不回填)。达标线是参数(settings
    *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。
    *  一次定位/验证/解决三根过程率轴与 /issues/stats 同源(this.onceRates
-   *  的既有判定),分母=完成交付全集——不随伴生在缺漂移,两处数字永一致。 */
-  onceGeneratedStats(): IssueOnceGeneratedStats {
+   *  的既有判定),分母=范围内完成交付全集——不随伴生在缺漂移。 */
+  onceGeneratedStats(days?: number): IssueOnceGeneratedStats {
     const runtime = this.options.settings?.runtime?.();
     const configured = Number(
       (runtime as Record<string, unknown> | undefined)
@@ -1216,9 +1217,21 @@ export class IssueFlowService {
     const threshold = Number.isFinite(configured) && configured > 0 && configured <= 100
       ? configured
       : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
-    // 三根过程率轴:与团队页既有一次率同一份判定(口径不分家);
-    // 解决 = 定位与验证双一次(ADR-0045 公式)。
-    const once = this.onceRates();
+    const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
+    // 收集范围内全部完成交付会话(判定事实 + 结论时刻)。
+    const collected: Array<{ live: LiveIssue; concludedAt: string }> = [];
+    for (const live of this.live.values()) {
+      const state = live.state;
+      if (state.status !== "archived") continue;
+      if (state.conclusion?.kind !== "delivered") continue;
+      if (!state.ticket?.trim()) continue;
+      const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
+      const atMs = Date.parse(concludedAt);
+      if (cutoff !== undefined && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
+      collected.push({ live, concludedAt });
+    }
+    const once = issueOnceRates(collected.map(
+      ({ live, concludedAt }) => ({ ...this.onceRateFacts(live), concludedAt })));
     const solvedPassed = once.per_session
       .filter((row) => row.localization_pass && row.repair_pass).length;
     const percent = (passed: number, total: number): number | null =>
@@ -1226,64 +1239,50 @@ export class IssueFlowService {
     const localization = { passed: once.localization.passed, rate: once.localization.rate };
     const verify = { passed: once.repair.passed, rate: once.repair.rate };
     const solved = { passed: solvedPassed, rate: percent(solvedPassed, once.total) };
-    // 定位/验证/解决按会话布尔:per_session 明细按会话号回填,供特性表
-    // 与按会话表直接消费(无一次率明细的会话如实记 false)。
     const axesById = new Map(once.per_session.map((row) => [row.id, row]));
 
     const sessions: IssueOnceGeneratedSession[] = [];
     let pending = 0;
     let unsupported = 0;
     let noCode = 0;
-    for (const live of this.live.values()) {
-      const state = live.state;
-      if (state.status !== "archived") continue;
-      if (state.conclusion?.kind !== "delivered") continue;
-      if (!state.ticket?.trim()) continue;
-      const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
-      const snapshot = readCodeOriginSnapshot(live.root, live.id);
-      if (!snapshot) {
-        if (concludedAt.slice(0, 10) >= ISSUE_CODE_ORIGIN_SINCE) pending += 1;
-        else unsupported += 1;
-        continue;
-      }
-      const aggregate = aggregateCodeOrigin(snapshot, threshold);
-      if (!aggregate.total) {
-        noCode += 1;
-        continue;
-      }
+    const repoMap = new Map<string, IssueOnceGeneratedRepoRow>();
+    for (const { live, concludedAt, ...rowFacts } of collected) {
       const axes = axesById.get(live.id);
+      const supported = concludedAt.slice(0, 10) >= ISSUE_CODE_ORIGIN_SINCE;
+      const snapshot = supported
+        ? readCodeOriginSnapshot(live.root, live.id) : undefined;
+      const aggregate = snapshot ? aggregateCodeOrigin(snapshot, threshold) : undefined;
+      const state: IssueOnceGeneratedSession["state"] =
+        !supported ? "unsupported"
+        : aggregate && aggregate.total > 0 ? "ok"
+        : aggregate ? "no_code"
+        : "pending";
+      if (state === "pending") pending += 1;
+      if (state === "unsupported") unsupported += 1;
+      if (state === "no_code") noCode += 1;
       sessions.push({
         id: live.id,
-        title: state.title,
-        module: state.module?.trim() || "未分类",
+        title: live.state.title,
+        module: live.state.module?.trim() || "未分类",
         concluded_at: concludedAt,
-        share: aggregate.share!,
-        pass: aggregate.pass === true,
-        lines: {
-          first: aggregate.first,
-          rework: aggregate.rework,
-          external: aggregate.external,
-        },
+        reviews: axes?.reviews ?? 0,
         localization_pass: axes?.localization_pass ?? false,
         verify_pass: axes?.repair_pass ?? false,
         solved_pass: axes ? axes.localization_pass && axes.repair_pass : false,
+        state,
+        ...(state === "ok" && aggregate ? {
+          share: aggregate.share!,
+          pass: aggregate.pass === true,
+          lines: {
+            first: aggregate.first,
+            rework: aggregate.rework,
+            external: aggregate.external,
+          },
+        } : {}),
       });
-    }
-    sessions.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));
-    const total = sessions.length;
-    const passed = sessions.filter((row) => row.pass).length;
-    // 按代码仓跨会话聚合:只出代码衍生指标;多仓会话按仓各计一次。
-    const repoMap = new Map<string, IssueOnceGeneratedRepoRow>();
-    for (const live of this.live.values()) {
-      const state = live.state;
-      if (state.status !== "archived") continue;
-      if (state.conclusion?.kind !== "delivered") continue;
-      if (!state.ticket?.trim()) continue;
-      const snapshot = readCodeOriginSnapshot(live.root, live.id);
-      if (!snapshot) continue;
+      if (state !== "ok" || !snapshot) continue;
       for (const repo of snapshot.by_repo) {
         if ("unavailable" in repo) continue;
-        // 零工作行仓段(无源码交付)与 per_session 的 no_code 口径对齐:不计。
         if (repo.lines.first + repo.lines.rework + repo.lines.external <= 0) continue;
         const bucket = repoMap.get(repo.repo) ?? {
           repo: repo.repo, sessions: 0,
@@ -1300,18 +1299,22 @@ export class IssueFlowService {
         repoMap.set(repo.repo, bucket);
       }
     }
-    const by_repo = [...repoMap.values()].sort((a, b) =>
-      b.total - a.total || a.repo.localeCompare(b.repo, "zh-Hans-CN"));
+    sessions.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));
+    const okRows = sessions.filter((row) => row.state === "ok");
+    const total = okRows.length;
+    const passed = okRows.filter((row) => row.pass).length;
     return {
       threshold_percent: threshold,
       supported_since: ISSUE_CODE_ORIGIN_SINCE,
+      delivered: once.total,
       total,
       passed,
       rate: total ? Math.round((passed / total) * 1000) / 10 : null,
       localization,
       verify,
       solved,
-      by_repo,
+      by_repo: [...repoMap.values()].sort((a, b) =>
+        b.total - a.total || a.repo.localeCompare(b.repo, "zh-Hans-CN")),
       pending,
       unsupported,
       no_code: noCode,
@@ -1802,7 +1805,7 @@ export class IssueFlowService {
   /** 网管环境落盘的唯一路径:凭据只进 vault(AES-GCM 按会话隔离的
    * 加密文件),issue.json/公开 API/事件只有引用；随后
    * environmentCredentials 会按 ADR-0003 解密到当前问题的 AI 上下文。
-   * 后台凭据(both)供日志抓取(技能 issue-ops)/build_deploy 消费,独立
+   * 后台凭据(both)供日志抓取(技能 fetch-logs)/build_deploy 消费,独立
    * root 凭据(root,显式存在时)供 get_issue_meta 元信息出口,各组
    * 自成行、可分别解出。登记与 env_needed 闸作答共用本路径,秘密
    * 纪律只有一份。sourceIp 在场=本次配置来自台账快照,会话状态记下
@@ -1908,7 +1911,7 @@ export class IssueFlowService {
     const environment = this.storeEnvironment(id, resolved, sourceIp);
     state.environment = environment;
     // 解锢(票 93):配置成功即整册清除拒绝台账——用户对环境的新裁定
-    // 覆盖旧裁定,日志抓取(技能 issue-ops)/build_deploy 恢复正常举闸路径。
+    // 覆盖旧裁定,日志抓取(技能 fetch-logs)/build_deploy 恢复正常举闸路径。
     delete state.env_declined;
     if (state.gate?.kind === "env_needed") {
       // 闸清在 issue.json(与 answer() 的闸裁决同一纪律)。清闸后
@@ -2113,7 +2116,7 @@ export class IssueFlowService {
 
   /** 主动拉取日志的意图递交口(#268,POST /issues/:id/logs/fetch;
    * Agent 主理第二例,ADR-0026):按钮不执行任何事,端点只守卫+留痕+
-   * 经平台回合通道发送通知词——拉取由 Agent 按技能 issue-ops 执行,
+   * 经平台回合通道发送通知词——拉取由 Agent 按技能 fetch-logs 执行,
    * 缺环境走既有环境闸(request_env 举卡→回填→自动续拉),平台不代拉。
    * 无重复拉取门禁:排队语义下连点只是重复意图,通知词一句"已拉取过
    * 先向用户确认"兜住;无独立"已拉取"状态位,页面判定用材料清单。
@@ -2135,7 +2138,7 @@ export class IssueFlowService {
     }
     recordTransition(state, {
       source: "platform",
-      note: "用户请求拉取网管日志——拉取由 Agent 按技能 issue-ops 执行,"
+      note: "用户请求拉取网管日志——拉取由 Agent 按技能 fetch-logs 执行,"
         + "端点不代拉",
     });
     saveState(live.root, state);
@@ -3195,7 +3198,7 @@ export class IssueFlowService {
     if (!toolsDir || !this.options.isolation) return;
     const destDir = join(live.root, ".ops-tools");
     mkdirSync(destDir, { recursive: true });
-    // fetch-logs 引擎已迁为平台技能 issue-ops 的 bin(随技能整包物化),
+    // fetch-logs 引擎已迁为平台技能 fetch-logs 的 bin(随技能整包物化),
     // 这里只剩封存中的 build-deploy(ADR-0013:代码原地保留)。
     const binName = process.platform === "win32"
       ? ["build-deploy.exe"]
@@ -3615,7 +3618,7 @@ export class IssueFlowService {
       mode: 0o600,
     });
     const skillPaths = materializeIssueSkills(live.root);
-    // 调试形态(--debug-issue):物化后把 issue-ops 的抓日志 wrapper
+    // 调试形态(--debug-issue):物化后把 fetch-logs 的抓日志 wrapper
     // 换成假引擎。只在旗标在场时发生;正式形态无此调用。
     if (this.options.debugIssue) {
       applyDebugIssueSkillPatch(live.root, this.options.debugIssue.opsMockBinDir);
@@ -4593,14 +4596,14 @@ export class IssueFlowService {
       promptCopy("notices", "review.triage", { count: sent.length }),
       notes,
     ].join("\n\n");
-    // 报告确认类闸挂起 = 用户在确认前插话:开分诊回合把意见递给 AI,
-    // 闸保持原样,回合收口仍回等待确认(报告没变,不是二次确认)。
-    const reportGatePending = state.status === "waiting_user"
-      && (state.gate?.kind === "analysis_confirm"
-        || state.gate?.kind === "conclude");
+    // 平台闸挂起(不论种类)= 用户在等待中插话:开分诊回合把意见递给
+    // AI,闸保持原样——回合收口时闸在场仍定格等待(#350:env_verify 卡
+    // 可能等很久,检视意见与验证互不相关,停靠到卡答完才送达 AI 就没法
+    // 处理);修改型申报回退时 fixedRollback 自会清掉旧闸。
+    const gatePending = state.status === "waiting_user" && !!state.gate;
     const receipt = state.status === "queued"
       ? `已接收 ${sent.length} 条检视意见；随任务启动一起送达，不用重复提交。`
-      : state.status === "waiting_user" && !reportGatePending && !supersededCard
+      : state.status === "waiting_user" && !gatePending && !supersededCard
       ? `已接收 ${sent.length} 条检视意见；当前问题答复后一起送达，不用重复提交。`
       : `已接收 ${sent.length} 条检视意见；AI 逐条分诊：回复型直接答复，修改型才回退重写。`;
     state.stage_note = receipt;
@@ -4608,12 +4611,12 @@ export class IssueFlowService {
     this.appendSessionEvent(live, "review_submitted", {
       count: sent.length, text: notes, receipt, mode: "incremental",
     });
-    if ((reportGatePending || supersededCard) && !this.turning.has(live.id)) {
-      // 等待的理由已消失(闸前的插话要当场答/卡已作废):开分诊回合。
-      // 回合仍忙的窄窗口(卡刚落地未收口)不抢方向盘,走 steer 随行。
+    if ((gatePending || supersededCard) && !this.turning.has(live.id)) {
+      // 等待的理由已消失(闸不挡插话/卡已作废):开分诊回合。回合仍忙
+      // 的窄窗口(卡刚落地未收口)不抢方向盘,走 steer 随行。
       this.continueTurn(live, message);
     } else {
-      // 运行中 steer 进当回合(#284 通道不变);排队/接管/非报告闸的
+      // 运行中 steer 进当回合(#284 通道不变);排队/接管/无闸无卡的
       // 等待态停靠随行;空闲开新回合——发送咽喉同一。
       this.startPlatformTurn(live, message);
     }

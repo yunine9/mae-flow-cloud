@@ -489,6 +489,9 @@ export async function handleIssueRoutes(
         title: String(body.title ?? ""),
         description: body.description === undefined
           ? undefined : String(body.description),
+        // 发起备注(DTS 列表随单填写):原样进登记元信息,开场词要求
+        // AI 优先读;没填不带,不造空串。
+        ...(body.remark ? { remark: String(body.remark) } : {}),
         source,
         ...(ticket ? { ticket } : {}),
         ...(body.repo_url ? { repoUrl: String(body.repo_url) } : {}),
@@ -773,7 +776,11 @@ export async function handleIssueRoutes(
     // 路由同样必须住在 :id 捕获之前;读开放与 stats 同权(查看模式)。
     if (method === "GET" && parts[1] === "once-generated"
       && parts.length === 2) {
-      return done(200, issueFlow.onceGeneratedStats());
+      // days=时间过滤(按结论时刻近 N 天;缺省=全部)。
+      const days = Number(new URL(request.url ?? "", "http://x")
+        .searchParams.get("days") ?? "");
+      return done(200, issueFlow.onceGeneratedStats(
+        Number.isFinite(days) && days > 0 ? days : undefined));
     }
 
     // 单会话一次生成明细(伴生快照原样):会话详情下钻的证据面。
@@ -1089,7 +1096,7 @@ export async function handleIssueRoutes(
 
     // 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮不执行任何
     // 事——端点只守卫+留痕+发送通知词(终态/queued 由服务层打回),
-    // 拉取由 Agent 按技能 issue-ops 执行(缺环境走既有环境闸)。写闸
+    // 拉取由 Agent 按技能 fetch-logs 执行(缺环境走既有环境闸)。写闸
     // 仅归属人,与调整关联仓同款。
     if (method === "POST" && parts[2] === "logs"
         && parts[3] === "fetch" && parts.length === 4) {

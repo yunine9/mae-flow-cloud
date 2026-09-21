@@ -4162,17 +4162,22 @@ export function getIssueOnceRates(): Promise<IssueOnceRate> {
 /** 首次生成占比与 90%AI生成达标率(ADR-0045,工单 #342):终态伴生
  *  快照(code-origin.json)的读侧聚合,工作量口径(增删行均计)。
  *  分母=有数据(伴生在场且有工作变更行)的完成交付会话;rate null=分母 0
- *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。 */
+ *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。字段
+ *  纪律(#353):页面常驻旧版前端,后端先行更新时本端点的响应仍会被
+ *  旧代码消费——字段加减保持可选,消费方按缺省处理,不得假设总在场。 */
 export interface IssueOnceGeneratedSessionRow {
   id: string;
   title: string;
   /** 特性(业务模块名标签;空白归「未分类」)。 */
   module: string;
   concluded_at: string;
-  /** 首次生成占比(百分数一位小数)。 */
-  share: number;
-  pass: boolean;
-  lines: { first: number; rework: number; external: number };
+  /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
+   *  待算;unsupported=早于起算日期(不进统计)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported";
+  /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
+  share?: number;
+  pass?: boolean;
+  lines?: { first: number; rework: number; external: number };
   /** 检视批次数(先行能力,呈现用)。 */
   reviews: number;
   /** 一次定位:分析报告一版过(与一次定位率同源判定)。 */
@@ -4224,8 +4229,8 @@ export interface IssueOnceGenerated {
   per_session: IssueOnceGeneratedSessionRow[];
 }
 
-export function getIssueOnceGenerated(): Promise<IssueOnceGenerated> {
-  return issueFetch("/issues/once-generated");
+export function getIssueOnceGenerated(days?: number): Promise<IssueOnceGenerated> {
+  return issueFetch(`/issues/once-generated${days ? `?days=${days}` : ""}`);
 }
 
 /** 单会话一次生成明细(伴生快照原样,会话详情下钻的证据面)。
@@ -4396,7 +4401,7 @@ export function requestIssueRepoChanges(
 }
 
 /** 主动拉取日志(#268,Agent 主理第二例,ADR-0026):按钮只递交意图——
- * 端点守卫+留痕+发送通知词,拉取由 Agent 按技能 issue-ops 执行(缺
+ * 端点守卫+留痕+发送通知词,拉取由 Agent 按技能 fetch-logs 执行(缺
  * 环境走既有环境闸),平台不代拉。成功 = HTTP 2xx 会话概要;日志清单
  * 不随本调用更新,随既有 updated_at 轮询自刷。 */
 export function requestIssueLogFetch(id: string): Promise<IssueSummary> {

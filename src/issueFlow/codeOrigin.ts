@@ -120,17 +120,23 @@ export interface IssueCodeOriginOptions {
 
 // ---- 读侧聚合形状(统计端点与详情端点;web/src/api.ts 有同源镜像) ----
 
-/** 达标率分母里的一行(伴生在场且留存源码行 >0 的完成交付会话)。 */
+/** 达标率分母里的一行(per_session 覆盖范围内全部完成交付会话,
+ *  state 区分有无统计数据:只有 ok 行带占比与工作行)。 */
 export interface IssueOnceGeneratedSession {
   id: string;
   title: string;
   /** 特性(业务模块名标签;空白归「未分类」,与需求侧特性口径同构)。 */
   module: string;
   concluded_at: string;
-  /** 首次生成占比(百分数一位小数);终态会话分母>0,不会是 null。 */
-  share: number;
-  pass: boolean;
-  lines: { first: number; rework: number; external: number };
+  /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
+   *  待算;unsupported=早于起算日期(不进统计)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported";
+  /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
+  share?: number;
+  pass?: boolean;
+  lines?: { first: number; rework: number; external: number };
+  /** 检视批次数(先行能力,呈现用)。 */
+  reviews: number;
   /** 一次定位:分析报告一版过(与 /issues/stats 同源判定)。 */
   localization_pass: boolean;
   /** 一次验证:环境验证零失败(未答卡=通过)。 */
@@ -172,6 +178,8 @@ export interface IssueOnceGeneratedStats {
   passed: number;
   /** 达标会话占比;分母 0 = null(前端显示 —)。 */
   rate: number | null;
+  /** 完成交付会话总数(三根过程率轴的分母,与 /issues/stats 同口径)。 */
+  delivered: number;
   /** 一次定位率(报告一版过):分母=完成交付会话,与 /issues/stats 同源。 */
   localization: IssueOnceGeneratedAxis;
   /** 一次验证率(验证不通过次数=0;未答卡=通过)。 */

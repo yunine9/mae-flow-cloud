@@ -251,7 +251,7 @@ test("环境预热:拉仓收口进 analyze 时后台启动,收据落台账不上
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失)。\\n## 证据链\\n执行计划:全表扫描。\\n## 置信度\\n高。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n是问题(索引缺失)。\\n## 置信度\\n高。\\n## 修改方案\\n补索引。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:索引缺失" } } },
     { text: "结论是问题,已提交等用户确认。" },
@@ -324,7 +324,7 @@ test("环境预热 fail-open:执行器异常落基建收据,主流程照走", as
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
-      "printf '# 初步定位\\n\\n## 问题现象\\n演示。\\n## 问题根因\\n是问题。\\n## 证据链\\n日志。\\n## 置信度\\n高。\\n## 修改方案\\n修。\\n' > issue-analysis.md" } } },
+      "printf '# 初步定位\\n\\n## 问题现象\\n演示。\\n## 问题根因\\n是问题。\\n## 置信度\\n高。\\n## 修改方案\\n修。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题" } } },
     { text: "结论是问题。" },
@@ -388,7 +388,7 @@ test("催办延续握住回合互斥:催办进行中归档被 409,平台通知 s
     { text: "先研究到这,稍后继续。" },
     { text: "收到,继续推进。" },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:pool exhausted。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "根因=连接池耗尽" } } },
     { text: "分析已提交,等确认。" },
@@ -451,7 +451,7 @@ test("忙撞不炸单:催办撞上会话收尾窗口,重投一次仍忙则留话
     { text: "(占位,被网关错误顶掉)" },
     { text: "(占位,被网关错误顶掉)" },
     { tool: { name: "bash", input: { command:
-      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 证据链\\n日志:pool exhausted。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
+      "printf '# 分析\\n\\n现象已核实。\\n## 问题现象\\n演示现象。\\n## 问题根因\\n连接池耗尽。\\n## 置信度\\n高。\\n## 修改方案\\n超时回收。\\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "根因=连接池耗尽" } } },
     { text: "分析已提交,等确认。" },

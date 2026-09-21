@@ -1574,10 +1574,10 @@ test("拉取日志意图递交(#268):按钮只递意图,端点守卫+留痕+发�
   // (忙=steer/等人=便签/空闲=开回合)。
   assert.match(serviceSource, /requestLogFetch\(id: string\)/);
   assert.match(serviceSource, /promptCopy\("notices", "logs\.fetch"\)/);
-  // 通知词是协议:执行者指引(issue-ops 技能 + 缺环境举卡)与重复拉取
+  // 通知词是协议:执行者指引(fetch-logs 技能 + 缺环境举卡)与重复拉取
   // 护栏(已拉取过先向用户确认)必须在场——护栏在文案不在门禁。
   assert.match(notices, /## logs\.fetch/);
-  assert.match(notices, /issue-ops/);
+  assert.match(notices, /fetch-logs/);
   assert.match(notices, /已拉取过/);
   // 页面:无日志的非终态会话才出钮(有日志后由「下载日志」替代),
   // 写口收 canOperate(意图递交是写);点击后就地「已通知 Agent」管理
@@ -1858,7 +1858,7 @@ test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动
   // 布局底盘:定宽布局 + colgroup(表头 w-* 退役,宽度只有一处来源);
   // 标题列不进默认宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
   assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed">/);
-  for (const col of ["select", "ticket", "title", "version", "status", "launch"]) {
+  for (const col of ["select", "ticket", "title", "version", "status", "launch", "remark"]) {
     assert.match(registration, new RegExp(`\\{renderCol\\("${col}"\\)\\}`));
   }
   assert.match(registration, /\{moduleCol && renderCol\("module"\)\}/);
@@ -1877,10 +1877,10 @@ test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动
   assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
   assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
   // 默认宽沿用迁表现行值(w-28/w-64/w-24/w-56),单号/状态给足内容定值;
-  // 分支列随分支匹配入列(ADR-0038)。拖动下限防内容打架。列存在性由
-  // DTS_COL_MIN 收口,少一列即测试红。
+  // 分支列随分支匹配入列(ADR-0038),发起备注列入列(2026-09-20)。
+  // 拖动下限防内容打架。列存在性由 DTS_COL_MIN 收口,少一列即测试红。
   assert.match(registration,
-    /select: 112, ticket: 190, version: 256, branch: 216, status: 88,\s*\n\s*launch: 96, module: 224/);
+    /select: 112, ticket: 190, version: 256, branch: 216, status: 88,\s*\n\s*launch: 96, remark: 240, module: 224/);
   assert.match(registration,
-    /select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,\s*\n\s*launch: 88/);
+    /select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,\s*\n\s*launch: 88, remark: 140, module: 160/);
 });

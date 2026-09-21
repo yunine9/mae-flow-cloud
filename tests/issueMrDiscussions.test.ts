@@ -42,11 +42,11 @@ async function until(probe: () => boolean, what: string): Promise<void> {
   assert.fail(`超时:${what}`);
 }
 
-/** 五章节报告(submit_analysis 的机械门票)。 */
+/** 四章节报告(submit_analysis 的机械门票)。 */
 const report = () =>
   `printf '%s\\n' '# 问题分析:登录超时' '一句话总结:连接池耗尽,扩容并回收。' \\
     '## 问题现象' '登录超时。' '## 问题根因' '连接池耗尽。' \\
-    '## 修改方案' '超时回收。' '## 证据链' '日志:连接池耗尽。' \\
+    '## 修改方案' '超时回收。' \\
     '## 置信度' '高:日志直接指向。' > issue-analysis.md`;
 
 test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不重复,失败容忍", async () => {

@@ -643,20 +643,20 @@ function ManualRegister({
 
 type DtsColKey =
   | "select" | "ticket" | "title" | "version" | "branch" | "status"
-  | "launch" | "module";
+  | "launch" | "remark" | "module";
 
 /** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号/
  *  状态原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
  *  列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
 const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
   select: 112, ticket: 190, version: 256, branch: 216, status: 88,
-  launch: 96, module: 224,
+  launch: 96, remark: 240, module: 224,
 };
 /** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号,状态列要放
  *  得下徽标)。 */
 const DTS_COL_MIN: Record<DtsColKey, number> = {
   select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,
-  launch: 88, module: 160,
+  launch: 88, remark: 140, module: 160,
 };
 /** 列宽记忆(全用户共用一份:列宽是屏幕偏好不是业务数据,不按人分)。 */
 const DTS_COL_WIDTHS_KEY = "mae-flow:dts-col-widths";
@@ -809,6 +809,10 @@ function DtsRegister({
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  // 发起备注列(2026-09-20):每单一个文本输入框,勾选发起时随单带上,
+  // 进登记元信息并要求 AI 重点优先读。按单号记忆、内存态——刷新不丢
+  // (人敲的字不因刷新蒸发),发起成功即清(已随会话落库,消费完毕)。
+  const [remarks, setRemarks] = useState<Record<string, string>>({});
   // 人工预绑模块列(spec #57):单号→模块团队共享映射,选即存;发起
   // 时静默携带,服务端烙 module_locked 锁——AI 不得改绑。列可整体
   // 隐藏(纯 UI 偏好,localStorage 按用户记忆)。
@@ -1210,9 +1214,19 @@ function DtsRegister({
             // 配置中心,未配置直接 400——前端勾选闸只是第一道。
             ticket: ticketNo,
             description: ticket?.title || undefined,
+            // 发起备注:备注列的输入原样随单,进登记元信息(AI 开场
+            // 重点优先读);空串不算填了。
+            ...(remarks[ticketNo]?.trim()
+              ? { remark: remarks[ticketNo].trim() } : {}),
             ...(binding ? { module_id: binding.module_id } : {}),
           });
           launched.push(created.id);
+          // 备注已随会话落库,清掉这一单的输入——已消费的指示不残留。
+          setRemarks((current) => {
+            const next = { ...current };
+            delete next[ticketNo];
+            return next;
+          });
         } catch (reason) {
           failures.push(`${ticketNo} → ${
             String(reason instanceof Error ? reason.message : reason)}`);
@@ -1356,6 +1370,7 @@ function DtsRegister({
               {renderCol("branch")}
               {renderCol("status")}
               {renderCol("launch")}
+              {renderCol("remark")}
               {moduleCol && renderCol("module")}
               <col style={{ width: 48 }} />
             </colgroup>
@@ -1490,6 +1505,17 @@ function DtsRegister({
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
+                {/* 发起备注列(2026-09-20):随单文本输入,发起时进登记
+                    元信息并要求 AI 重点优先读——发起人指路的最短通道。 */}
+                <TableHead className="relative">
+                  <span className="inline-flex items-center gap-1" title="发起时随单告知 AI 的备注:AI 开场会重点优先读这段话">
+                    发起备注
+                  </span>
+                  <DtsColResizeHandle colKey="remark" label="发起备注"
+                    width={dtsColWidth("remark")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>
                 {moduleCol && <TableHead className="relative">
                   所属模块
                   <DtsColResizeHandle colKey="module" label="所属模块"
@@ -1521,7 +1547,7 @@ function DtsRegister({
                     ? `已发起:会话 ${liveIssue.id} 进行中`
                     : `已发起:${liveIssue.account} 的会话 ${liveIssue.id} 进行中`)
                   : "";
-                const colCount = moduleCol ? 9 : 8;
+                const colCount = moduleCol ? 10 : 9;
                 return <Fragment key={ticket.ticket}>
                   <TableRow
                     data-state={selected.includes(ticket.ticket)
@@ -1610,6 +1636,21 @@ function DtsRegister({
                         </a>
                         : <span className="text-muted-foreground"
                           aria-label="未发起">—</span>}
+                    </TableCell>
+                    {/* 发起备注格:文本输入框(选填),发起时随单进登记
+                        元信息——AI 开场被要求重点优先读。输入不触发行
+                        选中,勾选仍走首格 checkbox。 */}
+                    <TableCell>
+                      <Input
+                        value={remarks[ticket.ticket] ?? ""}
+                        placeholder="给 AI 的重点提示(选填)"
+                        aria-label={`${ticket.ticket} 发起备注`}
+                        title="发起时随单告知 AI 的备注:AI 开场会重点优先读这段话"
+                        className="h-8 bg-surface text-xs"
+                        onChange={(event) => setRemarks((current) => ({
+                          ...current,
+                          [ticket.ticket]: event.target.value,
+                        }))} />
                     </TableCell>
                     {moduleCol && <TableCell>
                       <Select

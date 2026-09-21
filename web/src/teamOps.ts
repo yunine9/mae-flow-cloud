@@ -388,12 +388,12 @@ export interface OnceGeneratedFeatureRow {
 export function onceGeneratedFeatureRows(
   rows: ReadonlyArray<{
     module: string;
-    share: number;
-    pass: boolean;
+    share?: number;
+    pass?: boolean;
     localization_pass: boolean;
     verify_pass: boolean;
     solved_pass: boolean;
-    lines: { first: number; rework: number; external: number };
+    lines?: { first: number; rework: number; external: number };
   }>,
 ): OnceGeneratedFeatureRow[] {
   const groups = new Map<string, {
@@ -402,6 +402,7 @@ export function onceGeneratedFeatureRows(
     first: number; total: number;
   }>();
   for (const row of rows) {
+    if (row.share === undefined || !row.lines) continue; // 非 ok 行(待算/无源码)不进聚合
     const key = row.module?.trim() || "未分类";
     const bucket = groups.get(key)
       ?? { sessions: 0, passed: 0, localization: 0, verify: 0, solved: 0,

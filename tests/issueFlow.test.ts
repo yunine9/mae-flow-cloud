@@ -28,8 +28,8 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
   // vendor/mattpocock/ 下是原封照搬的外部技能(同步时整目录覆盖,不本地
   // 改),与平台自有技能同一张清单注册。
   const expected = [
-    "code-review", "codebase-design", "diagnosing-bugs", "grilling",
-    "implement", "issue-analysis", "issue-delivery", "issue-ops",
+    "code-review", "codebase-design", "diagnosing-bugs", "fetch-logs",
+    "grilling", "implement", "issue-analysis", "issue-delivery",
     "repo-docs", "tdd",
   ];
   const workspace = mfcTemp("mfc-issue-skills-");
@@ -84,7 +84,7 @@ test("技能源目录分类层(2026-09-04):递归发现、物化平铺、重名 
   assert.deepEqual(paths.map((path) => path.split("/").at(-2)),
     ["alpha", "beta"], "发现嵌套与顶层技能");
   // 目的地恒平铺:分类层只是源码组织,AI 看到的 skills/<名>/ 不变,
-  // 技能正文里写死的 ./skills/<名>/ 引用(如 issue-ops bin)不漂移。
+  // 技能正文里写死的 ./skills/<名>/ 引用(如 fetch-logs bin)不漂移。
   assert.equal(readdirSync(join(workspace, "skills")).sort().join(","),
     "alpha,beta");
   assert.ok(!existsSync(join(workspace, "skills", "engineering")),

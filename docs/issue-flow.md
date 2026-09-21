@@ -208,7 +208,7 @@ done/inherited/redo);阶段转移账进 events,事件流可回放。真相链:
 
 ## 宿主工具与会话技能
 
-会话工具:日志抓取不是工具——引擎是平台技能 issue-ops 的 bin
+会话工具:日志抓取不是工具——引擎是平台技能 fetch-logs 的 bin
 (fetch-logs/fetch-logs-k8s,随技能物化,Agent 经 Bash 按技能用法调,
 产物落工作区 grep 真实文件)/ `build_deploy`(宿主跑 build-deploy,
 成功哨兵校验;换库验证封存期间无阶段开放,调用
@@ -217,7 +217,7 @@ done/inherited/redo);阶段转移账进 events,事件流可回放。真相链:
 `pull_repo` / `push_branch`
 / `create_mr`(经公共 mrClient → 交付平台适配层 → codehub CLI,
 单号自动关联)/ `submit_analysis`(提交分析/
-结论,以报告在场且五章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
+结论,以报告在场且四章节齐全为门票,触发人工闸)/ `report_ut`(UT 结果事实上报,
 只记账——不是出口、不是建 MR 前置,UT 属修复阶段)/ `complete_stage`(拉单/拉仓/
 修复/提交MR 四个阶段的自报出口;提交 MR 阶段必带 mrs 申报 MR 清单,
 平台验绿收口)。AI 的 bash 超时语义已收窄(2026-09-04):命令包进容器内
@@ -236,9 +236,9 @@ analyze/conclude 出口;build_deploy 因换库验证封存(ADR-0013)无
 阶段开放,调用一律被阶段门禁拒绝,执行体原地保留待重启。
 
 技能(每次会话物化到 `skills/`):issue-analysis(分析工作流编排:方法论取用次序/轻量分流/取证
-规范/报告五章节/非问题出口)、
+规范/报告四章节/非问题出口)、
 issue-delivery(分支/提交格式 `[单号][类型] 描述`/推送/MR)、
-issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
+fetch-logs(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 
 ### 分析供给线与报告门票(2026-08-31,ADR-0005)
 
@@ -258,9 +258,11 @@ issue-ops(环境工具用法)。工号 = 登录账号,不再从 $HOME 猜。
 3. **通用诊断回路 diagnosing-bugs**:兜底方法论(vendor 技能,物化在
    `skills/diagnosing-bugs/`);都没有则 Agent 按取证规范自行定位。
 
-报告门票:`submit_analysis` 机械校验 issue-analysis.md 含五章节
-(问题现象/问题根因/修改方案/证据链/置信度),缺章节整单打回——轻量路径的简版
-报告同样要素不缺。"结论必附证据"由此从纯提示词约定升级为工具层关卡。
+报告门票:`submit_analysis` 机械校验 issue-analysis.md 含四章节
+(问题现象/问题根因/修改方案/置信度),缺章节整单打回——轻量路径的简版
+报告同样要素不缺。证据出处随文标注(结论处带代码 File:行号、日志关键行
+指针),不单设章节;「证据链」章已退役(2026-09-20,ADR-0046):报告写给
+用户,取证由 AI 自行完成、不向用户铺陈链条,证据局限写进「置信度」。
 
 ### 人工介入程度联动(2026-08-31,ADR-0006)
 

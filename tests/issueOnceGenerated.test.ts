@@ -131,11 +131,13 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(repoRow.total, 200);
     assert.equal(repoRow.share, 70);
     const rows = body.per_session as Array<{
-      id: string; module: string; share: number; pass: boolean;
+      id: string; state: string; module: string; share?: number; pass?: boolean;
       localization_pass: boolean; verify_pass: boolean; solved_pass: boolean;
     }>;
-    assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a"],
-      "明细按收口时刻倒序");
+    assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a", "issue-c", "issue-e", "issue-d"],
+      "per_session 覆盖范围内全部完成交付会话,按收口时刻倒序");
+    assert.deepEqual(rows.map((row) => row.state),
+      ["ok", "ok", "pending", "no_code", "unsupported"]);
     assert.equal(rows.find((row) => row.id === "issue-a")?.module, "未分类",
       "模块标签空白归「未分类」");
     assert.equal(rows.find((row) => row.id === "issue-a")?.pass, true);
@@ -203,4 +205,24 @@ test("onceGeneratedFeatureRows:归组/加权占比/达标率/排序/空白归未
     },
   ], "排序:会话数降序 → 工作行降序(计费 100 行在未分类 40 行前)→ 名称;解决率=定位∧验证");
   assert.deepEqual(onceGeneratedFeatureRows([]), []);
+});
+
+test("onceGeneratedFeatureRows:share/lines 缺失的行不崩不进聚合(#353)", () => {
+  // 真实形状:state 非 ok 的行(pending/no_code/unsupported)不带
+  // share/lines;旧前端把它们喂进聚合曾是白屏崩溃点。两个守卫分支
+  // (share 缺席、lines 缺席)都必须整行跳过,不计会话数。
+  const rows = onceGeneratedFeatureRows([
+    { module: "网关", share: 95, pass: true, localization_pass: true,
+      verify_pass: true, solved_pass: true,
+      lines: { first: 90, rework: 5, external: 5 } },
+    { module: "网关", localization_pass: false, verify_pass: false,
+      solved_pass: false },
+    { module: "计费", share: 40, pass: false, localization_pass: true,
+      verify_pass: false, solved_pass: false },
+  ]);
+  assert.deepEqual(rows, [{
+    module: "网关", sessions: 1, solved_rate: 100, pass_rate: 100,
+    localization_rate: 100, verify_rate: 100,
+    share: 90, total_lines: 100,
+  }], "只聚合 share 与 lines 都在场的行;share 由工作行重算(90/100),不取入参");
 });

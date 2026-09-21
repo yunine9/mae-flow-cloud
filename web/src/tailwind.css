@@ -7811,3 +7811,32 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .kd-global-results aside button span { flex-direction:column;flex-wrap:nowrap; }
 
 .kd-global-results .kd-reader header>div { display:grid;gap:6px;min-width:0;overflow-wrap:anywhere; }
+
+/* 帮助图标的即时悬停提示(替代原生 title:无浏览器延迟,悬停立现)。 */
+.help-tip { position: relative; display: inline-flex; cursor: help; }
+.help-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 340px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 1.7;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s ease;
+  z-index: 60;
+}
+.help-tip:hover::after { opacity: 1; }

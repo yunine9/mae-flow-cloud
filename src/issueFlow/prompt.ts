@@ -57,7 +57,7 @@ const MAX_SKILL_SOURCE_DEPTH = 8;
 /** 递归发现源目录下的技能包:目录直接含 SKILL.md 即一个包,发现即止
  * (不进包内再找技能,包的子目录是资源不是分类);普通文件跳过。
  * 分类层只是维护者的源码组织——物化目的地仍平铺 workspace/
- * skills/<名>/,技能正文里写死的 ./skills/<名>/ 引用(如 issue-ops
+ * skills/<名>/,技能正文里写死的 ./skills/<名>/ 引用(如 fetch-logs
  * 的 bin 引擎)不因分层漂移。 */
 export function discoverIssueSkillPackages(
   sourceDir: string,
@@ -83,7 +83,7 @@ export function discoverIssueSkillPackages(
 /** 把技能整包物化到工作区(幂等重写),返回 SKILL.md 精确路径。
  * 整包 = 技能目录内所有文件随 SKILL.md 一起走(2026-09-04 拍板:平台
  * 自带技能与团队货架同范式,可携带 bin/ 可执行引擎——日志抓取引擎
- * 已落 issue-ops/bin)。支持分类层源目录(递归发现,见上),物化目的地
+ * 已落 fetch-logs/bin)。支持分类层源目录(递归发现,见上),物化目的地
  * 恒平铺。源目录缺失、递归后一个技能都没有、目录名重复,都 fail-loud:
  * 技能是行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。 */
 export function materializeIssueSkills(
@@ -154,6 +154,9 @@ export interface IssueRegistrationMeta {
   scenario: "ticket" | "no_ticket";
   title: string;
   description: string;
+  /** 发起备注:DTS 列表勾选发起时人随单填写的补充说明(要求 AI 重点
+   * 优先读);缺席=发起时没填。 */
+  remark?: string;
   /** 登记人(ADR-0031):通常是测试,问题由其登记提交;缺席=自登记。 */
   reporter?: string;
   /** 责任人工号:会话归属人与唯一推进者(CONTEXT.md 登记元信息词条
@@ -208,6 +211,7 @@ export function issueRegistrationMeta(
     scenario: state.scenario ?? "ticket",
     title: state.title,
     description: state.description,
+    ...(state.remark ? { remark: state.remark } : {}),
     account: state.account,
     ...(attachments.length ? { attachments } : {}),
     ...(state.reporter && state.reporter !== state.account
@@ -261,7 +265,7 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
       + "明文如下,用户问起直接回答):",
     `    - 服务器地址: ${env.hosts.join(", ")}`,
     ...(env.env_type
-      ? [`    - 环境形态: ${ENV_TYPE_LABELS[env.env_type]}(决定日志抓取用哪套引擎,见技能 issue-ops)`]
+      ? [`    - 环境形态: ${ENV_TYPE_LABELS[env.env_type]}(决定日志抓取用哪套引擎,见技能 fetch-logs)`]
       : []),
     ...(env.backend_password
       ? [`    - 网管后台密码(sopuser/ossuser/ossadm 共用): ${env.backend_password}`]
@@ -388,6 +392,12 @@ export function issueFixedOpeningPrompt(
   const facts = [
     `- 标题: ${meta.title}`,
     `- 描述: ${meta.description || "(无补充描述)"}`,
+    // 发起备注单列一行(2026-09-20 拍板):发起人随单填写的指示,埋在
+    // 描述里会被略读——单列并明确"重点优先读、遵照执行"。
+    ...(meta.remark
+      ? [`- 发起备注: ${meta.remark}(发起人在 DTS 列表随单填写,`
+          + "重点优先读:开工前先完整读一遍并遵照其中的指示处理)"]
+      : []),
     // 登记附件单列一行(2026-09-19 拍板):日志是核心分析材料,埋在
     // 描述正文里容易被略读,单列并明确"优先查看"。
     ...(meta.attachments?.length
@@ -492,6 +502,11 @@ export function issueResumePrompt(
       ? [`- 登记人: ${meta.reporter}(问题由其登记提交)`]
       : []),
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
+    // 发起备注与附件随续聊词重给(与开场词同一事实源):重启后模型
+    // 上下文是重建的,登记材料不随对话流失。
+    ...(meta.remark
+      ? [`- 发起备注: ${meta.remark}(发起人随单填写,重点优先读并遵照执行)`]
+      : []),
     // 附件与产品版本随续聊词重给(与开场词同一事实源):重启后模型
     // 上下文是重建的,登记材料不随对话流失。
     ...(meta.attachments?.length

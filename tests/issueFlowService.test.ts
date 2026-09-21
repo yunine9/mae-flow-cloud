@@ -365,7 +365,7 @@ test("问题会话多轮闭环:研究→提问卡→作答→非问题归档(无
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
     { tool: { name: "bash", input: { command:
-      "printf '# 根因分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n非问题(测试环境时钟漂移导致的误报)。\\n## 证据链\\n时钟偏差记录。\\n## 置信度\\n高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
+      "printf '# 根因分析\\n\\n## 问题现象\\n演示现象。\\n## 问题根因\\n非问题(测试环境时钟漂移导致的误报)。\\n## 置信度\\n高:偏差可复现。\\n## 修改方案\\n校时后观察,建议归档。\\n' > issue-analysis.md" } } },
     { tool: { name: "AskUserQuestion", input: { questions: [{
       question: "分析结论是非问题(误报),确认归档收口?",
       options: ["确认归档", "继续研究"],
@@ -1086,7 +1086,7 @@ test("问题流专用部署(--issue-only):需求流程停用,问题流不受影�
 });
 
 test("ops 运维工具:真二进制冒烟,诚实失败且不泄密码", async (t) => {
-  // fetch-logs 引擎已迁为平台技能 issue-ops 的 bin(引擎未变,载体变了):
+  // fetch-logs 引擎已迁为平台技能 fetch-logs 的 bin(引擎未变,载体变了):
   // 它的执行面由技能正文承载、内网实测;这里只剩封存中的 build-deploy。
   const toolsDir = join(process.cwd(), "assets", "ops-tools");
   const binary = process.platform === "win32"
@@ -1213,7 +1213,7 @@ test("ops 容器内执行:超时第一响应在容器内,不连坐会话容器",
     },
   );
   // (fetch-logs 曾在此验证同一条容器内 timeout 契约;引擎迁为平台技能
-  // issue-ops 的 bin 后,该执行面由技能正文承载、内网实测——契约本身
+  // fetch-logs 的 bin 后,该执行面由技能正文承载、内网实测——契约本身
   // 已被上方 build-deploy 各例覆盖。)
 });
 
