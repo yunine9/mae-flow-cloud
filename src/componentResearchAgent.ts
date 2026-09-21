@@ -15,6 +15,7 @@ import type { ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { jointResearchMission, researchDocumentTool } from "./componentResearchDocumentTool.ts";
 import { researchDocumentMarkdown } from "./componentResearchDocument.ts";
+import { COMPONENT_API_BOUNDARY } from "./componentApiBoundary.ts";
 export const componentResearchMission = (
   component: ComponentRepository,
   language: string,
@@ -27,8 +28,9 @@ export const componentResearchMission = (
     "你是基础组件开发范式研究 Agent，产物是供 Coding Agent 检索的 Markdown 知识草稿，不是 Skill。",
     `本次指定的组件范围：${JSON.stringify(components)}。源码版本：${revision}。`,
     `只研究语言：${language}。主题：${topic}。`,
+    COMPONENT_API_BOUNDARY,
     ...(discoverTopics ? [
-      "本次是自动萃取整个组件，不需要用户提供主题。先 list 配置目录，从 README、公开头文件/接口、目录结构、示例与测试识别主要能力，再分别研究这些能力的真实用法。目录清单被截断时分子目录继续读取，不把首页当作完整清单。",
+      "本次是自动萃取整个组件，不需要用户提供主题。先 list 配置目录，从 README、对外接口目录、发布定义、目录结构、示例与测试识别明确对外的能力，再分别研究这些能力的真实用法。目录清单被截断时分子目录继续读取，不把首页当作完整清单。",
       "先在过程消息中列出发现的能力与研究计划，然后逐项查阅相关 API 和真实调用，不得只挑一个容易的 API 就结束。按用途归并相近接口，不逐个函数翻译，也不要强套固定主题数；规模由实际能力决定。",
       "目标是系统性积累可复用资产，不是用最少 Token 回答眼前问题。逐项深入研究正常路径、错误路径、资源生命周期、异步/线程条件及 UT/Mock；跨仓搜索不同调用场景，阅读上下文并与实现、测试相互核对。不要在找到两三个样例后机械停止；重复代码去重，有差异的用法继续查证。",
       "输出前再对照最初的能力清单检查遗漏，补查尚未研究的能力和互相矛盾的样例。未能查清的内容在过程里如实说明，不编成推荐规则。研究充分不等于文档冗长：将重复调用归为同一范式，保留必要变体和真实约束。",

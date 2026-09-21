@@ -277,6 +277,8 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     const done = research.get(job.id);
     assert.equal(done.status, "done", done.error);
     assert.match(JSON.stringify(model.requests[0]), /跨仓联合知识研究/);
+    assert.match(JSON.stringify(model.requests[0]), /不是 public 的都能用/);
+    assert.match(JSON.stringify(model.requests[0]), /interface 是优先线索，不是固定白名单/);
     assert.equal(done.document?.sections.length, 1);
     assert.equal(done.revision, revision);
     assert.ok(done.evidence.some(e => e.tool === "research_note"));
