@@ -4057,7 +4057,8 @@ export class TaskService {
     if (!this.isRequirementAnalysis(task) || !task.cwd) return;
     const previous = task.summary.requirement_graph;
     // 已确认的图已经成为任务编排事实，不再让工作区文件反向改写它。
-    if (previous?.stage === "confirmed") return;
+    if (previous?.stage === "confirmed"
+        || task.summary.status === "coordinating") return;
     const ticket = task.summary.ticket ?? task.summary.id;
     const path = join(task.cwd, ".mae-flow-work", ticket,
       "requirement-graph.json");
@@ -8341,16 +8342,54 @@ export class TaskService {
   /** 子任务的状态变化必须回写主任务，否则“主任务完成”只能靠页面猜。
    * 主任务不再运行 Agent，只作为跨仓需求的持久汇总：所有子任务都是真
    * completed 才完成；失败/取消/暂停/等人都继续留在当前现场并点名。 */
-  private reconcileRequirementParent(parent: TaskState): void {
+  private reconcileRequirementParent(parent: TaskState, recoverLinks = false): void {
     const graph = parent.summary.requirement_graph;
-    if (!this.isRequirementAnalysis(parent) || graph?.stage !== "confirmed"
+    if (!this.isRequirementAnalysis(parent) || !graph
         || graph.repositories.length === 0
         || parent.summary.status === "canceled"
         || parent.summary.status === "failed") return;
+    // 已交给子任务的历史主单可能被展示投影覆盖，丢掉 stage/task_id。
+    // 从真实父子关系恢复，不能要求人重新审批，也不能按同仓/同 AR 猜。
+    if (graph.stage !== "confirmed" && (!recoverLinks
+        || !["coordinating", "completed"].includes(parent.summary.status))) return;
+    const actualChildren = [...this.tasks.values()].filter((child) =>
+      child.summary.parent_task_id === parent.summary.id);
+    const used = new Set(graph.repositories.map((node) => node.task_id).filter(Boolean));
+    let repaired = false;
+    for (const node of graph.repositories) {
+      // 恢复关联只在重启读完全部任务后进行，不能拿加载到一半的候选集匹配。
+      if (!recoverLinks || node.task_id) continue;
+      const sameRepository = actualChildren.filter((child) =>
+        !used.has(child.summary.id) && child.summary.repo_url === node.url);
+      const label = node.scope?.name ?? node.name;
+      const candidates = graph.repositories.filter((other) => other.url === node.url).length === 1
+        ? sameRepository : sameRepository.filter((child) => {
+          // 同仓多单元只认创建时随任务保存的任务书；标题/单号可以改，
+          // 不能用它们猜测模块归属。旧材料缺失时保留现场，不误收口。
+          try {
+            return readFileSync(join(child.summary.workspace, DELIVERY_UNIT_SOURCE), "utf8")
+              .split(/\r?\n/, 1)[0] === `# 当前单元任务书：${label}`;
+          } catch { return false; }
+        });
+      if (candidates.length !== 1) continue;
+      node.task_id = candidates[0].summary.id;
+      used.add(node.task_id);
+      repaired = true;
+    }
     const children = graph.repositories.map((repository) =>
       repository.task_id ? this.tasks.get(repository.task_id) : undefined);
-    if (children.some((child) => !child)) return;
-    const states = children as TaskState[];
+    if (children.some((child) => !child
+        || child.summary.parent_task_id !== parent.summary.id)
+        || new Set(children).size !== children.length) {
+      if (repaired) this.persist(parent, false, false);
+      return;
+    }
+    if (graph.stage !== "confirmed") {
+      graph.stage = "confirmed";
+      repaired = true;
+    }
+    // 不能只看图中幸存的映射而漏掉实际已创建的兄弟任务。
+    const states = actualChildren;
     const completed = states.filter((child) =>
       child.summary.status === "completed").length;
     const attention = states.filter((child) => [
@@ -8363,7 +8402,7 @@ export class TaskService {
       : `${completed}/${states.length} 个子任务已完成`
         + (attention ? `，${attention} 个需要处理` : "，其余正在推进");
     const previousStatus = parent.summary.status;
-    if (previousStatus === nextStatus && parent.summary.detail === nextDetail) return;
+    if (!repaired && previousStatus === nextStatus && parent.summary.detail === nextDetail) return;
     parent.summary.status = nextStatus;
     parent.summary.detail = nextDetail;
     parent.summary.waiting = undefined;
@@ -8900,6 +8939,10 @@ export class TaskService {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
       }
     }
+    // 全部任务加载后先恢复父子关联，再发布 Story/补任务书；不受加载顺序影响。
+    for (const task of this.tasks.values()) {
+      if (this.isRequirementAnalysis(task)) this.reconcileRequirementParent(task, true);
+    }
     // 确认建单后发布 Story 的进程中断可恢复；先加载全部子任务再同步。
     for (const task of this.tasks.values()) {
       if (task.summary.requirement_graph?.stage !== "confirmed") continue;
@@ -8923,13 +8966,6 @@ export class TaskService {
       .map((task) => task.summary.parent_task_id).filter(Boolean))) {
       const parent = this.tasks.get(parentId!);
       if (parent) this.syncCrossRepositoryUpdates(parent);
-    }
-    // 旧版本拆单时就写 completed；全部恢复后统一校正，避免把未加载子任务
-    // 当成缺失；无需一次性迁移脚本，重启即可恢复真实层级状态。
-    for (const task of this.tasks.values()) {
-      if (this.isRequirementAnalysis(task)) {
-        this.reconcileRequirementParent(task);
-      }
     }
     if (this.counter > 0) {
       try {
@@ -10137,6 +10173,11 @@ export class TaskService {
       throw new TaskControlError(
         "已确认的整体拆分方案暂时无法读取，未生成子任务；请刷新后重试");
     }
+    // 确认事实先落盘，再逐个建单。persist 的展示投影会刷新 analysis 图，
+    // 若到循环末尾才 confirmed，后续 task_id/stage 会写进被替换的旧对象。
+    // confirmed 不代表已建齐；未关联单元继续由下面的可重入建单补齐。
+    graph.stage = "confirmed";
+    this.persist(task);
     const taskIds = new Map<string, string>();
     for (const repository of graph.repositories) {
       if (repository.task_id) taskIds.set(repository.id, repository.task_id);
