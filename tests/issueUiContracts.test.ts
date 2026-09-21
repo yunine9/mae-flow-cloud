@@ -786,6 +786,16 @@ test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#8
   assert.ok(pushBranchDesc, "push_branch 工具定义必须存在");
   assert.doesNotMatch(pushBranchDesc, /UT|全量回归|测试/,
     "push_branch 描述不得再教 UT——单源在 fix 简报,双写必漂移");
+  // 交付动作收敛(#373,ADR-0050):交付教学整体迁到 mr_green 简报;
+  // fix 简报只声明本阶段不推送,不再引用交付技能、不再劝阻式教学。
+  const fixBrief = briefs.match(/## stage\.fix\n([\s\S]*?)\n## stage\.mr_green/)?.[1] ?? "";
+  assert.ok(fixBrief, "briefs.md 缺 stage.fix 锚点");
+  assert.match(fixBrief, /本阶段不推送、不建 MR/, "fix 简报应声明本阶段不推送");
+  assert.doesNotMatch(fixBrief, /issue-delivery/, "交付技能引用应住 mr_green 简报");
+  assert.doesNotMatch(fixBrief, /不要推完代码停在原地等绿/,
+    "「别推完等绿」的劝阻随门禁收敛退役——本阶段根本推不了");
+  const mrGreenBrief = briefs.match(/## stage\.mr_green\n([\s\S]*?)\n## stage\.conclude/)?.[1] ?? "";
+  assert.match(mrGreenBrief, /issue-delivery/, "mr_green 简报应接住交付教学");
 });
 
 // ---- 左栏六标签(#123 拍平 + 2026-09-07 走查反馈:逐仓交付收编为末签;

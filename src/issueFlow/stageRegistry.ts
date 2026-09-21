@@ -162,7 +162,8 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   fix: {
     label: "问题修复",
     exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 推进到"
-      + "「提交 MR·跑绿」(建 MR 与流水线验绿都在下一阶段,本阶段无须等绿)",
+      + "「提交 MR·跑绿」(推送、建 MR 与流水线验绿都在下一阶段,本阶段"
+      + "不写远端,无须等绿)",
     exitAction: "complete_stage",
     tools: [
       { name: "request_env", note: "缺网管环境先要配置" },
@@ -171,7 +172,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "pull_repo", note: "补仓" },
       { name: "remove_repo", note: "用户指派移除无关仓" },
       { name: "bind_module" },
-      { name: "push_branch" },
       { name: "report_ut", note: "记录 UT 结果" },
       { name: "complete_stage" },
     ],
@@ -209,14 +209,15 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   },
 };
 
-// 调查、测试取证和阶段性交付是通用能力;移除仓(#240)跟随用户指派,
-// 全程可调(门禁在工具层:模块绑定仓/远端分支在/不可判定三类机械拒)。
-// 检视分诊(ADR-0035):respond_review/declare_review_rework 同样全程
-// 可调——意见可能在任何阶段送达,分诊不受阶段门禁管辖(提交通道本就
-// 运行中交办,#284)。阶段只组织出口,不禁止工具。无单仍不交付代码;
-// 仓、分支、真实推送和用户已选择的过目策略仍由工具核对。
+// 调查、测试取证和检视分诊是通用能力,全程可调:移除仓(#240)跟随
+// 用户指派(门禁在工具层:模块绑定仓/远端分支在/不可判定三类机械拒);
+// 检视分诊(ADR-0035)的 respond_review/declare_review_rework 意见可能
+// 在任何阶段送达(提交通道本就运行中交办,#284)。「阶段只组织出口,
+// 不禁止工具」的例外是交付类:push_branch/create_mr 会启动流水线监看、
+// 验绿门以 MR 台账为收口半边,与「提交 MR·跑绿」的阶段语义绑定,收敛
+// 为该阶段独占(#373,ADR-0050);无单路线不含该阶段,天然不交付代码。
 for (const spec of Object.values(FIXED_STAGE_SPECS)) {
-  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut", "push_branch", "create_mr",
+  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut",
     "respond_review", "declare_review_rework"]) {
     if (!spec.tools.some(tool => tool.name === name)) spec.tools = [...spec.tools, { name }];
   }
