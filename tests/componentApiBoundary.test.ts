@@ -40,3 +40,17 @@ test("interface 是优先线索而非固定白名单，可见性、已调用与�
   assert.match(tool.description,/outline 只登记已确认对外提供/);
   assert.match(JSON.stringify(tool.parameters),/对外提供的证据/);
 });
+
+test("SDK POM 必须实际读取并追踪发布关系，不把聚合或依赖清单当成对外 API", () => {
+  assert.match(COMPONENT_API_BOUNDARY,/sdk\/pom\.xml；存在时必须实际读取/);
+  for (const clue of ["modules", "parent", "properties", "profiles", "distributionManagement", "deploy", "groupId:artifactId:version", "packaging", "classifier"]) {
+    assert.ok(COMPONENT_API_BOUNDARY.includes(clue), `发布判断遗漏 ${clue}`);
+  }
+  assert.match(COMPONENT_API_BOUNDARY,/modules 是需要继续核对的候选，不是对外发布白名单/);
+  assert.match(COMPONENT_API_BOUNDARY,/dependencies\/dependencyManagement.*不自动成为本 SDK 对外提供的能力/);
+  assert.match(COMPONENT_API_BOUNDARY,/BOM.*不能伪称可调用的运行时 JAR/);
+  assert.match(COMPONENT_API_BOUNDARY,/配置不能证明某版本已实际发布/);
+  assert.match(COMPONENT_API_BOUNDARY,/没有 sdk\/pom\.xml.*其他构建系统/);
+  assert.match(COMPONENT_API_BOUNDARY,/不执行 Maven goal 或发布命令/);
+  assert.match(JSON.stringify(researchDocumentTool(input).parameters),/sdk\/pom\.xml.*发布配置到制品坐标/);
+});

@@ -14,7 +14,7 @@ export function researchDocumentTool(input: ResearchExecution) {
       id: Type.Optional(Type.String()), overview: Type.Optional(Type.String()),
       entries: Type.Optional(Type.Array(Type.Object(entry))),
       section: Type.Optional(Type.Object({ ...entry, content: Type.String(), interfaces: Type.String({ description: "受支持的对外入口、对外提供的证据、使用方范围与内部边界；public 或位于 interface 目录本身不是充分依据" }),
-        integration: Type.String(), example: Type.String(), sources: Type.String(), related_ids: Type.Array(Type.String()) })),
+        integration: Type.String({ description: "对外集成产物与依赖。存在 sdk/pom.xml 时须追踪发布模块及子 POM，说明发布配置到制品坐标、再到对外接口的映射；不把 modules 或 dependencies 直接当发布清单" }), example: Type.String(), sources: Type.String(), related_ids: Type.Array(Type.String()) })),
     }),
     async execute(_id: string, edit: any) {
       try {

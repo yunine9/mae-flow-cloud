@@ -195,7 +195,7 @@ export function ComponentRepositories() {
               <label className="grid gap-2">
                 组件说明
                 <Textarea
-                  placeholder="可说明对外接口约定，例如优先研究 interface/；impl/ 仅供内部使用。目录是研究线索，仍需核对发布依据。"
+                  placeholder="可说明 SDK 发布及接口约定，例如先查 sdk/pom.xml 的发布模块，再研究 interface/；impl/ 仅供内部使用。"
                   value={edit.description ?? ""}
                   onChange={(e) =>
                     setEdit({ ...edit, description: e.target.value })
