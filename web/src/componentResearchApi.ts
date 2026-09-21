@@ -10,6 +10,10 @@ export interface ComponentRepository {
 }
 export interface ComponentResearchRecord {
   id: string;
+  mode?: "topic" | "all" | "component";
+  parent_id?: string;
+  children?: ComponentResearchRecord[];
+  progress?: { total: number; done: number; failed: number; cancelled: number; running: number; queued: number; adopted: number };
   component: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;

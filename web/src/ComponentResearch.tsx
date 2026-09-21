@@ -66,6 +66,7 @@ export function ComponentResearch({
     [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
+  const [mode, setMode] = useState<"all" | "topic">("all");
   const [selected, setSelected] = useState(
       new URLSearchParams(location.search).get("componentResearch") ?? "",
     ),
@@ -165,7 +166,7 @@ export function ComponentResearch({
     try {
       const r = await componentRequest<ComponentResearchRecord>(
         "/component-research",
-        { language, topic },
+        { language, mode, ...(mode === "topic" ? { topic } : {}) },
       );
       await load();
       setDetail(r);
@@ -239,19 +240,20 @@ export function ComponentResearch({
             ) : (
               <>
                 <header className="mb-5">
+                  {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-xl font-semibold">{current.topic}</h2>
+                    <h2 className="flex-1 text-xl font-semibold">{current.topic}</h2>
                     {!focused && ["done", "failed", "cancelled"].includes(current.status) && (
                       <Button
                         variant="outline"
                         disabled={busy}
                         onClick={() => void manage("retry")}
                       >
-                        {current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
+                        {current.mode === "all" && current.status !== "done" ? "重试未完成组件" : current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
                       </Button>
                     )}
                     {!focused && ["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
-                    {!focused && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
+                    {!focused && !current.parent_id && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
                   </div>
                   <p className="mt-2 text-muted-foreground">
                     {current.components?.length ?? 1} 个组件仓 ·{" "}
@@ -267,9 +269,26 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
+                {current.mode === "all" && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
+                  <div className="rounded-xl border border-line bg-surface-2 p-5">
+                    <div className="flex items-center justify-between gap-3"><strong>组件草稿 {current.progress.done} / {current.progress.total}</strong><span className="text-muted-foreground">已采纳 {current.progress.adopted} 篇</span></div>
+                    <div role="progressbar" aria-label="组件完成进度" aria-valuemin={0} aria-valuemax={current.progress.total} aria-valuenow={current.progress.done} className="mt-4 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all" style={{width:`${100 * current.progress.done / (current.progress.total || 1)}%`}} /></div>
+                    <p className="mt-3 text-muted-foreground">{current.progress.running} 个正在萃取 · {current.progress.queued} 个排队 · {current.progress.failed} 个失败 · {current.progress.cancelled} 个已停止</p>
+                  </div>
+                  <p className="text-muted-foreground">自动发现各组件的主要能力，逐个生成开发范式草稿。已完成的可立即审查，失败不影响其他组件。</p>
+                  <div className="overflow-hidden rounded-xl border border-line">
+                    <table className="w-full text-left"><thead className="bg-surface-2"><tr><th className="px-4 py-3">基础组件</th><th className="px-4 py-3">进度</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+                      <tbody>{current.children?.map(child => <tr key={child.id} className="border-t border-line">
+                        <td className="max-w-[320px] px-4 py-4"><strong className="block">{child.component.name}</strong><span className="mt-1 block truncate text-sm text-muted-foreground" title={child.component.repository}>{child.component.path || child.component.repository.split("/").pop()} · {child.component.branch}</span></td>
+                        <td className={`px-4 py-4 ${child.status === "failed" ? "text-danger" : "text-muted-foreground"}`}>{child.stage}</td>
+                        <td className="px-4 py-4 text-right"><Button variant="outline" onClick={() => selectRecord(child.id)}>{child.status === "done" ? "审查草稿" : "查看过程"}</Button></td>
+                      </tr>)}</tbody>
+                    </table>
+                  </div>
+                </section>}
+                {current.mode !== "all" && <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
-                    源码范围与研究记录 · {current.evidence.length} 次工具调用
+                    源码范围与研究记录 · {current.evidence.length} 条记录
                   </summary>
                   {(current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
                   <ol className="max-h-64 overflow-auto text-sm">
@@ -279,12 +298,12 @@ export function ComponentResearch({
                         className="border-t border-line py-2 break-all"
                       >
                         {String(e.at ?? "")} ·{" "}
-                        {e.tool === "code_search" ? "跨仓检索" : "组件源码"} /{" "}
+                        {e.tool === "research_note" ? "研究说明" : e.tool === "code_search" ? "跨仓检索" : "组件源码"} /{" "}
                         {String(e.action ?? "")}
                         <br />
                         {String(e.query ?? e.path ?? "")}{" "}
                         {String(e.repository ?? "")}{" "}
-                        {e.status === "failed"
+                        {e.tool === "research_note" ? "" : e.status === "failed"
                           ? `失败：${e.error}`
                           : `返回 ${e.characters ?? 0} 字符`}
                         {typeof e.preview === "string" && (
@@ -300,7 +319,7 @@ export function ComponentResearch({
                       </li>
                     ))}
                   </ol>
-                </details>
+                </details>}
                 {current.draft && (
                   <>
                     <div className="mb-3 flex items-center justify-between">
@@ -425,26 +444,28 @@ export function ComponentResearch({
                   从真实源码中提炼开发范式
                 </h2>
                 <p className="text-muted-foreground">
-                  选定语言与具体问题。后台阅读组件实现、检索真实调用，生成带来源的
-                  Markdown 草稿。
+                  选择语言即可提取全部基础组件的开发范式，主题由 Agent 从源码中发现。
                 </p>
                 <Choice label="萃取语言" value={language} onChange={setLanguage}
                   items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
-                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `自动覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓，按主题识别相关组件。` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "选择语言后，自动从该语言的所有已启用组件仓查找相关用法。"}</p>
+                <div className="grid grid-cols-2 gap-3" role="group" aria-label="萃取方式">
+                  {([['all', '全部基础组件', '自动发现能力与主题，逐个生成草稿'], ['topic', '指定主题', '围绕一个具体问题跨组件研究']] as const).map(([value, label, hint]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong><span className="mt-2 block text-sm text-muted-foreground">{hint}</span></button>)}
+                </div>
+                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓${mode === "all" ? "，后台分批执行，可随时查看进度。" : "，按主题识别相关组件。"}` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
                 <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
-                <label className="grid gap-2">
+                {mode === "topic" && <label className="grid gap-2">
                   研究主题
                   <Textarea
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
                     placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
                   />
-                </label>
+                </label>}
                 <Button
-                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || !topic.trim()}
+                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
                   onClick={() => void start()}
                 >
-                  {busy ? "发起中…" : "开始后台萃取"}
+                  {busy ? "发起中…" : mode === "all" ? "一键萃取全部组件" : "开始后台萃取"}
                 </Button>
               </div>
         </DialogContent>

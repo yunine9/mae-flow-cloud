@@ -258,16 +258,17 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     );
     assert.match(pinned.content[0].text, /void Close/);
     assert.doesNotMatch(pinned.content[0].text, /WORKTREE/);
-    const job = research.start(
-      { component_id: row.id, language: "cpp", topic: "句柄关闭" },
-      "alice",
-    );
+    const batch = research.start({ mode: "all", language: "cpp" }, "alice");
+    const job = research.get(batch.children![0].id);
     await until(() => ["done", "failed"].includes(research.get(job.id).status));
     const done = research.get(job.id);
     assert.equal(done.status, "done", done.error);
+    assert.match(JSON.stringify(model.requests[0]), /自动萃取整个组件/);
+    assert.equal(research.get(batch.id).progress?.done, 1);
     assert.equal(done.revision, revision);
+    assert.ok(done.evidence.some(e => e.tool === "research_note"));
     assert.equal(
-      done.evidence.length,
+      done.evidence.filter(e => e.tool !== "research_note").length,
       3,
       JSON.stringify(model.requests.at(-1)),
     );
@@ -435,6 +436,14 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     assert.deepEqual(doc.technologies, ["cpp"]);
     const docs: any = await (await fetch(`${url}/knowledge-documents`)).json();
     assert.equal(docs.documents[0].id, doc.id);
+    const all = await post("/component-research", {mode:"all",language:"cpp"});
+    assert.equal(all.status, 202);
+    const batch: any = await all.json();
+    assert.equal(batch.children.length, 1);
+    await until(() => research.get(batch.id).status === "done");
+    const progress: any = await (await fetch(`${url}/component-research/${batch.id}`)).json();
+    assert.equal(progress.progress.done, 1);
+    assert.equal((await post("/component-research", {mode:"unknown",language:"cpp"})).status, 400);
   } finally {
     await service.shutdown();
     await new Promise<void>((r) => server.close(() => r()));
@@ -489,6 +498,23 @@ test("跨组件读取按 ID 路由、固定版本且延迟准备，证据保留�
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 
+test("组件源码目录分段列出并明确续读位置，扫描不会静默丢弃后续条目", async t => {
+  const dir = temporary();
+  t.after(() => rmSync(dir,{recursive:true,force:true}));
+  execFileSync("git", ["init", "-q", dir]);
+  for (let i=0;i<105;i++) writeFileSync(join(dir,`api-${String(i).padStart(3,"0")}.h`), "void call();\n");
+  execFileSync("git", ["-C",dir,"add","."]);
+  execFileSync("git", ["-C",dir,"-c","user.name=Test","-c","user.email=test@example.com","commit","-qm","fixture"]);
+  const tool = componentSourceTool(dir,"HEAD","",()=>{});
+  const first = await call(tool,{action:"list"});
+  assert.match(first.content[0].text,/目录共 105 项/);
+  assert.match(first.content[0].text,/list start=101/);
+  assert.doesNotMatch(first.content[0].text,/api-104/);
+  const next = await call(tool,{action:"list",start:101});
+  assert.match(next.content[0].text,/api-104/);
+  assert.doesNotMatch(next.content[0].text,/后续请/);
+});
+
 test("停止和删除不会被迟到结果复活；删除保留已采纳知识，失败可以重试", async () => {
   const dir = temporary();
   saveComponentRepository(dir, config, "alice");
@@ -522,4 +548,95 @@ test("停止和删除不会被迟到结果复活；删除保留已采纳知识�
     assert.equal(readKnowledgeDocument(dir, doc.id).id, doc.id);
     assert.throws(() => research.retry(done.id,"alice"), /删除/);
   } finally { release(); await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test("一键萃取无需主题，逐组件执行；失败隔离，重试只重做失败组件并保留原始范围", async t => {
+  const dir = temporary();
+  const one = saveComponentRepository(dir, config, "alice");
+  const two = saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git"}, "alice");
+  saveComponentRepository(dir, {...config, name:"Java", languages:["java"]}, "alice");
+  saveComponentRepository(dir, {...config, name:"已停用", enabled:false}, "alice");
+  const executions: string[] = [];
+  let fail = true;
+  const research = new ComponentResearch(dir, async ({record}) => {
+    executions.push(record.component.id);
+    assert.equal(record.mode, "component");
+    assert.deepEqual(record.components?.map(c => c.id), [record.component.id]);
+    if (record.component.id === two.id && fail) throw new Error("日期组件读取失败");
+    return "# 组件用法\n有来源的示例";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
+  const batch = research.start({mode:"all",language:"C++"}, "alice");
+  assert.equal(batch.children?.length, 2);
+  assert.equal(research.start({mode:"all",language:"cpp"}, "alice").id, batch.id);
+  await until(() => research.get(batch.id).status === "failed");
+  const partial = research.get(batch.id);
+  assert.equal(partial.progress?.done, 1);
+  assert.equal(partial.progress?.failed, 1);
+  assert.equal(research.list(true).length, 1, "列表显示一个批次，组件在详情展开");
+  assert.equal(research.list(true)[0].children, undefined);
+  const complete = partial.children!.find(c => c.status === "done")!;
+  research.adopt(complete.id, {scope:"platform"}, "alice");
+  assert.equal(research.get(batch.id).progress?.adopted, 1);
+  assert.throws(() => research.adopt(batch.id, {}, "alice"), /组件草稿/);
+  saveComponentRepository(dir, {id:two.id, enabled:false}, "alice");
+  fail = false;
+  assert.equal(research.retry(batch.id, "bob").id, batch.id);
+  await until(() => research.get(batch.id).status === "done");
+  assert.deepEqual(executions.sort(), [one.id, two.id, two.id].sort());
+  assert.equal(research.get(batch.id).progress?.adopted, 1);
+  assert.equal(research.get(batch.id).children!.find(c => c.component.id === two.id)!.operator, "bob");
+  research.remove(batch.id, "alice");
+  assert.equal(research.list().length, 0);
+  assert.ok(research.get(complete.id).document_id, "删除批次不删除已采纳知识的来源记录");
+  assert.throws(() => research.retry(complete.id, "alice"), /删除/);
+});
+
+test("全量组件不受旧主题队列 50 条限制，并发仍为 2；停止和删除覆盖排队与运行中的组件", async t => {
+  const dir = temporary();
+  for (let i=0; i<53; i++) saveComponentRepository(dir, {...config, name:`组件 ${i}`, repository:`https://code.example/c${i}.git`}, "alice");
+  let count = 0;
+  const research = new ComponentResearch(dir, async ({signal}) => {
+    count++;
+    await new Promise<void>(resolve => signal.aborted ? resolve() : signal.addEventListener("abort", () => resolve(), {once:true}));
+    return "# 迟到草稿";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
+  const batch = research.start({mode:"all",language:"cpp"}, "alice");
+  await until(() => count === 2);
+  assert.equal(research.get(batch.id).progress?.queued, 51);
+  assert.equal(research.start({mode:"all",language:"cpp",refresh:true}, "alice").id, batch.id);
+  research.stop(batch.id);
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(count, 2);
+  assert.equal(research.get(batch.id).progress?.cancelled, 53);
+  assert.equal(research.get(batch.id).status, "cancelled");
+  research.remove(batch.id, "alice");
+  assert.equal(research.list().length, 0);
+});
+
+test("重启后全量任务按组件恢复状态，单组件重试不扩成语言全量，已完成草稿不重做", async t => {
+  const dir = temporary();
+  saveComponentRepository(dir, config, "alice");
+  saveComponentRepository(dir, {...config,name:"日期",repository:"https://code.example/date.git"}, "alice");
+  const initial = new ComponentResearch(dir, async () => "# 草稿");
+  const batch = initial.start({mode:"all",language:"cpp"}, "alice");
+  await until(() => initial.get(batch.id).status === "done");
+  await initial.shutdown();
+  const interrupted = initial.get(batch.id).children![0];
+  const file = join(dir,"component-research",interrupted.id,"record.json");
+  const state = JSON.parse(readFileSync(file,"utf8"));
+  writeFileSync(file,JSON.stringify({...state,status:"running",draft:undefined}));
+  let runs = 0;
+  const recovered = new ComponentResearch(dir, async ({record}) => {
+    runs++; assert.equal(record.components?.length, 1); return "# 重试完成";
+  });
+  t.after(async () => { await recovered.shutdown(); rmSync(dir, {recursive:true,force:true}); });
+  assert.equal(recovered.get(batch.id).progress?.done, 1);
+  assert.equal(recovered.get(batch.id).progress?.failed, 1);
+  const retry = recovered.retry(interrupted.id,"alice");
+  assert.equal(retry.parent_id,batch.id);
+  await until(() => recovered.get(batch.id).status === "done");
+  assert.equal(runs,1);
+  assert.throws(() => recovered.retry(interrupted.id,"alice"), /最新记录/);
 });

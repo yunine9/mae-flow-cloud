@@ -22,6 +22,11 @@ import {
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 export interface ResearchRecord {
   id: string;
+  mode?: "topic" | "all" | "component";
+  parent_id?: string;
+  child_ids?: string[];
+  children?: ResearchRecord[];
+  progress?: { total: number; done: number; failed: number; cancelled: number; running: number; queued: number; adopted: number };
   component: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;
@@ -42,9 +47,10 @@ export interface ResearchRecord {
   evidence: Array<Record<string, unknown>>;
 }
 export interface ResearchInput {
+  mode?: "topic" | "all";
   component_id?: string;
   language: string;
-  topic: string;
+  topic?: string;
   refresh?: boolean;
 }
 export interface ResearchExecution {
@@ -74,7 +80,7 @@ export class ComponentResearch {
         if (!existsSync(path)) continue;
         const record: ResearchRecord = JSON.parse(readFileSync(path, "utf8"));
         this.records.set(record.id, record);
-        if (["queued", "running"].includes(record.status))
+        if (record.mode !== "all" && ["queued", "running"].includes(record.status))
           this.update(record, {
             status: "failed",
             stage: "已中断",
@@ -85,17 +91,30 @@ export class ComponentResearch {
   }
   list(summaryOnly = false) {
     return [...this.records.values()]
-      .filter(r => !r.deleted_at)
+      .filter(r => !r.deleted_at && !r.parent_id)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((r) =>
         structuredClone(
-          summaryOnly ? { ...r, draft: undefined, evidence: [] } : r,
+          summaryOnly ? { ...this.get(r.id), draft: undefined, evidence: [], children: undefined } : this.get(r.id),
         ),
       );
   }
   get(id: string) {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
+    if (r.mode === "all") {
+      const children = (r.child_ids ?? []).map(id => this.records.get(id)).filter((c): c is ResearchRecord => !!c);
+      const progress = { total: r.child_ids?.length ?? 0, done: 0, failed: 0, cancelled: 0, running: 0, queued: 0, adopted: 0 };
+      for (const child of children) { progress[child.status]++; if (child.document_id) progress.adopted++; }
+      progress.failed += progress.total - children.length;
+      const active = progress.running + progress.queued;
+      const status = active ? (progress.running ? "running" : "queued")
+        : progress.failed ? "failed" : progress.cancelled ? "cancelled" : "done";
+      return structuredClone({ ...r, status, progress,
+        stage: `已完成 ${progress.done}/${progress.total} 个组件${progress.failed ? `，${progress.failed} 个失败` : ""}${progress.cancelled ? `，${progress.cancelled} 个已停止` : ""}`,
+        children: children.map(c => ({ ...c, draft: undefined, evidence: [] })),
+      } satisfies ResearchRecord);
+    }
     return structuredClone(r);
   }
   start(input: ResearchInput, operator: string) {
@@ -103,6 +122,8 @@ export class ComponentResearch {
     const language = normalizeKnowledgeLanguages([input.language])[0];
     const components = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
     if (!components.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
+    if (input.mode && !["all", "topic"].includes(input.mode)) throw new Error("不支持的萃取方式");
+    if (input.mode === "all") return this.startAll(components, language, operator, input.refresh);
     const component = components[0]; // Legacy records retain their single component; new jobs cover the language registry.
     const topic = String(input.topic ?? "").trim();
     if (!topic || topic.length > 1000)
@@ -121,7 +142,7 @@ export class ComponentResearch {
     if (previous && (!input.refresh || previous.status !== "done"))
       return structuredClone(previous);
     if (
-      [...this.records.values()].filter((r) => r.status === "queued").length >=
+      [...this.records.values()].filter((r) => r.mode !== "all" && r.status === "queued").length >=
       50
     )
       throw new Error("待萃取队列已满，请稍后再试");
@@ -143,6 +164,27 @@ export class ComponentResearch {
     this.pump();
     return this.get(record.id);
   }
+  private componentJob(component: ComponentRepository, parent: ResearchRecord): ResearchRecord {
+    return { id: `cr-${randomUUID()}`, mode: "component", parent_id: parent.id,
+      component, components: [component], language: parent.language,
+      topic: `${component.name} · 开发范式`, operator: parent.operator,
+      key: `${parent.key}:${componentKey(component)}`, status: "queued",
+      created_at: new Date().toISOString(), stage: "等待自动分析组件", evidence: [] };
+  }
+  private startAll(components: ComponentRepository[], language: string, operator: string, refresh = false) {
+    const key = JSON.stringify(["all", language, components.map(componentKey).sort()]);
+    const previous = [...this.records.values()].reverse().find(r => r.mode === "all" && r.key === key && r.operator === operator && !r.deleted_at);
+    if (previous && (!refresh || ["queued", "running"].includes(this.get(previous.id).status))) return this.get(previous.id);
+    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components,
+      language, topic: "全部基础组件", operator, key, status: "queued", created_at: new Date().toISOString(),
+      stage: "等待萃取", evidence: [], child_ids: [] };
+    const children = components.map(c => this.componentJob(c, parent));
+    parent.child_ids = children.map(c => c.id);
+    // 全部组件先登记，再启动现有队列；每个组件独立失败、重试和采纳。
+    for (const record of [...children, parent]) { this.records.set(record.id, record); this.update(record, {}); }
+    this.pump();
+    return this.get(parent.id);
+  }
   private root(id: string) {
     return join(this.dir, "component-research", id);
   }
@@ -158,7 +200,7 @@ export class ComponentResearch {
     if (this.stopped) return;
     for (const record of this.records.values()) {
       if (this.running.size >= 2) break;
-      if (record.status !== "queued") continue;
+      if (record.mode === "all" || record.status !== "queued") continue;
       const controller = new AbortController();
       this.update(record, { status: "running", stage: "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
@@ -205,6 +247,10 @@ export class ComponentResearch {
   stop(id: string) {
     const record = this.records.get(id);
     if (!record || record.deleted_at) throw new Error("萃取任务不存在");
+    if (record.mode === "all") {
+      for (const child of record.child_ids ?? []) if (this.records.has(child)) this.stop(child);
+      return this.get(id);
+    }
     if (["queued", "running"].includes(record.status)) {
       this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()});
       this.running.get(id)?.controller.abort();
@@ -212,20 +258,43 @@ export class ComponentResearch {
     return this.get(id);
   }
   remove(id: string, operator: string) {
+    if (this.records.get(id)?.parent_id) throw new Error("请在全部组件任务中删除整批记录；可单独停止或重试组件");
     this.stop(id);
     const record = this.records.get(id)!;
+    for (const child of record.child_ids ?? []) {
+      const r = this.records.get(child);
+      if (r) this.update(r, {deleted_at:new Date().toISOString(), deleted_by:operator});
+    }
     // Preserve provenance of adopted knowledge; hide the task from management lists.
     this.update(record, {deleted_at:new Date().toISOString(), deleted_by:operator});
     return { deleted: true };
   }
   retry(id: string, operator: string) {
+    if (this.stopped) throw new Error("服务正在停止");
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
+    if (record.mode === "all") {
+      if (record.status === "done") return this.start({ mode: "all", language: record.language, refresh: true }, operator);
+      for (const child of record.children ?? []) if (["failed", "cancelled"].includes(child.status)) this.retry(child.id, operator);
+      return this.get(id);
+    }
+    if (record.parent_id) {
+      if (["queued", "running"].includes(record.status)) return record;
+      const parent = this.records.get(record.parent_id);
+      if (!parent || parent.deleted_at) throw new Error("萃取任务已删除");
+      if (!parent.child_ids?.includes(id)) throw new Error("该组件已重新萃取，请查看最新记录");
+      const next = this.componentJob(record.component, parent);
+      next.operator = operator;
+      this.records.set(next.id, next); this.update(next, {});
+      this.update(parent, { child_ids: parent.child_ids.map(child => child === id ? next.id : child) });
+      this.pump();
+      return this.get(next.id);
+    }
     return this.start({language:record.language, topic:record.topic, refresh:true}, operator);
   }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
-    if (!record || record.deleted_at || record.status !== "done") throw new Error("请等待草稿生成");
+    if (!record || record.mode === "all" || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
     if (record.document_id)
       return readKnowledgeDocument(this.dir, record.document_id);
     const content = String(input.content ?? record.draft ?? "");
@@ -261,7 +330,7 @@ export class ComponentResearch {
   async shutdown() {
     this.stopped = true;
     for (const r of this.records.values())
-      if (r.status === "queued")
+      if (r.mode !== "all" && r.status === "queued")
         this.update(r, {
           status: "failed",
           stage: "已中断",

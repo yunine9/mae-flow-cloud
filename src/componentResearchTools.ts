@@ -42,7 +42,7 @@ export const ecBinary = () =>
 export async function checkEc() {
   await executeFile(ecBinary(), ["tools"]);
 }
-function evidencePreview(text: string) {
+export function evidencePreview(text: string) {
   const preview = text.slice(0, 4000);
   try {
     scanForSecrets("源码摘要", Buffer.from(preview));
@@ -74,8 +74,8 @@ export function componentSourceTool(
       ]),
       path: Type.Optional(Type.String()),
       query: Type.Optional(Type.String()),
-      start: Type.Optional(Type.Integer({ minimum: 1 })),
-      end: Type.Optional(Type.Integer({ minimum: 1 })),
+      start: Type.Optional(Type.Integer({ minimum: 1, description: "read 的起始行，或 list 的起始条目（从 1 开始）" })),
+      end: Type.Optional(Type.Integer({ minimum: 1, description: "read 的末行，或 list 的末条目" })),
     }),
     async execute(_id: string, input: any) {
       try {
@@ -94,7 +94,7 @@ export function componentSourceTool(
             "请在配置的组件源码范围内阅读，跨仓调用请用 code_search",
           );
         let text = "";
-        if (input.action === "list")
+        if (input.action === "list") {
           text = await executeFile(
             "git",
             [
@@ -108,6 +108,12 @@ export function componentSourceTool(
             ],
             root,
           );
+          const entries = text.trimEnd().split("\n").filter(Boolean);
+          const start = Math.max(1, input.start ?? 1);
+          const end = Math.min(entries.length, input.end ?? start + 99, start + 199);
+          text = `目录共 ${entries.length} 项，本次 ${start}–${end} 项\n${entries.slice(start - 1, end).join("\n")}`;
+          if (end < entries.length) text += `\n后续请用 list start=${end + 1} 继续，或指定 path 分目录读取`;
+        }
         else if (input.action === "search") {
           if (!input.query) throw new Error("请输入关键词");
           try {
@@ -156,7 +162,7 @@ export function componentSourceTool(
           characters: text.length,
           preview: evidencePreview(text),
         });
-        return reply(text.slice(0, 30000));
+        return reply(text.length > 30000 ? text.slice(0, 30000) + "\n返回内容已截断，请缩小 path 或 start/end 范围继续读取。" : text);
       } catch (e) {
         onUse({
           tool: "component_source",
