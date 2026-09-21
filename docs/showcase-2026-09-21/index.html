@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MAE Flow · 端到端 AI 工程能力</title><style id="presentation-style">:root,svg{--text:#eff6ff;--text-muted:#adbed3;--text-dim:#64819e;--grid:#183049;--mask:#10233a;--frontend-fill:#102d46;--frontend-stroke:#4fc8fc;--backend-fill:#0c302d;--backend-stroke:#62dcc0;--database-fill:#182c47;--database-stroke:#a0b8ff;--cloud-fill:#23213b;--cloud-stroke:#b5a2ff;--security-fill:#24203e;--security-stroke:#b5a2ff;--messagebus-fill:#133b3b;--messagebus-stroke:#62dcc0;--external-fill:#1c263a;--external-stroke:#a4b5d6;--arrow:#7897b8;--arrow-emphasis:#58d0ff;--bg:#081322;font-family:Inter,"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:#081322;color:var(--text);height:100vh;overflow:hidden}button{font:inherit;cursor:pointer;color:inherit}button:focus-visible,[data-node-id]:focus-visible{outline:2px solid #77d3ff;outline-offset:4px}button:disabled{cursor:default;opacity:.4}[hidden]{display:none!important}.shell{height:100vh;max-width:2400px;margin:auto;display:grid;grid-template-rows:auto auto auto minmax(0,1fr) auto auto;gap:15px;padding:28px 40px 18px;background:radial-gradient(ellipse at 78% 5%,#12304c66,transparent 42%),radial-gradient(ellipse at 5% 88%,#12372e33,transparent 40%)}.masthead{display:flex;justify-content:space-between;align-items:center;gap:24px}.identity{display:flex;align-items:center;gap:18px}.brand-mark{font-family:Arial,sans-serif;width:54px;height:58px;border:1px solid #5ad4ff60;border-radius:17px;background:linear-gradient(150deg,#254b7180,#15394d30);display:grid;place-items:center;font-size:37px;line-height:1;font-weight:900;color:#78d7ff;box-shadow:0 0 26px #3baeff18}.eyebrow{color:#80d5ff;font-size:14px;letter-spacing:3px;font-weight:800}.eyebrow span{font-size:10px;color:#7c96b0;letter-spacing:2px;margin-left:14px}h1{font-size:32px;letter-spacing:.2px;margin:6px 0 0;font-weight:650}.headline-side{display:flex;flex-direction:column;gap:9px;text-align:right}.headline-side strong{font-size:17px;font-weight:500;color:#d5e7fa}.headline-side>span{font-size:13px;color:#86a4bc}.human-strip{display:flex;align-items:center;gap:25px;min-height:46px;padding:0 18px;border:1px solid #2d4b64;border-radius:11px;background:linear-gradient(90deg,#14364e70,#14233b30);font-size:14px;color:#bed0e5}.human-label{color:#e9f8ff;font-weight:650;padding-right:22px;border-right:1px solid #38556e;display:flex;align-items:center;gap:10px}.human-label i{width:7px;height:7px;background:#62d7ff;border-radius:50%;box-shadow:0 0 15px #62d7ff}.human-strip b{color:#526d84}.human-strip em{font-size:12px;font-style:normal;margin-left:auto;color:#7ca4bd}.scene-nav{display:flex;justify-content:space-between;align-items:center;gap:20px}.scene-nav [role=tablist]{display:flex;gap:5px}.scene-nav button{border:1px solid transparent;background:transparent;border-radius:8px;padding:9px 16px;color:#8fa9c4;font-size:14px;transition:background .2s,color .2s}.scene-nav button:hover{background:#21354b;color:white}.scene-nav button[aria-selected=true]{background:#18344c;border-color:#345972;color:#e6f5ff;box-shadow:inset 0 1px #8bdbff0e}.controls{display:flex;gap:8px}.controls button{border-color:#2a435b;color:#c0d1e5;padding:8px 13px}.controls button.play{color:#b9eeff;border-color:#3d718e;background:#13354d}.dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:8px;vertical-align:middle}.cyan{background:#55caff}.mint{background:#62dcc0}.violet{background:#b5a2ff}.stage{position:relative;min-height:0;border:1px solid #29425a;border-radius:16px;overflow:hidden;background:linear-gradient(160deg,#0e2134,#091622 70%);isolation:isolate;box-shadow:0 16px 64px #0002,inset 0 1px #9bd8ff0c}.stage:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#3b668010 1px,transparent 1px),linear-gradient(90deg,#3b668010 1px,transparent 1px);background-size:28px 28px;pointer-events:none;z-index:-1}.stage-glow{position:absolute;inset:0;background:radial-gradient(ellipse at 50% 40%,#25586a16,transparent 60%);z-index:-1}#diagram{height:100%;padding:7px 16px 29px;transition:opacity .35s,filter .35s}#diagram>svg{display:block;width:100%;height:100%;overflow:visible}.stage-key{position:absolute;bottom:11px;left:24px;display:flex;gap:22px;font-size:11px;color:#809cb6}.interact-hint{position:absolute;bottom:11px;right:24px;color:#7d97b0;font-size:11px}.narration{display:flex;align-items:center;gap:28px;padding:14px 20px;background:#13243a80;border:1px solid #243b52;border-radius:12px;min-height:84px}.chapter{flex:none;width:158px}.chapter>span{font-size:11px;letter-spacing:1px;color:#80b8db}.progress-track{margin-top:13px;height:3px;background:#293a50;border-radius:3px;overflow:hidden}.progress-track i{display:block;height:100%;width:12%;background:linear-gradient(90deg,#63c9ff,#6ee2c4);transition:width .5s}.narrative-copy{flex:1}.narrative-copy h2{font-size:19px;font-weight:600;margin:0 0 7px}.narrative-copy p{margin:0;font-size:13px;line-height:1.7;color:#a2bbd1}.story-controls{display:flex;gap:7px}.story-controls button{border:1px solid #38536c;border-radius:9px;background:#183047;width:36px;height:36px;color:#b4d2ed}.story-controls button:hover{background:#2b516f}footer{display:flex;justify-content:space-between;align-items:center;color:#5f7d98;font-size:11px;letter-spacing:.6px}footer b{margin:0 7px;font-weight:400}footer>span:first-child{color:#94afc6;font-size:12px;letter-spacing:2px}
+/* The diagram geometry and semantic IDs below come from the unmodified Archify renderer. */
+svg .c-grid{stroke:#23435c;fill:none;opacity:.18}svg .c-mask{fill:var(--mask);stroke:none}svg .c-frontend{fill:var(--frontend-fill);stroke:var(--frontend-stroke)}svg .c-backend{fill:var(--backend-fill);stroke:var(--backend-stroke)}svg .c-database{fill:var(--database-fill);stroke:var(--database-stroke)}svg .c-cloud{fill:var(--cloud-fill);stroke:var(--cloud-stroke)}svg .c-security{fill:var(--security-fill);stroke:var(--security-stroke)}svg .c-messagebus{fill:var(--messagebus-fill);stroke:var(--messagebus-stroke)}svg .c-external{fill:var(--external-fill);stroke:var(--external-stroke)}svg .t-primary{fill:var(--text)}svg .t-muted{fill:var(--text-muted)}svg .t-dim{fill:var(--text-dim)}svg .t-frontend{fill:var(--frontend-stroke)}svg .t-backend{fill:var(--backend-stroke)}svg .t-database{fill:var(--database-stroke)}svg .t-cloud,svg .t-security{fill:#b5a2ff}svg .t-external{fill:#a4b5d6}svg .a-default{stroke:var(--arrow);fill:none}svg .a-emphasis{stroke:var(--arrow-emphasis);fill:none}svg .a-security{stroke:#b5a2ff;fill:none;stroke-dasharray:5,5}svg .a-dashed{stroke:#a0b8ff;fill:none;stroke-dasharray:4,4}svg .m-default{fill:var(--arrow)}svg .m-emphasis{fill:var(--arrow-emphasis)}svg .m-security{fill:#b5a2ff}svg .m-dashed{fill:#a0b8ff}svg .c-region{fill:#1b36511a;stroke:#31516b;stroke-width:.7;stroke-dasharray:none}svg [data-boundary-label]{fill:#c1d9ed;font-size:11px;font-weight:500;letter-spacing:.6px}svg [data-node-id]{cursor:pointer;transition:opacity .4s,filter .4s}svg [data-node-id] rect{rx:8;stroke-width:1}svg [data-node-id] text[data-node-label]{font-size:15px;font-weight:650}svg [data-node-id] text[data-detail=context]{font-size:9px}svg [data-node-id] text[data-detail=fine]{font-size:8.5px}svg [data-node-id]:hover rect:not(.c-mask){stroke-width:2;filter:drop-shadow(0 0 6px #8fe4ff50)}svg .semantic-sigil{fill:none;stroke:currentColor;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round;opacity:.75}svg .s-frontend{color:#64d1ff}svg .s-backend{color:#74e9cc}svg .s-cloud,svg .s-security{color:#b5a2ff}svg .s-external{color:#a4b5d6}svg .semantic-sigil .sigil-fill{fill:currentColor;stroke:none}svg [data-edge-id]{transition:opacity .4s,stroke .4s}svg path.knowledge-edge{stroke:#62dcc0;marker-end:url(#knowledge-arrow)}svg g.knowledge-edge text{fill:#83e7ce}svg [data-node-id].dim,svg [data-edge-id].dim{opacity:.14}svg [data-node-id].active rect:not(.c-mask){stroke-width:2.1;filter:drop-shadow(0 0 7px #64d1ff55)}svg [data-node-id].knowledge-node.active rect:not(.c-mask){filter:drop-shadow(0 0 8px #62dcc050)}svg path.active{stroke-width:2.7}svg .flow-particle{stroke-width:2.8;stroke-linecap:round;fill:none;stroke-dasharray:8 64;pointer-events:none;animation:travel 2.8s linear infinite;filter:drop-shadow(0 0 3px currentColor);opacity:.85}@keyframes travel{to{stroke-dashoffset:-144}}
+#detail{position:absolute;right:22px;top:22px;width:340px;background:#132740f5;border:1px solid #4c789a;border-radius:14px;padding:28px;box-shadow:0 20px 80px #0007;backdrop-filter:blur(15px);animation:arrive .2s ease-out}#detail button{position:absolute;right:12px;top:10px;background:none;border:0;font-size:24px;color:#9fb5ca}#detail small{color:#69d1fb;letter-spacing:2px;font-size:11px}#detail h2{font-size:23px;margin:13px 0}#detail p{font-size:15px;line-height:1.9;color:#c0d2e3;margin:0}#detail-foot{border-top:1px solid #35536e;margin-top:20px;padding-top:15px;font-size:12px;line-height:1.8;color:#88acc4}@keyframes arrive{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+#philosophy{position:absolute;inset:0;padding:28px 38px;background:radial-gradient(ellipse at 50% 0,#21324b,#0b1a2b 80%);animation:arrive .35s ease-out;display:flex;flex-direction:column;justify-content:center}.philosophy-title{text-align:center;margin-bottom:22px}.philosophy-title>span{font-size:10px;letter-spacing:3px;color:#8fafd4}.philosophy-title h2{font-weight:600;font-size:30px;margin:10px 0}.philosophy-title p{color:#9cb3ca;font-size:14px}.principles{display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:1330px;width:100%;margin:0 auto}.principles article{border:1px solid #3a4d66;background:linear-gradient(120deg,#2036508c,#10203580);border-radius:12px;padding:20px 24px}.principles article>span{font-size:11px;color:#86c3e9;letter-spacing:1px}.principles article:nth-child(3)>span{color:#74dbc2}.principles h3{font-size:20px;font-weight:550;margin:10px 0}.principles p{font-size:14px;line-height:1.85;color:#aac1d6;margin:0 0 14px}.principles small{display:block;font-size:11px;color:#779ebc;border-top:1px solid #35516a;padding-top:11px}
+@media (max-height:820px){.shell{padding:18px 26px 12px;gap:9px}h1{font-size:26px}.human-strip{min-height:38px;font-size:12px;gap:16px}.masthead .brand-mark{width:45px;height:48px;font-size:30px}.headline-side strong{font-size:14px}.scene-nav button{padding:6px 13px;font-size:12px}.narration{min-height:66px;padding:9px 16px}.narrative-copy h2{font-size:16px}.narrative-copy p{font-size:12px}.philosophy-title{margin-bottom:8px}.philosophy-title h2{font-size:25px}.philosophy-title p{margin:8px 0}.principles{gap:11px}.principles article{padding:12px 18px}.principles h3{font-size:17px;margin:8px 0}.principles p{font-size:12px;margin-bottom:8px}.principles small{padding-top:8px}#philosophy{padding:20px 30px}}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+svg rect[data-composition-frame-id="0"]{fill:#1a46601a;stroke:#416785}svg rect[data-composition-frame-id="1"]{fill:#124b391a;stroke:#386b63}svg rect[data-composition-frame-id="2"]{fill:#352b4b1a;stroke:#514b73}svg g[data-composition-frame-id="1"] text{fill:#92e8d0}svg g[data-composition-frame-id="2"] text{fill:#c5b6f5}.human-strip>span,.human-strip>em{white-space:nowrap}
+</style></head>
+<body><main class="shell">
+<header class="masthead"><div class="identity"><span class="brand-mark" aria-hidden="true">M</span><div><div class="eyebrow">MAE FLOW <span>AI ENGINEERING PLATFORM</span></div><h1>让一次交付，成为下一次的能力。</h1></div></div><div class="headline-side"><strong>从个人提效到组织级 AI 工程能力</strong><span>交付闭环 × 知识闭环 × 人机协同</span></div></header>
+<section class="human-strip" aria-label="人掌控全程"><span class="human-label"><i></i> 人掌控方向</span><span>明确目标与边界</span><b>·</b><span>关键决定与检视</span><b>·</b><span>随时补充或接管</span><b>·</b><span>通知与可见进展</span><em>Agent 承担执行，人的判断持续生效</em></section>
+<nav class="scene-nav" aria-label="演示视图"><div role="tablist" aria-label="架构主题"><button role="tab" aria-selected="true" data-scene="overview">全景架构</button><button role="tab" aria-selected="false" data-scene="delivery"><i class="dot cyan"></i>交付闭环</button><button role="tab" aria-selected="false" data-scene="knowledge"><i class="dot mint"></i>知识自闭环</button><button role="tab" aria-selected="false" data-scene="philosophy">设计思想</button></div><div class="controls"><button id="play" class="play" aria-label="播放完整讲解">▶ <span>播放讲解</span></button><button id="fullscreen" aria-label="全屏演示">⛶ <span>全屏</span></button><button id="export" aria-label="导出 SVG 架构图">↓ <span>导出图</span></button></div></nav>
+<section class="stage" aria-label="交互式 Archify 架构图"><div class="stage-glow" aria-hidden="true"></div><div id="diagram"><svg viewBox="0 0 1090 454" role="group" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="blueprint" data-quality-profile="standard">
+        <title id="archify-diagram-title">MAE Flow · 从需求到交付的 AI 工程平台</title>
+        <desc id="archify-diagram-description">交付闭环 × 知识闭环</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        <marker id="knowledge-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#62dcc0"/></marker></defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Boundaries (behind everything) -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="01  交付闭环  /  从意图到真实交付" x="30" y="24" width="1030" height="106" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="02  知识自闭环  /  从一次交付到持续复用" x="30" y="192" width="1030" height="106" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="2" data-composition-frame-label="03  工程能力底座  /  将 Agent 接入团队研发体系" x="30" y="339" width="1030" height="112" rx="12" class="c-region" stroke-width="1"/>
+
+        <!-- Connection paths (before components for correct z-order) -->
+        <path data-edge-from="intent" data-edge-to="design" data-edge-key="0" data-edge-id="delivery-0" data-composition-points="196,79;222,79" d="M 196 79 L 222 79" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="design" data-edge-to="develop" data-edge-key="1" data-edge-id="delivery-1" data-composition-points="364,79;390,79" d="M 364 79 L 390 79" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="develop" data-edge-to="verify" data-edge-key="2" data-edge-id="delivery-2" data-composition-points="532,79;558,79" d="M 532 79 L 558 79" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="verify" data-edge-to="iterate" data-edge-key="3" data-edge-id="delivery-3" data-composition-points="700,79;726,79" d="M 700 79 L 726 79" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="iterate" data-edge-to="deliver" data-edge-key="4" data-edge-id="delivery-4" data-composition-points="868,79;894,79" d="M 868 79 L 894 79" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="verify" data-edge-to="develop" data-edge-label="失败反馈 → 修复验证" data-edge-key="5" data-edge-id="repair" data-composition-points="629,110;629,150;461,150;461,110" d="M 629 110 L 629 142 Q 629 150 621 150 L 469 150 Q 461 150 461 142 L 461 110" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="deliver" data-edge-to="retrospect" data-edge-label="合入后自动复盘" data-edge-key="6" data-edge-id="learn" data-composition-points="965,110;965,216" d="M 965 110 L 965 216" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="retrospect" data-edge-to="organize" data-edge-key="7" data-edge-id="retrospect-organize" data-composition-points="894,247;868,247" d="M 894 247 L 868 247" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="organize" data-edge-to="adopt" data-edge-key="8" data-edge-id="organize-adopt" data-composition-points="726,247;700,247" d="M 726 247 L 700 247" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="adopt" data-edge-to="assets" data-edge-key="9" data-edge-id="adopt-assets" data-composition-points="558,247;532,247" d="M 558 247 L 532 247" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="assets" data-edge-to="search" data-edge-key="10" data-edge-id="assets-search" data-composition-points="390,247;364,247" d="M 390 247 L 364 247" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="search" data-edge-to="extract" data-edge-key="11" data-edge-id="search-extract" data-composition-points="222,247;196,247" d="M 222 247 L 196 247" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="search" data-edge-to="design" data-edge-label="检索带入设计与实现" data-edge-key="12" data-edge-id="reuse" data-composition-points="293,216;293,110" d="M 293 216 L 293 110" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="extract" data-edge-to="organize" data-edge-label="发现知识缺口 → 自动萃取真实范式 → 补充知识" data-edge-key="13" data-edge-id="gap" data-composition-points="125,278;125,322;797,322;797,278" d="M 125 278 L 125 314 Q 125 322 133 322 L 789 322 Q 797 322 797 314 L 797 278" class="knowledge-edge a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+
+        <!-- Components -->
+        <g id="node-intent" data-node-id="intent" data-node-label="需求澄清" tabindex="0" role="button" aria-label="聚焦需求澄清，目标与边界 · Spec, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="目标与边界 · Spec" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>需求澄清 · 目标与边界 · Spec · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="54" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="54" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(60 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="125" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">需求澄清</text>
+        <text data-detail="context" x="125" y="93" class="t-muted" font-size="9" text-anchor="middle">目标与边界 · Spec</text>
+        </g>
+
+        <g id="node-design" data-node-id="design" data-node-label="方案与拆分" tabindex="0" role="button" aria-label="聚焦方案与拆分，模块职责与依赖 · Story, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="模块职责与依赖 · Story" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>方案与拆分 · 模块职责与依赖 · Story · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="222" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="222" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(228 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="293" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">方案与拆分</text>
+        <text data-detail="context" x="293" y="93" class="t-muted" font-size="9" text-anchor="middle">模块职责与依赖 · Story</text>
+        </g>
+
+        <g id="node-develop" data-node-id="develop" data-node-label="协同开发" tabindex="0" role="button" aria-label="聚焦协同开发，按依赖并行 · 代码与 UT, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="按依赖并行 · 代码与 UT" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>协同开发 · 按依赖并行 · 代码与 UT · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="390" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="390" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(396 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="461" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">协同开发</text>
+        <text data-detail="context" x="461" y="93" class="t-muted" font-size="9" text-anchor="middle">按依赖并行 · 代码与 UT</text>
+        </g>
+
+        <g id="node-verify" data-node-id="verify" data-node-label="验证与检视" tabindex="0" role="button" aria-label="聚焦验证与检视，编译 / 测试 / 人工检视, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="编译 / 测试 / 人工检视" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>验证与检视 · 编译 / 测试 / 人工检视 · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="558" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="558" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(564 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="629" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">验证与检视</text>
+        <text data-detail="context" x="629" y="93" class="t-muted" font-size="9" text-anchor="middle">编译 / 测试 / 人工检视</text>
+        </g>
+
+        <g id="node-iterate" data-node-id="iterate" data-node-label="MR 迭代" tabindex="0" role="button" aria-label="聚焦MR 迭代，推送 · 反馈 · 修复, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="推送 · 反馈 · 修复" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>MR 迭代 · 推送 · 反馈 · 修复 · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="726" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="726" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(732 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="797" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MR 迭代</text>
+        <text data-detail="context" x="797" y="93" class="t-muted" font-size="9" text-anchor="middle">推送 · 反馈 · 修复</text>
+        </g>
+
+        <g id="node-deliver" data-node-id="deliver" data-node-label="合入交付" tabindex="0" role="button" aria-label="聚焦合入交付，代码 / 验证 / 交付摘要, 01  交付闭环  /  从意图到真实交付" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="代码 / 验证 / 交付摘要" data-node-context="01  交付闭环  /  从意图到真实交付">
+          <title>合入交付 · 代码 / 验证 / 交付摘要 · 01  交付闭环  /  从意图到真实交付</title>
+          <rect x="894" y="48" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="894" y="48" width="142" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(900 54) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="965" y="77" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">合入交付</text>
+        <text data-detail="context" x="965" y="93" class="t-muted" font-size="9" text-anchor="middle">代码 / 验证 / 交付摘要</text>
+        </g>
+
+        <g id="node-extract" data-node-id="extract" data-node-label="源码范式萃取" tabindex="0" role="button" aria-label="聚焦源码范式萃取，组件源码 + 跨仓真实用例, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="组件源码 + 跨仓真实用例" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>源码范式萃取 · 组件源码 + 跨仓真实用例 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="54" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="54" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(60 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="125" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">源码范式萃取</text>
+        <text data-detail="context" x="125" y="261" class="t-muted" font-size="9" text-anchor="middle">组件源码 + 跨仓真实用例</text>
+        </g>
+
+        <g id="node-search" data-node-id="search" data-node-label="按需检索应用" tabindex="0" role="button" aria-label="聚焦按需检索应用，语言 · 模块 · 当前问题, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="语言 · 模块 · 当前问题" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>按需检索应用 · 语言 · 模块 · 当前问题 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="222" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="222" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(228 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="293" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">按需检索应用</text>
+        <text data-detail="context" x="293" y="261" class="t-muted" font-size="9" text-anchor="middle">语言 · 模块 · 当前问题</text>
+        </g>
+
+        <g id="node-assets" data-node-id="assets" data-node-label="组织知识资产" tabindex="0" role="button" aria-label="聚焦组织知识资产，规范 · 组件 · 业务 · 经验, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="规范 · 组件 · 业务 · 经验" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>组织知识资产 · 规范 · 组件 · 业务 · 经验 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="390" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="390" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(396 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="461" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">组织知识资产</text>
+        <text data-detail="context" x="461" y="261" class="t-muted" font-size="8.9" text-anchor="middle">规范 · 组件 · 业务 · 经验</text>
+        </g>
+
+        <g id="node-adopt" data-node-id="adopt" data-node-label="人工审视采纳" tabindex="0" role="button" aria-label="聚焦人工审视采纳，可修改 · 有依据 · 可追溯, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="可修改 · 有依据 · 可追溯" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>人工审视采纳 · 可修改 · 有依据 · 可追溯 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="558" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="558" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(564 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="629" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">人工审视采纳</text>
+        <text data-detail="context" x="629" y="261" class="t-muted" font-size="9" text-anchor="middle">可修改 · 有依据 · 可追溯</text>
+        </g>
+
+        <g id="node-organize" data-node-id="organize" data-node-label="抽象与定时整理" tabindex="0" role="button" aria-label="聚焦抽象与定时整理，归纳共性 · 合并零散知识, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="归纳共性 · 合并零散知识" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>抽象与定时整理 · 归纳共性 · 合并零散知识 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="726" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="726" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(732 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="797" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">抽象与定时整理</text>
+        <text data-detail="context" x="797" y="261" class="t-muted" font-size="9" text-anchor="middle">归纳共性 · 合并零散知识</text>
+        </g>
+
+        <g id="node-retrospect" data-node-id="retrospect" data-node-label="交付经验复盘" tabindex="0" role="button" aria-label="聚焦交付经验复盘，修改差异 + 检视意见, 02  知识自闭环  /  从一次交付到持续复用" aria-pressed="false" data-node-kind="backend" data-node-sublabel="修改差异 + 检视意见" data-node-context="02  知识自闭环  /  从一次交付到持续复用" class="knowledge-node">
+          <title>交付经验复盘 · 修改差异 + 检视意见 · 02  知识自闭环  /  从一次交付到持续复用</title>
+          <rect x="894" y="216" width="142" height="62" rx="6" class="c-mask"/>
+          <rect x="894" y="216" width="142" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(900 222) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="965" y="245" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">交付经验复盘</text>
+        <text data-detail="context" x="965" y="261" class="t-muted" font-size="9" text-anchor="middle">修改差异 + 检视意见</text>
+        </g>
+
+        <g id="node-agents" data-node-id="agents" data-node-label="Agent 协作执行" tabindex="0" role="button" aria-label="聚焦Agent 协作执行，分析 · 编码 · 构建 · 萃取, 03  工程能力底座  /  将 Agent 接入团队研发体系" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="分析 · 编码 · 构建 · 萃取" data-node-tag="主会话与子任务按需协作" data-node-context="03  工程能力底座  /  将 Agent 接入团队研发体系">
+          <title>Agent 协作执行 · 分析 · 编码 · 构建 · 萃取 · 03  工程能力底座  /  将 Agent 接入团队研发体系 · 主会话与子任务按需协作</title>
+          <rect x="54" y="363" width="310" height="68" rx="6" class="c-mask"/>
+          <rect x="54" y="363" width="310" height="68" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(60 369) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="209" y="395" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent 协作执行</text>
+        <text data-detail="context" x="209" y="411" class="t-muted" font-size="9" text-anchor="middle">分析 · 编码 · 构建 · 萃取</text>
+        <text data-detail="fine" x="209" y="423" class="t-cloud" font-size="7" text-anchor="middle">主会话与子任务按需协作</text>
+        </g>
+
+        <g id="node-harness" data-node-id="harness" data-node-label="MAE Flow 工程底座" tabindex="0" role="button" aria-label="聚焦MAE Flow 工程底座，Workflow / Skill · 编排与恢复, 03  工程能力底座  /  将 Agent 接入团队研发体系" aria-pressed="false" data-node-kind="security" data-node-sublabel="Workflow / Skill · 编排与恢复" data-node-tag="真实状态 · 隔离执行 · 权限与留痕" data-node-context="03  工程能力底座  /  将 Agent 接入团队研发体系">
+          <title>MAE Flow 工程底座 · Workflow / Skill · 编排与恢复 · 03  工程能力底座  /  将 Agent 接入团队研发体系 · 真实状态 · 隔离执行 · 权限与留痕</title>
+          <rect x="390" y="363" width="310" height="68" rx="6" class="c-mask"/>
+          <rect x="390" y="363" width="310" height="68" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(396 369) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="545" y="395" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">MAE Flow 工程底座</text>
+        <text data-detail="context" x="545" y="411" class="t-muted" font-size="9" text-anchor="middle">Workflow / Skill · 编排与恢复</text>
+        <text data-detail="fine" x="545" y="423" class="t-security" font-size="7" text-anchor="middle">真实状态 · 隔离执行 · 权限与留痕</text>
+        </g>
+
+        <g id="node-tools" data-node-id="tools" data-node-label="连接现有研发环境" tabindex="0" role="button" aria-label="聚焦连接现有研发环境，代码仓 / CodeHub · CI · 构建环境, 03  工程能力底座  /  将 Agent 接入团队研发体系" aria-pressed="false" data-node-kind="external" data-node-sublabel="代码仓 / CodeHub · CI · 构建环境" data-node-tag="代码搜索 · 小鲁班通知" data-node-context="03  工程能力底座  /  将 Agent 接入团队研发体系">
+          <title>连接现有研发环境 · 代码仓 / CodeHub · CI · 构建环境 · 03  工程能力底座  /  将 Agent 接入团队研发体系 · 代码搜索 · 小鲁班通知</title>
+          <rect x="726" y="363" width="310" height="68" rx="6" class="c-mask"/>
+          <rect x="726" y="363" width="310" height="68" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(732 369) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="881" y="395" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">连接现有研发环境</text>
+        <text data-detail="context" x="881" y="411" class="t-muted" font-size="9" text-anchor="middle">代码仓 / CodeHub · CI · 构建环境</text>
+        <text data-detail="fine" x="881" y="423" class="t-external" font-size="7" text-anchor="middle">代码搜索 · 小鲁班通知</text>
+        </g>
+
+        <!-- Connection labels -->
+
+
+
+
+
+        <g data-detail="context" data-edge-from="verify" data-edge-to="develop" data-edge-label="失败反馈 → 修复验证" data-edge-key="5" data-edge-id="repair">
+          <rect x="499.4" y="146" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="550" y="156" class="t-backend" font-size="8" text-anchor="middle">失败反馈 → 修复验证</text>
+        </g>
+        <g data-detail="context" data-edge-from="deliver" data-edge-to="retrospect" data-edge-label="合入后自动复盘" data-edge-key="6" data-edge-id="learn" class="knowledge-edge">
+          <rect x="926.4" y="162" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="965" y="172" class="t-backend" font-size="8" text-anchor="middle">合入后自动复盘</text>
+        </g>
+
+
+
+
+
+        <g data-detail="context" data-edge-from="search" data-edge-to="design" data-edge-label="检索带入设计与实现" data-edge-key="12" data-edge-id="reuse" class="knowledge-edge">
+          <rect x="244.8" y="162" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="293" y="172" class="t-backend" font-size="8" text-anchor="middle">检索带入设计与实现</text>
+        </g>
+        <g data-detail="context" data-edge-from="extract" data-edge-to="organize" data-edge-label="发现知识缺口 → 自动萃取真实范式 → 补充知识" data-edge-key="13" data-edge-id="gap" class="knowledge-edge">
+          <rect x="355.2" y="318" width="211.6" height="14" rx="3" class="c-mask"/>
+          <text x="461" y="328" class="t-backend" font-size="8" text-anchor="middle">发现知识缺口 → 自动萃取真实范式 → 补充知识</text>
+        </g>
+
+        <!-- Boundary labels (foreground masks keep routes out of titles) -->
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="01  交付闭环  /  从意图到真实交付">
+          <rect data-graph-role="structural-frame-label-mask" x="34" y="28" width="188.2" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="38" y="41" class="t-cloud" font-size="9" font-weight="600">01  交付闭环  /  从意图到真实交付</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="02  知识自闭环  /  从一次交付到持续复用">
+          <rect data-graph-role="structural-frame-label-mask" x="34" y="196" width="220.6" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="38" y="209" class="t-cloud" font-size="9" font-weight="600">02  知识自闭环  /  从一次交付到持续复用</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="2" data-composition-frame-kind="region" data-composition-frame-label="03  工程能力底座  /  将 Agent 接入团队研发体系">
+          <rect data-graph-role="structural-frame-label-mask" x="34" y="343" width="258.4" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="38" y="356" class="t-cloud" font-size="9" font-weight="600">03  工程能力底座  /  将 Agent 接入团队研发体系</text>
+        </g>
+
+        <!-- Legend -->
+
+      </svg></div><div class="stage-key"><span><i class="dot cyan"></i>需求到交付</span><span><i class="dot mint"></i>知识积累与复用</span><span><i class="dot violet"></i>工程能力支撑</span></div><span class="interact-hint">点击模块，查看职责</span><aside id="detail" hidden aria-label="模块职责"><button id="close-detail" aria-label="关闭模块职责">×</button><small id="detail-category"></small><h2 id="detail-title"></h2><p id="detail-body"></p><div id="detail-foot"></div></aside>
+<section id="philosophy" hidden aria-label="MAE Flow 设计思想"><div class="philosophy-title"><span>WHY MAE FLOW</span><h2>让人做判断，让系统少添负担。</h2><p>把工程能力交给团队，把可复用的经验留给下一次。</p></div><div class="principles"><article><span>01 · 人机协作</span><h3>人掌方向，Agent 执行</h3><p>目标、边界与关键取舍由人决定。批注、补充和接管进入后续执行，已经确认的决定持续有效。</p><small>关键决定 / 持续批注 / 随时接管</small></article><article><span>02 · 工程取舍</span><h3>流程服务质量，也为速度让路</h3><p>不把完成流程当作品质证明。减少形式检查与重复审批，按依赖并行推进，用真实结果判断交付。</p><small>有限并行 / 短反馈闭环 / 真实验证</small></article><article><span>03 · 组织资产</span><h3>经验必须回到下一次开发</h3><p>从源码和交付差异提炼经验；审视、整理后按需检索。知识带着来源与适用范围进入开发。</p><small>萃取 / 复盘 / 审视 / 检索复用</small></article><article><span>04 · 持续演进</span><h3>方法可复用，系统可维护</h3><p>Workflow 与 Skill 承载工作方法，宿主连接真实工具与工程环境。保留必要边界，支持暂停、恢复和追溯。</p><small>方法资产 / 工具适配 / 隔离与恢复</small></article></div></section></section>
+<section class="narration" aria-live="polite"><div class="chapter"><span id="chapter">全景 / OVERVIEW</span><div class="progress-track"><i id="progress"></i></div></div><div class="narrative-copy"><h2 id="narrative-title">交付是结果，知识是留下来的能力。</h2><p id="narrative-body">上层完成一次真实交付，中层让经验持续回流，底层让人、Agent 与现有研发环境协同工作。</p></div><div class="story-controls"><button id="previous" aria-label="上一段讲解">←</button><button id="next" aria-label="下一段讲解">→</button></div></section>
+<footer><span>可靠 · 易改 · 够快 · 安全</span><span>ARCHIFY · 可交互架构演示</span><span>空格 播放 / 暂停 <b>·</b> ← → 切换讲解 <b>·</b> Esc 返回全景</span></footer>
+</main><script type="application/json" id="graph-data">{"schema_version":1,"diagram_type":"architecture","meta":{"title":"MAE Flow · 从需求到交付的 AI 工程平台","subtitle":"交付闭环 × 知识闭环","locale":"zh-CN","animation":"none","visual_preset":"blueprint","quality_profile":"standard","viewBox":[1090,454],"legend":{"mode":"hidden"},"views":[{"id":"delivery","label":"交付闭环","focus":["intent","design","develop","verify","iterate","deliver"],"note":"Agent 执行，人掌握关键取舍，真实验证与合入结果完成交付。"},{"id":"knowledge","label":"知识自闭环","focus":["extract","search","assets","adopt","organize","retrospect","design","develop","deliver"],"note":"开发消费知识、缺口触发萃取、交付触发复盘，经人审视后持续复用。"},{"id":"foundation","label":"工程底座","focus":["agents","harness","tools"],"note":"Workflow 与 Skill 组织方法，宿主连接真实工程环境。"}]},"components":[{"id":"intent","type":"frontend","label":"需求澄清","sublabel":"目标与边界 · Spec","pos":[54,48],"size":[142,62]},{"id":"design","type":"frontend","label":"方案与拆分","sublabel":"模块职责与依赖 · Story","pos":[222,48],"size":[142,62]},{"id":"develop","type":"frontend","label":"协同开发","sublabel":"按依赖并行 · 代码与 UT","pos":[390,48],"size":[142,62]},{"id":"verify","type":"frontend","label":"验证与检视","sublabel":"编译 / 测试 / 人工检视","pos":[558,48],"size":[142,62]},{"id":"iterate","type":"frontend","label":"MR 迭代","sublabel":"推送 · 反馈 · 修复","pos":[726,48],"size":[142,62]},{"id":"deliver","type":"frontend","label":"合入交付","sublabel":"代码 / 验证 / 交付摘要","pos":[894,48],"size":[142,62]},{"id":"extract","type":"backend","label":"源码范式萃取","sublabel":"组件源码 + 跨仓真实用例","pos":[54,216],"size":[142,62]},{"id":"search","type":"backend","label":"按需检索应用","sublabel":"语言 · 模块 · 当前问题","pos":[222,216],"size":[142,62]},{"id":"assets","type":"backend","label":"组织知识资产","sublabel":"规范 · 组件 · 业务 · 经验","pos":[390,216],"size":[142,62]},{"id":"adopt","type":"backend","label":"人工审视采纳","sublabel":"可修改 · 有依据 · 可追溯","pos":[558,216],"size":[142,62]},{"id":"organize","type":"backend","label":"抽象与定时整理","sublabel":"归纳共性 · 合并零散知识","pos":[726,216],"size":[142,62]},{"id":"retrospect","type":"backend","label":"交付经验复盘","sublabel":"修改差异 + 检视意见","pos":[894,216],"size":[142,62]},{"id":"agents","type":"cloud","label":"Agent 协作执行","sublabel":"分析 · 编码 · 构建 · 萃取","pos":[54,363],"size":[310,68],"tag":"主会话与子任务按需协作"},{"id":"harness","type":"security","label":"MAE Flow 工程底座","sublabel":"Workflow / Skill · 编排与恢复","pos":[390,363],"size":[310,68],"tag":"真实状态 · 隔离执行 · 权限与留痕"},{"id":"tools","type":"external","label":"连接现有研发环境","sublabel":"代码仓 / CodeHub · CI · 构建环境","pos":[726,363],"size":[310,68],"tag":"代码搜索 · 小鲁班通知"}],"connections":[{"id":"delivery-0","from":"intent","to":"design","variant":"emphasis"},{"id":"delivery-1","from":"design","to":"develop","variant":"emphasis"},{"id":"delivery-2","from":"develop","to":"verify","variant":"emphasis"},{"id":"delivery-3","from":"verify","to":"iterate","variant":"emphasis"},{"id":"delivery-4","from":"iterate","to":"deliver","variant":"emphasis"},{"id":"repair","from":"verify","to":"develop","label":"失败反馈 → 修复验证","variant":"emphasis","fromSide":"bottom","toSide":"bottom","via":[[629,150],[461,150]],"labelAt":[550,156]},{"id":"learn","from":"deliver","to":"retrospect","label":"合入后自动复盘","variant":"emphasis","fromSide":"bottom","toSide":"top","labelAt":[965,172]},{"id":"retrospect-organize","from":"retrospect","to":"organize","variant":"emphasis"},{"id":"organize-adopt","from":"organize","to":"adopt","variant":"emphasis"},{"id":"adopt-assets","from":"adopt","to":"assets","variant":"emphasis"},{"id":"assets-search","from":"assets","to":"search","variant":"emphasis"},{"id":"search-extract","from":"search","to":"extract","variant":"emphasis"},{"id":"reuse","from":"search","to":"design","label":"检索带入设计与实现","variant":"emphasis","fromSide":"top","toSide":"bottom","labelAt":[293,172]},{"id":"gap","from":"extract","to":"organize","label":"发现知识缺口 → 自动萃取真实范式 → 补充知识","variant":"emphasis","fromSide":"bottom","toSide":"bottom","via":[[125,322],[797,322]],"labelAt":[461,328]}],"boundaries":[{"kind":"region","label":"01  交付闭环  /  从意图到真实交付","wraps":["intent","design","develop","verify","iterate","deliver"],"pad":24},{"kind":"region","label":"02  知识自闭环  /  从一次交付到持续复用","wraps":["extract","search","assets","adopt","organize","retrospect"],"pad":24},{"kind":"region","label":"03  工程能力底座  /  将 Agent 接入团队研发体系","wraps":["agents","harness","tools"],"pad":24}]}</script><script>'use strict';
+const graph=JSON.parse(document.querySelector('#graph-data').textContent);
+const svg=document.querySelector('#diagram>svg');
+const nodes=[...svg.querySelectorAll('[data-node-id]')];
+const edges=[...svg.querySelectorAll('[data-edge-id]')];
+const knowledge=new Set(['extract','search','assets','adopt','organize','retrospect']);
+const delivery=['intent','design','develop','verify','iterate','deliver'];
+const foundation=['agents','harness','tools'];
+const ns='http://www.w3.org/2000/svg';
+const details={
+ intent:['交付闭环','先把要解决的问题讲清楚，明确目标、边界与验收预期，形成可共同审视的 Spec。','人的决定进入后续执行，不靠反复交代维持上下文。'],
+ design:['交付闭环','分析模块职责和依赖，形成 Story 与任务拆分。公共准备按需先行，互不依赖的工作谨慎并行。','连线表达协作和依赖，不意味着所有任务一律串行。'],
+ develop:['交付闭环','Agent 结合实施计划、现有代码和适用知识完成代码与 UT。主会话和子任务按需要协作。','知识按当前问题检索，不将整本手册塞进每轮上下文。'],
+ verify:['交付闭环','编译、测试和流水线提供真实结果。人工与 MR 检视意见由责任人判断是否交给 Agent 修复。','自动修复客观失败；不盲目追着每条 AI 检视意见反复修改。'],
+ iterate:['交付闭环','宿主推送代码、创建 MR 并持续观察远端结果。Agent 承接修复，责任人掌握取舍与交付范围。','首次交付生成简明摘要，后续修复保持短反馈。'],
+ deliver:['交付闭环','以实际 MR 合入确认交付，保留代码、验证和过程材料；完成后自动启动经验复盘。','合入是事实，交付后复盘是知识闭环的输入。'],
+ retrospect:['知识自闭环','结合首次交付后的代码修改和检视意见，分析为什么一次没有写对，提炼可复用经验草稿。','任务完成后自动启动；草稿待人审视，不直接变成团队规范。'],
+ organize:['知识自闭环','去掉具体任务细节，保留可复用的原则、条件和例子；定时整理已有文档，减少重复和零散知识。','整理记录保留时间、来源与改动依据，便于核查。'],
+ adopt:['知识自闭环','成员可以审视、修改、采纳知识草稿。依据信任原则开放维护，保留来源、适用范围和修改记录。','自动化负责提炼和整理，人判断是否值得长期复用。'],
+ assets:['知识自闭环','统一管理规范、组件用法、业务模块知识和已采纳经验。以 Markdown 保留内容，索引供按需检索。','语言、业务模块、仓库与版本定义适用范围；Skill 独立承载方法。'],
+ search:['知识自闭环','Agent 使用统一 knowledge 工具，结合关键词与语义匹配查找当前问题所需知识，读取证据后应用。','普通检索不启动萃取；发现内部组件知识缺口时，Agent 可发起后台研究。'],
+ extract:['知识自闭环','从已配置的同语言组件仓读取源码，结合跨仓代码搜索寻找真实用例，提炼调用顺序、资源管理和测试范式。','支持按主题研究或一键扫描全部同语言组件；草稿保留源码依据。'],
+ agents:['工程能力底座','主会话衔接任务上下文，子任务承担分析、实现、验证与知识工作；具备条件时并行推进。','并行服务闭环效率，按依赖和实际写入边界安排工作。'],
+ harness:['工程能力底座','Workflow 和 Skill 组织工作方法；Cloud 宿主编排执行、保存状态并支持恢复，连接内核与外部工具。','保留必要权限和真实事实边界，不用无效流程替代质量。'],
+ tools:['工程能力底座','连接代码仓、CodeHub、CI、构建测试环境和代码搜索，小鲁班将进展与待处理事项送给责任人。','复用已有研发环境，不另造一套脱离实际交付的演示链路。']
+};
+const scenes={
+ overview:{label:'全景 / OVERVIEW',title:'交付是结果，知识是留下来的能力。',body:'上层完成一次真实交付，中层让经验持续回流，底层让人、Agent 与现有研发环境协同工作。'},
+ delivery:{label:'01 / DELIVERY LOOP',title:'从需求意图，一路走到真实合入。',body:'澄清、设计、开发、验证与 MR 迭代相互衔接；真实失败进入修复，检视意见由人判断与分派。'},
+ knowledge:{label:'02 / KNOWLEDGE LOOP',title:'发现缺口、补充知识、交付复盘，再回到下一次开发。',body:'自动萃取与复盘产生草稿，人工审视后入库；按需检索和定时整理，让经验持续积累并可复用。'},
+ philosophy:{label:'03 / DESIGN PRINCIPLES',title:'可靠、易改、够快、安全，要落实在具体取舍里。',body:'不把流程完整当作质量证明；人把握方向、Agent 执行，让真实交付成为组织能力的积累。'}
+};
+const beats=[
+ ['overview',[],[], '先看全貌：两条闭环，一套工程底座。','交付闭环让需求落成真实代码；知识闭环把这次工作留下的经验，再带回下一次开发。'],
+ ['delivery',['intent','design'],['delivery-0'],'把大需求拆成能推进的小目标。','先明确目标与验收，再分析职责和依赖。公共准备按需先行，可独立的任务并行推进。'],
+ ['delivery',['design','develop'],['delivery-1'],'让 Agent 带着方法和知识行动。','Workflow、Skill 和适用知识进入当前工作；主会话与子任务协作，完成代码与 UT。'],
+ ['delivery',['develop','verify'],['delivery-2','repair'],'质量来自真实验证，也来自人的判断。','编译、测试与流水线失败进入修复；人工及 AI 检视意见先由责任人选择，避免无休止的自动返工。'],
+ ['delivery',['iterate','deliver'],['delivery-4'],'从修改代码，走到真正完成交付。','宿主连接 Git、MR 与流水线，持续观察远端结果；过程可见、可暂停、可恢复。'],
+ ['knowledge',['deliver','retrospect'],['learn'],'合入之后，自动复盘为什么一次没有写对。','结合首次交付后的修改与检视意见，提炼经验草稿，让一次交付成为知识闭环的起点。'],
+ ['knowledge',['retrospect','organize','adopt'],['retrospect-organize','organize-adopt'],'提炼共性，交给人审视。','不只记录某个任务怎么改；归纳适用条件、通用做法与例子，成员可以修改和采纳。'],
+ ['knowledge',['adopt','assets','search'],['adopt-assets','assets-search'],'知识可管理，更要能在需要时被找到。','已采纳内容以 Markdown 保存并建立索引，按语言、模块和当前问题检索，保持来源与适用范围。'],
+ ['knowledge',['search','extract','organize'],['search-extract','gap'],'已有知识不够，就从真实源码补齐。','Agent 发现组件用法缺口时，可启动后台萃取；同语言组件仓与跨仓真实用例共同支撑范式提炼。'],
+ ['knowledge',['search','design','develop'],['reuse','delivery-1'],'回到开发，闭环才真正成立。','经验必须回到下一次设计与实现；定时整理让知识持续更新，而不是堆积成零散的文件。'],
+ ['overview',foundation,[],'让这套能力可靠运行，也能持续修改。','Agent 协作、可维护的方法资产、任务恢复与外部工具适配，构成 MAE Flow 的工程底座。'],
+ ['philosophy',[],[],'从个人提效，走向组织级 AI 工程能力。','人做关键判断，Agent 承担执行；减少无效等待，用真实交付积累可复用的团队能力。']
+];
+let scene='overview',playing=false,beat=-1,timer;
+const $=s=>document.querySelector(s);
+function caption(label,title,body){$('#chapter').textContent=label;$('#narrative-title').textContent=title;$('#narrative-body').textContent=body}
+function clearParticles(){svg.querySelectorAll('.flow-particle').forEach(n=>n.remove())}
+function focus(ids=[],edgeIds=[]){const selected=new Set(ids),es=new Set(edgeIds);nodes.forEach(n=>{n.classList.toggle('dim',selected.size>0&&!selected.has(n.dataset.nodeId));n.classList.toggle('active',selected.has(n.dataset.nodeId));n.setAttribute('aria-pressed',String(selected.has(n.dataset.nodeId)))});edges.forEach(e=>{const lit=es.has(e.dataset.edgeId)||(es.size===0&&selected.has(e.dataset.edgeFrom)&&selected.has(e.dataset.edgeTo));e.classList.toggle('dim',selected.size>0&&!lit);e.classList.toggle('active',lit)});clearParticles();if(playing){svg.querySelectorAll('path[data-edge-id].active').forEach(p=>{const c=p.cloneNode();for(const a of [...c.attributes])if(a.name.startsWith('data-')||a.name==='marker-end')c.removeAttribute(a.name);c.setAttribute('class','flow-particle');c.setAttribute('stroke',p.classList.contains('knowledge-edge')?'#a0f9df':'#b5eaff');p.after(c)})}}
+function stop(){playing=false;clearTimeout(timer);clearParticles();$('#play').innerHTML='▶ <span>播放讲解</span>';$('#play').setAttribute('aria-label','播放完整讲解')}
+function setScene(name,manual=true){if(manual){stop();beat=-1}scene=name;$('#diagram').inert=name==='philosophy';$('#diagram').setAttribute('aria-hidden',String(name==='philosophy'));$('#detail').hidden=true;$('#philosophy').hidden=name!=='philosophy';document.querySelectorAll('[data-scene]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.scene===name)));const ids=name==='delivery'?delivery:name==='knowledge'?[...knowledge,'design','deliver']:[];focus(ids);const s=scenes[name];caption(s.label,s.title,s.body);if(manual)$('#progress').style.width='12%'}
+function showBeat(index){beat=(index+beats.length)%beats.length;const [name,ids,es,title,body]=beats[beat];setScene(name,false);focus(ids,es);caption(`${String(beat+1).padStart(2,'0')} / ${beats.length} · ${name==='knowledge'?'知识闭环':name==='delivery'?'交付闭环':name==='philosophy'?'设计思想':'全景架构'}`,title,body);$('#progress').style.width=`${(beat+1)/beats.length*100}%`;if(playing){clearTimeout(timer);timer=setTimeout(()=>{if(beat===beats.length-1)stop();else showBeat(beat+1)},7200)}}
+function togglePlay(){if(playing){stop();return}playing=true;$('#play').innerHTML='Ⅱ <span>暂停讲解</span>';$('#play').setAttribute('aria-label','暂停讲解');showBeat(beat<0||beat===beats.length-1?0:beat)}
+document.querySelectorAll('[data-scene]').forEach(b=>b.addEventListener('click',()=>setScene(b.dataset.scene)));
+$('#play').addEventListener('click',togglePlay);
+$('#previous').addEventListener('click',()=>{stop();showBeat(beat<=0?0:beat-1)});
+$('#next').addEventListener('click',()=>{stop();showBeat(beat+1)});
+function showDetail(n){stop();const id=n.dataset.nodeId,[category,body,foot]=details[id];$('#detail-category').textContent=category;$('#detail-title').textContent=graph.components.find(c=>c.id===id).label;$('#detail-body').textContent=body;$('#detail-foot').textContent=foot;$('#detail').hidden=false;focus([id]);$('#close-detail').focus()}
+nodes.forEach(n=>{n.addEventListener('click',()=>showDetail(n));n.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();showDetail(n)}})});
+$('#close-detail').addEventListener('click',()=>setScene(scene));
+$('#fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch{caption('全屏提示','可使用浏览器全屏展示。','当前浏览器未开放网页全屏权限，可以使用浏览器的全屏功能继续演示。')}});
+document.addEventListener('fullscreenchange',()=>{$('#fullscreen').innerHTML=document.fullscreenElement?'⛶ <span>退出全屏</span>':'⛶ <span>全屏</span>'});
+$('#export').addEventListener('click',()=>{if(/^https?:$/.test(location.protocol)){const a=document.createElement('a');a.href=new URL('architecture.svg',location.href).href;a.download='MAE-Flow-端到端架构.svg';a.click();return}const copy=svg.cloneNode(true);copy.setAttribute('xmlns',ns);copy.querySelectorAll('.flow-particle').forEach(n=>n.remove());copy.querySelectorAll('.dim,.active').forEach(n=>n.classList.remove('dim','active'));const style=document.createElementNS(ns,'style');style.textContent=$('#presentation-style').textContent;copy.prepend(style);const bg=document.createElementNS(ns,'rect');bg.setAttribute('width','100%');bg.setAttribute('height','100%');bg.setAttribute('fill','#081322');style.after(bg);const url=URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)],{type:'image/svg+xml'}));const a=document.createElement('a');a.href=url;a.download='MAE-Flow-端到端架构.svg';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
+document.addEventListener('keydown',e=>{if(e.target.closest('button,input,textarea,[data-node-id]'))return;if(e.key===' '){e.preventDefault();togglePlay()}else if(e.key==='ArrowRight'){stop();showBeat(beat+1)}else if(e.key==='ArrowLeft'){stop();showBeat(beat<=0?0:beat-1)}else if(e.key==='Escape'){stop();setScene('overview')}});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stop()});
+setScene('overview');
+</script></body></html>

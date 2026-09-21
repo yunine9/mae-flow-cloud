@@ -1,0 +1,447 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "MAE Flow · 从需求到交付的 AI 工程平台",
+    "subtitle": "交付闭环 × 知识闭环",
+    "locale": "zh-CN",
+    "animation": "none",
+    "visual_preset": "blueprint",
+    "quality_profile": "standard",
+    "viewBox": [
+      1090,
+      454
+    ],
+    "legend": {
+      "mode": "hidden"
+    },
+    "views": [
+      {
+        "id": "delivery",
+        "label": "交付闭环",
+        "focus": [
+          "intent",
+          "design",
+          "develop",
+          "verify",
+          "iterate",
+          "deliver"
+        ],
+        "note": "Agent 执行，人掌握关键取舍，真实验证与合入结果完成交付。"
+      },
+      {
+        "id": "knowledge",
+        "label": "知识自闭环",
+        "focus": [
+          "extract",
+          "search",
+          "assets",
+          "adopt",
+          "organize",
+          "retrospect",
+          "design",
+          "develop",
+          "deliver"
+        ],
+        "note": "开发消费知识、缺口触发萃取、交付触发复盘，经人审视后持续复用。"
+      },
+      {
+        "id": "foundation",
+        "label": "工程底座",
+        "focus": [
+          "agents",
+          "harness",
+          "tools"
+        ],
+        "note": "Workflow 与 Skill 组织方法，宿主连接真实工程环境。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "intent",
+      "type": "frontend",
+      "label": "需求澄清",
+      "sublabel": "目标与边界 · Spec",
+      "pos": [
+        54,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "design",
+      "type": "frontend",
+      "label": "方案与拆分",
+      "sublabel": "模块职责与依赖 · Story",
+      "pos": [
+        222,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "develop",
+      "type": "frontend",
+      "label": "协同开发",
+      "sublabel": "按依赖并行 · 代码与 UT",
+      "pos": [
+        390,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "verify",
+      "type": "frontend",
+      "label": "验证与检视",
+      "sublabel": "编译 / 测试 / 人工检视",
+      "pos": [
+        558,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "iterate",
+      "type": "frontend",
+      "label": "MR 迭代",
+      "sublabel": "推送 · 反馈 · 修复",
+      "pos": [
+        726,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "deliver",
+      "type": "frontend",
+      "label": "合入交付",
+      "sublabel": "代码 / 验证 / 交付摘要",
+      "pos": [
+        894,
+        48
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "extract",
+      "type": "backend",
+      "label": "源码范式萃取",
+      "sublabel": "组件源码 + 跨仓真实用例",
+      "pos": [
+        54,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "search",
+      "type": "backend",
+      "label": "按需检索应用",
+      "sublabel": "语言 · 模块 · 当前问题",
+      "pos": [
+        222,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "assets",
+      "type": "backend",
+      "label": "组织知识资产",
+      "sublabel": "规范 · 组件 · 业务 · 经验",
+      "pos": [
+        390,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "adopt",
+      "type": "backend",
+      "label": "人工审视采纳",
+      "sublabel": "可修改 · 有依据 · 可追溯",
+      "pos": [
+        558,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "organize",
+      "type": "backend",
+      "label": "抽象与定时整理",
+      "sublabel": "归纳共性 · 合并零散知识",
+      "pos": [
+        726,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "retrospect",
+      "type": "backend",
+      "label": "交付经验复盘",
+      "sublabel": "修改差异 + 检视意见",
+      "pos": [
+        894,
+        216
+      ],
+      "size": [
+        142,
+        62
+      ]
+    },
+    {
+      "id": "agents",
+      "type": "cloud",
+      "label": "Agent 协作执行",
+      "sublabel": "分析 · 编码 · 构建 · 萃取",
+      "pos": [
+        54,
+        363
+      ],
+      "size": [
+        310,
+        68
+      ],
+      "tag": "主会话与子任务按需协作"
+    },
+    {
+      "id": "harness",
+      "type": "security",
+      "label": "MAE Flow 工程底座",
+      "sublabel": "Workflow / Skill · 编排与恢复",
+      "pos": [
+        390,
+        363
+      ],
+      "size": [
+        310,
+        68
+      ],
+      "tag": "真实状态 · 隔离执行 · 权限与留痕"
+    },
+    {
+      "id": "tools",
+      "type": "external",
+      "label": "连接现有研发环境",
+      "sublabel": "代码仓 / CodeHub · CI · 构建环境",
+      "pos": [
+        726,
+        363
+      ],
+      "size": [
+        310,
+        68
+      ],
+      "tag": "代码搜索 · 小鲁班通知"
+    }
+  ],
+  "connections": [
+    {
+      "id": "delivery-0",
+      "from": "intent",
+      "to": "design",
+      "variant": "emphasis"
+    },
+    {
+      "id": "delivery-1",
+      "from": "design",
+      "to": "develop",
+      "variant": "emphasis"
+    },
+    {
+      "id": "delivery-2",
+      "from": "develop",
+      "to": "verify",
+      "variant": "emphasis"
+    },
+    {
+      "id": "delivery-3",
+      "from": "verify",
+      "to": "iterate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "delivery-4",
+      "from": "iterate",
+      "to": "deliver",
+      "variant": "emphasis"
+    },
+    {
+      "id": "repair",
+      "from": "verify",
+      "to": "develop",
+      "label": "失败反馈 → 修复验证",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          629,
+          150
+        ],
+        [
+          461,
+          150
+        ]
+      ],
+      "labelAt": [
+        550,
+        156
+      ]
+    },
+    {
+      "id": "learn",
+      "from": "deliver",
+      "to": "retrospect",
+      "label": "合入后自动复盘",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        965,
+        172
+      ]
+    },
+    {
+      "id": "retrospect-organize",
+      "from": "retrospect",
+      "to": "organize",
+      "variant": "emphasis"
+    },
+    {
+      "id": "organize-adopt",
+      "from": "organize",
+      "to": "adopt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "adopt-assets",
+      "from": "adopt",
+      "to": "assets",
+      "variant": "emphasis"
+    },
+    {
+      "id": "assets-search",
+      "from": "assets",
+      "to": "search",
+      "variant": "emphasis"
+    },
+    {
+      "id": "search-extract",
+      "from": "search",
+      "to": "extract",
+      "variant": "emphasis"
+    },
+    {
+      "id": "reuse",
+      "from": "search",
+      "to": "design",
+      "label": "检索带入设计与实现",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        293,
+        172
+      ]
+    },
+    {
+      "id": "gap",
+      "from": "extract",
+      "to": "organize",
+      "label": "发现知识缺口 → 自动萃取真实范式 → 补充知识",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          125,
+          322
+        ],
+        [
+          797,
+          322
+        ]
+      ],
+      "labelAt": [
+        461,
+        328
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "01  交付闭环  /  从意图到真实交付",
+      "wraps": [
+        "intent",
+        "design",
+        "develop",
+        "verify",
+        "iterate",
+        "deliver"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "02  知识自闭环  /  从一次交付到持续复用",
+      "wraps": [
+        "extract",
+        "search",
+        "assets",
+        "adopt",
+        "organize",
+        "retrospect"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "region",
+      "label": "03  工程能力底座  /  将 Agent 接入团队研发体系",
+      "wraps": [
+        "agents",
+        "harness",
+        "tools"
+      ],
+      "pad": 24
+    }
+  ]
+}
