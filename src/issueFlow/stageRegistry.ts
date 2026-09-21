@@ -426,8 +426,7 @@ export function gateOptionLabel(kind: IssueGateKind, code: string): string {
 export type GateVerdict =
   | "advance"       // analysis_confirm+confirm:推进到 confirmTo
   | "rework"        // 有补充意见/自由作答:留在或回流分析
-  | "suspend"       // conclude+issue:挂起待关联单号
-  | "archive"       // conclude+non_issue:闭环归档
+  | "archive"       // conclude+issue/non_issue:闭环归档(issue 出提单模板,ADR-0048)
   | "fail"          // env_verify+fail:验证发现问题回退(通过无码——合入即通过)
   | "resume_watch"  // pipeline_unfixable+resume:重置监看账重看同一 SHA
   | "human_evidence" // pipeline_evidence+supply:原文入账,开修复回合
@@ -436,8 +435,8 @@ export type GateVerdict =
 /** 决策码分派单点。语义钉死:
  * - analysis_confirm:confirm 推进;其余(补充意见码/自由文本)一律
  *   留在分析阶段完善重提——与旧 startsWith 前缀匹配的 else 分支一致;
- * - conclude:issue 挂起 / non_issue 闭环;其余回流分析(旧的
- *   includes 匹配同样认不得就回流);
+ * - conclude:issue 与 non_issue 都闭环归档(issue 出提单模板,
+ *   ADR-0048);其余回流分析(旧的 includes 匹配同样认不得就回流);
  * - env_verify:fail 回退(通过没有码——MR 全部合入即视为通过,ADR-0034);
  *   认不得的原样 409(旧语义:验证闸不允许自由发挥)。 */
 export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
@@ -445,9 +444,9 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
     case "analysis_confirm":
       return code === "confirm" ? "advance" : "rework";
     case "conclude":
-      if (code === "issue") return "suspend";
-      if (code === "non_issue") return "archive";
-      return "rework";
+      // ADR-0048:确认是问题与非问题都直接闭环归档(前者出提单模板),
+      // 挂起与转正退役;认不得的回流分析。
+      return code === "issue" || code === "non_issue" ? "archive" : "rework";
     case "env_verify":
       if (code === "fail") return "fail";
       return "unrecognized";

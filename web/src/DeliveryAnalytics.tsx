@@ -10,6 +10,8 @@ import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryT
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
 import { cn } from "cn";
 import { getIssueOnceGenerated, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow } from "./api";
+import { getIssueRegistrationStats, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
+import { TicketTemplateCard } from "./issues/TicketTemplateCard";
 import { onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
 
@@ -69,9 +71,10 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
   return <tr className={child ? "delivery-child-row" : undefined}><td><button className="delivery-task-link" onClick={() => onSelect(id)}><b>{id}</b><span>{title}</span></button></td><td><TaskLanguages tasks={tasks} /></td><td>{parent ? <>已合入子任务 {tasks.filter(t => t.merged).length}/{tasks.length}{tasks.some(t => !t.merged) && <small>含未合入暂计</small>}</> : tasks.every(t => t.merged) ? "已合入" : "进行中 · 暂计"}</td><td>{values.available ? `${num(values.total)} 行` : "—"}</td><td className="delivery-accent">{percent(values.firstPercent)}</td><td title={tokens.available ? `已记录输入 ${num(tokens.input)} · 输出 ${num(tokens.output)}` : "没有模型用量记录"}><strong>{tokens.available ? num(tokens.total) : "—"}</strong>{tokens.available < tokens.tasks && <small>{tokens.available ? "部分用量已记录" : "暂无用量记录"}</small>}</td><td>{values.available}/{tasks.length}{!values.available && <small>待取证</small>}</td></tr>;
 }
 
-/** 问题处理页签(ADR-0044,工单 #340):一次生成占比的每会话明细与
- *  特性聚合——读侧与团队问题页统计瓦片同一端点、同一数字;行点击
- *  下钻行归属证据(伴生快照原样)。纯呈现层,不建第二套口径。
+/** DTS 页签(原「问题处理」,ADR-0044,工单 #340):一次生成占比的
+ *  每会话明细与特性聚合——读侧与团队问题页统计瓦片同一端点、同一
+ *  数字;行点击下钻行归属证据(伴生快照原样)。人群=有单交付会话;
+ *  无单会话在「登记问题」页签(ADR-0048)。纯呈现层,不建第二套口径。
  *  导出仅供视觉走查场景脚本挂载(与需求侧同款做法)。 */
 export function IssueAnalyticsTab() {
   const [stats, setStats] = useState<IssueOnceGenerated>();
@@ -133,7 +136,7 @@ export function IssueAnalyticsTab() {
         `${stats?.passed ?? 0}/${stats?.total ?? 0} 会话 ≥ 90%`,
         "单会话首次生成占比 ≥ 达标线(参数,当前 90%)判达标;多仓会话按工作行加权合成。分母=有统计数据的完成交付会话。")}
       {tile("一次定位率", stats?.localization.rate,
-        `${stats?.localization.passed ?? 0}/${delivered} 会话`,
+        `${stats?.localization.passed ?? 0}/${stats?.localization.total ?? delivered} 会话`,
         "分析报告一版过即一次定位;检视提出修改会生成新版本。")}
       {tile("一次验证率", stats?.verify.rate,
         `${stats?.verify.passed ?? 0}/${delivered} 会话`,
@@ -213,9 +216,163 @@ export function IssueAnalyticsTab() {
     </Sheet>
   </div>;
 }
+/** 登记问题页签(ADR-0048):无单会话的结论漏斗与研究质量。只数
+ *  结论已出的会话(非问题/确认是问题/取消),研究进行中与存量挂起
+ *  一律不进;一次定位分母=非问题+确认是问题。纯呈现层,与登记问题
+ *  统计端点同一数字;「确认是问题」行下钻报告版本账与提单模板卡。 */
+export function RegistrationAnalyticsTab() {
+  const [stats, setStats] = useState<IssueRegistrationStats>();
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [days, setDays] = useState("");
+  const [dim, setDim] = useState<"module" | "reporter" | "session">("module");
+  const [module, setModule] = useState("*");
+  const [selected, setSelected] = useState<IssueRegistrationSessionRow | null>(null);
+  const load = async (range: string) => {
+    setBusy(true); setError("");
+    try { setStats(await getIssueRegistrationStats(range ? Number(range) : undefined)); }
+    catch (e) { setError(e instanceof Error ? e.message : "加载失败"); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { void load(days); }, [days]);
+  const rows = useMemo(() => (stats?.per_session ?? [])
+    .filter((row) => module === "*" || row.module === module), [stats, module]);
+  const modules = stats?.by_module ?? [];
+  const reporters = stats?.by_reporter ?? [];
+  const pct = (value: number | null | undefined) =>
+    value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
+  const help = (tip: string) =>
+    <span className="help-tip" data-tip={tip}>
+      <HelpCircle size={14} className="text-muted-foreground" />
+    </span>;
+  const tile = (label: string, value: string, sub: string, tip: string) =>
+    <div className="rounded-[14px] border border-line bg-surface px-5 py-4">
+      <small className="mb-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
+        {label}{help(tip)}
+      </small>
+      <strong className="block text-[32px] leading-none tracking-[-0.02em] tabular-nums text-text-strong">
+        {value}</strong>
+      <span className="mt-2 block text-xs text-muted-foreground">{sub}</span>
+    </div>;
+  const badge = (conclusion: IssueRegistrationSessionRow["conclusion"]) =>
+    conclusion === "issue"
+      ? <span className="inline-flex items-center rounded-full bg-active-soft px-2 py-0.5 text-xs font-medium text-active">确认是问题</span>
+      : conclusion === "non_issue"
+        ? <span className="inline-flex items-center rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">非问题</span>
+        : <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs text-faint">取消</span>;
+  return <div className="grid gap-4">
+    {error && <p role="alert" className="delivery-error">{error}</p>}
+    <div className="flex flex-wrap items-center gap-3">
+      <AnalysisFilter label="时间" value={days} onChange={setDays}
+        items={[{ value: "30", label: "近 30 天" }, { value: "90", label: "近 90 天" }, { value: "", label: "全部时间" }]} />
+      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+        <BarChart3 size={15} />研究完成 {stats?.total ?? 0}
+        {help("结论已出的无单会话:非问题 + 确认是问题 + 取消。研究进行中与存量挂起一律不进任何数字。")}
+      </span>
+    </div>
+    <div className="grid grid-cols-[repeat(4,1fr)] gap-3.5">
+      {tile("登记总数", String(stats?.total ?? 0),
+        `非问题 ${stats?.non_issue ?? 0} · 确认是问题 ${stats?.issue_confirmed ?? 0} · 取消 ${stats?.canceled ?? 0}`,
+        "结论已出的无单(自研)问题会话数:研究进行中的暂不进,结论落地后自动计入;有单会话在 DTS 页签,不在此处。")}
+      {tile("非问题闭环率", pct(stats ? stats.total ? stats.non_issue / stats.total * 100 : null : null),
+        `${stats?.non_issue ?? 0}/${stats?.total ?? 0} 研究完成`,
+        "研究结论为「非问题」的占比。分母=研究完成(非问题+确认是问题+取消);挂起与进行中不进。")}
+      {tile("确认是问题率", pct(stats ? stats.total ? stats.issue_confirmed / stats.total * 100 : null : null),
+        `${stats?.issue_confirmed ?? 0}/${stats?.total ?? 0} 研究完成`,
+        "研究结论为「确认是问题」的占比:会话闭环并产出提单模板,测试拿模板去 DTS 提单后,新单号从 DTS 列表发起有单会话。分母同左。")}
+      {tile("一次定位率", pct(stats?.localization.rate),
+        `${stats?.localization.passed ?? 0}/${stats?.localization.total ?? 0} 会话`,
+        "分析报告一版就收口即一次定位;检视提出修改会生成新版本。分母=非问题+确认是问题,取消不构成一次研究。")}
+    </div>
+    <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
+      {([["module", "按模块"], ["reporter", "按登记人"], ["session", "按会话"]] as const).map(([key, label]) =>
+        <button key={key} type="button" aria-pressed={dim === key}
+          className={cn("border-r border-line px-5 py-2 text-sm last:border-r-0",
+            dim === key ? "bg-canvas font-semibold text-text-strong" : "text-muted-foreground hover:text-text-strong")}
+          onClick={() => setDim(key)}>{label}</button>)}
+    </div>
+    {dim === "module" && <section className="delivery-card"><h2 className="flex items-center gap-2">按模块
+      {help("无单会话按登记时所选业务模块聚合;点模块名可筛选按会话明细")}
+    </h2>
+      <div className="delivery-table-scroll"><table><thead><tr>
+        <th>模块</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>取消</th><th>一次定位率</th>
+      </tr></thead>
+        <tbody>{modules.map((entry) => <tr key={entry.key}>
+          <td><button className="delivery-task-link" aria-pressed={module === entry.key}
+            onClick={() => setModule(module === entry.key ? "*" : entry.key)}><b>{entry.key}</b></button></td>
+          <td>{entry.total}</td>
+          <td>{entry.non_issue}</td>
+          <td>{entry.issue_confirmed}</td>
+          <td className="text-muted-foreground">{entry.canceled}</td>
+          <td className="delivery-accent pct">{pct(entry.localization_rate)}</td>
+        </tr>)}</tbody></table></div>
+      {!modules.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有登记问题"}</p>}
+    </section>}
+    {dim === "reporter" && <section className="delivery-card"><h2 className="flex items-center gap-2">按登记人
+      {help("按登记时指派的登记人聚合;登记人缺席的老会话按归属兜底")}
+    </h2>
+      <div className="delivery-table-scroll"><table><thead><tr>
+        <th>登记人</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>取消</th><th>一次定位率</th>
+      </tr></thead>
+        <tbody>{reporters.map((entry) => <tr key={entry.key}>
+          <td className="wrap"><b>{entry.key}</b></td>
+          <td>{entry.total}</td>
+          <td>{entry.non_issue}</td>
+          <td>{entry.issue_confirmed}</td>
+          <td className="text-muted-foreground">{entry.canceled}</td>
+          <td className="delivery-accent pct">{pct(entry.localization_rate)}</td>
+        </tr>)}</tbody></table></div>
+      {!reporters.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有登记问题"}</p>}
+    </section>}
+    {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
+      {help("点「确认是问题」行查看报告版本账与提单模板卡")}
+    </h2>
+      <div className="delivery-table-scroll"><table><thead><tr>
+        <th>会话</th><th>模块</th><th>登记人</th><th>责任人</th><th>结论</th><th>报告版本</th><th>一次定位</th><th>收口时间</th>
+      </tr></thead>
+        <tbody>{rows.map((row) => <tr key={row.id}
+          style={{ cursor: row.conclusion === "issue" ? "pointer" : undefined }}
+          title={row.conclusion === "issue" ? "查看报告版本账与提单模板" : undefined}
+          onClick={row.conclusion === "issue" ? () => setSelected(row) : undefined}>
+          <td><span className="delivery-task-link"><b>{row.id}</b><span>{row.title}</span></span></td>
+          <td>{row.module}</td>
+          <td>{row.reporter}</td>
+          <td>{row.account}</td>
+          <td>{badge(row.conclusion)}</td>
+          <td className="pct">{row.conclusion === "canceled" ? "—" : `${row.report_version_count} 版`}</td>
+          <td>{row.localization_pass === undefined
+            ? <span className="text-muted-foreground">—</span>
+            : row.localization_pass
+              ? <span className="font-semibold text-success">✓ 一版</span>
+              : <span className="font-semibold text-danger">✗ 多版</span>}</td>
+          <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
+        </tr>)}</tbody></table></div>
+      {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有登记问题"}</p>}
+    </section>}
+    <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
+      <p>本页只数结论已出的无单(自研)会话:非问题闭环率与确认是问题率的分母=研究完成(非问题+确认是问题+取消);一次定位率分母=非问题+确认是问题(取消不构成一次研究);研究进行中与存量挂起一律不进。</p>
+      <p>一次定位率=分析报告一版过,检视提出修改会生成新版本。确认是问题即闭环归档并产出提单模板;提单在平台外完成(测试复制进 DTS 提单系统),新单号再从 DTS 列表发起有单会话完整重走。</p>
+    </details>
+    <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
+      <SheetContent className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(560px,46vw)] data-[side=right]:sm:max-w-[min(560px,46vw)]">
+        <SheetHeader><SheetTitle>{selected?.title}</SheetTitle>
+          <SheetDescription>{selected ? `${selected.module} · ${selected.reporter} 登记 · 报告 ${selected.report_version_count} 版` : "报告版本账与提单模板"}</SheetDescription></SheetHeader>
+        <div className="delivery-detail-body">{selected && <>
+          <section className="delivery-card"><h2>报告版本账
+            <span>{selected.localization_pass
+              ? "分析报告一版过,一次定位 ✓"
+              : "检视提出修改生成新版本,一次定位 ✗"}</span></h2>
+            <p className="delivery-muted">结论「{selected.conclusion === "issue" ? "确认是问题" : selected.conclusion === "non_issue" ? "非问题" : "取消"}」· 报告共 {selected.report_version_count} 版 · {new Date(selected.concluded_at).toLocaleDateString("zh-CN")} 收口</p>
+          </section>
+          {selected.conclusion === "issue" && <TicketTemplateCard issueId={selected.id} />}
+        </>}</div>
+      </SheetContent>
+    </Sheet>
+  </div>;
+}
 export function DeliveryAnalytics() {
   const detailTitle = useRef<HTMLHeadingElement>(null);
-  const [tab, setTab] = useState<"requirement" | "issue">("requirement");
+  const [tab, setTab] = useState<"requirement" | "issue" | "registration">("requirement");
   const [report, setReport] = useState<DeliveryAnalysisReport>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -247,7 +404,7 @@ export function DeliveryAnalytics() {
   const detailTokens = aggregateDeliveryTokens(detailRows.map(r => r.id), report?.task_tokens, selectedParent ? selected ?? undefined : undefined);
   return <div className="delivery-analysis">
     <div className="delivery-toolbar"><div className="delivery-tabs">
-      {([["requirement", "需求交付"], ["issue", "问题处理"]] as const).map(([key, label]) =>
+      {([["requirement", "需求交付"], ["issue", "DTS"], ["registration", "登记问题"]] as const).map(([key, label]) =>
         tab === key
           ? <strong key={key}>{label}</strong>
           : <button key={key} type="button" className="text-sm text-muted-foreground transition-colors hover:text-text-strong" aria-pressed={false} onClick={() => setTab(key)}>{label}</button>)}
@@ -278,5 +435,6 @@ export function DeliveryAnalytics() {
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}><SheetContent initialFocus={detailTitle} className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]"><SheetHeader><SheetTitle ref={detailTitle} tabIndex={-1}>{selected} · {selectedParent ? "主任务汇总" : "交付分析"}</SheetTitle><SheetDescription>{selectedParent ? `${detailRows[0]?.parent_title ?? "主任务"} · 当前筛选范围内 ${detailRows.length} 个子任务` : detailRows[0]?.title ?? "交付记录"}</SheetDescription></SheetHeader><div className="delivery-detail-body">{!detailRows.length ? <p>未找到该任务的交付记录。</p> : <><TaskLanguages tasks={detailRows} /><p className="delivery-scope">{selectedParent ? `已合入子任务 ${detailRows.filter(r => r.merged).length}/${detailRows.length}${detailRows.some(r => !r.merged) ? " · 含未合入暂计" : ""}` : detailRows.every(r => r.merged) ? "已合入" : "进行中，以下为最近推送版本的暂计数据"} · 证据覆盖 {detail.available}/{detail.tasks}</p><section className="delivery-card"><h2>Token 消耗 <span>{selectedParent ? "含主任务自身及当前范围子任务" : "本任务累计用量"}</span></h2><div className="grid grid-cols-3 gap-4 py-4"><div>总计<strong className="block text-xl">{detailTokens.available ? num(detailTokens.total) : "—"}</strong></div><div>输入<strong className="block text-xl">{detailTokens.available ? num(detailTokens.input) : "—"}</strong></div><div>输出<strong className="block text-xl">{detailTokens.available ? num(detailTokens.output) : "—"}</strong></div></div>{detailTokens.available < detailTokens.tasks && <p className="delivery-muted">{detailTokens.available}/{detailTokens.tasks} 个任务有用量记录；未记录的历史消耗不估算。</p>}</section><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(detail.total)} 行</span></h2><Donut counts={detail.retained} /></section>{detailRows.map(row => <section className="delivery-card" key={row.id}><div className="delivery-detail-heading"><h2>{row.id} · 提交记录</h2><a href={`/work/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer">工作台 <ExternalLink size={14} /></a>{row.mr_url && <a href={row.mr_url} target="_blank" rel="noreferrer">MR <ExternalLink size={14} /></a>}</div>{row.unavailable && <p className="delivery-note">{row.unavailable}</p>}{row.metric && <><p className="delivery-muted">比较 {row.metric.base.slice(0, 8)} → {row.metric.head.slice(0, 8)} · 排除 {row.metric.excluded_files} 个非代码文本文件</p><ol className="delivery-timeline">{row.metric.commits.map(c => <li key={c.sha}><i style={{ background: categories.find(k => k.key === c.origin)?.color }} /><div><strong>{categories.find(k => k.key === c.origin)?.label}</strong><span className="delivery-commit-size">+{num(c.additions)} / −{num(c.deletions)}</span><p>{c.subject}</p>{c.origin_evidence?.length ? <details><summary>分类依据</summary>{c.origin_evidence.map((text, index) => <p key={index}>{text}</p>)}</details> : null}<small>{c.sha.slice(0, 10)} · {new Date(c.at).toLocaleString("zh-CN")}</small></div></li>)}</ol></>}</section>)}</>}</div></SheetContent></Sheet>
     </>}
     {tab === "issue" && <IssueAnalyticsTab />}
+    {tab === "registration" && <RegistrationAnalyticsTab />}
   </div>;
 }

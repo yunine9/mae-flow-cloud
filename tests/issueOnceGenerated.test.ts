@@ -118,9 +118,9 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(body.no_code, 1, "issue-e 无源码交付");
     // 三根过程率轴与 /issues/stats 同源:分母=完成交付全集(a/b/c/d/e,
     // 不随伴生在缺漂移);种子都没有报告账与验证失败 → 双轴满分、解决满分。
-    assert.deepEqual(body.localization, { passed: 5, rate: 100 });
-    assert.deepEqual(body.verify, { passed: 5, rate: 100 });
-    assert.deepEqual(body.solved, { passed: 5, rate: 100 });
+    assert.deepEqual(body.localization, { passed: 5, total: 5, rate: 100 });
+    assert.deepEqual(body.verify, { passed: 5, total: 5, rate: 100 });
+    assert.deepEqual(body.solved, { passed: 5, total: 5, rate: 100 });
     const repoRows = body.by_repo as Array<{
       repo: string; sessions: number; first: number; total: number; share: number | null;
     }>;

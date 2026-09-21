@@ -70,6 +70,22 @@ test("纯函数:分母=完成交付;无单/非归档/结论非 delivered 全部�
   assert.deepEqual(summary.per_session.map((row) => row.id), ["keep"]);
 });
 
+test("纯函数:转正会话(ADR-0048 存量)一次定位整条剔出,验证轴照常计", () => {
+  const summary = issueOnceRates([
+    facts({ id: "keep" }),
+    // 转正新会话没有分析阶段,版本数 0 在旧规则下白捡一次定位通过——
+    // 剔出定位轴分子分母(研究在前身会话做的);验证轴是它真实走过的。
+    facts({ id: "converted", report_version_count: 0,
+      converted_from: "issue-0" }),
+  ]);
+  assert.equal(summary.total, 2, "完成交付全集不变(验证/解决轴分母不动)");
+  assert.equal(summary.localization.total, 1, "一次定位分母剔除转正会话");
+  assert.equal(summary.localization.passed, 1);
+  assert.equal(summary.localization.rate, 100);
+  assert.equal(summary.repair.total, 2, "验证轴分母照常含转正会话");
+  assert.equal(summary.per_session.length, 2);
+});
+
 test("纯函数:逐会话明细携带检视批次与两轴判定;空集比率 null", () => {
   const summary = issueOnceRates([
     facts({ id: "a", review_count: 2, report_version_count: 3,
@@ -81,8 +97,8 @@ test("纯函数:逐会话明细携带检视批次与两轴判定;空集比率 nu
   ]), [["a", 2, false, false], ["b", 0, true, true]]);
   assert.deepEqual(issueOnceRates([]), {
     total: 0,
-    localization: { passed: 0, rate: null },
-    repair: { passed: 0, rate: null },
+    localization: { passed: 0, total: 0, rate: null },
+    repair: { passed: 0, total: 0, rate: null },
     per_session: [],
   });
 });
@@ -183,9 +199,9 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
     assert.equal(body.total, 4,
       "分母=a/b/c/g;g 的存量 fixed 旧账读侧归一为 delivered,取消 d、"
       + "误报 e、无单 f 不进");
-    assert.deepEqual(body.localization, { passed: 2, rate: 50 },
+    assert.deepEqual(body.localization, { passed: 2, total: 4, rate: 50 },
       "一版报告的 issue-a/g 一次定位;b 两版、c 三版不是");
-    assert.deepEqual(body.repair, { passed: 3, rate: 75 },
+    assert.deepEqual(body.repair, { passed: 3, total: 4, rate: 75 },
       "a/c/g 零验证失败;b 答过一次验证未通过");
     const rows = body.per_session as Array<
       { id: string; reviews: number }>;
@@ -235,7 +251,7 @@ test("验证失败计数兼容生产记账格式(#328):「第 N 轮:」前缀不
       { issueFlow: service, authEnabled: false },
     );
     assert.equal(body.total, 2);
-    assert.deepEqual(body.repair, { passed: 0, rate: 0 },
+    assert.deepEqual(body.repair, { passed: 0, total: 2, rate: 0 },
       "生产格式与历史裸前缀都计为验证未通过,两种账都不再恒满分");
   } finally {
     await service.shutdown().catch(() => undefined);

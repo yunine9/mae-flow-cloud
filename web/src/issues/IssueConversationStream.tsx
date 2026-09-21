@@ -36,10 +36,9 @@
  * 终态给原因说明,查看者(canOperate=false)只见只读提示——写口语义
  * 与拆栏前(#126 及更早)的 canOperate 门零变化。
  *
- * 挂起转正卡(#127):右栏 NEXT ACTION 侧栏拆除后,挂起
- * 会话的关联转正入口由会话视图组装(IssueAssociateCard / 查看模式
- * IssueAssociateFacts)经 suspendedCard 槽下传,渲染在「与 Agent 协作」
- * 头之下、流之上——协作流区顶部,不随流滚动。
+ * 存量挂起说明卡(ADR-0048):挂起会话由会话视图组装存量说明卡
+ * 经 suspendedCard 槽下传,渲染在「与 Agent 协作」头之下、流之上
+ * ——协作流区顶部,不随流滚动;转正已退役,存量走手动归档收口。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -199,9 +198,8 @@ export function IssueConversationStream({
   /** 当前待处理卡(IssueDecisionCard / 查看模式 IssueWaitingFacts),
    * 会话视图组装;卡座把它钉在流末尾的 Agent 气泡内(#125)。 */
   currentCard?: ReactNode;
-  /** 挂起转正卡(#127):协作流区顶部(协作头之下、流之上)渲染,
-   * 会话视图按 status === "suspended" 组装——归属人两段式转正卡,
-   * 查看模式只读说明。 */
+  /** 存量挂起说明卡(ADR-0048):协作流区顶部(协作头之下、流之上)
+   * 渲染,会话视图按 status === "suspended" 组装,责任人/查看模式同卡。 */
   suspendedCard?: ReactNode;
   /** 输入区 dock 容器的节点回调(#125):转交会话视图存为 footerTarget,
    * 当前卡的提交区经 portal 挂进 dock。 */
@@ -550,7 +548,7 @@ export function IssueConversationStream({
         </Tabs>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
-      {/* 挂起转正卡(#127):协作流区顶部,协作头之下、流之上——不进
+      {/* 存量挂起说明卡(ADR-0048):协作流区顶部,协作头之下、流之上——不进
           可滚流区,不会被贴底跟随滚出视野;原 .issue-conv-suspended 槽位
           留白随 issue-workspace 家族退役,直译成槽位工具类。 */}
       {suspendedCard && <div className="mx-3.5 mb-1.5 shrink-0">{suspendedCard}</div>}
@@ -694,8 +692,8 @@ function IssueCollaborationComposer({
         hint: "Agent 启动后就能在这里插话或续聊。",
       }
     : status === "suspended" ? {
-        kind: "blocked", title: "会话挂起中",
-        hint: "在上方协作区关联 DTS 单号转正;转正后到新会话继续。",
+        kind: "blocked", title: "会话挂起中(存量)",
+        hint: "转正已退役:请在会话操作里手动归档收口。",
       }
     : ended ? {
         kind: "blocked", title: "会话已结束",

@@ -165,7 +165,7 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   // 分派直测:每类闸每个码的裁决语义,与协议化之前的分支行为逐项一致。
   assert.equal(gateVerdict("analysis_confirm", "confirm"), "advance");
   assert.equal(gateVerdict("analysis_confirm", "supplement"), "rework");
-  assert.equal(gateVerdict("conclude", "issue"), "suspend");
+  assert.equal(gateVerdict("conclude", "issue"), "archive");
   assert.equal(gateVerdict("conclude", "non_issue"), "archive");
   assert.equal(gateVerdict("conclude", "supplement"), "rework");
   // 验证闸只有「发现问题」一个码(ADR-0043:通过无码——合入即通过);

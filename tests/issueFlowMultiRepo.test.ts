@@ -1,14 +1,15 @@
 /**
  * 问题流多仓契约测试(模块带仓,2026-08-28):登记多仓 + 模块校验、
  * 克隆布局(关联仓彼此平等,平铺 repo/<仓名>/)、无单固定流程多仓
- * 端到端(提示词清单/阶段备注/转正继承)。单仓交付链路不因多仓而变:
+ * 端到端(提示词清单/阶段备注/结论闭环出提单模板,ADR-0048)。
+ * 单仓交付链路不因多仓而变:
  * 推送/MR/部署缺省作用于首个登记仓(repo_url 兼容别名),repo 参数
  * 只扩不破。
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -238,13 +239,12 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
   }
 });
 
-test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名>/ 平铺,转正全继承", async () => {
+test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名>/ 平铺,确认是问题即闭环出模板", async () => {
   const dataDir = mfcTemp("mfc-issue-mr-e2e-");
   // 三个裸仓名相同,钉死 repo/ 平铺命名的去重序号。
   const originA = bareOriginAt(join(dataDir, "a"), "origin.git");
   const originB = bareOriginAt(join(dataDir, "b"), "origin.git");
   const originC = bareOriginAt(join(dataDir, "c"), "origin.git");
-  const TICKET = "DTS-2026-1002";
   const script: Scene[] = [
     { tool: { name: "lookup_modules", input: { keyword: "支付" } } },
     { tool: { name: "bind_module", input: { module_id: "pay-core" } } },
@@ -324,39 +324,30 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
       state_version: gate.gate!.state_version,
       code: "issue",
     });
-    await until(() =>
-      service.get(created.id).status === "suspended" ? 1 : undefined, "挂起");
-
-    const { converted } = await service.associate(created.id,
-      { ticket: TICKET, confirm: true });
-    assert.ok(converted, "确认转正返回新会话");
-    assert.deepEqual(converted!.repo_urls, [originA, originB, originC],
-      "转正继承多仓");
-    assert.equal(converted!.module_id, "pay-core", "模块留痕继承");
-    assert.equal(converted!.module, "支付核心");
-    assert.equal(converted!.inherited_accounts?.issue, created.id,
-      "逐仓账只读引用指向旧会话(#31):账留原地,不拷贝");
-    const newRoot = join(dataDir, "issues", converted!.id);
-    assert.ok(existsSync(join(newRoot, "repo", "origin", ".git")), "首仓工作区继承");
-    assert.ok(existsSync(join(newRoot, "repo", "origin-2", ".git")),
-      "多仓工作区继承(免二次克隆)");
-    const branch = spawnSync("git", ["-C", join(newRoot, "repo", "origin"),
-      "branch", "--show-current"], { encoding: "utf-8" });
-    assert.equal(branch.stdout.trim(), `master_dev_${TICKET}`,
-      "转正时宿主给每个在场仓切好新单号分支");
-
-    await until(() => {
-      const issue = service.get(converted!.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" ? issue : undefined;
-    }, "转正会话首轮以问题卡停机");
+    // ADR-0048:确认是问题直接闭环归档——不再挂起/转正,多仓工作区
+    // 原地保留,当场产出提单模板。
+    const closed = await until(() => {
+      const issue = service.get(created.id);
+      return issue.status === "archived" ? issue : undefined;
+    }, "确认是问题直接归档");
+    assert.equal(closed.conclusion?.kind, "issue",
+      "确认是问题按 issue 结论闭环(ADR-0048)");
+    assert.equal(closed.module, "支付核心", "模块留痕留在本会话");
+    assert.ok(existsSync(join(root, "repo", "origin", ".git")), "首仓工作区原地保留");
+    assert.ok(existsSync(join(root, "repo", "origin-2", ".git")),
+      "多仓工作区原地保留(不迁移不复製)");
+    const template = readFileSync(
+      join(dataDir, "issues", created.id, "issue-ticket-template.md"), "utf8");
+    assert.match(template, /单据标题:下单超时/, "模板带单据标题");
+    assert.match(template, /是问题\(接口超时\)/, "「参考:问题根因」从分析报告抠出正文");
+    assert.match(template, /不应直接采信/, "防采信说明随模板走");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });
 
-// ---- 转正账继承(#31 只读引用):归档旧账可读 + 物理清理后优雅缺省 ----
+// ---- 归档会话详情可读(#31 读取路径):账留原地,前端仓卡照读 ----
 
 /** GET /issues/* 的最小路由假件(与 issueFlowContract 同款:过线 JSON
  * 才算数,不直调服务方法绕过序列化边界)。 */
@@ -386,7 +377,7 @@ function issueGet(
   });
 }
 
-test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,物理清理后优雅缺省", async () => {
+test("确认是问题多仓闭环:账留原地,归档会话详情全量可读(#31 读取路径)", async () => {
   const dataDir = mfcTemp("mfc-issue-inherit-");
   const originA = bareOriginAt(join(dataDir, "a"), "alpha.git");
   const originB = bareOriginAt(join(dataDir, "b"), "beta.git");
@@ -402,13 +393,6 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:扣款重复" } } },
     { text: "等用户确认。" },
-    // 转正会话首轮以问题卡合法停机:重启恢复不动 waiting_user,
-    // 第二个服务起来后现场保持原样。
-    { tool: { name: "AskUserQuestion", input: { questions: [{
-      question: "已继承分析报告,继续修复?",
-      options: ["继续", "先停"],
-      recommended: "继续",
-    }] } } },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -419,7 +403,6 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
   });
-  let second: IssueFlowService | undefined;
   try {
     createBusinessModule(dataDir, {
       id: "pay-core", name: "支付核心", description: "收单与清结算",
@@ -439,16 +422,10 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
       return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
         ? issue : undefined;
     }, "无单结论闸");
-    service.answer(created.id, {
-      state_version: gate.gate!.state_version,
-      code: "issue",
-    });
-    await until(() =>
-      service.get(created.id).status === "suspended" ? 1 : undefined, "挂起");
 
     // 旧账数据:无单场景到不了交付工具(绑单前推送/MR 被机械拒绝),
-    // 台账直填进旧会话现场——这里钉的是"引用读回账"的读取路径,不是
-    // 交付工具的记账语义(那在交付链路自己的测试里)。
+    // 台账直填进会话现场——这里钉的是"归档后账留原地、详情可读"的
+    // 读取路径,不是交付工具的记账语义(那在交付链路自己的测试里)。
     const old = service.session(created.id);
     const at = "2026-08-28T00:00:00Z";
     old.state.pushes = [
@@ -467,60 +444,35 @@ test("转正账继承:converted 只读引用旧账,归档旧会话详情可读,�
     };
     saveState(old.root, old.state);
 
-    const { converted } = await service.associate(created.id,
-      { ticket: TICKET, confirm: true });
-    assert.ok(converted, "确认转正返回新会话");
-    // 引用在场、账不拷贝:新会话三本账缺席,旧账留在原地。
-    assert.equal(converted!.inherited_accounts?.issue, created.id,
-      "converted 带只读引用且指向旧会话");
-    assert.equal(converted!.pushes, undefined, "旧推送账不拷贝进新会话");
-    assert.equal(converted!.mrs, undefined, "旧 MR 账不拷贝进新会话");
-    assert.equal(converted!.pipelines, undefined, "旧流水线账不拷贝进新会话");
+    service.answer(created.id, {
+      state_version: gate.gate!.state_version,
+      code: "issue",
+    });
+    // ADR-0048:确认是问题直接闭环归档,账留原地不迁移。
+    await until(() =>
+      service.get(created.id).status === "archived" ? 1 : undefined, "直接归档");
     const oldOnDisk = loadState(join(dataDir, "issues", created.id))!;
     assert.equal(oldOnDisk.status, "archived");
-    assert.equal(oldOnDisk.pushes?.length, 1, "旧会话归档但推送账在原地");
-    assert.equal(oldOnDisk.mrs?.length, 1, "旧会话归档但 MR 账在原地");
-    assert.ok(oldOnDisk.pipelines?.[originA], "旧会话归档但流水线账在原地");
+    assert.equal(oldOnDisk.conclusion?.kind, "issue");
+    assert.equal(oldOnDisk.pushes?.length, 1, "归档后推送账在原地");
+    assert.equal(oldOnDisk.mrs?.length, 1, "归档后 MR 账在原地");
+    assert.ok(oldOnDisk.pipelines?.[originA], "归档后流水线账在原地");
 
-    // 详情接口(前端仓卡的读取路径):归档旧会话只读可读,账数据全量
+    // 详情接口(前端仓卡的读取路径):归档会话只读可读,账数据全量
     // 可见——既有 GET /issues/:id 不拦终态,归属同账号放行。
     const oldRead = await issueGet(["issues", created.id], service);
-    assert.equal(oldRead.status, 200, "归档旧会话详情可只读");
+    assert.equal(oldRead.status, 200, "归档会话详情可只读");
     assert.equal(oldRead.body.status, "archived");
     assert.equal(oldRead.body.pushes?.[0]?.repo, originA);
     assert.equal(oldRead.body.mrs?.[0]?.repo, originB);
     assert.equal(oldRead.body.pipelines?.[originA]?.status, "failed");
     assert.equal(oldRead.body.pipelines?.[originA]?.checks?.[0]?.job, "ut-core");
-    const newRead = await issueGet(["issues", converted!.id], service);
-    assert.equal(newRead.status, 200);
-    assert.equal(newRead.body.inherited_accounts?.issue, created.id,
-      "新会话详情携带只读引用(前端仓卡据此读旧账)");
 
-    // 优雅缺省(#31 验收补充):旧会话被物理清理后,重启的服务里引用
-    // 仍在、旧会话详情 404——前端失败一次即静默退回现状,不报错。
-    // 关停前等转正会话首轮停机:现场不在 running,重启恢复零动作。
-    await until(() => {
-      const issue = service.get(converted!.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" ? 1 : undefined;
-    }, "转正会话首轮以问题卡停机");
-    await service.shutdown();
-    forceRm(join(dataDir, "issues", created.id));
-    second = new IssueFlowService({
-      interventionTier: () => "3",
-      dataDir, provider: "maeflow", model: "scripted-v1",
-      modelsJson: model.modelsJson(),
-      dts: new MockDtsGateway(),
-    });
-    const gone = await issueGet(["issues", created.id], second);
-    assert.equal(gone.status, 404, "物理清理后的旧会话详情 404");
-    const survivor = await issueGet(["issues", converted!.id], second);
-    assert.equal(survivor.status, 200, "新会话不受旧会话清理影响");
-    assert.equal(survivor.body.inherited_accounts?.issue, created.id,
-      "引用仍在(读不到由前端静默缺省,服务端不清洗引用)");
+    // 提单模板读路由:确认是问题的会话在场,旧版登记人也能拿到。
+    const templateFile = join(dataDir, "issues", created.id, "issue-ticket-template.md");
+    assert.ok(existsSync(templateFile), "确认是问题当场产出提单模板");
   } finally {
     await service.shutdown().catch(() => undefined);
-    await second?.shutdown().catch(() => undefined);
     await model.stop();
   }
 });

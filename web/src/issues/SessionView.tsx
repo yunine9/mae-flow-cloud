@@ -22,7 +22,6 @@ import {
   GIT_AUTH_ERROR_TAG,
   addIssueTakeoverNote,
   answerIssue,
-  associateIssueTicket,
   attachIssueEnvironment,
   controlIssue,
   fixedStageList,
@@ -34,7 +33,6 @@ import {
   resumeIssueTakeover,
   steerIssue,
   takeoverIssue,
-  type DtsTicketDetail,
   type IssueDetail,
   type IssueEnvironmentForm,
   type IssueStageState,
@@ -44,7 +42,8 @@ import { confirmDialog } from "../ConfirmDialog";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
 import { IssueCodeOriginPanel } from "./CodeOriginPanel";
 import { IssueWarmupLive } from "./IssueWarmupLive";
-import { IssueAssociateCard, IssueAssociateFacts } from "./IssueAssociateCard";
+import { IssueSuspendedCard } from "./IssueSuspendedCard";
+import { TicketTemplateCard } from "./TicketTemplateCard";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
 import { IssueMaterialsPane } from "./MaterialsPane";
@@ -242,32 +241,9 @@ export function IssueSessionView({
     addIssueTakeoverNote(detail.id, text).then(() => undefined);
   const resumeTakeover = (note?: string) =>
     perform(() => resumeIssueTakeover(detail.id, note));
-  /** 挂起会话关联单号转正:两段式(校验过目 → 确认),转正后跳新会话。
-   * 不走 perform:需要把 API 结果(单据详情/新会话)交回关联卡。 */
-  async function associate(ticket: string, confirm: boolean):
-      Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
-    if (busy) return {};
-    setBusy(true);
-    try {
-      const result = await associateIssueTicket(detail.id, { ticket, confirm });
-      if (result.converted) {
-        onListRefresh();
-        onOpenIssue(result.converted.id);
-      } else {
-        const next = await getIssue(detail.id);
-        onChanged(next);
-      }
-      return result;
-    } catch (reason) {
-      onError(String(reason instanceof Error ? reason.message : reason));
-      return {};
-    } finally {
-      setBusy(false);
-    }
-  }
   // 归档门禁(ADR-0034):有单会话不渲染归档按钮——交付出口只有
-  // 「全部 MR 合入自动归档」;无单仅在结论后(挂起待转正)可归,
-  // 结论前禁用并说明,要放弃走终止会话。
+  // 「全部 MR 合入自动归档」;无单存量挂起可归(ADR-0048 后不再新增
+  // 挂起,确认是问题即自动归档),结论前禁用并说明,要放弃走终止会话。
   const manualArchiveAllowed = detail.scenario !== "ticket";
   async function archive() {
     if (!await confirmDialog({
@@ -520,9 +496,13 @@ export function IssueSessionView({
             GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
             由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
             去重),提交区经 portal 挂进输入区 dock(dockRef→footerTarget);
-            查看模式渲染只读事实卡、不出 dock。挂起会话(#127)的关联转正
-            卡走 suspendedCard 槽,渲染在协作头之下、流之上——rail 拆除后
-            转正入口的唯一家。 */}
+            查看模式渲染只读事实卡、不出 dock。存量挂起会话(ADR-0048
+            退役前的停泊态)在 suspendedCard 槽看说明卡,协作头之下、
+            流之上;确认是问题归档的会话同位挂提单模板卡。 */}
+        {detail.status === "archived" && detail.conclusion?.kind === "issue" &&
+          <div className="mb-3">
+            <TicketTemplateCard issueId={detail.id} />
+          </div>}
         <IssueConversationStream
           key={detail.id}
           issueId={detail.id}
@@ -542,10 +522,8 @@ export function IssueSessionView({
                 onAnswer={answer} onEnvironment={attachEnvironment} />
             : <IssueWaitingFacts waiting={waiting} />)
             : undefined}
-          suspendedCard={detail.status === "suspended" ? (canOperate
-            ? <IssueAssociateCard busy={busy} onAssociate={associate} />
-            : <IssueAssociateFacts />)
-            : undefined}
+          suspendedCard={detail.status === "suspended"
+            ? <IssueSuspendedCard /> : undefined}
           dockRef={setDecisionFooterTarget}
           onSteer={sendSteer}
           onReply={sendReply}

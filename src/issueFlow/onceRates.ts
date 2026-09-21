@@ -45,6 +45,10 @@ export interface IssueOnceRateFacts {
   report_version_count: number;
   /** 检视提交批次数(只记账,不参与两轴判定)。 */
   review_count: number;
+  /** 转正血缘(ADR-0048 存量):在场=本会话由无单挂起关联单号转正
+   *  而来,自身没有分析阶段——一次定位轴剔出分子分母(研究在前身
+   *  会话做的,版本数 0 是「没做过」不是「一版过」);验证轴照常计。 */
+  converted_from?: string;
 }
 
 /** 从终态冻结快照(metrics.json,ADR-0042)提取一次率判定事实。
@@ -120,6 +124,8 @@ export function issueOnceOutcome(
 
 export interface IssueOnceRateAxis {
   passed: number;
+  /** 该轴自己的分母(一次定位剔除转正会话后可与 summary.total 不同)。 */
+  total: number;
   /** 占分母的百分数一位小数;分母 0 = null,前端显示 —。 */
   rate: number | null;
 }
@@ -143,6 +149,7 @@ export function issueOnceRates(
 ): IssueOnceRateSummary {
   const per_session: IssueOnceRateRow[] = [];
   let localizationPassed = 0;
+  let localizationTotal = 0;
   let repairPassed = 0;
   for (const row of rows) {
     if (!row.ticket?.trim()) continue;
@@ -151,8 +158,13 @@ export function issueOnceRates(
     // 两轴各测一个裁决点:定位=报告一版过(版本账);修复=环境验证
     // 一次过(验证卡零 fail;自动归档未答卡=验证通过,不进失败计数)。
     const { localization_pass, repair_pass } = issueOnceOutcome(row);
-    if (localization_pass) localizationPassed += 1;
-    if (repair_pass) repairPassed += 1;
+    // 转正会话没有分析阶段,一次定位轴整条剔出(分子分母都剔);
+    // 验证轴是它真实走过的裁决,照常进。
+    if (!row.converted_from) {
+      localizationTotal += 1;
+      if (localization_pass) localizationPassed += 1;
+    }
+    repairPassed += repair_pass ? 1 : 0;
     per_session.push({
       id: row.id, reviews: row.review_count,
       localization_pass, repair_pass,
@@ -161,8 +173,11 @@ export function issueOnceRates(
   const total = per_session.length;
   return {
     total,
-    localization: { passed: localizationPassed, rate: percent(localizationPassed, total) },
-    repair: { passed: repairPassed, rate: percent(repairPassed, total) },
+    localization: {
+      passed: localizationPassed, total: localizationTotal,
+      rate: percent(localizationPassed, localizationTotal),
+    },
+    repair: { passed: repairPassed, total, rate: percent(repairPassed, total) },
     per_session,
   };
 }

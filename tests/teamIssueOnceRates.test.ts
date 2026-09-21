@@ -19,7 +19,7 @@ test("api:一次率二轴走 /issues/stats,分母=完成交付,rate 可为 null"
   assert.match(api, /export function getIssueOnceRates\(\): Promise<IssueOnceRate>/);
   assert.match(api, /return issueFetch\("\/issues\/stats"\);/);
   assert.match(api,
-    /interface IssueOnceRate \{[\s\S]*?total: number;[\s\S]*?localization: \{ passed: number; rate: number \| null \};[\s\S]*?repair: \{ passed: number; rate: number \| null \};/);
+    /interface IssueOnceRate \{[\s\S]*?total: number;[\s\S]*?localization: \{ passed: number; total: number; rate: number \| null \};[\s\S]*?repair: \{ passed: number; total: number; rate: number \| null \};/);
 });
 
 test("App:一次率是独立旁栏路,失败保留上次结果并下传组件", () => {

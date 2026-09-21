@@ -317,7 +317,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
 });
 
 
-test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接归档留报告", async () => {
+test("固定流程无单闭环:结论是问题→直接归档出提单模板(ADR-0048);结论非问题→直接归档留报告", async () => {
   const dataDir = mfcTemp("mfc-issue-noticket-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
@@ -354,19 +354,22 @@ test("固定流程无单闭环:结论是问题→挂起;结论非问题→直接
       state_version: gate.gate!.state_version,
       code: "issue",
     });
-    const suspended = await until(() => {
+    // ADR-0048:确认是问题直接闭环归档,不再挂起;报告与提单模板都
+    // 留在会话目录(过程记录,永不回收)。
+    const archived = await until(() => {
       const issue = service.get(created.id);
-      return issue.status === "suspended" ? issue : undefined;
-    }, "挂起");
-    assert.equal(suspended.stage_states?.[2], "done", "确定结论节点完成");
-    // 挂起不可续聊,只能关联转正或归档。
-    assert.throws(() => service.reply(created.id, "继续"), /挂起中/);
-    // 归档保留报告,结论=问题成立。
-    const archived = await service.control(created.id, { action: "archive" });
+      return issue.status === "archived" ? issue : undefined;
+    }, "确认是问题直接归档");
+    assert.equal(archived.stage_states?.[2], "done", "确定结论节点完成");
     assert.equal(archived.conclusion?.kind, "issue");
-    assert.equal(archived.status, "archived");
     assert.ok(existsSync(join(dataDir, "issues", created.id, "issue-analysis.md")),
       "非交付收口也要留分析报告");
+    const template = readFileSync(
+      join(dataDir, "issues", created.id, "issue-ticket-template.md"), "utf8");
+    assert.match(template, /单据标题:列表导出超时/, "模板带单据标题");
+    assert.match(template, /是问题\(索引缺失导致全表扫描\)/, "「参考:问题根因」抠自分析报告");
+    assert.match(template, /补索引/, "「参考:修改方案」抠自分析报告");
+    assert.match(template, /不应直接采信/, "防采信说明随模板走");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -518,11 +521,11 @@ test("举卡裁决协议化:闸卡带决策码,按码分派文案可变;旧文�
 });
 
 
-test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继承,旧会话归档,单号唯一", async () => {
+test("确认是问题即闭环出提单模板(ADR-0048):直接归档不挂起,转正退役", async () => {
   const dataDir = mfcTemp("mfc-issue-assoc-");
   const origin = bareOrigin(dataDir);
   const script: Scene[] = [
-    // 无单会话走到挂起(先自己拉仓,自报收口后分析阶段才开门)。
+    // 无单会话走到结论闸(先自己拉仓,自报收口后分析阶段才开门)。
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
@@ -539,14 +542,6 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
       options: ["继续跑 UT", "先停"],
       recommended: "继续跑 UT",
     }] } } },
-    // 第二个无单会话(查重用)。
-    { tool: { name: "pull_repo", input: { url: origin } } },
-    { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
-    { tool: { name: "bash", input: { command:
-      "printf '# 问题分析\\n## 问题现象\\n演示现象。\\n## 问题根因:是问题(重复请求)\\n## 置信度\\n高。\\n## 修改方案\\n幂等去重。\\n' > issue-analysis.md" } } },
-    { tool: { name: "submit_analysis",
-      input: { conclusion: "issue", summary: "是问题:重复请求" } } },
-    { text: "等确认。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -554,7 +549,7 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     dts: new MockDtsGateway(),
-    // 转正两段式要等确认卡:显式三档对齐(缺省二档会代答纯选项卡)。
+    // 结论闸等人作答:显式三档对齐(缺省二档会代答纯选项卡)。
     interventionTier: () => "3",
   });
   try {
@@ -577,83 +572,19 @@ test("关联转正:两段式(校验过目→确认),工作区/报告/凭据继�
       state_version: gate.gate!.state_version,
       code: "issue",
     });
-    await until(() =>
-      service.get(created.id).status === "suspended" ? 1 : undefined, "挂起");
-
-    // 查无此单:直接拒。
-    await assert.rejects(
-      () => service.associate(created.id, { ticket: "DTS-9999" }),
-      /查无此单/,
-      "mock 网关只认 DTS-2026-1001~1005,乱编单号必须被拒");
-
-    // 两段式第一段:不 confirm 只校验+回详情过目,状态不动。
-    const preview = await service.associate(created.id, { ticket: TICKET });
-    assert.match(preview.ticket_detail?.content ?? "", /MOCK 单据/);
-    assert.equal(service.get(created.id).status, "suspended", "过目阶段不动状态");
-
-    // 第二段:确认转正。
-    const { converted } = await service.associate(created.id,
-      { ticket: TICKET, confirm: true });
-    assert.ok(converted, "确认后必须返回新会话");
-    assert.equal(converted!.scenario, "ticket");
-    assert.equal(converted!.stage, "fix", "转正直接进问题修改");
-    assert.deepEqual(converted!.stage_states?.slice(0, 3),
-      ["inherited", "inherited", "inherited"], "前三阶段标记继承");
-    assert.equal(converted!.stage_states?.[3], "in_progress",
-      "转正后 fix 阶段必须立即点亮为当前阶段");
-    assert.equal(converted!.converted_from, created.id);
-    const newRoot = join(dataDir, "issues", converted!.id);
-    assert.ok(existsSync(join(newRoot, "repo", "origin", ".git")),
-      "工作区(repo/origin/)继承,免二次克隆");
-    assert.ok(existsSync(join(newRoot, "issue-analysis.md")), "分析报告继承");
-    const branch = spawnSync("git",
-      ["-C", join(newRoot, "repo", "origin"), "branch", "--show-current"],
-      { encoding: "utf-8" });
-    assert.equal(branch.stdout.trim(), BRANCH, "宿主已在副本上用新单号建分支");
-    assert.ok(existsSync(join(dataDir, ".issue-environments", `${converted!.id}.json`)),
-      "环境凭据已复制到新会话");
-    // 两组凭据随后台一起转正:新会话自己的 vault 里页面、后台各自解出,
-    // 页面账号与后台三账号的密码都对得上(#17)。
-    const newVault = new IssueEnvironmentVault(dataDir);
-    assert.equal(newVault.credential(converted!.id,
-      converted!.environment!.credential_ref, "sopuser")?.password,
-      "env-shared-secret", "后台凭据在新会话解出");
-    const old = service.get(created.id);
-    assert.equal(old.status, "archived");
-    assert.equal(old.conclusion?.kind, "issue",
-      "转正收口按问题成立记,血缘见 converted_to(ADR-0037)");
-    assert.equal(old.converted_to, converted!.id);
-    assert.equal(existsSync(
-      join(dataDir, ".issue-environments", `${created.id}.json`)), false,
-      "旧会话凭据在复制完成后销毁");
-    // 新会话首轮在问题修改阶段干活,以问题卡合法停机(不再是裸文本收轮)。
-    await until(() => {
-      const issue = service.get(converted!.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" ? issue : undefined;
-    }, "转正会话首轮以问题卡停机");
-
-    // 单号唯一:第二个挂起会话再关联同单号 → 拒。
-    const second = service.create({
-      account: "dev", title: "重复请求", repoUrl: origin,
-      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
-    });
-    const gate2 = await until(() => {
-      const issue = service.get(second.id);
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "waiting_user" && issue.gate?.kind === "conclude"
-        ? issue : undefined;
-    }, "第二个无单会话结论闸");
-    service.answer(second.id, {
-      state_version: gate2.gate!.state_version,
-      code: "issue",
-    });
-    await until(() =>
-      service.get(second.id).status === "suspended" ? 1 : undefined, "第二个挂起");
-    await assert.rejects(
-      () => service.associate(second.id, { ticket: TICKET, confirm: true }),
-      /已有活跃会话/,
-      "同一登录用户+同一单号只能有一个活跃会话");
+    // ADR-0048:确认是问题直接闭环归档——不再挂起,当场产出提单模板。
+    const closed = await until(() => {
+      const issue = service.get(created.id);
+      return issue.status === "archived" ? issue : undefined;
+    }, "确认是问题直接归档");
+    assert.equal(closed.conclusion?.kind, "issue",
+      "确认是问题按 issue 结论闭环(ADR-0048)");
+    const template = readFileSync(
+      join(dataDir, "issues", created.id, "issue-ticket-template.md"), "utf8");
+    assert.match(template, /单据标题:偶发死锁/, "模板带单据标题");
+    assert.match(template, /是问题\(死锁\)/, "「参考:问题根因」从分析报告抠出正文");
+    assert.match(template, /调整加锁顺序/, "「参考:修改方案」从分析报告抠出正文");
+    assert.match(template, /不应直接采信/, "防采信说明随模板走,接单 AI 不盲信");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
