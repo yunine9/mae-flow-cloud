@@ -476,6 +476,19 @@ export function fixedNudgeNotice(
       remain: budget - attempt + 1,
     });
   }
+  // fix 阶段推完代码停在原地等绿(#357)用专用催办词:此轨迹下没有
+  // MR 也没有监看表(挂表要该仓已有 MR),"等绿"等不到任何通知;通用
+  // 催办词砸回简报纠正不了"等绿才能申报"的误读,专用词直接拆掉前提。
+  // 有 MR 在账不走这里——监看在场时催办本就不触发,等绿后归
+  // settlePipeline 的全绿提醒(pipeline.green.remind_fix)。
+  if (current === "fix" && !state.mrs?.length && state.pushes?.length
+      && !Object.values(state.pipelines ?? {})
+        .some((watch) => watch.watching || watch.status === "running")) {
+    return promptCopy("notices", "nudge.fix_wait_pipeline", {
+      attempt, budget,
+      remain: budget - attempt + 1,
+    });
+  }
   return promptCopy("notices", "nudge.body", {
     attempt,
     budget,

@@ -19,6 +19,10 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 {{stage_brief}}
 继续推进。除非正在等用户作答或确需用户决策,不要停下;再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
 
+## nudge.fix_wait_pipeline
+
+平台催办(第 {{attempt}}/{{budget}} 次): 你推了代码却停在「问题修复」阶段等流水线——本阶段平台不监听流水线(监看要等建了 MR 才启动),等下去不会有任何人把结果送来。complete_stage 在本阶段不是"宣布问题交付完成",只是把流程推进到「提交 MR·跑绿」:推进后 push_branch + create_mr,平台才开始监看流水线并验绿。现在就调 complete_stage 推进,再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
+
 ## restart.resume
 
 平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。
@@ -51,6 +55,12 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 先就问题理解与修改方向与用户对齐,按 grilling 技能(skills/grilling/SKILL.md)的设计树组织提问——先现象后方案、一轮一卡,有疑点用 AskUserQuestion 提问,不要自行猜;对齐后自行判断报告要不要修订:分析确需修正就修订,报告确实站得住就不必为改而改;无论改不改,都重新 submit_analysis 交用户过目。
 前几轮的修复还在分支上,除非新分析推翻,否则不要推倒重来。
 
+## gate.verify.note
+
+平台通知: 会话仍在「环境验证」等 MR 合入,用户通过问题卡自定义答复说了件要处理的事,先把这件事处理掉:
+{{text}}
+这段插话不是「验证发现问题」:不要回退阶段、不要重走分析;处理完如实收口,验证闸保持等待,MR 全部合入仍是验收口径。
+
 ## gate.evidence.header
 
 平台通知: 人工已把交付平台上的流水线报错原文贴进会话(仓 {{repo}},第 {{reds}}/{{max}} 次红灯,仍在「提交 MR·跑绿」阶段)。
@@ -67,6 +77,14 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 失败产物(若已镜像)在会话工作区 pipeline/ 目录,可用 Bash 读全文。
 请按原文修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看;尚未建过 MR 的仓再 create_mr)。
+
+## gate.resume.notes
+
+平台通知: 已按用户的作答重新监看流水线(仓 {{repo}},提交 {{sha}})。用户在卡上留了补充说明,先按补充说明处置,再由平台监看结果。用户补充说明:
+
+{{notes}}
+
+处置若涉及改代码(如回退改动、换方案实现),改完同分支 push_branch——已有 MR 自动跟新提交,平台按新提交重新监看;若补充说明只是确认平台已处理、无需改代码,就不要动作,结束回合等监看结果。
 
 ## env.configured
 
@@ -112,6 +130,10 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 平台通知: 全部 MR 流水线已跑绿({{repos}}),请调 complete_stage(带 mrs 参数申报 MR 清单)完成「提交 MR·跑绿」阶段申报。
 
+## pipeline.green.remind_fix
+
+平台通知: 全部 MR 流水线已跑绿({{repos}}),但会话还停在「问题修复」阶段——交付流程没有走完。请先调 complete_stage 把阶段推进到「提交 MR·跑绿」,再调 complete_stage(带 mrs 参数申报 MR 清单)完成申报验绿。
+
 ## pipeline.green.others_red
 
 平台通知: 仓 {{repo}} 流水线已全绿,但仍有 MR 未跑绿(仍在「提交 MR·跑绿」阶段)。请核实各仓流水线状态,需要的仓修复后同分支 push_branch(已有 MR 自动跟新提交,平台按新提交重新监看)。
@@ -130,6 +152,7 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 - 报错可定位:直接修复,修完同分支 push_branch——已有 MR 自动跟新提交,平台按新提交重新监看流水线;尚未建过 MR 的仓先 create_mr;
 - 报错原文有缺口、无法定位:不要猜改,调 raise_gate(kind=pipeline_evidence, repo={{repo}}),把缺口维度与原因写进 supplement,请用户把平台上的报错原文粘贴进卡作答;
 - 红灯全部来自改代码解决不了的平台侧工具告警:调 raise_gate(kind=pipeline_unfixable, repo={{repo}}),请用户到交付平台处理/豁免后在卡上作答。
+可修与否的判定口径(#368):回退改动、换语言或方案实现同样属于可修——判据是红灯会不会因此消失,不是眼前这份代码能不能小改;不要把「现有实现修不动」当成「改代码解决不了」,也不要锁死在既有实现的方向上打转。
 举了卡就结束本回合等用户作答;直接修复则继续推进,不要空转收嘴。
 
 ## red.deliver.external_head
@@ -144,7 +167,11 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 ## review.triage
 
 [检视意见分诊] 用户对分析报告提交了 {{count}} 条检视意见(清单见下)。请逐条自判每条意见的类型,再按类型处理,不要不分类就整批重写:
-- 回复型(澄清、追问、确认语义——用户在问问题、要解释、要补充信息,或只是求确认):调 respond_review 按意见号逐条回复,回复写完整话,不要只回"已知悉"。outcome 按语义选:需要用户补充说明=needs_clarification;解释说明、确认无需改动=not_fixed;确已因此改动=fixed(附依据)。回复型意见到此闭环:不改 issue-analysis.md、不调 submit_analysis、不申报回退。
+- 回复型(澄清、追问、确认语义——用户在问问题、要解释、要补充信息,或只是求确认):调 respond_review 按意见号逐条回复,回复写完整话,不要只回"已知悉"。outcome 按语义选:需要用户补充说明=needs_clarification;解释说明、确认无需改动=not_fixed;确已因此改动=fixed(附依据)。回复型意见到此闭环:不改 issue-analysis.md、不调 submit_analysis、不申报回退。needs_clarification 不是死路:用户会在该意见处直接回复补充说明,平台把线程递回给你,按答复继续作答。
 - 修改型(需要改动分析报告内容本身:补证据、改结论、修方案):先把本批里的回复型意见逐条 respond_review 回复完,再调 declare_review_rework 申报修改(列出修改型意见号)。平台会整体回退重写并把意见清单重新注入,按清单修订好报告后,把修改型意见也逐条 respond_review 交代(说清改了什么,outcome=fixed 附依据),再重新 submit_analysis,确认卡照旧交用户。
 - 检视回复只落在意见处(respond_review),报告正文不写「检视意见回应」之类的应答段——报告是交付物,重写版也保持干净纸面。
 - 全批都是回复型就不申报、不出版本,逐条回复后结束本回合即可;报告未改动时不要重新 submit_analysis。
+
+## review.reply
+
+[检视回复] 用户在你对检视意见的回复下追加了回复(完整线程见下,可能正是你要的补充说明,也可能是不认可你的解释)。读完线程后只处理这一条:调 respond_review 对该意见给出新回复——旧回执已被用户的回复取代,需要再澄清的就在回复里继续问;确须改动分析报告内容本身才 declare_review_rework(把连带要改的意见一并申报)。其余意见已答复过的不要重复处理。

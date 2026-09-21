@@ -33,6 +33,7 @@ import {
   getIssueFileDiff,
   getIssueMaterials,
   getIssueReviews,
+  replyIssueReview,
   sendIssueReviews,
   type DtsTicketDetail,
   type IssueAnalysisVersion,
@@ -48,6 +49,7 @@ import { GitDiff } from "../GitDiff";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "cn";
 import { formatLocalDateTime } from "../time";
 import { prepareDtsHtml } from "./dtsHtml";
@@ -424,12 +426,39 @@ function reviewOutcomeLabel(outcome: NonNullable<IssueReview["response"]>["outco
   return "需要你补充说明";
 }
 
-function IssueReviewItem({ item, check, onLocate, onRemove }: {
+function IssueReviewItem({ item, check, onLocate, onRemove, canOperate, onReply }: {
   item: IssueReview;
   check?: IssueReviewCheck;
   onLocate: (item: IssueReview) => void;
   onRemove?: () => void;
+  /** 归属操作权:就地回复的写口只给归属人(清单本身仍是纯读面)。 */
+  canOperate?: boolean;
+  onReply?: (item: IssueReview, text: string) => Promise<void>;
 }) {
+  // 回复线程(检视回复环):被用户回复取代的旧回执随 author_replies
+  // 留档,最新回应在 response——按序铺开即「Agent 回复 → 你的回复 → …」。
+  const rounds: Array<{ who: "agent" | "user"; text: string; at: string;
+    outcome?: NonNullable<IssueReview["response"]>["outcome"];
+    evidence?: string[] }> = [
+    ...(item.author_replies ?? []).flatMap((reply) => [
+      { who: "agent" as const, text: reply.response.summary,
+        at: reply.response.responded_at, outcome: reply.response.outcome,
+        evidence: reply.response.evidence },
+      { who: "user" as const, text: reply.text, at: reply.replied_at },
+    ]),
+    ...(item.response
+      ? [{ who: "agent" as const, text: item.response.summary,
+        at: item.response.responded_at, outcome: item.response.outcome,
+        evidence: item.response.evidence }]
+      : []),
+  ];
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  // 只对「AI 最新回应还在场」的意见开回复口:上一条回复未被 AI 处理前
+  // 不能再叠(服务端同口径打回)。
+  const canReply = !!canOperate && !!onReply && item.status === "sent"
+    && !!item.response && !replyBusy;
   return <li className={REVIEW_ITEM}>
     <div className="flex items-baseline gap-2">
       {/* 「意见N」是唯一对外标识(#261):台账 an- id 不出面;意见号是
@@ -448,32 +477,66 @@ function IssueReviewItem({ item, check, onLocate, onRemove }: {
     </div>
     <blockquote className="my-1 border-l-[3px] border-line pl-2 text-muted-foreground [overflow-wrap:anywhere]">针对 {item.anchor}</blockquote>
     <p className="m-0 text-text-strong [overflow-wrap:anywhere]">{item.note}</p>
-    {/* AI 的逐条回复(ADR-0035 检视分诊):回复型意见由 respond_review
-        原地答复并落账,这里只读呈现——需求侧批注回复同款体验,已提交
-        清单是纯读面,登录访问者都可见。 */}
-    {item.response && <div className="mt-1.5 rounded-md border border-line bg-surface p-2">
-      <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
-        <span className="font-bold text-text-strong">Agent 的回复</span>
-        <em className="not-italic">{reviewOutcomeLabel(item.response.outcome)}</em>
-        <time className="text-faint">{formatLocalDateTime(item.response.responded_at, { seconds: true })}</time>
+    {/* AI 的逐条回复与用户的再回复(ADR-0035 检视分诊 + 回复环):
+        需求侧批注回复同款体验;回复写口只给归属人。 */}
+    {rounds.map((round, index) => round.who === "agent"
+      ? <div key={index} className="mt-1.5 rounded-md border border-line bg-surface p-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+          <span className="font-bold text-text-strong">Agent 的回复</span>
+          <em className="not-italic">{round.outcome && reviewOutcomeLabel(round.outcome)}</em>
+          <time className="text-faint">{formatLocalDateTime(round.at, { seconds: true })}</time>
+        </div>
+        <p className="m-0 mt-1 text-[13px] leading-[1.7] text-text-strong [overflow-wrap:anywhere]">{round.text}</p>
+        {round.evidence && round.evidence.length > 0 && <p className="m-0 mt-0.5 text-xs text-faint [overflow-wrap:anywhere]">依据 {round.evidence.join("；")}</p>}
       </div>
-      <p className="m-0 mt-1 text-[13px] leading-[1.7] text-text-strong [overflow-wrap:anywhere]">{item.response.summary}</p>
-      {item.response.evidence.length > 0 && <p className="m-0 mt-0.5 text-xs text-faint [overflow-wrap:anywhere]">依据 {item.response.evidence.join("；")}</p>}
+      : <div key={index} className="mt-1.5 rounded-md border border-line border-l-2 border-l-line-strong bg-surface p-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-muted-foreground">
+          <span className="font-bold text-text-strong">你的回复</span>
+          <time className="text-faint">{formatLocalDateTime(round.at, { seconds: true })}</time>
+        </div>
+        <p className="m-0 mt-1 text-[13px] leading-[1.7] text-text-strong [overflow-wrap:anywhere]">{round.text}</p>
+      </div>)}
+    {canReply && !replyOpen && <div className="mt-1.5">
+      <Button type="button" variant="ghost" size="xs"
+        onClick={() => setReplyOpen(true)}>回复</Button>
+    </div>}
+    {canReply && replyOpen && <div className="mt-1.5 flex flex-col gap-1.5">
+      <Textarea rows={3} autoFocus className="resize-y bg-surface" value={replyText}
+        placeholder={item.response?.outcome === "needs_clarification"
+          ? "补充说明后递给 AI,它会在本意见处继续答复"
+          : "回复 AI 的这条回应;需要它改报告就在这里说明"}
+        onChange={(event) => setReplyText(event.target.value)} />
+      <div className="flex items-center gap-2">
+        <Button type="button" size="xs" disabled={replyBusy || !replyText.trim()}
+          onClick={() => {
+            setReplyBusy(true);
+            // 失败由面板 note 报(实现方吞错落 note),输入原样保留可改字重试。
+            onReply!(item, replyText).then(() => {
+              setReplyOpen(false);
+              setReplyText("");
+            }).catch(() => undefined).finally(() => setReplyBusy(false));
+          }}>
+          {replyBusy ? "提交中…" : "递给 AI"}
+        </Button>
+        <Button type="button" variant="ghost" size="xs" disabled={replyBusy}
+          onClick={() => { setReplyOpen(false); setReplyText(""); }}>取消</Button>
+      </div>
     </div>}
   </li>;
 }
 
 /** 检视区(#260 内联,原「检视」页签):草稿攒批、一次提交触发整体
  * 回退(轻量确认列明后果)。常驻分析报告正文下方,不再是独立页签。
- * 可见性分两层(spec #259 story 23):已提交意见清单是纯读面,登录
- * 访问者都可看;草稿编辑/移除/提交是写口,整段收在 canOperate——
- * 服务端本就登录可读、写仅归属人,这里只管把写控件放对位置。 */
+ * 可见性分两层(spec #259 story 23):已提交意见清单登录访问者都可看;
+ * 草稿编辑/移除/提交与「Agent 回复下的就地回复」(检视回复环)是写口,
+ * 整段收在 canOperate——服务端本就登录可读、写仅归属人,这里只管把
+ * 写控件放对位置。 */
 function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, onReload, onLocate }: {
   detail: IssueDetail;
   reviews: IssueReview[];
   checks: IssueReviewCheck[];
   reviewEnabled: boolean;
-  /** 归属操作权(查看模式=false):已提交清单照看,草稿写口不渲染。 */
+  /** 归属操作权(查看模式=false):清单照看,草稿与就地回复写口不渲染。 */
   canOperate: boolean;
   onReload: () => void;
   onLocate: (item: IssueReview) => void;
@@ -511,6 +574,19 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
     }
   }
 
+  /** 就地回复(检视回复环):答复落账留档并递给 AI,它在该意见处再
+   * 答复。失败落 note,输入留在条目里可改字重试。 */
+  async function reply(item: IssueReview, text: string) {
+    try {
+      const result = await replyIssueReview(id, item.seq ?? item.id, text);
+      setNote(result.stage_note || `已把你对意见${item.seq} 的回复递给 AI；它会在该意见处再答复。`);
+      onReload();
+    } catch (reason) {
+      setNote(String(reason instanceof Error ? reason.message : reason));
+      throw reason;
+    }
+  }
+
   return <div className="flex flex-col gap-3">
     {detail.review_active && <div className="utility-note">
       已有修改意见提交给 Agent；还可以继续补充并交办，不必等上一批结束。
@@ -539,12 +615,15 @@ function IssueReviewPanel({ detail, reviews, checks, reviewEnabled, canOperate, 
         </Button>
       </div>
     </section>}
-    {/* 已提交清单(spec #259 story 23):纯读,登录只读访问者也可见。 */}
+    {/* 已提交清单(spec #259 story 23):登录只读访问者也可见;就地
+        回复是归属人写口,随 canOperate 进条目。 */}
     {sent.length > 0 && <section>
       <h4 className={NOTE_HEAD}>已提交({sent.length})</h4>
       <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {sent.map((item) => <IssueReviewItem key={item.id} item={item}
-          check={checkOf(item.id)} onLocate={onLocate} />)}
+          check={checkOf(item.id)} onLocate={onLocate}
+          canOperate={canOperate && reviewEnabled}
+          onReply={reply} />)}
       </ul>
     </section>}
   </div>;

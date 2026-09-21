@@ -722,7 +722,9 @@ function GenericDecisionCard({ waiting, busy, footerTarget, onAnswer }: {
                 <span className={OPTION_BODY}><span className={cn(OPTION_TITLE, "text-muted-foreground")}>
                   自定义答复
                 </span><span className={OPTION_HINT}>
-                  以上选项都不合适时使用
+                  {waiting.gate_kind === "env_verify"
+                    ? "有别的插曲要说:交给 AI 处理,验证继续等合入"
+                    : "以上选项都不合适时使用"}
                 </span></span>
               </button>;
             })()}

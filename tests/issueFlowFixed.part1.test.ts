@@ -2338,7 +2338,7 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
  *  分析→修→推→MR 三回合),聚焦终态判定本身。watch 覆盖项供停机
  *  通知类测试预置 reds/过期 deadline(票 81),缺省维持原演出。 */
 
-test("红灯不可修:AI 在发送回合举 pipeline_unfixable 卡带事实,作答后重置监看重看同 SHA", async () => {
+test("红灯不可修:AI 在发送回合举 pipeline_unfixable 卡带事实,纯确认作答不开回合只重看同 SHA", async () => {
   const dataDir = mfcTemp("mfc-issue-unfixable-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
@@ -2441,13 +2441,12 @@ test("红灯不可修:AI 在发送回合举 pipeline_unfixable 卡带事实,作�
         code: "hold" }), /无法识别的验证答复/);
     assert.equal(service.get("issue-1").gate?.kind, "pipeline_unfixable",
       "打回后闸仍在场");
-    // 作答:重置监看账(deadline 重置、watching=true、红灯环账清零)
-    // 并重新监看同一 SHA。
+    // 作答(纯确认,无补充说明):重置监看账(deadline 重置、watching=true、
+    // 红灯环账清零)并重新监看同一 SHA,不开回合——带话路径另测(ADR-0049)。
     const deadlineBefore = gated.pipelines?.[origin]?.deadline ?? "";
     service.answer("issue-1", {
       state_version: gate.state_version,
       code: "resume",
-      notes: "已在平台豁免规则 R1",
     });
     const rearmed = await until(() => {
       const issue = service.get("issue-1");
@@ -2481,6 +2480,178 @@ test("红灯不可修:AI 在发送回合举 pipeline_unfixable 卡带事实,作�
     await model.stop();
     await platform.stop();
     await luban.stop();
+  }
+});
+
+test("红灯不可修作答带补充说明(#368,ADR-0049):开回合带话让 AI 先处置,监看照挂", async () => {
+  const dataDir = mfcTemp("mfc-issue-unfixable-notes-");
+  const origin = bareOrigin(dataDir);
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "CodeCheck 阶段失败",
+    checks: [{
+      dimension: "CODECHECK", status: "failed", tool: "SuperChecker",
+      details: [{ tool: "SuperChecker", file: "src/A.java", line: 0,
+        message: "规则 R1 命中" }],
+    }],
+  };
+  await platform.start();
+  seedMrGreenWatch(dataDir, origin);
+  {
+    const statePath = join(dataDir, "issues", "issue-1", "issue.json");
+    const seededState = JSON.parse(readFileSync(statePath, "utf-8")) as {
+      stage_states: string[];
+    };
+    seededState.stage_states = ["done", "done", "done", "done", "in_progress"];
+    writeFileSync(statePath, JSON.stringify(seededState));
+  }
+  const luban = new FakeLubanServer();
+  await luban.start();
+  // 剧本:红灯事实回合举卡(幕1/幕2),作答带补充说明→带话回合(幕3),
+  // 重看跑绿后的申报提醒(幕4)。带话回合与提醒的先后不作保(监看与回
+  // 合并行挂,忙时提醒走转投),断言只认请求内容、不认请求顺序。
+  const model = new ScriptedModelServer([
+    { tool: { name: "raise_gate", input: {
+      kind: "pipeline_unfixable", repo: origin,
+      supplement: "红灯全部来自 SuperChecker 平台侧告警(规则 R1),"
+        + "改代码解决不了,需人工在交付平台处理/豁免" } } },
+    { text: "已举卡等待人工处理。" },
+    { text: "收到补充说明,这就回退 C++ 改用 JS 实现。" },
+    { text: "收到,重新申报 MR 清单。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
+    notifier: new Notifier({ endpoint: luban.endpoint, fake: true }),
+    linkBase: "http://work.test",
+  });
+  try {
+    const sha = "c".repeat(40);
+    const gated = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "pipeline_unfixable"
+        ? issue : undefined;
+    }, "AI 举出不可修人工卡");
+    const gate = gated.gate!;
+    const deadlineBefore = gated.pipelines?.[origin]?.deadline ?? "";
+    // 作答带指令型补充说明:开回合把话递给 AI(只进账本不开回合=用户没说)。
+    service.answer("issue-1", {
+      state_version: gate.state_version,
+      code: "resume",
+      notes: "能不能不改c++,直接js这边排序一下?把你的C++修改回退掉",
+    });
+    assert.match(service.get("issue-1").stage_note ?? "", /用户补充/,
+      "状态行带补充标识(同步落盘,回合尚未覆盖)");
+    // 带话回合:正文带补充说明全文与监看定位(仓与提交)。标记用
+    // gate.resume.notes 独有短语——「用户补充说明」在工具 schema 里
+    // 也出现,不能当检索标记。
+    const notesTurn = await until(() =>
+      model.requests.map((request) => JSON.stringify(request))
+        .find((text) => text.includes("已按用户的作答重新监看流水线")),
+    "补充说明作为回合正文送达 AI");
+    assert.match(notesTurn, /把你的C\+\+修改回退掉/, "补充说明全文进词");
+    assert.match(notesTurn, new RegExp(origin), "带话正文带监看仓");
+    assert.match(notesTurn, /c{12}/, "带话正文带监看提交");
+    // 监看账重置与纯确认同口径:同 SHA 重看、环账清零;状态不落 idle
+    // (带话回合在飞,状态由回合体自管)。
+    await until(() => {
+      const issue = service.get("issue-1");
+      const watch = issue.pipelines?.[origin];
+      return issue.gate === undefined && watch?.watching
+        && watch.status === "running"
+        && watch.deadline > deadlineBefore ? issue : undefined;
+    }, "作答后重置监看账重新挂表");
+    const rearmed = service.get("issue-1");
+    assert.equal(rearmed.pipelines?.[origin]?.sha, sha, "同一 SHA 重新监看");
+    assert.equal(rearmed.pipelines?.[origin]?.reds, 0,
+      "预算账归零(重看是新一轮)");
+    assert.equal(rearmed.pipelines?.[origin]?.last_repair_sha, undefined,
+      "刹车账清掉(重看仍红不误判同提交刹车)");
+    // 重看跑绿,申报提醒照旧——带话不挡终态处理路径。
+    const reminder = await until(() =>
+      model.requests.length >= 4 ? JSON.stringify(model.requests) : undefined,
+    "全绿后的申报提醒回合");
+    assert.match(reminder, /complete_stage/, "提醒重新申报 MR 清单");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+
+test("全绿但 AI 停在 fix 阶段没推进(#357):全绿兜底开回合指路推进+申报,不静默定格", async () => {
+  const dataDir = mfcTemp("mfc-issue-fix-stage-green-");
+  const origin = bareOrigin(dataDir);
+  // 首个终态即 success:种子会话停在 fix 阶段、MR 已建、监看在表——
+  // 复现"AI 推完代码没调 complete_stage 就收嘴,在 fix 阶段等绿"。
+  const platform = new LoopPlatform("success");
+  await platform.start();
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = new Date().toISOString();
+  const sha = "c".repeat(40);
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev",
+    created_at: now, updated_at: now,
+    title: "fix 阶段等绿夹具", description: "", source: "dts",
+    ticket: "DTS-2026-1002",
+    repo_url: origin, repo_urls: [origin], scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "in_progress", "pending",
+      "pending", "pending"],
+    status: "idle", stage: "fix", stage_note: "", stage_at: now,
+    pushes: [{ repo: origin, branch: "master_dev_DTS-2026-1002",
+      sha, at: now }],
+    mrs: [{ repo: origin, branch: "master_dev_DTS-2026-1002",
+      title: "[DTS-2026-1002] fix 阶段等绿夹具",
+      url: "http://loop.test/mr/1", at: now }],
+    pipelines: {
+      [origin]: {
+        sha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+      },
+    },
+  }));
+  const model = new ScriptedModelServer([
+    { text: "收到,先调 complete_stage 推进阶段,再申报 MR 清单。" },
+  ], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    settings: fastPoll,
+    dts: new MockDtsGateway(),
+    platformUrl: platform.baseUrl,
+    gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
+  });
+  try {
+    const reminderText = await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "全绿后的 fix 阶段推进提醒回合");
+    assert.match(reminderText, /全部 MR 流水线已跑绿/);
+    assert.match(reminderText, /还停在「问题修复」阶段/,
+      "提醒要点破会话停在 fix 阶段");
+    assert.match(reminderText, /complete_stage/, "指路推进与申报");
+    // 不收口:阶段推进是 AI 的事,平台只指路。
+    assert.equal(service.get("issue-1").stage, "fix", "阶段不代推进");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      return issue.status === "idle" ? issue : undefined;
+    }, "提醒回合收口落 idle");
+    assert.equal(settled.stage, "fix");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
   }
 });
 

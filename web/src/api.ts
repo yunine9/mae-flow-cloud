@@ -2775,6 +2775,15 @@ export interface Annotation {
     answered_by?: string;
     revision?: number;
   }>;
+  /** 作者在意见处对 Agent 回应的逐条回复(问题域检视回复环):每条快照
+   * 它所回应的回执,按序即完整线程。 */
+  author_replies?: Array<{
+    text: string;
+    replied_at: string;
+    by?: string;
+    revision: number;
+    response: NonNullable<Annotation["response"]>;
+  }>;
 }
 
 export interface AnchorCheck {
@@ -4782,8 +4791,12 @@ export interface IssueReview {
   owner_reply?: Annotation["owner_reply"];
   resolution?: Annotation["resolution"];
   /** AI 的逐条回复(ADR-0035):回复型意见由 respond_review 原地答复,
-   * 检视面板在该意见下只读呈现(需求侧批注回复同款体验)。 */
+   * 检视面板在该意见下呈现(需求侧批注回复同款体验);被用户回复
+   * 取代的旧回执随 author_replies 留档,最新回应只在 response。 */
   response?: Annotation["response"];
+  /** 用户在意见处对 AI 回复的再回复(检视回复环):每条快照它所回应
+   * 的回执,按序即完整线程;上一条回复未被 AI 处理前不能再叠。 */
+  author_replies?: Annotation["author_replies"];
   quote?: string;
   line_end?: number;
   id: string;
@@ -4858,6 +4871,15 @@ export function updateIssueReview(id: string, reviewId: string, body: { context?
 export function sendIssueReviews(id: string, ids?: string[]): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/send`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }),
+  });
+}
+
+/** 意见处就地回复(检视回复环):review = 意见号或台账 id,答复递给
+ * AI 在该意见处再答复。 */
+export function replyIssueReview(id: string, review: number | string, text: string): Promise<IssueSummary> {
+  return issueFetch(`/issues/${encodeURIComponent(id)}/reviews/reply`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ review, text }),
   });
 }
 

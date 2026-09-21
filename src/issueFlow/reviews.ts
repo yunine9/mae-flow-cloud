@@ -41,6 +41,7 @@ export const REVIEWS_FILE = "reviews.jsonl";
  * 唯一边界:冻结版只准从这里读。 */
 export const REVIEWS_DIR = "reviews";
 
+
 export function reviewStore(root: string): AnnotationStore {
   return new AnnotationStore(join(root, REVIEWS_FILE));
 }
@@ -267,5 +268,38 @@ export function renderReviewNotes(
   if (mode === "rework") {
     lines.push("逐条交代完再重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
   }
+  return lines.join("\n");
+}
+
+/**
+ * 渲染一条意见的回复线程(用户在意见处回复后唤醒 AI 用):意见原文
+ * + 各轮「Agent 回复 → 用户回复」按序排列——被回复清空的旧回执快照在
+ * author_replies 里,最新回应(还没有用户回复的)在 response。AI 看
+ * 完整线程再作答,不会把用户的追问当新意见、重复回答别的意见号。
+ */
+export function renderReviewThread(item: Annotation): string {
+  if (item.seq === undefined) {
+    throw new Error(
+      `检视意见 ${item.id} 没有意见号:意见必须带号(ADR-0025),无号即坏账`);
+  }
+  const lines: string[] = [
+    `意见${item.seq}. [${item.id}] 历史第 ${item.line} 行`,
+    `   批注时原文:${item.quote || item.anchor}`,
+    `   要求:${item.note}`,
+    "",
+  ];
+  const rounds = [
+    ...(item.author_replies ?? []).map((reply) => [
+      { who: "你的回复", text: reply.response.summary, at: reply.response.responded_at },
+      { who: "用户的回复", text: reply.text, at: reply.replied_at },
+    ]).flat(),
+    ...(item.response
+      ? [{ who: "你的回复", text: item.response.summary, at: item.response.responded_at }]
+      : []),
+  ];
+  for (const round of rounds) {
+    lines.push(`— ${round.who}(${round.at}):${round.text}`);
+  }
+  lines.push("");
   return lines.join("\n");
 }

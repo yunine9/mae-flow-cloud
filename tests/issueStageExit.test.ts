@@ -414,6 +414,57 @@ test("出口回归(免模型):report_ut 降级为事实上报——只记账不�
 
 // ---- MR 验绿门三态(service 驱动,假交付平台) ----
 
+test("环境验证卡·自定义答复是等待中的插话:递 AI 一回合,闸保持原样继续等", async () => {
+  const chain = await startChain({
+    platformStatus: "success",
+    steps: (origin) => [[origin]],
+  });
+  try {
+    const raised = await until(() => {
+      const issue = chain.service.get(chain.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "waiting_user" && issue.gate?.kind === "env_verify"
+        ? issue : undefined;
+    }, "举环境验证闸");
+    const version = raised.gate!.state_version;
+    // 自定义答复(带文本、不带码,与页面上「自定义答复」提交同形):
+    // 不是「发现问题」的回退——现场照旧、轮次不动,话递给 AI。
+    chain.service.answer(chain.id, {
+      state_version: version,
+      decision: "MR 冒出合并冲突,先处理冲突",
+    });
+    const answered = chain.service.get(chain.id);
+    assert.equal(answered.stage, "mr_green", "插话不回退阶段");
+    assert.equal(answered.round ?? 1, 1, "插话不涨轮次");
+    assert.equal(answered.status, "running", "插话开了一回合");
+    // 回合收口时闸在场仍定格等待:同一张卡、原 state_version 还能作答。
+    const settled = await until(() => {
+      const issue = chain.service.get(chain.id);
+      return issue.status === "waiting_user"
+        && issue.gate?.kind === "env_verify" ? issue : undefined;
+    }, "插话回合收口,闸定格等待");
+    assert.equal(settled.gate!.state_version, version, "同一张卡继续等");
+    assert.match(chain.trail(), /用户插话\(验证等待中\)/, "插话进转移账");
+    assert.ok(chain.events().find((event) =>
+      event.kind === "human_decision"
+      && /合并冲突/.test(String(event.payload?.decision ?? ""))),
+      "插话进 human_decision 事件账");
+    // 卡还能照常答「发现问题」:回退重修语义不受插话影响。
+    chain.service.answer(chain.id, {
+      state_version: settled.gate!.state_version,
+      code: "fail", decision: "验证发现问题:数据没变化",
+    });
+    const rolled = await until(() => {
+      const snapshot = chain.service.get(chain.id);
+      return snapshot.stage === "analyze" && snapshot.round === 2
+        ? snapshot : undefined;
+    }, "插话后再答发现问题,照常回退");
+    assert.ok(rolled);
+  } finally {
+    await stopChain(chain);
+  }
+});
+
 test("MR 验绿门·全绿当场收口:申报即核验,全绿即流程终点待归档", async () => {
   const chain = await startChain({
     platformStatus: "success",
