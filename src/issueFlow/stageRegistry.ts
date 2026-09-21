@@ -163,7 +163,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     label: "问题修复",
     exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 推进到"
       + "「提交 MR·跑绿」(推送、建 MR 与流水线验绿都在下一阶段,本阶段"
-      + "不碰远端,无须等绿)",
+      + "不写远端,无须等绿)",
     exitAction: "complete_stage",
     tools: [
       { name: "request_env", note: "缺网管环境先要配置" },

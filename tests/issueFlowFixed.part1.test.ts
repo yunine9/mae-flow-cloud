@@ -626,12 +626,16 @@ test("阶段门禁单点(免模型):工具只在所属阶段开放;UT 并入修�
   // 固定流程不注册 report_stage(阶段真相在宿主)。
   assert.equal(tools.some((tool) => tool.name === "report_stage"), false);
   assert.equal(tools.some((tool) => tool.name === "submit_analysis"), true);
-  // fix 阶段:交付类工具(建 MR/推送)被阶段门禁拒并指路下一阶段
-  // (#373,ADR-0050);report_ut 在本阶段开放,complete_stage 是出口。
+  // fix 阶段:交付类工具(建 MR/推送)被阶段门禁拒,拒绝回执按注册表
+  // 自动指路下一阶段(#373,ADR-0050);report_ut 在本阶段开放,complete_stage 是出口。
   await assert.rejects(() => byName("create_mr").execute("x", {}),
-    /阶段门禁:create_mr/, "fix 阶段建 MR 被阶段门禁拒");
+    (error: Error) => /阶段门禁:create_mr/.test(error.message)
+      && error.message.includes("允许的阶段:提交 MR·跑绿"),
+    "fix 阶段建 MR 被拒,回执指路「提交 MR·跑绿」");
   await assert.rejects(() => byName("push_branch").execute("x", { branch: "master_dev_T1" }),
-    /阶段门禁:push_branch/, "fix 阶段推送同样被拒,推送收敛在「提交 MR·跑绿」");
+    (error: Error) => /阶段门禁:push_branch/.test(error.message)
+      && error.message.includes("允许的阶段:提交 MR·跑绿"),
+    "fix 阶段推送同样被拒,回执指路「提交 MR·跑绿」");
   // mr_green 阶段:没有 UT 记录不再挡建 MR(UT 降级为事实上报)——
   // 门禁放行,卡在机械前置(平台未配置),而不是任何 UT/阶段闸。
   base.stage = "mr_green";

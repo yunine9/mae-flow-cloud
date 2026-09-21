@@ -298,8 +298,15 @@ test("fix 阶段推完代码停在原地等绿:催办换定向纠偏词(#357),�
   }, 1, 2);
   assert.match(withMrs, /当前阶段「问题修复」/,
     "有 MR 的等绿另有全绿提醒接手,催办不复读定向词");
-  // 出口文案钉死(#357 的误读源头):fix 出口不再写"申报完成"。
+  // 出口文案钉死(#357 的误读源头):fix 出口不再写"申报完成";
+  // 交付动作收敛(#373,ADR-0050)后,出口写明推送也在下一阶段。
   const spec = FIXED_STAGE_SPECS.fix;
   assert.match(spec.exit, /推进到「提交 MR·跑绿」/);
+  assert.match(spec.exit, /推送、建 MR 与流水线验绿都在下一阶段/);
   assert.doesNotMatch(spec.exit, /申报完成/);
+  // 引导层与门禁同源:fix 简报的工具行不再出现交付工具,mr_green 齐装。
+  assert.doesNotMatch(stageToolLine("fix"), /push_branch|create_mr/,
+    "fix 简报工具行不得宣传交付工具");
+  assert.match(stageToolLine("mr_green"), /push_branch/);
+  assert.match(stageToolLine("mr_green"), /create_mr/);
 });
