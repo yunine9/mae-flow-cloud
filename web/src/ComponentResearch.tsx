@@ -18,6 +18,7 @@ import {
 } from "./componentResearchApi";
 import { getBusinessModules, type BusinessModule } from "./api";
 import { Markdown } from "./markdown";
+import { ComponentResearchReview } from "./ComponentResearchReview";
 function Choice({
   label,
   value,
@@ -143,7 +144,6 @@ export function ComponentResearch({
     };
   }, [open, selected]);
   useEffect(() => {
-    setDraft(current?.draft ?? "");
     setTitle(
       current
         ? `${knowledgeLanguageLabel(current.language)} · ${current.topic}`.slice(0, 160)
@@ -153,7 +153,10 @@ export function ComponentResearch({
     setScope("platform");
     setModule("");
     setRepos("");
-  }, [selected, current?.draft]);
+  }, [selected, current?.id]);
+  useEffect(() => {
+    if (!editing) setDraft(current?.draft ?? "");
+  }, [current?.draft, editing]);
   function selectRecord(id: string) {
     setSelected(id);
     const url = new URL(location.href);
@@ -243,13 +246,13 @@ export function ComponentResearch({
                   {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="flex-1 text-xl font-semibold">{current.topic}</h2>
-                    {!focused && ["done", "failed", "cancelled"].includes(current.status) && (
+                    {!focused && ["done", "failed", "cancelled"].includes(current.status) && !(current.document && current.status === "done") && (
                       <Button
                         variant="outline"
                         disabled={busy}
                         onClick={() => void manage("retry")}
                       >
-                        {current.mode === "all" && current.status !== "done" ? "重试未完成组件" : current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
+                        {current.document ? (current.review_turns?.length ? "重试本组件对话" : "继续未完成研究") : current.mode === "all" && current.status !== "done" ? "重试未完成组件" : current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
                       </Button>
                     )}
                     {!focused && ["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
@@ -269,7 +272,8 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                {current.mode === "all" && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
+                {current.document && <ComponentResearchReview record={current} onChanged={record => { setDetail(record); void load(); }} />}
+                {current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">
                     <div className="flex items-center justify-between gap-3"><strong>组件草稿 {current.progress.done} / {current.progress.total}</strong><span className="text-muted-foreground">已采纳 {current.progress.adopted} 篇</span></div>
                     <div role="progressbar" aria-label="组件完成进度" aria-valuemin={0} aria-valuemax={current.progress.total} aria-valuenow={current.progress.done} className="mt-4 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all" style={{width:`${100 * current.progress.done / (current.progress.total || 1)}%`}} /></div>
@@ -286,7 +290,7 @@ export function ComponentResearch({
                     </table>
                   </div>
                 </section>}
-                {current.mode !== "all" && <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
+                {(current.mode !== "all" || current.document) && <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
                     源码范围与研究记录 · {current.evidence.length} 条记录
                   </summary>
@@ -322,7 +326,7 @@ export function ComponentResearch({
                 </details>}
                 {current.draft && (
                   <>
-                    <div className="mb-3 flex items-center justify-between">
+                    {!current.document && <><div className="mb-3 flex items-center justify-between">
                       <h3 className="font-semibold">
                         {current.document_id
                           ? "原始萃取草稿"
@@ -345,7 +349,7 @@ export function ComponentResearch({
                       />
                     ) : (
                       <Markdown text={draft} />
-                    )}
+                    )}</>}
                     {current.document_id ? (
                       <Button
                         className="mt-5"
@@ -394,6 +398,8 @@ export function ComponentResearch({
                         <Button
                           disabled={
                             busy ||
+                            current.status !== "done" ||
+                            (!!current.document && !current.document.sections.some(section => section.selected)) ||
                             !draft.trim() ||
                             !title.trim() ||
                             (scope === "module" && !module) ||
@@ -407,7 +413,7 @@ export function ComponentResearch({
                                 id: string;
                               }>(`/component-research/${current.id}/adopt`, {
                                 title,
-                                content: draft,
+                                ...(current.document ? {} : { content: draft }),
                                 scope,
                                 module_ids: module ? [module] : [],
                                 repositories: repos
@@ -424,7 +430,7 @@ export function ComponentResearch({
                             }
                           }}
                         >
-                          确认采纳到知识库
+                          {current.document ? `确认采纳 ${current.document.sections.filter(section => section.selected).length} 项为一篇知识文档` : "确认采纳到知识库"}
                         </Button>
                       </section>
                     )}
@@ -444,14 +450,14 @@ export function ComponentResearch({
                   从真实源码中提炼开发范式
                 </h2>
                 <p className="text-muted-foreground">
-                  选择语言即可提取全部基础组件的开发范式，主题由 Agent 从源码中发现。
+                  联合分析所选语言的组件仓与相互依赖，细分可复用能力，汇成一篇含接口、集成依赖和最佳示例的 Markdown。生成后可逐项审核、对话和局部返工。
                 </p>
                 <Choice label="萃取语言" value={language} onChange={setLanguage}
                   items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
                 <div className="grid grid-cols-2 gap-3" role="group" aria-label="萃取方式">
-                  {([['all', '全部基础组件', '自动发现能力与主题，逐个生成草稿'], ['topic', '指定主题', '围绕一个具体问题跨组件研究']] as const).map(([value, label, hint]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong><span className="mt-2 block text-sm text-muted-foreground">{hint}</span></button>)}
+                  {([['all', '全部基础组件', '跨仓联合研究，一篇文档，逐项审查与返工'], ['topic', '指定主题', '围绕一个具体问题跨组件研究']] as const).map(([value, label, hint]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong><span className="mt-2 block text-sm text-muted-foreground">{hint}</span></button>)}
                 </div>
-                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓${mode === "all" ? "，后台分批执行，可随时查看进度。" : "，按主题识别相关组件。"}` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
+                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓${mode === "all" ? "，后台联合研究并逐项保存，可随时查看进度。" : "，按主题识别相关组件。"}` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
                 <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
                 {mode === "topic" && <label className="grid gap-2">
                   研究主题

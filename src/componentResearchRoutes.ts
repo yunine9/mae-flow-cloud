@@ -31,6 +31,19 @@ export async function componentResearchRoute(
         );
     } else {
       const research = service.getComponentResearch();
+      if (request.method === "GET" && parts[1] && parts[2] === "document") {
+        const content = research.markdown(parts[1]);
+        response.writeHead(200, { "content-type": "text/markdown; charset=utf-8",
+          "content-disposition": 'attachment; filename="component-guide.md"', "cache-control": "no-store" });
+        return response.end(content);
+      }
+      if (request.method === "POST" && parts[1] && parts[2] === "selection") {
+        const input = await readBody(request, 1024 * 1024);
+        return json(response, 200, research.selectSections(parts[1], input.ids, input.selected));
+      }
+      if (request.method === "POST" && parts[1] && parts[2] === "review") {
+        return json(response, 202, research.review(parts[1], await readBody(request, 128 * 1024), operator));
+      }
       if (request.method === "POST" && parts[1] && ["stop", "delete", "retry"].includes(parts[2])) {
         const result = parts[2] === "stop" ? research.stop(parts[1]) : parts[2] === "delete" ? research.remove(parts[1], operator) : research.retry(parts[1], operator);
         return json(response, 200, result);

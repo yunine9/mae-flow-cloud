@@ -13,6 +13,8 @@ import {
 } from "./componentResearchTools.ts";
 import type { ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
+import { jointResearchMission, researchDocumentTool } from "./componentResearchDocumentTool.ts";
+import { researchDocumentMarkdown } from "./componentResearchDocument.ts";
 export const componentResearchMission = (
   component: ComponentRepository,
   language: string,
@@ -56,7 +58,10 @@ export async function runComponentResearch(
   await checkEc();
   if (input.signal.aborted) throw new Error("萃取已停止");
   const components = input.record.components ?? [input.record.component];
-  const revisions: Record<string, string> = {};
+  const revisions: Record<string, string> = { ...input.record.revisions };
+  const readRepositories = new Set<string>((input.record.evidence ?? [])
+    .filter(event => event.tool === "component_source" && event.action === "read" && event.status === "returned" && event.component_id)
+    .map(event => String(event.component_id)));
   input.update({ stage: "分析语言组件清单" });
   const agentDir = join(input.root, "agent");
   mkdirSync(agentDir, { recursive: true });
@@ -71,7 +76,7 @@ export async function runComponentResearch(
       event.action === "read" &&
       event.status === "returned"
     )
-      sourceRead = true;
+      { sourceRead = true; if (event.component_id) readRepositories.add(String(event.component_id)); }
     if (
       event.tool === "code_search" &&
       event.action === "read" &&
@@ -108,16 +113,19 @@ export async function runComponentResearch(
     humanGate: new HumanGate(join(input.root, "waiting.json")),
     allowHumanQuestions: false,
     allowSubagents: false,
-    allowedTools: ["component_source", "code_search"],
+    allowedTools: ["component_source", "code_search", ...(input.record.document ? ["research_document"] : [])],
     extraTools: [
       languageComponentSourceTool(components, async component => {
         if (input.signal.aborted) throw new Error("萃取已停止");
         const source = await options.source(component, input.record.operator);
-        revisions[component.id] = source.revision;
-        input.update({ revisions: { ...revisions }, ...(components.length === 1 ? { revision: source.revision } : {}) });
-        return source;
+        // 局部返工沿用原研究的源码版本，避免其他章节悄悄变成不同版本。
+        const revision = revisions[component.id] ?? source.revision;
+        revisions[component.id] = revision;
+        input.update({ revisions: { ...revisions }, ...(components.length === 1 ? { revision } : {}) });
+        return { ...source, revision };
       }, observed),
       codeSearchTool(observed),
+      ...(input.record.document ? [researchDocumentTool(input)] : []),
     ],
     currentStep: () => "组件知识萃取",
     compactAnchor: () => input.record.topic,
@@ -135,22 +143,28 @@ export async function runComponentResearch(
   try {
     if (input.signal.aborted) throw new Error("萃取已停止");
     const outcome = await session.start(
-      componentResearchMission(
+      (input.record.document ? jointResearchMission(input) + `\n研究语言：${input.record.language}；完整仓库范围：${JSON.stringify(components)}` : componentResearchMission(
         input.record.component,
         input.record.language,
         input.record.topic,
         "通过 component_source 读取时固定并记录",
         components,
         input.record.mode === "component",
-      ) +
-      "\n先逐项评估清单与主题的相关性，名称说明不足时用 component_source 指定 component_id 搜索确认。相关组件均需查阅，不只选择第一个仓；无关仓不必通读。组件使用相同 API 名时保留差异。覆盖不足或失败记在过程消息里，不能把部分覆盖称为全量完成。",
+      )) +
+      (input.record.document ? "" : "\n先逐项评估清单与主题的相关性，名称说明不足时用 component_source 指定 component_id 搜索确认。相关组件均需查阅，不只选择第一个仓；无关仓不必通读。组件使用相同 API 名时保留差异。覆盖不足或失败记在过程消息里，不能把部分覆盖称为全量完成。"),
     );
     if (timedOut) throw new Error("萃取超过 1 小时，已停止；可查看已有研究记录后重试");
     if (outcome.status !== "turn_finished")
       throw new Error("研究会话未正常完成，请查看执行记录后重试");
-    if (!sourceRead)
+    if (!sourceRead && !input.review && !(input.record.document && readRepositories.size))
       throw new Error("没有实际读取组件源码，不能生成有来源的知识草稿，请重试");
+    if (input.record.document && !input.review) {
+      const missing = components.filter(component => !readRepositories.has(component.id));
+      if (missing.length) throw new Error(`联合研究尚未读取这些仓库：${missing.map(component => component.name).join("、")}；已保存章节保留，可继续研究`);
+      return researchDocumentMarkdown(input.record.topic, input.readDocument!());
+    }
     input.update({ stage: "整理知识草稿" });
+    if (input.review) return session.finalReply();
     return (
       (callerRead
         ? ""
