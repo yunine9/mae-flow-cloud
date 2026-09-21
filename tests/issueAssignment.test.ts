@@ -462,7 +462,9 @@ test("登记指派:单一列表——存量回填与挂起转正都认登记人"
     assert.deepEqual(
       (devList.body.issues as Array<{ id: string }>).map((row) => row.id),
       ["issue-1"], "dev 只看归属是自己或自己登记的");
-    // 挂起转正:登记人随会话走,测试不因换会话跟丢。
+    // 存量挂起会话(转正退役前的停泊态)重启后仍可手动归档收口,
+    // 结论按「确认是问题」记,登记人留痕不丢(ADR-0048:不再产生
+    // 新挂起,存量自然排空)。
     writeSession(dataDir, {
       ...base, id: "issue-3", account: "dev", reporter: "tester",
       status: "suspended", stage: "analyze", scenario: "no_ticket",
@@ -472,12 +474,11 @@ test("登记指派:单一列表——存量回填与挂起转正都认登记人"
       dts: new MockDtsGateway(),
     });
     try {
-      const { converted } = await revived.associate("issue-3",
-        { ticket: "DTS-2026-1001", confirm: true });
-      assert.ok(converted, "确认后转正");
-      assert.equal(converted.reporter, "tester",
-        "转正是同一问题的转正,登记人拷贝到新会话");
-      assert.equal(converted.account, "dev", "归属照旧");
+      const closed = await revived.control("issue-3", { action: "archive" });
+      assert.equal(closed.status, "archived", "挂起存量手动归档收口");
+      assert.equal(closed.conclusion?.kind, "issue",
+        "挂起存量归档按确认是问题记");
+      assert.equal(closed.reporter, "tester", "登记人留痕不丢");
     } finally {
       await revived.shutdown().catch(() => undefined);
     }

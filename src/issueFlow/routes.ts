@@ -783,6 +783,17 @@ export async function handleIssueRoutes(
         Number.isFinite(days) && days > 0 ? days : undefined));
     }
 
+    // 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
+    // 结论已出的会话。days=时间过滤(按结论时刻近 N 天;缺省=全部);
+    // 读开放与 stats 同权(查看模式)。
+    if (method === "GET" && parts[1] === "registration-stats"
+      && parts.length === 2) {
+      const days = Number(new URL(request.url ?? "", "http://x")
+        .searchParams.get("days") ?? "");
+      return done(200, issueFlow.registrationStats(
+        Number.isFinite(days) && days > 0 ? days : undefined));
+    }
+
     // 单会话一次生成明细(伴生快照原样):会话详情下钻的证据面。
     // 伴生缺席(未归档/未算完/早于起算日期)如实 404,不猜不补。
     if (method === "GET" && parts[1] && parts[2] === "code-origin"
@@ -1209,19 +1220,26 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.bindTicket(id, String(body.ticket ?? "")));
     }
 
-    // 挂起会话关联 DTS 单号转正(固定流程无单场景的收口动作)。
-    // 两段式:不带 confirm=校验单号存在并回详情过目;带 confirm=转正
-    // 生成新会话(继承分析报告,直接进问题修改)。
-    if (method === "POST" && parts[2] === "associate" && parts.length === 3) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能关联单号转正" });
+    // 提单模板(ADR-0048):确认是问题闭环的会话在场。登记人(只读/
+    // 查看模式)也要能拿到模板去提单——读路由登录即可,不设归属人门。
+    if (method === "GET" && parts[2] === "ticket-template" && parts.length === 3) {
+      const text = issueFlow.ticketTemplate(id);
+      if (text === undefined) {
+        return done(404, { error: "提单模板不存在(非问题/取消的会话或早期会话没有模板)" });
       }
-      const body = await readBody(request);
-      const result = await issueFlow.associate(id, {
-        ticket: String(body.ticket ?? ""),
-        ...(body.confirm === true ? { confirm: true } : {}),
+      response.writeHead(200, { "content-type": "text/markdown; charset=utf-8" });
+      response.end(text);
+      return true;
+    }
+
+    // 关联转正已退役(ADR-0048):无单会话确认是问题即闭环归档并产出
+    // 提单模板;存量挂起会话走手动归档收口。显式 410 给存量期的旧
+    // 前端一个明确指引,不留裸报错。
+    if (method === "POST" && parts[2] === "associate" && parts.length === 3) {
+      return done(410, {
+        error: "关联转正已退役:无单会话确认是问题即闭环归档(提单模板已出);"
+          + "存量挂起会话请手动归档收口",
       });
-      return done(200, result);
     }
 
     if (method === "POST" && parts[2] === "control" && parts.length === 3) {

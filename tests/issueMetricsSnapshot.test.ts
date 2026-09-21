@@ -587,8 +587,8 @@ test("一次率两轴:快照接入不改变既有统计输出", async () => {
     service.start();
     assert.deepEqual(service.onceRates(), {
       total: 2,
-      localization: { passed: 1, rate: 50 },
-      repair: { passed: 1, rate: 50 },
+      localization: { passed: 1, total: 2, rate: 50 },
+      repair: { passed: 1, total: 2, rate: 50 },
       per_session: [
         { id: "issue-1", reviews: 2, localization_pass: false, repair_pass: false },
         { id: "issue-2", reviews: 2, localization_pass: true, repair_pass: true },

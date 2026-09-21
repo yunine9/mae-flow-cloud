@@ -419,8 +419,8 @@ test("等价回归:混合现场纯现算与读快照两遍,两轴与明细逐位
     }
     const baseline = service.onceRates();
     assert.equal(baseline.total, 2, "分母=issue-a/issue-b");
-    assert.deepEqual(baseline.localization, { passed: 1, rate: 50 });
-    assert.deepEqual(baseline.repair, { passed: 1, rate: 50 });
+    assert.deepEqual(baseline.localization, { passed: 1, total: 2, rate: 50 });
+    assert.deepEqual(baseline.repair, { passed: 1, total: 2, rate: 50 });
     assert.deepEqual(rowOf(baseline, "issue-a"), {
       id: "issue-a", reviews: 2, localization_pass: false, repair_pass: false,
     });

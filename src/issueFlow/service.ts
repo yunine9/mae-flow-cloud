@@ -204,6 +204,12 @@ import {
   type IssueOnceRateSummary,
 } from "./onceRates.ts";
 import { listAnalysisVersions } from "./analysisVersions.ts";
+import { TICKET_TEMPLATE_FILE, writeTicketTemplate } from "./ticketTemplate.ts";
+import {
+  aggregateRegistrationStats,
+  type IssueRegistrationSessionRow,
+  type IssueRegistrationStats,
+} from "./registrationStats.ts";
 import {
   aggregateCodeOrigin,
   backfillCodeOrigin,
@@ -1085,7 +1091,7 @@ export class IssueFlowService {
     if (requeued || keptQueued) {
       this.log(`[issue-flow] 重启恢复: 续跑 ${requeued} 个、`
         + `排队 ${keptQueued} 个问题会话`);
-      // 台账行之后立即开泵:构造函数不能 await,泵与 create()/associate()
+      // 台账行之后立即开泵:构造函数不能 await,泵与 create()
       // 同款 void 火力——同步段把首批额度占上,余下的在收口时再泵。
       void this.pump();
     }
@@ -1148,11 +1154,16 @@ export class IssueFlowService {
 
   /** 单个会话的判定事实:终态先试冻结快照,拿不到再现算。 */
   private onceRateFacts(live: LiveIssue): IssueOnceRateFacts {
+    let facts: IssueOnceRateFacts;
     if (isTerminal(live.state.status)) {
       const frozen = this.frozenOnceRateFacts(live);
-      if (frozen) return frozen;
+      facts = frozen ?? this.computedOnceRateFacts(live);
+    } else {
+      facts = this.computedOnceRateFacts(live);
     }
-    return this.computedOnceRateFacts(live);
+    // 转正血缘是会话级事实,不在冻结快照里,统一从现场状态补齐
+    // (ADR-0048 存量:一次定位轴据此剔除)。
+    return { ...facts, converted_from: live.state.converted_from };
   }
 
   /** 终态会话的冻结快照读侧:文件在、内容认、会话号对得上才采用;
@@ -1236,9 +1247,18 @@ export class IssueFlowService {
       .filter((row) => row.localization_pass && row.repair_pass).length;
     const percent = (passed: number, total: number): number | null =>
       total ? Math.round((passed / total) * 1000) / 10 : null;
-    const localization = { passed: once.localization.passed, rate: once.localization.rate };
-    const verify = { passed: once.repair.passed, rate: once.repair.rate };
-    const solved = { passed: solvedPassed, rate: percent(solvedPassed, once.total) };
+    const localization = {
+      passed: once.localization.passed, total: once.localization.total,
+      rate: once.localization.rate,
+    };
+    const verify = {
+      passed: once.repair.passed, total: once.repair.total,
+      rate: once.repair.rate,
+    };
+    const solved = {
+      passed: solvedPassed, total: once.total,
+      rate: percent(solvedPassed, once.total),
+    };
     const axesById = new Map(once.per_session.map((row) => [row.id, row]));
 
     const sessions: IssueOnceGeneratedSession[] = [];
@@ -1327,6 +1347,54 @@ export class IssueFlowService {
   codeOriginDetail(id: string): IssueCodeOriginSnapshot | undefined {
     const live = this.live.get(id);
     return live ? readCodeOriginSnapshot(live.root, live.id) : undefined;
+  }
+
+  /** 提单模板读侧(ADR-0048):确认是问题闭环的会话在场;缺席返回
+   *  undefined 由路由 404(非问题/取消/早期会话自然缺席)。 */
+  ticketTemplate(id: string): string | undefined {
+    const live = this.live.get(id);
+    if (!live) return undefined;
+    const file = join(live.root, TICKET_TEMPLATE_FILE);
+    return existsSync(file) ? readFileSync(file, "utf8") : undefined;
+  }
+
+  /** 登记问题统计读侧(ADR-0048,#362):无单会话的结论漏斗与研究
+   *  质量,days 为时间过滤(按结论时刻,近 N 天;缺省=全部)。只数
+   *  结论已出:非问题/确认是问题归档 + 取消;研究进行中与存量挂起
+   *  一律不进,不给挂起设统计口径。一次定位分母=非问题+确认是问题
+   *  (取消不构成一次研究);版本数从分析版本账现读(取消会话没有
+   *  终态冻结,同账同源不漂移),登记人缺席按归属兜底(CONTEXT 口径)。 */
+  registrationStats(days?: number): IssueRegistrationStats {
+    const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
+    const rows: IssueRegistrationSessionRow[] = [];
+    for (const live of this.live.values()) {
+      const state = live.state;
+      if (state.scenario !== "no_ticket") continue;
+      const canceled = state.status === "canceled";
+      const concluded = state.status === "archived"
+        && (state.conclusion?.kind === "issue"
+          || state.conclusion?.kind === "non_issue");
+      if (!canceled && !concluded) continue;
+      const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
+      const atMs = Date.parse(concludedAt);
+      if (cutoff !== undefined
+        && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
+      const versionCount = listAnalysisVersions(live.root).length;
+      rows.push({
+        id: live.id,
+        title: state.title,
+        module: state.module?.trim() || "未分类",
+        reporter: state.reporter?.trim() || state.account,
+        account: state.account,
+        concluded_at: concludedAt,
+        conclusion: canceled ? "canceled"
+          : state.conclusion!.kind as "issue" | "non_issue",
+        report_version_count: versionCount,
+        ...(canceled ? {} : { localization_pass: versionCount <= 1 }),
+      });
+    }
+    rows.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));
+    return aggregateRegistrationStats(rows);
   }
 
   /** 容器探活(供工作区回收等外部清扫方做保险判断):会话容器当前
@@ -1594,8 +1662,7 @@ export class IssueFlowService {
       : explicitRepos;
     // 同账号+同单号至多一个进行中的固定流程会话(2026-08-28 批量发起的
     // 配套守卫):双发起 fail-loud 到具体单,而不是静默开出第二条平行
-    // 工作流(分支/MR/流水线监看都会打架)。与 associate() 的单号查重
-    // 同一口径。
+    // 工作流(分支/MR/流水线监看都会打架)。
     if (ticket) {
       const clash = [...this.live.values()].find((item) =>
         item.state.account === account
@@ -4034,11 +4101,24 @@ export class IssueFlowService {
     }
 
     if (verdict === "archive") {
-      // conclude 确认非问题:闭环归档(非问题也留报告,测试拿去留痕)。
+      // conclude 闸收口(ADR-0048):确认是问题与非问题都直接闭环归档
+      // ——挂起与转正退役,确认是问题即终态,当场产出提单模板(研究
+      // 成果以模板文本穿过 DTS 系统带到下一个有单会话);非问题也留
+      // 报告留痕。模板写盘 fail-open:失败不挡归档,读侧 404 如实。
+      const isIssue = code === "issue";
+      if (isIssue) {
+        try {
+          writeTicketTemplate(live.root, state);
+        } catch (error) {
+          this.log(`[issue-flow] ${live.id} 提单模板生成失败(归档不受阻): ${String(error)}`);
+        }
+      }
       const now = new Date().toISOString();
-      fixedComplete(state, "结论:非问题,已闭环归档");
+      fixedComplete(state, isIssue
+        ? "结论:是问题,已闭环归档(提单模板已出)"
+        : "结论:非问题,已闭环归档");
       state.conclusion = {
-        kind: "non_issue",
+        kind: isIssue ? "issue" : "non_issue",
         summary: gate.proposal?.summary
           ? `${gate.proposal.summary}${notes ? `;${notes}` : ""}`
           : decision,
@@ -4048,21 +4128,9 @@ export class IssueFlowService {
       saveState(live.root, state);
       this.freezeMetricsSnapshot(live);
       this.releaseDriver(live);
-      this.stopContainerInBackground(live, "非问题归档");
+      this.stopContainerInBackground(live, isIssue ? "问题归档" : "非问题归档");
       this.vault.remove(live.id);
-      this.log(`[issue-flow] ${live.id} 结论非问题,已闭环归档`);
-      return summarize(state);
-    }
-
-    if (verdict === "suspend") {
-      // conclude 确认是问题:挂起等用户关联 DTS 单号(关联即转正)。
-      fixedComplete(state, "结论:是问题,挂起等待关联单号");
-      state.status = "suspended";
-      state.stage_note = "结论为「是问题」——请关联 DTS 单号转正,或直接归档";
-      saveState(live.root, state);
-      this.releaseDriver(live);
-      this.stopContainerInBackground(live, "问题挂起");
-      this.log(`[issue-flow] ${live.id} 结论是问题,已挂起待关联单号`);
+      this.log(`[issue-flow] ${live.id} 结论${isIssue ? "是问题(提单模板已出)" : "非问题"},已闭环归档`);
       return summarize(state);
     }
 
@@ -6326,201 +6394,6 @@ export class IssueFlowService {
       }
       throw error;
     }
-  }
-
-  // ---- 无单挂起 → 关联单号转正(2026-08-27 拍板) ----
-
-  /** 两段式:不带 confirm → 只做 DTS 存在性校验并把单据详情给用户
-   * 过目;带 confirm → 转正:新会话继承工作区与分析报告直接进「问题
-   * 修改」,旧会话归档(结论 issue,血缘 converted_to)。同用户+同单号
-   * 至多一个活跃会话。转正后不可逆——单号是新会话的身份(分支名/MR/
-   * 台账都带)。 */
-  async associate(id: string, input: {
-    ticket: string;
-    confirm?: boolean;
-  }): Promise<{ ticket_detail?: DtsTicketDetail; converted?: IssueSummary }> {
-    const live = this.require(id);
-    const { state } = live;
-    if (state.scenario !== "no_ticket") {
-      throw new IssueControlError("只有无单固定流程的挂起会话才能关联转正");
-    }
-    if (state.status !== "suspended") {
-      throw new IssueControlError(
-        `当前状态 ${state.status} 不能关联转正(要走完问题分析并确认是问题、挂起后再来)`);
-    }
-    const ticket = input.ticket?.trim() ?? "";
-    if (!TICKET_PATTERN.test(ticket)) {
-      throw new IssueControlError("单号只能是字母数字下划线连字符");
-    }
-    if (!this.options.dts) {
-      throw new DtsGatewayUnconfiguredError(
-        "DTS 网关未配置,无法校验单号(部署需 --dts-mcp-url 或 --dts-mock)");
-    }
-    const clash = [...this.live.values()].find((item) =>
-      item.id !== id
-      && item.state.account === state.account
-      && item.state.ticket === ticket
-      && !isTerminal(item.state.status));
-    if (clash) {
-      throw new IssueControlError(
-        `单号 ${ticket} 已有活跃会话 ${clash.id},同一单号不能重复关联`);
-    }
-    // 网关失败不再本地包成控制错误(#9 单点映射):网关查询失败
-    // (含查无此单)按 McpGatewayError 原样上抛,路由层统一译成 502,
-    // 与拉单/详情/图代理同一出口。
-    const detail = await this.options.dts.detail(ticket);
-    if (!input.confirm) {
-      return { ticket_detail: detail };
-    }
-
-    // ---- 转正:新会话继承现场 ----
-    const newId = this.nextId();
-    const newRoot = join(this.issuesRoot, newId);
-    mkdirSync(newRoot, { recursive: true });
-    // 工作区复制:repo/(平铺的全部代码仓)+ 分析报告(skills 由
-    // openDriver 重物化,local-logs 不带——新一轮要拉新日志)。老会话
-    // 遗留的 ref/ 目录(平铺前的参考仓)原样跟走,读代码不受影响。
-    if (existsSync(join(live.root, "repo"))) {
-      cpSync(join(live.root, "repo"), join(newRoot, "repo"), { recursive: true });
-    }
-    if (existsSync(join(live.root, "ref"))) {
-      cpSync(join(live.root, "ref"), join(newRoot, "ref"), { recursive: true });
-    }
-    if (existsSync(join(live.root, "issue-analysis.md"))) {
-      cpSync(join(live.root, "issue-analysis.md"),
-        join(newRoot, "issue-analysis.md"));
-    }
-    // 环境凭据:各组各自解出、各自给新会话存一份自己的(vault 按会话 id
-    // 隔离;先复制后销毁旧的,顺序不能反)。解不出的组优雅缺省——后台
-    // 是消费方在场的依据,独立 root 只是记录,谁解不出来就只缺谁,
-    // 不炸转正。快照来源 IP 随值走(值已拷贝,来源事实保持)。
-    const oldEnvironment = state.environment;
-    let environment: IssueEnvironmentConfig | undefined;
-    if (oldEnvironment) {
-      const backendPassword = this.vault.credential(
-        id, oldEnvironment.credential_ref, "sopuser")?.password;
-      const root = oldEnvironment.root_credential_ref
-        ? this.vault.credential(id, oldEnvironment.root_credential_ref, "root")
-        : undefined;
-      const rows: VaultEnvironmentInput[] = [];
-      if (backendPassword) {
-        rows.push(backendVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
-          oldEnvironment.port, backendPassword));
-      }
-      if (root) {
-        rows.push(rootVaultRow(oldEnvironment.name, oldEnvironment.hosts[0],
-          oldEnvironment.port, root.password));
-      }
-      if (rows.length) {
-        const refs = this.vault.store(newId, rows);
-        const refByPurpose = (purpose: string) =>
-          refs.find((ref) => ref.purpose === purpose)?.id ?? "";
-        environment = {
-          credential_ref: backendPassword ? refByPurpose("both") : "",
-          name: oldEnvironment.name,
-          hosts: oldEnvironment.hosts,
-          port: oldEnvironment.port,
-          ...(root ? { root_credential_ref: refByPurpose("root") } : {}),
-          ...(oldEnvironment.environment_source_ip
-            ? { environment_source_ip: oldEnvironment.environment_source_ip }
-            : {}),
-        };
-      }
-    }
-    const now = new Date().toISOString();
-    const converted: IssueSessionState = {
-      id: newId,
-      account: state.account,
-      // 登记人随会话走(ADR-0031):转正是同一问题的转正,登记视角
-      // 的跟踪列表不该在此换会话时把测试跟丢。
-      reporter: state.reporter,
-      created_at: now,
-      updated_at: now,
-      title: state.title,
-      description: state.description,
-      source: "dts",
-      ticket,
-      ...(state.repo_urls?.length ? { repo_urls: state.repo_urls } : {}),
-      ...(state.repo_url ? { repo_url: state.repo_url } : {}),
-      ...(state.baseline ? { baseline: state.baseline } : {}),
-      ...(state.module ? { module: state.module } : {}),
-      ...(state.module_id ? { module_id: state.module_id } : {}),
-      // 锁随模块走:老会话的模块是人工选的,转正后仍是人工的意志(spec #57)。
-      ...(state.module_locked ? { module_locked: true } : {}),
-      ...(environment ? { environment } : {}),
-      scenario: "ticket",
-      round: 1,
-      // 继承段 3 个(inherited),当前 fix 段直接 in_progress(同 create
-      // 的首阶段理由:转正即入场,进度条当前节点必须亮)。
-      stage_states: initStageStates("ticket", 3)
-        .map((entry, index) =>
-          index === 3 ? "in_progress" as const : entry),
-      converted_from: id,
-      // 逐仓交付账只读引用(#31):账不拷贝,指向旧会话——旧会话归档但
-      // issue.json 原样在,前端仓卡按引用读旧账标注「转正前」;新会话
-      // 自己的 pushes/mrs/pipelines 只记新交付,两本账不混。
-      inherited_accounts: { issue: id },
-      status: "queued",
-      stage: "fix",
-      stage_note: `转正自 ${id}:分析报告已继承,直接进入问题修改`,
-      stage_at: now,
-      transitions: [],
-    };
-    recordTransition(converted, {
-      source: "platform", stage: "fix",
-      note: `由 ${id} 关联单号 ${ticket} 转正,分析报告已继承`,
-    });
-    // 继承仓全部切好转正分支(仓平等:每个在场仓都建,建不动的如实留日志)。
-    for (const repo of issueRepoWorkspaces(converted, newRoot)) {
-      if (!existsSync(join(repo.dir, ".git"))) continue;
-      try {
-        await ensureBranch({
-          dataDir: this.options.dataDir,
-          repoDir: repo.dir,
-          branch: expectedBranch(converted),
-        });
-      } catch (error) {
-        this.log(`[issue-flow] ${newId} 转正建分支失败(${repo.url}): ${String(error)}`);
-      }
-    }
-    // 收尾重查(H2):dts.detail 与 ensureBranch 是两段 await——并发窗里
-    // 同单号的活跃会话可能已经落地(双开转正/页面直建)。写终态、注册
-    // 新会话之前再查一次,同一把尺,命中即同款打回。
-    const lateClash = [...this.live.values()].find((item) =>
-      item.id !== id
-      && item.state.account === state.account
-      && item.state.ticket === ticket
-      && !isTerminal(item.state.status));
-    if (lateClash) {
-      throw new IssueControlError(
-        `单号 ${ticket} 已有活跃会话 ${lateClash.id},同一单号不能重复关联`);
-    }
-    saveState(newRoot, converted);
-    this.live.set(newId, {
-      id: newId, root: newRoot, state: converted,
-      humanGate: new HumanGate(join(newRoot, "waiting.json")),
-      controlEpoch: 0,
-    });
-    // 旧会话收口(不经 control:结论与链接有专属语义)。转正的本质
-    // 是问题成立+开新会话,结论按 issue 记,血缘留 converted_to(ADR-0037)。
-    state.conclusion = {
-      kind: "issue",
-      summary: `已关联单号 ${ticket},转正为 ${newId}`,
-      at: now,
-    };
-    state.converted_to = newId;
-    state.status = "archived";
-    recordTransition(state, {
-      source: "platform", note: `关联单号 ${ticket} 转正为 ${newId},本会话收口`,
-    });
-    saveState(live.root, state);
-    this.freezeMetricsSnapshot(live);
-    this.releaseDriver(live);
-    this.stopContainerInBackground(live, "关联单号转正");
-    this.vault.remove(id);
-    this.log(`[issue-flow] ${id} 关联 ${ticket} 转正为 ${newId}`);
-    void this.pump();
-    return { converted: summarize(converted) };
   }
 
   // ---- 关停 ----

@@ -145,9 +145,12 @@ export interface IssueOnceGeneratedSession {
   solved_pass: boolean;
 }
 
-/** 一根比率轴:分子与占比(分母=各自口径的会话数)。 */
+/** 一根比率轴:分子、分母与占比(分母=各自口径的会话数;一次定位
+ *  剔除转正会话后可与 summary.total 不同)。 */
 export interface IssueOnceGeneratedAxis {
   passed: number;
+  /** 该轴自己的分母。 */
+  total: number;
   /** 百分数一位小数;分母 0 = null(前端显示 —)。 */
   rate: number | null;
 }

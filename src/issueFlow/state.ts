@@ -55,7 +55,7 @@ export type IssueStatus =
   | "running"        // Agent 回合进行中
   | "waiting_user"   // Agent 举了 AskUserQuestion(或平台闸门),等用户作答
   | "idle"           // 回合结束,等用户下一句话
-  | "suspended"      // 无单流程结论为"问题",挂起等用户关联 DTS 单号转正
+  | "suspended"      // 存量:无单结论曾挂起等关联转正(机制已退役,ADR-0048,手动归档收口)
   | "archived"       // 已收口归档(结论见 conclusion)
   | "canceled"
   | "failed";
@@ -92,7 +92,7 @@ export interface StageTransition {
 export type IssueConclusionKind =
   | "non_issue"   // 非问题(误报/需求误解/无法复现)
   | "delivered"   // 修复完成即交付(合入与否看 mrs 账,不进结论,ADR-0037)
-  | "issue";      // 问题成立(含挂起后关联单号转正的收口,血缘见 converted_to)
+  | "issue";      // 确认是问题(现行为:直接闭环归档出提单模板,ADR-0048;存量含挂起转正收口,血缘见 converted_to)
 
 export interface IssueEnvironmentConfig {
   /** 环境引用(vault 里的 id);凭据永不进状态文件。 */
