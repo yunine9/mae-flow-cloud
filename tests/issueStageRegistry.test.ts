@@ -96,7 +96,9 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   assert.deepEqual(stagesAllowingTool("ticket", "submit_analysis"), ["analyze"]);
   assert.deepEqual(stagesAllowingTool("no_ticket", "submit_analysis"), ["analyze"]);
   assert.deepEqual(stagesAllowingTool("ticket", "report_ut"), [...STAGE_ROUTES.ticket]);
-  assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), [...STAGE_ROUTES.ticket]);
+  // 交付类收敛(#373,ADR-0050):push_branch/create_mr 启动流水线监看、
+  // 验绿门以 MR 台账为收口半边,与「提交 MR·跑绿」阶段语义绑定,独占。
+  assert.deepEqual(stagesAllowingTool("ticket", "create_mr"), ["mr_green"]);
   // build_deploy 封存(ADR-0013):无阶段开放,阶段门禁恒拒。
   assert.deepEqual(stagesAllowingTool("ticket", "build_deploy"), []);
   // complete_stage 是四个自报阶段(拉单/拉仓/修复/提交MR)的出口;
@@ -108,17 +110,21 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");
   assert.deepEqual(stagesAllowingTool("ticket", "pull_repo"), [...STAGE_ROUTES.ticket]);
   assert.deepEqual(stagesAllowingTool("ticket", "bind_module"), fromPrep);
-  // 自 fix 起常开:推送。
-  assert.deepEqual(stagesAllowingTool("ticket", "push_branch"),
-    [...STAGE_ROUTES.ticket]);
+  // 交付类独占:推送只在「提交 MR·跑绿」开放,修复阶段机械拒。
+  assert.deepEqual(stagesAllowingTool("ticket", "push_branch"), ["mr_green"]);
+  assert.equal(stageAllowsTool("ticket", "fix", "push_branch"), false);
+  assert.equal(stageAllowsTool("ticket", "fix", "create_mr"), false);
+  assert.equal(stageAllowsTool("ticket", "mr_green", "push_branch"), true);
+  assert.equal(stageAllowsTool("ticket", "mr_green", "create_mr"), true);
   // 无单 conclude:提交与跳过不再开放,拉仓/改绑/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "pull_repo"), true);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "bind_module"), true);
-  // 无单场景没有 fix 阶段:push_branch 无处开放(阶段门禁必拒)。
-  assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), [...STAGE_ROUTES.no_ticket]);
-  assert.equal(stageAllowsTool("no_ticket", "conclude", "push_branch"), true);
+  // 无单场景不交付代码:路线不含 mr_green,推送/建 MR 无处开放。
+  assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), []);
+  assert.deepEqual(stagesAllowingTool("no_ticket", "create_mr"), []);
+  assert.equal(stageAllowsTool("no_ticket", "conclude", "push_branch"), false);
   // 不在路线里的阶段(异常现场)一律拒绝,不放空子。
   assert.equal(stageAllowsTool("no_ticket", "dts_info", "request_env"), false);
 });

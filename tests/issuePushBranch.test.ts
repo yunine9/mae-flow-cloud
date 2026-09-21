@@ -12,8 +12,8 @@
  *
  * 范式与 issueInterventionTiers.test.ts / issueFlowService.test.ts 同款:
  * ScriptedModelServer 剧本 + 本地裸仓,只走公开 API 断言。推送用例走
- * 固定流程种子(fix 阶段收口后的返工续推:阶段门禁放行 push_branch,
- * 收口态不牵催办)。
+ * 固定流程种子(「提交 MR·跑绿」阶段的续推:交付工具收敛后 push_branch
+ * 只在该阶段开放,收口态不牵催办)。
  */
 
 import { test } from "node:test";
@@ -73,9 +73,9 @@ function baseOptions(dataDir: string, model: ScriptedModelServer): IssueFlowOpti
   };
 }
 
-/** 推送回归现场:盘上种子一个固定流程会话(fix 阶段收口后的返工续推,
- * 阶段门禁放行 push_branch,收口态不牵催办),恢复管线启动。必须在
- * 构造服务**之前**调用。 */
+/** 推送回归现场:盘上种子一个固定流程会话(「提交 MR·跑绿」阶段的
+ * 续推:交付工具收敛后 push_branch 只在该阶段开放,收口态不牵催办)。
+ * 必须在构造服务**之前**调用。 */
 function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
   const now = new Date().toISOString();
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
@@ -87,7 +87,7 @@ function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "pending"],
     status: "running",
-    stage: "fix", stage_note: "正在排查", stage_at: now,
+    stage: "mr_green", stage_note: "等待跑绿", stage_at: now,
   }));
   return { id: "issue-1" };
 }
@@ -215,7 +215,7 @@ function raceState(alpha: string, beta: string, now: string): IssueSessionState 
     repo_url: alpha, repo_urls: [alpha, beta],
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "pending"],
-    status: "idle", stage: "fix", stage_note: "", stage_at: now,
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
   };
 }
 
