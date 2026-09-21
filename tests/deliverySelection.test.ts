@@ -325,6 +325,9 @@ for (const current of ["external_verify", "end", "rework"]) {
       const task = service.create("整理失败后继续交付");
       const internal = (service as any).tasks.get(task.id);
       const baseline = repo.git("rev-parse", "HEAD^");
+      // 目标分支停留在基准提交；待交付内容只能在任务分支，不能伪装成上游已有内容。
+      repo.git("checkout", "-qb", "feature");
+      repo.git("branch", "-f", "master", baseline);
       writeFileSync(join(repo.cwd, ".mae-flow.json"), JSON.stringify({ current,
         step_heads: { branch_create: baseline }, config: { 分支名: "feature", 基线分支: "master" } }));
       internal.cwd = repo.cwd;
