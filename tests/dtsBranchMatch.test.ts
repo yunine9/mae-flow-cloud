@@ -282,9 +282,10 @@ const registration = readFileSync(
 
 test("UI 契约:分支列在列,未配置深链配置中心,选择框在 DTS 列表退役", () => {
   // 列骨架:分支列有自己的列宽把手(可拖拽)与表头;列在版本与状态之间。
+  // 9:8 → 10:9:#350 发起备注列入列(launch 与 module 之间)。
   assert.match(registration, /DtsColResizeHandle colKey="branch" label="分支"/);
   assert.match(registration, /\{renderCol\("branch"\)\}/);
-  assert.match(registration, /const colCount = moduleCol \? 9 : 8;/);
+  assert.match(registration, /const colCount = moduleCol \? 10 : 9;/);
   // 未命中:深链配置中心「版本与分支」页签,文案带「未配置分支」。
   assert.match(registration, /未配置分支,前往配置/);
   assert.match(registration, /href="\/configuration\?tab=versions"/);

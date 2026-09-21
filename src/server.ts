@@ -2121,7 +2121,13 @@ export function createTaskServer(
           });
         }
         const businessModuleId = typeof body.business_module_id === "string" ? body.business_module_id.trim() : "";
-        if (!businessModuleId) return json(response, 400, { error: "请选择所属业务模块" });
+        // 归属模块:登录下单且平台已配置模块库时必选——让用户选归属的前提
+        // 是平台真的配置了归属选项。本地单人/测试(无鉴权)与未配置模块库
+        // 的部署不卡创建,否则所有不带模块的既有脚本与测试全部 400。
+        const hasBusinessModules = listBusinessModules(service.options.dataDir).modules.length > 0;
+        if (viewer && hasBusinessModules && !businessModuleId) {
+          return json(response, 400, { error: "请选择所属业务模块" });
+        }
         // 任务归属人=登录者本人(不许替别人下单);无鉴权形态(本地
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
