@@ -434,3 +434,67 @@ for (const current of ["external_verify", "end", "rework"]) {
     } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); rmSync(repo.cwd, { recursive: true, force: true }); }
   });
 }
+
+for (const status of ["requested", "confirmed"] as const) {
+  test(`中文及引号路径：${status} 旧清单恢复后真实整理不再 pathspec 失败`, async () => {
+    const repo = repository({ commitArtifact: true });
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-quoted-delivery-"));
+    const service = new TaskService({ dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+    try {
+      const baseline = repo.git("rev-parse", "HEAD^");
+      const paths = ["docs/template/软件实现设计-design.md", 'src/quote"name.ts', "src/with space.ts", "src/[ab].ts"];
+      mkdirSync(join(repo.cwd, "docs/template"), { recursive: true });
+      for (const path of paths) writeFileSync(join(repo.cwd, path), "keep exactly\n");
+      repo.git("add", "--", ...paths.map(path => `:(literal)${path}`));
+      repo.git("commit", "-qm", "add non-ASCII paths");
+      repo.git("update-ref", "refs/remotes/origin/master", baseline);
+      const task = service.create("中文路径交付回归");
+      const internal = (service as any).tasks.get(task.id);
+      internal.cwd = repo.cwd;
+      internal.summary.baseline = "master";
+      const quoted = repo.git("-c", "core.quotePath=true", "diff", "--name-only", baseline, "HEAD", "--", paths[0]);
+      assert.ok(quoted.startsWith('"docs/template/\\'), "真实 Git 默认输出含八进制转义");
+      const storedPath = status === "requested" ? quoted : quoted.replace(/\\/g, "/");
+      internal.summary.delivery_selection = { status, paths: ["src/feature.ts", storedPath, ...paths.slice(1)],
+        observed_paths: [storedPath], excluded_paths: ["target/classes/Feature.class"],
+        head: repo.git("rev-parse", "HEAD"), baseline, waiting_id: "existing-card", updated_at: new Date().toISOString() };
+      const snapshot = await deliveryChangeSnapshot(repo.cwd);
+      assert.ok(snapshot);
+      for (const path of paths) assert.ok(snapshot.committed_paths.includes(path), path);
+      const contribution = await (service as any).deliveryContribution(internal, snapshot);
+      for (const path of paths) assert.ok(contribution.paths.includes(path), path);
+      assert.equal(internal.summary.delivery_selection.status, status, "修路径不伪造用户确认");
+      assert.ok(internal.summary.delivery_selection.paths.includes(paths[0]), "存量八进制路径已恢复");
+      assert.deepEqual(internal.summary.delivery_selection.observed_paths, [paths[0]]);
+      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
+      for (const path of paths) assert.equal(repo.git("show", `HEAD:${path}`), "keep exactly");
+      assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "");
+      assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
+      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+      // 确认卡明确去掉中文文档和含 glob 字符的文件，也必须按准确文件执行。
+      writeFileSync(join(repo.cwd, "src/a.ts"), "unrelated\n");
+      repo.git("add", "src/a.ts"); repo.git("commit", "-qm", "unrelated file");
+      await (service as any).applyDeliverySelectionAdjustment(internal, baseline,
+        [paths[0], "src/[ab].ts"], [], "skip", "owner");
+      assert.equal(repo.git("ls-files", "--", `:(literal)${paths[0]}`), "");
+      assert.equal(repo.git("ls-files", "--", ":(literal)src/[ab].ts"), "");
+      assert.equal(repo.git("show", "HEAD:src/a.ts"), "unrelated", "[ab] 不能按通配符误删其他文件");
+      assert.equal(readFileSync(join(repo.cwd, paths[0]), "utf8"), "keep exactly\n");
+    } finally {
+      await service.shutdown(); rmSync(repo.cwd, { recursive: true, force: true }); rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("交付快照中未提交中文重命名与箭头文件名不被展示格式破坏", async () => {
+  const repo = repository();
+  try {
+    repo.git("mv", "src/feature.ts", "src/新 名.ts");
+    writeFileSync(join(repo.cwd, 'src/a -> b"c.ts'), "new\n");
+    repo.git("add", "--", 'src/a -> b"c.ts');
+    const snapshot = await deliveryChangeSnapshot(repo.cwd);
+    assert.ok(snapshot?.workspace_paths.includes("src/新 名.ts"));
+    assert.ok(snapshot?.workspace_paths.includes('src/a -> b"c.ts'));
+    assert.ok(!snapshot?.workspace_paths.includes('b"c.ts'));
+  } finally { rmSync(repo.cwd, { recursive: true, force: true }); }
+});

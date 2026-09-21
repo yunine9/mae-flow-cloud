@@ -1,3 +1,4 @@
+import { recoverQuotedGitPaths } from "./gitPaths.ts";
 /** 推送确认保留用户选定的文件范围。内容和 SHA 变化由 Agent 说明，
  * 不自动作废决定；明确打回或范围调整仍创建新的待办。 */
 
@@ -55,7 +56,8 @@ export function describeDirtyPaths(paths: string[]): string {
 
 /** 交付清单路径归一:去 ./ 前缀、反斜杠转正、去重排序;绝对路径、..、控制字符
  * 一律拒绝——清单是要拿去 git 操作的,不能让一条路径逃出工作区。 */
-export function normalizedDeliveryPaths(values: string[]): string[] {
+export function normalizedDeliveryPaths(values: string[], knownPaths?: string[]): string[] {
+  if (knownPaths) values = recoverQuotedGitPaths(values, knownPaths);
   const paths = values.map((value) => String(value).trim()
     .replace(/\\/g, "/").replace(/^(?:\.\/)+/, "")).filter(Boolean);
   for (const path of paths) {

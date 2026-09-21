@@ -1,3 +1,4 @@
+import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
 import { closeMergeRequest } from "./mrClient.ts";
 import { ticketCorrectionBlocks, prepareTicketRewrite, applyTicketRewrite, correctionJournal, validateCorrectionTicket, writeCorrectionJson, mapCorrectionReferences, migrateTicketArtifacts, type TicketCorrection, type TicketRewrite } from "./ticketCorrection.ts";
@@ -10601,7 +10602,7 @@ export class TaskService {
     }
     const contribution = await this.deliveryContribution(task, snapshot);
     let paths = normalizedDeliveryPaths(
-      values === "committed" ? contribution.paths : values);
+      values === "committed" ? contribution.paths : values, snapshot.workspace_paths);
     const visible = new Set(snapshot.workspace_paths);
     const unknown = paths.filter((path) => !visible.has(path));
     let vanishedNote = "";
@@ -10830,12 +10831,12 @@ export class TaskService {
         ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
       if (inBaseline.status === 0) {
         if (existsSync(absolute)) preserved.set(path, readFileSync(absolute));
-        await run(["checkout", baseline, "--", path], `回退提交内容 ${path}`);
+        await run(["checkout", baseline, "--", `:(literal)${path}`], `回退提交内容 ${path}`);
       } else {
-        await run(["rm", "--cached", "-q", "--", path], `移出索引 ${path}`);
+        await run(["rm", "--cached", "-q", "--", `:(literal)${path}`], `移出索引 ${path}`);
       }
     }
-    if (add.length) await run(["add", "--", ...add], "补入勾选文件");
+    if (add.length) await run(["add", "--", ...add.map(path => `:(literal)${path}`)], "补入勾选文件");
     const staged = await runSafeWorktreeGitAsync(cwd,
       ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
     if (staged.status !== 0) {
@@ -16402,9 +16403,26 @@ export class TaskService {
     task: TaskState,
     snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>,
   ): Promise<{ paths: string[]; base_sha: string }> {
+    // 只修正有当前 Git 事实佐证的旧展示路径，不改状态、授权范围或 SHA。
+    const result = (paths: string[], base_sha: string) => {
+      const known = [...snapshot.workspace_paths, ...paths];
+      let changed = false;
+      const selection = task.summary.delivery_selection;
+      const lists = selection ? [selection.paths, selection.excluded_paths, selection.observed_paths] : [];
+      const review = task.summary.delivery?.push_review?.committed_paths;
+      if (review) lists.push(review);
+      for (const list of lists) {
+        if (!list) continue;
+        const restored = recoverQuotedGitPaths(list, known);
+        if (restored.some((path, i) => path !== list[i])) {
+          list.splice(0, list.length, ...restored); changed = true;
+        }
+      }
+      if (changed) this.persist(task);
+      return { paths, base_sha };
+    };
     if (!task.cwd) {
-      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
-        base_sha: snapshot.baseline! };
+      return result(normalizedDeliveryPaths(snapshot.committed_paths), snapshot.baseline!);
     }
     try {
       const state = JSON.parse(readFileSync(
@@ -16429,14 +16447,11 @@ export class TaskService {
       if (common.status !== 0 || bases.length !== 1) throw new Error("无法确定唯一的 MR 比较起点");
       const comparisonBase = bases[0]!;
       const contribution = await runSafeWorktreeGitAsync(
-        task.cwd, ["diff", "--name-only", comparisonBase, snapshot.head, "--"],
+        task.cwd, ["diff", "--name-only", "-z", comparisonBase, snapshot.head, "--"],
         { timeoutMs: 30_000 });
       if (contribution.status !== 0) throw new Error("贡献差异读取失败");
-      return {
-        paths: normalizedDeliveryPaths(
-          String(contribution.stdout ?? "").split("\n")),
-        base_sha: comparisonBase,
-      };
+      return result(normalizedDeliveryPaths(
+        gitNullPaths(String(contribution.stdout ?? ""))), comparisonBase);
     } catch (error) {
       // 老任务/本地仓没有目标分支配置或远端目标引用时，仅在线性历史中
       // 沿用任务起点；两种缺失对“无基点可比”是同一回事。历史里已有
@@ -16450,8 +16465,7 @@ export class TaskService {
           || !["目标分支缺失", "目标 ref 不存在"].includes(error.message)) {
         throw new TaskControlError(`无法确定交付差异范围：${String(error)}。请核对目标分支引用；未修改交付授权或代码。`);
       }
-      return { paths: normalizedDeliveryPaths(snapshot.committed_paths),
-        base_sha: snapshot.baseline! };
+      return result(normalizedDeliveryPaths(snapshot.committed_paths), snapshot.baseline!);
     }
   }
 
@@ -16971,8 +16985,8 @@ export class TaskService {
           ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
         message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", "按已确认范围整理修复提交"),
       });
-      const afterPaths = normalizedDeliveryPaths((await run(["diff", "--name-only",
-        contribution.base_sha, commit, "--"], "复核整理后的范围")).split("\n"));
+      const afterPaths = normalizedDeliveryPaths((await run(["diff", "--name-only", "-z",
+        contribution.base_sha, commit, "--"], "复核整理后的范围")).split("\0"));
       const remainingPlatform = (await run(["log", "--format=", "--name-only", "-z", "--diff-filter=A",
         `${contribution.base_sha}..${commit}`, "--", ...AGENT_PLATFORM_ROOTS], "复核平台目录历史"))
         .split("\0").map(path => path.trim()).filter(isAgentPlatformPath);
