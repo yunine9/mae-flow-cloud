@@ -168,12 +168,16 @@ test("举卡决策码:码表钉死(码+文案对),分派纯函数只认 (kind, c
   assert.equal(gateVerdict("conclude", "issue"), "archive");
   assert.equal(gateVerdict("conclude", "non_issue"), "archive");
   assert.equal(gateVerdict("conclude", "supplement"), "rework");
-  // 验证闸只有「发现问题」一个码(ADR-0043:通过无码——合入即通过);
-  // 旧「pass」码随选项退役,认不得原样打回(部署在途的旧卡补点即此路)。
+  // 验证闸卡面只有「发现问题」一个码(ADR-0043:通过无码——合入即
+  // 通过);自定义答复按文本在场归码 note(等待中的插话,闸保持)——
+  // note 是服务端归的码,不在卡面码表;旧「pass」码随选项退役,认不
+  // 得原样打回。
   assert.equal(gateVerdict("env_verify", "fail"), "fail");
+  assert.equal(gateVerdict("env_verify", "note"), "note");
   assert.equal(gateVerdict("env_verify", "pass"), "unrecognized");
-  // 认不得的答复(自由作答/乱码):报告确认与结论按补充意见处理
-  // (旧协议里非确认文本的 else 分支语义),验证闸一律打回(旧 409)。
+  // 认不得的答复(乱码/空码):报告确认与结论按补充意见处理(旧协议
+  // 里非确认文本的 else 分支语义);验证闸没带文本的认不得码仍打回
+  // (带文本的自由作答在 service 归码 note,场景用例见 issueStageExit)。
   assert.equal(gateVerdict("analysis_confirm", "确认报告,开始问题修复"), "rework",
     "文案只是普通文本,不再是匹配键");
   assert.equal(gateVerdict("conclude", ""), "rework");
@@ -253,4 +257,43 @@ test("生成等价性对账:同一注册表生成的简报与门禁,工具清单
   // 渲染注记不参与门禁:同一条目带 note 与不带 note 放行结果一致。
   assert.match(stageToolLine("analyze"), /dts_get_ticket\(重查\)/);
   assert.equal(stageAllowsTool("ticket", "analyze", "dts_get_ticket"), true);
+});
+
+test("fix 阶段推完代码停在原地等绿:催办换定向纠偏词(#357),没推过代码照旧通用催办", () => {
+  const now = new Date().toISOString();
+  const base = {
+    id: "issue-nudge-fix", account: "dev",
+    created_at: now, updated_at: now,
+    title: "t", description: "", source: "dts", ticket: "T1",
+    repo_url: "/tmp/x.git", scenario: "ticket", round: 1,
+    stage_states: STAGE_ROUTES.ticket.map(() => "pending"),
+    status: "running", stage: "fix", stage_note: "", stage_at: now,
+  } satisfies IssueSessionState;
+  const pushed = { repo: "/tmp/x.git", branch: "master_dev_T1",
+    sha: "a".repeat(40), at: now };
+  // 首修推完代码、无 MR 无监看(事故轨迹):催办要点破本阶段无人监听
+  // 流水线、拆掉"等绿才能申报"的误读,而不是把简报再砸一遍。
+  const waited = fixedNudgeNotice({
+    ...base, stage: "fix", pushes: [pushed],
+  }, 1, 2);
+  assert.match(waited, /不监听流水线/, "要点破本阶段没有监看");
+  assert.match(waited, /不是"宣布问题交付完成"/, "要拆掉申报=宣布完成的误读");
+  assert.match(waited, /complete_stage/, "要指路推进");
+  assert.doesNotMatch(waited, /当前阶段「/, "定向词不复读简报(简报纠正不了)");
+  // 没推过代码的提前收嘴:通用催办词照旧(带阶段简报)。
+  const generic = fixedNudgeNotice({ ...base, stage: "fix" }, 1, 2);
+  assert.match(generic, /当前阶段「问题修复」/);
+  // 有 MR 在账不走定向词:那种轨迹有监看表,等绿归 settlePipeline 的
+  // 全绿提醒(pipeline.green.remind_fix)接手。
+  const withMrs = fixedNudgeNotice({
+    ...base, stage: "fix", pushes: [pushed],
+    mrs: [{ repo: "/tmp/x.git", branch: "master_dev_T1", title: "t",
+      url: "http://x/mr/1", at: now }],
+  }, 1, 2);
+  assert.match(withMrs, /当前阶段「问题修复」/,
+    "有 MR 的等绿另有全绿提醒接手,催办不复读定向词");
+  // 出口文案钉死(#357 的误读源头):fix 出口不再写"申报完成"。
+  const spec = FIXED_STAGE_SPECS.fix;
+  assert.match(spec.exit, /推进到「提交 MR·跑绿」/);
+  assert.doesNotMatch(spec.exit, /申报完成/);
 });

@@ -176,6 +176,18 @@ export interface Annotation {
     answered_by?: string;
     revision?: number;
   }>;
+  /** 作者在意见处对 Agent 回应的逐条回复(问题域检视回复环,ADR-0035):
+   * 每条快照它所回应的那份回执(回执随之清空,最新回应只在 response),
+   * 按序排列即「Agent 回复 → 作者回复 → …」的完整线程;意见正文不动、
+   * revision 不变,Agent 须按回复重新 respond(同 revision)。 */
+  author_replies?: Array<{
+    text: string;
+    replied_at: string;
+    by?: string;
+    revision: number;
+    /** 被回应的那份回执:清空后只有这里还能看到它。 */
+    response: AnnotationResponse;
+  }>;
 }
 
 export interface AnnotationInput {
@@ -222,7 +234,10 @@ type Operation =
       line?: number; anchor?: string; note?: string }
   | { op: "delivery_reset"; id: string; at: string; reason: string }
   /** 人在澄清卡上答了 Agent 的追问:追问留档带答复,回执清空等新回执。 */
-  | { op: "clarified"; id: string; answer: string; at: string; by?: string };
+  | { op: "clarified"; id: string; answer: string; at: string; by?: string }
+  /** 作者在意见处回复了 Agent 的回应:回复留档快照所回应的回执,
+   * 回执清空等 Agent 按回复重新回应(问题域检视回复环,ADR-0035)。 */
+  | { op: "author_reply"; id: string; text: string; at: string; by?: string };
 
 /** 台账的原始操作(只读暴露给会话流投影:回执/退回/确认各自落账的时刻
  * 只在操作上,回放后的记录只剩"最终状态")。 */
@@ -411,6 +426,25 @@ export class AnnotationStore {
           answer: operation.answer,
           ...(operation.by ? { answered_by: operation.by } : {}),
           revision: found.rework ?? 0,
+        }];
+        found.response = undefined;
+        continue;
+      }
+      if (operation.op === "author_reply") {
+        const found = byId.get(operation.id);
+        // 只对"当前版本有回执可回"的意见成立:回执已被上一条回复清空
+        // (等 Agent 重新回应)或版本已变时,这份回复是迟到的历史,不改状态。
+        if (!found || found.status !== "sent"
+            || !found.response
+            || found.response.revision !== (found.rework ?? 0)) {
+          continue;
+        }
+        found.author_replies = [...(found.author_replies ?? []), {
+          text: operation.text,
+          replied_at: operation.at,
+          ...(operation.by ? { by: operation.by } : {}),
+          revision: found.rework ?? 0,
+          response: found.response,
         }];
         found.response = undefined;
         continue;
@@ -665,6 +699,31 @@ export class AnnotationStore {
     const normalized = String(answer ?? "").trim();
     if (!normalized) throw new AnnotationError("答复不能为空");
     this.append({ op: "clarified", id, answer: normalized,
+      at: new Date().toISOString(), ...(by ? { by } : {}) });
+    return this.list().find((item) => item.id === id)!;
+  }
+
+  /** 意见作者在意见处回复 Agent 的当前回应(问题域检视回复环,
+   * ADR-0035):回复留档并快照所回应的回执,回执清空——作者是否认可
+   * 仍由后续确认决定,这里只把球踢回 Agent,唤醒由上层负责。只接受
+   * 已提交且回应还在场的意见;上一条回复还没被 Agent 处理时不能再叠。 */
+  replyToResponse(id: string, text: string, by?: string): Annotation {
+    const found = this.list().find((item) => item.id === id);
+    if (!found) throw new AnnotationError(`批注不存在: ${id}`);
+    if (found.status === "draft") {
+      throw new AnnotationError("意见尚未提交,不能回复");
+    }
+    if (found.status === "dropped") {
+      throw new AnnotationError("这条已经移除");
+    }
+    if (!found.response) {
+      throw new AnnotationError(
+        "Agent 还没有回复这条意见,或你上一条回复还在等它处理",
+      );
+    }
+    const normalized = String(text ?? "").trim();
+    if (!normalized) throw new AnnotationError("回复不能为空");
+    this.append({ op: "author_reply", id, text: normalized,
       at: new Date().toISOString(), ...(by ? { by } : {}) });
     return this.list().find((item) => item.id === id)!;
   }

@@ -229,6 +229,7 @@ import {
 } from "./metricsSnapshot.ts";
 import { promptCopy } from "./promptCopy.ts";
 import {
+  AnnotationError,
   orderAnnotations,
   type AnchorCheck,
   type Annotation,
@@ -238,9 +239,11 @@ import {
   anchorChecks,
   dropReview,
   renderReviewNotes,
+  renderReviewThread,
   reviewStore,
   snapshotAnalysisVersion,
   submitReviews as submitReviewLedger,
+  writeReviewNotesSnapshot,
 } from "./reviews.ts";
 import {
   issueConversation,
@@ -2287,7 +2290,11 @@ export class IssueFlowService {
       const driver = await this.openDriver(live);
       return driver.startResume(issueResumePrompt(live.state, full,
         this.environmentCredentials(live),
-        { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+        {
+          tier: this.tierOf(live),
+          workspace: live.root,
+          blockedPaths: readResourceBlocks(this.options.dataDir),
+        }));
     });
   }
 
@@ -3866,7 +3873,11 @@ export class IssueFlowService {
           + (replay ? `\n\n${replay}` : "");
         return driver.startResume(issueResumePrompt(live.state, decisionText,
           this.environmentCredentials(live),
-          { tier: this.tierOf(live), blockedPaths: readResourceBlocks(this.options.dataDir) }));
+          {
+          tier: this.tierOf(live),
+          workspace: live.root,
+          blockedPaths: readResourceBlocks(this.options.dataDir),
+        }));
       });
     });
     return summarize(live.state);
@@ -3962,6 +3973,13 @@ export class IssueFlowService {
         && (rawDecision || notes)) {
       code = "supply";
     }
+    // env_verify 的自定义答复归码:没带 fail 码但带了文本(卡上
+    // 「自定义答复」通道,前端不发明码)按等待中的插话受理;连文本
+    // 都没有的认不得码照旧打回,不留乱码冒充插话的门。
+    if (gate.kind === "env_verify" && code !== "fail"
+        && (rawDecision || notes)) {
+      code = "note";
+    }
     // 显示语义的 decision:提交带了人话就原样用;只带码就从码表反查;
     // 认不得的码原样示人(409 的现场账要能看到交上来的到底是什么)。
     const decision = rawDecision
@@ -3980,6 +3998,31 @@ export class IssueFlowService {
     if (verdict === "unrecognized") {
       throw new IssueControlError(
         `无法识别的验证答复:「${decision.slice(0, 40)}」,请通过问题卡的选项作答`);
+    }
+    if (verdict === "note") {
+      // env_verify 的自定义答复:验证等待中用户有话要说(如 MR 冒出
+      // 合并冲突要处理——答「发现问题」是回退重修,与事实不符;通过
+      // 又是沉默等合入,没处说话)。按等待中的插话处理(与检视意见
+      // 插话同机制):开一回合把话递给 AI,闸保持原样——回合收口时
+      // 闸在场仍定格等待;处理完卡还在,继续等合入,仍可改答「发现
+      // 问题」。
+      recordTransition(state, {
+        source: "platform",
+        note: `用户插话(验证等待中): ${(rawDecision || notes).split("\n")[0]}`,
+      });
+      saveState(live.root, state);
+      // 闸没清,问句半边仍在 issue.json,human_decision 只补答半边、
+      // 不带问句快照——与闸答清卡的那几路不同。
+      this.appendSessionEvent(live, "human_decision", {
+        waiting_id: gate.id,
+        state_version: gate.state_version,
+        decision: rawDecision || notes,
+        ...(rawDecision && notes ? { notes } : { notes: "" }),
+      });
+      this.continueTurn(live, promptCopy("notices", "gate.verify.note", {
+        text: [rawDecision, notes].filter(Boolean).join("\n"),
+      }));
+      return summarize(state);
     }
     delete state.gate;
     recordTransition(state, {
@@ -4091,8 +4134,11 @@ export class IssueFlowService {
       // (deadline 重置、watching=true、清上一轮红灯账)并重新监看同一
       // SHA——平台侧已处理则这次就绿(走 success 终态处理:提醒重新申报/
       // 进验证),仍红则重新走分诊(可能变成可修,照常派回合;仍不可修
-      // 则再次举卡)。不开 AI 回合:监看是宿主的事,终态处理路径自会开回合;
-      // 会话随之落 idle(等监看结果,人可照常续聊)。
+      // 则再次举卡)。补充说明非空必须开回合带话(ADR-0049,#368):卡上
+      // 选项装不下指令,真指令(如「回退 C++ 改用 JS」)只写在补充说明
+      // 里,只进账本不开回合等于用户没说——AI 先按补充说明处置,监看器
+      // 自然跟到新提交;为空(纯确认)维持不开回合,落 idle 等监看结果。
+      // 两路监看都照挂,竞态由忙时转投与「头已变丢弃旧结果」既有守卫兜。
       const target = gate.pipeline;
       if (!target) {
         throw new IssueControlError("闸缺少流水线定位(举闸配置错误)");
@@ -4126,6 +4172,23 @@ export class IssueFlowService {
       delete watch.last_repair_sha;
       delete watch.last_failure_summary;
       watch.reds = 0;
+      const supplement = (notes ?? "").trim();
+      if (supplement) {
+        // 带话开回合:状态不落 idle——回合在飞,runTurn 自管状态。
+        state.stage_note = `已按人工答复重新监看流水线(${target.repo})`
+          + `@ ${target.sha.slice(0, 12)};用户补充: `
+          + `${supplement.split("\n")[0].slice(0, 80)}`;
+        saveState(live.root, state);
+        this.log(`[issue-flow] ${live.id} 不可修闸已答带补充说明,重置监看账`
+          + `(${target.repo}) @ ${target.sha.slice(0, 12)},开回合带话`);
+        void this.watchPipeline(live, target.repo, target.sha);
+        this.continueTurn(live, promptCopy("notices", "gate.resume.notes", {
+          repo: target.repo,
+          sha: target.sha.slice(0, 12),
+          notes: supplement,
+        }));
+        return summarize(state);
+      }
       state.status = "idle";
       state.stage_note = `已按人工答复重新监看流水线(${target.repo})`
         + `@ ${target.sha.slice(0, 12)},等结果`;
@@ -4593,6 +4656,9 @@ export class IssueFlowService {
         throw new IssueControlError("问题卡状态已变化,请刷新后重试");
       }
     }
+    // 意见清单快照(#366):全部可引用意见落盘 reviews/review-notes.md,
+    // 注入回合的正文被上下文压缩/服务重启丢掉后,AI 读文件拿回。
+    writeReviewNotesSnapshot(live.root, state.title, state.round ?? 1, "triage");
     const notes = renderReviewNotes(sent, state.title, state.round ?? 1, "triage");
     const message = [
       promptCopy("notices", "review.triage", { count: sent.length }),
@@ -4620,6 +4686,63 @@ export class IssueFlowService {
     } else {
       // 运行中 steer 进当回合(#284 通道不变);排队/接管/无闸无卡的
       // 等待态停靠随行;空闲开新回合——发送咽喉同一。
+      this.startPlatformTurn(live, message);
+    }
+    state.stage_note = receipt;
+    saveState(live.root, state);
+    return summarize(state);
+  }
+
+  /** 意见处就地回复(检视回复环,ADR-0035 的下半圈):用户对 AI 的
+   * 逐条回应再回复——账本 replyToResponse 落账留档并清空旧回执(球
+   * 踢回 Agent),平台只守卫、留痕、唤醒:把完整线程递给 AI,由它对
+   * 该意见重新 respond_review。needs_clarification 的补充说明走同一
+   * 入口。与提交检视同款边界:平台闸不动作废、保持原样(检视与验证
+   * 互不相关,#350);挂起的 Agent 问题卡不替用户作答,答复停靠随卡
+   * 答完的续聊送达。 */
+  replyToReview(id: string, reference: number | string, text: string): IssueSummary {
+    const live = this.require(id);
+    const { state } = live;
+    if (isTerminal(state.status)) throw new IssueControlError("会话已结束");
+    if (state.takeover) {
+      throw new IssueControlError("现场由你接管中；请交还 Agent 后再回复检视意见");
+    }
+    const reply = String(text ?? "").trim();
+    if (!reply) throw new IssueControlError("回复不能为空");
+    const store = reviewStore(live.root);
+    // 按意见号或台账 id 定位一条已送出的检视意见(口径同 respond_review)。
+    const items = store.list().filter((item) =>
+      item.status === "sent" && item.sent_via === "issue_review");
+    const match = typeof reference === "number" || /^\d+$/.test(String(reference))
+      ? items.find((item) => item.seq === Math.trunc(Number(reference)))
+      : items.find((item) => item.id === String(reference).trim());
+    if (!match) throw new IssueControlError("没有找到这条已提交的检视意见");
+    // 账本的打回(没回应可回/上一条回复还没被处理)是人话控制反馈,
+    // 转 IssueControlError 落 409,不进未登记错误族的 500。
+    let updated: Annotation;
+    try {
+      updated = store.replyToResponse(match.id, reply, live.state.account);
+    } catch (error) {
+      if (error instanceof AnnotationError) {
+        throw new IssueControlError(error.message);
+      }
+      throw error;
+    }
+    const receipt = `已把你对意见${match.seq} 的回复递给 AI；它会在该意见处再答复。`;
+    state.stage_note = receipt;
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "user_message", {
+      text: `回复了意见${match.seq}`, via: "review_reply",
+    });
+    const message = [
+      promptCopy("notices", "review.reply"),
+      renderReviewThread(updated),
+    ].join("\n\n");
+    const gatePending = state.status === "waiting_user" && !!state.gate;
+    if (gatePending && !this.turning.has(live.id)) {
+      this.continueTurn(live, message);
+    } else {
+      // 运行中 steer 进当回合;等卡/空闲停靠随行或开新回合——发送咽喉同提交检视。
       this.startPlatformTurn(live, message);
     }
     state.stage_note = receipt;
@@ -5898,6 +6021,17 @@ export class IssueFlowService {
         saveState(live.root, state);
         this.startPlatformTurn(live,
           promptCopy("notices", "pipeline.green.remind", {
+            repos: mrs.map((mr) => mr.repo).join(", "),
+          }));
+      } else if (allGreen && !anyWatching && state.stage === "fix") {
+        // 全绿但 AI 停在 fix 阶段(#357):它没调 complete_stage 推进
+        // 就结束了回合,在等一个此阶段没人监听的流水线。MR 已建且全绿,
+        // 这里是唯一的唤醒点——开回合指路:先推进阶段,再按 mr_green
+        // 口径申报。无 MR 的首修等不到全绿(监看压根没挂),那条轨迹
+        // 归催办词的定向纠偏(nudge.fix_wait_pipeline)。
+        saveState(live.root, state);
+        this.startPlatformTurn(live,
+          promptCopy("notices", "pipeline.green.remind_fix", {
             repos: mrs.map((mr) => mr.repo).join(", "),
           }));
       } else if (!allGreen && !anyWatching && mrs.length > 0) {

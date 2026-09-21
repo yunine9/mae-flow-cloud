@@ -1006,6 +1006,17 @@ export async function handleIssueRoutes(
       const body = await readBody(request);
       return done(200, issueFlow.submitReviews(id, Array.isArray(body.ids) ? body.ids.map(String) : undefined));
     }
+    // 意见处就地回复(检视回复环):review = 意见号或台账 id。
+    if (method === "POST" && parts[2] === "reviews"
+        && parts[3] === "reply" && parts.length === 4) {
+      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
+        return done(403, { error: "只有归属人能回复检视意见" });
+      }
+      const body = await readBody(request);
+      const reference = /^\d+$/.test(String(body.review ?? ""))
+        ? Number(body.review) : String(body.review ?? "");
+      return done(200, issueFlow.replyToReview(id, reference, String(body.text ?? "")));
+    }
     if (method === "PATCH" && parts[2] === "reviews" && parts.length === 4) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) return done(403, { error: "只有归属人能处理意见" });
       const body = await readBody(request);

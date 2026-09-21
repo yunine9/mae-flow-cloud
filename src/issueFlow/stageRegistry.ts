@@ -161,7 +161,8 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
 },
   fix: {
     label: "问题修复",
-    exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 申报完成",
+    exit: "所有涉及的仓改完、自检与单测可接受 → complete_stage 推进到"
+      + "「提交 MR·跑绿」(建 MR 与流水线验绿都在下一阶段,本阶段无须等绿)",
     exitAction: "complete_stage",
     tools: [
       { name: "request_env", note: "缺网管环境先要配置" },
@@ -428,6 +429,7 @@ export type GateVerdict =
   | "rework"        // 有补充意见/自由作答:留在或回流分析
   | "archive"       // conclude+issue/non_issue:闭环归档(issue 出提单模板,ADR-0048)
   | "fail"          // env_verify+fail:验证发现问题回退(通过无码——合入即通过)
+  | "note"          // env_verify+note:自定义答复=等待中插话,闸保持原样递 AI
   | "resume_watch"  // pipeline_unfixable+resume:重置监看账重看同一 SHA
   | "human_evidence" // pipeline_evidence+supply:原文入账,开修复回合
   | "unrecognized"; // 认不得的答复(仅 env_verify 打回,其余按补充意见)
@@ -437,8 +439,10 @@ export type GateVerdict =
  *   留在分析阶段完善重提——与旧 startsWith 前缀匹配的 else 分支一致;
  * - conclude:issue 与 non_issue 都闭环归档(issue 出提单模板,
  *   ADR-0048);其余回流分析(旧的 includes 匹配同样认不得就回流);
- * - env_verify:fail 回退(通过没有码——MR 全部合入即视为通过,ADR-0034);
- *   认不得的原样 409(旧语义:验证闸不允许自由发挥)。 */
+ * - env_verify:fail 回退(通过没有码——MR 全部合入即视为通过,
+ *   ADR-0034);自定义答复(服务端按文本在场归码 note,不在卡面码表)
+ *   是等待中的插话——验证等很久,冒出合并冲突这类插曲要说得上话;
+ *   其余认不得的原样 409。 */
 export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
   switch (kind) {
     case "analysis_confirm":
@@ -449,6 +453,7 @@ export function gateVerdict(kind: IssueGateKind, code: string): GateVerdict {
       return code === "issue" || code === "non_issue" ? "archive" : "rework";
     case "env_verify":
       if (code === "fail") return "fail";
+      if (code === "note") return "note";
       return "unrecognized";
     case "env_needed":
       // 作答口是配置表单;走到选项裁决即调用方违约,一律打回。

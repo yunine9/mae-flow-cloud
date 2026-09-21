@@ -20,7 +20,7 @@ import { renderAnnotations } from "../annotations.ts";
  * (reanchor 白送,只服务草稿:ADR-0025)与新版报告上的整体把关照旧。
  */
 
-import { existsSync, mkdirSync, readFileSync, copyFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, copyFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AnnotationStore,
@@ -40,6 +40,13 @@ export const REVIEWS_FILE = "reviews.jsonl";
  * 清单,快照不能混进去当页签)。版本投影(analysisVersions.ts)以它为
  * 唯一边界:冻结版只准从这里读。 */
 export const REVIEWS_DIR = "reviews";
+
+/** 意见清单快照文件名(#366):全部可引用意见的渲染清单。注入回合的
+ * 意见正文随上下文压缩/服务重启即丢,清单落盘后 AI 随时可读回。
+ * 不叫 current-batch:内容是可引用全集,而「当前批」在
+ * outstandingReviewBatch 里另有定义(按快照时刻划窗),同名不同义
+ * 会埋坑。 */
+export const REVIEW_NOTES_SNAPSHOT = "review-notes.md";
 
 export function reviewStore(root: string): AnnotationStore {
   return new AnnotationStore(join(root, REVIEWS_FILE));
@@ -238,6 +245,9 @@ export function renderReviewNotes(
     // 定位护栏两版共用:分诊回合里 respond 也要按原文核对意见。
     "- 行号仅为历史参考。每条修改前读取当前文件，以原文为准定位，结合批注时上下文核对；处理上一条后重新核对后续位置，不沿用旧行号。",
     "- 找不到原文或匹配多处时先检查当前实现；无法确认就说明，不猜位置、不把原文消失当作已修复，可继续处理其他意见。",
+    // 恢复源指路(#366):清单文本流到哪个注入点,指向就跟到哪——
+    // 上下文压缩丢正文后,AI 第一次读清单就知道去哪拿回全部意见。
+    `- 全部可引用检视意见的正文与要求已落盘工作区 reviews/${REVIEW_NOTES_SNAPSHOT}：上下文被压缩或服务重启后，先读该文件恢复意见内容，不要凭记忆或凭空编号引用。`,
   );
   if (mode === "rework") {
     lines.push(
@@ -267,5 +277,66 @@ export function renderReviewNotes(
   if (mode === "rework") {
     lines.push("逐条交代完再重新 submit_analysis 提交,平台会再次举确认卡等用户过目。");
   }
+  return lines.join("\n");
+}
+
+/**
+ * 意见清单快照(#366):把**全部可引用意见**(status=sent 且
+ * sent_via=issue_review,与 respond_review 的定位口径一致)按当前
+ * 注入点的契约渲染落盘 reviews/review-notes.md。注入回合的清单只带
+ * 本批,且正文随上下文压缩/服务重启即丢;快照是超集恢复源,AI 读
+ * 文件即可拿回全部意见正文。覆写制、永不回收(过期引用由
+ * locateSentReview 与台账拦截);写失败不挡提交/申报(fail-open,
+ * unknown_ref/unknown_seq 回执兜底仍在)。
+ */
+export function writeReviewNotesSnapshot(
+  root: string,
+  title: string,
+  round: number,
+  mode: "rework" | "triage",
+): void {
+  try {
+    const items = reviewStore(root).list().filter((item) =>
+      item.status === "sent" && item.sent_via === "issue_review");
+    if (!items.length) return;
+    mkdirSync(join(root, REVIEWS_DIR), { recursive: true });
+    writeFileSync(
+      join(root, REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT),
+      renderReviewNotes(items, title, round, mode));
+  } catch {
+    // 快照失败不挡提交/申报;回执兜底仍在。
+  }
+}
+
+/**
+ * 渲染一条意见的回复线程(用户在意见处回复后唤醒 AI 用):意见原文
+ * + 各轮「Agent 回复 → 用户回复」按序排列——被回复清空的旧回执快照在
+ * author_replies 里,最新回应(还没有用户回复的)在 response。AI 看
+ * 完整线程再作答,不会把用户的追问当新意见、重复回答别的意见号。
+ */
+export function renderReviewThread(item: Annotation): string {
+  if (item.seq === undefined) {
+    throw new Error(
+      `检视意见 ${item.id} 没有意见号:意见必须带号(ADR-0025),无号即坏账`);
+  }
+  const lines: string[] = [
+    `意见${item.seq}. [${item.id}] 历史第 ${item.line} 行`,
+    `   批注时原文:${item.quote || item.anchor}`,
+    `   要求:${item.note}`,
+    "",
+  ];
+  const rounds = [
+    ...(item.author_replies ?? []).map((reply) => [
+      { who: "你的回复", text: reply.response.summary, at: reply.response.responded_at },
+      { who: "用户的回复", text: reply.text, at: reply.replied_at },
+    ]).flat(),
+    ...(item.response
+      ? [{ who: "你的回复", text: item.response.summary, at: item.response.responded_at }]
+      : []),
+  ];
+  for (const round of rounds) {
+    lines.push(`— ${round.who}(${round.at}):${round.text}`);
+  }
+  lines.push("");
   return lines.join("\n");
 }

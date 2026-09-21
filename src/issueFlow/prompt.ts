@@ -33,6 +33,7 @@ import type { IssueSessionState } from "./state.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import { issueRepoWorkspaces } from "./state.ts";
 import { extractIssueAttachmentPaths } from "./issueAttachments.ts";
+import { REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT } from "./reviews.ts";
 import {
   FIXED_STAGE_LABELS,
   fixedStages,
@@ -476,6 +477,19 @@ export function fixedNudgeNotice(
       remain: budget - attempt + 1,
     });
   }
+  // fix 阶段推完代码停在原地等绿(#357)用专用催办词:此轨迹下没有
+  // MR 也没有监看表(挂表要该仓已有 MR),"等绿"等不到任何通知;通用
+  // 催办词砸回简报纠正不了"等绿才能申报"的误读,专用词直接拆掉前提。
+  // 有 MR 在账不走这里——监看在场时催办本就不触发,等绿后归
+  // settlePipeline 的全绿提醒(pipeline.green.remind_fix)。
+  if (current === "fix" && !state.mrs?.length && state.pushes?.length
+      && !Object.values(state.pipelines ?? {})
+        .some((watch) => watch.watching || watch.status === "running")) {
+    return promptCopy("notices", "nudge.fix_wait_pipeline", {
+      attempt, budget,
+      remain: budget - attempt + 1,
+    });
+  }
   return promptCopy("notices", "nudge.body", {
     attempt,
     budget,
@@ -519,6 +533,12 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
+    // 检视意见恢复源(#366):文件在场才指路——正文随上下文压缩即丢,
+    // 续聊重建的上下文靠这一行知道去哪拿回全部可引用意见。
+    ...(options.workspace
+      && existsSync(join(options.workspace, REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT))
+      ? [`- 检视意见:全部可引用意见的原文清单在 reviews/${REVIEW_NOTES_SNAPSHOT},引用意见前先读它,不要凭记忆或凭空编号`]
+      : []),
     ...skillSelectionLines(state, options.blockedPaths),
     ...businessKnowledgeLines(state),
     promptCopy("opening",

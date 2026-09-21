@@ -189,7 +189,7 @@ test("存量卡死单自愈:全合入+阶段未收口+未答卡,合入循环一�
   }
 });
 
-test("已全部合入时答「重新监看」:直接归档,不对旧提交重启监看", async () => {
+test("已全部合入时答「重新监看」:直接归档,不对旧提交重启监看(带补充说明也短路)", async () => {
   const dataDir = mfcTemp("mfc-issue-merge-archive-");
   const model = new ScriptedModelServer([{ text: "收到。" }], "scripted-v1",
     { linear: true });
@@ -206,7 +206,8 @@ test("已全部合入时答「重新监看」:直接归档,不对旧提交重启
     const before = service.get("issue-1").pipelines!["/tmp/origin.git"];
     const gateVersion = service.get("issue-1").gate!.state_version;
     const summary = service.answer("issue-1",
-      { state_version: gateVersion, code: "resume" });
+      { state_version: gateVersion, code: "resume",
+        notes: "已经在平台合入了,不用再重看" });
     assert.equal(summary.status, "archived", "作答回执即归档(直接收口)");
     assert.equal(summary.conclusion?.kind, "delivered");
     const after = service.get("issue-1");
@@ -215,7 +216,8 @@ test("已全部合入时答「重新监看」:直接归档,不对旧提交重启
     assert.equal(watch.started_at, before.started_at, "监看账未动");
     assert.ok(!after.stage_note.includes("重新监看"),
       "不再走重看路径的文案");
-    assert.equal(model.requests.length, 0, "归档不派 AI 回合");
+    assert.equal(model.requests.length, 0,
+      "归档不派 AI 回合(合入短路优先于带话,ADR-0049)");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

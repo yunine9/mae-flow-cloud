@@ -142,11 +142,15 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 
 ## review.unknown_ref
 
-检视意见 {{reference}} 不在本批待处理意见里(可引用:{{known}})。按意见清单里的「意见N」引用,不要凭空编号
+检视意见 {{reference}} 不在可引用意见里。可引用:
+{{known}}
+完整原文见工作区 reviews/review-notes.md;按「意见N」或台账 id 引用,不要凭空编号
 
 ## review.unknown_seq
 
-意见{{seq}} 不在本批待处理意见里(本批:{{known}})。按意见清单里的「意见N」引用,不要凭空编号
+意见{{seq}} 不在本批待分诊意见里。本批:
+{{known}}
+完整原文见工作区 reviews/review-notes.md;按「意见N」引用,不要凭空编号
 
 ## ut.recorded
 
