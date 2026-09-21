@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>交付分析 · 登记问题页签 — 静态原型(2026-09-21 拍板稿)</title>
+<style>
+  :root{
+    --canvas:#f3f3fa; --surface:#ffffff; --surface-2:#f8f8fc; --surface-3:#efedfc;
+    --text-strong:#24263b; --text:#393c50; --muted:#6b7085; --faint:#868b9e;
+    --line:#e5e5ef; --line-strong:#cfcddd;
+    --ink:#5b5bd6; --ink-hover:#4e4ec4;
+    --active:#2f66d6; --active-soft:#eaf0fb;
+    --attention:#b0680d; --attention-soft:#fbf1df;
+    --success:#1e7a4e; --success-soft:#e5f3eb;
+    --danger:#c23d38; --danger-soft:#fbebea;
+    --suspended:#3b83d5;
+    color-scheme: light;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--canvas); color:var(--text);
+    font:14px/1.55 "Inter Variable","Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",sans-serif;
+  }
+  .page{max-width:1720px; margin:0 auto; padding:24px 28px 48px; display:grid; gap:16px;}
+  h1{margin:0; font-size:20px; font-weight:700; color:var(--text-strong); letter-spacing:-0.01em;}
+  .pagehead{display:flex; align-items:baseline; gap:16px;}
+  .pagehead small{color:var(--muted); font-size:12.5px;}
+
+  /* 顶层页签:需求交付 / DTS / 登记问题 */
+  .tabs{display:inline-flex; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface);}
+  .tab{padding:9px 22px; font-size:14px; border:none; background:transparent; color:var(--muted); cursor:pointer; border-right:1px solid var(--line);}
+  .tab:last-child{border-right:none;}
+  .tab:hover{color:var(--text-strong);}
+  .tab[aria-selected="true"]{background:var(--surface-3); color:var(--text-strong); font-weight:600;}
+  .tab .new{margin-left:6px; font-size:11px; color:var(--ink); background:color-mix(in srgb, var(--ink) 10%, transparent); border-radius:99px; padding:1px 7px; vertical-align:1px;}
+
+  .toolbar{display:flex; flex-wrap:wrap; align-items:center; gap:14px; font-size:13.5px;}
+  .select{display:inline-flex; align-items:center; gap:10px; color:var(--text);}
+  .select .box{min-width:140px; display:inline-flex; justify-content:space-between; align-items:center; gap:8px;
+    border:1px solid var(--line-strong); border-radius:8px; background:var(--surface); padding:7px 12px; font-size:13.5px;}
+  .count-line{display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:13px;}
+
+  /* 帮助图标:悬停即时浮出(与应用 .help-tip 同款行为) */
+  .help-tip{position:relative; display:inline-flex; color:var(--muted); cursor:help;}
+  .help-tip::after{
+    content:attr(data-tip); position:absolute; left:50%; bottom:calc(100% + 7px); transform:translateX(-50%);
+    width:max-content; max-width:340px; padding:8px 11px; border-radius:8px;
+    background:var(--surface); border:1px solid var(--line-strong); color:var(--text);
+    font-size:12px; line-height:1.5; font-weight:400; text-align:left; white-space:normal;
+    box-shadow:0 6px 24px rgba(36,38,59,.10); opacity:0; visibility:hidden; transition:opacity .12s; z-index:60; pointer-events:none;
+  }
+  .help-tip:hover::after{opacity:1; visibility:visible;}
+
+  /* 瓦片 */
+  .tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:14px;}
+  .tile{border:1px solid var(--line); border-radius:14px; background:var(--surface); padding:16px 20px;}
+  .tile small{display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:13px; color:var(--muted);}
+  .tile strong{display:block; font-size:32px; line-height:1; letter-spacing:-0.02em; color:var(--text-strong); font-variant-numeric:tabular-nums;}
+  .tile span{display:block; margin-top:8px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums;}
+
+  /* 维度切换 */
+  .seg{display:inline-flex; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--surface);}
+  .seg button{padding:8px 20px; font-size:13.5px; border:none; background:transparent; color:var(--muted); cursor:pointer; border-right:1px solid var(--line);}
+  .seg button:last-child{border-right:none;}
+  .seg button:hover{color:var(--text-strong);}
+  .seg button[aria-pressed="true"]{background:var(--surface-2); color:var(--text-strong); font-weight:600;}
+
+  /* 卡片与表格 */
+  .card{border:1px solid var(--line); border-radius:14px; background:var(--surface); overflow:hidden;}
+  .card h2{margin:0; padding:14px 18px 10px; font-size:14px; font-weight:600; color:var(--text-strong); display:flex; align-items:center; gap:6px;}
+  .scroll{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th{padding:7px 14px; text-align:left; font-weight:600; font-size:12.5px; color:var(--muted);
+    background:color-mix(in srgb, var(--surface-2) 70%, transparent); border-bottom:1px solid var(--line); white-space:nowrap;}
+  th.r,td.r{text-align:right;}
+  td{padding:9px 14px; border-bottom:1px solid color-mix(in srgb, var(--line) 60%, transparent); font-variant-numeric:tabular-nums; white-space:nowrap;}
+  tbody tr:last-child td{border-bottom:none;}
+  tbody tr.rowlink{cursor:pointer;}
+  tbody tr.rowlink:hover{background:color-mix(in srgb, var(--ink) 4%, transparent);}
+  td .title{color:var(--text-strong);}
+  .dim{color:var(--muted);}
+  .ok{color:var(--success); font-weight:600;}
+  .bad{color:var(--danger);}
+  .rate{font-weight:600; color:var(--success);}
+  tfoot td{padding:9px 14px; font-size:12px; color:var(--faint); border-top:1px solid var(--line);}
+
+  .badge{display:inline-block; border-radius:99px; padding:2px 10px; font-size:12px; line-height:1.6;}
+  .badge.issue{color:var(--suspended); background:color-mix(in srgb, var(--suspended) 12%, transparent);}
+  .badge.non{color:var(--muted); background:color-mix(in srgb, var(--muted) 12%, transparent);}
+  .badge.cancel{color:var(--faint); background:color-mix(in srgb, var(--faint) 12%, transparent);}
+  .badge.hold{color:var(--attention); background:var(--attention-soft);}
+
+  /* 下钻抽屉 */
+  .overlay{position:fixed; inset:0; background:rgba(21,22,33,.42); opacity:0; visibility:hidden; transition:.15s; z-index:50;}
+  .drawer{position:fixed; top:0; right:0; bottom:0; width:560px; max-width:92vw; background:var(--surface);
+    border-left:1px solid var(--line); box-shadow:-12px 0 40px rgba(36,38,59,.14); z-index:55;
+    transform:translateX(102%); transition:transform .18s ease-out; display:flex; flex-direction:column;}
+  body.open .overlay{opacity:1; visibility:visible;}
+  body.open .drawer{transform:none;}
+  .drawer header{display:flex; align-items:flex-start; gap:10px; padding:18px 20px 12px; border-bottom:1px solid var(--line);}
+  .drawer header b{font-size:15px; color:var(--text-strong); line-height:1.4;}
+  .drawer .close{margin-left:auto; border:none; background:transparent; color:var(--muted); font-size:18px; cursor:pointer; padding:2px 6px;}
+  .drawer .body{padding:16px 20px 28px; overflow-y:auto; display:grid; gap:14px;}
+  .meta{display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:13px;}
+  .meta dt{color:var(--muted);} .meta dd{margin:0; color:var(--text-strong);}
+  .verline{font-size:12.5px; color:var(--muted); display:grid; gap:3px;}
+  .verline b{color:var(--text); font-weight:600;}
+
+  /* 提单模板卡 */
+  .tpl{border:1px solid var(--line); border-radius:12px; overflow:hidden;}
+  .tpl .tplhead{display:flex; align-items:center; gap:8px; padding:10px 14px; background:var(--surface-2); border-bottom:1px solid var(--line);
+    font-size:13px; font-weight:600; color:var(--text-strong);}
+  .tpl .tplhead small{font-weight:400; color:var(--muted);}
+  .copy{margin-left:auto; border:1px solid var(--ink); color:var(--ink); background:var(--surface); border-radius:8px;
+    padding:4px 12px; font-size:12.5px; cursor:pointer;}
+  .copy:hover{background:color-mix(in srgb, var(--ink) 8%, transparent);}
+  .tpl pre{margin:0; padding:14px; font:12px/1.7 var(--font-mono, "Cascadia Mono", Consolas, monospace);
+    white-space:pre-wrap; color:var(--text); background:var(--surface);}
+  .tpl .ref{border-top:1px dashed var(--line-strong); background:color-mix(in srgb, var(--attention) 4%, transparent);}
+  .tpl .ref b{color:var(--attention);}
+
+  /* 原型说明 */
+  .note{border:1px dashed var(--line-strong); border-radius:14px; padding:14px 18px; font-size:12.5px; color:var(--muted); background:color-mix(in srgb, var(--surface) 60%, transparent);}
+  .note b{color:var(--text);}
+  .note ul{margin:6px 0 0; padding-left:18px; display:grid; gap:3px;}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="pagehead">
+    <h1>交付分析</h1>
+    <small>静态原型 · 数据为示意 · 2026-09-21 拍板稿</small>
+  </div>
+
+  <!-- 三个页签:需求交付 / DTS(原「问题处理」更名) / 登记问题(本原型) -->
+  <div class="tabs" role="tablist" aria-label="交付分析页签">
+    <button class="tab" role="tab" aria-selected="false">需求交付</button>
+    <button class="tab" role="tab" aria-selected="false">DTS<small class="new" hidden></small></button>
+    <button class="tab" role="tab" aria-selected="true">登记问题<span class="new">新</span></button>
+  </div>
+
+  <div class="toolbar">
+    <span class="select">时间
+      <span class="box">全部时间
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m4 6 4 4 4-4"/></svg>
+      </span>
+    </span>
+    <span class="count-line">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 3 5-6"/></svg>
+      研究完成 20
+      <span class="help-tip" data-tip="结论已出的无单会话:非问题 9 · 确认是问题 8 · 取消 3,合计 20 即登记总数——没有结论的会话(研究进行中)不进任何比率分母。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </span>
+    </span>
+  </div>
+
+  <div class="tiles">
+    <div class="tile">
+      <small>登记总数
+        <span class="help-tip" data-tip="结论已出的无单(自研)问题会话数:研究进行中的暂不进,结论落地后自动计入;有单会话在 DTS 页签,不在此处。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        </span>
+      </small>
+      <strong>20</strong>
+      <span>近 30 天 8 个</span>
+    </div>
+    <div class="tile">
+      <small>非问题闭环率
+        <span class="help-tip" data-tip="研究结论为「非问题」的占比。分母=研究完成 20(非问题+确认是问题+取消;挂起存量不进)。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        </span>
+      </small>
+      <strong>45.0%</strong>
+      <span>9/20 研究完成</span>
+    </div>
+    <div class="tile">
+      <small>确认是问题率
+        <span class="help-tip" data-tip="研究结论为「确认是问题」的占比:会话闭环并产出提单模板,由测试把模板提单进 DTS 后,新单号从 DTS 列表发起有单会话。分母同左。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        </span>
+      </small>
+      <strong>40.0%</strong>
+      <span>8/20 研究完成</span>
+    </div>
+    <div class="tile">
+      <small>一次定位率
+        <span class="help-tip" data-tip="分析报告一版就收口即一次定位;检视提出修改会生成新版本。分母=非问题+确认是问题共 17(取消不构成一次研究,不进分母)。">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+        </span>
+      </small>
+      <strong>76.5%</strong>
+      <span>13/17 会话</span>
+    </div>
+  </div>
+
+  <div class="seg" role="tablist" aria-label="观察维度">
+    <button aria-pressed="true" id="dim-module">按模块</button>
+    <button aria-pressed="false" id="dim-owner">按登记人</button>
+    <button aria-pressed="false" id="dim-session">按会话</button>
+  </div>
+
+  <section class="card" id="table-module">
+    <h2>按模块
+      <span class="help-tip" data-tip="无单会话按登记时所选业务模块聚合;点模块名可筛选明细表。">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </span>
+    </h2>
+    <div class="scroll"><table>
+      <thead><tr>
+        <th>模块</th><th class="r">登记数</th><th class="r">非问题</th><th class="r">确认是问题</th><th class="r">取消</th><th class="r">一次定位率</th>
+      </tr></thead>
+      <tbody>
+        <tr class="rowlink"><td class="title">网管</td><td class="r">6</td><td class="r">3</td><td class="r">2</td><td class="r dim">1</td><td class="r rate">80.0%</td></tr>
+        <tr class="rowlink"><td class="title">拓扑</td><td class="r">6</td><td class="r">2</td><td class="r">3</td><td class="r dim">1</td><td class="r rate">80.0%</td></tr>
+        <tr class="rowlink"><td class="title">告警</td><td class="r">4</td><td class="r">2</td><td class="r">1</td><td class="r dim">1</td><td class="r rate">66.7%</td></tr>
+        <tr class="rowlink"><td class="title">性能</td><td class="r">3</td><td class="r">1</td><td class="r">2</td><td class="r dim">0</td><td class="r rate">66.7%</td></tr>
+        <tr class="rowlink"><td class="title">传输</td><td class="r">1</td><td class="r">1</td><td class="r">0</td><td class="r dim">0</td><td class="r rate">100.0%</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="6">合计 20 登记 · 非问题 9 · 确认是问题 8 · 取消 3 · 一次定位 13/17</td></tr></tfoot>
+    </table></div>
+  </section>
+
+  <section class="card hidden" id="table-owner">
+    <h2>按登记人</h2>
+    <div class="scroll"><table>
+      <thead><tr>
+        <th>登记人</th><th class="r">登记数</th><th class="r">非问题</th><th class="r">确认是问题</th><th class="r">取消</th><th class="r">一次定位率</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="title">王芳</td><td class="r">7</td><td class="r">3</td><td class="r">3</td><td class="r dim">1</td><td class="r rate">66.7%</td></tr>
+        <tr><td class="title">李强</td><td class="r">5</td><td class="r">2</td><td class="r">2</td><td class="r dim">1</td><td class="r rate">75.0%</td></tr>
+        <tr><td class="title">赵敏</td><td class="r">5</td><td class="r">2</td><td class="r">2</td><td class="r dim">1</td><td class="r rate">100.0%</td></tr>
+        <tr><td class="title">陈静</td><td class="r">3</td><td class="r">2</td><td class="r">1</td><td class="r dim">0</td><td class="r rate">66.7%</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="6">合计 20 登记 · 非问题 9 · 确认是问题 8 · 取消 3 · 一次定位 13/17</td></tr></tfoot>
+    </table></div>
+  </section>
+
+  <section class="card hidden" id="table-session">
+    <h2>按会话
+      <span class="help-tip" data-tip="无单会话逐条明细;点「确认是问题」行查看报告版本账与提单模板卡。">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+      </span>
+    </h2>
+    <div class="scroll"><table>
+      <thead><tr>
+        <th>时间</th><th>标题</th><th>模块</th><th>登记人</th><th>责任人</th><th>结论</th><th class="r">报告版本</th><th class="r">一次定位</th>
+      </tr></thead>
+      <tbody>
+        <tr class="rowlink" data-open><td class="dim">09-20</td><td class="title">拓扑自动发现偶发漏采部分网元</td><td>拓扑</td><td>王芳</td><td>周工</td><td><span class="badge issue">确认是问题</span></td><td class="r">2 版</td><td class="r bad">✗</td></tr>
+        <tr class="rowlink" data-open><td class="dim">09-20</td><td class="title">网管后台导出报表超时</td><td>网管</td><td>李强</td><td>吴工</td><td><span class="badge issue">确认是问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+        <tr><td class="dim">09-19</td><td class="title">告警风暴时页面卡顿</td><td>告警</td><td>赵敏</td><td>郑工</td><td><span class="badge non">非问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+        <tr class="rowlink" data-open><td class="dim">09-19</td><td class="title">性能一览列表误自动刷新</td><td>性能</td><td>王芳</td><td>周工</td><td><span class="badge issue">确认是问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+        <tr><td class="dim">09-18</td><td class="title">网管日志检索结果乱序</td><td>网管</td><td>王芳</td><td>吴工</td><td><span class="badge non">非问题</span></td><td class="r">2 版</td><td class="r bad">✗</td></tr>
+        <tr class="rowlink" data-open><td class="dim">09-17</td><td class="title">告警确认后仍重复上报</td><td>告警</td><td>李强</td><td>郑工</td><td><span class="badge issue">确认是问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+        <tr><td class="dim">09-16</td><td class="title">拓扑视图缩放丢失自定义分组</td><td>拓扑</td><td>赵敏</td><td>周工</td><td><span class="badge cancel">取消</span></td><td class="r">0 版</td><td class="r dim">—</td></tr>
+        <tr class="rowlink" data-open><td class="dim">09-16</td><td class="title">网管北向接口偶发断链</td><td>网管</td><td>王芳</td><td>吴工</td><td><span class="badge issue">确认是问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+        <tr><td class="dim">09-15</td><td class="title">性能门限越界不产生告警</td><td>性能</td><td>陈静</td><td>孙工</td><td><span class="badge non">非问题</span></td><td class="r">1 版</td><td class="r ok">✓</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="8">共 20 条,显示最近 9 条</td></tr></tfoot>
+    </table></div>
+  </section>
+
+  <div class="note">
+    <b>原型说明(拍板要点)</b>
+    <ul>
+      <li>交付分析共三个页签:需求交付 / <b>DTS</b>(原「问题处理」更名,内容不变) / <b>登记问题</b>(无单会话,本原型)。</li>
+      <li>无单流程终出口:<b>确认是问题 → 出提单模板 + 闭环归档</b>;不再挂起、不再转正。提单在平台外完成(测试复制模板进 DTS),新单号从 DTS 列表发起有单会话,完整重走五阶段。</li>
+      <li>比率口径:本页只数结论已出的会话,研究进行中的与存量挂起一律不进——非问题闭环率与确认是问题率分母 = 研究完成(含取消);一次定位率分母 = 非问题 + 确认是问题(取消不构成一次研究);存量挂起手动归档后按结论自然入账。</li>
+      <li>观察维度三个:按模块 / 按登记人 / 按会话,与 DTS 页签(按特性/按会话/按代码仓)同构;行点击下钻报告版本账与提单模板卡。</li>
+      <li>提单模板防采信:末尾「参考:问题根因 / 修改方案」两节标题即声明,正文附说明并随单据进入 DTS——接单的 AI 与评审不得直接采信,以有单会话重新分析为准。</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 下钻抽屉:报告版本账 + 提单模板卡 -->
+<div class="overlay" id="overlay"></div>
+<aside class="drawer" role="dialog" aria-label="会话下钻">
+  <header>
+    <b>拓扑自动发现偶发漏采部分网元</b>
+    <button class="close" id="close" aria-label="关闭">×</button>
+  </header>
+  <div class="body">
+    <dl class="meta">
+      <dt>模块</dt><dd>拓扑</dd>
+      <dt>登记人</dt><dd>王芳</dd>
+      <dt>责任人</dt><dd>周工</dd>
+      <dt>结论</dt><dd><span class="badge issue">确认是问题 · 提单模板已出</span></dd>
+    </dl>
+    <div class="verline">
+      <b>报告版本账</b>
+      <span>初版 · 09-19 11:02</span>
+      <span>修订 1 · 09-19 15:40(检视:补充断链恢复场景)→ 一次定位 ✗</span>
+    </div>
+    <div class="tpl">
+      <div class="tplhead">提单模板 <small>· 复制进 DTS 提单系统(登记人在「我的问题」只读可见)</small>
+        <button class="copy" id="copy">一键复制</button>
+      </div>
+      <pre>单据标题:拓扑自动发现偶发漏采部分网元
+
+基本信息:
+
+发生时间:2026-9-19 10:42:00
+版本:MAE-NEM V100R027C10B005
+复现概率:偶现
+
+问题描述:
+拓扑自动发现任务执行完成后,东南小区 3 台网元未出现在拓扑图中;
+手动全量发现后恢复,下一轮自动发现后再次缺失。
+
+触发步骤:
+1. 拓扑自动发现周期配置为 24 小时
+2. 断开一台网元北向接口 10 分钟后恢复
+3. 等待下一轮自动发现完成
+
+实际现象:
+3 台网元缺失,告警显示「网元不可达」但设备实际在线。
+
+预期结果:
+网元恢复后自动重新纳入拓扑,无需人工全量发现。
+
+分析过程(平台内已完成一轮研究,全文如下):
+现象定位到自动发现的增量调度:断链网元的分组队列在恢复事件后
+未被重新入队,后续增量轮次按「分组已同步」跳过……(分析报告全文)</pre>
+      <pre class="ref">========== 以下为初步研究结论,<b>仅供参考</b> ==========
+
+<b>参考:问题根因</b>
+北向断链恢复后,增量发现任务未将该网元所在分组重新入队
+(发现队列按分组增量调度,恢复事件不触发重扫)。
+
+<b>参考:修改方案</b>
+恢复扫描后将失联网元重新入队,并对分组队列增加断链恢复钩子。
+
+说明:以上「参考」两节来自登记阶段的一次研究,未经修复验证,
+实际根因与方案以有单会话的重新分析为准——接单的 AI 与评审
+不应直接采信本节内容。</pre>
+    </div>
+  </div>
+</aside>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  // 维度切换
+  const dims = [["dim-module","table-module"],["dim-owner","table-owner"],["dim-session","table-session"]];
+  for (const [btn, pane] of dims) $(btn).addEventListener("click", () => {
+    for (const [b, p] of dims) {
+      $(b).setAttribute("aria-pressed", String(b === btn));
+      $(p).classList.toggle("hidden", p !== pane);
+    }
+  });
+  // 下钻抽屉:点「确认是问题」行打开;首行默认打开便于走查
+  const openDrawer = () => document.body.classList.add("open");
+  const closeDrawer = () => document.body.classList.remove("open");
+  document.querySelectorAll("tr[data-open]").forEach((tr) => tr.addEventListener("click", openDrawer));
+  $("overlay").addEventListener("click", closeDrawer);
+  $("close").addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  openDrawer();
+  // 复制按钮(原型示意)
+  $("copy").addEventListener("click", function () {
+    this.textContent = "已复制(示意)";
+    setTimeout(() => { this.textContent = "一键复制"; }, 1200);
+  });
+</script>
+</body>
+</html>
