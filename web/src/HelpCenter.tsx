@@ -18,7 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { XIcon } from "lucide-react";
+import { XIcon, PlayIcon, ArrowUpRightIcon } from "lucide-react";
 import { cn } from "cn";
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator,
@@ -646,6 +646,23 @@ export function HelpCenter({ viewer, initialArticleId, onArticleChange }: {
           className="grid size-7 cursor-pointer place-items-center rounded-lg bg-surface-3 p-0 border-0 text-muted-foreground hover:text-text-strong">×</button>}
       </label>
     </div>
+
+    {!query && <section aria-label="平台全景演示" className="flex items-center justify-between gap-8 overflow-hidden rounded-2xl border border-primary/20 bg-surface px-8 py-6">
+      <div className="min-w-0">
+        <span className="text-xs font-bold tracking-wider text-primary">MAE FLOW · 交互式演示</span>
+        <h2 className="mt-2 mb-2 text-2xl font-bold text-text-strong">90 秒看懂：从需求交付到知识复用</h2>
+        <p className="mb-5 text-sm text-muted-foreground">跟随动画看完整闭环，自动聚焦模块并展开讲解；可随时暂停、缩放和切换。</p>
+        <div className="flex gap-3">
+          <Button size="lg" nativeButton={false} render={<a href="/help/platform-overview/index.html?autoplay=1" target="_blank" rel="noreferrer" />}>
+            <PlayIcon />一键播放</Button>
+          <Button size="lg" variant="outline" nativeButton={false} render={<a href="/help/platform-overview/index.html" target="_blank" rel="noreferrer" />}>
+            查看架构<ArrowUpRightIcon /></Button>
+        </div>
+      </div>
+      <a href="/help/platform-overview/index.html" target="_blank" rel="noreferrer" className="w-[34%] shrink-0 overflow-hidden rounded-xl border border-line bg-[#081322]" aria-label="查看平台全景架构">
+        <img src="/help/platform-overview/architecture.svg" alt="交付闭环、知识闭环与工程能力底座" className="block w-full" loading="lazy" />
+      </a>
+    </section>}
 
     {!query && <div className="grid gap-3 max-[980px]:grid-cols-1 sm:grid-cols-3" aria-label="常用帮助">
       {quickLinks.map((item, index) => <button type="button" key={item.id}

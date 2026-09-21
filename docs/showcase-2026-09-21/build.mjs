@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,5 +32,9 @@ try {
     .replace('<!-- LOGIC -->', `<script type="application/json" id="graph-data">${JSON.stringify(graph).replaceAll('<', '\\u003c')}</script><script>${script}</script>`);
   writeFileSync(join(dir, 'index.html'), html);
   writeFileSync(join(dir, 'architecture.svg'), svg.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ').replace(/(<svg[^>]*>)/, `$1<style>${css}</style><rect width="100%" height="100%" fill="#081322"/>`));
+  // 随正常 web build 发布，同一份源同时生成离线材料与平台帮助资产。
+  const publicDir = join(root, 'web/public/help/platform-overview');
+  mkdirSync(publicDir, { recursive: true });
+  for (const file of ['index.html', 'architecture.svg']) copyFileSync(join(dir, file), join(publicDir, file));
   console.log('Built Archify showcase: ' + join(dir, 'index.html'));
 } finally { rmSync(temp, { recursive: true, force: true }); }
