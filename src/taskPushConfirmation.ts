@@ -1,5 +1,6 @@
 import { deliveryChangeSnapshot } from "./artifacts.ts";
 import { TaskHostLedger, type HostOperation } from "./taskHostTools.ts";
+import { normalizedDeliveryPaths, pushReviewCallId, pushReviewReceiptCovers, samePaths } from "./pushReviewPolicy.ts";
 import type { TaskSummary } from "./taskService.ts";
 import type { HumanGate } from "./humanGate.ts";
 
@@ -8,6 +9,7 @@ export const HOST_PUSH_CHOICE_EFFECTS = [
   { key: "adjust", answers: ["先调整"], allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false },
 ];
 export const HOST_PUSH_CONFIRM_STEP = "host_push_confirm";
+export const PUSH_SCOPE_GUIDANCE = "已确认的文件范围不变时，后续修复、合并或提交说明调整沿用确认；不会仅因 SHA 变化重复询问。范围变化或你明确要求调整时，再核对本次改动。";
 interface PushConfirmationHost {
   summary: TaskSummary;
   cwd?: string;
@@ -18,36 +20,81 @@ interface PushConfirmationHost {
   notifyWaiting(): void;
 }
 
-/** Incremental publication asks only about this commit, without closing feedback.
- * The host ledger binds confirmation to the destination branch and commit SHA.
- */
+/** 两种推送入口复用同一个文件范围决定；实际发布 SHA 由准备和传输层取证。
+ * 提前推送不代替逐条检视意见闭环，也不伪造流水线通过。 */
 export async function confirmHostPush(host: PushConfirmationHost, operation: HostOperation, assertActive: () => void): Promise<boolean> {
-    const required = host.summary.push_confirmation
-      ?? host.accountDefault() ?? false;
-    if (!required || operation.push_confirmed) return true;
-    const previouslyConfirmed = new TaskHostLedger(host.summary).read().operations.some(item =>
-      item.push_confirmed && item.sha === operation.sha && item.branch === operation.branch);
-    if (previouslyConfirmed) return true;
-    const snapshot = host.cwd ? await deliveryChangeSnapshot(host.cwd) : undefined;
-    if (!snapshot || snapshot.head !== operation.sha) {
-      throw new Error("待推送内容已变化，请重新整理本次推送");
+  const required = host.summary.push_confirmation ?? host.accountDefault() ?? false;
+  if (!required) return true;
+  const snapshot = host.cwd ? await deliveryChangeSnapshot(host.cwd) : undefined;
+  if (!snapshot || snapshot.head !== operation.sha) throw new Error("推送准备期间提交发生变化，请刷新待执行操作后继续");
+  const paths = snapshot.baseline ? normalizedDeliveryPaths((await host.contribution(snapshot)).paths) : undefined;
+  assertActive();
+  const ledger = new TaskHostLedger(host.summary);
+  const selection = host.summary.delivery_selection;
+  const ownApproval = operation.push_confirmed
+    && (!operation.push_paths || (paths && samePaths(operation.push_paths, paths)));
+  const sharedApproval = paths && pushReviewReceiptCovers(selection && {
+    ...selection, paths: normalizedDeliveryPaths(selection.paths, paths),
+  }, { head: snapshot.head, paths });
+  // 旧台账没有范围，只能继承同分支同 SHA 的明确确认；新的确认统一写入 selection。
+  const legacyApproval = !selection && ledger.read().operations.some(item =>
+    item.push_confirmed && item.sha === operation.sha && item.branch === operation.branch
+    && item.target_branch === operation.target_branch);
+  if (ownApproval || sharedApproval || legacyApproval) {
+    operation.push_confirmed = true;
+    if (paths) {
+      operation.push_paths = paths;
+      if (!sharedApproval) host.summary.delivery_selection = {
+        ...selection, paths, observed_paths: snapshot.workspace_paths,
+        excluded_paths: normalizedDeliveryPaths([...(selection?.excluded_paths ?? []),
+          ...snapshot.workspace_paths.filter(path => !paths.includes(path))]).filter(path => !paths.includes(path)),
+        head: snapshot.head, baseline: snapshot.baseline!, status: "confirmed",
+        waiting_id: operation.push_waiting_id ?? `${host.summary.id}:${operation.id}`,
+        confirmation_mode: "human", confirmation_reason: "沿用责任人对本次推送文件范围的确认",
+        updated_at: new Date().toISOString(),
+      };
     }
-    if (host.summary.waiting?.step === HOST_PUSH_CONFIRM_STEP
-        && host.summary.waiting.call_id === operation.id) return false;
-    const paths = snapshot.baseline
-      ? (await host.contribution(snapshot)).paths : [];
-    assertActive();
-    host.summary.waiting = host.humanGate.createWaiting({
-      taskId: host.summary.id, step: HOST_PUSH_CONFIRM_STEP, callId: operation.id,
-      questionInput: { questions: [{ question: `推送到 ${operation.branch}？`,
-        options: ["确认推送", "先调整"] }] },
-      context: [operation.input.reason.slice(0, 500),
-        paths.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
-        "完整改动可在「交付材料 → 工作区变更」查看。调整范围请选「先调整」并说明。未处理的意见保持原状。"].join("\n\n"),
-    });
+    ledger.update(operation);
+    const waiting = host.summary.waiting;
+    if (waiting?.step === HOST_PUSH_CONFIRM_STEP
+        && (waiting.call_id === operation.id || waiting.waiting_id === operation.push_waiting_id)) {
+      if (waiting.status === "waiting") host.humanGate.supersede(waiting.waiting_id, {
+        stateVersion: waiting.state_version, notes: "当前文件范围已有确认，沿用决定继续推送" });
+      host.summary.waiting = undefined;
+      host.summary.status = "running";
+      host.summary.detail = "沿用已确认的交付范围，正在推送";
+    }
+    host.persist();
+    return true;
+  }
+  operation.push_confirmed = false;
+  const waiting = host.summary.waiting;
+  const samePending = waiting?.step === HOST_PUSH_CONFIRM_STEP
+    && (waiting.call_id === operation.id || waiting.waiting_id === operation.push_waiting_id)
+    && waiting.status === "waiting";
+  if (samePending && (!operation.push_paths || (paths && samePaths(operation.push_paths, paths)))) {
     host.summary.status = "waiting_for_human";
     host.summary.detail = "等待确认本次推送";
     host.persist();
-    host.notifyWaiting();
     return false;
+  }
+  if (samePending) host.humanGate.supersede(waiting.waiting_id, {
+    stateVersion: waiting.state_version, notes: "交付文件范围发生变化，展示更新后的范围" });
+  const revision = host.humanGate.all().filter(row => row.call_id.startsWith(`${operation.id}:`)).length;
+  const callId = paths ? `${operation.id}:${pushReviewCallId({ head: snapshot.head, paths })}:${revision}` : operation.id;
+  operation.push_paths = paths;
+  operation.push_waiting_id = `${host.summary.id}:${callId}`;
+  ledger.update(operation);
+  host.summary.waiting = host.humanGate.createWaiting({
+    taskId: host.summary.id, step: HOST_PUSH_CONFIRM_STEP, callId,
+    questionInput: { questions: [{ question: `推送到 ${operation.branch}？`, options: ["确认推送", "先调整"] }] },
+    context: [operation.input.reason.slice(0, 500),
+      paths?.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
+      "完整改动可在「交付材料 → 工作区变更」查看。调整范围请选「先调整」并说明。未处理的意见保持原状。",
+      PUSH_SCOPE_GUIDANCE].join("\n\n"),
+  });
+  host.summary.status = "waiting_for_human";
+  host.summary.detail = "等待确认本次推送";
+  host.persist(); host.notifyWaiting();
+  return false;
 }

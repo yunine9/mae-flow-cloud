@@ -37,7 +37,7 @@ import { watchTaskPipeline } from "./taskPipelineWatch.ts";
 import { getPipelineStatus, triggerPipeline, type PipelineRun } from "./pipelineClient.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 import { orderedRecord, decisionRequestDigest } from "./decisionRequestDigest.ts";
-import { confirmHostPush, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
+import { confirmHostPush, PUSH_SCOPE_GUIDANCE, HOST_PUSH_CHOICE_EFFECTS, HOST_PUSH_CONFIRM_STEP } from "./taskPushConfirmation.ts";
 import { readAnalysisArchitecture, STORY_ARCHITECTURE_GUIDANCE } from "./storyArchitecture.ts";
 import { readAnalysisSemanticArchitecture, SEMANTIC_ARCHITECTURE_GUIDANCE } from "./semanticArchitecture.ts";
 import { feedbackReceiptInstructions } from "./feedbackReceiptInstructions.ts";
@@ -10577,8 +10577,7 @@ export class TaskService {
     input: DecisionSubmission,
     closesFeedback: boolean,
     /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认。确认
-     * 同时绑定 HEAD 与路径集合；任何修复生成新 HEAD 都会重新检视，
-     * 即便文件名完全没变。只有同一 HEAD 的网络重试才复用收据。 */
+     * 确认绑定文件范围；同范围后续修复沿用决定，不因 HEAD 改变重问。 */
     defaultToCommitted = false,
   ): Promise<{
     record: NonNullable<TaskSummary["delivery_selection"]>;
@@ -11124,7 +11123,7 @@ export class TaskService {
       "- 入场后先执行 current，按当前 review 步骤承接人的决定；整理这份已由人指定的清单不需要再次询问同义问题。",
       "- 领域文档可以直接编辑，也可用 domain-archive 辅助整理；不按归档凭证重新裁决人的文件选择。",
       "- 整理完成后核对实际提交内容，代码与文档无需按阶段拆分提交；",
-      `  完成后系统会按新 HEAD 重新验证并再次请用户确认(当前清单 ${selection.paths.length} 个文件)。`,
+      `  完成后继续现有推送与流水线验证(当前清单 ${selection.paths.length} 个文件)。${PUSH_SCOPE_GUIDANCE}`,
       // 回执契约必须与 post-MR review 同一份:少了它,Agent 改完代码
       // 也不知道要写 local-receipts.json,收口时被回执门禁如实拦下,
       // 形成"改了却过不去"的死锁(e2e-picky-20260830 双复现,MFC-002)。
@@ -13907,7 +13906,7 @@ export class TaskService {
 
   private finishHostPushDecision(task: TaskState, waiting: WaitingRecord): void {
     const ledger = new TaskHostLedger(task.summary);
-    const operation = ledger.read().operations.find(item => item.id === waiting.call_id);
+    const operation = ledger.read().operations.find(item => item.id === waiting.call_id || item.push_waiting_id === waiting.waiting_id);
     if (!operation || operation.input.action !== "push") throw new TaskControlError("未找到待确认的推送");
     if (operation.state === "succeeded" || operation.state === "failed") return;
     // 按明确选项裁决；备注可能是审批渠道信息，不能将其当作“先调整”。
@@ -13924,6 +13923,7 @@ export class TaskService {
     } else {
       operation.state = "failed";
       operation.result = "用户要求调整本次推送";
+      if (task.summary.delivery_selection) task.summary.delivery_selection.status = "requested";
       ledger.update(operation);
       this.enqueueRepair(task, `用户要求调整推送，请整理后重新发起：\n${Object.values(waiting.answers ?? {}).join("\n")}\n${waiting.decision}\n${waiting.notes ?? ""}`, "按用户要求调整推送");
     }
@@ -16684,9 +16684,7 @@ export class TaskService {
       // 词,新人在唯一的人审闸口满屏找不到入口(2026-08-30 审计)。
       "完整代码变化在「交付材料 → 工作区变更」逐文件查看;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
-      "文件树左侧勾选框决定交付范围:取消勾选=该文件不推送。确认后,"
-      + "若 Agent 继续修改并生成新 HEAD,系统会在 Build-Fix 通过后展示"
-      + "新一轮检视;完全相同的 HEAD 重试不会重复打扰。",
+      "文件树左侧勾选框决定交付范围：取消勾选的文件不推送。" + PUSH_SCOPE_GUIDANCE,
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(自基线 ${snapshot.baseline.slice(0, 12)} 起;内容以检视材料实时为准):`,
@@ -20215,8 +20213,8 @@ export class TaskService {
       }
       if (expectedSha && sha !== expectedSha) {
         throw new Error(
-          `安全拒绝：待推送 HEAD 已从已验证的 ${expectedSha.slice(0, 12)}`
-          + ` 变为 ${sha.slice(0, 12)}，旧确认不可复用`);
+          `传输准备后 HEAD 从 ${expectedSha.slice(0, 12)} 变为 ${sha.slice(0, 12)}，`
+          + "本次未发送；请刷新待推送提交后继续，已有文件范围确认保留");
       }
       // 提交说明属于编码指导，传输层只核对授权目标与真实 SHA。
       // 平台远端自身拒绝时仍如实回报，不在这里另设格式否决权。

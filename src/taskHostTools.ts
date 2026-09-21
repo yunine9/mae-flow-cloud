@@ -44,6 +44,9 @@ export interface HostOperation {
   target_branch?: string;
   result?: string;
   push_confirmed?: boolean;
+  /** 本次人工确认的文件范围，SHA 更新不撤销相同范围的决定。 */
+  push_paths?: string[];
+  push_waiting_id?: string;
   review_handoff?: boolean;
   push_receipt?: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>;
   mr_receipt?: { url: string; id?: string | number };
