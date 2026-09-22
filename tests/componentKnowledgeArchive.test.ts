@@ -65,7 +65,7 @@ test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR �
   try {
     assert.equal((await request(endpoint)).status, 401);
     cookie = (await request("/auth/login", { username: "dev", password: "fixture-dev-password" })).headers.get("set-cookie")!.split(";")[0];
-    assert.deepEqual(await (await request(endpoint)).json(), { archive: null });
+    assert.deepEqual(await (await request(endpoint)).json(), { archive: null, defaults: { repository: "https://example.test/component.git", branch: "main", directory: "docs/components", filename: "component-guide.md" } });
     const prepared = await request(endpoint, { ...input, research_id: "spoofed" }); assert.equal(prepared.status, 200);
     let archive: any = await prepared.json(); assert.equal(archive.component_research_id, job.id); assert.equal(archive.documents[0].remote_review.target_content, "仓内人工规则\n");
     assert.match(archive.documents[0].content, /读取源码后的草稿|经过人工选择/);

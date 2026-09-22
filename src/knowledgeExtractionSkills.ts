@@ -1,3 +1,4 @@
+import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -72,6 +73,7 @@ export class KnowledgeExtractionSkills {
         || Object.entries(files).some(([path, content]) => !/^[\p{L}\p{N}][\p{L}\p{N}._/-]*\.md$/u.test(path)
           || path.split("/").some(segment => !segment || segment.startsWith(".")) || typeof content !== "string")
         || Buffer.byteLength(JSON.stringify(files)) > 1024 * 1024) throw new Error("请提供完整 Markdown Skill 包，路径不能越界，最多 1 MiB、100 个文件");
+    knowledgeArchiveDefaults(files, kind);
     const staging = join(this.root, `staging-${randomUUID()}`, name);
     try {
       for (const [path, content] of Object.entries(files)) {

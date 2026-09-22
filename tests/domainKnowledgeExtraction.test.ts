@@ -97,12 +97,13 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     { text: "已保存领域规则及仓内实现知识，等待审查。" },
   ]);
   await model.start();
-  const service = new DomainKnowledgeExtraction(dir, input => runDomainKnowledge(input, { dataDir: dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: source, revision }) }));
+  const service = new DomainKnowledgeExtraction(dir, input => runDomainKnowledge(input, { dataDir: dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async repository => { assert.equal(repository.id, "repo-1", "归档前只读取研究仓"); return { root: source, revision }; } }));
   try {
-    const job = service.create(config, "expert");
+    const { knowledge_target: _, ...researchOnly } = config;
+    const job = service.create(researchOnly, "expert");
     await until(() => ["done", "failed"].includes(service.get(job.id).status));
     const result = service.get(job.id); assert.equal(result.status, "done", result.error);
-    assert.equal(result.documents.length, 2); assert.equal(result.documents[0].base_revision, revision); assert.equal(result.revisions["repo-1"], revision);
+    assert.equal(result.documents.length, 2); assert.equal(result.documents[0].base_revision, ""); assert.equal(result.archive_configured, false); assert.equal(result.revisions["repo-1"], revision);
     assert.equal(result.turns[0].skill?.name, "domain-knowledge-extraction");
     const tools = (model.requests[0].tools as Array<{ name: string }>).map(t => t.name);
     assert.ok(tools.includes("extraction_skill")); assert.ok(tools.includes("knowledge_material"));

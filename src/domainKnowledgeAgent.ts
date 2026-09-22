@@ -32,9 +32,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     }));
     return sources.get(repository.id)!;
   };
-  const repositories = input.job.repositories.map(repo => ({ ...repo, languages: ["agnostic"], description: "本次业务研究范围", enabled: true }));
+  const researchRepositories = input.job.source_repositories ?? input.job.repositories;
+  const repositories = researchRepositories.map(repo => ({ ...repo, languages: ["agnostic"], description: "本次业务研究范围", enabled: true }));
   const readSources = new Set<string>();
-  const sourceTool = languageComponentSourceTool(repositories, row => source(input.job.repositories.find(r => r.id === row.id)!), event => {
+  const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), event => {
     if (event.action === "read" && event.status === "returned") readSources.add(String(event.component_id));
     input.evidence(event);
   });
@@ -55,10 +56,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         if (!doc) throw new Error("缺少草稿内容");
         const previous = input.read().find(d => d.id === doc.id);
         let baseline: { content: string | null; revision: string } | undefined;
-        if (!previous) {
+        if (!previous && input.job.archive_configured !== false) {
           const target = [input.job.knowledge_target, ...input.job.repositories].find(r => r.id === doc.target_id);
           if (!target || !doc.path.startsWith(`${target.docs_path}/`) || /(^|\/)\.\.?($|\/)|[\\\x00-\x1f]/.test(doc.path)) throw new Error("无效的归档路径");
-          const prepared = await source(target);
+          const prepared = await options.source(target, input.turn.operator, input.signal);
           const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", prepared.revision, "--", doc.path], prepared.root, input.signal);
           if (entry && !/^100644 blob |^100755 blob /.test(entry)) throw new Error("目标路径不是普通文档文件");
           const content = entry ? await executeFile("git", ["show", `${prepared.revision}:${doc.path}`], prepared.root) : null;
@@ -75,7 +76,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     parameters: Type.Object({ repository_id: Type.String() }),
     async execute(_id: string, params: { repository_id: string }) {
       try {
-        const repo = input.job.repositories.find(r => r.id === params.repository_id), previous = input.turn.previous_revisions?.[params.repository_id];
+        const repo = researchRepositories.find(r => r.id === params.repository_id), previous = input.turn.previous_revisions?.[params.repository_id];
         if (!repo || !previous) throw new Error("该仓没有可比较的旧版本");
         const current = await source(repo);
         const patch = await executeFile("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${previous}..${current.revision}`, "--", ...(repo.path ? [repo.path] : [])], current.root, input.signal);
@@ -103,7 +104,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   try {
     if (input.signal.aborted) throw new Error("研究已停止");
     const outcome = await session.start(extractionSkillMission(skill, {
-      mode: input.turn.mode, title: input.job.title, scope: input.job.scope, repositories: input.job.repositories, knowledge_target: input.job.knowledge_target,
+      mode: input.turn.mode, title: input.job.title, scope: input.job.scope, repositories: researchRepositories, archive_targets: input.job.repositories, archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
       revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
       materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })), ar_codes: input.job.ar_codes,
       documents: input.read().map(({ history, base_content, ...doc }) => doc),

@@ -1,3 +1,6 @@
+import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
+import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
+import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
@@ -100,21 +103,73 @@ export class DomainKnowledgeExtraction {
     if (this.stopped) throw new Error("服务正在停止");
     if ([...this.jobs.values()].filter(job => ["queued", "running"].includes(job.status)).length >= 50) throw new Error("当前研究队列已满，请稍后创建");
     const issue_no = knowledgeIssueNumber(input.issue_no);
+    const module_id = input.module_id ? String(input.module_id) : undefined;
+    if (module_id) {
+      const module = readBusinessModule(this.dataDir, module_id);
+      if (module.status !== "active") throw new Error("业务模块已停用");
+      if (!module.repositories.length) throw new Error("请先在业务模块中维护关联代码仓");
+      input = { ...input, title: module.name, scope: `按照领域知识萃取 Skill，完整研究业务模块「${module.name}」及其全部关联仓。模块说明：${module.description}`,
+        repositories: module.repositories.map(url => ({ repository: url, name: url.split("/").at(-1)?.replace(/\.git$/, "") || module.name, branch: input.baseline_branch || "main", path: "" })) };
+    }
     const title = String(input.title ?? "").trim(), scope = String(input.scope ?? "").trim();
     if (!title || title.length > 160 || !scope || scope.length > 10000) throw new Error("请填写业务域名称及本次研究范围");
     if (!Array.isArray(input.repositories) || !input.repositories.length || input.repositories.length > 30) throw new Error("请选择 1～30 个业务仓");
-    const repositories = input.repositories.map((r: any, i: number) => repository(r, `repo-${i + 1}`));
-    const knowledge_target = repository(input.knowledge_target, "domain");
-    if (new Set(repositories.map(r => r.repository)).size !== repositories.length || repositories.some(r => r.repository === knowledge_target.repository)) throw new Error("业务仓不能重复，领域知识仓须独立指定");
-    const module_id = input.module_id ? String(input.module_id) : undefined;
-    if (module_id && readBusinessModule(this.dataDir, module_id).status !== "active") throw new Error("业务模块已停用");
+    const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(this.dataDir).current("domain").files, "domain");
+    const repositories = input.repositories.map((r: any, i: number) => repository({ ...r, docs_path: r.docs_path || defaults.repository_directory }, `repo-${i + 1}`));
+    const configured = readKnowledgeRepoConfig(this.dataDir);
+    const knowledge_target = input.knowledge_target ? repository(input.knowledge_target, "domain") : {
+      id: "domain", name: "领域知识仓", repository: configured?.url || "", branch: configured?.branch || "main", path: "",
+      docs_path: configured?.docs_path || defaults.domain_directory,
+    };
+    if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
     const material_ids = this.materialIds(input.material_ids ?? []);
     const ar_codes = this.arCodes(input.ar_codes ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, ar_codes })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
+      source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: input.use_wxdoubao === true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     this.jobs.set(job.id, job); this.persist(job);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
+  }
+  configureArchive(id: string, input: { targets: unknown; base_revision?: number }) {
+    const job = this.live(id);
+    if (job.component_research_id) throw new Error("请使用组件归档设置");
+    if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成再设置归档位置");
+    if (input.base_revision !== (job.archive_revision ?? 0)) throw new Error("归档位置已被修改，请刷新后重新设置");
+    if (!Array.isArray(input.targets) || !input.targets.length) throw new Error("请提供归档目标");
+    const previous = [job.knowledge_target, ...job.repositories], candidate = structuredClone(job);
+    const ids = new Set<string>();
+    for (const value of input.targets) {
+      const old = previous.find(t => t.id === value?.id);
+      if (!old || ids.has(old.id)) throw new Error("归档目标无效或重复");
+      ids.add(old.id);
+      const next = repository({ ...value, path: old.path, name: old.name }, old.id);
+      const changed = next.repository !== old.repository || next.branch !== old.branch || next.docs_path !== old.docs_path;
+      if (changed && [...job.publications, ...(job.publication_history ?? [])].some(p => p.target_id === old.id)) throw new Error("此仓已发起归档，不能更换位置；后续更新继续使用原 MR 目标");
+      if (next.id === "domain") candidate.knowledge_target = next;
+      else candidate.repositories = candidate.repositories.map(t => t.id === next.id ? next : t);
+      if (!changed && job.archive_configured !== false) continue;
+      const remap = (path: string) => {
+        if (!path.startsWith(`${old.docs_path}/`)) throw new Error("草稿目录与归档目标不一致");
+        return `${next.docs_path}/${path.slice(old.docs_path.length + 1)}`;
+      };
+      for (const doc of candidate.documents.filter(d => d.target_id === old.id)) {
+        doc.path = remap(doc.path); doc.base_content = null; doc.base_revision = ""; delete doc.remote_review;
+      }
+      for (const turn of candidate.turns) for (const proposal of turn.proposals.filter(p => p.document.target_id === old.id)) proposal.document.path = remap(proposal.document.path);
+      candidate.cleanup_plans = candidate.cleanup_plans?.filter(p => p.target_id !== old.id);
+    }
+    const targets = [candidate.knowledge_target, ...candidate.repositories], paths = new Set<string>();
+    for (const doc of candidate.documents.filter(d => d.selected)) {
+      const target = targets.find(t => t.id === doc.target_id)!;
+      repository(target, target.id);
+      const key = JSON.stringify([target.repository, target.branch, doc.path]);
+      if (paths.has(key)) throw new Error("多个知识文档指向同一个目标文件，请调整归档目录");
+      paths.add(key);
+    }
+    candidate.source_repositories ??= structuredClone(job.repositories);
+    candidate.archive_configured = true; candidate.archive_revision = (job.archive_revision ?? 0) + 1;
+    Object.assign(job, candidate); this.persist(job); return this.get(id);
   }
   private materialIds(ids: unknown): string[] {
     if (!Array.isArray(ids) || ids.length > 30 || ids.some(id => typeof id !== "string")) throw new Error("最多关联 30 份资料");
@@ -184,8 +239,8 @@ export class DomainKnowledgeExtraction {
               } else {
                 // Continuing an interrupted extraction must preserve already completed or edited documents.
                 if (existing) throw new Error("该文档已有草稿，修改请使用局部修订");
-                if (!baseline || !/^[a-f0-9]{40,64}$/.test(baseline.revision)) throw new Error("尚未读取目标文件的归档基线");
-                job.documents.push({ ...structuredClone(input), revision: 1, selected: true, base_content: baseline.content, base_revision: baseline.revision, history: [] });
+                if (job.archive_configured !== false && (!baseline || !/^[a-f0-9]{40,64}$/.test(baseline.revision))) throw new Error("尚未读取目标文件的归档基线");
+                job.documents.push({ ...structuredClone(input), revision: 1, selected: true, base_content: baseline?.content ?? null, base_revision: baseline?.revision ?? "", history: [] });
                 this.persist(job);
               }
               return structuredClone(input);
@@ -228,6 +283,7 @@ export class DomainKnowledgeExtraction {
   }
   async readRemote(id: string, documentId: string, operator: string) {
     const job = this.live(id), doc = job.documents.find(d => d.id === documentId);
+    if (job.archive_configured === false) throw new Error("请先在入库与更新中保存归档位置");
     if (!doc || !this.options.readRemote) throw new Error("无法读取该文档的远端版本");
     if (this.publishing.has(id)) throw new Error("正在归档，请稍后读取");
     this.publishing.add(id);
@@ -257,6 +313,7 @@ export class DomainKnowledgeExtraction {
   }
   async previewCleanup(id: string, targetId: string, input: unknown, operator: string) {
     const job = this.live(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === targetId);
+    if (job.archive_configured === false) throw new Error("请先保存归档位置再预览清理范围");
     if (!target || !this.options.previewCleanup) throw new Error("无法预览此仓的清理范围");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
     this.publishing.add(id);
@@ -288,6 +345,7 @@ export class DomainKnowledgeExtraction {
   async publish(id: string, operator: string) {
     const job = this.live(id);
     knowledgeIssueNumber(job.issue_no);
+    if (job.archive_configured === false) throw new Error("请在入库与更新中确认归档位置");
     if (!this.options.publish) throw new Error("未配置 MR 归档能力");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("本轮仍在执行");
     if (!job.documents.some(d => d.selected)) throw new Error("请至少选择一份文档");

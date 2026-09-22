@@ -32,6 +32,7 @@ test("无效或越界的 Skill 更新不替换当前包", async () => {
     const skills = new KnowledgeExtractionSkills(root), original = skills.current("domain");
     await assert.rejects(skills.save("domain", { ...original.files, "../outside.md": "bad" }, original.digest, "expert"), /路径/);
     await assert.rejects(skills.save("domain", { ...original.files, "SKILL.md": "no frontmatter" }, original.digest, "expert"), /有效/);
+    await assert.rejects(skills.save("domain", { ...original.files, "references/archive-defaults.md": '```json\n{"domain_directory":"../outside","repository_directory":"docs"}\n```' }, original.digest, "expert"), /归档默认位置/);
     assert.equal(skills.current("domain").digest, original.digest);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

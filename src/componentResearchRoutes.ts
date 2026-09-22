@@ -1,3 +1,5 @@
+import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
+import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { generatedAgentRules } from "./knowledgeCleanup.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
@@ -37,7 +39,14 @@ export async function componentResearchRoute(
         if (record.deleted_at) throw new Error("萃取任务已删除");
         const manager = service.getDomainKnowledgeExtraction();
         const archive = manager.componentArchive(record.id);
-        if (request.method === "GET") return json(response, 200, { archive: archive ?? null });
+        if (request.method === "GET") {
+          const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(service.options.dataDir).current("component").files, "component");
+          const source = record.components?.[0] ?? record.component;
+          return json(response, 200, { archive: archive ?? null, defaults: {
+            repository: source?.repository ?? "", branch: source?.branch || "main",
+            directory: defaults.component_directory, filename: defaults.component_filename,
+          } });
+        }
         if (request.method === "POST") {
           const body = await readBody(request, 24 * 1024 * 1024);
           if (!parts[3]) {

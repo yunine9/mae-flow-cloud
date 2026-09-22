@@ -25,7 +25,11 @@ export function ComponentKnowledgeArchive({ record, title, content }: { record: 
   }
   useEffect(() => {
     let live = true;
-    void componentRequest<{ archive: DomainKnowledgeJob | null }>(endpoint).then(result => { if (live) { if (result.archive) receive(result.archive, true); setLoaded(true); } }).catch(e => { if (live) setError(e.message); });
+    void componentRequest<{ archive: DomainKnowledgeJob | null; defaults?: { repository: string; branch: string; directory: string; filename: string } }>(endpoint).then(result => { if (live) {
+      if (result.archive) receive(result.archive, true);
+      else if (result.defaults) { setRepository(result.defaults.repository); setBranch(result.defaults.branch); setDirectory(result.defaults.directory); setFilename(result.defaults.filename); }
+      setLoaded(true);
+    } }).catch(e => { if (live) setError(e.message); });
     return () => { live = false; };
   }, [endpoint]);
   const document = archive?.documents[0], publication = archive?.publications[0];
@@ -54,7 +58,7 @@ export function ComponentKnowledgeArchive({ record, title, content }: { record: 
     } finally { setBusy(false); }
   }
   return <section className="mt-5 space-y-4 rounded-lg border border-line bg-surface-2 p-4" aria-label="组件知识代码仓归档">
-    <div><h3 className="font-semibold">提交到代码仓</h3><p className="mt-1 text-sm text-muted-foreground">将勾选的组件章节合成 Markdown，提交到指定目录。已有同名文档会先展示原文与差异，创建 MR 后即可结束。</p></div>
+    <div><h3 className="font-semibold">提交到代码仓</h3><p className="mt-1 text-sm text-muted-foreground">将勾选的组件章节合成 Markdown，归档位置已按研究仓和 Skill 默认值带出，可按需调整。已有同名文档会先展示原文与差异，创建 MR 后即可结束。</p></div>
     {error && <p role="alert" className="text-danger">{error}</p>}
     <div className="grid grid-cols-2 gap-3">
       <label className="col-span-2 grid gap-1">目标仓地址<Input disabled={busy || locked} value={repository} onChange={e => setRepository(e.target.value)} placeholder="https://…/knowledge.git" /></label>

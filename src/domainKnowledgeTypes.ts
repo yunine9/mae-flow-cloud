@@ -43,6 +43,8 @@ export interface DomainKnowledgeJob {
   id: string; title: string; scope: string; issue_no?: string; module_id?: string; operator: string; created_at: string;
   component_research_id?: string; technologies?: string[];
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
+  source_repositories?: KnowledgeRepository[];
+  archive_configured?: boolean; archive_revision?: number;
   material_ids: string[]; use_wxdoubao: boolean; ar_codes: string[];
   status: "idle" | "queued" | "running" | "done" | "failed" | "cancelled"; stage: string; error?: string;
   revisions: Record<string, string>; skill?: { name: string; digest: string };

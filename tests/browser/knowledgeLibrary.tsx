@@ -12,19 +12,30 @@ window.addEventListener("error", e => errors.push(e.message)); window.addEventLi
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined; let result: unknown;
   if (path === "/knowledge-documents") result = { documents: [] };
-  else if (path === "/domain-extraction") result = { records: [job], knowledge_target: null };
+  else if (path === "/domain-extraction") {
+    if (input) { calls.push({ action: "create", ...input }); result = job; }
+    else result = { records: [job], knowledge_target: null };
+  }
+  else if (path.endsWith("/archive-targets")) {
+    for (const target of input.targets) {
+      const old = [job.knowledge_target, ...job.repositories].find(t => t.id === target.id)!;
+      for (const doc of job.documents.filter(d => d.target_id === old.id)) { doc.path = target.docs_path + doc.path.slice(old.docs_path.length); delete doc.remote_review; }
+      Object.assign(old, target);
+    }
+    job.archive_configured = true; job.archive_revision = (job.archive_revision ?? 0) + 1; result = job;
+  }
   else if (path === "/domain-extraction/dkx-browser/run") {
     calls.push({ action: "run", ...input });
     job.turns.push({ id: `turn-${calls.length}`, mode: input.mode, document_ids: input.document_ids, message: input.message, operator: "领域维护人", status: "done", created_at: new Date().toISOString(), reply: "已核对资料，保留未选文档。", proposals: input.mode === "discuss" ? [] : [{ document: { ...job.documents[0], content: job.documents[0].content + "\n\n取消前需要校验发货状态，并保留幂等处理依据。" }, base_revision: job.documents[0].revision, status: "pending" }] }); result = job;
   } else if (path.endsWith("/edit")) { const doc = job.documents.find(d => d.id === input.document.id)!; doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, sources: doc.sources, operator: "人工", at: new Date().toISOString() }); Object.assign(doc, { content: input.document.content, revision: doc.revision + 1 }); result = job; }
   else if (path.endsWith("/proposal")) { const proposal = job.turns.find(t => t.id === input.turn_id)!.proposals[0]; if (input.decision === "accept") Object.assign(job.documents[0], { content: proposal.document.content, revision: job.documents[0].revision + 1 }); proposal.status = input.decision === "accept" ? "accepted" : "discarded"; result = job; }
-  else if (path.endsWith("/remote")) { job.documents[0].remote_review = { id: "remote-1", target_content: "目标分支新增的人工规则", target_revision: "b".repeat(40), branch: "codex/knowledge-fixture", branch_revision: "c".repeat(40), branch_content: "MR 中的人工补充", reviewed: false }; result = job; }
+  else if (path.endsWith("/remote")) { job.documents.find(d => d.id === input.document_id)!.remote_review = { id: "remote-1", target_content: "目标分支新增的人工规则", target_revision: "b".repeat(40), branch: "codex/knowledge-fixture", branch_revision: "c".repeat(40), branch_content: "MR 中的人工补充", reviewed: false }; result = job; }
   else if (path.endsWith("/reconcile")) { Object.assign(job.documents[0], { content: input.document.content, revision: job.documents[0].revision + 1 }); job.documents[0].remote_review!.reviewed = true; result = job; }
   else if (path === "/domain-extraction/dkx-browser") result = job;
   else if (path === "/knowledge-extraction/skills/domain") { if (input) { calls.push({ action: "skill", ...input }); skill.files = input.files; skill.digest = "second"; } result = skill; }
   else if (path === "/component-research") result = { records: [] };
   else if (path === "/component-repositories") result = { components: [] };
-  else if (path === "/business-modules") result = { modules: [], warnings: [], operations: [] };
+  else if (path === "/business-modules") result = { modules: [{ id: "trade", name: "交易业务", description: "交易规则", status: "active", repositories: ["https://example.test/source.git"] }], warnings: [], operations: [] };
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
 };
@@ -72,6 +83,28 @@ async function run() {
   if (close) close.click(); else document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause(); await click("正文");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "desktop horizontal overflow");
   const workspace = document.querySelector('[aria-label="领域知识审查工作区"]')!; check(workspace.scrollWidth <= workspace.clientWidth + 2, "review horizontal overflow");
+  await click("入库与更新");
+  const fillInput = async (label: string, value: string) => {
+    const field = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    check(field, `missing input ${label}`); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
+  };
+  check(document.querySelector<HTMLInputElement>('input[aria-label="domain 归档文档目录"]')?.value === "domains/trade", "archive shows default directory");
+  await fillInput("domain 归档文档目录", "archive/trade");
+  check(button("一键创建或更新 MR").disabled, "unsaved archive location blocks publication");
+  await click("保存归档位置并检查已有文档");
+  check(job.documents[0].path === "archive/trade/states.md", "archive choice maps knowledge to target path");
+  check(!!job.documents[0].remote_review, "new location is compared with existing documents");
+  await click("＋ 新建萃取任务");
+  const createDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(d => d.getClientRects().length && d.textContent?.includes("新建领域知识萃取"))!;
+  check(!createDialog.textContent?.includes("本次研究范围") && !createDialog.textContent?.includes("业务域名称") && !createDialog.textContent?.includes("业务代码仓地址") && !createDialog.textContent?.includes("归档文档目录"), "creation only asks module and common branch, not topic or repository and archive setup");
+  const module = document.querySelector<HTMLSelectElement>('select[aria-label="萃取业务模块"]')!;
+  module.value = "trade"; module.dispatchEvent(new Event("change", { bubbles: true })); await pause();
+  await fillInput("统一基准分支", "release/current");
+  await fillInput("领域萃取关联单号", "REQ-new");
+  await click("开始后台萃取");
+  const created = calls.find(c => c.action === "create");
+  check(created?.module_id === "trade" && created.baseline_branch === "release/current", "creation sends module and one common branch");
+  check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created), "server derives scope and repositories from module maintenance");
   check(!errors.length, errors.join(";")); return { passed: true, width: innerWidth, revision: job.documents[0].revision, skill: skill.digest };
 }
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
