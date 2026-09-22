@@ -63,12 +63,13 @@ export function componentSourceTool(
   revision: string,
   range: string,
   onUse: (record: object) => void,
+  sourceLabel = "当前仓",
 ) {
   return defineTool({
     name: "component_source",
     label: "读取组件源码",
     description:
-      "只读本次固定版本的组件源码。list 列指定范围，search 搜索源码行，read 展开文件。不能修改源码。",
+      '只读本次固定版本的源码。list 列目录，read 读文件。search 多关键词用 keywords 数组，任意一个命中即可，例如 keywords:["CODC","PCI","MRO"]；完整短语用 query，空格不会拆词，两者只填一个。默认忽略大小写，区分大小写时设置 ignore_case:false。每次只搜索指定仓，其他仓须分别调用。不能修改源码。',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
@@ -76,7 +77,9 @@ export function componentSourceTool(
         Type.Literal("read"),
       ]),
       path: Type.Optional(Type.String()),
-      query: Type.Optional(Type.String()),
+      query: Type.Optional(Type.String({ description: "完整短语搜索，按字面匹配，不支持正则；多个关键词请用 keywords。" })),
+      keywords: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32, description: "多个字面关键词，任意一个命中即可；与 query 二选一。" })),
+      ignore_case: Type.Optional(Type.Boolean({ description: "默认 true：忽略大小写；false：区分大小写。" })),
       start: Type.Optional(Type.Integer({ minimum: 1, description: "read 的起始行，或 list 的起始条目（从 1 开始）" })),
       end: Type.Optional(Type.Integer({ minimum: 1, description: "read 的末行，或 list 的末条目" })),
     }),
@@ -118,7 +121,15 @@ export function componentSourceTool(
           if (end < entries.length) text += `\n后续请用 list start=${end + 1} 继续，或指定 path 分目录读取`;
         }
         else if (input.action === "search") {
-          if (!input.query) throw new Error("请输入关键词");
+          const hasQuery = typeof input.query === "string" && !!input.query.trim();
+          if (hasQuery && input.keywords !== undefined) throw new Error("query 与 keywords 只能填写一个；多关键词请用 keywords 数组");
+          if (input.keywords !== undefined && (!Array.isArray(input.keywords) || !input.keywords.length || input.keywords.length > 32 || input.keywords.some((word: unknown) => typeof word !== "string" || !word.trim())))
+            throw new Error("keywords 须包含 1～32 个非空字符串");
+          const patterns: string[] = input.keywords !== undefined ? [...new Set<string>(input.keywords)] : hasQuery ? [input.query] : [];
+          if (!patterns.length) throw new Error("请填写 query 完整短语，或 keywords 关键词数组");
+          if (patterns.some(word => /[\r\n\0]/.test(word))) throw new Error("搜索词不能包含换行或空字符");
+          if (input.ignore_case !== undefined && typeof input.ignore_case !== "boolean") throw new Error("ignore_case 须为布尔值");
+          const ignoreCase = input.ignore_case ?? true;
           try {
             text = await executeFile(
               "git",
@@ -127,8 +138,8 @@ export function componentSourceTool(
                 "grep",
                 "-n",
                 "-F",
-                "-e",
-                input.query,
+                ...(ignoreCase ? ["-i"] : []),
+                ...patterns.flatMap(word => ["-e", word]),
                 revision,
                 "--",
                 ...(path ? [path] : []),
@@ -137,8 +148,10 @@ export function componentSourceTool(
             );
           } catch (error) {
             if ((error as any).code !== 1) throw error;
-            text = "没有命中";
+            text = "没有命中。仅表示本仓当前版本和范围内未匹配，不代表其他仓没有相关代码。";
+            if (hasQuery && /\s/.test(input.query)) text += "当前按完整短语搜索；若要查多个词，请改用 keywords 数组。";
           }
+          text = `仓库：${sourceLabel}\n版本：${revision}\n范围：${path || "全仓"}\n匹配：${input.keywords !== undefined ? "多关键词任意命中" : "完整短语"}；${ignoreCase ? "忽略大小写" : "区分大小写"}；字面搜索\n${text}`;
         } else {
           const content = await executeFile(
             "git",
@@ -257,7 +270,7 @@ export function languageComponentSourceTool(
   const sources = new Map<string, Promise<{root: string; revision: string}>>();
   return defineTool({
     ...base,
-    description: "按 component_id 只读本次语言范围内的组件源码；list/search/read。未提供 ID 时仅在一个组件仓时自动选择。",
+    description: `按 component_id 选择本次研究清单中的一个仓。未提供 ID 时仅在一个仓时自动选择。${base.description}`,
     parameters: Type.Object({ ...base.parameters.properties, component_id: Type.Optional(Type.String()) }),
     async execute(id: string, input: any, signal, onUpdate, context) {
       const component = components.find(c => c.id === input.component_id) ?? (!input.component_id && components.length === 1 ? components[0] : undefined);
@@ -265,7 +278,7 @@ export function languageComponentSourceTool(
       try {
         if (!sources.has(component.id)) sources.set(component.id, prepare(component));
         const source = await sources.get(component.id)!;
-        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository })).execute(id, input, signal, onUpdate, context);
+        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository }), `${component.id} (${component.repository})`).execute(id, input, signal, onUpdate, context);
       } catch (error) {
         sources.delete(component.id);
         const message = error instanceof Error ? error.message : "源码准备失败";
