@@ -1,0 +1,45 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { LocalAuth } from "../src/auth.ts";
+import { createTaskServer } from "../src/server.ts";
+import { TaskService } from "../src/taskService.ts";
+import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+
+test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-routes-"));
+  const auth = new LocalAuth(join(root, "auth.json")); auth.bootstrapAdmin("admin", "admin-fixture-password"); auth.createUser("dev", "dev-fixture-password", "developer");
+  const service = new TaskService({ dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  const domain = new DomainKnowledgeExtraction(root, async input => {
+    input.save({ id: "rules", title: "规则", target_id: "domain", path: "domains/rules.md", layer: "domain", content: "# 规则\n测试内容", sources: "测试资料" }, { content: null, revision: "a".repeat(40) }); return "已保存";
+  });
+  (service as any).domainKnowledgeExtraction = domain;
+  const server = createTaskServer(service, { auth }); await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as any).port}`;
+  const request = (path: string, cookie = "", body?: unknown) => fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { cookie, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const login = async (user: string) => (await request("/auth/login", "", { username: user, password: `${user}-fixture-password` })).headers.get("set-cookie")!.split(";")[0];
+  try {
+    for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/knowledge-extraction/skills/domain"]) assert.equal((await request(path)).status, 401);
+    const dev = await login("dev"), admin = await login("admin");
+    const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, false);
+    assert.equal((await request("/knowledge-extraction/skills/domain", dev, { files: skill.files, expected_digest: skill.digest })).status, 403);
+    const files = { ...skill.files, "references/domain.md": skill.files["references/domain.md"] + "\n核对新增规则。\n" };
+    assert.equal((await request("/knowledge-extraction/skills/domain", admin, { files, expected_digest: skill.digest })).status, 200);
+    const upload = await request("/knowledge-materials", dev, { name: "rules.txt", content_base64: Buffer.from("业务资料测试").toString("base64") }); assert.equal(upload.status, 201);
+    const material: any = await upload.json(); assert.equal(material.state, "ready");
+    const start = await request("/domain-extraction", dev, { issue_no: "REQ-123", title: "领域", scope: "规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/business.git", branch: "main", docs_path: "docs" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });
+    assert.equal(start.status, 202); const job: any = await start.json();
+    for (let i = 0; i < 100 && domain.get(job.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));
+    const detail: any = await (await request(`/domain-extraction/${job.id}`, dev)).json(); assert.equal(detail.operator, "dev"); assert.equal(detail.issue_no, "REQ-123");
+    assert.equal((await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "" })).status, 400);
+    const associated = await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456" }); assert.equal(associated.status, 200); assert.equal((await associated.json() as any).issue_no, "REQ-456"); assert.deepEqual(detail.material_ids, [material.id]);
+    const edited = await request(`/domain-extraction/${job.id}/edit`, dev, { document: { ...detail.documents[0], content: "人工核对后的规则" }, base_revision: 1 }); assert.equal(edited.status, 200);
+    assert.equal((await request(`/domain-extraction/${job.id}/edit`, dev, { document: detail.documents[0], base_revision: 1 })).status, 400);
+    const doc = saveKnowledgeDocument(root, { title: "领域规则", content: "Git 正文", scope: "platform", research_source: { job_id: job.id, repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md" }, source: { repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md", revision: "a".repeat(40) } }, "dev");
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { content: "绕开 MR 修改" })).status, 400);
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { active: false })).status, 200);
+  } finally { await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+});

@@ -21,10 +21,13 @@ export interface ResearchDocument {
 export interface ResearchReviewTurn {
   id: string;
   section_id: string;
-  mode: "discuss" | "rework";
+  mode: "discuss" | "rework" | "update";
+  previous_revisions?: Record<string, string>;
+  skill?: { name: string; digest: string };
   message: string;
   operator: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
+  proposal?: { base_revision: number; section: ResearchSection; status: "pending" | "accepted" | "discarded" };
   reply?: string;
   error?: string;
   created_at: string;
@@ -37,12 +40,12 @@ export interface ResearchDocumentEdit {
   section?: Omit<ResearchSection, "selected" | "revision">;
 }
 export function sectionReady(section: ResearchSection): boolean {
-  return [section.content, section.interfaces, section.integration, section.sources].every(value => !!value?.trim())
+  return [section.content, section.interfaces, section.integration, section.sources].every(value => typeof value === "string" && !!value.trim())
     && /```[^\n]*\n[\s\S]*?\S[\s\S]*?\n```/.test(section.example ?? "");
 }
 export function editResearchDocument(document: ResearchDocument, edit: ResearchDocumentEdit,
   repositoryIds: string[], review?: ResearchReviewTurn): ResearchDocument {
-  if (review && (review.mode !== "rework" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
+  if (review && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
     throw new Error("本轮只能修改指定组件；讨论不会修改草稿，其他组件保持原样");
   }
   scanForSecrets("组件知识草稿", Buffer.from(JSON.stringify(edit)));

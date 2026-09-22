@@ -329,5 +329,37 @@
       "https://codehub-y.huawei.com/api/v4/projects/{repo_path}/merge_requests/{mr}"
     ],
     "timeout_s": 35
+  },
+  "mr_create_knowledge": {
+    "command": [
+      "codehub-cli",
+      "mr",
+      "create",
+      "--host",
+      "yellow",
+      "--project",
+      "{repo}",
+      "--source-branch",
+      "{source_branch}",
+      "--target-branch",
+      "{target_branch}",
+      "--title",
+      "{title}",
+      "--e2e-issues",
+      "{dts_no}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "--json",
+      "web_url,iid",
+      "-k"
+    ],
+    "url": {
+      "json": "web_url"
+    },
+    "id": {
+      "json": "iid"
+    }
   }
 }

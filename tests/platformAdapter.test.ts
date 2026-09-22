@@ -15,6 +15,7 @@ import {
   chmodSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -613,4 +614,26 @@ test("pipeline_status 兼容旧 desc 配置并对无顺序键的多 run fail-clo
   await assert.rejects(() => unsafe.handle("GET", "/pipeline/status",
     new URLSearchParams({ sha: "x", repo: "r" }), {}, {}),
   /多条 run.*pipeline_id.*无法可靠判断最新流水线/s);
+});
+
+test("知识 MR 必须传入关联单号，专用模板及普通模板都实际传给平台", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-adapter-")), cli = fakeCli(dir);
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  makeAdapter(dir, cli);
+  const path = join(dir, "adapter.json"), config = JSON.parse(readFileSync(path, "utf8"));
+  config.mr_create_knowledge = { ...config.mr_create };
+  writeFileSync(path, JSON.stringify(config));
+  const adapter = new PlatformAdapter(path, () => {});
+  const body = { repo: "https://example.test/knowledge.git", source_branch: "codex/knowledge-fixture", target_branch: "main", title: "知识归档" };
+  await assert.rejects(() => adapter.handle("POST", "/mr", new URLSearchParams(), { ...body, purpose: "knowledge" }, {}), /关联单号/);
+  await adapter.handle("POST", "/mr", new URLSearchParams(), { ...body, purpose: "knowledge", dts_no: "REQ-knowledge" }, {});
+  const knowledgeArgs = JSON.parse(readFileSync(join(dir, "last-argv.json"), "utf8"));
+  assert.equal(knowledgeArgs[knowledgeArgs.indexOf("--e2e-issues") + 1], "REQ-knowledge");
+  await adapter.handle("POST", "/mr", new URLSearchParams(), { ...body, dts_no: "REQ-fixture" }, {});
+  const ordinaryArgs = JSON.parse(readFileSync(join(dir, "last-argv.json"), "utf8"));
+  assert.equal(ordinaryArgs[ordinaryArgs.indexOf("--e2e-issues") + 1], "REQ-fixture");
+  config.mr_create_knowledge.command = config.mr_create.command.filter((arg: string) => !["--e2e-issues", "{dts_no}"].includes(arg));
+  writeFileSync(path, JSON.stringify(config));
+  const withoutAssociation = new PlatformAdapter(path, () => {});
+  await assert.rejects(() => withoutAssociation.handle("POST", "/mr", new URLSearchParams(), { ...body, purpose: "knowledge", dts_no: "REQ-knowledge" }, {}), /命令未配置单号关联/);
 });

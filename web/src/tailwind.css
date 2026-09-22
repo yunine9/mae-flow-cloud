@@ -7928,3 +7928,40 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .research-document-content { line-height: 1.8; }
 .research-discussion { margin-top: 28px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .research-full-document { line-height: 1.8; }
+
+/* 两类知识萃取共用桌面工作台。 */
+.knowledge-extraction-workspace { display:flex; flex-direction:column; gap:18px; min-height:480px; height:calc(100vh - 200px); border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:20px; }
+.knowledge-extraction-header { display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line); padding-bottom:16px; }
+.knowledge-extraction-body { display:grid; grid-template-columns:minmax(0,1fr); flex:1; min-height:0; gap:18px; }
+.knowledge-extraction-body.has-sidebar { grid-template-columns:200px minmax(0,1fr); }
+.knowledge-extraction-jobs { min-height:0; overflow:auto; border-right:1px solid var(--line); padding-right:14px; }
+.knowledge-extraction-content { min-width:0; overflow:auto; overscroll-behavior:contain; }
+.knowledge-extraction-content .research-review { height:clamp(280px, calc(100vh - 500px), 640px); }
+.knowledge-extraction-content .research-review-panes { grid-template-columns:180px minmax(0,1fr); }
+.knowledge-extraction-content .research-reader:not(.research-full-document) { display:grid; grid-template-columns:minmax(0,1fr) 260px; padding:0; overflow:hidden; }
+.knowledge-extraction-content .research-document-content { padding:18px; overflow:auto; overscroll-behavior:contain; min-width:0; }
+.knowledge-extraction-content .research-discussion { margin:0; padding:16px; border:0; border-left:1px solid var(--line); border-radius:0; overflow:auto; min-width:0; }
+
+/* 萃取成果按主题与章节阅读，仓路径只在归档阶段展示。 */
+.knowledge-outline-root { margin:0 0 12px; font-size:13px; line-height:1.6; color:var(--muted-foreground); overflow-wrap:anywhere; }
+.knowledge-outline-topics,.knowledge-outline-headings { list-style:none; margin:0; padding:0; }
+.knowledge-outline-topics > li { margin-bottom:6px; border:1px solid transparent; border-radius:8px; }
+.knowledge-outline-topics > li.is-current { border-color:var(--line); background:var(--surface); }
+.knowledge-outline-topic { display:flex; align-items:flex-start; gap:6px; padding:10px 6px; }
+.knowledge-outline-expand { flex-shrink:0; padding-top:4px; color:var(--muted-foreground); }
+.knowledge-outline-expand:disabled { opacity:.25; }
+.knowledge-outline-topic input { margin-top:5px; accent-color:var(--primary); flex-shrink:0; }
+.knowledge-outline-title { flex:1; min-width:0; text-align:left; overflow-wrap:anywhere; }
+.knowledge-outline-title strong { display:block; font-size:14px; line-height:1.6; }
+.knowledge-outline-title small { display:block; margin-top:3px; font-size:11px; color:var(--muted-foreground); }
+.knowledge-outline-title[aria-current] strong { color:var(--primary); }
+.knowledge-outline-headings { margin:0 7px 7px 15px; padding-left:9px; border-left:1px solid var(--line); }
+.knowledge-outline-headings button { display:block; width:100%; padding:5px 4px; font-size:12px; line-height:1.6; text-align:left; overflow-wrap:anywhere; color:var(--muted-foreground); }
+.knowledge-outline-headings button:hover,.knowledge-inline-link:hover { color:var(--primary); text-decoration:underline; }
+.knowledge-inline-link { color:var(--primary); cursor:pointer; text-align:left; text-decoration:underline; text-underline-offset:3px; }
+.knowledge-document-outline { padding:10px 12px; margin-bottom:16px; border:1px solid var(--line); border-radius:8px; font-size:13px; background:var(--surface-soft); }
+.knowledge-document-outline summary { cursor:pointer; color:var(--muted-foreground); }
+.knowledge-document-outline nav { display:flex; flex-direction:column; margin-top:8px; }
+.knowledge-document-outline button { text-align:left; padding:5px 8px; color:var(--primary); overflow-wrap:anywhere; }
+.knowledge-markdown [data-l]:focus { outline:2px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset:4px; }
+.knowledge-extraction-content .research-review-panes { grid-template-columns:clamp(195px, 23%, 260px) minmax(0,1fr); }

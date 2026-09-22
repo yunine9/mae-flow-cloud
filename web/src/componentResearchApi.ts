@@ -9,7 +9,13 @@ export interface ComponentRepository {
   enabled: boolean;
 }
 export interface ComponentResearchRecord {
+  material_ids?: string[];
+  update_document_revision?: string;
+  update_metadata?: { title: string; scope: string; module_ids: string[]; repositories: string[] };
   id: string;
+  skill?: { name: string; digest: string };
+  section_history?: Array<{ at: string; operator: string; section: ComponentResearchSection }>;
+  update_document_id?: string;
   mode?: "topic" | "all" | "component";
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
@@ -38,8 +44,10 @@ export interface ComponentResearchSection {
   related_ids: string[]; revision: number;
 }
 export interface ComponentResearchReviewTurn {
-  id: string; section_id: string; mode: "discuss" | "rework"; message: string; operator: string;
+  id: string; section_id: string; mode: "discuss" | "rework" | "update"; message: string; operator: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
+  skill?: { name: string; digest: string };
+  proposal?: { base_revision: number; section: ComponentResearchSection; status: "pending" | "accepted" | "discarded" };
   reply?: string; error?: string; created_at: string; finished_at?: string;
 }
 export async function componentRequest<T>(

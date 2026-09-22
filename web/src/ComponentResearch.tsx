@@ -1,3 +1,7 @@
+import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
+import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
+import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
+import { ExtractionSkillEditor } from "./ExtractionSkillEditor";
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -55,11 +59,13 @@ function Choice({
 export function ComponentResearch({
   open,
   focused = false,
+  focusId,
   onClose,
   onAdopt,
 }: {
   open: boolean;
   focused?: boolean;
+  focusId?: string;
   onClose: () => void;
   onAdopt: (id: string) => void;
 }) {
@@ -67,6 +73,7 @@ export function ComponentResearch({
     [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
+  const [materials, setMaterials] = useState<MaterialSummary[]>([]), [uploading, setUploading] = useState(false);
   const [mode, setMode] = useState<"all" | "topic">("all");
   const [selected, setSelected] = useState(
       new URLSearchParams(location.search).get("componentResearch") ?? "",
@@ -81,6 +88,7 @@ export function ComponentResearch({
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [stage, setStage] = useState("review");
   const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
@@ -145,31 +153,32 @@ export function ComponentResearch({
   }, [open, selected]);
   useEffect(() => {
     setTitle(
-      current
+      current?.update_metadata?.title ?? (current
         ? `${knowledgeLanguageLabel(current.language)} · ${current.topic}`.slice(0, 160)
-        : "",
+        : ""),
     );
     setEditing(false);
-    setScope("platform");
-    setModule("");
-    setRepos("");
-  }, [selected, current?.id]);
+    setScope(current?.update_metadata?.scope ?? "platform");
+    setModule(current?.update_metadata?.module_ids[0] ?? "");
+    setRepos(current?.update_metadata?.repositories.join("\n") ?? "");
+  }, [selected, current?.id, current?.update_document_revision]);
   useEffect(() => {
     if (!editing) setDraft(current?.draft ?? "");
   }, [current?.draft, editing]);
   function selectRecord(id: string) {
-    setSelected(id);
+    setSelected(id); setStage("review");
     const url = new URL(location.href);
     url.searchParams.set("componentResearch", id);
     history.replaceState(history.state, "", url);
   }
+  useEffect(() => { if (focusId) selectRecord(focusId); }, [focusId]);
   async function start() {
     setBusy(true);
     setError("");
     try {
       const r = await componentRequest<ComponentResearchRecord>(
         "/component-research",
-        { language, mode, ...(mode === "topic" ? { topic } : {}) },
+        { language, mode, material_ids: materials.map(m => m.id), ...(mode === "topic" ? { topic } : {}) },
       );
       await load();
       setDetail(r);
@@ -180,7 +189,7 @@ export function ComponentResearch({
       setBusy(false);
     }
   }
-  async function manage(action: "stop" | "delete" | "retry") {
+  async function manage(action: "stop" | "delete" | "retry" | "begin-update") {
     if (!current) return;
     setBusy(true); setError("");
     try {
@@ -191,25 +200,9 @@ export function ComponentResearch({
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return (
-    <section className="tw-root flex min-h-[620px] h-[calc(100vh-230px)] flex-col gap-5 rounded-xl border border-line bg-surface p-6" aria-label="源码萃取工作区">
-        <header className="flex items-center gap-4 border-b border-line pb-4">
-          <Button variant="outline" onClick={onClose}>{focused ? "← 返回文档" : "← 返回知识库"}</Button>
-          <h2 className="text-xl font-semibold">{focused ? "本篇文档的萃取过程" : "萃取任务"}</h2>
-          {!focused && <span className="text-muted-foreground">离开页面后仍会继续，可随时回来查看</span>}
-          {!focused && <>
-            <Button
-              className="ml-auto shrink-0"
-              onClick={() => {
-                selectRecord("new");
-                setError("");
-              }}
-            >
-              ＋ 新建萃取任务
-            </Button>
-          </>}
-        </header>
-        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[clamp(220px,20%,300px)_minmax(0,1fr)]"} min-h-0 flex-1 gap-5`}>
-          {!focused && <aside className="overflow-auto border-r border-line pr-4">
+    <KnowledgeExtractionWorkspace title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
+      onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}
+      sidebar={!focused ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
               <button
@@ -231,7 +224,7 @@ export function ComponentResearch({
             {!records.length && (
               <p className="text-muted-foreground">暂无萃取记录</p>
             )}
-          </aside>}
+          </div> : undefined}>
           <main className="min-w-0 overflow-auto overscroll-contain pr-2 text-base">
             {error && (
               <p role="alert" className="mb-3 text-danger">
@@ -263,6 +256,7 @@ export function ComponentResearch({
                     {knowledgeLanguageLabel(current.language)} ·{" "}
                     {current.operator}
                   </p>
+                  {current.skill && <p className="mt-2 text-xs text-muted-foreground">Skill：{current.skill.name} · {current.skill.digest.slice(0, 12)}</p>}
                   <p className="mt-3 font-medium text-primary">
                     {current.stage}
                   </p>
@@ -272,8 +266,9 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                {current.document && <ComponentResearchReview record={current} onChanged={record => { setDetail(record); void load(); }} />}
-                {current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
+                <KnowledgeExtractionStages value={stage} onChange={setStage} label="组件萃取阶段" />
+                {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
+                {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">
                     <div className="flex items-center justify-between gap-3"><strong>组件草稿 {current.progress.done} / {current.progress.total}</strong><span className="text-muted-foreground">已采纳 {current.progress.adopted} 篇</span></div>
                     <div role="progressbar" aria-label="组件完成进度" aria-valuemin={0} aria-valuemax={current.progress.total} aria-valuenow={current.progress.done} className="mt-4 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all" style={{width:`${100 * current.progress.done / (current.progress.total || 1)}%`}} /></div>
@@ -290,12 +285,13 @@ export function ComponentResearch({
                     </table>
                   </div>
                 </section>}
-                {(current.mode !== "all" || current.document) && <details open={focused || undefined} className="mb-5 rounded-lg border border-line p-4">
+                {["inputs", "progress"].includes(stage) && <details open className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
-                    源码范围与研究记录 · {current.evidence.length} 条记录
+                    {stage === "inputs" ? "源码范围与资料" : `研究记录 · ${current.evidence.length} 条记录`}
                   </summary>
-                  {(current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
-                  <ol className="max-h-64 overflow-auto text-sm">
+                  {stage === "inputs" && (current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
+                  {stage === "inputs" && <p className="mt-3 text-sm">关联资料：{current.material_ids?.length ?? 0} 份；新一轮可按当前来源核对并生成更新建议。</p>}
+                  {stage === "progress" && <ol className="max-h-64 overflow-auto text-sm">
                     {current.evidence.map((e, i) => (
                       <li
                         key={i}
@@ -322,11 +318,11 @@ export function ComponentResearch({
                         )}
                       </li>
                     ))}
-                  </ol>
+                  </ol>}
                 </details>}
-                {current.draft && (
+                {current.draft && ["review", "publish"].includes(stage) && (
                   <>
-                    {!current.document && <><div className="mb-3 flex items-center justify-between">
+                    {stage === "review" && !current.document && <><div className="mb-3 flex items-center justify-between">
                       <h3 className="font-semibold">
                         {current.document_id
                           ? "原始萃取草稿"
@@ -350,13 +346,14 @@ export function ComponentResearch({
                     ) : (
                       <Markdown text={draft} />
                     )}</>}
-                    {current.document_id ? (
-                      <Button
+                    {stage === "publish" && <ComponentKnowledgeArchive key={current.id} record={current} title={title} content={draft} />}
+                    {stage === "publish" && (current.document_id ? (
+                      <div className="mt-5 flex gap-3"><Button variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>更新这篇文档</Button><Button
                         className="mt-5"
                         onClick={() => onAdopt(current.document_id!)}
                       >
                         查看已采纳知识
-                      </Button>
+                      </Button></div>
                     ) : (
                       <section className="mt-5 grid gap-4 rounded-lg border border-line bg-surface-2 p-4">
                         <label className="grid gap-2">
@@ -433,13 +430,12 @@ export function ComponentResearch({
                           {current.document ? `确认采纳 ${current.document.sections.filter(section => section.selected).length} 项为一篇知识文档` : "确认采纳到知识库"}
                         </Button>
                       </section>
-                    )}
+                    ))}
                   </>
                 )}
               </>
             )}
           </main>
-        </div>
 
       <Dialog open={selected === "new"} onOpenChange={open => { if (!open) selectRecord("history"); }}>
         <DialogContent className="tw-root sm:max-w-[640px] max-h-[85vh] overflow-auto">
@@ -467,8 +463,9 @@ export function ComponentResearch({
                     placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
                   />
                 </label>}
+                <KnowledgeMaterialUpload materials={materials} onChange={setMaterials} onBusy={setUploading} />
                 <Button
-                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
+                  disabled={busy || uploading || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
                   onClick={() => void start()}
                 >
                   {busy ? "发起中…" : mode === "all" ? "一键萃取全部组件" : "开始后台萃取"}
@@ -477,6 +474,6 @@ export function ComponentResearch({
         </DialogContent>
       </Dialog>
       <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除萃取任务？</DialogTitle></DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<p>正在执行的任务会停止。已经采纳的知识文档和来源记录会保留。</p><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleting(false)}>取消</Button><Button disabled={busy} onClick={() => void manage("delete")}>确认删除</Button></div></DialogContent></Dialog>
-    </section>
+    </KnowledgeExtractionWorkspace>
   );
 }

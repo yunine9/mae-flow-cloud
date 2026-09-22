@@ -16,14 +16,13 @@ const input: ResearchExecution = {
 test("全量、主题、历史逐仓研究以及专家讨论/返工共用对外接口边界", () => {
   for (const language of ["cpp","java"]) for (const discover of [false,true]) {
     const mission = componentResearchMission(component,language,"用法","sha",[component],discover);
-    assert.ok(mission.includes(COMPONENT_API_BOUNDARY));
+    assert.match(mission, /references\/api-boundary\.md/);
     assert.ok(mission.includes(component.description),"按仓保留灵活的接口目录提示");
   }
   for (const mode of [undefined,"discuss","rework"] as const) {
     const mission = jointResearchMission({...input,review:mode ? {id:"r",section_id:"api",mode,message:"核对对外边界",operator:"expert",status:"running",created_at:"2026-09-21"} : undefined});
-    assert.ok(mission.includes(COMPONENT_API_BOUNDARY));
-    assert.match(mission,/而非让每个内部模块都成为一项/);
-    if (mode) assert.match(mission,/本轮只处理组件 api/);
+    assert.match(mission, /references\/api-boundary\.md/);
+    if (mode) assert.match(mission,/"section_id":"api"/);
   }
 });
 
@@ -37,8 +36,8 @@ test("interface 是优先线索而非固定白名单，可见性、已调用与�
   assert.match(COMPONENT_API_BOUNDARY,/候选也可加入审核清单，默认勾选供专家筛选/);
   assert.match(COMPONENT_API_BOUNDARY,/最佳示例必须站在组件使用方视角，推荐写法使用受支持的入口/);
   const tool = researchDocumentTool(input);
-  assert.match(tool.description,/outline 登记细粒度能力及有研究价值的待核实候选/);
-  assert.match(JSON.stringify(tool.parameters),/对外提供的证据/);
+  assert.match(tool.description,/内容方法见当前组件 Skill/);
+  assert.doesNotMatch(JSON.stringify(tool.parameters),/对外提供的证据/, "工具仅保留稳定数据接口，方法由 Skill 维护");
 });
 
 test("interface、IDL 和 POM 联合分析，候选可默认纳入审核但必须说明不确定性", () => {
@@ -63,7 +62,7 @@ test("开发范式共用接入示例要求：真实 include、构建依赖及库
   assert.match(COMPONENT_API_BOUNDARY,/未找到时明确标注待核实，不猜名字/);
   assert.match(COMPONENT_API_BOUNDARY,/未经编译验证须注明/);
   const schema = JSON.stringify(researchDocumentTool(input).parameters);
-  assert.match(schema,/#include.*CMakeLists\.txt.*target_link_libraries/);
+  assert.doesNotMatch(schema, /CMakeLists\.txt|target_link_libraries/, "不在工具中重复维护示例方法");
 });
 
 test("SDK POM 必须实际读取并追踪发布关系，不把聚合或依赖清单当成对外 API", () => {
@@ -77,5 +76,5 @@ test("SDK POM 必须实际读取并追踪发布关系，不把聚合或依赖清
   assert.match(COMPONENT_API_BOUNDARY,/配置不能证明某版本已实际发布/);
   assert.match(COMPONENT_API_BOUNDARY,/没有 sdk\/pom\.xml.*其他构建系统/);
   assert.match(COMPONENT_API_BOUNDARY,/不执行 Maven goal 或发布命令/);
-  assert.match(JSON.stringify(researchDocumentTool(input).parameters),/sdk\/pom\.xml.*发布配置到制品坐标/);
+  assert.doesNotMatch(JSON.stringify(researchDocumentTool(input).parameters), /sdk\/pom\.xml/, "POM 研究规则保存在 Skill 中");
 });

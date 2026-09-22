@@ -1,3 +1,7 @@
+import { runKnowledgeCommand } from "./knowledgeProcess.ts";
+import { DomainKnowledgeExtraction } from "./domainKnowledgeExtraction.ts";
+import { runDomainKnowledge } from "./domainKnowledgeAgent.ts";
+import { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
 import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
 import { closeMergeRequest } from "./mrClient.ts";
@@ -2400,6 +2404,7 @@ export class TaskService {
         role: string;
         work: Promise<unknown>;
       }> = [{ taskId: "knowledge-consolidation", role: "知识整理", work: this.knowledgeConsolidation?.shutdown() ?? Promise.resolve() }, { taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+        { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -5699,15 +5704,29 @@ export class TaskService {
         if(!receipt.delivered)throw new Error(receipt.last_error||"通知未送达");
       });
   }
+  private domainKnowledgeExtraction?: DomainKnowledgeExtraction;
+  getDomainKnowledgeExtraction(): DomainKnowledgeExtraction {
+    if (!this.domainKnowledgeExtraction) {
+      const publisher = new KnowledgeMrPublisher({ dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
+        credential: operator => this.options.gitCredential?.(operator), onIndexed: () => this.prepareKnowledgeIndex() });
+      this.domainKnowledgeExtraction = new DomainKnowledgeExtraction(this.options.dataDir, input => runDomainKnowledge(input, {
+        dataDir: this.options.dataDir,
+        model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
+        source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal),
+      }), { previewCleanup: (...args) => publisher.previewCleanup(...args), publish: (...args) => publisher.publish(...args), refresh: (...args) => publisher.refresh(...args), readRemote: (...args) => publisher.readRemote(...args) });
+    }
+    return this.domainKnowledgeExtraction;
+  }
   private componentResearch?: ComponentResearch;
   getComponentResearch(): ComponentResearch {
     return this.componentResearch ??= new ComponentResearch(this.options.dataDir, input => runComponentResearch(input, {
+      dataDir: this.options.dataDir,
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
-      source: (component, operator) => this.componentResearchSource(component, operator),
+      source: (component, operator, signal) => this.componentResearchSource(component, operator, signal),
     }), () => this.prepareKnowledgeIndex());
   }
   private componentSourceLocks = new Map<string, Promise<unknown>>();
-  private async componentResearchSource(component: ComponentRepository, operator: string) {
+  private async componentResearchSource(component: ComponentRepository, operator: string, signal?: AbortSignal) {
     const identity = this.options.gitCredential?.(operator) ?? this.options.platformGitCredential?.();
     const key = createHash("sha256").update(JSON.stringify([operator, identity, component.repository, component.branch])).digest("hex");
     const root = join(this.options.dataDir, "component-source-cache", key);
@@ -5716,8 +5735,10 @@ export class TaskService {
       const sandbox = this.prepareHostGitSandbox(identity);
       try {
         mkdirSync(root, { recursive: true });
-        const git = async (args: string[]) => { const result = await runGitProcess([...sandbox.args, ...args], { cwd: root, env: sandbox.env, timeoutMs: 90_000 });
-          if (result.status !== 0) throw new Error("组件源码同步失败，请检查仓库、分支及个人或系统 Git 凭据"); return result.stdout.trim(); };
+        const git = async (args: string[]) => {
+          try { return (await runKnowledgeCommand("git", [...sandbox.args, ...args], { cwd: root, env: sandbox.env, timeoutMs: 90_000, maxBytes: 20 * 1024 * 1024, signal })).trim(); }
+          catch { throw new Error("组件源码同步失败，请检查仓库、分支及个人或系统 Git 凭据"); }
+        };
         if (!existsSync(join(root, "HEAD"))) await git(["init", "--bare"]);
         await git(["fetch", "--depth=1", "--no-tags", component.repository, `refs/heads/${component.branch}`]);
         const revision = await git(["rev-parse", "FETCH_HEAD^{commit}"]);

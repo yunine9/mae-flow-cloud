@@ -1,3 +1,4 @@
+import { generatedAgentRules } from "./knowledgeCleanup.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import {
@@ -31,11 +32,45 @@ export async function componentResearchRoute(
         );
     } else {
       const research = service.getComponentResearch();
+      if (parts[1] && parts[2] === "archive") {
+        const record = research.get(parts[1]);
+        if (record.deleted_at) throw new Error("萃取任务已删除");
+        const manager = service.getDomainKnowledgeExtraction();
+        const archive = manager.componentArchive(record.id);
+        if (request.method === "GET") return json(response, 200, { archive: archive ?? null });
+        if (request.method === "POST") {
+          const body = await readBody(request, 24 * 1024 * 1024);
+          if (!parts[3]) {
+            const prepared = manager.prepareComponent({ ...body, ...research.archiveDraft(record.id, body) }, operator);
+            return json(response, 200, await manager.readRemote(prepared.id, prepared.documents[0].id, operator));
+          }
+          if (!archive) throw new Error("请先准备归档文档");
+          const id = archive.id;
+          if (parts[3] === "cleanup-template") return json(response, 200, { content: generatedAgentRules(archive, archive.knowledge_target, String(body.path || "AGENTS.md")) });
+          if (parts[3] === "cleanup-preview") return json(response, 200, await manager.previewCleanup(id, archive.knowledge_target.id, body, operator));
+          if (parts[3] === "cleanup-confirm") return json(response, 200, manager.confirmCleanup(id, body.plan_id, body.confirmed, body.preserve_paths));
+          if (parts[3] === "edit") return json(response, 200, manager.edit(id, body, operator));
+          if (parts[3] === "remote") return json(response, 200, await manager.readRemote(id, body.document_id, operator));
+          if (parts[3] === "reconcile") return json(response, 200, manager.reconcile(id, body, operator));
+          if (parts[3] === "publish") return json(response, 200, await manager.publish(id, operator));
+          if (parts[3] === "refresh") return json(response, 200, await manager.refresh(id, operator));
+          if (parts[3] === "restore") return json(response, 200, manager.restore(id, body.document_id, body.revision, body.base_revision, operator));
+        }
+        throw new Error("未知组件归档操作");
+      }
       if (request.method === "GET" && parts[1] && parts[2] === "document") {
         const content = research.markdown(parts[1]);
         response.writeHead(200, { "content-type": "text/markdown; charset=utf-8",
           "content-disposition": 'attachment; filename="component-guide.md"', "cache-control": "no-store" });
         return response.end(content);
+      }
+      if (request.method === "POST" && parts[1] && ["edit-section", "proposal", "restore-section", "begin-update"].includes(parts[2])) {
+        const body = await readBody(request, 3 * 1024 * 1024);
+        const result = parts[2] === "edit-section" ? research.editSection(parts[1], body, operator)
+          : parts[2] === "proposal" ? research.decideProposal(parts[1], body.turn_id, body.decision, operator)
+          : parts[2] === "restore-section" ? research.restoreSection(parts[1], body.section_id, body.revision, body.base_revision, operator)
+          : research.beginUpdate(parts[1], operator);
+        return json(response, 200, result);
       }
       if (request.method === "POST" && parts[1] && parts[2] === "selection") {
         const input = await readBody(request, 1024 * 1024);

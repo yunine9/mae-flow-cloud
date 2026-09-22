@@ -24,6 +24,7 @@ export interface MergeRequestCall {
   dtsNo?: string;
   credential?: MergeRequestCredential;
   timeoutMs?: number;
+  purpose?: "knowledge";
 }
 
 export interface MergeRequestReceipt {
@@ -73,6 +74,7 @@ export async function createMergeRequest(
         target_branch: call.targetBranch,
         title: call.title,
         ...(call.dtsNo ? { dts_no: call.dtsNo } : {}),
+        ...(call.purpose ? { purpose: call.purpose } : {}),
       }),
       signal: controller.signal,
     });

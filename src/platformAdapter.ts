@@ -195,6 +195,8 @@ interface AdapterConfig {
   token_file?: string;
   timeout_s?: number;
   mr_create: CommandSpec;
+  /** 知识归档独立模板，使用任务填写的关联单号。 */
+  mr_create_knowledge?: CommandSpec;
   /** 先查后建(可选):建 MR 前先查同分支对有没有已开的 MR,查到了
    * 直接复用。CodeHub 的建 MR 幂等语义不统一(CLI 报 stderr、REST
    * 静默回 200 空 body——能力核对报告 A2 实测),查询是唯一稳的路。
@@ -703,11 +705,13 @@ export class PlatformAdapter {
     }
     if (method === "POST" && path === "/mr") {
       const values = this.values(body, headers);
+      if (body.purpose === "knowledge" && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(values.dts_no)) throw new AdapterError("知识归档必须填写一个有效的关联单号");
       // 先查后建:同分支对已有开着的 MR 就复用,不去撞平台的幂等
       // 语义(CLI 报 stderr / REST 静默 200 空 body,形状不统一)。
       const found = await this.lookupMr(values);
       if (found) return { status: 201, payload: found };
-      const spec = this.config.mr_create;
+      const spec = body.purpose === "knowledge" ? this.config.mr_create_knowledge ?? this.config.mr_create : this.config.mr_create;
+      if (body.purpose === "knowledge" && !spec.command.some(arg => arg.includes("{dts_no}"))) throw new AdapterError("知识归档命令未配置单号关联，请在 mr_create_knowledge 中配置 {dts_no}");
       let stdout: string;
       try {
         stdout = await this.run(spec, values);

@@ -72,3 +72,10 @@ export function knowledgeAssetElementId(
 ): string {
   return `knowledge-${kind}-${parts.map(encodeURIComponent).join("-")}`;
 }
+
+/** An explicit subpage wins over remembered task IDs in the same URL. */
+export function knowledgeLibraryPage(search: string): "documents" | "component" | "domain" {
+  const query = new URLSearchParams(search), page = query.get("knowledgePage");
+  if (page === "documents" || page === "component" || page === "domain") return page;
+  return query.has("domainExtraction") ? "domain" : query.has("componentResearch") ? "component" : "documents";
+}

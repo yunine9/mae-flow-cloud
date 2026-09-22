@@ -33,6 +33,7 @@ export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
 function KnowledgeRepoPane() {
   const [config, setConfig] = useState<KnowledgeRepoConfig | undefined>();
   const [url, setUrl] = useState("");
+  const [branch, setBranch] = useState("main"), [docsPath, setDocsPath] = useState("domains"), [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -45,7 +46,7 @@ function KnowledgeRepoPane() {
   useEffect(() => { void refresh(); }, []);
   async function save() {
     setBusy(true); setError(""); setNotice("");
-    try { setConfig((await knowledgeRepoRequest("PUT", { url: url.trim() })).config); setUrl(""); setNotice("已保存;之后的会话开工时装载。"); }
+    try { setConfig((await knowledgeRepoRequest("PUT", { url: url.trim(), branch, docs_path: docsPath })).config); setUrl(""); setEditing(false); setNotice("已保存;之后的会话开工时装载。"); }
     catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   async function clear() {
@@ -58,16 +59,17 @@ function KnowledgeRepoPane() {
     <p className="mb-4 text-sm text-muted-foreground">团队领域知识统一治理的代码仓:问题会话开工时由平台克隆为只读参考件,AI 定位与改码时按业务模块名检索这里的知识。仅管理员可维护;克隆失败不影响定位。</p>
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
     {notice && <p className="mb-3 text-sm text-muted-foreground">{notice}</p>}
-    {loading ? <p className="p-10 text-center text-muted-foreground">正在读取配置…</p> : config
+    {loading ? <p className="p-10 text-center text-muted-foreground">正在读取配置…</p> : config && !editing
       ? <div className="grid gap-3">
         <p className="text-sm text-muted-foreground">当前知识仓:</p>
         <code className="break-all rounded-md bg-surface-2 px-3 py-2 text-sm">{config.url}</code>
-        <div><Button variant="outline" disabled={busy} onClick={() => void clear()}>清除配置</Button></div>
+        <p className="text-sm">萃取默认归档：{config.branch || "main"} / {config.docs_path || "domains"}</p><div className="flex gap-3"><Button variant="outline" onClick={() => { setUrl(config.url); setBranch(config.branch || "main"); setDocsPath(config.docs_path || "domains"); setEditing(true); }}>修改配置</Button><Button variant="outline" disabled={busy} onClick={() => void clear()}>清除配置</Button></div>
       </div>
       : <form className="grid max-w-xl gap-3" onSubmit={e => { e.preventDefault(); void save(); }}>
-        <p className="text-sm text-muted-foreground">尚未配置知识仓。</p>
+        <p className="text-sm text-muted-foreground">{config ? "修改后用于新萃取任务，已有任务保留原目标。" : "尚未配置知识仓。"}</p>
         <label className="grid gap-2">代码仓地址(HTTPS 或本地路径)<Input required value={url}
           placeholder="https://codehub.example.com/team/domain-knowledge.git" onChange={e => setUrl(e.target.value)} /></label>
+        <label className="grid gap-2">萃取默认归档分支<Input value={branch} onChange={e => setBranch(e.target.value)} /></label><label className="grid gap-2">领域文档默认目录<Input value={docsPath} onChange={e => setDocsPath(e.target.value)} /></label>
         <div><Button type="submit" disabled={busy || !url.trim()}>{busy ? "保存中…" : "保存"}</Button></div>
       </form>}
   </div>;

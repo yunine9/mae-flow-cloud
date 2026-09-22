@@ -33,9 +33,14 @@ window.fetch = async (url, options) => {
     result = record;
   } else if (path.endsWith("/review")) {
     calls.push({action:"review",...body});
-    if (body.mode === "rework") {const section = record.document!.sections.find(s => s.id === body.section_id)!;section.revision++;section.content += " 返工已补充取消时的资源释放说明。";}
-    record.review_turns!.push({id:`turn-${calls.length}`,...body,operator:"专家",status:"done",reply:"已核对来源，仅处理当前能力，其他组件保持原样。",created_at:new Date().toISOString()});
+    const section = record.document!.sections.find(s => s.id === body.section_id)!;
+    const proposal = body.mode === "rework" ? { base_revision: section.revision, section: { ...section, revision: section.revision + 1, content: section.content + " 返工已补充取消时的资源释放说明。" }, status: "pending" as const } : undefined;
+    record.review_turns!.push({proposal,id:`turn-${calls.length}`,...body,operator:"专家",status:"done",reply:"已核对来源，仅处理当前能力，其他组件保持原样。",created_at:new Date().toISOString()});
     result = record;
+  } else if (path.endsWith("/proposal")) {
+    const turn = record.review_turns!.find(t => t.id === body.turn_id)!;
+    const index = record.document!.sections.findIndex(s => s.id === turn.proposal!.section.id);
+    record.document!.sections[index] = turn.proposal!.section; turn.proposal!.status = "accepted"; result = record;
   } else if (path === "/component-research/cr-browser") result = record;
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result),{headers:{"Content-Type":"application/json"}});
@@ -52,25 +57,31 @@ async function message(value: string) {
 }
 async function run() {
   for (let i=0;i<60 && !document.querySelector('[aria-label="组件审核工作区"]');i++) await pause();
-  const boxes = () => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+  const boxes = () => [...document.querySelectorAll<HTMLInputElement>('[aria-label="组件能力目录"] input[type="checkbox"]')];
   check(boxes().length === record.document!.sections.length && boxes().every(b => b.checked), "all discovered capabilities must default selected");
   await click("全不选");check(boxes().every(b => !b.checked),"unselect all");
   await click("全选");boxes()[2].click();await pause();check(!boxes()[2].checked,"single checkbox selection");
-  const capability = [...document.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(b => b.textContent?.includes("异步读取"))!;
+  const capability = [...document.querySelectorAll<HTMLButtonElement>('button.knowledge-outline-title')].find(b => b.textContent?.includes("异步读取"))!;
   capability.click();await pause();
+  const outline = document.querySelector('[aria-label="知识主题与章节"]')!;
+  check(!outline.textContent?.includes("include/file.h"), "knowledge outline excludes source paths");
+  [...outline.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "公共接口")!.click(); await pause();
+  check(document.activeElement?.textContent === "公共接口", "chapter navigation focuses rendered heading");
   const before = JSON.stringify(record.document!.sections[0]);
   await message("为什么取消后仍需要等待回调？");await click("仅讨论");
   check(record.document!.sections[1].revision === 1,"discussion must not mutate draft");
-  await message("请补充取消后的资源释放顺序");await click("按意见返工此组件");
+  await message("请补充取消后的资源释放顺序");await click("生成修订建议");
+  check(record.document!.sections[1].revision === 1,"unaccepted proposal must not mutate draft");
+  await click("修订差异");await click("采纳此建议");await click("正文");
   check(record.document!.sections[1].revision === 2,"target must be revised");
   check(JSON.stringify(record.document!.sections[0]) === before,"other capability must remain unchanged");
   check(calls.filter(c => c.action === "review").every(c => c.section_id === "cap-1"),"dialogue must target selected capability");
   check(document.querySelector('[aria-label="组件专家对话"]')?.textContent?.includes("为什么取消"),"conversation history retained");
   await click("完整文档");
-  check(document.querySelectorAll('[id^="research-section-"]').length === record.document!.sections.length,"single document includes all chapters");
+  check(document.querySelectorAll('[aria-label="完整文档阅读区"] .knowledge-markdown').length === record.document!.sections.length,"single document includes all chapters");
   check(document.querySelector('[aria-label="文档组件目录"]'),"navigable directory");
   await click("逐项审核");
-  const list = document.querySelector<HTMLElement>('[aria-label="组件能力列表"]')!;
+  const list = document.querySelector<HTMLElement>('[aria-label="知识主题与章节"]')!;
   const reader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
   const outer = document.querySelector("main")!;
   const outerTop = outer.scrollTop;

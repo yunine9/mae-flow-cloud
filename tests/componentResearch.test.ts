@@ -219,6 +219,7 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
   process.env.MAE_FLOW_EC_BIN = fakeEc;
   const row = saveComponentRepository(dir, config, "alice");
   const model = new ScriptedModelServer([
+    { tool: { name: "extraction_skill", input: { path: "references/api-boundary.md" } } },
     {
       tool: {
         name: "component_source",
@@ -251,6 +252,7 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
   await model.start();
   const research = new ComponentResearch(dir, (input) =>
     runComponentResearch(input, {
+      dataDir: dir,
       model: () => ({
         provider: "maeflow",
         model: "scripted-v1",
@@ -276,12 +278,12 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     await until(() => ["done", "failed"].includes(research.get(job.id).status));
     const done = research.get(job.id);
     assert.equal(done.status, "done", done.error);
-    assert.match(JSON.stringify(model.requests[0]), /跨仓联合知识研究/);
-    assert.match(JSON.stringify(model.requests[0]), /不是 public 的都能用/);
-    assert.match(JSON.stringify(model.requests[0]), /interface 是优先线索，不是固定白名单/);
-    assert.match(JSON.stringify(model.requests[0]), /重点关注 interface\/、idl\//);
-    assert.match(JSON.stringify(model.requests[0]), /#include.*CMakeLists\.txt.*target_link_libraries/);
-    assert.match(JSON.stringify(model.requests[0]), /sdk\/pom\.xml；存在时必须实际读取/);
+    assert.match(JSON.stringify(model.requests[0]), /component-knowledge-extraction/);
+    assert.match(JSON.stringify(model.requests.at(-1)), /不是 public 的都能用/);
+    assert.match(JSON.stringify(model.requests.at(-1)), /interface 是优先线索，不是固定白名单/);
+    assert.match(JSON.stringify(model.requests.at(-1)), /重点关注 interface\/、idl\//);
+    assert.match(JSON.stringify(model.requests.at(-1)), /#include.*CMakeLists\.txt.*target_link_libraries/);
+    assert.match(JSON.stringify(model.requests.at(-1)), /sdk\/pom\.xml；存在时必须实际读取/);
     assert.equal(done.document?.sections.length, 1);
     assert.equal(done.revision, revision);
     assert.ok(done.evidence.some(e => e.tool === "research_note"));
@@ -611,6 +613,9 @@ test("全量跨仓只执行一次，细粒度能力默认全选，筛选后采�
   research.selectSections(batch.id, complete.document!.sections.map(s => s.id), false);
   assert.throws(() => research.adopt(batch.id, {scope:"platform"}, "alice"), /请选择至少一个/);
   research.selectSections(batch.id, ["cap-0"], true);
+  const archiveDraft = research.archiveDraft(batch.id, { title: "归档标题", content: "不能替换结构化内容" });
+  assert.match(archiveDraft.content, /## 能力 cap-0/);
+  assert.doesNotMatch(archiveDraft.content, /## 能力 cap-1\b|不能替换结构化内容/);
   const doc = research.adopt(batch.id, {scope:"platform",content:"不可覆盖结构化草稿"}, "alice");
   assert.match(doc.content, /## 能力 cap-0/);
   assert.doesNotMatch(doc.content, /## 能力 cap-1\b|不可覆盖结构化草稿/);
@@ -709,6 +714,10 @@ test("对话只读；局部返工只替换指定章节，失败与停止均保�
   assert.deepEqual(research.get(job.id).document, original);
   research.review(job.id,{section_id:"cap-0",mode:"rework",message:"按建议修改"},"expert");
   await until(() => research.get(job.id).status === "done");
+  assert.deepEqual(research.get(job.id).document, original, "建议未采纳不能修改正文");
+  const suggestion = research.get(job.id).review_turns!.at(-1)!;
+  assert.equal(suggestion.proposal?.status, "pending");
+  research.decideProposal(job.id, suggestion.id, "accept", "expert");
   const revised = research.get(job.id).document!;
   assert.equal(revised.sections[0].revision, 2);
   assert.deepEqual(revised.sections[1], original.sections[1]);
@@ -780,4 +789,24 @@ test("超过普通上传容量的联合长文可完整采纳，后续调整范�
   const { saveKnowledgeDocument } = await import("../src/knowledgeDocuments.ts");
   assert.equal(saveKnowledgeDocument(dir,{active:false},"alice",doc.id).content,doc.content);
   assert.throws(() => saveKnowledgeDocument(dir,{title:"普通上传",content:longContent},"alice"),/最大 2 MiB/);
+});
+
+test("已采纳组件更新沿用同一知识条目及名称范围，人工版本冲突不覆盖", async t => {
+  const { saveKnowledgeDocument } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => writeJoint(input));
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const first = research.adopt(job.id, { title: "团队定制的组件指南", scope: "repository", repositories: [config.repository] }, "alice");
+  const update = research.beginUpdate(job.id, "bob");
+  assert.equal(update.update_metadata?.title, first.title); assert.equal(update.update_metadata?.scope, "repository");
+  assert.deepEqual(update.update_metadata?.repositories, [config.repository]);
+  const section = update.document!.sections[0];
+  research.editSection(job.id, { section: { ...section, content: section.content + "\n人工补充" }, base_revision: section.revision }, "bob");
+  const second = research.adopt(job.id, update.update_metadata!, "bob");
+  assert.equal(second.id, first.id); assert.equal(second.title, first.title); assert.equal(second.scope, first.scope); assert.match(second.content, /人工补充/);
+  research.beginUpdate(job.id, "bob");
+  saveKnowledgeDocument(dir, { content: "另一维护人的正文" }, "other", first.id);
+  assert.throws(() => research.adopt(job.id, {}, "bob"), /正式文档已发生变化/);
 });
