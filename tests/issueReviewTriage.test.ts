@@ -660,6 +660,20 @@ test("交办分节:外部意见配 MR 话术、报告意见配报告话术,混�
       (issue) => issue.status === "waiting_user"
         && issue.gate?.kind === "analysis_confirm");
     assert.equal(settled.round, 1);
+    // 投递账与回合汇总账(ADR-0053):交办通知进了哪条路、回合怎么收口,
+    // 只凭 audit/ 账面可答。
+    const deliveryRows = readFileSync(join(root, "audit", "delivery.jsonl"),
+      "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    const injectedRow = deliveryRows.find((row: any) =>
+      row.kind === "delivery.turn" && row.decision === "started"
+      && /分析报告提交了 1 条/.test(row.msg));
+    assert.ok(injectedRow, "投递账记交办通知与判定分支");
+    assert.ok(injectedRow.turn_id?.startsWith("t-"), "投递行带回合关联 id");
+    const canonicalRows = readFileSync(join(root, "audit", "canonical.jsonl"),
+      "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(canonicalRows.some((row: any) =>
+      row.kind === "canonical.turn" && row.turn_id === injectedRow.turn_id),
+      "回合收口汇总行与投递行同 turn_id");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

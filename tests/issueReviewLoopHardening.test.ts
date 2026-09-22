@@ -257,6 +257,17 @@ test("按次入箱:追问线程的后续回应照发,同键不重发(ADR-0052)",
     assert.equal(t1.replyMrs.length, 2, "每条回复都携带 mr");
     assert.ok(t1.replyMrs.every((mr) => mr !== undefined && mr !== ""),
       "mr 取自台账(iid 或 URL),不缺席");
+    // dispatch 账(ADR-0053):装箱与发送流水,request_id=条目 id。
+    const dispatchRows = readFileSync(join(scene.issueDir, "audit", "dispatch.jsonl"),
+      "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    const stagedRow = dispatchRows.find((row: any) =>
+      row.action === "stage" && row.discussion_id === "T1");
+    assert.ok(stagedRow, "装箱进 dispatch 账");
+    assert.ok(stagedRow.mr !== undefined, "装箱行固化 mr");
+    assert.match(stagedRow.request_id, /^mrr-/, "request_id=信箱条目 id");
+    assert.ok(dispatchRows.some((row: any) =>
+      row.action === "deliver" && row.discussion_id === "T1"
+      && row.result === "replied"), "发送终局进 dispatch 账");
   } finally { await scene.stop(); }
 });
 

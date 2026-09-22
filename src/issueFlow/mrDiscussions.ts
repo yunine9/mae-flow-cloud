@@ -8,6 +8,7 @@
  */
 
 import { pipelineHeaders } from "../pipelineClient.ts";
+import { auditPlatformCall, newRequestId } from "./audit.ts";
 
 export interface MrDiscussionItem {
   id: string;
@@ -73,14 +74,21 @@ export async function fetchMrDiscussions(input: {
   const headers = pipelineHeaders(input.credential);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 30_000);
+  // 调用账(ADR-0053):拉取失败是 #383 考古的重点路径,成败都记。
+  const requestId = newRequestId();
+  const startedAt = Date.now();
+  let failure: string | undefined;
+  let status: number | undefined;
   try {
     const params = new URLSearchParams({ repo: input.repo });
     if (input.mr !== undefined) params.set("mr", String(input.mr));
     const response = await fetch(
       `${input.platformUrl.replace(/\/+$/, "")}/mr/discussions?${params}`,
       { headers, signal: controller.signal });
+    status = response.status;
     if (!response.ok) {
-      return { kind: "unavailable", reason: `HTTP ${response.status}` };
+      failure = `HTTP ${response.status}`;
+      return { kind: "unavailable", reason: failure };
     }
     const body = await response.json() as { discussions?: unknown };
     const items = (Array.isArray(body.discussions) ? body.discussions : [])
@@ -101,11 +109,19 @@ export async function fetchMrDiscussions(input: {
       }));
     return { kind: "available", items };
   } catch (error) {
+    failure = String(error instanceof Error ? error.message : error);
     return {
       kind: "unavailable",
-      reason: String(error instanceof Error ? error.message : error),
+      reason: failure,
     };
   } finally {
+    auditPlatformCall({
+      endpoint: "mr-discussions-list", request_id: requestId, startedAt,
+      detail: { repo: input.repo,
+        ...(input.mr !== undefined ? { mr: input.mr } : {}) },
+      ...(status !== undefined ? { status } : {}),
+      ...(failure ? { error: failure } : {}),
+    });
     clearTimeout(timer);
   }
 }

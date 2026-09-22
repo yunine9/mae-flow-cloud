@@ -241,6 +241,17 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       author: "迟到检视人", body: "收口后才提的意见",
     });
     await until(() => (service.get(created.id).feedback ?? []).some(record => record.source_id === "D4"), "验绿后的新报告仍落账");
+    // host-calls 账(ADR-0053):监看拉取与信箱发送的每次调用一行,
+    // 与 dispatch 账按 mrr-* 同 id join。
+    const callRows = readFileSync(join(dataDir, "logs", "host-calls.jsonl"),
+      "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(callRows.some((row: any) =>
+      row.kind === "call.mr-discussions-list" && row.repo === origin),
+      "讨论拉取调用进 host-calls 账");
+    const replyCall = callRows.find((row: any) =>
+      row.kind === "call.mr-discussion-reply" && row.discussion_id === "D1");
+    assert.ok(replyCall, "回复发送调用进 host-calls 账");
+    assert.match(replyCall.request_id, /^mrr-/, "request_id=信箱条目 id,两侧账可 join");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
