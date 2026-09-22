@@ -29,7 +29,10 @@ test("白名单外:非图片引用一律 undefined,渲染器原样显文本", ()
     "ticket-images/d65d964ac359071a.png",
     "issue-images/DTS2026091738381/d65d964ac359071a.png",
     "ticket-images/DTS2026091738381/abc.png",
-    "ticket-images/../issue.json",
+    "ticket-images/DTS2026091738381/d65d964ac359071a.html",
+    "issue-images/abcd1234ef567890.svg",
+    "ticket-images/../abcd1234ef567890.png",
+    "ticket-images/D\0TS/abcd1234ef567890.png",
     "![已渲染过的完整图语法](issue-images/abcd1234ef567890.jpg)",
   ]) {
     assert.equal(resolveWorkspaceImage("issue-9", ref), undefined, ref);

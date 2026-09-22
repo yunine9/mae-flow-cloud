@@ -951,10 +951,10 @@ export async function handleIssueRoutes(
     }
 
     // 会话工作区图片回显(只读旁路,数据面在 workspaceImages.ts):
-    // 分析报告/过程文档里嵌入的截图引用(工单截图、登记截图两种白名单
-    // 形状)经此从会话工作区读盘给浏览器(#376)。形状白名单即边界,
-    // 读无闸(查看模式,与 documents/reviews 同语义);缺失与非法形状
-    // 同一个 404 出码,不泄露盘面事实。
+    // 分析报告 markdown 里嵌入的截图引用(工单截图、登记截图两种
+    // 白名单形状)经此从会话工作区读盘给浏览器(#376)。形状白名单即
+    // 边界,读无闸(查看模式,与 documents/reviews 同语义);缺失与
+    // 非法形状同一个 404 出码,不泄露盘面事实。
     if (method === "GET" && parts[2] === "workspace-image"
         && parts.length === 3) {
       const session = issueFlow.session(id);

@@ -93,12 +93,16 @@ test("白名单即边界:穿越/台账/目录越级/非法形状/缺失一律拒
 
   const escapes: Array<[string, string]> = [
     ["穿越段", "ticket-images/../issue.json"],
+    ["穿越段+合法文件名", "ticket-images/../abcd1234ef567890.png"],
+    ["单号含空字节", "ticket-images/D\0TS/abcd1234ef567890.png"],
     ["绝对路径形态", "/etc/passwd"],
     ["台账直取", "issue.json"],
     ["越级目录", "repo/mgr/main.py"],
     ["登记截图带单号段", "issue-images/DTS2026091738381/d65d964ac359071a.png"],
     ["工单截图少一段", "ticket-images/d65d964ac359071a.png"],
     ["非法哈希长度", "ticket-images/DTS2026091738381/abc.png"],
+    ["非图扩展", "ticket-images/DTS2026091738381/d65d964ac359071a.html"],
+    ["矢量图扩展不在落盘集", "issue-images/abcd1234ef567890.svg"],
     ["缺 path 参数", ""],
   ];
   for (const [what, path] of escapes) {
