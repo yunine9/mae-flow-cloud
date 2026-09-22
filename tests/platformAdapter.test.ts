@@ -637,3 +637,47 @@ test("知识 MR 必须传入关联单号，专用模板及普通模板都实际�
   const withoutAssociation = new PlatformAdapter(path, () => {});
   await assert.rejects(() => withoutAssociation.handle("POST", "/mr", new URLSearchParams(), { ...body, purpose: "knowledge", dts_no: "REQ-knowledge" }, {}), /命令未配置单号关联/);
 });
+
+test("独立 resolve 端点透传请求体:{mr} 从 body 取值,缺席诚实报错(issue-383 回归)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-resolve-"));
+  const cli = fakeCli(dir);
+  const configPath = join(dir, "adapter.json");
+  writeFileSync(configPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: {
+      command: ["node", cli, "mr", "--repo", "{repo}",
+        "--source", "{source_branch}", "--target", "{target_branch}",
+        "--title", "{title}", "--token", "{token}"],
+      url: { json: "data.web_url" },
+    },
+    pipeline_trigger: {
+      command: ["node", cli, "trigger", "--repo", "{repo}",
+        "--sha", "{sha}", "--token", "{token}"],
+      status: { json: "data.state" },
+    },
+    pipeline_status: {
+      command: ["node", cli, "status", "--sha", "{sha}",
+        "--token", "{token}"],
+      runs: { json: "data.runs" }, status: { json: "data.state" },
+    },
+    // 部署形态:resolve 模板按讨论 id 解析、引用 {mr} 定位 MR。
+    discussion_resolve: {
+      command: ["node", cli, "resolvecmd", "--discussion", "{id}",
+        "--mr", "{mr}", "--token", "{token}"],
+    },
+  }));
+  chmodSync(configPath, 0o600);
+  const adapter = new PlatformAdapter(configPath, () => {});
+  const lastArgv = () => JSON.parse(
+    readFileSync(join(dir, "last-argv.json"), "utf-8"));
+  await adapter.handle("POST", "/mr/discussions/d-9/resolve",
+    new URLSearchParams(), { repo: "r", mr: "2989" }, {});
+  assert.ok(lastArgv().includes("2989"), "请求体里的 mr 进 CLI 参数");
+  assert.ok(lastArgv().includes("d-9"), "路径里的讨论 id 进 CLI 参数");
+  // 缺 mr:模板引用了 {mr} 而取值表没有——诚实报错,不静默发空
+  // (修复前处理器手工挑字段把 body 里的 mr 丢弃,确定性失败)。
+  await assert.rejects(
+    adapter.handle("POST", "/mr/discussions/d-9/resolve",
+      new URLSearchParams(), { repo: "r" }, {}),
+    /\{mr\}/);
+});

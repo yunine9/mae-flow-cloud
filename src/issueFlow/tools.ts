@@ -1217,6 +1217,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + "意见重新调用本工具作答即可。outcome 按语义选:"
         + "needs_clarification=要用户补充说明;"
         + "not_fixed=解释说明/确认无需改动;fixed=确已按意见改动(附依据)。"
+        + "对 MR 检视意见(CodeHub 讨论区来的,清单会注明)作答时,回复"
+        + "正文会由平台自动发布回 CodeHub 讨论——正文要自足,写清改了什么"
+        + "(附提交号)或答复了什么,检视人在 CodeHub 只看得到这段话。"
         + "本批含修改型意见时,回复完仍须调 declare_review_rework 申报;"
         + "修改型批次在重写完成后,也用它对本批意见逐条交代(改了什么,"
         + "outcome=fixed 附依据)再重新 submit_analysis——报告正文不写"
@@ -1310,6 +1313,20 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           if (!batchSeqs.has(seq)) {
             fail(promptCopy("receipts", "review.unknown_seq", { seq, known }));
           }
+        }
+        // MR 检视意见没有报告回退(ADR-0052):对象是代码,验收在流水线
+        // 与 MR 合入,不在分析报告确认卡——误申报会把分析阶段标记重做,
+        // 让责任人为一条代码意见重新确认报告。护栏打回并指路。
+        const externalSeqs = batch
+          .filter((item) => unique.includes(item.seq as number)
+            && item.external_review)
+          .map((item) => item.seq);
+        if (externalSeqs.length) {
+          fail(`意见${externalSeqs.join("、意见")} 是 MR 检视意见`
+            + "(检视人在 CodeHub 对代码提的意见),没有报告回退:不要申报、"
+            + "不要重写 issue-analysis.md。需要改代码的,修好后在同一修复"
+            + "分支追加提交并用 push_branch 重推;纯澄清的,直接 "
+            + "respond_review 作答——你的回复会自动发布回 CodeHub 讨论。");
         }
         // 版本快照在申报时刻冻结(ADR-0035):送出在先、冻结在后,快照
         // 名用批次送出时刻命名,读侧批次窗口才把意见对回它锚定的版本。

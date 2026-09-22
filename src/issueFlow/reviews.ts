@@ -213,7 +213,13 @@ export function renderReviewNotes(
   round: number,
   mode: "rework" | "triage" = "rework",
 ): string {
-  if (items.some(item => item.external_review)) return renderAnnotations(items, title)
+  if (items.some(item => item.external_review)) return renderAnnotations(items, title, {
+      // MR 检视意见的检视人是 CodeHub 检视人,"我人工检视"是报告检视的
+      // 口吻——混称正是 issue-383 的根因,清单头一并分家(ADR-0052)。
+      headerLine: `这是检视人在 CodeHub 的 MR 讨论区对本会话修复代码提的意见,`
+        + `共 ${items.length} 条、涉及 ${[...new Set(items.map(item => item.file))].length} 个文件。`
+        + "处理口径按上方平台通知执行,逐条 respond_review 交代。",
+    })
     + "\n这些是责任人明确选择的修改意见。按责任人补充要求处理，只回应本批；未选的外部报告不构成修复任务。本地处理不自动代表远端 resolve。";
   // 清单按意见号编排(ADR-0025):orderAnnotations 是行号序,跨批次会
   // 把意见5 排在意见3 前——这里只认意见号升序。意见必须带号(#261,

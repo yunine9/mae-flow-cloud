@@ -38,6 +38,7 @@ import { basename, join, relative } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   CloudSession,
+  looksLikeAuthFailure,
   looksLikeBusyCollision,
   looksLikeOutputTruncation,
   looksLikeRateLimited,
@@ -245,6 +246,7 @@ import {
   submitReviews as submitReviewLedger,
   writeReviewNotesSnapshot,
 } from "./reviews.ts";
+import { configureAudit, sessionAudit } from "./audit.ts";
 import {
   issueConversation,
   readConversationEvents,
@@ -569,6 +571,9 @@ export interface IssueFlowOptions {
   provider: string;
   model: string;
   modelsJson: Record<string, unknown>;
+  /** 认证失败(401)重试的退避间隔表,透传给会话驱动;缺省 10s/30s。
+   *  测试注快值,部署不传。 */
+  authRetryDelaysMs?: number[];
   settings?: {
     models(): ModelsSettings;
     /** 流水线监看的轮询节奏(与需求侧同一份运行参数);其中的
@@ -696,6 +701,9 @@ interface LiveIssue {
    *  新号,外层回合收口见号易主即让位——互斥位与并发额度因此横跨整条
    *  延续链,而不是在催办一开始就裸奔。 */
   turnToken?: number;
+  /** 本回合的审计关联 id(ADR-0053):beginTurn/beginContinuationTurn
+   *  定格,canonical 行与回合内投递账共享;跨重启唯一(带时间戳)。 */
+  auditTurnId?: string;
 }
 
 export interface IssueMessage {
@@ -773,9 +781,9 @@ const NUDGE_BUDGET = 2;
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
 const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
 
-/** MR 检视回复的草稿文件(AI 按注入清单写)与出站信箱(宿主发送账),
- * 都在会话工作区根;草稿即消费,信箱是发送的唯一真相。 */
-const MR_REPLY_DRAFT_FILE = "mr-review-replies.json";
+/** MR 检视回复的出站信箱(宿主发送账,会话工作区根):AI 的回复经
+ * respond_review 落批注账后由平台扫描装箱(ADR-0052 单通道),信箱是
+ * 发送的唯一真相。 */
 const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
@@ -898,6 +906,10 @@ export class IssueFlowService {
   constructor(options: IssueFlowOptions) {
     this.options = options;
     this.dataDir = options.dataDir;
+    // 进程级审计账(host-calls/canonical,ADR-0053):单实例服务装配
+    // 一次;多实例并存(测试)后者覆盖前者,进程账面归属最后装配者,
+    // 会话级账(root 内)不受影响。
+    configureAudit(join(options.dataDir, "logs"));
     this.vault = options.vault
       ?? new IssueEnvironmentVault(options.dataDir);
     this.environmentRegistry = options.environmentRegistry
@@ -2228,6 +2240,9 @@ export class IssueFlowService {
     const epoch = live.controlEpoch;
     const token = ++this.turnSeq;
     live.turnToken = token;
+    // 回合关联 id(ADR-0053):token 跨重启归零,拼时间戳保唯一;
+    // canonical 行与回合内投递账共享此 id。
+    live.auditTurnId = `t-${token}-${Date.now().toString(36)}`;
     this.turning.add(live.id);
     live.state.status = "running";
     live.state.nudges = 0;
@@ -2242,6 +2257,17 @@ export class IssueFlowService {
    *  忙会话反把整单标 failed(issue-20 实锤)。 */
   private endTurnSlot(live: LiveIssue, token: number): void {
     if (live.turnToken !== token) return;
+    // canonical 行(ADR-0053):每回合收口必发,成败都发——Agent 考古
+    // 第一入口,先读汇总拿关联 id 再下钻明细账。
+    sessionAudit(live.root, live.id, "canonical", {
+      kind: "canonical.turn",
+      msg: `回合收口(${live.state.stage} 阶段,${live.state.status})`,
+      turn_id: live.auditTurnId,
+      stage: live.state.stage,
+      status: live.state.status,
+      round: live.state.round ?? 1,
+      nudges: live.state.nudges ?? 0,
+    });
     this.turning.delete(live.id);
     void this.pump();
   }
@@ -2256,6 +2282,7 @@ export class IssueFlowService {
     const epoch = live.controlEpoch;
     const token = ++this.turnSeq;
     live.turnToken = token;
+    live.auditTurnId = `t-${token}-${Date.now().toString(36)}`;
     this.turning.add(live.id);
     void this.runTurn(live, body, epoch).finally(() =>
       this.endTurnSlot(live, token));
@@ -2270,6 +2297,16 @@ export class IssueFlowService {
     live: LiveIssue,
     message: string,
   ): void {
+    // 投递账 started(ADR-0053):continueTurn 是所有开回合的公共咽喉
+    // (startPlatformTurn 的直通分支与闸挂起时的插话直调都汇到这),
+    // 记账放这里才不漏 submitReviews/replyToReview 的直调路径。
+    sessionAudit(live.root, live.id, "delivery", {
+      kind: "delivery.turn",
+      msg: `平台消息投递:开新回合——${message.slice(0, 160)}`,
+      decision: "started", why: "空闲且无闸挡,开回合投递",
+      turn_id: live.auditTurnId,
+      stage: live.state.stage, status: live.state.status,
+    });
     this.beginTurn(live, () => this.resumeTurnBody(live, message));
   }
 
@@ -2681,6 +2718,20 @@ export class IssueFlowService {
           + "——额度恢复后发送「继续」,平台会原地续推";
         state.last_reply = live.driver?.finalReply() ?? state.last_reply;
         this.log(`[issue-flow] ${live.id} 模型限流/额度,停机待恢复(不标失败)`);
+      } else if (outcome.status === "session_ended"
+          && looksLikeAuthFailure(detail)) {
+        // 认证失败(401 家族,2026-09-22):上游网关偶发拒绝有效密钥,
+        // 驱动层退避重试已穷尽。与限流同尺——时间可恢复的模型侧失败
+        // 不判死:落 idle 交还人工,现场保留(不 releaseDriver),会话
+        // 上下文不丢;上游恢复后发「继续」原地续推,不必整单重来。
+        // 持续 401 多为密钥真的失效,文案指向核对配置而不怂恿盲试。
+        state.status = "idle";
+        state.stage_note = "模型网关认证失败(401),自动重试后仍被拒——"
+          + "稍后发送「继续」即可原地续推;若反复出现,请核对配置中心的"
+          + "模型网关密钥";
+        state.last_reply = live.driver?.finalReply() ?? state.last_reply;
+        this.log(`[issue-flow] ${live.id} 模型网关认证失败,`
+          + "停机待恢复(不标失败)");
       } else {
         state.status = "failed";
         state.error = detail;
@@ -3450,8 +3501,25 @@ export class IssueFlowService {
     // 中断/基建失败不等于编译完成,不拦补跑(#358):此前 finished_at
     // 一刀切,重启打断的预热永不重跑(issue-79 实锤,09-17 起无基线)。
     if (live.state.warmup?.finished_at
-        && live.state.warmup.status !== "infrastructure_failure") return;
-    if (!live.container && !configured.runner) return;
+        && live.state.warmup.status !== "infrastructure_failure") {
+      // 守卫拦截留痕(#404 场景 7):「为什么没预热」要能只凭账面回答。
+      sessionAudit(live.root, live.id, "decisions", {
+        kind: "decision.warmup",
+        msg: `预热守卫放行拦截:已有终局收据(${live.state.warmup.status})`,
+        decision: "skip-warmup",
+        reason_code: "warmup-finished",
+        warmup_status: live.state.warmup.status,
+      });
+      return;
+    }
+    if (!live.container && !configured.runner) {
+      sessionAudit(live.root, live.id, "decisions", {
+        kind: "decision.warmup",
+        msg: "预热守卫放行拦截:无容器且无 runner 注入",
+        decision: "skip-warmup", reason_code: "no-container",
+      });
+      return;
+    }
     live.warmupActive = true;
     const budgetMs = (live.state.repo_urls ?? [live.state.repo_url ?? ""]).some(isMaeRepository)
       ? 90 * 60_000 : IssueFlowService.WARMUP_BUDGET_MS;
@@ -3755,6 +3823,9 @@ export class IssueFlowService {
       knowledgeScope: "issue",
       provider: model.provider,
       model: model.model,
+      ...(this.options.authRetryDelaysMs
+        ? { authRetryDelaysMs: this.options.authRetryDelaysMs }
+        : {}),
       eventLog: new EventLog(join(live.root, "events.jsonl"), undefined, this.log),
       transcript: new TranscriptStore(join(live.root, "transcript.jsonl"), "main"),
       resumeSession: true,
@@ -4675,10 +4746,26 @@ export class IssueFlowService {
     // 注入回合的正文被上下文压缩/服务重启丢掉后,AI 读文件拿回。
     writeReviewNotesSnapshot(live.root, state.title, state.round ?? 1, "triage");
     const notes = renderReviewNotes(sent, state.title, state.round ?? 1, "triage");
-    const message = [
-      promptCopy("notices", "review.triage", { count: sent.length }),
-      notes,
-    ].join("\n\n");
+    // 分节注入(ADR-0052):报告意见配报告检视话术(review.triage),
+    // MR 检视意见配代码意见话术(review.triage.mr)——通知层把两个域
+    // 混成一节,正是 issue-383 里 AI 拿代码意见走报告分诊的根因。
+    // 混合批次两节拼接各说各的,不拒绝交办。
+    const externals = sent.filter((item) => item.external_review);
+    const internals = sent.filter((item) => !item.external_review);
+    const sections: string[] = [];
+    if (internals.length) {
+      sections.push(promptCopy("notices", "review.triage",
+        { count: internals.length }));
+      sections.push(renderReviewNotes(internals, state.title,
+        state.round ?? 1, "triage"));
+    }
+    if (externals.length) {
+      sections.push(promptCopy("notices", "review.triage.mr",
+        { count: externals.length }));
+      sections.push(renderReviewNotes(externals, state.title,
+        state.round ?? 1, "triage"));
+    }
+    const message = sections.join("\n\n");
     // 平台闸挂起(不论种类)= 用户在等待中插话:开分诊回合把意见递给
     // AI,闸保持原样——回合收口时闸在场仍定格等待(#350:env_verify 卡
     // 可能等很久,检视意见与验证互不相关,停靠到卡答完才送达 AI 就没法
@@ -5242,6 +5329,13 @@ export class IssueFlowService {
       if (!reason) return false;
       if (!staleLogged) {
         staleLogged = true;
+        // 决策账(#404 场景 8):过期结果拒绝按终态处理——「为什么没绿」
+        // 的判定留痕。
+        sessionAudit(live.root, live.id, "decisions", {
+          kind: "decision.pipeline",
+          msg: `终态 run 疑似过期结果,拒绝按终态处理(${repo})`,
+          decision: "reject-stale", repo, sha, reason,
+        });
         this.log(`[issue-flow] ${live.id} ${repo} 终态 run 疑似过期结果,`
           + `拒绝按终态处理继续轮询(${reason})`);
       }
@@ -5319,6 +5413,13 @@ export class IssueFlowService {
       state.pipelines[repo].deadline_extensions =
         (state.pipelines[repo].deadline_extensions ?? 0) + 1;
       state.pipelines[repo].deadline = new Date(Date.now() + budgetMs).toISOString();
+      sessionAudit(live.root, live.id, "decisions", {
+        kind: "decision.pipeline",
+        msg: `轮询预算到点流水线未出结果,自动延期一次(${repo})`,
+        decision: "extend-deadline", repo, sha,
+        extensions: state.pipelines[repo].deadline_extensions,
+        new_deadline: state.pipelines[repo].deadline,
+      });
       recordTransition(state, {
         source: "platform",
         note: `轮询预算到点流水线仍未出结果,自动延期一次(${repo})`
@@ -5341,6 +5442,13 @@ export class IssueFlowService {
       state.stage_note = `流水线轮询预算耗尽${extensionNote}`
         + "——请人工查看 MR/流水线,再发消息继续";
       saveState(live.root, state);
+      sessionAudit(live.root, live.id, "decisions", {
+        kind: "decision.pipeline",
+        msg: `轮询预算耗尽${extensionNote},停止监看喊人(${repo})`,
+        decision: "deadline-exhausted", repo, sha,
+        extensions: state.pipelines[repo].deadline_extensions ?? 0,
+        reason_code: "pipeline_watch_timeout",
+      });
       this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽(${repo})`
         + ` @ ${sha.slice(0, 12)}`);
       // 放弃点通知(票 81):机器等不起了就是需要人的时刻,主动喊人,
@@ -5632,7 +5740,7 @@ export class IssueFlowService {
             .catch(error => this.log(`[issue-flow] MR 新意见通知失败: ${String(error)}`));
         }
       }
-      this.stageMrReviewReplies(live);
+      this.stageRespondedMrReviews(live);
       await this.flushMrReviewReplies(live);
       await new Promise<void>((done) => {
         const timer = setTimeout(done, pollMs);
@@ -5730,62 +5838,84 @@ export class IssueFlowService {
     return [...fresh, ...followedUp];
   }
 
-  /** 检视回复草稿(AI 按注入清单写的工作区文件)→ 出站信箱。每条绑定
-   *  当前推送收据为 expected_sha;草稿即消费,防重复入箱。回合进行中
-   *  不装箱:AI 常在修完同一回合里"写草稿→再推送",回合中装箱会把
-   *  expected_sha 绑到推送前的旧版本,下一拍就误判漂移——等回合收口
-   *  绑稳定版本。 */
-  private stageMrReviewReplies(live: LiveIssue): void {
+  /** 对外发送账(ADR-0053 dispatch.jsonl):信箱条目的装箱与发送流水,
+   *  request_id=条目 id,与 host-calls 按同 id join(#383② 的解药)。 */
+  private auditDispatch(
+    live: LiveIssue, action: string, item: MrReviewReplyOutboxItem,
+    extra: Record<string, unknown> = {},
+  ): void {
+    sessionAudit(live.root, live.id, "dispatch", {
+      kind: "dispatch.outbox",
+      msg: `检视回复信箱 ${action}(${item.discussion_id})`,
+      action, request_id: item.id,
+      discussion_id: item.discussion_id, repo: item.repo,
+      ...(item.mr !== undefined ? { mr: item.mr } : {}),
+      ...extra,
+    });
+  }
+
+  /** 按仓从会话 MR 台账取 MR 标识(iid 优先,与监看拉取同口径)。
+   * 台账没有该仓(理论不可达:外部意见必来自某个 MR)返回 undefined,
+   * 装箱不带 mr——部署模板引用 {mr} 会诚实报错,不猜。 */
+  private mrRefFor(live: LiveIssue, repo: string): string | number | undefined {
+    const mr = live.state.mrs?.find((entry) => entry.repo === repo);
+    return mr ? (mr.iid ?? mr.url) : undefined;
+  }
+
+  /** 扫描批注账,把「已 respond 未入箱」的 MR 检视意见回复装入出站信箱
+   *  (ADR-0052 单通道:AI 经 respond_review 落面板账,平台按 responded_at
+   *  代发 CodeHub——不再有第二套 AI 侧协议)。回合进行中不装箱:AI 常
+   *  在同一回合里"回复→推送",回合中装箱会把 expected_sha 绑到推送前
+   *  的旧版本,下一拍就误判漂移——等回合收口绑稳定版本。按次去重
+   *  (键=responded_at):追问线程的后续回复照发;同键条目失败即终局,
+   *  重新 respond 才有新键,不借重发旧回复绕过 SHA 漂移作废。存量
+   *  「已 respond 未入箱」的历史回复同路补发(ADR-0052 自愈)。 */
+  private stageRespondedMrReviews(live: LiveIssue): void {
     if (this.turning.has(live.id)) return;
-    const draftPath = join(live.root, MR_REPLY_DRAFT_FILE);
-    if (!existsSync(draftPath)) return;
-    let draft: unknown;
-    try {
-      draft = JSON.parse(readFileSync(draftPath, "utf-8"));
-    } catch {
-      return; // 可能还在写:整文件 JSON 读不动就下一拍再读
-    }
-    if (!Array.isArray(draft) || !draft.length) return;
-    const records = this.feedbackStore(live).list()
-      .filter((record) => record.source === "mr_discussion");
+    const responded = reviewStore(live.root).list().filter((item) =>
+      item.external_review?.discussion_id && item.response);
+    if (!responded.length) return;
     const outbox = this.readMrReviewOutbox(live);
     let staged = 0;
-    for (const entry of draft) {
-      const discussionId = String(
-        (entry as Record<string, unknown>)?.discussion_id ?? "").trim();
-      const body = String(
-        (entry as Record<string, unknown>)?.body ?? "").trim();
-      if (!discussionId || !body) continue;
-      const record = records.find(
-        (candidate) => candidate.source_id === discussionId);
-      if (!record) {
-        this.log(`[issue-flow] ${live.id} 检视回复草稿引用未知意见 `
-          + `${discussionId},跳过`);
+    for (const annotation of responded) {
+      const discussionId = annotation.external_review!.discussion_id;
+      const response = annotation.response!;
+      if (outbox.items.some((item) =>
+        item.discussion_id === discussionId
+        && item.responded_at === response.responded_at)) {
+        continue; // 同一回应已在箱(投过/发送中/失败终局)
+      }
+      const scope = annotation.external_review!.scope;
+      const tracked = live.state.mrs?.find((mr) =>
+        `${mr.repo}:${mr.iid ?? mr.url}` === scope);
+      const repo = tracked?.repo
+        ?? scope.slice(0, Math.max(0, scope.lastIndexOf(":")));
+      if (!repo) {
+        this.log(`[issue-flow] ${live.id} 检视回复 ${discussionId} 的 scope `
+          + `解析不出仓,跳过: ${scope}`);
         continue;
       }
-      if (outbox.items.some((item) =>
-        item.discussion_id === discussionId && item.status !== "failed")) {
-        continue; // 已在箱(投过/发送中),不重复入箱
-      }
-      const repo = record.id.slice(
-        "mr-discussion:".length,
-        record.id.length - discussionId.length - 1);
-      outbox.items.push({
+      const mrRef = this.mrRefFor(live, repo);
+      const item: MrReviewReplyOutboxItem = {
         id: `mrr-${randomUUID()}`,
         repo,
+        ...(mrRef !== undefined ? { mr: mrRef } : {}),
         discussion_id: discussionId,
-        body,
+        body: response.summary,
         resolve: this.options.resolveDiscussions === true,
+        responded_at: response.responded_at,
         expected_sha: live.state.pushes
           ?.find((push) => push.repo === repo)?.sha ?? "",
         status: "pending",
         attempts: 0,
         created_at: new Date().toISOString(),
-      });
+      };
+      outbox.items.push(item);
+      this.auditDispatch(live, "stage", item,
+        { expected_sha: item.expected_sha, resolve: item.resolve,
+          source: "agent-respond" });
       staged += 1;
     }
-    // 草稿即消费:空稿/全部重复都删,不再逐拍解析。
-    rmSync(draftPath, { force: true });
     if (!staged) return;
     this.writeMrReviewOutbox(live, outbox);
     this.log(`[issue-flow] ${live.id} 检视回复待发布 ${staged} 条`);
@@ -5821,6 +5951,9 @@ export class IssueFlowService {
           : `代码已更新(回复绑定 ${boundSha.slice(0, 12)},`
             + `当前推送 ${receipt.slice(0, 12)})——请针对当前代码重写回复草稿`;
         dirty = true;
+        this.auditDispatch(live, "void", item,
+          { result: "sha-drift", error: item.last_error,
+            expected_sha: boundSha, current_sha: receipt || undefined });
         this.log(`[issue-flow] ${live.id} 检视回复作废(${item.discussion_id}): `
           + item.last_error);
         // 自愈闭环:意见仍是未了结状态时重新注入,AI 会拿到最新清单
@@ -5838,6 +5971,8 @@ export class IssueFlowService {
         item.status = "failed";
         item.last_error = "发送重试超限,请人工在 CodeHub 回复";
         dirty = true;
+        this.auditDispatch(live, "fail", item,
+          { result: "retries-exhausted", error: item.last_error });
         continue;
       }
       item.attempts += 1;
@@ -5849,13 +5984,18 @@ export class IssueFlowService {
             platformUrl,
             discussionId: item.discussion_id,
             repo: item.repo,
+            ...(item.mr !== undefined ? { mr: item.mr } : {}),
             idempotencyKey: item.id,
+            requestId: item.id,
+            issueId: live.id,
             headers: pipelineHeaders(credential),
           });
           item.status = "delivered";
           item.delivered_at = new Date().toISOString();
           delete item.last_error;
           dirty = true;
+          this.auditDispatch(live, "deliver", item,
+            { result: "resolved-only" });
           this.log(`[issue-flow] ${live.id} 检视讨论已标已解决(${item.discussion_id})`);
           continue;
         }
@@ -5863,15 +6003,20 @@ export class IssueFlowService {
           platformUrl,
           discussionId: item.discussion_id,
           repo: item.repo,
+          ...(item.mr !== undefined ? { mr: item.mr } : {}),
           body: item.body,
           resolve: item.resolve,
           idempotencyKey: item.id,
+          requestId: item.id,
+          issueId: live.id,
           headers: pipelineHeaders(credential),
         });
         item.status = "delivered";
         item.delivered_at = new Date().toISOString();
         delete item.last_error;
         dirty = true;
+        this.auditDispatch(live, "deliver", item,
+          { result: "replied", resolve: item.resolve });
         this.log(`[issue-flow] ${live.id} 检视回复已发布(${item.discussion_id})`);
         // 记账分家(②-Q3):发送成功只代表"已回复",检视人核验
         // 前不算了结;账失败不回滚发送事实(平台已有回复)。归因按
@@ -5890,6 +6035,9 @@ export class IssueFlowService {
         item.last_error = String(
           error instanceof Error ? error.message : error);
         dirty = true;
+        this.auditDispatch(live, "retry", item,
+          { result: "error", attempt: item.attempts,
+            error: item.last_error });
       }
     }
     if (dirty) this.writeMrReviewOutbox(live, outbox);
@@ -5918,9 +6066,11 @@ export class IssueFlowService {
       "mr-discussion:".length,
       record.id.length - discussionId.length - 1);
     const outbox = this.readMrReviewOutbox(live);
-    outbox.items.push({
+    const ownerMrRef = this.mrRefFor(live, repo);
+    const ownerItem: MrReviewReplyOutboxItem = {
       id: `mrr-${randomUUID()}`,
       repo,
+      ...(ownerMrRef !== undefined ? { mr: ownerMrRef } : {}),
       discussion_id: discussionId,
       body: trimmed,
       // 2026-09-18 拍板:责任人可勾选随答复代点已解决,默认不点——
@@ -5930,7 +6080,10 @@ export class IssueFlowService {
       attempts: 0,
       author: live.state.account,
       created_at: new Date().toISOString(),
-    });
+    };
+    outbox.items.push(ownerItem);
+    this.auditDispatch(live, "stage", ownerItem,
+      { source: "owner-reply", author: live.state.account });
     this.writeMrReviewOutbox(live, outbox);
     this.log(`[issue-flow] ${live.id} 责任人答复待发布(${discussionId})`);
   }
@@ -5951,9 +6104,11 @@ export class IssueFlowService {
       "mr-discussion:".length,
       record.id.length - discussionId.length - 1);
     const outbox = this.readMrReviewOutbox(live);
-    outbox.items.push({
+    const ownerMrRef = this.mrRefFor(live, repo);
+    const resolveItem: MrReviewReplyOutboxItem = {
       id: `mrr-${randomUUID()}`,
       repo,
+      ...(ownerMrRef !== undefined ? { mr: ownerMrRef } : {}),
       discussion_id: discussionId,
       body: "",
       resolve: false,
@@ -5962,7 +6117,10 @@ export class IssueFlowService {
       attempts: 0,
       author: live.state.account,
       created_at: new Date().toISOString(),
-    });
+    };
+    outbox.items.push(resolveItem);
+    this.auditDispatch(live, "stage", resolveItem,
+      { source: "owner-drop", resolve_only: true });
     this.writeMrReviewOutbox(live, outbox);
     this.log(`[issue-flow] ${live.id} 忽略意见待代点已解决(${discussionId})`);
   }
@@ -6047,6 +6205,13 @@ export class IssueFlowService {
     run: PipelineRun,
   ): Promise<void> {
     const { state } = live;
+    // 决策账(#404 场景 5/8):监看收到终态并动手结算——「平台看到了
+    // 什么、判了什么」的事实与判定一行可查。
+    sessionAudit(live.root, live.id, "decisions", {
+      kind: "decision.pipeline",
+      msg: `流水线终态结算(${repo},${run.status})`,
+      decision: "settle", repo, sha, run_status: run.status,
+    });
     // 终态复核(体检 C-H1):取消/归档可能落在监看迭代的 sleep/fetch
     // 窗口内——终态处理与它触发的举闸都不得再写已终态会话的状态。
     if (isTerminal(state.status)) return;
@@ -6516,11 +6681,21 @@ export class IssueFlowService {
    * 运行中/终态)时不抢方向盘:通知挂到 stage_note,续聊提示词会带上。 */
   private startPlatformTurn(live: LiveIssue, message: string): void {
     const { state } = live;
+    // 投递账(ADR-0053):平台递给 AI 什么、为什么没递到——判定分支
+    // 留痕与事实留痕同等,三分支各记一行(steer 入忙回合/便签停靠/开新回合)。
+    const delivery = (decision: string, why: string) =>
+      sessionAudit(live.root, live.id, "delivery", {
+        kind: "delivery.turn",
+        msg: `平台消息投递:${decision}——${message.slice(0, 160)}`,
+        decision, why, turn_id: live.auditTurnId,
+        stage: state.stage, status: state.status,
+      });
     // 忙时 steer 优先(2026-09-09,issue-20 复盘):不抢方向盘但也不干等,
     // 话递进正在跑的回合;收口前没送达的由 settle 的补发分支接力;
     // 现场不在(排队窗口)或等人/终态才落便签等续聊带上。
     if (this.turning.has(live.id) && live.driver
         && !isTerminal(state.status) && state.status !== "waiting_user" && !state.takeover) {
+      delivery("steer", "回合进行中,递进在跑的回合;收口未送达由 settle 补发接力");
       // steer 只入队不抛错;旁路 fail-open,递不进去就退回挂便签。
       void live.driver.steer(message)
         .catch(() => this.parkPlatformNotice(live, message));
@@ -6528,6 +6703,10 @@ export class IssueFlowService {
     }
     if (isTerminal(state.status) || this.turning.has(live.id)
         || state.status === "waiting_user" || state.status === "queued" || !!state.takeover) {
+      delivery("parked", isTerminal(state.status) ? "会话已终态"
+        : state.status === "waiting_user" ? "等人状态,随续聊带上"
+        : state.status === "queued" ? "排队窗口,现场不在"
+        : "现场由责任人接管中");
       this.parkPlatformNotice(live, message);
       return;
     }
@@ -6545,6 +6724,11 @@ export class IssueFlowService {
     const queue = live.state.parked_notices ?? (live.state.parked_notices = []);
     if (!queue.includes(full)) {
       queue.push(full);
+      sessionAudit(live.root, live.id, "delivery", {
+        kind: "delivery.park",
+        msg: `通知停靠便签(续跑随行):${full.slice(0, 160)}`,
+        turn_id: live.auditTurnId,
+      });
       // 补充要求和批注不能按长度截断，也不能用新消息覆盖尚未送达的旧要求。
     }
     if (!live.state.gate) {

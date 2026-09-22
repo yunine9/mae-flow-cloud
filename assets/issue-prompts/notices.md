@@ -8,8 +8,8 @@ receipts 的 mrgate.all_green / empty_ok 四处——改措辞四处同步,
 锚点是给不同场景的独立协议口,刻意不合并。
 同步护栏②:「同分支 push_branch(已有 MR 自动跟新提交,平台按新提交
 重新监看)」这句修复口径散在 red.deliver.guidance / gate.evidence.tail /
-mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
-——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
+review.triage.mr / pipeline.green.others_red 与 receipts 的 mrgate.red
+五处——改措辞五处同步;口径前提是推送事实即重挂监看(onBranchPushed
 触发启动),动这句先核对机制还在。
 -->
 
@@ -120,11 +120,12 @@ mr_review / pipeline.green.others_red 与 receipts 的 mrgate.red 五处
 
 平台催办(第 {{attempt}}/{{budget}} 次): 「提交 MR·跑绿」阶段已收口、全部流水线已跑绿,但环境验证卡还没有交给用户——请立即调 raise_gate 工具(kind=env_verify)举卡,然后结束回合等待用户验证(用户可不答——MR 全部合入即视为验证通过)。再无故停下 {{remain}} 次平台将不再催办,转为等你人工指令。
 
-## mr_review
+## review.triage.mr
 
-平台通知: CodeHub MR 收到 {{count}} 条检视意见,请逐条处理:
-{{list}}
-逐条修复后,在同一修复分支追加提交,用 push_branch 重推(已有 MR 自动跟新提交,平台按新提交重新监看),再调 complete_stage 重新申报验绿。每条处理完,把回复写进工作区文件 mr-review-replies.json(JSON 数组,元素形如 {"discussion_id": "意见id", "body": "回复正文"}),平台会代为发布回 CodeHub。
+[MR 检视意见分诊] 检视人在 CodeHub 的 MR 讨论区对本会话的修复代码提交了 {{count}} 条意见(清单见下)。这是代码意见,不是对分析报告的检视:不要调 declare_review_rework,不要重写 issue-analysis.md,平台对 MR 检视意见的申报回退会直接打回。逐条自判:
+- 需要改代码的:修好后在同一修复分支追加提交,用 push_branch 重推(已有 MR 自动跟新提交,平台按新提交重新监看)。
+- 纯澄清、求确认、要解释的:直接作答,不改代码。
+每条处理完(改了或答了)都调 respond_review 按意见号交代——你的回复会由平台自动发布回 CodeHub 讨论区,检视人只看得到回复正文,所以正文要自足:写清改了什么(附提交号)或答复了什么,不要只写"已修复"。意见是否解决以检视人在 CodeHub 的操作为准。
 
 ## pipeline.green.remind
 

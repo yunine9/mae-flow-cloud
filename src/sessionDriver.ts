@@ -135,6 +135,14 @@ export function looksLikeRateLimited(detail: string): boolean {
     .test(detail);
 }
 
+/** 模型网关认证失败(401 家族,2026-09-22 实锤:上游偶发以 401 拒绝
+ *  有效密钥):与限流同属时间可恢复的模型侧失败。判别对象是 pi 收口的
+ *  模型层错误原文——git 凭据报错走工具路径(issueGit),到不了这里。 */
+export function looksLikeAuthFailure(detail: string): boolean {
+  return /(?:\b401\b|unauthorized|authentication failed|(?:invalid|incorrect|expired|missing).{0,24}(?:api[ _-]?key|token|credentials?)|api[ _-]?key.{0,24}(?:invalid|expired|incorrect|not valid|missing))/i
+    .test(detail);
+}
+
 /** pi 的"忙撞"拒答(issue-20 实锤):prompt 允诺已回、会话还自认忙的
  *  收尾窗口里再 prompt,pi 原文就是这一句。识别它不是为了吞——是让
  *  调用方区分"会话坏了"和"递早了一拍",后者让一拍重投即可。 */
@@ -160,6 +168,17 @@ export function looksLikeOutputTruncation(detail: string): boolean {
 /** 输出超限纠偏重试预算:与催办预算同一哲学——纠偏不是永动机,模型
  *  连续无视精简指令就该交还人工,而不是无限烧请求。 */
 const OUTPUT_TRUNCATION_RETRIES = 2;
+
+/** 认证失败退避表(2026-09-22,上游偶发 401):预算=表长,穷尽就如实
+ *  上交,落点语义交宿主 settle(问题流落「停机待恢复」不判死)。间隔
+ *  可经 CloudSessionOptions.authRetryDelaysMs 覆盖(测试注快值)。 */
+const AUTH_FAILURE_RETRY_DELAYS_MS = [10_000, 30_000];
+
+function authFailureRetryNotice(attempt: number, budget: number): string {
+  return `平台重试(第 ${attempt}/${budget} 次):上一条模型请求被模型网关以 `
+    + "401 拒绝,判定为上游瞬时认证抖动,已自动重试。会话现场完好,已有"
+    + "工作都在,从中断处继续推进即可,不要重做已完成的工作。";
+}
 
 function outputTruncationRepairNotice(attempt: number): string {
   return `平台纠偏(第 ${attempt}/${OUTPUT_TRUNCATION_RETRIES} 次):`
@@ -369,6 +388,9 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  /** 认证失败(401)重试的退避间隔表,预算=表长;缺省 10s/30s。测试
+   *  注快值,生产不传。 */
+  authRetryDelaysMs?: number[];
   /** 用任务固定的模块/仓库/语言画像筛选尚未定格的团队 Skill；新任务
    * 已在创建现场生成精确快照，后续会话不应重复匹配。 */
   knowledgeContext?: {
@@ -465,6 +487,9 @@ export class CloudSession {
   private turnActivity = 0;
   private turnError = "";
   private turnTerminalError = "";
+  /** abort() 的内存信号:退避等待中的认证重试醒来后据此放弃重投——
+   *  取消/关停已把会话带走,再 prompt 是往死会话里灌消息。 */
+  private aborted = false;
   private toolArgs = new Map<string, Record<string, unknown>>();
   private lastAssistantText = new Map<string, string>();
   /** 各会话最近一条 assistant 消息若是模型层错误,记下原文;成功消息即清除。
@@ -832,8 +857,9 @@ export class CloudSession {
   }
 
   /** 回合级自愈总口(2026-09-10,issue-12/issue-20 复盘):收尾窗口
-   *  忙撞让拍重投、输出超限截断纠偏重试,上下文容量由请求前策略统一管理。
-   *  两条回合补救共用一套纪律:每类只补有限次,
+   *  忙撞让拍重投、输出超限截断纠偏重试、模型网关认证失败退避重试,
+   *  上下文容量由请求前策略统一管理。
+   *  三条回合补救共用一套纪律:每类只补有限次,
    *  补不动就如实上抛——自愈是纠偏不是永动机,绝不停在"看起来在
    *  推进"的假循环里,也不把可恢复的失败装成会话死亡(落点语义交
    *  宿主,问题流 settle 按 looksLike* 落 idle 而非 failed)。 */
@@ -855,6 +881,25 @@ export class CloudSession {
         + `第 ${attempt}/${OUTPUT_TRUNCATION_RETRIES} 次纠偏重试`);
       outcome = await this.promptTurn(
         outputTruncationRepairNotice(attempt));
+    }
+    // 认证失败(401 家族)退避重试:上游偶发拒绝有效密钥,时间可恢复。
+    // 与 SDK/pi 的自动重试互补——那两层对 401 快速失败,这里才兜得住。
+    // 预算=退避表长;表空视为关闭。取消/关停(aborted)后不再重投。
+    const authDelays = this.options.authRetryDelaysMs
+      ?? AUTH_FAILURE_RETRY_DELAYS_MS;
+    for (let attempt = 1; attempt <= authDelays.length; attempt++) {
+      if (this.aborted || outcome.status !== "session_ended"
+          || !looksLikeAuthFailure(outcome.detail ?? "")) break;
+      const delayMs = authDelays[attempt - 1];
+      this.options.log?.(`任务 ${this.options.taskId} 模型网关认证失败(401),`
+        + `${delayMs}ms 后第 ${attempt}/${authDelays.length} 次自动重试`);
+      await new Promise((done) => {
+        const timer = setTimeout(done, delayMs);
+        timer.unref?.();
+      });
+      if (this.aborted) break;
+      outcome = await this.promptTurn(
+        authFailureRetryNotice(attempt, authDelays.length));
     }
     return this.settle(outcome);
   }
@@ -929,6 +974,9 @@ export class CloudSession {
   /** 取消任务用的硬边界：中止当前 agent 回合并等它回到 idle。
    * 容器由 TaskService 同时停止，长 bash 不会遗留在隔离环境里。 */
   async abort(): Promise<void> {
+    // 先竖旗再收束:退避等待中的认证重试醒来后看旗放弃,不往已中止的
+    // 会话里再投消息。
+    this.aborted = true;
     // Pi 的 abort 不会替宿主 resolve 自定义 AskUserQuestion 工具里的
     // Promise。若会话正停在人工卡，直接 await abort 会永久等待，导致
     // pause/cancel/SIGTERM 全部挂死。先只解开内存工具调用（不写人类决定
