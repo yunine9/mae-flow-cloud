@@ -31,6 +31,7 @@ import {
   submitReviews,
 } from "../src/issueFlow/reviews.ts";
 import { listAnalysisVersions } from "../src/issueFlow/analysisVersions.ts";
+import { importExternalReviews } from "../src/externalReviewInbox.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 import {
   bareOrigin,
@@ -579,6 +580,86 @@ test("unknown_seq 打回同款带正文(#366);申报成功后快照以 rework �
     assert.match(notes, /不许漏号/, "快照已按 rework 契约覆写");
     assert.match(notes, /第 2 轮/, "快照轮次与注入清单口径一致(回退后)");
     assert.match(notes, /补监控证据并修订方案/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("MR 检视意见申报回退被打回:护栏指路修码重推/直接作答,不触发整体回退(ADR-0052)", async () => {
+  const { service, model, id, root, script } = await bootToConfirmGate();
+  try {
+    // 造一条外部批注(MR 检视意见,同监看同步形状:draft 态、带 scope)。
+    importExternalReviews(reviewStore(root), {
+      scope: "http://git.example/r/repo.git:3",
+      mrUrl: "http://git.example/r/repo.git/-/merge_requests/3",
+      owner: "dev",
+      items: [{ id: "E1", body: "这个函数有空指针风险",
+        author: "检视人老王", file: "src/LoginService.java", line: 42 }],
+    });
+    const note = reviewStore(root).list()
+      .find((item) => item.external_review?.discussion_id === "E1")!;
+    model.script.push({ tool: { name: "declare_review_rework", input: {
+      reviews: [{ seq: note.seq! }], reason: "意见要改代码,想走回退",
+    } } });
+    model.script.push({ text: "收到,按指路处理。" });
+    service.submitReviews(id, [note.id]);
+
+    const receipt = await until(() => {
+      const hit = model.requests.map((request) => JSON.stringify(request))
+        .find((text) => text.includes("没有报告回退"));
+      return hit ?? undefined;
+    }, "护栏打回文本回到模型");
+    assert.match(receipt, /同一修复分支/, "指路修码重推");
+    assert.match(receipt, /respond_review/, "指路直接作答");
+
+    const settled = await waitIssue(service, id, "分诊回合收口",
+      (issue) => issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm");
+    // 申报未执行:不回退、不出版本、闸保持原样。
+    assert.equal(settled.round, 1, "不回退,轮次不动");
+    assert.equal(settled.stage, "analyze");
+    assert.equal(snapshotCount(root), 0, "护栏打回不冻结版本快照");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("交办分节:外部意见配 MR 话术、报告意见配报告话术,混合批次两节拼接(ADR-0052)", async () => {
+  const { service, model, id, root, script } = await bootToConfirmGate();
+  try {
+    const reported = service.addReview(id, {
+      line: 4, anchor: "连接池耗尽。", note: "连接池配的是多大?",
+    });
+    importExternalReviews(reviewStore(root), {
+      scope: "http://git.example/r/repo.git:3",
+      mrUrl: "http://git.example/r/repo.git/-/merge_requests/3",
+      owner: "dev",
+      items: [{ id: "E1", body: "这里建议加监控埋点",
+        author: "检视人老李", file: "src/Pool.java", line: 7 }],
+    });
+    const external = reviewStore(root).list()
+      .find((item) => item.external_review?.discussion_id === "E1")!;
+    model.script.push({ text: "分诊收到,逐条处理。" });
+    // 混合批次:报告意见与外部意见一批交办(外部必须显式列 id)。
+    service.submitReviews(id, [reported.id, external.id]);
+
+    const injected = await until(() => {
+      const hit = model.requests.map((request) => JSON.stringify(request))
+        .find((text) => text.includes("MR 检视意见分诊"));
+      return hit ?? undefined;
+    }, "MR 话术注入");
+    assert.match(injected, /分析报告提交了 1 条/,
+      "同批报告意见保留报告检视话术(review.triage)");
+    assert.match(injected, /不要调 declare_review_rework/,
+      "MR 话术自带边界提示");
+    assert.match(injected, /这里建议加监控埋点/, "外部意见正文在清单里");
+    // 事件落账是整批口径:count=2。
+    const settled = await waitIssue(service, id, "分诊回合收口",
+      (issue) => issue.status === "waiting_user"
+        && issue.gate?.kind === "analysis_confirm");
+    assert.equal(settled.round, 1);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

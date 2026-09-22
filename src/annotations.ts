@@ -903,15 +903,18 @@ export function orderAnnotations(items: Annotation[]): Annotation[] {
 export function renderAnnotations(
   items: Annotation[],
   ticket: string,
-  options: { allowRelatedChanges?: boolean } = {},
+  options: { allowRelatedChanges?: boolean; headerLine?: string } = {},
 ): string {
   const ordered = orderAnnotations(items);
   const hasGraphAnnotations = ordered.some((item) =>
     item.artifact === REQUIREMENT_GRAPH_ARTIFACT);
   const files = [...new Set(ordered.map((item) => item.file))];
   const lines: string[] = [
-    `这是我人工检视 ${ticket} 的结果,共 ${ordered.length} 条,` +
-    `涉及 ${files.length} 个文件。请按下面的意见逐条修改。`,
+    // 头可覆盖:问题流的 MR 检视意见清单复用本渲染器,但检视人是
+    // CodeHub 检视人,"我人工检视"的口吻对它是错的(ADR-0052)。
+    options.headerLine
+      ?? `这是我人工检视 ${ticket} 的结果,共 ${ordered.length} 条,` +
+         `涉及 ${files.length} 个文件。请按下面的意见逐条修改。`,
     "",
     "几点要求:",
     "- 这是检视结论,不是征求意见。逐条落实,不要只回复\"已知悉\"。",
