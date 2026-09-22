@@ -3957,6 +3957,9 @@ export interface IssueSummary {
     watching: boolean;
     started_at: string;
     deadline: string;
+    /** 已自动延期的次数(#372):轮询预算到点先终查,仍在跑且没延期过
+     *  就延长一个完整预算再停表——计数随账上 wire,与监看账同进退。 */
+    deadline_extensions?: number;
     last_error?: string;
     round: number;
     /** 本仓累计红灯次数(绿了清零):修复轮预算(repair_rounds)的计数,

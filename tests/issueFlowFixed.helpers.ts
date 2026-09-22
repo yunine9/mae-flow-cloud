@@ -317,14 +317,20 @@ export function seedMrGreenWatch(
 }
 
 /** 停机通知幂等测试用:把已停表的监看账重挂(watching=true),再构造
- *  服务即走恢复路径重看同一提交——模拟"恢复重放再停机"的场景。 */
+ *  服务即走恢复路径重看同一提交——模拟"恢复重放再停机"的场景。
+ *  patch 可选追加字段改写(如把 deadline 拨回过去、保留延期计数)。 */
 
-export function rearmMrGreenWatch(dataDir: string, repo: string): void {
+export function rearmMrGreenWatch(
+  dataDir: string,
+  repo: string,
+  patch: Partial<IssuePipelineWatch> = {},
+): void {
   const path = join(dataDir, "issues", "issue-1", "issue.json");
   const state = JSON.parse(readFileSync(path, "utf-8")) as {
-    pipelines: Record<string, { watching: boolean }>;
+    pipelines: Record<string, IssuePipelineWatch>;
   };
   state.pipelines[repo].watching = true;
+  Object.assign(state.pipelines[repo], patch);
   writeFileSync(path, JSON.stringify(state));
 }
 

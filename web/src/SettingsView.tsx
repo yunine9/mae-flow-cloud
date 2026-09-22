@@ -212,7 +212,7 @@ function RuntimeCard({ view, onSaved }: {
         note="生效于下一轮检查"
         value={interval} onChange={setInterval_} />
       <KnobField label="流水线最长等待（秒）" defaultText={timeoutDefault}
-        note="超过时间后停止等待并提示人工介入"
+        note="单轮监看的初始预算：到点先自动延期一次（最长约 2 倍）再停止等待并提示人工介入"
         value={timeout_} onChange={setTimeout_} />
       {/* 回收是不可逆动作,note 必须把"删什么、留什么"说全——
           光写"保留期"会让人以为整单历史都没了。 */}

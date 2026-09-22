@@ -428,6 +428,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
           watching: false,
           started_at: "2026-08-28T00:00:00Z",
           deadline: "2026-08-28T00:10:00Z",
+          deadline_extensions: undefined,
           checks: [{ dimension: "UT", status: "success", job: undefined, url: undefined }],
           last_error: undefined,
           round: 1,
