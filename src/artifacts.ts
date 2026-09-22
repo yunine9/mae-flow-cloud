@@ -695,6 +695,8 @@ export async function compareDeliveryRevisions(
   cwd: string,
   from: string,
   to: string,
+  // 比较范围导航只需变更片段，不读取未修改的全文。
+  options: { compact?: boolean } = {},
 ): Promise<DeliveryRevisionComparison | undefined> {
   if (!exactCommitId(from) || !exactCommitId(to) || from === to) {
     return undefined;
@@ -715,7 +717,7 @@ export async function compareDeliveryRevisions(
   if (fromCommit === undefined || toCommit === undefined
       || ancestor === undefined) return undefined;
   const [raw, log] = await Promise.all([
-    gitAsync(cwd, ["diff", "--unified=999999", from, to, "--"]),
+    gitAsync(cwd, ["diff", options.compact ? "--unified=0" : "--unified=999999", from, to, "--"]),
     gitAsync(cwd, [
       "log", "--max-count=5", "--format=%h%x09%s", `${from}..${to}`, "--",
     ]),
@@ -1283,7 +1285,7 @@ function safeArtifactRelativePath(cwd: string, input: string): string | undefine
 async function changeFileAtPathAsync(
   cwd: string,
   wanted: string,
-): Promise<ArtifactChangeFile | undefined> {
+): Promise<{ path: string; stage: ArtifactChangeFile["stage"]; baseline?: string } | undefined> {
   const [baseline, status, untrackedText] = await Promise.all([
     taskBaselineAsync(cwd),
     gitAsync(cwd, ["status", "--porcelain", "--untracked-files=all",
@@ -1294,24 +1296,20 @@ async function changeFileAtPathAsync(
   if (status === undefined || untrackedText === undefined) return undefined;
   const untracked = untrackedText.split("\0").some((path) => path === wanted);
   if (untracked) {
-    return { path: wanted, stage: "untracked", additions: 0, deletions: 0 };
+    return { path: wanted, stage: "untracked", baseline };
   }
-  const [committedText, numstatText] = await Promise.all([
-    baseline
-      ? gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--", wanted])
-      : Promise.resolve(undefined),
-    gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--", wanted]),
-  ]);
+  const committedText = baseline
+    ? await gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--", wanted])
+    : undefined;
   const committed = new Set(uniqueBusinessPaths(
     gitNullPaths(committedText ?? "")));
   const statuses = statusEntries(status);
   if (!committed.has(wanted) && !statuses.has(wanted)) return undefined;
-  const stat = numstatByPath(numstatText ?? "").get(wanted)
-    ?? { additions: 0, deletions: 0 };
+
   return {
     path: wanted,
     stage: originOf(wanted, committed, statuses),
-    ...stat,
+    baseline,
   };
 }
 
@@ -1403,9 +1401,8 @@ export async function readArtifactFileDiffAsync(
       raw = await untrackedDiffAsync(cwd, file.path);
       heading = "未跟踪(untracked)";
     } else {
-      const baseline = await taskBaselineAsync(cwd);
       raw = await gitAsync(cwd, [
-        "diff", "--unified=999999", baseline ?? "HEAD", "--", file.path,
+        "diff", "--unified=999999", file.baseline ?? "HEAD", "--", file.path,
       ]);
       heading = ORIGIN_HEADING[file.stage];
     }

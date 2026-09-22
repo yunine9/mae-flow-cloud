@@ -16536,12 +16536,12 @@ export class TaskService {
       // 改动。此时展示 MR 净贡献，不把 master 更新标成“本轮修复”。
       if ((await runSafeWorktreeGitAsync(task.cwd!, ["merge-base", "--is-ancestor",
         contribution.base_sha, base], { timeoutMs: 30_000 })).status !== 0) continue;
-      focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
+      focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head, { compact: true });
       if (focused) break;
     }
     // 目标分支推进只影响全量 MR 净贡献，不能覆盖已确定的本轮范围。
     const comparison = focused ?? await compareDeliveryRevisions(
-      task.cwd!, contribution.base_sha, snapshot.head);
+      task.cwd!, contribution.base_sha, snapshot.head, { compact: true });
     const base = focused?.from ?? contribution.base_sha;
     const prepush = delivery?.prepush;
     const verification = prepush?.sha !== snapshot.head ? undefined : prepush?.state === "passed"

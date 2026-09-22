@@ -17,6 +17,7 @@ import { inflateRawSync } from "node:zlib";
 import { readJson } from "../src/jsonBody.ts";
 import {
   mkdirSync,
+  rmSync,
   mkdtempSync,
   symlinkSync,
   utimesSync,
@@ -493,6 +494,24 @@ test("缺少 gitignore 的依赖安装不膨胀交付事实，显式跟踪文件
   assert.deepEqual((await deliveryChangeSnapshot(cwd))?.committed_paths, [explicit]);
 });
 
+test("比较范围导航不会复制大文件里未修改的全文", async (t) => {
+  const cwd = makeSite({ git: true });
+  t.after(() => rmSync(cwd, {recursive:true, force:true}));
+  const run = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {encoding:"utf-8"}).trim();
+  const lines = Array.from({length:10000}, (_,i) => `export const value${i} = ${i};`);
+  writeFileSync(join(cwd,"large.ts"), lines.join("\n") + "\n");
+  run("add","large.ts");run("commit","-qm","base");const base=run("rev-parse","HEAD");
+  lines[5000] = "export const value5000 = -1;";
+  writeFileSync(join(cwd,"large.ts"),lines.join("\n") + "\n");
+  run("commit","-qam","one line change");const head=run("rev-parse","HEAD");
+  const full = await compareDeliveryRevisions(cwd,base,head);
+  const compact = await compareDeliveryRevisions(cwd,base,head,{compact:true});
+  assert.ok(full && compact);
+  assert.ok(full.content.length > 200000);
+  assert.ok(compact.content.length < 1000);
+  assert.deepEqual([compact.paths,compact.additions,compact.deletions], [full.paths,full.additions,full.deletions]);
+});
+
 test("提交比较只展示检视锚之后的修改，并把内容标成已提交", async () => {
   const cwd = makeSite({ git: true });
   const run = (...args: string[]) =>
@@ -523,6 +542,11 @@ test("提交比较只展示检视锚之后的修改，并把内容标成已提�
   assert.doesNotMatch(String(comparison?.content), /feat: initial delivery/);
   assert.deepEqual(comparison?.commits.map((item) => item.subject),
     ["fix: address review"]);
+  const compact = await compareDeliveryRevisions(cwd, reviewed, head, { compact: true });
+  assert.ok(compact);
+  assert.deepEqual({paths:compact.paths,additions:compact.additions,deletions:compact.deletions,commits:compact.commits},
+    {paths:comparison.paths,additions:comparison.additions,deletions:comparison.deletions,commits:comparison.commits},
+    "首屏比较摘要不生成全文，仍保持相同文件清单、统计和提交记录");
   assert.equal(await compareDeliveryRevisions(cwd, head, reviewed), undefined,
     "反向或不构成祖先关系的锚不能参与比较");
   assert.equal(await compareDeliveryRevisions(cwd, "HEAD", head), undefined,
