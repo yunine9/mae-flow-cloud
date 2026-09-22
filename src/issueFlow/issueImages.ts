@@ -57,8 +57,9 @@ function imageExtension(data: Buffer, contentType: string): string {
   return byType[contentType.split(";")[0].trim().toLowerCase()] ?? "img";
 }
 
-/** 扩展名 → MIME 类型(回显时定 content-type)。 */
-const EXT_TO_MIME: Record<string, string> = {
+/** 扩展名 → MIME 类型(回显时定 content-type)。staging 回显与会话
+ * 工作区图片回显(workspaceImages)共用这一份,不复制第二份。 */
+export const EXT_TO_MIME: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", gif: "image/gif",
   webp: "image/webp", bmp: "image/bmp", img: "application/octet-stream",
 };

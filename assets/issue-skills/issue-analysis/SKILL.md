@@ -20,7 +20,7 @@ metadata:
 用哪些看问题需要,不必凑齐:
 
 - 单据:`dts_get_ticket` 看处理历史,别人已排除的方向不重复;
-- 截图:工单截图已落 `ticket-images/<单号>/`,用 `inspect_image` 识图;
+- 截图:工单截图已落 `ticket-images/<单号>/`,用 `inspect_image` 识图;作现象证据的按报告模板嵌进报告(失败图不嵌);
 - 业务知识:先查简报里的「业务知识地图」,仓内 docs/ 按技能 repo-docs;引用业务事实把文件路径随文标注进报告,只引自己读过的原文;
 - 日志:按技能 fetch-logs 抓到 `local-logs/`,grep 报错栈与时间线,报告里只留一行关键报错+出处指针;
 - 代码:`git log`/`blame` 找最近变更,多仓问题每个仓都要看;

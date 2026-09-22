@@ -81,12 +81,16 @@ export function discoverIssueSkillPackages(
     : left.name > right.name ? 1 : 0);
 }
 
-/** 把技能整包物化到工作区(幂等重写),返回 SKILL.md 精确路径。
+/** 把技能整包物化到工作区(幂等重写),返回工作区内物化后的 SKILL.md 路径。
  * 整包 = 技能目录内所有文件随 SKILL.md 一起走(2026-09-04 拍板:平台
  * 自带技能与团队货架同范式,可携带 bin/ 可执行引擎——日志抓取引擎
  * 已落 fetch-logs/bin)。支持分类层源目录(递归发现,见上),物化目的地
  * 恒平铺。源目录缺失、递归后一个技能都没有、目录名重复,都 fail-loud:
- * 技能是行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。 */
+ * 技能是行为契约,静默少一个等于让 Agent 少一条规矩,不如启动就响。
+ * 返回物化路径而非源路径:pi 把它原样写进系统提示的技能索引 location
+ * (name/description/location 三件套),AI 照指路读文件,而沙箱只放行
+ * 会话工作区——喂源路径(#359 的事故路径)AI 一读就被拦,只能靠猜
+ * 相对路径自愈。需求侧货架 skill 喂的同样是工作区内快照路径。 */
 export function materializeIssueSkills(
   workspace: string,
   sourceDir: string = SKILL_SOURCE_DIR,
@@ -108,7 +112,7 @@ export function materializeIssueSkills(
     }
     claimed.add(pkg.name);
     copyPackage(pkg.dir, join(workspace, "skills", pkg.name));
-    paths.push(join(pkg.dir, "SKILL.md"));
+    paths.push(join(workspace, "skills", pkg.name, "SKILL.md"));
   }
   return paths;
 }
