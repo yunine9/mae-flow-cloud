@@ -20,6 +20,8 @@ export interface DomainTurn {
   status: "queued" | "running" | "done" | "failed" | "cancelled"; created_at: string; reply?: string; error?: string;
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean; previous_revisions?: Record<string, string>;
+  revisions?: Record<string, string>;
+  document_revisions?: Record<string, number>;
   proposals: Array<{ document: DomainDocumentContent; base_revision: number; status: "pending" | "accepted" | "discarded" }>;
 }
 export interface KnowledgeCleanupPlan {

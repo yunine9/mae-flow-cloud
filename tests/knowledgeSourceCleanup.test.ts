@@ -72,7 +72,7 @@ test("领域任务提供可选清理，未创建或未合入 MR 都不阻塞手�
     const restart = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
     assert.equal(restart.get(job.id).status, "idle");
     const started = await restart.sourceCleanupAction(job.id, "start", {}, "dev"); assert.ok(started.source_cleanup?.started);
-    for (let i = 0; i < 100 && !executes; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    for (let i = 0; i < 100 && ["queued", "running"].includes(restart.get(job.id).status); i++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(executes, 1);
     await restart.shutdown();
     // A persisted open cleanup MR is a capability receipt, not a gate.

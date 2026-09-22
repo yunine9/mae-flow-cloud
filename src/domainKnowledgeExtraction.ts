@@ -53,11 +53,12 @@ export class DomainKnowledgeExtraction {
       const job: DomainKnowledgeJob = JSON.parse(readFileSync(path, "utf8"));
       this.jobs.set(job.id, job);
       if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
-        job.status = "failed"; job.stage = "服务重启中断研究，已有草稿保留";
-        for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "failed"; turn.error = job.stage; }
+        job.status = "queued"; job.stage = "接续原研究会话";
+        for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "queued"; turn.error = undefined; }
         this.persist(job);
       }
     }
+    queueMicrotask(() => this.pump());
   }
   private root(id: string) { return join(this.dataDir, "domain-extraction", id); }
   private live(id: string) { const job = this.jobs.get(id); if (!job || job.deleted_at) throw new Error("领域萃取任务不存在或已删除"); return job; }
@@ -238,13 +239,14 @@ export class DomainKnowledgeExtraction {
       if (this.running.size >= 2) return;
       if (job.deleted_at || job.status !== "queued" || this.running.has(job.id)) continue;
       const turn = job.turns.find(t => t.status === "queued")!;
-      const controller = new AbortController(), base = structuredClone(job.documents), proposed = new Map<string, DomainDocumentContent>();
+      const controller = new AbortController(), base = structuredClone(job.documents);
+      turn.document_revisions ??= Object.fromEntries(base.map(doc => [doc.id, doc.revision]));
       job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
       const work = Promise.resolve().then(async () => {
         try {
           const reply = await this.execute({ job: this.get(job.id), turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(job.documents),
-            update: patch => { if (!controller.signal.aborted && !job.deleted_at) { Object.assign(job, patch); if (patch.skill) turn.skill = patch.skill; this.persist(job); } },
+            update: patch => { if (!controller.signal.aborted && !job.deleted_at) { Object.assign(job, patch); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
             evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
             save: (input, baseline) => {
               if (controller.signal.aborted || job.deleted_at) throw new Error("本轮已停止");
@@ -257,10 +259,15 @@ export class DomainKnowledgeExtraction {
               if (existing && (existing.target_id !== input.target_id || existing.path !== input.path || existing.layer !== input.layer)) throw new Error("已有文档不能改变归档位置");
               if (turn.mode !== "extract") {
                 if (!turn.document_ids.includes(input.id)) throw new Error("只能修订本轮选中文档");
-                proposed.set(input.id, structuredClone(input));
+                const previous = turn.proposals.find(p => p.document.id === input.id);
+                turn.proposals = [...turn.proposals.filter(p => p.document.id !== input.id), { document: structuredClone(input), base_revision: previous?.base_revision ?? turn.document_revisions![input.id], status: "pending" }];
+                this.persist(job);
               } else {
                 // Continuing an interrupted extraction must preserve already completed or edited documents.
-                if (existing) throw new Error("该文档已有草稿，修改请使用局部修订");
+                if (existing) {
+                  if (Object.entries(input).every(([key, value]) => existing[key as keyof DomainDocument] === value)) return structuredClone(input);
+                  throw new Error("该文档已有草稿，修改请使用局部修订");
+                }
                 if (job.archive_configured !== false && (!baseline || !/^[a-f0-9]{40,64}$/.test(baseline.revision))) throw new Error("尚未读取目标文件的归档基线");
                 job.documents.push({ ...structuredClone(input), revision: 1, selected: true, base_content: baseline?.content ?? null, base_revision: baseline?.revision ?? "", history: [] });
                 this.persist(job);
@@ -272,7 +279,6 @@ export class DomainKnowledgeExtraction {
           if (!reply.trim()) throw new Error("本轮没有返回结果");
           scanForSecrets("研究答复", Buffer.from(reply));
           if (turn.mode === "extract" && (!job.documents.length || !job.documents.some(doc => doc.layer === "domain"))) throw new Error("尚未生成领域知识草稿，已保存内容保留");
-          turn.proposals = [...proposed.values()].map(document => ({ document, base_revision: base.find(doc => doc.id === document.id)!.revision, status: "pending" }));
           turn.reply = reply; turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查";
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;
@@ -293,6 +299,7 @@ export class DomainKnowledgeExtraction {
   }
   decide(id: string, turnId: string, documentId: string, decision: "accept" | "discard", operator: string) {
     const job = this.live(id), proposal = job.turns.find(t => t.id === turnId)?.proposals.find(p => p.document.id === documentId);
+    if (job.turns.some(t => t.id === turnId && ["queued", "running"].includes(t.status))) throw new Error("本轮仍在生成修订建议，请等待完成");
     if (!proposal || !["accept", "discard"].includes(decision)) throw new Error("修订建议或操作无效");
     if (proposal.status !== "pending") return this.get(id);
     if (decision === "accept") this.edit(id, { document: proposal.document, base_revision: proposal.base_revision }, operator);
@@ -415,5 +422,13 @@ export class DomainKnowledgeExtraction {
       return this.get(id);
     } finally { this.publishing.delete(id); }
   }
-  async shutdown() { this.stopped = true; for (const job of this.jobs.values()) if (!job.deleted_at) this.stop(job.id); await Promise.allSettled([...this.running.values()].map(r => r.work)); }
+  async shutdown() {
+    this.stopped = true;
+    for (const job of this.jobs.values()) if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
+      job.status = "queued"; job.stage = "等待接续原研究会话";
+      for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
+      this.running.get(job.id)?.controller.abort(); this.persist(job);
+    }
+    await Promise.allSettled([...this.running.values()].map(r => r.work));
+  }
 }

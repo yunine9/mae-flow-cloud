@@ -21,20 +21,20 @@ export interface DomainAgentOptions {
 export async function runDomainKnowledge(input: DomainExecution, options: DomainAgentOptions) {
   const model = options.model();
   if (!model) throw new Error("请在模型网关配置主模型");
-  const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill);
+  const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill && !input.turn.skill);
   input.update({ skill: { name: skill.name, digest: skill.digest } });
-  const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = {};
+  const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = { ...input.turn.revisions };
   const source = (repository: KnowledgeRepository) => {
     if (!sources.has(repository.id)) sources.set(repository.id, options.source(repository, input.turn.operator, input.signal).then(value => {
       if (input.signal.aborted) throw new Error("研究已停止");
-      const revision = value.revision; revisions[repository.id] = revision;
-      input.update({ revisions: { ...input.job.revisions, ...revisions } }); return { root: value.root, revision };
+      const revision = revisions[repository.id] ?? value.revision; revisions[repository.id] = revision;
+      input.update({ revisions: { ...revisions } }); return { root: value.root, revision };
     }));
     return sources.get(repository.id)!;
   };
   const researchRepositories = input.job.source_repositories ?? input.job.repositories;
   const repositories = researchRepositories.map(repo => ({ ...repo, languages: ["agnostic"], description: "本次业务研究范围", enabled: true }));
-  const readSources = new Set<string>();
+  const readSources = new Set<string>(input.job.evidence.filter(event => event.tool === "component_source" && event.action === "read" && event.status === "returned" && event.revision === revisions[String(event.component_id)]).map(event => String(event.component_id)));
   const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), event => {
     if (event.action === "read" && event.status === "returned") readSources.add(String(event.component_id));
     input.evidence(event);
@@ -91,6 +91,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const agentDir = join(input.root, "agent"); mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
   const session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}`, workspace: input.root, agentDir,
+    resumeSession: true,
     provider: model.provider, model: model.model, allowedTools: tools.map(t => t.name), extraTools: tools, allowHumanQuestions: false, allowSubagents: false,
     eventLog: new EventLog(join(input.root, "events.jsonl"), event => { if (event.kind === "assistant_message") input.evidence({ tool: "research_note", preview: evidencePreview(String(event.payload.text ?? "")) }); }),
     transcript: new TranscriptStore(join(input.root, "transcript.jsonl"), "main"),

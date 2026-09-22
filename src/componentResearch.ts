@@ -99,18 +99,19 @@ export class ComponentResearch {
         if (!existsSync(path)) continue;
         const record: ResearchRecord = JSON.parse(readFileSync(path, "utf8"));
         this.records.set(record.id, record);
-        if ((record.mode !== "all" || record.format === "joint-document") && ["queued", "running"].includes(record.status)) {
+        if (!record.deleted_at && (record.mode !== "all" || record.format === "joint-document") && ["queued", "running"].includes(record.status)) {
           for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) {
-            turn.status = "failed"; turn.error = "服务重启中断了本轮，可保留原稿重新发送";
+            turn.status = "queued"; turn.error = undefined;
           }
           this.update(record, {
-            status: "failed",
-            stage: "已中断",
-            error: "服务重启中断了萃取，请重新发起",
-            finished_at: new Date().toISOString(),
+            status: "queued",
+            stage: "接续原研究会话",
+            error: undefined,
+            finished_at: undefined,
           });
         }
       }
+    queueMicrotask(() => this.pump());
   }
   list(summaryOnly = false) {
     return [...this.records.values()]
@@ -224,12 +225,14 @@ export class ComponentResearch {
     if (this.stopped) return;
     for (const record of this.records.values()) {
       if (this.running.size >= 2) break;
-      if ((record.mode === "all" && record.format !== "joint-document") || record.status !== "queued" || this.running.has(record.id)) continue;
+      if (record.deleted_at || (record.mode === "all" && record.format !== "joint-document") || record.status !== "queued" || this.running.has(record.id)) continue;
       const controller = new AbortController();
       const review = record.review_turns?.find(turn => turn.status === "queued");
       if (review) review.status = "running";
       const previousDocument = record.document ? structuredClone(record.document) : undefined;
+      if (review) review.base_revision ??= review.proposal?.base_revision ?? previousDocument?.sections.find(section => section.id === review.section_id)?.revision;
       let revisedDocument = previousDocument;
+      if (review?.proposal && revisedDocument) revisedDocument = { ...revisedDocument, sections: revisedDocument.sections.map(section => section.id === review.section_id ? structuredClone(review.proposal!.section) : section) };
       this.update(record, { status: "running", error: undefined, stage: review ? (review.mode === "discuss" ? "正在回答组件问题" : "正在返工指定组件") : "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
       const work = Promise.resolve()
@@ -245,30 +248,29 @@ export class ComponentResearch {
                 editDocument: (edit: ResearchDocumentEdit) => {
                   if (controller.signal.aborted || record.deleted_at || record.status !== "running") throw new Error("本轮已停止，未修改草稿");
                   const document = editResearchDocument(review ? revisedDocument! : record.document!, edit, (record.components ?? [record.component]).map(c => c.id), review);
-                  if (review) revisedDocument = document;
+                  if (review) {
+                    revisedDocument = document;
+                    if (review.mode !== "discuss") review.proposal = { base_revision: review.base_revision!,
+                      section: structuredClone(document.sections.find(s => s.id === review.section_id)!), status: "pending" };
+                    this.update(record, {});
+                  }
                   else this.update(record, { document, draft: researchDocumentMarkdown(record.topic, document) });
                   return structuredClone(document);
                 },
               } : {}),
-              update: (patch) => { if (!record.deleted_at && record.status !== "cancelled") { if (patch.skill && review) review.skill = patch.skill; this.update(record, patch); } },
+              update: (patch) => { if (!controller.signal.aborted && !record.deleted_at && record.status !== "cancelled") { if (patch.skill && review) review.skill = patch.skill; this.update(record, patch); } },
               evidence: (item) => {
                 if (record.deleted_at || record.status === "cancelled" || controller.signal.aborted) return;
                 record.evidence.push({ at: new Date().toISOString(), ...item });
                 this.update(record, {});
               },
             });
-            if (record.deleted_at || record.status === "cancelled") return;
-            if (controller.signal.aborted) throw new Error("萃取已停止");
+            if (controller.signal.aborted || record.deleted_at || record.status === "cancelled") return;
             if (!draft.trim()) throw new Error("模型未产出草稿");
             scanForSecrets("组件知识草稿.md", Buffer.from(draft));
             if (review) {
-              if (review.mode === "rework" && revisedDocument?.sections.find(s => s.id === review.section_id)?.revision
-                  === previousDocument?.sections.find(s => s.id === review.section_id)?.revision) {
+              if (review.mode === "rework" && !review.proposal) {
                 throw new Error("本轮没有更新指定组件，原稿已保留；请继续说明返工要求");
-              }
-              if (review.mode !== "discuss" && revisedDocument!.sections.find(s => s.id === review.section_id)!.revision !== previousDocument!.sections.find(s => s.id === review.section_id)!.revision) {
-                review.proposal = { base_revision: previousDocument!.sections.find(s => s.id === review.section_id)!.revision,
-                  section: structuredClone(revisedDocument!.sections.find(s => s.id === review.section_id)!), status: "pending" };
               }
               review.status = "done"; review.reply = draft; review.finished_at = new Date().toISOString();
             } else if (record.document && (!record.document.overview.trim() || !record.document.sections.length
@@ -282,7 +284,7 @@ export class ComponentResearch {
               finished_at: new Date().toISOString(),
             });
           } catch (error) {
-            if (record.deleted_at || record.status === "cancelled") return;
+            if (controller.signal.aborted || record.deleted_at || record.status === "cancelled") return;
             if (review) {
               review.status = "failed"; review.error = error instanceof Error ? error.message : "本轮失败";
               review.finished_at = new Date().toISOString();
@@ -411,6 +413,7 @@ export class ComponentResearch {
   decideProposal(id: string, turnId: string, decision: "accept" | "discard", operator: string) {
     const record = this.records.get(id), turn = record?.review_turns?.find(t => t.id === turnId);
     if (!record || record.deleted_at || record.document_id || !turn?.proposal) throw new Error("修订建议不存在或草稿已归档");
+    if (["queued", "running"].includes(turn.status)) throw new Error("本轮仍在生成修订建议，请等待完成");
     if (!["accept", "discard"].includes(decision)) throw new Error("请选择采纳或放弃");
     if (turn.proposal.status !== "pending") return this.get(id);
     if (decision === "accept") this.editSection(id, { section: turn.proposal.section, base_revision: turn.proposal.base_revision }, operator);
@@ -492,12 +495,14 @@ export class ComponentResearch {
   async shutdown() {
     this.stopped = true;
     for (const r of this.records.values())
-      if ((r.mode !== "all" || r.format === "joint-document") && r.status === "queued")
+      if (!r.deleted_at && (r.mode !== "all" || r.format === "joint-document") && ["queued", "running"].includes(r.status)) {
+        for (const turn of r.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
         this.update(r, {
-          status: "failed",
-          stage: "已中断",
-          error: "服务停止，请重新发起",
+          status: "queued",
+          stage: "等待接续原研究会话",
+          error: undefined,
         });
+      }
     for (const r of this.running.values()) r.controller.abort();
     await Promise.allSettled([...this.running.values()].map((r) => r.work));
   }

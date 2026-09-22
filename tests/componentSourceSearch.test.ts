@@ -38,5 +38,13 @@ test("源码搜索支持多词任意命中、短语、大小写与逐仓范围",
     assert.match(await search({ query: "CODC", keywords: ["PCI"] }), /只能填写一个/);
     assert.match(await search({ keywords: [""] }), /非空字符串/);
     assert.match(await search({ keywords: ["CODC\nPCI"] }), /不能包含换行/);
+    const read = async (path: string) => {
+      const result = await tool.execute("read", { action: "read", component_id: "repo-1", path }, undefined, undefined, {} as never);
+      return result.content.map(c => c.type === "text" ? c.text : "").join("\n");
+    };
+    assert.match(await read("src/missing.txt"), /文件不存在.*list/);
+    assert.doesNotMatch(await read("src/missing.txt"), /凭据|网络/);
+    assert.match(await read("src"), /路径是目录.*list/);
+    assert.match(await read("src/code.txt"), /CODC module/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

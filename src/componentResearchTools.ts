@@ -28,7 +28,12 @@ export function executeFile(
           ? reject(
               Object.assign(
                 new Error(
-                  `${file === "git" ? "源码读取" : "ec 调用"}失败，请检查工具安装、凭据和网络`,
+                  error.name === "AbortError" ? "操作已取消"
+                    : error.code === "ENOENT" ? `${file === "git" ? "Git" : "ec"} 工具未安装或路径错误`
+                    : error.code === "EACCES" ? "当前服务账户无权执行工具"
+                    : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "返回内容过大，请缩小搜索或读取范围"
+                    : error.killed ? "操作超时，请缩小范围后重试"
+                    : file === "git" ? "本地源码操作失败，请检查仓库、版本和路径" : "ec 调用失败，请检查工具配置、凭据和网络",
                 ),
                 { code: error.code },
               ),
@@ -76,7 +81,7 @@ export function componentSourceTool(
         Type.Literal("search"),
         Type.Literal("read"),
       ]),
-      path: Type.Optional(Type.String()),
+      path: Type.Optional(Type.String({ description: "仓内完整相对路径，read 请使用 list/search 返回的路径，不要仅凭文件名猜测。" })),
       query: Type.Optional(Type.String({ description: "完整短语搜索，按字面匹配，不支持正则；多个关键词请用 keywords。" })),
       keywords: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32, description: "多个字面关键词，任意一个命中即可；与 query 二选一。" })),
       ignore_case: Type.Optional(Type.Boolean({ description: "默认 true：忽略大小写；false：区分大小写。" })),
@@ -153,6 +158,10 @@ export function componentSourceTool(
           }
           text = `仓库：${sourceLabel}\n版本：${revision}\n范围：${path || "全仓"}\n匹配：${input.keywords !== undefined ? "多关键词任意命中" : "完整短语"}；${ignoreCase ? "忽略大小写" : "区分大小写"}；字面搜索\n${text}`;
         } else {
+          if (!path) throw new Error("read 需要文件路径，请先用 list 查看目录");
+          const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", revision, "--", path], root, signal);
+          if (!entry.trim()) throw new Error(`当前版本下文件不存在：${path}。请先用 list 查找完整仓内路径，再 read；不要反复猜测文件名。`);
+          if (/^040000 tree /.test(entry)) throw new Error(`路径是目录：${path}。请用 list 列出文件后再 read。`);
           const content = await executeFile(
             "git",
             ["show", `${revision}:${path}`],

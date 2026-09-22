@@ -7,7 +7,7 @@ const pause = () => new Promise(resolve => setTimeout(resolve, 90));
 const job: DomainKnowledgeJob = { id: "dkx-browser", issue_no: "REQ-knowledge-fixture", title: "交易履约领域", scope: "订单状态、取消与库存回补", operator: "领域维护人", created_at: "2026-09-22T01:00:00Z", repositories: [{ id: "repo-1", name: "订单服务", repository: "https://example.test/orders.git", branch: "main", path: "src", docs_path: "docs/business" }], knowledge_target: { id: "domain", name: "交易领域知识仓", repository: "https://example.test/knowledge.git", branch: "main", path: "", docs_path: "domains/trade" }, material_ids: [], use_wxdoubao: true, ar_codes: ["AR-FIXTURE"], status: "done", stage: "草稿待审查", revisions: {}, skill: { name: "domain-knowledge-extraction", digest: "abcd1234" }, turns: [], publications: [], evidence: [],
   documents: [{ id: "states", title: "订单状态与取消规则", target_id: "domain", path: "domains/trade/states.md", layer: "domain", content: "# 订单状态与取消规则\n\n订单从待支付进入已支付，随后由履约服务创建发货任务。\n\n## 取消边界\n\n仅未发货订单允许取消，库存回补需要与支付退款分别核对。\n\n> 此处为浏览器验收夹具，不代表真实业务规则。", sources: "上传资料：交易规格 v2 / 第 3 章\n\n源码：订单服务 / src/order.ts @ fixture\n\n无线豆包：查询“取消订单的边界”，来源版本未知。", revision: 1, selected: true, base_content: null, base_revision: "a".repeat(40), history: [] }, { id: "integration", title: "订单服务的跨仓职责", target_id: "repo-1", path: "docs/business/integration.md", layer: "repository", content: "# 跨仓职责\n\n订单仓记录业务状态，履约仓维护物流处理。", sources: "订单仓与履约仓的接口定义（测试夹具）", revision: 1, selected: true, base_content: null, base_revision: "a".repeat(40), history: [] }] };
 job.evidence = [
-  ...Array.from({ length: 35 }, (_, index) => ({ tool: "component_source", action: "list", path: `src/business/module-${index}`, preview: "目录结果\n" + "src/business/a.ts\n".repeat(80), at: "2026-09-22T01:00:00Z", status: "returned" })),
+  ...Array.from({ length: 55 }, (_, index) => ({ tool: "component_source", action: "list", path: `src/business/module-${index}`, preview: "目录结果\n" + "src/business/a.ts\n".repeat(80), at: new Date(Date.parse("2026-09-22T01:00:00Z") + index * 1000).toISOString(), status: "returned" })),
   { tool: "component_source", action: "read", path: "src/orders.ts", status: "failed", error: "文件读取失败，请核对版本" },
   { tool: "research_note", preview: "## 阶段结论\n正在核对取消订单的边界。" },
   { tool: "business_knowledge", action: "knowledge_search", status: "available", query: { question: "订单取消规则" }, result: { source: "业务规格", content: "检索依据正文" } },
@@ -64,21 +64,21 @@ async function run() {
   check(document.querySelector('[aria-label="知识萃取类型"]')?.textContent?.includes("领域知识萃取"), "extraction type navigation nested below extraction");
   await click("研究过程");
   const progress = document.querySelector<HTMLElement>('[aria-label="研究过程记录"]')!;
-  check(progress.querySelectorAll('.knowledge-progress-heading').length === 4, "many file records collapse into activity groups");
-  check(!progress.querySelector('.knowledge-progress-entry') && !progress.querySelector('pre'), "no file names or raw output mounted by default");
-  check(progress.textContent?.includes("1 条异常"), "collapsed groups keep failures visible");
-  progress.querySelector<HTMLButtonElement>('[aria-controls$="-browse"]')!.click(); await pause();
-  check(progress.querySelectorAll('.knowledge-progress-entry').length === 20, "expanded group limits initial records");
-  await click("再显示 15 条（剩余 15 条）");
-  check(progress.querySelectorAll('.knowledge-progress-entry').length === 35, "can load remaining records");
+  check(!progress.querySelector('.knowledge-progress-heading') && !progress.querySelector('input[type="checkbox"]'), "timeline has no activity groups or type filters");
+  check(progress.querySelectorAll('.knowledge-progress-entry').length === 40, "timeline initially shows latest 40 summaries");
+  check(progress.textContent?.includes("1 条异常"), "timeline keeps failures visible");
+  check(progress.querySelector('.knowledge-progress-summary')?.textContent === "src/business/module-18", "latest entries remain in chronological order");
+  await click("查看更早的 18 条动态");
+  check(progress.querySelectorAll('.knowledge-progress-entry').length === 58, "can load earlier history into same timeline");
+  check(progress.querySelector('.knowledge-progress-summary')?.textContent === "src/business/module-0", "earliest entry is first");
+  const summaries = [...progress.querySelectorAll('.knowledge-progress-entry > summary')];
+  check(summaries.at(-2)?.textContent?.includes("分析与整理") && summaries.at(-1)?.textContent?.includes("检索业务知识"), "different activities stay interleaved by occurrence");
   const record = progress.querySelector<HTMLDetailsElement>('.knowledge-progress-entry')!;
   check(!record.open && !record.querySelector('pre')!.getClientRects().length, "source listing stays folded until explicitly opened");
   record.querySelector('summary')!.click(); await pause();
   check(record.open && record.querySelector('pre')!.getClientRects().length, "record expands to actual source output");
-  await click("全部折叠"); check(!progress.querySelector('.knowledge-progress-entry'), "collapse all removes expanded records");
-  const errorsOnly = progress.querySelector<HTMLInputElement>('input[type="checkbox"]')!; errorsOnly.click(); await pause();
-  check(progress.querySelectorAll('.knowledge-progress-heading').length === 1, "error filter narrows activity groups");
-  errorsOnly.click(); await click("审查与修订");
+  await click("全部折叠"); check(!progress.querySelector('details[open]'), "collapse all closes detail while retaining summaries");
+  await click("审查与修订");
   const outline = document.querySelector('[aria-label="知识主题与章节"]')!;
   check(outline.textContent?.includes("取消边界"), "knowledge headings visible");
   check(!/domains\/trade|docs\/business|仓外|仓内/.test(outline.textContent ?? ""), "outline organizes knowledge without repository paths");
