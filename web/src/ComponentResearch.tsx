@@ -226,7 +226,7 @@ export function ComponentResearch({
               <p className="text-muted-foreground">暂无萃取记录</p>
             )}
           </div> : undefined}>
-          <main className="min-w-0 overflow-auto overscroll-contain pr-2 text-base">
+          <main className="min-w-0 pr-2 text-base">
             {error && (
               <p role="alert" className="mb-3 text-danger">
                 {error}

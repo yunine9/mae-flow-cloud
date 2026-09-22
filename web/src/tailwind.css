@@ -7914,7 +7914,7 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .research-capability-search > svg { position: absolute; top: 50%; left: 10px; transform: translateY(-50%); color: var(--muted-foreground); pointer-events: none; }
 .research-capability-search input { padding-left: 32px; background: var(--surface); }
 .research-selection-actions { display: flex; align-items: center; gap: 16px; margin-top: 10px; font-size: 14px; }
-.research-capability-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 8px; }
+.research-capability-list { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: auto; scrollbar-gutter: stable; padding: 8px; }
 .research-capability { display: flex; align-items: flex-start; gap: 9px; padding: 12px 10px; margin-bottom: 4px; border: 1px solid transparent; border-radius: 8px; }
 .research-capability:hover { background: var(--surface); }
 .research-capability.is-current { border-color: color-mix(in srgb, var(--primary) 25%, var(--line)); background: var(--accent-soft); }
@@ -7922,24 +7922,24 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .research-capability-title { display: block; font-size: 15px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
 .research-capability-arrow { flex-shrink: 0; margin-top: 4px; color: var(--muted-foreground); opacity: 0; }
 .research-capability.is-current .research-capability-arrow { opacity: 1; color: var(--primary); }
-.research-reader { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 24px; scroll-padding-top: 20px; }
+.research-reader { flex: 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: auto; scrollbar-gutter: stable; padding: 24px; scroll-padding-top: 20px; }
 .research-reader:focus-visible, .research-capability-list:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .research-document-eyebrow { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; color: var(--muted-foreground); font-size: 13px; }
 .research-document-content { line-height: 1.8; }
 .research-discussion { margin-top: 28px; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .research-full-document { line-height: 1.8; }
 
-/* 两类知识萃取共用桌面工作台。 */
+/* 两类知识萃取共用桌面工作台；内部滚动到边界后允许外层页面继续滚动。 */
 .knowledge-extraction-workspace { display:flex; flex-direction:column; gap:18px; min-height:480px; height:calc(100vh - 200px); border:1px solid var(--line); border-radius:12px; background:var(--surface); padding:20px; }
 .knowledge-extraction-header { display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--line); padding-bottom:16px; }
 .knowledge-extraction-body { display:grid; grid-template-columns:minmax(0,1fr); flex:1; min-height:0; gap:18px; }
 .knowledge-extraction-body.has-sidebar { grid-template-columns:200px minmax(0,1fr); }
 .knowledge-extraction-jobs { min-height:0; overflow:auto; border-right:1px solid var(--line); padding-right:14px; }
-.knowledge-extraction-content { min-width:0; overflow:auto; overscroll-behavior:contain; }
+.knowledge-extraction-content { min-width:0; min-height:0; overflow:auto; overscroll-behavior:auto; }
 .knowledge-extraction-content .research-review { height:clamp(280px, calc(100vh - 500px), 640px); }
 .knowledge-extraction-content .research-review-panes { grid-template-columns:180px minmax(0,1fr); }
 .knowledge-extraction-content .research-reader:not(.research-full-document) { display:grid; grid-template-columns:minmax(0,1fr) 260px; padding:0; overflow:hidden; }
-.knowledge-extraction-content .research-document-content { padding:18px; overflow:auto; overscroll-behavior:contain; min-width:0; }
+.knowledge-extraction-content .research-document-content { padding:18px; overflow:auto; overscroll-behavior:auto; min-width:0; }
 .knowledge-extraction-content .research-discussion { margin:0; padding:16px; border:0; border-left:1px solid var(--line); border-radius:0; overflow:auto; min-width:0; }
 
 /* 萃取成果按主题与章节阅读，仓路径只在归档阶段展示。 */
@@ -7993,5 +7993,5 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .knowledge-progress-detail { padding:4px 20px 18px 44px; font-size:13px; max-height:380px; overflow:auto; overflow-wrap:anywhere; }
 .knowledge-progress-detail pre { margin-top:10px; padding:12px; background:var(--surface-2); border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 .knowledge-progress-empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-size:14px; }
-.knowledge-progress-entries > ol { margin:0; padding:0; list-style:none; max-height:420px; overflow:auto; overscroll-behavior:contain; }
+.knowledge-progress-entries > ol { margin:0; padding:0; list-style:none; max-height:420px; overflow:auto; overscroll-behavior:auto; }
 .knowledge-progress-entry:not([open]) > .knowledge-progress-detail { display:none; }

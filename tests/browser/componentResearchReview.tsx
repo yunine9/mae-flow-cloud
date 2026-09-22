@@ -90,7 +90,7 @@ async function run() {
   reader.scrollTop = 220;
   await pause();
   check(list.scrollTop === 180 && reader.scrollTop === 220 && outer.scrollTop === outerTop, "scroll positions must stay independent");
-  check(getComputedStyle(list).overscrollBehaviorY === "contain" && getComputedStyle(reader).overscrollBehaviorY === "contain", "wheel at a boundary must not scroll parent");
+  check(getComputedStyle(list).overscrollBehaviorY === "auto" && getComputedStyle(reader).overscrollBehaviorY === "auto", "wheel at a boundary can continue scrolling the parent");
   const next = [...list.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("批量写入"))!;
   next.click();await pause();
   check(reader.scrollTop === 0 && list.scrollTop === 180, "switching component resets document only");
@@ -102,5 +102,5 @@ async function run() {
   document.querySelector("main")!.scrollTop = 0;
   return {passed:true,width:innerWidth,selected:boxes().filter(b => b.checked).length,turns:record.review_turns!.length};
 }
-run().then(value => {document.getElementById("result")!.textContent = JSON.stringify(value);})
+if (!new URLSearchParams(location.search).has("scrollCheck")) run().then(value => {document.getElementById("result")!.textContent = JSON.stringify(value);})
   .catch(error => {document.getElementById("result")!.textContent = JSON.stringify({error:String(error)});});

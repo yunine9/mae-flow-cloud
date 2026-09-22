@@ -133,7 +133,9 @@ async function run() {
   upload.addEventListener("click", event => { event.preventDefault(); pickerOpened = true; }, { once: true });
   chooseFile.click(); check(pickerOpened, "choose-file button opens its file picker");
   const transfer = new DataTransfer(); transfer.items.add(new File(["ZIP fixture; binary parser verified separately"], "业务资料.zip", { type: "application/zip" }));
-  upload.files = transfer.files; upload.dispatchEvent(new Event("change", { bubbles: true })); await pause(); await pause();
+  upload.files = transfer.files; upload.dispatchEvent(new Event("change", { bubbles: true }));
+  for (let attempt = 0; attempt < 40 && !calls.some(c => c.action === "upload"); attempt++) await pause();
+  await pause();
   check(calls.some(c => c.action === "upload" && c.name === "业务资料.zip" && c.version === "" && !("scope" in c)), "ZIP upload requires no metadata");
   check(createDialog.textContent?.includes("1 张图片") && createDialog.textContent?.includes("1 个附件未解析"), "upload shows images and partial parsing warning");
   const module = document.querySelector<HTMLSelectElement>('select[aria-label="萃取业务模块"]')!;
@@ -156,4 +158,4 @@ async function run() {
   check(!button("删除任务") && !document.querySelector('[aria-label="研究过程记录"]'), "deletion clears task detail");
   check(!errors.length, errors.join(";")); return { passed: true, width: innerWidth, revision: job.documents[0].revision, skill: skill.digest };
 }
-run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
+if (!new URLSearchParams(location.search).has("scrollCheck")) run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
