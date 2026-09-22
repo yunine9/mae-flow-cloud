@@ -449,6 +449,9 @@ export class CloudSession {
   private session!: Awaited<ReturnType<typeof createAgentSession>>["session"];
   private modelRuntime!: Awaited<ReturnType<typeof ModelRuntime.create>>;
   private pendingTurn?: Promise<Outcome>;
+  private turnInFlight = false;
+  /** 人工工具仍挂起或模型仍在执行时，宿主不能借用工作区。 */
+  get isIdle(): boolean { return !this.turnInFlight && !this.waitingRecord; }
   private waitingSignal = deferred<Outcome>();
   private decisionResolvers = new Map<string, (text: string) => void>();
   private waitingRecord?: WaitingRecord;
@@ -707,6 +710,7 @@ export class CloudSession {
    *  失败在这里只产出 Outcome 不落终态事件:补救链(自愈/重投)可能
    *  把它救活,确认不再补救才由 settle 落账。 */
   private promptTurn(userMessage: string, announce = true): Promise<Outcome> {
+    this.turnInFlight = true;
     if (announce) {
       this.emit("user_message", this.sessionId, { text: userMessage });
     }
@@ -720,7 +724,7 @@ export class CloudSession {
       .catch((error): Outcome => {
         const detail = userFacingModelFailure(String(error));
         return { status: "session_ended", reason: "failed", detail };
-      });
+      }).finally(() => { this.turnInFlight = false; });
     return Promise.race([this.pendingTurn, this.waitingSignal.promise]);
   }
 

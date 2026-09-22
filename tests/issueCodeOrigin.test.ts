@@ -1,5 +1,5 @@
 /**
- * 一次生成归属层(工单 #335/#336/#337,ADR-0044):返工边界纯函数、
+ * 首次生成归属层(工单 #335/#336/#337,ADR-0044):返工边界纯函数、
  * 行级三分类归属(真仓夹具)、head 四级优先级、平台外行进分母、
  * 只写一次与后台通道/清扫器兜底的落盘语义。
  *
@@ -28,14 +28,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import {
   aggregateCodeOrigin,
+  AsyncWorktreeGitSession,
   awaitCodeOriginLane,
   backfillCodeOrigin,
   buildCodeOriginSnapshot,
+  codeOriginSupported,
+  codeOriginPending,
   enqueueCodeOrigin,
   ISSUE_CODE_ORIGIN_FILE,
   readCodeOriginSnapshot,
@@ -126,7 +129,7 @@ function seedState(root: string, origin: string, options: SeedOptions)
   const state: IssueSessionState = {
     id: "issue-1", account: ACCOUNT, reporter: ACCOUNT,
     created_at: now, updated_at: now,
-    title: "一次生成归属夹具", description: "", source: "dts", ticket: TICKET,
+    title: "首次生成归属夹具", description: "", source: "dts", ticket: TICKET,
     repo_url: origin, repo_urls: [origin],
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "pending"],
@@ -193,7 +196,7 @@ test("返工边界:反馈先于一切推送不算边界;无反馈=全程首轮",
 
 test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
   const snapshot: IssueCodeOriginSnapshot = {
-    schema_version: 2,
+    schema_version: 3,
     generated_at: "now",
     session_id: "issue-1",
     by_repo: [
@@ -208,7 +211,7 @@ test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
   assert.equal(aggregate.pass, true);
   assert.equal(aggregateCodeOrigin(snapshot, 90).pass, false);
   const empty = aggregateCodeOrigin({
-    schema_version: 2, generated_at: "now", session_id: "x",
+    schema_version: 3, generated_at: "now", session_id: "x",
     by_repo: [{ repo: "c", branch: "d", unavailable: "不可得" }],
   } as unknown as IssueCodeOriginSnapshot);
   assert.equal(empty.total, 0);
@@ -409,9 +412,9 @@ async function seedComputableSession(root: string): Promise<string> {
   const state = seedState(root, origin, {
     events: [{ at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, sha) }],
   });
-  // 结论时刻钉在起算日期之后(测试机真实时钟可能仍在 UTC 前一天,
-  // 不能拿 new Date() 赌支持期判定)。
-  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-20T12:00:00.000Z" };
+  // 结论时刻钉在起算日(2026-09-23,白名单扩配置后缀的 v3 换版)之后
+  // (测试机真实时钟可能仍在 UTC 前一天,不能拿 new Date() 赌支持期判定)。
+  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-23T12:00:00.000Z" };
   writeFileSync(join(root, "issue.json"), JSON.stringify(state, null, 1));
   return origin;
 }
@@ -561,3 +564,156 @@ function seedWorkspaceNamed(sessionRoot: string, origin: string, name: string)
   git(dir, "checkout", "-q", "-b", BRANCH);
   return dir;
 }
+
+// ---- 挂死保险与通道放行(工单 #380) ----
+
+/** 困住的远端:给既有真裸仓用 plumbing 造一笔工作区拿不到的提交,
+ *  再把它的松散对象文件换成同名 FIFO——目录校验照常通过,传输器读
+ *  对象时 open() 无写者永阻塞。本地路径远端(生产合法形态)里的
+ *  确定性挂死。必须在克隆工作区之后调用(克隆一个含 trap 分支的
+ *  仓,连只要 master 也会在传输进程里挂住)。返回放行出口。 */
+function trapBranchIn(origin: string): { sha: string; unblock: () => void } {
+  const tree = git(origin, "rev-parse", "master^{tree}");
+  const commit = execFileSync("git", ["commit-tree", tree, "-m", "困住的提交"], {
+    cwd: origin, env: GIT_ENV, encoding: "utf-8",
+  }).trim();
+  git(origin, "update-ref", `refs/heads/${BRANCH}`, commit);
+  const object = join(origin, "objects", commit.slice(0, 2), commit.slice(2));
+  unlinkSync(object);
+  execFileSync("mkfifo", [object]);
+  // 收尾:任务级超限只放行等待方,挂住的传输树仍留在后台(与生产
+  // 一致——组杀要等命令级超时才发生,测试的 500ms 等不到)。测试
+  // 收尾按同款语义直接 SIGKILL 这棵树;轮询防它还没走到阻塞点。
+  // FIFO 本体留给临时目录清理收走。
+  const unblock = (): void => {
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline) {
+      let matched = "";
+      try {
+        matched = execFileSync("pgrep", ["-f", origin],
+          { encoding: "utf-8" }).trim();
+      } catch { return; /* 无匹配=传输树已清 */ }
+      for (const pid of matched.split("\n").filter(Boolean)) {
+        try { process.kill(Number(pid), "SIGKILL"); } catch { /* 已退 */ }
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    }
+  };
+  return { sha: commit, unblock };
+}
+
+/** 挂死单夹具:工作区先克隆干净仓,再给远端下毒——归属计算的
+ *  fetch 撞上 FIFO,确定性挂死。 */
+function seedHangSession(tmp: string, name: string): {
+  root: string; state: IssueSessionState; unblock: () => void;
+} {
+  // 远端名恒为缺省 origin:工作区映射按仓名(URL 末段)找 repo/<仓名>,
+  // seedWorkspace 固定克隆到 repo/origin,名字对不上会找不到工作区,
+  // fetch 根本不跑(静默降级而非挂死)。
+  const origin = bareOrigin(tmp);
+  const root = join(tmp, "issues", name);
+  seedWorkspace(root, origin);
+  const trap = trapBranchIn(origin);
+  const state = seedState(root, origin, {
+    events: [{ at: "2026-09-21T02:00:00.000Z",
+      note: pushNote(origin, trap.sha) }],
+  });
+  // 结论时刻钉在起算日之后(理由同 seedComputableSession:真实时钟
+  // 可能还早于新起算日,不拿 new Date() 赌支持期判定)。
+  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-23T12:00:00.000Z" };
+  writeFileSync(join(root, "issue.json"), JSON.stringify(state, null, 1));
+  return { root, state, unblock: trap.unblock };
+}
+
+test("起算日随 v3 口径挪至 2026-09-23(白名单扩配置类后缀):换版窗口两端一端不支持、一端支持", () => {
+  const delivered = (at: string) => ({
+    conclusion: { kind: "delivered" as const, summary: "", at },
+    updated_at: at,
+  });
+  assert.equal(codeOriginSupported(delivered("2026-09-22T23:59:59.000Z")), false);
+  assert.equal(codeOriginSupported(delivered("2026-09-23T00:00:00.000Z")), true);
+});
+
+test("命令级组杀:超时整组终止(传输进程一并带走),命令按失败收场", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const origin = bareOrigin(tmp, "trap");
+  const dir = seedWorkspace(join(tmp, "issues", "issue-1"), origin);
+  const trap = trapBranchIn(origin);
+  const session = AsyncWorktreeGitSession.open(dir);
+  assert.ok(session);
+  const started = Date.now();
+  const outcome = await session.run(
+    ["fetch", "--quiet", "--no-tags", origin, BRANCH], 700);
+  const waited = Date.now() - started;
+  assert.notEqual(outcome.code, 0);
+  assert.ok(waited < 20_000, `组杀未生效,等了 ${waited}ms`);
+  let leftover = false;
+  try { execFileSync("pgrep", ["-f", origin]); leftover = true; } catch {
+    /* 无残留 */
+  }
+  assert.equal(leftover, false, "握住管道的传输进程没被带走");
+  session.close();
+  trap.unblock();
+});
+
+test("通道挂死保险:任务超限告警放行,后续任务照常,登记清掉,回收交清扫器", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const hang = seedHangSession(tmp, "hang");
+  try {
+    const hangLogs: string[] = [];
+    let hangSettled = 0;
+    assert.equal(enqueueCodeOrigin(hang.root, hang.state, {}, {
+      onSettled: () => { hangSettled += 1; },
+      log: (message) => hangLogs.push(message),
+    }, { jobTimeoutMs: 500 }), true);
+    // 挂死单占道期间健康单排队;挂死单超限放行后健康单照常算完。
+    const healthyRoot = join(tmp, "issues", "healthy");
+    await seedComputableSession(healthyRoot);
+    const healthyState = JSON.parse(
+      readFileSyncForState(healthyRoot)) as IssueSessionState;
+    const healthyLogs: string[] = [];
+    let healthySettled = 0;
+    assert.equal(enqueueCodeOrigin(healthyRoot, healthyState, {}, {
+      onSettled: () => { healthySettled += 1; },
+      log: (message) => healthyLogs.push(message),
+    }), true);
+
+    await awaitCodeOriginLane();
+
+    const healthyFile = join(healthyRoot, ISSUE_CODE_ORIGIN_FILE);
+    assert.ok(existsSync(healthyFile), "健康单没被挂死单拖住");
+    assert.equal(healthySettled, 1);
+    // 超限不调 onSettled:现场留给每日清扫器补算后回收。
+    assert.equal(hangSettled, 0);
+    assert.ok(!existsSync(join(hang.root, ISSUE_CODE_ORIGIN_FILE)));
+    assert.equal(codeOriginPending(hang.root), false, "在途登记没清");
+
+    const hangText = hangLogs.join("\n");
+    assert.match(hangText, /已入队\(队列 1\)/);
+    assert.match(hangText, /首次生成归属开始计算/);
+    assert.match(hangText, /首次生成归属超时告警.*耗时/);
+    const healthyText = healthyLogs.join("\n");
+    assert.match(healthyText, /已入队\(队列 1\)/);
+    assert.match(healthyText, /首次生成归属开始计算/);
+    assert.match(healthyText, /首次生成归属已冻结.*耗时/);
+  } finally {
+    hang.unblock();
+  }
+});
+
+test("补算挂死保险:超时返回 false,不拖死清扫轮", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const hang = seedHangSession(tmp, "hang");
+  try {
+    const started = Date.now();
+    const logs: string[] = [];
+    const written = await backfillCodeOrigin(hang.root, hang.state, {},
+      (message) => logs.push(message), { jobTimeoutMs: 500 });
+    assert.equal(written, false);
+    assert.ok(Date.now() - started < 30_000,
+      "补算超限没放行,会把整轮清扫堵死");
+    assert.match(logs.join("\n"), /首次生成归属超时告警.*耗时/);
+  } finally {
+    hang.unblock();
+  }
+});

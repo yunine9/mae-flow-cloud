@@ -74,7 +74,7 @@ test("CodeHub 自动触发配置按真实状态查询，空结果不伪造运行
 for (const ciLoop of [false, true]) test(`提前验证续接原目标和未送达插话，不受历史 CI 环影响（${ciLoop}）`, async t => {
   const f = await fixture(t), { task, service } = f;
   if (ciLoop) task.summary.delivery.loop = { kind: "ci", state: "repairing", last_sha: old, round: 1, failure: "旧告警" };
-  task.driver = { dispose() {}, takeUndeliveredSteers: () => ["不能直接返回 false"] };
+  task.driver = { isIdle: true, dispose() {}, takeUndeliveredSteers: () => ["不能直接返回 false"] };
   const host = service.taskHostRuntime(task);
   await queueTaskHostOperation(host, "early-check", { action: "trigger_pipeline", reason: "提前验证，然后继续编码" });
   await finishTaskHostOperation(host);

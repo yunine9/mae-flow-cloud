@@ -4296,7 +4296,7 @@ export function getIssueRegistrationStats(
   return issueFetch(`/issues/registration-stats${days ? `?days=${days}` : ""}`);
 }
 
-/** 单会话一次生成明细(伴生快照原样,会话详情下钻的证据面)。
+/** 单会话首次生成明细(伴生快照原样,会话详情下钻的证据面)。
  *  by_repo 两态:可得(三分类行数+逐提交证据)或「不可得」(人话理由)。 */
 export interface IssueCodeOriginCommitRow {
   sha: string;

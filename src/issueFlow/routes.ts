@@ -775,8 +775,8 @@ export async function handleIssueRoutes(
       return done(200, issueFlow.onceRates());
     }
 
-    // 一次生成达标率(ADR-0044):终态伴生快照(code-origin.json)的
-    // 读侧聚合,分母三态排除口径见 service.onceGeneratedStats。字面
+    // 90%AI生成达标率(ADR-0044/0045):终态伴生快照(code-origin.json)
+    // 的读侧聚合,分母三态排除口径见 service.onceGeneratedStats。字面
     // 路由同样必须住在 :id 捕获之前;读开放与 stats 同权(查看模式)。
     if (method === "GET" && parts[1] === "once-generated"
       && parts.length === 2) {
@@ -798,7 +798,7 @@ export async function handleIssueRoutes(
         Number.isFinite(days) && days > 0 ? days : undefined));
     }
 
-    // 单会话一次生成明细(伴生快照原样):会话详情下钻的证据面。
+    // 单会话首次生成明细(伴生快照原样):会话详情下钻的证据面。
     // 伴生缺席(未归档/未算完/早于起算日期)如实 404,不猜不补。
     if (method === "GET" && parts[1] && parts[2] === "code-origin"
       && parts.length === 3) {
@@ -807,7 +807,7 @@ export async function handleIssueRoutes(
       return snapshot
         ? done(200, snapshot)
         : done(404, {
-          error: "该会话暂无一次生成统计(未归档、未算完或早于起算日期)",
+          error: "该会话暂无首次生成统计(未归档、未算完或早于起算日期)",
         });
     }
 

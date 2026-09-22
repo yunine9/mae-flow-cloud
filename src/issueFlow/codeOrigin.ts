@@ -1,6 +1,6 @@
 /**
- * 一次生成归属层(ADR-0044,工单 #335/#336/#337):会话终态后,对代码
- * 现场一次算清「最终留存的源码行里,多少行是首轮生成且存活到合入的」,
+ * 首次生成归属层(ADR-0044/0045,工单 #335/#336/#337):会话终态后,对代码
+ * 现场一次算清「交付的变更行里,多少行是首轮生成」,
  * 冻结成会话目录下的伴生文件 code-origin.json(独立于 metrics.json,
  * 自带 schema 版本,只写一次、永不重写)。
  *
@@ -12,26 +12,26 @@
  * - **宁缺勿假**:算不出就「不可得」,绝不按首轮暂计——指标当 KPI
  *   用,坏账不虚构达标(需求侧的宽容档明确不搬)。
  *
- * 执行模型(工单 #335/#336):归档响应不等计算——任务挂后台串行通道
- * (一次一个会话),Git 一律走异步口(同步 spawn 阻塞 Node 事件循环,
- * safeGit.ts 有明文纪律);终态现场回收为通道任务让路;进程崩溃的
- * 缺口由每日清扫器兜底(回收前伴生缺失且属支持期的先补算一次)。
- * 超时只作挂死保险:单命令分钟级、整层十分钟级,慢不算失败,真挂死
- * 才降级。
+ * 执行模型(工单 #335/#336,#380 改队列):归档响应不等计算——任务挂
+ * 后台串行通道(一次一个会话),Git 一律走异步口(同步 spawn 阻塞
+ * Node 事件循环,safeGit.ts 有明文纪律);终态现场回收为通道任务让路;
+ * 进程崩溃的缺口由每日清扫器兜底(回收前伴生缺失且属支持期的先补算
+ * 一次)。超时只作挂死保险:单命令分钟级、单任务一刻钟级;单命令超时
+ * 按进程组整组终止(孤儿子进程握住管道会让 close 永不到来,任务就此
+ * 挂死,#380 的生产事故),任务级到点视为挂死——告警放行后续任务,
+ * 现场回收交清扫器。
  *
- * 归属口径(逐提交三分类,行级 blame):
+ * 归属口径(逐提交三分类):
  * - 首轮:落在平台推送区间内、且该推送不晚于返工边界的提交;
  * - 返工:落在平台推送区间内、晚于返工边界的提交;
  * - 平台外:不在任何平台推送区间内的提交(含末笔推送之后的尾部、
  *   被外部头观测记录在案的提交)。
  * 返工边界=首个反馈事件(ledgerFacts.feedbackEvents:检视批次送出/
  * 红灯按失败处理/验证发现问题)所回应的那笔推送(会话级全局边界,
- * 多仓共用)。区间归属把平台一次推送携带的多个提交都算平台——与
- * 提交归属层(commit_attribution,只认推送头)的语义差异是拍板过的:
- * 行级占比要的是「谁交付的这批代码」,不是「哪笔提交在账」。
+ * 多仓共用)。区间归属把平台一次推送携带的多个提交都算平台。
  */
 
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { durableWriteFileSync } from "../durableWrite.ts";
@@ -52,13 +52,19 @@ import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
 export const ISSUE_CODE_ORIGIN_FILE = "code-origin.json";
 
 /** 伴生结构的版本号:归属口径(工作量/触发集/白名单/区间规则)换版时 +1。
- *  v2(2026-09-20):占比改工作量口径(每提交增删行均计),提交明细带
- *  adds/dels;v1 为留存行 blame 口径,读侧按缺失处理。 */
-export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 2;
+ *  v3(2026-09-22):源码白名单扩配置类后缀(json/yaml/yml/xml/
+ *  properties),工作量分母随之变化;v2(2026-09-20):占比改工作量
+ *  口径(每提交增删行均计),提交明细带 adds/dels;v1 为留存行 blame
+ *  口径,读侧按缺失处理。 */
+export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 3;
 
 /** 起算日期(支持期起点,ISO 日期):此前终态的会话永不试算、不进
- *  统计分母——清扫器判定与界面文案共用这一处常量(ADR-0044)。 */
-export const ISSUE_CODE_ORIGIN_SINCE = "2026-09-20";
+ *  统计分母——清扫器判定与界面文案共用这一处常量(ADR-0044)。
+ *  **换版纪律(工单 #380)**:快照 schema 每换版,起算日必须同步挪到
+ *  新版口径的上线日(2026-09-23 = v3 上线 09-22 后首个完整日;v2 时
+ *  曾为 09-21)。否则旧版快照会被读侧当缺失、清扫器当在场,该单永久
+ *  「待算」;旧版快照不迁移、不改写(冻结纪律:一次算清,不猜不补)。 */
+export const ISSUE_CODE_ORIGIN_SINCE = "2026-09-23";
 
 /** 达标线缺省(参数,部署可经 settings.runtime 的
  *  issue_once_generated_threshold_percent 调整;调线不动统计逻辑)。 */
@@ -69,6 +75,12 @@ const COMMAND_TIMEOUT_MS = 5 * 60_000;
 const SESSION_BUDGET_MS = 10 * 60_000;
 const LINE_BUDGET = 200_000;
 const PUSH_BUDGET = 200;
+
+/** 任务级挂死保险上限(工单 #380):整层预算 + 一条命令超时的缓冲。
+ *  到点视为挂死——告警放行,不让一个永不动了的任务堵死整条通道。 */
+const JOB_TIMEOUT_MS = SESSION_BUDGET_MS + COMMAND_TIMEOUT_MS;
+/** 命令级组杀的宽限:SIGTERM 后给收尾的余量,残留再 SIGKILL。 */
+const COMMAND_KILL_GRACE_MS = 3_000;
 
 export interface IssueCodeOriginCommit {
   sha: string;
@@ -116,6 +128,13 @@ export interface IssueCodeOriginSnapshot {
 export interface IssueCodeOriginOptions {
   /** fetch MR 分支用的 Git 凭据(与推送工具同源;缺省匿名尝试)。 */
   fetchCredential?: GitCredential;
+  /** 过程日志出口(逐仓开始等;通道与清扫器把宿主日志接进来)。 */
+  log?: (message: string) => void;
+}
+
+/** 任务级挂死保险的可注入缺省(测试用短值;生产用缺省常量)。 */
+export interface CodeOriginJobLimits {
+  jobTimeoutMs?: number;
 }
 
 // ---- 读侧聚合形状(统计端点与详情端点;web/src/api.ts 有同源镜像) ----
@@ -208,7 +227,7 @@ export interface IssueCodeOriginAggregate {
   external: number;
   /** 分母=三类行数合计(留存源码行总数)。 */
   total: number;
-  /** 一次生成占比(百分数一位小数);total=0 → null(前端显示 —)。 */
+  /** 首次生成占比(百分数一位小数);total=0 → null(前端显示 —)。 */
   share: number | null;
   /** 是否达到达标线;total=0 → null(不进分母)。 */
   pass: boolean | null;
@@ -259,8 +278,9 @@ interface GitOutcome {
 
 /** 会话工作区某仓的异步 Git 会话:受信视图建一次贯穿多次命令;需要
  *  fetch 时叠凭据沙箱(与推送工具同一套加固)。每命令带挂死保险
- *  超时;调用方再握整层预算。 */
-class AsyncWorktreeGitSession {
+ *  超时(超时按进程组整杀);调用方再握整层预算。导出供命令级组杀
+ *  的直连测试(工单 #380)。 */
+export class AsyncWorktreeGitSession {
   private constructor(
     private readonly cwd: string,
     private readonly view: SafeGitView,
@@ -280,22 +300,56 @@ class AsyncWorktreeGitSession {
 
   run(args: string[], timeoutMs = COMMAND_TIMEOUT_MS): Promise<GitOutcome> {
     return new Promise((resolve) => {
-      execFile("git", [...(this.sandbox?.args ?? []), ...args], {
+      // spawn(而非 execFile)+ detached:execFile 会丢掉 detached,
+      // 孩子不成组;超时就只能杀到 git 本身,握住继承管道的孙进程
+      // (传输器/凭据助手)让 close 永不到来,任务就此挂死(#380
+      // 生产事故)。detached(POSIX)让 git 自成进程组,超时按组整杀。
+      const child = spawn("git", [...(this.sandbox?.args ?? []), ...args], {
         cwd: this.cwd,
         env: this.view.environment(this.sandbox?.env),
-        encoding: "utf-8",
-        timeout: timeoutMs,
-        maxBuffer: 32 * 1024 * 1024,
-      }, (error, stdout, stderr) => {
-        resolve({
-          code: error && typeof (error as { code?: number }).code === "number"
-            ? (error as { code: number }).code
-            : error ? -1 : 0,
-          stdout: stdout ?? "",
-          stderr: stderr
-            || (error ? String((error as Error & { message?: string }).message) : ""),
-        });
+        detached: process.platform !== "win32",
       });
+      let stdout = "";
+      let stderr = "";
+      let overflow = false;
+      const cap = 32 * 1024 * 1024;
+      child.stdout.on("data", (chunk: Buffer) => {
+        if (stdout.length < cap) stdout += chunk.toString("utf-8");
+        else overflow = true;
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        if (stderr.length < cap) stderr += chunk.toString("utf-8");
+        else overflow = true;
+      });
+      let killTimer: NodeJS.Timeout | undefined;
+      let graceTimer: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (code: number, note?: string): void => {
+        if (settled) return;
+        settled = true;
+        if (killTimer !== undefined) clearTimeout(killTimer);
+        if (graceTimer !== undefined) clearTimeout(graceTimer);
+        resolve({
+          code,
+          stdout,
+          stderr: note ? `${stderr}\n${note}` : stderr,
+        });
+      };
+      child.on("error", (error) => {
+        finish(-1, String(error instanceof Error ? error.message : error));
+      });
+      child.on("close", (code) => {
+        finish(overflow || code === null ? -1 : code,
+          overflow ? "输出超过 32MB 上限,已截断" : undefined);
+      });
+      // 计时自管。unref:计时器不拦进程退出,退出即同归于尽。
+      killTimer = setTimeout(() => {
+        killCommandTree(child, "SIGTERM");
+        graceTimer = setTimeout(
+          () => killCommandTree(child, "SIGKILL"), COMMAND_KILL_GRACE_MS);
+        graceTimer?.unref();
+      }, timeoutMs);
+      killTimer.unref();
     });
   }
 
@@ -312,6 +366,22 @@ class AsyncWorktreeGitSession {
     this.sandbox?.cleanup();
     this.view.cleanup();
   }
+}
+
+/** 按进程组发信号(detached 时子进程自成一组,孙进程一并带走);
+ *  组已不在(ESRCH)退回单杀;Windows 无进程组,单杀。 */
+function killCommandTree(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-pid, signal);
+      return;
+    } catch {
+      /* 组已退出,退单杀 */
+    }
+  }
+  try { child.kill(signal); } catch { /* 已退出 */ }
 }
 
 function firstErrorLine(text: string): string {
@@ -618,7 +688,7 @@ export async function buildCodeOriginSnapshot(
   const startedAt = Date.now();
   const budget = () => {
     if (Date.now() - startedAt > SESSION_BUDGET_MS) {
-      throw new Error("一次生成归属超过十分钟预算,该仓暂不计入");
+      throw new Error("首次生成归属超过十分钟预算,该仓暂不计入");
     }
   };
   const pushes = ledgerPushes(state.transitions ?? []);
@@ -633,6 +703,8 @@ export async function buildCodeOriginSnapshot(
   const dataDir = join(root, "..", "..");
   const byRepo: IssueCodeOriginRepo[] = [];
   for (const group of groupPushes(pushes)) {
+    options.log?.(`[issue-flow] ${state.id} 首次生成归属 `
+      + `${group.repo} 开始计算`);
     const workspace = issueRepoWorkspaces(state, root).find(
       (entry) => entry.url === group.repo)?.dir;
     const session = workspace
@@ -694,13 +766,35 @@ export async function writeCodeOriginSnapshot(
 }
 
 // ---- 后台串行通道(归档响应不等计算;现场回收让路) ----
+// 队列+单跑循环(工单 #380):promise 链版本里一个任务永不返回就堵死
+// 整条通道,且从外面既拆不开也看不见;现在任务显式排队,每个任务都握
+// 任务级挂死保险——到点告警放行,通道继续,挂死单交清扫器收尾。
+
+interface CodeOriginHooks {
+  onSettled?: () => void;
+  log?: (message: string) => void;
+}
+
+interface LaneJob {
+  key: string;
+  root: string;
+  state: IssueSessionState;
+  options: IssueCodeOriginOptions;
+  hooks: CodeOriginHooks;
+  limits: CodeOriginJobLimits;
+  /** 通道任务自身收尾(算完或被挂死保险放行)的出口;兜底补算等它。 */
+  release: () => void;
+  promise: Promise<void>;
+}
 
 const pending = new Map<string, Promise<void>>();
-let lane: Promise<void> = Promise.resolve();
+const queue: LaneJob[] = [];
+let draining = false;
+let drainPromise: Promise<void> = Promise.resolve();
 
 /** 等待通道排空(测试与服务停机前收尾用)。 */
 export async function awaitCodeOriginLane(): Promise<void> {
-  await lane;
+  await drainPromise;
 }
 
 export function codeOriginPending(root: string): boolean {
@@ -709,12 +803,14 @@ export function codeOriginPending(root: string): boolean {
 
 /** 归档后入队:伴生已在/不支持期/无仓=不入队(返回 false,调用方立即
  *  回收现场);入队则任务收尾(成败皆算)后回调 onSettled——调用方把
- *  现场回收挂在它后面。写盘失败只记日志,绝不阻塞收口。 */
+ *  现场回收挂在它后面。写盘失败只记日志,绝不阻塞收口;任务级超限的
+ *  挂死除外:不调 onSettled,现场留给每日清扫器补算后回收。 */
 export function enqueueCodeOrigin(
   root: string,
   state: IssueSessionState,
   options: IssueCodeOriginOptions,
-  hooks: { onSettled?: () => void; log?: (message: string) => void } = {},
+  hooks: CodeOriginHooks = {},
+  limits: CodeOriginJobLimits = {},
 ): boolean {
   const key = join(root, ISSUE_CODE_ORIGIN_FILE);
   if (pending.has(key)) return true;
@@ -724,35 +820,107 @@ export function enqueueCodeOrigin(
     ? state.repo_urls
     : state.repo_url ? [state.repo_url] : [];
   if (!repoUrls.length) return false;
-  const job = lane.then(async () => {
-    try {
-      const result = await writeCodeOriginSnapshot(root, state, options);
-      if (result.written) {
-        hooks.log?.(`[issue-flow] ${state.id} 一次生成归属已冻结`
-          + (result.degraded.length ? `(缺项:${result.degraded.join("、")})` : ""));
-      }
-    } catch (error) {
-      hooks.log?.(`[issue-flow] ${state.id} 一次生成归属生成失败`
-        + `(不阻塞收口,清扫器兜底): `
-        + String(error instanceof Error ? error.message : error));
-    }
-  }).finally(() => {
-    pending.delete(key);
-    hooks.onSettled?.();
-  });
-  pending.set(key, job);
-  lane = job;
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => { release = resolve; });
+  const job: LaneJob = {
+    key, root, state, options, hooks, limits, release, promise,
+  };
+  queue.push(job);
+  pending.set(key, promise);
+  hooks.log?.(`[issue-flow] ${state.id} 首次生成归属已入队(队列 ${queue.length})`);
+  drain();
   return true;
+}
+
+function drain(): void {
+  if (draining) return;
+  draining = true;
+  drainPromise = (async () => {
+    try {
+      for (let job = queue.shift(); job; job = queue.shift()) {
+        await runLaneJob(job);
+      }
+    } finally {
+      draining = false;
+    }
+  })();
+}
+
+/** 单任务执行:任务级挂死保险到点告警放行。被放行的任务体留在后台
+ *  继续(不可取消)——它若最终自己写盘,只写一次语义照常生效。 */
+async function runLaneJob(job: LaneJob): Promise<void> {
+  const startedAt = Date.now();
+  job.hooks.log?.(`[issue-flow] ${job.state.id} 首次生成归属开始计算`);
+  let released = false;
+  await raceJobTimeout(
+    job.limits.jobTimeoutMs ?? JOB_TIMEOUT_MS,
+    runJobBody(job, startedAt),
+    () => { released = true; },
+  );
+  pending.delete(job.key);
+  job.release();
+  if (released) {
+    job.hooks.log?.(`[issue-flow] ${job.state.id} 首次生成归属超时告警`
+      + `(耗时 ${fmtElapsed(Date.now() - startedAt)},疑似挂死,已放行后续;`
+      + `现场回收交每日清扫器)`);
+    return;
+  }
+  job.hooks.onSettled?.();
+}
+
+async function runJobBody(job: LaneJob, startedAt: number): Promise<void> {
+  const elapsed = () => fmtElapsed(Date.now() - startedAt);
+  try {
+    const result = await writeCodeOriginSnapshot(job.root, job.state, {
+      ...job.options,
+      log: job.hooks.log ?? job.options.log,
+    });
+    if (result.written) {
+      job.hooks.log?.(`[issue-flow] ${job.state.id} 首次生成归属已冻结`
+        + `(耗时 ${elapsed()})`
+        + (result.degraded.length ? `(缺项:${result.degraded.join("、")})` : ""));
+    }
+  } catch (error) {
+    job.hooks.log?.(`[issue-flow] ${job.state.id} 首次生成归属生成失败`
+      + `(耗时 ${elapsed()},不阻塞收口,清扫器兜底): `
+      + String(error instanceof Error ? error.message : error));
+  }
+}
+
+/** 任务级挂死保险:到点触发 onTimeout 并放行等待方;任务体不受影响
+ *  继续跑(不可取消),成败仍由它自己的写盘判定。 */
+async function raceJobTimeout<T>(
+  timeoutMs: number,
+  work: Promise<T>,
+  onTimeout: () => void,
+): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  const guard = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => { onTimeout(); resolve(undefined); }, timeoutMs);
+  });
+  timer?.unref();
+  try {
+    return await Promise.race([work, guard]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function fmtElapsed(ms: number): string {
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 /** 清扫器兜底(工单 #336):现场还在而伴生缺失(进程曾在归档与算完
  *  之间退出),回收前补算一次。通道在途的让路(等它跑完);支持期
- *  外的返回 false 不试算。 */
+ *  外的返回 false 不试算。补算自身也握任务级挂死保险(工单 #380):
+ *  单次补算挂死只损失这一单,不拖死整轮清扫。 */
 export async function backfillCodeOrigin(
   root: string,
   state: IssueSessionState,
   options: IssueCodeOriginOptions,
   log: (message: string) => void = () => {},
+  limits: CodeOriginJobLimits = {},
 ): Promise<boolean> {
   const key = join(root, ISSUE_CODE_ORIGIN_FILE);
   if (existsSync(key) || !codeOriginSupported(state)) return false;
@@ -764,16 +932,29 @@ export async function backfillCodeOrigin(
     ? state.repo_urls
     : state.repo_url ? [state.repo_url] : [];
   if (!repoUrls.length) return false;
-  try {
-    const result = await writeCodeOriginSnapshot(root, state, options);
-    if (result.written) {
-      log(`[issue-flow] ${state.id} 一次生成归属补算已冻结`
-        + (result.degraded.length ? `(缺项:${result.degraded.join("、")})` : ""));
+  log(`[issue-flow] ${state.id} 首次生成归属开始补算`);
+  const startedAt = Date.now();
+  const elapsed = () => fmtElapsed(Date.now() - startedAt);
+  let written = false;
+  let released = false;
+  await raceJobTimeout(limits.jobTimeoutMs ?? JOB_TIMEOUT_MS, (async () => {
+    try {
+      const result = await writeCodeOriginSnapshot(root, state,
+        { ...options, log });
+      written = result.written;
+      if (result.written) {
+        log(`[issue-flow] ${state.id} 首次生成归属补算已冻结(耗时 ${elapsed()})`
+          + (result.degraded.length ? `(缺项:${result.degraded.join("、")})` : ""));
+      }
+    } catch (error) {
+      log(`[issue-flow] ${state.id} 首次生成归属补算失败(耗时 ${elapsed()},`
+        + `不阻塞回收): `
+        + String(error instanceof Error ? error.message : error));
     }
-    return result.written;
-  } catch (error) {
-    log(`[issue-flow] ${state.id} 一次生成归属补算失败(不阻塞回收): `
-      + String(error instanceof Error ? error.message : error));
-    return false;
+  })(), () => { released = true; });
+  if (released) {
+    log(`[issue-flow] ${state.id} 首次生成归属超时告警(补算,`
+      + `耗时 ${elapsed()},疑似挂死,不阻塞回收)`);
   }
+  return written;
 }
