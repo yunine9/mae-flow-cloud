@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
+import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
 import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { fetchMrGates } from "./mrGateClient.ts";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
@@ -39,7 +40,14 @@ export class KnowledgeMrPublisher {
       const env = { ...prepared.env };
       for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
       const result = await runGitProcess([...prepared.args, ...gitCommitIdentityConfigs(identity.credential).flatMap(([key, value]) => ["-c", `${key}=${value}`]), ...args], { cwd: root, env, timeoutMs: 90_000 });
-      if (result.status !== 0 && !allowFailure) throw new Error("知识文档 Git 操作失败，请检查个人权限、分支和网络；未覆盖远端提交");
+      if (result.status !== 0 && !allowFailure) {
+        const output = `${result.stderr}\n${result.stdout}`;
+        if (commitHookRejection(output)) {
+          const sha = rejectedCommitSha(output);
+          throw new Error(`CodeHub 拒绝推送：提交说明不符合仓库规范${sha ? `（提交 ${sha.slice(0, 12)}）` : ""}，请检查仓库提交格式要求`);
+        }
+        throw new Error("知识文档 Git 操作失败，请检查个人权限、分支和网络；未覆盖远端提交");
+      }
       return result.status === 0 ? result.stdout : "";
     };
     try { await git(["init", "--bare"]); return await work(git, root); }
@@ -160,7 +168,7 @@ export class KnowledgeMrPublisher {
       }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
       if (!remote && tree === before) { publication.cleanup_id = cleanup?.id ?? publication.cleanup_id; publication.state = "unchanged"; publication.revision = parent; const result = await this.refresh(job, publication, operator); save(result); return result; }
-      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", job.cleanup_only ? `docs(${issue}): 清理萃取前旧知识` : `docs: 更新${job.title}知识`])).trim();
+      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", cloudCommitSubject(issue, "feat", job.cleanup_only ? "清理萃取前旧知识" : `更新${job.title}知识`)])).trim();
       publication.revision = sha; saveAttempt();
       if (sha !== remote) await git(["push", target.repository, `${sha}:refs/heads/${branch}`]);
       publication.cleanup_id = cleanup?.id ?? publication.cleanup_id;

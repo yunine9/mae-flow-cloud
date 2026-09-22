@@ -48,7 +48,7 @@ test("领域清理只提交删除 MR，响应丢失复用分支，创建后不�
     const publication = task.source_cleanup!.publications[0]; assert.equal(publication.state, "opened");
     assert.equal(git(remote, "ls-tree", "-r", "--name-only", publication.branch), "code.ts", "MR contains only deletions, never draft additions");
     assert.match(git(remote, "show", "master:docs/old/rules.md"), /POISON/);
-    assert.match(git(remote, "log", "-1", "--format=%s", publication.branch), /REQ-cleanup/);
+    assert.equal(git(remote, "log", "-1", "--format=%s", publication.branch).trim(), "[REQ_cleanup][feat]清理萃取前旧知识");
     const queriesBefore = gateQueries;
     await prepare.action(task, "publish", { paths_by_target }, "dev", save);
     assert.equal(gateQueries, queriesBefore, "created MR is retained without state checks");

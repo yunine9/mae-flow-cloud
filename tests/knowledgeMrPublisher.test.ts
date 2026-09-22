@@ -49,10 +49,17 @@ test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库
     const first = await publisher.publish(job, target, saved, "expert", save);
     assert.equal(count, 1, "响应丢失后找回同一 MR"); assert.equal(first.url, mrs[0].url);
     assert.equal(git(remote, "show", `${first.branch}:code.ts`), "original code");
+    assert.equal(git(remote, "log", "-1", "--format=%s", first.branch), "[REQ_knowledge_123][feat]更新订单知识");
     job.documents[0].content = "# 状态\n已支付"; job.documents[0].revision = 2; job.documents[1].selected = false;
     // Rejected pushes preserve the confirmed version and can safely retry the same MR.
     const hook = join(remote, "hooks", "pre-receive"); writeFileSync(hook, "#!/bin/sh\nexit 1\n"); chmodSync(hook, 0o700);
     await assert.rejects(publisher.publish(job, target, first, "expert", save), /Git 操作失败/);
+    writeFileSync(hook, "#!/bin/sh\necho \"Deny by project hooks setting 'default': message of commit 'abcdef1234567890' does not match the regular-expression\" >&2\necho 'fixture-password' >&2\nexit 1\n");
+    await assert.rejects(publisher.publish(job, target, first, "expert", save), (error: Error) => {
+      assert.match(error.message, /CodeHub.*提交说明不符合仓库规范.*abcdef123456/);
+      assert.doesNotMatch(error.message, /fixture-password/);
+      return true;
+    });
     assert.match(saved!.documents[0].content, /已创建/); assert.match(saved!.attempted_documents![0].content, /已支付/);
     rmSync(hook);
     const second = await publisher.publish(job, target, saved, "expert", save);
