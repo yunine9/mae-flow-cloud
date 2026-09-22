@@ -29,6 +29,10 @@
  * 返工边界=首个反馈事件(ledgerFacts.feedbackEvents:检视批次送出/
  * 红灯按失败处理/验证发现问题)所回应的那笔推送(会话级全局边界,
  * 多仓共用)。区间归属把平台一次推送携带的多个提交都算平台。
+ *
+ * 被 force push(强制覆盖远端同名分支的重推)覆盖的平台提交,对象
+ * 仍在本仓现场时按原分类补计工作量(ADR-0051)——首轮代码被覆盖
+ * 不等于没写过;对象已回收的补不出,如实跳过。
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -52,19 +56,29 @@ import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
 export const ISSUE_CODE_ORIGIN_FILE = "code-origin.json";
 
 /** 伴生结构的版本号:归属口径(工作量/触发集/白名单/区间规则)换版时 +1。
- *  v3(2026-09-22):源码白名单扩配置类后缀(json/yaml/yml/xml/
- *  properties),工作量分母随之变化;v2(2026-09-20):占比改工作量
- *  口径(每提交增删行均计),提交明细带 adds/dels;v1 为留存行 blame
- *  口径,读侧按缺失处理。 */
-export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 3;
+ *  v4(2026-09-22):被 force push 覆盖的平台提交按原分类补计工作量,
+ *  提交明细带 overwritten 标记(#377,ADR-0051);v3(2026-09-22):
+ *  源码白名单扩配置类后缀(json/yaml/yml/xml/properties),工作量分母
+ *  随之变化;v2(2026-09-20):占比改工作量口径(每提交增删行均计),
+ *  提交明细带 adds/dels;v1 为留存行 blame 口径,读侧拒收。 */
+export const ISSUE_CODE_ORIGIN_SCHEMA_VERSION = 4;
+
+/** 读侧兼容的最低版本:v2 起与当前同为工作量度量,v2/v3 相对 v4 只是
+ *  精度缺口(被覆盖提交与配置类后缀漏计),方向恒为保守(旧版数字
+ *  不高于新版),混读不是编造,读侧照收(ADR-0051)——v1 的留存行
+ *  blame 是另一个度量,不在其列。 */
+export const ISSUE_CODE_ORIGIN_READABLE_SINCE = 2;
 
 /** 起算日期(支持期起点,ISO 日期):此前终态的会话永不试算、不进
  *  统计分母——清扫器判定与界面文案共用这一处常量(ADR-0044)。
- *  **换版纪律(工单 #380)**:快照 schema 每换版,起算日必须同步挪到
- *  新版口径的上线日(2026-09-23 = v3 上线 09-22 后首个完整日;v2 时
- *  曾为 09-21)。否则旧版快照会被读侧当缺失、清扫器当在场,该单永久
- *  「待算」;旧版快照不迁移、不改写(冻结纪律:一次算清,不猜不补)。 */
-export const ISSUE_CODE_ORIGIN_SINCE = "2026-09-23";
+ *  **换版纪律(工单 #380 立,ADR-0051 修)**:schema 换版若产生
+ *  **不可换算的两个度量**(v1 留存行 blame → v2 工作量),起算日必须
+ *  同步挪到新版口径的上线日、旧版快照退役——否则旧版快照读侧当缺失、
+ *  清扫器当在场,该单永久「待算」;旧版快照一律不迁移、不改写(冻结
+ *  纪律:一次算清,不猜不补)。同一度量的精度扩充(v3 白名单扩后缀、
+ *  v4 覆盖提交补计)方向恒为保守,读侧保留旧版可读、起算日不动——
+ *  当前 09-21 = v2 上线后的首个完整日,v3 曾挪 09-23、随判据退回。 */
+export const ISSUE_CODE_ORIGIN_SINCE = "2026-09-21";
 
 /** 达标线缺省(参数,部署可经 settings.runtime 的
  *  issue_once_generated_threshold_percent 调整;调线不动统计逻辑)。 */
@@ -91,6 +105,9 @@ export interface IssueCodeOriginCommit {
   adds: number;
   /** 该提交的源码删除行数(与新增同权,均为正向工作量)。 */
   dels: number;
+  /** 该提交已被 force push 覆盖、不在最终历史里(v4 补计;v2/v3 数据
+   *  无此字段=留存提交)。 */
+  overwritten?: boolean;
 }
 
 export interface IssueCodeOriginRepoOk {
@@ -107,9 +124,11 @@ export interface IssueCodeOriginRepoOk {
   boundary:
     | { kind: FeedbackEventKind; at: string; push_sha: string }
     | null;
-  /** 最终留存源码行三分类(平台外行计入分母,不计入分子)。 */
+  /** 平台交付工作量三分类(源码增+删工作行;平台外计入分母,不计入
+   *  分子;v4 起含被 force push 覆盖的提交)。 */
   lines: { first: number; rework: number; external: number };
-  /** 拥有留存行的提交(证据面:每行数从哪来)。 */
+  /** 拥有工作行的提交(证据面:每行数从哪来;含被覆盖提交,见
+   *  overwritten)。 */
   commits: IssueCodeOriginCommit[];
 }
 
@@ -225,12 +244,25 @@ export interface IssueCodeOriginAggregate {
   first: number;
   rework: number;
   external: number;
-  /** 分母=三类行数合计(留存源码行总数)。 */
+  /** 分母=三类工作行合计。 */
   total: number;
   /** 首次生成占比(百分数一位小数);total=0 → null(前端显示 —)。 */
   share: number | null;
   /** 是否达到达标线;total=0 → null(不进分母)。 */
   pass: boolean | null;
+}
+
+/** 读侧版本判定:v2 起与当前同为工作量度量,旧版精度缺口方向恒为
+ *  保守,混读不是编造(ADR-0051);v1(留存行 blame)与畸形/未来
+ *  版本拒收。 */
+function readableCodeOrigin(
+  snapshot: IssueCodeOriginSnapshot | undefined,
+): snapshot is IssueCodeOriginSnapshot {
+  return snapshot !== undefined
+    && typeof snapshot.schema_version === "number"
+    && Number.isInteger(snapshot.schema_version)
+    && snapshot.schema_version >= ISSUE_CODE_ORIGIN_READABLE_SINCE
+    && snapshot.schema_version <= ISSUE_CODE_ORIGIN_SCHEMA_VERSION;
 }
 
 /** 聚合(行数加权):只吃「可得」仓;全部降级/无源码行时 total=0,
@@ -240,7 +272,7 @@ export function aggregateCodeOrigin(
   thresholdPercent = ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT,
 ): IssueCodeOriginAggregate {
   const lines = { first: 0, rework: 0, external: 0 };
-  if (snapshot && snapshot.schema_version === ISSUE_CODE_ORIGIN_SCHEMA_VERSION) {
+  if (readableCodeOrigin(snapshot)) {
     for (const repo of snapshot.by_repo) {
       if ("unavailable" in repo) continue;
       lines.first += repo.lines.first;
@@ -585,22 +617,27 @@ async function attributeOneRepo(
   if (group.shas.length > PUSH_BUDGET) {
     throw new Error(`推送笔数超过统计预算(${group.shas.length})`);
   }
-  const tips: string[] = [];
+  //  逐笔解析、保留原始下标:某笔对象缺失(被覆盖后现场重克隆等)只
+  //  跳过该笔,分类时刻仍按各自推送时刻取——压缩数组取下标会错位,把
+  //  后面的推送按前面的时刻分类(#377)。
+  const resolved: Array<string | undefined> = [];
   for (const sha of group.shas) {
-    const resolved = await resolveCommit(session, sha);
-    if (resolved) tips.push(resolved);
+    resolved.push(await resolveCommit(session, sha));
   }
-  if (!tips.length) throw new Error("推送账里的提交对象在工作区都取不到");
+  if (!resolved.some(Boolean)) {
+    throw new Error("推送账里的提交对象在工作区都取不到");
+  }
   const classify = new Map<string, "first" | "rework">();
-  for (let index = 0; index < tips.length; index += 1) {
-    const tip = tips[index]!;
+  let prevTip: string | undefined;
+  for (let index = 0; index < resolved.length; index += 1) {
+    const tip = resolved[index];
+    if (!tip) continue;
     budget();
-    const range = index === 0
-      ? `${baseCut}..${tip}`
-      : `${tips[index - 1]!}..${tip}`;
+    const range = `${prevTip ?? baseCut}..${tip}`;
     const listed = await session.run([
       "rev-list", "--reverse", "--no-merges", range]);
-    if (listed.code !== 0) continue; // 单笔对象缺失跳过,不废整仓
+    prevTip = tip;
+    if (listed.code !== 0) continue; // 单笔区间读取失败跳过,不废整仓
     const phase: "first" | "rework" =
       boundary && group.ats[index]! > boundary.at ? "rework" : "first";
     for (const sha of listed.stdout.trim().split("\n").filter(Boolean)) {
@@ -647,6 +684,39 @@ async function attributeOneRepo(
       origin, adds, dels,
     });
   }
+
+  // 5) 被覆盖提交补计(#377,ADR-0051):分类账里有、但不在最终历史
+  //    (base..head)里的提交 = 被 force push 覆盖掉的平台提交。首轮
+  //    代码被覆盖不等于没写过,工作量按原分类补进分子分母;归类走
+  //    originOf(外部头观测在案的仍判平台外,与留存提交同尺)。提交
+  //    对象已被回收(现场重克隆/回收)时读取失败跳过,不阻塞整仓;
+  //    补计行数同受行数预算约束。
+  const survived = new Set(allShas.map((sha) => sha.toLowerCase()));
+  for (const [sha, phase] of classify) {
+    if (survived.has(sha)) continue;
+    budget();
+    const origin = originOf(sha);
+    let work: { adds: number; dels: number };
+    try {
+      work = await commitWork(session, budget, sha);
+    } catch {
+      continue; // 对象已被回收,补不出工作量,如实跳过
+    }
+    const workLines = work.adds + work.dels;
+    if (workLines <= 0) continue; // 纯改名/纯非源码提交不占统计
+    lines[origin] += workLines;
+    workTotal += workLines;
+    if (workTotal > LINE_BUDGET) {
+      throw new Error(`代码规模超过统计预算(${workTotal} 行)`);
+    }
+    const show = await session.run(
+      ["show", "-s", "--format=%cI%x1f%s", sha], 30_000);
+    const [at, subject] = show.stdout.trim().split("\x1f");
+    commits.set(sha, {
+      sha, at: at ?? "", subject: subject ?? "",
+      origin, adds: work.adds, dels: work.dels, overwritten: true,
+    });
+  }
   return {
     repo: group.repo,
     branch: group.branch,
@@ -670,7 +740,7 @@ export function readCodeOriginSnapshot(
   if (!existsSync(path)) return undefined;
   try {
     const snapshot = JSON.parse(readFileSync(path, "utf-8")) as IssueCodeOriginSnapshot;
-    if (snapshot?.schema_version !== ISSUE_CODE_ORIGIN_SCHEMA_VERSION) return undefined;
+    if (!readableCodeOrigin(snapshot)) return undefined;
     if (snapshot.session_id !== sessionId) return undefined;
     return snapshot;
   } catch {

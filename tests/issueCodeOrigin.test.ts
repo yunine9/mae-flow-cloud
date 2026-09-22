@@ -20,6 +20,10 @@
  * 9. 落盘语义:只写一次(重复写跳过);enqueue 入队算完落盘、
  *    onSettled 收尾;backfill 对缺失补算、对在场跳过;支持期外
  *    (起算日期前终态)不入队不试算。
+ * 10. 强推覆盖首轮:被覆盖提交按原分类补计工作量,明细带
+ *     overwritten(#377,ADR-0051);
+ * 11. 中间推送对象缺失:分类按各自推送时刻取,不错位(#377);
+ * 12. 读侧版本混读:v2..v4 同度量可读,v1/未来版本拒收(ADR-0051)。
  *
  * 范式:issueMetricsAttribution 的假远端(bareOrigin)+ 种子现场直写
  * issue.json;归属层纯构建函数直测(async)。
@@ -28,7 +32,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import {
@@ -219,6 +223,39 @@ test("聚合:降级仓跳过;分母 0 → null;达标线按占比判", () => {
   assert.equal(empty.pass, null);
 });
 
+test("读侧版本混读:v2..v4 同度量可读;v1 与未来版本拒收(ADR-0051)", () => {
+  const build = (version: number) => ({
+    schema_version: version, generated_at: "now", session_id: "x",
+    by_repo: [{ repo: "a", branch: "b",
+      lines: { first: 60, rework: 20, external: 20 } }],
+  } as unknown as IssueCodeOriginSnapshot);
+  for (const version of [2, 3, 4]) {
+    const aggregate = aggregateCodeOrigin(build(version), 60);
+    assert.equal(aggregate.total, 100, `v${version} 应可读`);
+  }
+  for (const version of [1, 5]) {
+    const aggregate = aggregateCodeOrigin(build(version), 60);
+    assert.equal(aggregate.total, 0, `v${version} 应拒收`);
+  }
+  // 磁盘路径同尺:readCodeOriginSnapshot 对 v2/v3/v4 收,v1/未来拒。
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const root = join(tmp, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const freeze = (version: number) => writeFileSync(
+    join(root, ISSUE_CODE_ORIGIN_FILE), JSON.stringify({
+      schema_version: version, generated_at: "now", session_id: "issue-1",
+      by_repo: [],
+    }));
+  freeze(2);
+  assert.ok(readCodeOriginSnapshot(root, "issue-1"), "v2 文件应可读");
+  freeze(4);
+  assert.ok(readCodeOriginSnapshot(root, "issue-1"), "v4 文件应可读");
+  freeze(1);
+  assert.equal(readCodeOriginSnapshot(root, "issue-1"), undefined, "v1 拒收");
+  freeze(5);
+  assert.equal(readCodeOriginSnapshot(root, "issue-1"), undefined, "未来版本拒收");
+});
+
 // ---- 真仓夹具 ----
 
 test("单推送无反馈:全部工作行计首轮,占比 100;md 不进分母", async () => {
@@ -272,6 +309,83 @@ test("两推送夹一次验证失败:边界前工作行首轮、边界后行返�
   const aggregate = aggregateCodeOrigin(snapshot, 90);
   assert.equal(aggregate.share, 50);
   assert.equal(aggregate.pass, false);
+});
+
+test("force push 覆盖首轮:被覆盖提交按原分类补计,明细带 overwritten(#377)", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const root = join(tmp, "issues", "issue-1");
+  const origin = bareOrigin(tmp);
+  const dir = seedWorkspace(root, origin);
+  const first = pushPlatformAfter(dir, { "src/a.ts": lines(10) }, "首轮实现");
+  // 反馈打回后 force push 整体重写:首轮提交被覆盖,不在最终历史里,
+  // 但对象仍在工作区(git 对象不随分支重写消失)。
+  const verifyFail = "第 1 轮:用户环境验证发现问题:改的不对,回退掉";
+  git(dir, "reset", "-q", "--hard", "origin/master");
+  commitFiles(dir, "推倒重写", { "src/b.ts": lines(12) });
+  git(dir, "push", "-q", "--force", "origin", BRANCH);
+  const second = git(dir, "rev-parse", "HEAD");
+  const state = seedState(root, origin, {
+    events: [
+      { at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, first) },
+      { at: "2026-09-20T02:30:00.000Z", note: verifyFail },
+      { at: "2026-09-20T03:00:00.000Z", note: pushNote(origin, second) },
+    ],
+  });
+  const snapshot = await buildCodeOriginSnapshot(root, state);
+  const repo = repoOk(snapshot);
+  // 首轮被覆盖≠没写过:被覆盖的 10 行按原分类(边界前)补进首轮,
+  // 重写的 12 行计返工——旧口径下这里是 first=0、占比 0%(issue-74)。
+  assert.deepEqual(repo.lines, { first: 10, rework: 12, external: 0 });
+  const overwritten = repo.commits.find((commit) => commit.sha === first);
+  assert.ok(overwritten, "被覆盖提交应进证据明细");
+  assert.equal(overwritten!.overwritten, true);
+  assert.equal(overwritten!.origin, "first");
+  const survived = repo.commits.find((commit) => commit.sha === second);
+  assert.ok(survived);
+  assert.notEqual(survived!.overwritten, true, "留存提交不带覆盖标记");
+  const aggregate = aggregateCodeOrigin(snapshot, 90);
+  assert.equal(aggregate.share, 45.5);
+  assert.equal(aggregate.pass, false);
+});
+
+test("中间推送对象缺失:分类按各自推送时刻取,不错位(#377)", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const root = join(tmp, "issues", "issue-1");
+  const origin = bareOrigin(tmp);
+  const dir = seedWorkspace(root, origin);
+  const first = pushPlatformAfter(dir, { "src/a.ts": lines(10) }, "首轮");
+  // 强推重写后把工作区整个换成全新克隆:首轮提交对象从此取不到。
+  // 必须 --no-local——本地路径克隆默认硬链接远端对象库的**全部**对象
+  // (含不可达的),不用传输协议就造不出「对象缺失」。
+  git(dir, "reset", "-q", "--hard", "origin/master");
+  commitFiles(dir, "推倒重写", { "src/b.ts": lines(12) });
+  git(dir, "push", "-q", "--force", "origin", BRANCH);
+  const second = git(dir, "rev-parse", "HEAD");
+  rmSync(dir, { recursive: true, force: true });
+  rawGit(["clone", "-q", "--no-local", origin, dir]);
+  git(dir, "checkout", "-q", BRANCH);
+  let firstResolvable = false;
+  try {
+    git(dir, "rev-parse", "--verify", `${first}^{commit}`);
+    firstResolvable = true;
+  } catch { /* 对象不在:预期 */ }
+  assert.equal(firstResolvable, false,
+    "夹具失效:首轮提交对象在全新克隆里仍可解析,测不到错位路径");
+  const state = seedState(root, origin, {
+    events: [
+      { at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, first) },
+      { at: "2026-09-20T02:30:00.000Z",
+        note: "第 1 轮:用户环境验证发现问题:改的不对,回退掉" },
+      { at: "2026-09-20T03:00:00.000Z", note: pushNote(origin, second) },
+    ],
+  });
+  const snapshot = await buildCodeOriginSnapshot(root, state);
+  const repo = repoOk(snapshot);
+  // 重写推送(03:00)晚于边界(02:30):整笔计返工。旧实现用压缩后
+  // 的数组下标取时刻,首笔缺失时会把这笔按首笔时刻(02:00)误判首轮。
+  assert.deepEqual(repo.lines, { first: 0, rework: 12, external: 0 });
+  assert.ok(repo.boundary);
+  assert.equal(repo.boundary!.push_sha, first.slice(0, 12));
 });
 
 test("平台外尾部提交:fetch 拿到对象,行进分母不计分子,口径=mr_branch", async () => {
@@ -412,9 +526,9 @@ async function seedComputableSession(root: string): Promise<string> {
   const state = seedState(root, origin, {
     events: [{ at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, sha) }],
   });
-  // 结论时刻钉在起算日(2026-09-23,白名单扩配置后缀的 v3 换版)之后
-  // (测试机真实时钟可能仍在 UTC 前一天,不能拿 new Date() 赌支持期判定)。
-  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-23T12:00:00.000Z" };
+  // 结论时刻钉在起算日(2026-09-21,v2 首个完整日)之后(测试机真实
+  // 时钟可能仍在前一天,不能拿 new Date() 赌支持期判定)。
+  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-21T12:00:00.000Z" };
   writeFileSync(join(root, "issue.json"), JSON.stringify(state, null, 1));
   return origin;
 }
@@ -619,18 +733,23 @@ function seedHangSession(tmp: string, name: string): {
       note: pushNote(origin, trap.sha) }],
   });
   // 结论时刻钉在起算日之后(理由同 seedComputableSession:真实时钟
-  // 可能还早于新起算日,不拿 new Date() 赌支持期判定)。
-  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-23T12:00:00.000Z" };
+  // 可能还早于起算日,不拿 new Date() 赌支持期判定)。
+  state.conclusion = { kind: "delivered", summary: "", at: "2026-09-21T12:00:00.000Z" };
   writeFileSync(join(root, "issue.json"), JSON.stringify(state, null, 1));
   return { root, state, unblock: trap.unblock };
 }
 
-test("起算日随 v3 口径挪至 2026-09-23(白名单扩配置类后缀):换版窗口两端一端不支持、一端支持", () => {
+test("起算日 2026-09-21(v2 首个完整日;v3 曾挪 09-23,v4 按度量可换算判据退回,ADR-0051):窗口两端一端不支持、一端支持", () => {
   const delivered = (at: string) => ({
     conclusion: { kind: "delivered" as const, summary: "", at },
     updated_at: at,
   });
-  assert.equal(codeOriginSupported(delivered("2026-09-22T23:59:59.000Z")), false);
+  assert.equal(codeOriginSupported(delivered("2026-09-20T23:59:59.000Z")), false);
+  assert.equal(codeOriginSupported(delivered("2026-09-21T00:00:00.000Z")), true);
+  // v3 换版曾按「每换版必挪」把起算日推到 09-23,把 9-21/22 收口的
+  // v2 快照会话整段退休;v4 立判据(同度量精度扩充不挪)退回——
+  // 9-21/22 收口的会话重新进分母。
+  assert.equal(codeOriginSupported(delivered("2026-09-22T12:00:00.000Z")), true);
   assert.equal(codeOriginSupported(delivered("2026-09-23T00:00:00.000Z")), true);
 });
 

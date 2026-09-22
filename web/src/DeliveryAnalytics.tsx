@@ -143,7 +143,7 @@ export function IssueAnalyticsTab() {
         "验证不通过次数=0 即一次验证;未答卡=通过(合入即通过)。")}
       {tile("首次生成占比", weightedShare(stats),
         `首轮 ${num(sumLines(stats).first)} / 全部 ${num(sumLines(stats).total)} 行`,
-        "首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母。跨会话按工作行加权。")}
+        "首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}
     </div>
     <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
       {([["feature", "按特性"], ["session", "按会话"], ["repo", "按代码仓"]] as const).map(([key, label]) =>
@@ -204,7 +204,7 @@ export function IssueAnalyticsTab() {
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
       <p>一次定位率=分析报告一版过;一次验证率=验证不通过 0 次(未答卡=通过);一次解决率=两者同时;分母均为完成交付会话。</p>
-      <p>首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内);返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
+      <p>首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内);返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;被强制覆盖(force push)的平台推送按原分类计入,证据表里标「已覆盖」;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
       <SheetContent className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]">
