@@ -16,11 +16,12 @@ import { createKnowledgeCandidate, decideKnowledgeCandidate } from
   "../src/knowledgeCandidates.ts";
 import { listWorkflowAssetCatalog } from "../src/workflowAssetRegistry.ts";
 import { resolveWorkflowAssets } from "../src/workflowAssetResolution.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 test("统一资产目录返回真实版本身份，任务解析只接受对拍成功的精确资产",
   async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-workflow-registry-"));
-    const workspace = mkdtempSync(join(tmpdir(), "mfc-workflow-snapshot-"));
+    const dataDir = mfcTemp("mfc-workflow-registry-");
+    const workspace = mfcTemp("mfc-workflow-snapshot-");
     createBusinessModule(dataDir, {
       id: "order", name: "订单", description: "订单业务", owner: "alice",
       repositories: ["https://code.example/order.git"],

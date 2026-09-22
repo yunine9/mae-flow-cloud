@@ -28,6 +28,7 @@ import {
   SKILL_SOURCE_DIR,
 } from "../src/issueFlow/prompt.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const SKILL_DIR = join(
   fileURLToPath(import.meta.url), "..", "..", "assets", "issue-skills");
@@ -145,7 +146,7 @@ test("技能指路真实性:skills/<名>/SKILL.md 引用必须指向真实物化
 
 test("整包物化:技能目录的附属物(如 fetch-logs 的 bin 引擎)必须随技能落到工作区且有执行位", () => {
   // 非标单文件物化的旧病回潮=技能携带的能力静默失效,按盘上真物验。
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-skill-materialize-"));
+  const workspace = mfcTemp("mfc-skill-materialize-");
   const paths = materializeIssueSkills(workspace);
   assert.ok(paths.length >= 3, "物化的技能数量异常");
   for (const path of paths) {

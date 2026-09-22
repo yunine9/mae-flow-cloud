@@ -39,11 +39,12 @@ import {
   publishBusinessKnowledgeAsset,
 } from "../src/businessModuleLibrary.ts";
 import { writeRequirementArtifacts } from "./requirementGraphFixture.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const SCRIPT: Scene[] = [{ text: "完成。" }];
 
 test("代码仓不可选时必须解释部署原因；正式多仓模式保持可填写", () => {
-  const base = { dataDir: mkdtempSync(join(tmpdir(), "mfc-repo-availability-")),
+  const base = { dataDir: mfcTemp("mfc-repo-availability-"),
     maxConcurrent: 0, provider: "test", model: "test", modelsJson: {} };
   const demo = new TaskService(base).launchOptions().repo;
   assert.equal(demo.enabled, false);
@@ -63,7 +64,7 @@ test("代码仓不可选时必须解释部署原因；正式多仓模式保持�
 });
 
 test("launch-options:生效模型来自 models.json,设置层压部署层", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-"));
+  const dataDir = mfcTemp("mfc-lf-");
   const settings = new RuntimeSettings(dataDir);
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1",
@@ -90,7 +91,7 @@ test("launch-options:生效模型来自 models.json,设置层压部署层", () =
 });
 
 test("下单审计同时记输入值、生效值与来源，不把需求全文刷进日志", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-audit-"));
+  const dataDir = mfcTemp("mfc-lf-audit-");
   const settings = new RuntimeSettings(dataDir);
   settings.updateRuntime({ repair_rounds: 3 });
   const logs: string[] = [];
@@ -152,7 +153,7 @@ test("下单审计同时记输入值、生效值与来源，不把需求全文�
 });
 
 test("业务模块目录不返回正文；下单只交 ID，服务端固定当时版本", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-module-"));
+  const dataDir = mfcTemp("mfc-lf-module-");
   createBusinessModule(dataDir, {
     id: "orders", name: "订单域", description: "订单创建与履约",
     owner: "owner-a", repositories: ["https://code.example/orders.git"],
@@ -195,7 +196,7 @@ test("同仓并行不按责任人豁免 AR 冲突；失败后重来仍沿用单�
   // 撞单的真实代价:两单派生同名分支,第二单非快进推送失败烧完预算,
   // 同分支对的 MR 还会被幂等复用互相污染(2026-08-30 审计,"跑挂了
   // 直接重下"是最常见操作)。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-dup-"));
+  const dataDir = mfcTemp("mfc-lf-dup-");
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
@@ -222,7 +223,7 @@ test("同仓并行不按责任人豁免 AR 冲突；失败后重来仍沿用单�
 
 test("多仓撞单门禁按完整 repositories 集合求交,不只比较首仓", () => {
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-multi-dup-")),
+    dataDir: mfcTemp("mfc-lf-multi-dup-"),
     provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
@@ -247,7 +248,7 @@ test("多仓撞单门禁按完整 repositories 集合求交,不只比较首仓",
 });
 
 test("团队 Skill 进入统一下单目录；普通任务自动固定全部适用版本", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-team-skill-"));
+  const dataDir = mfcTemp("mfc-lf-team-skill-");
   for (const [name, marker, language] of [
     ["java-check", "JAVA-CHECK-BODY", "java"],
     ["cpp-check", "CPP-CHECK-BODY", "cpp"],
@@ -286,7 +287,7 @@ test("模型默认自动派生:管理员只贴 models.json 也能直接用", () 
   // 实测踩到:服务起来后表单是空的,人不知道还差"再手打一遍
   // provider/model"这一步。贴完就该能用——第一个 provider 的第一个
   // 模型即默认,显式配了才压过它。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-auto-"));
+  const dataDir = mfcTemp("mfc-lf-auto-");
   const settings = new RuntimeSettings(dataDir);
   settings.updateModels({
     json: { providers: { gw: { models: [{ id: "glm-5.1" }, { id: "x" }] } } },
@@ -304,7 +305,7 @@ test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => 
   // 一刀切的门禁会把用不上那件东西的部署一起挡在门外:纯会话形态
   // (不接代码仓)要什么 Git 令牌?没接通知端点要什么通知令牌?
   // 所以每条缺项都绑自己的前提。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-block-"));
+  const dataDir = mfcTemp("mfc-lf-block-");
   const kernel = new TaskService({
     dataDir, provider: "", model: "", modelsJson: {},
     host: { kernelRoot: "/tmp" },   // 接了仓,但没配平台
@@ -323,7 +324,7 @@ test("配置缺项:只拦真会咬人的那几样,文案说清去哪配", () => 
   }
   // 纯会话形态(不接仓):平台与 Git 令牌都不该被要求
   const chat = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-chat-")),
+    dataDir: mfcTemp("mfc-lf-chat-"),
     provider: "gw", model: "m",
     modelsJson: { providers: { gw: { models: [{ id: "m" }] } } },
   });
@@ -339,7 +340,7 @@ test("交付方式:选项与默认值都取自内核 flow.json,自造的当场�
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核(仓内 kernel/ 快照应随仓自带)");
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-lane-")),
+    dataDir: mfcTemp("mfc-lf-lane-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot, repoPath: "/tmp/repo" },
@@ -394,7 +395,7 @@ test("文字补充:团队约定+任务补充编译进 supplement-only 定格档�
   // 文字建议层统一落 workflow_profile.supplements。
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核");
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-stage-plan-"));
+  const dataDir = mfcTemp("mfc-lf-stage-plan-");
   const settings = new RuntimeSettings(dataDir);
   settings.updateExecutionPolicy({
     team_instructions: "不确定的外部行为明确说明",
@@ -425,7 +426,7 @@ test("结构化工作流:下单固定唯一最终方案，平台下限不可删�
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核");
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-workflow-v2-")),
+    dataDir: mfcTemp("mfc-lf-workflow-v2-"),
     provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot, repoPath: "/tmp/repo" },
@@ -464,7 +465,7 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话仍保留 AR
   // 不让模型开工后再逐项来问。单号必填与"交付仓必填"同口径;
   // 基线分支给默认 master——多数单就交到 master,少数改一下即可。
   const kernel = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-ticket-")),
+    dataDir: mfcTemp("mfc-lf-ticket-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
@@ -488,7 +489,7 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话仍保留 AR
   // 纯会话形态不强制单号，但 AR/REQ 是业务身份，创建页仍应保留入口；
   // 基线才是代码交付专属字段。
   const chat = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-chat2-")),
+    dataDir: mfcTemp("mfc-lf-chat2-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
   });
@@ -500,7 +501,7 @@ test("单号/基线分支:下单收齐,基线默认 master,纯会话仍保留 AR
 
 test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分析阶段", () => {
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-graph-")),
+    dataDir: mfcTemp("mfc-lf-graph-"),
     provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp" },
@@ -547,7 +548,7 @@ test("统一需求图:单仓是一个节点,多仓进入同一任务的需求分
 });
 
 test("需求图确认:复用普通任务生成各仓交付,硬依赖保持排队", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-confirm-"));
+  const dataDir = mfcTemp("mfc-lf-chain-confirm-");
   const kernelRoot = discoverKernelRoot(process.cwd())!;
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
@@ -785,7 +786,7 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
   // 分析会话没有内核 preTool 门禁兜底,"禁止推送"若只是开场白的一句
   // 话,模型犯浑就真推上去了。用真仓验证:readonly 克隆后 push 失败,
   // 普通克隆(交付任务)push 照常。
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-readonly-"));
+  const dataDir = mfcTemp("mfc-lf-readonly-");
   const origin = join(dataDir, "origin");
   execFileSync("git", ["init", "-q", "-b", "master", origin]);
   execFileSync("git", ["-C", origin, "commit", "-q", "--allow-empty",
@@ -834,7 +835,7 @@ test("分析现场只读:真 push 必须在传输层死掉,不靠 prompt 嘱咐"
 });
 
 test("需求分析与内核物理隔离，旧的错误配置待办可从原现场自愈", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-analysis-isolation-"));
+  const dataDir = mfcTemp("mfc-analysis-isolation-");
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
@@ -879,7 +880,7 @@ test("需求分析与内核物理隔离，旧的错误配置待办可从原现�
 });
 
 test("前置死透不许无限等:取消→子任务如实 failed;失败→留队说明", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-chain-dep-"));
+  const dataDir = mfcTemp("mfc-lf-chain-dep-");
   const service = new TaskService({
     dataDir, provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
@@ -917,7 +918,7 @@ test("假小鲁班不索个人令牌;部署切真端点后要求立刻恢复", (
   // 部署切成真端点后要求立刻恢复(真件确实按令牌认人)。
   let override: { endpoint?: string } = {};
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-fake-luban-")),
+    dataDir: mfcTemp("mfc-lf-fake-luban-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     notifier: new Notifier({
@@ -935,7 +936,7 @@ test("假小鲁班不索个人令牌;部署切真端点后要求立刻恢复", (
 
 test("下单即校验:不存在的模型、负预算、带密码的仓地址,当场打回", () => {
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),
+    dataDir: mfcTemp("mfc-lf-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot: "/tmp", repoPath: "/tmp/repo" },
@@ -969,7 +970,7 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
 
   // 没接内核模式:仓字段整个不该出现(enabled=false),硬塞就打回
   const bald = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-")),
+    dataDir: mfcTemp("mfc-lf-"),
     provider: "a", model: "a-1",
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
   });
@@ -980,7 +981,7 @@ test("下单即校验:不存在的模型、负预算、带密码的仓地址,当
 
 test("任务执行补充在下单时固定，不与需求正文或内核红线混为一体", () => {
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-profile-")),
+    dataDir: mfcTemp("mfc-lf-profile-"),
     provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
   });
@@ -1017,7 +1018,7 @@ test("仓库地址在下单前按真实 Git 身份探测，并逐仓返回人话
   const kernelRoot = discoverKernelRoot(process.cwd());
   if (!kernelRoot) throw new Error("找不到内核");
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-probe-")),
+    dataDir: mfcTemp("mfc-lf-probe-"),
     provider: "a", model: "a-1", maxConcurrent: 0,
     modelsJson: { providers: { a: { models: [{ id: "a-1" }] } } },
     host: { kernelRoot },
@@ -1185,7 +1186,7 @@ test("消费:任务级代码仓压过部署仓,克隆的就是下单填的那个
   const model = new ScriptedModelServer(SCRIPT);
   await model.start();
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-repo-")),
+    dataDir: mfcTemp("mfc-lf-repo-"),
     provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     host: { kernelRoot, repoPath: repoA, python: "python3" },
@@ -1223,7 +1224,7 @@ test("消费:任务级模型选择压过服务默认(默认是打不通的网关
     providers: Record<string, unknown>;
   }).providers;
   const service = new TaskService({
-    dataDir: mkdtempSync(join(tmpdir(), "mfc-lf-run-")),
+    dataDir: mfcTemp("mfc-lf-run-"),
     provider: "dead", model: "dead-1",
     modelsJson: { providers: {
       ...scripted,
@@ -1247,7 +1248,7 @@ test("消费:任务级模型选择压过服务默认(默认是打不通的网关
 });
 
 test("路由:没配齐令牌 409 不给下单;补齐后放行;坏参数仍 400", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-lf-http-"));
+  const dataDir = mfcTemp("mfc-lf-http-");
   createBusinessModule(dataDir, { id: "launch-domain", name: "下单测试",
     description: "完整表单用于验证令牌检查", owner: "dev",
     repositories: ["https://code.example/repo.git"] }, "dev");

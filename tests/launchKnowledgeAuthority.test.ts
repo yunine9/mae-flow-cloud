@@ -27,6 +27,7 @@ import {
   TaskService,
 } from "../src/taskService.ts";
 import { WorkflowAssetLibrary } from "../src/workflowAssetLibrary.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function service(dataDir: string): TaskService {
   return new TaskService({
@@ -72,8 +73,8 @@ test("UT 生成方式只看本任务实际装载的 Skill，不受全局货架�
 
 test("新任务每个代码仓都必须有非空技术画像，拒绝时不产生任务现场",
   async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-profile-required-"));
-    const repository = mkdtempSync(join(tmpdir(), "mfc-profile-required-repo-"));
+    const dataDir = mfcTemp("mfc-launch-profile-required-");
+    const repository = mfcTemp("mfc-profile-required-repo-");
     execFileSync("git", ["init", "--quiet", "--bare", repository]);
     const taskService = service(dataDir);
     const server = createTaskServer(taskService);
@@ -141,7 +142,7 @@ function workflowDefinition(moduleId: string, asset: {
 }
 
 test("发起前预匹配与任务快照共用 40 项上限和稳定版本身份", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-count-"));
+  const dataDir = mfcTemp("mfc-launch-authority-count-");
   for (let index = 0; index < 41; index += 1) {
     publishEngineering(dataDir, index);
   }
@@ -181,7 +182,7 @@ test("发起前预匹配与任务快照共用 40 项上限和稳定版本身份"
 });
 
 test("4 MiB 上限与任务创建对拍，不能把匹配项全数冒充已注入", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-bytes-"));
+  const dataDir = mfcTemp("mfc-launch-authority-bytes-");
   const content = "x".repeat(256 * 1024);
   for (let index = 0; index < 17; index += 1) {
     publishEngineering(dataDir, index, content);
@@ -204,7 +205,7 @@ test("4 MiB 上限与任务创建对拍，不能把匹配项全数冒充已注�
 
 test("工作流引用强制并入业务模块；预览返回管理定位、版本与真正命中交集",
   () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-flow-"));
+    const dataDir = mfcTemp("mfc-launch-authority-flow-");
     createBusinessModule(dataDir, {
       id: "orders", name: "订单域", description: "订单边界", owner: "owner",
       repositories: ["https://code.example/team/orders.git"],
@@ -243,7 +244,7 @@ test("工作流引用强制并入业务模块；预览返回管理定位、版�
   });
 
 test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-degrade-"));
+  const dataDir = mfcTemp("mfc-launch-authority-degrade-");
   mkdirSync(join(dataDir, "business-modules", "broken"), { recursive: true });
   writeFileSync(join(dataDir, "business-modules", "broken", "module.json"),
     "{broken");
@@ -261,7 +262,7 @@ test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配
 });
 
 test("自动匹配工程知识损坏时明确降级；旧 digest 拒绝，新清单可继续", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-corrupt-"));
+  const dataDir = mfcTemp("mfc-launch-authority-corrupt-");
   const repository = "https://code.example/team/orders.git";
   const candidate = publishEngineering(dataDir, 1);
   const taskService = service(dataDir);
@@ -320,7 +321,7 @@ test("自动匹配工程知识损坏时明确降级；旧 digest 拒绝，新清
 });
 
 test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固定", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-skill-"));
+  const dataDir = mfcTemp("mfc-launch-authority-skill-");
   const valid = join(dataDir, "skills", "java-review");
   const oversized = join(dataDir, "skills", "oversized");
   mkdirSync(valid, { recursive: true });
@@ -362,7 +363,7 @@ test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固�
 
 test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变化清单放行",
   () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-digest-"));
+    const dataDir = mfcTemp("mfc-launch-authority-digest-");
     const repository = "https://code.example/team/orders.git";
     createBusinessModule(dataDir, {
       id: "orders", name: "订单域", description: "订单边界", owner: "owner",
@@ -418,8 +419,8 @@ test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变
 
 test("技术画像记忆失败时，本单仍使用已核对画像而不静默缩小匹配范围",
   async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-profile-write-"));
-    const repository = mkdtempSync(join(tmpdir(), "mfc-launch-profile-repo-"));
+    const dataDir = mfcTemp("mfc-launch-profile-write-");
+    const repository = mfcTemp("mfc-launch-profile-repo-");
     execFileSync("git", ["init", "--quiet", "--bare", repository]);
     const engineering = publishEngineering(dataDir, 1, undefined, repository);
     // profiles.json 故意做成目录，让“记住供下次使用”失败；当前请求的
@@ -487,7 +488,7 @@ test("技术画像记忆失败时，本单仍使用已核对画像而不静默�
 
 test("POST 预匹配由服务端解析已发布 workflow_selection，不创建任务现场",
   async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-launch-authority-route-"));
+    const dataDir = mfcTemp("mfc-launch-authority-route-");
     createBusinessModule(dataDir, {
       id: "orders", name: "订单域", description: "订单边界", owner: "owner",
       repositories: ["https://code.example/team/orders.git"],

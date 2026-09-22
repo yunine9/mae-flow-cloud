@@ -12,33 +12,30 @@
  * 那部分残留仍由它在 24h 后收走。
  */
 
-import { chmodSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
+import { sweepStaleMfcTmp } from "../scripts/clean-test-tmp.ts";
+import { forceRm } from "./mfcRm.ts";
+
+export { forceRm };
+
+// 清扫脱钩 npm test(2026-09-21,#34 复发复盘):定向跑(npx tsx --test
+// file)绕过 npm test 的前置清道夫,残留只会越积越多——任何测试入口
+// 只要 import 本模块就先扫一次,24h 安全窗不变,fail-open 不挡测试。
+// 只在真收走了东西或删失败时打一行,套件并行 71 个进程不刷屏。
+try {
+  const { removed, failed } = sweepStaleMfcTmp();
+  if (removed.length || failed.length) {
+    console.warn(`[mfcTmp] 加载即扫:删除 ${removed.length} 个超窗残留,`
+      + `${failed.length} 个删除失败(权限/竞态)`);
+  }
+} catch {
+  // 扫描失败(权限/竞态)不挡测试,下一轮再收。
+}
 
 const created = new Set<string>();
-
-/** 删一棵目录树:git 产物里有只读目录挡 unlink(清道夫手册同款坑),
- * 先把沿途目录全放开再删一遍——删文件只需父目录可写,文件本身不用动。
- * 测试自身的 finally 清理也走这里(裸 rmSync 会撞只读目录直接炸)。 */
-export function forceRm(dir: string): void {
-  try {
-    rmSync(dir, { recursive: true, force: true });
-    return;
-  } catch {
-    // 只读目录挡路,放开权限走重试。
-  }
-  try {
-    chmodSync(dir, 0o700);
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) forceRm(join(dir, entry.name));
-    }
-  } catch {
-    // 树可能已被并发清掉,最后一刀 force 会给出真相。
-  }
-  rmSync(dir, { recursive: true, force: true });
-}
 
 after(() => {
   if (process.env.MFC_TEST_KEEP_TMP) return;
