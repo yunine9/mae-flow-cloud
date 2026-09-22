@@ -8507,6 +8507,13 @@ export class TaskService {
           if (pending?.status === "resolved") task.pendingResume = pending;
         }
         this.tasks.set(summary.id, task);
+        // 旧版把一次交付异常留在 skipped；后续等待合入、完成或明确停摆
+        // 已有更新的结论，不再把历史异常当作第二个当前阻塞原因。
+        if (summary.delivery?.skipped && (summary.delivery.stalled
+            || ["await_merge", "completed"].includes(summary.status))) {
+          delete summary.delivery.skipped;
+          this.writeTaskState(task);
+        }
         if (interruptWarmupReceipt(summary.baseline_build)) this.writeTaskState(task);
         // 本地视觉回归需要同一批排队/运行/验证/待合入样本跨重启保持
         // 原样，否则 recover 会把它们重新入队或继续轮询，浏览器刚打开
@@ -14953,12 +14960,19 @@ export class TaskService {
     cls: StallClass,
   ): void {
     const delivery = task.summary.delivery;
-    if (delivery?.stalled) return; // 幂等:同一次停摆只喊一次
+    if (delivery?.stalled === reason && delivery.stall_class === cls) {
+      if (delivery.skipped) {
+        delete delivery.skipped;
+        this.persist(task);
+      }
+      return; // 同原因不重复通知，但新原因必须能覆盖旧诊断。
+    }
     task.summary.status = "verifying";
     task.summary.detail = stallDetail(reason);
     task.summary.delivery = {
       ...delivery,
       ...stallWrite(delivery?.mr_state, reason, cls),
+      skipped: undefined,
     };
     this.persist(task);
     this.notifyVerificationStalled(task, reason, cls);
@@ -15084,9 +15098,7 @@ export class TaskService {
     this.scheduleDeliveryRecovery(task, epoch);
   }
 
-  /** 停摆要说病因不是症状:"权威流水线尚未逐项通过"是症状,
-   * "宿主推送失败: fatal: ..." 才是人能拿着去办的那句。交付成功时
-   * delivery 会整份换掉,skipped 不会残留成假线索。 */
+  /** 停摆要说当前病因；成功接续与明确的新停摆会清除旧 skipped。 */
   private stallReason(task: TaskState): string {
     return stallReasonOf(task.summary.delivery, task.summary.detail);
   }
@@ -15184,6 +15196,7 @@ export class TaskService {
         task.summary.delivery = {
           ...task.summary.delivery,
           pipeline: "running",
+          skipped: undefined,
         };
         this.persist(task);
         this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
@@ -15196,6 +15209,7 @@ export class TaskService {
         task.summary.delivery = {
           ...task.summary.delivery,
           pipeline: status,
+          skipped: undefined,
           ...(checks !== undefined ? { checks } : {}),
         };
       }
@@ -17519,7 +17533,8 @@ export class TaskService {
         observed: async run => {
           // 旁路永不抢交付：正式入口核对 HEAD、范围和 MR 后会接管监听槽。
           const canSettle = !background && task.summary.status === "verifying";
-          task.summary.delivery = { ...task.summary.delivery, pipeline: run?.status ?? "not_found", checks: run?.checks };
+          task.summary.delivery = { ...task.summary.delivery, pipeline: run?.status ?? "not_found", checks: run?.checks,
+            ...(!background && run ? { skipped: undefined } : {}) };
           this.persist(task);
           if (run && run.status !== "running" && canSettle) {
             await this.pipelineVerdict(task, sha, run.status, run.log ?? "", run.checks, task.controlEpoch);
@@ -17653,6 +17668,7 @@ export class TaskService {
         return;
       }
       if (delivery.loop) delivery.loop.state = "green";
+      delivery.skipped = undefined;
       delivery.mr_state = "等待合入";
       delivery.waiting_on = undefined;
       task.summary.status = "await_merge";
