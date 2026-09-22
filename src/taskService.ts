@@ -1,7 +1,4 @@
-import { runKnowledgeCommand } from "./knowledgeProcess.ts";
-import { DomainKnowledgeExtraction } from "./domainKnowledgeExtraction.ts";
-import { runDomainKnowledge } from "./domainKnowledgeAgent.ts";
-import { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
+import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
 import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
@@ -15,8 +12,6 @@ import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts
 import { DeliveryExperiences } from "./deliveryExperience.ts";
 import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
-import { ComponentResearch } from "./componentResearch.ts";
-import { runComponentResearch } from "./componentResearchAgent.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
 import { buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
@@ -5711,24 +5706,20 @@ export class TaskService {
   }
   private domainKnowledgeExtraction?: DomainKnowledgeExtraction;
   getDomainKnowledgeExtraction(): DomainKnowledgeExtraction {
-    if (!this.domainKnowledgeExtraction) {
-      const publisher = new KnowledgeMrPublisher({ dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
-        credential: operator => this.options.gitCredential?.(operator), onIndexed: () => this.prepareKnowledgeIndex() });
-      this.domainKnowledgeExtraction = new DomainKnowledgeExtraction(this.options.dataDir, input => runDomainKnowledge(input, {
-        dataDir: this.options.dataDir,
-        model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
-        source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal),
-      }), { previewCleanup: (...args) => publisher.previewCleanup(...args), publish: (...args) => publisher.publish(...args), refresh: (...args) => publisher.refresh(...args), readRemote: (...args) => publisher.readRemote(...args) });
-    }
-    return this.domainKnowledgeExtraction;
+    return this.domainKnowledgeExtraction ??= createDomainKnowledgeExtraction({
+      dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
+      credential: operator => this.options.gitCredential?.(operator), onIndexed: () => this.prepareKnowledgeIndex(),
+      model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
+      source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal),
+    });
   }
   private componentResearch?: ComponentResearch;
   getComponentResearch(): ComponentResearch {
-    return this.componentResearch ??= new ComponentResearch(this.options.dataDir, input => runComponentResearch(input, {
-      dataDir: this.options.dataDir,
+    return this.componentResearch ??= createComponentKnowledgeExtraction({
+      dataDir: this.options.dataDir, onIndexed: () => this.prepareKnowledgeIndex(),
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
       source: (component, operator, signal) => this.componentResearchSource(component, operator, signal),
-    }), () => this.prepareKnowledgeIndex());
+    });
   }
   private componentSourceLocks = new Map<string, Promise<unknown>>();
   private async componentResearchSource(component: ComponentRepository, operator: string, signal?: AbortSignal) {
@@ -5739,15 +5730,7 @@ export class TaskService {
     const work = previous.catch(() => undefined).then(async () => {
       const sandbox = this.prepareHostGitSandbox(identity);
       try {
-        mkdirSync(root, { recursive: true });
-        const git = async (args: string[]) => {
-          try { return (await runKnowledgeCommand("git", [...sandbox.args, ...args], { cwd: root, env: sandbox.env, timeoutMs: 90_000, maxBytes: 20 * 1024 * 1024, signal })).trim(); }
-          catch { throw new Error("组件源码同步失败，请检查仓库、分支及个人或系统 Git 凭据"); }
-        };
-        if (!existsSync(join(root, "HEAD"))) await git(["init", "--bare"]);
-        await git(["fetch", "--depth=1", "--no-tags", component.repository, `refs/heads/${component.branch}`]);
-        const revision = await git(["rev-parse", "FETCH_HEAD^{commit}"]);
-        return { root, revision };
+        return await syncKnowledgeSource(root, component.repository, component.branch, sandbox, signal);
       } finally { this.cleanupHostGitCredential(sandbox); }
     });
     this.componentSourceLocks.set(key, work);
