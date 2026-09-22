@@ -102,6 +102,11 @@ async function run() {
   check(!createDialog.textContent?.includes("无线豆包") && !createDialog.textContent?.includes("适用范围"), "no tool switch or redundant scope field");
   const upload = createDialog.querySelector<HTMLInputElement>('input[aria-label="上传业务资料"]')!;
   check(upload.accept.includes(".zip"), "upload accepts ZIP");
+  const chooseFile = [...createDialog.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "选择文件")!;
+  check(chooseFile?.getClientRects().length && !chooseFile.disabled, "choose-file button is visible and enabled");
+  let pickerOpened = false;
+  upload.addEventListener("click", event => { event.preventDefault(); pickerOpened = true; }, { once: true });
+  chooseFile.click(); check(pickerOpened, "choose-file button opens its file picker");
   const transfer = new DataTransfer(); transfer.items.add(new File(["ZIP fixture; binary parser verified separately"], "业务资料.zip", { type: "application/zip" }));
   upload.files = transfer.files; upload.dispatchEvent(new Event("change", { bubbles: true })); await pause(); await pause();
   check(calls.some(c => c.action === "upload" && c.name === "业务资料.zip" && c.version === "" && !("scope" in c)), "ZIP upload requires no metadata");
