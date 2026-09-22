@@ -494,6 +494,30 @@ test("缺少 gitignore 的依赖安装不膨胀交付事实，显式跟踪文件
   assert.deepEqual((await deliveryChangeSnapshot(cwd))?.committed_paths, [explicit]);
 });
 
+test("文件清单直接包含重命名和未跟踪文件的行数，无需逐个打开正文", async (t) => {
+  const cwd = makeSite({ git: true });
+  t.after(() => rmSync(cwd,{recursive:true,force:true}));
+  const run = (...args:string[]) => execFileSync("git",["-C",cwd,...args],{encoding:"utf-8"}).trim();
+  const lines = Array.from({length:30},(_,i)=>`const item${i} = ${i};`);
+  writeFileSync(join(cwd,"old.ts"),lines.join("\n")+"\n");
+  run("add","old.ts");run("commit","-qm","baseline");
+  writeFileSync(join(cwd,".mae-flow.json"),JSON.stringify({step_heads:{branch_create:run("rev-parse","HEAD")}}));
+  const renamed = '新文件 "renamed".ts';run("mv","old.ts",renamed);
+  lines[10]="const item10 = -1;";writeFileSync(join(cwd,renamed),lines.join("\n")+"\n");
+  run("commit","-qam","rename and edit");
+  writeFileSync(join(cwd,"new.ts"),"one\ntwo\nthree");
+  mkdirSync(join(cwd,"new-folder"));
+  writeFileSync(join(cwd,"new-folder","other.ts"),"one\ntwo\n");
+  writeFileSync(join(cwd,"binary.bin"),Buffer.from([0,1,2,3]));
+  const manifest=(await listArtifactsAsync(cwd)).find(item=>item.kind==="diff")!.change_files!;
+  const changed=manifest.find(file=>file.path===renamed)!;
+  assert.equal(changed.additions,1);assert.equal(changed.deletions,1);
+  assert.equal(manifest.find(file=>file.path==="new.ts")?.additions,3);
+  assert.equal(manifest.find(file=>file.path==="binary.bin")?.stats_status,"binary");
+  const page=await listArtifactChangeDirectoryAsync(cwd,"new-folder");
+  assert.equal(page?.entries[0].additions,2);assert.equal(page?.entries[0].deletions,0);
+});
+
 test("比较范围导航不会复制大文件里未修改的全文", async (t) => {
   const cwd = makeSite({ git: true });
   t.after(() => rmSync(cwd, {recursive:true, force:true}));

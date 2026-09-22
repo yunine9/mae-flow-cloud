@@ -12,6 +12,7 @@ export interface ChangedFile {
   lines: string[];
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export function fileKind(path: string): FileKind {

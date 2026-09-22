@@ -466,6 +466,17 @@ test("代码差异目录以完整清单为准，正文只补当前文件", () =>
   assert.equal(files[1].kind, "代码");
 });
 
+test("点开正文或正文截断不改变其他文件和当前文件的完整增删统计", () => {
+  const manifest = [
+    {path:"src/a.ts",stage:"committed",additions:1000,deletions:7},
+    {path:"src/b.ts",stage:"committed",additions:23,deletions:4},
+  ];
+  const body = (path: string) => `## 已提交(committed)\ndiff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old\n+new\n`;
+  for (const text of ["",body("src/a.ts"),body("src/b.ts")]) {
+    assert.deepEqual(gitDiff.filesForDiff(text,manifest).map((file: {additions:number;deletions:number}) => [file.additions,file.deletions]),[[1000,7],[23,4]]);
+  }
+});
+
 test("上万条文件清单的首屏保持有界，不在服务端一次性输出全部文件节点", () => {
   const manifest = Array.from({ length: 10_000 }, (_, index) => ({
     path: `target/CMakeFiles/module-${index}/object.o`,

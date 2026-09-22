@@ -156,6 +156,7 @@ export interface GitDiffFileManifest {
   stage: ChangeStage;
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export interface GitDiffDirectoryManifest {
@@ -168,6 +169,9 @@ export interface GitDiffDirectoryEntry {
   kind: "file" | "directory";
   file_count: number;
   stage: "untracked";
+  stats_status?: "unavailable" | "binary";
+  additions?: number;
+  deletions?: number;
 }
 
 export interface GitDiffDirectoryPage {
@@ -204,6 +208,7 @@ export function filesForDiff(
     return content
       ? {
           ...content,
+          ...entry,
           key: `${entry.stage}:${entry.path}`,
           stage: entry.stage,
         }
@@ -361,7 +366,7 @@ export function GitDiff({
     for (const file of loadedUntrackedFiles.values()) {
       const content = contentByPath.get(file.path);
       merged.set(file.path, content
-        ? { ...content, key: file.key, stage: "untracked" }
+        ? { ...content, ...file, lines: content.lines }
         : file);
     }
     return [...merged.values()];
@@ -711,8 +716,9 @@ export function GitDiff({
               stage: "untracked",
               kind: fileKind(entry.path),
               lines: [],
-              additions: 0,
-              deletions: 0,
+              additions: entry.additions ?? 0,
+              deletions: entry.deletions ?? 0,
+              stats_status: entry.stats_status ?? (entry.additions === undefined ? "unavailable" : undefined),
             });
           }
           return next;
@@ -781,7 +787,7 @@ export function GitDiff({
             ?? "bg-surface-muted text-muted-foreground")}>{file.kind.slice(0, 1)}</span>
           <span className={GIT.fileName}><strong className={GIT.fileNameStrong}>{file.path.split("/").at(-1)}</strong>
             <small className={GIT.fileSub}><span className={GIT.fileSubPath}>{stageName[file.stage]} · {file.kind}</span>
-              {(file.additions > 0 || file.deletions > 0) && (
+              {file.stats_status ? <span title="尚未取得完整行数统计">{file.stats_status === "binary" ? "二进制" : "—"}</span> : (file.additions > 0 || file.deletions > 0) && (
                 <i className={GIT.fileStats}><em className={GIT.fileStatsAdd}>+{file.additions}</em>
                   <del className={GIT.fileStatsDel}>−{file.deletions}</del></i>
               )}</small></span>
@@ -843,14 +849,15 @@ export function GitDiff({
             ? renderUntrackedDirectory(entry, depth + 1, overview)
             : hiddenPaths.has(entry.path) || hiddenByDirectory(entry.path)
               ? null
-              : renderFile({
+              : renderFile(files.find(file => file.path === entry.path) ?? {
                   key: `untracked:${entry.path}`,
                   path: entry.path,
                   stage: "untracked",
                   kind: fileKind(entry.path),
                   lines: [],
-                  additions: 0,
-                  deletions: 0,
+                  additions: entry.additions ?? 0,
+                  deletions: entry.deletions ?? 0,
+                  stats_status: entry.stats_status ?? (entry.additions === undefined ? "unavailable" : undefined),
                 }, depth + 1, overview))}
           {state?.nextOffset !== undefined && (
             <Button type="button" className={GIT.loadMore}

@@ -3289,6 +3289,7 @@ export interface ArtifactChangeFile {
     | "staged_working" | "unstaged" | "untracked";
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export interface ArtifactChangeDirectory {
@@ -3301,6 +3302,9 @@ export interface ArtifactChangeDirectoryEntry {
   kind: "file" | "directory";
   file_count: number;
   stage: "untracked";
+  stats_status?: "unavailable" | "binary";
+  additions?: number;
+  deletions?: number;
 }
 
 export interface ArtifactChangeDirectoryPage {

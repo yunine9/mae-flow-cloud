@@ -26,6 +26,8 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
+import { open as openAsync, realpath as realpathAsync } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
 import { runSafeWorktreeGit, runSafeWorktreeGitAsync } from "./safeGit.ts";
 import {
@@ -127,6 +129,7 @@ export interface ArtifactChangeFile {
   stage: ArtifactChangeStage;
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export interface ArtifactChangeDirectory {
@@ -140,6 +143,9 @@ export interface ArtifactChangeDirectoryEntry {
   /** 目录下包含的未跟踪文件总数；文件恒为 1。 */
   file_count: number;
   stage: "untracked";
+  stats_status?: "unavailable" | "binary";
+  additions?: number;
+  deletions?: number;
 }
 
 export interface ArtifactChangeDirectoryPage {
@@ -822,23 +828,63 @@ function originOf(
   return "committed";
 }
 
-function numstatByPath(text: string): Map<string, {
-  additions: number;
-  deletions: number;
-}> {
-  const stats = new Map<string, { additions: number; deletions: number }>();
-  for (const line of text.split("\n")) {
-    const [added, deleted, ...pathParts] = line.split("\t");
-    const path = decodeGitQuotedPath(pathParts.join("\t").trim());
+type FileLineStats = Pick<ArtifactChangeFile, "additions" | "deletions" | "stats_status">;
+const unavailableStats: FileLineStats = { additions: 0, deletions: 0, stats_status: "unavailable" };
+
+/** --numstat -z 的重命名项是「计数\0旧路径\0新路径」，不能按展示用箭头拆分。 */
+function numstatByPath(text: string): Map<string, FileLineStats> {
+  const stats = new Map<string, FileLineStats>();
+  const fields = text.split("\0");
+  for (let index = 0; index < fields.length; index++) {
+    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(fields[index]);
+    if (!match) continue;
+    let path = match[3];
+    if (!path) { index++; path = fields[++index]; }
     if (!path || isFlowControlPath(path)) continue;
-    const additions = Number.parseInt(added, 10);
-    const deletions = Number.parseInt(deleted, 10);
-    stats.set(path, {
-      additions: Number.isFinite(additions) ? additions : 0,
-      deletions: Number.isFinite(deletions) ? deletions : 0,
-    });
+    stats.set(path, match[1] === "-" || match[2] === "-"
+      ? { additions: 0, deletions: 0, stats_status: "binary" }
+      : { additions: Number(match[1]), deletions: Number(match[2]) });
   }
   return stats;
+}
+
+/** 未跟踪目录仍按页展开；只数本页普通小文件的行，不生成 Diff 或读取构建产物全文。 */
+async function untrackedLineStats(cwd: string, paths: string[]): Promise<Map<string, FileLineStats>> {
+  const result = new Map<string, FileLineStats>();
+  const root = await realpathAsync(cwd);
+  let next = 0;
+  await Promise.all(Array.from({length: Math.min(4, paths.length)}, async () => {
+    while (next < paths.length) {
+      const path = paths[next++];
+      result.set(path, unavailableStats);
+      let handle: Awaited<ReturnType<typeof openAsync>> | undefined;
+      try {
+        const target = await realpathAsync(join(root, path));
+        if (!target.startsWith(root + sep)) continue;
+        handle = await openAsync(join(root, path), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+        const info = await handle.stat();
+        if (!info.isFile() || info.size > MAX_BYTES) continue;
+        const buffer = Buffer.alloc(info.size + 1);
+        let length = 0;
+        while (length < buffer.length) {
+          const read = await handle.read(buffer, length, buffer.length - length, length);
+          if (!read.bytesRead) break;
+          length += read.bytesRead;
+        }
+        if (length !== info.size) continue; // 文件写入中，不能把半份正文当完整统计。
+        const content = buffer.subarray(0, length);
+        if (content.subarray(0, 8000).includes(0)) {
+          result.set(path, {additions:0, deletions:0, stats_status:"binary"}); continue;
+        }
+        let lines = 0;
+        for (const byte of content) if (byte === 10) lines++;
+        if (length && content[length - 1] !== 10) lines++;
+        result.set(path, {additions:lines, deletions:0});
+      } catch { /* 不可读文件保持未知，不影响其他文件或伪造零行。 */ }
+      finally { await handle?.close(); }
+    }
+  }));
+  return result;
 }
 
 /**
@@ -873,7 +919,7 @@ async function collectDiffManifestAsync(
     baseline
       ? gitAsync(cwd, ["diff", "--name-only", "-z", baseline, "HEAD", "--"])
       : Promise.resolve(undefined),
-    gitAsync(cwd, ["diff", "--numstat", baseline ?? "HEAD", "--"]),
+    gitAsync(cwd, ["diff", "--numstat", "-z", baseline ?? "HEAD", "--"]),
   ]);
   const committed = new Set(uniqueBusinessPaths(
     gitNullPaths(committedText ?? "")));
@@ -891,6 +937,7 @@ async function collectDiffManifestAsync(
     .filter((line) => !line.slice(3).trim().endsWith("/"))
     .join("\n")));
   const stats = numstatByPath(numstatText ?? "");
+  for (const [path, stat] of await untrackedLineStats(cwd, [...untracked].slice(0, 200))) stats.set(path, stat);
   const paths = uniqueBusinessPaths([
     ...committed,
     ...changedPaths(statusLines.filter((line) => !line.startsWith("??"))
@@ -898,7 +945,8 @@ async function collectDiffManifestAsync(
     ...untracked,
   ]);
   const files = paths.map((path) => {
-    const stat = stats.get(path) ?? { additions: 0, deletions: 0 };
+    const stat = stats.get(path) ?? (numstatText !== undefined && !untracked.has(path)
+      ? { additions: 0, deletions: 0 } : unavailableStats);
     return {
       path,
       stage: untracked.has(path)
@@ -1371,9 +1419,11 @@ export async function listArtifactChangeDirectoryAsync(
   const pageOffset = Math.max(0, Math.floor(offset));
   const pageLimit = Math.max(1, Math.min(500, Math.floor(limit)));
   const end = Math.min(entries.length, pageOffset + pageLimit);
+  const pageEntries = entries.slice(pageOffset, end);
+  const stats = await untrackedLineStats(cwd, pageEntries.filter(entry => entry.kind === "file").map(entry => entry.path));
   return {
     path: wanted,
-    entries: entries.slice(pageOffset, end),
+    entries: pageEntries.map(entry => entry.kind === "file" ? { ...entry, ...stats.get(entry.path) } : entry),
     total_entries: entries.length,
     total_files: totalFiles,
     ...(end < entries.length ? { next_offset: end } : {}),

@@ -102,7 +102,7 @@ export function ChangeFileTree({ files, activePath, onSelect, selectable, select
             {!data.file ? <ChevronRight size={13} className={item.isExpanded() ? "is-expanded" : ""} /> : <span className="change-tree-spacer" />}
             {data.file ? <FileCode2 size={16} /> : <Folder size={16} className="change-folder-icon" />}
             <span className="change-tree-name">{data.name}</span>
-            {data.file ? <span className="change-tree-stats"><b>+{data.file.additions}</b><i>−{data.file.deletions}</i></span>
+            {data.file ? data.file.stats_status ? <span className="change-tree-count" title="尚未取得完整行数统计">{data.file.stats_status === "binary" ? "二进制" : "—"}</span> : <span className="change-tree-stats"><b>+{data.file.additions}</b><i>−{data.file.deletions}</i></span>
               : <span className="change-tree-count">{data.paths.length}</span>}
             {data.file && !["committed", "committed_working"].includes(data.file.stage) && <span className="change-local-dot" title="尚未提交的工作区改动" />}
           </div>;
