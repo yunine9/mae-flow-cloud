@@ -19,7 +19,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
@@ -27,6 +27,7 @@ import type { IssueFlowOptions } from "../src/issueFlow/service.ts";
 import type { IssueSessionState } from "../src/issueFlow/state.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
+import { MR_GREEN_ENV_VERIFY_NOTE } from "../src/issueFlow/state.ts";
 import {
   LoopPlatform,
   bareOrigin,
@@ -303,6 +304,170 @@ test("同提交刹车:上轮发送的提交再红——停机带诊断,不再发
       "刹车停机通知发出");
     assert.match(JSON.stringify(luban.messages), /同一提交/,
       "通知把 AI 的诊断交给人");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+// ---- 撤卡(#374 流水线红灯未感知):卡是平台断言,断言被新事实推翻
+// 就撤下——红灯事实不再停靠旧卡,失败送达不再被等人状态吞掉。 ----
+
+/** 在 seedMrGreenWatch 的绿表上种一张在场卡:等人的验证卡(或带提交
+ *  定位的人工卡),stage_note 保留收口常量(守闸器判据的回归锚)。 */
+function seedGateOnWatch(
+  dataDir: string,
+  repo: string,
+  gate: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+): void {
+  const path = join(dataDir, "issues", "issue-1", "issue.json");
+  const state = JSON.parse(readFileSync(path, "utf-8")) as
+    & { gate?: unknown; status?: string; stage_note?: string }
+    & Record<string, unknown>;
+  state.gate = gate;
+  state.status = "waiting_user";
+  state.stage_note = MR_GREEN_ENV_VERIFY_NOTE;
+  Object.assign(state, extra);
+  writeFileSync(path, JSON.stringify(state));
+}
+
+test("374 回归:验证卡在场遇红灯——撤卡回落,红灯事实照常送达不停靠", async () => {
+  const dataDir = mfcTemp("mfc-redcutover-stalegate-");
+  const origin = bareOrigin(dataDir);
+  seedMrGreenWatch(dataDir, origin);
+  // 374 现场:全绿收口后 AI 举的验证卡没答,监看账在恢复直挂续表
+  // (不经 armPipelineWatch)——红灯必须撤卡送达,不再 park 进便签。
+  seedGateOnWatch(dataDir, origin, {
+    id: "gate-stale", kind: "env_verify", state_version: 0,
+    created_at: new Date().toISOString(),
+    question: { questions: [{ question: "验证?", options: [] }] },
+  });
+  const platform = new LoopPlatform("failed");
+  platform.firstFailure = {
+    log: "BUILD FAILURE: 模块 notify-service 编译失败",
+  };
+  await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer(
+    [{ text: "收到失败事实,开始修复。" }], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService(
+    options({ dataDir, model, platformUrl: platform.baseUrl, luban }));
+  try {
+    // 撤卡先于红灯送达:第一声模型请求到达时,卡已撤、等人已回落、
+    // stage_note 还是收口常量(此刻收嘴催办机器尚未接管收口)。
+    await until(() =>
+      model.requests.length ? JSON.stringify(model.requests) : undefined,
+    "红灯事实送达回合启动");
+    assert.match(JSON.stringify(model.requests), /流水线未通过/,
+      "红灯事实开回合送达 AI,不是落便签等人");
+    const midTurn = readStateFile(dataDir);
+    assert.equal(midTurn.gate, undefined, "旧验证卡已撤下");
+    assert.equal(midTurn.status, "running", "等人已回落,回合在飞");
+    assert.equal(midTurn.stage_note, MR_GREEN_ENV_VERIFY_NOTE,
+      "撤卡不动 stage_note(守闸器欠卡判据按收口常量认现场)");
+    assert.deepEqual(midTurn.parked_notices, undefined,
+      "失败事实不进欠账队列");
+    assert.match(JSON.stringify(midTurn.transitions),
+      /环境验证卡过期撤下/, "撤卡落转移账");
+    const settled = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "红灯修复回合收口");
+    assert.equal(settled.gate, undefined);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("374 撤卡范围:同仓新提交使旧人工卡作废(推送路,恢复补挂触发)", async () => {
+  const dataDir = mfcTemp("mfc-redcutover-stalegate-push-");
+  const origin = bareOrigin(dataDir);
+  seedMrGreenWatch(dataDir, origin);
+  // 监看账落后于推送账(旧提交 d… 的不可修卡在场,推送账已是新提交
+  // c…):重启补挂走 armPipelineWatch,换 SHA 分支撤卡。
+  const OLD_SHA = "d".repeat(40);
+  seedGateOnWatch(dataDir, origin, {
+    id: "gate-old", kind: "pipeline_unfixable", state_version: 0,
+    created_at: new Date().toISOString(),
+    question: { questions: [{ question: "人工处理?", options: [] }] },
+    pipeline: { repo: origin, sha: OLD_SHA },
+  }, {
+    pipelines: {
+      [origin]: {
+        sha: OLD_SHA, status: "failed", watching: false,
+        started_at: new Date().toISOString(),
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+      },
+    },
+  });
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer(
+    [{ text: "空闲,无回合。" }], "scripted-v1", { linear: true });
+  await model.start();
+  const platform = new LoopPlatform("failed");
+  await platform.start();
+  const service = new IssueFlowService(
+    options({ dataDir, model, platformUrl: platform.baseUrl, luban }));
+  try {
+    const rearmed = await until(() => {
+      const state = readStateFile(dataDir);
+      return state.pipelines?.[origin]?.sha === SHA && state.gate === undefined
+        ? state : undefined;
+    }, "补挂换新提交并撤卡");
+    assert.equal(rearmed.status, "idle", "等人回落空闲");
+    assert.match(JSON.stringify(rearmed.transitions),
+      /流水线不可修告警卡过期撤下/, "撤卡落转移账(推送动因)");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    await platform.stop();
+    await luban.stop();
+  }
+});
+
+test("374 撤卡范围:跨仓红灯不推翻人工卡——卡照常等人,红灯停靠随卡送达", async () => {
+  const dataDir = mfcTemp("mfc-redcutover-stalegate-keep-");
+  const origin = bareOrigin(dataDir);
+  seedMrGreenWatch(dataDir, origin);
+  // 卡定位的是另一个仓的提交:本仓红灯不推翻它,卡保持在场,
+  // 红灯事实落便签随卡答完的续跑送达(不撤、不代答)。
+  seedGateOnWatch(dataDir, origin, {
+    id: "gate-other", kind: "pipeline_unfixable", state_version: 0,
+    created_at: new Date().toISOString(),
+    question: { questions: [{ question: "人工处理?", options: [] }] },
+    pipeline: { repo: "http://other.test/repo.git", sha: "e".repeat(40) },
+  });
+  const platform = new LoopPlatform("failed");
+  await platform.start();
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService(
+    options({ dataDir, model, platformUrl: platform.baseUrl, luban }));
+  try {
+    await until(() => {
+      const state = readStateFile(dataDir);
+      return state.parked_notices?.some((item) => /流水线未通过/.test(item))
+        ? state : undefined;
+    }, "红灯事实停靠进欠账便签");
+    const state = readStateFile(dataDir);
+    assert.equal(state.gate?.kind, "pipeline_unfixable", "卡原样在场");
+    assert.equal(state.status, "waiting_user", "等人状态不变");
+    assert.equal(state.stage_note, MR_GREEN_ENV_VERIFY_NOTE,
+      "卡在场不动 stage_note");
+    assert.equal(model.requests.length, 0, "不趁卡在开回合");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

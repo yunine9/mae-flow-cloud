@@ -17,6 +17,7 @@ import {
   type SelectedRepositorySkill,
   validRepositorySkillPath,
 } from "../src/repositorySkillRuntime.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function digest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -29,7 +30,7 @@ function fixture(): {
   content: string;
   selected: SelectedRepositorySkill;
 } {
-  const root = mkdtempSync(join(tmpdir(), "mfc-repo-skill-runtime-"));
+  const root = mfcTemp("mfc-repo-skill-runtime-");
   const workspace = join(root, "repo");
   const directory = join(workspace, ".agents", "skills", "domain-api");
   mkdirSync(directory, { recursive: true });

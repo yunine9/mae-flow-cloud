@@ -37,6 +37,7 @@ import {
   knowledgeUsageSnapshot,
 } from "../src/knowledgeTrace.ts";
 import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const SCRIPT: Scene[] = [{ text: "写完了。" }];
 
@@ -120,7 +121,7 @@ async function runDirect(
 }
 
 test("宿主级 skill 放一次,每个任务都带到模型眼前", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-"));
+  const dataDir = mfcTemp("mfc-skill-");
   writeSkill(join(dataDir, "skills"), "java-autout",
     "内网单测写法指南 JAVA-AUTOUT-MARKER");
   const seen = await runOnce(dataDir);
@@ -130,7 +131,7 @@ test("宿主级 skill 放一次,每个任务都带到模型眼前", async () => 
 
 test("团队 Skill 在建任务时固定，货架更新与原位重跑都不改变既有任务版本",
   async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-pin-"));
+    const dataDir = mfcTemp("mfc-skill-pin-");
     const source = writeSkill(join(dataDir, "skills"), "stable-skill",
       "PINNED-SKILL-V1");
     const service = new TaskService({
@@ -174,13 +175,13 @@ test("团队 Skill 在建任务时固定，货架更新与原位重跑都不改�
   });
 
 test("没有 skill 目录照常跑——不是每个部署都有内网 skill", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-none-"));
+  const dataDir = mfcTemp("mfc-skill-none-");
   const seen = await runOnce(dataDir);
   assert.ok(!seen.includes("JAVA-AUTOUT-MARKER"));
 });
 
 test("任务资源清单可取消团队 Skill，空数组不会退回全量装载", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-selection-"));
+  const root = mfcTemp("mfc-host-skill-selection-");
   const workspace = join(root, "repo");
   const sourceRoot = join(root, "deployment-skills");
   mkdirSync(workspace, { recursive: true });
@@ -205,7 +206,7 @@ test("任务资源清单可取消团队 Skill，空数组不会退回全量装�
 });
 
 test("新跨仓子任务从父快照复制时仍按本仓技术画像筛选 Skill", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-child-scope-"));
+  const root = mfcTemp("mfc-host-skill-child-scope-");
   const sourceRoot = join(root, "skills");
   const parentWorkspace = join(root, "parent");
   const childWorkspace = join(root, "child");
@@ -243,7 +244,7 @@ test("新跨仓子任务从父快照复制时仍按本仓技术画像筛选 Skil
 });
 
 test("宿主 Skill 正文和附件从任务内只读快照读取,不暴露部署源路径", async () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-projection-"));
+  const root = mfcTemp("mfc-host-skill-projection-");
   const workspace = join(root, "repo");
   const sourceRoot = join(root, "deployment-skills");
   mkdirSync(workspace, { recursive: true });
@@ -285,7 +286,7 @@ test("宿主 Skill 正文和附件从任务内只读快照读取,不暴露部署
 });
 
 test("宿主 Skill 包含软链接时不投影,避免附件越出部署 Skill 根", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-symlink-"));
+  const root = mfcTemp("mfc-host-skill-symlink-");
   const sourceRoot = join(root, "deployment-skills");
   const sourceSkill = writeSkill(
     sourceRoot, "unsafe-skill", "UNSAFE-SKILL-MARKER");
@@ -304,7 +305,7 @@ test("宿主 Skill 包含软链接时不投影,避免附件越出部署 Skill �
 });
 
 test("宿主 Skill 只读快照损坏后会安全重建", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-rebuild-"));
+  const root = mfcTemp("mfc-host-skill-rebuild-");
   const workspace = join(root, "repo");
   const sourceRoot = join(root, "deployment-skills");
   mkdirSync(workspace, { recursive: true });
@@ -327,7 +328,7 @@ test("宿主 Skill 只读快照损坏后会安全重建", () => {
 });
 
 test("宿主 Skill 快照祖先是软链接时 fail-closed,不向任务外写入", () => {
-  const root = mkdtempSync(join(tmpdir(), "mfc-host-skill-target-link-"));
+  const root = mfcTemp("mfc-host-skill-target-link-");
   const workspace = join(root, "repo");
   const outside = join(root, "outside");
   const sourceRoot = join(root, "deployment-skills");
@@ -346,7 +347,7 @@ test("宿主 Skill 快照祖先是软链接时 fail-closed,不向任务外写入
 });
 
 test("仓内 Skill 未选择时完全不可见,不再自动扫描 .pi/.claude/.cac", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-skill-none-"));
+  const workspace = mfcTemp("mfc-repo-skill-none-");
   writeSkill(join(workspace, ".pi", "skills"), "repo-a",
     "REPO-A-MARKER");
   writeSkill(join(workspace, ".claude", "skills"), "repo-b",
@@ -361,7 +362,7 @@ test("仓内 Skill 未选择时完全不可见,不再自动扫描 .pi/.claude/.c
 });
 
 test("精确选择仓 A 的 Skill,不会顺带装载同目录仓 B Skill", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-skill-one-"));
+  const workspace = mfcTemp("mfc-repo-skill-one-");
   const skillRoot = join(workspace, ".pi", "skills");
   const skillA = writeSkill(skillRoot, "repo-a", "REPO-A-MARKER");
   writeSkill(skillRoot, "repo-b", "REPO-B-MARKER");
@@ -372,7 +373,7 @@ test("精确选择仓 A 的 Skill,不会顺带装载同目录仓 B Skill", async
 });
 
 test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入上下文", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-knowledge-"));
+  const workspace = mfcTemp("mfc-repo-knowledge-");
   const engineeringPath = join(workspace, "team-build.md");
   writeFileSync(engineeringPath,
     "# 团队构建知识\n\nENGINEERING-KNOWLEDGE-BODY-MARKER\n");
@@ -436,7 +437,7 @@ test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入�
 });
 
 test("子 Agent 与主 Agent 使用同一仓库 Skill allowlist", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-repo-skill-child-"));
+  const workspace = mfcTemp("mfc-repo-skill-child-");
   const skillRoot = join(workspace, ".pi", "skills");
   const skillA = writeSkill(skillRoot, "repo-a", "REPO-A-MARKER");
   writeSkill(skillRoot, "repo-b", "REPO-B-MARKER");
@@ -464,7 +465,7 @@ test("子 Agent 与主 Agent 使用同一仓库 Skill allowlist", async () => {
 
 
 test("平台屏蔽实际模型上下文中的仓库 Skill 与 AGENTS，保留未屏蔽资源", async () => {
-  const workspace = mkdtempSync(join(tmpdir(), "mfc-resource-block-"));
+  const workspace = mfcTemp("mfc-resource-block-");
   const blocked = writeSkill(join(workspace, ".cac", "skills"), "department", "BLOCKED_SKILL_SENTINEL");
   const allowed = writeSkill(join(workspace, ".agents", "skills"), "business", "ALLOWED_SKILL_SENTINEL");
   writeFileSync(join(workspace, "AGENTS.md"), "BLOCKED_AGENT_SENTINEL");

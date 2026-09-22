@@ -9,6 +9,7 @@ import { CloudSession } from "../src/sessionDriver.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TASK_REQUIREMENT_ARTIFACT } from "../src/annotations.ts";
 import { auxiliarySessionEpoch, trackAuxiliarySession, abortAuxiliarySessions } from "../src/auxiliarySessions.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 for (const role of ["requirement-review", "warmup"] as const) {
   for (const action of ["cancel", "shutdown"] as const) {
@@ -22,7 +23,7 @@ for (const role of ["requirement-review", "warmup"] as const) {
       });
       await model.start();
       const service: any = new TaskService({
-        dataDir: mkdtempSync(join(tmpdir(), "mfc-aux-stop-")), maxConcurrent: 0,
+        dataDir: mfcTemp("mfc-aux-stop-"), maxConcurrent: 0,
         provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
       });
       const summary = service.create("原始需求", { account: "owner",
@@ -77,7 +78,7 @@ for (const role of ["requirement-review", "warmup"] as const) {
 }
 
 test("服务恢复时，遗留预热 running 必须改为中断，不能显示永远编译中", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-warmup-recover-"));
+  const dataDir = mfcTemp("mfc-warmup-recover-");
   const options = { dataDir, maxConcurrent: 0, provider: "test", model: "test", modelsJson: {} };
   const before: any = new TaskService(options);
   const summary = before.create("恢复预热事实");
@@ -121,7 +122,7 @@ test("取消期间才创建完的辅助会话不能启动；明确恢复后可�
 });
 
 test("已取消/暂停的任务，残留回调不得重开容器", async () => {
-  const service: any = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), "mfc-stopped-container-")),
+  const service: any = new TaskService({ dataDir: mfcTemp("mfc-stopped-container-"),
     maxConcurrent: 0, provider: "test", model: "test", modelsJson: {} });
   const summary = service.create("不允许复活容器");
   const task = service.tasks.get(summary.id);
@@ -147,7 +148,7 @@ for (const role of ["main", "warmup"] as const) {
       });
       await model.start();
       const service: any = new IssueFlowService({
-        dataDir: mkdtempSync(join(tmpdir(), "mfc-issue-aux-stop-")), maxConcurrentTurns: 0,
+        dataDir: mfcTemp("mfc-issue-aux-stop-"), maxConcurrentTurns: 0,
         provider: "maeflow", model: "scripted-v1", modelsJson: model.modelsJson(),
       });
       const summary = service.create({ account: "owner", title: "检查停止会话",

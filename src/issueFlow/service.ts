@@ -5088,6 +5088,65 @@ export class IssueFlowService {
    * 换库验证(未申报则提示 AI 申报);红→携失败项开回合让 AI 修
    * (同分支再推,MR 自动跟新提交)。幂等:同 SHA 在盯则跳过
    * (MR 幂等重建会重复触发本钩子)。 */
+  /** 新事实使在场旧卡过期时的撤卡(#374):卡是平台对用户的断言,
+   *  断言被推翻就撤下——是撤卡,不是替用户作答,作答账照旧走 answer。
+   *  范围(2026-09-22 拍板):
+   *  - 环境验证卡的断言是全局的(「均已通过,请验证」),任何仓的新
+   *    提交/红灯都推翻它;
+   *  - 红灯人工两卡断言的是特定提交的红灯,只有同仓换新提交才作废
+   *    (作答按提交定位续看,提交被取代后必打回「监看账已变化」——
+   *    留着是僵尸卡);跨仓红灯不推翻它,卡照常等人,新事实停靠随卡
+   *    答完送达。新提交红灯落账后重举前置即满足,撤卡不丢终局。
+   *  撤卡动作与 autoArchiveDelivered 清面同款:清 gate、作废等待待办、
+   *  等人回落空闲、转移账留痕。stage_note 不动——守闸器欠卡判据按
+   *  收口说明常量认现场(#248),动了它绿灯真空(新推送跑绿后没人
+   *  补举)就永远没人喊。parked_notices 原样保留(续聊照常注入)。
+   *  落盘点:armPipelineWatch 换 SHA(推送/重启补挂同函数)+ 
+   *  settlePipeline 红灯终态(兜住恢复直挂续表与「推送后 AI 同回合
+   *  补举」的窗口——raise_gate 前置只查收口不查在途流水线)。
+   *  调用方负责 saveState。 */
+  private dismissStaleGate(
+    live: LiveIssue,
+    repo: string,
+    sha: string,
+    cause: "push" | "red",
+  ): void {
+    const { state } = live;
+    const gate = state.gate;
+    if (!gate || isTerminal(state.status)) return;
+    if (gate.kind !== "env_verify"
+        && !(gate.pipeline && gate.pipeline.repo === repo
+          && gate.pipeline.sha !== sha)) {
+      return;
+    }
+    const gateName = gate.kind === "env_verify" ? "环境验证卡"
+      : gate.kind === "pipeline_unfixable" ? "流水线不可修告警卡"
+      : "流水线报错回灌卡";
+    const note = cause === "push"
+      ? `新提交 ${sha.slice(0, 12)} 使${gateName}过期撤下——断言的旧事实不再成立`
+      : `流水线红灯(${repo} @ ${sha.slice(0, 12)})使${gateName}过期撤下`
+        + "——失败事实改送 AI 修复";
+    delete state.gate;
+    if (state.status === "waiting_user") state.status = "idle";
+    recordTransition(state, { source: "platform", note });
+    const pending = live.humanGate.pending()[0];
+    if (pending) {
+      try {
+        live.humanGate.supersede(pending.waiting_id, {
+          stateVersion: pending.state_version,
+          notes: cause === "push"
+            ? "流水线新提交使本卡过期作废" : "流水线红灯使本卡过期作废",
+        });
+      } catch (error) {
+        this.log(`[issue-flow] ${live.id} 撤卡作废待办 `
+          + `${pending.waiting_id} 失败: `
+          + String(error instanceof Error ? error.message : error));
+      }
+    }
+    this.log(`[issue-flow] ${live.id} ${gateName}过期撤下`
+      + `(${cause === "push" ? "新提交" : "红灯"} @ ${repo} ${sha.slice(0, 12)})`);
+  }
+
   armPipelineWatch(live: LiveIssue, repo: string): void {
     const state = live.state;
     const platformUrl = this.options.platformUrl;
@@ -5108,6 +5167,9 @@ export class IssueFlowService {
     if (watching?.sha && watching.sha !== sha) {
       this.resolveIssuePipelineFeedback(live, repo, "addressed",
         `已产生新提交 ${sha.slice(0, 12)}，等待新流水线核验`);
+      // 新推送使旧卡过期就撤(#374,见 dismissStaleGate):全绿/红灯
+      // 断言都绑定提交,推送即过期,不等结果。
+      this.dismissStaleGate(live, repo, sha, "push");
     }
     const now = Date.now();
     const { budgetMs } = this.pipelineKnobs();
@@ -6063,6 +6125,10 @@ export class IssueFlowService {
     });
     // 红=申报打回:清掉申报账,修复后要重新申报再过验绿门。
     delete state.mr_gate;
+    // 红灯兜底撤卡(#374,见 dismissStaleGate):推送撤卡(main 路)漏
+    // 掉的现场——恢复直挂续表绕过 armPipelineWatch、推送后 AI 同回合
+    // 补举的验证卡——到红灯这里必须让失败事实正常送达,不再停靠旧卡。
+    this.dismissStaleGate(live, repo, sha, "red");
     // 取证增强:平台失败产物全文镜像进会话工作区 pipeline/,AI 用
     // Bash 读全文再修,而不是只看状态响应里截断 1500 字的摘要。
     // 镜像失败不拦主链路——按摘要修复,文案如实说明没有产物。
@@ -6314,10 +6380,12 @@ export class IssueFlowService {
   }
 
   /** 一拍守闸扫描(#248,ADR-0024):机械判据=「mr_green 已收口+
-   *  会话空闲+无任何闸在等+收口已超阈值」——正是"平台认为没事可做,
-   *  但验证卡没交出去"的静默态。waiting_user(有人被等)/running
-   *  (回合在飞,卡可能正在举)/接管中/终态一律不喊:守闸器防的是
-   *  静默漏卡,不打扰已知的等待。纯报警:不改会话状态、不举卡、
+   *  会话空闲+无任何闸在等+无在途流水线监看+收口已超阈值」——正是
+   *  "平台认为没事可做,但验证卡没交出去"的静默态。waiting_user
+   *  (有人被等)/running(回合在飞,卡可能正在举)/接管中/终态一律
+   *  不喊;在途监看也不喊(#374):推送撤卡后修复环在飞,卡缺席是
+   *  暂态,跑完自见分晓(绿→真空再喊,红→修复回合接着来),飞行中
+   *  喊人只会把人叫来打断正在跑的修复。纯报警:不改会话状态、不举卡、
    *  不开回合;通知 fail-open,发送失败只记日志。幂等靠 outcome 通道
    *  按 (taskId,status) 去重——status 带轮次,返工新一轮是新事件。 */
   private sweepEnvVerifyWatchdog(): void {
@@ -6327,6 +6395,8 @@ export class IssueFlowService {
     for (const live of this.live.values()) {
       const { state } = live;
       if (state.status !== "idle" || state.gate || state.takeover) continue;
+      if (Object.values(state.pipelines ?? {})
+        .some((item) => item.watching)) continue;
       if (!state.scenario || state.stage !== "mr_green") continue;
       const index = fixedStageIndex(state.scenario, "mr_green");
       if (index < 0 || (state.stage_states?.[index] ?? "pending") !== "done") {

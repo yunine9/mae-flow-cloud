@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { listHostSkillShelfRoot } from "../src/hostSkillShelf.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 function skill(data: string, name: string, body = "original", tech = "java") {
   const dir = join(data, "skills", name);
@@ -13,7 +14,7 @@ function skill(data: string, name: string, body = "original", tech = "java") {
   writeFileSync(join(dir, "scripts", "check.sh"), "echo ready\n");
 }
 function setup() {
-  const data = mkdtempSync(join(tmpdir(), "mfc-skill-sync-"));
+  const data = mfcTemp("mfc-skill-sync-");
   skill(data, "old-skill");
   const service = new TaskService({ dataDir: data, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const task = service.create("任务", { account: "owner", repositoryProfiles: [{ repository: "https://code.example/java.git", technologies: ["java"], confirmed: true, updated_at: new Date().toISOString(), updated_by: "owner" }] });

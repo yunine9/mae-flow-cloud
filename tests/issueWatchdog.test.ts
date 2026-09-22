@@ -171,6 +171,33 @@ test("守闸不误伤②:验证已通过待归档的会话不喊——照发会�
   }
 });
 
+test("守闸不误伤③:流水线在途监看不喊——修复环飞行中卡缺席是暂态", async () => {
+  const dataDir = mfcTemp("mfc-watchdog-watching-");
+  // #374 撤卡后的修复窗口:idle + 已收口 + 无闸,但新提交的流水线
+  // 监看还在跑——跑完自见分晓(绿→真空再喊,红→修复回合接着来),
+  // 飞行中喊人只会把人叫来打断正在跑的修复。
+  seedClosed(dataDir, "issue-watching", Date.now() - 10 * 60_000, {
+    pipelines: {
+      "http://loop.test/repo.git": {
+        sha: "c".repeat(40), status: "running", watching: true,
+        started_at: new Date().toISOString(),
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1,
+      },
+    },
+  });
+  const luban = new FakeLubanServer();
+  await luban.start();
+  const service = new IssueFlowService(
+    options({ dataDir, endpoint: luban.endpoint, watchdogMinutes: 0.001 }));
+  try {
+    await quiesce(1_800, () => luban.messages.length > 0);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await luban.stop();
+  }
+});
+
 test("守闸阈值热改:启动时关(0),后来开到非 0——下一拍生效不用重启", async () => {
   const dataDir = mfcTemp("mfc-watchdog-hotknob-");
   seedClosed(dataDir, "issue-1", Date.now() - 10 * 60_000);
