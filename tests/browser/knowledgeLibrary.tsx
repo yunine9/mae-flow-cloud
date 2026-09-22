@@ -11,7 +11,8 @@ const calls: any[] = [], errors: string[] = [];
 window.addEventListener("error", e => errors.push(e.message)); window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined; let result: unknown;
-  if (path === "/domain-extraction") result = { records: [job], knowledge_target: null };
+  if (path === "/knowledge-documents") result = { documents: [] };
+  else if (path === "/domain-extraction") result = { records: [job], knowledge_target: null };
   else if (path === "/domain-extraction/dkx-browser/run") {
     calls.push({ action: "run", ...input });
     job.turns.push({ id: `turn-${calls.length}`, mode: input.mode, document_ids: input.document_ids, message: input.message, operator: "领域维护人", status: "done", created_at: new Date().toISOString(), reply: "已核对资料，保留未选文档。", proposals: input.mode === "discuss" ? [] : [{ document: { ...job.documents[0], content: job.documents[0].content + "\n\n取消前需要校验发货状态，并保留幂等处理依据。" }, base_revision: job.documents[0].revision, status: "pending" }] }); result = job;
@@ -37,7 +38,10 @@ async function type(label: string, value: string) {
 }
 async function run() {
   for (let i = 0; i < 60 && !button("仅讨论"); i++) await pause();
-  check(document.querySelector('[aria-label="知识库子页面"]')?.textContent?.includes("基础组件萃取"), "two extraction pages");
+  const primary = document.querySelector('[aria-label="知识库子页面"]')!;
+  check(primary.textContent?.includes("知识文档") && primary.textContent?.includes("知识萃取"), "knowledge library separates documents and extraction");
+  check(!primary.textContent?.includes("基础组件萃取") && !primary.textContent?.includes("领域知识萃取"), "extraction types must not share the documents navigation level");
+  check(document.querySelector('[aria-label="知识萃取类型"]')?.textContent?.includes("领域知识萃取"), "extraction type navigation nested below extraction");
   const outline = document.querySelector('[aria-label="知识主题与章节"]')!;
   check(outline.textContent?.includes("取消边界"), "knowledge headings visible");
   check(!/domains\/trade|docs\/business|仓外|仓内/.test(outline.textContent ?? ""), "outline organizes knowledge without repository paths");
@@ -50,6 +54,11 @@ async function run() {
   await click("编辑"); await type("编辑领域文档", original + "\n\n人工补充的边界条件。");
   await click("订单服务的跨仓职责修订 1"); await click("订单状态与取消规则修订 1");
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching knowledge topics preserves unsaved edits");
+  await click("知识文档");
+  check(!document.querySelector('[aria-label="知识萃取类型"]'), "document page has no extraction type tabs");
+  await click("知识萃取");
+  check(document.querySelector('[aria-label="知识萃取类型"] button[aria-pressed="true"]')?.textContent === "领域知识萃取", "return to last extraction type");
+  check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching primary pages preserves unsaved edits");
   await click("基础组件萃取"); await click("领域知识萃取");
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching pages preserves unsaved edits");
   await click("保存人工版本"); await click("差异"); check(button("采纳建议").disabled, "stale proposal cannot overwrite manual revision"); await click("放弃");
