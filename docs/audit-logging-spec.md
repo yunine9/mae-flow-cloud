@@ -57,7 +57,10 @@
 └── …(既有账全部原位保留)
 <dataDir>/logs/
 ├── host-calls.jsonl             ← 宿主→适配层调用(带 issue_id 可回查)
-└── canonical.jsonl              ← 回合/会话汇总(考古第一入口)
+├── canonical.jsonl              ← 回合/会话汇总(考古第一入口)
+<adapter 配置目录>/logs/
+└── adapter-calls.jsonl          ← 适配层每请求一行(parent_request_id
+                                    =宿主透传的 x-mfc-request-id,#408)
 ```
 
 读法约定:先 `canonical.jsonl` 找到出事的回合与关联 id → 按 issue_id 进会话目录读 `audit/` 三账 → 需要正文进 transcript,需要终态进 outbox/state,需要适配层细节按 `request_id` grep `host-calls.jsonl`。
