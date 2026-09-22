@@ -93,7 +93,7 @@ _Avoid_: 关联仓(它是参考件,不可交付)、知识库资产(那是团队�
 _Avoid_: 平台代拉、页面直接拉取(违反 Agent 主理);把页面拉取当 AI 读日志的前提(AI 的日志链路在容器与 local-logs,页签橱窗已拆)
 
 **环境预热**:
-拉仓收口进 analyze 时后台启动的专职编译会话(需求侧 warmupAgent 的问题流移植,2026-09-04):同一任务容器里编译基线、焐热分仓缓存、沉淀构建入口到 `.mae-flow-work/build-notes.md`。fail-open 旁路:失败落 infrastructure_failure 收据(`issue.json` 的 `warmup` 字段,不上 wire),主流程照走;与需求侧同条件启用(host + isolateImage),测试形态缺席即关。修复 Agent 开改前先读 build-notes。
+拉仓收口进 analyze 时后台启动的专职编译会话(需求侧 warmupAgent 的问题流移植,2026-09-04):同一任务容器里编译基线、焐热分仓缓存、沉淀构建入口到 `.mae-flow-work/build-notes.md`。fail-open 旁路:失败落 infrastructure_failure 收据(`issue.json` 的 `warmup` 字段,不上 wire),主流程照走;与需求侧同条件启用(host + isolateImage),测试形态缺席即关。修复 Agent 开改前先读 build-notes。收据分终局与未终局(#358):passed/failed 是编译事实,不再重跑;infrastructure_failure(重启打断、预算到点、执行器异常)说明"基线是否编得过尚未确认",analyze 期间的续聊回合会自动补跑——过了 analyze 不补,修复期编译的是脏树,会把半成品的错扣到基线头上。
 
 **容器内超时**:
 bash 与 ops 命令超时的统一语义(2026-09-04 收窄,AI bash 路径跟进 ops 的 7df0940 模式):命令包进容器内 coreutils `timeout`,超时只了结命令进程组、会话容器不动;exec 的「超时=销毁容器」退为预算+60s 兜底保险。此前一次 npm install 超时就掀掉容器,自愈重建让模型在无知中循环重试(2940 次实测)。Abort(用户打断)仍销毁容器。

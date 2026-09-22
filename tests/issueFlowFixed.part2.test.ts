@@ -371,6 +371,74 @@ test("环境预热 fail-open:执行器异常落基建收据,主流程照走", as
   }
 });
 
+test("环境预热补跑(#358):基建失败收据不算终局,analyze 续聊回合自动补跑", async () => {
+  const dataDir = mfcTemp("mfc-issue-warmup-retry-");
+  const origin = bareOrigin(dataDir);
+  const warmupWorkspaces: string[] = [];
+  // 每个续聊回合 = 1 幕收嘴 + 催办预算 2 幕(平台自动续跑),全纯文本
+  // 确定性地耗尽催办落 idle,不给剧本对账留变数。
+  const script: Scene[] = Array.from({ length: 11 }, () => (
+    { text: "继续研究。" }));
+  script[0] = { tool: { name: "pull_repo", input: { url: origin } } };
+  script[1] = { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } };
+  const model = new ScriptedModelServer(script, "scripted-v1",
+    { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+    warmup: {
+      enabled: true,
+      runner: async (request) => {
+        warmupWorkspaces.push(request.workspace);
+        // 首跑执行器异常(重启中断/容器故障一类)落基建收据;
+        // 续聊回合补跑成功,之后终局收据拦住一切再跑。
+        if (warmupWorkspaces.length === 1) {
+          throw new Error("预热容器炸了");
+        }
+        return { status: "passed", message: "基线全绿" };
+      },
+    },
+  });
+  try {
+    seedModule(dataDir, origin);
+    const created = service.create({
+      account: "dev", title: "导出超时", repoUrl: origin,
+      moduleId: MODULE_ID, environment: NO_TICKET_ENV,
+    });
+    const statePath = join(dataDir, "issues", created.id, "issue.json");
+    const readState = () => JSON.parse(readFileSync(statePath, "utf-8")) as {
+      warmup?: { status: string; finished_at?: string; detail?: string };
+      stage?: string;
+    };
+    // 首跑失败落基建收据,主流程照走:analyze 中段催办耗尽落 idle。
+    await until(() => {
+      const state = readState();
+      return state.warmup?.finished_at && state.stage === "analyze"
+        ? state.warmup : undefined;
+    }, "首跑基建收据");
+    await until(() => service.get(created.id).status === "idle"
+      ? service.get(created.id) : undefined, "analyze 中段落 idle");
+    assert.equal(warmupWorkspaces.length, 1, "基建失败后尚未补跑");
+    assert.match(readState().warmup!.detail ?? "", /预热容器炸了/);
+    // analyze 里的续聊回合:容器就绪即补跑,收据翻成终局 passed。
+    service.reply(created.id, "继续推进分析");
+    await until(() => readState().warmup?.status === "passed"
+      ? readState().warmup : undefined, "补跑收据翻终局");
+    assert.equal(warmupWorkspaces.length, 2, "基建失败收据恰好补跑一次");
+    await until(() => service.get(created.id).status === "idle"
+      ? service.get(created.id) : undefined, "补跑回合收口");
+    // 终局收据(passed)拦住后续续聊回合,不再重跑。
+    service.reply(created.id, "再补一点细节");
+    await until(() => service.get(created.id).status === "idle"
+      ? service.get(created.id) : undefined, "第三回合收口");
+    assert.equal(warmupWorkspaces.length, 2, "终局收据后不再重跑");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
 // ---- 催办延续的互斥与忙撞(issue-20 复盘,2026-09-09) ----
 
 /** 模拟 pi 的截断工具错误:报错文本同时携带"output token limit"与
