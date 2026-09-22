@@ -2,446 +2,386 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "MAE Flow · 从需求到交付的 AI 工程平台",
-    "subtitle": "交付闭环 × 知识闭环",
+    "title": "MAE Flow · 交付与知识双闭环",
+    "subtitle": "MAE Flow · 能力架构",
     "locale": "zh-CN",
     "animation": "none",
     "visual_preset": "blueprint",
     "quality_profile": "standard",
     "viewBox": [
-      1090,
-      454
+      1320,
+      482
     ],
     "legend": {
       "mode": "hidden"
-    },
-    "views": [
-      {
-        "id": "delivery",
-        "label": "交付闭环",
-        "focus": [
-          "intent",
-          "design",
-          "develop",
-          "verify",
-          "iterate",
-          "deliver"
-        ],
-        "note": "Agent 执行，人掌握关键取舍，真实验证与合入结果完成交付。"
-      },
-      {
-        "id": "knowledge",
-        "label": "知识自闭环",
-        "focus": [
-          "extract",
-          "search",
-          "assets",
-          "adopt",
-          "organize",
-          "retrospect",
-          "design",
-          "develop",
-          "deliver"
-        ],
-        "note": "开发消费知识、缺口触发萃取、交付触发复盘，经人审视后持续复用。"
-      },
-      {
-        "id": "foundation",
-        "label": "工程底座",
-        "focus": [
-          "agents",
-          "harness",
-          "tools"
-        ],
-        "note": "Workflow 与 Skill 组织方法，宿主连接真实工程环境。"
-      }
-    ]
+    }
   },
   "components": [
     {
-      "id": "intent",
+      "id": "o_intent",
       "type": "frontend",
       "label": "需求澄清",
-      "sublabel": "目标与边界 · Spec",
+      "sublabel": "目标 · 边界 · Spec",
       "pos": [
-        54,
-        48
+        46,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "design",
+      "id": "o_design",
       "type": "frontend",
       "label": "方案与拆分",
-      "sublabel": "模块职责与依赖 · Story",
+      "sublabel": "模块职责 · Story · 依赖",
       "pos": [
-        222,
-        48
+        260,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "develop",
+      "id": "o_develop",
       "type": "frontend",
       "label": "协同开发",
-      "sublabel": "按依赖并行 · 代码与 UT",
+      "sublabel": "适用知识 · 代码 · UT",
       "pos": [
-        390,
-        48
+        474,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "verify",
+      "id": "o_verify",
       "type": "frontend",
-      "label": "验证与检视",
-      "sublabel": "编译 / 测试 / 人工检视",
+      "label": "真实验证",
+      "sublabel": "编译 · 单测 · 流水线",
       "pos": [
-        558,
-        48
+        688,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "iterate",
+      "id": "o_iterate",
       "type": "frontend",
-      "label": "MR 迭代",
-      "sublabel": "推送 · 反馈 · 修复",
+      "label": "MR 持续迭代",
+      "sublabel": "提交 MR · 修复 · 检视",
       "pos": [
-        726,
-        48
+        902,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "deliver",
+      "id": "o_deliver",
       "type": "frontend",
       "label": "合入交付",
-      "sublabel": "代码 / 验证 / 交付摘要",
+      "sublabel": "合入事实 · 交付材料",
       "pos": [
-        894,
-        48
+        1116,
+        53
       ],
       "size": [
-        142,
-        62
+        158,
+        61
       ]
     },
     {
-      "id": "extract",
+      "id": "o_produce",
       "type": "backend",
-      "label": "源码范式萃取",
-      "sublabel": "组件源码 + 跨仓真实用例",
+      "label": "知识生产",
+      "sublabel": "复盘 · 组件 · 资料与源码",
       "pos": [
-        54,
-        216
+        46,
+        214
       ],
       "size": [
-        142,
-        62
-      ]
+        188,
+        82
+      ],
+      "tag": "交付复盘 / 组件 / 资料与源码"
     },
     {
-      "id": "search",
+      "id": "o_govern",
       "type": "backend",
-      "label": "按需检索应用",
-      "sublabel": "语言 · 模块 · 当前问题",
+      "label": "知识治理",
+      "sublabel": "审视采纳 · 抽象 · 定时整理",
       "pos": [
-        222,
-        216
+        306,
+        214
       ],
       "size": [
-        142,
-        62
-      ]
+        188,
+        82
+      ],
+      "tag": "来源可追溯，适用范围明确"
     },
     {
-      "id": "assets",
+      "id": "o_store",
+      "type": "database",
+      "label": "外部知识仓库",
+      "sublabel": "Markdown · 自动发布 · 版本",
+      "pos": [
+        566,
+        214
+      ],
+      "size": [
+        188,
+        82
+      ],
+      "tag": "自动发布 · 近期接入"
+    },
+    {
+      "id": "o_retrieve",
       "type": "backend",
-      "label": "组织知识资产",
-      "sublabel": "规范 · 组件 · 业务 · 经验",
+      "label": "知识获取与检索",
+      "sublabel": "仓库导入 · 分节 · RAG",
       "pos": [
-        390,
-        216
+        826,
+        214
       ],
       "size": [
-        142,
-        62
-      ]
+        188,
+        82
+      ],
+      "tag": "关键词 + 语义，按需读原文"
     },
     {
-      "id": "adopt",
+      "id": "o_apply",
       "type": "backend",
-      "label": "人工审视采纳",
-      "sublabel": "可修改 · 有依据 · 可追溯",
+      "label": "消费与反馈",
+      "sublabel": "计划 · 实现 · 修复",
       "pos": [
-        558,
-        216
+        1086,
+        214
       ],
       "size": [
-        142,
-        62
-      ]
-    },
-    {
-      "id": "organize",
-      "type": "backend",
-      "label": "抽象与定时整理",
-      "sublabel": "归纳共性 · 合并零散知识",
-      "pos": [
-        726,
-        216
+        188,
+        82
       ],
-      "size": [
-        142,
-        62
-      ]
+      "tag": "用于下一次开发"
     },
     {
-      "id": "retrospect",
-      "type": "backend",
-      "label": "交付经验复盘",
-      "sublabel": "修改差异 + 检视意见",
-      "pos": [
-        894,
-        216
-      ],
-      "size": [
-        142,
-        62
-      ]
-    },
-    {
-      "id": "agents",
+      "id": "o_agents",
       "type": "cloud",
       "label": "Agent 协作执行",
-      "sublabel": "分析 · 编码 · 构建 · 萃取",
+      "sublabel": "主会话 · 子任务 · 后台知识工作",
       "pos": [
-        54,
-        363
+        46,
+        389
       ],
       "size": [
-        310,
-        68
+        360,
+        66
       ],
-      "tag": "主会话与子任务按需协作"
+      "tag": "按依赖并行，过程可见"
     },
     {
-      "id": "harness",
-      "type": "security",
+      "id": "o_harness",
+      "type": "cloud",
       "label": "MAE Flow 工程底座",
-      "sublabel": "Workflow / Skill · 编排与恢复",
+      "sublabel": "Workflow / Skill · 状态 · 恢复",
       "pos": [
-        390,
-        363
+        480,
+        389
       ],
       "size": [
-        310,
-        68
+        360,
+        66
       ],
-      "tag": "真实状态 · 隔离执行 · 权限与留痕"
+      "tag": "人的决定有效，真实结果留痕"
     },
     {
-      "id": "tools",
-      "type": "external",
+      "id": "o_tools",
+      "type": "cloud",
       "label": "连接现有研发环境",
-      "sublabel": "代码仓 / CodeHub · CI · 构建环境",
+      "sublabel": "Git / CodeHub · CI · 代码搜索",
       "pos": [
-        726,
-        363
+        914,
+        389
       ],
       "size": [
-        310,
-        68
+        360,
+        66
       ],
-      "tag": "代码搜索 · 小鲁班通知"
+      "tag": "构建环境 · 小鲁班通知"
     }
   ],
   "connections": [
     {
-      "id": "delivery-0",
-      "from": "intent",
-      "to": "design",
+      "id": "o_delivery_0",
+      "from": "o_intent",
+      "to": "o_design",
       "variant": "emphasis"
     },
     {
-      "id": "delivery-1",
-      "from": "design",
-      "to": "develop",
+      "id": "o_delivery_1",
+      "from": "o_design",
+      "to": "o_develop",
       "variant": "emphasis"
     },
     {
-      "id": "delivery-2",
-      "from": "develop",
-      "to": "verify",
+      "id": "o_delivery_2",
+      "from": "o_develop",
+      "to": "o_verify",
       "variant": "emphasis"
     },
     {
-      "id": "delivery-3",
-      "from": "verify",
-      "to": "iterate",
+      "id": "o_delivery_3",
+      "from": "o_verify",
+      "to": "o_iterate",
       "variant": "emphasis"
     },
     {
-      "id": "delivery-4",
-      "from": "iterate",
-      "to": "deliver",
+      "id": "o_delivery_4",
+      "from": "o_iterate",
+      "to": "o_deliver",
       "variant": "emphasis"
     },
     {
-      "id": "repair",
-      "from": "verify",
-      "to": "develop",
-      "label": "失败反馈 → 修复验证",
+      "id": "o_knowledge_0",
+      "from": "o_produce",
+      "to": "o_govern",
+      "variant": "emphasis"
+    },
+    {
+      "id": "o_knowledge_1",
+      "from": "o_govern",
+      "to": "o_store",
+      "variant": "emphasis"
+    },
+    {
+      "id": "o_knowledge_2",
+      "from": "o_store",
+      "to": "o_retrieve",
+      "variant": "emphasis"
+    },
+    {
+      "id": "o_knowledge_3",
+      "from": "o_retrieve",
+      "to": "o_apply",
+      "variant": "emphasis"
+    },
+    {
+      "id": "o_feedback",
+      "from": "o_apply",
+      "to": "o_produce",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "bottom",
       "via": [
         [
-          629,
-          150
+          1180,
+          334
         ],
         [
-          461,
-          150
+          140,
+          334
         ]
       ],
       "labelAt": [
-        550,
-        156
-      ]
+        660,
+        338
+      ],
+      "label": "交付经验与知识缺口持续回流"
     },
     {
-      "id": "learn",
-      "from": "deliver",
-      "to": "retrospect",
-      "label": "合入后自动复盘",
+      "id": "o_learn",
+      "from": "o_deliver",
+      "to": "o_apply",
       "variant": "emphasis",
       "fromSide": "bottom",
       "toSide": "top",
       "labelAt": [
-        965,
-        172
+        1190,
+        173
+      ],
+      "label": "交付反馈",
+      "via": [
+        [
+          1195,
+          173
+        ],
+        [
+          1180,
+          173
+        ]
       ]
     },
     {
-      "id": "retrospect-organize",
-      "from": "retrospect",
-      "to": "organize",
-      "variant": "emphasis"
-    },
-    {
-      "id": "organize-adopt",
-      "from": "organize",
-      "to": "adopt",
-      "variant": "emphasis"
-    },
-    {
-      "id": "adopt-assets",
-      "from": "adopt",
-      "to": "assets",
-      "variant": "emphasis"
-    },
-    {
-      "id": "assets-search",
-      "from": "assets",
-      "to": "search",
-      "variant": "emphasis"
-    },
-    {
-      "id": "search-extract",
-      "from": "search",
-      "to": "extract",
-      "variant": "emphasis"
-    },
-    {
-      "id": "reuse",
-      "from": "search",
-      "to": "design",
-      "label": "检索带入设计与实现",
+      "id": "o_reuse",
+      "from": "o_retrieve",
+      "to": "o_develop",
       "variant": "emphasis",
       "fromSide": "top",
       "toSide": "bottom",
-      "labelAt": [
-        293,
-        172
-      ]
-    },
-    {
-      "id": "gap",
-      "from": "extract",
-      "to": "organize",
-      "label": "发现知识缺口 → 自动萃取真实范式 → 补充知识",
-      "variant": "emphasis",
-      "fromSide": "bottom",
-      "toSide": "bottom",
       "via": [
         [
-          125,
-          322
+          920,
+          160
         ],
         [
-          797,
-          322
+          553,
+          160
         ]
       ],
       "labelAt": [
-        461,
-        328
-      ]
+        755,
+        162
+      ],
+      "label": "检索进入计划与实现"
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "01  交付闭环  /  从意图到真实交付",
+      "label": "01  交付闭环 · 从需求到真实合入",
       "wraps": [
-        "intent",
-        "design",
-        "develop",
-        "verify",
-        "iterate",
-        "deliver"
+        "o_intent",
+        "o_design",
+        "o_develop",
+        "o_verify",
+        "o_iterate",
+        "o_deliver"
       ],
-      "pad": 24
+      "pad": 22
     },
     {
       "kind": "region",
-      "label": "02  知识自闭环  /  从一次交付到持续复用",
+      "label": "02  知识闭环 · 生产 → 治理 → 外部存储 → 获取与消费",
       "wraps": [
-        "extract",
-        "search",
-        "assets",
-        "adopt",
-        "organize",
-        "retrospect"
+        "o_produce",
+        "o_govern",
+        "o_store",
+        "o_retrieve",
+        "o_apply"
       ],
-      "pad": 24
+      "pad": 22
     },
     {
       "kind": "region",
-      "label": "03  工程能力底座  /  将 Agent 接入团队研发体系",
+      "label": "03  工程底座 · 连接人、Agent 与现有研发体系",
       "wraps": [
-        "agents",
-        "harness",
-        "tools"
+        "o_agents",
+        "o_harness",
+        "o_tools"
       ],
-      "pad": 24
+      "pad": 22
     }
   ]
 }

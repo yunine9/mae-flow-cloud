@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "知识视图 · 生产、治理、存储与消费",
+    "subtitle": "MAE Flow · 能力架构",
+    "locale": "zh-CN",
+    "animation": "none",
+    "visual_preset": "blueprint",
+    "quality_profile": "standard",
+    "viewBox": [
+      1320,
+      506
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "components": [
+    {
+      "id": "k_retro",
+      "type": "backend",
+      "label": "交付经验复盘",
+      "sublabel": "首次交付后的修改 + 检视意见",
+      "pos": [
+        46,
+        74
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "合入后自动生成待审草稿"
+    },
+    {
+      "id": "k_component",
+      "type": "backend",
+      "label": "基础组件萃取",
+      "sublabel": "源码定义 + 跨仓真实调用",
+      "pos": [
+        46,
+        213
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "按语言一键扫描组件仓"
+    },
+    {
+      "id": "k_business",
+      "type": "backend",
+      "label": "资料与源码治理",
+      "sublabel": "业务资料 + 模块源码 + 团队 Skill",
+      "pos": [
+        46,
+        352
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "资料 + 源码治理 · 近期接入"
+    },
+    {
+      "id": "k_adopt",
+      "type": "backend",
+      "label": "人工审视与采纳",
+      "sublabel": "可编辑 · 可放弃 · 可追溯",
+      "pos": [
+        378,
+        74
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "草稿经判断后再进入复用"
+    },
+    {
+      "id": "k_organize",
+      "type": "backend",
+      "label": "抽象与定时整理",
+      "sublabel": "归纳共性 · 合并重复 · 保留例外",
+      "pos": [
+        378,
+        213
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "整理记录可查，原文保留"
+    },
+    {
+      "id": "k_scope",
+      "type": "backend",
+      "label": "范围与来源管理",
+      "sublabel": "语言 · 业务模块 · 仓库 · 版本",
+      "pos": [
+        378,
+        352
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "规范 / 组件 / 业务 / 经验"
+    },
+    {
+      "id": "k_git",
+      "type": "database",
+      "label": "发布到外部知识仓",
+      "sublabel": "Markdown · 自动发布 · 版本",
+      "pos": [
+        710,
+        74
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "自动发布 · 近期接入"
+    },
+    {
+      "id": "k_import",
+      "type": "external",
+      "label": "从外部仓库获取",
+      "sublabel": "选仓库 / 分支 / 文件或文件夹",
+      "pos": [
+        710,
+        213
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "保留相对路径与来源信息"
+    },
+    {
+      "id": "k_index",
+      "type": "database",
+      "label": "分节与检索索引",
+      "sublabel": "语义分节 · 原文定位 · 可重建",
+      "pos": [
+        710,
+        352
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "原文是资产，索引服务检索"
+    },
+    {
+      "id": "k_search",
+      "type": "frontend",
+      "label": "按需检索 · RAG",
+      "sublabel": "knowledge：搜索 → 展开 → 核对",
+      "pos": [
+        1042,
+        74
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "按当前问题查，不整本注入"
+    },
+    {
+      "id": "k_apply",
+      "type": "frontend",
+      "label": "用于计划与代码",
+      "sublabel": "组件选型 · 实现 · 测试 · 修复",
+      "pos": [
+        1042,
+        213
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "把“查到”变成“用对”"
+    },
+    {
+      "id": "k_feedback",
+      "type": "backend",
+      "label": "反馈回到知识生产",
+      "sublabel": "交付复盘 · 缺口补充 · 纠错",
+      "pos": [
+        1042,
+        352
+      ],
+      "size": [
+        232,
+        80
+      ],
+      "tag": "从这次交付改善下一次开发"
+    }
+  ],
+  "connections": [
+    {
+      "id": "k_produce_0",
+      "from": "k_retro",
+      "to": "k_adopt",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          328,
+          114
+        ],
+        [
+          328,
+          114
+        ]
+      ]
+    },
+    {
+      "id": "k_produce_1",
+      "from": "k_component",
+      "to": "k_adopt",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          328,
+          253
+        ],
+        [
+          328,
+          114
+        ]
+      ]
+    },
+    {
+      "id": "k_produce_2",
+      "from": "k_business",
+      "to": "k_adopt",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          328,
+          392
+        ],
+        [
+          328,
+          114
+        ]
+      ]
+    },
+    {
+      "id": "k_adopt_organize",
+      "from": "k_adopt",
+      "to": "k_organize",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_organize_scope",
+      "from": "k_organize",
+      "to": "k_scope",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_to_git",
+      "from": "k_organize",
+      "to": "k_git",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          660,
+          253
+        ],
+        [
+          660,
+          114
+        ]
+      ],
+      "labelAt": [
+        662,
+        182
+      ],
+      "label": "发布知识"
+    },
+    {
+      "id": "k_get",
+      "from": "k_git",
+      "to": "k_import",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_build_index",
+      "from": "k_import",
+      "to": "k_index",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_rag",
+      "from": "k_index",
+      "to": "k_search",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          990,
+          392
+        ],
+        [
+          990,
+          114
+        ]
+      ],
+      "labelAt": [
+        992,
+        259
+      ],
+      "label": "建立检索"
+    },
+    {
+      "id": "k_use",
+      "from": "k_search",
+      "to": "k_apply",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_learn",
+      "from": "k_apply",
+      "to": "k_feedback",
+      "variant": "emphasis"
+    },
+    {
+      "id": "k_cycle",
+      "from": "k_feedback",
+      "to": "k_component",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          1158,
+          478
+        ],
+        [
+          306,
+          478
+        ],
+        [
+          306,
+          312
+        ],
+        [
+          162,
+          312
+        ]
+      ],
+      "labelAt": [
+        690,
+        482
+      ],
+      "label": "新经验、知识缺口 → 再生产与治理"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "01  知识生产",
+      "wraps": [
+        "k_retro",
+        "k_component",
+        "k_business"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "02  知识治理",
+      "wraps": [
+        "k_adopt",
+        "k_organize",
+        "k_scope"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "03  外部存储与获取",
+      "wraps": [
+        "k_git",
+        "k_import",
+        "k_index"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "04  RAG 消费与反馈",
+      "wraps": [
+        "k_search",
+        "k_apply",
+        "k_feedback"
+      ],
+      "pad": 22
+    }
+  ]
+}

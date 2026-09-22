@@ -1,0 +1,456 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "交付视图 · 从首次交付到 MR 迭代闭环",
+    "subtitle": "MAE Flow · 能力架构",
+    "locale": "zh-CN",
+    "animation": "none",
+    "visual_preset": "blueprint",
+    "quality_profile": "standard",
+    "viewBox": [
+      1320,
+      506
+    ],
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "components": [
+    {
+      "id": "d_plan",
+      "type": "frontend",
+      "label": "澄清与模块拆分",
+      "sublabel": "Spec · Story · 职责与依赖",
+      "pos": [
+        42,
+        72
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "有公共依赖先准备，独立任务并行"
+    },
+    {
+      "id": "d_code",
+      "type": "frontend",
+      "label": "知识辅助实现",
+      "sublabel": "实施计划 · 代码 · UT",
+      "pos": [
+        42,
+        211
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "组件与规范按需查阅"
+    },
+    {
+      "id": "d_verify",
+      "type": "frontend",
+      "label": "首次编译与测试",
+      "sublabel": "真实命令 · 结果 · 失败证据",
+      "pos": [
+        42,
+        350
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "失败反馈进入当前修复"
+    },
+    {
+      "id": "d_scope",
+      "type": "frontend",
+      "label": "确定交付范围",
+      "sublabel": "人工检视 · 批注 · 文件选择",
+      "pos": [
+        310,
+        72
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "已有决定沿用，避免重复审批"
+    },
+    {
+      "id": "d_mr",
+      "type": "frontend",
+      "label": "推送并提交 MR",
+      "sublabel": "同步分支 · 推送 · 创建 / 关联",
+      "pos": [
+        310,
+        211
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "宿主执行，远端结果留痕"
+    },
+    {
+      "id": "d_report",
+      "type": "frontend",
+      "label": "首次交付摘要",
+      "sublabel": "变更视图 · 测试与业务场景",
+      "pos": [
+        310,
+        350
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "后台子会话，不阻塞 MR 迭代"
+    },
+    {
+      "id": "d_watch",
+      "type": "frontend",
+      "label": "观察 MR 与 CI",
+      "sublabel": "状态 · 日志 · 新检视意见",
+      "pos": [
+        584,
+        72
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "监听当前发布版本"
+    },
+    {
+      "id": "d_gate",
+      "type": "frontend",
+      "label": "流水线 / 门禁修复",
+      "sublabel": "编译 · UT · CodeCheck",
+      "pos": [
+        584,
+        211
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "客观失败 → 自动处理"
+    },
+    {
+      "id": "d_push",
+      "type": "frontend",
+      "label": "修复提交与复验",
+      "sublabel": "代码修改 · 再推送 · 再验证",
+      "pos": [
+        584,
+        350
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "新结果回到监听"
+    },
+    {
+      "id": "d_comments",
+      "type": "frontend",
+      "label": "MR 检视意见汇入",
+      "sublabel": "人工意见 · 数字人报告",
+      "pos": [
+        802,
+        72
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "转为统一批注"
+    },
+    {
+      "id": "d_triage",
+      "type": "frontend",
+      "label": "责任人判断与分派",
+      "sublabel": "自行答复 / 闭环 / 交给 Agent",
+      "pos": [
+        802,
+        211
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "支持补充要求、批量提交"
+    },
+    {
+      "id": "d_review",
+      "type": "frontend",
+      "label": "检视意见修复",
+      "sublabel": "按采纳要求修改 · 回应结果",
+      "pos": [
+        802,
+        350
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "tag": "可与独立的 CI 修复协作"
+    },
+    {
+      "id": "d_merge",
+      "type": "frontend",
+      "label": "实际合入确认",
+      "sublabel": "MR 已合入 → 任务交付",
+      "pos": [
+        1078,
+        72
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "依据平台事实完成任务"
+    },
+    {
+      "id": "d_notify",
+      "type": "cloud",
+      "label": "进展与通知",
+      "sublabel": "工作台 · 小鲁班 · 待办",
+      "pos": [
+        1078,
+        211
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "人不必一直盯着页面"
+    },
+    {
+      "id": "d_retro",
+      "type": "backend",
+      "label": "交付后经验复盘",
+      "sublabel": "首次之后的修改 + 检视意见",
+      "pos": [
+        1078,
+        350
+      ],
+      "size": [
+        200,
+        80
+      ],
+      "tag": "草稿 → 人审 → 知识治理"
+    }
+  ],
+  "connections": [
+    {
+      "id": "d_plan_code",
+      "from": "d_plan",
+      "to": "d_code",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_code_verify",
+      "from": "d_code",
+      "to": "d_verify",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_ready",
+      "from": "d_verify",
+      "to": "d_scope",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          275,
+          390
+        ],
+        [
+          275,
+          112
+        ]
+      ]
+    },
+    {
+      "id": "d_scope_mr",
+      "from": "d_scope",
+      "to": "d_mr",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_summary",
+      "from": "d_mr",
+      "to": "d_report",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_published",
+      "from": "d_mr",
+      "to": "d_watch",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          548,
+          251
+        ],
+        [
+          548,
+          112
+        ]
+      ]
+    },
+    {
+      "id": "d_fail",
+      "from": "d_watch",
+      "to": "d_gate",
+      "variant": "emphasis",
+      "labelAt": [
+        650,
+        174
+      ],
+      "label": "失败"
+    },
+    {
+      "id": "d_repair",
+      "from": "d_gate",
+      "to": "d_push",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_repeat",
+      "from": "d_push",
+      "to": "d_watch",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          674,
+          472
+        ],
+        [
+          554,
+          472
+        ],
+        [
+          554,
+          112
+        ]
+      ],
+      "labelAt": [
+        661,
+        478
+      ],
+      "label": "LOOP · 新版本复验"
+    },
+    {
+      "id": "d_collect",
+      "from": "d_watch",
+      "to": "d_comments",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_judge",
+      "from": "d_comments",
+      "to": "d_triage",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_assign",
+      "from": "d_triage",
+      "to": "d_review",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_submit_review",
+      "from": "d_review",
+      "to": "d_push",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_merged",
+      "from": "d_watch",
+      "to": "d_merge",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          674,
+          22
+        ],
+        [
+          1178,
+          22
+        ]
+      ],
+      "labelAt": [
+        930,
+        25
+      ],
+      "label": "MR 实际合入"
+    },
+    {
+      "id": "d_know",
+      "from": "d_merge",
+      "to": "d_notify",
+      "variant": "emphasis"
+    },
+    {
+      "id": "d_retrospect",
+      "from": "d_notify",
+      "to": "d_retro",
+      "variant": "emphasis"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "01  分析与开发",
+      "wraps": [
+        "d_plan",
+        "d_code",
+        "d_verify"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "02  首次交付",
+      "wraps": [
+        "d_scope",
+        "d_mr",
+        "d_report"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "region",
+      "label": "03  MR LOOP · 观察、判断、修复与复验",
+      "wraps": [
+        "d_watch",
+        "d_gate",
+        "d_push",
+        "d_comments",
+        "d_triage",
+        "d_review"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "04  合入与知识回流",
+      "wraps": [
+        "d_merge",
+        "d_notify",
+        "d_retro"
+      ],
+      "pad": 22
+    }
+  ]
+}
