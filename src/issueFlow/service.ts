@@ -2280,6 +2280,12 @@ export class IssueFlowService {
     message: string,
   ): Promise<Outcome> {
     await this.ensureContainer(live);
+    // 预热补跑(#358):被打断/基建失败的预热收据不算终局,analyze
+    // 期间主 Agent 只读,续聊回合容器就绪即补跑(startBaselineWarmup
+    // 自身守卫幂等,fail-open);过了 analyze 不补——修复期编译的是
+    // 脏树,会把半成品的编译错扣到基线头上。重启续跑与用户消息同享
+    // 这条自愈路:阶段单向,没有别的时机再进 analyze。
+    if (live.state.stage === "analyze") this.startBaselineWarmup(live);
     // 欠账便签随行(#244 发送必达):任何续聊形态的回合都把停靠通知
     // 捎给模型——落到便签的通知不能停在显示摘要里没人看见。
     return this.withParkedNotices(live, async (replay) => {
@@ -3427,10 +3433,13 @@ export class IssueFlowService {
   private static readonly WARMUP_BUDGET_MS = 25 * 60_000;
 
   /** 环境预热启动(2026-09-04,需求侧 startBaselineWarmup 的问题流
-   * 移植)。complete_stage 推进进 analyze 时由工具层调用,与主 Agent
-   * 的分析并行。守卫全 fail-open:开关缺席、无隔离、已在跑、收过
-   * 收据、容器不在场,任何一条不满足就静默跳过——预热是旁路,不是
-   * 流程依赖。幂等:收据在 state(重启/重走 analyze 都不再重跑)。 */
+   * 移植)。complete_stage 推进进 analyze(工具层)与续聊回合容器就绪
+   * 后(resumeTurnBody,#358 补跑)两条路调用,与主 Agent 的分析并行。
+   * 守卫全 fail-open:开关缺席、无隔离、已在跑、收过终局收据、容器
+   * 不在场,任何一条不满足就静默跳过——预热是旁路,不是流程依赖。
+   * 幂等:终局收据(passed/failed)在 state 不再重跑;中断/基建失败
+   * (infrastructure_failure)不算编译完成,analyze 期间补跑,与需求
+   * 侧 293343c3 同款守卫。 */
   private startBaselineWarmup(live: LiveIssue): void {
     if (this.shuttingDown || isTerminal(live.state.status)) return;
     const configured = this.options.warmup;
@@ -3438,7 +3447,10 @@ export class IssueFlowService {
     // 原生路径要真容器;测试注入 runner 时放行。
     if (!configured.runner && !this.options.isolation) return;
     if (live.warmupActive) return;
-    if (live.state.warmup?.finished_at) return;
+    // 中断/基建失败不等于编译完成,不拦补跑(#358):此前 finished_at
+    // 一刀切,重启打断的预热永不重跑(issue-79 实锤,09-17 起无基线)。
+    if (live.state.warmup?.finished_at
+        && live.state.warmup.status !== "infrastructure_failure") return;
     if (!live.container && !configured.runner) return;
     live.warmupActive = true;
     const budgetMs = (live.state.repo_urls ?? [live.state.repo_url ?? ""]).some(isMaeRepository)

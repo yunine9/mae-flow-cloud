@@ -37,7 +37,14 @@ const ORIGIN_CLASS: Record<"first" | "rework" | "external", string> = {
   external: "text-muted-foreground",
 };
 
-const num = (value: number) => value.toLocaleString("zh-CN");
+/** 快照版本镜像(src/issueFlow/codeOrigin.ts 的
+ *  ISSUE_CODE_ORIGIN_SCHEMA_VERSION):版本错位(部署窗口旧后端、旧包读新
+ *  快照,#360)时整块按缺失退场,不渲染未知形状。 */
+const SNAPSHOT_SCHEMA_VERSION = 2;
+
+/** 非数字(字段缺席/形状漂移)显示「—」,不让渲染崩掉整页(#360)。 */
+const num = (value: number | undefined) =>
+  Number.isFinite(value) ? value!.toLocaleString("zh-CN") : "—";
 const percent = (value: number | null) =>
   value === null ? "—" : `${value.toFixed(1)}%`;
 
@@ -70,7 +77,8 @@ export function IssueCodeOriginPanel({ id, threshold }: {
   if (busy) {
     return <p className="m-0 text-sm text-muted-foreground">正在读取一次生成归属…</p>;
   }
-  if (missing || !snapshot) {
+  if (missing || !snapshot
+    || snapshot.schema_version !== SNAPSHOT_SCHEMA_VERSION) {
     return <p className="m-0 text-sm text-muted-foreground">
       该会话暂无一次生成统计(未归档、未算完或早于起算日期)。</p>;
   }

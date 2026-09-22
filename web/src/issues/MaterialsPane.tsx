@@ -45,6 +45,7 @@ import {
 } from "../api";
 import { Annotatable } from "../Annotatable";
 import { Markdown } from "../markdown";
+import { resolveWorkspaceImage } from "./workspaceImageRef";
 import { GitDiff } from "../GitDiff";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { Badge } from "@/components/ui/badge";
@@ -366,9 +367,11 @@ function IssueAnalysisReport({ detail, canOperate }: {
                     };
                   }
                 }}>
-                <Markdown showLineNumbers text={content} />
+                <Markdown showLineNumbers text={content}
+                  resolveImage={(path) => resolveWorkspaceImage(id, path)} />
               </Annotatable>
-            : <Markdown showLineNumbers text={content} />}
+            : <Markdown showLineNumbers text={content}
+                resolveImage={(path) => resolveWorkspaceImage(id, path)} />}
         </article>
         {/* 检视区常驻正文下方(#260 收敛,原「检视」页签):不再整块挂
             canOperate——已提交意见清单是纯读面,登录只读访问者也可见
@@ -387,7 +390,8 @@ function IssueAnalysisReport({ detail, canOperate }: {
           <Annotatable taskId={id} artifact={ANALYSIS_DOC}
             fallbackFile={ANALYSIS_DOC} kind="doc" enabled={false}
             items={frozenReviews} onAdded={() => {}}>
-            <Markdown showLineNumbers text={frozen.content} />
+            <Markdown showLineNumbers text={frozen.content}
+              resolveImage={(path) => resolveWorkspaceImage(id, path)} />
           </Annotatable>
         </> : <p className="m-0 text-[13px] text-faint">正在读取该版快照…</p>}
       </article>}
