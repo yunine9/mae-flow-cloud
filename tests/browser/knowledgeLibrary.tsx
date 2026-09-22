@@ -142,7 +142,7 @@ async function run() {
   module.value = "trade"; module.dispatchEvent(new Event("change", { bubbles: true })); await pause();
   await fillInput("统一基准分支", "release/current");
   await fillInput("领域萃取关联单号", "REQ-new");
-  await click("开始后台萃取");
+  await click("创建任务，先清理旧知识");
   const created = calls.find(c => c.action === "create");
   check(created?.module_id === "trade" && created.baseline_branch === "release/current", "creation sends module and one common branch");
   check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created) && !("use_wxdoubao" in created), "server derives scope and repositories from module maintenance");

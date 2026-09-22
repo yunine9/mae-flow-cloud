@@ -1,3 +1,4 @@
+import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -37,7 +38,9 @@ export class DomainKnowledgeExtraction {
   private running = new Map<string, { controller: AbortController; work: Promise<void> }>();
   private publishing = new Set<string>();
   private stopped = false;
+  private get sourceCleanup() { return this.options.sourceCleanup; }
   constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string>, private options: {
+    sourceCleanup?: KnowledgeSourceCleanup;
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void) => Promise<DomainPublication>;
     refresh?: (job: DomainKnowledgeJob, publication: DomainPublication, operator: string) => Promise<DomainPublication>;
     previewCleanup?: (job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) => Promise<KnowledgeCleanupPlan>;
@@ -126,10 +129,27 @@ export class DomainKnowledgeExtraction {
     const ar_codes = this.arCodes(input.ar_codes ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, ar_codes })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
-      source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
+      source_cleanup: this.sourceCleanup?.create(repositories), source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+    if (job.source_cleanup) job.stage = "准备清理旧知识";
     this.jobs.set(job.id, job); this.persist(job);
+    if (job.source_cleanup) return this.get(job.id);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
+  }
+  async sourceCleanupAction(id: string, action: string, input: any, operator: string) {
+    if (this.stopped) throw new Error("服务正在停止");
+    const job = this.live(id);
+    if (!this.sourceCleanup || this.publishing.has(id) || this.running.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
+    this.publishing.add(id);
+    try {
+      if (action === "start") {
+        if (job.source_cleanup?.started) throw new Error("萃取已启动，请使用研究区继续任务");
+        if (!job.source_cleanup) throw new Error("此任务没有清理记录，请在研究区继续任务");
+        job.revisions = {}; job.source_cleanup.started = true;
+        this.persist(job);
+      } else await this.sourceCleanup.action(job, action, input, operator, () => this.persist(job));
+    } finally { this.publishing.delete(id); }
+    return action === "start" ? this.run(id, { mode: "extract", message: job.scope }, operator) : this.get(id);
   }
   configureArchive(id: string, input: { targets: unknown; base_revision?: number }) {
     const job = this.live(id);
@@ -195,6 +215,7 @@ export class DomainKnowledgeExtraction {
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
     if (input.ar_codes) job.ar_codes = this.arCodes(input.ar_codes);
     job.use_wxdoubao = true;
+    if (job.source_cleanup) job.source_cleanup.started = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
@@ -351,7 +372,7 @@ export class DomainKnowledgeExtraction {
     const job = this.live(id), issue = knowledgeIssueNumber(value);
     if (this.publishing.has(id)) throw new Error("正在创建 MR，请稍后修改关联单号");
     if (job.issue_no === issue) return this.get(id);
-    if ([...job.publications, ...(job.publication_history ?? [])].some(p => p.mr_attempted || p.url)) throw new Error("已发起 MR 创建，不能更改本任务的关联单号");
+    if ([...job.publications, ...(job.publication_history ?? []), ...(job.source_cleanup?.publications ?? [])].some(p => p.mr_attempted || p.url)) throw new Error("已发起 MR 创建，不能更改本任务的关联单号");
     job.issue_no = issue; this.persist(job); return this.get(id);
   }
   async publish(id: string, operator: string) {

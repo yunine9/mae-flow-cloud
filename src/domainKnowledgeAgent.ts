@@ -23,12 +23,12 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   if (!model) throw new Error("请在模型网关配置主模型");
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill);
   input.update({ skill: { name: skill.name, digest: skill.digest } });
-  const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions = { ...input.job.revisions };
+  const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = {};
   const source = (repository: KnowledgeRepository) => {
     if (!sources.has(repository.id)) sources.set(repository.id, options.source(repository, input.turn.operator, input.signal).then(value => {
       if (input.signal.aborted) throw new Error("研究已停止");
-      const revision = revisions[repository.id] ?? value.revision; revisions[repository.id] = revision;
-      input.update({ revisions: { ...revisions } }); return { root: value.root, revision };
+      const revision = value.revision; revisions[repository.id] = revision;
+      input.update({ revisions: { ...input.job.revisions, ...revisions } }); return { root: value.root, revision };
     }));
     return sources.get(repository.id)!;
   };
@@ -113,7 +113,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     if (timedOut) throw new Error("研究超过 24 小时，已有草稿保留");
     if (outcome.status !== "turn_finished") throw new Error("研究会话未正常完成");
     if (input.turn.mode === "extract") {
-      const observed = new Set([...readSources, ...input.job.evidence.filter(e => e.tool === "component_source" && e.action === "read" && e.status === "returned").map(e => String(e.component_id))]);
+      const observed = readSources;
       if (repositories.some(repo => !observed.has(repo.id))) throw new Error("部分业务仓尚未读取，已保存草稿保留，请继续研究");
     }
     return session.finalReply();

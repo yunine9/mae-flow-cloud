@@ -24,6 +24,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         const body = await readBody(request, 3 * 1024 * 1024);
         if (!parts[1]) return json(response, 202, manager.create(body, operator));
         const id = parts[1];
+        if (parts[2] === "source-cleanup") return json(response, 200, await manager.sourceCleanupAction(id, parts[3], body, operator));
         if (parts[2] === "cleanup-template") {
           const job = manager.get(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === body.target_id);
           if (!target) throw new Error("请选择规范文件的目标仓");

@@ -40,6 +40,8 @@ export interface DomainPublication {
   cleanup_id?: string; removed_paths?: string[];
 }
 export interface DomainKnowledgeJob {
+  cleanup_only?: boolean;
+  source_cleanup?: KnowledgeSourceCleanupState;
   id: string; title: string; scope: string; issue_no?: string; module_id?: string; operator: string; created_at: string;
   component_research_id?: string; technologies?: string[];
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
@@ -59,4 +61,11 @@ export interface DomainExecution {
   read: () => DomainDocument[];
   update: (patch: { revisions?: Record<string, string>; skill?: DomainKnowledgeJob["skill"]; stage?: string }) => void;
   evidence: (event: Record<string, unknown>) => void;
+}
+
+export interface KnowledgeSourceCleanupState {
+  repositories: KnowledgeRepository[];
+  plans: KnowledgeCleanupPlan[];
+  publications: DomainPublication[];
+  started?: boolean;
 }

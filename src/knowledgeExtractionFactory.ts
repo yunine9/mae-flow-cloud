@@ -1,3 +1,4 @@
+import { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ComponentResearch } from "./componentResearch.ts";
@@ -12,6 +13,7 @@ export type { ComponentResearch, DomainKnowledgeExtraction };
 export function createDomainKnowledgeExtraction(options: DomainAgentOptions & ConstructorParameters<typeof KnowledgeMrPublisher>[0]) {
   const publisher = new KnowledgeMrPublisher(options);
   return new DomainKnowledgeExtraction(options.dataDir, input => runDomainKnowledge(input, options), {
+    sourceCleanup: new KnowledgeSourceCleanup(publisher),
     previewCleanup: (...args) => publisher.previewCleanup(...args),
     publish: (...args) => publisher.publish(...args),
     refresh: (...args) => publisher.refresh(...args),

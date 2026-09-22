@@ -76,8 +76,8 @@ export class KnowledgeMrPublisher {
     const continueBranch = previous && !["merged", "closed", "unchanged"].includes(oldState ?? "");
     const branch = continueBranch ? previous!.branch : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
     const docs = job.documents.filter(d => d.selected && d.target_id === target.id);
-    const requestedCleanup = docs.length ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
-    const cleanup = requestedCleanup && ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id) ? requestedCleanup : undefined;
+    const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
+    const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
     if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
     if (!cleanup && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
     const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
@@ -160,7 +160,7 @@ export class KnowledgeMrPublisher {
       }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
       if (!remote && tree === before) { publication.cleanup_id = cleanup?.id ?? publication.cleanup_id; publication.state = "unchanged"; publication.revision = parent; const result = await this.refresh(job, publication, operator); save(result); return result; }
-      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", `docs: 更新${job.title}知识`])).trim();
+      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", job.cleanup_only ? `docs(${issue}): 清理萃取前旧知识` : `docs: 更新${job.title}知识`])).trim();
       publication.revision = sha; saveAttempt();
       if (sha !== remote) await git(["push", target.repository, `${sha}:refs/heads/${branch}`]);
       publication.cleanup_id = cleanup?.id ?? publication.cleanup_id;
@@ -169,7 +169,7 @@ export class KnowledgeMrPublisher {
         // The adapter deduplicates by repository and source/target branches.
         publication.mr_attempted = true; save(publication);
         let receipt;
-        try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: `知识库：${job.title}`, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
+        try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: job.cleanup_only ? `知识清理：${issue} · ${target.name}` : `知识库：${job.title}`, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
         catch { throw new Error("文档已推送，MR 创建尚未确认；重试将复用同一分支"); }
         if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后重试");
         publication.url = receipt.url; publication.mr_id = receipt.id;
@@ -199,7 +199,7 @@ export class KnowledgeMrPublisher {
           research_source: { job_id: job.component_research_id ?? job.id, repository: target.repository, branch: target.branch, path: saved.path, revision } }, operator, previous?.id, job.component_research_id ? { maxContentBytes: 16 * 1024 * 1024 } : {});
       }
       for (const path of publication.removed_paths ?? []) {
-        if (await this.content(git, revision, path) !== null) continue;
+        if ((await cleanupEntries(git, revision, [path])).length) continue;
         for (const old of listKnowledgeDocuments(this.options.dataDir).filter(d => d.active && d.source?.repository === target.repository && d.source.branch === target.branch && d.source.path === path)) saveKnowledgeDocument(this.options.dataDir, { ...old, active: false }, operator, old.id);
       }
       this.options.onIndexed();
