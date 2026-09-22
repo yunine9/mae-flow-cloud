@@ -400,17 +400,20 @@ function stageDurations(
 // ---- 代码现场取数(工单 #326:提交归属比对 + 逐推送 diff 统计) ----
 
 /** 源码扩展名白名单(「仅源码增/删行」的判定口径):首版内置常见
- *  源码后缀,文档与二进制不掺水。口径要调整只改这一处,别在调用点
- *  散落判断。 */
+ *  源码后缀,文档与二进制不掺水;2026-09-22 扩入配置类后缀(json/
+ *  yaml/yml/xml/properties,Java 系仓库的配置改动是真工作量)——
+ *  lockfile 等生成物随之灌水,知情接受,未做路径排除。口径要调整
+ *  只改这一处,别在调用点散落判断。 */
 export const SOURCE_CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "java", "c", "cc", "cpp",
   "cxx", "h", "hh", "hpp", "go", "rs", "cs", "kt", "swift", "rb", "php",
   "vue", "svelte", "css", "scss", "less", "html", "sql", "sh", "bash",
   "zsh", "ps1", "bat",
+  "json", "xml", "yaml", "yml", "properties",
 ]);
 
 /** 文件路径是否算源码(按扩展名白名单):无后缀、整名点文件
- *  (如 .gitignore)与白名单外的后缀都不算。一次生成归属层
+ *  (如 .gitignore)与白名单外的后缀都不算。首次生成归属层
  *  (codeOrigin.ts)同源消费,口径单一来源。 */
 export function isSourcePath(path: string): boolean {
   const base = path.split(/[\\/]/).pop() ?? path;
