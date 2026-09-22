@@ -428,6 +428,15 @@ export class PlatformAdapter {
     } else if (this.config.token) {
       this.serviceToken = this.config.token;
     }
+    if (!this.serviceToken) {
+      // 显眼警告,不拒启:引用 {token} 的命令模板仍可靠请求头里的
+      // 个人令牌逐请求工作;两头皆空时每条命令都会 401(issue-383:
+      // token 文件在盘但 adapter.json 没引用,25,712 条 401 靠考古发现)。
+      // 让「没配服务令牌」在启动一瞬可见,而不是在错误日志里沉底。
+      console.warn("[adapter] 未配置服务令牌(token/token_file 皆空):"
+        + "引用 {token} 的命令模板将逐请求依赖个人令牌头,"
+        + "缺失时全部失败——请检查 adapter.json");
+    }
   }
 
   /** 模板套值 + 执行。token 优先用请求头里的个人令牌(MR 发起人=
@@ -952,9 +961,11 @@ export class PlatformAdapter {
           return { status: 404,
                    payload: { error: "未配置 discussion_resolve" } };
         }
+        // 请求体原样透传(与 reply 处理器同款):模板引用 {mr} 之类的
+        // 占位符时值来自 body——手工挑字段会把 body 里的 mr 丢掉,
+        // 模板必然报「引用了 {mr} 但没有值」(issue-383 的确定性故障)。
         await this.run(spec, this.values(
-          { id: decodeURIComponent(resolveMatch[1]),
-            repo: String(body.repo ?? "") }, headers));
+          { ...body, id: decodeURIComponent(resolveMatch[1]) }, headers));
         return { status: 200, payload: { ok: true, resolved: true } };
       }
     }
