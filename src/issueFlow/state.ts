@@ -300,8 +300,14 @@ export interface IssuePipelineWatch {
   /** true=宿主定时器还在盯;false=已出终态或预算耗尽。 */
   watching: boolean;
   started_at: string;
-  /** 轮询预算到期时刻(ISO);预算内不重复开表。 */
+  /** 轮询预算到期时刻(ISO);预算内不重复开表。预算耗尽时若还没延期过
+   *  (#372),先自动延长一个完整预算再喊人,deadline 随之改写。 */
   deadline: string;
+  /** 已自动延期的次数(#372):CI 高峰排队会让正常流水线(空闲期 6-10
+   *  分钟出结果)在初始预算内跑不完,到期先静默延长一次再停表——
+   *  真卡死的喊人从 30 分钟推到 60 分钟,是有界的代价。落盘计数,
+   *  重启不多送;新一轮挂表(换 SHA/人工重看)从 0 重新计。 */
+  deadline_extensions?: number;
   checks?: import("../pipelineContract.ts").PipelineCheck[];
   last_error?: string;
   round: number;

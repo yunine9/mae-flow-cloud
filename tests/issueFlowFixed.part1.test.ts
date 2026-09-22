@@ -3124,12 +3124,13 @@ test("红灯修复轮预算耗尽→小鲁班停机通知(标题/单号/原因/�
 });
 
 
-test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落停表路);同因恢复重放不重发", async () => {
+test("流水线轮询预算到点→终查+自动延期一次(#372)→延期也耗尽停表喊人(带延期留痕);同因恢复重放不重发", async () => {
   const dataDir = mfcTemp("mfc-issue-watch-notify-");
   const origin = bareOrigin(dataDir);
   const platform = new LoopPlatform("failed");
   await platform.start();
-  // deadline 已过期:恢复重挂表后循环条件立刻为假,直奔停表路。
+  // deadline 已过期:恢复重挂表后循环条件立刻为假,先终查(假件前两次
+  // 状态查询回 running)再走延期路(#372)——首耗尽不再直落停表。
   seedMrGreenWatch(dataDir, origin, {
     deadline: new Date(Date.now() - 60_000).toISOString(),
   });
@@ -3138,53 +3139,94 @@ test("流水线轮询预算耗尽→小鲁班停机通知(过期 deadline 直落
   const notifier = new Notifier({ endpoint: luban.endpoint, fake: true });
   const model = new ScriptedModelServer([], "scripted-v1", { linear: true });
   await model.start();
-  const buildService = () => new IssueFlowService({
+  const readWatch = (): IssuePipelineWatch => {
+    const state = JSON.parse(readFileSync(
+      join(dataDir, "issues", "issue-1", "issue.json"), "utf-8")) as {
+      pipelines: Record<string, IssuePipelineWatch>;
+    };
+    return state.pipelines[origin];
+  };
+  const buildService = (platformUrl: string) => new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
     settings: fastPoll,
     dts: new MockDtsGateway(),
-    platformUrl: platform.baseUrl,
+    platformUrl,
     gitCredential: () => ({ username: "dev", password: "git-token", email: "dev@example.com" }),
     notifier,
     linkBase: "http://work.test",
   });
-  const service = buildService();
+  const service = buildService(platform.baseUrl);
   try {
-    const stopped = await until(() => {
-      const issue = service.get("issue-1");
-      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.pipelines?.[origin]?.last_error === "轮询预算耗尽,请人工查看流水线"
-        ? issue : undefined;
-    }, "轮询预算耗尽停表");
-    assert.equal(stopped.pipelines?.[origin]?.watching, false, "监看停表");
-    assert.match(stopped.stage_note ?? "", /轮询预算耗尽/);
-    assert.equal(model.requests.length, 0, "停表不开平台回合");
-    // 通知到达:标题/单号、放弃原因、轮次、建议动作。
-    const messages = await until(() =>
-      luban.messages.length ? luban.messages : undefined, "停机通知到达");
-    assert.equal(messages.length, 1, "同因只发一条");
-    const text = JSON.stringify(messages);
-    assert.match(text, /红灯分诊夹具/, "问题标题入文案");
-    assert.match(text, /DTS-2026-1002/, "单号入文案");
-    assert.match(text, /轮询预算耗尽/, "放弃原因入文案");
-    assert.match(text, /第 1 轮验证/, "监看轮次入文案");
-    assert.match(text, /请人工查看 MR\/流水线/, "建议动作入文案");
-    assert.match(text, /发消息继续/, "建议动作含续跑指引");
-    const key = `issue-1:outcome:pipeline_watch_timeout:${origin}:`
-      + "c".repeat(40);
-    assert.ok(notifier.list().some((record) => record.waiting_id === key),
-      "幂等键=会话 id+原因+提交(outcome 通道 waiting_id)");
-    // 同因再停机不重发:恢复重放(deadline 依旧过期)再次停表,同键幂等。
+    // 第一拍到点:终查仍在跑→自动延期一次——继续监看、deadline 改写、
+    // 落盘留痕,不停表、不喊人、不开平台回合。
+    const extended = await until(() => {
+      const watch = readWatch();
+      return (watch.deadline_extensions ?? 0) >= 1 ? watch : undefined;
+    }, "到期自动延期一次");
+    assert.equal(extended.watching, true, "延期后继续监看");
+    assert.ok(Date.parse(extended.deadline) > Date.now(),
+      "deadline 改写到未来(一个完整预算)");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(luban.messages.length, 0, "延期不喊人");
+    assert.equal(model.requests.length, 0, "延期不开平台回合");
     await service.shutdown().catch(() => undefined);
-    rearmMrGreenWatch(dataDir, origin);
-    const revived = buildService();
+    // 第二拍到点(延期额度已尽):停表喊人,停表路文案与通知都带
+    // 「已自动延期一次」留痕。
+    rearmMrGreenWatch(dataDir, origin, {
+      deadline: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const revived = buildService(platform.baseUrl);
     try {
-      await until(() => {
+      const stopped = await until(() => {
         const issue = revived.get("issue-1");
+        if (issue.status === "failed") throw new Error(issue.error ?? "failed");
         return issue.pipelines?.[origin]?.watching === false ? issue : undefined;
-      }, "恢复重放后再次停表");
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      assert.equal(luban.messages.length, 1, "同因恢复重放不重发");
+      }, "延期耗尽后停表");
+      assert.match(stopped.pipelines?.[origin]?.last_error ?? "",
+        /轮询预算耗尽\(已自动延期一次\)/);
+      assert.match(stopped.stage_note ?? "", /已自动延期一次/);
+      assert.equal(model.requests.length, 0, "停表不开平台回合");
+      // 通知到达:标题/单号、放弃原因(含延期留痕)、轮次、建议动作。
+      const messages = await until(() =>
+        luban.messages.length ? luban.messages : undefined, "停机通知到达");
+      assert.equal(messages.length, 1, "同因只发一条");
+      const text = JSON.stringify(messages);
+      assert.match(text, /红灯分诊夹具/, "问题标题入文案");
+      assert.match(text, /DTS-2026-1002/, "单号入文案");
+      assert.match(text, /已自动延期一次/, "延期留痕入通知文案");
+      assert.match(text, /第 1 轮验证/, "监看轮次入文案");
+      assert.match(text, /请人工查看 MR\/流水线/, "建议动作入文案");
+      assert.match(text, /发消息继续/, "建议动作含续跑指引");
+      const key = `issue-1:outcome:pipeline_watch_timeout:${origin}:`
+        + "c".repeat(40);
+      assert.ok(notifier.list().some((record) => record.waiting_id === key),
+        "幂等键=会话 id+原因+提交(outcome 通道 waiting_id)");
+      // 同因再停机不重发:换一块没出过终态的平台假件(避免重放的终查
+      // 恰好吃到「第三次查询出终态」的剧本),deadline 依旧过期,延期
+      // 计数保持 1——恢复重放再次停表,同键幂等不重发。
+      await revived.shutdown().catch(() => undefined);
+      const platform2 = new LoopPlatform("failed");
+      await platform2.start();
+      try {
+        rearmMrGreenWatch(dataDir, origin, {
+          deadline: new Date(Date.now() - 60_000).toISOString(),
+        });
+        const again = buildService(platform2.baseUrl);
+        try {
+          await until(() => {
+            const issue = again.get("issue-1");
+            return issue.pipelines?.[origin]?.watching === false
+              ? issue : undefined;
+          }, "恢复重放后再次停表");
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          assert.equal(luban.messages.length, 1, "同因恢复重放不重发");
+        } finally {
+          await again.shutdown().catch(() => undefined);
+        }
+      } finally {
+        await platform2.stop();
+      }
     } finally {
       await revived.shutdown().catch(() => undefined);
     }

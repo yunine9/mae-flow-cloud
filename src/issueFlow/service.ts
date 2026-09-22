@@ -4184,6 +4184,9 @@ export class IssueFlowService {
       delete watch.last_repair_sha;
       delete watch.last_failure_summary;
       watch.reds = 0;
+      // 延期计数一并清(#372):人工重看是新一轮监看,初始预算重新起算,
+      // 旧账上的"已延期一次"不能让新监看失去延期资格,也不能累加。
+      delete watch.deadline_extensions;
       const supplement = (notes ?? "").trim();
       if (supplement) {
         // 带话开回合:状态不落 idle——回合在飞,runTurn 自管状态。
@@ -5261,40 +5264,82 @@ export class IssueFlowService {
       // 触发失败不弃看:适配层可能已因建 MR 自动触发,状态查询照走。
       this.log(`[issue-flow] ${live.id} 流水线触发失败(继续查状态): ${String(error)}`);
     }
-    while (
-      state.pipelines?.[repo]?.sha === sha
-      && state.pipelines[repo].watching
-      && !isTerminal(state.status)
-      && Date.now() < Date.parse(state.pipelines[repo].deadline)
-    ) {
-      await new Promise<void>((done) => {
-        const timer = setTimeout(done, pollMs);
-        timer.unref?.();
-      });
-      if (state.pipelines?.[repo]?.sha !== sha
-          || !state.pipelines[repo].watching
-          || isTerminal(state.status)) return;
-      try {
-        const status = await getPipelineStatus(call());
-        // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
-        // 越过后触发且仍在 running 的新 run，让监看器提前收口。
-        const latest = status.runs.at(-1);
-        if (latest && latest.status !== "running" && !rejectStale(latest)) {
-          await this.settlePipeline(live, repo, sha, latest);
-          return;
+    // 到点出循环后不立刻停表(#372):先终查一次(结果可能恰在最后一拍
+    // 出),仍在跑且本轮还没延期过就静默延长一个完整预算回到轮询。
+    // CI 高峰排队是真实耗尽现场(#372,issue-131):空闲期 10 分钟出结果
+    // 的流水线,高峰期 30 分钟只是还在排队,停表喊人只会把人叫来看
+    // 「还在跑」。延期把真卡死的喊人推迟一拍(30→60 分钟),是有界的
+    // 代价——只延一次,60 分钟仍不够是该仓调 poll_timeout_s 的信号,
+    // 不该靠堆延期掩盖;计数随 issue.json 落盘,重启不重置不多送。
+    for (;;) {
+      while (
+        state.pipelines?.[repo]?.sha === sha
+        && state.pipelines[repo].watching
+        && !isTerminal(state.status)
+        && Date.now() < Date.parse(state.pipelines[repo].deadline)
+      ) {
+        await new Promise<void>((done) => {
+          const timer = setTimeout(done, pollMs);
+          timer.unref?.();
+        });
+        if (state.pipelines?.[repo]?.sha !== sha
+            || !state.pipelines[repo].watching
+            || isTerminal(state.status)) return;
+        try {
+          const status = await getPipelineStatus(call());
+          // 与申报门同一口径：runs.at(-1) 才是当前 run。历史终态不能
+          // 越过后触发且仍在 running 的新 run，让监看器提前收口。
+          const latest = status.runs.at(-1);
+          if (latest && latest.status !== "running" && !rejectStale(latest)) {
+            await this.settlePipeline(live, repo, sha, latest);
+            return;
+          }
+        } catch (error) {
+          this.log(`[issue-flow] ${live.id} 流水线查询失败(继续轮): ${String(error)}`);
         }
-      } catch (error) {
-        this.log(`[issue-flow] ${live.id} 流水线查询失败(继续轮): ${String(error)}`);
       }
+      // 循环因账目变化(换 SHA/停表/终态)退出时不延期,直接落到停表段;
+      // 只有「同提交仍在监看+非终态」才是预算真到点,才轮到终查与延期。
+      if (!(state.pipelines?.[repo]?.sha === sha
+        && state.pipelines[repo].watching
+        && !isTerminal(state.status))) break;
+      let final: PipelineRun | undefined;
+      try {
+        final = (await getPipelineStatus(call())).runs.at(-1);
+      } catch (error) {
+        // 终查失败按仍在跑延期:平台瞬时抖动不该恰在到点时终止监看。
+        this.log(`[issue-flow] ${live.id} 预算终查失败(按仍在跑处理): ${String(error)}`);
+      }
+      if (final && final.status !== "running" && !rejectStale(final)) {
+        await this.settlePipeline(live, repo, sha, final);
+        return;
+      }
+      if ((state.pipelines[repo].deadline_extensions ?? 0) >= 1) break;
+      const { budgetMs } = this.pipelineKnobs();
+      state.pipelines[repo].deadline_extensions =
+        (state.pipelines[repo].deadline_extensions ?? 0) + 1;
+      state.pipelines[repo].deadline = new Date(Date.now() + budgetMs).toISOString();
+      recordTransition(state, {
+        source: "platform",
+        note: `轮询预算到点流水线仍未出结果,自动延期一次(${repo})`
+          + ` @ ${sha.slice(0, 12)},新到期 ${state.pipelines[repo].deadline}`,
+      });
+      saveState(live.root, state);
+      this.log(`[issue-flow] ${live.id} 轮询预算到点流水线未出结果,`
+        + `自动延期一次(${repo}) @ ${sha.slice(0, 12)}`);
     }
     // 预算耗尽:如实停表,不阻塞会话——用户可人工查看后发消息继续。
     // 终态会话不写不算不喊(体检 C-H2):循环因 isTerminal 退出时也落
     // 到这里,不能给已取消/归档的会话改 stage_note、发"请人工"通知。
     if (state.pipelines?.[repo]?.sha === sha && state.pipelines[repo].watching
         && !isTerminal(state.status)) {
+      const extendedOnce = (state.pipelines[repo].deadline_extensions ?? 0) >= 1;
+      const extensionNote = extendedOnce ? "(已自动延期一次)" : "";
       state.pipelines[repo].watching = false;
-      state.pipelines[repo].last_error = "轮询预算耗尽,请人工查看流水线";
-      state.stage_note = "流水线轮询预算耗尽——请人工查看 MR/流水线,再发消息继续";
+      state.pipelines[repo].last_error =
+        `轮询预算耗尽${extensionNote},请人工查看流水线`;
+      state.stage_note = `流水线轮询预算耗尽${extensionNote}`
+        + "——请人工查看 MR/流水线,再发消息继续";
       saveState(live.root, state);
       this.log(`[issue-flow] ${live.id} 流水线监看预算耗尽(${repo})`
         + ` @ ${sha.slice(0, 12)}`);
@@ -5303,7 +5348,7 @@ export class IssueFlowService {
       this.notifyPipelineStopped(live,
         `pipeline_watch_timeout:${repo}:${sha}`,
         `${this.issueSubject(live)}:仓 ${repo} 流水线轮询预算耗尽`
-          + `(第 ${state.pipelines[repo].round ?? 1} 轮验证,`
+          + `${extensionNote}(第 ${state.pipelines[repo].round ?? 1} 轮验证,`
           + `提交 ${sha.slice(0, 12)}),流水线在预算内迟迟未出结果,`
           + "自动监看已停止。请人工查看 MR/流水线,处理后发消息继续");
     }
