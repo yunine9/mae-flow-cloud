@@ -74,7 +74,14 @@ kernel/ > ../mae-flow),不用再单独 clone 内核仓；需要联调活内核�
    任务现场再删)。老版本是每次启动静默清空,踩过一次真单蒸发;
 5. 适配层:填 adapter.json(codehubcli 命令模板)→ `npm run adapter
    -- --config adapter.json`(tmux)→ `curl http://127.0.0.1:8790/`
-   → 三端点各手动打一发核对 → 平台地址填进管理页;
+   → 三端点各手动打一发核对 → 平台地址填进管理页。
+   日志纪律(2026-09-22,#408):适配层每次请求自动记 `logs/adapter-calls.jsonl`
+   (配置文件旁,JSON lines,带宿主透传的 request id、状态、耗时、错误原文)
+   ——查问题先看这本账,`adapter.log`(tmux stdout 重定向)只是兜底。
+   重定向要有翻转,别无限涨:`npm run adapter ... >> adapter.log 2>&1`
+   配 logrotate(size+time 双触发、`copytruncate`、compress),或
+   `multilog`/`svlogd` 等带轮转的运行器; tmux 直跑不重定向会在会话
+   死时丢历史。宿主侧(8787)同理走 journald 或同款 logrotate。
 5b. **内部 CLI 只有 Windows 版也不怕**,两条路:①(首选)WSL 互操作
    直接调 .exe——命令模板写 `/mnt/c/.../codehubcli.exe`,其余不变,
    .exe 走 Windows 侧网络栈,公司代理/VPN 白捡;先验

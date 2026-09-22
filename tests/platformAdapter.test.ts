@@ -12,6 +12,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  existsSync,
   chmodSync,
   mkdtempSync,
   readFileSync,
@@ -680,4 +681,61 @@ test("独立 resolve 端点透传请求体:{mr} 从 body 取值,缺席诚实报�
     adapter.handle("POST", "/mr/discussions/d-9/resolve",
       new URLSearchParams(), { repo: "r" }, {}),
     /\{mr\}/);
+});
+
+test("适配层调用账(#408):每请求一行带 parent_request_id,异常也记", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-audit-"));
+  const cli = fakeCli(dir);
+  const configPath = join(dir, "adapter.json");
+  writeFileSync(configPath, JSON.stringify({
+    token: "svc-token-0000",
+    mr_create: {
+      command: ["node", cli, "mr", "--repo", "{repo}",
+        "--source", "{source_branch}", "--target", "{target_branch}",
+        "--title", "{title}", "--token", "{token}"],
+      url: { json: "data.web_url" },
+    },
+    pipeline_trigger: {
+      command: ["node", cli, "trigger", "--repo", "{repo}",
+        "--sha", "{sha}", "--token", "{token}"],
+      status: { json: "data.state" },
+    },
+    pipeline_status: {
+      command: ["node", cli, "status", "--sha", "{sha}",
+        "--token", "{token}"],
+      runs: { json: "data.runs" }, status: { json: "data.state" },
+    },
+    discussion_resolve: {
+      command: ["node", cli, "resolvecmd", "--discussion", "{id}",
+        "--mr", "{mr}", "--token", "{token}"],
+    },
+  }));
+  chmodSync(configPath, 0o600);
+  const adapter = new PlatformAdapter(configPath, () => {});
+  const callsFile = join(dir, "logs", "adapter-calls.jsonl");
+  const rows = () => existsSync(callsFile)
+    ? readFileSync(callsFile, "utf-8").trim().split("\n")
+      .map((line) => JSON.parse(line)) : [];
+
+  await adapter.handle("POST", "/mr/discussions/d-9/resolve",
+    new URLSearchParams(), { repo: "r", mr: "2989" },
+    { "x-mfc-request-id": encodeURIComponent("mrr-1") });
+  const row = rows().find((item: any) =>
+    item.endpoint === "POST /mr/discussions/d-9/resolve");
+  assert.equal(row.parent_request_id, "mrr-1",
+    "宿主透传 id 记为 parent(两侧账按同动作 join)");
+  assert.equal(row.status, 200);
+  assert.deepEqual(row.params, { repo: "r", mr: "2989" }, "白名单参数摘要");
+  assert.ok(row.duration_ms >= 0);
+  assert.equal(row.ts, row.written_at, "双时间在账");
+
+  // 异常路径:缺 mr → AdapterError 抛出(serve 转 502),账里 error 行
+  // 带原文(已掩码)——401/{mr} 类故障不再只沉在 stdout 日志里。
+  await assert.rejects(adapter.handle("POST", "/mr/discussions/d-9/resolve",
+    new URLSearchParams(), { repo: "r" },
+    { "x-mfc-request-id": encodeURIComponent("mrr-1") }));
+  const errorRow = rows().at(-1) as any;
+  assert.equal(errorRow.level, "error");
+  assert.match(errorRow.error, /\{mr\}/);
+  assert.equal(errorRow.parent_request_id, "mrr-1");
 });
