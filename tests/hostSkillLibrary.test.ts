@@ -36,6 +36,7 @@ import {
 } from "../src/hostSkillLibrary.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const encode = (text: string) => Buffer.from(text, "utf-8").toString("base64");
 
@@ -49,7 +50,7 @@ const ENGINEERING_METADATA = {
 };
 
 test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕复原", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-lib-"));
+  const dataDir = mfcTemp("mfc-skill-lib-");
   await assert.rejects(uploadHostSkill(dataDir, "missing-tags", [
     { path: "SKILL.md", content_base64: encode(skillMd("缺少治理参数")) },
   ], "admin-a"), /必须设置知识性质与作用域标签/,
@@ -107,7 +108,7 @@ test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕
 });
 
 test("Skill 正文不变但附件变化时，详情整包指纹必须随当前包变化", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-detail-package-"));
+  const dataDir = mfcTemp("mfc-skill-detail-package-");
   const content = skillMd("整包对拍");
   const first = await uploadHostSkill(dataDir, "package-version", [
     { path: "SKILL.md", content_base64: encode(content) },
@@ -131,7 +132,7 @@ test("Skill 正文不变但附件变化时，详情整包指纹必须随当前�
 });
 
 test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版本可回退", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-languages-"));
+  const dataDir = mfcTemp("mfc-skill-languages-");
   await uploadHostSkill(dataDir, "mixed-build", [
     { path: "SKILL.md", content_base64: encode(skillMd("混合仓构建")) },
     { path: "references/build.md", content_base64: encode("构建说明\n") },
@@ -202,7 +203,7 @@ test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版
 });
 
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-guard-"));
+  const dataDir = mfcTemp("mfc-skill-guard-");
   const cases: Array<{ why: RegExp; files: Parameters<typeof uploadHostSkill>[2] }> = [
     {
       why: /密钥赋值|令牌/,
@@ -267,7 +268,7 @@ test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越�
 });
 
 test("下线归档可回退;不存在的下线与坏版本号回退明确报错", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-off-"));
+  const dataDir = mfcTemp("mfc-skill-off-");
   await uploadHostSkill(dataDir, "review-notes", [
     { path: "SKILL.md", content_base64: encode(skillMd("检视笔记")) },
   ], "admin", ENGINEERING_METADATA);
@@ -294,7 +295,7 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
 });
 
 test("路由权限:登录成员共同维护;留痕带操作人", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "mfc-skill-route-"));
+  const dir = mfcTemp("mfc-skill-route-");
   const dataDir = join(dir, "data");
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("boss", "administrator-pass");
@@ -422,7 +423,7 @@ test("路由权限:登录成员共同维护;留痕带操作人", async () => {
 });
 
 test("包内路径放开中文(实锤:references/0010_如何使用Kernel.md 被拒);点开头与遍历照拒", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-lib-cjk-"));
+  const dataDir = mfcTemp("mfc-skill-lib-cjk-");
   const record = await uploadHostSkill(dataDir, "java-autout", [
     { path: "SKILL.md", content_base64: encode(skillMd("单测写法")) },
     // 内网真实被拒的路径原样收录,防回归。
@@ -448,7 +449,7 @@ test("包内路径放开中文(实锤:references/0010_如何使用Kernel.md 被�
 });
 
 test("提交待审:验收闸同上架,通过才上架,驳回留痕,不许二次裁决", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-sub-"));
+  const dataDir = mfcTemp("mfc-skill-sub-");
   // 不合格的包(缺 SKILL.md)连待审区都进不去。
   await assert.rejects(submitHostSkill(dataDir, "java-autout", [
     { path: "notes.md", content_base64: encode("没有 SKILL.md\n") },

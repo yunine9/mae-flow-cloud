@@ -14,6 +14,7 @@ import { createTaskServer } from "../src/server.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskService } from "../src/taskService.ts";
 import { writeRequirementArtifacts } from "./requirementGraphFixture.ts";
+import { mfcTemp } from "./mfcTmp.ts";
 
 const KERNEL = resolve("kernel");
 
@@ -81,7 +82,7 @@ test("目录令牌把服务端发现结果还原为任务 Skill 清单", async (
     "-c", "user.name=Test", "-c", "user.email=test@example.com",
     "commit", "--quiet", "-m", "knowledge",
   ], { cwd: repo });
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-flow-data-")));
+  const taskService = service(mfcTemp("mfc-skill-flow-data-"));
   const catalog = await taskService.scanRepositorySkills({
     repositories: [repo], baseline: "master", account: "dev",
   });
@@ -108,7 +109,7 @@ test("目录令牌绑定用户/仓/基线，伪造 Skill id 不能下单", async
   const repo = repository("guard", [
     { root: ".pi", name: "guard-rules", marker: "GUARD-MARKER" },
   ]);
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-guard-data-")));
+  const taskService = service(mfcTemp("mfc-skill-guard-data-"));
   const catalog = await taskService.scanRepositorySkills({
     repositories: [repo], baseline: "master", account: "alice",
   });
@@ -138,7 +139,7 @@ test("宿主 Skill 以 Pi 解析的 frontmatter name 拦截仓内同名选择", 
   const repo = repository("host-conflict", [
     { root: ".agents", name: "domain-api", marker: "REPOSITORY-DOMAIN-API" },
   ]);
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-host-conflict-"));
+  const dataDir = mfcTemp("mfc-skill-host-conflict-");
   const hostDirectory = join(dataDir, "skills", "legacy-folder-alias");
   mkdirSync(hostDirectory, { recursive: true });
   writeFileSync(join(hostDirectory, "SKILL.md"), [
@@ -173,7 +174,7 @@ test("宿主 Skill 解析失败时不拿目录名误拦仓内 Skill", async () =
   const repo = repository("broken-host-skill", [
     { root: ".agents", name: "domain-api", marker: "VALID-REPOSITORY-SKILL" },
   ]);
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-broken-host-"));
+  const dataDir = mfcTemp("mfc-skill-broken-host-");
   const hostDirectory = join(dataDir, "skills", "domain-api");
   mkdirSync(hostDirectory, { recursive: true });
   // Pi 对缺 description 的 SKILL.md 不加载；catalog 必须使用同一个
@@ -204,7 +205,7 @@ test("跨仓拆出的子任务只继承自己仓库的 Skill", async () => {
   const repoB = repository("b", [
     { root: ".agents", name: "same-name", marker: "B-MARKER" },
   ]);
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-chain-data-")));
+  const taskService = service(mfcTemp("mfc-skill-chain-data-"));
   const catalog = await taskService.scanRepositorySkills({
     repositories: [repoA, repoB], baseline: "master", account: "dev",
   });
@@ -248,7 +249,7 @@ test("旧跨仓父任务恢复拆单保持 undefined，子任务仍把本仓 Ski
   const repoB = repository("legacy-b", [
     { root: ".pi", name: "legacy-b-guide", marker: "LEGACY-B-SKILL" },
   ]);
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-skill-legacy-chain-"));
+  const dataDir = mfcTemp("mfc-skill-legacy-chain-");
   const originalService = service(dataDir);
   const parent = originalService.create("恢复旧跨仓任务并继续拆单", {
     account: "dev",
@@ -337,7 +338,7 @@ test("Chain 检视决定可更新按仓 Skill，先落盘再生成子任务", as
   const repoB = repository("review-b", [
     { root: ".pi", name: "review-b-guide", marker: "REVIEW-B" },
   ]);
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-review-data-")));
+  const taskService = service(mfcTemp("mfc-skill-review-data-"));
   const parent = taskService.create("跨仓方案先分析、检视时再选能力", {
     account: "dev",
     repos: [repoA, repoB],
@@ -422,7 +423,7 @@ test("Chain 检视按成功仓覆盖选择，扫描失败仓保留原 Skill", as
   const repoC = repository("merge-c", [
     { root: ".cac", name: "merge-c-clear", marker: "MERGE-C-CLEAR" },
   ]);
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-merge-data-")));
+  const taskService = service(mfcTemp("mfc-skill-merge-data-"));
   const initialCatalog = await taskService.scanRepositorySkills({
     repositories: [repoA, repoB, repoC], baseline: "master", account: "dev",
   });
@@ -537,7 +538,7 @@ test("HTTP 显式选择保持兼容；未选择时等待 Git 现场原生发现"
   const repo = repository("http", [
     { root: ".agents", name: "http-api", marker: "HTTP-MARKER" },
   ]);
-  const taskService = service(mkdtempSync(join(tmpdir(), "mfc-skill-http-data-")));
+  const taskService = service(mfcTemp("mfc-skill-http-data-"));
   const server = createTaskServer(taskService);
   await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
   const address = server.address();

@@ -16,10 +16,11 @@
  * (exit 0),绝不挡住测试——同本仓"旁路 fail-open"的纪律。
  */
 
-import { lstatSync, readdirSync, rmSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { forceRm } from "../tests/mfcRm.ts";
 
 /** 安全窗:目录 mtime 距今超过这个时长才认定是异常残留。 */
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -59,8 +60,10 @@ export function sweepStaleMfcTmp(
       continue;
     }
     try {
+      // forceRm 而非裸 rmSync:git 产物里的只读目录挡 unlink,裸删会
+      // EACCES 留尸(2026-09-21 复盘:687 个超窗残留删 0 个的根因);
       // force 吞掉 ENOENT:扫到删之间被并行会话清掉,不算失败。
-      rmSync(full, { recursive: true, force: true });
+      forceRm(full);
       result.removed.push(entry.name);
     } catch (error) {
       // 权限/竞态等单条失败:告警后继续,这轮清不完下轮还会再来。
