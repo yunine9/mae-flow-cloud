@@ -31,6 +31,9 @@ import {
  *   GET  /issues/:id/documents/read   → 读一份过程文档(?name=;缺失为
  *                                      200 {unavailable},不 404)
  *   GET  /issues/:id/documents/archive → 全部过程文档打包下载(ZIP)
+ *   GET  /issues/:id/workspace-image → 会话工作区图片回显(?path=;
+ *                                      只认工单/登记截图两种白名单
+ *                                      形状,#376)
  *   GET  /issues/:id/analysis-versions → 分析报告版本清单(#262:检视
  *                                      提交时冻结的快照 + live 最新版,
  *                                      去重后命名初版/修订N)
@@ -104,6 +107,7 @@ import {
   stageIssueImage,
 } from "./issueImages.ts";
 import { stageIssueAttachmentStream } from "./issueAttachments.ts";
+import { readWorkspaceImage } from "./workspaceImages.ts";
 import { listBusinessModules } from "../businessModuleLibrary.ts";
 
 export interface IssueViewer {
@@ -943,6 +947,30 @@ export async function handleIssueRoutes(
         "cache-control": "no-store",
       });
       response.end(archive.data);
+      return true;
+    }
+
+    // 会话工作区图片回显(只读旁路,数据面在 workspaceImages.ts):
+    // 分析报告/过程文档里嵌入的截图引用(工单截图、登记截图两种白名单
+    // 形状)经此从会话工作区读盘给浏览器(#376)。形状白名单即边界,
+    // 读无闸(查看模式,与 documents/reviews 同语义);缺失与非法形状
+    // 同一个 404 出码,不泄露盘面事实。
+    if (method === "GET" && parts[2] === "workspace-image"
+        && parts.length === 3) {
+      const session = issueFlow.session(id);
+      const path = String(
+        new URL(request.url ?? "", "http://x").searchParams.get("path") ?? "");
+      if (!path) return done(400, { error: "缺少 path 参数" });
+      const image = readWorkspaceImage({ root: session.root, path });
+      if (!image) return done(404, { error: "图片不存在或路径非法" });
+      response.writeHead(200, {
+        "content-type": image.mime_type,
+        "content-length": String(image.data.length),
+        "content-disposition": "inline",
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, max-age=86400",
+      });
+      response.end(image.data);
       return true;
     }
 
