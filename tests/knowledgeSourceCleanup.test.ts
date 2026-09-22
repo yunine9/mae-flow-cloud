@@ -41,11 +41,13 @@ test("领域清理只提交删除 MR，响应丢失复用分支，创建后不�
   const task: SourceCleanupTask = { id: "dkx-preparation", issue_no: "REQ-cleanup", operator: "dev", created_at: new Date().toISOString(), source_cleanup: prepare.create([repo]) };
   let writes = 0; const save = () => { writes++; };
   try {
+    task.source_cleanup!.publications.push({ target_id: repo.id, branch: "codex/knowledge-old-cleanup", state: "failed", revision: "abcdef123456", documents: [] });
     const paths_by_target = { [repo.id]: ["docs/old", "AGENTS.md"] };
     await prepare.action(task, "publish", { paths_by_target }, "dev", save); assert.equal(task.source_cleanup!.publications[0].state, "failed");
     assert.equal(task.source_cleanup!.plans[0].target_entries.length, 3);
     await prepare.action(task, "publish", { paths_by_target }, "dev", save); assert.equal(mrs.length, 1, "lost response recovers the same MR");
     const publication = task.source_cleanup!.publications[0]; assert.equal(publication.state, "opened");
+    assert.equal(publication.branch, "master_Fixture_REQ-cleanup", "清理分支采用基线分支_Git工号_单号，工号不使用登录名");
     assert.equal(git(remote, "ls-tree", "-r", "--name-only", publication.branch), "code.ts", "MR contains only deletions, never draft additions");
     assert.match(git(remote, "show", "master:docs/old/rules.md"), /POISON/);
     assert.equal(git(remote, "log", "-1", "--format=%s", publication.branch).trim(), "[REQ_cleanup][feat]清理萃取前旧知识");

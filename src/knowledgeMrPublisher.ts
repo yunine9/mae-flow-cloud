@@ -82,7 +82,10 @@ export class KnowledgeMrPublisher {
       if (previous.sync_state !== "done") throw new Error(previous.sync_error || "已合入文档尚未同步，请重试同步后继续更新");
     }
     const continueBranch = previous && !["merged", "closed", "unchanged"].includes(oldState ?? "");
-    const branch = continueBranch ? previous!.branch : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
+    const newBranch = job.cleanup_only
+      ? `${target.branch}_${identity.credential.username.split("\\").pop()}_${issue}`
+      : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
+    const branch = continueBranch && (!job.cleanup_only || previous!.mr_attempted || previous!.url) ? previous!.branch : newBranch;
     const docs = job.documents.filter(d => d.selected && d.target_id === target.id);
     const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
     const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
