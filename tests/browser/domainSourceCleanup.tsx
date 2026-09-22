@@ -23,17 +23,24 @@ async function click(text: string) { const b = button(text); assert(!b.disabled,
 async function run() {
   await pause(); assert(!button("开始萃取").disabled, "Optional cleanup must not block extraction");
   assert(!document.querySelector('button[data-action="refresh"]'), "No MR gate control");
+  assert(button("创建清理 MR").disabled, "No preview must not allow destructive publication");
+  const guidance = () => document.getElementById(button("创建清理 MR").getAttribute("aria-describedby")!)?.textContent ?? "";
+  assert(guidance().includes("预览将删除的文件"), "Disabled button must explain the next action");
   await click("预览将删除的文件");
+  assert(button("创建清理 MR").disabled && guidance().includes("勾选"), "Preview must point to the deletion confirmation");
   const check = () => [...document.querySelectorAll("label")].find(l => l.textContent === "确认删除以上文件，其余文件保留")!.querySelector("input")!;
   check().click(); await pause(); assert(!button("创建清理 MR").disabled, "Can clean only the selected repository");
+  assert(guidance().includes("已确认 1 个仓"), "Ready state explains which scope will be published");
   // Editing a confirmed scope requires a fresh preview; it cannot submit a stale list.
   const textarea = document.querySelector("textarea")!;
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
   setter.call(textarea, "docs/other"); textarea.dispatchEvent(new Event("input", { bubbles: true })); await pause();
   assert(button("创建清理 MR").disabled, "Unsaved scope blocks submission");
+  assert(guidance().includes("业务仓 1") && guidance().includes("路径已修改"), "Changed scope names the repository requiring another preview");
   setter.call(textarea, "docs/old\nAGENTS.md"); textarea.dispatchEvent(new Event("input", { bubbles: true })); await pause();
   await click("创建清理 MR"); assert(!button("开始萃取").disabled, "Opened MR must not block manual start");
   assert(document.querySelector('a[href="https://example.test/mr/1"]'), "MR link available");
+  assert(button("创建清理 MR").disabled && guidance().includes("已有清理范围已处理"), "Created MR is explained instead of leaving a silent disabled button");
   await click("开始萃取");
   assert(started && calls.filter(c => c === "start").length === 1, "Exactly one extraction start");
   assert(!document.querySelector("textarea"), "Scope frozen after extraction start");
