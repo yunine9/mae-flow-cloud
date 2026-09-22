@@ -2,8 +2,10 @@
 import importlib.util
 import json
 import unittest
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+sys.path.insert(0, str(Path(__file__).parents[1] / "harness"))
 
 spec = importlib.util.spec_from_file_location("retrieval", Path(__file__).parents[1] / "harness/knowledge_retrieval.py")
 m = importlib.util.module_from_spec(spec)

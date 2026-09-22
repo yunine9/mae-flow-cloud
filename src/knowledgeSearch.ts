@@ -190,7 +190,7 @@ export class KnowledgeSearch {
     // A document may have been edited/withdrawn during asynchronous indexing.
     const current = new Map(readCatalog().assets.map(asset => [asset.id, asset]));
     const searched = new Map(catalog.assets.map(asset => [asset.id, asset]));
-    return { available: true as const, warnings: [...catalog.warnings, ...(!ready ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
+    return { available: true as const, warnings: [...catalog.warnings, ...(!ready || hits.pendingSources ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
       const asset = current.get(hit.id), prior = searched.get(hit.id);
       if (!asset || !prior || asset.content !== prior.content || asset.revision !== prior.revision) return [];
       const path = sources.find(source => source.id === asset.id)?.path;
