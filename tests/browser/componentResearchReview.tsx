@@ -8,9 +8,9 @@ const repos = ["文件基础库", "异步调用库"].map((name, i) => ({id:`repo
 const record: ComponentResearchRecord = {
   id:"cr-browser",mode:"all",format:"joint-document",topic:"基础组件联合使用指南",language:"cpp",operator:"专家",
   component:repos[0],components:repos,status:"done",stage:"草稿待审查",created_at:"2026-09-21T08:00:00Z",evidence:[],
-  document:{overview:"文件基础库提供句柄管理，异步调用库在其上实现取消与回调。调用方先初始化资源，再提交异步操作，最后等待回调释放。",sections:["安全打开与关闭", "异步读取与取消", "批量写入与错误恢复"].map((title,i) => ({
+  document:{overview:"文件基础库提供句柄管理，异步调用库在其上实现取消与回调。调用方先初始化资源，再提交异步操作，最后等待回调释放。",sections:["安全打开与关闭", "异步读取与取消", "批量写入与错误恢复", ...Array.from({length:32}, (_,i) => `组件能力 ${i+4}：资源管理与错误恢复`)].map((title,i) => ({
     id:`cap-${i}`,title,repository_ids:i === 1 ? ["repo-0","repo-1"] : ["repo-0"],selected:true,revision:1,
-    content:"适用于需要明确资源所有权的操作。失败时先检查错误码，关闭已获得的资源；不得在回调结束前销毁句柄。",
+    content:Array.from({length:12}, () => "适用于需要明确资源所有权的操作。失败时先检查错误码，关闭已获得的资源；不得在回调结束前销毁句柄。").join("\n\n"),
     interfaces:"`include/file.h`：Open / Close；`include/async.h`：ReadAsync / Cancel。",
     integration:"链接 `libfile.so`，异步能力另依赖 `libasync.so`；CMake target：file、async。",
     example:"根据接口整理，未编译验证。\n```cpp\n#include <file.h>\nint main() {\n  auto handle = Open(\"sample.txt\");\n  if (!handle) return 1;\n  Close(handle);\n  return 0;\n}\n```",
@@ -53,7 +53,7 @@ async function message(value: string) {
 async function run() {
   for (let i=0;i<60 && !document.querySelector('[aria-label="组件审核工作区"]');i++) await pause();
   const boxes = () => [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-  check(boxes().length === 3 && boxes().every(b => b.checked), "all discovered capabilities must default selected");
+  check(boxes().length === record.document!.sections.length && boxes().every(b => b.checked), "all discovered capabilities must default selected");
   await click("全不选");check(boxes().every(b => !b.checked),"unselect all");
   await click("全选");boxes()[2].click();await pause();check(!boxes()[2].checked,"single checkbox selection");
   const capability = [...document.querySelectorAll<HTMLButtonElement>('button[aria-pressed]')].find(b => b.textContent?.includes("异步读取"))!;
@@ -67,9 +67,23 @@ async function run() {
   check(calls.filter(c => c.action === "review").every(c => c.section_id === "cap-1"),"dialogue must target selected capability");
   check(document.querySelector('[aria-label="组件专家对话"]')?.textContent?.includes("为什么取消"),"conversation history retained");
   await click("完整文档");
-  check(document.querySelectorAll('[id^="research-section-"]').length === 3,"single document includes all chapters");
+  check(document.querySelectorAll('[id^="research-section-"]').length === record.document!.sections.length,"single document includes all chapters");
   check(document.querySelector('[aria-label="文档组件目录"]'),"navigable directory");
   await click("逐项审核");
+  const list = document.querySelector<HTMLElement>('[aria-label="组件能力列表"]')!;
+  const reader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
+  const outer = document.querySelector("main")!;
+  const outerTop = outer.scrollTop;
+  check(list.scrollHeight > list.clientHeight && reader.scrollHeight > reader.clientHeight, "both long panes must have bounded independent scroll areas");
+  list.scrollTop = 180;
+  reader.scrollTop = 220;
+  await pause();
+  check(list.scrollTop === 180 && reader.scrollTop === 220 && outer.scrollTop === outerTop, "scroll positions must stay independent");
+  check(getComputedStyle(list).overscrollBehaviorY === "contain" && getComputedStyle(reader).overscrollBehaviorY === "contain", "wheel at a boundary must not scroll parent");
+  const next = [...list.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("批量写入"))!;
+  next.click();await pause();
+  check(reader.scrollTop === 0 && list.scrollTop === 180, "switching component resets document only");
+  list.scrollTop = 0;
   const workspace = document.querySelector('[aria-label="组件审核工作区"]')!;
   check(workspace.scrollWidth <= workspace.clientWidth + 2,"desktop workspace horizontal overflow");
   check(document.documentElement.scrollWidth <= innerWidth + 2,"desktop page horizontal overflow");

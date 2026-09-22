@@ -208,7 +208,7 @@ export function ComponentResearch({
             </Button>
           </>}
         </header>
-        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[minmax(280px,28%)_minmax(0,1fr)]"} min-h-0 flex-1 gap-5`}>
+        <div className={`grid ${focused ? "grid-cols-1" : "grid-cols-[clamp(220px,20%,300px)_minmax(0,1fr)]"} min-h-0 flex-1 gap-5`}>
           {!focused && <aside className="overflow-auto border-r border-line pr-4">
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
@@ -232,7 +232,7 @@ export function ComponentResearch({
               <p className="text-muted-foreground">暂无萃取记录</p>
             )}
           </aside>}
-          <main className="min-w-0 overflow-auto pr-2 text-base">
+          <main className="min-w-0 overflow-auto overscroll-contain pr-2 text-base">
             {error && (
               <p role="alert" className="mb-3 text-danger">
                 {error}
