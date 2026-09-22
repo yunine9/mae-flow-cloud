@@ -12,6 +12,16 @@ const checks = [
     tool: "CodeCheck" },
 ];
 
+test("超限指标提供事实，但不冒充可定位的编译错误", () => {
+  const result = assessPipelineRepairEvidence({
+    checks: [{ dimension: "COMPILE", status: "failed", details: [
+      { message: "DT=2 [超限]", rule: "quality_metric", severity: "error" },
+    ] }],
+    artifacts: [],
+  });
+  assert.deepEqual(result.missingDimensions, ["COMPILE"]);
+});
+
 test("流水线证据逐维对齐，材料包非空不能掩盖缺失维度", () => {
   const result = assessPipelineRepairEvidence({
     checks,

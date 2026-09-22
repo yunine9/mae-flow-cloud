@@ -7,6 +7,7 @@ silently changes search semantics. No task workflow decisions are made here.
 import json
 import math
 import re
+from memory_runtime import phase, check_deadline
 
 # Conservative noise floor for the locally evaluated model only; not confidence.
 # Other models retain candidates until calibrated instead of borrowing this scale.
@@ -17,7 +18,10 @@ BGE_NOISE_FLOOR = 0.50
 async def retrieve(ms, query, sources, limit, sections=False):
     if not sources:
         return []
-    vector = (await ms._embedder.embed([query]))[0]
+    check_deadline()
+    with phase("embed_ms"):
+        vector = (await ms._embedder.embed([query]))[0]
+    check_deadline()
     store = ms._store
     if int(store._client.get_collection_stats(store._collection).get("row_count", 0)) == 0:
         return []
@@ -34,8 +38,12 @@ async def retrieve(ms, query, sources, limit, sections=False):
         )
         return rows[0] if rows else []
     while True:
-        dense = search("embedding", vector, "COSINE")
-        keyword = search("sparse_vector", query, "BM25")
+        check_deadline()
+        with phase("dense_ms"):
+            dense = search("embedding", vector, "COSINE")
+        check_deadline()
+        with phase("keyword_ms"):
+            keyword = search("sparse_vector", query, "BM25")
         unique = {h["entity"]["source"] for h in dense + keyword}
         if len(unique) >= min(limit, len(sources)) or max(len(dense), len(keyword)) < depth or depth >= 2048:
             break
@@ -98,7 +106,7 @@ async def retrieve(ms, query, sources, limit, sections=False):
 
 
 
-async def index_document(ms, path):
+async def index_document(ms, path, checkpoint=None):
     """Index meaningful content with its subject; never embed audit frontmatter.
 
     memsearch's default chunker drops title-only sections. In an experience the
@@ -129,7 +137,14 @@ async def index_document(ms, path):
     # Similar lengths share a model batch, avoiding padding every short rule to
     # the longest example in its original document order. IDs/order are stable.
     pending = sorted((c for c in chunks if ident(c) not in old), key=lambda c: len(c.content))
-    count = await ms._embed_and_store(pending)
+    count = 0
+    for offset in range(0, len(pending), 8):
+        check_deadline()
+        if checkpoint:
+            await checkpoint()
+        with phase("index_batch_ms"):
+            count += await ms._embed_and_store(pending[offset:offset + 8])
+    check_deadline()
     # Only remove old chunks after replacement has been successfully indexed.
     stale = old - current
     if stale:

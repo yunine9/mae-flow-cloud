@@ -88,6 +88,11 @@ test("新 SHA 首次失败正常派发修复并更新 last_sha，同 SHA 再失�
     loop: { kind: "ci", round: 1, last_sha: "old", state: "repairing", failure: "旧失败" } };
   projectPushReceipt(state.summary, { sha: "new", ref: "work", remote: "origin" });
   state.summary.delivery.pipeline = "failed";
+  state.summary.delivery.checks = [{ dimension: "COMPILE", status: "failed", details: [
+    { message: "构建失败=1 [超限]", rule: "quality_metric", severity: "error" },
+    { message: "DT=2 [超限]", rule: "quality_metric", severity: "error" },
+    { message: "cannot find symbol Widget", file: "src/main.ts", line: 10 },
+  ] }];
   service.mirrorPipelineArtifacts = async () => [];
   const opened: string[] = [];
   service.openFeedbackBatch = (_task: unknown, _source: string, items: Array<{ source_id: string }>) => opened.push(items[0].source_id);
@@ -96,6 +101,9 @@ test("新 SHA 首次失败正常派发修复并更新 last_sha，同 SHA 再失�
   assert.equal(state.summary.delivery.loop.round, 2);
   assert.match(opened[0], /^new:/);
   assert.equal(state.summary.delivery.loop.state, "repairing");
+  assert.match(state.mission, /DT=2 \[超限\]/);
+  assert.match(state.mission, /报告生成成功、测试执行通过、覆盖率达标是三件事/);
+  assert.match(state.mission, /未知含义保留原名与数值/);
   await service.dispatchCiRepair(state, "new", "same failure", 20, state.controlEpoch);
   assert.equal(state.summary.delivery.loop.state, "repairing");
   assert.equal(state.summary.delivery.loop.round, 3);

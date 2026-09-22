@@ -38,7 +38,7 @@ TOKEN="$3"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export MFC_MCP_CLIENT_DIR="${MFC_MCP_CLIENT_DIR:-$SCRIPT_DIR}"
 
-exec python3 - "$REPO_PATH" "$SHA" "$TOKEN" << 'PYEOF'
+exec python3 - "$REPO_PATH" "$SHA" "$TOKEN" "$SCRIPT_DIR" << 'PYEOF'
 import json
 import os
 import re
@@ -101,34 +101,17 @@ def fetch_url(url, headers=None, timeout=30):
         return None
 
 
-TOOL_DIMENSION = {
-    'CloudBuild2.0': 'COMPILE',
-    'build2.0': 'COMPILE',
-    'codecheck': 'CODECHECK',
-    'CodeCheck': 'CODECHECK',
-    'CodeCheckForTest': 'CODECHECK',
-    'codechecktest': 'CODECHECK',
-    'SuperChecker': 'CODECHECK',
-    'CPP_UT': 'UT',
-}
+sys.path.insert(0, sys.argv[4])
+from pipeline_checks import (
+    TOOL_DIMENSION, merge_check, quality_check,
+    report_only, report_note, checks_from_stages,
+)
 
 STATUS_MAP = {
-    'success': 'success',
-    'failed': 'failed',
-    'running': 'running',
-    'pending': 'pending',
-    'canceled': 'canceled',
-    'skipped': 'skipped',
-}
-
-# 同一维度出现多个检查时,保留最需要关注的状态。
-STATUS_PRIORITY = {
-    'failed': 60,
-    'running': 50,
-    'pending': 40,
-    'canceled': 30,
-    'success': 20,
-    'skipped': 10,
+    'success': 'success', 'passed': 'success', 'failed': 'failed',
+    'error': 'failed', 'running': 'running', 'pending': 'pending',
+    'created': 'pending', 'manual': 'not_run', 'not_run': 'not_run',
+    'canceled': 'canceled', 'cancelled': 'canceled', 'skipped': 'skipped',
 }
 
 # 这里不是为了"精准识别所有错误",而是为了找到值得保留上下文的失败信号。
@@ -304,33 +287,13 @@ def extract_job_id(real):
     return match.group(1) if match else None
 
 
-def merge_check(checks_map, dim, mapped_status, tool, url_val):
-    candidate = {
-        'dimension': dim,
-        'status': mapped_status,
-        **({'job': tool} if tool else {}),
-        # tool 独立带上(宿主 unfixable_tools 分诊按它判,不能混在 job 里)。
-        **({'tool': tool} if tool else {}),
-        **({'url': url_val} if url_val else {}),
-    }
-
-    existing = checks_map.get(dim)
-    if existing is None:
-        checks_map[dim] = candidate
-        return
-
-    old_priority = STATUS_PRIORITY.get(existing.get('status'), 0)
-    new_priority = STATUS_PRIORITY.get(mapped_status, 0)
-    if new_priority > old_priority:
-        checks_map[dim] = candidate
-
-
 def fetch_quality_log(pid, decoded_repo, token, env):
     """拉 quality + reviewtips → 拼成 checks 与质量摘要。"""
     checks_map = {}
     failures_by_tool = {}
     details_by_dim = {}
     job_id = None
+    report_parts = []
 
     try:
         proc = subprocess.run(
@@ -359,25 +322,14 @@ def fetch_quality_log(pid, decoded_repo, token, env):
         if not dim:
             continue
 
-        raw_status = check.get('status', 'pending')
-        mapped_status = STATUS_MAP.get(raw_status, 'pending')
-        url_val = check.get('log_url', '')
-        merge_check(checks_map, dim, mapped_status, tool, url_val)
-
-        if mapped_status == 'failed':
-            metrics_parts = []
-            for metric in check.get('metrics', []):
-                field = metric.get('field', '')
-                real = metric.get('real', '')
-                expected = metric.get('expected', '')
-                exceeded = metric.get('exceeded', False)
-                if field:
-                    metrics_parts.append(
-                        f'{field}={real}(期望{expected})'
-                        + (' [超限]' if exceeded else '')
-                    )
-            if metrics_parts:
-                failures_by_tool[tool] = ', '.join(metrics_parts)
+        candidate = quality_check(check, STATUS_MAP)
+        if candidate:
+            merge_check(checks_map, candidate)
+            if candidate['status'] == 'failed':
+                failures_by_tool[tool] = ', '.join(
+                    detail['message'] for detail in candidate['details'])
+        elif report_only(check) or tool == 'CPP_UT':
+            report_parts.append(report_note(check))
 
         if not job_id:
             for metric in check.get('metrics', []):
@@ -438,11 +390,12 @@ def fetch_quality_log(pid, decoded_repo, token, env):
             except Exception as e:
                 log_err(f'reviewtips {tool_type} 失败: {e}')
 
+    quality_parts.extend(report_parts)
     checks = list(checks_map.values())
     for check in checks:
         details = details_by_dim.get(check['dimension'])
         if details:
-            check['details'] = details[:50]
+            check['details'] = check.get('details', []) + details[:50]
     return quality_parts, checks
 
 
@@ -490,29 +443,25 @@ for pipeline in pipelines:
     quality_parts, checks = fetch_quality_log(pid, decoded_repo, token, env)
     entry['checks'] = checks
 
+    # 实际执行 job 与报告生成分开读取。编译失败不否定独立并行 UT。
+    failed_stages = []
+    try:
+        jd = fetch_url(f'{CODEHUB_API}/projects/{encoded_repo}/pipelines/{pid}/jobs')
+        stages = (jd or {}).get('stages', [])
+        picked = checks_from_stages(stages, STATUS_MAP)
+        for check in checks:
+            merge_check(picked, check)
+        entry['checks'] = list(picked.values())
+        for stage in stages:
+            for job in stage.get('jobs', []):
+                if job.get('status') == 'failed':
+                    failed_stages.append(
+                        f"FAILED stage={stage.get('name', '?')} job={job.get('name', '?')}")
+    except Exception as e:
+        log_err(f'拉 jobs pid={pid} 失败: {e}')
+
     if pipeline.get('status') == 'failed':
-        fail_parts = []
-
-        # 先拉失败 stage/job。
-        try:
-            jurl = f'{CODEHUB_API}/projects/{encoded_repo}/pipelines/{pid}/jobs'
-            jreq = urllib.request.Request(jurl, headers={'Private-Token': token})
-            with opener.open(jreq, timeout=30) as jresp:
-                jd = json.loads(jresp.read().decode('utf-8'))
-
-            failed_stages = []
-            for stage in jd.get('stages', []):
-                for job in stage.get('jobs', []):
-                    if job.get('status') == 'failed':
-                        failed_stages.append(
-                            f"FAILED stage={stage.get('name', '?')} "
-                            f"job={job.get('name', '?')}"
-                        )
-            if failed_stages:
-                fail_parts.append('\n'.join(failed_stages))
-        except Exception as e:
-            log_err(f'拉 jobs pid={pid} 失败: {e}')
-            fail_parts.append('(拉 jobs 失败)')
+        fail_parts = failed_stages
 
         fail_parts.extend(quality_parts)
 

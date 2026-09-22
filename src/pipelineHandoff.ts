@@ -52,7 +52,7 @@ export function projectPipelineRun(task: { summary: TaskSummary; mission?: strin
   const run = response ? confirmedPipelineRun(sha, response) : undefined;
   if (task.summary.delivery?.git_push?.sha !== sha) throw new Error("流水线提交与当前已推送提交不一致");
   task.summary.delivery = { ...task.summary.delivery, sha, pipeline: run?.status ?? "not_found", pipeline_background: background,
-    checks: run?.checks, ...(background ? {} : { stalled: undefined, waiting_on: undefined, evidence_gap: undefined }) };
+    checks: run?.checks, ...(background ? {} : { skipped: undefined, stalled: undefined, stall_class: undefined, waiting_on: undefined, evidence_gap: undefined }) };
   if (background) return run; // 提前验证只记远端事实，不接管当前目标或编码状态。
   const loop = task.summary.delivery.loop;
   if (loop?.kind === "ci") {

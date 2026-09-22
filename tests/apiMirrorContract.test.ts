@@ -117,6 +117,7 @@ const REVIEW_NOT_MIRRORED = new Set<string>([
   "agent_context",      // 责任人转交补充说明
   "response",           // 已镜像,但镜像整体复用 Annotation["response"] 引用
                         // (ADR-0035 起随回复型意见出),子字段不逐个展开,按前缀豁免
+  "author_replies",     // 已整体复用 Annotation["author_replies"]，与 response 同样不展开引用
   "owner_reply",        // 责任人原话记账
   "verified_at",        // 逐条确认是需求流闭环;问题域整卡确认
   "verified_by",

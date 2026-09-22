@@ -63,6 +63,8 @@ export interface MemorySearchHit {
   phase?: string;
 }
 
+export type MemorySearchResults = MemorySearchHit[] & { pendingSources?: number };
+
 type Pending = {
   resolve: (value: Record<string, unknown> | undefined) => void;
   timer: NodeJS.Timeout;
@@ -213,16 +215,21 @@ export class MemorySidecar {
     if (!(await this.start())) return undefined;
     const child = this.child;
     if (!child) return undefined;
+    if (this.pending.size >= 128) {
+      this.options.log?.(`记忆检索队列繁忙，${String(payload.op)} 未入队`);
+      return undefined;
+    }
     const id = this.nextId++;
+    const sentAt = Date.now();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        this.options.log?.(`记忆检索 ${String(payload.op)} 超预算 ${budgetMs}ms,按不可用处理`);
+        this.options.log?.(`记忆检索 id=${id} ${String(payload.op)} 超预算 ${budgetMs}ms,按不可用处理`);
         resolve(undefined);
       }, budgetMs);
       this.pending.set(id, { resolve, timer });
       try {
-        child.stdin.write(JSON.stringify({ id, ...payload }) + "\n");
+        child.stdin.write(JSON.stringify({ id, ...payload, sent_at_ms: sentAt, deadline_ms: sentAt + budgetMs }) + "\n");
       } catch (error) {
         this.pending.delete(id);
         clearTimeout(timer);
@@ -253,14 +260,18 @@ export class MemorySidecar {
   async search(input: {
     query: string; repo: string; pathPrefix?: string; limit?: number;
     sources?: Array<{ id: string; path: string }>;
-  }): Promise<MemorySearchHit[] | undefined> {
+  }): Promise<MemorySearchResults | undefined> {
     const reply = await this.request({
       op: "search", query: input.query, repo: input.repo,
       ...(input.sources ? { sources: input.sources } : {}),
       path_prefix: input.pathPrefix ?? "", limit: Math.min(input.limit ?? 8, 20),
     }, this.budgets.searchMs);
     if (!reply || reply.error || !Array.isArray(reply.hits)) return undefined;
-    return (reply.hits as MemorySearchHit[]).filter((hit) => typeof hit.id === "string");
+    const hits: MemorySearchResults = (reply.hits as MemorySearchHit[]).filter((hit) => typeof hit.id === "string");
+    if (typeof reply.pending_sources === "number" && reply.pending_sources > 0) {
+      hits.pendingSources = reply.pending_sources;
+    }
+    return hits;
   }
 
   async expand(memoryId: string): Promise<string | undefined> {

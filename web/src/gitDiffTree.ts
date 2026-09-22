@@ -1,3 +1,5 @@
+import { parsePatch } from "diff";
+
 export type ChangeStage = "committed" | "committed_working" | "staged"
   | "staged_working" | "unstaged" | "untracked";
 export type FileKind = "代码" | "文档" | "测试" | "配置" | "其他";
@@ -10,6 +12,7 @@ export interface ChangedFile {
   lines: string[];
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export function fileKind(path: string): FileKind {
@@ -56,10 +59,13 @@ export function parseChanges(text: string): ChangedFile[] {
     if (/^## 已暂存/.test(line)) { finish(); stage = "staged"; continue; }
     if (/^## 未暂存/.test(line)) { finish(); stage = "unstaged"; continue; }
     if (/^## 未跟踪/.test(line)) { finish(); stage = "untracked"; continue; }
-    const header = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
-    if (header) {
+    if (line.startsWith("diff --git ")) {
       finish();
-      current = { path: header[2], stage, lines: [line] };
+      // Git uses C-style quoted paths for spaces, quotes and UTF-8 bytes.
+      // Use the standard patch parser instead of assuming unquoted a/... b/....
+      const header = parsePatch(line + "\n")[0];
+      const name = header?.newFileName === "/dev/null" ? header.oldFileName : header?.newFileName;
+      if (name) current = { path: name.replace(/^[ab]\//, ""), stage, lines: [line] };
       continue;
     }
     const untracked = line.match(/^\?\?\s+(.+)$/);

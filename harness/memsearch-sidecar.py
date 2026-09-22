@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from knowledge_retrieval import retrieve, index_document
+from memory_runtime import Scheduler, local_client_options, phase, check_deadline
 
 
 def log(message: str) -> None:
@@ -88,17 +89,22 @@ class Sidecar:
         self.corpus = Path(args.corpus).expanduser().resolve()
         self.corpus.mkdir(parents=True, exist_ok=True)
         Path(args.milvus).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-        self.ms = MemSearch(
-            [str(self.corpus)],
-            embedding_provider=args.provider,
-            embedding_model=args.model or None,
-            milvus_uri=args.milvus,
-            reranker_model="",
-            # 台账与目录摘要不是记忆,归档的不再命中(reindex 时生效)。
-            exclude=["index.jsonl", "ledger.jsonl", "_archive/**", "_digests/**"],
-        )
+        with local_client_options():
+            self.ms = MemSearch(
+                [str(self.corpus)],
+                embedding_provider=args.provider,
+                embedding_model=args.model or None,
+                milvus_uri=args.milvus,
+                reranker_model="",
+                # 台账与目录摘要不是记忆,归档的不再命中(reindex 时生效)。
+                exclude=["index.jsonl", "ledger.jsonl", "_archive/**", "_digests/**"],
+            )
+
+        self.schedule_index = None
+        self.yield_reads = None
 
     async def health(self, _req: dict) -> dict:
+        self.ms._store._client.get_collection_stats(self.ms._store._collection)
         return {"ok": True, "corpus": str(self.corpus)}
 
     async def ingest(self, req: dict) -> dict:
@@ -118,6 +124,8 @@ class Sidecar:
         for path in self.corpus.rglob("*.md"):
             if self.indexable(path):
                 count += await self.ensure_indexed(path)
+                if self.yield_reads:
+                    await self.yield_reads()
         return {"ok": True, "chunks": count}
 
     async def ensure_indexed(self, path: Path) -> int:
@@ -126,7 +134,12 @@ class Sidecar:
         cache = getattr(self, "_indexed_files", {})
         if cache.get(str(path)) == fingerprint:
             return 0
-        count = await index_document(self.ms, path)
+        with phase("index_ms"):
+            count = await index_document(self.ms, path, checkpoint=self.yield_reads)
+        check_deadline()
+        # If edited during indexing, do not mark the new revision as ready.
+        if (path.stat().st_mtime_ns, path.stat().st_size) != fingerprint:
+            raise RuntimeError("索引期间文档已修改，需要按新版本重试")
         cache[str(path)] = fingerprint
         self._indexed_files = cache
         return count
@@ -144,45 +157,65 @@ class Sidecar:
         if not query:
             raise ValueError("query 不能为空")
         limit = max(1, min(int(req.get("limit", 8) or 8), 20))
-        repo = str(req.get("repo", "")).strip()
-        path_prefix = str(req.get("path_prefix", "")).strip()
-        sources = {}
-        # Cloud supplies an exact, currently eligible catalog for unified search.
-        # Legacy clients use the same retrieval engine with memory-only scope.
-        supplied = req.get("sources")
-        if supplied is not None and not isinstance(supplied, list):
-            raise ValueError("sources 必须是数组")
-        paths = [Path(item["path"]) for item in supplied] if supplied is not None else self.corpus.rglob("*.md")
-        supplied_ids = {str(Path(item["path"]).resolve()): item["id"] for item in supplied or []}
-        for path in paths:
-            path = path.resolve()
-            if not path.is_file() or not self.indexable(path):
-                continue
-            front = read_front(path)
-            ident = front.get("knowledge_id") or memory_id_of(str(path))
-            if not ident:
-                continue
-            if supplied is not None:
-                if supplied_ids.get(str(path)) != ident:
+        with phase("catalog_ms"):
+            repo = str(req.get("repo", "")).strip()
+            path_prefix = str(req.get("path_prefix", "")).strip()
+            sources = {}
+            # Cloud supplies an exact, currently eligible catalog for unified search.
+            # Legacy clients use the same retrieval engine with memory-only scope.
+            supplied = req.get("sources")
+            if supplied is not None and not isinstance(supplied, list):
+                raise ValueError("sources 必须是数组")
+            paths = [Path(item["path"]) for item in supplied] if supplied is not None else self.corpus.rglob("*.md")
+            supplied_ids = {str(Path(item["path"]).resolve()): item["id"] for item in supplied or []}
+            for path in paths:
+                check_deadline()
+                path = path.resolve()
+                if not path.is_file() or not self.indexable(path):
                     continue
-            else:
-                if front.get("knowledge_id"):
+                front = read_front(path)
+                ident = front.get("knowledge_id") or memory_id_of(str(path))
+                if not ident:
                     continue
-                if repo and front.get("repo") != repo and front.get("scope") != "platform":
-                    continue
-                if path_prefix and front.get("scope") != "platform" and not any(
-                    str(p).startswith(path_prefix) for p in front.get("paths", [])
-                ):
-                    continue
-            sources[str(path)] = {"id": ident, **front}
-        for source in sources:
-            await self.ensure_indexed(Path(source))
+                if supplied is not None:
+                    if supplied_ids.get(str(path)) != ident:
+                        continue
+                else:
+                    if front.get("knowledge_id"):
+                        continue
+                    if repo and front.get("repo") != repo and front.get("scope") != "platform":
+                        continue
+                    if path_prefix and front.get("scope") != "platform" and not any(
+                        str(p).startswith(path_prefix) for p in front.get("paths", [])
+                    ):
+                        continue
+                sources[str(path)] = {"id": ident, **front}
+            # Searching never embeds documents. Missing/edited sources are indexed
+            # in small background batches and excluded until their current revision
+            # is ready, so stale snippets cannot be presented as the new document.
+            pending = []
+            for source in list(sources):
+                path = Path(source)
+                stat = path.stat()
+                if getattr(self, "_indexed_files", {}).get(source) != (stat.st_mtime_ns, stat.st_size):
+                    pending.append(source)
+                    del sources[source]
+                    if self.schedule_index:
+                        self.schedule_index(path)
+        if pending and not sources:
+            return {"error": "相关知识索引正在准备，请稍后重试", "pending_sources": len(pending)}
+        check_deadline()
         rows = await retrieve(self.ms, query, sources, limit, sections=supplied is not None)
         hits = []
         for row in rows:
             source = row["source"]
             # Recheck current status, not just index metadata.
             if not self.indexable(Path(source)):
+                continue
+            stat = Path(source).stat()
+            if self._indexed_files.get(source) != (stat.st_mtime_ns, stat.st_size):
+                if self.schedule_index:
+                    self.schedule_index(Path(source))
                 continue
             front = sources[source]
             hits.append({
@@ -192,7 +225,7 @@ class Sidecar:
                 "heading": row.get("heading", ""), "snippet": str(row.get("content", ""))[:1200],
                 "file": source, "chunk_hash": row.get("chunk_hash", ""),
             })
-        return {"ok": True, "hits": hits}
+        return {"ok": True, "hits": hits, "pending_sources": len(pending)}
 
     async def expand(self, req: dict) -> dict:
         memory_id = str(req.get("memory_id", "")).strip()
@@ -220,31 +253,10 @@ async def main() -> None:
         log(f"启动失败: {error!r}")
         sys.exit(2)
     reply({"id": 0, "ok": True, "ready": True})
-    ops = {"health": sidecar.health, "ingest": sidecar.ingest, "reindex": sidecar.reindex,
-           "search": sidecar.search, "expand": sidecar.expand}
-    loop = asyncio.get_running_loop()
-    while True:
-        line = await loop.run_in_executor(None, sys.stdin.readline)
-        if not line:
-            break
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError as error:
-            reply({"id": None, "error": f"请求不是 JSON: {error}"})
-            continue
-        req_id = req.get("id")
-        op = ops.get(str(req.get("op", "")))
-        if op is None:
-            reply({"id": req_id, "error": f"未知操作: {req.get('op')}"})
-            continue
-        try:
-            result = await op(req)
-            reply({"id": req_id, **result})
-        except Exception as error:  # noqa: BLE001 - 单条失败不许拖死进程
-            reply({"id": req_id, "error": f"{type(error).__name__}: {error}"})
+    try:
+        await Scheduler(sidecar, reply, log).run(sys.stdin)
+    finally:
+        sidecar.ms.close()
 
 
 if __name__ == "__main__":

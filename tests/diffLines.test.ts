@@ -1,3 +1,4 @@
+import { unifiedDiffRows } from "../web/src/diffLines.ts";
 /**
  * diff 行 → 新文件行号。这是代码批注的定位地基:算错一位,所有代码
  * 批注都指错地方,而模型手上的文件里根本没有"diff 第几行"这回事。
@@ -128,3 +129,15 @@ test("词级高亮:公共前后缀之外的中段标 emphasis;整行不同不标
   assert.equal(third.old?.emphasis, undefined);
   assert.equal(third.next?.emphasis, undefined);
 });
+
+test('patch trailing newline does not create a phantom source line', () => {
+ const lines = ['diff --git a/a.cpp b/a.cpp','@@ -0,0 +1,1 @@','+int value = 1;',''];
+ assert.deepEqual(diffReviewRows(lines).filter(row => row.type === 'line').map(row => row.next?.number), [1]);
+ assert.equal(newFileLines(lines).at(-1), 0);
+});
+
+ test('上下对比先展示完整删除块，再展示新增块，不交错两套行号', () => {
+ const rows = unifiedDiffRows(diffReviewRows(['@@ -2,2 +2,3 @@','-oldA','-oldB','+newA','+newB','+newC']));
+ assert.deepEqual(rows.filter(row => row.type === 'line').map(row => [row.old?.text ?? row.next?.text, row.old?.number ?? row.next?.number]),
+   [['oldA',2],['oldB',3],['newA',2],['newB',3],['newC',4]]);
+ });

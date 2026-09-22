@@ -17,6 +17,7 @@ import { inflateRawSync } from "node:zlib";
 import { readJson } from "../src/jsonBody.ts";
 import {
   mkdirSync,
+  rmSync,
   mkdtempSync,
   symlinkSync,
   utimesSync,
@@ -493,6 +494,48 @@ test("缺少 gitignore 的依赖安装不膨胀交付事实，显式跟踪文件
   assert.deepEqual((await deliveryChangeSnapshot(cwd))?.committed_paths, [explicit]);
 });
 
+test("文件清单直接包含重命名和未跟踪文件的行数，无需逐个打开正文", async (t) => {
+  const cwd = makeSite({ git: true });
+  t.after(() => rmSync(cwd,{recursive:true,force:true}));
+  const run = (...args:string[]) => execFileSync("git",["-C",cwd,...args],{encoding:"utf-8"}).trim();
+  const lines = Array.from({length:30},(_,i)=>`const item${i} = ${i};`);
+  writeFileSync(join(cwd,"old.ts"),lines.join("\n")+"\n");
+  run("add","old.ts");run("commit","-qm","baseline");
+  writeFileSync(join(cwd,".mae-flow.json"),JSON.stringify({step_heads:{branch_create:run("rev-parse","HEAD")}}));
+  const renamed = '新文件 "renamed".ts';run("mv","old.ts",renamed);
+  lines[10]="const item10 = -1;";writeFileSync(join(cwd,renamed),lines.join("\n")+"\n");
+  run("commit","-qam","rename and edit");
+  writeFileSync(join(cwd,"new.ts"),"one\ntwo\nthree");
+  mkdirSync(join(cwd,"new-folder"));
+  writeFileSync(join(cwd,"new-folder","other.ts"),"one\ntwo\n");
+  writeFileSync(join(cwd,"binary.bin"),Buffer.from([0,1,2,3]));
+  const manifest=(await listArtifactsAsync(cwd)).find(item=>item.kind==="diff")!.change_files!;
+  const changed=manifest.find(file=>file.path===renamed)!;
+  assert.equal(changed.additions,1);assert.equal(changed.deletions,1);
+  assert.equal(manifest.find(file=>file.path==="new.ts")?.additions,3);
+  assert.equal(manifest.find(file=>file.path==="binary.bin")?.stats_status,"binary");
+  const page=await listArtifactChangeDirectoryAsync(cwd,"new-folder");
+  assert.equal(page?.entries[0].additions,2);assert.equal(page?.entries[0].deletions,0);
+});
+
+test("比较范围导航不会复制大文件里未修改的全文", async (t) => {
+  const cwd = makeSite({ git: true });
+  t.after(() => rmSync(cwd, {recursive:true, force:true}));
+  const run = (...args: string[]) => execFileSync("git", ["-C", cwd, ...args], {encoding:"utf-8"}).trim();
+  const lines = Array.from({length:10000}, (_,i) => `export const value${i} = ${i};`);
+  writeFileSync(join(cwd,"large.ts"), lines.join("\n") + "\n");
+  run("add","large.ts");run("commit","-qm","base");const base=run("rev-parse","HEAD");
+  lines[5000] = "export const value5000 = -1;";
+  writeFileSync(join(cwd,"large.ts"),lines.join("\n") + "\n");
+  run("commit","-qam","one line change");const head=run("rev-parse","HEAD");
+  const full = await compareDeliveryRevisions(cwd,base,head);
+  const compact = await compareDeliveryRevisions(cwd,base,head,{compact:true});
+  assert.ok(full && compact);
+  assert.ok(full.content.length > 200000);
+  assert.ok(compact.content.length < 1000);
+  assert.deepEqual([compact.paths,compact.additions,compact.deletions], [full.paths,full.additions,full.deletions]);
+});
+
 test("提交比较只展示检视锚之后的修改，并把内容标成已提交", async () => {
   const cwd = makeSite({ git: true });
   const run = (...args: string[]) =>
@@ -523,6 +566,11 @@ test("提交比较只展示检视锚之后的修改，并把内容标成已提�
   assert.doesNotMatch(String(comparison?.content), /feat: initial delivery/);
   assert.deepEqual(comparison?.commits.map((item) => item.subject),
     ["fix: address review"]);
+  const compact = await compareDeliveryRevisions(cwd, reviewed, head, { compact: true });
+  assert.ok(compact);
+  assert.deepEqual({paths:compact.paths,additions:compact.additions,deletions:compact.deletions,commits:compact.commits},
+    {paths:comparison.paths,additions:comparison.additions,deletions:comparison.deletions,commits:comparison.commits},
+    "首屏比较摘要不生成全文，仍保持相同文件清单、统计和提交记录");
   assert.equal(await compareDeliveryRevisions(cwd, head, reviewed), undefined,
     "反向或不构成祖先关系的锚不能参与比较");
   assert.equal(await compareDeliveryRevisions(cwd, "HEAD", head), undefined,

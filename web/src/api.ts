@@ -3289,6 +3289,7 @@ export interface ArtifactChangeFile {
     | "staged_working" | "unstaged" | "untracked";
   additions: number;
   deletions: number;
+  stats_status?: "unavailable" | "binary";
 }
 
 export interface ArtifactChangeDirectory {
@@ -3301,6 +3302,9 @@ export interface ArtifactChangeDirectoryEntry {
   kind: "file" | "directory";
   file_count: number;
   stage: "untracked";
+  stats_status?: "unavailable" | "binary";
+  additions?: number;
+  deletions?: number;
 }
 
 export interface ArtifactChangeDirectoryPage {
@@ -3313,8 +3317,9 @@ export interface ArtifactChangeDirectoryPage {
 
 export async function listArtifacts(
   taskId: string,
+  signal?: AbortSignal,
 ): Promise<{ items?: ArtifactMeta[]; unavailable?: string }> {
-  const response = await fetch(`/tasks/${taskId}/artifacts`);
+  const response = await fetch(`/tasks/${taskId}/artifacts`, { signal });
   if (!response.ok) {
     const body = await errorBody(response);
     return {
@@ -3605,9 +3610,10 @@ export async function readRequirementRevision(
 export async function readArtifact(
   taskId: string,
   name: string,
+  signal?: AbortSignal,
 ): Promise<{ content?: string; kind?: string; branch?: string; unavailable?: string }> {
   const response = await fetch(
-    `/tasks/${taskId}/artifacts/${encodeURIComponent(name)}`);
+    `/tasks/${taskId}/artifacts/${encodeURIComponent(name)}`, { signal });
   if (!response.ok) {
     const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
@@ -3623,6 +3629,7 @@ export async function readArtifact(
 export async function readArtifactFileDiff(
   taskId: string,
   path: string,
+  signal?: AbortSignal,
 ): Promise<{
   content?: string;
   branch?: string;
@@ -3631,7 +3638,7 @@ export async function readArtifactFileDiff(
 }> {
   const response = await fetch(
     `/tasks/${encodeURIComponent(taskId)}/artifacts/file-diff?path=${
-      encodeURIComponent(path)}`);
+      encodeURIComponent(path)}`, { signal });
   if (!response.ok) {
     const body = await errorBody(response);
     return { unavailable: String(body.error ?? `HTTP ${response.status}`) };
@@ -3660,8 +3667,8 @@ export async function listArtifactChangeDirectory(
 }
 
 /** 只读浏览导航，不依赖待审批卡。 */
-export async function readDiffReview(taskId: string): Promise<PushReviewPresentation | undefined> {
-  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/diff-review`);
+export async function readDiffReview(taskId: string, signal?: AbortSignal): Promise<PushReviewPresentation | undefined> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/diff-review`, { signal });
   if (!response.ok) throw new Error(`读取代码比较范围失败：HTTP ${response.status}`);
   const body = await parseJson<{ review?: PushReviewPresentation | null }>(response);
   return body.review ?? undefined;
@@ -3672,6 +3679,7 @@ export async function readDiffReview(taskId: string): Promise<PushReviewPresenta
 export async function readPushReviewDiff(
   taskId: string,
   scope: "changes" | "full",
+  signal?: AbortSignal,
 ): Promise<{
   content?: string;
   branch?: string;
@@ -3680,7 +3688,7 @@ export async function readPushReviewDiff(
   status?: number;
 }> {
   const response = await fetch(
-    `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`);
+    `/tasks/${encodeURIComponent(taskId)}/push-review-diff?scope=${scope}`, { signal });
   if (!response.ok) {
     const body = await errorBody(response);
     return {

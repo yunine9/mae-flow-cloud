@@ -85,6 +85,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import {
   PIPELINE_DIMENSIONS,
+  parsePipelineDefects,
   type PipelineCheck,
   type PipelineCheckStatus,
 } from "./pipelineContract.ts";
@@ -121,11 +122,10 @@ interface CommandSpec {
   check_status?: Extract;
   check_job?: Extract;
   check_url?: Extract;
-  /** stage/tool 粒度(可选):失败时宿主能告诉修复 Agent"挂在哪个
-   * stage 的哪个 job 的哪个工具",不用对着 log 猜。缺陷明细(details)
-   * 不走模板抽取——嵌套太深,用 contract 模式的脚本直接给。 */
+  /** stage/tool/details 默认读取同名字段，也允许模板指定其他路径。 */
   check_stage?: Extract;
   check_tool?: Extract;
+  check_details?: Extract;
   check_status_map?: Record<string, string>;
   /** MR 标识(iid)抽取(mr_create/mr_lookup 用,可选):抽到了就随
    * {url} 一起回给宿主,后续门禁/讨论查询带回来当 {mr}。 */
@@ -335,8 +335,10 @@ function extractChecks(
     };
     const job = optional(spec.check_job);
     const url = optional(spec.check_url);
-    const stage = optional(spec.check_stage);
-    const tool = optional(spec.check_tool);
+    const stage = optional(spec.check_stage ?? { json: "stage" });
+    const tool = optional(spec.check_tool ?? { json: "tool" });
+    const details = parsePipelineDefects(extractOptional(
+      spec.check_details ?? { json: "details" }, stdout, item));
     return {
       dimension: dimension as PipelineCheck["dimension"],
       status,
@@ -344,6 +346,7 @@ function extractChecks(
       ...(url !== undefined ? { url } : {}),
       ...(stage !== undefined ? { stage } : {}),
       ...(tool !== undefined ? { tool } : {}),
+      ...(details.length ? { details } : {}),
     };
   });
 }

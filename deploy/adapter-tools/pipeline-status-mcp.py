@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -58,21 +57,10 @@ CHECK_STATUS = {
     "canceled": "canceled", "cancelled": "canceled",
     "skipped": "skipped", "manual": "not_run", "not_run": "not_run",
 }
-# 工具名→维度(与内网现用脚本同一张表,SuperChecker 归 CODECHECK)。
-TOOL_DIMENSION = {
-    "CloudBuild2.0": "COMPILE", "build2.0": "COMPILE",
-    "codecheck": "CODECHECK", "CodeCheck": "CODECHECK",
-    "CodeCheckForTest": "CODECHECK", "codechecktest": "CODECHECK",
-    "SuperChecker": "CODECHECK", "CPP_UT": "UT",
-}
-STATUS_PRIORITY = {"failed": 60, "running": 50, "pending": 40,
-                   "canceled": 30, "success": 20, "skipped": 10,
-                   "not_run": 5}
-JOB_DIMENSION_RULES = [
-    (re.compile(r"codecheck|codeccp|superchecker|lint", re.I), "CODECHECK"),
-    (re.compile(r"\but\b|unit[_-]?test|llt|coverage", re.I), "UT"),
-    (re.compile(r"build|compile|maven|cmake|package", re.I), "COMPILE"),
-]
+from pipeline_checks import (
+    merge_check, quality_check, report_only, report_note,
+    checks_from_stages as execution_checks,
+)
 
 
 def log_err(message: str) -> None:
@@ -104,38 +92,8 @@ def resolve_project_id(
     raise McpHttpError("get_project_info 响应里没有 project_id/id")
 
 
-def merge_check(picked: dict, candidate: dict) -> None:
-    existing = picked.get(candidate["dimension"])
-    if existing is None or STATUS_PRIORITY.get(candidate["status"], 0) \
-            > STATUS_PRIORITY.get(existing["status"], 0):
-        picked[candidate["dimension"]] = candidate
-
-
 def checks_from_stages(stages) -> dict:
-    picked: dict = {}
-    for stage in stages or []:
-        stage_name = str(stage.get("name") or "")
-        for job in stage.get("jobs") or []:
-            name = str(job.get("name") or "")
-            dimension = TOOL_DIMENSION.get(name)
-            if not dimension:
-                for pattern, mapped in JOB_DIMENSION_RULES:
-                    if pattern.search(f"{stage_name} {name}"):
-                        dimension = mapped
-                        break
-            if not dimension:
-                continue
-            merge_check(picked, {
-                "dimension": dimension,
-                "status": map_word(job.get("status"), CHECK_STATUS,
-                                   f"job {name}"),
-                "job": name,
-                "tool": name,
-                **({"stage": stage_name} if stage_name else {}),
-                **({"url": str(job.get("web_url"))}
-                   if job.get("web_url") else {}),
-            })
-    return picked
+    return execution_checks(stages, CHECK_STATUS)
 
 
 def enrich_from_quality(
@@ -144,6 +102,7 @@ def enrich_from_quality(
     pipeline_id,
     picked,
     codehub_host,
+    notes=None,
 ) -> None:
     """get_pipeline_quality → 逐工具状态与指标明细(增益路,失败不拦)。"""
     try:
@@ -166,32 +125,13 @@ def enrich_from_quality(
     for row in rows or []:
         if not isinstance(row, dict):
             continue
-        tool = str(row.get("tool") or row.get("tool_name") or "")
-        dimension = TOOL_DIMENSION.get(tool)
-        if not dimension:
-            continue
-        raw_status = str(row.get("status") or "").lower()
-        candidate = {
-            "dimension": dimension,
-            "status": CHECK_STATUS.get(raw_status) or "pending",
-            "job": tool, "tool": tool,
-            **({"url": str(row.get("log_url"))}
-               if row.get("log_url") else {}),
-        }
-        details = []
-        for metric in row.get("metrics") or []:
-            field = metric.get("field")
-            if not field:
-                continue
-            details.append({
-                "message": f"{field}={metric.get('real', '')}"
-                           f"(期望{metric.get('expected', '')})"
-                           + ("[超限]" if metric.get("exceeded") else ""),
-                "tool": tool,
-            })
-        if details:
-            candidate["details"] = details[:50]
-        merge_check(picked, candidate)
+        candidate = quality_check(row, CHECK_STATUS)
+        if candidate:
+            merge_check(picked, candidate)
+        elif notes is not None and (report_only(row)
+                or (row.get('tool') or row.get('tool_name')) == 'CPP_UT'):
+            notes.append(report_note(row))
+
 
 
 def main() -> int:
@@ -236,11 +176,13 @@ def main() -> int:
         return 0
     picked = checks_from_stages(pipeline.get("stages"))
     pipeline_id = str(pipeline.get("id") or "")
+    notes = []
     if pipeline_id:
         enrich_from_quality(
-            client, project_id, pipeline_id, picked, codehub_host)
+            client, project_id, pipeline_id, picked, codehub_host, notes)
     run = {
         "status": map_word(pipeline.get("status"), RUN_STATUS, "pipeline"),
+        **({"log": "\n".join(notes)} if notes else {}),
         # is_valid 是这条主路的灵魂:false=MR 头上无有效流水线、挂的是
         # 陈灯——原样回显,宿主 selectTerminalRun 机械拒收。
         **({"is_valid": bool(pipeline.get("is_valid"))}

@@ -184,3 +184,53 @@ test("本机检索连接绕过代理，并保留使用方已有的代理排除�
     assert.equal(supplied.no_proxy, "internal.example", "只修改子进程环境，不改调用方配置");
   } finally { sidecar.stop(); }
 });
+
+test("真实 sidecar：冷索引后台准备，默认三秒预算连续查询、编辑后不返回旧正文", async t => {
+  if (!existsSync(REAL_PYTHON)) return t.skip("需要 MFC_MEMSEARCH_PYTHON");
+  const { rmSync } = await import("node:fs");
+  const { dataDir, store, ids } = corpusWith(1);
+  const row = store.review(ids[0], "owner", { decision: "accepted", revision: store.find(ids[0])!.revision ?? 1 });
+  const path = join(store.root, row.file);
+  const logs: string[] = [];
+  let exited: Promise<void> | undefined;
+  const sidecar = new MemorySidecar({ python: REAL_PYTHON, script: REAL_SCRIPT,
+    corpusDir: store.root, milvusPath: join(dataDir, "milvus.db"),
+    env: { HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" }, log: value => logs.push(value),
+    spawnProcess(command, args, env) {
+      const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      exited = new Promise(resolve => child.once("close", () => resolve()));
+      return child;
+    },
+  });
+  t.after(async () => { sidecar.stop(); await exited; rmSync(dataDir, { recursive: true, force: true }); });
+  assert.equal(await sidecar.start(), true);
+  assert.equal(sidecar.searchBudgetMs, 3000);
+  const input = { query: "黑名单和渠道开关的判断顺序", repo: "notify-service" };
+  assert.equal(await sidecar.search(input), undefined, "首次索引准备不能冒充无命中");
+  const readyBy = Date.now() + 10_000;
+  let prepared = false;
+  while (Date.now() < readyBy) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    if ((await sidecar.search(input))?.[0]?.id === ids[0]) { prepared = true; break; }
+  }
+  assert.ok(prepared, "无需显式 ingest，后台索引应完成并恢复检索");
+  const elapsed: number[] = [];
+  for (let index = 0; index < 5; index++) {
+    const start = Date.now();
+    const hits = await sidecar.search(input);
+    elapsed.push(Date.now() - start);
+    assert.equal(hits?.[0]?.id, ids[0]);
+  }
+  t.diagnostic(`本机真实检索五次耗时(ms): ${elapsed.join(", ")}`);
+  writeFileSync(path, readFileSync(path, "utf8").replaceAll("黑名单判断必须在渠道开关之前", "渠道开关判断必须先执行"));
+  assert.equal(await sidecar.search(input), undefined, "修改后旧索引正文不能混入结果");
+  assert.equal(await sidecar.ingest(path, 20_000), true);
+  const updated = await sidecar.search(input);
+  assert.ok(updated?.[0]?.snippet?.includes("渠道开关判断必须先执行"));
+  assert.ok(!updated?.some(hit => hit.snippet?.includes("黑名单判断必须在渠道开关之前")));
+  assert.equal(await sidecar.health(), true);
+  // stdout reply can arrive just before the stderr diagnostics.
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(logs.some(line => line.includes('"embed_ms"') && line.includes('"database_ms"')));
+  assert.ok(!logs.some(line => line.includes("too_many_pings")));
+});

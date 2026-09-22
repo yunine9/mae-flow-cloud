@@ -427,7 +427,8 @@ test("开发协作:默认标签跟可用性走,占位文案与原因框一致,�
   assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "decision", receipt\)/);
   assert.match(service, /this\.recordDeferredInterrupt\(task, delivered, "mission", receipt\)/);
   // 借活会话的 emit 记账,不另开实例撞编号。
-  assert.match(service, /task\.driver\.noteUserMessage\(text, \{ deferred, \.\.\.receipt \}\)/);
+  assert.match(service, /task\.driver \?\? task\.retainedSession\?\.driver/);
+  assert.match(service, /driver\.noteUserMessage\(text, \{ deferred, \.\.\.receipt \}\)/);
 });
 
 test("需求修订失败原因上页面;开发助手接管前列明边界", () => {

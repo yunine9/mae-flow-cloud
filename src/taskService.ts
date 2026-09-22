@@ -300,6 +300,7 @@ import {
 } from "./humanGate.ts";
 import { humanizeRepositoryIds } from "./repositoryNames.ts";
 import { CloudSession, type Outcome } from "./sessionDriver.ts";
+import { continueRetainedSession, discardRetainedSession, retainIdleSession, handoffSession, hostActionStopsContainer } from "./hostSessionContinuity.ts";
 import {
   probeVisionCapability,
   type VisionModelChoice,
@@ -1703,6 +1704,8 @@ interface TaskState {
   mergeSettlement?: Promise<void>;
   transportActive?: Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   hostActionActive?: Promise<boolean>;
+  /** 宿主操作期间暂停的原会话；不拥有工作区写权限，不持久化。 */
+  retainedSession?: { driver: CloudSession; epoch: number; message?: string };
   mrCreateActive?: ReturnType<typeof createMergeRequest>;
   /** 流水线轮询按 SHA 防重入；新 SHA 可以立刻接棒，旧轮醒来后自退。 */
   pipelinePollSha?: string;
@@ -2402,6 +2405,7 @@ export class TaskService {
       }> = [{ taskId: "knowledge-consolidation", role: "知识整理", work: this.knowledgeConsolidation?.shutdown() ?? Promise.resolve() }, { taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
+        discardRetainedSession(task);
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
         task.controlEpoch += 1;
         task.assistantEpoch = (task.assistantEpoch ?? 0) + 1;
@@ -3765,7 +3769,7 @@ export class TaskService {
           );
     const reviewContract = summary.waiting ? reviewDecisionContract(requirementDecisionContract(summary.waiting.question, this.isRequirementAnalysis(task)), choiceEffects) : undefined;
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
-      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
+      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? "diff"
       : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
         || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         || summary.waiting?.step === MR_DESCRIPTION_STEP
@@ -3824,7 +3828,7 @@ export class TaskService {
         ? {
             ...summary.waiting,
             question: reviewContract!.question,
-            ...(summary.waiting.step === HOST_PUSH_CONFIRM_STEP ? { recommended_view: undefined } : recommendedView ? { recommended_view: recommendedView } : {}),
+            ...(recommendedView ? { recommended_view: recommendedView } : {}),
             ...(choiceEffects.length ? {
               choice_effects: reviewContract!.effects.map((effect) => ({
                 key: effect.key,
@@ -6261,6 +6265,7 @@ export class TaskService {
           && task.mission) {
         task.mission += "\n\n- 人工刚从工作台贴回的流水线报错原文：\n"
           + text;
+        if (task.retainedSession) task.pendingMainSteers = [...(task.pendingMainSteers ?? []), text];
       } else if (task.summary.status === "verifying") {
         task.summary.detail = "已收到人工流水线报错，正在自动恢复修复分诊";
         task.summary.delivery!.waiting_on = undefined;
@@ -6430,6 +6435,7 @@ export class TaskService {
     } else if (task.summary.status === "queued" && task.mission) {
       // 还没拿到并发槽，直接把意见并进同一份持久使命；不会多起一轮。
       task.mission += `\n\n${delivered}`;
+      if (task.retainedSession) task.pendingMainSteers = [...(task.pendingMainSteers ?? []), delivered];
       this.rememberWorkspaceReview(task, picked);
       this.persist(task);
     } else if (task.summary.status === "waiting_for_human") {
@@ -8348,6 +8354,10 @@ export class TaskService {
     strict = false,
     reconcileParent = true,
   ): void {
+    if (task.retainedSession && (task.retainedSession.epoch !== task.controlEpoch
+        || ["paused", "pausing", "canceled", "completed", "failed", "await_merge"].includes(task.summary.status))) {
+      discardRetainedSession(task);
+    }
     const now = new Date().toISOString();
     if (task.lastPersistedStatus !== undefined
         && task.lastPersistedStatus !== task.summary.status) {
@@ -8507,6 +8517,13 @@ export class TaskService {
           if (pending?.status === "resolved") task.pendingResume = pending;
         }
         this.tasks.set(summary.id, task);
+        // 旧版把一次交付异常留在 skipped；后续等待合入、完成或明确停摆
+        // 已有更新的结论，不再把历史异常当作第二个当前阻塞原因。
+        if (summary.delivery?.skipped && (summary.delivery.stalled
+            || ["await_merge", "completed"].includes(summary.status))) {
+          delete summary.delivery.skipped;
+          this.writeTaskState(task);
+        }
         if (interruptWarmupReceipt(summary.baseline_build)) this.writeTaskState(task);
         // 本地视觉回归需要同一批排队/运行/验证/待合入样本跨重启保持
         // 原样，否则 recover 会把它们重新入队或继续轮询，浏览器刚打开
@@ -10584,7 +10601,7 @@ export class TaskService {
     note: string;
   } | undefined> {
     // 阅读 diff 不代表授权整理提交；旧客户端夹带的清单也不能改变现场。
-    if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP) return undefined;
+    if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP && waiting.step !== HOST_PUSH_CONFIRM_STEP) return undefined;
     const explicit = input.delivery_paths !== undefined;
     const previous = task.summary.delivery_selection;
     const values = explicit
@@ -10635,7 +10652,7 @@ export class TaskService {
       // 用户选择“重新编译”或“直接提交”；旧客户端缺字段时保守重编。
       // 两个选择都已经确认这份清单，只有后续编译真的改了代码才再检视。
       const compileAction: DeliveryCompileAction =
-        waiting.step === CLOUD_PUSH_CONFIRM_STEP
+        (waiting.step === CLOUD_PUSH_CONFIRM_STEP || waiting.step === HOST_PUSH_CONFIRM_STEP)
           ? input.delivery_compile_action ?? "rerun" : "rerun";
       const mustRemove = committed.filter((path) => !paths.includes(path));
       const mustAdd = paths.filter((path) => !committed.includes(path));
@@ -10663,7 +10680,7 @@ export class TaskService {
       ].filter(Boolean).join(";");
       this.registerAgentPlatformLocalExcludes(task.cwd,
         reconciledExcluded.filter((path) => !archiveIds.has(path.toLowerCase())));
-      const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
+      const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP || waiting.step === HOST_PUSH_CONFIRM_STEP;
       return {
         record: {
           paths,
@@ -10823,36 +10840,22 @@ export class TaskService {
       }
       return result;
     };
-    const preserved = new Map<string, Buffer>();
-    for (const path of remove) {
-      const absolute = join(cwd, path);
-      const inBaseline = await runSafeWorktreeGitAsync(cwd,
-        ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
-      if (inBaseline.status === 0) {
-        if (existsSync(absolute)) preserved.set(path, readFileSync(absolute));
-        await run(["checkout", baseline, "--", `:(literal)${path}`], `回退提交内容 ${path}`);
-      } else {
-        await run(["rm", "--cached", "-q", "--", `:(literal)${path}`], `移出索引 ${path}`);
-      }
-    }
-    if (add.length) await run(["add", "--", ...add.map(path => `:(literal)${path}`)], "补入勾选文件");
-    const staged = await runSafeWorktreeGitAsync(cwd,
-      ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-    if (staged.status !== 0) {
-      const summary = [
-        remove.length ? `剔除 ${remove.length} 个未勾选文件` : "",
-        add.length ? `补入 ${add.length} 个勾选文件` : "",
-      ].filter(Boolean).join("、");
-      await run(["commit", "-m",
-        cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
-          `按最终人工检视整理交付清单——${summary}`)], "整理提交");
-    }
-    // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
-    // 不是"被销毁";它们成为未暂存改动留在现场,脏区检查放行已确认
-    // 剔除的路径(prePushDirtyPaths 同口径)。
-    for (const [path, content] of preserved) {
-      writeFileSync(join(cwd, path), content);
-    }
+    const head = (await run(["rev-parse", "HEAD"], "读取当前提交")).stdout.trim();
+    const summary = [
+      remove.length ? `剔除 ${remove.length} 个未勾选文件` : "",
+      add.length ? `补入 ${add.length} 个勾选文件` : "",
+    ].filter(Boolean).join("、");
+    const commit = await deliveryCommitTree({ cwd, head, baseline, parents: [head],
+      restorePaths: remove, addPaths: add,
+      configs: [["user.name", "mae-flow-cloud"], ["user.email", "cloud@mae-flow.local"],
+        ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
+      message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", `按最终人工检视整理交付清单——${summary}`),
+    });
+    // 只更新这次明确调整的索引项，其余暂存内容和整个工作区原样保留。
+    await run(["update-ref", "HEAD", commit, head], "接续整理提交");
+    const changed = [...remove, ...add];
+    if (changed.length) await run(["restore", "--source", commit, "--staged", "--",
+      ...changed.map(path => `:(literal)${path}`)], "更新已确认范围的索引");
     const at = new Date().toISOString();
     const revision = await this.prePushRevision(task);
     const pending = createPrePushVerification(revision, at);
@@ -11391,10 +11394,21 @@ export class TaskService {
     }
     if (waiting.step === HOST_PUSH_CONFIRM_STEP) {
       this.assertOwnerDecides(task, input.actor, "确认本次推送");
+      if (input.delivery_compile_action && !["rerun", "skip"].includes(input.delivery_compile_action)) {
+        throw new TaskControlError("请选择重新编译或直接提交");
+      }
+      const selections = [...Object.values(answers), decision];
+      const accepted = selections.includes("确认推送") && !selections.includes("先调整");
+      // Reuse the same explicit file selection as the final delivery card.
+      // Old clients without delivery_paths keep their existing confirmation behavior.
+      const selection = input.delivery_paths !== undefined
+        ? await this.deliverySelectionForDecision(task, waiting, input, accepted)
+        : undefined;
       const resolved = task.humanGate.resolve(waiting.waiting_id, {
         stateVersion: input.state_version, decision,
         answers: Object.keys(answers).length ? answers : undefined,
-        notes: normalized.notes, requestDigest, decidedBy: input.actor,
+        notes: [normalized.notes, selection?.note].filter(Boolean).join("\n"), requestDigest, decidedBy: input.actor,
+        continuation: selection ? { delivery_selection: selection.record } : undefined,
       });
       this.finishHostPushDecision(task, resolved);
       return { ...task.summary };
@@ -11921,7 +11935,8 @@ export class TaskService {
         if (((task.driver || task.container) && !task.prepushActive) || task.assistantActive) {
           throw new TaskControlError("原执行者尚未释放现场，请先完成暂停或交回");
         }
-      } else if (task.summary.status !== "running" || !task.driver) {
+      } else if (!["running", "queued"].includes(task.summary.status)
+          || (!task.driver && !task.retainedSession)) {
         throw new TaskControlError(`任务 ${id} 当前是 ${task.summary.status},没有在跑的会话可插话`);
       }
     }
@@ -11945,6 +11960,13 @@ export class TaskService {
       display: message || "（只引用了知识，没有附言）",
       ...(resolved ? { references: resolved.labels } : {}),
     };
+    if (task.retainedSession && ["running", "queued"].includes(task.summary.status)) {
+      task.pendingMainSteers = [...(task.pendingMainSteers ?? []), delivered];
+      this.recordDeferredInterrupt(task, delivered, "mission", receipt);
+      if (resolved) this.recordSteerKnowledge(task, resolved.footprints);
+      this.persist(task);
+      return this.project(task);
+    }
     if (task.summary.status === "waiting_for_human") {
       // 决定窗口不开插话通道(同一件事不能有两个入口),但引用的知识
       // 版本已固定,压进决定的 continuation,决定提交时一并送达。
@@ -12013,8 +12035,9 @@ export class TaskService {
     receipt: { display: string; references?: string[] },
   ): void {
     try {
-      if (task.driver) {
-        task.driver.noteUserMessage(text, { deferred, ...receipt });
+      const driver = task.driver ?? task.retainedSession?.driver;
+      if (driver) {
+        driver.noteUserMessage(text, { deferred, ...receipt });
         return;
       }
       const log = new EventLog(
@@ -12659,7 +12682,13 @@ export class TaskService {
     const work = finishTaskHostOperation(this.taskHostRuntime(task, epoch));
     task.hostActionActive = work;
     try { return await work; }
-    finally { if (task.hostActionActive === work) task.hostActionActive = undefined; }
+    finally {
+      if (task.hostActionActive === work) task.hostActionActive = undefined;
+      if (task.pauseRequested && this.current(task, epoch)) await this.finishPause(task, "running");
+      // 长时间等待流水线或异常退出不常驻会话；短操作及人工推送决定复用。
+      if (!["queued", "running", "waiting_for_human"].includes(task.summary.status)) discardRetainedSession(task);
+      setImmediate(() => this.bypass(undefined, "宿主操作后续跑", this.pump()));
+    }
   }
 
   private async createDeliveryMr(task: TaskState, input: Parameters<typeof createMergeRequest>[0]): ReturnType<typeof createMergeRequest> {
@@ -13876,6 +13905,7 @@ export class TaskService {
       const readyIndex = this.queue.findIndex((queued) => {
         const candidate = this.tasks.get(queued);
         if (!candidate) return true;
+        if (candidate.hostActionActive) return false;
         return !concurrentTicketConflict(scheduling, candidate, this.queue)
           && (candidate.summary.blocked_by ?? []).every((dependency) =>
             scheduling.completed(this.tasks.get(dependency)));
@@ -13897,7 +13927,10 @@ export class TaskService {
           : "Agent 正在处理";
       this.persist(task);
       const epoch = task.controlEpoch;
-      this.bypass(task, "任务启动", this.launch(task, epoch).finally(() => {
+      this.bypass(task, "任务启动", continueRetainedSession(task, epoch, {
+        launch: () => this.launch(task, epoch), persist: () => this.persist(task),
+        settle: turn => this.settle(task, turn, epoch),
+      }).finally(() => {
         this.runningCount -= 1;
         this.bypass(undefined, "任务泵", this.pump());
       }));
@@ -13914,6 +13947,12 @@ export class TaskService {
     const accepted = selections.includes("确认推送") && !selections.includes("先调整");
     task.summary.waiting = undefined;
     if (accepted) {
+      const selection = this.continuationDeliverySelection(waiting);
+      if (selection) {
+        task.summary.delivery_selection = selection;
+        operation.push_paths = selection.paths;
+        operation.sha = selection.head;
+      }
       operation.push_confirmed = true;
       ledger.update(operation);
       task.summary.status = "running";
@@ -13921,6 +13960,8 @@ export class TaskService {
       this.persist(task);
       this.bypass(task, "确认后推送", this.finishHostAction(task));
     } else {
+      const selection = this.continuationDeliverySelection(waiting);
+      if (selection) task.summary.delivery_selection = selection;
       operation.state = "failed";
       operation.result = "用户要求调整本次推送";
       if (task.summary.delivery_selection) task.summary.delivery_selection.status = "requested";
@@ -13966,17 +14007,17 @@ export class TaskService {
         this.annotations(task).respond(id, { revision, outcome, summary, evidence });
         this.reconcileWorkspaceFeedbackAuthority(task);
       },
-      release: async () => {
-        // 换代后，旧流水线回调不能再给新目标派发修复；合入监听仍按任务生命周期运行。
+      release: async (action) => {
+        // 普通操作沿用当前执行代次；暂停、取消、明确重启才撤销会话执行权。
         if (!this.current(task, actionEpoch)) throw new TaskControlError("执行权已交接");
         if (task.prepushActive || task.assistantActive) throw new TaskControlError("验证或接手会话仍占用现场，暂不能执行宿主操作");
-        task.controlEpoch += 1;
+        const replaceSession = action === "restart_session" || actionEpoch !== epoch;
+        handoffSession(task, replaceSession);
         actionEpoch = task.controlEpoch;
-        task.pendingMainSteers = [...(task.pendingMainSteers ?? []), ...(task.driver?.takeUndeliveredSteers() ?? [])];
-        task.driver?.dispose();
-        task.driver = undefined;
-        const failure = await this.stopTaskContainer(task, "宿主操作交接");
-        if (failure) throw new TaskControlError(failure);
+        if (hostActionStopsContainer(action, replaceSession)) {
+          const failure = await this.stopTaskContainer(task, "宿主操作交接");
+          if (failure) throw new TaskControlError(failure);
+        }
       },
       persist: () => this.persist(task, true),
       mrTitle: (operation) => {
@@ -13997,7 +14038,9 @@ export class TaskService {
       recordPublishedPush: receipt => this.recordPublishedPush(task, receipt),
       resumePipelineAfterPush: () => !!task.summary.delivery?.mr_url && !task.pendingMainSteers?.length && shouldVerifyCiPush(task.mission, task.summary),
       resume: (message, target, operation) => this.enqueueRepair(task,
-        hostResumeMission(task.mission, message, target, operation, task.summary), "宿主操作已返回，继续当前目标"),
+        hostResumeMission(task.mission, message, target, operation, task.summary), "宿主操作已返回，继续当前目标",
+        [target ? `责任人调整后的目标：${target}。不再执行已暂缓事项。` : "",
+          message, "沿用已有上下文，只核对本次操作影响的文件或状态；不要重新阅读整个任务、重复探索或重做已完成工作。"].filter(Boolean).join("\n\n")),
       allowPush: () => this.existingMergeRequestAllowsDelivery(task, actionEpoch),
       preparePush: operation => prepareHostPush({ cwd: task.cwd, summary: task.summary,
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
@@ -14623,7 +14666,7 @@ export class TaskService {
           + `数量或绿灯。代码提交用任务容器的 Git;已有任务授权内可随时用`
           + `task_control push/create_mr 阶段性发布,无需先修完所有旧问题。`
           + `验证可用 retry_verification,流水线用 task_pipeline;缺少能力如实说明。`
-          + `宿主工具 queued 后结束本轮,由 Cloud 释放会话、执行并带回真实结果。`
+          + `宿主工具 queued 后结束本轮,由 Cloud 执行并把真实结果带回原会话；不需要重新开工或全量检查现场。`
           + `不要读取或索要 Git 令牌。较新的责任人要求优先,明确不再处理的`
           + `反馈逐条 defer_feedback;保留失败事实,不把暂缓或推送当成验证通过。`;
       }
@@ -14948,12 +14991,19 @@ export class TaskService {
     cls: StallClass,
   ): void {
     const delivery = task.summary.delivery;
-    if (delivery?.stalled) return; // 幂等:同一次停摆只喊一次
+    if (delivery?.stalled === reason && delivery.stall_class === cls) {
+      if (delivery.skipped) {
+        delete delivery.skipped;
+        this.persist(task);
+      }
+      return; // 同原因不重复通知，但新原因必须能覆盖旧诊断。
+    }
     task.summary.status = "verifying";
     task.summary.detail = stallDetail(reason);
     task.summary.delivery = {
       ...delivery,
       ...stallWrite(delivery?.mr_state, reason, cls),
+      skipped: undefined,
     };
     this.persist(task);
     this.notifyVerificationStalled(task, reason, cls);
@@ -15079,9 +15129,7 @@ export class TaskService {
     this.scheduleDeliveryRecovery(task, epoch);
   }
 
-  /** 停摆要说病因不是症状:"权威流水线尚未逐项通过"是症状,
-   * "宿主推送失败: fatal: ..." 才是人能拿着去办的那句。交付成功时
-   * delivery 会整份换掉,skipped 不会残留成假线索。 */
+  /** 停摆要说当前病因；成功接续与明确的新停摆会清除旧 skipped。 */
   private stallReason(task: TaskState): string {
     return stallReasonOf(task.summary.delivery, task.summary.detail);
   }
@@ -15179,6 +15227,7 @@ export class TaskService {
         task.summary.delivery = {
           ...task.summary.delivery,
           pipeline: "running",
+          skipped: undefined,
         };
         this.persist(task);
         this.bypass(task, "流水线轮询", this.pollPipeline(task, epoch));
@@ -15191,6 +15240,7 @@ export class TaskService {
         task.summary.delivery = {
           ...task.summary.delivery,
           pipeline: status,
+          skipped: undefined,
           ...(checks !== undefined ? { checks } : {}),
         };
       }
@@ -16531,12 +16581,12 @@ export class TaskService {
       // 改动。此时展示 MR 净贡献，不把 master 更新标成“本轮修复”。
       if ((await runSafeWorktreeGitAsync(task.cwd!, ["merge-base", "--is-ancestor",
         contribution.base_sha, base], { timeoutMs: 30_000 })).status !== 0) continue;
-      focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head);
+      focused = await compareDeliveryRevisions(task.cwd!, base, snapshot.head, { compact: true });
       if (focused) break;
     }
     // 目标分支推进只影响全量 MR 净贡献，不能覆盖已确定的本轮范围。
     const comparison = focused ?? await compareDeliveryRevisions(
-      task.cwd!, contribution.base_sha, snapshot.head);
+      task.cwd!, contribution.base_sha, snapshot.head, { compact: true });
     const base = focused?.from ?? contribution.base_sha;
     const prepush = delivery?.prepush;
     const verification = prepush?.sha !== snapshot.head ? undefined : prepush?.state === "passed"
@@ -17514,7 +17564,8 @@ export class TaskService {
         observed: async run => {
           // 旁路永不抢交付：正式入口核对 HEAD、范围和 MR 后会接管监听槽。
           const canSettle = !background && task.summary.status === "verifying";
-          task.summary.delivery = { ...task.summary.delivery, pipeline: run?.status ?? "not_found", checks: run?.checks };
+          task.summary.delivery = { ...task.summary.delivery, pipeline: run?.status ?? "not_found", checks: run?.checks,
+            ...(!background && run ? { skipped: undefined } : {}) };
           this.persist(task);
           if (run && run.status !== "running" && canSettle) {
             await this.pipelineVerdict(task, sha, run.status, run.log ?? "", run.checks, task.controlEpoch);
@@ -17648,6 +17699,7 @@ export class TaskService {
         return;
       }
       if (delivery.loop) delivery.loop.state = "green";
+      delivery.skipped = undefined;
       delivery.mr_state = "等待合入";
       delivery.waiting_on = undefined;
       task.summary.status = "await_merge";
@@ -18119,6 +18171,11 @@ export class TaskService {
       `- 先分诊再动手:通读日志,列出本轮暴露的全部问题类别`
       + `(编译报错/编译告警/UT 失败/UT 覆盖率不够/CodeCheck/其他),`
       + `在本轮当前目标范围内充分修复；责任人明确暂缓的事项保留记录。`,
+      "- 结果表述：报告生成成功、测试执行通过、覆盖率达标是三件事，不能相互推导。"
+      + "例如 Review Tips 的 CPP_UT=success 且只有 ut_json 链接，只能说明报告生成成功；"
+      + "没有实际测试结果，不说 UT 通过；没有覆盖率指标及对应阈值，不说覆盖率达标。"
+      + "逐项说明所有超限指标（包括 DT），未知含义保留原名与数值，不猜测试类型、失败用例数或独立根因。"
+      + "编译失败也不能直接推断并行 UT 未执行；执行情况以同次流水线的实际测试报告、job 或日志为准。",
       // 定位先于修改(Agentless 的固定管线在修 bug 上打赢自由 agent
       // 循环):逼一句"依据"出来,是为了让定位错当场暴露——说不出
       // 依据的定位多半是猜的,猜着改就是拿流水线当调试器。
@@ -19564,6 +19621,7 @@ export class TaskService {
     task: TaskState,
     mission: string,
     detail: string,
+    continuationMessage = mission,
   ): void {
     const receipt = this.activeFeedbackReceiptInstructions(task);
     task.mission = [mission, this.foreignCommitNotice(task), receipt]
@@ -19571,6 +19629,8 @@ export class TaskService {
     task.summary.status = "queued";
     task.summary.detail = detail;
     task.resume = true;
+    if (task.retainedSession) task.retainedSession.message = [continuationMessage, this.foreignCommitNotice(task), receipt]
+      .filter(Boolean).join("\n\n");
     this.persist(task);
     this.queue.push(task.summary.id);
     setImmediate(() => this.bypass(undefined, "任务泵", this.pump()));
@@ -20785,6 +20845,11 @@ export class TaskService {
       this.options.log?.(
         `任务 ${task.summary.id} 收口时抛异常(任务如实 failed,服务继续): `
         + String(error));
+    } finally {
+      if (task.retainedSession && (!this.current(task, task.retainedSession.epoch)
+          || !["queued", "running", "waiting_for_human"].includes(task.summary.status))) {
+        discardRetainedSession(task);
+      }
     }
   }
 
@@ -21037,10 +21102,11 @@ export class TaskService {
           task.summary.detail = "Agent 已结束，正在释放执行环境并交接宿主验证";
           this.persist(task);
         }
-        task.driver?.dispose();
-        // host push 的硬前提：不仅调用 dispose，还要先从任务状态移除
-        // 会话句柄，还要串行停净普通编码容器。异步 fire-and-forget 会
-        // 让旧容器和紧接着启动的 prepush attempt 同时写一个 workspace。
+        // 先借出工作区，不销毁已结束本轮的会话。交付若马上派发继续工作，
+        // 复用上下文；正式等待流水线或结束任务时由 settle finally 释放。
+        if (task.driver?.isIdle) retainIdleSession(task);
+        else task.driver?.dispose();
+        // 工作树写操作仍必须停净容器，避免后台进程与宿主同时修改文件。
         task.driver = undefined;
         const completedContainer = task.container;
         await (completedContainer?.stop() ?? Promise.resolve());

@@ -26,10 +26,10 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
                 records.append({"source": str(path), "score": 1, "content": ident})
             calls = []
 
-            async def index_document(index, path):
+            async def index_document(index, path, checkpoint=None):
                 return 1
 
-            async def retrieve(index, query, sources, limit):
+            async def retrieve(index, query, sources, limit, **kwargs):
                 calls.append(set(sources))
                 return [{**row, "semantic_score": .8} for row in records if row["source"] in sources]
 
@@ -39,7 +39,10 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             sidecar = module.Sidecar.__new__(module.Sidecar)
             sidecar.corpus = root
             sidecar.ms = Index()
+            sidecar.schedule_index = None
+            sidecar.yield_reads = None
             with patch.object(module, "retrieve", retrieve), patch.object(module, "index_document", index_document):
+                await sidecar.reindex({})
                 result = await sidecar.search({"query": "current evidence", "repo": "a"})
                 self.assertEqual({hit["id"] for hit in result["hits"]}, {"c-a-111", "c-c-333"})
                 self.assertEqual(calls, [{records[0]["source"], records[2]["source"]}])
@@ -64,11 +67,14 @@ class PlatformMemoryTests(unittest.IsolatedAsyncioTestCase):
             sidecar = module.Sidecar.__new__(module.Sidecar)
             sidecar.corpus = root
             sidecar.ms = Index()
-            async def retrieve(index, query, sources, limit):
+            sidecar.schedule_index = None
+            sidecar.yield_reads = None
+            async def retrieve(index, query, sources, limit, **kwargs):
                 return [{**row, "semantic_score": .8} for row in records if row["source"] in sources]
-            async def index_document(index, path):
+            async def index_document(index, path, checkpoint=None):
                 return await index.index_file(path)
             with patch.object(module, "retrieve", retrieve), patch.object(module, "index_document", index_document):
+                await sidecar.reindex({})
                 self.assertEqual([h["id"] for h in (await sidecar.search({"query": "retry"}))["hits"]], ["c-a-222"])
                 self.assertEqual((await sidecar.reindex({}))["chunks"], 0)
             self.assertEqual(indexed, ["c-a-222.md"])

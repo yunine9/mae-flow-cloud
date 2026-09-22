@@ -15,6 +15,11 @@ export function newFileLines(lines: string[]): number[] {
   const numbers: number[] = [];
   let cursor = 0;
   for (const line of lines) {
+    if (line === "") {
+      // split("\n") leaves a trailing separator; an actual empty context line starts with a space.
+      numbers.push(0);
+      continue;
+    }
     const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
     if (hunk) {
       cursor = Number(hunk[1]);
@@ -98,6 +103,7 @@ export function diffReviewRows(lines: string[]): DiffReviewRow[] {
   };
 
   for (const line of lines) {
+    if (line === "") continue;
     const hunk = line.match(
       /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/,
     );
@@ -142,4 +148,19 @@ export function diffReviewRows(lines: string[]): DiffReviewRow[] {
   }
   flushChanges();
   return rows;
+}
+
+/** Unified view keeps each deletion block before its replacement, with original source line numbers. */
+export function unifiedDiffRows(rows: readonly DiffReviewRow[]): DiffReviewRow[] {
+  const result: DiffReviewRow[] = [];
+  let removed: DiffReviewRow[] = [], added: DiffReviewRow[] = [];
+  const flush = () => { result.push(...removed, ...added); removed = []; added = []; };
+  for (const row of rows) {
+    if (row.type === 'line' && (row.old?.kind === 'removed' || row.next?.kind === 'added')) {
+      if (row.old) removed.push({type:'line', old:row.old});
+      if (row.next) added.push({type:'line', next:row.next});
+    } else { flush(); result.push(row); }
+  }
+  flush();
+  return result;
 }

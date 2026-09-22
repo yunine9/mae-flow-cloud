@@ -1,3 +1,5 @@
+import { LatestRead } from "./latestRead";
+import { readDeliverySelectionDraft, type DeliverySelectionDraft } from "./deliverySelectionDraft";
 import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
@@ -568,6 +570,12 @@ export function TaskWorkspace({
   const loadedMaterialKey = useRef("");
   const [selectedDiffPath, setSelectedDiffPath] = useState("");
   const [diffFileLoading, setDiffFileLoading] = useState(false);
+  const materialReader = useRef(new LatestRead<Awaited<ReturnType<typeof readPushReviewDiff>>>());
+  const artifactReader = useRef(new LatestRead<Awaited<ReturnType<typeof listArtifacts>>>());
+  const comparisonReader = useRef(new LatestRead<Awaited<ReturnType<typeof readDiffReview>>>());
+  useEffect(() => () => {
+    materialReader.current.cancel(); artifactReader.current.cancel(); comparisonReader.current.cancel();
+  }, [task.id]);
   const [diffFileError, setDiffFileError] = useState("");
   const [notes, setNotes] = useState<Annotation[]>([]);
   const locationRequest = useRef(0);
@@ -611,21 +619,27 @@ export function TaskWorkspace({
   // 换卡立即隔离旧选择；不要在父层 effect 里清空子文件树刚回传的
   // 默认勾选。普通 Diff 没有 push_review，也必须能初始化决定卡。
   const deliverySelectionKey = JSON.stringify([
-    task.id, task.waiting?.waiting_id, pushReview?.head_sha,
+    task.id, task.waiting?.waiting_id,
   ]);
-  const [deliverySelectionState, setDeliverySelectionState] = useState<{
-    key: string; selection: GitDiffSelection | undefined;
-  }>();
+  const selectionStorageKey = `mae-flow:delivery-selection:${task.id}`;
+  const [deliverySelectionState, setDeliverySelectionState] = useState<DeliverySelectionDraft | undefined>(() => {
+    try { return readDeliverySelectionDraft(sessionStorage.getItem(selectionStorageKey), deliverySelectionKey); }
+    catch { return undefined; }
+  });
   const deliverySelection = deliverySelectionForCard(
     deliverySelectionState, deliverySelectionKey);
-  const setDeliverySelection = (selection: GitDiffSelection | undefined) =>
-    setDeliverySelectionState({ key: deliverySelectionKey, selection });
+  const setDeliverySelection = (selection: GitDiffSelection | undefined) => {
+    const draft = { key: deliverySelectionKey, selection };
+    setDeliverySelectionState(draft);
+    try { sessionStorage.setItem(selectionStorageKey, JSON.stringify(draft)); } catch { /* Reading still works without browser storage. */ }
+  };
   const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
     pushReview ? { kind: "checking" } : { kind: "idle" },
   );
   const [diffScope, setDiffScope] = useState<"changes" | "full">(
     pushReview?.has_focused_changes ? "changes" : "full");
-  const scopedDiff = Boolean(pushReview && (approvalReview || diffScope === "changes"));
+  // 全部改动始终按文件加载；待确认卡不应退回下载整仓 Diff。
+  const scopedDiff = Boolean(pushReview && diffScope === "changes");
   const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
@@ -860,7 +874,7 @@ export function TaskWorkspace({
   useEffect(() => {
     if (materialView !== "diff") return;
     let alive = true;
-    void readDiffReview(task.id).then(review => {
+    void comparisonReader.current.read(task.id, signal => readDiffReview(task.id, signal)).then(review => {
       if (!alive) return;
       setBrowsingReview(previous => previous?.taskId === task.id
         && JSON.stringify(previous.review) === JSON.stringify(review) ? previous : { taskId: task.id, review });
@@ -1137,7 +1151,7 @@ export function TaskWorkspace({
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
   useEffect(() => {
     let alive = true;
-    void listArtifacts(task.id).then((result) => {
+    void artifactReader.current.read(task.id, signal => listArtifacts(task.id, signal)).then((result) => {
       if (!alive) return;
       setUnavailable(result.unavailable ?? "");
       setItems(result.items);
@@ -1164,7 +1178,7 @@ export function TaskWorkspace({
           ?.purpose ?? "")) {
         setMaterialView("doc");
       }
-    });
+    }).catch(reason => { if (alive && reason?.name !== "AbortError") setUnavailable(String(reason)); });
     return () => { alive = false; };
   }, [task.id, livePulse, task.updated_at, task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha, recommendedMaterialView]);
@@ -1206,17 +1220,17 @@ export function TaskWorkspace({
       && activeArtifactForRead?.kind === "diff"
       && !requestedDiffPath
       && activeUntrackedDirectories.length > 0;
-    const reading = pushDiffActive
-      ? readPushReviewDiff(task.id, diffScope)
+    const reading = materialReader.current.read(readKey, signal => pushDiffActive
+      ? readPushReviewDiff(task.id, diffScope, signal)
       : lazyWorkspaceDiff
-        ? readArtifactFileDiff(task.id, requestedDiffPath)
+        ? readArtifactFileDiff(task.id, requestedDiffPath, signal)
         : directoryOnlyWorkspaceDiff
           ? Promise.resolve({
               content: "未跟踪目录已折叠；展开目录后再按需读取文件。",
               branch: undefined,
               unavailable: undefined,
             })
-        : readArtifact(task.id, active);
+        : readArtifact(task.id, active, signal));
     void reading.then((result) => {
       if (!alive) return;
       loadedMaterialKey.current = readKey;
@@ -1560,7 +1574,7 @@ export function TaskWorkspace({
 
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
-    Boolean(pushReview),
+    scopedDiff,
     pushDiffState,
     deliverySelection,
   );
@@ -2370,7 +2384,7 @@ export function TaskWorkspace({
                 </div>
               )}
               {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
-              {!loading && content && (
+              {((!loading && content) || (materialView === "diff" && !scopedDiff && !!activeMeta?.change_files?.length)) && (
               <Annotatable
                 taskId={task.id}
                 artifact={active}
@@ -2389,12 +2403,15 @@ export function TaskWorkspace({
                       manifest={!scopedDiff ? activeMeta?.change_files : undefined}
                       untrackedDirectories={!scopedDiff
                         ? activeMeta?.untracked_directories : undefined}
+                      onRetry={() => setLivePulse(tick => tick + 1)}
+                      selectionHint={canOperate && needsDeliverySelection(task.waiting) && diffScope === "changes"
+                        ? "当前只展示本次增量。点击上方「全部改动」勾选最终交付文件。" : undefined}
                       onDirectoryLoad={!scopedDiff
                         ? (path, offset) => listArtifactChangeDirectory(
                             task.id, path, offset)
                         : undefined}
                       onFileSelect={!scopedDiff ? setSelectedDiffPath : undefined}
-                      activeFileLoading={diffFileLoading}
+                      activeFileLoading={loading || diffFileLoading}
                       activeFileError={diffFileError}
                       hideKey={task.id}
                       scopeLabel={pushReview
