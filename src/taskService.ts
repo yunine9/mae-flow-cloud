@@ -1,3 +1,4 @@
+import { resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
 import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
 import { closeMergeRequest } from "./mrClient.ts";
@@ -342,7 +343,7 @@ import {
   type PipelineEvidenceAssessment,
 } from "./pipelineEvidence.ts";
 import {
-  inspectKernelPosition, inspectKernelDeliveryReady,
+  inspectKernelPosition, inspectKernelDeliveryReady, stalledKernelStep,
   inspectKernelTaskCompletion,
   type KernelCompletionAttestation,
 } from "./terminalAttestation.ts";
@@ -18834,9 +18835,11 @@ export class TaskService {
       }
       if (batch.result_digest) {
         // 上面已核验同一快照的全部反馈事实（含历史结果和调度决定）。
-        // 同步补齐可能因崩溃遗漏的索引，不再读盘核验；首次登记后的新状态仍重新核验。
-        this.syncFeedbackStoreFromKernel(task, false, state);
-        return undefined;
+        // 正常重放复用快照；旧任务交还步骤后重新读盘核验，再补齐索引。
+        const resumed = resumeRecordedFeedback({ host, cwd: task.cwd, workspace: task.summary.workspace,
+          taskId: task.summary.id, state, batch });
+        this.syncFeedbackStoreFromKernel(task, false, resumed ? undefined : state);
+        return batch.status === "needs_human" ? "反馈中仍有需要人工判断的条目" : undefined;
       }
     } catch (error) {
       if (error instanceof KernelUnavailableError) {
@@ -18860,6 +18863,8 @@ export class TaskService {
       results = [];
       for (const item of batchItems) {
         const annotation = annotations.get(String(item.source_id ?? ""));
+        const resolved = resolvedWorkspaceFeedback(item, annotation);
+        if (resolved) { results.push(resolved); continue; }
         const response = annotation?.response;
         if (!response || response.revision !== Number(item.source_revision ?? 0)) {
           return `工作台反馈 ${String(item.id)} 缺少当前版本的逐条回执`;
@@ -19124,6 +19129,7 @@ export class TaskService {
         + "问题里必须点明歧义和不同结果，不能用泛泛的‘请确认’把工作退回用户。",
       ...priorPipeline,
       this.reviewReceiptInstructionsFor(task, annotations),
+      "- 本批修改、必要验证与逐条答复完成后即可结束本轮，宿主会登记结果并继续交付。不要为了推进 feedback_triage 重复处理已闭环意见或重复编译；仍有实际失败或新意见则继续处理。",
       "- 在当前 MR 分支修改必要的源码和测试，遵守 current 的提交清单与 commit 指引。"
         + "不要读取或索要个人 Git 令牌；可用 task_control push 阶段性推送到原分支、"
         + "更新原 MR；Build-Fix 与权威流水线分别记录新 SHA 的真实结果。",
@@ -20693,21 +20699,7 @@ export class TaskService {
     if (!this.options.host || !task.cwd || this.isRequirementAnalysis(task)) {
       return undefined;
     }
-    try {
-      const statePath = join(task.cwd, ".mae-flow.json");
-      if (!existsSync(statePath)) return "init(尚未初始化)";
-      const current = String(
-        JSON.parse(readFileSync(statePath, "utf-8"))?.current ?? "");
-      // external_verify 是 flow.json 明示的宿主等待点。Agent 到这里结束
-      // 回合就是正确行为：不能再催它本地编译/跑 UT，更不能连催五轮。
-      // settle 随后会释放会话并调用 tryDeliver，由宿主触发权威流水线。
-      if (current === "external_verify" || current === "delivery_watch") {
-        return undefined;
-      }
-      return current && current !== "end" ? current : undefined;
-    } catch {
-      return undefined;
-    }
+    return stalledKernelStep(task.cwd);
   }
 
   /** 升级前 Cloud 自己曾把分析任务误催进 init。只修复同时满足三项的
@@ -20985,56 +20977,6 @@ export class TaskService {
           this.notifyOutcome(task);
           break;
         }
-        // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
-        // delivery_review)。内核 current 不在终态且催办还有效时,
-        // 同一会话催办续跑,而不是把半截流程标成 completed。
-        const stalled = this.stalledStep(task);
-        if (stalled && task.nudgedStep !== stalled) {
-          // 换了步骤才重置预算；同一步第二次 end_turn 不能因为“已经催过”
-          // 就越过内核直接交付。最多催五次，之后如实停机等重跑。
-          task.nudgedStep = stalled;
-          task.nudgeCount = 0;
-        }
-        if (stalled && task.driver && (task.nudgeCount ?? 0) < 5) {
-          task.nudgeCount = (task.nudgeCount ?? 0) + 1;
-          const confirmationAnswers = stepChoiceEffects(
-            this.options.host?.kernelRoot, stalled)
-            .filter(effect => effect.closesFeedback)
-            .flatMap(effect => effect.answers);
-          const reviewCardInstruction = confirmationAnswers.length
-            ? `这是必须由责任人决定的检视步骤。材料准备好后必须调用 AskUserQuestion；确认选项原样使用“${confirmationAnswers[0]}”，另一项明确写“仍需调整（按当前检视意见修改）”。不要用普通文本代替卡片。`
-            : "";
-          this.options.log?.(
-            `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
-          await this.settle(task, task.driver.continueWith(
-            `本轮工作尚未走完:内核当前步骤是 ${stalled},还没到宿主等待点。` +
-            `尚未 init 就按开工引导先执行 init;否则执行 current ` +
-            `查看本步指引并继续,直到流程进入 external_verify 或 delivery_watch。` +
-            `已答复过的确认项不要重复提问。${reviewCardInstruction}`), epoch);
-          break;
-        }
-        const beforeDelivery = this.options.host && !this.isRequirementAnalysis(task)
-          ? inspectKernelPosition(task.cwd, this.options.host.kernelRoot) : undefined;
-        if (beforeDelivery
-            && beforeDelivery.kind !== "terminal"
-            && beforeDelivery.kind !== "delivery_watch"
-            && beforeDelivery.kind !== "external_verify") {
-          // 执行位置异常先停下；模型结束发言不能代替内核流程完成。
-          task.lastReply = task.driver?.finalReply();
-          const earlyDriver = task.driver;
-          if (task.driver === earlyDriver) task.driver = undefined;
-          earlyDriver?.dispose();
-          const cleanupFailure = await this.stopTaskContainer(
-            task, "Agent 提前结束后");
-          if (!this.current(task, epoch)) break;
-          task.mission = undefined;
-          task.summary.status = "failed";
-          task.summary.detail = `Agent 提前结束，${beforeDelivery.reason}`
-            + (cleanupFailure ? `；${cleanupFailure}` : "");
-          this.persist(task);
-          this.notifyOutcome(task);
-          break;
-        }
         // 逐条回执是 Agent 本轮工作的机器收据，不是需要用户处理的业务
         // 异常。必须趁原会话和容器还活着检查：第一次漏写/写坏就原地
         // 补交一次，不重新改代码、不另起 Agent。过去在 dispose 之后才
@@ -21095,6 +21037,57 @@ export class TaskService {
             this.activeFeedbackReceiptInstructions(task),
             "写完后立即结束本轮。",
           ].join("\n\n")), epoch);
+          break;
+        }
+        // 回合结束≠流程走完:模型可能提前收嘴(run3 实测停在
+        // delivery_review)。内核 current 不在终态且催办还有效时,
+        // 同一会话催办续跑,而不是把半截流程标成 completed。
+        const receiptFailure = workspaceReceiptFailure || feedbackResultFailure;
+        const stalled = receiptFailure ? undefined : this.stalledStep(task);
+        if (stalled && task.nudgedStep !== stalled) {
+          // 换了步骤才重置预算；同一步第二次 end_turn 不能因为“已经催过”
+          // 就越过内核直接交付。最多催五次，之后如实停机等重跑。
+          task.nudgedStep = stalled;
+          task.nudgeCount = 0;
+        }
+        if (stalled && task.driver && (task.nudgeCount ?? 0) < 5) {
+          task.nudgeCount = (task.nudgeCount ?? 0) + 1;
+          const confirmationAnswers = stepChoiceEffects(
+            this.options.host?.kernelRoot, stalled)
+            .filter(effect => effect.closesFeedback)
+            .flatMap(effect => effect.answers);
+          const reviewCardInstruction = confirmationAnswers.length
+            ? `这是必须由责任人决定的检视步骤。材料准备好后必须调用 AskUserQuestion；确认选项原样使用“${confirmationAnswers[0]}”，另一项明确写“仍需调整（按当前检视意见修改）”。不要用普通文本代替卡片。`
+            : "";
+          this.options.log?.(
+            `任务 ${task.summary.id} 催办续跑(流程停在 ${stalled})`);
+          await this.settle(task, task.driver.continueWith(
+            `本轮工作尚未走完:内核当前步骤是 ${stalled},还没到宿主等待点。` +
+            `尚未 init 就按开工引导先执行 init;否则执行 current ` +
+            `查看本步指引并继续,直到流程进入 external_verify 或 delivery_watch。` +
+            `已答复过的确认项不要重复提问。${reviewCardInstruction}`), epoch);
+          break;
+        }
+        const beforeDelivery = !receiptFailure && this.options.host && !this.isRequirementAnalysis(task)
+          ? inspectKernelPosition(task.cwd, this.options.host.kernelRoot) : undefined;
+        if (beforeDelivery
+            && beforeDelivery.kind !== "terminal"
+            && beforeDelivery.kind !== "delivery_watch"
+            && beforeDelivery.kind !== "external_verify") {
+          // 执行位置异常先停下；模型结束发言不能代替内核流程完成。
+          task.lastReply = task.driver?.finalReply();
+          const earlyDriver = task.driver;
+          if (task.driver === earlyDriver) task.driver = undefined;
+          earlyDriver?.dispose();
+          const cleanupFailure = await this.stopTaskContainer(
+            task, "Agent 提前结束后");
+          if (!this.current(task, epoch)) break;
+          task.mission = undefined;
+          task.summary.status = "failed";
+          task.summary.detail = `Agent 提前结束，${beforeDelivery.reason}`
+            + (cleanupFailure ? `；${cleanupFailure}` : "");
+          this.persist(task);
+          this.notifyOutcome(task);
           break;
         }
         if (this.atExternalVerificationWait(task)) {
