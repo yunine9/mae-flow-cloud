@@ -33,7 +33,7 @@ export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
 function KnowledgeRepoPane() {
   const [config, setConfig] = useState<KnowledgeRepoConfig | undefined>();
   const [url, setUrl] = useState("");
-  const [branch, setBranch] = useState("main"), [docsPath, setDocsPath] = useState("domains"), [editing, setEditing] = useState(false);
+  const [branch, setBranch] = useState("master"), [docsPath, setDocsPath] = useState("domains"), [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -63,7 +63,7 @@ function KnowledgeRepoPane() {
       ? <div className="grid gap-3">
         <p className="text-sm text-muted-foreground">当前知识仓:</p>
         <code className="break-all rounded-md bg-surface-2 px-3 py-2 text-sm">{config.url}</code>
-        <p className="text-sm">萃取默认归档：{config.branch || "main"} / {config.docs_path || "domains"}</p><div className="flex gap-3"><Button variant="outline" onClick={() => { setUrl(config.url); setBranch(config.branch || "main"); setDocsPath(config.docs_path || "domains"); setEditing(true); }}>修改配置</Button><Button variant="outline" disabled={busy} onClick={() => void clear()}>清除配置</Button></div>
+        <p className="text-sm">萃取默认归档：{config.branch || "master"} / {config.docs_path || "domains"}</p><div className="flex gap-3"><Button variant="outline" onClick={() => { setUrl(config.url); setBranch(config.branch || "master"); setDocsPath(config.docs_path || "domains"); setEditing(true); }}>修改配置</Button><Button variant="outline" disabled={busy} onClick={() => void clear()}>清除配置</Button></div>
       </div>
       : <form className="grid max-w-xl gap-3" onSubmit={e => { e.preventDefault(); void save(); }}>
         <p className="text-sm text-muted-foreground">{config ? "修改后用于新萃取任务，已有任务保留原目标。" : "尚未配置知识仓。"}</p>

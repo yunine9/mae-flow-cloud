@@ -86,8 +86,8 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     },
   });
   const materials = input.job.material_ids.map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id));
-  const tools = [extractionSkillTool(skill), sourceTool, codeSearchTool(input.evidence), documentTool, knowledgeMaterialTool(materials), changesTool,
-    ...(input.job.use_wxdoubao ? [wxdoubaoTool(input.signal, input.evidence)] : [])];
+  const tools = [extractionSkillTool(skill), sourceTool, codeSearchTool(input.evidence), documentTool, knowledgeMaterialTool(materials, join(options.dataDir, "knowledge-materials")), changesTool,
+    wxdoubaoTool(input.signal, input.evidence)];
   const agentDir = join(input.root, "agent"); mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
   const session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}`, workspace: input.root, agentDir,

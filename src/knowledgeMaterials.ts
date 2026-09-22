@@ -3,22 +3,24 @@ import { runKnowledgeCommand } from "./knowledgeProcess.ts";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
 export interface KnowledgeMaterial {
   id: string; name: string; scope: string; version: string; bytes: number; digest: string;
   state: "ready" | "failed"; error?: string; sections: Array<{ location: string; text: string }>;
+  uploaded_at?: string; warnings?: string[];
+  images?: Array<{ id: string; path: string; mimeType: string; bytes: number }>;
 }
-const supported = new Set([".md", ".txt", ".docx", ".pdf", ".xlsx", ".pptx"]);
+const supported = new Set([".md", ".txt", ".docx", ".pdf", ".xlsx", ".pptx", ".zip"]);
 export async function saveKnowledgeMaterial(root: string, input: { name: string; content_base64: string; scope?: string; version?: string }, signal?: AbortSignal): Promise<KnowledgeMaterial> {
   if (!input || typeof input.name !== "string" || input.name.length > 180 || /[\x00-\x1f/\\]/.test(input.name) || !supported.has(extname(input.name).toLowerCase()))
-    throw new Error("支持 Markdown、文本、DOCX、PDF、XLSX、PPTX，请使用有效文件名");
+    throw new Error("支持 Markdown、文本、DOCX、PDF、XLSX、PPTX、ZIP，请使用有效文件名");
   if (typeof input.content_base64 !== "string" || input.content_base64.length > 28 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(input.content_base64)) throw new Error("资料编码无效或超过 20 MiB");
   const bytes = Buffer.from(input.content_base64, "base64");
   if (!bytes.length || bytes.length > 20 * 1024 * 1024) throw new Error("资料不能为空且不能超过 20 MiB");
-  const record: KnowledgeMaterial = { id: `material-${randomUUID()}`, name: input.name, scope: String(input.scope ?? "本次研究").slice(0, 500), version: String(input.version ?? "未标注").slice(0, 100), bytes: bytes.length,
+  const record: KnowledgeMaterial = { id: `material-${randomUUID()}`, name: input.name, scope: String(input.scope ?? "本次萃取任务").slice(0, 500), version: String(input.version ?? "").slice(0, 100), uploaded_at: new Date().toISOString(), bytes: bytes.length,
     digest: createHash("sha256").update(bytes).digest("hex"), state: "failed", sections: [] };
   const folder = join(root, record.id); mkdirSync(folder, { recursive: true });
   const file = join(folder, `source${extname(input.name).toLowerCase()}`);
@@ -27,11 +29,17 @@ export async function saveKnowledgeMaterial(root: string, input: { name: string;
     const raw = await runKnowledgeCommand(process.env.MAE_FLOW_PYTHON_BIN || "python3", [fileURLToPath(new URL("../scripts/parse-knowledge-material.py", import.meta.url)), file],
       { signal, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 }).catch(() => { throw new Error("资料解析失败，请检查文件格式与解析器；PDF 需要 pdftotext，扫描件需要先做 OCR"); });
     scanForSecrets(input.name, Buffer.from(raw));
-    record.sections = JSON.parse(raw);
-    if (!record.sections.length || !record.sections.some(s => s.text.trim())) throw new Error("未提取到可读文本，请补充可检索文档或 OCR 结果");
+    const parsed = JSON.parse(raw);
+    if (parsed.error) throw new Error(parsed.error);
+    record.sections = Array.isArray(parsed) ? parsed : parsed.sections;
+    if (!Array.isArray(parsed)) { record.images = parsed.images; record.warnings = parsed.warnings; }
+    if (!record.sections.some(s => s.text.trim()) && !record.images?.length) throw new Error("未提取到可读文本或图片，请补充可检索文档或 OCR 结果");
     record.state = "ready";
   } catch (error) { record.error = signal?.aborted ? "资料解析已取消" : error instanceof Error ? error.message : "资料解析失败"; }
-  finally { for (const entry of readdirSync(folder)) if (entry.startsWith("parse-pdf-")) rmSync(join(folder, entry), { recursive: true, force: true }); }
+  finally {
+    for (const entry of readdirSync(folder)) if (entry.startsWith("parse-pdf-")) rmSync(join(folder, entry), { recursive: true, force: true });
+    if (record.state === "failed") { rmSync(join(folder, "images"), { recursive: true, force: true }); record.sections = []; record.images = []; }
+  }
   writeFileSync(join(folder, "material.json"), JSON.stringify(record), { mode: 0o600 });
   return record;
 }
@@ -39,13 +47,24 @@ export function readKnowledgeMaterial(root: string, id: string): KnowledgeMateri
   if (!/^material-[a-f0-9-]{36}$/.test(id) || !existsSync(join(root, id, "material.json"))) throw new Error("资料不存在");
   return JSON.parse(readFileSync(join(root, id, "material.json"), "utf8"));
 }
-export function knowledgeMaterialTool(materials: KnowledgeMaterial[]) {
+export function knowledgeMaterialTool(materials: KnowledgeMaterial[], root?: string) {
   return defineTool({
     name: "knowledge_material", label: "读取上传资料",
-    description: "列出本任务上传资料的范围、版本、解析状态与章节；按资料编号和章节序号读取正文。保留原始定位，不把解析片段冒充全文。",
-    parameters: Type.Object({ id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 1 })), count: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })) }),
-    async execute(_id: string, input: { id?: string; start?: number; count?: number }) {
+    description: "列出本任务上传资料、解析警告、章节和 ZIP 图片路径；按资料编号及章节序号读取正文。用 id + image_path 读取图片内容，每次一张。Markdown 相对图片链接按文档所在目录对应到图片路径，不能仅凭文件名推断图片内容。未填写的版本为未知，上传时间不代表业务版本。",
+    parameters: Type.Object({ id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 1 })), count: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })), image_path: Type.Optional(Type.String()) }),
+    async execute(_id: string, input: { id?: string; start?: number; count?: number; image_path?: string }, _signal?: AbortSignal, _onUpdate?: unknown, context?: Pick<ExtensionContext, "model">) {
       const material = materials.find(m => m.id === input.id);
+      if (input.image_path !== undefined) {
+        const asset = material?.state === "ready" && material.images?.find(i => i.path === input.image_path);
+        if (!root || !material || !/^material-[a-f0-9-]{36}$/.test(material.id) || !asset || !/^[a-f0-9]{64}$/.test(asset.id))
+          return { content: [{ type: "text" as const, text: "图片不在本次资料中，或资料解析失败" }], details: {}, isError: true };
+        if (context?.model && !context.model.input.includes("image"))
+          return { content: [{ type: "text" as const, text: "当前萃取模型不支持图片，尚未读取该图片；请在模型配置中使用支持图片的模型，或补充文字说明。不能推断图中内容。" }], details: {}, isError: true };
+        try {
+          return { content: [{ type: "text" as const, text: `${material.name} / ${asset.path}` },
+            { type: "image" as const, data: readFileSync(join(root, material.id, "images", asset.id)).toString("base64"), mimeType: asset.mimeType }], details: {} };
+        } catch { return { content: [{ type: "text" as const, text: "图片文件不可读，请重新上传资料" }], details: {}, isError: true }; }
+      }
       let data: unknown;
       if (!input.id) data = materials.map(({ sections, ...rest }) => ({ ...rest, sections: sections.map((s, i) => ({ index: i + 1, location: s.location, characters: s.text.length })) }));
       else if (!material) return { content: [{ type: "text" as const, text: "资料不在本次研究范围" }], details: {}, isError: true };

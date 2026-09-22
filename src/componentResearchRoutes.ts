@@ -43,7 +43,7 @@ export async function componentResearchRoute(
           const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(service.options.dataDir).current("component").files, "component");
           const source = record.components?.[0] ?? record.component;
           return json(response, 200, { archive: archive ?? null, defaults: {
-            repository: source?.repository ?? "", branch: source?.branch || "main",
+            repository: source?.repository ?? "", branch: source?.branch || "master",
             directory: defaults.component_directory, filename: defaults.component_filename,
           } });
         }

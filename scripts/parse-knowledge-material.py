@@ -9,10 +9,21 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+import importlib.util
 
 
 def parse(path):
     suffix = path.suffix.lower()
+    if suffix == ".zip":
+        spec = importlib.util.spec_from_file_location("knowledge_zip", pathlib.Path(__file__).with_name("parse-knowledge-zip.py"))
+        bundle = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(bundle)
+        try:
+            return bundle.parse_bundle(path)
+        except bundle.BundleError as error:
+            return json.dumps({"error": str(error)}, ensure_ascii=False)
+        except (zipfile.BadZipFile, RuntimeError, NotImplementedError, EOFError):
+            return json.dumps({"error": "ZIP 损坏、加密或压缩格式不受支持，请重新打包"}, ensure_ascii=False)
     sections = []
 
     def add(location, text):

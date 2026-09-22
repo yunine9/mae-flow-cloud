@@ -12,6 +12,7 @@ window.addEventListener("error", e => errors.push(e.message)); window.addEventLi
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined; let result: unknown;
   if (path === "/knowledge-documents") result = { documents: [] };
+  else if (path === "/knowledge-materials") { calls.push({ action: "upload", ...input }); result = { id: "material-zip", name: input.name, version: input.version, scope: "本次萃取任务", state: "ready", sections: 2, images: [{ path: "images/state.png" }], warnings: ["未解析附件：图.svg"] }; }
   else if (path === "/domain-extraction") {
     if (input) { calls.push({ action: "create", ...input }); result = job; }
     else result = { records: [job], knowledge_target: null };
@@ -97,6 +98,14 @@ async function run() {
   await click("＋ 新建萃取任务");
   const createDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(d => d.getClientRects().length && d.textContent?.includes("新建领域知识萃取"))!;
   check(!createDialog.textContent?.includes("本次研究范围") && !createDialog.textContent?.includes("业务域名称") && !createDialog.textContent?.includes("业务代码仓地址") && !createDialog.textContent?.includes("归档文档目录"), "creation only asks module and common branch, not topic or repository and archive setup");
+  check(document.querySelector<HTMLInputElement>('input[aria-label="统一基准分支"]')?.value === "master", "default baseline is master");
+  check(!createDialog.textContent?.includes("无线豆包") && !createDialog.textContent?.includes("适用范围"), "no tool switch or redundant scope field");
+  const upload = createDialog.querySelector<HTMLInputElement>('input[aria-label="上传业务资料"]')!;
+  check(upload.accept.includes(".zip"), "upload accepts ZIP");
+  const transfer = new DataTransfer(); transfer.items.add(new File(["ZIP fixture; binary parser verified separately"], "业务资料.zip", { type: "application/zip" }));
+  upload.files = transfer.files; upload.dispatchEvent(new Event("change", { bubbles: true })); await pause(); await pause();
+  check(calls.some(c => c.action === "upload" && c.name === "业务资料.zip" && c.version === "" && !("scope" in c)), "ZIP upload requires no metadata");
+  check(createDialog.textContent?.includes("1 张图片") && createDialog.textContent?.includes("1 个附件未解析"), "upload shows images and partial parsing warning");
   const module = document.querySelector<HTMLSelectElement>('select[aria-label="萃取业务模块"]')!;
   module.value = "trade"; module.dispatchEvent(new Event("change", { bubbles: true })); await pause();
   await fillInput("统一基准分支", "release/current");
@@ -104,7 +113,8 @@ async function run() {
   await click("开始后台萃取");
   const created = calls.find(c => c.action === "create");
   check(created?.module_id === "trade" && created.baseline_branch === "release/current", "creation sends module and one common branch");
-  check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created), "server derives scope and repositories from module maintenance");
+  check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created) && !("use_wxdoubao" in created), "server derives scope and repositories from module maintenance");
+  check(created.material_ids.includes("material-zip"), "uploaded bundle associated with new task");
   check(!errors.length, errors.join(";")); return { passed: true, width: innerWidth, revision: job.documents[0].revision, skill: skill.digest };
 }
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });

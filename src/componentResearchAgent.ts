@@ -96,7 +96,7 @@ export async function runComponentResearch(
       } catch (error) { return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : "比较失败" }], details: {}, isError: true }; }
     },
   });
-  const materialTool = knowledgeMaterialTool((input.record.material_ids ?? []).map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id)));
+  const materialTool = knowledgeMaterialTool((input.record.material_ids ?? []).map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id)), join(options.dataDir, "knowledge-materials"));
   const session = await CloudSession.create({
     taskId: input.record.id,
     workspace: input.root,

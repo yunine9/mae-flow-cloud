@@ -12,7 +12,7 @@ export function ComponentKnowledgeArchive({ record, title, content }: { record: 
   const endpoint = `/component-research/${record.id}/archive`;
   const [cleanupBlocked, setCleanupBlocked] = useState(false);
   const [archive, setArchive] = useState<DomainKnowledgeJob>();
-  const [repository, setRepository] = useState(""), [branch, setBranch] = useState("main"), [directory, setDirectory] = useState("docs/components");
+  const [repository, setRepository] = useState(""), [branch, setBranch] = useState("master"), [directory, setDirectory] = useState("docs/components");
   const [filename, setFilename] = useState("component-guide.md"), [issue, setIssue] = useState("");
   const [editor, setEditor] = useState<DomainDocument>(), [busy, setBusy] = useState(false), [loaded, setLoaded] = useState(false), [error, setError] = useState("");
   const [view, setView] = useState<"diff" | "preview" | "edit">("diff");

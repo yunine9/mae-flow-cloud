@@ -109,7 +109,7 @@ export class DomainKnowledgeExtraction {
       if (module.status !== "active") throw new Error("业务模块已停用");
       if (!module.repositories.length) throw new Error("请先在业务模块中维护关联代码仓");
       input = { ...input, title: module.name, scope: `按照领域知识萃取 Skill，完整研究业务模块「${module.name}」及其全部关联仓。模块说明：${module.description}`,
-        repositories: module.repositories.map(url => ({ repository: url, name: url.split("/").at(-1)?.replace(/\.git$/, "") || module.name, branch: input.baseline_branch || "main", path: "" })) };
+        repositories: module.repositories.map(url => ({ repository: url, name: url.split("/").at(-1)?.replace(/\.git$/, "") || module.name, branch: input.baseline_branch || "master", path: "" })) };
     }
     const title = String(input.title ?? "").trim(), scope = String(input.scope ?? "").trim();
     if (!title || title.length > 160 || !scope || scope.length > 10000) throw new Error("请填写业务域名称及本次研究范围");
@@ -118,7 +118,7 @@ export class DomainKnowledgeExtraction {
     const repositories = input.repositories.map((r: any, i: number) => repository({ ...r, docs_path: r.docs_path || defaults.repository_directory }, `repo-${i + 1}`));
     const configured = readKnowledgeRepoConfig(this.dataDir);
     const knowledge_target = input.knowledge_target ? repository(input.knowledge_target, "domain") : {
-      id: "domain", name: "领域知识仓", repository: configured?.url || "", branch: configured?.branch || "main", path: "",
+      id: "domain", name: "领域知识仓", repository: configured?.url || "", branch: configured?.branch || "master", path: "",
       docs_path: configured?.docs_path || defaults.domain_directory,
     };
     if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
@@ -127,7 +127,7 @@ export class DomainKnowledgeExtraction {
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, ar_codes })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
-      material_ids, ar_codes, use_wxdoubao: input.use_wxdoubao === true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+      material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     this.jobs.set(job.id, job); this.persist(job);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
   }
@@ -194,6 +194,7 @@ export class DomainKnowledgeExtraction {
     scanForSecrets("研究意见", Buffer.from(message));
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
     if (input.ar_codes) job.ar_codes = this.arCodes(input.ar_codes);
+    job.use_wxdoubao = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;

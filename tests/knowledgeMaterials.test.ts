@@ -59,3 +59,52 @@ test("PDF 解析真实文本及页码；空白 PDF 不冒充可读资料", { ski
     const empty = await saveKnowledgeMaterial(root, { name: "blank.pdf", content_base64: pdf("") }); assert.equal(empty.state, "failed"); assert.match(empty.error!, /未提取/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("ZIP 文档及图片保留包内定位，工具按任务范围返回图片，未知附件明确提示", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-zip-"));
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1kAAAAASUVORK5CYII=";
+  try {
+    execFileSync("python3", ["-c", `import zipfile,sys,base64
+with zipfile.ZipFile(sys.argv[1], 'w') as z:
+ z.writestr('业务/规则.md', '# 取消规则\\n![状态](../images/state.png)\\n未发货允许取消')
+ z.writestr('images/state.png', base64.b64decode(sys.argv[2]))
+ z.writestr('附件/说明.svg', '<svg></svg>')
+ z.writestr('__MACOSX/._规则.md', b'metadata')`, join(root, "bundle.zip"), png]);
+    const material = await saveKnowledgeMaterial(root, { name: "业务资料.zip", content_base64: readFileSync(join(root, "bundle.zip")).toString("base64") });
+    assert.equal(material.state, "ready", material.error); assert.equal(material.version, ""); assert.equal(material.scope, "本次萃取任务"); assert.ok(material.uploaded_at);
+    assert.equal(material.sections.length, 1); assert.match(material.sections[0].location, /业务\/规则.md · 行 1/); assert.match(material.sections[0].text, /\.\.\/images\/state.png/);
+    assert.equal(material.images?.length, 1); assert.equal(material.images![0].path, "images/state.png"); assert.equal(material.warnings?.length, 1); assert.match(material.warnings![0], /说明.svg/);
+    const { knowledgeMaterialTool, readKnowledgeMaterial } = await import("../src/knowledgeMaterials.ts");
+    const tool: any = knowledgeMaterialTool([readKnowledgeMaterial(root, material.id)], root);
+    const listing = await tool.execute("list", {}); assert.match((listing.content[0] as any).text, /images\/state.png/);
+    const image = await tool.execute("image", { id: material.id, image_path: "images/state.png" });
+    assert.equal(image.content[1].type, "image"); assert.equal((image.content[1] as any).data, png); assert.equal((image.content[1] as any).mimeType, "image/png");
+    const noVision = await tool.execute("text-model", { id: material.id, image_path: "images/state.png" }, undefined, undefined, { model: { input: ["text"] } as any });
+    assert.equal(noVision.isError, true); assert.match((noVision.content[0] as any).text, /不支持图片/);
+    assert.equal((await tool.execute("outside", { id: "material-other", image_path: "images/state.png" })).isError, true);
+    assert.equal((await tool.execute("traverse", { id: material.id, image_path: "../../source.zip" })).isError, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("ZIP 拒绝穿越、链接、重复条目、过大展开和损坏；失败不保留可读图片", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-zip-invalid-"));
+  try {
+    execFileSync("python3", ["-c", `import zipfile,sys,stat
+from pathlib import Path
+root=Path(sys.argv[1])
+for name,path in [('traverse','../escape.md'),('absolute','/absolute.md'),('windows','C:/escape.md')]:
+ with zipfile.ZipFile(root/(name+'.zip'),'w') as z:z.writestr(path,'规则')
+with zipfile.ZipFile(root/'symlink.zip','w') as z:
+ i=zipfile.ZipInfo('link.md');i.create_system=3;i.external_attr=(stat.S_IFLNK|0o777)<<16;z.writestr(i,'/outside')
+with zipfile.ZipFile(root/'duplicate.zip','w') as z:
+ z.writestr('same.md','first');z.writestr('same.md','second')
+with zipfile.ZipFile(root/'large.zip','w',compression=zipfile.ZIP_DEFLATED) as z:z.writestr('large.md',b'x'*(11*1024*1024))
+with zipfile.ZipFile(root/'expanded.zip','w',compression=zipfile.ZIP_DEFLATED) as z:
+ for i in range(11):z.writestr(str(i)+'.md',b'x'*(10*1024*1024))
+(root/'broken.zip').write_bytes(b'not a zip')`, root], { stdio: "pipe" });
+    for (const name of ["traverse", "absolute", "windows", "symlink", "duplicate", "large", "expanded", "broken"]) {
+      const record = await saveKnowledgeMaterial(root, { name: `${name}.zip`, content_base64: readFileSync(join(root, `${name}.zip`)).toString("base64") });
+      assert.equal(record.state, "failed", name); assert.match(record.error!, /ZIP/); assert.deepEqual(record.sections, []); assert.deepEqual(record.images, []);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
