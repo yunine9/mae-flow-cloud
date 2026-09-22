@@ -4310,6 +4310,9 @@ export interface IssueCodeOriginCommitRow {
   adds: number;
   /** 该提交的源码删除行数(与新增同权,正向工作量)。 */
   dels: number;
+  /** 该提交已被 force push 覆盖、不在最终历史里(v4 起;v2/v3 数据
+   *  无此字段=留存提交)。 */
+  overwritten?: boolean;
 }
 
 export interface IssueCodeOriginRepoOk {

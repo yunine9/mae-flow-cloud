@@ -38,9 +38,11 @@ const ORIGIN_CLASS: Record<"first" | "rework" | "external", string> = {
 };
 
 /** 快照版本镜像(src/issueFlow/codeOrigin.ts 的
- *  ISSUE_CODE_ORIGIN_SCHEMA_VERSION):版本错位(部署窗口旧后端、旧包读新
- *  快照,#360)时整块按缺失退场,不渲染未知形状。 */
-const SNAPSHOT_SCHEMA_VERSION = 3;
+ *  ISSUE_CODE_ORIGIN_SCHEMA_VERSION 与读侧兼容下限):版本错位(部署窗口
+ *  旧后端、旧包读新快照,#360)时整块按缺失退场,不渲染未知形状;
+ *  v2..v4 同为工作量度量可混读(ADR-0051),低于 v2 或高于当前退场。 */
+const SNAPSHOT_SCHEMA_VERSION_MIN = 2;
+const SNAPSHOT_SCHEMA_VERSION = 4;
 
 /** 非数字(字段缺席/形状漂移)显示「—」,不让渲染崩掉整页(#360)。 */
 const num = (value: number | undefined) =>
@@ -78,7 +80,8 @@ export function IssueCodeOriginPanel({ id, threshold }: {
     return <p className="m-0 text-sm text-muted-foreground">正在读取首次生成归属…</p>;
   }
   if (missing || !snapshot
-    || snapshot.schema_version !== SNAPSHOT_SCHEMA_VERSION) {
+    || snapshot.schema_version < SNAPSHOT_SCHEMA_VERSION_MIN
+    || snapshot.schema_version > SNAPSHOT_SCHEMA_VERSION) {
     return <p className="m-0 text-sm text-muted-foreground">
       该会话暂无首次生成统计(未归档、未算完或早于起算日期)。</p>;
   }
@@ -141,10 +144,16 @@ export function IssueCodeOriginPanel({ id, threshold }: {
               + ` 之后的推送计返工`
             : "全程没有反馈事件:全部平台推送计首轮"}
         </p>
-        {repo.commits.length > 0 && (
+        {repo.commits.length > 0 && (() => {
+          const overwrittenCount =
+            repo.commits.filter((commit) => commit.overwritten).length;
+          return (
           <details className="mt-1.5">
             <summary className="cursor-pointer text-xs text-muted-foreground">
-              行归属证据({repo.commits.length} 个提交拥有留存行)
+              行归属证据({repo.commits.length} 个提交拥有工作行
+              {overwrittenCount > 0
+                ? `,含被强制覆盖 ${overwrittenCount} 个(不在最终历史里,工作量照计)`
+                : ""})
             </summary>
             <table className="mt-2 w-full text-left text-xs">
               <thead>
@@ -165,6 +174,12 @@ export function IssueCodeOriginPanel({ id, threshold }: {
                     </td>
                     <td className={cn("py-1 pr-3 font-semibold", ORIGIN_CLASS[commit.origin])}>
                       {ORIGIN_TEXT[commit.origin]}
+                      {commit.overwritten && (
+                        <span className="ml-1 font-normal text-muted-foreground"
+                          title="该提交已被 force push 覆盖、不在最终历史里;工作量按原分类照计(ADR-0051)">
+                          已覆盖
+                        </span>
+                      )}
                     </td>
                     <td className="py-1 pr-3 tabular-nums text-success">+{num(commit.adds)}</td>
                     <td className="py-1 pr-3 tabular-nums text-danger">−{num(commit.dels)}</td>
@@ -175,7 +190,8 @@ export function IssueCodeOriginPanel({ id, threshold }: {
               </tbody>
             </table>
           </details>
-        )}
+          );
+        })()}
       </div>
     ))}
   </div>;
