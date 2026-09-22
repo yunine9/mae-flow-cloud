@@ -9,7 +9,7 @@ import { validateRepoUrl } from "./issueFlow/issueGit.ts";
 
 export class KnowledgeRepoConfigError extends Error {}
 
-export interface KnowledgeRepoConfig { url: string }
+export interface KnowledgeRepoConfig { url: string; branch?: string; docs_path?: string }
 
 const file = (dataDir: string) => join(dataDir, "knowledge-repo.json");
 
@@ -30,7 +30,8 @@ export function readKnowledgeRepoConfig(
     throw new KnowledgeRepoConfigError(
       "知识仓配置文件格式错误,请删除后重新配置(knowledge-repo.json)");
   }
-  return { url: (data as { url: string }).url };
+  const saved = data as KnowledgeRepoConfig;
+  return { url: saved.url, ...(saved.branch ? { branch: saved.branch } : {}), ...(saved.docs_path ? { docs_path: saved.docs_path } : {}) };
 }
 
 /** scp/ssh 形态(git@host:path):validateRepoUrl 会把它误当本地路径
@@ -47,6 +48,7 @@ function isScpForm(input: string): boolean {
 export function saveKnowledgeRepoConfig(
   dataDir: string,
   rawUrl: string,
+  defaults: { branch?: string; docs_path?: string } = {},
 ): KnowledgeRepoConfig {
   const input = String(rawUrl ?? "");
   let url: string;
@@ -62,8 +64,12 @@ export function saveKnowledgeRepoConfig(
       "知识仓地址无效:不支持 ssh/scp 形态(git@host:path),"
         + "请改用 HTTPS 地址");
   }
-  write(dataDir, { url });
-  return { url };
+  const branch = defaults.branch?.trim(), docs_path = defaults.docs_path?.trim().replace(/\/$/, "");
+  if (branch && (branch.startsWith("-") || /[\s\\~^:?*\[\x00-\x1f]|\.\.|@\{|\/\/|\.$|\/$|\.lock(?:\/|$)/.test(branch))) throw new KnowledgeRepoConfigError("归档默认分支格式无效");
+  if (docs_path && docs_path.split("/").some(p => !p || p === "." || p === ".." || p.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(p))) throw new KnowledgeRepoConfigError("归档目录必须是仓内相对路径");
+  const config = { url, ...(branch ? { branch } : {}), ...(docs_path ? { docs_path } : {}) };
+  write(dataDir, config);
+  return config;
 }
 
 export function clearKnowledgeRepoConfig(dataDir: string): void {

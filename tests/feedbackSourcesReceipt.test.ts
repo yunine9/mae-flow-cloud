@@ -287,6 +287,9 @@ test("工作台批注来源:Agent 逐条回应(不带证据)登记进真内核",
     assert.ok(batch.result_digest, "内核已登记本批回执");
     assert.deepEqual(batch.results.map((item: any) => item.status).sort(),
       ["explained", "needs_human"]);
+    assert.equal((service as any).recordActiveFeedbackResult(internal), failure,
+      "结果重放仍保留真正需要人工判断的意见");
+    assert.equal(readState(cwd).current, "feedback_triage");
   } finally {
     await stop();
   }
@@ -554,4 +557,70 @@ test("结果 A 在推送前登记，发布 B 后幂等收口仍可信，篡改�
   } finally {
     await stop();
   }
+});
+
+for (const changed of [false, true]) test(`396：20 条人工已闭环意见先登记再交付，不催重复处理（代码变化=${changed}）`, async () => {
+  const s = await watchingService(`396-${changed}`), api = s.service as any;
+  try {
+    const store = new AnnotationStore(join(s.workspace, "annotations.jsonl"));
+    const notes = Array.from({ length: 20 }, (_, i) => store.add({ author: "owner", artifact: "main.ts",
+      file: "main.ts", line: i + 1, anchor: "ready", note: "确认这处实现", kind: "code" }));
+    store.markSent(notes.map(n => n.id), "review_repair");
+    s.open("fb-396", notes.map(n => ({ id: `workspace:${n.id}`, source: "workspace", source_id: n.id,
+      source_revision: 0, kind: "code_review", summary: n.note, verification: "author" })));
+    assert.equal(readState(s.cwd).delivery_loop.batches[0].status, "repairing");
+    assert.equal(api.activeFeedbackResult(s.internal), undefined,
+      "工作台意见直接消费批注事实，不再要求另一份 JSON 回执");
+    for (const note of notes) {
+      if (changed) {
+        store.respond(note.id, { outcome: "fixed", summary: "已按要求修改", evidence: ["main.ts:1"] });
+        store.resolveAsOwner(note.id, "owner", { revision: 0, outcome: "fixed", reason: "已核对" });
+      } else store.verify(note.id, "owner");
+    }
+    if (changed) {
+      writeFileSync(join(s.cwd, "main.ts"), "export const ready = false;\n");
+      execFileSync("git", ["add", "main.ts"], { cwd: s.cwd, env: GIT_ENV });
+      execFileSync("git", ["commit", "-qm", "修复"], { cwd: s.cwd, env: GIT_ENV });
+    }
+    s.internal.summary.status = "running";
+    s.internal.summary.delivery = { pipeline: "success", loop: { kind: "review", state: "repairing",
+      review_source: "workspace", workspace_review_annotation_ids: notes.map(n => n.id) } };
+    let nudges = 0, deliveries = 0;
+    s.internal.driver = { isIdle: true, takeUndeliveredSteers: () => [], finalReply: () => "已处理",
+      dispose() {}, continueWith: async () => { nudges++; throw new Error("不应重复催办"); } };
+    api.tryDeliver = async () => { deliveries++; s.internal.summary.status = "verifying"; };
+    assert.equal(readState(s.cwd).current, "feedback_triage");
+    await api.settle(s.internal, Promise.resolve({ status: "turn_finished" }), s.internal.controlEpoch);
+    assert.equal(nudges, 0, s.internal.summary.detail);
+    assert.equal(deliveries, 1, s.internal.summary.detail);
+    assert.equal(readState(s.cwd).current, changed ? "external_verify" : "delivery_watch");
+    const batch = readState(s.cwd).delivery_loop.batches[0];
+    assert.equal(batch.results.length, 20);
+    assert.ok(batch.results.every((row: any) => row.status === "explained"));
+    assert.equal(batch.status, changed ? "awaiting_verification" : "closed");
+    assert.equal(s.internal.summary.status, "verifying", "交给宿主不冒充 MR 合入或任务完成");
+  } finally { await s.stop(); }
+});
+
+test("396：已登记结果的旧任务停在 feedback_triage 时幂等交还，不改写原回执", async () => {
+  const s = await watchingService("396-replay"), api = s.service as any;
+  try {
+    const store = new AnnotationStore(join(s.workspace, "annotations.jsonl"));
+    const note = store.add({ author: "owner", artifact: "main.ts", file: "main.ts", line: 1,
+      anchor: "ready", note: "补齐实现", kind: "code" });
+    store.markSent([note.id], "review_repair");
+    s.open("fb-396-old", [{ id: `workspace:${note.id}`, source: "workspace", source_id: note.id,
+      source_revision: 0, kind: "code_review", summary: note.note, verification: "author" }]);
+    store.respond(note.id, { outcome: "fixed", summary: "已补齐", evidence: ["main.ts:1"] });
+    writeFileSync(join(s.cwd, "main.ts"), "export const ready = false;\n");
+    execFileSync("git", ["add", "main.ts"], { cwd: s.cwd, env: GIT_ENV });
+    execFileSync("git", ["commit", "-qm", "修复"], { cwd: s.cwd, env: GIT_ENV });
+    assert.equal(api.recordActiveFeedbackResult(s.internal), undefined);
+    const state = readState(s.cwd), original = structuredClone(state.delivery_loop.batches[0]);
+    state.current = "feedback_triage";
+    writeFileSync(join(s.cwd, ".mae-flow.json"), JSON.stringify(state));
+    assert.equal(api.recordActiveFeedbackResult(s.internal), undefined);
+    assert.equal(readState(s.cwd).current, "external_verify");
+    assert.deepEqual(readState(s.cwd).delivery_loop.batches[0], original);
+  } finally { await s.stop(); }
 });

@@ -100,6 +100,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
     if (request.method === "POST" && (!id || parts.length === 2)) {
       const body = await readBody(request, 3 * 1024 * 1024);
       const previous = id ? readKnowledgeDocument(dir, id) : undefined;
+      if ((previous?.research_source?.job_id.startsWith("dkx-") || (previous?.research_source?.job_id.startsWith("cr-") && previous.source)) && (body.content !== undefined || body.repository_import || body.research_source !== undefined)) throw new Error("知识正文由 Git 归档管理，请从萃取过程修订并通过 MR 更新；这里可调整适用范围与启用状态");
       const input = { ...body, source: body.content !== undefined ? undefined : previous?.source };
       if (body.repository_import) {
         const { repository, branch, path } = body.repository_import;

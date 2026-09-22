@@ -9,6 +9,7 @@ export function executeFile(
   file: string,
   args: string[],
   cwd?: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) =>
     execFile(
@@ -17,6 +18,8 @@ export function executeFile(
       {
         cwd,
         timeout: 30000,
+        signal,
+        killSignal: "SIGKILL",
         maxBuffer: 1024 * 1024,
         env: { ...process.env, EC_DEBUG: "0", GIT_TERMINAL_PROMPT: "0" },
       },
@@ -39,8 +42,8 @@ export const ecBinary = () =>
   (existsSync(join(homedir(), ".local/bin/ec"))
     ? join(homedir(), ".local/bin/ec")
     : "ec");
-export async function checkEc() {
-  await executeFile(ecBinary(), ["tools"]);
+export async function checkEc(signal?: AbortSignal) {
+  await executeFile(ecBinary(), ["tools"], undefined, signal);
 }
 export function evidencePreview(text: string) {
   const preview = text.slice(0, 4000);
@@ -77,7 +80,7 @@ export function componentSourceTool(
       start: Type.Optional(Type.Integer({ minimum: 1, description: "read 的起始行，或 list 的起始条目（从 1 开始）" })),
       end: Type.Optional(Type.Integer({ minimum: 1, description: "read 的末行，或 list 的末条目" })),
     }),
-    async execute(_id: string, input: any) {
+    async execute(_id: string, input: any, signal) {
       try {
         const path = String(input.path ?? range);
         if (
@@ -106,7 +109,7 @@ export function componentSourceTool(
               "--",
               ...(path ? [path] : []),
             ],
-            root,
+            root, signal,
           );
           const entries = text.trimEnd().split("\n").filter(Boolean);
           const start = Math.max(1, input.start ?? 1);
@@ -130,7 +133,7 @@ export function componentSourceTool(
                 "--",
                 ...(path ? [path] : []),
               ],
-              root,
+              root, signal,
             );
           } catch (error) {
             if ((error as any).code !== 1) throw error;
@@ -140,7 +143,7 @@ export function componentSourceTool(
           const content = await executeFile(
             "git",
             ["show", `${revision}:${path}`],
-            root,
+            root, signal,
           );
           const lines = content.split("\n"),
             start = Math.max(1, input.start ?? 1),
@@ -170,7 +173,7 @@ export function componentSourceTool(
           status: "failed",
           error: (e as Error).message,
         });
-        return reply((e as Error).message);
+        return { ...reply((e as Error).message), isError: true };
       }
     },
   });
@@ -194,7 +197,7 @@ export function codeSearchTool(onUse: (record: object) => void) {
       start: Type.Optional(Type.Integer({ minimum: 1 })),
       end: Type.Optional(Type.Integer({ minimum: 1 })),
     }),
-    async execute(_id: string, input: any) {
+    async execute(_id: string, input: any, signal) {
       try {
         const args =
           input.action === "read"
@@ -222,7 +225,7 @@ export function codeSearchTool(onUse: (record: object) => void) {
             ))
         )
           throw new Error("请提供查询或仓库与文件路径");
-        const text = await executeFile(ecBinary(), args);
+        const text = await executeFile(ecBinary(), args, undefined, signal);
         onUse({
           tool: "code_search",
           ...input,
@@ -238,7 +241,7 @@ export function codeSearchTool(onUse: (record: object) => void) {
           status: "failed",
           error: (e as Error).message,
         });
-        return reply((e as Error).message);
+        return { ...reply((e as Error).message), isError: true };
       }
     },
   });
@@ -258,7 +261,7 @@ export function languageComponentSourceTool(
     parameters: Type.Object({ ...base.parameters.properties, component_id: Type.Optional(Type.String()) }),
     async execute(id: string, input: any, signal, onUpdate, context) {
       const component = components.find(c => c.id === input.component_id) ?? (!input.component_id && components.length === 1 ? components[0] : undefined);
-      if (!component) return reply("请指定本次组件清单中的 component_id");
+      if (!component) return { ...reply("请指定本次组件清单中的 component_id"), isError: true };
       try {
         if (!sources.has(component.id)) sources.set(component.id, prepare(component));
         const source = await sources.get(component.id)!;
@@ -267,7 +270,7 @@ export function languageComponentSourceTool(
         sources.delete(component.id);
         const message = error instanceof Error ? error.message : "源码准备失败";
         onUse({ tool: "component_source", action: input.action, component_id: component.id, repository: component.repository, status: "failed", error: message });
-        return reply(message);
+        return { ...reply(message), isError: true };
       }
     },
   });

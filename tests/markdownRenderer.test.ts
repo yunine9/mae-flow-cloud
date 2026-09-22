@@ -118,3 +118,14 @@ test("行号仅由文档入口开启，普通对话不显示且保留批注锚�
   assert.match(document, /data-source-lines="1"/);
   assert.match(document, /data-l="3"/);
 });
+
+test("知识阅读器可接管章节和相对文档链接，外链保持安全且不执行 HTML", () => {
+  const source = '[章节](#边界) [规则](../rules.md) [官网](https://example.com)\n<a id="chapter"></a>\n<script>bad()</script>';
+  const render = (enabled: boolean) => renderToStaticMarkup(React.createElement(Markdown, { text: source, ...(enabled ? { onOpenKnowledgeLink: () => {} } : {}) }));
+  const html = render(true);
+  assert.equal((html.match(/class="knowledge-inline-link"/g) ?? []).length, 2);
+  assert.match(html, /href="https:\/\/example.com"/);
+  assert.match(html, /<span data-l="2"><\/span>/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(render(false), /knowledge-inline-link/);
+});

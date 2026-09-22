@@ -1,4 +1,4 @@
-import { KnowledgeDocuments } from "./KnowledgeDocuments";
+import { KnowledgeLibrary } from "./KnowledgeLibrary";
 import { PeopleProvider, PersonName, usePersonName } from "./People";
 import { DeliveryAnalytics } from "./DeliveryAnalytics";
 /**
@@ -16,7 +16,7 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { ChevronDown, Plus } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { cn } from "cn";
 import { Spinner } from "@/components/Spinner";
 import { Button } from "@/components/ui/button";
@@ -101,7 +101,7 @@ const HelpCenter = lazy(() =>
 // 只装需求)与团队问题(teamIssues,只装问题会话);页内领域切换器随
 // 之退场,问题处理(issues)仍是个人操作台,与"我的需求"对位。
 type View = "team" | "teamIssues" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "knowledge" | "wishes" | "help" | "environments" | "deliveryAnalysis";
+  | "settings" | "library" | "knowledge" | "wishes" | "help" | "environments" | "deliveryAnalysis";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -110,7 +110,7 @@ type TeamAssetTab = "documents" | "knowledge" | "modules" | "workflows" | "insig
 
 const APP_VIEWS = new Set<View>([
   "team", "teamIssues", "mine", "issues", "profile", "users", "settings",
-  "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
+  "library", "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>(["documents",
   "knowledge", "modules", "workflows", "insights", "memories",
@@ -237,7 +237,8 @@ export function resolveWorkspaceTarget(
 
 function initialView(user: AuthUser): View {
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
-  if (new URLSearchParams(location.search).get("experience") === "1" || new URLSearchParams(location.search).has("knowledgeDocuments")) return "knowledge";
+  if (["knowledgeDocuments", "knowledgePage", "componentResearch", "domainExtraction"].some(key => new URLSearchParams(location.search).has(key))) return "library";
+  if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
@@ -725,9 +726,9 @@ export function App() {
   const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
   const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
   const [knowledgeCategory, setKnowledgeCategory] = useState<"documents" | "skills">("documents");
-  const [knowledgeUploadRequest, setKnowledgeUploadRequest] = useState(0);
+  const [knowledgeUploadRequest] = useState(0);
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
-    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : readKnowledgeAssetFocus() ? "knowledge" : "documents");
+    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : readKnowledgeAssetFocus() ? "knowledge" : "memories");
   const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
     readKnowledgeAssetFocus,
   );
@@ -812,7 +813,7 @@ export function App() {
         const restoredView = viewFromHistoryState(event.state);
         const restoredTab = teamAssetTabFromHistoryState(event.state);
         const restoredIssueChild = issueChildTabFromHistoryState(event.state);
-        if (restoredView) setView(restoredView);
+        if (restoredView) setView(restoredView === "knowledge" && restoredTab === "documents" ? "library" : restoredView);
         if (restoredTab) setTeamAssetTab(restoredTab);
         // 后退/前进还原问题处理子页签;admin 的强制口径在渲染处兜底。
         if (restoredIssueChild) setIssueChildTab(restoredIssueChild);
@@ -1246,6 +1247,7 @@ export function App() {
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
       : "登记问题并指派责任人，或处理指派到你名下的问题：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
+    library: { title: "知识库", description: "统一管理组件与业务领域知识，从资料研究到人工修订、归档和持续更新。" },
     knowledge: { title: "团队资产", description: "管理团队通用知识、模块知识和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
@@ -1314,6 +1316,9 @@ export function App() {
     }
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
+    if (next === "library") {
+      history.pushState(appHistoryState("library"), "", "/?knowledgePage=documents"); setIssueRouteId(""); setView("library"); return;
+    }
     if (next === "help") {
       const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
       if (location.pathname !== nextPath) {
@@ -1348,6 +1353,11 @@ export function App() {
     // 不变量对表:进出页签、history 同步写完后按当前 URL 重读快照——
     // 进入问题处理拿到深链 id(有则直达工作台),离开则随归位清成空串。
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
+    if (["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
+      const url = new URL(location.href);
+      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component"]) url.searchParams.delete(key);
+      history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
+    }
     setIssueRouteId(readIssueRoute());
     setView(next);
   };
@@ -1390,6 +1400,7 @@ export function App() {
                   childTab={activeIssueChild} onSelectChild={selectIssueChild}
                   onSelect={selectView} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+                <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
@@ -1427,6 +1438,7 @@ export function App() {
                 <NavButton view="team" current={view} onSelect={selectView} label="团队需求" />
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
+                <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
                 <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
@@ -1453,13 +1465,12 @@ export function App() {
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
     <div className="min-h-screen min-w-0 bg-(--canvas)">
       <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
-        (dtsWide || view === "knowledge") ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || view === "knowledge" || view === "library") ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div className={view === "knowledge" ? "team-assets-heading" : undefined}>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
           {view === "knowledge" ? <>
           <nav className="team-assets-tabs" aria-label="团队资产类型">
-            <button type="button" className={["documents", "knowledge", "modules"].includes(teamAssetTab) ? "active" : ""} onClick={() => selectTeamAssetTab("documents")}><strong>知识库</strong></button>
             <button type="button" className={teamAssetTab === "memories" ? "active" : ""} onClick={() => selectTeamAssetTab("memories")}><strong>经验沉淀</strong></button>
             <button type="button" className={teamAssetTab === "workflows" ? "active" : ""} onClick={() => selectTeamAssetTab("workflows")}><strong>工作流</strong></button>
             <button type="button" className={teamAssetTab === "insights" ? "active" : ""} onClick={() => selectTeamAssetTab("insights")}><strong>使用效能</strong></button>
@@ -1468,7 +1479,6 @@ export function App() {
 
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
-          {view === "knowledge" && teamAssetTab === "documents" && <Button className="h-11 px-4 text-base" onClick={() => setKnowledgeUploadRequest(n => n + 1)}><Plus size={18} />{knowledgeCategory === "skills" ? "添加 Skill" : "添加知识"}</Button>}
           {(view === "mine" || view === "team") && <TaskSyncIndicator state={taskSync} onRetry={refresh} />}
           {relevantWaiting > 0 && view !== "users" && view !== "settings" && (
             <div className="flex h-8 items-center gap-2 whitespace-nowrap rounded-[8px] border border-(--attention)/10 bg-(--attention-soft) pl-[9px] pr-2.5 text-sm font-medium text-(--attention)">
@@ -1496,7 +1506,7 @@ export function App() {
       </header>
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
-        (dtsWide || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || view === "library" || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
@@ -1535,12 +1545,13 @@ export function App() {
           </TeamWorldTabs>
         </section>}
 
+        {view === "library" && <KnowledgeLibrary category={knowledgeCategory} onCategoryChange={setKnowledgeCategory} uploadRequest={knowledgeUploadRequest}
+          onOpenTask={id => { const target = tasks.find(task => task.id === id); if (target) openArtifacts(target); else location.assign(`/work/${encodeURIComponent(id)}`); }}
+          onManage={focus => { setKnowledgeFocus(focus); const tab = focus ? focus.kind === "business" ? "modules" : "knowledge" : "memories"; history.pushState(appHistoryState("knowledge", tab), "", focus ? knowledgeAssetPath(focus) : "/?experience=1"); setTeamAssetTab(tab); setView("knowledge"); }} />}
+
         {view === "knowledge" && <section className="team-assets-workspace">
-          {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectTeamAssetTab("documents")}>← 返回知识库</Button>}
-          {teamAssetTab === "documents" ? <KnowledgeDocuments onOpenTask={taskId => { const target = tasks.find(task => task.id === taskId); if (target) openArtifacts(target); else location.assign(`/work/${encodeURIComponent(taskId)}`); }} category={knowledgeCategory} onCategoryChange={setKnowledgeCategory} uploadRequest={knowledgeUploadRequest} onManage={focus => {
-            if (!focus) { selectTeamAssetTab("memories"); return; }
-            setKnowledgeFocus(focus); selectTeamAssetTab(focus.kind === "business" ? "modules" : "knowledge");
-          }} /> : teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
+          {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectView("library")}>← 返回知识库</Button>}
+          {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
             initialAsset={knowledgeFocus}
             onOpenTask={(taskId) => {

@@ -393,6 +393,17 @@ def complete_superseded_pipeline_feedback(state, verified_sha):
     return bool(_promote(state, loop))
 
 
+def _handoff_host_feedback(state, batch):
+    # Cloud 已提交逐条处理结果；后续推送和权威验证由宿主负责。
+    # 不再要求 Agent 为推进步骤重走 build/归档/检视，不产生质量 PASS。
+    if (host_managed_continuous_review()
+            and batch.get("status") == "awaiting_verification"
+            and batch.get("batch_id") == (state.get("delivery_loop") or {}).get("active_batch_id")
+            and state.get("current") in _WRITER):
+        state["current"] = "external_verify"
+        state.setdefault("step_heads", {})["external_verify"] = _head()
+
+
 def _result(flow, state, args):
     del flow
     payload = _payload(args.file, RESULT_SCHEMA)
@@ -445,6 +456,7 @@ def _result(flow, state, args):
     if batch.get("result_digest"):
         if batch.get("result_digest") != _result_digest(original_feedback_order(results, batch.get("results"))):
             _die("批次 %s 已登记不同结果，拒绝覆盖" % batch_id)
+        _handoff_host_feedback(state, batch)
         save_with_host_proof(state, proof_nonce)
         print(json.dumps({
             "schema": STATE_SCHEMA, "idempotent": True,
@@ -476,6 +488,7 @@ def _result(flow, state, args):
         promoted = _promote(state, loop)
         state["current"] = "feedback_triage" if promoted else "delivery_watch"
         state.setdefault("step_heads", {})[state["current"]] = head
+    _handoff_host_feedback(state, batch)
     _history(state, str(batch.get("from_step") or ""),
              "feedback-result:" + batch_id,
              "%s；HEAD %s" % (batch["status"], head[:12]))

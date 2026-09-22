@@ -1,3 +1,5 @@
+import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
+import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
 import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
 import { randomUUID } from "node:crypto";
@@ -1097,6 +1099,7 @@ export function createTaskServer(
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
+        || ["domain-extraction", "knowledge-materials", "knowledge-extraction"].includes(parts[0])
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
@@ -1267,6 +1270,10 @@ export function createTaskServer(
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
       if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
+      if (["domain-extraction", "knowledge-materials"].includes(parts[0])) return domainKnowledgeRoute(request, response, parts, service,
+        viewer?.username ?? "本地部署", readBody, json);
+      if (parts[0] === "knowledge-extraction") return extractionConfigurationRoute(request, response, parts, service.options.dataDir,
+        viewer?.username ?? "本地部署", !options.auth || viewer?.role === "admin", readBody, json);
       if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-candidates") {
         const operator = viewer?.username ?? "本地部署";
@@ -1492,7 +1499,7 @@ export function createTaskServer(
           if (request.method === "PUT" && parts.length === 1) {
             const body = await readBody(request);
             return json(response, 200,
-              { config: saveKnowledgeRepoConfig(dataDir, body.url) });
+              { config: saveKnowledgeRepoConfig(dataDir, body.url, { branch: body.branch, docs_path: body.docs_path }) });
           }
           if (request.method === "DELETE" && parts.length === 1) {
             clearKnowledgeRepoConfig(dataDir);

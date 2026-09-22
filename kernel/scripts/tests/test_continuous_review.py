@@ -272,6 +272,45 @@ class DeliveryCommandTests(TempProject):
         delivery.cmd_delivery({"steps": {}}, value, args)
         self.assertEqual(without_host_nonces(first), without_host_nonces(value))
 
+    def test_host_results_handoff_without_repeating_coding_steps(self):
+        for step in ("feedback_triage", "build", "domain_archive", "delivery_review", "push"):
+            with self.subTest(step=step):
+                value = self.live_state()
+                path = self.write_json("batch.json", batch(base=self.head))
+                delivery.cmd_delivery({"steps": {}}, value, SimpleNamespace(
+                    delivery_action="feedback-open", file=path))
+                value["current"] = step
+                path = self.write_json("result.json", {
+                    "schema": delivery.RESULT_SCHEMA, "batch_id": "fb-1", "changed": True,
+                    "results": [{"id": "workspace:an-1", "status": "fixed", "summary": "已修改"}],
+                })
+                args = SimpleNamespace(delivery_action="feedback-result", file=path)
+                with mock.patch.object(delivery, "host_managed_continuous_review", return_value=True), \
+                        mock.patch.object(delivery, "verify_feedback_facts"):
+                    delivery.cmd_delivery({"steps": {}}, value, args)
+                    self.assertEqual("external_verify", value["current"])
+                    active = value["delivery_loop"]["batches"][0]
+                    self.assertEqual("awaiting_verification", active["status"])
+                    self.assertNotEqual("PASS", (value.get("quality", {}).get("external_verification") or {}).get("verdict"))
+                    # 升级前结果已登记、步骤仍留在旧位置的现场可幂等恢复。
+                    value["current"] = step
+                    previous = json.loads(json.dumps(active))
+                    delivery.cmd_delivery({"steps": {}}, value, args)
+                    self.assertEqual("external_verify", value["current"])
+                    self.assertEqual(previous, active)
+
+    def test_host_handoff_preserves_human_questions_and_other_active_batches(self):
+        value = state("feedback_triage")
+        value["delivery_loop"] = {"active_batch_id": "current"}
+        with mock.patch.object(delivery, "host_managed_continuous_review", return_value=True):
+            for item in ({"batch_id": "current", "status": "needs_human"},
+                         {"batch_id": "old", "status": "awaiting_verification"}):
+                delivery._handoff_host_feedback(value, item)
+                self.assertEqual("feedback_triage", value["current"])
+            value["current"] = "end"
+            delivery._handoff_host_feedback(value, {"batch_id": "current", "status": "awaiting_verification"})
+            self.assertEqual("end", value["current"])
+
     def test_result_requires_one_receipt_per_item(self):
         value = self.live_state()
         open_path = self.write_json("batch.json", batch(base=self.head))

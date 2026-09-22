@@ -64,6 +64,16 @@ function declaredTerminal(kernelRoot: string | undefined, current: string): bool
   return current === "end";
 }
 
+/** 只用于提示未完成步骤；反馈结果需由调用方先登记，不能据此跳过处理。 */
+export function stalledKernelStep(cwd: string): string | undefined {
+  try {
+    const path = join(cwd, ".mae-flow.json");
+    if (!existsSync(path)) return "init(尚未初始化)";
+    const current = String(JSON.parse(readFileSync(path, "utf-8"))?.current ?? "");
+    return current && !["external_verify", "delivery_watch", "end"].includes(current) ? current : undefined;
+  } catch { return undefined; }
+}
+
 /** 只识别执行位置，不查询 Git 或收据；此结果不能证明交付就绪/完成。 */
 export function inspectKernelPosition(
   cwd: string | undefined, kernelRoot: string | undefined,
