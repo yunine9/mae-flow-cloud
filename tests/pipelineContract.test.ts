@@ -18,6 +18,21 @@ import { getPipelineStatus } from "../src/pipelineClient.ts";
 const SHA = "a".repeat(40);
 const OTHER = "b".repeat(40);
 
+test("超限指标不被普通缺陷摘要预算挤掉，不解释 DT 的含义", () => {
+  const lines = summarizeFailedChecks([{
+    dimension: "COMPILE", status: "failed",
+    details: [
+      ...Array.from({ length: 12 }, (_, i) => ({ message: `错误 ${i}` })),
+      { message: "构建失败=1 [超限]", rule: "quality_metric", severity: "error" },
+      { message: "DT=2 [超限]", rule: "quality_metric", severity: "error" },
+    ],
+  }], 1).join("\n");
+  assert.match(lines, /构建失败=1/);
+  assert.match(lines, /DT=2/);
+  assert.match(lines, /还有 11 条/);
+  assert.doesNotMatch(lines, /部署测试/);
+});
+
 test("防过期结果:is_valid=false 与绑错 SHA 的 run 一律拒收", () => {
   // MR 头上无有效流水线时平台挂旧分支的灯(对比报告头号根因):
   // 旧绿灯不背书新代码,旧红灯也不许触发白烧的修复轮。

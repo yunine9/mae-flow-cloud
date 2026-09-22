@@ -48,7 +48,10 @@ function fakeCli(dir: string): string {
         ] },
         { id: 102, state: "FAILED", fail_log: "BUILD FAILURE: 覆盖率 61%", jobs: [
           { quality: "COMPILE", state: "SUCCESS", name: "compile" },
-          { quality: "UT", state: "FAILED", name: "unit-test" },
+          { quality: "UT", state: "FAILED", name: "unit-test",
+            stage: "test", tool: "actual-ut",
+            details: [{ message: "DT=2 [超限]", rule: "quality_metric",
+              severity: "error", tool: "actual-ut" }, { message: "" }] },
           { quality: "CODECHECK", state: "SKIPPED", name: "codecheck" },
         ] },
       ], argv: args } }));
@@ -179,6 +182,10 @@ test("三端点走真 CLI:模板套值、抽取、状态映射、多 run 全对"
   assert.equal(runs[1].status, "failed");
   assert.equal(runs[1].checks[1].dimension, "UT");
   assert.equal(runs[1].checks[1].status, "failed");
+  assert.equal(runs[1].checks[1].stage, "test");
+  assert.equal(runs[1].checks[1].tool, "actual-ut");
+  assert.equal(runs[1].checks[1].details.length, 1);
+  assert.equal(runs[1].checks[1].details[0].message, "DT=2 [超限]");
   assert.equal(runs[1].checks[2].status, "skipped");
   assert.match(runs[1].log, /覆盖率 61%/, "失败日志是修复环的口粮");
 

@@ -132,15 +132,20 @@ export function summarizeFailedChecks(
     lines.push(`${check.dimension}${where ? `(${where})` : ""}: failed`
       + (total ? `,缺陷 ${total} 条` : "")
       + (check.url ? ` ${check.url}` : ""));
-    for (const defect of (check.details ?? []).slice(0, maxDefectsPerCheck)) {
+    // 超限指标逐项呈现，普通缺陷才按摘要预算截取，避免只讲首个错误。
+    const metrics = (check.details ?? []).filter((d) =>
+      d.rule === "quality_metric" && d.severity === "error");
+    const selected = [...metrics, ...(check.details ?? [])
+      .filter((d) => !metrics.includes(d)).slice(0, maxDefectsPerCheck)];
+    for (const defect of selected) {
       const site = defect.file
         ? `${defect.file}${defect.line ? `:${defect.line}` : ""} ` : "";
       const tag = [defect.tool, defect.rule, defect.severity]
         .filter(Boolean).join("/");
       lines.push(`  - ${site}${tag ? `[${tag}] ` : ""}${defect.message}`);
     }
-    if (total > maxDefectsPerCheck) {
-      lines.push(`  - …还有 ${total - maxDefectsPerCheck} 条,`
+    if (total > selected.length) {
+      lines.push(`  - …还有 ${total - selected.length} 条,`
         + "完整清单见本轮派发的流水线镜像材料");
     }
   }

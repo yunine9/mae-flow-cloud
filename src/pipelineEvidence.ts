@@ -245,7 +245,7 @@ export function assessPipelineRepairEvidence(input: {
       continue;
     }
     if (check.details.some((detail) => meaningful(detail.message)
-      && (!!detail.file || !!detail.rule || !!detail.line))) {
+      && (!!detail.file || (!!detail.rule && detail.rule !== "quality_metric") || !!detail.line))) {
       addSource(sources, check.dimension, "status checks 的结构化失败明细");
     }
   }
