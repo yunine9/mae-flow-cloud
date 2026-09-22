@@ -41,9 +41,9 @@ export function isAdjustmentAnswer(answer: string): boolean {
   return isReviewAdjustmentAnswer(answer);
 }
 
-/** diff 只表示阅读代码。只有 Cloud 清单卡消费文件勾选、执行清单推送。 */
+/** 两类推送确认共用文件清单；普通阅读不会授权修改交付范围。 */
 export function needsDeliverySelection(waiting?: { step?: string; recommended_view?: string }): boolean {
-  return waiting?.step === "cloud_push_confirm";
+  return waiting?.step === "cloud_push_confirm" || waiting?.step === "host_push_confirm";
 }
 
 /** 只有这次手势确实拖动并选中文字才忽略 click，旧选区不能锁死选项。 */

@@ -90,7 +90,7 @@ export async function confirmHostPush(host: PushConfirmationHost, operation: Hos
     questionInput: { questions: [{ question: `推送到 ${operation.branch}？`, options: ["确认推送", "先调整"] }] },
     context: [operation.input.reason.slice(0, 500),
       paths?.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
-      "完整改动可在「交付材料 → 工作区变更」查看。调整范围请选「先调整」并说明。未处理的意见保持原状。",
+      "在「代码改动 → 全部改动」中勾选本次交付文件，再确认推送。需要 Agent 修改代码时请选择「先调整」。未处理的意见保持原状。",
       PUSH_SCOPE_GUIDANCE].join("\n\n"),
   });
   host.summary.status = "waiting_for_human";

@@ -7840,3 +7840,61 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
   z-index: 60;
 }
 .help-tip:hover::after { opacity: 1; }
+
+/* Code review: a bounded, virtual file tree and stable light-DOM annotation anchors. */
+.git-change-view .change-files { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.change-tree-content { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.change-tree-content.is-overview { height: 480px; }
+.change-tree-panel { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.change-tree-search { display: flex; align-items: center; gap: 8px; margin: 12px 10px 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--muted); }
+.change-tree-search input { min-width: 0; width: 100%; border: 0; background: transparent; font: inherit; font-size: 14px; outline: none; color: var(--text); }
+.change-tree-search button, .change-tree-tools button { border: 0; background: none; cursor: pointer; color: inherit; padding: 3px; }
+.change-tree-tools { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px 12px; font-size: 13px; color: var(--muted); }
+.change-tree-tools label { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+.change-tree-scroll { flex: 1; min-height: 0; overflow: auto; outline: none; }
+.change-tree-item { display: flex; align-items: center; gap: 6px; padding-right: 10px; cursor: pointer; border-left: 3px solid transparent; font-size: 14px; color: var(--text); outline: none; }
+.change-tree-item:hover { background: var(--surface-2); }
+.change-tree-item.is-active { background: var(--accent-soft); border-left-color: var(--accent); }
+.change-tree-item:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+.change-tree-item svg { flex-shrink: 0; color: var(--muted); }
+.change-tree-item svg.is-expanded { transform: rotate(90deg); }
+.change-tree-item .change-folder-icon { color: #b88926; }
+.change-tree-item input, .change-tree-tools input { width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--accent); cursor: pointer; }
+.change-tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.change-tree-spacer { width: 13px; flex-shrink: 0; }
+.change-tree-count { font-size: 12px; color: var(--muted); }
+.change-tree-stats { display: flex; gap: 5px; font: 12px ui-monospace, monospace; white-space: nowrap; }
+.change-tree-stats b { color: var(--success); font-weight: 500; }
+.change-tree-stats i { color: var(--danger); font-style: normal; }
+.change-local-dot { width: 5px; height: 5px; border-radius: 100%; background: var(--attention); flex-shrink: 0; }
+.change-tree-empty { padding: 30px 12px; text-align: center; color: var(--muted); font-size: 14px; }
+.change-lazy-directories { border-top: 1px solid var(--line); max-height: 35%; overflow: auto; flex-shrink: 0; }
+.change-selection-hint { padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface-soft); color: var(--muted); font-size: 14px; }
+.diff-view-toggle { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-soft); }
+.diff-view-toggle button { padding: 4px 8px; font-size: 13px; border: 0; background: none; border-radius: 4px; color: var(--muted); cursor: pointer; }
+.diff-view-toggle button[aria-pressed=true] { color: var(--accent); background: var(--surface); box-shadow: 0 1px 3px #0001; }
+.diff-review-canvas { position: relative; }
+.diff-review.is-unified .diff-review-row, .diff-review.is-unified .diff-review-head { display: block; }
+.diff-review.is-unified .diff-cell.empty { display: none; }
+.diff-review.is-unified .diff-cell + .diff-cell { border-left: 0; }
+.diff-review-head { position: sticky; top: 0; z-index: 2; }
+.workspace-studio .is-embedded .change-files { overflow: hidden; }
+.git-change-browser.is-tree-hidden { grid-template-columns: minmax(0, 1fr); }
+.git-change-browser.is-tree-hidden > .change-files, .git-change-browser.is-tree-hidden > .change-panel-resizer { display: none; }
+.git-change-view.is-embedded > .change-summary { padding: 8px 12px; }
+.git-change-view.is-embedded .change-summary-lead { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
+.git-change-view.is-embedded .change-delivery-bar { padding: 8px 12px; margin-bottom: 0; border-radius: 0; border-left: 0; border-right: 0; }
+.git-change-view.is-embedded .change-delivery-lead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.git-change-view .change-detail-header { padding: 8px 12px; gap: 6px 12px; }
+.git-change-view .diff-review-head { min-height: 26px; }
+/* Common Windows laptop viewport: give the identity its own wide row instead of wrapping it into five lines. */
+@media (min-width: 1000px) and (max-width: 1600px) {
+  .workspace-studio.task-workspace-v2:has(.ws-doc.is-diff) > .ws-head {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "back identity controls" "progress progress progress";
+    min-height: 0; padding-top: 8px; padding-bottom: 8px; row-gap: 4px;
+  }
+  .workspace-studio.task-workspace-v2:has(.ws-doc.is-diff) > .ws-head .ws-progress { padding: 0; }
+}
+.workspace-studio .is-embedded .git-change-browser.is-tree-hidden,
+.git-change-view.is-focused .git-change-browser.is-tree-hidden { grid-template-columns: minmax(0, 1fr); }

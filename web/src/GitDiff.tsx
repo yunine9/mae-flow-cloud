@@ -1,20 +1,20 @@
+import type { GitDiffSelection } from "./deliverySelectionDraft";
+export type { GitDiffSelection } from "./deliverySelectionDraft";
+import { ChangeFileTree } from "./ChangeFileTree";
+import { VirtualDiffRows } from "./VirtualDiffRows";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   diffReviewRows,
+  unifiedDiffRows,
   type DiffCell,
   type DiffReviewRow,
 } from "./diffLines";
 import {
-  changeTree,
-  compactDirectory,
-  descendantFiles,
-  displayDirectoryPaths,
   fileKind,
   parseChanges,
   type ChangedFile,
-  type ChangeDirectory,
   type ChangeStage,
 } from "./gitDiffTree";
 import {
@@ -52,12 +52,6 @@ const GIT = {
   overviewCopy: "flex min-w-0 flex-col gap-[3px]",
   overviewTitle: "text-[13.5px] text-text-strong",
   overviewNote: "text-sm leading-snug text-muted-foreground",
-  treeCaption: "flex h-7 items-center justify-between px-[7px] text-sm font-bold text-muted-foreground",
-  treeCaptionCount: "not-italic",
-  treeCaptionMeta: "flex items-center gap-[7px]",
-  treeCaptionBtn: "inline-flex h-6 cursor-pointer items-center gap-1 rounded-[5px] border border-transparent bg-transparent px-[7px] text-sm font-bold text-muted-foreground hover:border-(--accent) hover:bg-(--accent-soft) hover:text-(--accent) dark:hover:bg-(--accent-soft)",
-  treeCaptionBtnSvg: "size-3 fill-none stroke-current stroke-[1.4]",
-  tree: "min-w-0",
   treeRow: "group/row relative flex min-w-0 items-center gap-1 rounded-[7px] border border-transparent pl-[calc(5px+var(--tree-depth,0)*12px)] pr-1 hover:bg-surface",
   treeRowCompact: "min-h-[42px]",
   treeRowOverview: "min-h-[46px]",
@@ -80,19 +74,13 @@ const GIT = {
   fileStatsDel: "no-underline text-danger",
   deliveryCheck: "grid size-5 flex-none cursor-pointer place-items-center rounded-[5px] border border-line-strong bg-transparent p-0 text-transparent hover:border-(--accent) hover:bg-transparent hover:text-transparent dark:hover:bg-transparent",
   deliveryCheckOn: "border-(--accent) bg-(--accent) text-(--accent-fg) hover:bg-(--accent) hover:text-(--accent-fg)",
-  deliveryCheckPartial: "border-(--accent) bg-(--accent-soft) text-transparent after:h-0.5 after:w-2 after:rounded-sm after:bg-(--accent) after:content-[''] hover:bg-(--accent-soft) hover:text-transparent",
   deliveryCheckSvg: "size-[13px] fill-none stroke-current stroke-2",
   hideBtn: "absolute right-1 top-1/2 z-[1] grid size-[28px] -translate-y-1/2 cursor-pointer place-items-center rounded-[6px] border border-transparent bg-transparent p-0 text-muted-foreground opacity-0 hover:border-line-strong hover:bg-danger-soft hover:text-danger focus-visible:opacity-100 group-hover/row:opacity-100 dark:hover:bg-danger-soft hover:text-danger active:-translate-y-1/2!",
   hideBtnSvg: "size-[15px] fill-none stroke-current stroke-[1.35]",
-  groupSecond: "mt-2.5",
   groupHead: "mb-1 mt-0.5 flex items-center justify-between gap-2 rounded-[7px] px-2 py-[5px] text-sm",
-  groupHeadPush: "bg-success-soft text-success",
   groupHeadLocal: "bg-surface-muted text-muted-foreground",
   groupHeadStrong: "font-bold tracking-[.02em]",
   groupHeadCount: "rounded-full px-2 py-px text-sm font-bold not-italic",
-  groupLocalBtn: "w-full cursor-pointer border-0 bg-transparent p-0 text-left font-[inherit] hover:text-text-strong h-auto hover:bg-transparent dark:hover:bg-transparent aria-expanded:bg-transparent aria-expanded:text-text-strong dark:aria-expanded:bg-transparent",
-  groupLocalToggle: "w-3 flex-none text-base leading-none",
-  treeEmpty: "px-2.5 py-[22px] text-center text-sm text-muted-foreground",
   treeUntracked: "mt-2",
   treeLazy: "ml-6 mr-2 mb-[5px] mt-[3px] flex items-center justify-between gap-2 rounded-md bg-surface-muted px-2.5 py-2 text-sm text-muted-foreground",
   treeLazyError: "text-danger",
@@ -161,12 +149,6 @@ function storedNumber(key: string, fallback: number): number {
   } catch {
     return fallback;
   }
-}
-
-export interface GitDiffSelection {
-  selectedPaths: string[];
-  committedPaths: string[];
-  allPaths: string[];
 }
 
 export interface GitDiffFileManifest {
@@ -317,6 +299,8 @@ export function GitDiff({
   onDirectoryLoad,
   activeFileLoading = false,
   activeFileError = "",
+  onRetry,
+  selectionHint,
   hideKey,
   selectable = false,
   selectionKey = "",
@@ -341,6 +325,8 @@ export function GitDiff({
   ) => Promise<GitDiffDirectoryPage>;
   activeFileLoading?: boolean;
   activeFileError?: string;
+  onRetry?: () => void;
+  selectionHint?: string;
   /** 每任务保存自己的视图隐藏项；隐藏不参与 Git 或交付判断。 */
   hideKey?: string;
   /** 仅代码检视待办开放交付勾选。 */
@@ -368,6 +354,7 @@ export function GitDiff({
   const [loadedUntrackedFiles, setLoadedUntrackedFiles] =
     useState<Map<string, ChangedFile>>(new Map());
   const files = useMemo(() => {
+    if (!loadedUntrackedFiles.size) return baseFiles;
     const merged = new Map(baseFiles.map((file) => [file.path, file]));
     const contentByPath = new Map(parseChanges(text)
       .map((file) => [file.path, file] as const));
@@ -396,22 +383,17 @@ export function GitDiff({
   const [diffFontSize, setDiffFontSize] = useState(() =>
     clampDiffFontSize(storedNumber("mae-flow:git-diff-font-size",
       DEFAULT_DIFF_FONT_SIZE)));
-  // 首次渲染就折叠目录。旧实现等首屏提交后才在 effect 里折叠，数万
-  // 文件会先真实生成数十万个 DOM 节点，浏览器已经卡死，effect 根本
-  // 来不及执行。
-  const [collapsedDirectories, setCollapsedDirectories] =
-    useState<Set<string>>(() => new Set(
-      displayDirectoryPaths(changeTree(baseFiles))));
   const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
   const [hiddenDirectories, setHiddenDirectories] =
     useState<Set<string>>(new Set());
   const [deliveryPaths, setDeliveryPaths] = useState<Set<string>>(new Set());
-  const [localGroupOpen, setLocalGroupOpen] = useState(false);
   const [activeSelectionKey, setActiveSelectionKey] = useState("");
   const initializedSelection = useRef("");
-  const initializedDirectories = useRef<Set<string>>(new Set());
   const gitBrowser = useRef<HTMLDivElement>(null);
   const diffCanvas = useRef<HTMLDivElement>(null);
+  const diffScroll = useRef<HTMLDivElement>(null);
+  const [unified, setUnified] = useState(true);
+  const [treeHidden, setTreeHidden] = useState(false);
   // 分栏把手是否真被拖动过:拖动收尾的 click 不算"点了一行"(MFC-034)。
   const resizerDragged = useRef(false);
   const [pathTip, setPathTip] = useState<{
@@ -441,25 +423,6 @@ export function GitDiff({
     !directoryRoots.some((directory) =>
       pathInsideDirectory(file.path, directory.path))),
   [visibleFiles, directoryRoots]);
-  const tree = useMemo(() => changeTree(treeFiles), [treeFiles]);
-  // 交付检视时按语义分两组:检视的重心是"将推送"的提交增量,工作区
-  // 其他改动默认不进远端——混在一棵树里,人分不清哪些必须看。
-  const pushFiles = useMemo(() => treeFiles.filter((file) =>
-    file.stage === "committed" || file.stage === "committed_working"),
-  [treeFiles]);
-  const localFiles = useMemo(() => treeFiles.filter((file) =>
-    file.stage !== "committed" && file.stage !== "committed_working"),
-  [treeFiles]);
-  const grouped = selectable && pushFiles.length > 0
-    && (localFiles.length > 0 || visibleDirectoryRoots.length > 0);
-  const pushTree = useMemo(() => changeTree(pushFiles), [pushFiles]);
-  const localTree = useMemo(() => changeTree(localFiles), [localFiles]);
-  const allDirectories = useMemo(() => grouped
-    ? [...new Set([
-      ...displayDirectoryPaths(pushTree),
-      ...displayDirectoryPaths(localTree),
-    ])]
-    : displayDirectoryPaths(tree), [grouped, tree, pushTree, localTree]);
   const committedPaths = useMemo(() => files
     .filter((file) => file.stage === "committed"
       || file.stage === "committed_working")
@@ -550,15 +513,6 @@ export function GitDiff({
   }, [directoryRootKey]);
 
   useEffect(() => {
-    const known = initializedDirectories.current;
-    const added = allDirectories.filter((path) => !known.has(path));
-    if (added.length) {
-      setCollapsedDirectories((current) => new Set([...current, ...added]));
-    }
-    initializedDirectories.current = new Set(allDirectories);
-  }, [allDirectories.join("\0")]);
-
-  useEffect(() => {
     if (!selectable || !files.length) {
       if (!selectable) {
         initializedSelection.current = "";
@@ -635,9 +589,10 @@ export function GitDiff({
     () => diffReviewRows(active?.lines ?? []),
     [active],
   );
+  const displayRows = useMemo(() => unified ? unifiedDiffRows(reviewRows) : reviewRows, [reviewRows, unified]);
   const folded = useMemo(
-    () => foldedRows(reviewRows, expanded, showAll || Boolean(requestedFile)),
-    [reviewRows, expanded, showAll, requestedFile],
+    () => foldedRows(displayRows, expanded, showAll || Boolean(requestedFile)),
+    [displayRows, expanded, showAll, requestedFile],
   );
   useEffect(() => {
     if (requestedFile) {
@@ -664,8 +619,6 @@ export function GitDiff({
     (sum, file) => sum + file.deletions, 0);
   const branchLabel = branch || "分支未知";
   const selectedDeliveryCount = deliveryPaths.size;
-  const hasCollapsedDirectories = allDirectories.some((path) =>
-    collapsedDirectories.has(path));
   const selectionChanged = selectable
     && (selectedDeliveryCount !== committedPaths.length
       || committedPaths.some((path) => !deliveryPaths.has(path)));
@@ -931,119 +884,22 @@ export function GitDiff({
     );
   }
 
-  function renderDirectory(
-    directory: ChangeDirectory,
-    depth: number,
-    overview: boolean,
-  ): ReactNode {
-    const compacted = compactDirectory(directory);
-    directory = compacted.directory;
-    const descendants = descendantFiles(directory);
-    const paths = descendants.map((file) => file.path);
-    const included = paths.filter((path) => deliveryPaths.has(path)).length;
-    const collapsed = collapsedDirectories.has(directory.path);
-    return (
-      <div className="change-tree-directory" key={directory.path}>
-        <div className={cn(GIT.treeRow, overview ? GIT.treeRowOverview : GIT.treeRowCompact)}
-          style={{ "--tree-depth": depth } as CSSProperties}>
-          {selectable && (
-            <Button type="button"
-              className={cn(GIT.deliveryCheck,
-                included === paths.length && GIT.deliveryCheckOn,
-                included > 0 && included < paths.length && GIT.deliveryCheckPartial)}
-              aria-pressed={included === paths.length}
-              aria-label={`${included === paths.length ? "改为仅留本地" : "纳入交付"}目录 ${directory.path}`}
-              title={included === paths.length
-                ? "整个目录改为仅留本地，不推送" : "整个目录纳入本次交付"}
-              onClick={() => toggleDelivery(paths)}>
-              <svg viewBox="0 0 16 16" aria-hidden className={GIT.deliveryCheckSvg}><path d="m3.5 8 3 3 6-6" /></svg>
-            </Button>
-          )}
-          <Button type="button" className={GIT.dirMain}
-            title={directory.path}
-            aria-expanded={!collapsed}
-            onClick={() => setCollapsedDirectories((current) => {
-              const next = new Set(current);
-              if (next.has(directory.path)) next.delete(directory.path);
-              else next.add(directory.path);
-              return next;
-            })}>
-            <svg viewBox="0 0 16 16" aria-hidden
-              className={cn(GIT.dirChevron, !collapsed && GIT.dirChevronOpen)}><path d="m6 3 5 5-5 5" /></svg>
-            <span aria-hidden className={GIT.dirGlyph}>▰</span><strong className={GIT.dirName}>{compacted.label}</strong><i className={GIT.dirCount}>{directory.count}</i>
-          </Button>
-          <Button type="button" className={GIT.hideBtn}
-            title="隐藏整个目录；不改变交付清单"
-            aria-label={`隐藏目录 ${directory.path}`}
-            onClick={() => hideFiles(paths)}>
-            <svg viewBox="0 0 18 18" aria-hidden className={GIT.hideBtnSvg}><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
-          </Button>
-        </div>
-        {!collapsed && (
-          <div className="change-tree-children">
-            {directory.directories.map((child) =>
-              renderDirectory(child, depth + 1, overview))}
-            {directory.files.map((file) => renderFile(file, depth + 1, overview))}
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  function renderTreeNodes(
-    source: { directories: ChangeDirectory[]; files: ChangedFile[] },
-    overview: boolean,
-  ) {
-    return (
-      <>
-        {source.directories.map((directory) =>
-          renderDirectory(directory, 0, overview))}
-        {source.files.map((file) => renderFile(file, 0, overview))}
-      </>
-    );
-  }
-
   function renderTree(overview: boolean) {
-    return (
-      <div className={cn(GIT.tree, overview && "p-2")}>
-        {grouped ? (
-          <>
-            <div>
-              <div className={cn(GIT.groupHead, GIT.groupHeadPush)}>
-                <strong className={GIT.groupHeadStrong}>本次提交 · 将推送</strong>
-                <i className={cn(GIT.groupHeadCount,
-                  "bg-[color-mix(in_srgb,var(--success)_14%,transparent)] text-success")}>{pushFiles.length}</i>
-              </div>
-              {renderTreeNodes(pushTree, overview)}
-            </div>
-            <div className={GIT.groupSecond}>
-              <Button type="button" className={cn(GIT.groupHead, GIT.groupHeadLocal,
-                GIT.groupLocalBtn)}
-                aria-expanded={localGroupOpen}
-                onClick={() => setLocalGroupOpen((open) => !open)}>
-                <span aria-hidden className={GIT.groupLocalToggle}>{localGroupOpen ? "⌄" : "›"}</span>
-                <strong className={cn(GIT.groupHeadStrong, "mr-auto")}>工作区其他改动 · 默认仅留本地</strong>
-                <i className={cn(GIT.groupHeadCount,
-                  "bg-[color-mix(in_srgb,var(--muted)_14%,transparent)] text-muted-foreground")}>{localFiles.length + visibleDirectoryRoots.length}</i>
-              </Button>
-              {localGroupOpen && renderTreeNodes(localTree, overview)}
-              {localGroupOpen && renderUntrackedDirectories(overview)}
-            </div>
-          </>
-        ) : <>
-          {renderTreeNodes(tree, overview)}
-          {renderUntrackedDirectories(overview)}
-        </>}
-        {!visibleFiles.length && !visibleDirectoryRoots.length && (
-          <div className={GIT.treeEmpty}>全部变更已从视图隐藏</div>
-        )}
-      </div>
-    );
+    return <div className={`change-tree-content${overview ? " is-overview" : ""}`}>
+      <ChangeFileTree files={treeFiles} activePath={active?.path} selectable={selectable}
+        selectedPaths={deliveryPaths} onToggle={toggleDelivery}
+        onSelect={file => { setSelected(file.key); if (!embeddedBrowser) setFocused(true); }} />
+      {visibleDirectoryRoots.length > 0 && <div className="change-lazy-directories">
+        <div className="change-tree-tools">未跟踪目录 · 按需展开</div>{renderUntrackedDirectories(overview)}
+      </div>}
+    </div>;
   }
 
   if (!files.length && !directoryRoots.length) {
     return <div className={cn(GIT.untrackedNote, "text-center")}>
-      <strong className={GIT.untrackedNoteTitle}>暂无代码变更</strong><span>{text}</span></div>;
+      <strong className={GIT.untrackedNoteTitle}>{activeFileLoading ? "正在读取变更文件…" : text.trim() ? "暂时无法展示代码差异" : "暂无代码变更"}</strong>
+      <span>{text.trim() ? "文件清单尚未就绪，请重新读取。" : "文件发生改动后会显示在这里。"}</span>
+      {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>重新读取</Button>}</div>;
   }
 
   return (
@@ -1076,8 +932,8 @@ export function GitDiff({
           </div>
         </header>
       ) : (
-        <header className={cn(GIT.summary, embeddedBrowser && GIT.summaryEmbedded)}>
-          <div className={GIT.summaryLead}>
+        <header className={cn("change-summary", GIT.summary, embeddedBrowser && GIT.summaryEmbedded)}>
+          <div className={cn("change-summary-lead", GIT.summaryLead)}>
             <span className={cn(GIT.summaryKicker, embeddedBrowser && "hidden")}>代码改动</span>
             <strong className={cn(GIT.summaryTitle, embeddedBrowser && GIT.summaryTitleEmbedded)}>{baseFiles.length} 个文件发生变化{directoryRoots.length
               ? ` · ${directoryRoots.length} 个未跟踪目录` : ""}</strong>
@@ -1098,14 +954,15 @@ export function GitDiff({
         </header>
       )}
 
+      {selectionHint && !selectable && <div className="change-selection-hint">{selectionHint}</div>}
       {(selectable || hiddenPaths.size > 0 || hiddenDirectories.size > 0) && (
-        <div className={cn(GIT.deliveryBar,
+        <div className={cn("change-delivery-bar", GIT.deliveryBar,
           selectionChanged
             ? "border-[color-mix(in_srgb,var(--attention)_30%,var(--line))] bg-attention-soft text-attention"
             : "border-[color-mix(in_srgb,var(--success)_28%,var(--line))] bg-success-soft text-success",
           focused && GIT.deliveryBarFocused,
           embeddedBrowser && GIT.deliveryBarEmbedded)}>
-          {selectable && <div className={GIT.deliveryBarLead}>
+          {selectable && <div className={cn("change-delivery-lead", GIT.deliveryBarLead)}>
             <strong className={GIT.deliveryBarTitle}>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
             <span className={GIT.deliveryBarNote}>{selectionChanged
               ? "已调整范围；右侧只读摘要会实时同步。"
@@ -1133,27 +990,9 @@ export function GitDiff({
       )}
 
       {focused || embeddedBrowser ? (
-      <div className="git-change-browser" ref={gitBrowser}
+      <div className={`git-change-browser${treeHidden ? " is-tree-hidden" : ""}`} ref={gitBrowser}
         style={{ "--change-tree-width": `${treePanelWidth}px` } as CSSProperties}>
         <nav className="change-files" aria-label="变更文件">
-          <div className={GIT.treeCaption}><span>按目录</span><div className={GIT.treeCaptionMeta}>
-            <i className={GIT.treeCaptionCount}>{treeFiles.length}{visibleDirectoryRoots.length
-              ? ` + ${visibleDirectoryRoots.length}目录` : ""}</i>
-            {allDirectories.length > 0 && (
-              <Button type="button" className={GIT.treeCaptionBtn}
-                aria-label={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
-                title={hasCollapsedDirectories ? "展开全部目录" : "折叠全部目录"}
-                onClick={() => setCollapsedDirectories(hasCollapsedDirectories
-                  ? new Set() : new Set(allDirectories))}>
-                <svg viewBox="0 0 16 16" aria-hidden className={GIT.treeCaptionBtnSvg}>
-                  {hasCollapsedDirectories
-                    ? <><path d="m4 3 4 4 4-4" /><path d="m4 9 4 4 4-4" /></>
-                    : <><path d="m4 7 4-4 4 4" /><path d="m4 13 4-4 4 4" /></>}
-                </svg>
-                {hasCollapsedDirectories ? "全部展开" : "全部折叠"}
-              </Button>
-            )}
-          </div></div>
           {renderTree(false)}
         </nav>
 
@@ -1184,13 +1023,19 @@ export function GitDiff({
         </div>
 
         <section className="change-file-detail">
-          <header className={cn(GIT.detailHead, focused && GIT.detailHeadFocused,
+          <header className={cn("change-detail-header", GIT.detailHead, focused && GIT.detailHeadFocused,
             embeddedBrowser && GIT.detailHeadWrap)}>
             <div className={GIT.detailHeadLead}><strong title={active?.path}
               className={cn(GIT.detailHeadPath, focused && GIT.detailHeadPathFocused,
                 embeddedBrowser && GIT.detailHeadPathWrap)}>{active?.path}</strong>
               <span className={GIT.detailHeadSub}>{active && `${stageName[active.stage]} · ${active.kind}${lineCount ? ` · ${lineCount} 行` : ""}`}</span></div>
             <div className={GIT.detailActions}>
+              <Button type="button" variant="outline" size="sm" aria-expanded={!treeHidden}
+                onClick={() => setTreeHidden(value => !value)}>{treeHidden ? "展开目录" : "收起目录"}</Button>
+              <div className="diff-view-toggle" aria-label="差异显示方式">
+                <button type="button" aria-pressed={!unified} onClick={() => setUnified(false)}>左右对比</button>
+                <button type="button" aria-pressed={unified} onClick={() => setUnified(true)}>上下对比</button>
+              </div>
               {active && (active.additions > 0 || active.deletions > 0) && (
                 <small className={GIT.detailHeadStats}><b className={GIT.totalPlus}>+{active.additions}</b>
                   <i className={cn("not-italic", GIT.totalMinus)}>−{active.deletions}</i></small>)}
@@ -1227,6 +1072,7 @@ export function GitDiff({
           ) : activeFileError ? (
             <div className={GIT.untrackedNote} role="alert">
               <strong className={GIT.untrackedNoteTitle}>这个文件暂时打不开</strong><span>{activeFileError}</span>
+              {onRetry && <Button variant="outline" size="sm" onClick={onRetry}>重新读取</Button>}
             </div>
           ) : !active && directoryRoots.length ? (
             <div className={GIT.untrackedNote}>
@@ -1238,13 +1084,13 @@ export function GitDiff({
           ) : (
             // data-file / data-l 是批注的锚:批注层用事件委托认它们,
             // 不需要 GitDiff 知道批注这回事(内核面板也是这么分层的)。
-            <div className="ws-diff diff-review" data-file={active?.path}
+            <div ref={diffScroll} className={`ws-diff diff-review${unified ? " is-unified" : ""}`} data-file={active?.path}
               style={{ "--git-diff-font-size": `${diffFontSize}px` } as CSSProperties}>
               <div className="diff-review-canvas" ref={diffCanvas}
                 style={{ "--diff-before-width": `${diffSplit}%` } as CSSProperties}>
-                <div className="diff-review-head"><span>变更前</span><span>变更后</span></div>
-                <div className="diff-review-body">
-                {folded.entries.map((row, index) => {
+                <div className="diff-review-head"><span>{unified ? "代码差异" : "变更前"}</span>{!unified && <span>变更后</span>}</div>
+                <VirtualDiffRows rows={folded.entries} scrollElement={() => diffScroll.current}
+                  enabled={!requestedFile} rowHeight={Math.max(28, diffFontSize * 1.5)} render={(row, index) => {
                   if (row.type === "fold") {
                     return (
                       <button className="diff-fold" type="button" key={row.key}
@@ -1260,13 +1106,12 @@ export function GitDiff({
                   return (
                     <div className="diff-review-row" key={`line:${index}`}
                       {...(at ? { "data-l": at } : {})}>
-                      <DiffCellView cell={row.old} side="old" />
-                      <DiffCellView cell={row.next} side="new" />
+                      {(!unified || row.old?.kind === "removed") && <DiffCellView cell={row.old} side="old" />}
+                      {(!unified || row.next) && <DiffCellView cell={row.next} side="new" />}
                     </div>
                   );
-                })}
-                </div>
-                <div className="diff-column-resizer" role="separator" tabIndex={0}
+                }} />
+                {!unified && <div className="diff-column-resizer" role="separator" tabIndex={0}
                   aria-label="调整变更前后宽度" aria-orientation="vertical"
                   aria-valuemin={25} aria-valuemax={75}
                   aria-valuenow={Math.round(diffSplit)}
@@ -1301,7 +1146,7 @@ export function GitDiff({
                     }
                   }}>
                   <span aria-hidden />
-                </div>
+                </div>}
               </div>
             </div>
           )}
@@ -1314,8 +1159,8 @@ export function GitDiff({
               <svg viewBox="0 0 20 20" className="size-[17px] fill-none stroke-current stroke-[1.35]"><path d="M6 3.5H3.5V6M14 3.5h2.5V6M6 16.5H3.5V14M14 16.5h2.5V14M7 7h6v6H7z" /></svg>
             </span>
             <div className={GIT.overviewCopy}>
-              <strong className={GIT.overviewTitle}>代码差异在专注审阅中查看</strong>
-              <span className={GIT.overviewNote}>点击文件直接进入宽屏双栏视图；工作台只保留变更概览。</span>
+              <strong className={GIT.overviewTitle}>选择文件查看代码差异</strong>
+              <span className={GIT.overviewNote}>点击文件查看逐行变化，支持上下对比与批注。</span>
             </div>
           </div>
           {renderTree(true)}

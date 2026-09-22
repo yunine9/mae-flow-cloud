@@ -7,7 +7,7 @@ export const DEFAULT_DIFF_SPLIT = 50;
 export const MIN_DIFF_SPLIT = 25;
 export const MAX_DIFF_SPLIT = 75;
 
-export const DEFAULT_DIFF_FONT_SIZE = 14;
+export const DEFAULT_DIFF_FONT_SIZE = 15;
 export const MIN_DIFF_FONT_SIZE = 12;
 export const MAX_DIFF_FONT_SIZE = 20;
 

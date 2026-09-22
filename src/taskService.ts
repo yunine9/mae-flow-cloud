@@ -3765,7 +3765,7 @@ export class TaskService {
           );
     const reviewContract = summary.waiting ? reviewDecisionContract(requirementDecisionContract(summary.waiting.question, this.isRequirementAnalysis(task)), choiceEffects) : undefined;
     const recommendedView: "source" | "doc" | "chain" | "diff" | undefined =
-      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? undefined
+      summary.waiting?.step === HOST_PUSH_CONFIRM_STEP ? "diff"
       : summary.waiting?.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP
         || summary.waiting?.step === CLOUD_SPLIT_PROPOSAL_STEP
         || summary.waiting?.step === MR_DESCRIPTION_STEP
@@ -3824,7 +3824,7 @@ export class TaskService {
         ? {
             ...summary.waiting,
             question: reviewContract!.question,
-            ...(summary.waiting.step === HOST_PUSH_CONFIRM_STEP ? { recommended_view: undefined } : recommendedView ? { recommended_view: recommendedView } : {}),
+            ...(recommendedView ? { recommended_view: recommendedView } : {}),
             ...(choiceEffects.length ? {
               choice_effects: reviewContract!.effects.map((effect) => ({
                 key: effect.key,
@@ -10584,7 +10584,7 @@ export class TaskService {
     note: string;
   } | undefined> {
     // 阅读 diff 不代表授权整理提交；旧客户端夹带的清单也不能改变现场。
-    if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP) return undefined;
+    if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP && waiting.step !== HOST_PUSH_CONFIRM_STEP) return undefined;
     const explicit = input.delivery_paths !== undefined;
     const previous = task.summary.delivery_selection;
     const values = explicit
@@ -10635,7 +10635,7 @@ export class TaskService {
       // 用户选择“重新编译”或“直接提交”；旧客户端缺字段时保守重编。
       // 两个选择都已经确认这份清单，只有后续编译真的改了代码才再检视。
       const compileAction: DeliveryCompileAction =
-        waiting.step === CLOUD_PUSH_CONFIRM_STEP
+        (waiting.step === CLOUD_PUSH_CONFIRM_STEP || waiting.step === HOST_PUSH_CONFIRM_STEP)
           ? input.delivery_compile_action ?? "rerun" : "rerun";
       const mustRemove = committed.filter((path) => !paths.includes(path));
       const mustAdd = paths.filter((path) => !committed.includes(path));
@@ -10663,7 +10663,7 @@ export class TaskService {
       ].filter(Boolean).join(";");
       this.registerAgentPlatformLocalExcludes(task.cwd,
         reconciledExcluded.filter((path) => !archiveIds.has(path.toLowerCase())));
-      const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP;
+      const confirmed = waiting.step === CLOUD_PUSH_CONFIRM_STEP || waiting.step === HOST_PUSH_CONFIRM_STEP;
       return {
         record: {
           paths,
@@ -10823,36 +10823,22 @@ export class TaskService {
       }
       return result;
     };
-    const preserved = new Map<string, Buffer>();
-    for (const path of remove) {
-      const absolute = join(cwd, path);
-      const inBaseline = await runSafeWorktreeGitAsync(cwd,
-        ["cat-file", "-e", `${baseline}:${path}`], { timeoutMs: 30_000 });
-      if (inBaseline.status === 0) {
-        if (existsSync(absolute)) preserved.set(path, readFileSync(absolute));
-        await run(["checkout", baseline, "--", `:(literal)${path}`], `回退提交内容 ${path}`);
-      } else {
-        await run(["rm", "--cached", "-q", "--", `:(literal)${path}`], `移出索引 ${path}`);
-      }
-    }
-    if (add.length) await run(["add", "--", ...add.map(path => `:(literal)${path}`)], "补入勾选文件");
-    const staged = await runSafeWorktreeGitAsync(cwd,
-      ["diff", "--cached", "--quiet"], { timeoutMs: 30_000 });
-    if (staged.status !== 0) {
-      const summary = [
-        remove.length ? `剔除 ${remove.length} 个未勾选文件` : "",
-        add.length ? `补入 ${add.length} 个勾选文件` : "",
-      ].filter(Boolean).join("、");
-      await run(["commit", "-m",
-        cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix",
-          `按最终人工检视整理交付清单——${summary}`)], "整理提交");
-    }
-    // 提交落定后把被剔除文件的原内容写回工作区:改动只是"不交付",
-    // 不是"被销毁";它们成为未暂存改动留在现场,脏区检查放行已确认
-    // 剔除的路径(prePushDirtyPaths 同口径)。
-    for (const [path, content] of preserved) {
-      writeFileSync(join(cwd, path), content);
-    }
+    const head = (await run(["rev-parse", "HEAD"], "读取当前提交")).stdout.trim();
+    const summary = [
+      remove.length ? `剔除 ${remove.length} 个未勾选文件` : "",
+      add.length ? `补入 ${add.length} 个勾选文件` : "",
+    ].filter(Boolean).join("、");
+    const commit = await deliveryCommitTree({ cwd, head, baseline, parents: [head],
+      restorePaths: remove, addPaths: add,
+      configs: [["user.name", "mae-flow-cloud"], ["user.email", "cloud@mae-flow.local"],
+        ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
+      message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", `按最终人工检视整理交付清单——${summary}`),
+    });
+    // 只更新这次明确调整的索引项，其余暂存内容和整个工作区原样保留。
+    await run(["update-ref", "HEAD", commit, head], "接续整理提交");
+    const changed = [...remove, ...add];
+    if (changed.length) await run(["restore", "--source", commit, "--staged", "--",
+      ...changed.map(path => `:(literal)${path}`)], "更新已确认范围的索引");
     const at = new Date().toISOString();
     const revision = await this.prePushRevision(task);
     const pending = createPrePushVerification(revision, at);
@@ -11391,10 +11377,21 @@ export class TaskService {
     }
     if (waiting.step === HOST_PUSH_CONFIRM_STEP) {
       this.assertOwnerDecides(task, input.actor, "确认本次推送");
+      if (input.delivery_compile_action && !["rerun", "skip"].includes(input.delivery_compile_action)) {
+        throw new TaskControlError("请选择重新编译或直接提交");
+      }
+      const selections = [...Object.values(answers), decision];
+      const accepted = selections.includes("确认推送") && !selections.includes("先调整");
+      // Reuse the same explicit file selection as the final delivery card.
+      // Old clients without delivery_paths keep their existing confirmation behavior.
+      const selection = input.delivery_paths !== undefined
+        ? await this.deliverySelectionForDecision(task, waiting, input, accepted)
+        : undefined;
       const resolved = task.humanGate.resolve(waiting.waiting_id, {
         stateVersion: input.state_version, decision,
         answers: Object.keys(answers).length ? answers : undefined,
-        notes: normalized.notes, requestDigest, decidedBy: input.actor,
+        notes: [normalized.notes, selection?.note].filter(Boolean).join("\n"), requestDigest, decidedBy: input.actor,
+        continuation: selection ? { delivery_selection: selection.record } : undefined,
       });
       this.finishHostPushDecision(task, resolved);
       return { ...task.summary };
@@ -13914,6 +13911,12 @@ export class TaskService {
     const accepted = selections.includes("确认推送") && !selections.includes("先调整");
     task.summary.waiting = undefined;
     if (accepted) {
+      const selection = this.continuationDeliverySelection(waiting);
+      if (selection) {
+        task.summary.delivery_selection = selection;
+        operation.push_paths = selection.paths;
+        operation.sha = selection.head;
+      }
       operation.push_confirmed = true;
       ledger.update(operation);
       task.summary.status = "running";
@@ -13921,6 +13924,8 @@ export class TaskService {
       this.persist(task);
       this.bypass(task, "确认后推送", this.finishHostAction(task));
     } else {
+      const selection = this.continuationDeliverySelection(waiting);
+      if (selection) task.summary.delivery_selection = selection;
       operation.state = "failed";
       operation.result = "用户要求调整本次推送";
       if (task.summary.delivery_selection) task.summary.delivery_selection.status = "requested";

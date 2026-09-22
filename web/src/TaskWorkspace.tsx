@@ -1,3 +1,4 @@
+import { readDeliverySelectionDraft, type DeliverySelectionDraft } from "./deliverySelectionDraft";
 import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
@@ -611,15 +612,20 @@ export function TaskWorkspace({
   // 换卡立即隔离旧选择；不要在父层 effect 里清空子文件树刚回传的
   // 默认勾选。普通 Diff 没有 push_review，也必须能初始化决定卡。
   const deliverySelectionKey = JSON.stringify([
-    task.id, task.waiting?.waiting_id, pushReview?.head_sha,
+    task.id, task.waiting?.waiting_id,
   ]);
-  const [deliverySelectionState, setDeliverySelectionState] = useState<{
-    key: string; selection: GitDiffSelection | undefined;
-  }>();
+  const selectionStorageKey = `mae-flow:delivery-selection:${task.id}`;
+  const [deliverySelectionState, setDeliverySelectionState] = useState<DeliverySelectionDraft | undefined>(() => {
+    try { return readDeliverySelectionDraft(sessionStorage.getItem(selectionStorageKey), deliverySelectionKey); }
+    catch { return undefined; }
+  });
   const deliverySelection = deliverySelectionForCard(
     deliverySelectionState, deliverySelectionKey);
-  const setDeliverySelection = (selection: GitDiffSelection | undefined) =>
-    setDeliverySelectionState({ key: deliverySelectionKey, selection });
+  const setDeliverySelection = (selection: GitDiffSelection | undefined) => {
+    const draft = { key: deliverySelectionKey, selection };
+    setDeliverySelectionState(draft);
+    try { sessionStorage.setItem(selectionStorageKey, JSON.stringify(draft)); } catch { /* Reading still works without browser storage. */ }
+  };
   const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
     pushReview ? { kind: "checking" } : { kind: "idle" },
   );
@@ -1560,7 +1566,7 @@ export function TaskWorkspace({
 
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const decisionDeliverySelection = usablePushReviewSelection(
-    Boolean(pushReview),
+    scopedDiff,
     pushDiffState,
     deliverySelection,
   );
@@ -2370,7 +2376,7 @@ export function TaskWorkspace({
                 </div>
               )}
               {loading && <div className="utility-note">正在打开 {activeMeta?.label}…</div>}
-              {!loading && content && (
+              {((!loading && content) || (materialView === "diff" && !scopedDiff && !!activeMeta?.change_files?.length)) && (
               <Annotatable
                 taskId={task.id}
                 artifact={active}
@@ -2389,12 +2395,15 @@ export function TaskWorkspace({
                       manifest={!scopedDiff ? activeMeta?.change_files : undefined}
                       untrackedDirectories={!scopedDiff
                         ? activeMeta?.untracked_directories : undefined}
+                      onRetry={() => setLivePulse(tick => tick + 1)}
+                      selectionHint={canOperate && needsDeliverySelection(task.waiting) && diffScope === "changes"
+                        ? "当前只展示本次增量。点击上方「全部改动」勾选最终交付文件。" : undefined}
                       onDirectoryLoad={!scopedDiff
                         ? (path, offset) => listArtifactChangeDirectory(
                             task.id, path, offset)
                         : undefined}
                       onFileSelect={!scopedDiff ? setSelectedDiffPath : undefined}
-                      activeFileLoading={diffFileLoading}
+                      activeFileLoading={loading || diffFileLoading}
                       activeFileError={diffFileError}
                       hideKey={task.id}
                       scopeLabel={pushReview

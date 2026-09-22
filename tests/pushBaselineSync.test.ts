@@ -1,7 +1,7 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
@@ -22,7 +22,7 @@ function fixture(t: TestContext) {
   const service: any = new TaskService({ dataDir: join(root, "data"), provider: "test",
     model: "test", modelsJson: {}, maxConcurrent: 0 });
   const summary = service.create("推送前同步基准分支");
-  t.after(() => service.shutdown());
+  t.after(async () => { await service.shutdown(); rmSync(root, { recursive: true, force: true }); });
   const remote = join(root, "remote.git"), cwd = join(summary.workspace, "repo");
   git(root, "init", "--bare", "-q", remote);
   git(root, "init", "-q", "-b", "main", cwd);
@@ -279,4 +279,45 @@ test("传输失败保留真实旧 SHA，重试沿用确认；切到其他分支�
   assert.equal(switched.state, "failed");
   assert.match(switched.result!, /工作分支已切换/);
   assert.equal(git(f.remote, "rev-parse", "feature"), head);
+});
+
+test("宿主推送确认可直接勾选文件：排除内容留在本地，一次确认真实推送所选范围", async t => {
+  const f = fixture(t);
+  f.task.summary.push_confirmation = true;
+  writeFileSync(join(f.cwd, 'feature.ts'), 'export const feature = true;\n');
+  writeFileSync(join(f.cwd, 'local.ts'), 'export const localOnly = true;\n');
+  git(f.cwd, 'add', 'feature.ts', 'local.ts'); git(f.cwd, 'commit', '-qm', 'task changes');
+  writeFileSync(join(f.cwd, 'selected-local.ts'), 'export const selectedLocal = true;\n');
+  writeFileSync(join(f.cwd, 'unrelated.ts'), 'export const stagedOnly = true;\n');
+  git(f.cwd, 'add', 'unrelated.ts');
+  const host = f.service.taskHostRuntime(f.task);
+  host.allowPush = async () => true;
+  await queueTaskHostOperation(host, 'selected-push', { action: 'push', reason: '交付所选文件' });
+  await finishTaskHostOperation(host);
+  const waiting = f.task.summary.waiting;
+  assert.equal(waiting.step, 'host_push_confirm');
+  f.service.existingMergeRequestAllowsDelivery = async () => true;
+  await f.service.decide(f.task.summary.id, {
+    state_version: waiting.state_version, waiting_id: waiting.waiting_id,
+    selected_options: { [waiting.question.questions[0].question]: '确认推送' },
+    delivery_paths: ['feature.ts', 'selected-local.ts'], delivery_compile_action: 'skip',
+  });
+  const deadline = Date.now() + 20000;
+  let op;
+  do {
+    op = new TaskHostLedger(f.task.summary).read().operations[0];
+    if (op.state !== 'running' && op.state !== 'queued') break;
+    if (Date.now() > deadline) throw new Error('所选范围推送超时');
+    await new Promise(resolve => setTimeout(resolve, 30));
+  } while (true);
+  assert.equal(op.state, 'succeeded', op.result);
+  assert.equal(git(f.remote, 'ls-tree', '--name-only', 'feature', 'local.ts'), '');
+  assert.equal(git(f.remote, 'show', 'feature:feature.ts'), 'export const feature = true;');
+  assert.equal(readFileSync(join(f.cwd, 'local.ts'), 'utf8'), 'export const localOnly = true;\n');
+  assert.equal(git(f.remote, 'ls-tree', '--name-only', 'feature', 'unrelated.ts'), '');
+  assert.equal(git(f.cwd, 'diff', '--cached', '--name-only'), 'unrelated.ts');
+  assert.equal(git(f.remote, 'show', 'feature:selected-local.ts'), 'export const selectedLocal = true;');
+  assert.equal(f.task.summary.waiting, undefined);
+  assert.deepEqual(f.task.summary.delivery_selection.paths, ['feature.ts', 'selected-local.ts']);
+  assert.deepEqual(op.push_paths, ['feature.ts', 'selected-local.ts']);
 });

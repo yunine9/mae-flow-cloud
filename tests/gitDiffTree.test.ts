@@ -68,3 +68,14 @@ test("变更统计包含空白新增/删除行，但不把 +++/--- 文件头算�
   assert.equal(files[0].additions, 2);
   assert.equal(files[0].deletions, 2);
 });
+
+test("Git quoted UTF-8, spaces and rename headers retain their real paths", () => {
+  const files = parseChanges([
+    'diff --git "a/src/\\345\\221\\212\\350\\255\\246.cpp" "b/src/\\345\\221\\212\\350\\255\\246.cpp"',
+    '@@ -1 +1 @@', '-before', '+after',
+    'diff --git a/src/old name.cpp b/src/new name.cpp',
+    'similarity index 100%', 'rename from src/old name.cpp', 'rename to src/new name.cpp',
+  ].join('\n'));
+  assert.deepEqual(files.map(file => file.path), ['src/告警.cpp', 'src/new name.cpp']);
+  assert.equal(files[0].additions, 1);
+});
