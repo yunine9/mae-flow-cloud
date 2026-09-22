@@ -30,8 +30,10 @@ const BASE_STATE = {
 
 const DELIVERED_SINCE = {
   status: "archived",
-  // 起算日 2026-09-23(白名单 v3 换版)之后终态,属支持期。
-  conclusion: { kind: "delivered", summary: "s", at: "2026-09-23T10:00:00Z" },
+  // 起算日 2026-09-21(v2 首个完整日;v3 换版曾挪 09-23,v4 按度量
+  // 可换算判据退回,ADR-0051)。收口故意落在 09-22——v3 纪律曾退休
+  // 的窗口,锁死「9-21/22 的 v2 快照会话重新进分母」不回退。
+  conclusion: { kind: "delivered", summary: "s", at: "2026-09-22T10:00:00Z" },
 };
 
 function seedSession(dataDir: string, state: Record<string, unknown>): void {
@@ -48,7 +50,9 @@ function seedCompanion(dataDir: string, id: string, lines: {
 }): void {
   writeFileSync(join(dataDir, "issues", id, "code-origin.json"),
     JSON.stringify({
-      schema_version: 3,
+      // schema_version 故意落 2:读侧 v2..v4 同度量混读(ADR-0051),
+      // 旧版快照照常进统计。
+      schema_version: 2,
       generated_at: "2026-09-20T11:00:00.000Z",
       session_id: id,
       by_repo: [{
@@ -110,7 +114,7 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
       "/issues/once-generated", ["issues", "once-generated"]);
     assert.equal(status, 200);
     assert.equal(body.threshold_percent, 90, "达标线缺省 90(参数)");
-    assert.equal(body.supported_since, "2026-09-23");
+    assert.equal(body.supported_since, "2026-09-21");
     assert.equal(body.total, 2, "分母=issue-a/b(issue-e 无源码行不进)");
     assert.equal(body.passed, 1, "占比恰 90 判达标,50 不达标");
     assert.equal(body.rate, 50);
