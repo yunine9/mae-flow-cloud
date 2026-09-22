@@ -1,3 +1,4 @@
+import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
 import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
@@ -285,41 +286,14 @@ export function ComponentResearch({
                     </table>
                   </div>
                 </section>}
-                {["inputs", "progress"].includes(stage) && <details open className="mb-5 rounded-lg border border-line p-4">
+                {stage === "inputs" && <details open className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
-                    {stage === "inputs" ? "源码范围与资料" : `研究记录 · ${current.evidence.length} 条记录`}
+                    源码范围与资料
                   </summary>
                   {stage === "inputs" && (current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
                   {stage === "inputs" && <p className="mt-3 text-sm">关联资料：{current.material_ids?.length ?? 0} 份；新一轮可按当前来源核对并生成更新建议。</p>}
-                  {stage === "progress" && <ol className="max-h-64 overflow-auto text-sm">
-                    {current.evidence.map((e, i) => (
-                      <li
-                        key={i}
-                        className="border-t border-line py-2 break-all"
-                      >
-                        {String(e.at ?? "")} ·{" "}
-                        {e.tool === "research_note" ? "研究说明" : e.tool === "code_search" ? "跨仓检索" : "组件源码"} /{" "}
-                        {String(e.action ?? "")}
-                        <br />
-                        {String(e.query ?? e.path ?? "")}{" "}
-                        {String(e.repository ?? "")}{" "}
-                        {e.tool === "research_note" ? "" : e.status === "failed"
-                          ? `失败：${e.error}`
-                          : `返回 ${e.characters ?? 0} 字符`}
-                        {typeof e.preview === "string" && (
-                          <details className="mt-2">
-                            <summary className="cursor-pointer text-primary">
-                              查看返回片段
-                            </summary>
-                            <pre className="mt-2 whitespace-pre-wrap rounded bg-surface-2 p-3">
-                              {e.preview}
-                            </pre>
-                          </details>
-                        )}
-                      </li>
-                    ))}
-                  </ol>}
                 </details>}
+                {stage === "progress" && <KnowledgeResearchProgress key={current.id} evidence={current.evidence} />}
                 {current.draft && ["review", "publish"].includes(stage) && (
                   <>
                     {stage === "review" && !current.document && <><div className="mb-3 flex items-center justify-between">

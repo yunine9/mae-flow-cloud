@@ -7965,3 +7965,33 @@ button.kd-tree-name { color:var(--brand);font-weight:600; }
 .knowledge-document-outline button { text-align:left; padding:5px 8px; color:var(--primary); overflow-wrap:anywhere; }
 .knowledge-markdown [data-l]:focus { outline:2px solid color-mix(in srgb, var(--primary) 35%, transparent); outline-offset:4px; }
 .knowledge-extraction-content .research-review-panes { grid-template-columns:clamp(195px, 23%, 260px) minmax(0,1fr); }
+
+/* Keep research output behind activity groups instead of expanding file listings. */
+.knowledge-progress { min-width:0; }
+.knowledge-progress-toolbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.knowledge-progress-group { margin-bottom:10px; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+.knowledge-progress-heading { display:flex; align-items:center; gap:10px; width:100%; min-height:58px; padding:14px 18px; text-align:left; cursor:pointer; background:var(--surface); }
+.knowledge-progress-heading:hover { background:var(--surface-2); }
+.knowledge-progress-heading:focus-visible { outline:2px solid var(--primary); outline-offset:-2px; }
+.knowledge-progress-heading strong { font-size:14px; }
+.knowledge-progress-count { padding:2px 8px; border-radius:6px; background:var(--surface-2); color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.knowledge-progress-description { margin-left:8px; color:var(--text-muted); font-size:13px; flex:1; }
+.knowledge-progress-error { color:var(--danger); font-size:12px; white-space:nowrap; }
+.knowledge-progress-entries { border-top:1px solid var(--line); }
+.knowledge-progress-entry { border-bottom:1px solid var(--line); }
+.knowledge-progress-entries li:last-child .knowledge-progress-entry { border-bottom:0; }
+.knowledge-progress-entry > summary { display:flex; align-items:center; gap:10px; padding:12px 18px; cursor:pointer; font-size:12px; min-width:0; }
+.knowledge-progress-entry > summary::-webkit-details-marker { display:none; }
+.knowledge-progress-entry > summary::before { content:""; width:6px; height:6px; border-right:1px solid currentColor; border-bottom:1px solid currentColor; transform:rotate(-45deg); flex-shrink:0; }
+.knowledge-progress-entry[open] > summary::before { transform:rotate(45deg); }
+.knowledge-progress-entry > summary:hover { background:var(--surface-2); }
+.knowledge-progress-dot { width:5px; height:5px; border-radius:50%; background:var(--text-muted); flex-shrink:0; }
+.knowledge-progress-dot.is-error { background:var(--danger); }
+.knowledge-progress-action { flex-shrink:0; }
+.knowledge-progress-summary { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted); }
+.knowledge-progress-entry time { color:var(--text-muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.knowledge-progress-detail { padding:4px 20px 18px 44px; font-size:13px; max-height:380px; overflow:auto; overflow-wrap:anywhere; }
+.knowledge-progress-detail pre { margin-top:10px; padding:12px; background:var(--surface-2); border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
+.knowledge-progress-empty { padding:40px 20px; text-align:center; color:var(--text-muted); font-size:14px; }
+.knowledge-progress-entries > ol { margin:0; padding:0; list-style:none; max-height:420px; overflow:auto; overscroll-behavior:contain; }
+.knowledge-progress-entry:not([open]) > .knowledge-progress-detail { display:none; }
