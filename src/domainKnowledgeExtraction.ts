@@ -49,7 +49,7 @@ export class DomainKnowledgeExtraction {
       if (!existsSync(path)) continue;
       const job: DomainKnowledgeJob = JSON.parse(readFileSync(path, "utf8"));
       this.jobs.set(job.id, job);
-      if (["queued", "running"].includes(job.status)) {
+      if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
         job.status = "failed"; job.stage = "服务重启中断研究，已有草稿保留";
         for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "failed"; turn.error = job.stage; }
         this.persist(job);
@@ -57,14 +57,14 @@ export class DomainKnowledgeExtraction {
     }
   }
   private root(id: string) { return join(this.dataDir, "domain-extraction", id); }
-  private live(id: string) { const job = this.jobs.get(id); if (!job) throw new Error("领域萃取任务不存在"); return job; }
+  private live(id: string) { const job = this.jobs.get(id); if (!job || job.deleted_at) throw new Error("领域萃取任务不存在或已删除"); return job; }
   private persist(job: DomainKnowledgeJob) {
     mkdirSync(this.root(job.id), { recursive: true });
     const path = join(this.root(job.id), "job.json");
     writeFileSync(`${path}.tmp`, JSON.stringify(job), { mode: 0o600 }); renameSync(`${path}.tmp`, path);
   }
   get(id: string) { return structuredClone(this.live(id)); }
-  list() { return [...this.jobs.values()].filter(job => !job.component_research_id).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...structuredClone(job), documents: job.documents.map(({ content: _, history: __, base_content: ___, remote_review: ____, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
+  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...structuredClone(job), documents: job.documents.map(({ content: _, history: __, base_content: ___, remote_review: ____, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
   componentArchive(researchId: string) {
     const job = [...this.jobs.values()].find(job => job.component_research_id === researchId);
     return job ? this.get(job.id) : undefined;
@@ -215,7 +215,7 @@ export class DomainKnowledgeExtraction {
     if (this.stopped) return;
     for (const job of this.jobs.values()) {
       if (this.running.size >= 2) return;
-      if (job.status !== "queued" || this.running.has(job.id)) continue;
+      if (job.deleted_at || job.status !== "queued" || this.running.has(job.id)) continue;
       const turn = job.turns.find(t => t.status === "queued")!;
       const controller = new AbortController(), base = structuredClone(job.documents), proposed = new Map<string, DomainDocumentContent>();
       job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
@@ -223,10 +223,10 @@ export class DomainKnowledgeExtraction {
         try {
           const reply = await this.execute({ job: this.get(job.id), turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(job.documents),
-            update: patch => { if (!controller.signal.aborted) { Object.assign(job, patch); if (patch.skill) turn.skill = patch.skill; this.persist(job); } },
-            evidence: event => { if (!controller.signal.aborted) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
+            update: patch => { if (!controller.signal.aborted && !job.deleted_at) { Object.assign(job, patch); if (patch.skill) turn.skill = patch.skill; this.persist(job); } },
+            evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
             save: (input, baseline) => {
-              if (controller.signal.aborted) throw new Error("本轮已停止");
+              if (controller.signal.aborted || job.deleted_at) throw new Error("本轮已停止");
               if (turn.mode === "discuss") throw new Error("讨论不修改文档");
               // Model output is content only; publication and human-review fields
               // are exclusively managed by explicit service operations.
@@ -247,14 +247,14 @@ export class DomainKnowledgeExtraction {
               return structuredClone(input);
             },
           });
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted || job.deleted_at) return;
           if (!reply.trim()) throw new Error("本轮没有返回结果");
           scanForSecrets("研究答复", Buffer.from(reply));
           if (turn.mode === "extract" && (!job.documents.length || !job.documents.some(doc => doc.layer === "domain"))) throw new Error("尚未生成领域知识草稿，已保存内容保留");
           turn.proposals = [...proposed.values()].map(document => ({ document, base_revision: base.find(doc => doc.id === document.id)!.revision, status: "pending" }));
           turn.reply = reply; turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查";
         } catch (error) {
-          if (controller.signal.aborted) return;
+          if (controller.signal.aborted || job.deleted_at) return;
           turn.status = "failed"; job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = "本轮失败，已有文档保留";
         } finally { this.persist(job); }
       }).finally(() => { this.running.delete(job.id); this.pump(); });
@@ -311,6 +311,17 @@ export class DomainKnowledgeExtraction {
       this.running.get(id)?.controller.abort(); this.persist(job);
     }
     return this.get(id);
+  }
+  remove(id: string, operator: string) {
+    const existing = this.jobs.get(id);
+    if (existing?.deleted_at) return { deleted: true };
+    const job = this.live(id);
+    if (job.component_research_id) throw new Error("请在基础组件萃取中管理对应任务");
+    if (this.publishing.has(id)) throw new Error("正在归档或核对远端，请等待当前操作完成后再删除");
+    this.stop(id);
+    // Keep source and MR history for published knowledge, as component task deletion does.
+    job.deleted_at = new Date().toISOString(); job.deleted_by = operator;
+    this.persist(job); this.pump(); return { deleted: true };
   }
   async previewCleanup(id: string, targetId: string, input: unknown, operator: string) {
     const job = this.live(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === targetId);
@@ -383,5 +394,5 @@ export class DomainKnowledgeExtraction {
       return this.get(id);
     } finally { this.publishing.delete(id); }
   }
-  async shutdown() { this.stopped = true; for (const job of this.jobs.values()) this.stop(job.id); await Promise.allSettled([...this.running.values()].map(r => r.work)); }
+  async shutdown() { this.stopped = true; for (const job of this.jobs.values()) if (!job.deleted_at) this.stop(job.id); await Promise.allSettled([...this.running.values()].map(r => r.work)); }
 }

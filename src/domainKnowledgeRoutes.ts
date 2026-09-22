@@ -35,6 +35,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         if (parts[2] === "archive-targets") return json(response, 200, manager.configureArchive(id, body));
         if (parts[2] === "run") return json(response, 202, manager.run(id, body, operator));
         if (parts[2] === "stop") return json(response, 200, manager.stop(id));
+        if (parts[2] === "delete") return json(response, 200, manager.remove(id, operator));
         if (parts[2] === "edit") return json(response, 200, manager.edit(id, body, operator));
         if (parts[2] === "proposal") return json(response, 200, manager.decide(id, body.turn_id, body.document_id, body.decision, operator));
         if (parts[2] === "restore") return json(response, 200, manager.restore(id, body.document_id, body.revision, body.base_revision, operator));

@@ -46,6 +46,7 @@ export interface DomainKnowledgeJob {
   source_repositories?: KnowledgeRepository[];
   archive_configured?: boolean; archive_revision?: number;
   material_ids: string[]; use_wxdoubao: boolean; ar_codes: string[];
+  deleted_at?: string; deleted_by?: string;
   status: "idle" | "queued" | "running" | "done" | "failed" | "cancelled"; stage: string; error?: string;
   revisions: Record<string, string>; skill?: { name: string; digest: string };
   documents: DomainDocument[]; turns: DomainTurn[]; evidence: Array<Record<string, unknown>>; publications: DomainPublication[];

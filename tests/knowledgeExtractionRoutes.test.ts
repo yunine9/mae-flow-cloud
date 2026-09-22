@@ -49,5 +49,13 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     const doc = saveKnowledgeDocument(root, { title: "领域规则", content: "Git 正文", scope: "platform", research_source: { job_id: job.id, repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md" }, source: { repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md", revision: "a".repeat(40) } }, "dev");
     assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { content: "绕开 MR 修改" })).status, 400);
     assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { active: false })).status, 200);
+    assert.equal((await request(`/domain-extraction/${job.id}/delete`, "", {})).status, 401);
+    const deleted = await request(`/domain-extraction/${job.id}/delete`, dev, {});
+    assert.equal(deleted.status, 200); assert.deepEqual(await deleted.json(), { deleted: true });
+    assert.equal((await request(`/domain-extraction/${job.id}`, dev)).status, 400);
+    const remaining: any = await (await request("/domain-extraction", dev)).json();
+    assert.ok(!remaining.records.some((r: any) => r.id === job.id));
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev)).status, 200);
+    assert.equal((await request(`/knowledge-materials/${material.id}`, dev)).status, 200);
   } finally { await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });

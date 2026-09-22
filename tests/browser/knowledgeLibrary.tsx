@@ -14,6 +14,7 @@ job.evidence = [
 ];
 const skill = { name: "domain-knowledge-extraction", digest: "first", can_manage: true, files: { "SKILL.md": "---\nname: domain-knowledge-extraction\ndescription: 领域知识方法\n---\n读取本包引用。", "references/domain.md": "研究领域规则。" }, versions: [] };
 const calls: any[] = [], errors: string[] = [];
+let taskDeleted = false;
 window.addEventListener("error", e => errors.push(e.message)); window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined; let result: unknown;
@@ -21,7 +22,7 @@ window.fetch = async (url, options) => {
   else if (path === "/knowledge-materials") { calls.push({ action: "upload", ...input }); result = { id: "material-zip", name: input.name, version: input.version, scope: "本次萃取任务", state: "ready", sections: 2, images: [{ path: "images/state.png" }], warnings: ["未解析附件：图.svg"] }; }
   else if (path === "/domain-extraction") {
     if (input) { calls.push({ action: "create", ...input }); result = job; }
-    else result = { records: [job], knowledge_target: null };
+    else result = { records: taskDeleted ? [] : [job], knowledge_target: null };
   }
   else if (path.endsWith("/archive-targets")) {
     for (const target of input.targets) {
@@ -31,6 +32,7 @@ window.fetch = async (url, options) => {
     }
     job.archive_configured = true; job.archive_revision = (job.archive_revision ?? 0) + 1; result = job;
   }
+  else if (path === "/domain-extraction/dkx-browser/delete") { calls.push({ action: "delete" }); taskDeleted = true; result = { deleted: true }; }
   else if (path === "/domain-extraction/dkx-browser/run") {
     calls.push({ action: "run", ...input });
     job.turns.push({ id: `turn-${calls.length}`, mode: input.mode, document_ids: input.document_ids, message: input.message, operator: "领域维护人", status: "done", created_at: new Date().toISOString(), reply: "已核对资料，保留未选文档。", proposals: input.mode === "discuss" ? [] : [{ document: { ...job.documents[0], content: job.documents[0].content + "\n\n取消前需要校验发货状态，并保留幂等处理依据。" }, base_revision: job.documents[0].revision, status: "pending" }] }); result = job;
@@ -144,6 +146,14 @@ async function run() {
   check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created) && !("use_wxdoubao" in created), "server derives scope and repositories from module maintenance");
   check(created.material_ids.includes("material-zip"), "uploaded bundle associated with new task");
   await click("研究过程");
+  await click("删除任务");
+  const deletion = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(dialog => dialog.getClientRects().length && dialog.textContent?.includes("删除领域萃取任务"))!;
+  check(deletion.textContent?.includes("已创建的 MR") && deletion.textContent?.includes("来源记录"), "deletion explains preserved publications and provenance");
+  await click("取消"); check(!taskDeleted, "cancel leaves task intact");
+  await click("删除任务"); await click("确认删除");
+  check(taskDeleted && !document.querySelector('[aria-label="萃取任务列表"]')?.textContent?.includes(job.title), "confirmed deletion removes task from list");
+  check(!new URL(location.href).searchParams.has("domainExtraction"), "deletion clears stale task URL");
+  check(!button("删除任务") && !document.querySelector('[aria-label="研究过程记录"]'), "deletion clears task detail");
   check(!errors.length, errors.join(";")); return { passed: true, width: innerWidth, revision: job.documents[0].revision, skill: skill.digest };
 }
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
