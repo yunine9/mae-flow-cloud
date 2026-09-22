@@ -67,13 +67,13 @@ async function run() {
   check(!progress.querySelector('.knowledge-progress-heading') && !progress.querySelector('input[type="checkbox"]'), "timeline has no activity groups or type filters");
   check(progress.querySelectorAll('.knowledge-progress-entry').length === 40, "timeline initially shows latest 40 summaries");
   check(progress.textContent?.includes("1 条异常"), "timeline keeps failures visible");
-  check(progress.querySelector('.knowledge-progress-summary')?.textContent === "src/business/module-18", "latest entries remain in chronological order");
+  check(progress.querySelector('.knowledge-progress-summary')?.textContent === "订单取消规则", "latest activity appears first");
   await click("查看更早的 18 条动态");
   check(progress.querySelectorAll('.knowledge-progress-entry').length === 58, "can load earlier history into same timeline");
-  check(progress.querySelector('.knowledge-progress-summary')?.textContent === "src/business/module-0", "earliest entry is first");
+  check([...progress.querySelectorAll('.knowledge-progress-summary')].at(-1)?.textContent === "src/business/module-0", "earlier history is appended at the bottom");
   const summaries = [...progress.querySelectorAll('.knowledge-progress-entry > summary')];
-  check(summaries.at(-2)?.textContent?.includes("分析与整理") && summaries.at(-1)?.textContent?.includes("检索业务知识"), "different activities stay interleaved by occurrence");
-  const record = progress.querySelector<HTMLDetailsElement>('.knowledge-progress-entry')!;
+  check(summaries[0]?.textContent?.includes("检索业务知识") && summaries[1]?.textContent?.includes("分析与整理"), "different activities stay in reverse chronological order");
+  const record = progress.querySelectorAll<HTMLDetailsElement>('.knowledge-progress-entry')[3]!;
   check(!record.open && !record.querySelector('pre')!.getClientRects().length, "source listing stays folded until explicitly opened");
   record.querySelector('summary')!.click(); await pause();
   check(record.open && record.querySelector('pre')!.getClientRects().length, "record expands to actual source output");

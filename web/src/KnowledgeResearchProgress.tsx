@@ -17,13 +17,12 @@ export function KnowledgeResearchProgress({ evidence }: { evidence: Evidence[] }
   const [limit, setLimit] = useState(40);
   // 后台按发生顺序追加；无时间戳的旧记录也保留在原来的位置。
   const entries = evidence.map((event, index) => ({ event, index }));
-  const visible = entries.slice(-limit), errors = evidence.filter(failed).length;
+  const visible = entries.slice(-limit).reverse(), errors = evidence.filter(failed).length;
   return <section ref={root} className="knowledge-progress" aria-label="研究过程记录">
-    <header className="knowledge-progress-toolbar"><div><strong>研究动态 <span className="text-muted-foreground font-normal">· {evidence.length} 条</span></strong><p className="mt-1 text-sm text-muted-foreground">按时间顺序展示，展开查看详情{errors > 0 && <span className="knowledge-progress-error"> · {errors} 条异常</span>}</p></div>
+    <header className="knowledge-progress-toolbar"><div><strong>研究动态 <span className="text-muted-foreground font-normal">· {evidence.length} 条</span></strong><p className="mt-1 text-sm text-muted-foreground">最新动态在前，展开查看详情{errors > 0 && <span className="knowledge-progress-error"> · {errors} 条异常</span>}</p></div>
       <Button variant="ghost" size="sm" onClick={() => root.current?.querySelectorAll("details[open]").forEach(node => { (node as HTMLDetailsElement).open = false; })}>全部折叠</Button>
     </header>
     {!evidence.length ? <p className="knowledge-progress-empty">研究开始后，Agent 的工作进展会显示在这里。</p> : <div className="knowledge-progress-entries">
-      {entries.length > limit && <Button variant="ghost" size="sm" className="m-3" onClick={() => setLimit(current => current + 40)}>查看更早的 {Math.min(40, entries.length - limit)} 条动态</Button>}
       <ol>{visible.map(({ event, index }) => {
         const error = failed(event), timestamp = typeof event.at === "string" ? new Date(event.at) : undefined;
         const action = event.tool === "research_note" ? "分析与整理" : event.tool === "knowledge_source_changes" ? "核对来源变化" : actions[String(event.action)] ?? "研究进展";
@@ -38,6 +37,7 @@ export function KnowledgeResearchProgress({ evidence }: { evidence: Evidence[] }
           <details className="mt-3 text-sm text-muted-foreground"><summary className="cursor-pointer">完整记录</summary><pre>{JSON.stringify(event, null, 2)}</pre></details>
         </div></details></li>;
       })}</ol>
+      {entries.length > limit && <Button variant="ghost" size="sm" className="m-3" onClick={() => setLimit(current => current + 40)}>查看更早的 {Math.min(40, entries.length - limit)} 条动态</Button>}
     </div>}
   </section>;
 }
