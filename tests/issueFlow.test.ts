@@ -19,9 +19,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, isAbsolute } from "node:path";
 import { IssueEnvironmentVault } from "../src/issueEnvironment.ts";
-import { materializeIssueSkills } from "../src/issueFlow/prompt.ts";
+import {
+  discoverIssueSkillPackages,
+  materializeIssueSkills,
+  SKILL_SOURCE_DIR,
+} from "../src/issueFlow/prompt.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
@@ -40,16 +44,25 @@ test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", ()
     const body = readFileSync(path, "utf-8");
     assert.match(body, /^---\nname: [^\n]+\ndescription: [^\n]+\n/,
       "SKILL.md 必须带 name+description frontmatter(pi 靠它进系统提示词)");
+    // 返回的是物化路径且必须落在工作区内:pi 把它原样写进系统提示的
+    // 技能索引 location,沙箱只放行工作区内——源路径混进来(#359)
+    // AI 一读就被拦。物化目的地恒 skills/<名>/,工作区一变即漂。
+    const rel = relative(workspace, path);
+    assert.ok(rel && !rel.startsWith("..") && !isAbsolute(rel),
+      `物化返回路径必须落在工作区内: ${path}`);
   }
   const second = materializeIssueSkills(workspace);
   assert.deepEqual(first, second, "幂等重写:路径稳定,重复物化不漂移");
-  // 源路径可带分类层(vendor/mattpocock/engineering/<名>/),用物化器
-  // 返回的源路径逐个比对,不假设平铺。
-  for (const sourcePath of first) {
-    const name = sourcePath.split("/").at(-2)!;
+  // 源可带分类层(vendor/mattpocock/engineering/<名>/),按发现器拿
+  // 真源路径逐个比对,不假设平铺;返回值已是物化路径,当不得源用。
+  const sources = new Map(
+    discoverIssueSkillPackages(SKILL_SOURCE_DIR).map((pkg) => [pkg.name, pkg.dir]));
+  assert.equal(sources.size, first.length);
+  for (const path of first) {
+    const name = path.split("/").at(-2)!;
     assert.equal(
       readFileSync(join(workspace, "skills", name, "SKILL.md"), "utf-8"),
-      readFileSync(sourcePath, "utf-8"),
+      readFileSync(join(sources.get(name)!, "SKILL.md"), "utf-8"),
       `${name} 物化内容必须与仓内源文件逐字节一致`);
   }
   assert.equal(readdirSync(join(workspace, "skills")).length, expected.length);
