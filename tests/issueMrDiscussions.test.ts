@@ -22,6 +22,7 @@ import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { fetchMrDiscussions } from "../src/issueFlow/mrDiscussions.ts";
+import { reviewStore, submitReviews } from "../src/issueFlow/reviews.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -87,9 +88,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     { tool: { name: "create_mr", input: {} } },
     { tool: { name: "complete_stage", input: { note: "MR 已申报", mrs: [origin] } } },
     { text: "MR 已申报,等待流水线与检视。" },
-    // ── 检视意见注入(票 02)后的修复回合:写回复草稿 → 修 → 推 → 重建 MR → 重新申报。 ──
-    { tool: { name: "bash", input: { command:
-      "printf '%s' '[{\"discussion_id\":\"D1\",\"body\":\"已修复:补充了连接池超时回收逻辑\"}]' > mr-review-replies.json" } } },
+    // ── 检视意见注入(票 02)后的修复回合:修 → 推 → 重建 MR → 重新申报。 ──
     { tool: { name: "bash", input: { command: commit(`[${TICKET}][fix] 检视意见修复:超时回收`) } } },
     { tool: { name: "push_branch", input: {} } },
     { tool: { name: "create_mr", input: {} } },
@@ -172,13 +171,17 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     assert.equal((service.get(created.id).feedback ?? [])
       .find((item) => item.source_id === "D1")?.status, "open");
 
-    // 原始意见只同步待判断批注，责任人交办前不通知模型。
-    assert.equal(JSON.stringify(model.requests).includes("mr-review-replies.json"), false);
-    // 显式准备已授权的回复草稿，继续验证原有 outbox 发送。
-    writeFileSync(join(dataDir, "issues", created.id, "mr-review-replies.json"),
-      JSON.stringify([{ discussion_id: "D1", body: "已修复连接池回收" }]));
+    // 原始意见只同步待判断批注，责任人交办前意见正文不进任何模型请求。
+    assert.doesNotMatch(JSON.stringify(model.requests), /连接池没有超时回收/);
+    // ── 票 03:交办 → AI respond → 出站信箱 → 发送 CodeHub(ADR-0052
+    // 单通道:AI 经 respond_review 落面板账,平台按 responded_at 代发)。 ──
+    const issueDir = join(dataDir, "issues", created.id);
+    const d1Note = reviewStore(issueDir).list()
+      .find((item) => item.external_review?.discussion_id === "D1")!;
+    submitReviews(issueDir, [d1Note.id]);
+    reviewStore(issueDir).respond(d1Note.id,
+      { outcome: "fixed", summary: "已修复连接池回收", evidence: [] });
 
-    // ── 票 03:草稿 → 出站信箱 → 发送 CodeHub。 ──
     const d1Discussion = platform.discussions.find((item) => item.id === "D1")!;
     await until(() => d1Discussion.replies.length > 0, "D1 回复已发送 CodeHub");
     assert.match(d1Discussion.replies[0], /已修复/);
@@ -200,8 +203,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
 
     // SHA 漂移终态(检视闭环 ② 改语义):直写信箱构造"绑定旧提交"的
     // pending——版本对不上直接标失败("请重写"),不再永远 pending;
-    // 失败不挡新草稿,重写后照常发送。
-    const issueDir = join(dataDir, "issues", created.id);
+    // 失败不挡新回应,重新 respond 后照常发送。
     const outboxPath = join(issueDir, "mr-review-outbox.json");
     writeFileSync(outboxPath, JSON.stringify({ items: [{
       id: "mrr-drift-test", repo: origin, discussion_id: "D2",
@@ -218,10 +220,13 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
         && /代码已更新|重写/.test(String(item.last_error ?? ""));
     }, "SHA 漂移直接标失败(不再永远 pending)");
     assert.equal(d2.replies.length, 0, "漂移条目绝不发送");
-    // 失败不挡新草稿:AI 重写 D2 回复 → 新条目入箱绑当前收据 → 发送。
-    writeFileSync(join(issueDir, "mr-review-replies.json"),
-      JSON.stringify([{ discussion_id: "D2", body: "已补监控埋点(重写)" }]));
-    await until(() => d2.replies.length > 0, "重写草稿后 D2 发送");
+    // 失败不挡新回应:AI 对 D2 重新 respond → 新条目绑当前收据 → 发送。
+    const d2Note = reviewStore(issueDir).list()
+      .find((item) => item.external_review?.discussion_id === "D2")!;
+    submitReviews(issueDir, [d2Note.id]);
+    reviewStore(issueDir).respond(d2Note.id,
+      { outcome: "fixed", summary: "已补监控埋点(重写)", evidence: [] });
+    await until(() => d2.replies.length > 0, "重写回应后 D2 发送");
     assert.match(d2.replies.at(-1)!, /重写/);
 
     // 验绿后仍发现迟到意见，责任人在托管期间不会漏掉新报告。
@@ -236,6 +241,17 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
       author: "迟到检视人", body: "收口后才提的意见",
     });
     await until(() => (service.get(created.id).feedback ?? []).some(record => record.source_id === "D4"), "验绿后的新报告仍落账");
+    // host-calls 账(ADR-0053):监看拉取与信箱发送的每次调用一行,
+    // 与 dispatch 账按 mrr-* 同 id join。
+    const callRows = readFileSync(join(dataDir, "logs", "host-calls.jsonl"),
+      "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.ok(callRows.some((row: any) =>
+      row.kind === "call.mr-discussions-list" && row.repo === origin),
+      "讨论拉取调用进 host-calls 账");
+    const replyCall = callRows.find((row: any) =>
+      row.kind === "call.mr-discussion-reply" && row.discussion_id === "D1");
+    assert.ok(replyCall, "回复发送调用进 host-calls 账");
+    assert.match(replyCall.request_id, /^mrr-/, "request_id=信箱条目 id,两侧账可 join");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

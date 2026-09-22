@@ -16,6 +16,7 @@ import {
   parsePipelineChecks,
   type PipelineCheck,
 } from "./pipelineContract.ts";
+import { auditPlatformCall, newRequestId } from "./issueFlow/audit.ts";
 
 export interface PipelineCredential {
   username: string;
@@ -78,15 +79,35 @@ async function pipelineFetch(
 ): Promise<Record<string, unknown>> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // 调用账(ADR-0053):宿主→适配层每次调用一行,成败都记——401 可按
+  // 端点聚合,错误原文(stderr 摘要)上浮进账,不再考古 adapter.log。
+  const requestId = newRequestId();
+  const startedAt = Date.now();
+  let failure: string | undefined;
+  let status: number | undefined;
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
+    status = response.status;
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      throw new Error(`${what}失败 HTTP ${response.status}`
-        + (text ? `: ${text.slice(0, 300)}` : ""));
+      failure = `HTTP ${response.status}` + (text ? `: ${text.slice(0, 300)}` : "");
+      throw new Error(`${what}失败${failure}`);
     }
     return await response.json().catch(() => ({})) as Record<string, unknown>;
+  } catch (error) {
+    failure ??= String(error instanceof Error ? error.message : error);
+    throw error;
   } finally {
+    let endpoint = "unknown";
+    try {
+      endpoint = new URL(url).pathname.replace(/^\//, "").replace(/\//g, "-");
+    } catch { /* 非 URL(测试桩)按未知端点记 */ }
+    auditPlatformCall({
+      endpoint, request_id: requestId, startedAt,
+      detail: { method: init.method },
+      ...(status !== undefined ? { status } : {}),
+      ...(failure ? { error: failure } : {}),
+    });
     clearTimeout(timer);
   }
 }

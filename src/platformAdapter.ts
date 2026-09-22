@@ -81,8 +81,9 @@
 
 import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createServer } from "node:http";
+import { appendAudit } from "./issueFlow/audit.ts";
 import {
   PIPELINE_DIMENSIONS,
   parsePipelineDefects,
@@ -399,6 +400,8 @@ function orderStatusRuns(
 export class PlatformAdapter {
   private readonly config: AdapterConfig;
   private serviceToken = "";
+  /** 调用账落点(#408):构造时按配置文件位置定。 */
+  private adapterCallsFile = "";
 
   constructor(configPath: string, private log = console.error) {
     // 部署配置语义:坏了拒绝启动。带着一半配置起服,比不起服更害人。
@@ -428,6 +431,19 @@ export class PlatformAdapter {
     } else if (this.config.token) {
       this.serviceToken = this.config.token;
     }
+    if (!this.serviceToken) {
+      // 显眼警告,不拒启:引用 {token} 的命令模板仍可靠请求头里的
+      // 个人令牌逐请求工作;两头皆空时每条命令都会 401(issue-383:
+      // token 文件在盘但 adapter.json 没引用,25,712 条 401 靠考古发现)。
+      // 让「没配服务令牌」在启动一瞬可见,而不是在错误日志里沉底。
+      console.warn("[adapter] 未配置服务令牌(token/token_file 皆空):"
+        + "引用 {token} 的命令模板将逐请求依赖个人令牌头,"
+        + "缺失时全部失败——请检查 adapter.json");
+    }
+    // 调用账落点(#408):配置文件旁 logs/adapter-calls.jsonl——适配层
+    // 是独立进程,不知识别的 dataDir;与配置同区,部署纪律见文档。
+    this.adapterCallsFile = join(
+      dirname(configPath), "logs", "adapter-calls.jsonl");
   }
 
   /** 模板套值 + 执行。token 优先用请求头里的个人令牌(MR 发起人=
@@ -689,7 +705,65 @@ export class PlatformAdapter {
     return accepted.includes(String(raw ?? "").toLowerCase());
   }
 
+  /** 对外入口:适配层调用账(ADR-0053,#408)统一在此记——每请求一行
+   *  (端点/状态/耗时/错误原文),parent_request_id 取宿主透传的
+   *  x-mfc-request-id,两侧账按同一动作 id 对上(#383② 的另一半)。
+   *  账落配置文件旁 logs/adapter-calls.jsonl,复用审计原语(双时间、
+   *  fail-open、滚动压缩)。body/query 只记白名单参数摘要,密钥头
+   *  (x-mfc-git-token 等)永不进账;CLI 错误原文在 run() 内已掩码。 */
   async handle(
+    method: string,
+    path: string,
+    query: URLSearchParams,
+    body: Record<string, unknown>,
+    headers: Record<string, string | string[] | undefined>,
+  ): Promise<{ status: number; payload: unknown }> {
+    const startedAt = Date.now();
+    const rawParent = headers["x-mfc-request-id"];
+    const parentValue = Array.isArray(rawParent) ? rawParent[0] : rawParent;
+    let parentRequestId: string | undefined;
+    try {
+      parentRequestId = decodeURIComponent(String(parentValue ?? "")) || undefined;
+    } catch {
+      parentRequestId = String(parentValue ?? "") || undefined;
+    }
+    const summary: Record<string, unknown> = {};
+    for (const key of ["repo", "mr", "sha", "dts_no", "discussion_id"] as const) {
+      const value = body[key] ?? query.get(key);
+      if (value !== undefined && value !== null && value !== "") {
+        summary[key] = value;
+      }
+    }
+    try {
+      const result = await this.route(method, path, query, body, headers);
+      appendAudit(this.adapterCallsFile, {
+        kind: "adapter.call",
+        msg: `${method} ${path} → ${result.status}`,
+        ...(parentRequestId ? { parent_request_id: parentRequestId } : {}),
+        endpoint: `${method} ${path}`,
+        status: result.status,
+        duration_ms: Date.now() - startedAt,
+        ...(Object.keys(summary).length ? { params: summary } : {}),
+        ...(result.status >= 400 ? { level: "warn" as const } : {}),
+      });
+      return result;
+    } catch (error) {
+      // AdapterError 的消息在 run() 内已过密钥掩码;此处如实记账再抛,
+      // HTTP 层(serve)照旧把 AdapterError 转 502。
+      appendAudit(this.adapterCallsFile, {
+        kind: "adapter.call", level: "error",
+        msg: `${method} ${path} → 异常`,
+        ...(parentRequestId ? { parent_request_id: parentRequestId } : {}),
+        endpoint: `${method} ${path}`,
+        duration_ms: Date.now() - startedAt,
+        ...(Object.keys(summary).length ? { params: summary } : {}),
+        error: String(error instanceof Error ? error.message : error),
+      });
+      throw error;
+    }
+  }
+
+  private async route(
     method: string,
     path: string,
     query: URLSearchParams,
@@ -952,9 +1026,11 @@ export class PlatformAdapter {
           return { status: 404,
                    payload: { error: "未配置 discussion_resolve" } };
         }
+        // 请求体原样透传(与 reply 处理器同款):模板引用 {mr} 之类的
+        // 占位符时值来自 body——手工挑字段会把 body 里的 mr 丢掉,
+        // 模板必然报「引用了 {mr} 但没有值」(issue-383 的确定性故障)。
         await this.run(spec, this.values(
-          { id: decodeURIComponent(resolveMatch[1]),
-            repo: String(body.repo ?? "") }, headers));
+          { ...body, id: decodeURIComponent(resolveMatch[1]) }, headers));
         return { status: 200, payload: { ok: true, resolved: true } };
       }
     }

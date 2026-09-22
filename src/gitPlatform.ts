@@ -51,6 +51,8 @@ export interface Discussion {
   resolved: boolean;
   /** 发布过的回复(测试断言"回复真到了平台"用)。 */
   replies: string[];
+  /** 每条回复/代点已解决请求携带的 mr(issue-383:信箱透传断言用)。 */
+  replyMrs: unknown[];
 }
 
 export interface PipelineRun {
@@ -286,6 +288,7 @@ export class FakeGitPlatform {
             if (!discussion) reply(404, { error: "讨论不存在" });
             else {
               discussion.resolved = true;
+              discussion.replyMrs.push(body.mr);
               reply(200, { ok: true, resolved: true });
             }
           } else if (request.method === "GET"
@@ -424,6 +427,7 @@ export class FakeGitPlatform {
       return { ok: true };
     }
     discussion.replies.push(String(body.body ?? ""));
+    discussion.replyMrs.push(body.mr);
     if (idempotencyKey) this.discussionReplyIdempotency.add(idempotencyKey);
     if (body.resolve === true) discussion.resolved = true;
     return { ok: true };
@@ -434,8 +438,8 @@ export class FakeGitPlatform {
   }
 
   /** 测试注入:种一条未解决的检视意见。 */
-  seedDiscussion(input: Omit<Discussion, "resolved" | "replies">): void {
-    this.discussions.push({ ...input, resolved: false, replies: [] });
+  seedDiscussion(input: Omit<Discussion, "resolved" | "replies" | "replyMrs">): void {
+    this.discussions.push({ ...input, resolved: false, replies: [], replyMrs: [] });
   }
 
   /** MR 详情页(最小 HTML,零依赖):事实 + 合入按钮。 */
