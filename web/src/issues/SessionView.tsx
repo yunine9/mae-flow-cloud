@@ -389,14 +389,14 @@ export function IssueSessionView({
               className="h-auto px-0 font-bold text-danger underline underline-offset-2 hover:text-danger"
               onClick={onNavigateProfile}>去个人设置配置令牌</Button>}
         </div>}
-        {/* 一次生成归属(ADR-0044,#339):收口会话的证据面——最终留存
+        {/* 首次生成归属(ADR-0044,#339):收口会话的证据面——最终留存
             源码行的三分类(首轮/返工/平台外)、每仓明细与逐提交行归属;
             伴生缺席(未算完/早于起算日)由面板如实说明,收口前不渲染。
             默认折叠:证据面是复盘时下钻看的,不占首屏。 */}
         {!isIssueActive(detail.status) && (
           <details className="rounded-lg border border-line bg-surface px-4 py-3">
             <summary className="cursor-pointer text-sm font-semibold text-text-strong">
-              一次生成归属(收口会话的代码来源统计)
+              首次生成归属(收口会话的代码来源统计)
             </summary>
             <div className="mt-3">
               <IssueCodeOriginPanel id={detail.id} />

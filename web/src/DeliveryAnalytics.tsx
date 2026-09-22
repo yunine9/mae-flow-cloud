@@ -71,7 +71,7 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
   return <tr className={child ? "delivery-child-row" : undefined}><td><button className="delivery-task-link" onClick={() => onSelect(id)}><b>{id}</b><span>{title}</span></button></td><td><TaskLanguages tasks={tasks} /></td><td>{parent ? <>已合入子任务 {tasks.filter(t => t.merged).length}/{tasks.length}{tasks.some(t => !t.merged) && <small>含未合入暂计</small>}</> : tasks.every(t => t.merged) ? "已合入" : "进行中 · 暂计"}</td><td>{values.available ? `${num(values.total)} 行` : "—"}</td><td className="delivery-accent">{percent(values.firstPercent)}</td><td title={tokens.available ? `已记录输入 ${num(tokens.input)} · 输出 ${num(tokens.output)}` : "没有模型用量记录"}><strong>{tokens.available ? num(tokens.total) : "—"}</strong>{tokens.available < tokens.tasks && <small>{tokens.available ? "部分用量已记录" : "暂无用量记录"}</small>}</td><td>{values.available}/{tasks.length}{!values.available && <small>待取证</small>}</td></tr>;
 }
 
-/** DTS 页签(原「问题处理」,ADR-0044,工单 #340):一次生成占比的
+/** DTS 页签(原「问题处理」,ADR-0044,工单 #340):首次生成占比的
  *  每会话明细与特性聚合——读侧与团队问题页统计瓦片同一端点、同一
  *  数字;行点击下钻行归属证据(伴生快照原样)。人群=有单交付会话;
  *  无单会话在「登记问题」页签(ADR-0048)。纯呈现层,不建第二套口径。

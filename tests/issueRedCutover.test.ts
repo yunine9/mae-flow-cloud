@@ -358,28 +358,27 @@ test("374 回归:验证卡在场遇红灯——撤卡回落,红灯事实照常�
   const service = new IssueFlowService(
     options({ dataDir, model, platformUrl: platform.baseUrl, luban }));
   try {
-    // 撤卡先于红灯送达:第一声模型请求到达时,卡已撤、等人已回落、
-    // stage_note 还是收口常量(此刻收嘴催办机器尚未接管收口)。
-    await until(() =>
-      model.requests.length ? JSON.stringify(model.requests) : undefined,
-    "红灯事实送达回合启动");
-    assert.match(JSON.stringify(model.requests), /流水线未通过/,
-      "红灯事实开回合送达 AI,不是落便签等人");
-    const midTurn = readStateFile(dataDir);
-    assert.equal(midTurn.gate, undefined, "旧验证卡已撤下");
-    assert.equal(midTurn.status, "running", "等人已回落,回合在飞");
-    assert.equal(midTurn.stage_note, MR_GREEN_ENV_VERIFY_NOTE,
-      "撤卡不动 stage_note(守闸器欠卡判据按收口常量认现场)");
-    assert.deepEqual(midTurn.parked_notices, undefined,
-      "失败事实不进欠账队列");
-    assert.match(JSON.stringify(midTurn.transitions),
-      /环境验证卡过期撤下/, "撤卡落转移账");
+    // 全部断言取终态可观测的不变量(2026-09-22 CI 修正):脚本模型
+    // 响应极快,「回合在飞」是抓不住的瞬态——装作能抓住只会赛跑。
+    // 撤卡+送达的组合本身已构成回归锚:修复前红灯永远 park、
+    // status 定格 waiting_user、模型收不到任何请求。
+    // 完成信号=idle 且模型请求已发生(2026-09-22 二次修正):撤卡置
+    // idle 与红灯回合真正开跑之间隔着产物镜像的网络往返,窗口里
+    // status 已是 idle 而请求还是空——只看 idle 会在窗口里假绿。
     const settled = await until(() => {
       const issue = service.get("issue-1");
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
-      return issue.status === "idle" ? issue : undefined;
-    }, "红灯修复回合收口");
-    assert.equal(settled.gate, undefined);
+      return issue.status === "idle" && model.requests.length ? issue : undefined;
+    }, "红灯事实送达并收口");
+    assert.match(JSON.stringify(model.requests), /流水线未通过/,
+      "红灯事实开回合送达 AI,不是落便签等人");
+    assert.equal(settled.gate, undefined, "旧验证卡已撤下");
+    const state = readStateFile(dataDir);
+    assert.equal(state.status, "idle", "等人回落空闲(撤卡解锁回合)");
+    assert.deepEqual(state.parked_notices, undefined,
+      "失败事实不进欠账队列");
+    assert.match(JSON.stringify(state.transitions),
+      /环境验证卡过期撤下/, "撤卡落转移账");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

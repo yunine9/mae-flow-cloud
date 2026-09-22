@@ -32,6 +32,7 @@ import {
   buildIssueMetricsSnapshot,
   writeIssueMetricsSnapshot,
   SOURCE_CODE_EXTENSIONS,
+  isSourcePath,
   ISSUE_METRICS_FILE,
   type IssueMetricsAttributionRepo,
   type IssueMetricsAttributionRepoOk,
@@ -363,10 +364,16 @@ test("逐推送 diff:文件数/增删行正确,md 与二进制不进仅源码行
   assert.equal(entry.platform_count, 2);
   assert.equal(entry.external_count, 0);
 
-  // 白名单本体:源码后缀在内,文档/数据后缀不在。
+  // 白名单本体:源码与配置类后缀在内,文档后缀不在。
   assert.ok(SOURCE_CODE_EXTENSIONS.has("ts")
     && SOURCE_CODE_EXTENSIONS.has("py") && SOURCE_CODE_EXTENSIONS.has("sh"));
+  assert.ok(SOURCE_CODE_EXTENSIONS.has("json") && SOURCE_CODE_EXTENSIONS.has("xml")
+    && SOURCE_CODE_EXTENSIONS.has("yaml") && SOURCE_CODE_EXTENSIONS.has("yml")
+    && SOURCE_CODE_EXTENSIONS.has("properties"), "2026-09-22 扩入配置类后缀");
   assert.ok(!SOURCE_CODE_EXTENSIONS.has("md") && !SOURCE_CODE_EXTENSIONS.has("dat"));
+  // 判定函数:大小写归一,无后缀/整名点文件不算。
+  assert.ok(isSourcePath("src/app.json") && isSourcePath("cfg/app.properties"));
+  assert.ok(isSourcePath("a/b.XML") && !isSourcePath("Makefile") && !isSourcePath(".gitignore"));
 });
 
 // ---- 3. 强推:顶掉的平台提交不在 MR 清单,事实层照全 ----

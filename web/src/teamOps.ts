@@ -381,7 +381,7 @@ export interface OnceGeneratedFeatureRow {
   total_lines: number;
 }
 
-/** 按特性(业务模块标签,空白归「未分类」)聚合一次生成明细:输入是
+/** 按特性(业务模块标签,空白归「未分类」)聚合首次生成明细:输入是
  *  once-generated 端点的 per_session(服务端已滤成分母全集)。排序:
  *  会话数降序 → 行数降序 → 名称(与 issueFeatureRows 的排序精神
  *  同构:处理多的特性先看)。 */

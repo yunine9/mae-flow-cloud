@@ -1336,7 +1336,7 @@ export class IssueFlowService {
     };
   }
 
-  /** 单会话一次生成明细(伴生文件原样读;统计与详情同一份事实,
+  /** 单会话首次生成明细(伴生文件原样读;统计与详情同一份事实,
    *  缺席返回 undefined 由路由 404)。 */
   codeOriginDetail(id: string): IssueCodeOriginSnapshot | undefined {
     const live = this.live.get(id);
@@ -4887,7 +4887,7 @@ export class IssueFlowService {
     this.freezeMetricsSnapshot(live);
     this.vault.remove(live.id);
     this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
-    // 一次生成归属(ADR-0044):归档响应不等计算——伴生统计挂后台通道,
+    // 首次生成归属(ADR-0044):归档响应不等计算——伴生统计挂后台通道,
     // 现场回收为它让路(任务收尾后再删);不入队(伴生已在/不支持期/
     // 无仓)则照旧当场后台回收。崩溃缺口由每日清扫器兜底。
     this.reclaimAfterCodeOrigin(live);
@@ -4896,7 +4896,7 @@ export class IssueFlowService {
 
   /** 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方
    *  (不可续聊,过程记录全保留),后台回收——不阻塞响应(删 GB 级
-   *  node_modules 可能要数秒)。一次生成归属(ADR-0044)入队时,回收
+   *  node_modules 可能要数秒)。首次生成归属(ADR-0044)入队时,回收
    *  挂在通道任务收尾之后(统计窗口与磁盘治理两全);旋钮关=不删。 */
   private reclaimAfterCodeOrigin(
     live: Pick<LiveIssue, "root" | "id" | "state">,
@@ -4981,7 +4981,7 @@ export class IssueFlowService {
       try {
         if (terminal) {
           if (!reclaimOn) continue;
-          // 一次生成归属兜底(ADR-0044):现场还在而伴生缺失(进程曾在
+          // 首次生成归属兜底(ADR-0044):现场还在而伴生缺失(进程曾在
           // 归档与算完之间退出),回收前补算一次再删;支持期外的终态
           // 会话不试算。通道在途的由兜底函数自己让路。
           try {
@@ -4989,7 +4989,7 @@ export class IssueFlowService {
               fetchCredential: this.options.gitCredential?.(state.account),
             }, (message) => this.log(message));
           } catch (error) {
-            this.log(`[issue-flow] ${name} 一次生成归属补算异常(不阻塞回收): `
+            this.log(`[issue-flow] ${name} 首次生成归属补算异常(不阻塞回收): `
               + String(error instanceof Error ? error.message : error));
           }
           const size = this.reclaimRepoDir(root, name, state);

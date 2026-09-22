@@ -1,5 +1,5 @@
 /**
- * 一次生成达标率读侧与呈现(工单 #338/#340,ADR-0044):
+ * 90%AI生成达标率读侧与呈现(工单 #338/#340,ADR-0044):
  * 1. GET /issues/once-generated 分母三态——有数据(伴生在场且留存
  *    源码行>0)/待算(支持期内终态、伴生缺席)/不支持期(起算日期前
  *    终态,永不回填);达标线缺省与逐会话明细;非完成交付(取消/误报)
@@ -30,7 +30,8 @@ const BASE_STATE = {
 
 const DELIVERED_SINCE = {
   status: "archived",
-  conclusion: { kind: "delivered", summary: "s", at: "2026-09-20T10:00:00Z" },
+  // 起算日 2026-09-23(白名单 v3 换版)之后终态,属支持期。
+  conclusion: { kind: "delivered", summary: "s", at: "2026-09-23T10:00:00Z" },
 };
 
 function seedSession(dataDir: string, state: Record<string, unknown>): void {
@@ -47,7 +48,7 @@ function seedCompanion(dataDir: string, id: string, lines: {
 }): void {
   writeFileSync(join(dataDir, "issues", id, "code-origin.json"),
     JSON.stringify({
-      schema_version: 2,
+      schema_version: 3,
       generated_at: "2026-09-20T11:00:00.000Z",
       session_id: id,
       by_repo: [{
@@ -84,7 +85,7 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
   seedCompanion(dataDir, "issue-a",
     { first: 90, rework: 5, external: 5 });
   seedSession(dataDir, { id: "issue-b", ...DELIVERED_SINCE,
-    conclusion: { kind: "delivered", summary: "s", at: "2026-09-20T12:00:00Z" } });
+    conclusion: { kind: "delivered", summary: "s", at: "2026-09-23T12:00:00Z" } });
   seedCompanion(dataDir, "issue-b",
     { first: 50, rework: 40, external: 10 });
   // 待算:支持期内终态、伴生缺席(通道在途或曾丢失)。
@@ -109,7 +110,7 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
       "/issues/once-generated", ["issues", "once-generated"]);
     assert.equal(status, 200);
     assert.equal(body.threshold_percent, 90, "达标线缺省 90(参数)");
-    assert.equal(body.supported_since, "2026-09-20");
+    assert.equal(body.supported_since, "2026-09-23");
     assert.equal(body.total, 2, "分母=issue-a/b(issue-e 无源码行不进)");
     assert.equal(body.passed, 1, "占比恰 90 判达标,50 不达标");
     assert.equal(body.rate, 50);

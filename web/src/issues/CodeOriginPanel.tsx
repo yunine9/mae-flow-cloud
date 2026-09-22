@@ -1,5 +1,5 @@
 /**
- * 一次生成归属明细(ADR-0044,工单 #339/#340):终态伴生快照
+ * 首次生成归属明细(ADR-0044,工单 #339/#340):终态伴生快照
  * (code-origin.json)的人读面——聚合行 + 每仓三分类 + 逐提交证据。
  * 会话工作台(SessionView,归档后呈现)与交付分析「问题处理」页签
  * (DeliveryAnalytics,行点击下钻)共用同一份事实与同一渲染。
@@ -40,7 +40,7 @@ const ORIGIN_CLASS: Record<"first" | "rework" | "external", string> = {
 /** 快照版本镜像(src/issueFlow/codeOrigin.ts 的
  *  ISSUE_CODE_ORIGIN_SCHEMA_VERSION):版本错位(部署窗口旧后端、旧包读新
  *  快照,#360)时整块按缺失退场,不渲染未知形状。 */
-const SNAPSHOT_SCHEMA_VERSION = 2;
+const SNAPSHOT_SCHEMA_VERSION = 3;
 
 /** 非数字(字段缺席/形状漂移)显示「—」,不让渲染崩掉整页(#360)。 */
 const num = (value: number | undefined) =>
@@ -75,12 +75,12 @@ export function IssueCodeOriginPanel({ id, threshold }: {
   }, [id]);
 
   if (busy) {
-    return <p className="m-0 text-sm text-muted-foreground">正在读取一次生成归属…</p>;
+    return <p className="m-0 text-sm text-muted-foreground">正在读取首次生成归属…</p>;
   }
   if (missing || !snapshot
     || snapshot.schema_version !== SNAPSHOT_SCHEMA_VERSION) {
     return <p className="m-0 text-sm text-muted-foreground">
-      该会话暂无一次生成统计(未归档、未算完或早于起算日期)。</p>;
+      该会话暂无首次生成统计(未归档、未算完或早于起算日期)。</p>;
   }
 
   const ok = snapshot.by_repo.filter((repo): repo is IssueCodeOriginRepoOk =>
@@ -95,7 +95,7 @@ export function IssueCodeOriginPanel({ id, threshold }: {
   return <div className="grid gap-3">
     <div className="flex flex-wrap items-baseline gap-x-5 gap-y-1 rounded-lg border border-line bg-surface px-4 py-3">
       <strong className="text-sm text-text-strong">
-        一次生成占比 <span className="text-lg tabular-nums">{percent(share)}</span>
+        首次生成占比 <span className="text-lg tabular-nums">{percent(share)}</span>
       </strong>
       {threshold !== undefined && share !== null && (
         <span className={cn("text-sm font-semibold",
