@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { callWxdoubao, decodeWxdoubao, wxdoubaoConfig, WxdoubaoError } from "../src/wxdoubao.ts";
+import { callWxdoubao, decodeWxdoubao, wxdoubaoConfig, WxdoubaoError, wxdoubaoTool } from "../src/wxdoubao.ts";
 
 const raw = (result: unknown) => JSON.stringify({ jsonrpc: "2.0", id: 3, result });
 test("无线豆包区分业务鉴权失败、无数据和带定位信息的知识", () => {
@@ -25,11 +25,17 @@ test("CLI 保留参数边界、使用环境凭据且取消实际子进程", asyn
   try {
     writeFileSync(executable, `#!${process.execPath}\nconst args=process.argv.slice(2); if(args.includes(process.env.WXDOUBAO_TOKEN)) process.exit(1); console.log(JSON.stringify({result:{structuredContent:{code:200,data:{args,user:process.env.WXDOUBAO_USERID}}}}));`, { mode: 0o700 });
     const question = '引号 " ; $(echo injected)';
-    const result = await callWxdoubao("knowledge_search", { question }, { config });
+    const result = await callWxdoubao("knowledge_search", { question, ar_code: "", scene: null, sources: "  " }, { config });
     const data = (result.data as any).data;
     assert.equal(data.user, "fixture-user");
     assert.deepEqual(JSON.parse(data.args[data.args.indexOf("--json") + 1]), { question });
     assert.ok(data.args.includes("--raw"));
+    for (const tool of ["ar_fur_info", "ar_idp_docs", "ar_mr_diff", "ar_history_similar"] as const) {
+      const args = { ar_code: "AR123", ...(tool === "ar_mr_diff" ? { scene: "review" } : {}) };
+      const response = await callWxdoubao(tool, { ...args, question: null, sources: "" }, { config });
+      const argv = (response.data as any).data.args;
+      assert.deepEqual(JSON.parse(argv[argv.indexOf("--json") + 1]), args);
+    }
     writeFileSync(executable, `#!${process.execPath}\nsetInterval(()=>{},1000);`, { mode: 0o700 });
     const controller = new AbortController();
     const pending = callWxdoubao("knowledge_search", { question: "状态" }, { config, signal: controller.signal });
@@ -38,4 +44,26 @@ test("CLI 保留参数边界、使用环境凭据且取消实际子进程", asyn
     writeFileSync(executable, `#!${process.execPath}\nconsole.error(process.env.WXDOUBAO_TOKEN); process.exit(3);`, { mode: 0o700 });
     await assert.rejects(callWxdoubao("knowledge_search", { question: "状态" }, { config }), (e: Error) => !e.message.includes(config.token) && /连接/.test(e.message));
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("参数错误可一次定位，失败证据不保存正文或未知字段名", async () => {
+  const events: Record<string, unknown>[] = [];
+  const tool = wxdoubaoTool(new AbortController().signal, event => events.push(event));
+  for (const [input, expected] of [
+    [{ tool: "knowledge_search", question: " " }, /缺少必填参数 question/],
+    [{ tool: "ar_idp_docs" }, /缺少必填参数 ar_code/],
+    [{ tool: "knowledge_search", question: "private-query", ar_code: "private-ar" }, /不支持的非空参数.*question、sources/],
+    [{ tool: "ar_mr_diff", ar_code: "AR123", scene: 123 }, /scene 必须是字符串/],
+    [{ tool: "knowledge_search", question: "private-query", "private-field": "private-value" }, /不支持的非空参数/],
+  ] as const) {
+    const result = await tool.execute("invalid", input, undefined, undefined, {} as never);
+    assert.equal((result as typeof result & { isError?: boolean }).isError, true);
+    assert.equal(result.content[0].type, "text");
+    if (result.content[0].type === "text") assert.match(result.content[0].text, expected);
+  }
+  assert.doesNotMatch(JSON.stringify(events), /private-/);
+  assert.equal(events[0].error_code, "arguments");
+  assert.deepEqual(events[0].arguments, { fields: { question: "empty" }, unknown_field_count: 0 });
+  assert.deepEqual(events[2].arguments, { fields: { question: "string", ar_code: "string" }, unknown_field_count: 0 });
+  assert.equal((events[4].arguments as any).unknown_field_count, 1);
 });
