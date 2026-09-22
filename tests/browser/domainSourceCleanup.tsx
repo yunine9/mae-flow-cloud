@@ -10,7 +10,9 @@ window.fetch = async (input, init) => {
   const state = task.source_cleanup;
   if (action === "preview") state.plans = [...state.plans.filter(p => p.target_id !== body.target_id), { id: body.target_id, target_id: body.target_id, directories: body.no_cleanup ? [] : body.paths, target_revision: "a".repeat(40), target_entries: body.no_cleanup ? [] : [{ path: "docs/old/rules.md", mode: "100644", oid: "b".repeat(40) }, { path: "AGENTS.md", mode: "100644", oid: "c".repeat(40) }], document_versions: [], confirmed: false }];
   if (action === "confirm") { const plan = state.plans.find(p => p.id === body.plan_id)!; plan.confirmed = body.confirmed; plan.preserve_paths = body.preserve_paths ?? plan.preserve_paths; }
-  if (action === "publish") state.publications = state.repositories.filter(repo => state.plans.some(p => p.target_id === repo.id && p.confirmed)).map(repo => ({ target_id: repo.id, branch: "codex/cleanup", state: state.plans.find(p => p.target_id === repo.id)!.directories.length ? "opened" : "unchanged", documents: [], ...(repo.id === "repo-1" ? { url: "https://example.test/mr/1", mr_attempted: true } : {}) }));
+  if (action === "publish") for (const repo of state.repositories.filter(repo => Array.isArray(body.paths_by_target?.[repo.id]))) {
+    state.publications = [...state.publications.filter(p => p.target_id !== repo.id), { target_id: repo.id, branch: "codex/cleanup", state: "opened", documents: [], url: `https://example.test/mr/${repo.id}`, mr_attempted: true }];
+  }
   if (action === "start") { state.started = true; started = true; }
   return new Response(JSON.stringify(task), { headers: { "content-type": "application/json" } });
 };
@@ -23,27 +25,13 @@ async function click(text: string) { const b = button(text); assert(!b.disabled,
 async function run() {
   await pause(); assert(!button("开始萃取").disabled, "Optional cleanup must not block extraction");
   assert(!document.querySelector('button[data-action="refresh"]'), "No MR gate control");
-  assert(button("创建清理 MR").disabled, "No preview must not allow destructive publication");
-  const guidance = () => document.getElementById(button("创建清理 MR").getAttribute("aria-describedby")!)?.textContent ?? "";
-  assert(guidance().includes("预览将删除的文件"), "Disabled button must explain the next action");
-  await click("预览将删除的文件");
-  assert(button("创建清理 MR").disabled && guidance().includes("勾选"), "Preview must point to the deletion confirmation");
-  const check = () => [...document.querySelectorAll("label")].find(l => l.textContent === "确认删除以上文件，其余文件保留")!.querySelector("input")!;
-  check().click(); await pause(); assert(!button("创建清理 MR").disabled, "Can clean only the selected repository");
-  assert(guidance().includes("已确认 1 个仓"), "Ready state explains which scope will be published");
-  // Editing a confirmed scope requires a fresh preview; it cannot submit a stale list.
-  const textarea = document.querySelector("textarea")!;
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
-  setter.call(textarea, "docs/other"); textarea.dispatchEvent(new Event("input", { bubbles: true })); await pause();
-  assert(button("创建清理 MR").disabled, "Unsaved scope blocks submission");
-  assert(guidance().includes("业务仓 1") && guidance().includes("路径已修改"), "Changed scope names the repository requiring another preview");
-  setter.call(textarea, "docs/old\nAGENTS.md"); textarea.dispatchEvent(new Event("input", { bubbles: true })); await pause();
-  await click("创建清理 MR"); assert(!button("开始萃取").disabled, "Opened MR must not block manual start");
-  assert(document.querySelector('a[href="https://example.test/mr/1"]'), "MR link available");
-  assert(button("创建清理 MR").disabled && guidance().includes("已有清理范围已处理"), "Created MR is explained instead of leaving a silent disabled button");
+  assert(!button("一键创建所有清理 MR").disabled, "Default paths allow immediate creation without preview or confirmation");
+  await click("一键创建所有清理 MR"); assert(!button("开始萃取").disabled, "Opened MR must not block manual start");
+  assert(document.querySelector('a[href="https://example.test/mr/repo-1"]'), "MR link available");
+  assert(document.querySelector('a[href="https://example.test/mr/repo-2"]'), "Every repository gets its own MR");
   await click("开始萃取");
   assert(started && calls.filter(c => c === "start").length === 1, "Exactly one extraction start");
-  assert(!document.querySelector("textarea"), "Scope frozen after extraction start");
+  assert([...document.querySelectorAll<HTMLTextAreaElement>("textarea")].every(textarea => textarea.disabled), "Scope frozen after extraction start");
   assert(document.documentElement.scrollWidth <= innerWidth, "No horizontal overflow");
   document.getElementById("result")!.textContent = JSON.stringify({ passed: true });
 }

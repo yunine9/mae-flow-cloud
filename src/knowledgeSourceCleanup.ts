@@ -38,10 +38,17 @@ export class KnowledgeSourceCleanup {
       if (!Array.isArray(preserved) || preserved.some(p => typeof p !== "string" || !plan.target_entries.some(e => e.path === p))) throw new Error("只能保留预览清单中的文件");
       plan.preserve_paths = [...new Set(preserved)] as string[]; plan.confirmed = input.confirmed; save();
     } else if (action === "publish") {
-      if (!state.plans.some(p => p.confirmed)) throw new Error("请先预览并确认需要删除的文件");
-      for (const target of state.repositories.filter(r => state.plans.some(p => p.target_id === r.id && p.confirmed))) {
+      const pathsByTarget = input.paths_by_target;
+      if (!pathsByTarget || typeof pathsByTarget !== "object" || Array.isArray(pathsByTarget)) throw new Error("请提供各仓的清理路径");
+      for (const target of state.repositories) {
         const previous = state.publications.find(p => p.target_id === target.id);
         if (previous?.url || previous?.state === "unchanged") continue;
+        const paths = (pathsByTarget as Record<string, unknown>)[target.id];
+        if (!Array.isArray(paths)) throw new Error(`请填写 ${target.name} 的清理路径`);
+        const plan = await this.publisher.previewCleanup(this.job(task), target, { paths }, operator);
+        plan.confirmed = true;
+        state.plans = [...state.plans.filter(p => p.target_id !== target.id), plan];
+        save();
         const persist = (publication: DomainPublication) => { state.publications = [...state.publications.filter(p => p.target_id !== target.id), structuredClone(publication)]; save(); };
         try {
           persist(await this.publisher.publish(this.job(task), target, previous, operator, persist));
