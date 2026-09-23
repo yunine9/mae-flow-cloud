@@ -21,6 +21,13 @@ export type TaskStatus =
   | "canceled"
   | "failed";
 
+export interface DeliveryFile { path: string; label: string; previous?: string }
+export interface PushFileList {
+  branch: string; head_sha: string; base_sha?: string;
+  comparison?: "remote_branch" | "target_branch";
+  files?: DeliveryFile[]; unavailable_reason?: string;
+}
+
 export const STATUS_TEXT: Record<TaskStatus, string> = {
   queued: "排队中",
   running: "进行中",
@@ -1030,6 +1037,9 @@ export interface TaskSummary {
     created_at?: string;
     step?: string;
     question?: {
+      /** 提交前只读文件事实，不提交选择、不参与授权。 */
+      delivery_files?: DeliveryFile[];
+      push_file_list?: PushFileList;
       questions?: WaitingQuestion[];
       /** clarification = Agent 处理检视意见时缺信息,单独问人;不是验收。 */
       purpose?: "confirmation" | "clarification";
@@ -4986,6 +4996,7 @@ export interface ConversationAnnotationRef {
 }
 
 export type ConversationItem =
+  | { kind: "push_file_list"; id: string; ts: string; manifest: PushFileList }
   | {
       kind: "session"; id: string; ts: string;
       phase: "started" | "ended";

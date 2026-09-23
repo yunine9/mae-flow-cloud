@@ -22,6 +22,7 @@ const vite = await createServer({
 const app = await vite.ssrLoadModule("/src/App.tsx");
 const workspace = await vite.ssrLoadModule("/src/TaskWorkspace.tsx");
 const taskCard = await vite.ssrLoadModule("/src/TaskCard.tsx");
+const deliveryList = await vite.ssrLoadModule("/src/DeliveryFileList.tsx");
 const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
@@ -482,6 +483,22 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   }), "单元测试验证");
 });
 
+test("完整交付清单不截断或过滤文件，大目录默认折叠且可以搜索末尾文件", () => {
+  const files = Array.from({ length: 232 }, (_, i) => ({ path: `build/output-${i}.o`, label: "新增" }));
+  const groups = deliveryList.deliveryFileGroups(files);
+  assert.equal(groups[0][1].length, 232);
+  assert.deepEqual(deliveryList.deliveryFileGroups(files, "output-231"), [["build", [files[231]]]]);
+  const large = renderToStaticMarkup(React.createElement(deliveryList.DeliveryFileList, { files }));
+  assert.match(large, /232 个文件/);
+  assert.match(large, /搜索交付文件/);
+  assert.doesNotMatch(large, /checkbox|<details[^>]*open|output-231/, "折叠目录不挂载数百个隐藏行");
+  const small = renderToStaticMarkup(React.createElement(deliveryList.DeliveryFileList, { files: [files[231], { path: "README.md", label: "修改" }] }));
+  assert.match(small, /output-231\.o/);
+  assert.match(small, /仓库根目录/);
+  assert.match(small, /README\.md/);
+  assert.doesNotMatch(small, /checkbox/);
+});
+
 test("最终交付决定卡不要求勾选文件，人工意见仍可提交", () => {
   const deliveryTask = {
     ...task("delivery", "waiting_for_human"),
@@ -490,7 +507,7 @@ test("最终交付决定卡不要求勾选文件，人工意见仍可提交", ()
       state_version: 1,
       step: "cloud_push_confirm",
       recommended_view: "diff",
-      question: { questions: [{
+      question: { delivery_files: [{ path: "src/delivery.ts", label: "新增" }], questions: [{
         question: "是否按清单继续？",
         options: ["确认按清单推送", "按清单返工"],
       }] },
@@ -509,6 +526,8 @@ test("最终交付决定卡不要求勾选文件，人工意见仍可提交", ()
   assert.match(html, /当前有 3 条检视意见未闭环/);
   assert.match(html, /建议选择“按清单返工”/);
   assert.doesNotMatch(html, /当前卡片缺少调整选项/);
+  assert.match(html, /本次推送清单/);
+  assert.match(html, /delivery\.ts/);
 });
 
 test("管理员旁路只开放给当前复检白名单中的他人待闭环意见", () => {

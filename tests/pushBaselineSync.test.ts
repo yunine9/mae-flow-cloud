@@ -13,6 +13,7 @@ import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { createMergeRequest } from "../src/mrClient.ts";
 import { REVIEW_MISSION_END } from "../src/reviewHandoff.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 function git(cwd: string, ...args: string[]) {
@@ -80,7 +81,43 @@ test("首次及再次 push 都包含最新基准分支；新 SHA 可登记到真
     assert.equal(git(f.cwd, "merge-base", "--is-ancestor", target, remoteHead), "");
     const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
     assert.equal(state.delivery_loop.published.sha, remoteHead);
+    const manifests = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list");
+    const manifest = manifests.at(-1)!.payload as any;
+    assert.equal(manifest.head_sha, remoteHead);
+    assert.deepEqual(manifest.files.map((file: any) => file.path), round === 1 ? ["feature.ts"] : ["upstream2.ts"],
+      "首次只列目标分支之外的变化；再次合入上游时列出本次任务分支实际新增变化，不重复历史文件");
   }
+});
+
+test("每次真实 push 前留下增量清单：重复修改、删除、重命名和外来提交均按远端起点计算", async t => {
+  const f = fixture(t);
+  const manifests: any[] = [];
+  const original = f.service.presentPushFileList.bind(f.service);
+  f.service.presentPushFileList = (task: any, manifest: any) => {
+    const remote = git(f.remote, "ls-remote", "--heads", f.remote, "refs/heads/feature").split(/\s+/)[0];
+    if (remote) assert.equal(manifest.base_sha, remote, "在传输发生前核对远端实际起点");
+    manifests.push(manifest); original(task, manifest);
+  };
+  for (const file of ["repeat.ts", "deleted.ts", "renamed.ts"]) writeFileSync(join(f.cwd, file), file + "\n");
+  git(f.cwd, "add", "repeat.ts", "deleted.ts", "renamed.ts"); git(f.cwd, "commit", "-qm", "feat: initial delivery");
+  assert.equal((await f.push("initial")).state, "succeeded");
+  writeFileSync(join(f.cwd, "repeat.ts"), "modified again\n");
+  git(f.cwd, "rm", "deleted.ts"); git(f.cwd, "mv", "renamed.ts", "renamed-new.ts");
+  git(f.cwd, "add", "repeat.ts"); git(f.cwd, "commit", "-qm", "feat: repairs");
+  assert.equal((await f.push("repairs")).state, "succeeded");
+  assert.deepEqual(manifests.at(-1).files, [
+    { path: "deleted.ts", label: "删除" }, { path: "renamed-new.ts", label: "重命名", previous: "renamed.ts" },
+    { path: "repeat.ts", label: "修改" },
+  ]);
+  // 人已向任务分支提交的文件不再算作 Agent 本次待推送内容。
+  git(f.peer, "fetch", "-q", "origin", "feature"); git(f.peer, "checkout", "-qb", "feature", "origin/feature");
+  writeFileSync(join(f.peer, "human.ts"), "human code\n"); git(f.peer, "add", "human.ts"); git(f.peer, "commit", "-qm", "feat: human change"); git(f.peer, "push", "-q", "origin", "feature");
+  writeFileSync(join(f.cwd, "repeat.ts"), "third change\n"); git(f.cwd, "commit", "-qam", "feat: third change");
+  assert.equal((await f.push("after-human")).state, "succeeded");
+  assert.deepEqual(manifests.at(-1).files, [{ path: "repeat.ts", label: "修改" }]);
+  assert.equal(manifests.length, 3);
+  const items = f.service.conversation(f.task.summary.id).items.filter((item: any) => item.kind === "push_file_list");
+  assert.equal(items.length, 3, "自动推送和已确认推送也在与 Agent 协作中保留每轮完整清单");
 });
 
 test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后均不删修复或重复确认", async t => {
@@ -118,6 +155,10 @@ test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后�
     assert.equal(git(f.remote, "ls-tree", "--name-only", "feature", "--", "user-notes.txt"), "");
     const snapshot = (await deliveryChangeSnapshot(f.cwd))!;
     assert.equal((await service.deliveryContribution(task, snapshot)).paths.length, [15, 16, 19][i]);
+    const manifest = new EventLog(service.eventLogPath(task.summary.id)).replay().filter(row => row.kind === "push_file_list").at(-1)!.payload as any;
+    const expected = i === 0 ? delivered : [...groups[i], `upstream-${i}.ts`];
+    assert.deepEqual(manifest.files.map((file: any) => file.path).sort(), [...expected].sort(),
+      "重启后增量起点仍是远端已推送提交，不回退任务起点或旧勾选清单");
     assert.equal(await service.pushConfirmationSatisfied(task, "feature"), true, "自动交付入口复用同一确认");
     if (i === 0) {
       service.persist(task); await service.shutdown();
@@ -238,6 +279,10 @@ for (const continuous of [false, true]) test(`同步完成后远端${continuous 
     assert.equal(git(f.cwd, "merge-base", "--is-ancestor", foreign, operation.sha!), "");
     assert.equal(git(f.remote, "show", "feature:mine.ts"), "my change");
     assert.equal(git(f.remote, "show", "feature:peer-1.ts"), "peer change");
+    const manifests = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list");
+    const last = manifests.at(-1)!.payload as any;
+    assert.equal(last.base_sha, foreign, "重试在同步后重新按新的远端起点计算");
+    assert.deepEqual(last.files, [{ path: "mine.ts", label: "新增" }]);
   }
 });
 
@@ -294,6 +339,9 @@ test("自动交付入口遇到并发推送，也在宿主内同步重试且只�
   assert.equal(f.task.summary.delivery.git_push.sha, sha);
   assert.equal(platform.pipelines.length, 1, JSON.stringify(f.task.summary));
   assert.equal(platform.pipelines[0].sha, sha);
+  const manifest = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list").at(-1)!.payload as any;
+  assert.equal(manifest.head_sha, sha);
+  assert.deepEqual(manifest.files, [{ path: "main.ts", label: "修改" }], "自动入口在最后一次真实推送前也生成清单");
   assert.equal(git(f.remote, "show", "feature:main.ts"), content.replace("first=0", "first=1").replace("last=0", "last=1").trim());
 });
 
@@ -390,6 +438,8 @@ test("旧 delivery.sha 不阻止真实推送：一次人工确认覆盖后续同
   assert.equal(f.task.summary.waiting?.step, "host_push_confirm");
   assert.equal(f.task.summary.delivery.sha, f.base, "未推送不得提前覆盖远端事实");
   const waiting = f.task.summary.waiting;
+  assert.deepEqual(waiting.question.delivery_files, [{ path: "feature.ts", label: "新增" }]);
+  assert.match(waiting.context, /feature\.ts.*\[新增\]/);
   await finishTaskHostOperation(runtime());
   assert.equal(f.task.summary.waiting.waiting_id, waiting.waiting_id, "恢复同一待办不另举卡");
   assert.equal(notifications, 1);

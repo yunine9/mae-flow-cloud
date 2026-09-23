@@ -1,4 +1,5 @@
 import { deliveryChangeSnapshot } from "./artifacts.ts";
+import { deliveryFileList, type PushFileList } from "./deliveryFileList.ts";
 import { TaskHostLedger, type HostOperation } from "./taskHostTools.ts";
 import { normalizedDeliveryPaths, pushReviewCallId, hasPushApproval, latestPushDecision, samePaths } from "./pushReviewPolicy.ts";
 import type { TaskSummary } from "./taskService.ts";
@@ -15,7 +16,8 @@ interface PushConfirmationHost {
   cwd?: string;
   humanGate: HumanGate;
   accountDefault(): boolean | undefined;
-  contribution(snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>): Promise<{ paths: string[] }>;
+  contribution(snapshot: NonNullable<Awaited<ReturnType<typeof deliveryChangeSnapshot>>>): Promise<{ paths: string[]; base_sha?: string }>;
+  pushFiles(branch: string, head: string): Promise<PushFileList>;
   persist(): void;
   notifyWaiting(): void;
 }
@@ -27,7 +29,8 @@ export async function confirmHostPush(host: PushConfirmationHost, operation: Hos
   if (!required) return true;
   const snapshot = host.cwd ? await deliveryChangeSnapshot(host.cwd) : undefined;
   if (!snapshot || snapshot.head !== operation.sha) throw new Error("推送准备期间提交发生变化，请刷新待执行操作后继续");
-  const paths = snapshot.baseline ? normalizedDeliveryPaths((await host.contribution(snapshot)).paths) : undefined;
+  const contribution = snapshot.baseline ? await host.contribution(snapshot) : undefined;
+  const paths = contribution ? normalizedDeliveryPaths(contribution.paths) : undefined;
   assertActive();
   const ledger = new TaskHostLedger(host.summary);
   const selection = host.summary.delivery_selection;
@@ -69,14 +72,21 @@ export async function confirmHostPush(host: PushConfirmationHost, operation: Hos
     stateVersion: waiting.state_version, notes: "交付文件范围发生变化，展示更新后的范围" });
   const revision = host.humanGate.all().filter(row => row.call_id.startsWith(`${operation.id}:`)).length;
   const callId = paths ? `${operation.id}:${pushReviewCallId({ head: snapshot.head, paths })}:${revision}` : operation.id;
+  const manifest = await host.pushFiles(operation.branch!, snapshot.head);
+  const files = manifest.files;
+  const fileList = files ? deliveryFileList(files)
+    : manifest.unavailable_reason ?? "本次推送清单暂不可读";
+  assertActive();
   operation.push_paths = paths;
   operation.push_waiting_id = `${host.summary.id}:${callId}`;
   ledger.update(operation);
   host.summary.waiting = host.humanGate.createWaiting({
     taskId: host.summary.id, step: HOST_PUSH_CONFIRM_STEP, callId,
-    questionInput: { questions: [{ question: `推送到 ${operation.branch}？`, options: ["确认推送", "先调整"] }] },
+    questionInput: { questions: [{ question: `推送到 ${operation.branch}？`, options: ["确认推送", "先调整"] }],
+      push_file_list: manifest, ...(files ? { delivery_files: files } : {}) },
     context: [operation.input.reason.slice(0, 500),
-      paths?.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
+      `提交分支：${operation.branch} → ${operation.target_branch ?? "目标分支"}`,
+      fileList,
       "推送当前已提交的改动。需要 Agent 修改代码时请选择「先调整」。未处理的意见保持原状。",
       PUSH_SCOPE_GUIDANCE].join("\n\n"),
   });

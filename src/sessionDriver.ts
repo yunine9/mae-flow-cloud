@@ -837,6 +837,11 @@ export class CloudSession {
     this.emit("user_message", this.sessionId, { text, via: "interrupt", ...extra });
   }
 
+  /** 沿用会话的事件序号，清单只供界面阅读，不注入模型或新增审批。 */
+  notePushFileList(payload: Record<string, unknown>): void {
+    this.emit("push_file_list", "main", payload);
+  }
+
   pendingSteers(): string[] {
     try {
       const queue = (this.session as any).getSteeringMessages?.();

@@ -16,6 +16,7 @@
 import type { Annotation, AnnotationOperation, AnnotationResolution } from "./annotations.ts";
 import type { FeedbackRecord } from "./feedbackStore.ts";
 import type { WaitingRecord } from "./humanGate.ts";
+import type { PushFileList } from "./deliveryFileList.ts";
 
 export interface ConversationSteps {
   calls: number;
@@ -38,6 +39,7 @@ export interface AnnotationRef {
 }
 
 export type ConversationItem =
+  | { kind: "push_file_list"; id: string; ts: string; manifest: PushFileList }
   | {
       kind: "session"; id: string; ts: string;
       /** started = 会话开始/恢复;ended = 会话结束(带原因)。 */
@@ -273,6 +275,11 @@ function fromEvents(
     const kind = String(event.kind ?? "");
     const payload = (event.payload ?? {}) as Record<string, any>;
     const session = String(event.sessionId ?? MAIN_SESSION);
+    if (kind === "push_file_list") {
+      flush(ts);
+      items.push({ kind, id: `push-files-${event.eventId ?? index}`, ts, manifest: payload as PushFileList });
+      continue;
+    }
     if (session !== MAIN_SESSION) continue;      // 子会话/开发助手另有出口
 
     if (kind === "session_started") {
@@ -615,7 +622,7 @@ export function buildConversation(sources: ConversationSources): ConversationVie
   // 同一毫秒的并列按来源顺序:卡在它前面那段话之后,决定在卡之后。批注
   // 账的各类条目同一档——它们之间的先后就是台账顺序(sort 是稳定的)。
   const rank: Record<ConversationItem["kind"], number> = {
-    session: 0, turn: 1, steer: 2, external: 3, card: 4, decision: 5,
+    session: 0, turn: 1, steer: 2, external: 3, card: 4, decision: 5, push_file_list: 5,
     annotations_sent: 6, receipts: 6, owner_reply: 6, clarified: 6,
     withdrawal_requested: 6, verified: 6, reopened: 6, revised: 6, delivery_reset: 6, assistant: 8, sync: 3,
   };

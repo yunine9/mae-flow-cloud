@@ -9,6 +9,7 @@ import { Input } from "./components/ui/input";
 import { Textarea } from "./components/ui/textarea";
 import { PersonName } from "./People";
 import { ExecutionEventBuffer } from "./executionEventBuffer";
+import { DeliveryFileList } from "./DeliveryFileList";
 /**
  * 单任务处置台：摘要适合扫读，展开后集中承载审批、交付事实、
  * 外部动作与事件现场。服务端镜像是唯一事实来源。
@@ -995,9 +996,7 @@ export function WaitingCard({
       )}
 
       {!chainReview && task.waiting?.context && (() => {
-        /* 长背景(推送确认的文件清单动辄上百行)默认折叠只露开头——
-           重点(要我做什么、较上次变了什么)在前几行,整版清单是
-           留档不是必读;需要时一键展开。
+        /* 提交前完整清单直接展示，其他长背景仍可按需展开。
            preface = 举卡前 Agent 刚展示的完整清单:卡上写"上述配置
            是否正确"时,"上述"必须就在卡里(MFC-028 盲签)。 */
         const preface = task.waiting.preface
@@ -1005,10 +1004,10 @@ export function WaitingCard({
         const contextText = (preface ? `${preface}\n\n---\n\n` : "")
           + rewritePanelPath(task.waiting.context, task.id);
         const contextLines = contextText.split("\n").length;
-        const collapsible = contextLines > 16;
+        const collapsible = !pushConfirmation && contextLines > 16;
         const block = (
-          <div className="waiting-context">
-            <div className="context-label">决策背景</div>
+          <div className={`waiting-context${pushConfirmation ? " delivery-file-list" : ""}`}>
+            <div className="context-label">{pushConfirmation ? "交付说明与完整清单" : "决策背景"}</div>
             <div className={`waiting-context-body${
               collapsible && !contextOpen ? " clamped" : ""}`}>
               <Markdown text={contextText} />
@@ -1025,12 +1024,18 @@ export function WaitingCard({
         // 拆分确认卡的背景是 Agent 对方案的复述,方案本身已在左侧成图;
         // 默认收起,想看原话再展开。其它卡照旧摊开(推送确认那类"上述
         // 配置是否正确"的卡,上述必须就在眼前——MFC-028 盲签)。
-        return chainReview
+        return pushConfirmation && task.waiting.question?.delivery_files
+          ? <details className="waiting-context-details" onToggle={event => setContextOpen(event.currentTarget.open)}>
+              <summary>交付背景与清单原文</summary>{contextOpen && block}</details>
+          : chainReview
           ? <details className="waiting-context-details">
               <summary>Agent 对方案的说明</summary>{block}
             </details>
           : block;
       })()}
+
+      {pushConfirmation && task.waiting?.question?.delivery_files && <DeliveryFileList
+        key={task.waiting.waiting_id} files={task.waiting.question.delivery_files} manifest={task.waiting.question.push_file_list} />}
 
       {!requirementAnalysisConfirmation && <div className="question-list">
         {!chainReview && questions.some((item) => (item.options?.length ?? 0) > 0) && (
@@ -1217,7 +1222,9 @@ export function WaitingCard({
               : picked[questions[0].question] ? "再次点击已选项可取消，改填自定义答复" : "也可以选择上方选项"}</small></span>
           <Textarea ref={replyInput} className="min-h-0 resize-y" value={replyText} aria-label="决定回复"
             rows={chainReview ? 3 : undefined}
-            placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
+            placeholder={mrDescription ? "从 AR 单复制准确描述，请勿额外添加单号或前后缀" : pushConfirmation && !picked[questions[0].question]
+              ? "直接说明调整意见，例如：移除 build.log，把缺少的测试文件补上"
+              : picked[questions[0].question] ? "补充选择原因或处理要求…" : "选项都不合适时，在这里填写答复…"}
             onChange={(event) => setReplyText(event.target.value)} />
         </div>}
         {!requirementAnalysisConfirmation && !unifiedReply && <div className="decision-notes">

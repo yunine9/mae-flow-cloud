@@ -58,6 +58,17 @@ function kinds(items: ConversationItem[]): string[] {
   return items.map((item) => item.kind);
 }
 
+test("每轮推送清单独立呈现，不受普通会话文字截断限制", () => {
+  const files = Array.from({ length: 232 }, (_, i) => ({ path: `build/output-${i}.o`, label: "新增" }));
+  const view = buildConversation({ events: [
+    event("push_file_list", at(1), { branch: "feature", head_sha: "a".repeat(40), files }),
+    event("push_file_list", at(2), { branch: "feature", head_sha: "b".repeat(40), base_sha: "a".repeat(40), files: [{ path: "src/a.ts", label: "修改" }] }),
+  ], waiting: [], annotations: [], annotationHistory: [], feedback: [] });
+  assert.equal(view.items.length, 2);
+  assert.deepEqual((view.items[0] as Extract<ConversationItem, {kind:"push_file_list"}>).manifest.files, files);
+  assert.equal((view.items[1] as Extract<ConversationItem, {kind:"push_file_list"}>).manifest.files?.length, 1);
+});
+
 test("主会话按回合合并,工具步骤折成计数,子会话与 AskUserQuestion 不进流", () => {
   const events = [
     event("session_started", at(0), { resume: false }),

@@ -1,4 +1,4 @@
-/** 文件勾选按 Git 事实整理当次提交，历史选择不限制后续修复。 */
+/** 历史文件勾选不限制后续修复；交付清单只读展示 Git 事实。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -99,6 +99,10 @@ async function waitingService(repo: ReturnType<typeof repository>) {
     ? true : undefined, "任务等待代码检视");
   const internal = (service as any).tasks.get(id);
   internal.cwd = repo.cwd;
+  const baseline = JSON.parse(readFileSync(join(repo.cwd, ".mae-flow.json"), "utf8")).step_heads.branch_create;
+  repo.git("branch", "preview-base", baseline);
+  internal.summary.repo_url = repo.cwd;
+  internal.summary.delivery = { target_branch: "preview-base" };
   // 待办与通知保存面向人的本地化标题；宿主必须从 pulse 的稳定步骤 ID
   // 读取内核契约，不能拿中文标题去查 flow.json。
   internal.summary.waiting.step = "最终代码增量检视";
@@ -135,8 +139,9 @@ test("普通内核检视卡不消费交付勾选；真正 push 前再生成当�
       "确认后现场变化应回到最新检视卡，不能掉进 failed 死胡同");
     assert.equal(service.get(id)?.waiting?.step, "cloud_push_confirm");
     assert.match(service.get(id)?.detail ?? "", /等待确认推送/);
-    assert.match(String(service.get(id)?.waiting?.context ?? ""),
-      /- src\/extra\.ts/);
+    assert.match(String(service.get(id)?.waiting?.context ?? ""), /extra\.ts.*\[新增\]/);
+    assert.ok((service.get(id)?.waiting?.question as any)?.delivery_files
+      .some((file: any) => file.path === "src/extra.ts" && file.label === "新增"));
   } finally {
     await model.stop();
   }

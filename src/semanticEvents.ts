@@ -27,6 +27,7 @@ export type SemanticEventKind =
   | "turn_finished"
   | "session_ended"
   | "human_decision"
+  | "push_file_list"
   /** 检视提交(问题域,ADR-0007):用户对分析报告的检视意见清单落账
    * ——过程问答投影靠它呈现"这轮为什么重跑"。 */
   | "review_submitted"
@@ -59,6 +60,7 @@ const REQUIRED_PAYLOAD: Record<SemanticEventKind, readonly string[]> = {
   turn_finished: ["reason"],
   session_ended: ["reason", "detail"],
   human_decision: ["waiting_id", "state_version", "decision", "notes"],
+  push_file_list: ["branch", "head_sha"],
   review_submitted: ["count", "text"],
   /** 磁盘治理(票 01/03):终态现场或构建产物回收落账。bytes=本次
    *  回收字节数;scope=repo(整仓现场)或 products(构建产物)。 */

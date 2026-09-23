@@ -1527,6 +1527,25 @@ details[open] > .repository-resource-title::before { transform: rotate(90deg); }
 }
 .push-review-commits code { margin-right: 8px; color: var(--text-strong); }
 .push-review-actions { display: flex; gap: 8px; }
+.delivery-file-list { min-width: 0; padding: 12px 14px; border-block: 1px solid var(--line); }
+.decision-card > .delivery-file-list { order: 1; }
+.delivery-file-list > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.delivery-file-list > header strong { color: var(--text-strong); font-size: var(--fs-13); }
+.delivery-file-list > header span, .delivery-file-list > p { color: var(--muted); font-size: var(--fs-12); }
+.delivery-file-list > p { margin: 6px 0; line-height: 1.6; }
+.delivery-file-tools { display: flex; flex-wrap: wrap; gap: 4px; margin: 10px 0; }
+.delivery-file-tools input { flex: 1 1 100%; min-width: 0; }
+.delivery-file-directories > details { border-top: 1px solid var(--line); }
+.delivery-file-directories summary { cursor: pointer; padding: 9px 0; overflow-wrap: anywhere; font-size: var(--fs-12); }
+.delivery-file-directories summary small { margin-left: 10px; color: var(--muted); white-space: nowrap; }
+.delivery-file-directories ul { list-style: none; padding: 0 0 8px 12px; margin: 0; }
+.delivery-file-directories li { display: flex; align-items: baseline; gap: 10px; padding: 5px 0; font-size: var(--fs-12); }
+.delivery-file-name { flex: 1; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.delivery-file-name small { display: block; color: var(--muted); }
+.delivery-file-change { flex-shrink: 0; color: var(--muted); }
+.delivery-file-change[data-change="新增"] { color: var(--success); }
+.delivery-file-change[data-change="删除"] { color: var(--danger); }
+.delivery-file-list .md-block-code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .push-review-actions .current {
   min-height: var(--control-h); padding: 0 10px; display: inline-flex; align-items: center;
   color: var(--muted); border: 1px dashed var(--line-strong); border-radius: var(--radius-sm);

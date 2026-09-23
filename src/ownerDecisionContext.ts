@@ -9,6 +9,8 @@ import { renderDecision, type WaitingRecord } from "./humanGate.ts";
 export interface OwnerInstruction { id: string; actor: string; text: string; at: string; source?: string }
 /** 编码会话和 Build-Fix 共用的提交方法，不新增过滤器或审批状态。 */
 export const COMMIT_CONTENT_GUIDANCE = "每次 git commit 前查看 git diff --cached 的文件列表和实际差异，核对本次暂存内容。"
+  + "提交前说明完整文件清单，按目录列出每个文件及新增、修改、删除等变更，不用省略号代替文件；用户可直接用自然语言提出调整，不新增逐项勾选或等待确认。"
+  + "文件数量明显增加时，结合构建前后 Git 状态和实际差异检查是否夹带生成产物；确认无关后先撤出暂存再展示清单，不能只凭数量或扩展名断定文件不该交付。"
   + "结合当前需求与已交办的检视意见，发现无关编译产物、日志或其他无关改动时，仅将其撤出暂存，保留本地文件；按具体路径暂存，不用 git add .。"
   + "提交前按本次文件和需求查阅相关原始要求：.mae-flow-work/owner-inputs.json 保留用户输入和已交办的检视原文，主会话也可用 task_context(view=instructions) 查询。"
   + "只沿用仍适用的明确要求；已经完成的单次修正不变成永久限制，已撤回或不采纳的意见不继续执行，用户改变要求时以最新原话为准。按需读取，不把全部历史意见重复加入上下文。"

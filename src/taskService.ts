@@ -1,5 +1,6 @@
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
+import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
 import { resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
 import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
@@ -912,8 +913,7 @@ export interface PushReviewPresentation {
    * ——文件数有值、行数假零的混合结果比没有更误导(MFC-040)。 */
   stats_unavailable_reason?: string;
   commits: Array<{ sha: string; subject: string }>;
-  /** 完整工作区变化用来初始化勾选器；committed_paths 才是当前 HEAD
-   * 真正会随 push 带走的默认范围。 */
+  /** 完整工作区变化供阅读；committed_paths 是当前已提交的 MR 文件变化。 */
   all_paths: string[];
   committed_paths: string[];
   agent_note?: string;
@@ -13513,6 +13513,7 @@ export class TaskService {
         summary: task.summary, cwd: task.cwd, humanGate: task.humanGate,
         accountDefault: () => this.options.pushConfirmation?.(task.summary.luban_account),
         contribution: snapshot => this.deliveryContribution(task, snapshot),
+        pushFiles: (branch, head) => this.readPushFileList(task, branch, head),
         persist: () => this.persist(task), notifyWaiting: () => this.notifyWaiting(task),
       }, operation, () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化");
@@ -16083,7 +16084,8 @@ export class TaskService {
         && this.dispatchReviewProcessing(task, reviewGap.pending) !== "exhausted") {
       return false;
     }
-    const committed = (await this.deliveryContribution(task, snapshot)).paths;
+    const contribution = await this.deliveryContribution(task, snapshot);
+    const committed = contribution.paths;
     const selection = task.summary.delivery_selection;
     const decisions = task.humanGate.resolved();
     if (!recheckRequired && hasPushApproval(selection, decisions)) return true;
@@ -16118,6 +16120,8 @@ export class TaskService {
       ...task.summary.delivery,
       push_review: pushReview,
     };
+    const manifest = await this.readPushFileList(task, branch, snapshot.head);
+    const files = manifest.files;
     const reviewContext = recheckRequired ? [
       "**这是人工意见修改后的复检，不是按 push 次数重复询问。**",
       reviewItems.length
@@ -16138,11 +16142,8 @@ export class TaskService {
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
       "推送当前已提交的改动；发现问题可提出检视意见。" + PUSH_SCOPE_GUIDANCE,
       "",
-      `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
-      + `(自基线 ${snapshot.baseline.slice(0, 12)} 起;内容以检视材料实时为准):`,
-      ...committed.slice(0, 20).map((path) => `- ${path}`),
-      ...(committed.length > 20
-        ? [`- …其余 ${committed.length - 20} 个文件请在完整交付内容中查看`] : []),
+      `提交分支：${branch} → ${task.summary.delivery?.target_branch ?? task.summary.baseline ?? "目标分支"}`,
+      files ? deliveryFileList(files) : manifest.unavailable_reason ?? "本次推送清单暂不可读",
       ...(extras.length ? [
         `另有 ${extras.length} 个工作区文件不在本次提交中(未跟踪/未暂存),`
         + "不会被推送。"] : []),
@@ -16152,9 +16153,9 @@ export class TaskService {
       step: CLOUD_PUSH_CONFIRM_STEP,
       callId,
       questionInput: { questions: [{
-        question: `请检视当前待推送代码(${committed.length} 个文件 → ${branch})，是否推送？`,
+        question: `请检视本次待推送代码(${files ? `${files.length} 个文件 → ` : ""}${branch})，是否推送？`,
         options: [PUSH_CONFIRM_ACCEPT, PUSH_CONFIRM_REWORK],
-      }] },
+      }], push_file_list: manifest, ...(files ? { delivery_files: files } : {}) },
       context,
     });
     task.summary.status = "waiting_for_human";
@@ -19562,6 +19563,49 @@ export class TaskService {
 
   /** Agent 会话已释放后由宿主完成唯一一次传输，并立刻从远端反查 SHA。
    * 返回值既是 TaskSummary 现场，也是 `pipeline record` 的内核收据。 */
+  private async readPushFileList(task: TaskState, branch: string, head: string): Promise<PushFileList> {
+    const unavailable = (reason: string): PushFileList => ({ branch, head_sha: head, unavailable_reason: reason });
+    if (!task.cwd) return unavailable("工作区不可读，暂时不能计算本次推送清单");
+    let sandbox: ReturnType<TaskService["prepareHostGitSandbox"]> | undefined;
+    try {
+      const configured = task.summary.repo_url ?? this.effectiveDefaultRepo();
+      if (!configured) return unavailable("未配置权威代码仓，暂时不能计算本次推送清单");
+      validateRepositoryAddress(configured);
+      if (!/^[a-z]:[\\/]/i.test(configured) && /^[a-z][a-z\d+.-]*:/i.test(configured)
+          && !/^(?:https?|file):\/\//i.test(configured)) return unavailable("代码仓传输协议不受支持");
+      const remote = /^(?:https?|file):\/\//i.test(configured) ? configured : resolve(configured);
+      let target = task.summary.delivery?.target_branch ?? task.summary.baseline;
+      try {
+        const state = JSON.parse(readFileSync(join(task.cwd, ".mae-flow.json"), "utf8"));
+        target = task.summary.delivery?.target_branch ?? state.config?.["基线分支"] ?? target;
+      } catch { /* 旧现场仍可使用任务保存的目标分支。 */ }
+      sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
+      const sourceRef = `refs/heads/${branch}`, targetRef = target ? `refs/heads/${target}` : undefined;
+      const observed = await runGitProcess([...sandbox.args, "ls-remote", "--heads", remote,
+        sourceRef, ...(targetRef ? [targetRef] : [])], { timeoutMs: 30_000, env: sandbox.env });
+      if (observed.status !== 0) return unavailable("远端分支查询失败，未把全量 MR 文件冒充本次增量");
+      const refs = new Map(observed.stdout.trim().split(/\r?\n/).map(line => {
+        const [sha, ref] = line.split(/\s+/); return [ref, sha];
+      }));
+      return await pendingPushFiles(task.cwd, branch, head, refs.get(sourceRef) ?? null, targetRef ? refs.get(targetRef) : undefined);
+    } catch {
+      return unavailable("本次推送差异读取失败，请查看代码改动；没有生成文件过滤或新的审批");
+    } finally {
+      if (sandbox) this.cleanupHostGitCredential(sandbox);
+    }
+  }
+
+  private presentPushFileList(task: TaskState, manifest: PushFileList): void {
+    // 只记展示事实；历史清单不成为下一次推送的授权或比较起点。
+    const payload = { ...manifest };
+    const driver = task.driver ?? task.retainedSession?.driver;
+    if (driver) { driver.notePushFileList(payload); return; }
+    const log = new EventLog(this.eventLogPath(task.summary.id), event => this.bypass(
+      task, "记录推送清单", this.options.projection?.appendEvent(event)));
+    log.append({ eventId: log.lastEventId() + 1, taskId: task.summary.id, sessionId: "main",
+      ts: new Date().toISOString(), kind: "push_file_list", payload });
+  }
+
   private async pushFromHost(task: TaskState, branch: string, expectedSha?: string): Promise<GitPushReceipt> {
     if (task.transportActive) throw new TaskControlError("已有宿主传输正在执行");
     const work = this.pushFromHostTransport(task, branch, expectedSha);
@@ -19654,6 +19698,9 @@ export class TaskService {
       if (objectCheck.status !== 0) {
         throw new Error("待推送 HEAD 不是可读取的提交对象");
       }
+      const manifest = await this.readPushFileList(task, branch, sha);
+      try { this.presentPushFileList(task, manifest); }
+      catch (error) { this.options.log?.(`任务 ${task.summary.id} 推送清单记录失败：${String(error)}`); }
       if (this.shuttingDown || task.controlEpoch !== epoch || task.summary.status === "canceled"
           || (!metadataOnlySha && ticketCorrectionBlocks(task.summary.ticket_correction))) {
         throw new TaskControlError(task.summary.delivery?.waiting_on ?? "任务执行权已变化，未推送");

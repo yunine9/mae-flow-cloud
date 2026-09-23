@@ -2330,7 +2330,7 @@ export function TaskWorkspace({
                   )}
                   <p className="m-0 min-w-[240px] flex-1 text-[13px] text-muted-foreground">{diffScope === "changes"
                     ? "这里只看这次处理产生的变化；浏览代码不会发起推送或要求再次确认。"
-                    : approvalReview ? "这里可以调整最终交付文件；取消勾选的文件不会进入本次推送。" : "这里查看任务的全部改动，包括尚未提交的工作区修改。"}</p>
+                    : approvalReview ? "这里查看完整交付改动；需要调整文件时，直接在右侧回复中说明。" : "这里查看任务的全部改动，包括尚未提交的工作区修改。"}</p>
                 </div>
               )}
               {unavailable && <div className="utility-note">{unavailable}</div>}

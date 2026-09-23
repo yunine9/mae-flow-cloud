@@ -391,6 +391,9 @@ function applyScenario(
     },
     detail: "等待负责人完成推送前检视",
   });
+  if (key === "push-review" && summary.waiting) Object.assign((summary.waiting as ReturnType<typeof waitingRecord>).question, { delivery_files: [
+    { path: "src/workspace.ts", label: "修改" }, { path: "tests/workspace.test.ts", label: "新增" },
+  ] });
   if (key === "coordinating") Object.assign(summary, {
     progress: progress(4, "两个交付单元并行推进"),
     // 候选仓必须与拆分出的模块一致:原来只有 1 个候选仓却拆出 2 个模块,
