@@ -5,7 +5,7 @@
  * simply return no plan; Cloud never invents a second mapping as a fallback.
  */
 
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -233,6 +233,45 @@ export function readCurrentExecutionPlan(options: {
   python?: string;
 }): ExecutionPlan | undefined {
   return readCurrentExecutionPlanReading(options).plan;
+}
+
+const pendingReadings = new Map<string, Promise<ExecutionPlanReading>>();
+
+/** HTTP 详情查询不能用同步 Python 阻塞其他请求；相同版本的并发读取共用一次查询。 */
+export async function readCurrentExecutionPlanReadingAsync(options: {
+  kernelRoot?: string; workspace?: string; python?: string;
+}): Promise<ExecutionPlanReading> {
+  const { kernelRoot, workspace } = options;
+  const empty: ExecutionPlanReading = { kernel_warnings: [] };
+  if (!kernelRoot || !workspace) return empty;
+  const script = join(kernelRoot, "scripts", "mae-flow.py");
+  if (!existsSync(script) || !existsSync(join(workspace, ".mae-flow.json"))) return empty;
+  const key = `${kernelRoot}\0${workspace}`;
+  const version = fingerprint(kernelRoot, workspace);
+  const cached = cache.get(key);
+  if (cached?.fingerprint === version) return cached.value;
+  const pendingKey = `${key}\0${version}`;
+  const pending = pendingReadings.get(pendingKey);
+  if (pending) return pending;
+  const reading = new Promise<ExecutionPlanReading>(resolve => {
+    execFile(options.python ?? "python3", [script, "execution-plan", "--json"],
+      { cwd: workspace, encoding: "utf8", timeout: 5_000, maxBuffer: 1024 * 1024 },
+      (error, stdout, stderr) => {
+        const value: ExecutionPlanReading = { kernel_warnings: String(stderr ?? "").split("\n").map(line => line.trim()).filter(line => line.startsWith("⚠")) };
+        if (!error) {
+          try {
+            const parsed = JSON.parse(String(stdout).trim().split("\n").at(-1) ?? "{}");
+            if (validPlan(parsed)) value.plan = { ...parsed, workflow_items: parsed.workflow_items ?? [],
+              customization: { ...parsed.customization, layers: parsed.customization.layers ?? [], stage_layers: parsed.customization.stage_layers ?? [] } };
+          } catch { /* 保持只读展示的兼容降级。 */ }
+        }
+        // 查询期间现场改变时，不用旧结果覆盖较新的缓存。
+        if (fingerprint(kernelRoot, workspace) === version) cache.set(key, { fingerprint: version, value });
+        resolve(value);
+      });
+  }).finally(() => pendingReadings.delete(pendingKey));
+  pendingReadings.set(pendingKey, reading);
+  return reading;
 }
 
 export function clearExecutionPlanCache(): void {

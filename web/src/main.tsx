@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { RootErrorBoundary } from "./RootErrorBoundary";
+import { startBrowserDiagnostics } from "./browserDiagnostics";
 // #233 收官:16 个 legacy CSS 文件与 preflight-compat 已全部退役,
 // 手写样式只剩 tailwind.css 唯一入口(层序声明在其头部,与加载顺序无关)。
 import "./tailwind.css";
@@ -23,5 +24,6 @@ document.documentElement.dataset.density = savedDensity === "compact" ? "compact
 
 // 兜住整棵树:渲染异常显示可读的错误页,而不是把页面清空(见
 // RootErrorBoundary 头注释里那次"点一行就白屏"的实测)。
+try { startBrowserDiagnostics(); } catch { /* 诊断不可用不能影响页面启动。 */ }
 createRoot(document.getElementById("root")!).render(
   <RootErrorBoundary><App /></RootErrorBoundary>);

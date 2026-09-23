@@ -205,6 +205,7 @@ export function prepareContainerHostPaths(input: {
   /** 只有平台管理的缓存根子树才允许递归 chown；自定义 volume 不参与。 */
   cacheRoot?: string;
   runtime?: ContainerOwnershipRuntime;
+  log?: (message: string) => void;
 }): PreparedOwnership {
   const owner = rootContainerOwner(input.user, input.runtime);
   if (!owner) {
@@ -213,6 +214,9 @@ export function prepareContainerHostPaths(input: {
   if (!input.markerRoot) {
     throw new Error("root 宿主准备容器缓存时缺少宿主专用属主标记目录");
   }
+  const started = performance.now();
+  input.log?.('[container-prepare] {"event":"start"}');
+  try {
   const workspaceEntries = chownTree(input.workspace, owner);
   let cacheTrees = 0;
   const seen = new Set<string>();
@@ -223,6 +227,9 @@ export function prepareContainerHostPaths(input: {
     if (prepareCache(source, owner, resolve(input.markerRoot))) cacheTrees += 1;
   }
   return { active: true, owner, workspaceEntries, cacheTrees };
+  } finally {
+    input.log?.(`[container-prepare] ${JSON.stringify({ event: "finish", elapsed_ms: Math.round(performance.now() - started) })}`);
+  }
 }
 
 /**

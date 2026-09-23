@@ -1,4 +1,5 @@
 import { StartupRecovery } from "./startupRecovery.ts";
+import { startStartupDiagnostics, pendingHttpRequests, SystemCheckTrace } from "./runtimeDiagnostics.ts";
 /**
  * 启动任务服务。默认演示模式:内置剧本假模型,浏览器打开首页即可
  * 发任务→看进度→点审批走完整环。接真模型(GLM-5.1):
@@ -1064,8 +1065,14 @@ async function main(): Promise<void> {
     recentLog: () => [...taskLogRing],
   });
   const startup = new StartupRecovery();
+  const stopDiagnostics = await startStartupDiagnostics(console.log, () => ({
+    startup: startup.state, postgres: projection?.diagnostics(),
+    system_check: service.systemCheckStatus(), requests: pendingHttpRequests(),
+  }));
   const restoreTasks = async () => {
-    const platformCheck = await service.refreshDeliveryPlatformCheck();
+    const trace = new SystemCheckTrace(message => console.log(message.replace("[system-check]", "[startup-phase]")));
+    try {
+    const platformCheck = await trace.phase("platform", () => service.refreshDeliveryPlatformCheck());
     const runtimeLog = deploymentRuntime.status === "error"
       ? console.error : console.log;
     runtimeLog(`[serve] Linux 部署自检(${deploymentRuntime.status}): `
@@ -1080,18 +1087,19 @@ async function main(): Promise<void> {
     // 先清理本 dataDir 实例上次崩溃遗留的 coding/prepush/system-check/
     // issue 容器，再恢复两类任务。顺序不能反：recover 一旦入队就可能
     // 启动新容器，随后清扫会把新旧现场混在一起。
-    const swept = await service.sweepOrphanContainers();
+    const swept = await trace.phase("orphan_containers", () => service.sweepOrphanContainers());
     if (swept.removed.length) {
       console.log(`[serve] 已清理遗留任务容器 ${swept.removed.length} 个: `
         + swept.removed.join(", "));
     }
-    issueFlow.start();
+    await trace.phase("issue_recovery", async () => issueFlow.start());
     // 进程可死任务不死:重启后重建索引,在跑的任务续跑,等人的继续等。
-    const recovered = service.recover();
+    const recovered = await trace.phase("task_recovery", async () => service.recover());
     if (recovered.restored) {
       console.log(`[serve] 恢复任务 ${recovered.restored} 个`
         + `(重新入队 ${recovered.requeued} 个)`);
     }
+    } finally { trace.finish(); }
   };
   const lubanApproval = lubanPluginToken
     ? new LubanApprovalGateway([
@@ -1222,6 +1230,7 @@ async function main(): Promise<void> {
   const terminate = async (signal: "SIGTERM" | "SIGINT") => {
     if (terminating) return;
     terminating = true;
+    await stopDiagnostics();
     console.log(`[serve] 收到 ${signal}，停止接单并清理会话/任务容器...`);
     // Docker 默认只给 10 秒优雅退出。任务容器清理或外部连接偶发卡住
     // 时，旧进程会在 release() 之前被 SIGKILL，下一容器便被陈旧锁永

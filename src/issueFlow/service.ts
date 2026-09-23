@@ -3421,6 +3421,7 @@ export class IssueFlowService {
     // root 守护进程 + 非 root 容器用户时,把工作区属主在 docker run
     // 前交给容器用户(与需求侧同款;非 root 服务自判 active:false 跳过)。
     const prepared = prepareContainerHostPaths({
+      log: message => this.log(`${message} container=${live.id}`),
       workspace: live.root,
       volumes: volumes,
       user: isolation.user,

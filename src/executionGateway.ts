@@ -2,6 +2,7 @@ import { createServer, request as httpRequest, type IncomingHttpHeaders } from "
 import { request as httpsRequest } from "node:https";
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, resolve, sep } from "node:path";
+import { traceHttpRequest } from "./runtimeDiagnostics.ts";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "application/javascript; charset=utf-8",
@@ -38,6 +39,7 @@ export function createExecutionGateway(options: {
     throw new Error("runtime-url 必须是无凭据、无路径的 http/https 执行服务地址");
   }
   return createServer((request, response) => {
+    traceHttpRequest(request, response, options.log, "gateway");
     let url: URL;
     try { url = new URL(request.url ?? "/", "http://gateway"); }
     catch { response.writeHead(400).end(); return; }

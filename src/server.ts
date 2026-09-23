@@ -3,6 +3,7 @@ import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
 import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
 import { randomUUID } from "node:crypto";
+import { traceHttpRequest, sanitizeBrowserTimings } from "./runtimeDiagnostics.ts";
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -405,7 +406,9 @@ export function createTaskServer(
   // 阶段要求完整 TaskService.options，更不能反向绑死无关读侧。
   const workflowKernelRoot = service.options?.host?.kernelRoot
     ?? service.options?.workflowCatalogRoot;
+  const browserTimingLast = new Map<string, number>();
   return createServer(async (request, response) => {
+    traceHttpRequest(request, response, options.log ?? service.options?.log);
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
@@ -429,6 +432,17 @@ export function createTaskServer(
         "mae_flow_session",
       );
       const viewer = options.auth?.sessionUser(sessionToken);
+      if (request.method === "POST" && url.pathname === "/browser-timing") {
+        if (options.auth && !viewer) return json(response, 401, { error: "请先登录" });
+        const account = viewer?.username ?? "local";
+        const previous = browserTimingLast.get(account) ?? 0;
+        if (Date.now() - previous < 5_000) return json(response, 204, {});
+        browserTimingLast.set(account, Date.now());
+        const body = await readBody(request, 8_192);
+        const entries = sanitizeBrowserTimings(body.entries);
+        if (entries.length) (options.log ?? service.options?.log)?.(`[browser-timing] ${JSON.stringify({ at: new Date().toISOString(), entries })}`);
+        return json(response, 204, {});
+      }
       if (viewer) {
         // 两侧通知深链都靠真实访问入口兜底:需求侧 /work 与问题侧
         // /issues 同款自学,--public-url 缺席时不能只剩路径后缀。
@@ -2369,7 +2383,7 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
-        const correction = service.get(id)?.ticket_correction;
+        const correction = request.method !== "GET" ? storedTask(service, id)?.ticket_correction : undefined;
         if (request.method !== "GET" && parts[2] !== "correct-ticket"
             && correction && correction.state !== "completed" && !correction.cleanup_only) {
           return json(response, 409, { error: "单号正在纠正，请在任务详情中查看进度或重试" });
@@ -2386,12 +2400,12 @@ export function createTaskServer(
           catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "GET" && parts.length === 2) {
-          const task = service.get(id);
+          const task = service.getAsync ? await service.getAsync(id) : service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, task);
         }
         if (request.method === "GET" && parts.length === 3 && parts[2] === "knowledge-source") {
-          const task = service.get(id);
+          const task = service.getAsync ? await service.getAsync(id) : service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });
           try {
             return json(response, 200, readTaskKnowledgeSource({
@@ -2713,7 +2727,7 @@ export function createTaskServer(
             await service.requestReview(id, viewer.username, committer));
         }
         if (request.method === "GET" && parts[2] === "reviews") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.listTaskReviews(id));
         }
@@ -2723,12 +2737,12 @@ export function createTaskServer(
         if (request.method === "GET"
             && ["execution", "build-fix", "prepush"].includes(parts[2])
             && parts[3] === "events") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return streamExecutionEvents(response, target.workspace, {
             buildFixOnly: parts[2] !== "execution",
             follow: url.searchParams.get("follow") !== "false",
-            terminal: () => ["completed", "failed", "canceled"].includes(service.get(id)?.status ?? "canceled"),
+            terminal: () => ["completed", "failed", "canceled"].includes(storedTask(service, id)?.status ?? "canceled"),
           });
         }
         // 环境预热编译的实时事件流(用户点名:预热进展必须清楚可见)。
@@ -2738,7 +2752,7 @@ export function createTaskServer(
             () => service.warmupEventLogPath(id));
         }
         if (parts[2] === "developer-assistant") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET") {
             return json(response, 200, service.developerAssistant(id));
@@ -2766,7 +2780,7 @@ export function createTaskServer(
         }
         // 发过的补充说明 + 送达与否:发出去没有回执等于对着空气说话。
         if (request.method === "GET" && parts[2] === "interrupts") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.listInterrupts(id));
         }
@@ -2775,7 +2789,7 @@ export function createTaskServer(
         // 闭环。这样路过成员留下的有效意见不会成为无人能接的草稿。
         // 任务记忆:只读列表、原文、撤回。没有编辑——改就是再圈一次。
         if (parts[2] === "memories") {
-          if (!service.get(id)) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!storedTask(service, id)) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET" && parts.length === 3) {
             return json(response, 200, service.listTaskMemories(id).map(row => ({ ...row,
               can_review: true })));
@@ -2800,7 +2814,7 @@ export function createTaskServer(
           }
         }
         if (parts[2] === "overall-story") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET") {
             return json(response, 200, parts[3] === "revisions" && parts[4]
@@ -2839,7 +2853,7 @@ export function createTaskServer(
             ? service.previewEarlyStart(id, actor, input) : service.startTaskEarly(id, actor, input));
         }
         if (parts[2] === "annotations") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const author = viewer?.username ?? "本地用户";
           if (request.method === "GET" && parts.length === 3) {
@@ -3098,21 +3112,21 @@ export function createTaskServer(
         // 行为摘要(只读):事件流折叠成人看得过来的分段与异常信号。
         // 权限口径同任务详情;纯展示,不参与任何判定。
         if (request.method === "GET" && parts[2] === "activity") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.activity(id));
         }
         // 会话流(只读):人和 Agent 之间的回合。权限口径同任务详情;
         // 纯展示,不参与判定。
         if (request.method === "GET" && parts[2] === "conversation") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           return json(response, 200, service.conversation(id));
         }
         // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
         // ——能看任务就能看它经历了什么。纯展示,不参与判定。
         if (request.method === "GET" && parts[2] === "timeline") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           // 代码工作区经现成的公开方法反推:面板在 <cwd>/.mae-flow-work/
           // 之下,拿不到就交给 buildTimeline 自己在工作区里找。
@@ -3149,7 +3163,7 @@ export function createTaskServer(
         // 权限口径同任务详情;能看任务就能拿它的诊断包。
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "diagnostics") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const bundle = await service.exportDiagnostics(id);
           response.writeHead(200, {
@@ -3179,12 +3193,12 @@ export function createTaskServer(
         // 不接受客户端提供任意图源或文件路径。
         if (request.method === "GET" && parts[2] === "architecture" && parts.length <= 4) {
           const load = async () => {
-            const target = service.get(id);
+            const target = storedTask(service, id);
             if (!target) return undefined;
             return readArchitectureStory(target, service.artifactRoot(id));
           };
           const loadArchify = (): string | undefined => {
-            const target = service.get(id);
+            const target = storedTask(service, id);
             if (!target) return undefined;
             // 主、子任务刷新都发布到各自工作区；优先读取与当前 Story 绑定的发布版本。
             const published = readCurrentStoryArchitecture(target.workspace, readArchitectureStory(target, service.artifactRoot(id))?.content ?? "");
@@ -3199,7 +3213,7 @@ export function createTaskServer(
           };
           const artifact = await load();
           if (!artifact) return json(response, 404, {
-            error: service.get(id)?.parent_task_id
+            error: storedTask(service, id)?.parent_task_id
               ? "尚无模块 Story，请先完成当前模块设计"
               : "尚无全局 Story，请先完成主任务分析",
           });
@@ -3227,7 +3241,7 @@ export function createTaskServer(
         // spec.md 就该在旁边,而不是让人跳到另一套界面里翻。权限口径
         // 同任务详情;能读哪些文件由 artifacts.ts 的白名单把守。
         if (request.method === "GET" && parts[2] === "artifacts") {
-          const target = service.get(id);
+          const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           const root = service.artifactRoot(id);
           const sources = {
@@ -3432,13 +3446,17 @@ function streamEvents(
   streamJsonlAsSse(service, id, response, () => service.eventLogPath(id));
 }
 
+function storedTask(service: TaskService, id: string) {
+  return service.storedTaskSummary ? service.storedTaskSummary(id) : service.get(id);
+}
+
 function streamJsonlAsSse(
   service: TaskService,
   id: string,
   response: import("node:http").ServerResponse,
   resolvePath: () => string | undefined,
 ): void {
-  if (!service.get(id)) {
+  if (!storedTask(service, id)) {
     return json(response, 404, { error: `任务 ${id} 不存在` });
   }
   response.writeHead(200, {
@@ -3480,7 +3498,7 @@ function streamJsonlAsSse(
         }
       }
     }
-    const status = service.get(id)?.status;
+    const status = storedTask(service, id)?.status;
     if (status === "completed" || status === "failed" || status === "canceled") {
       response.end();
       return;

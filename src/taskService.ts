@@ -195,6 +195,8 @@ import {
 import {
   hasStructuralWorkflowProjectionMismatch,
   readCurrentExecutionPlanReading,
+  readCurrentExecutionPlanReadingAsync,
+  type ExecutionPlanReading,
   readExecutionPlaybookOptions,
   type ExecutionPlan,
   type ExecutionPlaybookOption,
@@ -324,6 +326,8 @@ import {
   repairContainerMutationOwnership,
 } from "./containerOwnership.ts";
 import type { ExternalAction, PgProjection } from "./projection.ts";
+import { SystemCheckTrace } from "./runtimeDiagnostics.ts";
+import { runDeploymentCheck } from "./deploymentSystemCheck.ts";
 import type { RuntimeSettings } from "./settings.ts";
 import { resolveModelConfig, type ResolvedModelConfig } from "./modelResolution.ts";
 import { ReviewStore, assertReviewCanComplete, type ReviewRequest } from "./reviews.ts";
@@ -1953,6 +1957,8 @@ export class TaskService {
   /** 平台探测是异步的，launchOptions 只消费最近一次事实。serve 在开放
    * HTTP 前先探一次，管理页每次“重新检查”都会刷新。 */
   private deliveryPlatformCheck?: DeliveryPlatformCheck;
+  private activeSystemCheck?: Promise<SystemCheckResult>;
+  private systemCheckTrace?: SystemCheckTrace;
 
   private readonly deliveryExperiences = new DeliveryExperiences<TaskState>(task => ({
     store: this.memories(), repo: this.memoryRepo(task),
@@ -2124,6 +2130,7 @@ export class TaskService {
             // 统一交给容器用户；只在 clone 后做一次会漏掉随后生成的
             // .mae-flow 状态，靠 umask 0000 又会把现场开放给所有用户。
             const prepared = prepareContainerHostPaths({
+              log: message => service.options.log?.(`${message} container=${ownedInput.name}`),
               workspace: ownedInput.workspace,
               volumes: ownedInput.volumes,
               user: ownedInput.limits.user,
@@ -3014,6 +3021,27 @@ export class TaskService {
     return task ? this.project(task, true) : undefined;
   }
 
+  async getAsync(id: string): Promise<TaskSummary | undefined> {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const started = performance.now();
+    const reading = await readCurrentExecutionPlanReadingAsync({
+      kernelRoot: this.options.host?.kernelRoot,
+      workspace: task.cwd ?? task.summary.workspace, python: this.options.host?.python,
+    });
+    const planRead = performance.now();
+    const summary = this.tasks.get(id) === task ? this.project(task, true, reading) : undefined;
+    if (performance.now() - started >= 250) this.options.log?.(`[task-read] ${JSON.stringify({ id,
+      plan_ms: Math.round(planRead - started), projection_ms: Math.round(performance.now() - planRead) })}`);
+    return summary;
+  }
+
+  /** 文件读取和事件流只需要已保存的元数据，不应顺便计算整份任务详情。 */
+  storedTaskSummary(id: string): Readonly<TaskSummary> | undefined {
+    const summary = this.tasks.get(id)?.summary;
+    return summary ? { ...summary } : undefined;
+  }
+
   /** 批注附图落盘:任务目录是真相,同时铺进 Agent 工作区供 inspect_image 读。 */
   storeAnnotationAsset(id: string, bytes: Buffer) {
     const task = this.tasks.get(id);
@@ -3354,7 +3382,7 @@ export class TaskService {
 
   /** 启动一次与真实任务同约束的短命容器，验证的不是宿主 PATH，而是
    * 真正会承载 Agent 命令的镜像、挂载、身份和工具链。 */
-  private async probeTaskContainerToolchain(): Promise<{
+  private async probeTaskContainerToolchain(trace?: SystemCheckTrace): Promise<{
     ready: boolean;
     detail: string;
     suggestion?: string;
@@ -3423,7 +3451,7 @@ export class TaskService {
     let failurePhase = "start";
     let detail = "";
     try {
-      await container.start();
+      await (trace ? trace.phase("container.start", () => container.start()) : container.start());
       failurePhase = "toolchain-exec";
       const command = [
         "set -eu",
@@ -3489,10 +3517,11 @@ export class TaskService {
         "node -e 'process.stdout.write(\" node-ok\")'",
         'printf \' __MFC_CONTAINER_TOOLCHAIN_OK__\\n\'',
       ].join("; ");
-      const result = await container.exec(command, workspace, {
+      const execute = () => container.exec(command, workspace, {
         timeout: 60,
         onData: (chunk) => { output += chunk.toString(); },
       });
+      const result = await (trace ? trace.phase("container.exec", execute) : execute());
       if (result.exitCode !== 0
           || !output.includes("__MFC_CONTAINER_TOOLCHAIN_OK__")) {
         throw new Error(`容器工具链自检退出码 ${result.exitCode}`);
@@ -3514,7 +3543,7 @@ export class TaskService {
       failure = error;
     } finally {
       try {
-        await container.stop();
+        await (trace ? trace.phase("container.stop", () => container.stop()) : container.stop());
       } catch (error) {
         failurePhase = failure ? `${failurePhase}+cleanup` : "cleanup";
         failure = failure
@@ -3538,130 +3567,30 @@ export class TaskService {
 
   /** 管理员部署自检：不发送测试消息、不创建业务任务，也不改变运行配置；
    * 会启动并销毁一个短命构建容器，以免把宿主工具链误报成任务可用。 */
-  async systemCheck(): Promise<SystemCheckResult> {
-    const items: SystemCheckItem[] = [];
-    const runtime = this.options.deploymentRuntime;
-    items.push(runtime
-      ? { key: "runtime", label: "Linux 部署", ...runtime }
-      : { key: "runtime", label: "Linux 部署", status: "warning",
-          detail: "当前调用形态没有部署运行信息",
-          suggestion: "请从正式 serve 入口运行部署自检" });
-    try {
-      accessSync(this.options.dataDir, constants.R_OK | constants.W_OK);
-      items.push({ key: "data", label: "任务数据", status: "ok",
-        detail: "数据目录可读写" });
-    } catch (error) {
-      items.push({ key: "data", label: "任务数据", status: "error",
-        detail: "数据目录不可读写", suggestion: String(error) });
-    }
+  systemCheckStatus() { return this.systemCheckTrace?.snapshot(); }
 
-    const active = this.launchOptions().model;
-    items.push(active
-      ? { key: "model", label: "模型网关", status: "ok",
-          detail: `${active.provider}/${active.model} 已配置` }
-      : { key: "model", label: "模型网关", status: "error",
-          detail: "没有可用模型",
-          suggestion: "管理页 → 模型网关：填写网关地址、API Key 和模型名称" });
-
-    const vision = this.activeVisionChoice();
-    items.push(vision
-      ? { key: "vision", label: "图片识别", status: "ok",
-          detail: `${vision.provider}/${vision.model} 已配置（未做实时调用）`,
-          suggestion: "可在管理页点击“测试识图能力”做真实端到端验证" }
-      : { key: "vision", label: "图片识别", status: "warning",
-          detail: "尚未配置专用图片识别模型",
-          suggestion: "管理页 → 图片识别：配置内部多模态模型网关；不影响纯文本任务" });
-
-    const notify = this.options.notifier?.health();
-    items.push(!notify?.configured
-      ? { key: "notify", label: "消息通知", status: "warning",
-          detail: "通知通道未配置",
-          suggestion: "这是部署项；成员只需在个人设置中填写自己的小鲁班 Token" }
-      : notify.last_error
-        ? { key: "notify", label: "消息通知", status: "warning",
-            detail: "已配置，但最近一次发送失败", suggestion: notify.last_error }
-        : { key: "notify", label: "消息通知", status: "ok",
-            detail: "小鲁班通知通道已就绪" });
-
-    // 通知链接地址:2026-08-19 内网实锤——没配 --public-url,发起人又
-    // 只从回环地址(本机/SSH 隧道)访问,通知里的链接别人打不开。回环
-    // 已不入账,所以这里能如实分三种:显式配置 > 已自学 > 还没着落。
-    const linkBase = this.notificationLinkBase();
-    items.push(this.options.linkBase
-      ? { key: "link", label: "通知链接地址", status: "ok",
-          detail: `固定为 ${this.options.linkBase}(--public-url)` }
-      : linkBase
-        ? { key: "link", label: "通知链接地址", status: "ok",
-            detail: `已从内网访问自学:${linkBase}`,
-            suggestion: "建议启动时加 --public-url 固定,不依赖谁先登录" }
-        : { key: "link", label: "通知链接地址", status: "warning",
-            detail: "尚无可用地址:未配 --public-url,也还没有人从内网地址"
-              + "访问过(回环地址不算——发给别人打不开)",
-            suggestion: "启动加 --public-url http://<内网IP>:<端口>,"
-              + "或先用内网地址打开一次本页面" });
-
-    const projection = this.options.projection
-      ? await this.options.projection.health() : undefined;
-    items.push(!projection
-      ? { key: "postgres", label: "PostgreSQL", status: "warning",
-          detail: "未配置历史投影", suggestion: "任务仍可运行，但无跨生命周期历史" }
-      : !projection.reachable
-        ? { key: "postgres", label: "PostgreSQL", status: "error",
-            detail: "数据库不可达", suggestion: projection.last_error }
-        : projection.last_error
-          ? { key: "postgres", label: "PostgreSQL", status: "warning",
-              detail: "连接正常，但最近有投影写入失败", suggestion: projection.last_error }
-          : { key: "postgres", label: "PostgreSQL", status: "ok",
-              detail: "连接与投影正常" });
-
-    const platform = this.effectivePlatformUrl();
-    const platformCheck = platform
-      ? await this.refreshDeliveryPlatformCheck() : undefined;
-    items.push(!this.options.host
-      ? { key: "git", label: "Git 交付", status: "warning",
-          detail: "当前是纯会话模式", suggestion: "交付代码前启用内核模式与代码仓" }
-      : !platform
-        ? { key: "git", label: "Git 交付", status: "error",
-            detail: "MR / 流水线服务未就绪",
-            suggestion: "请部署维护人员检查平台适配服务" }
-        : !platformCheck?.ready
-          ? { key: "git", label: "Git 交付", status: "error",
-              detail: platformCheck?.detail ?? "平台能力预检未完成",
-              suggestion: platformCheck?.suggestion }
-          : { key: "git", label: "Git 交付", status: "ok",
-              detail: platformCheck.detail });
-
-    const containerProbe = await this.probeTaskContainerToolchain();
-    items.push(!this.options.prepush?.enabled
-      ? { key: "prepush", label: "Build-Fix", status: "warning",
-          detail: "当前部署未启用 Build-Fix" }
-      : !containerProbe.ready
-        ? { key: "prepush", label: "Build-Fix", status: "error",
-            detail: "已启用，但任务构建环境未通过真实自检",
-            suggestion: containerProbe.suggestion }
-        : { key: "prepush", label: "Build-Fix", status: "ok",
-            detail: "按需可用；主动请求时独立执行编译与 UT，不在交付前自动补跑，构建槽位 "
-              + `${this.prePushBuildSlotCount()}` });
-
-    if (!this.options.isolation) {
-      items.push({ key: "container", label: "统一任务容器",
-        status: this.options.host ? "error" : "warning",
-        detail: "未启用任务容器",
-        suggestion: "正式部署必须配置 --isolate-image；业务命令不会回退宿主" });
-    } else {
-      items.push(containerProbe.ready
-        ? { key: "container", label: "统一任务容器", status: "ok",
-            detail: containerProbe.detail }
-        : { key: "container", label: "统一任务容器", status: "error",
-            detail: containerProbe.detail, suggestion: containerProbe.suggestion });
-    }
-
-    const overall: SystemCheckStatus = items.some((item) => item.status === "error")
-      ? "error" : items.some((item) => item.status === "warning") ? "warning" : "ok";
-    return { checked_at: new Date().toISOString(), overall, items };
+  systemCheck(): Promise<SystemCheckResult> {
+    // 部署脚本与管理页同时自检时共用正在执行的检查，避免重复启动容器。
+    if (this.activeSystemCheck) return this.activeSystemCheck;
+    const trace = this.systemCheckTrace = new SystemCheckTrace(this.options.log);
+    this.activeSystemCheck = Promise.resolve().then(() => this.runSystemCheck(trace)).then(result => {
+      trace.finish({ overall: result.overall, checks: result.items.map(item => ({ key: item.key, status: item.status })) });
+      return result;
+    }, error => { trace.finish({ error: true }); throw error; }).finally(() => {
+      this.activeSystemCheck = undefined; this.systemCheckTrace = undefined;
+    });
+    return this.activeSystemCheck;
   }
 
-  private project(task: TaskState, includeKnowledgeUsage = false): TaskSummary {
+  private runSystemCheck(trace: SystemCheckTrace): Promise<SystemCheckResult> {
+    return runDeploymentCheck({ options: this.options, model: this.activeModelChoice(),
+      vision: this.activeVisionChoice(), linkBase: this.notificationLinkBase(),
+      platform: this.effectivePlatformUrl(), buildSlots: this.prePushBuildSlotCount(), trace,
+      refreshPlatform: () => this.refreshDeliveryPlatformCheck(),
+      probeContainer: () => this.probeTaskContainerToolchain(trace) });
+  }
+
+  private project(task: TaskState, includeKnowledgeUsage = false, preparedPlan?: ExecutionPlanReading): TaskSummary {
     this.refreshRequirementGraph(task);
     const record = task.notifyRecord;
     const summary = task.summary;
@@ -3703,7 +3632,7 @@ export class TaskService {
     const parent = summary.parent_task_id
       ? this.tasks.get(summary.parent_task_id) : undefined;
     const planReading = includeKnowledgeUsage
-      ? readCurrentExecutionPlanReading({
+      ? preparedPlan ?? readCurrentExecutionPlanReading({
           kernelRoot: this.options.host?.kernelRoot,
           workspace: task.cwd ?? summary.workspace,
           python: this.options.host?.python,
@@ -8464,6 +8393,7 @@ export class TaskService {
         continue;
       }
       this.options.log?.(`开始恢复任务 ${name}`);
+      const recoveryStarted = performance.now();
       try {
         const saved = JSON.parse(readFileSync(path, "utf-8"));
         const summary = saved.summary as TaskSummary;
@@ -8896,6 +8826,8 @@ export class TaskService {
         }
       } catch (error) {
         this.options.log?.(`恢复 ${name} 失败: ${String(error)}`);
+      } finally {
+        this.options.log?.(`[task-recovery] ${JSON.stringify({ id: name, elapsed_ms: Math.round(performance.now() - recoveryStarted) })}`);
       }
     }
     // 全部任务加载后先恢复父子关联，再发布 Story/补任务书；不受加载顺序影响。
@@ -9098,16 +9030,8 @@ export class TaskService {
     if (!projection) return;
     this.bypass(task, "投影 upsert",
       projection.upsertTask(this.project(task)));
-    try {
-      const log = new EventLog(
-        join(task.summary.workspace, "events.jsonl"));
-      for (const event of log.replay()) {
-        this.bypass(task, "投影事件", projection.appendEvent(event));
-      }
-    } catch (error) {
-      this.options.log?.(
-        `任务 ${task.summary.id} 投影重放失败: ${String(error)}`);
-    }
+    this.bypass(task, "投影事件恢复", projection.replayEvents?.(
+      task.summary.id, join(task.summary.workspace, "events.jsonl")));
   }
 
   /** 重跑一单:completed/failed 的任务重新入队,host 模式以内核
