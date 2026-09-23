@@ -15,6 +15,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyDebugIssueSkillPatch, setupDebugIssue,
   type DebugIssueAuth } from "../src/issueFlow/debugIssue.ts";
+import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { until } from "./issueFlowFixed.helpers.ts";
+import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { readBusinessModule } from "../src/businessModuleLibrary.ts";
 import { EnvironmentRegistry } from "../src/environmentRegistry.ts";
@@ -285,6 +288,134 @@ test("MockDtsGateway 注入调试单数据源:列表/详情/查无此单", async
     assert.equal(detail.title, "调试单");
     await assert.rejects(gateway.detail("DTS-2026-0000"), /查无此单/);
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("--debug-issue 播种公共组件仓(#426,ADR-0054):镜像+登记表+示例模块订阅幂等", async () => {
+  const root = mkdtempSync(join(tmpdir(), "debug-issue-components-"));
+  try {
+    const dataDir = join(root, "data");
+    const repos = ["alpha", "beta"].map((name) => ({
+      name, path: makeSourceRepo(root, name),
+    }));
+    const options = {
+      dataDir,
+      auth: fakeAuth(),
+      repos,
+      components: [{
+        id: "comp-demo",
+        name: "公共组件演示",
+        path: repos[0].path,
+        languages: ["TypeScript"],
+        description: "排查组件渲染问题时读取",
+      }],
+      log: () => {},
+    };
+    const setup = await setupDebugIssue(options);
+    // 登记表落在 dataDir 根,repository = 组件镜像路径(问题流的身份
+    // 归类与订阅快照读的就是这份文件)。
+    const registry = JSON.parse(readFileSync(
+      join(dataDir, "component-repositories.json"), "utf-8")) as Array<{
+        id: string; repository: string; enabled: boolean;
+      }>;
+    assert.equal(registry.length, 1);
+    assert.equal(registry[0].id, "comp-demo");
+    assert.equal(registry[0].enabled, true);
+    assert.equal(registry[0].repository,
+      join(setup.remotesDir, "comp-demo.git"));
+    assert.ok(existsSync(join(setup.remotesDir, "comp-demo.git", "HEAD")));
+    assert.deepEqual(setup.components,
+      [{ id: "comp-demo", name: "公共组件演示",
+        path: join(setup.remotesDir, "comp-demo.git") }]);
+    // 示例模块订阅 comp-demo。
+    const module = readBusinessModule(dataDir, "debug-sample");
+    assert.deepEqual(module.reference_component_repos, ["comp-demo"]);
+    // 幂等:重跑不重复订阅、登记表重写内容一致。
+    await setupDebugIssue(options);
+    assert.deepEqual(
+      readBusinessModule(dataDir, "debug-sample").reference_component_repos,
+      ["comp-demo"]);
+    assert.equal((JSON.parse(readFileSync(
+      join(dataDir, "component-repositories.json"), "utf-8")) as Array<unknown>)
+      .length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("调试会话参考仓全链(#426):开场注入订阅目录,拉取入参考仓台账", async () => {
+  const root = mkdtempSync(join(tmpdir(), "debug-issue-chain-"));
+  const dataDir = join(root, "data");
+  const repos = ["alpha", "beta"].map((name) => ({
+    name, path: makeSourceRepo(root, name),
+  }));
+  const setup = await setupDebugIssue({
+    dataDir,
+    auth: fakeAuth(),
+    repos,
+    components: [{
+      id: "comp-demo",
+      name: "公共组件演示",
+      path: repos[0].path,
+      languages: ["TypeScript"],
+      description: "排查组件渲染问题时读取",
+    }],
+    log: () => {},
+  });
+  const componentMirror = join(setup.remotesDir, "comp-demo.git");
+  const script: Scene[] = [
+    { tool: { name: "pull_repo", input: { url: setup.mirrors[0]!.path } } },
+    { tool: { name: "pull_repo", input: { url: setup.mirrors[1]!.path } } },
+    { tool: { name: "pull_repo", input: { url: componentMirror } } },
+    { tool: { name: "complete_stage", input: { note: "仓已看齐" } } },
+    { text: "分析中,已研读公共组件源码。" },
+  ];
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(),
+  });
+  try {
+    const created = service.create({
+      account: "dev", title: "调试全链:公共组件引用报错",
+      moduleId: "debug-sample",
+      environment: { hosts: ["10.0.0.8"], backendPassword: "x" },
+    });
+    await until(() => {
+      const issue = service.get(created.id);
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "调试全链回合收口");
+    const state = JSON.parse(readFileSync(
+      join(dataDir, "issues", created.id, "issue.json"), "utf-8")) as {
+      public_repos?: Array<{ url: string; name: string }>;
+      repo_urls?: string[];
+    };
+    assert.deepEqual(state.public_repos?.map((row) => row.url),
+      [componentMirror], "组件镜像落参考仓台账");
+    assert.deepEqual([...(state.repo_urls ?? [])].sort(),
+      [setup.mirrors[0]!.path, setup.mirrors[1]!.path].sort(),
+      "绑定镜像照旧平等入列");
+    // 开场词:订阅目录注入的是本地镜像路径,AI 照抄地址即拉。
+    const opening = model.requests
+      .flatMap((request) => (request as any).messages ?? [])
+      .filter((message: any) => message?.role === "user")
+      .map((message: any) => typeof message.content === "string"
+        ? message.content
+        : (message.content ?? []).map((block: any) =>
+          block?.text ?? "").join(" "))
+      .join("\n");
+    assert.match(opening, /公共组件演示/);
+    assert.match(opening, new RegExp(componentMirror.replace(/[.\\]/g, "\\$&")));
+    assert.match(opening, /何时需要读取: 排查组件渲染问题时读取/);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+    // 克隆被 harden 成只读(拉仓收口的属主/权限治理),清理前先放开
+    // 写位;失败尽力而为,不掩盖断言结果。
+    try { execFileSync("chmod", ["-R", "u+w", root]); } catch { /* 尽力 */ }
     rmSync(root, { recursive: true, force: true });
   }
 });

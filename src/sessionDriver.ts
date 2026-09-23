@@ -577,9 +577,13 @@ export class CloudSession {
       context_restored: Boolean(this.checkpoint?.restored),
       restored_messages: this.checkpoint?.messageCount ?? 0,
       recovery_reason: this.checkpoint?.reason });
+    // 降级开局(原生会话缺失/损坏)的告知语:不管具体原因是什么,都
+    // 固定带上「勿从头重做」——恢复依据是工作区已有材料和执行记录
+    // (ADR-0055:异常重跑的降级开局也走这里)。
     const continuity = this.checkpoint?.restored
       ? "原 Pi 会话上下文已恢复（含已返回的工具结果及压缩记录）。从实际未完成处继续，已完成的阅读、分析和子 Agent 报告可复用。"
-      : this.checkpoint?.reason ?? "原 Pi 会话不可用，请依据工作区已有材料和执行记录恢复，勿假定需要从头重做。";
+      : `${this.checkpoint?.reason ?? "原 Pi 会话上下文不可用"}。`
+        + "请依据工作区已有材料和执行记录恢复，勿从头重做。";
     return this.turnWithRepairs(`${continuity}\n以宿主本轮下发的最新用户决定、插话和批注为准；与历史上下文冲突时同步修订文档、测试和实现。旧执行目标不能推翻用户的新决定。current 只用于核对流程事实，不代表要重做整个步骤。未知结果先核实再重试。\n\n${userMessage}`);
   }
 

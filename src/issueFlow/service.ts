@@ -93,8 +93,8 @@ import {
   isTerminal,
   issueRepoWorkspaces,
   loadState,
-  MAX_ISSUE_REPOS,
   normalizeIssueRepos,
+  resolvePullRoute,
   recordTransition,
   repoNameOf,
   saveState,
@@ -129,6 +129,9 @@ import {
 } from "./worksiteExport.ts";
 import { recentEvents } from "./materials.ts";
 
+/** 恢复消息里引用原文的统一截断线:末条人工决定与重跑操作者说明共用。 */
+const QUOTED_NOTE_MAX = 2000;
+
 /** 崩溃回灌的取材(遗留洞 A-H1):事件账末条恰是人的决定时取原文。
  *  只认末条——后面已有 Agent 回应的说明当时送达了,不重播旧话。 */
 function lastHumanDecisionNote(root: string): string {
@@ -139,7 +142,26 @@ function lastHumanDecisionNote(root: string): string {
   const text = String(last.payload?.decision ?? "").trim();
   if (!text) return "";
   return "\n\n[服务中断前你还没来得及读到的用户决定,原文如下]\n"
-    + text.slice(0, 2000);
+    + text.slice(0, QUOTED_NOTE_MAX);
+}
+
+/** 异常重跑的决定回灌(ADR-0055):事件账最近 3 条人工决定原文,按
+ *  时间正序回放。与崩溃回灌(lastHumanDecisionNote,只认末条)不同:
+ *  重跑常见降级开局——底层上下文没了,人的近期决定是续跑最直接的
+ *  执行输入,三条内的连贯指令比孤零零一条完整;更早的已沉淀进分析
+ *  报告与转移账,不再重播。重启恢复路径不换:仍走 last-1 版,语义
+ *  不动。 */
+function recentHumanDecisionNotes(root: string, limit = 3): string {
+  const decisions = recentEvents(root, 200)
+    .filter((event) => event.kind === "human_decision")
+    .slice(-limit) as Array<{ payload?: { decision?: unknown } }>;
+  const lines = decisions
+    .map((event) => String(event.payload?.decision ?? "").trim())
+    .filter(Boolean)
+    .map((text) => text.slice(0, 2000));
+  if (!lines.length) return "";
+  return "\n\n[会话异常前最近的人工决定,原文回放(时间正序)]\n"
+    + lines.map((text, index) => `${index + 1}. ${text}`).join("\n");
 }
 import {
   cloneRepository,
@@ -150,6 +172,10 @@ import {
   type GitCredential,
 } from "./issueGit.ts";
 import { readKnowledgeRepoConfig } from "../knowledgeRepoConfig.ts";
+import {
+  componentRepositories,
+  type ComponentRepository,
+} from "../componentRepositories.ts";
 import {
   readBusinessModule,
   type BusinessModule,
@@ -193,6 +219,7 @@ import {
   issueResumePrompt,
   materializeIssueSkills,
   type IssueEnvCredentials,
+  type IssueResumeOptions,
 } from "./prompt.ts";
 import {
   countVerifyFailures,
@@ -781,6 +808,18 @@ const NUDGE_BUDGET = 2;
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
 const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
 
+/** 异常重跑(ADR-0055)的恢复回合开场:与重启通知同一纪律——以用户
+ * 消息落事件流、时间线可查。操作者说明原文拼进通知(补充说明不变量:
+ * 带说明必开回合送达,只记账不算送达),截断线用 QUOTED_NOTE_MAX。 */
+function reviveResumeNotice(note?: string): string {
+  const text = note?.trim();
+  return promptCopy("notices", "revive.resume", {
+    note: text
+      ? `\n\n[操作者关于本次异常的说明]\n${text.slice(0, QUOTED_NOTE_MAX)}`
+      : "",
+  });
+}
+
 /** MR 检视回复的出站信箱(宿主发送账,会话工作区根):AI 的回复经
  * respond_review 落批注账后由平台扫描装箱(ADR-0052 单通道),信箱是
  * 发送的唯一真相。 */
@@ -1007,77 +1046,9 @@ export class IssueFlowService {
           + lastHumanDecisionNote(root) } : {}),
       };
       this.live.set(state.id, live);
-      // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
-      // 重启后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
-      // 检视监看续挂(②-Q1):原启动链(MR 建成→流水线监看)重启后
-      // 不再触发——流水线已按终态处理(watching=false)的会话,意见发现、
-      // 注入与回复发送会全部停摆,凡 mr_green 且有 MR 一律续挂;
-      // 外部意见只同步为待判断批注，不恢复旧版自动派发修复通知。
-      if (state.mrs?.length && !isTerminal(state.status)) {
-        this.watchMergeStates(live);
-        this.watchMrDiscussions(live);
-
-      }
-      // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
-      // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
-      let staleRetryLedger = false;
-      for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
-        if (watch.watching) {
-          this.log(`[issue-flow] ${state.id} 恢复流水线监看(${repo})`
-            + ` @ ${watch.sha.slice(0, 12)}`);
-          void this.watchPipeline(live, repo, watch.sha);
-        }
-        // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
-        // 成了死账,顺手清掉(红灯的下一步=失败事实发送给 AI,不再
-        // 有"定时重评"的恢复义务)。
-        if (watch.evidence_retry_deadline) {
-          delete watch.evidence_retry_deadline;
-          delete watch.evidence_retry_attempts;
-          delete watch.evidence_failure_log;
-          staleRetryLedger = true;
-        }
-      }
-      if (staleRetryLedger) saveState(root, state);
-      // 监看账落后于推送账就补挂(issue-72 死表现场的重启自愈):有
-      // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后启动的监看丢失
-      // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
-      // 重挂。同 SHA 已按终态处理的不碰:重放红灯终态处理会扰动同提交刹车账。
-      // external_head 的账不补挂(ADR-0041):检查目标是有意跟着平台外
-      // 提交走的,落后的推送账不是正确目标——补挂会跟检查目标跟随机制
-      // 打架(重启即来回切)。放在续表循环之后,补挂换掉的新账不会被
-      // 旧循环重复盯。
-      if (!isTerminal(state.status)) {
-        for (const mr of state.mrs ?? []) {
-          const pushed = state.pushes
-            ?.find((item) => item.repo === mr.repo)?.sha;
-          const watch = state.pipelines?.[mr.repo];
-          if (pushed && (!watch || (watch.sha !== pushed
-              && !watch.external_head))) {
-            this.log(`[issue-flow] ${state.id} 监看账落后于推送账`
-              + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
-            this.armPipelineWatch(live, mr.repo);
-          }
-        }
-      }
-      // 重启清扫(H6):等人会话里够格代答的闸重判一次(免审批档位
-      // 不因重启漏答);非等人的会话不该还有挂着的人问卡——崩溃前没
-      // 走完的定格作废留痕,别留一张永远答不了的卡占列表。
-      if (state.status === "waiting_user") {
-        this.maybeAutoAnswerGate(live);
-      } else {
-        for (const record of live.humanGate.pending()) {
-          try {
-            live.humanGate.supersede(record.waiting_id, {
-              stateVersion: record.state_version,
-              notes: "重启清扫:崩溃遗留的未定格待办,作废",
-            });
-          } catch (error) {
-            this.log(`[issue-flow] ${state.id} 重启作废待办 `
-              + `${record.waiting_id} 失败: `
-              + String(error instanceof Error ? error.message : error));
-          }
-        }
-      }
+      // 在途账清理(与异常重跑共用的每单段,ADR-0055):日志前缀传
+      // 空串、作废来路标「重启」——重启恢复的日志与作废备注一字不差。
+      this.rearmInFlightLedgers(live, "", "重启");
     }
     // 孤儿凭据对账(H5):崩溃/强杀可能把"vault 里还有凭据、会话已不在
     // 册或已终态"的孤儿留在盘上——按会话 id 隔离的保险箱没人再去
@@ -1100,6 +1071,90 @@ export class IssueFlowService {
       // 台账行之后立即开泵:构造函数不能 await,泵与 create()
       // 同款 void 火力——同步段把首批额度占上,余下的在收口时再泵。
       void this.pump();
+    }
+  }
+
+  /** 在途账重新接手(重启恢复与异常重跑共用的每单段,ADR-0055):
+   *  崩溃留在窗口里的账不因「换个方式续跑」而漂——未定格 Agent 卡
+   *  作废、MR 合入/检视监看续挂、流水线监看续表、监看账落后于推送账
+   *  补挂、retry 死账清理。判断依据与日志行沿重启恢复的既有写法;
+   *  logPrefix 只进日志行(重启恢复传空串,历史日志一字不差),作废
+   *  备注按 scene 标来路(重启/异常重跑)。 */
+  private rearmInFlightLedgers(
+    live: LiveIssue,
+    logPrefix: string,
+    scene: string,
+  ): void {
+    const { state } = live;
+    // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
+    // 中断后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
+    // 检视监看续挂(②-Q1):原启动链(MR 建成→流水线监看)中断后
+    // 不再触发——流水线已按终态处理(watching=false)的会话,意见发现、
+    // 注入与回复发送会全部停摆,凡 mr_green 且有 MR 一律续挂;
+    // 外部意见只同步为待判断批注，不恢复旧版自动派发修复通知。
+    if (state.mrs?.length && !isTerminal(state.status)) {
+      this.watchMergeStates(live);
+      this.watchMrDiscussions(live);
+    }
+    // 流水线监看续表:deadline 还是原来那张(中断不白送预算);
+    // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
+    let staleRetryLedger = false;
+    for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
+      if (watch.watching) {
+        this.log(`[issue-flow] ${logPrefix}${state.id} 恢复流水线监看(${repo})`
+          + ` @ ${watch.sha.slice(0, 12)}`);
+        void this.watchPipeline(live, repo, watch.sha);
+      }
+      // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
+      // 成了死账,顺手清掉(红灯的下一步=失败事实发送给 AI,不再
+      // 有"定时重评"的恢复义务)。
+      if (watch.evidence_retry_deadline) {
+        delete watch.evidence_retry_deadline;
+        delete watch.evidence_retry_attempts;
+        delete watch.evidence_failure_log;
+        staleRetryLedger = true;
+      }
+    }
+    if (staleRetryLedger) saveState(live.root, state);
+    // 监看账落后于推送账就补挂(issue-72 死表现场的中断自愈):有
+    // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后启动的监看丢失
+    // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
+    // 重挂。同 SHA 已按终态处理的不碰:重放红灯终态处理会扰动同提交刹车账。
+    // external_head 的账不补挂(ADR-0041):检查目标是有意跟着平台外
+    // 提交走的,落后的推送账不是正确目标——补挂会跟检查目标跟随机制
+    // 打架(重启即来回切)。放在续表循环之后,补挂换掉的新账不会被
+    // 旧循环重复盯。
+    if (!isTerminal(state.status)) {
+      for (const mr of state.mrs ?? []) {
+        const pushed = state.pushes
+          ?.find((item) => item.repo === mr.repo)?.sha;
+        const watch = state.pipelines?.[mr.repo];
+        if (pushed && (!watch || (watch.sha !== pushed
+            && !watch.external_head))) {
+          this.log(`[issue-flow] ${logPrefix}${state.id} 监看账落后于推送账`
+            + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
+          this.armPipelineWatch(live, mr.repo);
+        }
+      }
+    }
+    // 清扫(H6):等人会话里够格代答的闸重判一次(免审批档位不因
+    // 中断漏答);非等人的会话不该还有挂着的人问卡——崩溃前没走完的
+    // 定格作废留痕,别留一张永远答不了的卡占列表。
+    if (state.status === "waiting_user") {
+      this.maybeAutoAnswerGate(live);
+    } else {
+      for (const record of live.humanGate.pending()) {
+        try {
+          live.humanGate.supersede(record.waiting_id, {
+            stateVersion: record.state_version,
+            notes: `${scene}清扫:崩溃遗留的未定格待办,作废`,
+          });
+        } catch (error) {
+          this.log(`[issue-flow] ${state.id} ${scene}作废待办 `
+            + `${record.waiting_id} 失败: `
+            + String(error instanceof Error ? error.message : error));
+        }
+      }
     }
   }
 
@@ -1628,6 +1683,10 @@ export class IssueFlowService {
     // (前端传来的 module 文本在带 moduleId 时让位,标签不出现两个真相)。
     let moduleName = input.module?.trim() || undefined;
     let moduleRepos: string[] | undefined;
+    // 参考组件仓目录快照(ADR-0054):发起时刻按模块订阅解析启用条目,
+    // create 定格进 state——会话中途改模块订阅不追溯。登记表不可读
+    // 按 fail-open 走(空目录),不挡发起;与知识仓装载同一姿态。
+    let moduleReferenceRepos: IssueSessionState["reference_repos"];
     const moduleId = input.moduleId?.trim() || undefined;
     // 登记门禁(无单定位的机械真相):无单号登记必须指名业务模块并带上
     // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐。
@@ -1651,6 +1710,19 @@ export class IssueFlowService {
         }
         moduleName = module.name;
         moduleRepos = module.repositories;
+        try {
+          const registryRows = componentRepositories(this.options.dataDir);
+          moduleReferenceRepos = (module.reference_component_repos ?? [])
+            .map((refId) => registryRows.find((row) => row.id === refId))
+            .filter((row): row is ComponentRepository =>
+              !!row && row.enabled)
+            .map((row) => ({
+              id: row.id, name: row.name,
+              url: row.repository, description: row.description,
+            }));
+        } catch {
+          moduleReferenceRepos = [];
+        }
       } catch (error) {
         if (error instanceof IssueControlError) throw error;
         throw new IssueControlError(
@@ -1740,6 +1812,8 @@ export class IssueFlowService {
       ...(input.productVersion ? { product_version: input.productVersion } : {}),
       ...(moduleName ? { module: moduleName } : {}),
       ...(moduleId ? { module_id: moduleId } : {}),
+      ...(moduleReferenceRepos?.length
+        ? { reference_repos: moduleReferenceRepos } : {}),
       ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       scenario,
@@ -2111,17 +2185,8 @@ export class IssueFlowService {
           `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
       }
     }
-    // 新增链⑤:合并计数 ≤ 上限。不给移除抵扣:清单由 Agent 执行变化,
-    // 先拉后删的时序下抵扣不成立,静态可保证的上限只有 current+fresh
-    // (remove_repo 只减不增,任何执行顺序都不会越过这道闸)。
-    if (current.length + freshAdds.length > MAX_ISSUE_REPOS) {
-      throw new IssueControlError(
-        `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓`
-          + `(当前 ${current.length} 个,本次新增 ${freshAdds.length} 个`
-          + `将到 ${current.length + freshAdds.length} 个);`
-          + "请精简清单或分多次调整");
-    }
-    // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
+  // 数量上限已废除(ADR-0054):不再做合并计数校验。
+  // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
     const removed: string[] = [];
     for (const url of removes) {
       const hit = inCurrent(url);
@@ -2154,7 +2219,21 @@ export class IssueFlowService {
     }
     // 校验全过才留痕(转移账 + 事件账双记),清单一字不动——repo_urls
     // 由 Agent 经 pull_repo/remove_repo 执行后变化,这里是"用户的裁定",
-    // 不是清单本身。
+    // 不是清单本身。新增方向顺带记指派意图(ADR-0054):Agent 调
+    // pull_repo 落地时凭它走平等仓登记路径并摘参考仓台账行(指派升级)。
+    if (freshAdds.length) {
+      state.repo_assign_pending = [
+        ...(state.repo_assign_pending ?? []), ...freshAdds];
+      // 指派史永久留痕:展示层区分「运行中经人指派」与登记自带仓。
+      const assigned = state.assigned_repos ?? [];
+      for (const url of freshAdds) {
+        if (!assigned.some((item) =>
+          repositoryIdentity(item) === repositoryIdentity(url))) {
+          assigned.push(url);
+        }
+      }
+      state.assigned_repos = assigned;
+    }
     const summary = [
       ...(freshAdds.length ? [`新增 ${freshAdds.join("、")}`] : []),
       ...(removed.length ? [`移除 ${removed.join("、")}`] : []),
@@ -2291,8 +2370,7 @@ export class IssueFlowService {
   /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
    * 重建会话,以续聊提示词把话交给重建的上下文。用户主动续聊与平台
    * 通知共用;重启自动续跑(#27)是同一回合体的另一条启动路径,走
-   * 泵(见 pump),不在这里——它必须排队等并发额度。boundary=分析→
-   * 修复边界(票 02):那一次续聊前必压一次,锚点钉住分析报告。 */
+   * 泵(见 pump),不在这里——它必须排队等并发额度。 */
   private continueTurn(
     live: LiveIssue,
     message: string,
@@ -2332,13 +2410,22 @@ export class IssueFlowService {
       }
       const driver = await this.openDriver(live);
       return driver.startResume(issueResumePrompt(live.state, full,
-        this.environmentCredentials(live),
-        {
-          tier: this.tierOf(live),
-          workspace: live.root,
-          blockedPaths: readResourceBlocks(this.options.dataDir),
-        }));
+        this.environmentCredentials(live), this.resumePromptOptions(live)));
     });
+  }
+
+  /** 续聊提示词的公共选项(两处 startResume 同源):档位/工作区/屏蔽
+   *  清单,外加分析报告指针(ADR-0055)——报告在场才带,重启与异常
+   *  重跑的降级开局都直接知道方案要点在哪,不必从头重找。 */
+  private resumePromptOptions(live: LiveIssue): IssueResumeOptions {
+    return {
+      tier: this.tierOf(live),
+      workspace: live.root,
+      blockedPaths: readResourceBlocks(this.options.dataDir),
+      ...(existsSync(join(live.root, ANALYSIS_REPORT_FILENAME))
+        ? { report: this.analysisReportPointer(live) }
+        : {}),
+    };
   }
 
   /** 分析报告指针(边界路共用):落盘路径 + 「修改方案」章节要点。
@@ -2429,6 +2516,8 @@ export class IssueFlowService {
     };
     const taken = new Set(issueRepoWorkspaces(state, live.root)
       .map((repo) => repo.dir.split(/[\\/]/).at(-1) ?? ""));
+    // 参考仓(ADR-0054)的名字同样占用:知识仓不与参考仓名相撞。
+    (state.public_repos ?? []).forEach((row) => taken.add(row.name));
     if (taken.has(name)) return skip(`仓名 ${name} 与关联仓撞名`);
     const target = join(live.root, "repo", name);
     try {
@@ -2473,11 +2562,30 @@ export class IssueFlowService {
   ): Promise<{
     dir: string; cloned: boolean; branch?: string;
     head: string;
+    reference?: boolean;
   }> {
     const { state } = live;
     const url = validateRepoUrl(rawUrl);
     this.requireGitIdentity(state.account, [url]);
-    // 登记合并:与登记/模块绑定同一把尺,超上限整次打回。
+    // 身份裁决(ADR-0054,resolvePullRoute 纯函数):指派意图 > 登记
+    // 表命中 > 平等登记。指派升级:摘掉参考仓台账行走平等仓登记路径
+    // ——「改共享资产」由用户指派背书,身份随人的意志升级,不随 AI
+    // 的重复拉取升级。模块绑定仓(登记侧既定关系)也算已知:发起时
+    // 显式给了仓清单的边缘场景下绑定仓不在 repo_urls,不该被登记表
+    // 卷成参考仓。命中只查一次,裁决与参考仓路径共用。
+    const registryHit = this.referenceRegistryHit(url);
+    const route = resolvePullRoute(state, url, registryHit !== undefined,
+      this.moduleBoundRepos(state));
+    if (route === "assigned") {
+      const identity = repositoryIdentity(url);
+      state.repo_assign_pending = (state.repo_assign_pending ?? [])
+        .filter((item) => repositoryIdentity(item) !== identity);
+      state.public_repos = (state.public_repos ?? []).filter((row) =>
+        repositoryIdentity(row.url) !== identity);
+    } else if (route === "reference") {
+      return this.pullReferenceRepo(live, url, registryHit!);
+    }
+    // 登记合并:与登记/模块绑定同一把尺。
     const merged = normalizeIssueRepos(undefined,
       [...(state.repo_urls ?? []), url]);
     state.repo_urls = merged;
@@ -2551,6 +2659,94 @@ export class IssueFlowService {
       ...(branch ? { branch } : {}),
       head,
       ...(remoteBranch ? { remoteBranch } : {}),
+    };
+  }
+
+  /** 公共组件仓目录命中查询(ADR-0054):组件仓库表的启用行按地址
+   * 归一比对。登记表读不出来(缺文件/坏 JSON)按未配置走,不挡平等
+   * 仓路径——目录是增强项,不是拉仓的前置闸。 */
+  private referenceRegistryHit(url: string): ComponentRepository | undefined {
+    let rows: ComponentRepository[];
+    try {
+      rows = componentRepositories(this.options.dataDir);
+    } catch {
+      return undefined;
+    }
+    const identity = repositoryIdentity(url);
+    return rows.find((row) => row.enabled
+      && repositoryIdentity(row.repository) === identity);
+  }
+
+  /** 模块绑定仓清单(登记侧既定关系,身份裁决的 extraKnown):模块
+   * 读不到/没绑定按空走,fail-open 不挡拉仓。 */
+  private moduleBoundRepos(state: IssueSessionState): string[] {
+    if (!state.module_id) return [];
+    try {
+      return readBusinessModule(this.options.dataDir, state.module_id)
+        .repositories;
+    } catch {
+      return [];
+    }
+  }
+
+  /** 参考仓拉取(ADR-0054):命中目录的地址落只读参考件。照常平铺
+   * repo/<仓名>/ 可研读,但不进登记清单——交付工具的定位映射只认
+   * 登记清单,参考仓在结构上推不了、交不了(知识仓同款机理)。与
+   * 版本线无关的共享资产:不走基线克隆、不建修复分支、不做 Mae 构建
+   * 准备。幂等:台账已在场的仓按原仓名回报,不重记不重克隆。 */
+  private async pullReferenceRepo(
+    live: LiveIssue,
+    url: string,
+    hit: ComponentRepository,
+  ): Promise<{
+    dir: string; cloned: boolean; head: string; reference: boolean;
+  }> {
+    const { state } = live;
+    const identity = repositoryIdentity(url);
+    const existing = (state.public_repos ?? []).find((row) =>
+      repositoryIdentity(row.url) === identity);
+    const base = repoNameOf(url);
+    const name = existing?.name ?? (() => {
+      const taken = new Set<string>([
+        ...issueRepoWorkspaces(state, live.root)
+          .map((repo) => repo.dir.split(/[\\/]/).at(-1) ?? ""),
+        ...(state.public_repos ?? []).map((row) => row.name),
+      ]);
+      let candidate = base;
+      let serial = 2;
+      while (taken.has(candidate)) candidate = `${base}-${serial++}`;
+      return candidate;
+    })();
+    const dir = join(live.root, "repo", name);
+    const cloned = !existsSync(join(dir, ".git"));
+    if (cloned) {
+      this.log(`[issue-flow] ${live.id} 参考仓拉取: ${url}`
+        + `(${hit.name})`);
+      await cloneRepository({
+        dataDir: this.options.dataDir,
+        targetDir: dir,
+        repoUrl: url,
+        credential: this.options.gitCredential?.(state.account),
+      });
+    }
+    // 克隆以宿主身份落盘,收口修属主(与 pull_repo 同款;幂等 walk 对
+    // 属主已对的 inode 零写入)。
+    repairContainerCloneOwnership({
+      workspace: live.root,
+      dir,
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    });
+    const head = await currentHead(dir);
+    if (!existing) {
+      state.public_repos = [...(state.public_repos ?? []),
+        { url, name, at: new Date().toISOString() }];
+    }
+    return {
+      dir: relative(live.root, dir) || dir,
+      cloned,
+      head,
+      reference: true,
     };
   }
 
@@ -3956,12 +4152,7 @@ export class IssueFlowService {
         const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
           + (replay ? `\n\n${replay}` : "");
         return driver.startResume(issueResumePrompt(live.state, decisionText,
-          this.environmentCredentials(live),
-          {
-          tier: this.tierOf(live),
-          workspace: live.root,
-          blockedPaths: readResourceBlocks(this.options.dataDir),
-        }));
+          this.environmentCredentials(live), this.resumePromptOptions(live)));
       });
     });
     return summarize(live.state);
@@ -4144,13 +4335,9 @@ export class IssueFlowService {
       fixedAdvance(state, target,
         `用户确认分析报告,进入${stageName(target)}`);
       saveState(live.root, state);
-      // 报告指针钉进推进通知词(必达通道):pi 的手动压缩在单回合
-      // 历史上不带 customInstructions,摘要保不住指针——通知词是 fix
-      // 回合的开场,压缩再多次它都在最新回合里。
+      // 报告指针钉进推进通知词(必达通道):通知词是 fix 回合的开场,
+      // 压缩再多次它都在最新回合里;fix 阶段的压缩锚也带同一指针。
       const pointer = this.analysisReportPointer(live);
-      // boundary=true:分析→修复边界的续聊前必压一次(票 02)——此刻
-      // 上下文正是一生中最重的(定位探针/报错原文全是可丢弃的过程性
-      // 探索),锚点钉住分析报告指针再进 fix。
       this.continueTurn(live, fixedAdvanceNotice(state,
         promptCopy("notices", "gate.analysis_confirm.confirm", {
           stage: stageName(target),
@@ -4869,22 +5056,26 @@ export class IssueFlowService {
   }
 
   async control(id: string, input: {
-    action: "cancel" | "archive";
+    action: "cancel" | "archive" | "revive";
     kind?: IssueConclusionKind;
     summary?: string;
+    /** 异常重跑(ADR-0055)可附的操作者说明,随恢复回合必达送达 AI。 */
+    note?: string;
   }): Promise<IssueSummary> {
     const live = this.require(id);
+    if (input.action === "revive") return this.reviveIssue(live, input.note);
     if (isTerminal(live.state.status)
       && live.state.status !== "failed") {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
     }
     if (live.state.status === "failed" && input.action !== "cancel") {
-      // failed 曾是"死胡同终态":不能续聊、不能归档、不能取消,出错
-      // 的会话永远占着列表(2026-09-02 用户实锤难受)。出口定为取消——
-      // 归档需要结论,结论词表里没有"失败"语义,强归档只能落到
-      // "非问题",那是撒谎;取消=放弃这单,错误信息与账目都还在。
+      // failed 曾是"死胡同终态":不能续聊、不能归档,出错的会话永远
+      // 占着列表(2026-09-02 用户实锤难受)。出口有二(ADR-0055):取消
+      // =放弃这单;异常重跑=操作者确认异常已排除后原地复活——归档
+      // 仍然不行,结论词表里没有"失败"语义,强归档只能落到"非问题",
+      // 那是撒谎。错误信息与账目两条出口都保留。
       throw new IssueControlError(
-        "已失败的会话没有结论可归档,只能取消清理");
+        "已失败的会话没有结论可归档,只能取消清理或异常重跑");
     }
     if (this.turning.has(live.id) && input.action !== "cancel") {
       throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
@@ -4983,6 +5174,62 @@ export class IssueFlowService {
     // 无仓)则照旧当场后台回收。崩溃缺口由每日清扫器兜底。
     this.reclaimAfterCodeOrigin(live);
     return summarize(live.state);
+  }
+
+  /** 异常重跑(ADR-0055):failed 的第二出口。不取消、不动问题单目录
+   * ——分析报告、检视意见、人工决定原文、阶段与轮次账、代码现场原
+   * 地全在(它们绑问题单目录,不绑底层会话;failed 又豁免现场回收,
+   * repo/ 与 Pi 原生会话文件都在盘上)。恢复回合走 continueTurn:现
+   * 场重建后 resumeSession 原样接回底层上下文(与重启自续跑同链),
+   * 开场是 revive 通知+操作者说明原文+末条人工决定原文补投。走续聊
+   * 而非排队泵:操作者在场显式动作,与用户「继续」同权——排队消息
+   * 只在内存,落盘 queued 撞上进程重启会被恢复管线误当登记首轮开场。
+   * 异常是黑盒:平台不诊断、不自动重试,确认权在操作者;轮次账不推
+   * 高(重跑不是流程倒退,不脏修复轮预算与一次率口径)。 */
+  private reviveIssue(live: LiveIssue, note?: string): IssueSummary {
+    const { state } = live;
+    if (state.status !== "failed" || this.turning.has(live.id)) {
+      throw new IssueControlError(
+        "异常重跑只适用于已失败的会话;已取消/归档是终态,如需重做请重新发起");
+    }
+    const operatorNote = note?.trim() ?? "";
+    // failed 时冻结的终态快照(ADR-0042)随复活失效:删掉,最终收口
+    // 重新冻结——留着会让"只生成一次"的读侧拿 failed 版本当终局。
+    const metricsSnapshot = join(live.root, ISSUE_METRICS_FILE);
+    if (existsSync(metricsSnapshot)) {
+      rmSync(metricsSnapshot, { force: true });
+      this.log(`[issue-flow] ${live.id} 异常重跑:终态快照已失效删除`);
+    }
+    // 状态落 idle(对话开放,同 reply 发消息前的状态);回合跑起来后
+    // 页面自然显示进行中。若恢复回合再失败,落回 failed 可再次重跑。
+    state.status = "idle";
+    delete state.error;
+    recordTransition(state, {
+      source: "platform",
+      note: operatorNote
+        ? `操作者确认异常已排除,异常重跑(说明:${operatorNote.slice(0, 160)})`
+        : "操作者确认异常已排除,异常重跑,继续推进",
+    });
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "issue_revived", {
+      operator_note: operatorNote,
+    });
+    sessionAudit(live.root, live.id, "decisions", {
+      kind: "decision.revive",
+      msg: `操作者发起异常重跑:failed 会话原地复活`
+        + (operatorNote ? ",附操作者说明" : ""),
+      decision: "revive",
+      reason_code: "operator-confirmed",
+      stage: state.stage, status: state.status,
+    });
+    // 在途账清理与重启恢复对齐(ADR-0055):崩溃留在窗口里的未定格
+    // Agent 卡作废、MR/流水线监看续挂、监看账落后补挂、retry 死账
+    // 清理——异常前的在途账不越过复活线带进恢复回合。
+    this.rearmInFlightLedgers(live, "异常重跑:", "异常重跑");
+    this.log(`[issue-flow] ${live.id} 异常重跑:恢复回合启动`);
+    this.continueTurn(live, reviveResumeNotice(operatorNote)
+      + recentHumanDecisionNotes(live.root));
+    return summarize(state);
   }
 
   /** 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方

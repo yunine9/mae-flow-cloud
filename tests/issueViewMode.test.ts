@@ -365,10 +365,10 @@ const WRITE_ROUTES: Array<{
     denied: "只有归属人能关联单号转正",
   },
   {
-    what: "归档/取消", method: "POST",
+    what: "归档/取消/重跑", method: "POST",
     parts: ["issues", LIVE, "control"],
     payload: { action: "cancel" },
-    denied: "只有归属人能归档或取消会话",
+    denied: "只有归属人能重跑、取消或归档会话",
   },
 ];
 

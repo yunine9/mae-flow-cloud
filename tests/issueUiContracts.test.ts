@@ -1660,10 +1660,11 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
     /const repoDiffEmpty =\s*\n\s*pendingRepoAdd\.length === 0 && pendingRepoRemove\.length === 0;/);
   assert.match(metaPane, /disabled=\{repoDiffEmpty \|\| repoSubmitting\}/);
   // https 即时校验(与后端同款口径前置,别等服务端打回):https:// 前缀
-  // /不与现清单重复/合并计数 ≤ 8;错误就地小字(role=alert)。
+  // /不与现清单重复;数量上限已废除(ADR-0054),前端不得再有同尺预判;
+  // 错误就地小字(role=alert)。
   assert.match(metaPane, /startsWith\("https:\/\/"\)/);
   assert.match(metaPane, /该仓已在关联仓清单里,不重复添加/);
-  assert.match(metaPane, /const MAX_ISSUE_REPOS = 8;/);
+  assert.doesNotMatch(metaPane, /MAX_ISSUE_REPOS|最多拉取/);
   // 不乐观更新(项目原则:UI 只做状态显示):清单数据源仍是 detail,
   // MetaPane 无任何改写 detail 的回调/状态;提交成功只清缓冲 + 如实状态
   // 提示(「已通知 Agent 处理」),绝不写「删除成功」。
@@ -1671,6 +1672,26 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   assert.doesNotMatch(metaPane, /onChanged|setDetail\(/);
   assert.match(metaPane, /已通知 Agent 处理,清单将在 Agent 执行后更新/);
   assert.doesNotMatch(metaPane, /删除成功|移除成功/);
+});
+
+test("只读参考件入卡(#425,ADR-0054):四类身份徽标同 pane 分组陈列", () => {
+  const metaPane = readFileSync(resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  // 元信息页签的关联仓清单即仓卡面:模块绑定/用户指派徽标打在登记
+  // 仓行上;参考仓与知识仓是只读参考件,独立分组「装了才出」。
+  assert.match(metaPane, /title="运行中经元信息页签指派的仓\(ADR-0023 通道\)">用户指派<\/Badge>/);
+  // 用户指派的权威口径 = 指派台账(assigned_repos):登记自带仓不误标。
+  assert.match(metaPane, /\(detail\.assigned_repos \?\? \[\]\)\.some\(\(item\) =>/);
+  assert.match(metaPane, /aria-label="关联仓清单"/);
+  assert.match(metaPane, /只读参考件/);
+  assert.match(metaPane, /detail\.public_repos\?\.\s*length/);
+  assert.match(metaPane, />参考仓·只读<\/Badge>/);
+  assert.match(metaPane, /detail\.knowledge_repo\?\.status === "ready"/);
+  assert.match(metaPane, />知识仓·只读<\/Badge>/);
+  // 知识仓此前只在过程记录里露面;上 wire 后镜像已补(api.ts),服务端
+  // summarize 不再剥离该键(契约对账样例同步补 undefined)。
+  const apiMirror = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.match(apiMirror, /public_repos\?: Array<\{ url: string; name: string; at: string \}>/);
+  assert.match(apiMirror, /knowledge_repo\?: \{/);
 });
 
 // ---- #256 扫尾:焦点行断供回场、裸钮收编 ----

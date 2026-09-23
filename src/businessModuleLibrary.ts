@@ -7,6 +7,7 @@
 
 import { createHash } from "node:crypto";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
+import { componentRepositories } from "./componentRepositories.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -62,6 +63,10 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  /** 参考组件仓订阅(2026-09-23,ADR-0054):公共组件仓登记表条目的
+   * id 引用,存引用不抄地址——登记表地址变更模块零跟进。问题会话
+   * 开场只注入本模块订阅条目的描述;历史模块无此字段,读作空。 */
+  reference_component_repos?: string[];
   status: BusinessModuleStatus;
   revision: number;
   assets: BusinessKnowledgeAsset[];
@@ -156,6 +161,30 @@ function moduleRepositories(values: string[]): string[] {
   return unique;
 }
 
+/** 参考组件仓订阅(ADR-0054):从公共组件仓登记表多选条目 id,存引用
+ * 不抄地址。悬空引用保存打回——订阅的条目事后被删/登记表不可读时,
+ * 任何再保存都要求先清理订阅,失效引用不许静默滞留。停用条目允许
+ * 订阅:停用只是暂不注入,不是删除。 */
+function referenceComponentRepos(dataDir: string, values: unknown): string[] {
+  const unique = [...new Set((Array.isArray(values) ? values : [])
+    .map((item) => String(item).trim()).filter(Boolean))];
+  if (!unique.length) return [];
+  let known: Set<string>;
+  try {
+    known = new Set(componentRepositories(dataDir).map((row) => row.id));
+  } catch {
+    throw new BusinessModuleError(
+      "公共组件仓登记表不可读，暂时无法核对参考组件仓订阅");
+  }
+  const missing = unique.filter((id) => !known.has(id));
+  if (missing.length) {
+    throw new BusinessModuleError(
+      `引用的组件仓条目不存在：${missing.join("、")}`
+        + "（请从公共组件仓登记表重新选择）");
+  }
+  return unique;
+}
+
 function root(dataDir: string): string {
   return join(dataDir, ROOT);
 }
@@ -186,6 +215,8 @@ function parseModule(value: unknown): BusinessModule {
   }
   return {
     ...module,
+    reference_component_repos: Array.isArray(module.reference_component_repos)
+      ? module.reference_component_repos.map(String) : [],
     assets: module.assets.map((asset) => ({
       ...asset,
       // 兼容历史资产：旧 languages 不再参与业务知识归属或匹配。
@@ -297,6 +328,7 @@ export function createBusinessModule(
     owner: string;
     maintainers?: string[];
     repositories?: string[];
+    reference_component_repos?: string[];
   },
   operator: string,
 ): BusinessModule {
@@ -314,6 +346,8 @@ export function createBusinessModule(
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
     repositories: moduleRepositories(input.repositories ?? []),
+    reference_component_repos: referenceComponentRepos(
+      dataDir, input.reference_component_repos ?? []),
     status: "active",
     revision: 1,
     assets: [],
@@ -336,6 +370,7 @@ export function updateBusinessModule(
     owner?: string;
     maintainers?: string[];
     repositories?: string[];
+    reference_component_repos?: string[];
     status?: BusinessModuleStatus;
   },
   operator: string,
@@ -361,6 +396,14 @@ export function updateBusinessModule(
       : usernames(patch.maintainers, owner),
     repositories: patch.repositories === undefined
       ? current.repositories : moduleRepositories(patch.repositories),
+    // 订阅校验永远按保存后的最终值跑(不只校验补丁):条目事后被删,
+    // 带着悬空引用的任何再保存都打回,迫使先清理——失效不静默滞留。
+    reference_component_repos: referenceComponentRepos(
+      dataDir,
+      patch.reference_component_repos === undefined
+        ? current.reference_component_repos ?? []
+        : patch.reference_component_repos,
+    ),
     status,
     revision: current.revision + 1,
     updated_at: now,

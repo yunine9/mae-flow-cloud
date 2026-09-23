@@ -30,7 +30,10 @@ export type SemanticEventKind =
   /** 检视提交(问题域,ADR-0007):用户对分析报告的检视意见清单落账
    * ——过程问答投影靠它呈现"这轮为什么重跑"。 */
   | "review_submitted"
-  | "workspace_reclaimed";
+  | "workspace_reclaimed"
+  /** 异常重跑(问题域,ADR-0055):操作者确认异常已排除,failed 会话
+   * 原地复活。operator_note=操作者随重跑附的一句话说明,空串=未附。 */
+  | "issue_revived";
 
 export interface SemanticEvent {
   eventId: number;
@@ -60,6 +63,7 @@ const REQUIRED_PAYLOAD: Record<SemanticEventKind, readonly string[]> = {
   /** 磁盘治理(票 01/03):终态现场或构建产物回收落账。bytes=本次
    *  回收字节数;scope=repo(整仓现场)或 products(构建产物)。 */
   workspace_reclaimed: ["bytes", "scope"],
+  issue_revived: ["operator_note"],
 };
 
 export function validateEvent(event: SemanticEvent): string {

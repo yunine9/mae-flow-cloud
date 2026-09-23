@@ -31,7 +31,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { BusinessModuleError, createBusinessModule, readBusinessModule }
+import { BusinessModuleError, createBusinessModule, readBusinessModule,
+  updateBusinessModule }
   from "../businessModuleLibrary.ts";
 import { EnvironmentRegistry } from "../environmentRegistry.ts";
 import { FakeGitPlatform } from "../gitPlatform.ts";
@@ -41,6 +42,26 @@ import { FakeGitPlatform } from "../gitPlatform.ts";
 export const DEBUG_ISSUE_REPOS: Array<{ name: string; path: string }> = [
   { name: "dafung-web", path: "/home/ning/code/dafung-web" },
   { name: "scotland-yard-gd", path: "/home/ning/code/scotland-yard-gd" },
+];
+
+/** 调试形态的公共组件登记表种子(ADR-0054,2026-09-23):每个条目独立
+ * 建镜像(仓名不同于绑定仓),登记表 repository 写镜像路径——问题流的
+ * 身份归类与模块订阅快照读的就是这份本地文件,本地路径即可全链闭环。 */
+export const DEBUG_ISSUE_COMPONENTS: Array<{
+  id: string;
+  name: string;
+  path: string;
+  languages: string[];
+  description: string;
+}> = [
+  {
+    id: "debug-common-web-kit",
+    name: "公共组件演示·Web 套件",
+    path: "/home/ning/code/dafung-web",
+    languages: ["TypeScript"],
+    description: "排查表格/导出等公共组件行为时读取"
+      + "(调试演示条目,镜像 dafung-web 源)",
+  },
 ];
 
 /** 播种器对账号面的最小依赖(结构化,不绑 LocalAuth 具体类,测试好替身)。 */
@@ -63,6 +84,8 @@ export interface DebugIssueSetup {
   platformUrl: string;
   /** 已就位的镜像(源仓缺失的会跳过并大声记账)。 */
   mirrors: Array<{ name: string; path: string }>;
+  /** 已就位的公共组件登记表条目(镜像路径;ADR-0054)。 */
+  components: Array<{ id: string; name: string; path: string }>;
 }
 
 function runGit(cwd: string, ...args: string[]): Promise<string> {
@@ -215,6 +238,14 @@ export async function setupDebugIssue(options: {
   auth: DebugIssueAuth;
   /** 目标仓(测试注入替身;缺省用 DEBUG_ISSUE_REPOS)。 */
   repos?: Array<{ name: string; path: string }>;
+  /** 公共组件登记表种子(测试注入替身;缺省用 DEBUG_ISSUE_COMPONENTS)。 */
+  components?: Array<{
+    id: string;
+    name: string;
+    path: string;
+    languages: string[];
+    description: string;
+  }>;
   /** 执行侧保证 dev 账号在场(缺省 true;纯资产播种的测试可关)。 */
   ensureDevAccount?: boolean;
   log?: (message: string) => void;
@@ -239,6 +270,41 @@ export async function setupDebugIssue(options: {
     const target = join(remotesDir, `${repo.name}.git`);
     await ensureBareMirror(repo.path, target, log);
     mirrors.push({ name: repo.name, path: target });
+  }
+
+  // ①.5 公共组件仓登记表(ADR-0054):组件源仓独立建镜像,登记表
+  // repository 写镜像路径——问题流的身份归类与模块订阅快照读同一份
+  // 文件,本地路径即可全链闭环。整表每次启动重写:调试形态的登记表
+  // 是播种物(与罐头日志"只在缺时写"不同——正式形态的登记表在正式
+  // dataDir,互不相干,这里不覆盖任何用户资产)。
+  const seededComponents: Array<{ id: string; name: string; path: string }> = [];
+  const componentRows: Array<Record<string, unknown>> = [];
+  for (const component of options.components ?? DEBUG_ISSUE_COMPONENTS) {
+    if (!existsSync(join(component.path, ".git"))) {
+      log(`组件源仓不存在或不是 git 仓,跳过: ${component.path}`);
+      continue;
+    }
+    const target = join(remotesDir, `${component.id}.git`);
+    await ensureBareMirror(component.path, target, log);
+    componentRows.push({
+      id: component.id,
+      name: component.name,
+      repository: target,
+      branch: "master",
+      path: "",
+      languages: component.languages,
+      description: component.description,
+      enabled: true,
+    });
+    seededComponents.push({
+      id: component.id, name: component.name, path: target,
+    });
+  }
+  if (componentRows.length) {
+    writeFileSync(join(options.dataDir, "component-repositories.json"),
+      JSON.stringify(componentRows, null, 2) + "\n");
+    log(`公共组件仓登记表已播种: ${componentRows.length} 条`
+      + "(订阅注入与拉取归类同源)");
   }
 
   // ② dev 账号的 Git 署名:没有它,宿主模式克隆不写 user.email,
@@ -270,10 +336,32 @@ export async function setupDebugIssue(options: {
             + " bare 镜像仓。调试单(DTS-2026-9001~9003)按仓名命中本模块。",
           owner: "dev",
           repositories: mirrors.map((item) => item.path),
+          reference_component_repos: seededComponents
+            .map((item) => item.id),
         }, "dev");
-        log(`示例业务模块已播种: ${moduleId}(绑 ${mirrors.length} 个镜像)`);
+        log(`示例业务模块已播种: ${moduleId}(绑 ${mirrors.length} 个镜像)`
+          + (seededComponents.length
+            ? `,订阅 ${seededComponents.length} 个参考组件仓` : ""));
       } catch (seedError) {
         log(`示例模块播种失败(不影响其余资产): ${String(seedError)}`);
+      }
+    }
+    if (seededComponents.length) {
+      // 存量示例模块(本特性之前的调试 dataDir)幂等补订阅:差的才补,
+      // 已订阅原样跳过;更新失败不挡其余资产。
+      try {
+        const current = readBusinessModule(options.dataDir, moduleId);
+        const wanted = seededComponents.map((item) => item.id);
+        const nowHave = current.reference_component_repos ?? [];
+        if (wanted.some((id) => !nowHave.includes(id))) {
+          updateBusinessModule(options.dataDir, moduleId, {
+            reference_component_repos:
+              [...new Set([...nowHave, ...wanted])],
+          }, "debug-issue");
+          log("示例模块已补参考组件仓订阅");
+        }
+      } catch (error) {
+        log(`示例模块补订阅失败(不影响其余资产): ${String(error)}`);
       }
     }
   }
@@ -334,6 +422,7 @@ export async function setupDebugIssue(options: {
     remotesDir,
     platformUrl: platform.baseUrl,
     mirrors,
+    components: seededComponents,
   };
 }
 
