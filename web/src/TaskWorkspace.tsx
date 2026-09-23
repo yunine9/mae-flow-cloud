@@ -242,7 +242,7 @@ export function workspaceNextActionCopy(
       : { title: "等待检视与合入", detail: "前往 CodeHub 完成最后一步" };
   }
   if (task.status === "coordinating") {
-    return { title: "子任务进行中", detail: "全部子任务完成后主任务自动完成" };
+    return { title: "子任务进行中", detail: "剩余子任务完成或取消后，主任务自动收口" };
   }
   return { title: "当前无待办", detail: "无需处理" };
 }
@@ -1735,7 +1735,7 @@ export function TaskWorkspace({
       {!waiting && task.status === "coordinating" && (
         <div className="grid gap-2">
           <strong className="text-sm text-text-strong">{task.focus?.needs_attention ? "有子任务需要处理" : "子任务正在推进"}</strong>
-          <p className="m-0 text-[13px] leading-relaxed text-muted-foreground">{task.detail ?? "全部子任务完成后，主任务会自动完成。"}</p>
+          <p className="m-0 text-[13px] leading-relaxed text-muted-foreground">{task.detail ?? "剩余子任务完成或取消后，主任务会自动收口。"}</p>
           <div className="grid gap-1.5">{task.requirement_graph?.repositories.map((repository) => (
             <button type="button" key={repository.id}
               disabled={!repository.task_id || !onOpenTask}

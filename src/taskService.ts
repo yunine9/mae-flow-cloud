@@ -678,7 +678,7 @@ export type TaskStatus =
   | "pausing"
   | "paused"
   | "waiting_for_human"
-  | "coordinating"   // 跨仓主任务已拆单，等待全部子任务真实完成
+  | "coordinating"   // 跨仓主任务已拆单，等待子任务完成或取消
   | "completed"
   | "verifying"      // MR 已建,权威流水线未过(主 spec §10:不能标完成)
   | "await_merge"    // 流水线通过,等待人工合入;系统不自动合并
@@ -8173,9 +8173,8 @@ export class TaskService {
     this.writeTaskState(task);
   }
 
-  /** 子任务的状态变化必须回写主任务，否则“主任务完成”只能靠页面猜。
-   * 主任务不再运行 Agent，只作为跨仓需求的持久汇总：所有子任务都是真
-   * completed 才完成；失败/取消/暂停/等人都继续留在当前现场并点名。 */
+  /** 子任务的状态变化必须回写主任务。取消表示这部分工作不再需要；
+   * 其余范围全部完成后主任务收口，不能把取消项写成已交付。 */
   private reconcileRequirementParent(parent: TaskState, recoverLinks = false): void {
     const graph = parent.summary.requirement_graph;
     if (!this.isRequirementAnalysis(parent) || !graph
@@ -8226,14 +8225,19 @@ export class TaskService {
     const states = actualChildren;
     const completed = states.filter((child) =>
       child.summary.status === "completed").length;
+    const canceled = states.filter((child) =>
+      child.summary.status === "canceled").length;
     const attention = states.filter((child) => [
-      "waiting_for_human", "paused", "failed", "canceled",
+      "waiting_for_human", "paused", "failed",
     ].includes(child.summary.status)).length;
-    const allCompleted = completed === states.length;
-    const nextStatus: TaskStatus = allCompleted ? "completed" : "coordinating";
-    const nextDetail = allCompleted
-      ? `全部 ${states.length} 个子任务已完成，跨仓需求交付完成`
-      : `${completed}/${states.length} 个子任务已完成`
+    const allClosed = completed + canceled === states.length;
+    const nextStatus: TaskStatus = allClosed
+      ? completed ? "completed" : "canceled" : "coordinating";
+    const progress = `${completed}/${states.length} 个子任务已完成`
+      + (canceled ? `，${canceled} 个已取消` : "");
+    const nextDetail = allClosed
+      ? completed ? `${progress}，当前需求已完成` : "全部子任务已取消，主任务随之取消"
+      : progress
         + (attention ? `，${attention} 个需要处理` : "，其余正在推进");
     const previousStatus = parent.summary.status;
     if (!repaired && previousStatus === nextStatus && parent.summary.detail === nextDetail) return;

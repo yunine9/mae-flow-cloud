@@ -28,6 +28,16 @@ test("跨仓主任务在子任务推进期间保持活动，并把异常指向�
   });
   assert.equal(progressing.kind, "machine");
   assert.equal(progressing.needs_attention, false);
+  const canceled = projectTaskFocus({
+    status: "coordinating",
+    detail: "1/3 个子任务已完成，1 个已取消，其余正在推进",
+    requirement_graph: { repositories: [
+      { task_status: "completed" }, { task_status: "canceled" },
+      { task_status: "queued" },
+    ] },
+  });
+  assert.equal(canceled.needs_attention, false,
+    "取消的子任务不应持续提示责任人处理");
 
   const attention = projectTaskFocus({
     status: "coordinating",
@@ -258,7 +268,7 @@ test("从未起跑的 failed 单指向重新下单,不指无效重跑(MFC-025)",
     status: "failed", detail: "会话中断",
     progress: { current_phase: "写代码", step: "自由实现" },
   });
-  assert.match(started.next_action, /重跑/);
+  assert.match(started.next_action, /按原流程重试/);
 });
 
 test("按需验证历史失败不遮盖已继续交付或完成的当前事实", () => {

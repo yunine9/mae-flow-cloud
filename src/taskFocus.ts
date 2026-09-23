@@ -158,12 +158,12 @@ export function projectTaskFocus(task: FocusTask): TaskFocus {
   if (task.status === "coordinating") {
     const repositories = task.requirement_graph?.repositories ?? [];
     const attention = repositories.filter((repository) => [
-      "waiting_for_human", "paused", "failed", "canceled",
+      "waiting_for_human", "paused", "failed",
     ].includes(repository.task_status ?? "")).length;
     return focus(
       attention ? "human_action" : "machine",
       task.detail?.trim() || "子任务正在推进",
-      attention ? "打开主任务查看并处理异常子任务" : "等待各子任务完成",
+      attention ? "打开主任务查看并处理异常子任务" : "等待各子任务完成或取消",
       attention ? "responsible" : "agent",
       attention ? 96 : 50,
       attention > 0,

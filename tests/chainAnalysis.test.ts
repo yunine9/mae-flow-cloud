@@ -207,8 +207,10 @@ test("跨仓分析会话:候选仓逐仓判断→只按改动模块建任务→�
     // (父单收口会放出并发槽,晚一步取消子会话就会去误消费剧本场景)。
     await service.cancel(apiChild.id, "tester");
     await service.cancel(webChild.id, "tester");
-    assert.equal(service.get(parent.id)?.status, "coordinating",
-      "子任务取消后父任务仍应留在当前现场并提示处理");
+    assert.equal(service.get(parent.id)?.status, "canceled",
+      "全部子任务取消时主任务也取消，不冒充交付完成");
+    // 以下手工改写子任务状态仅为验证旧任务书与汇总；另起一个汇总现场。
+    internal.tasks.get(parent.id).summary.status = "coordinating";
     for (const child of [apiChild, webChild]) {
       const state = internal.tasks.get(child.id);
       state.summary.status = "completed";

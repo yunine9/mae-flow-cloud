@@ -130,7 +130,7 @@ test("缺失子任务、同仓归属不明、外部任务映射不能被误判�
   assert.equal(f.state.summary.status, "coordinating");
 });
 
-test("未确认分析不自动通过；失败/取消的子任务和图外兄弟仍需处理", t => {
+test("未确认分析不自动通过；失败子任务和图外兄弟仍需处理", t => {
   const f = fixture(t);
   const children = f.split();
   children.forEach(child => child.summary.status = "completed");
@@ -140,7 +140,7 @@ test("未确认分析不自动通过；失败/取消的子任务和图外兄弟�
   assert.equal(f.state.summary.status, "waiting_for_human");
   assert.equal(f.state.summary.requirement_graph.stage, "analysis");
   f.state.summary.status = "coordinating";
-  for (const status of ["failed", "canceled", "paused", "running"]) {
+  for (const status of ["failed", "paused", "running"]) {
     children[1].summary.status = status;
     f.internal.reconcileRequirementParent(f.state, true);
     assert.equal(f.state.summary.status, "coordinating");
@@ -153,6 +153,37 @@ test("未确认分析不自动通过；失败/取消的子任务和图外兄弟�
   f.internal.tasks.get(extra.id).summary.status = "completed";
   f.internal.persist(f.internal.tasks.get(extra.id));
   assert.equal(f.state.summary.status, "completed");
+});
+
+test("取消两项不再需要的子任务后主任务收口，重启后保留数量", async t => {
+  const f = fixture(t, 7);
+  const children = f.split();
+  for (const child of children.slice(0, 5)) {
+    child.summary.status = "completed";
+    child.summary.workspace_reclaimed_at = new Date().toISOString();
+    f.internal.persist(child);
+  }
+  children[5].summary.status = "waiting_for_human";
+  f.internal.persist(children[5]);
+  await f.service.cancel(children[5].summary.id, "owner");
+  assert.equal(f.service.get(f.parent.id)?.status, "coordinating");
+  await f.service.cancel(children[6].summary.id, "owner");
+  const result = f.service.get(f.parent.id)!;
+  assert.equal(result.status, "completed");
+  assert.match(result.detail ?? "", /5\/7 个子任务已完成，2 个已取消/);
+  const restored = f.recover();
+  assert.equal(restored.get(f.parent.id)?.status, "completed");
+  assert.match(restored.get(f.parent.id)?.detail ?? "", /5\/7 个子任务已完成，2 个已取消/);
+});
+
+test("全部子任务取消时主任务也取消，不冒充代码交付", t => {
+  const f = fixture(t);
+  const children = f.split();
+  for (const child of children) {
+    child.summary.status = "canceled";
+    f.internal.persist(child);
+  }
+  assert.equal(f.service.get(f.parent.id)?.status, "canceled");
 });
 
 test("明确取消或失败的主任务不因子任务完成而被自动恢复", t => {
