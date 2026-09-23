@@ -144,6 +144,25 @@ function lastHumanDecisionNote(root: string): string {
   return "\n\n[服务中断前你还没来得及读到的用户决定,原文如下]\n"
     + text.slice(0, QUOTED_NOTE_MAX);
 }
+
+/** 异常重跑的决定回灌(ADR-0055):事件账最近 3 条人工决定原文,按
+ *  时间正序回放。与崩溃回灌(lastHumanDecisionNote,只认末条)不同:
+ *  重跑常见降级开局——底层上下文没了,人的近期决定是续跑最直接的
+ *  执行输入,三条内的连贯指令比孤零零一条完整;更早的已沉淀进分析
+ *  报告与转移账,不再重播。重启恢复路径不换:仍走 last-1 版,语义
+ *  不动。 */
+function recentHumanDecisionNotes(root: string, limit = 3): string {
+  const decisions = recentEvents(root, 200)
+    .filter((event) => event.kind === "human_decision")
+    .slice(-limit) as Array<{ payload?: { decision?: unknown } }>;
+  const lines = decisions
+    .map((event) => String(event.payload?.decision ?? "").trim())
+    .filter(Boolean)
+    .map((text) => text.slice(0, 2000));
+  if (!lines.length) return "";
+  return "\n\n[会话异常前最近的人工决定,原文回放(时间正序)]\n"
+    + lines.map((text, index) => `${index + 1}. ${text}`).join("\n");
+}
 import {
   cloneRepository,
   currentHead,
@@ -200,6 +219,7 @@ import {
   issueResumePrompt,
   materializeIssueSkills,
   type IssueEnvCredentials,
+  type IssueResumeOptions,
 } from "./prompt.ts";
 import {
   countVerifyFailures,
@@ -1026,77 +1046,9 @@ export class IssueFlowService {
           + lastHumanDecisionNote(root) } : {}),
       };
       this.live.set(state.id, live);
-      // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
-      // 重启后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
-      // 检视监看续挂(②-Q1):原启动链(MR 建成→流水线监看)重启后
-      // 不再触发——流水线已按终态处理(watching=false)的会话,意见发现、
-      // 注入与回复发送会全部停摆,凡 mr_green 且有 MR 一律续挂;
-      // 外部意见只同步为待判断批注，不恢复旧版自动派发修复通知。
-      if (state.mrs?.length && !isTerminal(state.status)) {
-        this.watchMergeStates(live);
-        this.watchMrDiscussions(live);
-
-      }
-      // 流水线监看续表:deadline 还是原来那张(重启不白送预算);
-      // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
-      let staleRetryLedger = false;
-      for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
-        if (watch.watching) {
-          this.log(`[issue-flow] ${state.id} 恢复流水线监看(${repo})`
-            + ` @ ${watch.sha.slice(0, 12)}`);
-          void this.watchPipeline(live, repo, watch.sha);
-        }
-        // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
-        // 成了死账,顺手清掉(红灯的下一步=失败事实发送给 AI,不再
-        // 有"定时重评"的恢复义务)。
-        if (watch.evidence_retry_deadline) {
-          delete watch.evidence_retry_deadline;
-          delete watch.evidence_retry_attempts;
-          delete watch.evidence_failure_log;
-          staleRetryLedger = true;
-        }
-      }
-      if (staleRetryLedger) saveState(root, state);
-      // 监看账落后于推送账就补挂(issue-72 死表现场的重启自愈):有
-      // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后启动的监看丢失
-      // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
-      // 重挂。同 SHA 已按终态处理的不碰:重放红灯终态处理会扰动同提交刹车账。
-      // external_head 的账不补挂(ADR-0041):检查目标是有意跟着平台外
-      // 提交走的,落后的推送账不是正确目标——补挂会跟检查目标跟随机制
-      // 打架(重启即来回切)。放在续表循环之后,补挂换掉的新账不会被
-      // 旧循环重复盯。
-      if (!isTerminal(state.status)) {
-        for (const mr of state.mrs ?? []) {
-          const pushed = state.pushes
-            ?.find((item) => item.repo === mr.repo)?.sha;
-          const watch = state.pipelines?.[mr.repo];
-          if (pushed && (!watch || (watch.sha !== pushed
-              && !watch.external_head))) {
-            this.log(`[issue-flow] ${state.id} 监看账落后于推送账`
-              + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
-            this.armPipelineWatch(live, mr.repo);
-          }
-        }
-      }
-      // 重启清扫(H6):等人会话里够格代答的闸重判一次(免审批档位
-      // 不因重启漏答);非等人的会话不该还有挂着的人问卡——崩溃前没
-      // 走完的定格作废留痕,别留一张永远答不了的卡占列表。
-      if (state.status === "waiting_user") {
-        this.maybeAutoAnswerGate(live);
-      } else {
-        for (const record of live.humanGate.pending()) {
-          try {
-            live.humanGate.supersede(record.waiting_id, {
-              stateVersion: record.state_version,
-              notes: "重启清扫:崩溃遗留的未定格待办,作废",
-            });
-          } catch (error) {
-            this.log(`[issue-flow] ${state.id} 重启作废待办 `
-              + `${record.waiting_id} 失败: `
-              + String(error instanceof Error ? error.message : error));
-          }
-        }
-      }
+      // 在途账清理(与异常重跑共用的每单段,ADR-0055):日志前缀传
+      // 空串、作废来路标「重启」——重启恢复的日志与作废备注一字不差。
+      this.rearmInFlightLedgers(live, "", "重启");
     }
     // 孤儿凭据对账(H5):崩溃/强杀可能把"vault 里还有凭据、会话已不在
     // 册或已终态"的孤儿留在盘上——按会话 id 隔离的保险箱没人再去
@@ -1119,6 +1071,90 @@ export class IssueFlowService {
       // 台账行之后立即开泵:构造函数不能 await,泵与 create()
       // 同款 void 火力——同步段把首批额度占上,余下的在收口时再泵。
       void this.pump();
+    }
+  }
+
+  /** 在途账重新接手(重启恢复与异常重跑共用的每单段,ADR-0055):
+   *  崩溃留在窗口里的账不因「换个方式续跑」而漂——未定格 Agent 卡
+   *  作废、MR 合入/检视监看续挂、流水线监看续表、监看账落后于推送账
+   *  补挂、retry 死账清理。判断依据与日志行沿重启恢复的既有写法;
+   *  logPrefix 只进日志行(重启恢复传空串,历史日志一字不差),作废
+   *  备注按 scene 标来路(重启/异常重跑)。 */
+  private rearmInFlightLedgers(
+    live: LiveIssue,
+    logPrefix: string,
+    scene: string,
+  ): void {
+    const { state } = live;
+    // 合入事实监看续挂(ADR-0022):验绿已收口、MR 还没全部合入的,
+    // 中断后继续逐仓盯 /mr/gates;已终态/已全合入的循环自会退出。
+    // 检视监看续挂(②-Q1):原启动链(MR 建成→流水线监看)中断后
+    // 不再触发——流水线已按终态处理(watching=false)的会话,意见发现、
+    // 注入与回复发送会全部停摆,凡 mr_green 且有 MR 一律续挂;
+    // 外部意见只同步为待判断批注，不恢复旧版自动派发修复通知。
+    if (state.mrs?.length && !isTerminal(state.status)) {
+      this.watchMergeStates(live);
+      this.watchMrDiscussions(live);
+    }
+    // 流水线监看续表:deadline 还是原来那张(中断不白送预算);
+    // watching=false 的(终态/耗尽)不重挂。多仓各自挂各自的表。
+    let staleRetryLedger = false;
+    for (const [repo, watch] of Object.entries(state.pipelines ?? {})) {
+      if (watch.watching) {
+        this.log(`[issue-flow] ${logPrefix}${state.id} 恢复流水线监看(${repo})`
+          + ` @ ${watch.sha.slice(0, 12)}`);
+        void this.watchPipeline(live, repo, watch.sha);
+      }
+      // 证据重试窗已随红灯分诊退场(#247):存量盘上的 retry 字段
+      // 成了死账,顺手清掉(红灯的下一步=失败事实发送给 AI,不再
+      // 有"定时重评"的恢复义务)。
+      if (watch.evidence_retry_deadline) {
+        delete watch.evidence_retry_deadline;
+        delete watch.evidence_retry_attempts;
+        delete watch.evidence_failure_log;
+        staleRetryLedger = true;
+      }
+    }
+    if (staleRetryLedger) saveState(live.root, state);
+    // 监看账落后于推送账就补挂(issue-72 死表现场的中断自愈):有
+    // MR 的仓,监看缺席或 SHA 与推送账对不上,说明推送后启动的监看丢失
+    // (修复环不重建 MR/进程崩溃窗口/回退轮清表)——按推送账新 SHA
+    // 重挂。同 SHA 已按终态处理的不碰:重放红灯终态处理会扰动同提交刹车账。
+    // external_head 的账不补挂(ADR-0041):检查目标是有意跟着平台外
+    // 提交走的,落后的推送账不是正确目标——补挂会跟检查目标跟随机制
+    // 打架(重启即来回切)。放在续表循环之后,补挂换掉的新账不会被
+    // 旧循环重复盯。
+    if (!isTerminal(state.status)) {
+      for (const mr of state.mrs ?? []) {
+        const pushed = state.pushes
+          ?.find((item) => item.repo === mr.repo)?.sha;
+        const watch = state.pipelines?.[mr.repo];
+        if (pushed && (!watch || (watch.sha !== pushed
+            && !watch.external_head))) {
+          this.log(`[issue-flow] ${logPrefix}${state.id} 监看账落后于推送账`
+            + `(${mr.repo}),补挂 @ ${pushed.slice(0, 12)}`);
+          this.armPipelineWatch(live, mr.repo);
+        }
+      }
+    }
+    // 清扫(H6):等人会话里够格代答的闸重判一次(免审批档位不因
+    // 中断漏答);非等人的会话不该还有挂着的人问卡——崩溃前没走完的
+    // 定格作废留痕,别留一张永远答不了的卡占列表。
+    if (state.status === "waiting_user") {
+      this.maybeAutoAnswerGate(live);
+    } else {
+      for (const record of live.humanGate.pending()) {
+        try {
+          live.humanGate.supersede(record.waiting_id, {
+            stateVersion: record.state_version,
+            notes: `${scene}清扫:崩溃遗留的未定格待办,作废`,
+          });
+        } catch (error) {
+          this.log(`[issue-flow] ${state.id} ${scene}作废待办 `
+            + `${record.waiting_id} 失败: `
+            + String(error instanceof Error ? error.message : error));
+        }
+      }
     }
   }
 
@@ -2374,13 +2410,22 @@ export class IssueFlowService {
       }
       const driver = await this.openDriver(live);
       return driver.startResume(issueResumePrompt(live.state, full,
-        this.environmentCredentials(live),
-        {
-          tier: this.tierOf(live),
-          workspace: live.root,
-          blockedPaths: readResourceBlocks(this.options.dataDir),
-        }));
+        this.environmentCredentials(live), this.resumePromptOptions(live)));
     });
+  }
+
+  /** 续聊提示词的公共选项(两处 startResume 同源):档位/工作区/屏蔽
+   *  清单,外加分析报告指针(ADR-0055)——报告在场才带,重启与异常
+   *  重跑的降级开局都直接知道方案要点在哪,不必从头重找。 */
+  private resumePromptOptions(live: LiveIssue): IssueResumeOptions {
+    return {
+      tier: this.tierOf(live),
+      workspace: live.root,
+      blockedPaths: readResourceBlocks(this.options.dataDir),
+      ...(existsSync(join(live.root, ANALYSIS_REPORT_FILENAME))
+        ? { report: this.analysisReportPointer(live) }
+        : {}),
+    };
   }
 
   /** 分析报告指针(边界路共用):落盘路径 + 「修改方案」章节要点。
@@ -4106,12 +4151,7 @@ export class IssueFlowService {
         const decisionText = `用户对问题卡的答复:\n${renderDecision(record)}`
           + (replay ? `\n\n${replay}` : "");
         return driver.startResume(issueResumePrompt(live.state, decisionText,
-          this.environmentCredentials(live),
-          {
-          tier: this.tierOf(live),
-          workspace: live.root,
-          blockedPaths: readResourceBlocks(this.options.dataDir),
-        }));
+          this.environmentCredentials(live), this.resumePromptOptions(live)));
       });
     });
     return summarize(live.state);
@@ -5181,9 +5221,13 @@ export class IssueFlowService {
       reason_code: "operator-confirmed",
       stage: state.stage, status: state.status,
     });
+    // 在途账清理与重启恢复对齐(ADR-0055):崩溃留在窗口里的未定格
+    // Agent 卡作废、MR/流水线监看续挂、监看账落后补挂、retry 死账
+    // 清理——异常前的在途账不越过复活线带进恢复回合。
+    this.rearmInFlightLedgers(live, "异常重跑:", "异常重跑");
     this.log(`[issue-flow] ${live.id} 异常重跑:恢复回合启动`);
     this.continueTurn(live, reviveResumeNotice(operatorNote)
-      + lastHumanDecisionNote(live.root));
+      + recentHumanDecisionNotes(live.root));
     return summarize(state);
   }
 

@@ -14,6 +14,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
@@ -941,6 +942,218 @@ test("异常重跑:真 failed 现场复活后恢复回合接回原上下文,操�
     assert.ok(recovery.includes("网关额度已恢复,继续"), "操作者说明原文必达");
     assert.ok(recovery.includes("第一轮:已定位日志时序问题。"),
       "原会话上下文接回:上一轮发言在请求历史里,不是降级开局");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("异常重跑·降级开局:恢复请求带齐报告指针/意见恢复源/最近三条决定回放,告知语勿从头重做", async () => {
+  // 底层 Pi 会话文件缺失时 sessionDriver 降级为全新会话(ADR-0055):
+  // 上下文接不回来,工作区材料与人工决定就是续跑的全部依据——恢复
+  // 回合的请求必须把它们投影齐全,而且明确告知勿从头重做。
+  const dataDir = mfcTemp("mfc-issue-revive-degrade-");
+  seedRecoverableIssue(dataDir, "issue-1", {
+    status: "failed",
+    pushes: [{ repo: "origin", branch: "master_dev_DTS-1",
+      sha: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      at: "2026-08-29T00:00:00Z" }],
+  });
+  const root = join(dataDir, "issues", "issue-1");
+  // 降级前提:底层 Pi 原生会话目录不留(缺失/损坏同路)。
+  rmSync(join(root, "pi-agent"), { recursive: true, force: true });
+  // 工作区材料:分析报告(带「修改方案」章节)+检视意见快照。
+  writeFileSync(join(root, "issue-analysis.md"),
+    "# 根因分析\n\n## 问题现象\n演示现象。\n## 问题根因\n环境时钟漂移。\n"
+    + "## 修改方案\n校准节点时钟后复测。\n## 置信度\n高。\n");
+  mkdirSync(join(root, "reviews"), { recursive: true });
+  writeFileSync(join(root, "reviews", "review-notes.md"),
+    "- 意见一:日志时序图坐标轴标注错误\n");
+  // 事件账种四条人工决定:回放窗口是最近 3 条,最老一条必须出局。
+  writeFileSync(join(root, "events.jsonl"),
+    [1, 2, 3, 4].map((n) => JSON.stringify({
+      eventId: n, taskId: "issue-1", sessionId: "issue-1",
+      ts: `2026-08-29T00:0${n}:00Z`, kind: "human_decision",
+      payload: { waiting_id: `issue-1:call-${n}`, state_version: 1,
+        decision: `人工决定${n}号:按方案${n}执行`, notes: "" },
+    })).join("\n") + "\n");
+  const script: Scene[] = [{ text: "收到,按已有材料继续推进。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), deferRecovery: true,
+  });
+  try {
+    service.start();
+    await service.control("issue-1", { action: "revive" });
+    const done = await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "降级恢复回合收口");
+    assert.equal(done.stage, "analyze", "阶段保持 failed 前原样");
+    const request = JSON.stringify(model.requests.at(-1));
+    assert.ok(request.includes("- 标题: 标题-issue-1"),
+      "登记元信息随续聊提示词重给");
+    assert.ok(request.includes("- 最近阶段:"),
+      "最近阶段随续聊提示词重给");
+    assert.ok(request.includes("issue-analysis.md") &&
+      request.includes("校准节点时钟后复测。"),
+      "报告路径+修改方案要点指针随请求");
+    assert.ok(request.includes("reviews/review-notes.md"),
+      "检视意见恢复源指针随请求");
+    assert.ok(request.includes("- 已推送: master_dev_DTS-1"),
+      "推送/MR 账随续聊提示词重给");
+    assert.ok(request.includes("人工决定2号")
+      && request.includes("人工决定3号") && request.includes("人工决定4号"),
+      "最近三条人工决定原文回放");
+    assert.ok(!request.includes("人工决定1号"),
+      "窗口外的最老决定不回放");
+    assert.ok(request.indexOf("人工决定2号") < request.indexOf("人工决定3号")
+      && request.indexOf("人工决定3号") < request.indexOf("人工决定4号"),
+      "决定按时间正序回放");
+    assert.ok(request.includes("勿从头重做"),
+      "降级告知语明确「勿从头重做」");
+    // 事件账全程连续:种下的 1-4、issue_revived、恢复回合的过程事件
+    // 一条账记到底,复活前后不另立账本。
+    const ids = readFileSync(join(root, "events.jsonl"), "utf-8")
+      .split("\n").filter((line) => line.trim())
+      .map((line) => (JSON.parse(line) as { eventId: number }).eventId);
+    assert.ok(ids.length > 5, "恢复回合有过程事件落账");
+    assert.ok(ids.every((id, index) => index === 0 || id === ids[index - 1] + 1),
+      "eventId 逐条连续,复活前后同账");
+    const revivedCount = readFileSync(join(root, "events.jsonl"), "utf-8")
+      .split("\n").filter((line) => line.includes("\"issue_revived\"")).length;
+    assert.equal(revivedCount, 1, "issue_revived 恰一条");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("异常重跑:崩溃遗留的未定格 Agent 卡随复活作废,不再投影可答卡", async () => {
+  // 幽灵卡形态:Agent 举了卡没等人答,回合先一步失败——卡留在
+  // waiting.json 里永远等不到答案。重跑的清账与重启恢复同款:未定格
+  // 卡作废留痕,不越过复活线带进恢复回合。(夹具在 start() 之后种卡:
+  // 启动恢复管线对 failed 也会清扫,先种卡会被它抢走,测不到重跑侧。)
+  const dataDir = mfcTemp("mfc-issue-revive-ghost-");
+  seedRecoverableIssue(dataDir, "issue-1", { status: "failed" });
+  const root = join(dataDir, "issues", "issue-1");
+  const script: Scene[] = [{ text: "收到,恢复推进。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), deferRecovery: true,
+  });
+  try {
+    service.start();
+    writeFileSync(join(root, "waiting.json"), JSON.stringify({ records: {
+      "issue-1:call-ghost": {
+        waiting_id: "issue-1:call-ghost", task_id: "issue-1", step: "fix",
+        call_id: "call-ghost",
+        question: { questions: [{ question: "用哪个方案修复?",
+          options: ["方案 A", "方案 B"], recommended: "方案 A" }] },
+        state_version: 1, status: "waiting", decision: "", notes: "",
+        created_at: "2026-08-29T00:00:00Z", resolved_at: "",
+      },
+    } }, null, 1));
+    await service.control("issue-1", { action: "revive" });
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "恢复回合收口");
+    const store = JSON.parse(
+      readFileSync(join(root, "waiting.json"), "utf-8")) as {
+      records: Record<string, { status: string; notes: string }>;
+    };
+    const ghost = store.records["issue-1:call-ghost"];
+    assert.equal(ghost.status, "superseded", "幽灵卡随复活作废");
+    assert.match(ghost.notes, /异常重跑/, "作废备注标明异常重跑来路");
+    const waitingCards = service.conversation("issue-1").items
+      .filter((item) => item.kind === "card" && item.status === "waiting");
+    assert.equal(waitingCards.length, 0, "协作流不再投影可答卡");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+    await model.stop();
+  }
+});
+
+test("异常重跑:失败前的 MR/流水线监看账随复活续挂与补挂,落后账对齐推送账", async () => {
+  // 在途监看与重启恢复同一套判断(共用 rearmInFlightLedgers):在盯的
+  // 仓续挂,监看账落后于推送账的仓按推送账补挂。日志行带「异常重跑」
+  // 前缀——与启动恢复管线自己发的同款行区分得开。无 platformUrl:
+  // 续挂/补挂的证据在日志与判断,不在平台轮询。
+  const dataDir = mfcTemp("mfc-issue-revive-watch-");
+  const repoA = join(dataDir, "repo-a.git");
+  const repoB = join(dataDir, "repo-b.git");
+  const watchSha = "c".repeat(40);
+  const pushedSha = "4".repeat(40);
+  const now = "2026-08-29T00:00:00Z";
+  seedRecoverableIssue(dataDir, "issue-1", {
+    status: "failed",
+    pushes: [
+      { repo: repoA, branch: "master_dev_DTS-1", sha: watchSha, at: now },
+      { repo: repoB, branch: "master_dev_DTS-2", sha: pushedSha, at: now },
+    ],
+    mrs: [
+      { repo: repoA, branch: "master_dev_DTS-1", title: "MR-A",
+        url: "http://loop.test/mr/1", at: now },
+      { repo: repoB, branch: "master_dev_DTS-2", title: "MR-B",
+        url: "http://loop.test/mr/2", at: now },
+    ],
+    pipelines: {
+      // A:在盯且与推送账同 SHA——续挂;retry 死账与重启恢复同款清扫
+      // 在启动侧先清一次,重跑侧走同一助手(同函数覆盖)。
+      [repoA]: { sha: watchSha, status: "running", watching: true,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1, evidence_retry_deadline: now,
+        evidence_retry_attempts: 2, evidence_failure_log: "旧账" },
+      // B:死表停在旧提交(watching=false,SHA 落后推送账)——补挂。
+      [repoB]: { sha: "9".repeat(40), status: "failed", watching: false,
+        started_at: now,
+        deadline: new Date(Date.now() + 120_000).toISOString(),
+        round: 1 },
+    },
+  });
+  const script: Scene[] = [{ text: "收到,恢复推进。" }];
+  const model = new ScriptedModelServer(script);
+  await model.start();
+  const logs: string[] = [];
+  const service = new IssueFlowService({
+    dataDir, provider: "maeflow", model: "scripted-v1",
+    modelsJson: model.modelsJson(), deferRecovery: true,
+    log: (message) => logs.push(message),
+  });
+  try {
+    service.start();
+    const before = logs.length;
+    await service.control("issue-1", { action: "revive" });
+    await until(() => {
+      const issue = service.get("issue-1");
+      if (issue.status === "failed") throw new Error(issue.error ?? "failed");
+      return issue.status === "idle" ? issue : undefined;
+    }, "恢复回合收口");
+    const reviveLogs = logs.slice(before).join("\n");
+    assert.match(reviveLogs,
+      new RegExp(`异常重跑:issue-1 恢复流水线监看\\(${repoA.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`),
+      "在盯的仓随复活续挂");
+    assert.match(reviveLogs,
+      new RegExp(`异常重跑:issue-1 监看账落后于推送账\\(${repoB.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\),补挂`),
+      "落后于推送账的死表按推送账补挂");
+    // 盘面对账:启动恢复管线已把 retry 死账清掉(与重跑同一助手);
+    // 监看账与推送账的判断不写盘(无 platformUrl,补挂只记账日志),
+    // 盘上 A 仓的在盯账保持原样。
+    const onDisk = JSON.parse(readFileSync(
+      join(dataDir, "issues", "issue-1", "issue.json"), "utf-8")) as {
+      pipelines: Record<string, Record<string, unknown>>;
+    };
+    assert.equal("evidence_retry_deadline" in onDisk.pipelines[repoA], false,
+      "retry 死账字段被清扫(启动侧,与重跑同助手)");
+    assert.equal(onDisk.pipelines[repoA].watching, true, "A 仓在盯账保持");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
