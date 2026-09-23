@@ -559,8 +559,12 @@ export function TaskWorkspace({
   const overallStoryPublished = !task.parent_task_id && !!items?.some(item => item.name === OVERALL_STORY_ARTIFACT && item.story_published);
   const [unavailable, setUnavailable] = useState("");
   const [active, setActive] = useState("");
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [materialView, setMaterialView] =
     useState<MaterialView>(recommendedMaterialView);
+  const materialViewRef = useRef(materialView);
+  materialViewRef.current = materialView;
   const [architectureLine, setArchitectureLine] = useState<number>();
   const [moduleLocation, setModuleLocation] = useState<{ taskId: string; id: string; name: string; request: number }>();
   const [moduleLocationRetry, setModuleLocationRetry] = useState<string>();
@@ -1151,26 +1155,34 @@ export function TaskWorkspace({
   // "哪一步该看哪个文件"是内核语义,前端不复刻,只用修改时间定位。
   useEffect(() => {
     let alive = true;
-    void artifactReader.current.read(task.id, signal => listArtifacts(task.id, signal)).then((result) => {
+    const showArtifacts = (result: Awaited<ReturnType<typeof listArtifacts>>, documentsOnly = false) => {
       if (!alive) return;
       setUnavailable(result.unavailable ?? "");
-      setItems(result.items);
+      setItems(previous => documentsOnly
+        ? [...(result.items ?? []), ...(previous ?? []).filter(item => item.kind === "diff")]
+        : result.items);
+      // 代码检视仍等真实变更清单；后台刷文档也不能覆盖用户已选的文件。
+      if (documentsOnly && (materialViewRef.current === "diff" || artifactTask.current === task.id)) return;
       // 列表可能随任务轮询/状态切换重新读取。默认项只用于首次进入；
       // 用户已经切到代码改动时绝不能被后台刷新拽回最近文档。
       const evidenceKey = pipelineEvidenceNeedsHuman(task)
         ? `${task.id}:${task.delivery?.evidence_gap?.sha ?? ""}` : "";
       const newlyActionable = Boolean(evidenceKey
         && openedEvidenceGap.current !== evidenceKey);
-      const current = artifactTask.current === task.id && !newlyActionable
-        ? active : "";
+      let current = artifactTask.current === task.id && !newlyActionable
+        ? activeRef.current : "";
+      // 等待清单期间可能已切到代码页签，迟到响应应打开代码，不能把文档当 Diff。
+      if (materialViewRef.current === "diff"
+          && result.items?.find(item => item.name === current)?.kind !== "diff") current = "";
       const summaryLink = new URLSearchParams(window.location.search).get("deliverySummary") === "1"
         && openedDeliverySummary.current !== task.id
         && result.items?.some(item => item.name === "task-materials/交付摘要.md");
       const next = summaryLink ? "task-materials/交付摘要.md" : preferredWorkspaceArtifact(
-        result.items ?? [], current, recommendedMaterialView,
+        result.items ?? [], current, materialViewRef.current === "diff" ? "diff" : recommendedMaterialView,
         pipelineEvidenceNeedsHuman(task));
       artifactTask.current = task.id;
       openedEvidenceGap.current = evidenceKey;
+      activeRef.current = next;
       setActive(next);
       if (summaryLink) { openedDeliverySummary.current = task.id; openMaterial("doc"); }
       if (next !== current && ["pipeline_evidence_gap", "delivery_unit_brief",
@@ -1178,7 +1190,10 @@ export function TaskWorkspace({
           ?.purpose ?? "")) {
         setMaterialView("doc");
       }
-    }).catch(reason => { if (alive && reason?.name !== "AbortError") setUnavailable(String(reason)); });
+    };
+    void artifactReader.current.read(task.id, signal => listArtifacts(task.id, signal,
+      result => showArtifacts(result, true))).then(result => showArtifacts(result))
+      .catch(reason => { if (alive && reason?.name !== "AbortError") setUnavailable(String(reason)); });
     return () => { alive = false; };
   }, [task.id, livePulse, task.updated_at, task.delivery?.evidence_gap?.state,
     task.delivery?.evidence_gap?.sha, recommendedMaterialView]);

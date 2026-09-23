@@ -3254,8 +3254,10 @@ export function createTaskServer(
           if (parts.length === 3) {
             // 代码现场尚未 init 时也可能已有任务级流水线补证材料；两路
             // 独立 fail-open，不能用 root 缺失把 pipeline/ 一起吞掉。
+            const kind = url.searchParams.get("kind");
             return json(response, 200,
-              await listArtifactsAsync(root, sources));
+              await listArtifactsAsync(root, sources,
+                kind === "doc" || kind === "diff" ? kind : undefined));
           }
           if (parts.length === 4 && parts[3] === "archive") {
             let archive;

@@ -1231,15 +1231,16 @@ export function listArtifacts(
 export async function listArtifactsAsync(
   cwd: string | undefined,
   sources: ArtifactSources = {},
+  kind?: "doc" | "diff",
 ): Promise<ArtifactMeta[]> {
   const items: ArtifactMeta[] = [];
   try {
-    items.push(...collectReadableDocs(cwd, sources).map((doc) => doc.meta));
+    if (kind !== "diff") items.push(...collectReadableDocs(cwd, sources).map((doc) => doc.meta));
   } catch {
     // 文档一路塌了，Git 一路仍可返回。
   }
   try {
-    const diff = cwd
+    const diff = cwd && kind !== "doc"
       ? diffMetaFromManifest(cwd, await collectDiffManifestAsync(cwd))
       : undefined;
     if (diff) items.push(diff);
