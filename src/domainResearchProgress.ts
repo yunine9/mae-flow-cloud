@@ -38,7 +38,7 @@ export class DomainResearchProgress {
   private persist() { this.input.update({ research: this.state }); }
   anchor() {
     const pending = this.state.capabilities.filter(c => c.state !== "researched");
-    return `业务范围：${this.input.job.scope}\n研究阶段：${this.state.phase}；共 ${this.state.capabilities.length} 项知识主题，${pending.length} 项未完成。\n未完成主题摘要（最多 20 项）：${JSON.stringify(pending.slice(0, 20).map(c => ({ id: c.id, title: c.title, state: c.state, repository_ids: c.repository_ids })))}\n目标是补全代码不能表达的业务背景、规则原因、隐含约束与历史经验。完整计划用 knowledge_research read 分页读取，指定 id 读取结论与证据；knowledge_evidence 回查业务资料，knowledge_draft read 读取草稿。方法通过 extraction_skill 读取 SKILL.md 和 references/domain.md。源码仅按需核对，不按仓扫描。\n${this.workers?.anchor() ?? ""}`;
+    return `业务范围：${this.input.job.scope}\n研究阶段：${this.state.phase}；共 ${this.state.capabilities.length} 项知识主题，${pending.length} 项未完成。\n未完成主题摘要（最多 20 项）：${JSON.stringify(pending.slice(0, 20).map(c => ({ id: c.id, title: c.title, state: c.state, repository_ids: c.repository_ids })))}\n目标是补全代码不能表达的业务背景、规则原因、隐含约束与历史经验。完整计划用 knowledge_research read 分页读取，指定 id 读取结论与证据；knowledge_evidence list 检索主、子 Agent 已查资料，read 回查正文；knowledge_draft read 读取草稿。无线豆包与上传资料同为主力，无上传资料也主动检索。方法通过 extraction_skill 读取 SKILL.md、references/domain.md 和 references/materials.md。源码仅按需核对，不按仓扫描。\n${this.workers?.anchor() ?? ""}`;
   }
   gaps(): string[] {
     const gaps: string[] = this.workers?.gaps() ?? [], docs = this.input.read();
