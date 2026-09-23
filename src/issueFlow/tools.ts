@@ -477,7 +477,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         + `${facts.reference
           ? "\n- 身份: 参考仓(只读参考件:可研读,不可修改、不可交付——"
             + "推送/交付工具对它不可达;需要修改时请用户在元信息页签按"
-            + "普通地址指派,拉取即转正)"
+            + "普通地址指派;指派后重新拉取,即转为平等关联仓)"
           : ""}`
         + `${facts.remoteBranch
           ? `\n- ` + promptCopy("receipts", "pull.remote_branch_warn", {

@@ -458,8 +458,13 @@ export function IssueMetaPane({ detail, canOperate }: {
                     {badge.label}</span>}
                   {bound && <Badge variant="neutral"
                     title="该仓在业务模块的绑定仓清单里(团队资产目录)">模块绑定</Badge>}
-                  {!bound && registered && <Badge variant="neutral"
-                    title="运行中经元信息页签指派的仓(ADR-0023 通道)">用户指派</Badge>}
+                  {/* 用户指派的权威口径 = 指派台账(assigned_repos,ADR-0023
+                      通道的永久留痕):登记自带仓(DTS/模块带出)不在台账,
+                      不误标。 */}
+                  {!bound && (detail.assigned_repos ?? []).some((item) =>
+                    repoIdentity(item) === repoIdentity(row.repo))
+                    && <Badge variant="neutral"
+                      title="运行中经元信息页签指派的仓(ADR-0023 通道)">用户指派</Badge>}
                   {queued && <Badge variant="warning"
                     title="已入本次移除缓冲,点「确定」后才交给 Agent">将移除</Badge>}
                   {/* #241:移除 = 人裁定该仓与问题无关的严肃操作——按钮

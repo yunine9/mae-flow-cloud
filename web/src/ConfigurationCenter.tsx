@@ -5,6 +5,7 @@ import { getBusinessModules, createBusinessModule, updateBusinessModule,
   productVersionRequest, knowledgeRepoRequest,
   type BusinessModule, type ProductVersion, type KnowledgeRepoConfig } from "./api";
 import { componentRequest, type ComponentRepository } from "./componentResearchApi";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -177,11 +178,11 @@ function MappingList({ kind }: { kind: string }) {
             <legend className="text-sm text-muted-foreground">参考组件仓（可选）——问题会话开场只注入这里勾选组件的「何时需要读取」描述，AI 据此决定是否拉取源码研读</legend>
             <div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border border-line p-2">
               {components.map(c => <label key={c.id} className="flex items-start gap-2 text-sm">
-                <input type="checkbox" className="mt-1" checked={(edit.refs ?? []).includes(c.id)}
-                  onChange={e => setEdit({ ...edit, refs: e.target.checked
+                <Checkbox className="mt-0.5" checked={(edit.refs ?? []).includes(c.id)}
+                  onCheckedChange={checked => setEdit({ ...edit, refs: checked
                     ? [...(edit.refs ?? []), c.id]
                     : (edit.refs ?? []).filter(id => id !== c.id) })} />
-                <span>{c.name}{!c.enabled && <span className="ml-1 text-muted-foreground">（已停用）</span>}
+                <span>{c.name}{!c.enabled && <span className="ml-1 text-muted-foreground">（已停用·暂不注入）</span>}
                   <span className="ml-2 text-muted-foreground">{c.description}</span></span>
               </label>)}
               {!components.length && <p className="p-2 text-sm text-muted-foreground">基础组件仓页签还没有条目</p>}

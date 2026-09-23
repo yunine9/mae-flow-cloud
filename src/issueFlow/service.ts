@@ -129,6 +129,9 @@ import {
 } from "./worksiteExport.ts";
 import { recentEvents } from "./materials.ts";
 
+/** 恢复消息里引用原文的统一截断线:末条人工决定与重跑操作者说明共用。 */
+const QUOTED_NOTE_MAX = 2000;
+
 /** 崩溃回灌的取材(遗留洞 A-H1):事件账末条恰是人的决定时取原文。
  *  只认末条——后面已有 Agent 回应的说明当时送达了,不重播旧话。 */
 function lastHumanDecisionNote(root: string): string {
@@ -139,7 +142,7 @@ function lastHumanDecisionNote(root: string): string {
   const text = String(last.payload?.decision ?? "").trim();
   if (!text) return "";
   return "\n\n[服务中断前你还没来得及读到的用户决定,原文如下]\n"
-    + text.slice(0, 2000);
+    + text.slice(0, QUOTED_NOTE_MAX);
 }
 import {
   cloneRepository,
@@ -787,11 +790,13 @@ const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
 
 /** 异常重跑(ADR-0055)的恢复回合开场:与重启通知同一纪律——以用户
  * 消息落事件流、时间线可查。操作者说明原文拼进通知(补充说明不变量:
- * 带说明必开回合送达,只记账不算送达),截断线与崩溃回灌同款 2000。 */
+ * 带说明必开回合送达,只记账不算送达),截断线用 QUOTED_NOTE_MAX。 */
 function reviveResumeNotice(note?: string): string {
   const text = note?.trim();
   return promptCopy("notices", "revive.resume", {
-    note: text ? `\n\n[操作者关于本次异常的说明]\n${text.slice(0, 2000)}` : "",
+    note: text
+      ? `\n\n[操作者关于本次异常的说明]\n${text.slice(0, QUOTED_NOTE_MAX)}`
+      : "",
   });
 }
 
@@ -2136,14 +2141,14 @@ export class IssueFlowService {
     const inCurrent = (url: string): string | undefined =>
       current.find((item) =>
         repositoryIdentity(item) === repositoryIdentity(url));
-  // 新增链④:不得与当前清单重复(重复新增=误操作,如实打回)。
-  for (const url of freshAdds) {
-    const hit = inCurrent(url);
-    if (hit) {
-      throw new IssueControlError(
-        `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
+    // 新增链④:不得与当前清单重复(重复新增=误操作,如实打回)。
+    for (const url of freshAdds) {
+      const hit = inCurrent(url);
+      if (hit) {
+        throw new IssueControlError(
+          `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
+      }
     }
-  }
   // 数量上限已废除(ADR-0054):不再做合并计数校验。
   // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
     const removed: string[] = [];
@@ -2179,10 +2184,19 @@ export class IssueFlowService {
     // 校验全过才留痕(转移账 + 事件账双记),清单一字不动——repo_urls
     // 由 Agent 经 pull_repo/remove_repo 执行后变化,这里是"用户的裁定",
     // 不是清单本身。新增方向顺带记指派意图(ADR-0054):Agent 调
-    // pull_repo 落地时凭它走平等仓登记路径并摘参考仓台账行(指派转正)。
+    // pull_repo 落地时凭它走平等仓登记路径并摘参考仓台账行(指派升级)。
     if (freshAdds.length) {
       state.repo_assign_pending = [
         ...(state.repo_assign_pending ?? []), ...freshAdds];
+      // 指派史永久留痕:展示层区分「运行中经人指派」与登记自带仓。
+      const assigned = state.assigned_repos ?? [];
+      for (const url of freshAdds) {
+        if (!assigned.some((item) =>
+          repositoryIdentity(item) === repositoryIdentity(url))) {
+          assigned.push(url);
+        }
+      }
+      state.assigned_repos = assigned;
     }
     const summary = [
       ...(freshAdds.length ? [`新增 ${freshAdds.join("、")}`] : []),
@@ -2509,11 +2523,14 @@ export class IssueFlowService {
     const url = validateRepoUrl(rawUrl);
     this.requireGitIdentity(state.account, [url]);
     // 身份裁决(ADR-0054,resolvePullRoute 纯函数):指派意图 > 登记
-    // 表命中 > 平等登记。指派转正:摘掉参考仓台账行走平等仓登记路径
+    // 表命中 > 平等登记。指派升级:摘掉参考仓台账行走平等仓登记路径
     // ——「改共享资产」由用户指派背书,身份随人的意志升级,不随 AI
-    // 的重复拉取升级。
-    const route = resolvePullRoute(state, url,
-      this.referenceRegistryHit(url) !== undefined);
+    // 的重复拉取升级。模块绑定仓(登记侧既定关系)也算已知:发起时
+    // 显式给了仓清单的边缘场景下绑定仓不在 repo_urls,不该被登记表
+    // 卷成参考仓。命中只查一次,裁决与参考仓路径共用。
+    const registryHit = this.referenceRegistryHit(url);
+    const route = resolvePullRoute(state, url, registryHit !== undefined,
+      this.moduleBoundRepos(state));
     if (route === "assigned") {
       const identity = repositoryIdentity(url);
       state.repo_assign_pending = (state.repo_assign_pending ?? [])
@@ -2521,8 +2538,7 @@ export class IssueFlowService {
       state.public_repos = (state.public_repos ?? []).filter((row) =>
         repositoryIdentity(row.url) !== identity);
     } else if (route === "reference") {
-      return this.pullReferenceRepo(live, url,
-        this.referenceRegistryHit(url)!);
+      return this.pullReferenceRepo(live, url, registryHit!);
     }
     // 登记合并:与登记/模块绑定同一把尺。
     const merged = normalizeIssueRepos(undefined,
@@ -2614,6 +2630,18 @@ export class IssueFlowService {
     const identity = repositoryIdentity(url);
     return rows.find((row) => row.enabled
       && repositoryIdentity(row.repository) === identity);
+  }
+
+  /** 模块绑定仓清单(登记侧既定关系,身份裁决的 extraKnown):模块
+   * 读不到/没绑定按空走,fail-open 不挡拉仓。 */
+  private moduleBoundRepos(state: IssueSessionState): string[] {
+    if (!state.module_id) return [];
+    try {
+      return readBusinessModule(this.options.dataDir, state.module_id)
+        .repositories;
+    } catch {
+      return [];
+    }
   }
 
   /** 参考仓拉取(ADR-0054):命中目录的地址落只读参考件。照常平铺
@@ -5112,11 +5140,11 @@ export class IssueFlowService {
    * 地全在(它们绑问题单目录,不绑底层会话;failed 又豁免现场回收,
    * repo/ 与 Pi 原生会话文件都在盘上)。恢复回合走 continueTurn:现
    * 场重建后 resumeSession 原样接回底层上下文(与重启自续跑同链),
-   * 开场是 revive 通知+操作者说明+末条人工决定回灌。走续聊而非排队
-   * 泵:操作者在场显式动作,与用户「继续」同权——排队消息只在内存,
-   * 落盘 queued 撞上进程重启会被恢复管线误当登记首轮开场。异常是黑
-   * 盒:平台不诊断、不自动重试,确认权在操作者;轮次账不推高(重跑
-   * 不是流程倒退,不脏修复轮预算与一次率口径)。 */
+   * 开场是 revive 通知+操作者说明原文+末条人工决定原文补投。走续聊
+   * 而非排队泵:操作者在场显式动作,与用户「继续」同权——排队消息
+   * 只在内存,落盘 queued 撞上进程重启会被恢复管线误当登记首轮开场。
+   * 异常是黑盒:平台不诊断、不自动重试,确认权在操作者;轮次账不推
+   * 高(重跑不是流程倒退,不脏修复轮预算与一次率口径)。 */
   private reviveIssue(live: LiveIssue, note?: string): IssueSummary {
     const { state } = live;
     if (state.status !== "failed" || this.turning.has(live.id)) {
@@ -5131,15 +5159,15 @@ export class IssueFlowService {
       rmSync(metricsSnapshot, { force: true });
       this.log(`[issue-flow] ${live.id} 异常重跑:终态快照已失效删除`);
     }
-    // 状态落 idle(对话开放,同 reply 的回合前置状态),运行位由回合
-    // 骨架呈现;若恢复回合再失败,自然落回 failed 可再次重跑。
+    // 状态落 idle(对话开放,同 reply 发消息前的状态);回合跑起来后
+    // 页面自然显示进行中。若恢复回合再失败,落回 failed 可再次重跑。
     state.status = "idle";
     delete state.error;
     recordTransition(state, {
       source: "platform",
       note: operatorNote
         ? `操作者确认异常已排除,异常重跑(说明:${operatorNote.slice(0, 160)})`
-        : "操作者确认异常已排除,异常重跑,原地续跑",
+        : "操作者确认异常已排除,异常重跑,继续推进",
     });
     saveState(live.root, state);
     this.appendSessionEvent(live, "issue_revived", {

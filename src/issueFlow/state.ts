@@ -413,9 +413,13 @@ export interface IssueSessionState {
   }>;
   /** 用户指派意图的未消费留痕(ADR-0054):requestRepoChanges 接受的
    * 新增地址先记在这,Agent 调 pull_repo 落地时消费——凭它走平等仓
-   * 登记路径并摘参考仓台账行(指派转正)。端点依旧不直改清单,pending
-   * 记的是人的意志,清单仍随 Agent 执行变化。 */
+   * 登记路径并摘参考仓台账行(指派升级为平等仓)。端点依旧不直改
+   * 清单,pending 记的是人的意志,清单仍随 Agent 执行变化。 */
   repo_assign_pending?: string[];
+  /** 用户指派过的地址(永久留痕,ADR-0023 通道):requestRepoChanges
+   * 的每次新增都记一笔,展示层据此把「运行中经人指派」的在册仓与
+   * 登记自带仓区分开;摘除仓不销痕(指派史是审计事实)。 */
+  assigned_repos?: string[];
   baseline?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
@@ -545,14 +549,18 @@ export function normalizeIssueRepos(
 
 /** pull_repo 的身份裁决(2026-09-23,ADR-0054):指派意图 > 登记表
  * 命中 > 平等登记。assigned = 地址带着用户指派意图(pending 未消费,
- * requestRepoChanges 落下的"人的意志");reference = 未登记且命中公共
- * 组件仓目录启用行;其余一律平等登记(现状口径)。只裁决不落账——
- * pending 与参考仓台账的消费在服务侧 pullRepoFor。纯函数,直测。 */
+ * requestRepoChanges 落下的"人的意志");reference = 不在已知集合且
+ * 命中公共组件仓目录启用行;其余一律平等登记(现状口径)。known
+ * 之外,extraKnown(模块绑定仓等登记侧既定关系)同样算已知——模块
+ * 绑定的地址即使没进 repo_urls(发起时显式给了仓清单的边缘场景)
+ * 也不该被登记表卷成参考仓。只裁决不落账——pending 与参考仓台账的
+ * 消费在服务侧 pullRepoFor。纯函数,直测。 */
 export function resolvePullRoute(
   state: Pick<IssueSessionState,
     "repo_urls" | "public_repos" | "repo_assign_pending">,
   url: string,
   registryHit: boolean,
+  extraKnown: readonly string[] = [],
 ): "assigned" | "reference" | "registered" {
   const identity = repositoryIdentity(url);
   if (state.repo_assign_pending?.some((item) =>
@@ -560,7 +568,8 @@ export function resolvePullRoute(
     return "assigned";
   }
   const known = (state.repo_urls ?? []).some((item) =>
-    repositoryIdentity(item) === identity);
+    repositoryIdentity(item) === identity)
+    || extraKnown.some((item) => repositoryIdentity(item) === identity);
   if (!known && registryHit) return "reference";
   return "registered";
 }

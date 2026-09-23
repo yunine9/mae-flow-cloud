@@ -1679,6 +1679,8 @@ test("只读参考件入卡(#425,ADR-0054):四类身份徽标同 pane 分组陈�
   // 元信息页签的关联仓清单即仓卡面:模块绑定/用户指派徽标打在登记
   // 仓行上;参考仓与知识仓是只读参考件,独立分组「装了才出」。
   assert.match(metaPane, /title="运行中经元信息页签指派的仓\(ADR-0023 通道\)">用户指派<\/Badge>/);
+  // 用户指派的权威口径 = 指派台账(assigned_repos):登记自带仓不误标。
+  assert.match(metaPane, /\(detail\.assigned_repos \?\? \[\]\)\.some\(\(item\) =>/);
   assert.match(metaPane, /aria-label="关联仓清单"/);
   assert.match(metaPane, /只读参考件/);
   assert.match(metaPane, /detail\.public_repos\?\.\s*length/);

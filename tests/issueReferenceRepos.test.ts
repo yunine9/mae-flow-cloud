@@ -2,7 +2,7 @@
  * 参考仓内核(#422,ADR-0054)契约测试。
  *
  * 拉取身份归类(命中登记表→参考仓台账/未命中与停用→平等仓/用户指派
- * 转正)走 scripted 全链路(linear 顺演,真 bare 仓真克隆);摘除参考仓
+ * 指派升级为平等仓)走 scripted 全链路(linear 顺演,真 bare 仓真克隆);摘除参考仓
  * 走直调范式(issueRemoveRepo 同款)。参考仓只读的结构保证断言到输入
  * 面:参考仓不进 repo_urls,交付工具的定位映射(issueRepoWorkspaces)
  * 因此天然不含它——推不了交不了不靠提示词自觉。
@@ -289,7 +289,7 @@ test("重复拉取幂等不重账;未命中与停用条目照旧入登记清单"
   }
 });
 
-test("用户指派已拉取的参考仓:端点记指派意图不直改清单,落地转正", async () => {
+test("用户指派已拉取的参考仓:端点记指派意图不直改清单,落地为平等仓", async () => {
   const dataDir = mfcTemp("mfc-issue-ref-promote-");
   const bound = bareOriginAt(join(dataDir, "origins"), "bound.git", "bound");
   // 页面指派只收 https(ADR-0023 浏览器手输口径),这里用 https 形态
@@ -316,9 +316,11 @@ test("用户指派已拉取的参考仓:端点记指派意图不直改清单,落
     const state = readState(dataDir, id);
     assert.deepEqual(state.repo_assign_pending, [common],
       "指派意图落 pending,等 Agent pull_repo 消费");
+    assert.deepEqual(state.assigned_repos, [common],
+      "指派史永久留痕(展示层的用户指派徽标口径)");
     assert.deepEqual(state.repo_urls, [bound], "端点不直改登记清单");
     assert.deepEqual(state.public_repos?.map((row: any) => row.url),
-      [common], "端点也不直改参考仓台账——转正由 Agent 执行");
+      [common], "端点也不直改参考仓台账——升级由 Agent 执行");
     assert.match(transitionNotes(state), /用户调整会话仓清单/);
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -336,7 +338,7 @@ test("身份裁决 resolvePullRoute:指派意图 > 登记表命中 > 平等登�
     repo_assign_pending: [common],
   };
   assert.equal(resolvePullRoute(state, common, true), "assigned",
-    "用户指派压过登记表——转正为平等仓");
+    "用户指派压过登记表——升级为平等仓");
   assert.equal(resolvePullRoute({
     repo_urls: [bound],
     public_repos: [{ url: common, name: "common-ui", at: "now" }],
@@ -348,6 +350,11 @@ test("身份裁决 resolvePullRoute:指派意图 > 登记表命中 > 平等登�
   "已在登记清单的地址(绑定/指派)保持平等,登记表不追溯");
   assert.equal(resolvePullRoute({ repo_urls: [] }, other, false),
     "registered", "未命中目录照旧平等登记");
+  assert.equal(resolvePullRoute({
+    repo_urls: [],
+  }, common, true, [common]), "registered",
+  "模块绑定仓算已知(extraKnown):发起时显式给仓清单的边缘场景下,"
+    + "绑定地址不被登记表卷成参考仓");
   assert.equal(resolvePullRoute({
     repo_urls: [bound],
     public_repos: [{ url: common, name: "common-ui", at: "now" }],

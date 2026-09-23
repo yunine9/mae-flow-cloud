@@ -3908,6 +3908,9 @@ export interface IssueSummary {
   /** 参考仓台账(ADR-0054):拉取时命中公共组件仓目录的只读参考件;
    * 不在 repo_urls 里,交付工具结构够不着。会话页据此渲染「参考仓·只读」。 */
   public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 用户指派过的地址(永久留痕):展示层据此把「运行中经人指派」的
+   * 在册仓与登记自带仓区分开(用户指派徽标)。 */
+  assigned_repos?: string[];
   /** 知识仓装载账(ADR-0033):开工即装的只读参考件;status=ready 才
    * 有现场。会话页据此渲染「知识仓·只读」卡片(装了才出)。 */
   knowledge_repo?: {
