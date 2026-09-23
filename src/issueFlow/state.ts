@@ -18,6 +18,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { durableWriteFileSync } from "../durableWrite.ts";
 import { join } from "node:path";
 import type { FeedbackRecord } from "../feedbackStore.ts";
@@ -394,6 +395,17 @@ export interface IssueSessionState {
     note?: string;
     at: string;
   };
+  /** 参考仓台账(2026-09-23,ADR-0054):拉取时命中公共组件仓目录
+   * (组件仓库表启用行)的只读参考件——可研读,不可修改、不可交付。
+   * URL **不进** repo_urls,与知识仓同一个只读机理:交付工具的定位
+   * 映射只认登记清单,参考仓在结构上推不了、交不了。name 是落盘
+   * 仓名(撞登记仓名时带序号),目录即 repo/<name>/。 */
+  public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 用户指派意图的未消费留痕(ADR-0054):requestRepoChanges 接受的
+   * 新增地址先记在这,Agent 调 pull_repo 落地时消费——凭它走平等仓
+   * 登记路径并摘参考仓台账行(指派转正)。端点依旧不直改清单,pending
+   * 记的是人的意志,清单仍随 Agent 执行变化。 */
+  repo_assign_pending?: string[];
   baseline?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
@@ -521,6 +533,28 @@ export function normalizeIssueRepos(
   return unique;
 }
 
+/** pull_repo 的身份裁决(2026-09-23,ADR-0054):指派意图 > 登记表
+ * 命中 > 平等登记。assigned = 地址带着用户指派意图(pending 未消费,
+ * requestRepoChanges 落下的"人的意志");reference = 未登记且命中公共
+ * 组件仓目录启用行;其余一律平等登记(现状口径)。只裁决不落账——
+ * pending 与参考仓台账的消费在服务侧 pullRepoFor。纯函数,直测。 */
+export function resolvePullRoute(
+  state: Pick<IssueSessionState,
+    "repo_urls" | "public_repos" | "repo_assign_pending">,
+  url: string,
+  registryHit: boolean,
+): "assigned" | "reference" | "registered" {
+  const identity = repositoryIdentity(url);
+  if (state.repo_assign_pending?.some((item) =>
+    repositoryIdentity(item) === identity)) {
+    return "assigned";
+  }
+  const known = (state.repo_urls ?? []).some((item) =>
+    repositoryIdentity(item) === identity);
+  if (!known && registryHit) return "reference";
+  return "registered";
+}
+
 /** 仓名派生的唯一真相:地址末段去 .git。issueRepoWorkspaces 与知识仓
  * 装载(#286)共用——知识仓的撞名判定依赖两处同名同源,分叉即漏闸。 */
 export function repoNameOf(url: string): string {
@@ -532,7 +566,9 @@ export function repoNameOf(url: string): string {
  * 拍板:仓平等——废除主仓 repo/ + 参考仓 ref/ 的等级布局,单仓多仓
  * 同构)。仓名取地址末段去 .git,重名追加序号;克隆一律由 Agent 调
  * pull_repo 工具发起,平台不自动克隆。知识仓(#286)不在本口径:
- * 它的 URL 不进 repo_urls,装载走 service.ensureKnowledgeRepo。 */
+ * 它的 URL 不进 repo_urls,装载走 service.ensureKnowledgeRepo。
+ * 参考仓台账(ADR-0054)的名字参与占用:登记仓名与参考仓名撞名时,
+ * 后拉的一方落序号名,谁也不覆盖谁。 */
 export function issueRepoWorkspaces(
   state: IssueSessionState,
   workspaceRoot: string,
@@ -540,7 +576,8 @@ export function issueRepoWorkspaces(
   const repoUrls = state.repo_urls?.length
     ? state.repo_urls
     : state.repo_url ? [state.repo_url] : [];
-  const taken = new Set<string>();
+  const taken = new Set<string>(
+    (state.public_repos ?? []).map((row) => row.name));
   return repoUrls.map((url) => {
     const name = repoNameOf(url);
     let candidate = name;

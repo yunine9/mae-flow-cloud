@@ -94,6 +94,7 @@ import {
   issueRepoWorkspaces,
   loadState,
   normalizeIssueRepos,
+  resolvePullRoute,
   recordTransition,
   repoNameOf,
   saveState,
@@ -149,6 +150,10 @@ import {
   type GitCredential,
 } from "./issueGit.ts";
 import { readKnowledgeRepoConfig } from "../knowledgeRepoConfig.ts";
+import {
+  componentRepositories,
+  type ComponentRepository,
+} from "../componentRepositories.ts";
 import {
   readBusinessModule,
   type BusinessModule,
@@ -779,6 +784,16 @@ const NUDGE_BUDGET = 2;
  * 重启这件事在会话时间线里可查,不落 stage_note(那是显示层的现场
  * 说明,盖掉就丢了恢复前的阶段语境,续聊提示词还要用它)。 */
 const RESTART_RESUME_NOTICE = promptCopy("notices", "restart.resume");
+
+/** 异常重跑(ADR-0055)的恢复回合开场:与重启通知同一纪律——以用户
+ * 消息落事件流、时间线可查。操作者说明原文拼进通知(补充说明不变量:
+ * 带说明必开回合送达,只记账不算送达),截断线与崩溃回灌同款 2000。 */
+function reviveResumeNotice(note?: string): string {
+  const text = note?.trim();
+  return promptCopy("notices", "revive.resume", {
+    note: text ? `\n\n[操作者关于本次异常的说明]\n${text.slice(0, 2000)}` : "",
+  });
+}
 
 /** MR 检视回复的出站信箱(宿主发送账,会话工作区根):AI 的回复经
  * respond_review 落批注账后由平台扫描装箱(ADR-0052 单通道),信箱是
@@ -2144,7 +2159,12 @@ export class IssueFlowService {
     }
     // 校验全过才留痕(转移账 + 事件账双记),清单一字不动——repo_urls
     // 由 Agent 经 pull_repo/remove_repo 执行后变化,这里是"用户的裁定",
-    // 不是清单本身。
+    // 不是清单本身。新增方向顺带记指派意图(ADR-0054):Agent 调
+    // pull_repo 落地时凭它走平等仓登记路径并摘参考仓台账行(指派转正)。
+    if (freshAdds.length) {
+      state.repo_assign_pending = [
+        ...(state.repo_assign_pending ?? []), ...freshAdds];
+    }
     const summary = [
       ...(freshAdds.length ? [`新增 ${freshAdds.join("、")}`] : []),
       ...(removed.length ? [`移除 ${removed.join("、")}`] : []),
@@ -2419,6 +2439,8 @@ export class IssueFlowService {
     };
     const taken = new Set(issueRepoWorkspaces(state, live.root)
       .map((repo) => repo.dir.split(/[\\/]/).at(-1) ?? ""));
+    // 参考仓(ADR-0054)的名字同样占用:知识仓不与参考仓名相撞。
+    (state.public_repos ?? []).forEach((row) => taken.add(row.name));
     if (taken.has(name)) return skip(`仓名 ${name} 与关联仓撞名`);
     const target = join(live.root, "repo", name);
     try {
@@ -2463,11 +2485,28 @@ export class IssueFlowService {
   ): Promise<{
     dir: string; cloned: boolean; branch?: string;
     head: string;
+    reference?: boolean;
   }> {
     const { state } = live;
     const url = validateRepoUrl(rawUrl);
     this.requireGitIdentity(state.account, [url]);
-    // 登记合并:与登记/模块绑定同一把尺,超上限整次打回。
+    // 身份裁决(ADR-0054,resolvePullRoute 纯函数):指派意图 > 登记
+    // 表命中 > 平等登记。指派转正:摘掉参考仓台账行走平等仓登记路径
+    // ——「改共享资产」由用户指派背书,身份随人的意志升级,不随 AI
+    // 的重复拉取升级。
+    const route = resolvePullRoute(state, url,
+      this.referenceRegistryHit(url) !== undefined);
+    if (route === "assigned") {
+      const identity = repositoryIdentity(url);
+      state.repo_assign_pending = (state.repo_assign_pending ?? [])
+        .filter((item) => repositoryIdentity(item) !== identity);
+      state.public_repos = (state.public_repos ?? []).filter((row) =>
+        repositoryIdentity(row.url) !== identity);
+    } else if (route === "reference") {
+      return this.pullReferenceRepo(live, url,
+        this.referenceRegistryHit(url)!);
+    }
+    // 登记合并:与登记/模块绑定同一把尺。
     const merged = normalizeIssueRepos(undefined,
       [...(state.repo_urls ?? []), url]);
     state.repo_urls = merged;
@@ -2541,6 +2580,82 @@ export class IssueFlowService {
       ...(branch ? { branch } : {}),
       head,
       ...(remoteBranch ? { remoteBranch } : {}),
+    };
+  }
+
+  /** 公共组件仓目录命中查询(ADR-0054):组件仓库表的启用行按地址
+   * 归一比对。登记表读不出来(缺文件/坏 JSON)按未配置走,不挡平等
+   * 仓路径——目录是增强项,不是拉仓的前置闸。 */
+  private referenceRegistryHit(url: string): ComponentRepository | undefined {
+    let rows: ComponentRepository[];
+    try {
+      rows = componentRepositories(this.options.dataDir);
+    } catch {
+      return undefined;
+    }
+    const identity = repositoryIdentity(url);
+    return rows.find((row) => row.enabled
+      && repositoryIdentity(row.repository) === identity);
+  }
+
+  /** 参考仓拉取(ADR-0054):命中目录的地址落只读参考件。照常平铺
+   * repo/<仓名>/ 可研读,但不进登记清单——交付工具的定位映射只认
+   * 登记清单,参考仓在结构上推不了、交不了(知识仓同款机理)。与
+   * 版本线无关的共享资产:不走基线克隆、不建修复分支、不做 Mae 构建
+   * 准备。幂等:台账已在场的仓按原仓名回报,不重记不重克隆。 */
+  private async pullReferenceRepo(
+    live: LiveIssue,
+    url: string,
+    hit: ComponentRepository,
+  ): Promise<{
+    dir: string; cloned: boolean; head: string; reference: boolean;
+  }> {
+    const { state } = live;
+    const identity = repositoryIdentity(url);
+    const existing = (state.public_repos ?? []).find((row) =>
+      repositoryIdentity(row.url) === identity);
+    const base = repoNameOf(url);
+    const name = existing?.name ?? (() => {
+      const taken = new Set<string>([
+        ...issueRepoWorkspaces(state, live.root)
+          .map((repo) => repo.dir.split(/[\\/]/).at(-1) ?? ""),
+        ...(state.public_repos ?? []).map((row) => row.name),
+      ]);
+      let candidate = base;
+      let serial = 2;
+      while (taken.has(candidate)) candidate = `${base}-${serial++}`;
+      return candidate;
+    })();
+    const dir = join(live.root, "repo", name);
+    const cloned = !existsSync(join(dir, ".git"));
+    if (cloned) {
+      this.log(`[issue-flow] ${live.id} 参考仓拉取: ${url}`
+        + `(${hit.name})`);
+      await cloneRepository({
+        dataDir: this.options.dataDir,
+        targetDir: dir,
+        repoUrl: url,
+        credential: this.options.gitCredential?.(state.account),
+      });
+    }
+    // 克隆以宿主身份落盘,收口修属主(与 pull_repo 同款;幂等 walk 对
+    // 属主已对的 inode 零写入)。
+    repairContainerCloneOwnership({
+      workspace: live.root,
+      dir,
+      user: this.options.isolation?.user,
+      runtime: this.options.ownershipRuntime,
+    });
+    const head = await currentHead(dir);
+    if (!existing) {
+      state.public_repos = [...(state.public_repos ?? []),
+        { url, name, at: new Date().toISOString() }];
+    }
+    return {
+      dir: relative(live.root, dir) || dir,
+      cloned,
+      head,
+      reference: true,
     };
   }
 
@@ -4858,22 +4973,26 @@ export class IssueFlowService {
   }
 
   async control(id: string, input: {
-    action: "cancel" | "archive";
+    action: "cancel" | "archive" | "revive";
     kind?: IssueConclusionKind;
     summary?: string;
+    /** 异常重跑(ADR-0055)可附的操作者说明,随恢复回合必达送达 AI。 */
+    note?: string;
   }): Promise<IssueSummary> {
     const live = this.require(id);
+    if (input.action === "revive") return this.reviveIssue(live, input.note);
     if (isTerminal(live.state.status)
       && live.state.status !== "failed") {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
     }
     if (live.state.status === "failed" && input.action !== "cancel") {
-      // failed 曾是"死胡同终态":不能续聊、不能归档、不能取消,出错
-      // 的会话永远占着列表(2026-09-02 用户实锤难受)。出口定为取消——
-      // 归档需要结论,结论词表里没有"失败"语义,强归档只能落到
-      // "非问题",那是撒谎;取消=放弃这单,错误信息与账目都还在。
+      // failed 曾是"死胡同终态":不能续聊、不能归档,出错的会话永远
+      // 占着列表(2026-09-02 用户实锤难受)。出口有二(ADR-0055):取消
+      // =放弃这单;异常重跑=操作者确认异常已排除后原地复活——归档
+      // 仍然不行,结论词表里没有"失败"语义,强归档只能落到"非问题",
+      // 那是撒谎。错误信息与账目两条出口都保留。
       throw new IssueControlError(
-        "已失败的会话没有结论可归档,只能取消清理");
+        "已失败的会话没有结论可归档,只能取消清理或异常重跑");
     }
     if (this.turning.has(live.id) && input.action !== "cancel") {
       throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
