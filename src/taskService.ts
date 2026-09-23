@@ -8709,11 +8709,10 @@ export class TaskService {
           // 通用 verifying/任务队列分支启动第二条恢复链。
           continue;
         }
-        // 已推送且内核已交出工作区，却还没有 MR：继续原交付入口创建 MR。
-        // 只盯裸分支的 pipeline/status 不会让 MR 自己出现。
+        // 尚无 MR 时先继续交付，不能拿旧 not_found 空查裸分支。
         if (summary.status === "verifying" && !summary.delivery?.stalled
-            && this.needsMrAfterPush(task)) {
-          this.bypass(task, "恢复 MR 创建", this.tryDeliver(task, task.controlEpoch));
+            && this.needsDeliveryBeforePipeline(task)) {
+          this.bypass(task, "恢复交付", this.tryDeliver(task, task.controlEpoch));
           continue;
         }
         if (this.recoverEarlyPipeline(task)) { requeued += 1; continue; }
@@ -8742,15 +8741,11 @@ export class TaskService {
           this.bypass(task, "流水线失败证据恢复",
             this.dispatchCiRepair(task, summary.delivery.sha,
               gap.failure_log ?? "", max, task.controlEpoch));
-        } else if (summary.status === "verifying"
+        } else if (summary.status === "verifying" && !summary.delivery?.stalled
             && (summary.delivery?.pipeline?.startsWith("running") || summary.delivery?.pipeline === "not_found"
               || summary.delivery?.pipeline === "查询失败，正在重试")) {
-          // 前缀匹配而非全等:预算耗尽/拒过期结果会把 pipeline 写成
-          // "running(轮询预算耗尽…)" 之类带注记的形态。它们语义上仍是
-          // "远端在跑/该继续盯",全等匹配会把这类任务漏到下面的
-          // tryDeliver 兜底里重建 MR + 同 SHA 重触发流水线
-          // (2026-08-29 部署审计实锤:每次重启白烧一条)。重启=新预算,
-          // 续轮即可,终态自然落袋。
+          // 已有 MR 且远端尚未给终态，续查同 SHA；不要重建 MR 或重触发。
+          // running 可能带注记，仍属运行中；查不到有效 run 则受原验证期限约束。
           this.bypass(task, "流水线轮询",
             this.pollPipeline(task, task.controlEpoch));
         } else if (summary.status === "verifying"
@@ -13936,7 +13931,7 @@ export class TaskService {
         if (task.prepushActive) { task.controlEpoch += 1; actionEpoch = task.controlEpoch; await this.stopPrePush(task.summary.id, task.summary.luban_account, false); }
       },
       recordPublishedPush: receipt => this.recordPublishedPush(task, receipt),
-      resumePipelineAfterPush: () => !!task.summary.delivery?.mr_url && !task.pendingMainSteers?.length && shouldVerifyCiPush(task.mission, task.summary),
+      resumePipelineAfterPush: () => this.hasDeliveryMr(task) && !task.pendingMainSteers?.length && shouldVerifyCiPush(task.mission, task.summary),
       resume: (message, target, operation) => this.enqueueRepair(task,
         hostResumeMission(task.mission, message, target, operation, task.summary), "宿主操作已返回，继续当前目标",
         [target ? `责任人调整后的目标：${target}。不再执行已暂缓事项。` : "",
@@ -13985,7 +13980,7 @@ export class TaskService {
       watch: () => this.ensureMergeWatch(task),
       watchPush: () => {
         if (!this.effectivePlatformUrl()) return;
-        if (this.needsMrAfterPush(task)) {
+        if (this.needsDeliveryBeforePipeline(task)) {
           task.summary.status = "verifying";
           task.summary.detail = "代码已推送，正在接续创建 MR";
           this.persist(task);
@@ -17454,16 +17449,20 @@ export class TaskService {
 
   /** 提前发布不是交付收口。只有内核交接或纯 CI 修复完成，且没有新插话时才接管。 */
   private pipelineCanTakeOver(task: TaskState): boolean {
-    return !task.pendingMainSteers?.length && !task.driver
-      && ((!!task.summary.delivery?.mr_url && shouldVerifyCiPush(task.mission, task.summary))
+    return this.hasDeliveryMr(task)
+      && !task.pendingMainSteers?.length && !task.driver
+      && (shouldVerifyCiPush(task.mission, task.summary)
         || (!task.mission && this.atHostDeliveryWait(task)));
   }
 
-  /** 只在 Agent 已交还工作区后接续交付；编码中的提前推送仍由原会话继续。 */
-  private needsMrAfterPush(task: TaskState): boolean {
-    return !!task.summary.delivery?.git_push?.sha
-      && !task.summary.delivery?.mr_url
-      && task.summary.delivery?.mr_id === undefined
+  private hasDeliveryMr(task: TaskState): boolean {
+    return !!task.summary.delivery?.mr_url?.trim()
+      || task.summary.delivery?.mr_id !== undefined;
+  }
+
+  /** 未建 MR 时交付入口负责推送/建 MR；编码中的提前验证仍归原会话。 */
+  private needsDeliveryBeforePipeline(task: TaskState): boolean {
+    return !this.hasDeliveryMr(task)
       && !task.driver && !task.mission && !task.pendingMainSteers?.length
       && this.atHostDeliveryWait(task);
   }
@@ -17481,10 +17480,12 @@ export class TaskService {
   }
 
   private async pollPipeline(task: TaskState, epoch: number, background = false): Promise<void> {
-    if (this.needsMrAfterPush(task)) {
+    if (this.needsDeliveryBeforePipeline(task)) {
       if (!background && task.summary.status === "verifying") await this.tryDeliver(task, epoch);
       return;
     }
+    // 裸分支的查询只能是编码期间的旁路观察，不能接管正式交付。
+    if (!background && !this.hasDeliveryMr(task)) return;
     const sha = task.summary.delivery?.sha, platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !sha) return;
     // 提前验证按任务/SHA 存活；正式验证仍服从会话代际，二者共用单一监听槽。
@@ -17494,8 +17495,19 @@ export class TaskService {
     const current = () => !this.shuttingDown && this.tasks.get(task.summary.id) === task
       && !["completed", "canceled"].includes(task.summary.status)
       && task.summary.delivery?.sha === sha && task.pipelinePollSha === sha && task.pipelinePollEpoch === owner
-      && !this.needsMrAfterPush(task)
-      && (background || (this.current(task, epoch) && task.summary.status === "verifying"));
+      && !this.needsDeliveryBeforePipeline(task)
+      && (background || this.hasDeliveryMr(task))
+      && (background || (this.current(task, epoch) && task.summary.status === "verifying"
+        && !task.summary.delivery?.stalled));
+    const waitingForRun = (reason: string): boolean => {
+      if (background || !current()) return false;
+      const before = task.summary.delivery?.verify_deadline;
+      const deadline = this.verificationDeadline(task);
+      if (task.summary.delivery?.verify_deadline !== before) this.persist(task);
+      if (Date.now() < deadline) return false;
+      this.markVerificationStalled(task, reason, "infrastructure");
+      return true;
+    };
     try {
       await watchTaskPipeline({
         call: () => ({ platformUrl, sha, repo: task.summary.repo_url ?? this.effectiveDefaultRepo(),
@@ -17508,7 +17520,10 @@ export class TaskService {
           const canSettle = !background && task.summary.status === "verifying";
           task.summary.delivery = { ...task.summary.delivery, pipeline: run?.status ?? "not_found", checks: run?.checks,
             ...(!background && run ? { skipped: undefined } : {}) };
+          if (!background && run) task.summary.delivery.verify_deadline = undefined;
           this.persist(task);
+          if (!run && waitingForRun(
+            `已创建 MR，但在等待期限内仍未找到提交 ${sha.slice(0, 8)} 的有效流水线；请检查平台触发与查询配置`)) return true;
           if (run && run.status !== "running" && canSettle) {
             await this.pipelineVerdict(task, sha, run.status, run.log ?? "", run.checks, task.controlEpoch);
             return true;
@@ -17519,6 +17534,8 @@ export class TaskService {
           task.summary.delivery = { ...task.summary.delivery, pipeline: "查询失败，正在重试" };
           this.persist(task);
           this.options.log?.(`任务 ${task.summary.id} 流水线查询失败(继续轮): ${String(error)}`);
+          return waitingForRun(
+            `提交 ${sha.slice(0, 8)} 的流水线持续查询失败：${String(error).slice(0, 180)}`);
         },
       });
     } finally {

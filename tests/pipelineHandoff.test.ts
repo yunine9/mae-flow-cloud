@@ -170,7 +170,9 @@ test("同 SHA 会话换代后新轮询接棒，旧轮询退出不能清掉新标
     delivery: { platformUrl: `http://127.0.0.1:${(server.address() as any).port}`, pollIntervalMs: 5 } });
   const task = service.create("验证", { account: "owner" });
   const state = service.tasks.get(task.id);
-  state.summary.status = "verifying"; state.summary.delivery = { sha: "new", pipeline: "running" };
+  state.summary.status = "verifying"; state.summary.delivery = {
+    sha: "new", mr_url: "http://platform/mr/1", pipeline: "running",
+  };
   const oldPoll = service.pollPipeline(state, state.controlEpoch);
   state.controlEpoch++;
   const newPoll = service.pollPipeline(state, state.controlEpoch);
