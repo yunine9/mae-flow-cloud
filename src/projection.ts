@@ -16,6 +16,9 @@
  */
 
 import pg from "pg";
+import { createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
+import { setImmediate } from "node:timers/promises";
 import type { TaskSummary } from "./taskService.ts";
 import type { SemanticEvent } from "./semanticEvents.ts";
 
@@ -95,21 +98,28 @@ create table if not exists external_actions (
 export class PgProjection {
   private pool: pg.Pool;
   private ready: Promise<void> | null = null;
+  private replayTail: Promise<void> = Promise.resolve();
+  private replayPending = 0;
+  private replayActive?: string;
+  private replays = new Map<string, { cancelled: boolean; running: boolean; done: Promise<void> }>();
+  private closing = false;
   /** 最近一次写失败的原因:页面/测试观测用,流程从不读它。 */
   lastError?: string;
 
   constructor(
-    connectionString: string,
+    private connectionString: string,
     private log?: (message: string) => void,
   ) {
-    this.pool = new pg.Pool({ connectionString, max: 4 });
+    this.pool = new pg.Pool({ connectionString, max: 4,
+      connectionTimeoutMillis: 5_000, query_timeout: 10_000, statement_timeout: 10_000 });
     // 空闲连接的后台错误(数据库重启等)不许变成进程级 unhandled error。
     this.pool.on("error", (error) => this.fail("pool", error));
   }
 
   /** 建表幂等,首次写入前保证一次;失败进入 fail-open 常规路径。 */
   private ensureSchema(): Promise<void> {
-    if (!this.ready) this.ready = this.pool.query(SCHEMA).then(() => undefined);
+    if (!this.ready) this.ready = this.pool.query(SCHEMA).then(() => undefined)
+      .catch(error => { this.ready = null; throw error; });
     return this.ready;
   }
 
@@ -151,8 +161,15 @@ export class PgProjection {
   /** 事件副本:幂等锚 (taskId, eventId),重放冲突即 no-op。 */
   async appendEvent(event: SemanticEvent): Promise<void> {
     try {
-      await this.ensureSchema();
-      await this.pool.query(
+      await this.writeEvent(event);
+    } catch (error) {
+      this.fail(`appendEvent ${event.taskId}#${event.eventId}`, error);
+    }
+  }
+
+  private async writeEvent(event: SemanticEvent): Promise<void> {
+    await this.ensureSchema();
+    await this.pool.query(
         `insert into task_events (task_id, event_id, session_id, ts, kind, payload)
          values ($1,$2,$3,$4,$5,$6)
          on conflict (task_id, event_id) do nothing`,
@@ -160,9 +177,46 @@ export class PgProjection {
           event.taskId, event.eventId, event.sessionId,
           event.ts, event.kind, JSON.stringify(event.payload),
         ]);
-    } catch (error) {
-      this.fail(`appendEvent ${event.taskId}#${event.eventId}`, error);
-    }
+  }
+
+  /** 历史日志按文件、按事件逐条补齐，不把全部历史压进连接池等待队列。
+   * 实时事件仍直接写入，重复记录由原有主键去重。只读源文件，失败留待下次补齐。 */
+  replayEvents(taskId: string, path: string): Promise<void> {
+    const existing = this.replays.get(taskId);
+    if (existing) return existing.done;
+    const replay = { cancelled: false, running: false, done: Promise.resolve() };
+    this.replayPending++;
+    this.replayTail = this.replayTail.then(async () => {
+      this.replayPending--;
+      if (this.closing || replay.cancelled) return;
+      replay.running = true;
+      await setImmediate();
+      this.replayActive = taskId;
+      const stream = createReadStream(path, { encoding: "utf8" });
+      const lines = createInterface({ input: stream, crlfDelay: Infinity });
+      try {
+        for await (const line of lines) {
+          if (this.closing || replay.cancelled) break;
+          if (!line.trim()) continue;
+          const event = JSON.parse(line) as SemanticEvent;
+          if (event.taskId !== taskId) throw new Error("历史事件的任务编号不匹配");
+          await this.writeEvent(event);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") this.fail(`replay ${taskId}`, error);
+      } finally {
+        lines.close(); stream.destroy(); this.replayActive = undefined;
+      }
+    }).finally(() => { this.replays.delete(taskId); });
+    replay.done = this.replayTail;
+    this.replays.set(taskId, replay);
+    return this.replayTail;
+  }
+
+  diagnostics() {
+    return { connections: this.pool.totalCount, idle: this.pool.idleCount,
+      waiting: this.pool.waitingCount, replay_pending: this.replayPending,
+      replay_active: this.replayActive, schema_started: this.ready !== null };
   }
 
   /** 外部动作台账:同幂等键重复登记只更新结果侧,请求侧保留首次。 */
@@ -300,6 +354,9 @@ export class PgProjection {
         transaction = false;
         return { found: true, deleted: false, status };
       }
+      // 已授权删除的历史不能被后台重放重新写回；只等该任务已发出的那一次写入。
+      const replay = this.replays.get(taskId);
+      if (replay) { replay.cancelled = true; if (replay.running) await replay.done; }
       await client.query("delete from task_events where task_id = $1", [taskId]);
       await client.query(
         "delete from external_actions where task_id = $1",
@@ -318,18 +375,26 @@ export class PgProjection {
     }
   }
 
-  /** 管理页主动自检：真实执行 select 1，但不改变写侧 fail-open 语义。 */
+  /** 自检使用短命独立连接，不等待建表、历史重放或业务连接池。
+   * 连接与查询各有 3 秒上限；最后关闭连接，避免超时后后台继续积压。 */
   async health(): Promise<{ reachable: boolean; last_error?: string }> {
+    const client = new pg.Client({ connectionString: this.connectionString,
+      connectionTimeoutMillis: 3_000, query_timeout: 3_000, statement_timeout: 3_000 });
+    client.on("error", () => {}); // 连接关闭期间的后台错误由本次结果反映。
     try {
-      await this.ensureSchema();
-      await this.pool.query("select 1");
+      await client.connect();
+      await client.query("select 1");
       return { reachable: true, last_error: this.lastError };
     } catch (error) {
       return { reachable: false, last_error: String(error) };
+    } finally {
+      await client.end().catch(() => undefined);
     }
   }
 
   async close(): Promise<void> {
+    this.closing = true;
+    await this.replayTail;
     await this.pool.end().catch(() => undefined);
   }
 }

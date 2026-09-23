@@ -4,7 +4,8 @@
 # 2026-08-28 重构:实现整体搬进 pipeline_log.py——toolkit「PipelineLog
 # 编排器」的忠实移植(8 个 Strategy、依赖顺序、三条降级链、落盘文件名
 # 全部照抄;详见该文件头注释)。本脚本退化为薄壳:调编排器采集落盘,
-# 再按 512KB/item 预算装箱输出。对宿主的 adapter 契约不变。
+# 再按总包预算装箱输出。构建日志能装下时保留全文；对宿主的
+# adapter 契约不变。
 #
 # 产物清单(toolkit 同名):
 #   pipeline_log_summary.json   每个策略 ok/failed + 原因(先看这个)

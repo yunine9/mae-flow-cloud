@@ -1,6 +1,6 @@
 import { recoverQuotedGitPaths } from "./gitPaths.ts";
-/** 推送确认保留用户选定的文件范围。内容和 SHA 变化由 Agent 说明，
- * 不自动作废决定；明确打回或范围调整仍创建新的待办。 */
+/** 推送确认与当次文件整理分开。后续修复不受历史文件清单限制；
+ * 用户明确打回及人工检视仍按现有入口处理。 */
 
 import { createHash } from "node:crypto";
 import { TaskControlError } from "./errors.ts";
@@ -10,24 +10,14 @@ export interface PushReviewSnapshot {
   paths: string[];
 }
 
-export interface PushReviewReceipt {
-  status: "requested" | "confirmed";
-  head: string;
-  paths: string[];
+/** 文件选择只整理当次提交，确认不因后续修复的文件增减失效。
+ * 用户明确要求返工时会写 requested，不能继承旧确认。 */
+export function hasPushApproval(selection: { status: string } | undefined): boolean {
+  return selection?.status === "confirmed";
 }
 
 function sameOrderedValues(left: string[], right: string[]): boolean {
-  return left.length === right.length
-    && left.every((value, index) => value === right[index]);
-}
-
-/** 调用方先按自己的安全规则归一化路径；这里刻意只做精确对拍。 */
-export function pushReviewReceiptCovers(
-  receipt: PushReviewReceipt | undefined,
-  snapshot: PushReviewSnapshot,
-): boolean {
-  return receipt?.status === "confirmed"
-    && sameOrderedValues(receipt.paths, snapshot.paths);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 /** 同一文件范围复用待办；cycleToken 区分用户明确打回后的下一轮。 */
@@ -42,10 +32,7 @@ export function pushReviewCallId(
   return `push-confirm-${digest.slice(0, 12)}`;
 }
 
-// ── 2026-09-06 绞杀第三块:push 前确认与交付范围的决策(从 taskService 搬来)。
-// 下面全是纯函数:该不该出卡、能不能全自动续推、越界怎么算、给人看的话
-// 怎么说。Git 快照、批注读取、举卡、持久化留在 TaskService 的薄壳里。
-// 行为零变更;决策表见 tests/pushReviewPolicy.test.ts。
+// 推送确认的纯函数；Git 快照、批注读取、待办和持久化留在 TaskService。
 
 /** 脏路径给人看的形态:前几条点名,余量说总数——三万个产物文件不能
  * 整版倒进 detail,但"哪个目录在渗产物"必须一眼可见。 */
@@ -106,56 +93,6 @@ export function pushReviewPolicyFor(input: {
     recheckRequired,
     hasHumanFeedback,
   };
-}
-
-/** 已有交付清单、又到了推送点:精确收据放行;"全自动"只在同一文件集合
- * 内按责任人既有设置续推；编译结果不代替授权，也不构成额外门禁。 */
-export type SelectionPushDecision =
-  | { kind: "allow" }
-  | { kind: "auto_confirm"; reason: string }
-  | { kind: "recard"; reason: string };
-
-export function selectionPushDecision(input: {
-  selectionStatus: string;
-  selectionHead: string | undefined;
-  /** 已归一化(排序去重)的清单路径与当前提交路径。 */
-  expected: string[];
-  current: string[];
-  head: string;
-  /** 惰性取:精确收据放行时原来根本不算策略(不读批注)。 */
-  policy: () => PushReviewPolicy;
-}): SelectionPushDecision {
-  const sameScope = samePaths(input.current, input.expected);
-  if (input.selectionStatus === "confirmed"
-      && sameScope) {
-    return { kind: "allow" };
-  }
-  // "全自动"关闭的是常规最终过目,不是交付白名单。Build-Fix 在同一文件
-  // 集合内修出新 SHA 时可以按既定范围自动续推;新增/移除文件是范围冲突,
-  // 必须强制出卡,月光也不能代答。
-  const policy = input.policy();
-  if (!policy.ordinaryReviewEnabled && !policy.recheckRequired
-      && !policy.hasHumanFeedback && sameScope) {
-    return { kind: "auto_confirm", reason: "按既定推送设置续推；当前 SHA 未改变已选交付文件范围" };
-  }
-  if (!sameScope) {
-    const unexpected = input.current.filter((path) => !input.expected.includes(path));
-    const missing = input.expected.filter((path) => !input.current.includes(path));
-    return { kind: "recard", reason: [
-      unexpected.length
-        ? `新增了未确认文件 ${describeDirtyPaths(unexpected)}` : "",
-      missing.length
-        ? `已确认文件不再提交 ${describeDirtyPaths(missing)}` : "",
-    ].filter(Boolean).join("；") || "提交文件集合已经变化" };
-  }
-  if (input.selectionStatus !== "confirmed") {
-    return { kind: "recard", reason: "交付文件清单已整理完成，等待确认当前改动" };
-  }
-  return { kind: "allow" };
-}
-
-export function recardDetail(reason: string): string {
-  return `需要核对交付范围：${reason}。正在展示当前文件清单；不用重跑任务。`;
 }
 
 /** 重复确认时把文件范围变化说成人话:只补了一个 .gitignore 时人看一行就能

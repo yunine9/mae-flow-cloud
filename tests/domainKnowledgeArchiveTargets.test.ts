@@ -70,3 +70,35 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     assert.deepEqual(restored.get(job.id).source_repositories, sources); await restored.shutdown();
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("逐文件归档支持根目录与其他目录，保留修订和冲突保护，不能由模型扩大写入范围", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-file-paths-"));
+  const service = new DomainKnowledgeExtraction(root, async input => {
+    if (input.turn.mode === "extract") {
+      const target = input.job.knowledge_target;
+      for (const name of ["AGENTS", "rules", "extra"]) input.save({ id: name, title: name, path: `${target.docs_path}/${name}.md`, target_id: "domain", layer: "domain", content: "原稿", sources: "源码" });
+      assert.throws(() => input.save({ id: "escape", title: "非法扩展", path: "AGENTS.md", target_id: "domain", layer: "domain", content: "规则", sources: "源码", archive_path: "AGENTS.md" } as any), /默认目录/);
+    } else for (const doc of input.read().filter(d => input.turn.document_ids.includes(d.id))) input.save({ ...doc, content: "更新建议" });
+    return "done";
+  }, { readRemote: async (_job, doc) => ({ id: "remote", target_content: doc.path === "AGENTS.md" ? "已有根目录规范" : null, target_revision: "a".repeat(40), reviewed: false }) });
+  try {
+    let job = await done(service, service.create({ issue_no: "REQ-files", title: "领域", scope: "完整研究", repositories: [source] }, "user").id);
+    const targets = [{ ...job.knowledge_target, repository: "https://example.test/knowledge.git" }];
+    const before = service.get(job.id);
+    for (const path of ["../AGENTS.md", ".git/rules.md", "/AGENTS.md", "code.ts"]) assert.throws(() => service.configureArchive(job.id, { targets, base_revision: 0, documents: [{ id: "AGENTS", path }] }), /相对路径/);
+    assert.throws(() => service.configureArchive(job.id, { targets, base_revision: 0, documents: [{ id: "AGENTS", path: "same.md" }, { id: "rules", path: "same.md" }] }), /同一个目标文件/);
+    assert.deepEqual(service.get(job.id), before);
+    job = service.configureArchive(job.id, { targets, base_revision: 0, documents: [{ id: "AGENTS", path: "AGENTS.md" }, { id: "rules", path: "docs/domain/rules.md" }, { id: "extra", path: "guides/extra.md" }] });
+    assert.deepEqual(job.documents.map(d => d.path), ["AGENTS.md", "docs/domain/rules.md", "guides/extra.md"]);
+    job = await service.readRemote(job.id, "AGENTS", "user");
+    assert.equal(job.documents[0].remote_review?.target_content, "已有根目录规范");
+    service.run(job.id, { mode: "revise", document_ids: ["AGENTS"], message: "更新规范" }, "user");
+    job = await done(service, job.id);
+    assert.equal(job.turns.at(-1)!.proposals[0].document.path, "AGENTS.md");
+    job = service.configureArchive(job.id, { targets, base_revision: 1, documents: [{ id: "AGENTS", path: "docs/AGENTS.md" }] });
+    assert.equal(job.documents[0].remote_review, undefined);
+    assert.equal(job.turns.at(-1)!.proposals[0].document.path, "docs/AGENTS.md");
+    const restarted = new DomainKnowledgeExtraction(root, async () => "unused");
+    assert.equal(restarted.get(job.id).documents[0].archive_path, "docs/AGENTS.md"); await restarted.shutdown();
+  } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
+});

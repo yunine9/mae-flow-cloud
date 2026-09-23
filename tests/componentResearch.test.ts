@@ -157,7 +157,7 @@ test("按组件、主题和语言复用研究；并发有界；草稿不检索�
     rmSync(dir, { recursive: true, force: true });
   }
 });
-test("重启中断如实失败；任务 knowledge 可发起并读取记录，不依赖搜索索引在线", async () => {
+test("重启接续原任务；任务 knowledge 可发起并读取记录，不依赖搜索索引在线", async () => {
   const dir = temporary();
   const row = saveComponentRepository(dir, config, "alice");
   const research = new ComponentResearch(dir, async () => "# 草稿");
@@ -186,9 +186,10 @@ test("重启中断如实失败；任务 knowledge 可发起并读取记录，不
     const stale = JSON.parse(readFileSync(path, "utf8"));
     stale.status = "running";
     writeFileSync(path, JSON.stringify(stale));
-    const reloaded = new ComponentResearch(dir, async () => "");
-    assert.equal(reloaded.get(job.id).status, "failed");
-    assert.match(reloaded.get(job.id).error!, /重启/);
+    const reloaded = new ComponentResearch(dir, async () => "接续完成");
+    assert.equal(reloaded.get(job.id).status, "queued");
+    await until(() => reloaded.get(job.id).status === "done");
+    assert.equal(reloaded.get(job.id).error, undefined);
     await reloaded.shutdown();
   } finally {
     await research.shutdown();
@@ -322,7 +323,7 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
       codeSearchTool((e) => events.push(e)),
       { action: "kw", query: "Close" },
     );
-    assert.match(failTool.content[0].text, /失败/);
+    assert.match(failTool.content[0].text, /ec 工具未安装或路径错误/);
     assert.equal((events[0] as any).status, "failed");
   } finally {
     await research.shutdown();
@@ -675,12 +676,10 @@ test("重启中断保留章节、勾选与对话，继续研究沿用原始跨�
     return "# 重试完成";
   });
   t.after(async () => { await recovered.shutdown(); rmSync(dir, {recursive:true,force:true}); });
-  assert.equal(recovered.get(batch.id).status, "failed");
-  assert.equal(recovered.get(batch.id).review_turns?.[0].status, "failed");
+  assert.equal(recovered.get(batch.id).status, "queued");
+  assert.equal(recovered.get(batch.id).review_turns?.[0].status, "queued");
   assert.deepEqual(recovered.get(batch.id).document, original);
   for (const repo of componentRepositories(dir)) saveComponentRepository(dir,{id:repo.id,enabled:false},"alice");
-  const retry = recovered.retry(batch.id,"alice");
-  assert.equal(retry.id,batch.id);
   await until(() => recovered.get(batch.id).status === "done");
   assert.equal(runs,1);
   assert.deepEqual(recovered.get(batch.id).document, original);

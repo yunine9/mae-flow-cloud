@@ -71,6 +71,20 @@ for (const action of ["pull_repo", "sync_branch", "push", "retry_verification"])
   });
 }
 
+test("推送后交付由宿主接管时不再唤醒 Agent", async t => {
+  const f = fixture(t), runtime = f.service.taskHostRuntime;
+  let handoffs = 0;
+  f.service.taskHostRuntime = (...args: any[]) => ({ ...runtime(...args),
+    watchPush: () => { handoffs++; return true; },
+  });
+  f.enqueue("push");
+  assert.equal(await f.service.finishHostAction(f.task), true);
+  assert.equal(handoffs, 1);
+  assert.equal(new TaskHostLedger(f.task.summary).read().operations.at(-1)?.state, "succeeded");
+  assert.equal(f.service.queue.includes(f.task.summary.id), false);
+  assert.equal(f.messages.length, 0);
+});
+
 test("目标登记不销毁会话或容器；明确重启才销毁", async t => {
   const f = fixture(t), epoch = f.task.controlEpoch;
   const host = f.service.taskHostRuntime(f.task);
@@ -84,6 +98,18 @@ test("目标登记不销毁会话或容器；明确重启才销毁", async t => 
   assert.equal(f.disposed(), 1); assert.equal(f.stopped(), 1);
   assert.equal(f.task.retainedSession, undefined);
   assert.ok(f.task.controlEpoch > epoch);
+});
+
+test("旧会话更新文件选择记录保留容器和模型上下文", async t => {
+  const f = fixture(t);
+  const host = f.service.taskHostRuntime(f.task);
+  await host.release("restore_delivery_paths");
+  host.resume("文件选择记录已更新");
+  await f.resume();
+  assert.equal(f.task.container, f.container);
+  assert.equal(f.task.driver, f.driver);
+  assert.equal(f.stopped(), 0);
+  assert.equal(f.disposed(), 0);
 });
 
 test("宿主操作失败仍把失败原文带回同一会话", async t => {

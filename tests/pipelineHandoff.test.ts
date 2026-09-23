@@ -6,6 +6,14 @@ import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "../src/pipelineHandoff.ts";
 
+test("推送结果晚于 MR 关闭返回：保留真实提交收据，不清除关闭原因", () => {
+  const summary: any = { delivery: { sha: "old", mr_state: "已关闭", waiting_on: "MR 已关闭，请重新打开", pipeline: "failed" } };
+  projectPushReceipt(summary, { sha: "new", ref: "refs/heads/work", remote: "origin" });
+  assert.equal(summary.delivery.git_push.sha, "new");
+  assert.equal(summary.delivery.waiting_on, "MR 已关闭，请重新打开");
+  assert.equal(summary.delivery.pipeline, undefined);
+});
+
 test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果，上次派发修复锚不改", () => {
   const summary: any = { delivery: { sha: "old", pipeline: "success", checks: [{ dimension: "UT", status: "success" }],
     attested: "PASS@old", evidence_gap: { sha: "old" }, mr_url: "mr/1",
@@ -162,7 +170,9 @@ test("同 SHA 会话换代后新轮询接棒，旧轮询退出不能清掉新标
     delivery: { platformUrl: `http://127.0.0.1:${(server.address() as any).port}`, pollIntervalMs: 5 } });
   const task = service.create("验证", { account: "owner" });
   const state = service.tasks.get(task.id);
-  state.summary.status = "verifying"; state.summary.delivery = { sha: "new", pipeline: "running" };
+  state.summary.status = "verifying"; state.summary.delivery = {
+    sha: "new", mr_url: "http://platform/mr/1", pipeline: "running",
+  };
   const oldPoll = service.pollPipeline(state, state.controlEpoch);
   state.controlEpoch++;
   const newPoll = service.pollPipeline(state, state.controlEpoch);

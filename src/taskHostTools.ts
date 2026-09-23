@@ -5,6 +5,7 @@ import { remainingCiMission } from "./ciMission.ts";
 import { canHandoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
+import { pushWithFreshBranch, RemoteBranchBusyError } from "./pushRace.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -44,7 +45,7 @@ export interface HostOperation {
   target_branch?: string;
   result?: string;
   push_confirmed?: boolean;
-  /** 本次人工确认的文件范围，SHA 更新不撤销相同范围的决定。 */
+  /** 待确认卡的展示快照；确认后文件增减不撤销推送决定。 */
   push_paths?: string[];
   push_waiting_id?: string;
   review_handoff?: boolean;
@@ -147,7 +148,8 @@ export interface TaskHostRuntime {
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
-  watchPush?(): void;
+  /** 已到交付等待点且尚无 MR 时，true 表示宿主接续创建 MR，不再唤醒 Agent。 */
+  watchPush?(): boolean | void;
   /** false 表示仅记录提前验证，调用者继续原目标；true/旧接口 void 表示交付接管。 */
   acceptPipeline(sha: string, run?: PipelineRun): Promise<boolean | void>;
   syncFeedback(): void;
@@ -346,24 +348,38 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     } else if (input.action === "restore_delivery_paths") {
       operation.result = await restoreDeliveryPaths(host, operation, ownerInstruction(host, input.request_id).actor);
     } else if (input.action === "push") {
-      if (!operation.push_receipt && !await host.allowPush()) throw new Error("当前 MR 或推送授权不允许发布，请查看任务现场的具体原因");
-      if (!operation.push_receipt && host.preparePush) {
-        await host.preparePush(operation);
-        host.assertActive(); ledger.update(operation);
-      }
-      if (!operation.push_receipt && host.confirmPush && !await host.confirmPush(operation)) return true;
-      host.assertActive();
-      const receipt = operation.push_receipt ?? await host.push(operation.branch!, operation.sha!);
+      const allowed = async () => {
+        if (await host.allowPush()) return true;
+        operation.state = "failed";
+        operation.result = host.summary.delivery?.waiting_on ?? host.summary.delivery?.stalled
+          ?? host.summary.detail ?? "远端交付状态尚未确认，未推送";
+        ledger.update(operation);
+        // MR 关闭、人工等待或网络恢复已有明确去处，不能再唤醒 Agent 猜原因。
+        return false;
+      };
+      const prepare = async () => {
+        if (!await allowed()) return false;
+        if (host.preparePush) { await host.preparePush(operation); host.assertActive(); ledger.update(operation); }
+        return !host.confirmPush || await host.confirmPush(operation);
+      };
+      if (!operation.push_receipt && !await prepare()) return true;
+      const receipt = operation.push_receipt ?? await pushWithFreshBranch(async () => {
+        if (!await allowed()) return undefined;
+        host.assertActive(); return host.push(operation.branch!, operation.sha!);
+      }, prepare);
+      if (!receipt) return true;
       // Save the remote fact before updating the task projection. A retry of a
       // partially persisted result must not repeat a transport operation.
       operation.push_receipt = receipt;
+      operation.sha = receipt.sha;
       ledger.update(operation);
       // Persist the transport fact even when cancellation races the response.
       projectPushReceipt(host.summary, receipt);
       host.persist();
       scopePipelineArtifacts(join(host.summary.workspace, "pipeline"), receipt.sha);
       host.recordPublishedPush?.(receipt);
-      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      operation.result = `已确认提交 ${receipt.sha} 已发布到远端 ${receipt.ref}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      host.assertActive();
       if (await host.finishReviewAfterPush?.(operation)) {
         const handedOff = await verifyPublishedCi(host, operation, ledger);
         operation.state = "succeeded"; ledger.update(operation);
@@ -375,7 +391,10 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         operation.state = "succeeded"; ledger.update(operation);
         if (handedOff) return true;
       }
-      host.watchPush?.();
+      if (host.watchPush?.()) {
+        operation.state = "succeeded"; ledger.update(operation);
+        return true;
+      }
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
@@ -448,6 +467,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     }
     operation.state = "failed";
     operation.result = safeMessage(host, error);
+    if (error instanceof RemoteBranchBusyError) {
+      ledger.update(operation); host.fail?.(operation.result); return true;
+    }
   }
   ledger.update(operation);
   // 范围整理已明确停下时保留诊断，不再派 Agent 重试同一次推送。
@@ -550,7 +572,7 @@ export function taskHostGoal(host: TaskHostRuntime): string {
   return `${operations}\n[${newer ? "先前执行目标，需结合后续答复判断是否仍适用" : "执行目标摘要，不替代需求决定"}] ${target.target}\n来源指令：${target.request_id}；这是 Agent 登记的概括，不能据此重新解释用户原话。无关目标可保留，明确被新答复推翻的内容先同步文档再实施。已暂缓的反馈不自动恢复。`;
 }
 
-const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。用户要求把误取消的文件加回交付时，用 restore_delivery_paths，传 paths 和 task_context 中的责任人 request_id；无需再次请求确认，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后结束本轮，让平台执行；普通操作完成后沿用原会话，只需处理返回结果和受影响的内容，不要重新熟悉整个任务；queued 不等于成功。不要读取令牌或修改平台控制文件。";
+const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。文件勾选只整理当次提交，不是后续修复的白名单。按需求和责任人最新意见直接补齐必要文件，无需先恢复或扩展清单；用户明确的禁改/不提交指令仍须遵守。restore_delivery_paths 仅兼容旧会话的记录更新，不是提交前置步骤，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后结束本轮，让平台执行；普通操作完成后沿用原会话，只需处理返回结果和受影响的内容，不要重新熟悉整个任务；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,
@@ -591,7 +613,7 @@ export function createTaskHostTools(host: TaskHostRuntime) {
     defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE + " 每次 push 前（包括首次交付、检视意见修复和流水线修复后）都先提交本次有意交付的修改，再用 sync_branch 拉取并合并最新远端任务分支与目标分支，结束本轮等待宿主结果。有冲突时读取双方上下文、解决并提交，不要直接选 ours/theirs。同步后执行受影响的编译与 UT，再走原 push/MR 流程。按与最新目标分支的共同祖先核对 MR 净改动，不把从 master 等目标分支合入的代码算成本任务新增。编译前后对照 git status，区分源码和生成产物，按明确路径暂存，不用 git add . 夹带产物；不要删除或覆盖原有未提交修改，无法确认文件用途时向责任人说明并请求处理意见。MR 已报告冲突时主动按此处理，不等待流水线出现或失败。pull_repo 只克隆关联仓。",
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
-        paths: Type.Optional(Type.Array(Type.String(), { description: "恢复交付时指定原清单内的准确文件路径" })),
+        paths: Type.Optional(Type.Array(Type.String(), { description: "兼容旧会话更新选择记录时指定准确业务文件路径；正常修复无需调用" })),
         target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支用 sync_branch 同步。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),

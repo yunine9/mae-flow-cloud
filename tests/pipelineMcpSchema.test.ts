@@ -435,6 +435,82 @@ with tempfile.TemporaryDirectory() as raw:
 
 with tempfile.TemporaryDirectory() as raw:
     root = pathlib.Path(raw)
+    ctx = FileContext(raw)
+    # issue 414：前面的普通 ERROR 超过旧版 200 条上限，真正的 UT
+    # 失败处在 3 MiB 日志中段；gcovr 在末尾只是后续报错。
+    nl = chr(10)
+    failed_cases = ''.join(
+        f'[  FAILED  ] ServiceSuite.Case{i} (1 ms)' + nl
+        for i in range(28))
+    long_log = (('[ERROR] build notice' + nl) * 240
+                + ('ordinary build output 0123456789' + nl) * 44000
+                + failed_cases
+                + 'Run: 59 Failure total: 28 Failures: 28 Errors: 0' + nl
+                + 'ERROR mssage: Test case failed. Run: 59 Failure total: 28' + nl
+                + ('ordinary coverage output 0123456789' + nl) * 44000
+                + 'gcovr exit 22' + nl + 'BuildState.FAILED' + nl)
+    pipeline_log.write_build_log(ctx, '3DFH4HMK-6M4C', long_log, set())
+    excerpt = (root / 'build_error_excerpt_3DFH4HMK-6M4C.txt') \
+        .read_text(encoding='utf-8')
+    assert '测试失败原文' in excerpt
+    assert 'Failure total: 28' in excerpt
+    assert 'Test case failed' in excerpt
+    assert all(f'ServiceSuite.Case{i}' in excerpt for i in range(28)), \
+        '28 个失败用例的名称都要进入摘要，不能被前面的通用 ERROR 挤掉'
+    assert 'gcovr exit 22' not in excerpt or \
+        excerpt.index('Test case failed') < excerpt.index('gcovr exit 22')
+    items = pipeline_log.collect_output_items(raw)
+    mirrored = {item['name']: item['text'] for item in items}
+    assert mirrored['build_log_3DFH4HMK-6M4C.txt'] == long_log, \
+        '3 MiB 构建日志放得进总包时不应截成 512 KiB'
+    assert 'Test case failed' in mirrored['build_error_excerpt_3DFH4HMK-6M4C.txt']
+    assert len(json.dumps(items, ensure_ascii=False).encode('utf-8')) \
+        <= pipeline_log.MAX_BUNDLE_BYTES
+    assert not pipeline_log.UT_FAILURE_PATTERN.search('Failure total: 0')
+
+with tempfile.TemporaryDirectory() as raw:
+    # 首尾各 20 条不足以覆盖大批量失败；所有用例名应进入摘要。
+    failures = ''.join(
+        f'[  FAILED  ] ServiceSuite.Case{i}' + chr(10)
+        for i in range(60))
+    pipeline_log.write_build_log(FileContext(raw), 'many-cases', failures, set())
+    excerpt = (pathlib.Path(raw) / 'build_error_excerpt_many-cases.txt') \
+        .read_text(encoding='utf-8')
+    assert all(f'ServiceSuite.Case{i}' in excerpt for i in range(60))
+
+for language, log, expected in [
+    ('Java Maven', '[ERROR] Tests run: 3, Failures: 1, Errors: 0' + chr(10)
+     + '[ERROR] ExampleServiceTest.testInvalidInput:42 expected 200 but was 500',
+     'ExampleServiceTest.testInvalidInput'),
+    ('Java Gradle', 'ExampleServiceTest > rejectsInvalidInput FAILED',
+     'rejectsInvalidInput'),
+    ('JS Jest', 'FAIL src/service.test.js' + chr(10)
+     + '  ● Service > handles rejected response' + chr(10)
+     + 'Tests: 1 failed, 4 passed', 'handles rejected response'),
+    ('JS Vitest', 'Test Files 1 failed' + chr(10)
+     + ' × should reject invalid input' + chr(10)
+     + 'Tests 1 failed', 'should reject invalid input'),
+    ('JS Mocha', '2 failing' + chr(10)
+     + '  1) Service returns error' + chr(10)
+     + '  2) Service releases connection', 'Service releases connection'),
+    ('Python pytest', 'FAILED tests/test_service.py::TestService::test_reject - AssertionError',
+     'TestService::test_reject'),
+    ('Go test', '--- FAIL: TestServiceReject (0.01s)', 'TestServiceReject'),
+    ('Rust cargo test', 'test service::tests::reject ... FAILED', 'service::tests::reject'),
+    ('NET test', 'Failed Product.ServiceTests.Reject [3 ms]',
+     'Product.ServiceTests.Reject'),
+]:
+    with tempfile.TemporaryDirectory() as raw:
+        pipeline_log.write_build_log(FileContext(raw), language, log, set())
+        excerpt = (pathlib.Path(raw) / f'build_error_excerpt_{language}.txt') \
+            .read_text(encoding='utf-8')
+        assert expected in excerpt, f'{language} 的失败用例没有进入摘要'
+
+with tempfile.TemporaryDirectory() as raw:
+    root = pathlib.Path(raw)
+    # 把预算缩小，仅验证超预算时优先保留结构化材料和省略清单。
+    actual_budget = pipeline_log.MAX_BUNDLE_BYTES
+    pipeline_log.MAX_BUNDLE_BYTES = 4 * 1024 * 1024
     (root / 'pipeline_log_summary.json').write_text(
         json.dumps({'strategies': {'build-logs': {'status': 'ok'}}}),
         encoding='utf-8')
@@ -461,6 +537,7 @@ with tempfile.TemporaryDirectory() as raw:
         if item['name'] == 'pipeline_artifacts_omitted.json'))
     assert any(row['name'].startswith('build_log_')
                for row in manifest['files'])
+    pipeline_log.MAX_BUNDLE_BYTES = actual_budget
 `;
 
 test("构建证据全空不报成功，长日志保留错误片段且总包不撞上限", () => {

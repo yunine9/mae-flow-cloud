@@ -65,5 +65,5 @@ export async function continueRetainedSession(task: SessionTask, epoch: number, 
 
 /** 改工作树前停净旧容器，避免后台命令写入；目标登记、关联仓和 API 操作保留环境。 */
 export function hostActionStopsContainer(action?: HostAction, replace = false): boolean {
-  return replace || !action || ["push", "sync_branch", "restore_delivery_paths", "retry_verification"].includes(action);
+  return replace || !action || ["push", "sync_branch", "retry_verification"].includes(action);
 }

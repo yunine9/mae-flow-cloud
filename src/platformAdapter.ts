@@ -452,6 +452,7 @@ export class PlatformAdapter {
   private run(
     spec: CommandSpec,
     values: Record<string, string>,
+    maxBuffer = 8 * 1024 * 1024,
   ): Promise<string> {
     const secrets = [values.token, this.serviceToken]
       .filter((value): value is string => !!value);
@@ -476,7 +477,7 @@ export class PlatformAdapter {
       (spec.timeout_s ?? this.config.timeout_s ?? 60) * 1000;
     return new Promise((resolve, reject) => {
       execFile(executable, args,
-        { encoding: "utf-8", timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 },
+        { encoding: "utf-8", timeout: timeoutMs, maxBuffer },
         (error, stdout, stderr) => {
           if (error) {
             reject(new AdapterError(
@@ -639,12 +640,11 @@ export class PlatformAdapter {
       return existsSync(dir)
         ? readdirSync(dir).map((name) => ({
             name,
-            text: readFileSync(join(dir, name), "utf-8")
-              .slice(0, 512 * 1024),
+            text: readFileSync(join(dir, name), "utf-8"),
           }))
         : [];
     }
-    const { items } = await this.runList(spec, values);
+    const { items } = await this.runList(spec, values, 128 * 1024 * 1024);
     return items
       .filter((row) => row.name !== undefined && row.text !== undefined)
       .map((row) => ({ name: String(row.name), text: String(row.text) }));
@@ -655,9 +655,10 @@ export class PlatformAdapter {
   private async runList(
     spec: ListSpec,
     values: Record<string, string>,
+    maxBuffer?: number,
   ): Promise<{ stdout: string; parsed: () => unknown;
                items: Array<Record<string, unknown>> }> {
-    const stdout = await this.run(spec, values);
+    const stdout = await this.run(spec, values, maxBuffer);
     let parsedCache: unknown;
     const parsed = () => parsedCache ??= JSON.parse(stdout);
     const rawList = spec.items

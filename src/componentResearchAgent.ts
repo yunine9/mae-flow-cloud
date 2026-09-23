@@ -55,8 +55,8 @@ export async function runComponentResearch(
   writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), {
     mode: 0o600,
   });
-  let sourceRead = false;
-  let callerRead = false;
+  let sourceRead = readRepositories.size > 0;
+  let callerRead = input.record.evidence.some(event => event.tool === "code_search" && event.action === "read" && event.status === "returned" && Number(event.characters) > 0);
   const observed = (event: Record<string, unknown>) => {
     if (
       event.tool === "component_source" &&
@@ -99,6 +99,7 @@ export async function runComponentResearch(
   const materialTool = knowledgeMaterialTool((input.record.material_ids ?? []).map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id)), join(options.dataDir, "knowledge-materials"));
   const session = await CloudSession.create({
     taskId: input.record.id,
+    resumeSession: true,
     workspace: input.root,
     agentDir,
     provider: model.provider,

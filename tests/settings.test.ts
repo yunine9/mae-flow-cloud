@@ -259,6 +259,12 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     const admin = await login("admin", "admin-password-1");
     const dev = await login("dev", "dev-password-11");
 
+    const anonymousTiming = await fetch(`${base}/browser-timing`, { method: "POST", body: JSON.stringify({ entries: [] }) });
+    assert.equal(anonymousTiming.status, 401);
+    const timing = await fetch(`${base}/browser-timing`, { method: "POST", headers: { cookie: dev },
+      body: JSON.stringify({ entries: [{ kind: "longtask", duration_ms: 350 }] }) });
+    assert.equal(timing.status, 204, "已登录成员可上报经过白名单过滤的耗时");
+
     const denied = await fetch(`${base}/settings`, {
       headers: { cookie: dev } });
     assert.equal(denied.status, 403);

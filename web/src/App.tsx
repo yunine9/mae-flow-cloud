@@ -751,6 +751,7 @@ export function App() {
   /** 深链指向的任务已不存在时的提示(空串=无提示)。 */
   const [missingTaskNotice, setMissingTaskNotice] = useState("");
   const refreshInFlight = useRef<Promise<void> | undefined>(undefined);
+  const sidebarRefreshInFlight = useRef<Promise<unknown> | undefined>(undefined);
   const [targetRoute, setTargetRoute] = useState(readWorkspaceRoute);
   const targetTaskId = targetRoute.taskId;
   const targetReviewId = targetRoute.reviewId;
@@ -912,6 +913,19 @@ export function App() {
   ]);
 
   function refresh(): Promise<void> {
+    // 旁栏各自更新，慢请求或接口未启用都不能拖住任务列表和任务深链。
+    if (!sidebarRefreshInFlight.current) {
+      const sidebars = Promise.allSettled([
+        listMyReviews().then(setMyReviews),
+        listAllIssues().then(setTeamIssues),
+        session?.role === "admin" ? Promise.resolve()
+          : listIssues().then(setMyIssues),
+      ]);
+      sidebarRefreshInFlight.current = sidebars;
+      void sidebars.finally(() => {
+        if (sidebarRefreshInFlight.current === sidebars) sidebarRefreshInFlight.current = undefined;
+      });
+    }
     if (refreshInFlight.current) return refreshInFlight.current;
     // 等人的排最前、等最久的第一:这块屏幕先回答"谁在等我"。
     setTaskSync((current) => current.kind === "error"
@@ -919,23 +933,7 @@ export function App() {
       : current);
     const running = (async () => {
       try {
-        // 三路各自独立:任务列表是这块屏幕的正文,拿不到才算同步中断;检视与
-        // 问题是旁栏,哪一路失败就保留上次结果。原来 Promise.all 捆在一起,
-        // 问题流没启用的部署(试跑器现场、最小部署)/issues 一律 404,整页永远
-        // "数据更新中断、尚未取得任务数据"(2026-09-06 用户在演练现场实锤)。
-        // 本人问题列表也是旁栏,且只对开发成员拉:admin 的 GET /issues 返回
-        // 全量,与 scope=all 重复,徽章又不挂 admin(见 IssueNavGroup)。
-        const [tasksResult, reviewsResult, issuesResult, myIssuesResult] =
-          await Promise.allSettled([
-            listTasks(), listMyReviews(), listAllIssues(),
-            session?.role === "admin"
-              ? Promise.resolve<IssueSummary[]>([]) : listIssues(),
-          ]);
-        if (tasksResult.status === "rejected") throw tasksResult.reason;
-        setTasks(tasksResult.value.sort(byUrgency));
-        if (reviewsResult.status === "fulfilled") setMyReviews(reviewsResult.value);
-        if (issuesResult.status === "fulfilled") setTeamIssues(issuesResult.value);
-        if (myIssuesResult.status === "fulfilled") setMyIssues(myIssuesResult.value);
+        setTasks((await listTasks()).sort(byUrgency));
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。

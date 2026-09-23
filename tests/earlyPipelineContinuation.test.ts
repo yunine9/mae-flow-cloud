@@ -19,12 +19,16 @@ async function until(check: () => boolean) {
 }
 async function fixture(t: any) {
   const root = mkdtempSync(join(tmpdir(), "early-pipeline-"));
-  let payload: any = { runs: [] }, error = false, queries = 0, triggers = 0;
+  let payload: any = { runs: [] }, error = false, queries = 0, statusQueries = 0, triggers = 0;
   const bodies: any[] = [];
   let delay: Promise<void> | undefined;
   const server = createServer(async (req, res) => {
     let text = ""; for await (const chunk of req) text += chunk;
-    if (req.method === "POST") { triggers++; bodies.push(JSON.parse(text)); } else queries++;
+    if (req.method === "POST") { triggers++; bodies.push(JSON.parse(text)); }
+    else {
+      queries++;
+      if (req.url?.startsWith("/pipeline/status")) statusQueries++;
+    }
     const captured = JSON.stringify(payload), failed = error;
     await delay;
     res.statusCode = failed ? 502 : 200;
@@ -46,7 +50,8 @@ async function fixture(t: any) {
   t.after(async () => { await service.shutdown(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); rmSync(root, { recursive: true, force: true }); });
   return { service, task, options, platformUrl, bodies,
     response: (value: any) => { payload = value; }, outage: (value: boolean) => { error = value; },
-    delay: (value?: Promise<void>) => { delay = value; }, queries: () => queries, triggers: () => triggers };
+    delay: (value?: Promise<void>) => { delay = value; }, queries: () => queries,
+    statusQueries: () => statusQueries, triggers: () => triggers };
 }
 
 test("显式空查询不接受顶层 running；旧单 run 响应仍兼容", () => {
@@ -134,6 +139,124 @@ test("正式验证复用同一提交观察结果，只有交付接管后才裁�
   assert.deepEqual(verdicts, [{ sha, status: "success" }]); assert.equal(f.triggers(), 0);
 });
 
+test("交付等待点推送后无 MR，宿主接续创建而不轮询裸分支", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  let deliveries = 0;
+  service.tryDeliver = async () => { deliveries++; };
+  assert.equal(service.taskHostRuntime(task).watchPush(), true);
+  await until(() => deliveries === 1);
+  assert.equal(task.summary.status, "verifying");
+  assert.equal(f.queries(), 0);
+  assert.equal(f.triggers(), 0);
+  await service.pollPipeline(task, task.controlEpoch);
+  assert.equal(deliveries, 2, "旧的正式轮询入口也应转到同一交付入口");
+  assert.equal(f.queries(), 0);
+});
+
+test("没有 MR 的提前验证不能接管正式交付", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "running";
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  assert.equal(service.pipelineCanTakeOver(task), false);
+  const handedOff = await service.acceptPipelineRun(task, sha,
+    { sha, status: "running" }, task.controlEpoch, !service.pipelineCanTakeOver(task));
+  assert.equal(handedOff, false);
+  assert.equal(task.summary.status, "running");
+  assert.equal(task.summary.delivery.pipeline_background, true);
+  assert.equal(f.statusQueries(), 0);
+});
+
+test("仅保存 MR 编号的旧任务也能正式验证", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.delivery.mr_id = 3384;
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  assert.equal(service.pipelineCanTakeOver(task), true);
+  task.summary.delivery.loop = { kind: "ci", state: "repairing", last_sha: old, round: 1 };
+  task.mission = `当前目标是处理本轮流水线失败(1)。分支上提交 ${old} 的权威流水线结果是 failed。[本轮流水线修复目标结束]`;
+  assert.equal(service.taskHostRuntime(task).resumePipelineAfterPush(sha), true);
+});
+
+test("重启恢复无 MR 的已推送任务，接续创建 MR 而非空转轮询", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "verifying";
+  task.summary.delivery.pipeline = "not_found";
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  service.persist(task);
+  await service.shutdown();
+  const restored: any = new TaskService(f.options);
+  t.after(() => restored.shutdown());
+  let deliveries = 0;
+  restored.tryDeliver = async () => { deliveries++; };
+  restored.recover();
+  await until(() => deliveries === 1);
+  assert.equal(f.queries(), 0);
+  assert.equal(restored.tasks.get(task.summary.id).summary.delivery.git_push.sha, sha);
+});
+
+test("旧任务还没推送却留下 not_found，恢复时仍先走交付入口", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "verifying";
+  task.summary.delivery.pipeline = "not_found";
+  task.summary.delivery.git_push = undefined;
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  service.persist(task);
+  await service.shutdown();
+  const restored: any = new TaskService(f.options);
+  t.after(() => restored.shutdown());
+  let deliveries = 0;
+  restored.tryDeliver = async () => { deliveries++; };
+  restored.recover();
+  await until(() => deliveries === 1);
+  assert.equal(f.queries(), 0);
+  assert.equal(f.triggers(), 0);
+});
+
+for (const outage of [false, true]) test(`MR 已建但流水线始终不可得，按现有期限停下（查询故障：${outage}）`, async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "verifying";
+  task.summary.delivery.mr_url = "http://platform/mr/1";
+  task.summary.delivery.verify_deadline = new Date(Date.now() - 1000).toISOString();
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  f.outage(outage);
+  await service.pollPipeline(task, task.controlEpoch);
+  assert.match(task.summary.delivery.stalled, outage ? /持续查询失败/ : /仍未找到.*有效流水线/);
+  assert.equal(task.summary.delivery.stall_class, "infrastructure");
+  assert.equal(f.queries(), 1);
+  assert.equal(f.triggers(), 0);
+  service.persist(task);
+  await service.shutdown();
+  const restored: any = new TaskService(f.options);
+  t.after(() => restored.shutdown());
+  restored.recover();
+  await new Promise(r => setTimeout(r, 30));
+  assert.equal(f.statusQueries(), 1, "已停摆不能因服务重启再次开始无限轮询");
+});
+
+test("首次查不到流水线时落盘等待期限，真实运行出现后解除缺失期限", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "verifying";
+  task.summary.delivery.mr_url = "http://platform/mr/1";
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  const polling = service.pollPipeline(task, task.controlEpoch);
+  await until(() => Boolean(task.summary.delivery.verify_deadline));
+  const saved = JSON.parse(readFileSync(join(task.summary.workspace, "task.json"), "utf8"));
+  assert.equal(saved.summary.delivery.verify_deadline, task.summary.delivery.verify_deadline);
+  f.response({ runs: [{ sha, status: "running" }] });
+  await until(() => task.summary.delivery.pipeline === "running");
+  assert.equal(task.summary.delivery.verify_deadline, undefined);
+  task.summary.status = "completed";
+  await polling;
+  assert.equal(task.summary.delivery.stalled, undefined);
+});
+
 for (const state of ["verifying", "paused", "waiting_for_human"] as const) test(`重启恢复提前验证现场：${state} 保留收据和目标`, async t => {
   const f = await fixture(t), { task, service } = f;
   task.summary.status = state; task.summary.delivery.pipeline = "running";
@@ -156,6 +279,7 @@ test("触发请求带 MR，自动触发查询可以按 MR 找到真实运行", a
 
 test("正式 CI 接棒已落盘后，重启只续观察，不误判成未完编码", async t => {
   const f = await fixture(t), { task, service } = f;
+  task.summary.delivery.mr_url = "http://platform/mr/1";
   task.mission = "当前目标是处理本轮流水线失败(1)。分支上提交 " + old + " 的权威流水线结果是 failed。[本轮流水线修复目标结束]";
   task.summary.delivery.loop = { kind: "ci", state: "repairing", last_sha: old, round: 1 };
   await service.acceptPipelineRun(task, sha, { sha, status: "running" }, task.controlEpoch);

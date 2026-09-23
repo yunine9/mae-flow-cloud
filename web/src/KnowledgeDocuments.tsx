@@ -1,3 +1,4 @@
+import { PlatformSkillPane, platformSkillLabels, platformSkillRequest, type PlatformSkillKind } from "./PlatformSkill";
 import { KnowledgeConsolidation } from "./KnowledgeConsolidation";
 import { KnowledgeExport } from "./KnowledgeExport";
 import { ComponentResearch } from "./ComponentResearch";
@@ -33,6 +34,27 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   const [addOpen, setAddOpen] = useState(false);
   const [importSource, setImportSource] = useState("upload");
   const [nativeUpload, setNativeUpload] = useState(false);
+  const [skillUse, setSkillUse] = useState("task"), [skillFilter, setSkillFilter] = useState("all");
+  const [platformKind, setPlatformKind] = useState<PlatformSkillKind>("component");
+  const [platformRows, setPlatformRows] = useState<KnowledgeDocument[]>([]);
+  const platformKindOf = (id: string) => id === "platform-skill-component" ? "component" : id === "platform-skill-domain" ? "domain" : undefined;
+  async function refreshPlatformSkills() {
+    const items = await Promise.all((["component", "domain"] as const).map(async kind => {
+      const skill = await platformSkillRequest(kind);
+      return { id: `platform-skill-${kind}`, title: skill.name, form: "skill", scope: "platform" as const,
+        scope_label: `平台使用 · ${platformSkillLabels[kind]}`, module_ids: [], repositories: [], technologies: [], product_versions: [],
+        when_to_use: "", active: true, revision: skill.digest, history: [], indexing: { state: "native" } };
+    }));
+    setPlatformRows(items);
+  }
+  useEffect(() => { if (category === "skills") void refreshPlatformSkills().catch(e => setError(e.message)); }, [category]);
+  useEffect(() => {
+    const sync = () => {
+      const kind = new URLSearchParams(location.search).get("platformSkill");
+      if (kind === "component" || kind === "domain") { onCategoryChange("skills"); setSkillFilter("all"); setTerm(""); setSelected(`platform-skill-${kind}`); }
+    };
+    sync(); addEventListener("popstate", sync); return () => removeEventListener("popstate", sync);
+  }, []);
   const [editingExternal, setEditingExternal] = useState(false);
   const [rows, setRows] = useState<KnowledgeDocument[]>([]), [selected, setSelected] = useState("");
   useEffect(() => { if (selectedDocument) { setSelected(selectedDocument); void refresh().catch(e => setError(e.message)); } }, [selectedDocument]);
@@ -44,7 +66,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   useEffect(() => {
     if (uploadRequest !== lastUploadRequest.current) {
       lastUploadRequest.current = uploadRequest;
-      if (category === "skills") setNativeUpload(true);
+      if (category === "skills") { const kind = platformKindOf(selected); setSkillUse(kind ? "platform" : "task"); if (kind) setPlatformKind(kind); setNativeUpload(true); }
       else setAddOpen(true);
     }
   }, [uploadRequest]);
@@ -64,16 +86,25 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   useEffect(() => {
     const version = ++request.current;
     setDoc(undefined);  setError(""); setEditingExternal(false); setNativeUpload(false);
-    if (selected) void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(selected)}`).then(value => {
+    if (selected && !platformKindOf(selected)) void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(selected)}`).then(value => {
       if (request.current === version) { setDoc(value); if (value.form === "skill") setTab("content"); }
     }).catch(e => { if (request.current === version) setError(e.message); });
   }, [selected]);
   useEffect(() => { setNativeUpload(false); setEditingExternal(false); }, [category]);
   const row = rows.find(value => value.id === selected), status = row?.indexing;
-  const visible = rows.filter(r => (filter === "all" || r.scope === filter) && (category === "skills" ? r.form === "skill" : r.form !== "skill") && `${r.title} ${r.source?.path ?? ""} ${r.source?.repository ?? ""}`.toLowerCase().includes(term.toLowerCase()));
+  const visible = [...rows, ...platformRows].filter(r => (category === "skills" ? skillFilter === "all" || (skillFilter === "platform") === !!platformKindOf(r.id) : filter === "all" || r.scope === filter) && (category === "skills" ? r.form === "skill" : r.form !== "skill") && `${r.title} ${r.scope_label ?? ""} ${r.source?.path ?? ""} ${r.source?.repository ?? ""}`.toLowerCase().includes(term.toLowerCase()));
   useEffect(() => {
-    setSelected(id => visible.some(item => item.id === id) ? id : visible[0]?.id || "");
-  }, [rows, category, filter, term]);
+    setSelected(id => visible.some(item => item.id === id) || (platformKindOf(id) && !platformRows.length && (category === "skills" || new URLSearchParams(location.search).get("platformSkill") === platformKindOf(id))) ? id : visible[0]?.id || "");
+  }, [rows, platformRows, category, filter, skillFilter, term]);
+  function selectCategory(next: "documents" | "skills") {
+    const url = new URL(location.href); url.searchParams.delete("platformSkill"); history.replaceState(history.state, "", url);
+    onCategoryChange(next);
+  }
+  function selectRow(id: string) {
+    const url = new URL(location.href), kind = platformKindOf(id);
+    if (kind) url.searchParams.set("platformSkill", kind); else url.searchParams.delete("platformSkill");
+    history.replaceState(history.state, "", url); setSelected(id);
+  }
   async function update(body: unknown) {
     const id = selected; setBusy(true); setError("");
     try {
@@ -97,28 +128,28 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   if(consolidationOpen)return <KnowledgeConsolidation onClose={()=>{const url=new URL(location.href);url.searchParams.delete("knowledgeConsolidation");history.replaceState(history.state,"",url);setConsolidationOpen(false);void refresh();}}/>;
   if (researchOpen && !addOpen) return <><ComponentResearch focused={!!researchDocument} open={researchOpen} onClose={()=>{if(researchDocument) setSelected(researchDocument);setResearchOpen(false);const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("researchDocument");url.searchParams.delete("component");history.replaceState(history.state,"",url);}} onAdopt={id=>{const url=new URL(location.href);url.searchParams.delete("componentResearch");url.searchParams.delete("researchDocument");url.searchParams.delete("component");history.replaceState(history.state,"",url);setResearchOpen(false);onCategoryChange("documents");setFilter("all");setTerm("");void refresh();setSelected(id);}} /></>;
   return <div className="knowledge-documents">
-    <nav className="tw-root flex items-center gap-3 border-b border-line px-5 py-3" aria-label="知识与萃取"><strong>知识文档</strong><Button variant="outline" onClick={() => openResearch("history")}>萃取任务 · 进度与管理 →</Button><Button variant="outline" onClick={()=>openConsolidation()}>知识整理 →</Button></nav>
+    {category === "documents" && <nav className="tw-root flex items-center gap-3 border-b border-line px-5 py-3" aria-label="知识与萃取"><strong>知识文档</strong><Button variant="outline" onClick={() => openResearch("history")}>萃取任务 · 进度与管理 →</Button><Button variant="outline" onClick={()=>openConsolidation()}>知识整理 →</Button></nav>}
     <header className="kd-toolbar">
       <div className="kd-search-input"><Search size={19} /><Input aria-label="搜索文档" placeholder={category === "skills" ? "搜索 Skill 名称" : "搜索文档名称"} value={term} onChange={e => setTerm(e.target.value)} /></div>
-      <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>
+      {category === "skills" ? <Select value={skillFilter} onValueChange={v => setSkillFilter(v ?? "all")} items={[{value:"all",label:"所有使用对象"},{value:"task",label:"任务使用"},{value:"platform",label:"平台使用"}]}><SelectTrigger aria-label="Skill 使用对象筛选"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有使用对象"],["task","任务使用"],["platform","平台使用"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select> : <Select value={filter} onValueChange={v => setFilter(v ?? "all")} items={[{value:"all",label:"所有范围"},{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"代码仓"}]}><SelectTrigger aria-label="知识范围"><SelectValue /></SelectTrigger><SelectContent>{[["all","所有范围"],["platform","平台通用"],["module","业务模块"],["repository","代码仓"]].map(([value,label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>}
 
 
       {category === "documents" && <KnowledgeExport documents={rows} />}
-      <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>
+      {category === "documents" && <Button variant="outline" onClick={()=>setTrialOpen(true)}><Search size={18}/>试搜知识</Button>}
     </header>
     {error && <div role="alert" className="kd-error">{error}</div>}
     <div className="kd-layout">
       <aside className="kd-library"><nav className="kd-category-tabs" aria-label="知识形式">
-        <button type="button" aria-pressed={category === "documents"} onClick={() => onCategoryChange("documents")}><FileText size={18} />文档<span>{rows.filter(r => r.form !== "skill").length}</span></button>
-        <button type="button" aria-pressed={category === "skills"} onClick={() => onCategoryChange("skills")}><Blocks size={18} />Skill<span>{rows.filter(r => r.form === "skill").length}</span></button>
+        <button type="button" aria-pressed={category === "documents"} onClick={() => selectCategory("documents")}><FileText size={18} />文档<span>{rows.filter(r => r.form !== "skill").length}</span></button>
+        <button type="button" aria-pressed={category === "skills"} onClick={() => selectCategory("skills")}><Blocks size={18} />Skill<span>{rows.filter(r => r.form === "skill").length + platformRows.length}</span></button>
       </nav>
-        <div className="kd-doc-list">{visible.map(item => <button key={item.id} className={`kd-doc-row ${selected === item.id ? "selected" : ""}`} onClick={() => setSelected(item.id)}>
-          {item.form === "skill" ? <Blocks size={29} className="kd-file-icon" /> : <FileText size={29} className="kd-file-icon" />}<span className="kd-doc-info"><strong title={item.title}>{item.title}</strong>{item.id.startsWith("kg-") && <small>整理专题</small>}{item.research_source && <small>{item.research_source.job_id.startsWith("dkx-") ? "领域知识萃取" : "基础组件萃取"}</small>}{item.source && <><small className="kd-source-path" title={item.source.path}>{item.source.path}</small><small className="kd-source-path" title={`${item.source.repository} · ${item.source.branch}`}>{repositoryLabel(item.source)}</small></>}<small>{scopeLabel(item, modules)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
+        <div className="kd-doc-list">{visible.map(item => <button key={item.id} className={`kd-doc-row ${selected === item.id ? "selected" : ""}`} onClick={() => selectRow(item.id)}>
+          {item.form === "skill" ? <Blocks size={29} className="kd-file-icon" /> : <FileText size={29} className="kd-file-icon" />}<span className="kd-doc-info"><strong title={item.title}>{item.title}</strong>{item.id.startsWith("kg-") && <small>整理专题</small>}{item.research_source && <small>{item.research_source.job_id.startsWith("dkx-") ? "领域知识萃取" : "基础组件萃取"}</small>}{item.source && <><small className="kd-source-path" title={item.source.path}>{item.source.path}</small><small className="kd-source-path" title={`${item.source.repository} · ${item.source.branch}`}>{repositoryLabel(item.source)}</small></>}<small>{item.form === "skill" && !platformKindOf(item.id) ? "任务使用 · " : ""}{scopeLabel(item, modules)}{item.technologies.length ? ` · ${item.technologies.map(languageLabel).join("、")}` : ""}</small></span>
           <span className={`kd-status ${item.indexing?.state}`}>{labels[item.indexing?.state ?? "queued"]}</span>
         </button>)}{!visible.length && <div className="kd-empty">{category === "skills" ? "暂无匹配的 Skill，可通过右上角添加。" : "暂无匹配的文档，可上传手册或从仓库导入。"}</div>}</div>
 
       </aside>
-      <section className="kd-detail">{nativeUpload ? <><Button variant="ghost" onClick={() => setNativeUpload(false)}>← 返回 Skill</Button><KnowledgeAssetsWorkspace key="native-upload" embedded initialUpload onOpenTask={onOpenTask} /></> : doc?.focus?.kind === "skill" ? <KnowledgeAssetsWorkspace key={doc.id} embedded initialAsset={doc.focus} onOpenTask={onOpenTask} /> : editingExternal && doc?.focus ? <><Button variant="ghost" onClick={() => { setEditingExternal(false); void refresh(); }}>← 返回阅读</Button>{doc.focus.kind === "business" ? <BusinessAssetEditor moduleId={doc.focus.moduleId} assetId={doc.focus.assetId} onDone={() => { setEditingExternal(false); void refresh(); void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(doc.id)}`).then(setDoc).catch(e=>setError(e.message)); }} /> : <KnowledgeAssetsWorkspace embedded initialAsset={doc.focus} onOpenTask={onOpenTask} />}</> : !doc ? <div className="kd-empty">{selected ? "正在读取文档…" : category === "skills" ? "选择 Skill，查看说明或维护技能包" : "选择文档，查看内容或试搜知识"}</div> : <>
+      <section className="kd-detail">{nativeUpload ? <><Button variant="ghost" onClick={() => setNativeUpload(false)}>← 返回 Skill</Button><div className="tw-root flex gap-3 items-center border-b border-line p-5"><span>使用对象</span>{[["task", "任务使用"], ["platform", "平台使用"]].map(([value, label]) => <Button key={value} variant={skillUse === value ? "default" : "outline"} aria-pressed={skillUse === value} onClick={() => setSkillUse(value)}>{label}</Button>)}{skillUse === "platform" && <Select value={platformKind} onValueChange={v => setPlatformKind(v as PlatformSkillKind)} items={Object.entries(platformSkillLabels).map(([value,label])=>({value,label}))}><SelectTrigger aria-label="平台 Skill 用途" className="w-[220px]"><SelectValue /></SelectTrigger><SelectContent>{Object.entries(platformSkillLabels).map(([value,label])=><SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select>}</div>{skillUse === "platform" ? <PlatformSkillPane key={platformKind} kind={platformKind} upload onSaved={() => { void refreshPlatformSkills().catch(e => setError(e.message)); }} /> : <KnowledgeAssetsWorkspace key="native-upload" embedded initialUpload onOpenTask={onOpenTask} />}</> : platformKindOf(selected) ? <PlatformSkillPane key={selected} kind={platformKindOf(selected)!} onSaved={() => { void refreshPlatformSkills().catch(e => setError(e.message)); }} /> : doc?.focus?.kind === "skill" ? <KnowledgeAssetsWorkspace key={doc.id} embedded initialAsset={doc.focus} onOpenTask={onOpenTask} /> : editingExternal && doc?.focus ? <><Button variant="ghost" onClick={() => { setEditingExternal(false); void refresh(); }}>← 返回阅读</Button>{doc.focus.kind === "business" ? <BusinessAssetEditor moduleId={doc.focus.moduleId} assetId={doc.focus.assetId} onDone={() => { setEditingExternal(false); void refresh(); void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(doc.id)}`).then(setDoc).catch(e=>setError(e.message)); }} /> : <KnowledgeAssetsWorkspace embedded initialAsset={doc.focus} onOpenTask={onOpenTask} />}</> : !doc ? <div className="kd-empty">{selected ? "正在读取文档…" : category === "skills" ? "选择 Skill，查看说明或维护技能包" : "选择文档，查看内容或试搜知识"}</div> : <>
         <header className="kd-doc-header"><div><h2>{doc.title}</h2>{doc.research_source && <Button variant="link" className="px-0" onClick={() => openResearch(doc.research_source!.job_id, doc.id)}>查看本篇文档的萃取过程 →</Button>}<div className="kd-tags"><span>{scopeLabel(doc, modules)}</span>{doc.technologies.map(v => <span key={v}>{languageLabel(v)}</span>)}<span>{doc.product_versions.join("、") || "所有版本"}</span><span className={`kd-status ${status?.state}`}>{labels[status?.state ?? "queued"]}</span></div></div>
           <div className="kd-actions">{doc.external ? <Button variant="outline" onClick={() => doc.id.startsWith("kg-") ? openConsolidation(doc.id) : doc.focus ? setEditingExternal(true) : onManage() }>{doc.id.startsWith("kg-") ? "查看专题与整理记录" : doc.focus ? "编辑资料" : "审查经验"}</Button> : <><Button variant="outline" onClick={() => setForm("edit")}>编辑适用范围</Button><Button variant="outline" onClick={() => (doc.research_source?.job_id.startsWith("dkx-") || (doc.research_source?.job_id.startsWith("cr-") && doc.source)) ? openResearch(doc.research_source.job_id, doc.id) : setForm("replace")}>{(doc.research_source?.job_id.startsWith("dkx-") || (doc.research_source?.job_id.startsWith("cr-") && doc.source)) ? "修订并更新 MR" : "替换文档"}</Button><DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" aria-label="更多文档操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled={busy} onClick={() => void update({ active: !doc.active })}>{doc.active ? "停用文档" : "启用文档"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></>}</div></header>
         {doc.form !== "skill" && <div className="kd-meta">{status?.state === "ready" ? `${status.sections === undefined ? "索引已就绪" : `已整理 ${status.sections} 个章节`} · 原始文档保持不变` : status?.state === "failed" ? status.error : status?.state === "source" ? status.error : status?.state === "disabled" ? "已停用，不再用于 Agent 检索" : "后台正在准备知识索引，可先阅读原文"}

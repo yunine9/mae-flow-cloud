@@ -14,6 +14,7 @@ import {
   hasStructuralWorkflowProjectionMismatch,
   readCurrentExecutionPlan,
   readCurrentExecutionPlanReading,
+  readCurrentExecutionPlanReadingAsync,
 } from "../src/executionPlan.ts";
 
 function fixture(valid = true): { kernelRoot: string; workspace: string } {
@@ -67,6 +68,22 @@ test("Cloud 只消费内核结构化执行方案，不在 TS 侧猜阶段做法"
   assert.equal(plan?.step.id, "build");
   assert.deepEqual(plan?.customization.locked, ["真实证据"]);
   assert.equal(plan?.customization.layers[0].instructions, "先核对旧数据");
+});
+
+test("任务详情的慢 Python 查询不阻塞事件循环，同版本并发只执行一次", async () => {
+  clearExecutionPlanCache();
+  const current = fixture();
+  const script = join(current.kernelRoot, "scripts", "mae-flow.py");
+  writeFileSync(script, "import time\nwith open('calls.txt', 'a') as f: f.write('1')\ntime.sleep(0.25)\n" + readFileSync(script, "utf8"));
+  let ticked = false;
+  const timer = setTimeout(() => { ticked = true; }, 20);
+  const one = readCurrentExecutionPlanReadingAsync(current);
+  const two = readCurrentExecutionPlanReadingAsync(current);
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(ticked, true);
+  const [a, b] = await Promise.all([one, two]); clearTimeout(timer);
+  assert.equal(a.plan?.step.id, "build"); assert.deepEqual(a, b);
+  assert.equal(readFileSync(join(current.workspace, "calls.txt"), "utf8"), "1");
 });
 
 test("补充型方案的 platform_default+overrides 是正常生效，不误报投影缺失", () => {

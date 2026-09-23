@@ -94,7 +94,7 @@ export class KnowledgeMrPublisher {
     const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
       documents: docs.map(doc => ({ id: doc.id, path: doc.path, content: markdown(doc, job), revision: doc.revision, base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
     for (const doc of docs) {
-      if (!knowledgeRelativePath(doc.path, true).startsWith(`${target.docs_path}/`)) throw new Error("归档文件超出指定目录");
+      if (!knowledgeRelativePath(doc.path, true).startsWith(`${target.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
       scanForSecrets(doc.path, Buffer.from(markdown(doc, job)));
     }
     // Keep the last confirmed push separate from the attempted content. A timeout may

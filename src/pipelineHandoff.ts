@@ -2,6 +2,7 @@ import { remainingCiMission } from "./ciMission.ts";
 import { parsePipelineChecks } from "./pipelineContract.ts";
 import type { PipelineRun, PipelineStatus } from "./pipelineClient.ts";
 import type { TaskSummary } from "./taskService.ts";
+import { CLOSED_MR_WRITE } from "./mergeWatch.ts";
 
 export function validPushReceipt(value: unknown): value is NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]> {
   const row = value as { sha?: unknown; ref?: unknown; remote?: unknown } | undefined;
@@ -18,7 +19,8 @@ export function projectPushReceipt(summary: TaskSummary, receipt: NonNullable<No
       ? { last_push_base_sha: previous.git_push.sha } : {}),
     ...(previous?.sha !== receipt.sha ? {
       pipeline: undefined, pipeline_background: undefined, checks: undefined, attested: undefined,
-      evidence_gap: undefined, verify_deadline: undefined, waiting_on: undefined,
+      evidence_gap: undefined, verify_deadline: undefined,
+      waiting_on: previous?.mr_state === CLOSED_MR_WRITE.mr_state ? previous.waiting_on : undefined,
     } : {}) };
 }
 

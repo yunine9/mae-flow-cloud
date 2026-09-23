@@ -55,18 +55,14 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
         await pause();
         if (kind === "domain") {
           await click("研究过程");
-          await evaluate("document.querySelector('[aria-controls$=\"-browse\"]').click()"); await pause();
           const list = ".knowledge-progress-entries > ol";
 
           await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollIntoView({block:'center'})`);
           await wheel(list, 250);
-          assert.ok(await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop > 0`), `${width}: research list scrolls internally`);
-          await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop=1e7;document.querySelector('.knowledge-extraction-content').scrollTop=0`);
-          await wheel(list, 250);
-          assert.ok(await outerTop() > 0, `${width}: research list bottom must pass wheel to outer detail`);
-          await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop=0`);
+          assert.ok(await outerTop() > 0, `${width}: timeline wheel scrolls the outer detail directly`);
+          assert.equal(await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop`), 0, "timeline has no nested scroll trap");
           const before = await outerTop(); await wheel(list, -250);
-          assert.ok(await outerTop() < before, `${width}: list top must pass upward wheel`);
+          assert.ok(await outerTop() < before, `${width}: timeline scrolls upward with outer detail`);
           await click("＋ 新建萃取任务");
           await evaluate("[...document.querySelectorAll('[role=dialog] details')].forEach(e=>e.open=true)"); await pause();
           const canScroll = await evaluate("(()=>{const e=document.querySelector('[role=dialog]');return e.scrollHeight>e.clientHeight})()");
@@ -85,7 +81,7 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
         // At the bottom of the workspace, native wheel chaining reaches the page itself.
         await evaluate("document.querySelectorAll('.knowledge-extraction-content, .research-reader, .research-document-content, .knowledge-progress-entries > ol').forEach(e=>e.scrollTop=1e7);window.scrollTo(0,0)");
         const before = await evaluate("window.scrollY");
-        await wheel(kind === "domain" ? '[aria-controls$="-notes"]' : ".knowledge-extraction-content main > header", 300);
+        await wheel(kind === "domain" ? '.knowledge-progress-entries > ol > li:last-child summary' : ".knowledge-extraction-content main > header", 300);
         assert.ok(await evaluate("window.scrollY") > before, `${kind} ${width}: workspace boundary must allow page scrolling`);
       }
       await send("Target.closeTarget", { targetId });

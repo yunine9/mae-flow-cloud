@@ -1,15 +1,17 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { KernelHost } from "../src/kernelHost.ts";
 import { openKernelFeedback } from "../src/kernelDelivery.ts";
-import { queueTaskHostOperation, finishTaskHostOperation, TaskHostLedger } from "../src/taskHostTools.ts";
+import { queueTaskHostOperation, finishTaskHostOperation, recordTaskHostInstruction, TaskHostLedger } from "../src/taskHostTools.ts";
 import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import { deliveryChangeSnapshot } from "../src/artifacts.ts";
+import { FakeGitPlatform } from "../src/gitPlatform.ts";
+import { createMergeRequest } from "../src/mrClient.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 function git(cwd: string, ...args: string[]) {
@@ -78,6 +80,188 @@ test("首次及再次 push 都包含最新基准分支；新 SHA 可登记到真
     const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
     assert.equal(state.delivery_loop.published.sha, remoteHead);
   }
+});
+
+test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后均不删修复或重复确认", async t => {
+  const f = fixture(t);
+  let service = f.service, task = f.task;
+  const initial = Array.from({ length: 12 }, (_, i) => `feature-${i}.ts`);
+  const groups = [["MessageCode.xml", "OtherMessageCode.xml", "MsgCodeMgr.hpp"], ["CMakeLists.txt"], ["app_define.json", "ServiceImpl.cpp", "ControllerTest.cpp"]];
+  for (const path of initial) writeFileSync(join(f.cwd, path), "initial change\n");
+  git(f.cwd, "add", ...initial); git(f.cwd, "commit", "-qm", "feat: initial files");
+  task.summary.push_confirmation = true;
+  task.summary.delivery_selection = { status: "confirmed", paths: initial, excluded_paths: groups[0], observed_paths: [...initial, ...groups[0]],
+    head: git(f.cwd, "rev-parse", "HEAD"), baseline: f.base, waiting_id: "reviewed-12", updated_at: new Date().toISOString() };
+  const exclude = join(f.cwd, ".git/info/exclude");
+  writeFileSync(exclude, "# user rules\n/user-notes.txt\n# mae-flow: local assets excluded from this delivery\n/.claude/\n" + groups[0].map(path => `/${path}`).join("\n") + "\n");
+  service.registerAgentPlatformLocalExcludes(f.cwd);
+  assert.ok(!readFileSync(exclude, "utf8").includes("/MsgCodeMgr.hpp"), "启动时清除旧清单留下的永久 ignore");
+  assert.ok(readFileSync(exclude, "utf8").includes("/user-notes.txt"), "保留用户自己的规则");
+  writeFileSync(join(f.cwd, "user-notes.txt"), "private local notes\n");
+  let confirmations = 0;
+  const delivered = [...initial];
+  for (let i = 0; i < groups.length; i++) {
+    service.notifyWaiting = () => { confirmations++; };
+    for (const path of groups[i]) writeFileSync(join(f.cwd, path), `required repair ${i}\n`);
+    git(f.cwd, "add", ...groups[i]); git(f.cwd, "commit", "-qm", `feat: required repair ${i}`);
+    delivered.push(...groups[i]);
+    f.upstream(`upstream-${i}.ts`, "upstream changes\n");
+    task.summary.status = "running";
+    const host = service.taskHostRuntime(task); host.allowPush = async () => true;
+    await queueTaskHostOperation(host, `repair-${i}`, { action: "push", reason: "补齐需求实现与编译依赖" });
+    await finishTaskHostOperation(host);
+    const operation = new TaskHostLedger(task.summary).read().operations.find(op => op.id === `repair-${i}`)!;
+    assert.equal(operation.state, "succeeded", operation.result);
+    assert.equal(confirmations, 0);
+    for (const path of delivered) assert.ok(git(f.remote, "show", `feature:${path}`).length, path);
+    assert.equal(git(f.remote, "ls-tree", "--name-only", "feature", "--", "user-notes.txt"), "");
+    const snapshot = (await deliveryChangeSnapshot(f.cwd))!;
+    assert.equal((await service.deliveryContribution(task, snapshot)).paths.length, [15, 16, 19][i]);
+    assert.equal(await service.pushConfirmationSatisfied(task, "feature"), true, "自动交付入口复用同一确认");
+    if (i === 0) {
+      service.persist(task); await service.shutdown();
+      service = new TaskService({ ...service.options, maxConcurrent: 0 });
+      t.after(() => service.shutdown());
+      assert.equal(service.recover().restored, 1);
+      task = service.tasks.get(task.summary.id);
+      service.removeFromQueue(task.summary.id);
+    }
+  }
+});
+
+for (const status of ["confirmed", "requested"] as const) test(`旧会话恢复文件仅更新记录，保留 ${status} 决定且不绑定排队时 SHA`, async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, "feature.ts"), "feature\n");
+  git(f.cwd, "add", "feature.ts"); git(f.cwd, "commit", "-qm", "feat: feature");
+  f.task.summary.delivery_selection = { status, paths: ["feature.ts"], excluded_paths: ["missed.ts"],
+    observed_paths: ["feature.ts", "missed.ts"], head: git(f.cwd, "rev-parse", "HEAD"), baseline: f.base,
+    waiting_id: "original-decision", confirmation_mode: "human", updated_at: new Date().toISOString() };
+  const host = f.service.taskHostRuntime(f.task);
+  const requestId = recordTaskHostInstruction(f.task.summary, "补回 missed.ts，修复需要的 dependency.ts 也一起提交");
+  await queueTaskHostOperation(host, "legacy-restore", { action: "restore_delivery_paths",
+    reason: "落实责任人最新意见", request_id: requestId, paths: ["missed.ts", "dependency.ts"] });
+  for (const path of ["missed.ts", "dependency.ts"]) writeFileSync(join(f.cwd, path), "required repair\n");
+  git(f.cwd, "add", "missed.ts", "dependency.ts"); git(f.cwd, "commit", "-qm", "feat: repair");
+  await finishTaskHostOperation(host);
+  const operation = new TaskHostLedger(f.task.summary).read().operations.find(op => op.id === "legacy-restore")!;
+  assert.equal(operation.state, "succeeded", operation.result);
+  assert.equal(f.task.summary.delivery_selection.status, status);
+  assert.equal(f.task.summary.delivery_selection.waiting_id, "original-decision");
+  assert.equal(f.task.summary.delivery_selection.confirmation_mode, "human");
+  assert.deepEqual(f.task.summary.delivery_selection.excluded_paths, []);
+  assert.deepEqual(f.task.summary.delivery_selection.paths, ["feature.ts", "missed.ts", "dependency.ts"]);
+  assert.equal(f.task.summary.waiting, undefined);
+  const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
+  assert.ok(JSON.stringify(state).includes("dependency.ts"), "真实内核同步记录新增依赖");
+});
+
+test("旧已确认操作缺文件快照，排队后补齐代码仍沿用确认并记录实际发布 SHA", async t => {
+  const f = fixture(t);
+  f.task.summary.push_confirmation = true;
+  const host = f.service.taskHostRuntime(f.task); host.allowPush = async () => true;
+  await queueTaskHostOperation(host, "legacy-approved-push", { action: "push", reason: "继续已确认的推送" });
+  const ledger = new TaskHostLedger(f.task.summary);
+  ledger.update({ ...ledger.pending()!, push_confirmed: true });
+  writeFileSync(join(f.cwd, "dependency.ts"), "necessary repair\n");
+  git(f.cwd, "add", "dependency.ts"); git(f.cwd, "commit", "-qm", "feat: repair dependency");
+  const head = git(f.cwd, "rev-parse", "HEAD");
+  await finishTaskHostOperation(host);
+  const operation = ledger.read().operations.find(op => op.id === "legacy-approved-push")!;
+  assert.equal(operation.state, "succeeded", operation.result);
+  assert.equal(f.task.summary.waiting, undefined);
+  assert.equal(git(f.remote, "rev-parse", "feature"), head);
+  assert.equal(f.task.summary.delivery.sha, head);
+  assert.deepEqual(f.task.summary.delivery_selection.paths, ["dependency.ts"]);
+});
+
+for (const continuous of [false, true]) test(`同步完成后远端${continuous ? "持续" : "再次"}推进：${continuous ? "三次后停下，不唤醒 Agent 空转" : "同一次宿主操作内重新同步推送"}`, async t => {
+  const f = fixture(t);
+  git(f.cwd, "push", "-q", f.remote, "feature");
+  git(f.peer, "fetch", "-q", "origin", "feature"); git(f.peer, "checkout", "-qb", "feature", "origin/feature");
+  writeFileSync(join(f.cwd, "mine.ts"), "my change\n");
+  git(f.cwd, "add", "mine.ts"); git(f.cwd, "commit", "-qm", "feat: my change");
+  const original = f.service.pushFromHostTransport.bind(f.service);
+  let sends = 0, foreign = "";
+  f.service.pushFromHostTransport = async (...args: unknown[]) => {
+    sends++;
+    if (continuous || sends === 1) {
+      writeFileSync(join(f.peer, `peer-${sends}.ts`), "peer change\n");
+      git(f.peer, "add", "."); git(f.peer, "commit", "-qm", "feat: peer change");
+      git(f.peer, "push", "-q", "origin", "feature"); foreign = git(f.peer, "rev-parse", "HEAD");
+    }
+    return original(...args);
+  };
+  const operation = await f.push("racing-push");
+  assert.equal(sends, continuous ? 3 : 2, operation.result);
+  if (continuous) {
+    assert.equal(operation.state, "failed"); assert.equal(f.task.summary.status, "failed");
+    assert.match(operation.result!, /三次推送均被拒绝.*已停止自动重试/);
+    assert.equal(f.service.queue.includes(f.task.summary.id), false);
+    assert.equal(git(f.remote, "rev-parse", "feature"), foreign);
+  } else {
+    assert.equal(operation.state, "succeeded", operation.result);
+    assert.equal(operation.push_receipt?.sha, operation.sha);
+    assert.equal(git(f.remote, "rev-parse", "feature"), operation.sha);
+    assert.equal(git(f.cwd, "merge-base", "--is-ancestor", foreign, operation.sha!), "");
+    assert.equal(git(f.remote, "show", "feature:mine.ts"), "my change");
+    assert.equal(git(f.remote, "show", "feature:peer-1.ts"), "peer change");
+  }
+});
+
+test("推送已成功、反查前远端又追加：确认祖先关系，不把成功误报成失败", async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, "mine.ts"), "my change\n");
+  git(f.cwd, "add", "mine.ts"); git(f.cwd, "commit", "-qm", "feat: my change");
+  const hook = join(f.remote, "hooks", "post-receive");
+  writeFileSync(hook, `#!/bin/sh
+while read old new ref; do
+  tree=$(git rev-parse "$new^{tree}")
+  next=$(printf 'feat: concurrent follow-up\\n' | git -c user.name=peer -c user.email=peer@test commit-tree "$tree" -p "$new")
+  git update-ref "$ref" "$next" "$new" || exit 1
+done
+`);
+  chmodSync(hook, 0o755);
+  const operation = await f.push("accepted-before-peer");
+  assert.equal(operation.state, "succeeded", operation.result);
+  const remote = git(f.remote, "rev-parse", "feature");
+  assert.notEqual(remote, operation.sha, "反查看到的是外部追加后的提交");
+  assert.equal(git(f.remote, "merge-base", "--is-ancestor", operation.sha!, remote), "");
+  assert.equal(operation.push_receipt?.sha, git(f.cwd, "rev-parse", "HEAD"), "收据只能登记本次实际推送的 SHA");
+});
+
+test("自动交付入口遇到并发推送，也在宿主内同步重试且只触发最终 SHA 的流水线", async t => {
+  const f = fixture(t);
+  const platform = new FakeGitPlatform(); platform.barePath = f.remote; await platform.start();
+  t.after(() => platform.stop());
+  f.service.options.delivery = { platformUrl: platform.baseUrl, pollIntervalMs: 100_000, repairRounds: 0 };
+  const content = "first=0\n" + "\n".repeat(12) + "last=0\n";
+  writeFileSync(join(f.cwd, "main.ts"), content); git(f.cwd, "commit", "-qam", "feat: initial implementation");
+  const published = git(f.cwd, "rev-parse", "HEAD");
+  git(f.cwd, "push", "-q", f.remote, "feature");
+  const mr = await createMergeRequest({ platformUrl: platform.baseUrl, repo: f.remote, sourceBranch: "feature", targetBranch: "main", title: "并发推送" });
+  f.task.summary.delivery = { ...f.task.summary.delivery, mr_url: mr.url, mr_id: mr.id,
+    git_push: { sha: published, ref: "refs/heads/feature", remote: "origin" }, sha: published };
+  f.task.summary.status = "verifying"; f.task.mission = undefined;
+  f.task.summary.push_confirmation = false;
+  writeFileSync(join(f.cwd, "main.ts"), content.replace("first=0", "first=1")); git(f.cwd, "commit", "-qam", "feat: my change");
+  f.task.summary.delivery_selection = { status: "confirmed", paths: ["main.ts"], observed_paths: ["main.ts"], excluded_paths: [],
+    head: git(f.cwd, "rev-parse", "HEAD"), baseline: f.base, waiting_id: "approved", updated_at: new Date().toISOString() };
+  git(f.peer, "fetch", "-q", "origin", "feature"); git(f.peer, "checkout", "-qb", "feature", "origin/feature");
+  const original = f.service.pushFromHostTransport.bind(f.service); let sends = 0;
+  f.service.pushFromHostTransport = async (...args: unknown[]) => {
+    if (++sends === 1) {
+      writeFileSync(join(f.peer, "main.ts"), content.replace("last=0", "last=1")); git(f.peer, "add", ".");
+      git(f.peer, "commit", "-qm", "feat: peer change"); git(f.peer, "push", "-q", "origin", "feature");
+    }
+    return original(...args);
+  };
+  await f.service.tryDeliver(f.task, f.task.controlEpoch);
+  assert.equal(sends, 2, JSON.stringify(f.task.summary));
+  const sha = git(f.remote, "rev-parse", "feature");
+  assert.equal(f.task.summary.delivery.git_push.sha, sha);
+  assert.equal(platform.pipelines.length, 1, JSON.stringify(f.task.summary));
+  assert.equal(platform.pipelines[0].sha, sha);
+  assert.equal(git(f.remote, "show", "feature:main.ts"), content.replace("first=0", "first=1").replace("last=0", "last=1").trim());
 });
 
 test("真实冲突先返回原检视会话；内核允许解决、提交和重新推送，不要求旧 SHA 许可", async t => {
@@ -212,7 +396,7 @@ test("旧 delivery.sha 不阻止真实推送：一次人工确认覆盖后续同
   assert.equal(notifications, 1, "不是每个新 SHA 再问一次");
 });
 
-test("同范围确认可以跨入口复用，新增文件仍展示一次；明确先调整不能被旧确认吞掉", async t => {
+test("确认跨入口复用，新增及漏选文件直接交付；明确先调整仍须处理", async t => {
   const f = fixture(t);
   f.task.summary.push_confirmation = true;
   writeFileSync(join(f.cwd, "feature.ts"), "export const feature = true;\n");
@@ -231,7 +415,10 @@ test("同范围确认可以跨入口复用，新增文件仍展示一次；明�
   assert.equal(notifications, 0);
   writeFileSync(join(f.cwd, "new.ts"), "new file\n");
   git(f.cwd, "add", "new.ts"); git(f.cwd, "commit", "-qm", "add new file");
-  assert.equal((await run("scope-expanded")).state, "running");
+  assert.equal((await run("scope-expanded")).state, "succeeded");
+  assert.equal(notifications, 0, "新业务文件不重开文件范围确认");
+  f.task.summary.delivery_selection.status = "requested";
+  assert.equal((await run("explicit-adjustment")).state, "running");
   assert.equal(notifications, 1);
   let waiting = f.task.summary.waiting;
   await f.service.decide(f.task.summary.id, { state_version: waiting.state_version,

@@ -16,7 +16,8 @@ function fixture(t: { after(fn: () => Promise<void>): void }, options = {}) {
   const summary = service.create("恢复交付错误");
   const task = service.tasks.get(summary.id);
   task.summary.status = "verifying";
-  task.summary.delivery = { sha: "head", git_push: { sha: "head", ref: "refs/heads/work", remote: "origin" }, skipped: error };
+  task.summary.delivery = { sha: "head", mr_url: "http://platform/mr/1",
+    git_push: { sha: "head", ref: "refs/heads/work", remote: "origin" }, skipped: error };
   return { service, task, dir };
 }
 

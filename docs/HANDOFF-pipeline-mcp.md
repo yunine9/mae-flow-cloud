@@ -49,7 +49,7 @@ pipeline_log.py 头注释。
 - `pipeline_log.py`:编排器本体,8 个 Strategy 原名原序,三条降级
   链(构建日志 SSE→build zip→分页;CodeCheck codeccp MCP→
   reviewtips→defect/list)。改逻辑基本只动这个文件。
-- `pipeline-artifacts.sh`:薄壳(采集→512KB 装箱),契约
+- `pipeline-artifacts.sh`:薄壳(采集→100MiB 总包预算内保留构建日志全文),契约
   `[{name,text}]` 不变,第 4 参 `{mr}` 可选。
 - `pipeline-status-mcp.py`:status 主路(第一候选);
   `pipeline-status.sh`:v4 降级(第二候选,内网现用、已验证)。

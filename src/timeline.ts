@@ -17,6 +17,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { ExecutionEventReader } from "./executionEvents.ts";
+import type { ExecutionEvent } from "./executionEvents.ts";
+import { setImmediate } from "node:timers/promises";
 
 export type TimelineTone = "info" | "attention" | "success" | "danger";
 
@@ -113,8 +115,7 @@ function resolveCwd(workspace: string, cwd?: string): string | undefined {
 }
 
 /** 语义事件 → 时间线条目。 */
-function fromEvents(workspace: string): TimelineEntry[] {
-  const events = readJsonl(join(workspace, "events.jsonl"));
+function fromEvents(workspace: string, events = readJsonl(join(workspace, "events.jsonl"))): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   // 子 Agent 按 call_id 配对:派出与返回各是一条,配不上对的另说。
   const spawned = new Map<string, Record<string, any>>();
@@ -343,6 +344,8 @@ function fromMemoryUsage(workspace: string): TimelineEntry[] {
 export function buildTimeline(
   workspace: string,
   cwd?: string,
+  events?: Array<Record<string, any>>,
+  buildFixEvents?: ExecutionEvent[],
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
   const push = (source: () => TimelineEntry[]) => {
@@ -352,8 +355,8 @@ export function buildTimeline(
       // 单路数据源崩了不影响其他路——只读旁路不许把页面拖垮。
     }
   };
-  push(() => fromEvents(workspace));
-  push(() => new ExecutionEventReader(workspace, true).read()
+  push(() => fromEvents(workspace, events));
+  push(() => (buildFixEvents ?? new ExecutionEventReader(workspace, true).read())
     .filter((event) => ["session_started", "turn_finished"].includes(event.kind))
     .map((event) => ({
       ts: normalizeTimestamp(event.ts, "utc"), kind: "session" as const, tone: "info" as const,
@@ -377,4 +380,19 @@ export function buildTimeline(
     if (!Number.isFinite(rightAt)) return -1;
     return leftAt - rightAt;
   });
+}
+
+/** HTTP 已取得主日志的共享增量结果，构建历史也分块读，只留时间线需要的事件。 */
+export async function buildTimelineAsync(workspace: string, cwd: string | undefined,
+  events: Array<Record<string, any>>): Promise<TimelineEntry[]> {
+  const reader = new ExecutionEventReader(workspace, true);
+  const buildFixEvents: ExecutionEvent[] = [];
+  try {
+    do {
+      buildFixEvents.push(...reader.read(256 * 1024)
+        .filter(event => ["session_started", "turn_finished"].includes(event.kind)));
+      await setImmediate();
+    } while (reader.hasMore);
+  } catch { /* 构建历史不可读时，其他时间线来源仍可显示。 */ }
+  return buildTimeline(workspace, cwd, events, buildFixEvents);
 }

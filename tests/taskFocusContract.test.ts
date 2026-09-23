@@ -42,7 +42,7 @@ const ROWS: Row[] = [
     expect: F("human_action", "1/2 个子任务已完成", "打开主任务查看并处理异常子任务", "responsible", 96, true) },
   { branch: "coordinating·都在推进",
     input: { status: "coordinating", requirement_graph: { repositories: [{ task_status: "running" }] } },
-    expect: F("machine", "子任务正在推进", "等待各子任务完成", "agent", 50) },
+    expect: F("machine", "子任务正在推进", "等待各子任务完成或取消", "agent", 50) },
   { branch: "waiting_for_human·澄清卡",
     input: { status: "waiting_for_human", waiting: { question: { purpose: "clarification", questions: [{}] } } },
     expect: F("human_action", "Agent 处理检视意见时缺少信息,需要你补充",

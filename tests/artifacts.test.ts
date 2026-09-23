@@ -184,6 +184,10 @@ test("异步工作台读侧与原有差异快照语义一致", async () => {
   assert.ok(diff);
   assert.equal(diff.file_count, 2);
   assert.ok(items.some((item) => item.name.endsWith("/spec.md")));
+  const documents = await listArtifactsAsync(cwd, {}, "doc");
+  const changes = await listArtifactsAsync(cwd, {}, "diff");
+  assert.deepEqual(documents, items.filter(item => item.kind === "doc"));
+  assert.deepEqual(changes, items.filter(item => item.kind === "diff"));
   const snapshot = await readArtifactAsync(cwd, DIFF_NAME);
   assert.match(String(snapshot?.content), /异步路径修改/);
   assert.match(String(snapshot?.content), /异步路径未跟踪/);
@@ -778,6 +782,11 @@ test("路由 GET /tasks/:id/artifacts[/:name]:能看任务就能看材料", asyn
     assert.deepEqual(new Set(names(listed)), new Set([
       "REQ7/spec.md", PIPELINE_EVIDENCE_GAP_ARTIFACT, DIFF_NAME,
     ]));
+    for (const kind of ["doc", "diff"]) {
+      const filtered = await fetch(`${base}/tasks/${created.id}/artifacts?kind=${kind}`)
+        .then(response => readJson(response));
+      assert.deepEqual(filtered, listed.filter(item => item.kind === kind));
+    }
     const diffMeta = listed.find((item) => item.name === DIFF_NAME);
     assert.deepEqual(diffMeta?.change_files?.map((file) => file.path),
       ["feature.ts"]);

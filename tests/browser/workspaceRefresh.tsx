@@ -11,6 +11,7 @@ window.setInterval = ((fn: TimerHandler, ms: number) =>
 let reads = 0;
 let conversations = 0;
 let changed = false;
+let diffListsCompleted = 0;
 const errors: string[] = [];
 window.addEventListener("error", (e) => errors.push(e.message));
 window.addEventListener("unhandledrejection", (e) => errors.push(String(e.reason)));
@@ -22,11 +23,17 @@ const doc = () => "# Story\n" + (changed ? "new-version" : "design")
 window.fetch = async (input) => {
   const path = String(input);
   let value: unknown;
-  if (path.endsWith("/artifacts")) {
-    value = [{ name: "material", kind: mode, label: "Story", bytes: 100,
+  if (/\/artifacts(?:\?|$)/.test(path)) {
+    const kind = new URL(path, "http://fixture").searchParams.get("kind");
+    if (mode === "doc" && kind === "diff") { await pause(2500); diffListsCompleted++; }
+    value = kind && kind !== mode ? (kind === "diff" ? [{ name: "__workspace_diff__", kind: "diff", label: "代码改动", bytes: 100,
+      modified_at: "2026-09-09", file_count: 1, change_files: [{ path: "main.ts", stage: "unstaged", additions: 1, deletions: 1 }] }] : []) : [{ name: "material", kind: mode, label: "Story", bytes: 100,
       modified_at: "2026-09-08", ...(mode === "diff" ? {
         change_files: [{ path: "main.ts", stage: "unstaged", additions: 1, deletions: 1 }],
       } : {}) }];
+    if (mode === "doc" && kind === "doc") (value as unknown[]).push({
+      name: "other", kind: "doc", label: "Other", bytes: 100, modified_at: "2026-09-07",
+    });
   } else if (path.includes("/artifacts/")) {
     reads++;
     await pause(100);
@@ -58,6 +65,8 @@ async function run() {
   let original: Element | null = null;
   for (let i = 0; i < 40 && !original; i++) { await pause(50); original = document.querySelector(selector); }
   if (!original) throw new Error("initial material missing: " + errors.join(";"));
+  const documentBeforeGit = mode === "doc" && diffListsCompleted === 0;
+  if (mode === "doc" && !documentBeforeGit) throw new Error("document waited for slow Git scan");
   const readAt = reads;
   let detached = false;
   const observer = new MutationObserver(() => { if (!original!.isConnected) detached = true; });
@@ -71,6 +80,12 @@ async function run() {
   if (!document.querySelector(".ws-doc")?.textContent?.includes("new-version")) throw new Error("real update did not reach reader");
   let storyFullscreen: boolean | undefined;
   if (mode === "doc") {
+    const other = [...document.querySelectorAll<HTMLButtonElement>(".ws-tab")].find(button => button.textContent?.includes("Other"));
+    if (!other) throw Error("second document missing");
+    other.click(); await pause(150);
+    while (diffListsCompleted === 0) await pause(50);
+    if (document.querySelector(".ws-doc")?.getAttribute("data-artifact") !== "other") throw Error("late manifest reset the user's selection");
+    if (!document.querySelector(".ws-doc")?.textContent?.includes("new-version")) throw new Error("late manifest replaced current document");
     const open = [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent?.includes("查看大图"));
     if (!open) throw new Error("Story PlantUML 缺少原地查看大图入口");
@@ -83,7 +98,7 @@ async function run() {
     if (document.querySelector(".plantuml-figure.is-presenting")) throw new Error("Story PlantUML 无法退出全屏");
   }
   if (errors.length) throw new Error(errors.join(";"));
-  return { mode, reads, conversations, stable: true, updated: true, ...(storyFullscreen ? { storyFullscreen } : {}) };
+  return { mode, reads, conversations, stable: true, updated: true, ...(storyFullscreen ? { storyFullscreen, documentBeforeGit } : {}) };
 }
 run().then((value) => { document.getElementById("result")!.textContent = JSON.stringify(value); })
   .catch((error) => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });

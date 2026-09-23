@@ -35,6 +35,10 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.equal(start.status, 202); const job: any = await start.json();
     for (let i = 0; i < 100 && domain.get(job.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     const detail: any = await (await request(`/domain-extraction/${job.id}`, dev)).json(); assert.equal(detail.operator, "dev"); assert.equal(detail.issue_no, "REQ-123");
+    assert.equal((await request(`/domain-extraction/${job.id}/resume`, "", {})).status, 401);
+    const resumed: any = await (await request(`/domain-extraction/${job.id}/resume`, dev, { use_latest_skill: true })).json();
+    assert.equal(resumed.turns.length, 1); assert.equal(resumed.turns[0].id, detail.turns[0].id); assert.equal(resumed.turns[0].use_latest_skill, true);
+    for (let i = 0; i < 100 && domain.get(job.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     assert.equal((await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "" })).status, 400);
     const associated = await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456" }); assert.equal(associated.status, 200); assert.equal((await associated.json() as any).issue_no, "REQ-456"); assert.deepEqual(detail.material_ids, [material.id]);
     createBusinessModule(root, { id: "trade", name: "交易", description: "交易业务", owner: "dev", repositories: ["https://example.test/source.git"] }, "dev");

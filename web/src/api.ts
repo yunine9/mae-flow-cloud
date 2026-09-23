@@ -3322,8 +3322,26 @@ export interface ArtifactChangeDirectoryPage {
 export async function listArtifacts(
   taskId: string,
   signal?: AbortSignal,
+  onDocuments?: (result: { items?: ArtifactMeta[]; unavailable?: string }) => void,
 ): Promise<{ items?: ArtifactMeta[]; unavailable?: string }> {
-  const response = await fetch(`/tasks/${taskId}/artifacts`, { signal });
+  if (onDocuments) {
+    // 文档到达即可阅读；耗时的 Git 变更扫描独立返回，不挡住任务入口。
+    const [documents, changes] = await Promise.all([
+      fetchArtifacts(taskId, signal, "doc").then(result => { onDocuments(result); return result; }),
+      fetchArtifacts(taskId, signal, "diff"),
+    ]);
+    return {
+      items: [...(documents.items ?? []), ...(changes.items ?? [])]
+        .sort((a, b) => b.modified_at.localeCompare(a.modified_at)),
+      unavailable: documents.unavailable ?? changes.unavailable,
+    };
+  }
+  return fetchArtifacts(taskId, signal);
+}
+
+async function fetchArtifacts(taskId: string, signal?: AbortSignal, kind?: "doc" | "diff")
+  : Promise<{ items?: ArtifactMeta[]; unavailable?: string }> {
+  const response = await fetch(`/tasks/${taskId}/artifacts${kind ? `?kind=${kind}` : ""}`, { signal });
   if (!response.ok) {
     const body = await errorBody(response);
     return {
@@ -3332,7 +3350,9 @@ export async function listArtifacts(
         : String(body.error ?? `HTTP ${response.status}`),
     };
   }
-  return { items: await parseJson(response) };
+  const items: ArtifactMeta[] = await parseJson(response);
+  // 前后端滚动升级时旧服务会忽略 kind，客户端仍按请求分类，避免重复条目。
+  return { items: kind ? items.filter(item => item.kind === kind) : items };
 }
 
 /** 管理页运行时设置(服务端 src/settings.ts 的镜像)。

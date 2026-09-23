@@ -23,6 +23,7 @@ export interface ResearchReviewTurn {
   section_id: string;
   mode: "discuss" | "rework" | "update";
   previous_revisions?: Record<string, string>;
+  base_revision?: number;
   skill?: { name: string; digest: string };
   message: string;
   operator: string;

@@ -9,7 +9,7 @@ export async function watchTaskPipeline(options: {
   interval: number;
   current(): boolean;
   observed(run?: PipelineRun): Promise<boolean>;
-  unavailable(error: unknown): void;
+  unavailable(error: unknown): boolean | void;
 }): Promise<void> {
   while (options.current()) {
     await new Promise(resolve => setTimeout(resolve, options.interval).unref());
@@ -19,7 +19,7 @@ export async function watchTaskPipeline(options: {
       const call = options.call();
       run = observedPipelineRun(call.sha, await getPipelineStatus(call));
     } catch (error) {
-      if (options.current()) options.unavailable(error);
+      if (options.current() && options.unavailable(error)) return;
       continue;
     }
     if (!options.current()) return; // 请求期间发生换提交/暂停/取消，迟到结果不接管新现场。
