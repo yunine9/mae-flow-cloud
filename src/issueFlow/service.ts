@@ -93,7 +93,6 @@ import {
   isTerminal,
   issueRepoWorkspaces,
   loadState,
-  MAX_ISSUE_REPOS,
   normalizeIssueRepos,
   recordTransition,
   repoNameOf,
@@ -2103,25 +2102,16 @@ export class IssueFlowService {
     const inCurrent = (url: string): string | undefined =>
       current.find((item) =>
         repositoryIdentity(item) === repositoryIdentity(url));
-    // 新增链④:不得与当前清单重复(重复新增=误操作,如实打回)。
-    for (const url of freshAdds) {
-      const hit = inCurrent(url);
-      if (hit) {
-        throw new IssueControlError(
-          `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
-      }
-    }
-    // 新增链⑤:合并计数 ≤ 上限。不给移除抵扣:清单由 Agent 执行变化,
-    // 先拉后删的时序下抵扣不成立,静态可保证的上限只有 current+fresh
-    // (remove_repo 只减不增,任何执行顺序都不会越过这道闸)。
-    if (current.length + freshAdds.length > MAX_ISSUE_REPOS) {
+  // 新增链④:不得与当前清单重复(重复新增=误操作,如实打回)。
+  for (const url of freshAdds) {
+    const hit = inCurrent(url);
+    if (hit) {
       throw new IssueControlError(
-        `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓`
-          + `(当前 ${current.length} 个,本次新增 ${freshAdds.length} 个`
-          + `将到 ${current.length + freshAdds.length} 个);`
-          + "请精简清单或分多次调整");
+        `「${url}」已在会话仓清单里(${hit}),不用重复新增`);
     }
-    // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
+  }
+  // 数量上限已废除(ADR-0054):不再做合并计数校验。
+  // 移除链①:必须在册(归一比对,命中登记原文)→ 组内去重。
     const removed: string[] = [];
     for (const url of removes) {
       const hit = inCurrent(url);

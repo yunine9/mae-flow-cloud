@@ -1660,10 +1660,11 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
     /const repoDiffEmpty =\s*\n\s*pendingRepoAdd\.length === 0 && pendingRepoRemove\.length === 0;/);
   assert.match(metaPane, /disabled=\{repoDiffEmpty \|\| repoSubmitting\}/);
   // https 即时校验(与后端同款口径前置,别等服务端打回):https:// 前缀
-  // /不与现清单重复/合并计数 ≤ 8;错误就地小字(role=alert)。
+  // /不与现清单重复;数量上限已废除(ADR-0054),前端不得再有同尺预判;
+  // 错误就地小字(role=alert)。
   assert.match(metaPane, /startsWith\("https:\/\/"\)/);
   assert.match(metaPane, /该仓已在关联仓清单里,不重复添加/);
-  assert.match(metaPane, /const MAX_ISSUE_REPOS = 8;/);
+  assert.doesNotMatch(metaPane, /MAX_ISSUE_REPOS|最多拉取/);
   // 不乐观更新(项目原则:UI 只做状态显示):清单数据源仍是 detail,
   // MetaPane 无任何改写 detail 的回调/状态;提交成功只清缓冲 + 如实状态
   // 提示(「已通知 Agent 处理」),绝不写「删除成功」。

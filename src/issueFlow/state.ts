@@ -502,15 +502,11 @@ export interface IssueSummary extends IssueSessionState {
 
 // ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----
 
-/** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
- * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */
-export const MAX_ISSUE_REPOS = 8;
-
 /** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
  * 顺序即语义——首个即 repo_url 兼容别名(推送/部署的缺省目标),
  * 仓彼此平等。登记(create)、
  * 闸门补填(resolveGate)与 Agent 绑模块(bind_module)三处共用同一
- * 把尺子,上限与协议规则不允许各自为政。 */
+ * 把尺子,协议规则不允许各自为政;数量上限已废除(ADR-0054)。 */
 export function normalizeIssueRepos(
   single: string | undefined,
   list: string[] | undefined,
@@ -521,11 +517,6 @@ export function normalizeIssueRepos(
     if (!url) continue;
     const validated = validateRepoUrl(url);
     if (!unique.includes(validated)) unique.push(validated);
-  }
-  if (unique.length > MAX_ISSUE_REPOS) {
-    throw new IssueControlError(
-      `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓(当前 ${unique.length} 个);`
-        + "请精简模块绑定或分多次分析");
   }
   return unique;
 }

@@ -80,9 +80,7 @@ function repoIdentity(value: string): string {
  * 零写口,这道闸是给 #241 编辑器预立的结构位。 */
 const TERMINAL_STATUSES = ["archived", "canceled", "failed"] as const;
 
-/** 一个问题会话的合并仓上限(与后端 state.ts 的 MAX_ISSUE_REPOS 同一口
- * 径):新增输入的即时校验先行同款,别等服务端打回。 */
-const MAX_ISSUE_REPOS = 8;
+// 数量上限已废除(ADR-0054):前端不再做同尺预判。
 
 // ---- 交付事实的呈现(ADR-0027):逐仓交付页签退役,角色/流水线徽标
 // 与推送/MR 记录融合进关联仓行——三个纯函数(perRepo)与色板原住
@@ -293,15 +291,6 @@ export function IssueMetaPane({ detail, canOperate }: {
     if (repos.some((url) => repoIdentity(url) === identity)
       || pendingRepoAdd.some((url) => repoIdentity(url) === identity)) {
       return "该仓已在关联仓清单里,不重复添加";
-    }
-    // 上限口径与后端一致:移除不抵扣(current + 新增 ≤ 上限)——
-    // 先拉后删的执行时序下抵扣不成立,后端按不抵扣校验,前端同尺
-    // 预判,否则前端放行、后端 409。
-    const projected = repos.length + pendingRepoAdd.length + 1;
-    if (projected > MAX_ISSUE_REPOS) {
-      return `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓`
-        + `(现有 ${repos.length} 个,再新增将达 ${projected} 个),`
-        + "请分多次提交";
     }
     return undefined;
   }

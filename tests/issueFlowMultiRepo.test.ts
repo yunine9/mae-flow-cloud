@@ -218,15 +218,13 @@ test("登记校验:无单必须带模块与环境;模块存在/在架/非零仓;
     const deferred = service.create({ account: "dev", title: "无仓登记", ticket: "DTS1" });
     assert.equal(deferred.repo_url, undefined, "无仓登记不再拦截");
     assert.equal(deferred.scenario, "ticket");
-    // 上限:9 个仓拒(模块库允许绑 20,会话拉取封顶 8)。
-    assert.throws(
-      () => service.create({
-        account: "dev", title: "t",
-        repoUrls: Array.from({ length: 9 }, (_, index) =>
-          `https://code.test/r${index}.git`),
-      }),
-      /最多拉取/,
-    );
+    // 上限已废除(ADR-0054):9 个仓登记照常放行,不再拒。
+    const capped = service.create({
+      account: "dev", title: "超旧上限登记", ticket: "DTS-CAP",
+      repoUrls: Array.from({ length: 9 }, (_, index) =>
+        `https://code.test/r${index}.git`),
+    });
+    assert.equal(loadState(join(dataDir, "issues", capped.id))!.repo_urls?.length, 9);
     // 多仓去重:同址出现两次只落一份。
     const created = service.create({
       account: "dev", title: "重复仓登记", ticket: "DTS2",
