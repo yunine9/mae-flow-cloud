@@ -1283,16 +1283,24 @@ export async function handleIssueRoutes(
 
     if (method === "POST" && parts[2] === "control" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能归档或取消会话" });
+        return done(403, { error: "只有归属人能重跑、取消或归档会话" });
       }
       const body = await readBody(request);
       const kind = ["non_issue", "delivered", "issue"].includes(String(body.kind))
         ? String(body.kind) as "non_issue" | "delivered" | "issue" : undefined;
+      // 动作白名单 fail-loud(与 kind 同尺):拼错的动作打回 400,不静默
+      // 落成 archive——归档是有结论语义的收口,不能当兜底垃圾箱。
+      const action = ["cancel", "archive", "revive"].includes(String(body.action))
+        ? String(body.action) as "cancel" | "archive" | "revive" : undefined;
+      if (!action) {
+        return done(400, { error: "未知 control 动作,只支持重跑/取消/归档" });
+      }
       return done(200, await issueFlow.control(id, {
-        action: body.action === "cancel" ? "cancel" : "archive",
+        action,
         ...(kind ? { kind } : {}),
         ...(body.summary !== undefined
           ? { summary: String(body.summary) } : {}),
+        ...(body.note !== undefined ? { note: String(body.note) } : {}),
       }));
     }
 

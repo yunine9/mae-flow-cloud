@@ -29,7 +29,7 @@ review.triage.mr / pipeline.green.others_red 与 receipts 的 mrgate.red
 
 ## revive.resume
 
-平台通知: 会话曾异常中断,操作者确认异常已排除,异常重跑——原地接着当前阶段继续,不重复已完成的工作,也不要把异常中断本身当作要排查的问题。{{note}}
+平台通知: 会话曾异常中断,操作者确认异常已排除,继续推进。异常重跑:原地接着当前阶段继续,不重复已完成的工作,也不要把异常中断本身当作要排查的问题。{{note}}
 
 ## rework.products_reclaimed
 

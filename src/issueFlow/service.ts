@@ -1642,6 +1642,10 @@ export class IssueFlowService {
     // (前端传来的 module 文本在带 moduleId 时让位,标签不出现两个真相)。
     let moduleName = input.module?.trim() || undefined;
     let moduleRepos: string[] | undefined;
+    // 参考组件仓目录快照(ADR-0054):发起时刻按模块订阅解析启用条目,
+    // create 定格进 state——会话中途改模块订阅不追溯。登记表不可读
+    // 按 fail-open 走(空目录),不挡发起;与知识仓装载同一姿态。
+    let moduleReferenceRepos: IssueSessionState["reference_repos"];
     const moduleId = input.moduleId?.trim() || undefined;
     // 登记门禁(无单定位的机械真相):无单号登记必须指名业务模块并带上
     // 网管环境——仓的唯一来源是模块绑定,现场凭据发起时就要齐。
@@ -1665,6 +1669,19 @@ export class IssueFlowService {
         }
         moduleName = module.name;
         moduleRepos = module.repositories;
+        try {
+          const registryRows = componentRepositories(this.options.dataDir);
+          moduleReferenceRepos = (module.reference_component_repos ?? [])
+            .map((refId) => registryRows.find((row) => row.id === refId))
+            .filter((row): row is ComponentRepository =>
+              !!row && row.enabled)
+            .map((row) => ({
+              id: row.id, name: row.name,
+              url: row.repository, description: row.description,
+            }));
+        } catch {
+          moduleReferenceRepos = [];
+        }
       } catch (error) {
         if (error instanceof IssueControlError) throw error;
         throw new IssueControlError(
@@ -1754,6 +1771,8 @@ export class IssueFlowService {
       ...(input.productVersion ? { product_version: input.productVersion } : {}),
       ...(moduleName ? { module: moduleName } : {}),
       ...(moduleId ? { module_id: moduleId } : {}),
+      ...(moduleReferenceRepos?.length
+        ? { reference_repos: moduleReferenceRepos } : {}),
       ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       scenario,
@@ -2301,8 +2320,7 @@ export class IssueFlowService {
   /** 续聊形态的回合入口:现场(driver)在场就把话递进去;进程重启后
    * 重建会话,以续聊提示词把话交给重建的上下文。用户主动续聊与平台
    * 通知共用;重启自动续跑(#27)是同一回合体的另一条启动路径,走
-   * 泵(见 pump),不在这里——它必须排队等并发额度。boundary=分析→
-   * 修复边界(票 02):那一次续聊前必压一次,锚点钉住分析报告。 */
+   * 泵(见 pump),不在这里——它必须排队等并发额度。 */
   private continueTurn(
     live: LiveIssue,
     message: string,
@@ -4248,13 +4266,9 @@ export class IssueFlowService {
       fixedAdvance(state, target,
         `用户确认分析报告,进入${stageName(target)}`);
       saveState(live.root, state);
-      // 报告指针钉进推进通知词(必达通道):pi 的手动压缩在单回合
-      // 历史上不带 customInstructions,摘要保不住指针——通知词是 fix
-      // 回合的开场,压缩再多次它都在最新回合里。
+      // 报告指针钉进推进通知词(必达通道):通知词是 fix 回合的开场,
+      // 压缩再多次它都在最新回合里;fix 阶段的压缩锚也带同一指针。
       const pointer = this.analysisReportPointer(live);
-      // boundary=true:分析→修复边界的续聊前必压一次(票 02)——此刻
-      // 上下文正是一生中最重的(定位探针/报错原文全是可丢弃的过程性
-      // 探索),锚点钉住分析报告指针再进 fix。
       this.continueTurn(live, fixedAdvanceNotice(state,
         promptCopy("notices", "gate.analysis_confirm.confirm", {
           stage: stageName(target),
@@ -5091,6 +5105,58 @@ export class IssueFlowService {
     // 无仓)则照旧当场后台回收。崩溃缺口由每日清扫器兜底。
     this.reclaimAfterCodeOrigin(live);
     return summarize(live.state);
+  }
+
+  /** 异常重跑(ADR-0055):failed 的第二出口。不取消、不动问题单目录
+   * ——分析报告、检视意见、人工决定原文、阶段与轮次账、代码现场原
+   * 地全在(它们绑问题单目录,不绑底层会话;failed 又豁免现场回收,
+   * repo/ 与 Pi 原生会话文件都在盘上)。恢复回合走 continueTurn:现
+   * 场重建后 resumeSession 原样接回底层上下文(与重启自续跑同链),
+   * 开场是 revive 通知+操作者说明+末条人工决定回灌。走续聊而非排队
+   * 泵:操作者在场显式动作,与用户「继续」同权——排队消息只在内存,
+   * 落盘 queued 撞上进程重启会被恢复管线误当登记首轮开场。异常是黑
+   * 盒:平台不诊断、不自动重试,确认权在操作者;轮次账不推高(重跑
+   * 不是流程倒退,不脏修复轮预算与一次率口径)。 */
+  private reviveIssue(live: LiveIssue, note?: string): IssueSummary {
+    const { state } = live;
+    if (state.status !== "failed" || this.turning.has(live.id)) {
+      throw new IssueControlError(
+        "异常重跑只适用于已失败的会话;已取消/归档是终态,如需重做请重新发起");
+    }
+    const operatorNote = note?.trim() ?? "";
+    // failed 时冻结的终态快照(ADR-0042)随复活失效:删掉,最终收口
+    // 重新冻结——留着会让"只生成一次"的读侧拿 failed 版本当终局。
+    const metricsSnapshot = join(live.root, ISSUE_METRICS_FILE);
+    if (existsSync(metricsSnapshot)) {
+      rmSync(metricsSnapshot, { force: true });
+      this.log(`[issue-flow] ${live.id} 异常重跑:终态快照已失效删除`);
+    }
+    // 状态落 idle(对话开放,同 reply 的回合前置状态),运行位由回合
+    // 骨架呈现;若恢复回合再失败,自然落回 failed 可再次重跑。
+    state.status = "idle";
+    delete state.error;
+    recordTransition(state, {
+      source: "platform",
+      note: operatorNote
+        ? `操作者确认异常已排除,异常重跑(说明:${operatorNote.slice(0, 160)})`
+        : "操作者确认异常已排除,异常重跑,原地续跑",
+    });
+    saveState(live.root, state);
+    this.appendSessionEvent(live, "issue_revived", {
+      operator_note: operatorNote,
+    });
+    sessionAudit(live.root, live.id, "decisions", {
+      kind: "decision.revive",
+      msg: `操作者发起异常重跑:failed 会话原地复活`
+        + (operatorNote ? ",附操作者说明" : ""),
+      decision: "revive",
+      reason_code: "operator-confirmed",
+      stage: state.stage, status: state.status,
+    });
+    this.log(`[issue-flow] ${live.id} 异常重跑:恢复回合启动`);
+    this.continueTurn(live, reviveResumeNotice(operatorNote)
+      + lastHumanDecisionNote(live.root));
+    return summarize(state);
   }
 
   /** 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方

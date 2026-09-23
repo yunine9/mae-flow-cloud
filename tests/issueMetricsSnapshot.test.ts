@@ -540,7 +540,7 @@ test("只生成一次:failed 之后再取消,快照内容一字不变", async ()
       service.get(id).status === "failed" ? service.get(id) : undefined,
     "先落 failed 终态");
     const first = readFileSync(join(root, ISSUE_METRICS_FILE), "utf-8");
-    // failed 的唯一出路是取消:第二次终态路径不得重写快照。
+    // failed 的出口是取消或异常重跑(ADR-0055):第二次终态路径不得重写快照。
     const canceled = await service.control(id, { action: "cancel" });
     assert.equal(canceled.status, "canceled");
     const second = readFileSync(join(root, ISSUE_METRICS_FILE), "utf-8");
