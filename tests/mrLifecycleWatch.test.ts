@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { TaskService } from "../src/taskService.ts";
+import { TaskHostLedger } from "../src/taskHostTools.ts";
 
 async function until(check: () => boolean) {
   const deadline = Date.now() + 3000;
@@ -42,6 +43,87 @@ async function fixture(t: TestContext) {
   });
   return { service, task, remote, create, id };
 }
+
+for (const status of ["running", "queued", "verifying"]) test(`${status} 时 MR 关闭停止自动执行，重复监听不重试，重开续接原目标`, async t => {
+  const { service, task, remote } = await fixture(t);
+  task.summary.status = status; task.mission = "保留原检视目标和未推送改动";
+  const stopped: string[] = [];
+  if (status === "running") {
+    task.driver = { abort: async () => { stopped.push("agent"); }, dispose() {} };
+    task.container = { stop: async () => { stopped.push("container"); } };
+  }
+  if (status === "verifying") task.prepushActive = new Promise<void>(resolve => {
+    task.prepushAbort = { abort: () => { stopped.push("build-fix"); resolve(); } };
+  });
+  const epoch = task.controlEpoch;
+  remote.state = "closed";
+  (service as any).ensureMergeWatch(task);
+  await until(() => task.summary.status === "await_merge" && task.summary.delivery.loop.state === "halted");
+  await until(() => remote.requests.length >= 4);
+  assert.equal(task.controlEpoch, epoch + 1, "重复观察关闭状态不能反复停止和换代");
+  assert.equal((service as any).queue.includes(task.summary.id), false);
+  assert.match(task.summary.delivery.waiting_on, /MR 已关闭/);
+  assert.equal(task.mission, "保留原检视目标和未推送改动");
+  assert.deepEqual(stopped.sort(), status === "running" ? ["agent", "container"] : status === "verifying" ? ["build-fix"] : []);
+  remote.state = "opened";
+  await until(() => task.summary.status === "queued");
+  assert.equal(task.mission, "保留原检视目标和未推送改动");
+  await until(() => remote.requests.length >= 6);
+  assert.equal((service as any).queue.filter(id => id === task.summary.id).length, 1);
+});
+
+for (const closeDuringPrepare of [false, true]) test(`宿主 push ${closeDuringPrepare ? "同步时 MR 关闭" : "查询到 MR closed"}：保留准确原因，零传输、零 Agent 重试`, async t => {
+  const { service, task, remote } = await fixture(t);
+  task.summary.status = "running"; remote.state = closeDuringPrepare ? "opened" : "closed";
+  if (closeDuringPrepare) {
+    const runtime = (service as any).taskHostRuntime.bind(service);
+    (service as any).taskHostRuntime = (...args: unknown[]) => ({ ...runtime(...args),
+      preparePush: async () => { remote.state = "closed"; }, confirmPush: async () => true });
+  }
+  const ledger = new TaskHostLedger(task.summary);
+  ledger.update({ id: "closed-push", state: "queued", at: new Date().toISOString(),
+    input: { action: "push", reason: "更新原 MR" }, branch: "feature", target_branch: "main", sha: "old-failed-sha" });
+  const push = t.mock.method(service as any, "pushFromHost", async () => { throw new Error("不应传输"); });
+  await (service as any).finishHostAction(task);
+  await until(() => remote.requests.length >= 4);
+  assert.equal(push.mock.callCount(), 0);
+  assert.equal(ledger.read().operations[0].state, "failed");
+  assert.match(ledger.read().operations[0].result!, /MR 已关闭.*重新打开/);
+  assert.doesNotMatch(ledger.read().operations[0].result!, /文件授权|推送授权不允许/);
+  assert.equal(task.summary.status, "await_merge");
+  assert.equal((service as any).queue.includes(task.summary.id), false);
+});
+
+test("MR 关闭不覆盖用户暂停，重开也不能擅自恢复", async t => {
+  const { service, task, remote } = await fixture(t);
+  task.summary.status = "paused"; task.mission = "用户暂停的目标";
+  (service as any).removeFromQueue(task.summary.id);
+  remote.state = "closed"; (service as any).ensureMergeWatch(task);
+  await until(() => task.summary.delivery.mr_state === "已关闭");
+  assert.equal(task.summary.status, "paused");
+  remote.state = "opened";
+  await until(() => task.summary.delivery.mr_state === "等待合入");
+  assert.equal(task.summary.status, "paused");
+  assert.equal((service as any).queue.includes(task.summary.id), false);
+});
+
+test("关闭后的停止状态跨服务重启保留，重开后只恢复一次", async t => {
+  const { service, task, remote, create, id } = await fixture(t);
+  task.summary.status = "running"; task.mission = "继续未完成的修改";
+  remote.state = "closed";
+  await (service as any).settleMergeState(task, "closed");
+  await service.shutdown();
+  const revived = create(); assert.equal(revived.recover().restored, 1);
+  const restored = (revived as any).tasks.get(id);
+  await until(() => remote.requests.length >= 3);
+  assert.equal(restored.summary.status, "await_merge");
+  assert.equal(restored.summary.delivery.loop.state, "halted");
+  assert.equal((revived as any).queue.includes(id), false);
+  remote.state = "opened";
+  await until(() => restored.summary.status === "queued");
+  assert.equal(restored.mission, "继续未完成的修改");
+  assert.equal((revived as any).queue.filter(value => value === id).length, 1);
+});
 
 test("running 检视修复遇到冲突且没有流水线：通知当前 Agent 一次，保留检视任务", async t => {
   const { service, task, remote } = await fixture(t);

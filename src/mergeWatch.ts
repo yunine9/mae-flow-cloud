@@ -129,6 +129,7 @@ export function nextWatchStep(input: {
   if (view.mrState === "merged") {
     return { kind: "settle_merged", sourceSha: view.sourceSha };
   }
+  if (view.mrState === "closed") return { kind: "settle_closed" };
   // 冲突可能阻止平台创建流水线，不能等待流水线结果或 await_merge。
   // 活跃会话由调用方补充指令，不能在监听器里并发修改工作区。
   if (["running", "queued", "verifying"].includes(input.status)
@@ -138,7 +139,6 @@ export function nextWatchStep(input: {
     return { kind: "repair_conflict" };
   }
   if (input.status !== "await_merge") return { kind: "wait" };
-  if (view.mrState === "closed") return { kind: "settle_closed" };
   const drift = sourceShaDrift(input.verifiedSha, view.sourceSha);
   if (drift.drifted) {
     return { kind: "stall_drift",
@@ -173,7 +173,7 @@ export function mergedCompletionDetail(
 export const CLOSED_MR_WRITE = {
   mr_state: "已关闭",
   waiting_on: "MR 已关闭，请重新打开或由任务责任人主动停止任务",
-  detail: "MR 已关闭但任务尚未结束；系统继续监听，重开后自动恢复",
+  detail: "MR 已关闭，自动交付已停止；本地改动已保留，系统继续监听，重开后恢复未完成工作",
 } as const;
 
 export const REOPENED_MR_WRITE = {

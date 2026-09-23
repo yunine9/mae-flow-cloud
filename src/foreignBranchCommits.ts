@@ -97,7 +97,7 @@ export async function absorbForeignBranchCommits(input: {
   if (!ok(listed)) {
     return { kind: "unavailable", reason: `读取远端分支失败:${brief(listed)}` };
   }
-  const remoteSha = (text(listed).split("\n")[0] ?? "").split(/\s+/)[0] ?? "";
+  let remoteSha = (text(listed).split("\n")[0] ?? "").split(/\s+/)[0] ?? "";
   // 远端还没有这条分支:首次推送,没有外来提交可言。
   if (!/^[0-9a-f]{40}$/i.test(remoteSha)) return { kind: "none" };
   // 常态快路:远端头就是我们推的那个(或更老)。不下载、不改动任何东西。
@@ -120,6 +120,12 @@ export async function absorbForeignBranchCommits(input: {
   if (!ok(fetched)) {
     return { kind: "unavailable", reason: `拉取远端分支失败:${brief(fetched)}` };
   }
+  // ls-remote 与 fetch 之间仍可能有人推送，接续必须使用本次实际拉到的头。
+  const fetchedHead = await worktree(["rev-parse", "--verify", `refs/remotes/origin/${branch}`]);
+  if (!ok(fetchedHead) || !/^[0-9a-f]{40,64}$/i.test(text(fetchedHead))) {
+    return { kind: "unavailable", reason: "无法核对本次拉取的远端分支提交" };
+  }
+  remoteSha = text(fetchedHead);
   if (!await hasObject(worktree, remoteSha)) {
     return { kind: "unavailable", reason: "拉取后仍读不到远端分支提交" };
   }

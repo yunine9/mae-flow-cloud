@@ -97,6 +97,26 @@ async function absorb(bare: string, work: string, lastPushedSha?: string) {
   });
 }
 
+test("查询远端后、fetch 前又有人追加：使用实际 fetch 到的最新提交接续", async () => {
+  const { bare, work, pushed } = scene();
+  const first = humanPush(bare, "first.txt", "first\n", "feat: 第一次追加");
+  commit(work, "mine.txt", "mine\n", "feat: 本地修改");
+  let latest = first;
+  const transport = runner(tmpdir());
+  const outcome = await absorbForeignBranchCommits({ branch: BRANCH, remoteUrl: bare, lastPushedSha: pushed,
+    transport: async args => {
+      const result = await transport(args);
+      if (args[0] === "ls-remote") latest = humanPush(bare, "second.txt", "second\n", "feat: 查询期间追加");
+      return result;
+    }, worktree: runner(work) });
+  assert.equal(outcome.kind, "absorbed", JSON.stringify(outcome));
+  if (outcome.kind !== "absorbed") return;
+  assert.equal(outcome.base_sha, latest);
+  assert.equal(git(work, "merge-base", "--is-ancestor", latest, "HEAD"), "");
+  git(work, "push", "--quiet", bare, BRANCH);
+  assert.equal(git(bare, "show", `${BRANCH}:second.txt`), "second");
+});
+
 test("远端多了人推的提交:本任务的提交接到它后面,外来提交原样不动", async () => {
   const { bare, work, pushed } = scene();
   const human = humanPush(bare, "hotfix.txt", "human fix\n", "fix: 人工热修");

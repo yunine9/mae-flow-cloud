@@ -6,6 +6,14 @@ import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { confirmedPipelineRun, historicalPipelineFeedback, projectPushReceipt } from "../src/pipelineHandoff.ts";
 
+test("推送结果晚于 MR 关闭返回：保留真实提交收据，不清除关闭原因", () => {
+  const summary: any = { delivery: { sha: "old", mr_state: "已关闭", waiting_on: "MR 已关闭，请重新打开", pipeline: "failed" } };
+  projectPushReceipt(summary, { sha: "new", ref: "refs/heads/work", remote: "origin" });
+  assert.equal(summary.delivery.git_push.sha, "new");
+  assert.equal(summary.delivery.waiting_on, "MR 已关闭，请重新打开");
+  assert.equal(summary.delivery.pipeline, undefined);
+});
+
 test("新推送同步验证目标并清除旧绿灯；同 SHA 重试保留结果，上次派发修复锚不改", () => {
   const summary: any = { delivery: { sha: "old", pipeline: "success", checks: [{ dimension: "UT", status: "success" }],
     attested: "PASS@old", evidence_gap: { sha: "old" }, mr_url: "mr/1",

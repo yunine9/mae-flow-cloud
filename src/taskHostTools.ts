@@ -5,6 +5,7 @@ import { remainingCiMission } from "./ciMission.ts";
 import { canHandoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
 import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
+import { pushWithFreshBranch, RemoteBranchBusyError } from "./pushRace.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -346,24 +347,38 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     } else if (input.action === "restore_delivery_paths") {
       operation.result = await restoreDeliveryPaths(host, operation, ownerInstruction(host, input.request_id).actor);
     } else if (input.action === "push") {
-      if (!operation.push_receipt && !await host.allowPush()) throw new Error("当前 MR 或推送授权不允许发布，请查看任务现场的具体原因");
-      if (!operation.push_receipt && host.preparePush) {
-        await host.preparePush(operation);
-        host.assertActive(); ledger.update(operation);
-      }
-      if (!operation.push_receipt && host.confirmPush && !await host.confirmPush(operation)) return true;
-      host.assertActive();
-      const receipt = operation.push_receipt ?? await host.push(operation.branch!, operation.sha!);
+      const allowed = async () => {
+        if (await host.allowPush()) return true;
+        operation.state = "failed";
+        operation.result = host.summary.delivery?.waiting_on ?? host.summary.delivery?.stalled
+          ?? host.summary.detail ?? "远端交付状态尚未确认，未推送";
+        ledger.update(operation);
+        // MR 关闭、人工等待或网络恢复已有明确去处，不能再唤醒 Agent 猜原因。
+        return false;
+      };
+      const prepare = async () => {
+        if (!await allowed()) return false;
+        if (host.preparePush) { await host.preparePush(operation); host.assertActive(); ledger.update(operation); }
+        return !host.confirmPush || await host.confirmPush(operation);
+      };
+      if (!operation.push_receipt && !await prepare()) return true;
+      const receipt = operation.push_receipt ?? await pushWithFreshBranch(async () => {
+        if (!await allowed()) return undefined;
+        host.assertActive(); return host.push(operation.branch!, operation.sha!);
+      }, prepare);
+      if (!receipt) return true;
       // Save the remote fact before updating the task projection. A retry of a
       // partially persisted result must not repeat a transport operation.
       operation.push_receipt = receipt;
+      operation.sha = receipt.sha;
       ledger.update(operation);
       // Persist the transport fact even when cancellation races the response.
       projectPushReceipt(host.summary, receipt);
       host.persist();
       scopePipelineArtifacts(join(host.summary.workspace, "pipeline"), receipt.sha);
       host.recordPublishedPush?.(receipt);
-      operation.result = `已核验远端 ${receipt.ref} @ ${receipt.sha}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      operation.result = `已确认提交 ${receipt.sha} 已发布到远端 ${receipt.ref}。当前验证目标已同步到本次提交；旧失败保留在历史，不能用于判定新提交，推送本身不表示验证通过或反馈闭环；未提交改动不包含在内。`;
+      host.assertActive();
       if (await host.finishReviewAfterPush?.(operation)) {
         const handedOff = await verifyPublishedCi(host, operation, ledger);
         operation.state = "succeeded"; ledger.update(operation);
@@ -448,6 +463,9 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     }
     operation.state = "failed";
     operation.result = safeMessage(host, error);
+    if (error instanceof RemoteBranchBusyError) {
+      ledger.update(operation); host.fail?.(operation.result); return true;
+    }
   }
   ledger.update(operation);
   // 范围整理已明确停下时保留诊断，不再派 Agent 重试同一次推送。

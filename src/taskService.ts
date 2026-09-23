@@ -289,6 +289,7 @@ import type {
 } from "./notifier.ts";
 import { EventLog, type SemanticEvent } from "./semanticEvents.ts";
 import { DisplayEventReader, annotationReply } from "./displayEvents.ts";
+import { pushWithFreshBranch, rejectedByBranchAdvance, RemoteBranchAdvancedError, RemoteBranchBusyError } from "./pushRace.ts";
 import {
   buildActivity, readActivityEvents, type ActivityView,
 } from "./activity.ts";
@@ -17185,7 +17186,7 @@ export class TaskService {
       // 推送授权绑定当前工作区 HEAD，而不是可能属于旧版本的 Build-Fix
       // 收据。远端推送仍复核此 SHA，避免确认后悄悄带走未检视的新提交。
       const observedRevision = await this.prePushRevision(task);
-      const expectedPushSha = observedRevision.sha;
+      let expectedPushSha = observedRevision.sha;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       const existingPushReceipt = task.summary.delivery?.git_push?.sha
         === expectedPushSha ? task.summary.delivery.git_push : undefined;
@@ -17214,8 +17215,24 @@ export class TaskService {
       // 触发一条新的同 SHA 流水线。retry() 写入的标记只活到本次交付。
       const manualPipelineRetry = previous?.pipeline
         === "人工重跑,待重新验证";
-      const pushReceipt = existingPushReceipt ?? await this.pushFromHost(
-        task, branch, expectedPushSha);
+      const pushReceipt = existingPushReceipt ?? await pushWithFreshBranch(async () => {
+        if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return undefined;
+        return this.pushFromHost(task, branch, expectedPushSha);
+      }, async () => {
+        if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return false;
+        if (await this.absorbForeignRemoteCommits(task, branch) === "blocked") return false;
+        await this.syncTargetBeforePush(task, task.summary.delivery?.target_branch ?? baseline, epoch);
+        if (!this.current(task, epoch) || await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") return false;
+        if (!await this.deliverySelectionAllowsPush(task, branch)) return false;
+        if (await this.reconcileFrozenBaselineAncestry(task, false) === "blocked") return false;
+        if (task.summary.delivery?.loop?.kind === "review" && task.summary.delivery.loop.review_source === "platform") {
+          const staged = await this.stageReviewReplies(task);
+          if (!staged.ok) { this.markVerificationStalled(task, staged.detail ?? "检视回复尚未准备好", "evidence_invalid"); return false; }
+        }
+        expectedPushSha = (await this.prePushRevision(task)).sha;
+        return this.current(task, epoch);
+      });
+      if (!pushReceipt) return;
       const sha = pushReceipt.sha;
       projectPushReceipt(task.summary, pushReceipt);
       // push 已经发生就先落账；即使随后 MR/流水线接口抖动，恢复时也能
@@ -17223,6 +17240,7 @@ export class TaskService {
       this.persist(task);
       scopePipelineArtifacts(join(task.summary.workspace, "pipeline"), pushReceipt.sha);
       this.recordPublishedPush(task, pushReceipt);
+      if (!this.current(task, epoch)) return;
       // 检视回复只能在对应代码可从远端看见后发送。部分失败保留在
       // outbox，后续监控/重启继续；不重派 Agent、不删除失败项。
       if (!await this.flushReviewReplyOutbox(task)) {
@@ -17365,6 +17383,9 @@ export class TaskService {
     } catch (error) {
       if (!this.current(task, epoch)) return;
       // 嵌套的 "Error: Error: …" 前缀对人是噪声,剥掉再进卡片/日志。
+      if (error instanceof RemoteBranchBusyError) {
+        this.markVerificationStalled(task, error.message, "safety"); return;
+      }
       const rawCause = String(error).replace(/^(Error:\s*)+/, "");
       const cause = userFacingDeliveryFailure(error);
       if (cause !== rawCause) {
@@ -18186,12 +18207,32 @@ export class TaskService {
     state: "merged" | "closed",
     observedSourceSha?: string,
   ): Promise<void> {
-    if (task.mergeSettlement) return task.mergeSettlement;
-    if (["completed", "canceled"].includes(task.summary.status)) return;
+    while (task.mergeSettlement) await task.mergeSettlement;
+    if (this.shuttingDown || this.tasks.get(task.summary.id) !== task
+        || ["completed", "canceled"].includes(task.summary.status)) return;
     const settlement = this.applyMergeState(task, state, observedSourceSha);
     task.mergeSettlement = settlement;
     try { await settlement; }
     finally { if (task.mergeSettlement === settlement) task.mergeSettlement = undefined; }
+  }
+
+  private async stopMrExecution(task: TaskState): Promise<string[]> {
+    task.controlEpoch += 1;
+    this.removeFromQueue(task.summary.id); this.removePrePushBuildWaiter(task);
+    discardRetainedSession(task);
+    const driver = task.driver, container = task.container;
+    const activePrepush = task.prepushActive, abort = task.prepushAbort;
+    task.pendingMainSteers = [...(task.pendingMainSteers ?? []), ...(driver?.takeUndeliveredSteers?.() ?? [])];
+    abort?.abort();
+    const cleanup = await Promise.allSettled([
+      activePrepush?.then(() => undefined) ?? Promise.resolve(),
+      driver?.abort() ?? Promise.resolve(), container?.stop() ?? Promise.resolve(),
+    ]);
+    if (cleanup[1].status === "fulfilled" && task.driver === driver) { task.driver = undefined; driver?.dispose(); }
+    if (cleanup[2].status === "fulfilled" && task.container === container) task.container = undefined;
+    if (task.prepushActive === activePrepush) task.prepushActive = undefined;
+    if (task.prepushAbort === abort) task.prepushAbort = undefined;
+    return stopFailures(cleanup);
   }
 
   private async applyMergeState(
@@ -18211,28 +18252,8 @@ export class TaskService {
       this.persist(task);
       // 合入是最终抢占事件：先让任何在途 writer 失去写状态权并停止，
       // 再核对本地提交是否已包含于合入版本，避免把未交付代码标成完成。
-      task.controlEpoch += 1;
-      const driver = task.driver;
-      const container = task.container;
-      const activePrepush = task.prepushActive;
-      const abort = task.prepushAbort;
-      abort?.abort();
-      const cleanup = await Promise.allSettled([
-        activePrepush?.then(() => undefined) ?? Promise.resolve(),
-        driver?.abort() ?? Promise.resolve(),
-        container?.stop() ?? Promise.resolve(),
-      ]);
-      if (cleanup[1].status === "fulfilled" && task.driver === driver) {
-        task.driver = undefined;
-        driver?.dispose();
-      }
-      if (cleanup[2].status === "fulfilled" && task.container === container) {
-        task.container = undefined;
-      }
-      if (task.prepushActive === activePrepush) task.prepushActive = undefined;
-      if (task.prepushAbort === abort) task.prepushAbort = undefined;
+      const failures = await this.stopMrExecution(task);
       if (this.shuttingDown || ["canceled"].includes(task.summary.status)) return;
-      const failures = stopFailures(cleanup);
       if (failures.length) {
         this.markVerificationStalled(task,
           `MR 已合入，但在途执行者未能确认停止：${failures.join("；")}`, "infrastructure");
@@ -18324,11 +18345,29 @@ export class TaskService {
     }
     const changed = delivery.mr_state !== CLOSED_MR_WRITE.mr_state
       || delivery.waiting_on !== CLOSED_MR_WRITE.waiting_on;
+    const interrupted = ["running", "queued", "verifying"].includes(task.summary.status)
+      || [CLOUD_PUSH_CONFIRM_STEP, HOST_PUSH_CONFIRM_STEP].includes(task.summary.waiting?.step ?? "");
     delivery.mr_state = CLOSED_MR_WRITE.mr_state;
     delivery.waiting_on = CLOSED_MR_WRITE.waiting_on;
-    task.summary.status = "await_merge";
     task.summary.detail = CLOSED_MR_WRITE.detail;
-    if (changed) this.persist(task);
+    if (interrupted) {
+      task.summary.status = "await_merge";
+      delivery.loop = { ...delivery.loop, round: delivery.loop?.round ?? 0, state: "halted", diagnosis: CLOSED_MR_WRITE.waiting_on };
+      const waiting = task.summary.waiting;
+      if (waiting && [CLOUD_PUSH_CONFIRM_STEP, HOST_PUSH_CONFIRM_STEP].includes(waiting.step)) {
+        task.humanGate.supersede(waiting.waiting_id, { stateVersion: waiting.state_version, notes: CLOSED_MR_WRITE.waiting_on });
+        task.summary.waiting = undefined;
+      }
+      this.persist(task);
+      const failures = await this.stopMrExecution(task);
+      if (this.shuttingDown || this.tasks.get(task.summary.id) !== task || task.summary.status !== "await_merge") return;
+      if (failures.length) {
+        delivery.loop.diagnosis = `MR 已关闭，但停止执行失败：${failures.join("；")}`;
+        delivery.waiting_on = delivery.loop.diagnosis;
+        task.summary.status = "failed"; task.summary.detail = delivery.loop.diagnosis;
+      }
+    }
+    if (changed || interrupted) this.persist(task);
   }
 
   private ensureMergeWatch(task: TaskState): void {
@@ -18382,6 +18421,22 @@ export class TaskService {
           await this.settleMergeState(task, "merged", step.sourceSha);
           return;
         }
+        if (step.kind === "settle_closed") {
+          await this.settleMergeState(task, "closed");
+          await new Promise((tick) => setTimeout(tick, interval).unref()); continue;
+        }
+        if (task.summary.delivery?.mr_state === CLOSED_MR_WRITE.mr_state) {
+          const delivery = task.summary.delivery;
+          const resume = task.summary.status === "await_merge" && delivery.loop?.state === "halted"
+            && delivery.loop.diagnosis === CLOSED_MR_WRITE.waiting_on;
+          delivery.mr_state = REOPENED_MR_WRITE.mr_state; delivery.waiting_on = undefined;
+          task.summary.detail = REOPENED_MR_WRITE.detail; this.persist(task);
+          if (resume) {
+            delivery.loop!.diagnosis = undefined;
+            this.enqueueRepair(task, task.mission ?? "MR 已重新打开，沿用原会话继续未完成的开发与交付，保留本地修改。", REOPENED_MR_WRITE.detail);
+            continue;
+          }
+        }
         if (!view.gates.some(gate => gate.name === "conflict_passed" && !gate.passed)) {
           task.conflictNotice = undefined;
         }
@@ -18416,21 +18471,10 @@ export class TaskService {
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
         }
-        if (step.kind === "settle_closed") {
-          await this.settleMergeState(task, "closed");
-          await new Promise((tick) => setTimeout(tick, interval).unref());
-          continue;
-        }
         if (step.kind === "stall_drift") {
           this.markVerificationStalled(task, step.reason, "safety");
           await new Promise((tick) => setTimeout(tick, interval).unref());
           continue;
-        }
-        if (task.summary.delivery?.mr_state === CLOSED_MR_WRITE.mr_state) {
-          task.summary.delivery.mr_state = REOPENED_MR_WRITE.mr_state;
-          task.summary.delivery.waiting_on = REOPENED_MR_WRITE.waiting_on;
-          task.summary.detail = REOPENED_MR_WRITE.detail;
-          this.persist(task);
         }
         // 门禁按平台事实分类；原始意见只同步批注，不合成自动修复门禁。
         const gates = view.gates;
@@ -20114,6 +20158,7 @@ export class TaskService {
       throw new Error("安全拒绝：Agent 会话仍在，不能执行宿主 Git 推送");
     }
     if (!task.cwd) throw new Error("任务没有代码工作区，不能推送");
+    const epoch = task.controlEpoch;
     const deliverySnapshot = await deliveryChangeSnapshot(task.cwd);
     if (!metadataOnlySha && deliverySnapshot?.added_agent_platform_paths.length) {
       throw new Error(
@@ -20188,6 +20233,10 @@ export class TaskService {
       if (objectCheck.status !== 0) {
         throw new Error("待推送 HEAD 不是可读取的提交对象");
       }
+      if (this.shuttingDown || task.controlEpoch !== epoch || task.summary.status === "canceled"
+          || (!metadataOnlySha && ticketCorrectionBlocks(task.summary.ticket_correction))) {
+        throw new TaskControlError(task.summary.delivery?.waiting_on ?? "任务执行权已变化，未推送");
+      }
       const pushed = await runGitProcess([
         ...sandbox.args, `--git-dir=${staging}`, "push", "--no-verify",
         ...(metadataOnlySha ? [`--force-with-lease=${ref}:`] : []),
@@ -20197,6 +20246,9 @@ export class TaskService {
         env: { ...sandbox.env, ...objectEnv },
       });
       if (pushed.status !== 0) {
+        if (!metadataOnlySha && rejectedByBranchAdvance(String(pushed.stdout ?? ""))) {
+          throw new RemoteBranchAdvancedError("远端任务分支在同步后又有新提交，当前提交尚未推送；需要重新同步后再试");
+        }
         const stderrText = pushed.timedOut
           ? `超过 ${GIT_TRANSFER_TIMEOUT_MS / 60_000} 分钟传输预算，已终止 git/ssh 进程组`
           : String(pushed.stderr || pushed.stdout || pushed.error);
@@ -20210,7 +20262,15 @@ export class TaskService {
         env: sandbox.env,
       });
       const remoteSha = String(verified.stdout ?? "").trim().split(/\s+/)[0];
-      if (verified.status !== 0 || remoteSha !== sha) {
+      let included = verified.status === 0 && remoteSha === sha;
+      if (!included && verified.status === 0 && /^[a-f0-9]{40,64}$/i.test(remoteSha)) {
+        // 推送成功后别人又追加了提交，不应把真实成功误报为失败并重复推送。
+        const fetched = await transportGit([`--git-dir=${staging}`, "fetch", "--no-tags", "--no-recurse-submodules",
+          remoteUrl, `+${ref}:refs/heads/observed`], objectEnv);
+        included = fetched.status === 0 && (await transportGit([`--git-dir=${staging}`,
+          "merge-base", "--is-ancestor", sha, "refs/heads/observed"], objectEnv)).status === 0;
+      }
+      if (!included) {
         throw new Error(
           `远端 SHA 复核失败: 本地 ${sha.slice(0, 12)}，远端 `
           + `${remoteSha ? remoteSha.slice(0, 12) : "缺失"}`);
