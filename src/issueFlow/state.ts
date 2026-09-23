@@ -401,6 +401,16 @@ export interface IssueSessionState {
    * 映射只认登记清单,参考仓在结构上推不了、交不了。name 是落盘
    * 仓名(撞登记仓名时带序号),目录即 repo/<name>/。 */
   public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 参考组件仓目录快照(2026-09-23,ADR-0054):发起时刻按模块订阅
+   * 解析的启用条目(名称/地址/描述)。开场注入给 AI 做按需拉取决策;
+   * 快照在 create 定格,会话生命周期内不变——模块订阅后续增删不
+   * 追溯进行中的会话(与环境快照同一纪律)。 */
+  reference_repos?: Array<{
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+  }>;
   /** 用户指派意图的未消费留痕(ADR-0054):requestRepoChanges 接受的
    * 新增地址先记在这,Agent 调 pull_repo 落地时消费——凭它走平等仓
    * 登记路径并摘参考仓台账行(指派转正)。端点依旧不直改清单,pending

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { issueRepoWorkspaces, resolvePullRoute } from "../src/issueFlow/state.ts";
+import { issueFixedOpeningPrompt } from "../src/issueFlow/prompt.ts";
 import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import {
@@ -118,6 +119,18 @@ function toolResultTexts(model: ScriptedModelServer): string {
   return texts.join("\n");
 }
 
+/** 开场词断言:首个请求的 user 消息全文(开场提示词在第一回合)。 */
+function firstUserText(model: ScriptedModelServer): string {
+  const first = model.requests[0] as any;
+  return (((first?.messages ?? []) as any[])
+    .filter((message) => message?.role === "user")
+    .map((message) => typeof message.content === "string"
+      ? message.content
+      : (message.content ?? []).map((block: any) =>
+        block?.text ?? "").join(" "))
+    .join("\n"));
+}
+
 interface RefScene {
   dataDir: string;
   model: ScriptedModelServer;
@@ -158,10 +171,16 @@ test("拉取命中登记表:入参考仓台账不进登记清单,回执与转移
   const bound = bareOriginAt(join(dataDir, "origins"), "bound.git", "bound");
   const common = bareOriginAt(join(dataDir, "origins"), "common-ui.git",
     "common-ui");
-  writeRegistry(dataDir, [registryRow("comp-1", "公共UI库", common)]);
+  const unrelated = "https://components.example/unrelated.git";
+  writeRegistry(dataDir, [
+    registryRow("comp-1", "公共UI库", common),
+    registryRow("comp-2", "无关组件", unrelated),
+  ]);
+  // 模块订阅 comp-1:开场只注入订阅条目,未订阅的 comp-2 不出现。
   createBusinessModule(dataDir, {
     id: MODULE_ID, name: "支付核心", description: "收单与清结算",
     owner: "dev", repositories: [bound],
+    reference_component_repos: ["comp-1"],
   }, "tester");
   const scene = await refScene(dataDir, bound, [
     { tool: { name: "pull_repo", input: { url: bound } } },
@@ -173,6 +192,10 @@ test("拉取命中登记表:入参考仓台账不进登记清单,回执与转移
   try {
     await settle(scene, "参考仓回合收口");
     const state = readState(dataDir, scene.id);
+    assert.deepEqual(state.reference_repos, [{
+      id: "comp-1", name: "公共UI库", url: common,
+      description: "公共组件源码;排查组件渲染问题时拉取研读",
+    }], "发起时刻的订阅快照定格进 state");
     assert.deepEqual(state.public_repos?.map((row: any) => row.url),
       [common], "参考仓台账只记登记表命中的地址");
     assert.equal(state.public_repos?.[0]?.name, "common-ui");
@@ -188,10 +211,36 @@ test("拉取命中登记表:入参考仓台账不进登记清单,回执与转移
     assert.ok(existsSync(join(repoRoot, "bound", ".git")));
     assert.ok(existsSync(join(repoRoot, "common-ui", ".git")),
       "参考仓照常平铺落地,可研读");
+    // 开场注入:订阅条目(名称/描述)在场,未订阅条目缺席;契约区分
+    // 绑定仓与参考仓的拉取口径。
+    const opening = firstUserText(model);
+    assert.match(opening, /## 参考组件仓目录/);
+    assert.match(opening, /公共UI库/);
+    assert.match(opening, /何时需要读取: 公共组件源码/);
+    assert.doesNotMatch(opening, /无关组件/);
+    assert.match(opening, /参考组件仓目录里的仓按各自「何时需要读取」描述按需拉/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+test("无订阅会话开场无目录节;有订阅则注入名称地址与描述", () => {
+  const base = fixedState({});
+  assert.doesNotMatch(issueFixedOpeningPrompt(base), /## 参考组件仓目录/,
+    "无订阅不注入目录节,零污染(契约条文仍在,那不是节)");
+  const opening = issueFixedOpeningPrompt({
+    ...base,
+    reference_repos: [{
+      id: "c1", name: "公共UI库",
+      url: "https://components.example/common-ui.git",
+      description: "排查表格渲染问题时读取",
+    }],
+  });
+  assert.match(opening, /## 参考组件仓目录/);
+  assert.match(opening, /公共UI库\(https:\/\/components\.example\/common-ui\.git\)/);
+  assert.match(opening, /何时需要读取: 排查表格渲染问题时读取/);
+  assert.match(opening, /不需要就不拉/);
 });
 
 test("重复拉取幂等不重账;未命中与停用条目照旧入登记清单", async () => {

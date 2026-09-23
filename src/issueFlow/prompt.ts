@@ -433,9 +433,22 @@ export function issueFixedOpeningPrompt(
     inheritedNote,
   ].filter(Boolean).join("\n");
   // 段落间空行是渲染结构(filter(Boolean) 会吞 "" 占位,空行随段块拼接)。
+  // 参考组件仓目录(ADR-0054):发起时刻的订阅快照,skill 描述同款
+  // 机制——AI 天天看得见,按「何时需要读取」自行决定拉不拉;无订阅
+  // 整节省略(零污染)。
+  const referenceRepoCatalog = (state.reference_repos ?? []).length
+    ? `## 参考组件仓目录(公共组件源码,按需研读)\n\n`
+      + (state.reference_repos ?? []).map((row) =>
+        `- ${row.name}(${row.url})\n  何时需要读取: ${row.description}`)
+          .join("\n")
+      + `\n\n定位问题需要看公共组件源码时,照抄地址调 pull_repo 拉取;`
+        + `命中登记表的地址会成为参考仓(只读参考件:可研读,不可修改、`
+        + `不可交付)。不需要就不拉。`
+    : "";
   return [
     promptCopy("opening", "fixed.header"),
     `## 问题事实\n\n${facts}`,
+    referenceRepoCatalog,
     `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})\n${stages}`,
     `## 阶段机契约(平台机械执行,说了算)\n${contract}`,
     promptCopy("opening", "fixed.kickoff"),
