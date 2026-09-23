@@ -433,9 +433,22 @@ export function issueFixedOpeningPrompt(
     inheritedNote,
   ].filter(Boolean).join("\n");
   // 段落间空行是渲染结构(filter(Boolean) 会吞 "" 占位,空行随段块拼接)。
+  // 参考组件仓目录(ADR-0054):发起时刻的订阅快照,skill 描述同款
+  // 机制——AI 天天看得见,按「何时需要读取」自行决定拉不拉;无订阅
+  // 整节省略(零污染)。
+  const referenceRepoCatalog = (state.reference_repos ?? []).length
+    ? `## 参考组件仓目录(公共组件源码,按需研读)\n\n`
+      + (state.reference_repos ?? []).map((row) =>
+        `- ${row.name}(${row.url})\n  何时需要读取: ${row.description}`)
+          .join("\n")
+      + `\n\n定位问题需要看公共组件源码时,照抄地址调 pull_repo 拉取;`
+        + `命中登记表的地址会成为参考仓(只读参考件:可研读,不可修改、`
+        + `不可交付)。不需要就不拉。`
+    : "";
   return [
     promptCopy("opening", "fixed.header"),
     `## 问题事实\n\n${facts}`,
+    referenceRepoCatalog,
     `## 阶段路线(${scenario === "ticket" ? "有单五阶段" : "无单三节点"})\n${stages}`,
     `## 阶段机契约(平台机械执行,说了算)\n${contract}`,
     promptCopy("opening", "fixed.kickoff"),
@@ -503,6 +516,17 @@ export function fixedNudgeNotice(
   });
 }
 
+/** 续聊提示词的选项(服务侧组装;独立成接口是让 service 的组装助手
+ * 与本函数共享同一形状)。 */
+export interface IssueResumeOptions {
+  tier?: IssueInterventionTier;
+  workspace?: string;
+  blockedPaths?: string[];
+  /** 分析报告指针(ADR-0055):落盘路径+「修改方案」章节要点。服务
+   *  侧算好传入,这里只投影——报告读不出就不带,提示词不留空洞。 */
+  report?: { path: string; plan: string };
+}
+
 /** 续聊提示词(重启/归档前的下一轮):锚定已有现场,不从头推翻。
  * 登记元信息随现场一并重给(服务重启后模型上下文是重建的,元信息
  * 不随对话流失——含网管环境明文,与开场词同一事实源)。 */
@@ -510,7 +534,7 @@ export function issueResumePrompt(
   state: IssueSessionState,
   userText: string,
   credentials: IssueEnvCredentials = {},
-  options: { tier?: IssueInterventionTier; workspace?: string; blockedPaths?: string[] } = {},
+  options: IssueResumeOptions = {},
 ): string {
   const meta = issueRegistrationMeta(state, credentials);
   return [
@@ -537,6 +561,13 @@ export function issueResumePrompt(
     moduleLine(meta),
     ...environmentLines(meta),
     `- 最近阶段: ${stageLabelOf(state)}(${state.stage_note || "无说明"})`,
+    // 分析报告指针(ADR-0055):分析收口过的现场,重启/异常重跑的降级
+    // 开局也要直接知道报告在哪、方案要点是什么,不必从头重找。服务侧
+    // 算好传入,报告缺席就不带,提示词不留空洞。
+    ...(options.report
+      ? [`- 分析报告: ${options.report.path}`,
+         `- 修改方案要点: ${options.report.plan}`]
+      : []),
     // 检视意见恢复源(#366):文件在场才指路——正文随上下文压缩即丢,
     // 续聊重建的上下文靠这一行知道去哪拿回全部可引用意见。
     ...(options.workspace

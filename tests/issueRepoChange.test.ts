@@ -244,37 +244,29 @@ test("校验拦截面:全空/非 https(file:// 与 ssh 也拦)/与清单重复/r
   }
 });
 
-test("超上限:现有+新增超过 8 打回(移除不抵扣——先拉后删的时序下抵扣不成立)", async () => {
+test("上限已废除(ADR-0054):现有 8 + 新增 1 照常放行,超旧上限不再打回", async () => {
   const dataDir = mfcTemp("mfc-issue-repochange-cap-");
   const eight = Array.from({ length: 8 }, (_, index) =>
     `https://git.example.com/org/r${index}.git`);
   const id = seedIssue(dataDir, { repoUrls: eight });
   const model = new ScriptedModelServer(
-    [{ text: "已收到移除指令。" }], "scripted-v1", { linear: true });
+    [{ text: "已收到指令。" }], "scripted-v1", { linear: true });
   await model.start();
   const service = new IssueFlowService(baseOptions(dataDir, model));
   try {
-    assert.throws(
-      () => service.requestRepoChanges(id,
-        { add: ["https://git.example.com/org/one-more.git"], remove: [] }),
-      (error: Error) => {
-        assert.match(error.message, /最多拉取 8 个代码仓/);
-        return true;
-      });
-    assert.equal(model.requests.length, 0, "打回不开回合");
-    // 到顶不加不减的合法边界:只移除不新增放行(校验通过,开回合发送)。
-    const ok = service.requestRepoChanges(id, { add: [], remove: [eight[7]] });
+    // 旧上限 8 的位置直接放行:校验通过,开回合发送,不报「最多拉取」。
+    const ok = service.requestRepoChanges(id,
+      { add: ["https://git.example.com/org/one-more.git"], remove: [] });
     assert.equal(ok.id, id);
     await until(() => {
       const issue = service.get(id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "只移除回合收口");
-    // 模型只收到移除段:空的新增方向不出空段落。
+    }, "超旧上限回合收口");
     const texts = userTexts(model);
-    assert.match(texts, /移除本会话的代码仓/);
-    assert.doesNotMatch(texts, /新增了代码仓/);
-    // 清单仍 8 个:端点没直改,Agent 剧本也没有执行工具。
+    assert.match(texts, /新增了代码仓|新增本会话的代码仓/);
+    assert.doesNotMatch(texts, /最多拉取/);
+    // 清单仍 8 个:端点没直改,Agent 剧本也没有执行工具(留痕不代执)。
     assert.equal(readStateFile(dataDir, id).repo_urls?.length, 8);
   } finally {
     await service.shutdown().catch(() => undefined);

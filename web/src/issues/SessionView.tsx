@@ -52,6 +52,11 @@ import { IssueMetaPane } from "./MetaPane";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { IssueStatusBadge } from "../StatusBadge";
 import { cn } from "cn";
 
@@ -263,6 +268,26 @@ export function IssueSessionView({
     void perform(() => controlIssue(detail.id, { action: "cancel" }));
   }
 
+  // 异常重跑(ADR-0055,#430):failed 会话的第二出口——原地复活续跑,
+  // 不取消、不动问题单目录,分析报告/检视意见/人工决定/代码现场全在,
+  // AI 接回原上下文继续推进。与「重新发起」是两条路:重新发起会新开
+  // 问题单目录、现场断代;工作台没有重新发起入口,差别讲在确认框正文,
+  // 防止想重做的人误以为只有丢现场一条路。说明可留空,空则服务端用
+  // 默认词「操作者确认异常已排除,继续推进」;确认框不用 confirmDialog
+  // (它没有输入位),走 Dialog 自带说明输入。防重沿用既有 busy 闸
+  // (发起中按钮禁用);后端拒绝(状态已变等)经 perform 落 onError
+  // 既有通道,不在框内另造报错面。
+  const [reviveOpen, setReviveOpen] = useState(false);
+  const [reviveNote, setReviveNote] = useState("");
+  function reviveSession() {
+    const note = reviveNote.trim();
+    setReviveOpen(false);
+    void perform(() => controlIssue(detail.id, {
+      action: "revive",
+      ...(note ? { note } : {}),
+    }));
+  }
+
   // 全屏工作台(ADR-0018 骨架对齐):复用任务侧 studio 骨架——ws-head
   // 头部(返回/身份/进度/操作)+ ws-body 两栏(左 ws-evidence 工作区、
   // 右 ws-side 协作)。ADR-0040 起是 /issues/:id 的页面形态(不再是叠在
@@ -361,12 +386,45 @@ export function IssueSessionView({
               ? "给出结论（是问题挂起/非问题闭环）后才能归档；要放弃请终止会话"
               : undefined}
             onClick={archive}>归档收口</Button>}
+          {/* 异常重跑(#430,ADR-0055):仅异常(失败)会话出现,与终止
+              并排——failed 状态下的两个出口:原地续跑 or 放弃终止。
+              发起中(busy)禁用防重;确认框与说明输入见 header 之后。 */}
+          {detail.status === "failed" && <Button type="button" size="sm"
+            disabled={busy}
+            title="原地续跑:分析报告、检视意见、人工决定、代码现场全在,AI 接回原上下文继续推进"
+            onClick={() => { setReviveNote(""); setReviveOpen(true); }}>异常重跑</Button>}
           <Button type="button" variant="destructive" size="sm" disabled={busy
             || ["archived", "canceled"].includes(detail.status)}
             onClick={cancelSession}>终止会话</Button>
         </>}
       </div>
     </header>
+
+    {/* 异常重跑确认框(#430,ADR-0055):一句话说明可留空;确认即调
+        control revive。正文讲清与「重新发起」的差别(原地续跑全现场
+        vs 新开目录现场断代)——工作台没有重新发起入口,这里是唯一
+        讲差别的地方。busy 时确认钮禁用,防状态在途重复发起。 */}
+    <Dialog open={reviveOpen}
+      onOpenChange={(open) => { if (!busy) setReviveOpen(open); }}>
+      <DialogContent aria-label="异常重跑确认">
+        <DialogHeader>
+          <DialogTitle>异常重跑</DialogTitle>
+          <DialogDescription>
+            确认异常已排除后原地续跑：不取消会话、不动问题单目录，分析报告、检视意见、人工决定、代码现场全部保留，AI 接回原上下文继续推进。这与「重新发起」不同——重新发起会新开问题单目录、现场断代；本会话的恢复路只有异常重跑这一条。
+          </DialogDescription>
+        </DialogHeader>
+        <Input value={reviveNote}
+          onChange={(event) => setReviveNote(event.target.value)}
+          placeholder="可附一句话说明，随恢复回合送达 AI（可留空）"
+          aria-label="重跑说明（可留空）" />
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={busy}
+            onClick={() => setReviveOpen(false)}>取消</Button>
+          <Button type="button" disabled={busy}
+            onClick={reviveSession}>确认重跑</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <div className="ws-body max-[1100px]:grid-cols-[minmax(0,1fr)]">
       {/* ws-evidence 是滚动主区(#231 换装:共享 studio 皮肤类保留,

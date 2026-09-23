@@ -18,6 +18,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
+import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { durableWriteFileSync } from "../durableWrite.ts";
 import { join } from "node:path";
 import type { FeedbackRecord } from "../feedbackStore.ts";
@@ -394,6 +395,31 @@ export interface IssueSessionState {
     note?: string;
     at: string;
   };
+  /** 参考仓台账(2026-09-23,ADR-0054):拉取时命中公共组件仓目录
+   * (组件仓库表启用行)的只读参考件——可研读,不可修改、不可交付。
+   * URL **不进** repo_urls,与知识仓同一个只读机理:交付工具的定位
+   * 映射只认登记清单,参考仓在结构上推不了、交不了。name 是落盘
+   * 仓名(撞登记仓名时带序号),目录即 repo/<name>/。 */
+  public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 参考组件仓目录快照(2026-09-23,ADR-0054):发起时刻按模块订阅
+   * 解析的启用条目(名称/地址/描述)。开场注入给 AI 做按需拉取决策;
+   * 快照在 create 定格,会话生命周期内不变——模块订阅后续增删不
+   * 追溯进行中的会话(与环境快照同一纪律)。 */
+  reference_repos?: Array<{
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+  }>;
+  /** 用户指派意图的未消费留痕(ADR-0054):requestRepoChanges 接受的
+   * 新增地址先记在这,Agent 调 pull_repo 落地时消费——凭它走平等仓
+   * 登记路径并摘参考仓台账行(指派升级为平等仓)。端点依旧不直改
+   * 清单,pending 记的是人的意志,清单仍随 Agent 执行变化。 */
+  repo_assign_pending?: string[];
+  /** 用户指派过的地址(永久留痕,ADR-0023 通道):requestRepoChanges
+   * 的每次新增都记一笔,展示层据此把「运行中经人指派」的在册仓与
+   * 登记自带仓区分开;摘除仓不销痕(指派史是审计事实)。 */
+  assigned_repos?: string[];
   baseline?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
@@ -502,15 +528,11 @@ export interface IssueSummary extends IssueSessionState {
 
 // ---- 多仓工作区映射(克隆/工具/提示词共用,目录命名只写这一处) ----
 
-/** 一个问题会话最多拉取的代码仓数。模块库允许一个模块绑 20 个仓,
- * 但问题会话一轮克隆 8 个已是分析上限——再多说明该拆会话了。 */
-export const MAX_ISSUE_REPOS = 8;
-
 /** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
  * 顺序即语义——首个即 repo_url 兼容别名(推送/部署的缺省目标),
  * 仓彼此平等。登记(create)、
  * 闸门补填(resolveGate)与 Agent 绑模块(bind_module)三处共用同一
- * 把尺子,上限与协议规则不允许各自为政。 */
+ * 把尺子,协议规则不允许各自为政;数量上限已废除(ADR-0054)。 */
 export function normalizeIssueRepos(
   single: string | undefined,
   list: string[] | undefined,
@@ -522,12 +544,34 @@ export function normalizeIssueRepos(
     const validated = validateRepoUrl(url);
     if (!unique.includes(validated)) unique.push(validated);
   }
-  if (unique.length > MAX_ISSUE_REPOS) {
-    throw new IssueControlError(
-      `一个问题会话最多拉取 ${MAX_ISSUE_REPOS} 个代码仓(当前 ${unique.length} 个);`
-        + "请精简模块绑定或分多次分析");
-  }
   return unique;
+}
+
+/** pull_repo 的身份裁决(2026-09-23,ADR-0054):指派意图 > 登记表
+ * 命中 > 平等登记。assigned = 地址带着用户指派意图(pending 未消费,
+ * requestRepoChanges 落下的"人的意志");reference = 不在已知集合且
+ * 命中公共组件仓目录启用行;其余一律平等登记(现状口径)。known
+ * 之外,extraKnown(模块绑定仓等登记侧既定关系)同样算已知——模块
+ * 绑定的地址即使没进 repo_urls(发起时显式给了仓清单的边缘场景)
+ * 也不该被登记表卷成参考仓。只裁决不落账——pending 与参考仓台账的
+ * 消费在服务侧 pullRepoFor。纯函数,直测。 */
+export function resolvePullRoute(
+  state: Pick<IssueSessionState,
+    "repo_urls" | "public_repos" | "repo_assign_pending">,
+  url: string,
+  registryHit: boolean,
+  extraKnown: readonly string[] = [],
+): "assigned" | "reference" | "registered" {
+  const identity = repositoryIdentity(url);
+  if (state.repo_assign_pending?.some((item) =>
+    repositoryIdentity(item) === identity)) {
+    return "assigned";
+  }
+  const known = (state.repo_urls ?? []).some((item) =>
+    repositoryIdentity(item) === identity)
+    || extraKnown.some((item) => repositoryIdentity(item) === identity);
+  if (!known && registryHit) return "reference";
+  return "registered";
 }
 
 /** 仓名派生的唯一真相:地址末段去 .git。issueRepoWorkspaces 与知识仓
@@ -541,7 +585,9 @@ export function repoNameOf(url: string): string {
  * 拍板:仓平等——废除主仓 repo/ + 参考仓 ref/ 的等级布局,单仓多仓
  * 同构)。仓名取地址末段去 .git,重名追加序号;克隆一律由 Agent 调
  * pull_repo 工具发起,平台不自动克隆。知识仓(#286)不在本口径:
- * 它的 URL 不进 repo_urls,装载走 service.ensureKnowledgeRepo。 */
+ * 它的 URL 不进 repo_urls,装载走 service.ensureKnowledgeRepo。
+ * 参考仓台账(ADR-0054)的名字参与占用:登记仓名与参考仓名撞名时,
+ * 后拉的一方落序号名,谁也不覆盖谁。 */
 export function issueRepoWorkspaces(
   state: IssueSessionState,
   workspaceRoot: string,
@@ -549,7 +595,8 @@ export function issueRepoWorkspaces(
   const repoUrls = state.repo_urls?.length
     ? state.repo_urls
     : state.repo_url ? [state.repo_url] : [];
-  const taken = new Set<string>();
+  const taken = new Set<string>(
+    (state.public_repos ?? []).map((row) => row.name));
   return repoUrls.map((url) => {
     const name = repoNameOf(url);
     let candidate = name;
@@ -573,9 +620,9 @@ export function summarize(state: IssueSessionState): IssueSummary {
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
     parked_notices: _parkedNotices,
-    // knowledge_repo(知识仓装载账,#286)同罪同罚:工作台无消费面,
-    // 现场经转移账可见;上 wire 要先补前端镜像与样例,不白送。
-    knowledge_repo: _knowledgeRepo,
+    // reference_repos(参考组件仓目录快照,ADR-0054)不上 wire:它是
+    // 开场词的注入源,工作台无消费面;要上前端先补镜像与样例,不白送。
+    reference_repos: _referenceRepos,
     ...rest } = state;
   return {
     ...rest,

@@ -27,6 +27,10 @@ review.triage.mr / pipeline.green.others_red 与 receipts 的 mrgate.red
 
 平台通知: 服务重启,平台自动续跑,接着当前阶段继续,不重复已完成的工作。
 
+## revive.resume
+
+平台通知: 会话曾异常中断,操作者确认异常已排除,继续推进。异常重跑:原地接着当前阶段继续,不重复已完成的工作,也不要把异常中断本身当作要排查的问题。{{note}}
+
 ## rework.products_reclaimed
 
 平台通知: 该单的构建产物(target/build/node_modules 等编译中间物)已按磁盘纪律回收,源码与依赖缓存完好。本次返工的首次编译是全量编译(依赖缓存热,无需重新下载),耗时会长于增量——按正常流程编译验证即可,不要把编译变慢当作环境故障排查。

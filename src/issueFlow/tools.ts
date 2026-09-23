@@ -148,6 +148,8 @@ export interface IssueToolContext {
     branch?: string;
     head: string;
     remoteBranch?: string;
+    /** 命中公共组件仓目录(ADR-0054):只读参考件,不进登记清单。 */
+    reference?: boolean;
   }>;
   /** 固定流程:create_mr 成功后由服务启动流水线监看(触发+轮询)。 */
   onMrCreated?(repo: string): void;
@@ -437,7 +439,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带创建修复分支 "
       + "master_<工号>_<单号>;基线分支在远端不存在时拉仓整次失败,如实"
       + "向用户报告,不要在别的分支上继续。"
-      + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。",
+      + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。"
+      + "命中公共组件仓目录(组件仓库表)的地址落成参考仓——只读参考件,"
+      + "可研读,不可修改、不可交付(ADR-0054)。",
     parameters: Type.Object({
       url: Type.String({
         description: "代码仓地址(https 或本地路径);已在会话里的仓幂等回报",
@@ -452,9 +456,10 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `代码仓已拉取: ${facts.dir}${facts.cloned ? "(新克隆)" : "(已在场)"}`
           + `${facts.branch ? `,分支 ${facts.branch}` : ""}`
+          + `${facts.reference ? "·参考仓(只读)" : ""}`
           + `${facts.remoteBranch
-            ? `——⚠ 远端同名修复分支遗留@${facts.remoteBranch}(与本地分叉)`
-            : ""}`,
+          ? `——⚠ 远端同名修复分支遗留@${facts.remoteBranch}(与本地分叉)`
+          : ""}`,
       });
       ctx.persist();
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
@@ -469,6 +474,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       return ok(`代码仓就绪:\n- 工作区目录: ${facts.dir}\n`
         + `- HEAD: ${facts.head.slice(0, 12)}`
         + `${facts.branch ? `\n- 修复分支: ${facts.branch}(已切好)` : ""}`
+        + `${facts.reference
+          ? "\n- 身份: 参考仓(只读参考件:可研读,不可修改、不可交付——"
+            + "推送/交付工具对它不可达;需要修改时请用户在元信息页签按"
+            + "普通地址指派;指派后重新拉取,即转为平等关联仓)"
+          : ""}`
         + `${facts.remoteBranch
           ? `\n- ` + promptCopy("receipts", "pull.remote_branch_warn", {
             branch: facts.branch ?? "",
@@ -495,7 +505,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "要请用户先在代码平台删除远端分支;③远端状态查不到(网络/凭据)"
       + "时保守拒绝,稍后重试。通过后宿主物理删除工作区仓目录,并把该仓"
       + "从会话关联仓清单摘除(首位仓被删时兼容首位字段自动接替新首位),"
-      + "删除事实入转移账。repo 必填,必须是会话登记过的仓。",
+      + "删除事实入转移账。repo 必填,必须是会话登记过的仓。参考仓(拉取"
+      + "时命中公共组件仓目录的只读参考件)同样可摘:删台账行与工作区"
+      + "目录,无修复分支门禁——它本就不建分支(ADR-0054)。",
     parameters: Type.Object({
       repo: Type.String({
         description: "要移除的代码仓地址(会话登记过的);删除必须显式指仓",
@@ -505,6 +517,38 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       gateStage("remove_repo");
       const wanted = String(params.repo ?? "").trim();
       if (!wanted) fail("repo 不能为空:删除必须显式指仓(给要移除的代码仓地址)");
+      // 参考仓分支(ADR-0054):参考仓不在登记清单,locateRepo 够不着;
+      // 摘除 = 删台账行 + 物理删目录。无修复分支门禁——参考仓不建分支,
+      // 也无模块绑定可言(命中登记表的非绑定地址才成参考仓)。
+      const wantedIdentity = repositoryIdentity(wanted);
+      const publicHit = (state.public_repos ?? []).find((row) =>
+        repositoryIdentity(row.url) === wantedIdentity);
+      if (publicHit) {
+        const publicDir = resolve(join(ctx.workspace, "repo", publicHit.name));
+        const publicRoot = resolve(ctx.workspace);
+        if (publicDir === publicRoot
+          || !publicDir.startsWith(publicRoot + sep)) {
+          fail(`参考仓工作区目录异常(repo/${publicHit.name}),拒绝删除`);
+        }
+        rmSync(publicDir, { recursive: true, force: true });
+        try {
+          const parent = dirname(publicDir);
+          if (existsSync(parent) && readdirSync(parent).length === 0) {
+            rmdirSync(parent);
+          }
+        } catch { /* 空目录清理是尽力而为 */ }
+        state.public_repos = (state.public_repos ?? [])
+          .filter((row) => row !== publicHit);
+        recordTransition(state, {
+          source: "platform",
+          note: `参考仓已摘除(该仓与本问题无关): ${publicHit.url}`
+            + `(工作区 repo/${publicHit.name}/)·参考仓(只读)`,
+        });
+        ctx.persist();
+        return ok(`已摘除参考仓 ${publicHit.url}:工作区目录已删除,`
+          + "参考仓台账行已移除。参考仓是只读参考件,与登记仓清单无关"
+          + "(需要它重新可研读时再调 pull_repo)。");
+      }
       // 目录只认登记映射(issueRepoWorkspaces),不吃任何用户路径输入:
       // URL 不在清单=拒;映射值锚死 <工作区>/repo/<仓名> 平铺名,仓名
       // 取地址末段去 .git 且不含路径分隔符,逃逸形态在公共调用面上

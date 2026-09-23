@@ -380,6 +380,11 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       ticket: TICKET,
       repo_url: origin,
       repo_urls: [origin],
+      // 参考仓台账与知识仓装载账(#425,ADR-0054):本会话都没装,
+      // 显式 undefined = 可选键,镜像已补(web/src/api.ts)。
+      public_repos: undefined,
+      knowledge_repo: undefined,
+      assigned_repos: undefined,
       module: undefined,
       module_id: undefined,
       baseline: undefined,

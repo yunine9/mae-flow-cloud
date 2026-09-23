@@ -1508,6 +1508,8 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  /** 参考组件仓订阅(ADR-0054):公共组件仓登记表条目 id 引用。 */
+  reference_component_repos?: string[];
   status: "active" | "archived";
   revision: number;
   assets: BusinessKnowledgeAsset[];
@@ -1567,6 +1569,7 @@ export async function createBusinessModule(input: {
   owner?: string;
   maintainers?: string[];
   repositories: string[];
+  reference_component_repos?: string[];
 }): Promise<BusinessModule> {
   const response = await fetch("/business-modules", {
     method: "POST",
@@ -1579,7 +1582,8 @@ export async function createBusinessModule(input: {
 export async function updateBusinessModule(
   id: string,
   patch: Partial<Pick<BusinessModule,
-    "name" | "description" | "owner" | "maintainers" | "repositories" | "status">>,
+    "name" | "description" | "owner" | "maintainers" | "repositories"
+    | "reference_component_repos" | "status">>,
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
     method: "PUT",
@@ -3921,6 +3925,21 @@ export interface IssueSummary {
   repo_url?: string;
   /** 全部关联仓(彼此平等;与 repo_url 由服务端 dual-write 保持一致)。 */
   repo_urls?: string[];
+  /** 参考仓台账(ADR-0054):拉取时命中公共组件仓目录的只读参考件;
+   * 不在 repo_urls 里,交付工具结构够不着。会话页据此渲染「参考仓·只读」。 */
+  public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 用户指派过的地址(永久留痕):展示层据此把「运行中经人指派」的
+   * 在册仓与登记自带仓区分开(用户指派徽标)。 */
+  assigned_repos?: string[];
+  /** 知识仓装载账(ADR-0033):开工即装的只读参考件;status=ready 才
+   * 有现场。会话页据此渲染「知识仓·只读」卡片(装了才出)。 */
+  knowledge_repo?: {
+    url: string;
+    name: string;
+    status: "ready" | "skipped";
+    note?: string;
+    at: string;
+  };
   module?: string;
   /** 登记选定的业务模块 ID(module 标签的来源留痕)。 */
   module_id?: string;
@@ -4598,9 +4617,11 @@ export async function getIssueTicketTemplate(id: string): Promise<string | null>
 }
 
 export function controlIssue(id: string, input: {
-  action: "cancel" | "archive";
+  action: "cancel" | "archive" | "revive";
   kind?: "non_issue" | "delivered" | "issue";
   summary?: string;
+  /** revive 专用(ADR-0055):操作者一句话说明,随恢复回合送达 AI。 */
+  note?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
     method: "POST",
