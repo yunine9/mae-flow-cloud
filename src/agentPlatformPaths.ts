@@ -51,3 +51,14 @@ export function isAgentPlatformPath(path: string): boolean {
 export function describeAgentPlatformRoots(): string {
   return AGENT_PLATFORM_ROOTS.join(" / ");
 }
+
+/** 旧版曾把未勾选文件永久写入本地 ignore。只清除 Cloud 标记区中
+ * 与任务选择记录一致的条目，保留仓库/用户自己维护的 ignore。 */
+export function removeLegacyDeliveryExcludes(text: string, paths: readonly string[]): string {
+  const legacy = new Set(paths.map(path => `/${path}`));
+  let cloudBlock = false;
+  return text.split("\n").filter(line => {
+    if (line.startsWith("#")) cloudBlock = line === "# mae-flow: local assets excluded from this delivery";
+    return !(cloudBlock && legacy.has(line));
+  }).join("\n");
+}

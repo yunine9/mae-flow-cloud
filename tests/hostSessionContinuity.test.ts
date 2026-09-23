@@ -100,6 +100,18 @@ test("目标登记不销毁会话或容器；明确重启才销毁", async t => 
   assert.ok(f.task.controlEpoch > epoch);
 });
 
+test("旧会话更新文件选择记录保留容器和模型上下文", async t => {
+  const f = fixture(t);
+  const host = f.service.taskHostRuntime(f.task);
+  await host.release("restore_delivery_paths");
+  host.resume("文件选择记录已更新");
+  await f.resume();
+  assert.equal(f.task.container, f.container);
+  assert.equal(f.task.driver, f.driver);
+  assert.equal(f.stopped(), 0);
+  assert.equal(f.disposed(), 0);
+});
+
 test("宿主操作失败仍把失败原文带回同一会话", async t => {
   const f = fixture(t), runtime = f.service.taskHostRuntime;
   f.service.taskHostRuntime = (...args: any[]) => ({ ...runtime(...args), cloneReference: async () => { throw new Error("远端 502"); } });

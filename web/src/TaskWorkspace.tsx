@@ -892,8 +892,7 @@ export function TaskWorkspace({
       setDiffScope("full");
       return;
     }
-    const selected = task.delivery_selection?.status === "requested"
-      ? task.delivery_selection.paths : pushReview.committed_paths;
+    const selected = pushReview.committed_paths;
     setDeliverySelection({
       selectedPaths: [...selected],
       committedPaths: [...pushReview.committed_paths],
@@ -2446,8 +2445,7 @@ export function TaskWorkspace({
                         && (!pushReview || diffScope === "full")}
                       selectionKey={deliverySelectionKey}
                       initialSelectedPaths={deliverySelection?.selectedPaths
-                        ?? (task.delivery_selection?.status === "requested"
-                          ? task.delivery_selection.paths : undefined)}
+                        ?? pushReview?.committed_paths}
                       onSelectionChange={setDeliverySelection}
                       focusRequest={diffReviewRequest} />
                   : <Markdown showLineNumbers text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT || /(^|\/)story\.md$/.test(active)

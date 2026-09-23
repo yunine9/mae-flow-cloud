@@ -157,9 +157,8 @@ import {
 } from "./feedbackPolicy.ts";
 import {
   type PushReviewPolicy, describeDirtyPaths, listedPaths,
-  normalizedDeliveryPaths, pushReviewCallId, pushReviewPolicyFor, pushReviewReceiptCovers,
-  pushWaitingDetail, recardDetail, samePaths, scopeDeltaLine,
-  selectionPushDecision,
+  normalizedDeliveryPaths, pushReviewCallId, pushReviewPolicyFor, hasPushApproval,
+  pushWaitingDetail, samePaths, scopeDeltaLine,
 } from "./pushReviewPolicy.ts";
 import {
   DeliveryOutbox,
@@ -575,7 +574,7 @@ import {
   type SafeGitCommitIdentity,
 } from "./safeGit.ts";
 import {
-  AGENT_PLATFORM_LOCAL_EXCLUDES,
+  AGENT_PLATFORM_LOCAL_EXCLUDES, removeLegacyDeliveryExcludes,
   AGENT_PLATFORM_ROOTS,
   FLOW_RUNTIME_LOCAL_EXCLUDES,
   AGENT_PLATFORM_PATHSPECS,
@@ -896,9 +895,7 @@ export interface CrossRepositoryUpdate {
   created_at: string;
 }
 
-/** push 前检视的阅读导航。它解释“这次为什么又来检视、先看哪里”，
- * 但不新增审批状态：真正授权仍只认 delivery_selection 绑定的完整
- * HEAD + 文件集合。 */
+/** push 前检视的阅读导航。展示本次实际改动，不把历史文件选择变成后续修复边界。 */
 export interface PushReviewPresentation {
   kind: "delivery" | "feedback" | "pipeline" | "conflict" | "rework";
   title: string;
@@ -1284,10 +1281,8 @@ export interface TaskSummary {
      * Agent。同一批只派一次:派过仍没完成就如实举卡让人返工,不空转。 */
     review_processing_dispatched_for?: string;
   };
-  /** push 前最终交付范围收据。requested 表示已经作为返工要求发给
-   * Agent；confirmed 只授权当时精确的 head + paths。人工复检关闭时，
-   * Build-Fix 后若文件集合严格不变，可由明确的 policy 收据续推；它与
-   * 人工确认分开留痕，不能伪装成人看过最新代码。 */
+  /** 推送决定与当次文件选择记录。requested 表示用户要求调整；confirmed
+   * 可供后续修复沿用。head/paths 留作回顾，不限制后续必要修复的文件集合。 */
   delivery_selection?: {
     paths: string[];
     observed_paths: string[];
@@ -1300,10 +1295,8 @@ export interface TaskSummary {
     confirmation_reason?: string;
     updated_at: string;
   };
-  /** push 前人工确认交付范围(任务级显式开关;缺省由个人设置决定)。
-   * 开着时宿主在 prepush 收敛后挂云端原生 diff 卡:确认→按白名单
-   * 推送;返工→带清单契约的修复会话整理提交后重新确认。这是宿主对
-   * 自己动作(push)设的闸,不碰内核流程。 */
+  /** push 前人工确认(任务级显式开关;缺省由个人设置决定)。
+   * 确认后沿用决定；明确返工则修改后重新确认。文件勾选只整理当次提交。 */
   push_confirmation?: boolean;
   /** 从现场看板的 panel-pulse.js/panel.html 读取的进度摘要。 */
   progress?: TaskProgress;
@@ -1907,11 +1900,11 @@ function deliverySelectionNote(
   const selected = paths.slice(0, limit).map((path) => `- ${path}`);
   if (paths.length > limit) selected.push(`- …其余 ${paths.length - limit} 个文件`);
   return [
-    "<delivery-selection schema=\"mae-flow-delivery-selection/1\" mode=\"allowlist\">",
-    `用户通过文件勾选器确认：只交付以下 ${paths.length} 个文件。`,
+    "<delivery-selection schema=\"mae-flow-delivery-selection/1\" mode=\"snapshot\">",
+    `上次文件选择记录：当次提交选择了 ${paths.length} 个文件。`,
     ...(selected.length ? selected : ["- （不交付任何文件）"]),
-    `当前另有 ${excluded.length} 个文件未勾选；它们不得进入提交。`,
-    "若当前 commit 与该清单不一致，请调整暂存/提交后重新进入代码检视；不要自行扩大清单。",
+    `当时另有 ${excluded.length} 个文件未纳入该次提交。`,
+    "这份记录只用于回顾当次整理，不是后续修复的文件白名单。按需求和责任人最新意见补齐必要实现、依赖、配置及测试，无需先扩清单；明确的禁改或不交付指令仍须遵守。只暂存本次有意交付的文件，不夹带构建产物或他人未提交的修改。",
     "</delivery-selection>",
   ].join("\n");
 }
@@ -10494,8 +10487,7 @@ export class TaskService {
     waiting: WaitingRecord,
     input: DecisionSubmission,
     closesFeedback: boolean,
-    /** push 前确认卡:没显式勾选就按"当前 commit 全量"确认。确认
-     * 确认绑定文件范围；同范围后续修复沿用决定，不因 HEAD 改变重问。 */
+    /** push 前确认卡:没显式勾选就按当前已提交改动确认，不回退到历史清单。 */
     defaultToCommitted = false,
   ): Promise<{
     record: NonNullable<TaskSummary["delivery_selection"]>;
@@ -10504,11 +10496,9 @@ export class TaskService {
     // 阅读 diff 不代表授权整理提交；旧客户端夹带的清单也不能改变现场。
     if (waiting.step !== CLOUD_PUSH_CONFIRM_STEP && waiting.step !== HOST_PUSH_CONFIRM_STEP) return undefined;
     const explicit = input.delivery_paths !== undefined;
-    const previous = task.summary.delivery_selection;
     const values = explicit
       ? input.delivery_paths!
-      : previous?.status === "requested" ? previous.paths
-        : defaultToCommitted ? "committed" as const : undefined;
+      : defaultToCommitted ? "committed" as const : undefined;
     if (values === undefined) return undefined;
     if (!task.cwd) {
       throw new TaskControlError("代码现场尚未就绪，不能确认交付文件");
@@ -10551,7 +10541,7 @@ export class TaskService {
     if (closesFeedback && !samePaths(paths, committed)) {
       // 清单调整仍是宿主机械活，不打回 Agent 猜。push 确认卡同时让
       // 用户选择“重新编译”或“直接提交”；旧客户端缺字段时保守重编。
-      // 两个选择都已经确认这份清单，只有后续编译真的改了代码才再检视。
+      // 两个选择都已确认推送，后续必要修复不因文件增减重新检视。
       const compileAction: DeliveryCompileAction =
         (waiting.step === CLOUD_PUSH_CONFIRM_STEP || waiting.step === HOST_PUSH_CONFIRM_STEP)
           ? input.delivery_compile_action ?? "rerun" : "rerun";
@@ -10607,7 +10597,7 @@ export class TaskService {
             ? `(宿主已按清单机械整理提交:${actions};用户选择不再编译，`
               + `将直接提交并由权威流水线裁决)${vanishedNote}`
             : `(宿主已按清单机械整理提交:${actions};新 HEAD 将重新编译；`
-              + `编译过程未改代码就直接提交，产生新代码才再次检视)${vanishedNote}`),
+              + `后续必要修复沿用本次推送确认，不因文件增减重复检视)${vanishedNote}`),
       };
     }
     if (closesFeedback) {
@@ -11011,12 +11001,12 @@ export class TaskService {
       delete task.summary.delivery.skipped;
     }
     this.enqueueRepair(task, [
-      "用户在 push 前确认交付清单时要求按清单返工；按当前要求整理提交，较新的责任人要求可调整目标:",
+      "用户要求调整本次推送；结合当前需求、选中的文件与最新意见修复:",
       review
         ? "- 用户本次确认的交付范围、补充说明与检视批注（完整原文）：\n"
           + review
-        : "- 用户未填写额外说明；严格按结构化交付清单处理。",
-      "- 把不在清单里却已进入提交的文件从提交中移出(优先 git rm --cached 后追加提交);",
+        : "- 用户未填写额外说明；按这次选择整理提交，必要的配套修复不受历史清单限制。",
+      "- 按本次明确选择移出不交付的文件；若最新意见要求补回或修复依赖需要新增业务文件，可直接补齐，无需先扩清单;",
       "  文件本身要不要保留在工作区,按它的性质与用户意见判断,不确定就保留并说明。",
       // MFC-036 实锤:Agent 为整理清单 rebase 到定格基线的父提交,最终
       // 树看似正确但基线祖先关系断裂,MR 永远无法快进合入。硬边界写死。
@@ -13945,8 +13935,8 @@ export class TaskService {
         assertActive: () => { if (!this.current(task, actionEpoch) || task.pauseRequested) throw new TaskControlError("任务执行权已变化"); } },
         operation, branch => this.absorbForeignRemoteCommits(task, branch, false), async () => {
           await this.syncTargetBeforePush(task, operation.target_branch!, actionEpoch);
-          if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") {
-            throw new TaskControlError(task.summary.detail ?? "无法整理已确认的交付范围");
+          if (await this.reconcileDeliveryPlatformBoundary(task) === "blocked") {
+            throw new TaskControlError(task.summary.detail ?? "无法清理平台本地目录");
           }
         }),
       finishReviewAfterPush: operation => handoffReview({
@@ -15639,9 +15629,7 @@ export class TaskService {
   ): Promise<PrePushRunResult> {
     if (!task.cwd) throw new Error("Build-Fix 缺少代码工作区");
     if (task.driver) throw new Error("已有 Agent 会话在运行，不能启动 Build-Fix");
-    // 用户排除过的未跟踪过程件直接登记到 clone 本地 exclude。专项
-    // Agent 看不到这些噪声，就不需要靠“别提交”门禁反复纠偏；已跟踪
-    // 文件仍由下面的交付契约与宿主收口处理。
+    // 平台目录继续本地忽略；同时清理旧版本按文件勾选写入的永久 ignore。
     this.registerAgentPlatformLocalExcludes(
       task.cwd,
       request.deliverySelection?.excludedPaths ?? [],
@@ -16331,10 +16319,7 @@ export class TaskService {
     }
   }
 
-  /** push 前人工确认不区分“第一次/后续”：按当前设置拿最终代码给人
-   * 检视，不要求 Build-Fix。人工意见还要先由任务责任人逐条裁决；
-   * 任务责任人只在逐条闭环后签本次 HEAD。完全相同 HEAD 的网络重试
-   * 幂等复用，HEAD 变化则旧收据立即失效。 */
+  /** 推送检视中的 Agent 说明，保留可读段落并限制长度。 */
   private concisePushReviewNote(task: TaskState): string | undefined {
     const text = String(task.lastReply ?? "")
       .replace(/\r\n?/g, "\n")
@@ -16527,9 +16512,7 @@ export class TaskService {
     };
   }
 
-  /** Cloud 最终交付卡的唯一策略入口。过程月光只决定内核普通问题是否
-   * 自动作答；这里单独裁决最终过目、人工意见与文件范围冲突，避免两道
-   * push 门禁各读一次设置后得出相反结论。 */
+  /** 最终过目与人工意见复检遵守任务设置；历史文件清单不另设推送限制。 */
   private pushReviewPolicy(task: TaskState): PushReviewPolicy {
     const loop = task.summary.delivery?.loop;
     return pushReviewPolicyFor({
@@ -16551,9 +16534,7 @@ export class TaskService {
     const loop = task.summary.delivery?.loop;
     const policy = this.pushReviewPolicy(task);
     const { recheckRequired } = policy;
-    // 未闭环人工意见和交付范围冲突属于安全例外，不能被月光/全自动
-    // 偏好吞掉。普通最终过目仍服从个人设置；旧的无设置测试/部署只要
-    // 已经存在 selection，就维持既有的保守复检语义。
+    // 人工意见仍按原有复检处理，普通最终过目服从个人设置。
     const required = force || policy.required;
     if (!task.cwd) return true;
     if (!await this.existingMergeRequestAllowsDelivery(task, task.controlEpoch)) return false;
@@ -16575,13 +16556,7 @@ export class TaskService {
     }
     const committed = (await this.deliveryContribution(task, snapshot)).paths;
     const selection = task.summary.delivery_selection;
-    if (!recheckRequired && pushReviewReceiptCovers(selection && {
-      status: selection.status,
-      head: selection.head,
-      paths: normalizedDeliveryPaths(selection.paths),
-    }, { head: snapshot.head, paths: committed })) {
-      return true;
-    }
+    if (!recheckRequired && hasPushApproval(selection)) return true;
     const cycleToken = selection?.status === "requested"
       ? selection.waiting_id
       : recheckRequired ? loop?.review_ids : selection?.waiting_id;
@@ -16595,19 +16570,17 @@ export class TaskService {
         normalizedDeliveryPaths(task.summary.delivery?.push_review?.committed_paths ?? []), committed)) return false; // 同范围旧版本卡也继续等原回答
       task.humanGate.supersede(waiting.waiting_id, {
         stateVersion: waiting.state_version,
-        notes: "交付文件集合已变化,旧确认卡作废,按最新范围重新确认",
+        notes: "待确认的改动已更新，展示当前提交内容",
       });
     }
-    // 重复确认时把文件范围变化说成人话。例如只补了一个 .gitignore，
-    // 人看一行就能拍板，不用整单重看；“增量 diff”这类实现词不露出。
+    // 因明确返工或人工意见复检再次展示时，说明与上次相比的变化。
     const previous = selection?.status === "confirmed"
       ? normalizedDeliveryPaths(selection.paths) : undefined;
     const deltaLine = scopeDeltaLine(previous, committed);
     const deltaLines = deltaLine ? [deltaLine] : [];
     const extras = snapshot.workspace_paths
       .filter((path) => !committed.includes(path));
-    // 只在 Build-Fix 收敛后举卡。HEAD 用于展示，不能作废用户决定；
-    // 文件范围或用户明确打回才形成新的待办。
+    // HEAD 和文件集合用于展示；文件增减不会作废已有推送决定。
     const reviewAnnotationIds = new Set(
       loop?.workspace_review_annotation_ids ?? []);
     const reviewItems = recheckRequired
@@ -16641,7 +16614,7 @@ export class TaskService {
       // 词,新人在唯一的人审闸口满屏找不到入口(2026-08-30 审计)。
       "完整代码变化在「交付材料 → 工作区变更」逐文件查看;发现问题可在"
       + "代码行上留批注,选「需要调整代码」让 Agent 修改。",
-      "文件树左侧勾选框决定交付范围：取消勾选的文件不推送。" + PUSH_SCOPE_GUIDANCE,
+      "默认提交当前已提交的改动；需要剔除文件时可取消勾选，只整理本次提交。" + PUSH_SCOPE_GUIDANCE,
       "",
       `即将向分支 ${branch} 推送以下 ${committed.length} 个文件`
       + `(自基线 ${snapshot.baseline.slice(0, 12)} 起;内容以检视材料实时为准):`,
@@ -16673,64 +16646,6 @@ export class TaskService {
     }
     this.options.log?.(
       `任务 ${task.summary.id} push 前确认卡已生成(HEAD ${snapshot.head.slice(0, 12)})`);
-    return false;
-  }
-
-  private async deliverySelectionAllowsPush(
-    task: TaskState,
-    branch: string,
-  ): Promise<boolean> {
-    const selection = task.summary.delivery_selection;
-    if (!selection) return true;
-    let reason = "";
-    if (!task.cwd) {
-      reason = "代码现场不可用，无法复核交付文件清单";
-    } else {
-      const snapshot = await deliveryChangeSnapshot(task.cwd);
-      if (!snapshot?.baseline) {
-        reason = "任务基线不可读，无法复核交付文件清单";
-      } else {
-        const current = (await this.deliveryContribution(task, snapshot)).paths;
-        const expected = normalizedDeliveryPaths(selection.paths);
-        // 放行/代确认/停下/重新出卡由决策表定(pushReviewPolicy.
-        // selectionPushDecision):"全自动"关闭的是常规最终过目,不是交付
-        // 白名单——同集合新 SHA 可代确认续推,范围变了月光也不能代答。
-        const decision = selectionPushDecision({
-          selectionStatus: selection.status,
-          selectionHead: selection.head,
-          expected,
-          current,
-          head: snapshot.head,
-          policy: () => this.pushReviewPolicy(task),
-        });
-        if (decision.kind === "allow") return true;
-        if (decision.kind === "auto_confirm") {
-          selection.status = "confirmed";
-          selection.head = snapshot.head;
-          selection.observed_paths = snapshot.workspace_paths;
-          selection.baseline = snapshot.baseline;
-          selection.confirmation_mode = "policy";
-          selection.confirmation_reason = decision.reason;
-          selection.updated_at = new Date().toISOString();
-          this.persist(task);
-          this.options.log?.(
-            `任务 ${task.summary.id} 全自动续推：HEAD ${snapshot.head.slice(0, 12)}`
-            + ` 未改变已选交付范围(${current.length} 个文件)`);
-          return true;
-        }
-        reason = decision.reason;
-      }
-    }
-    if (!reason) return true;
-    const detail = recardDetail(reason);
-    task.summary.status = "verifying";
-    task.summary.detail = detail;
-    if (task.summary.delivery) delete task.summary.delivery.skipped;
-    this.persist(task);
-    this.options.log?.(`任务 ${task.summary.id} ${detail}`);
-    // 这里是常规偏好之外的范围/人工意见冲突。必须强制出卡；再次读取
-    // “全自动”偏好会形成 verifying + 无 waiting + 无 MR 的死锁。
-    await this.pushConfirmationSatisfied(task, branch, true);
     return false;
   }
 
@@ -16835,18 +16750,13 @@ export class TaskService {
     throw new TaskControlError("模块目录限制已取消，请刷新任务，通过现有检视提出具体意见");
   }
 
-  /** 流水线/prepush 修复不得把用户已经排除的文件“顺手带回来”。这不再
-   * 交给 Agent 撞一道新门禁：若变化只涉及已明确排除的路径（或中心注入
-   * 目录），宿主以最近一次已推送的干净 SHA 为锚，把修复中的已确认文件
-   * 机械重组为一个提交。被排除内容仍留在工作区，但污染提交从可达历史中
-   * 消失；真正新增的业务文件不在这里猜，由首次范围确认或用户明确提交
-   * 的 MR 检视授权决定。 */
-  private async reconcileConfirmedDeliveryBoundary(
+  /** 只清理 Agent 平台注入目录，不按历史文件选择撤销本轮业务修复。 */
+  private async reconcileDeliveryPlatformBoundary(
     task: TaskState,
   ): Promise<"unchanged" | "changed" | "blocked"> {
-    const selection = task.summary.delivery_selection;
-    if (!selection || !task.cwd) return "unchanged";
+    if (!task.cwd) return "unchanged";
     const cwd = task.cwd;
+    this.registerAgentPlatformLocalExcludes(cwd);
     const snapshot = await deliveryChangeSnapshot(cwd);
     if (!snapshot?.baseline) return "unchanged";
     let contribution: { paths: string[]; base_sha: string };
@@ -16858,20 +16768,10 @@ export class TaskService {
       return "blocked";
     }
     const current = contribution.paths;
-    const expected = normalizedDeliveryPaths(selection.paths);
-    const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
-    const unexpected = current.filter((path) => !expected.includes(path));
-    const platformHistory = normalizedDeliveryPaths(
-      snapshot.added_agent_platform_paths ?? []);
-    const knownRejected = unexpected.filter((path) => rejected.has(path)
-      || isAgentPlatformPath(path));
-    if (!platformHistory.length && !knownRejected.length) return "unchanged";
-    // 已排除内容与真正的新业务文件同时出现时，也只机械剔除前者、保留
-    // 后者。旧实现要求“所有新增都属于已排除项”才清理，结果一条正常
-    // 新测试文件会让 .claude/.cac 等污染跟着回到确认门禁，修复 Agent
-    // 反复撞墙。目标集合只由事实分类，不猜新业务文件该不该留。
-    const targetPaths = current.filter((path) => !isAgentPlatformPath(path)
-      && !rejected.has(path));
+    const platformHistory = normalizedDeliveryPaths(snapshot.added_agent_platform_paths ?? []);
+    const platformPaths = current.filter(isAgentPlatformPath);
+    if (!platformHistory.length && !platformPaths.length) return "unchanged";
+    const targetPaths = current.filter(path => !isAgentPlatformPath(path));
 
     const run = async (args: string[], action: string) => {
       const result = await runSafeWorktreeGitAsync(cwd, args, {
@@ -16918,7 +16818,7 @@ export class TaskService {
       }
     }
     if (!anchor) {
-      const detail = "检测到修复重新带入了已排除文件，但找不到可靠的整理起点。"
+      const detail = "提交历史包含平台本地目录，但找不到可靠的整理起点。"
         + "未改写已推送历史，请在代码检视中确认处理。";
       task.summary.status = "failed";
       task.summary.detail = detail;
@@ -16932,13 +16832,13 @@ export class TaskService {
     const preserveTarget = !await isAncestorSha(contribution.base_sha, anchor);
     const restorePaths = (await run(["diff", "--name-only", "--no-renames", "-z",
       contribution.base_sha, head, "--"], "读取排除路径差异")).split("\0")
-      .filter(path => path && (rejected.has(path) || isAgentPlatformPath(path)));
+      .filter(path => path && isAgentPlatformPath(path));
     try {
       const commit = await deliveryCommitTree({ cwd, head, baseline: contribution.base_sha,
         parents: [anchor, ...(preserveTarget ? [contribution.base_sha] : [])], restorePaths,
         configs: [["user.name", "mae-flow-cloud"], ["user.email", "cloud@mae-flow.local"],
           ...gitCommitIdentityConfigs(this.options.gitCredential?.(task.summary.luban_account))],
-        message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", "按已确认范围整理修复提交"),
+        message: cloudCommitSubject(task.summary.ticket ?? task.summary.id, "fix", "清理提交中的平台本地目录"),
       });
       const afterPaths = normalizedDeliveryPaths((await run(["diff", "--name-only", "-z",
         contribution.base_sha, commit, "--"], "复核整理后的范围")).split("\0"));
@@ -16955,7 +16855,7 @@ export class TaskService {
       if (restorePaths.length) await run(["restore", "--source", commit, "--staged", "--",
         ...restorePaths.map(path => `:(literal)${path}`)], "更新排除项索引");
     } catch (error) {
-      const detail = `按已确认范围自动整理失败：${String(error)}。工作区内容保留，可查看代码并补充处理要求。`;
+      const detail = `平台本地目录清理失败：${String(error)}。工作区内容保留，可查看代码并补充处理要求。`;
       task.summary.status = "failed";
       task.summary.detail = detail;
       task.summary.delivery = { ...task.summary.delivery, skipped: detail };
@@ -16963,49 +16863,11 @@ export class TaskService {
       return "blocked";
     }
 
-    this.registerAgentPlatformLocalExcludes(cwd, selection.excluded_paths);
+    this.registerAgentPlatformLocalExcludes(cwd);
     this.options.log?.(
-      `任务 ${task.summary.id} 已自动移除修复重新带入的排除内容：${
-        describeDirtyPaths([...new Set([...unexpected, ...platformHistory])])}`);
+      `任务 ${task.summary.id} 已移除提交历史中的平台本地目录：${
+        describeDirtyPaths([...new Set([...platformPaths, ...platformHistory])])}`);
     return "changed";
-  }
-
-  /** 用户在 MR 工作台点“提交并继续修改”，已经授权 Agent 为落实这些
-   * 意见调整当前 MR 的业务文件集合。既有人工排除仍是硬边界，平台目录
-   * 仍由宿主硬剔除；其余必要的新源码/测试先继承到候选集合，再由本轮
-   * 人工意见复检卡统一确认，不因为文件集合变化额外制造第二张卡。 */
-  private async inheritWorkspaceReviewDeliverySelection(
-    task: TaskState,
-  ): Promise<void> {
-    const loop = task.summary.delivery?.loop;
-    const selection = task.summary.delivery_selection;
-    if (!loop?.workspace_review_pending) return;
-    if (selection?.status !== "confirmed" || !task.cwd) {
-      loop.workspace_review_pending = false;
-      this.persist(task);
-      return;
-    }
-    const snapshot = await deliveryChangeSnapshot(task.cwd);
-    if (!snapshot?.baseline) return;
-    const paths = (await this.deliveryContribution(task, snapshot)).paths;
-    const rejected = new Set(normalizedDeliveryPaths(selection.excluded_paths));
-    // 这两类绝不靠“用户提交了检视意见”放宽。正常情况下前面的机械
-    // 清理已经移除；若仍在，保留 pending 让既有门禁明确停下。
-    if (paths.some((path) => rejected.has(path) || isAgentPlatformPath(path))) {
-      return;
-    }
-    task.summary.delivery_selection = {
-      ...selection,
-      paths,
-      observed_paths: snapshot.workspace_paths,
-      head: snapshot.head,
-      baseline: snapshot.baseline,
-      updated_at: new Date().toISOString(),
-    };
-    loop.workspace_review_pending = false;
-    this.persist(task);
-    this.options.log?.(
-      `任务 ${task.summary.id} 本地 MR 检视已更新本轮候选交付集合(${paths.length} 个文件)，等待同一轮人工复检`);
   }
 
   /** 中心能力注入目录绝不能靠 Agent 自觉。info/exclude 防普通 add，
@@ -17149,10 +17011,8 @@ export class TaskService {
       if (baselineGate === "blocked") return;
       // 清理历史目录限制卡，继续现有验证和交付确认。
       if (!await this.deliveryScopeAllowsPush(task)) return;
-      // 流水线修复若只把用户明确排除的过程件带回提交，宿主先机械收口，
-      // 不新增一道让 Agent 反复碰撞的门禁；真正的新业务文件仍在后面的
-      // 最终范围卡确认。避免把已排除文件带入后续推送。
-      if (await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") return;
+      // 平台注入目录不能发布；业务文件按本轮需求修复，不受旧勾选限制。
+      if (await this.reconcileDeliveryPlatformBoundary(task) === "blocked") return;
       if (!await this.agentPlatformChangesAllowPush(task)) return;
       if (await this.ensureCommitMessagePolicy(task) === "blocked") return;
       // 独立 Build-Fix 仅由显式验证请求启动。交付不再补跑编译或 UT，
@@ -17160,7 +17020,10 @@ export class TaskService {
       // 首次交付仍须在人工确认和 push 前核对远端 MR/分支事实。
       if (!knownMr
           && !await this.existingMergeRequestAllowsDelivery(task, epoch)) return;
-      await this.inheritWorkspaceReviewDeliverySelection(task);
+      if (task.summary.delivery?.loop?.workspace_review_pending) {
+        task.summary.delivery.loop.workspace_review_pending = false;
+        this.persist(task);
+      }
       if (!this.current(task, epoch)) return;
       // 平台检视回复必须在已有按需验证以及交付范围机械整理全部收敛后
       // 才绑定最终 HEAD 入 outbox。此前在普通 Agent 收口时就入队，
@@ -17197,15 +17060,13 @@ export class TaskService {
         }
         return;
       }
-      // 推送授权绑定当前工作区 HEAD，而不是可能属于旧版本的 Build-Fix
-      // 收据。远端推送仍复核此 SHA，避免确认后悄悄带走未检视的新提交。
+      // 传输绑定当前 HEAD，避免推送期间并发改写造成发布事实记错；
+      // 这个 SHA 检查不用于作废已有推送确认。
       const observedRevision = await this.prePushRevision(task);
       let expectedPushSha = observedRevision.sha;
       if (!await this.pushConfirmationSatisfied(task, branch)) return;
       const existingPushReceipt = task.summary.delivery?.git_push?.sha
         === expectedPushSha ? task.summary.delivery.git_push : undefined;
-      if (!existingPushReceipt
-          && !await this.deliverySelectionAllowsPush(task, branch)) return;
       const arTicket = String(task.summary.ticket ?? state?.config?.["单号"] ?? branch).trim();
       const mrDescription = savedMrDescription(task.humanGate, task.summary.id, arTicket);
       if (!mrDescription && !task.summary.delivery?.mr_url
@@ -17236,8 +17097,7 @@ export class TaskService {
         if (!await this.existingMergeRequestAllowsDelivery(task, epoch)) return false;
         if (await this.absorbForeignRemoteCommits(task, branch) === "blocked") return false;
         await this.syncTargetBeforePush(task, task.summary.delivery?.target_branch ?? baseline, epoch);
-        if (!this.current(task, epoch) || await this.reconcileConfirmedDeliveryBoundary(task) === "blocked") return false;
-        if (!await this.deliverySelectionAllowsPush(task, branch)) return false;
+        if (!this.current(task, epoch) || await this.reconcileDeliveryPlatformBoundary(task) === "blocked") return false;
         if (await this.reconcileFrozenBaselineAncestry(task, false) === "blocked") return false;
         if (task.summary.delivery?.loop?.kind === "review" && task.summary.delivery.loop.review_source === "platform") {
           const staged = await this.stageReviewReplies(task);
@@ -18122,7 +17982,7 @@ export class TaskService {
         ...artifacts.map((name) => `  ${resolve(task.summary.workspace, "pipeline", name)}`),
       ] : []),
       ...(task.summary.delivery_selection?.status === "confirmed" ? [
-        "- 本轮继承用户已经确认的最终推送范围。修流水线不是重新选文件：",
+        "- 历史文件选择供参考，不限制本轮落实需求和检视意见所需的修复：",
         deliverySelectionNote(
           task.summary.delivery_selection.paths,
           task.summary.delivery_selection.excluded_paths,
@@ -20108,23 +19968,22 @@ export class TaskService {
           throw new Error("Git 本地排除文件不是普通文件");
         }
       }
-      const current = existsSync(excludePath)
-        ? readFileSync(excludePath, "utf-8") : "";
+      const original = existsSync(excludePath) ? readFileSync(excludePath, "utf-8") : "";
+      const selection = [...this.tasks.values()].find(task => task.cwd === cwd)?.summary.delivery_selection;
+      const current = removeLegacyDeliveryExcludes(original, normalizedDeliveryPaths([
+        ...deliveryExcludedPaths, ...(selection?.paths ?? []), ...(selection?.excluded_paths ?? []),
+      ]));
       const lines = new Set(current.split("\n").map((line) => line.trim()));
-      const deliveryExcludes = normalizedDeliveryPaths(deliveryExcludedPaths)
-        .map((path) => `/${path}`);
       const missing = [
         ...AGENT_PLATFORM_LOCAL_EXCLUDES,
         ...FLOW_RUNTIME_LOCAL_EXCLUDES,
         "docs/req/",
-        ...deliveryExcludes,
       ]
         .filter((entry) => !lines.has(entry));
-      if (!missing.length) return;
+      if (!missing.length && current === original) return;
       writeFileSync(excludePath,
         `${current}${current && !current.endsWith("\n") ? "\n" : ""}`
-        + "# mae-flow: local assets excluded from this delivery\n"
-        + missing.join("\n") + "\n");
+        + (missing.length ? "# mae-flow: local runtime assets\n" + missing.join("\n") + "\n" : ""));
     } catch (error) {
       // 本地 ignore 是第一道减噪，不是唯一安全边界；push 前提交历史
       // 仍会硬校验。这里说清楚但不阻塞任务启动。

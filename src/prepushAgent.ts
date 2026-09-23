@@ -38,8 +38,7 @@ export interface PrePushRunRequest {
   baseline: string;
   /** 与宿主 push 前机械校验同源的人类可读规范。缺席时使用平台默认值。 */
   commitConvention?: string;
-  /** 用户已经确认过的最终交付边界。专项 Agent 可以修这些文件，但不能
-   * 把此前排除的本地过程件重新带进提交；真正收口仍由宿主机械复核。 */
+  /** 历史文件选择供回顾，不限制本轮必要修复。 */
   deliverySelection?: {
     paths: string[];
     excludedPaths: string[];
@@ -603,21 +602,9 @@ export function prePushMission(
   const deliverySelection = request.deliverySelection;
   const deliveryGuidance = deliverySelection ? [
     "",
-    "用户已经确认最终推送范围；这不是新的门禁，而是本轮修复必须继承的交付契约：",
-    `- 可以修改并提交已确认的 ${deliverySelection.paths.length} 个文件；`
-      + "同一文件内容变化不需要再次打扰用户。",
-    ...(deliverySelection.paths.slice(0, 300)
-      .map((path) => `  - ${path}`)),
-    ...(deliverySelection.paths.length > 300
-      ? [`  - …其余 ${deliverySelection.paths.length - 300} 个文件`] : []),
-    `- 此前明确排除的 ${deliverySelection.excludedPaths.length} 个本地文件`
-      + "不得重新 add/commit；它们留在工作区不影响 push，也不要求清空。",
-    ...(deliverySelection.excludedPaths.slice(0, 100)
-      .map((path) => `  - ${path}`)),
-    ...(deliverySelection.excludedPaths.length > 100
-      ? [`  - …其余 ${deliverySelection.excludedPaths.length - 100} 个文件`] : []),
-    "- 修复确实需要新增、删除或重命名业务文件时可以正常完成；Cloud 会只为"
-      + "新的业务范围重新请用户确认一次，不要用日志、过程文档或平台目录凑提交。",
+    "历史文件选择只整理当次提交，不限制本轮修复。按需求和责任人最新意见补齐实现、依赖、配置与测试，无需先扩清单，也不因文件增减重开确认。",
+    "此前未选择的文件可能是漏选，不能仅凭旧清单拒绝必要修复；用户明确要求不改或不交付的内容仍须遵守。",
+    "不要夹带构建产物或他人原有未提交修改；对照改动和验证结果，按准确路径暂存本轮有意交付的文件。",
   ] : [];
   const foreign = request.foreignCommits;
   const foreignGuidance = foreign?.count ? [

@@ -1,5 +1,4 @@
-/** 文件级交付清单：界面隐藏只是视图，真正的勾选必须绑定 Git 事实，
- * 返工时进入 Agent 上下文，push 前还要重新核对。 */
+/** 文件勾选按 Git 事实整理当次提交，历史选择不限制后续修复。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -10,6 +9,16 @@ import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { TaskControlError, TaskService } from "../src/taskService.ts";
 import { deliveryChangeSnapshot, readArtifact, DIFF_NAME } from "../src/artifacts.ts";
+import { removeLegacyDeliveryExcludes } from "../src/agentPlatformPaths.ts";
+
+test("旧清单 ignore 迁移只删除 Cloud 标记区的已知业务路径，保留用户与平台规则", () => {
+  const manual = "# user rules\n/missed.ts\n/build/\n";
+  const cloud = "# mae-flow: local assets excluded from this delivery\n/.claude/\n/missed.ts\n/retained.ts\n";
+  const after = "# user additions\n/missed.ts\n/notes/\n";
+  const migrated = removeLegacyDeliveryExcludes(manual + cloud + after, ["missed.ts"]);
+  assert.equal(migrated, manual + cloud.replace("/missed.ts\n", "") + after);
+  assert.equal(removeLegacyDeliveryExcludes(migrated, ["missed.ts"]), migrated);
+});
 
 async function until<T>(
   probe: () => T | undefined,
@@ -216,11 +225,11 @@ test("有外来提交时机械重组不越过它:人推的代码不会被 reset 
     repo.git("commit", "--quiet", "-m", "fix: 修复顺手带回产物");
 
     const outcome = await (service as any)
-      .reconcileConfirmedDeliveryBoundary(internal);
+      .reconcileDeliveryPlatformBoundary(internal);
 
-    assert.equal(outcome, "changed");
-    assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "",
-      "已排除的产物仍要退出提交");
+    assert.equal(outcome, "unchanged");
+    assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "target/classes/Feature.class",
+      "历史勾选不再自动撤销本轮有意提交的文件");
     assert.equal(repo.git("merge-base", "--is-ancestor", foreign, "HEAD"), "",
       "人推的提交必须仍是 HEAD 的祖先");
     assert.equal(repo.git("show", "HEAD:hotfix.txt"), "human hotfix",
@@ -252,13 +261,13 @@ test("首次推送不能把含排除文件和平台目录历史的检视 HEAD �
     writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
     repo.git("add", "src/feature.ts");
     repo.git("commit", "--quiet", "-m", "review repair after confirmation");
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
-    assert.equal(repo.git("diff", "--name-only", baseline, "HEAD"), "src/feature.ts");
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "changed");
+    assert.equal(repo.git("diff", "--name-only", baseline, "HEAD"), "src/feature.ts\ntarget/classes/Feature.class");
     assert.equal(repo.git("show", "HEAD:src/feature.ts"), "export const value = 2;");
     assert.equal(repo.git("log", "--format=", "--name-only", `${baseline}..HEAD`, "--", ".claude"), "",
       "先提交后删除的平台文件也不应随历史推送");
     assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged",
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged",
       "重试不重复整理或再生一道门禁");
   } finally {
     await service.shutdown(); await model.stop();
@@ -298,7 +307,7 @@ test("合入 master 的排除路径和平台目录不算本任务新增，脏文
     assert.ok(!snapshot.workspace_paths.includes("upstream.txt"));
     assert.match(readArtifact(repo.cwd, DIFF_NAME)!.content, /generated binary/);
     assert.doesNotMatch(readArtifact(repo.cwd, DIFF_NAME)!.content, /master change|upstream skill/);
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged");
     assert.equal(await (service as any).agentPlatformChangesAllowPush(internal), true);
     const review = await (service as any).buildPushReviewPresentation(internal, snapshot, false);
     assert.equal(review.base_sha, upstream, "上轮 push 到 merge HEAD 的差异不能冒充本轮任务增量");
@@ -308,7 +317,7 @@ test("合入 master 的排除路径和平台目录不算本任务新增，脏文
   } finally { await service.shutdown(); await model.stop(); rmSync(repo.cwd, { recursive: true, force: true }); }
 });
 
-test("整理已排除提交只用提交树，不夹带或丢失业务暂存、未暂存和编译产物", async () => {
+test("平台目录整理只用提交树，历史未选文件与业务暂存、未暂存均不丢失", async () => {
   const repo = repository();
   const { service, model, internal } = await waitingService(repo);
   try {
@@ -318,21 +327,24 @@ test("整理已排除提交只用提交树，不夹带或丢失业务暂存、�
       excluded_paths: ["target/classes/Feature.class"], observed_paths: ["src/feature.ts"], head: pushed, baseline, waiting_id: "old", updated_at: "now" };
     writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 2;\n");
     repo.git("add", "src/feature.ts", "target/classes/Feature.class"); repo.git("commit", "-qm", "repair and unwanted output");
+    mkdirSync(join(repo.cwd, ".claude"));
+    writeFileSync(join(repo.cwd, ".claude", "injected.md"), "platform only");
+    repo.git("add", "-f", ".claude/injected.md"); repo.git("commit", "-qm", "accidental platform file");
     writeFileSync(join(repo.cwd, "README.md"), "staged intent\n"); repo.git("add", "README.md");
     writeFileSync(join(repo.cwd, "README.md"), "unstaged intent\n");
     writeFileSync(join(repo.cwd, "src/feature.ts"), "uncommitted source\n");
     writeFileSync(join(repo.cwd, "user-new.ts"), "new staged source\n"); repo.git("add", "user-new.ts");
     mkdirSync(join(repo.cwd, "imap")); writeFileSync(join(repo.cwd, "imap/output.o"), "output");
     const staged = repo.git("diff", "--cached");
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "changed");
     assert.equal(repo.git("show", "HEAD:src/feature.ts"), "export const value = 2;");
     assert.equal(repo.git("diff", "--cached"), staged, "业务暂存保持原样");
     assert.equal(readFileSync(join(repo.cwd, "README.md"), "utf8"), "unstaged intent\n");
     assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf8"), "uncommitted source\n");
     assert.equal(readFileSync(join(repo.cwd, "imap/output.o"), "utf8"), "output");
     assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
-    assert.equal(repo.git("ls-files", "target/classes/Feature.class"), "");
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+    assert.equal(repo.git("ls-files", "target/classes/Feature.class"), "target/classes/Feature.class");
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged");
   } finally { await service.shutdown(); await model.stop(); rmSync(repo.cwd, { recursive: true, force: true }); }
 });
 
@@ -353,7 +365,7 @@ test("无法清理已推送的平台目录历史时恢复原提交并报告具�
     writeFileSync(join(repo.cwd, "src/feature.ts"), "export const value = 3;\n");
     repo.git("add", "src/feature.ts"); repo.git("commit", "--quiet", "-m", "new repair");
     const original = repo.git("rev-parse", "HEAD");
-    assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "blocked");
+    assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "blocked");
     assert.equal(repo.git("rev-parse", "HEAD"), original);
     assert.equal(readFileSync(join(repo.cwd, "src/feature.ts"), "utf8"), "export const value = 3;\n");
     assert.match(internal.summary.detail, /原提交、索引与工作区均未修改/);
@@ -426,7 +438,7 @@ for (const current of ["external_verify", "end", "rework"]) {
       } else {
         await until(() => service.get(task.id)?.waiting?.step === "cloud_push_confirm" ? true : undefined, "直接回到推送确认卡");
         assert.equal(service.get(task.id)?.delivery_selection?.status, "requested", "重跑不伪造确认");
-        assert.equal(repo.git("diff", "--name-only", baseline, "HEAD"), "src/feature.ts");
+        assert.equal(repo.git("diff", "--name-only", baseline, "HEAD"), "src/feature.ts\ntarget/classes/Feature.class");
         assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
         assert.equal((service as any).queue.length, 0, "不派编码 Agent 查询不存在的流水线");
       }
@@ -466,11 +478,11 @@ for (const status of ["requested", "confirmed"] as const) {
       assert.equal(internal.summary.delivery_selection.status, status, "修路径不伪造用户确认");
       assert.ok(internal.summary.delivery_selection.paths.includes(paths[0]), "存量八进制路径已恢复");
       assert.deepEqual(internal.summary.delivery_selection.observed_paths, [paths[0]]);
-      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "changed");
+      assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged");
       for (const path of paths) assert.equal(repo.git("show", `HEAD:${path}`), "keep exactly");
-      assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "");
+      assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "target/classes/Feature.class");
       assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
-      assert.equal(await (service as any).reconcileConfirmedDeliveryBoundary(internal), "unchanged");
+      assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged");
       // 确认卡明确去掉中文文档和含 glob 字符的文件，也必须按准确文件执行。
       writeFileSync(join(repo.cwd, "src/a.ts"), "unrelated\n");
       repo.git("add", "src/a.ts"); repo.git("commit", "-qm", "unrelated file");
