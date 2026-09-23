@@ -4597,9 +4597,11 @@ export async function getIssueTicketTemplate(id: string): Promise<string | null>
 }
 
 export function controlIssue(id: string, input: {
-  action: "cancel" | "archive";
+  action: "cancel" | "archive" | "revive";
   kind?: "non_issue" | "delivered" | "issue";
   summary?: string;
+  /** revive 专用(ADR-0055):操作者一句话说明,随恢复回合送达 AI。 */
+  note?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
     method: "POST",
