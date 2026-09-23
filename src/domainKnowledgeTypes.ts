@@ -5,6 +5,8 @@ export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
 export interface DomainDocument extends DomainDocumentContent {
+  /** 用户在归档设置中指定的完整相对路径；模型输出不能设置此字段。 */
+  archive_path?: string;
   revision: number; selected: boolean; base_content: string | null; base_revision: string;
   history: Array<{ revision: number; content: string; sources: string; title: string; operator: string; at: string }>;
   knowledge_document_id?: string;

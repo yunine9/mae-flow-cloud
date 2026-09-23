@@ -9,6 +9,29 @@ import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 
+test("逐文件归档真实提交根目录与子目录，已有根目录规范仍需核对", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-path-publish-")), source = join(root, "source"), remote = join(root, "remote.git");
+  mkdirSync(source);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  git(source, "init", "-b", "master"); writeFileSync(join(source, "AGENTS.md"), "旧规范\n"); writeFileSync(join(source, "code.ts"), "源码\n");
+  git(source, "add", "."); git(source, "-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "fixture"); git(root, "clone", "--bare", source, remote);
+  const server = createServer((_req, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ id: 1, url: "https://example.test/mr/1" })); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
+  const target = { id: "domain", name: "知识仓", repository: remote, branch: "master", path: "", docs_path: "docs/knowledge" };
+  const job: DomainKnowledgeJob = { id: "dkx-paths", title: "规则", scope: "规则", issue_no: "REQ-files", operator: "user", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], ar_codes: [], use_wxdoubao: true, status: "done", stage: "归档", revisions: {}, turns: [], evidence: [], publications: [], documents: ["AGENTS.md", "docs/domain/rules.md", "guides/extra.md"].map((path, index) => ({ id: `doc-${index}`, title: path, path, archive_path: path, target_id: "domain", layer: "domain", content: "新知识", sources: "已核对源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] })) };
+  try {
+    await assert.rejects(publisher.publish(job, target, undefined, "user", () => {}), /已有他人修改/);
+    const snapshot = await publisher.readRemote(job, job.documents[0], "user");
+    assert.equal(snapshot.target_content, "旧规范\n"); job.documents[0].remote_review = { ...snapshot, reviewed: true };
+    const publication = await publisher.publish(job, target, undefined, "user", () => {});
+    assert.equal(publication.state, "opened");
+    for (const doc of job.documents) assert.match(git(remote, "show", `${publication.branch}:${doc.path}`), /新知识/);
+    assert.equal(git(remote, "show", `${publication.branch}:code.ts`), "源码");
+    assert.equal(git(remote, "show", "master:AGENTS.md"), "旧规范");
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库、新一轮保留其他文件及人工修改", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-publish-")), remote = join(root, "remote.git"), source = join(root, "source");
   mkdirSync(source); const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();

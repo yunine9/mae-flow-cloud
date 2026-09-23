@@ -12,6 +12,7 @@ job.evidence = [
   { tool: "research_note", preview: "## 阶段结论\n正在核对取消订单的边界。" },
   { tool: "business_knowledge", action: "knowledge_search", status: "available", query: { question: "订单取消规则" }, result: { source: "业务规格", content: "检索依据正文" } },
 ];
+job.documents.push({ ...job.documents[1], id: "agents", title: "模型生成的规范主题", path: "docs/business/AGENTS.md", content: "# 仓库规范\n遵守业务规则。" });
 const skill = { name: "domain-knowledge-extraction", digest: "first", can_manage: true, files: { "SKILL.md": "---\nname: domain-knowledge-extraction\ndescription: 领域知识方法\n---\n读取本包引用。", "references/domain.md": "研究领域规则。" }, versions: [] };
 const calls: any[] = [], errors: string[] = [];
 let taskDeleted = false;
@@ -30,6 +31,7 @@ window.fetch = async (url, options) => {
       for (const doc of job.documents.filter(d => d.target_id === old.id)) { doc.path = target.docs_path + doc.path.slice(old.docs_path.length); delete doc.remote_review; }
       Object.assign(old, target);
     }
+    for (const entry of input.documents ?? []) { const doc = job.documents.find(d => d.id === entry.id)!; doc.path = entry.path; doc.archive_path = entry.path; delete doc.remote_review; }
     job.archive_configured = true; job.archive_revision = (job.archive_revision ?? 0) + 1; result = job;
   }
   else if (path === "/domain-extraction/dkx-browser/delete") { calls.push({ action: "delete" }); taskDeleted = true; result = { deleted: true }; }
@@ -79,17 +81,16 @@ async function run() {
   check(record.open && record.querySelector('pre')!.getClientRects().length, "record expands to actual source output");
   await click("全部折叠"); check(!progress.querySelector('details[open]'), "collapse all closes detail while retaining summaries");
   await click("审查与修订");
-  const outline = document.querySelector('[aria-label="知识主题与章节"]')!;
-  check(outline.textContent?.includes("取消边界"), "knowledge headings visible");
-  check(!/domains\/trade|docs\/business|仓外|仓内/.test(outline.textContent ?? ""), "outline organizes knowledge without repository paths");
-  [...outline.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "取消边界")!.click(); await pause();
-  check(document.activeElement?.textContent === "取消边界", "chapter navigation focuses rendered Markdown heading");
+  const outline = document.querySelector('[aria-label="知识仓库与文件"]')!;
+  check(outline.textContent?.includes("交易领域知识仓") && outline.textContent?.includes("订单服务"), "files grouped by repository");
+  check(outline.textContent?.includes("states.md") && outline.textContent?.includes("integration.md"), "tree displays filenames");
+  check(!outline.textContent?.includes("取消边界") && !outline.textContent?.includes("订单状态与取消规则"), "tree has no generated topic or heading hierarchy");
   const original = job.documents[0].content;
   await type("领域知识修订意见", "取消为什么需要校验发货状态？"); await click("仅讨论"); check(job.documents[0].content === original, "discussion is read-only");
   await type("领域知识修订意见", "补充取消时的前置校验"); await click("生成建议"); check(job.documents[0].content === original, "proposal cannot auto-apply");
   await click("差异"); check(button("采纳建议") && !button("采纳建议").disabled, "proposal can be reviewed");
   await click("编辑"); await type("编辑领域文档", original + "\n\n人工补充的边界条件。");
-  await click("订单服务的跨仓职责修订 1"); await click("订单状态与取消规则修订 1");
+  await click("integration.md"); await click("states.md");
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching knowledge topics preserves unsaved edits");
   await click("知识文档");
   check(!document.querySelector('[aria-label="知识萃取类型"]'), "document page has no extraction type tabs");
@@ -116,9 +117,18 @@ async function run() {
   };
   check(document.querySelector<HTMLInputElement>('input[aria-label="domain 归档文档目录"]')?.value === "domains/trade", "archive shows default directory");
   await fillInput("domain 归档文档目录", "archive/trade");
+  await fillInput("repo-1 归档文档目录", "docs/new");
+  const archive = document.querySelector('[aria-label="领域知识归档位置"]')!;
+  archive.querySelectorAll<HTMLDetailsElement>('details').forEach(node => { node.open = true; }); await pause();
+  check(archive.textContent?.includes("AGENTS.md") && !archive.textContent?.includes("docs/new/AGENTS.md"), "AGENTS defaults to root while ordinary documents move together");
+  check(!archive.querySelector('input[aria-label="integration 文件归档路径"]'), "per-file editing is hidden by default");
+  archive.querySelector<HTMLButtonElement>('[aria-label="调整 integration.md 归档路径"]')!.click(); await pause();
+  await fillInput("integration 文件归档路径", "docs/interfaces/integration.md");
   check(button("一键创建或更新 MR").disabled, "unsaved archive location blocks publication");
   await click("保存归档位置并检查已有文档");
   check(job.documents[0].path === "archive/trade/states.md", "archive choice maps knowledge to target path");
+  check(job.documents.find(d => d.id === "agents")?.path === "AGENTS.md", "root rules saved without filling a file path");
+  check(job.documents.find(d => d.id === "integration")?.path === "docs/interfaces/integration.md", "one-off file path saved independently");
   check(!!job.documents[0].remote_review, "new location is compared with existing documents");
   await click("＋ 新建萃取任务");
   const createDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(d => d.getClientRects().length && d.textContent?.includes("新建领域知识萃取"))!;

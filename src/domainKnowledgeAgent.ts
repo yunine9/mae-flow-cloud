@@ -41,7 +41,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   });
   const documentTool = defineTool({
     name: "knowledge_draft", label: "保存领域知识草稿",
-    description: "read 列出本次文档，id 读取全文；save 保存新文档或本轮选中文档的修订建议。目标编号 domain 为知识仓，repo-* 为对应业务仓；文件必须在指定文档目录。不能修改源码、创建 MR 或直接采纳建议。",
+    description: "read 列出本次文档，id 读取全文；save 保存新文档或本轮选中文档的修订建议。目标编号 domain 为知识仓，repo-* 为对应业务仓；新文件使用默认文档目录，已有文件保持用户设置的完整路径（可能是根目录 AGENTS.md）。不能更换已有文件路径、修改源码、创建 MR 或直接采纳建议。",
     parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("save")]), id: Type.Optional(Type.String()),
       document: Type.Optional(Type.Object({ id: Type.String(), title: Type.String(), target_id: Type.String(), path: Type.String(), layer: Type.Union([Type.Literal("domain"), Type.Literal("repository")]), content: Type.String(), sources: Type.String() })) }),
     async execute(_id: string, params: { action: "read" | "save"; id?: string; document?: DomainDocumentContent }) {

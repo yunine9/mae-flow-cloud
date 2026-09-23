@@ -152,7 +152,7 @@ export class DomainKnowledgeExtraction {
     } finally { this.publishing.delete(id); }
     return action === "start" ? this.run(id, { mode: "extract", message: job.scope }, operator) : this.get(id);
   }
-  configureArchive(id: string, input: { targets: unknown; base_revision?: number }) {
+  configureArchive(id: string, input: { targets: unknown; documents?: unknown; base_revision?: number }) {
     const job = this.live(id);
     if (job.component_research_id) throw new Error("请使用组件归档设置");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成再设置归档位置");
@@ -171,14 +171,32 @@ export class DomainKnowledgeExtraction {
       else candidate.repositories = candidate.repositories.map(t => t.id === next.id ? next : t);
       if (!changed && job.archive_configured !== false) continue;
       const remap = (path: string) => {
-        if (!path.startsWith(`${old.docs_path}/`)) throw new Error("草稿目录与归档目标不一致");
+        if (!path.startsWith(`${old.docs_path}/`)) return path;
         return `${next.docs_path}/${path.slice(old.docs_path.length + 1)}`;
       };
       for (const doc of candidate.documents.filter(d => d.target_id === old.id)) {
-        doc.path = remap(doc.path); doc.base_content = null; doc.base_revision = ""; delete doc.remote_review;
+        if (!doc.archive_path) doc.path = remap(doc.path);
+        doc.base_content = null; doc.base_revision = ""; delete doc.remote_review;
       }
-      for (const turn of candidate.turns) for (const proposal of turn.proposals.filter(p => p.document.target_id === old.id)) proposal.document.path = remap(proposal.document.path);
+      for (const turn of candidate.turns) for (const proposal of turn.proposals.filter(p => p.document.target_id === old.id)) proposal.document.path = candidate.documents.find(d => d.id === proposal.document.id)?.path ?? remap(proposal.document.path);
       candidate.cleanup_plans = candidate.cleanup_plans?.filter(p => p.target_id !== old.id);
+    }
+    if (input.documents !== undefined) {
+      if (!Array.isArray(input.documents)) throw new Error("请提供各文件的归档路径");
+      const documentIds = new Set<string>();
+      for (const value of input.documents) {
+        const doc = candidate.documents.find(d => d.id === value?.id);
+        if (!doc || documentIds.has(doc.id)) throw new Error("归档文件无效或重复");
+        documentIds.add(doc.id);
+        const path = knowledgeRelativePath(value.path, true);
+        if (path !== doc.path) {
+          if ([...job.publications, ...(job.publication_history ?? [])].some(p => p.target_id === doc.target_id)) throw new Error("此仓已发起归档，不能更换文件路径；后续更新继续使用原路径");
+          doc.path = path; doc.base_content = null; doc.base_revision = ""; delete doc.remote_review;
+          for (const turn of candidate.turns) for (const proposal of turn.proposals.filter(p => p.document.id === doc.id)) proposal.document.path = path;
+          candidate.cleanup_plans = candidate.cleanup_plans?.filter(p => p.target_id !== doc.target_id);
+        }
+        doc.archive_path = path;
+      }
     }
     const targets = [candidate.knowledge_target, ...candidate.repositories], paths = new Set<string>();
     for (const doc of candidate.documents.filter(d => d.selected)) {
@@ -229,7 +247,8 @@ export class DomainKnowledgeExtraction {
     const target = [job.knowledge_target, ...job.repositories].find(r => r.id === input.target_id);
     if (!target || input.layer !== (target.id === "domain" ? "domain" : "repository")) throw new Error("领域文档进入知识仓，仓内文档进入对应业务仓");
     const path = knowledgeRelativePath(input.path, true);
-    if (!path.startsWith(`${target.docs_path}/`)) throw new Error("文档只能写入本次指定的文档目录");
+    const approved = job.documents.find(doc => doc.id === input.id && doc.target_id === input.target_id)?.archive_path;
+    if (!path.startsWith(`${target.docs_path}/`) && path !== approved) throw new Error("文档只能写入默认目录或已设置的文件归档路径");
     if (job.documents.some(doc => doc.id !== input.id && doc.target_id === input.target_id && doc.path === path)) throw new Error("该目标文件已有草稿，请更新原编号");
     scanForSecrets("领域知识草稿", Buffer.from(JSON.stringify(input)));
   }
