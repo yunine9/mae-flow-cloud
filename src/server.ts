@@ -101,7 +101,7 @@ import {
 } from "./taskService.ts";
 import { PLANTUML_SOURCE_LIMIT, renderPlantUml } from "./plantumlRender.ts";
 import { REVIEW_ASSET_MAX_BYTES, ReviewAssetError } from "./reviewAssets.ts";
-import { buildTimeline } from "./timeline.ts";
+import { buildTimelineAsync } from "./timeline.ts";
 import { streamExecutionEvents } from "./executionEvents.ts";
 import {
   ArtifactArchiveTooLargeError,
@@ -2755,7 +2755,7 @@ export function createTaskServer(
           const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
           if (request.method === "GET") {
-            return json(response, 200, service.developerAssistant(id));
+            return json(response, 200, await service.developerAssistantAsync(id));
           }
           if (request.method === "POST") {
             if (!canOperate(viewer, target.luban_account, !!options.auth)) {
@@ -2782,7 +2782,7 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "interrupts") {
           const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          return json(response, 200, service.listInterrupts(id));
+          return json(response, 200, await service.listInterruptsAsync(id));
         }
         // 检视批注:圈注权和送达权分开——谁都能圈。作者可提交自己的
         // 意见；任务责任人还可以原样转交他人的意见，但不能改写或替他
@@ -3114,14 +3114,14 @@ export function createTaskServer(
         if (request.method === "GET" && parts[2] === "activity") {
           const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          return json(response, 200, service.activity(id));
+          return json(response, 200, await service.activityAsync(id));
         }
         // 会话流(只读):人和 Agent 之间的回合。权限口径同任务详情;
         // 纯展示,不参与判定。
         if (request.method === "GET" && parts[2] === "conversation") {
           const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          return json(response, 200, service.conversation(id));
+          return json(response, 200, await service.conversationAsync(id));
         }
         // 交付时间线(只读):现场文件读成人话,权限口径同任务详情
         // ——能看任务就能看它经历了什么。纯展示,不参与判定。
@@ -3134,7 +3134,7 @@ export function createTaskServer(
             ?? service.panelFile(id, "panel-pulse.js");
           const cwd = panel ? dirname(dirname(panel)) : undefined;
           return json(response, 200,
-            buildTimeline(target.workspace, cwd));
+            await buildTimelineAsync(target.workspace, cwd, await service.readDisplayEvents(id)));
         }
         // 越界裁决(单仓拆分负责面门禁):裁决权只在主责任人手里——
         // 单元责任人自己放行自己的越界,边界就形同虚设。
@@ -3465,47 +3465,68 @@ function streamJsonlAsSse(
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
   });
+  response.flushHeaders();
   let activePath: string | undefined;
   let offset = 0;
-  let carry = Buffer.alloc(0);
+  let carry: Buffer[] = [], carryBytes = 0;
   let closed = false;
-  response.on("close", () => (closed = true));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let pending: string[] = [], next = 0;
+  let hasMore = false;
+  let inode: number | undefined;
+  response.on("close", () => {
+    closed = true; clearTimeout(timer); response.removeListener("drain", push); pending = []; carry = []; carryBytes = 0;
+  });
   const push = () => {
     if (closed) return;
+    while (next < pending.length) {
+      const line = pending[next++];
+      if (line.trim() && !response.write(`data: ${line}\n\n`)) {
+        response.once("drain", push); return;
+      }
+    }
+    pending = []; next = 0;
     const path = resolvePath();
     if (path !== activePath) {
       // 换文件(prepush 换轮)= 新的一份日志,从头放;半行缓存作废。
       activePath = path;
       offset = 0;
-      carry = Buffer.alloc(0);
+      carry = []; carryBytes = 0;
+      inode = undefined;
     }
-    if (path && existsSync(path) && statSync(path).size > offset) {
+    hasMore = false;
+    if (path && existsSync(path)) {
+      const stat = statSync(path);
+      if (inode !== stat.ino || stat.size < offset) { offset = 0; carry = []; carryBytes = 0; }
+      inode = stat.ino;
       const fd = openSync(path, "r");
       let read = 0;
       let chunk: Buffer;
       try {
-        chunk = Buffer.alloc(statSync(path).size - offset);
+        chunk = Buffer.alloc(Math.min(256 * 1024, Math.max(0, stat.size - offset)));
         read = readSync(fd, chunk, 0, chunk.length, offset);
       } finally {
         closeSync(fd);
       }
       offset += read;
-      carry = Buffer.concat([carry, chunk.subarray(0, read)]);
-      const cut = carry.lastIndexOf(0x0a);
+      hasMore = offset < stat.size;
+      chunk = chunk.subarray(0, read);
+      const cut = chunk.lastIndexOf(0x0a);
       if (cut >= 0) {
-        const complete = carry.subarray(0, cut).toString("utf-8");
-        carry = Buffer.from(carry.subarray(cut + 1));
-        for (const line of complete.split("\n")) {
-          if (line.trim()) response.write(`data: ${line}\n\n`);
-        }
+        const complete = Buffer.concat([...carry, chunk.subarray(0, cut)], carryBytes + cut).toString("utf-8");
+        carry = []; carryBytes = 0;
+        pending = complete.split("\n");
+      }
+      if (cut + 1 < chunk.length) {
+        const rest = Buffer.from(chunk.subarray(cut + 1)); carry.push(rest); carryBytes += rest.length;
       }
     }
     const status = storedTask(service, id)?.status;
-    if (status === "completed" || status === "failed" || status === "canceled") {
+    if (!hasMore && !pending.length && (status === "completed" || status === "failed" || status === "canceled")) {
       response.end();
       return;
     }
-    setTimeout(push, 300);
+    timer = setTimeout(push, hasMore || pending.length ? 0 : 300);
   };
   push();
 }

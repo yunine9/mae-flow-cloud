@@ -288,6 +288,7 @@ import type {
   NotifyRecord,
 } from "./notifier.ts";
 import { EventLog, type SemanticEvent } from "./semanticEvents.ts";
+import { DisplayEventReader, annotationReply } from "./displayEvents.ts";
 import {
   buildActivity, readActivityEvents, type ActivityView,
 } from "./activity.ts";
@@ -1916,6 +1917,17 @@ function deliverySelectionNote(
 
 
 export class TaskService {
+  private readonly displayEvents = new DisplayEventReader({ log: message => this.options.log?.(message) });
+
+  async readDisplayEvents(id: string): Promise<SemanticEvent[]> {
+    if (!this.tasks.has(id)) throw new NotFoundError(`任务 ${id} 不存在`);
+    return this.displayEvents.read(this.eventLogPath(id));
+  }
+
+  async activityAsync(id: string) { return this.activity(id, await this.readDisplayEvents(id)); }
+  async conversationAsync(id: string) { return this.conversation(id, await this.readDisplayEvents(id)); }
+  async listInterruptsAsync(id: string) { return this.listInterrupts(id, await this.readDisplayEvents(id)); }
+  async developerAssistantAsync(id: string) { return this.developerAssistant(id, await this.readDisplayEvents(id)); }
   /** 没有部署级 public URL 时，记住最近一次已登录用户实际访问的地址。
    * 通知由该次请求触发时即可带上同事能访问的内网 Host，而不是回环地址。 */
   private observedLinkBase?: string;
@@ -4543,12 +4555,10 @@ export class TaskService {
     }
   }
 
-  /** 行为摘要(只读旁路):事件流折叠成"此刻在干嘛/干了什么/有什么
-   * 值得看"。每次现算,不留第二份状态;10~20 人规模下逐行读一遍
-   * 事件账本毫无压力,先别上缓存。 */
-  activity(id: string): ActivityView {
+  /** 行为摘要只呈现事实；HTTP 传入共享的异步增量读取结果。 */
+  activity(id: string, events = readActivityEvents(this.eventLogPath(id))): ActivityView {
     const task = this.tasks.get(id)!;
-    return buildActivity(readActivityEvents(this.eventLogPath(id)), {
+    return buildActivity(events, {
       running: task.summary.status === "running",
     });
   }
@@ -4556,12 +4566,11 @@ export class TaskService {
   /** 会话流(只读投影):事件账、决定账、批注账、反馈索引、开发助手
    * 往来拼成"谁对谁说了什么、现在轮到谁"。每本账各自降级,读不动的写进
    * problems——旁路绝不因一本账坏了把整栏拖没。 */
-  conversation(id: string): ConversationView {
+  conversation(id: string, events = readActivityEvents(this.eventLogPath(id))): ConversationView {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     const workspace = task.summary.workspace;
     const problems: string[] = [];
-    const events = readActivityEvents(this.eventLogPath(id));
     let waiting: WaitingRecord[] = [];
     try {
       waiting = task.humanGate.all();
@@ -4585,7 +4594,7 @@ export class TaskService {
     }
     let interrupts: ReturnType<TaskService["listInterrupts"]> = [];
     try {
-      interrupts = this.listInterrupts(id);
+      interrupts = this.listInterrupts(id, events as SemanticEvent[]);
     } catch {
       // listInterrupts 自己已 fail-open;这里只是双保险
     }
@@ -5065,11 +5074,11 @@ export class TaskService {
    * 不替你判断"已采纳"(那是推断,不是事实)。
    *
    * 锚点检查是旁路:读不到材料按"还在"放行,绝不因为它挡住人送意见。
+   * 同步操作只取批注与锚点；页面需要的 AI 回复由异步读侧提供。
    */
   listAnnotations(id: string): {
     items: Annotation[];
     checks: AnchorCheck[];
-    reply?: { texts: string[]; truncated: boolean };
   } {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
@@ -5078,7 +5087,7 @@ export class TaskService {
     const items = this.annotations(task).visible();
     const checks = reanchor(items, (artifact) =>
       this.annotationArtifactContent(task, artifact));
-    return { items, checks, reply: this.annotationReply(task, items) };
+    return { items, checks };
   }
 
   /** 工作台轮询专用异步读侧。先按 artifact 去重读取，再用同一份快照
@@ -5103,6 +5112,9 @@ export class TaskService {
     this.reconcileResolvedDecisionAnnotations(task);
     if (task.summary.delivery?.mr_url) importStoredExternalReviews(this.annotations(task), task.summary.workspace, task.summary.delivery.mr_url, task.summary.luban_account ?? "本地用户");
     const items = this.annotations(task).visible();
+    const reply = items.some(item => item.sent_at)
+      ? this.readDisplayEvents(id).then(events => annotationReply(events, items.map(item => item.sent_at)))
+        .catch(() => undefined) : Promise.resolve(undefined);
     const contents = new Map<string, string | undefined>();
     await Promise.all([...new Set(items.map((item) => item.artifact))]
       .map(async (artifact) => {
@@ -5126,7 +5138,7 @@ export class TaskService {
         ...(viewer?.person_name ? { person_name: viewer.person_name } : {}),
       },
     );
-    return { items, checks, closures, submission: this.annotationSubmissionView(task), reply: this.annotationReply(task, items) };
+    return { items, checks, closures, submission: this.annotationSubmissionView(task), reply: await reply };
   }
 
   private annotationSubmissionView(task: TaskState): AnnotationSubmissionView {
@@ -5161,51 +5173,6 @@ export class TaskService {
     };
   }
 
-  /** 最后一批批注送出之后,主会话 AI 说过的话——原样带给面板。
-   *
-   * 刻意不做逐条对应:从自由文本里猜"第几段对应第几条",配错了就把
-   * "AI 不同意"错挂到别的批注上,比不显示更害人(与"不推断已采纳"同根)。
-   * 用户拍板走轻的:"就把 ai 的话展示出来就行",对不对应人自己看。 */
-  private annotationReply(
-    task: TaskState,
-    items: Annotation[],
-  ): { texts: string[]; truncated: boolean } | undefined {
-    const sentTimes = items
-      .map((item) => item.sent_at ? +new Date(item.sent_at) : NaN)
-      .filter((at) => Number.isFinite(at));
-    if (!sentTimes.length) return undefined;
-    const lastSent = Math.max(...sentTimes);
-    try {
-      // 新事件是完整 ISO；旧事件是去掉 T/Z 的 UTC 裸串。只给旧格式补 Z，
-      // 不能给新格式再拼一个 Z（会得到 ...ZZ，整批回话因此被过滤掉）。
-      const instant = (ts: unknown) => {
-        const raw = String(ts ?? "").trim();
-        const candidate = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)
-          ? `${raw.replace(" ", "T")}Z`
-          : raw;
-        return new Date(candidate).getTime();
-      };
-      const texts = new EventLog(join(task.summary.workspace, "events.jsonl"))
-        .replay()
-        .filter((event) => event.kind === "assistant_message"
-          && String(event.sessionId ?? "main") === "main"
-          && instant(event.ts) > lastSent)
-        .map((event) => String(event.payload?.text ?? "").trim())
-        .filter(Boolean);
-      if (!texts.length) return undefined;
-      // 面板不是会话流,给个够看的量就好;截了要说,别装完整。
-      const kept = texts.slice(0, 8)
-        .map((text) => text.length > 1500 ? text.slice(0, 1500) + "…" : text);
-      return {
-        texts: kept,
-        truncated: texts.length > 8
-          || texts.slice(0, 8).some((text) => text.length > 1500),
-      };
-    } catch {
-      return undefined;   // 读不动就不带:旁路绝不挡住清单本身
-    }
-  }
-
   /** 发过的插话 + 送达与否。
    *
    * "我发了然后就没了,咋知道它消费了没"——发出去没有回执,等于让人对着
@@ -5220,7 +5187,7 @@ export class TaskService {
    * 口径仍是事实而非推断:**这些是你说完之后它说的话,不是"对你的回复"**。
    * 我们没法证明哪句是答你的(steer 在回合间隙送达,模型可能先把手头
    * 那段话说完),所以只按时间切片给到下一条插话为止,标签也这么写。 */
-  listInterrupts(id: string): Array<{
+  listInterrupts(id: string, preparedEvents?: SemanticEvent[]): Array<{
     /** 人写的附言原文;引用的知识正文不在这里,只给名字。 */
     text: string; at: string; delivered: boolean;
     /** 不走 steer 的两条路:随下一次决定送达 / 任务启动时并入使命。 */
@@ -5248,9 +5215,7 @@ export class TaskService {
         references?: string[];
         said: Array<{ text: string; at: string }>;
       }> = [];
-      for (const event of new EventLog(
-        join(task.summary.workspace, "events.jsonl"),
-      ).replay()) {
+      for (const event of preparedEvents ?? readActivityEvents(this.eventLogPath(id))) {
         if (event.kind === "user_message"
             && event.payload?.via === "interrupt") {
           // 送达判定必须拿送达用的整段正文去比队列;展示另给。
@@ -11989,7 +11954,7 @@ export class TaskService {
 
   /** 旁路开发助手的读侧：回复来自助手快照，命令/文件工具结果来自
    * 任务 SSE 正本。服务重启后没有活会话却仍写 running 时如实改中断。 */
-  developerAssistant(id: string): DeveloperAssistantView {
+  developerAssistant(id: string, preparedEvents?: SemanticEvent[]): DeveloperAssistantView {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
     let snapshot = readDeveloperAssistant(task.summary.workspace);
@@ -11997,9 +11962,7 @@ export class TaskService {
         && !task.assistantActive) {
       snapshot = interruptDeveloperAssistant(task.summary.workspace);
     }
-    const events = new EventLog(
-      join(task.summary.workspace, "events.jsonl"),
-    ).replay();
+    const events = preparedEvents ?? readActivityEvents(this.eventLogPath(id)) as SemanticEvent[];
     return {
       ...snapshot,
       messages: developerAssistantConversation(snapshot, events),
