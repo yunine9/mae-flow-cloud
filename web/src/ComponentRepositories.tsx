@@ -70,6 +70,7 @@ export function ComponentRepositories() {
       </div>
       <p className="mb-5 text-muted-foreground">
         维护可研究的源码范围与语言。按需同步源码、查找真实调用，提炼为待审查的知识草稿。所有团队成员均可维护。
+        业务模块也可在这里订阅「参考组件仓」：问题会话开场只注入订阅条目的说明，AI 据此决定是否拉取源码研读。
       </p>
       {error && (
         <p role="alert" className="mb-3 text-danger">
@@ -195,7 +196,7 @@ export function ComponentRepositories() {
               <label className="grid gap-2">
                 组件说明
                 <Textarea
-                  placeholder="可说明接口及发布线索，例如重点关注 interface/、idl/，结合 sdk/pom.xml 分析；有疑点的能力也可保留供专家核对。"
+                  placeholder="写何时需要读取：问题会话的 AI 据此决定是否拉取源码。也可说明接口及发布线索，例如重点关注 interface/、idl/，结合 sdk/pom.xml 分析；有疑点的能力也可保留供专家核对。"
                   value={edit.description ?? ""}
                   onChange={(e) =>
                     setEdit({ ...edit, description: e.target.value })

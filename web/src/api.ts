@@ -1508,6 +1508,8 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  /** 参考组件仓订阅(ADR-0054):公共组件仓登记表条目 id 引用。 */
+  reference_component_repos?: string[];
   status: "active" | "archived";
   revision: number;
   assets: BusinessKnowledgeAsset[];
@@ -1567,6 +1569,7 @@ export async function createBusinessModule(input: {
   owner?: string;
   maintainers?: string[];
   repositories: string[];
+  reference_component_repos?: string[];
 }): Promise<BusinessModule> {
   const response = await fetch("/business-modules", {
     method: "POST",
@@ -1579,7 +1582,8 @@ export async function createBusinessModule(input: {
 export async function updateBusinessModule(
   id: string,
   patch: Partial<Pick<BusinessModule,
-    "name" | "description" | "owner" | "maintainers" | "repositories" | "status">>,
+    "name" | "description" | "owner" | "maintainers" | "repositories"
+    | "reference_component_repos" | "status">>,
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
     method: "PUT",

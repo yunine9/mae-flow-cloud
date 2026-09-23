@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -17,6 +17,15 @@ import {
 } from "../src/businessModuleLibrary.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+
+/** 落一份公共组件仓登记表(组件知识研究线与问题流共用的数据文件)。 */
+function writeComponentRepositories(
+  dataDir: string,
+  rows: Array<Record<string, unknown>>,
+): void {
+  writeFileSync(join(dataDir, "component-repositories.json"),
+    JSON.stringify(rows));
+}
 
 test("业务模块全员维护；知识正文按版本发布且归档不删除历史", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-"));
@@ -97,6 +106,73 @@ test("业务模块全员维护；知识正文按版本发布且归档不删除�
     id: "../escape", name: "坏模块", description: "越界",
     owner: "owner-a",
   }, "admin-a"), BusinessModuleError);
+});
+
+test("模块参考组件仓订阅:存登记表条目引用,悬空引用拒绝,失效后保存打回", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-refcomp-"));
+  writeComponentRepositories(dataDir, [
+    { id: "comp-ui", name: "公共UI库",
+      repository: "https://code.example/ui.git", branch: "master",
+      path: "", languages: ["TypeScript"],
+      description: "公共表格组件源码;排查表格渲染问题时读取", enabled: true },
+    { id: "comp-old", name: "停用组件",
+      repository: "https://code.example/old.git", branch: "master",
+      path: "", languages: ["Java"],
+      description: "已停用的旧组件源码", enabled: false },
+  ]);
+  const created = createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "统一支付边界",
+    owner: "owner-a", repositories: ["https://code.example/pay.git"],
+    reference_component_repos: ["comp-ui", "comp-old"],
+  }, "admin-a");
+  assert.deepEqual(created.reference_component_repos, ["comp-ui", "comp-old"],
+    "订阅存条目引用(含停用条目——停用只是暂不注入,不是删除)");
+  // 引用去重;悬空引用保存打回。
+  assert.deepEqual(createBusinessModule(dataDir, {
+    id: "pay-edge", name: "边界模块", description: "重复订阅去重",
+    owner: "owner-a", repositories: ["https://code.example/edge.git"],
+    reference_component_repos: ["comp-ui", "comp-ui", " "],
+  }, "admin-a").reference_component_repos, ["comp-ui"]);
+  assert.throws(() => createBusinessModule(dataDir, {
+    id: "pay-ghost", name: "悬空模块", description: "引用不存在的条目",
+    owner: "owner-a", repositories: ["https://code.example/ghost.git"],
+    reference_component_repos: ["comp-ui", "ghost"],
+  }, "admin-a"), /引用的组件仓条目不存在：ghost/);
+  // 更新可改订阅、可清空;清空语义 = 显式传空数组(不传 = 维持现状)。
+  assert.deepEqual(updateBusinessModule(dataDir, created.id, {
+    reference_component_repos: [],
+  }, "owner-a").reference_component_repos, []);
+  updateBusinessModule(dataDir, created.id, {
+    reference_component_repos: ["comp-ui"],
+  }, "owner-a");
+  // 登记表条目事后被删:存量订阅标失效由展示层处理,但任何再保存
+  // 都会打回,迫使先清理悬空引用(失效不静默滞留)。
+  writeComponentRepositories(dataDir, []);
+  assert.throws(() => updateBusinessModule(dataDir, created.id, {
+    description: "顺手改说明",
+  }, "owner-a"), /引用的组件仓条目不存在：comp-ui/);
+  assert.equal(updateBusinessModule(dataDir, created.id, {
+    reference_component_repos: [],
+    description: "清理订阅后正常保存",
+  }, "owner-a").description, "清理订阅后正常保存");
+});
+
+test("模块编辑对话框:参考组件仓多选订阅,失效订阅提示,组件说明带填写指引", () => {
+  const dialog = readFileSync(
+    new URL("../web/src/ConfigurationCenter.tsx", import.meta.url), "utf-8");
+  // 多选选择器:选项来自公共组件仓登记表,勾选即订阅;停用条目可
+  // 订阅可取消(停用只是暂不注入,不是删除)。
+  assert.match(dialog, /参考组件仓（可选）/);
+  assert.match(dialog, /问题会话开场只注入这里勾选组件的「何时需要读取」描述/);
+  assert.match(dialog, /reference_component_repos: edit\.refs \?\? \[\]/);
+  assert.match(dialog, /components\.map\(c => <label key=\{c\.id\}/);
+  assert.match(dialog, /\(edit\.refs \?\? \[\]\)\.filter\(id => !components\.some\(c => c\.id === id\)\)\.length > 0/);
+  assert.match(dialog, /已失效订阅（条目已删除，保存前请取消勾选）/);
+  // 登记表页签:组件说明的填写指引面向问题会话的拉取决策。
+  const registry = readFileSync(
+    new URL("../web/src/ComponentRepositories.tsx", import.meta.url), "utf-8");
+  assert.match(registry, /写何时需要读取：问题会话的 AI 据此决定是否拉取源码/);
+  assert.match(registry, /业务模块也可在这里订阅「参考组件仓」/);
 });
 
 test("业务模块保存与更新强制至少绑定一个代码仓", () => {

@@ -1553,6 +1553,9 @@ export function createTaskServer(
               maintainers,
               repositories: Array.isArray(body.repositories)
                 ? body.repositories.map(String) : [],
+              reference_component_repos: Array.isArray(
+                body.reference_component_repos)
+                ? body.reference_component_repos.map(String) : [],
             }, operator)));
           }
           if (request.method === "GET" && parts.length === 2) {
@@ -1585,6 +1588,10 @@ export function createTaskServer(
                 repositories: body.repositories === undefined
                   ? undefined : Array.isArray(body.repositories)
                     ? body.repositories.map(String) : [],
+                reference_component_repos:
+                  body.reference_component_repos === undefined
+                    ? undefined : Array.isArray(body.reference_component_repos)
+                      ? body.reference_component_repos.map(String) : [],
                 status: body.status === undefined
                   ? undefined : String(body.status) as "active" | "archived",
               }, operator)));
