@@ -134,6 +134,40 @@ test("正式验证复用同一提交观察结果，只有交付接管后才裁�
   assert.deepEqual(verdicts, [{ sha, status: "success" }]); assert.equal(f.triggers(), 0);
 });
 
+test("交付等待点推送后无 MR，宿主接续创建而不轮询裸分支", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  let deliveries = 0;
+  service.tryDeliver = async () => { deliveries++; };
+  assert.equal(service.taskHostRuntime(task).watchPush(), true);
+  await until(() => deliveries === 1);
+  assert.equal(task.summary.status, "verifying");
+  assert.equal(f.queries(), 0);
+  assert.equal(f.triggers(), 0);
+  await service.pollPipeline(task, task.controlEpoch);
+  assert.equal(deliveries, 2, "旧的正式轮询入口也应转到同一交付入口");
+  assert.equal(f.queries(), 0);
+});
+
+test("重启恢复无 MR 的已推送任务，接续创建 MR 而非空转轮询", async t => {
+  const f = await fixture(t), { task, service } = f;
+  task.mission = undefined;
+  task.summary.status = "verifying";
+  task.summary.delivery.pipeline = "not_found";
+  writeFileSync(join(task.cwd, ".mae-flow.json"), JSON.stringify({ current: "external_verify" }));
+  service.persist(task);
+  await service.shutdown();
+  const restored: any = new TaskService(f.options);
+  t.after(() => restored.shutdown());
+  let deliveries = 0;
+  restored.tryDeliver = async () => { deliveries++; };
+  restored.recover();
+  await until(() => deliveries === 1);
+  assert.equal(f.queries(), 0);
+  assert.equal(restored.tasks.get(task.summary.id).summary.delivery.git_push.sha, sha);
+});
+
 for (const state of ["verifying", "paused", "waiting_for_human"] as const) test(`重启恢复提前验证现场：${state} 保留收据和目标`, async t => {
   const f = await fixture(t), { task, service } = f;
   task.summary.status = state; task.summary.delivery.pipeline = "running";

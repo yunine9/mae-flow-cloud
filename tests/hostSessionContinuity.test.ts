@@ -71,6 +71,20 @@ for (const action of ["pull_repo", "sync_branch", "push", "retry_verification"])
   });
 }
 
+test("推送后交付由宿主接管时不再唤醒 Agent", async t => {
+  const f = fixture(t), runtime = f.service.taskHostRuntime;
+  let handoffs = 0;
+  f.service.taskHostRuntime = (...args: any[]) => ({ ...runtime(...args),
+    watchPush: () => { handoffs++; return true; },
+  });
+  f.enqueue("push");
+  assert.equal(await f.service.finishHostAction(f.task), true);
+  assert.equal(handoffs, 1);
+  assert.equal(new TaskHostLedger(f.task.summary).read().operations.at(-1)?.state, "succeeded");
+  assert.equal(f.service.queue.includes(f.task.summary.id), false);
+  assert.equal(f.messages.length, 0);
+});
+
 test("目标登记不销毁会话或容器；明确重启才销毁", async t => {
   const f = fixture(t), epoch = f.task.controlEpoch;
   const host = f.service.taskHostRuntime(f.task);

@@ -8709,6 +8709,13 @@ export class TaskService {
           // 通用 verifying/任务队列分支启动第二条恢复链。
           continue;
         }
+        // 已推送且内核已交出工作区，却还没有 MR：继续原交付入口创建 MR。
+        // 只盯裸分支的 pipeline/status 不会让 MR 自己出现。
+        if (summary.status === "verifying" && !summary.delivery?.stalled
+            && this.needsMrAfterPush(task)) {
+          this.bypass(task, "恢复 MR 创建", this.tryDeliver(task, task.controlEpoch));
+          continue;
+        }
         if (this.recoverEarlyPipeline(task)) { requeued += 1; continue; }
         if (summary.status === "verifying"
             && !summary.delivery?.stalled
@@ -13978,6 +13985,14 @@ export class TaskService {
       watch: () => this.ensureMergeWatch(task),
       watchPush: () => {
         if (!this.effectivePlatformUrl()) return;
+        if (this.needsMrAfterPush(task)) {
+          task.summary.status = "verifying";
+          task.summary.detail = "代码已推送，正在接续创建 MR";
+          this.persist(task);
+          setImmediate(() => this.bypass(task, "推送后创建 MR",
+            this.tryDeliver(task, actionEpoch)));
+          return true;
+        }
         task.summary.delivery = { ...task.summary.delivery, pipeline: task.summary.delivery?.pipeline ?? "待查询", pipeline_background: true };
         this.persist(task); this.ensureMergeWatch(task);
         this.bypass(task, "提前推送验证监听", this.pollPipeline(task, actionEpoch, true));
@@ -17444,6 +17459,15 @@ export class TaskService {
         || (!task.mission && this.atHostDeliveryWait(task)));
   }
 
+  /** 只在 Agent 已交还工作区后接续交付；编码中的提前推送仍由原会话继续。 */
+  private needsMrAfterPush(task: TaskState): boolean {
+    return !!task.summary.delivery?.git_push?.sha
+      && !task.summary.delivery?.mr_url
+      && task.summary.delivery?.mr_id === undefined
+      && !task.driver && !task.mission && !task.pendingMainSteers?.length
+      && this.atHostDeliveryWait(task);
+  }
+
   /** 同一份远端事实有两种用途：编码期间供参考，交付期间驱动裁决。 */
   private async acceptPipelineRun(task: TaskState, sha: string, response: PipelineRun | undefined,
     epoch: number, background = false): Promise<boolean> {
@@ -17457,6 +17481,10 @@ export class TaskService {
   }
 
   private async pollPipeline(task: TaskState, epoch: number, background = false): Promise<void> {
+    if (this.needsMrAfterPush(task)) {
+      if (!background && task.summary.status === "verifying") await this.tryDeliver(task, epoch);
+      return;
+    }
     const sha = task.summary.delivery?.sha, platformUrl = this.effectivePlatformUrl();
     if (!platformUrl || !sha) return;
     // 提前验证按任务/SHA 存活；正式验证仍服从会话代际，二者共用单一监听槽。
@@ -17466,6 +17494,7 @@ export class TaskService {
     const current = () => !this.shuttingDown && this.tasks.get(task.summary.id) === task
       && !["completed", "canceled"].includes(task.summary.status)
       && task.summary.delivery?.sha === sha && task.pipelinePollSha === sha && task.pipelinePollEpoch === owner
+      && !this.needsMrAfterPush(task)
       && (background || (this.current(task, epoch) && task.summary.status === "verifying"));
     try {
       await watchTaskPipeline({

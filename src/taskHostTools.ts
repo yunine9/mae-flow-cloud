@@ -148,7 +148,8 @@ export interface TaskHostRuntime {
   push(branch: string, sha: string): Promise<NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>>;
   verify(): Promise<unknown>;
   watch(): void;
-  watchPush?(): void;
+  /** 已到交付等待点且尚无 MR 时，true 表示宿主接续创建 MR，不再唤醒 Agent。 */
+  watchPush?(): boolean | void;
   /** false 表示仅记录提前验证，调用者继续原目标；true/旧接口 void 表示交付接管。 */
   acceptPipeline(sha: string, run?: PipelineRun): Promise<boolean | void>;
   syncFeedback(): void;
@@ -390,7 +391,10 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         operation.state = "succeeded"; ledger.update(operation);
         if (handedOff) return true;
       }
-      host.watchPush?.();
+      if (host.watchPush?.()) {
+        operation.state = "succeeded"; ledger.update(operation);
+        return true;
+      }
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
