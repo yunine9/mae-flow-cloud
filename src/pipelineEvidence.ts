@@ -40,7 +40,7 @@ const COMPILE_ERROR = /(?:fatal error|\berror:|undefined reference|collect2:|ld(
 // 旧尺子对 Jest 输出全部不中:"Tests: 1 failed" 的 fail 不紧跟 tests、
 // "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。汇总行的冒号可选:
 // Jest 是 "Tests: 1 failed",Vitest 是 "Test Files 1 failed"。
-const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
+const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|\btest case failed\b|\bfailure total:\s*[1-9]\d*\b|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\[\s*FAILED\s*\]\s+[1-9]\d*\s+tests?\b|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
 const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
 
@@ -285,14 +285,19 @@ export function assessPipelineRepairEvidence(input: {
       }
       continue;
     }
-    // 结构化错误 JSON 与平台摘要抽取的短文本没有"按内容重新归维"的
-    // 空间:仍按 record 映射维度判定(缺省编译),尺子不变。
+    if (name.startsWith("build_error_excerpt_")) {
+      // 摘要保留了完整日志中的失败原文。CPP_UT 的 record 可能被平台
+      // 标作 build2.0，不能让这个弱标签覆盖明确的测试失败行。
+      const detected = sniffDimensions(text);
+      for (const dimension of detected) addSource(sources, dimension, name);
+      if (!detected.length && mapped && actionableStructuredError(text)) {
+        addSource(sources, mapped, name);
+      }
+      continue;
+    }
+    // 结构化错误 JSON 按 record 映射维度判定(缺省编译)。
     const dimension = mapped ?? "COMPILE";
-    const actionable = name.startsWith("build_error_excerpt_")
-      ? (dimension === "UT" ? UT_ERROR.test(text)
-        : actionableStructuredError(text))
-      : actionableStructuredError(text);
-    if (actionable) addSource(sources, dimension, name);
+    if (actionableStructuredError(text)) addSource(sources, dimension, name);
   }
 
   if (input.humanEvidence?.dimensions.length

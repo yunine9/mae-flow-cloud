@@ -64,10 +64,10 @@ from mcp_tool_contracts import (
 )
 
 MAX_ITEM_BYTES = 512 * 1024
-# PlatformAdapter 的 CLI stdout 上限是 8 MiB。这里把整个 JSON 包控制在
-# 6 MiB 内，给 JSON 列表标点、UTF-8 与 Node 解码留余量；不能只限制
-# 单文件，否则十几份构建日志会让“每份都合法、整包直接 502”。
-MAX_BUNDLE_BYTES = 6 * 1024 * 1024
+# 构建日志没有单文件 512 KiB 限制；整包仍留有界预算，避免异常平台
+# 响应无限占用适配器内存。只对 pipeline_artifacts 命令放宽到 128 MiB，
+# 其他命令沿用原来的 8 MiB。结构化失败片段先入包，超预算日志留清单。
+MAX_BUNDLE_BYTES = 100 * 1024 * 1024
 
 CODEHUB_API = os.environ.get(
     'MFC_CODEHUB_API', 'https://codehub-y.huawei.com/api/v4')
@@ -102,13 +102,20 @@ CODECCP_REST = os.environ.get(
 # CodeCheck 类 reviewtips 遍历的工具维度(toolkit 同款清单)。
 REVIEWTIP_TOOL_TYPES = ['codecheck', 'build2.0', 'codechecktest', 'CPP_UT']
 
-# 原始日志最终要过单文件/总包预算。结构化 get_build_error_info 是首选，
-# 但网关不可用时仍要把散落在长日志中段的编译/链接/测试失败片段单独
-# 摘出来，不能只靠“头 15% + 尾 85%”碰运气。
+# 原始日志最终要过总包预算。结构化 get_build_error_info 是首选，
+# 但网关不可用时仍要把散落在长日志中段的失败片段单独摘出来。
+# 测试汇总要先于尾部的报告工具报错呈现，避免把后果当成根因。
+UT_FAILURE_PATTERN = re.compile(
+    r'(?:\btest case failed\b|\bfailure total:\s*[1-9]\d*\b|'
+    r'\btests?:\s*[1-9]\d*\s+failed\b|'
+    r'\btest (?:suites|files)\s*:?\s*[1-9]\d*\s+failed\b|'
+    r'\[\s*FAILED\s*\]\s+[1-9]\d*\s+tests?\b)',
+    re.IGNORECASE)
 BUILD_ERROR_PATTERN = re.compile(
     r'(?:fatal error|\berror:|undefined reference|collect2:|'
     r'ld(?:\.lld)?: error|make(?:\[\d+\])?: \*\*\*|\[ERROR\]|'
-    r'killed signal|tests? failed|failures?!!!)',
+    r'killed signal|tests? failed|failures?!!!|'
+    + UT_FAILURE_PATTERN.pattern + r')',
     re.IGNORECASE)
 
 
@@ -622,20 +629,36 @@ def write_build_log(ctx: Context, rid: str, text: str, evidence: set) -> None:
     ctx.write_text(name, text)
     evidence.add(name)
     lines = text.splitlines()
-    hit_indexes = [index for index, line in enumerate(lines)
-                   if BUILD_ERROR_PATTERN.search(line)][:200]
-    if not hit_indexes:
+    test_hits = [index for index, line in enumerate(lines)
+                 if UT_FAILURE_PATTERN.search(line)]
+    other_hits = [index for index, line in enumerate(lines)
+                  if BUILD_ERROR_PATTERN.search(line)
+                  and not UT_FAILURE_PATTERN.search(line)]
+    if not test_hits and not other_hits:
         return
-    selected = set()
-    for index in hit_indexes:
-        selected.update(range(max(0, index - 3), min(len(lines), index + 6)))
+    def context(hit_indexes):
+        selected = set()
+        for index in hit_indexes:
+            selected.update(range(max(0, index - 3), min(len(lines), index + 6)))
+        excerpt_lines = []
+        previous = None
+        for index in sorted(selected):
+            if previous is not None and index > previous + 1:
+                excerpt_lines.append('... 中间无关日志省略 ...')
+            excerpt_lines.append(f'{index + 1}: {lines[index]}')
+            previous = index
+        return excerpt_lines
+
+    # 先展示测试失败原文，再展示编译/报告工具报错；早期的大量通用
+    # [ERROR] 不能占满名额，挤掉后面真正的测试失败行。
     excerpt_lines = []
-    previous = None
-    for index in sorted(selected):
-        if previous is not None and index > previous + 1:
-            excerpt_lines.append('... 中间无关日志省略 ...')
-        excerpt_lines.append(f'{index + 1}: {lines[index]}')
-        previous = index
+    if test_hits:
+        excerpt_lines.append('===== 测试失败原文（优先排查） =====')
+        excerpt_lines.extend(context(test_hits[:20] + test_hits[-20:]))
+    if other_hits:
+        if excerpt_lines:
+            excerpt_lines.append('===== 其他构建报错 =====')
+        excerpt_lines.extend(context(other_hits[:120] + other_hits[-40:]))
     excerpt = '\n'.join(excerpt_lines)
     excerpt = _truncate_utf8_head_tail(
         excerpt, 256 * 1024, head_ratio=0.5,
@@ -898,7 +921,7 @@ def run(project_path: str, sha: str, token: str, out_dir: str,
 
 
 # ---------------------------------------------------------------------------
-# 512KB 预算装箱(从 pipeline-artifacts.sh 收编的既有实现,语义不变)
+# 按总包预算装箱；普通材料有单文件上限，构建日志按剩余空间保留全文。
 # ---------------------------------------------------------------------------
 def _utf8_len(text):
     return len(text.encode('utf-8', errors='replace'))
@@ -1047,6 +1070,17 @@ def collect_output_items(out_dir: str) -> list:
                 content = fh.read()
         except OSError:
             continue
+        # 构建日志按总包剩余空间装载。单份 3 MiB 日志只要放得下就
+        # 原样交给 Agent；512 KiB 是普通材料的限额，不适用于原始日志。
+        log_budget = (MAX_BUNDLE_BYTES - 64 * 1024 - used_bytes
+                      - (1 if items else 0)) if name.startswith('build_log_') else None
+        if log_budget is not None and log_budget < 1024:
+            omitted.append({
+                'name': name,
+                'reason': 'artifact 总包超过 100 MiB，保留结构化证据优先',
+                'original_utf8_bytes': _utf8_len(content),
+            })
+            continue
         item = None
         if name.endswith('.json'):
             try:
@@ -1054,12 +1088,13 @@ def collect_output_items(out_dir: str) -> list:
             except json.JSONDecodeError:
                 pass
         if item is None:
-            item = fit_text_item(name, content)
+            item = fit_text_item(name, content,
+                                 max_item_bytes=log_budget or MAX_ITEM_BYTES)
         item_bytes = _serialized_item_size(item) + (1 if items else 0)
         if used_bytes + item_bytes > MAX_BUNDLE_BYTES - 64 * 1024:
             omitted.append({
                 'name': name,
-                'reason': 'artifact 总包超过 6 MiB，保留结构化证据优先',
+                'reason': 'artifact 总包超过 100 MiB，保留结构化证据优先',
                 'original_utf8_bytes': _utf8_len(content),
             })
             continue

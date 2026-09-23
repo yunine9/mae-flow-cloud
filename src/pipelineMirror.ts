@@ -5,7 +5,7 @@
  *   镜像到会话工作区 pipeline/,AI 用 Bash 读全文而不是 1500 字摘要。
  *   原先需求侧(taskService 私有方法)与问题流(pipelineRepair 导出)
  *   各有一份拷贝,语义微差;这里合并为一份,以需求侧踩过坑的版本为准
- *   (临时文件原子落盘/只读位/512KB 截断/路径穿越防线/"成功查询但零
+ *   (临时文件原子落盘/只读位/路径穿越防线/"成功查询但零
  *   产物也必须清空上一轮")。
  * - isBlindPipelineInput: 盲输入判据——失败摘要抠掉链接后没有诊断
  *   内容 = 修复会话手里没有可信失败证据。内网实锤:适配层把 log 填成
@@ -63,7 +63,7 @@ export function isBlindPipelineInput(
  * - fail-open:404/坏响应/网络失败一律返回空清单，旧材料预先归档——镜像
  *   只是取证的增强,红灯主链路(账本+回合)不因它中断,调用方按返回
  *   清单决定给 AI 的指引文案(照常走摘要通道);
- * - 落盘走临时文件原子改名、只读位(0o444)、单文件截到 512KB;文件
+ * - 落盘走临时文件原子改名、只读位(0o444)，保留服务返回的全文;文件
  *   名只留基名,别让平台字段写出目录外。
  */
 export async function mirrorPipelineArtifacts(input: {
@@ -124,7 +124,7 @@ export async function mirrorPipelineArtifacts(input: {
       const target = join(input.dir, name);
       const temporary = join(
         input.dir, `.${name}.${process.pid}.${randomUUID()}.tmp`);
-      writeFileSync(temporary, String(file.text).slice(0, 512 * 1024), {
+      writeFileSync(temporary, file.text, {
         mode: 0o444,
         flag: "wx",
       });

@@ -435,6 +435,37 @@ with tempfile.TemporaryDirectory() as raw:
 
 with tempfile.TemporaryDirectory() as raw:
     root = pathlib.Path(raw)
+    ctx = FileContext(raw)
+    # issue 414：前面的普通 ERROR 超过旧版 200 条上限，真正的 UT
+    # 失败处在 3 MiB 日志中段；gcovr 在末尾只是后续报错。
+    long_log = ('[ERROR] build notice\n' * 240
+                + 'ordinary build output 0123456789\n' * 44000
+                + 'Run: 59 Failure total: 28 Failures: 28 Errors: 0\n'
+                + 'ERROR mssage: Test case failed. Run: 59 Failure total: 28\n'
+                + 'ordinary coverage output 0123456789\n' * 44000
+                + 'gcovr exit 22\nBuildState.FAILED\n')
+    pipeline_log.write_build_log(ctx, '3DFH4HMK-6M4C', long_log, set())
+    excerpt = (root / 'build_error_excerpt_3DFH4HMK-6M4C.txt') \
+        .read_text(encoding='utf-8')
+    assert '测试失败原文' in excerpt
+    assert 'Failure total: 28' in excerpt
+    assert 'Test case failed' in excerpt
+    assert 'gcovr exit 22' not in excerpt or \
+        excerpt.index('Test case failed') < excerpt.index('gcovr exit 22')
+    items = pipeline_log.collect_output_items(raw)
+    mirrored = {item['name']: item['text'] for item in items}
+    assert mirrored['build_log_3DFH4HMK-6M4C.txt'] == long_log, \
+        '3 MiB 构建日志放得进总包时不应截成 512 KiB'
+    assert 'Test case failed' in mirrored['build_error_excerpt_3DFH4HMK-6M4C.txt']
+    assert len(json.dumps(items, ensure_ascii=False).encode('utf-8')) \
+        <= pipeline_log.MAX_BUNDLE_BYTES
+    assert not pipeline_log.UT_FAILURE_PATTERN.search('Failure total: 0')
+
+with tempfile.TemporaryDirectory() as raw:
+    root = pathlib.Path(raw)
+    # 把预算缩小，仅验证超预算时优先保留结构化材料和省略清单。
+    actual_budget = pipeline_log.MAX_BUNDLE_BYTES
+    pipeline_log.MAX_BUNDLE_BYTES = 4 * 1024 * 1024
     (root / 'pipeline_log_summary.json').write_text(
         json.dumps({'strategies': {'build-logs': {'status': 'ok'}}}),
         encoding='utf-8')
@@ -461,6 +492,7 @@ with tempfile.TemporaryDirectory() as raw:
         if item['name'] == 'pipeline_artifacts_omitted.json'))
     assert any(row['name'].startswith('build_log_')
                for row in manifest['files'])
+    pipeline_log.MAX_BUNDLE_BYTES = actual_budget
 `;
 
 test("构建证据全空不报成功，长日志保留错误片段且总包不撞上限", () => {

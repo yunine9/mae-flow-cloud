@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 import {
   existsSync,
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -22,6 +23,37 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlatformAdapter } from "../src/platformAdapter.ts";
+
+test("流水线材料可传超过 8 MiB 的完整日志，目录模式也不截成 512 KiB", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-large-log-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  makeAdapter(dir, fakeCli(dir));
+  const configPath = join(dir, "adapter.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  const cli = join(dir, "large-artifacts.mjs");
+  writeFileSync(cli, 'process.stdout.write(JSON.stringify([{name:"build_log_ut.txt",text:"x".repeat(9*1024*1024)+"\\nTest case failed"}]))');
+  config.pipeline_artifacts = { command: ["node", cli],
+    fields: { name: { json: "name" }, text: { json: "text" } } };
+  writeFileSync(configPath, JSON.stringify(config));
+  const query = new URLSearchParams({ repo: "group/repo", sha: "a".repeat(40),
+    mr: "https://codehub.example/mr/1" });
+  const adapter = new PlatformAdapter(configPath, () => {});
+  const result = await adapter.handle("GET", "/pipeline/artifacts", query, {}, {});
+  assert.equal(result.status, 200);
+  assert.equal((result.payload as any).files[0].text.length,
+    9 * 1024 * 1024 + "\nTest case failed".length);
+  assert.match((result.payload as any).files[0].text, /Test case failed$/);
+
+  const logs = join(dir, "logs-from-command");
+  mkdirSync(logs);
+  const full = "x".repeat(3 * 1024 * 1024) + "\nFailure total: 28";
+  writeFileSync(join(logs, "build_log_ut.txt"), full);
+  config.pipeline_artifacts = { command: ["node", "-e", ""], files_dir: logs };
+  writeFileSync(configPath, JSON.stringify(config));
+  const fromDir = await new PlatformAdapter(configPath, () => {})
+    .handle("GET", "/pipeline/artifacts", query, {}, {});
+  assert.equal((fromDir.payload as any).files[0].text, full);
+});
 
 /** 假 codehubcli:把收到的 argv 原样回显进 JSON,行为按子命令走——
  * 测的就是"模板套了什么值、适配层怎么消化输出"。 */
