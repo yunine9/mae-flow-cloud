@@ -195,7 +195,7 @@ test("镜像契约:404/坏响应/网络失败返回空，旧现场归档而不�
   }
 });
 
-test("镜像契约:成功查询但零产物也必须清空上一轮;穿越与超长截断", async () => {
+test("镜像契约:成功查询但零产物也必须清空上一轮;路径安全且保留完整日志", async () => {
   const platform = await fakePlatform();
   const dir = join(mkdtempSync(join(tmpdir(), "mfc-mirror-empty-")),
     "pipeline");
@@ -208,16 +208,19 @@ test("镜像契约:成功查询但零产物也必须清空上一轮;穿越与超
     }), []);
     assert.equal(existsSync(join(dir, "old_sha.log")), false,
       "零产物不清空,修复会话会按旧 SHA 日志改代码");
-    // 路径穿越防线:文件名只留基名;单文件截到 512KB。
+    // 路径穿越防线:文件名只留基名;长日志完整保留。
+    const fullLog = "x".repeat(3 * 1024 * 1024)
+      + "\nRun: 59 Failure total: 28 Failures: 28 Errors: 0\n"
+      + "gcovr exit 22\n";
     platform.setFiles([
-      { name: "sub/dir/build.log", text: "x".repeat(512 * 1024 + 1) },
+      { name: "sub/dir/build.log", text: fullLog },
       { name: ".", text: "weird" },
     ]);
     assert.deepEqual(await mirrorPipelineArtifacts({
       platformUrl: platform.url, sha: "a", repo: "r", dir,
     }), ["build.log"]);
     assert.equal(existsSync(join(dir, "sub")), false);
-    assert.equal(readFileSync(join(dir, "build.log")).length, 512 * 1024);
+    assert.equal(readFileSync(join(dir, "build.log"), "utf8"), fullLog);
   } finally {
     await platform.stop();
   }

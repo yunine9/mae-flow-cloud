@@ -183,7 +183,8 @@ MR 创建成功即落盘并启动监听，不等待流水线绿灯。已有 MR �
 
 - 适配层负责把你们那套(SSE 网关 → CloudBuild → zip/有界日志窗口)
   封装成"一次调用给我一组文本文件";**宿主不碰你们的认证与取数窗口**;
-- 单个文件按 512KB 预算截断；整包按 6MiB 预算，结构化错误优先，
+- 构建日志在 100MiB 总包预算内保留全文；普通材料仍有单文件
+  512KiB 限制。结构化错误与测试失败片段优先，
   被省略文件写入 `pipeline_artifacts_omitted.json`，不能静默消失;
 - 拿不到就回 `{"files": []}`,宿主降级用摘要通道,不报错。
 
@@ -533,7 +534,7 @@ npm run adapter -- --config adapter.json --selftest
   // discussion_resolve 默认不配(D3:resolve 归检视人)。团队拍板要
   // 代点再配:PUT .../discussions/{id} -d '{"resolved":true}'
   "pipeline_artifacts": {   // A6:PipelineLog 编排器全量采证
-    // 直接输出 [{name,text}] 数组(单条 ≤512KB,头少尾多截断)。
+    // 直接输出 [{name,text}] 数组；构建日志在总包预算内保留全文。
     // 第 4 参 {mr} 可选:给了走 MR-first 主路,不给按 sha→ref 反查。
     "command": ["bash",
       "/opt/mae-flow-cloud/deploy/adapter-tools/pipeline-artifacts.sh",
@@ -572,8 +573,8 @@ pending，绝不以“可能重复回复”为代价继续发送。上例使用 
   每策略 fail-open,`pipeline_log_summary.json` 逐策略记 ok/failed
   与原因 + `guessed_args` 清单(离线烟测实证:全端点死掉仍 rc=0
   出合法 JSON)。行云 AI Review 是唯一纯 REST 通路;
-- `pipeline-artifacts.sh`:退化为薄壳——调编排器采集落盘,再按
-  512KB/item 装箱输出,adapter 契约不变;
+- `pipeline-artifacts.sh`:退化为薄壳——调编排器采集落盘,
+  构建日志在 100MiB 总包预算内保留全文,adapter 契约不变;
 - `pipeline-status-mcp.py`:status 主路(MCP get_project_info →
   actual_head_pipeline(show_job,含 is_valid)→ quality 增益);
 - `mcp_http_client.py`:streamable-HTTP MCP 客户端 + **五网关注册表**

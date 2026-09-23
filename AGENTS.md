@@ -2,6 +2,8 @@
 
 内网问题统一通过本仓 GitHub Issue 跟踪。用户提供 Issue 编号时，先读取正文及评论，以现场证据核对当前代码，再定位和修复；不要仅凭报告中的推测直接修改。
 
+定位具体 MFC 故障（非定时批量巡检）时，先读取并应用 [mfc-diagnosis 技能](skills/mfc-diagnosis/SKILL.md)。先核对实际运行版本和现场执行链，再确认根因；证据不足时明确写待验证假设，不以第一种合理解释收口。
+
 核心取舍：流程不等于质量，却直接影响闭环速度；当流程不能显著提升质量时，应优先为速度让步。不要把完成流程当作质量证明。
 
 排查或修复 mae-flow 内核及 mae-flow-cloud 宿主流程机制中**需求交付流程**（taskService 及需求侧链路）的问题时，必须先读取并应用 [kernel-simplification 技能](skills/kernel-simplification/SKILL.md)，再设计和实施修改。典型场景包括重复审批、流程阻塞、反复唤醒，以及收据、指纹或 SHA 判定引发的循环。问题单处理流程（issueFlow）禁止读取或套用该技能。
