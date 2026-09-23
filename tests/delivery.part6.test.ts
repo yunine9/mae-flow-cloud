@@ -301,7 +301,7 @@ test("宿主 push 硬拒本任务新提交的 Agent 平台注入目录", async (
   }
 });
 
-test("宿主 push 钉死已验证 SHA,确认后 HEAD 变化不得发生 TOCTOU 误推", async () => {
+test("宿主 push 核对已确认 SHA，HEAD 变化时不发送且保留文件范围确认", async () => {
   const cwd = makeSourceRepo();
   const approved = git(cwd, "rev-parse", "HEAD");
   writeFileSync(join(cwd, "after-review.txt"), "not reviewed\n");
@@ -319,7 +319,8 @@ test("宿主 push 钉死已验证 SHA,确认后 HEAD 变化不得发生 TOCTOU �
     await assert.rejects(() => (service as any).pushFromHost({
       cwd,
       summary: { id: "task-toctou", repo_url: remote },
-    }, "must-not-exist", approved), /HEAD 已从已验证的.*旧确认不可复用/);
+    }, "must-not-exist", approved),
+    /传输准备后 HEAD 从 .* 变为 .*本次未发送.*已有文件范围确认保留/);
     assert.equal(git(remote, "branch", "--list", "must-not-exist"), "",
       "SHA 不一致时远端不能出现分支");
   } finally {

@@ -73,7 +73,7 @@ export function buildService(
            repairRounds?: number },
   settings?: RuntimeSettings,
 ) {
-  return new TaskService({
+  const service = new TaskService({
     dataDir,
     provider: "maeflow",
     model: "scripted-v1",
@@ -90,6 +90,12 @@ export function buildService(
     },
     delivery: { platformUrl: platform.baseUrl, ...poll },
   });
+  // 本夹具只验证交付状态机。首次 MR 旁路摘要使用同一个假模型会消耗
+  // 线性剧本的下一幕，使 CI 修复命令被摘要会话执行，主会话跳过修复。
+  // 摘要本身由 deliverySummary.test.ts 独立验证。
+  (service as unknown as { deliverySummaries: { start: () => void } })
+    .deliverySummaries.start = () => {};
+  return service;
 }
 
 export function deliveryModel(
