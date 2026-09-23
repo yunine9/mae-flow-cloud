@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
+import { IncompleteDomainResearch } from "./domainResearchProgress.ts";
 
 import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution, DomainRemoteReview, KnowledgeCleanupPlan } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
@@ -240,6 +241,18 @@ export class DomainKnowledgeExtraction {
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
     this.persist(job); this.pump(); return this.get(id);
   }
+  resume(id: string, operator: string, useLatestSkill = false) {
+    if (this.stopped) throw new Error("服务正在停止");
+    const job = this.live(id), turn = job.turns.at(-1);
+    if (job.component_research_id || this.running.has(id) || this.publishing.has(id) || !turn
+        || !["failed", "cancelled", "done"].includes(job.status)) throw new Error("当前任务不能接续");
+    if (job.status === "done" && turn.mode !== "extract") throw new Error("请选择文档发起新的修订");
+    turn.status = "queued"; turn.operator = operator; turn.error = undefined;
+    if (useLatestSkill) { turn.use_latest_skill = true; turn.skill = undefined; }
+    if (turn.research) { turn.research.phase = "research"; turn.research.finish_requested = false; }
+    job.status = "queued"; job.stage = "接续原研究会话"; job.error = undefined;
+    this.persist(job); this.pump(); return this.get(id);
+  }
   private validateDocument(job: DomainKnowledgeJob, input: DomainDocumentContent) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(input.id) || !input.title?.trim() || input.title.length > 160 || !input.content?.trim() || !input.sources?.trim()) throw new Error("文档需要稳定编号、标题、正文与来源");
     const maxBytes = (job.component_research_id ? 16 : 2) * 1024 * 1024;
@@ -265,7 +278,7 @@ export class DomainKnowledgeExtraction {
         try {
           const reply = await this.execute({ job: this.get(job.id), turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(job.documents),
-            update: patch => { if (!controller.signal.aborted && !job.deleted_at) { Object.assign(job, patch); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
+            update: patch => { if (!controller.signal.aborted && !job.deleted_at) { const { research, ...rest } = patch; Object.assign(job, rest); if (research) turn.research = structuredClone(research); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
             evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
             save: (input, baseline) => {
               if (controller.signal.aborted || job.deleted_at) throw new Error("本轮已停止");
@@ -285,10 +298,14 @@ export class DomainKnowledgeExtraction {
                 // Continuing an interrupted extraction must preserve already completed or edited documents.
                 if (existing) {
                   if (Object.entries(input).every(([key, value]) => existing[key as keyof DomainDocument] === value)) return structuredClone(input);
-                  throw new Error("该文档已有草稿，修改请使用局部修订");
+                  const owned = existing.research_turn_id === turn.id || (!existing.research_turn_id && existing.revision === 1 && !existing.history.length);
+                  if (!owned || existing.human_edited || [...job.publications, ...(job.publication_history ?? [])].some(p => p.documents.some(d => d.id === existing.id))) throw new Error("该草稿已有人工修改、已归档或属于其他研究轮，请通过局部修订生成建议");
+                  existing.history.push({ revision: existing.revision, title: existing.title, content: existing.content, sources: existing.sources, operator: "领域研究 Agent", at: new Date().toISOString() });
+                  Object.assign(existing, input, { revision: existing.revision + 1, research_turn_id: turn.id });
+                  this.persist(job); return structuredClone(input);
                 }
                 if (job.archive_configured !== false && (!baseline || !/^[a-f0-9]{40,64}$/.test(baseline.revision))) throw new Error("尚未读取目标文件的归档基线");
-                job.documents.push({ ...structuredClone(input), revision: 1, selected: true, base_content: baseline?.content ?? null, base_revision: baseline?.revision ?? "", history: [] });
+                job.documents.push({ ...structuredClone(input), revision: 1, research_turn_id: turn.id, selected: true, base_content: baseline?.content ?? null, base_revision: baseline?.revision ?? "", history: [] });
                 this.persist(job);
               }
               return structuredClone(input);
@@ -301,7 +318,7 @@ export class DomainKnowledgeExtraction {
           turn.reply = reply; turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查";
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;
-          turn.status = "failed"; job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = "本轮失败，已有文档保留";
+          turn.status = "failed"; job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = error instanceof IncompleteDomainResearch ? "研究尚未完成，草稿与进度保留" : "本轮失败，已有文档保留";
         } finally { this.persist(job); }
       }).finally(() => { this.running.delete(job.id); this.pump(); });
       this.running.set(job.id, { controller, work });
@@ -314,7 +331,7 @@ export class DomainKnowledgeExtraction {
     this.validateDocument(job, input.document);
     if (doc.target_id !== input.document.target_id || doc.path !== input.document.path || doc.layer !== input.document.layer) throw new Error("不能通过编辑改变归档位置");
     doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, sources: doc.sources, operator, at: new Date().toISOString() });
-    Object.assign(doc, { title: input.document.title, content: input.document.content, sources: input.document.sources, revision: doc.revision + 1 }); this.persist(job); return this.get(id);
+    Object.assign(doc, { title: input.document.title, content: input.document.content, sources: input.document.sources, revision: doc.revision + 1, human_edited: true }); this.persist(job); return this.get(id);
   }
   decide(id: string, turnId: string, documentId: string, decision: "accept" | "discard", operator: string) {
     const job = this.live(id), proposal = job.turns.find(t => t.id === turnId)?.proposals.find(p => p.document.id === documentId);

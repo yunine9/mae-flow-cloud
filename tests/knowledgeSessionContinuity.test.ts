@@ -10,6 +10,7 @@ import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
+import { businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -27,16 +28,25 @@ const document = { id: "rules", title: "规则", target_id: "domain", path: "doc
 test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不重复保存草稿", async () => {
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve);
+  const material = await businessMaterial(f.dir);
   const model = new ScriptedModelServer([
+    { tool: { name: "knowledge_material", input: { id: material.id } } },
     { tool: { name: "component_source", input: { action: "read", component_id: "repo-1", path: "code.ts" } } },
     { tool: { name: "knowledge_draft", input: { action: "save", document } } },
+    { tool: { name: "knowledge_research", input: { action: "upsert", capability: { id: "rules", title: "规则", repository_ids: ["repo-1"], state: "researched", findings: "ORIGINAL_CONTEXT 常量定义", checks: { implementation: "code.ts 中的常量", callers: "最小仓无调用方", scenarios: "常量读取", tests: "最小仓无测试", materials: "未上传资料" }, sources: [{ repository_id: "repo-1", path: "code.ts" }], document_ids: ["rules"] } } } },
+    { tool: { name: "knowledge_research", input: { action: "upsert", capability: { id: "rules", title: "规则", repository_ids: ["repo-1"], state: "researched", findings: "ORIGINAL_CONTEXT 常量定义", checks: { implementation: "code.ts 中的常量", callers: "最小仓无调用方", scenarios: "常量读取", tests: "最小仓无测试", materials: "未上传资料" }, sources: [{ repository_id: "repo-1", path: "code.ts" }], document_ids: ["rules"] } } } },
+    { tool: { name: "knowledge_research", input: { action: "inventory_complete" } } },
+    { tool: { name: "knowledge_research", input: { action: "complete" } } },
+    { text: "等待证据核对" },
+    { tool: { name: "knowledge_draft", input: { action: "read", id: "rules" } } },
+    { tool: { name: "knowledge_research", input: { action: "complete" } } },
     { text: "沿用原研究结果完成" },
-  ], "scripted-v1", { beforeScene: async ({ index }) => { if (index === 2 && !paused) { paused = true; await hold; } } });
+  ], "scripted-v1", { linear: true, beforeScene: async ({ request, index }) => { useReturnedEvidence(request, model.script); if (index === 3 && !paused) { paused = true; await hold; } } });
   await model.start();
   const options = { dataDir: f.dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: f.source, revision: f.revision }) };
   let service = new DomainKnowledgeExtraction(f.dir, input => runDomainKnowledge(input, options));
   try {
-    const job = service.create({ issue_no: "REQ1", title: "业务", scope: "提取业务规则", repositories: [{ name: "业务", repository: "https://example.test/business.git", branch: "master" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "master", docs_path: "docs/knowledge" } }, "expert");
+    const job = service.create({ issue_no: "REQ1", title: "业务", scope: "提取业务规则", material_ids: [material.id], repositories: [{ name: "业务", repository: "https://example.test/business.git", branch: "master" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "master", docs_path: "docs/knowledge" } }, "expert");
     await until(() => paused);
     const turnId = service.get(job.id).turns[0].id;
     await service.shutdown(); release();

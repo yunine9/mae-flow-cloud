@@ -48,3 +48,21 @@ test("源码搜索支持多词任意命中、短语、大小写与逐仓范围",
     assert.match(await read("src/code.txt"), /CODC module/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("源码目录默认显示业务层级，平台文件不挤占分页且可显式查看", async () => {
+  const root = mkdtempSync(join(tmpdir(), "source-tree-"));
+  const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  try {
+    mkdirSync(join(root, ".cac/mae-flow"), { recursive: true }); mkdirSync(join(root, "src/deep"), { recursive: true });
+    for (let i = 0; i < 110; i++) writeFileSync(join(root, `.cac/mae-flow/${i}.md`), "BUSINESS_TOKEN\n");
+    writeFileSync(join(root, "src/deep/rule.ts"), "BUSINESS_TOKEN real implementation\n");
+    git("init"); git("add", "."); git("-c", "user.name=fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "fixture");
+    const tool = languageComponentSourceTool([{ id: "one", name: "one", repository: "https://example.test/one", branch: "master", path: "", languages: ["ts"], enabled: true, description: "" }], async () => ({ root, revision: git("rev-parse", "HEAD") }), () => {});
+    const invoke = async (input: object) => (await tool.execute("test", input as never, undefined, undefined, {} as never)).content.map(c => c.type === "text" ? c.text : "").join("\n");
+    const list = await invoke({ action: "list" }); assert.match(list, /src\//); assert.doesNotMatch(list, /\.cac\//); assert.match(list, /排除平台及依赖文件 110/);
+    assert.match(await invoke({ action: "list", path: "src/" }), /src\/deep\//);
+    assert.match(await invoke({ action: "list", recursive: true }), /src\/deep\/rule.ts/);
+    assert.match(await invoke({ action: "list", include_platform: true }), /\.cac\//);
+    const search = await invoke({ action: "search", query: "BUSINESS_TOKEN" }); assert.match(search, /real implementation/); assert.doesNotMatch(search, /\.cac\//);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

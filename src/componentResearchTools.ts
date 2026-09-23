@@ -63,6 +63,9 @@ const reply = (text: string) => ({
   content: [{ type: "text" as const, text }],
   details: {},
 });
+export function isResearchPlatformPath(path: string): boolean {
+  return /(^|\/)(?:\.cac|\.mae-flow|\.mae-flow-work|\.pi|\.codegraph|node_modules|\.git)(?:\/|$)/.test(path);
+}
 export function componentSourceTool(
   root: string,
   revision: string,
@@ -74,7 +77,7 @@ export function componentSourceTool(
     name: "component_source",
     label: "读取组件源码",
     description:
-      '只读本次固定版本的源码。list 列目录，read 读文件。search 多关键词用 keywords 数组，任意一个命中即可，例如 keywords:["CODC","PCI","MRO"]；完整短语用 query，空格不会拆词，两者只填一个。默认忽略大小写，区分大小写时设置 ignore_case:false。每次只搜索指定仓，其他仓须分别调用。不能修改源码。',
+      '只读本次固定版本的源码。list 默认列当前层的目录与文件，逐层指定 path 深入；recursive:true 按文件分页。默认排除平台生成目录，include_platform:true 可查看。read 读文件。search 多关键词用 keywords 数组，任意一个命中即可；完整短语用 query，两者只填一个。默认忽略大小写。每次只搜索指定仓，其他仓须分别调用。不能修改源码。',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("list"),
@@ -85,12 +88,15 @@ export function componentSourceTool(
       query: Type.Optional(Type.String({ description: "完整短语搜索，按字面匹配，不支持正则；多个关键词请用 keywords。" })),
       keywords: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 32, description: "多个字面关键词，任意一个命中即可；与 query 二选一。" })),
       ignore_case: Type.Optional(Type.Boolean({ description: "默认 true：忽略大小写；false：区分大小写。" })),
+      recursive: Type.Optional(Type.Boolean({ description: "list 默认列当前层；true 递归列全部文件并分页。" })),
+      include_platform: Type.Optional(Type.Boolean({ description: "显式包含平台及依赖生成目录，默认排除。" })),
       start: Type.Optional(Type.Integer({ minimum: 1, description: "read 的起始行，或 list 的起始条目（从 1 开始）" })),
       end: Type.Optional(Type.Integer({ minimum: 1, description: "read 的末行，或 list 的末条目" })),
     }),
     async execute(_id: string, input: any, signal) {
       try {
-        const path = String(input.path ?? range);
+        const requestedPath = String(input.path ?? range);
+        const path = requestedPath.length > 1 ? requestedPath.replace(/\/$/, "") : requestedPath;
         if (
           path &&
           (path.startsWith("/") ||
@@ -119,10 +125,16 @@ export function componentSourceTool(
             ],
             root, signal,
           );
-          const entries = text.trimEnd().split("\n").filter(Boolean);
+          const all = text.trimEnd().split("\n").filter(Boolean);
+          const files = input.include_platform ? all : all.filter(p => !isResearchPlatformPath(p));
+          const prefix = path ? `${path}/` : "";
+          const entries = input.recursive ? files : [...new Set(files.map(p => {
+            const relative = p.startsWith(prefix) ? p.slice(prefix.length) : p;
+            return relative.includes("/") ? `${prefix}${relative.split("/")[0]}/` : p;
+          }))];
           const start = Math.max(1, input.start ?? 1);
           const end = Math.min(entries.length, input.end ?? start + 99, start + 199);
-          text = `目录共 ${entries.length} 项，本次 ${start}–${end} 项\n${entries.slice(start - 1, end).join("\n")}`;
+          text = `目录共 ${entries.length} 项，本次 ${start}–${end} 项；业务范围文件 ${files.length} 个，排除平台及依赖文件 ${all.length - files.length} 个\n${entries.slice(start - 1, end).join("\n")}`;
           if (end < entries.length) text += `\n后续请用 list start=${end + 1} 继续，或指定 path 分目录读取`;
         }
         else if (input.action === "search") {
@@ -156,6 +168,10 @@ export function componentSourceTool(
             text = "没有命中。仅表示本仓当前版本和范围内未匹配，不代表其他仓没有相关代码。";
             if (hasQuery && /\s/.test(input.query)) text += "当前按完整短语搜索；若要查多个词，请改用 keywords 数组。";
           }
+          if (!input.include_platform) text = text.split("\n").filter(line => {
+            const match = /^[^:]+:(.*?):\d+:/.exec(line);
+            return !match || !isResearchPlatformPath(match[1]);
+          }).join("\n") || "业务范围没有命中（已排除平台及依赖生成目录）";
           text = `仓库：${sourceLabel}\n版本：${revision}\n范围：${path || "全仓"}\n匹配：${input.keywords !== undefined ? "多关键词任意命中" : "完整短语"}；${ignoreCase ? "忽略大小写" : "区分大小写"}；字面搜索\n${text}`;
         } else {
           if (!path) throw new Error("read 需要文件路径，请先用 list 查看目录");

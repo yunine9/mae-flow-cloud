@@ -5,6 +5,8 @@ export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
 export interface DomainDocument extends DomainDocumentContent {
+  research_turn_id?: string;
+  human_edited?: boolean;
   /** 用户在归档设置中指定的完整相对路径；模型输出不能设置此字段。 */
   archive_path?: string;
   revision: number; selected: boolean; base_content: string | null; base_revision: string;
@@ -24,7 +26,16 @@ export interface DomainTurn {
   use_latest_skill?: boolean; previous_revisions?: Record<string, string>;
   revisions?: Record<string, string>;
   document_revisions?: Record<string, number>;
+  research?: DomainResearch;
   proposals: Array<{ document: DomainDocumentContent; base_revision: number; status: "pending" | "accepted" | "discarded" }>;
+}
+export interface DomainResearch {
+  capabilities: Array<{ id: string; title: string; repository_ids: string[]; state: "pending" | "researched" | "blocked";
+    findings: string; checks?: Record<string, string>; evidence_ids?: string[];
+    sources: Array<{ repository_id: string; path: string }>; document_ids: string[] }>;
+  inventory_complete: boolean;
+  phase: "research" | "review" | "complete";
+  finish_requested?: boolean;
 }
 export interface KnowledgeCleanupPlan {
   id: string; target_id: string; directories: string[]; confirmed: boolean;
@@ -63,7 +74,7 @@ export interface DomainExecution {
   job: DomainKnowledgeJob; turn: DomainTurn; root: string; signal: AbortSignal;
   save: (document: DomainDocumentContent, baseline?: { content: string | null; revision: string }) => DomainDocumentContent;
   read: () => DomainDocument[];
-  update: (patch: { revisions?: Record<string, string>; skill?: DomainKnowledgeJob["skill"]; stage?: string }) => void;
+  update: (patch: { revisions?: Record<string, string>; skill?: DomainKnowledgeJob["skill"]; stage?: string; research?: DomainResearch }) => void;
   evidence: (event: Record<string, unknown>) => void;
 }
 
