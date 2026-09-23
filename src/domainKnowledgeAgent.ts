@@ -129,7 +129,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const timer = setTimeout(() => { timedOut = true; runController.abort(); }, 24 * 60 * 60_000); timer.unref();
   try {
     signal.throwIfAborted(); workers?.restore();
-    let outcome = await session.start((research ? `本次是持续业务知识研究任务，补全读代码无法得知的背景、业务意图、规则原因、隐含约束和历史经验。无线豆包与上传业务资料同为主力来源，按 Skill 的 references/materials.md 主动发现主题、追查需求设计与历史依据，没有上传资料也从业务检索开始。用 knowledge_evidence 检索和回读已有查询；源码仅按具体疑问辅助核对，不要求扫描或读取每个仓。先用 knowledge_research 保存知识问题和资料线索，持续补证；多项独立调查可用 knowledge_delegate 分工。完成项引用业务资料实际返回的 evidence_id，不能用源码代替业务意图依据。普通回复不会结束研究；知识主题调查和最终资料核对完成后才结束。既有草稿可完善，人工修改受保护。\n${research.anchor()}\n\n` : "") + extractionSkillMission(skill, {
+    let outcome = await session.start((research ? `本次是持续业务知识研究任务，补全读代码无法得知的背景、业务意图、规则原因、隐含约束和历史经验。无线豆包与上传业务资料同为主力来源，按 Skill 的资料研究指引 主动发现主题、追查需求设计与历史依据，没有上传资料也从业务检索开始。用 knowledge_evidence 检索和回读已有查询；源码仅按具体疑问辅助核对，不要求扫描或读取每个仓。先用 knowledge_research 保存知识问题和资料线索，持续补证；多项独立调查可用 knowledge_delegate 分工。完成项引用业务资料实际返回的 evidence_id，不能用源码代替业务意图依据。普通回复不会结束研究；知识主题调查和最终资料核对完成后才结束。既有草稿可完善，人工修改受保护。\n${research.anchor()}\n\n` : "") + extractionSkillMission(skill, {
       mode: input.turn.mode, title: input.job.title, scope: input.job.scope, repositories: researchRepositories, archive_targets: input.job.repositories, archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
       revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
       materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })), ar_codes: input.job.ar_codes,

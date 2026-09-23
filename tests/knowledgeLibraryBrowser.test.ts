@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("知识库桌面交互：独立页签、人工编辑保护、建议采纳和整包 Skill 编辑", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("知识库桌面交互：独立页签、人工编辑保护、建议采纳和统一平台 Skill 上传和在线查看", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-library-browser-"));
   try {
     const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeLibrary.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });

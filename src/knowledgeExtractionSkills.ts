@@ -10,7 +10,7 @@ import { loadSkills } from "@earendil-works/pi-coding-agent";
 
 export type ExtractionKind = "component" | "domain";
 export interface ExtractionSkillSnapshot {
-  name: string; digest: string; captured_at: string; files: Record<string, string>;
+  name: string; kind?: ExtractionKind; digest: string; captured_at: string; files: Record<string, string>;
 }
 const defaults = fileURLToPath(new URL("../internal-skills/", import.meta.url));
 const skillName = (kind: ExtractionKind) => {
@@ -39,16 +39,16 @@ function readPackage(root: string): Record<string, string> {
   if (!files["SKILL.md"]) throw new Error("Skill 缺少 SKILL.md");
   return files;
 }
-function snapshot(name: string, files: Record<string, string>): ExtractionSkillSnapshot {
+function snapshot(name: string, files: Record<string, string>, kind?: ExtractionKind): ExtractionSkillSnapshot {
   const digest = createHash("sha256").update(JSON.stringify(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)))).digest("hex");
-  return { name, digest, captured_at: new Date().toISOString(), files };
+  return { name, ...(kind ? { kind } : {}), digest, captured_at: new Date().toISOString(), files };
 }
 export function bundledExtractionSkill(kind: ExtractionKind) {
   const name = skillName(kind);
   return snapshot(name, readPackage(join(defaults, name)));
 }
 
-/** Method packages have their own store, so they never enter the coding knowledge shelf. */
+/** 与任务 Skill 共用管理入口，但单独存储，只供平台萃取会话加载。 */
 export class KnowledgeExtractionSkills {
   private queue: Promise<unknown> = Promise.resolve();
   readonly root: string;
@@ -56,7 +56,7 @@ export class KnowledgeExtractionSkills {
   current(kind: ExtractionKind) {
     const name = skillName(kind), file = join(this.root, name, "current.json");
     const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) as ExtractionSkillSnapshot : bundledExtractionSkill(kind);
-    if (current.name !== name || snapshot(name, current.files).digest !== current.digest) throw new Error("Skill 包校验失败");
+    if ((current.kind ? current.kind !== kind : current.name !== name) || snapshot(current.name, current.files).digest !== current.digest) throw new Error("Skill 包校验失败");
     const history = join(this.root, name, "versions");
     const versions = existsSync(history) ? readdirSync(history).filter(file => /^[a-f0-9-]+\.json$/.test(file))
       .map(file => JSON.parse(readFileSync(join(history, file), "utf8")))
@@ -70,9 +70,9 @@ export class KnowledgeExtractionSkills {
     const previous = this.current(kind), name = skillName(kind);
     if (previous.digest !== expectedDigest) throw new Error("Skill 已被更新，请刷新后比较修改");
     if (!files || Array.isArray(files) || Object.keys(files).length > 100 || !files["SKILL.md"]
-        || Object.entries(files).some(([path, content]) => !/^[\p{L}\p{N}][\p{L}\p{N}._/-]*\.md$/u.test(path)
-          || path.split("/").some(segment => !segment || segment.startsWith(".")) || typeof content !== "string")
-        || Buffer.byteLength(JSON.stringify(files)) > 1024 * 1024) throw new Error("请提供完整 Markdown Skill 包，路径不能越界，最多 1 MiB、100 个文件");
+        || Object.entries(files).some(([path, content]) => !/^[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(path)
+          || path.split("/").some(segment => !segment || segment.startsWith(".")) || typeof content !== "string" || content.includes("\0"))
+        || Buffer.byteLength(JSON.stringify(files)) > 1024 * 1024) throw new Error("请提供含 SKILL.md 的完整文本 Skill 包，路径不能越界，最多 1 MiB、100 个文件");
     knowledgeArchiveDefaults(files, kind);
     const staging = join(this.root, `staging-${randomUUID()}`, name);
     try {
@@ -82,14 +82,16 @@ export class KnowledgeExtractionSkills {
         writeFileSync(join(staging, path), content, { mode: 0o600 });
       }
       const loaded = loadSkills({ cwd: staging, agentDir: staging, skillPaths: [staging], includeDefaults: false });
-      if (loaded.skills.length !== 1 || loaded.skills[0].name !== name) throw new Error("请保留 Skill 名称并提供有效的 name 和 description");
+      if (loaded.skills.length !== 1) throw new Error("请提供一个标准 Skill，SKILL.md 需要有效的 name 和 description");
       for (const [filePath, content] of Object.entries(files)) {
+        if (!filePath.endsWith(".md")) continue;
         for (const match of content.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
+          if (/^[a-z][a-z0-9+.-]*:/i.test(match[1])) continue;
           if (!Object.hasOwn(files, join(dirname(filePath), match[1])))
             throw new Error(`Skill 引用文件不存在：${match[1]}`);
         }
       }
-      const next = snapshot(name, files), root = join(this.root, name), versionId = randomUUID();
+      const next = snapshot(loaded.skills[0].name, files, kind), root = join(this.root, name), versionId = randomUUID();
       mkdirSync(join(root, "versions"), { recursive: true });
       const { versions: _, ...old } = previous;
       writeFileSync(join(root, "versions", `${versionId}.json`), JSON.stringify({ ...old, version_id: versionId, archived_at: new Date().toISOString(), operator, action }), { mode: 0o600 });
@@ -116,7 +118,7 @@ export class KnowledgeExtractionSkills {
     };
     if (existsSync(path)) {
       const saved: ExtractionSkillSnapshot = JSON.parse(readFileSync(path, "utf8"));
-      if (saved.name !== skillName(kind) || snapshot(saved.name, saved.files).digest !== saved.digest) throw new Error("固定的 Skill 包校验失败");
+      if ((saved.kind ? saved.kind !== kind : saved.name !== skillName(kind)) || snapshot(saved.name, saved.files).digest !== saved.digest) throw new Error("固定的 Skill 包校验失败");
       retain(saved);
       if (!useLatest) return saved;
     }

@@ -3,7 +3,7 @@ import type { ExtractionKind } from "./knowledgeExtractionSkills.ts";
 export interface KnowledgeArchiveDefaults {
   domain_directory: string; repository_directory: string; component_directory: string; component_filename: string;
 }
-/** 旧方法包缺少此引用时沿用原默认值；新包可在页面内编辑这份约定。 */
+/** 旧方法包缺少此引用时沿用原默认值；新包可通过上传更新这份约定。 */
 export function knowledgeArchiveDefaults(files: Record<string, string>, kind: ExtractionKind): KnowledgeArchiveDefaults {
   const defaults = { domain_directory: "domains", repository_directory: "docs/knowledge", component_directory: "docs/components", component_filename: "component-guide.md" };
   const text = files["references/archive-defaults.md"];

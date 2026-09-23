@@ -44,13 +44,15 @@ window.fetch = async (url, options) => {
   else if (path.endsWith("/reconcile")) { Object.assign(job.documents[0], { content: input.document.content, revision: job.documents[0].revision + 1 }); job.documents[0].remote_review!.reviewed = true; result = job; }
   else if (path === "/domain-extraction/dkx-browser") result = job;
   else if (path === "/knowledge-extraction/skills/domain") { if (input) { calls.push({ action: "skill", ...input }); skill.files = input.files; skill.digest = "second"; } result = skill; }
+  else if (path === "/knowledge-extraction/skills/component") result = { ...skill, name: "component-knowledge-extraction" };
   else if (path === "/component-research") result = { records: [] };
   else if (path === "/component-repositories") result = { components: [] };
   else if (path === "/business-modules") result = { modules: [{ id: "trade", name: "交易业务", description: "交易规则", status: "active", repositories: ["https://example.test/source.git"] }], warnings: [], operations: [] };
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
 };
-createRoot(document.getElementById("app")!).render(<KnowledgeLibrary category="documents" onCategoryChange={() => {}} uploadRequest={0} onOpenTask={() => {}} onManage={() => {}} />);
+function App() { const [category, setCategory] = React.useState<"documents" | "skills">("documents"); return <KnowledgeLibrary category={category} onCategoryChange={setCategory} uploadRequest={0} onOpenTask={() => {}} onManage={() => {}} />; }
+createRoot(document.getElementById("app")!).render(<App />);
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label && b.getClientRects().length)!;
 async function click(label: string) { check(button(label), `missing ${label}`); button(label).click(); await pause(); }
@@ -103,11 +105,36 @@ async function run() {
   await type("领域知识修订意见", "在人工版本上补充校验依据"); await click("生成建议"); await click("差异"); await click("采纳建议"); check(job.documents[0].content.includes("人工补充"), "accepted revision preserves manual content");
   await click("远端合并"); await click("读取远端版本并比较"); check(document.body.textContent?.includes("目标分支新增的人工规则"), "remote text visible for review");
   await type("远端合并稿", job.documents[0].content + "\n目标分支新增的人工规则"); await click("保存合并稿并确认远端版本"); check(job.documents[0].remote_review?.reviewed, "manual reconciliation submitted");
-  await click("维护萃取 Skill"); await click("references/domain.md"); await type("Skill 文件内容", "新版方法：核对取消与退款的不同状态。"); await click("发布前差异"); check(document.querySelector('[aria-label="Skill 文件差异"]')?.textContent?.includes("新版方法"), "skill diff previews change"); await click("编辑文件");
-  const newFile = document.querySelector<HTMLInputElement>('input[aria-label="新 Skill 文件路径"]')!; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(newFile, "references/extra.md"); newFile.dispatchEvent(new Event("input", { bubbles: true })); await pause(); await click("添加引用文件"); await type("Skill 文件内容", "补充引用方法"); await click("发布此 Skill 新版本");
-  check(calls.find(c => c.action === "skill")?.files["SKILL.md"] === skill.files["SKILL.md"], "saving a reference preserves the complete package");
-  const dialog = document.querySelector('[role="dialog"]')!; const close = [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(b => /close|关闭/i.test(b.textContent ?? "") || /close|关闭/i.test(b.getAttribute("aria-label") ?? ""));
-  if (close) close.click(); else document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause(); await click("正文");
+  await click("查看萃取 Skill →");
+  check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("领域知识萃取"), "extraction link opens the exact platform Skill in the library");
+  check(!document.querySelector('[role="dialog"]'), "Skill no longer opens a separate editor dialog");
+  await click("references/domain.md");
+  check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("研究领域规则。"), "reference is readable online");
+  await click("＋ 添加 Skill");
+  check(button("平台使用")?.getAttribute("aria-pressed") === "true", "add Skill exposes platform use in unified upload");
+  async function uploadSkillFile(files: Array<[string, string]>, directory = false) {
+    const transfer = new DataTransfer();
+    for (const [name, text] of files) {
+      const file = new File([text], name.split("/").at(-1)!);
+      if (directory) Object.defineProperty(file, "webkitRelativePath", { value: `custom-skill/${name}` });
+      transfer.items.add(file);
+    }
+    const input = document.querySelector<HTMLInputElement>(`input[aria-label="${directory ? "上传平台 Skill 目录" : "上传平台 SKILL.md"}"]`)!;
+    input.files = transfer.files; input.dispatchEvent(new Event("change", { bubbles: true }));
+    for (let i = 0; i < 20 && !button("保存并用于新任务") && !document.querySelector('[aria-label="平台 Skill 详情"] [role="alert"]'); i++) await pause();
+  }
+  await uploadSkillFile([["readme.md", "not a skill"]]);
+  check(!button("保存并用于新任务") && document.querySelector('[aria-label="平台 Skill 详情"] [role="alert"]'), "missing SKILL.md cannot submit");
+  await uploadSkillFile([["SKILL.md", skill.files["SKILL.md"]], ["references/domain.md", "新版方法：核对取消与退款的不同状态。"]], true);
+  check(button("保存并用于新任务") && !calls.some(c => c.action === "skill"), "upload preview does not publish automatically");
+  await click("references/domain.md");
+  check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("新版方法"), "uploaded reference preview");
+  await click("保存并用于新任务");
+  check(calls.find(c => c.action === "skill")?.files["references/domain.md"].includes("新版方法"), "whole package saved through platform runtime store");
+  check(calls.find(c => c.action === "skill")?.expected_digest === "first", "upload checks current version to avoid overwriting concurrent changes");
+  check(document.querySelector('[aria-label="平台 Skill 详情"] [role="status"]')?.textContent?.includes("正在运行的任务继续使用原版本"), "success explains effective scope");
+  check(document.documentElement.scrollWidth <= innerWidth + 2, "Skill view desktop horizontal overflow");
+  await click("知识萃取"); await click("正文");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "desktop horizontal overflow");
   const workspace = document.querySelector('[aria-label="领域知识审查工作区"]')!; check(workspace.scrollWidth <= workspace.clientWidth + 2, "review horizontal overflow");
   await click("入库与更新");
