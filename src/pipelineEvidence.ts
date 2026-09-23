@@ -40,7 +40,8 @@ const COMPILE_ERROR = /(?:fatal error|\berror:|undefined reference|collect2:|ld(
 // 旧尺子对 Jest 输出全部不中:"Tests: 1 failed" 的 fail 不紧跟 tests、
 // "FAIL src/x.test.jsx" 不是 FAILED 在 test 之后。汇总行的冒号可选:
 // Jest 是 "Tests: 1 failed",Vitest 是 "Test Files 1 failed"。
-const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|\btest case failed\b|\bfailure total:\s*[1-9]\d*\b|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\[\s*FAILED\s*\]\s+[1-9]\d*\s+tests?\b|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b)/i;
+const UT_ERROR = /(?:tests? (?:run:.*)?fail(?:ed|ure)?|\btest case failed\b|\btest case\s+[^\r\n]+?\s+failed\b|\bfailure total:\s*[1-9]\d*\b|\bTests run:\s*\d+,\s*Failures:\s*[1-9]\d*\b|failures?!!!|assert(?:ion)?(?:error| failed)|expected .+ (?:but|to)|unit tests? failed|coverage.+(?:below|less|failed)|\bFAILED\b.+(?:test|case)|\[\s*FAILED\s*\]\s+(?:[1-9]\d*\s+tests?\b|[\w/:-]+(?:\.[\w/:-]+)+)|\bCPP_UT\b|\bFAIL\b\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)|\bTest (?:Suites|Files):?\s*[1-9]\d*\s+failed|\bTests:?\s*[1-9]\d*\s+failed|\b\d+\s+failing\b|^\s*[●✖×]\s+\S)/im;
+const UT_CASE_ERROR = /(?:^\s*(?:\[ERROR\]\s*)?[\w.$]+Test\.[\w$]+:\d+|^\s*[\w.$]+Test\s*>\s*.+\s+FAILED\b|^\s*FAILED\s+\S+\.py(?:::\S+)+\b|^\s*--- FAIL:\s*Test\S+|^\s*test\s+\S+\s+\.\.\.\s+FAILED\b|^\s*Failed\s+[\w.]+\s+\[\d+\s*(?:ms|s)\])/im;
 const PATH_WITH_LINE = /(?:[A-Za-z]:)?[^\s"']+\.(?:c|cc|cpp|cxx|h|hpp|java|kt|py|js|jsx|ts|tsx|go|rs|cs|xml):\d+/i;
 const TEST_FILE_PATH = /\.(?:test|spec)\.(?:js|jsx|ts|tsx|java|kt|py)\b/i;
 
@@ -79,7 +80,7 @@ function dimensionOfTool(tool: unknown): PipelineDimension | undefined {
  * record 却全被归到编译维),日志真实维度由内容决定。 */
 function sniffDimensions(text: string): PipelineDimension[] {
   const dims = new Set<PipelineDimension>();
-  if (UT_ERROR.test(text)) dims.add("UT");
+  if (UT_ERROR.test(text) || UT_CASE_ERROR.test(text)) dims.add("UT");
   if (COMPILE_ERROR.test(text)) dims.add("COMPILE");
   // 堆栈行(路径:行号)逐行归维:部分 runner 的失败堆栈未必带 FAIL/
   // 汇总关键字,但 path:line 就够定位;测试文件堆栈归 UT,其余归编译
@@ -146,6 +147,7 @@ function actionableStructuredError(text: string): boolean {
   const parsed = parseJson(text);
   if (parsed !== undefined && hasLocatedDefect(parsed)) return true;
   return COMPILE_ERROR.test(text) || UT_ERROR.test(text)
+    || UT_CASE_ERROR.test(text)
     || PATH_WITH_LINE.test(text);
 }
 

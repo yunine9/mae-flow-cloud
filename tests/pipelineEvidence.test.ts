@@ -189,6 +189,40 @@ test("CPP_UT 汇总失败进入证据判定，gcovr 后续报错不能遮住测�
     "失败数为 0 和 gcovr 错误不能冒充 UT 用例失败证据");
 });
 
+test("CPP_UT 具体失败用例名可直接作为测试失败证据", () => {
+  for (const line of [
+    "[  FAILED  ] ServiceSuite.Case17 (1 ms)",
+    "Test case ServiceSuite.Case17 failed",
+  ]) {
+    const result = assessPipelineRepairEvidence({
+      checks: [{ dimension: "UT", status: "failed", tool: "CPP_UT" }],
+      artifacts: [{ name: "build_error_excerpt_ut.txt", text: line }],
+    });
+    assert.deepEqual(result.availableDimensions, ["UT"], line);
+  }
+});
+
+test("常见技术栈的失败用例名能进入 UT 证据", () => {
+  for (const line of [
+    "[ERROR] Tests run: 3, Failures: 1, Errors: 0",
+    "[ERROR] ExampleServiceTest.testInvalidInput:42 expected 200 but was 500",
+    "ExampleServiceTest > rejectsInvalidInput FAILED",
+    "FAIL src/service.test.js",
+    "● Service > handles rejected response",
+    "2 failing\n  1) Service returns error",
+    "FAILED tests/test_service.py::TestService::test_reject - AssertionError",
+    "--- FAIL: TestServiceReject (0.01s)",
+    "test service::tests::reject ... FAILED",
+    "Failed Product.ServiceTests.Reject [3 ms]",
+  ]) {
+    const result = assessPipelineRepairEvidence({
+      checks: [{ dimension: "UT", status: "failed" }],
+      artifacts: [{ name: "build_error_excerpt_job.txt", text: line }],
+    });
+    assert.deepEqual(result.availableDimensions, ["UT"], line);
+  }
+});
+
 test("复合构建工具的 record 被归到编译维时，日志内容仍按 UT 背书", () => {
   // 真实形态:CodeCCP2.0 下 build2.0 跑 JS UT,defects[].toolName=build2.0
   // 被 record-id 归类硬映射成编译维;日志内容嗅探才是权威,映射降级为

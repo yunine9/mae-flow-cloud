@@ -107,9 +107,21 @@ REVIEWTIP_TOOL_TYPES = ['codecheck', 'build2.0', 'codechecktest', 'CPP_UT']
 # 测试汇总要先于尾部的报告工具报错呈现，避免把后果当成根因。
 UT_FAILURE_PATTERN = re.compile(
     r'(?:\btest case failed\b|\bfailure total:\s*[1-9]\d*\b|'
+    r'\btest case\s+[^\r\n]+?\s+failed\b|'
     r'\btests?:\s*[1-9]\d*\s+failed\b|'
     r'\btest (?:suites|files)\s*:?\s*[1-9]\d*\s+failed\b|'
-    r'\[\s*FAILED\s*\]\s+[1-9]\d*\s+tests?\b)',
+    r'\bTests run:\s*\d+,\s*Failures:\s*[1-9]\d*\b|'
+    r'\b[1-9]\d*\s+failing\b|'
+    r'^\s*(?:\[ERROR\]\s*)?FAIL\s+\S+\.(?:test|spec)\.(?:js|jsx|ts|tsx)\b|'
+    r'^\s*[●✖×]\s+\S|'
+    r'^\s*(?:\[ERROR\]\s*)?[\w.$]+Test\.[\w$]+(?::\d+|\b[^\r\n]*<<<\s*(?:FAILURE|ERROR))|'
+    r'^\s*[\w.$]+Test\s*>\s*.+\s+FAILED\b|'
+    r'^\s*FAILED\s+\S+\.py(?:::\S+)+\b|'
+    r'^\s*--- FAIL:\s*Test\S+|'
+    r'^\s*test\s+\S+\s+\.\.\.\s+FAILED\b|'
+    r'^\s*Failed\s+[\w.]+\s+\[\d+\s*(?:ms|s)\]|'
+    r'\[\s*FAILED\s*\]\s+(?:[1-9]\d*\s+tests?\b|'
+    r'[\w/:-]+(?:\.[\w/:-]+)+))',
     re.IGNORECASE)
 BUILD_ERROR_PATTERN = re.compile(
     r'(?:fatal error|\berror:|undefined reference|collect2:|'
@@ -631,6 +643,13 @@ def write_build_log(ctx: Context, rid: str, text: str, evidence: set) -> None:
     lines = text.splitlines()
     test_hits = [index for index, line in enumerate(lines)
                  if UT_FAILURE_PATTERN.search(line)]
+    # Mocha 的汇总是“2 failing”，用例名则单独排成“1) 名称”。
+    # 只在同份日志已经出现失败汇总时，把这些编号行识别为用例。
+    if any(re.search(r'\b[1-9]\d*\s+failing\b', line, re.IGNORECASE)
+           for line in lines):
+        test_hits.extend(index for index, line in enumerate(lines)
+                         if re.match(r'^\s*\d+\)\s+\S', line))
+    test_hits = sorted(set(test_hits))
     other_hits = [index for index, line in enumerate(lines)
                   if BUILD_ERROR_PATTERN.search(line)
                   and not UT_FAILURE_PATTERN.search(line)]
@@ -653,8 +672,12 @@ def write_build_log(ctx: Context, rid: str, text: str, evidence: set) -> None:
     # [ERROR] 不能占满名额，挤掉后面真正的测试失败行。
     excerpt_lines = []
     if test_hits:
-        excerpt_lines.append('===== 测试失败原文（优先排查） =====')
-        excerpt_lines.extend(context(test_hits[:20] + test_hits[-20:]))
+        excerpt_lines.append(f'===== 测试失败原文（{len(test_hits)} 行，优先排查） =====')
+        # 用例名逐行列出；不能只取首尾 20 条，否则中间的失败用例
+        # 会再次从摘要里消失。首尾上下文另列，完整日志仍单独保存。
+        excerpt_lines.extend(f'{index + 1}: {lines[index]}' for index in test_hits)
+        excerpt_lines.append('===== 测试失败前后文 =====')
+        excerpt_lines.extend(context(test_hits[:5] + test_hits[-5:]))
     if other_hits:
         if excerpt_lines:
             excerpt_lines.append('===== 其他构建报错 =====')
