@@ -1674,6 +1674,24 @@ test("关联仓编辑器(#241):绑定仓零按钮、确定 diff 门禁、https �
   assert.doesNotMatch(metaPane, /删除成功|移除成功/);
 });
 
+test("只读参考件入卡(#425,ADR-0054):四类身份徽标同 pane 分组陈列", () => {
+  const metaPane = readFileSync(resolve("web/src/issues/MetaPane.tsx"), "utf-8");
+  // 元信息页签的关联仓清单即仓卡面:模块绑定/用户指派徽标打在登记
+  // 仓行上;参考仓与知识仓是只读参考件,独立分组「装了才出」。
+  assert.match(metaPane, /title="运行中经元信息页签指派的仓\(ADR-0023 通道\)">用户指派<\/Badge>/);
+  assert.match(metaPane, /aria-label="关联仓清单"/);
+  assert.match(metaPane, /只读参考件/);
+  assert.match(metaPane, /detail\.public_repos\?\.\s*length/);
+  assert.match(metaPane, />参考仓·只读<\/Badge>/);
+  assert.match(metaPane, /detail\.knowledge_repo\?\.status === "ready"/);
+  assert.match(metaPane, />知识仓·只读<\/Badge>/);
+  // 知识仓此前只在过程记录里露面;上 wire 后镜像已补(api.ts),服务端
+  // summarize 不再剥离该键(契约对账样例同步补 undefined)。
+  const apiMirror = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.match(apiMirror, /public_repos\?: Array<\{ url: string; name: string; at: string \}>/);
+  assert.match(apiMirror, /knowledge_repo\?: \{/);
+});
+
 // ---- #256 扫尾:焦点行断供回场、裸钮收编 ----
 
 test("列表卡焦点行:task-focus 家族 utilities 直译(#256),版式与状态点回场", () => {

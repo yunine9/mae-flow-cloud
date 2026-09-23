@@ -458,6 +458,8 @@ export function IssueMetaPane({ detail, canOperate }: {
                     {badge.label}</span>}
                   {bound && <Badge variant="neutral"
                     title="该仓在业务模块的绑定仓清单里(团队资产目录)">模块绑定</Badge>}
+                  {!bound && registered && <Badge variant="neutral"
+                    title="运行中经元信息页签指派的仓(ADR-0023 通道)">用户指派</Badge>}
                   {queued && <Badge variant="warning"
                     title="已入本次移除缓冲,点「确定」后才交给 Agent">将移除</Badge>}
                   {/* #241:移除 = 人裁定该仓与问题无关的严肃操作——按钮
@@ -515,6 +517,39 @@ export function IssueMetaPane({ detail, canOperate }: {
               </li>;
             })}
           </ul>}
+      {/* 只读参考件分组(#425,ADR-0054):参考仓(命中公共组件仓目录
+          的按需拉取件)与知识仓(开工即装的全局领域知识仓)同一陈列档
+          ——装了才出,缺席整组不渲染。它们不在关联仓清单里(交付工具
+          结构够不着),徽标直说身份。 */}
+      {(!!detail.public_repos?.length
+        || detail.knowledge_repo?.status === "ready") && <div
+        className="grid content-start gap-2 border-t border-line pt-2">
+        <strong className="text-sm font-bold">只读参考件</strong>
+        {(detail.public_repos ?? []).map((row) => <div
+          key={row.url} className="flex flex-wrap items-center gap-2 text-sm">
+          <strong title={row.url}
+            className="font-mono text-[13px] font-semibold text-text-strong [overflow-wrap:anywhere]">
+            {row.name}
+          </strong>
+          <Badge variant="neutral"
+            title="拉取时命中公共组件仓目录的只读参考件:可研读,不可修改、不可交付——推送/交付工具对它不可达(ADR-0054)">参考仓·只读</Badge>
+          <span className="select-text font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            {row.url}
+          </span>
+        </div>)}
+        {detail.knowledge_repo?.status === "ready" && <div
+          className="flex flex-wrap items-center gap-2 text-sm">
+          <strong title={detail.knowledge_repo.url}
+            className="font-mono text-[13px] font-semibold text-text-strong [overflow-wrap:anywhere]">
+            {detail.knowledge_repo.name}
+          </strong>
+          <Badge variant="neutral"
+            title="开工即装的全局领域知识仓,只读参考件:可研读,不可修改、不可交付(ADR-0033)">知识仓·只读</Badge>
+          <span className="select-text font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            {detail.knowledge_repo.url}
+          </span>
+        </div>}
+      </div>}
     </section>
     {/* #241 编辑区:增删裁定先入本地缓冲,「确定」一次提交给 Agent 执行。
         清单不乐观更新(数据源仍是 detail),提交成功只清缓冲并如实告知,

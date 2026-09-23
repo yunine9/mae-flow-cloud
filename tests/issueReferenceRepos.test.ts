@@ -199,6 +199,15 @@ test("拉取命中登记表:入参考仓台账不进登记清单,回执与转移
     assert.deepEqual(state.public_repos?.map((row: any) => row.url),
       [common], "参考仓台账只记登记表命中的地址");
     assert.equal(state.public_repos?.[0]?.name, "common-ui");
+    // wire 口径(#425):public_repos 上投影(页面要渲染参考仓卡),
+    // reference_repos 目录快照不上 wire(无消费面,不白送)。
+    const summary = scene.service.get(scene.id) as any;
+    assert.deepEqual(summary.public_repos?.map((row: any) => row.url),
+      [common], "public_repos 上 wire");
+    assert.equal("reference_repos" in summary, false,
+      "目录快照不上 wire");
+    assert.equal("knowledge_repo" in summary, false,
+      "未装知识仓不造空壳");
     assert.deepEqual(state.repo_urls, [bound], "登记清单不含参考仓");
     // 结构只读的输入面:交付工具的定位映射不含参考仓目录。
     const dirs = issueRepoWorkspaces(state,

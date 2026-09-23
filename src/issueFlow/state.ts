@@ -611,9 +611,9 @@ export function summarize(state: IssueSessionState): IssueSummary {
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
     module_locked: _moduleLocked,
     parked_notices: _parkedNotices,
-    // knowledge_repo(知识仓装载账,#286)同罪同罚:工作台无消费面,
-    // 现场经转移账可见;上 wire 要先补前端镜像与样例,不白送。
-    knowledge_repo: _knowledgeRepo,
+    // reference_repos(参考组件仓目录快照,ADR-0054)不上 wire:它是
+    // 开场词的注入源,工作台无消费面;要上前端先补镜像与样例,不白送。
+    reference_repos: _referenceRepos,
     ...rest } = state;
   return {
     ...rest,

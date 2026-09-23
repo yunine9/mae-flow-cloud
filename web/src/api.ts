@@ -3905,6 +3905,18 @@ export interface IssueSummary {
   repo_url?: string;
   /** 全部关联仓(彼此平等;与 repo_url 由服务端 dual-write 保持一致)。 */
   repo_urls?: string[];
+  /** 参考仓台账(ADR-0054):拉取时命中公共组件仓目录的只读参考件;
+   * 不在 repo_urls 里,交付工具结构够不着。会话页据此渲染「参考仓·只读」。 */
+  public_repos?: Array<{ url: string; name: string; at: string }>;
+  /** 知识仓装载账(ADR-0033):开工即装的只读参考件;status=ready 才
+   * 有现场。会话页据此渲染「知识仓·只读」卡片(装了才出)。 */
+  knowledge_repo?: {
+    url: string;
+    name: string;
+    status: "ready" | "skipped";
+    note?: string;
+    at: string;
+  };
   module?: string;
   /** 登记选定的业务模块 ID(module 标签的来源留痕)。 */
   module_id?: string;
