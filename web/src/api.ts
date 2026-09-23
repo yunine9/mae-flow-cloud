@@ -21,8 +21,6 @@ export type TaskStatus =
   | "canceled"
   | "failed";
 
-export type DeliveryCompileAction = "rerun" | "skip";
-
 export const STATUS_TEXT: Record<TaskStatus, string> = {
   queued: "排队中",
   running: "进行中",
@@ -1073,7 +1071,7 @@ export interface TaskSummary {
     prepush?: PrepushVerification;
     /** 进程活性只看这里，不能再由旧存储字段 prepush.state=preparing 推断。 */
     prepush_runtime?: PrepushRuntime;
-    /** 当前 push 检视的阅读导航；授权仍由 delivery_selection 决定。 */
+    /** 当前 push 检视的阅读导航，展示实际提交内容。 */
     push_review?: PushReviewPresentation;
     /** 历史目录限制卡，恢复或继续验证时清理。 */
     scope_violation?: { paths: string[]; noted_at: string };
@@ -1112,6 +1110,7 @@ export interface TaskSummary {
       failure?: string;
     };
   };
+  /** 旧任务历史兼容字段，界面不再使用文件选择。 */
   delivery_selection?: {
     paths: string[];
     observed_paths: string[];
@@ -1124,7 +1123,7 @@ export interface TaskSummary {
     confirmation_reason?: string;
     updated_at: string;
   };
-  /** push 前人工确认交付范围(任务级显式开关,缺省继承个人设置)。 */
+  /** push 前人工确认(任务级显式开关,缺省继承个人设置)。 */
   push_confirmation?: boolean;
   progress?: TaskProgress;
   /** 当前阶段采用什么做法的只读说明；状态与完成条件仍以内核为准。 */
@@ -2389,12 +2388,8 @@ export async function decide(
   repositoryAssignees?: Record<string, string>,
   /** Chain 图上的逐仓 AR 单号；与责任人同一次确认提交。 */
   repositoryTickets?: Record<string, string>,
-  /** 代码检视勾选的最终交付文件；空数组表示明确不选任何文件。 */
-  deliveryPaths?: string[],
   /** 当前卡的稳定身份；用于把成功请求的网络重放识别为幂等成功。 */
   waitingId?: string,
-  /** 调整最终文件后，是重新编译还是把新提交直接交给权威流水线。 */
-  deliveryCompileAction?: DeliveryCompileAction,
 ): Promise<{ conflict?: string }> {
   const response = await fetch(`/tasks/${taskId}/decision`, {
     method: "POST",
@@ -2409,8 +2404,6 @@ export async function decide(
       selected_repository_skill_ids: repositorySkills?.selectedIds,
       repository_assignees: repositoryAssignees,
       repository_tickets: repositoryTickets,
-      delivery_paths: deliveryPaths,
-      delivery_compile_action: deliveryCompileAction,
     }),
   });
   if (response.status === 409) {

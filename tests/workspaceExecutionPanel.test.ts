@@ -179,22 +179,18 @@ test("任务摘要卡仍按需展开，避免多张卡同时建立实时连接",
   assert.doesNotMatch(utilities, /<ExecutionPanel task=\{task\} defaultOpen \/>/);
 });
 
-test("push 检视先给这次修改入口，同时保留完整交付与文件选择", () => {
+test("push 检视先给这次修改入口，同时保留完整交付阅读", () => {
   assert.match(taskCard, />\s*看这次改的\s*</);
   assert.match(taskCard, />\s*看全部改动\s*</);
   assert.match(taskCard, /activeDeliveryScope === "full"[^]*正在看全部改动/,
     "已经摆在左侧的完整交付必须是状态，不得保留成点击无反馈的假按钮");
-  assert.match(workspace, /activeDeliveryScope=\{needsDeliverySelection\(task\.waiting\)[^]*diffScope/,
+  assert.match(workspace, /activeDeliveryScope=\{isPushConfirmation\(task\.waiting\)[^]*diffScope/,
     "决策卡必须知道左侧当前显示的范围，不能只拿到一个盲跳回调");
   assert.match(workspace,
     /readPushReviewDiff\(task\.id, diffScope\)/,
     "跳转后必须读取服务端固化的比较锚，不能在浏览器猜 Git revision");
-  assert.match(workspace,
-    /pushReview\.committed_paths[^]*pushReview\.all_paths/,
-    "快速复检不能丢掉完整交付清单，确认仍要覆盖当前全部待推送文件");
-  assert.match(workspace,
-    /!pushReview \|\| diffScope === "full"/,
-    "只有完整交付视图能调整文件范围，这次修改视图保持纯阅读");
+  assert.doesNotMatch(workspace, /selectable=|initialSelectedPaths=|onSelectionChange=\{setDeliverySelection/);
+
 });
 
 test("Agent 长说明与提交记录默认折叠，避免挤满窄决策栏", () => {
@@ -205,21 +201,11 @@ test("Agent 长说明与提交记录默认折叠，避免挤满窄决策栏", ()
     "长篇内部回复不能继续与标题、提交记录全挤在一个段落里");
 });
 
-test("最终交付范围只在 diff 树调整，决策卡保留摘要和直达入口", () => {
-  assert.doesNotMatch(taskCard, /className="delivery-scope-files"/);
-  assert.match(taskCard, /文件去留在左侧「代码改动」里调整/);
-  assert.match(taskCard, /去代码改动里选文件/);
-  assert.match(taskCard, /按这 \$\{deliverySelection\.selectedPaths\.length\} 个文件推送/);
-  assert.match(taskCard, /重新编译后提交/);
-  assert.match(taskCard, /不再编译，直接提交/);
-  assert.match(taskCard, /提交返工意见/);
-  assert.match(taskCard,
-    /const deliveryReady = !requiresDeliverySelection\s*\|\| selectedHandlesFeedback/,
-    "返工不能被 diff/文件清单加载失败卡死；只有确认推送需要当前清单");
-  assert.doesNotMatch(workspace, /onDeliverySelectionChange=\{task\.waiting/);
+test("推送检视不再包含文件选择、草稿或按清单重编入口", () => {
+  assert.doesNotMatch(taskCard, /deliverySelection|deliveryReady|showDeliveryCompileActions|选文件|全部纳入|不再编译，直接提交/);
+  assert.doesNotMatch(workspace, /deliverySelection|initialSelectedPaths|selectable=/);
+  assert.doesNotMatch(gitDiff, /toggleDelivery|replaceDelivery|selectable|deliveryPaths/);
   assert.match(workspace, /focusRequest=\{diffReviewRequest\}/);
-  assert.match(gitDiff, /if \(focusRequest > 0 && !embeddedBrowser\) setFocused\(true\)/);
-  assert.match(gitDiff, /requestedDeliveryKey[^]*setDeliveryPaths/);
 });
 
 test("工作台打开后列表卡只保留待办信号，不重复渲染整张决定表单", () => {
@@ -233,10 +219,8 @@ test("工作区其他改动默认折叠但不隐藏事实", () => {
   assert.match(gitDiff, /localGroupOpen && renderTreeNodes\(localTree/);
 });
 
-test("最终代码审阅统计只计算将推送文件，不混入仅留本地改动", () => {
-  assert.match(gitDiff,
-    /const countedFiles = selectable[^]*deliveryPaths\.has\(file\.path\)/,
-    "交付检视标题的加减行数必须跟随最终推送勾选集合");
+test("代码审阅统计基于实际差异，不依赖文件勾选", () => {
+  assert.match(gitDiff, /const countedFiles = files/);
   assert.match(gitDiff, /const additions = countedFiles\.reduce/);
   assert.match(gitDiff, /const deletions = countedFiles\.reduce/);
 });
@@ -304,8 +288,7 @@ test("增量浏览独立于审批卡，完整浏览保留按文件加载", () =>
   assert.match(workspace, /readDiffReview\(task.id\)/);
   assert.match(workspace, /const pushReview = \(browsingReview.*\?\? approvalReview/);
   assert.match(workspace, /manifest=\{!scopedDiff/);
-  assert.match(workspace, /task.status === "waiting_for_human"[^]*needsDeliverySelection\(task.waiting\)/,
-    "只读浏览不会开放交付勾选");
+  assert.doesNotMatch(workspace, /selectable=|deliverySelection/);
 });
 
 

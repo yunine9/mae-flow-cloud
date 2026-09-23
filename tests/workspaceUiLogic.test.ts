@@ -377,29 +377,7 @@ test("await_merge 的右栏明确给出合入行动，关闭 MR 给出异常行�
   }, false).title, "MR 已关闭，需要处理");
 });
 
-test("普通 Diff 的默认勾选可用于当前决定，换任务或换卡不复用旧选择", () => {
-  const key = JSON.stringify(["task-3", "new-card"]);
-  const selection = {
-    selectedPaths: ["src/a.ts"], committedPaths: ["src/a.ts"],
-    allPaths: ["src/a.ts", "src/local.ts"],
-  };
-  const state = { key, selection };
-  assert.equal(workspace.usablePushReviewSelection(false, { kind: "idle" },
-    workspace.deliverySelectionForCard(state, key)), selection);
-  for (const next of [
-    ["task-3", "next-card"],
-    ["task-4", "new-card"],
-  ]) {
-    assert.equal(workspace.deliverySelectionForCard(state, JSON.stringify(next)),
-      undefined);
-  }
-  assert.equal(workspace.deliverySelectionForCard(undefined, key), undefined);
-  const empty = { ...selection, selectedPaths: [] };
-  assert.deepEqual(workspace.deliverySelectionForCard({ key, selection: empty },
-    key)?.selectedPaths, []);
-});
-
-test("过期 push diff 不进入 GitDiff 内容，并撤销可提交的文件选择", () => {
+test("过期 push diff 不进入 GitDiff 内容", () => {
   const stale = workspace.normalizePushReviewDiffResult({
     unavailable: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
     status: 404,
@@ -410,21 +388,11 @@ test("过期 push diff 不进入 GitDiff 内容，并撤销可提交的文件选
     message: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
     expired: true,
   });
-  const selection = {
-    selectedPaths: ["src/a.ts"],
-    committedPaths: ["src/a.ts"],
-    allPaths: ["src/a.ts"],
-  };
-  assert.equal(workspace.usablePushReviewSelection(true, stale.state, selection),
-    undefined);
-
   const fresh = workspace.normalizePushReviewDiffResult({
     content: "diff --git a/src/a.ts b/src/a.ts\n",
     branch: "feature/a",
   });
   assert.equal(fresh.state.kind, "ready");
-  assert.equal(workspace.usablePushReviewSelection(true, fresh.state, selection),
-    selection);
 });
 
 test("push diff API 保留 404 状态，供工作台识别版本失效", async () => {
@@ -514,7 +482,7 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   }), "单元测试验证");
 });
 
-test("最终交付决定卡只显示范围摘要，文件去留统一留在左侧 diff", () => {
+test("最终交付决定卡不要求勾选文件，人工意见仍可提交", () => {
   const deliveryTask = {
     ...task("delivery", "waiting_for_human"),
     waiting: {
@@ -535,21 +503,9 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
   const html = renderToStaticMarkup(React.createElement(taskCard.WaitingCard, {
     task: deliveryTask,
     onDecided: () => undefined,
-    deliverySelection: {
-      selectedPaths: ["src/emoji.ts"],
-      committedPaths: ["src/emoji.ts", "test.log"],
-      allPaths: ["src/emoji.ts", "test.log"],
-    },
     unresolvedAnnotationCount: 3,
-    onDeliverySelectionChange: () => undefined,
   }));
-  assert.match(html, /这次推送哪些文件/);
-  assert.match(html, /1 \/ 2 个文件将推送/);
-  assert.match(html, /文件去留在左侧「代码改动」里调整/);
-  assert.match(html, /重新编译后提交/);
-  assert.match(html, /不再编译，直接提交/);
-  assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
-  assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
+  assert.doesNotMatch(html, /这次推送哪些文件|文件去留|选文件|重新编译后提交|不再编译，直接提交|全部纳入|全部仅留本地/);
   assert.match(html, /当前有 3 条检视意见未闭环/);
   assert.match(html, /建议选择“按清单返工”/);
   assert.doesNotMatch(html, /当前卡片缺少调整选项/);

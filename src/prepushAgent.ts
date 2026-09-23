@@ -38,11 +38,6 @@ export interface PrePushRunRequest {
   baseline: string;
   /** 与宿主 push 前机械校验同源的人类可读规范。缺席时使用平台默认值。 */
   commitConvention?: string;
-  /** 历史文件选择供回顾，不限制本轮必要修复。 */
-  deliverySelection?: {
-    paths: string[];
-    excludedPaths: string[];
-  };
   /** 只用于提醒 Build-Fix Agent 自查提交范围，不是按目录硬拦截。
    * 某些仓会合法提交生成代码/二进制，最终判断仍由 Agent 基于仓库事实作出。 */
   changeScope?: BuildFixScopeReview;
@@ -599,13 +594,6 @@ export function prePushMission(
       + "不要自行用 600 秒之类的短 timeout 截断已知慢编译；平台会提升"
       + "过短的重型构建 timeout，整轮硬上限仍负责终止真正卡死的任务。"
     : "";
-  const deliverySelection = request.deliverySelection;
-  const deliveryGuidance = deliverySelection ? [
-    "",
-    "历史文件选择只整理当次提交，不限制本轮修复。按需求和责任人最新意见补齐实现、依赖、配置与测试，无需先扩清单，也不因文件增减重开确认。",
-    "此前未选择的文件可能是漏选，不能仅凭旧清单拒绝必要修复；用户明确要求不改或不交付的内容仍须遵守。",
-    "不要夹带构建产物或他人原有未提交修改；对照改动和验证结果，按准确路径暂存本轮有意交付的文件。",
-  ] : [];
   const foreign = request.foreignCommits;
   const foreignGuidance = foreign?.count ? [
     "",
@@ -672,7 +660,6 @@ export function prePushMission(
       + "注入的本地 Skill/配置：只读使用，禁止修改、强制 add 或提交；"
       + "Cloud 会在 push 前复核整个提交历史。",
     ...scopeGuidance,
-    ...deliveryGuidance,
     ...foreignGuidance,
     "依赖下载、工具缺失、磁盘/网络/权限等不是改代码能解决的问题，归类为 infrastructure_failure，",
     "写清缺什么后停止，不要为了制造绿灯篡改测试、关闭检查或编造执行结果。",

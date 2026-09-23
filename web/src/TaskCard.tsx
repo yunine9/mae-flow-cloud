@@ -25,7 +25,7 @@ import { cn } from "cn";
 import { taskOverviewRelationship } from "./taskHierarchy";
 import { TaskOverviewRow } from "./TaskOverviewRow";
 import { Markdown } from "./markdown";
-import { clearDecisionChoice, isDecisionTextDrag, isAdjustmentAnswer, needsDeliverySelection, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
+import { clearDecisionChoice, isDecisionTextDrag, isAdjustmentAnswer, isPushConfirmation, toggleDecisionChoice, unifiedDecisionReply } from "./decisionSelection";
 import { confirmDialog } from "./ConfirmDialog";
 import {
   decide,
@@ -37,7 +37,6 @@ import {
   statusText,
   tailExecutionEvents,
   type ExternalAction,
-  type DeliveryCompileAction,
   type SemanticEvent,
   type SseConnectionState,
   type TaskSummary,
@@ -59,7 +58,6 @@ import {
 import type { RepositorySkillSelection } from "./RepositorySkillPicker";
 import type { RepositoryAssigneeSelection } from "./RepositoryAssigneePicker";
 import { chainStages } from "./RequirementGraph";
-import type { GitDiffSelection } from "./GitDiff";
 import { PrepushStatus } from "./PrepushStatus";
 import { TaskStatusBadge, TASK_STATUS_RAIL } from "./StatusBadge";
 import { TokenUsage } from "./TokenUsage";
@@ -469,15 +467,12 @@ export function TaskCard({
           )}
           {showDecisionForm && decides && !chainReview
             && task.status === "waiting_for_human" && task.waiting && (
-            needsDeliverySelection(task.waiting) ? (
-              /* 交付清单必须对着真实 diff 勾选,而勾选面板只在工作台的
-                 「本任务变更」里。列表页若直接渲决策表单,提交键会永远
-                 停在"正在读取交付文件清单"(push 确认卡实锤死锁),
-                 所以这里只给入口不给表单。 */
+            isPushConfirmation(task.waiting) ? (
+              /* 列表保留入口，工作台展示完整代码与意见。 */
               <div className="grid gap-1.5 rounded-lg border border-line bg-surface-2 p-3 text-sm">
                 <span className="font-mono text-xs font-bold tracking-wide text-ink">交付检视</span>
-                <strong className="text-[15px] text-text-strong">Build-Fix 已通过，请做最终代码检视</strong>
-                <p className="m-0 text-xs leading-relaxed text-muted-foreground">这版代码已完成构建与测试修复；请到任务工作台检视 diff，确认后将直接推送。</p>
+                <strong className="text-[15px] text-text-strong">请检视当前待推送代码</strong>
+                <p className="m-0 text-xs leading-relaxed text-muted-foreground">请到任务工作台查看代码差异和检视意见，确认后将直接推送。</p>
                 {onOpenArtifacts && (
                   <Button type="button" size="sm" className="w-fit" onClick={onOpenArtifacts}>
                     去检视代码
@@ -685,7 +680,7 @@ function waitingStepTitle(task: TaskSummary): string | undefined {
   if (isChainReviewWaiting(task)) return "确认拆分方案";
   if (step === "host_push_confirm") return "确认本次推送";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
-  if (needsDeliverySelection(task.waiting)) return "代码检视";
+  if (isPushConfirmation(task.waiting)) return "代码检视";
   return undefined;
 }
 
@@ -703,7 +698,6 @@ export function WaitingCard({
   attachment,
   repositorySkillSelection,
   repositoryAssigneeSelection,
-  deliverySelection,
   pushReview,
   onLocateDelivery,
   activeDeliveryScope,
@@ -729,14 +723,9 @@ export function WaitingCard({
   repositorySkillSelection?: RepositorySkillSelection;
   /** Chain 的逐仓分工；确认拆单前必须全部指向已就绪成员。 */
   repositoryAssigneeSelection?: RepositoryAssigneeSelection;
-  /** 代码检视里的文件级交付清单；由工作区变更面板的真实勾选产生。 */
-  deliverySelection?: GitDiffSelection;
-  /** 兼容调用方；文件去留只在左侧 diff 树调整，右栏不再放第二套控件。 */
-  onDeliverySelectionChange?: (selection: GitDiffSelection) => void;
   /** 当前待推送代码为什么需要再检视，以及两种阅读范围。 */
   pushReview?: PushReviewPresentation;
-  /** 跳到勾选面板(工作台的「本任务变更」)。列表页没有勾选面板,
-   * 不传即不渲跳转钮。 */
+  /** 跳到工作台的代码差异；不传则不显示跳转按钮。 */
   onLocateDelivery?: (scope?: "changes" | "full") => void;
   /** 当前已经摆在左侧的检视范围。相同范围必须显示成状态,不能继续
    * 假装是一个点了会有动作的按钮。 */
@@ -794,13 +783,7 @@ export function WaitingCard({
   const feedbackLabel = feedbackOption?.replace(/[（(].*$/, "") ?? "需要调整";
   const attachmentCount = unresolvedAnnotationCount
     ?? annotationIds?.length ?? 0;
-  const requiresDeliverySelection = needsDeliverySelection(task.waiting);
-  const deliverySelectionChanged = !!deliverySelection
-    && (deliverySelection.selectedPaths.length
-      !== deliverySelection.committedPaths.length
-      || deliverySelection.committedPaths.some((path) =>
-        !deliverySelection.selectedPaths.includes(path)));
-
+  const pushConfirmation = isPushConfirmation(task.waiting);
   const answerOf = (question: string) => picked[question] ?? "";
   const optional = (question: string) =>
     /可忽略|若上题|如无|可跳过|可不填/.test(question);
@@ -809,9 +792,6 @@ export function WaitingCard({
   const chainProjectionReady = task.requirement_graph?.projection_state === "ready";
   const reworksChainChoice = chainReview && Object.values(picked).some((answer) =>
     answer.includes("需要修改"));
-  // 勾选与 commit 不同不再算冲突(2026-08-28 用户拍板易用性):服务端
-  // 会按勾选机械整理提交，用户在同一张卡选择重新编译或直接提交。
-  // 只有未闭环批注仍然拦“通过”——那是真有意见没处理。
   const reviewChoiceConflict = attachmentCount > 0
     && questions.some((item) => {
     const options = item.options ?? [];
@@ -831,22 +811,15 @@ export function WaitingCard({
   // 而当前卡展示成“需要调整代码（按清单返工）”。服务端允许这种别名，
   // 前端也必须从 diff 卡的明确返工文案兜底识别，不能仍承诺“推送”。
   const selectedHandlesFeedback = Boolean(selectedEffect?.handles_feedback)
-    || ((requiresDeliverySelection || task.waiting?.step === "host_push_confirm")
+    || ((pushConfirmation || task.waiting?.step === "host_push_confirm")
       && selectedAnswers.some(isAdjustmentAnswer));
   const hasCustomPrimaryAnswer = (unifiedReply && !picked[questions[0]?.question] && !!replyText.trim()) || questions.some((item) =>
     (item.options?.length ?? 0) > 0
     && !picked[item.question]
     && !!customOpen[item.question]
     && !!custom[item.question]?.trim());
-  const isReviewDecision = requiresDeliverySelection
+  const isReviewDecision = pushConfirmation
     || choiceEffects.some((effect) => effect.closes_feedback);
-  // 返工只要求把意见送回 Agent；服务端会以当前 commit 范围作为默认
-  // 清单。代码 diff 短暂加载失败、版本刚刷新时也必须让人退回修改，
-  // 不能拿“先读到文件树”当返工前置。只有确认推送才要求浏览器拿到
-  // 当前清单且至少选中一个文件。
-  const deliveryReady = !requiresDeliverySelection
-    || selectedHandlesFeedback
-    || Boolean(deliverySelection?.selectedPaths.length);
   const ready = (requirementAnalysisConfirmation || questions.every((item) => {
     const options = item.options ?? [];
     const answered = unifiedReply ? Boolean(picked[item.question] || replyText.trim()) : options.length
@@ -854,7 +827,7 @@ export function WaitingCard({
         || (customOpen[item.question] && custom[item.question]?.trim())
       : customOpen[item.question] && custom[item.question]?.trim();
     return optional(item.question) || Boolean(answered);
-  })) && deliveryReady
+  }))
     && !repositorySkillSelection?.scanning
     && (!repositorySkillSelection?.scanned
       || !!repositorySkillSelection.catalogToken)
@@ -894,7 +867,7 @@ export function WaitingCard({
     }
   }
 
-  async function submit(deliveryCompileAction?: DeliveryCompileAction) {
+  async function submit() {
     if (!ready || submitting) return;
     const selectedOptions: Record<string, string> = {};
     const freeResponses: Record<string, string> = {};
@@ -934,9 +907,7 @@ export function WaitingCard({
         repositorySkills,
         confirmsChain ? repositoryAssigneeSelection?.assignments : undefined,
         confirmsChain ? repositoryAssigneeSelection?.tickets : undefined,
-        requiresDeliverySelection ? deliverySelection?.selectedPaths : undefined,
         task.waiting!.waiting_id,
-        deliveryCompileAction,
       );
       if (result.conflict) setConflict(result.conflict);
       onDecided();
@@ -965,15 +936,7 @@ export function WaitingCard({
       : hasCustomPrimaryAnswer ? "提交自定义处理方式"
         : selectedHandlesFeedback
           ? selectedAnswers.includes("先调整") ? "交给 Agent 先调整" : "发送并继续修改"
-          : requiresDeliverySelection && deliverySelection
-            ? `按这 ${deliverySelection.selectedPaths.length} 个文件推送`
-            : requiresDeliverySelection
-              ? "先检视并选择交付文件"
-              : "提交决定";
-  const showDeliveryCompileActions = requiresDeliverySelection
-    && deliverySelectionChanged
-    && !selectedHandlesFeedback
-    && !hasCustomPrimaryAnswer;
+          : pushConfirmation ? "确认推送" : "提交决定";
 
   return (
     <section className={`decision-card${chainReview ? " is-module-confirmation" : ""}`} aria-labelledby={`decision-${task.id}`}>
@@ -1246,8 +1209,7 @@ export function WaitingCard({
       )}
 
       <DecisionFooterMount target={footerTarget}>
-      <footer className={`decision-footer${
-        showDeliveryCompileActions ? " has-submit-choices" : ""}`}>
+      <footer className="decision-footer">
         {unifiedReply && <div className="decision-unified-reply">
           <span>{mrDescription ? "AR 单上的准确描述" : chainReview ? (picked[questions[0].question] ? "补充说明（可选）" : "其他处理意见")
             : picked[questions[0].question] ? "补充所选决定的说明" : "自定义答复"} <small>{mrDescription ? "将原样用作 MR 标题" : chainReview
@@ -1292,32 +1254,13 @@ export function WaitingCard({
             ? `将把剩余 ${pendingReviewAnnotationIds.length} 条检视意见随本次决定一并送给 Agent`
             : `还有 ${pendingReviewAnnotationIds.length} 条意见：请先删除无效意见，或自行答复无需改动的意见；其余会在选择“仍需调整”后一起送给 Agent`}</span>
         </div>}
-        {/* #217:has-submit-choices 时 footer 换行,警示占满整行(原
-            .decision-footer.has-submit-choices > .alert 的 flex-basis) */}
-        {conflict && <Alert variant="destructive" role="alert"
-          className={`mb-3${showDeliveryCompileActions ? " basis-full" : ""}`}>{conflict}</Alert>}
-        {showDeliveryCompileActions ? (
-          <div className="decision-submit-choices flex-wrap" aria-label="清单调整后的提交方式">
-            <Button type="button" variant="outline" className="flex-1"
-              disabled={!ready} onClick={() => submit("rerun")}>
-              {submitting ? "正在提交…" : "重新编译后提交"}
-            </Button>
-            <Button type="button" className="flex-1"
-              disabled={!ready} onClick={() => submit("skip")}>
-              {submitting ? "正在提交…" : "不再编译，直接提交"}
-              <svg viewBox="0 0 20 20" aria-hidden>
-                <path d="m4 10 3.2 3.2L16 5.5" />
-              </svg>
-            </Button>
-          </div>
-        ) : (
-          <div className="flex justify-end">
-            <Button type="button" disabled={!ready} onClick={() => submit()}>{submitLabel}</Button>
-          </div>
-        )}
+        {conflict && <Alert variant="destructive" role="alert" className="mb-3">{conflict}</Alert>}
+        <div className="flex justify-end">
+          <Button type="button" disabled={!ready} onClick={() => submit()}>{submitLabel}</Button>
+        </div>
       </footer>
       </DecisionFooterMount>
-      {(pushReview || requiresDeliverySelection) && <details className="decision-evidence">
+      {pushReview && <details className="decision-evidence">
         <summary>改动摘要与推送范围</summary>
       {pushReview && (
         <section className="push-review-overview" aria-label="本次代码检视摘要">
@@ -1384,40 +1327,6 @@ export function WaitingCard({
                     看全部改动
                   </Button>}
             </div>
-          )}
-        </section>
-      )}
-
-      {requiresDeliverySelection && (
-        <section className={`delivery-scope-card${
-          deliverySelectionChanged ? " changed" : ""}`}
-          aria-labelledby={`delivery-scope-${task.id}`}>
-          <header>
-            <div>
-              <span>这次推送哪些文件</span>
-              <strong id={`delivery-scope-${task.id}`}>{deliverySelection
-                ? `${deliverySelection.selectedPaths.length} / ${deliverySelection.allPaths.length} 个文件将推送`
-                : "先打开代码差异完成检视"}</strong>
-            </div>
-          </header>
-          {!deliverySelection ? (
-            <p>请到左侧「代码改动」逐个文件查看，并在那里决定文件去留。</p>
-          ) : (
-            <div className="delivery-scope-result" role="status">
-              <strong>文件去留在左侧「代码改动」里调整</strong>
-              <span>{selectedHandlesFeedback
-                ? "这次只提交返工意见，不会推送；Agent 会按当前范围处理后再次交给你检视。"
-                : deliverySelection.selectedPaths.length === 0
-                  ? "至少纳入一个文件才能通过；也可以选择返工，把去留原因交给 Agent。"
-                  : deliverySelectionChanged
-                    ? `Cloud 会按左侧选中的 ${deliverySelection.selectedPaths.length} 个文件机械整理提交；其余 ${deliverySelection.allPaths.length - deliverySelection.selectedPaths.length} 个只留在任务工作区。提交时可选择是否重新编译。`
-                    : "保持当前提交文件集合不变，服务端复核后继续推送。"}</span>
-            </div>
-          )}
-          {onLocateDelivery && (
-            <Button type="button" variant="outline" size="sm"
-              className="mx-5 mb-3.5 mt-0 w-fit self-start"
-              onClick={() => onLocateDelivery("full")}>去代码改动里选文件</Button>
           )}
         </section>
       )}

@@ -7,6 +7,13 @@ import { assertTaskReadRoot } from "./taskHostDiagnostics.ts";
 import { renderDecision, type WaitingRecord } from "./humanGate.ts";
 
 export interface OwnerInstruction { id: string; actor: string; text: string; at: string; source?: string }
+/** 编码会话和 Build-Fix 共用的提交方法，不新增过滤器或审批状态。 */
+export const COMMIT_CONTENT_GUIDANCE = "每次 git commit 前查看 git diff --cached 的文件列表和实际差异，核对本次暂存内容。"
+  + "结合当前需求与已交办的检视意见，发现无关编译产物、日志或其他无关改动时，仅将其撤出暂存，保留本地文件；按具体路径暂存，不用 git add .。"
+  + "提交前按本次文件和需求查阅相关原始要求：.mae-flow-work/owner-inputs.json 保留用户输入和已交办的检视原文，主会话也可用 task_context(view=instructions) 查询。"
+  + "只沿用仍适用的明确要求；已经完成的单次修正不变成永久限制，已撤回或不采纳的意见不继续执行，用户改变要求时以最新原话为准。按需读取，不把全部历史意见重复加入上下文。"
+  + "历史文件勾选已取消，未勾选不代表禁止提交，不维护路径黑名单，不按扩展名或目录名自动排除文件。";
+
 export const DECISION_SYNC_GUIDANCE = "责任人的最终决定优先；协作者意见不自动成为最终裁决。用户原始答复是需求依据，decisions.md 是其整理；Spec、Story、实施附录、UT 和代码是落实。"
   + "先判断新答复是否改变行为、边界或验收预期：改变时沿当前任务同步受影响的决定及 BEH/TC、设计、代码和 UT，明确取代了哪条旧口径；无关决定保留。"
   + "回执写对不等于文档/实现已改对。引用原始答复编号和具体含义，不能把 Agent 的 set_target 摘要当作用户原话，不能用旧 Spec 否定更新答复。"
@@ -47,7 +54,7 @@ export function submittedReviewInputs(items: Annotation[]): OwnerInstruction[] {
     if (sent || item.status === "verified") {
       rows.push({ id: `annotation:${item.id}:r${revision}`, actor: item.author,
         at: item.edited_at || item.sent_at || item.created_at, source: "review",
-        text: `${context}\n已提交检视意见（不是最终需求裁决）：${item.note}${item.images?.length ? "\n附图：" + item.images.map(image => image.path).join("、") : ""}` });
+        text: `${context}\n已提交检视意见（${item.status === "verified" ? "已处理；" : ""}不是最终需求裁决）：${item.note}${item.images?.length ? "\n附图：" + item.images.map(image => image.path).join("、") : ""}` });
       if (item.agent_context?.revision === revision) rows.push({
         id: `annotation:${item.id}:r${revision}:context`, actor: item.agent_context.by,
         at: item.agent_context.at, source: "review_context", text: `${context}\n转交时补充说明：${item.agent_context.text}` });

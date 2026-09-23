@@ -1,6 +1,6 @@
 import { deliveryChangeSnapshot } from "./artifacts.ts";
 import { TaskHostLedger, type HostOperation } from "./taskHostTools.ts";
-import { normalizedDeliveryPaths, pushReviewCallId, hasPushApproval, samePaths } from "./pushReviewPolicy.ts";
+import { normalizedDeliveryPaths, pushReviewCallId, hasPushApproval, latestPushDecision, samePaths } from "./pushReviewPolicy.ts";
 import type { TaskSummary } from "./taskService.ts";
 import type { HumanGate } from "./humanGate.ts";
 
@@ -9,7 +9,7 @@ export const HOST_PUSH_CHOICE_EFFECTS = [
   { key: "adjust", answers: ["先调整"], allowsSourceEdit: true, handlesFeedback: true, closesFeedback: false },
 ];
 export const HOST_PUSH_CONFIRM_STEP = "host_push_confirm";
-export const PUSH_SCOPE_GUIDANCE = "文件勾选只整理本次提交，不限制后续修复。确认后按需求和最新意见继续交付，不因文件增减、合并或 SHA 变化重复询问；明确要求调整和人工意见复检仍保留。";
+export const PUSH_SCOPE_GUIDANCE = "文件勾选机制已取消，当前提交可直接交付。后续修复不受历史文件清单限制；明确的调整意见仍交给 Agent 处理。";
 interface PushConfirmationHost {
   summary: TaskSummary;
   cwd?: string;
@@ -32,25 +32,15 @@ export async function confirmHostPush(host: PushConfirmationHost, operation: Hos
   const ledger = new TaskHostLedger(host.summary);
   const selection = host.summary.delivery_selection;
   const ownApproval = operation.push_confirmed;
-  const sharedApproval = hasPushApproval(selection);
-  // 旧台账没有范围，只能继承同分支同 SHA 的明确确认；新的确认统一写入 selection。
-  const legacyApproval = !selection && ledger.read().operations.some(item =>
+  const decisions = host.humanGate.resolved();
+  const sharedApproval = hasPushApproval(selection, decisions);
+  // 更早版本仅在操作记录中保存确认；无更新的人工决定时兼容读取。
+  const legacyApproval = !selection && !latestPushDecision(decisions) && ledger.read().operations.some(item =>
     item.push_confirmed && item.sha === operation.sha && item.branch === operation.branch
     && item.target_branch === operation.target_branch);
   if (ownApproval || sharedApproval || legacyApproval) {
     operation.push_confirmed = true;
-    if (paths) {
-      operation.push_paths = paths;
-      if (!sharedApproval) host.summary.delivery_selection = {
-        ...selection, paths, observed_paths: snapshot.workspace_paths,
-        excluded_paths: normalizedDeliveryPaths([...(selection?.excluded_paths ?? []),
-          ...snapshot.workspace_paths.filter(path => !paths.includes(path))]).filter(path => !paths.includes(path)),
-        head: snapshot.head, baseline: snapshot.baseline!, status: "confirmed",
-        waiting_id: operation.push_waiting_id ?? `${host.summary.id}:${operation.id}`,
-        confirmation_mode: "human", confirmation_reason: "沿用责任人的推送确认；文件选择仅用于当次整理",
-        updated_at: new Date().toISOString(),
-      };
-    }
+    if (paths) operation.push_paths = paths;
     ledger.update(operation);
     const waiting = host.summary.waiting;
     if (waiting?.step === HOST_PUSH_CONFIRM_STEP
@@ -87,7 +77,7 @@ export async function confirmHostPush(host: PushConfirmationHost, operation: Hos
     questionInput: { questions: [{ question: `推送到 ${operation.branch}？`, options: ["确认推送", "先调整"] }] },
     context: [operation.input.reason.slice(0, 500),
       paths?.length ? `本次涉及 ${paths.length} 个文件：${paths.slice(0, 5).join("、")}${paths.length > 5 ? "等" : ""}` : "本次推送当前已提交的改动。",
-      "默认推送当前已提交的改动；可在「代码改动 → 全部改动」中按需剔除本次不交付的文件。需要 Agent 修改代码时请选择「先调整」。未处理的意见保持原状。",
+      "推送当前已提交的改动。需要 Agent 修改代码时请选择「先调整」。未处理的意见保持原状。",
       PUSH_SCOPE_GUIDANCE].join("\n\n"),
   });
   host.summary.status = "waiting_for_human";

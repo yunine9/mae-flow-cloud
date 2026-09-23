@@ -4,7 +4,6 @@ import { observedPipelineRun, historicalPipelineFeedback, projectPushReceipt, va
 import { remainingCiMission } from "./ciMission.ts";
 import { canHandoffReview, REVIEW_MISSION_END } from "./reviewHandoff.ts";
 import { scopePipelineArtifacts } from "./pipelineArtifactScope.ts";
-import { restoreDeliveryPaths } from "./taskDeliveryScope.ts";
 import { pushWithFreshBranch, RemoteBranchBusyError } from "./pushRace.ts";
 /** Task-scoped host tools. Transport operations are handed off at a turn boundary,
  * so the existing single-writer Git/container contract also covers Agent requests. */
@@ -24,8 +23,8 @@ import { getPipelineStatus, triggerPipeline, type PipelineCredential, type Pipel
 import { createMergeRequest } from "./mrClient.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
 
-const HOST_ACTIONS = ["set_target", "defer_feedback", "restore_delivery_paths", "push", "create_mr", "retry_verification", "sync_branch", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
-export type HostAction = typeof HOST_ACTIONS[number];
+const HOST_ACTIONS = ["set_target", "defer_feedback", "push", "create_mr", "retry_verification", "sync_branch", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
+export type HostAction = typeof HOST_ACTIONS[number] | "restore_delivery_paths"; // 仅兼容旧的已排队操作
 export interface HostRequest {
   action: HostAction;
   reason: string;
@@ -199,7 +198,7 @@ function safeMessage(host: TaskHostRuntime, value: unknown, limit = 8000): strin
 
 export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, input: HostRequest): Promise<HostOperation> {
   host.assertActive();
-  if (!HOST_ACTIONS.includes(input.action)) throw new Error("未知的宿主操作");
+  if (input.action !== "restore_delivery_paths" && !HOST_ACTIONS.includes(input.action)) throw new Error("未知的宿主操作");
   const ledger = new TaskHostLedger(host.summary);
   const existing = ledger.read().operations.find(op => op.id === id);
   if (existing) {
@@ -222,11 +221,6 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
     if (!host.kernel || !host.cwd) throw new Error("当前任务尚无可登记目标调整的内核现场");
     if (input.action === "defer_feedback" && !input.feedback_id) throw new Error("请指定一条反馈的完整 ID，不能批量忽略");
   }
-  if (input.action === "restore_delivery_paths") {
-    ownerInstruction(host, input.request_id);
-    if (!host.kernel || !host.cwd || !host.summary.delivery_selection) throw new Error("当前没有可恢复的交付清单或内核现场");
-    if (!input.paths?.length) throw new Error("请指定要恢复交付的文件路径");
-  }
   const operation: HostOperation = { id, input, state: "queued", at: new Date().toISOString() };
   if (input.action === "push" || input.action === "create_mr" || input.action === "sync_branch") {
     const state = kernelState(host);
@@ -242,11 +236,6 @@ export async function queueTaskHostOperation(host: TaskHostRuntime, id: string, 
     operation.sha = snapshot.head;
     operation.branch = branch;
     operation.target_branch = baseline;
-  }
-  if (input.action === "restore_delivery_paths") {
-    const snapshot = await deliveryChangeSnapshot(host.cwd!);
-    if (!snapshot) throw new Error("无法确定当前提交");
-    operation.sha = snapshot.head;
   }
   if (input.action === "trigger_pipeline") {
     operation.sha = host.summary.delivery?.git_push?.sha ?? host.summary.delivery?.sha;
@@ -346,7 +335,7 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
       if (feedback?.source === "workspace") host.deferAnnotation?.(feedback.source_id, feedback.source_revision, instruction.actor, input.reason);
       operation.result = `当前目标：${target}。${input.feedback_id ? `已暂缓 ${input.feedback_id} 的自动修复；原失败和意见仍保留。` : "未取消其他反馈。"}`;
     } else if (input.action === "restore_delivery_paths") {
-      operation.result = await restoreDeliveryPaths(host, operation, ownerInstruction(host, input.request_id).actor);
+      operation.result = "文件勾选机制已取消，无需恢复清单，可直接继续修复和提交。";
     } else if (input.action === "push") {
       const allowed = async () => {
         if (await host.allowPush()) return true;
@@ -572,7 +561,7 @@ export function taskHostGoal(host: TaskHostRuntime): string {
   return `${operations}\n[${newer ? "先前执行目标，需结合后续答复判断是否仍适用" : "执行目标摘要，不替代需求决定"}] ${target.target}\n来源指令：${target.request_id}；这是 Agent 登记的概括，不能据此重新解释用户原话。无关目标可保留，明确被新答复推翻的内容先同步文档再实施。已暂缓的反馈不自动恢复。`;
 }
 
-const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。文件勾选只整理当次提交，不是后续修复的白名单。按需求和责任人最新意见直接补齐必要文件，无需先恢复或扩展清单；用户明确的禁改/不提交指令仍须遵守。restore_delivery_paths 仅兼容旧会话的记录更新，不是提交前置步骤，不要手改控制文件。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后结束本轮，让平台执行；普通操作完成后沿用原会话，只需处理返回结果和受影响的内容，不要重新熟悉整个任务；queued 不等于成功。不要读取令牌或修改平台控制文件。";
+const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。文件勾选机制已取消，旧清单不限制当前任务，不需要恢复路径或扩大范围。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后结束本轮，让平台执行；普通操作完成后沿用原会话，只需处理返回结果和受影响的内容，不要重新熟悉整个任务；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,
@@ -613,7 +602,6 @@ export function createTaskHostTools(host: TaskHostRuntime) {
     defineTool({ name: "task_control", label: "任务宿主操作", description: GUIDANCE + " 每次 push 前（包括首次交付、检视意见修复和流水线修复后）都先提交本次有意交付的修改，再用 sync_branch 拉取并合并最新远端任务分支与目标分支，结束本轮等待宿主结果。有冲突时读取双方上下文、解决并提交，不要直接选 ours/theirs。同步后执行受影响的编译与 UT，再走原 push/MR 流程。按与最新目标分支的共同祖先核对 MR 净改动，不把从 master 等目标分支合入的代码算成本任务新增。编译前后对照 git status，区分源码和生成产物，按明确路径暂存，不用 git add . 夹带产物；不要删除或覆盖原有未提交修改，无法确认文件用途时向责任人说明并请求处理意见。MR 已报告冲突时主动按此处理，不等待流水线出现或失败。pull_repo 只克隆关联仓。",
       parameters: Type.Object({ action: Type.Union(HOST_ACTIONS.map(value => Type.Literal(value))),
         reason: Type.String(), request_id: Type.Optional(Type.String({ description: "目标变更所依据的责任人指令编号，来自 task_context" })),
-        paths: Type.Optional(Type.Array(Type.String(), { description: "兼容旧会话更新选择记录时指定准确业务文件路径；正常修复无需调用" })),
         target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支用 sync_branch 同步。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),

@@ -9,7 +9,7 @@ import { createPrePushVerification, beginPrePushAttempt } from "../src/prePushVe
 import { HumanGate } from "../src/humanGate.ts";
 import { explicitlyRequestsReviewFeedback, pendingReviewAnnotation, isReviewAdjustmentAnswer, reviewDecisionContract, REVIEW_ADJUST, REVIEW_HOLD } from "../src/reviewDecisionContract.ts";
 import { stepChoiceEffects } from "../src/kernelChoices.ts";
-import { needsDeliverySelection } from "../web/src/decisionSelection.ts";
+import { isPushConfirmation } from "../web/src/decisionSelection.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 const effects = stepChoiceEffects(kernelRoot, "delivery_review");
@@ -139,7 +139,7 @@ test("旧卡仍可查看 diff，但暂不确认不消费旧清单、不推送、
   const f = fixture();
   const card = f.service.get("task-19")!.waiting!;
   assert.equal(card.recommended_view, "diff");
-  assert.equal(needsDeliverySelection(card), false);
+  assert.equal(isPushConfirmation(card), false);
   let pushes = 0; f.api.tryDeliver = async () => { pushes++; };
   await f.service.decide("task-19", { waiting_id: card.waiting_id, state_version: card.state_version, actor: "owner", selected_options: { [raw.questions[0].question]: REVIEW_HOLD }, delivery_paths: [] });
   assert.equal(pushes, 0);

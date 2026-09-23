@@ -96,14 +96,13 @@ export const WORKBENCH_UI_SCENARIOS: readonly WorkbenchUiScenario[] = [
     key: "push-review",
     title: "推送前检视代码与批注",
     status: "waiting_for_human",
-    purpose: "覆盖 Git Diff、文件范围、批注四态、邀请与检视筛选",
-    checkpoints: ["代码目录", "双栏 Diff", "范围选择", "批注四态", "MR 意见", "机器告警"],
+    purpose: "覆盖 Git Diff、批注四态、邀请与检视筛选",
+    checkpoints: ["代码目录", "双栏 Diff", "改动浏览", "批注四态", "MR 意见", "机器告警"],
     actions: [
       ...stableActions,
       "搜索", "全屏查看", "邀请他人检视", "等我确认", "Agent 处理中", "已完成",
-      "看全部改动", "去代码改动里选文件", "专注审阅", "全部纳入",
-      "全部仅留本地", "折叠全部目录", "缩小 Git 字号", "放大 Git 字号",
-      "行批注", "确认按清单推送", "需要调整代码（按清单返工）", "提交返工意见",
+      "看全部改动", "专注审阅", "折叠全部目录", "缩小 Git 字号", "放大 Git 字号",
+      "行批注", "确认推送", "需要调整代码", "发送并继续修改",
     ],
   },
   {

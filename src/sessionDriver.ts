@@ -423,6 +423,8 @@ export interface CloudSessionOptions {
    * 平台原子能力(报阶段/拉日志/受门禁的推送)递给 Agent——秘密留在
    * 宿主,Agent 只拿到工具语义。内核任务不传,行为不变。 */
   extraTools?: unknown[];
+  /** 宿主的固定工作指令，主/子会话及恢复时都进入系统提示，不随对话压缩。 */
+  additionalSystemInstructions?: readonly string[];
   /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
@@ -1171,6 +1173,7 @@ export class CloudSession {
     }
     const appendedSystemPrompt = [
       GIT_COMMIT_IDENTITY_GUIDANCE,
+      ...(this.options.additionalSystemInstructions ?? []),
       ...resourceBlockNotice(blockedRepositoryResources),
       ...(this.options.humanFacing && config.sessionId === this.sessionId
         ? [HUMAN_FACING_STYLE] : []),
@@ -1198,7 +1201,7 @@ export class CloudSession {
           ...repoContextFiles,
         ],
       }),
-      // 提交身份约束覆盖主、子与专项会话；面对人的语气只用于主会话。
+      // 固定指令覆盖主、子与专项会话；面对人的语气只用于主会话。
       ...(appendedSystemPrompt.length ? {
         appendSystemPromptOverride: (base: string[]) => [
           ...base, ...appendedSystemPrompt,

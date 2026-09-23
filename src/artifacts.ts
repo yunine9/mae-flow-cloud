@@ -184,9 +184,8 @@ export interface DeliveryChangeSnapshot {
   added_agent_platform_paths: string[];
 }
 
-/** 两个已经落成的提交之间，真正会随 push 传输的代码变化。它只服务
- * 检视阅读，不参与交付授权；授权仍由 delivery_selection 的 HEAD 与
- * 完整路径集合决定。 */
+/** 两个已经落成的提交之间，真正会随 push 传输的代码变化。
+ * 只服务检视阅读，不参与推送授权，也不形成文件白名单。 */
 export interface DeliveryRevisionComparison {
   from: string;
   to: string;

@@ -1,5 +1,4 @@
 import { LatestRead } from "./latestRead";
-import { readDeliverySelectionDraft, type DeliverySelectionDraft } from "./deliverySelectionDraft";
 import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
 import { ReviewBody } from "./ReviewBody";
@@ -29,8 +28,8 @@ import { OverallStoryTools, OVERALL_STORY_ARTIFACT } from "./OverallStoryTools";
 import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { isInvitedReviewParticipant } from "../../src/reviewParticipation";
 import { Markdown } from "./markdown";
-import { needsDeliverySelection, queuedDecisionAnnotationIds } from "./decisionSelection";
-import { GitDiff, type GitDiffSelection } from "./GitDiff";
+import { isPushConfirmation, queuedDecisionAnnotationIds } from "./decisionSelection";
+import { GitDiff } from "./GitDiff";
 import { RequirementDiff } from "./RequirementDiff";
 import { QuickWishButton } from "./WishQuickCreate";
 import { ConversationStream, type StreamFilter } from "./ConversationStream";
@@ -369,21 +368,6 @@ export function normalizePushReviewDiffResult(result: {
   };
 }
 
-export function deliverySelectionForCard(
-  state: { key: string; selection: GitDiffSelection | undefined } | undefined,
-  key: string,
-): GitDiffSelection | undefined {
-  return state?.key === key ? state.selection : undefined;
-}
-
-export function usablePushReviewSelection(
-  pushReviewActive: boolean,
-  state: PushReviewDiffLoadState,
-  selection: GitDiffSelection | undefined,
-): GitDiffSelection | undefined {
-  return pushReviewActive && state.kind !== "ready" ? undefined : selection;
-}
-
 export function defaultWorkspaceView(_task: TaskSummary): WorkspaceView {
   // 状态变化只改「当前」画布里的内容，不再把人自动甩到另一套导航。
   return "focus";
@@ -550,7 +534,7 @@ export function TaskWorkspace({
     ?? (task.parent_task_id ? "doc"
       : task.requirement_graph?.stage === "confirmed" ? "chain" : "source");
   // 审批导航与只读浏览分开：没有待办也可从任务历史计算增量范围。
-  const approvalReview = (needsDeliverySelection(task.waiting)
+  const approvalReview = (isPushConfirmation(task.waiting)
       || task.waiting?.step === "cloud_push_confirm")
     ? task.delivery?.push_review : undefined;
   const [browsingReview, setBrowsingReview] = useState<{ taskId: string; review?: PushReviewPresentation }>();
@@ -620,23 +604,6 @@ export function TaskWorkspace({
     useState<RepositoryAssigneeSelection>(EMPTY_REPOSITORY_ASSIGNEE_SELECTION);
   const [repositoryAssigneeSave, setRepositoryAssigneeSave] =
     useState<"idle" | "saving" | "saved" | "error">("idle");
-  // 换卡立即隔离旧选择；不要在父层 effect 里清空子文件树刚回传的
-  // 默认勾选。普通 Diff 没有 push_review，也必须能初始化决定卡。
-  const deliverySelectionKey = JSON.stringify([
-    task.id, task.waiting?.waiting_id,
-  ]);
-  const selectionStorageKey = `mae-flow:delivery-selection:${task.id}`;
-  const [deliverySelectionState, setDeliverySelectionState] = useState<DeliverySelectionDraft | undefined>(() => {
-    try { return readDeliverySelectionDraft(sessionStorage.getItem(selectionStorageKey), deliverySelectionKey); }
-    catch { return undefined; }
-  });
-  const deliverySelection = deliverySelectionForCard(
-    deliverySelectionState, deliverySelectionKey);
-  const setDeliverySelection = (selection: GitDiffSelection | undefined) => {
-    const draft = { key: deliverySelectionKey, selection };
-    setDeliverySelectionState(draft);
-    try { sessionStorage.setItem(selectionStorageKey, JSON.stringify(draft)); } catch { /* Reading still works without browser storage. */ }
-  };
   const [pushDiffState, setPushDiffState] = useState<PushReviewDiffLoadState>(
     pushReview ? { kind: "checking" } : { kind: "idle" },
   );
@@ -892,16 +859,10 @@ export function TaskWorkspace({
       setDiffScope("full");
       return;
     }
-    const selected = pushReview.committed_paths;
-    setDeliverySelection({
-      selectedPaths: [...selected],
-      committedPaths: [...pushReview.committed_paths],
-      allPaths: [...pushReview.all_paths],
-    });
     setPushDiffState({ kind: "checking" });
     setContent("");
     setDiffScope(pushReview.has_focused_changes ? "changes" : "full");
-  }, [deliverySelectionKey]);
+  }, [task.id, task.waiting?.waiting_id]);
 
   useEffect(() => {
     const waitingId = task.waiting?.waiting_id;
@@ -1587,11 +1548,6 @@ export function TaskWorkspace({
   }, [reviewPanelOpen, materialsFullscreen, reviewFocus?.request, reviewRevealRequest]);
 
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
-  const decisionDeliverySelection = usablePushReviewSelection(
-    scopedDiff,
-    pushDiffState,
-    deliverySelection,
-  );
   const canContributeReview = canOperate
     || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
@@ -2418,8 +2374,6 @@ export function TaskWorkspace({
                       untrackedDirectories={!scopedDiff
                         ? activeMeta?.untracked_directories : undefined}
                       onRetry={() => setLivePulse(tick => tick + 1)}
-                      selectionHint={canOperate && needsDeliverySelection(task.waiting) && diffScope === "changes"
-                        ? "当前只展示本次增量。点击上方「全部改动」勾选最终交付文件。" : undefined}
                       onDirectoryLoad={!scopedDiff
                         ? (path, offset) => listArtifactChangeDirectory(
                             task.id, path, offset)
@@ -2436,17 +2390,6 @@ export function TaskWorkspace({
                               ?? pushReview.base_sha ?? "").slice(0, 7)}`
                             + ` → ${(pushReview.head_sha ?? "").slice(0, 7)}`
                         : undefined}
-                      selectable={canOperate
-                        // waiting 残留(如 await_merge 后列表快照没带
-                        // waiting 键)不得再开勾选:必须真的在等这张卡
-                        // (MFC-009)。
-                        && task.status === "waiting_for_human"
-                        && needsDeliverySelection(task.waiting)
-                        && (!pushReview || diffScope === "full")}
-                      selectionKey={deliverySelectionKey}
-                      initialSelectedPaths={deliverySelection?.selectedPaths
-                        ?? pushReview?.committed_paths}
-                      onSelectionChange={setDeliverySelection}
                       focusRequest={diffReviewRequest} />
                   : <Markdown showLineNumbers text={content} onOpenArchitecture={active === OVERALL_STORY_ARTIFACT || /(^|\/)story\.md$/.test(active)
                     ? (line) => { setArchitectureLine(line); openMaterial("chain"); } : undefined} />}
@@ -2561,10 +2504,8 @@ export function TaskWorkspace({
                     && task.requirement_graph?.projection_state === "ready"
                     && task.requirement_graph.repositories.length > 0
                     ? repositoryAssignees : undefined}
-                  deliverySelection={needsDeliverySelection(task.waiting)
-                    ? decisionDeliverySelection : undefined}
                   pushReview={pushReview}
-                  onLocateDelivery={needsDeliverySelection(task.waiting)
+                  onLocateDelivery={isPushConfirmation(task.waiting)
                     ? (scope) => {
                         setWorkspaceView("materials");
                         setMaterialView("diff");
@@ -2582,7 +2523,7 @@ export function TaskWorkspace({
                         if (first) setActive(first.name);
                       }
                     : undefined}
-                  activeDeliveryScope={needsDeliverySelection(task.waiting)
+                  activeDeliveryScope={isPushConfirmation(task.waiting)
                     ? diffScope : undefined}
                   attachment={requirementAnalysisConfirmation ? undefined :
                     <>

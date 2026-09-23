@@ -100,11 +100,11 @@ test("目标登记不销毁会话或容器；明确重启才销毁", async t => 
   assert.ok(f.task.controlEpoch > epoch);
 });
 
-test("旧会话更新文件选择记录保留容器和模型上下文", async t => {
+test("旧会话的恢复路径操作完成兼容返回后保留容器和模型上下文", async t => {
   const f = fixture(t);
   const host = f.service.taskHostRuntime(f.task);
   await host.release("restore_delivery_paths");
-  host.resume("文件选择记录已更新");
+  host.resume("文件选择机制已取消，无需恢复路径");
   await f.resume();
   assert.equal(f.task.container, f.container);
   assert.equal(f.task.driver, f.driver);
