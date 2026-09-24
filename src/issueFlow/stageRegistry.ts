@@ -131,8 +131,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     exit: "要用的仓都 pull_repo 拉齐 → complete_stage 申报完成;无需代码仓则直接 complete_stage 跳过",
     exitAction: "complete_stage",
     tools: [
-      { name: "lookup_modules" },
-      { name: "bind_module" },
       { name: "pull_repo" },
       { name: "complete_stage" },
       { name: "request_env" },
@@ -151,8 +149,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
     { name: "request_env" },
     { name: "get_issue_meta" },
     { name: "dts_get_ticket", note: "重查" },
-    { name: "lookup_modules" },
-    { name: "bind_module" },
     { name: "pull_repo", note: "补仓" },
     { name: "remove_repo", note: "用户指派移除无关仓" },
     { name: "submit_analysis" },
@@ -171,7 +167,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "dts_get_ticket" },
       { name: "pull_repo", note: "补仓" },
       { name: "remove_repo", note: "用户指派移除无关仓" },
-      { name: "bind_module" },
       { name: "report_ut", note: "记录 UT 结果" },
       { name: "complete_stage" },
     ],
@@ -189,7 +184,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
-      { name: "bind_module" },
     ],
   },
   conclude: {
@@ -203,7 +197,6 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
       { name: "get_issue_meta" },
       { name: "dts_get_ticket" },
       { name: "pull_repo" },
-      { name: "bind_module" },
     ],
     gate: { kind: "conclude", reworkTo: "analyze" },
   },
@@ -217,7 +210,7 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
 // 验绿门以 MR 台账为收口半边,与「提交 MR·跑绿」的阶段语义绑定,收敛
 // 为该阶段独占(#373,ADR-0050);无单路线不含该阶段,天然不交付代码。
 for (const spec of Object.values(FIXED_STAGE_SPECS)) {
-  for (const name of ["lookup_modules", "pull_repo", "remove_repo", "report_ut",
+  for (const name of ["pull_repo", "remove_repo", "report_ut",
     "respond_review", "declare_review_rework"]) {
     if (!spec.tools.some(tool => tool.name === name)) spec.tools = [...spec.tools, { name }];
   }

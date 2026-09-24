@@ -170,7 +170,7 @@ export interface IssueRegistrationMeta {
   /** 登记附件(attachments/<hash>.<ext>,工作区相对路径):人随描述
    * 上传的日志等分析材料,开场词单列一行引导优先查看;缺席=没传。 */
   attachments?: string[];
-  module?: { id: string; name: string; locked?: boolean };
+  module?: { id: string; name: string };
   /** 登记仓全量:url 是克隆源,dir 是会话工作区内的落位(AI 按工作区
    * 相对路径读代码,不必自己从地址推仓名)。 */
   repos: Array<{ url: string; dir: string }>;
@@ -226,7 +226,6 @@ export function issueRegistrationMeta(
       ? { module: {
         id: state.module_id,
         name: state.module || state.module_id,
-        ...(state.module_locked ? { locked: true } : {}),
       } }
       : {}),
     repos,
@@ -281,17 +280,10 @@ function environmentLines(meta: IssueRegistrationMeta): string[] {
   ];
 }
 
-/** 元信息的模块行(模块是登记必选,但 DTS 发起/未绑定的会话还没有)。
- * 人工预绑锁(spec #57):锁定时明确"不得改绑、直接拉仓",AI 的唯一
- * 出路是把不符报告给人。 */
+/** 元信息的模块行(模块是三路发起的必选项,开场必在,ADR-0056)。 */
 function moduleLine(meta: IssueRegistrationMeta): string {
   if (!meta.module) return "";
-  const base = `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`;
-  return meta.module.locked
-    ? base + "\n  - 该模块由人工在发起时预绑并锁定:不要调用 bind_module,"
-      + "直接对已登记仓逐个 pull_repo;若你判断模块与单据明显不符,"
-      + "用 AskUserQuestion 告知用户,由人改绑或提供仓地址"
-    : base;
+  return `- 业务模块: ${meta.module.name}(id: ${meta.module.id})`;
 }
 
 /** 多仓清单块:全部平铺 repo/<仓名>/(2026-08-28 拍板:仓平等,无主从)。
@@ -424,7 +416,7 @@ export function issueFixedOpeningPrompt(
         ? [`- 拉仓基线分支: ${meta.baseline}`]
         : []),
     repoLines(state)
-      || "- 代码仓: (未登记——用 lookup_modules 检索业务模块带出仓,或 AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
+      || "- 代码仓: (未登记——AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     knowledgeRepoLine(state),
     ...(scenario === "ticket" && state.ticket
       ? [`- 修复分支 master_${state.account}_${state.ticket}`]

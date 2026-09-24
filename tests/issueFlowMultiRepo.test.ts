@@ -243,9 +243,9 @@ test("无单多仓端到端:模块带仓,AI 逐仓 pull_repo 落到 repo/<仓名
   const originA = bareOriginAt(join(dataDir, "a"), "origin.git");
   const originB = bareOriginAt(join(dataDir, "b"), "origin.git");
   const originC = bareOriginAt(join(dataDir, "c"), "origin.git");
+  // 模块在 create 时定局并把仓带进登记清单(ADR-0056):AI 开场直接
+  // 逐仓 pull_repo,识别路(lookup_modules/bind_module)已退役。
   const script: Scene[] = [
-    { tool: { name: "lookup_modules", input: { keyword: "支付" } } },
-    { tool: { name: "bind_module", input: { module_id: "pay-core" } } },
     { tool: { name: "pull_repo", input: { url: originA } } },
     { tool: { name: "pull_repo", input: { url: originB } } },
     { tool: { name: "pull_repo", input: { url: originC } } },
@@ -380,9 +380,8 @@ test("确认是问题多仓闭环:账留原地,归档会话详情全量可读(#3
   const originA = bareOriginAt(join(dataDir, "a"), "alpha.git");
   const originB = bareOriginAt(join(dataDir, "b"), "beta.git");
   const TICKET = "DTS-2026-1003";
+  // 模块在 create 时定局并把仓带进登记清单(ADR-0056),识别路退役。
   const script: Scene[] = [
-    { tool: { name: "lookup_modules", input: { keyword: "支付" } } },
-    { tool: { name: "bind_module", input: { module_id: "pay-core" } } },
     { tool: { name: "pull_repo", input: { url: originA } } },
     { tool: { name: "pull_repo", input: { url: originB } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },

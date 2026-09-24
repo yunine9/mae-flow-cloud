@@ -48,6 +48,8 @@ const userControlClass =
 export function UserPicker(props: {
   options: UserOption[];
   ariaLabel: string;
+  /** 触发器内的常驻前缀(如「责任人」):不选人也知道这框是什么。 */
+  label?: string;
   disabled?: boolean;
   placeholder?: string;
   emptyLabel?: string;
@@ -56,6 +58,7 @@ export function UserPicker(props: {
   const {
     options,
     ariaLabel,
+    label,
     disabled = false,
     placeholder = "搜索姓名或工号",
     emptyLabel = "请选择成员",
@@ -83,6 +86,7 @@ export function UserPicker(props: {
         render={<button type="button" disabled={disabled}
           className={`${userControlClass} flex items-center justify-between gap-2 text-left`}
           aria-label={ariaLabel} aria-expanded={open}>
+          {label && <span className="shrink-0 text-muted-foreground">{label}</span>}
           <span className="min-w-0 truncate">{selectedLabel || emptyLabel}</span>
           <ChevronDown aria-hidden
             className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />

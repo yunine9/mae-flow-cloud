@@ -1267,42 +1267,23 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
 });
 
 
-test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_repo;lookup 未命中说无匹配;零仓模块打回", async () => {
+test("模块开场即定局(ADR-0056):登记带模块与仓,AI 开场直拉;识别路工具退役", async () => {
   const dataDir = mfcTemp("mfc-issue-bindmod-");
   const origin = bareOrigin(dataDir);
   createBusinessModule(dataDir, {
     id: "media-core", name: "媒体核心", description: "播放与转码",
     owner: "dev", repositories: [origin],
   }, "tester");
-  // 登记门禁(#17)要求无单登记自带模块:给一个占位模块过门,会话内
-  // 绑定 media-core 仍是首次绑定(首绑与改绑的转移账文案不同)。
-  createBusinessModule(dataDir, {
-    id: "entry-mod", name: "入口模块", description: "登记占位",
-    owner: "dev", repositories: [origin],
-  }, "tester");
-  // 保存口强制模块至少绑一仓,零仓夹具只能直接落盘——这里钉的是
-  // bind 侧对存量零仓数据的兜底打回。
-  mkdirSync(join(dataDir, "business-modules", "empty-mod"), { recursive: true });
-  writeFileSync(
-    join(dataDir, "business-modules", "empty-mod", "module.json"),
-    `${JSON.stringify({
-      id: "empty-mod", name: "空模块", description: "没绑仓",
-      owner: "dev", maintainers: [], repositories: [], status: "active",
-      revision: 1, assets: [],
-      created_at: new Date().toISOString(), created_by: "tester",
-      updated_at: new Date().toISOString(), updated_by: "tester",
-    }, null, 2)}\n`,
-  );
+  // 模块在发起时定局(ADR-0056):登记即带模块与仓,识别路
+  // (lookup_modules/bind_module)退役,AI 开场直接逐仓 pull_repo。
   const script: Scene[] = [
-    { tool: { name: "lookup_modules", input: { keyword: "媒体" } } },
-    { tool: { name: "bind_module", input: { module_id: "media-core" } } },
     { tool: { name: "pull_repo", input: { url: origin } } },
     { tool: { name: "complete_stage", input: { note: "仓已拉齐" } } },
     { tool: { name: "bash", input: { command:
       "printf '# 分析\n\n转码失败已定位。\n## 问题现象\n演示现象。\n## 问题根因\n转码线程泄漏。\n## 置信度\n高。\n## 修改方案\n释放泄漏线程。\n' > issue-analysis.md" } } },
     { tool: { name: "submit_analysis",
       input: { conclusion: "issue", summary: "是问题:转码线程泄漏" } } },
-    { text: "模块已绑、仓已拉,分析已提交。" },
+    { text: "模块已定、仓已拉,分析已提交。" },
   ];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
   await model.start();
@@ -1311,12 +1292,9 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     modelsJson: model.modelsJson(),
   });
   try {
-    // 无单登记带模块+环境(#17 门禁):首轮即 prep_repo,Agent 检索→
-    // 绑定→拉仓→分析,全在一个回合里走完(不再有平台闸,也没有宿主代
-    // 克隆);登记已带同款模块时 bind_module 重绑只做事不倒转阶段。
     const created = service.create({
       account: "dev", title: "转码失败",
-      moduleId: "entry-mod",
+      moduleId: "media-core",
       environment: {
         hosts: ["10.0.0.8"],
         backendPassword: "env-shared-secret",
@@ -1328,20 +1306,17 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "waiting_user"
         && issue.gate?.kind === "conclude" ? issue : undefined;
-    }, "绑定拉仓后结论闸");
-    assert.equal(analyzed.module_id, "media-core");
+    }, "拉仓后结论闸");
+    assert.equal(analyzed.module_id, "media-core", "模块随登记落盘");
     assert.equal(analyzed.module, "媒体核心", "模块名由模块库派生");
-    assert.deepEqual(analyzed.repo_urls, [origin], "模块仓并进会话登记");
+    assert.deepEqual(analyzed.repo_urls, [origin], "模块仓随登记带出");
     assert.equal(analyzed.stage, "conclude", "无单场景分析结论即终点节点");
     assert.ok(existsSync(
       join(dataDir, "issues", created.id, "repo", "origin", ".git")),
       "克隆由 pull_repo 落地(repo/<仓名>/ 平铺)");
-    assert.ok(analyzed.transitions?.some((entry) =>
-      /已绑定业务模块「媒体核心」/.test(entry.note)));
 
-    // 工具直调(免模型):检索命中/未命中、零仓模块打回、bind 回执
-    // 给出待拉仓的 pull_repo 指令、pull_repo 只落地不推进(出口是
-    // complete_stage)、后期改绑与补拉不倒转阶段。
+    // 工具直调(免模型):识别路工具不再注册;拉仓只落地不推进(出口
+    // 是 complete_stage)。
     const state: IssueSessionState = {
       id: "issue-x", account: "dev",
       created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
@@ -1372,21 +1347,12 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     };
     const textOf = (result: unknown) =>
       (result as { content: Array<{ text: string }> }).content[0].text;
-    const hit = await byName("lookup_modules").execute("x", { keyword: "媒体" });
-    assert.match(textOf(hit), /media-core/);
-    assert.match(textOf(hit), /媒体核心/);
-    const miss = await byName("lookup_modules").execute("x", { keyword: "不存在的词" });
-    assert.match(textOf(miss), /无匹配业务模块/);
-    await assert.rejects(
-      () => byName("bind_module").execute("x", { module_id: "empty-mod" }),
-      /没有绑定代码仓/, "零仓模块必须打回,让模型转头去问用户");
-    const bindReceipt = textOf(
-      await byName("bind_module").execute("x", { module_id: "media-core" }));
-    assert.match(bindReceipt, /pull_repo/, "绑定回执要给出逐仓拉取指令");
-    assert.equal(pulled.length, 0, "bind_module 本身不克隆");
-    assert.deepEqual(state.repo_urls, [origin]);
+    assert.ok(!tools.some((item) => item.name === "bind_module"),
+      "bind_module 已随识别路退役(ADR-0056)");
+    assert.ok(!tools.some((item) => item.name === "lookup_modules"),
+      "lookup_modules 已随识别路退役(ADR-0056)");
     // 首拉只落地不再机械推进;回执带注册表简报指路 complete_stage;
-    // complete_stage 才把阶段推进 analyze。此后补拉/改绑不倒转阶段。
+    // complete_stage 才把阶段推进 analyze。
     const pullReceipt = textOf(
       await byName("pull_repo").execute("x", { url: origin }));
     assert.equal(state.stage, "prep_repo", "拉仓只落地,不机械推进");
@@ -1397,8 +1363,7 @@ test("业务模块映射(2026-08-28 v2):bind_module 只登记,拉仓靠 pull_rep
     assert.equal(state.stage_states?.[1], "done");
     state.stage = "fix";
     await byName("pull_repo").execute("x", { url: origin });
-    await byName("bind_module").execute("x", { module_id: "media-core" });
-    assert.equal(state.stage, "fix", "后期的补拉与改绑只做事,不倒转阶段");
+    assert.equal(state.stage, "fix", "后期补拉只做事,不倒转阶段");
     assert.equal(pulled.length, 2, "幂等重拉照常执行(工具不猜意图)");
   } finally {
     await service.shutdown().catch(() => undefined);

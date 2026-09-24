@@ -4,7 +4,7 @@
  *   已终态会话——canceled 不被覆写成 waiting_user,不发"请人工"通知;
  * - C-H3:终态(挂起同款)会话不接受补配环境(防复活);
  * - C-H6:收口清面——终态会话不再投影闸/未决卡;
- * - C-H7:wire 不漏机制账(module_locked、pipelines 重试/刹车子字段)。
+ * - C-H7:wire 不漏机制账(预绑锁退役字段、pipelines 重试/刹车子字段)。
  *
  * 范式与 issueMrDiscussions 同款:ScriptedModelServer + FakeGitPlatform。
  */
@@ -12,10 +12,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
-import { summarize, type IssueSessionState } from "../src/issueFlow/state.ts";
+import { loadState, summarize, type IssueSessionState } from "../src/issueFlow/state.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { mfcTemp } from "./mfcTmp.ts";
@@ -160,7 +162,10 @@ test("收口清面:等待中的会话取消后,闸与未决卡不再投影", asy
   }
 });
 
-test("wire 契约:module_locked 机制账不上投影;pipelines 重试/刹车字段按镜像可见", () => {
+test("wire 契约:预绑锁退役字段不上投影;pipelines 重试/刹车字段按镜像可见", () => {
+  // 走真实读盘路径:盘上存量死账(字段已退役,ADR-0056)loadState 即剥,
+  // 投影不携带;剥离点在读盘,不在投影。
+  const root = mkdtempSync(join(tmpdir(), "mfc-wire-legacy-"));
   const state = {
     id: "issue-x", account: "dev", title: "t", status: "idle",
     created_at: "2026-09-10T00:00:00.000Z", updated_at: "2026-09-10T00:00:00.000Z",
@@ -181,8 +186,10 @@ test("wire 契约:module_locked 机制账不上投影;pipelines 重试/刹车字
       },
     },
   } as unknown as IssueSessionState;
-  const wire = summarize(state) as Record<string, any>;
-  assert.equal("module_locked" in wire, false, "module_locked 不上 wire");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "issue.json"), JSON.stringify(state));
+  const wire = summarize(loadState(root)!) as Record<string, any>;
+  assert.equal("module_locked" in wire, false, "module_locked 读盘即剥,不上 wire");
   const watch = wire.pipelines["http://r.git"];
   assert.equal(watch.sha, "a".repeat(40), "流水线主体照常投影");
   // 2026-09-10 勘定(C-H7 复议):重试窗/刹车五字段是测试与后续 UI 的

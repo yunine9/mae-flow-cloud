@@ -9,10 +9,14 @@ import { RepositoryResourceNotice } from "../RepositoryResourceNotice";
  * 白名单消毒在 dtsHtml.ts,这里只引用不重复。
  */
 import {
-  Fragment, useCallback, useEffect, useMemo, useRef, useState,
+  useCallback, useEffect, useMemo, useRef, useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -25,7 +29,7 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Check, ChevronRight, Columns3, Copy, RotateCw } from "lucide-react";
+import { Check, ChevronDown, Columns3, Copy, RotateCw } from "lucide-react";
 import {
   createIssue,
   getBusinessModules,
@@ -53,13 +57,11 @@ import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
 import { RichTextEditor } from "./RichTextEditor";
-import { USE_RICH_TEXT_DESCRIPTION_EDITOR } from "./descriptionEditorChoice";
-import {
+import { USE_RICH_TEXT_DESCRIPTION_EDITOR } from "./descriptionEditorChoice";import {
   ISSUE_DESCRIPTION_TEMPLATE, isUntouchedTemplate,
 } from "./descriptionTemplate";
 import { resolveAssignee } from "./assigneeDefault";
 import { copyIssueDescription } from "./copyIssueDescription";
-import { prepareDtsHtml } from "./dtsHtml";
 import {
   DTS_ACTIONABLE_STATUS,
   dtsNoCandidates,
@@ -644,24 +646,48 @@ function ManualRegister({
 /* ---------- DTS 列表列宽拖拽(2026-09-17) ---------- */
 
 type DtsColKey =
-  | "select" | "ticket" | "title" | "version" | "branch" | "status"
-  | "launch" | "remark" | "module";
+  | "select" | "ticket" | "title"
+  | "launch" | "remark" | "module" | "tier";
 
-/** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号/
- *  状态原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
+/** 默认列宽(px):沿用迁表时的现行宽度(w-28/w-64/w-24/w-56)。单号
+ *  原本内容自适应,给足内容的定值。标题列不设默认——它是唯一弹性
  *  列,吃掉全部剩余宽度(拖其他列都是从它身上要地方,初览观感不变)。 */
 const DTS_COL_DEFAULT: { [K in Exclude<DtsColKey, "title">]: number } = {
-  select: 112, ticket: 190, version: 256, branch: 216, status: 88,
-  launch: 96, remark: 240, module: 224,
+  select: 64, ticket: 150,
+  launch: 96, remark: 240, module: 160, tier: 116,
 };
-/** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号,状态列要放
- *  得下徽标)。 */
+/** 拖动下限:再窄内容就互相打架(单号列要放得下完整单号)。 */
 const DTS_COL_MIN: Record<DtsColKey, number> = {
-  select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,
-  launch: 88, remark: 140, module: 160,
+  select: 48, ticket: 120, title: 160,
+  launch: 88, remark: 140, module: 120, tier: 96,
 };
 /** 列宽记忆(全用户共用一份:列宽是屏幕偏好不是业务数据,不按人分)。 */
 const DTS_COL_WIDTHS_KEY = "mae-flow:dts-col-widths";
+
+/** 可显隐的数据列(ADR-0056):勾选与单号两列常驻,其余数据列按人
+ *  显隐;隐藏不消失义务——发起闸仍在勾选列禁用态上可见。 */
+const DTS_HIDEABLE_COLS: Array<{ key: DtsColKey; label: string }> = [
+  { key: "title", label: "标题" },
+  { key: "module", label: "所属模块" },
+  { key: "launch", label: "发起状态" },
+  { key: "remark", label: "发起备注" },
+  // 介入档位默认隐藏(2026-09-24 用户拍板):会话级特例是少数人的
+  // 进阶需求,不占默认视野;要在列设置里自己打开。显隐极性与其余
+  // 数据列相反(默认关,点名才开),单独存一份按人记忆。
+  { key: "tier", label: "介入档位" },
+];
+
+/** 介入档位三档(ADR-0057):与个人设置「人工介入程度 · 问题处理」
+ *  同名同序;「跟随全局」是列上多出的第四个值=不落偏好。 */
+const TIER_OPTIONS = [
+  { value: "1", label: "全自动" },
+  { value: "2", label: "优先报告" },
+  { value: "3", label: "优先对齐" },
+] as const;
+type DtsTierPref = (typeof TIER_OPTIONS)[number]["value"];
+const TIER_LABEL = new Map<string, string>(TIER_OPTIONS.map((tier) =>
+  [tier.value, tier.label]));
+const TIER_FOLLOW = "__follow";
 
 const clampDtsColWidth = (key: DtsColKey, px: number) =>
   Math.max(DTS_COL_MIN[key], Math.round(px));
@@ -811,20 +837,102 @@ function DtsRegister({
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  // 发起备注列(2026-09-20):每单一个文本输入框,勾选发起时随单带上,
-  // 进登记元信息并要求 AI 重点优先读。按单号记忆、内存态——刷新不丢
-  // (人敲的字不因刷新蒸发),发起成功即清(已随会话落库,消费完毕)。
-  const [remarks, setRemarks] = useState<Record<string, string>>({});
-  // 人工预绑模块列(spec #57):单号→模块团队共享映射,选即存;发起
-  // 时静默携带,服务端烙 module_locked 锁——AI 不得改绑。列可整体
-  // 隐藏(纯 UI 偏好,localStorage 按用户记忆)。
-  const moduleColKey = `mae-flow:dts-module-col:${viewer.username}`;
-  const [moduleCol, setModuleCol] = useState(() => {
+  // 发起备注列(2026-09-20;2026-09-24 重做):格子里是预览,点击弹
+  // 多行弹窗编辑(用户可能长篇输入,单行输入框不够)。按人持久化在
+  // localStorage(无过期,刷新/重开浏览器都在),发起成功即清该单
+  // 条目(已随会话落库,消费完毕)。上限 5000 字:备注直进 AI 开场
+  // 上下文,防长材料挤爆(长材料走登记附件/知识仓)。
+  const remarksKey = `mae-flow:dts-remarks:${viewer.username}`;
+  const [remarks, setRemarks] = useState<Record<string, string>>(() => {
     try {
-      return localStorage.getItem(moduleColKey) !== "hidden";
-    } catch { return true; }
+      const parsed: unknown = JSON.parse(
+        localStorage.getItem(remarksKey) ?? "{}");
+      if (typeof parsed !== "object" || parsed === null) return {};
+      return Object.fromEntries(Object.entries(parsed)
+        .filter((entry): entry is [string, string] =>
+          typeof entry[1] === "string"));
+    } catch { return {}; }
   });
+  useEffect(() => {
+    try {
+      localStorage.setItem(remarksKey, JSON.stringify(remarks));
+    } catch { /* 旁路:存不下就本次会话内有效 */ }
+  }, [remarks, remarksKey]);
+  // 弹窗编辑态:remarkEditing=正在编辑的单号(null=关);草稿独立,
+  // 保存才落 remarks,取消/X/点外部一律丢弃。
+  const [remarkEditing, setRemarkEditing] = useState<string | null>(null);
+  const [remarkDraft, setRemarkDraft] = useState("");
+  const REMARK_MAX = 5000;
+  // 介入档位(ADR-0057):未发起行按单选初始档,存本地按人(同发起
+  // 备注款,无过期);发起成功即清该单条目——已随会话定格落库,消费
+  // 完毕。空(无条目)=跟随全局,发起请求不带字段。发起后不可改,
+  // 进行中行只读显示,协助视角不显示(偏好只影响自己的发起)。
+  const tiersKey = `mae-flow:dts-tiers:${viewer.username}`;
+  const [tiers, setTiers] = useState<Partial<Record<string, DtsTierPref>>>(() => {
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(tiersKey) ?? "{}");
+      if (typeof parsed !== "object" || parsed === null) return {};
+      return Object.fromEntries(Object.entries(parsed)
+        .filter((entry): entry is [string, DtsTierPref] =>
+          TIER_LABEL.has(entry[1])));
+    } catch { return {}; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(tiersKey, JSON.stringify(tiers));
+    } catch { /* 旁路:存不下就本次会话内有效 */ }
+  }, [tiers, tiersKey]);
+  // 所属模块(ADR-0056):单号→模块团队共享映射只存人工改选;服务端
+  // 强匹配的带出值不落账(显示=现算、执行=快照),展示=改选优先于
+  // 带出,发起必带。选即存,PUT 失败回滚并把原因落在那一行。
   const [bindings, setBindings] = useState<Record<string, DtsModuleBindingEntry>>({});
+  // 列显隐(ADR-0056):数据列(标题/版本/分支/所属模块/发起状态/
+  // 发起备注)可按人显隐,勾选与单号常驻;隐藏不消失义务——发起闸
+  // 仍在勾选列禁用态上可见。localStorage 按用户记忆。
+  const hiddenColsKey = `mae-flow:dts-hidden-cols:${viewer.username}`;
+  const [hiddenCols, setHiddenCols] = useState<Set<DtsColKey>>(() => {
+    try {
+      const raw = localStorage.getItem(hiddenColsKey);
+      if (!raw) return new Set();
+      const parsed: unknown = JSON.parse(raw);
+      const keys = Array.isArray(parsed) ? parsed : [];
+      return new Set(keys.filter((key): key is DtsColKey =>
+        DTS_HIDEABLE_COLS.some((col) => col.key === key)));
+    } catch { return new Set(); }
+  });
+  // 介入档位列单独一份显隐记忆(2026-09-24 用户拍板默认隐藏):其余
+  // 数据列默认开、勾掉进 hiddenCols;这列默认关、点名才开,极性相反
+  // 不共用一份集合,免得「缺席」一词两头解读。
+  const tierColShownKey = `mae-flow:dts-tier-col:${viewer.username}`;
+  const [tierColShown, setTierColShown] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(tierColShownKey) === "1";
+    } catch { return false; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(tierColShownKey, tierColShown ? "1" : "0");
+    } catch { /* 旁路:存不下就本次会话内有效 */ }
+  }, [tierColShown, tierColShownKey]);
+  const colShown = (key: DtsColKey) =>
+    key === "tier" ? tierColShown : !hiddenCols.has(key);
+  const toggleCol = (key: DtsColKey, shown: boolean) => {
+    if (key === "tier") {
+      setTierColShown(shown);
+      return;
+    }
+    setHiddenCols((prev) => {
+      const next = new Set(prev);
+      if (shown) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  useEffect(() => {
+    try {
+      localStorage.setItem(hiddenColsKey, JSON.stringify([...hiddenCols]));
+    } catch { /* 旁路:存不下就本次会话内有效 */ }
+  }, [hiddenCols, hiddenColsKey]);
   const [modules, setModules] = useState<BusinessModule[]>();
   // 行内保存反馈:哪张单正在存/哪张单存失败(失败显示原因,选择回滚)。
   const [bindingTicket, setBindingTicket] = useState("");
@@ -836,7 +944,7 @@ function DtsRegister({
       && module.repositories.length > 0),
   [modules]);
 
-  // 列宽拖拽(2026-09-17):除展开钮外全列可拖。用户改过的列记进
+  // 列宽拖拽(2026-09-17):全列可拖。用户改过的列记进
   // localStorage(会话启动读一次,改即写);没改的列用默认宽,标题列
   // 保持弹性吃剩余宽——初览观感与迁表时一致。拖动中宽度直写 <col>
   // (免整表重渲),松手才落状态。
@@ -874,6 +982,16 @@ function DtsRegister({
       ref={(el) => { colEls.current[key] = el ?? undefined; }}
       style={px !== undefined ? { width: px } : undefined} />;
   };
+
+  // 表最小宽(2026-09-24):标题列是唯一弹性列,table-fixed 下它的宽
+  // = 表宽 − Σ(定宽列)。定宽合计吃满表宽(列被拖宽/窗口缩窄)时余量
+  // 归零,标题列被挤没、列头互相叠字——给表 min-width = Σ可见定宽 +
+  // 标题下限,空间不够就横向滚动,标题永远保住最小宽。
+  const tableMinWidth = (["select", "ticket",
+    "launch", "remark", "module", "tier"] as DtsColKey[])
+    .filter((key) => colShown(key))
+    .reduce((sum, key) => sum + (dtsColWidth(key) ?? DTS_COL_MIN[key]),
+      DTS_COL_MIN.title);
 
   // 模糊搜索:单号/标题/版本,大小写不敏感;列头过滤叠加其上。
   const [query, setQuery] = useState("");
@@ -922,6 +1040,17 @@ function DtsRegister({
       if (t.version) set.add(dtsVersionGroup(t.version));
     });
     return sortDtsVersionsDesc([...set]);
+  }, [actionable]);
+
+  // 版本组内任一单未命中分支映射即标红(ADR-0038 两道闸不变,列已
+  // 退役,信号收进过滤框):映射按前缀包含,组内通常整组一致,取
+  // 保守侧——里面有发不了的单就该红。
+  const unmappedGroups = useMemo(() => {
+    const set = new Set<string>();
+    actionable?.forEach((t) => {
+      if (t.version && !t.branch) set.add(dtsVersionGroup(t.version));
+    });
+    return set;
   }, [actionable]);
 
   // 默认勾选最高 R/C 版本(列表已降序):R/C 相同的多个版本串视为
@@ -988,23 +1117,15 @@ function DtsRegister({
       if (remoteSeq.current !== seq) return;
       const found = results.filter((item): item is { no: string; detail: DtsTicketDetail } =>
         Boolean(item));
-      // 远程查到的单直接入详情缓存:展开零等待,不再二次请求。
-      setDetailCache((prev) => {
-        const next = { ...prev };
-        for (const { no, detail } of found) {
-          const key = detail.ticket || no;
-          if (!next[key]) next[key] = detail;
-        }
-        return next;
-      });
       setRemote({ loading: false, tickets: found.map(({ no, detail }) => ({
         ticket: detail.ticket || no,
         title: detail.title,
         severity: detail.severity,
         version: detail.version,
-        // 远程查单入列也带分支匹配结果(服务端详情同源补齐),否则
-        // 绕过列表的单子在分支列全员误报「未配置分支」。
+        // 远程查单入列也带分支与模块匹配结果(服务端详情同源补齐),
+        // 否则绕过列表的单子在两列上全员误报未配置/未匹配。
         branch: detail.branch,
+        module_id: detail.module_id,
         url: detail.url,
         description: detail.description,
         // 状态不带入列,可拉取判定(isActionableDts)会把远程命中的单
@@ -1032,14 +1153,28 @@ function DtsRegister({
       ? showLaunched : showUnlaunched);
   }, [versionFiltered, remoteTickets, launchFilterActive, showUnlaunched,
     showLaunched, shownLiveByTicket]);
+  // 展示中的单存在未配置分支映射时给提示条(2026-09-24,分支列退役
+  // 后信号收拢到过滤框旁):提示跟着「当前看得见的单里有发不了的」
+  // 这个事实走,不跟过滤动作走——选「全部」也看得见。
+  const displayedUnmapped = useMemo(() => {
+    const rows = display.filter((t) => !t.branch);
+    const groups = new Set<string>();
+    let versionless = false;
+    rows.forEach((t) => {
+      if (t.version) groups.add(dtsVersionGroup(t.version));
+      else versionless = true;
+    });
+    return { count: rows.length, groups: [...groups], versionless };
+  }, [display]);
 
   // 全选表头(三态):只作用于当前展示列表中**可勾**的行——搜索+版本
   // 过滤划范围,发起过滤里已发起的行、未配置分支的行(ADR-0038,禁
-  // 发起)勾选禁用,不在全选之列。可勾行全中时点击整体取消,部分或
-  // 全无时一键勾满。已勾选但被过滤掉的单不在展示列表里,保持原样,
-  // 发起时照常带上。
+  // 发起)与未匹配业务模块的行(ADR-0056,禁发起)勾选禁用,不在全选
+  // 之列。可勾行全中时点击整体取消,部分或全无时一键勾满。已勾选但
+  // 被过滤掉的单不在展示列表里,保持原样,发起时照常带上。
   const selectableTickets = display
-    .filter((t) => !mineLiveByTicket.has(t.ticket) && !!t.branch)
+    .filter((t) => !mineLiveByTicket.has(t.ticket) && !!t.branch
+      && !!(bindings[t.ticket]?.module_id ?? t.module_id))
     .map((t) => t.ticket);
   const displayedSelectedCount =
     selectableTickets.filter((no) => selected.includes(no)).length;
@@ -1055,11 +1190,6 @@ function DtsRegister({
     }
   }
 
-  // 展开详情:同一张单只拉一次(缓存),失败不影响列表已有字段展示。
-  const [expandedTicket, setExpandedTicket] = useState<string | null>(null);
-  const [detailCache, setDetailCache] = useState<Record<string, DtsTicketDetail>>({});
-  const [detailLoading, setDetailLoading] = useState(false);
-
   async function load(target?: string) {
     // 换人发起的重拉带着新名下进同一函数:target 在场以它为准,绕开
     // setState 后旧闭包读不到新值的时序。
@@ -1073,7 +1203,6 @@ function DtsRegister({
     setTitleFilter("");
     setShowUnlaunched(true);
     setShowLaunched(false);
-    setExpandedTicket(null);
     try {
       const result = await listDtsTickets(account);
       setTickets(result.tickets);
@@ -1164,32 +1293,28 @@ function DtsRegister({
     }
   }
 
-  async function toggleExpand(ticketNo: string) {
-    if (expandedTicket === ticketNo) {
-      setExpandedTicket(null);
-      return;
-    }
-    setExpandedTicket(ticketNo);
-    if (!detailCache[ticketNo]) {
-      setDetailLoading(true);
-      try {
-        const detail = await getDtsTicketDetail(ticketNo);
-        setDetailCache((prev) => ({ ...prev, [ticketNo]: detail }));
-      } catch {
-        // 详情获取失败不影响展示列表中已有的字段
-      } finally {
-        setDetailLoading(false);
-      }
-    }
+  /** 备注弹窗保存:草稿落 remarks(空串=清除该单条目),持久化由
+   *  remarks 的 effect 统一写 localStorage;取消/X/点外部不经过这里,
+   *  草稿直接丢弃。 */
+  function saveRemarkDraft() {
+    if (remarkEditing === null) return;
+    const ticketNo = remarkEditing;
+    const text = remarkDraft;
+    setRemarks((current) => {
+      const next = { ...current };
+      if (text.trim()) next[ticketNo] = text;
+      else delete next[ticketNo];
+      return next;
+    });
+    setRemarkEditing(null);
   }
 
   /** 批量发起(2026-08-28):每单一个独立工作流;逐张串行 create,
    * 单张失败不拖垮整批。已有进行中会话的单跳过并计入失败(服务端
    * create 的同单查重也会兜一道)。有成功的把新会话交父级:切「问题
    * 会话」子页签挂成功横幅(ADR-0040:不在本页打开工作台,批量更不
-   * 开 N 个页签)。payload 带单号与标题;有人工预绑模块的一并带上
-   * ——会话开场即带模块与仓,AI 跳过识别且被锁死不得改绑(spec
-   * #57);没绑的照旧 AI 识别。 */
+   * 开 N 个页签)。payload 带单号、标题与所属模块(ADR-0056:发起
+   * 必带,开场即有模块与仓,AI 不再识别模块)。 */
   async function launch() {
     if (!selected.length || busy) return;
     setBusy(true);
@@ -1207,7 +1332,14 @@ function DtsRegister({
         // 远程补查的单也能发起:标题从远程详情里取。
         const ticket = tickets?.find((item) => item.ticket === ticketNo)
           ?? remote.tickets.find((item) => item.ticket === ticketNo);
-        const binding = bindings[ticketNo];
+        // 模块发起闸的前端半边(ADR-0056):改选优先于带出,都没有
+        // 不发(勾选闸已拦,这里是纵深防御);带出值不落账,发起时
+        // 现场解析——与列上所见同源。
+        const moduleId = bindings[ticketNo]?.module_id ?? ticket?.module_id;
+        if (!moduleId) {
+          failures.push(`${ticketNo} → 未匹配到业务模块,发起被拦`);
+          continue;
+        }
         try {
           const created = await createIssue({
             title: ticket?.title || ticketNo,
@@ -1220,11 +1352,22 @@ function DtsRegister({
             // 重点优先读);空串不算填了。
             ...(remarks[ticketNo]?.trim()
               ? { remark: remarks[ticketNo].trim() } : {}),
-            ...(binding ? { module_id: binding.module_id } : {}),
+            // 介入档位(ADR-0057):发起前选了档才带,创建即定格,
+            // 发起后不可改;没选=跟随全局,不带字段。
+            ...(tiers[ticketNo]
+              ? { intervention_tier: tiers[ticketNo] } : {}),
+            module_id: moduleId,
           });
           launched.push(created);
           // 备注已随会话落库,清掉这一单的输入——已消费的指示不残留。
           setRemarks((current) => {
+            const next = { ...current };
+            delete next[ticketNo];
+            return next;
+          });
+          // 介入档位同理:已定格进会话,清掉本地偏好(重新发起走全局)。
+          setTiers((current) => {
+            if (!current[ticketNo]) return current;
             const next = { ...current };
             delete next[ticketNo];
             return next;
@@ -1270,58 +1413,112 @@ function DtsRegister({
       {/* 名下视角切换(2026-09-17 协助处理):默认自己,选人看别人名下
           的单;几十人直接搜索(UserPicker 同款 combobox)。发起后的
           会话仍归属自己,提示条在工具栏下说清。 */}
-      <div className="w-44">
+      <div className="w-48">
         <UserPicker value={owner} options={ownerOptions} ariaLabel="查看谁名下的问题单"
-          onChange={pickOwner} placeholder="搜索姓名或工号" />
+          label="责任人" onChange={pickOwner} placeholder="搜索姓名或工号" />
       </div>
-      <Input type="search" className="h-9 w-full sm:w-80" value={query}
+      <Input type="search" className="h-9 w-full min-w-40 flex-1 sm:max-w-80" value={query}
         aria-label="搜索问题单"
         placeholder="搜索单号、标题、版本;输入完整单号可远程查单"
         onChange={(e) => setQuery(e.target.value)} />
-      {/* 列显示/隐藏(shadcn 惯用法):表格原语本身不带列开关,这里按
-          Data Table 的列选择器形态用 Popover+Checkbox 承载,暂只有
-          「所属模块」一列可选,后续加列在这里长。localStorage 按用户
-          记忆(键沿用旧开关的,老用户偏好不丢)。 */}
+      {/* 版本过滤(2026-09-24 从版本列表头上移,列随分支列一并退役):
+          下拉选择框形态——触发器显示当前选中(全部/单组/N 组),弹层
+          复选清单按版本组多选,勾一组带全组 B 版,默认勾选并列最高
+          R/C 组(2026-08-29 口径不变);组内任一单未命中分支映射标红
+          ——分支闸(禁勾+后端 400)原样,提示条见工具栏下方。 */}
       <Popover>
-        <PopoverTrigger render={<Button type="button" variant="ghost" size="sm"
-          aria-label="列设置"
-          title="显示或隐藏「所属模块」列">
-          <Columns3 aria-hidden className="size-3.5" />列
-        </Button>} />
-        <PopoverContent align="start" className="w-48 p-1">
-          <label className="flex min-h-9 cursor-pointer items-center
-            justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-            所属模块
-            <Checkbox checked={moduleCol} onCheckedChange={(checked) => {
-              setModuleCol(checked);
-              try {
-                localStorage.setItem(moduleColKey, checked ? "shown" : "hidden");
-              } catch { /* 旁路:存不下就本次会话内有效 */ }
-            }} />
-          </label>
+        <PopoverTrigger render={<button type="button"
+          className="inline-flex h-9 w-56 items-center gap-2 rounded-md
+            border border-input bg-surface px-3 text-sm outline-none
+            transition-colors hover:bg-accent/40 focus-visible:ring-3
+            focus-visible:ring-ring/50"
+          aria-label="按版本组过滤问题单"
+          title="按版本组多选过滤:勾一组带全组 B 版;红色组内有单未配置分支映射">
+          <span className="text-muted-foreground">版本</span>
+          <span className="min-w-0 flex-1 truncate text-left">
+            {selectedVersions.length === 0 ? "全部版本"
+              : selectedVersions.length === 1 ? selectedVersions[0]
+              : `已选 ${selectedVersions.length} 个版本组`}
+          </span>
+          <ChevronDown aria-hidden className="size-4 shrink-0
+            text-muted-foreground" />
+        </button>} />
+        <PopoverContent align="start" className="tw-root w-72 p-1">
+          {versions.length === 0
+            ? <p className="px-2 py-3 text-sm text-muted-foreground">
+                名下没有带版本的问题单
+              </p>
+            : <div className="flex flex-col">
+                {versions.map((version) => <label key={version}
+                  className="flex min-h-11 cursor-pointer items-center gap-2.5
+                    rounded-md px-2 py-1.5 text-sm hover:bg-accent">
+                  <Checkbox checked={selectedVersions.includes(version)}
+                    onCheckedChange={(checked) => setSelectedVersions((prev) => checked
+                      ? [...prev, version]
+                      : prev.filter((item) => item !== version))} />
+                  <span className={`font-mono text-xs ${unmappedGroups.has(version)
+                    ? "text-destructive" : ""}`}>{version}</span>
+                  {unmappedGroups.has(version) && <span
+                    className="ml-auto text-xs text-destructive">未配置分支</span>}
+                </label>)}
+              </div>}
+          <div className="mt-1 border-t border-line pt-1">
+            <button type="button"
+              className="w-full rounded-md px-2 py-1 text-left text-sm
+                text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => setSelectedVersions([])}>
+              清除版本筛选(全显)
+            </button>
+          </div>
         </PopoverContent>
       </Popover>
+      {/* 列显示/隐藏(shadcn 惯用法):Data Table 的列选择器形态,
+          Popover+Checkbox 承载全部数据列(ADR-0056);勾选与单号常驻
+          不进清单,义务不随视图消失。localStorage 按用户记忆。
+          工具栏控件统一 h-9 一族(2026-09-24 排版收拾):输入、过滤、
+          列设置、动作钮同高同距,左侧过滤簇与右侧动作簇以弹力空隙分
+          隔,计数随动作簇右对齐。 */}
+      <Popover>
+        <PopoverTrigger render={<Button type="button" variant="outline"
+          aria-label="列设置"
+          title="显示或隐藏数据列(勾选与单号常驻)">
+          <Columns3 aria-hidden className="size-4" />列
+        </Button>} />
+        <PopoverContent align="start" className="w-48 p-1">
+          {DTS_HIDEABLE_COLS.map((col) => (
+            <label key={col.key} className="flex min-h-9 cursor-pointer
+              items-center justify-between gap-2 rounded-md px-2 py-1.5
+              text-sm hover:bg-accent">
+              {col.label}
+              <Checkbox checked={colShown(col.key)}
+                onCheckedChange={(checked) =>
+                  toggleCol(col.key, checked === true)} />
+            </label>
+          ))}
+        </PopoverContent>
+      </Popover>
+      <div className="grow" />
       {remote.loading
-        ? <span className="text-xs text-muted-foreground" role="status">远程查单中…</span>
+        ? <span className="text-sm text-muted-foreground" role="status">远程查单中…</span>
         : (query || ticketFilter.trim() || titleFilter.trim()
           || selectedVersions.length > 0 || launchFilterActive) && <span
-            className="text-xs text-muted-foreground">
+            className="text-sm text-muted-foreground">
           {display.length} / {actionable?.length ?? 0} 条
+          {selected.length > 0 && ` · 已选 ${selected.length}`}
         </span>}
-      <div className="grow" />
-      {note && <span className="text-xs text-muted-foreground" role="status">{note}</span>}
-      <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}
+      {note && <span className="text-sm text-muted-foreground" role="status">{note}</span>}
+      <Button variant="outline" onClick={() => void load()} disabled={loading}
         title={`重新拉取 ${ownerLabel} 名下问题单(勾选与搜索会重置)`}>
-        <RotateCw aria-hidden className={`size-3.5 ${loading ? "animate-spin" : ""}`} />
+        <RotateCw aria-hidden className={`size-4 ${loading ? "animate-spin" : ""}`} />
         {loading ? (tickets === undefined ? "拉取中…" : "刷新中…") : "刷新"}
       </Button>
-      <Button size="sm" disabled={!selected.length || busy}
+      <Button disabled={!selected.length || busy}
         title={launchTitle} onClick={launch}>
         {launchLabel}
       </Button>
     </div>
     {assistMode && <p className="rounded-md border border-line bg-muted/40
-      px-3 py-2 text-xs leading-normal text-muted-foreground" role="note">
+      px-3 py-2 text-sm leading-normal text-muted-foreground" role="note">
       正在查看 <b className="font-medium text-foreground">{ownerLabel}</b>
       名下的单子。发起处理的会话归属你自己名下推进(分支按发起人隔离,
       不动对方已发起的会话);别人发起过的单标「进行中」,点开是查看模式。
@@ -1330,9 +1527,20 @@ function DtsRegister({
       正在拉取 {ownerLabel} 名下的问题单…
     </p>}
     {hiddenRemote.length > 0 && <p className="rounded-md border border-line
-      bg-muted/40 px-3 py-2 text-xs text-muted-foreground" role="note">
+      bg-muted/40 px-3 py-2 text-sm text-muted-foreground" role="note">
       {hiddenRemote.map((t) => t.ticket).join("、")} 存在,但状态不是
       「{DTS_ACTIONABLE_STATUS}」,不在可拉取范围。
+    </p>}
+    {displayedUnmapped.count > 0 && <p className="rounded-md
+      border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs
+      text-destructive" role="note">
+      {displayedUnmapped.groups.length
+        ? `版本组 ${displayedUnmapped.groups.join("、")} 未配置分支映射,`
+        : "部分单据版本未配置分支映射,"}
+      相关单据暂不可发起——请先在
+      <a className="mx-0.5 font-medium underline underline-offset-2 hover:underline"
+        href="/configuration?tab=versions">配置中心「版本与分支」</a>
+      补好映射再发起。
     </p>}
     {tickets && tickets.length > 0 && <>
       {/* 列表体:shadcn Table(2026-09-11 迁移,spec #171 评审后拍板——
@@ -1365,34 +1573,28 @@ function DtsRegister({
               来源只有 colgroup 一处(th 上的 w-* 退役);标题列不给宽,
               吃掉剩余宽度。把手贴各列表头右缘,列宽拖完记忆在
               localStorage(mae-flow:dts-col-widths),双击把手回默认。 */}
-          <Table aria-label="名下问题单" className="table-fixed">
+          <Table aria-label="名下问题单" className="table-fixed"
+            style={{ minWidth: tableMinWidth }}>
             <colgroup>
               {renderCol("select")}
               {renderCol("ticket")}
-              {renderCol("title")}
-              {renderCol("version")}
-              {renderCol("branch")}
-              {renderCol("status")}
-              {renderCol("launch")}
-              {renderCol("remark")}
-              {moduleCol && renderCol("module")}
-              <col style={{ width: 48 }} />
+              {colShown("title") && renderCol("title")}
+              {colShown("launch") && renderCol("launch")}
+              {colShown("remark") && renderCol("remark")}
+              {colShown("module") && renderCol("module")}
+              {colShown("tier") && renderCol("tier")}
             </colgroup>
-            <TableHeader>
+            <TableHeader className="bg-surface-2">
               <TableRow>
                 <TableHead className="relative">
-                  <div className="flex items-center gap-2">
-                    <Checkbox aria-label="全选展示中的问题单"
-                      checked={selectableTickets.length > 0
-                        && allDisplayedSelected}
-                      indeterminate={!allDisplayedSelected
-                        && displayedSelectedCount > 0}
-                      onCheckedChange={() => toggleSelectAll()} />
-                    <span className="whitespace-nowrap text-xs font-normal
-                      text-muted-foreground">
-                      已选 {displayedSelectedCount} / {selectableTickets.length} 张
-                    </span>
-                  </div>
+                  {/* 只放全选框(2026-09-24 排版收拾):「已选 N 张」曾把
+                      首列撑到 112px,挪进工具栏计数;勾选列回归纯勾选。 */}
+                  <Checkbox aria-label="全选展示中的问题单"
+                    checked={selectableTickets.length > 0
+                      && allDisplayedSelected}
+                    indeterminate={!allDisplayedSelected
+                      && displayedSelectedCount > 0}
+                    onCheckedChange={() => toggleSelectAll()} />
                   <DtsColResizeHandle colKey="select" label="勾选"
                     width={dtsColWidth("select")}
                     onPreview={previewColWidth}
@@ -1415,7 +1617,7 @@ function DtsRegister({
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>
-                <TableHead className="relative">
+                {colShown("title") && <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     标题
                     <HeaderFilter label="标题" active={!!titleFilter.trim()}
@@ -1431,56 +1633,11 @@ function DtsRegister({
                     width={dtsColWidth("title")}
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
-                {/* 版本列(2026-09-13 表头化):展示含 B 版构建号的完整
-                    版本(截断后悬停可见全串),过滤只认版本组——漏斗
-                    弹层沿旧「版本过滤」的分组清单(勾组带全组 B 版),
-                    44px 触控目标由选项行 min-h-11 保留。 */}
-                <TableHead className="relative">
-                  <span className="inline-flex items-center gap-1">
-                    版本
-                    {versions.length > 0 && <HeaderFilter label="版本" contentClassName="w-72"
-                      active={selectedVersions.length > 0}
-                      onClear={() => setSelectedVersions([])}>
-                      {() => <div className="flex flex-col">
-                        {versions.map((version) => <label key={version}
-                          className="flex min-h-11 cursor-pointer items-center gap-2.5
-                            rounded-md px-2 py-1.5 text-sm hover:bg-accent">
-                          <Checkbox checked={selectedVersions.includes(version)}
-                            onCheckedChange={(checked) => setSelectedVersions((prev) => checked
-                              ? [...prev, version]
-                              : prev.filter((item) => item !== version))} />
-                          <span className="font-mono text-xs">{version}</span>
-                        </label>)}
-                      </div>}
-                    </HeaderFilter>}
-                  </span>
-                  <DtsColResizeHandle colKey="version" label="版本"
-                    width={dtsColWidth("version")}
-                    onPreview={previewColWidth}
-                    onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
-                {/* 分支列(ADR-0038):服务端按「单据版本包含配置版本,
-                    多命中取最长」逐单带出;未命中给「未配置分支,前往
-                    配置」深链配置中心版本与分支页签,该行禁发起。 */}
-                <TableHead className="relative">
-                  分支
-                  <DtsColResizeHandle colKey="branch" label="分支"
-                    width={dtsColWidth("branch")}
-                    onPreview={previewColWidth}
-                    onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
-                <TableHead className="relative">
-                  状态
-                  <DtsColResizeHandle colKey="status" label="状态"
-                    width={dtsColWidth("status")}
-                    onPreview={previewColWidth}
-                    onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
+                </TableHead>}
                 {/* 发起状态列(2026-09-14):本平台有没有发起过——判定
                     与发起拦截同尺(liveIssueFor 一处口径),漏斗默认只
                     看未发起;徽标可点,跳进该单名下的进行中会话。 */}
-                <TableHead className="relative">
+                {colShown("launch") && <TableHead className="relative">
                   <span className="inline-flex items-center gap-1">
                     发起状态
                     <HeaderFilter label="发起状态" active={launchFilterActive}
@@ -1508,10 +1665,10 @@ function DtsRegister({
                     width={dtsColWidth("launch")}
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
+                </TableHead>}
                 {/* 发起备注列(2026-09-20):随单文本输入,发起时进登记
                     元信息并要求 AI 重点优先读——发起人指路的最短通道。 */}
-                <TableHead className="relative">
+                {colShown("remark") && <TableHead className="relative">
                   <span className="inline-flex items-center gap-1" title="发起时随单告知 AI 的备注:AI 开场会重点优先读这段话">
                     发起备注
                   </span>
@@ -1519,25 +1676,32 @@ function DtsRegister({
                     width={dtsColWidth("remark")}
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
-                </TableHead>
-                {moduleCol && <TableHead className="relative">
+                </TableHead>}
+                {colShown("module") && <TableHead className="relative">
                   所属模块
                   <DtsColResizeHandle colKey="module" label="所属模块"
                     width={dtsColWidth("module")}
                     onPreview={previewColWidth}
                     onCommit={commitColWidth} onReset={resetColWidth} />
                 </TableHead>}
-                <TableHead />
+                {/* 介入档位列(ADR-0057):发起前按单定档,发起时随请求
+                    定格进会话,发起后不可改;进行中行只读显示生效档。 */}
+                {colShown("tier") && <TableHead className="relative">
+                  <span className="inline-flex items-center gap-1"
+                    title="发起前按单选定介入档位:发起后定格,不再跟随个人设置的改动;不选=跟随全局">
+                    介入档位
+                  </span>
+                  <DtsColResizeHandle colKey="tier" label="介入档位"
+                    width={dtsColWidth("tier")}
+                    onPreview={previewColWidth}
+                    onCommit={commitColWidth} onReset={resetColWidth} />
+                </TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {display.map((ticket) => {
                 const isRemote = remote.tickets.some((item) =>
                   item.ticket === ticket.ticket);
-                const isExpanded = expandedTicket === ticket.ticket;
-                const detail = detailCache[ticket.ticket];
-                const detailId =
-                  `issue-dts-detail-${encodeURIComponent(ticket.ticket)}`;
                 // 发起状态两本账(2026-09-17 协助视角):拦截认我的名册
                 // (同账号+同单号至多一个进行中,与服务端 create 同尺);
                 // 徽标认展示名册——协助视角下别人发起过的单也标「进行中」,
@@ -1551,16 +1715,19 @@ function DtsRegister({
                     ? `已发起:会话 ${liveIssue.id} 进行中`
                     : `已发起:${liveIssue.account} 的会话 ${liveIssue.id} 进行中`)
                   : "";
-                const colCount = moduleCol ? 10 : 9;
-                return <Fragment key={ticket.ticket}>
-                  <TableRow
+                // 模块两本账(ADR-0056):人工改选优先于服务端带出值,
+                // 都没有=未匹配——勾选禁发,列上必填。
+                const boundModule = bindings[ticket.ticket]?.module_id;
+                const resolvedModule = boundModule ?? ticket.module_id;
+                return <TableRow key={ticket.ticket}
                     data-state={selected.includes(ticket.ticket)
                       ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox checked={selected.includes(ticket.ticket)}
-                        disabled={!!mineLive || !ticket.branch}
+                        disabled={!!mineLive || !ticket.branch || !resolvedModule}
                         title={mineLive ? `${liveTip},不可重复发起`
-                          : !ticket.branch ? "未配置分支,不可发起——点分支列的「前往配置」补映射"
+                          : !ticket.branch ? "单据版本未配置分支映射,不可发起——见版本过滤旁的红色提示前往配置"
+                          : !resolvedModule ? "未匹配到业务模块,不可发起——在所属模块列选择后再勾选"
                           : undefined}
                         aria-label={`选择 ${ticket.ticket}`}
                         onCheckedChange={(checked) => setSelected((current) =>
@@ -1576,45 +1743,26 @@ function DtsRegister({
                           外观与原文字一致;新开页签,不带走列表现场)。 */}
                       {/* overflow-hidden:列宽拖窄后「远程」徽标裁在格内,
                           不横溢进标题列(table-fixed 格宽即硬宽)。 */}
-                      <a className="issue-dts-ticket font-mono text-sm
-                        font-medium text-primary underline-offset-2
-                        hover:underline"
-                        href={dtsTicketUrl(ticket.ticket)}
-                        target="_blank" rel="noreferrer">
-                        {ticket.ticket}
-                      </a>
-                      {isRemote && <Badge variant="outline" className="ml-1.5">
-                        远程
-                      </Badge>}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <a className="issue-dts-ticket block min-w-0 truncate
+                          font-mono text-sm font-medium text-primary
+                          underline-offset-2 hover:underline"
+                          title={ticket.ticket}
+                          href={dtsTicketUrl(ticket.ticket)}
+                          target="_blank" rel="noreferrer">
+                          {ticket.ticket}
+                        </a>
+                        {isRemote && <Badge variant="outline"
+                          className="shrink-0">远程</Badge>}
+                      </span>
                     </TableCell>
-                    <TableCell className="max-w-0">
+                    {colShown("title") && <TableCell className="max-w-0">
                       <span className="block truncate"
                         title={ticket.title || undefined}>
                         {ticket.title || "(无标题)"}
                       </span>
-                    </TableCell>
-                    <TableCell className="max-w-0">
-                      <span className="block truncate font-mono text-xs"
-                        title={ticket.version}>
-                        {ticket.version || "—"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="max-w-0 text-sm">
-                      {ticket.branch
-                        ? <span className="block truncate font-mono text-xs"
-                            title={ticket.branch}>{ticket.branch}</span>
-                        : <a className="text-xs text-destructive underline
-                            underline-offset-2 hover:underline"
-                            href="/configuration?tab=versions"
-                            title="单据版本没有匹配到配置中心的版本与分支映射,配置后即可发起">
-                            未配置分支,前往配置
-                          </a>}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {ticket.status
-                        && <Badge variant="secondary">{ticket.status}</Badge>}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap">
+                    </TableCell>}
+                    {colShown("launch") && <TableCell className="whitespace-nowrap">
                       {liveIssue
                         /* 进行中徽标=新页签链接(ADR-0040):直接开该单
                            名下的进行中会话,不在本页跳转。样式等价复刻
@@ -1640,28 +1788,50 @@ function DtsRegister({
                         </a>
                         : <span className="text-muted-foreground"
                           aria-label="未发起">—</span>}
-                    </TableCell>
-                    {/* 发起备注格:文本输入框(选填),发起时随单进登记
-                        元信息——AI 开场被要求重点优先读。输入不触发行
-                        选中,勾选仍走首格 checkbox。 */}
-                    <TableCell>
-                      <Input
-                        value={remarks[ticket.ticket] ?? ""}
-                        placeholder="给 AI 的重点提示(选填)"
-                        aria-label={`${ticket.ticket} 发起备注`}
-                        title="发起时随单告知 AI 的备注:AI 开场会重点优先读这段话"
-                        className="h-8 bg-surface text-xs"
-                        onChange={(event) => setRemarks((current) => ({
-                          ...current,
-                          [ticket.ticket]: event.target.value,
-                        }))} />
-                    </TableCell>
-                    {moduleCol && <TableCell>
+                    </TableCell>}
+                    {/* 发起备注格(2026-09-24 重做):预览钮——空时弱化
+                        「点击填写备注」,已填显示截断预览(悬停 title
+                        全文),点击弹多行弹窗编辑。写好的备注持久化按
+                        人存 localStorage,发起时随单进登记元信息(AI
+                        开场重点优先读);点击不触发行选中,勾选仍走
+                        首格 checkbox。 */}
+                    {colShown("remark") && <TableCell>
+                      <button type="button"
+                        className={`h-8 w-full truncate rounded-md border
+                          px-2 text-left text-xs transition-colors
+                          ${remarks[ticket.ticket]
+                            ? "border-input bg-surface hover:bg-accent/40"
+                            : "border-dashed border-input bg-transparent text-muted-foreground hover:bg-accent/40"}`}
+                        title={remarks[ticket.ticket] || undefined}
+                        aria-label={`${ticket.ticket} 发起备注${
+                          remarks[ticket.ticket] ? "(已填写,点击编辑)" : "(空,点击填写)"}`}
+                        onClick={() => {
+                          setRemarkDraft(remarks[ticket.ticket] ?? "");
+                          setRemarkEditing(ticket.ticket);
+                        }}>
+                        {remarks[ticket.ticket] || "点击填写备注"}
+                      </button>
+                    </TableCell>}
+                    {colShown("module") && <TableCell>
+                      {/* 所属模块格(ADR-0056):带出值或人工改选,发起
+                          必带;未匹配(零命中/重名歧义)必填,勾选闸同尺
+                          拦。人工改选即存团队共享映射,带出值不落账。 */}
                       <Select
-                        value={bindings[ticket.ticket]?.module_id ?? "__none"}
+                        value={resolvedModule ?? "__none"}
                         disabled={bindingTicket === ticket.ticket}
+                        // 占位项只给「规则没带出」的行,且恒在(2026-09-24):
+                        // 选中模块后乐观更新会改写行的匹配态,若此时把占位
+                        // 项从清单里动态摘除,Base UI 会在弹层收起的重渲染
+                        // 中对「当前值不在 items」补一次空提交,把刚选的
+                        // 绑定清掉——表现就是「选了又弹回未匹配」。判据用
+                        // 服务端带出值(静态)而非改选态(会翻转)。规则
+                        // 带出行不设占位项:人工改选是粘性的,想回带出值
+                        // 就像选普通模块一样重选它,没有「切回自动」的
+                        // 特权入口(自动匹配一词随启发式退役,见 CONTEXT.md)。
                         items={[
-                          { value: "__none", label: "未选择(AI 运行时识别)" },
+                          ...(ticket.module_id ? [] : [
+                            { value: "__none", label: "未匹配,发起前必选" },
+                          ]),
                           ...moduleCatalog.map((module) => ({
                             value: module.id, label: module.name,
                           })),
@@ -1671,15 +1841,21 @@ function DtsRegister({
                             value === "__none" || value == null
                               ? "" : value)}>
                         <SelectTrigger
-                          className="h-8 w-full text-xs"
+                          className={`h-8 w-full text-xs ${resolvedModule
+                            ? "" : "border-destructive/60 text-destructive"}`}
                           aria-label={`${ticket.ticket} 所属业务模块`}
-                          title="人工预绑这张单所属的业务模块;发起处理时直接带出,AI 不再识别">
+                          title={`${moduleCatalog.find((module) =>
+                            module.id === resolvedModule)?.name
+                            ?? (resolvedModule ? resolvedModule : "未匹配到业务模块")}`
+                            + (resolvedModule
+                              ? " · 发起时随单带出(可改选,选即存团队共享映射)"
+                              : ":从下拉选择,发起前必填")}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="tw-root">
-                          <SelectItem value="__none">
-                            未选择(AI 运行时识别)
-                          </SelectItem>
+                          {!ticket.module_id && <SelectItem value="__none">
+                            未匹配,发起前必选
+                          </SelectItem>}
                           {moduleCatalog.map((module) => (
                             <SelectItem key={module.id} value={module.id}>
                               {module.name}
@@ -1691,62 +1867,90 @@ function DtsRegister({
                           {bindFail.message}
                         </p>}
                     </TableCell>}
-                    <TableCell className="text-right">
-                      <button type="button"
-                        aria-expanded={isExpanded}
-                        aria-controls={detailId}
-                        aria-label={`${isExpanded ? "收起" : "展开"} ${ticket.ticket} 详情`}
-                        onClick={() => void toggleExpand(ticket.ticket)}
-                        className="inline-flex size-9 items-center justify-center
-                          rounded-sm text-muted-foreground transition-colors
-                          hover:bg-accent hover:text-foreground">
-                        <ChevronRight aria-hidden
-                          className={`size-4 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-                      </button>
-                    </TableCell>
+                    {colShown("tier") && <TableCell>
+                      {/* 介入档位格(ADR-0057):未发起=四选项下拉(跟随
+                          全局缺省),选即存本地偏好,发起时随请求定格进
+                          会话;进行中=只读——特例显示档名,否则「跟随
+                          全局」(自己的会话悬停可见当前实际生效档);
+                          协助视角未发起行不设(偏好只影响自己的发起,
+                          要设就换回自己名下)。 */}
+                      {liveIssue
+                        ? <span className="block truncate text-xs text-muted-foreground"
+                            title={liveIssue.intervention_tier
+                              ? `${TIER_LABEL.get(liveIssue.intervention_tier)}(发起时定格,发起后不可改)`
+                              : liveIssue.account === viewer.username
+                                ? `跟随全局 · 现·${TIER_LABEL.get(viewer.issue_intervention_tier ?? "2")}(随个人设置改动)`
+                                : "跟随全局"}>
+                            {liveIssue.intervention_tier
+                              ? TIER_LABEL.get(liveIssue.intervention_tier)
+                              : "跟随全局"}
+                          </span>
+                        : assistMode
+                          ? <span className="text-muted-foreground"
+                              aria-label="协助视角不设置介入档位">—</span>
+                          : <Select
+                              value={tiers[ticket.ticket] ?? TIER_FOLLOW}
+                              items={[{ value: TIER_FOLLOW, label: "跟随全局" },
+                                ...TIER_OPTIONS]}
+                              onValueChange={(value) => {
+                                const tier = value === TIER_FOLLOW || value == null
+                                  ? undefined : value as DtsTierPref;
+                                setTiers((current) => {
+                                  const next = { ...current };
+                                  if (tier) next[ticket.ticket] = tier;
+                                  else delete next[ticket.ticket];
+                                  return next;
+                                });
+                              }}>
+                            <SelectTrigger className="h-8 w-full text-xs"
+                              aria-label={`${ticket.ticket} 介入档位`}
+                              title="发起前按单定档:发起后定格,不再跟随个人设置;跟随全局=用个人设置的档">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="tw-root">
+                              <SelectItem value={TIER_FOLLOW}>跟随全局</SelectItem>
+                              {TIER_OPTIONS.map((tier) => (
+                                <SelectItem key={tier.value} value={tier.value}>
+                                  {tier.label}
+                                </SelectItem>))}
+                            </SelectContent>
+                          </Select>}
+                    </TableCell>}
                   </TableRow>
-                  {isExpanded && <TableRow className="hover:bg-transparent">
-                    <TableCell colSpan={colCount} className="bg-muted/30 p-0">
-                      <div id={detailId} className="px-10 py-3">
-                        {detailLoading
-                          && <span className="text-xs text-muted-foreground">
-                            加载详情…
-                          </span>}
-                        <dl className="grid grid-cols-[max-content_1fr]
-                          items-baseline gap-x-4 gap-y-1 text-sm">
-                          <dt className="text-muted-foreground">问题级别</dt>
-                          <dd>{detail?.severity || ticket.severity || "—"}</dd>
-                          <dt className="text-muted-foreground">问题版本</dt>
-                          <dd className="font-mono text-xs">
-                            {detail?.version || ticket.version || "—"}</dd>
-                          <dt className="text-muted-foreground">问题链接</dt>
-                          <dd className="min-w-0">{(detail?.url || ticket.url)
-                            ? <a className="text-primary underline underline-offset-2 break-all"
-                                href={detail?.url || ticket.url}
-                                target="_blank" rel="noreferrer">
-                              {detail?.url || ticket.url}
-                            </a>
-                            : "—"}</dd>
-                          <dt className="text-muted-foreground">提单人</dt>
-                          <dd>{detail?.submitter || ticket.submitter || "—"}</dd>
-                          <dt className="text-muted-foreground">问题描述</dt>
-                          <dd className="issue-dts-detail-html"
-                            dangerouslySetInnerHTML={{
-                              __html: prepareDtsHtml(
-                                detail?.description || ticket.description)
-                                || "(暂无描述)",
-                            }}
-                          />
-                        </dl>
-                      </div>
-                    </TableCell>
-                  </TableRow>}
-                </Fragment>;
               })}
             </TableBody>
           </Table>
         </div>}
     </>}
+    {/* 发起备注编辑弹窗(2026-09-24):多行 Textarea,草稿保存才生效
+        (取消/X/点外部丢弃);上限 5000 字带计数——备注直进 AI 开场
+        上下文,防长材料挤爆(长材料走登记附件/知识仓)。 */}
+    <Dialog open={remarkEditing !== null} onOpenChange={(open) => {
+      if (!open) setRemarkEditing(null);
+    }}>
+      <DialogContent className="tw-root sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>发起备注{remarkEditing ? ` · ${remarkEditing}` : ""}</DialogTitle>
+          <DialogDescription>开始时 AI 会重点读这段话。</DialogDescription>
+        </DialogHeader>
+        <Textarea value={remarkDraft} autoFocus
+          maxLength={REMARK_MAX}
+          aria-label="发起备注内容"
+          placeholder="给 AI 的重点提示信息:已排除的方向、已明确的方案、清晰的问题描述等"
+          className="h-64 [field-sizing:fixed] text-sm"
+          onChange={(event) => setRemarkDraft(event.target.value)} />
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground">
+            {remarkDraft.length} / {REMARK_MAX} 字
+          </span>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline"
+              onClick={() => setRemarkEditing(null)}>取消</Button>
+            <Button type="button" onClick={saveRemarkDraft}>保存备注</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
     {tickets && tickets.length === 0 && <div className="flex flex-col items-center
       gap-2 rounded-lg border border-dashed border-line px-6 py-12 text-center">
       <p className="text-base font-medium">

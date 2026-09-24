@@ -307,6 +307,9 @@ export interface DtsTicketBrief {
   submitter?: string;
   url?: string;
   description?: string;
+  /** 特性名(单据字段 sFeatureNoName,列表查询需 fields 显式请求):
+   * 业务模块强匹配的关键字段(ADR-0056),路由层据此带出 module_id。 */
+  featureName?: string;
 }
 
 export interface DtsTicketDetail {
@@ -325,10 +328,9 @@ export interface DtsTicketDetail {
    * 远程查单的前端要靠它判断可拉取(拉单只接"开发人员实施修改"),
    * 缺了它远程命中的单会被一律误判为状态不可拉取。 */
   status?: string;
-  /** 特性名(batchQueryTicket 的 sFeatureNoName,需 fields 显式请求)。 */
+  /** 特性名(batchQueryTicket/listByVersionAndHead 的 sFeatureNoName,
+   * 需 fields 显式请求):业务模块强匹配的关键字段(ADR-0056)。 */
   featureName?: string;
-  /** 模块名(batchQueryTicket 的 sModuleNoName,需 fields 显式请求)。 */
-  moduleName?: string;
 }
 
 export interface DtsGateway {
@@ -399,7 +401,9 @@ export class McpDtsGateway implements DtsGateway {
         dtsStatus: [],
         severity: [],
         convertAttachment: false,
-        fields: [],
+        // 特性名是模块强匹配的关键字段(ADR-0056),列表也要显式请求
+        // 才返回——与 detail 的 batchQueryTicket 同一纪律。
+        fields: ["sFeatureNoName"],
         otherConditions: [{
           fieldName: "currentHandler",
           operator: "EqualName",
@@ -435,6 +439,8 @@ export class McpDtsGateway implements DtsGateway {
             ? String(item.outerLinkUrl) : undefined,
           description: item.briefDesc !== undefined
             ? String(item.briefDesc) : undefined,
+          featureName: item.sFeatureNoName !== undefined
+            ? String(item.sFeatureNoName) : undefined,
         })).filter((item) => item.ticket);
       }
     } catch {
@@ -451,10 +457,10 @@ export class McpDtsGateway implements DtsGateway {
       this.gateway.toolName("detail", "batchQueryTicket"),
       {
         dtsNos: [ticket],
-        // 特性/模块名是业务模块匹配的关键词来源,状态名是远程查单的
-        // 可拉取判据——batchQueryTicket 都必须在 fields 里显式请求才
-        // 返回(实测缺省不给)。
-        fields: ["sFeatureNoName", "sModuleNoName", "dtsStatusName"],
+        // 特性名是业务模块强匹配的关键字段(ADR-0056),状态名是远程
+        // 查单的可拉取判据——batchQueryTicket 都必须在 fields 里显式
+        // 请求才返回(实测缺省不给)。
+        fields: ["sFeatureNoName", "dtsStatusName"],
         attachmentView: false,
       },
     );
@@ -500,8 +506,6 @@ export class McpDtsGateway implements DtsGateway {
               ? String(first.dtsStatusName) : undefined,
             featureName: first.sFeatureNoName !== undefined
               ? String(first.sFeatureNoName) : undefined,
-            moduleName: first.sModuleNoName !== undefined
-              ? String(first.sModuleNoName) : undefined,
           };
         }
       }
@@ -666,6 +670,7 @@ export class MockDtsGateway implements DtsGateway {
           title: known.title,
           status: known.status,
           ...(known.version ? { version: known.version } : {}),
+          ...(known.featureName ? { featureName: known.featureName } : {}),
           ...(known.description ? { description: known.description } : {}),
           content: known.content,
         };
@@ -675,6 +680,7 @@ export class MockDtsGateway implements DtsGateway {
         title: known.title,
         status: known.status,
         ...(known.version ? { version: known.version } : {}),
+        ...(known.featureName ? { featureName: known.featureName } : {}),
         content:
           `【MOCK 单据】${known.title}\n\n`
           + `单号: ${known.ticket}\n状态: ${known.status ?? "打开"}\n`

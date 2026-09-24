@@ -1,6 +1,9 @@
 import {
   listProductVersions, matchProductVersion, type ProductVersion,
 } from "../configurationCenter.ts";
+import {
+  isIssueInterventionTier, type IssueInterventionTier,
+} from "../auth.ts";
 /**
  * 问题流 HTTP 路由(/issues/*)。
  *
@@ -272,76 +275,34 @@ function withDtsBranch<T extends { version?: string }>(
   return row ? { ...ticket, branch: row.branch } : ticket;
 }
 
-/** DTS 单据自动匹配业务模块:用 sFeatureNoName / sModuleNoName 拆出
- * 关键词,与模块库的 name/id/description 做匹配。唯一高置信命中时
- * 返回模块 ID;多候选或零候选返回 undefined(留给 Agent 后续处理)。 */
-function matchDtsToModule(
-  featureName: string | undefined,
-  moduleName: string | undefined,
-  dataDir: string,
-): string | undefined {
-  if (!dataDir) return undefined;
-  const keywords = extractDtsKeywords(featureName, moduleName);
-  if (!keywords.length) return undefined;
-  const { modules } = listBusinessModules(dataDir);
-  const active = modules.filter((m) => m.status === "active");
-  if (!active.length) return undefined;
-
-  interface Scored { id: string; name: string; score: number; matchedBy: string[] }
-  const scored: Scored[] = [];
-  for (const mod of active) {
-    const nameLower = mod.name.toLowerCase();
-    const descLower = mod.description.toLowerCase();
-    const idLower = mod.id.toLowerCase();
-    let score = 0;
-    const matchedBy: string[] = [];
-    for (const kw of keywords) {
-      const kwLower = kw.toLowerCase();
-      if (nameLower === kwLower) { score += 100; matchedBy.push(`name=「${kw}」`); continue; }
-      if (nameLower.includes(kwLower)) { score += 50; matchedBy.push(`name∋「${kw}」`); continue; }
-      if (idLower === kwLower) { score += 90; matchedBy.push(`id=「${kw}」`); continue; }
-      if (idLower.includes(kwLower)) { score += 40; matchedBy.push(`id∋「${kw}」`); continue; }
-      if (descLower.includes(kwLower)) { score += 20; matchedBy.push(`desc∋「${kw}」`); continue; }
-      // 中文逐字匹配
-      const chars = [...kwLower];
-      let charHits = 0;
-      for (const ch of chars) {
-        if (nameLower.includes(ch) || descLower.includes(ch)) charHits++;
-      }
-      if (charHits >= chars.length * 0.6 && charHits > 0) {
-        score += Math.round(charHits / chars.length * 10);
-        matchedBy.push(`部分字∋「${kw}」(${charHits}/${chars.length})`);
-      }
+/** DTS 模块强匹配的模块库索引(ADR-0056):在架业务模块按「名称
+ *  trim 后」建 name→ids 映射;重名收敛到同键多 id,查询端多命中即
+ *  未匹配。每次请求建一次,列表与详情共用。 */
+function dtsFeatureModuleIndex(dataDir: string): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  try {
+    for (const mod of listBusinessModules(dataDir).modules) {
+      if (mod.status !== "active") continue;
+      const name = mod.name.trim();
+      if (!name) continue;
+      index.set(name, [...(index.get(name) ?? []), mod.id]);
     }
-    if (score > 0) scored.push({ id: mod.id, name: mod.name, score, matchedBy });
+  } catch {
+    // 模块库不可读按零配置处理(与分支配置同一姿态):全体未匹配,
+    // 发起走必填,不为坏数据炸拉单页。
   }
-  scored.sort((a, b) => b.score - a.score);
-  // 唯一高置信命中(得分 >= 40 且远超第二名):自动绑定
-  if (scored.length === 1 && scored[0].score >= 40) return scored[0].id;
-  if (scored.length >= 2 && scored[0].score >= 40
-      && scored[0].score > scored[1].score * 2) return scored[0].id;
-  return undefined;
+  return index;
 }
 
-/** 从 DTS 的 sFeatureNoName / sModuleNoName 中提取关键词。
- * 中英文混合拆分:"【Access】跟踪管理Fars" → ["Access", "跟踪管理", "Fars"] */
-function extractDtsKeywords(
-  featureName?: string,
-  moduleName?: string,
-): string[] {
-  const parts: string[] = [];
-  for (const text of [featureName, moduleName]) {
-    if (!text?.trim()) continue;
-    const cleaned = text.replace(/[【】\[\]()（）]/g, " ").replace(/\s+/g, " ").trim();
-    const rawParts = cleaned.split(/[\s,，、：:；;]+/);
-    for (const part of rawParts) {
-      const segments = part.match(/[\u4e00-\u9fff]+|[A-Za-z][A-Za-z0-9._-]*/g);
-      if (segments) {
-        for (const seg of segments) { if (seg.length >= 2) parts.push(seg); }
-      } else if (part.length >= 2) { parts.push(part); }
-    }
-  }
-  return parts;
+/** 给单据补模块(列表与详情同源,ADR-0056):特性名 trim 后与模块
+ *  名称完全相等且唯一命中才带出;未命中/多命中不加字段,前端按
+ *  「未匹配」呈现走必填。 */
+function withDtsModule<T extends { featureName?: string }>(
+  index: Map<string, string[]>, ticket: T,
+): T {
+  const feature = ticket.featureName?.trim();
+  const hits = feature ? index.get(feature) : undefined;
+  return hits?.length === 1 ? { ...ticket, module_id: hits[0] } : ticket;
 }
 
 /** 处理 /issues/* 请求;返回 false 表示与问题域无关。 */
@@ -407,10 +368,6 @@ export async function handleIssueRoutes(
         });
       }
       const ticket = body.ticket ? String(body.ticket) : undefined;
-      // DTS 来源自动匹配业务模块:前端未显式选模块时,用 DTS 单据的
-      // sFeatureNoName/sModuleNoName 与模块库做匹配;唯一高置信命中时
-      // 自动绑定,多候选或零候选时留给 Agent 在 prep_repo 阶段处理。
-      let autoModuleId: string | undefined;
       let productVersion = String(body.product_version ?? "").trim();
       // 版本必填(2026-09-18):手工登记必须指明问题发生的版本——版本是
       // 复现与修复的基线。与上方手工必填责任人同位同尺;DTS 来源不带,
@@ -421,18 +378,35 @@ export async function handleIssueRoutes(
             + "请回登记页选择后再发起",
         });
       }
+      // 模块发起闸(ADR-0056):DTS 来源必带模块——列上带出或人工
+      // 改选,发起前已定局,服务端不再补猜;都不在即拒,与分支闸同款。
+      if (source === "dts" && !body.module_id) {
+        return done(400, {
+          error: "单据未匹配到业务模块:请到 DTS 列表「所属模块」列"
+            + "选择模块后再发起",
+        });
+      }
+      // 会话级介入档位(ADR-0057):DTS 列表发起前按单选定,随创建
+      // 请求定格——发起后不可改,终身不随全局改档;缺席=跟随全局。
+      let interventionTier: IssueInterventionTier | undefined;
+      if (body.intervention_tier !== undefined
+          && body.intervention_tier !== null
+          && body.intervention_tier !== "") {
+        const tier = String(body.intervention_tier);
+        if (!isIssueInterventionTier(tier)) {
+          return done(400, {
+            error: "介入档位不合法(只支持 全自动/优先报告/优先对齐 三档)",
+          });
+        }
+        interventionTier = tier;
+      }
       let dtsVersion: string | undefined;
-      if (source === "dts" && ticket && routeOptions.dts
-          && (!body.module_id || !productVersion)) {
+      if (!productVersion && source === "dts" && ticket && routeOptions.dts) {
         try {
-          const detail = await routeOptions.dts.detail(ticket);
-          dtsVersion = detail.version;
-          if (!body.module_id) autoModuleId = matchDtsToModule(
-            detail.featureName, detail.moduleName,
-            routeOptions.issueFlow?.dataDir ?? "",
-          );
+          // 详情只为分支匹配取版本号(ADR-0038);模块已在上面闸上定局。
+          dtsVersion = (await routeOptions.dts.detail(ticket)).version;
         } catch {
-          // 匹配失败不阻断发起,留给 Agent 处理。
+          // 版本读不到由下方分支闸如实报错,这里不另造错误。
         }
       }
       // 分支匹配(ADR-0038):DTS 发起没有显式选版本时,按单据版本
@@ -504,11 +478,11 @@ export async function handleIssueRoutes(
         ...(body.baseline ? { baseline: String(body.baseline) } : {}),
         ...(productVersion ? { productVersion } : {}),
         ...(body.module ? { module: String(body.module) } : {}),
-        // 人工显式选的模块(DTS 预绑/登记页)带锁;服务端 matchDtsToModule
-        // 的自动匹配是机器猜测,不带锁(其命中只在人工未选时生效)。
-        ...(body.module_id
-          ? { moduleId: String(body.module_id), moduleLocked: true } : {}),
-        ...(autoModuleId ? { moduleId: autoModuleId } : {}),
+        // 模块发起前已定局(ADR-0056):DTS 恒带,登记页/无单必选;
+        // create 校验在架与仓绑定,通过即开场可用。
+        ...(body.module_id ? { moduleId: String(body.module_id) } : {}),
+        // 会话级介入档位(ADR-0057):发起前选了才带,缺席=跟随全局。
+        ...(interventionTier ? { interventionTier } : {}),
         ...(environmentInput ? { environment: environmentInput } : {}),
       });
       return done(201, created);
@@ -525,11 +499,14 @@ export async function handleIssueRoutes(
       const owner = new URL(request.url ?? "", "http://x")
         .searchParams.get("owner")?.trim() ?? "";
       // 分支列数据源(ADR-0038):匹配在后端单点,列表逐单带出——
-      // 前端纯展示,列显示与发起解析永不漂移。
+      // 前端纯展示,列显示与发起解析永不漂移。模块带出同一纪律
+      // (ADR-0056):特性名与模块名强匹配,服务端单点逐单带出。
       const versionRows = configuredVersionRows(issueFlow.dataDir);
+      const moduleIndex = dtsFeatureModuleIndex(issueFlow.dataDir);
       const tickets = (await requireDts(routeOptions.dts)
         .listByOwner(owner || String(viewer?.username ?? "")))
-        .map(ticket => withDtsBranch(versionRows, ticket));
+        .map(ticket => withDtsModule(moduleIndex,
+          withDtsBranch(versionRows, ticket)));
       return done(200, { tickets, mock: routeOptions.dts?.mock === true });
     }
 
@@ -540,14 +517,15 @@ export async function handleIssueRoutes(
       }
       const ticket = decodeURIComponent(parts[2]);
       if (!ticket) return done(400, { error: "缺少问题单号" });
-      // 详情与列表同源补分支(ADR-0038):远程查单入列的单子,分支列
-      // 不因绕过列表而缺席。
+      // 详情与列表同源补分支与模块(ADR-0038/ADR-0056):远程查单
+      // 入列的单子,两列不因绕过列表而缺席。
       const detail = await requireDts(routeOptions.dts).detail(ticket);
-      return done(200, withDtsBranch(
-        configuredVersionRows(issueFlow.dataDir), detail));
+      return done(200, withDtsModule(dtsFeatureModuleIndex(issueFlow.dataDir),
+        withDtsBranch(configuredVersionRows(issueFlow.dataDir), detail)));
     }
 
-    // 单号→模块人工预绑(spec #57):团队共享事实,登录即可读写——
+    // 单号→模块人工改选(spec #57 起;ADR-0056 后只存人工改选):
+    // 团队共享事实,登录即可读写——
     // 管理员也在内(维护数据不算"处理问题单",与上方按人拉单的 403
     // 边界不同)。
     if (method === "GET" && parts[1] === "dts-bindings"

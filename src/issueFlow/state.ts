@@ -21,6 +21,7 @@ import {
 import { repositoryIdentity } from "../knowledgeAssetModel.ts";
 import { durableWriteFileSync } from "../durableWrite.ts";
 import { join } from "node:path";
+import type { IssueInterventionTier } from "../auth.ts";
 import type { FeedbackRecord } from "../feedbackStore.ts";
 import { IssueControlError } from "./errors.ts";
 import type { IssueWarmupReceipt } from "./warmup.ts";
@@ -151,7 +152,7 @@ export interface IssuePushRecord {
  * issue.json——Agent 对该文件只读,推不动闸门,这正是"固定流程"
  * 的强制度所在。渲染层复用问题卡组件(形状与 waiting 卡同构)。
  * 代码仓缺口不走平台闸(2026-08-28 拍板退役 repo_needed):AI 用
- * lookup_modules/pull_repo/AskUserQuestion 自己闭环。 */
+ * pull_repo/AskUserQuestion 自己闭环(模块发起即定局,ADR-0056)。 */
 export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
   | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
@@ -372,6 +373,10 @@ export interface IssueSessionState {
    * 元信息(IssueRegistrationMeta)——开场词/续聊词与 get_issue_meta
    * 都要求 AI 优先读它。缺席=发起时没填(手工登记不带这列)。 */
   remark?: string;
+  /** 会话级介入档位(ADR-0057):DTS 列表发起前按单选定(1/2/3),
+   * create 时定格进状态——发起后不可改,终身不随全局改档;缺席=
+   * 跟随全局(tierOf 现读责任人的账号设置)。 */
+  intervention_tier?: IssueInterventionTier;
   source: IssueSource;
   /** 可空:先研究后补单是问题流的一等场景。绑定前推送/MR 被机械拒绝。 */
   ticket?: string;
@@ -423,14 +428,10 @@ export interface IssueSessionState {
   baseline?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
-   * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。 */
+   * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。
+   * 三路发起开场必有模块(ADR-0056),运行时不再有绑模块动作。 */
   module_id?: string;
   module?: string;
-  /** 人工预绑锁(spec #57):模块来自人在发起时的显式选择(DTS 列表
-   * 预绑或登记页手工选)即烙印,AI 的 bind_module 对此拒绝改绑——
-   * 模块绑定权在人,AI 发现不符只能 AskUserQuestion。缺省=未锁
-   * (AI 运行时自己绑的可改绑,维持现状)。 */
-  module_locked?: true;
   environment?: IssueEnvironmentConfig;
   /** 固定流程的场景。 */
   scenario?: IssueScenario;
@@ -530,8 +531,8 @@ export interface IssueSummary extends IssueSessionState {
 
 /** 登记仓清单:单仓(兼容字段)与多仓合并去重,逐个过协议校验。
  * 顺序即语义——首个即 repo_url 兼容别名(推送/部署的缺省目标),
- * 仓彼此平等。登记(create)、
- * 闸门补填(resolveGate)与 Agent 绑模块(bind_module)三处共用同一
+ * 仓彼此平等。登记(create)与
+ * 闸门补填(resolveGate)两处共用同一
  * 把尺子,协议规则不允许各自为政;数量上限已废除(ADR-0054)。 */
 export function normalizeIssueRepos(
   single: string | undefined,
@@ -618,7 +619,6 @@ export function summarize(state: IssueSessionState): IssueSummary {
   const { mr_gate: _gate,
     env_declined: _envDeclined,
     merge_noted: _mergeNoted, mr_closed_noted: _mrClosedNoted,
-    module_locked: _moduleLocked,
     parked_notices: _parkedNotices,
     // reference_repos(参考组件仓目录快照,ADR-0054)不上 wire:它是
     // 开场词的注入源,工作台无消费面;要上前端先补镜像与样例,不白送。
@@ -695,6 +695,9 @@ export function loadState(root: string): IssueSessionState | undefined {
   delete (state as { push_review_head?: unknown }).push_review_head;
   delete (state as { push_review_force?: unknown }).push_review_force;
   delete (state as { push_review_remote?: unknown }).push_review_remote;
+  // 预绑锁退役(ADR-0056):三路发起开场必有模块,不再有 AI 绑模块
+  // 的动作,锁没有锁的对象;盘上存量字段是死账,读盘即剥不上 wire。
+  delete (state as { module_locked?: unknown }).module_locked;
   return state;
 }
 

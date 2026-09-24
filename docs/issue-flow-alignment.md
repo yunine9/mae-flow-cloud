@@ -104,7 +104,7 @@ beginTurn 封死;pushes/mrs/流水线表账面幂等;档位×闸全表一致
 - B-H4:两路档位代答通知换独立状态词"已代答"(原共用 running 幂等键,
   第二次代答通知被吞);
 - C-H9:materials/file 与 log-extract 补 admin 403(与其余写路由同款);
-- C-H7:wire 剥离 module_locked 与 pipelines 五个重试/刹车子字段。
+- C-H7:wire 剥离 module_locked 与 pipelines 五个重试/刹车子字段。(2026-09-23:module_locked 随 ADR-0056 整体退役,字段从状态类型删除、读盘即剥,不再是投影关切。)
 
 **遗留(按严重度,回 grill 排期)**:
 - A-H1(中)作答内容跨重启丢失:answer 落账后、送达前崩溃,恢复回合
