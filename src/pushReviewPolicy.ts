@@ -4,15 +4,30 @@ import { recoverQuotedGitPaths } from "./gitPaths.ts";
 
 import { createHash } from "node:crypto";
 import { TaskControlError } from "./errors.ts";
+import type { WaitingRecord } from "./humanGate.ts";
 
 export interface PushReviewSnapshot {
   head: string;
   paths: string[];
 }
 
-/** 文件选择只整理当次提交，确认不因后续修复的文件增减失效。
- * 用户明确要求返工时会写 requested，不能继承旧确认。 */
-export function hasPushApproval(selection: { status: string } | undefined): boolean {
+type PushDecision = Pick<WaitingRecord, "step" | "status" | "resolved_at" | "waiting_id" | "decision" | "answers">;
+
+/** 复用已有人工决定，不再保存文件选择作为推送许可。 */
+export function latestPushDecision(decisions: readonly PushDecision[]): PushDecision | undefined {
+  return decisions.filter(row => row.status === "resolved"
+    && ["cloud_push_confirm", "host_push_confirm"].includes(row.step))
+    .sort((a, b) => a.resolved_at.localeCompare(b.resolved_at)).at(-1);
+}
+
+export function hasPushApproval(selection: { status: string } | undefined, decisions: readonly PushDecision[] = []): boolean {
+  const decision = latestPushDecision(decisions);
+  if (decision) {
+    const answers = Object.values(decision.answers ?? {});
+    return (answers.length ? answers : [decision.decision]).every(answer =>
+      ["确认推送", "确认按清单推送", "确认推送并进入检视"].includes(answer));
+  }
+  // 兼容仅保存过旧选择记录的已确认任务，路径不参与判断。
   return selection?.status === "confirmed";
 }
 
@@ -64,7 +79,7 @@ export function samePaths(left: string[], right: string[]): boolean {
 export interface PushReviewPolicy {
   /** 三个来源任一成立就要人过目。 */
   required: boolean;
-  /** 常规最终过目:任务级设置 > 个人默认 > 有交付清单即保守复检。 */
+  /** 常规最终过目:任务级设置 > 个人默认。 */
   ordinaryReviewEnabled: boolean;
   /** 工作台意见返工后的复检:不是按 push 次数重复问。 */
   recheckRequired: boolean;
@@ -79,39 +94,19 @@ export function pushReviewPolicyFor(input: {
   taskSetting: boolean | undefined;
   /** 个人默认惰性取:任务级设置在时原来根本不查个人设置。 */
   accountDefault: () => boolean | undefined;
-  hasSelection: boolean;
 }): PushReviewPolicy {
   const recheckRequired = input.reviewSource === "workspace"
     && input.workspaceRecheckRequired === true;
   const hasHumanFeedback = input.unresolvedAnnotations > 0;
   const ordinaryReviewEnabled = input.taskSetting
     ?? input.accountDefault()
-    ?? input.hasSelection;
+    ?? false;
   return {
     required: recheckRequired || hasHumanFeedback || ordinaryReviewEnabled,
     ordinaryReviewEnabled,
     recheckRequired,
     hasHumanFeedback,
   };
-}
-
-/** 重复确认时把文件范围变化说成人话:只补了一个 .gitignore 时人看一行就能
- * 拍板,不用整单重看;"增量 diff"这类实现词不露出。没有上次确认或范围
- * 没变就不说。 */
-export function scopeDeltaLine(
-  previous: string[] | undefined,
-  committed: string[],
-): string | undefined {
-  if (!previous) return undefined;
-  const addedPaths = committed.filter((path) => !previous.includes(path));
-  const removedPaths = previous.filter((path) => !committed.includes(path));
-  if (!addedPaths.length && !removedPaths.length) return undefined;
-  return `**文件范围变化：${[
-    addedPaths.length ? `新增 ${describeDirtyPaths(addedPaths)}` : "",
-    removedPaths.length ? `移除 ${describeDirtyPaths(removedPaths)}` : "",
-  ].filter(Boolean).join(";")};其余 ${
-    committed.filter((path) => previous.includes(path)).length
-  } 个文件与上次确认一致,可只检视变化部分。**`;
 }
 
 export function pushWaitingDetail(
@@ -122,7 +117,7 @@ export function pushWaitingDetail(
     ? pendingReviewItems
       ? `等待 ${pendingReviewItems} 条检视意见由提出人确认`
       : "检视意见已闭环，等待责任人确认推送"
-    : "等待确认最终交付范围";
+    : "等待确认推送";
 }
 
 /** 前缀按路径段闭合:src/filter 匹配 src/filter 与 src/filter/**,不吞

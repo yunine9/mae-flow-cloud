@@ -28,24 +28,12 @@ export function fileTreeModel(files: readonly ChangedFile[]) {
   return nodes;
 }
 
-function FileCheckbox({ checked, mixed, label, onChange }: {
-  checked: boolean; mixed: boolean; label: string; onChange(): void;
-}) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (ref.current) ref.current.indeterminate = mixed; }, [mixed]);
-  return <input ref={ref} type="checkbox" checked={checked} aria-label={label}
-    onClick={event => event.stopPropagation()} onChange={onChange} />;
-}
-
 /** Headless Tree handles keyboard/focus; the virtual list bounds DOM size even with all folders expanded. */
-export function ChangeFileTree({ files, activePath, onSelect, selectable, selectedPaths, onToggle }: {
+export function ChangeFileTree({ files, activePath, onSelect }: {
   files: readonly ChangedFile[]; activePath?: string; onSelect(file: ChangedFile): void;
-  selectable: boolean; selectedPaths: ReadonlySet<string>; onToggle(paths: string[]): void;
 }) {
   const [query, setQuery] = useState("");
-  const [onlySelected, setOnlySelected] = useState(false);
-  const filtered = useMemo(() => files.filter(file => (!onlySelected || selectedPaths.has(file.path))
-    && file.path.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [files, query, onlySelected, selectedPaths]);
+  const filtered = useMemo(() => files.filter(file => file.path.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())), [files, query]);
   const model = useMemo(() => fileTreeModel(filtered), [filtered]);
   const previousModel = useRef(model);
   const retiredModel = previousModel.current;
@@ -79,7 +67,6 @@ export function ChangeFileTree({ files, activePath, onSelect, selectable, select
       placeholder="搜索文件名或路径" aria-label="搜索变更文件" onChange={event => setQuery(event.target.value)} />
       {query && <button type="button" aria-label="清除文件搜索" onClick={() => setQuery("")}>×</button>}</div>
     <div className="change-tree-tools"><span>{filtered.length} 个文件</span>
-      {selectable && <label><input type="checkbox" checked={onlySelected} onChange={e => setOnlySelected(e.target.checked)} />只看已选</label>}
       <button type="button" title={expandedItems.length ? "折叠全部目录" : "展开全部目录"}
         aria-label={expandedItems.length ? "折叠全部目录" : "展开全部目录"}
         onClick={() => setExpandedItems(expandedItems.length ? [] : [...model.keys()].filter(key => key.startsWith("dir:")))}><ChevronsDownUp size={15} /></button>
@@ -92,13 +79,10 @@ export function ChangeFileTree({ files, activePath, onSelect, selectable, select
       <div style={{ height: virtual.getTotalSize(), position: "relative" }}>
         {virtual.getVirtualItems().map(row => {
           const item = items[row.index]; const data = item.getItemData();
-          const count = data.paths.reduce((n, path) => n + Number(selectedPaths.has(path)), 0);
           const props = item.getProps();
           return <div {...props} key={item.getId()} className={`change-tree-item${data.file?.path === activePath ? " is-active" : ""}`}
             title={data.path} style={{ position: "absolute", top: row.start, height: row.size,
               paddingLeft: 8 + Math.min(item.getItemMeta().level, 6) * 14, width: "100%" }}>
-            {selectable && <FileCheckbox checked={count === data.paths.length} mixed={count > 0 && count < data.paths.length}
-              label={`${count === data.paths.length ? "取消交付" : "纳入交付"} ${data.path}`} onChange={() => onToggle(data.paths)} />}
             {!data.file ? <ChevronRight size={13} className={item.isExpanded() ? "is-expanded" : ""} /> : <span className="change-tree-spacer" />}
             {data.file ? <FileCode2 size={16} /> : <Folder size={16} className="change-folder-icon" />}
             <span className="change-tree-name">{data.name}</span>
@@ -108,7 +92,7 @@ export function ChangeFileTree({ files, activePath, onSelect, selectable, select
           </div>;
         })}
       </div>
-      {!filtered.length && <div className="change-tree-empty">{query || onlySelected ? "没有符合条件的文件" : "暂无文件变更"}</div>}
+      {!filtered.length && <div className="change-tree-empty">{query ? "没有符合条件的文件" : "暂无文件变更"}</div>}
     </div>
   </div>;
 }

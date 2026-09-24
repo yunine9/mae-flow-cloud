@@ -22,6 +22,7 @@ const vite = await createServer({
 const app = await vite.ssrLoadModule("/src/App.tsx");
 const workspace = await vite.ssrLoadModule("/src/TaskWorkspace.tsx");
 const taskCard = await vite.ssrLoadModule("/src/TaskCard.tsx");
+const deliveryList = await vite.ssrLoadModule("/src/DeliveryFileList.tsx");
 const prepush = await vite.ssrLoadModule("/src/PrepushStatus.tsx");
 const api = await vite.ssrLoadModule("/src/api.ts");
 const annotationPanel = await vite.ssrLoadModule("/src/AnnotationPanel.tsx");
@@ -377,29 +378,7 @@ test("await_merge 的右栏明确给出合入行动，关闭 MR 给出异常行�
   }, false).title, "MR 已关闭，需要处理");
 });
 
-test("普通 Diff 的默认勾选可用于当前决定，换任务或换卡不复用旧选择", () => {
-  const key = JSON.stringify(["task-3", "new-card"]);
-  const selection = {
-    selectedPaths: ["src/a.ts"], committedPaths: ["src/a.ts"],
-    allPaths: ["src/a.ts", "src/local.ts"],
-  };
-  const state = { key, selection };
-  assert.equal(workspace.usablePushReviewSelection(false, { kind: "idle" },
-    workspace.deliverySelectionForCard(state, key)), selection);
-  for (const next of [
-    ["task-3", "next-card"],
-    ["task-4", "new-card"],
-  ]) {
-    assert.equal(workspace.deliverySelectionForCard(state, JSON.stringify(next)),
-      undefined);
-  }
-  assert.equal(workspace.deliverySelectionForCard(undefined, key), undefined);
-  const empty = { ...selection, selectedPaths: [] };
-  assert.deepEqual(workspace.deliverySelectionForCard({ key, selection: empty },
-    key)?.selectedPaths, []);
-});
-
-test("过期 push diff 不进入 GitDiff 内容，并撤销可提交的文件选择", () => {
+test("过期 push diff 不进入 GitDiff 内容", () => {
   const stale = workspace.normalizePushReviewDiffResult({
     unavailable: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
     status: 404,
@@ -410,21 +389,11 @@ test("过期 push diff 不进入 GitDiff 内容，并撤销可提交的文件选
     message: "这张检视卡对应的代码已经变化，请刷新查看最新版本",
     expired: true,
   });
-  const selection = {
-    selectedPaths: ["src/a.ts"],
-    committedPaths: ["src/a.ts"],
-    allPaths: ["src/a.ts"],
-  };
-  assert.equal(workspace.usablePushReviewSelection(true, stale.state, selection),
-    undefined);
-
   const fresh = workspace.normalizePushReviewDiffResult({
     content: "diff --git a/src/a.ts b/src/a.ts\n",
     branch: "feature/a",
   });
   assert.equal(fresh.state.kind, "ready");
-  assert.equal(workspace.usablePushReviewSelection(true, fresh.state, selection),
-    selection);
 });
 
 test("push diff API 保留 404 状态，供工作台识别版本失效", async () => {
@@ -514,7 +483,23 @@ test("工作台面向用户只说实时执行日志和单元测试", () => {
   }), "单元测试验证");
 });
 
-test("最终交付决定卡只显示范围摘要，文件去留统一留在左侧 diff", () => {
+test("完整交付清单不截断或过滤文件，大目录默认折叠且可以搜索末尾文件", () => {
+  const files = Array.from({ length: 232 }, (_, i) => ({ path: `build/output-${i}.o`, label: "新增" }));
+  const groups = deliveryList.deliveryFileGroups(files);
+  assert.equal(groups[0][1].length, 232);
+  assert.deepEqual(deliveryList.deliveryFileGroups(files, "output-231"), [["build", [files[231]]]]);
+  const large = renderToStaticMarkup(React.createElement(deliveryList.DeliveryFileList, { files }));
+  assert.match(large, /232 个文件/);
+  assert.match(large, /搜索交付文件/);
+  assert.doesNotMatch(large, /checkbox|<details[^>]*open|output-231/, "折叠目录不挂载数百个隐藏行");
+  const small = renderToStaticMarkup(React.createElement(deliveryList.DeliveryFileList, { files: [files[231], { path: "README.md", label: "修改" }] }));
+  assert.match(small, /output-231\.o/);
+  assert.match(small, /仓库根目录/);
+  assert.match(small, /README\.md/);
+  assert.doesNotMatch(small, /checkbox/);
+});
+
+test("最终交付决定卡不要求勾选文件，人工意见仍可提交", () => {
   const deliveryTask = {
     ...task("delivery", "waiting_for_human"),
     waiting: {
@@ -522,7 +507,7 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
       state_version: 1,
       step: "cloud_push_confirm",
       recommended_view: "diff",
-      question: { questions: [{
+      question: { delivery_files: [{ path: "src/delivery.ts", label: "新增" }], questions: [{
         question: "是否按清单继续？",
         options: ["确认按清单推送", "按清单返工"],
       }] },
@@ -535,24 +520,14 @@ test("最终交付决定卡只显示范围摘要，文件去留统一留在左�
   const html = renderToStaticMarkup(React.createElement(taskCard.WaitingCard, {
     task: deliveryTask,
     onDecided: () => undefined,
-    deliverySelection: {
-      selectedPaths: ["src/emoji.ts"],
-      committedPaths: ["src/emoji.ts", "test.log"],
-      allPaths: ["src/emoji.ts", "test.log"],
-    },
     unresolvedAnnotationCount: 3,
-    onDeliverySelectionChange: () => undefined,
   }));
-  assert.match(html, /这次推送哪些文件/);
-  assert.match(html, /1 \/ 2 个文件将推送/);
-  assert.match(html, /文件去留在左侧「代码改动」里调整/);
-  assert.match(html, /重新编译后提交/);
-  assert.match(html, /不再编译，直接提交/);
-  assert.doesNotMatch(html, /交付文件清单|全部纳入|全部仅留本地/);
-  assert.doesNotMatch(html, /src\/emoji\.ts|test\.log/);
+  assert.doesNotMatch(html, /这次推送哪些文件|文件去留|选文件|重新编译后提交|不再编译，直接提交|全部纳入|全部仅留本地/);
   assert.match(html, /当前有 3 条检视意见未闭环/);
   assert.match(html, /建议选择“按清单返工”/);
   assert.doesNotMatch(html, /当前卡片缺少调整选项/);
+  assert.match(html, /本次推送清单/);
+  assert.match(html, /delivery\.ts/);
 });
 
 test("管理员旁路只开放给当前复检白名单中的他人待闭环意见", () => {

@@ -11,6 +11,15 @@ test("推送确认不绑定历史文件集合；明确返工不会复用旧确�
   assert.equal(hasPushApproval(undefined), false);
 });
 
+test("已有人工决定是确认依据；最新返工覆盖旧清单的 confirmed 状态", () => {
+  const decision = { step: "cloud_push_confirm", status: "resolved" as const,
+    waiting_id: "one", resolved_at: "2026-09-23T01:00:00Z", decision: "确认推送" };
+  assert.equal(hasPushApproval(undefined, [decision]), true);
+  const adjust = { ...decision, waiting_id: "two", resolved_at: "2026-09-23T02:00:00Z", decision: "需要调整代码" };
+  assert.equal(hasPushApproval({ status: "confirmed" }, [adjust, decision]), false);
+  assert.equal(hasPushApproval({ status: "requested" }, [decision]), true);
+});
+
 test("同范围的卡键不因 HEAD 换卡，明确返工才开新轮", () => {
   const snapshot = { head: "head-a", paths: ["src/a.ts"] };
   assert.equal(pushReviewCallId(snapshot), pushReviewCallId(snapshot));
@@ -24,25 +33,22 @@ test("同范围的卡键不因 HEAD 换卡，明确返工才开新轮", () => {
 // ── 2026-09-06 绞杀第三块:push 前确认与交付范围的决策表 ──────────────
 import {
   deliveryScopeViolations, describeDirtyPaths, listedPaths, pathWithinScope,
-  pushReviewPolicyFor, pushWaitingDetail, scopeDeltaLine,
+  pushReviewPolicyFor, pushWaitingDetail,
   scopeViolationDetail,
 } from "../src/pushReviewPolicy.ts";
 
 const policyInput = {
   reviewSource: undefined, workspaceRecheckRequired: undefined,
   unresolvedAnnotations: 0, taskSetting: undefined,
-  accountDefault: () => undefined, hasSelection: false,
+  accountDefault: () => undefined,
 } as const;
 
 test("要不要人过目:三个来源任一成立;任务级设置压过个人默认,且在时不查个人默认", () => {
   assert.equal(pushReviewPolicyFor({ ...policyInput }).required, false);
-  assert.deepEqual(pushReviewPolicyFor({ ...policyInput, hasSelection: true }), {
-    required: true, ordinaryReviewEnabled: true, recheckRequired: false, hasHumanFeedback: false,
-  }, "没有任何设置但已有交付清单:维持保守复检");
   assert.equal(pushReviewPolicyFor({ ...policyInput, accountDefault: () => true }).ordinaryReviewEnabled, true);
   let asked = 0;
   const p = pushReviewPolicyFor({ ...policyInput, taskSetting: false,
-    accountDefault: () => { asked += 1; return true; }, hasSelection: true });
+    accountDefault: () => { asked += 1; return true; } });
   assert.equal(p.ordinaryReviewEnabled, false, "任务级关掉就是关掉");
   assert.equal(asked, 0, "任务级设置在时不查个人默认(保住原来的短路)");
   assert.equal(pushReviewPolicyFor({ ...policyInput, taskSetting: false, unresolvedAnnotations: 2 }).required, true,
@@ -54,12 +60,8 @@ test("要不要人过目:三个来源任一成立;任务级设置压过个人默
     false, "只有工作台意见返工才算复检");
 });
 
-test("给人看的话:范围变化一行、等待文案、脏路径与越界清单的截断", () => {
-  assert.equal(scopeDeltaLine(undefined, ["a"]), undefined, "第一次确认没有'上次'");
-  assert.equal(scopeDeltaLine(["a", "b"], ["a", "b"]), undefined, "范围没变不说");
-  assert.equal(scopeDeltaLine(["a", "b"], ["a", "c"]),
-    "**文件范围变化：新增 c;移除 b;其余 1 个文件与上次确认一致,可只检视变化部分。**");
-  assert.equal(pushWaitingDetail(false, 3), "等待确认最终交付范围");
+test("给人看的话:等待文案、脏路径与越界清单的截断", () => {
+  assert.equal(pushWaitingDetail(false, 3), "等待确认推送");
   assert.equal(pushWaitingDetail(true, 2), "等待 2 条检视意见由提出人确认");
   assert.equal(pushWaitingDetail(true, 0), "检视意见已闭环，等待责任人确认推送");
   assert.equal(describeDirtyPaths(["a", "b"]), "a、b");

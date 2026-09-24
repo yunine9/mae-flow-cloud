@@ -375,7 +375,7 @@ function applyScenario(
     baseline: git.base,
     push_confirmation: true,
     waiting: waitingRecord(id, "cloud_push_confirm", [
-      { question: "是否按当前范围推送？", options: ["确认按清单推送", "需要调整代码（按清单返工）"] },
+      { question: "是否推送当前改动？", options: ["确认推送", "需要调整代码"] },
     ], "核对变更、批注和将推送文件；未跟踪产物不会自动进入交付。"),
     delivery: {
       mr_url: "https://code.example.test/mae-flow/merge_requests/128",
@@ -389,12 +389,11 @@ function applyScenario(
         committed_paths: ["src/workspace.ts", "tests/workspace.test.ts"],
         agent_note: longPreface, verification: "类型检查与交互契约通过" },
     },
-    delivery_selection: { paths: ["src/workspace.ts", "tests/workspace.test.ts"],
-      observed_paths: ["src/workspace.ts", "tests/workspace.test.ts"], excluded_paths: [],
-      status: "requested", waiting_id: `${id}:fixture-waiting`, head: git.head,
-      baseline: git.base, updated_at: iso(5) },
     detail: "等待负责人完成推送前检视",
   });
+  if (key === "push-review" && summary.waiting) Object.assign((summary.waiting as ReturnType<typeof waitingRecord>).question, { delivery_files: [
+    { path: "src/workspace.ts", label: "修改" }, { path: "tests/workspace.test.ts", label: "新增" },
+  ] });
   if (key === "coordinating") Object.assign(summary, {
     progress: progress(4, "两个交付单元并行推进"),
     // 候选仓必须与拆分出的模块一致:原来只有 1 个候选仓却拆出 2 个模块,

@@ -104,6 +104,17 @@ function render(overrides: Record<string, unknown> = {}): string {
   }));
 }
 
+test("自动推送清单在协作流里可读，没有文件勾选或新的确认按钮", () => {
+  const manifest: ConversationItem = { kind: "push_file_list", id: "push-1", ts: T3,
+    manifest: { branch: "feature", head_sha: "b".repeat(40), base_sha: "a".repeat(40), comparison: "remote_branch",
+      files: [{ path: "src/repeated.ts", label: "修改" }] } };
+  const html = render({ items: [manifest] });
+  assert.match(html, /本次推送清单/);
+  assert.match(html, /相对远端任务分支/);
+  assert.match(html, /repeated\.ts/);
+  assert.doesNotMatch(html, /type="checkbox"|确认推送|确认清单/);
+});
+
 test("筛选与线程:只剩全部 / 需要我的;线程只留牵涉这条批注的", () => {
   // 2026-09-06 用户:"右边的检视意见和左边的抽屉是不是重复"——第三档筛选去掉,
   // 意见类条目在流里只留一行摘要,详情只在抽屉。

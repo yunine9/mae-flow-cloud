@@ -1,4 +1,4 @@
-/** 文件勾选按 Git 事实整理当次提交，历史选择不限制后续修复。 */
+/** 历史文件勾选不限制后续修复；交付清单只读展示 Git 事实。 */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -99,6 +99,10 @@ async function waitingService(repo: ReturnType<typeof repository>) {
     ? true : undefined, "任务等待代码检视");
   const internal = (service as any).tasks.get(id);
   internal.cwd = repo.cwd;
+  const baseline = JSON.parse(readFileSync(join(repo.cwd, ".mae-flow.json"), "utf8")).step_heads.branch_create;
+  repo.git("branch", "preview-base", baseline);
+  internal.summary.repo_url = repo.cwd;
+  internal.summary.delivery = { target_branch: "preview-base" };
   // 待办与通知保存面向人的本地化标题；宿主必须从 pulse 的稳定步骤 ID
   // 读取内核契约，不能拿中文标题去查 flow.json。
   internal.summary.waiting.step = "最终代码增量检视";
@@ -134,9 +138,10 @@ test("普通内核检视卡不消费交付勾选；真正 push 前再生成当�
     assert.equal(service.get(id)?.status, "waiting_for_human",
       "确认后现场变化应回到最新检视卡，不能掉进 failed 死胡同");
     assert.equal(service.get(id)?.waiting?.step, "cloud_push_confirm");
-    assert.match(service.get(id)?.detail ?? "", /等待确认最终交付范围/);
-    assert.match(String(service.get(id)?.waiting?.context ?? ""),
-      /- src\/extra\.ts/);
+    assert.match(service.get(id)?.detail ?? "", /等待确认推送/);
+    assert.match(String(service.get(id)?.waiting?.context ?? ""), /extra\.ts.*\[新增\]/);
+    assert.ok((service.get(id)?.waiting?.question as any)?.delivery_files
+      .some((file: any) => file.path === "src/extra.ts" && file.label === "新增"));
   } finally {
     await model.stop();
   }
@@ -416,6 +421,7 @@ for (const current of ["external_verify", "end", "rework"]) {
       internal.cwd = repo.cwd;
       internal.summary.status = "failed";
       internal.summary.detail = "按已确认范围自动整理后复核未通过";
+      internal.summary.push_confirmation = true;
       internal.summary.delivery = { skipped: internal.summary.detail };
       internal.summary.delivery_selection = { paths: ["src/feature.ts"], excluded_paths: ["target/classes/Feature.class"],
         observed_paths: ["src/feature.ts", "target/classes/Feature.class"], status: "requested",
@@ -483,15 +489,6 @@ for (const status of ["requested", "confirmed"] as const) {
       assert.equal(repo.git("ls-files", "--", "target/classes/Feature.class"), "target/classes/Feature.class");
       assert.equal(readFileSync(join(repo.cwd, "target/classes/Feature.class"), "utf8"), "bytecode");
       assert.equal(await (service as any).reconcileDeliveryPlatformBoundary(internal), "unchanged");
-      // 确认卡明确去掉中文文档和含 glob 字符的文件，也必须按准确文件执行。
-      writeFileSync(join(repo.cwd, "src/a.ts"), "unrelated\n");
-      repo.git("add", "src/a.ts"); repo.git("commit", "-qm", "unrelated file");
-      await (service as any).applyDeliverySelectionAdjustment(internal, baseline,
-        [paths[0], "src/[ab].ts"], [], "skip", "owner");
-      assert.equal(repo.git("ls-files", "--", `:(literal)${paths[0]}`), "");
-      assert.equal(repo.git("ls-files", "--", ":(literal)src/[ab].ts"), "");
-      assert.equal(repo.git("show", "HEAD:src/a.ts"), "unrelated", "[ab] 不能按通配符误删其他文件");
-      assert.equal(readFileSync(join(repo.cwd, paths[0]), "utf8"), "keep exactly\n");
     } finally {
       await service.shutdown(); rmSync(repo.cwd, { recursive: true, force: true }); rmSync(dataDir, { recursive: true, force: true });
     }

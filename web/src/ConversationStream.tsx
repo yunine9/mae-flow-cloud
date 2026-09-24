@@ -1,4 +1,5 @@
 import { feedbackStatusLabel, feedbackSummary } from "./feedbackPresentation";
+import { DeliveryFileList } from "./DeliveryFileList";
 /**
  * 会话流:右栏只回答"谁对谁说了什么、现在轮到谁"。
  *
@@ -859,6 +860,13 @@ export function ConversationStream({
           </ul>,
         });
       }
+      case "push_file_list":
+        return message({
+          key: item.id, who: "system", name: "推送前清单", ts: item.ts,
+          children: item.manifest.files
+            ? <DeliveryFileList files={item.manifest.files} manifest={item.manifest} />
+            : <p className={CONV.problem}>{item.manifest.unavailable_reason ?? "本次推送清单暂不可读"}</p>,
+        });
       case "assistant":
         return message({
           key: item.id, who: item.role === "user" ? "you" : "assistant",

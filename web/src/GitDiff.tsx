@@ -1,5 +1,3 @@
-import type { GitDiffSelection } from "./deliverySelectionDraft";
-export type { GitDiffSelection } from "./deliverySelectionDraft";
 import { ChangeFileTree } from "./ChangeFileTree";
 import { VirtualDiffRows } from "./VirtualDiffRows";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -305,12 +303,7 @@ export function GitDiff({
   activeFileLoading = false,
   activeFileError = "",
   onRetry,
-  selectionHint,
   hideKey,
-  selectable = false,
-  selectionKey = "",
-  initialSelectedPaths,
-  onSelectionChange,
   scopeLabel,
   focusRequest = 0,
   embeddedBrowser = false,
@@ -331,14 +324,8 @@ export function GitDiff({
   activeFileLoading?: boolean;
   activeFileError?: string;
   onRetry?: () => void;
-  selectionHint?: string;
   /** 每任务保存自己的视图隐藏项；隐藏不参与 Git 或交付判断。 */
   hideKey?: string;
-  /** 仅代码检视待办开放交付勾选。 */
-  selectable?: boolean;
-  selectionKey?: string;
-  initialSelectedPaths?: string[];
-  onSelectionChange?: (selection: GitDiffSelection) => void;
   /** 当前对比范围的人话(如"本次修改 · a2f2715 → 510a5fa")。缺省
    * 沿用工作区语义。曾经硬编码"任务基线至当前工作区",HEAD→HEAD
    * 的增量也顶着这行标题(MFC-007)。 */
@@ -391,9 +378,6 @@ export function GitDiff({
   const [hiddenPaths, setHiddenPaths] = useState<Set<string>>(new Set());
   const [hiddenDirectories, setHiddenDirectories] =
     useState<Set<string>>(new Set());
-  const [deliveryPaths, setDeliveryPaths] = useState<Set<string>>(new Set());
-  const [activeSelectionKey, setActiveSelectionKey] = useState("");
-  const initializedSelection = useRef("");
   const gitBrowser = useRef<HTMLDivElement>(null);
   const diffCanvas = useRef<HTMLDivElement>(null);
   const diffScroll = useRef<HTMLDivElement>(null);
@@ -428,11 +412,6 @@ export function GitDiff({
     !directoryRoots.some((directory) =>
       pathInsideDirectory(file.path, directory.path))),
   [visibleFiles, directoryRoots]);
-  const committedPaths = useMemo(() => files
-    .filter((file) => file.stage === "committed"
-      || file.stage === "committed_working")
-    .map((file) => file.path).sort((left, right) => left.localeCompare(right)),
-  [files]);
 
   useEffect(() => {
     if (!hiddenStorageKey || typeof window === "undefined") {
@@ -518,63 +497,6 @@ export function GitDiff({
   }, [directoryRootKey]);
 
   useEffect(() => {
-    if (!selectable || !files.length) {
-      if (!selectable) {
-        initializedSelection.current = "";
-        setActiveSelectionKey("");
-      }
-      return;
-    }
-    const key = selectionKey || "delivery";
-    const available = new Set(files.map((file) => file.path));
-    if (initializedSelection.current !== key) {
-      const initial = initialSelectedPaths ?? committedPaths;
-      setDeliveryPaths(new Set(initial.filter((path) => available.has(path))));
-      initializedSelection.current = key;
-      setActiveSelectionKey(key);
-      return;
-    }
-    setDeliveryPaths((current) => new Set(
-      [...current].filter((path) => available.has(path)),
-    ));
-  }, [selectable, selectionKey, files.map((file) => file.path).join("\0")]);
-
-  const requestedDeliveryKey = initialSelectedPaths
-    ?.filter((path) => files.some((file) => file.path === path))
-    .sort((left, right) => left.localeCompare(right)).join("\0");
-  useEffect(() => {
-    // 服务端刷新后可能回送已请求的交付清单，diff 树必须原位跟上，
-    // 不能只把 initialSelectedPaths 当成一次性的默认值。
-    if (!selectable || initialSelectedPaths === undefined) return;
-    const available = new Set(files.map((file) => file.path));
-    const next = new Set(initialSelectedPaths.filter((path) =>
-      available.has(path)));
-    setDeliveryPaths((current) => {
-      const currentKey = [...current].sort().join("\0");
-      const nextKey = [...next].sort().join("\0");
-      return currentKey === nextKey ? current : next;
-    });
-  }, [selectable, selectionKey, requestedDeliveryKey]);
-
-  useEffect(() => {
-    const key = selectionKey || "delivery";
-    if (!selectable || activeSelectionKey !== key) return;
-    // 外部清单刚刷新时，先等上面的同步 effect 落到树里；否则这里会
-    // 用一帧前的旧值反向覆盖父层，表现成右侧点了又弹回去。
-    if (requestedDeliveryKey !== undefined
-        && requestedDeliveryKey !== [...deliveryPaths].sort().join("\0")) return;
-    onSelectionChange?.({
-      selectedPaths: [...deliveryPaths].sort((left, right) =>
-        left.localeCompare(right)),
-      committedPaths,
-      allPaths: files.map((file) => file.path).sort((left, right) =>
-        left.localeCompare(right)),
-    });
-  }, [selectable, selectionKey, activeSelectionKey, requestedDeliveryKey,
-    [...deliveryPaths].sort().join("\0"), committedPaths.join("\0"),
-    files.map((file) => file.path).join("\0")]);
-
-  useEffect(() => {
     if (!visibleFiles.some((file) => file.key === selected)) {
       setSelected(visibleFiles[0]?.key ?? "");
     }
@@ -612,51 +534,12 @@ export function GitDiff({
     : largest, 0);
   const hasTextRows = reviewRows.some((row) => row.type === "line");
   const canFold = showAll || folded.hidden > 0 || expanded.size > 0;
-  // 最终检视里的统计必须与“将推送”同一口径。完整 diff 仍保留仅留本地
-  // 文件供人查看，但不能把它们的行数算进完整交付，否则会与右栏清单
-  // 同屏出现两套数字（MFC-056）。普通工作区浏览没有交付选择，仍统计全部。
-  const countedFiles = selectable
-    ? files.filter((file) => deliveryPaths.has(file.path))
-    : files;
+  const countedFiles = files;
   const additions = countedFiles.reduce(
     (sum, file) => sum + file.additions, 0);
   const deletions = countedFiles.reduce(
     (sum, file) => sum + file.deletions, 0);
   const branchLabel = branch || "分支未知";
-  const selectedDeliveryCount = deliveryPaths.size;
-  const selectionChanged = selectable
-    && (selectedDeliveryCount !== committedPaths.length
-      || committedPaths.some((path) => !deliveryPaths.has(path)));
-
-  function toggleDelivery(paths: string[]) {
-    if (!selectable) return;
-    const next = new Set(deliveryPaths);
-    const add = paths.some((path) => !next.has(path));
-    for (const path of paths) {
-      if (add) next.add(path);
-      else next.delete(path);
-    }
-    setDeliveryPaths(next);
-    onSelectionChange?.({
-      selectedPaths: [...next].sort((left, right) => left.localeCompare(right)),
-      committedPaths,
-      allPaths: files.map((file) => file.path).sort((left, right) =>
-        left.localeCompare(right)),
-    });
-  }
-
-  function replaceDelivery(paths: string[]) {
-    if (!selectable) return;
-    const next = new Set(paths);
-    setDeliveryPaths(next);
-    onSelectionChange?.({
-      selectedPaths: [...next].sort((left, right) => left.localeCompare(right)),
-      committedPaths,
-      allPaths: files.map((file) => file.path).sort((left, right) =>
-        left.localeCompare(right)),
-    });
-  }
-
   function hideFiles(paths: string[]) {
     setHiddenPaths((current) => new Set([...current, ...paths]));
   }
@@ -751,21 +634,10 @@ export function GitDiff({
   }
 
   function renderFile(file: ChangedFile, depth: number, overview: boolean) {
-    const included = deliveryPaths.has(file.path);
     return (
       <div className={cn(GIT.treeRow, overview ? GIT.treeRowOverview : GIT.treeRowCompact,
         file.key === active?.key && GIT.treeRowOn)}
         key={file.key} style={{ "--tree-depth": depth } as CSSProperties}>
-        {selectable && (
-          <Button type="button" className={cn(GIT.deliveryCheck,
-            included && GIT.deliveryCheckOn)}
-            aria-pressed={included}
-            aria-label={`${included ? "改为仅留本地" : "纳入交付"} ${file.path}`}
-            title={included ? "改为仅留本地，不推送" : "纳入本次交付"}
-            onClick={() => toggleDelivery([file.path])}>
-            <svg viewBox="0 0 16 16" aria-hidden className={GIT.deliveryCheckSvg}><path d="m3.5 8 3 3 6-6" /></svg>
-          </Button>
-        )}
         <Button type="button" className={GIT.fileMain} title={file.path}
           onClick={() => {
             setSelected(file.key);
@@ -792,7 +664,7 @@ export function GitDiff({
                   <del className={GIT.fileStatsDel}>−{file.deletions}</del></i>
               )}</small></span>
         </Button>
-        <Button type="button" className={GIT.hideBtn} title="从当前视图隐藏；不改变交付清单"
+        <Button type="button" className={GIT.hideBtn} title="从当前视图隐藏；不改变提交内容"
           aria-label={`隐藏 ${file.path}`} onClick={() => hideFiles([file.path])}>
           <svg viewBox="0 0 18 18" aria-hidden className={GIT.hideBtnSvg}><path d="M2.5 9s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4Z" /><path d="m3 3 12 12" /></svg>
         </Button>
@@ -827,7 +699,7 @@ export function GitDiff({
             <i className={GIT.dirCount}>{count === undefined ? "按需" : count}</i>
           </Button>
           <Button type="button" className={GIT.hideBtn}
-            title="隐藏整个未跟踪目录；不改变 Git 或交付清单"
+            title="隐藏整个未跟踪目录；不改变 Git 或提交内容"
             aria-label={`隐藏目录 ${directory.path}`}
             onClick={() => setHiddenDirectories((current) =>
               new Set([...current, directory.path]))}>
@@ -893,8 +765,7 @@ export function GitDiff({
 
   function renderTree(overview: boolean) {
     return <div className={`change-tree-content${overview ? " is-overview" : ""}`}>
-      <ChangeFileTree files={treeFiles} activePath={active?.path} selectable={selectable}
-        selectedPaths={deliveryPaths} onToggle={toggleDelivery}
+      <ChangeFileTree files={treeFiles} activePath={active?.path}
         onSelect={file => { setSelected(file.key); if (!embeddedBrowser) setFocused(true); }} />
       {visibleDirectoryRoots.length > 0 && <div className="change-lazy-directories">
         <div className="change-tree-tools">未跟踪目录 · 按需展开</div>{renderUntrackedDirectories(overview)}
@@ -961,29 +832,13 @@ export function GitDiff({
         </header>
       )}
 
-      {selectionHint && !selectable && <div className="change-selection-hint">{selectionHint}</div>}
-      {(selectable || hiddenPaths.size > 0 || hiddenDirectories.size > 0) && (
-        <div className={cn("change-delivery-bar", GIT.deliveryBar,
-          selectionChanged
-            ? "border-[color-mix(in_srgb,var(--attention)_30%,var(--line))] bg-attention-soft text-attention"
-            : "border-[color-mix(in_srgb,var(--success)_28%,var(--line))] bg-success-soft text-success",
-          focused && GIT.deliveryBarFocused,
+      {(hiddenPaths.size > 0 || hiddenDirectories.size > 0) && (
+        <div className={cn(GIT.deliveryBar, focused && GIT.deliveryBarFocused,
           embeddedBrowser && GIT.deliveryBarEmbedded)}>
-          {selectable && <div className={cn("change-delivery-lead", GIT.deliveryBarLead)}>
-            <strong className={GIT.deliveryBarTitle}>最终推送范围：{selectedDeliveryCount} / {files.length} 个文件</strong>
-            <span className={GIT.deliveryBarNote}>{selectionChanged
-              ? "已调整范围；右侧只读摘要会实时同步。"
-              : "勾选表示纳入交付；取消表示仅留本地。完成后在右侧提交决定。"}</span></div>}
-          <div className={cn(GIT.deliveryBarActions, embeddedBrowser && "flex-wrap")}>
-            {selectable && <>
-              <Button type="button" variant="outline" size="sm" onClick={() =>
-                replaceDelivery(files.map((file) => file.path))}>全部纳入</Button>
-              <Button type="button" variant="outline" size="sm"
-                onClick={() => replaceDelivery([])}>全部仅留本地</Button>
-            </>}
+          <div className={GIT.deliveryBarActions}>
             {(hiddenPaths.size > 0 || hiddenDirectories.size > 0) && <Button type="button"
               variant="outline" size="sm"
-              title="隐藏只影响浏览，不影响上面的交付勾选"
+              title="隐藏只影响浏览，不改变提交内容"
               onClick={() => {
                 setHiddenPaths(new Set());
                 setHiddenDirectories(new Set());

@@ -41,8 +41,8 @@ export function isAdjustmentAnswer(answer: string): boolean {
   return isReviewAdjustmentAnswer(answer);
 }
 
-/** 两类推送确认共用文件清单；普通阅读不会授权修改交付范围。 */
-export function needsDeliverySelection(waiting?: { step?: string; recommended_view?: string }): boolean {
+/** 识别推送确认卡；代码展示和修改意见仍使用现有入口。 */
+export function isPushConfirmation(waiting?: { step?: string; recommended_view?: string }): boolean {
   return waiting?.step === "cloud_push_confirm" || waiting?.step === "host_push_confirm";
 }
 

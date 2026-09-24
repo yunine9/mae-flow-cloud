@@ -12,6 +12,8 @@ import { sealPipelineLifecycle } from "./kernelHostFixture.ts";
 import { deliveryChangeSnapshot } from "../src/artifacts.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { createMergeRequest } from "../src/mrClient.ts";
+import { REVIEW_MISSION_END } from "../src/reviewHandoff.ts";
+import { EventLog } from "../src/semanticEvents.ts";
 
 const kernelRoot = join(process.cwd(), "kernel");
 function git(cwd: string, ...args: string[]) {
@@ -79,7 +81,43 @@ test("首次及再次 push 都包含最新基准分支；新 SHA 可登记到真
     assert.equal(git(f.cwd, "merge-base", "--is-ancestor", target, remoteHead), "");
     const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
     assert.equal(state.delivery_loop.published.sha, remoteHead);
+    const manifests = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list");
+    const manifest = manifests.at(-1)!.payload as any;
+    assert.equal(manifest.head_sha, remoteHead);
+    assert.deepEqual(manifest.files.map((file: any) => file.path), round === 1 ? ["feature.ts"] : ["upstream2.ts"],
+      "首次只列目标分支之外的变化；再次合入上游时列出本次任务分支实际新增变化，不重复历史文件");
   }
+});
+
+test("每次真实 push 前留下增量清单：重复修改、删除、重命名和外来提交均按远端起点计算", async t => {
+  const f = fixture(t);
+  const manifests: any[] = [];
+  const original = f.service.presentPushFileList.bind(f.service);
+  f.service.presentPushFileList = (task: any, manifest: any) => {
+    const remote = git(f.remote, "ls-remote", "--heads", f.remote, "refs/heads/feature").split(/\s+/)[0];
+    if (remote) assert.equal(manifest.base_sha, remote, "在传输发生前核对远端实际起点");
+    manifests.push(manifest); original(task, manifest);
+  };
+  for (const file of ["repeat.ts", "deleted.ts", "renamed.ts"]) writeFileSync(join(f.cwd, file), file + "\n");
+  git(f.cwd, "add", "repeat.ts", "deleted.ts", "renamed.ts"); git(f.cwd, "commit", "-qm", "feat: initial delivery");
+  assert.equal((await f.push("initial")).state, "succeeded");
+  writeFileSync(join(f.cwd, "repeat.ts"), "modified again\n");
+  git(f.cwd, "rm", "deleted.ts"); git(f.cwd, "mv", "renamed.ts", "renamed-new.ts");
+  git(f.cwd, "add", "repeat.ts"); git(f.cwd, "commit", "-qm", "feat: repairs");
+  assert.equal((await f.push("repairs")).state, "succeeded");
+  assert.deepEqual(manifests.at(-1).files, [
+    { path: "deleted.ts", label: "删除" }, { path: "renamed-new.ts", label: "重命名", previous: "renamed.ts" },
+    { path: "repeat.ts", label: "修改" },
+  ]);
+  // 人已向任务分支提交的文件不再算作 Agent 本次待推送内容。
+  git(f.peer, "fetch", "-q", "origin", "feature"); git(f.peer, "checkout", "-qb", "feature", "origin/feature");
+  writeFileSync(join(f.peer, "human.ts"), "human code\n"); git(f.peer, "add", "human.ts"); git(f.peer, "commit", "-qm", "feat: human change"); git(f.peer, "push", "-q", "origin", "feature");
+  writeFileSync(join(f.cwd, "repeat.ts"), "third change\n"); git(f.cwd, "commit", "-qam", "feat: third change");
+  assert.equal((await f.push("after-human")).state, "succeeded");
+  assert.deepEqual(manifests.at(-1).files, [{ path: "repeat.ts", label: "修改" }]);
+  assert.equal(manifests.length, 3);
+  const items = f.service.conversation(f.task.summary.id).items.filter((item: any) => item.kind === "push_file_list");
+  assert.equal(items.length, 3, "自动推送和已确认推送也在与 Agent 协作中保留每轮完整清单");
 });
 
 test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后均不删修复或重复确认", async t => {
@@ -117,6 +155,10 @@ test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后�
     assert.equal(git(f.remote, "ls-tree", "--name-only", "feature", "--", "user-notes.txt"), "");
     const snapshot = (await deliveryChangeSnapshot(f.cwd))!;
     assert.equal((await service.deliveryContribution(task, snapshot)).paths.length, [15, 16, 19][i]);
+    const manifest = new EventLog(service.eventLogPath(task.summary.id)).replay().filter(row => row.kind === "push_file_list").at(-1)!.payload as any;
+    const expected = i === 0 ? delivered : [...groups[i], `upstream-${i}.ts`];
+    assert.deepEqual(manifest.files.map((file: any) => file.path).sort(), [...expected].sort(),
+      "重启后增量起点仍是远端已推送提交，不回退任务起点或旧勾选清单");
     assert.equal(await service.pushConfirmationSatisfied(task, "feature"), true, "自动交付入口复用同一确认");
     if (i === 0) {
       service.persist(task); await service.shutdown();
@@ -129,7 +171,39 @@ test("#432 漏选后分批补齐 12→15→16→19 文件，同步和重启后�
   }
 });
 
-for (const status of ["confirmed", "requested"] as const) test(`旧会话恢复文件仅更新记录，保留 ${status} 决定且不绑定排队时 SHA`, async t => {
+test("旧的待调整清单不会自动开启审批，正常交付只发布已提交文件", async t => {
+  const f = fixture(t);
+  writeFileSync(join(f.cwd, "needed.ts"), "required implementation\n");
+  git(f.cwd, "add", "needed.ts"); git(f.cwd, "commit", "-qm", "feat: implementation");
+  writeFileSync(join(f.cwd, "build.log"), "local build output\n");
+  f.task.summary.delivery_selection = { status: "requested", paths: [], excluded_paths: ["needed.ts"],
+    observed_paths: ["needed.ts"], head: f.base, baseline: f.base, waiting_id: "old-selection", updated_at: new Date().toISOString() };
+  assert.equal(await f.service.pushConfirmationSatisfied(f.task, "feature"), true);
+  const host = f.service.taskHostRuntime(f.task); host.allowPush = async () => true;
+  await queueTaskHostOperation(host, "automatic", { action: "push", reason: "继续交付" });
+  await finishTaskHostOperation(host);
+  const op = new TaskHostLedger(f.task.summary).read().operations.find(op => op.id === "automatic")!;
+  assert.equal(op.state, "succeeded", op.result);
+  assert.equal(f.task.summary.waiting, undefined);
+  assert.equal(git(f.remote, "show", "feature:needed.ts"), "required implementation");
+  assert.equal(git(f.remote, "ls-tree", "--name-only", "feature", "build.log"), "");
+  assert.equal(readFileSync(join(f.cwd, "build.log"), "utf8"), "local build output\n");
+  // 旧 ignore 清理后产物重新出现在 status，也不能因此反复唤醒已推送的检视任务。
+  f.task.mission = `MR 上有 1 条意见需要修复\n${REVIEW_MISSION_END}`;
+  f.task.summary.delivery.mr_url = "https://example.test/mr/1";
+  f.task.summary.delivery.loop = { kind: "review", review_source: "platform" };
+  f.service.effectivePlatformUrl = () => "https://example.test";
+  f.service.stageReviewReplies = async () => ({ ok: true });
+  f.service.recordActiveFeedbackResult = () => undefined;
+  f.service.atHostDeliveryWait = () => true;
+  f.service.flushReviewReplyOutbox = async () => true;
+  f.service.ensureMergeWatch = () => {};
+  assert.equal(await host.finishReviewAfterPush(op), true);
+  assert.equal(f.task.summary.status, "verifying");
+  assert.equal(readFileSync(join(f.cwd, "build.log"), "utf8"), "local build output\n");
+});
+
+for (const status of ["confirmed", "requested"] as const) test(`旧会话恢复清单操作直接结束，不再改写 ${status} 历史记录或调用内核`, async t => {
   const f = fixture(t);
   writeFileSync(join(f.cwd, "feature.ts"), "feature\n");
   git(f.cwd, "add", "feature.ts"); git(f.cwd, "commit", "-qm", "feat: feature");
@@ -148,11 +222,11 @@ for (const status of ["confirmed", "requested"] as const) test(`旧会话恢复�
   assert.equal(f.task.summary.delivery_selection.status, status);
   assert.equal(f.task.summary.delivery_selection.waiting_id, "original-decision");
   assert.equal(f.task.summary.delivery_selection.confirmation_mode, "human");
-  assert.deepEqual(f.task.summary.delivery_selection.excluded_paths, []);
-  assert.deepEqual(f.task.summary.delivery_selection.paths, ["feature.ts", "missed.ts", "dependency.ts"]);
+  assert.deepEqual(f.task.summary.delivery_selection.excluded_paths, ["missed.ts"]);
+  assert.deepEqual(f.task.summary.delivery_selection.paths, ["feature.ts"]);
   assert.equal(f.task.summary.waiting, undefined);
   const state = JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json"), "utf8"));
-  assert.ok(JSON.stringify(state).includes("dependency.ts"), "真实内核同步记录新增依赖");
+  assert.ok(!JSON.stringify(state).includes("dependency.ts"), "旧清单操作不再向内核写入文件限制");
 });
 
 test("旧已确认操作缺文件快照，排队后补齐代码仍沿用确认并记录实际发布 SHA", async t => {
@@ -171,7 +245,7 @@ test("旧已确认操作缺文件快照，排队后补齐代码仍沿用确认�
   assert.equal(f.task.summary.waiting, undefined);
   assert.equal(git(f.remote, "rev-parse", "feature"), head);
   assert.equal(f.task.summary.delivery.sha, head);
-  assert.deepEqual(f.task.summary.delivery_selection.paths, ["dependency.ts"]);
+  assert.equal(f.task.summary.delivery_selection, undefined, "推送不再生成文件选择记录");
 });
 
 for (const continuous of [false, true]) test(`同步完成后远端${continuous ? "持续" : "再次"}推进：${continuous ? "三次后停下，不唤醒 Agent 空转" : "同一次宿主操作内重新同步推送"}`, async t => {
@@ -205,6 +279,10 @@ for (const continuous of [false, true]) test(`同步完成后远端${continuous 
     assert.equal(git(f.cwd, "merge-base", "--is-ancestor", foreign, operation.sha!), "");
     assert.equal(git(f.remote, "show", "feature:mine.ts"), "my change");
     assert.equal(git(f.remote, "show", "feature:peer-1.ts"), "peer change");
+    const manifests = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list");
+    const last = manifests.at(-1)!.payload as any;
+    assert.equal(last.base_sha, foreign, "重试在同步后重新按新的远端起点计算");
+    assert.deepEqual(last.files, [{ path: "mine.ts", label: "新增" }]);
   }
 });
 
@@ -261,6 +339,9 @@ test("自动交付入口遇到并发推送，也在宿主内同步重试且只�
   assert.equal(f.task.summary.delivery.git_push.sha, sha);
   assert.equal(platform.pipelines.length, 1, JSON.stringify(f.task.summary));
   assert.equal(platform.pipelines[0].sha, sha);
+  const manifest = new EventLog(f.service.eventLogPath(f.task.summary.id)).replay().filter(row => row.kind === "push_file_list").at(-1)!.payload as any;
+  assert.equal(manifest.head_sha, sha);
+  assert.deepEqual(manifest.files, [{ path: "main.ts", label: "修改" }], "自动入口在最后一次真实推送前也生成清单");
   assert.equal(git(f.remote, "show", "feature:main.ts"), content.replace("first=0", "first=1").replace("last=0", "last=1").trim());
 });
 
@@ -357,6 +438,8 @@ test("旧 delivery.sha 不阻止真实推送：一次人工确认覆盖后续同
   assert.equal(f.task.summary.waiting?.step, "host_push_confirm");
   assert.equal(f.task.summary.delivery.sha, f.base, "未推送不得提前覆盖远端事实");
   const waiting = f.task.summary.waiting;
+  assert.deepEqual(waiting.question.delivery_files, [{ path: "feature.ts", label: "新增" }]);
+  assert.match(waiting.context, /feature\.ts.*\[新增\]/);
   await finishTaskHostOperation(runtime());
   assert.equal(f.task.summary.waiting.waiting_id, waiting.waiting_id, "恢复同一待办不另举卡");
   assert.equal(notifications, 1);
@@ -374,8 +457,7 @@ test("旧 delivery.sha 不阻止真实推送：一次人工确认覆盖后续同
   assert.equal(firstOp.state, "succeeded", firstOp.result);
   assert.equal(git(f.remote, "rev-parse", "feature"), first);
   assert.equal(f.task.summary.delivery.sha, first);
-  assert.equal(f.task.summary.delivery_selection.status, "confirmed");
-  assert.deepEqual(f.task.summary.delivery_selection.paths, ["feature.ts"]);
+  assert.equal(f.task.summary.delivery_selection, undefined, "确认只记录决定，不再创建文件清单");
   for (const round of [2, 3]) {
     writeFileSync(join(f.cwd, "feature.ts"), `export const feature = ${round};\n`);
     git(f.cwd, "commit", "-qam", "next CI repair");
@@ -468,7 +550,7 @@ test("传输失败保留真实旧 SHA，重试沿用确认；切到其他分支�
   assert.equal(git(f.remote, "rev-parse", "feature"), head);
 });
 
-test("宿主推送确认可直接勾选文件：排除内容留在本地，一次确认真实推送所选范围", async t => {
+test("旧客户端携带勾选也不改变提交：推送既有 commit，不加入暂存或未跟踪文件", async t => {
   const f = fixture(t);
   f.task.summary.push_confirmation = true;
   writeFileSync(join(f.cwd, 'feature.ts'), 'export const feature = true;\n');
@@ -498,13 +580,13 @@ test("宿主推送确认可直接勾选文件：排除内容留在本地，一�
     await new Promise(resolve => setTimeout(resolve, 30));
   } while (true);
   assert.equal(op.state, 'succeeded', op.result);
-  assert.equal(git(f.remote, 'ls-tree', '--name-only', 'feature', 'local.ts'), '');
+  assert.equal(git(f.remote, 'show', 'feature:local.ts'), 'export const localOnly = true;');
   assert.equal(git(f.remote, 'show', 'feature:feature.ts'), 'export const feature = true;');
   assert.equal(readFileSync(join(f.cwd, 'local.ts'), 'utf8'), 'export const localOnly = true;\n');
   assert.equal(git(f.remote, 'ls-tree', '--name-only', 'feature', 'unrelated.ts'), '');
   assert.equal(git(f.cwd, 'diff', '--cached', '--name-only'), 'unrelated.ts');
-  assert.equal(git(f.remote, 'show', 'feature:selected-local.ts'), 'export const selectedLocal = true;');
+  assert.equal(git(f.remote, 'ls-tree', '--name-only', 'feature', 'selected-local.ts'), '', '即便旧请求勾选，平台也不替 Agent add 文件');
   assert.equal(f.task.summary.waiting, undefined);
-  assert.deepEqual(f.task.summary.delivery_selection.paths, ['feature.ts', 'selected-local.ts']);
-  assert.deepEqual(op.push_paths, ['feature.ts', 'selected-local.ts']);
+  assert.equal(f.task.summary.delivery_selection, undefined);
+  assert.deepEqual(op.push_paths, ['feature.ts', 'local.ts']);
 });

@@ -145,6 +145,6 @@ export async function closeWorkspaceReview(
   await service.decide(id, {
     waiting_id: waiting.waiting_id,
     state_version: waiting.state_version,
-    selected_options: { [question]: "确认按清单推送" },
+    selected_options: { [question]: "确认推送" },
   });
 }

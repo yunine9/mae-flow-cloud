@@ -97,6 +97,34 @@ test('存量批注入口修改后立即刷新阅读副本，仍不改变送达�
   assert.equal(reopened.status, 'draft');
 });
 
+test('长会话后可按需找回已处理意见原文及处置，不把它当新待办或永久禁令', async t => {
+  const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), 'owner-long-history-')), provider: 'test', model: 'test', modelsJson: {}, maxConcurrent: 0 });
+  t.after(() => service.shutdown());
+  const task = (service as any).tasks.get(service.create('实现当前需求').id);
+  task.cwd = join(task.summary.workspace, 'repo'); mkdirSync(task.cwd);
+  const store = (service as any).annotations(task) as AnnotationStore;
+  const item = store.add({ author: '本地用户', file: 'build.log', artifact: 'code', line: 1,
+    anchor: 'build output', note: '撤出这次误暂存的日志，后续不要提交构建日志', kind: 'code' });
+  store.markSent([item.id], 'decision', '本地用户');
+  store.respond(item.id, { outcome: 'fixed', summary: '日志已撤出暂存，保留本地文件', evidence: ['git diff --cached 不含该日志'] });
+  store.verify(item.id, '本地用户');
+  for (let i = 0; i < 80; i++) recordTaskHostInstruction(task.summary, `后续补充需求 ${i}`, '本地用户');
+  const recovered = new AnnotationStore(store.path);
+  const review = submittedReviewInputs(recovered.list()).find(row => row.id === `annotation:${item.id}:r0`)!;
+  assert.match(review.text, /已处理/);
+  assert.match(review.text, /后续不要提交构建日志/);
+  const host = (service as any).taskHostRuntime(task);
+  refreshOwnerInputProjection(host);
+  const projection = JSON.parse(readFileSync(join(task.cwd, '.mae-flow-work', 'owner-inputs.json'), 'utf8'));
+  assert.ok(projection.instructions.some((row: any) => row.id === review.id));
+  assert.doesNotMatch(projection.recent_inputs, /撤出这次误暂存的日志/);
+  const tool = createTaskHostTools(host).find(tool => tool.name === 'task_context')!;
+  const result = await (tool.execute as any)('lookup-old-review', { view: 'instructions', keyword: item.id });
+  assert.match(JSON.stringify(result), /已处理[\s\S]*后续不要提交构建日志/);
+  assert.equal(recovered.list()[0].status, 'verified');
+  assert.equal(task.summary.delivery_selection, undefined);
+});
+
 test('入口拒绝的插话不进入后续决定上下文', async t => {
   const service = new TaskService({ dataDir: mkdtempSync(join(tmpdir(), 'owner-rejected-')), provider: 'test', model: 'test', modelsJson: {}, maxConcurrent: 0 });
   t.after(() => service.shutdown());
