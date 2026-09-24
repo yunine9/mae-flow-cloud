@@ -1,6 +1,7 @@
 /**
  * 提单模板与转正退役的路由契约(ADR-0048):模板读路由登录即可
- * (登记人只读可复制),缺席 404;关联转正显式 410 带手动归档指引。
+ * (登记人只读可复制),缺席 404;关联转正显式 410 指引存量挂起取消
+ * 收口(手动归档亦退役,ADR-0057)。
  * 模板内容三要素(版式/参考两节/防采信说明)由服务级闭环测试钉住
  * (issueFlowFixed.part1 / issueFlowMultiRepo),这里只钉过线协议。
  */
@@ -75,7 +76,7 @@ test("提单模板读路由与转正退役 410(ADR-0048)", async () => {
     const retired = await issueCall("POST",
       ["issues", "issue-ok", "associate"], service);
     assert.equal(retired.status, 410, "关联转正显式退役");
-    assert.match(retired.text, /手动归档/, "410 文案指向手动归档收口");
+    assert.match(retired.text, /取消收口/, "410 文案指向取消收口(归档已退役)");
   } finally {
     await service.shutdown().catch(() => undefined);
     rmSync(dataDir, { recursive: true, force: true });

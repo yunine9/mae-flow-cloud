@@ -56,7 +56,7 @@ export type IssueStatus =
   | "running"        // Agent 回合进行中
   | "waiting_user"   // Agent 举了 AskUserQuestion(或平台闸门),等用户作答
   | "idle"           // 回合结束,等用户下一句话
-  | "suspended"      // 存量:无单结论曾挂起等关联转正(机制已退役,ADR-0048,手动归档收口)
+  | "suspended"      // 存量:无单结论曾挂起等关联转正(机制已退役,ADR-0048;手动归档亦退役,只能取消收口,ADR-0057)
   | "archived"       // 已收口归档(结论见 conclusion)
   | "canceled"
   | "failed";

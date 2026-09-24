@@ -331,7 +331,8 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
   assert.match(confirmDialog,
     /initialFocus=\{current\.options\.danger \? cancelRef : confirmRef\}/,
     "首卡打开由 initialFocus 落位危险档口径");
-  // 问题流三处接入:取消会话(危险档)/归档会话/提交检视意见。
+  // 问题流两处接入:取消会话(危险档)/提交检视意见(归档会话随
+    // 手动归档退役,ADR-0057)。
   for (const [name, source] of [["SessionView", sessionView],
     ["MaterialsPane", materialsPane]] as const) {
     assert.doesNotMatch(source, /window\.confirm\(/,
@@ -339,7 +340,6 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
     if (name === "SessionView") assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
   }
   assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
-  assert.match(sessionView, /title: "归档会话"/);
   assert.doesNotMatch(materialsPane, /条检视意见并重跑分析|disabled=\{busy \|\| !reviewEnabled \|\| detail.status === "running"\}/);
   // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
   // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
@@ -534,15 +534,16 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.doesNotMatch(factsBody, /<input|<button/);
   // 输入区(#127 起发言唯一入口):查看者整段只读,插话/续聊收进归属分支。
   assert.match(stream, /!canOperate \? \{ kind: "readonly" \}/);
-  // 头部控件区:归档/终止整组收进归属分支(#127 自侧栏栏脚迁入),
-  // 与「导出现场记录」并列;确认语义由 confirmDialog 断言钉住。
+  // 头部控件区:终止(归档已退役,ADR-0057)整组收进归属分支
+  // (#127 自侧栏栏脚迁入),与「导出现场记录」并列;确认语义由
+  // confirmDialog 断言钉住。
   const headControls = sessionView.slice(
     sessionView.indexOf('className="ws-head-controls"'),
     sessionView.indexOf("</header>"));
-  assert.ok(headControls.includes("canOperate && <>"), "归档/终止必须挂在 canOperate 分支下");
-  assert.ok(headControls.includes("归档收口"), "头部控件区缺归档");
+  assert.ok(headControls.includes("canOperate && <>"), "终止必须挂在 canOperate 分支下");
   assert.ok(headControls.includes("终止会话"), "头部控件区缺终止");
-  assert.ok(headControls.includes('onClick={archive}'), "归档必须接 archive(confirmDialog)");
+  assert.doesNotMatch(headControls, /归档收口|onClick=\{archive\}/,
+    "手动归档已退役,头部不得再有归档入口(ADR-0057)");
   assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
   // 材料页签:人工修改整链(快速修改编辑器、请 AI 复核、人工修改记录)
   // 已整体退役(ADR-0028)——问题流的人工写口清零,代码层面意见走右栏
@@ -964,15 +965,14 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
   assert.doesNotMatch(sessionView, /IssueRail|issue-rail(?!-card)|issue-side-more/);
   assert.doesNotMatch(stream, /IssueRail|issue-side-more/);
   assert.doesNotMatch(css, /issue-side-more|issue-rail-input|issue-rail-foot|issue-rail-actions|issue-analysis-cta/);
-  // 归档/终止入头部控件区(与导出并列),确认语义保留:
-  // confirmDialog 的两条接入(归档/终止)在 SessionView 原样。
+  // 终止入头部控件区(与导出并列;归档已退役 ADR-0057),确认语义
+  // 保留:confirmDialog 的接入(终止)在 SessionView 原样。
   const headControls = sessionView.slice(
     sessionView.indexOf('className="ws-head-controls"'),
     sessionView.indexOf("</header>"));
   assert.ok(headControls.includes("导出现场记录"));
-  assert.ok(headControls.includes("归档收口"));
   assert.ok(headControls.includes("终止会话"));
-  assert.match(sessionView, /title: "归档会话"/);
+  assert.doesNotMatch(headControls, /归档收口/, "归档入口已退役(ADR-0057)");
   assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
   // 头部危险档(#231 改锚):终止钮换 Button destructive 软皮,红色
   // 危险 affordance 保留(手搓 .danger 皮随 issue-workspace 家族退役)。

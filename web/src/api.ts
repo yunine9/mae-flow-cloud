@@ -4617,9 +4617,7 @@ export async function getIssueTicketTemplate(id: string): Promise<string | null>
 }
 
 export function controlIssue(id: string, input: {
-  action: "cancel" | "archive" | "revive";
-  kind?: "non_issue" | "delivered" | "issue";
-  summary?: string;
+  action: "cancel" | "revive";
   /** revive 专用(ADR-0055):操作者一句话说明,随恢复回合送达 AI。 */
   note?: string;
 }): Promise<IssueSummary> {
@@ -4627,19 +4625,6 @@ export function controlIssue(id: string, input: {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
-  });
-}
-
-/** 合入事实快照(ADR-0022):归档对话框现扫现答,每仓 MR 状态+是否全合入。 */
-export interface IssueMergeStatus {
-  mrs: Array<{ repo: string; url?: string;
-    state: "merged" | "closed" | "opened"; merged_sha?: string }>;
-  all_merged: boolean;
-}
-
-export function issueMergeStatus(id: string): Promise<IssueMergeStatus> {
-  return issueFetch(`/issues/${encodeURIComponent(id)}/merge-status`, {
-    method: "POST",
   });
 }
 

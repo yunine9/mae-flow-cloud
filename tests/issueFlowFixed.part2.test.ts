@@ -482,9 +482,6 @@ test("催办延续握住回合互斥:催办进行中归档被 409,平台通知 s
     });
     await until(() => model.requests.length >= 4 ? true : undefined,
       "催办回合已发出并被扣住");
-    await assert.rejects(
-      () => service.control(created.id, { action: "archive" }),
-      /请先取消会话/);
     service.attachEnvironment(created.id, NO_TICKET_ENV);
     assert.equal(service.get(created.id).status, "running",
       "催办进行中,通知不得改变运行状态");

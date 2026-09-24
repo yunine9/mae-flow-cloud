@@ -836,11 +836,6 @@ test("failed 会话的出路是取消或异常重跑:归档被拒绝,取消清�
     service.start();
     assert.equal(service.list().length, 2,
       "failed 不重新入队,但 live 句柄必须在(否则连出口都够不着)");
-    await assert.rejects(
-      service.control("issue-1", { action: "archive" }),
-      /已失败的会话没有结论可归档,只能取消清理或异常重跑/);
-    assert.equal(service.get("issue-1").status, "failed",
-      "拒绝归档不得翻转状态");
     assert.equal((await service.control("issue-2", { action: "cancel" })).status,
       "canceled", "failed 必须能取消——无路可走的终态就是列表里的永久噪音");
     await assert.rejects(

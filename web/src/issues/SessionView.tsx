@@ -246,18 +246,6 @@ export function IssueSessionView({
     addIssueTakeoverNote(detail.id, text).then(() => undefined);
   const resumeTakeover = (note?: string) =>
     perform(() => resumeIssueTakeover(detail.id, note));
-  // 归档门禁(ADR-0034):有单会话不渲染归档按钮——交付出口只有
-  // 「全部 MR 合入自动归档」;无单存量挂起可归(ADR-0048 后不再新增
-  // 挂起,确认是问题即自动归档),结论前禁用并说明,要放弃走终止会话。
-  const manualArchiveAllowed = detail.scenario !== "ticket";
-  async function archive() {
-    if (!await confirmDialog({
-      title: "归档会话",
-      message: "归档后会话收口不可续聊，凭据将清理。",
-      confirmLabel: "归档",
-    })) return;
-    void perform(() => controlIssue(detail.id, { action: "archive" }));
-  }
   async function cancelSession() {
     if (!await confirmDialog({
       title: "终止会话",
@@ -376,16 +364,11 @@ export function IssueSessionView({
             anchor.click();
             anchor.remove();
           }}>导出现场记录</Button>
-        {/* 归档/终止(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
-            确认语义;归档按 ADR-0034 门禁——有单不渲染(合入自动归档),
-            无单结论后可用;终止都是写操作,查看模式整组不渲染。 */}
+        {/* 终止/异常重跑(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
+            确认语义;手动归档已退役(ADR-0034/0057)——交付出口是合入自动
+            归档,无单结论在 conclude 卡当场闭环;终止都是写操作,查看模式
+            整组不渲染。 */}
         {canOperate && <>
-          {manualArchiveAllowed && <Button type="button" variant="outline"
-            size="sm" disabled={busy || detail.status !== "suspended"}
-            title={detail.status !== "suspended"
-              ? "给出结论（是问题挂起/非问题闭环）后才能归档；要放弃请终止会话"
-              : undefined}
-            onClick={archive}>归档收口</Button>}
           {/* 异常重跑(#430,ADR-0055):仅异常(失败)会话出现,与终止
               并排——failed 状态下的两个出口:原地续跑 or 放弃终止。
               发起中(busy)禁用防重;确认框与说明输入见 header 之后。 */}

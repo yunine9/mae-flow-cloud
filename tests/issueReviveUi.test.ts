@@ -106,7 +106,8 @@ test("区分文案:确认框正文讲清异常重跑与重新发起的差别", (
 test("api 客户端:control 动作联合含 revive,note 是请求侧字段", () => {
   const control = api.slice(api.indexOf("export function controlIssue"),
     api.indexOf("issueFetch(`/issues/", api.indexOf("export function controlIssue")));
-  assert.match(control, /action: "cancel" \| "archive" \| "revive";/,
+  // 手动归档退役(ADR-0057),动作词只剩取消与异常重跑。
+  assert.match(control, /action: "cancel" \| "revive";/,
     "动作联合类型要含 revive(#428 后端已上线)");
   assert.match(control, /note\?: string;/, "请求侧要有可选 note 字段");
 });

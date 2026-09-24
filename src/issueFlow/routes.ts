@@ -1272,46 +1272,30 @@ export async function handleIssueRoutes(
     }
 
     // 关联转正已退役(ADR-0048):无单会话确认是问题即闭环归档并产出
-    // 提单模板;存量挂起会话走手动归档收口。显式 410 给存量期的旧
-    // 前端一个明确指引,不留裸报错。
+    // 提单模板;手动归档也已退役(ADR-0057),存量挂起只能取消收口。
+    // 显式 410 给存量期的旧前端一个明确指引,不留裸报错。
     if (method === "POST" && parts[2] === "associate" && parts.length === 3) {
       return done(410, {
         error: "关联转正已退役:无单会话确认是问题即闭环归档(提单模板已出);"
-          + "存量挂起会话请手动归档收口",
+          + "存量挂起会话只能取消收口",
       });
     }
 
     if (method === "POST" && parts[2] === "control" && parts.length === 3) {
       if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能重跑、取消或归档会话" });
+        return done(403, { error: "只有归属人能重跑或取消会话" });
       }
       const body = await readBody(request);
-      const kind = ["non_issue", "delivered", "issue"].includes(String(body.kind))
-        ? String(body.kind) as "non_issue" | "delivered" | "issue" : undefined;
-      // 动作白名单 fail-loud(与 kind 同尺):拼错的动作打回 400,不静默
-      // 落成 archive——归档是有结论语义的收口,不能当兜底垃圾箱。
-      const action = ["cancel", "archive", "revive"].includes(String(body.action))
-        ? String(body.action) as "cancel" | "archive" | "revive" : undefined;
+      // 动作白名单 fail-loud:拼错的动作打回 400,不静默落成别的动作。
+      const action = ["cancel", "revive"].includes(String(body.action))
+        ? String(body.action) as "cancel" | "revive" : undefined;
       if (!action) {
-        return done(400, { error: "未知 control 动作,只支持重跑/取消/归档" });
+        return done(400, { error: "未知 control 动作,只支持重跑/取消" });
       }
       return done(200, await issueFlow.control(id, {
         action,
-        ...(kind ? { kind } : {}),
-        ...(body.summary !== undefined
-          ? { summary: String(body.summary) } : {}),
         ...(body.note !== undefined ? { note: String(body.note) } : {}),
       }));
-    }
-
-    // 合入事实快照(ADR-0022):归档对话框现扫现答,与归档核对同一
-    // 兜底——软闸不堵归档,但把每仓 MR 状态摆给人看。
-    if (method === "POST" && parts[2] === "merge-status"
-        && parts.length === 3) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有归属人能核对合入事实" });
-      }
-      return done(200, await issueFlow.mergeStatus(id));
     }
 
     return done(404, { error: "未知问题接口" });
