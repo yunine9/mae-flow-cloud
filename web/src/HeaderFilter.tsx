@@ -14,11 +14,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 
-export function HeaderFilter({ label, active, onClear, contentClassName, children }: {
+export function HeaderFilter({ label, active, onClear, clearLabel, contentClassName, children }: {
   label: string;
   active: boolean;
-  /** 本列的清除动作:给了才在弹层底部出「清除此列筛选」。 */
+  /** 本列的清除动作:给了才在弹层底部出清除入口。 */
   onClear?: () => void;
+  /** 清除入口的措辞(缺省「清除此列筛选」;过滤入口不在列头上时自定义)。 */
+  clearLabel?: string;
   /** 弹层宽度覆盖(缺省 w-40):多选清单类内容可放宽。 */
   contentClassName?: string;
   children: (close: () => void) => ReactNode;
@@ -44,7 +46,7 @@ export function HeaderFilter({ label, active, onClear, contentClassName, childre
           onClick={() => {
             onClear();
             setOpen(false);
-          }}>清除此列筛选</button>
+          }}>{clearLabel ?? "清除此列筛选"}</button>
       </div>}
     </PopoverContent>
   </Popover>;

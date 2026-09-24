@@ -54,7 +54,7 @@ import {
 } from "./mrDiscussions.ts";
 import type { VisionCapabilityConfig, VisionModelChoice } from "../visionCapability.ts";
 import type { Notifier, NotifyQuestion } from "../notifier.ts";
-import type { IssueInterventionTier } from "../auth.ts";
+import { isIssueInterventionTier, type IssueInterventionTier } from "../auth.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
 import { GateService } from "../gateService.ts";
@@ -546,12 +546,12 @@ export interface IssueCreateInput {
   productVersion?: string;
   /** 业务模块自由文本标签(仅展示/报告引用,不承载判定)。 */
   module?: string;
-  /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。 */
+  /** 登记选定的业务模块 ID:校验存在且 active,名称派生 module 标签。
+   * 三路发起开场必有(ADR-0056),运行时不再有绑模块动作。 */
   moduleId?: string;
-  /** 人工预绑锁(spec #57):路由层只在模块 id 来自人的显式选择时
-   * 置真(DTS 预绑/登记页手工选;服务端 matchDtsToModule 自动匹配
-   * 不算,那仍是机器猜测,不锁)。 */
-  moduleLocked?: boolean;
+  /** 会话级介入档位(ADR-0057):DTS 列表发起前按单选定,create 定格
+   * 进状态,发起后不可改;缺席=跟随全局。 */
+  interventionTier?: IssueInterventionTier;
   environment?: IssueEnvironmentInput;
 }
 
@@ -1647,7 +1647,8 @@ export class IssueFlowService {
     const baseline = resolveProductBranch(this.options.dataDir, input.productVersion, input.baseline);
     // 登记人=发起登记的登录用户;归属=责任人,显式指派优先,缺席=
     // 自登记(ADR-0031)。同账号+同单号去重、写闸、闸口通知、Git 身份、
-    // 介入档位全部继续挂归属账号——责任人换了人,机制语义自动跟着换人。
+    // 介入档位(全局档;会话级特例随会话走,ADR-0057)全部继续挂
+    // 归属账号——责任人换了人,机制语义自动跟着换人。
     const reporter = input.reporter?.trim() || creator;
     const account = input.assignee?.trim() || creator;
     // 指派校验只在角色回调在场时生效(缺席=裸构造,测试世界无身份
@@ -1674,6 +1675,12 @@ export class IssueFlowService {
     const ticket = input.ticket?.trim() || undefined;
     if (ticket && !TICKET_PATTERN.test(ticket)) {
       throw new IssueControlError("单号只能是字母数字下划线连字符(如 DTS2026082001317)");
+    }
+    // 会话级介入档位(ADR-0057):发起前定档,发起后不可改;路由已拦
+    // 非法值,这里兜底直调方(测试/内部调用),半截登记不落盘。
+    if (input.interventionTier
+        && !isIssueInterventionTier(input.interventionTier)) {
+      throw new IssueControlError("介入档位不合法(只支持 1/2/3 三档)");
     }
     const explicitRepos = normalizeIssueRepos(input.repoUrl, input.repoUrls);
     // 场景由单号有无机械派生:有单走五阶段,无单走三节点。
@@ -1802,6 +1809,8 @@ export class IssueFlowService {
       title,
       description: input.description?.trim() ?? "",
       ...(input.remark?.trim() ? { remark: input.remark.trim() } : {}),
+      ...(input.interventionTier
+        ? { intervention_tier: input.interventionTier } : {}),
       source: input.source ?? "manual",
       ...(ticket ? { ticket } : {}),
       ...(repoUrls.length
@@ -1813,7 +1822,6 @@ export class IssueFlowService {
       ...(moduleId ? { module_id: moduleId } : {}),
       ...(moduleReferenceRepos?.length
         ? { reference_repos: moduleReferenceRepos } : {}),
-      ...(moduleId && input.moduleLocked ? { module_locked: true } : {}),
       ...(environment ? { environment } : {}),
       scenario,
       round: 1,
@@ -2989,9 +2997,11 @@ export class IssueFlowService {
   }
 
   /** 介入档位现读现判(ADR-0019):会话开/续聊/闸判定都读当下值,
-   * 用户改档即刻生效;回调缺席=缺省二档。 */
+   * 用户改档即刻生效;回调缺席=缺省二档。会话级覆盖(ADR-0057)
+   * 优先——发起前按单定档的会话终身用它,不吃全局改档。 */
   private tierOf(live: LiveIssue): IssueInterventionTier {
-    return this.options.interventionTier?.(live.state.account) ?? "2";
+    return live.state.intervention_tier
+      ?? this.options.interventionTier?.(live.state.account) ?? "2";
   }
 
   /** 自动节奏(提示词少问/不简报、纯选项问答卡按推荐整卡代答):

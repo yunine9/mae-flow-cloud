@@ -2,7 +2,8 @@
   {
     "ticket": "DTS-2026-1001",
     "title": "【DEV·模拟】订单列表导出超时(数据量大时必现)",
-    "status": "打开"
+    "status": "打开",
+    "featureName": "订单中心"
   },
   {
     "ticket": "DTS-2026-1002",
@@ -10,7 +11,8 @@
     "status": "开发人员实施修改",
     "version": "V100R025C10SPC010B009",
     "severity": "提示",
-    "submitter": "zhangsan"
+    "submitter": "zhangsan",
+    "featureName": "消息中心"
   },
   {
     "ticket": "DTS-2026-1003",
@@ -18,7 +20,8 @@
     "status": "处理中",
     "version": "V100R025C10SPC010B011",
     "severity": "严重",
-    "submitter": "lisi"
+    "submitter": "lisi",
+    "featureName": "移动审批"
   },
   {
     "ticket": "DTS-2026-1004",
@@ -26,7 +29,8 @@
     "status": "开发人员实施修改",
     "version": "V100R025C10SPC021B002",
     "severity": "一般",
-    "submitter": "wangwu"
+    "submitter": "wangwu",
+    "featureName": "用户管理"
   },
   {
     "ticket": "DTS-2026-1005",
@@ -34,7 +38,8 @@
     "status": "处理中",
     "version": "V100R025C10SPC010B009",
     "severity": "严重",
-    "submitter": "zhangsan"
+    "submitter": "zhangsan",
+    "featureName": "报表中心"
   },
   {
     "ticket": "DTS-2026-1006",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 
@@ -107,27 +107,29 @@ test("环境选择器可用键盘操作，清单在自身视口滚动", () => {
   assert.match(environmentPicker, /PopoverContent align="start"/);
 });
 
-test("DTS 详情按钮独立于勾选格，窄屏下拉与触控目标可达", () => {
-  // shadcn 表格化(2026-09-11)后:勾选 Checkbox 独占首格,展开按钮
-  // 独占尾格——两个命中目标互不嵌套;旧勾选 label 行退役。
+test("DTS 列表:行尾展开详情与列头版本漏斗退役,版本过滤住工具栏(ADR-0056)", () => {
+  // shadcn 表格化(2026-09-11)后:勾选 Checkbox 独占首格。行尾展开
+  // 详情整体退役(ADR-0056):单号直达 DTS 门户已是详情出口,展开钮、
+  // detailId 折叠面与 size-9 触控钮一并退役,不得回流。
   assert.doesNotMatch(registration, /<label className="issue-dts-row-main">/,
     "旧勾选 label 行应已退役(勾选改 Checkbox 独立格)");
-  assert.match(registration, /aria-controls=\{detailId\}/);
-  assert.match(registration, /aria-label=\{`\$\{isExpanded \? "收起" : "展开"\}/);
-  // 触控目标:展开按钮 36px 见方(size-9),不再依赖旧 css 的 44px 规则。
-  assert.match(registration, /size-9 items-center justify-center/);
-  // 版本过滤住「版本」列表头漏斗(2026-09-13 表头化,壳两页共用):浮层
-  // 碰撞归 Base UI;44px 触控目标由选项行 min-h-11 保留在组件上,不再
-  // 依赖页面 css。旧工具栏「版本过滤」按钮随表头化退役。
-  assert.match(registration, /<HeaderFilter label="版本" contentClassName="w-72"/);
+  assert.doesNotMatch(registration, /aria-controls=\{detailId\}|isExpanded\b/,
+    "行尾展开详情已退役(单号直达 DTS 门户)");
+  // 版本过滤住工具栏下拉(2026-09-24 从版本列表头迁出,版本/分支列
+  // 随 ADR-0038 修订一并退役):多选版本组 + 清除入口;单号/标题漏斗
+  // 照旧住列头。
+  assert.doesNotMatch(registration, /<HeaderFilter label="版本"/,
+    "版本列头漏斗已退役(过滤迁工具栏下拉)");
+  assert.match(registration, /aria-label="按版本组过滤问题单"/);
+  assert.match(registration, /清除版本筛选\(全显\)/);
   assert.match(registration, /<HeaderFilter label="单号" active=\{!!ticketFilter\.trim\(\)\}/);
   assert.match(registration, /<HeaderFilter label="标题" active=\{!!titleFilter\.trim\(\)\}/);
   assert.match(registration, /aria-label="按单号过滤"/);
   assert.match(registration, /aria-label="按标题过滤"/);
+  // 44px 触控目标由漏斗选项行 min-h-11 保留在组件上,不再依赖页面 css。
   assert.match(registration, /min-h-11 cursor-pointer items-center gap-2\.5/);
-  assert.match(registration, /title=\{ticket\.version\}/);
   assert.doesNotMatch(registration, /issue-dts-version-menu|issue-dts-version-trigger/);
-  assert.doesNotMatch(registration, /"版本过滤"/, "工具栏版本过滤按钮应已退役(筛选住列头)");
+  assert.doesNotMatch(registration, /"版本过滤"/, "工具栏旧版本过滤按钮应已退役");
 });
 
 test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026-09-14)", () => {
@@ -154,14 +156,17 @@ test("DTS 发起状态列:判定与拦截同尺单源,默认只看未发起(2026
   assert.match(registration, /已发起\(进行中\)/);
   assert.match(registration,
     /selectedVersions\.length > 0 \|\| launchFilterActive/);
-  // 已发起的行:我名下的勾选禁用(悬停说明);未配置分支的行同样禁
-  // (ADR-0038,禁发起双闸的前端一侧)。徽标是新页签链接(ADR-0040),
-  // 直接开该单名下的进行中会话;全选只作用于可勾行。刷新回默认态
-  // (打开/刷新 = 只看未发起)。
-  assert.match(registration, /disabled=\{!!mineLive \|\| !ticket\.branch\}/);
+  // 已发起的行:我名下的勾选禁用(悬停说明);未配置分支(ADR-0038)
+  // 与未匹配模块(ADR-0056)的行同样禁——发起三闸的前端一侧。徽标是
+  // 新页签链接(ADR-0040),直接开该单名下的进行中会话;全选只作用于
+  // 可勾行。刷新回默认态(打开/刷新 = 只看未发起)。
+  assert.match(registration,
+    /disabled=\{!!mineLive \|\| !ticket\.branch \|\| !resolvedModule\}/);
   assert.match(registration,
     /href=\{issueSessionPath\(liveIssue\.id\)\}\s*\n?\s*target="_blank" rel="noreferrer"/);
-  assert.match(registration, /const selectableTickets = display/);
+  assert.match(registration,
+    /const selectableTickets = display\s*\n\s*\.filter\(\(t\) => !mineLiveByTicket\.has\(t\.ticket\) && !!t\.branch/,
+    "可勾行 = 未发起 + 有分支 + 有模块,与勾选禁用同尺");
   assert.match(registration,
     /setShowUnlaunched\(true\);\s*\n\s*setShowLaunched\(false\);/);
   // 判定索引化:进行中会话按单建一份 Map,过滤/全选/逐行同吃;裸
@@ -430,7 +435,7 @@ test("环境形态字段:唯一落点是共用新建弹框,登记与闸卡只选
   assert.match(apiTypes, /env_type\?: "virtualized" \| "k8s"/);
 });
 
-test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(spec #57)", () => {
+test("DTS 列表所属模块列:强匹配带出/人工改选/显隐记忆/发起必带(ADR-0056)", () => {
   const registration = readFileSync(
     resolve("web/src/issues/Registration.tsx"), "utf-8");
   const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
@@ -439,24 +444,26 @@ test("DTS 列表人工预绑模块列:选即存/显隐记忆/发起静默携带(
   assert.match(apiTypes, /putDtsModuleBinding/);
   assert.match(apiTypes, /"\/issues\/dts-bindings"/);
   assert.match(apiTypes, /dts-bindings\/\$\{encodeURIComponent\(ticket\)\}/);
-  // 列渲染:每行 shadcn Select + 「未选择」解绑项 + aria 标注。
+  // 列渲染:改选优先于带出,都没有 = 未匹配必填(占位项只给服务端
+  // 没带出的行,且恒在——Base UI 对「当前值不在 items」会补空提交,
+  // 动态摘占位会把刚选的清掉);占位文案点名发起前必选。
   assert.match(registration,
-    /<Select[\s\S]{0,80}value=\{bindings\[ticket\.ticket\]\?\.module_id \?\? "__none"\}/);
-  assert.match(registration,
-    /<SelectItem value="__none">[\s\S]{0,40}未选择\(AI 运行时识别\)/);
+    /<Select[\s\S]{0,80}value=\{resolvedModule \?\? "__none"\}/);
+  assert.match(registration, /未匹配,发起前必选/);
   assert.match(registration, /aria-label=\{\`\$\{ticket\.ticket\} 所属业务模块\`\}/);
-  // 选即存:乐观更新失败回滚,反馈落在行内。
+  // 改选即存:乐观更新失败回滚,反馈落在行内。
   assert.match(registration, /async function bindModule\(/);
   assert.match(registration, /putDtsModuleBinding\(ticketNo, moduleId \|\| null\)/);
   assert.match(registration, /text-destructive" role="alert"/);
-  // 显隐:工具栏「列」Popover(shadcn 列选择器形态)+ localStorage 按用户记忆。
+  // 显隐(ADR-0056 列显隐系统化):统一「列」Popover + localStorage
+  // 按用户记忆;介入档位列单独一份默认关的开关(ADR-0058)。
   assert.match(registration, /aria-label="列设置"/);
   assert.match(registration,
-    /mae-flow:dts-module-col:\$\{viewer\.username\}/);
-  assert.match(registration, /localStorage\.setItem\(moduleColKey/);
-  // 发起携带:预绑模块静默进场;没绑的不带(AI 照旧运行时识别)。
-  assert.match(registration,
-    /\.\.\.\(binding \? \{ module_id: binding\.module_id \} : \{\}\),/);
+    /mae-flow:dts-hidden-cols:\$\{viewer\.username\}/);
+  assert.match(registration, /localStorage\.setItem\(hiddenColsKey/);
+  // 发起携带:改选/带出现场解析恒带(ADR-0056 双闸纵深防御的一半);
+  // 列上没有就不发,没有「不带的」路径。
+  assert.match(registration, /module_id: moduleId,/);
   // 模块目录与登记页同尺:active 且有仓。
   assert.match(registration,
     /module\.status === "active"\s*&&\s*module\.repositories\.length > 0/);
@@ -493,8 +500,8 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const stream = readFileSync(
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
-  const associate = readFileSync(
-    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
+  const suspended = readFileSync(
+    resolve("web/src/issues/IssueSuspendedCard.tsx"), "utf-8");
   // 工作台头部:「无单场景」是状态说明不是控件,查看模式照常示人。
   // #98 单路径化后一切会话都是固定流程,自由分支的绑单输入已整体删除,
   // 不得再以任何形式回流。
@@ -526,12 +533,11 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
   assert.match(sessionView,
     /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
-  // 转正卡只在归属分支(#127 协作流区顶部);挂起的只读说明对围观者保留。
+  // 挂起槽位(#434 起转正退役):不再组两段式,存量挂起统一一张只读
+  // 说明卡(归属人与查看模式同卡),零写口。
   assert.match(sessionView,
-    /suspendedCard=\{detail\.status === "suspended" \? \(canOperate\s*\n\s*\? <IssueAssociateCard[\s\S]*?: <IssueAssociateFacts \/>\)/);
-  // 只读说明组件零写口:没有输入、没有按钮。
-  const factsBody = associate.slice(associate.indexOf("export function IssueAssociateFacts"));
-  assert.doesNotMatch(factsBody, /<input|<button/);
+    /suspendedCard=\{detail\.status === "suspended"\s*\n\s*\? <IssueSuspendedCard \/>\s*: undefined\}/);
+  assert.doesNotMatch(suspended, /<input|<button/, "挂起说明卡零写口");
   // 输入区(#127 起发言唯一入口):查看者整段只读,插话/续聊收进归属分支。
   assert.match(stream, /!canOperate \? \{ kind: "readonly" \}/);
   // 头部控件区:终止(归档已退役,ADR-0057)整组收进归属分支
@@ -604,16 +610,18 @@ test("检视区以意见号为主键展示(#261):「意见N」在卡面,an- id �
 // ---- 检视分诊(ADR-0035):AI 的逐条回复落账后在该意见下只读呈现,
 // ---- 需求侧批注回复同款体验;纯读面,不挂归属条件。
 
-test("检视意见面板呈现 AI 回复(ADR-0035):response 只读块挂意见卡下,结果词与回复原文在", () => {
+test("检视意见面板呈现 AI 回复(ADR-0035):回复环按序铺开,结果词与回复原文在", () => {
   const reviewCard = materials.slice(
     materials.indexOf("function reviewOutcomeLabel"),
     materials.indexOf("function IssueReviewPanel"));
-  // 回复块挂在 item.response 在场时;回复原文(不是"已处理"三字糊弄)
-  // 是主内容,evidence 只作补充行。
-  assert.match(reviewCard, /\{item\.response && <div/);
+  // 回复环(2026-09 回复环改版):被回复取代的旧回执随 author_replies
+  // 留档,最新回应在 response——按序铺开「Agent 回复 → 你的回复 → …」;
+  // 回复原文(不是"已处理"三字糊弄)是主内容,evidence 只作补充行。
+  assert.match(reviewCard,
+    /rounds\.map\(\(round, index\) => round\.who === "agent"/);
   assert.match(reviewCard, /Agent 的回复/);
-  assert.match(reviewCard, /\{item\.response\.summary\}/);
-  assert.match(reviewCard, /依据 \{item\.response\.evidence\.join\("；"\)\}/);
+  assert.match(reviewCard, /\{round\.text\}/);
+  assert.match(reviewCard, /依据 \{round\.evidence\.join\("；"\)\}/);
   // 结果词与需求侧同话术(response 是机器事实,不是验收)。
   assert.match(reviewCard, /"已处理"/);
   assert.match(reviewCard, /"没有修改"/);
@@ -988,37 +996,29 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
     "终局说明由输入区承载(终局无侧栏卡后不断档)");
 });
 
-test("挂起转正入流(#127):转正卡在协作流区顶部,两段式与查看模式只读语义原样", () => {
+test("挂起说明卡入流(#127 槽位;#434 起转正退役,只剩只读说明)", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const stream = readFileSync(
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
-  const associate = readFileSync(
-    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
-  // 会话视图按挂起状态组装下传:归属人拿两段式转正卡,查看模式只读说明。
+  const suspended = readFileSync(
+    resolve("web/src/issues/IssueSuspendedCard.tsx"), "utf-8");
+  // #434 手动归档/转正退役:挂起不再是可转正的停泊态——现在确认是
+  // 问题直接闭环归档并产出提单模板,存量挂起只能终止收口。协作流
+  // 顶部的槽位保留,但只承载一张只读说明卡(归属人与查看模式同卡),
+  // 两段式转正卡不得回流。
   assert.match(sessionView,
-    /suspendedCard=\{detail\.status === "suspended" \? \(canOperate\s*\n\s*\? <IssueAssociateCard busy=\{busy\} onAssociate=\{associate\} \/>\s*\n\s*: <IssueAssociateFacts \/>\)\s*\n\s*: undefined\}/);
+    /suspendedCard=\{detail\.status === "suspended"\s*\n\s*\? <IssueSuspendedCard \/>\s*: undefined\}/);
+  assert.doesNotMatch(sessionView, /IssueAssociateCard|IssueAssociateFacts/,
+    "转正卡已退役(#434),会话视图不得再引用");
   // 挂载点:协作流区顶部——「与 Agent 协作」头之下、可滚流区之上
   // (不进流,不会被贴底跟随滚出视野)。
   assert.match(stream,
     /<header className="ws-collaboration-head">[\s\S]*?\{suspendedCard && <div className="mx-3\.5 mb-1\.5 shrink-0">\{suspendedCard\}<\/div>\}[\s\S]*?<div className="ws-stream"/);
-  // 样式落点(#231 改锚):#127 槽位留白随 issue-workspace 家族退役,
-  // 直译成槽位工具类(mx-3.5 mb-1.5,ws-anchor 同节奏)。
-  // 两段式搬运不改语义:输单号 → 校验过目(单据详情回显)→ 确认转正;
-  // 校验/确认都走同一个 onAssociate(ticket, confirm) 口。
-  assert.match(associate, /export function IssueAssociateCard/);
-  assert.match(associate, /const result = await onAssociate\(ticket\.trim\(\), false\);/);
-  assert.match(associate, /await onAssociate\(ticket\.trim\(\), true\);/);
-  assert.match(associate, /校验单号/);
-  assert.match(associate, /确认转正\(继承分析报告,进入问题修改\)/);
-  assert.match(associate, /转正不可逆:本会话将归档,新会话以该单号继续。/);
-  // 转正成功跳新会话:associate 结果带 converted 时 onOpenIssue 由
-  // 会话视图处理(链路在 SessionView,不在卡组件)。
-  assert.match(sessionView,
-    /if \(result\.converted\) \{[\s\S]*onOpenIssue\(result\.converted\.id\);/);
-  // 输入区挂起提示指向协作区(不再指向已拆的「更多操作」)。
-  assert.match(stream, /在上方协作区关联 DTS 单号转正/);
-  assert.doesNotMatch(stream, /更多操作/);
+  // 说明卡点名牌指示牌:转正与手动归档均已退役,出路只有终止。
+  assert.match(suspended, /转正与手动归档机制均已退役/);
+  assert.match(suspended, /终止会话/);
+  assert.doesNotMatch(suspended, /<input|<button/, "说明卡零写口");
 });
 
 // ---- 举卡入流(#125,ADR-0018 决策三):当前等待卡钉在协作流末尾的
@@ -1725,16 +1725,10 @@ test("裸 button 收编(#256):常规动作钮走 shadcn Button,领域件不动",
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   assert.match(sessionView,
     /<Button type="button" variant="link"[\s\S]{0,220}去个人设置配置令牌\s*<\/Button>/);
-  // 关联卡两枚动作钮收编 shadcn:校验钮此前真裸奔(无任何样式落点,
-  // 浏览器默认皮直出);转正主钮的 issue-rail-primary 类退役。
-  const associate = readFileSync(
-    resolve("web/src/issues/IssueAssociateCard.tsx"), "utf-8");
-  assert.match(associate, /import \{ Button \} from "@\/components\/ui\/button";/);
-  assert.match(associate,
-    /<Button type="button" variant="outline"[\s\S]{0,220}\{pending \? "校验中…" : "校验单号"\}\s*<\/Button>/);
-  assert.match(associate,
-    /<Button type="button" className="w-full"[\s\S]{0,220}确认转正\(继承分析报告,进入问题修改\)\s*<\/Button>/);
-  assert.doesNotMatch(associate, /issue-rail-primary/);
+  // 关联卡(校验/转正两枚动作钮)已随 #434 转正退役整体删除,文件不
+  // 在即契约满足;若以新形态回流,按 shadcn Button 收编纪律另立新锚。
+  assert.ok(!existsSync(resolve("web/src/issues/IssueAssociateCard.tsx")),
+    "转正关联卡应已退役删除(#434)");
 });
 
 test("会话列表单一口径(ADR-0031,2026-09-16 修订):归属或登记人是自己,卡片并列两端", () => {
@@ -1798,10 +1792,10 @@ test("DTS「进行中」入口链接级可供性;进行态读屏可达;详情长
   // 列设置触发钮是弹层出口,不是切换钮:aria-pressed 撤下,开合语义
   // 归 Popover 原语自带的 aria-haspopup/aria-expanded。
   assert.doesNotMatch(registration, /aria-pressed=\{moduleCol\}/);
-  // 详情「问题链接」长 URL 断行,不撑破详情网格。
-  assert.match(registration, /<dd className="min-w-0">/);
+  // 展开详情随 ADR-0056 退役(详情长链断行随行尾格一并退场):单号
+  // 直达 DTS 门户,格内截断 + title 全文,长链不撑破表格。
   assert.match(registration,
-    /text-primary underline underline-offset-2 break-all/);
+    /issue-dts-ticket block min-w-0 truncate/);
 });
 
 test("外部图片粘贴按 src 协议三路转存,Clipboard 死路不回潮(#276)", () => {
@@ -1890,13 +1884,15 @@ test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图
 
 test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动记忆在 localStorage(2026-09-17)", () => {
   // 布局底盘:定宽布局 + colgroup(表头 w-* 退役,宽度只有一处来源);
-  // 标题列不进默认宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
-  assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed">/);
-  for (const col of ["select", "ticket", "title", "version", "status", "launch", "remark"]) {
-    assert.match(registration, new RegExp(`\\{renderCol\\("${col}"\\)\\}`));
+  // 标题列不进定宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
+  // 表最小宽 = Σ可见定宽 + 标题下限(2026-09-24):定宽合计吃满表宽时
+  // 标题列被挤没、列头叠字,minWidth 兜底转横向滚动。
+  assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed"\s*\n\s*style=\{\{ minWidth: tableMinWidth \}\}>/);
+  for (const col of ["select", "ticket", "title", "launch", "remark",
+    "module", "tier"]) {
+    assert.match(registration, new RegExp(`renderCol\\("${col}"\\)`));
   }
-  assert.match(registration, /\{moduleCol && renderCol\("module"\)\}/);
-  assert.match(registration, /<col style=\{\{ width: 48 \}\} \/>/);
+  assert.match(registration, /\{colShown\("title"\) && renderCol\("title"\)\}/);
   assert.doesNotMatch(registration, /<TableHead className="w-\d+"/,
     "列宽收口 colgroup,表头不得再挂 w-* 定宽");
   // 把手:role=separator 可聚焦,pointer capture 拖动,双击/Enter 回默认,
@@ -1910,11 +1906,11 @@ test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动
   assert.match(registration, /mae-flow:dts-col-widths/);
   assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
   assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
-  // 默认宽沿用迁表现行值(w-28/w-64/w-24/w-56),单号/状态给足内容定值;
-  // 分支列随分支匹配入列(ADR-0038),发起备注列入列(2026-09-20)。
-  // 拖动下限防内容打架。列存在性由 DTS_COL_MIN 收口,少一列即测试红。
+  // 列存在性与默认/下限宽由 DTS_COL_DEFAULT/DTS_COL_MIN 收口:版本/
+  // 分支列随 ADR-0038 修订退役,介入档位列入列(ADR-0058,默认隐藏),
+  // 少一列或多一列即这里红。
   assert.match(registration,
-    /select: 112, ticket: 190, version: 256, branch: 216, status: 88,\s*\n\s*launch: 96, remark: 240, module: 224/);
+    /select: 64, ticket: 150,\s*\n\s*launch: 96, remark: 240, module: 160, tier: 116,/);
   assert.match(registration,
-    /select: 96, ticket: 150, title: 160, version: 140, branch: 120, status: 72,\s*\n\s*launch: 88, remark: 140, module: 160/);
+    /select: 48, ticket: 120, title: 160,\s*\n\s*launch: 88, remark: 140, module: 120, tier: 96,/);
 });

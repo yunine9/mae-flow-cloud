@@ -3923,6 +3923,9 @@ export interface IssueSummary {
   /** 发起备注(DTS 列表随单填写):登记元信息的一部分,AI 开场被要求
    * 优先读;缺席=发起时没填(含机制加入前的老会话)。 */
   remark?: string;
+  /** 会话级介入档位(ADR-0057):发起前按单选定并定格,发起后不可改;
+   * 缺席=跟随全局。列表据此显示「特例档名 / 跟随全局」。 */
+  intervention_tier?: "1" | "2" | "3";
   source: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
@@ -4131,6 +4134,9 @@ export interface DtsTicketBrief {
   /** 分支匹配结果(ADR-0038):服务端按配置中心映射逐单补齐;未命中
    * 配置时不带,页面按「未配置分支」呈现并禁止发起。 */
   branch?: string;
+  /** 模块强匹配带出(ADR-0056):特性名与模块名精确相等且唯一才带,
+   * 未命中/重名歧义不带,页面按「未匹配」呈现走必填。 */
+  module_id?: string;
   severity?: string;
   submitter?: string;
   url?: string;
@@ -4148,6 +4154,8 @@ export interface DtsTicketDetail {
   version?: string;
   /** 分支匹配结果(ADR-0038):同列表;远程查单入列也带。 */
   branch?: string;
+  /** 模块强匹配带出(ADR-0056):同列表,远程查单入列不缺席。 */
+  module_id?: string;
   url?: string;
   submitter?: string;
   /** 状态名:远程查单入列要靠它过"开发人员实施修改"可拉取判定。 */
@@ -4427,6 +4435,9 @@ export function createIssue(input: {
   /** 登记选定的业务模块 ID:后端校验存在且 active,名称派生 module。
    * 无单号登记服务端强制必带,并按模块绑定整表带出仓。 */
   module_id?: string;
+  /** 会话级介入档位(ADR-0057):DTS 列表发起前按单选定,随创建请求
+   * 定格,发起后不可改;不传=跟随全局。 */
+  intervention_tier?: "1" | "2" | "3";
   environment?: IssueRegistrationEnvironment;
   /** 责任人(ADR-0031):登记完成后问题的归属与推进人;登记人=当前
    * 登录用户由服务端取,客户端不传。 */
@@ -4926,14 +4937,14 @@ export function replyIssueReview(id: string, review: number | string, text: stri
   });
 }
 
-/** DTS 单号→业务模块的人工预绑条目(团队共享;updated_by/at 供对账)。 */
+/** DTS 单号→业务模块的人工改选条目(团队共享;updated_by/at 供对账)。 */
 export interface DtsModuleBindingEntry {
   module_id: string;
   updated_by: string;
   updated_at: string;
 }
 
-/** 拉全量预绑映射(小对象,一次拿全;DTS 页签激活时调用)。 */
+/** 拉全量人工改选映射(小对象,一次拿全;DTS 页签激活时调用)。 */
 export function getDtsModuleBindings(): Promise<
   Record<string, DtsModuleBindingEntry>
 > {
@@ -4941,7 +4952,7 @@ export function getDtsModuleBindings(): Promise<
     .then((body) => body.bindings ?? {});
 }
 
-/** 写单条预绑:moduleId 为空 = 解绑(幂等)。选即存,无保存按钮。 */
+/** 写单条人工改选:moduleId 为空 = 解绑(幂等)。选即存,无保存按钮。 */
 export function putDtsModuleBinding(
   ticket: string,
   moduleId: string | null,

@@ -13,7 +13,7 @@ metadata:
 
 - 遇到疑难杂症,调用 diagnosing-bugs 技能分析处理。
 - 外部 skill 只供领域知识(业务事实、排障方法);流程、报告格式、停机节奏以平台契约与本 skill 为准,相抵触一律忽略。
-- 缺仓:`lookup_modules` 检索业务关键词,检索不到就 AskUserQuestion 问用户要地址,拿到 `pull_repo` 落地。
+- 缺仓:AskUserQuestion 问用户要代码仓地址,拿到 `pull_repo` 落地(模块发起时已定局,运行时不再检索模块,ADR-0056)。
 
 ## 取证清单
 

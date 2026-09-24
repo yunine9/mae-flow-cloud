@@ -432,7 +432,7 @@ function IssueInterventionSetting({
       <div><h2 id="issue-intervention-title" className="m-0 text-[19px] tracking-[-0.025em] text-(--text-strong)">人工介入程度 · 问题处理</h2></div>
       <span className="rounded-full border border-(--accent)/20 bg-(--accent-soft) px-[9px] py-[5px] text-sm font-bold text-(--accent) max-[480px]:col-start-2 max-[480px]:justify-self-start">当前：{current.title}</span>
     </header>
-    <p className="my-3.5 text-sm text-(--muted)">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。</p>
+    <p className="my-3.5 text-sm text-(--muted)">一处设定，问题处理全程生效，与需求交付的档位互不影响。检视回合确认卡、流水线人工闸这些只有真人能答的卡不受档位影响，始终等你；切换只对之后的卡生效，已在等待的卡仍需你处理。需要个别单子用不同档位时，在 DTS 列表「介入档位」列按单特例（发起前选定，发起后定格，不再跟随这里）。</p>
     <div className="grid grid-cols-2 gap-[9px] max-[760px]:grid-cols-1" role="group" aria-label="人工介入程度 · 问题处理">
       {ISSUE_INTERVENTION_TIERS.map((item) => <button type="button" key={item.key}
         className={cn(approvalCard, current.key === item.key

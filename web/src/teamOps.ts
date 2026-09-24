@@ -319,8 +319,9 @@ export function issueDeliveryBreakdown(
   };
 }
 
-/** 特性(业务模块)归类键:module 空白归「未分类」。DTS 拉单时特性/
- * 模块名经 matchDtsToModule 折算进模块,这里只认落盘的 module 标签。 */
+/** 特性(业务模块)归类键:module 空白归「未分类」。DTS 发起即带
+ * 模块(特性名强匹配带出或人工改选,ADR-0056),这里只认落盘的
+ * module 标签。 */
 export function issueFeatureKey(issue: { module?: string }): string {
   return issue.module?.trim() || "未分类";
 }

@@ -42,7 +42,6 @@ import {
   MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
   issueRepoWorkspaces,
-  normalizeIssueRepos,
   raiseGate,
   recordTransition,
   ENV_SCOPE_LABELS,
@@ -346,8 +345,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       : String(state.stage);
 
   const gateStage = (tool: string): void => {
-    // 只读检索不需要等待历史圈选卡；它不改变阶段或替人作答。
-    if (tool === "lookup_modules" && scenario && stageAllowsTool(scenario, state.stage as FixedStage, tool)) return;
     // 存量 skill 圈选闸在场(ADR-0011 举起的历史卡;ADR-0014 起新卡
     // 永不举):先等用户答完再干活。守卫放在所有阶段门禁之前——闸
     // 举起后回执已叫 Agent 停回合,它若继续调平台工具,这里机械拦下。
@@ -391,44 +388,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     },
   }));
 
-  // ---- 业务模块库检索 ----
-  // 把"问题单 → 业务模块 → 代码仓"的映射交给 Agent 现场查证:模块库
-  // 是宿主数据目录里的显式发布实体,工具只读目录、只回 id/名称/仓清单,
-  // 永不携带任何凭据。
-
-  tools.push(defineTool({
-    name: "lookup_modules",
-    label: "Look Up Business Modules",
-    description:
-      "按关键词检索业务模块库(模块名称/ID/说明包含即命中,大小写不敏感),"
-      + "返回命中的模块 ID、名称与绑定的代码仓清单。用于把问题单映射到业务模块:"
-      + "先检索,命中后用 bind_module 绑定;检索不到就如实告知并"
-      + "用 AskUserQuestion 问用户。",
-    parameters: Type.Object({
-      keyword: Type.String({
-        description: "检索词:模块名称/ID/说明的子串(如「媒体」「pay」)",
-      }),
-    }),
-    async execute(_toolCallId: string, params: any) {
-      gateStage("lookup_modules");
-      const keyword = String(params.keyword ?? "").trim().toLowerCase();
-      if (!keyword) fail("keyword 不能为空:给一个模块名称/ID/说明的子串");
-      const { modules } = listBusinessModules(ctx.dataRoot);
-      const hits = modules.filter((module) =>
-        module.status === "active"
-        && (module.name.toLowerCase().includes(keyword)
-          || module.id.toLowerCase().includes(keyword)
-          || module.description.toLowerCase().includes(keyword)));
-      if (!hits.length) return ok("无匹配业务模块");
-      const lines = hits.map((module) => `- ${module.name}(id: ${module.id});`
-        + `代码仓 ${module.repositories.length} 个${module.repositories.length
-          ? `:\n    ${module.repositories.join("\n    ")}`
-          : "(该模块未绑定代码仓)"}`);
-      return ok(`命中 ${hits.length} 个业务模块:\n${lines.join("\n")}`
-        + "\n\n要绑定其中某个模块请调用 bind_module(带模块 id)。");
-    },
-  }));
-
   // ---- 拉仓(2026-08-28 拍板:克隆是 Agent 的显式工具动作) ----
 
   tools.push(defineTool({
@@ -439,7 +398,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带创建修复分支 "
       + "master_<工号>_<单号>;基线分支在远端不存在时拉仓整次失败,如实"
       + "向用户报告,不要在别的分支上继续。"
-      + "发现缺仓就调它:lookup_modules 带出的仓、用户给的地址都经它落地。"
+      + "发现缺仓就调它:登记清单里的仓、用户给的地址都经它落地。"
       + "命中公共组件仓目录(组件仓库表)的地址落成参考仓——只读参考件,"
       + "可研读,不可修改、不可交付(ADR-0054)。",
     parameters: Type.Object({
@@ -862,19 +821,12 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       ctx.persist();
       // 首查不再机械推进:回执提醒"读完单据 complete_stage 收口"(出口
       // 条文在注册表,阶段转移时 complete.stage_closed 会带下一阶段简报)。
-      // 单据自带的业务关键词(特性/模块)附在前面,帮 lookup_modules 精准匹配。
-      const moduleHint = detail.featureName || detail.moduleName
-        ? "\n\n" + promptCopy("receipts", "dts.module_hint", {
-          feature: detail.featureName ?? "无",
-          module: detail.moduleName ?? "无",
-        })
-        : "";
       const briefing = scenario && state.stage === "dts_info"
         ? "\n\n" + promptCopy("receipts", "dts.briefing") + "\n"
         : "";
       return ok(`问题单 ${detail.ticket} 详情:\n${contentText}`
         + (imageNote ? `\n\n${imageNote}` : "")
-        + `${moduleHint}${briefing}`);
+        + `${briefing}`);
     },
   }));
 
@@ -1076,73 +1028,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
   // ---- 以下工具绑场景注册表(无场景的存量现场不注册) ----
 
   if (scenario) {
-    // 绑定业务模块(拉取代码仓阶段的 AI 识别路):只记账不克隆——
-    // 克隆是 pull_repo 的活(2026-08-28 拍板:AI 对拉仓效果保持认知)。
-    tools.push(defineTool({
-      name: "bind_module",
-      label: "Bind Business Module",
-      description:
-        "把会话绑定到业务模块,并按模块绑定的代码仓清单补齐本会话的登记"
-        + "(与已登记仓合并去重,不克隆)。先 lookup_modules 检索再调用;"
-        + "绑定后请对模块带出的每个仓逐个调 pull_repo 拉取。重复调用=改绑"
-        + "(更新模块标签);模块没绑代码仓会失败,此时用 AskUserQuestion"
-        + "向用户要代码仓地址。",
-      parameters: Type.Object({
-        module_id: Type.String({
-          description: "业务模块 ID(lookup_modules 返回的 id)",
-        }),
-      }),
-      async execute(_toolCallId: string, params: any) {
-        gateStage("bind_module");
-        // 人工预绑锁(spec #57):模块是人在发起时显式选定的,绑定权
-        // 在人——AI 不得改绑,发现不符只能 AskUserQuestion 报告给人。
-        if (state.module_locked) {
-          fail(promptCopy("receipts", "bind.locked"));
-        }
-        const moduleId = String(params.module_id ?? "").trim();
-        if (!moduleId) fail("module_id 不能为空:先 lookup_modules 检索拿到模块 id");
-        let module;
-        try {
-          module = readBusinessModule(ctx.dataRoot, moduleId);
-        } catch (error) {
-          fail(promptCopy("receipts", "bind.module_unreadable", {
-            module_id: moduleId,
-            reason: error instanceof Error ? error.message : String(error),
-          }));
-        }
-        if (module.status !== "active") {
-          fail(`业务模块「${module.name}」已归档,不能绑定`);
-        }
-        if (!module.repositories.length) {
-          fail(promptCopy("receipts", "bind.module_no_repo",
-            { module: module.name }));
-        }
-        // 模块仓与已登记仓合并去重(已在场的仓不动),与登记同一把尺;
-        // 超上限整次打回,不留半绑定状态。
-        const merged = normalizeIssueRepos(undefined,
-          [...(state.repo_urls ?? []), ...module.repositories]);
-        const rebind = state.module_id === module.id;
-        const fresh = merged.filter((url) =>
-          !(state.repo_urls ?? []).includes(url));
-        state.module_id = module.id;
-        state.module = module.name;
-        state.repo_url = merged[0];
-        state.repo_urls = merged;
-        recordTransition(state, {
-          source: "platform",
-          note: rebind
-            ? `业务模块改绑为「${module.name}」(代码仓 ${merged.length} 个)`
-            : `已绑定业务模块「${module.name}」(代码仓 ${merged.length} 个)`,
-        });
-        ctx.persist();
-        return ok(`已绑定业务模块「${module.name}」,会话登记代码仓 ${merged.length} 个`
-          + (fresh.length
-            ? `——新登记 ${fresh.length} 个,请逐个调用 pull_repo 拉取:\n`
-              + fresh.map((url) => `  pull_repo(url: "${url}")`).join("\n")
-            : "(全部已在会话里)"));
-      },
-    }));
-
     // 提交分析报告:人工闸的入口(有单=报告确认;无单=结论确认)
     tools.push(defineTool({
       name: "submit_analysis",

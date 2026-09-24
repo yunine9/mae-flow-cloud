@@ -1,10 +1,9 @@
 /**
- * DTS 单号→模块人工预绑(spec #57,T1 后端纵切):
+ * DTS 单号→模块绑定与强匹配带出(ADR-0056):
  * - 绑定存储:写读往返/持久化/解绑幂等/last-write-wins 留痕/校验打回
- * - 路由:GET 全量、PUT 单条(绑定与解绑),人工 module_id 发起烙印锁
- * - 锁死语义:预绑会话里 bind_module 被拒(回执经模型请求可见);
- *   无预绑会话 AI 绑模块维持现状
- * - 开场词渲染锁定语义(经模型请求断言,提示词与工具双保险)
+ * - 路由:GET 全量、PUT 单条(绑定与解绑),DTS 发起必带模块(闸 400)
+ * - 强匹配带出:特性名 trim 后与模块名完全相等且唯一才随列表带 module_id
+ * - 模块识别工具退役:bind_module/lookup_modules 不再注册,锁语义退场
  */
 
 import { test } from "node:test";
@@ -22,6 +21,7 @@ import {
   createBusinessModule,
   updateBusinessModule,
 } from "../src/businessModuleLibrary.ts";
+import { saveProductVersion } from "../src/configurationCenter.ts";
 import {
   createIssueTools,
   type IssueToolContext,
@@ -70,6 +70,7 @@ async function makeModelService(dataDir: string, script: Scene[]): Promise<{
 function issueGet(
   parts: string[],
   service: IssueFlowService,
+  extra: Record<string, unknown> = {},
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
     let status = 0;
@@ -85,7 +86,7 @@ function issueGet(
       } as any,
       parts,
       { issueFlow: service, authEnabled: false,
-        viewer: { username: "alice", role: "developer" } },
+        viewer: { username: "alice", role: "developer" }, ...extra },
     ).catch(reject);
   });
 }
@@ -95,6 +96,7 @@ function issuePut(
   parts: string[],
   payload: unknown,
   service: IssueFlowService,
+  extra: Record<string, unknown> = {},
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
     const request = new EventEmitter() as any;
@@ -112,7 +114,7 @@ function issuePut(
       } as any,
       parts,
       { issueFlow: service, authEnabled: false,
-        viewer: { username: "alice", role: "developer" } },
+        viewer: { username: "alice", role: "developer" }, ...extra },
     ).catch(reject);
     request.emit("data", Buffer.from(JSON.stringify(payload)));
     request.emit("end");
@@ -124,6 +126,7 @@ function issuePost(
   parts: string[],
   payload: unknown,
   service: IssueFlowService,
+  extra: Record<string, unknown> = {},
 ): Promise<{ status: number; body: Record<string, any> }> {
   return new Promise((resolve, reject) => {
     const request = new EventEmitter() as any;
@@ -141,7 +144,7 @@ function issuePost(
       } as any,
       parts,
       { issueFlow: service, authEnabled: false,
-        viewer: { username: "alice", role: "developer" } },
+        viewer: { username: "alice", role: "developer" }, ...extra },
     ).catch(reject);
     request.emit("data", Buffer.from(JSON.stringify(payload)));
     request.emit("end");
@@ -272,16 +275,25 @@ test("绑定路由:PUT 绑定/解绑、GET 全量;域校验打回 409", async ()
   }
 });
 
-test("人工预绑发起:落盘含模块/仓/锁定烙印;开场词锁定语义到达模型", async () => {
+test("DTS 发起带模块:模块与仓开场即定局,预绑锁语义退役(ADR-0056)", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-bind-lock-"));
   const origin = bareOrigin(dataDir);
   createBusinessModule(dataDir, {
     id: "pay-core", name: "支付核心", description: "收单与清结算",
     owner: "dev", repositories: [origin],
   }, "tester");
+  // 分支闸(ADR-0038)需要的版本映射:详情假网关给版本号,配置中心
+  // 给包含它的映射行。
+  saveProductVersion(dataDir, { version: "V100R025C10", branch: "master" });
+  const fakeDts = {
+    listByOwner: async () => [],
+    detail: async (ticket: string) => ({
+      ticket, version: "V100R025C10SPC010B009",
+    }),
+  };
   // 最小剧本:开场后一句收口,回合自然落地。
   const script: Scene[] = [
-    { text: "收到,模块已预绑,直接开始研究。" },
+    { text: "收到,模块已在发起时定局,直接开始研究。" },
   ];
   const { model, service } = await makeModelService(dataDir, script);
   try {
@@ -291,32 +303,53 @@ test("人工预绑发起:落盘含模块/仓/锁定烙印;开场词锁定语义�
       source: "dts",
       ticket: "DTS20260901010",
       module_id: "pay-core",
-    }, service);
+    }, service, { dts: fakeDts });
     assert.equal(created.status, 201);
 
     await until(() => {
       const issue = service.get(created.body.id);
       if (issue.status === "failed") throw new Error(issue.error ?? "failed");
       return issue.status === "idle" ? issue : undefined;
-    }, "预绑会话首轮收口");
+    }, "带模块会话首轮收口");
 
     const state = loadState(join(dataDir, "issues", created.body.id));
-    assert.equal(state?.module_id, "pay-core", "预绑模块落盘");
-    assert.equal(state?.module_locked, true, "人工预绑必须烙印锁定");
+    assert.equal(state?.module_id, "pay-core", "模块落盘");
+    assert.equal(state?.module, "支付核心", "模块名由模块库派生");
     assert.deepEqual(state?.repo_urls, [origin], "仓来自模块绑定");
+    assert.ok(!("module_locked" in (state ?? {})), "锁标志已退役");
 
-    // 锁定语义经开场词到达模型(提示词保险;硬闸在工具直调里测)。
+    // 锁定语义不再出现在模型请求里(bind_module 已随识别路退役)。
     const requestText = JSON.stringify(model.requests);
-    assert.match(requestText, /人工在发起时预绑并锁定/);
-    assert.match(requestText, /不要调用 bind_module/);
+    assert.doesNotMatch(requestText, /bind_module/);
+    assert.doesNotMatch(requestText, /预绑并锁定/);
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
 });
 
-test("工具级锁:锁定会话 bind_module 被拒;未锁会话可绑可改绑(现状不变)", async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-bind-tool-"));
+test("DTS 发起缺模块:闸 400 打回,指路列表列选择(ADR-0056)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-module-gate-"));
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const rejected = await issuePost(["issues"], {
+      account: "dev",
+      title: "t",
+      source: "dts",
+      ticket: "DTS20260901011",
+    }, service);
+    assert.equal(rejected.status, 400);
+    assert.match(String(rejected.body.error), /未匹配到业务模块/);
+    assert.match(String(rejected.body.error), /所属模块/);
+  } finally {
+    void service.shutdown().catch(() => undefined);
+  }
+});
+
+test("列表强匹配带出:特性名 trim 后与模块名完全相等且唯一才带 module_id", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-module-match-"));
   const origin = bareOrigin(dataDir);
   createBusinessModule(dataDir, {
     id: "pay-core", name: "支付核心", description: "收单与清结算",
@@ -326,8 +359,50 @@ test("工具级锁:锁定会话 bind_module 被拒;未锁会话可绑可改绑(�
     id: "msg-gate", name: "消息网关", description: "消息路由与限流",
     owner: "dev", repositories: [origin],
   }, "tester");
+  // 重名模块:命中歧义,按未匹配处理。
+  createBusinessModule(dataDir, {
+    id: "dup-a", name: "重复模块", description: "d", owner: "dev",
+    repositories: [origin],
+  }, "tester");
+  createBusinessModule(dataDir, {
+    id: "dup-b", name: "重复模块", description: "d", owner: "dev",
+    repositories: [origin],
+  }, "tester");
+  const brief = (ticket: string, featureName?: string) => ({
+    ticket, title: ticket,
+    ...(featureName !== undefined ? { featureName } : {}),
+  });
+  const fakeDts = {
+    listByOwner: async () => [
+      brief("DTS-A", " 支付核心 "), // 前后空格 trim 后相等 → 命中
+      brief("DTS-B", "不存在的模块"), // 零命中
+      brief("DTS-C", "重复模块"),   // 多命中歧义
+      brief("DTS-D"),               // 单据无特性名
+    ],
+    detail: async (ticket: string) => ({ ticket }),
+  };
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const listed = await issueGet(["issues", "dts"], service, { dts: fakeDts });
+    assert.equal(listed.status, 200);
+    const byTicket = new Map<string, string | undefined>(
+      (listed.body.tickets as Array<{ ticket: string; module_id?: string }>)
+        .map((row) => [row.ticket, row.module_id]));
+    assert.equal(byTicket.get("DTS-A"), "pay-core", "trim 相等即命中");
+    assert.equal(byTicket.get("DTS-B"), undefined, "零命中不带字段");
+    assert.equal(byTicket.get("DTS-C"), undefined, "重名歧义按未匹配");
+    assert.equal(byTicket.get("DTS-D"), undefined, "无特性名不带字段");
+  } finally {
+    void service.shutdown().catch(() => undefined);
+  }
+});
+
+test("模块识别工具退役:bind_module/lookup_modules 不再注册(ADR-0056)", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-tools-retired-"));
   const now = new Date().toISOString();
-  const base: IssueSessionState = {
+  const state: IssueSessionState = {
     id: "issue-x", account: "dev",
     created_at: now, updated_at: now,
     title: "t", description: "", source: "dts", ticket: "DTS20260901013",
@@ -336,86 +411,14 @@ test("工具级锁:锁定会话 bind_module 被拒;未锁会话可绑可改绑(�
     status: "idle" as const, stage: "prep_repo" as const,
     stage_note: "", stage_at: now,
   };
-  const textOf = (result: unknown) =>
-    (result as { content: Array<{ text: string }> }).content[0].text;
-
-  // 锁定:改绑被拒,状态原地不动,回执指路 AskUserQuestion。
-  const locked: IssueSessionState = {
-    ...base,
-    module_id: "pay-core", module: "支付核心", module_locked: true,
-    repo_url: origin, repo_urls: [origin],
-  };
-  const lockedCtx: IssueToolContext = {
-    state: locked, workspace: "/tmp/ws", dataRoot: dataDir,
+  const ctx: IssueToolContext = {
+    state, workspace: "/tmp/ws", dataRoot: dataDir,
     persist: () => undefined,
     pullRepo: async () => ({ dir: "repo/origin", cloned: true,
       head: "a".repeat(12) }),
   };
-  const lockedBind = (createIssueTools(lockedCtx) as Array<{
-    name: string;
-    execute: (id: string, params: any) => Promise<unknown>;
-  }>).find((tool) => tool.name === "bind_module");
-  assert.ok(lockedBind, "应注册 bind_module");
-  await assert.rejects(
-    () => lockedBind.execute("x", { module_id: "msg-gate" }),
-    /人工预绑锁定,不能调用 bind_module 改绑/);
-  assert.match(await lockedBind.execute("x", { module_id: "msg-gate" })
-    .then(() => "").catch((error: Error) => error.message),
-    /AskUserQuestion/, "回执必须指路人工通道");
-  assert.equal(locked.module_id, "pay-core", "改绑尝试不生效");
-  assert.deepEqual(locked.repo_urls, [origin], "仓清单不被改绑尝试污染");
-
-  // 对照:未锁会话(无预绑)AI 自己绑与改绑维持现状。
-  const unlocked: IssueSessionState = { ...base };
-  const unlockedCtx: IssueToolContext = {
-    state: unlocked, workspace: "/tmp/ws", dataRoot: dataDir,
-    persist: () => undefined,
-    pullRepo: async () => ({ dir: "repo/origin", cloned: true,
-      head: "a".repeat(12) }),
-  };
-  const unlockedTools = createIssueTools(unlockedCtx) as Array<{
-    name: string;
-    execute: (id: string, params: any) => Promise<unknown>;
-  }>;
-  const unlockedBind = unlockedTools.find((tool) => tool.name === "bind_module");
-  assert.ok(unlockedBind);
-  const receipt = textOf(await unlockedBind.execute(
-    "x", { module_id: "msg-gate" }));
-  assert.match(receipt, /已绑定业务模块「消息网关」/);
-  assert.equal(unlocked.module_id, "msg-gate");
-  assert.equal(unlocked.module_locked, undefined, "AI 自绑不锁");
-  await unlockedBind.execute("x", { module_id: "msg-gate" });
-  assert.ok((unlocked.transitions ?? []).some((entry) =>
-    /改绑为「消息网关」/.test(entry.note)),
-    "未锁会话可改绑(现状不变),改绑入账");
-  assert.equal(unlocked.module_id, "msg-gate");
-});
-
-test("服务端自动匹配(matchDtsToModule 路径)不带锁:机器猜测不等于人工预绑", () => {
-  const dataDir = mkdtempSync(join(tmpdir(), "mfc-dts-bind-auto-"));
-  const origin = bareOrigin(dataDir);
-  createBusinessModule(dataDir, {
-    id: "pay-core", name: "支付核心", description: "收单与清结算",
-    owner: "dev", repositories: [origin],
-  }, "tester");
-  const service = new IssueFlowService({
-    dataDir, provider: "p", model: "m", modelsJson: {},
-  });
-  try {
-    // 直接走服务层:路由里 autoModuleId 传 moduleId 但不带 moduleLocked。
-    const created = service.create({
-      account: "dev", title: "t", source: "dts",
-      ticket: "DTS20260901012", moduleId: "pay-core",
-    });
-    const state = loadState(join(dataDir, "issues", created.id));
-    assert.equal(state?.module_id, "pay-core");
-    assert.equal(state?.module_locked, undefined,
-      "自动匹配是机器猜测,不得烙印人工预绑锁");
-    assert.equal(created.module, "支付核心");
-  } finally {
-    // 回合会因假 provider 失败,不影响登记字段落盘断言。
-    void service.shutdown().catch(() => undefined);
-  }
-  assert.ok(readFileSync(
-    join(dataDir, "issues", "issue-1", "issue.json"), "utf-8"));
+  const names = (createIssueTools(ctx) as Array<{ name: string }>)
+    .map((tool) => tool.name);
+  assert.ok(!names.includes("bind_module"), "bind_module 已退役");
+  assert.ok(!names.includes("lookup_modules"), "lookup_modules 已退役");
 });

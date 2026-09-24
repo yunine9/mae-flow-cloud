@@ -21,10 +21,6 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 
 遗留警报: 远端已存在同名修复分支 {{branch}}@{{remote}},与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留,普通推送会被拒(非快进)。后续 push_branch 首次即带 force=true 覆盖即可(租赁式核对远端旧 tip;该分支已有 MR 时覆盖后原 MR 随之更新,不要重复创建),不必请用户去平台删远端分支。
 
-## dts.module_hint
-
-业务信息:特性={{feature}},模块={{module}}——请用这些关键词调 lookup_modules 检索业务模块
-
 ## dts.briefing
 
 单据详情已获取——通读单据后调 complete_stage 申报完成(材料到位不会自动推进)。
@@ -111,18 +107,6 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 ## mr.receipt.fixed
 
 平台已启动流水线监看:请结束本回合,等待流水线结果(红了平台会带回失败项让你修)。
-
-## bind.locked
-
-该会话的业务模块由人工预绑锁定,不能调用 bind_module 改绑。如你判断模块与单据明显不符,请用 AskUserQuestion 告知用户,由人在 DTS 列表改绑或提供代码仓地址;当前直接对已登记仓逐个 pull_repo 即可
-
-## bind.module_unreadable
-
-业务模块 {{module_id}} 不存在或元数据不可读:{{reason}}。请用 lookup_modules 重新检索,或用 AskUserQuestion 问用户
-
-## bind.module_no_repo
-
-业务模块「{{module}}」没有绑定代码仓——请用 AskUserQuestion 向用户要代码仓地址
 
 ## analysis.no_report
 

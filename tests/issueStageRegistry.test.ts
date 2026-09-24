@@ -105,22 +105,17 @@ test("阶段注册表:门禁矩阵在注册表层面钉死(工读全程,出口�
   // 两个举卡阶段(分析/无单结论)卡工具即出口,不含它。
   assert.deepEqual(stagesAllowingTool("ticket", "complete_stage"),
     ["dts_info", "prep_repo", "fix", "mr_green"]);
-  assert.deepEqual(stagesAllowingTool("ticket", "lookup_modules"), [...STAGE_ROUTES.ticket]);
-  // 自 prep_repo 起常开:拉仓与改绑,越往后越不收回。
-  const fromPrep = FIXED_TICKET_STAGES.filter((stage) => stage !== "dts_info");
   assert.deepEqual(stagesAllowingTool("ticket", "pull_repo"), [...STAGE_ROUTES.ticket]);
-  assert.deepEqual(stagesAllowingTool("ticket", "bind_module"), fromPrep);
   // 交付类独占:推送只在「提交 MR·跑绿」开放,修复阶段机械拒。
   assert.deepEqual(stagesAllowingTool("ticket", "push_branch"), ["mr_green"]);
   assert.equal(stageAllowsTool("ticket", "fix", "push_branch"), false);
   assert.equal(stageAllowsTool("ticket", "fix", "create_mr"), false);
   assert.equal(stageAllowsTool("ticket", "mr_green", "push_branch"), true);
   assert.equal(stageAllowsTool("ticket", "mr_green", "create_mr"), true);
-  // 无单 conclude:提交与跳过不再开放,拉仓/改绑/工读仍在。
+  // 无单 conclude:提交与跳过不再开放,拉仓/工读仍在。
   assert.equal(stageAllowsTool("no_ticket", "conclude", "submit_analysis"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "complete_stage"), false);
   assert.equal(stageAllowsTool("no_ticket", "conclude", "pull_repo"), true);
-  assert.equal(stageAllowsTool("no_ticket", "conclude", "bind_module"), true);
   // 无单场景不交付代码:路线不含 mr_green,推送/建 MR 无处开放。
   assert.deepEqual(stagesAllowingTool("no_ticket", "push_branch"), []);
   assert.deepEqual(stagesAllowingTool("no_ticket", "create_mr"), []);
