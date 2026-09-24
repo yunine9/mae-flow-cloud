@@ -359,16 +359,10 @@ const WRITE_ROUTES: Array<{
     denied: "只有归属人能绑定单号",
   },
   {
-    what: "关联单号转正", method: "POST",
-    parts: ["issues", LIVE, "associate"],
-    payload: { ticket: "DTS-2026-1" },
-    denied: "只有归属人能关联单号转正",
-  },
-  {
     what: "归档/取消/重跑", method: "POST",
     parts: ["issues", LIVE, "control"],
     payload: { action: "cancel" },
-    denied: "只有归属人能重跑、取消或归档会话",
+    denied: "只有归属人能重跑或取消会话",
   },
 ];
 
@@ -459,6 +453,11 @@ test("源码契约:/issues/:id 下每条写路由分支都自带 own() 归属闸
     }));
   const writeBranches = marks
     .filter((mark) => mark.method !== "GET")
+    // 410 墓碑(关联转正退役,ADR-0048)不是活写路由:对所有人同答
+    // 410,不承载归属写语义,不进归属闸盘点。
+    .filter((mark) => !tail.slice(mark.start,
+      marks.find((other) => other.start > mark.start)?.start ?? tail.length)
+      .includes("410"))
     .map((mark) => ({
       ...mark,
       body: tail.slice(

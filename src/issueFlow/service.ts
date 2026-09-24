@@ -104,7 +104,6 @@ import {
   type FixedStage,
   type IssueBusinessKnowledge,
   type IssueBusinessKnowledgeEntry,
-  type IssueConclusionKind,
   type IssueEnvironmentConfig,
   type IssueGate,
   type IssueGateScope,
@@ -2038,7 +2037,7 @@ export class IssueFlowService {
     }
     if (state.status === "suspended") {
       throw new IssueControlError(
-        "会话已挂起(等关联单号转正),不能补配环境——先归档或完成转正");
+        "会话已挂起(存量),不能补配环境——挂起存量只能取消收口");
     }
     const { resolved, sourceIp } = this.resolveEnvironmentInput(input);
     if (options?.saveToRegistry) {
@@ -4374,10 +4373,9 @@ export class IssueFlowService {
       };
       state.status = "archived";
       saveState(live.root, state);
-      this.freezeMetricsSnapshot(live);
       this.releaseDriver(live);
       this.stopContainerInBackground(live, isIssue ? "问题归档" : "非问题归档");
-      this.vault.remove(live.id);
+      this.finishTerminalHygiene(live);
       this.log(`[issue-flow] ${live.id} 结论${isIssue ? "是问题(提单模板已出)" : "非问题"},已闭环归档`);
       return summarize(state);
     }
@@ -4717,7 +4715,7 @@ export class IssueFlowService {
       throw new IssueControlError("先作答当前问题卡再接管");
     }
     if (state.status === "suspended") {
-      throw new IssueControlError("挂起会话先关联单号转正");
+      throw new IssueControlError("存量挂起会话只能取消收口");
     }
     const previous = state.status;
     const wasRunning = previous === "running";
@@ -5056,9 +5054,7 @@ export class IssueFlowService {
   }
 
   async control(id: string, input: {
-    action: "cancel" | "archive" | "revive";
-    kind?: IssueConclusionKind;
-    summary?: string;
+    action: "cancel" | "revive";
     /** 异常重跑(ADR-0055)可附的操作者说明,随恢复回合必达送达 AI。 */
     note?: string;
   }): Promise<IssueSummary> {
@@ -5068,42 +5064,15 @@ export class IssueFlowService {
       && live.state.status !== "failed") {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
     }
-    if (live.state.status === "failed" && input.action !== "cancel") {
-      // failed 曾是"死胡同终态":不能续聊、不能归档,出错的会话永远
-      // 占着列表(2026-09-02 用户实锤难受)。出口有二(ADR-0055):取消
-      // =放弃这单;异常重跑=操作者确认异常已排除后原地复活——归档
-      // 仍然不行,结论词表里没有"失败"语义,强归档只能落到"非问题",
-      // 那是撒谎。错误信息与账目两条出口都保留。
-      throw new IssueControlError(
-        "已失败的会话没有结论可归档,只能取消清理或异常重跑");
-    }
-    if (this.turning.has(live.id) && input.action !== "cancel") {
-      throw new IssueControlError("会话正在运行；如需立即停止，请先取消会话");
-    }
-    if (input.action === "archive") {
-      // 归档门禁(ADR-0034):有单会话的交付出口只有「全部 MR 合入
-      // 自动归档」,手动归档退役——它防不了错,还让任务终态含糊
-      // (没合入也能归掉)。无单会话给出结论前同样不归:结论只可能
-      // 来自 conclude 卡,挂起待转正是唯一可手动归档的无单现场。
-      const ticketed = Boolean(live.state.ticket?.trim())
-        || live.state.scenario === "ticket";
-      if (ticketed) {
-        throw new IssueControlError(
-          "有单会话不再手动归档：全部 MR 合入后自动归档收口"
-            + "（ADR-0034）；要放弃这单请取消会话");
-      }
-      if (live.state.status !== "suspended") {
-        throw new IssueControlError(
-          "无单会话给出结论（是问题挂起/非问题闭环）前不能归档"
-            + "；要放弃请取消会话");
-      }
-    }
+    // 取消是运行中会话的即时停止出口(turning 不挡),也是 failed 的
+    // 出口之一(另一出口异常重跑,ADR-0055,自行守卫)——到这里动作
+    // 只剩取消,无需再设状态闸。
     // 先停净再写终态。过去先清 live.container、异步 stop，接口已经回了
     // “取消成功”但 Docker 仍在；失败后也没有句柄可重试。
     const previousStatus = live.state.status;
     live.controlEpoch += 1;
     delete live.state.takeover; // 接管中收口:人工驾驶标记不残留进终态
-    // 验证未答就归档/取消:闸随终态清面——"没答"本身是有效选择,
+    // 验证未答就取消:闸随终态清面——"没答"本身是有效选择,
     // 终态不再挂待办(2026-09-10 A 方案拍板的"不锁死"半边)。
     delete live.state.gate;
     try {
@@ -5115,40 +5084,18 @@ export class IssueFlowService {
       if (errors.length) throw new AggregateError(errors, "会话或容器未能停止");
       this.releaseDriver(live);
     } catch (error) {
-      if (input.action === "cancel" && previousStatus === "running") {
+      if (previousStatus === "running") {
         live.state.status = "idle";
         live.state.error = `取消时容器回收失败：${String(error)}`;
         saveState(live.root, live.state);
       }
       throw new IssueControlError(
-        `容器未能确认回收，${input.action === "cancel" ? "取消" : "归档"}`
-          + `尚未完成，请重试：${String(error)}`);
+        `容器未能确认回收，取消尚未完成，请重试：${String(error)}`);
     }
-    const now = new Date().toISOString();
-    if (input.action === "cancel") {
-      live.state.status = "canceled";
-    } else {
-      // 结论词表收敛后只有三档(ADR-0037):修复完成即 delivered
-      // (合入与否看 mrs 账,归档瞬间不再复核合入——那道竞态核对
-      // 只为 delivered/fixed 细分服务,细分没了,核对一并退役);
-      // 挂起会话=问题成立;其余按非问题收口。
-      const kind = input.kind
-        ?? (live.state.status === "suspended" ? "issue"
-          : live.state.mrs?.length || live.state.pushes?.length
-            ? "delivered" : "non_issue");
-      live.state.conclusion = {
-        kind,
-        summary: input.summary?.trim() || live.state.last_reply
-          || live.state.stage_note || "(无补充说明)",
-        at: now,
-      };
-      live.state.status = "archived";
-      // 阶段账留在场景路线自己的词表里(进度条按 scenario 对齐)。
-      fixedComplete(live.state, "会话已归档收口(用户操作)");
-    }
+    live.state.status = "canceled";
     saveState(live.root, live.state);
     // 收口清面(体检 C-H6):闸与未决 Agent 卡不随终态残留——不然
-    // 已取消/归档的会话还投影着一张永远答不了的卡。平台闸直接删;
+    // 已取消的会话还投影着一张永远答不了的卡。平台闸直接删;
     // Agent 卡逐条 supersede(作废留痕,decision 空串=无人答过)。
     if (live.state.gate) {
       delete live.state.gate;
@@ -5158,21 +5105,15 @@ export class IssueFlowService {
       try {
         live.humanGate.supersede(record.waiting_id, {
           stateVersion: record.state_version,
-          notes: `会话已${input.action === "cancel" ? "取消" : "归档"},待办作废`,
+          notes: "会话已取消,待办作废",
         });
       } catch (error) {
         this.log(`[issue-flow] ${id} 终态作废待办 ${record.waiting_id} 失败: `
           + String(error instanceof Error ? error.message : error));
       }
     }
-    // 终态快照(ADR-0042):待办作废账落定之后、现场回收之前冻结。
-    this.freezeMetricsSnapshot(live);
-    this.vault.remove(live.id);
-    this.log(`[issue-flow] ${id} ${input.action === "cancel" ? "取消" : "归档"}`);
-    // 首次生成归属(ADR-0044):归档响应不等计算——伴生统计挂后台通道,
-    // 现场回收为它让路(任务收尾后再删);不入队(伴生已在/不支持期/
-    // 无仓)则照旧当场后台回收。崩溃缺口由每日清扫器兜底。
-    this.reclaimAfterCodeOrigin(live);
+    this.finishTerminalHygiene(live);
+    this.log(`[issue-flow] ${id} 取消`);
     return summarize(live.state);
   }
 
@@ -5236,6 +5177,22 @@ export class IssueFlowService {
    *  (不可续聊,过程记录全保留),后台回收——不阻塞响应(删 GB 级
    *  node_modules 可能要数秒)。首次生成归属(ADR-0044)入队时,回收
    *  挂在通道任务收尾之后(统计窗口与磁盘治理两全);旋钮关=不删。 */
+  /** 终态卫生尾巴:凡写 archived/canceled 终态的路径,收尾必须走到
+   *  这里——冻结终态快照(ADR-0042,待办作废账落定后)→清理环境凭据
+   *  →入队首次生成归属并在算完后回收现场(ADR-0044:响应不等计算,
+   *  伴生统计挂后台通道,现场回收为它让路;不入队(伴生已在/不支持
+   *  期/无仓)则当场后台回收;崩溃缺口由每日清扫器兜底)。三处调用:
+   *  取消、结论闸闭环归档、交付自动归档。漏一处的代价(#434 实证):
+   *  单子顶着「待算」等下一轮清扫(最长 24h),凭据等重启对账才清。
+   *  停容器同步/异步、通知、提单模板由触发场景决定,留在各路径。 */
+  private finishTerminalHygiene(
+    live: Pick<LiveIssue, "root" | "id" | "state">,
+  ): void {
+    this.freezeMetricsSnapshot(live);
+    this.vault.remove(live.id);
+    this.reclaimAfterCodeOrigin(live);
+  }
+
   private reclaimAfterCodeOrigin(
     live: Pick<LiveIssue, "root" | "id" | "state">,
   ): void {
@@ -5882,10 +5839,9 @@ export class IssueFlowService {
           + String(error instanceof Error ? error.message : error));
       }
     }
-    // 终态快照(ADR-0042):待办作废账落定之后、现场回收之前冻结。
-    this.freezeMetricsSnapshot(live);
     this.releaseDriver(live);
     this.stopContainerInBackground(live, "交付完成自动归档");
+    this.finishTerminalHygiene(live);
     this.notifyMergeFact(live,
       `全部 MR 已合入(${mrs.length} 个)——已自动归档收口,交付完成`);
     this.log(`[issue-flow] ${live.id} 全部 MR 合入,自动归档收口`);
@@ -5903,7 +5859,11 @@ export class IssueFlowService {
     }).catch(() => undefined);
   }
 
-  /** 归档对话框的合入事实快照(现扫现答,与归档核对同一兜底)。 */
+  /** 合入事实单次现扫(ADR-0022):逐仓问一遍平台并记账,返回快照
+   *  投影。生产的持续同步由合入监看循环承担(阶段到 mr_green 才启动),
+   *  这里是不等监看的单次入口——监看未启动的窗口(如检查目标未收口)
+   *  要把合入事实落账,测试与诊断也走这一扫。HTTP 端点随归档对话框
+   *  退役(ADR-0057),不再单独过线。 */
   async mergeStatus(id: string): Promise<{
     mrs: Array<{ repo: string; url?: string;
       state: "merged" | "closed" | "opened"; merged_sha?: string }>;
@@ -6749,9 +6709,9 @@ export class IssueFlowService {
 
   /** mr_green 收口(2026-09-02 拍板,ADR-0013:流程终点=流水线全绿,
    * 换库验证封存):当前阶段 fixedComplete、用户小鲁班通知、等归属人
-   * 手动归档。归档前用户续聊即重开本阶段返工(见 reply 的收口重开),
-   * AI 修完重推再申报,可多轮。状态保持 idle——收口是"等人拍板归档",
-   * 不是终态。 */
+   * 合入即自动归档(ADR-0034,归档收尾走终态卫生尾巴)。合入前用户
+   * 续聊即重开本阶段返工(见 reply 的收口重开),AI 修完重推再申报,
+   * 可多轮。状态保持 idle——收口是"等合入事实",不是终态。 */
   private closeMrGreen(live: LiveIssue, note: string): void {
     fixedComplete(live.state, note);
     // 收口即启动合入事实监看(ADR-0022):两条收口路都汇到这里,

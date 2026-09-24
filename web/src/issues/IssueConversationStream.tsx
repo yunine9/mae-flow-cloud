@@ -38,7 +38,7 @@
  *
  * 存量挂起说明卡(ADR-0048):挂起会话由会话视图组装存量说明卡
  * 经 suspendedCard 槽下传,渲染在「与 Agent 协作」头之下、流之上
- * ——协作流区顶部,不随流滚动;转正已退役,存量走手动归档收口。
+ * ——协作流区顶部,不随流滚动;转正与手动归档均已退役,存量只能终止收口。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -693,7 +693,7 @@ function IssueCollaborationComposer({
       }
     : status === "suspended" ? {
         kind: "blocked", title: "会话挂起中(存量)",
-        hint: "转正已退役:请在会话操作里手动归档收口。",
+        hint: "转正已退役:存量挂起只能终止会话收口。",
       }
     : ended ? {
         kind: "blocked", title: "会话已结束",

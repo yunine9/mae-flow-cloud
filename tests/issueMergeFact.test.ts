@@ -10,10 +10,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
+import { ISSUE_CODE_ORIGIN_FILE } from "../src/issueFlow/codeOrigin.ts";
 import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { FakeLubanServer, Notifier } from "../src/notifier.ts";
 import { mfcTemp } from "./mfcTmp.ts";
@@ -118,6 +120,7 @@ async function greenFixture() {
   }, "mr_green 验绿后环境验证闸");
   return {
     id: created.id, service, platform, luban, model,
+    issueDir: join(dataDir, "issues", created.id),
     stop: async () => {
       await service.shutdown();
       await model.stop();
@@ -180,7 +183,7 @@ test("未答验证卡时合入:自动归档=验证通过语义,闸随终态清�
   }
 });
 
-test("MR 被关闭:通知给出路;有单手动归档被拒,取消仍可达", async () => {
+test("MR 被关闭:通知给出路;取消仍可达", async () => {
   const scene = await greenFixture();
   try {
     const branch = scene.service.get(scene.id).mrs![0].branch;
@@ -193,15 +196,32 @@ test("MR 被关闭:通知给出路;有单手动归档被拒,取消仍可达", as
     assert.equal(lubanText(scene.luban).includes("有 MR 被关闭"), true,
       "关闭通知带返工出路");
 
-    // ADR-0034:有单不再手动归档——被关闭的 MR 不算交付,人只能
+    // ADR-0034/0057:手动归档已退役——被关闭的 MR 不算交付,人只能
     // 续聊返工或取消。
-    await assert.rejects(
-      () => scene.service.control(scene.id, { action: "archive" }),
-      /不再手动归档/,
-    );
     const canceled = await scene.service.control(scene.id,
       { action: "cancel" });
     assert.equal(canceled.status, "canceled");
+  } finally {
+    await scene.stop();
+  }
+});
+
+test("全部合入自动归档即入队归属并回收现场(#434 终态卫生尾巴)", async () => {
+  const scene = await greenFixture();
+  try {
+    const branch = scene.service.get(scene.id).mrs![0].branch;
+    scene.platform.settleMr(branch, "merged");
+    await until(() => scene.service.get(scene.id).status === "archived",
+      "合入自动归档");
+    // 归档响应不等计算:伴生快照在后台通道落盘。自动归档漏调入队的
+    // 单子 code-origin.json 缺席,达标率页顶着「待算」等下一轮清扫
+    // (最长 24h)——#434 的病灶,这里钉死尾巴必须在场。
+    await until(() =>
+      existsSync(join(scene.issueDir, ISSUE_CODE_ORIGIN_FILE)),
+      "自动归档入队首次生成归属(code-origin.json 落盘)");
+    // 算完后现场回收:repo/ 为归属计算让路,算完即删,不等清扫器。
+    await until(() => !existsSync(join(scene.issueDir, "repo")),
+      "归属算完现场已回收");
   } finally {
     await scene.stop();
   }
