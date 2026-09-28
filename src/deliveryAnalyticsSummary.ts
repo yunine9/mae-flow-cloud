@@ -22,8 +22,9 @@ export function aggregateDeliveryModules(rows: DeliveryAnalysisRow[]) {
   const groups = new Map<string, { id: string; name: string; lines: number }>();
   const seen = new Set<string>();
   for (const row of rows) {
-    if (!row.merged || !row.metric || seen.has(row.id)) continue;
-    seen.add(row.id);
+    const key = `${row.id}:${row.delivery_id ?? "initial"}`;
+    if (!row.merged || !row.metric || seen.has(key)) continue;
+    seen.add(key);
     const id = row.business_module?.id ?? "";
     const group = groups.get(id) ?? { id, name: row.business_module?.name ?? "未关联模块", lines: 0 };
     group.lines += sumOrigins(row.metric.retained); groups.set(id, group);

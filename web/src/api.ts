@@ -872,6 +872,10 @@ export interface FeedbackRecord {
 }
 
 export interface TaskSummary {
+  continuation?: { id: string; text: string; actor: string; at: string; state: "preparing" | "failed" | "active"; error?: string; branch: string; baseline: string };
+  delivery_history?: Array<{ id: string; started_at: string; completed_at: string; delivery: TaskSummary["delivery"]; request?: string; archive: string }>;
+  delivery_generation?: string;
+  delivery_started_at?: string;
   id: string;
   title?: string;
   requirement: string;
@@ -5396,6 +5400,15 @@ export async function correctTaskTicket(taskId: string, ticket: string, title: s
 export async function cancelTaskTicketCorrection(taskId: string): Promise<TaskSummary> {
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/correct-ticket`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "cancel" }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 已合入后复用原任务和目录开始修改。requestId 保持不变可安全重试。 */
+export async function continueTaskDelivery(taskId: string, text: string, requestId: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/continue-delivery`, {
+    method: "POST", body: JSON.stringify({ text, request_id: requestId }),
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);

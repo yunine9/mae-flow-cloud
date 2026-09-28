@@ -16,7 +16,7 @@ import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
-import { buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
+import { awaitTaskDeliveryAnalytics, buildDeliveryAnalysis, observeDeliveryCode, recordDeliveryPublication } from "./deliveryAnalytics.ts";
 import { concurrentWorkPrompt } from "./concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "./configurationCenter.ts";
 import { createMemoryContext } from "./memoryContext.ts";
@@ -537,6 +537,7 @@ import {
   type CommitSubjectRecord,
 } from "./commitPolicy.ts";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
+import { archiveContinuationRuntime, continuationInstructions, continuationPending, resetContinuationBranch, snapshotContinuation, type TaskContinuation, type TaskDeliveryHistory } from "./taskContinuation.ts";
 import { TaskBranchSync, type BranchSyncRequest } from "./taskBranchSync.ts";
 import {
   classifyDeliveryFailure,
@@ -936,6 +937,10 @@ export interface SplitEscalation {
 
 export interface TaskSummary {
   id: string;
+  continuation?: TaskContinuation;
+  delivery_history?: TaskDeliveryHistory[];
+  delivery_generation?: string;
+  delivery_started_at?: string;
   /** 仅供本地 UI 场景库冻结状态；必须同时显式开启
    * MAE_FLOW_UI_FIXTURE_MODE，正式任务永远不会写入。 */
   ui_fixture?: true;
@@ -1629,7 +1634,7 @@ function undeliveredInterrupts(workspace: string): string[] {
     const events = new EventLog(join(workspace, "events.jsonl")).replay();
     let since = -1;
     events.forEach((event, at) => {
-      if (event.kind === "turn_finished") since = at;
+      if (event.kind === "turn_finished" || event.payload?.via === "continue_delivery") since = at;
     });
     return events.slice(since + 1)
       .filter((event) => event.kind === "user_message"
@@ -8094,6 +8099,7 @@ export class TaskService {
   }
 
   private writeTaskState(task: TaskState, strict = false): boolean {
+    if (this.tasks.has(task.summary.id) && this.tasks.get(task.summary.id) !== task) return false;
     try {
       const path = join(task.summary.workspace, "task.json");
       writeFileSync(path + ".tmp", JSON.stringify({
@@ -8228,6 +8234,7 @@ export class TaskService {
     strict = false,
     reconcileParent = true,
   ): void {
+    if (this.tasks.get(task.summary.id) !== task) return;
     if (task.retainedSession && (task.retainedSession.epoch !== task.controlEpoch
         || ["paused", "pausing", "canceled", "completed", "failed", "await_merge"].includes(task.summary.status))) {
       discardRetainedSession(task);
@@ -8392,6 +8399,17 @@ export class TaskService {
           if (pending?.status === "resolved") task.pendingResume = pending;
         }
         this.tasks.set(summary.id, task);
+        // 准备继续修改可能在 Git/内核初始化之间中断，不能用旧合入记录恢复完成或启动 Agent。
+        if (continuationPending(summary)) {
+          restored++;
+          summary.continuation!.state = "failed";
+          summary.continuation!.error = "上次准备被服务重启中断，请点击继续修改重试";
+          summary.detail = summary.continuation!.error;
+          this.writeTaskState(task);
+          this.counter = Math.max(this.counter, Number(summary.id.slice("task-".length)) || 0);
+          this.replayProjection(task);
+          continue;
+        }
         // 旧版把一次交付异常留在 skipped；后续等待合入、完成或明确停摆
         // 已有更新的结论，不再把历史异常当作第二个当前阻塞原因。
         if (summary.delivery?.skipped && (summary.delivery.stalled
@@ -8922,6 +8940,7 @@ export class TaskService {
     let freed = 0;
     for (const task of this.tasks.values()) {
       const summary = task.summary;
+      if (continuationPending(summary) || this.historyMutationActive.has(summary.id)) continue;
       const verdict = judgeReclaim({
         id: summary.id,
         status: summary.status,
@@ -9146,6 +9165,7 @@ export class TaskService {
         `任务 ${id} 流水线验证还在进行中,重跑会重复烧流水线;` +
         `等它收敛或停机后再说`);
     }
+    if (continuationPending(task.summary)) throw new TaskControlError("请使用继续修改入口重试准备，不能按旧流程重跑");
     if (!["completed", "failed", "verifying"].includes(status)) {
       throw new NotFoundError(
         `任务 ${id} 状态是 ${status},只有 completed/failed/停机的 verifying 可重跑`);
@@ -9277,6 +9297,125 @@ export class TaskService {
     return { ...task.summary };
   }
 
+  /** 已合入任务的继续修改：保留任务、目录和缓存，显式开始新的内核流程。 */
+  async continueDelivery(id: string, text: string, requestId: string, actor: string): Promise<TaskSummary> {
+    const release = this.beginHistoryMutation(id);
+    let task = this.tasks.get(id);
+    try {
+      if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+      if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId)) throw new TaskControlError("继续修改请求编号无效");
+      const message = text.trim();
+      if (!message || message.length > 12_000) throw new TaskControlError("请填写本次修改要求（不超过 12000 字）");
+      if (task.summary.luban_account && task.summary.luban_account !== actor) throw new TaskControlError("只有任务责任人可以继续修改");
+      if (task.summary.continuation?.id === requestId && task.summary.continuation.state === "active") return this.project(task);
+      if (task.summary.delivery_history?.some(item => item.archive === requestId)) {
+        throw new TaskControlError("这次继续修改请求已结束，请重新填写本次修改要求");
+      }
+      const pending = continuationPending(task.summary);
+      if (task.summary.status !== "completed" || this.isRequirementAnalysis(task) || task.summary.origin === "issue") {
+        throw new TaskControlError("请在 MR 已合入的具体代码任务中继续修改；主任务请打开对应子任务");
+      }
+      if (!this.options.host) throw new TaskControlError("当前部署没有启用需求内核");
+      if (!pending && !["merged", "已合入"].includes(task.summary.delivery?.mr_state ?? "")) {
+        throw new TaskControlError("当前任务没有已合入的 MR，不能开始下一次交付");
+      }
+      if (task.driver || task.container || task.containerReopen || task.prepushActive || task.assistantActive
+          || task.mergeSettlement || task.deliveryActive || task.evidenceRetryActive
+          || task.transportActive || task.hostActionActive || task.mrCreateActive
+          || task.reviewOutboxFlush || hasAuxiliarySessions(task)) {
+        throw new TaskControlError("上一轮执行仍在结束，请稍后继续修改");
+      }
+      const previous = task.summary;
+      const branch = previous.continuation && pending ? previous.continuation.branch : previous.delivery?.source_branch;
+      const baseline = previous.continuation && pending ? previous.continuation.baseline : previous.delivery?.target_branch ?? previous.baseline;
+      if (!branch || !baseline) throw new TaskControlError("历史交付缺少工作分支或基准分支，无法继续修改");
+      if (task.cwd && existsSync(task.cwd)) {
+        const state = new KernelHost({ kernelRoot: this.options.host.kernelRoot,
+          workspace: task.cwd, taskId: id, transcriptPath: join(previous.workspace, "transcript.jsonl") }).flowState();
+        if (state && !state.terminal && !(pending && state.current === "config_confirm")) {
+          throw new TaskControlError(`内核仍在 ${state.current}，不能重置代码目录`);
+        }
+      }
+      const continuation: TaskContinuation = pending ? { ...previous.continuation!, state: "preparing", error: undefined }
+        : { id: requestId, text: message, actor, at: new Date().toISOString(), state: "preparing", branch, baseline };
+      if (pending && message !== continuation.text) throw new TaskControlError("上次准备尚未完成，请先按已保存的要求重试");
+      snapshotContinuation(previous, task.cwd, continuation.id);
+      // 替换运行对象，使旧监听与迟到回调仍属于旧对象；任务 ID 和累计用量保留。
+      task.controlEpoch += 1;
+      discardRetainedSession(task);
+      const replacement: TaskState = { summary: { ...structuredClone(previous), continuation },
+        cwd: task.cwd, humanGate: task.humanGate, tokenUsage: task.tokenUsage,
+        controlEpoch: task.controlEpoch, assistantEpoch: 0 };
+      task = replacement;
+      this.tasks.set(id, task);
+      task.summary.detail = "正在从最新基准准备继续修改，保留原目录与构建缓存";
+      this.writeTaskState(task, true);
+      this.removeFromQueue(id);
+      await Promise.all([this.deliverySummaries.stopTask(id), this.deliveryExperiences.stopTask(id), awaitTaskDeliveryAnalytics(previous)]);
+      const repo = task.summary.repo_url ?? this.effectiveDefaultRepo();
+      if (!repo) throw new TaskControlError("任务没有配置代码仓");
+      validateRepositoryAddress(repo);
+      if (/^[a-z][a-z\d+.-]*:/i.test(repo) && !/^(?:https?|file):\/\//i.test(repo)
+          && !/^[a-z]:[\\/]/i.test(repo)) throw new TaskControlError("代码仓传输协议不受支持");
+      const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
+      try {
+        if (!task.cwd || !existsSync(task.cwd)) {
+          task.cwd = await this.cloneRepo(task.summary.workspace, sandbox,
+            this.options.gitCredential?.(task.summary.luban_account), repo, baseline);
+          this.writeTaskState(task, true);
+        }
+        await resetContinuationBranch({ cwd: task.cwd, repo, branch, baseline, sandbox });
+      } finally { this.cleanupHostGitCredential(sandbox); }
+      if (this.shuttingDown) throw new TaskControlError("服务正在关闭，请重启后重试继续修改");
+      const original = snapshotContinuation(task.summary, task.cwd, continuation.id);
+      archiveContinuationRuntime(task.summary.workspace, continuation.id, new TaskHostLedger(task.summary).path);
+      const kernel = new KernelHost({ kernelRoot: this.options.host.kernelRoot, python: this.options.host.python,
+        workspace: task.cwd!, fileAccessRoot: task.summary.workspace,
+        transcriptPath: join(task.summary.workspace, "transcript.jsonl"), taskId: id });
+      await kernel.initializeNextDelivery();
+      if (this.shuttingDown) throw new TaskControlError("服务正在关闭，请重启后重试继续修改");
+      const summary = task.summary;
+      summary.delivery_history = [...(original.delivery_history ?? []), {
+        id: original.delivery_generation ?? "initial", started_at: original.delivery_started_at ?? original.created_at,
+        completed_at: original.completed_at ?? continuation.at, delivery: original.delivery,
+        request: original.continuation?.text, archive: continuation.id,
+      }];
+      summary.delivery_generation = continuation.id;
+      summary.delivery_started_at = new Date().toISOString();
+      summary.continuation = { ...continuation, state: "active" };
+      for (const key of ["delivery", "delivery_selection", "waiting", "progress", "execution_plan", "control",
+        "completed_at", "baseline_build", "notify", "feedback", "feedback_error", "focus", "status_label",
+        "repair_stopped", "execution_plan_alerts", "workspace_reclaimed_at", "ticket_correction"] as const) delete summary[key];
+      summary.baseline = baseline;
+      summary.lane = "局部修改";
+      summary.status = "queued";
+      summary.detail = "继续修改已受理，沿用原任务和代码目录";
+      task.humanGate = new HumanGate(join(summary.workspace, "waiting.json"));
+      task.resume = false;
+      try { this.persist(task, true, true); }
+      catch (error) { summary.continuation.state = "failed"; throw error; }
+      try {
+        const log = new EventLog(this.eventLogPath(id), event => this.bypass(task, "记录继续修改", this.options.projection?.appendEvent(event)));
+        log.append({ eventId: log.lastEventId() + 1, taskId: id, sessionId: "main", ts: continuation.at,
+          kind: "user_message", payload: { text: continuation.text, actor, via: "continue_delivery" } });
+        recordTaskHostInstruction(summary, continuation.text, actor);
+      } catch (error) { this.options.log?.(`继续修改要求已随任务保存，时间线记录失败：${String(error)}`); }
+      this.queue.push(id);
+      this.bypass(undefined, "任务泵", this.pump());
+      return this.project(task);
+    } catch (error) {
+      if (task && continuationPending(task.summary)) {
+        task.summary.status = "completed";
+        task.summary.continuation!.state = "failed";
+        task.summary.continuation!.error = String(error);
+        task.summary.detail = `继续修改准备未完成：${String(error)}。修改要求已保存，可重试`;
+        this.writeTaskState(task);
+        this.replayProjection(task);
+      }
+      throw error;
+    } finally { release(); }
+  }
+
   /** 从头重跑不是 retry：它原位覆盖同一个 task-N，只继承下单配置与
    * 结构关系，不继承工作区、流程进度、人工卡、交付结果或检视记录。 */
   async rerunFromStart(id: string): Promise<TaskSummary> {
@@ -9291,6 +9430,7 @@ export class TaskService {
   private async rerunFromStartLocked(id: string): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (continuationPending(task.summary)) throw new TaskControlError("继续修改尚未准备完成，请先从继续修改入口重试");
     if (!HARD_DELETE_STATUSES.includes(task.summary.status)) {
       throw new TaskControlError(
         `任务 ${id} 当前是 ${task.summary.status}，只有 completed/failed/canceled`
@@ -9528,7 +9668,7 @@ export class TaskService {
 
   private beginHistoryMutation(id: string): () => void {
     if (this.historyMutationActive.has(id)) {
-      throw new TaskControlError(`任务 ${id} 正在执行清空重跑或彻底删除，请勿重复操作`);
+      throw new TaskControlError(`任务 ${id} 正在准备继续修改、清空重跑或删除，请勿重复操作`);
     }
     this.historyMutationActive.add(id);
     return () => this.historyMutationActive.delete(id);
@@ -12924,6 +13064,8 @@ export class TaskService {
 
   private current(task: TaskState, epoch: number): boolean {
     return !this.shuttingDown
+      && this.tasks.get(task.summary.id) === task
+      && !continuationPending(task.summary)
       && task.controlEpoch === epoch
       && !ticketCorrectionBlocks(task.summary.ticket_correction)
       && task.summary.status !== "canceled";
@@ -13968,7 +14110,7 @@ export class TaskService {
           task.summary.requirement_document,
           requirementPath,
         );
-        const requirementForAgent = deliveryUnitReady ? [
+        const inheritedRequirement = deliveryUnitReady ? [
           "【当前交付单元 · 必读顺序】先完整读取 .mae-flow-unit.md。"
             + "它是本子任务的主任务书和范围边界；然后读取"
             + " .mae-flow-chain.md 理解上下游，最后按需查阅"
@@ -13978,6 +14120,9 @@ export class TaskService {
             + "不要猜。",
           originalRequirementContext,
         ].join("\n\n") : originalRequirementContext;
+        const requirementForAgent = continuationInstructions(task.summary)
+          ? `${continuationInstructions(task.summary)}\n\n以下是历史背景材料：\n${inheritedRequirement}`
+          : inheritedRequirement;
         const repairKernelOwnership = () => {
           if (!this.options.isolation) return;
           repairContainerKernelOwnership({

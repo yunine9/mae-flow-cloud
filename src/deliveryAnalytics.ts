@@ -10,10 +10,10 @@ import type { RepositoryProfile } from "./repositoryProfiles.ts";
 import { emptyOrigins, type CodeOrigin, type DeliveryAnalysisReport, type DeliveryCodeMetric } from "./deliveryAnalyticsTypes.ts";
 
 interface StoredAnalysis { version: 1; head: string; metric?: DeliveryCodeMetric; error?: string; attribution?: string; intervals?: RepairInterval[] }
-type Task = Pick<TaskSummary, "id" | "workspace">;
-type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin">;
+type Task = Pick<TaskSummary, "id" | "workspace" | "delivery_generation">;
+type CollectionTask = Pick<TaskSummary, "id" | "workspace" | "delivery" | "origin" | "delivery_generation">;
 function location(task: Task): string {
-  const key = createHash("sha256").update(`${task.workspace}\0${task.id}`).digest("hex");
+  const key = createHash("sha256").update(`${task.workspace}\0${task.id}${task.delivery_generation ? `\0${task.delivery_generation}` : ""}`).digest("hex");
   return join(dirname(task.workspace), ".delivery-analysis", `${key}.json`);
 }
 function read(task: Task): StoredAnalysis | undefined {
@@ -74,9 +74,10 @@ let lane: Promise<void> = Promise.resolve();
 /** Best-effort observer, single Git worker across tasks. Never awaited by the
  * delivery state machine; failed analytics never retries or blocks a task. */
 export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefined, head: string, retry = false): void {
-  if (!cwd || !/^[a-f0-9]{40,64}$/.test(head) || summary.origin === "issue") return;
+  if (!cwd || !/^[a-f0-9]{40,64}$/.test(head) || summary.origin === "issue"
+      || (summary.continuation && summary.continuation.state !== "active")) return;
   const snapshot: CollectionTask = { id: summary.id, workspace: summary.workspace,
-    origin: summary.origin, delivery: structuredClone(summary.delivery) };
+    origin: summary.origin, delivery_generation: summary.delivery_generation, delivery: structuredClone(summary.delivery) };
   const attribution = attributionKey(snapshot, cwd);
   const key = `${location(summary)}:${head}:${attribution}`;
   const saved = read(summary);
@@ -91,6 +92,11 @@ export function observeDeliveryCode(summary: TaskSummary, cwd: string | undefine
   lane = job;
 }
 export async function awaitDeliveryAnalytics(): Promise<void> { await lane; }
+/** 复用代码目录前，让已开始读取上一轮 Git 现场的统计完成。 */
+export async function awaitTaskDeliveryAnalytics(task: Task): Promise<void> {
+  const prefix = `${location(task)}:`;
+  await Promise.all([...pending].filter(([key]) => key.startsWith(prefix)).map(([, work]) => work));
+}
 
 export async function collectDeliveryCode(summary: CollectionTask, cwd: string, head: string): Promise<DeliveryCodeMetric> {
   const attribution = attributionKey(summary, cwd);
@@ -172,6 +178,11 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       usage: task.token_usage ? { input_tokens: task.token_usage.input_tokens, output_tokens: task.token_usage.output_tokens, total_tokens: task.token_usage.total_tokens } : undefined })),
     rows: tasks
     .filter(task => task.origin !== "issue" && !parentIds.has(task.id))
+    .flatMap(task => [...(task.delivery_history ?? []).map(previous => ({ ...task,
+      status: "completed" as const, delivery: previous.delivery,
+      delivery_generation: previous.id === "initial" ? undefined : previous.id,
+      delivery_started_at: previous.started_at, completed_at: previous.completed_at,
+    })), task])
     .map(task => {
       let root: TaskSummary | undefined = task;
       const visited = new Set<string>();
@@ -198,7 +209,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
           commit.origin_evidence = ["按统计口径：未明确识别为流水线修复，归检视修改"];
         }
       }
-      return { id: task.id, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
+      return { id: task.id, delivery_id: task.delivery_generation ?? "initial", started_at: task.delivery_started_at ?? task.created_at, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
         repo: cleanRepository(task.repo_url ?? ""), languages, modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
         merged,

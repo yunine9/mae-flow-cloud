@@ -36,6 +36,15 @@ const F = (
 
 /** 每个 `return focus(` 至少一行;有条件措辞的分支把每种措辞都列出来。 */
 const ROWS: Row[] = [
+  { branch: "继续修改·准备中",
+    input: { status: "completed", continuation: { state: "preparing" } },
+    expect: F("machine", "正在准备继续修改", "正在更新基准并保留原目录与缓存", "agent", 50) },
+  { branch: "继续修改·准备失败待重试",
+    input: { status: "completed", continuation: { state: "failed", error: "基准拉取失败" } },
+    expect: F("human_action", "继续修改准备未完成", "打开原任务，重试继续修改", "responsible", 96, true) },
+  { branch: "继续修改·准备完成后正常排队",
+    input: { status: "queued", continuation: { state: "active" } },
+    expect: F("machine", "任务正在执行队列中等待", "获得执行资源后自动开始", "platform", 30) },
   { branch: "coordinating·有异常子任务",
     input: { status: "coordinating", detail: "1/2 个子任务已完成",
       requirement_graph: { repositories: [{ task_status: "completed" }, { task_status: "failed" }] } },
@@ -178,7 +187,7 @@ const ROWS: Row[] = [
 test("焦点契约:表覆盖源码里的每一个分支(新增分支必须补表)", () => {
   const source = readFileSync(new URL("../src/taskFocus.ts", import.meta.url), "utf-8");
   const sites = (source.match(/return focus\(/g) ?? []).length;
-  assert.equal(sites, 24,
+  assert.equal(sites, 25,
     `src/taskFocus.ts 现在有 ${sites} 个 return focus( 分支;改了分支数请同步更新本表与这里的常量`);
   assert.ok(ROWS.length >= sites, "契约表的行数不能少于分支数");
 });

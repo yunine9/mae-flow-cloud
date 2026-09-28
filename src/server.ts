@@ -1,3 +1,4 @@
+import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
@@ -2397,7 +2398,7 @@ export function createTaskServer(
         }
         if (request.method !== "GET" && service.historyMutationInProgress(id)) {
           return json(response, 409, {
-            error: `任务 ${id} 正在执行清空重跑或彻底删除，请勿同时修改`,
+            error: `任务 ${id} 正在准备继续修改、清空重跑或删除，请勿同时修改`,
           });
         }
         if (request.method === "PUT" && parts.length === 3 && parts[2] === "business-module") {
@@ -3092,6 +3093,28 @@ export function createTaskServer(
           }
           return json(response, 200,
             await service.stopPrePush(id, viewer?.username));
+        }
+        if (request.method === "GET" && parts[2] === "delivery-history" && parts.length === 4) {
+          const target = storedTask(service, id);
+          if (!target?.delivery_history?.some(item => item.archive === parts[3])) return json(response, 404, { error: "交付历史不存在" });
+          const archive = continuationHistoryZip(target.workspace, parts[3]);
+          response.writeHead(200, { "content-type": "application/zip", "content-length": archive.length,
+            "content-disposition": `attachment; filename="${id}-delivery-history.zip"`, "cache-control": "no-store" });
+          return response.end(archive);
+        }
+        if (request.method === "POST" && parts[2] === "continue-delivery") {
+          const target = storedTask(service, id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (options.auth && (!viewer || viewer.role === "admin" || viewer.username !== target.luban_account)) {
+            return json(response, 403, { error: "只有该任务责任人可以继续修改" });
+          }
+          const blockers = [...service.launchOptions().blockers, ...personalBlockers(viewer)];
+          if (blockers.length) return json(response, 409, { error: "配置未完成，请先补齐：" + blockers.map(item => item.label).join("；"), blockers });
+          const body = await readBody(request);
+          const result = await service.continueDelivery(id, String(body.text ?? ""),
+            String(body.request_id ?? ""), viewer?.username ?? target.luban_account ?? "本地用户");
+          options.lubanApproval?.purgeTask(id);
+          return json(response, 200, result);
         }
         // 从头重跑会原位覆盖旧任务及其审计现场。管理员不替开发者发起
         // 或冒用其代码身份；鉴权部署下只能由任务本人执行。

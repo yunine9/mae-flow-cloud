@@ -62,6 +62,7 @@ export const RECLAIM_KEEP: readonly string[] = [
   "pipeline",            // 流水线日志:平台上两周后可能也没了,它是交付证据
   "chain-plan.md",       // 多仓链方案,几 KB
   "unit-brief.md",       // 子任务自己的主任务书,回收后仍需可追溯
+  "delivery-history",   // 同一任务此前每次合入的执行记录和交付材料
   KERNEL_STATE_SNAPSHOT,
 ];
 

@@ -229,7 +229,7 @@ test("同一任务的两个破坏性请求互斥，不能拿旧引用覆盖新�
   const first = service.rerunFromStart(created.id);
   await assert.rejects(
     service.hardDeleteHistory(created.id),
-    /正在执行清空重跑或彻底删除/,
+    /正在准备继续修改、清空重跑或删除/,
   );
   const replacement = await first;
   assert.equal(replacement.id, created.id);

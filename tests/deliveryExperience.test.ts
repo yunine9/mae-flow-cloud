@@ -57,6 +57,25 @@ test("通知发给责任人并直达本次草稿，不改变任务状态",async(
 });
 test("草稿保存后通知失败，重启只补通知不重跑模型",async()=>{const f=fixture();let models=0,notifications=0;const options=()=>({...f.options(),notify:async()=>{notifications++;if(notifications===1)throw Error("暂时离线");}});const runner=async()=>{models++;return JSON.stringify({drafts:[draft]});};try{const service=new DeliveryExperiences(options,runner);service.capture(f.task);f.merge();service.start(f.task);await service.flush();assert.equal(f.store.list().length,1);const restarted=new DeliveryExperiences(options,runner);restarted.start(f.task);await restarted.flush();assert.equal(models,1);assert.equal(notifications,2);assert.equal(f.store.list().length,1);}finally{f.cleanup();}});
 
+test("原任务的下一次交付独立整理经验，并使用本次要求", async () => {
+  const f = fixture();
+  let context = "";
+  const service = new DeliveryExperiences(f.options, async input => {
+    context = input.context;
+    return JSON.stringify({ drafts: [draft] });
+  });
+  try {
+    service.capture(f.task); f.merge(); service.start(f.task); await service.flush();
+    rmSync(join(f.workspace, "delivery-experience"), { recursive: true, force: true });
+    f.task.summary.delivery_generation = "next-delivery";
+    f.task.summary.continuation = { state: "active", text: "修复空行并补说明" };
+    service.capture(f.task); service.start(f.task); await service.flush();
+    assert.equal(f.store.list().length, 2);
+    assert.equal(JSON.parse(context).requirement, "修复空行并补说明");
+    assert.ok(f.store.list().some(row => row.evidence === "delivery:task-1:next-delivery:0"));
+  } finally { f.cleanup(); }
+});
+
 test("大型需求超过八条独立经验全部保存，不因数量拒绝或截断", async () => {
   const f = fixture();
   const drafts = Array.from({ length: 12 }, (_, index) => ({ ...draft, trigger: `组件场景 ${index + 1} 的适用条件` }));

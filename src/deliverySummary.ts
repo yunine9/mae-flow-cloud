@@ -47,7 +47,7 @@ export class DeliverySummaries<T extends Owner> {
           const designs = listArtifactDocuments(repo, { taskMaterialRoot: snapshot.workspace })
             .filter(doc => /(?:story|spec)\.md$/i.test(doc.name)).slice(0, 3)
             .map(doc => ({ name: doc.name, content: readArtifact(repo, doc.name, { taskMaterialRoot: snapshot.workspace })?.content.slice(0, 32_000) }));
-          const context = JSON.stringify({ requirement: snapshot.requirement, mr: snapshot.delivery!.mr_url,
+          const context = JSON.stringify({ requirement: snapshot.continuation?.state === "active" ? snapshot.continuation.text : snapshot.requirement, mr: snapshot.delivery!.mr_url,
             head, base, captured_at: capturedAt, design: designs,
             // 已有结构化记录冻结后交给模型；当前流水线未结束不等待、不追更。
             test_records: { prepush: snapshot.delivery!.prepush, pipeline: snapshot.delivery!.pipeline,
@@ -94,6 +94,12 @@ export class DeliverySummaries<T extends Owner> {
   }
 
   async flush(): Promise<void> { await Promise.all([...this.jobs.values()].map(job => job.work)); }
+  async stopTask(id: string): Promise<void> {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    job.abort.abort(new Error("任务开始下一次交付"));
+    await job.work;
+  }
   async shutdown(): Promise<void> {
     this.stopped = true;
     for (const job of this.jobs.values()) job.abort.abort(new Error("服务停止"));

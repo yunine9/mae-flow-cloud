@@ -52,6 +52,20 @@ export class KernelHost {
 
   constructor(readonly options: KernelHostOptions) {}
 
+  /** 用户明确要求合入后继续修改。只由宿主在停止旧执行并保存历史后调用。
+   * init 自己归档终态及清理授权；不改 current，不伪造 goto/审批记录。
+   * 初始化成功但宿主尚未落盘时允许重试，不能重置已经开始实现的状态。 */
+  async initializeNextDelivery(): Promise<void> {
+    const before = this.flowState();
+    if (before && !before.terminal) {
+      if (before.current === "config_confirm") return;
+      throw new Error(`内核仍在 ${before.current}，不能作为已合入任务重新初始化`);
+    }
+    this.requireSuccess("继续修改初始化", await this.spawnCli("init", ["init"]));
+    const after = this.flowState();
+    if (!after || after.terminal) throw new Error("继续修改初始化未建立新的内核执行状态");
+  }
+
   /** 任务开工:sessionstart + userprompt(捕获需求原话、铺转发壳),
    * 返回内核自己的开工引导文本——首条 prompt 的组成部分,不由云端复述。 */
   async bootstrap(requirement: string): Promise<string> {
@@ -253,7 +267,8 @@ export class KernelHost {
     };
   }
 
-  private flowState(): { current: string; terminal: boolean } | undefined {
+  /** 只读阶段事实，供宿主在重置已合入任务的代码目录前检查。 */
+  flowState(): { current: string; terminal: boolean } | undefined {
     const statePath = join(this.options.workspace, ".mae-flow.json");
     if (!existsSync(statePath)) return undefined;
     let state: Record<string, any>;

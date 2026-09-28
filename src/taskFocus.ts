@@ -30,6 +30,7 @@ export interface TaskFocus {
 
 interface FocusTask {
   status: string;
+  continuation?: { state: "preparing" | "failed" | "active"; error?: string };
   detail?: string;
   requirement_graph?: {
     repositories?: Array<{ task_status?: string }>;
@@ -125,6 +126,8 @@ export function projectRepairStopped(task: FocusTask): boolean {
  * (等人/坏了都比修复更紧急),所以只在 queued/running/(pausing)/verifying
  * 下改写。 */
 export function projectStatusLabel(task: FocusTask): string {
+  if (task.continuation?.state === "preparing") return "正在准备继续修改";
+  if (task.continuation?.state === "failed") return "继续修改待重试";
   const loop = task.delivery?.loop;
   const runtime = task.delivery?.prepush_runtime;
   if (["queued", "running", "verifying"].includes(task.status)) {
@@ -151,6 +154,13 @@ export function projectStatusLabel(task: FocusTask): string {
 
 /** 从服务端已有事实生成唯一的扫读口径；任何未知状态都安全降级。 */
 export function projectTaskFocus(task: FocusTask): TaskFocus {
+  if (task.continuation && task.continuation.state !== "active") {
+    const failed = task.continuation.state === "failed";
+    return focus(failed ? "human_action" : "machine",
+      failed ? "继续修改准备未完成" : "正在准备继续修改",
+      failed ? "打开原任务，重试继续修改" : "正在更新基准并保留原目录与缓存",
+      failed ? "responsible" : "agent", failed ? 96 : 50, failed);
+  }
   const delivery = task.delivery;
   const loop = delivery?.loop;
   const prepush = delivery?.prepush;

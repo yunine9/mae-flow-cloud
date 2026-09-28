@@ -50,6 +50,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "cn";
 import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
+import { TaskContinueDelivery } from "./TaskContinueDelivery";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
@@ -1942,6 +1943,7 @@ export function TaskWorkspace({
           </div>
         )}
       </header>
+      <TaskContinueDelivery key={task.id} task={task} canOperate={canOperate} onChanged={onChanged} />
 
       {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}

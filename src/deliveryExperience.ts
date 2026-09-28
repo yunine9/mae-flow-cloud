@@ -85,7 +85,7 @@ export class DeliveryExperiences<T extends Owner> {
         const evidence = options.evidence();
         const ids = new Set(["diff", ...evidence.map(e => e.id)]);
         writeFileSync(join(root,"evidence.json"),JSON.stringify(evidence),{mode:0o600});
-        const context = JSON.stringify({ requirement: snapshot.requirement, module: options.module,
+        const context = JSON.stringify({ requirement: snapshot.continuation?.state === "active" ? snapshot.continuation.text : snapshot.requirement, module: options.module,
           base, head, merged_sha: snapshot.delivery!.merged_sha, evidence_count: evidence.length, evidence: evidence.slice(0,100).map(e => ({id:e.id,summary:String(e.note ?? e.summary ?? "").slice(0,300)})),
           verification: { prepush: snapshot.delivery!.prepush, checks: snapshot.delivery!.checks },
           existing_experiences: options.store.list().filter(r => r.task === snapshot.id || (r.review?.status === "accepted" && (r.scope === "platform" || r.repo === options.repo || (options.module && r.module === options.module)))).slice(-50).map(r => ({ id:r.id, trigger:r.trigger, conclusion:r.conclusion })),
@@ -103,7 +103,7 @@ export class DeliveryExperiences<T extends Owner> {
         if (!existsSync(root) || task.summary.status !== "completed") return;
         const saved: string[] = [];
         for (const [index, draft] of drafts.entries()) {
-          const evidenceKey = `delivery:${snapshot.id}:${index}`;
+          const evidenceKey = `delivery:${snapshot.id}:${snapshot.delivery_generation ? `${snapshot.delivery_generation}:` : ""}${index}`;
           const existing = options.store.list({ task:snapshot.id }).find(r => r.evidence === evidenceKey);
           const { evidence_ids, ...fields } = draft;
           const record = existing ?? options.store.record({ ...fields, source:"delivery_review", judged_by:"agent", repo:options.repo,
@@ -125,5 +125,11 @@ export class DeliveryExperiences<T extends Owner> {
     this.jobs.set(snapshot.id, {work, abort});
   }
   async flush(): Promise<void> { await Promise.all([...this.jobs.values()].map(j => j.work)); }
+  async stopTask(id: string): Promise<void> {
+    const job = this.jobs.get(id);
+    if (!job) return;
+    job.abort.abort(new Error("任务开始下一次交付"));
+    await job.work;
+  }
   async shutdown(): Promise<void> { this.stopped = true; for (const j of this.jobs.values()) j.abort.abort(); await this.flush(); }
 }
