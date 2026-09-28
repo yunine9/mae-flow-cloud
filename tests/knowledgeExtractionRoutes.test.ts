@@ -23,7 +23,7 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
   const request = (path: string, cookie = "", body?: unknown) => fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { cookie, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const login = async (user: string) => (await request("/auth/login", "", { username: user, password: `${user}-fixture-password` })).headers.get("set-cookie")!.split(";")[0];
   try {
-    for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/knowledge-extraction/skills/domain"]) assert.equal((await request(path)).status, 401);
+    for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/domain-extraction/probes", "/knowledge-extraction/skills/domain"]) assert.equal((await request(path)).status, 401);
     const dev = await login("dev"), admin = await login("admin");
     const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, false);
     assert.equal((await request("/knowledge-extraction/skills/domain", dev, { files: skill.files, expected_digest: skill.digest })).status, 403);
@@ -42,6 +42,15 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.equal((await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "" })).status, 400);
     const associated = await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456" }); assert.equal(associated.status, 200); assert.equal((await associated.json() as any).issue_no, "REQ-456"); assert.deepEqual(detail.material_ids, [material.id]);
     createBusinessModule(root, { id: "trade", name: "交易", description: "交易业务", owner: "dev", repositories: ["https://example.test/source.git"] }, "dev");
+    assert.equal((await request("/domain-extraction/probes", "", { module_id: "trade", probe_module: "取消" })).status, 401);
+    const probeResponse = await request("/domain-extraction/probes", dev, { module_id: "trade", probe_module: "取消", material_ids: [material.id] });
+    assert.equal(probeResponse.status, 202); const probe: any = await probeResponse.json();
+    assert.equal(probe.probe.module, "取消"); assert.deepEqual(probe.material_ids, [material.id]);
+    assert.equal((await request(`/domain-extraction/${probe.id}/publish`, dev, {})).status, 400);
+    const normalRecords: any = await (await request("/domain-extraction", dev)).json();
+    assert.ok(!normalRecords.records.some((r: any) => r.id === probe.id));
+    const probeRecords: any = await (await request("/domain-extraction/probes", dev)).json();
+    assert.ok(probeRecords.records.some((r: any) => r.id === probe.id));
     const later = await request("/domain-extraction", dev, { issue_no: "REQ-later", module_id: "trade", baseline_branch: "release" });
     assert.equal(later.status, 202); const deferred: any = await later.json();
     for (let i = 0; i < 100 && domain.get(deferred.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));

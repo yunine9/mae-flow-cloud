@@ -17,6 +17,7 @@ export interface KnowledgeWorkResult {
   cross_items?: Array<{ id: string; title: string; questions: string }>;
 }
 export interface KnowledgePipelineState {
+  probe_module?: string;
   version: 1; skill: string; tasks: KnowledgeWork[];
   calibration: "pending" | "waiting" | "accepted";
   calibration_continue?: number;
@@ -29,11 +30,12 @@ const work = (id: string, phase: KnowledgePhase, title: string, depends_on: stri
 export class DomainKnowledgePipeline {
   readonly state: KnowledgePipelineState;
   private changed?: (state: KnowledgePipelineState) => void;
-  constructor(private file: string, skill: string, private continued = 0) {
+  constructor(private file: string, skill: string, private continued = 0, private probeModule?: string) {
     this.state = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {
-      version: 1, skill, calibration: "pending", tasks: [work("inventory", "inventory", "盘点业务模块与公共组件", [])],
+      version: 1, skill, probe_module: probeModule, calibration: "pending", tasks: [work("inventory", "inventory", "盘点业务模块与公共组件", [])],
     };
     if (this.state.version !== 1) throw new Error("不支持的领域研究进度版本");
+    if (this.state.probe_module !== probeModule) throw new Error("不能改变已开始验证的模块范围，请新建验证任务");
     // 显式接续才恢复失败任务；已通过的任务和历史意见保留。
     for (const task of this.state.tasks) if (task.status === "running" || task.status === "failed") { task.status = "pending"; task.attempts = 0; }
     if (this.state.calibration === "waiting" && continued > (this.state.calibration_continue ?? 0)) this.state.calibration = "accepted";
@@ -56,6 +58,7 @@ export class DomainKnowledgePipeline {
     if (task.phase === "inventory") {
       const modules = result.modules;
       if (!modules?.length || modules.length > 100 || !unique(modules.map(m => m.id))) throw new Error("盘点需要 1～100 个唯一模块编号");
+      if (this.probeModule && (modules.length !== 1 || modules[0].id !== "probe" || modules[0].title !== this.probeModule || modules[0].depends_on.length)) throw new Error("本次仅验证指定模块：modules 只能有 id=probe、title=" + this.probeModule + " 的一项，depends_on 必须为空；依赖只在该模块内按需查证");
       const ordered: typeof modules = [], remaining = [...modules];
       while (remaining.length) {
         const ready = remaining.filter(m => m.depends_on.every(id => ordered.some(row => row.id === id)))
@@ -64,7 +67,7 @@ export class DomainKnowledgePipeline {
         const m = ready[0]; ordered.push(m); remaining.splice(remaining.indexOf(m), 1);
       }
       for (const m of ordered) tasks.push(work(`plan-${m.id}`, "plan", m.title, ["inventory", ...m.depends_on.map(id => `wrap-${id}`)], JSON.stringify(m), m.id));
-      tasks.push(work("cross-plan", "cross-plan", "识别跨模块链路与跨仓契约", ordered.map(m => `wrap-${m.id}`)));
+      if (!this.probeModule) tasks.push(work("cross-plan", "cross-plan", "识别跨模块链路与跨仓契约", ordered.map(m => `wrap-${m.id}`)));
     } else if (task.phase === "plan") {
       const features = result.subfeatures;
       if (!features?.length || features.length > 50 || !unique(features.map(f => f.id))) throw new Error("模块规划需要唯一的子功能清单");
@@ -82,6 +85,8 @@ export class DomainKnowledgePipeline {
       tasks.push(work(common, "common", `${task.title}：公共链路`, hops, "", task.module));
       for (const f of features) tasks.push(work(`assemble-${task.module}-${f.id}`, "assemble", f.title, [common, ...f.hops.map(h => `hop-${task.module}-${f.id}-${h.id}`)], JSON.stringify(f), task.module));
       tasks.push(work(`wrap-${task.module}`, "wrap", `${task.title}：导航、交互与仓内设计`, features.map(f => `assemble-${task.module}-${f.id}`), "", task.module));
+    } else if (task.phase === "wrap" && this.probeModule) {
+      for (const name of ["glossary", "questions", "index"]) tasks.push(work(`synthesis-${name}`, "synthesis", `${this.probeModule}：${name === "glossary" ? "术语" : name === "questions" ? "待确认问题" : "验证范围与索引"}`, [task.id], name));
     } else if (task.phase === "cross-plan") {
       if (!result.cross_items || result.cross_items.length > 100 || !unique(result.cross_items.map(c => c.id))) throw new Error("跨模块规划需要 cross_items，可为空，但须在 findings 说明依据");
       for (const c of result.cross_items) tasks.push(work(`cross-${c.id}`, "cross", c.title, [task.id], c.questions));
@@ -132,6 +137,7 @@ export class DomainKnowledgePipeline {
     }
     const unfinished = this.state.tasks.filter(t => t.status !== "done");
     if (unfinished.length) throw new IncompleteDomainResearch(`研究尚未完成，${unfinished.length} 项失败或依赖受阻；已通过的结果保留。${unfinished.filter(t => t.status === "failed").map(t => `${t.title}：${t.feedback}`).join("；")}`);
+    if (this.probeModule) return `单模块效果验证完成：${this.probeModule}，${this.state.tasks.length} 个任务已完成独立评审。结果仅作为验证草稿，未入库或发布。`;
     return `领域知识研究完成：${this.state.tasks.length} 个任务均已完成独立评审。草稿等待人工审查与归档，未确认问题见问题清单。`;
   }
 }

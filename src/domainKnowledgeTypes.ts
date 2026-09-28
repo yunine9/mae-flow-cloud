@@ -57,6 +57,8 @@ export interface DomainPublication {
   cleanup_id?: string; removed_paths?: string[];
 }
 export interface DomainKnowledgeJob {
+  /** 临时单模块效果验证，使用独立任务且不允许归档。 */
+  probe?: { module: string };
   cleanup_only?: boolean;
   source_cleanup?: KnowledgeSourceCleanupState;
   id: string; title: string; scope: string; issue_no?: string; module_id?: string; operator: string; created_at: string;

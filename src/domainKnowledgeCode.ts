@@ -5,9 +5,9 @@ export interface KnowledgeCodeSnapshot {
   repository: KnowledgeRepository; root: string; revision: string; files: string[];
   build_units: Array<{ path: string; targets: string[]; dependencies: string[] }>;
 }
-export async function scanKnowledgeCode(repository: KnowledgeRepository, source: { root: string; revision: string }, signal: AbortSignal) {
+export async function scanKnowledgeCode(repository: KnowledgeRepository, source: { root: string; revision: string }, signal: AbortSignal, excludePath?: (path: string) => boolean) {
   const files = (await executeFile("git", ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", source.revision, "--", ...(repository.path ? [repository.path] : [])], source.root, signal))
-    .split("\0").filter(p => p && !isResearchPlatformPath(p));
+    .split("\0").filter(p => p && !isResearchPlatformPath(p) && !excludePath?.(p));
   const build_units: KnowledgeCodeSnapshot["build_units"] = [];
   for (const path of files.filter(f => /(^|\/)(CMakeLists\.txt|pom\.xml|package\.json)$/.test(f))) {
     const content = await executeFile("git", ["show", `${source.revision}:${path}`], source.root, signal);

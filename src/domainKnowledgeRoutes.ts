@@ -19,6 +19,10 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
       if (request.method === "GET" && parts[1]) return json(response, 200, readKnowledgeMaterial(materialRoot, parts[1]));
     } else {
       const manager = service.getDomainKnowledgeExtraction();
+      if (parts[1] === "probes" && !parts[2]) {
+        if (request.method === "GET") return json(response, 200, { records: manager.list(true) });
+        if (request.method === "POST") return json(response, 202, manager.createProbe(await readBody(request, 3 * 1024 * 1024), operator));
+      }
       if (request.method === "GET") return json(response, 200, parts[1] ? manager.get(parts[1]) : { records: manager.list(), knowledge_target: readKnowledgeRepoConfig(service.options.dataDir) ?? null });
       if (request.method === "POST") {
         const body = await readBody(request, 3 * 1024 * 1024);

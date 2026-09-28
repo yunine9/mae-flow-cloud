@@ -29,6 +29,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const runController = new AbortController(), signal = AbortSignal.any([input.signal, runController.signal]);
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill && !input.turn.skill);
   input.update({ skill: { name: skill.name, digest: skill.digest } });
+  if (input.job.probe && !skill.files["references/platform-pipeline.md"]) throw new Error("临时验证需要支持平台分段研究的领域 Skill，请先更新领域萃取 Skill");
   if (input.turn.mode === "extract" && skill.files["references/platform-pipeline.md"]) return runDomainKnowledgePipeline(input, options, skill);
   const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = { ...input.turn.revisions };
   const source = (repository: KnowledgeRepository) => {

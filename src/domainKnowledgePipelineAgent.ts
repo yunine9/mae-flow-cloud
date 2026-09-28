@@ -1,3 +1,4 @@
+import { probeExcludedPath } from "./domainKnowledgeProbe.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -32,8 +33,9 @@ export async function runDomainKnowledgePipeline(input: DomainExecution, options
   const controller = new AbortController(), signal = AbortSignal.any([input.signal, controller.signal]);
   const timer = setTimeout(() => controller.abort(), 48 * 60 * 60_000); timer.unref();
   const root = join(input.root, "knowledge-pipeline", input.turn.id);
-  const pipeline = new DomainKnowledgePipeline(join(root, "state.json"), skill.digest, input.turn.pipeline_continue);
+  const pipeline = new DomainKnowledgePipeline(join(root, "state.json"), skill.digest, input.turn.pipeline_continue, input.job.probe?.module);
   const repositories = input.job.source_repositories ?? input.job.repositories;
+  const excludePath = input.job.probe ? probeExcludedPath(repositories) : undefined;
   const revisions = { ...input.turn.revisions };
   const sources = new Map<string, { root: string; revision: string }>();
   const source = async (repo: KnowledgeRepository) => {
@@ -49,7 +51,7 @@ export async function runDomainKnowledgePipeline(input: DomainExecution, options
   try {
     input.update({ stage: "扫描固定版本的源码结构" });
     const snapshots: KnowledgeCodeSnapshot[] = [];
-    for (const repository of repositories) snapshots.push(await scanKnowledgeCode(repository, await source(repository), signal));
+    for (const repository of repositories) snapshots.push(await scanKnowledgeCode(repository, await source(repository), signal, excludePath ? path => excludePath(path, repository.id) : undefined));
     const structure = knowledgeStructure(snapshots);
     writeFileSync(join(root, "structure.json"), JSON.stringify(structure), { mode: 0o600 });
     const materials = input.job.material_ids.map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id));
@@ -166,14 +168,16 @@ export async function runDomainKnowledgePipeline(input: DomainExecution, options
         },
       });
       const tools = [structureTool, extractionSkillTool(skill), draftTool, resultTool, taskTool,
-        languageComponentSourceTool(repositories.map(r => ({ ...r, enabled: true, description: "研究范围", languages: ["agnostic"] })), r => source(repositories.find(repo => repo.id === r.id)!), observe),
+        languageComponentSourceTool(repositories.map(r => ({ ...r, enabled: true, description: "研究范围", languages: ["agnostic"] })), r => source(repositories.find(repo => repo.id === r.id)!), observe, excludePath),
         knowledgeMaterialTool(materials, join(options.dataDir, "knowledge-materials"), observe),
         wxdoubaoTool(signal, observe, { evidencePaging: true }), knowledgeEvidenceTool(() => input.job.evidence, observe)];
       const instruction = `你是领域知识${review ? "独立评审者，不是作者" : "研究者"}，只处理当前小任务。先用 extraction_skill 读 references/principles.md 和 references/${review ? "phase-review" : phaseFile(task)}.md。通过 knowledge_work read（提供 id）读取依赖任务结果。只用本会话工具，不能调用 Claude CLI、Bash 或写源码。使用 knowledge_work_result 保存结构化结果后结束；普通回复不是完成信号。\n`;
       const prompt = instruction + extractionSkillMission(skill, { task, review_result: reviewResult, repositories, revisions,
         archive_targets: [input.job.knowledge_target, ...input.job.repositories], structure: task.phase === "inventory" ? structure.map(s => ({ repository_id: s.repository_id, revision: s.revision, files: s.files, build_units: s.build_units.length, note: s.note })) : undefined,
+        probe: input.job.probe ? { module: input.job.probe.module, inventory: "modules 只允许一项：id=probe，title 为指定模块原名，depends_on=[]。依赖仅按需查证，不生成其他模块或全域跨模块任务。", excluded: "源码仓所有层级 docs/、AGENTS.md 及配置文档目录；本次上传资料与无线豆包仍可读取。" } : undefined,
         scope: input.job.scope, materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })), ar_codes: input.job.ar_codes });
       const driver = await CloudSession.create({ taskId: `${input.job.id}-${sessionId}`, workspace: sessionRoot, agentDir,
+        excludeAgentFiles: !!input.job.probe,
         resumeSession: false, provider: model.provider, model: model.model, allowedTools: tools.map(t => t.name), extraTools: tools,
         allowHumanQuestions: false, allowSubagents: false,
         eventLog: new EventLog(join(sessionRoot, "events.jsonl"), event => { if (event.kind === "assistant_message") observe({ tool: "research_note", preview: evidencePreview(String(event.payload.text ?? "")) }); }),

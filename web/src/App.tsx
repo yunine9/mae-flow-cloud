@@ -1353,7 +1353,7 @@ export function App() {
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
     if (["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component"]) url.searchParams.delete(key);
+      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());

@@ -72,6 +72,7 @@ export function componentSourceTool(
   range: string,
   onUse: (record: object) => void,
   sourceLabel = "当前仓",
+  excludePath?: (path: string) => boolean,
 ) {
   return defineTool({
     name: "component_source",
@@ -110,11 +111,13 @@ export function componentSourceTool(
           throw new Error(
             "请在配置的组件源码范围内阅读，跨仓调用请用 code_search",
           );
+        if (excludePath?.(path)) throw new Error("本次验证屏蔽了既有文档与 AGENTS.md，请读取源码或本次上传资料");
         let text = "";
         if (input.action === "list") {
           text = await executeFile(
             "git",
             [
+              ...(excludePath ? ["-c", "core.quotepath=false"] : []),
               "--literal-pathspecs",
               "ls-tree",
               "-r",
@@ -126,7 +129,7 @@ export function componentSourceTool(
             root, signal,
           );
           const all = text.trimEnd().split("\n").filter(Boolean);
-          const files = input.include_platform ? all : all.filter(p => !isResearchPlatformPath(p));
+          const files = all.filter(p => !excludePath?.(p) && (input.include_platform || !isResearchPlatformPath(p)));
           const prefix = path ? `${path}/` : "";
           const entries = input.recursive ? files : [...new Set(files.map(p => {
             const relative = p.startsWith(prefix) ? p.slice(prefix.length) : p;
@@ -151,8 +154,10 @@ export function componentSourceTool(
             text = await executeFile(
               "git",
               [
+                ...(excludePath ? ["-c", "core.quotepath=false"] : []),
                 "--literal-pathspecs",
                 "grep",
+                ...(excludePath ? ["-I"] : []),
                 "-n",
                 "-F",
                 ...(ignoreCase ? ["-i"] : []),
@@ -168,9 +173,9 @@ export function componentSourceTool(
             text = "没有命中。仅表示本仓当前版本和范围内未匹配，不代表其他仓没有相关代码。";
             if (hasQuery && /\s/.test(input.query)) text += "当前按完整短语搜索；若要查多个词，请改用 keywords 数组。";
           }
-          if (!input.include_platform) text = text.split("\n").filter(line => {
+          if (!input.include_platform || excludePath) text = text.split("\n").filter(line => {
             const match = /^[^:]+:(.*?):\d+:/.exec(line);
-            return !match || !isResearchPlatformPath(match[1]);
+            return !match || (!excludePath?.(match[1]) && (input.include_platform || !isResearchPlatformPath(match[1])));
           }).join("\n") || "业务范围没有命中（已排除平台及依赖生成目录）";
           text = `仓库：${sourceLabel}\n版本：${revision}\n范围：${path || "全仓"}\n匹配：${input.keywords !== undefined ? "多关键词任意命中" : "完整短语"}；${ignoreCase ? "忽略大小写" : "区分大小写"}；字面搜索\n${text}`;
         } else {
@@ -290,6 +295,7 @@ export function languageComponentSourceTool(
   components: import("./componentRepositories.ts").ComponentRepository[],
   prepare: (component: import("./componentRepositories.ts").ComponentRepository) => Promise<{root: string; revision: string}>,
   onUse: (record: Record<string, unknown>) => void,
+  excludePath?: (path: string, repositoryId?: string) => boolean,
 ) {
   const base = componentSourceTool("", "", "", onUse);
   const sources = new Map<string, Promise<{root: string; revision: string}>>();
@@ -303,7 +309,7 @@ export function languageComponentSourceTool(
       try {
         if (!sources.has(component.id)) sources.set(component.id, prepare(component));
         const source = await sources.get(component.id)!;
-        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository }), `${component.id} (${component.repository})`).execute(id, input, signal, onUpdate, context);
+        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository }), `${component.id} (${component.repository})`, excludePath ? path => excludePath(path, component.id) : undefined).execute(id, input, signal, onUpdate, context);
       } catch (error) {
         sources.delete(component.id);
         const message = error instanceof Error ? error.message : "源码准备失败";

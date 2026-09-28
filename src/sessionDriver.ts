@@ -419,6 +419,8 @@ export interface CloudSessionOptions {
    * 索引之后。收集发生在上下文构建时:回合中途 pull_repo 新落地的
    * 仓,要等下一次会话重建才进入提示词。空/缺席=行为不变。 */
   repoContextFiles?: Array<{ path: string; content: string }>;
+  /** 临时知识效果验证：不加载 SDK 自动发现及显式传入的既有 AGENTS 文件。 */
+  excludeAgentFiles?: boolean;
   /** 会话专属宿主工具(defineTool 形状)。问题流这样的旁路会话用它把
    * 平台原子能力(报阶段/拉日志/受门禁的推送)递给 Agent——秘密留在
    * 宿主,Agent 只拿到工具语义。内核任务不传,行为不变。 */
@@ -1201,7 +1203,7 @@ export class CloudSession {
       // 仓自带的规矩——注入顺序即阅读顺序,SDK 默认 → 平台知识索引 →
       // 各仓契约(收集口径见 collectRepoContextFiles)。
       agentsFilesOverride: (current) => ({
-        agentsFiles: [
+        agentsFiles: this.options.excludeAgentFiles ? [] : [
           ...current.agentsFiles.filter((file) =>
             !repositoryResourceBlocked(file.path)),
           ...(knowledgeIndex.path && knowledgeIndex.content
