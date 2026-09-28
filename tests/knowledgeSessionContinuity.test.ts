@@ -10,7 +10,7 @@ import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
-import { businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
+import { useLegacyDomainMethod, businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -28,6 +28,7 @@ const document = { id: "rules", title: "规则", target_id: "domain", path: "doc
 test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不重复保存草稿", async () => {
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve);
+  await useLegacyDomainMethod(f.dir);
   const material = await businessMaterial(f.dir);
   const model = new ScriptedModelServer([
     { tool: { name: "knowledge_material", input: { id: material.id } } },

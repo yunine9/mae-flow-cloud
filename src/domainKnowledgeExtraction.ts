@@ -247,6 +247,7 @@ export class DomainKnowledgeExtraction {
     if (job.component_research_id || this.running.has(id) || this.publishing.has(id) || !turn
         || !["failed", "cancelled", "done"].includes(job.status)) throw new Error("当前任务不能接续");
     if (job.status === "done" && turn.mode !== "extract") throw new Error("请选择文档发起新的修订");
+    turn.pipeline_continue = (turn.pipeline_continue ?? 0) + 1;
     turn.status = "queued"; turn.operator = operator; turn.error = undefined;
     if (useLatestSkill) { turn.use_latest_skill = true; turn.skill = undefined; }
     if (turn.research) { turn.research.phase = "research"; turn.research.finish_requested = false; }

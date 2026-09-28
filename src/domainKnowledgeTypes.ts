@@ -27,6 +27,8 @@ export interface DomainTurn {
   revisions?: Record<string, string>;
   document_revisions?: Record<string, number>;
   research?: DomainResearch;
+  /** 仅显式接续递增，服务重启不自动通过质量校准。 */
+  pipeline_continue?: number;
   proposals: Array<{ document: DomainDocumentContent; base_revision: number; status: "pending" | "accepted" | "discarded" }>;
 }
 export interface DomainResearch {

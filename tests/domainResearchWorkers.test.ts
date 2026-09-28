@@ -12,7 +12,7 @@ import type { DomainExecution, DomainResearch } from "../src/domainKnowledgeType
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import type { Scene } from "../src/scriptedModel.ts";
-import { businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
+import { useLegacyDomainMethod, businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
 import { businessKnowledgeEvidenceId } from "../src/domainResearchEvidence.ts";
 
 const report: DomainResearchReport = { findings: "月底结算限制来自历史重复扣款问题", checks: { background: "业务评审记录说明不能直接取消的原因" }, evidence_ids: [], sources: [], open_questions: [] };
@@ -74,7 +74,7 @@ test("真实子 Agent 重启恢复独立上下文，不能写主草稿，来源�
     { tool: { name: "knowledge_research_result", input: { action: "save", report } } },
     { text: "该能力调查完成，供主 Agent 核对" },
   ], "scripted-v1", { linear: true, beforeScene: async ({ request, index }) => { useReturnedEvidence(request, model.script); if (index === 1 && !paused) { paused = true; await hold; } } });
-  await model.start();
+  await useLegacyDomainMethod(root); await model.start();
   const evidence: Array<Record<string, unknown>> = [], revisions = { "repo-1": revision };
   const input = { root, turn: { id: "turn-1" }, job: { id: "job-1", scope: "状态研究", material_ids: [material.id], ar_codes: [], evidence,
     repositories: [{ id: "repo-1", repository: "https://example.test/business.git", branch: "master", path: "", name: "业务" }] } } as unknown as DomainExecution;
@@ -131,7 +131,7 @@ test("业务资料驱动主子研究：上下文压缩后交回证据，完全�
       else if (request.tools?.some((t: { name: string }) => t.name === "knowledge_research_result")) { useReturnedEvidence(request, child); model.script[index] = child[childIndex++] ?? { text: "子研究已完成" }; }
       else { useReturnedEvidence(request, main); model.script[index] = main[mainIndex++] ?? { text: "主研究已完成" }; }
     } });
-  await model.start();
+  await useLegacyDomainMethod(root); await model.start();
   const json = model.modelsJson() as any; json.providers.maeflow.models[0] = { id: "scripted-v1", contextWindow: 32000, maxTokens: 2048 };
   const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root,
     model: () => ({ provider: "maeflow", model: "scripted-v1", json }), source: async () => { throw new Error("业务资料足够，本例不得准备代码仓"); } }));

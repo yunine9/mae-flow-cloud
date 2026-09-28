@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DomainKnowledgeExtraction, type DomainExecution, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
-import { businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
+import { useLegacyDomainMethod, businessMaterial, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
 
 const config = { issue_no: "REQ-knowledge-123", title: "订单", scope: "状态与取消规则", repositories: [{ name: "交易仓", repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/business" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains/orders" } };
 const document = { id: "states", title: "订单状态", target_id: "domain", path: "domains/orders/states.md", layer: "domain" as const, content: "# 订单\n原始规则", sources: "repo-1 / src/state.ts @ 123" };
@@ -131,7 +131,7 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     { tool: { name: "knowledge_research", input: { action: "complete" } } },
     { text: "已保存领域规则及仓内实现知识，等待审查。" },
   ], "scripted-v1", { linear: true, beforeScene: ({ request }) => useReturnedEvidence(request, model.script) });
-  await model.start();
+  await useLegacyDomainMethod(dir); await model.start();
   const service = new DomainKnowledgeExtraction(dir, input => { input.job.revisions = { "repo-1": staleRevision }; return runDomainKnowledge(input, { dataDir: dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async repository => { assert.equal(repository.id, "repo-1", "归档前只读取研究仓"); return { root: source, revision }; } }); });
   try {
     const { knowledge_target: _, ...researchOnly } = config;
@@ -187,7 +187,7 @@ test("研究 Harness 连续推进多项能力，超过四轮仍接续原上下�
     { tool: { name: "knowledge_research", input: { action: "complete" } } }, { text: "申请证据核对" },
     { tool: { name: "knowledge_draft", input: { action: "read", id: document.id } } },
     { tool: { name: "knowledge_research", input: { action: "complete" } } }, { text: "证据核对完成" });
-  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true, beforeScene: ({ request }) => useReturnedEvidence(request, script) }); await model.start();
+  const model = new ScriptedModelServer(script, "scripted-v1", { linear: true, beforeScene: ({ request }) => useReturnedEvidence(request, script) }); await useLegacyDomainMethod(dir); await model.start();
   const service = new DomainKnowledgeExtraction(dir, input => runDomainKnowledge(input, { dataDir: dir,
     model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: source, revision }) }));
   try {

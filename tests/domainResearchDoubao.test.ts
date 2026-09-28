@@ -11,7 +11,7 @@ import { businessKnowledgeEvidenceId } from "../src/domainResearchEvidence.ts";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import type { DomainExecution, DomainResearch } from "../src/domainKnowledgeTypes.ts";
 import type { DomainResearchReport, DomainResearchWorker } from "../src/domainResearchWorkers.ts";
-import { useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
+import { useLegacyDomainMethod, useReturnedEvidence } from "./domainKnowledgeEvidenceFixture.ts";
 
 test("无线豆包独立支撑主子研究：复用概览、追查需求设计与历史，再调查新的例外", async () => {
   const root = mkdtempSync(join(tmpdir(), "domain-doubao-")), executable = join(root, "cli");
@@ -75,7 +75,7 @@ console.log(JSON.stringify({result:{structuredContent:results[action]}}));`, { m
   const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root,
     model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: noSource }));
   try {
-    await model.start();
+    await useLegacyDomainMethod(root); await model.start();
     const job = service.create({ issue_no: "REQ1", title: "结算知识", scope: "结算业务", material_ids: [], repositories: [{ repository: "https://example.test/business.git", branch: "master" }] }, "expert");
     for (let i = 0; i < 1000 && !["done", "failed"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
     const result = service.get(job.id); assert.equal(result.status, "done", result.error);

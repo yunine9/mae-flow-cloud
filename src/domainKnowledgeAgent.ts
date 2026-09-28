@@ -1,3 +1,4 @@
+import { runDomainKnowledgePipeline } from "./domainKnowledgePipelineAgent.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -28,6 +29,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const runController = new AbortController(), signal = AbortSignal.any([input.signal, runController.signal]);
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill && !input.turn.skill);
   input.update({ skill: { name: skill.name, digest: skill.digest } });
+  if (input.turn.mode === "extract" && skill.files["references/platform-pipeline.md"]) return runDomainKnowledgePipeline(input, options, skill);
   const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = { ...input.turn.revisions };
   const source = (repository: KnowledgeRepository) => {
     if (!sources.has(repository.id)) sources.set(repository.id, options.source(repository, input.turn.operator, signal).then(value => {

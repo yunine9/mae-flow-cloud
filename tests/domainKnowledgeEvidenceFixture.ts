@@ -16,3 +16,13 @@ export function useReturnedEvidence(request: Record<string, any>, scenes: Scene[
     if (record) record.evidence_ids = ids;
   }
 }
+
+/** 老任务固定了旧执行协议；验证接续兼容时明确选用旧协议。 */
+export async function useLegacyDomainMethod(root: string) {
+  const { KnowledgeExtractionSkills } = await import("../src/knowledgeExtractionSkills.ts");
+  const skills = new KnowledgeExtractionSkills(root), bundled = skills.current("domain");
+  const files = Object.fromEntries(Object.entries(bundled.files).map(([path, text]) => [
+    path.replace("platform-pipeline.md", "legacy-pipeline.md"), text.replaceAll("platform-pipeline.md", "legacy-pipeline.md"),
+  ]));
+  await skills.save("domain", files, bundled.digest, "legacy-test-fixture");
+}
