@@ -134,12 +134,16 @@ export interface SkillSubmissionRecord {
   reject_reason?: string;
 }
 
-/** 疑似密钥的形态清单。宁可错杀让人改个写法,不可放一个真令牌进
- * 权限全开的目录;占位符(<token>/{TOKEN}/$VAR)由值形态排除。 */
-const SECRET_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+/** 疑似密钥的形态清单。占位符和 HTTP 头名称不作为凭据；
+ * 跳过这些匹配后，仍继续检查同一文件中的其他内容。 */
+const SECRET_PATTERNS: Array<{
+  label: string; pattern: RegExp; skip?: (match: RegExpMatchArray) => boolean;
+}> = [
   {
     label: "密钥赋值",
-    pattern: /(?:api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?(?=[A-Za-z0-9_\-./+]*[A-Za-z])[A-Za-z0-9_\-./+]{8,}/i,
+    pattern: /(api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?((?=[A-Za-z0-9_\-./+]*[A-Za-z])[A-Za-z0-9_\-./+]{8,})/i,
+    // 例如 X_ACCESS_TOKEN = "x-access-token"，值是头名称而非令牌。
+    skip: (match) => /^[a-z]+(?:-[a-z]+)+$/.test(match[2]),
   },
   { label: "Bearer 凭据", pattern: /Bearer\s+(?=[A-Za-z0-9\-._~+/]*[A-Za-z])[A-Za-z0-9\-._~+/]{16,}/ },
   { label: "私钥块", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
@@ -229,9 +233,9 @@ export function scanForSecrets(path: string, content: Buffer): void {
   }
   if (!looksTextual(content)) return;
   const text = content.toString("utf-8");
-  for (const { label, pattern } of SECRET_PATTERNS) {
-    const match = pattern.exec(text);
-    if (match) {
+  for (const { label, pattern, skip } of SECRET_PATTERNS) {
+    for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
+      if (skip?.(match)) continue;
       const line = text.slice(0, match.index).split("\n").length;
       throw new SkillLibraryError(
         `疑似${label}(${path}:${line} ${maskedExcerpt(match[0])})。`

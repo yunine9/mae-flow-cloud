@@ -30,6 +30,7 @@ import {
   readHostSkillDocument,
   rejectSkillSubmission,
   rollbackHostSkill,
+  scanForSecrets,
   submitHostSkill,
   updateHostSkillKnowledgeMetadata,
   uploadHostSkill,
@@ -200,6 +201,29 @@ test("Skill 是知识形态；性质与模块/仓库/技术作用域分离且版
     nature: "business", business_module_ids: ["orders"], repositories: [],
     technologies: ["java"],
   }), /业务知识不能标工程语言.*拆出一项工程知识/);
+});
+
+test("HTTP 头名常量允许整包上传，仍扫描后续凭据并保持错误掩码", async () => {
+  const dataDir = mfcTemp("mfc-skill-header-");
+  const headers = 'X_ACCESS_TOKEN = "x-access-token"\nAPI_KEY = "x-api-key"';
+  await uploadHostSkill(dataDir, "header-guide", [{
+    path: "SKILL.md", content_base64: encode(skillMd("请求头用法", headers)),
+  }], "admin", ENGINEERING_METADATA);
+  assert.ok(readHostSkillDocument(dataDir, "header-guide").content.includes(headers));
+  const values = ["sk_live_abcd1234efgh", "x-access-token123", "X-ACCESS-TOKEN", "abcdefgh"];
+  for (const value of values) {
+    // 同一规则在放行头名称后不能停止；重复扫描不共享正则游标。
+    for (let run = 0; run < 2; run++) {
+      assert.throws(() => scanForSecrets("guide.md", Buffer.from(
+        `${headers}\npassword = "${value}"`)),
+      (error) => error instanceof SkillLibraryError
+        && error.message.includes("guide.md:3") && !error.message.includes(value));
+    }
+  }
+  assert.throws(() => scanForSecrets("guide.md", Buffer.from(
+    `${headers}\nBearer abcdefghijklmnopqrst`)), /Bearer 凭据/);
+  assert.throws(() => scanForSecrets("guide.md", Buffer.from(
+    `${headers}\n-----BEGIN PRIVATE KEY-----`)), /私钥块/);
 });
 
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
