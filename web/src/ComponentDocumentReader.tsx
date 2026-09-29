@@ -9,12 +9,12 @@ import { Markdown } from "./markdown";
 export interface ComponentReaderFile { id: string; path: string[]; content?: string; searchText?: string; metadata?: string }
 
 /** 文件路径只用于阅读导航，保留原始 Markdown 与程序化产物，不重新生成知识。 */
-export function ComponentDocumentReader({ files, selected, onSelect, actions, message, contentLabel = "知识正文", treeLabel = "文档目录", height = "calc(100dvh - 240px)", allowRaw = false }: {
+export function ComponentDocumentReader({ files, selected, onSelect, actions, message, contentLabel = "知识正文", treeLabel = "文档目录", height = "calc(100dvh - 240px)", allowRaw = false, collapseFolders = false }: {
   files: ComponentReaderFile[]; selected: string; onSelect: (id: string) => void; actions?: ReactNode; message?: ReactNode;
-  contentLabel?: string; treeLabel?: string; height?: string; allowRaw?: boolean;
+  contentLabel?: string; treeLabel?: string; height?: string; allowRaw?: boolean; collapseFolders?: boolean;
 }) {
   const [fullscreen, setFullscreen] = useState(false), [showTree, setShowTree] = useState(true);
-  const [query, setQuery] = useState(""), [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [query, setQuery] = useState(""), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(collapseFolders ? files.flatMap(f => f.path.slice(0, -1).map((_, i) => JSON.stringify(f.path.slice(0, i + 1)))) : []));
   const [raw, setRaw] = useState(false), [linkError, setLinkError] = useState("");
   const [outlines, setOutlines] = useState<Set<string>>(new Set());
   const [jump, setJump] = useState<{ id: string; line: number }>();
@@ -22,7 +22,10 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
   const file = files.find(f => f.id === selected);
   const needle = query.trim().toLowerCase();
   const visible = files.filter(f => !needle || `${f.path.join("/")} ${f.searchText ?? ""}`.toLowerCase().includes(needle));
-  useEffect(() => { setLinkError(""); scroll.current = 0; reader.current?.scrollTo(0, 0); }, [selected]);
+  useEffect(() => {
+    setLinkError(""); scroll.current = 0; reader.current?.scrollTo(0, 0);
+    if (file) setCollapsed(old => { const next = new Set(old); file.path.slice(0, -1).forEach((_, i) => next.delete(JSON.stringify(file.path.slice(0, i + 1)))); return next; });
+  }, [selected]);
   useEffect(() => {
     if (!jump || jump.id !== selected || file?.content === undefined) return;
     const target = reader.current?.querySelector<HTMLElement>(`[data-l="${jump.line}"]`);

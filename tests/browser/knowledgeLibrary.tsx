@@ -118,7 +118,9 @@ async function run() {
   await click("查看萃取 Skill →");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("领域知识萃取"), "extraction link opens the exact platform Skill in the library");
   check(!document.querySelector('[role="dialog"]'), "Skill no longer opens a separate editor dialog");
-  check(button("references")?.getAttribute("aria-expanded") === "true", "Skill shows a folder hierarchy");
+  check(button("references")?.getAttribute("aria-expanded") === "false", "Skill folders start folded so its entry file stays visible");
+  check(button("SKILL.md"), "Skill entry is visible without scrolling through attachments");
+  await click("references");
   await click("references"); check(!button("domain.md"), "Skill folder collapses"); await click("references");
   const link = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Skill 文件正文"] button.knowledge-inline-link')].find(a => a.textContent === "方法")!;
   check(link, "Skill relative link is rendered"); link.click(); await pause();

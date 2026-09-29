@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import "./KnowledgeReadingFrame.css";
 
 export function KnowledgeReadingFrame({ children, actions, title }: { children: ReactNode; actions?: ReactNode; title: string }) {
   const [fullscreen, setFullscreen] = useState(false), [showTree, setShowTree] = useState(true);

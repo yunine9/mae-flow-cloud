@@ -69,7 +69,7 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
         {pending && <><span className="text-sm text-muted-foreground">已选 {Object.keys(pending).length} 个文件</span><Button disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并用于新任务"}</Button><Button variant="ghost" disabled={busy} onClick={() => { setPending(undefined); setPath("SKILL.md"); }}>取消上传</Button></>}
       </div>
     </div>}
-    {files ? <ComponentDocumentReader allowRaw height="max(500px, calc(100dvh - 290px))" treeLabel="平台 Skill 文件" contentLabel="Skill 文件正文"
+    {files ? <ComponentDocumentReader allowRaw collapseFolders height="max(500px, calc(100dvh - 290px))" treeLabel="平台 Skill 文件" contentLabel="Skill 文件正文"
       files={Object.keys(files).sort((a, b) => a === "SKILL.md" ? -1 : b === "SKILL.md" ? 1 : a.localeCompare(b)).map(name => ({ id: name, path: name.split("/"), content: files[name] }))}
       selected={path} onSelect={setPath} /> : !error && <p>正在读取 Skill…</p>}
     {!!skill?.versions.length && <details className="border-t border-line pt-4 text-sm"><summary className="cursor-pointer">更新记录 · {skill.versions.length}</summary><ul className="mt-3 space-y-2 text-muted-foreground">{skill.versions.map(v => <li key={v.version_id}>{new Date(v.archived_at).toLocaleString()} · {v.operator} 更新了 Skill</li>)}</ul></details>}
