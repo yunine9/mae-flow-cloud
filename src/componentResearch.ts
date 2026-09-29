@@ -25,7 +25,11 @@ import {
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { editResearchDocument, researchDocumentMarkdown, sectionReady,
   type ResearchSection, type ResearchDocument, type ResearchDocumentEdit, type ResearchReviewTurn } from "./componentResearchDocument.ts";
+export interface ComponentChallenge {
+  item_id: string; source_digest: string; language: string; repository_ids: string[]; claim: string;
+}
 export interface ResearchRecord {
+  challenge?: ComponentChallenge;
   id: string;
   pipeline?: ComponentPipelineState;
   source_policy?: "code-only-v1";
@@ -194,6 +198,19 @@ export class ComponentResearch {
     this.pump();
     return this.get(record.id);
   }
+  startChallenge(challenge: ComponentChallenge, operator: string) {
+    if (this.stopped) throw new Error("服务正在停止");
+    const existing = [...this.records.values()].find(r => !r.deleted_at && r.challenge?.item_id === challenge.item_id
+      && r.challenge.source_digest === challenge.source_digest && ["queued", "running"].includes(r.status));
+    if (existing) return this.get(existing.id);
+    const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
+    if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
+    if ([...this.records.values()].filter(r => r.status === "queued").length >= 50) throw new Error("研究队列已满，请稍后再试");
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, source_policy: "code-only-v1", challenge, component: components[0], components,
+      language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
+      created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
+    this.records.set(record.id, record); this.update(record, {}); this.pump(); return this.get(record.id);
+  }
   private componentJob(component: ComponentRepository, parent: ResearchRecord): ResearchRecord {
     return { id: `cr-${randomUUID()}`, mode: "component", parent_id: parent.id,
       component, components: [component], language: parent.language,
@@ -276,14 +293,14 @@ export class ComponentResearch {
                 throw new Error("本轮没有更新指定组件，原稿已保留；请继续说明返工要求");
               }
               review.status = "done"; review.reply = draft; review.finished_at = new Date().toISOString();
-            } else if (record.document && (!record.document.overview.trim() || !record.document.sections.length
+            } else if (!record.challenge && record.document && (!record.document.overview.trim() || !record.document.sections.length
                 || record.document.sections.some(section => !sectionReady(section)))) {
               throw new Error("联合草稿尚不完整：需要跨仓关系说明，以及每项组件的接口、集成依赖、最佳示例和来源；已写内容保留，可继续研究");
             }
             this.update(record, {
               status: "done",
-              stage: review ? "本轮已完成，等待专家继续审查" : "草稿待审查",
-              draft: record.document ? researchDocumentMarkdown(record.topic, record.document) : draft,
+              stage: record.challenge ? "反例研究已完成，请人工判断" : review ? "本轮已完成，等待专家继续审查" : "草稿待审查",
+              draft: !record.challenge && record.document ? researchDocumentMarkdown(record.topic, record.document) : draft,
               finished_at: new Date().toISOString(),
             });
           } catch (error) {
@@ -470,7 +487,7 @@ export class ComponentResearch {
   }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
-    if (!record || (record.mode === "all" && record.format !== "joint-document") || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
+    if (!record || record.challenge || (record.mode === "all" && record.format !== "joint-document") || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
     if (record.document_id)
       return readKnowledgeDocument(this.dir, record.document_id);
     if (record.document && (!record.document.sections.some(s => s.selected)

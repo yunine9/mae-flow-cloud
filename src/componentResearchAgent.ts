@@ -65,7 +65,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
     const pipeline = input.review ? undefined : new ComponentResearchPipeline(join(root, "state.json"), skill.digest, components.map(c => c.id));
     const session = async (task: ComponentWork, reviewResult?: ComponentWorkResult) => {
       signal.throwIfAborted();
-      const reviewing = !!reviewResult, discussing = input.review?.mode === "discuss";
+      const reviewing = !!reviewResult, discussing = input.review?.mode === "discuss" || !!input.record.challenge;
       const sessionId = randomUUID(), dir = join(root, "sessions", sessionId), agentDir = join(dir, "agent");
       mkdirSync(agentDir, { recursive: true }); writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
       const sourceReads: Array<Record<string, unknown>> = [], callerReads = new Set<string>(), draftReads = new Map<string, number>();
@@ -148,7 +148,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               verdict = { pass: params.pass, feedback: params.feedback };
             } else {
               if (!discussing && !["inventory", "plan"].includes(task.phase) && !saved) throw new Error("必须先保存本项产物");
-              if (!discussing && ["inventory", "plan", "paradigm"].includes(task.phase) && !searched) throw new Error("必须通过 everycode 查找实际调用，并如实记录缺口");
+              if (((!discussing && ["inventory", "plan", "paradigm"].includes(task.phase)) || input.record.challenge) && !searched) throw new Error("必须通过 everycode 查找实际调用，并如实记录缺口");
               if (!params.findings?.trim() || !Array.isArray(params.open_questions)) throw new Error("请保存具体结论与待确认问题");
               const refs = await validateKnowledgeReferences(params.findings, snapshots, signal); if (refs.errors.length) throw new Error(refs.errors.join("；"));
               result = structuredClone(params);
@@ -198,6 +198,12 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         return { result, verdict };
       } finally { clearTimeout(sessionTimer); signal.removeEventListener("abort", abort); driver.dispose(); }
     };
+    if (input.record.challenge) {
+      input.update({ stage: "独立核对原生用法与组件边界" });
+      const response = await session({ id: "challenge", phase: "inventory", title: "寻找合理反例", status: "running", attempts: 1, dependencies: [],
+        spec: `待验证主张（仅为假设，不能作为证据）：${input.record.challenge.claim}\n独立寻找必须保留原生写法、组件无法替代的合理场景。读取基础仓实现边界，并使用 everycode 搜索、展开消费方调用。不要修改文档或启用规则。结果说明：找到反例 / 当前未找到 / 证据不足；逐条列出基础仓固定版本、代码位置、消费方调用位置及不能替代的原因。未找到不等于证明正确，记录搜索范围、版本未知与待确认问题。` });
+      return response.result!.findings + (response.result!.open_questions.length ? "\n\n待确认：\n" + response.result!.open_questions.join("\n") : "");
+    }
     if (input.review) {
       const section = input.readDocument!().sections.find(s => s.id === input.review!.section_id)!;
       if (!section.paradigm) throw new Error("历史章节没有结构化范式，请新建研究；原稿保留可读");

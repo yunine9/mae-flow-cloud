@@ -93,5 +93,15 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     const accepted = service.decideProposal(job.id, revised.review_turns!.at(-1)!.id, "accept", "expert");
     assert.match(accepted.document!.sections.find(s => s.id === "paradigm-pool-submit")!.content, /修订/);
     assert.throws(() => service.review(job.id, { section_id: "paradigm-pool-submit", mode: "discuss", message: "问题", material_ids: ["x"] }, "expert"), /仅使用/);
+    const beforeChallenge = sessions.length;
+    const challenge = { item_id: "component-test", source_digest: "a".repeat(64), repository_ids: [c.id], language,
+      claim: "原生线程全部改成 Pool.submit（待验证）" };
+    const run = service.startChallenge(challenge, "expert");
+    assert.equal(service.startChallenge(challenge, "expert").id, run.id, "相同版本的运行中挑战去重");
+    const report = await finished(run.id);
+    assert.equal(sessions.length, beforeChallenge + 1, "挑战只运行一个独立只读会话，不走整套萃取");
+    assert.match(report.draft!, /核对代码/); assert.equal(report.document?.sections.length, 0);
+    assert.throws(() => service.adopt(run.id, {}, "expert"), /草稿/);
+    assert.equal(service.get(job.id).document!.sections.length, 4, "挑战不改写原文档");
   } finally { await service.shutdown(); intercepted.mock.restore(); if (old === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = old; rmSync(dir, { recursive: true, force: true }); }
 });

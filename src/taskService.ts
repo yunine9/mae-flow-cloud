@@ -123,6 +123,8 @@ import { MemorySidecar, DEFAULT_MEMORY_BUDGETS, type MemorySearchHit } from "./m
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
 import { KnowledgeSearch } from "./knowledgeSearch.ts";
 import { createKnowledgeTool } from "./knowledgeTools.ts";
+import { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
+import type { ComponentKnowledgeCheckReport } from "./componentKnowledgeCheck.ts";
 import { DELIVERY_SPLIT_GUIDANCE } from "./deliverySplitGuidance.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
 import { projectKernelFeedback } from "./feedbackProjection.ts";
@@ -1149,6 +1151,7 @@ export interface TaskSummary {
   /** Git 交付事实(§10):MR 链接/状态、流水线结果、或没交付的原因。
    * sha = 流水线绑定的代码版本,也是重启后续轮的锚。 */
   delivery?: {
+    component_knowledge?: ComponentKnowledgeCheckReport;
     mr_url?: string;
     /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
     mr_id?: number | string;
@@ -5330,6 +5333,33 @@ export class TaskService {
     const selected = new Set((task.summary.business_modules ?? []).map(m => m.id));
     return listBusinessModules(this.options.dataDir).modules.filter(m => m.status === "active"
       && (selected.has(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r))))).map(m => m.id);
+  }
+
+  async sampleComponentKnowledge(id: string) {
+    const task = this.tasks.get(id);
+    if (!task?.cwd) throw new Error("请选择已准备好代码工作区的需求任务");
+    const consumer = this.componentKnowledge(task);
+    if (!consumer) throw new Error("该任务没有组件知识消费上下文");
+    return consumer.check({ trigger: "sample" });
+  }
+
+  private componentKnowledge(task: TaskState) {
+    if (!task.cwd || this.isRequirementAnalysis(task)) return undefined;
+    return new ComponentKnowledgeConsumption({ dataDir: this.options.dataDir, cwd: task.cwd,
+      context: () => {
+        const module = task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+        return { repo: this.memoryRepo(task), repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
+          moduleIds: module ? [module.id] : (task.summary.business_modules ?? []).map(m => m.id), productVersion: task.summary.product_version };
+      },
+      languages: () => [...new Set((task.summary.repository_profiles ?? []).flatMap(p => p.technologies)
+        .map(l => ({ "c++": "cpp", cxx: "cpp" }[l.toLowerCase()] ?? l.toLowerCase())))],
+      baseline: () => {
+        if (task.summary.delivery?.target_branch || task.summary.baseline) return task.summary.delivery?.target_branch ?? task.summary.baseline!;
+        try { return String(JSON.parse(readFileSync(join(task.cwd!, ".mae-flow.json"), "utf8"))?.config?.["基线分支"] ?? ""); } catch { return ""; }
+      },
+      onReport: report => {
+        if (report.trigger === "sample") return; task.summary.delivery = { ...task.summary.delivery, component_knowledge: report }; this.persist(task); },
+    });
   }
 
   /** 平台与本仓有效记忆；仅仓库记忆检查路径是否仍存在。 */
@@ -11998,6 +12028,7 @@ export class TaskService {
         // 开发助手也能查记忆(§8:所有会话同有);不挂首改目录提醒——
         // 人在接管,提醒是给自动跑的主 Agent 的。
         extraTools: this.memoryTools(task),
+        componentKnowledge: this.componentKnowledge(task),
         memoryContext: () => this.taskMemoryContext(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
@@ -14376,6 +14407,7 @@ export class TaskService {
         // 任务记忆：检索工具与每轮临时上下文，故障不阻塞模型。
         // 拆分提议:只给单仓直接开发的主任务。
         extraTools: [...(this.memoryTools(task) ?? []), ...this.splitTools(task), ...createTaskHostTools(this.taskHostRuntime(task, epoch))],
+        componentKnowledge: this.componentKnowledge(task),
         memoryContext: () => this.taskMemoryContext(task),
         // 分析卡上残留的 repo-N 序号机械换成仓库名(prompt 已按名称呼,
         // 这是第二道)。编码会话没有序号清单,不挂。
@@ -15550,6 +15582,8 @@ export class TaskService {
       await applyGitCommitIdentity(task.cwd, this.options.gitCredential?.(task.summary.luban_account));
       driver = await CloudSession.create({
         taskId: `${task.summary.id}:prepush:${request.round}`,
+        componentKnowledge: this.componentKnowledge(task),
+        extraTools: this.memoryTools(task)?.filter((tool: any) => tool.name === "knowledge"),
         workspace: task.cwd,
         agentDir,
         additionalSystemInstructions: [COMMIT_CONTENT_GUIDANCE],
@@ -19830,6 +19864,7 @@ export class TaskService {
       }
       // 提交说明属于编码指导，传输层只核对授权目标与真实 SHA。
       // 平台远端自身拒绝时仍如实回报，不在这里另设格式否决权。
+      if (!metadataOnlySha) await this.componentKnowledge(task)?.check({ target: sha, trigger: "mr" });
       const objects = gitView.objectDirectory;
       const staging = join(sandbox.dir, "transport.git");
       const initialized = await transportGit(["init", "--quiet", "--bare", staging]);

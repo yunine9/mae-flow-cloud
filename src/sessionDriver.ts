@@ -2,6 +2,7 @@ import { SessionCompaction } from "./sessionCompaction.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
 import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
 import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
+import type { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
 import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
 /**
@@ -427,6 +428,8 @@ export interface CloudSessionOptions {
   extraTools?: unknown[];
   /** 宿主的固定工作指令，主/子会话及恢复时都进入系统提示，不随对话压缩。 */
   additionalSystemInstructions?: readonly string[];
+  /** 正式组件范式的选型提示与新增代码观察；主、子和恢复会话共用。 */
+  componentKnowledge?: ComponentKnowledgeConsumption;
   /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
@@ -1222,6 +1225,9 @@ export class CloudSession {
         {
           name: "mae-flow-gate",
           factory: (pi: any) => {
+            if (this.options.componentKnowledge) pi.on("before_agent_start", async (event: any) => ({
+              systemPrompt: [event.systemPrompt, this.options.componentKnowledge!.guidance()].filter(Boolean).join("\n\n"),
+            }));
             const memoryContext = this.options.memoryContext?.();
             if (memoryContext) pi.on("context", async (event: any) => ({
               messages: await memoryContext(event.messages),
@@ -1229,12 +1235,16 @@ export class CloudSession {
             pi.on("tool_call", async (event: any) =>
               this.onToolCall(config.sessionId, event));
             pi.on("tool_result", async (event: any) => {
+              const componentNote = await this.options.componentKnowledge?.afterTool(
+                TOOL_NAME_MAP[event.toolName] ?? event.toolName, event.input ?? {},
+              ).catch(error => `组件使用检查未完成：${String(error)}`);
               try {
                 const note = await this.options.hostHooks?.toolResultNote?.({
                   name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
                   input: event.input ?? {},
                 });
-                if (note) return { content: [...event.content, { type: "text", text: note }] };
+                const notes = [note, componentNote].filter(Boolean);
+                if (notes.length) return { content: [...event.content, { type: "text", text: notes.join("\n\n") }] };
               } catch (error) {
                 this.kernelFailures.push(String(error));
                 return { content: [...event.content, { type: "text",
@@ -1372,6 +1382,7 @@ export class CloudSession {
       customTools: [
         ...(config.customTools as any[]),
         ...((config.extraTools ?? this.options.extraTools ?? []) as any[]),
+        ...(this.options.componentKnowledge ? [this.options.componentKnowledge.tool()] : []),
         ...visionTools,
         ...ownedFileTools,
         ...isolatedTools,

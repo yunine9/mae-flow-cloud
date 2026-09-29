@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { componentRuleFiles } from "../src/componentRuleCandidates.ts";
+import { componentAstGrepBinary } from "../src/componentKnowledgeCheck.ts";
 const candidates = [
   { language: "cpp", kind: "identifiers", value: "std::thread" },
   { language: "cpp", kind: "imports", value: "<thread>" },
@@ -21,8 +22,9 @@ test("规则派生区分 C/C++，未知语言明确标注，无候选不会伪�
   const unknown = componentRuleFiles([{ ...candidates[0], language: "rust" }]);
   assert.match(unknown["derived/rule-report.md"], /暂无/); assert.ok(!Object.keys(unknown).some(p => p.includes("/rules/")));
 });
-const executable = process.env.MFC_AST_GREP_BIN;
-test("真实 ast-grep 校验派生规则正反例，新增 .c 文件能命中 malloc", { skip: !executable || !existsSync(executable) ? "设置 MFC_AST_GREP_BIN 运行真实规则验证" : false }, () => {
+const executable = componentAstGrepBinary();
+test("真实 ast-grep 校验派生规则正反例，新增 .c 文件能命中 malloc", () => {
+  assert.ok(executable && existsSync(executable), "需要安装锁定的 ast-grep npm 依赖");
   const root = mkdtempSync(join(tmpdir(), "component-rules-"));
   try {
     for (const [path, content] of Object.entries(componentRuleFiles(candidates))) { const file = join(root, path); mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content); }

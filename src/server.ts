@@ -1,3 +1,4 @@
+import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
@@ -1113,7 +1114,7 @@ export function createTaskServer(
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
-        || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
+        || parts[0] === "component-knowledge" || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
         || ["domain-extraction", "knowledge-materials", "knowledge-extraction"].includes(parts[0])
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
@@ -1284,6 +1285,7 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
+      if (parts[0] === "component-knowledge") return componentKnowledgeRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["domain-extraction", "knowledge-materials"].includes(parts[0])) return domainKnowledgeRoute(request, response, parts, service,
         viewer?.username ?? "本地部署", readBody, json);

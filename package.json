@@ -23,6 +23,7 @@
     "test:affected": "tsx scripts/affected-tests.ts"
   },
   "dependencies": {
+    "@ast-grep/cli": "0.45.3",
     "@earendil-works/pi-coding-agent": "0.84.1",
     "elkjs": "^0.12.0",
     "pg": "^8.23.0",

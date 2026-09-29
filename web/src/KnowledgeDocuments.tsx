@@ -94,7 +94,7 @@ export function KnowledgeDocuments({ onManage, onOpenTask, uploadRequest = 0, ca
   const row = rows.find(value => value.id === selected), status = row?.indexing;
   const visible = [...rows, ...platformRows].filter(r => (category === "skills" ? skillFilter === "all" || (skillFilter === "platform") === !!platformKindOf(r.id) : filter === "all" || r.scope === filter) && (category === "skills" ? r.form === "skill" : r.form !== "skill") && `${r.title} ${r.scope_label ?? ""} ${r.source?.path ?? ""} ${r.source?.repository ?? ""}`.toLowerCase().includes(term.toLowerCase()));
   useEffect(() => {
-    setSelected(id => visible.some(item => item.id === id) || (platformKindOf(id) && !platformRows.length && (category === "skills" || new URLSearchParams(location.search).get("platformSkill") === platformKindOf(id))) ? id : visible[0]?.id || "");
+    setSelected(id => (id === selectedDocument && !rows.length) || visible.some(item => item.id === id) || (platformKindOf(id) && !platformRows.length && (category === "skills" || new URLSearchParams(location.search).get("platformSkill") === platformKindOf(id))) ? id : visible.find(item => item.id === selectedDocument)?.id || visible[0]?.id || "");
   }, [rows, platformRows, category, filter, skillFilter, term]);
   function selectCategory(next: "documents" | "skills") {
     const url = new URL(location.href); url.searchParams.delete("platformSkill"); history.replaceState(history.state, "", url);

@@ -393,6 +393,10 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
       body: JSON.stringify(body),
     });
   try {
+    const governanceResponse = await fetch(url + "/component-knowledge");
+    assert.equal(governanceResponse.status, 200);
+    assert.deepEqual((await governanceResponse.json() as any).items, []);
+    assert.equal((await post("/component-knowledge/sample", { task_id: "missing" })).status, 400);
     const configResponse = await post("/component-repositories", config);
     assert.equal(configResponse.status, 200);
     const component: any = await configResponse.json();

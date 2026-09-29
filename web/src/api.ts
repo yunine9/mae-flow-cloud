@@ -1,3 +1,4 @@
+import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
 import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 export type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
@@ -1072,6 +1073,7 @@ export interface TaskSummary {
     last_error?: string;
   };
   delivery?: {
+    component_knowledge?: ComponentKnowledgeCheckReport;
     /** 最近一次推送的起点，仅用于代码增量展示。 */
     last_push_base_sha?: string;
     mr_url?: string;
