@@ -134,7 +134,22 @@ export interface SkillSubmissionRecord {
   reject_reason?: string;
 }
 
-/** 疑似密钥的形态清单。占位符和 HTTP 头名称不作为凭据；
+/** 仅识别已知头名的完整常量值，不凭连字符外形豁免密码或配置值。 */
+function isHeaderNameConstant(match: RegExpMatchArray): boolean {
+  const before = match.input!.slice(0, match.index);
+  const name = (before.match(/[\p{L}\p{N}_$-]*$/u)?.[0] ?? "") + match[1];
+  const headers: Record<string, string> = {
+    X_ACCESS_TOKEN: "x-access-token", X_API_KEY: "x-api-key", API_KEY: "x-api-key",
+  };
+  if (!Object.hasOwn(headers, name) || headers[name] !== match[2].toLowerCase()) return false;
+  const quote = match[0].match(/[:=]\s*(["'])[^"']*$/)?.[1];
+  const after = match.input!.slice(match.index! + match[0].length);
+  // 必须是完整字面量；后缀字符、拼接表达式、未加引号的配置值都不豁免。
+  return !!quote && after[0] === quote
+    && /^[ \t]*(?:$|\r?\n|[,;)}\]`]|\/\/|#|\/\*)/.test(after.slice(1));
+}
+
+/** 疑似密钥的形态清单。占位符和已识别的 HTTP 头名常量不作为凭据；
  * 跳过这些匹配后，仍继续检查同一文件中的其他内容。 */
 const SECRET_PATTERNS: Array<{
   label: string; pattern: RegExp; skip?: (match: RegExpMatchArray) => boolean;
@@ -142,8 +157,7 @@ const SECRET_PATTERNS: Array<{
   {
     label: "密钥赋值",
     pattern: /(api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?((?=[A-Za-z0-9_\-./+]*[A-Za-z])[A-Za-z0-9_\-./+]{8,})/i,
-    // 例如 X_ACCESS_TOKEN = "x-access-token"，值是头名称而非令牌。
-    skip: (match) => /^[a-z]+(?:-[a-z]+)+$/.test(match[2]),
+    skip: isHeaderNameConstant,
   },
   { label: "Bearer 凭据", pattern: /Bearer\s+(?=[A-Za-z0-9\-._~+/]*[A-Za-z])[A-Za-z0-9\-._~+/]{16,}/ },
   { label: "私钥块", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
@@ -232,7 +246,34 @@ export function scanForSecrets(path: string, content: Buffer): void {
       `文件名即密钥容器,skill 是权限全开的公开指南,不能收: ${path}`);
   }
   if (!looksTextual(content)) return;
-  const text = content.toString("utf-8");
+  const pending = [{ path, text: content.toString("utf-8") }];
+  while (pending.length) {
+    const item = pending.pop()!;
+    scanSecretText(item.path, item.text);
+    // 研究工具传入 JSON 文档。检查解码后的正文，不能让转义引号掩盖赋值。
+    let value: unknown;
+    try { value = JSON.parse(item.text); } catch { continue; }
+    const fields: unknown[] = [value];
+    const fieldPath = `${path}（JSON 文本字段）`;
+    while (fields.length) {
+      const field = fields.pop();
+      if (typeof field === "string") pending.push({ path: fieldPath, text: field });
+      else if (Array.isArray(field)) {
+        for (const child of field) fields.push(child);
+      } else if (field && typeof field === "object") {
+        for (const [key, child] of Object.entries(field)) {
+          // 同时检查解码后的键值关系，例如值中用 Unicode 转义书写的密码。
+          if (typeof child === "string") {
+            scanSecretText(fieldPath, `${JSON.stringify(key)}: ${JSON.stringify(child)}`);
+          }
+          fields.push(child);
+        }
+      }
+    }
+  }
+}
+
+function scanSecretText(path: string, text: string): void {
   for (const { label, pattern, skip } of SECRET_PATTERNS) {
     for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
       if (skip?.(match)) continue;

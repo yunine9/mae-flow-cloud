@@ -226,6 +226,43 @@ test("HTTP 头名常量允许整包上传，仍扫描后续凭据并保持错误
     `${headers}\n-----BEGIN PRIVATE KEY-----`)), /私钥块/);
 });
 
+test("头名例外只匹配完整常量声明，不能放行形似头名的密码或值前缀", () => {
+  for (const header of ['X_ACCESS_TOKEN = "x-access-token"',
+    'const X_ACCESS_TOKEN = "X-Access-Token";', 'API_KEY = \'x-api-key\'',
+    '{"X_API_KEY":"X-API-Key"}']) {
+    assert.doesNotThrow(() => scanForSecrets("headers.md", Buffer.from(header)), header);
+  }
+  const secrets = ['password = "correct-horse-battery-staple"',
+    'PASSWORD = "x-access-token"', 'secret = "x-api-key"',
+    'api_key = "x-api-key"', 'OTHER_TOKEN = "x-access-token"',
+    'X_ACCESS_TOKEN = "x-access-token$private"',
+    'X_ACCESS_TOKEN = "x-access-token!private"',
+    'X_ACCESS_TOKEN = "x-access-token" + privateSuffix',
+    'X_ACCESS_TOKEN = "x-access-token""private"',
+    'X_ACCESS_TOKEN = x-access-token'];
+  for (const secret of secrets) {
+    for (const text of [secret, `API_KEY = "x-api-key"\n${secret}`, `${secret}\nAPI_KEY = "x-api-key"`]) {
+      assert.throws(() => scanForSecrets("mixed.md", Buffer.from(text)), SkillLibraryError, secret);
+    }
+  }
+});
+
+test("真实上传拒绝连字符口令，失败更新和待审提交均不留下可读凭据", async () => {
+  const dataDir = mfcTemp("mfc-skill-secret-phrase-");
+  const safe = skillMd("请求头", 'X_ACCESS_TOKEN = "x-access-token"');
+  await uploadHostSkill(dataDir, "header-guide", [{path:"SKILL.md",content_base64:encode(safe)}], "admin", ENGINEERING_METADATA);
+  const before = readHostSkillDocument(dataDir, "header-guide").content;
+  const unsafe = [
+    {path:"SKILL.md",content_base64:encode(safe)},
+    {path:"references/config.md",content_base64:encode('password = "correct-horse-battery-staple"')},
+  ];
+  await assert.rejects(uploadHostSkill(dataDir, "header-guide", unsafe, "admin", ENGINEERING_METADATA), SkillLibraryError);
+  assert.equal(readHostSkillDocument(dataDir, "header-guide").content, before);
+  assert.equal(existsSync(join(dataDir,"skills","header-guide","references","config.md")),false);
+  await assert.rejects(submitHostSkill(dataDir, "new-guide", unsafe, "member", ENGINEERING_METADATA), SkillLibraryError);
+  assert.equal(listSkillSubmissions(dataDir).length,0);
+});
+
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
   const dataDir = mfcTemp("mfc-skill-guard-");
   const cases: Array<{ why: RegExp; files: Parameters<typeof uploadHostSkill>[2] }> = [

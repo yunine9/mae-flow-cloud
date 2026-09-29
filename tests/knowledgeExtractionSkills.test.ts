@@ -37,6 +37,18 @@ test("无效或越界的 Skill 更新不替换当前包", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("萃取方法允许头名说明，拒绝夹带口令且保留已发布版本", async () => {
+  const root=mkdtempSync(join(tmpdir(),"extraction-secret-"));
+  try {
+    const skills=new KnowledgeExtractionSkills(root),original=skills.current("component");
+    const files={...original.files,"references/headers.md":'X_ACCESS_TOKEN = "X-Access-Token"'};
+    const accepted=await skills.save("component",files,original.digest,"expert");
+    await assert.rejects(skills.save("component",{...files,"references/config.md":'password = "correct-horse-battery-staple"'},accepted.digest,"expert"),/疑似密钥/);
+    assert.equal(skills.current("component").digest,accepted.digest);
+    assert.deepEqual(skills.current("component").files,files);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
 test("标准 Skill 可按平台用途上传，保留原名、引用与文本附件，运行中的版本不变", async () => {
   const root = mkdtempSync(join(tmpdir(), "platform-skill-"));
   try {
