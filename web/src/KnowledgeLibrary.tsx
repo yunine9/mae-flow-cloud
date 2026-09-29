@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Blocks, BookOpen, Layers, PanelLeftClose, PanelLeftOpen, Plus, SquareTerminal } from "lucide-react";
+import { Blocks, BookOpen, Layers, Plus, SquareTerminal } from "lucide-react";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { KnowledgeDocuments } from "./KnowledgeDocuments";
 import { ComponentKnowledgeWorkspace } from "./ComponentKnowledgeWorkspace";
@@ -20,7 +21,7 @@ export function KnowledgeLibrary({ onCategoryChange, uploadRequest, onOpenTask, 
   onOpenTask: (id: string) => void; onManage: (focus?: KnowledgeAssetFocus) => void;
 }) {
   const documentCategory = useRef<"documents" | "skills">("documents");
-  const [route, setRoute] = useState(readRoute), [expanded, setExpanded] = useState(true);
+  const [route, setRoute] = useState(readRoute);
   const [visited, setVisited] = useState(new Set<string>());
   const [upload, setUpload] = useState(uploadRequest);
   const [kind, setKind] = useState<ExtractionKind>(() => route.page === "component" ? "component" : "domain");
@@ -45,12 +46,14 @@ export function KnowledgeLibrary({ onCategoryChange, uploadRequest, onOpenTask, 
   useEffect(() => { setVisited(old => new Set([...old, panel])); }, [panel]);
   const mounted = (name: string) => panel === name || visited.has(name);
   return <KnowledgeStudioContext.Provider value={{ view: route.view, openExecution, openResult }}>
-    <section className={`knowledge-studio ${route.view === "knowledge" ? "studio-result" : ""} ${expanded ? "studio-expanded" : ""}`} aria-label="知识工作室">
+    <section className={`knowledge-studio ${route.view === "knowledge" ? "studio-result" : ""}`} aria-label="知识工作室">
       <header className="studio-header">
-        <div className="studio-brand"><Button size="icon" variant="ghost" aria-label={expanded ? "显示平台导航" : "展开工作室"} onClick={() => setExpanded(!expanded)}>{expanded ? <PanelLeftOpen /> : <PanelLeftClose />}</Button><Layers size={22} /><strong>知识工作室</strong></div>
-        <nav className="studio-navigation" aria-label="知识工作室导航">
-          {([["skills", "Skills", Blocks], ["workbench", "工作台", SquareTerminal], ["knowledge", "知识", BookOpen]] as const).map(([view, label, Icon]) => <button key={view} aria-current={route.view === view ? "page" : undefined} onClick={() => navigate(view, view === "workbench" ? kind : "documents")}><Icon size={17} />{label}</button>)}
-        </nav>
+        <div className="studio-brand"><Layers size={22} /><strong>知识库</strong></div>
+        <Tabs className="studio-navigation" value={route.view} onValueChange={view => navigate(view as KnowledgeStudioView, view === "workbench" ? kind : "documents")}>
+          <TabsList variant="line" aria-label="知识工作室导航">
+            {([["skills", "Skills", Blocks], ["workbench", "工作台", SquareTerminal], ["knowledge", "知识", BookOpen]] as const).map(([view, label, Icon]) => <TabsTrigger key={view} value={view} aria-current={route.view === view ? "page" : undefined} className="px-4 py-2"><Icon size={17} />{label}</TabsTrigger>)}
+          </TabsList>
+        </Tabs>
         <div className="studio-header-actions">{documentPage && <Button onClick={() => setUpload(n => n + 1)}><Plus size={16} />{route.view === "skills" ? "上传 Skill" : "添加知识"}</Button>}</div>
       </header>
       {route.view === "workbench" && <nav className="studio-kind-switch" aria-label="萃取类型">{(["domain", "component"] as const).map(value => <Button key={value} variant={kind === value ? "secondary" : "ghost"} aria-pressed={kind === value} onClick={() => navigate("workbench", value)}>{value === "domain" ? "领域知识萃取" : "组件知识萃取"}</Button>)}</nav>}

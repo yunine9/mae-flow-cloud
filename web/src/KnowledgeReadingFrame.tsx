@@ -1,19 +1,26 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { FileText, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { useKnowledgeReader } from "./useKnowledgeReader";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export function KnowledgeReadingFrame({ children, actions, title }: { children: ReactNode; actions?: ReactNode; title: string }) {
-  const [fullscreen, setFullscreen] = useState(false), [showTree, setShowTree] = useState(true);
-  const body = <section className={`domain-file-workspace ${showTree ? "" : "tree-hidden"}`} aria-label="领域知识审查工作区" style={{ height: fullscreen ? "100%" : "max(500px, calc(100dvh - 340px))" }}>
+export function KnowledgeReadingFrame({ children, actions, documentActions, title }: { children: ReactNode; actions?: ReactNode; documentActions?: ReactNode; title: string }) {
+  const { fullscreen, setFullscreen, showTree, toggleTree, frameRef } = useKnowledgeReader();
+  const [host] = useState(() => { const node = document.createElement("div"); node.className = "knowledge-reading-host"; return node; });
+  const mountReader = useCallback((node: HTMLDivElement | null) => { if (node) node.appendChild(host); }, [host]);
+  const body = <section ref={frameRef} className={`domain-file-workspace ${showTree ? "" : "tree-hidden"}`} aria-label="领域知识审查工作区" style={{ height: fullscreen ? "100%" : "max(500px, calc(100dvh - 340px))" }}>
     <header className="research-review-toolbar">
-      <Button variant="ghost" size="sm" onClick={() => setShowTree(!showTree)}>{showTree ? "收起目录" : "展开目录"}</Button>
-      <strong className="mr-auto">{title}</strong>{actions}
-      <Button variant="outline" size="sm" onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? "退出全屏" : "全屏阅读"}</Button>
+      <div className="reader-tree-tools"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={toggleTree}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}{showTree ? "收起目录" : "展开目录"}</Button></div>
+      <div className="reader-file-tools"><FileText size={20} /><strong title={title}>{title}</strong><div className="reader-file-actions">{documentActions}{actions}
+        <Button variant="outline" size="sm" onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}{fullscreen ? "退出全屏" : "全屏阅读"}</Button>
+      </div></div>
     </header>{children}
   </section>;
-  return <>{!fullscreen && body}<Dialog open={fullscreen} onOpenChange={setFullscreen}>
+  // 移动同一个阅读器，保留目录折叠、正文滚动和正在编辑的内容。
+  return <>{!fullscreen && <div className="knowledge-reading-host" ref={mountReader} />}{createPortal(body, host)}<Dialog open={fullscreen} onOpenChange={setFullscreen}>
     <DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root knowledge-reader-dialog h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none">
-      <DialogTitle className="sr-only">领域知识全屏阅读</DialogTitle>{fullscreen && body}
+      <DialogTitle className="sr-only">领域知识全屏阅读</DialogTitle>{fullscreen && <div className="knowledge-reading-host" ref={mountReader} />}
     </DialogContent>
   </Dialog></>;
 }

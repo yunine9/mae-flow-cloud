@@ -1,22 +1,27 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, FileText, Folder, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { knowledgeAnchorLine, resolveKnowledgeReference } from "./knowledgeStructure";
 import { Markdown } from "./markdown";
+import { useKnowledgeReader } from "./useKnowledgeReader";
 
 export interface ComponentReaderFile { id: string; path: string[]; content?: string; searchText?: string; metadata?: string }
 
 /** 文件路径只用于阅读导航，保留原始 Markdown 与程序化产物，不重新生成知识。 */
-export function ComponentDocumentReader({ files, selected, onSelect, actions, message, contentLabel = "知识正文", treeLabel = "文档目录", height = "calc(100dvh - 240px)", allowRaw = false, collapseFolders = false }: {
+export function ComponentDocumentReader({ files, selected, onSelect, actions, message, contentLabel = "知识正文", treeLabel = "文档目录", height = "calc(100dvh - 240px)", allowRaw = false, collapseFolders = false, embeddedTree = true }: {
   files: ComponentReaderFile[]; selected: string; onSelect: (id: string) => void; actions?: ReactNode; message?: ReactNode;
-  contentLabel?: string; treeLabel?: string; height?: string; allowRaw?: boolean; collapseFolders?: boolean;
+  contentLabel?: string; treeLabel?: string; height?: string; allowRaw?: boolean; collapseFolders?: boolean; embeddedTree?: boolean;
 }) {
-  const [fullscreen, setFullscreen] = useState(false), [showTree, setShowTree] = useState(true);
+  const { fullscreen, setFullscreen, showTree, toggleTree, frameRef } = useKnowledgeReader();
+  const [host] = useState(() => { const node = document.createElement("div"); node.className = "knowledge-reading-host"; return node; });
+  const mountReader = useCallback((node: HTMLDivElement | null) => { if (node) node.appendChild(host); }, [host]);
+  const treeVisible = showTree && (embeddedTree || fullscreen);
   const [query, setQuery] = useState(""), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(collapseFolders ? files.flatMap(f => f.path.slice(0, -1).map((_, i) => JSON.stringify(f.path.slice(0, i + 1)))) : []));
   const [raw, setRaw] = useState(false), [linkError, setLinkError] = useState("");
-  const [jump, setJump] = useState<{ id: string; line: number }>();
+  const [jump, setJump] = useState<{ id: string; line?: number; anchor?: string }>();
   const scroll = useRef(0), reader = useRef<HTMLDivElement>(null);
   const file = files.find(f => f.id === selected);
   const needle = query.trim().toLowerCase();
@@ -27,7 +32,9 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
   }, [selected]);
   useEffect(() => {
     if (!jump || jump.id !== selected || file?.content === undefined) return;
-    const target = reader.current?.querySelector<HTMLElement>(`[data-l="${jump.line}"]`);
+    const line = jump.anchor ? knowledgeAnchorLine(file.content, jump.anchor) : jump.line;
+    if (!line) { setLinkError("当前文档中未找到这个章节。"); return; }
+    const target = reader.current?.querySelector<HTMLElement>(`[data-l="${line}"]`);
     if (target && reader.current) { reader.current.scrollTop += target.getBoundingClientRect().top - reader.current.getBoundingClientRect().top - 20; target.tabIndex = -1; target.focus({ preventScroll: true }); }
   }, [jump, selected, file?.content]);
   function openReference(href: string) {
@@ -35,8 +42,8 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
       if (!file) return;
       const entries = files.map(f => ({ ...f, path: f.path.join("/"), target_id: "files" }));
       const reference = resolveKnowledgeReference(entries, entries.find(f => f.id === file.id)!, href);
-      if (!reference || (reference.anchor && !knowledgeAnchorLine(reference.item.content ?? "", reference.anchor))) { setLinkError("当前文件包中未找到这个文件或章节。"); return; }
-      setLinkError(""); setRaw(false); onSelect(reference.item.id); setJump({ id: reference.item.id, line: knowledgeAnchorLine(reference.item.content ?? "", reference.anchor) ?? 1 }); return;
+      if (!reference || (reference.anchor && reference.item.content !== undefined && !knowledgeAnchorLine(reference.item.content, reference.anchor))) { setLinkError("当前文件包中未找到这个文件或章节。"); return; }
+      setLinkError(""); setRaw(false); onSelect(reference.item.id); setJump({ id: reference.item.id, line: 1, anchor: reference.anchor }); return;
     }
     let anchor: string;
     try { anchor = decodeURIComponent(href.slice(1)); } catch { setLinkError("章节链接格式无效。"); return; }
@@ -58,16 +65,16 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
       </li>;
     })}</ul>;
   }
-  const body = <div className="component-document-reader flex h-full min-h-0 flex-col overflow-hidden bg-surface text-base">
+  const body = <div ref={frameRef} className={`component-document-reader ${treeVisible ? "" : "tree-hidden"} flex h-full min-h-0 flex-col overflow-hidden bg-surface text-base`}>
     <header className="component-reader-toolbar flex h-14 shrink-0 items-center gap-3 border-b border-line px-3">
-      <Button size="icon" variant="ghost" aria-label={showTree ? "收起目录" : "展开目录"} title={showTree ? "收起目录" : "展开目录"} onClick={() => setShowTree(!showTree)}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</Button>
+      {(embeddedTree || fullscreen) && <Button size="sm" variant="ghost" aria-label={showTree ? "收起目录" : "展开目录"} aria-expanded={showTree} onClick={toggleTree}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}目录</Button>}
       <span className="min-w-0 flex-1 truncate font-medium" title={file?.path.join(" / ")}>{file?.path.at(-1) ?? "文档"}</span>
       {allowRaw && /\.md$/i.test(file?.path.at(-1) ?? "") && <Button variant="ghost" onClick={() => setRaw(!raw)}>{raw ? "阅读" : "原文"}</Button>}
       {actions}
-      <Button size="icon" variant="ghost" aria-label={fullscreen ? "退出全屏" : "全屏阅读"} title={fullscreen ? "退出全屏" : "全屏阅读"} onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</Button>
+      <Button size="sm" variant="outline" aria-label={fullscreen ? "退出全屏" : "全屏阅读"} onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}{fullscreen ? "退出全屏" : "全屏阅读"}</Button>
     </header>
     <div className="flex min-h-0 flex-1">
-      {showTree && <nav className="component-reader-tree flex w-[260px] shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
+      {treeVisible && <nav className="component-reader-tree flex w-[260px] shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
         <div className="relative p-3"><Search size={16} className="absolute left-6 top-6 text-muted-foreground" /><Input aria-label="搜索文档" placeholder="搜索文档" className="pl-9" value={query} onChange={e => setQuery(e.target.value)} /></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2 text-sm">{tree(visible)}{!visible.length && <p className="p-3 text-muted-foreground">{query ? "没有匹配的文档" : "暂无文档"}</p>}</div>
       </nav>}
@@ -82,7 +89,7 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
     </div>
   </div>;
   return <>
-    {!fullscreen && <div className="component-reader-frame min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}>{body}</div>}
-    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root knowledge-reader-dialog h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && body}</DialogContent></Dialog>
+    {!fullscreen && <div className="component-reader-frame min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}><div className="knowledge-reading-host" ref={mountReader} /></div>}{createPortal(body, host)}
+    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root knowledge-reader-dialog h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && <div className="knowledge-reading-host" ref={mountReader} />}</DialogContent></Dialog>
   </>;
 }

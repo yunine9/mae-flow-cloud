@@ -53,14 +53,7 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
         await send("Page.navigate", { url: `${pathToFileURL(html)}?scrollCheck=1&knowledgePage=domain&domainExtraction=dkx-browser&componentResearch=cr-browser` }, sessionId);
         await until(async () => !!await evaluate(kind === "component" ? "!!document.querySelector('[aria-label=\"组件萃取文档\"]')" : "!!document.querySelector('.research-reader')"));
         if (kind === "component") await click("审阅与修订");
-        // Fullscreen studio keeps the host page outside the reading surface.
-        // Check native page chaining in the embedded mode where that page is reachable.
-        if (kind === "domain") {
-          assert.equal(await evaluate("getComputedStyle(document.querySelector('.knowledge-studio')).position"), "fixed");
-          assert.equal(await evaluate("document.querySelector('.knowledge-studio').getBoundingClientRect().height"), height);
-          await evaluate("document.querySelector('[aria-label=\"显示平台导航\"]').click()");
-          await pause();
-        }
+        if (kind === "domain") assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.knowledge-studio')).position"), "fixed", "knowledge remains in the platform page");
         await pause();
         if (kind === "domain") {
           await click("萃取过程");

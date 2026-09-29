@@ -58,14 +58,19 @@ const check = (ok: unknown, message: string) => { if (!ok) throw new Error(messa
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label && b.getClientRects().length)!;
 async function click(label: string) { check(button(label), `missing ${label}`); button(label).click(); await pause(); }
 async function more(label: string) { document.querySelector<HTMLButtonElement>('[aria-label="更多领域文档操作"]')!.click(); await pause(); const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent?.trim() === label); check(item, `missing menu item ${label}`); item!.click(); await pause(); }
+async function taskAction(label: string) {
+  if (button(label)) return click(label);
+  document.querySelector<HTMLButtonElement>('[aria-label="更多萃取操作"]')!.click(); await pause();
+  const item = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent?.trim() === label.replace(/^＋ /, ""));
+  check(item, `missing task action ${label}`); item!.click(); await pause();
+}
 async function type(label: string, value: string) {
   const field = document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="${label}"]`)!;
   check(field, `missing field ${label}`); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
 }
 async function run() {
   for (let i = 0; i < 60 && !button("讨论与修订"); i++) await pause();
-  check(getComputedStyle(document.querySelector('.knowledge-studio')!).backgroundColor === "rgb(25, 29, 32)", "solid charcoal studio surface");
-  check(getComputedStyle(document.querySelector('.studio-paper')!).backgroundColor === "rgb(252, 253, 253)", "light paper is isolated from dark app theme");
+  check(getComputedStyle(document.querySelector('.knowledge-studio')!).getPropertyValue("--primary") === getComputedStyle(document.documentElement).getPropertyValue("--primary"), "knowledge uses the platform theme");
   const primary = document.querySelector('[aria-label="知识工作室导航"]')!;
   check(primary.textContent?.includes("Skills") && primary.textContent?.includes("工作台") && primary.textContent?.includes("知识"), "navigation separates tools, execution and results");
   await click("萃取过程");
@@ -90,9 +95,15 @@ async function run() {
   check(outline.textContent?.includes("states.md") && outline.textContent?.includes("integration.md"), "tree displays filenames");
   check(!outline.textContent?.includes("取消边界") && !outline.textContent?.includes("订单状态与取消规则"), "tree has no generated topic or heading hierarchy");
   check(!button("仅讨论"), "discussion is hidden while reading");
+  const paragraph = document.querySelector<HTMLElement>('.research-document-content .md-p')!;
+  check(parseFloat(getComputedStyle(paragraph).fontSize) >= 17, "knowledge body must stay readable");
+  check(document.querySelector('.research-document-content .md')!.getBoundingClientRect().width <= 881, "wide screens keep a readable line length");
+  await click("docs");
+  check(button("docs")?.getAttribute("aria-expanded") === "false", "source directory can fold independently");
   await click("全屏阅读"); await new Promise(resolve => setTimeout(resolve, 220));
   const readerDialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
   check(readerDialog.getBoundingClientRect().width >= innerWidth - 4 && readerDialog.getBoundingClientRect().height >= innerHeight - 4, `domain reader fills desktop viewport: ${readerDialog.getBoundingClientRect().width} x ${readerDialog.getBoundingClientRect().height} / ${innerWidth} x ${innerHeight}`);
+  check(button("docs")?.getAttribute("aria-expanded") === "false", "fullscreen preserves folder state");
   await click("domains");
   check(!button("states.md"), "nested folder collapses its files");
   await click("domains"); await click("states.md");
@@ -100,6 +111,7 @@ async function run() {
   check(!document.querySelector('[aria-label="领域知识文件导航"]')?.getClientRects().length, "tree can be hidden for reading");
   await click("展开目录"); await click("退出全屏");
   check(button("states.md")?.getAttribute("aria-current") === "page", "selection survives fullscreen");
+  check(button("docs")?.getAttribute("aria-expanded") === "false", "leaving fullscreen preserves folders"); await click("docs");
   await click("讨论与修订");
   const original = job.documents[0].content;
   await type("领域知识修订意见", "取消为什么需要校验发货状态？"); await click("仅讨论"); check(job.documents[0].content === original, "discussion is read-only");
@@ -123,7 +135,7 @@ async function run() {
   await type("领域知识修订意见", "在人工版本上补充校验依据"); await click("生成建议"); await more("修订差异"); await click("采纳建议"); check(job.documents[0].content.includes("人工补充"), "accepted revision preserves manual content");
   await more("远端合并"); await click("读取远端版本并比较"); check(document.body.textContent?.includes("目标分支新增的人工规则"), "remote text visible for review");
   await type("远端合并稿", job.documents[0].content + "\n目标分支新增的人工规则"); await click("保存合并稿并确认远端版本"); check(job.documents[0].remote_review?.reviewed, "manual reconciliation submitted");
-  await click("查看 Skill");
+  await taskAction("查看 Skill");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("domain-knowledge-extraction"), "extraction link opens the exact platform Skill in the library");
   check(!document.querySelector('[role="dialog"]'), "Skill no longer opens a separate editor dialog");
   check(button("references")?.getAttribute("aria-expanded") === "false", "Skill folders start folded so its entry file stays visible");
@@ -196,7 +208,7 @@ async function run() {
   check(job.documents.find(d => d.id === "agents")?.path === "AGENTS.md", "root rules saved without filling a file path");
   check(job.documents.find(d => d.id === "integration")?.path === "docs/interfaces/integration.md", "one-off file path saved independently");
   check(!!job.documents[0].remote_review, "new location is compared with existing documents");
-  await click("＋ 新建萃取任务");
+  await taskAction("＋ 新建萃取任务");
   const createDialog = [...document.querySelectorAll<HTMLElement>('[role="dialog"]')].find(d => d.getClientRects().length && d.textContent?.includes("新建领域知识萃取"))!;
   check(!createDialog.textContent?.includes("本次研究范围") && !createDialog.textContent?.includes("业务域名称") && !createDialog.textContent?.includes("业务代码仓地址") && !createDialog.textContent?.includes("归档文档目录"), "creation only asks module and common branch, not topic or repository and archive setup");
   check(document.querySelector<HTMLInputElement>('input[aria-label="统一基准分支"]')?.value === "master", "default baseline is master");

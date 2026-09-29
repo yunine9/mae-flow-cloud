@@ -13,16 +13,16 @@ export function KnowledgeExtractionStages({ value, onChange, label, cleanup = fa
   return <nav className="knowledge-extraction-stages mb-4 flex gap-2" aria-label={label}>{[...(cleanup ? [["cleanup", "清理旧知识"]] : []), ["inputs", "资料"], ["progress", "萃取过程"], ["review", draftOnly ? "验证草稿" : "阅读成果"], ...(!draftOnly ? [["publish", "入库"]] : [])].map(([key, title]) => <Button key={key} size="sm" aria-pressed={value === key} variant={value === key ? "secondary" : "ghost"} onClick={() => choose(key)}>{title}</Button>)}</nav>;
 }
 
-export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, actions, cleanup = false, draftOnly = false, codeOnly = false }: {
-  codeOnly?: boolean; draftOnly?: boolean; cleanup?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; actions?: ReactNode;
+export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, actions, hideHeader = false, cleanup = false, draftOnly = false, codeOnly = false }: {
+  hideHeader?: boolean; codeOnly?: boolean; draftOnly?: boolean; cleanup?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; actions?: ReactNode;
 }) {
   const studio = useKnowledgeStudio();
   return <section className="tw-root knowledge-extraction-workspace" aria-label={`${title}工作区`}>
-    <header className="knowledge-extraction-header">
+    {!hideHeader && <header className="knowledge-extraction-header">
       {onClose && <Button variant="outline" onClick={onClose}>← 返回知识文档</Button>}
       <div className="mr-auto"><h2 className="text-lg font-semibold">{title}</h2></div>
       {actions}{onNew && <Button onClick={() => { if (studio) studio.openExecution(codeOnly ? "component" : "domain"); onNew(); }}>＋ 新建萃取任务</Button>}
-    </header>
+    </header>}
     <div className={`knowledge-extraction-body${sidebar ? " has-sidebar" : ""}`}>
       {sidebar && <aside className="knowledge-extraction-jobs" aria-label="萃取任务列表">{sidebar}</aside>}
       <div className="knowledge-extraction-content">{children}</div>

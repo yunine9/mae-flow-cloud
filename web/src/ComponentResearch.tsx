@@ -1,9 +1,10 @@
-import { MoreHorizontal } from "lucide-react";
+import { useKnowledgeStudio } from "./KnowledgeStudioContext";
+import { MoreHorizontal, FileText, History, ArrowUpRight } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
-import { ExtractionSkillEditor } from "./ExtractionSkillEditor";
+import { ExtractionSkillEditor, openExtractionSkill } from "./ExtractionSkillEditor";
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -93,6 +94,7 @@ export function ComponentResearch({
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
+  const studio = useKnowledgeStudio();
   const [stage, setStage] = useState("review");
   useEffect(() => { if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }, [surface]);
   const [componentsLoaded, setComponentsLoaded] = useState(false);
@@ -220,7 +222,7 @@ export function ComponentResearch({
     <ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} readerHeight="calc(96dvh - 110px)" />
   </section>;
   return (
-    <KnowledgeExtractionWorkspace codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
+    <KnowledgeExtractionWorkspace hideHeader={surface === "knowledge" && !!current} codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
       onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}
       sidebar={!focused && surface !== "knowledge" ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
@@ -255,7 +257,19 @@ export function ComponentResearch({
               <p className="p-8 text-muted-foreground">在左侧选择任务，查看进度、来源证据和草稿。</p>
             ) : (
               <>
-                <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
+                {surface === "knowledge" ? <header className="studio-result-toolbar">
+                  <FileText size={21} /><strong title={current.topic}>{current.topic}</strong><span className="studio-job-status">{current.status === "done" ? "已生成" : current.stage}</span>
+                  <div className="studio-result-actions"><Button variant="ghost" onClick={() => { studio?.openExecution("component", current.id); setStage("progress"); }}><History size={16} />萃取过程</Button>
+                    {stage !== "review" && <Button variant="ghost" onClick={() => setStage("review")}>阅读成果</Button>}
+                    <Button onClick={() => setStage("publish")}><ArrowUpRight size={17} />入库</Button>
+                    <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openExtractionSkill("component")}>查看 Skill</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => { studio?.openExecution("component"); selectRecord("new"); }}>新建萃取任务</DropdownMenuItem>
+                      {!focused && !current.parent_id && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
+                    </DropdownMenuContent></DropdownMenu>
+                  </div>
+                </header> : <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
                   {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
@@ -286,7 +300,7 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>
+                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>}
                 {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
                 {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">

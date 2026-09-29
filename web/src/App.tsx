@@ -1461,7 +1461,7 @@ export function App() {
     <SidebarInset>
     {/* 工作台壳(#228 工具类化):书页宽由 max-w 条件直译,DTS 全宽时
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
-    <div className={cn("min-h-screen min-w-0 bg-(--canvas)", view === "library" && "knowledge-app-surface")}>
+    <div className="min-h-screen min-w-0 bg-(--canvas)">
       {view !== "library" && <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
         (dtsWide || view === "knowledge") ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
