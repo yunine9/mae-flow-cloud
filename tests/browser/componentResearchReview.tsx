@@ -68,10 +68,9 @@ async function run() {
   await click("全选");boxes()[2].click();await pause();check(!boxes()[2].checked,"single checkbox selection");
   const capability = [...document.querySelectorAll<HTMLButtonElement>('button.knowledge-outline-title')].find(b => b.textContent?.includes("异步读取"))!;
   capability.click();await pause();
-  const outline = document.querySelector('[aria-label="知识主题与章节"]')!;
+  const outline = document.querySelector('[aria-label="知识文档列表"]')!;
   check(!outline.textContent?.includes("include/file.h"), "knowledge outline excludes source paths");
-  [...outline.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "公共接口")!.click(); await pause();
-  check(document.activeElement?.textContent === "公共接口", "chapter navigation focuses rendered heading");
+  check(!outline.querySelector("[aria-expanded]") && !outline.textContent?.includes("公共接口"), "document navigation has no chapter expansion");
   const before = JSON.stringify(record.document!.sections[0]);
   await message("为什么取消后仍需要等待回调？");await click("仅讨论");
   check(record.document!.sections[1].revision === 1,"discussion must not mutate draft");
@@ -86,7 +85,7 @@ async function run() {
   check(document.querySelectorAll('[aria-label="完整文档阅读区"] .knowledge-markdown').length === record.document!.sections.length,"single document includes all chapters");
   check(document.querySelector('[aria-label="文档组件目录"]'),"navigable directory");
   await click("逐项审核");
-  const list = document.querySelector<HTMLElement>('[aria-label="知识主题与章节"]')!;
+  const list = document.querySelector<HTMLElement>('[aria-label="知识文档列表"]')!;
   const reader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
   const outer = document.querySelector("main")!;
   const outerTop = outer.scrollTop;

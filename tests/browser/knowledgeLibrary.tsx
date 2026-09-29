@@ -120,6 +120,7 @@ async function run() {
   check(!document.querySelector('[role="dialog"]'), "Skill no longer opens a separate editor dialog");
   check(button("references")?.getAttribute("aria-expanded") === "false", "Skill folders start folded so its entry file stays visible");
   check(button("SKILL.md"), "Skill entry is visible without scrolling through attachments");
+  check(!document.querySelector('[aria-label^="展开章节"], [aria-label^="收起章节"]'), "Skill files do not expand into chapter outlines");
   await click("references");
   await click("references"); check(!button("domain.md"), "Skill folder collapses"); await click("references");
   const link = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Skill 文件正文"] button.knowledge-inline-link')].find(a => a.textContent === "方法")!;
@@ -128,6 +129,7 @@ async function run() {
   document.querySelector<HTMLButtonElement>('[aria-label="全屏阅读"]')!.click(); await new Promise(resolve => setTimeout(resolve, 220));
   check(document.querySelector('[role="dialog"]')!.getBoundingClientRect().width >= innerWidth - 4, "Skill reader fills viewport");
   document.querySelector<HTMLButtonElement>('[aria-label="退出全屏"]')!.click(); await pause();
+  if (button("references")?.getAttribute("aria-expanded") === "false") await click("references");
   await click("domain.md");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("研究领域规则。"), "reference is readable online");
   await click("＋ 添加 Skill");
@@ -147,6 +149,7 @@ async function run() {
   check(!button("保存并用于新任务") && document.querySelector('[aria-label="平台 Skill 详情"] [role="alert"]'), "missing SKILL.md cannot submit");
   await uploadSkillFile([["SKILL.md", skill.files["SKILL.md"]], ["references/domain.md", "新版方法：核对取消与退款的不同状态。"]], true);
   check(button("保存并用于新任务") && !calls.some(c => c.action === "skill"), "upload preview does not publish automatically");
+  if (button("references")?.getAttribute("aria-expanded") === "false") await click("references");
   await click("domain.md");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("新版方法"), "uploaded reference preview");
   await click("保存并用于新任务");

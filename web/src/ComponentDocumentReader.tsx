@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, Maximize2, Minimize2, Pane
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { knowledgeAnchorLine, knowledgeHeadingTree, resolveKnowledgeReference, type KnowledgeHeading } from "./knowledgeStructure";
+import { knowledgeAnchorLine, resolveKnowledgeReference } from "./knowledgeStructure";
 import { Markdown } from "./markdown";
 
 export interface ComponentReaderFile { id: string; path: string[]; content?: string; searchText?: string; metadata?: string }
@@ -16,7 +16,6 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
   const [fullscreen, setFullscreen] = useState(false), [showTree, setShowTree] = useState(true);
   const [query, setQuery] = useState(""), [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(collapseFolders ? files.flatMap(f => f.path.slice(0, -1).map((_, i) => JSON.stringify(f.path.slice(0, i + 1)))) : []));
   const [raw, setRaw] = useState(false), [linkError, setLinkError] = useState("");
-  const [outlines, setOutlines] = useState<Set<string>>(new Set());
   const [jump, setJump] = useState<{ id: string; line: number }>();
   const scroll = useRef(0), reader = useRef<HTMLDivElement>(null);
   const file = files.find(f => f.id === selected);
@@ -45,9 +44,6 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
     if (!target) { setLinkError("当前文档中未找到这个章节。"); return; }
     setLinkError(""); onSelect(target.id); setJump({ id: target.id, line: knowledgeAnchorLine(target.content ?? "", anchor) ?? 1 });
   }
-  function headings(nodes: KnowledgeHeading[], id: string): ReactNode {
-    return <ul className="list-none space-y-1 pl-3">{nodes.map(node => <li key={node.line} className="list-none">{node.children.length ? <details><summary className="cursor-pointer truncate py-1" title={node.title}>{node.title}</summary>{headings([ { ...node, children: [] }, ...node.children ], id)}</details> : <button className="block w-full truncate rounded px-2 py-1 text-left text-muted-foreground hover:bg-surface-2 hover:text-primary" title={node.title} onClick={() => { setRaw(false); onSelect(id); setJump({ id, line: node.line }); }}>{node.title}</button>}</li>)}</ul>;
-  }
   function toggleFolder(key: string) { setCollapsed(old => { const next = new Set(old); if (next.has(key)) next.delete(key); else next.add(key); return next; }); }
   function tree(rows: ComponentReaderFile[], depth = 0, parent: string[] = []): ReactNode {
     const folders = [...new Set(rows.filter(f => f.path.length > depth + 1).map(f => f.path[depth]))];
@@ -57,11 +53,8 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
         {expanded ? <ChevronDown size={15} className="shrink-0" /> : <ChevronRight size={15} className="shrink-0" />}<Folder size={16} className="shrink-0 text-muted-foreground" /><span className="truncate font-medium">{folder}</span>
       </button>{expanded && <div className="ml-3 border-l border-line pl-2">{tree(rows.filter(f => f.path[depth] === folder), depth + 1, [...parent, folder])}</div>}</li>;
     })}{rows.filter(f => f.path.length === depth + 1).map(f => {
-      const outline = f.content !== undefined && /\.md$/i.test(f.path.at(-1) ?? "") ? knowledgeHeadingTree(f.content) : [];
       return <li key={f.id} className="list-none"><div className={`flex items-start rounded-md ${f.id === selected ? "bg-primary/10 text-primary" : "hover:bg-surface-2"}`}>
-        {!!outline.length && <button className="shrink-0 py-3 pl-1" aria-label={`${outlines.has(f.id) ? "收起" : "展开"}章节 ${f.path.at(-1)}`} aria-expanded={outlines.has(f.id)} onClick={() => setOutlines(old => { const next = new Set(old); if (next.has(f.id)) next.delete(f.id); else next.add(f.id); return next; })}>{outlines.has(f.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>}
         <button title={f.path.at(-1)} aria-current={f.id === selected ? "page" : undefined} className="flex min-w-0 flex-1 items-start gap-2 px-2 py-2.5 text-left" onClick={() => { setJump(undefined); onSelect(f.id); }}><FileText size={16} className="mt-0.5 shrink-0" /><span className="line-clamp-2 break-words">{f.path.at(-1)}</span></button></div>
-        {outlines.has(f.id) && headings(outline, f.id)}
       </li>;
     })}</ul>;
   }

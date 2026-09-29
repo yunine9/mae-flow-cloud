@@ -58,8 +58,8 @@ async function main() {
   if (document.querySelector('[aria-label="组件列表"] button[aria-current]')) throw new Error("目录没有折叠");
   flushSync(() => folder.click());
   type("搜索文档", "不存在的文档"); if (!document.body.textContent?.includes("没有匹配的文档")) throw new Error("搜索未筛选"); type("搜索文档", "");
-  labelledButton("展开章节 后台任务的提交与等待.md"); await delay(); button("最佳示例"); await delay();
-  if (!document.activeElement?.textContent?.includes("最佳示例")) throw new Error("章节目录未跳到正文标题");
+  if (document.querySelector('[aria-label="组件列表"] [aria-label*="章节"]')) throw new Error("文件不应展开章节");
+  if (document.querySelector('[aria-label="组件列表"]')?.textContent?.includes("最佳示例")) throw new Error("文件目录不应混入正文标题");
   labelledButton("全屏阅读"); await delay();
   labelledButton("收起目录"); await delay();
   for (let i = 0; i < 10; i++) await delay();
