@@ -59,12 +59,14 @@ function Choice({
 export function ComponentResearch({
   open,
   focused = false,
+  compact = false,
   focusId,
   onClose,
   onAdopt,
 }: {
   open: boolean;
   focused?: boolean;
+  compact?: boolean;
   focusId?: string;
   onClose: () => void;
   onAdopt: (id: string) => void;
@@ -265,7 +267,7 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />
+                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}
                 {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
                 {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">

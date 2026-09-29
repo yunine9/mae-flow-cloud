@@ -16,20 +16,20 @@ import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { TaskService } from "../src/taskService.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 
-test("真实 Pi 主/子会话编码前收到正式选择表，写文件和 Bash 改码收到同源检查反馈", async () => {
+test("真实 Pi 主/子会话只用 knowledge 查询组件，写文件和 Bash 改码收到同源检查反馈", async () => {
   const f = consumptionFixture(), doc = f.publish(), reports: any[] = [];
   enableComponentHints(f);
   const consumer = new ComponentKnowledgeConsumption({ dataDir: f.data, cwd: f.cwd, context: () => f.context, languages: () => ["cpp"], baseline: () => "main", onReport: r => reports.push(r) });
   const p = consumer.catalog().paradigms[0];
   const model = new ScriptedModelServer([
     { tool: { name: "Task", input: { subagent_type: "component-knowledge-agent", description: "核对组件", prompt: "只分析后台任务的选型，先读正式知识。" } } },
-    { tool: { name: "component_knowledge", input: { action: "list", query: "后台" } } },
+    { tool: { name: "knowledge", input: { action: "search", query: "后台" } } },
     { tool: { name: "knowledge", input: { action: "read", id: doc.id, revision: doc.revision, start_line: p.start_line, end_line: p.end_line } } },
     { text: "已核对 Pool.submit 和等待约束，按正式知识实施。" },
     { tool: { name: "write", input: { path: "new.cpp", content: "void f() { std::thread created; }\n" } } },
     { tool: { name: "bash", input: { command: "printf 'void f() { std::thread shell_created; }\\n' > shell.cpp" } } },
     { text: "收到组件使用提示，核对适用条件。" },
-    { tool: { name: "component_knowledge", input: { action: "list" } } },
+    { tool: { name: "knowledge", input: { action: "search", query: "后台" } } },
     { text: "正式文档已停用，不再沿用。" },
   ], "scripted-v1", { linear: true });
   let session: CloudSession | undefined;
@@ -41,8 +41,8 @@ test("真实 Pi 主/子会话编码前收到正式选择表，写文件和 Bash 
       gate: new GateService({ cwd: f.cwd, workspace: f.cwd }), humanGate: new HumanGate(join(f.dir, "waiting.json")), componentKnowledge: consumer,
       extraTools: [createKnowledgeTool({ service: () => new KnowledgeSearch(f.data), context: () => f.context })] });
     assert.equal((await session.start("开发后台任务")).status, "turn_finished");
-    assert.match(JSON.stringify(model.requests[0]), /本任务可查阅的已采纳组件范式/);
-    assert.match(JSON.stringify(model.requests[1]), /本任务可查阅的已采纳组件范式/);
+    assert.doesNotMatch(JSON.stringify(model.requests[0]), /本任务可查阅的已采纳组件范式|"name":"component_knowledge"/);
+    assert.doesNotMatch(JSON.stringify(model.requests[1]), /本任务可查阅的已采纳组件范式|"name":"component_knowledge"/);
     assert.match(JSON.stringify(model.requests[3]), /退出前等待任务完成/);
     assert.match(JSON.stringify(model.requests[5]), /new.cpp:1/);
     assert.match(JSON.stringify(model.requests[6]), /shell.cpp:1/);
@@ -53,7 +53,7 @@ test("真实 Pi 主/子会话编码前收到正式选择表，写文件和 Bash 
     const system = lastRequest.system ?? (lastRequest.messages ?? []).filter((m: any) => m.role === "system");
     assert.doesNotMatch(JSON.stringify(system), /本任务可查阅的已采纳组件范式/);
     const result = lastRequest.messages.at(-1).content[0].content;
-    assert.deepEqual(JSON.parse(result).paradigms, []);
+    assert.match(String(result), /未找到足够相关的知识/);
   } finally { session?.dispose(); await model.stop(); f.cleanup(); }
 });
 

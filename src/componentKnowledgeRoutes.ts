@@ -1,3 +1,4 @@
+import { componentKnowledgeArtifacts } from "./componentKnowledgeArtifacts.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { componentGovernance } from "./componentKnowledgeGovernance.ts";
@@ -13,12 +14,14 @@ export async function componentKnowledgeRoute(request: IncomingMessage, response
       }));
       return json(response, 200, { ...componentGovernance(dir), challenges });
     }
+    if (request.method === "GET" && parts.length === 3 && parts[2] === "artifacts") return json(response, 200, componentKnowledgeArtifacts(dir, parts[1]));
     if (request.method !== "POST") return json(response, 404, { error: "未知组件知识操作" });
     const input = await readBody(request, 16384);
     if (parts[1] === "sample") return json(response, 200, await service.sampleComponentKnowledge(String(input.task_id ?? "")));
     const item = componentGovernance(dir).items.find(r => r.id === parts[1]);
     if (!item) throw new Error("组件条目已不存在或源知识已停用，请刷新");
     if (input.source_digest !== item.source_digest) throw new Error("源知识已更新，请刷新后操作");
+    if (parts[2] === "policy" && item.kind !== "rule") throw new Error("知识是否可用由源文档控制，此处仅设置代码检查");
     if (parts[2] === "policy") return json(response, 200, saveComponentPolicy(dir, item.id, item.source_digest, input, operator));
     if (parts[2] === "feedback") return json(response, 200, addComponentFeedback(dir, { ...input, item_id: item.id }, operator));
     if (parts[2] === "challenge") return json(response, 202, service.getComponentResearch().startChallenge({

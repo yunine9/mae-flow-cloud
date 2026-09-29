@@ -9,7 +9,7 @@ export function createKnowledgeTool(options: {
   researchOperator?: () => string;
   service: () => KnowledgeSearch | undefined;
   context: () => KnowledgeContext;
-  onUse?: (event: { moment: "search" | "expand"; query?: string; ids: string[] }) => void;
+  onUse?: (event: { moment: "search" | "expand"; query?: string; ids: string[]; status?: "ready" | "unavailable" | "empty"; assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string }> }) => void;
 }) {
   const reply = (text: string, details: object = {}) => ({ content: [{ type: "text" as const, text }], details });
   return defineTool({
@@ -49,7 +49,7 @@ export function createKnowledgeTool(options: {
           const query = input.query?.trim();
           if (!query) return reply("请提供当前要解决的具体问题 query。");
           const result = await service.search(context, query);
-          options.onUse?.({ moment: "search", query, ids: result.hits.map(hit => hit.id) });
+          try { options.onUse?.({ moment: "search", query, ids: result.hits.map(hit => hit.id), status: !result.available ? "unavailable" : result.hits.length ? "ready" : "empty", assets: result.hits.map(hit => ({ id: hit.id, revision: hit.revision, start_line: hit.start_line, end_line: hit.end_line, heading: hit.heading })) }); } catch { /* 观测失败不改变检索结果。 */ }
           const warning = result.warnings.length ? `\n提示：${result.warnings.join("；")}` : "";
           if (!result.available) return reply(result.warnings.join("；"), { available: false });
           if (!result.hits.length) return reply("未找到足够相关的知识；继续根据现场证据工作，不代表相关知识一定不存在。" + warning, { available: true, hits: [] });
@@ -74,7 +74,7 @@ export function createKnowledgeTool(options: {
           selected.push(line); size += line.length;
         }
         const next = start + selected.length;
-        options.onUse?.({ moment: "expand", ids: [asset.id] });
+        try { options.onUse?.({ moment: "expand", ids: [asset.id], status: "ready", assets: [{ id: asset.id, revision: asset.revision, start_line: start, end_line: next - 1 }] }); } catch { /* 观测失败不改变读取结果。 */ }
         return reply(`${asset.title}\n范围：${asset.scope}\n文档修订：${asset.revision}（不是产品版本）\n`
           + `产品版本：${asset.productVersions.join("、") || "未单独声明，请核对正文"}\n`
           + `适用条件：${asset.whenToUse}\n共 ${lines.length} 行，从 ${start} 行开始：\n`

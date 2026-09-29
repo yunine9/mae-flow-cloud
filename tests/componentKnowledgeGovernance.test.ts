@@ -20,10 +20,8 @@ test("默认候选不进入 Agent 提示；策略即时生效、按路径检查�
     writeFileSync(join(f.cwd, "src/new.cpp"), "void x() { std::thread value; }\n");
     writeFileSync(join(f.cwd, "outside.cpp"), "void x() { std::thread value; }\n");
     const rule = c.catalog().rules[0];
-    assert.equal(c.guidance(), ""); assert.equal(await c.afterTool("Bash", {}), undefined);
+    assert.equal(await c.afterTool("Bash", {}), undefined);
     assert.equal(componentObservations(f.data).length, 2);
-    const check = await c.tool().execute("check", { action: "check" } as any, undefined, undefined, {} as any);
-    assert.deepEqual((check.details as any).findings, [], "手动工具也不能暴露候选提示");
     policy(f, rule, "warning", ["src/**"]);
     const visible = await c.afterTool("Bash", {}); assert.match(visible!, /src\/new.cpp/); assert.doesNotMatch(visible!, /outside.cpp/);
     policy(f, rule, "off"); assert.equal(await c.afterTool("Bash", {}), undefined);
@@ -75,11 +73,15 @@ test("治理接口从真实目录取当前版本，拒绝伪造条目，反例�
     f.publish(); const item = componentGovernance(f.data).items.find(i => i.kind === "rule")!;
     let challenge: any;
     const service: any = { options: { dataDir: f.data }, getComponentResearch: () => ({ list: () => [], startChallenge: (input: any) => { challenge = input; return { id: "challenge" }; } }) };
-    async function request(parts: string[], body: any) {
-      let result: any; await componentKnowledgeRoute({ method: "POST" } as any, {} as any, ["component-knowledge", ...parts], service, "owner", async () => body, (_r, status, value) => { result = { status, value }; }); return result;
+    async function request(parts: string[], body: any, method = "POST") {
+      let result: any; await componentKnowledgeRoute({ method } as any, {} as any, ["component-knowledge", ...parts], service, "owner", async () => body, (_r, status, value) => { result = { status, value }; }); return result;
     }
     assert.equal((await request([item.id, "policy"], { revision: 0, source_digest: "stale", level: "warning" })).status, 400);
     assert.equal((await request(["fake", "feedback"], {})).status, 400);
+    const artifacts = await request([item.id, "artifacts"], undefined, "GET");
+    assert.equal(artifacts.status, 200); assert.ok(artifacts.value.files[`derived/ast-grep/rules/${item.id}.yml`]);
+    const knowledge = componentGovernance(f.data).items.find(i => i.kind === "mapping")!;
+    assert.equal((await request([knowledge.id, "policy"], { source_digest: knowledge.source_digest })).status, 400);
     assert.equal((await request([item.id, "challenge"], { source_digest: item.source_digest })).status, 202);
     assert.deepEqual(challenge.repository_ids, ["base"]); assert.match(challenge.claim, /std::thread/);
     assert.equal((await request([item.id, "policy"], { revision: 0, source_digest: item.source_digest, level: "warning", owner: "owner", reason: "已核对适用边界" })).status, 200);

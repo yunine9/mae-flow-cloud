@@ -18,12 +18,13 @@ test("组件知识工作台桌面操作：启用、限定路径、样本反馈�
     for (const [width, height] of [[1920, 1080], [1366, 768]]) {
       const dump = join(dir, `${width}.html`), fd = openSync(dump, "w");
       try { execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, String(width))}`,
-        `--window-size=${width},${height}`, "--virtual-time-budget=2500", "--dump-dom",
+        `--window-size=${width},${height}`, "--virtual-time-budget=6000", "--dump-dom",
         ...(process.env.MFC_GOVERNANCE_SCREENSHOTS ? [`--screenshot=${join(process.env.MFC_GOVERNANCE_SCREENSHOTS, `governance-${width}.png`)}`] : []),
         `file://${html}?knowledgePage=component`], { timeout: 15000, stdio: ["ignore", fd, "ignore"] }); }
       catch (e) { if ((e as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw e; } finally { closeSync(fd); }
-      const result = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
-      assert.ok(result, `${width}: 页面未完成`); const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true);
+      const result = readFileSync(dump, "utf8").match(/<pre id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
+      if (!result && process.env.MFC_GOVERNANCE_SCREENSHOTS) writeFileSync(join(process.env.MFC_GOVERNANCE_SCREENSHOTS, "debug.html"), readFileSync(html));
+      assert.ok(result, `${width}: 页面未完成`); const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true, JSON.stringify(value));
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

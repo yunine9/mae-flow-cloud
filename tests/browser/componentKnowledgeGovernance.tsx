@@ -20,29 +20,48 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (path.endsWith("/policy")) { if (value.revision !== data.revision || !value.reason) throw new Error("策略字段缺失"); rule.policy = { ...rule.policy, ...value, operator: "组件负责人", updated_at: String(++data.revision) }; }
     if (path.endsWith("/feedback")) { rule.needs_review = true; rule.feedback.push({ ...value, id: "feedback", item_id: rule.id, at: "today", operator: "组件负责人" }); }
     if (path.endsWith("/challenge")) data.challenges.push({ id: "challenge", status: "done", stage: "反例研究已完成，请人工判断", draft: "## 找到合理反例\n基础仓启动适配器在任务池创建前需要原生线程。请收窄规则范围。", challenge: { item_id: rule.id, source_digest: rule.source_digest } });
-    return Response.json({});
+    return {ok:true,json:async () => ({})} as Response;
   }
-  return Response.json(path === "/component-knowledge" ? data : path === "/tasks" ? [] : {});
+  if (path.startsWith("/knowledge-documents/")) return {ok:true,json:async () => ({id:"kd-pool", content: "\n".repeat(23) + "## 后台任务的提交与等待\n### 怎么用\n```cpp\nPool pool; pool.submit(work);\n```", revision:"v1"})} as Response;
+  if (path.endsWith("/artifacts")) return {ok:true,json:async () => ({document_id:"kd-pool",document_revision:"v1",source_digest:"abc",files:{"derived/ast-grep/rules/component-thread.yml":"language: Cpp\nrule:\n  kind: qualified_identifier", "source.md":"原始知识"}})} as Response;
+  return {ok:true,json:async () => structuredClone(path === "/component-knowledge" ? data : path === "/tasks" ? [] : {})} as Response;
 };
-const delay = () => new Promise(r => setTimeout(r, 20));
+const delay = async () => { await new Promise(r => setTimeout(r, 20)); flushSync(() => {}); };
 function button(text: string) { const el = [...document.querySelectorAll("button")].find(e => e.textContent?.trim() === text); if (!el) throw new Error("找不到按钮 " + text); flushSync(() => el.click()); }
 function type(label: string, value: string) { const el = document.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | HTMLTextAreaElement; if (!el) throw new Error("找不到字段 " + label); const prototype = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; flushSync(() => { Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); }); }
+function choose(label: string, value: string) { const el = document.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; if (!el) throw new Error("找不到选项 " + label); flushSync(() => { el.value = value; el.dispatchEvent(new Event("change", {bubbles:true})); }); }
+function expand(text: string) { const el = [...document.querySelectorAll("summary")].find(e => e.textContent?.trim().startsWith(text)); if (!el) throw new Error("找不到展开项 " + text); el.click(); }
+function closeDialog() { const el = [...document.querySelectorAll('[data-slot="dialog-content"][data-open] button')].filter(e => e.textContent?.trim() === "Close").at(-1); if (!el) throw new Error("找不到关闭按钮"); flushSync(() => el.click()); }
 async function main() {
   const root = createRoot(document.getElementById("app")!);
   flushSync(() => root.render(<ComponentKnowledgeWorkspace open onClose={() => {}} onAdopt={id => { adopted = id; }} />));
-  for (let i = 0; i < 40 && !document.body.textContent?.includes("std::thread →"); i++) await delay();
-  flushSync(() => (document.querySelector('[aria-label="组件知识条目"] button') as HTMLButtonElement).click()); await delay();
+  for (let i = 0; i < 40 && !document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)"); i++) await delay();
+  if (!document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)")) throw new Error("未直接展示知识正文与示例：" + document.getElementById("app")?.textContent?.slice(0, 1200) + " calls=" + calls.join());
+  if (/替代规则|选型映射|文档抽查/.test(document.getElementById("app")?.textContent ?? "")) throw new Error("旧页签仍在");
+  if (document.querySelectorAll('[aria-label="组件列表"] button').length !== 1) throw new Error("派生规则被重复列作知识");
+  document.getElementById("result")!.textContent = JSON.stringify({progress:"打开设置"});
+  button("使用设置"); await delay(); expand("检查 std::thread");
   if (!document.body.textContent?.includes("src/work.cpp:42")) throw new Error("未显示实际命中位置");
-  button("已启用提示"); type("组件负责人", "线程池负责人"); type("策略变更理由", "对照样本与实现确认普通工作线程适用"); type("适用路径", "src/**");
-  button("保存策略"); await delay(); await delay();
+  document.getElementById("result")!.textContent = JSON.stringify({progress:"编辑规则"});
+  button("设置检查"); await delay(); choose("使用状态", "warning"); type("组件负责人", "线程池负责人"); type("策略变更理由", "对照样本与实现确认普通工作线程适用"); type("适用路径", "src/**");
+  button("保存"); await delay(); await delay();
   if (rule.policy.level !== "warning" || rule.policy.scope[0] !== "src/**") throw new Error("未保存人工策略");
-  button("针对这处反馈"); type("反馈依据", "启动适配器必须使用原生线程，存在合法例外"); button("记录反馈"); await delay(); await delay();
+  document.getElementById("result")!.textContent = JSON.stringify({progress:"样本纠错"});
+  button("这处提示有误"); await delay(); type("反馈依据", "启动适配器必须使用原生线程，存在合法例外"); button("提交纠错"); await delay(); await delay();
   if (!rule.feedback.some(f => f.observation_id === "sample")) throw new Error("反馈未关联实际样本");
-  button("寻找合理反例"); await delay(); await delay();
+  document.getElementById("result")!.textContent = JSON.stringify({progress:"例外与产物"});
+  button("核对例外"); await delay(); await delay();
   if (!calls.some(c => c.endsWith("/challenge"))) throw new Error("未启动反例研究");
-  button("查看并修正源文档 · 第 24 行"); if (adopted !== "kd-pool") throw new Error("源文档导航错误");
-  button("已停用"); type("策略变更理由", "存在反例，先停用并收窄范围"); button("保存策略"); await delay(); await delay();
+  // 当前设置面板中的产物入口；主页面入口处于关闭的 details 中。
+  const artifactButton = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find(e => e.textContent === "查看程序化产物") as HTMLButtonElement;
+  flushSync(() => artifactButton.click()); await delay(); await delay();
+  if (!document.querySelector('[aria-label="产物内容"]')?.textContent?.includes("qualified_identifier")) throw new Error("未显示可执行规则产物");
+  button("source.md"); if (document.querySelector('[aria-label="产物内容"]')?.textContent !== "原始知识") throw new Error("产物切换错误");
+  document.getElementById("result")!.textContent = JSON.stringify({progress:"关闭产物"});
+  closeDialog(); await delay();
+  button("设置检查"); await delay(); choose("使用状态", "off"); type("策略变更理由", "存在反例，先停用并收窄范围"); button("保存"); await delay(); await delay();
   if (String(rule.policy.level) !== "off") throw new Error("未停用规则");
+  closeDialog(); await delay(); expand("来源依据"); button("打开源文档"); if (adopted !== "kd-pool") throw new Error("源文档导航错误");
   if (document.documentElement.scrollWidth > innerWidth) throw new Error("桌面横向溢出");
   document.getElementById("result")!.textContent = JSON.stringify({ passed: true, width: innerWidth });
 }

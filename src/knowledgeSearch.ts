@@ -1,3 +1,4 @@
+import { isComponentKnowledge, searchComponentKnowledge } from "./componentKnowledgeSearch.ts";
 /** Unified read-only retrieval over published assets and adopted experiences.
  * Source catalogs remain authoritative; mirrors are disposable search input.
  * No workflow gates, inferred approvals, or edits to the original knowledge.
@@ -146,6 +147,10 @@ export class KnowledgeSearch {
   catalog(context: KnowledgeContext) { return collectSearchableKnowledge(this.dataDir, context); }
 
   documentStatus(asset: SearchableKnowledge) {
+    if (isComponentKnowledge(asset)) {
+      const result = searchComponentKnowledge([asset], "");
+      return result.warnings.length ? { state: "failed", error: result.warnings.join("；") } : { state: "ready", sections: result.hits.length };
+    }
     const path = this.mirror(asset), key = this.indexKey(path);
     if (this.indexed.get(path) === key) return { state: "ready", sections: this.sidecar?.indexedSections?.(path) };
     if (!this.sidecar) return { state: "failed", error: "知识检索服务未配置，原文已保存。" };
@@ -165,32 +170,48 @@ export class KnowledgeSearch {
   async prepare(): Promise<void> {
     if (!this.sidecar) return;
     const catalog = collectSearchableKnowledge(this.dataDir, { repo: "", repositories: [], moduleIds: [] }, true);
-    const results = await Promise.all(catalog.assets.map(asset => this.ensureIndexed(this.mirror(asset))));
+    const results = await Promise.all(catalog.assets.filter(asset => !isComponentKnowledge(asset)).map(asset => this.ensureIndexed(this.mirror(asset))));
     const failed = results.filter(ok => !ok).length;
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
   async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string, library = false): Promise<KnowledgeSearchResult> {
-    if (!this.sidecar) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
     const readCatalog = () => {
       const value = onlyId || library ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
       return onlyId ? { ...value, assets: value.assets.filter(a => a.id === onlyId) } : value;
     };
     const catalog = readCatalog();
-    const sources = catalog.assets.map(asset => ({ id: asset.id, path: this.mirror(asset) }));
+    const components = searchComponentKnowledge(catalog.assets, query);
+    const ordinary = catalog.assets.filter(asset => !isComponentKnowledge(asset));
+    const merge = (result: KnowledgeSearchResult): KnowledgeSearchResult => {
+      const latest = new Map(readCatalog().assets.map(asset => [asset.id, asset.revision]));
+      const direct = components.hits.filter(hit => latest.get(hit.id) === hit.revision);
+      // 两类结果的分数不可直接比较；交替保留，避免组件条目挤掉普通知识。
+      const hits: KnowledgeHit[] = [];
+      for (let i = 0; hits.length < limit && i < Math.max(direct.length, result.hits.length); i++) {
+        if (direct[i]) hits.push(direct[i]);
+        if (result.hits[i] && hits.length < limit) hits.push(result.hits[i]);
+      }
+      return { available: direct.length > 0 || result.available,
+        hits,
+        warnings: [...new Set([...catalog.warnings, ...components.warnings, ...result.warnings])] };
+    };
+    if (!ordinary.length) return merge({ available: true, hits: [], warnings: [] });
+    if (!this.sidecar) return merge({ available: false, hits: [], warnings: ["普通文档检索暂不可用；组件知识可直接查询，继续当前任务。"] });
+    const sources = ordinary.map(asset => ({ id: asset.id, path: this.mirror(asset) }));
     if (!sources.length) return { available: true, hits: [], warnings: catalog.warnings };
     // One shared in-flight index per document revision; no duplicate
     // index jobs on repeated questions. The caller has a bounded wait below.
     const jobs = sources.map(source => this.ensureIndexed(source.path));
     const ready = await within(Promise.all(jobs).then(values => values.every(Boolean)), 1200);
     const searchable = sources.filter(source => this.indexed.get(source.path) === this.indexKey(source.path));
-    if (!searchable.length) return { available: false as const, hits: [], warnings: ["相关知识索引正在准备或暂不可用；继续当前任务，不等待或反复重试。"] };
-    const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000);
-    if (!hits) return { available: false as const, hits: [], warnings: ["知识检索暂不可用；继续当前任务。"] };
+    if (!searchable.length) return merge({ available: false, hits: [], warnings: ["普通文档索引正在准备或暂不可用。"] });
+    const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000).catch(() => undefined);
+    if (!hits) return merge({ available: false, hits: [], warnings: ["普通文档检索暂不可用。"] });
     // A document may have been edited/withdrawn during asynchronous indexing.
     const current = new Map(readCatalog().assets.map(asset => [asset.id, asset]));
     const searched = new Map(catalog.assets.map(asset => [asset.id, asset]));
-    return { available: true as const, warnings: [...catalog.warnings, ...(!ready || hits.pendingSources ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
+    return merge({ available: true as const, warnings: [...catalog.warnings, ...(!ready || hits.pendingSources ? ["部分文档尚未索引完成，当前结果不是完整知识范围。"] : [])], hits: hits.flatMap(hit => {
       const asset = current.get(hit.id), prior = searched.get(hit.id);
       if (!asset || !prior || asset.content !== prior.content || asset.revision !== prior.revision) return [];
       const path = sources.find(source => source.id === asset.id)?.path;
@@ -205,7 +226,7 @@ export class KnowledgeSearch {
         whenToUse: asset.whenToUse, summary: asset.kind === "experience" ? asset.summary : hit.snippet,
         versionNote: asset.productVersions.length ? `适用产品版本：${asset.productVersions.join("、")}`
           : "未单独声明产品版本；使用前核对正文中的适用条件与例外。" }];
-    }) };
+    }) });
   }
 
   read(context: KnowledgeContext, id: string) {

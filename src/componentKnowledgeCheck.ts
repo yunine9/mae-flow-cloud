@@ -154,5 +154,5 @@ export function componentCheckMessage(report: ComponentKnowledgeCheckReport) {
   return [report.status === "incomplete" ? "组件使用检查未完成。" : report.status === "not_applicable" ? "当前没有适用的组件语法规则。" : `组件使用检查：${report.checked_files} 个文件，${report.findings.length} 处需核对。`,
     `模式：观察提示；规则版本 ${report.rules_digest.slice(0, 12)}。语法命中不等于违规，请核对依赖版本、适用条件和合法例外，不机械替换。`,
     ...report.findings.slice(0, 20).map(f => `${f.path}:${f.line}：${f.need}，可选 ${f.component} / ${f.api.join("、")}。条件：${f.applicability}。依据：knowledge read id=${f.document_id} start_line=${f.document_line} revision=${f.document_revision}（${f.paradigm_id}）`),
-    ...(report.findings.length > 20 ? ["更多结果使用 component_knowledge(action=check) 查看。"] : []), ...report.warnings].join("\n");
+    ...(report.findings.length > 20 ? ["更多结果见任务的组件使用检查。"] : []), ...report.warnings].join("\n");
 }

@@ -25,7 +25,7 @@ export interface ComponentFeedback {
 export interface ComponentGovernanceItem {
   id: string; kind: "mapping" | "rule"; source_digest: string; policy: ComponentPolicy; original?: string; rule?: Record<string, unknown>;
   paradigm: { title: string; component: string; language: string; need: string; api: string[]; applicability: string;
-    replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; document_id: string; start_line: number;
+    replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; document_id: string; start_line: number; end_line?: number;
     evidence: Array<{ repository_id: string; path: string; revision: string; start: number; end: number }>; usage_evidence: string[] };
   samples: Array<ComponentKnowledgeFinding & { id: string; repository: string; checked_at: string; head?: string }>;
   feedback: ComponentFeedback[]; needs_review: boolean;

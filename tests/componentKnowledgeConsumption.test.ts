@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { componentSection, consumptionFixture, enableComponentHints } from "./componentConsumptionFixture.ts";
-import { componentKnowledgeCatalog, componentSelectionTable, publishedComponentParadigms } from "../src/componentKnowledgeCatalog.ts";
+import { componentKnowledgeCatalog, publishedComponentParadigms } from "../src/componentKnowledgeCatalog.ts";
 import { checkComponentKnowledge } from "../src/componentKnowledgeCheck.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
@@ -21,7 +21,7 @@ test("正式组件知识按仓库、语言和产品版本消费；无 replaces �
     enableComponentHints(f);
     let catalog = componentKnowledgeCatalog(f.data, f.context, ["cpp"]);
     assert.equal(catalog.paradigms.length, 2); assert.equal(catalog.rules.length, 1);
-    assert.match(componentSelectionTable(catalog), /等待所有任务完成/);
+    assert.ok(catalog.paradigms.some(p => p.need === "等待所有任务完成"));
     const p = catalog.paradigms[0], asset = new KnowledgeSearch(f.data).read(f.context, p.document_id)!;
     assert.match(asset.content.split("\n").slice(p.start_line - 1, p.end_line).join("\n"), /退出前等待/);
     assert.equal(p.document_revision, doc.revision);

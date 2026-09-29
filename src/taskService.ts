@@ -5358,7 +5358,13 @@ export class TaskService {
         try { return String(JSON.parse(readFileSync(join(task.cwd!, ".mae-flow.json"), "utf8"))?.config?.["基线分支"] ?? ""); } catch { return ""; }
       },
       onReport: report => {
-        if (report.trigger === "sample") return; task.summary.delivery = { ...task.summary.delivery, component_knowledge: report }; this.persist(task); },
+        if (report.trigger === "sample") return;
+        task.summary.delivery = { ...task.summary.delivery, component_knowledge: report }; this.persist(task);
+        this.logMemoryUsage(task, { moment: "component_check", status: report.status === "incomplete" ? "unavailable" : "ready",
+          ids: [...new Set(report.findings.map(f => f.document_id))],
+          assets: [...new Map(report.findings.map(f => [JSON.stringify([f.document_id, f.document_revision, f.document_line]), { id: f.document_id, revision: f.document_revision, start_line: f.document_line }])).values()],
+          check: { trigger: report.trigger, head: report.head, findings: report.findings.length,
+            hints: report.findings.filter(f => f.level === "warning" && !f.exempt_reason).length, rules_digest: report.rules_digest } }); },
     });
   }
 

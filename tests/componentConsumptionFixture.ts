@@ -32,7 +32,7 @@ export function consumptionFixture() {
 
 export function enableComponentHints(f: ReturnType<typeof consumptionFixture>) {
   const catalog = componentKnowledgeCatalog(f.data, f.context);
-  for (const item of [...catalog.rules, ...catalog.paradigms.map(p => ({ ...p, id: p.mapping_id }))]) {
+  for (const item of catalog.rules) {
     saveComponentPolicy(f.data, item.id, item.source_digest, { revision: readComponentPolicies(f.data).revision,
       source_digest: item.source_digest, level: "warning", owner: "组件负责人", reason: "已对照实际代码核对适用条件", scope: [] }, "expert");
   }

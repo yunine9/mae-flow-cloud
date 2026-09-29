@@ -428,7 +428,7 @@ export interface CloudSessionOptions {
   extraTools?: unknown[];
   /** 宿主的固定工作指令，主/子会话及恢复时都进入系统提示，不随对话压缩。 */
   additionalSystemInstructions?: readonly string[];
-  /** 正式组件范式的选型提示与新增代码观察；主、子和恢复会话共用。 */
+  /** 组件新增代码检查；主、子和恢复会话共用，知识查询沿用 knowledge。 */
   componentKnowledge?: ComponentKnowledgeConsumption;
   /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
@@ -1225,9 +1225,6 @@ export class CloudSession {
         {
           name: "mae-flow-gate",
           factory: (pi: any) => {
-            if (this.options.componentKnowledge) pi.on("before_agent_start", async (event: any) => ({
-              systemPrompt: [event.systemPrompt, this.options.componentKnowledge!.guidance()].filter(Boolean).join("\n\n"),
-            }));
             const memoryContext = this.options.memoryContext?.();
             if (memoryContext) pi.on("context", async (event: any) => ({
               messages: await memoryContext(event.messages),
@@ -1382,7 +1379,6 @@ export class CloudSession {
       customTools: [
         ...(config.customTools as any[]),
         ...((config.extraTools ?? this.options.extraTools ?? []) as any[]),
-        ...(this.options.componentKnowledge ? [this.options.componentKnowledge.tool()] : []),
         ...visionTools,
         ...ownedFileTools,
         ...isolatedTools,

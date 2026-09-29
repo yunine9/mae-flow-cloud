@@ -218,8 +218,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
       className="mx-3.5 mb-3.5 rounded-lg border border-line bg-surface p-3.5">
       <header className="flex items-start justify-between gap-3">
         <div className="grid gap-0.5"><strong id="knowledge-memory-usage-title"
-          className="text-base font-semibold text-foreground">这单用到的</strong>
-          <small className="text-sm/relaxed text-muted-foreground">宿主在开局、进入新阶段、首次改某目录时替 Agent 查过并推送的记忆，以及 Agent 自己查过、展开过的。</small></div>
+          className="text-base font-semibold text-foreground">知识使用记录</strong>
+          <small className="text-sm/relaxed text-muted-foreground">检索、正文读取与代码检查的实际记录。</small></div>
         <Badge variant="merge">{memoryUsage.length} 次</Badge>
       </header>
       {memoryUsage.length ? <ol className="mt-2.5 grid list-none gap-1.5 p-0">
@@ -230,23 +230,24 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             text-left">
             <MemoryMark tone={row.moment === "search" || row.moment === "expand"
               ? "plain" : "default"}>
-              {row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
+              {row.moment === "component_check" ? "检" : row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
                 : row.moment === "edit" ? "改" : row.moment === "search" ? "查" : "展"}
             </MemoryMark>
             <span className="grid min-w-0 gap-0.5">
               <strong className="flex flex-wrap items-center gap-1.5
-                text-[13.5px] text-foreground">{row.moment === "context" ? (row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
+                text-[13.5px] text-foreground">{row.moment === "component_check" ? `组件检查：${row.status === "unavailable" ? "未完成" : `${row.check?.findings ?? 0} 处命中，${row.check?.hints ?? 0} 处需核对`}` : row.moment === "context" ? (row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
                 : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
                   : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时${row.digest ? "推送目录摘要" : "提醒"}`
                     : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`
-                      : "Agent 展开记忆"}</strong>
+                      : row.status === "rejected" ? "知识读取被拒绝" : row.status === "unavailable" ? "知识读取未完成" : "Agent 读取知识正文"}</strong>
               <em className="font-mono text-xs text-muted-foreground">{row.ids.length ? row.ids.join("、") : "没有命中"}</em>
+              {row.assets?.map((asset, i) => <a key={`${asset.id}-${i}`} className="break-all text-sm text-primary" href={`/?knowledgeDocuments=1&knowledgeDocument=${encodeURIComponent(asset.id)}`}>{asset.heading || asset.id} · {asset.start_line ? `第 ${asset.start_line}${asset.end_line ? `–${asset.end_line}` : ""} 行 · ` : ""}{asset.revision.slice(0, 12)}</a>)}
               <small className="text-sm text-faint">{time(row.ts)}</small>
             </span>
           </div>
         </li>)}
       </ol> : <Empty className="mb-3.5 border p-3">
-        <EmptyDescription>还没有推送或检索。任务启动时会按仓推送历史记忆；Agent 也可以自己用 corpus_search 查。</EmptyDescription></Empty>}
+        <EmptyDescription>尚无知识使用记录。</EmptyDescription></Empty>}
     </section>
     {utMethod && <p className={cn("mx-3.5 mb-3 rounded-[9px] border px-2.5 py-2",
       "text-sm", utMethod === "仓内既有写法"
