@@ -67,6 +67,7 @@ export async function componentResearchRoute(
         }
         throw new Error("未知组件归档操作");
       }
+      if (request.method === "GET" && parts[1] && parts[2] === "artifacts") return json(response, 200, research.artifacts(parts[1]));
       if (request.method === "GET" && parts[1] && parts[2] === "document") {
         const content = research.markdown(parts[1]);
         response.writeHead(200, { "content-type": "text/markdown; charset=utf-8",

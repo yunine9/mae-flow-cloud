@@ -9,6 +9,8 @@ export interface ComponentRepository {
   enabled: boolean;
 }
 export interface ComponentResearchRecord {
+  source_policy?: "code-only-v1";
+  pipeline?: { tasks: Array<{ id: string; title: string; status: string; feedback?: string }> };
   material_ids?: string[];
   update_document_revision?: string;
   update_metadata?: { title: string; scope: string; module_ids: string[]; repositories: string[] };
@@ -39,6 +41,7 @@ export interface ComponentResearchRecord {
   evidence: Array<Record<string, unknown>>;
 }
 export interface ComponentResearchSection {
+  paradigm?: { kind: string; component: string; language: string; status: string; need: string; api: string[]; applicability: string; replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; evidence: Array<{ repository_id: string; path: string; revision: string; start: number; end: number }>; usage_evidence: string[]; open_questions: string[] };
   id: string; title: string; repository_ids: string[]; selected: boolean;
   content: string; interfaces: string; integration: string; example: string; sources: string;
   related_ids: string[]; revision: number;

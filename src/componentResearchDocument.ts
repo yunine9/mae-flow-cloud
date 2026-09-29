@@ -1,7 +1,9 @@
+import { validateComponentParadigm, componentSources, type ComponentParadigm } from "./componentParadigms.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
 /** 一项是可独立理解、使用和审查的能力，可能由多个仓共同提供。 */
 export interface ResearchSection {
+  paradigm?: ComponentParadigm;
   id: string;
   title: string;
   repository_ids: string[];
@@ -52,7 +54,7 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
   scanForSecrets("组件知识草稿", Buffer.from(JSON.stringify(edit)));
   const next = structuredClone(document);
   const check = (entry: { id: string; title: string; repository_ids: string[] }) => {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(entry.id) || !entry.title?.trim()) throw new Error("组件须有稳定编号和名称");
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(entry.id) || !entry.title?.trim()) throw new Error("组件须有稳定编号和名称");
     if (!entry.repository_ids?.length || entry.repository_ids.some(id => !repositoryIds.includes(id))) {
       throw new Error("组件来源必须对应本次研究范围内的仓库");
     }
@@ -76,7 +78,9 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
   } else if (edit.action === "section" && edit.section) {
     const section = edit.section;
     check(section);
+    if (section.paradigm) { validateComponentParadigm(section.paradigm, repositoryIds); section.sources = componentSources(section.paradigm); }
     const index = next.sections.findIndex(item => item.id === section.id);
+    if (index >= 0 && next.sections[index].paradigm && !section.paradigm) throw new Error("不能删除已有范式的结构化字段");
     if (index < 0) throw new Error("请先将组件加入能力清单，再写正文");
     if (!sectionReady({ ...section, selected: true, revision: 1 })) {
       throw new Error("每个组件都必须写用法、公共接口、集成产物/依赖、来源和含代码块的最佳示例；未验证的示例须如实标注");
@@ -91,7 +95,8 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
 
 export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false): string {
   const sections = document.sections.filter(section => !selectedOnly || section.selected);
-  return [`# ${title}`, document.overview,
+  const metadata = sections.filter(s => s.paradigm).map(s => ({ id: s.id, title: s.title, revision: s.revision, ...s.paradigm }));
+  return [metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", `# ${title}`, document.overview,
     "## 组件目录", ...sections.map(section => `- [${section.title}](#component-${section.id})`),
     ...sections.map(section => [
       `<a id="component-${section.id}"></a>`, `## ${section.title}`,

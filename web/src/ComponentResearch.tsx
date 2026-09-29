@@ -1,6 +1,5 @@
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
-import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
 import { ExtractionSkillEditor } from "./ExtractionSkillEditor";
 import { useEffect, useState } from "react";
@@ -74,7 +73,6 @@ export function ComponentResearch({
     [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
-  const [materials, setMaterials] = useState<MaterialSummary[]>([]), [uploading, setUploading] = useState(false);
   const [mode, setMode] = useState<"all" | "topic">("all");
   const [selected, setSelected] = useState(
       new URLSearchParams(location.search).get("componentResearch") ?? "",
@@ -179,7 +177,7 @@ export function ComponentResearch({
     try {
       const r = await componentRequest<ComponentResearchRecord>(
         "/component-research",
-        { language, mode, material_ids: materials.map(m => m.id), ...(mode === "topic" ? { topic } : {}) },
+        { language, mode, ...(mode === "topic" ? { topic } : {}) },
       );
       await load();
       setDetail(r);
@@ -201,7 +199,7 @@ export function ComponentResearch({
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   return (
-    <KnowledgeExtractionWorkspace title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
+    <KnowledgeExtractionWorkspace codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
       onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}
       sidebar={!focused ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
@@ -257,6 +255,7 @@ export function ComponentResearch({
                     {knowledgeLanguageLabel(current.language)} ·{" "}
                     {current.operator}
                   </p>
+                  {current.pipeline && <p className="mt-2 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(t => t.status === "done").length}/{current.pipeline.tasks.length} 项通过 · 来源：基础仓代码、everycode</p>}
                   {current.skill && <p className="mt-2 text-xs text-muted-foreground">Skill：{current.skill.name} · {current.skill.digest.slice(0, 12)}</p>}
                   <p className="mt-3 font-medium text-primary">
                     {current.stage}
@@ -267,7 +266,7 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                <KnowledgeExtractionStages value={stage} onChange={setStage} label="组件萃取阶段" />
+                <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />
                 {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
                 {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">
@@ -288,10 +287,10 @@ export function ComponentResearch({
                 </section>}
                 {stage === "inputs" && <details open className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
-                    源码范围与资料
+                    源码范围与调用来源
                   </summary>
                   {stage === "inputs" && (current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
-                  {stage === "inputs" && <p className="mt-3 text-sm">关联资料：{current.material_ids?.length ?? 0} 份；新一轮可按当前来源核对并生成更新建议。</p>}
+                  {stage === "inputs" && <p className="mt-3 text-sm">来源限定为基础仓固定版本代码与 everycode 真实调用。{current.material_ids?.length ? "此历史记录曾关联上传资料，重新研究须新建任务。" : ""}</p>}
                 </details>}
                 {stage === "progress" && <KnowledgeResearchProgress key={current.id} evidence={current.evidence} />}
                 {current.draft && ["review", "publish"].includes(stage) && (
@@ -437,9 +436,9 @@ export function ComponentResearch({
                     placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
                   />
                 </label>}
-                <KnowledgeMaterialUpload materials={materials} onChange={setMaterials} onBusy={setUploading} />
+                <p className="text-sm text-muted-foreground">仅从基础仓代码与 everycode 真实调用萃取，不使用上传资料或无线豆包。</p>
                 <Button
-                  disabled={busy || uploading || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
+                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
                   onClick={() => void start()}
                 >
                   {busy ? "发起中…" : mode === "all" ? "一键萃取全部组件" : "开始后台萃取"}

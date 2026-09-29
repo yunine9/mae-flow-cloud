@@ -1,4 +1,5 @@
-import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
+import { exportComponentArtifacts } from "./componentParadigms.ts";
+import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
 /** Background research is an inspectable draft, not a task or a delivery gate. */
 import { randomUUID } from "node:crypto";
 import {
@@ -26,6 +27,8 @@ import { editResearchDocument, researchDocumentMarkdown, sectionReady,
   type ResearchSection, type ResearchDocument, type ResearchDocumentEdit, type ResearchReviewTurn } from "./componentResearchDocument.ts";
 export interface ResearchRecord {
   id: string;
+  pipeline?: ComponentPipelineState;
+  source_policy?: "code-only-v1";
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
   mode?: "topic" | "all" | "component";
@@ -143,8 +146,8 @@ export class ComponentResearch {
   }
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
-    const material_ids = [...new Set(input.material_ids ?? [])];
-    if (material_ids.length > 30 || material_ids.reduce((bytes, id) => bytes + readKnowledgeMaterial(join(this.dir, "knowledge-materials"), id).bytes, 0) > 100 * 1024 * 1024) throw new Error("最多关联 30 份资料，总容量 100 MiB");
+    if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
+    const material_ids: string[] = [];
     const language = normalizeKnowledgeLanguages([input.language])[0];
     const components = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
     if (!components.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
@@ -156,7 +159,7 @@ export class ComponentResearch {
       throw new Error("请填写具体萃取主题，最多 1000 字");
     const key = JSON.stringify([
       components.map(componentKey).sort(),
-      language,
+      "code-only-v1", language,
       topic.replace(/\s+/g, " ").toLowerCase(), material_ids,
     ]);
     const previous = [...this.records.values()]
@@ -176,7 +179,7 @@ export class ComponentResearch {
       id: `cr-${randomUUID()}`,
       component,
       components,
-      material_ids,
+      material_ids, source_policy: "code-only-v1",
       language,
       topic,
       operator,
@@ -199,10 +202,10 @@ export class ComponentResearch {
       created_at: new Date().toISOString(), stage: "等待自动分析组件", evidence: [] };
   }
   private startAll(components: ComponentRepository[], language: string, operator: string, refresh = false, material_ids: string[] = []) {
-    const key = JSON.stringify(["joint-document", language, components.map(componentKey).sort(), material_ids]);
+    const key = JSON.stringify(["joint-document", "code-only-v1", language, components.map(componentKey).sort(), material_ids]);
     const previous = [...this.records.values()].reverse().find(r => r.mode === "all" && r.key === key && r.operator === operator && !r.deleted_at);
     if (previous && (!refresh || ["queued", "running"].includes(this.get(previous.id).status))) return this.get(previous.id);
-    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components, material_ids,
+    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components, material_ids, source_policy: "code-only-v1",
       language, topic: "基础组件联合使用指南", operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [],
       stage: "等待跨仓联合萃取", evidence: [] };
@@ -243,11 +246,11 @@ export class ComponentResearch {
               root: this.root(record.id),
               signal: controller.signal,
               review: review ? structuredClone(review) : undefined,
-              ...(record.document ? {
-                readDocument: () => structuredClone(review ? revisedDocument! : record.document!),
+              ...{
+                readDocument: () => structuredClone(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }),
                 editDocument: (edit: ResearchDocumentEdit) => {
                   if (controller.signal.aborted || record.deleted_at || record.status !== "running") throw new Error("本轮已停止，未修改草稿");
-                  const document = editResearchDocument(review ? revisedDocument! : record.document!, edit, (record.components ?? [record.component]).map(c => c.id), review);
+                  const document = editResearchDocument(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }, edit, (record.components ?? [record.component]).map(c => c.id), review);
                   if (review) {
                     revisedDocument = document;
                     if (review.mode !== "discuss") review.proposal = { base_revision: review.base_revision!,
@@ -257,7 +260,7 @@ export class ComponentResearch {
                   else this.update(record, { document, draft: researchDocumentMarkdown(record.topic, document) });
                   return structuredClone(document);
                 },
-              } : {}),
+              },
               update: (patch) => { if (!controller.signal.aborted && !record.deleted_at && record.status !== "cancelled") { if (patch.skill && review) review.skill = patch.skill; this.update(record, patch); } },
               evidence: (item) => {
                 if (record.deleted_at || record.status === "cancelled" || controller.signal.aborted) return;
@@ -336,6 +339,7 @@ export class ComponentResearch {
     if (this.stopped) throw new Error("服务正在停止");
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
+    if (record.source_policy !== "code-only-v1") return this.start({ mode: record.mode === "all" ? "all" : "topic", language: record.language, topic: record.topic, refresh: true }, operator);
     if (record.format === "joint-document") {
       if (["queued", "running"].includes(record.status)) return record;
       if (record.document_id) throw new Error("已采纳的草稿保留原样；请新建联合萃取任务");
@@ -382,15 +386,11 @@ export class ComponentResearch {
     if (!record?.document || record.deleted_at || record.document_id) throw new Error("当前草稿不可讨论或返工");
     if (this.running.has(id) || ["queued", "running"].includes(record.status)) throw new Error("请等待本轮完成或停止后再继续对话");
     if (!record.document.sections.some(section => section.id === input.section_id)) throw new Error("请先选择要讨论或返工的组件");
+    if (record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用代码来源的研究后再修订");
     const message = String(input.message ?? "").trim();
     if (!["discuss", "rework", "update"].includes(input.mode) || !message || message.length > 20_000) throw new Error("请填写讨论或返工要求，最多 20000 字");
     scanForSecrets("专家讨论", Buffer.from(message));
-    if (input.material_ids) {
-      if (!Array.isArray(input.material_ids) || input.material_ids.length > 30 || input.material_ids.some(id => typeof id !== "string")) throw new Error("最多关联 30 份资料");
-      const ids = [...new Set(input.material_ids)];
-      if (ids.reduce((bytes, id) => bytes + readKnowledgeMaterial(join(this.dir, "knowledge-materials"), id).bytes, 0) > 100 * 1024 * 1024) throw new Error("资料总容量不能超过 100 MiB");
-      record.material_ids = ids;
-    }
+    if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
     record.review_turns ??= [];
     record.review_turns.push({ id: `review-${randomUUID()}`, section_id: input.section_id,
       mode: input.mode, message, operator, status: "queued", created_at: new Date().toISOString(),
@@ -405,6 +405,14 @@ export class ComponentResearch {
     if (["queued", "running"].includes(record.status) && !record.review_turns?.some(t => ["queued", "running"].includes(t.status))) throw new Error("首次萃取正在写入，请等待完成");
     if (section.revision !== input.base_revision) throw new Error("章节已有新版本，请比较后重新保存");
     const document = editResearchDocument(record.document, { action: "section", section: input.section }, (record.components ?? [record.component]).map(c => c.id));
+    const metadata = document.sections.find(s => s.id === section.id)?.paradigm;
+    if (record.source_policy === "code-only-v1" && metadata) {
+      if (metadata.language !== record.language) throw new Error("范式语言与研究语言不一致");
+      for (const ref of metadata.evidence) if (!record.evidence.some(e => e.tool === "component_source" && e.action === "read" && e.status === "returned"
+        && e.component_id === ref.repository_id && e.path === ref.path && e.revision === ref.revision
+        && Number(e.start) <= ref.start && Number(e.end) >= ref.end)) throw new Error("引用必须对应本任务已读取的基础仓代码范围");
+      for (const id of metadata.usage_evidence) if (!record.evidence.some(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.status === "returned" && e.content)) throw new Error("调用证据必须对应本任务已取得的 everycode 原文");
+    }
     record.section_history ??= [];
     record.section_history.push({ at: new Date().toISOString(), operator, section: structuredClone(section) });
     this.update(record, { document, draft: researchDocumentMarkdown(record.topic, document) });
@@ -413,7 +421,7 @@ export class ComponentResearch {
   decideProposal(id: string, turnId: string, decision: "accept" | "discard", operator: string) {
     const record = this.records.get(id), turn = record?.review_turns?.find(t => t.id === turnId);
     if (!record || record.deleted_at || record.document_id || !turn?.proposal) throw new Error("修订建议不存在或草稿已归档");
-    if (["queued", "running"].includes(turn.status)) throw new Error("本轮仍在生成修订建议，请等待完成");
+    if (decision === "accept" && turn.status !== "done") throw new Error("本轮尚未完成独立评审，不能采纳修订建议");
     if (!["accept", "discard"].includes(decision)) throw new Error("请选择采纳或放弃");
     if (turn.proposal.status !== "pending") return this.get(id);
     if (decision === "accept") this.editSection(id, { section: turn.proposal.section, base_revision: turn.proposal.base_revision }, operator);
@@ -438,6 +446,18 @@ export class ComponentResearch {
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
     return record.document ? researchDocumentMarkdown(record.topic, record.document, true) : record.draft ?? "";
+  }
+  artifacts(id: string) {
+    const record = this.get(id);
+    if (record.deleted_at) throw new Error("萃取任务已删除");
+    const exported = exportComponentArtifacts(record.document?.sections ?? []);
+    const ids = new Set(exported.catalog.flatMap(p => p.usage_evidence));
+    const references = [...ids].map(id => {
+      const e = record.evidence.find(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.content);
+      if (!e) throw new Error(`缺少 everycode 原始证据：${id}`);
+      return { id, repository: e.repository, path: e.path, start: e.start ?? 1, end: e.end ?? 160, content: e.content, revision: null, version_note: "原始返回未结构化提供版本，具体版本以正文为准" };
+    });
+    return { ...exported, files: { ...exported.files, "evidence/everycode.json": JSON.stringify(references, null, 2) + "\n" } };
   }
   archiveDraft(id: string, input: { title?: string; content?: string }) {
     const record = this.get(id);

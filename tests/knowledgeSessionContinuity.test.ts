@@ -1,3 +1,4 @@
+import { componentPipelineScript } from "./componentPipelineFixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -64,37 +65,34 @@ test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不�
   } finally { release(); await service.shutdown(); await model.stop(); rmSync(f.dir, { recursive: true, force: true }); }
 });
 
-test("组件萃取重启接续原 Pi 会话；用户明确停止的任务不会被复活", async () => {
+test("组件萃取重启保留通过的小任务并创建新会话；明确停止不复活", async () => {
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve), oldEc = process.env.MAE_FLOW_EC_BIN;
-  const ec = join(f.dir, "ec"); writeFileSync(ec, "#!/bin/sh\necho '[]'\n", { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+  const ec = join(f.dir, "ec"); writeFileSync(ec, "#!/bin/sh\necho 'caller code'\n", { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
   const row = saveComponentRepository(f.dir, { name: "组件", repository: "https://example.test/component.git", branch: "master", path: "", languages: ["cpp"] }, "expert");
-  const model = new ScriptedModelServer([
-    { tool: { name: "component_source", input: { action: "read", component_id: row.id, path: "code.ts" } } },
-    { text: "原组件研究已完成" },
-  ], "scripted-v1", { beforeScene: async ({ index }) => { if (index === 1 && !paused) { paused = true; await hold; } } });
+  const fixtureScript = componentPipelineScript(row.id, "code.ts", f.revision, "caller code\n");
+  let model = new ScriptedModelServer(fixtureScript.script, "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
+    if (index === fixtureScript.offsets["plan-pool"] && !paused) { paused = true; await hold; }
+  } });
   await model.start();
   const options = { dataDir: f.dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: f.source, revision: f.revision }) };
   let service = new ComponentResearch(f.dir, input => runComponentResearch(input, options));
   try {
-    const job = service.start({ component_id: row.id, language: "cpp", topic: "接口规则" }, "expert");
-    await until(() => paused); await service.shutdown(); release();
+    const job = service.start({ language: "cpp", topic: "接口规则" }, "expert");
+    await until(() => paused); await service.shutdown(); release(); await model.stop();
     assert.equal(service.get(job.id).status, "queued");
+    assert.equal(service.get(job.id).pipeline!.tasks.find(t => t.id === "inventory")!.status, "done");
+    const inventoryReads = service.get(job.id).evidence.filter(e => e.pipeline_task === "inventory").length;
+    model = new ScriptedModelServer(fixtureScript.script.slice(fixtureScript.offsets["plan-pool"]), "scripted-v1", { linear: true }); await model.start();
     service = new ComponentResearch(f.dir, input => runComponentResearch(input, options));
     await until(() => ["done", "failed"].includes(service.get(job.id).status));
     assert.equal(service.get(job.id).status, "done", service.get(job.id).error);
-    assert.equal(service.get(job.id).evidence.filter(e => e.tool === "component_source" && e.action === "read").length, 1);
-    assert.match(JSON.stringify(model.requests.at(-1)), /ORIGINAL_CONTEXT/);
-    assert.match(readFileSync(join(f.dir, "component-research", job.id, "events.jsonl"), "utf8"), /"context_restored":true/);
-    const stopped = service.start({ component_id: row.id, language: "cpp", topic: "停止用例" }, "expert");
-    service.stop(stopped.id); await service.shutdown();
+    assert.equal(service.get(job.id).evidence.filter(e => e.pipeline_task === "inventory").length, inventoryReads);
+    assert.equal(service.get(job.id).document!.sections.length, 4);
+    const stopped = service.start({ language: "cpp", topic: "停止用例" }, "expert"); service.stop(stopped.id); await service.shutdown();
     service = new ComponentResearch(f.dir, async () => { throw new Error("不应执行已停止任务"); });
     assert.equal(service.get(stopped.id).status, "cancelled");
-  } finally {
-    release(); await service.shutdown(); await model.stop();
-    if (oldEc === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = oldEc;
-    rmSync(f.dir, { recursive: true, force: true });
-  }
+  } finally { release(); await service.shutdown(); await model.stop(); if (oldEc === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = oldEc; rmSync(f.dir, { recursive: true, force: true }); }
 });
 
 test("领域修订建议在重启前落盘，接续保留原文版本并保护期间的人工修改", async () => {

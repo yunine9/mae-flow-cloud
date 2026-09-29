@@ -1,3 +1,4 @@
+import { componentPipelineScript } from "./componentPipelineFixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -218,38 +219,9 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     { mode: 0o700 },
   );
   process.env.MAE_FLOW_EC_BIN = fakeEc;
+  writeFileSync(join(dir, "AGENTS.md"), "FORBIDDEN_COMPONENT_CONTEXT_SENTINEL");
   const row = saveComponentRepository(dir, config, "alice");
-  const model = new ScriptedModelServer([
-    { tool: { name: "extraction_skill", input: { path: "references/api-boundary.md" } } },
-    {
-      tool: {
-        name: "component_source",
-        input: { action: "read", path: "src/file.cpp" },
-      },
-    },
-    {
-      tool: {
-        name: "code_search",
-        input: { action: "kw", query: "lang:C++ Close" },
-      },
-    },
-    {
-      tool: {
-        name: "code_search",
-        input: {
-          action: "read",
-          repository: "consumer",
-          path: "src/use.cpp",
-          start: 1,
-          end: 30,
-        },
-      },
-    },
-    { tool: { name: "research_document", input: { action: "outline", entries: [{ id: "close", title: "能力 close", repository_ids: [row.id] }] } } },
-    { tool: { name: "research_document", input: { action: "overview", overview: "文件句柄与跨仓调用的资源释放关系" } } },
-    { tool: { name: "research_document", input: { action: "section", section: sectionData("close", [row.id]) } } },
-    { text: "已完成并保存组件及示例。" },
-  ]);
+  const model = new ScriptedModelServer(componentPipelineScript(row.id, "src/file.cpp", revision, "consumer/src/use.cpp:12 Close(handle); revision unknown\n").script, "scripted-v1", { linear: true });
   await model.start();
   const research = new ComponentResearch(dir, (input) =>
     runComponentResearch(input, {
@@ -280,20 +252,17 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     const done = research.get(job.id);
     assert.equal(done.status, "done", done.error);
     assert.match(JSON.stringify(model.requests[0]), /component-knowledge-extraction/);
+    assert.doesNotMatch(JSON.stringify(model.requests), /FORBIDDEN_COMPONENT_CONTEXT_SENTINEL/);
     assert.match(JSON.stringify(model.requests.at(-1)), /不是 public 的都能用/);
     assert.match(JSON.stringify(model.requests.at(-1)), /interface 是优先线索，不是固定白名单/);
     assert.match(JSON.stringify(model.requests.at(-1)), /重点关注 interface\/、idl\//);
     assert.match(JSON.stringify(model.requests.at(-1)), /#include.*CMakeLists\.txt.*target_link_libraries/);
     assert.match(JSON.stringify(model.requests.at(-1)), /sdk\/pom\.xml；存在时必须实际读取/);
-    assert.equal(done.document?.sections.length, 1);
+    assert.equal(done.document?.sections.length, 4);
     assert.equal(done.revision, revision);
     assert.ok(done.evidence.some(e => e.tool === "research_note"));
-    assert.equal(
-      done.evidence.filter(e => e.tool !== "research_note").length,
-      3,
-      JSON.stringify(model.requests.at(-1)),
-    );
-    assert.match(done.draft!, /版本未知/);
+    assert.ok(done.evidence.some(e => e.tool === "code_search" && e.action === "read" && e.evidence_id));
+    assert.match(done.draft!, /未提供时为未知/);
     const toolNames = (model.requests[0].tools as Array<{ name: string }>).map(
       (t) => t.name,
     );
@@ -427,6 +396,7 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     const configResponse = await post("/component-repositories", config);
     assert.equal(configResponse.status, 200);
     const component: any = await configResponse.json();
+    assert.equal((await post("/component-research", { language: "cpp", topic: "UT", material_ids: ["old-upload"] })).status, 400);
     assert.equal(
       (
         await post("/component-research", {
@@ -471,6 +441,12 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     const download = await fetch(`${url}/component-research/${batch.id}/document`);
     assert.match(download.headers.get("content-type")!, /text\/markdown/);
     assert.doesNotMatch(await download.text(), /## 能力 cap-0/);
+    const artifactsResponse = await fetch(`${url}/component-research/${batch.id}/artifacts`);
+    assert.equal(artifactsResponse.status, 200);
+    const artifacts: any = await artifactsResponse.json();
+    assert.equal(artifacts.schema, "mfc.component-paradigm/v1");
+    assert.equal(artifacts.enabled, false);
+    assert.ok(artifacts.files["derived/catalog.json"]);
     assert.equal((await post(`/component-research/${batch.id}/review`, {section_id:"unknown",mode:"discuss",message:"问题"})).status, 400);
     assert.equal((await post(`/component-research/${batch.id}/review`, {section_id:"cap-0",mode:"discuss",message:"头文件对应哪个库？"})).status, 202);
     await until(() => research.get(batch.id).status === "done");

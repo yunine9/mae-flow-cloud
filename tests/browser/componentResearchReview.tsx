@@ -9,6 +9,7 @@ const record: ComponentResearchRecord = {
   id:"cr-browser",mode:"all",format:"joint-document",topic:"基础组件联合使用指南",language:"cpp",operator:"专家",
   component:repos[0],components:repos,status:"done",stage:"草稿待审查",created_at:"2026-09-21T08:00:00Z",evidence:[],
   document:{overview:"文件基础库提供句柄管理，异步调用库在其上实现取消与回调。调用方先初始化资源，再提交异步操作，最后等待回调释放。",sections:["安全打开与关闭", "异步读取与取消", "批量写入与错误恢复", ...Array.from({length:32}, (_,i) => `组件能力 ${i+4}：资源管理与错误恢复`)].map((title,i) => ({
+    paradigm: { kind: "paradigm", component: "file", language: "cpp", status: "recommended", need: title, api: ["Close"], applicability: "SDK v2", replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [{ repository_id: "repo-0", path: "src/file.cpp", revision: "a".repeat(40), start: 1, end: 1 }], usage_evidence: [], open_questions: [] },
     id:`cap-${i}`,title,repository_ids:i === 1 ? ["repo-0","repo-1"] : ["repo-0"],selected:true,revision:1,
     content:Array.from({length:12}, () => "适用于需要明确资源所有权的操作。失败时先检查错误码，关闭已获得的资源；不得在回调结束前销毁句柄。").join("\n\n"),
     interfaces:"`include/file.h`：Open / Close；`include/async.h`：ReadAsync / Cancel。",
@@ -27,6 +28,7 @@ window.fetch = async (url, options) => {
   if (path === "/component-repositories") result = {components:repos};
   else if (path === "/business-modules") result = {modules:[]};
   else if (path === "/component-research") result = {records:[record]};
+  else if (path.endsWith("/artifacts")) result = { mapping: "# 组件选择表\n\n需要安全释放资源 → Close（SDK v2）", rules: [], files: { "components/file/paradigms/close.md": "---\nschema: \"mfc.component-paradigm/v1\"\n---\n正文" } };
   else if (path.endsWith("/selection")) {
     calls.push({action:"selection",...body});
     for (const section of record.document!.sections) if (body.ids.includes(section.id)) section.selected = body.selected;
@@ -98,6 +100,11 @@ async function run() {
   const workspace = document.querySelector('[aria-label="组件审核工作区"]')!;
   check(workspace.scrollWidth <= workspace.clientWidth + 2,"desktop workspace horizontal overflow");
   check(document.documentElement.scrollWidth <= innerWidth + 2,"desktop page horizontal overflow");
+  check(!document.querySelector('input[type="file"]'), "component research must not expose uploads");
+  await click("查看派生产物");
+  check(document.querySelector('[aria-label="组件派生产物"]')?.textContent?.includes("规则未启用"), "derived candidates cannot claim enabled");
+  check(button("下载结构化产物"), "structured artifact export available");
+  check(document.documentElement.scrollWidth <= innerWidth + 2, "artifact preview does not overflow desktop");
   check(!errors.length,errors.join(";"));
   document.querySelector("main")!.scrollTop = 0;
   return {passed:true,width:innerWidth,selected:boxes().filter(b => b.checked).length,turns:record.review_turns!.length};
