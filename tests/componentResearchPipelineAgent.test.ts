@@ -105,3 +105,34 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     assert.equal(service.get(job.id).document!.sections.length, 4, "挑战不改写原文档");
   } finally { await service.shutdown(); intercepted.mock.restore(); if (old === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = old; rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("组件萃取失败保留模型连接错误和重试次数", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-model-error-")), repo = join(dir, "base"), ec = join(dir, "ec");
+  const old = process.env.MAE_FLOW_EC_BIN;
+  mkdirSync(repo); writeFileSync(join(repo, "pool.h"), "void submit();\n");
+  execFileSync("git", ["init", "-q", repo]); execFileSync("git", ["-C", repo, "add", "."]);
+  execFileSync("git", ["-C", repo, "-c", "user.name=test", "-c", "user.email=test@example.test", "commit", "-qm", "fixture"]);
+  const revision = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  writeFileSync(ec, `#!${process.execPath}\nconsole.log('[]');\n`, { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+  saveComponentRepository(dir, { name: "基础库", repository: "https://example.test/base.git", branch: "main", path: "", languages: ["cpp"] }, "expert");
+  const intercepted = mock.method(CloudSession, "create", async () => ({
+    start: async () => ({ status: "session_ended", reason: "failed", detail: "Connection error." }),
+    dispose() {}, abort: async () => {},
+  }) as any);
+  const service = new ComponentResearch(dir, input => runComponentResearch(input, {
+    dataDir: dir, model: () => ({ provider: "test", model: "test", json: {} }), source: async () => ({ root: repo, revision }),
+  }));
+  try {
+    const job = service.start({ language: "cpp", mode: "topic", topic: "任务池" }, "expert");
+    for (let i = 0; i < 500 && ["queued", "running"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
+    const failed = service.get(job.id);
+    assert.equal(failed.status, "failed");
+    assert.match(failed.error!, /Connection error/);
+    assert.match(failed.pipeline!.tasks[0].feedback!, /Connection error/);
+    assert.equal(failed.pipeline!.tasks[0].attempts, 3);
+  } finally {
+    await service.shutdown(); intercepted.mock.restore();
+    if (old === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = old;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

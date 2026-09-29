@@ -193,7 +193,9 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         signal.throwIfAborted(); let outcome = await driver.start(prompt);
         for (let i = 0; i < 2 && !result && !verdict && outcome.status === "turn_finished"; i++) outcome = await driver.startResume("请继续完成当前任务，使用 component_work_result 提交结构化结果。");
         signal.throwIfAborted();
-        if (expired || outcome.status !== "turn_finished" || (!result && !verdict)) throw new Error("本项会话未完成，可重试独立会话");
+        if (expired) throw new Error("本项研究超过 45 分钟，已停止；已通过的任务保留，可重试接续");
+        if (outcome.status !== "turn_finished") throw new Error(`本项研究会话中断：${outcome.detail || outcome.reason || outcome.status}；已通过的任务保留，可重试接续`);
+        if (!result && !verdict) throw new Error("模型结束了回复，但未提交研究结果；已通过的任务保留，可重试接续");
         writeFileSync(join(dir, "result.json"), JSON.stringify(verdict ?? result), { mode: 0o600 });
         return { result, verdict };
       } finally { clearTimeout(sessionTimer); signal.removeEventListener("abort", abort); driver.dispose(); }
