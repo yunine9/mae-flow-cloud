@@ -50,8 +50,8 @@ for (const available of [true, false]) test(`组件子会话实际调用 knowled
     const childRequest = model.requests[1] as any;
     const names = childRequest.tools.map((t:any)=>t.function?.name ?? t.name);
     assert.ok(names.includes("knowledge"));assert.ok(!names.includes("push_branch"));
-    assert.match(JSON.stringify(childRequest),/组件与规范分析 Agent/);
-    assert.match(JSON.stringify(model.requests[0]),/component-knowledge-agent/);
+    assert.match(JSON.stringify(childRequest),/component-plan 的 Cloud 适配版/);
+    assert.match(JSON.stringify(model.requests[0]),/component-plan-agent/);
     assert.match(readFileSync(plan,"utf8"),/原有任务/);
     assert.match(readFileSync(plan,"utf8"),available ? /TeamFile/ : /待核实/);
     if (available) {assert.equal(uses.length,2);assert.match(JSON.stringify(model.requests[3]),/创建者释放/);}

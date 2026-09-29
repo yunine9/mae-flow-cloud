@@ -4,10 +4,11 @@ import { join } from "node:path";
 import type { MemoryStore } from "./taskMemory.ts";
 
 export interface MemoryUsageEvent {
-  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check" | "component_plan";
+  plan?: { path: string; capability?: string; operation: string; errors?: number; warnings?: number };
   check?: { trigger: string; head?: string; findings: number; hints: number; rules_digest: string };
   status?: "ready" | "unavailable" | "empty" | "rejected";
-  assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string }>;
+  assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string; card_id?: string; retrieval?: string }>;
   ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;
 }
 export function recordMemoryUsage(context: {

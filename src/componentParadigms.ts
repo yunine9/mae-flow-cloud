@@ -1,4 +1,5 @@
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
+import { componentCardId, componentCardText } from "./componentKnowledgeCards.ts";
 import { createHash } from "node:crypto";
 import type { ResearchSection } from "./componentResearchDocument.ts";
 
@@ -120,7 +121,10 @@ export function exportComponentArtifacts(sections: ResearchSection[]) {
     files[path] = componentArtifact(s);
   }
   const derived = deriveComponentArtifacts(files);
+  const cards = Object.fromEntries(derived.catalog.filter(p => p.kind === "paradigm" && p.status === "recommended")
+    .map(p => [`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`, componentCardText(p, p.path, String(p.revision))]));
   return { schema: COMPONENT_ARTIFACT_SCHEMA, ...derived, files: { ...files, ...componentRuleFiles(derived.rules),
+    ...cards,
     "derived/catalog.json": JSON.stringify({ schema: COMPONENT_ARTIFACT_SCHEMA, paradigms: derived.catalog }, null, 2) + "\n",
     "derived/mapping-table.md": derived.mapping + "\n",
     "derived/rule-candidates.json": JSON.stringify({ schema: COMPONENT_ARTIFACT_SCHEMA, enabled: false, rules: derived.rules }, null, 2) + "\n" } };

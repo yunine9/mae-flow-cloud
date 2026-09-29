@@ -1758,7 +1758,7 @@ export class CloudSession {
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
         "子 Agent 不能提问、不能再派子 Agent。" +
-        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型与规范分析请派发 component-knowledge-agent，任务卡提供计划路径与代码入口。" : ""),
+        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型请派发 component-plan-agent 执行 component-plan Skill，任务卡提供计划路径与代码入口。" : ""),
       parameters: Type.Object({
         subagent_type: Type.String({
           description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",

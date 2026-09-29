@@ -230,17 +230,17 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
             text-left">
             <MemoryMark tone={row.moment === "search" || row.moment === "expand"
               ? "plain" : "default"}>
-              {row.moment === "component_check" ? "检" : row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
+              {row.moment === "component_plan" ? "计" : row.moment === "component_check" ? "检" : row.moment === "context" ? "忆" : row.moment === "launch" ? "启" : row.moment === "phase" ? "阶"
                 : row.moment === "edit" ? "改" : row.moment === "search" ? "查" : "展"}
             </MemoryMark>
             <span className="grid min-w-0 gap-0.5">
               <strong className="flex flex-wrap items-center gap-1.5
-                text-[13.5px] text-foreground">{row.moment === "component_check" ? `组件检查：${row.status === "unavailable" ? "未完成" : `${row.check?.findings ?? 0} 处命中，${row.check?.hints ?? 0} 处需核对`}` : row.moment === "context" ? (row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
+                text-[13.5px] text-foreground">{row.moment === "component_plan" ? `组件计划${row.plan?.operation === "check_impl" ? "对照实现" : "校验"}：${row.plan?.errors ?? 0} 处问题，${row.plan?.warnings ?? 0} 条提示 · ${row.plan?.path ?? ""}` : row.moment === "component_check" ? `组件检查：${row.status === "unavailable" ? "未完成" : `${row.check?.findings ?? 0} 处命中，${row.check?.hints ?? 0} 处需核对`}` : row.moment === "context" ? (row.plan ? "组件检索卡片" : row.status === "unavailable" ? "记忆检索暂不可用，任务继续" : "本轮相关记忆") : row.moment === "launch" ? "开局推送"
                 : row.moment === "phase" ? `进入「${row.phase ?? "新阶段"}」时推送`
                   : row.moment === "edit" ? `首次改 ${row.dir || "某目录"} 时${row.digest ? "推送目录摘要" : "提醒"}`
-                    : row.moment === "search" ? `Agent 检索：${row.query ?? ""}`
+                    : row.moment === "search" ? `Agent 检索${row.plan?.capability ? `（${row.plan.capability}）` : ""}：${row.query ?? ""}`
                       : row.status === "rejected" ? "知识读取被拒绝" : row.status === "unavailable" ? "知识读取未完成" : "Agent 读取知识正文"}</strong>
-              <em className="font-mono text-xs text-muted-foreground">{row.ids.length ? row.ids.join("、") : "没有命中"}</em>
+              {row.moment !== "component_plan" && <em className="font-mono text-xs text-muted-foreground">{row.ids.length ? row.ids.join("、") : "没有命中"}</em>}
               {row.assets?.map((asset, i) => <a key={`${asset.id}-${i}`} className="break-all text-sm text-primary" href={`/?knowledgeDocuments=1&knowledgeDocument=${encodeURIComponent(asset.id)}`}>{asset.heading || asset.id} · {asset.start_line ? `第 ${asset.start_line}${asset.end_line ? `–${asset.end_line}` : ""} 行 · ` : ""}{asset.revision.slice(0, 12)}</a>)}
               <small className="text-sm text-faint">{time(row.ts)}</small>
             </span>

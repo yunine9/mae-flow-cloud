@@ -2957,9 +2957,10 @@ export interface MemoryUsageRow {
   /** 首改目录时推的是目录摘要而不是逐条。 */
   digest?: boolean;
   ts: string;
-  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check" | "component_plan";
+  plan?: { path: string; capability?: string; operation: string; errors?: number; warnings?: number };
   status?: "ready" | "unavailable" | "empty" | "rejected";
-  assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string }>;
+  assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string; card_id?: string; retrieval?: string }>;
   check?: { trigger: string; head?: string; findings: number; hints: number; rules_digest: string };
   ids: string[];
   query?: string;

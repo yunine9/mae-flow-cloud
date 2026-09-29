@@ -6,6 +6,7 @@ export interface ComponentKnowledgeFinding {
   document_id: string; document_revision: string; document_line: number; paradigm_id: string;
 }
 export interface ComponentKnowledgeCheckReport {
+  plans?: Array<{ path: string; findings: string[]; error?: string }>;
   mode: "observe"; trigger: "edit" | "manual" | "mr" | "sample";
   status: "completed" | "incomplete" | "not_applicable";
   checked_at: string; head?: string; base?: string; rules_digest: string;

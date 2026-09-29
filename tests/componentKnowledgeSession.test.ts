@@ -22,7 +22,7 @@ test("真实 Pi 主/子会话只用 knowledge 查询组件，写文件和 Bash �
   const consumer = new ComponentKnowledgeConsumption({ dataDir: f.data, cwd: f.cwd, context: () => f.context, languages: () => ["cpp"], baseline: () => "main", onReport: r => reports.push(r) });
   const p = consumer.catalog().paradigms[0];
   const model = new ScriptedModelServer([
-    { tool: { name: "Task", input: { subagent_type: "component-knowledge-agent", description: "核对组件", prompt: "只分析后台任务的选型，先读正式知识。" } } },
+    { tool: { name: "Task", input: { subagent_type: "component-plan-agent", description: "核对组件", prompt: "只分析后台任务的选型，先读正式知识。" } } },
     { tool: { name: "knowledge", input: { action: "search", query: "后台" } } },
     { tool: { name: "knowledge", input: { action: "read", id: doc.id, revision: doc.revision, start_line: p.start_line, end_line: p.end_line } } },
     { text: "已核对 Pool.submit 和等待约束，按正式知识实施。" },

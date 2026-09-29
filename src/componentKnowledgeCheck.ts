@@ -22,7 +22,7 @@ async function git(cwd: string, args: string[]) {
   return result.stdout;
 }
 /** 用真实目标分支的共同祖先计算增量；基线不存在时不能回退成空差异。 */
-async function comparisonBase(cwd: string, baseline: string, head: string) {
+export async function comparisonBase(cwd: string, baseline: string, head: string) {
   if (!baseline || baseline.startsWith("-") || /[\r\n\0]/.test(baseline)) throw new Error("缺少有效的目标分支基线，组件检查未完成");
   const refs = baseline.startsWith("refs/") || /^[a-f0-9]{40,64}$/.test(baseline) ? [baseline] : baseline.startsWith("origin/") ? [`refs/remotes/${baseline}`] : [`refs/remotes/origin/${baseline}`, `refs/heads/${baseline}`];
   for (const ref of refs) {

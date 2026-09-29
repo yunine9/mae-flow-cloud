@@ -1,6 +1,7 @@
 import { componentKnowledgeCatalog } from "./componentKnowledgeCatalog.ts";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
+import { componentCardId, componentCardText } from "./componentKnowledgeCards.ts";
 
 /** 按当前正式知识重建可检查的文件，不持久化第二份知识或策略。 */
 export function componentKnowledgeArtifacts(dir: string, itemId: string) {
@@ -20,6 +21,7 @@ export function componentKnowledgeArtifacts(dir: string, itemId: string) {
   files["derived/rule-report.md"] = "# 代码检查产物\n\n运行状态见 rule-policy.json。语法命中只表示需要核对，不证明业务违规；当前不拦截提交。\n";
   const { policy: _policy, ...entry } = p;
   files["source.md"] = asset.content;
+  files[`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`] = componentCardText(p, `${p.document_id}:${p.start_line}-${p.end_line}`, p.document_revision);
   files["derived/catalog.json"] = JSON.stringify({ paradigms: [entry] }, null, 2) + "\n";
   const cell = (s: string) => s.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
   files["derived/mapping-table.md"] = `| 需求 | 组件 / API | 适用条件 | 来源 |\n|---|---|---|---|\n| ${cell(p.need)} | ${cell(p.component + " / " + p.api.join("、"))} | ${cell(p.applicability)} | source.md:${p.start_line} |\n`;

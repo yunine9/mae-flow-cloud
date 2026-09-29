@@ -36,20 +36,20 @@ test("同一 knowledge 工具直接查询结构化组件，读正文记录版本
   } finally { f.cleanup(); }
 });
 
-test("普通文档仍经共享搜索服务；组件不重复建立向量索引，来源修订即时更新", async () => {
+test("普通文档仍经共享搜索服务；组件只索引短卡片，来源修订即时更新", async () => {
   const f = consumptionFixture();
   try {
     const doc = f.publish(); let ingested = 0, ordinaryId = "";
-    const sidecar: any = { ingest: async () => { ingested++; return true; }, search: async (input: any) => { ordinaryId = input.sources[0].id; const start = readFileSync(input.sources[0].path, "utf8").split("\n").findIndex(line => line === "# 上传") + 1; return [{ id: ordinaryId, snippet: "文件上传规定", start_line: start, end_line: start + 1 }]; } };
+    const sidecar: any = { ingest: async () => { ingested++; return true; }, search: async (input: any) => { ordinaryId = input.sources[0].id; const start = readFileSync(input.sources[0].path, "utf8").split("\n").findIndex(line => line === "# 上传") + 1; return input.sources.map((s: any) => ({ id: s.id, snippet: "文件上传规定", start_line: start, end_line: start + 1 })); } };
     const ordinary = saveKnowledgeDocument(f.data, { title: "上传规范", scope: "platform", content: "# 上传\n必须限制大小。" }, "expert");
     const service = new KnowledgeSearch(f.data, sidecar);
     const found = await service.search(f.context, "后台任务 上传");
-    assert.equal(ingested, 1); assert.equal(ordinaryId, ordinary.id);
+    assert.equal(ingested, 2); assert.equal(ordinaryId, ordinary.id);
     assert.ok(found.hits.some(h => h.id === doc.id)); assert.ok(found.hits.some(h => h.id === ordinary.id));
     saveKnowledgeDocument(f.data, { content: doc.content.replaceAll("Pool.submit", "Pool.enqueue") }, "expert", doc.id);
     const updated = await service.search(f.context, "Pool.enqueue");
-    assert.match(updated.hits[0].summary!, /Pool.enqueue/); assert.notEqual(updated.hits[0].revision, doc.revision);
-    assert.equal(ingested, 1);
+    assert.match(updated.hits.find(h => h.id === doc.id)!.summary!, /Pool.enqueue/); assert.notEqual(updated.hits.find(h => h.id === doc.id)!.revision, doc.revision);
+    assert.equal(ingested, 3);
   } finally { f.cleanup(); }
 });
 

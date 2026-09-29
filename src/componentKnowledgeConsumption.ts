@@ -1,6 +1,7 @@
 import { recordComponentObservations, applyComponentExemptions } from "./componentKnowledgePolicy.ts";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { KnowledgeContext } from "./knowledgeSearch.ts";
+import type { ComponentPlan } from "./componentPlan.ts";
 import { componentKnowledgeCatalog, type ComponentKnowledgeCatalog } from "./componentKnowledgeCatalog.ts";
 import { checkComponentKnowledge, componentCheckMessage, type ComponentKnowledgeCheckReport } from "./componentKnowledgeCheck.ts";
 
@@ -9,6 +10,7 @@ export class ComponentKnowledgeConsumption {
   private lastNote = "";
   constructor(private options: {
     dataDir: string; cwd: string; context: () => KnowledgeContext; languages: () => string[]; baseline: () => string;
+    plan?: () => ComponentPlan;
     onReport?: (report: ComponentKnowledgeCheckReport) => void;
   }) {}
   catalog(): ComponentKnowledgeCatalog {
@@ -17,6 +19,13 @@ export class ComponentKnowledgeConsumption {
   }
   async check(input: { target?: string; paths?: string[]; trigger: ComponentKnowledgeCheckReport["trigger"] }) {
     const report = await checkComponentKnowledge({ cwd: this.options.cwd, baseline: this.options.baseline(), catalog: this.catalog(), ...input });
+    if (input.trigger === "mr" && this.options.plan) {
+      const plan = this.options.plan(); report.plans = [];
+      for (const path of plan.recordedPaths()) {
+        try { const result = await plan.check(path, input.target); report.plans.push({ path, findings: result.findings }); }
+        catch (e) { report.plans.push({ path, findings: [], error: e instanceof Error ? e.message : String(e) }); }
+      }
+    }
     try { const repository = this.options.context().repositories[0] ?? this.options.context().repo;
       applyComponentExemptions(this.options.dataDir, repository, report);
       recordComponentObservations(this.options.dataDir, repository, report); } catch { /* 观察记录失败不阻塞开发。 */ }

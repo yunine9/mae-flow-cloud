@@ -124,6 +124,7 @@ import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memo
 import { KnowledgeSearch } from "./knowledgeSearch.ts";
 import { createKnowledgeTool } from "./knowledgeTools.ts";
 import { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
+import { ComponentPlan } from "./componentPlan.ts";
 import type { ComponentKnowledgeCheckReport } from "./componentKnowledgeCheck.ts";
 import { DELIVERY_SPLIT_GUIDANCE } from "./deliverySplitGuidance.ts";
 import { createSplitProposalTool, type SplitProposalInput } from "./splitProposalTool.ts";
@@ -5346,6 +5347,7 @@ export class TaskService {
   private componentKnowledge(task: TaskState) {
     if (!task.cwd || this.isRequirementAnalysis(task)) return undefined;
     return new ComponentKnowledgeConsumption({ dataDir: this.options.dataDir, cwd: task.cwd,
+      plan: () => this.componentPlan(task),
       context: () => {
         const module = task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
         return { repo: this.memoryRepo(task), repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
@@ -5704,6 +5706,7 @@ export class TaskService {
           return module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id); })(),
         productVersion: task.summary.product_version }),
       onUse: event => this.logMemoryUsage(task, event),
+      plan: () => this.componentPlan(task),
       research: () => this.getComponentResearch(),
       researchOperator: () => task.summary.luban_account ?? "本地部署",
     })];
@@ -5712,6 +5715,16 @@ export class TaskService {
   private logMemoryUsage(task: TaskState, event: MemoryUsageEvent): void {
     recordMemoryUsage({ workspace: task.summary.workspace, taskId: task.summary.id,
       store: () => this.memories(), log: this.options.log }, event);
+  }
+
+  private componentPlan(task: TaskState) {
+    return new ComponentPlan({ workspace: task.summary.workspace, cwd: () => task.cwd,
+      baseline: () => task.summary.delivery?.target_branch ?? task.summary.baseline ?? "",
+      search: () => this.getKnowledgeSearch(), context: () => ({ repo: this.memoryRepo(task),
+        repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
+        moduleIds: (() => { const module = task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+          return module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id); })(), productVersion: task.summary.product_version }),
+      usage: () => readMemoryUsage(task.summary.workspace) });
   }
 
   listTaskMemoryUsage(id: string): Array<Record<string, unknown>> {
