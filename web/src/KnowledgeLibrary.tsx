@@ -7,7 +7,6 @@ import { ComponentResearch } from "./ComponentResearch";
 import { DomainKnowledgeExtraction } from "./DomainKnowledgeExtraction";
 import { KnowledgeStudioContext, type ExtractionKind, type KnowledgeStudioView } from "./KnowledgeStudioContext";
 import { knowledgeLibraryPage, knowledgeStudioView, type KnowledgeAssetFocus } from "./knowledgeNavigation";
-import "./knowledgeStudio.css";
 
 type Page = "documents" | ExtractionKind;
 const readRoute = () => {
