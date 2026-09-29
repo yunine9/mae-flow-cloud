@@ -79,3 +79,14 @@ export function knowledgeLibraryPage(search: string): "documents" | "component" 
   if (page === "documents" || page === "component" || page === "domain") return page;
   return query.has("domainExtraction") ? "domain" : query.has("componentResearch") ? "component" : "documents";
 }
+
+/** 旧链接仍可打开；新链接明确区分工具、执行过程和知识成果。 */
+export function knowledgeStudioView(search: string): "skills" | "workbench" | "knowledge" {
+  const query = new URLSearchParams(search), view = query.get("knowledgeView");
+  if (view === "skills" || view === "workbench" || view === "knowledge") return view;
+  if (query.has("platformSkill")) return "skills";
+  const page = knowledgeLibraryPage(search);
+  if (page === "domain") return query.get("domainExtraction") ? "knowledge" : "workbench";
+  if (page === "component" && ["new", "history"].includes(query.get("componentResearch") ?? "")) return "workbench";
+  return "knowledge";
+}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ComponentDocumentReader } from "./ComponentDocumentReader";
 import { componentRequest } from "./componentResearchApi";
+import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 
 export type PlatformSkillKind = "component" | "domain";
 export const platformSkillLabels = { component: "基础组件萃取", domain: "领域知识萃取" };
@@ -16,6 +17,7 @@ export const platformSkillRequest = (kind: PlatformSkillKind, body?: unknown) =>
 export function PlatformSkillPane({ kind, upload = false, onSaved }: {
   kind: PlatformSkillKind; upload?: boolean; onSaved: () => void;
 }) {
+  const studio = useKnowledgeStudio();
   const [skill, setSkill] = useState<PlatformSkill>(), [pending, setPending] = useState<Record<string, string>>();
   const [showUpload, setShowUpload] = useState(upload);
   const [path, setPath] = useState("SKILL.md");
@@ -52,11 +54,10 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
     finally { setBusy(false); }
   }
   const files = pending ?? skill?.files;
-  return <div className="tw-root space-y-5 p-6" aria-label="平台 Skill 详情">
+  return <div className="tw-root platform-skill-pane space-y-5 p-6" aria-label="平台 Skill 详情">
     <header className="flex items-start justify-between gap-4"><div>
-      <p className="mb-2 text-sm text-muted-foreground">平台使用 · {platformSkillLabels[kind]}</p>
-      <h2 className="text-2xl font-semibold">{showUpload ? "上传平台 Skill" : skill?.name ?? platformSkillLabels[kind]}</h2>
-    </div>{skill?.can_manage && !showUpload && <Button variant="outline" onClick={() => setShowUpload(true)}>上传新版本</Button>}</header>
+      <h2 className="text-lg font-semibold">{showUpload ? "上传 Skill" : skill?.name ?? platformSkillLabels[kind]}</h2>
+    </div><div className="flex gap-2">{skill?.can_manage && !showUpload && <Button variant="outline" onClick={() => setShowUpload(true)}>上传新版本</Button>}{studio && skill && !showUpload && <Button onClick={() => studio.openExecution(kind)}>使用此 Skill</Button>}</div></header>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="text-primary">{notice}</p>}
     {skill?.can_manage && showUpload && <div className="rounded-xl border border-line bg-muted/30 p-4 space-y-3">

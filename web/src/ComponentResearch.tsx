@@ -63,6 +63,7 @@ export function ComponentResearch({
   focused = false,
   compact = false,
   focusId,
+  surface,
   onClose,
   onAdopt,
 }: {
@@ -70,6 +71,7 @@ export function ComponentResearch({
   focused?: boolean;
   compact?: boolean;
   focusId?: string;
+  surface?: "knowledge" | "workbench";
   onClose: () => void;
   onAdopt: (id: string) => void;
 }) {
@@ -92,6 +94,7 @@ export function ComponentResearch({
   const [deleting, setDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const [stage, setStage] = useState("review");
+  useEffect(() => { if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }, [surface]);
   const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
@@ -169,7 +172,7 @@ export function ComponentResearch({
     if (!editing) setDraft(current?.draft ?? "");
   }, [current?.draft, editing]);
   function selectRecord(id: string) {
-    setSelected(id); setStage("review");
+    setSelected(id); setStage(surface === "workbench" ? "progress" : "review");
     const url = new URL(location.href);
     url.searchParams.set("componentResearch", id);
     history.replaceState(history.state, "", url);
@@ -219,7 +222,7 @@ export function ComponentResearch({
   return (
     <KnowledgeExtractionWorkspace codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
       onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}
-      sidebar={!focused ? <div>
+      sidebar={!focused && surface !== "knowledge" ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
               <button
@@ -252,7 +255,7 @@ export function ComponentResearch({
               <p className="p-8 text-muted-foreground">在左侧选择任务，查看进度、来源证据和草稿。</p>
             ) : (
               <>
-                <header className="mb-5">
+                <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
                   {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
@@ -283,7 +286,7 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}
+                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>
                 {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
                 {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">

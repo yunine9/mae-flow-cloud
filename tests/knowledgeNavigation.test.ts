@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   knowledgeAssetPath,
   knowledgeLibraryPage,
+  knowledgeStudioView,
   readKnowledgeAssetFocus,
 } from "../web/src/knowledgeNavigation.ts";
 
@@ -55,4 +56,15 @@ test("管理员和开发者均有独立的一级知识库入口", () => {
     assert.match(section, /<NavButton view="library"[^>]+label="知识库"/);
     assert.match(section, /<NavButton view="knowledge"[^>]+label="团队资产"/);
   }
+});
+
+
+test("工作室深链区分 Skill、执行过程与知识成果", () => {
+  assert.equal(knowledgeStudioView("?knowledgePage=documents&platformSkill=domain"), "skills");
+  assert.equal(knowledgeStudioView("?knowledgePage=domain"), "workbench");
+  assert.equal(knowledgeStudioView("?knowledgePage=domain&domainExtraction=dkx-1"), "knowledge");
+  assert.equal(knowledgeStudioView("?knowledgePage=component&componentResearch=new"), "workbench");
+  assert.equal(knowledgeStudioView("?knowledgePage=documents&domainExtraction=dkx-1"), "knowledge");
+  assert.equal(knowledgeStudioView("?knowledgeView=workbench&knowledgePage=domain&domainExtraction=dkx-1"), "workbench");
+  assert.equal(knowledgeStudioView("?knowledgeView=knowledge&platformSkill=domain"), "knowledge");
 });

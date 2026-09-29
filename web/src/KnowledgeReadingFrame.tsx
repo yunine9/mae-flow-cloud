@@ -12,7 +12,7 @@ export function KnowledgeReadingFrame({ children, actions, title }: { children: 
     </header>{children}
   </section>;
   return <>{!fullscreen && body}<Dialog open={fullscreen} onOpenChange={setFullscreen}>
-    <DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none">
+    <DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root knowledge-reader-dialog h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none">
       <DialogTitle className="sr-only">领域知识全屏阅读</DialogTitle>{fullscreen && body}
     </DialogContent>
   </Dialog></>;

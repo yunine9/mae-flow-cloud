@@ -5,8 +5,9 @@ export function ExtractionSkillEditor({ kind }: { kind: "component" | "domain" }
   return <Button variant="outline" onClick={() => {
     const url = new URL(location.href);
     url.searchParams.set("knowledgePage", "documents");
+    url.searchParams.set("knowledgeView", "skills");
     url.searchParams.set("platformSkill", kind);
     history.pushState(history.state, "", url);
     dispatchEvent(new PopStateEvent("popstate"));
-  }}>查看萃取 Skill →</Button>;
+  }}>查看 Skill</Button>;
 }

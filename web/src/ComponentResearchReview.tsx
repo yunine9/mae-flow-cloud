@@ -73,7 +73,7 @@ export function ComponentResearchReview({ record, onChanged, readerHeight = "cal
     {error && <p role="alert" className="text-danger">{error}</p>}
     {view === "document" ? <div className="research-review-panes">
       <KnowledgeOutline title={record.topic} items={outlineItems} currentId={section?.id} onNavigate={navigateKnowledge} label="文档组件目录" />
-      <div ref={reader} tabIndex={0} aria-label="完整文档阅读区" className="research-reader research-full-document"><p className="mb-4 text-sm text-muted-foreground">完整萃取成果（含未勾选项）；下载与入库仅包含勾选项。</p>
+      <div ref={reader} tabIndex={0} aria-label="完整文档阅读区" className="research-reader research-full-document studio-paper"><p className="mb-4 text-sm text-muted-foreground">完整萃取成果（含未勾选项）；下载与入库仅包含勾选项。</p>
         <Markdown text={`# ${record.topic}\n\n${record.document!.overview || "正在联合研究，章节将逐步保存…"}`} />
         {sections.map(item => <section key={item.id} className="mt-6 border-t border-line pt-4"><KnowledgeMarkdown text={sectionMarkdown(item)} focus={item.id === section?.id ? knowledgeFocus : undefined} />
           {!!item.related_ids.length && <p className="mt-3 text-sm">关联知识：{item.related_ids.map(id => <button key={id} className="knowledge-inline-link" onClick={() => navigateKnowledge(id)}>{sections.find(s => s.id === id)?.title ?? id}</button>)}</p>}
@@ -87,7 +87,7 @@ export function ComponentResearchReview({ record, onChanged, readerHeight = "cal
         </>} />
         <div className="research-reader">
           {section ? <>
-            <div ref={reader} tabIndex={0} aria-label="组件详细文档" className="research-document-content">
+            <div ref={reader} tabIndex={0} aria-label="组件详细文档" className="research-document-content studio-paper">
               <div className="research-document-eyebrow"><FileText size={16} />组件使用指南</div>
               <p className="mb-3 text-sm text-muted-foreground">{section.title} · {section.selected ? "已纳入文档" : "未纳入文档"}</p>
               <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="章节内容视图">

@@ -28,9 +28,9 @@ async function run() {
   for (let i = 0; i < 50 && !document.querySelector('[aria-label="萃取任务列表"] button'); i++) await pause();
   const old = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="萃取任务列表"] button')].find(b => b.textContent?.includes(job.title))!;
   check(old, "historical probe remains in task list"); old.click(); await pause();
-  await click("查看验证草稿");
+  await click("验证草稿");
   check(document.body.textContent?.includes("这里显示本次验证草稿"), "old draft remains readable");
-  check(!button("入库与更新") && !button("清理旧知识") && !button("仅讨论"), "historical probe remains draft only");
+  check(!button("入库") && !button("清理旧知识") && !button("仅讨论"), "historical probe remains draft only");
   await click("＋ 新建萃取任务");
   check(document.querySelector('[aria-label="本次萃取要求"]'), "new task has free text instructions");
   check(document.querySelector('[aria-label="领域萃取关联单号"]') && !document.querySelector('[aria-label="仅验证的模块"]'), "new task always uses the standard form");

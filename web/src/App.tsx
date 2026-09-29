@@ -1353,7 +1353,7 @@ export function App() {
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
     if (["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe"]) url.searchParams.delete(key);
+      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeView", "platformSkill"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());
@@ -1461,9 +1461,9 @@ export function App() {
     <SidebarInset>
     {/* 工作台壳(#228 工具类化):书页宽由 max-w 条件直译,DTS 全宽时
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
-    <div className="min-h-screen min-w-0 bg-(--canvas)">
-      <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
-        (dtsWide || view === "knowledge" || view === "library") ? "max-w-none" : "max-w-(--page-width)",
+    <div className={cn("min-h-screen min-w-0 bg-(--canvas)", view === "library" && "knowledge-app-surface")}>
+      {view !== "library" && <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
+        (dtsWide || view === "knowledge") ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div className={view === "knowledge" ? "team-assets-heading" : undefined}>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
@@ -1501,11 +1501,11 @@ export function App() {
             </div>
           )}
         </div>
-      </header>
+      </header>}
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
         (dtsWide || view === "library" || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
-        "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]")}>
+        "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]", view === "library" && "knowledge-app-main")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>

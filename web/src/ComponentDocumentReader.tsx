@@ -58,8 +58,8 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
       </li>;
     })}</ul>;
   }
-  const body = <div className="flex h-full min-h-0 flex-col overflow-hidden bg-surface text-base">
-    <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-3">
+  const body = <div className="component-document-reader flex h-full min-h-0 flex-col overflow-hidden bg-surface text-base">
+    <header className="component-reader-toolbar flex h-14 shrink-0 items-center gap-3 border-b border-line px-3">
       <Button size="icon" variant="ghost" aria-label={showTree ? "收起目录" : "展开目录"} title={showTree ? "收起目录" : "展开目录"} onClick={() => setShowTree(!showTree)}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</Button>
       <span className="min-w-0 flex-1 truncate font-medium" title={file?.path.join(" / ")}>{file?.path.at(-1) ?? "文档"}</span>
       {allowRaw && /\.md$/i.test(file?.path.at(-1) ?? "") && <Button variant="ghost" onClick={() => setRaw(!raw)}>{raw ? "阅读" : "原文"}</Button>}
@@ -67,11 +67,11 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
       <Button size="icon" variant="ghost" aria-label={fullscreen ? "退出全屏" : "全屏阅读"} title={fullscreen ? "退出全屏" : "全屏阅读"} onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</Button>
     </header>
     <div className="flex min-h-0 flex-1">
-      {showTree && <nav className="flex w-[260px] shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
+      {showTree && <nav className="component-reader-tree flex w-[260px] shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
         <div className="relative p-3"><Search size={16} className="absolute left-6 top-6 text-muted-foreground" /><Input aria-label="搜索文档" placeholder="搜索文档" className="pl-9" value={query} onChange={e => setQuery(e.target.value)} /></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2 text-sm">{tree(visible)}{!visible.length && <p className="p-3 text-muted-foreground">{query ? "没有匹配的文档" : "暂无文档"}</p>}</div>
       </nav>}
-      <div ref={node => { reader.current = node; if (node) node.scrollTop = scroll.current; }} onScroll={e => { scroll.current = e.currentTarget.scrollTop; }} tabIndex={0} aria-label={contentLabel} className="min-w-0 flex-1 overflow-auto overscroll-contain px-8 py-7 outline-none">
+      <div ref={node => { reader.current = node; if (node) node.scrollTop = scroll.current; }} onScroll={e => { scroll.current = e.currentTarget.scrollTop; }} tabIndex={0} aria-label={contentLabel} className="studio-paper component-reader-content min-w-0 flex-1 overflow-auto overscroll-contain px-8 py-7 outline-none">
         {linkError && <p role="status" className="mb-4 text-attention">{linkError}</p>}
         {message ?? (file?.content === undefined ? <p className="text-muted-foreground">{file ? "正在读取文档…" : "选择一篇文档开始阅读"}</p> : /\.md$/i.test(file.path.at(-1) ?? "") && !raw ? <>
           {/^---\r?\n/.test(file.content) && <details className="mb-5"><summary className="cursor-pointer text-sm text-muted-foreground">文档元数据</summary><pre className="overflow-auto whitespace-pre p-3 text-sm">{file.content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1]}</pre></details>}
@@ -82,7 +82,7 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
     </div>
   </div>;
   return <>
-    {!fullscreen && <div className="min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}>{body}</div>}
-    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && body}</DialogContent></Dialog>
+    {!fullscreen && <div className="component-reader-frame min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}>{body}</div>}
+    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root knowledge-reader-dialog h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && body}</DialogContent></Dialog>
   </>;
 }
