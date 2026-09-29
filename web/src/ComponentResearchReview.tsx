@@ -1,3 +1,4 @@
+import { ComponentDocumentReader } from "./ComponentDocumentReader";
 import { KnowledgeOutline } from "./KnowledgeOutline";
 import { KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
 import { useEffect, useRef, useState } from "react";
@@ -8,16 +9,18 @@ import { diffLines } from "diff";
 import { Markdown } from "./markdown";
 import { componentRequest, type ComponentResearchRecord, type ComponentResearchSection } from "./componentResearchApi";
 
-function sectionMarkdown(section: ComponentResearchSection) {
-  return [`# ${section.title}`, ...(section.paradigm ? [`**状态：${({ recommended: "推荐", legacy: "历史写法", unverified: "待核实" } as Record<string, string>)[section.paradigm.status] ?? section.paradigm.status}**\n\n**需求：** ${section.paradigm.need}\n\n**适用条件：** ${section.paradigm.applicability}`] : []), section.content, "### 公共接口", section.interfaces || "待研究",
+function sectionMarkdown(section: ComponentResearchSection, includeMetadata = true) {
+  return [...(/^\s*#\s/.test(section.content) ? [] : [`# ${section.title}`]), ...(includeMetadata && section.paradigm ? [`**状态：${({ recommended: "推荐", legacy: "历史写法", unverified: "待核实" } as Record<string, string>)[section.paradigm.status] ?? section.paradigm.status}**\n\n**需求：** ${section.paradigm.need}\n\n**适用条件：** ${section.paradigm.applicability}`] : []), section.content, "### 公共接口", section.interfaces || "待研究",
     "### 集成产物与依赖", section.integration || "待研究", "### 最佳示例", section.example || "待补充（本项尚未完成）",
     "### 来源", section.sources || "待研究"].join("\n\n");
 }
-export function ComponentResearchReview({ record, onChanged }: {
-  record: ComponentResearchRecord; onChanged: (record: ComponentResearchRecord) => void;
+export function ComponentResearchReview({ record, onChanged, readerHeight = "calc(100dvh - 300px)" }: {
+  readerHeight?: string; record: ComponentResearchRecord; onChanged: (record: ComponentResearchRecord) => void;
 }) {
   const sections = record.document!.sections;
+  const documentTitle = record.document!.overview.match(/^#\s+(.+)$/m)?.[1] ?? record.topic;
   const reader = useRef<HTMLDivElement>(null);
+  const [reviewing, setReviewing] = useState(false);
   const [selected, setSelected] = useState(sections[0]?.id ?? "");
   const [message, setMessage] = useState("");
   const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeFocus>();
@@ -35,7 +38,7 @@ export function ComponentResearchReview({ record, onChanged }: {
   const versions = (record.section_history ?? []).filter(h => h.section.id === section?.id);
   const turns = (record.review_turns ?? []).filter(turn => turn.section_id === section?.id);
   useEffect(() => { setArtifacts(undefined); }, [record.id, sections.map(s => `${s.id}:${s.revision}:${s.selected}`).join("|")]);
-  useEffect(() => { setSelected(""); setMessage(""); setError(""); setView("component"); setEditor(undefined); }, [record.id]);
+  useEffect(() => { setSelected(""); setReviewing(false); setMessage(""); setError(""); setView("component"); setEditor(undefined); }, [record.id]);
   function navigateKnowledge(id: string, line?: number) {
     if (editor?.id === id && line !== undefined) { setError("请先保存或取消当前编辑，再跳转章节。"); return; }
     setSelected(id); setMessage(""); setError(""); setDetailTab("content");
@@ -52,8 +55,14 @@ export function ComponentResearchReview({ record, onChanged }: {
   async function send(mode: "discuss" | "rework" | "update") {
     if (section && await request("review", { section_id: section.id, mode, message, use_latest_skill: useLatestSkill })) setMessage("");
   }
+  if (!reviewing) return <section aria-label="组件萃取文档">
+    <ComponentDocumentReader height={readerHeight} selected={selected || "overview"} onSelect={setSelected}
+      files={[{ id: "overview", path: [documentTitle, "总览.md"], content: record.document!.overview }, ...sections.map(s => ({ id: s.id, path: s.paradigm ? [documentTitle, s.paradigm.component, `${sections.filter(other => other.paradigm?.component === s.paradigm?.component && other.paradigm?.kind === s.paradigm?.kind).length > 1 ? s.title : ({ contracts: "使用契约", paradigm: "推荐用法", pitfalls: "误用与边界", index: "使用导航" } as Record<string, string>)[s.paradigm.kind] ?? s.title}.md`] : [documentTitle, `${s.title}.md`], content: sectionMarkdown(s, false), searchText: s.title, metadata: s.paradigm ? JSON.stringify(s.paradigm, null, 2) : undefined }))]}
+      actions={<><Button variant="ghost" onClick={() => setReviewing(true)}>审阅与修订</Button><a className="px-2 text-sm text-primary" href={`/component-research/${record.id}/document`} download>下载 Markdown</a></>} />
+  </section>;
   return <section aria-label="组件审核工作区" className="research-review">
     <div className="research-review-toolbar">
+      <Button variant="ghost" onClick={() => setReviewing(false)}>返回文档</Button>
       <div className="mr-auto min-w-0"><strong className="flex items-center gap-2"><Layers size={18} />{sections.length} 项可复用能力</strong><p className="mt-1 text-sm text-muted-foreground">已完成 {sections.filter(s => s.revision > 0).length} 项 · 已勾选 {sections.filter(s => s.selected).length} 项，采纳为一篇 Markdown</p></div>
       <div className="research-review-views" role="group" aria-label="审查视图"><Button aria-pressed={view === "component"} variant={view === "component" ? "default" : "outline"} onClick={() => setView("component")}>逐项审核</Button>
       <Button aria-pressed={view === "document"} variant={view === "document" ? "default" : "outline"} onClick={() => setView("document")}>完整文档</Button></div>

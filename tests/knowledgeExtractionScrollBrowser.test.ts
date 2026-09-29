@@ -32,7 +32,7 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       const fixture = kind === "domain" ? "knowledgeLibrary" : "componentResearchReview";
       const bundle = await build({ entryPoints: [resolve(`tests/browser/${fixture}.tsx`)], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });
       const html = join(root, `${kind}.html`);
-      writeFileSync(html, `<!doctype html><meta charset="utf-8"><style>${css} #result {display:none}</style><div style="padding:24px"><h1 style="height:52px">知识库</h1><div id="app"></div><footer style="height:200px">页面下方内容</footer></div><pre id="result"></pre><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`);
+      writeFileSync(html, `<!doctype html><meta charset="utf-8"><style>${css} #result {display:none} ${kind === "component" ? ".knowledge-extraction-content main { padding-bottom: 320px; }" : ""}</style><div style="padding:24px"><h1 style="height:52px">知识库</h1><div id="app"></div><footer style="height:200px">页面下方内容</footer></div><pre id="result"></pre><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`);
       const { targetId } = await send("Target.createTarget", { url: "about:blank" });
       const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
       const evaluate = async (expression: string) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
@@ -51,7 +51,8 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       for (const [width, height] of [[1920, 1080], [1366, 768]]) {
         await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
         await send("Page.navigate", { url: `${pathToFileURL(html)}?scrollCheck=1&knowledgePage=domain&domainExtraction=dkx-browser&componentResearch=cr-browser` }, sessionId);
-        await until(async () => !!await evaluate("!!document.querySelector('.research-reader')"));
+        await until(async () => !!await evaluate(kind === "component" ? "!!document.querySelector('[aria-label=\"组件萃取文档\"]')" : "!!document.querySelector('.research-reader')"));
+        if (kind === "component") await click("审阅与修订");
         await pause();
         if (kind === "domain") {
           await click("研究过程");
@@ -75,13 +76,15 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
           await evaluate(`document.querySelector(${JSON.stringify(reader)}).scrollIntoView({block:'center'})`);
           await wheel(reader, 250); assert.ok(await evaluate(`document.querySelector(${JSON.stringify(reader)}).scrollTop>0`), "component document scrolls internally");
           await evaluate(`document.querySelector(${JSON.stringify(reader)}).scrollTop=1e7;document.querySelector('.knowledge-extraction-content').scrollTop=0`);
-          assert.ok(await evaluate("(()=>{const e=document.querySelector('.knowledge-extraction-content');return e.scrollHeight>e.clientHeight})()"), "component fixture has outer overflow");
-          await wheel(reader, 250); assert.ok(await outerTop() > 0, `${width}: component reader must not trap wheel in non-scrolling main`);
+          const hasOuterOverflow = await evaluate("(()=>{const e=document.querySelector('.knowledge-extraction-content');return e.scrollHeight>e.clientHeight})()");
+          const pageBefore = await evaluate("window.scrollY");
+          await wheel(reader, 250);
+          assert.ok(hasOuterOverflow ? await outerTop() > 0 : await evaluate("window.scrollY") > pageBefore, `${width}: component reader boundary continues to the next scrolling parent`);
         }
         // At the bottom of the workspace, native wheel chaining reaches the page itself.
         await evaluate("document.querySelectorAll('.knowledge-extraction-content, .research-reader, .research-document-content, .knowledge-progress-entries > ol').forEach(e=>e.scrollTop=1e7);window.scrollTo(0,0)");
         const before = await evaluate("window.scrollY");
-        await wheel(kind === "domain" ? '.knowledge-progress-entries > ol > li:last-child summary' : ".knowledge-extraction-content main > header", 300);
+        await wheel(kind === "domain" ? '.knowledge-progress-entries > ol > li:last-child summary' : ".knowledge-extraction-content", 300);
         assert.ok(await evaluate("window.scrollY") > before, `${kind} ${width}: workspace boundary must allow page scrolling`);
       }
       await send("Target.closeTarget", { targetId });

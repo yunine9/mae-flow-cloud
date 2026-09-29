@@ -1,3 +1,5 @@
+import { MoreHorizontal } from "lucide-react";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
@@ -200,6 +202,20 @@ export function ComponentResearch({
       await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
+  if (compact && current?.document && stage === "review") return <section className="tw-root space-y-3" aria-label="萃取结果阅读页">
+    <header className="flex items-center gap-3 pr-8">
+      <Button variant="ghost" onClick={() => selectRecord("history")}>← 萃取记录</Button>
+      <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={current.topic}>{current.document.overview.match(/^#\s+(.+)$/m)?.[1] ?? "萃取结果"}</h2>
+      <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="萃取结果操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
+        <DropdownMenuItem onClick={() => setStage("progress")}>执行详情</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setStage("inputs")}>来源范围</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => setStage("publish")}>入库与更新</DropdownMenuItem>
+      </DropdownMenuContent></DropdownMenu>
+      {current.document_id ? <Button onClick={() => onAdopt(current.document_id!)}>查看已采纳知识</Button> : <Button disabled={busy || ["queued", "running"].includes(current.status)} onClick={() => setStage("publish")}>采纳知识</Button>}
+    </header>
+    {error && <p role="alert" className="text-danger">{error}</p>}
+    <ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} readerHeight="calc(96dvh - 110px)" />
+  </section>;
   return (
     <KnowledgeExtractionWorkspace codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
       onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}

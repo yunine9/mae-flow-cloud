@@ -36,6 +36,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 };
 const delay = async () => { await new Promise(r => setTimeout(r, 20)); flushSync(() => {}); };
 function button(text: string) { const el = [...document.querySelectorAll("button")].find(e => e.textContent?.trim() === text); if (!el) throw new Error("找不到按钮 " + text); flushSync(() => el.click()); }
+function labelledButton(label: string) { const el = document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`); if (!el) throw new Error("找不到按钮 " + label); flushSync(() => el.click()); }
+function menuItem(text: string) { const el = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(e => e.textContent === text); if (!el) throw new Error("找不到菜单项 " + text); flushSync(() => el.click()); }
 function type(label: string, value: string) { const el = document.querySelector(`[aria-label="${label}"]`) as HTMLInputElement | HTMLTextAreaElement; if (!el) throw new Error("找不到字段 " + label); const prototype = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; flushSync(() => { Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); }); }
 function choose(label: string, value: string) { const el = document.querySelector(`[aria-label="${label}"]`) as HTMLSelectElement; if (!el) throw new Error("找不到选项 " + label); flushSync(() => { el.value = value; el.dispatchEvent(new Event("change", {bubbles:true})); }); }
 function expand(text: string) { const el = [...document.querySelectorAll("summary")].find(e => e.textContent?.trim().startsWith(text)); if (!el) throw new Error("找不到展开项 " + text); el.click(); }
@@ -48,9 +50,24 @@ async function main() {
   const body = document.querySelector('[aria-label="知识正文"]')?.textContent ?? "";
   if (!body.includes("正文中部的源码说明") || body.includes("最后来源元数据")) throw new Error("来源裁剪误删正文或未隐藏末尾元数据");
   if (/替代规则|选型映射|文档抽查/.test(document.getElementById("app")?.textContent ?? "")) throw new Error("旧页签仍在");
-  if (document.querySelectorAll('[aria-label="组件列表"] button').length !== 1) throw new Error("派生规则被重复列作知识");
+  if (document.querySelectorAll('[aria-label="组件列表"] button[aria-current]').length !== 1) throw new Error("派生规则被重复列作知识");
   document.getElementById("result")!.textContent = JSON.stringify({progress:"打开设置"});
-  button("使用设置"); await delay(); expand("检查 std::thread");
+  // 目录折叠、搜索、全屏与滚动恢复是阅读主流程。
+  const folder = document.querySelector<HTMLButtonElement>('[aria-label="组件列表"] button[aria-expanded]')!;
+  flushSync(() => folder.click());
+  if (document.querySelector('[aria-label="组件列表"] button[aria-current]')) throw new Error("目录没有折叠");
+  flushSync(() => folder.click());
+  type("搜索文档", "不存在的文档"); if (!document.body.textContent?.includes("没有匹配的文档")) throw new Error("搜索未筛选"); type("搜索文档", "");
+  labelledButton("展开章节 后台任务的提交与等待.md"); await delay(); button("最佳示例"); await delay();
+  if (!document.activeElement?.textContent?.includes("最佳示例")) throw new Error("章节目录未跳到正文标题");
+  labelledButton("全屏阅读"); await delay();
+  labelledButton("收起目录"); await delay();
+  for (let i = 0; i < 10; i++) await delay();
+  const full = document.querySelector('[aria-label="知识正文"]')!.getBoundingClientRect();
+  if (full.width < innerWidth * 0.98 || full.height < innerHeight * 0.85) throw new Error(`全屏阅读仍被其他面板挤占 ${full.width}x${full.height}, viewport ${innerWidth}x${innerHeight}`);
+  if (document.querySelector('[aria-label="组件列表"]')) throw new Error("目录未收起");
+  labelledButton("展开目录"); labelledButton("退出全屏"); await delay();
+  labelledButton("文档操作"); await delay(); menuItem("代码检查"); await delay(); expand("检查 std::thread");
   if (!document.body.textContent?.includes("src/work.cpp:42")) throw new Error("未显示实际命中位置");
   document.getElementById("result")!.textContent = JSON.stringify({progress:"编辑规则"});
   button("设置检查"); await delay(); choose("使用状态", "warning"); type("组件负责人", "线程池负责人"); type("策略变更理由", "对照样本与实现确认普通工作线程适用"); type("适用路径", "src/**");
@@ -66,14 +83,15 @@ async function main() {
   const artifactButton = [...document.querySelectorAll('[data-slot="dialog-content"] button')].find(e => e.textContent === "查看程序化产物") as HTMLButtonElement;
   flushSync(() => artifactButton.click()); await delay(); await delay();
   if (!document.querySelector('[aria-label="产物内容"]')?.textContent?.includes("qualified_identifier")) throw new Error("未显示可执行规则产物");
-  button("source.md"); if (document.querySelector('[aria-label="产物内容"]')?.textContent !== "原始知识") throw new Error("产物切换错误");
+  button("source.md"); if (!document.querySelector('[aria-label="产物内容"]')?.textContent?.includes("原始知识")) throw new Error("产物切换错误");
+  button("原文"); if (!document.querySelector('[aria-label="产物内容"] pre')) throw new Error("Markdown 原文不可读"); button("阅读");
   document.getElementById("result")!.textContent = JSON.stringify({progress:"关闭产物"});
   closeDialog(); await delay();
   button("设置检查"); await delay(); choose("使用状态", "off"); type("策略变更理由", "存在反例，先停用并收窄范围"); button("保存"); await delay(); await delay();
   if (String(rule.policy.level) !== "off") throw new Error("未停用规则");
-  closeDialog(); await delay(); expand("来源依据"); button("打开源文档"); if (adopted !== "kd-pool") throw new Error("源文档导航错误");
+  closeDialog(); await delay(); labelledButton("文档操作"); await delay(); menuItem("来源与纠错记录"); await delay(); button("打开源文档"); if (adopted !== "kd-pool") throw new Error("源文档导航错误");
   if (document.documentElement.scrollWidth > innerWidth) throw new Error("桌面横向溢出");
-  button("删除知识"); await delay(); await delay();
+  closeDialog(); await delay(); labelledButton("管理组件知识"); await delay(); menuItem("删除知识"); await delay(); await delay();
   const all = document.querySelector('[aria-label="全选组件知识"]') as HTMLInputElement;
   flushSync(() => all.click()); button("删除所选（1）"); await delay();
   if (!document.body.textContent?.includes("平台没有撤销删除入口")) throw new Error("未明确删除范围");

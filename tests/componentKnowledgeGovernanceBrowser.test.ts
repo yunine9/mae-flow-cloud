@@ -14,7 +14,7 @@ test("组件知识工作台桌面操作：启用、限定路径、样本反馈�
       format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });
     const assets = resolve("web/dist/assets"), css = readdirSync(assets).filter(n => n.endsWith(".css")).map(n => readFileSync(join(assets, n), "utf8")).join("\n");
     const html = join(dir, "check.html");
-    writeFileSync(html, '<!doctype html><meta charset="utf-8"><style>' + css + '</style><div id="app" style="padding:32px;max-width:1500px;margin:auto"></div><pre id="result"></pre><script>' + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
+    writeFileSync(html, '<!doctype html><meta charset="utf-8"><style>' + css + '[data-slot="dialog-content"] { animation: none; transition: none; }</style><div id="app" style="padding:32px;max-width:1500px;margin:auto"></div><pre id="result"></pre><script>' + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
     for (const [width, height] of [[1920, 1080], [1366, 768]]) {
       const dump = join(dir, `${width}.html`), fd = openSync(dump, "w");
       try { execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, String(width))}`,

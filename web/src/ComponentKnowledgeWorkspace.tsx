@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BookOpen, ChevronRight, Search, Settings2, Sparkles } from "lucide-react";
+import { MoreHorizontal, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -11,7 +11,8 @@ import { componentRequest } from "./componentResearchApi";
 import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { listTasks, type TaskSummary } from "./api";
 import { Markdown } from "./markdown";
-import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { ComponentDocumentReader } from "./ComponentDocumentReader";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import type { ComponentPolicyLevel, ComponentFeedback, ComponentGovernanceSnapshot, ComponentGovernanceItem } from "../../src/componentKnowledgeTypes";
 
 type Item = ComponentGovernanceItem;
@@ -24,11 +25,11 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   open: boolean; focusId?: string; onClose: () => void; onAdopt: (id: string) => void;
 }) {
   const [data, setData] = useState<ComponentGovernanceSnapshot>(), [error, setError] = useState(""), [notice, setNotice] = useState("");
-  const [selected, setSelected] = useState(""), [query, setQuery] = useState("");
+  const [selected, setSelected] = useState("");
   const [policySnapshot, setPolicySnapshot] = useState({ revision: -1, digest: "" });
   const [feedbackDigest, setFeedbackDigest] = useState("");
   const [artifacts, setArtifacts] = useState("");
-  const [deleting, setDeleting] = useState(false);
+  const [deleting, setDeleting] = useState(false), [sources, setSources] = useState(false);
   const [research, setResearch] = useState(focusId || ""), [adopted, setAdopted] = useState("");
   const [document, setDocument] = useState<KnowledgeDocument>(), [documentError, setDocumentError] = useState("");
   const [settings, setSettings] = useState(false), [editId, setEditId] = useState(""), [feedbackId, setFeedbackId] = useState("");
@@ -37,8 +38,6 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   const [level, setLevel] = useState<ComponentPolicyLevel>("shadow"), [owner, setOwner] = useState(""), [scope, setScope] = useState(""), [reason, setReason] = useState("");
   const [feedback, setFeedback] = useState<ComponentFeedback["kind"]>("quality_error"), [note, setNote] = useState(""), [sampleId, setSampleId] = useState("");
   const knowledge = (data?.items ?? []).filter(i => i.kind === "mapping");
-  const visible = knowledge.filter(i => `${i.paradigm.component} ${i.paradigm.title} ${i.paradigm.need} ${i.paradigm.api.join(" ")}`.toLowerCase().includes(query.toLowerCase()));
-  const components = [...new Set(visible.map(i => i.paradigm.component))];
   const item = knowledge.find(i => i.id === selected);
   const rules = item ? (data?.items ?? []).filter(i => i.kind === "rule" && belongs(i, item)) : [];
   const edit = data?.items.find(i => i.id === editId), feedbackItem = data?.items.find(i => i.id === feedbackId);
@@ -53,10 +52,10 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   }, [open]);
   useEffect(() => {
     setSelected(previous => {
-      const target = adopted && visible.find(i => i.paradigm.document_id === adopted);
-      return target ? target.id : visible.some(i => i.id === previous) ? previous : visible[0]?.id ?? "";
+      const target = adopted && knowledge.find(i => i.paradigm.document_id === adopted);
+      return target ? target.id : knowledge.some(i => i.id === previous) ? previous : knowledge[0]?.id ?? "";
     });
-  }, [data, query, adopted]);
+  }, [data, adopted]);
   useEffect(() => {
     let live = true; setDocument(undefined); setDocumentError("");
     if (item) void documentRequest<KnowledgeDocument>(`/${encodeURIComponent(item.paradigm.document_id)}`).then(doc => { if (live) setDocument(doc); }).catch(e => { if (live) setDocumentError(e.message); });
@@ -90,44 +89,36 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   // 只隐藏程序附加在末尾的来源，保留模型正文中的来源说明及其后的完整示例。
   const sourceStart = rawContent?.lastIndexOf("\n### 来源\n") ?? -1;
   const content = (sourceStart >= 0 ? rawContent?.slice(0, sourceStart) : rawContent)?.trim();
-  return <section className="tw-root space-y-4" aria-label="组件知识工作台">
+  return <section className="tw-root space-y-3" aria-label="组件知识工作台">
     <header className="flex items-center justify-between gap-4">
       <h2 className="text-xl font-semibold">组件知识</h2>
-      <div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setDeleting(true)}>删除知识</Button><Button variant="ghost" onClick={() => setResearch("history")}>查看萃取记录</Button><Button onClick={() => setResearch("new")}><Sparkles size={16} />萃取知识</Button></div>
+      <div className="flex items-center gap-2"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="管理组件知识" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => setResearch("history")}>查看萃取记录</DropdownMenuItem><DropdownMenuItem onClick={() => setDeleting(true)}>删除知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu><Button onClick={() => setResearch("new")}><Sparkles size={16} />萃取知识</Button></div>
     </header>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="text-primary">{notice}</p>}
     {!!data?.warnings.length && <details className="rounded-lg border border-line p-3"><summary className="cursor-pointer text-attention">有 {data.warnings.length} 项知识未能完整读取</summary>{data.warnings.map((w, i) => <p key={i} className="mt-2 break-words">{w}</p>)}</details>}
-    <div className="grid min-h-[620px] grid-cols-[260px_minmax(0,1fr)] overflow-hidden rounded-xl border border-line bg-surface">
-      <aside className="border-r border-line bg-surface-2/40" aria-label="组件列表">
-        <div className="relative border-b border-line p-4"><Search size={16} className="absolute left-7 top-7 text-muted-foreground" /><Input className="pl-9" aria-label="搜索组件知识" placeholder="搜索组件或能力" value={query} onChange={e => { setAdopted(""); setQuery(e.target.value); }} /></div>
-        <div className="max-h-[720px] overflow-auto p-3">{components.map(component => <section key={component} className="mb-5">
-          <h3 className="px-3 py-2 font-semibold">{component}</h3>
-          {visible.filter(i => i.paradigm.component === component).map(row => <button key={row.id} aria-current={row.id === selected ? "true" : undefined} onClick={() => { setAdopted(""); setSelected(row.id); }} className={`flex w-full items-start gap-2 rounded-lg px-3 py-3 text-left text-sm ${row.id === selected ? "bg-primary/10 text-primary" : "hover:bg-surface-2"}`}><BookOpen size={16} className="mt-0.5 shrink-0" /><span className="min-w-0 flex-1 break-words">{row.paradigm.need}</span>{row.needs_review && <span aria-label="需要核对" title="需要核对" className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-attention" />}</button>)}
-        </section>)}{!components.length && <p className="px-3 py-8 text-sm text-muted-foreground">{!data ? "正在加载…" : query ? "没有匹配的知识" : "暂无组件知识"}</p>}</div>
-      </aside>
-      {item ? <article className="min-w-0" aria-label="组件知识详情">
-        <header className="border-b border-line px-8 py-6">
-          <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground"><span>{item.paradigm.component}</span><ChevronRight size={14} /><span>{knowledgeLanguageLabel(item.paradigm.language)}</span></div>
-          <div className="flex items-start justify-between gap-6"><h3 className="text-2xl font-semibold leading-snug">{item.paradigm.title}</h3><div className="flex shrink-0 gap-1"><Button variant="ghost" onClick={() => correct(item)}>纠错</Button><Button variant="outline" onClick={() => { setSettings(true); setDialogError(""); }}><Settings2 size={16} />使用设置</Button></div></div>
-          <div className="mt-4 flex flex-wrap gap-2">{item.paradigm.api.map(api => <code key={api} className="rounded-md bg-surface-2 px-2.5 py-1 text-sm">{api}</code>)}</div>
-        </header>
-        <div className="space-y-6 px-8 py-6">
-          {item.needs_review && <p className="rounded-lg bg-attention/10 p-3 text-attention">这条知识有变更或纠错记录，需要重新核对。</p>}
-          <section><h4 className="mb-2 font-semibold">适用条件</h4><p className="leading-relaxed">{item.paradigm.applicability}</p></section>
-          <section aria-label="知识正文" className="min-w-0 overflow-x-auto">{documentError ? <div role="alert" className="text-danger">正文读取失败：{documentError}<Button variant="link" onClick={() => onAdopt(item.paradigm.document_id)}>打开源文档</Button></div> : !document ? <p className="text-muted-foreground">正在读取用法与示例…</p> : content ? <Markdown text={content} /> : <p className="text-muted-foreground">本条知识暂无可展示的正文。</p>}</section>
-          <details className="border-t border-line pt-4"><summary className="cursor-pointer font-medium">代码检查 · {rules.length} 项</summary><div className="mt-4 flex items-center justify-between gap-3"><span>当前检查只提供提示，不拦截提交。</span><Button variant="outline" onClick={() => { setSettings(true); setDialogError(""); }}>查看检查与结果</Button></div><Button className="mt-3" variant="link" onClick={() => setArtifacts(item.id)}>查看程序化产物</Button></details>
-          <details className="border-t border-line pt-4"><summary className="cursor-pointer font-medium">来源依据</summary><div className="mt-4 space-y-3">{item.paradigm.evidence.map((e, i) => <p key={i} className="break-all text-sm">{e.repository_id} / {e.path}:{e.start}–{e.end}<br /><span className="text-muted-foreground">版本 {e.revision}</span></p>)}{item.paradigm.usage_evidence.map((e, i) => <p className="break-words text-sm" key={i}>{e}</p>)}<Button variant="outline" onClick={() => onAdopt(item.paradigm.document_id)}>打开源文档</Button></div></details>
-          {!!item.feedback.length && <details className="border-t border-line pt-4"><summary className="cursor-pointer font-medium">纠错记录 · {item.feedback.length}</summary>{item.feedback.map(f => <p key={f.id} className="mt-3 leading-relaxed"><strong>{feedbackLabels[f.kind]}</strong> · {f.operator}<br />{f.reason}</p>)}</details>}
-        </div>
-      </article> : <div className="flex min-h-[620px] flex-col items-center justify-center gap-5 p-10 text-center"><BookOpen size={36} className="text-muted-foreground" /><h3 className="text-lg font-medium">{!data ? "正在读取组件知识" : query ? "换个关键词试试" : "从基础组件开始积累知识"}</h3>{data && !query && <Button onClick={() => setResearch("new")}>萃取知识</Button>}</div>}
-    </div>
+    <ComponentDocumentReader treeLabel="组件列表" selected={selected} onSelect={id => { setAdopted(""); setSelected(id); }}
+      files={knowledge.map(row => ({ id: row.id, path: [row.paradigm.component, `${row.paradigm.title}.md`], searchText: `${row.paradigm.need} ${row.paradigm.api.join(" ")}`, content: row.id === selected && document ? (content || "本条知识暂无正文。") : undefined }))}
+      message={documentError ? <div role="alert" className="text-danger">正文读取失败：{documentError}<Button variant="link" onClick={() => item && onAdopt(item.paradigm.document_id)}>打开源文档</Button></div> : undefined}
+      actions={item && <>
+        {item.needs_review && <span className="text-attention">待核对</span>}
+        <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="文档操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
+          <DropdownMenuItem onClick={() => { setSettings(true); setDialogError(""); }}>代码检查</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setArtifacts(item.id)}>查看程序化产物</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setSources(true)}>来源与纠错记录</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => correct(item)}>纠错</DropdownMenuItem>
+        </DropdownMenuContent></DropdownMenu>
+      </>} />
+    <Dialog open={sources && open} onOpenChange={setSources}><DialogContent className="tw-root sm:max-w-[760px] max-h-[85vh] overflow-auto"><DialogHeader><DialogTitle>来源与纠错记录</DialogTitle></DialogHeader>
+      {item && <><section><h3 className="mb-2 font-semibold">适用条件</h3><p className="leading-relaxed">{item.paradigm.applicability}</p></section><div className="space-y-4">{item.paradigm.evidence.map((e, i) => <p key={i} className="break-all">{e.repository_id} / {e.path}:{e.start}–{e.end}<br /><span className="text-muted-foreground">版本 {e.revision}</span></p>)}{item.paradigm.usage_evidence.map((e, i) => <p className="break-words" key={i}>{e}</p>)}<Button variant="outline" onClick={() => onAdopt(item.paradigm.document_id)}>打开源文档</Button></div>
+      {!!item.feedback.length && <section className="border-t border-line pt-4"><h3 className="font-semibold">纠错记录</h3>{item.feedback.map(f => <p key={f.id} className="mt-3 leading-relaxed"><strong>{feedbackLabels[f.kind]}</strong> · {f.operator}<br />{f.reason}</p>)}</section>}</>}
+    </DialogContent></Dialog>
 
     <ComponentKnowledgeArtifacts id={open ? artifacts : ""} onClose={() => setArtifacts("")} />
     <ComponentKnowledgeDelete open={open && deleting} onClose={() => setDeleting(false)} onChanged={() => { setAdopted(""); setArtifacts(""); void refresh().catch(e => setError(e.message)); }} />
-    <Dialog open={!!research && open} onOpenChange={value => { if (!value) closeResearch(); }}><DialogContent className="tw-root w-[94vw] max-w-none sm:max-w-none max-h-[92vh] overflow-auto"><DialogHeader><DialogTitle>萃取知识</DialogTitle></DialogHeader><ComponentResearch open={!!research && open} focusId={research} compact onClose={closeResearch} onAdopt={id => { setAdopted(id); setQuery(""); closeResearch(); }} /></DialogContent></Dialog>
+    <Dialog open={!!research && open} onOpenChange={value => { if (!value) closeResearch(); }}><DialogContent className="tw-root w-[98vw] max-w-none sm:max-w-none h-[96dvh] overflow-auto block"><DialogHeader className="sr-only"><DialogTitle>萃取知识</DialogTitle></DialogHeader><ComponentResearch open={!!research && open} focusId={research} compact onClose={closeResearch} onAdopt={id => { setAdopted(id); closeResearch(); }} /></DialogContent></Dialog>
 
-    <Dialog open={settings && open} onOpenChange={value => { if (!busy) { setSettings(value); setDialogError(""); } }}><DialogContent className="tw-root sm:max-w-[760px] max-h-[85vh] overflow-auto"><DialogHeader><DialogTitle>使用设置 · {item?.paradigm.component}</DialogTitle></DialogHeader>
+    <Dialog open={settings && open} onOpenChange={value => { if (!busy) { setSettings(value); setDialogError(""); } }}><DialogContent className="tw-root sm:max-w-[760px] max-h-[85vh] overflow-auto"><DialogHeader><DialogTitle>代码检查 · {item?.paradigm.component}</DialogTitle></DialogHeader>
       {dialogError && !edit && !feedbackItem && <p role="alert" className="text-danger">{dialogError}</p>}
       {item && <>
         <section className="space-y-3"><div className="flex items-center justify-between"><h3 className="font-semibold">代码检查</h3><span className="rounded bg-surface-2 px-3 py-1 text-sm">不拦截提交</span></div>

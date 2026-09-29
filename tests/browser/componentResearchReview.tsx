@@ -58,7 +58,10 @@ async function message(value: string) {
   field.dispatchEvent(new Event("input",{bubbles:true}));await pause();
 }
 async function run() {
-  for (let i=0;i<60 && !document.querySelector('[aria-label="组件审核工作区"]');i++) await pause();
+  for (let i=0;i<60 && !document.querySelector('[aria-label="组件萃取文档"]');i++) await pause();
+  check(document.querySelector('[aria-label="文档目录"]'), "result opens as a document tree");
+  check(!document.querySelector('[aria-label="组件专家对话"]'), "discussion stays out of the reading view");
+  await click("审阅与修订");
   const boxes = () => [...document.querySelectorAll<HTMLInputElement>('[aria-label="组件能力目录"] input[type="checkbox"]')];
   check(boxes().length === record.document!.sections.length && boxes().every(b => b.checked), "all discovered capabilities must default selected");
   await click("全不选");check(boxes().every(b => !b.checked),"unselect all");
