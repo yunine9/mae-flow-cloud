@@ -25,10 +25,16 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
   try {
     for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/domain-extraction/probes", "/knowledge-extraction/skills/domain"]) assert.equal((await request(path)).status, 401);
     const dev = await login("dev"), admin = await login("admin");
-    const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, false);
-    assert.equal((await request("/knowledge-extraction/skills/domain", dev, { files: skill.files, expected_digest: skill.digest })).status, 403);
+    const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, true);
+    assert.equal((await request("/knowledge-extraction/skills/domain", "", { files: skill.files, expected_digest: skill.digest })).status, 401);
     const files = { ...skill.files, "references/domain.md": skill.files["references/domain.md"] + "\n核对新增规则。\n" };
-    assert.equal((await request("/knowledge-extraction/skills/domain", admin, { files, expected_digest: skill.digest })).status, 200);
+    assert.equal((await request("/knowledge-extraction/skills/domain", dev, { files, expected_digest: skill.digest })).status, 200);
+    const updated: any = await (await request("/knowledge-extraction/skills/domain", dev)).json();
+    assert.ok(updated.digest !== skill.digest);
+    assert.equal((await request("/knowledge-extraction/skills/domain", admin, { files: skill.files, expected_digest: skill.digest })).status, 400, "并发上传不能覆盖其他人的新版本");
+    const componentSkill: any = await (await request("/knowledge-extraction/skills/component", dev)).json();
+    assert.equal(componentSkill.can_manage, true);
+    assert.equal((await request("/knowledge-extraction/skills/component", dev, { files: componentSkill.files, expected_digest: componentSkill.digest })).status, 200);
     const upload = await request("/knowledge-materials", dev, { name: "rules.txt", content_base64: Buffer.from("业务资料测试").toString("base64") }); assert.equal(upload.status, 201);
     const material: any = await upload.json(); assert.equal(material.state, "ready");
     const start = await request("/domain-extraction", dev, { issue_no: "REQ-123", title: "领域", scope: "规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/business.git", branch: "main", docs_path: "docs" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });

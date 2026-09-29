@@ -7,7 +7,6 @@ import { execFileSync } from "node:child_process";
 import { probeExcludedPath } from "../src/domainKnowledgeProbe.ts";
 import { componentSourceTool } from "../src/componentResearchTools.ts";
 import { scanKnowledgeCode, validateKnowledgeReferences } from "../src/domainKnowledgeCode.ts";
-import { DomainKnowledgePipeline, type KnowledgeWorkResult } from "../src/domainKnowledgePipeline.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 
@@ -37,29 +36,6 @@ test("临时验证在列表、搜索、直接读取和引用校验中屏蔽全�
     assert.equal((await validateKnowledgeReferences("`repo-1:docs/old.md`", [snapshot], signal())).errors.length, 1);
     const normal = componentSourceTool(root, revision, "", () => {});
     assert.match((await (normal as any).execute("normal", { action: "read", path: "docs/old.md" }, signal())).content[0].text, /OLD_KNOWLEDGE_SENTINEL/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("单模块验证拒绝扩展其他模块，无全域跨模块任务，重启保留同一范围", async () => {
-  const root = mkdtempSync(join(tmpdir(), "knowledge-probe-plan-"));
-  try {
-    const file = join(root, "state.json"), pipeline = new DomainKnowledgePipeline(file, "skill", 0, "邻区发现");
-    let rejected = false;
-    await pipeline.run({ signal: signal(), stage: () => {}, review: async () => undefined, execute: async task => {
-      const result: KnowledgeWorkResult = { findings: "只验证邻区发现，其他模块仅按需核对依赖", open_questions: [], document_ids: [task.id] };
-      if (task.phase === "inventory") {
-        if (task.attempts === 1) result.modules = [{ id: "other", title: "其他模块", kind: "business", depends_on: [], scope: "all" }];
-        else { assert.match(task.feedback!, /本次仅验证指定模块/); rejected = true; result.modules = [{ id: "probe", title: "邻区发现", kind: "business", depends_on: [], scope: "repo-1/src" }]; }
-      }
-      if (task.phase === "plan") result.subfeatures = [{ id: "discovery", title: "发现", hops: [{ id: "entry", title: "输入边界", questions: "哪些条件触发发现？" }] }];
-      return result;
-    } });
-    assert.equal(rejected, true);
-    assert.equal(pipeline.state.tasks.filter(t => t.phase === "plan").length, 1);
-    assert.ok(!pipeline.state.tasks.some(t => ["cross", "cross-plan"].includes(t.phase)));
-    assert.equal(pipeline.state.tasks.filter(t => t.phase === "synthesis").length, 3);
-    assert.throws(() => new DomainKnowledgePipeline(file, "skill", 0, "其他"), /不能改变/);
-    assert.equal(new DomainKnowledgePipeline(file, "skill", 0, "邻区发现").state.tasks.every(t => t.status === "done"), true);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

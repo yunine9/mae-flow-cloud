@@ -1,13 +1,3 @@
----
-title: <跨模块链路标题>
-type: cross-chain
-modules: [<模块id>, <模块id>]
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <跨模块链路标题>
 
 ## 因果关系

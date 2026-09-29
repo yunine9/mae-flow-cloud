@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, FileText, Folder, Maximize2, Minimize2, Pane
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { knowledgeAnchorLine, knowledgeHeadingTree, type KnowledgeHeading } from "./knowledgeStructure";
+import { knowledgeAnchorLine, knowledgeHeadingTree, resolveKnowledgeReference, type KnowledgeHeading } from "./knowledgeStructure";
 import { Markdown } from "./markdown";
 
 export interface ComponentReaderFile { id: string; path: string[]; content?: string; searchText?: string; metadata?: string }
@@ -29,7 +29,13 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
     if (target && reader.current) { reader.current.scrollTop += target.getBoundingClientRect().top - reader.current.getBoundingClientRect().top - 20; target.tabIndex = -1; target.focus({ preventScroll: true }); }
   }, [jump, selected, file?.content]);
   function openReference(href: string) {
-    if (!href.startsWith("#")) { setLinkError("请在来源文档中查看此链接。"); return; }
+    if (!href.startsWith("#")) {
+      if (!file) return;
+      const entries = files.map(f => ({ ...f, path: f.path.join("/"), target_id: "files" }));
+      const reference = resolveKnowledgeReference(entries, entries.find(f => f.id === file.id)!, href);
+      if (!reference || (reference.anchor && !knowledgeAnchorLine(reference.item.content ?? "", reference.anchor))) { setLinkError("当前文件包中未找到这个文件或章节。"); return; }
+      setLinkError(""); setRaw(false); onSelect(reference.item.id); setJump({ id: reference.item.id, line: knowledgeAnchorLine(reference.item.content ?? "", reference.anchor) ?? 1 }); return;
+    }
     let anchor: string;
     try { anchor = decodeURIComponent(href.slice(1)); } catch { setLinkError("章节链接格式无效。"); return; }
     const target = [file, ...files.filter(f => f !== file)].find(f => f && (f.id === anchor || `component-${f.id}` === anchor || knowledgeAnchorLine(f.content ?? "", anchor)));
@@ -59,7 +65,7 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
   const body = <div className="flex h-full min-h-0 flex-col overflow-hidden bg-surface text-base">
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-3">
       <Button size="icon" variant="ghost" aria-label={showTree ? "收起目录" : "展开目录"} title={showTree ? "收起目录" : "展开目录"} onClick={() => setShowTree(!showTree)}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}</Button>
-      <span className="min-w-0 flex-1 truncate font-medium" title={file?.path.join(" / ")}>{file?.path.at(-1) ?? "组件文档"}</span>
+      <span className="min-w-0 flex-1 truncate font-medium" title={file?.path.join(" / ")}>{file?.path.at(-1) ?? "文档"}</span>
       {allowRaw && /\.md$/i.test(file?.path.at(-1) ?? "") && <Button variant="ghost" onClick={() => setRaw(!raw)}>{raw ? "阅读" : "原文"}</Button>}
       {actions}
       <Button size="icon" variant="ghost" aria-label={fullscreen ? "退出全屏" : "全屏阅读"} title={fullscreen ? "退出全屏" : "全屏阅读"} onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}</Button>
@@ -81,6 +87,6 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
   </div>;
   return <>
     {!fullscreen && <div className="min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}>{body}</div>}
-    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} className="tw-root h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && body}</DialogContent></Dialog>
+    <Dialog open={fullscreen} onOpenChange={setFullscreen}><DialogContent showCloseButton={false} style={{ animation: "none" }} className="tw-root h-[100dvh] w-[100vw] max-w-none gap-0 overflow-hidden rounded-none p-0 sm:max-w-none"><DialogTitle className="sr-only">文档全屏阅读</DialogTitle>{fullscreen && body}</DialogContent></Dialog>
   </>;
 }

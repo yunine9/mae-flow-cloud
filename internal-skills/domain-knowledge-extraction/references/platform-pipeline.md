@@ -1,29 +1,40 @@
-# 平台执行协议
+# 平台工具接口
 
-本包改编自 [Issue 440](https://github.com/yunine9/mae-flow-cloud/issues/440) 附件 kb-builder。沿用小任务、独立评审、真实引用、显式未知的研究方法；调度由 Cloud 的 TypeScript 宿主完成，不依赖 Claude CLI 或 Python。
+平台执行当前选用的 Skill，展示过程、草稿和结果，再由用户一键创建或更新归档 MR。平台不认识本方法中的模块、链路分段、阶段编号或文档标题；这些约定由本包的 SKILL.md 和 phase 文件决定。替换方法包可以改变研究顺序、文档目录和正文结构。
 
-## 输入和工具
+## 输入与资料
 
-- 上下文中的 task 是唯一当前任务，spec 为具体问题，depends_on 是已完成依赖。用 knowledge_work 提供 id 读取结果；省略 id 按 start/count 分页看任务摘要。不要把所有历史灌入当前会话。
-- knowledge_structure 分页读取宿主静态扫描的 CMake/Maven/npm 构建单元和依赖候选；不执行构建或解析条件表达式。
-- component_source 按仓编号读取固定版本源码，分页 list、search、read；结构清单仅定位，不替代构建依赖核对。
-- knowledge_material 读取上传资料、章节及图片。business_knowledge 调用无线豆包。knowledge_evidence 回读已持久保存的原始资料与查询，跨会话复用时仍需读正文。
-- knowledge_draft read 查看草稿；save 保存正文，使用 archive_targets 中的 id 和 docs_path。文件里的示例 knowledge/ 和 repos/*/docs/ 要映射到这些真实目标，不能直接照搬。
-- knowledge_work_result 提交当前任务结果。findings 写具体证据、文档片段、覆盖范围、排除项和依据；document_ids 只填本会话保存的草稿；open_questions 逐项写清问题、已知证据、影响、建议请教角色及优先级。
+上下文提供 mode、scope、repositories、archive_targets、materials、ar_codes、已有文档摘要及用户反馈。单模块验证的 probe.module 是本次研究范围；仅研究它，依赖按需核对，不扩展为全领域。验证模式中平台屏蔽源码仓所有 docs/、AGENTS.md 和配置文档目录，本次上传资料和无线豆包继续可用。
 
-## 阶段输出
+- extraction_skill：省略 path 查看包内文件，指定 path 读方法或模板；文件名由 Skill 自己定义。
+- component_source：按仓编号 list/search/read 固定版本源码；按需定位构建文件和调用，不要求宿主预扫描所有仓。
+- knowledge_structure：按需查看指定仓的构建单元和依赖候选，候选关系仍需读取源码核实。
+- knowledge_source_check：检查代码引用的路径、行号、符号是否存在；评审时调用并处理错误。结论是否成立仍需阅读源码和业务资料判断。
+- knowledge_material：读取上传资料及章节、图片。
+- business_knowledge：调用无线豆包，具体查询见 materials.md。
+- knowledge_evidence：搜索和回读已保存的原始资料与查询结果。
+- knowledge_source_changes：更新时比较已固定的旧、新源码版本。
+- knowledge_draft：read 查看文档；save 保存草稿或修订建议。使用 archive_targets 中的 id 和 docs_path；讨论及只读步骤不能写文档，不能直接发布或采纳。
 
-- inventory：modules 每项有 id、title、kind（public/business）、depends_on（模块编号）、scope。scope 写实际仓编号、路径、业务资料对应章节和排除依据。无引用的目录猜测不算盘点。
-- plan：subfeatures 每项有 id、title、hops；每段有 id、title、questions。questions 写入口、出口、边界、3～6 个具体问题和代码/资料起点。宿主据此生成研究、公共提炼、组装与模块收尾任务。
-- hop：findings 保存代码追踪、业务资料与豆包证据、约束、易错点和可供组装的段落。可不建最终文档；不要把中间笔记直接冒充已入库知识。
-- common/assemble/wrap/cross/synthesis：用 knowledge_draft 保存最终草稿，再提交结果。没有公共段或跨功能影响时写检查过的候选与结论，不能虚构。
-- cross-plan：cross_items 每项 id、title、questions；问题中标明链路或契约及涉及模块。确实没有时可为空，findings 要说明检查范围与依据。
-- synthesis：术语任务对照业务、代码和协议术语；问题任务读取各阶段 open_questions 按模块/角色/优先级去重；索引任务列文档地图、实际覆盖及未覆盖范围。报告不宣称已合入。
+## 自行安排独立步骤
 
-## 独立评审
+knowledge_work 的 action：
 
-评审没有保存文档权限。先读取全部待评审草稿和 findings，按 phase-review.md 回查关键源码、原始上传资料和豆包证据，检查每个问题是否回答或列为待确认。代码行存在只能证明引用有效，不能证明结论正确。资料版本、截断、解析缺失和冲突必须可见。
+- list：分页查看步骤状态，start 指定起点。
+- schedule：保存 steps 数组。每项有 id、title、instructions、depends_on、readonly；编号由 Skill 选择，依赖须在已保存或同批步骤中。instructions 写具体问题、范围、应读的本包文件、输入编号和预期结果。不能覆盖已有步骤，需要返工时新建编号并附反馈。
+- run：指定 id，在全新的独立会话执行该步骤并等待结果。已完成步骤返回原结果；中断或失败步骤可再次执行。平台不自动生成后续任务。
+- read：指定 id 读取步骤详情与结果。不指定 id 读取当前执行记录。只展开需要的结果，避免把全部材料重复注入上下文。
+- discard：指定 id、reason，明确记录不再需要执行的步骤；依赖它的步骤仍需另行处理。
+- legacy：查看升级前保留的研究进度和结果。先对照已有文档与通过项，再安排未完成工作，不从头覆盖人工稿。
 
-knowledge_work_result 用 pass 和 feedback 返回结论。退回时写具体位置、问题和可执行修正意见。通过前必须打开支撑关键结论的来源；来源少于三处时全部核对，不虚构抽查。规划任务也要评审覆盖、依赖和问题粒度，不能仅凭格式正确通过。
+主会话按 SKILL.md 的研究方法逐步安排任务。phase-inventory.md 等文件约定的 modules、subfeatures、hops、cross_items 都属于本 Skill 的数据格式，放在结果的 data 中；主会话读取后自行安排下一步，平台不会解释这些字段。平台并不要求每个 Skill 使用这些字段或独立步骤，简单任务可以直接保存文档。
 
-任务结果与评审意见保存在任务数据目录。人不需要准备配置文件、安装 Claude 或复制本地知识目录；继续使用平台现有审查、修订、人工采纳与 MR 归档。
+## 保存结果与评审
+
+每个会话用 knowledge_work_result 提交 summary、document_ids、可选 data。中间发现、证据编号、待确认问题、阶段结果均可放 data；文档编号须对应已经保存的草稿。不能只用普通回复表示完成。
+
+本方法的独立评审使用 readonly=true 的步骤。按 phase-review.md 读取待评审文档及原始依据，返回 data: {pass: true/false, feedback: "具体意见"}。主会话据此决定补充、返工或继续；评审不会被平台自动插入。
+
+主会话结束时 status=complete；需要用户查看或补充信息时 status=paused，并在 summary 说明原因。所有已安排步骤需完成或明确放弃后才能结束；不完整工作应保存暂停结果，不能伪报完成。暂停不会因服务重启自动通过，用户明确接续后 continued 才增加。
+
+正文通过 knowledge_draft 保存，不把日志或工作计划当作文档正文。最终报告写 summary，文档结构由本包方法决定。知识入库、索引和 MR 合入状态以平台事实为准。

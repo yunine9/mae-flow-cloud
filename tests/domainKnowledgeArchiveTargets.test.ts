@@ -38,7 +38,7 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     assert.equal(initial.title, module.name);
     assert.equal(initial.repositories[0].repository, source.repository);
     assert.equal(initial.repositories[0].branch, "release/current");
-    assert.match(initial.scope, /完整研究/);
+    assert.match(initial.scope, /交易业务/);
     let job = await done(service, initial.id);
     assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
     assert.deepEqual(job.documents.map(d => d.path), ["business/domains/rules.md", "business/local/rules.md"]);

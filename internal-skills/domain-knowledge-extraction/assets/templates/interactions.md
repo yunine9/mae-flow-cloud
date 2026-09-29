@@ -1,13 +1,3 @@
----
-title: <模块名> · 子功能间的相互影响
-type: interactions
-module: <模块id>
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <模块名> 子功能间的相互影响
 
 ## 共享数据
@@ -23,7 +13,3 @@ status: draft
 ## 顺序依赖与互相抑制
 
 <一个子功能的结果是另一个的输入；一个运行期间另一个是否暂停。>
-
-## 已检查但未发现交互的方面
-
-<写明检查了什么，避免后来者重复排查。>

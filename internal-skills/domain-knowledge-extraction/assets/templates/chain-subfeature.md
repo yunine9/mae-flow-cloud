@@ -1,13 +1,3 @@
----
-title: <模块名> · <子功能名>
-type: chain
-module: <模块id>
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <子功能名>
 
 ## 业务目标

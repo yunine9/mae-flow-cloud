@@ -1,4 +1,4 @@
-> 平台适配：本文中的 `_work/`、`spec` 和输出文件是研究内容的组织说明。实际任务从当前上下文与 `knowledge_work` 读取；中间发现用 `knowledge_work_result` 保存，最终正文用 `knowledge_draft` 保存到平台给出的目标和 docs_path。不得自行写本地文件。输出协议以 [平台执行协议](platform-pipeline.md) 为准。
+> 通过 step.instructions 与 knowledge_work 读取本步骤的范围、问题和已有结果；中间内容保存到 knowledge_work_result.data，最终文档通过 knowledge_draft 保存。下面的 knowledge/ 和 repos/ 是相对平台归档目标的文档组织，不是本机目录。工具参数见 [平台工具接口](platform-pipeline.md)。
 
 # 规划阶段：把一个模块拆成子功能和链路跳
 
@@ -14,9 +14,9 @@
    - 好问题："MroTask 在参数下发失败后是否重试？重试期间新的优化周期到来会怎样？"
    - 好问题："为什么切换参数的调整步长限制在 ±2dB？依据是协议、现网经验还是算法稳定性？"
    - 坏问题："介绍一下 MroTask 类。""这一跳做了什么？"
-6. **控制规模**。整个模块的跳数不超过任务 spec 中的 `max_hops`。超出时按价值取舍（问题多、改动频繁、业务核心的优先），被舍弃的写入 `deferred`。
+6. **控制规模**。步骤说明给出 `max_hops` 时遵循该上限；未给出则按实际复杂度拆分。超出时按价值取舍（问题多、改动频繁、业务核心的优先），被舍弃的写入 `deferred`。
 
-## 产出：`_work/plans/<模块id>.json`
+## 产出：knowledge_work_result.data
 
 ```json
 {
@@ -48,7 +48,7 @@
 }
 ```
 
-硬性要求（脚本会校验）：子功能 `id` 与跳 `id` 只能用小写字母、数字、连字符；每一跳必须有 `id` 和 `title`。`related_code` 的格式为 `仓名:路径或glob`。
+本方法的记录约定：子功能 `id` 与跳 `id` 只能用小写字母、数字、连字符；每一跳必须有 `id` 和 `title`。`related_code` 的格式为 `仓名:路径或glob`。
 
 ## 不要做的事
 

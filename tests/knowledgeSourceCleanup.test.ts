@@ -60,30 +60,36 @@ test("领域清理只提交删除 MR，响应丢失复用分支，创建后不�
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("领域任务提供可选清理，未创建或未合入 MR 都不阻塞手动开始；重启保留准备状态", async () => {
+test("新领域任务直接执行 Skill；旧任务清理记录和手动开始仍可接续", async () => {
   const root = mkdtempSync(join(tmpdir(), "domain-preparation-"));
   let executes = 0;
   const unused = async () => { throw new Error("手动开始不应调用 MR API"); };
   const sourceCleanup = new KnowledgeSourceCleanup({ previewCleanup: unused, publish: unused });
-  const manager = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
+  const execute = async (input: import("../src/domainKnowledgeExtraction.ts").DomainExecution) => {
+    executes++;
+    input.save({ id: "guide", title: "规则", target_id: "domain", layer: "domain", path: "domains/rules.md", content: "# 规则", sources: "业务资料" });
+    return "done";
+  };
+  const manager = new DomainKnowledgeExtraction(root, execute, { sourceCleanup });
   const config = { issue_no: "REQ-prepare", title: "订单", scope: "订单规则", repositories: [1, 2].map(id => ({ repository: `https://example.test/repo${id}.git`, branch: "master" })) };
   try {
-    const job = manager.create(config, "dev"); assert.equal(job.status, "idle"); assert.equal(executes, 0); assert.equal(job.turns.length, 0);
-    const restart = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
+    const job = manager.create(config, "dev"); assert.equal(job.source_cleanup, undefined);
+    for (let i = 0; i < 100 && manager.get(job.id).status !== "done"; i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(manager.get(job.id).status, "done"); assert.equal(executes, 1);
+    await manager.shutdown();
+    // Simulate a pre-upgrade record, including a cleanup MR that is still open.
+    const file = join(root, "domain-extraction", job.id, "job.json");
+    const stored = manager.get(job.id);
+    stored.status = "idle"; stored.turns = []; stored.documents = [];
+    stored.source_cleanup = sourceCleanup.create(stored.repositories);
+    stored.source_cleanup.publications = [{ target_id: "repo-1", branch: "codex/cleanup", state: "opened", url: "https://example.test/mr/1", documents: [] }];
+    writeFileSync(file, JSON.stringify(stored));
+    const restart = new DomainKnowledgeExtraction(root, execute, { sourceCleanup });
     assert.equal(restart.get(job.id).status, "idle");
     const started = await restart.sourceCleanupAction(job.id, "start", {}, "dev"); assert.ok(started.source_cleanup?.started);
     for (let i = 0; i < 100 && ["queued", "running"].includes(restart.get(job.id).status); i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(executes, 1);
+    assert.equal(executes, 2);
+    assert.equal(restart.get(job.id).source_cleanup?.publications[0].url, "https://example.test/mr/1");
     await restart.shutdown();
-    // A persisted open cleanup MR is a capability receipt, not a gate.
-    const pending = manager.create(config, "dev");
-    const { readFileSync } = await import("node:fs");
-    const file = join(root, "domain-extraction", pending.id, "job.json"), stored = JSON.parse(readFileSync(file, "utf8"));
-    stored.source_cleanup.publications = [{ target_id: "repo-1", branch: "codex/cleanup", state: "opened", url: "https://example.test/mr/1", documents: [] }];
-    writeFileSync(file, JSON.stringify(stored));
-    const resumed = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
-    await resumed.sourceCleanupAction(pending.id, "start", {}, "dev");
-    for (let i = 0; i < 100 && executes < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(executes, 2); await resumed.shutdown();
   } finally { await manager.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });

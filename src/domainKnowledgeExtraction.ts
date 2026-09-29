@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
-import { IncompleteDomainResearch } from "./domainResearchProgress.ts";
+import { IncompleteDomainResearch } from "./domainSkillWork.ts";
 
 import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution, DomainRemoteReview, KnowledgeCleanupPlan } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
@@ -122,15 +122,14 @@ export class DomainKnowledgeExtraction {
     if (module_id) {
       const module = readBusinessModule(this.dataDir, module_id);
       if (module.status !== "active") throw new Error("业务模块已停用");
-      if (!module.repositories.length) throw new Error("请先在业务模块中维护关联代码仓");
-      input = { ...input, title: module.name, scope: `按照领域知识萃取 Skill，完整研究业务模块「${module.name}」及其全部关联仓。模块说明：${module.description}`,
+      input = { ...input, title: module.name, scope: `业务模块：${module.name}。模块说明：${module.description}`,
         repositories: module.repositories.map(url => ({ repository: url, name: url.split("/").at(-1)?.replace(/\.git$/, "") || module.name, branch: input.baseline_branch || "master", path: "" })) };
     }
     if (probe) input = { ...input, title: `${String(input.title).slice(0, 45)} / ${probe.module}`,
       scope: `临时 Skill 效果验证。所属领域：${input.title}。仅提取「${probe.module}」模块的知识，其他模块不独立研究。相关公共机制仅按需核对。屏蔽源码仓所有层级 docs/、AGENTS.md 和配置的文档目录，保留无线豆包与本次上传的业务资料。` };
     const title = String(input.title ?? "").trim(), scope = String(input.scope ?? "").trim();
     if (!title || title.length > 160 || !scope || scope.length > 10000) throw new Error("请填写业务域名称及本次研究范围");
-    if (!Array.isArray(input.repositories) || !input.repositories.length || input.repositories.length > 30) throw new Error("请选择 1～30 个业务仓");
+    if (!Array.isArray(input.repositories) || input.repositories.length > 30) throw new Error("业务仓须为数组，最多 30 个；无源码时可传空数组");
     const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(this.dataDir).current("domain").files, "domain");
     const repositories = input.repositories.map((r: any, i: number) => repository({ ...r, docs_path: r.docs_path || defaults.repository_directory }, `repo-${i + 1}`));
     const configured = readKnowledgeRepoConfig(this.dataDir);
@@ -143,11 +142,9 @@ export class DomainKnowledgeExtraction {
     const ar_codes = this.arCodes(input.ar_codes ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, ar_codes })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
-      source_cleanup: probe ? undefined : this.sourceCleanup?.create(repositories), source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
+      source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
-    if (job.source_cleanup) job.stage = "准备清理旧知识";
     this.jobs.set(job.id, job); this.persist(job);
-    if (job.source_cleanup) return this.get(job.id);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
   }
   async sourceCleanupAction(id: string, action: string, input: any, operator: string) {
@@ -330,7 +327,7 @@ export class DomainKnowledgeExtraction {
           if (controller.signal.aborted || job.deleted_at) return;
           if (!reply.trim()) throw new Error("本轮没有返回结果");
           scanForSecrets("研究答复", Buffer.from(reply));
-          if (turn.mode === "extract" && (!job.documents.length || !job.documents.some(doc => doc.layer === "domain"))) throw new Error("尚未生成领域知识草稿，已保存内容保留");
+          if (turn.mode === "extract" && !job.documents.length) throw new Error("尚未生成领域知识草稿，已保存内容保留");
           turn.reply = reply; turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查";
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;

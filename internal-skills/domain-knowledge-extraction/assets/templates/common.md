@@ -1,13 +1,3 @@
----
-title: <模块名> · 共用链路段
-type: common
-module: <模块id>
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <模块名> 共用链路段
 
 本文记录被多个子功能共用的链路段。子功能文档中以"见 common.md「Cx 标题」"引用这里。**修改这里的代码会同时影响下表中的所有子功能。**

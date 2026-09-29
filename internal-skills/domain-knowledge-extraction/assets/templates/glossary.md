@@ -1,12 +1,3 @@
----
-title: 术语表
-type: glossary
-related_code:
-  - <仓名>:<根目录glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # 术语表
 
 业务说法、代码命名与协议术语的对应关系。同一业务术语有多个代码命名时全部列出并说明使用范围。

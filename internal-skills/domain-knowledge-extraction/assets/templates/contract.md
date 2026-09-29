@@ -1,13 +1,3 @@
----
-title: <契约标题>
-type: contract
-repos: [<仓名>, <仓名>]
-related_code:
-  - <仓名>:<接口或消息定义所在文件>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <契约标题>
 
 **定义位置**：`<仓>:<路径>#<符号>`（字段以定义为准，本文不复制字段列表）

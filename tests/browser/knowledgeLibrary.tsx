@@ -13,7 +13,7 @@ job.evidence = [
   { tool: "business_knowledge", action: "knowledge_search", status: "available", query: { question: "订单取消规则" }, result: { source: "业务规格", content: "检索依据正文" } },
 ];
 job.documents.push({ ...job.documents[1], id: "agents", title: "模型生成的规范主题", path: "docs/business/AGENTS.md", content: "# 仓库规范\n遵守业务规则。" });
-const skill = { name: "domain-knowledge-extraction", digest: "first", can_manage: true, files: { "SKILL.md": "---\nname: domain-knowledge-extraction\ndescription: 领域知识方法\n---\n读取本包引用。", "references/domain.md": "研究领域规则。" }, versions: [] };
+const skill = { name: "domain-knowledge-extraction", digest: "first", can_manage: true, files: { "SKILL.md": "---\nname: domain-knowledge-extraction\ndescription: 领域知识方法\n---\n读取[方法](references/domain.md)。", "references/domain.md": "研究领域规则。" }, versions: [] };
 const calls: any[] = [], errors: string[] = [];
 let taskDeleted = false;
 window.addEventListener("error", e => errors.push(e.message)); window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
@@ -61,11 +61,9 @@ async function type(label: string, value: string) {
   check(field, `missing field ${label}`); Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
 }
 async function run() {
-  for (let i = 0; i < 60 && !button("仅讨论"); i++) await pause();
+  for (let i = 0; i < 60 && !button("讨论与修订"); i++) await pause();
   const primary = document.querySelector('[aria-label="知识库子页面"]')!;
-  check(primary.textContent?.includes("知识文档") && primary.textContent?.includes("知识萃取"), "knowledge library separates documents and extraction");
-  check(!primary.textContent?.includes("基础组件萃取") && !primary.textContent?.includes("领域知识萃取"), "extraction types must not share the documents navigation level");
-  check(document.querySelector('[aria-label="知识萃取类型"]')?.textContent?.includes("领域知识萃取"), "extraction type navigation nested below extraction");
+  check(primary.textContent?.includes("知识文档") && primary.textContent?.includes("组件知识") && primary.textContent?.includes("领域知识萃取"), "knowledge navigation exposes its three workspaces");
   await click("研究过程");
   const progress = document.querySelector<HTMLElement>('[aria-label="研究过程记录"]')!;
   check(!progress.querySelector('.knowledge-progress-heading') && !progress.querySelector('input[type="checkbox"]'), "timeline has no activity groups or type filters");
@@ -87,6 +85,18 @@ async function run() {
   check(outline.textContent?.includes("交易领域知识仓") && outline.textContent?.includes("订单服务"), "files grouped by repository");
   check(outline.textContent?.includes("states.md") && outline.textContent?.includes("integration.md"), "tree displays filenames");
   check(!outline.textContent?.includes("取消边界") && !outline.textContent?.includes("订单状态与取消规则"), "tree has no generated topic or heading hierarchy");
+  check(!button("仅讨论"), "discussion is hidden while reading");
+  await click("全屏阅读"); await new Promise(resolve => setTimeout(resolve, 220));
+  const readerDialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+  check(readerDialog.getBoundingClientRect().width >= innerWidth - 4 && readerDialog.getBoundingClientRect().height >= innerHeight - 4, `domain reader fills desktop viewport: ${readerDialog.getBoundingClientRect().width} x ${readerDialog.getBoundingClientRect().height} / ${innerWidth} x ${innerHeight}`);
+  await click("domains");
+  check(!button("states.md"), "nested folder collapses its files");
+  await click("domains"); await click("states.md");
+  await click("收起目录");
+  check(!document.querySelector('[aria-label="领域知识文件导航"]')?.getClientRects().length, "tree can be hidden for reading");
+  await click("展开目录"); await click("退出全屏");
+  check(button("states.md")?.getAttribute("aria-current") === "page", "selection survives fullscreen");
+  await click("讨论与修订");
   const original = job.documents[0].content;
   await type("领域知识修订意见", "取消为什么需要校验发货状态？"); await click("仅讨论"); check(job.documents[0].content === original, "discussion is read-only");
   await type("领域知识修订意见", "补充取消时的前置校验"); await click("生成建议"); check(job.documents[0].content === original, "proposal cannot auto-apply");
@@ -96,10 +106,10 @@ async function run() {
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching knowledge topics preserves unsaved edits");
   await click("知识文档");
   check(!document.querySelector('[aria-label="知识萃取类型"]'), "document page has no extraction type tabs");
-  await click("知识萃取");
-  check(document.querySelector('[aria-label="知识萃取类型"] button[aria-pressed="true"]')?.textContent === "领域知识萃取", "return to last extraction type");
+  await click("领域知识萃取");
+  check(document.querySelector('[aria-label="知识库子页面"] button[aria-pressed="true"]')?.textContent === "领域知识萃取", "return to last extraction type");
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching primary pages preserves unsaved edits");
-  await click("基础组件萃取"); await click("领域知识萃取");
+  await click("组件知识"); await click("领域知识萃取");
   check(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="编辑领域文档"]')?.value.includes("人工补充"), "switching pages preserves unsaved edits");
   await click("保存人工版本"); await click("差异"); check(button("采纳建议").disabled, "stale proposal cannot overwrite manual revision"); await click("放弃");
   await type("领域知识修订意见", "在人工版本上补充校验依据"); await click("生成建议"); await click("差异"); await click("采纳建议"); check(job.documents[0].content.includes("人工补充"), "accepted revision preserves manual content");
@@ -108,7 +118,15 @@ async function run() {
   await click("查看萃取 Skill →");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("领域知识萃取"), "extraction link opens the exact platform Skill in the library");
   check(!document.querySelector('[role="dialog"]'), "Skill no longer opens a separate editor dialog");
-  await click("references/domain.md");
+  check(button("references")?.getAttribute("aria-expanded") === "true", "Skill shows a folder hierarchy");
+  await click("references"); check(!button("domain.md"), "Skill folder collapses"); await click("references");
+  const link = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Skill 文件正文"] button.knowledge-inline-link')].find(a => a.textContent === "方法")!;
+  check(link, "Skill relative link is rendered"); link.click(); await pause();
+  check(button("domain.md")?.getAttribute("aria-current") === "page", "Skill link navigates within package");
+  document.querySelector<HTMLButtonElement>('[aria-label="全屏阅读"]')!.click(); await new Promise(resolve => setTimeout(resolve, 220));
+  check(document.querySelector('[role="dialog"]')!.getBoundingClientRect().width >= innerWidth - 4, "Skill reader fills viewport");
+  document.querySelector<HTMLButtonElement>('[aria-label="退出全屏"]')!.click(); await pause();
+  await click("domain.md");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("研究领域规则。"), "reference is readable online");
   await click("＋ 添加 Skill");
   check(button("平台使用")?.getAttribute("aria-pressed") === "true", "add Skill exposes platform use in unified upload");
@@ -127,14 +145,14 @@ async function run() {
   check(!button("保存并用于新任务") && document.querySelector('[aria-label="平台 Skill 详情"] [role="alert"]'), "missing SKILL.md cannot submit");
   await uploadSkillFile([["SKILL.md", skill.files["SKILL.md"]], ["references/domain.md", "新版方法：核对取消与退款的不同状态。"]], true);
   check(button("保存并用于新任务") && !calls.some(c => c.action === "skill"), "upload preview does not publish automatically");
-  await click("references/domain.md");
+  await click("domain.md");
   check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("新版方法"), "uploaded reference preview");
   await click("保存并用于新任务");
   check(calls.find(c => c.action === "skill")?.files["references/domain.md"].includes("新版方法"), "whole package saved through platform runtime store");
   check(calls.find(c => c.action === "skill")?.expected_digest === "first", "upload checks current version to avoid overwriting concurrent changes");
   check(document.querySelector('[aria-label="平台 Skill 详情"] [role="status"]')?.textContent?.includes("正在运行的任务继续使用原版本"), "success explains effective scope");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "Skill view desktop horizontal overflow");
-  await click("知识萃取"); await click("正文");
+  await click("领域知识萃取"); await click("正文");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "desktop horizontal overflow");
   const workspace = document.querySelector('[aria-label="领域知识审查工作区"]')!; check(workspace.scrollWidth <= workspace.clientWidth + 2, "review horizontal overflow");
   await click("入库与更新");
@@ -179,7 +197,7 @@ async function run() {
   module.value = "trade"; module.dispatchEvent(new Event("change", { bubbles: true })); await pause();
   await fillInput("统一基准分支", "release/current");
   await fillInput("领域萃取关联单号", "REQ-new");
-  await click("创建任务，先清理旧知识");
+  await click("开始萃取");
   const created = calls.find(c => c.action === "create");
   check(created?.module_id === "trade" && created.baseline_branch === "release/current", "creation sends module and one common branch");
   check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created) && !("use_wxdoubao" in created), "server derives scope and repositories from module maintenance");

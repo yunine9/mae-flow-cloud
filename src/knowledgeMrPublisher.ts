@@ -13,7 +13,7 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import type { DomainDocument, DomainRemoteReview } from "./domainKnowledgeTypes.ts";
 
-const markdown = (doc: { content: string; sources: string }, job: DomainKnowledgeJob) => job.component_research_id ? doc.content : `${doc.content.trimEnd()}\n\n## 来源\n\n${doc.sources.trim()}\n`;
+const markdown = (doc: { content: string; sources: string }, _job: DomainKnowledgeJob) => doc.content;
 export class KnowledgeMrPublisher {
   constructor(private options: {
     dataDir: string; platformUrl: () => string | undefined;

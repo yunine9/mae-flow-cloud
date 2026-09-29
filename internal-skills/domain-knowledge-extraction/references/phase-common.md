@@ -1,4 +1,4 @@
-> 平台适配：本文中的 `_work/`、`spec` 和输出文件是研究内容的组织说明。实际任务从当前上下文与 `knowledge_work` 读取；中间发现用 `knowledge_work_result` 保存，最终正文用 `knowledge_draft` 保存到平台给出的目标和 docs_path。不得自行写本地文件。输出协议以 [平台执行协议](platform-pipeline.md) 为准。
+> 通过 step.instructions 与 knowledge_work 读取本步骤的范围、问题和已有结果；中间内容保存到 knowledge_work_result.data，最终文档通过 knowledge_draft 保存。下面的 knowledge/ 和 repos/ 是相对平台归档目标的文档组织，不是本机目录。工具参数见 [平台工具接口](platform-pipeline.md)。
 
 # 公共提炼阶段：找出模块内多个子功能共用的链路段
 
@@ -6,7 +6,7 @@
 
 ## 输入
 
-- `spec.sections_dir` 下所有子功能的 section（`<子功能>/<跳>.md`），必要时查阅 `_work/findings/` 中对应的证据。
+- 通过 knowledge_work read 读取说明中列出的作者步骤，取得各子功能的 data.section 与 data.findings；必要时回读原始资料。
 - 模块依赖的公共组件文档（如有）：公共组件已经讲过的机制，这里只引用、不重复。
 
 ## 步骤
@@ -17,7 +17,7 @@
 
 ## 产出：`knowledge/chains/<模块>/common.md`
 
-使用模板 `common.md`。如果确实没有共用段，仍然写这个文件：frontmatter + 一句说明"本模块各子功能链路相互独立，无共用链路段"，以及你检查过哪些候选位置——这能避免后续会话重复做同样的判断。
+使用模板 `common.md`。如果确实没有共用段，不生成空文件；在 data 中记录检查范围与结论，供后续步骤复用。
 
 每个共用段包含：哪些子功能用到它、入口与出口（代码引用）、约束与原因、易错点（特别是"改动这里会同时影响哪些子功能"）。
 

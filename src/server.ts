@@ -1290,7 +1290,7 @@ export function createTaskServer(
       if (["domain-extraction", "knowledge-materials"].includes(parts[0])) return domainKnowledgeRoute(request, response, parts, service,
         viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-extraction") return extractionConfigurationRoute(request, response, parts, service.options.dataDir,
-        viewer?.username ?? "本地部署", !options.auth || viewer?.role === "admin", readBody, json);
+        viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-candidates") {
         const operator = viewer?.username ?? "本地部署";

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Markdown } from "./markdown";
+import { ComponentDocumentReader } from "./ComponentDocumentReader";
 import { componentRequest } from "./componentResearchApi";
 
 export type PlatformSkillKind = "component" | "domain";
@@ -18,7 +18,7 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
 }) {
   const [skill, setSkill] = useState<PlatformSkill>(), [pending, setPending] = useState<Record<string, string>>();
   const [showUpload, setShowUpload] = useState(upload);
-  const [path, setPath] = useState("SKILL.md"), [source, setSource] = useState(false);
+  const [path, setPath] = useState("SKILL.md");
   const [error, setError] = useState(""), [notice, setNotice] = useState(""), [busy, setBusy] = useState(false);
   const directory = useRef<HTMLInputElement>(null), file = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -56,7 +56,6 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
     <header className="flex items-start justify-between gap-4"><div>
       <p className="mb-2 text-sm text-muted-foreground">平台使用 · {platformSkillLabels[kind]}</p>
       <h2 className="text-2xl font-semibold">{showUpload ? "上传平台 Skill" : skill?.name ?? platformSkillLabels[kind]}</h2>
-      <p className="mt-2 text-sm text-muted-foreground">用于平台的{platformSkillLabels[kind]}，不加载到需求或问题任务。</p>
     </div>{skill?.can_manage && !showUpload && <Button variant="outline" onClick={() => setShowUpload(true)}>上传新版本</Button>}</header>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="text-primary">{notice}</p>}
@@ -70,11 +69,9 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
         {pending && <><span className="text-sm text-muted-foreground">已选 {Object.keys(pending).length} 个文件</span><Button disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并用于新任务"}</Button><Button variant="ghost" disabled={busy} onClick={() => { setPending(undefined); setPath("SKILL.md"); }}>取消上传</Button></>}
       </div>
     </div>}
-    {skill && !skill.can_manage && <p className="text-sm text-muted-foreground">可在线查看；更新平台 Skill 请联系管理员。</p>}
-    {files ? <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-5">
-      <nav aria-label="平台 Skill 文件" className="space-y-1">{Object.keys(files).sort((a, b) => a === "SKILL.md" ? -1 : b === "SKILL.md" ? 1 : a.localeCompare(b)).map(name => <button key={name} type="button" aria-pressed={path === name} onClick={() => setPath(name)} className={`block w-full rounded-lg px-3 py-2 text-left text-sm break-all ${path === name ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted"}`}>{name}</button>)}</nav>
-      <section className="min-w-0 rounded-xl border border-line"><div className="flex items-center justify-between gap-3 border-b border-line p-3"><strong className="break-all text-sm">{path}</strong><Button variant="ghost" size="sm" onClick={() => setSource(!source)}>{source ? "阅读" : "查看源码"}</Button></div><div className="max-h-[560px] overflow-auto p-5">{source || !path.endsWith(".md") ? <pre className="whitespace-pre-wrap break-words text-sm">{files[path]}</pre> : <Markdown text={path === "SKILL.md" ? (files[path] ?? "").replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "") : files[path] ?? ""} />}</div></section>
-    </div> : !error && <p>正在读取 Skill…</p>}
+    {files ? <ComponentDocumentReader allowRaw height="max(500px, calc(100dvh - 290px))" treeLabel="平台 Skill 文件" contentLabel="Skill 文件正文"
+      files={Object.keys(files).sort((a, b) => a === "SKILL.md" ? -1 : b === "SKILL.md" ? 1 : a.localeCompare(b)).map(name => ({ id: name, path: name.split("/"), content: files[name] }))}
+      selected={path} onSelect={setPath} /> : !error && <p>正在读取 Skill…</p>}
     {!!skill?.versions.length && <details className="border-t border-line pt-4 text-sm"><summary className="cursor-pointer">更新记录 · {skill.versions.length}</summary><ul className="mt-3 space-y-2 text-muted-foreground">{skill.versions.map(v => <li key={v.version_id}>{new Date(v.archived_at).toLocaleString()} · {v.operator} 更新了 Skill</li>)}</ul></details>}
   </div>;
 }

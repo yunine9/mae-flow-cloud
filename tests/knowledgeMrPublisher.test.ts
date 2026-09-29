@@ -26,7 +26,7 @@ test("逐文件归档真实提交根目录与子目录，已有根目录规范�
     assert.equal(snapshot.target_content, "旧规范\n"); job.documents[0].remote_review = { ...snapshot, reviewed: true };
     const publication = await publisher.publish(job, target, undefined, "user", () => {});
     assert.equal(publication.state, "opened");
-    for (const doc of job.documents) assert.match(git(remote, "show", `${publication.branch}:${doc.path}`), /新知识/);
+    for (const doc of job.documents) assert.equal(git(remote, "show", `${publication.branch}:${doc.path}`), doc.content, "MR 原样保存 Skill 正文，不添加平台来源章节");
     assert.equal(git(remote, "show", `${publication.branch}:code.ts`), "源码");
     assert.equal(git(remote, "show", "master:AGENTS.md"), "旧规范");
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
