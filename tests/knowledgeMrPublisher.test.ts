@@ -222,3 +222,53 @@ test("组件文档更新与可选清理：同名原文先核对，清理和新�
     assert.equal(git(remote, "show", "main:AGENTS.md"), "# 新规范\n参考 docs/legacy/guide.md", "纯删除也只修改 MR 分支");
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });
+
+test("组件上库为独立正文与结构文件，真实 Git 合入后恢复消费，错配或人工修改不能静默覆盖", async () => {
+  const { researchDocumentMarkdown } = await import("../src/componentResearchDocument.ts");
+  const { componentArchiveParts, restoreComponentArchive } = await import("../src/componentKnowledgeArchiveFormat.ts");
+  const { componentSection } = await import("./componentConsumptionFixture.ts");
+  const { publishedComponentParadigms } = await import("../src/componentKnowledgeDocument.ts");
+  const root = mkdtempSync(join(tmpdir(), "component-clean-publish-")), source = join(root, "source"), remote = join(root, "remote.git");
+  mkdirSync(source);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  git(source, "init", "-b", "main"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.test");
+  writeFileSync(join(source, "code.cpp"), "// original\n"); git(source, "add", "."); git(source, "commit", "-m", "fixture"); git(root, "clone", "--bare", source, remote);
+  let state = "opened";
+  const server = createServer((req, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify(req.url?.startsWith("/mr/gates") ? { mr_state: state, gates: [] } : { id: 1, url: "https://example.test/mr/1" })); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
+  const target = { id: "domain", name: "组件知识仓", repository: remote, branch: "main", path: "", docs_path: "docs/components" };
+  const section = componentSection();
+  const parts = componentArchiveParts(researchDocumentMarkdown("任务池使用指南", { overview: "提交后台任务并在退出前等待完成。", sections: [section] }, true));
+  const path = "docs/components/guide.md", metadataPath = "docs/components/guide.metadata.json";
+  const job: DomainKnowledgeJob = { id: "dkx-clean-guide", component_research_id: "cr-components", title: "任务池使用指南", issue_no: "REQ-guide", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "任务池使用指南", path, target_id: "domain", layer: "domain", ...parts, sources: "核对过的源码与调用", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
+  try {
+    const first = await publisher.publish(job, target, undefined, "expert", () => {}); job.publications = [first];
+    const md = git(remote, "show", `${first.branch}:${path}`), metadata = git(remote, "show", `${first.branch}:${metadataPath}`);
+    assert.doesNotMatch(md, /everycode|repository_id|schema:|来源|a{40}/);
+    assert.match(md, /Pool.submit/); assert.match(metadata, /everycode|repository_id/);
+    assert.equal(first.documents.length, 2);
+    const restored = restoreComponentArchive(md, metadata);
+    assert.deepEqual(publishedComponentParadigms({ id: "import", revision: "1", content: restored, productVersions: [] })[0].evidence, section.paradigm!.evidence);
+    // Both files participate in the same conflict check, including hand-edited metadata.
+    git(source, "fetch", remote, first.branch); git(source, "checkout", "-B", "human", "FETCH_HEAD");
+    writeFileSync(join(source, metadataPath), metadata + " "); git(source, "add", "."); git(source, "commit", "-m", "human metadata"); git(source, "push", remote, `HEAD:refs/heads/${first.branch}`);
+    await assert.rejects(publisher.publish(job, target, first, "expert", () => {}), /已有他人修改/);
+    const snapshot = await publisher.readRemote(job, job.documents[0], "expert");
+    assert.equal(snapshot.branch_metadata, metadata + " ");
+    job.documents[0].remote_review = { ...snapshot, reviewed: true };
+    const reconciled = await publisher.publish(job, target, first, "expert", () => {});
+    git(remote, "update-ref", "refs/heads/main", reconciled.revision!); state = "merged";
+    const merged = await publisher.refresh(job, reconciled, "expert");
+    assert.equal(merged.sync_state, "done", merged.sync_error);
+    const formal = listKnowledgeDocuments(root); assert.equal(formal.length, 1, "结构文件不作为第二篇知识导入");
+    const parsed = publishedComponentParadigms({ id: formal[0].id, revision: formal[0].revision, content: formal[0].content, productVersions: [] });
+    assert.deepEqual(parsed[0].replaces, section.paradigm!.replaces);
+    // A body edit after merge cannot silently retain rules from a different document.
+    git(source, "fetch", remote, "main"); git(source, "checkout", "-B", "main", "FETCH_HEAD");
+    writeFileSync(join(source, path), md + "\n调用方式已经调整。\n"); git(source, "add", "."); git(source, "commit", "-m", "body only"); git(source, "push", remote, "main");
+    const mismatch = await publisher.refresh(job, merged, "expert");
+    assert.equal(mismatch.sync_state, "failed"); assert.match(mismatch.sync_error!, /正文与结构文件不一致/);
+    assert.equal(listKnowledgeDocuments(root)[0].revision, formal[0].revision);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+});

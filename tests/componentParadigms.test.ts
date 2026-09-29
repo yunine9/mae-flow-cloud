@@ -16,7 +16,7 @@ export const paradigmSection = (id = "paradigm-pool-submit"): ResearchSection =>
     usage_evidence: ["everycode-" + "b".repeat(24)], open_questions: [],
   },
 });
-test("实际 Markdown frontmatter 往返一致，派生覆盖无替代关系的能力并排除 legacy", () => {
+test("干净 Markdown 与独立元数据往返一致，兼容旧 frontmatter，派生覆盖无替代关系的能力并排除 legacy", () => {
   const section = paradigmSection(); const plain = paradigmSection("paradigm-pool-wait"); plain.paradigm!.replaces.identifiers = []; plain.paradigm!.need = "等待任务完成";
   const legacy = paradigmSection("paradigm-pool-old"); legacy.paradigm!.status = "legacy";
   assert.deepEqual(readComponentArtifact(componentArtifact(section)).paradigm, section.paradigm);
@@ -27,8 +27,19 @@ test("实际 Markdown frontmatter 往返一致，派生覆盖无替代关系的�
   const sources = Object.fromEntries(Object.entries(exported.files).filter(([path]) => path.startsWith("components/")));
   const derived = deriveComponentArtifacts(sources); assert.deepEqual(derived.rules, exported.rules); assert.equal(derived.digest, exported.digest);
   assert.deepEqual(deriveComponentArtifacts(Object.fromEntries(Object.entries(sources).reverse())), derived, "输入文件枚举顺序不能改变派生结果");
-  const path = Object.keys(sources)[0]; const changed = { ...sources, [path]: sources[path].replace('"后台执行任务"', '"安全后台执行任务"').replace('need: "后台执行任务"', 'need: "按队列执行任务"') };
+  const path = Object.keys(sources).find(p => p.endsWith(".metadata.json"))!;
+  const metadata = JSON.parse(sources[path]); metadata.need = "按队列执行任务";
+  const changed = { ...sources, [path]: JSON.stringify(metadata) };
   assert.match(deriveComponentArtifacts(changed).mapping, /按队列执行任务/); assert.notEqual(deriveComponentArtifacts(changed).digest, exported.digest);
+  const markdown = sources[path.replace(/\.metadata\.json$/, ".md")];
+  assert.doesNotMatch(markdown, /everycode-|repository_id|a{40}|^---|## 来源/);
+  assert.match(markdown, /Pool::Submit/); assert.match(markdown, /p.Wait/);
+  assert.deepEqual(JSON.parse(sources[path]).evidence, section.paradigm!.evidence);
+  assert.deepEqual(readComponentArtifact(markdown, sources[path]).paradigm, section.paradigm);
+  const missing = { ...sources }; delete missing[path]; assert.throws(() => deriveComponentArtifacts(missing), /frontmatter/);
+  const orphan = { ...sources }; delete orphan[path.replace(/\.metadata\.json$/, ".md")]; assert.throws(() => deriveComponentArtifacts(orphan), /缺少对应文档/);
+  assert.throws(() => deriveComponentArtifacts({ ...sources, [path]: JSON.stringify({ ...metadata, schema: "unknown" }) }), /格式/);
+
 });
 test("程序读取严格拒绝坏字段、类型、版本、路径、重复编号，不静默漏掉文档", () => {
   const source = componentArtifact(paradigmSection());

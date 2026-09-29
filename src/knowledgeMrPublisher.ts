@@ -1,3 +1,4 @@
+import { componentArchiveParts, componentArchiveMetadata, componentMetadataPath, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
 import { cleanupDocumentVersions, cleanupEntries, previewKnowledgeCleanup } from "./knowledgeCleanup.ts";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -54,7 +55,7 @@ export class KnowledgeMrPublisher {
     finally { sandbox.cleanup(prepared); rmSync(root, { recursive: true, force: true }); }
   }
   private async content(git: (args: string[]) => Promise<string>, revision: string, path: string) {
-    knowledgeRelativePath(path, true);
+    knowledgeRelativePath(path, !path.endsWith(".metadata.json"));
     const segments = path.split("/");
     for (let i = 1; i < segments.length; i++) {
       const parent = await git(["--literal-pathspecs", "ls-tree", revision, "--", segments.slice(0, i).join("/")]);
@@ -86,15 +87,26 @@ export class KnowledgeMrPublisher {
       ? `${target.branch}_${identity.credential.username.split("\\").pop()}_${issue}`
       : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
     const branch = continueBranch && (!job.cleanup_only || previous!.mr_attempted || previous!.url) ? previous!.branch : newBranch;
-    const docs = job.documents.filter(d => d.selected && d.target_id === target.id);
+    const docs: Array<DomainDocument & { metadata_for?: string }> = job.documents.filter(d => d.selected && d.target_id === target.id).flatMap(doc => {
+      if (!job.component_research_id) return [doc];
+      const parts = componentArchiveParts(doc.content), metadata = doc.component_metadata ?? parts.component_metadata;
+      const clean = { ...doc, content: parts.content };
+      if (!metadata) return [clean];
+      const content = componentArchiveMetadata(parts.content, metadata);
+      restoreComponentArchive(parts.content, content);
+      const review = doc.remote_review;
+      return [clean, { ...doc, id: `${doc.id}::metadata`, metadata_for: doc.id, path: componentMetadataPath(doc.path),
+        archive_path: doc.archive_path ? componentMetadataPath(doc.archive_path) : undefined, content, base_content: null,
+        remote_review: review ? { ...review, target_content: review.target_metadata ?? null, branch_content: review.branch_metadata ?? null } : undefined }];
+    });
     const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
     const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
     if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
     if (!cleanup && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
     const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
-      documents: docs.map(doc => ({ id: doc.id, path: doc.path, content: markdown(doc, job), revision: doc.revision, base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
+      documents: docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for, content: markdown(doc, job), revision: doc.revision, base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
     for (const doc of docs) {
-      if (!knowledgeRelativePath(doc.path, true).startsWith(`${target.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
+      if (!knowledgeRelativePath(doc.path, !doc.metadata_for).startsWith(`${target.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
       scanForSecrets(doc.path, Buffer.from(markdown(doc, job)));
     }
     // Keep the last confirmed push separate from the attempted content. A timeout may
@@ -197,9 +209,17 @@ export class KnowledgeMrPublisher {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
       const revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
       for (const saved of publication.documents) {
-        const content = await this.content(git, revision, saved.path);
+        if (saved.metadata_for) continue;
+        let content = await this.content(git, revision, saved.path);
         if (content === null) throw new Error(`${saved.path} 不在当前目标分支中，未标记为已入库`);
         scanForSecrets(saved.path, Buffer.from(content));
+        const companion = publication.documents.find(file => file.metadata_for === saved.id);
+        if (companion) {
+          const metadata = await this.content(git, revision, companion.path);
+          if (metadata === null) throw new Error(`${companion.path} 不在当前目标分支中，未同步组件规则`);
+          scanForSecrets(companion.path, Buffer.from(metadata));
+          content = restoreComponentArchive(content, metadata);
+        }
         const doc = job.documents.find(d => d.id === saved.id)!;
         const previous = listKnowledgeDocuments(this.options.dataDir).find(d => d.source?.repository === target.repository && d.source.branch === target.branch && d.source.path === saved.path)
           ?? (job.component_research_id ? listKnowledgeDocuments(this.options.dataDir).find(d => !d.source && d.research_source?.job_id === job.component_research_id) : undefined);
@@ -244,6 +264,11 @@ export class KnowledgeMrPublisher {
         await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
         result.branch = publication.branch; result.branch_revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
         result.branch_content = await this.content(git, result.branch_revision, doc.path);
+      }
+      if (job.component_research_id) {
+        const path = componentMetadataPath(doc.path);
+        result.target_metadata = await this.content(git, target_revision, path);
+        if (result.branch_revision) result.branch_metadata = await this.content(git, result.branch_revision, path);
       }
       scanForSecrets("远端知识文档", Buffer.from(JSON.stringify(result)));
       return result;

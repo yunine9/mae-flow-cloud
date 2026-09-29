@@ -1,3 +1,4 @@
+import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
 /** Background research is an inspectable draft, not a task or a delivery gate. */
@@ -462,7 +463,7 @@ export class ComponentResearch {
   markdown(id: string) {
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
-    return record.document ? researchDocumentMarkdown(record.topic, record.document, true) : record.draft ?? "";
+    return record.document ? researchDocumentMarkdown(record.topic, record.document, true, false) : componentKnowledgeMarkdown(record.draft ?? "");
   }
   artifacts(id: string) {
     const record = this.get(id);

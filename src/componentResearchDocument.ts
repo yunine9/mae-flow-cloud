@@ -1,3 +1,4 @@
+import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { validateComponentParadigm, componentSources, type ComponentParadigm } from "./componentParadigms.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
@@ -93,15 +94,15 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
   return next;
 }
 
-export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false): string {
+export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false, includeMetadata = true): string {
   const sections = document.sections.filter(section => !selectedOnly || section.selected);
   const metadata = sections.filter(s => s.paradigm).map(s => ({ id: s.id, title: s.title, revision: s.revision, ...s.paradigm }));
-  return [metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", `# ${title}`, document.overview,
+  return [includeMetadata && metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", ...(/^\s*#\s/.test(document.overview) ? [] : [`# ${title}`]), componentKnowledgeMarkdown(document.overview),
     "## 组件目录", ...sections.map(section => `- [${section.title}](#component-${section.id})`),
     ...sections.map(section => [
       `<a id="component-${section.id}"></a>`, `## ${section.title}`,
-      ...(sectionReady(section) ? [section.content, "### 公共接口", section.interfaces,
-        "### 集成产物与依赖", section.integration, "### 最佳示例", section.example, "### 来源", section.sources]
+      ...(sectionReady(section) ? [componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces),
+        "### 集成产物与依赖", componentKnowledgeMarkdown(section.integration), "### 最佳示例", componentKnowledgeMarkdown(section.example)]
         : ["> 本组件尚未完成研究，不能作为已确认的使用指南。"]),
       ...(section.related_ids.length ? ["### 关联组件", ...section.related_ids.map(id => {
         const related = document.sections.find(item => item.id === id);

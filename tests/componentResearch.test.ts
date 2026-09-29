@@ -262,7 +262,7 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     assert.equal(done.revision, revision);
     assert.ok(done.evidence.some(e => e.tool === "research_note"));
     assert.ok(done.evidence.some(e => e.tool === "code_search" && e.action === "read" && e.evidence_id));
-    assert.match(done.draft!, /未提供时为未知/);
+    assert.doesNotMatch(done.draft!, /未提供时为未知|### 来源/);
     const toolNames = (model.requests[0].tools as Array<{ name: string }>).map(
       (t) => t.name,
     );
@@ -448,7 +448,7 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     const artifactsResponse = await fetch(`${url}/component-research/${batch.id}/artifacts`);
     assert.equal(artifactsResponse.status, 200);
     const artifacts: any = await artifactsResponse.json();
-    assert.equal(artifacts.schema, "mfc.component-paradigm/v1");
+    assert.equal(artifacts.schema, "mfc.component-paradigm/v2");
     assert.equal(artifacts.enabled, false);
     assert.ok(artifacts.files["derived/catalog.json"]);
     assert.equal((await post(`/component-research/${batch.id}/review`, {section_id:"unknown",mode:"discuss",message:"问题"})).status, 400);

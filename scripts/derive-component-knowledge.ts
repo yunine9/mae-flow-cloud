@@ -15,7 +15,7 @@ function main() {
         if (entry.isSymbolicLink()) throw new Error("产物目录不能含软链接");
         const path = relative + "/" + entry.name;
         if (entry.isDirectory()) walk(path);
-        else if (entry.isFile() && path.endsWith(".md")) files[path] = readFileSync(join(source, path), "utf8");
+        else if (entry.isFile() && (path.endsWith(".md") || path.endsWith(".metadata.json"))) files[path] = readFileSync(join(source, path), "utf8");
       }
     };
     if (!existsSync(join(source, "components"))) throw new Error("缺少 components 产物目录");

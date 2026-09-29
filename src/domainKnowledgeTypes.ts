@@ -5,16 +5,18 @@ export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
 export interface DomainDocument extends DomainDocumentContent {
+  component_metadata?: string;
   research_turn_id?: string;
   human_edited?: boolean;
   /** 用户在归档设置中指定的完整相对路径；模型输出不能设置此字段。 */
   archive_path?: string;
   revision: number; selected: boolean; base_content: string | null; base_revision: string;
-  history: Array<{ revision: number; content: string; sources: string; title: string; operator: string; at: string }>;
+  history: Array<{ revision: number; content: string; component_metadata?: string; sources: string; title: string; operator: string; at: string }>;
   knowledge_document_id?: string;
   remote_review?: DomainRemoteReview;
 }
 export interface DomainRemoteReview {
+  target_metadata?: string | null; branch_metadata?: string | null;
   id: string; target_content: string | null; target_revision: string;
   branch?: string; branch_content?: string | null; branch_revision?: string;
   reviewed: boolean;
@@ -50,7 +52,7 @@ export interface KnowledgeCleanupPlan {
 export interface DomainPublication {
   target_id: string; state: "pending" | "opened" | "merged" | "failed" | "closed" | "unchanged";
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
-  documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null }>;
+  documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; metadata_for?: string }>;
   attempted_documents?: DomainPublication["documents"];
   sync_state?: "pending" | "done" | "failed";
   sync_error?: string;

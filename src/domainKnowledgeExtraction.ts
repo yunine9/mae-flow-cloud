@@ -1,4 +1,5 @@
 import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
+import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -94,12 +95,13 @@ export class DomainKnowledgeExtraction {
     const changedTarget = JSON.stringify(job.knowledge_target) !== JSON.stringify(target) || job.documents[0]?.path !== path;
     if (job.publications.length && (changedTarget || job.issue_no !== issue_no)) throw new Error("已发起归档，不能更换目标仓、分支、路径或关联单号");
     const candidate = { ...job, knowledge_target: target };
-    const document: DomainDocumentContent = { id: "component-guide", title: input.title, target_id: "domain", path, layer: "domain", content: `${input.content.trimEnd()}\n\n## 萃取来源\n\n${input.sources.trim()}\n`, sources: input.sources };
+    const parts = componentArchiveParts(input.content);
+    const document: DomainDocumentContent = { id: "component-guide", title: input.title, target_id: "domain", path, layer: "domain", content: parts.content, sources: input.sources };
     this.validateDocument(candidate, document);
     const old = job.documents[0];
-    const next: DomainDocument = { ...document, selected: true, revision: (old?.revision ?? 0) + 1,
+    const next: DomainDocument = { ...document, component_metadata: parts.component_metadata, selected: true, revision: (old?.revision ?? 0) + 1,
       base_content: changedTarget ? null : old?.base_content ?? null, base_revision: changedTarget ? "" : old?.base_revision ?? "",
-      history: old ? [...old.history, { revision: old.revision, title: old.title, content: old.content, sources: old.sources, operator, at: new Date().toISOString() }] : [],
+      history: old ? [...old.history, { revision: old.revision, title: old.title, content: old.content, component_metadata: old.component_metadata, sources: old.sources, operator, at: new Date().toISOString() }] : [],
     };
     Object.assign(job, { title: input.title, issue_no, knowledge_target: target, documents: [next], stage: "待审查提交内容" });
     this.jobs.set(job.id, job); this.persist(job); return this.get(job.id);
@@ -344,7 +346,7 @@ export class DomainKnowledgeExtraction {
     if (input.base_revision !== doc.revision) throw new Error("文档已有新版本，请比较差异后重新保存");
     this.validateDocument(job, input.document);
     if (doc.target_id !== input.document.target_id || doc.path !== input.document.path || doc.layer !== input.document.layer) throw new Error("不能通过编辑改变归档位置");
-    doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, sources: doc.sources, operator, at: new Date().toISOString() });
+    doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, component_metadata: doc.component_metadata, sources: doc.sources, operator, at: new Date().toISOString() });
     Object.assign(doc, { title: input.document.title, content: input.document.content, sources: input.document.sources, revision: doc.revision + 1, human_edited: true }); this.persist(job); return this.get(id);
   }
   decide(id: string, turnId: string, documentId: string, decision: "accept" | "discard", operator: string) {
@@ -358,7 +360,9 @@ export class DomainKnowledgeExtraction {
   restore(id: string, documentId: string, revision: number, baseRevision: number, operator: string) {
     const doc = this.live(id).documents.find(d => d.id === documentId), previous = doc?.history.find(h => h.revision === revision);
     if (!doc || !previous) throw new Error("历史版本不存在");
-    return this.edit(id, { document: { ...doc, content: previous.content, title: previous.title, sources: previous.sources }, base_revision: baseRevision }, operator);
+    this.edit(id, { document: { ...doc, content: previous.content, title: previous.title, sources: previous.sources }, base_revision: baseRevision }, operator);
+    doc.component_metadata = previous.component_metadata;
+    this.persist(this.live(id)); return this.get(id);
   }
   async readRemote(id: string, documentId: string, operator: string) {
     const job = this.live(id), doc = job.documents.find(d => d.id === documentId);

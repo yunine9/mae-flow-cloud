@@ -1,3 +1,4 @@
+import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
 import { componentCardId, componentCardText } from "./componentKnowledgeCards.ts";
 import { createHash } from "node:crypto";
@@ -73,11 +74,17 @@ export function componentArtifact(section: ResearchSection) {
   const p = section.paradigm!;
   validateComponentParadigm(p, section.repository_ids);
   const header = { schema: COMPONENT_ARTIFACT_SCHEMA, id: section.id, title: section.title, revision: section.revision, ...p };
-  const body = [section.content, "## 公共接口", section.interfaces, "## 集成产物与依赖", section.integration,
-    "## 完整示例", section.example, "## 来源", componentSources(p)].join("\n\n");
-  return `---\n${Object.entries(header).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n\n# ${section.title}\n\n${body}\n`;
+  const body = [componentKnowledgeMarkdown(section.content), "## 公共接口", componentKnowledgeMarkdown(section.interfaces), "## 集成产物与依赖", componentKnowledgeMarkdown(section.integration),
+    "## 完整示例", componentKnowledgeMarkdown(section.example)].join("\n\n");
+  return `---\n${Object.entries(header).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n\n${/^\s*#\s/.test(body) ? "" : `# ${section.title}\n\n`}${body}\n`;
 }
-export function readComponentArtifact(text: string) {
+export const COMPONENT_EXPORT_SCHEMA = "mfc.component-paradigm/v2";
+export function readComponentArtifact(text: string, metadataJson?: string) {
+  if (metadataJson !== undefined) {
+    const fields = JSON.parse(metadataJson);
+    if (!fields || fields.schema !== COMPONENT_EXPORT_SCHEMA || /^---\r?\n/.test(text)) throw new Error("组件文档与元数据格式不一致");
+    text = `---\n${Object.entries({ ...fields, schema: COMPONENT_ARTIFACT_SCHEMA }).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n${text}`;
+  }
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(text);
   if (!match || !match[2].trim()) throw new Error("组件产物必须包含 frontmatter 和非空正文");
   const fields: Record<string, unknown> = {};
@@ -99,9 +106,13 @@ export function readComponentArtifact(text: string) {
 export function deriveComponentArtifacts(files: Record<string, string>) {
   const ids = new Set<string>();
   const sortedFiles = Object.entries(files).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-  const sections = sortedFiles.map(([path, text]) => {
+  for (const [path] of sortedFiles) {
+    if (!/^components\/[a-z0-9-]+\/(?:paradigms\/)?[a-z0-9-]+\.(?:md|metadata\.json)$/.test(path)) throw new Error(`不支持的组件产物路径：${path}`);
+    if (path.endsWith(".metadata.json") && !Object.hasOwn(files, path.replace(/\.metadata\.json$/, ".md"))) throw new Error(`元数据缺少对应文档：${path}`);
+  }
+  const sections = sortedFiles.filter(([path]) => path.endsWith(".md")).map(([path, text]) => {
     if (!/^components\/[a-z0-9-]+\/(?:paradigms\/)?[a-z0-9-]+\.md$/.test(path)) throw new Error(`不支持的组件产物路径：${path}`);
-    const doc = readComponentArtifact(text);
+    const doc = readComponentArtifact(text, files[path.replace(/\.md$/, ".metadata.json")]);
     const expected = componentArtifactPath(doc.id, doc.paradigm);
     if (path !== expected || ids.has(doc.id)) throw new Error(`组件产物路径或编号重复：${doc.id}`);
     ids.add(doc.id);
@@ -118,12 +129,15 @@ export function exportComponentArtifacts(sections: ResearchSection[]) {
   for (const s of sections.filter(s => s.selected && s.paradigm)) {
     const path = componentArtifactPath(s.id, s.paradigm!);
     if (Object.hasOwn(files, path)) throw new Error("组件产物路径重复");
-    files[path] = componentArtifact(s);
+    const canonical = componentArtifact(s);
+    const doc = readComponentArtifact(canonical);
+    files[path] = doc.body.trim() + "\n";
+    files[path.replace(/\.md$/, ".metadata.json")] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: doc.id, title: doc.title, revision: doc.revision, ...doc.paradigm }, null, 2) + "\n";
   }
   const derived = deriveComponentArtifacts(files);
   const cards = Object.fromEntries(derived.catalog.filter(p => p.kind === "paradigm" && p.status === "recommended")
     .map(p => [`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`, componentCardText(p, p.path, String(p.revision))]));
-  return { schema: COMPONENT_ARTIFACT_SCHEMA, ...derived, files: { ...files, ...componentRuleFiles(derived.rules),
+  return { schema: COMPONENT_EXPORT_SCHEMA, ...derived, files: { ...files, ...componentRuleFiles(derived.rules),
     ...cards,
     "derived/catalog.json": JSON.stringify({ schema: COMPONENT_ARTIFACT_SCHEMA, paradigms: derived.catalog }, null, 2) + "\n",
     "derived/mapping-table.md": derived.mapping + "\n",

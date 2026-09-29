@@ -24,7 +24,7 @@ test("组件归档准备可复用、人工稿防覆盖、保存跨重启、目�
     assert.throws(() => service.prepareComponent({ ...input, issue_no: "" }, "dev"), /关联单号/);
     let job = service.prepareComponent(input, "dev");
     assert.equal(service.list().length, 0); assert.equal(job.documents[0].path, "docs/components/guide.md");
-    assert.equal(job.component_research_id, "cr-source"); assert.match(job.documents[0].content, /萃取来源/);
+    assert.equal(job.component_research_id, "cr-source"); assert.doesNotMatch(job.documents[0].content, /萃取来源/);
     assert.throws(() => service.run(job.id, { mode: "extract", message: "错误入口" }, "dev"), /基础组件/);
     const first = job.documents[0]; job = service.edit(job.id, { document: { ...first, content: "人工归档合并稿\n" }, base_revision: first.revision }, "dev");
     assert.throws(() => service.prepareComponent({ ...input, base_revision: 1 }, "dev"), /新版本/);

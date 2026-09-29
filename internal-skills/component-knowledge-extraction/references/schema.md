@@ -1,8 +1,8 @@
-# 结构化产物协议 v1
+# 组件正文与结构化产物协议
 
 ## 写作工具输入
 
-research_document section 字段：id（严格等于 task.id）、title、repository_ids、content、interfaces、integration、example、related_ids、paradigm。example 包含真实代码块和是否编译验证的说明。sources 由程序生成，不由模型另写一份。
+research_document section 字段：id（严格等于 task.id）、title、repository_ids、content、interfaces、integration、example、related_ids、paradigm。example 包含真实代码块和是否编译验证的说明。sources 是平台内部追溯字段，不追加到 Markdown，也不由模型另写一份。
 
 paradigm 字段全部必填，空集合用 []：
 
@@ -26,15 +26,15 @@ replaces.identifiers 写精确符号，如 std::thread、Executors.newFixedThrea
 
 ## 导出的文件与程序读取
 
-每份产物有独立路径：components/<component>/<task.id>.md，范式放在 paradigms/ 子目录。第一段 frontmatter 使用 schema="mfc.component-paradigm/v1"，还包括 id、title、revision 和上述全部 paradigm 字段。
+每份正文有独立路径：components/<component>/<task.id>.md，推荐用法放在 paradigms/ 子目录。Markdown 不带 frontmatter 和来源清单，只含可读的知识正文、接口、接入依赖与完整示例。
 
-frontmatter 每行固定为 `字段名: JSON值`。字符串带双引号，列表和对象使用单行 JSON 表示；这是规范化的 YAML 子集，方便稳定解析。正文接标题、用法、公共接口、集成产物与依赖、完整示例、来源。禁止省略、重复或自造字段，格式升级需新 schema 版本。
+同路径的 <task.id>.metadata.json 保存 schema="mfc.component-paradigm/v2"、id、title、revision 和全部 paradigm 字段。证据、内部状态及调查缺口只放结构化字段。正文与元数据共同构成一份产物，不另写第二份知识。
 
-平台导出后重新解析这些 Markdown，并生成 derived/catalog.json、derived/mapping-table.md、derived/rule-candidates.json，以及 C/C++/Java 的 ast-grep 候选规则、正反样例和规则报告。三者来自同一文档集合；规则 state=candidate、enabled=false。自然语言 patterns 仅作提示，不生成伪装为可执行的规则。
+平台导出后重新读取每对文件，生成 derived/catalog.json、derived/mapping-table.md、derived/rule-candidates.json，以及适用语言的 ast-grep 规则、正反样例和报告。规则状态由平台管理；自然语言 patterns 不伪装为可执行规则。模型不手工维护派生文件。
 
-catalog 每项包含 path，指向包内实际 Markdown；选择表也链接该文件。输入文件枚举顺序不影响结果。解析失败时整次派生失败，不跳过坏文档后输出看似完整的结果。
+catalog 的 path 指向实际 Markdown。元数据缺失、非法字段、孤立元数据或重复编号均报错，不静默输出半份结果。旧版 frontmatter 文档仍可读取，新导出使用正文与 JSON 分开的格式。
 
-联合文档下载仍保留审查视图，frontmatter 为 mfc.component-guide/v1，component_paradigms 保存所选章节元数据。包内 evidence/everycode.json 保留被引用的 everycode 原始代码，供离线追溯。完整的独立产物与派生文件通过“下载结构化产物”取得。
+联合 Markdown 下载同样只含知识。Git 归档提交两份配套文件：指南 .md 与同名 .metadata.json（mfc.component-guide/v2，包含 component_paradigms 和正文摘要 content_sha256）。合入后读取同一 Git 版本的这两份文件并校验一致性，再恢复正式知识的内部结构；文件缺失或正文摘要不一致时提示同步失败，不使用错配的规则。正式入库仍保留现有内部格式以兼容检索与规则消费；其中的机器字段不属于阅读和下载正文。包内 evidence/everycode.json 保存原始调用代码，完整产物通过结构化产物入口取得。
 
 独立重提取命令：`node --import tsx scripts/derive-component-knowledge.ts <导出的JSON包或解包目录> [输出目录]`。无输出目录时仅校验和输出摘要；错误输入非零退出，不覆盖已有结果；重复生成会移除上次清单中的过期规则。
 
@@ -42,9 +42,9 @@ catalog 每项包含 path，指向包内实际 Markdown；选择表也链接该�
 
 草稿导出仍是预览。人工采纳或 MR 归档同步为启用的正式知识后，平台从正式 Markdown 提取范式，按任务仓库、模块、语言及明确声明的产品版本选择。选型映射和派生规则分别维护启用策略；新内容默认为 shadow，只记录命中，不向开发 Agent 提示。文档采纳不等于规则启用。
 
-组件知识工作台提供替代规则、选型映射、文档抽查、萃取记录。负责人核对实际样本和反例后可启用 warning，按相对路径限定范围；off 立即停止该项提示。策略保存在宿主数据目录 component-governance/rule-policy.json，开发工具不能修改。当前平台不提供阻断提交的 error 级别。
+组件知识工作台以文档阅读为入口，代码检查设置和实际命中按需打开。负责人可启用 warning、限定路径或设为 off；平台不提供阻断提交的 error 级别。人工策略存于 component-governance/rule-policy.json，开发工具不能修改。
 
-主开发会话、组件分析子会话、开发助手和验证会话只收到人工启用的精简选择表；详细内容沿用 knowledge read，表中提供文档 ID、修订和原文行号。component_knowledge list 筛选及分页，check 主动检查；两者不暴露候选规则的提示。
+组件选择沿用 component-plan Skill 和统一 knowledge 工具：按需检索卡片、读取完整知识、核对实施计划。同一份正式知识产生检索卡片和检查规则，不另建一套知识入口。新规则默认为 shadow，只记录命中；人工启用后才提供提示。
 
 编辑/写入和 Bash 工具结束后，平台检查新增代码；宿主推送前按真实提交与目标分支共同祖先检查。两处使用同一派生器，排除组件自身实现。报告区分完成、无适用规则和未完成；候选观察仅供工作台查看。程序故障不会伪造通过，不改变需求状态或自动重试。
 

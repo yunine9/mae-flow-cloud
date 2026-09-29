@@ -10,7 +10,7 @@ export interface PublishedComponentParadigm extends ComponentParadigm {
   product_versions: string[]; source_repositories: string[];
 }
 /** 读取正式文档自身的格式，不读取研究记录或旁路生成的缓存。 */
-export function publishedComponentParadigms(asset: SearchableKnowledge): PublishedComponentParadigm[] {
+export function publishedComponentParadigms(asset: Pick<SearchableKnowledge, "id" | "revision" | "content" | "productVersions">): PublishedComponentParadigm[] {
   const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(asset.content);
   if (!front || !/^schema:.*mfc\.component-/m.test(front[1])) return [];
   const lines = asset.content.split(/\r?\n/);
@@ -36,7 +36,7 @@ export function publishedComponentParadigms(asset: SearchableKnowledge): Publish
     if (anchors.length !== 1) throw new Error(`范式 ${id} 缺少唯一正文位置`);
     const start = anchors[0], next = lines.findIndex((line, index) => index > start && /^<a id="component-[a-z0-9-]+"><\/a>$/.test(line));
     const body = lines.slice(start, next < 0 ? lines.length : next).join("\n");
-    if (!["### 公共接口", "### 集成产物与依赖", "### 最佳示例", "### 来源"].every(h => body.includes(h)) || !body.includes("```")) throw new Error(`范式 ${id} 正文不完整，不能用于开发`);
+    if (!["### 公共接口", "### 集成产物与依赖", "### 最佳示例"].every(h => body.includes(h)) || !body.includes("```")) throw new Error(`范式 ${id} 正文不完整，不能用于开发`);
     return { ...metadata, id, title, revision, ...source, start_line: start + 1, end_line: next < 0 ? lines.length : next };
   });
 }

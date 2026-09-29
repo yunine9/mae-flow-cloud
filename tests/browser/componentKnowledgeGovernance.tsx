@@ -48,7 +48,7 @@ async function main() {
   for (let i = 0; i < 40 && !document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)"); i++) await delay();
   if (!document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)")) throw new Error("未直接展示知识正文与示例：" + document.getElementById("app")?.textContent?.slice(0, 1200) + " calls=" + calls.join());
   const body = document.querySelector('[aria-label="知识正文"]')?.textContent ?? "";
-  if (!body.includes("正文中部的源码说明") || body.includes("最后来源元数据")) throw new Error("来源裁剪误删正文或未隐藏末尾元数据");
+  if (body.includes("正文中部的源码说明") || body.includes("最后来源元数据")) throw new Error("来源记录仍出现在知识正文");
   if (/替代规则|选型映射|文档抽查/.test(document.getElementById("app")?.textContent ?? "")) throw new Error("旧页签仍在");
   if (document.querySelectorAll('[aria-label="组件列表"] button[aria-current]').length !== 1) throw new Error("派生规则被重复列作知识");
   document.getElementById("result")!.textContent = JSON.stringify({progress:"打开设置"});

@@ -6,6 +6,7 @@ import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
 import { componentKnowledgeCatalog } from "../src/componentKnowledgeCatalog.ts";
 import { componentKnowledgeArtifacts } from "../src/componentKnowledgeArtifacts.ts";
+import { restoreComponentArchive } from "../src/componentKnowledgeArchiveFormat.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 
 test("同一 knowledge 工具直接查询结构化组件，读正文记录版本；停用同时撤销查询与检查", async () => {
@@ -27,7 +28,8 @@ test("同一 knowledge 工具直接查询结构化组件，读正文记录版本
     const rule = componentKnowledgeCatalog(f.data, f.context).rules[0];
     assert.deepEqual(JSON.parse(files.files[`derived/ast-grep/rules/${rule.id}.yml`]).rule, rule.rule);
     assert.ok(files.files[`derived/ast-grep/rule-tests/${rule.id}-test.yml`]);
-    assert.equal(files.files["source.md"], doc.content);
+    assert.doesNotMatch(files.files["source.md"], /schema:|repository_id|everycode-/);
+    assert.equal(restoreComponentArchive(files.files["source.md"], files.files["source.metadata.json"]).trim(), doc.content.trim());
     saveKnowledgeDocument(f.data, { active: false }, "expert", doc.id);
     assert.equal((await service.search(f.context, "后台任务")).hits.length, 0);
     assert.equal(service.read(f.context, doc.id), undefined);

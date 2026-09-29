@@ -1,3 +1,5 @@
+import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
+import { COMPONENT_EXPORT_SCHEMA, readComponentArtifact } from "./componentParadigms.ts";
 import { componentKnowledgeCatalog } from "./componentKnowledgeCatalog.ts";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
@@ -20,11 +22,17 @@ export function componentKnowledgeArtifacts(dir: string, itemId: string) {
     language: { c: "C", cpp: "Cpp", java: "Java" }[rule.language], severity: "warning", message: "核对组件适用条件", rule: rule.rule }, null, 2) + "\n";
   files["derived/rule-report.md"] = "# 代码检查产物\n\n运行状态见 rule-policy.json。语法命中只表示需要核对，不证明业务违规；当前不拦截提交。\n";
   const { policy: _policy, ...entry } = p;
-  files["source.md"] = asset.content;
+  const source = componentArchiveParts(asset.content);
+  files["source.md"] = source.content;
+  if (source.component_metadata) files["source.metadata.json"] = source.component_metadata;
+  else {
+    const doc = readComponentArtifact(asset.content);
+    files["source.metadata.json"] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: doc.id, title: doc.title, revision: doc.revision, ...doc.paradigm }, null, 2) + "\n";
+  }
   files[`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`] = componentCardText(p, `${p.document_id}:${p.start_line}-${p.end_line}`, p.document_revision);
   files["derived/catalog.json"] = JSON.stringify({ paradigms: [entry] }, null, 2) + "\n";
   const cell = (s: string) => s.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
-  files["derived/mapping-table.md"] = `| 需求 | 组件 / API | 适用条件 | 来源 |\n|---|---|---|---|\n| ${cell(p.need)} | ${cell(p.component + " / " + p.api.join("、"))} | ${cell(p.applicability)} | source.md:${p.start_line} |\n`;
+  files["derived/mapping-table.md"] = `| 需求 | 组件 / API | 适用条件 | 来源 |\n|---|---|---|---|\n| ${cell(p.need)} | ${cell(p.component + " / " + p.api.join("、"))} | ${cell(p.applicability)} | source.md |\n`;
   files["derived/rule-candidates.json"] = JSON.stringify({ rules: candidates }, null, 2) + "\n";
   files["rule-policy.json"] = JSON.stringify(Object.fromEntries(rules.map(r => [r.id, r.policy])), null, 2) + "\n";
   return { document_id: p.document_id, document_revision: p.document_revision, source_digest: p.source_digest, files };
