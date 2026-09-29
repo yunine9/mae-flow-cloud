@@ -128,6 +128,9 @@ export class DomainKnowledgeExtraction {
     if (probe) input = { ...input, title: `${String(input.title).slice(0, 45)} / ${probe.module}`,
       scope: `临时 Skill 效果验证。所属领域：${input.title}。仅提取「${probe.module}」模块的知识，其他模块不独立研究。相关公共机制仅按需核对。屏蔽源码仓所有层级 docs/、AGENTS.md 和配置的文档目录，保留无线豆包与本次上传的业务资料。` };
     const title = String(input.title ?? "").trim(), scope = String(input.scope ?? "").trim();
+    if (input.instructions !== undefined && typeof input.instructions !== "string") throw new Error("本次要求须为文本");
+    const instructions = input.instructions?.trim() || undefined;
+    if (instructions && instructions.length > 20000) throw new Error("本次要求最多 20000 字");
     if (!title || title.length > 160 || !scope || scope.length > 10000) throw new Error("请填写业务域名称及本次研究范围");
     if (!Array.isArray(input.repositories) || input.repositories.length > 30) throw new Error("业务仓须为数组，最多 30 个；无源码时可传空数组");
     const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(this.dataDir).current("domain").files, "domain");
@@ -140,8 +143,8 @@ export class DomainKnowledgeExtraction {
     if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
     const material_ids = this.materialIds(input.material_ids ?? []);
     const ar_codes = this.arCodes(input.ar_codes ?? []);
-    scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, ar_codes })));
-    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
+    scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions, ar_codes })));
+    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
       source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     this.jobs.set(job.id, job); this.persist(job);

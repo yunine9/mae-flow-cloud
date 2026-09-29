@@ -21,6 +21,7 @@ window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined; let result: unknown;
   if (path === "/knowledge-documents") result = { documents: [] };
   else if (path === "/knowledge-materials") { calls.push({ action: "upload", ...input }); result = { id: "material-zip", name: input.name, version: input.version, scope: "本次萃取任务", state: "ready", sections: 2, images: [{ path: "images/state.png" }], warnings: ["未解析附件：图.svg"] }; }
+  else if (path === "/domain-extraction/probes") result = { records: [] };
   else if (path === "/domain-extraction") {
     if (input) { calls.push({ action: "create", ...input }); result = job; }
     else result = { records: taskDeleted ? [] : [job], knowledge_target: null };
@@ -202,10 +203,12 @@ async function run() {
   module.value = "trade"; module.dispatchEvent(new Event("change", { bubbles: true })); await pause();
   await fillInput("统一基准分支", "release/current");
   await fillInput("领域萃取关联单号", "REQ-new");
+  await type("本次萃取要求", "只研究退款模块，不读取 legacy/payment.ts；按业务流程组织文档。");
   await click("开始萃取");
   const created = calls.find(c => c.action === "create");
   check(created?.module_id === "trade" && created.baseline_branch === "release/current", "creation sends module and one common branch");
   check(!("scope" in created) && !("title" in created) && !("repositories" in created) && !("knowledge_target" in created) && !("use_wxdoubao" in created), "server derives scope and repositories from module maintenance");
+  check(created.instructions === "只研究退款模块，不读取 legacy/payment.ts；按业务流程组织文档。", "custom instructions are sent unchanged alongside module inputs");
   check(created.material_ids.includes("material-zip"), "uploaded bundle associated with new task");
   await click("研究过程");
   await click("删除任务");

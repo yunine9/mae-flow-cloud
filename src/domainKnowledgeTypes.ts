@@ -64,6 +64,8 @@ export interface DomainKnowledgeJob {
   cleanup_only?: boolean;
   source_cleanup?: KnowledgeSourceCleanupState;
   id: string; title: string; scope: string; issue_no?: string; module_id?: string; operator: string; created_at: string;
+  /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
+  instructions?: string;
   component_research_id?: string; technologies?: string[];
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
   source_repositories?: KnowledgeRepository[];

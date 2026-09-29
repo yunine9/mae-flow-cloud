@@ -17,6 +17,7 @@ function extract(input: DomainExecution) { input.save(document, { content: null,
 test("工作草稿持续修正，手动重试保留原轮次；人工修改不能被 Agent 覆盖", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-working-draft-")); let first = true, turnId = "";
   const service = new DomainKnowledgeExtraction(dir, async input => {
+    assert.equal(input.job.instructions, "只研究订单取消；不要读取 legacy/payment.ts");
     if (first) {
       first = false; turnId = input.turn.id; extract(input);
       input.save({ ...document, content: "补证后修正" });
@@ -28,7 +29,7 @@ test("工作草稿持续修正，手动重试保留原轮次；人工修改不�
     return "研究结束";
   });
   try {
-    const job = service.create(config, "expert"); await until(() => service.get(job.id).documents[0]?.revision === 2);
+    const job = service.create({ ...config, instructions: "只研究订单取消；不要读取 legacy/payment.ts" }, "expert"); await until(() => service.get(job.id).documents[0]?.revision === 2);
     service.stop(job.id); await new Promise(resolve => setTimeout(resolve, 20));
     service.edit(job.id, { document: { ...document, content: "人工修改" }, base_revision: 2 }, "editor");
     service.resume(job.id, "expert"); await until(() => service.get(job.id).status === "done");
@@ -47,7 +48,8 @@ test("领域修订建议不覆盖人工编辑，版本冲突、恢复和重启�
   });
   try {
     for (const issue_no of [undefined, "", "  ", "REQ-1,REQ-2", "REQ-1\nREQ-2", "x".repeat(121)]) assert.throws(() => service.create({ ...config, issue_no }, "expert"), /关联单号/);
-    const job = service.create({ ...config, issue_no: "  REQ-knowledge-123  " }, "expert");
+    for (const instructions of [123, {}, "x".repeat(20001)]) assert.throws(() => service.create({ ...config, instructions }, "expert"), /本次要求/);
+    const job = service.create({ ...config, issue_no: "  REQ-knowledge-123  ", instructions: "只说明取消条件\n不要读取 legacy/payment.ts" }, "expert");
     assert.equal(job.issue_no, "REQ-knowledge-123");
     await until(() => service.get(job.id).status === "done");
     service.run(job.id, { mode: "discuss", document_ids: [document.id], message: "依据是什么" }, "expert");
