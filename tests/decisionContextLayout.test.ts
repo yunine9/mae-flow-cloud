@@ -535,7 +535,7 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   assert.match(memory, /appendFileSync\(this\.indexPath/, "索引只追加");
 });
 
-test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
+test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、知识使用记录只读", () => {
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
   assert.equal((service.match(/memoryContext: \(\) => this\.taskMemoryContext\(task\)/g) ?? []).length, 2,
     "主会话与开发助手通过独立工厂接入每轮记忆");
@@ -549,7 +549,7 @@ test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发�
   const serve = readFileSync(join(process.cwd(), "src/executionRuntime.ts"), "utf-8");
   assert.match(serve, /flag\("--memsearch"\)/);
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
-  assert.match(footprint, /这单用到的/);
+  assert.match(footprint, /知识使用记录/);
   assert.match(footprint, /listTaskMemoryUsage\(taskId\)/);
   const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
   assert.match(server, /parts\[3\] === "usage"/);
