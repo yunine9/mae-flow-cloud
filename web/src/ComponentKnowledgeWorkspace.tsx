@@ -86,7 +86,10 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
     setResearch(""); const url = new URL(location.href); url.searchParams.delete("componentResearch"); url.searchParams.delete("researchDocument"); history.replaceState(history.state, "", url);
     void refresh().catch(e => setError(e.message));
   }
-  const content = item && document?.content?.split(/\r?\n/).slice(item.paradigm.start_line - 1, item.paradigm.end_line).join("\n").replace(/^<a id="component-[^"\n]+"><\/a>\s*/gm, "").trim().replace(/^#{1,2} [^\n]+\n/, "").replace(/^#{2,3} 来源\s*\n[\s\S]*$/m, "").trim();
+  const rawContent = item && document?.content?.split(/\r?\n/).slice(item.paradigm.start_line - 1, item.paradigm.end_line).join("\n").replace(/^<a id="component-[^"\n]+"><\/a>\s*/gm, "").trim().replace(/^#{1,2} [^\n]+\n/, "");
+  // 只隐藏程序附加在末尾的来源，保留模型正文中的来源说明及其后的完整示例。
+  const sourceStart = rawContent?.lastIndexOf("\n### 来源\n") ?? -1;
+  const content = (sourceStart >= 0 ? rawContent?.slice(0, sourceStart) : rawContent)?.trim();
   return <section className="tw-root space-y-4" aria-label="组件知识工作台">
     <header className="flex items-center justify-between gap-4">
       <h2 className="text-xl font-semibold">组件知识</h2>

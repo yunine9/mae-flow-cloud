@@ -30,7 +30,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     return {ok:true,json:async () => ({})} as Response;
   }
   if (path === "/component-knowledge/documents") return {ok:true,json:async () => structuredClone(deletion)} as Response;
-  if (path.startsWith("/knowledge-documents/")) return {ok:true,json:async () => ({id:"kd-pool", content: "\n".repeat(23) + "## 后台任务的提交与等待\n### 怎么用\n```cpp\nPool pool; pool.submit(work);\n```", revision:"v1"})} as Response;
+  if (path.startsWith("/knowledge-documents/")) return {ok:true,json:async () => ({id:"kd-pool", content: "\n".repeat(23) + "## 后台任务的提交与等待\n### 怎么用\n先提交，退出前等待。\n## 来源\n正文中部的源码说明\n### 公共接口\nPool.submit\n### 最佳示例\n```cpp\nPool pool; pool.submit(work);\n```\n### 来源\n最后来源元数据", revision:"v1"})} as Response;
   if (path.endsWith("/artifacts")) return {ok:true,json:async () => ({document_id:"kd-pool",document_revision:"v1",source_digest:"abc",files:{"derived/ast-grep/rules/component-thread.yml":"language: Cpp\nrule:\n  kind: qualified_identifier", "source.md":"原始知识"}})} as Response;
   return {ok:true,json:async () => structuredClone(path === "/component-knowledge" ? data : path === "/tasks" ? [] : {})} as Response;
 };
@@ -45,6 +45,8 @@ async function main() {
   flushSync(() => root.render(<ComponentKnowledgeWorkspace open onClose={() => {}} onAdopt={id => { adopted = id; }} />));
   for (let i = 0; i < 40 && !document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)"); i++) await delay();
   if (!document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("pool.submit(work)")) throw new Error("未直接展示知识正文与示例：" + document.getElementById("app")?.textContent?.slice(0, 1200) + " calls=" + calls.join());
+  const body = document.querySelector('[aria-label="知识正文"]')?.textContent ?? "";
+  if (!body.includes("正文中部的源码说明") || body.includes("最后来源元数据")) throw new Error("来源裁剪误删正文或未隐藏末尾元数据");
   if (/替代规则|选型映射|文档抽查/.test(document.getElementById("app")?.textContent ?? "")) throw new Error("旧页签仍在");
   if (document.querySelectorAll('[aria-label="组件列表"] button').length !== 1) throw new Error("派生规则被重复列作知识");
   document.getElementById("result")!.textContent = JSON.stringify({progress:"打开设置"});
