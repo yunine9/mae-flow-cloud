@@ -213,7 +213,7 @@ export function ComponentResearch({
                   setError("");
                 }}
               >
-                <strong className="block">{r.topic}</strong>
+                <strong className="line-clamp-2" title={r.topic}>{r.topic}</strong>
                 <span className="mt-2 block text-sm text-muted-foreground">
                   {knowledgeLanguageLabel(r.language)} · {r.components?.length ?? 1} 个组件仓
                 </span>
@@ -237,7 +237,7 @@ export function ComponentResearch({
                 <header className="mb-5">
                   {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
-                    <h2 className="flex-1 text-xl font-semibold">{current.topic}</h2>
+                    <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
                     {!focused && ["done", "failed", "cancelled"].includes(current.status) && !(current.document && current.status === "done") && (
                       <Button
                         variant="outline"
@@ -255,8 +255,7 @@ export function ComponentResearch({
                     {knowledgeLanguageLabel(current.language)} ·{" "}
                     {current.operator}
                   </p>
-                  {current.pipeline && <p className="mt-2 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(t => t.status === "done").length}/{current.pipeline.tasks.length} 项通过 · 来源：基础仓代码、everycode</p>}
-                  {current.skill && <p className="mt-2 text-xs text-muted-foreground">Skill：{current.skill.name} · {current.skill.digest.slice(0, 12)}</p>}
+                  {current.pipeline && <p className="mt-2 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(t => t.status === "done").length}/{current.pipeline.tasks.length} 项通过</p>}
                   <p className="mt-3 font-medium text-primary">
                     {current.stage}
                   </p>
@@ -415,18 +414,12 @@ export function ComponentResearch({
           <DialogHeader><DialogTitle>新建萃取任务</DialogTitle></DialogHeader>
           {error && <p role="alert" className="text-danger">{error}</p>}
               <div className="mx-auto grid max-w-2xl gap-5 py-4">
-                <h2 className="text-xl font-semibold">
-                  从真实源码中提炼开发范式
-                </h2>
-                <p className="text-muted-foreground">
-                  联合分析所选语言的组件仓与相互依赖，细分可复用能力，汇成一篇含接口、集成依赖和最佳示例的 Markdown。生成后可逐项审核、对话和局部返工。
-                </p>
                 <Choice label="萃取语言" value={language} onChange={setLanguage}
                   items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
                 <div className="grid grid-cols-2 gap-3" role="group" aria-label="萃取方式">
-                  {([['all', '全部基础组件', '跨仓联合研究，一篇文档，逐项审查与返工'], ['topic', '指定主题', '围绕一个具体问题跨组件研究']] as const).map(([value, label, hint]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong><span className="mt-2 block text-sm text-muted-foreground">{hint}</span></button>)}
+                  {([['all', '全部基础组件'], ['topic', '指定主题']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong></button>)}
                 </div>
-                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓${mode === "all" ? "，后台联合研究并逐项保存，可随时查看进度。" : "，按主题识别相关组件。"}` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
+                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
                 <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
                 {mode === "topic" && <label className="grid gap-2">
                   研究主题
@@ -436,7 +429,6 @@ export function ComponentResearch({
                     placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
                   />
                 </label>}
-                <p className="text-sm text-muted-foreground">仅从基础仓代码与 everycode 真实调用萃取，不使用上传资料或无线豆包。</p>
                 <Button
                   disabled={busy || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
                   onClick={() => void start()}

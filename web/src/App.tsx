@@ -1245,7 +1245,7 @@ export function App() {
       ? "全员问题会话只读查看:进入单个会话围观现场,操作仍属归属人。"
       : "登记问题并指派责任人，或处理指派到你名下的问题：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
-    library: { title: "知识库", description: "统一管理组件与业务领域知识，从资料研究到人工修订、归档和持续更新。" },
+    library: { title: "知识库", description: "" },
     knowledge: { title: "团队资产", description: "管理团队通用知识、模块知识和工作流；代码仓内容始终由 Git 管理。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
