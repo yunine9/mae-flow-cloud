@@ -102,7 +102,8 @@ export class ComponentPlan {
     const used = new Set<string>(), planned = new Set(validation.rows.filter(r => r.decision === "使用").map(r => `${r.source}#${r.card}`));
     for (const p of paradigms.filter(p => p.kind === "paradigm" && p.status === "recommended")) {
       const key = `${p.document_id}@${p.document_revision}#${componentCardId(p)}`;
-      const found = p.api.map(api => api.split(/::|\./).at(-1)!).filter(api => api.length >= 3 && words.has(api));
+      const found = p.api.map(api => api.split("(")[0].trim().match(/[A-Za-z_]\w*$/)?.[0])
+        .filter((api): api is string => !!api && api.length >= 3 && words.has(api));
       if (found.length) used.add(key);
       if (planned.has(key) && !found.length) findings.push(`${componentCardId(p)}：新增代码中未观察到计划接口，需核对是否通过已有封装调用`);
       if (!planned.has(key) && found.length) findings.push(`${componentCardId(p)}：新增代码出现计划外接口 ${found.join("、")}，请核对`);

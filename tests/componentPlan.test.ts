@@ -121,3 +121,17 @@ test("真实 memsearch 只索引一张短卡片，换说法召回、读取原文
     assert.equal(await sidecar.reindex(), 0); assert.deepEqual((await search.search(f.context,"线程池")).hits, []);
   } finally { sidecar.stop(); f.cleanup(); }
 });
+
+test("真实萃取的完整 API 签名按函数名对照，不把参数类型当接口", async () => {
+  const f = consumptionFixture();
+  try {
+    const section = componentSection();
+    section.paradigm!.api = ["void acme::Pool::submit(std::function<void()>)", "void acme::Pool::wait()"];
+    const doc = f.publish([section]), s = setup(f);
+    s.row(`| C1 | 后台任务 | 使用 | cpp/pool/pool-submit | ${doc.id}@${doc.revision} | 等待完成后释放 | 使用已有任务池 |`);
+    writeFileSync(join(f.cwd, "new.cpp"), "void work() { pool.submit(job); pool.wait(); }\n");
+    assert.deepEqual((await s.plan.check(s.path)).findings, []);
+    writeFileSync(join(f.cwd, "new.cpp"), "std::function<void()> callback; // submit wait 只是注释\n");
+    assert.match((await s.plan.check(s.path)).findings.join(), /未观察到计划接口/);
+  } finally { f.cleanup(); }
+});
