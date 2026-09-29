@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ComponentKnowledgeArtifacts } from "./ComponentKnowledgeArtifacts";
+import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
 import { ComponentResearch } from "./ComponentResearch";
 import { componentRequest } from "./componentResearchApi";
 import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
@@ -27,6 +28,7 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   const [policySnapshot, setPolicySnapshot] = useState({ revision: -1, digest: "" });
   const [feedbackDigest, setFeedbackDigest] = useState("");
   const [artifacts, setArtifacts] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [research, setResearch] = useState(focusId || ""), [adopted, setAdopted] = useState("");
   const [document, setDocument] = useState<KnowledgeDocument>(), [documentError, setDocumentError] = useState("");
   const [settings, setSettings] = useState(false), [editId, setEditId] = useState(""), [feedbackId, setFeedbackId] = useState("");
@@ -88,7 +90,7 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
   return <section className="tw-root space-y-4" aria-label="组件知识工作台">
     <header className="flex items-center justify-between gap-4">
       <h2 className="text-xl font-semibold">组件知识</h2>
-      <div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setResearch("history")}>查看萃取记录</Button><Button onClick={() => setResearch("new")}><Sparkles size={16} />萃取知识</Button></div>
+      <div className="flex items-center gap-2"><Button variant="ghost" onClick={() => setDeleting(true)}>删除知识</Button><Button variant="ghost" onClick={() => setResearch("history")}>查看萃取记录</Button><Button onClick={() => setResearch("new")}><Sparkles size={16} />萃取知识</Button></div>
     </header>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="text-primary">{notice}</p>}
@@ -119,6 +121,7 @@ export function ComponentKnowledgeWorkspace({ open, focusId, onClose: _onClose, 
     </div>
 
     <ComponentKnowledgeArtifacts id={open ? artifacts : ""} onClose={() => setArtifacts("")} />
+    <ComponentKnowledgeDelete open={open && deleting} onClose={() => setDeleting(false)} onChanged={() => { setAdopted(""); setArtifacts(""); void refresh().catch(e => setError(e.message)); }} />
     <Dialog open={!!research && open} onOpenChange={value => { if (!value) closeResearch(); }}><DialogContent className="tw-root w-[94vw] max-w-none sm:max-w-none max-h-[92vh] overflow-auto"><DialogHeader><DialogTitle>萃取知识</DialogTitle></DialogHeader><ComponentResearch open={!!research && open} focusId={research} compact onClose={closeResearch} onAdopt={id => { setAdopted(id); setQuery(""); closeResearch(); }} /></DialogContent></Dialog>
 
     <Dialog open={settings && open} onOpenChange={value => { if (!busy) { setSettings(value); setDialogError(""); } }}><DialogContent className="tw-root sm:max-w-[760px] max-h-[85vh] overflow-auto"><DialogHeader><DialogTitle>使用设置 · {item?.paradigm.component}</DialogTitle></DialogHeader>

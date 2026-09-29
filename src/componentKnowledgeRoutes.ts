@@ -1,4 +1,5 @@
 import { componentKnowledgeArtifacts } from "./componentKnowledgeArtifacts.ts";
+import { componentDeletionView, deleteComponentDocuments, retryKnowledgeDeletions } from "./componentKnowledgeDeletion.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { componentGovernance } from "./componentKnowledgeGovernance.ts";
@@ -8,6 +9,7 @@ export async function componentKnowledgeRoute(request: IncomingMessage, response
   operator: string, readBody: (r: IncomingMessage, limit?: number) => Promise<any>, json: (r: ServerResponse, status: number, value: any) => unknown) {
   try {
     const dir = service.options.dataDir;
+    if (request.method === "GET" && parts.length === 2 && parts[1] === "documents") return json(response, 200, componentDeletionView(dir));
     if (request.method === "GET" && parts.length === 1) {
       const challenges = service.getComponentResearch().list().filter(r => r.challenge && !r.deleted_at).map(r => ({
         id: r.id, challenge: r.challenge, status: r.status, stage: r.stage, draft: r.draft, error: r.error, created_at: r.created_at,
@@ -17,6 +19,8 @@ export async function componentKnowledgeRoute(request: IncomingMessage, response
     if (request.method === "GET" && parts.length === 3 && parts[2] === "artifacts") return json(response, 200, componentKnowledgeArtifacts(dir, parts[1]));
     if (request.method !== "POST") return json(response, 404, { error: "未知组件知识操作" });
     const input = await readBody(request, 16384);
+    if (parts.length === 2 && parts[1] === "delete") return json(response, 200, await deleteComponentDocuments(dir, input.documents, operator, service.getKnowledgeSearch()));
+    if (parts.length === 2 && parts[1] === "retry-deletions") return json(response, 200, await retryKnowledgeDeletions(dir, service.getKnowledgeSearch()));
     if (parts[1] === "sample") return json(response, 200, await service.sampleComponentKnowledge(String(input.task_id ?? "")));
     const item = componentGovernance(dir).items.find(r => r.id === parts[1]);
     if (!item) throw new Error("组件条目已不存在或源知识已停用，请刷新");

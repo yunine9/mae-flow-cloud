@@ -4,7 +4,8 @@ import { isComponentKnowledge, searchComponentKnowledge } from "./componentKnowl
  * No workflow gates, inferred approvals, or edits to the original knowledge.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { retryKnowledgeDeletions } from "./componentKnowledgeDeletion.ts";
 import { join } from "node:path";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import { listKnowledgeCandidateCatalog } from "./knowledgeCandidates.ts";
@@ -169,6 +170,7 @@ export class KnowledgeSearch {
   /** Background preparation after publication/startup; search still scopes the catalog. */
   async prepare(): Promise<void> {
     if (!this.sidecar) return;
+    await retryKnowledgeDeletions(this.dataDir, this);
     const catalog = collectSearchableKnowledge(this.dataDir, { repo: "", repositories: [], moduleIds: [] }, true);
     const results = await Promise.all(catalog.assets.filter(asset => !isComponentKnowledge(asset)).map(asset => this.ensureIndexed(this.mirror(asset))));
     const failed = results.filter(ok => !ok).length;
@@ -233,6 +235,18 @@ export class KnowledgeSearch {
     return this.catalog(context).assets.find(a => a.id === id);
   }
 
+  async removeFromIndex(id: string): Promise<boolean> {
+    const path = this.mirrorPath(id);
+    rmSync(path, { force: true });
+    this.indexed.delete(path); this.states.delete(path);
+    try { return await this.sidecar?.remove(path) ?? false; }
+    catch { return false; }
+  }
+
+  private mirrorPath(id: string) {
+    return join(this.dataDir, "corpus", "_knowledge", `${createHash("sha256").update(id).digest("hex")}.md`);
+  }
+
   private mirror(asset: SearchableKnowledge): string {
     // Memory already has its authoritative Markdown; don't duplicate it.
     if (asset.path) return asset.path;
@@ -242,9 +256,8 @@ export class KnowledgeSearch {
       block => block.replace(/[^\n]/g, ""));
     const text = `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n`
       + `# ${asset.title}\n\n适用范围：${asset.scope}\n适用条件：${asset.whenToUse}\n${asset.summary}\n\n${body}`;
-    const hash = createHash("sha256").update(asset.id).digest("hex");
     const root = join(this.dataDir, "corpus", "_knowledge");
-    const path = join(root, `${hash}.md`);
+    const path = this.mirrorPath(asset.id);
     if (!existsSync(path) || readFileSync(path, "utf8") !== text) {
       mkdirSync(root, { recursive: true });
       const temporary = `${path}.${randomUUID()}.tmp`;
@@ -255,17 +268,20 @@ export class KnowledgeSearch {
   }
 
   private indexKey(path: string): string {
+    if (!existsSync(path)) return "";
     return path + ":" + createHash("sha256").update(readFileSync(path)).digest("hex");
   }
 
   private ensureIndexed(path: string): Promise<boolean> {
     // Includes contents: edits to a memory at the same path need reindexing.
     const key = this.indexKey(path);
+    if (!key) return Promise.resolve(false);
     if (this.indexed.get(path) === key) return Promise.resolve(true);
     const existing = this.indexing.get(key);
     if (existing) return existing;
     this.states.set(path, { key, state: "queued" });
     const job = this.indexQueue.then(() => {
+      if (!existsSync(path)) return false;
       this.states.set(path, { key, state: "indexing" });
       return this.sidecar!.ingest(path, 600_000);
     }).then(ok => { if (ok) this.indexed.set(path, key);

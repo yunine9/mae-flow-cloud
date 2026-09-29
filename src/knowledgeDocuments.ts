@@ -1,6 +1,7 @@
 /** Human-maintained manuals. One atomic record holds original text and its audit trail. */
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync, rmSync } from "node:fs";
+import { knowledgeDeleted, listKnowledgeDeletions } from "./knowledgeDeletionStore.ts";
 import { join } from "node:path";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
@@ -18,11 +19,16 @@ function file(dir: string, id: string) {
   return join(root(dir), `${id}.json`);
 }
 export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocument {
+  if (knowledgeDeleted(dir, id)) throw new Error("知识已删除");
   return JSON.parse(readFileSync(file(dir, id), "utf8"));
+}
+export function eraseKnowledgeDocument(dir: string, id: string) {
+  if (!knowledgeDeleted(dir, id)) throw new Error("请先记录知识删除操作");
+  rmSync(file(dir, id), { force: true });
 }
 export function listKnowledgeDocuments(dir: string): KnowledgeDocument[] {
   if (!existsSync(root(dir))) return [];
-  return readdirSync(root(dir)).filter(name => /^kd-[a-f0-9-]{36}\.json$/.test(name))
+  return readdirSync(root(dir)).filter(name => /^kd-[a-f0-9-]{36}\.json$/.test(name) && !knowledgeDeleted(dir, name.slice(0, -5)))
     .map(name => readKnowledgeDocument(dir, name.slice(0, -5)))
     .sort((a, b) => b.history.at(-1)!.at.localeCompare(a.history.at(-1)!.at));
 }
@@ -34,6 +40,8 @@ export function saveKnowledgeDocument(dir: string, input: Record<string, unknown
   options: { maxContentBytes?: number } = {}): KnowledgeDocument {
   const previous = id ? readKnowledgeDocument(dir, id) : undefined;
   const merged = { ...previous, ...input };
+  const research = merged.research_source as KnowledgeDocument["research_source"];
+  if (!previous && research?.job_id && listKnowledgeDeletions(dir).some(d => d.research_job_id === research.job_id)) throw new Error("本次萃取的知识已删除；如需重新入库，请新建萃取任务，旧归档同步不会恢复知识");
   const title = String(merged.title ?? "").trim();
   const content = String(merged.content ?? "").replace(/\r\n/g, "\n");
   if (!title || title.length > 160) throw new Error("请填写文档名称（最多 160 字）");

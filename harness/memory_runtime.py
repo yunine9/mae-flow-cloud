@@ -139,7 +139,7 @@ class Scheduler:
         try:
             check_deadline()
             op = req.get("op")
-            if op not in ("search", "ingest", "reindex", "health", "expand"):
+            if op not in ("search", "ingest", "reindex", "health", "expand", "remove"):
                 raise ValueError("unknown operation")
             result = await getattr(self.sidecar, op)(req)
             check_deadline()

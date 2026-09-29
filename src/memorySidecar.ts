@@ -257,6 +257,14 @@ export class MemorySidecar {
     return reply?.ok === true ? Number(reply.chunks ?? 0) : undefined;
   }
 
+  /** 删除指定来源的全部索引块；只有旁路确认成功才返回 true。 */
+  async remove(path: string): Promise<boolean> {
+    this.sectionCounts.delete(path);
+    const reply = await this.request({ op: "remove", path }, this.budgets.ingestMs);
+    if (reply?.error) this.options.log?.(`知识索引删除失败：${String(reply.error)}`);
+    return reply?.ok === true;
+  }
+
   async search(input: {
     query: string; repo: string; pathPrefix?: string; limit?: number;
     sources?: Array<{ id: string; path: string }>;

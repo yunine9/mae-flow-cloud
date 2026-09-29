@@ -13,15 +13,23 @@ const rule: ComponentGovernanceItem = { id: "rule-thread", kind: "rule", origina
   stats: { observed: 1, reviewed: 0, exempt: 0, exemption_rate: null }, feedback: [], needs_review: false };
 const data: ComponentGovernanceSnapshot = { revision: 0, items: [rule, { ...structuredClone(rule), id: "mapping-pool", kind: "mapping", samples: [] }], warnings: [], challenges: [], retention: "按当前版本与去重样本统计；尚未判断的样本不计入误报率。" };
 const calls: string[] = []; let adopted = "";
+let deletion = { documents: [{ id: "kd-pool", title: "旧版线程池知识", revision: "v1", active: true }], pending: [] as Array<{id:string;title:string}> };
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = String(input); calls.push(path);
   if (init?.method === "POST") {
     const value = JSON.parse(init.body as string);
+    if (path === "/component-knowledge/delete") {
+      if (value.documents.length !== 1 || value.documents[0].revision !== "v1") throw new Error("删除缺少来源版本");
+      data.items = []; deletion = { documents: [], pending: [{ id:"kd-pool", title:"旧版线程池知识" }] };
+      return {ok:true,json:async () => structuredClone(deletion)} as Response;
+    }
+    if (path === "/component-knowledge/retry-deletions") { deletion.pending = []; return {ok:true,json:async () => structuredClone(deletion)} as Response; }
     if (path.endsWith("/policy")) { if (value.revision !== data.revision || !value.reason) throw new Error("策略字段缺失"); rule.policy = { ...rule.policy, ...value, operator: "组件负责人", updated_at: String(++data.revision) }; }
     if (path.endsWith("/feedback")) { rule.needs_review = true; rule.feedback.push({ ...value, id: "feedback", item_id: rule.id, at: "today", operator: "组件负责人" }); }
     if (path.endsWith("/challenge")) data.challenges.push({ id: "challenge", status: "done", stage: "反例研究已完成，请人工判断", draft: "## 找到合理反例\n基础仓启动适配器在任务池创建前需要原生线程。请收窄规则范围。", challenge: { item_id: rule.id, source_digest: rule.source_digest } });
     return {ok:true,json:async () => ({})} as Response;
   }
+  if (path === "/component-knowledge/documents") return {ok:true,json:async () => structuredClone(deletion)} as Response;
   if (path.startsWith("/knowledge-documents/")) return {ok:true,json:async () => ({id:"kd-pool", content: "\n".repeat(23) + "## 后台任务的提交与等待\n### 怎么用\n```cpp\nPool pool; pool.submit(work);\n```", revision:"v1"})} as Response;
   if (path.endsWith("/artifacts")) return {ok:true,json:async () => ({document_id:"kd-pool",document_revision:"v1",source_digest:"abc",files:{"derived/ast-grep/rules/component-thread.yml":"language: Cpp\nrule:\n  kind: qualified_identifier", "source.md":"原始知识"}})} as Response;
   return {ok:true,json:async () => structuredClone(path === "/component-knowledge" ? data : path === "/tasks" ? [] : {})} as Response;
@@ -63,6 +71,16 @@ async function main() {
   if (String(rule.policy.level) !== "off") throw new Error("未停用规则");
   closeDialog(); await delay(); expand("来源依据"); button("打开源文档"); if (adopted !== "kd-pool") throw new Error("源文档导航错误");
   if (document.documentElement.scrollWidth > innerWidth) throw new Error("桌面横向溢出");
+  button("删除知识"); await delay(); await delay();
+  const all = document.querySelector('[aria-label="全选组件知识"]') as HTMLInputElement;
+  flushSync(() => all.click()); button("删除所选（1）"); await delay();
+  if (!document.body.textContent?.includes("平台没有撤销删除入口")) throw new Error("未明确删除范围");
+  button("返回选择"); await delay(); if (calls.includes("/component-knowledge/delete")) throw new Error("取消也执行了删除");
+  button("删除所选（1）"); button("确认删除知识及索引"); await delay(); await delay();
+  if (!document.body.textContent?.includes("索引清理待重试")) throw new Error("未显示索引清理失败");
+  if (document.querySelectorAll('[aria-label="组件列表"] button').length) throw new Error("已删除知识仍在列表");
+  button("重试清理索引"); await delay(); await delay();
+  if (!document.body.textContent?.includes("memsearch 索引已清理")) throw new Error("未完成索引清理");
   document.getElementById("result")!.textContent = JSON.stringify({ passed: true, width: innerWidth });
 }
 main().catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
