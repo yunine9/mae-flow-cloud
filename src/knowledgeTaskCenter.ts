@@ -49,6 +49,7 @@ export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
   });
   if (pendingProposal || unpublished) return { ...row, status_label: "待检视", group: "attention" };
   if (knowledgeArchiveState(job) === "failed") return { ...row, status_label: "已发布 · 归档待处理", group: "attention" };
+  if (job.publications.some(publication => publication.sync_state === "diverged")) return { ...row, status_label: "已发布 · 远端待核对", group: "attention" };
   if (knowledgeArchiveState(job) === "running") return { ...row, status_label: "已发布 · 归档中", group: "completed" };
   if (job.documents.length) return { ...row, status_label: "已发布" };
   return row;

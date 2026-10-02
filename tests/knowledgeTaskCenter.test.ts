@@ -30,6 +30,9 @@ test("领域研究完成不等于发布；发布后新稿与归档失败仍可�
   job.documents[0].knowledge_document_id = "kd-1";
   job.documents[0].published_document_revision = 2;
   assert.equal(domainKnowledgeTask(job).status_label, "已发布");
+  job.publications = [{ target_id: "domain", branch: "b", state: "merged", documents: [], sync_state: "diverged", diverged_paths: ["a.md"] }];
+  assert.deepEqual([domainKnowledgeTask(job).status_label, domainKnowledgeTask(job).group], ["已发布 · 远端待核对", "attention"], "合入后归档仓被改须提醒人核对");
+  job.publications = [];
   job.archive_batches = [{ id: "archive", created_at: job.created_at, operator: "alice", state: "failed", documents: [], targets: [], publications: [] }];
   assert.equal(domainKnowledgeTask(job).status_label, "已发布 · 归档待处理");
   job.documents[0].revision = 3;

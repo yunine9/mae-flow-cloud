@@ -579,6 +579,13 @@ export class DomainKnowledgeExtraction {
         batch.targets = structuredClone([job.knowledge_target, ...job.repositories]);
         batch.documents = batch.documents.map(doc => { const current = job.documents.find(d => d.id === doc.id); return current ? { ...doc, path: current.path, archive_path: current.archive_path } : doc; });
       } else if (!batch.issue_description) batch.issue_description = job.issue_description;
+      // 批次快照取自发布那一刻，之后人读取远端并确认“保留平台版本”时正文不变、不会产生新批次；
+      // 只有确认稿正是本批要归档的正文时才带上这次核对，吸收了远端改动的确认稿须重新发布。
+      batch.documents = batch.documents.map(doc => {
+        const current = job.documents.find(d => d.id === doc.id);
+        return current?.remote_review?.reviewed && current.content === doc.content && current.component_metadata === doc.component_metadata
+          ? { ...doc, remote_review: structuredClone(current.remote_review) } : doc;
+      });
     }
     this.persist(job); this.scheduleArchive(id); return this.get(id);
   }

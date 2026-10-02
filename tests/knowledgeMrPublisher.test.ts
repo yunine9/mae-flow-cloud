@@ -278,7 +278,111 @@ test("组件上库为独立正文与结构文件，真实 Git 合入后恢复消
     git(source, "fetch", remote, "main"); git(source, "checkout", "-B", "main", "FETCH_HEAD");
     writeFileSync(join(source, path), md + "\n调用方式已经调整。\n"); git(source, "add", "."); git(source, "commit", "-m", "body only"); git(source, "push", remote, "main");
     const mismatch = await publisher.refresh(job, merged, "expert");
-    assert.equal(mismatch.sync_state, "failed"); assert.match(mismatch.sync_error!, /归档内容与发布版本不同/);
+    assert.equal(mismatch.sync_state, "diverged"); assert.deepEqual(mismatch.diverged_paths, [path], "合入后正文被改记为待核对差异，平台正文不动");
+    assert.match(mismatch.sync_error!, /请核对远端差异/);
     assert.equal(listKnowledgeDocuments(root)[0].revision, formal[0].revision);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("合入后归档仓被直接修改：记录差异不覆盖平台正文，人工核对（吸收或保留）后可继续发布新 MR", async () => {
+  const { DomainKnowledgeExtraction } = await import("../src/domainKnowledgeExtraction.ts");
+  const { readKnowledgeDocument } = await import("../src/knowledgeDocuments.ts");
+  for (const choice of ["absorb", "keep"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "knowledge-diverged-")), source = join(root, "source"), remote = join(root, "remote.git");
+    mkdirSync(source);
+    const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    git(source, "init", "-b", "main"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.test");
+    writeFileSync(join(source, "code.ts"), "code\n"); git(source, "add", "."); git(source, "commit", "-m", "fixture");
+    execFileSync("git", ["clone", "--bare", source, remote], { stdio: "ignore" });
+    const base = git(source, "rev-parse", "HEAD");
+    const mrs: Array<{ id: number; url: string; source_branch: string; target_branch: string; state: string }> = [];
+    const server = createServer(async (request, response) => {
+      const url = new URL(request.url!, "http://fixture");
+      response.setHeader("content-type", "application/json");
+      if (url.pathname === "/mr/gates") response.end(JSON.stringify({ mr_state: mrs.find(m => String(m.id) === url.searchParams.get("mr"))!.state, gates: [] }));
+      else if (url.pathname === "/mr/discover") response.end(JSON.stringify({ mrs: mrs.filter(m => m.source_branch === url.searchParams.get("source_branch")) }));
+      else if (url.pathname === "/mr") {
+        let text = ""; for await (const part of request) text += part;
+        const body = JSON.parse(text), mr = { id: mrs.length + 1, url: `https://example.test/repo/merge_requests/${mrs.length + 1}`, source_branch: body.source_branch, target_branch: body.target_branch, state: "opened" };
+        mrs.push(mr); response.end(JSON.stringify(mr));
+      } else { response.writeHead(404); response.end("{}"); }
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
+    // 服务只接受 HTTP 仓库地址；夹具把该地址映射到本地真 bare 仓，其余走真实发布器。
+    const address = "https://example.test/knowledge.git";
+    const local = <T extends { repository: string }>(target: T): T => target.repository === address ? { ...target, repository: remote } : target;
+    const localJob = (job: DomainKnowledgeJob): DomainKnowledgeJob => ({ ...job, knowledge_target: local(job.knowledge_target), repositories: job.repositories.map(local) });
+    const path = "docs/domain/orders.md";
+    const service = new DomainKnowledgeExtraction(root, async input => {
+      input.save({ id: "orders", title: "订单", target_id: "domain", path, layer: "domain", content: "# 订单\n平台发布的规则\n", sources: "固定源码" }, { revision: base, content: null });
+      return "完成";
+    }, {
+      publish: (job, target, previous, operator, save) => publisher.publish(localJob(job), local(target), previous, operator, save),
+      refresh: (job, publication, operator) => publisher.refresh(localJob(job), publication, operator),
+      readRemote: (job, document, operator) => publisher.readRemote(localJob(job), document, operator),
+    });
+    const settled = async (check: () => boolean) => {
+      for (let n = 0; n < 800; n++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 25)); }
+      throw new Error("等待归档超时");
+    };
+    try {
+      const { id } = service.create({ title: "订单", scope: "订单规则", issue_no: "REQ-diverge", issue_description: "订单规则归档",
+        repositories: [], knowledge_target: { repository: address, branch: "main", docs_path: "docs/domain" } }, "author");
+      await settled(() => service.get(id).status === "done");
+      await service.publish(id, "author");
+      await settled(() => ["done", "failed"].includes(service.get(id).archive_batches?.[0].state ?? ""));
+      const first = service.get(id).publications[0];
+      assert.equal(first.state, "opened", service.get(id).archive_batches?.[0].error); assert.equal(mrs.length, 1);
+      // MR 合入后，业务方绕过平台直接在目标分支改了这篇文档。
+      git(remote, "update-ref", "refs/heads/main", first.revision!); mrs[0].state = "merged";
+      git(source, "fetch", remote, "main"); git(source, "reset", "--hard", "FETCH_HEAD");
+      writeFileSync(join(source, path), "# 订单\n平台发布的规则\n业务方直接补充的规则\n"); git(source, "add", path); git(source, "commit", "-m", "business edit"); git(source, "push", remote, "HEAD:refs/heads/main");
+      const knowledgeId = service.get(id).documents[0].knowledge_document_id!, formal = readKnowledgeDocument(root, knowledgeId);
+      const refreshed = (await service.refresh(id, "author")).publications[0];
+      assert.equal(refreshed.sync_state, "diverged", refreshed.sync_error);
+      assert.deepEqual(refreshed.diverged_paths, [path]);
+      assert.equal(refreshed.target_revision, git(remote, "rev-parse", "main"), "记下远端版本供核对");
+      assert.match(refreshed.sync_error!, /^请核对远端差异.*docs\/domain\/orders\.md.*合入后被直接修改.*读取远端版本.*平台正文未被覆盖/);
+      assert.equal(readKnowledgeDocument(root, knowledgeId).revision, formal.revision, "refresh 不从 Git 反向覆盖平台正文");
+      // 平台继续修订并发布：人工核对前不能静默覆盖远端改动。
+      let job = service.get(id);
+      service.edit(id, { document: { ...job.documents[0], content: "# 订单\n平台发布的规则\n平台新增的规则\n" }, base_revision: job.documents[0].revision }, "author");
+      await service.publish(id, "author");
+      await settled(() => service.get(id).archive_batches?.[1]?.state === "failed");
+      assert.equal(mrs.length, 1);
+      assert.match(service.get(id).archive_batches![1].error!, /^请核对远端差异.*读取远端版本/, "未核对前给出去哪核对的错误，而非笼统的尚未同步");
+      assert.equal(service.get(id).publications[0].sync_state, "diverged", "差异记录不被失败的尝试挤进历史");
+      // 人工读取远端、确认合并稿；无论吸收远端改动还是保留平台版本，都能继续发布。
+      job = await service.readRemote(id, "orders", "author");
+      const review = job.documents[0].remote_review!;
+      assert.match(review.target_content!, /业务方直接补充/);
+      let decided = choice === "absorb" ? "# 订单\n平台发布的规则\n业务方直接补充的规则\n平台新增的规则\n" : job.documents[0].content;
+      service.reconcile(id, { document: { ...job.documents[0], content: decided }, base_revision: job.documents[0].revision, snapshot_id: review.id }, "author");
+      if (choice === "absorb") {
+        // 核对之后远端又被改：旧核对不能放行，仍提示重新核对。
+        writeFileSync(join(source, path), "# 订单\n平台发布的规则\n业务方直接补充的规则\n业务方第二次修改\n"); git(source, "add", path); git(source, "commit", "-m", "business edit 2"); git(source, "push", remote, "HEAD:refs/heads/main");
+        await service.publish(id, "author"); service.retryArchive(id, "author");
+        await settled(() => service.get(id).archive_batches!.at(-1)!.state === "failed");
+        assert.match(service.get(id).archive_batches!.at(-1)!.error!, /^请核对远端差异/); assert.equal(mrs.length, 1);
+        job = await service.readRemote(id, "orders", "author");
+        decided = "# 订单\n平台发布的规则\n业务方直接补充的规则\n业务方第二次修改\n平台新增的规则\n";
+        service.reconcile(id, { document: { ...job.documents[0], content: decided }, base_revision: job.documents[0].revision, snapshot_id: job.documents[0].remote_review!.id }, "author");
+      }
+      await service.publish(id, "author");
+      service.retryArchive(id, "author");
+      await settled(() => ["done", "failed"].includes(service.get(id).archive_batches!.at(-1)!.state));
+      const last = service.get(id).archive_batches!.at(-1)!;
+      assert.deepEqual(service.get(id).archive_batches!.map(b => b.state), choice === "absorb" ? ["done", "superseded", "superseded", "done"] : ["done", "done"]);
+      assert.equal(last.state, "done", last.error);
+      const latest = service.get(id).publications[0];
+      assert.equal(latest.state, "opened"); assert.equal(mrs.length, 2); assert.notEqual(latest.branch, first.branch);
+      assert.equal(git(remote, "show", `${latest.branch}:${path}`), decided.trimEnd());
+      assert.equal(readKnowledgeDocument(root, knowledgeId).content, decided);
+      assert.ok(service.get(id).publication_history?.some(p => p.sync_state === "diverged"), "核对过的差异记录留在历史");
+      // 新 MR 合入后同步恢复正常。
+      git(remote, "update-ref", "refs/heads/main", latest.revision!); mrs[1].state = "merged";
+      assert.equal((await service.refresh(id, "author")).publications[0].sync_state, "done");
+    } finally { await service.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+  }
 });

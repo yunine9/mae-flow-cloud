@@ -115,7 +115,7 @@ export function ComponentKnowledgeArchive({ record, title, content, compact = fa
         <p>{publication.state === "opened" ? "MR 已创建，本次提交完成" : publication.state === "unchanged" ? "内容相同，无需创建 MR" : publication.state === "merged" ? "MR 已合并" : publication.state === "closed" ? "MR 已关闭" : publication.state === "failed" ? "提交失败，可重试" : "正在准备提交"}</p>
         {publication.url && <a className="text-primary underline" href={publication.url} target="_blank" rel="noreferrer">打开 MR</a>}
         {publication.error && <p className="mt-2 text-danger">{publication.error}</p>}
-        {publication.sync_state && <p>知识库同步：{publication.sync_state === "done" ? "已完成" : publication.sync_state === "failed" ? "失败，可刷新重试" : "等待同步"}</p>}
+        {publication.sync_state && <p>知识库同步：{publication.sync_state === "done" ? "已完成" : publication.sync_state === "failed" ? "失败，可刷新重试" : publication.sync_state === "diverged" ? "归档仓文档在合入后被修改，请读取远端核对" : "等待同步"}</p>}
         {publication.sync_error && <p className="text-danger">{publication.sync_error}</p>}
       </div>}
       {!!document.history.length && <details><summary className="cursor-pointer text-sm">查看提交稿历史</summary>{[...document.history].reverse().map(entry => <div key={entry.revision} className="mt-2 flex items-center gap-3 text-sm"><span>v{entry.revision} · {entry.operator} · {new Date(entry.at).toLocaleString()}</span><Button size="sm" variant="outline" disabled={busy || dirty} onClick={() => void act("restore", { document_id: document.id, revision: entry.revision, base_revision: document.revision })}>恢复此版</Button></div>)}</details>}

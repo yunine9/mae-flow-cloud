@@ -61,6 +61,11 @@ window.fetch = async (url, options) => {
       documents.push({ ...documents[0], id: item.knowledge_document_id, title: item.title, content: item.content, revision: item.published_revision, repositories: item.layer === "repository" ? [repository.repository] : [], source: { ...documents[0].source!, path: item.path } });
     }
     job.archive_batches = [{ id: "batch-1", created_at: "2026-09-30T02:00:00Z", operator: "dev", state: "pending", documents: structuredClone(job.documents.filter(d => input.document_ids.includes(d.id))), targets: [job.knowledge_target, repository], publications: [] }]; result = job;
+  } else if (path === `/domain-extraction/${job.id}/refresh`) {
+    // #447：合入后归档仓被直接修改，后端给出状态与文案，前端只显示并提供核对入口。
+    job.publications = [{ target_id: "domain", branch: "codex/knowledge-fixture", state: "merged", url: "https://example.test/mr/1", documents: [], sync_state: "diverged",
+      diverged_paths: ["docs/business/states.md"], sync_error: "请核对远端差异后再发布：归档仓中的 docs/business/states.md 在 MR 合入后被直接修改过" }];
+    result = job;
   } else if (/^\/domain-extraction\/dkx-[^/]+$/.test(path)) result = jobs.find(item => item.id === path.split("/")[2]);
   else if (path === "/skills/order-check/submissions") result = { directory: "order-check", id: "submission-1", status: "pending" };
   else throw new Error(`unexpected request: ${path}`);
@@ -168,7 +173,18 @@ async function run() {
   check(published[0].input.expected_revisions.states === 2 && published[0].input.expected_revisions.integration === 1, "batch carries each draft revision");
   check(new URLSearchParams(location.search).get("kbReview") === "1", "publication stays in review");
   check(document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("Git 正在后台归档"), "publication dialog keeps archive progress available");
-  const formalLink = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(item => item.textContent?.trim() === "查看正式知识");
+  await click("刷新 MR 状态");
+  const divergedAlert = document.querySelector('[role="dialog"] [role="alert"]');
+  check(divergedAlert?.textContent?.includes("请核对远端差异后再发布") && document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("待核对"), "merged archive edited in Git asks the reviewer to compare, using backend text");
+  await click("核对 states.md 的远端差异");
+  // 关闭后 base-ui 保留 data-closed 节点等退场动画，无头 Chrome 里不一定结束，只认未关闭的对话框。
+  const statusDialog = '[role="dialog"]:not([data-closed]) [aria-label="知识发布与 Git 归档状态"]';
+  for (let i = 0; i < 20 && document.querySelector(statusDialog); i++) await pause();
+  check(!document.querySelector(statusDialog), "compare entry closes the publication dialog");
+  check(button("读取远端版本并比较"), "compare entry opens the remote merge view of that manuscript");
+  await clickSelector('[aria-label="发布记录与 Git 归档状态"]');
+  await waitFor(statusDialog);
+  const formalLink = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"]:not([data-closed]) button')].find(item => item.textContent?.trim() === "查看正式知识");
   check(formalLink && visible(formalLink), "publication dialog offers the formal knowledge link");
   formalLink!.click(); await pause(); await waitFor('[aria-label="交易业务知识阅读器"] .knowledge-markdown');
   check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("取消前核对发货状态"), "published file resolves real module from fallback route");

@@ -57,8 +57,11 @@ export interface DomainPublication {
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
   documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; metadata_for?: string; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
-  sync_state?: "pending" | "done" | "failed";
+  /** diverged：MR 已合入，但归档仓里的文档之后被直接改过；平台正文不动，等人读取远端核对后再发布。 */
+  sync_state?: "pending" | "done" | "failed" | "diverged";
   sync_error?: string;
+  /** 与平台发布版本不同的归档文件；对应远端版本为 target_revision。 */
+  diverged_paths?: string[];
   cleanup_id?: string; removed_paths?: string[];
   target_revision?: string;
   updated_at?: string;

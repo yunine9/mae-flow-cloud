@@ -14,6 +14,11 @@ import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath,
 import type { DomainDocument, DomainRemoteReview } from "./domainKnowledgeTypes.ts";
 
 const markdown = (doc: { content: string; sources: string }, _job: DomainKnowledgeJob) => doc.content;
+// 组件结构文件随正文走，提示与核对入口都落在正文路径上。
+const documentPaths = (documents: Array<{ id: string; path: string; metadata_for?: string }>, paths: string[]) =>
+  [...new Set(paths.map(path => { const file = documents.find(d => d.path === path); return file?.metadata_for ? documents.find(d => d.id === file.metadata_for)?.path ?? path : path; }))];
+// #447：平台发布即生效、Git 只归档。合入后归档仓被直接修改时两边都不自动覆盖，只请人核对。
+const divergedMessage = (paths: string[]) => `请核对远端差异后再发布：归档仓中的 ${paths.join("、")} 在 MR 合入后被直接修改过，与平台发布版本不同。请读取远端版本并保存合并稿（可吸收远端改动或保留平台版本），确认后再发布；平台正文未被覆盖`;
 export class KnowledgeMrPublisher {
   constructor(private options: {
     dataDir: string; platformUrl: () => string | undefined;
@@ -78,9 +83,12 @@ export class KnowledgeMrPublisher {
       if (body.mrs[0]) previous = { ...previous, url: body.mrs[0].url, mr_id: body.mrs[0].id };
     }
     const oldState = previous?.url ? await this.state(target, previous, operator) : previous?.state;
+    let diverged: Map<string, string | null> | undefined;
     if (oldState === "merged" && previous) {
-      previous = await this.refresh(job, previous, operator); save(previous);
-      if (previous.sync_state !== "done") throw new Error(previous.sync_error || "已合入文档尚未同步，请重试同步后继续更新");
+      const inspected = await this.inspect(job, previous, operator); previous = inspected.result; save(previous);
+      // 远端被改过不是故障：人读取远端、确认合并稿后即可继续，下面逐文件核对确认的是否就是当前远端。
+      if (previous.sync_state === "diverged") diverged = inspected.diverged;
+      else if (previous.sync_state !== "done") throw new Error(previous.sync_error || "已合入文档尚未同步，请重试同步后继续更新");
     }
     const continueBranch = previous && !["merged", "closed", "unchanged"].includes(oldState ?? "");
     const newBranch = job.cleanup_only
@@ -107,10 +115,14 @@ export class KnowledgeMrPublisher {
         selected: true, sources: "先前发布批次", base_content: old.base_content ?? null, base_revision: "", history: [], archive_path: old.path,
         published_revision: old.knowledge_revision });
     }
+    // 实测死锁（2026-10）：只要上一 MR 合入后远端被改过，后续发布永远卡在这里。人工核对过当前远端内容的文件放行，
+    // 未核对或核对的已不是当前远端时给出去哪核对的错误，在保存尝试记录前拒绝，免得差异记录被新分支挤进历史。
+    const unreviewed = diverged ? docs.filter(doc => diverged!.has(doc.path) && (!doc.remote_review?.reviewed || doc.remote_review.target_content !== diverged!.get(doc.path))) : [];
+    if (unreviewed.length) throw new Error(divergedMessage(documentPaths(docs, unreviewed.map(doc => doc.path))));
     const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
     const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
     if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
-    if (!cleanup && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
+    if (!cleanup && !diverged && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
     // 新建 MR 使用关联单据的准确描述；已有 MR 继续复用，不改写远端标题。
     const mrTitle = continueBranch && previous?.url ? undefined : knowledgeIssueDescription(job.issue_description, { required: true });
     const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
@@ -205,27 +217,36 @@ export class KnowledgeMrPublisher {
     });
   }
   async refresh(job: DomainKnowledgeJob, publication: DomainPublication, operator: string): Promise<DomainPublication> {
+    return (await this.inspect(job, publication, operator)).result;
+  }
+  /** 远端正文只在内存里交给发布核对，不落盘；记录只留路径与 target_revision，人从读取远端拿原文。 */
+  private async inspect(job: DomainKnowledgeJob, publication: DomainPublication, operator: string) {
     const target = [job.knowledge_target, ...job.repositories].find(r => r.id === publication.target_id)!;
     const state = publication.state === "unchanged" ? "unchanged" : await this.state(target, publication, operator), result: DomainPublication = { ...publication, state, error: undefined };
-    if (state !== "merged" && state !== "unchanged") return result;
-    result.sync_state = "pending"; result.sync_error = undefined;
+    const diverged = new Map<string, string | null>();
+    if (state !== "merged" && state !== "unchanged") return { result, diverged };
+    result.sync_state = "pending"; result.sync_error = undefined; result.diverged_paths = undefined;
     try { await this.withGit(operator, async git => {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
       const revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
       result.target_revision = revision;
       for (const saved of publication.documents) {
         const content = await this.content(git, revision, saved.path);
-        if (content === null) throw new Error(`${saved.path} 不在当前目标分支中；平台已发布版本保持生效`);
-        if (content !== saved.content) throw new Error(`${saved.path} 的归档内容与发布版本不同，请核对 Git 变更；平台正文未被覆盖`);
+        if (content !== saved.content) diverged.set(saved.path, content);
       }
+      if (diverged.size) return;
       for (const path of publication.removed_paths ?? []) {
         if ((await cleanupEntries(git, revision, [path])).length) continue;
         for (const old of listKnowledgeDocuments(this.options.dataDir).filter(d => d.active && (d.archive_target ?? d.source)?.repository === target.repository && (d.archive_target ?? d.source)?.branch === target.branch && (d.archive_target ?? d.source)?.path === path)) saveKnowledgeDocument(this.options.dataDir, { ...old, active: false }, operator, old.id);
       }
       this.options.onIndexed();
-    }); result.sync_state = "done"; }
-    catch (error) { result.sync_state = "failed"; result.sync_error = error instanceof Error ? error.message : "已合入，知识文档同步失败"; }
-    return result;
+    });
+    if (diverged.size) {
+      result.sync_state = "diverged"; result.diverged_paths = documentPaths(publication.documents, [...diverged.keys()]);
+      result.sync_error = divergedMessage(result.diverged_paths);
+    } else result.sync_state = "done"; }
+    catch (error) { diverged.clear(); result.sync_state = "failed"; result.sync_error = error instanceof Error ? error.message : "已合入，知识文档同步失败"; }
+    return { result, diverged };
   }
   async previewCleanup(job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) {
     const publication = job.publications.find(p => p.target_id === target.id);
