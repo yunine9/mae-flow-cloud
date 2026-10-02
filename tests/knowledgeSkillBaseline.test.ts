@@ -94,7 +94,7 @@ test("审核等待期间直接发布新版或下线均使原提交失效，不�
   }
 });
 
-test("没有保存基线的旧提交保留兼容行为，不补造曾经核对过的版本", async () => {
+test("生产线验收3/14（F20）：缺基线审核记录逐条隔离并点名，不被批准且不覆盖正式包或坏字节", async () => {
   const dir = fixture();
   try {
     await uploadHostSkill(dir, directory, files("old official"), "admin", metadata);
@@ -102,9 +102,13 @@ test("没有保存基线的旧提交保留兼容行为，不补造曾经核对�
     const path = join(dir, "skill-submissions", directory, pending.id, "submission.json");
     const legacy = JSON.parse(readFileSync(path, "utf8")); delete legacy.base_package_digest; writeFileSync(path, JSON.stringify(legacy));
     await uploadHostSkill(dir, directory, files("later official"), "admin", metadata);
-    await approveSkillSubmission(dir, directory, pending.id, "admin");
-    const approved = listSkillSubmissions(dir).find(r => r.id === pending.id)!;
-    assert.equal(approved.status, "approved"); assert.equal(Object.hasOwn(approved, "base_package_digest"), false);
-    assert.equal(readHostSkillPackage(dir, directory).package_digest, pending.package_digest);
+    const badBytes = readFileSync(path, "utf8"), live = readHostSkillPackage(dir, directory), operations = listSkillOperations(dir);
+    await assert.rejects(approveSkillSubmission(dir, directory, pending.id, "admin"), /记录损坏：skill-submissions\/baseline-review\/[^/]+\/submission\.json/);
+    const warnings: string[] = [];
+    assert.deepEqual(listSkillSubmissions(dir, warnings), []);
+    assert.ok(warnings.some(warning => warning.includes(`skill-submissions/${directory}/${pending.id}/submission.json`)));
+    assert.equal(readFileSync(path, "utf8"), badBytes);
+    assert.deepEqual(readHostSkillPackage(dir, directory), live);
+    assert.deepEqual(listSkillOperations(dir), operations);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

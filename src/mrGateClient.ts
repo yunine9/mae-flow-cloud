@@ -1,6 +1,28 @@
 import { readJson } from "./jsonBody.ts";
 import type { GateItem, GateView } from "./mergeWatch.ts";
 
+/** 错误只读取前 300 字符，响应未结束也有独立的 10 秒预算。 */
+export async function readMrFailureBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const reading = (async () => {
+    const decoder = new TextDecoder(); let text = "";
+    while (text.length < 300) {
+      const part = await reader.read();
+      if (part.done) return (text + decoder.decode()).slice(0, 300);
+      text += decoder.decode(part.value, { stream: true });
+    }
+    return text.slice(0, 300);
+  })();
+  try {
+    return await Promise.race([reading, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("MR 平台错误正文读取超时（10 秒）")), 10_000);
+      timer.unref?.();
+    })]);
+  } finally { clearTimeout(timer); void reader.cancel().catch(() => undefined); }
+}
+
 /** 查询指定 MR 的平台事实。监控允许缺失生命周期字段；再次交付必须
  * 严格核对。不可得仍返回 undefined，但失败原因必须交给调用方分类，
  * 不能让一次网络抖动和确定性鉴权错误都变成直接停摆。 */
@@ -13,6 +35,8 @@ export async function fetchMrGates(options: {
   requireExisting?: boolean;
   log?: (error: string) => void;
   onFailure?: (reason: string) => void;
+  /** 知识归档需要展示平台原文；其他调用方保留原来的失败字符串。 */
+  includeFailureBody?: boolean;
 }): Promise<GateView | undefined> {
   const { platformUrl, delivery, requireExisting } = options;
   const failed = (reason: string): undefined => {
@@ -43,7 +67,11 @@ export async function fetchMrGates(options: {
     const response = await fetch(`${platformUrl}/mr/gates?${params}`, {
       headers: options.headers, signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      if (!options.includeFailureBody) throw new Error(`HTTP ${response.status}`);
+      const detail = await readMrFailureBody(response).catch(error => error instanceof Error ? error.message : String(error));
+      throw new Error(`HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+    }
     let body;
     try {
       body = await readJson(response);

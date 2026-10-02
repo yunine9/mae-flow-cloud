@@ -1,15 +1,7 @@
 import type { DomainDocument, DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 
-export function publishedDomainRevision(job: DomainKnowledgeJob, document: DomainDocument): number | undefined {
-  if (document.published_document_revision !== undefined) return document.published_document_revision;
-  if (!document.knowledge_document_id) return undefined;
-  return [...job.publications, ...(job.publication_history ?? [])].filter(publication => ["merged", "unchanged"].includes(publication.state))
-    .flatMap(publication => publication.documents).filter(published => published.id === document.id)
-    .reduce<number | undefined>((revision, published) => Math.max(revision ?? 0, published.revision), undefined);
-}
-
 export function domainDocumentHasChanges(job: DomainKnowledgeJob, document: DomainDocument): boolean {
-  return !!latestDomainProposal(job, document.id) || publishedDomainRevision(job, document) !== document.revision;
+  return job.production?.documents.find(item => item.id === document.id)?.changed === true;
 }
 
 export function latestDomainProposal(job: DomainKnowledgeJob, documentId: string) {
@@ -20,11 +12,7 @@ export function latestDomainProposal(job: DomainKnowledgeJob, documentId: string
 }
 
 export function domainProposalProblem(job: DomainKnowledgeJob, document: DomainDocument): string | undefined {
-  const pending = latestDomainProposal(job, document.id);
-  if (!pending) return;
-  const name = document.path || document.title || document.id;
-  if (pending.turn.status !== "done") return `${name} 的修改尚未完成，完成后才能确认发布。`;
-  if (pending.proposal.base_revision !== document.revision) return `${name} 的正文已变化，请重新修改或放弃这份修改结果后再发布。`;
+  return job.production?.documents.find(item => item.id === document.id)?.proposal_problem;
 }
 
 /** 未完成或已冲突的修改不替换正文预览。 */

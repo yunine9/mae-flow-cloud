@@ -61,7 +61,8 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.equal((await request(`/domain-extraction/${job.id}/edit`, dev, { document: detail.documents[0], base_revision: 1 })).status, 400);
     const doc = saveKnowledgeDocument(root, { title: "领域规则", content: "Git 正文", scope: "platform", research_source: { job_id: job.id, repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md" }, source: { repository: "https://example.test/knowledge.git", branch: "main", path: "domains/rules.md", revision: "a".repeat(40) } }, "dev");
     assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { content: "绕开 MR 修改" })).status, 400);
-    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { active: false })).status, 200);
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { active: false })).status, 400, "启停也必须提供版本号");
+    assert.equal((await request(`/knowledge-documents/${doc.id}`, dev, { active: false, expected_revision: doc.revision })).status, 200);
     assert.equal((await request(`/domain-extraction/${job.id}/delete`, "", {})).status, 401);
     const deleted = await request(`/domain-extraction/${job.id}/delete`, dev, {});
     assert.equal(deleted.status, 200); assert.deepEqual(await deleted.json(), { deleted: true });

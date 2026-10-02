@@ -1,6 +1,7 @@
 import { readHostSkillPackage, readSkillSubmissionPackage } from "./hostSkillLibrary.ts";
 import { readKnowledgeSkillContext, saveKnowledgeSkillContext } from "./knowledgeSkillContext.ts";
 import { listKnowledgeTasks } from "./knowledgeTaskCenter.ts";
+import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { listKnowledgeReviewNotes, saveKnowledgeReviewNote, applyKnowledgeReviewNotes, resolveKnowledgeReviewNotes, type KnowledgeReviewKind, type KnowledgeReviewNoteInput } from "./knowledgeReviewNotes.ts";
 import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
@@ -1269,7 +1270,7 @@ export function createTaskServer(
       if (parts[0] === "knowledge-tasks" && request.method === "GET" && parts.length === 1) {
         return json(response, 200, listKnowledgeTasks({ dataDir: service.options.dataDir,
           domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch(),
-          skillExtractionJob: id => service.skillExtractionJob(id) }));
+          skillExtractionJob: id => service.skillExtractionJob(id), warnings: () => service.knowledgeRecordWarnings() }));
       }
       if (parts[0] === "knowledge-review") {
         const sources = { dataDir: service.options.dataDir, domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch() };
@@ -1585,7 +1586,7 @@ export function createTaskServer(
               operator,
             });
             if (metadata) saveKnowledgeSkillContext(service.options.dataDir, job.id, metadata);
-            return json(response, 200, { ...job, knowledge_scope: metadata });
+            return json(response, 200, { ...job, knowledge_scope: metadata, production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
           if (request.method === "GET" && parts.length === 3) {
             const job = service.skillExtractionJob(
@@ -1593,7 +1594,7 @@ export function createTaskServer(
             if (!job) {
               return json(response, 404, { error: "提取任务不存在" });
             }
-            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id) });
+            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id), production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
         } catch (error) {
           if (error instanceof SkillLibraryError) return json(response, 400, { error: error.message });
@@ -1618,7 +1619,8 @@ export function createTaskServer(
         }
         try {
           if (request.method === "GET" && parts.length === 4 && parts[2] === "submissions") {
-            return json(response, 200, readSkillSubmissionPackage(dataDir, decodeURIComponent(parts[1]), decodeURIComponent(parts[3])));
+            const pack = readSkillSubmissionPackage(dataDir, decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
+            return json(response, 200, { ...pack, production: projectKnowledgeProduction({ kind: "skill-submission", record: pack.record }) });
           }
           if (request.method === "GET" && parts.length === 3 && parts[2] === "package") {
             return json(response, 200, readHostSkillPackage(dataDir, decodeURIComponent(parts[1])));
@@ -1635,8 +1637,9 @@ export function createTaskServer(
           // ——谁提交了什么、裁决结果如何是团队可见的台账。
           if (request.method === "GET" && parts.length === 2
               && parts[1] === "submissions") {
+            const warnings: string[] = [];
             return json(response, 200,
-              { submissions: listSkillSubmissions(dataDir) });
+              { submissions: listSkillSubmissions(dataDir, warnings).map(record => ({ ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) })), warnings });
           }
           if (request.method === "GET" && parts.length === 2) {
             return json(response, 200, readHostSkillDocument(
@@ -1645,11 +1648,12 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 3
               && parts[2] === "submissions") {
             const body = await readBody(request);
-            return json(response, 200, await submitHostSkill(
+            const record = await submitHostSkill(
               dataDir, decodeURIComponent(parts[1]),
               Array.isArray(body.files) ? body.files : [],
               viewer?.username ?? "本地部署",
-              skillMetadataFromBody(dataDir, body)));
+              skillMetadataFromBody(dataDir, body));
+            return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
           const operator = viewer?.username ?? "本地部署";
           if (request.method === "PATCH" && parts.length === 3
@@ -1672,17 +1676,19 @@ export function createTaskServer(
           }
           if (request.method === "POST" && parts.length === 5
               && parts[2] === "submissions" && parts[4] === "approve") {
-            return json(response, 200, await approveSkillSubmission(
-              dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3]), operator));
+            const directory = decodeURIComponent(parts[1]), id = decodeURIComponent(parts[3]);
+            const operation = await approveSkillSubmission(dataDir, directory, id, operator);
+            const { record } = readSkillSubmissionPackage(dataDir, directory, id);
+            return json(response, 200, { ...operation, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
           if (request.method === "POST" && parts.length === 5
               && parts[2] === "submissions" && parts[4] === "reject") {
             const body = await readBody(request);
-            return json(response, 200, await rejectSkillSubmission(
+            const record = await rejectSkillSubmission(
               dataDir, decodeURIComponent(parts[1]),
               decodeURIComponent(parts[3]), operator,
-              typeof body.reason === "string" ? body.reason : undefined));
+              typeof body.reason === "string" ? body.reason : undefined);
+            return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
         } catch (error) {
           if (error instanceof SkillLibraryError) {

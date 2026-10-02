@@ -16,11 +16,12 @@ import { DomainSkillWork, IncompleteDomainResearch, type SkillWorkResult, type S
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { businessKnowledgeEvidenceId, knowledgeEvidenceTool } from "./domainResearchEvidence.ts";
+import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 
 export interface DomainAgentOptions {
   dataDir: string;
   model: () => { provider: string; model: string; json: unknown } | undefined;
-  source: (repository: KnowledgeRepository, operator: string, signal?: AbortSignal) => Promise<{ root: string; revision: string }>;
+  source: (repository: KnowledgeRepository, operator: string, signal?: AbortSignal, baselineRevisions?: string[]) => Promise<{ root: string; revision: string }>;
 }
 export async function runDomainKnowledge(input: DomainExecution, options: DomainAgentOptions) {
   const model = options.model();
@@ -30,8 +31,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   input.update({ skill: { name: skill.name, digest: skill.digest } });
   const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = { ...input.turn.revisions };
   const source = (repository: KnowledgeRepository) => {
-    if (!sources.has(repository.id)) sources.set(repository.id, options.source(repository, input.turn.operator, signal).then(value => {
-      if (signal.aborted) throw new Error("研究已停止");
+    const baselines = [...new Set([revisions[repository.id], input.turn.previous_revisions?.[repository.id]].filter((value): value is string => !!value))];
+    if (!sources.has(repository.id)) sources.set(repository.id, options.source(repository, input.turn.operator, signal, baselines).then(value => {
+      signal.throwIfAborted();
       const revision = revisions[repository.id] ?? value.revision; revisions[repository.id] = revision;
       input.update({ revisions: { ...revisions } }); return { root: value.root, revision };
     }));
@@ -69,10 +71,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         if (!previous && input.job.archive_configured !== false) {
           const target = [input.job.knowledge_target, ...input.job.repositories].find(r => r.id === doc.target_id);
           if (!target || !doc.path.startsWith(`${target.docs_path}/`) || /(^|\/)\.\.?($|\/)|[\\\x00-\x1f]/.test(doc.path)) throw new Error("无效的归档路径");
-          const prepared = await options.source(target, input.turn.operator, input.signal);
-          const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", prepared.revision, "--", doc.path], prepared.root, input.signal);
+          const prepared = await options.source(target, input.turn.operator, signal);
+          const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", prepared.revision, "--", doc.path], prepared.root, signal);
           if (entry && !/^100644 blob |^100755 blob /.test(entry)) throw new Error("目标路径不是普通文档文件");
-          const content = entry ? await executeFile("git", ["show", `${prepared.revision}:${doc.path}`], prepared.root) : null;
+          const content = entry ? await executeFile("git", ["show", `${prepared.revision}:${doc.path}`], prepared.root, signal) : null;
           baseline = { content, revision: prepared.revision };
         }
         const saved = input.save(doc, baseline);
@@ -89,7 +91,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         const repo = researchRepositories.find(r => r.id === params.repository_id), previous = input.turn.previous_revisions?.[params.repository_id];
         if (!repo || !previous) throw new Error("该仓没有可比较的旧版本");
         const current = await source(repo);
-        const patch = await executeFile("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${previous}..${current.revision}`, "--", ...(repo.path ? [repo.path] : [])], current.root, input.signal);
+        const patch = await executeFile("git", ["--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${previous}..${current.revision}`, "--", ...(repo.path ? [repo.path] : [])], current.root, signal);
         input.evidence({ tool: "knowledge_source_changes", repository_id: repo.id, previous, revision: current.revision, status: "returned" });
         return { content: [{ type: "text" as const, text: patch || "源码没有变化" }], details: {} };
       } catch (error) { return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : "来源比较失败" }], details: {}, isError: true }; }
@@ -208,12 +210,16 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       writeFileSync(join(sessionRoot, "result.json"), JSON.stringify(result), { mode: 0o600 }); return result;
     } finally { signal.removeEventListener("abort", abort); session.dispose(); }
   };
-  const timer = setTimeout(() => runController.abort(), 48 * 60 * 60_000); timer.unref();
+  let totalExpired = false;
+  const timer = setTimeout(() => { totalExpired = true; runController.abort(new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE)); }, 48 * 60 * 60_000); timer.unref();
   try {
     signal.throwIfAborted(); progress();
     const result = work.state.result ?? await execute();
     if (result.status === "paused") throw new IncompleteDomainResearch(result.summary);
     return result.summary;
+  } catch (error) {
+    if (totalExpired && !input.signal.aborted) throw new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE);
+    throw error;
   } finally { clearTimeout(timer); runController.abort(); }
 }
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });

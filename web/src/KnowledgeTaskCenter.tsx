@@ -4,7 +4,8 @@ import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { PersonName } from "./People";
 import { formatLocalDateTime, relativeTime } from "./time";
-import { getKnowledgeTasks, knowledgeTaskElapsed, knowledgeTaskOpensDocument, type KnowledgeTaskCenterData, type KnowledgeTaskGroup, type KnowledgeTaskKind, type KnowledgeTaskRow, type KnowledgeTaskSummary } from "./knowledgeTaskCenterApi";
+import { getKnowledgeTasks, knowledgeTaskElapsed, knowledgeTaskAction, type KnowledgeTaskCenterData, type KnowledgeTaskGroup, type KnowledgeTaskKind, type KnowledgeTaskRow, type KnowledgeTaskSummary } from "./knowledgeTaskCenterApi";
+import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
 
 export type { KnowledgeTaskCenterData, KnowledgeTaskKind, KnowledgeTaskSummary } from "./knowledgeTaskCenterApi";
 
@@ -26,15 +27,15 @@ export function KnowledgeTaskCapsule({ summary, onClick, active = false }: {
   </button>;
 }
 
-function TaskRow({ task, now, onOpen }: { task: KnowledgeTaskRow; now: number; onOpen: (kind: KnowledgeTaskKind, id: string, review?: boolean) => void }) {
+function TaskRow({ task, now, onOpen }: { task: KnowledgeTaskRow; now: number; onOpen: (kind: KnowledgeTaskKind, id: string, action: KnowledgeProductionAction) => void }) {
   const elapsed = knowledgeTaskElapsed(task, now);
   const time = task.started_at;
-  return <button type="button" className="knowledge-task-row" onClick={() => onOpen(task.kind, task.id, knowledgeTaskOpensDocument(task))} aria-label={`打开${kindLabels[task.kind]}：${task.title}`}>
+  return <button type="button" className="knowledge-task-row" onClick={() => onOpen(task.kind, task.id, knowledgeTaskAction(task))} title={task.next_action.label} aria-label={`${task.next_action.label}，打开${kindLabels[task.kind]}：${task.title}`}>
     <div className="knowledge-task-main">
       <div className="knowledge-task-title" title={task.title}>{task.title}</div>
       <div className="knowledge-task-meta"><span>{kindLabels[task.kind]}</span>{task.scope && <span title={task.scope}>{task.scope}</span>}</div>
     </div>
-    <div><span className={`knowledge-task-status is-${task.group}${task.status === "failed" ? " is-failed" : ""}`}>{task.status_label}</span></div>
+    <div><span className={`knowledge-task-status is-${task.group}`}>{task.status_label}</span></div>
     <div className="knowledge-task-person"><PersonName account={task.operator} fallback="—" /></div>
     <div className="knowledge-task-time" title={task.created_at ? `创建于 ${formatLocalDateTime(task.created_at, { seconds: true, year: true })}` : undefined}>
       {time ? <time dateTime={time}>{formatLocalDateTime(time)}</time> : <span>—</span>}
@@ -53,7 +54,7 @@ function TaskRow({ task, now, onOpen }: { task: KnowledgeTaskRow; now: number; o
 }
 
 export function KnowledgeTaskCenter({ onOpen, onBack, data, onSummaryChange }: {
-  onOpen: (kind: KnowledgeTaskKind, id: string, review?: boolean) => void;
+  onOpen: (kind: KnowledgeTaskKind, id: string, action: KnowledgeProductionAction) => void;
   onBack: () => void;
   /** 传入数据时由外层统一刷新；null 表示正在加载。 */
   data?: KnowledgeTaskCenterData | null;

@@ -8,7 +8,8 @@ function componentDocument(doc: KnowledgeDocument) {
 }
 export function componentDeletionView(dir: string) {
   return {
-    documents: listKnowledgeDocuments(dir).filter(componentDocument).map(d => ({ id: d.id, title: d.title, revision: d.revision, active: d.active })),
+    git_message: "平台删除不改动 Git 归档，请自行决定是否在归档仓删除对应文件。",
+    documents: listKnowledgeDocuments(dir).filter(componentDocument).map(d => ({ id: d.id, title: d.title, revision: d.revision, active: d.active, archive_target: d.archive_target })),
     pending: listKnowledgeDeletions(dir).filter(d => d.index_state === "pending"),
   };
 }

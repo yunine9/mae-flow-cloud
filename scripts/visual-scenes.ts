@@ -22,6 +22,12 @@ import { createServer } from "../web/node_modules/vite/dist/node/index.js";
 import {
   projectRepairStopped, projectStatusLabel, projectTaskFocus,
 } from "../src/taskFocus.ts";
+import { domainKnowledgeTask } from "../src/knowledgeTaskCenter.ts";
+import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
+import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
+import type { SkillSubmissionRecord } from "../src/hostSkillLibrary.ts";
+import { componentDeletionView } from "../src/componentKnowledgeDeletion.ts";
+import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 
 /** 浏览器可执行文件:环境变量优先;缺省先找 playwright 缓存里的 Linux
  * 无头壳——WSL 上走 Windows Edge 互操作要跨 interop+9p,同页实测 8.7s
@@ -115,7 +121,7 @@ function page(theme: string, body: string, css: string): string {
 
 async function render(out: string): Promise<void> {
   const themes = (flag("--themes") ?? "light,dark").split(",");
-  const widths = (flag("--widths") ?? "1440,1200,900,600,390").split(",").map(Number);
+  const widths = (flag("--widths") ?? (args.includes("--only-knowledge") ? "1920,1680,1600,1440,1366" : "1440,1200,900,600,390")).split(",").map(Number);
   const css = bundledCss();
   mkdirSync(out, { recursive: true });
   const vite = await createServer({
@@ -159,6 +165,17 @@ async function render(out: string): Promise<void> {
       const { KnowledgeResearchCreate } = await vite.ssrLoadModule("/src/KnowledgeResearchCreate.tsx");
       const { KnowledgeAssetsWorkspace } = await vite.ssrLoadModule("/src/KnowledgeAssets.tsx");
       const { KnowledgeTaskCenter } = await vite.ssrLoadModule("/src/KnowledgeTaskCenter.tsx");
+      const { DomainKnowledgePublicationStatus } = await vite.ssrLoadModule("/src/DomainKnowledgePublicationStatus.tsx");
+      // 同一份原始事实在前后各经后端投影，不能用截图夹具掩盖状态误判。
+      const productionJobs = ["同步失败", "远端待核对", "MR 已关闭", "归档与研究均失败"].map((title, index) => ({
+        id: `dkx-visual-${index}`, title, scope: "订单规则", operator: "alice", created_at: "2026-09-06T01:00:00Z",
+        status: index === 3 ? "failed" : "done", stage: "", revisions: {}, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false,
+        knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/knowledge", branch: "main", path: "", docs_path: "docs" },
+        documents: [{ id: "doc", title: "订单规则", target_id: "domain", path: "docs/orders.md", layer: "domain", content: "订单规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [], knowledge_document_id: "kd-visual", published_document_revision: 2, published_revision: "formal-v2" }],
+        turns: [], evidence: [], publications: [{ target_id: "domain", branch: "knowledge/orders", state: index === 2 ? "closed" : index === 3 ? "failed" : "merged", documents: [],
+          ...(index === 0 ? { sync_state: "failed", sync_error: "已合入，平台同步失败：存储暂不可写" } : index === 1 ? { sync_state: "diverged", sync_error: "归档仓正文已变化，请核对远端版本", diverged_paths: ["docs/orders.md"] } : { error: index === 2 ? "MR 已关闭" : "Git 推送失败" }) }],
+      } as DomainKnowledgeJob));
+      const productionRows = productionJobs.map(domainKnowledgeTask);
       const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
       Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "http://localhost/?kbPage=home", search: "?kbPage=home" } });
       try {
@@ -170,6 +187,13 @@ async function render(out: string): Promise<void> {
             tasks: [], summary: { running: 0, attention: 1, total: 0 },
             warnings: ["请检查损坏的知识记录：domain-extraction/dkx-00000000-0000-4000-8000-000000000001/job.json；其余任务照常可用"],
           } })],
+          ["knowledge-task-status", () => React.createElement(KnowledgeTaskCenter, { onOpen: noop, onBack: noop, data: {
+            tasks: productionRows, warnings: [], summary: { running: productionRows.filter(row => row.group === "running").length,
+              attention: productionRows.filter(row => row.group === "attention").length, total: productionRows.length },
+          } })],
+          ["knowledge-archive-sync-failed", () => React.createElement("div", { style: { padding: 24 } }, React.createElement(DomainKnowledgePublicationStatus, {
+            job: { ...productionJobs[0], production: (productionRows[0] as any).production }, onConfigure: noop, onAction: async () => true, onCompare: noop,
+          }))],
         ];
         for (const [name, make] of variants) {
           try {
@@ -177,11 +201,33 @@ async function render(out: string): Promise<void> {
             for (const theme of themes) scenes.push({ name: `${name}-${theme}`, html: page(theme, markup, css) });
           } catch (error) { failures.push(`${name}: ${String(error).split("\n")[0]}`); }
         }
+        if (args.includes("--production-detail")) {
+          const source = resolve(flag("--source-root") ?? ".");
+          const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeProductionVisual.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' },
+            plugins: [{ name: "visual-source", setup(builder) { builder.onResolve({ filter: /^\.\.\/\.\.\/web\/src\/(KnowledgeSkillTask|ComponentKnowledgeDelete)$/ }, args => ({ path: join(source, `web/src/${args.path.split("/").at(-1)}.tsx`) })); } }] });
+          stop();
+          const content = "---\nname: file-guide\ndescription: 文件组件操作指南\n---\n\n# 文件组件\n\n读取指定文件，核对错误处理，再保存修订。";
+          for (const status of ["pending", "approving", "approved", "rejected"] as const) {
+            const record: SkillSubmissionRecord = { id: "visual-skill", directory: "file-guide", operator: "alice", created_at: "2026-09-06T01:00:00Z", status,
+              skill_digest: "a".repeat(64), package_digest: "b".repeat(64), base_package_digest: null, files: 1, bytes: Buffer.byteLength(content), nature: "engineering", business_module_ids: [], technologies: ["cpp"], repositories: [],
+              ...(status === "pending" ? {} : { decided_at: "2026-09-06T02:00:00Z", decided_by: "admin" }) };
+            const fixture = { kind: "skill-submission", id: `${record.directory}/${record.id}`, response: { record, files: [{ path: "SKILL.md", bytes: record.bytes, content }], production: projectKnowledgeProduction({ kind: "skill-submission", record }) } };
+            const json = JSON.stringify(fixture).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
+            const markup = `<div id="visual-app" style="padding:24px"></div><script id="visual-fixture" type="application/json">${json}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`;
+            for (const theme of themes) scenes.push({ name: `knowledge-skill-${status}-${theme}`, html: page(theme, markup, css) });
+          }
+          const deletion = { ...componentDeletionView(out), documents: [{ id: "kd-deletion", title: "文件组件操作指南", revision: "v1", active: true,
+            archive_target: { repository: "https://example.test/components.git", branch: "main", path: "docs/components/files.md" } }] };
+          const json = JSON.stringify({ kind: "component-deletion", response: deletion }).replaceAll("<", "\\u003c");
+          const markup = `<div id="visual-app"></div><script id="visual-fixture" type="application/json">${json}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`;
+          for (const theme of themes) scenes.push({ name: `knowledge-component-deletion-${theme}`, html: page(theme, markup, css) });
+        }
       } finally {
         if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation);
         else Reflect.deleteProperty(globalThis, "location");
       }
     }
+    if (args.includes("--only-production-deletion")) scenes.splice(0, scenes.length, ...scenes.filter(scene => scene.name.startsWith("knowledge-component-deletion-")));
     for (const scene of scenes) writeFileSync(join(out, `${scene.name}.html`), scene.html);
     writeFileSync(join(out, "scenes.json"), JSON.stringify({ widths, scenes: scenes.map((s) => s.name), failures }, null, 2));
     console.log(`[visual] ${scenes.length} 个场景写入 ${out}${failures.length ? `;${failures.length} 个渲染失败` : ""}`);

@@ -9,6 +9,7 @@ export interface ComponentRepository {
   enabled: boolean;
 }
 export interface ComponentResearchRecord {
+  production?: import("../../src/knowledgeProductionTypes").KnowledgeProductionView;
   pipeline?: { tasks: Array<{ id: string; title: string; status: string; feedback?: string }> };
   material_ids?: string[];
   update_document_revision?: string;
@@ -52,15 +53,17 @@ export interface ComponentResearchReviewTurn {
 export async function componentRequest<T>(
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const response = await fetch(
     path,
     body === undefined
-      ? undefined
+      ? signal ? { signal } : undefined
       : {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
+          ...(signal ? { signal } : {}),
         },
   );
   const result: unknown = await response.json();

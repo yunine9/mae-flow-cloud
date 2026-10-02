@@ -4,16 +4,14 @@ import { KnowledgeLibrary } from "../../web/src/KnowledgeLibrary";
 import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 import type { KnowledgeDocument } from "../../web/src/knowledgeDocumentsApi";
 import type { ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
+import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
+import type { KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
 
 const pause = (ms = 90) => new Promise(resolve => setTimeout(resolve, ms));
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };
 const repository = { id: "orders", name: "订单服务", repository: "https://example.test/orders.git", branch: "master", path: "", docs_path: "docs/business" };
-const job: DomainKnowledgeJob = { id: "dkx-review", module_id: "trade", title: "交易规则更新", scope: "订单取消与回补", issue_no: "REQ-447", issue_description: "核对订单取消与回补规则", operator: "dev", created_at: "2026-09-30T01:00:00Z", repositories: [repository], knowledge_target: { ...repository, id: "domain", name: "领域模块知识", repository: "https://example.test/knowledge.git" }, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, turns: [], publications: [], evidence: [], documents: [
-  { id: "states", title: "订单状态规则", target_id: "domain", path: "docs/business/states.md", layer: "domain", content: "# 订单状态规则\n\n取消前核对发货状态。", sources: "业务规格（测试夹具）", revision: 2, selected: true, base_content: null, base_revision: "fixture", history: [] },
-  { id: "integration", title: "订单服务职责", target_id: "orders", path: "docs/business/integration.md", layer: "repository", content: "# 订单服务职责\n\n库存回补需要幂等。", sources: "订单接口（测试夹具）", revision: 1, selected: true, base_content: null, base_revision: "fixture", history: [] },
-  { id: "unchanged", title: "现行交易规则", target_id: "domain", path: "docs/business/current.md", layer: "domain", content: "# 现行交易规则\n\n当前正式知识仍可使用。", sources: "正式基线", revision: 1, selected: true, published_document_revision: 1, published_revision: "formal-1", knowledge_document_id: "kd-current", base_content: null, base_revision: "fixture", history: [] },
-] };
-const running: DomainKnowledgeJob = { ...structuredClone(job), id: "dkx-running", title: "支付规则研究中", status: "running", stage: "正在核对源码", documents: [], evidence: [{ tool: "research_note", preview: "正在核对退款与取消的边界。", status: "returned" }] };
+const fixtures = (window as unknown as { __KNOWLEDGE_LIBRARY_FIXTURES__: { job: DomainKnowledgeJob; running: DomainKnowledgeJob; created: DomainKnowledgeJob; openedJob: DomainKnowledgeJob; divergedJob: DomainKnowledgeJob; taskRows: Record<string, KnowledgeTaskRow>; projections: Record<string, KnowledgeProductionView> } }).__KNOWLEDGE_LIBRARY_FIXTURES__;
+const job = fixtures.job, running = fixtures.running;
 // 萃取滚轮测试(knowledgeExtractionScrollBrowser)复用本夹具:?scrollCheck=1 时不跑下面的整链脚本,
 // 并给进行中任务补足一屏放不下的研究动态,让时间线真的需要滚动。
 const scrollCheck = new URLSearchParams(location.search).has("scrollCheck");
@@ -32,13 +30,14 @@ const modules = [
   { id: "alarm", name: "告警管理", description: "告警规则", status: "active", repositories: ["https://example.test/alarm.git"], assets: [] },
 ];
 const calls: Array<{ path: string; input?: any }> = [], errors: string[] = [];
+let backgroundArchiveOpened = false;
 window.addEventListener("error", e => errors.push(e.message));
 window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined;
   calls.push({ path, input }); let result: unknown;
   if (path === "/knowledge-tasks") {
-    const tasks = jobs.map(item => ({ id: item.id, kind: "domain", title: item.title, scope: modules.find(module => module.id === item.module_id)?.name, operator: item.operator, created_at: item.created_at, status: item.status, status_label: item.status === "running" ? "进行中" : "待审查", group: item.status === "running" ? "running" : "attention", stage: item.stage }));
+    const tasks = jobs.map(item => ({ ...fixtures.taskRows[item.id], status_label: item.production!.status_label, group: item.production!.group, next_action: item.production!.next_action, production: item.production }));
     result = { tasks, warnings: [], summary: { running: tasks.filter(t => t.group === "running").length, attention: tasks.filter(t => t.group === "attention").length, total: tasks.length } };
   } else if (path === "/knowledge-documents") result = { documents };
   else if (path.startsWith("/knowledge-documents/")) { const id = decodeURIComponent(path.split("/")[2]); result = documents.find(item => item.id === id); }
@@ -49,10 +48,11 @@ window.fetch = async (url, options) => {
   else if (path === "/component-research") result = { records: [] };
   else if (path.startsWith("/knowledge-review/")) result = { notes: [] };
   else if (path === "/domain-extraction") {
-    if (input) { const created = { ...structuredClone(running), id: "dkx-created", title: "告警管理研究", module_id: input.module_id }; jobs.push(created); result = created; }
+    if (input) { const created = { ...structuredClone(fixtures.created), module_id: input.module_id }; jobs.push(created); result = created; }
     else result = { records: jobs, knowledge_target: null };
   } else if (path === `/domain-extraction/${job.id}/selection`) {
     for (const item of job.documents) if (input.ids.includes(item.id)) item.selected = input.selected;
+    job.production = input.selected ? fixtures.projections.initial : fixtures.projections.none;
     result = job;
   } else if (path === `/domain-extraction/${job.id}/publish`) {
     for (const item of job.documents.filter(document => input.document_ids.includes(document.id))) {
@@ -60,13 +60,15 @@ window.fetch = async (url, options) => {
       item.knowledge_document_id = `kd-${item.id}`; item.published_document_revision = item.revision; item.published_revision = `formal-${item.id}`;
       documents.push({ ...documents[0], id: item.knowledge_document_id, title: item.title, content: item.content, revision: item.published_revision, repositories: item.layer === "repository" ? [repository.repository] : [], source: { ...documents[0].source!, path: item.path } });
     }
-    job.archive_batches = [{ id: "batch-1", created_at: "2026-09-30T02:00:00Z", operator: "dev", state: "pending", documents: structuredClone(job.documents.filter(d => input.document_ids.includes(d.id))), targets: [job.knowledge_target, repository], publications: [] }]; result = job;
+    job.archive_batches = [{ id: "batch-1", created_at: "2026-09-30T02:00:00Z", operator: "dev", state: "pending", documents: structuredClone(job.documents.filter(d => input.document_ids.includes(d.id))), targets: [job.knowledge_target, repository], publications: [] }]; job.production = fixtures.projections.published; result = job;
   } else if (path === `/domain-extraction/${job.id}/refresh`) {
     // #447：合入后归档仓被直接修改，后端给出状态与文案，前端只显示并提供核对入口。
-    job.publications = [{ target_id: "domain", branch: "codex/knowledge-fixture", state: "merged", url: "https://example.test/mr/1", documents: [], sync_state: "diverged",
-      diverged_paths: ["docs/business/states.md"], sync_error: "请核对远端差异后再发布：归档仓中的 docs/business/states.md 在 MR 合入后被直接修改过" }];
+    Object.assign(job, structuredClone(fixtures.divergedJob), { production: fixtures.projections.diverged });
     result = job;
-  } else if (/^\/domain-extraction\/dkx-[^/]+$/.test(path)) result = jobs.find(item => item.id === path.split("/")[2]);
+  } else if (/^\/domain-extraction\/dkx-[^/]+$/.test(path)) {
+    if (path === `/domain-extraction/${job.id}` && backgroundArchiveOpened && job.archive_batches?.[0].state === "pending") Object.assign(job, structuredClone(fixtures.openedJob));
+    result = jobs.find(item => item.id === path.split("/")[2]);
+  }
   else if (path === "/skills/order-check/submissions") result = { directory: "order-check", id: "submission-1", status: "pending" };
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
@@ -144,20 +146,20 @@ async function run() {
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "module opened from home");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
   checkLibraryNavigationRestored();
-  await clickSelector(".knowledge-task-capsule"); await waitFor('[aria-label="打开领域萃取：支付规则研究中"]');
-  await clickSelector('[aria-label="打开领域萃取：支付规则研究中"]'); await waitFor('[aria-label="研究过程记录"]');
+  await clickSelector(".knowledge-task-capsule"); await waitFor('[aria-label$="打开领域萃取：支付规则研究中"]');
+  await clickSelector('[aria-label$="打开领域萃取：支付规则研究中"]'); await waitFor('[aria-label="研究过程记录"]');
   check(new URLSearchParams(location.search).get("kbReview") !== "1", "running task opens execution rather than review");
   check(document.querySelector('[aria-label="研究过程记录"]')?.textContent?.includes("退款与取消"), "task detail reuses recorded research progress");
-  await click("返回任务中心"); await waitFor('[aria-label="打开领域萃取：交易规则更新"]');
-  await clickSelector('[aria-label="打开领域萃取：交易规则更新"]'); await waitFor('[aria-label="领域知识文件导航"]');
+  await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：交易规则更新"]');
+  await clickSelector('[aria-label$="打开领域萃取：交易规则更新"]'); await waitFor('[aria-label="领域知识文件导航"]');
   check(new URLSearchParams(location.search).get("kbReview") === "1", "attention task deep link selects manuscript review");
   checkFocusedReader('[aria-label="领域知识审查工作区"]', "domain manuscript review");
   check(!document.querySelector(".studio-refine-bar"), "review maximizes manuscript space without a persistent refinement form");
   check(!document.querySelector('[aria-label="知识发布与 Git 归档状态"]'), "publication history does not occupy manuscript space before opening it");
-  await click("返回任务中心"); await waitFor('[aria-label="打开领域萃取：交易规则更新"]');
+  await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：交易规则更新"]');
   check(new URLSearchParams(location.search).get("kbPage") === "tasks", "review returns to its task center");
   checkLibraryNavigationRestored();
-  await clickSelector('[aria-label="打开领域萃取：交易规则更新"]'); await waitFor('[aria-label="领域知识文件导航"]');
+  await clickSelector('[aria-label$="打开领域萃取：交易规则更新"]'); await waitFor('[aria-label="领域知识文件导航"]');
   checkFocusedReader('[aria-label="领域知识审查工作区"]', "reopened manuscript review");
   check(button("确认并发布（2）"), "unchanged published file excluded from this batch");
   await clickSelector('input[aria-label="批量选择发布 全部变化文稿"]');
@@ -173,6 +175,10 @@ async function run() {
   check(published[0].input.expected_revisions.states === 2 && published[0].input.expected_revisions.integration === 1, "batch carries each draft revision");
   check(new URLSearchParams(location.search).get("kbReview") === "1", "publication stays in review");
   check(document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("Git 正在后台归档"), "publication dialog keeps archive progress available");
+  check(job.archive_batches?.[0].state === "pending" && documents.some(document => document.id === "kd-states") && documents.some(document => document.id === "kd-integration"), "platform knowledge is immediately live while Git is still pending");
+  backgroundArchiveOpened = true;
+  for (let i = 0; i < 60 && !button("刷新 MR 状态"); i++) await pause();
+  check(button("刷新 MR 状态") && document.querySelector('a[href="https://example.test/mr/1"]'), "backend GET reports the opened MR before refresh is offered");
   await click("刷新 MR 状态");
   const divergedAlert = document.querySelector('[role="dialog"] [role="alert"]');
   check(divergedAlert?.textContent?.includes("请核对远端差异后再发布") && document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("待核对"), "merged archive edited in Git asks the reviewer to compare, using backend text");
@@ -196,13 +202,13 @@ async function run() {
   check(button("开始研究")?.disabled, "a related issue requires its description before research starts");
   check(!document.body.textContent?.includes("补充业务 AR") && !document.querySelector('[aria-label*="AR"]'), "knowledge research no longer exposes the supplementary AR field");
   await fill('[aria-label="单号描述"]', "修复告警重复通知并核对恢复规则");
-  await click("开始研究"); await waitFor('[aria-label="打开领域萃取：告警管理研究"]');
+  await click("开始研究"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
   const created = calls.find(call => call.path === "/domain-extraction" && call.input);
   check(created?.input.module_id === "alarm" && created.input.baseline_branch === "master", "create submits actual module id and baseline branch");
   check(created?.input.issue_description === "修复告警重复通知并核对恢复规则", "research submits the supplied issue description for an accurate MR title");
   check(!Object.prototype.hasOwnProperty.call(created?.input, "ar_codes"), "research does not submit removed supplementary AR data");
   check(new URLSearchParams(location.search).get("kbPage") === "tasks", "creation returns to the knowledge task center");
-  await clickSelector('[aria-label="打开领域萃取：告警管理研究"]'); await waitFor('[aria-label="研究过程记录"]');
+  await clickSelector('[aria-label$="打开领域萃取：告警管理研究"]'); await waitFor('[aria-label="研究过程记录"]');
   await click("返回任务中心"); await waitFor('[aria-label="知识任务中心"]');
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]'); await chooseNew("导入 Skill");
   check(!document.querySelector('textarea'), "import is package-only, with no pasted document input");

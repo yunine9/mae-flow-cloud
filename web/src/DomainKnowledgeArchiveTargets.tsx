@@ -7,7 +7,7 @@ import type { DomainKnowledgeJob, KnowledgeRepository } from "../../src/domainKn
 const targetsOf = (job: DomainKnowledgeJob) => [job.knowledge_target, ...job.repositories];
 const filename = (path: string) => path.split("/").at(-1)!;
 const pathsOf = (job: DomainKnowledgeJob) => Object.fromEntries(job.documents.map(doc => [doc.id,
-  !doc.archive_path && ![...job.publications, ...(job.publication_history ?? [])].some(p => p.target_id === doc.target_id) && /^agents\.md$/i.test(filename(doc.path)) ? "AGENTS.md" : doc.path]));
+  !doc.archive_path && !job.production?.archive.locked_target_ids.includes(doc.target_id) && /^agents\.md$/i.test(filename(doc.path)) ? "AGENTS.md" : doc.path]));
 export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBlockedChange, onCompare }: {
   job: DomainKnowledgeJob; disabled?: boolean; onChange: (job: DomainKnowledgeJob) => void;
   onBlockedChange: (blocked: boolean) => void; onCompare: (id: string) => void;
@@ -47,7 +47,7 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBlock
   return <section className="space-y-4 rounded-lg border border-line p-4" aria-label="领域知识归档位置">
     <div><h3 className="font-semibold">选择归档位置</h3><p className="mt-1 text-sm text-muted-foreground">路径已自动填好：AGENTS.md 放根目录，其他文档沿用默认目录。可按仓批量调整目录，只有例外文件需要单独改位置。</p></div>
     {selected.map(target => {
-      const locked = [...job.publications, ...(job.publication_history ?? [])].some(p => p.target_id === target.id);
+      const locked = job.production?.archive.locked_target_ids.includes(target.id);
       return <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled || locked}>
         <legend className="px-1 font-medium">{target.id === "domain" ? "领域知识" : target.name}</legend>
         <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label={`${target.id} 归档仓地址`} value={target.repository} onChange={e => change(target.id, { repository: e.target.value })} placeholder="https://…/knowledge.git" /></label>
@@ -66,8 +66,7 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBlock
     <Button variant="outline" disabled={busy || disabled || invalid || !selected.length} onClick={() => void prepare()}>{busy ? "正在检查已有文档…" : "保存归档位置并检查已有文档"}</Button>
     {changed && <p className="text-sm text-muted-foreground">归档位置尚未保存，保存后重新检查已有文档和清理范围。</p>}
     {!changed && job.archive_configured !== false && <ul className="space-y-2 text-sm">{job.documents.filter(d => d.selected).map(doc => {
-      const remote = doc.remote_review;
-      return <li key={doc.id}>{doc.title} · {remote ? remote.reviewed ? "已核对远端" : remote.target_content !== null || remote.branch_content != null ? "目标位置已有文档，请核对差异" : "目标位置为新文档" : "尚未比较目标文档"}
+      return <li key={doc.id}>{doc.title} · {job.production?.documents.find(item => item.id === doc.id)?.remote_review_message}
         <Button size="sm" variant="link" onClick={() => onCompare(doc.id)}>核对已有文档</Button></li>;
     })}</ul>}
   </section>;

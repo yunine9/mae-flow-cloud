@@ -7,6 +7,9 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
+import { knowledgeLibraryProductionFixtures } from "./fixtures/knowledgeLibraryProduction.ts";
+import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
+import type { ResearchRecord } from "../src/componentResearch.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const pause = (ms = 120) => new Promise(r => setTimeout(r, ms));
@@ -32,7 +35,9 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       const fixture = kind === "domain" ? "knowledgeLibrary" : "componentResearchReview";
       const bundle = await build({ entryPoints: [resolve(`tests/browser/${fixture}.tsx`)], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });
       const html = join(root, `${kind}.html`);
-      writeFileSync(html, `<!doctype html><meta charset="utf-8"><style>${css} #result {display:none} ${kind === "component" ? ".knowledge-extraction-content main { padding-bottom: 320px; }" : ""}</style><div style="padding:24px"><h1 style="height:52px">知识库</h1><div id="app"></div><footer style="height:200px">页面下方内容</footer></div><pre id="result"></pre><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`);
+      const fixtureData = kind === "domain" ? `window.__KNOWLEDGE_LIBRARY_FIXTURES__=${JSON.stringify(knowledgeLibraryProductionFixtures())};`
+        : `window.__COMPONENT_REVIEW_PRODUCTIONS__=${JSON.stringify({ initial: projectKnowledgeProduction({ kind: "component", record: { id: "cr-browser", topic: "基础组件联合使用指南", status: "done", stage: "草稿待审查", language: "cpp", operator: "专家", created_at: "2026-09-21T08:00:00Z", evidence: [], review_turns: [], document: { overview: "组件使用指南", sections: Array.from({ length: 35 }, (_, i) => ({ id: `cap-${i}`, title: i === 0 ? "安全打开与关闭" : i === 1 ? "异步读取与取消" : i === 2 ? "批量写入与错误恢复" : `组件能力 ${i + 1}：资源管理与错误恢复`, revision: 1, selected: true })) } } as unknown as ResearchRecord }) })};`;
+      writeFileSync(html, `<!doctype html><meta charset="utf-8"><style>${css} #result {display:none} ${kind === "component" ? ".knowledge-extraction-content main { padding-bottom: 320px; }" : ""}</style><div style="padding:24px"><h1 style="height:52px">知识库</h1><div id="app"></div><footer style="height:200px">页面下方内容</footer></div><pre id="result"></pre><script>${fixtureData.replaceAll("</script", "<\\/script")}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`);
       const { targetId } = await send("Target.createTarget", { url: "about:blank" });
       const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
       const evaluate = async (expression: string) => { const result = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId); if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };

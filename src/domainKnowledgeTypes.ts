@@ -74,6 +74,11 @@ export interface DomainArchiveBatch {
     current_revision?: string; reason: "newer_version" | "deleted" }>;
 }
 export interface DomainKnowledgeJob {
+  /** 创建请求的规范化键；后续归档、关联信息与资料维护不改变它。 */
+  key?: string;
+  /** 只在读取响应中计算，磁盘记录不保存另一份状态。 */
+  production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
+  deletion?: import("./knowledgeProductionTypes").KnowledgeDomainDeletionView;
   id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
   instructions?: string;

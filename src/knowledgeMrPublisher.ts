@@ -7,7 +7,8 @@ import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
 import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
-import { fetchMrGates } from "./mrGateClient.ts";
+import { fetchMrGates, readMrFailureBody } from "./mrGateClient.ts";
+import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
@@ -57,10 +58,12 @@ export class KnowledgeMrPublisher {
     return { credential, platformUrl, headers: { "x-mfc-git-user": encodeURIComponent(credential.username), "x-mfc-git-token": encodeURIComponent(credential.password) } };
   }
   private async state(target: KnowledgeRepository, publication: DomainPublication, operator: string) {
-    const { platformUrl, headers } = this.identity(operator);
-    const view = await fetchMrGates({ platformUrl, headers, repo: target.repository, requireExisting: true,
+    const { platformUrl, headers, credential } = this.identity(operator);
+    let failure = "MR 查询未返回有效状态";
+    const view = await fetchMrGates({ platformUrl, headers, repo: target.repository, requireExisting: true, includeFailureBody: true,
+      onFailure: reason => { failure = reason; },
       delivery: { source_branch: publication.branch, target_branch: target.branch, mr_id: publication.mr_id, mr_url: publication.url } });
-    if (!view) throw new Error("暂时无法确认 MR 状态，请稍后重试，未创建重复 MR");
+    if (!view) throw knowledgeMrFailure(failure, "MR 状态查询", [credential.password]);
     return view.mrState;
   }
   private async withGit<T>(operator: string, work: (git: (args: string[], allowFailure?: boolean) => Promise<string>, root: string) => Promise<T>) {
@@ -83,7 +86,7 @@ export class KnowledgeMrPublisher {
               const sha = rejectedCommitSha(output);
               throw new Error(`CodeHub 拒绝推送：提交说明不符合仓库规范${sha ? `（提交 ${sha.slice(0, 12)}）` : ""}，请检查仓库提交格式要求`);
             }
-            throw new Error("知识文档 Git 操作失败，请检查个人权限、分支和网络；未覆盖远端提交");
+            throw knowledgeGitFailure(result.timedOut ? "network" : classifyKnowledgeGitFailure(output), "知识文档");
           }
           return result.status === 0 ? result.stdout : "";
         };
@@ -116,9 +119,19 @@ export class KnowledgeMrPublisher {
     const identity = this.identity(operator);
     if (previous?.mr_attempted && !previous.url) {
       const query = new URLSearchParams({ repo: target.repository, source_branch: previous.branch, target_branch: target.branch });
-      const response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: AbortSignal.timeout(15_000) });
-      if (!response.ok) throw new Error("上次 MR 创建结果不确定，当前无法查询原分支；请恢复 MR 查询服务后重试，未重复创建");
-      const body = await response.json() as { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
+      let response: Response, body: { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
+      try {
+        response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: AbortSignal.timeout(15_000) });
+        if (!response.ok) {
+          const detail = await readMrFailureBody(response).catch(error => error instanceof Error ? error.message : String(error));
+          throw new Error(`HTTP ${response.status}${detail ? `：${detail}` : ""}`);
+        }
+        try { body = await response.json() as typeof body; }
+        catch (error) {
+          if (error instanceof SyntaxError) throw new Error("交付平台响应不完整：原分支 MR 查询响应不是合法 JSON");
+          throw error;
+        }
+      } catch (error) { throw knowledgeMrFailure(error, "原分支 MR 查询", [identity.credential.password]); }
       if (!Array.isArray(body.mrs) || body.mrs.length > 1 || body.mrs.some(mr => mr.source_branch !== previous!.branch || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
       if (body.mrs[0]) previous = { ...previous, url: body.mrs[0].url, mr_id: body.mrs[0].id };
     }
@@ -247,7 +260,7 @@ export class KnowledgeMrPublisher {
         publication.mr_attempted = true; save(publication);
         let receipt;
         try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: mrTitle!, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
-        catch { throw new Error("文档已推送，MR 创建尚未确认；重试将复用同一分支"); }
+        catch (error) { throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
         if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后重试");
         publication.url = receipt.url; publication.mr_id = receipt.id;
       }

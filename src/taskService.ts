@@ -429,7 +429,7 @@ import {
   type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
-import { readHostSkillDocument, scanForSecrets } from "./hostSkillLibrary.ts";
+import { readHostSkillDocument, scanForSecrets, recoverSkillSubmissions } from "./hostSkillLibrary.ts";
 import {
   EXTRACTION_TIMEOUT_MS,
   buildExtractionMission,
@@ -2020,6 +2020,7 @@ export class TaskService {
     // 服务启动即接续研究和归档，不等待用户首次打开知识页面。
     this.getDomainKnowledgeExtraction();
     this.getComponentResearch();
+    this.bypass(undefined, "Skill 审核恢复", recoverSkillSubmissions(options.dataDir, this.skillRecoveryWarnings));
   }
 
   async refreshDeliveryPlatformCheck(): Promise<DeliveryPlatformCheck | undefined> {
@@ -5523,6 +5524,8 @@ export class TaskService {
   }
 
   private domainKnowledgeExtraction?: DomainKnowledgeExtraction;
+  private skillRecoveryWarnings: string[] = [];
+  knowledgeRecordWarnings(): string[] { return [...this.skillRecoveryWarnings]; }
   getDomainKnowledgeExtraction(): DomainKnowledgeExtraction {
     return this.domainKnowledgeExtraction ??= createDomainKnowledgeExtraction({
       dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
@@ -5531,10 +5534,10 @@ export class TaskService {
         if (!this.options.notifier) return;
         this.bypass(undefined, "知识研究停止超时通知", this.options.notifier.notifyOutcome({ taskId: job.id, account: job.operator,
           status: "failed", summary: `${job.title}：${job.error}`,
-          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=research&kbKind=domain&kbTask=${encodeURIComponent(job.id)}` }));
+          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=task&kbKind=domain&kbTask=${encodeURIComponent(job.id)}` }));
       },
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
-      source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal),
+      source: (repository, operator, signal, baselineRevisions) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal, baselineRevisions),
     });
   }
   private componentResearch?: ComponentResearch;
@@ -5545,14 +5548,15 @@ export class TaskService {
         if (!this.options.notifier) return;
         this.bypass(undefined, "组件研究停止超时通知", this.options.notifier.notifyOutcome({ taskId: record.id, account: record.operator,
           status: "failed", summary: `${record.topic || record.language}：${record.error}`,
-          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=research&kbKind=component&kbTask=${encodeURIComponent(record.id)}` }));
+          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=task&kbKind=component&kbTask=${encodeURIComponent(record.id)}` }));
       },
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
-      source: (component, operator, signal) => this.componentResearchSource(component, operator, signal),
+      source: (component, operator, signal, baselineRevisions) => this.componentResearchSource(component, operator, signal, baselineRevisions),
+      archiveFor: id => this.getDomainKnowledgeExtraction().componentArchive(id),
     });
   }
   private componentSourceLocks = new Map<string, Promise<unknown>>();
-  private async componentResearchSource(component: ComponentRepository, operator: string, signal?: AbortSignal) {
+  private async componentResearchSource(component: ComponentRepository, operator: string, signal?: AbortSignal, baselineRevisions: string[] = []) {
     const identity = this.options.gitCredential?.(operator) ?? this.options.platformGitCredential?.();
     const key = createHash("sha256").update(JSON.stringify([operator, identity, component.repository, component.branch])).digest("hex");
     const root = join(this.options.dataDir, "component-source-cache", key);
@@ -5560,7 +5564,7 @@ export class TaskService {
     const work = previous.catch(() => undefined).then(async () => {
       const sandbox = this.prepareHostGitSandbox(identity);
       try {
-        return await syncKnowledgeSource(root, component.repository, component.branch, sandbox, signal);
+        return await syncKnowledgeSource(root, component.repository, component.branch, sandbox, signal, baselineRevisions);
       } finally { this.cleanupHostGitCredential(sandbox); }
     });
     this.componentSourceLocks.set(key, work);

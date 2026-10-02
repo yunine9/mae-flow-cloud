@@ -2,9 +2,9 @@ import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "../../src/knowle
 import { instantMs } from "./time";
 export type { KnowledgeTaskCenterData, KnowledgeTaskGroup, KnowledgeTaskKind, KnowledgeTaskRow, KnowledgeTaskSummary } from "../../src/knowledgeTaskCenterTypes";
 
-/** 后台归档不影响阅读；只有仍在研究或需要恢复执行的任务打开过程。 */
-export function knowledgeTaskOpensDocument(task: Pick<KnowledgeTaskRow, "status">) {
-  return !["queued", "running", "failed", "cancelled", "idle"].includes(task.status);
+/** 完整保留服务端动作，归档设置和指定文稿都能到达。 */
+export function knowledgeTaskAction(task: Pick<KnowledgeTaskRow, "next_action">) {
+  return task.next_action;
 }
 
 export async function getKnowledgeTasks(signal?: AbortSignal): Promise<KnowledgeTaskCenterData> {

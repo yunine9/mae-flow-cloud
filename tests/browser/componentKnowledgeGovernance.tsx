@@ -4,6 +4,9 @@ import { flushSync } from "../../web/node_modules/react-dom";
 import { ComponentKnowledgeWorkspace } from "../../web/src/ComponentKnowledgeWorkspace";
 import type { ComponentGovernanceSnapshot, ComponentGovernanceItem } from "../../src/componentKnowledgeTypes";
 
+declare global { interface Window { __COMPONENT_GIT_DELETION_MESSAGE__: string } }
+const gitMessage = window.__COMPONENT_GIT_DELETION_MESSAGE__;
+
 const rule: ComponentGovernanceItem = { id: "rule-thread", kind: "rule", original: "std::thread", source_digest: "abc",
   policy: { level: "shadow", source_digest: "abc", owner: "", scope: [], reason: "新候选，尚未人工启用", operator: "", updated_at: "" },
   paradigm: { component: "线程池", title: "后台任务的提交与等待", language: "cpp", need: "执行后台任务", api: ["Pool::Submit"], applicability: "已链接 Pool v2；底层线程适配器保留原生线程。",
@@ -13,14 +16,14 @@ const rule: ComponentGovernanceItem = { id: "rule-thread", kind: "rule", origina
   stats: { observed: 1, reviewed: 0, exempt: 0, exemption_rate: null }, feedback: [], needs_review: false };
 const data: ComponentGovernanceSnapshot = { revision: 0, items: [rule, { ...structuredClone(rule), id: "mapping-pool", kind: "mapping", samples: [] }], warnings: [], challenges: [], retention: "按当前版本与去重样本统计；尚未判断的样本不计入误报率。" };
 const calls: string[] = []; let adopted = "";
-let deletion = { documents: [{ id: "kd-pool", title: "旧版线程池知识", revision: "v1", active: true }], pending: [] as Array<{id:string;title:string}> };
+let deletion = { git_message: gitMessage, documents: [{ id: "kd-pool", title: "旧版线程池知识", revision: "v1", active: true }], pending: [] as Array<{id:string;title:string}> };
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const path = String(input); calls.push(path);
   if (init?.method === "POST") {
     const value = JSON.parse(init.body as string);
     if (path === "/component-knowledge/delete") {
       if (value.documents.length !== 1 || value.documents[0].revision !== "v1") throw new Error("删除缺少来源版本");
-      data.items = []; deletion = { documents: [], pending: [{ id:"kd-pool", title:"旧版线程池知识" }] };
+      data.items = []; deletion = { ...deletion, documents: [], pending: [{ id:"kd-pool", title:"旧版线程池知识" }] };
       return {ok:true,json:async () => structuredClone(deletion)} as Response;
     }
     if (path === "/component-knowledge/retry-deletions") { deletion.pending = []; return {ok:true,json:async () => structuredClone(deletion)} as Response; }
@@ -102,7 +105,7 @@ async function main() {
   closeDialog(); await delay(); labelledButton("管理组件知识"); await delay(); menuItem("删除知识"); await delay(); await delay();
   const all = document.querySelector('[aria-label="全选组件知识"]') as HTMLInputElement;
   flushSync(() => all.click()); button("删除所选（1）"); await delay();
-  if (!document.body.textContent?.includes("平台没有撤销删除入口")) throw new Error("未明确删除范围");
+  if (!gitMessage || !document.body.textContent?.includes(gitMessage)) throw new Error("未显示后端的 Git 删除说明");
   button("返回选择"); await delay(); if (calls.includes("/component-knowledge/delete")) throw new Error("取消也执行了删除");
   button("删除所选（1）"); button("确认删除知识及索引"); await delay(); await delay();
   if (!document.body.textContent?.includes("索引清理待重试")) throw new Error("未显示索引清理失败");

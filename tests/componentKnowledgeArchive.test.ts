@@ -90,6 +90,8 @@ test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR �
     assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "正式人工修订", expected_revision: knowledge.revision })).status, 200);
     assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "过期覆盖", expected_revision: knowledge.revision })).status, 400);
     assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "绕过 MR 的正文" })).status, 400);
-    assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { active: false })).status, 200);
+    assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { active: false })).status, 400, "启停也必须提供版本号");
+    const current = readKnowledgeDocument(root, knowledge.id);
+    assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { active: false, expected_revision: current.revision })).status, 200);
   } finally { await host.shutdown(); await new Promise<void>(r => server.close(() => r())); rmSync(root, { recursive: true, force: true }); }
 });

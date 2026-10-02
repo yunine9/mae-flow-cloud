@@ -18,6 +18,7 @@ import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
 import type { ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
+import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 
 const list = () => Type.Array(Type.String());
 const reference = Type.Object({ repository_id: Type.String(), path: Type.String(), revision: Type.String(), start: Type.Integer({ minimum: 1 }), end: Type.Integer({ minimum: 1 }) });
@@ -34,7 +35,7 @@ const failure = (error: unknown) => ({ ...reply(error instanceof Error ? error.m
 
 export async function runComponentResearch(input: ResearchExecution, options: {
   dataDir: string; model: () => { provider: string; model: string; json: unknown } | undefined;
-  source: (component: ComponentRepository, operator: string, signal?: AbortSignal) => Promise<{ root: string; revision: string }>;
+  source: (component: ComponentRepository, operator: string, signal?: AbortSignal, baselineRevisions?: string[]) => Promise<{ root: string; revision: string }>;
 }) {
   const model = options.model(); if (!model) throw new Error("请在模型网关配置主模型");
   if (input.record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用基础仓代码与 everycode 的研究");
@@ -45,14 +46,15 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   await checkEc(input.signal);
   const components = input.record.components ?? [input.record.component];
   const controller = new AbortController(), signal = AbortSignal.any([input.signal, controller.signal]);
-  const timer = setTimeout(() => controller.abort(), 48 * 60 * 60_000); timer.unref();
+  let totalExpired = false;
+  const timer = setTimeout(() => { totalExpired = true; controller.abort(new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE)); }, 48 * 60 * 60_000); timer.unref();
   const root = join(input.root, "component-pipeline"), snapshots: KnowledgeCodeSnapshot[] = [];
   const revisions = { ...input.record.revisions };
   const evidence = [...input.record.evidence];
   try {
     for (const component of components) {
       signal.throwIfAborted(); input.update({ stage: `扫描基础仓：${component.name}` });
-      const prepared = await options.source(component, input.review?.operator ?? input.record.operator, signal);
+      const prepared = await options.source(component, input.review?.operator ?? input.record.operator, signal, revisions[component.id] ? [revisions[component.id]] : []);
       const revision = revisions[component.id] ?? prepared.revision; revisions[component.id] = revision; input.update({ revisions: { ...revisions } });
       snapshots.push(await scanKnowledgeCode({ ...component, docs_path: "" }, { ...prepared, revision }, signal, excludedComponentSource));
     }
@@ -217,5 +219,8 @@ export async function runComponentResearch(input: ResearchExecution, options: {
       review: async (t, r) => { const v = (await session(t, r)).verdict!; return v.pass ? undefined : v.feedback; },
       changed: state => input.update({ pipeline: state, stage: state.tasks.find(t => t.status === "running")?.title ?? "组件范式研究" }) });
     return researchDocumentMarkdown(input.record.topic, input.readDocument!());
+  } catch (error) {
+    if (totalExpired && !input.signal.aborted) throw new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE);
+    throw error;
   } finally { clearTimeout(timer); controller.abort(); }
 }

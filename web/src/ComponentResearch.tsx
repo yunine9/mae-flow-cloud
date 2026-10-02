@@ -1,5 +1,5 @@
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
-import { MoreHorizontal, FileText, History, CheckCircle2, Settings2 } from "lucide-react";
+import { MoreHorizontal, FileText, History, Settings2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
@@ -99,14 +99,18 @@ export function ComponentResearch({
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [reviewBlocked, setReviewBlocked] = useState(false);
-  const [archiveNotice, setArchiveNotice] = useState("");
   const [archiveRefresh, setArchiveRefresh] = useState(0);
+  const [archiveOpenRequest, setArchiveOpenRequest] = useState(0);
   const [publishSettingsOpen, setPublishSettingsOpen] = useState(false);
   const publishing = useRef(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const studio = useKnowledgeStudio();
   const [stage, setStage] = useState("review");
-  useEffect(() => { if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }, [surface]);
+  useEffect(() => {
+    const archiveStage = new URLSearchParams(location.search).get("kbStage");
+    if (archiveStage === "publish" || archiveStage === "remote") { setStage("review"); setArchiveOpenRequest(value => value + 1); }
+    else if (surface) setStage(surface === "knowledge" ? "review" : "progress");
+  }, [surface, focusId]);
   const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
@@ -184,7 +188,8 @@ export function ComponentResearch({
     if (!editing) setDraft(current?.draft ?? "");
   }, [current?.draft, editing]);
   function selectRecord(id: string) {
-    setSelected(id); setStage(surface === "workbench" ? "progress" : "review");
+    const archiveStage = new URLSearchParams(location.search).get("kbStage");
+    setSelected(id); setStage(archiveStage === "publish" || archiveStage === "remote" ? "review" : surface === "workbench" ? "progress" : "review");
     const url = new URL(location.href);
     if (id === "history") {
       url.searchParams.set("kbPage", "tasks");
@@ -228,7 +233,7 @@ export function ComponentResearch({
   async function publishKnowledge() {
     if (!current || publishing.current) return;
     publishing.current = true;
-    setBusy(true); setError(""); setArchiveNotice("");
+    setBusy(true); setError("");
     try {
       let prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}`);
       if (prepared.status !== "done") throw new Error("请等待本轮研究完成后确认并发布");
@@ -254,16 +259,16 @@ export function ComponentResearch({
         prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${prepared.id}/proposal`, { turn_id: turn.id, decision: "accept" });
         setDetail(prepared);
       }
-      const document = await componentRequest<{ id: string }>(`/component-research/${prepared.id}/adopt`, {
+      await componentRequest<{ id: string }>(`/component-research/${prepared.id}/adopt`, {
         title, ...(prepared.document ? {} : { content: draft }), scope,
         module_ids: module ? [module] : [], repositories: repos.split("\n").map(s => s.trim()).filter(Boolean),
       });
-      setDetail({ ...prepared, document_id: document.id, stage: "已发布为知识" });
+      setDetail(await componentRequest<ComponentResearchRecord>(`/component-research/${prepared.id}`));
       // Knowledge is already live. Archive failures must not turn this into a failed publication.
       try {
         const endpoint = `/component-research/${current.id}/archive`;
         const result = await componentRequest<{ archive: DomainKnowledgeJob | null }>(endpoint);
-        const reusesMr = result.archive?.publications.some(item => !["closed", "merged"].includes(item.state) && (item.url || item.mr_id));
+        const reusesMr = result.archive?.production?.archive.issue_description_required === false;
         if (result.archive?.issue_no && (result.archive.issue_description || reusesMr) && result.archive.knowledge_target.repository) {
           const archive = await componentRequest<DomainKnowledgeJob>(endpoint, {
             title, ...(current.document ? {} : { content: draft }),
@@ -275,9 +280,8 @@ export function ComponentResearch({
             document_ids: archive.documents.map(d => d.id),
             expected_revisions: Object.fromEntries(archive.documents.map(d => [d.id, d.revision])),
           });
-          setArchiveNotice("Git 归档已提交，可在“Git 归档”中查看进度。");
-        } else setArchiveNotice("知识已生效。Git 归档尚未配置，可在“Git 归档”中补充归档位置、关联单号与单号描述。");
-      } catch (e) { setArchiveNotice(`知识已生效，Git 归档待处理：${(e as Error).message}`); }
+        }
+      } catch (e) { setError((e as Error).message); }
       setArchiveRefresh(value => value + 1);
       void load().catch(() => {});
     } catch (e) { setError((e as Error).message); }
@@ -294,18 +298,16 @@ export function ComponentResearch({
     <header className="knowledge-reading-toolbar flex shrink-0 items-center gap-3 border-b border-line px-4 py-2">
       <KnowledgeBackButton onClick={onClose} destination={backLabel} />
       <div className="flex min-w-0 flex-1 items-center gap-3"><h2 className="truncate text-base font-semibold" title={current.topic}>{current.topic}</h2>
-        <span className={`shrink-0 text-sm ${current.document_id ? "text-success" : "text-muted-foreground"}`}>{current.document_id ? <><CheckCircle2 size={15} className="inline" /> 已发布<span className="sr-only">已发布为 1 篇组件知识，当前版本已生效</span></> : current.status === "done" ? current.update_document_id ? "更新待检视" : "待检视" : ["queued", "running"].includes(current.status) ? current.review_turns?.some(turn => turn.status === "running" || turn.status === "queued") || current.update_document_id ? "修改中" : "研究中" : current.status === "failed" ? "研究失败" : "已停止"}</span></div>
+        <span className={`shrink-0 text-sm ${current.production?.group === "attention" ? "text-amber-700" : "text-muted-foreground"}`}>{current.production?.status_label}</span></div>
       <div hidden={stage !== "review"} className="flex shrink-0 items-center gap-2">
-        {current.document_id ? <>
-          <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} compact refreshKey={archiveRefresh} notice={archiveNotice} onOpenKnowledge={onAdopt} onArchiveAction={() => setArchiveNotice("")} />
-          <Button variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>更新知识</Button><Button onClick={() => onAdopt(current.document_id!)}>查看知识</Button>
-        </> : <>
-          <Button variant="ghost" onClick={() => setPublishSettingsOpen(true)}><Settings2 size={16} />发布设置</Button>
-          <Button disabled={busy || reviewBlocked || current.status !== "done" || !title.trim() || (current.document ? !current.document.sections.some(s => s.selected) : !draft.trim()) || (scope === "module" && !module) || (scope === "repository" && !repos.trim())} onClick={() => void publishKnowledge()}>{busy ? "正在发布…" : "确认并发布"}</Button>
-        </>}
+        {current.production?.archive.visible && <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} compact refreshKey={archiveRefresh} openRequest={archiveOpenRequest} compareDocumentId={new URLSearchParams(location.search).get("kbStage") === "remote" ? new URLSearchParams(location.search).get("knowledgeDocument") ?? undefined : undefined} onOpenKnowledge={onAdopt} />}
+        {current.production?.research_actions.filter(action => ["publish", "update"].includes(action.id)).map(action => action.id === "update"
+          ? <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>{action.label}</Button>
+          : <span key={action.id} className="flex items-center gap-2"><Button variant="ghost" onClick={() => setPublishSettingsOpen(true)}><Settings2 size={16} />发布设置</Button><Button disabled={busy || reviewBlocked || !title.trim() || (current.document ? !current.document.sections.some(s => s.selected) : !draft.trim()) || (scope === "module" && !module) || (scope === "repository" && !repos.trim())} onClick={() => void publishKnowledge()}>{busy ? "正在发布…" : action.label}</Button></span>)}
+        {current.production?.knowledge_document_id && <Button onClick={() => onAdopt(current.production!.knowledge_document_id!)}>查看知识</Button>}
       </div>
     </header>
-    <KnowledgeTaskNavigation value={stage} onChange={switchTaskView} documentCount={current.document || current.draft ? 1 : 0} working={["queued", "running"].includes(current.status)} status={current.status} modifying={!!current.update_document_id || !!current.review_turns?.some(turn => turn.mode !== "discuss")} published={!!current.document_id} disabled={busy} />
+    <KnowledgeTaskNavigation value={stage} onChange={switchTaskView} documentCount={current.document || current.draft ? 1 : 0} view={current.production} disabled={busy} />
     {error && <p role="alert" className="shrink-0 px-4 py-2 text-danger">{error}</p>}
     <Dialog open={publishSettingsOpen} onOpenChange={setPublishSettingsOpen}><DialogContent className="tw-root max-h-[85dvh] overflow-auto sm:max-w-xl">
       <DialogHeader><DialogTitle>发布设置</DialogTitle></DialogHeader>
@@ -319,15 +321,14 @@ export function ComponentResearch({
       <Button className="justify-self-end" onClick={() => setPublishSettingsOpen(false)}>完成</Button>
     </DialogContent></Dialog>
     <div hidden={stage !== "review"} className="min-h-0 flex-1" style={{ display: stage === "review" ? "flex" : "none", flexDirection: "column" }}>
-      {current.update_document_id && !current.document_id && <p className="shrink-0 border-b border-line px-4 py-1.5 text-sm text-muted-foreground">当前为更新草稿，已发布版本继续生效。</p>}
+      {current.production?.platform_message && <p className="shrink-0 border-b border-line px-4 py-1.5 text-sm text-muted-foreground">{current.production.platform_message}</p>}
       {current.document ? <ComponentResearchReview key={`review:${current.id}`} record={current} unified onBlockedChange={setReviewBlocked} onChanged={record => { setDetail(record); void load(); }} readerHeight="100%" />
-        : current.draft ? <section className="min-h-0 flex-1 overflow-auto p-6"><div className="mb-3 flex justify-between"><strong>{current.document_id ? "已发布文稿" : "待发布文稿"}</strong>{!current.document_id && <Button variant="outline" onClick={() => setEditing(!editing)}>{editing ? "预览文稿" : "编辑文稿"}</Button>}</div>{editing ? <Textarea aria-label="知识文稿" rows={16} value={draft} onChange={e => setDraft(e.target.value)} /> : <Markdown text={draft} />}</section>
+        : current.draft ? <section className="min-h-0 flex-1 overflow-auto p-6"><div className="mb-3 flex justify-between"><strong>{current.production?.status_label}</strong>{!current.document_id && <Button variant="outline" onClick={() => setEditing(!editing)}>{editing ? "预览文稿" : "编辑文稿"}</Button>}</div>{editing ? <Textarea aria-label="知识文稿" rows={16} value={draft} onChange={e => setDraft(e.target.value)} /> : <Markdown text={draft} />}</section>
         : <p className="p-6 text-muted-foreground">文稿生成后可在这里检视。</p>}
     </div>
     <div hidden={stage !== "progress"} className="min-h-0 flex-1 overflow-auto p-5">
       <div className="mb-4 flex items-center gap-3 text-sm"><span className="mr-auto text-muted-foreground">{current.components?.length ?? 1} 个组件仓 · {knowledgeLanguageLabel(current.language)} · {current.operator}</span>
-        {["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
-        {["failed", "cancelled"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("retry")}>继续研究</Button>}
+        {current.production?.research_actions.filter(action => ["stop", "resume"].includes(action.id)).map(action => <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage(action.id === "resume" ? "retry" : "stop")}>{action.label}</Button>)}
         <details className="relative"><summary className="cursor-pointer text-muted-foreground">来源范围</summary><div className="absolute right-0 z-10 mt-2 w-[480px] max-w-[80vw] rounded-lg border border-line bg-surface p-4 shadow-lg">{(current.components ?? [current.component]).map(component => <p key={component.id} className="mb-2 break-all">{component.name} · {component.repository} · {component.branch} · {component.path || "根目录"}<br />读取版本：{current.revisions?.[component.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}</div></details>
       </div>
       {current.error && <p role="alert" className="mb-4 text-danger">{current.error}</p>}
@@ -387,7 +388,7 @@ export function ComponentResearch({
               <>
                 {surface === "knowledge" ? <header className="studio-result-toolbar">
                   <KnowledgeBackButton onClick={onClose} destination={backLabel} />
-                  <FileText size={21} /><strong title={current.topic}>{current.topic}</strong><span className="studio-job-status">{current.status === "done" ? "已生成" : current.stage}</span>
+                  <FileText size={21} /><strong title={current.topic}>{current.topic}</strong><span className="studio-job-status">{current.production?.status_label}</span>
                   <div className="studio-result-actions"><Button variant="ghost" onClick={() => { studio?.openExecution("component", current.id); setStage("progress"); }}><History size={16} />萃取过程</Button>
                     {stage !== "review" && <Button variant="ghost" onClick={() => setStage("review")}>阅读成果</Button>}
                     <Button onClick={() => setStage("publish")}>Git 归档</Button>
@@ -400,16 +401,7 @@ export function ComponentResearch({
                 </header> : <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
                   <div className="flex items-center justify-between gap-3">
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
-                    {!focused && ["done", "failed", "cancelled"].includes(current.status) && !(current.document && current.status === "done") && (
-                      <Button
-                        variant="outline"
-                        disabled={busy}
-                        onClick={() => void manage("retry")}
-                      >
-                        {current.document ? (current.review_turns?.length ? "重试本组件对话" : "继续未完成研究") : current.mode === "all" && current.status !== "done" ? "重试未完成组件" : current.status === "failed" ? "失败重试" : current.status === "cancelled" ? "重新启动" : "重新萃取"}
-                      </Button>
-                    )}
-                    {!focused && ["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
+                    {!focused && current.production?.research_actions.filter(action => ["stop", "resume"].includes(action.id)).map(action => <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage(action.id === "resume" ? "retry" : "stop")}>{action.label}</Button>)}
                     {!focused && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
                   </div>
                   <p className="mt-2 text-muted-foreground">

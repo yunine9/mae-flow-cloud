@@ -1,4 +1,5 @@
 import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
+import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 export type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
@@ -1836,6 +1837,7 @@ export interface SkillKnowledgeMetadataInput {
 
 /** 资产库操作留痕(谁/何时/什么动作/什么指纹),服务端逐条记录。 */
 export interface SkillOperationRecord {
+  production?: KnowledgeProductionView;
   at: string;
   operator: string;
   action: "upload" | "update" | "offline" | "rollback"
@@ -1850,11 +1852,12 @@ export interface SkillOperationRecord {
 
 /** 开发者提交的待审 skill 包:人人可提交,管理员审核上架。 */
 export interface SkillSubmissionRecord {
+  production?: KnowledgeProductionView;
   id: string;
   directory: string;
   operator: string;
   created_at: string;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approving" | "approved" | "rejected";
   skill_digest: string;
   package_digest: string;
   files: number;
@@ -1911,6 +1914,7 @@ export async function getSkillDocument(
 }
 
 export interface SkillExtractionJob {
+  production?: KnowledgeProductionView;
   id: string;
   status: "running" | "done" | "failed";
   repo: string;

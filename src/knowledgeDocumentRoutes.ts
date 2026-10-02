@@ -59,7 +59,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       assertNotResearching(service, id);
       const body = await readBody(request, 3 * 1024 * 1024);
       const previous = readKnowledgeDocument(dir, id);
-      if (body.content !== undefined && typeof body.expected_revision !== "string") throw new Error("请提供编辑时的知识版本，避免覆盖他人修改");
+      if (typeof body.expected_revision !== "string") throw new Error("请提供编辑时的知识版本，避免覆盖他人修改");
       const input = { ...body, source: body.content !== undefined ? undefined : previous?.source };
       const doc = saveKnowledgeDocument(dir, input, operator, id, { expectedRevision: body.expected_revision });
       service.prepareKnowledgeIndex();

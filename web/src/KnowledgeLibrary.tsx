@@ -14,6 +14,7 @@ import { ComponentResearch } from "./ComponentResearch";
 import { PlatformSkillPane, type PlatformSkillKind } from "./PlatformSkill";
 import { KnowledgeStudioContext, type ExtractionKind } from "./KnowledgeStudioContext";
 import type { KnowledgeAssetFocus } from "./knowledgeNavigation";
+import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
 
 type Page = "home" | "module" | "tasks" | "research" | "import" | "task";
 type Kind = ExtractionKind | "skill-extraction" | "skill-submission";
@@ -39,15 +40,20 @@ export function KnowledgeLibrary({ onCategoryChange, onOpenTask, onManage }: {
   }, []);
   function navigate(page: Page, values: Record<string, string> = {}) {
     const url = new URL(location.href);
-    for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill"]) url.searchParams.delete(key);
+    for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "kbStage", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill"]) url.searchParams.delete(key);
     url.searchParams.set("kbPage", page);
     for (const [key, value] of Object.entries(values)) if (value) url.searchParams.set(key, value);
     history.pushState(history.state, "", url); setRoute(readRoute());
   }
-  function openTask(kind: Kind, id: string, review = false) {
+  function openTask(kind: Kind, id: string, review = false, action?: KnowledgeProductionAction) {
     if (id === "new" || !id) { navigate("research", { kbKind: kind }); return; }
     if (id === "history") { navigate("tasks"); return; }
-    navigate("task", { kbKind: kind, kbTask: id, kbReview: review ? "1" : "" });
+    if (action?.href) {
+      history.pushState(history.state, "", new URL(action.href, location.href)); setRoute(readRoute()); return;
+    }
+    navigate("task", { kbKind: kind, kbTask: id, kbReview: review ? "1" : "",
+      kbStage: action?.view === "archive" ? "publish" : action?.id === "compare" ? "remote" : "",
+      knowledgeDocument: action?.document_id ?? "" });
   }
   const focused = route.page === "module" || route.page === "task";
   return <KnowledgeStudioContext.Provider value={{ view: route.review ? "knowledge" : "workbench", openExecution: (kind, id) => openTask(kind, id ?? "new"), openResult: (kind, id) => openTask(kind, id, true) }}>
@@ -66,7 +72,7 @@ export function KnowledgeLibrary({ onCategoryChange, onOpenTask, onManage }: {
       {route.page === "module" && (route.module === "platform" && ["platform-skill-domain", "platform-skill-component"].includes(route.document)
         ? <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
-      {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, review) => openTask(kind, id, review)} onSummaryChange={setSummary} />}
+      {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, action) => openTask(kind, id, action.view !== "progress", action)} onSummaryChange={setSummary} />}
       {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} onBack={() => navigate("home")} onCreated={() => navigate("tasks")} />}
       {route.page === "import" && <KnowledgeSkillImport moduleKey={route.module} onBack={() => navigate("home")} onCreated={() => navigate("tasks")} />}
       {route.page === "task" && <div className="knowledge-hub-task">

@@ -5,7 +5,7 @@ import type { ResearchRecord } from "./componentResearch.ts";
 import type { ExtractionJobRecord } from "./knowledgeExtraction.ts";
 import { listSkillSubmissions, type SkillSubmissionRecord } from "./hostSkillLibrary.ts";
 import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "./knowledgeTaskCenterTypes.ts";
-import { knowledgeArchiveState } from "./knowledgeArchiveStatus.ts";
+import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
 function validTime(value: unknown): string | undefined {
@@ -23,79 +23,36 @@ export function latestKnowledgeResearchNote(evidence: Array<Record<string, unkno
   return undefined;
 }
 
-function state(status: string): Pick<KnowledgeTaskRow, "status_label" | "group"> {
-  if (status === "queued") return { status_label: "排队中", group: "running" };
-  if (status === "running") return { status_label: "进行中", group: "running" };
-  if (status === "failed") return { status_label: "执行失败", group: "attention" };
-  if (status === "cancelled") return { status_label: "已停止", group: "attention" };
-  if (status === "idle") return { status_label: "待开始", group: "attention" };
-  return { status_label: "已完成", group: "completed" };
+function projection(input: Parameters<typeof projectKnowledgeProduction>[0]) {
+  const production = projectKnowledgeProduction(input);
+  return { status_label: production.status_label, group: production.group, next_action: production.next_action, production };
 }
-
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
-  const row: KnowledgeTaskRow = {
-    id: job.id, kind: "domain", title: job.title, scope: job.scope,
-    operator: job.operator, created_at: validTime(job.created_at), status: job.status, ...state(job.status),
-    stage: job.stage, error: job.error, latest_note: latestKnowledgeResearchNote(job.evidence),
-  };
-  if (job.status === "running") row.status_label = ["revise", "update"].includes(job.turns.at(-1)?.mode ?? "") ? "修改中" : "研究中";
-  if (job.status !== "done") return row;
-  const pendingProposal = job.turns.some(turn => turn.proposals.some(proposal => proposal.status === "pending"));
-  const unpublished = job.documents.some(document => {
-    if (document.published_document_revision !== undefined) return document.published_document_revision !== document.revision;
-    // 老记录没有本地发布版本，只能以已成功归档的同版文稿确认发布。
-    return !document.knowledge_document_id || ![...job.publications, ...(job.publication_history ?? [])]
-      .some(publication => ["merged", "unchanged"].includes(publication.state)
-        && publication.documents.some(published => published.id === document.id && published.revision === document.revision));
-  });
-  if (pendingProposal || unpublished) return { ...row, status_label: "待检视", group: "attention" };
-  if (knowledgeArchiveState(job) === "failed") return { ...row, status_label: "已发布 · 归档待处理", group: "attention" };
-  if (job.publications.some(publication => publication.sync_state === "diverged")) return { ...row, status_label: "已发布 · 远端待核对", group: "attention" };
-  if (knowledgeArchiveState(job) === "running") return { ...row, status_label: "已发布 · 归档中", group: "completed" };
-  if (job.documents.length) return { ...row, status_label: "已发布" };
-  return row;
+  return { id: job.id, kind: "domain", title: job.title, scope: job.scope, operator: job.operator,
+    created_at: validTime(job.created_at), status: job.status, ...projection({ kind: "domain", record: job }),
+    stage: job.stage, error: job.error, latest_note: latestKnowledgeResearchNote(job.evidence) };
 }
-
-export function componentKnowledgeTask(record: ResearchRecord): KnowledgeTaskRow {
-  const row: KnowledgeTaskRow = {
-    id: record.id, kind: "component", title: record.topic || `${record.language} 基础组件萃取`, scope: record.language,
+export function componentKnowledgeTask(record: ResearchRecord, archive?: DomainKnowledgeJob): KnowledgeTaskRow {
+  return { id: record.id, kind: "component", title: record.topic || `${record.language} 基础组件萃取`, scope: record.language,
     operator: record.operator, created_at: validTime(record.created_at), finished_at: validTime(record.finished_at),
-    status: record.status, ...state(record.status), stage: record.stage, error: record.error,
-    latest_note: latestKnowledgeResearchNote(record.evidence),
-  };
-  if (record.status === "running") row.status_label = record.review_turns?.some(turn => ["queued", "running"].includes(turn.status) && turn.mode !== "discuss") ? "修改中" : "研究中";
-  if (record.status !== "done" || record.challenge) return row;
-  const published = record.document_id;
-  const draft = record.draft || record.document;
-  if (published) return { ...row, status_label: "已发布" };
-  if (draft || record.review_turns?.some(turn => turn.proposal?.status === "pending")) return { ...row, status_label: "待检视", group: "attention" };
-  return row;
+    status: record.status, ...projection({ kind: "component", record, archive }), stage: record.stage, error: record.error,
+    latest_note: latestKnowledgeResearchNote(record.evidence) };
 }
-
 export function skillExtractionTask(record: ExtractionJobRecord): KnowledgeTaskRow {
-  return {
-    id: record.id, kind: "skill-extraction", title: record.intent, scope: record.repo, operator: record.operator,
-    started_at: validTime(record.started_at), finished_at: validTime(record.finished_at),
-    status: record.status, ...state(record.status), error: record.error,
-    // 制作记录不追踪后续提交审核，不能把已生成草稿永远算作待审核。
-    ...(record.status === "done" ? { status_label: "草稿已生成", stage: "可在详情中编辑并提交 Skill" } : {}),
-  };
+  return { id: record.id, kind: "skill-extraction", title: record.intent, scope: record.repo, operator: record.operator,
+    started_at: validTime(record.started_at), finished_at: validTime(record.finished_at), status: record.status,
+    ...projection({ kind: "skill-extraction", record }), error: record.error };
 }
-
 export function skillSubmissionTask(record: SkillSubmissionRecord): KnowledgeTaskRow {
-  return {
-    id: `${record.directory}/${record.id}`, kind: "skill-submission", title: record.directory,
-    scope: [...record.business_module_ids ?? [], ...record.technologies ?? []].join(" · "),
-    operator: record.operator, created_at: validTime(record.created_at), status: record.status,
-    status_label: record.status === "pending" ? "待审核" : record.status === "approved" ? "已上架" : "已退回",
-    group: record.status === "pending" ? "attention" : "completed", error: record.reject_reason,
-    // created_at → decided_at 是审核等待，不是执行耗时。
-    stage: record.decided_at ? `审核时间 ${record.decided_at}` : "等待管理员审核 Skill 包",
-  };
+  return { id: `${record.directory}/${record.id}`, kind: "skill-submission", title: record.directory,
+    scope: [...record.business_module_ids ?? [], ...record.technologies ?? []].join(" · "), operator: record.operator,
+    created_at: validTime(record.created_at), status: record.status, ...projection({ kind: "skill-submission", record }),
+    error: record.reject_reason, stage: record.decided_at ? `审核时间 ${record.decided_at}` : "请审查 Skill 包，通过后上架" };
 }
 
 export interface KnowledgeTaskSources {
   dataDir: string;
+  warnings?(): string[];
   domain: { list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined; warnings?(): string[] };
   component: { list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord; warnings?(): string[] };
   skillExtractionJob(id: string): ExtractionJobRecord | undefined;
@@ -104,6 +61,7 @@ export interface KnowledgeTaskSources {
 /** 只读投影：各自的研究记录仍是状态来源，中心不保存第二份任务。 */
 export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTaskCenterData {
   const tasks: KnowledgeTaskRow[] = [], warnings: string[] = [];
+  warnings.push(...sources.warnings?.() ?? []);
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   listKnowledgeDocuments(sources.dataDir, warnings);
   const collect = (label: string, read: () => void) => {
@@ -114,16 +72,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   });
   collect("基础组件萃取", () => {
     for (const record of sources.component.list()) {
-      const row = componentKnowledgeTask(record);
-      if (row.status_label === "已发布") {
-        const archive = sources.domain.componentArchive?.(record.id);
-        if (archive) {
-          const status = knowledgeArchiveState(archive);
-          if (status === "failed") Object.assign(row, { status_label: "已发布 · 归档待处理", group: "attention" });
-          else if (status === "running") row.status_label = "已发布 · 归档中";
-        }
-      }
-      tasks.push(row);
+      tasks.push(componentKnowledgeTask(record, sources.domain.componentArchive?.(record.id)));
     }
   });
   collect("Skill 制作", () => {
@@ -136,7 +85,8 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
       if (record) tasks.push(skillExtractionTask(record));
     }
   });
-  collect("Skill 导入", () => tasks.push(...listSkillSubmissions(sources.dataDir).map(skillSubmissionTask)));
+  collect("Skill 导入", () => tasks.push(...listSkillSubmissions(sources.dataDir, warnings).map(skillSubmissionTask)));
+  warnings.splice(0, warnings.length, ...new Set(warnings));
   tasks.sort((a, b) => Date.parse(b.created_at ?? b.started_at ?? "") - Date.parse(a.created_at ?? a.started_at ?? "") || a.id.localeCompare(b.id));
   return { tasks, warnings, summary: {
     running: tasks.filter(task => task.group === "running").length,

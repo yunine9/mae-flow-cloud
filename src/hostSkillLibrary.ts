@@ -33,10 +33,12 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
+import { durableWriteFileSync } from "./durableWrite.ts";
 import {
   normalizeKnowledgeAssetMetadata,
   readSkillKnowledgeMetadata,
@@ -51,6 +53,7 @@ const MAX_FILES = 400;
 const MAX_DEPTH = 8;
 /** 版本痕不设上限会无限吃盘;超过后修剪最老的(操作留痕永不修剪)。 */
 const MAX_VERSIONS_PER_SKILL = 20;
+const APPROVAL_BUDGET_MS = 60_000;
 
 const LIVE_DIR = "skills";
 const VERSIONS_DIR = "skill-versions";
@@ -120,11 +123,11 @@ export interface SkillSubmissionRecord {
   directory: string;
   operator: string;
   created_at: string;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approving" | "approved" | "rejected";
   skill_digest: string;
   package_digest: string;
-  /** 提交时生效整包的版本；null 表示尚未上架，旧记录缺省表示未保存基线。 */
-  base_package_digest?: string | null;
+  /** 提交时生效整包的版本；null 表示尚未上架，缺失不能证明审查基线。 */
+  base_package_digest: string | null;
   files: number;
   bytes: number;
   nature: KnowledgeAssetMetadata["nature"];
@@ -524,7 +527,9 @@ function installStaged(
   action: "upload" | "update" | "rollback",
   staged: ReturnType<typeof validateStaged>,
   detail?: string,
+  checkBudget: () => void = () => {},
 ): SkillOperationRecord {
+  checkBudget();
   const liveRoot = join(dataDir, LIVE_DIR);
   mkdirSync(liveRoot, { recursive: true });
   chmodSync(liveRoot, 0o755);
@@ -533,6 +538,7 @@ function installStaged(
     archiveLive(dataDir, directory,
       action === "rollback" ? "rollback" : "update", operator);
   }
+  checkBudget();
   renameSync(join(stagingRoot, directory), live);
   const record: SkillOperationRecord = {
     at: new Date().toISOString(),
@@ -545,6 +551,7 @@ function installStaged(
     bytes: staged.bytes,
     ...(detail ? { detail } : {}),
   };
+  checkBudget();
   appendOperation(dataDir, record);
   return record;
 }
@@ -555,6 +562,19 @@ function serialized<T>(work: () => T): Promise<T> {
   const next = writeQueue.then(work);
   writeQueue = next.catch(() => undefined);
   return next;
+}
+
+/** 等待写队列也计入预算；过期请求不能在调用人收到失败后继续安装。 */
+function approvalWithinBudget<T>(work: (checkBudget: () => void) => T): Promise<T> {
+  const deadline = Date.now() + APPROVAL_BUDGET_MS;
+  let expired = false, timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = () => new SkillLibraryError("Skill 审批超过60秒预算，已停止；已保存的审核通过意图将在服务启动时接续，请检查提交记录");
+  const checkBudget = () => { if (expired || Date.now() >= deadline) throw timeout(); };
+  const queued = serialized(() => { checkBudget(); return work(checkBudget); });
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(timeout()); }, APPROVAL_BUDGET_MS);
+  });
+  return Promise.race([queued, budget]).finally(() => clearTimeout(timer));
 }
 
 function stageDirectory(dataDir: string, directory: string): string {
@@ -708,7 +728,7 @@ function writeSubmissionRecord(
   dataDir: string,
   record: SkillSubmissionRecord,
 ): void {
-  writeFileSync(
+  durableWriteFileSync(
     join(submissionRoot(dataDir, record.directory), record.id,
       "submission.json"),
     JSON.stringify(record), { mode: 0o644 });
@@ -736,6 +756,15 @@ export function submitHostSkill(
         stagingRoot, directory, files, metadata);
       const live = join(dataDir, LIVE_DIR, directory);
       const basePackageDigest = existsSync(live) ? packageDigest(live) : null;
+      const duplicate = listSkillSubmissions(dataDir).find(record =>
+        record.directory === directory && ["pending", "approving"].includes(record.status)
+        && record.package_digest === staged.packageDigestValue
+        && record.base_package_digest === basePackageDigest);
+      if (duplicate) {
+        // 只复用仍待处理且基线相同的提交，退回与正式版本变化后都能重新提交。
+        readSkillSubmissionPackage(dataDir, directory, duplicate.id);
+        return duplicate;
+      }
       const stamp = new Date().toISOString().replace(/[-:.]/g, "");
       let id = stamp;
       for (let seq = 1;
@@ -780,27 +809,59 @@ export function submitHostSkill(
   });
 }
 
-/** 全部提交记录(含已裁决的:审核史也是台账)。读侧 fail-open。 */
+/** 逐条读取台账；坏件保留原字节，并通过现有告警渠道点名。 */
 export function listSkillSubmissions(
   dataDir: string,
+  warnings?: string[],
 ): SkillSubmissionRecord[] {
   const root = join(dataDir, SUBMISSIONS_DIR);
   if (!existsSync(root)) return [];
   const records: SkillSubmissionRecord[] = [];
   for (const dir of readdirSync(root, { withFileTypes: true })) {
     if (!dir.isDirectory()) continue;
-    for (const entry of readdirSync(join(root, dir.name),
-      { withFileTypes: true })) {
+    let entries: Dirent[];
+    try { entries = readdirSync(join(root, dir.name), { withFileTypes: true }); }
+    catch {
+      warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}，无法读取提交目录`);
+      continue;
+    }
+    for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        records.push(JSON.parse(readFileSync(
-          join(root, dir.name, entry.name, "submission.json"), "utf-8")));
+        records.push(readSubmission(dataDir, dir.name, entry.name));
       } catch {
-        // 坏记录跳过:待审区读侧不硬崩。
+        warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}/${entry.name}/submission.json`);
       }
     }
   }
   return records.sort((left, right) => right.id.localeCompare(left.id));
+}
+
+function validSubmission(value: unknown, directory: string, id: string): value is SkillSubmissionRecord {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const text = (key: string) => typeof record[key] === "string" && !!record[key];
+  const time = (key: string) => text(key) && Number.isFinite(Date.parse(record[key] as string));
+  const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const strings = (key: string) => Array.isArray(record[key]) && (record[key] as unknown[]).every(value => typeof value === "string");
+  if (record.id !== id || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || record.directory !== directory
+      || !text("operator") || !time("created_at") || !digest(record.skill_digest) || !digest(record.package_digest)
+      || !Object.hasOwn(record, "base_package_digest") || !(record.base_package_digest === null || digest(record.base_package_digest))
+      || !["pending", "approving", "approved", "rejected"].includes(String(record.status))
+      || !Number.isInteger(record.files) || (record.files as number) < 1 || (record.files as number) > MAX_FILES
+      || !Number.isInteger(record.bytes) || (record.bytes as number) < 1 || (record.bytes as number) > MAX_PACKAGE_BYTES
+      || !["business", "engineering"].includes(String(record.nature))
+      || !["business_module_ids", "repositories", "technologies"].every(strings)
+      || (record.reject_reason !== undefined && typeof record.reject_reason !== "string")) return false;
+  if (record.status !== "pending" && (!time("decided_at") || !text("decided_by"))) return false;
+  if (record.decided_at !== undefined && !time("decided_at")) return false;
+  if (record.decided_by !== undefined && !text("decided_by")) return false;
+  try {
+    assertDirectoryName(directory);
+    normalizeKnowledgeAssetMetadata({ nature: record.nature, form: "skill", business_module_ids: record.business_module_ids,
+      repositories: record.repositories, technologies: record.technologies });
+  } catch { return false; }
+  return true;
 }
 
 function readSubmission(
@@ -812,60 +873,116 @@ function readSubmission(
   if (!existsSync(path)) {
     throw new SkillLibraryError(`没有这份提交: ${directory}/${id}`);
   }
-  return JSON.parse(readFileSync(path, "utf-8"));
+  try {
+    if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("审核记录不是普通文件");
+    const record: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    if (!validSubmission(record, directory, id)) throw new Error("审核记录形状不完整或基线缺失");
+    return record;
+  } catch (error) {
+    throw new SkillLibraryError(`记录损坏：${SUBMISSIONS_DIR}/${directory}/${id}/submission.json；${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
-/** 审核通过 → 上架。重走完整验收(与回退同纪律),操作留痕记提交人
- * 与审核人两个名字。 */
+function stageSubmission(dataDir: string, record: SkillSubmissionRecord, checkBudget: () => void) {
+  checkBudget();
+  const stagingRoot = stageDirectory(dataDir, record.directory);
+  try {
+    copyOrdinaryDirectory(join(submissionRoot(dataDir, record.directory), record.id, "package"), join(stagingRoot, record.directory));
+    checkBudget();
+    normalizePermissions(join(stagingRoot, record.directory));
+    const staged = validateStaged(stagingRoot, record.directory);
+    if (staged.packageDigestValue !== record.package_digest || staged.skillDigest !== record.skill_digest) {
+      throw new SkillLibraryError("提交包已变化，请重新提交后审查");
+    }
+    checkBudget();
+    return { stagingRoot, staged };
+  } catch (error) {
+    rmSync(stagingRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** 意图是安装权限的依据；若安装已完成，只补审核结果，不能再次归档或覆盖。 */
+function finishApproval(dataDir: string, record: SkillSubmissionRecord, prepared: ReturnType<typeof stageSubmission>, checkBudget: () => void): SkillOperationRecord {
+  checkBudget();
+  const live = join(dataDir, LIVE_DIR, record.directory);
+  const currentDigest = existsSync(live) ? packageDigest(live) : null;
+  const installDetail = `审核通过 ${record.operator} 的提交 ${record.id}`;
+  const installationRecorded = listSkillOperations(dataDir, Number.MAX_SAFE_INTEGER).some(operation => operation && typeof operation === "object" && !Array.isArray(operation)
+    && operation.directory === record.directory
+    && operation.package_digest === record.package_digest && operation.detail === installDetail && ["upload", "update"].includes(operation.action));
+  checkBudget();
+  let installed: SkillOperationRecord;
+  // 精确安装台账证明这次审批已生效；后来下线或回退不撤销历史裁决，只补终态。
+  if (installationRecorded || currentDigest === record.package_digest) {
+    installed = {
+      at: record.decided_at!, operator: record.decided_by!, action: record.base_package_digest === null ? "upload" : "update",
+      directory: record.directory, skill_digest: record.skill_digest, package_digest: record.package_digest,
+      files: record.files, bytes: record.bytes, detail: installDetail,
+    };
+    // kill 可能发生在换包 rename 后、操作留痕前；按原意图补足，不重复换包。
+    checkBudget();
+    if (!installationRecorded) appendOperation(dataDir, installed);
+  } else {
+    if (currentDigest !== null && currentDigest !== record.base_package_digest) {
+      throw new SkillLibraryError("当前 Skill 包在审核通过后又发生变化，未覆盖正式包；请核对提交包与当前版本");
+    }
+    installed = installStaged(dataDir, prepared.stagingRoot, record.directory, record.decided_by!,
+      record.base_package_digest === null ? "upload" : "update", prepared.staged, installDetail, checkBudget);
+  }
+  const approvalDetail = `通过 ${record.operator} 的提交 ${record.id}`;
+  const decided = { ...record, status: "approved" as const };
+  const recorded = listSkillOperations(dataDir, Number.MAX_SAFE_INTEGER).some(operation => operation && typeof operation === "object" && !Array.isArray(operation)
+    && operation.action === "approve"
+    && operation.directory === record.directory && operation.package_digest === record.package_digest && operation.detail === approvalDetail);
+  checkBudget();
+  if (!recorded) appendOperation(dataDir, {
+    at: record.decided_at!, operator: record.decided_by!, action: "approve", directory: record.directory,
+    skill_digest: record.skill_digest, package_digest: record.package_digest, detail: approvalDetail,
+  });
+  checkBudget();
+  writeSubmissionRecord(dataDir, decided);
+  return installed;
+}
+
+/** 审核结果先耐久保存为意图，换包中断后仍知道原审核人和精确内容。 */
 export function approveSkillSubmission(
-  dataDir: string,
-  directory: string,
-  id: string,
-  approver: string,
+  dataDir: string, directory: string, id: string, approver: string,
 ): Promise<SkillOperationRecord> {
-  return serialized(() => {
+  return approvalWithinBudget(checkBudget => {
     assertDirectoryName(directory);
     const record = readSubmission(dataDir, directory, id);
-    if (record.status !== "pending") {
-      throw new SkillLibraryError(
-        `提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    if (record.status !== "pending") throw new SkillLibraryError(`提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    const live = join(dataDir, LIVE_DIR, directory);
+    const currentDigest = existsSync(live) ? packageDigest(live) : null;
+    if (currentDigest !== record.base_package_digest) {
+      throw new SkillLibraryError("当前 Skill 包在提交后已发生变化，请基于最新版本重新提交；本次仍保持待审核，未覆盖已发布内容");
     }
-    if (record.base_package_digest !== undefined) {
-      const live = join(dataDir, LIVE_DIR, directory);
-      const currentDigest = existsSync(live) ? packageDigest(live) : null;
-      if (currentDigest !== record.base_package_digest) {
-        throw new SkillLibraryError("当前 Skill 包在提交后已发生变化，请基于最新版本重新提交；本次仍保持待审核，未覆盖已发布内容");
-      }
-    }
-    const stagingRoot = stageDirectory(dataDir, directory);
+    const prepared = stageSubmission(dataDir, record, checkBudget);
     try {
-      cpSync(join(submissionRoot(dataDir, directory), id, "package"),
-        join(stagingRoot, directory), { recursive: true });
-      normalizePermissions(join(stagingRoot, directory));
-      const staged = validateStaged(stagingRoot, directory);
-      const exists = existsSync(join(dataDir, LIVE_DIR, directory));
-      const installed = installStaged(dataDir, stagingRoot, directory,
-        approver, exists ? "update" : "upload", staged,
-        `审核通过 ${record.operator} 的提交 ${id}`);
-      const decided: SkillSubmissionRecord = {
-        ...record,
-        status: "approved",
-        decided_at: new Date().toISOString(),
-        decided_by: approver,
-      };
-      writeSubmissionRecord(dataDir, decided);
-      appendOperation(dataDir, {
-        at: decided.decided_at!,
-        operator: approver,
-        action: "approve",
-        directory,
-        skill_digest: record.skill_digest,
-        package_digest: record.package_digest,
-        detail: `通过 ${record.operator} 的提交 ${id}`,
-      });
-      return installed;
-    } finally {
-      rmSync(stagingRoot, { recursive: true, force: true });
+      const intent = { ...record, status: "approving" as const, decided_at: new Date().toISOString(), decided_by: approver };
+      checkBudget();
+      writeSubmissionRecord(dataDir, intent);
+      return finishApproval(dataDir, intent, prepared, checkBudget);
+    } finally { rmSync(prepared.stagingRoot, { recursive: true, force: true }); }
+  });
+}
+
+/** 服务启动只接续已审批的意图；单条失败保留原记录并点名，不能阻挡邻居。 */
+export function recoverSkillSubmissions(dataDir: string, warnings: string[] = []): Promise<void> {
+  return approvalWithinBudget(checkBudget => {
+    const records = listSkillSubmissions(dataDir, warnings);
+    for (const record of records) {
+      if (record.status !== "approving") continue;
+      const path = `${SUBMISSIONS_DIR}/${record.directory}/${record.id}/submission.json`;
+      try {
+        checkBudget();
+        const prepared = stageSubmission(dataDir, record, checkBudget);
+        try { finishApproval(dataDir, record, prepared, checkBudget); }
+        finally { rmSync(prepared.stagingRoot, { recursive: true, force: true }); }
+      } catch (error) {
+        warnings.push(`审核通过尚未完成：${path}；${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   });
 }

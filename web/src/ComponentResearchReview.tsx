@@ -42,13 +42,13 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   const [artifacts, setArtifacts] = useState<{ mapping: string; rules: unknown[]; files: Record<string, string> }>();
   const [metadataText, setMetadataText] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  const active = ["queued", "running"].includes(record.status);
-  const readonly = !!record.document_id;
+  const active = record.production?.working;
+  const readonly = record.production?.review.readonly;
   const section = sections.find(item => item.id === selected) ?? sections[0];
   const proposal = section && latestComponentProposal(record, section.id);
   const previewSections = sections.map(item => {
     const candidate = latestComponentProposal(record, item.id);
-    return !readonly && candidate?.status === "done" && candidate.proposal?.base_revision === item.revision
+    return !readonly && record.production?.review.sections.find(section => section.id === item.id)?.proposal_message && candidate?.proposal
       ? { ...candidate.proposal.section, id: item.id, revision: item.revision, selected: item.selected } : item;
   });
   const previewSection = previewSections.find(item => item.id === section?.id);
@@ -66,7 +66,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
     setKnowledgeFocus(old => ({ line, token: (old?.token ?? 0) + 1 }));
   }
   const outlineItems = previewSections.map(item => ({ id: item.id, title: item.title, content: sectionMarkdown(item), selected: item.selected,
-    status: item.revision ? `${readonly ? item.selected ? "已发布" : "未发布 · 原稿保留" : item.selected ? "已选择" : "未选择"} · 修订 ${item.revision}` : "正在萃取" }));
+    status: record.production?.review.sections.find(section => section.id === item.id)?.status_label }));
   async function request(action: string, body: unknown) {
     setBusy(true); setError("");
     try { onChanged(await componentRequest<ComponentResearchRecord>(`/component-research/${record.id}/${action}`, body)); return true; }
@@ -85,7 +85,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
     <div className="research-review-toolbar" style={unified ? { padding: "7px 16px", gap: 8, flexWrap: "nowrap" } : undefined}>
       {!unified && <Button variant="ghost" onClick={() => setReviewing(false)}>返回文档</Button>}
       <Button variant="ghost" size="sm" aria-expanded={treeVisible} onClick={() => setTreeVisible(value => !value)}>{treeVisible ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}{treeVisible ? "收起目录" : "展开目录"}</Button>
-      <strong className="mr-auto flex min-w-0 items-center gap-2 text-sm" title={`${sections.length} 项能力 · ${readonly ? "已发布" : "已选"} ${sections.filter(s => s.selected).length} 项 · 合成 1 篇知识`}><FileText size={16} className="shrink-0" /><span className="truncate">{view === "document" ? "完整文档" : section?.title || documentTitle}</span></strong>
+      <strong className="mr-auto flex min-w-0 items-center gap-2 text-sm" title={record.production?.review.selection_message}><FileText size={16} className="shrink-0" /><span className="truncate">{view === "document" ? "完整文档" : section?.title || documentTitle}</span></strong>
       {(view === "document" || !!section && detailTab === "content" && editor?.id !== section.id) && <KnowledgeContentSearch contentRef={searchableContent} contentKey={searchKey} contentSelector=".md" />}
       <div className="research-review-views shrink-0" role="group" aria-label="审查视图"><Button size="sm" aria-pressed={view === "component"} variant={view === "component" ? "secondary" : "ghost"} onClick={() => setView("component")}>{unified ? "逐项审查" : "逐项审核"}</Button>
         <Button size="sm" aria-pressed={view === "document"} variant={view === "document" ? "secondary" : "ghost"} onClick={() => setView("document")}>完整文档</Button></div>
@@ -119,7 +119,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
           {section ? <>
             <div ref={reader} tabIndex={0} aria-label="组件详细文档" className="research-document-content studio-paper" style={unified ? { padding: "16px 28px 28px", overflow: "auto", minWidth: 0, minHeight: 0 } : undefined}>
               <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="章节内容视图">
-                <span className="mr-auto text-sm text-muted-foreground">{showingProposal ? "修改后文稿 · 确认并发布后生效" : `修订 ${section.revision} · ${readonly ? section.selected ? "已发布" : "未发布 · 原稿保留" : section.selected ? "已选择" : "未选择"}`}{!readonly && !showingProposal && proposal && <span className="text-warning"> · {proposal.status !== "done" ? "本轮修改尚未完成" : "修改与当前文稿冲突，请查看差异"}</span>}</span>
+                <span className="mr-auto text-sm text-muted-foreground">{record.production?.review.sections.find(item => item.id === section.id)?.proposal_message ?? record.production?.review.sections.find(item => item.id === section.id)?.status_label}{!readonly && !showingProposal && record.production?.review.sections.find(item => item.id === section.id)?.proposal_problem && <span className="text-warning"> · {record.production.review.sections.find(item => item.id === section.id)?.proposal_problem}</span>}</span>
                 {([["content", "正文"], ["changes", "修订差异"], ["history", "历史版本"]] as const).map(([value, label]) => <Button key={value} size="sm" variant={detailTab === value ? "secondary" : "ghost"} onClick={() => setDetailTab(value)}>{label}</Button>)}
                 {!readonly && <Button size="sm" variant="outline" disabled={busy || active || !!proposal} title={proposal ? "请先在修订差异中放弃当前修改，再人工编辑" : undefined} onClick={() => { setEditor(structuredClone(section)); setMetadataText(section.paradigm ? JSON.stringify(section.paradigm, null, 2) : ""); setDetailTab("content"); }}>人工编辑</Button>}
               </div>
@@ -144,14 +144,14 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
                 {turns.map(turn => <article key={turn.id} className="space-y-2 border-b border-line pb-3">
                   <p className="text-xs text-muted-foreground">{turn.operator} · {turn.mode === "rework" ? "要求本项返工" : "讨论"} · {new Date(turn.created_at).toLocaleString()}{turn.skill && ` · Skill ${turn.skill.digest.slice(0, 8)}`}</p>
                   <p className="whitespace-pre-wrap break-words">{turn.message}</p>
-                  {turn.proposal && <p className="text-sm text-primary">{turn.proposal.status === "pending" ? "修改待确认" : turn.proposal.status === "accepted" ? "修改已确认" : "修改已放弃"}{turn.proposal.status === "pending" && <Button variant="link" onClick={() => setDetailTab("changes")}>比较差异</Button>}</p>}
-                  {turn.reply ? <div className="rounded-md bg-surface p-3"><Markdown text={turn.reply} /></div> : <p className={turn.error ? "text-danger" : "text-muted-foreground"}>{turn.error ?? ({ queued: "等待处理…", running: "正在查阅资料并处理…", cancelled: "本轮已停止，原稿保留", failed: "本轮失败，原稿保留", done: "本轮已完成" }[turn.status])}</p>}
+                  {turn.proposal && <p className="text-sm text-primary">{record.production?.review.turns.find(item => item.id === turn.id)?.proposal_status_label}{turn.proposal.status === "pending" && <Button variant="link" onClick={() => setDetailTab("changes")}>比较差异</Button>}</p>}
+                  {turn.reply ? <div className="rounded-md bg-surface p-3"><Markdown text={turn.reply} /></div> : <p className={turn.error ? "text-danger" : "text-muted-foreground"}>{turn.error ?? record.production?.review.turns.find(item => item.id === turn.id)?.status_label}</p>}
                 </article>)}
                 {!turns.length && <p className="text-sm text-muted-foreground">此组件尚无讨论记录。</p>}
               </div>
               {!readonly && <><Textarea aria-label="组件讨论或返工意见" rows={4} placeholder="例如：请拆清同步与异步用法，补充错误处理示例，并核对头文件实际对应的库。" value={message} onChange={e => setMessage(e.target.value)} maxLength={20000} />
                 <div className="mt-3 flex flex-wrap gap-2"><Button variant="outline" disabled={busy || active || !message.trim()} onClick={() => void send("discuss")}>仅讨论</Button><Button disabled={busy || active || !message.trim()} onClick={() => void send("rework")}>生成修订建议</Button><Button variant="outline" disabled={busy || active || !message.trim()} onClick={() => void send("update")}>核对来源更新</Button></div>
-                {active && <p className="mt-2 text-sm text-muted-foreground">本轮正在执行，可先填写下一条意见；完成或停止后继续发送。</p>}
+                {record.production?.review.active_message && <p className="mt-2 text-sm text-muted-foreground">{record.production.review.active_message}</p>}
               </>}
             </section>}
           </> : <div className="rounded-lg border border-line p-5"><Markdown text={record.document!.overview || "正在联合阅读组件仓，梳理公开接口、构建目标与调用关系。"} /></div>}

@@ -7,7 +7,7 @@ import { componentKnowledgeTask, domainKnowledgeTask, latestKnowledgeResearchNot
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
 import type { SkillSubmissionRecord } from "../src/hostSkillLibrary.ts";
-import { knowledgeTaskElapsed, knowledgeTaskOpensDocument } from "../web/src/knowledgeTaskCenterApi.ts";
+import { knowledgeTaskElapsed, knowledgeTaskAction } from "../web/src/knowledgeTaskCenterApi.ts";
 
 function domain(): DomainKnowledgeJob {
   return { id: "domain-1", title: "结算", scope: "结算模块", operator: "alice", created_at: "2026-09-30T01:00:00Z", status: "done", stage: "本轮完成，等待审查", revisions: {}, repositories: [], knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/knowledge", branch: "main", path: "", docs_path: "docs" }, material_ids: [], ar_codes: [], use_wxdoubao: false, documents: [{ id: "doc", title: "结算规则", target_id: "domain", path: "docs/a.md", layer: "domain", content: "规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [] }], turns: [], evidence: [], publications: [] };
@@ -26,17 +26,18 @@ test("研究动态只取最新公开研究文字，保留真实时间，跳过�
 
 test("领域研究完成不等于发布；发布后新稿与归档失败仍可处理", () => {
   const job = domain();
-  assert.equal(domainKnowledgeTask(job).status_label, "待检视");
+  assert.equal(domainKnowledgeTask(job).status_label, "待审查");
   job.documents[0].knowledge_document_id = "kd-1";
   job.documents[0].published_document_revision = 2;
-  assert.equal(domainKnowledgeTask(job).status_label, "已发布");
+  assert.equal(domainKnowledgeTask(job).status_label, "已入库");
   job.publications = [{ target_id: "domain", branch: "b", state: "merged", documents: [], sync_state: "diverged", diverged_paths: ["a.md"] }];
-  assert.deepEqual([domainKnowledgeTask(job).status_label, domainKnowledgeTask(job).group], ["已发布 · 远端待核对", "attention"], "合入后归档仓被改须提醒人核对");
+  assert.deepEqual([domainKnowledgeTask(job).status_label, domainKnowledgeTask(job).group], ["已入库 · 远端待核对", "attention"], "合入后归档仓被改须提醒人核对");
   job.publications = [];
   job.archive_batches = [{ id: "archive", created_at: job.created_at, operator: "alice", state: "failed", documents: [], targets: [], publications: [] }];
-  assert.equal(domainKnowledgeTask(job).status_label, "已发布 · 归档待处理");
+  assert.equal(domainKnowledgeTask(job).status_label, "已入库 · 归档待处理");
+  job.archive_batches = [];
   job.documents[0].revision = 3;
-  assert.equal(domainKnowledgeTask(job).status_label, "待检视");
+  assert.equal(domainKnowledgeTask(job).status_label, "待审查");
   job.status = "running";
   assert.equal(domainKnowledgeTask(job).group, "running");
   assert.equal(domainKnowledgeTask(job).started_at, undefined);
@@ -47,7 +48,7 @@ test("组件研究保留执行结束，但不把创建当开始；发布与待�
   assert.equal(componentKnowledgeTask(record).group, "attention");
   assert.equal(knowledgeTaskElapsed(componentKnowledgeTask(record)), "—");
   record.document_id = "kd-1";
-  assert.equal(componentKnowledgeTask(record).status_label, "已发布");
+  assert.equal(componentKnowledgeTask(record).status_label, "已入库 · 未归档");
 });
 
 test("Skill 审核等待不能作为运行时长，重启中断无结束时间不继续计时", () => {
@@ -90,13 +91,13 @@ test("归档在后台进行时任务仍直接打开文稿，旧归档失败不�
     { id: "old", created_at: job.created_at, operator: "alice", state: "failed", documents: [{ ...job.documents[0], published_revision: "old" }], targets: [], publications: [] },
     { id: "new", created_at: job.created_at, operator: "alice", state: "running", documents: [{ ...job.documents[0] }], targets: [], publications: [] },
   ];
-  assert.equal(domainKnowledgeTask(job).status_label, "已发布 · 归档中");
+  assert.equal(domainKnowledgeTask(job).status_label, "已入库 · 归档中");
   assert.equal(domainKnowledgeTask(job).group, "completed");
-  assert.equal(knowledgeTaskOpensDocument(domainKnowledgeTask(job)), true);
+  assert.equal(knowledgeTaskAction(domainKnowledgeTask(job)).view, "review");
   job.archive_batches[1].state = "done";
-  assert.equal(domainKnowledgeTask(job).status_label, "已发布");
+  assert.equal(domainKnowledgeTask(job).status_label, "已入库");
   job.status = "running";
-  assert.equal(knowledgeTaskOpensDocument(domainKnowledgeTask(job)), false);
+  assert.equal(knowledgeTaskAction(domainKnowledgeTask(job)).view, "progress");
   job.status = "cancelled";
   assert.equal(domainKnowledgeTask(job).group, "attention");
 });
@@ -108,8 +109,8 @@ test("组件归档失败仍打开已发布文稿，和领域任务一样保留�
     const archive = domain();
     archive.archive_batches = [{ id: "failed", created_at: archive.created_at, operator: "alice", state: "failed", documents: [], targets: [], publications: [] }];
     const result = listKnowledgeTasks({ dataDir, domain: { list: () => [], get: () => archive, componentArchive: () => archive }, component: { list: () => [record], get: () => record }, skillExtractionJob: () => undefined });
-    assert.equal(result.tasks[0].status_label, "已发布 · 归档待处理");
+    assert.equal(result.tasks[0].status_label, "已入库 · 归档待处理");
     assert.equal(result.summary.attention, 1);
-    assert.equal(knowledgeTaskOpensDocument(result.tasks[0]), true);
+    assert.equal(knowledgeTaskAction(result.tasks[0]).view, "archive");
   } finally { rmSync(dataDir, { recursive: true, force: true }); }
 });

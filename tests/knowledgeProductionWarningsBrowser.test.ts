@@ -8,7 +8,9 @@ import { test } from "node:test";
 import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { ComponentResearch, type ResearchRecord } from "../src/componentResearch.ts";
-import { listKnowledgeTasks } from "../src/knowledgeTaskCenter.ts";
+import { componentKnowledgeTask, domainKnowledgeTask, listKnowledgeTasks } from "../src/knowledgeTaskCenter.ts";
+import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
+import type { KnowledgeTaskCenterData } from "../src/knowledgeTaskCenterTypes.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -18,8 +20,33 @@ function write(dir: string, relative: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, text);
 }
+function productionMatrix(): KnowledgeTaskCenterData {
+  const tasks: KnowledgeTaskCenterData["tasks"] = [];
+  for (const failure of ["sync-failed", "diverged", "closed", "archive-failed"] as const) for (const kind of ["domain", "component"] as const) {
+    const job: DomainKnowledgeJob = { id: `dkx-${kind}-${failure}`, title: `${kind} ${failure} 与研究失败`, scope: "组合状态核对", operator: "alice", created_at: "2026-10-03T00:00:00Z", repositories: [], knowledge_target: repository, material_ids: [], ar_codes: [], use_wxdoubao: false, status: "failed", stage: "本轮研究失败", error: "研究执行体失败，原知识保留", revisions: {}, turns: [], evidence: [], documents: [{ id: "orders", title: "已发布订单规则", target_id: "domain", layer: "domain", path: "domains/orders.md", content: "正式订单规则", sources: "固定版本源码", revision: 1, selected: true, base_content: null, base_revision: "a".repeat(40), history: [], knowledge_document_id: "kd-matrix", published_revision: "b".repeat(64), published_document_revision: 1, published_at: "2026-10-03T00:00:00Z" }], publications: [] };
+    const publication: DomainKnowledgeJob["publications"][number] = { target_id: "domain", branch: `codex/${kind}-${failure}`, state: failure === "closed" ? "closed" : failure === "archive-failed" ? "failed" : "merged", url: `https://example.test/mr/${kind}-${failure}`, documents: [{ id: "orders", path: "domains/orders.md", content: "正式订单规则", revision: 1 }],
+      ...(failure === "sync-failed" ? { sync_state: "failed" as const, sync_error: "Git 网络暂时故障，同步未完成" } : {}),
+      ...(failure === "diverged" ? { sync_state: "diverged" as const, sync_error: "合入后归档仓被修改，请人工核对", diverged_paths: ["domains/orders.md"] } : {}),
+      ...(failure === "closed" ? { error: "MR 已关闭，尚未归档" } : {}),
+      ...(failure === "archive-failed" ? { error: "Git 网络暂时故障，归档未完成" } : {}) };
+    job.publications = [publication];
+    job.archive_batches = [{ id: `batch-${kind}-${failure}`, state: failure === "archive-failed" ? "failed" : "done", created_at: job.created_at, operator: "alice", documents: structuredClone(job.documents), targets: [repository], publications: [publication], ...(failure === "archive-failed" ? { error: publication.error } : {}) }];
+    const record: ResearchRecord = { id: `cr-${failure}`, component: { id: "orders", name: "订单组件", repository: "https://example.test/component.git", branch: "main", path: "src", languages: ["cpp"], description: "订单规则", enabled: true }, language: "cpp", topic: job.title, operator: "alice", key: `matrix-${failure}`, status: "failed", stage: "本轮研究失败", error: job.error, created_at: job.created_at, evidence: [], document_id: "kd-matrix" };
+    if (kind === "component") job.component_research_id = record.id;
+    const expected = kind === "domain" ? projectKnowledgeProduction({ kind, record: job }) : projectKnowledgeProduction({ kind, record, archive: job });
+    const task = kind === "domain" ? domainKnowledgeTask(job) : componentKnowledgeTask(record, job);
+    assert.equal(task.group, "attention", "归档处理优先于研究失败和已发布");
+    assert.equal(task.status_label, `已入库 · ${{ "sync-failed": "同步失败", diverged: "远端待核对", closed: "MR 已关闭", "archive-failed": "归档待处理" }[failure]}`);
+    assert.deepEqual(task.production, expected, "任务行和详情使用同一后端投影");
+    assert.deepEqual(task.next_action, expected.next_action);
+    assert.ok(task.next_action.href?.includes("kbPage=task"));
+    if (failure === "diverged") assert.equal(task.next_action.document_id, "orders");
+    tasks.push(task);
+  }
+  return { tasks, warnings: [], summary: { running: 0, attention: tasks.length, total: tasks.length } };
+}
 
-test("生产线验收3（F5）：桌面任务中心显示并筛选真实坏文件告警，其他任务可打开，只有告警时不显示无任务空态",
+test("生产线验收3/F5 与生产线验收8/F10–F12：桌面任务中心保留坏文件告警，组合状态和完整动作沿用后端真实投影",
   { timeout: 40_000, skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
     const dir = mkdtempSync(join(tmpdir(), "mfc-production-warnings-browser-"));
     const dataDir = join(dir, "data"), warningsDir = join(dir, "warnings-only");
@@ -47,7 +74,7 @@ test("生产线验收3（F5）：桌面任务中心显示并筛选真实坏文�
       assert.equal(populated.summary.attention, 4);
       assert.equal(warningsOnly.tasks.length, 0);
       assert.equal(warningsOnly.summary.attention, 3);
-      const fixture = { populated, warningsOnly, badPaths, runningId: running.id, completedId: completed.id, attentionId: attention.id };
+      const fixture = { populated, warningsOnly, matrix: productionMatrix(), badPaths, runningId: running.id, completedId: completed.id, attentionId: attention.id };
       let buildTimer: ReturnType<typeof setTimeout> | undefined;
       const bundled = await Promise.race([
         build({ entryPoints: [resolve("tests/browser/knowledgeProductionWarnings.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } }),

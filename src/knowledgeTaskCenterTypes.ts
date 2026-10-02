@@ -13,6 +13,8 @@ export interface KnowledgeTaskRow {
   status: string;
   status_label: string;
   group: KnowledgeTaskGroup;
+  next_action: import("./knowledgeProductionTypes").KnowledgeProductionAction;
+  production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
   stage?: string;
   error?: string;
   /** 仅公开的 assistant 文本摘要；工具原始输出不进入列表。 */

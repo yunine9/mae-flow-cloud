@@ -54,7 +54,7 @@ test("生产线验收5：刷新发现合入后远端差异，核对保留平台�
     const job = service.create(config, "alice"); await until(() => service.get(job.id).status === "done");
     await service.publish(job.id, "alice"); await until(() => service.get(job.id).archive_batches?.[0].state === "done");
     await service.refresh(job.id, "alice");
-    assert.equal(domainKnowledgeTask(service.get(job.id)).status_label, "已发布 · 远端待核对");
+    assert.equal(domainKnowledgeTask(service.get(job.id)).status_label, "已入库 · 远端待核对");
     await service.readRemote(job.id, "orders", "alice");
     const doc = service.get(job.id).documents[0];
     // 保留平台版本：正文不变，确认核对

@@ -1,3 +1,4 @@
+import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
@@ -30,6 +31,8 @@ export interface ComponentChallenge {
   item_id: string; source_digest: string; language: string; repository_ids: string[]; claim: string;
 }
 export interface ResearchRecord {
+  /** 服务端读取时计算，不写入 record.json。 */
+  production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
   challenge?: ComponentChallenge;
   id: string;
   pipeline?: ComponentPipelineState;
@@ -168,6 +171,7 @@ export class ComponentResearch {
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
     private onStopTimeout: (record: ResearchRecord) => void = () => {},
+    private archiveFor: (id: string) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
   ) {
     const root = join(dir, "component-research");
     if (existsSync(root))
@@ -207,10 +211,11 @@ export class ComponentResearch {
         ),
       );
   }
-  get(id: string) {
+  get(id: string): ResearchRecord {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
-    return structuredClone(r);
+    const record = structuredClone(r);
+    return { ...record, production: projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }) };
   }
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
@@ -237,7 +242,7 @@ export class ComponentResearch {
           r.key === key && r.operator === operator && !r.deleted_at && !["failed", "cancelled"].includes(r.status),
       );
     if (previous && (!input.refresh || previous.status !== "done"))
-      return structuredClone(previous);
+      return this.get(previous.id);
     if (
       [...this.records.values()].filter((r) => r.status === "queued").length >=
       50
@@ -536,8 +541,8 @@ export class ComponentResearch {
   beginUpdate(id: string, operator: string) {
     const record = this.records.get(id);
     if (!record?.document || record.deleted_at) throw new Error("请选择已入库的联合文档");
-    const published = record.document_id ? readKnowledgeDocument(this.dir, record.document_id)
-      : listKnowledgeDocuments(this.dir).find(doc => doc.research_source?.job_id === id);
+    const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
+    const published = formalId ? readKnowledgeDocument(this.dir, formalId) : undefined;
     if (!published) throw new Error("请选择已入库的联合文档");
     let baseline = researchDocumentMarkdown(published.title, record.document, true);
     if (record.published_revision) {
@@ -573,7 +578,7 @@ export class ComponentResearch {
     if (record.document && (!record.document.sections.some(s => s.selected) || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
     const title = String(input.title ?? record.topic).trim();
     const content = record.document ? researchDocumentMarkdown(title, record.document, true) : String(input.content ?? record.draft ?? "");
-    return { research_id: id, title, content, language: record.language, knowledge_revision: record.document_id ? record.published_revision : record.update_document_revision,
+    return { research_id: id, title, content, language: record.language, knowledge_document_id: record.document_id ?? record.update_document_id, knowledge_revision: record.document_id ? record.published_revision : record.update_document_revision,
       research_source: { job_id: id, repository: record.component.repository, branch: record.component.branch, path: record.component.path,
         revision: record.revision, components: record.components?.map(c => ({ id: c.id, repository: c.repository, branch: c.branch, path: c.path, revision: record.revisions?.[c.id] })) },
       sources: (record.components ?? [record.component]).map(c => `${c.name}：${c.repository} · ${c.branch} · ${c.path || "全仓"} @ ${record.revisions?.[c.id] ?? record.revision ?? "版本未记录"}`).join("\n") };
@@ -581,12 +586,10 @@ export class ComponentResearch {
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
     if (!record || record.challenge || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
-    if (record.document_id)
-      return readKnowledgeDocument(this.dir, record.document_id);
-    const published = !record.update_document_id && listKnowledgeDocuments(this.dir).find(doc => doc.research_source?.job_id === id);
-    if (published) {
-      const matchesDraft = record.document && published.content === researchDocumentMarkdown(published.title, record.document, true);
-      this.update(record, { document_id: published.id, published_revision: matchesDraft ? published.revision : undefined, stage: "已发布为知识" });
+    const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
+    if (formalId && !record.update_document_id) {
+      const published = readKnowledgeDocument(this.dir, formalId);
+      this.update(record, { document_id: formalId, published_revision: published.revision, stage: "已入库" });
       return published;
     }
     this.assertSelectedChangesConfirmed(record);

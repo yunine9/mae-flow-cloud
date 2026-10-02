@@ -61,7 +61,7 @@ test('B1验收1：普通文档上传、仓库导入、导出和试查退役，�
     assert.equal((await post(path,{query:'规则',ids:[doc.id],repository:'https://example.com/repo.git',branch:'main'})).status,404,path);
   }
   const list=await (await fetch(url)).json() as any;assert.equal(list.documents[0].indexing.state,'failed');assert.equal(list.documents[0].content,undefined);
-  assert.equal((await post(`/${doc.id}`,{active:false})).status,200);
+  assert.equal((await post(`/${doc.id}`,{active:false,expected_revision:doc.revision})).status,200);
   const edit = await post(`/${doc.id}`, { content: '# 人工修订', expected_revision: (await (await fetch(url+`/${doc.id}`)).json() as any).revision });
   assert.equal(edit.status, 200); const revised = await edit.json() as any;
   const versions = await (await fetch(url+`/${doc.id}/versions`)).json() as any;

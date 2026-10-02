@@ -20,7 +20,7 @@ test("删除运行与排队任务：中止执行、拒绝迟到写入、重启�
     return "迟到的回复";
   });
   try {
-    const first = service.create(config, "user"), second = service.create(config, "user"), queued = service.create(config, "user");
+    const first = service.create({ ...config, title: "运行任务一" }, "user"), second = service.create({ ...config, title: "运行任务二" }, "user"), queued = service.create({ ...config, title: "排队任务" }, "user");
     await wait(() => executions.length === 2);
     assert.equal(service.get(queued.id).status, "queued");
     assert.deepEqual(service.remove(queued.id, "user"), { deleted: true });

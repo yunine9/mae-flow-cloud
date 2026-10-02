@@ -897,24 +897,47 @@ test("已采纳组件更新沿用同一知识条目及名称范围，人工版�
   assert.throws(() => research.adopt(job.id, {}, "bob"), /正式文档已发生变化/);
 });
 
-test("组件通过归档入口正式发布后，采纳复用同一知识并可找回增量基线", async t => {
-  const { saveKnowledgeDocument, listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
+test("生产线验收8/14：组件正式归档按精确任务绑定接续，先采纳或直接更新沿用同一正式ID且版本冲突不覆盖", async t => {
+  const { DomainKnowledgeExtraction } = await import("../src/domainKnowledgeExtraction.ts");
+  const { saveKnowledgeDocument, readKnowledgeDocument, listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
   const dir = temporary(); saveComponentRepository(dir, config, "alice");
-  const research = new ComponentResearch(dir, async input => writeJoint(input));
-  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("组件归档不能运行领域研究"); }, {
+    publish: async (job, target) => ({ target_id: target.id, state: "opened", branch: `codex/component-${job.component_research_id}`,
+      url: "https://example.test/mr/1", documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content,
+        revision: document.revision, knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision })) }),
+  });
+  const research = new ComponentResearch(dir, async input => writeJoint(input), undefined, undefined, id => manager.componentArchive(id));
+  t.after(async () => { await Promise.all([manager.shutdown(), research.shutdown()]); rmSync(dir, { recursive: true, force: true }); });
   for (const recoverThroughAdopt of [true, false]) {
     const job = research.start({ mode: "all", language: "cpp", refresh: true }, "alice");
     await until(() => research.get(job.id).status === "done");
-    const current = research.get(job.id);
-    const formal = saveKnowledgeDocument(dir, { title: "已发布的组件", content: researchDocumentMarkdown("已发布的组件", current.document!, true),
-      technologies: ["cpp"], archive_target: { repository: "https://example.test/knowledge.git", branch: "main", path: `${job.id}.md` },
-      research_source: { job_id: job.id, repository: config.repository, branch: "main", path: "src" } }, "reviewer");
-    if (recoverThroughAdopt) assert.equal(research.adopt(job.id, { title: "不能重复新建" }, "alice").id, formal.id);
+    const archive = manager.prepareComponent({ ...research.archiveDraft(job.id, { title: "已发布的组件" }),
+      target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "docs/components" }, filename: `${job.id}.md`,
+      issue_no: "REQ-component-binding", issue_description: "补充基础组件使用规范" }, "reviewer");
+    const published = await manager.publish(archive.id, "reviewer");
+    await until(() => manager.get(archive.id).archive_batches?.[0]?.state === "done");
+    const formal = readKnowledgeDocument(dir, published.documents[0].knowledge_document_id!);
+    assert.equal(manager.componentArchive(job.id)?.component_research_id, job.id);
+    assert.equal(manager.componentArchive(job.id)?.documents[0].knowledge_document_id, formal.id);
+    assert.equal(research.get(job.id).document_id, undefined, "未曾直接采纳，恢复依据必须来自真实归档任务的精确绑定");
+    const before = listKnowledgeDocuments(dir).map(document => document.id).sort();
+    if (recoverThroughAdopt) {
+      assert.equal(research.adopt(job.id, { title: "不能重复新建" }, "alice").id, formal.id);
+      assert.equal(research.get(job.id).document_id, formal.id);
+      assert.deepEqual(listKnowledgeDocuments(dir).map(document => document.id).sort(), before);
+    }
     const update = research.beginUpdate(job.id, "alice");
     assert.equal(update.update_document_id, formal.id); assert.equal(update.update_document_revision, formal.revision);
+    assert.deepEqual(listKnowledgeDocuments(dir).map(document => document.id).sort(), before, "找回增量基线不能创建正式副本");
     const section = update.document!.sections[0];
     research.editSection(job.id, { section: { ...section, content: section.content + "\n补充异常路径" }, base_revision: section.revision }, "alice");
-    assert.equal(research.adopt(job.id, update.update_metadata!, "alice").id, formal.id);
+    const revised = research.adopt(job.id, update.update_metadata!, "alice");
+    assert.equal(revised.id, formal.id); assert.match(revised.content, /补充异常路径/);
+    assert.deepEqual(listKnowledgeDocuments(dir).map(document => document.id).sort(), before);
+    research.beginUpdate(job.id, "alice");
+    const expert = saveKnowledgeDocument(dir, { content: revised.content + "\n另一维护人的边界说明" }, "expert", formal.id, { expectedRevision: revised.revision });
+    assert.throws(() => research.adopt(job.id, update.update_metadata!, "alice"), /正式文档已发生变化/);
+    assert.deepEqual(readKnowledgeDocument(dir, formal.id), JSON.parse(JSON.stringify(expert)));
   }
   assert.equal(listKnowledgeDocuments(dir).length, 2, "每次研究始终只有原正式条目");
 });
