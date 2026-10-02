@@ -3,6 +3,7 @@ import { createRoot } from "../../web/node_modules/react-dom/client";
 import { KnowledgeLibrary } from "../../web/src/KnowledgeLibrary";
 import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 import type { KnowledgeDocument } from "../../web/src/knowledgeDocumentsApi";
+import type { ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
 
 const pause = (ms = 90) => new Promise(resolve => setTimeout(resolve, ms));
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };
@@ -13,8 +14,19 @@ const job: DomainKnowledgeJob = { id: "dkx-review", module_id: "trade", title: "
   { id: "unchanged", title: "现行交易规则", target_id: "domain", path: "docs/business/current.md", layer: "domain", content: "# 现行交易规则\n\n当前正式知识仍可使用。", sources: "正式基线", revision: 1, selected: true, published_document_revision: 1, published_revision: "formal-1", knowledge_document_id: "kd-current", base_content: null, base_revision: "fixture", history: [] },
 ] };
 const running: DomainKnowledgeJob = { ...structuredClone(job), id: "dkx-running", title: "支付规则研究中", status: "running", stage: "正在核对源码", documents: [], evidence: [{ tool: "research_note", preview: "正在核对退款与取消的边界。", status: "returned" }] };
+// 萃取滚轮测试(knowledgeExtractionScrollBrowser)复用本夹具:?scrollCheck=1 时不跑下面的整链脚本,
+// 并给进行中任务补足一屏放不下的研究动态,让时间线真的需要滚动。
+const scrollCheck = new URLSearchParams(location.search).has("scrollCheck");
+if (scrollCheck) running.evidence = Array.from({ length: 55 }, (_, index) => ({ tool: "component_source", action: "list", path: `src/business/module-${index}`, preview: "目录结果\n" + "src/business/a.ts\n".repeat(80), at: new Date(Date.parse("2026-09-30T01:00:00Z") + index * 1000).toISOString(), status: "returned" }));
 const jobs: DomainKnowledgeJob[] = [job, running];
 const documents: KnowledgeDocument[] = [{ id: "kd-current", title: "现行交易规则", content: job.documents[2].content, scope: "module", module_ids: ["trade"], repositories: [], technologies: [], product_versions: [], when_to_use: "订单业务", active: true, revision: "formal-1", history: [], source: { repository: job.knowledge_target.repository, branch: "master", path: "docs/current.md", revision: "fixture" }, research_source: { job_id: job.id, repository: repository.repository, branch: "master", path: "docs/current.md" } }];
+// 工程语言 → 基础组件:文件组件的正式指南(按组件仓地址归到组件)及其一条派生规则。
+documents.push({ id: "kd-file-guide", title: "文件组件指南", content: "---\nschema: mfc.component-guide/v1\n---\n# 文件组件指南\n\n打开文件后必须关闭句柄。", scope: "component", module_ids: [], repositories: ["https://example.test/file.git"], technologies: ["cpp"], product_versions: [], when_to_use: "C++ 文件读写", active: true, revision: "file-1", history: [], source: { repository: "https://example.test/knowledge.git", branch: "master", path: "docs/file-guide.md", revision: "fixture" } });
+const governance: ComponentGovernanceSnapshot = { revision: 3, warnings: [], challenges: [], retention: "按当前版本与去重样本统计。", items: [{ id: "rule-fopen", kind: "rule", original: "fopen", source_digest: "digest-file",
+  policy: { level: "shadow", source_digest: "digest-file", owner: "", scope: [], reason: "新候选，尚未人工启用", operator: "", updated_at: "" },
+  paradigm: { component: "文件组件", title: "用文件组件打开文件", language: "cpp", need: "读写文件", api: ["File::Open"], applicability: "已链接文件组件", replaces: { identifiers: ["fopen"], imports: [], patterns: [] }, document_id: "kd-file-guide", start_line: 4,
+    evidence: [{ repository_id: "file", path: "src/file.cpp", revision: "a".repeat(40), start: 1, end: 9 }], usage_evidence: [] },
+  samples: [], stats: { observed: 2, reviewed: 0, exempt: 0, exemption_rate: null }, feedback: [], needs_review: false }] };
 const modules = [
   { id: "trade", name: "交易业务", description: "交易规则与团队资产", status: "active", repositories: [repository.repository], assets: [] },
   { id: "alarm", name: "告警管理", description: "告警规则", status: "active", repositories: ["https://example.test/alarm.git"], assets: [] },
@@ -33,6 +45,7 @@ window.fetch = async (url, options) => {
   else if (path === "/skills") result = { skills: [], operations: [], warnings: [] };
   else if (path === "/business-modules") result = { modules, warnings: [], operations: [] };
   else if (path === "/component-repositories") result = { components: [{ id: "file", name: "文件组件", repository: "https://example.test/file.git", branch: "master", path: "", languages: ["cpp"], enabled: true, description: "" }] };
+  else if (path === "/component-knowledge") result = governance;
   else if (path === "/component-research" || path === "/domain-extraction/probes") result = { records: [] };
   else if (path.startsWith("/knowledge-review/")) result = { notes: [] };
   else if (path === "/domain-extraction") {
@@ -103,6 +116,24 @@ async function run() {
   checkLibraryNavigationRestored();
   check(document.querySelector('[aria-label="业务模块"]') && document.querySelector('[aria-label="工程语言"]'), "home groups modules and languages");
   check(button("新增") && !button("研究知识") && !button("导入 Skill"), "home exposes one new menu without duplicate research or import buttons");
+  // 组件规则治理挂在"工程语言 → 基础组件"下:选中组件文档后切到「规则」页签,级别按钮打开同一套设置对话框。
+  await clickSelector('[aria-label="打开C++知识目录"]'); await waitFor('[aria-label="模块知识目录"] [aria-label="基础组件"]');
+  const componentRow = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="基础组件"] button[aria-expanded]')].find(item => item.textContent?.includes("文件组件"));
+  check(componentRow, "language reader lists the enabled component");
+  for (let i = 0; i < 60 && !componentRow!.textContent?.includes("1 规则"); i++) await pause();
+  check(componentRow!.textContent?.includes("1 规则"), "component node counts its governed rules");
+  if (componentRow!.getAttribute("aria-expanded") !== "true") { componentRow!.click(); await pause(); }
+  await click("file-guide.md"); await waitFor('[aria-label="文件组件知识"]');
+  check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("打开文件后必须关闭句柄") && !document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("schema:"), "usage tab shows the guide without its metadata frontmatter");
+  const rulesTab = [...document.querySelectorAll<HTMLElement>('[aria-label="文件组件知识"] [role="tab"]')].find(item => item.textContent?.startsWith("规则"));
+  check(rulesTab?.textContent?.includes("1"), "rules tab shows the rule count"); rulesTab!.click(); await waitFor('[aria-label="组件规则"] table');
+  check(document.querySelector('[aria-label="组件规则"] table')?.textContent?.includes("用文件组件打开文件"), "rules tab lists the component's rules");
+  await clickSelector('button[aria-label="设置级别：用文件组件打开文件"]'); await waitFor('[role="dialog"] select[aria-label="使用状态"]');
+  const levelDialog = document.querySelector<HTMLElement>('[role="dialog"]')!, levelSelect = levelDialog.querySelector<HTMLSelectElement>('select[aria-label="使用状态"]')!;
+  check(levelDialog.textContent?.includes("检查 fopen") && levelSelect.value === "shadow" && [...levelSelect.options].map(o => o.textContent).join("/") === "只记录/提示/关闭", "level button opens the shared policy dialog");
+  levelDialog.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')?.click(); await pause();
+  check(!calls.some(call => call.path.endsWith("/policy")), "opening the level dialog does not change the policy");
+  await click("返回知识库"); await waitFor('[aria-label="打开交易业务知识目录"]');
   await clickSelector('[aria-label="打开交易业务知识目录"]'); await waitFor('[aria-label="模块知识目录"]');
   check(["领域模块知识", "仓内知识", "Skill"].every(label => document.querySelector(`[aria-label="模块知识目录"] [aria-label="${label}"]`)), "business reader has the three agreed groups");
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "module opened from home");
@@ -172,4 +203,4 @@ async function run() {
   root.unmount();
   return { passed: true, width: innerWidth, published: published.length, created: created?.input.module_id };
 }
-run().then(value => { document.getElementById("result")!.textContent = JSON.stringify(value); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); root.unmount(); });
+if (!scrollCheck) run().then(value => { document.getElementById("result")!.textContent = JSON.stringify(value); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); root.unmount(); });

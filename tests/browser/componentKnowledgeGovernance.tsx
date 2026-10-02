@@ -64,7 +64,15 @@ async function main() {
   labelledButton("收起目录"); await delay();
   for (let i = 0; i < 10; i++) await delay();
   const full = document.querySelector('[aria-label="知识正文"]')!.getBoundingClientRect();
-  if (full.width < innerWidth * 0.98 || full.height < innerHeight * 0.85) throw new Error(`全屏阅读仍被其他面板挤占 ${full.width}x${full.height}, viewport ${innerWidth}x${innerHeight}`);
+  // e6749677 起全屏阅读器统一留 16px 面板边(.knowledge-reader-dialog .component-document-reader),
+  // 1366 下 32px 边距就超过了旧的"正文≥98% 视口"比例。这里要守的是"没有其他面板挤占":
+  // 阅读框铺满视口,收起目录后正文占满阅读框的内容区。
+  const frame = document.querySelector<HTMLElement>('.knowledge-reader-dialog .component-document-reader');
+  if (!frame) throw new Error("全屏阅读器未挂进全屏对话框");
+  const box = frame.getBoundingClientRect(), style = getComputedStyle(frame);
+  const contentWidth = box.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  if (box.width < innerWidth - 4 || box.height < innerHeight - 4) throw new Error(`全屏阅读框未铺满视口 ${box.width}x${box.height}, viewport ${innerWidth}x${innerHeight}`);
+  if (full.width < contentWidth - 2 || full.height < innerHeight * 0.85) throw new Error(`全屏阅读仍被其他面板挤占 ${full.width}x${full.height}, 阅读框内容宽 ${contentWidth}, viewport ${innerWidth}x${innerHeight}`);
   if (document.querySelector('[aria-label="组件列表"]')) throw new Error("目录未收起");
   labelledButton("展开目录"); labelledButton("退出全屏"); await delay();
   labelledButton("文档操作"); await delay(); menuItem("代码检查"); await delay(); expand("检查 std::thread");

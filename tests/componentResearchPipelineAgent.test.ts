@@ -80,7 +80,11 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     assert.equal(done.document?.sections.length, 4); assert.ok(done.pipeline?.tasks.every(t => t.status === "done")); assert.equal(rejectedReview, 7);
     assert.equal(new Set(sessions.map(s => s.workspace)).size, sessions.length);
     const artifacts = service.artifacts(job.id); assert.equal(artifacts.catalog.length, 4); assert.equal(artifacts.rules.length, 1); assert.match(artifacts.mapping, /提交后台任务/);
-    assert.ok(artifacts.files["components/pool/paradigms/paradigm-pool-submit.md"]); assert.match(service.markdown(job.id), /component_paradigms:/);
+    assert.ok(artifacts.files["components/pool/paradigms/paradigm-pool-submit.md"]); // 2fb4bab4 起导出(阅读/下载)是脱离萃取过程的独立知识,不再带 frontmatter 元数据;
+    // 程序提取所需的结构化范式仍保存在草稿里(正式采纳沿用同一份),两边各管各的。
+    const exported = service.markdown(job.id);
+    assert.doesNotMatch(exported, /component_paradigms:|schema:/); assert.match(exported, /## 提交任务/);
+    assert.match(service.get(job.id).draft!, /component_paradigms:/);
     assert.match(artifacts.files["evidence/everycode.json"], /submit\(\)/);
     const current = done.document!.sections.find(s => s.id === "paradigm-pool-submit")!;
     for (const change of [

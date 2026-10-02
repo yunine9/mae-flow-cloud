@@ -39,7 +39,8 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       const click = async (label: string) => { assert.ok(await evaluate(`(() => {const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(label)} && b.getClientRects().length); if(!b)return false;b.click();return true;})()`), `missing ${label}`); await pause(); };
       const wheel = async (selector: string, deltaY: number) => {
         await pause(550); // End the previous native wheel gesture before checking a new boundary.
-        const point = await evaluate(`(() => {const e=document.querySelector(${JSON.stringify(selector)});const r=e.getBoundingClientRect(),p=e.closest('.knowledge-extraction-content')?.getBoundingClientRect();const top=Math.max(r.top,p?.top??0,0),bottom=Math.min(r.bottom,p?.bottom??innerHeight,innerHeight);if(bottom-top<8)throw new Error('wheel target not visible');return {x:r.left+Math.min(r.width/2,250),y:top+Math.min(40,(bottom-top)/2)};})()`);
+        // 落点裁到最近的滚动容器内:专注页里研究过程上方是固定的任务头,落在那里滚轮不会生效。
+        const point = await evaluate(`(() => {const e=document.querySelector(${JSON.stringify(selector)});const r=e.getBoundingClientRect(),p=e.closest('.knowledge-task-progress, .knowledge-extraction-content')?.getBoundingClientRect();const top=Math.max(r.top,p?.top??0,0),bottom=Math.min(r.bottom,p?.bottom??innerHeight,innerHeight);if(bottom-top<8)throw new Error('wheel target not visible');return {x:r.left+Math.min(r.width/2,250),y:top+Math.min(40,(bottom-top)/2)};})()`);
         await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...point }, sessionId);
         // A short wheel burst also settles fractional scroll positions at the boundary.
         for (let step = 0; step < 2; step++) {
@@ -47,16 +48,23 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
           await pause(280);
         }
       };
-      const outerTop = () => evaluate("document.querySelector('.knowledge-extraction-content').scrollTop");
+      // 领域任务按 #447 进入知识库的专注页(研究过程自己滚动);组件夹具仍是页面内的萃取工作区。
+      const scroller = kind === "domain" ? ".knowledge-task-progress" : ".knowledge-extraction-content";
+      const outerTop = () => evaluate(`document.querySelector(${JSON.stringify(scroller)}).scrollTop`);
+      const url = kind === "domain" ? "?scrollCheck=1&kbPage=task&kbKind=domain&kbTask=dkx-running&domainExtraction=dkx-running" : "?scrollCheck=1&knowledgePage=domain&domainExtraction=dkx-browser&componentResearch=cr-browser";
       for (const [width, height] of [[1920, 1080], [1366, 768]]) {
         await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
-        await send("Page.navigate", { url: `${pathToFileURL(html)}?scrollCheck=1&knowledgePage=domain&domainExtraction=dkx-browser&componentResearch=cr-browser` }, sessionId);
-        await until(async () => !!await evaluate(kind === "component" ? "!!document.querySelector('[aria-label=\"组件萃取文档\"]')" : "!!document.querySelector('.research-reader')"));
+        await send("Page.navigate", { url: `${pathToFileURL(html)}${url}` }, sessionId);
+        await until(async () => !!await evaluate(kind === "component" ? "!!document.querySelector('[aria-label=\"组件萃取文档\"]')" : "!!document.querySelector('[aria-label=\"研究过程记录\"] .knowledge-progress-entries')"));
         if (kind === "component") await click("审阅与修订");
-        if (kind === "domain") assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.knowledge-studio')).position"), "fixed", "knowledge remains in the platform page");
+        if (kind === "domain") {
+          // #447 拍板打开任务即近乎全屏的专注阅读,平台导航退出主画面;
+          // 取代旧口径"知识留在平台页面内(不得 fixed)"。
+          const hub = await evaluate("(()=>{const h=document.querySelector('.knowledge-hub.is-focused');if(!h)return null;const r=h.getBoundingClientRect();return {position:getComputedStyle(h).position,left:r.left,top:r.top,width:r.width,height:r.height}})()");
+          assert.ok(hub && hub.position === "fixed" && Math.abs(hub.left) <= 1 && Math.abs(hub.top) <= 1 && hub.width >= width - 2 && hub.height >= height - 2, `${width}: focused task covers the viewport ${JSON.stringify(hub)}`);
+        }
         await pause();
         if (kind === "domain") {
-          await click("萃取过程");
           const list = ".knowledge-progress-entries > ol";
 
           await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollIntoView({block:'center'})`);
@@ -65,12 +73,16 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
           assert.equal(await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop`), 0, "timeline has no nested scroll trap");
           const before = await outerTop(); await wheel(list, -250);
           assert.ok(await outerTop() < before, `${width}: timeline scrolls upward with outer detail`);
-          await click("＋ 新建萃取任务");
+          // 新建任务已改为独立页面,任务页上留下的模态框是删除确认;打开再关闭后滚轮必须恢复。
+          await evaluate("document.querySelector('[aria-label=\"更多萃取操作\"]').click()"); await pause(300);
+          assert.ok(await evaluate("(()=>{const item=[...document.querySelectorAll('[role=menuitem]')].find(e=>e.textContent.trim()==='删除任务');if(!item)return false;item.click();return true;})()"), "missing 删除任务");
+          await pause(300); assert.ok(await evaluate("!!document.querySelector('[role=dialog]')"), "deletion dialog opens");
           await evaluate("[...document.querySelectorAll('[role=dialog] details')].forEach(e=>e.open=true)"); await pause();
           const canScroll = await evaluate("(()=>{const e=document.querySelector('[role=dialog]');return e.scrollHeight>e.clientHeight})()");
           if (canScroll) { await wheel('[role="dialog"]', 250); assert.ok(await evaluate("document.querySelector('[role=dialog]').scrollTop>0"), "dialog content scrolls while page is locked"); }
           await evaluate("document.querySelector('[role=dialog] [data-slot=dialog-close]').click()"); await pause(200);
-          await evaluate(`document.querySelector(${JSON.stringify(list)}).scrollTop=1e7;document.querySelector('.knowledge-extraction-content').scrollTop=0`);
+          assert.ok(await evaluate("!document.querySelector('[role=dialog]')"), "deletion dialog closes");
+          await evaluate(`document.querySelector(${JSON.stringify(scroller)}).scrollTop=0`);
           await wheel(list, 250); assert.ok(await outerTop() > 0, "closing dialog releases page wheel scrolling");
         } else {
           const reader = ".research-document-content";
@@ -82,11 +94,13 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
           await wheel(reader, 250);
           assert.ok(hasOuterOverflow ? await outerTop() > 0 : await evaluate("window.scrollY") > pageBefore, `${width}: component reader boundary continues to the next scrolling parent`);
         }
-        // At the bottom of the workspace, native wheel chaining reaches the page itself.
-        await evaluate("document.querySelectorAll('.knowledge-extraction-content, .research-reader, .research-document-content, .knowledge-progress-entries > ol').forEach(e=>e.scrollTop=1e7);window.scrollTo(0,0)");
+        await evaluate("document.querySelectorAll('.knowledge-extraction-content, .knowledge-task-progress, .research-reader, .research-document-content, .knowledge-progress-entries > ol').forEach(e=>e.scrollTop=1e7);window.scrollTo(0,0)");
         const before = await evaluate("window.scrollY");
         await wheel(kind === "domain" ? '.knowledge-progress-entries > ol > li:last-child summary' : ".knowledge-extraction-content", 300);
-        assert.ok(await evaluate("window.scrollY") > before, `${kind} ${width}: workspace boundary must allow page scrolling`);
+        // 页面内的组件工作区:到底后原生滚轮链继续滚动平台页面。
+        if (kind === "component") assert.ok(await evaluate("window.scrollY") > before, `${kind} ${width}: workspace boundary must allow page scrolling`);
+        // 专注页铺满视口,背后的平台页面被锁定,滚到底也不能把看不见的页面带着走。
+        else assert.equal(await evaluate("window.scrollY"), before, `${kind} ${width}: focused task keeps the hidden platform page still`);
       }
       await send("Target.closeTarget", { targetId });
     }

@@ -45,8 +45,12 @@ test("interface、IDL 和 POM 联合分析，候选可默认纳入审核但必�
   assert.match(COMPONENT_API_BOUNDARY,/POM 联合分析，不规定.*固定顺序/);
   assert.match(COMPONENT_API_BOUNDARY,/IDL、\.proto.*生成.*构建和发布产物/);
   assert.match(COMPONENT_API_BOUNDARY,/不以发布证明齐全作为准入条件/);
-  assert.match(COMPONENT_API_BOUNDARY,/标题和 interfaces 必须标注‘待核实’/);
-  assert.match(COMPONENT_API_BOUNDARY,/内部实现参考/);
+  // 2fb4bab4 起导出的是脱离萃取过程的独立知识:不确定性改由结构化 status/open_questions
+  // 记账,正文只写使用边界,不再在标题和 interfaces 里打「待核实」「内部实现参考」标签。
+  assert.match(COMPONENT_API_BOUNDARY,/结构化 status 与 open_questions 记录待确认问题、已找到的线索和缺失证据/);
+  assert.match(COMPONENT_API_BOUNDARY,/正文只说明使用边界/);
+  assert.match(COMPONENT_API_BOUNDARY,/不把调查清单写进正文/);
+  assert.doesNotMatch(COMPONENT_API_BOUNDARY,/标题和 interfaces 必须标注/, "萃取元数据不得回流进正文标题");
   assert.match(COMPONENT_API_BOUNDARY,/默认勾选不等于专家已确认或推荐使用/);
   for (const mission of [jointResearchMission(input), componentResearchMission(component,"cpp","用法","sha",[component],true)]) {
     assert.doesNotMatch(mission,/只登记已确认对外|候选只记入研究记录/);
@@ -59,7 +63,8 @@ test("开发范式共用接入示例要求：真实 include、构建依赖及库
   }
   assert.match(COMPONENT_API_BOUNDARY,/纯头文件库说明无需链接二进制库/);
   assert.match(COMPONENT_API_BOUNDARY,/非 CMake 项目.*不强造 CMake 包或 target/);
-  assert.match(COMPONENT_API_BOUNDARY,/未找到时明确标注待核实，不猜名字/);
+  // 同上(2fb4bab4):缺失接入条件写明缺哪项、来源进 evidence,而不是在正文里标「待核实」。
+  assert.match(COMPONENT_API_BOUNDARY,/来源写入 evidence；未找到时说明缺少哪项接入条件，不猜名字/);
   assert.match(COMPONENT_API_BOUNDARY,/未经编译验证须注明/);
   const schema = JSON.stringify(researchDocumentTool(input).parameters);
   assert.doesNotMatch(schema, /CMakeLists\.txt|target_link_libraries/, "不在工具中重复维护示例方法");

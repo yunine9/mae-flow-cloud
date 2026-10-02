@@ -53,10 +53,20 @@ test("知识库刷新与后退优先打开显式页签，记住任务不劫持�
 test("管理员和开发者均有独立的一级知识库入口", () => {
   const app = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");
   const nav = app.slice(app.indexOf('<SidebarContent aria-label="视图切换"'), app.indexOf('</SidebarContent>'));
-  for (const section of nav.split('</> : <>')) {
+  const sections = nav.split('</> : <>');
+  assert.equal(sections.length, 2, "侧栏仍分管理员与开发者两套");
+  // #447 拍板:知识库是知识与团队资产的唯一一级入口,侧栏不再并列「团队资产」
+  // (原断言要求两个按钮并存,是收口前的旧口径)。
+  for (const section of sections) {
     assert.match(section, /<NavButton view="library"[^>]+label="知识库"/);
-    assert.match(section, /<NavButton view="knowledge"[^>]+label="团队资产"/);
+    assert.doesNotMatch(section, /<NavButton view="knowledge"/);
   }
+  // 去掉侧栏按钮不等于删掉团队经验:它仍可从知识库「＋新增」菜单和 ?experience=1 深链到达,
+  // 两条路都落到 view="knowledge" 的经验页签。
+  assert.match(app, /get\("experience"\) === "1"\) return "knowledge"/, "experience 深链仍打开团队资产视图");
+  assert.match(app, /onManage=\{focus => \{[^}]*"\/\?experience=1"[^}]*setView\("knowledge"\)/, "知识库的维护入口切到团队资产视图");
+  const library = readFileSync(new URL("../web/src/KnowledgeLibrary.tsx", import.meta.url), "utf8");
+  assert.match(library, /onClick=\{\(\) => onManage\(\)\}>团队经验与维护</, "知识库新增菜单保留团队经验入口");
 });
 
 
