@@ -1,5 +1,6 @@
 import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
-import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
+import { componentArchiveParts, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
+import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
@@ -21,6 +22,14 @@ export function knowledgeIssueNumber(value: unknown): string {
   return issue;
 }
 
+export function knowledgeIssueDescription(value: unknown, options: { required?: boolean } = {}): string | undefined {
+  if (value === undefined && !options.required) return undefined;
+  if (typeof value !== "string" || !value.trim()) throw new Error("请填写关联单号对应的准确描述，将原样用作 MR 标题");
+  const description = value.trim();
+  if (description.length > 2000 || /[\x00-\x1f\x7f\u2028\u2029]/.test(description)) throw new Error("单号描述须为单行文本，最多 2000 字");
+  return description;
+}
+
 export function knowledgeRelativePath(value: unknown, markdown = false): string {
   const path = String(value ?? "").trim().replace(/\/$/, "");
   if (!path || path.length > 1000 || path.split("/").some(p => !p || p === "." || p === ".." || p.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(p)) || (markdown && !path.endsWith(".md"))) throw new Error("请使用仓内文档相对路径，文档必须为 .md");
@@ -39,6 +48,8 @@ export class DomainKnowledgeExtraction {
   private jobs = new Map<string, DomainKnowledgeJob>();
   private running = new Map<string, { controller: AbortController; work: Promise<void> }>();
   private publishing = new Set<string>();
+  private archiving = new Map<string, Promise<void>>();
+  private archiveQueue: Promise<void> = Promise.resolve();
   private stopped = false;
   private get sourceCleanup() { return this.options.sourceCleanup; }
   constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string>, private options: {
@@ -54,13 +65,14 @@ export class DomainKnowledgeExtraction {
       if (!existsSync(path)) continue;
       const job: DomainKnowledgeJob = JSON.parse(readFileSync(path, "utf8"));
       this.jobs.set(job.id, job);
+      for (const batch of job.archive_batches ?? []) if (batch.state === "running") batch.state = "pending";
       if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
         job.status = "queued"; job.stage = "接续原研究会话";
         for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "queued"; turn.error = undefined; }
         this.persist(job);
       }
     }
-    queueMicrotask(() => this.pump());
+    queueMicrotask(() => { this.pump(); for (const job of this.jobs.values()) this.scheduleArchive(job.id); });
   }
   private root(id: string) { return join(this.dataDir, "domain-extraction", id); }
   private live(id: string) { const job = this.jobs.get(id); if (!job || job.deleted_at) throw new Error("领域萃取任务不存在或已删除"); return job; }
@@ -76,17 +88,18 @@ export class DomainKnowledgeExtraction {
     return job ? this.get(job.id) : undefined;
   }
   prepareComponent(input: { research_id: string; title: string; content: string; sources: string; language: string;
-    target: unknown; filename: unknown; issue_no: unknown; base_revision?: number }, operator: string) {
+    target: unknown; filename: unknown; issue_no: unknown; issue_description?: unknown; base_revision?: number; knowledge_revision?: string;
+    research_source?: DomainKnowledgeJob["component_source"] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     if (!input.content?.trim()) throw new Error("请提供非空的组件知识正文");
-    const issue_no = knowledgeIssueNumber(input.issue_no), target = repository(input.target, "domain");
+    const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description), target = repository(input.target, "domain");
     const filename = knowledgeRelativePath(input.filename, true);
     if (filename.includes("/")) throw new Error("文件名不能包含目录，请在归档目录中填写路径");
     const path = `${target.docs_path}/${filename}`;
     const existing = this.componentArchive(input.research_id);
     const job: DomainKnowledgeJob = existing ? this.live(existing.id) : {
       id: `dkx-${randomUUID()}`, component_research_id: input.research_id, technologies: [input.language],
-      title: input.title, scope: "基础组件知识归档", issue_no, operator, created_at: new Date().toISOString(),
+      title: input.title, scope: "基础组件知识归档", issue_no, issue_description, operator, created_at: new Date().toISOString(),
       repositories: [], knowledge_target: target, material_ids: [], ar_codes: [], use_wxdoubao: false,
       status: "done", stage: "待审查提交内容", revisions: {}, documents: [], turns: [], evidence: [], publications: [],
     };
@@ -94,19 +107,47 @@ export class DomainKnowledgeExtraction {
     if (existing && input.base_revision !== job.documents[0].revision) throw new Error("归档草稿已有新版本，请刷新后重新准备");
     const changedTarget = JSON.stringify(job.knowledge_target) !== JSON.stringify(target) || job.documents[0]?.path !== path;
     if (job.publications.length && (changedTarget || job.issue_no !== issue_no)) throw new Error("已发起归档，不能更换目标仓、分支、路径或关联单号");
+    if (issue_description !== undefined && job.issue_description && job.issue_description !== issue_description && this.hasAttemptedMr(job)) throw new Error("已发起 MR 创建，不能更改本任务的单号描述");
     const candidate = { ...job, knowledge_target: target };
     const parts = componentArchiveParts(input.content);
     const document: DomainDocumentContent = { id: "component-guide", title: input.title, target_id: "domain", path, layer: "domain", content: parts.content, sources: input.sources };
     this.validateDocument(candidate, document);
     const old = job.documents[0];
+    const formal = old?.knowledge_document_id ? readKnowledgeDocument(this.dataDir, old.knowledge_document_id)
+      : listKnowledgeDocuments(this.dataDir).find(doc => doc.research_source?.job_id === input.research_id);
+    const formalRevision = input.knowledge_revision === formal?.revision ? input.knowledge_revision : old?.published_revision ?? input.knowledge_revision;
+    if (formal && (formalRevision ? formal.revision !== formalRevision : formal.content !== input.content)) throw new Error("正式知识已有其他修改，请核对当前知识后再准备归档，未覆盖人工修改");
     const next: DomainDocument = { ...document, component_metadata: parts.component_metadata, selected: true, revision: (old?.revision ?? 0) + 1,
+      knowledge_document_id: old?.knowledge_document_id ?? formal?.id, published_revision: formalRevision ?? formal?.revision,
+      published_document_revision: old?.published_document_revision, published_at: old?.published_at,
       base_content: changedTarget ? null : old?.base_content ?? null, base_revision: changedTarget ? "" : old?.base_revision ?? "",
       history: old ? [...old.history, { revision: old.revision, title: old.title, content: old.content, component_metadata: old.component_metadata, sources: old.sources, operator, at: new Date().toISOString() }] : [],
     };
-    Object.assign(job, { title: input.title, issue_no, knowledge_target: target, documents: [next], stage: "待审查提交内容" });
+    Object.assign(job, { title: input.title, issue_no, issue_description: issue_description ?? (job.issue_no === issue_no ? job.issue_description : undefined), knowledge_target: target, documents: [next],
+      component_source: input.research_source ?? job.component_source, stage: "待审查提交内容" });
     this.jobs.set(job.id, job); this.persist(job); return this.get(job.id);
   }
   create(input: any, operator: string) { return this.createJob(input, operator); }
+  beginUpdate(documentId: string, input: { message?: string; expected_revision?: string; material_ids?: string[]; ar_codes?: string[] }, operator: string) {
+    const published = readKnowledgeDocument(this.dataDir, documentId);
+    if (input.expected_revision && input.expected_revision !== published.revision) throw new Error("知识已有新版本，请刷新后发起更新");
+    const original = this.jobs.get(published.research_source?.job_id ?? "");
+    if (!original || original.component_research_id) throw new Error("此知识不属于领域研究，请使用其原有维护入口");
+    const source = original.documents.find(d => d.knowledge_document_id === documentId
+      || d.id === published.research_source?.document_id || d.path === published.research_source?.path);
+    if (!source) throw new Error("找不到知识的研究来源，不能猜测更新基线");
+    const document: DomainDocument = { ...structuredClone(source), title: published.title, content: published.content,
+      knowledge_document_id: published.id, published_revision: published.revision, published_document_revision: 1,
+      revision: 1, history: [], selected: true, human_edited: true, research_turn_id: undefined, remote_review: undefined };
+    const job: DomainKnowledgeJob = { ...structuredClone(original), id: `dkx-${randomUUID()}`, operator,
+      created_at: new Date().toISOString(), deleted_at: undefined, deleted_by: undefined, status: "idle", stage: "准备增量研究",
+      documents: [document], turns: [], evidence: [], archive_batches: [], publication_history: [],
+      revisions: { ...(published.research_source?.source_revisions ?? original.revisions) },
+      material_ids: published.research_source?.material_ids ?? original.material_ids, cleanup_plans: undefined, source_cleanup: undefined };
+    this.jobs.set(job.id, job); this.persist(job);
+    return this.run(job.id, { mode: "update", document_ids: [document.id], message: input.message?.trim() || "核对来源变化，更新受影响知识；保留现有人工内容，无变化时说明原因",
+      material_ids: input.material_ids, ar_codes: input.ar_codes }, operator);
+  }
   createProbe(input: any, operator: string) {
     const module = typeof input.probe_module === "string" ? input.probe_module.trim() : "";
     if (!module || module.length > 100) throw new Error("请填写要验证的单个模块名称，最多 100 字");
@@ -117,7 +158,7 @@ export class DomainKnowledgeExtraction {
   private createJob(input: any, operator: string, probe?: DomainKnowledgeJob["probe"]) {
     if (this.stopped) throw new Error("服务正在停止");
     if ([...this.jobs.values()].filter(job => ["queued", "running"].includes(job.status)).length >= 50) throw new Error("当前研究队列已满，请稍后创建");
-    const issue_no = knowledgeIssueNumber(input.issue_no);
+    const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description);
     const module_id = input.module_id ? String(input.module_id) : undefined;
     if (module_id) {
       const module = readBusinessModule(this.dataDir, module_id);
@@ -144,7 +185,7 @@ export class DomainKnowledgeExtraction {
     const material_ids = this.materialIds(input.material_ids ?? []);
     const ar_codes = this.arCodes(input.ar_codes ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions, ar_codes })));
-    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
+    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
       source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     this.jobs.set(job.id, job); this.persist(job);
@@ -289,11 +330,20 @@ export class DomainKnowledgeExtraction {
       const turn = job.turns.find(t => t.status === "queued")!;
       const controller = new AbortController(), base = structuredClone(job.documents);
       turn.document_revisions ??= Object.fromEntries(base.map(doc => [doc.id, doc.revision]));
+      const earlierTurns = job.turns.slice(0, job.turns.indexOf(turn)).reverse();
+      const workingDocuments = base.map(doc => {
+        if (turn.mode === "extract") return doc;
+        const resumed = turn.proposals.find(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision);
+        const previous = earlierTurns.find(previous => previous.status === "done" && previous.proposals.some(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision));
+        const proposal = resumed ?? previous?.proposals.find(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision);
+        // 后续意见接着已完成的新稿修改，正文与发布基线仍等人工确认。
+        return proposal ? { ...doc, title: proposal.document.title, content: proposal.document.content, sources: proposal.document.sources } : doc;
+      });
       job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
       const work = Promise.resolve().then(async () => {
         try {
-          const reply = await this.execute({ job: this.get(job.id), turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
-            read: () => structuredClone(job.documents),
+          const reply = await this.execute({ job: { ...this.get(job.id), documents: structuredClone(workingDocuments) }, turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
+            read: () => structuredClone(turn.mode === "extract" ? job.documents : workingDocuments),
             update: patch => { if (!controller.signal.aborted && !job.deleted_at) { const { research, ...rest } = patch; Object.assign(job, rest); if (research) turn.research = structuredClone(research); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
             evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
             save: (input, baseline) => {
@@ -309,6 +359,7 @@ export class DomainKnowledgeExtraction {
                 if (!turn.document_ids.includes(input.id)) throw new Error("只能修订本轮选中文档");
                 const previous = turn.proposals.find(p => p.document.id === input.id);
                 turn.proposals = [...turn.proposals.filter(p => p.document.id !== input.id), { document: structuredClone(input), base_revision: previous?.base_revision ?? turn.document_revisions![input.id], status: "pending" }];
+                Object.assign(workingDocuments.find(doc => doc.id === input.id)!, structuredClone(input));
                 this.persist(job);
               } else {
                 // Continuing an interrupted extraction must preserve already completed or edited documents.
@@ -350,11 +401,17 @@ export class DomainKnowledgeExtraction {
     Object.assign(doc, { title: input.document.title, content: input.document.content, sources: input.document.sources, revision: doc.revision + 1, human_edited: true }); this.persist(job); return this.get(id);
   }
   decide(id: string, turnId: string, documentId: string, decision: "accept" | "discard", operator: string) {
-    const job = this.live(id), proposal = job.turns.find(t => t.id === turnId)?.proposals.find(p => p.document.id === documentId);
-    if (job.turns.some(t => t.id === turnId && ["queued", "running"].includes(t.status))) throw new Error("本轮仍在生成修订建议，请等待完成");
+    const job = this.live(id), turn = job.turns.find(t => t.id === turnId), proposal = turn?.proposals.find(p => p.document.id === documentId);
+    if (turn && ["queued", "running"].includes(turn.status)) throw new Error("本轮仍在生成修订建议，请等待完成");
     if (!proposal || !["accept", "discard"].includes(decision)) throw new Error("修订建议或操作无效");
+    if (decision === "accept" && ["queued", "running"].includes(job.status)) throw new Error("当前研究仍在进行，请等待完成后再确认修改");
     if (proposal.status !== "pending") return this.get(id);
-    if (decision === "accept") this.edit(id, { document: proposal.document, base_revision: proposal.base_revision }, operator);
+    if (decision === "accept") {
+      if (turn!.status !== "done") throw new Error("本轮修改尚未完成，请重试完成后再确认");
+      if (job.turns.slice(job.turns.indexOf(turn!) + 1).some(later => later.proposals.some(item => item.document.id === documentId && item.status === "pending"))) throw new Error("已有更新的修改建议，请重新检视；如需使用此建议，请先放弃后续建议");
+      this.edit(id, { document: proposal.document, base_revision: proposal.base_revision }, operator);
+      for (const old of job.turns.flatMap(item => item.proposals)) if (old !== proposal && old.document.id === documentId && old.status === "pending") old.status = "discarded";
+    }
     proposal.status = decision === "accept" ? "accepted" : "discarded"; this.persist(job); return this.get(id);
   }
   restore(id: string, documentId: string, revision: number, baseRevision: number, operator: string) {
@@ -431,39 +488,173 @@ export class DomainKnowledgeExtraction {
     }
     plan.confirmed = confirmed; this.persist(job); return this.get(id);
   }
-  setIssueNumber(id: string, value: unknown) {
-    const job = this.live(id), issue = knowledgeIssueNumber(value);
-    if (this.publishing.has(id)) throw new Error("正在创建 MR，请稍后修改关联单号");
-    if (job.issue_no === issue) return this.get(id);
-    if ([...job.publications, ...(job.publication_history ?? []), ...(job.source_cleanup?.publications ?? [])].some(p => p.mr_attempted || p.url)) throw new Error("已发起 MR 创建，不能更改本任务的关联单号");
-    job.issue_no = issue; this.persist(job); return this.get(id);
+  private hasAttemptedMr(job: DomainKnowledgeJob) {
+    return [...job.publications, ...(job.publication_history ?? []), ...(job.source_cleanup?.publications ?? []), ...(job.archive_batches ?? []).flatMap(batch => batch.publications)]
+      .some(p => p.mr_attempted || p.url || p.mr_id !== undefined);
   }
-  async publish(id: string, operator: string) {
+  setIssueNumber(id: string, value: unknown, description?: unknown) {
+    const job = this.live(id), issue = knowledgeIssueNumber(value);
+    const nextDescription = knowledgeIssueDescription(description) ?? (job.issue_no === issue ? job.issue_description : undefined);
+    if (this.publishing.has(id)) throw new Error("正在创建 MR，请稍后修改关联单号和描述");
+    if (job.issue_no === issue && job.issue_description === nextDescription) return this.get(id);
+    if (this.hasAttemptedMr(job) && (job.issue_no !== issue || (job.issue_description && job.issue_description !== nextDescription))) throw new Error("已发起 MR 创建，不能更改本任务的关联单号或描述");
+    job.issue_no = issue; job.issue_description = nextDescription;
+    for (const batch of job.archive_batches ?? []) if (!["done", "superseded"].includes(batch.state)) {
+      if (!batch.publications.some(p => p.mr_attempted || p.url || p.mr_id !== undefined)) {
+        batch.issue_no = issue; batch.issue_description = nextDescription;
+      } else if (!batch.issue_description) batch.issue_description = nextDescription;
+    }
+    this.persist(job); return this.get(id);
+  }
+  async publish(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> } = {}) {
     const job = this.live(id);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
-    knowledgeIssueNumber(job.issue_no);
-    if (job.archive_configured === false) throw new Error("请在入库与更新中确认归档位置");
-    if (!this.options.publish) throw new Error("未配置 MR 归档能力");
-    if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("本轮仍在执行");
-    if (!job.documents.some(d => d.selected)) throw new Error("请至少选择一份文档");
-    this.publishing.add(id);
-    try {
-      for (const target of [job.knowledge_target, ...job.repositories].filter(t => job.documents.some(d => d.selected && d.target_id === t.id) || job.publications.some(p => p.target_id === t.id && !["merged", "closed", "unchanged"].includes(p.state)))) {
-        const save = (publication: DomainPublication) => {
-          const index = job.publications.findIndex(p => p.target_id === target.id);
-          if (index >= 0 && job.publications[index].branch !== publication.branch) (job.publication_history ??= []).push(structuredClone(job.publications[index]));
-          if (index < 0) job.publications.push(publication); else job.publications[index] = publication;
+    if (job.probe) throw new Error("临时效果验证只生成草稿，不能发布知识");
+    if (["queued", "running"].includes(job.status)) throw new Error("请等待本轮研究完成或停止后发布");
+    if (input.document_ids && (!Array.isArray(input.document_ids) || input.document_ids.some(id => !job.documents.some(d => d.id === id)))) throw new Error("请选择本次发布的知识文档");
+    const selected = job.documents.filter(d => input.document_ids ? input.document_ids.includes(d.id) : d.selected);
+    if (!selected.length) throw new Error("请至少选择一份文档");
+    if (job.turns.some(turn => turn.proposals.some(proposal => proposal.status === "pending" && selected.some(doc => doc.id === proposal.document.id)))) throw new Error("所选文档有尚未确认的修改，请先确认或放弃后发布");
+    // Check every baseline before writing any member of this publication.
+    const existing = listKnowledgeDocuments(this.dataDir);
+    const prepared = selected.map(doc => {
+      this.validateDocument(job, doc);
+      if (input.expected_revisions && input.expected_revisions[doc.id] !== doc.revision) throw new Error("草稿已有新版本，请刷新后重新发布");
+      const target = [job.knowledge_target, ...job.repositories].find(t => t.id === doc.target_id)!;
+      const origin = existing.filter(d => d.research_source?.job_id === (job.component_research_id ?? job.id));
+      const previous = doc.knowledge_document_id ? readKnowledgeDocument(this.dataDir, doc.knowledge_document_id)
+        : origin.find(d => d.research_source?.document_id === doc.id)
+          ?? origin.find(d => {
+            if (d.research_source?.document_id) return false;
+            if (job.component_research_id) return true;
+            const location = d.archive_target ?? d.research_source;
+            return location?.repository === target.repository && location.branch === target.branch && location.path === doc.path;
+          });
+      if (previous && doc.published_revision && previous.revision !== doc.published_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
+      const content = doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content;
+      if (previous && !doc.published_revision && previous.content !== content) throw new Error("旧研究尚未绑定当前正式知识版本，请从正式知识的更新入口继续，保留已有人工修改");
+      if (!previous && target.repository && existing.some(d => {
+        const location = d.archive_target ?? d.source;
+        return location?.repository === target.repository && location.branch === target.branch && location.path === doc.path;
+      })) throw new Error(`${doc.path} 已有正式知识，请从该知识的更新入口继续，避免重复发布`);
+      return { doc, target, previous };
+    });
+    const destinations = new Set<string>();
+    for (const { doc, target } of prepared) if (target.repository) {
+      const destination = JSON.stringify([target.repository, target.branch, doc.path]);
+      if (destinations.has(destination)) throw new Error(`${doc.path} 在本批次指向同一归档仓和分支，请调整路径后发布，未写入正式知识`);
+      destinations.add(destination);
+    }
+    for (const { doc, target, previous } of prepared) {
+      const content = doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content;
+      const source = job.source_repositories?.find(repository => repository.id === doc.target_id) ?? target;
+      const published = saveKnowledgeDocument(this.dataDir, { ...previous, title: doc.title, content,
+        scope: previous?.scope ?? (job.component_research_id ? "platform" : doc.layer === "domain" && job.module_id ? "module" : doc.layer === "repository" ? "repository" : "platform"),
+        module_ids: previous?.module_ids ?? (doc.layer === "domain" && job.module_id ? [job.module_id] : []),
+        repositories: previous?.repositories ?? (doc.layer === "repository" ? [source.repository] : []),
+        technologies: previous?.technologies ?? job.technologies, active: previous?.active ?? true,
+        archive_target: { repository: target.repository, branch: target.branch, path: doc.path },
+        research_source: job.component_research_id && (job.component_source || previous?.research_source) ? job.component_source ?? previous?.research_source : { job_id: job.component_research_id ?? job.id, document_id: doc.id,
+          repository: target.repository, branch: target.branch, path: doc.path,
+          source_revisions: { ...job.revisions }, material_ids: [...job.material_ids], skill: job.skill },
+      }, operator, previous?.id, { expectedRevision: previous?.revision, maxContentBytes: job.component_research_id ? 16 * 1024 * 1024 : undefined });
+      doc.knowledge_document_id = published.id; doc.published_revision = published.revision;
+      doc.published_document_revision = doc.revision; doc.published_at = published.history.at(-1)!.at;
+    }
+    // Each batch retains the exact published text, even if the next research edits its draft.
+    const documents = structuredClone(selected).map(doc => ({ ...doc, selected: true }));
+    const duplicate = job.archive_batches?.find(batch => batch.documents.length === documents.length
+      && documents.every(doc => batch.documents.some(old => old.knowledge_document_id === doc.knowledge_document_id && old.published_revision === doc.published_revision)));
+    if (!duplicate) (job.archive_batches ??= []).push({ id: randomUUID(), created_at: new Date().toISOString(), operator,
+      state: "pending", documents, targets: structuredClone([job.knowledge_target, ...job.repositories]), issue_no: job.issue_no, issue_description: job.issue_description, publications: [] });
+    this.persist(job); this.scheduleArchive(id);
+    return this.get(id);
+  }
+  retryArchive(id: string, operator: string) {
+    const job = this.live(id);
+    if (this.archiving.has(id)) throw new Error("归档正在进行");
+    for (const batch of job.archive_batches ?? []) if (batch.state === "failed") {
+      batch.state = "pending"; batch.error = undefined; batch.operator = operator;
+      if (!batch.publications.some(p => p.mr_attempted || p.url || p.mr_id !== undefined)) {
+        batch.issue_no = job.issue_no; batch.issue_description = job.issue_description;
+        batch.targets = structuredClone([job.knowledge_target, ...job.repositories]);
+        batch.documents = batch.documents.map(doc => { const current = job.documents.find(d => d.id === doc.id); return current ? { ...doc, path: current.path, archive_path: current.archive_path } : doc; });
+      } else if (!batch.issue_description) batch.issue_description = job.issue_description;
+    }
+    this.persist(job); this.scheduleArchive(id); return this.get(id);
+  }
+  private scheduleArchive(id: string) {
+    if (this.stopped || this.archiving.has(id)) return;
+    const job = this.jobs.get(id), first = job?.archive_batches?.find(batch => !["done", "superseded"].includes(batch.state));
+    if (!job || job.deleted_at || !first || first.state === "failed") return;
+    const work = this.archiveQueue.then(async () => {
+      if (this.stopped) return;
+      this.publishing.add(id);
+      try {
+        for (const batch of job.archive_batches ?? []) {
+          if (this.stopped || batch.state === "failed") break;
+          if (["done", "superseded"].includes(batch.state)) continue;
+          batch.state = "running"; this.persist(job);
+          try {
+            batch.superseded_documents = [];
+            const documents = batch.documents.filter(doc => {
+              if (!doc.knowledge_document_id || !doc.published_revision) return true;
+              let current: ReturnType<typeof readKnowledgeDocument> | undefined;
+              try { current = readKnowledgeDocument(this.dataDir, doc.knowledge_document_id); }
+              catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (!(error instanceof Error) || error.message !== "知识已删除")) throw error;
+              }
+              if (current?.revision === doc.published_revision) return true;
+              batch.superseded_documents!.push({ document_id: doc.id, knowledge_document_id: doc.knowledge_document_id,
+                published_revision: doc.published_revision, current_revision: current?.revision, reason: current ? "newer_version" : "deleted" });
+              return false;
+            });
+            if (!documents.length) { batch.state = "superseded"; batch.error = undefined; this.persist(job); continue; }
+            if (!this.options.publish) throw new Error("知识已发布；尚未配置 Git 归档能力");
+            knowledgeIssueNumber(batch.issue_no);
+            const snapshot: DomainKnowledgeJob = { ...structuredClone(job), documents: structuredClone(documents), issue_no: batch.issue_no, issue_description: batch.issue_description,
+              knowledge_target: batch.targets.find(t => t.id === "domain")!, repositories: batch.targets.filter(t => t.id !== "domain") };
+            const groups = new Map<string, KnowledgeRepository[]>();
+            for (const target of batch.targets.filter(t => documents.some(d => d.target_id === t.id))) {
+              const key = JSON.stringify([target.repository, target.branch]);
+              groups.set(key, [...(groups.get(key) ?? []), target]);
+            }
+            for (const targets of groups.values()) {
+              const target = targets[0];
+              repository(target, target.id);
+              if (targets.length > 1 && snapshot.cleanup_plans?.some(plan => plan.confirmed && targets.some(t => t.id === plan.target_id))) throw new Error("同仓多目标的清理计划须先通过独立清理完成，再归档本批知识；正式知识已生效");
+              const grouped = { ...snapshot, documents: snapshot.documents.filter(d => targets.some(t => t.id === d.target_id))
+                .map(d => ({ ...d, target_id: target.id, archive_path: d.archive_path ?? d.path })) };
+              const save = (publication: DomainPublication) => {
+                publication = { ...publication, updated_at: new Date().toISOString() };
+                const index = job.publications.findIndex(p => p.target_id === target.id);
+                if (index >= 0 && job.publications[index].branch !== publication.branch) (job.publication_history ??= []).push(structuredClone(job.publications[index]));
+                if (index < 0) job.publications.push(publication); else job.publications[index] = publication;
+                const found = batch.publications.findIndex(p => p.target_id === target.id);
+                if (found < 0) batch.publications.push(structuredClone(publication)); else batch.publications[found] = structuredClone(publication);
+                this.persist(job);
+              };
+              const ids = new Set(documents.map(d => d.knowledge_document_id).filter(Boolean));
+              const related = [...this.jobs.values()].flatMap(other => other.publications.filter(p => {
+                const location = [other.knowledge_target, ...other.repositories].find(t => t.id === p.target_id);
+                return location?.repository === target.repository && location.branch === target.branch
+                  && p.documents.some(d => d.knowledge_document_id && ids.has(d.knowledge_document_id));
+              })).sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+              const previous = related[0] ? { ...related[0], target_id: target.id } : job.publications.find(p => p.target_id === target.id);
+              try { save(await this.options.publish(grouped, target, previous, batch.operator, save)); }
+              catch (error) {
+                const latest = job.publications.find(p => p.target_id === target.id) ?? { target_id: target.id, branch: `codex/knowledge-${job.id}-${target.id}`, documents: [], state: "failed" as const };
+                save({ ...latest, state: latest.state === "merged" ? "merged" : "failed", error: error instanceof Error ? error.message : "归档失败" });
+                throw error;
+              }
+            }
+            batch.state = "done"; batch.error = undefined;
+          } catch (error) { batch.state = "failed"; batch.error = error instanceof Error ? error.message : "归档失败"; }
           this.persist(job);
-        };
-        const previous = job.publications.find(p => p.target_id === target.id);
-        try { save(await this.options.publish(this.get(id), target, previous, operator, save)); }
-        catch (error) {
-          const latest = job.publications.find(p => p.target_id === target.id) ?? previous ?? { target_id: target.id, branch: `codex/knowledge-${job.id}-${target.id}`, documents: [], state: "failed" as const };
-          save({ ...latest, state: latest.state === "merged" ? "merged" : "failed", error: error instanceof Error ? error.message : "归档失败" });
         }
-      }
-      return this.get(id);
-    } finally { this.publishing.delete(id); }
+      } finally { this.publishing.delete(id); }
+    }).finally(() => this.archiving.delete(id));
+    this.archiveQueue = work.catch(() => undefined);
+    this.archiving.set(id, work);
   }
   async refresh(id: string, operator: string) {
     const job = this.live(id);
@@ -475,6 +666,7 @@ export class DomainKnowledgeExtraction {
       for (let i = 0; i < job.publications.length; i++) if (job.publications[i].url || job.publications[i].state === "unchanged") {
         try { job.publications[i] = await this.options.refresh(this.get(id), job.publications[i], operator); }
         catch (error) { job.publications[i].error = error instanceof Error ? error.message : "MR 状态查询失败"; }
+        for (const batch of job.archive_batches ?? []) batch.publications = batch.publications.map(p => p.branch === job.publications[i].branch ? structuredClone(job.publications[i]) : p);
         this.persist(job);
       }
       return this.get(id);
@@ -487,6 +679,6 @@ export class DomainKnowledgeExtraction {
       for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
       this.running.get(job.id)?.controller.abort(); this.persist(job);
     }
-    await Promise.allSettled([...this.running.values()].map(r => r.work));
+    await Promise.allSettled([...this.running.values()].map(r => r.work).concat([...this.archiving.values()]));
   }
 }

@@ -55,13 +55,19 @@ export async function componentResearchRoute(
           }
           if (!archive) throw new Error("请先准备归档文档");
           const id = archive.id;
+          if (parts[3] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no, body.issue_description));
           if (parts[3] === "cleanup-template") return json(response, 200, { content: generatedAgentRules(archive, archive.knowledge_target, String(body.path || "AGENTS.md")) });
           if (parts[3] === "cleanup-preview") return json(response, 200, await manager.previewCleanup(id, archive.knowledge_target.id, body, operator));
           if (parts[3] === "cleanup-confirm") return json(response, 200, manager.confirmCleanup(id, body.plan_id, body.confirmed, body.preserve_paths));
           if (parts[3] === "edit") return json(response, 200, manager.edit(id, body, operator));
           if (parts[3] === "remote") return json(response, 200, await manager.readRemote(id, body.document_id, operator));
           if (parts[3] === "reconcile") return json(response, 200, manager.reconcile(id, body, operator));
-          if (parts[3] === "publish") return json(response, 200, await manager.publish(id, operator));
+          if (parts[3] === "publish") {
+            const published = await manager.publish(id, operator, body);
+            service.prepareKnowledgeIndex();
+            return json(response, 200, published);
+          }
+          if (parts[3] === "archive-retry") return json(response, 202, manager.retryArchive(id, operator));
           if (parts[3] === "refresh") return json(response, 200, await manager.refresh(id, operator));
           if (parts[3] === "restore") return json(response, 200, manager.restore(id, body.document_id, body.revision, body.base_revision, operator));
         }

@@ -237,7 +237,7 @@ export function resolveWorkspaceTarget(
 
 function initialView(user: AuthUser): View {
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
-  if (["knowledgeDocuments", "knowledgePage", "componentResearch", "domainExtraction"].some(key => new URLSearchParams(location.search).has(key))) return "library";
+  if (["kbPage", "knowledgeDocument", "platformSkill", "knowledgeDocuments", "knowledgePage", "componentResearch", "domainExtraction"].some(key => new URLSearchParams(location.search).has(key))) return "library";
   if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
@@ -1315,7 +1315,7 @@ export function App() {
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
     if (next === "library") {
-      history.pushState(appHistoryState("library"), "", "/?knowledgePage=documents"); setIssueRouteId(""); setView("library"); return;
+      history.pushState(appHistoryState("library"), "", "/?kbPage=home"); setIssueRouteId(""); setView("library"); return;
     }
     if (next === "help") {
       const nextPath = `/help/${encodeURIComponent(helpArticleId)}`;
@@ -1351,9 +1351,9 @@ export function App() {
     // 不变量对表:进出页签、history 同步写完后按当前 URL 重读快照——
     // 进入问题处理拿到深链 id(有则直达工作台),离开则随归位清成空串。
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
-    if (["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
+    if (["kbPage", "knowledgeDocument", "platformSkill", "knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeView", "platformSkill"]) url.searchParams.delete(key);
+      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeView", "platformSkill"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());
@@ -1399,7 +1399,7 @@ export function App() {
                   onSelect={selectView} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
-                <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
                     管理),与团队资产同进「管理视角」组。 */}
@@ -1437,7 +1437,7 @@ export function App() {
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
-                <NavButton view="knowledge" current={view} onSelect={selectView} label="团队资产" />
+
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
                     同组,不进 admin 专属的「系统管理」——那组是管理员工具。 */}

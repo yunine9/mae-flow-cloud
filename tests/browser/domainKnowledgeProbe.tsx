@@ -28,10 +28,13 @@ async function run() {
   for (let i = 0; i < 50 && !document.querySelector('[aria-label="萃取任务列表"] button'); i++) await pause();
   const old = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="萃取任务列表"] button')].find(b => b.textContent?.includes(job.title))!;
   check(old, "historical probe remains in task list"); old.click(); await pause();
-  await click("验证草稿");
+  const manuscript = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="研究过程与文稿"] button')].find(item => item.textContent?.includes("文稿"));
+  check(manuscript && !manuscript.disabled, "historical probe uses unified manuscript view"); manuscript!.click(); await pause();
   check(document.body.textContent?.includes("这里显示本次验证草稿"), "old draft remains readable");
   check(!button("入库") && !button("清理旧知识") && !button("仅讨论"), "historical probe remains draft only");
-  await click("＋ 新建萃取任务");
+  document.querySelector<HTMLButtonElement>('[aria-label="更多萃取操作"]')!.click(); await pause();
+  const create = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.trim() === "新建萃取任务");
+  check(create, "new task is available from the unified toolbar"); create!.click(); await pause();
   check(document.querySelector('[aria-label="本次萃取要求"]'), "new task has free text instructions");
   check(document.querySelector('[aria-label="领域萃取关联单号"]') && !document.querySelector('[aria-label="仅验证的模块"]'), "new task always uses the standard form");
   check(!button("开始单模块验证") && button("开始萃取"), "no separate temporary creation action");

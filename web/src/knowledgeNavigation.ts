@@ -90,3 +90,13 @@ export function knowledgeStudioView(search: string): "skills" | "workbench" | "k
   if (page === "component" && ["new", "history"].includes(query.get("componentResearch") ?? "")) return "workbench";
   return "knowledge";
 }
+
+/** 从研究页进入萃取方法时清除任务定位，刷新后仍停留在同一方法。 */
+export function extractionSkillSearch(search: string, kind: "component" | "domain"): string {
+  const query = new URLSearchParams(search);
+  for (const key of ["kbPage", "kbKind", "kbModule", "kbTask", "kbReview", "domainExtraction", "componentResearch", "knowledgeDocument", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeConsolidation"]) query.delete(key);
+  query.set("knowledgePage", "documents");
+  query.set("knowledgeView", "skills");
+  query.set("platformSkill", kind);
+  return `?${query.toString()}`;
+}

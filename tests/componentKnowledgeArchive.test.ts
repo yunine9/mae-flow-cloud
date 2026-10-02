@@ -9,9 +9,9 @@ import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { LocalAuth } from "../src/auth.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
-import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 
-const input = { research_id: "cr-source", title: "组件使用指南", content: "# 组件\n经过人工选择的组件知识", language: "cpp", sources: "src/file.cpp @ abc", issue_no: "REQ-component", target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "docs/components" }, filename: "guide.md" };
+const input = { research_id: "cr-source", title: "组件使用指南", content: "# 组件\n经过人工选择的组件知识", language: "cpp", sources: "src/file.cpp @ abc", issue_no: "REQ-component", issue_description: "补充基础组件的使用约定", target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "docs/components" }, filename: "guide.md" };
 
 test("组件归档准备可复用、人工稿防覆盖、保存跨重启、目标锁定且不进入领域任务列表", async () => {
   const root = mkdtempSync(join(tmpdir(), "component-archive-"));
@@ -22,7 +22,11 @@ test("组件归档准备可复用、人工稿防覆盖、保存跨重启、目�
   try {
     assert.throws(() => service.prepareComponent({ ...input, filename: "../guide.md" }, "dev"), /相对路径/);
     assert.throws(() => service.prepareComponent({ ...input, issue_no: "" }, "dev"), /关联单号/);
+    assert.throws(() => service.prepareComponent({ ...input, issue_description: "" }, "dev"), /准确描述/);
     let job = service.prepareComponent(input, "dev");
+    job = service.prepareComponent({ ...input, issue_no: "REQ-another", issue_description: undefined, base_revision: job.documents[0].revision }, "dev");
+    assert.equal(job.issue_description, undefined, "更换归档单号不沿用旧单据描述");
+    job = service.prepareComponent({ ...input, base_revision: job.documents[0].revision }, "dev");
     assert.equal(service.list().length, 0); assert.equal(job.documents[0].path, "docs/components/guide.md");
     assert.equal(job.component_research_id, "cr-source"); assert.doesNotMatch(job.documents[0].content, /萃取来源/);
     assert.throws(() => service.run(job.id, { mode: "extract", message: "错误入口" }, "dev"), /基础组件/);
@@ -31,19 +35,22 @@ test("组件归档准备可复用、人工稿防覆盖、保存跨重启、目�
     job = service.prepareComponent({ ...input, content: "更新过的组件知识", base_revision: job.documents[0].revision }, "dev");
     assert.equal(job.documents[0].history.at(-1)!.content, "人工归档合并稿\n");
     const restarted = new DomainKnowledgeExtraction(root, async () => "unused");
-    assert.equal(restarted.componentArchive(input.research_id)!.id, job.id); await restarted.shutdown();
+    assert.equal(restarted.componentArchive(input.research_id)!.id, job.id);
+    assert.equal(restarted.get(job.id).issue_description, input.issue_description); await restarted.shutdown();
     await service.previewCleanup(job.id, "domain", {}, "dev");
     assert.throws(() => service.confirmCleanup(job.id, "preview", true, ["elsewhere.md"]), /清单/);
     assert.throws(() => service.confirmCleanup(job.id, "preview", true, [job.documents[0].path]), /新增文档/);
     const selected = service.confirmCleanup(job.id, "preview", false, ["docs/old.md"]);
     assert.deepEqual(selected.cleanup_plans![0].preserve_paths, ["docs/old.md"]);
     await service.publish(job.id, "dev");
+    for (let i = 0; i < 100 && service.get(job.id).archive_batches?.[0].state !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     assert.throws(() => service.prepareComponent({ ...input, target: { ...input.target, docs_path: "elsewhere" }, base_revision: job.documents[0].revision }, "dev"), /不能更换/);
     assert.throws(() => service.prepareComponent({ ...input, issue_no: "REQ-other", base_revision: job.documents[0].revision }, "dev"), /不能更换/);
+    assert.throws(() => service.prepareComponent({ ...input, issue_description: "更换 MR 标题", base_revision: job.documents[0].revision }, "dev"), /不能更改/);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR 参数，正式正文不能绕过 MR", async () => {
+test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR 参数，平台正式发布与版本并发保护", async () => {
   const root = mkdtempSync(join(tmpdir(), "component-archive-http-"));
   const auth = new LocalAuth(join(root, "auth.json")); auth.bootstrapAdmin("admin", "fixture-admin-password"); auth.createUser("dev", "fixture-dev-password", "developer");
   const host = new TaskService({ dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
@@ -65,6 +72,8 @@ test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR �
   try {
     assert.equal((await request(endpoint)).status, 401);
     cookie = (await request("/auth/login", { username: "dev", password: "fixture-dev-password" })).headers.get("set-cookie")!.split(";")[0];
+    const adopted: any = await (await request(`/component-research/${job.id}/adopt`, { title: "组件指南" })).json();
+    assert.ok(adopted.id);
     assert.deepEqual(await (await request(endpoint)).json(), { archive: null, defaults: { repository: "https://example.test/component.git", branch: "main", directory: "docs/components", filename: "component-guide.md" } });
     const prepared = await request(endpoint, { ...input, research_id: "spoofed" }); assert.equal(prepared.status, 200);
     let archive: any = await prepared.json(); assert.equal(archive.component_research_id, job.id); assert.equal(archive.documents[0].remote_review.target_content, "仓内人工规则\n");
@@ -74,7 +83,12 @@ test("组件归档 HTTP 实际连接任务、同名文件比较、修订与 MR �
     assert.equal(merged.status, 200); archive = await merged.json();
     assert.equal((await request(endpoint + "/publish", {})).status, 200); assert.equal(publishedIssue, "REQ-component");
     const rules: any = await (await request(endpoint + "/cleanup-template", { path: "AGENTS.md" })).json(); assert.match(rules.content, /docs\/components\/guide.md/);
-    const knowledge = saveKnowledgeDocument(root, { title: "组件", content: "合入正文", scope: "platform", technologies: ["cpp"], source: { repository: input.target.repository, branch: "main", path: "docs/components/guide.md", revision: "a" }, research_source: { job_id: job.id, repository: input.target.repository, branch: "main", path: "docs/components/guide.md" } }, "dev");
+    const knowledge = readKnowledgeDocument(root, manager.get(archive.id).documents[0].knowledge_document_id!);
+    assert.equal(knowledge.id, adopted.id, "先本地发布再归档沿用正式知识 ID");
+    assert.equal(listKnowledgeDocuments(root).length, 1);
+    assert.match(knowledge.content, /仓内人工规则/);
+    assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "正式人工修订", expected_revision: knowledge.revision })).status, 200);
+    assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "过期覆盖", expected_revision: knowledge.revision })).status, 400);
     assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { content: "绕过 MR 的正文" })).status, 400);
     assert.equal((await request(`/knowledge-documents/${knowledge.id}`, { active: false })).status, 200);
   } finally { await host.shutdown(); await new Promise<void>(r => server.close(() => r())); rmSync(root, { recursive: true, force: true }); }

@@ -151,13 +151,13 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
         id="knowledge-footprint-title" className="text-[15px]
         text-foreground">
         本任务知识</strong>
-        <p className="m-0 text-sm/relaxed text-muted-foreground">看见本任务可用与实际消费的知识，可中途提醒 Agent 用某一条；闭环意见和修复会形成候选；责任人确认结论与范围后才作为经验复用。</p></div>
+        <p className="m-0 text-sm/relaxed text-muted-foreground">查看本任务已加载、读取和检索的知识；这些记录不代表已正确应用。可中途提醒 Agent 使用某一条，经验候选确认结论与范围后才供后续任务复用。</p></div>
       <div className="flex items-center gap-2" aria-label="知识消费摘要">
         <span className="grid min-w-[62px] gap-px rounded-[9px] border
           border-line bg-muted px-2 py-1.5 text-center"><strong
           className="font-mono text-[15px] font-bold text-foreground">{
           usage?.summary.used ?? 0}</strong><small className="text-sm
-          text-muted-foreground">已消费</small></span>
+          text-muted-foreground">已加载或读取</small></span>
         <span className="grid min-w-[62px] gap-px rounded-[9px] border
           border-line bg-muted px-2 py-1.5 text-center"><strong
           className="font-mono text-[15px] font-bold text-foreground">{
@@ -195,7 +195,8 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
               ? "font-bold text-primary" : item.loaded_count > 0
                 ? "text-text" : "text-faint")}>
               {item.read_count > 0 ? `读取 ${item.read_count} 次`
-                : item.loaded_count > 0 ? "开局已加载" : "可用未读"}</small>
+                : item.loaded_count > 0 ? "开局已加载" : "可用未读"}
+              {(item.search_count ?? 0) > 0 && ` · 检索 ${item.search_count} 次`}</small>
             <Button type="button" variant="outline" size="xs" className="flex-none"
               disabled={busy || taskStatus !== "running"}
               title={taskStatus === "running" ? "送达当前 Agent"
@@ -270,10 +271,10 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
         <SourceLink className="font-mono text-[13px]" aria-label={`查看原文：${item.name}`}
           title={`查看原文：${item.path}`}
           onClick={() => setSourceOpen(item)}>{item.path} ↗</SourceLink>
-        <small className="text-sm text-muted-foreground">{item.read_count > 0 ? `读取/检索 ${item.read_count} 次`
-          : "开局已加载"}</small></article>)}</div>
+        <small className="text-sm text-muted-foreground">{item.read_count > 0 ? `读取 ${item.read_count} 次`
+          : "开局已加载"}{(item.search_count ?? 0) > 0 && ` · 检索 ${item.search_count} 次`}</small></article>)}</div>
       : <Empty className="mx-3.5 mb-3.5 border p-3">
-        <EmptyDescription>尚无已消费知识；可用知识被加载、读取或检索后会在这里出现。</EmptyDescription></Empty>}
+        <EmptyDescription>尚无已加载或读取的知识；检索定位记录可在可用知识和明细中查看。</EmptyDescription></Empty>}
     {!!usage?.events.length && <details className="border-t border-line">
       <summary className="flex min-h-[38px] cursor-pointer items-center
         justify-between px-3.5 text-sm font-bold text-text">

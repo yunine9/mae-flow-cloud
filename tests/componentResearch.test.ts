@@ -740,6 +740,114 @@ test("缺最佳示例不能完成，已保存能力允许继续补齐而不重�
   assert.deepEqual(research.get(job.id).document!.sections[0],preserved);
 });
 
+test("组件确认发布拦截未确认建议，并发冲突保留原稿，采用最新建议清理旧建议", async t => {
+  const { listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    const section = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;
+    input.editDocument!({ action: "section", section: { ...section, content: input.review.message } });
+    if (input.review.message === "未完成的修改") throw new Error("研究失败");
+    return "修改完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  for (const message of ["旧建议", "新建议"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "alice");
+    await until(() => research.get(job.id).status === "done");
+  }
+  assert.throws(() => research.adopt(job.id, {}, "alice"), /尚未确认的修改/);
+  assert.throws(() => research.archiveDraft(job.id, {}), /尚未确认的修改/);
+  const section = research.get(job.id).document!.sections[0];
+  research.editSection(job.id, { section: { ...section, content: "其他人修改的正文" }, base_revision: section.revision }, "bob");
+  assert.throws(() => research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice"), /新版本/);
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["pending", "pending"]);
+  assert.equal(listKnowledgeDocuments(dir).length, 0);
+  research.review(job.id, { section_id: "cap-1", mode: "rework", message: "未完成的修改" }, "alice");
+  await until(() => research.get(job.id).status === "failed");
+  assert.throws(() => research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice"), /尚未完成/);
+  research.review(job.id, { section_id: "cap-0", mode: "rework", message: "最终确认的修改" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const accepted = research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice");
+  assert.deepEqual(accepted.review_turns!.map(turn => turn.proposal!.status), ["discarded", "discarded", "pending", "accepted"]);
+  research.selectSections(job.id, ["cap-1"], false);
+  assert.match(research.archiveDraft(job.id, {}).content, /最终确认的修改/);
+  const published = research.adopt(job.id, {}, "alice");
+  assert.match(published.content, /最终确认的修改/); assert.doesNotMatch(published.content, /未完成的修改/);
+  assert.equal(research.adopt(job.id, {}, "alice").id, published.id, "重复发布保持幂等，未选章节的意见仍保留");
+});
+
+test("组件连续整体意见接着上一轮候选修改，原稿与发布基线保留到确认", async t => {
+  const dir = temporary();
+  saveComponentRepository(dir, config, "alice");
+  const seen: string[] = [];
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    const document = input.readDocument!(), section = document.sections[0];
+    assert.deepEqual(input.record.document, document, "执行快照和读取工具使用同一份候选内容");
+    assert.equal(input.record.draft, researchDocumentMarkdown(input.record.topic, document));
+    seen.push(section.content);
+    input.editDocument!({ action: "section", section: { ...section, content: section.content + `\n${input.review.message}` } });
+    return "修改完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const original = research.get(job.id).document!;
+  for (const message of ["补充第一轮边界", "补充第二轮示例"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "expert");
+    await until(() => ["done", "failed"].includes(research.get(job.id).status));
+    assert.equal(research.get(job.id).status, "done", research.get(job.id).error);
+  }
+  const pending = research.get(job.id), content = original.sections[0].content;
+  assert.deepEqual(seen, [content, content + "\n补充第一轮边界"]);
+  assert.deepEqual(pending.document, original, "待确认候选不会修改原稿");
+  assert.equal(pending.document_id, undefined);
+  assert.equal(pending.review_turns!.at(-1)!.proposal!.base_revision, original.sections[0].revision);
+  assert.equal(pending.review_turns!.at(-1)!.proposal!.section.content, content + "\n补充第一轮边界\n补充第二轮示例");
+  research.editSection(job.id, { section: { ...original.sections[0], content: "人工保存的新正文" }, base_revision: original.sections[0].revision }, "editor");
+  research.review(job.id, { section_id: "cap-0", mode: "rework", message: "核对人工正文" }, "expert");
+  await until(() => ["done", "failed"].includes(research.get(job.id).status));
+  assert.equal(research.get(job.id).status, "done", research.get(job.id).error);
+  assert.equal(seen.at(-1), "人工保存的新正文", "版本已变更时不会沿用过期候选");
+  const latest = research.get(job.id).review_turns!.at(-1)!;
+  const confirmed = research.decideProposal(job.id, latest.id, "accept", "expert");
+  assert.equal(confirmed.document!.sections[0].content, "人工保存的新正文\n核对人工正文");
+  assert.equal(confirmed.document!.sections[0].revision, original.sections[0].revision + 2);
+  assert.deepEqual(confirmed.document!.sections[1], original.sections[1]);
+});
+
+test("组件确认竞态：不覆盖较新建议，研究进行中不能确认，放弃新建议后可确认旧建议", async t => {
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  let release = () => {}, discussing = false;
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    if (input.review.mode === "discuss") { await new Promise<void>(resolve => { release = resolve; discussing = true; }); return "讨论完成"; }
+    const section = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;
+    input.editDocument!({ action: "section", section: { ...section, content: input.review.message } }); return "修改完成";
+  });
+  t.after(async () => { release(); await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  for (const message of ["已阅读的旧建议", "刚生成的新建议"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "alice");
+    await until(() => research.get(job.id).status === "done");
+  }
+  const [old, latest] = research.get(job.id).review_turns!;
+  assert.throws(() => research.decideProposal(job.id, old.id, "accept", "alice"), /更新的修改建议/);
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["pending", "pending"]);
+  assert.equal(research.get(job.id).document!.sections[0].revision, 1);
+  research.review(job.id, { section_id: "cap-0", mode: "discuss", message: "继续讨论" }, "alice");
+  await until(() => discussing);
+  assert.throws(() => research.decideProposal(job.id, latest.id, "accept", "alice"), /当前研究仍在进行/);
+  release(); await until(() => research.get(job.id).status === "done");
+  research.decideProposal(job.id, latest.id, "discard", "alice");
+  const accepted = research.decideProposal(job.id, old.id, "accept", "alice");
+  assert.equal(accepted.document!.sections[0].content, "已阅读的旧建议");
+  assert.deepEqual(accepted.review_turns!.slice(0, 2).map(turn => turn.proposal!.status), ["accepted", "discarded"]);
+});
+
 test("结构化章节拒绝未知来源、空示例和悬空关联；Markdown 保留真实依赖", () => {
   const doc = editResearchDocument({overview:"联合关系",sections:[]},{action:"outline",entries:[{id:"a",title:"A",repository_ids:["r"]},{id:"b",title:"B",repository_ids:["r"]}]},["r"]);
   const section = sectionData("a",["r"]);
@@ -788,4 +896,82 @@ test("已采纳组件更新沿用同一知识条目及名称范围，人工版�
   research.beginUpdate(job.id, "bob");
   saveKnowledgeDocument(dir, { content: "另一维护人的正文" }, "other", first.id);
   assert.throws(() => research.adopt(job.id, {}, "bob"), /正式文档已发生变化/);
+});
+
+test("组件通过归档入口正式发布后，采纳复用同一知识并可找回增量基线", async t => {
+  const { saveKnowledgeDocument, listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => writeJoint(input));
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  for (const recoverThroughAdopt of [true, false]) {
+    const job = research.start({ mode: "all", language: "cpp", refresh: true }, "alice");
+    await until(() => research.get(job.id).status === "done");
+    const current = research.get(job.id);
+    const formal = saveKnowledgeDocument(dir, { title: "已发布的组件", content: researchDocumentMarkdown("已发布的组件", current.document!, true),
+      technologies: ["cpp"], archive_target: { repository: "https://example.test/knowledge.git", branch: "main", path: `${job.id}.md` },
+      research_source: { job_id: job.id, repository: config.repository, branch: "main", path: "src" } }, "reviewer");
+    if (recoverThroughAdopt) assert.equal(research.adopt(job.id, { title: "不能重复新建" }, "alice").id, formal.id);
+    const update = research.beginUpdate(job.id, "alice");
+    assert.equal(update.update_document_id, formal.id); assert.equal(update.update_document_revision, formal.revision);
+    const section = update.document!.sections[0];
+    research.editSection(job.id, { section: { ...section, content: section.content + "\n补充异常路径" }, base_revision: section.revision }, "alice");
+    assert.equal(research.adopt(job.id, update.update_metadata!, "alice").id, formal.id);
+  }
+  assert.equal(listKnowledgeDocuments(dir).length, 2, "每次研究始终只有原正式条目");
+});
+
+test("组件连续两轮发布归档与增量更新保留源码来源，归档元信息不阻断更新，人工正文仍受保护", async t => {
+  const { DomainKnowledgeExtraction } = await import("../src/domainKnowledgeExtraction.ts");
+  const { saveKnowledgeDocument, readKnowledgeDocument, listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    input.update({ revisions: Object.fromEntries(input.record.components!.map(c => [c.id, (input.review ? "b" : "a").repeat(40)])) });
+    if (input.review) {
+      const section = input.readDocument!().sections.find(s => s.id === input.review!.section_id)!;
+      input.editDocument!({ action: "section", section: { ...section, content: section.content + "\n新增超时回收规则。" } });
+      return "增量修订已完成";
+    }
+    return writeJoint(input);
+  });
+  const manager = new DomainKnowledgeExtraction(dir, async () => "unused", { publish: async (job, target) => ({ target_id: target.id,
+    state: "opened", branch: "codex/component-cycles", url: "https://example.test/mr/1", documents: job.documents.map(d => ({ id: d.id, path: d.path, content: d.content, revision: d.revision })) }) });
+  t.after(async () => { await manager.shutdown(); await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const first = research.adopt(job.id, { title: "组件联合指南" }, "alice");
+  for (let round = 0; round < 2; round++) {
+    const previous = manager.componentArchive(job.id);
+    const archive = manager.prepareComponent({ ...research.archiveDraft(job.id, { title: first.title }),
+      target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "docs/components" },
+      filename: "guide.md", issue_no: "REQ-cycles", base_revision: previous?.documents[0].revision }, "alice");
+    await manager.publish(archive.id, "alice");
+    await until(() => manager.get(archive.id).archive_batches?.[round]?.state === "done");
+    const formal = readKnowledgeDocument(dir, first.id);
+    assert.deepEqual(formal.research_source?.components?.map(c => ({ ...c, revision: undefined })), first.research_source?.components?.map(c => ({ ...c, revision: undefined })));
+    assert.equal(formal.research_source?.components?.[0].revision, (round ? "b" : "a").repeat(40));
+    assert.equal(formal.research_source?.repository, config.repository);
+    assert.equal(formal.research_source?.path, config.path);
+    assert.equal(formal.archive_target?.repository, "https://example.test/knowledge.git");
+    const update = research.beginUpdate(job.id, "alice");
+    assert.equal(update.update_document_revision, formal.revision);
+    if (!round) {
+      research.review(job.id, { section_id: update.document!.sections[0].id, mode: "update", message: "核对源码变化并补充回收规则" }, "alice");
+      await until(() => research.get(job.id).status === "done");
+      research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice");
+      assert.equal(research.adopt(job.id, update.update_metadata!, "alice").id, first.id);
+    } else {
+      saveKnowledgeDocument(dir, { content: formal.content + "\n人工刚补充的重要边界。" }, "expert", first.id, { expectedRevision: formal.revision });
+      assert.throws(() => research.adopt(job.id, update.update_metadata!, "alice"), /正式文档已发生变化/);
+      assert.throws(() => research.beginUpdate(job.id, "alice"), /避免覆盖人工更新/);
+    }
+  }
+  assert.equal(listKnowledgeDocuments(dir).length, 1);
+  const archiveFirst = research.start({ mode: "all", language: "cpp", refresh: true }, "alice");
+  await until(() => research.get(archiveFirst.id).status === "done");
+  const archive = manager.prepareComponent({ ...research.archiveDraft(archiveFirst.id, { title: "先归档的组件" }),
+    target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "docs/components" }, filename: "archive-first.md", issue_no: "REQ-cycles" }, "alice");
+  const published = await manager.publish(archive.id, "alice");
+  const direct = readKnowledgeDocument(dir, published.documents[0].knowledge_document_id!);
+  assert.equal(direct.research_source?.components?.[0].repository, config.repository);
+  assert.equal(direct.research_source?.repository, config.repository);
 });

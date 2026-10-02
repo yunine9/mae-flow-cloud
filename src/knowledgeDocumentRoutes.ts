@@ -2,7 +2,7 @@ import { readConsolidationAudit, readConsolidationSource } from "./knowledgeCons
 import { exportKnowledge } from "./knowledgeExport.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
-import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
+import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocuments, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
 
 export async function knowledgeDocumentRoute(request: IncomingMessage, response: ServerResponse, parts: string[], service: TaskService,
@@ -81,6 +81,23 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       });
       return json(response, 200, { documents });
     }
+    if (request.method === "GET" && id && parts[2] === "versions") {
+      readKnowledgeDocument(dir, id);
+      if (parts[3]) return json(response, 200, readKnowledgeDocumentVersion(dir, id, parts[3]));
+      return json(response, 200, { versions: listKnowledgeDocumentVersions(dir, id).map(v => ({ revision: v.document.revision,
+        title: v.document.title, published_at: v.published_at, operator: v.operator })) });
+    }
+    if (request.method === "POST" && id && parts[2] === "update-research") {
+      const body = await readBody(request, 256 * 1024);
+      return json(response, 202, service.getDomainKnowledgeExtraction().beginUpdate(id, body, operator));
+    }
+    if (request.method === "POST" && id && parts[2] === "restore") {
+      const body = await readBody(request, 8192);
+      if (typeof body.expected_revision !== "string") throw new Error("请提供当前知识版本");
+      const old = readKnowledgeDocumentVersion(dir, id, String(body.revision));
+      const doc = saveKnowledgeDocument(dir, { ...old.document }, operator, id, { expectedRevision: body.expected_revision, maxContentBytes: 16 * 1024 * 1024 });
+      service.prepareKnowledgeIndex(); return json(response, 200, doc);
+    }
     if (request.method === "GET" && id) {
       const doc = knowledgeDocumentCatalog(dir).documents.find(d => d.id === id);
       if (!doc) throw new Error("知识已停用或不存在");
@@ -100,7 +117,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
     if (request.method === "POST" && (!id || parts.length === 2)) {
       const body = await readBody(request, 3 * 1024 * 1024);
       const previous = id ? readKnowledgeDocument(dir, id) : undefined;
-      if ((previous?.research_source?.job_id.startsWith("dkx-") || (previous?.research_source?.job_id.startsWith("cr-") && previous.source)) && (body.content !== undefined || body.repository_import || body.research_source !== undefined)) throw new Error("知识正文由 Git 归档管理，请从萃取过程修订并通过 MR 更新；这里可调整适用范围与启用状态");
+      if (previous && (body.content !== undefined || body.repository_import) && typeof body.expected_revision !== "string") throw new Error("请提供编辑时的知识版本，避免覆盖他人修改");
       const input = { ...body, source: body.content !== undefined ? undefined : previous?.source };
       if (body.repository_import) {
         const { repository, branch, path } = body.repository_import;
@@ -112,7 +129,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
         input.title = body.title || path.split("/").at(-1);
         input.source = { repository: repository.trim(), branch: branch.trim(), path: path.trim(), revision: fetched.revision };
       }
-      const doc = saveKnowledgeDocument(dir, input, operator, id);
+      const doc = saveKnowledgeDocument(dir, input, operator, id, { expectedRevision: body.expected_revision });
       service.prepareKnowledgeIndex();
       return json(response, id ? 200 : 201, doc);
     }

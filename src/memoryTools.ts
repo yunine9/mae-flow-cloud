@@ -1,3 +1,4 @@
+import { KNOWLEDGE_WRITING_GUIDANCE } from "./knowledgeWritingGuidance.ts";
 /** Agent 的仓库记忆检索、展开和主动记录。仓库由宿主固定，索引不可用不阻断正本读写。 */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -89,6 +90,7 @@ export function createMemoryTools(backend: MemoryToolBackend) {
     name: "corpus_write", label: "沉淀经验候选",
     promptSnippet: "corpus_write: 用户说‘帮我沉淀/记住这条经验’时，保存候选并返回该条审查链接，不改变任务流程。",
     promptGuidelines: [
+      KNOWLEDGE_WRITING_GUIDANCE,
       "用户在对话里明确说‘帮我沉淀一下’、‘记住这个规范供以后复用’时，结合上下文调用 corpus_write；不要求先有检视意见、代码改动或构建失败。普通‘这次这样改’不是要求沉淀，不给每次开发对话增加记忆提醒。",
       "自动经验整理由宿主在 MR 合入、任务完成后集中启动；开发过程中不要自行调用 corpus_write 批量提炼检视意见或构建修复，仅响应用户明确的记录请求。",
       "保留用户原话到 user_statement。忠实区分人的明确约定与自己的推论，不擅自扩大范围；提炼可迁移的判断方法与必要前提，结论另起一段以‘适用例外：’说明边界。流程经验可不填 paths，不为记录经验追问无关的文件位置。",

@@ -52,7 +52,8 @@ export function createKnowledgeTool(options: {
           return reply(JSON.stringify({ ...record, key: undefined, url: `/?knowledgeDocuments=1&componentResearch=${record.id}` }) + "\n草稿须人工审查采纳才进入知识库；继续独立工作，不循环轮询。");
         }
         const service = options.service();
-        if (!service) return reply("知识检索暂不可用；继续当前任务，不反复重试等待。");
+        if (!service) { observe({moment:input.action === "read" ? "expand" : "search",ids:[],status:"unavailable",reason:"unavailable",requested_id:input.id});
+          return reply("知识检索暂不可用；继续当前任务，不反复重试等待。"); }
         const context = options.context();
         const planService = options.plan?.();
         const plan = input.plan_path && planService ? { path: planService.path(input.plan_path).relative, capability: input.capability, operation: input.action } : undefined;
@@ -86,11 +87,14 @@ export function createKnowledgeTool(options: {
         }
         if (input.action !== "read" || !input.id) return reply("read 需要提供搜索结果中的 id。");
         const asset = service.read(context, input.id);
-        if (!asset) return reply("该知识取不到：已停用、已不适用于当前任务或不存在；不要沿用旧结论。");
-        if (input.revision && input.revision !== asset.revision) return reply("文档已更新，请重新 search 定位章节，不沿用旧版本行号。");
+        if (!asset) { observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"not_accessible"});
+          return reply("该知识取不到：已停用、已不适用于当前任务或不存在；不要沿用旧结论。"); }
+        if (input.revision && input.revision !== asset.revision) { observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"revision_changed"});
+          return reply("文档已更新，请重新 search 定位章节，不沿用旧版本行号。"); }
         const lines = asset.content.split("\n");
         const start = Math.max(1, input.start_line ?? 1);
         if (start > lines.length || (input.end_line !== undefined && input.end_line < start)) {
+          observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"invalid_range"});
           return reply(`读取范围无效；该文档共 ${lines.length} 行，请使用搜索返回的原文行号。`);
         }
         const end = Math.min(lines.length, input.end_line ?? start + 119, start + 599);
@@ -111,6 +115,7 @@ export function createKnowledgeTool(options: {
       } catch (error) {
         if (input.action === "plan" || input.plan_path) return reply(error instanceof Error ? error.message : "计划检查未完成");
         if (["components", "research", "research_status"].includes(input.action)) return reply(error instanceof Error ? error.message : "萃取暂不可用");
+        observe({moment:input.action === "read" ? "expand" : "search",ids:[],requested_id:input.id,status:"unavailable",reason:"unavailable"});
         return reply("知识读取暂不可用；继续当前任务，不反复重试等待。");
       }
     },

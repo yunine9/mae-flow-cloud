@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -63,6 +63,33 @@ test("坏足迹行和不可写观测旁路不会影响任务读侧", () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-knowledge-trace-bad-"));
   writeFileSync(join(root, "knowledge-events.jsonl"), "bad json\n");
   assert.equal(knowledgeUsageSnapshot({ workspace: root }), undefined);
+});
+
+test("检索定位不冒充正文读取，也不进入 Skill 消费效果统计", async () => {
+  const { buildHostSkillEffects } = await import("../src/knowledgeInsights.ts");
+  const root = mkdtempSync(join(tmpdir(), "mfc-knowledge-search-only-"));
+  try {
+    const path = join(root, "skills", "cpp-autout", "SKILL.md");
+    const trace = new KnowledgeTrace(join(root, "knowledge-events.jsonl"), "task", root);
+    trace.register(path, { id: "skill:cpp-autout", kind: "skill", name: "cpp-autout",
+      path: ".mae-flow-work/host-skills/cpp-autout/SKILL.md", scope: "team", selected: true });
+    for (const name of ["grep", "find", "ls"]) trace.observeTool("main", name, {path}, false);
+    trace.observeTool("main", "read", {path}, true);
+    let usage = knowledgeUsageSnapshot({workspace:root})!;
+    assert.equal(usage.resources[0].read_count, 0);
+    assert.equal(usage.resources[0].search_count, 3);
+    assert.equal(usage.summary.used, 0);
+    assert.equal(usage.summary.skills_used, 0);
+    assert.equal(usage.summary.selected_unused, 1);
+    const effects = () => buildHostSkillEffects([{id:"task",status:"completed",knowledge_usage:usage}]).get("cpp-autout")!;
+    assert.equal(effects().accessed_tasks, 0);
+    trace.observeTool("main", "read", {path}, false);
+    usage = knowledgeUsageSnapshot({workspace:root})!;
+    assert.equal(usage.resources[0].read_count, 1);
+    assert.equal(usage.resources[0].search_count, 3);
+    assert.equal(usage.summary.skills_used, 1);
+    assert.equal(effects().access_events, 1);
+  } finally { rmSync(root, {recursive:true,force:true}); }
 });
 
 test("自发读取的文档带首标题摘要:排行可读性来自观测那一刻", () => {

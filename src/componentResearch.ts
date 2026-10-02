@@ -21,6 +21,7 @@ import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import {
   saveKnowledgeDocument,
   readKnowledgeDocument,
+  readKnowledgeDocumentVersion,
   listKnowledgeDocuments,
 } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
@@ -253,14 +254,23 @@ export class ComponentResearch {
       const previousDocument = record.document ? structuredClone(record.document) : undefined;
       if (review) review.base_revision ??= review.proposal?.base_revision ?? previousDocument?.sections.find(section => section.id === review.section_id)?.revision;
       let revisedDocument = previousDocument;
-      if (review?.proposal && revisedDocument) revisedDocument = { ...revisedDocument, sections: revisedDocument.sections.map(section => section.id === review.section_id ? structuredClone(review.proposal!.section) : section) };
+      if (review && revisedDocument) {
+        const earlierTurns = record.review_turns!.slice(0, record.review_turns!.indexOf(review)).reverse();
+        revisedDocument = { ...revisedDocument, sections: revisedDocument.sections.map(section => {
+          const resumed = section.id === review.section_id && review.proposal?.status === "pending" && review.proposal.base_revision === section.revision ? review.proposal : undefined;
+          const previous = earlierTurns.find(previous => previous.status === "done" && previous.section_id === section.id && previous.proposal?.status === "pending" && previous.proposal.base_revision === section.revision);
+          const proposal = resumed ?? previous?.proposal;
+          // 接着已完成的候选稿修改，原章节版本与选择状态保留到确认时。
+          return proposal ? { ...structuredClone(proposal.section), revision: section.revision, selected: section.selected } : section;
+        }) };
+      }
       this.update(record, { status: "running", error: undefined, stage: review ? (review.mode === "discuss" ? "正在回答组件问题" : "正在返工指定组件") : "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
       const work = Promise.resolve()
         .then(async () => {
           try {
             const draft = await this.execute({
-              record: structuredClone(record),
+              record: { ...structuredClone(record), ...(review && revisedDocument ? { document: structuredClone(revisedDocument), draft: researchDocumentMarkdown(record.topic, revisedDocument) } : {}) },
               root: this.root(record.id),
               signal: controller.signal,
               review: review ? structuredClone(review) : undefined,
@@ -441,8 +451,13 @@ export class ComponentResearch {
     if (!record || record.deleted_at || record.document_id || !turn?.proposal) throw new Error("修订建议不存在或草稿已归档");
     if (decision === "accept" && turn.status !== "done") throw new Error("本轮尚未完成独立评审，不能采纳修订建议");
     if (!["accept", "discard"].includes(decision)) throw new Error("请选择采纳或放弃");
+    if (decision === "accept" && ["queued", "running"].includes(record.status)) throw new Error("当前研究仍在进行，请等待完成后再确认修改");
     if (turn.proposal.status !== "pending") return this.get(id);
-    if (decision === "accept") this.editSection(id, { section: turn.proposal.section, base_revision: turn.proposal.base_revision }, operator);
+    if (decision === "accept") {
+      if (record.review_turns!.slice(record.review_turns!.indexOf(turn) + 1).some(later => later.section_id === turn.section_id && later.proposal?.status === "pending")) throw new Error("已有更新的修改建议，请重新检视；如需使用此建议，请先放弃后续建议");
+      this.editSection(id, { section: turn.proposal.section, base_revision: turn.proposal.base_revision }, operator);
+      for (const old of record.review_turns ?? []) if (old !== turn && old.section_id === turn.section_id && old.proposal?.status === "pending") old.proposal.status = "discarded";
+    }
     turn.proposal.status = decision === "accept" ? "accepted" : "discarded";
     this.update(record, {}); return this.get(id);
   }
@@ -453,10 +468,17 @@ export class ComponentResearch {
   }
   beginUpdate(id: string, operator: string) {
     const record = this.records.get(id);
-    if (!record?.document || !record.document_id || record.deleted_at) throw new Error("请选择已入库的联合文档");
-    const published = readKnowledgeDocument(this.dir, record.document_id);
-    if (!published.source && (record.published_revision ? published.revision !== record.published_revision : published.content !== researchDocumentMarkdown(published.title, record.document, true))) throw new Error("正式文档已由其他入口修改，请先核对当前文档，避免覆盖人工更新");
-    this.update(record, { update_document_id: record.document_id, update_document_revision: published.revision,
+    if (!record?.document || record.deleted_at) throw new Error("请选择已入库的联合文档");
+    const published = record.document_id ? readKnowledgeDocument(this.dir, record.document_id)
+      : listKnowledgeDocuments(this.dir).find(doc => doc.research_source?.job_id === id);
+    if (!published) throw new Error("请选择已入库的联合文档");
+    let baseline = researchDocumentMarkdown(published.title, record.document, true);
+    if (record.published_revision) {
+      if (published.revision === record.published_revision) baseline = published.content;
+      else baseline = readKnowledgeDocumentVersion(this.dir, published.id, record.published_revision).document.content;
+    }
+    if (published.content.trim() !== baseline.trim()) throw new Error("正式文档已由其他入口修改，请先核对当前文档，避免覆盖人工更新");
+    this.update(record, { update_document_id: published.id, update_document_revision: published.revision,
       document_id: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories }, stage: "选择受影响章节，生成更新建议", operator });
     return this.get(id);
   }
@@ -480,10 +502,13 @@ export class ComponentResearch {
   archiveDraft(id: string, input: { title?: string; content?: string }) {
     const record = this.get(id);
     if (record.deleted_at || record.status !== "done" || (record.mode === "all" && record.format !== "joint-document")) throw new Error("请等待组件草稿完成后归档");
+    if (!record.document_id) this.assertSelectedChangesConfirmed(record);
     if (record.document && (!record.document.sections.some(s => s.selected) || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
     const title = String(input.title ?? record.topic).trim();
     const content = record.document ? researchDocumentMarkdown(title, record.document, true) : String(input.content ?? record.draft ?? "");
-    return { research_id: id, title, content, language: record.language,
+    return { research_id: id, title, content, language: record.language, knowledge_revision: record.document_id ? record.published_revision : record.update_document_revision,
+      research_source: { job_id: id, repository: record.component.repository, branch: record.component.branch, path: record.component.path,
+        revision: record.revision, components: record.components?.map(c => ({ id: c.id, repository: c.repository, branch: c.branch, path: c.path, revision: record.revisions?.[c.id] })) },
       sources: (record.components ?? [record.component]).map(c => `${c.name}：${c.repository} · ${c.branch} · ${c.path || "全仓"} @ ${record.revisions?.[c.id] ?? record.revision ?? "版本未记录"}`).join("\n") };
   }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
@@ -491,9 +516,15 @@ export class ComponentResearch {
     if (!record || record.challenge || (record.mode === "all" && record.format !== "joint-document") || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
     if (record.document_id)
       return readKnowledgeDocument(this.dir, record.document_id);
+    const published = !record.update_document_id && listKnowledgeDocuments(this.dir).find(doc => doc.research_source?.job_id === id);
+    if (published) {
+      const matchesDraft = record.document && published.content === researchDocumentMarkdown(published.title, record.document, true);
+      this.update(record, { document_id: published.id, published_revision: matchesDraft ? published.revision : undefined, stage: "已发布为知识" });
+      return published;
+    }
+    this.assertSelectedChangesConfirmed(record);
     if (record.document && (!record.document.sections.some(s => s.selected)
         || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
-    if (listKnowledgeDocuments(this.dir).some(doc => doc.source && doc.research_source?.job_id === id)) throw new Error("该组件知识已由 Git 归档管理，请通过提交到代码仓更新 MR");
     const content = record.document ? researchDocumentMarkdown(String(input.title ?? record.topic), record.document, true)
       : String(input.content ?? record.draft ?? "");
     scanForSecrets("组件知识.md", Buffer.from(content));
@@ -529,6 +560,9 @@ export class ComponentResearch {
     this.update(record, { document_id: document.id, published_revision: document.revision, stage: "已采纳为知识" });
     this.onAdopt();
     return document;
+  }
+  private assertSelectedChangesConfirmed(record: ResearchRecord) {
+    if (record.review_turns?.some(turn => turn.proposal?.status === "pending" && record.document?.sections.some(section => section.id === turn.section_id && section.selected))) throw new Error("所选组件有尚未确认的修改，请先确认或放弃后发布");
   }
   async shutdown() {
     this.stopped = true;

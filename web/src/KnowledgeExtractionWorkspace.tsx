@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
+import { KnowledgeBackButton } from "./KnowledgeBackButton";
 
 export function KnowledgeExtractionStages({ value, onChange, label, cleanup = false, draftOnly = false, codeOnly = false }: { value: string; onChange: (value: string) => void; label: string; cleanup?: boolean; draftOnly?: boolean; codeOnly?: boolean }) {
   const studio = useKnowledgeStudio();
@@ -10,16 +11,16 @@ export function KnowledgeExtractionStages({ value, onChange, label, cleanup = fa
     else if (studio && id && next === "progress" && studio.view === "knowledge") studio.openExecution(kind, id);
     onChange(next);
   }
-  return <nav className="knowledge-extraction-stages mb-4 flex gap-2" aria-label={label}>{[...(cleanup ? [["cleanup", "清理旧知识"]] : []), ["inputs", "资料"], ["progress", "萃取过程"], ["review", draftOnly ? "验证草稿" : "阅读成果"], ...(!draftOnly ? [["publish", "入库"]] : [])].map(([key, title]) => <Button key={key} size="sm" aria-pressed={value === key} variant={value === key ? "secondary" : "ghost"} onClick={() => choose(key)}>{title}</Button>)}</nav>;
+  return <nav className="knowledge-extraction-stages mb-4 flex gap-2" aria-label={label}>{[...(cleanup ? [["cleanup", "清理旧知识"]] : []), ["inputs", "资料"], ["progress", "萃取过程"], ["review", draftOnly ? "验证草稿" : "文稿审查"], ...(!draftOnly ? [["publish", "Git 归档"]] : [])].map(([key, title]) => <Button key={key} size="sm" aria-pressed={value === key} variant={value === key ? "secondary" : "ghost"} onClick={() => choose(key)}>{title}</Button>)}</nav>;
 }
 
-export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, actions, hideHeader = false, cleanup = false, draftOnly = false, codeOnly = false }: {
-  hideHeader?: boolean; codeOnly?: boolean; draftOnly?: boolean; cleanup?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; actions?: ReactNode;
+export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, backLabel = "知识文档", actions, hideHeader = false, cleanup = false, draftOnly = false, codeOnly = false }: {
+  hideHeader?: boolean; codeOnly?: boolean; draftOnly?: boolean; cleanup?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; backLabel?: string; actions?: ReactNode;
 }) {
   const studio = useKnowledgeStudio();
   return <section className="tw-root knowledge-extraction-workspace" aria-label={`${title}工作区`}>
     {!hideHeader && <header className="knowledge-extraction-header">
-      {onClose && <Button variant="outline" onClick={onClose}>← 返回知识文档</Button>}
+      {onClose && <KnowledgeBackButton onClick={onClose} destination={backLabel} />}
       <div className="mr-auto"><h2 className="text-lg font-semibold">{title}</h2></div>
       {actions}{onNew && <Button onClick={() => { if (studio) studio.openExecution(codeOnly ? "component" : "domain"); onNew(); }}>＋ 新建萃取任务</Button>}
     </header>}

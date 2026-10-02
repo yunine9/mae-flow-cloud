@@ -1,0 +1,10 @@
+.knowledge-content-search { position:relative; flex-shrink:0; }
+.knowledge-content-search-panel { position:absolute; right:0; top:calc(100% + 10px); z-index:10; display:flex; align-items:center; gap:6px; width:430px; max-width:calc(100vw - 32px); min-height:48px; padding:7px 9px; border:1px solid var(--line); border-radius:10px; color:var(--text); background:var(--surface); box-shadow:0 8px 28px color-mix(in srgb,var(--text-strong) 16%,transparent); }
+.knowledge-content-search-panel > svg { flex-shrink:0; margin-left:3px; color:var(--muted); }
+.knowledge-content-search-panel input { width:0; min-width:0; flex:1; border:0; background:transparent; color:var(--text-strong); font:inherit; font-size:15px; padding:5px; outline:none; }
+.knowledge-content-search-panel:focus-within { border-color:color-mix(in srgb,var(--primary) 65%,var(--line)); }
+.knowledge-content-search-count { flex-shrink:0; min-width:47px; text-align:center; color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+.knowledge-content-search-panel button { display:grid; place-items:center; flex-shrink:0; width:29px; height:29px; border:0; border-radius:5px; background:transparent; color:var(--text); cursor:pointer; }
+.knowledge-content-search-panel button:hover { background:var(--surface-2); }
+.knowledge-content-search-panel button:disabled { opacity:.35; cursor:default; }
+.knowledge-content-search-panel button:focus-visible { outline:2px solid var(--primary); outline-offset:1px; }

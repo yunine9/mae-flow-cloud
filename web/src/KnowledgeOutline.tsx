@@ -3,17 +3,18 @@ import { FileText, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 export interface KnowledgeOutlineItem { id: string; title: string; content: string; selected?: boolean; status?: string }
-export function KnowledgeOutline({ title, items, currentId, onNavigate, onSelection, disabled, selectionPrefix = "纳入", actions, label = "知识结构导航" }: {
+export function KnowledgeOutline({ title, items, currentId, onNavigate, onSelection, disabled, selectionPrefix = "纳入", actions, label = "知识结构导航", itemLabel = "文档", itemUnit = "份" }: {
   title: string; items: KnowledgeOutlineItem[]; currentId?: string; onNavigate: (id: string, line?: number) => void;
   onSelection?: (id: string, selected: boolean) => void; disabled?: boolean; selectionPrefix?: string;
   actions?: ReactNode; label?: string;
+  itemLabel?: string; itemUnit?: string;
 }) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLocaleLowerCase();
   const visible = items.filter(item => !needle || item.title.toLocaleLowerCase().includes(needle));
   return <aside className="research-capabilities knowledge-outline" aria-label={label}>
-    <div className="research-capabilities-header"><strong>文档 <span>{items.length} 份</span></strong><p className="knowledge-outline-root">{title}</p>
-      <div className="research-capability-search"><Search size={16} /><Input aria-label="搜索文档" placeholder="搜索文档" value={query} onChange={e => setQuery(e.target.value)} /></div>
+    <div className="research-capabilities-header"><strong>{itemLabel} <span>{items.length} {itemUnit}</span></strong><p className="knowledge-outline-root">{title}</p>
+      <div className="research-capability-search"><Search size={16} /><Input aria-label={`搜索${itemLabel}`} placeholder={`搜索${itemLabel}`} value={query} onChange={e => setQuery(e.target.value)} /></div>
       {actions && <div className="research-selection-actions">{actions}</div>}
     </div>
     <nav className="research-capability-list" aria-label="知识文档列表"><ul className="knowledge-outline-topics">{visible.map(item => {
@@ -23,6 +24,6 @@ export function KnowledgeOutline({ title, items, currentId, onNavigate, onSelect
           <button className="knowledge-outline-title" aria-current={item.id === currentId ? "page" : undefined} onClick={() => onNavigate(item.id)}><strong>{item.title}</strong>{item.status && <small>{item.status}</small>}</button>
         </div>
       </li>;
-    })}</ul>{!visible.length && <p className="p-3 text-sm text-muted-foreground">{items.length ? "没有匹配的文档。" : "萃取结果会逐步出现在这里。"}</p>}</nav>
+    })}</ul>{!visible.length && <p className="p-3 text-sm text-muted-foreground">{items.length ? `没有匹配的${itemLabel}。` : "萃取结果会逐步出现在这里。"}</p>}</nav>
   </aside>;
 }

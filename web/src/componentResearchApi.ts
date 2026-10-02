@@ -67,7 +67,7 @@ export async function componentRequest<T>(
           body: JSON.stringify(body),
         },
   );
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "请求失败");
-  return result;
+  const result: unknown = await response.json();
+  if (!response.ok) throw new Error(result && typeof result === "object" && "error" in result && typeof result.error === "string" ? result.error : "请求失败");
+  return result as T;
 }

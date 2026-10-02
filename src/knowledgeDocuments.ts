@@ -10,8 +10,9 @@ export interface KnowledgeDocument {
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
   when_to_use: string; active: boolean; revision: string;
   source?: { repository: string; branch: string; path: string; revision: string };
-  research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
-  history: Array<{ at: string; operator: string; action: string }>;
+  archive_target?: { repository: string; branch: string; path: string };
+  research_source?: { job_id:string; document_id?: string; repository:string; branch:string; path:string; revision?:string; source_revisions?: Record<string, string>; material_ids?: string[]; skill?: { name: string; digest: string }; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
+  history: Array<{ at: string; operator: string; action: string; revision?: string }>;
 }
 const root = (dir: string) => join(dir, "knowledge-documents");
 function file(dir: string, id: string) {
@@ -32,13 +33,43 @@ export function listKnowledgeDocuments(dir: string): KnowledgeDocument[] {
     .map(name => readKnowledgeDocument(dir, name.slice(0, -5)))
     .sort((a, b) => b.history.at(-1)!.at.localeCompare(a.history.at(-1)!.at));
 }
+export interface KnowledgeDocumentVersion { document: KnowledgeDocument; published_at: string; operator: string }
+function versionRoot(dir: string, id: string) {
+  file(dir, id);
+  return join(dir, "knowledge-document-versions", id);
+}
+function retainVersion(dir: string, document: KnowledgeDocument) {
+  const folder = versionRoot(dir, document.id);
+  mkdirSync(folder, { recursive: true });
+  const last = document.history.at(-1)!;
+  const version: KnowledgeDocumentVersion = { document, published_at: last.at, operator: last.operator };
+  try { writeFileSync(join(folder, `${document.revision}.json`), JSON.stringify(version), { mode: 0o640, flag: "wx" }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+}
+export function listKnowledgeDocumentVersions(dir: string, id: string) {
+  // Existing records acquire a recoverable baseline without inventing older text.
+  const current = readKnowledgeDocument(dir, id);
+  retainVersion(dir, current);
+  const committed = new Set([current.revision, ...current.history.map(h => h.revision)]);
+  return readdirSync(versionRoot(dir, id)).filter(name => /^[a-f0-9]{64}\.json$/.test(name) && committed.has(name.slice(0, -5)))
+    .map(name => readKnowledgeDocumentVersion(dir, id, name.slice(0, -5)))
+    .sort((a, b) => b.published_at.localeCompare(a.published_at));
+}
+export function readKnowledgeDocumentVersion(dir: string, id: string, revision: string): KnowledgeDocumentVersion {
+  if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error("知识版本无效");
+  const current = readKnowledgeDocument(dir, id);
+  if (current.revision !== revision && !current.history.some(h => h.revision === revision)) throw new Error("该版本尚未发布或不存在");
+  if (current.revision === revision) retainVersion(dir, current);
+  return JSON.parse(readFileSync(join(versionRoot(dir, id), `${revision}.json`), "utf8"));
+}
 function strings(value: unknown, max = 20): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(v => typeof v !== "string" || v.length > 512)) throw new Error("适用范围格式不正确");
   return [...new Set(value.map(v => v.trim()).filter(Boolean))];
 }
 export function saveKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string,
-  options: { maxContentBytes?: number } = {}): KnowledgeDocument {
+  options: { maxContentBytes?: number; expectedRevision?: string } = {}): KnowledgeDocument {
   const previous = id ? readKnowledgeDocument(dir, id) : undefined;
+  if (options.expectedRevision !== undefined && previous?.revision !== options.expectedRevision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const merged = { ...previous, ...input };
   const research = merged.research_source as KnowledgeDocument["research_source"];
   if (!previous && research?.job_id && listKnowledgeDeletions(dir).some(d => d.research_job_id === research.job_id)) throw new Error("本次萃取的知识已删除；如需重新入库，请新建萃取任务，旧归档同步不会恢复知识");
@@ -61,14 +92,19 @@ export function saveKnowledgeDocument(dir: string, input: Record<string, unknown
     technologies: normalizeKnowledgeLanguages(merged.technologies ?? []), product_versions: strings(merged.product_versions ?? []),
     when_to_use: String(merged.when_to_use ?? "").trim().slice(0, 1000), active: merged.active !== false,
     research_source: merged.research_source as KnowledgeDocument["research_source"],
+    archive_target: merged.archive_target as KnowledgeDocument["archive_target"],
     source: merged.source as KnowledgeDocument["source"] };
   const revision = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
   if (previous?.revision === revision) return previous;
   const action = !previous ? "上传文档" : previous.active !== fields.active ? fields.active ? "启用文档" : "停用文档"
     : previous.source?.revision !== fields.source?.revision && fields.source ? "从仓库更新"
     : previous.content !== content ? "替换文档" : "修改适用范围";
+  const history = structuredClone(previous?.history ?? []);
+  if (previous && history.length && !history.at(-1)!.revision) history.at(-1)!.revision = previous.revision;
   const doc: KnowledgeDocument = { ...fields, id: previous?.id ?? `kd-${randomUUID()}`, revision,
-    history: [...(previous?.history ?? []), { at: new Date().toISOString(), operator, action }] };
+    history: [...history, { at: new Date().toISOString(), operator, action, revision }] };
+  if (previous) retainVersion(dir, previous);
+  retainVersion(dir, doc);
   mkdirSync(root(dir), { recursive: true });
   const target = file(dir, doc.id), temporary = `${target}.${randomUUID()}.tmp`;
   writeFileSync(temporary, JSON.stringify(doc), { mode: 0o640 });

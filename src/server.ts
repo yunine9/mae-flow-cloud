@@ -1,3 +1,7 @@
+import { readHostSkillPackage, readSkillSubmissionPackage } from "./hostSkillLibrary.ts";
+import { readKnowledgeSkillContext, saveKnowledgeSkillContext } from "./knowledgeSkillContext.ts";
+import { listKnowledgeTasks } from "./knowledgeTaskCenter.ts";
+import { listKnowledgeReviewNotes, saveKnowledgeReviewNote, applyKnowledgeReviewNotes, resolveKnowledgeReviewNotes, type KnowledgeReviewKind, type KnowledgeReviewNoteInput } from "./knowledgeReviewNotes.ts";
 import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
@@ -1115,7 +1119,7 @@ export function createTaskServer(
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
         || parts[0] === "component-knowledge" || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
-        || ["domain-extraction", "knowledge-materials", "knowledge-extraction"].includes(parts[0])
+        || ["domain-extraction", "knowledge-materials", "knowledge-extraction", "knowledge-tasks", "knowledge-review"].includes(parts[0])
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
@@ -1284,6 +1288,22 @@ export function createTaskServer(
           throw error;
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
+      }
+      if (parts[0] === "knowledge-tasks" && request.method === "GET" && parts.length === 1) {
+        return json(response, 200, listKnowledgeTasks({ dataDir: service.options.dataDir,
+          domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch(),
+          skillExtractionJob: id => service.skillExtractionJob(id) }));
+      }
+      if (parts[0] === "knowledge-review") {
+        const sources = { dataDir: service.options.dataDir, domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch() };
+        const kind = parts[1] as KnowledgeReviewKind, id = decodeURIComponent(parts[2] ?? "");
+        try {
+          if (request.method === "GET" && parts.length === 3) return json(response, 200, listKnowledgeReviewNotes(sources, kind, id));
+          if (request.method === "POST" && parts.length === 3) return json(response, 200, saveKnowledgeReviewNote(sources, kind, id, await readBody(request) as unknown as KnowledgeReviewNoteInput, viewer?.username ?? "本地部署"));
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "apply") return json(response, 202, applyKnowledgeReviewNotes(sources, kind, id, await readBody(request) as { note_ids: string[] }, viewer?.username ?? "本地部署"));
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "resolve") return json(response, 200, resolveKnowledgeReviewNotes(sources, kind, id, await readBody(request) as { note_ids: string[] }, viewer?.username ?? "本地部署"));
+          return json(response, 404, { error: "未知知识审阅接口" });
+        } catch (error) { return json(response, 400, { error: (error as Error).message }); }
       }
       if (parts[0] === "component-knowledge") return componentKnowledgeRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
@@ -1681,13 +1701,16 @@ export function createTaskServer(
         try {
           if (request.method === "POST" && parts.length === 2) {
             const body = await readBody(request);
-            return json(response, 200, service.startSkillExtraction({
+            const metadata = body.nature ? skillMetadataFromBody(service.options.dataDir, body) : undefined;
+            const job = service.startSkillExtraction({
               repo: String(body.repo ?? ""),
               intent: String(body.intent ?? ""),
               pathHint: typeof body.path_hint === "string"
                 ? body.path_hint : undefined,
               operator,
-            }));
+            });
+            if (metadata) saveKnowledgeSkillContext(service.options.dataDir, job.id, metadata);
+            return json(response, 200, { ...job, knowledge_scope: metadata });
           }
           if (request.method === "GET" && parts.length === 3) {
             const job = service.skillExtractionJob(
@@ -1695,9 +1718,10 @@ export function createTaskServer(
             if (!job) {
               return json(response, 404, { error: "提取任务不存在" });
             }
-            return json(response, 200, job);
+            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id) });
           }
         } catch (error) {
+          if (error instanceof SkillLibraryError) return json(response, 400, { error: error.message });
           if (error instanceof TaskControlError) {
             return json(response, 409, { error: error.message });
           }
@@ -1718,6 +1742,12 @@ export function createTaskServer(
           });
         }
         try {
+          if (request.method === "GET" && parts.length === 4 && parts[2] === "submissions") {
+            return json(response, 200, readSkillSubmissionPackage(dataDir, decodeURIComponent(parts[1]), decodeURIComponent(parts[3])));
+          }
+          if (request.method === "GET" && parts.length === 3 && parts[2] === "package") {
+            return json(response, 200, readHostSkillPackage(dataDir, decodeURIComponent(parts[1])));
+          }
           if (request.method === "GET" && parts.length === 3
               && parts[2] === "versions") {
             return json(response, 200, {

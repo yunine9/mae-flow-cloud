@@ -76,6 +76,15 @@ test('HTTP 上传、修改、停用和试搜接口，无侧车时明确不可用
   assert.equal((await post(`/${doc.id}`,{active:false})).status,200);
   assert.equal((await post(`/${doc.id}/search`,{query:'规则'})).status,400);
   assert.equal((await post('',{title:'x',content:''})).status,400);
+  const edit = await post(`/${doc.id}`, { content: '# 人工修订', expected_revision: (await (await fetch(url+`/${doc.id}`)).json() as any).revision });
+  assert.equal(edit.status, 200); const revised = await edit.json() as any;
+  const versions = await (await fetch(url+`/${doc.id}/versions`)).json() as any;
+  assert.equal(versions.versions.length, 3);
+  const old = await (await fetch(url+`/${doc.id}/versions/${doc.revision}`)).json() as any;
+  assert.equal(old.document.content, doc.content);
+  assert.equal((await post(`/${doc.id}/restore`, { revision: doc.revision, expected_revision: doc.revision })).status, 400);
+  const restored = await post(`/${doc.id}/restore`, { revision: doc.revision, expected_revision: revised.revision });
+  assert.equal(restored.status, 200); assert.equal((await restored.json() as any).content, doc.content);
  }finally{await service.shutdown();await new Promise<void>(r=>server.close(()=>r()));rmSync(dir,{recursive:true,force:true});}
 });
 

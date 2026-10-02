@@ -30,7 +30,9 @@ test("桌面审核：默认全选、单项排除、专家对话和局部返工�
           `file://${html}?componentResearch=cr-browser`],{timeout:25000,stdio:["ignore",fd,"ignore"]});
       } catch (error) {if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;}
       finally {closeSync(fd);}
-      const result = readFileSync(dump,"utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
+      const output = readFileSync(dump,"utf8");
+      if (process.env.MFC_RESEARCH_SCREENSHOT_DIR) writeFileSync(join(process.env.MFC_RESEARCH_SCREENSHOT_DIR, `research-${width}.html`), output);
+      const result = output.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
       assert.ok(result,`${width}: browser did not finish`);
       const value = JSON.parse(result);assert.equal(value.error,undefined,`${width}: ${value.error}`);assert.equal(value.passed,true);
     }

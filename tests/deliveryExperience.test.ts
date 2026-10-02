@@ -92,3 +92,33 @@ test("大型需求超过八条独立经验全部保存，不因数量拒绝或�
     assert.match(DELIVERY_EXPERIENCE_MISSION, /不设条数上限/);
   } finally { f.cleanup(); }
 });
+
+test('解释文字加唯一 JSON 块可解析，多个候选块与伪造依据仍拒绝',()=>{
+  assert.deepEqual(parseDeliveryExperiences('核对后没有新经验。\n\n```json\n{"drafts":[]}\n```',new Set()),[]);
+  assert.throws(()=>parseDeliveryExperiences('```json\n{"drafts":[]}\n```\n```json\n{"drafts":[]}\n```',new Set()));
+  assert.throws(()=>parseDeliveryExperiences('```json\n{"drafts":[{"dimension":"组件与接口用法","scope":"local","trigger":"使用接口时","problem":"失败","conclusion":"检查条件","paths":[],"evidence_ids":["invented"]}]}\n```',new Set(['diff'])),/真实依据/);
+});
+
+test("交付复盘收到消费时的历史经验，修订建议待审且不覆盖现行人工内容",async()=>{
+ const {recordMemoryUsage}=await import("../src/memoryUsage.ts");
+ const f=fixture();
+ try {
+  const row=f.store.record({source:"user_note",judged_by:"human",scope:"local",repo:"repo",paths:["file.cpp"],task:"old",evidence:"note",trigger:"资源释放",conclusion:"旧结论：open 失败不需要 close。"});
+  f.store.review(row.id,"owner",{decision:"accepted",revision:1});
+  recordMemoryUsage({workspace:f.workspace,taskId:"task-1",store:()=>f.store},{moment:"context",ids:[row.id],assets:[{id:row.id,revision:"2"}]});
+  f.store.review(row.id,"owner",{decision:"accepted",revision:2,conclusion:"人工补充：借用资源不能关闭，其他条件待核实。"});
+  const reference=`memory:${row.id}:2`;
+  const service=new DeliveryExperiences(f.options,async input=>{
+   const context=JSON.parse(input.context);assert.equal(context.memory_usage_available,true);
+   const evidence=JSON.parse(readFileSync(join(input.root,"evidence.json"),"utf8")).find((e:any)=>e.id===reference);
+   assert.equal(evidence.historical.conclusion,"旧结论：open 失败不需要 close。");
+   assert.equal(evidence.current_revision,3);
+   return JSON.stringify({drafts:[{...draft,evidence_ids:["diff","annotation:a",reference]}]});
+  });
+  service.capture(f.task);f.merge();service.start(f.task);await service.flush();
+  assert.equal(f.store.find(row.id)?.revision,3);
+  assert.equal(f.store.find(row.id)?.conclusion,"人工补充：借用资源不能关闭，其他条件待核实。");
+  const proposal=f.store.list({task:"task-1"})[0];
+  assert.equal(proposal.review?.status,"pending");assert.match(proposal.quote!,new RegExp(reference));
+ }finally{f.cleanup();}
+});

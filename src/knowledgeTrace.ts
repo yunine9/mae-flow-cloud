@@ -45,7 +45,10 @@ export interface TaskKnowledgeResource extends KnowledgeResourceRef {
   state: "available" | "loaded" | "used";
   available_count: number;
   loaded_count: number;
+  /** Successful body reads only. Searching a path does not prove it was read. */
   read_count: number;
+  /** Optional for compatibility with previously serialized snapshots. */
+  search_count?: number;
   first_at?: string;
   last_at?: string;
 }
@@ -253,6 +256,7 @@ export function knowledgeUsageSnapshot(options: {
       available_count: 0,
       loaded_count: 0,
       read_count: 0,
+      search_count: 0,
     });
   };
   for (const item of options.selectedSkills ?? []) seed({
@@ -295,7 +299,8 @@ export function knowledgeUsageSnapshot(options: {
     item.last_at = !item.last_at || event.ts > item.last_at ? event.ts : item.last_at;
     if (event.action === "available") item.available_count += 1;
     if (event.action === "loaded") item.loaded_count += 1;
-    if (event.action === "read" || event.action === "searched") item.read_count += 1;
+    if (event.action === "read") item.read_count += 1;
+    if (event.action === "searched") item.search_count = (item.search_count ?? 0) + 1;
     item.state = item.read_count > 0 ? "used"
       : item.loaded_count > 0 ? "loaded" : "available";
   }

@@ -1802,6 +1802,7 @@ export interface TaskKnowledgeResource {
   available_count: number;
   loaded_count: number;
   read_count: number;
+  search_count?: number;
   first_at?: string;
   last_at?: string;
 }

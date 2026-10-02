@@ -103,8 +103,10 @@ async function run() {
   check(workspace.scrollWidth <= workspace.clientWidth + 2,"desktop workspace horizontal overflow");
   check(document.documentElement.scrollWidth <= innerWidth + 2,"desktop page horizontal overflow");
   check(!document.querySelector('input[type="file"]'), "component research must not expose uploads");
-  await click("查看派生产物");
-  check(document.querySelector('[aria-label="组件派生产物"]')?.textContent?.includes("规则未启用"), "derived candidates cannot claim enabled");
+  document.querySelector<HTMLButtonElement>('[aria-label="文稿更多操作"]')!.click(); await pause();
+  const artifactsAction = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("查看派生产物"));
+  check(artifactsAction, "artifact preview remains in the more menu"); artifactsAction!.click(); await pause();
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes("规则未启用"), "derived candidates cannot claim enabled");
   check(button("下载结构化产物"), "structured artifact export available");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "artifact preview does not overflow desktop");
   check(!errors.length,errors.join(";"));

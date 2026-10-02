@@ -7,6 +7,7 @@ node_modules/
 .pi/
 .agents/
 .ui-fixtures/
+.knowledge-preview-*/
 web/dist/
 web/*.tsbuildinfo
 # 内核在仓根落的临时工作目录(probe/用例跑内核时生成)

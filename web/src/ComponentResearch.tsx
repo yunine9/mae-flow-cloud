@@ -1,11 +1,12 @@
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
-import { MoreHorizontal, FileText, History, ArrowUpRight } from "lucide-react";
+import { MoreHorizontal, FileText, History, CheckCircle2, Settings2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
+import { KnowledgeBackButton } from "./KnowledgeBackButton";
+import { KnowledgeTaskNavigation } from "./KnowledgeTaskNavigation";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
-import { ExtractionSkillEditor, openExtractionSkill } from "./ExtractionSkillEditor";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +26,8 @@ import {
 } from "./componentResearchApi";
 import { getBusinessModules, type BusinessModule } from "./api";
 import { Markdown } from "./markdown";
-import { ComponentResearchReview } from "./ComponentResearchReview";
+import { ComponentResearchReview, latestComponentProposal } from "./ComponentResearchReview";
+import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 function Choice({
   label,
   value,
@@ -66,6 +68,7 @@ export function ComponentResearch({
   focusId,
   surface,
   onClose,
+  backLabel = "知识文档",
   onAdopt,
 }: {
   open: boolean;
@@ -74,6 +77,7 @@ export function ComponentResearch({
   focusId?: string;
   surface?: "knowledge" | "workbench";
   onClose: () => void;
+  backLabel?: string;
   onAdopt: (id: string) => void;
 }) {
   const [components, setComponents] = useState<ComponentRepository[]>([]),
@@ -93,6 +97,11 @@ export function ComponentResearch({
     [module, setModule] = useState(""),
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [reviewBlocked, setReviewBlocked] = useState(false);
+  const [archiveNotice, setArchiveNotice] = useState("");
+  const [archiveRefresh, setArchiveRefresh] = useState(0);
+  const [publishSettingsOpen, setPublishSettingsOpen] = useState(false);
+  const publishing = useRef(false);
   const [statusFilter, setStatusFilter] = useState("all");
   const studio = useKnowledgeStudio();
   const [stage, setStage] = useState("review");
@@ -203,13 +212,124 @@ export function ComponentResearch({
     try {
       const result = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}/${action}`, {});
       if (action === "delete") { setDeleting(false); setDetail(undefined); selectRecord("history"); }
-      else { setDetail(result); selectRecord(result.id); }
+      else { setDetail(result); selectRecord(result.id); if (action === "begin-update") studio?.openResult("component", result.id); }
       await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
+  async function publishKnowledge() {
+    if (!current || publishing.current) return;
+    publishing.current = true;
+    setBusy(true); setError(""); setArchiveNotice("");
+    try {
+      let prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}`);
+      if (prepared.status !== "done") throw new Error("请等待本轮研究完成后确认并发布");
+      const selectedSections = prepared.document?.sections.filter(section => section.selected) ?? [];
+      const inspectedSections = current.document?.sections.filter(section => section.selected) ?? [];
+      if (prepared.document_id !== current.document_id || selectedSections.length !== inspectedSections.length || selectedSections.some(section => {
+        const inspected = inspectedSections.find(item => item.id === section.id);
+        return !inspected || inspected.revision !== section.revision
+          || latestComponentProposal(current, section.id)?.id !== latestComponentProposal(prepared, section.id)?.id;
+      })) {
+        setDetail(prepared);
+        throw new Error("文稿已有新修改，请重新检视后发布");
+      }
+      const proposals = selectedSections.flatMap(section => {
+        const turn = latestComponentProposal(prepared, section.id);
+        if (!turn?.proposal) return [];
+        if (turn.status !== "done") throw new Error(`“${section.title}”的修改尚未完成，请先查看研究过程`);
+        if (turn.proposal.base_revision !== section.revision) throw new Error(`“${section.title}”已发生变化，请先查看修订差异，处理冲突后再发布`);
+        return [turn];
+      });
+      // Validate the entire selection before accepting any candidate.
+      for (const turn of proposals) {
+        prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${prepared.id}/proposal`, { turn_id: turn.id, decision: "accept" });
+        setDetail(prepared);
+      }
+      const document = await componentRequest<{ id: string }>(`/component-research/${prepared.id}/adopt`, {
+        title, ...(prepared.document ? {} : { content: draft }), scope,
+        module_ids: module ? [module] : [], repositories: repos.split("\n").map(s => s.trim()).filter(Boolean),
+      });
+      setDetail({ ...prepared, document_id: document.id, stage: "已发布为知识" });
+      // Knowledge is already live. Archive failures must not turn this into a failed publication.
+      try {
+        const endpoint = `/component-research/${current.id}/archive`;
+        const result = await componentRequest<{ archive: DomainKnowledgeJob | null }>(endpoint);
+        const reusesMr = result.archive?.publications.some(item => !["closed", "merged"].includes(item.state) && (item.url || item.mr_id));
+        if (result.archive?.issue_no && (result.archive.issue_description || reusesMr) && result.archive.knowledge_target.repository) {
+          const archive = await componentRequest<DomainKnowledgeJob>(endpoint, {
+            title, ...(current.document ? {} : { content: draft }),
+            target: result.archive.knowledge_target,
+            filename: result.archive.documents[0]?.path.split("/").at(-1),
+            issue_no: result.archive.issue_no, issue_description: result.archive.issue_description, base_revision: result.archive.documents[0]?.revision,
+          });
+          await componentRequest<DomainKnowledgeJob>(`${endpoint}/publish`, {
+            document_ids: archive.documents.map(d => d.id),
+            expected_revisions: Object.fromEntries(archive.documents.map(d => [d.id, d.revision])),
+          });
+          setArchiveNotice("Git 归档已提交，可在“Git 归档”中查看进度。");
+        } else setArchiveNotice("知识已生效。Git 归档尚未配置，可在“Git 归档”中补充归档位置、关联单号与单号描述。");
+      } catch (e) { setArchiveNotice(`知识已生效，Git 归档待处理：${(e as Error).message}`); }
+      setArchiveRefresh(value => value + 1);
+      void load().catch(() => {});
+    } catch (e) { setError((e as Error).message); }
+    finally { publishing.current = false; setBusy(false); }
+  }
+  const switchTaskView = (next: "progress" | "review") => {
+    setStage(next);
+    if (current && studio) {
+      if (next === "review") studio.openResult("component", current.id);
+      else studio.openExecution("component", current.id);
+    }
+  };
+  if (surface && current) return <section className="tw-root component-knowledge-review" aria-label="组件文稿审查" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden" }}>
+    <header className="knowledge-reading-toolbar flex shrink-0 items-center gap-3 border-b border-line px-4 py-2">
+      <KnowledgeBackButton onClick={onClose} destination={backLabel} />
+      <div className="flex min-w-0 flex-1 items-center gap-3"><h2 className="truncate text-base font-semibold" title={current.topic}>{current.topic}</h2>
+        <span className={`shrink-0 text-sm ${current.document_id ? "text-success" : "text-muted-foreground"}`}>{current.document_id ? <><CheckCircle2 size={15} className="inline" /> 已发布<span className="sr-only">已发布为 1 篇组件知识，当前版本已生效</span></> : current.status === "done" ? current.update_document_id ? "更新待检视" : "待检视" : ["queued", "running"].includes(current.status) ? current.review_turns?.some(turn => turn.status === "running" || turn.status === "queued") || current.update_document_id ? "修改中" : "研究中" : current.status === "failed" ? "研究失败" : "已停止"}</span></div>
+      <div hidden={stage !== "review"} className="flex shrink-0 items-center gap-2">
+        {current.document_id ? <>
+          <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} compact refreshKey={archiveRefresh} notice={archiveNotice} onOpenKnowledge={onAdopt} onArchiveAction={() => setArchiveNotice("")} />
+          <Button variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>更新知识</Button><Button onClick={() => onAdopt(current.document_id!)}>查看知识</Button>
+        </> : <>
+          <Button variant="ghost" onClick={() => setPublishSettingsOpen(true)}><Settings2 size={16} />发布设置</Button>
+          <Button disabled={busy || reviewBlocked || current.status !== "done" || !title.trim() || (current.document ? !current.document.sections.some(s => s.selected) : !draft.trim()) || (scope === "module" && !module) || (scope === "repository" && !repos.trim())} onClick={() => void publishKnowledge()}>{busy ? "正在发布…" : "确认并发布"}</Button>
+        </>}
+      </div>
+    </header>
+    <KnowledgeTaskNavigation value={stage} onChange={switchTaskView} documentCount={current.document || current.draft ? 1 : 0} working={["queued", "running"].includes(current.status)} status={current.status} modifying={!!current.update_document_id || !!current.review_turns?.some(turn => turn.mode !== "discuss")} published={!!current.document_id} disabled={busy} />
+    {error && <p role="alert" className="shrink-0 px-4 py-2 text-danger">{error}</p>}
+    <Dialog open={publishSettingsOpen} onOpenChange={setPublishSettingsOpen}><DialogContent className="tw-root max-h-[85dvh] overflow-auto sm:max-w-xl">
+      <DialogHeader><DialogTitle>发布设置</DialogTitle></DialogHeader>
+      <div className="grid grid-cols-2 gap-4">
+        <label className="col-span-2 grid gap-2">知识名称<Input value={title} onChange={e => setTitle(e.target.value)} /></label>
+        <Choice label="适用范围" value={scope} onChange={setScope} items={[{value:"platform",label:"平台通用"},{value:"module",label:"业务模块"},{value:"repository",label:"特定代码仓"}]} />
+        {scope === "module" && <Choice label="业务模块" value={module} onChange={setModule} items={modules.filter(m => m.status === "active").map(m => ({value:m.id,label:m.name}))} />}
+        {scope === "repository" && <label className="grid gap-2">适用代码仓（每行一个）<Textarea value={repos} onChange={e => setRepos(e.target.value)} /></label>}
+        <p className="col-span-2 text-sm text-muted-foreground">勾选的能力合成一篇知识。未选内容保留在本任务中；更新时以完整所选章节替换这篇知识。</p>
+      </div>
+      <Button className="justify-self-end" onClick={() => setPublishSettingsOpen(false)}>完成</Button>
+    </DialogContent></Dialog>
+    <div hidden={stage !== "review"} className="min-h-0 flex-1" style={{ display: stage === "review" ? "flex" : "none", flexDirection: "column" }}>
+      {current.update_document_id && !current.document_id && <p className="shrink-0 border-b border-line px-4 py-1.5 text-sm text-muted-foreground">当前为更新草稿，已发布版本继续生效。</p>}
+      {current.document ? <ComponentResearchReview key={`review:${current.id}`} record={current} unified onBlockedChange={setReviewBlocked} onChanged={record => { setDetail(record); void load(); }} readerHeight="100%" />
+        : current.draft ? <section className="min-h-0 flex-1 overflow-auto p-6"><div className="mb-3 flex justify-between"><strong>{current.document_id ? "已发布文稿" : "待发布文稿"}</strong>{!current.document_id && <Button variant="outline" onClick={() => setEditing(!editing)}>{editing ? "预览文稿" : "编辑文稿"}</Button>}</div>{editing ? <Textarea aria-label="知识文稿" rows={16} value={draft} onChange={e => setDraft(e.target.value)} /> : <Markdown text={draft} />}</section>
+        : <p className="p-6 text-muted-foreground">文稿生成后可在这里检视。</p>}
+    </div>
+    <div hidden={stage !== "progress"} className="min-h-0 flex-1 overflow-auto p-5">
+      <div className="mb-4 flex items-center gap-3 text-sm"><span className="mr-auto text-muted-foreground">{current.components?.length ?? 1} 个组件仓 · {knowledgeLanguageLabel(current.language)} · {current.operator}</span>
+        {["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
+        {["failed", "cancelled"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("retry")}>继续研究</Button>}
+        <details className="relative"><summary className="cursor-pointer text-muted-foreground">来源范围</summary><div className="absolute right-0 z-10 mt-2 w-[480px] max-w-[80vw] rounded-lg border border-line bg-surface p-4 shadow-lg">{(current.components ?? [current.component]).map(component => <p key={component.id} className="mb-2 break-all">{component.name} · {component.repository} · {component.branch} · {component.path || "根目录"}<br />读取版本：{current.revisions?.[component.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}</div></details>
+      </div>
+      {current.error && <p role="alert" className="mb-4 text-danger">{current.error}</p>}
+      {current.pipeline && <p className="mb-4 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(task => task.status === "done").length}/{current.pipeline.tasks.length} 项通过</p>}
+      {!!current.children?.length && <div className="mb-5 divide-y rounded-lg border border-line">{current.children.map(child => <div key={child.id} className="flex items-center gap-4 p-3"><strong className="mr-auto">{child.component.name}</strong><span className="text-sm text-muted-foreground">{child.stage}</span><Button variant="outline" onClick={() => { selectRecord(child.id); if (studio) child.status === "done" ? studio.openResult("component", child.id) : studio.openExecution("component", child.id); }}>{child.status === "done" ? "检视文稿" : "查看过程"}</Button></div>)}</div>}
+      <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} />
+    </div>
+  </section>;
   if (compact && current?.document && stage === "review") return <section className="tw-root space-y-3" aria-label="萃取结果阅读页">
     <header className="flex items-center gap-3 pr-8">
-      <Button variant="ghost" onClick={() => selectRecord("history")}>← 萃取记录</Button>
+      <KnowledgeBackButton onClick={() => selectRecord("history")} destination="萃取记录" />
       <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={current.topic}>{current.document.overview.match(/^#\s+(.+)$/m)?.[1] ?? "萃取结果"}</h2>
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="萃取结果操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
         <DropdownMenuItem onClick={() => setStage("progress")}>执行详情</DropdownMenuItem>
@@ -219,11 +339,11 @@ export function ComponentResearch({
       {current.document_id ? <Button onClick={() => onAdopt(current.document_id!)}>查看已采纳知识</Button> : <Button disabled={busy || ["queued", "running"].includes(current.status)} onClick={() => setStage("publish")}>采纳知识</Button>}
     </header>
     {error && <p role="alert" className="text-danger">{error}</p>}
-    <ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} readerHeight="calc(96dvh - 110px)" />
+    <ComponentResearchReview key={`review:${current.id}`} record={current} onChanged={record => { setDetail(record); void load(); }} readerHeight="calc(96dvh - 110px)" />
   </section>;
   return (
-    <KnowledgeExtractionWorkspace hideHeader={surface === "knowledge" && !!current} codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose}
-      onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }} actions={<ExtractionSkillEditor kind="component" />}
+    <KnowledgeExtractionWorkspace hideHeader={surface === "knowledge" && !!current} codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose} backLabel={backLabel}
+      onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }}
       sidebar={!focused && surface !== "knowledge" ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
@@ -258,20 +378,20 @@ export function ComponentResearch({
             ) : (
               <>
                 {surface === "knowledge" ? <header className="studio-result-toolbar">
+                  <KnowledgeBackButton onClick={onClose} destination={backLabel} />
                   <FileText size={21} /><strong title={current.topic}>{current.topic}</strong><span className="studio-job-status">{current.status === "done" ? "已生成" : current.stage}</span>
                   <div className="studio-result-actions"><Button variant="ghost" onClick={() => { studio?.openExecution("component", current.id); setStage("progress"); }}><History size={16} />萃取过程</Button>
                     {stage !== "review" && <Button variant="ghost" onClick={() => setStage("review")}>阅读成果</Button>}
-                    <Button onClick={() => setStage("publish")}><ArrowUpRight size={17} />入库</Button>
+                    <Button onClick={() => setStage("publish")}>Git 归档</Button>
                     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => openExtractionSkill("component")}>查看 Skill</DropdownMenuItem>
                       <DropdownMenuItem onClick={() => { studio?.openExecution("component"); selectRecord("new"); }}>新建萃取任务</DropdownMenuItem>
                       {!focused && !current.parent_id && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
                     </DropdownMenuContent></DropdownMenu>
                   </div>
                 </header> : <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
-                  {current.parent_id && <Button variant="link" className="mb-3 px-0" onClick={() => selectRecord(current.parent_id!)}>← 返回全部组件进度</Button>}
                   <div className="flex items-center justify-between gap-3">
+                    {current.parent_id && <KnowledgeBackButton onClick={() => selectRecord(current.parent_id!)} destination="全部组件进度" />}
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
                     {!focused && ["done", "failed", "cancelled"].includes(current.status) && !(current.document && current.status === "done") && (
                       <Button
@@ -300,8 +420,8 @@ export function ComponentResearch({
                     </p>
                   )}
                 </header>
-                {compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>}
-                {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={current.id} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
+                {surface === "workbench" ? <nav className="mb-4 flex gap-2" aria-label="组件研究详情">{([['progress','研究过程'],['inputs','来源范围']] as const).map(([value,label]) => <Button key={value} size="sm" variant={stage === value ? "secondary" : "ghost"} onClick={() => setStage(value)}>{label}</Button>)}<Button size="sm" variant="outline" disabled={!current.draft && !current.document} onClick={() => studio ? studio.openResult("component", current.id) : setStage("review")}>文稿审查</Button></nav> : compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>}
+                {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={`review:${current.id}`} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
                 {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
                   <div className="rounded-xl border border-line bg-surface-2 p-5">
                     <div className="flex items-center justify-between gap-3"><strong>组件草稿 {current.progress.done} / {current.progress.total}</strong><span className="text-muted-foreground">已采纳 {current.progress.adopted} 篇</span></div>
@@ -326,7 +446,7 @@ export function ComponentResearch({
                   {stage === "inputs" && (current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
                   {stage === "inputs" && <p className="mt-3 text-sm">来源限定为基础仓固定版本代码与 everycode 真实调用。{current.material_ids?.length ? "此历史记录曾关联上传资料，重新研究须新建任务。" : ""}</p>}
                 </details>}
-                {stage === "progress" && <KnowledgeResearchProgress key={current.id} evidence={current.evidence} />}
+                {stage === "progress" && <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} />}
                 {current.draft && ["review", "publish"].includes(stage) && (
                   <>
                     {stage === "review" && !current.document && <><div className="mb-3 flex items-center justify-between">
@@ -353,7 +473,7 @@ export function ComponentResearch({
                     ) : (
                       <Markdown text={draft} />
                     )}</>}
-                    {stage === "publish" && <ComponentKnowledgeArchive key={current.id} record={current} title={title} content={draft} />}
+                    {stage === "publish" && <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} />}
                     {stage === "publish" && (current.document_id ? (
                       <div className="mt-5 flex gap-3"><Button variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>更新这篇文档</Button><Button
                         className="mt-5"

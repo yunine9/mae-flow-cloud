@@ -2,7 +2,7 @@ import type { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
 import type { KnowledgeSourceCleanupState, DomainKnowledgeJob, DomainPublication, KnowledgeRepository } from "./domainKnowledgeTypes.ts";
 
 export interface SourceCleanupTask {
-  id: string; issue_no?: string; operator: string; created_at: string;
+  id: string; issue_no?: string; issue_description?: string; operator: string; created_at: string;
   source_cleanup?: KnowledgeSourceCleanupState;
 }
 export class KnowledgeSourceCleanup {
@@ -13,7 +13,7 @@ export class KnowledgeSourceCleanup {
   private job(task: SourceCleanupTask): DomainKnowledgeJob {
     const state = task.source_cleanup;
     if (!state) throw new Error("此旧任务未经过萃取前清理，请新建任务，避免沿用受旧知识影响的草稿");
-    return { id: `${task.id}-cleanup`, title: "萃取前旧知识清理", issue_no: task.issue_no, operator: task.operator, created_at: task.created_at,
+    return { id: `${task.id}-cleanup`, title: "萃取前旧知识清理", issue_no: task.issue_no, issue_description: task.issue_description, operator: task.operator, created_at: task.created_at,
       scope: "萃取前清理旧知识", cleanup_only: true, knowledge_target: state.repositories[0], repositories: state.repositories.slice(1),
       material_ids: [], ar_codes: [], use_wxdoubao: false, status: "idle", stage: "清理旧知识", revisions: {}, documents: [], turns: [], evidence: [],
       cleanup_plans: state.plans, publications: state.publications };

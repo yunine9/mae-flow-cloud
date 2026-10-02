@@ -5,15 +5,15 @@ import { useKnowledgeReader } from "./useKnowledgeReader";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export function KnowledgeReadingFrame({ children, actions, documentActions, title }: { children: ReactNode; actions?: ReactNode; documentActions?: ReactNode; title: string }) {
+export function KnowledgeReadingFrame({ children, actions, documentActions, title, focused = false }: { children: ReactNode; actions?: ReactNode; documentActions?: ReactNode; title: string; focused?: boolean }) {
   const { fullscreen, setFullscreen, showTree, toggleTree, frameRef } = useKnowledgeReader();
   const [host] = useState(() => { const node = document.createElement("div"); node.className = "knowledge-reading-host"; return node; });
   const mountReader = useCallback((node: HTMLDivElement | null) => { if (node) node.appendChild(host); }, [host]);
-  const body = <section ref={frameRef} className={`domain-file-workspace ${showTree ? "" : "tree-hidden"}`} aria-label="领域知识审查工作区" style={{ height: fullscreen ? "100%" : "max(500px, calc(100dvh - 340px))" }}>
+  const body = <section ref={frameRef} className={`domain-file-workspace ${showTree ? "" : "tree-hidden"}${focused ? " is-focused-reader" : ""}`} aria-label="领域知识审查工作区" style={{ height: fullscreen || focused ? "100%" : "max(500px, calc(100dvh - 340px))" }}>
     <header className="research-review-toolbar">
       <div className="reader-tree-tools"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={toggleTree}>{showTree ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}{showTree ? "收起目录" : "展开目录"}</Button></div>
       <div className="reader-file-tools"><FileText size={20} /><strong title={title}>{title}</strong><div className="reader-file-actions">{documentActions}{actions}
-        <Button variant="outline" size="sm" onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}{fullscreen ? "退出全屏" : "全屏阅读"}</Button>
+        {!focused && <Button variant="outline" size="sm" onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}{fullscreen ? "退出全屏" : "全屏阅读"}</Button>}
       </div></div>
     </header>{children}
   </section>;

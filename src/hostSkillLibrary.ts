@@ -123,6 +123,8 @@ export interface SkillSubmissionRecord {
   status: "pending" | "approved" | "rejected";
   skill_digest: string;
   package_digest: string;
+  /** 提交时生效整包的版本；null 表示尚未上架，旧记录缺省表示未保存基线。 */
+  base_package_digest?: string | null;
   files: number;
   bytes: number;
   nature: KnowledgeAssetMetadata["nature"];
@@ -220,6 +222,50 @@ export function readHostSkillDocument(
     package_digest: packageDigestValue,
     bytes: raw.byteLength,
   };
+}
+
+/** 只读当前包，所有路径仍按上传规则校验；不跟随软链接。 */
+export function readHostSkillPackage(dataDir: string, directory: string) {
+  const document = readHostSkillDocument(dataDir, directory);
+  const files = readSkillPackageFiles(join(dataDir, LIVE_DIR, directory));
+  return { ...document, files };
+}
+
+function readSkillPackageFiles(packageRoot: string) {
+  if (!lstatSync(packageRoot).isDirectory()) throw new SkillLibraryError("Skill 包目录无效");
+  const files: Array<{ path: string; bytes: number; content?: string }> = [];
+  let total = 0;
+  function visit(relative: string, depth: number) {
+    if (depth > 16) throw new SkillLibraryError("Skill 目录层级过深");
+    for (const entry of readdirSync(join(packageRoot, relative), { withFileTypes: true })) {
+      const path = relative ? `${relative}/${entry.name}` : entry.name;
+      assertPackagePath(path);
+      if (entry.isSymbolicLink()) throw new SkillLibraryError("Skill 包不能包含软链接");
+      if (entry.isDirectory()) { visit(path, depth + 1); continue; }
+      if (!entry.isFile()) throw new SkillLibraryError("Skill 包包含不支持的文件类型");
+      if (files.length >= 500) throw new SkillLibraryError("Skill 包文件数量过多");
+      const raw = readFileSync(join(packageRoot, path)); total += raw.byteLength;
+      if (total > 20 * 1024 * 1024) throw new SkillLibraryError("Skill 包超过 20 MiB");
+      let content: string | undefined;
+      if (raw.byteLength <= 128 * 1024 && !raw.includes(0)) {
+        try { content = new TextDecoder("utf-8", { fatal: true }).decode(raw); } catch { /* 二进制附件保留文件信息。 */ }
+      }
+      files.push({ path, bytes: raw.byteLength, ...(content === undefined ? {} : { content }) });
+    }
+  }
+  visit("", 0);
+  files.sort((a,b) => a.path === "SKILL.md" ? -1 : b.path === "SKILL.md" ? 1 : a.path.localeCompare(b.path));
+  return files;
+}
+
+export function readSkillSubmissionPackage(dataDir: string, directory: string, id: string) {
+  assertDirectoryName(directory);
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new SkillLibraryError("提交编号无效");
+  const record = readSubmission(dataDir, directory, id);
+  const root = join(submissionRoot(dataDir, directory), id, "package");
+  const files = readSkillPackageFiles(root);
+  if (packageDigest(root) !== record.package_digest) throw new SkillLibraryError("提交包已变化，请重新提交后审查");
+  return { record, files };
 }
 
 function assertPackagePath(path: string): void {
@@ -714,6 +760,8 @@ export function submitHostSkill(
     try {
       const staged = materializeToStaging(
         stagingRoot, directory, files, metadata);
+      const live = join(dataDir, LIVE_DIR, directory);
+      const basePackageDigest = existsSync(live) ? packageDigest(live) : null;
       const stamp = new Date().toISOString().replace(/[-:.]/g, "");
       let id = stamp;
       for (let seq = 1;
@@ -731,6 +779,7 @@ export function submitHostSkill(
         status: "pending",
         skill_digest: staged.skillDigest,
         package_digest: staged.packageDigestValue,
+        base_package_digest: basePackageDigest,
         files: staged.files,
         bytes: staged.bytes,
         nature: staged.nature,
@@ -806,6 +855,13 @@ export function approveSkillSubmission(
     if (record.status !== "pending") {
       throw new SkillLibraryError(
         `提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    }
+    if (record.base_package_digest !== undefined) {
+      const live = join(dataDir, LIVE_DIR, directory);
+      const currentDigest = existsSync(live) ? packageDigest(live) : null;
+      if (currentDigest !== record.base_package_digest) {
+        throw new SkillLibraryError("当前 Skill 包在提交后已发生变化，请基于最新版本重新提交；本次仍保持待审核，未覆盖已发布内容");
+      }
     }
     const stagingRoot = stageDirectory(dataDir, directory);
     try {

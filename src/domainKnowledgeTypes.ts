@@ -13,6 +13,9 @@ export interface DomainDocument extends DomainDocumentContent {
   revision: number; selected: boolean; base_content: string | null; base_revision: string;
   history: Array<{ revision: number; content: string; component_metadata?: string; sources: string; title: string; operator: string; at: string }>;
   knowledge_document_id?: string;
+  published_revision?: string;
+  published_document_revision?: number;
+  published_at?: string;
   remote_review?: DomainRemoteReview;
 }
 export interface DomainRemoteReview {
@@ -52,21 +55,32 @@ export interface KnowledgeCleanupPlan {
 export interface DomainPublication {
   target_id: string; state: "pending" | "opened" | "merged" | "failed" | "closed" | "unchanged";
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
-  documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; metadata_for?: string }>;
+  documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; metadata_for?: string; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
   sync_state?: "pending" | "done" | "failed";
   sync_error?: string;
   cleanup_id?: string; removed_paths?: string[];
+  target_revision?: string;
+  updated_at?: string;
+}
+export interface DomainArchiveBatch {
+  id: string; created_at: string; operator: string; state: "pending" | "running" | "done" | "failed" | "superseded";
+  documents: DomainDocument[]; targets: KnowledgeRepository[]; issue_no?: string; issue_description?: string;
+  publications: DomainPublication[]; error?: string;
+  superseded_documents?: Array<{ document_id: string; knowledge_document_id: string; published_revision: string;
+    current_revision?: string; reason: "newer_version" | "deleted" }>;
 }
 export interface DomainKnowledgeJob {
   /** 临时单模块效果验证，使用独立任务且不允许归档。 */
   probe?: { module: string };
   cleanup_only?: boolean;
   source_cleanup?: KnowledgeSourceCleanupState;
-  id: string; title: string; scope: string; issue_no?: string; module_id?: string; operator: string; created_at: string;
+  id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
   instructions?: string;
   component_research_id?: string; technologies?: string[];
+  component_source?: { job_id: string; repository: string; branch: string; path: string; revision?: string;
+    components?: Array<{ id: string; repository: string; branch: string; path: string; revision?: string }> };
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
   source_repositories?: KnowledgeRepository[];
   archive_configured?: boolean; archive_revision?: number;
@@ -76,6 +90,7 @@ export interface DomainKnowledgeJob {
   revisions: Record<string, string>; skill?: { name: string; digest: string };
   documents: DomainDocument[]; turns: DomainTurn[]; evidence: Array<Record<string, unknown>>; publications: DomainPublication[];
   publication_history?: DomainPublication[];
+  archive_batches?: DomainArchiveBatch[];
   cleanup_plans?: KnowledgeCleanupPlan[];
 }
 export interface DomainExecution {

@@ -117,7 +117,7 @@ export function KnowledgeDocuments({ studio = false, onManage, onOpenTask, uploa
   async function update(body: unknown) {
     const id = selected; setBusy(true); setError("");
     try {
-      const saved = await documentRequest<KnowledgeDocument>(`/${encodeURIComponent(id)}`, body);
+      const saved = await documentRequest<KnowledgeDocument>(`/${encodeURIComponent(id)}`, { ...(body as Record<string, unknown>), expected_revision: doc?.revision });
       if (selectedRef.current === id) { setDoc(saved);  }
       await refresh();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -210,7 +210,7 @@ function DocumentForm({ initialSource = "upload", mode, doc, modules, onClose, o
     setBusy(true); setError("");
     try {
       if (mode !== "edit" && source === "upload" && content === undefined) throw new Error("请选择 Markdown 文件");
-      const body = { title, scope, module_ids: moduleIds, repositories: split(repositories), technologies: language, product_versions: versions, when_to_use: when,
+      const body = { expected_revision: doc?.revision, title, scope, module_ids: moduleIds, repositories: split(repositories), technologies: language, product_versions: versions, when_to_use: when,
         ...(mode === "edit" ? {} : source === "repository" ? { repository_import: { repository: repo, branch, path } } : { content }) };
       if (mode === "upload" && source === "repository") {
         if (!tree || !chosen.length) throw new Error("请读取文件树并勾选文档或文件夹");

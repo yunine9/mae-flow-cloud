@@ -19,7 +19,7 @@ test("逐文件归档真实提交根目录与子目录，已有根目录规范�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
   const target = { id: "domain", name: "知识仓", repository: remote, branch: "master", path: "", docs_path: "docs/knowledge" };
-  const job: DomainKnowledgeJob = { id: "dkx-paths", title: "规则", scope: "规则", issue_no: "REQ-files", operator: "user", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], ar_codes: [], use_wxdoubao: true, status: "done", stage: "归档", revisions: {}, turns: [], evidence: [], publications: [], documents: ["AGENTS.md", "docs/domain/rules.md", "guides/extra.md"].map((path, index) => ({ id: `doc-${index}`, title: path, path, archive_path: path, target_id: "domain", layer: "domain", content: "新知识", sources: "已核对源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] })) };
+  const job: DomainKnowledgeJob = { id: "dkx-paths", title: "规则", scope: "规则", issue_no: "REQ-files", issue_description: "整理业务规范与领域文档", operator: "user", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], ar_codes: [], use_wxdoubao: true, status: "done", stage: "归档", revisions: {}, turns: [], evidence: [], publications: [], documents: ["AGENTS.md", "docs/domain/rules.md", "guides/extra.md"].map((path, index) => ({ id: `doc-${index}`, title: path, path, archive_path: path, target_id: "domain", layer: "domain", content: "新知识", sources: "已核对源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] })) };
   try {
     await assert.rejects(publisher.publish(job, target, undefined, "user", () => {}), /已有他人修改/);
     const snapshot = await publisher.readRemote(job, job.documents[0], "user");
@@ -32,25 +32,27 @@ test("逐文件归档真实提交根目录与子目录，已有根目录规范�
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库、新一轮保留其他文件及人工修改", async () => {
+test("真实 Git 文档归档复用开放 MR、保留前批、合入只更新归档状态、新一轮保留其他文件及人工修改", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-publish-")), remote = join(root, "remote.git"), source = join(root, "source");
   mkdirSync(source); const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git(source, "init", "-b", "main"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.test");
   writeFileSync(join(source, "code.ts"), "original code\n"); git(source, "add", "."); git(source, "commit", "-m", "fixture");
   execFileSync("git", ["clone", "--bare", source, remote], { stdio: "ignore" });
   const base = git(source, "rev-parse", "HEAD");
-  const receivedIssues: string[] = [];
+  const receivedIssues: string[] = [], receivedTitles: string[] = [];
+  const mrRequests: string[] = [];
   let count = 0, indexed = 0, loseResponse = false;
   const mrs: Array<{ id: number; url: string; source_branch: string; target_branch: string; state: string }> = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, "http://fixture");
+    mrRequests.push(`${request.method} ${url.pathname}`);
     response.setHeader("content-type", "application/json");
     if (url.pathname === "/mr/gates") { const mr = mrs.find(m => String(m.id) === url.searchParams.get("mr"))!; response.end(JSON.stringify({ mr_state: mr.state, gates: [] })); }
     else if (url.pathname === "/mr/discover") response.end(JSON.stringify({ mrs: mrs.filter(m => m.source_branch === url.searchParams.get("source_branch")) }));
     else if (url.pathname === "/mr") {
       let text = ""; for await (const part of request) text += part;
       const body = JSON.parse(text), mr = { id: ++count, url: `https://example.test/repo/merge_requests/${count}`, source_branch: body.source_branch, target_branch: body.target_branch, state: "opened" };
-      receivedIssues.push(body.dts_no);
+      receivedIssues.push(body.dts_no); receivedTitles.push(body.title);
       mrs.push(mr);
       if (loseResponse) { loseResponse = false; response.writeHead(502); response.end('{}'); } else response.end(JSON.stringify(mr));
     } else { response.writeHead(404); response.end("{}"); }
@@ -60,17 +62,23 @@ test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => indexed++ });
   const target = { id: "domain", name: "领域仓", repository: remote, branch: "main", path: "", docs_path: "docs/domain" };
   const doc: DomainKnowledgeJob["documents"][number] = { id: "states", title: "订单状态", target_id: "domain", path: "docs/domain/states.md", layer: "domain" as const, content: "# 状态\n已创建", sources: "fixture 来源", revision: 1, selected: true, base_content: null, base_revision: base, history: [] };
-  const job: DomainKnowledgeJob = { id: "dkx-fixture", issue_no: "REQ-knowledge-123", title: "订单", scope: "状态", operator: "expert", created_at: new Date().toISOString(), repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, documents: [doc, { ...doc, id: "cancel", title: "取消", path: "docs/domain/cancel.md" }], turns: [], evidence: [], publications: [] };
+  const job: DomainKnowledgeJob = { id: "dkx-fixture", issue_no: "REQ-knowledge-123", issue_description: "  修复订单取消后的库存回补  并补齐幂等规则（二期）  ", title: "订单", scope: "状态", operator: "expert", created_at: new Date().toISOString(), repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, documents: [doc, { ...doc, id: "cancel", title: "取消", path: "docs/domain/cancel.md" }], turns: [], evidence: [], publications: [] };
   let saved: DomainPublication | undefined;
   const save = (value: DomainPublication) => { saved = structuredClone(value); };
   try {
     await assert.rejects(publisher.publish({ ...job, issue_no: undefined }, target, undefined, "expert", save), /关联单号/);
     assert.equal(git(remote, "branch", "--list", "codex/*"), "", "缺少单号时不得推送分支");
+    for (const description of [undefined, "", " \n\t "]) {
+      await assert.rejects(publisher.publish({ ...job, issue_description: description }, target, undefined, "expert", save), /描述/);
+    }
+    assert.deepEqual(mrRequests, [], "缺少单号描述时不执行任何 MR 请求");
+    assert.equal(git(remote, "branch", "--list", "codex/*"), "", "缺少单号描述时不推送待建 MR 的分支");
     loseResponse = true;
     await assert.rejects(publisher.publish(job, target, undefined, "expert", save), /尚未确认/);
     assert.equal(saved?.mr_attempted, true); assert.equal(count, 1); assert.deepEqual(receivedIssues, [job.issue_no]);
-    const first = await publisher.publish(job, target, saved, "expert", save);
-    assert.equal(count, 1, "响应丢失后找回同一 MR"); assert.equal(first.url, mrs[0].url);
+    assert.deepEqual(receivedTitles, [job.issue_description!.trim()], "新 MR 标题使用单号描述原文，仅去掉首尾空白，不添加知识库、任务名或单号");
+    const first = await publisher.publish({ ...job, issue_description: undefined }, target, saved, "expert", save);
+    assert.equal(count, 1, "响应丢失后找回同一 MR，无需再次填写单号描述"); assert.equal(first.url, mrs[0].url);
     assert.equal(git(remote, "show", `${first.branch}:code.ts`), "original code");
     assert.equal(git(remote, "log", "-1", "--format=%s", first.branch), "[REQ_knowledge_123][feat]更新订单知识");
     job.documents[0].content = "# 状态\n已支付"; job.documents[0].revision = 2; job.documents[1].selected = false;
@@ -85,17 +93,19 @@ test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库
     });
     assert.match(saved!.documents[0].content, /已创建/); assert.match(saved!.attempted_documents![0].content, /已支付/);
     rmSync(hook);
-    const second = await publisher.publish(job, target, saved, "expert", save);
-    assert.equal(second.branch, first.branch); assert.equal(count, 1);
+    const second = await publisher.publish({ ...job, issue_description: undefined }, target, saved, "expert", save);
+    assert.equal(second.branch, first.branch); assert.equal(count, 1, "历史任务没有单号描述仍可更新已有开放 MR");
+    assert.deepEqual(receivedTitles, [job.issue_description!.trim()], "复用 MR 时保持原有标题，不发送改名或重新创建请求");
     assert.match(git(remote, "show", `${second.branch}:${doc.path}`), /已支付/);
-    assert.throws(() => git(remote, "show", `${second.branch}:docs/domain/cancel.md`), /failed/i);
-    assert.equal(listKnowledgeDocuments(root).length, 0, "未合入不进入正式知识库");
+    assert.match(git(remote, "show", `${second.branch}:docs/domain/cancel.md`), /已创建/, "下一批未选中仍保留前批已发布文档");
+    assert.equal(listKnowledgeDocuments(root).length, 0, "Git 发布器不负责创建正式知识");
     git(remote, "update-ref", "refs/heads/main", second.revision!); mrs[0].state = "merged";
     const merged = await publisher.refresh(job, second, "expert");
-    assert.equal(merged.state, "merged"); assert.equal(indexed, 1); assert.match(listKnowledgeDocuments(root)[0].content, /已支付/);
+    assert.equal(merged.state, "merged"); assert.equal(indexed, 1); assert.equal(listKnowledgeDocuments(root).length, 0, "MR 合入不能反向创建正式知识");
     job.documents[0].content = "# 状态\n已完成"; job.documents[0].revision = 3;
     const third = await publisher.publish(job, target, merged, "expert", save);
     assert.notEqual(third.branch, second.branch); assert.equal(count, 2); assert.deepEqual(receivedIssues, [job.issue_no, job.issue_no]);
+    assert.deepEqual(receivedTitles, [job.issue_description!.trim(), job.issue_description!.trim()], "新一轮 MR 仍精确使用单号描述");
     // Another contributor edits the open MR branch; a later publication must not overwrite it.
     git(source, "fetch", remote, third.branch); git(source, "checkout", "-B", "human-edit", "FETCH_HEAD");
     writeFileSync(join(source, doc.path), "人工独立修改\n"); git(source, "add", doc.path); git(source, "commit", "-m", "human"); git(source, "push", remote, `HEAD:refs/heads/${third.branch}`);
@@ -128,7 +138,7 @@ test("真实 Git 文档归档复用开放 MR、撤回未选项、合入后入库
     job.documents[0].base_content = git(remote, "show", `main:${doc.path}`) + "\n";
     const unchanged = await publisher.publish(job, target, undefined, "expert", save);
     assert.equal(unchanged.state, "unchanged"); assert.equal(unchanged.sync_state, "done"); assert.equal(count, 2, "无变化不创建空 MR");
-    assert.match(listKnowledgeDocuments(root)[0].content, /目标分支的新规则/);
+    assert.equal(listKnowledgeDocuments(root).length, 0, "Git 核对不导入远端正文");
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -152,7 +162,7 @@ test("组件文档更新与可选清理：同名原文先核对，清理和新�
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
   const target = { id: "domain", name: "组件知识仓", repository: remote, branch: "main", path: "", docs_path: "docs/legacy" };
-  const job: DomainKnowledgeJob = { id: "dkx-cleanup", component_research_id: "cr-components", technologies: ["cpp"], title: "组件指南", issue_no: "REQ-cleanup", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "组件指南", path: "docs/legacy/guide.md", target_id: "domain", layer: "domain", content: "新组件指南\n", sources: "已核对源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
+  const job: DomainKnowledgeJob = { id: "dkx-cleanup", component_research_id: "cr-components", technologies: ["cpp"], title: "组件指南", issue_no: "REQ-cleanup", issue_description: "更新组件指南并清理已确认的旧规范", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "组件指南", path: "docs/legacy/guide.md", target_id: "domain", layer: "domain", content: "新组件指南\n", sources: "已核对源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
   let saved: DomainPublication | undefined;
   const save = (p: DomainPublication) => { saved = structuredClone(p); };
   try {
@@ -212,8 +222,7 @@ test("组件文档更新与可选清理：同名原文先核对，清理和新�
     git(remote, "update-ref", "refs/heads/main", updated.revision!); state = "merged";
     const merged = await publisher.refresh(job, updated, "expert"); assert.equal(merged.sync_state, "done");
     assert.equal(listKnowledgeDocuments(root).find(d => d.id === oldKnowledge.id)!.active, false, "合入删除后停用旧知识索引来源");
-    const doc = listKnowledgeDocuments(root).find(d => d.source?.path === "docs/legacy/guide.md")!;
-    assert.equal(doc.research_source!.job_id, "cr-components"); assert.deepEqual(doc.technologies, ["cpp"]); assert.equal(doc.scope, "platform");
+    assert.equal(listKnowledgeDocuments(root).some(d => d.source?.path === "docs/legacy/guide.md"), false, "组件 MR 不反向创建知识正文");
     job.publications = [updated];
     const deleteAgent = await publisher.previewCleanup(job, target, { paths: ["AGENTS.md"] }, "expert"); deleteAgent.confirmed = true; job.cleanup_plans = [deleteAgent];
     const onlyDeleted = await publisher.publish(job, target, updated, "expert", save);
@@ -241,8 +250,9 @@ test("组件上库为独立正文与结构文件，真实 Git 合入后恢复消
   const section = componentSection();
   const parts = componentArchiveParts(researchDocumentMarkdown("任务池使用指南", { overview: "提交后台任务并在退出前等待完成。", sections: [section] }, true));
   const path = "docs/components/guide.md", metadataPath = "docs/components/guide.metadata.json";
-  const job: DomainKnowledgeJob = { id: "dkx-clean-guide", component_research_id: "cr-components", title: "任务池使用指南", issue_no: "REQ-guide", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "任务池使用指南", path, target_id: "domain", layer: "domain", ...parts, sources: "核对过的源码与调用", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
+  const job: DomainKnowledgeJob = { id: "dkx-clean-guide", component_research_id: "cr-components", title: "任务池使用指南", issue_no: "REQ-guide", issue_description: "补齐任务池的安全使用指南", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "任务池使用指南", path, target_id: "domain", layer: "domain", ...parts, sources: "核对过的源码与调用", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
   try {
+    const local = saveKnowledgeDocument(root, { title: job.title, content: restoreComponentArchive(parts.content, parts.component_metadata!), technologies: ["cpp"] }, "expert");
     const first = await publisher.publish(job, target, undefined, "expert", () => {}); job.publications = [first];
     const md = git(remote, "show", `${first.branch}:${path}`), metadata = git(remote, "show", `${first.branch}:${metadataPath}`);
     assert.doesNotMatch(md, /everycode|repository_id|schema:|来源|a{40}/);
@@ -261,14 +271,14 @@ test("组件上库为独立正文与结构文件，真实 Git 合入后恢复消
     git(remote, "update-ref", "refs/heads/main", reconciled.revision!); state = "merged";
     const merged = await publisher.refresh(job, reconciled, "expert");
     assert.equal(merged.sync_state, "done", merged.sync_error);
-    const formal = listKnowledgeDocuments(root); assert.equal(formal.length, 1, "结构文件不作为第二篇知识导入");
+    const formal = listKnowledgeDocuments(root); assert.equal(formal.length, 1, "结构文件不作为第二篇知识导入"); assert.equal(formal[0].revision, local.revision, "归档不改平台正文");
     const parsed = publishedComponentParadigms({ id: formal[0].id, revision: formal[0].revision, content: formal[0].content, productVersions: [] });
     assert.deepEqual(parsed[0].replaces, section.paradigm!.replaces);
     // A body edit after merge cannot silently retain rules from a different document.
     git(source, "fetch", remote, "main"); git(source, "checkout", "-B", "main", "FETCH_HEAD");
     writeFileSync(join(source, path), md + "\n调用方式已经调整。\n"); git(source, "add", "."); git(source, "commit", "-m", "body only"); git(source, "push", remote, "main");
     const mismatch = await publisher.refresh(job, merged, "expert");
-    assert.equal(mismatch.sync_state, "failed"); assert.match(mismatch.sync_error!, /正文与结构文件不一致/);
+    assert.equal(mismatch.sync_state, "failed"); assert.match(mismatch.sync_error!, /归档内容与发布版本不同/);
     assert.equal(listKnowledgeDocuments(root)[0].revision, formal[0].revision);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });

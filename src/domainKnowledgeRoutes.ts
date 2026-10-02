@@ -36,7 +36,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         }
         if (parts[2] === "cleanup-preview") return json(response, 200, await manager.previewCleanup(id, body.target_id, body, operator));
         if (parts[2] === "cleanup-confirm") return json(response, 200, manager.confirmCleanup(id, body.plan_id, body.confirmed, body.preserve_paths));
-        if (parts[2] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no));
+        if (parts[2] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no, body.issue_description));
         if (parts[2] === "archive-targets") return json(response, 200, manager.configureArchive(id, body));
         if (parts[2] === "run") return json(response, 202, manager.run(id, body, operator));
         if (parts[2] === "resume") return json(response, 202, manager.resume(id, operator, body.use_latest_skill === true));
@@ -48,7 +48,12 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         if (parts[2] === "selection") return json(response, 200, manager.select(id, body.ids, body.selected));
         if (parts[2] === "remote") return json(response, 200, await manager.readRemote(id, body.document_id, operator));
         if (parts[2] === "reconcile") return json(response, 200, manager.reconcile(id, body, operator));
-        if (parts[2] === "publish") return json(response, 200, await manager.publish(id, operator));
+        if (parts[2] === "publish") {
+          const published = await manager.publish(id, operator, body);
+          service.prepareKnowledgeIndex();
+          return json(response, 200, published);
+        }
+        if (parts[2] === "archive-retry") return json(response, 202, manager.retryArchive(id, operator));
         if (parts[2] === "refresh") return json(response, 200, await manager.refresh(id, operator));
       }
     }

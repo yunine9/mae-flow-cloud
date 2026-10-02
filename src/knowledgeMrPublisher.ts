@@ -10,7 +10,7 @@ import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { fetchMrGates } from "./mrGateClient.ts";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
-import { knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
+import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import type { DomainDocument, DomainRemoteReview } from "./domainKnowledgeTypes.ts";
 
 const markdown = (doc: { content: string; sources: string }, _job: DomainKnowledgeJob) => doc.content;
@@ -99,12 +99,24 @@ export class KnowledgeMrPublisher {
         archive_path: doc.archive_path ? componentMetadataPath(doc.archive_path) : undefined, content, base_content: null,
         remote_review: review ? { ...review, target_content: review.target_metadata ?? null, branch_content: review.branch_metadata ?? null } : undefined }];
     });
+    // A later publication adds to the open MR. Its smaller selection must not
+    // withdraw documents already published by an earlier batch.
+    if (continueBranch) for (const old of new Map([...(previous?.documents ?? []), ...(previous?.attempted_documents ?? [])].map(doc => [doc.id, doc])).values()) {
+      if (docs.some(doc => doc.id === old.id)) continue;
+      docs.push({ ...old, title: old.path, target_id: target.id, layer: target.id === "domain" ? "domain" : "repository",
+        selected: true, sources: "先前发布批次", base_content: old.base_content ?? null, base_revision: "", history: [], archive_path: old.path,
+        published_revision: old.knowledge_revision });
+    }
     const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
     const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
     if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
     if (!cleanup && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
+    // 新建 MR 使用关联单据的准确描述；已有 MR 继续复用，不改写远端标题。
+    const mrTitle = continueBranch && previous?.url ? undefined : knowledgeIssueDescription(job.issue_description, { required: true });
     const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
-      documents: docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for, content: markdown(doc, job), revision: doc.revision, base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
+      documents: docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for, content: markdown(doc, job), revision: doc.revision,
+        knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision,
+        base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
     for (const doc of docs) {
       if (!knowledgeRelativePath(doc.path, !doc.metadata_for).startsWith(`${target.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
       scanForSecrets(doc.path, Buffer.from(markdown(doc, job)));
@@ -157,14 +169,6 @@ export class KnowledgeMrPublisher {
         const conflicts = (await git(["ls-files", "--unmerged", "-z"])).split("\0").filter(Boolean).map(row => row.slice(row.indexOf("\t") + 1));
         if (conflicts.some(path => !docs.some(d => d.path === path) && !cleanupIncludes(path))) throw new Error("MR 包含文档范围外的合并冲突，请由仓维护者先处理源码冲突");
       } else await git(["read-tree", parent]);
-      const knownDocuments = [...(previous?.documents ?? []), ...(previous?.attempted_documents ?? [])];
-      if (continueBranch && remote) for (const excluded of [...new Map(knownDocuments.map(d => [d.id, d])).values()].filter(old => !docs.some(doc => doc.id === old.id))) {
-        const current = await this.content(git, parent, excluded.path);
-        const original = await this.content(git, targetSha, excluded.path);
-        if (current !== original && !knownDocuments.some(d => d.id === excluded.id && d.content === current)) throw new Error(`${excluded.path} 已有他人修改，不能自动撤回归档`);
-        if (original === null) await git(["--work-tree", root, "update-index", "--force-remove", "--", excluded.path]);
-        else { const file = join(root, "knowledge-content.tmp"); writeFileSync(file, original, { mode: 0o600 }); const blob = (await git(["hash-object", "-w", file])).trim(); await git(["update-index", "--add", "--cacheinfo", "100644", blob, excluded.path]); }
-      }
       if (cleanup) {
         const removed = [...new Set([...cleanup.target_entries, ...(cleanup.branch_entries ?? [])].map(e => e.path))]
           .filter(path => !cleanup.preserve_paths?.includes(path));
@@ -192,7 +196,7 @@ export class KnowledgeMrPublisher {
         // The adapter deduplicates by repository and source/target branches.
         publication.mr_attempted = true; save(publication);
         let receipt;
-        try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: job.cleanup_only ? `知识清理：${issue} · ${target.name}` : `知识库：${job.title}`, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
+        try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: mrTitle!, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
         catch { throw new Error("文档已推送，MR 创建尚未确认；重试将复用同一分支"); }
         if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后重试");
         publication.url = receipt.url; publication.mr_id = receipt.id;
@@ -208,30 +212,15 @@ export class KnowledgeMrPublisher {
     try { await this.withGit(operator, async git => {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
       const revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
+      result.target_revision = revision;
       for (const saved of publication.documents) {
-        if (saved.metadata_for) continue;
-        let content = await this.content(git, revision, saved.path);
-        if (content === null) throw new Error(`${saved.path} 不在当前目标分支中，未标记为已入库`);
-        scanForSecrets(saved.path, Buffer.from(content));
-        const companion = publication.documents.find(file => file.metadata_for === saved.id);
-        if (companion) {
-          const metadata = await this.content(git, revision, companion.path);
-          if (metadata === null) throw new Error(`${companion.path} 不在当前目标分支中，未同步组件规则`);
-          scanForSecrets(companion.path, Buffer.from(metadata));
-          content = restoreComponentArchive(content, metadata);
-        }
-        const doc = job.documents.find(d => d.id === saved.id)!;
-        const previous = listKnowledgeDocuments(this.options.dataDir).find(d => d.source?.repository === target.repository && d.source.branch === target.branch && d.source.path === saved.path)
-          ?? (job.component_research_id ? listKnowledgeDocuments(this.options.dataDir).find(d => !d.source && d.research_source?.job_id === job.component_research_id) : undefined);
-        if (previous?.content === content && previous.source?.revision === revision) continue;
-        saveKnowledgeDocument(this.options.dataDir, { ...previous, title: doc.title, content, scope: previous?.scope ?? (job.component_research_id ? "platform" : target.id === "domain" && job.module_id ? "module" : "repository"), module_ids: previous?.module_ids ?? (target.id === "domain" && job.module_id ? [job.module_id] : []),
-          repositories: previous?.repositories ?? (target.id === "domain" && job.repositories.length ? job.repositories.map(r => r.repository) : [target.repository]), source: { repository: target.repository, branch: target.branch, path: saved.path, revision }, active: previous?.active ?? true,
-          technologies: previous?.technologies ?? job.technologies,
-          research_source: { job_id: job.component_research_id ?? job.id, repository: target.repository, branch: target.branch, path: saved.path, revision } }, operator, previous?.id, job.component_research_id ? { maxContentBytes: 16 * 1024 * 1024 } : {});
+        const content = await this.content(git, revision, saved.path);
+        if (content === null) throw new Error(`${saved.path} 不在当前目标分支中；平台已发布版本保持生效`);
+        if (content !== saved.content) throw new Error(`${saved.path} 的归档内容与发布版本不同，请核对 Git 变更；平台正文未被覆盖`);
       }
       for (const path of publication.removed_paths ?? []) {
         if ((await cleanupEntries(git, revision, [path])).length) continue;
-        for (const old of listKnowledgeDocuments(this.options.dataDir).filter(d => d.active && d.source?.repository === target.repository && d.source.branch === target.branch && d.source.path === path)) saveKnowledgeDocument(this.options.dataDir, { ...old, active: false }, operator, old.id);
+        for (const old of listKnowledgeDocuments(this.options.dataDir).filter(d => d.active && (d.archive_target ?? d.source)?.repository === target.repository && (d.archive_target ?? d.source)?.branch === target.branch && (d.archive_target ?? d.source)?.path === path)) saveKnowledgeDocument(this.options.dataDir, { ...old, active: false }, operator, old.id);
       }
       this.options.onIndexed();
     }); result.sync_state = "done"; }

@@ -43,7 +43,10 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     let job = await done(service, initial.id);
     assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
     assert.deepEqual(job.documents.map(d => d.path), ["business/domains/rules.md", "business/local/rules.md"]);
-    await assert.rejects(service.publish(job.id, "user"), /归档位置/);
+    await service.publish(job.id, "user");
+    for (let i = 0; i < 100 && service.get(job.id).archive_batches?.[0].state !== "failed"; i++) await new Promise(r => setTimeout(r, 5));
+    assert.ok(service.get(job.id).documents.every(d => d.knowledge_document_id), "归档配置不影响正式发布");
+    assert.match(service.get(job.id).archive_batches![0].error!, /仓库地址/);
     assert.throws(() => service.configureArchive(job.id, { targets: [{ ...job.knowledge_target, docs_path: "../bad" }], base_revision: 0 }), /仓库地址|路径/);
     job = service.configureArchive(job.id, { base_revision: 0, targets: [{ ...job.knowledge_target, repository: "https://example.test/knowledge.git" }, ...job.repositories] });
     await service.readRemote(job.id, "domain", "user");
@@ -62,7 +65,10 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     assert.deepEqual(job.documents.map(d => d.path), ["new/domain/rules.md", "new/repo/rules.md"]);
     assert.deepEqual(job.turns.at(-1)!.proposals.map(p => p.document.path), job.documents.map(d => d.path));
     assert.ok(job.documents.every(d => d.content.includes("人工内容")));
-    job = await service.publish(job.id, "user");
+    service.retryArchive(job.id, "user");
+    for (let i = 0; i < 100 && service.get(job.id).archive_batches?.[0].state !== "done"; i++) await new Promise(r => setTimeout(r, 5));
+    job = service.get(job.id);
+    assert.equal(job.archive_batches![0].state, "done", job.archive_batches![0].error);
     assert.equal(job.publications[1].documents[0].path, "new/repo/rules.md");
     assert.throws(() => service.configureArchive(job.id, { targets: [{ ...targets[0], docs_path: "other" }], base_revision: 2 }), /已发起归档/);
     service.run(job.id, { mode: "update", document_ids: job.documents.map(d => d.id), message: "核对新版本" }, "user");

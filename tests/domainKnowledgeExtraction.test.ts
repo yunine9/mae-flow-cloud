@@ -4,10 +4,11 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "nod
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DomainKnowledgeExtraction, type DomainExecution, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
+import { DomainKnowledgeExtraction, knowledgeIssueDescription, type DomainExecution, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
+import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 
 const config = { issue_no: "REQ-knowledge-123", title: "订单", scope: "状态与取消规则", repositories: [{ name: "交易仓", repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/business" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains/orders" } };
 const document = { id: "states", title: "订单状态", target_id: "domain", path: "domains/orders/states.md", layer: "domain" as const, content: "# 订单\n原始规则", sources: "repo-1 / src/state.ts @ 123" };
@@ -49,8 +50,12 @@ test("领域修订建议不覆盖人工编辑，版本冲突、恢复和重启�
   try {
     for (const issue_no of [undefined, "", "  ", "REQ-1,REQ-2", "REQ-1\nREQ-2", "x".repeat(121)]) assert.throws(() => service.create({ ...config, issue_no }, "expert"), /关联单号/);
     for (const instructions of [123, {}, "x".repeat(20001)]) assert.throws(() => service.create({ ...config, instructions }, "expert"), /本次要求/);
-    const job = service.create({ ...config, issue_no: "  REQ-knowledge-123  ", instructions: "只说明取消条件\n不要读取 legacy/payment.ts" }, "expert");
+    for (const issue_description of [null, 123, {}, "", "  ", "第一行\n第二行", "x".repeat(2001)]) assert.throws(() => service.create({ ...config, issue_description }, "expert"), /描述/);
+    const job = service.create({ ...config, issue_no: "  REQ-knowledge-123  ", issue_description: "  支持订单取消与状态核对  ", instructions: "只说明取消条件\n不要读取 legacy/payment.ts" }, "expert");
     assert.equal(job.issue_no, "REQ-knowledge-123");
+    assert.equal(job.issue_description, "支持订单取消与状态核对");
+    assert.equal(service.setIssueNumber(job.id, "REQ-another").issue_description, undefined, "更改单号不沿用旧单据描述");
+    assert.equal(service.setIssueNumber(job.id, config.issue_no, "支持订单取消与状态核对").issue_description, "支持订单取消与状态核对");
     await until(() => service.get(job.id).status === "done");
     service.run(job.id, { mode: "discuss", document_ids: [document.id], message: "依据是什么" }, "expert");
     await until(() => service.get(job.id).status === "done");
@@ -101,8 +106,12 @@ test("MR 部分失败保存已经发生的分支事实，重试复用分支且�
   });
   try {
     const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
-    assert.equal((await service.publish(job.id, "expert")).publications[0].state, "failed");
-    assert.equal((await service.publish(job.id, "expert")).publications[0].state, "opened");
+    await service.publish(job.id, "expert");
+    await until(() => service.get(job.id).archive_batches?.[0].state === "failed");
+    assert.equal(service.get(job.id).publications[0].state, "failed");
+    service.retryArchive(job.id, "expert");
+    await until(() => service.get(job.id).archive_batches?.[0].state === "done");
+    assert.equal(service.get(job.id).publications[0].state, "opened");
     assert.equal(calls, 2);
     assert.throws(() => service.setIssueNumber(job.id, "REQ-other"), /不能更改/);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
@@ -215,8 +224,168 @@ test("旧草稿可补填单号，创建 MR 前拦截缺失单号且重启保留�
     const path = join(dir, "domain-extraction", job.id, "job.json"), stored = JSON.parse(readFileSync(path, "utf8"));
     delete stored.issue_no; writeFileSync(path, JSON.stringify(stored));
     service = new DomainKnowledgeExtraction(dir, async () => "unused", { publish: async () => { throw new Error("不应执行发布"); } });
-    await assert.rejects(service.publish(job.id, "expert"), /关联单号/);
+    const published = await service.publish(job.id, "expert");
+    assert.ok(published.documents[0].knowledge_document_id, "缺少单号不阻止平台发布");
+    await until(() => service!.get(job.id).archive_batches?.[0].state === "failed");
+    assert.match(service.get(job.id).archive_batches![0].error!, /关联单号/);
     assert.equal(service.setIssueNumber(job.id, "  REQ-legacy  ").issue_no, "REQ-legacy");
     assert.equal(JSON.parse(readFileSync(path, "utf8")).issue_no, "REQ-legacy");
   } finally { await original.shutdown(); await service?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("旧任务补齐单号描述后重试使用准确标题，批次、重启与增量更新保留描述", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-issue-description-"));
+  const description = "修复订单取消后的状态回退";
+  let createdTitles: string[] = [];
+  let service = new DomainKnowledgeExtraction(dir, async input => extract(input), {
+    publish: async (job, target) => {
+      const title = knowledgeIssueDescription(job.issue_description, { required: true })!;
+      createdTitles.push(title);
+      return { target_id: target.id, branch: "codex/description", state: "opened", url: "https://example.test/mr/description", documents: [] };
+    },
+  });
+  try {
+    const legacy = service.create(config, "expert"); await until(() => service.get(legacy.id).status === "done");
+    await service.publish(legacy.id, "expert"); await until(() => service.get(legacy.id).archive_batches?.[0].state === "failed");
+    assert.match(service.get(legacy.id).archive_batches![0].error!, /准确描述/);
+    assert.equal(createdTitles.length, 0);
+    const supplemented = service.setIssueNumber(legacy.id, config.issue_no, `  ${description}  `);
+    assert.equal(supplemented.issue_description, description);
+    assert.equal(supplemented.archive_batches![0].issue_description, description);
+    service.retryArchive(legacy.id, "expert"); await until(() => service.get(legacy.id).archive_batches?.[0].state === "done");
+    assert.deepEqual(createdTitles, [description]);
+    assert.throws(() => service.setIssueNumber(legacy.id, config.issue_no, "其他单号描述"), /不能更改/);
+    assert.equal(service.setIssueNumber(legacy.id, config.issue_no).issue_description, description, "旧调用不会清空已有描述");
+    const published = service.get(legacy.id).documents[0].knowledge_document_id!;
+    await service.shutdown();
+    service = new DomainKnowledgeExtraction(dir, async () => "已核对");
+    assert.equal(service.get(legacy.id).issue_description, description);
+    assert.equal(service.get(legacy.id).archive_batches![0].issue_description, description);
+    const update = service.beginUpdate(published, {}, "expert");
+    assert.equal(update.issue_description, description);
+    await until(() => service.get(update.id).status === "done");
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("领域确认修改后才发布，采用最新建议清理同文档旧建议且未选文档不阻塞", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-confirm-publish-"));
+  const service = new DomainKnowledgeExtraction(dir, async input => {
+    if (input.turn.mode === "extract") {
+      extract(input);
+      input.save({ ...document, id: "other", path: "domains/orders/other.md" }, { content: null, revision: "a".repeat(40) });
+    } else {
+      const current = input.read().find(doc => input.turn.document_ids.includes(doc.id))!;
+      input.save({ ...current, content: input.turn.message });
+    }
+    return "已完成";
+  });
+  try {
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
+    for (const message of ["旧修改", "最新修改"]) {
+      service.run(job.id, { mode: "revise", document_ids: [document.id], message }, "expert");
+      await until(() => service.get(job.id).status === "done");
+    }
+    await assert.rejects(service.publish(job.id, "expert", { document_ids: [document.id] }), /尚未确认的修改/);
+    assert.equal(listKnowledgeDocuments(dir).length, 0);
+    const latest = service.get(job.id).turns.at(-1)!;
+    const accepted = service.decide(job.id, latest.id, document.id, "accept", "expert");
+    assert.deepEqual(accepted.turns.slice(1).map(turn => turn.proposals[0].status), ["discarded", "accepted"]);
+    service.run(job.id, { mode: "revise", document_ids: ["other"], message: "未选文档的建议" }, "expert");
+    await until(() => service.get(job.id).status === "done");
+    await service.publish(job.id, "expert", { document_ids: [document.id], expected_revisions: { [document.id]: 2 } });
+    assert.equal(listKnowledgeDocuments(dir)[0].content, "最新修改");
+    assert.equal(service.get(job.id).turns.at(-1)!.proposals[0].status, "pending");
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("领域失败回合不能采纳部分建议，并发正文修改不清理建议也不发布", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-confirm-conflict-"));
+  const service = new DomainKnowledgeExtraction(dir, async input => {
+    if (input.turn.mode === "extract") return extract(input);
+    input.save({ ...input.read()[0], content: input.turn.message });
+    if (input.turn.message === "失败修改") throw new Error("核对未完成");
+    return "已完成";
+  });
+  try {
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
+    service.run(job.id, { mode: "revise", document_ids: [document.id], message: "失败修改" }, "expert");
+    await until(() => service.get(job.id).status === "failed");
+    assert.throws(() => service.decide(job.id, service.get(job.id).turns.at(-1)!.id, document.id, "accept", "expert"), /尚未完成/);
+    service.run(job.id, { mode: "revise", document_ids: [document.id], message: "完整建议" }, "expert");
+    await until(() => service.get(job.id).status === "done");
+    const current = service.get(job.id), latest = current.turns.at(-1)!;
+    service.edit(job.id, { document: { ...current.documents[0], content: "其他人刚保存的正文" }, base_revision: current.documents[0].revision }, "other");
+    assert.throws(() => service.decide(job.id, latest.id, document.id, "accept", "expert"), /新版本/);
+    assert.deepEqual(service.get(job.id).turns.slice(1).map(turn => turn.proposals[0].status), ["pending", "pending"]);
+    await assert.rejects(service.publish(job.id, "expert"), /尚未确认的修改/);
+    assert.equal(listKnowledgeDocuments(dir).length, 0);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("领域确认竞态：不覆盖较新建议，研究进行中不能确认，放弃新建议后可确认旧建议", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-confirm-race-"));
+  let release = () => {}, discussing = false;
+  const service = new DomainKnowledgeExtraction(dir, async input => {
+    if (input.turn.mode === "extract") return extract(input);
+    if (input.turn.mode === "discuss") { await new Promise<void>(resolve => { release = resolve; discussing = true; }); return "讨论完成"; }
+    input.save({ ...input.read()[0], content: input.turn.message }); return "修改完成";
+  });
+  try {
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
+    for (const message of ["已阅读的旧建议", "刚生成的新建议"]) {
+      service.run(job.id, { mode: "revise", document_ids: [document.id], message }, "expert");
+      await until(() => service.get(job.id).status === "done");
+    }
+    const [old, latest] = service.get(job.id).turns.slice(1);
+    assert.throws(() => service.decide(job.id, old.id, document.id, "accept", "expert"), /更新的修改建议/);
+    assert.deepEqual(service.get(job.id).turns.slice(1).map(turn => turn.proposals[0].status), ["pending", "pending"]);
+    assert.equal(service.get(job.id).documents[0].revision, 1);
+    service.run(job.id, { mode: "discuss", document_ids: [document.id], message: "继续讨论" }, "expert");
+    await until(() => discussing);
+    assert.throws(() => service.decide(job.id, latest.id, document.id, "accept", "expert"), /当前研究仍在进行/);
+    release(); await until(() => service.get(job.id).status === "done");
+    service.decide(job.id, latest.id, document.id, "discard", "expert");
+    const accepted = service.decide(job.id, old.id, document.id, "accept", "expert");
+    assert.equal(accepted.documents[0].content, "已阅读的旧建议");
+    assert.deepEqual(accepted.turns.slice(1, 3).map(turn => turn.proposals[0].status), ["accepted", "discarded"]);
+  } finally { release(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("领域连续整体意见接着上一轮候选修改，原稿与发布基线保留到确认", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-feedback-continuation-"));
+  const seen: string[] = [];
+  const service = new DomainKnowledgeExtraction(dir, async input => {
+    if (input.turn.mode === "extract") return extract(input);
+    const current = input.read()[0];
+    assert.deepEqual(input.job.documents, input.read(), "执行快照和读取工具使用同一份候选内容");
+    seen.push(current.content);
+    input.save({ ...current, content: current.content + `\n${input.turn.message}` });
+    assert.equal(input.read()[0].content, current.content + `\n${input.turn.message}`, "同一轮继续读取已修改的新稿");
+    return "修改完成";
+  });
+  try {
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
+    const original = service.get(job.id).documents[0];
+    for (const message of ["补充第一轮边界", "补充第二轮示例"]) {
+      service.run(job.id, { mode: "revise", document_ids: [document.id], message }, "expert");
+      await until(() => ["done", "failed"].includes(service.get(job.id).status));
+      assert.equal(service.get(job.id).status, "done", service.get(job.id).error);
+    }
+    const pending = service.get(job.id);
+    assert.deepEqual(seen, [document.content, document.content + "\n补充第一轮边界"]);
+    assert.deepEqual(pending.documents[0], original, "待确认候选不会修改原稿及归档基线");
+    assert.equal(pending.turns.at(-1)!.proposals[0].base_revision, original.revision);
+    assert.equal(pending.turns.at(-1)!.proposals[0].document.content, document.content + "\n补充第一轮边界\n补充第二轮示例");
+    service.edit(job.id, { document: { ...original, content: "人工保存的新正文" }, base_revision: original.revision }, "editor");
+    service.run(job.id, { mode: "revise", document_ids: [document.id], message: "核对人工正文" }, "expert");
+    await until(() => ["done", "failed"].includes(service.get(job.id).status));
+    assert.equal(service.get(job.id).status, "done", service.get(job.id).error);
+    assert.equal(seen.at(-1), "人工保存的新正文", "版本已变更时不会沿用过期候选");
+    const latest = service.get(job.id).turns.at(-1)!;
+    const confirmed = service.decide(job.id, latest.id, document.id, "accept", "expert");
+    assert.equal(confirmed.documents[0].content, "人工保存的新正文\n核对人工正文");
+    assert.equal(confirmed.documents[0].revision, original.revision + 2);
+    assert.equal(confirmed.documents[0].base_revision, original.base_revision);
+    assert.equal(confirmed.documents[0].base_content, original.base_content);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

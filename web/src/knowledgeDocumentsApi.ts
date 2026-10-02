@@ -15,7 +15,7 @@ export async function documentRequest<T>(path = "", body?: unknown): Promise<T> 
   const response = await fetch(`/knowledge-documents${path}`, body === undefined ? undefined : {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
-  const data = await response.json();
+  const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || "请求失败");
   return data;
 }

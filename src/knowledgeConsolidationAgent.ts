@@ -1,3 +1,4 @@
+import { KNOWLEDGE_WRITING_GUIDANCE } from "./knowledgeWritingGuidance.ts";
 import {
   recordConsolidationTrace,
   saveConsolidationEvidence,
@@ -25,6 +26,7 @@ export const KNOWLEDGE_CONSOLIDATION_MISSION = `你是团队知识整理 Agent�
 反例：“所有回调都要改为弱引用”“加强生命周期管理”——前者扩大条件，后者无法执行。网络模块的超时单位与网元模块不同，即使 API 同名，也分别标明模块/组件；不要合并为统一数值。
 每个专题用 rationale 简短说明可核对的整理依据：合并了哪些重复内容、保留了哪些不同前提、哪些内容未纳入以及原因。不要给出内部思考过程，只写读者可以对照来源验证的结论。
 每个专题引用真实 sources.id 和章节名 sections。full=true 仅当该来源所有独立有效知识都被本专题完整覆盖；部分摘取必须 false，不能为去重而声称全文覆盖。缺少可合并的知识时 topics 可以为空。
+${KNOWLEDGE_WRITING_GUIDANCE}
 只返回 JSON：{"topics":[{"key":"稳定专题标识，更新用已有 key","title":"专题名","summary":"何时使用","rationale":"简短整理依据与取舍","content":"完整 Markdown 正文","sources":[{"id":"真实来源ID","sections":["引用章节"],"full":false}],"conflicts":["需人工判断的矛盾，没有则空数组"]}]}。不要输出思考过程。`;
 
 export function knowledgeMaterialTool(

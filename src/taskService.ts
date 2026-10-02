@@ -121,7 +121,7 @@ import {
 } from "./taskMemory.ts";
 import { MemorySidecar, DEFAULT_MEMORY_BUDGETS, type MemorySearchHit } from "./memorySidecar.ts";
 import { createMemoryTools, memoryContextQuery, resolveMemoryHits } from "./memoryTools.ts";
-import { KnowledgeSearch } from "./knowledgeSearch.ts";
+import { KnowledgeSearch, resolveKnowledgeModules, type KnowledgeContext } from "./knowledgeSearch.ts";
 import { createKnowledgeTool } from "./knowledgeTools.ts";
 import { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
 import { ComponentPlan } from "./componentPlan.ts";
@@ -5247,7 +5247,7 @@ export class TaskService {
     const assignee = needsOwner ? task.summary.luban_account ?? "本地用户" : undefined;
 
     const record = this.annotations(task).add({ ...input, route, assignee });
-    // 效果账(§6):推过的记忆所在文件又被人提了意见 → 那条记忆记一笔返工。
+    // 记录经验关联文件的后续意见，供复盘核对；不能据此判定经验有害。
     if (route === "agent" && record.kind === "code" && record.file) {
       this.noteMemoryRework(task, record.file);
     }
@@ -5316,7 +5316,7 @@ export class TaskService {
         return ids.flatMap(id => {
           const row = rows.get(id);
           const who = row?.judged_by === "human" ? "人确认" : row?.judged_by === "agent" ? "Agent 记录" : "流水线";
-          return row && memoryAccessible(row, this.memoryRepo(task), this.memoryModules(task), task.summary.product_version) ? [{ id,
+          return row && memoryAccessible(row, this.memoryRepo(task), this.memoryModules(task), task.summary.product_version) ? [{ id, revision: String(row.revision ?? 1),
             text: `[${row.scope === "platform" ? "平台通用" : "本仓"} · ${who} · ${row.at.slice(0, 10)}] ${row.trigger}: ${row.conclusion}${row.product_versions?.length ? `（适用版本：${row.product_versions.join("、")}）` : ""}`,
           }] : [];
         });
@@ -5329,11 +5329,17 @@ export class TaskService {
     return repoSlug(task.summary.repo_url ?? task.summary.repositories?.[0]);
   }
 
+  private taskKnowledgeContext(task: TaskState): KnowledgeContext {
+    const module = task.summary.business_module
+      ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+    return { repo: this.memoryRepo(task),
+      repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
+      moduleIds: module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id),
+      productVersion: task.summary.product_version };
+  }
+
   private memoryModules(task: TaskState): string[] {
-    const repos = new Set([task.summary.repo_url, ...(task.summary.repositories ?? [])].filter(Boolean).map(r => repositoryIdentity(r!)));
-    const selected = new Set((task.summary.business_modules ?? []).map(m => m.id));
-    return listBusinessModules(this.options.dataDir).modules.filter(m => m.status === "active"
-      && (selected.has(m.id) || m.repositories.some(r => repos.has(repositoryIdentity(r))))).map(m => m.id);
+    return resolveKnowledgeModules(this.options.dataDir, this.taskKnowledgeContext(task)).modules.map(module => module.id);
   }
 
   async sampleComponentKnowledge(id: string) {
@@ -5699,12 +5705,7 @@ export class TaskService {
         description: `历史会话兼容入口；新的检索和展开请使用 knowledge。${tool.description}` })) : [];
     return [...legacy, ...memoryTools.filter(tool => tool.name === "corpus_write"), createKnowledgeTool({
       service: () => this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar),
-      context: () => ({ repo: this.memoryRepo(task),
-        repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
-        moduleIds: (() => { const module = task.summary.business_module
-          ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
-          return module ? [module.id] : (task.summary.business_modules ?? []).map(item => item.id); })(),
-        productVersion: task.summary.product_version }),
+      context: () => this.taskKnowledgeContext(task),
       onUse: event => this.logMemoryUsage(task, event),
       plan: () => this.componentPlan(task),
       research: () => this.getComponentResearch(),
@@ -5792,8 +5793,8 @@ export class TaskService {
     await this.deliveryExperiences.flush();
   }
 
-  /** 效果账:这单推过的记忆里,路径正好是刚被人提意见的那个文件的,
-   * 各记一笔返工(同一单同一条只记一次)。旁路,失败只记日志。 */
+  /** 记录已提供经验与同文件意见的关联，同一任务每条只记一次。
+   * 不推断因果、不影响排序；记录失败只记日志。 */
   private noteMemoryRework(task: TaskState, file: string): void {
     try {
       const pushed = new Set<string>();
@@ -5813,7 +5814,7 @@ export class TaskService {
         if (!record.paths.includes(file)) continue;
         ledger.append({ kind: "rework", id: record.id, task: task.summary.id, note: file });
         this.options.log?.(
-          `记忆 ${record.id} 推送后同文件 ${file} 又被提意见,效果账记一笔返工`);
+          `经验 ${record.id} 提供后，关联文件 ${file} 出现新意见，已记录供复盘核对`);
       }
     } catch (error) {
       this.options.log?.(`记忆效果账写入失败: ${String(error)}`);

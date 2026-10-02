@@ -50,13 +50,10 @@ export function knowledgeProductVersions(content: string): string[] {
   } catch { return []; }
 }
 
-export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false, raw = false): {
-  assets: SearchableKnowledge[]; warnings: string[];
-} {
-  const assets: SearchableKnowledge[] = [];
-  const warnings: string[] = [];
+/** 明确选择优先；只有仓库唯一对应一个模块时才自动使用该模块。 */
+export function resolveKnowledgeModules(dataDir: string, context: Pick<KnowledgeContext, "repositories" | "moduleIds">, all = false) {
   const repos = new Set(context.repositories.map(repositoryIdentity));
-  const matchesRepos = (values: string[]) => all || !values.length || values.some(r => repos.has(repositoryIdentity(r)));
+  const warnings: string[] = [];
   const catalog = listBusinessModules(dataDir);
   warnings.push(...catalog.warnings);
   const activeModules = catalog.modules.filter(m => m.status === "active");
@@ -66,6 +63,19 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const modules = all ? activeModules : explicit.size
     ? activeModules.filter(m => explicit.has(m.id)) : mapped.length === 1 ? mapped : [];
   if (!all && !explicit.size && mapped.length > 1) warnings.push("仓库关联多个业务模块，未自动混用模块知识；请先明确本任务的业务模块。");
+  return { modules, warnings };
+}
+
+export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false, raw = false): {
+  assets: SearchableKnowledge[]; warnings: string[];
+} {
+  const assets: SearchableKnowledge[] = [];
+  const warnings: string[] = [];
+  const repos = new Set(context.repositories.map(repositoryIdentity));
+  const matchesRepos = (values: string[]) => all || !values.length || values.some(r => repos.has(repositoryIdentity(r)));
+  const selection = resolveKnowledgeModules(dataDir, context, all);
+  const modules = selection.modules;
+  warnings.push(...selection.warnings);
   const moduleIds = new Set(modules.map(m => m.id));
   for (const doc of listKnowledgeDocuments(dataDir)) {
     if (!doc.active || !matchesRepos(doc.repositories)

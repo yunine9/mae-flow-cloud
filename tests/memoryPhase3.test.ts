@@ -109,7 +109,7 @@ test("起草解析:只认形状对的 JSON;摘要必须引用真实 id、不超 
   assert.match(fallback, /另有 1 条,用 knowledge search 描述 src\/filter/);
 });
 
-test("权重:人判 > 流水线;一年减半;返工减得比命中加得狠;general 略重", () => {
+test("权重保留来源与时间排序，同文件意见不能作为有害知识扣分", () => {
   const now = Date.parse("2026-09-03T00:00:00Z");
   const fresh = { judged_by: "human", scope: "local", at: "2026-09-01T00:00:00Z" } as const;
   const human = memoryWeight(fresh, EMPTY_STATS, now);
@@ -120,7 +120,8 @@ test("权重:人判 > 流水线;一年减半;返工减得比命中加得狠;gene
   const general = memoryWeight({ ...fresh, scope: "general" }, EMPTY_STATS, now);
   assert.ok(human > pipeline);
   assert.ok(Math.abs(yearOld - human / 2) < 0.01);
-  assert.ok(used > human && reworked < human);
+  assert.ok(used > human);
+  assert.equal(reworked, used, "同文件返工不证明经验有害");
   assert.ok(general > human);
   assert.ok(memoryWeight(fresh, { ...EMPTY_STATS, reworks: 9 }, now) >= 0.05, "有下限,不归零");
 });
@@ -140,7 +141,7 @@ test("过程中主动记录直接保存，不调用逐条提炼模型", async ()
   } finally { await svc.shutdown(); }
 });
 
-test("台账与效果账:推送记 push;推过的文件又被提意见记 rework,权重掉到后面;总览能看到", async () => {
+test("台账保留同文件意见的关联事实，不据此降低经验权重;总览能看到", async () => {
   const { svc, dataDir } = fakeService();
   try {
     const store = new MemoryStore(dataDir);
@@ -172,7 +173,9 @@ test("台账与效果账:推送记 push;推过的文件又被提意见记 rework
     assert.equal(after.length, 2, "同单同条只记一次;别的文件不算");
     assert.deepEqual(new Set(after.map((row) => row.id)), new Set([a.id, b.id]));
 
-    // 没推过的第三条现在排最前(返工把前两条压下去了)
+    const rankAt = Date.now();
+    assert.equal(memoryWeight(a, store.ledger.stats().get(a.id), rankAt), memoryWeight(a, { ...EMPTY_STATS, pushes: 1 }, rankAt), "意见关联不改变权重");
+    // 新增条目仍可加入排序；同文件意见不证明旧经验有害。
     const c = store.record({ ...base, evidence: "e3", conclusion: "C:没推过的" });
     store.review(c.id, "owner", { decision: "accepted", revision: 1 });
     const ranked = (svc as any).memoryCandidates(internal).map((row: any) => row.id);

@@ -29,7 +29,7 @@ test("领域清理只提交删除 MR，响应丢失复用分支，创建后不�
     else if (url.pathname === "/mr/discover") response.end(JSON.stringify({ mrs: mrs.filter(m => m.source_branch === url.searchParams.get("source_branch")) }));
     else if (url.pathname === "/mr") {
       let text = ""; for await (const part of request) text += part;
-      const body = JSON.parse(text); assert.equal(body.dts_no, "REQ-cleanup"); assert.match(body.title, /知识清理/);
+      const body = JSON.parse(text); assert.equal(body.dts_no, "REQ-cleanup"); assert.equal(body.title, "清理旧领域文档并重新整理业务知识");
       const mr = { id: mrs.length + 1, url: `https://example.test/mr/${mrs.length + 1}`, source_branch: body.source_branch, target_branch: body.target_branch, state: "opened" }; mrs.push(mr);
       if (loseResponse) { loseResponse = false; response.statusCode = 502; response.end("{}"); } else response.end(JSON.stringify(mr));
     } else { response.statusCode = 404; response.end("{}"); }
@@ -38,7 +38,7 @@ test("领域清理只提交删除 MR，响应丢失复用分支，创建后不�
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
   const prepare = new KnowledgeSourceCleanup(publisher);
   const repo = { id: "repo-1", name: "交易仓", repository: remote, branch: "master", path: "", docs_path: "docs/old" };
-  const task: SourceCleanupTask = { id: "dkx-preparation", issue_no: "REQ-cleanup", operator: "dev", created_at: new Date().toISOString(), source_cleanup: prepare.create([repo]) };
+  const task: SourceCleanupTask = { id: "dkx-preparation", issue_no: "REQ-cleanup", issue_description: "清理旧领域文档并重新整理业务知识", operator: "dev", created_at: new Date().toISOString(), source_cleanup: prepare.create([repo]) };
   let writes = 0; const save = () => { writes++; };
   try {
     task.source_cleanup!.publications.push({ target_id: repo.id, branch: "codex/knowledge-old-cleanup", state: "failed", revision: "abcdef123456", documents: [] });

@@ -5,6 +5,7 @@ import {
   knowledgeAssetPath,
   knowledgeLibraryPage,
   knowledgeStudioView,
+  extractionSkillSearch,
   readKnowledgeAssetFocus,
 } from "../web/src/knowledgeNavigation.ts";
 
@@ -67,4 +68,17 @@ test("工作室深链区分 Skill、执行过程与知识成果", () => {
   assert.equal(knowledgeStudioView("?knowledgePage=documents&domainExtraction=dkx-1"), "knowledge");
   assert.equal(knowledgeStudioView("?knowledgeView=workbench&knowledgePage=domain&domainExtraction=dkx-1"), "workbench");
   assert.equal(knowledgeStudioView("?knowledgeView=knowledge&platformSkill=domain"), "knowledge");
+});
+
+test("萃取方法入口清除新旧任务定位，组件与领域均可直接维护对应 Skill", () => {
+  const current = "?kbPage=research&kbKind=component&kbModule=engineering%3Acpp&kbTask=cr-old&kbReview=1&domainExtraction=dkx-old&componentResearch=cr-old&knowledgeDocument=kd-old&knowledgeDocuments=1&researchDocument=kd-research&component=old&knowledgeProbe=1&knowledgeConsolidation=1&knowledgePage=component&knowledgeView=knowledge&theme=cloud";
+  for (const kind of ["component", "domain"] as const) {
+    const search = extractionSkillSearch(current, kind), query = new URLSearchParams(search);
+    assert.equal(query.get("platformSkill"), kind);
+    assert.equal(query.get("theme"), "cloud");
+    assert.equal(knowledgeLibraryPage(search), "documents");
+    assert.equal(knowledgeStudioView(search), "skills");
+    for (const key of ["kbPage", "kbKind", "kbModule", "kbTask", "kbReview", "domainExtraction", "componentResearch", "knowledgeDocument", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeConsolidation"]) assert.equal(query.has(key), false, key);
+    assert.equal(extractionSkillSearch(search, kind), search, "刷新后的同一入口保持稳定");
+  }
 });

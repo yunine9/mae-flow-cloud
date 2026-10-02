@@ -46,7 +46,10 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.equal(resumed.turns.length, 1); assert.equal(resumed.turns[0].id, detail.turns[0].id); assert.equal(resumed.turns[0].use_latest_skill, true);
     for (let i = 0; i < 100 && domain.get(job.id).status !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     assert.equal((await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "" })).status, 400);
-    const associated = await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456" }); assert.equal(associated.status, 200); assert.equal((await associated.json() as any).issue_no, "REQ-456"); assert.deepEqual(detail.material_ids, [material.id]);
+    assert.equal((await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456", issue_description: "" })).status, 400);
+    const associated = await request(`/domain-extraction/${job.id}/issue`, dev, { issue_no: "REQ-456", issue_description: "  核对领域规则  " });
+    assert.equal(associated.status, 200); const association: any = await associated.json();
+    assert.equal(association.issue_no, "REQ-456"); assert.equal(association.issue_description, "核对领域规则"); assert.deepEqual(detail.material_ids, [material.id]);
     createBusinessModule(root, { id: "trade", name: "交易", description: "交易业务", owner: "dev", repositories: ["https://example.test/source.git"] }, "dev");
     assert.equal((await request("/domain-extraction/probes", "", { module_id: "trade", probe_module: "取消" })).status, 401);
     const probeResponse = await request("/domain-extraction/probes", dev, { module_id: "trade", probe_module: "取消", material_ids: [material.id] });

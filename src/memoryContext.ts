@@ -2,12 +2,12 @@ import { DEFAULT_MEMORY_BUDGETS } from "./memorySidecar.ts";
 
 /** 每轮临时上下文：不写会话历史、不改工具结果、不把检索失败变成任务失败。 */
 export const MEMORY_CONTEXT_TYPE = "mae-memory-context";
-export interface MemoryContextEntry { id: string; text: string }
+export interface MemoryContextEntry { id: string; text: string; revision?: string }
 export interface MemoryContextOptions {
   search(query: string): Promise<string[] | undefined>;
   resolve(ids: string[]): MemoryContextEntry[];
   context(): string;
-  onUse?(event: { query: string; ids: string[]; status: "ready" | "unavailable" }): void;
+  onUse?(event: { query: string; ids: string[]; status: "ready" | "unavailable"; assets?: Array<{id:string;revision:string}> }): void;
   budgetMs?: number;
   refreshMs?: number;
 }
@@ -65,7 +65,9 @@ export function createMemoryContext(options: MemoryContextOptions): (messages: a
       const status = available && expires > Date.now() ? "ready" : "unavailable";
       const usage = JSON.stringify([query, entries, status]);
       if (usage !== lastUsage) {
-        options.onUse?.({ query, ids: entries.map(entry => entry.id), status });
+        try { options.onUse?.({ query, ids: entries.map(entry => entry.id), status,
+          assets: entries.flatMap(entry => entry.revision ? [{id:entry.id,revision:entry.revision}] : []) });
+        } catch { /* Failed observation must not remove valid task context. */ }
         lastUsage = usage;
       }
       if (!entries.length) return clean;

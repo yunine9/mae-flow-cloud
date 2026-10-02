@@ -1,0 +1,6 @@
+.knowledge-page-title { display:flex; align-items:center; gap:16px; min-width:0; }
+.knowledge-page-title > h2 { margin:0; min-width:0; }
+.knowledge-back-button { display:inline-flex; align-items:center; justify-content:center; gap:8px; flex-shrink:0; height:36px; padding:0 12px; border:1px solid var(--line-strong); border-radius:8px; background:var(--surface); color:var(--text-strong); font-size:13px; font-weight:500; box-shadow:0 1px 2px color-mix(in srgb,var(--text-strong) 5%,transparent); }
+.knowledge-back-button > svg { color:var(--primary); }
+.knowledge-back-button:hover { border-color:var(--primary); background:color-mix(in srgb,var(--primary) 6%,var(--surface)); color:var(--text-strong); }
+.knowledge-back-button:focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
