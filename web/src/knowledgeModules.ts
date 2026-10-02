@@ -4,6 +4,7 @@ import type { ComponentRepository } from "./componentResearchApi";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { documentRequest } from "./knowledgeDocumentsApi";
+import type { ComponentGovernanceItem, ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
 
 export type KnowledgeModuleCategory = "business" | "engineering" | "unassigned";
 export interface ModuleDocument extends KnowledgeDocument {
@@ -130,4 +131,26 @@ export async function loadKnowledgeModules(): Promise<KnowledgeModuleData> {
   if (components.status === "rejected") result.warnings.push("基础组件配置读取失败，组件归属暂不可用。");
   if (skills.status === "rejected") result.warnings.push("Skill 归属读取失败，部分 Skill 暂列待整理。");
   return result;
+}
+
+/** 组件治理快照（规则级别、命中与反馈）；读取失败时调用方隐藏规则数，不推断为 0。 */
+export type ComponentRule = ComponentGovernanceItem;
+export const loadComponentGovernance = () => componentRequest<ComponentGovernanceSnapshot>("/component-knowledge");
+/** 规则按"所属文档 ∪ 证据仓"归到组件：治理里的 component 是范式短名，与组件仓 id 不同名。 */
+export function componentRuleMatches(rule: ComponentRule, documentIds: string[], componentId?: string): boolean {
+  return rule.kind === "rule" && (documentIds.includes(rule.paradigm.document_id) || (!!componentId && rule.paradigm.evidence.some(e => e.repository_id === componentId)));
+}
+export function rulesForComponent(snapshot: ComponentGovernanceSnapshot, group: KnowledgeModuleGroup): ComponentRule[] {
+  return snapshot.items.filter(rule => componentRuleMatches(rule, group.documents.map(d => d.id), group.id));
+}
+/** 首页只数"提示"与"只记录"；关闭的规则不计入，避免把不出声的规则算成覆盖。 */
+export function languageRuleSummary(snapshot: ComponentGovernanceSnapshot, language: string) {
+  const rules = snapshot.items.filter(i => i.kind === "rule" && i.paradigm.language === language);
+  return { warning: rules.filter(r => r.policy.level === "warning").length, shadow: rules.filter(r => r.policy.level === "shadow").length };
+}
+/** 仓地址转浏览地址；ssh 形式 git@host:group/repo 转为 https。 */
+export function repositoryWebUrl(value: string): string | undefined {
+  const key = repositoryKey(value), ssh = /^(?:ssh:\/\/)?git@([^:/]+)[:/](.+)$/.exec(key);
+  if (ssh) return `https://${ssh[1]}/${ssh[2]}`;
+  return /^https?:\/\//.test(key) ? key : undefined;
 }

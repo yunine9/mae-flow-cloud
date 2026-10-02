@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { Markdown } from "./markdown";
 import { knowledgeAnchorLine } from "./knowledgeStructure";
 export interface KnowledgeFocus { line?: number; anchor?: string; token: number }
-export function KnowledgeMarkdown({ text, focus, onReference }: { text: string; focus?: KnowledgeFocus; onReference?: (href: string) => boolean }) {
+/** 组件指南开头的结构字段（mfc.component-guide 等）给机器读；阅读时换成空行，
+ *  行号不变，批注与章节定位仍对得上。其他文档的 frontmatter 原样保留。 */
+export function blankKnowledgeMetadata(text: string): string {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(text);
+  if (!match || !/^schema:\s*["']?mfc\./m.test(match[1])) return text;
+  return match[0].replace(/[^\n]/g, "") + text.slice(match[0].length);
+}
+export function KnowledgeMarkdown({ text: original, focus, onReference, hideMetadata = false }: { text: string; focus?: KnowledgeFocus; onReference?: (href: string) => boolean; hideMetadata?: boolean }) {
+  const text = hideMetadata ? blankKnowledgeMetadata(original) : original;
   const root = useRef<HTMLDivElement>(null), [notice, setNotice] = useState("");
   function navigate(line?: number, anchor?: string) {
     const number = anchor ? knowledgeAnchorLine(text, anchor) : line;

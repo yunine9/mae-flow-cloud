@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw, Sparkles } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,12 +7,16 @@ import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { KnowledgeVersions } from "./KnowledgeVersions";
+import { ComponentKnowledgeWorkspace } from "./ComponentKnowledgeWorkspace";
+import { useKnowledgeStudio } from "./KnowledgeStudioContext";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
 import { KnowledgeContentSearch } from "./KnowledgeContentSearch";
 import { KnowledgeReviewNotes } from "./KnowledgeReviewNotes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
-import { knowledgeFilePath, loadKnowledgeModules, type KnowledgeModuleData, type ModuleDocument } from "./knowledgeModules";
+import { blankKnowledgeMetadata, KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
+import { knowledgeFilePath, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type KnowledgeModuleData, type KnowledgeModuleGroup, type ModuleDocument } from "./knowledgeModules";
 
 export interface KnowledgeModuleReaderProps {
   moduleKey: string;
@@ -57,6 +61,9 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const article = useRef<HTMLDivElement>(null);
   const searchableContent = useRef<HTMLDivElement>(null);
   const [notesToolbar, setNotesToolbar] = useState<HTMLSpanElement | null>(null);
+  const [governance, setGovernance] = useState<ComponentGovernanceSnapshot>(), [governanceError, setGovernanceError] = useState(""), [governanceReload, setGovernanceReload] = useState(0);
+  const [componentTab, setComponentTab] = useState<"usage" | "rules">("usage");
+  const studio = useKnowledgeStudio();
   const requestedModule = data?.modules.find(m => m.key === moduleKey);
   const module = selectedDocumentId && !requestedModule?.documents.some(d => d.id === selectedDocumentId)
     ? data?.modules.find(m => m.documents.some(d => d.id === selectedDocumentId)) ?? requestedModule
@@ -98,6 +105,16 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     void read(); article.current?.scrollTo({ top: 0 });
     return () => { live = false; };
   }, [current?.id, reload]);
+  const engineering = module?.category === "engineering";
+  useEffect(() => {
+    // 规则数与规则页签是旁路：读取失败只在组件处提示，不挡正文阅读。
+    let live = true; setGovernanceError("");
+    if (engineering) void loadComponentGovernance().then(value => { if (live) setGovernance(value); }).catch(e => { if (live) { setGovernance(undefined); setGovernanceError((e as Error).message); } });
+    return () => { live = false; };
+  }, [engineering, reload, governanceReload]);
+  const currentComponent = engineering ? module?.repositories.find(r => r.id !== "unassigned" && r.documents.some(d => d.id === current?.id)) : undefined;
+  const componentRules = governance && currentComponent ? rulesForComponent(governance, currentComponent) : [];
+  useEffect(() => { setComponentTab("usage"); }, [currentComponent?.id]);
   const needle = query.trim().toLocaleLowerCase(), visible = useMemo(() => (module?.documents ?? []).filter(d => !needle || `${d.title} ${knowledgeFilePath(d)}`.toLocaleLowerCase().includes(needle)), [module, needle]);
   const visibleIds = new Set(visible.map(d => d.id)), currentKey = current?.form === "skill" ? `${selected}:${skillPath}` : selected;
   function choose(doc: ModuleDocument, path = "SKILL.md") {
@@ -120,27 +137,39 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       {!visible.some(d => d.form === "skill") && <p className="px-2 py-2 text-xs text-muted-foreground">暂无 Skill</p>}
     </section>;
   }
+  function repositoryCount(repository: KnowledgeModuleGroup) {
+    // 基础组件数规则（会不会提示 Agent 比文档数更有意义）；规则读不到时退回文档数，不显示成 0。
+    if (!engineering || repository.id === "unassigned") return <small className="text-xs text-muted-foreground">{repository.documents.length}</small>;
+    if (!repository.documents.length) return <small className="shrink-0 text-xs text-muted-foreground">尚无知识</small>;
+    if (!governance) return <small className="text-xs text-muted-foreground" title="规则读取失败，显示文档数">{repository.documents.length}</small>;
+    const count = rulesForComponent(governance, repository).length;
+    return <small className="shrink-0 text-xs text-muted-foreground" title={`${count} 条规则`}>{count} 规则</small>;
+  }
   function repositoryList() {
     return <section aria-label={module?.category === "business" ? "仓内知识" : "基础组件"}><h3 className="mb-2 text-xs font-medium text-muted-foreground">{module?.category === "business" ? "仓内知识" : "基础组件"}</h3>
       {module?.repositories.filter(r => !needle || r.documents.some(d => visibleIds.has(d.id))).map(repository => {
         const open = !!needle || expandedRepository === repository.id;
-        return <div key={repository.id} className="mb-1"><Button variant="ghost" className="km-tree-row h-auto min-h-9 justify-start gap-2 whitespace-normal px-2 text-left" aria-expanded={open} onClick={() => setExpandedRepository(open ? "" : repository.id)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<GitBranch size={15} className="text-muted-foreground" /><span className="flex-1 text-sm">{repository.name}</span><small className="text-xs text-muted-foreground">{repository.documents.length}</small></Button>{open && <div className="ml-3 border-l border-line pl-2">{repository.documents.length ? <FileTree files={files(repository.documents)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无知识</p>}</div>}</div>;
+        return <div key={repository.id} className="mb-1"><Button variant="ghost" className="km-tree-row h-auto min-h-9 justify-start gap-2 whitespace-normal px-2 text-left" aria-expanded={open} onClick={() => setExpandedRepository(open ? "" : repository.id)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<GitBranch size={15} className="text-muted-foreground" /><span className="flex-1 text-sm">{repository.name}</span>{repositoryCount(repository)}</Button>{open && <div className="ml-3 border-l border-line pl-2">{repository.documents.length ? <FileTree files={files(repository.documents)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">{engineering ? "尚无知识" : "暂无知识"}</p>}
+            {engineering && !repository.documents.length && repository.id !== "unassigned" && <Button size="xs" variant="outline" className="mx-2 mb-2" onClick={() => studio ? studio.openExecution("component") : location.assign("?kbPage=research&kbKind=component")}><Sparkles />发起研究</Button>}</div>}</div>;
       })}
       {!module?.repositories.length && <p className="px-2 py-2 text-xs text-muted-foreground">暂无关联项</p>}
+      {engineering && governanceError && <p className="px-2 py-1 text-xs text-muted-foreground">规则读取失败，暂显示文档数。</p>}
     </section>;
   }
   const rootDocuments = visible.filter(d => d.form !== "skill" && !module?.repositories.some(r => r.documents.some(item => item.id === d.id)));
   const file = skillPath === "SKILL.md" ? detail?.content : skillFiles?.find(f => f.path === skillPath)?.content;
   const body = current?.form === "skill" ? file : detail?.content;
   const packageAnnotations = current?.form === "skill" && !!current.skillDirectory;
-  const markdownBody = current && body !== undefined && <KnowledgeMarkdown text={body} focus={focus} onReference={href => {
+  const shownBody = body === undefined ? undefined : blankKnowledgeMetadata(body);
+  const usage = !currentComponent || componentTab === "usage";
+  const markdownBody = current && body !== undefined && <KnowledgeMarkdown hideMetadata text={body} focus={focus} onReference={href => {
     if (current.form === "skill") { const [path, anchor] = href.split("#"), parts = skillPath.split("/").slice(0, -1); for (const segment of path.split("/")) { if (segment === "..") parts.pop(); else if (segment && segment !== ".") parts.push(segment); } const target = parts.join("/"); if (skillFiles?.some(file => file.path === target)) { setSkillPath(target); setFocus({ anchor, token: Date.now() }); return true; } }
     return false;
   }} />;
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
-      <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined} /><span ref={setNotesToolbar} className="flex items-center" /></div>
+      <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" /></div>
     </header>
     {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
     <div className="km-reader-panes" data-tree-hidden={!showTree}>
@@ -149,11 +178,21 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       </aside>}
       <div ref={article} className="km-document p-6" aria-label="知识正文" tabIndex={0}>
         {!data && !error ? <p role="status" className="py-12 text-center text-muted-foreground">正在读取知识目录…</p> : !module ? <p className="py-12 text-center text-muted-foreground">该目录不存在，或当前没有可读取的归属信息。</p> : !current ? <div className="grid justify-items-center gap-3 py-16 text-muted-foreground"><BookOpen size={28} /><p>这个目录还没有知识</p></div> : <div className="km-document-body">
-          <header className="mb-6 border-b border-line pb-4"><div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={15} /> : <FileText size={15} />}<span className="break-all">{current.form === "skill" ? `${current.skillDirectory || current.title}/${skillPath}` : knowledgeFilePath(current)}</span>{!current.active && <Badge variant="secondary">已停用</Badge>}</div>{!body?.trimStart().startsWith(`# ${current.title}\n`) && <h2 className="text-xl font-semibold leading-snug">{current.title}</h2>}{current.when_to_use && <p className="mt-2 text-sm text-muted-foreground">{current.when_to_use}</p>}</header>
+          {currentComponent && <div className="mb-5 flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-line pb-2">
+            <Tabs value={componentTab} onValueChange={value => setComponentTab(value as typeof componentTab)}><TabsList variant="line" aria-label={`${currentComponent.name}知识`}>
+              <TabsTrigger value="usage" className="px-3 after:absolute after:inset-x-2 after:-bottom-3 after:h-0.5 after:rounded-full after:bg-primary after:opacity-0 data-active:after:opacity-100">用法</TabsTrigger>
+              <TabsTrigger value="rules" className="px-3 after:absolute after:inset-x-2 after:-bottom-3 after:h-0.5 after:rounded-full after:bg-primary after:opacity-0 data-active:after:opacity-100">规则{governance && <span className="tabular-nums text-muted-foreground">{componentRules.length}</span>}</TabsTrigger>
+            </TabsList></Tabs>
+            <span className="text-xs text-muted-foreground">基础组件 · {currentComponent.name}</span>
+          </div>}
+          {!usage ? (governanceError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>组件规则读取失败：{governanceError}</p><Button variant="outline" onClick={() => setGovernanceReload(n => n + 1)}>重试</Button></div>
+            : <ComponentKnowledgeWorkspace open variant="rules" component={{ id: currentComponent!.id, documentIds: currentComponent!.documents.map(d => d.id) }} onClose={() => setComponentTab("usage")} onAdopt={id => { const doc = module?.documents.find(d => d.id === id); if (doc) { choose(doc); setComponentTab("usage"); } }} onChanged={() => setGovernanceReload(n => n + 1)} />) : <>
+          <header className="mb-6 border-b border-line pb-4"><div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={15} /> : <FileText size={15} />}<span className="break-all">{current.form === "skill" ? `${current.skillDirectory || current.title}/${skillPath}` : knowledgeFilePath(current)}</span>{!current.active && <Badge variant="secondary">已停用</Badge>}</div>{!shownBody?.trimStart().startsWith(`# ${current.title}\n`) && <h2 className="text-xl font-semibold leading-snug">{current.title}</h2>}{current.when_to_use && <p className="mt-2 text-sm text-muted-foreground">{current.when_to_use}</p>}</header>
           <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); setUpdating(true); setUpdateError(""); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
           {current.form === "skill" && detail && !skillFiles && <p className="mt-6 text-xs text-muted-foreground">已读取 SKILL.md；当前接口未提供包内附件清单。</p>}
           {detail && !current.external && <KnowledgeVersions key={`${detail.id}:${detail.revision}`} document={detail} onRestored={() => setReload(n => n + 1)} />}
           {detail && <details className="mt-8 border-t border-line pt-3 text-sm"><summary className="text-muted-foreground">版本与来源</summary><div className="mt-3 grid gap-2 text-sm text-muted-foreground"><p className="break-all">版本：{detail.revision || "未记录"}</p>{current.maintainedAt && <p>最近维护：{new Date(current.maintainedAt).toLocaleString("zh-CN")}</p>}{detail.source && <p className="break-all">{detail.source.repository} · {detail.source.branch} · {detail.source.path}</p>}{detail.research_source && <Button variant="link" className="justify-start px-0" onClick={() => onResearch(detail.research_source!.job_id, detail.id)}>查看研究与归档记录</Button>}{detail.history?.map((entry, index) => <p key={`${entry.at}:${index}`}>{new Date(entry.at).toLocaleString("zh-CN")} · {entry.operator} · {entry.action}</p>)}</div></details>}
+          </>}
         </div>}
       </div>
     </div>
