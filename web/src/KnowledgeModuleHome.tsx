@@ -5,7 +5,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { knowledgeFileName, loadKnowledgeModules, type KnowledgeModule, type KnowledgeModuleCategory, type KnowledgeModuleData } from "./knowledgeModules";
-import "./knowledge-modules.css";
 
 export interface KnowledgeModuleHomeProps {
   onOpenModule: (key: string) => void;

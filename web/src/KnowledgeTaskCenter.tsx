@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { PersonName } from "./People";
 import { formatLocalDateTime, relativeTime } from "./time";
 import { getKnowledgeTasks, knowledgeTaskElapsed, knowledgeTaskOpensDocument, type KnowledgeTaskCenterData, type KnowledgeTaskGroup, type KnowledgeTaskKind, type KnowledgeTaskRow, type KnowledgeTaskSummary } from "./knowledgeTaskCenterApi";
-import "./knowledgeTaskCenter.css";
 
 export type { KnowledgeTaskCenterData, KnowledgeTaskKind, KnowledgeTaskSummary } from "./knowledgeTaskCenterApi";
 

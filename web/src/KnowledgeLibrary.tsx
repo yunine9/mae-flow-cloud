@@ -14,7 +14,6 @@ import { ComponentResearch } from "./ComponentResearch";
 import { KnowledgeDocuments } from "./KnowledgeDocuments";
 import { KnowledgeStudioContext, type ExtractionKind } from "./KnowledgeStudioContext";
 import { knowledgeLibraryPage, knowledgeStudioView, type KnowledgeAssetFocus } from "./knowledgeNavigation";
-import "./knowledge-library.css";
 
 type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "legacy";
 type Kind = ExtractionKind | "skill-extraction" | "skill-submission";

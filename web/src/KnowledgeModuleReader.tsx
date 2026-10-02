@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Textarea } from "@/components/ui/textarea";
 import { KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
 import { knowledgeFilePath, loadKnowledgeModules, type KnowledgeModuleData, type ModuleDocument } from "./knowledgeModules";
-import "./knowledge-modules.css";
 
 export interface KnowledgeModuleReaderProps {
   moduleKey: string;

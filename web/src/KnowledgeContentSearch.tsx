@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import "./knowledge-content-search.css";
 
 interface KnowledgeContentSearchProps {
   contentRef: RefObject<HTMLElement | null>;
