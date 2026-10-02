@@ -112,7 +112,7 @@
 | # | 场景 | 后果 | 证据 | 证实 | 批次 | 整改结果 |
 |---|---|---|---|---|---|---|
 | F1 | MR 在平台上被关闭，之后有人刷新状态 | 显示"归档待处理"，但"重试"只处理 failed 批次，而这个批次是 done；"重新发布"又被同批次去重挡掉。永远推不动 | knowledgeArchiveStatus.ts:14；domainKnowledgeExtraction.ts:565-568、575、594 | r3 | B2 | 已修（b9df0dd2） |
-| F2 | 合入后归档仓被人改过，且是"刷新"时发现的；人核对后选择保留平台版本 | 正文没变，不生成新批次；重试也找不到 failed 批次。"远端待核对"永久挂着（d3b27327 只修了发布时发现的路径） | 同上；knowledgeTaskCenter.ts:52 | r3 | B2 | 已修（b9df0dd2） |
+| F2 | 合入后归档仓被人改过，且是"刷新"时发现的；人核对后选择保留平台版本 | 正文没变，不生成新批次；重试也找不到 failed 批次。"远端待核对"永久挂着（d3b27327 只修了发布时发现的路径） | 同上；knowledgeTaskCenter.ts:52 | r3 | B2 | 已修（b9df0dd2、b18bb4fe；核对不增版本，动作接续原批次） |
 | F3 | 停止只改状态并发 abort，没有收口预算 | 执行体不响应时，任务永远不能继续；两个这样的任务就占满全局并发 2，所有排队任务不动；shutdown 也是无预算等待 | domainKnowledgeExtraction.ts:285、303、328、446-454、689；componentResearch.ts:249、340-353、374、579 | r1 | B2（D1） | 已修（b9df0dd2） |
 | F4 | 管理器懒加载（`??=`） | 重启后没人访问知识接口，研究就不接续，running 批次不重排 | taskService.ts:5622-5637；server.ts:1294 | r7 | B2 | 已修（b9df0dd2） |
 | F5 | 任意一个 job.json / record.json / kd-*.json 损坏 | 整个领域或组件管理器、正式库列表全部不可用，报错不说是哪个文件 | domainKnowledgeExtraction.ts:63-67；componentResearch.ts:104-110；knowledgeDocuments.ts:30-34 | r8 | B2 | 已修（b9df0dd2） |
@@ -120,22 +120,22 @@
 | F7 | 刷新进行中有人点重试 | 刷新用旧快照整体回写，覆盖刚推送的 revision（lost update）；归档的 finally 还会删掉刷新持有的锁 | domainKnowledgeExtraction.ts:572-574、596-598、661、673-676 | r4 | B2 | 已修（b9df0dd2） |
 | F8 | 组件的 adopt、准备归档、发布由前端串起来 | 中途失败或关浏览器后，知识已生效但没有批次；任务中心显示"已发布" | web/src/ComponentResearch.tsx:248-271；componentResearchRoutes.ts:52-54；knowledgeTaskCenter.ts:116-122 | 推断 | B4（D4） | 待 B4 |
 | F9 | 没有 MR 后台轮询 | 一直显示"待合入"；清理型 MR 合入后，对应正式知识要等有人刷新才停用 | knowledgeMrPublisher.ts:238-241 | 推断 | B4（D2） | 待 B4 |
-| F10 | 合入后同步失败（sync_state=failed） | 显示"已发布"并归入已完成；领域界面只认 diverged，failed 不提示 | knowledgeArchiveStatus.ts:9-17；knowledgeTaskCenter.ts:52；DomainKnowledgePublicationStatus.tsx:27-31 | r5 | B3 | 待 B3 |
-| F11 | 组件归档 diverged | 组件显示"已发布"，同样状态的领域显示"远端待核对" | knowledgeTaskCenter.ts:116-122 对比 52 | r5 | B3 | 待 B3 |
-| F12 | 已发布后又跑一轮研究，这轮失败 | 只显示"执行失败"，把"归档待处理"遮住 | knowledgeTaskCenter.ts:41 | r5 | B3 | 待 B3 |
-| F13 | MR 平台返回 400/401 | 一律说"MR 创建尚未确认，重试将复用同一分支"；401 被说成"暂时无法确认，请稍后重试" | knowledgeMrPublisher.ts:211-212、38 | r9 | B3 | 待 B3 |
-| F14 | git 推送或拉取失败 | 鉴权、网络、非快进不区分，只有一句笼统提示 | knowledgeMrPublisher.ts:55；knowledgeExtractionFactory.ts:30 | 推断 | B3 | 待 B3 |
+| F10 | 合入后同步失败（sync_state=failed） | 显示"已发布"并归入已完成；领域界面只认 diverged，failed 不提示 | knowledgeArchiveStatus.ts:9-17；knowledgeTaskCenter.ts:52；DomainKnowledgePublicationStatus.tsx:27-31 | r5 | B3 | 已修（b18bb4fe） |
+| F11 | 组件归档 diverged | 组件显示"已发布"，同样状态的领域显示"远端待核对" | knowledgeTaskCenter.ts:116-122 对比 52 | r5 | B3 | 已修（b18bb4fe） |
+| F12 | 已发布后又跑一轮研究，这轮失败 | 只显示"执行失败"，把"归档待处理"遮住 | knowledgeTaskCenter.ts:41 | r5 | B3 | 已修（b18bb4fe） |
+| F13 | MR 平台返回 400/401 | 一律说"MR 创建尚未确认，重试将复用同一分支"；401 被说成"暂时无法确认，请稍后重试" | knowledgeMrPublisher.ts:211-212、38 | r9 | B3 | 已修（b18bb4fe） |
+| F14 | git 推送或拉取失败 | 鉴权、网络、非快进不区分，只有一句笼统提示 | knowledgeMrPublisher.ts:55；knowledgeExtractionFactory.ts:30 | 推断 | B3 | 已修（b18bb4fe） |
 | F15 | 基础设施故障 | 不自动重试，不通知，等人自己发现 | domainKnowledgeExtraction.ts:658；taskService.ts:5622-5637 对比 5612-5618 | 推断 | B4（D3） | 待 B4 |
 | F16 | 批注交给 Agent 后，这一轮失败、被停止或建议被放弃 | 批注永远停在"已交给 Agent"，不能再提交 | knowledgeReviewNotes.ts:107-111、129 | r6 | B2 | 已修（b9df0dd2） |
-| F17 | 源码缓存是 depth=1，缓存 key 含操作人和凭据 | 换人或换令牌后算不出增量差异，报错误导 | taskService.ts:5640-5642；knowledgeExtractionFactory.ts:38；domainKnowledgeAgent.ts:92-97 | git 已证实 | B3 | 待 B3 |
-| F18 | 48 小时总预算到期 | 英文报错 "This operation was aborted"，不提预算 | domainKnowledgeAgent.ts:218；componentResearchAgent.ts:52 | 推断 | B3 | 待 B3 |
-| F19 | Skill 审核通过时在 installStaged 和写审核记录之间崩溃 | 新包已上线，提交仍是 pending，再审被"包已变化"挡住 | hostSkillLibrary.ts:865-880 | 推断 | B3 | 待 B3 |
-| F20 | submission.json 非原子写；同一个包重复提交 | 坏记录静默消失；重复提交出现两份 pending | hostSkillLibrary.ts:735-741、830-833 | 推断 | B3 | 待 B3 |
-| F21 | 领域研究的 create 不幂等 | 重复点击开两个研究，花双份模型费用 | domainKnowledgeExtraction.ts:158-193 | 推断 | B3 | 待 B3 |
-| F22 | 只改范围或启停时不要求 expected_revision | 并发修改时后写者覆盖 | knowledgeDocumentRoutes.ts:120 | 推断 | B3 | 待 B3 |
+| F17 | 源码缓存是 depth=1，缓存 key 含操作人和凭据 | 换人或换令牌后算不出增量差异，报错误导 | taskService.ts:5640-5642；knowledgeExtractionFactory.ts:38；domainKnowledgeAgent.ts:92-97 | git 已证实 | B3 | 已修（b18bb4fe） |
+| F18 | 48 小时总预算到期 | 英文报错 "This operation was aborted"，不提预算 | domainKnowledgeAgent.ts:218；componentResearchAgent.ts:52 | 推断 | B3 | 已修（b18bb4fe） |
+| F19 | Skill 审核通过时在 installStaged 和写审核记录之间崩溃 | 新包已上线，提交仍是 pending，再审被"包已变化"挡住 | hostSkillLibrary.ts:865-880 | 推断 | B3 | 已修（b18bb4fe） |
+| F20 | submission.json 非原子写；同一个包重复提交 | 坏记录静默消失；重复提交出现两份 pending | hostSkillLibrary.ts:735-741、830-833 | 推断 | B3 | 已修（b18bb4fe） |
+| F21 | 领域研究的 create 不幂等 | 重复点击开两个研究，花双份模型费用 | domainKnowledgeExtraction.ts:158-193 | 推断 | B3 | 已修（b18bb4fe） |
+| F22 | 只改范围或启停时不要求 expected_revision | 并发修改时后写者覆盖 | knowledgeDocumentRoutes.ts:120 | 推断 | B3 | 已修（b18bb4fe） |
 | F23 | 研究运行中允许 edit / restore / reconcile | 不丢数据，但这一轮白跑 | domainKnowledgeExtraction.ts:394-396 | 推断 | B2 | 已修（b9df0dd2） |
-| F24 | 没配置归档仓就发布 | 提示"请填写不带凭据的 HTTP/HTTPS 仓库地址"，不指向设置页 | domainKnowledgeExtraction.ts:180-183、630 | 推断 | B3 | 待 B3 |
-| F25 | 删除组件知识不处理 Git 归档；删除领域任务后，失败批次失去重试入口 | 平台和 Git 长期不一致 | componentKnowledgeDeletion.ts；domainKnowledgeExtraction.ts:455-465、595 | 推断 | B3 | 待 B3 |
+| F24 | 没配置归档仓就发布 | 提示"请填写不带凭据的 HTTP/HTTPS 仓库地址"，不指向设置页 | domainKnowledgeExtraction.ts:180-183、630 | 推断 | B3 | 已修（b18bb4fe） |
+| F25 | 删除组件知识不处理 Git 归档；删除领域任务后，失败批次失去重试入口 | 平台和 Git 长期不一致 | componentKnowledgeDeletion.ts；domainKnowledgeExtraction.ts:455-465、595 | 推断 | B3 | 已修（b18bb4fe） |
 | F26 | 归档 git 子进程 detached；kill -9 遗留临时目录和临时凭据 | 可能出现孤儿推送；凭据残留在磁盘上 | knowledgeMrPublisher.ts:41-60；executionRuntime.ts:1240 | 推断 | B2 | 已修（b9df0dd2） |
 
 **"已发布"有 7 处各自判断，口径不一致**：
@@ -319,11 +319,7 @@ B3 把它们收敛成一个服务端函数（D5）。
 
 ## 6. 复现用例
 
-整改前 `repros/` 有 9 个文件、14 个用例，断言的是基线上的错误行为。B2 已将 r1/r2/r3/r4/r6/r7/r8 翻转并移入 `tests/`；当前仅剩 r5/r9，留给 B3：
-
-```bash
-npx tsx --test --test-concurrency=1 docs/knowledge-production-line/repros/r*.test.ts   # 仅运行尚未翻转的 r5/r9
-```
+整改前 `repros/` 有 9 个文件、14 个用例，断言的是基线上的错误行为。B2 已将 r1/r2/r3/r4/r6/r7/r8 翻转并移入 `tests/`；B3 已翻转 r5/r9，修复前失败、修复后通过，原件与空目录均已删除。
 
 | 文件 | 证实的问题 | 整改结果 |
 |---|---|---|
@@ -331,11 +327,11 @@ npx tsx --test --test-concurrency=1 docs/knowledge-production-line/repros/r*.tes
 | r2-partial-publish | F6：正式库已有 1 篇，job.json 里却没有记录、没有批次，归档状态显示 done | 已翻转（b9df0dd2；tests/knowledgeProductionPartialPublish.test.ts） |
 | r3-archive-deadend | F1、F2：重试和重新发布之后，推送次数仍然是 1 | 已翻转（b9df0dd2；tests/knowledgeProductionArchiveContinue.test.ts） |
 | r4-refresh-archive-race | F7：刷新把 sha-v2 覆盖回 sha-v1 | 已翻转（b9df0dd2；tests/knowledgeProductionArchiveMutex.test.ts） |
-| r5-status-projection | F10–F12 | 待 B3 |
+| r5-status-projection | F10–F12 | 已翻转（b18bb4fe；tests/knowledgeProductionStatus.test.ts） |
 | r6-review-notes-stuck | F16 | 已翻转（b9df0dd2；tests/knowledgeProductionReviewRecovery.test.ts） |
 | r7-lazy-recovery | F4：启动 1.5 秒后仍是"研究中"，一访问就推进 | 已翻转（b9df0dd2；tests/knowledgeProductionRecovery.test.ts） |
 | r8-single-corrupt-record | F5：三处都报 "Unexpected end of JSON input" | 已翻转（b9df0dd2；tests/knowledgeProductionCorruptRecords.test.ts） |
-| r9-mr-error-swallowed | F13：真 git bare 仓加假平台 | 待 B3 |
+| r9-mr-error-swallowed | F13：真 git bare 仓加假平台 | 已翻转（b18bb4fe；tests/knowledgeProductionErrors.test.ts） |
 
 修复某个 F 时，先把对应用例搬进 `tests/` 并改成断言正确行为，确认它在修复前失败、修复后通过，再删掉 `repros/` 里的原件。B4 结束时 `repros/` 目录应已删空。
 
@@ -381,3 +377,13 @@ B2、B3 是纯补漏，不依赖任何新机制，只要 B1 能做就可以先�
 - Visual：五档桌面宽度 1920/1680/1600/1440/1366，60 张中 50 张逐像素一致；10 张均为坏记录场景，差异只对应告警移入当前/待处理列表、当前数量计入后端告警、删除有告警时的错误空态及随之上移的页脚。1366 浅色与 1920 深色已目视核对，真实浏览器覆盖筛选、文件名搜索、正常任务打开和只有告警的场景，无横向溢出。自有浏览器与 visual 进程已退出。
 - 偏离及原因：真 kill 实测暴露正式主记录 rename 与下一次 job 写盘之间的缺口，因此用已有归档批次先保存精确版本，恢复时按实际正式版本过滤并补齐已生效篇的字段，未新增持久状态。损坏校验沿用现有写入口可接受的来源信息及任务完整仓库范围，保留消费侧记录，不加迁移或默认值。旧测试改为停止后编辑再主动接续，并取消发布已启动归档后立即再点重试的调用；版本冲突、回执找回、分支复用与去重断言保留。凭据移入知识专用临时目录，共享 Git 现场保持原样。
 - 留给 B3：r5/r9 翻转；唯一状态投影及下一步、错误分类、源码基线取回、48 小时说明、Skill 审批恢复/重复提交、领域创建去重、全写入口版本锁、归档配置提示和删除说明。B4–B6 及上位缺口清账继续按原顺序，不等待评审。
+
+### B3（2026-10-03）：生产状态与失败原因如实显示
+
+- 提交：`b18bb4fe`（实现、编号测试与 r5/r9 翻转）。本记录独立提交，以便记录已产生的提交号。
+- 范围与验收：修复 F10/F11/F12/F13/F14/F17/F18/F19/F20/F21/F22/F24/F25；补齐 F2 的界面动作与同正文核对不增版本。验收 8、9 的错误信息部分、12、13 及 14 的对应回归均有测试；验收 5 补齐未配置归档仓和实际核对后的接续动作。任务中心、领域与组件详情、Skill 审查及归档区共用后端投影，移除旧状态和正式 ID 推测回退。
+- 复现与回归：r5/r9 先改成正确断言并确认修复前失败，修复后通过，原件和空目录已删除。新增 88 条带验收编号的测试，覆盖真实磁盘/TaskService/HTTP、MR 错误原文与脱敏、真实 Git 取回旧 SHA、假时钟预算、审批意图及 EIO、去重与版本锁。F19 额外验证已安装后下线或回退：恢复仅补原审批终态，保留原审批人/时间及后来的人操作，不重复安装或归档。
+- 测试：最终 `npm test` 共 2846 条：2811 通过、24 失败、11 跳过、0 取消；与快层基线差集为空（偶发的“全部合入后停止追踪新意见”本次通过）。本批 `test:full` 收尾只跑一次，共 3040 条：2993 通过、36 失败、11 跳过、0 取消；36 条 = 快层既有失败 24 条 + 重仿真基线 12 条，与两份基线并集差集为空。根类型检查、Web tsc 通过，最终 gate 的 126 条全部通过。未修任何基线既有失败。
+- Visual：1920/1680/1600/1440/1366 五档 16:9 桌面、浅深两色，共 130 张独立画面；60 张逐像素一致，70 张差异有对应规则：20 张显示正确的归档故障优先级及同步失败，40 张改正 Skill 待审查/审核通过中/已上架/已退回文案与徽章，10 张删除确认显示后端 Git 提示及准确仓/分支/路径，删除重复提示。1366 浅色及 1920 深色已目视核对，无横向溢出，未改样式。补拍删除框时一次漏传桌面宽度而用了工具旧默认；无效截图已删除，已按五档桌面重新执行前后截图及像素比对，知识场景默认值也改成桌面宽度。自有截图和浏览器进程均已退出。
+- 偏离及原因：为 D5 分离浏览器可用的只读 DTO，避免 Web 引入 Node 模块；HTTP 写入即时返回投影，防止审批中错误显示退回。浏览器夹具由 Node 调用真实后端生成文案，不复制状态；四个旧夹具补版本号、区分不同创建请求、补删除提示，原取消/并发/索引清理断言保留。真实回归揭示“核对即增版本”和“已安装审批永久停在审批中”的遗漏，按已有继续条件和精确安装台账补齐，没有新增产品机制。
+- 留给 B4：按 D2/D3 接一个服务内调度器、自动 MR 跟踪、故障退避与通知，并按 D4 实现组件服务端单次发布。跨重启重试预算所需最小持久记录、无发起人时管理员收件人的映射已依据 0.4 向用户确认，答复前不新增这些未列字段或配置；其余授权工作继续。B5/B6 的意见版本、审阅核心和唯一页面入口，以及上位 2.6 全部清账仍待后续批次。
