@@ -34,17 +34,12 @@ export interface ResearchRecord {
   challenge?: ComponentChallenge;
   id: string;
   pipeline?: ComponentPipelineState;
-  source_policy?: "code-only-v1";
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
-  mode?: "topic" | "all" | "component";
+  mode?: "topic" | "all";
   format?: "joint-document";
   document?: ResearchDocument;
   review_turns?: ResearchReviewTurn[];
-  parent_id?: string;
-  child_ids?: string[];
-  children?: ResearchRecord[];
-  progress?: { total: number; done: number; failed: number; cancelled: number; running: number; queued: number; adopted: number };
   component: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;
@@ -108,7 +103,7 @@ export class ComponentResearch {
         if (!existsSync(path)) continue;
         const record: ResearchRecord = JSON.parse(readFileSync(path, "utf8"));
         this.records.set(record.id, record);
-        if (!record.deleted_at && (record.mode !== "all" || record.format === "joint-document") && ["queued", "running"].includes(record.status)) {
+        if (!record.deleted_at && ["queued", "running"].includes(record.status)) {
           for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) {
             turn.status = "queued"; turn.error = undefined;
           }
@@ -124,30 +119,17 @@ export class ComponentResearch {
   }
   list(summaryOnly = false) {
     return [...this.records.values()]
-      .filter(r => !r.deleted_at && !r.parent_id)
+      .filter(r => !r.deleted_at)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((r) =>
         structuredClone(
-          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, review_turns: undefined, evidence: [], children: undefined } : this.get(r.id),
+          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, review_turns: undefined, evidence: [] } : this.get(r.id),
         ),
       );
   }
   get(id: string) {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
-    if (r.mode === "all" && r.format !== "joint-document") {
-      const children = (r.child_ids ?? []).map(id => this.records.get(id)).filter((c): c is ResearchRecord => !!c);
-      const progress = { total: r.child_ids?.length ?? 0, done: 0, failed: 0, cancelled: 0, running: 0, queued: 0, adopted: 0 };
-      for (const child of children) { progress[child.status]++; if (child.document_id) progress.adopted++; }
-      progress.failed += progress.total - children.length;
-      const active = progress.running + progress.queued;
-      const status = active ? (progress.running ? "running" : "queued")
-        : progress.failed ? "failed" : progress.cancelled ? "cancelled" : "done";
-      return structuredClone({ ...r, status, progress,
-        stage: `已完成 ${progress.done}/${progress.total} 个组件${progress.failed ? `，${progress.failed} 个失败` : ""}${progress.cancelled ? `，${progress.cancelled} 个已停止` : ""}`,
-        children: children.map(c => ({ ...c, draft: undefined, evidence: [] })),
-      } satisfies ResearchRecord);
-    }
     return structuredClone(r);
   }
   start(input: ResearchInput, operator: string) {
@@ -159,13 +141,13 @@ export class ComponentResearch {
     if (!components.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
     if (input.mode && !["all", "topic"].includes(input.mode)) throw new Error("不支持的萃取方式");
     if (input.mode === "all") return this.startAll(components, language, operator, input.refresh, material_ids);
-    const component = components[0]; // Legacy records retain their single component; new jobs cover the language registry.
+    const component = components[0];
     const topic = String(input.topic ?? "").trim();
     if (!topic || topic.length > 1000)
       throw new Error("请填写具体萃取主题，最多 1000 字");
     const key = JSON.stringify([
       components.map(componentKey).sort(),
-      "code-only-v1", language,
+      language,
       topic.replace(/\s+/g, " ").toLowerCase(), material_ids,
     ]);
     const previous = [...this.records.values()]
@@ -177,7 +159,7 @@ export class ComponentResearch {
     if (previous && (!input.refresh || previous.status !== "done"))
       return structuredClone(previous);
     if (
-      [...this.records.values()].filter((r) => r.mode !== "all" && r.status === "queued").length >=
+      [...this.records.values()].filter((r) => r.status === "queued").length >=
       50
     )
       throw new Error("待萃取队列已满，请稍后再试");
@@ -185,7 +167,7 @@ export class ComponentResearch {
       id: `cr-${randomUUID()}`,
       component,
       components,
-      material_ids, source_policy: "code-only-v1",
+      material_ids,
       language,
       topic,
       operator,
@@ -208,23 +190,16 @@ export class ComponentResearch {
     const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
     if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
     if ([...this.records.values()].filter(r => r.status === "queued").length >= 50) throw new Error("研究队列已满，请稍后再试");
-    const record: ResearchRecord = { id: `cr-${randomUUID()}`, source_policy: "code-only-v1", challenge, component: components[0], components,
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, component: components[0], components,
       language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
       created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {}); this.pump(); return this.get(record.id);
   }
-  private componentJob(component: ComponentRepository, parent: ResearchRecord): ResearchRecord {
-    return { id: `cr-${randomUUID()}`, mode: "component", parent_id: parent.id,
-      component, components: [component], language: parent.language,
-      topic: `${component.name} · 开发范式`, operator: parent.operator,
-      key: `${parent.key}:${componentKey(component)}`, status: "queued",
-      created_at: new Date().toISOString(), stage: "等待自动分析组件", evidence: [] };
-  }
   private startAll(components: ComponentRepository[], language: string, operator: string, refresh = false, material_ids: string[] = []) {
-    const key = JSON.stringify(["joint-document", "code-only-v1", language, components.map(componentKey).sort(), material_ids]);
+    const key = JSON.stringify(["joint-document", language, components.map(componentKey).sort(), material_ids]);
     const previous = [...this.records.values()].reverse().find(r => r.mode === "all" && r.key === key && r.operator === operator && !r.deleted_at);
     if (previous && (!refresh || ["queued", "running"].includes(this.get(previous.id).status))) return this.get(previous.id);
-    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components, material_ids, source_policy: "code-only-v1",
+    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components, material_ids,
       language, topic: "基础组件联合使用指南", operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [],
       stage: "等待跨仓联合萃取", evidence: [] };
@@ -247,7 +222,7 @@ export class ComponentResearch {
     if (this.stopped) return;
     for (const record of this.records.values()) {
       if (this.running.size >= 2) break;
-      if (record.deleted_at || (record.mode === "all" && record.format !== "joint-document") || record.status !== "queued" || this.running.has(record.id)) continue;
+      if (record.deleted_at || record.status !== "queued" || this.running.has(record.id)) continue;
       const controller = new AbortController();
       const review = record.review_turns?.find(turn => turn.status === "queued");
       if (review) review.status = "running";
@@ -340,10 +315,6 @@ export class ComponentResearch {
   stop(id: string) {
     const record = this.records.get(id);
     if (!record || record.deleted_at) throw new Error("萃取任务不存在");
-    if (record.mode === "all" && record.format !== "joint-document") {
-      for (const child of record.child_ids ?? []) if (this.records.has(child)) this.stop(child);
-      return this.get(id);
-    }
     if (["queued", "running"].includes(record.status)) {
       for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "cancelled";
       this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()});
@@ -352,13 +323,8 @@ export class ComponentResearch {
     return this.get(id);
   }
   remove(id: string, operator: string) {
-    if (this.records.get(id)?.parent_id) throw new Error("请在全部组件任务中删除整批记录；可单独停止或重试组件");
     this.stop(id);
     const record = this.records.get(id)!;
-    for (const child of record.child_ids ?? []) {
-      const r = this.records.get(child);
-      if (r) this.update(r, {deleted_at:new Date().toISOString(), deleted_by:operator});
-    }
     // Preserve provenance of adopted knowledge; hide the task from management lists.
     this.update(record, {deleted_at:new Date().toISOString(), deleted_by:operator});
     return { deleted: true };
@@ -367,7 +333,6 @@ export class ComponentResearch {
     if (this.stopped) throw new Error("服务正在停止");
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
-    if (record.source_policy !== "code-only-v1") return this.start({ mode: record.mode === "all" ? "all" : "topic", language: record.language, topic: record.topic, refresh: true }, operator);
     if (record.format === "joint-document") {
       if (["queued", "running"].includes(record.status)) return record;
       if (record.document_id) throw new Error("已采纳的草稿保留原样；请新建联合萃取任务");
@@ -379,23 +344,6 @@ export class ComponentResearch {
       const live = this.records.get(id)!;
       this.update(live, { status: "queued", error: undefined, finished_at: undefined, stage: "继续联合研究，保留已有组件" });
       this.pump(); return this.get(id);
-    }
-    if (record.mode === "all") {
-      if (record.status === "done") return this.start({ mode: "all", language: record.language, refresh: true }, operator);
-      for (const child of record.children ?? []) if (["failed", "cancelled"].includes(child.status)) this.retry(child.id, operator);
-      return this.get(id);
-    }
-    if (record.parent_id) {
-      if (["queued", "running"].includes(record.status)) return record;
-      const parent = this.records.get(record.parent_id);
-      if (!parent || parent.deleted_at) throw new Error("萃取任务已删除");
-      if (!parent.child_ids?.includes(id)) throw new Error("该组件已重新萃取，请查看最新记录");
-      const next = this.componentJob(record.component, parent);
-      next.operator = operator;
-      this.records.set(next.id, next); this.update(next, {});
-      this.update(parent, { child_ids: parent.child_ids.map(child => child === id ? next.id : child) });
-      this.pump();
-      return this.get(next.id);
     }
     return this.start({language:record.language, topic:record.topic, refresh:true}, operator);
   }
@@ -434,7 +382,7 @@ export class ComponentResearch {
     if (section.revision !== input.base_revision) throw new Error("章节已有新版本，请比较后重新保存");
     const document = editResearchDocument(record.document, { action: "section", section: input.section }, (record.components ?? [record.component]).map(c => c.id));
     const metadata = document.sections.find(s => s.id === section.id)?.paradigm;
-    if (record.source_policy === "code-only-v1" && metadata) {
+    if (metadata) {
       if (metadata.language !== record.language) throw new Error("范式语言与研究语言不一致");
       for (const ref of metadata.evidence) if (!record.evidence.some(e => e.tool === "component_source" && e.action === "read" && e.status === "returned"
         && e.component_id === ref.repository_id && e.path === ref.path && e.revision === ref.revision
@@ -501,7 +449,7 @@ export class ComponentResearch {
   }
   archiveDraft(id: string, input: { title?: string; content?: string }) {
     const record = this.get(id);
-    if (record.deleted_at || record.status !== "done" || (record.mode === "all" && record.format !== "joint-document")) throw new Error("请等待组件草稿完成后归档");
+    if (record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿完成后归档");
     if (!record.document_id) this.assertSelectedChangesConfirmed(record);
     if (record.document && (!record.document.sections.some(s => s.selected) || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
     const title = String(input.title ?? record.topic).trim();
@@ -513,7 +461,7 @@ export class ComponentResearch {
   }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
-    if (!record || record.challenge || (record.mode === "all" && record.format !== "joint-document") || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
+    if (!record || record.challenge || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
     if (record.document_id)
       return readKnowledgeDocument(this.dir, record.document_id);
     const published = !record.update_document_id && listKnowledgeDocuments(this.dir).find(doc => doc.research_source?.job_id === id);
@@ -567,7 +515,7 @@ export class ComponentResearch {
   async shutdown() {
     this.stopped = true;
     for (const r of this.records.values())
-      if (!r.deleted_at && (r.mode !== "all" || r.format === "joint-document") && ["queued", "running"].includes(r.status)) {
+      if (!r.deleted_at && ["queued", "running"].includes(r.status)) {
         for (const turn of r.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
         this.update(r, {
           status: "queued",

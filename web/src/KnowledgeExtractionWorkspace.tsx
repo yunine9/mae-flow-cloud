@@ -3,19 +3,19 @@ import { Button } from "@/components/ui/button";
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 
-export function KnowledgeExtractionStages({ value, onChange, label, cleanup = false, draftOnly = false, codeOnly = false }: { value: string; onChange: (value: string) => void; label: string; cleanup?: boolean; draftOnly?: boolean; codeOnly?: boolean }) {
+export function KnowledgeExtractionStages({ value, onChange, label, codeOnly = false }: { value: string; onChange: (value: string) => void; label: string; codeOnly?: boolean }) {
   const studio = useKnowledgeStudio();
   function choose(next: string) {
-    const kind = codeOnly ? "component" : "domain", id = new URLSearchParams(location.search).get(codeOnly ? "componentResearch" : "domainExtraction");
+    const kind = codeOnly ? "component" : "domain", params = new URLSearchParams(location.search), id = params.get("kbKind") === kind ? params.get("kbTask") : null;
     if (studio && id && next === "review" && studio.view === "workbench") studio.openResult(kind, id);
     else if (studio && id && next === "progress" && studio.view === "knowledge") studio.openExecution(kind, id);
     onChange(next);
   }
-  return <nav className="knowledge-extraction-stages mb-4 flex gap-2" aria-label={label}>{[...(cleanup ? [["cleanup", "清理旧知识"]] : []), ["inputs", "资料"], ["progress", "萃取过程"], ["review", draftOnly ? "验证草稿" : "文稿审查"], ...(!draftOnly ? [["publish", "Git 归档"]] : [])].map(([key, title]) => <Button key={key} size="sm" aria-pressed={value === key} variant={value === key ? "secondary" : "ghost"} onClick={() => choose(key)}>{title}</Button>)}</nav>;
+  return <nav className="knowledge-extraction-stages mb-4 flex gap-2" aria-label={label}>{[["inputs", "资料"], ["progress", "萃取过程"], ["review", "文稿审查"], ["publish", "Git 归档"]].map(([key, title]) => <Button key={key} size="sm" aria-pressed={value === key} variant={value === key ? "secondary" : "ghost"} onClick={() => choose(key)}>{title}</Button>)}</nav>;
 }
 
-export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, backLabel = "知识文档", actions, hideHeader = false, cleanup = false, draftOnly = false, codeOnly = false }: {
-  hideHeader?: boolean; codeOnly?: boolean; draftOnly?: boolean; cleanup?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; backLabel?: string; actions?: ReactNode;
+export function KnowledgeExtractionWorkspace({ title, sidebar, children, onNew, onClose, backLabel = "知识文档", actions, hideHeader = false, codeOnly = false }: {
+  hideHeader?: boolean; codeOnly?: boolean; title: string; sidebar?: ReactNode; children: ReactNode; onNew?: () => void; onClose?: () => void; backLabel?: string; actions?: ReactNode;
 }) {
   const studio = useKnowledgeStudio();
   return <section className="tw-root knowledge-extraction-workspace" aria-label={`${title}工作区`}>

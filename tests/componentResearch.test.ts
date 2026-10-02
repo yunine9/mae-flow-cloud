@@ -177,7 +177,8 @@ test("重启接续原任务；任务 knowledge 可发起并读取记录，不依
       language: "cpp",
       query: "文件读取",
     });
-    assert.match(result.content[0].text, /componentResearch/);
+    const started = JSON.parse(result.content[0].text.split("\n")[0]);
+    assert.equal(started.url, `/?kbPage=task&kbKind=component&kbTask=${started.id}`);
     await until(() => research.list()[0].status === "done");
     const job = research.list()[0];
     const status = await call(tool, { action: "research_status", id: job.id });
@@ -436,7 +437,6 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     assert.equal(all.status, 202);
     const batch: any = await all.json();
     assert.equal(batch.format, "joint-document");
-    assert.equal(batch.children, undefined);
     await until(() => research.get(batch.id).status === "done");
     const progress: any = await (await fetch(`${url}/component-research/${batch.id}`)).json();
     assert.equal(progress.document.sections.length, 2);
@@ -580,7 +580,6 @@ test("全量跨仓只执行一次，细粒度能力默认全选，筛选后采�
   });
   t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
   const batch = research.start({mode:"all",language:"C++"}, "alice");
-  assert.equal(batch.children, undefined);
   assert.equal(research.start({mode:"all",language:"cpp"}, "alice").id, batch.id);
   await until(() => research.get(batch.id).status === "done");
   const complete = research.get(batch.id);

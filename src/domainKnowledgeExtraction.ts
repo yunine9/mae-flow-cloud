@@ -1,4 +1,3 @@
-import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 import { componentArchiveParts, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
@@ -51,9 +50,7 @@ export class DomainKnowledgeExtraction {
   private archiving = new Map<string, Promise<void>>();
   private archiveQueue: Promise<void> = Promise.resolve();
   private stopped = false;
-  private get sourceCleanup() { return this.options.sourceCleanup; }
   constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string>, private options: {
-    sourceCleanup?: KnowledgeSourceCleanup;
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void) => Promise<DomainPublication>;
     refresh?: (job: DomainKnowledgeJob, publication: DomainPublication, operator: string) => Promise<DomainPublication>;
     previewCleanup?: (job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) => Promise<KnowledgeCleanupPlan>;
@@ -82,7 +79,7 @@ export class DomainKnowledgeExtraction {
     writeFileSync(`${path}.tmp`, JSON.stringify(job), { mode: 0o600 }); renameSync(`${path}.tmp`, path);
   }
   get(id: string) { return structuredClone(this.live(id)); }
-  list(probes = false) { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at && !!job.probe === probes).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...structuredClone(job), documents: job.documents.map(({ content: _, history: __, base_content: ___, remote_review: ____, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
+  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...structuredClone(job), documents: job.documents.map(({ content: _, history: __, base_content: ___, remote_review: ____, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
   componentArchive(researchId: string) {
     const job = [...this.jobs.values()].find(job => job.component_research_id === researchId);
     return job ? this.get(job.id) : undefined;
@@ -143,19 +140,12 @@ export class DomainKnowledgeExtraction {
       created_at: new Date().toISOString(), deleted_at: undefined, deleted_by: undefined, status: "idle", stage: "准备增量研究",
       documents: [document], turns: [], evidence: [], archive_batches: [], publication_history: [],
       revisions: { ...(published.research_source?.source_revisions ?? original.revisions) },
-      material_ids: published.research_source?.material_ids ?? original.material_ids, cleanup_plans: undefined, source_cleanup: undefined };
+      material_ids: published.research_source?.material_ids ?? original.material_ids, cleanup_plans: undefined };
     this.jobs.set(job.id, job); this.persist(job);
     return this.run(job.id, { mode: "update", document_ids: [document.id], message: input.message?.trim() || "核对来源变化，更新受影响知识；保留现有人工内容，无变化时说明原因",
       material_ids: input.material_ids, ar_codes: input.ar_codes }, operator);
   }
-  createProbe(input: any, operator: string) {
-    const module = typeof input.probe_module === "string" ? input.probe_module.trim() : "";
-    if (!module || module.length > 100) throw new Error("请填写要验证的单个模块名称，最多 100 字");
-    if (!input.module_id) throw new Error("请选择所属领域");
-    scanForSecrets("验证模块", Buffer.from(module));
-    return this.createJob({ ...input, issue_no: "SKILL-PROBE", knowledge_target: undefined }, operator, { module });
-  }
-  private createJob(input: any, operator: string, probe?: DomainKnowledgeJob["probe"]) {
+  private createJob(input: any, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     if ([...this.jobs.values()].filter(job => ["queued", "running"].includes(job.status)).length >= 50) throw new Error("当前研究队列已满，请稍后创建");
     const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description);
@@ -166,8 +156,6 @@ export class DomainKnowledgeExtraction {
       input = { ...input, title: module.name, scope: `业务模块：${module.name}。模块说明：${module.description}`,
         repositories: module.repositories.map(url => ({ repository: url, name: url.split("/").at(-1)?.replace(/\.git$/, "") || module.name, branch: input.baseline_branch || "master", path: "" })) };
     }
-    if (probe) input = { ...input, title: `${String(input.title).slice(0, 45)} / ${probe.module}`,
-      scope: `临时 Skill 效果验证。所属领域：${input.title}。仅提取「${probe.module}」模块的知识，其他模块不独立研究。相关公共机制仅按需核对。屏蔽源码仓所有层级 docs/、AGENTS.md 和配置的文档目录，保留无线豆包与本次上传的业务资料。` };
     const title = String(input.title ?? "").trim(), scope = String(input.scope ?? "").trim();
     if (input.instructions !== undefined && typeof input.instructions !== "string") throw new Error("本次要求须为文本");
     const instructions = input.instructions?.trim() || undefined;
@@ -185,31 +173,14 @@ export class DomainKnowledgeExtraction {
     const material_ids = this.materialIds(input.material_ids ?? []);
     const ar_codes = this.arCodes(input.ar_codes ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions, ar_codes })));
-    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target, ...(probe ? { probe } : {}),
+    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!input.knowledge_target, archive_revision: 0,
       material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     this.jobs.set(job.id, job); this.persist(job);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
   }
-  async sourceCleanupAction(id: string, action: string, input: any, operator: string) {
-    if (this.stopped) throw new Error("服务正在停止");
-    const job = this.live(id);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
-    if (!this.sourceCleanup || this.publishing.has(id) || this.running.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
-    this.publishing.add(id);
-    try {
-      if (action === "start") {
-        if (job.source_cleanup?.started) throw new Error("萃取已启动，请使用研究区继续任务");
-        if (!job.source_cleanup) throw new Error("此任务没有清理记录，请在研究区继续任务");
-        job.revisions = {}; job.source_cleanup.started = true;
-        this.persist(job);
-      } else await this.sourceCleanup.action(job, action, input, operator, () => this.persist(job));
-    } finally { this.publishing.delete(id); }
-    return action === "start" ? this.run(id, { mode: "extract", message: job.scope }, operator) : this.get(id);
-  }
   configureArchive(id: string, input: { targets: unknown; documents?: unknown; base_revision?: number }) {
     const job = this.live(id);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
     if (job.component_research_id) throw new Error("请使用组件归档设置");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成再设置归档位置");
     if (input.base_revision !== (job.archive_revision ?? 0)) throw new Error("归档位置已被修改，请刷新后重新设置");
@@ -280,7 +251,6 @@ export class DomainKnowledgeExtraction {
   run(id: string, input: { mode: DomainTurn["mode"]; document_ids?: string[]; message?: string; use_latest_skill?: boolean; material_ids?: string[]; ar_codes?: string[] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const job = this.live(id);
-    if (job.probe && input.mode !== "extract") throw new Error("临时效果验证只执行首次萃取；调整模块或资料请新建验证任务");
     if (job.component_research_id) throw new Error("请在基础组件萃取任务中生成修订建议");
     if (this.running.has(id) || this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待本轮完成或停止后继续");
     if (!["extract", "discuss", "revise", "update"].includes(input.mode)) throw new Error("未知研究操作");
@@ -291,7 +261,6 @@ export class DomainKnowledgeExtraction {
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
     if (input.ar_codes) job.ar_codes = this.arCodes(input.ar_codes);
     job.use_wxdoubao = true;
-    if (job.source_cleanup) job.source_cleanup.started = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
@@ -423,7 +392,6 @@ export class DomainKnowledgeExtraction {
   }
   async readRemote(id: string, documentId: string, operator: string) {
     const job = this.live(id), doc = job.documents.find(d => d.id === documentId);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
     if (job.archive_configured === false) throw new Error("请先在入库与更新中保存归档位置");
     if (!doc || !this.options.readRemote) throw new Error("无法读取该文档的远端版本");
     if (this.publishing.has(id)) throw new Error("正在归档，请稍后读取");
@@ -465,7 +433,6 @@ export class DomainKnowledgeExtraction {
   }
   async previewCleanup(id: string, targetId: string, input: unknown, operator: string) {
     const job = this.live(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === targetId);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
     if (job.archive_configured === false) throw new Error("请先保存归档位置再预览清理范围");
     if (!target || !this.options.previewCleanup) throw new Error("无法预览此仓的清理范围");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
@@ -489,7 +456,7 @@ export class DomainKnowledgeExtraction {
     plan.confirmed = confirmed; this.persist(job); return this.get(id);
   }
   private hasAttemptedMr(job: DomainKnowledgeJob) {
-    return [...job.publications, ...(job.publication_history ?? []), ...(job.source_cleanup?.publications ?? []), ...(job.archive_batches ?? []).flatMap(batch => batch.publications)]
+    return [...job.publications, ...(job.publication_history ?? []), ...(job.archive_batches ?? []).flatMap(batch => batch.publications)]
       .some(p => p.mr_attempted || p.url || p.mr_id !== undefined);
   }
   setIssueNumber(id: string, value: unknown, description?: unknown) {
@@ -508,7 +475,6 @@ export class DomainKnowledgeExtraction {
   }
   async publish(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> } = {}) {
     const job = this.live(id);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不能发布知识");
     if (["queued", "running"].includes(job.status)) throw new Error("请等待本轮研究完成或停止后发布");
     if (input.document_ids && (!Array.isArray(input.document_ids) || input.document_ids.some(id => !job.documents.some(d => d.id === id)))) throw new Error("请选择本次发布的知识文档");
     const selected = job.documents.filter(d => input.document_ids ? input.document_ids.includes(d.id) : d.selected);
@@ -665,7 +631,6 @@ export class DomainKnowledgeExtraction {
   }
   async refresh(id: string, operator: string) {
     const job = this.live(id);
-    if (job.probe) throw new Error("临时效果验证只生成草稿，不读取旧归档、清理仓库或发布知识");
     if (!this.options.refresh) throw new Error("未配置 MR 状态查询");
     if (this.publishing.has(id)) throw new Error("正在归档，请稍后刷新");
     this.publishing.add(id);

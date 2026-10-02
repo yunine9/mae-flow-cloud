@@ -47,7 +47,6 @@ export async function runPipelineCases(options:{out:string;data:string;sidecar:M
     }
     writeFileSync(join(out,'adoption.json'),JSON.stringify({simulated_reviewer:true,ids:saved,note:'测试消费生成结果；不代表生产中自动采纳'},null,2));
     const service=new TaskService({dataDir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0}),host=service as any;
-    service.getKnowledgeConsolidation().settings({enabled:false,time:'03:00',timezone:'Asia/Shanghai'},'benchmark');
     host.memorySidecar=options.sidecar;
     try {
       const id=service.create('按经验实现导出与配置读取').id,task=host.tasks.get(id);

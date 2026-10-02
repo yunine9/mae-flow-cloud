@@ -70,9 +70,7 @@ export function buildExtractionMission(input: {
   ].join("\n");
 }
 
-/** 与 skillDistiller.parseDraft 同一对标记,但提取草稿必须显式带标记:
- * 蒸馏的候选区允许粗糙,提取草稿要直接回填人的编辑框,整段当草稿会把
- * 模型的闲聊一起灌进去。 */
+/** 提取草稿必须显式带标记；草稿直接回填编辑框，不能把模型闲聊混进正文。 */
 export function parseExtractionDraft(
   text: string,
 ): { draft: string; notes: string } | undefined {

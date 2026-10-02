@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBusinessModule, publishBusinessKnowledgeAsset, archiveBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
-import { createKnowledgeCandidate, decideKnowledgeCandidate } from "../src/knowledgeCandidates.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { collectSearchableKnowledge, KnowledgeSearch, knowledgeProductVersions } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
 import { knowledgeDocumentCatalog } from "../src/knowledgeDocumentCatalog.ts";
@@ -18,10 +18,9 @@ function seed(dir: string) {
   publishBusinessKnowledgeAsset(dir, "alarm", { id: "dedup", title: "告警重复事件", summary: "事件去重",
     when_to_use: "处理告警重复上报时", content: "# 重复告警\n按事件 ID 和网元 ID 去重。" }, "owner");
   function document(title: string, body: string, published = true) {
-    const row = createKnowledgeCandidate(dir, { source_task_id: "task-1", title, summary: title,
-      when_to_use: "修改超时配置时", nature: "engineering", form: "document", technologies: ["cpp"], content: body }, "owner");
-    if (published) decideKnowledgeCandidate(dir, row.id, "published", "owner");
-    return `team:${row.id}`;
+    const row = saveKnowledgeDocument(dir, { title, when_to_use: "修改超时配置时", technologies: ["cpp"],
+      content: body, active: published, product_versions: knowledgeProductVersions(body) }, "owner");
+    return row.id;
   }
   const old = document("2.6B 超时配置", '---\nproduct_versions: ["2.6B"]\n---\n配置 request_timeout_ms，单位毫秒。');
   const current = document("2.7B 超时配置", '---\nproduct_versions: ["2.7B"]\n---\n配置 request_timeout_seconds，单位秒。');
@@ -152,9 +151,6 @@ test("检索指引进入实际 PI 系统提示词，提供统一工具名及简�
 test("Skill 管理读原生包；knowledge 不索引、不检索、不读取 Skill 或旧发布收据", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-"));
   try {
-    const record = createKnowledgeCandidate(dir, { source_task_id: "task-1", title: "构建指南", summary: "构建方法",
-      when_to_use: "首次构建", nature: "engineering", form: "skill", technologies: ["cpp"], content: "旧的做法" }, "owner");
-    decideKnowledgeCandidate(dir, record.id, "published", "owner", { published_target: "skills/build-guide" });
     const root = join(dir, "skills", "build-guide");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(root, "SKILL.md"), "---\nname: build-guide\ndescription: 首次构建\nknowledge_nature: engineering\ntechnologies: [cpp]\n---\n# 构建指南\n当前正确做法\n");
@@ -166,10 +162,8 @@ test("Skill 管理读原生包；knowledge 不索引、不检索、不读取 Ski
     await search.prepare();
     assert.equal(ingested,0,"包括后台 prepare 也不索引技能包");
     assert.deepEqual((await search.search(context,"首次构建")).hits,[],"旧索引命中不能复活技能条目");
-    assert.equal(service.read(context, `team:${record.id}`), undefined);
     rmSync(root, { recursive: true });
     assert.equal(service.read(context, "skill:build-guide/SKILL.md"), undefined);
-    assert.equal(service.read(context, `team:${record.id}`), undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

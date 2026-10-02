@@ -23,7 +23,7 @@ import {
   MEMORY_DRAFT_BUDGET_MS, buildMemoryDraftPrompt, parseMemoryDraft,
   renderDirectoryDigestFallback,
 } from "../src/memoryDraft.ts";
-import { draftWithModel } from "../src/skillDistiller.ts";
+import { draftWithModel } from "../src/modelTransport.ts";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {

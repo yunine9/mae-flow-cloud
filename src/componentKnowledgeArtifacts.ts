@@ -1,5 +1,4 @@
 import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
-import { COMPONENT_EXPORT_SCHEMA, readComponentArtifact } from "./componentParadigms.ts";
 import { componentKnowledgeCatalog } from "./componentKnowledgeCatalog.ts";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
@@ -25,10 +24,6 @@ export function componentKnowledgeArtifacts(dir: string, itemId: string) {
   const source = componentArchiveParts(asset.content);
   files["source.md"] = source.content;
   if (source.component_metadata) files["source.metadata.json"] = source.component_metadata;
-  else {
-    const doc = readComponentArtifact(asset.content);
-    files["source.metadata.json"] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: doc.id, title: doc.title, revision: doc.revision, ...doc.paradigm }, null, 2) + "\n";
-  }
   files[`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`] = componentCardText(p, `${p.document_id}:${p.start_line}-${p.end_line}`, p.document_revision);
   files["derived/catalog.json"] = JSON.stringify({ paradigms: [entry] }, null, 2) + "\n";
   const cell = (s: string) => s.replaceAll("|", "\\|").replace(/\r?\n/g, " ");

@@ -3,22 +3,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   knowledgeAssetPath,
-  knowledgeLibraryPage,
-  knowledgeStudioView,
   extractionSkillSearch,
   readKnowledgeAssetFocus,
 } from "../web/src/knowledgeNavigation.ts";
 
-test("团队知识管理深链可往返三类稳定身份", () => {
+test("B1验收3：保留业务资产与 Skill 的稳定身份深链", () => {
   const business = { kind: "business" as const,
     moduleId: "order experience", assetId: "state/rule", version: 7,
     digest: "a".repeat(64) };
-  const engineering = { kind: "engineering" as const,
-    candidateId: "kc-java-build", digest: "b".repeat(64) };
   const skill = { kind: "skill" as const, directory: "release-safety",
     digest: "c".repeat(64), packageDigest: "d".repeat(64) };
 
-  for (const target of [business, engineering, skill]) {
+  for (const target of [business, skill]) {
     const path = knowledgeAssetPath(target);
     assert.ok(path.startsWith("/?"));
     assert.deepEqual(readKnowledgeAssetFocus(new URL(path, "http://local").search),
@@ -38,15 +34,6 @@ test("残缺或未知知识深链不会误导航", () => {
     `?knowledge=skill&asset=x&digest=${"a".repeat(64)}`), undefined);
   assert.equal(readKnowledgeAssetFocus("?knowledge=unknown&asset=x"), undefined);
   assert.equal(readKnowledgeAssetFocus("?knowledge=skill"), undefined);
-});
-
-
-test("知识库刷新与后退优先打开显式页签，记住任务不劫持知识文档页", () => {
-  assert.equal(knowledgeLibraryPage("?knowledgePage=documents&domainExtraction=dkx-1&componentResearch=cr-2"), "documents");
-  assert.equal(knowledgeLibraryPage("?knowledgePage=component&domainExtraction=dkx-1"), "component");
-  assert.equal(knowledgeLibraryPage("?knowledgePage=domain&componentResearch=cr-2"), "domain");
-  assert.equal(knowledgeLibraryPage("?componentResearch=cr-2"), "component");
-  assert.equal(knowledgeLibraryPage("?domainExtraction=dkx-1"), "domain");
 });
 
 
@@ -70,25 +57,26 @@ test("管理员和开发者均有独立的一级知识库入口", () => {
 });
 
 
-test("工作室深链区分 Skill、执行过程与知识成果", () => {
-  assert.equal(knowledgeStudioView("?knowledgePage=documents&platformSkill=domain"), "skills");
-  assert.equal(knowledgeStudioView("?knowledgePage=domain"), "workbench");
-  assert.equal(knowledgeStudioView("?knowledgePage=domain&domainExtraction=dkx-1"), "knowledge");
-  assert.equal(knowledgeStudioView("?knowledgePage=component&componentResearch=new"), "workbench");
-  assert.equal(knowledgeStudioView("?knowledgePage=documents&domainExtraction=dkx-1"), "knowledge");
-  assert.equal(knowledgeStudioView("?knowledgeView=workbench&knowledgePage=domain&domainExtraction=dkx-1"), "workbench");
-  assert.equal(knowledgeStudioView("?knowledgeView=knowledge&platformSkill=domain"), "knowledge");
+test("B1验收1：领域萃取方法使用现有阅读页，组件创建页不暴露方法维护", () => {
+  const current = "?kbPage=research&kbKind=domain&kbModule=business%3Atrade&kbTask=dkx-old&kbReview=1&knowledgeDocument=kd-old&theme=cloud";
+  const search = extractionSkillSearch(current, "domain"), query = new URLSearchParams(search);
+  assert.equal(query.get("kbPage"), "module");
+  assert.equal(query.get("kbModule"), "platform");
+  assert.equal(query.get("knowledgeDocument"), "platform-skill-domain");
+  assert.equal(query.get("theme"), "cloud");
+  for (const key of ["kbKind", "kbTask", "kbReview"]) assert.equal(query.has(key), false, key);
+  assert.equal(extractionSkillSearch(search, "domain"), search);
+  const create = readFileSync(new URL("../web/src/KnowledgeResearchCreate.tsx", import.meta.url), "utf8");
+  assert.match(create, /mode === "domain" && <ExtractionSkillEditor/);
+  const library = readFileSync(new URL("../web/src/KnowledgeLibrary.tsx", import.meta.url), "utf8");
+  assert.match(library, /route\.page === "module"[\s\S]*PlatformSkillPane/);
 });
 
-test("萃取方法入口清除新旧任务定位，组件与领域均可直接维护对应 Skill", () => {
-  const current = "?kbPage=research&kbKind=component&kbModule=engineering%3Acpp&kbTask=cr-old&kbReview=1&domainExtraction=dkx-old&componentResearch=cr-old&knowledgeDocument=kd-old&knowledgeDocuments=1&researchDocument=kd-research&component=old&knowledgeProbe=1&knowledgeConsolidation=1&knowledgePage=component&knowledgeView=knowledge&theme=cloud";
-  for (const kind of ["component", "domain"] as const) {
-    const search = extractionSkillSearch(current, kind), query = new URLSearchParams(search);
-    assert.equal(query.get("platformSkill"), kind);
-    assert.equal(query.get("theme"), "cloud");
-    assert.equal(knowledgeLibraryPage(search), "documents");
-    assert.equal(knowledgeStudioView(search), "skills");
-    for (const key of ["kbPage", "kbKind", "kbModule", "kbTask", "kbReview", "domainExtraction", "componentResearch", "knowledgeDocument", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeConsolidation"]) assert.equal(query.has(key), false, key);
-    assert.equal(extractionSkillSearch(search, kind), search, "刷新后的同一入口保持稳定");
+test("B1验收1：任务和配置链接打开当前阅读页，不经过旧页面", () => {
+  for (const filename of ["KnowledgeFootprint", "ComponentKnowledgeCheck"]) {
+    const source = readFileSync(new URL(`../web/src/${filename}.tsx`, import.meta.url), "utf8");
+    assert.match(source, /kbPage=module&kbModule=unassigned&knowledgeDocument=/);
   }
+  const config = readFileSync(new URL("../web/src/ComponentRepositories.tsx", import.meta.url), "utf8");
+  assert.match(config, /kbPage=module&kbModule=engineering/);
 });

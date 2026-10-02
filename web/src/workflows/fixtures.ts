@@ -75,15 +75,6 @@ export const workflowCatalogFixture: WorkflowAssetCatalogItem[] = [
     availability: "available",
   },
   {
-    ref: { registry: "engineering_knowledge", id: "mixed-repo-build",
-      version: "v2", digest: `1${digest.slice(1)}`, nature: "engineering", form: "rule" },
-    type: "knowledge", title: "Java + C++ 混合仓构建规则",
-    summary: "识别全量构建成本，选择增量验证并设置可解释的超时。",
-    when_to_use: "代码仓包含 Maven 与 CMake 构建链时",
-    nature: "engineering", form: "rule", business_module_ids: [], repositories: [],
-    technologies: ["Java", "C++"], availability: "available",
-  },
-  {
     ref: { registry: "team_skill", id: "pipeline-failure-triage",
       version: "v5", digest: `2${digest.slice(1)}`, form: "skill" },
     type: "skill", title: "流水线失败归因", summary: "区分代码、环境与超时问题并给出下一步。",
@@ -125,18 +116,12 @@ export const workflowDefinitionFixture: WorkflowDefinition = {
         description: "按频点、网元和制式定位交叉冲突。", locked: false,
         editable: true, source: "workflow", asset_ref: workflowCatalogFixture[0]!.ref,
         use: { mode: "on_stage_enter" } }, position: { after: "repository-evidence" } },
-    { edit_id: "configure-build", stage_id: "implementation", op: "add",
-      item: { id: "mixed-build-rule", kind: "knowledge",
-        title: "Java + C++ 混合仓构建规则", locked: false, editable: true,
-        source: "workflow", asset_ref: workflowCatalogFixture[1]!.ref,
-        use: { mode: "before_item", anchor: "implement" } },
-      position: { before: "implement" } },
   ],
 };
 
 export const workflowAssetsFixture: WorkflowAssetSummary[] = [
   {
-    id: "frequency-delivery", name: "频点需求稳健交付", description: "在探索阶段加载领域定位 Skill，并在实现前应用混合仓构建规则。",
+    id: "frequency-delivery", name: "频点需求稳健交付", description: "在探索阶段按需加载领域定位 Skill。",
     scope: "team", owner: "mae", maintainers: ["lin", "chen"], status: "published",
     latest_version: 3, draft_revision: 6, selectable_for_tasks: true,
     updated_at: "2026-08-28T10:20:00.000Z",

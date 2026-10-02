@@ -12,16 +12,13 @@ import { HumanGate } from "./humanGate.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { checkEc, languageComponentSourceTool, codeSearchTool, evidencePreview } from "./componentResearchTools.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
-import { bundledExtractionSkill, KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool, type ExtractionSkillSnapshot } from "./knowledgeExtractionSkills.ts";
+import { KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool } from "./knowledgeExtractionSkills.ts";
 import { researchDocumentMarkdown, type ResearchSection } from "./componentResearchDocument.ts";
 import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult } from "./componentResearchPipeline.ts";
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
 import type { ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 
-export const componentResearchMission = (component: ComponentRepository, language: string, topic: string, revision: string,
-  components: ComponentRepository[] = [component], discoverTopics = false, skill: ExtractionSkillSnapshot = bundledExtractionSkill("component")) =>
-  extractionSkillMission(skill, { mode: "extract", component, components, language, topic, revision, scope: discoverTopics ? "全部能力" : "指定主题" });
 const list = () => Type.Array(Type.String());
 const reference = Type.Object({ repository_id: Type.String(), path: Type.String(), revision: Type.String(), start: Type.Integer({ minimum: 1 }), end: Type.Integer({ minimum: 1 }) });
 const metadata = Type.Object({ kind: Type.Union(["contracts", "paradigm", "pitfalls", "index"].map(s => Type.Literal(s))), component: Type.String(), language: Type.String(),
@@ -40,11 +37,10 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   source: (component: ComponentRepository, operator: string, signal?: AbortSignal) => Promise<{ root: string; revision: string }>;
 }) {
   const model = options.model(); if (!model) throw new Error("请在模型网关配置主模型");
-  if (input.record.source_policy !== "code-only-v1") throw new Error("旧任务需新建研究以采用代码来源限制，原记录保留可读");
   if (input.record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用基础仓代码与 everycode 的研究");
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("component", join(input.root, "component-pipeline-skill.json"), input.record.use_latest_skill);
   if (!skill.files["references/platform-pipeline.md"]) throw new Error("组件 Skill 尚未适配分任务与结构化产物协议，请更新组件萃取 Skill 后新建研究");
-  input.update({ skill: { name: skill.name, digest: skill.digest }, use_latest_skill: false, source_policy: "code-only-v1", format: "joint-document",
+  input.update({ skill: { name: skill.name, digest: skill.digest }, use_latest_skill: false, format: "joint-document",
     ...(input.record.document ? {} : { document: { overview: "", sections: [] } }) });
   await checkEc(input.signal);
   const components = input.record.components ?? [input.record.component];
@@ -52,7 +48,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   const timer = setTimeout(() => controller.abort(), 48 * 60 * 60_000); timer.unref();
   const root = join(input.root, "component-pipeline"), snapshots: KnowledgeCodeSnapshot[] = [];
   const revisions = { ...input.record.revisions };
-  const evidence = input.record.source_policy === "code-only-v1" ? [...input.record.evidence] : [];
+  const evidence = [...input.record.evidence];
   try {
     for (const component of components) {
       signal.throwIfAborted(); input.update({ stage: `扫描基础仓：${component.name}` });

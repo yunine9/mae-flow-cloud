@@ -27,7 +27,7 @@ test("桌面审核：默认全选、单项排除、专家对话和局部返工�
         execFileSync(chrome,["--headless=new","--disable-gpu","--no-first-run","--disable-extensions",`--user-data-dir=${join(dir,String(width))}`,
           `--window-size=${width},${height}`,"--virtual-time-budget=7000","--dump-dom",
           ...(process.env.MFC_RESEARCH_SCREENSHOT_DIR ? [`--screenshot=${join(process.env.MFC_RESEARCH_SCREENSHOT_DIR,`research-${width}.png`)}`] : []),
-          `file://${html}?componentResearch=cr-browser`],{timeout:25000,stdio:["ignore",fd,"ignore"]});
+          `file://${html}?kbPage=task&kbKind=component&kbTask=cr-browser`],{timeout:25000,stdio:["ignore",fd,"ignore"]});
       } catch (error) {if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;}
       finally {closeSync(fd);}
       const output = readFileSync(dump,"utf8");

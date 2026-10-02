@@ -68,39 +68,20 @@ export function deriveComponentParadigms(sections: ResearchSection[]) {
     digest: createHash("sha256").update(JSON.stringify(catalog)).digest("hex") };
 }
 
-export const COMPONENT_ARTIFACT_SCHEMA = "mfc.component-paradigm/v1";
-/** JSON 值是 YAML 的子集；逐字段输出，解析不依赖模型或宽松的 YAML 类型转换。 */
-export function componentArtifact(section: ResearchSection) {
-  const p = section.paradigm!;
-  validateComponentParadigm(p, section.repository_ids);
-  const header = { schema: COMPONENT_ARTIFACT_SCHEMA, id: section.id, title: section.title, revision: section.revision, ...p };
-  const body = [componentKnowledgeMarkdown(section.content), "## 公共接口", componentKnowledgeMarkdown(section.interfaces), "## 集成产物与依赖", componentKnowledgeMarkdown(section.integration),
-    "## 完整示例", componentKnowledgeMarkdown(section.example)].join("\n\n");
-  return `---\n${Object.entries(header).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n\n${/^\s*#\s/.test(body) ? "" : `# ${section.title}\n\n`}${body}\n`;
-}
 export const COMPONENT_EXPORT_SCHEMA = "mfc.component-paradigm/v2";
-export function readComponentArtifact(text: string, metadataJson?: string) {
-  if (metadataJson !== undefined) {
-    const fields = JSON.parse(metadataJson);
-    if (!fields || fields.schema !== COMPONENT_EXPORT_SCHEMA || /^---\r?\n/.test(text)) throw new Error("组件文档与元数据格式不一致");
-    text = `---\n${Object.entries({ ...fields, schema: COMPONENT_ARTIFACT_SCHEMA }).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("\n")}\n---\n${text}`;
-  }
-  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]+)$/.exec(text);
-  if (!match || !match[2].trim()) throw new Error("组件产物必须包含 frontmatter 和非空正文");
-  const fields: Record<string, unknown> = {};
+/** 正文只供人阅读，程序字段必须来自同一导出包中的独立元数据。 */
+export function readComponentArtifact(text: string, metadataJson: string | undefined) {
+  if (!metadataJson || !text.trim() || /^---\r?\n/.test(text)) throw new Error("组件文档与独立元数据格式不一致");
+  const fields = JSON.parse(metadataJson);
   const keys = ["schema", "id", "title", "revision", "kind", "component", "language", "status", "need", "api", "applicability", "replaces", "evidence", "usage_evidence", "open_questions"];
-  for (const line of match[1].split(/\r?\n/)) {
-    const field = /^([a-z_]+): (.+)$/.exec(line);
-    if (!field || !keys.includes(field[1]) || Object.hasOwn(fields, field[1])) throw new Error("组件产物存在未知、重复或格式不规范的字段");
-    try { fields[field[1]] = JSON.parse(field[2]); } catch { throw new Error(`字段 ${field[1]} 必须使用 JSON 字符串、数组或对象格式`); }
-  }
-  if (keys.some(k => !Object.hasOwn(fields, k)) || fields.schema !== COMPONENT_ARTIFACT_SCHEMA
+  if (!fields || typeof fields !== "object" || Array.isArray(fields) || Object.keys(fields).length !== keys.length
+    || keys.some(k => !Object.hasOwn(fields, k)) || fields.schema !== COMPONENT_EXPORT_SCHEMA
     || typeof fields.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,199}$/.test(fields.id)
-    || typeof fields.title !== "string" || !fields.title.trim() || !Number.isInteger(fields.revision) || Number(fields.revision) < 1) throw new Error("组件产物缺少必填字段或 schema/id/revision 无效");
+    || typeof fields.title !== "string" || !fields.title.trim() || !Number.isInteger(fields.revision) || fields.revision < 1) throw new Error("组件产物缺少必填字段或元数据格式/id/revision 无效");
   const { schema: _, id, title, revision, ...metadata } = fields;
-  const p = metadata as unknown as ComponentParadigm;
+  const p = metadata as ComponentParadigm;
   validateComponentParadigm(p, Array.isArray(p.evidence) ? p.evidence.map(e => e?.repository_id) : []);
-  return { id: id as string, title: title as string, revision: revision as number, paradigm: p, body: match[2] };
+  return { id: id as string, title: title as string, revision: revision as number, paradigm: p, body: text };
 }
 /** 从实际导出的 Markdown 重新提取，再派生，确保导出格式就是程序的输入契约。 */
 export function deriveComponentArtifacts(files: Record<string, string>) {
@@ -129,17 +110,18 @@ export function exportComponentArtifacts(sections: ResearchSection[]) {
   for (const s of sections.filter(s => s.selected && s.paradigm)) {
     const path = componentArtifactPath(s.id, s.paradigm!);
     if (Object.hasOwn(files, path)) throw new Error("组件产物路径重复");
-    const canonical = componentArtifact(s);
-    const doc = readComponentArtifact(canonical);
-    files[path] = doc.body.trim() + "\n";
-    files[path.replace(/\.md$/, ".metadata.json")] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: doc.id, title: doc.title, revision: doc.revision, ...doc.paradigm }, null, 2) + "\n";
+    validateComponentParadigm(s.paradigm!, s.repository_ids);
+    const body = [componentKnowledgeMarkdown(s.content), "## 公共接口", componentKnowledgeMarkdown(s.interfaces), "## 集成产物与依赖", componentKnowledgeMarkdown(s.integration),
+      "## 完整示例", componentKnowledgeMarkdown(s.example)].join("\n\n");
+    files[path] = `${/^\s*#\s/.test(body) ? "" : `# ${s.title}\n\n`}${body.trim()}\n`;
+    files[path.replace(/\.md$/, ".metadata.json")] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: s.id, title: s.title, revision: s.revision, ...s.paradigm }, null, 2) + "\n";
   }
   const derived = deriveComponentArtifacts(files);
   const cards = Object.fromEntries(derived.catalog.filter(p => p.kind === "paradigm" && p.status === "recommended")
     .map(p => [`derived/cards/${componentCardId(p).replaceAll("/", "__")}.md`, componentCardText(p, p.path, String(p.revision))]));
   return { schema: COMPONENT_EXPORT_SCHEMA, ...derived, files: { ...files, ...componentRuleFiles(derived.rules),
     ...cards,
-    "derived/catalog.json": JSON.stringify({ schema: COMPONENT_ARTIFACT_SCHEMA, paradigms: derived.catalog }, null, 2) + "\n",
+    "derived/catalog.json": JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, paradigms: derived.catalog }, null, 2) + "\n",
     "derived/mapping-table.md": derived.mapping + "\n",
-    "derived/rule-candidates.json": JSON.stringify({ schema: COMPONENT_ARTIFACT_SCHEMA, enabled: false, rules: derived.rules }, null, 2) + "\n" } };
+    "derived/rule-candidates.json": JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, enabled: false, rules: derived.rules }, null, 2) + "\n" } };
 }

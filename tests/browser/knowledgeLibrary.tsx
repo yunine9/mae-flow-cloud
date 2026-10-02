@@ -46,7 +46,7 @@ window.fetch = async (url, options) => {
   else if (path === "/business-modules") result = { modules, warnings: [], operations: [] };
   else if (path === "/component-repositories") result = { components: [{ id: "file", name: "文件组件", repository: "https://example.test/file.git", branch: "master", path: "", languages: ["cpp"], enabled: true, description: "" }] };
   else if (path === "/component-knowledge") result = governance;
-  else if (path === "/component-research" || path === "/domain-extraction/probes") result = { records: [] };
+  else if (path === "/component-research") result = { records: [] };
   else if (path.startsWith("/knowledge-review/")) result = { notes: [] };
   else if (path === "/domain-extraction") {
     if (input) { const created = { ...structuredClone(running), id: "dkx-created", title: "告警管理研究", module_id: input.module_id }; jobs.push(created); result = created; }
@@ -208,11 +208,16 @@ async function run() {
   check(!document.querySelector('textarea'), "import is package-only, with no pasted document input");
   await pick([new File(["ordinary document"], "notes.pdf", { type: "application/pdf" })]);
   check(document.querySelector('[role="alert"]')?.textContent?.includes("SKILL.md") && button("提交并审查")?.disabled, "ordinary document cannot enter Skill import");
-  const skill = new File(["---\nname: order-check\ndescription: 核对订单取消条件\n---\n读取 references/rules.md。"], "SKILL.md"), reference = new File(["先校验发货状态。"], "rules.md");
+  const skillText = "---\nname: order-check\ndescription: 核对订单取消条件\n---\n读取 references/rules.md。", referenceText = "先校验发货状态。";
+  const skill = new File([skillText], "SKILL.md"), reference = new File([referenceText], "rules.md");
+  // Chrome 虚拟时间与文件 I/O 使用不同的时钟；已知内存内容直接返回，避免等待被虚拟计时器提前耗尽。
+  for (const [file, content] of [[skill, skillText], [reference, referenceText]] as const) Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode(content).buffer });
   Object.defineProperty(skill, "webkitRelativePath", { value: "order-check/SKILL.md" }); Object.defineProperty(reference, "webkitRelativePath", { value: "order-check/references/rules.md" });
   await pick([skill, reference]); await chooseDestination("交易", "交易业务"); await click("提交并审查"); await waitFor('[aria-label="知识任务中心"]');
   const submission = calls.find(call => call.path === "/skills/order-check/submissions");
   check(submission?.input.business_module_ids[0] === "trade" && submission.input.files.some((file: any) => file.path === "references/rules.md"), "Skill submission preserves relative attachments and real module ownership");
+  const decodeFile = (path: string) => new TextDecoder().decode(Uint8Array.from(atob(submission!.input.files.find((file: any) => file.path === path).content_base64), character => character.charCodeAt(0)));
+  check(decodeFile("SKILL.md") === skillText && decodeFile("references/rules.md") === referenceText, "Skill submission preserves the complete UTF-8 package and attachment contents");
   check(!calls.some(call => call.path.endsWith("/approve")), "import does not bypass human review");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "desktop shell has no horizontal overflow");
   check(!errors.length, errors.join("; "));

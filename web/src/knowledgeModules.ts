@@ -87,7 +87,7 @@ export function projectKnowledgeModules(input: {
   for (const component of input.components.filter(c => c.enabled)) for (const id of component.languages) language(id);
   const unassigned: KnowledgeModule = { key: "unassigned", id: "unassigned", name: "待整理知识", description: "尚未明确模块或语言归属，原有内容仍可阅读", category: "unassigned", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 };
   for (const doc of documents) {
-    const matches = modules.filter(m => m.category === "business" && (doc.module_ids.includes(m.id) || (!doc.module_ids.length && doc.focus?.kind !== "engineering" && doc.repositories.some(r => m.repositories.some(g => g.id === repositoryKey(r))))));
+    const matches = modules.filter(m => m.category === "business" && (doc.module_ids.includes(m.id) || (!doc.module_ids.length && doc.repositories.some(r => m.repositories.some(g => g.id === repositoryKey(r))))));
     const targets = matches.length ? matches : doc.module_ids.length || doc.focus?.kind === "business" ? [] : [...new Set(doc.technologies)].map(language);
     if (!targets.length) unassigned.documents.push(doc);
     for (const target of targets) {

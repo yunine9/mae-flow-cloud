@@ -28,7 +28,7 @@ window.fetch = async (url, options) => {
   if (path === "/component-repositories") result = {components:repos};
   else if (path === "/business-modules") result = {modules:[]};
   else if (path === "/component-research") result = {records:[record]};
-  else if (path.endsWith("/artifacts")) result = { mapping: "# 组件选择表\n\n需要安全释放资源 → Close（SDK v2）", rules: [], files: { "components/file/paradigms/close.md": "---\nschema: \"mfc.component-paradigm/v1\"\n---\n正文" } };
+  else if (path.endsWith("/artifacts")) result = { mapping: "# 组件选择表\n\n需要安全释放资源 → Close（SDK v2）", rules: [], files: { "components/file/paradigms/close.md": "# 安全释放\n正文" } };
   else if (path.endsWith("/selection")) {
     calls.push({action:"selection",...body});
     for (const section of record.document!.sections) if (body.ids.includes(section.id)) section.selected = body.selected;

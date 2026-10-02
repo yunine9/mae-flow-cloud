@@ -242,7 +242,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
                     : row.moment === "search" ? `Agent 检索${row.plan?.capability ? `（${row.plan.capability}）` : ""}：${row.query ?? ""}`
                       : row.status === "rejected" ? "知识读取被拒绝" : row.status === "unavailable" ? "知识读取未完成" : "Agent 读取知识正文"}</strong>
               {row.moment !== "component_plan" && <em className="font-mono text-xs text-muted-foreground">{row.ids.length ? row.ids.join("、") : "没有命中"}</em>}
-              {row.assets?.map((asset, i) => <a key={`${asset.id}-${i}`} className="break-all text-sm text-primary" href={`/?knowledgeDocuments=1&knowledgeDocument=${encodeURIComponent(asset.id)}`}>{asset.heading || asset.id} · {asset.start_line ? `第 ${asset.start_line}${asset.end_line ? `–${asset.end_line}` : ""} 行 · ` : ""}{asset.revision.slice(0, 12)}</a>)}
+              {row.assets?.map((asset, i) => <a key={`${asset.id}-${i}`} className="break-all text-sm text-primary" href={`/?kbPage=module&kbModule=unassigned&knowledgeDocument=${encodeURIComponent(asset.id)}`}>{asset.heading || asset.id} · {asset.start_line ? `第 ${asset.start_line}${asset.end_line ? `–${asset.end_line}` : ""} 行 · ` : ""}{asset.revision.slice(0, 12)}</a>)}
               <small className="text-sm text-faint">{time(row.ts)}</small>
             </span>
           </div>

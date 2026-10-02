@@ -85,9 +85,10 @@ export function ComponentResearch({
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
   const [mode, setMode] = useState<"all" | "topic">("all");
-  const [selected, setSelected] = useState(
-      new URLSearchParams(location.search).get("componentResearch") ?? "",
-    ),
+  const [selected, setSelected] = useState(() => {
+      const params = new URLSearchParams(location.search);
+      return params.get("kbKind") === "component" ? params.get("kbTask") ?? "" : "";
+    }),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState(""),
@@ -185,7 +186,15 @@ export function ComponentResearch({
   function selectRecord(id: string) {
     setSelected(id); setStage(surface === "workbench" ? "progress" : "review");
     const url = new URL(location.href);
-    url.searchParams.set("componentResearch", id);
+    if (id === "history") {
+      url.searchParams.set("kbPage", "tasks");
+      url.searchParams.delete("kbKind"); url.searchParams.delete("kbTask"); url.searchParams.delete("kbReview");
+    } else {
+      url.searchParams.set("kbPage", id && id !== "new" ? "task" : "research");
+      url.searchParams.set("kbKind", "component");
+      if (id && id !== "new") url.searchParams.set("kbTask", id);
+      else { url.searchParams.delete("kbTask"); url.searchParams.delete("kbReview"); }
+    }
     history.replaceState(history.state, "", url);
   }
   useEffect(() => { if (focusId) selectRecord(focusId); }, [focusId]);
@@ -323,7 +332,6 @@ export function ComponentResearch({
       </div>
       {current.error && <p role="alert" className="mb-4 text-danger">{current.error}</p>}
       {current.pipeline && <p className="mb-4 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(task => task.status === "done").length}/{current.pipeline.tasks.length} 项通过</p>}
-      {!!current.children?.length && <div className="mb-5 divide-y rounded-lg border border-line">{current.children.map(child => <div key={child.id} className="flex items-center gap-4 p-3"><strong className="mr-auto">{child.component.name}</strong><span className="text-sm text-muted-foreground">{child.stage}</span><Button variant="outline" onClick={() => { selectRecord(child.id); if (studio) child.status === "done" ? studio.openResult("component", child.id) : studio.openExecution("component", child.id); }}>{child.status === "done" ? "检视文稿" : "查看过程"}</Button></div>)}</div>}
       <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} />
     </div>
   </section>;
@@ -386,12 +394,11 @@ export function ComponentResearch({
                     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
                       <DropdownMenuItem onClick={() => { studio?.openExecution("component"); selectRecord("new"); }}>新建萃取任务</DropdownMenuItem>
-                      {!focused && !current.parent_id && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
+                      {!focused && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
                     </DropdownMenuContent></DropdownMenu>
                   </div>
                 </header> : <div className="studio-run-toolbar"><header className="studio-execution-summary mb-5">
                   <div className="flex items-center justify-between gap-3">
-                    {current.parent_id && <KnowledgeBackButton onClick={() => selectRecord(current.parent_id!)} destination="全部组件进度" />}
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
                     {!focused && ["done", "failed", "cancelled"].includes(current.status) && !(current.document && current.status === "done") && (
                       <Button
@@ -403,7 +410,7 @@ export function ComponentResearch({
                       </Button>
                     )}
                     {!focused && ["queued", "running"].includes(current.status) && <Button variant="outline" disabled={busy} onClick={() => void manage("stop")}>停止任务</Button>}
-                    {!focused && !current.parent_id && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
+                    {!focused && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
                   </div>
                   <p className="mt-2 text-muted-foreground">
                     {current.components?.length ?? 1} 个组件仓 ·{" "}
@@ -422,23 +429,6 @@ export function ComponentResearch({
                 </header>
                 {surface === "workbench" ? <nav className="mb-4 flex gap-2" aria-label="组件研究详情">{([['progress','研究过程'],['inputs','来源范围']] as const).map(([value,label]) => <Button key={value} size="sm" variant={stage === value ? "secondary" : "ghost"} onClick={() => setStage(value)}>{label}</Button>)}<Button size="sm" variant="outline" disabled={!current.draft && !current.document} onClick={() => studio ? studio.openResult("component", current.id) : setStage("review")}>文稿审查</Button></nav> : compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>}
                 {current.document && <div hidden={stage !== "review"}><ComponentResearchReview key={`review:${current.id}`} record={current} onChanged={record => { setDetail(record); void load(); }} /></div>}
-                {["review", "progress"].includes(stage) && current.mode === "all" && !current.document && current.progress && <section aria-label="全部组件萃取进度" className="mb-5 space-y-5">
-                  <div className="rounded-xl border border-line bg-surface-2 p-5">
-                    <div className="flex items-center justify-between gap-3"><strong>组件草稿 {current.progress.done} / {current.progress.total}</strong><span className="text-muted-foreground">已采纳 {current.progress.adopted} 篇</span></div>
-                    <div role="progressbar" aria-label="组件完成进度" aria-valuemin={0} aria-valuemax={current.progress.total} aria-valuenow={current.progress.done} className="mt-4 h-2 overflow-hidden rounded-full bg-primary/10"><div className="h-full rounded-full bg-primary transition-all" style={{width:`${100 * current.progress.done / (current.progress.total || 1)}%`}} /></div>
-                    <p className="mt-3 text-muted-foreground">{current.progress.running} 个正在萃取 · {current.progress.queued} 个排队 · {current.progress.failed} 个失败 · {current.progress.cancelled} 个已停止</p>
-                  </div>
-                  <p className="text-muted-foreground">自动发现各组件的主要能力，逐个生成开发范式草稿。已完成的可立即审查，失败不影响其他组件。</p>
-                  <div className="overflow-hidden rounded-xl border border-line">
-                    <table className="w-full text-left"><thead className="bg-surface-2"><tr><th className="px-4 py-3">基础组件</th><th className="px-4 py-3">进度</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
-                      <tbody>{current.children?.map(child => <tr key={child.id} className="border-t border-line">
-                        <td className="max-w-[320px] px-4 py-4"><strong className="block">{child.component.name}</strong><span className="mt-1 block truncate text-sm text-muted-foreground" title={child.component.repository}>{child.component.path || child.component.repository.split("/").pop()} · {child.component.branch}</span></td>
-                        <td className={`px-4 py-4 ${child.status === "failed" ? "text-danger" : "text-muted-foreground"}`}>{child.stage}</td>
-                        <td className="px-4 py-4 text-right"><Button variant="outline" onClick={() => selectRecord(child.id)}>{child.status === "done" ? "审查草稿" : "查看过程"}</Button></td>
-                      </tr>)}</tbody>
-                    </table>
-                  </div>
-                </section>}
                 {stage === "inputs" && <details open className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
                     源码范围与调用来源

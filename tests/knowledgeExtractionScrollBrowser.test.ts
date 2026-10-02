@@ -51,7 +51,7 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       // 领域任务按 #447 进入知识库的专注页(研究过程自己滚动);组件夹具仍是页面内的萃取工作区。
       const scroller = kind === "domain" ? ".knowledge-task-progress" : ".knowledge-extraction-content";
       const outerTop = () => evaluate(`document.querySelector(${JSON.stringify(scroller)}).scrollTop`);
-      const url = kind === "domain" ? "?scrollCheck=1&kbPage=task&kbKind=domain&kbTask=dkx-running&domainExtraction=dkx-running" : "?scrollCheck=1&knowledgePage=domain&domainExtraction=dkx-browser&componentResearch=cr-browser";
+      const url = kind === "domain" ? "?scrollCheck=1&kbPage=task&kbKind=domain&kbTask=dkx-running" : "?scrollCheck=1&kbPage=task&kbKind=component&kbTask=cr-browser";
       for (const [width, height] of [[1920, 1080], [1366, 768]]) {
         await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
         await send("Page.navigate", { url: `${pathToFileURL(html)}${url}` }, sessionId);

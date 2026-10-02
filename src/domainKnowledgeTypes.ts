@@ -74,10 +74,6 @@ export interface DomainArchiveBatch {
     current_revision?: string; reason: "newer_version" | "deleted" }>;
 }
 export interface DomainKnowledgeJob {
-  /** 临时单模块效果验证，使用独立任务且不允许归档。 */
-  probe?: { module: string };
-  cleanup_only?: boolean;
-  source_cleanup?: KnowledgeSourceCleanupState;
   id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
   instructions?: string;
@@ -102,11 +98,4 @@ export interface DomainExecution {
   read: () => DomainDocument[];
   update: (patch: { revisions?: Record<string, string>; skill?: DomainKnowledgeJob["skill"]; stage?: string; research?: DomainResearch }) => void;
   evidence: (event: Record<string, unknown>) => void;
-}
-
-export interface KnowledgeSourceCleanupState {
-  repositories: KnowledgeRepository[];
-  plans: KnowledgeCleanupPlan[];
-  publications: DomainPublication[];
-  started?: boolean;
 }

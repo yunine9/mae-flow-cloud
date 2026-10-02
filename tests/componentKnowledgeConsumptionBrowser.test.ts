@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("桌面组件检查显示位置、条件与未完成原因，知识深链定位正式文档", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("B1验收1：桌面组件检查显示位置、条件与未完成原因，知识深链定位正式文档", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-component-consume-browser-"));
   try {
     const built = await build({ entryPoints: [resolve("tests/browser/componentKnowledgeConsumption.tsx")], bundle: true, write: false,
@@ -20,7 +20,7 @@ test("桌面组件检查显示位置、条件与未完成原因，知识深链�
       try { execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, String(width))}`,
         `--window-size=${width},${height}`, "--virtual-time-budget=2500", "--dump-dom",
         ...(process.env.MFC_CONSUMPTION_SCREENSHOTS ? [`--screenshot=${join(process.env.MFC_CONSUMPTION_SCREENSHOTS, `consume-${width}.png`)}`] : []),
-        `file://${html}?knowledgePage=documents&knowledgeDocument=kd-consumer`], { timeout: 15000, stdio: ["ignore", fd, "ignore"] }); }
+        `file://${html}?kbPage=module&kbModule=engineering%3Acpp&knowledgeDocument=kd-consumer`], { timeout: 15000, stdio: ["ignore", fd, "ignore"] }); }
       catch (e) { if ((e as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw e; } finally { closeSync(fd); }
       const result = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
       assert.ok(result, `${width}: 页面未完成`); const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true);

@@ -12,11 +12,6 @@ import {
   type SelectedBusinessModule,
 } from "./businessModuleRuntime.ts";
 import {
-  ENGINEERING_KNOWLEDGE_LIMITS,
-  selectEngineeringKnowledge,
-  type EngineeringKnowledgeSelection,
-} from "./engineeringKnowledgeRuntime.ts";
-import {
   knowledgeMatchesTask,
   repositoryIdentity,
   type KnowledgeAssetMetadata,
@@ -35,7 +30,6 @@ import { workflowKnowledgeSelections } from "./workflowAssetResolution.ts";
 
 export type LaunchKnowledgePreviewSource =
   | "business_modules"
-  | "engineering_knowledge"
   | "team_skills"
   | "repository_profiles";
 
@@ -68,19 +62,6 @@ export interface LaunchBusinessKnowledgePreview extends MatchedScope {
   bytes: number;
 }
 
-export interface LaunchEngineeringKnowledgePreview extends MatchedScope {
-  id: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  form: "document" | "rule" | "example";
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-  digest: string;
-  bytes: number;
-}
-
 export interface LaunchTeamSkillPreview extends MatchedScope {
   name: string;
   description: string;
@@ -108,21 +89,12 @@ export interface LaunchKnowledgePreview {
     technologies: string[];
     business_module_ids: string[];
     workflow_business_module_ids: string[];
-    workflow_engineering_knowledge_ids: string[];
     workflow_team_skill_ids: string[];
   };
   business_knowledge: LaunchBusinessKnowledgePreview[];
-  engineering_knowledge: LaunchEngineeringKnowledgePreview[];
   team_skills: LaunchTeamSkillPreview[];
   /** 当前有序清单与版本身份的服务端指纹；创建时必须原样对拍。 */
   selection_digest: string;
-  limits: {
-    engineering_knowledge: EngineeringKnowledgeSelection["limits"] & {
-      matched: number;
-      selected: number;
-      omitted: number;
-    };
-  };
   warnings: LaunchKnowledgePreviewNotice[];
   /** 非空表示按当前输入真正创建任务会被拒绝。 */
   errors: LaunchKnowledgePreviewNotice[];
@@ -131,7 +103,6 @@ export interface LaunchKnowledgePreview {
 export interface LaunchKnowledgePreviewInput {
   repositories?: string[];
   selectedBusinessModuleIds?: string[];
-  selectedEngineeringKnowledgeIds?: string[];
   selectedHostSkillPaths?: string[];
   repositoryProfiles?: Array<Pick<RepositoryProfile,
     "repository" | "technologies" | "confirmed">>;
@@ -141,28 +112,19 @@ export interface LaunchKnowledgePreviewInput {
 /** 创建与预览共用：工作流引用必须强制并入人工选择。 */
 export function effectiveLaunchKnowledgeSelections(input: {
   selectedBusinessModuleIds?: string[];
-  selectedEngineeringKnowledgeIds?: string[];
   workflowDefinition?: unknown;
 }): {
   businessModuleIds: string[];
-  engineeringKnowledgeIds?: string[];
   workflow: ReturnType<typeof workflowKnowledgeSelections>;
 } {
   const workflow = input.workflowDefinition === undefined
-    ? { businessModuleIds: [], engineeringKnowledgeIds: [], teamSkillIds: [] }
+    ? { businessModuleIds: [], teamSkillIds: [] }
     : workflowKnowledgeSelections(input.workflowDefinition);
   return {
     businessModuleIds: [...new Set([
       ...(input.selectedBusinessModuleIds ?? []),
       ...workflow.businessModuleIds,
     ].map(String).map((item) => item.trim()).filter(Boolean))],
-    engineeringKnowledgeIds:
-      input.selectedEngineeringKnowledgeIds === undefined
-        && workflow.engineeringKnowledgeIds.length === 0 ? undefined
-        : [...new Set([
-            ...(input.selectedEngineeringKnowledgeIds ?? []),
-            ...workflow.engineeringKnowledgeIds,
-          ].map(String).map((item) => item.trim()).filter(Boolean))],
     workflow,
   };
 }
@@ -226,7 +188,6 @@ function selectionDigest(input: {
   technologies: string[];
   businessModuleIds: string[];
   businessKnowledge: LaunchBusinessKnowledgePreview[];
-  engineeringKnowledge: LaunchEngineeringKnowledgePreview[];
   teamSkills: LaunchTeamSkillPreview[];
 }): string {
   return createHash("sha256").update(JSON.stringify({
@@ -239,10 +200,6 @@ function selectionDigest(input: {
       module_revision: item.module_revision,
       id: item.id,
       version: item.version,
-      digest: item.digest,
-    })),
-    engineering_knowledge: input.engineeringKnowledge.map((item) => ({
-      id: item.id,
       digest: item.digest,
     })),
     team_skills: input.teamSkills.map((item) => ({
@@ -289,7 +246,6 @@ export function previewLaunchKnowledge(
   const uniqueTechnologies = [...new Set(technologies)];
   const selections = effectiveLaunchKnowledgeSelections({
     selectedBusinessModuleIds: input.selectedBusinessModuleIds,
-    selectedEngineeringKnowledgeIds: input.selectedEngineeringKnowledgeIds,
     workflowDefinition: input.workflowDefinition,
   });
 
@@ -334,45 +290,6 @@ export function previewLaunchKnowledge(
     technologies: uniqueTechnologies,
     businessModuleIds: businessModules.map((module) => module.id),
   };
-
-  let engineeringSelection: EngineeringKnowledgeSelection = {
-    items: [], matched: 0, omitted: 0, warnings: [],
-    limits: { ...ENGINEERING_KNOWLEDGE_LIMITS },
-  };
-  try {
-    engineeringSelection = selectEngineeringKnowledge({
-      dataDir, ...context,
-      selectedIds: selections.engineeringKnowledgeIds,
-    });
-    if (engineeringSelection.warnings.length) {
-      degraded = true;
-      const notices = engineeringSelection.warnings.map((message) => ({
-        source: "engineering_knowledge" as const,
-        code: selections.engineeringKnowledgeIds !== undefined
-          ? "selection_invalid" as const : "catalog_warning" as const,
-        message,
-      }));
-      if (selections.engineeringKnowledgeIds !== undefined) {
-        errors.push(...notices);
-      } else {
-        warnings.push(...notices);
-      }
-    }
-    if (engineeringSelection.omitted) {
-      warnings.push({ source: "engineering_knowledge", code: "limit_applied",
-        message: `有 ${engineeringSelection.omitted} 项匹配工程知识因 40 项 / 4 MiB 任务上限未进入本次快照` });
-    }
-  } catch (error) {
-    degraded = true;
-    const notice = { source: "engineering_knowledge" as const,
-      code: selections.engineeringKnowledgeIds !== undefined
-        ? "selection_invalid" as const : "catalog_unavailable" as const,
-      message: selections.engineeringKnowledgeIds !== undefined
-        ? `明确选择的工程知识无法固定：${String(error)}`
-        : `团队工程知识目录读取失败，任务将退化为无工程知识：${String(error)}` };
-    if (selections.engineeringKnowledgeIds !== undefined) errors.push(notice);
-    else warnings.push(notice);
-  }
 
   const selectedHostSkillPaths = input.selectedHostSkillPaths === undefined
       && selections.workflow.teamSkillIds.length === 0
@@ -460,19 +377,6 @@ export function previewLaunchKnowledge(
   }
 
   const businessKnowledge = businessPreview(businessModules, context);
-  const engineeringKnowledge = engineeringSelection.items.map((item) => ({
-    id: item.id,
-    title: item.title,
-    summary: item.summary,
-    when_to_use: item.when_to_use,
-    form: item.form as "document" | "rule" | "example",
-    business_module_ids: [...item.business_module_ids],
-    repositories: [...item.repositories],
-    technologies: [...item.technologies],
-    digest: item.digest,
-    bytes: item.bytes,
-    ...matchedScope(item, context),
-  }));
   const previewSkills = teamSkills.map((skill) => ({
     name: skill.name,
     description: skill.description,
@@ -496,27 +400,17 @@ export function previewLaunchKnowledge(
       technologies: uniqueTechnologies,
       business_module_ids: context.businessModuleIds,
       workflow_business_module_ids: selections.workflow.businessModuleIds,
-      workflow_engineering_knowledge_ids:
-        selections.workflow.engineeringKnowledgeIds,
       workflow_team_skill_ids: selections.workflow.teamSkillIds,
     },
     business_knowledge: businessKnowledge,
-    engineering_knowledge: engineeringKnowledge,
     team_skills: previewSkills,
     selection_digest: selectionDigest({
       repositories,
       technologies: uniqueTechnologies,
       businessModuleIds: context.businessModuleIds,
       businessKnowledge,
-      engineeringKnowledge,
       teamSkills: previewSkills,
     }),
-    limits: { engineering_knowledge: {
-      ...engineeringSelection.limits,
-      matched: engineeringSelection.matched,
-      selected: engineeringSelection.items.length,
-      omitted: engineeringSelection.omitted,
-    } },
     warnings,
     errors,
   };

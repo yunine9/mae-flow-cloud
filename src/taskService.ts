@@ -9,8 +9,6 @@ import { ticketCorrectionBlocks, prepareTicketRewrite, applyTicketRewrite, corre
 import { annotationSubmissionView, type AnnotationSubmissionView } from "./annotationSubmissionView.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
-import { KnowledgeConsolidation } from "./knowledgeConsolidation.ts";
-import { runKnowledgeConsolidationAgent } from "./knowledgeConsolidationAgent.ts";
 import { DeliveryExperiences } from "./deliveryExperience.ts";
 import { DeliverySummaries } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
@@ -401,13 +399,6 @@ import {
   type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import {
-  copyEngineeringKnowledgeSnapshots,
-  materializeEngineeringKnowledge,
-  publishedEngineeringKnowledge,
-  snapshotEngineeringKnowledge,
-  type SelectedEngineeringKnowledge,
-} from "./engineeringKnowledgeRuntime.ts";
-import {
   effectiveLaunchKnowledgeSelections,
   previewLaunchKnowledge,
   type LaunchKnowledgePreview,
@@ -415,7 +406,6 @@ import {
 } from "./launchKnowledgePreview.ts";
 import {
   discoverRepositorySkills,
-  readRepositoryKnowledgeFile, readRepositoryKnowledgeTree,
   type RepositorySkillCatalog,
   type RepositorySkillDescriptor,
 } from "./repositorySkills.ts";
@@ -439,15 +429,6 @@ import {
   type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
-import {
-  buildDistillPrompt,
-  collectSkillEvidence,
-  draftWithModel,
-  listSkillCandidates,
-  parseDraft,
-  saveSkillCandidate,
-  type SkillCandidateRecord,
-} from "./skillDistiller.ts";
 import { readHostSkillDocument, scanForSecrets } from "./hostSkillLibrary.ts";
 import {
   EXTRACTION_TIMEOUT_MS,
@@ -470,10 +451,10 @@ import {
 import { GIT_TRANSFER_TIMEOUT_MS } from "./gitTransferBudget.ts";
 const MAX_REQUIREMENT_RECEIPTS_BYTES = 128 * 1024;
 
-/** 货架条目在读侧的完整形态:资产事实+效果账+待裁决候选数。 */
+/** 货架条目在读侧的完整形态:资产事实+效果账。 */
 export type DecoratedHostSkillShelf = HostSkillShelf & {
   skills: Array<HostSkillShelfEntry
-    & { effect?: HostSkillEffect; candidates: number }>;
+    & { effect?: HostSkillEffect }>;
 };
 import {
   PrePushCommands,
@@ -1070,8 +1051,6 @@ export interface TaskSummary {
   /** Single requirement ownership for reporting; children read their root parent. */
   business_module?: { id: string; name: string };
   business_module_history?: Array<{ at: string; by: string; from?: { id: string; name: string }; to?: { id: string; name: string } }>;
-  /** 下单时匹配/选择并固定的团队工程知识（Skill 由团队 Skill 货架承载）。 */
-  engineering_knowledge?: SelectedEngineeringKnowledge[];
   /** 任务详情读侧投影：提供/加载/阅读的宿主事实，不参与任务落盘。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 持续检视轻量索引；原始事实仍由各来源账本负责。 */
@@ -2021,8 +2000,6 @@ export class TaskService {
       this.memorySweepTimer.unref?.();
     }, 30_000);
     this.memorySweepTimer.unref?.();
-    try { this.getKnowledgeConsolidation().startScheduler(); }
-    catch(error) { this.options.log?.(`知识整理暂不可用，任务照常运行：${String(error)}`); }
     // 被彻底删除的最高编号不能在重启后复用；否则旧通知/浏览器收藏会
     // 悄悄指向一张毫不相关的新任务。水位单独留在 dataDir，不属于任
     // 何任务历史，因此硬删除不会碰它。
@@ -2401,7 +2378,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "knowledge-consolidation", role: "知识整理", work: this.knowledgeConsolidation?.shutdown() ?? Promise.resolve() }, { taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
@@ -2688,75 +2665,13 @@ export class TaskService {
     return {
       ...shelf,
       skills: shelf.skills.map((skill) => {
-        const directory = skill.path.includes("/")
-          ? skill.path.split("/")[0] : undefined;
         return {
           ...skill,
           effect: effects.get(skill.name),
-          candidates: directory
-            ? listSkillCandidates(this.options.dataDir, directory)
-              .filter((item) => item.status === "drafted").length
-            : 0,
         };
       }),
     };
   }
-
-  /** 沉淀环(roadmap §9):从读过该 skill 的任务现场起草修订稿,
-   * 落候选区等管理员裁决。旁路纪律:单发模型调用带硬超时,同一时刻
-   * 只跑一份,失败如实报错;绝不自动上架。 */
-  async distillSkillDraft(
-    directory: string,
-    operator: string,
-  ): Promise<SkillCandidateRecord> {
-    if (this.distillActive) {
-      throw new TaskControlError("已有一份修订稿在起草中,请稍候");
-    }
-    const shelf = listHostSkillShelf(this.options.dataDir);
-    const entry = shelf.skills.find((skill) =>
-      skill.path.split("/")[0] === directory);
-    if (!entry) {
-      throw new TaskControlError(`货架上没有这个 skill: ${directory}`);
-    }
-    const active = this.activeModelChoice();
-    if (!active) {
-      throw new TaskControlError("模型网关未配置,无法起草(管理页 → 模型网关)");
-    }
-    const projected = [...this.tasks.values()]
-      .map((task) => this.project(task, true));
-    const evidence = collectSkillEvidence(projected, entry.name);
-    if (!evidence.taskIds.length) {
-      throw new TaskControlError(
-        "还没有任务真正读过这个 skill,证据不足以起草——先让它被用起来");
-    }
-    const skillContent = readFileSync(
-      join(this.options.dataDir, "skills", ...entry.path.split("/")), "utf-8");
-    const prompt = buildDistillPrompt({
-      skillName: entry.name,
-      skillContent,
-      effect: buildHostSkillEffects(projected).get(entry.name),
-      evidenceText: evidence.text,
-    });
-    this.distillActive = true;
-    try {
-      const raw = await draftWithModel({
-        modelsJson: this.activeModelsJson(),
-        provider: active.provider,
-        model: active.model,
-        system: prompt.system,
-        user: prompt.user,
-      });
-      const draft = parseDraft(raw);
-      return saveSkillCandidate(this.options.dataDir, directory, {
-        skill: draft.skill,
-        notes: draft.notes,
-        evidence: evidence.text,
-      }, evidence.taskIds, operator);
-    } finally {
-      this.distillActive = false;
-    }
-  }
-  private distillActive = false;
 
   // ---- 定向知识提取(知识库侧旁路,不建任务、不碰交付链) ----
 
@@ -3767,7 +3682,6 @@ export class TaskService {
             workspace: task.summary.workspace,
             selectedSkills: summary.repository_skills,
             businessModules: summary.business_modules,
-            engineeringKnowledge: summary.engineering_knowledge,
           })
         : undefined,
       ...(feedback.length ? { feedback } : {}),
@@ -5605,19 +5519,6 @@ export class TaskService {
     this.bypass(undefined, "任务泵", this.pump());
   }
 
-  private knowledgeConsolidation?: KnowledgeConsolidation;
-  getKnowledgeConsolidation(): KnowledgeConsolidation {
-    return this.knowledgeConsolidation ??= new KnowledgeConsolidation(this.options.dataDir,
-      input => runKnowledgeConsolidationAgent(input, {choice:this.activeModelChoice(),json:this.resolvedModels().json},
-        async query => (await this.getKnowledgeSearch().searchLibrary(query)).hits.map(h=>h.id)),
-      () => this.prepareKnowledgeIndex(), this.options.log, async job => {
-        if(!this.options.notifier)return;
-        const receipt=await this.options.notifier.notifyOutcome({taskId:job.id,account:job.operator,status:"知识整理草稿已生成",
-          summary:`已整理出 ${job.topics.length} 篇专题草稿，请审查来源、适用条件和冲突，可编辑后采纳。`,
-          link:`${(this.notificationLinkBase()??"").replace(/\/$/,"")}/?knowledgeDocuments=1&knowledgeConsolidation=${job.topics[0]}`});
-        if(!receipt.delivered)throw new Error(receipt.last_error||"通知未送达");
-      });
-  }
   private domainKnowledgeExtraction?: DomainKnowledgeExtraction;
   getDomainKnowledgeExtraction(): DomainKnowledgeExtraction {
     return this.domainKnowledgeExtraction ??= createDomainKnowledgeExtraction({
@@ -5656,23 +5557,6 @@ export class TaskService {
     return this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar);
   }
 
-  async importKnowledgeFile(repository: string, baseline: string, path: string, account?: string) {
-    if (!/^https?:\/\//i.test(repository) || repository.length > 2048) throw new Error("请填写 CodeHub 的 HTTP/HTTPS 仓库地址");
-    validateRepositoryAddress(repository);
-    const prepared = this.prepareHostGitSandbox(this.options.gitCredential?.(account));
-    try { return await readRepositoryKnowledgeFile({ repository, baseline, path,
-      credentialHelper: prepared?.helper, credentialArgs: prepared?.args, credentialEnv: prepared?.env }); }
-    finally { this.cleanupHostGitCredential(prepared); }
-  }
-  async importKnowledgeTree(repository: string, baseline: string, paths: string[] | undefined, account?: string) {
-    if (!/^https?:\/\//i.test(repository) || repository.length > 2048) throw new Error("请填写 CodeHub 的 HTTP/HTTPS 仓库地址");
-    validateRepositoryAddress(repository);
-    if (new URL(repository).password) throw new Error("仓库地址请勿包含密码或令牌");
-    const prepared = this.prepareHostGitSandbox(this.options.gitCredential?.(account));
-    try { return await readRepositoryKnowledgeTree({ repository, baseline, paths,
-      credentialHelper: prepared?.helper, credentialArgs: prepared?.args, credentialEnv: prepared?.env }); }
-    finally { this.cleanupHostGitCredential(prepared); }
-  }
   private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;
 
   prepareKnowledgeIndex(): void {
@@ -6784,12 +6668,6 @@ export class TaskService {
       }>;
       updated_at: string;
     }>;
-    engineering_knowledge: Array<{
-      id: string; title: string; summary: string; when_to_use: string;
-      form: "document" | "rule" | "example";
-      business_module_ids: string[]; repositories: string[];
-      technologies: string[];
-    }>;
     /** 团队管理的 Skill 形态知识目录；正文不随下单接口返回。 */
     team_skills: HostSkillShelfEntry[];
     /** 服务级缺的配置(管理员去补)。非空=不给下单。 */
@@ -6816,8 +6694,6 @@ export class TaskService {
       }>;
       updated_at: string;
     }> = [];
-    let engineeringKnowledge: ReturnType<typeof publishedEngineeringKnowledge>
-      = [];
     let teamSkills: HostSkillShelfEntry[] = [];
     const workflowCatalogRoot = this.options.host?.kernelRoot
       ?? this.options.workflowCatalogRoot;
@@ -6860,12 +6736,6 @@ export class TaskService {
       blockers.push({ key: "requirement_disabled", where: "admin",
         label: "本部署为问题流专用(--issue-only),需求流程未启用;"
           + "处理问题请前往「问题处理」页" });
-    }
-    try {
-      engineeringKnowledge = publishedEngineeringKnowledge(this.options.dataDir);
-    } catch (error) {
-      this.options.log?.(
-        `[engineering-knowledge] 下单目录读取失败(fail-open): ${String(error)}`);
     }
     try {
       teamSkills = listHostSkillShelf(this.options.dataDir).skills
@@ -6914,17 +6784,6 @@ export class TaskService {
       execution_playbooks: executionPlaybooks,
       workflow_standard: workflowStandard,
       business_modules: businessModules,
-      engineering_knowledge: engineeringKnowledge
-        .map((item) => ({
-          id: item.id,
-          title: item.title,
-          summary: item.summary,
-          when_to_use: item.when_to_use,
-          form: item.form as "document" | "rule" | "example",
-          business_module_ids: item.business_module_ids,
-          repositories: item.repositories,
-          technologies: item.technologies,
-        })),
       team_skills: teamSkills,
       blockers,
       needs: {
@@ -7348,13 +7207,8 @@ export class TaskService {
       /** 普通新下单开启：每个仓必须有非空技术画像。内部拆单/
        * 重跑和历史调用不开启，避免倒查老任务。 */
       requireRepositoryProfiles?: boolean;
-      /** 内部复制/旧客户端兼容；普通下单缺席并由服务端自动匹配。 */
-      selectedEngineeringKnowledgeIds?: string[];
       /** 发起页服务端预览的有序清单指纹；不一致时拒绝静默换名单。 */
       knowledgePreviewDigest?: string;
-      /** 仅供跨仓拆单复制父任务已固定版本。 */
-      engineeringKnowledge?: SelectedEngineeringKnowledge[];
-      engineeringKnowledgeSourceWorkspace?: string;
       /** 仅供跨仓拆单：从父任务复制已经固定的模块版本与正文。 */
       businessModules?: SelectedBusinessModule[];
       businessModuleSourceWorkspace?: string;
@@ -7621,7 +7475,7 @@ export class TaskService {
       throw new Error("每个任务最多选择 20 个仓内 Skill");
     }
     // 画像必须在知识预览和 task id 分配前定格：同一份输入同时决定
-    // 工程知识、团队 Skill 和任务台账；被拒的新单也不应留下空现场。
+    // 团队 Skill 和任务台账；被拒的新单也不应留下空现场。
     let repositoryProfiles = options.repositoryProfiles ?? [];
     if (options.repositoryProfiles === undefined && repositories.length) {
       try {
@@ -7646,22 +7500,18 @@ export class TaskService {
       .flatMap((profile) => profile.technologies))];
     const effectiveKnowledgeSelections = effectiveLaunchKnowledgeSelections({
       selectedBusinessModuleIds: options.selectedBusinessModuleIds,
-      selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
       workflowDefinition: !options.workflowProfile
         ? options.workflowDefinition : undefined,
     });
     const workflowSelections = effectiveKnowledgeSelections.workflow;
     const selectedBusinessModuleIds =
       effectiveKnowledgeSelections.businessModuleIds;
-    const selectedEngineeringKnowledgeIds =
-      effectiveKnowledgeSelections.engineeringKnowledgeIds;
     let expectedKnowledgePreview:
       ReturnType<typeof previewLaunchKnowledge> | undefined;
     if (options.knowledgePreviewDigest) {
       const currentPreview = previewLaunchKnowledge(this.options.dataDir, {
         repositories,
         selectedBusinessModuleIds: options.selectedBusinessModuleIds,
-        selectedEngineeringKnowledgeIds: options.selectedEngineeringKnowledgeIds,
         selectedHostSkillPaths: options.selectedHostSkillPaths,
         repositoryProfiles,
         workflowDefinition: !options.workflowProfile
@@ -7692,7 +7542,6 @@ export class TaskService {
     }
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
-    let engineeringKnowledge: SelectedEngineeringKnowledge[] = [];
     let teamSkills: HostSkillShelfEntry[] = [];
     let hostSkillSnapshotWarnings: string[] = [];
     try {
@@ -7722,35 +7571,6 @@ export class TaskService {
           moduleIds: selectedBusinessModuleIds,
           repositories,
         });
-      }
-      try {
-        if (options.engineeringKnowledge !== undefined) {
-          if (!options.engineeringKnowledgeSourceWorkspace) {
-            throw new Error("复制团队工程知识快照时缺少父任务现场");
-          }
-          engineeringKnowledge = copyEngineeringKnowledgeSnapshots({
-            selected: options.engineeringKnowledge,
-            sourceTaskWorkspace: options.engineeringKnowledgeSourceWorkspace,
-            targetTaskWorkspace: workspace,
-            repository: repositories.length === 1 ? repositories[0] : undefined,
-            technologies: profileTechnologies.length
-              ? profileTechnologies : undefined,
-            businessModuleIds: businessModules.map((module) => module.id),
-          });
-        } else {
-          engineeringKnowledge = snapshotEngineeringKnowledge({
-            dataDir: this.options.dataDir,
-            taskWorkspace: workspace,
-            repositories,
-            technologies: profileTechnologies,
-            businessModuleIds: businessModules.map((module) => module.id),
-            selectedIds: selectedEngineeringKnowledgeIds,
-          });
-        }
-      } catch (error) {
-        engineeringKnowledge = [];
-        this.options.log?.(
-          `[engineering-knowledge] 任务 ${id} 快照失败，已退化为无团队工程知识（不影响下单）：${String(error)}`);
       }
       const hostSkillSnapshotRoot = join(workspace, "host-skill-snapshot");
       mkdirSync(hostSkillSnapshotRoot, { recursive: true, mode: 0o750 });
@@ -7821,13 +7641,6 @@ export class TaskService {
             version: asset.version,
             digest: asset.digest,
           })));
-        const expectedEngineering = expectedKnowledgePreview
-          .engineering_knowledge.map((item) => ({
-            id: item.id, digest: item.digest,
-          }));
-        const actualEngineering = engineeringKnowledge.map((item) => ({
-          id: item.id, digest: item.digest,
-        }));
         const expectedSkills = expectedKnowledgePreview.team_skills
           .map((item) => ({
             path: item.path,
@@ -7840,9 +7653,9 @@ export class TaskService {
           package_digest: item.package_digest,
         }));
         if (JSON.stringify({ business: actualBusiness,
-          engineering: actualEngineering, skills: actualSkills })
+          skills: actualSkills })
             !== JSON.stringify({ business: expectedBusiness,
-              engineering: expectedEngineering, skills: expectedSkills })) {
+              skills: expectedSkills })) {
           throw new Error(
             "发起前知识清单未能按核对版本完整固定，请重新核对后再发起");
         }
@@ -7872,7 +7685,6 @@ export class TaskService {
               repositories,
               technologies: profileTechnologies,
               businessModules,
-              engineeringKnowledge,
               repositorySkills,
               hostSkillSnapshotRoot: join(workspace, "host-skill-snapshot"),
             }),
@@ -7918,8 +7730,6 @@ export class TaskService {
       business_modules: businessModules.length ? businessModules : undefined,
       business_module: businessModule,
       business_module_history: businessModule ? [{ at: new Date().toISOString(), by: options.account ?? "本地部署", to: businessModule }] : undefined,
-      engineering_knowledge: engineeringKnowledge.length
-        ? engineeringKnowledge : undefined,
       requirement_graph: repositories.length
         ? {
             stage: analysisParent ? "analysis" : "confirmed",
@@ -8027,8 +7837,6 @@ export class TaskService {
         knowledge_preview_digest: options.knowledgePreviewDigest ?? null,
         selected_business_module_ids:
           options.selectedBusinessModuleIds ?? null,
-        selected_engineering_knowledge_ids:
-          options.selectedEngineeringKnowledgeIds ?? null,
         selected_repository_skill_ids:
           options.selectedRepositorySkillIds ?? null,
         selected_team_skill_paths: options.selectedHostSkillPaths ?? null,
@@ -8081,9 +7889,6 @@ export class TaskService {
           assets: module.assets.map((asset) => ({
             id: asset.id, version: asset.version, digest: asset.digest,
           })),
-        })),
-        engineering_knowledge: engineeringKnowledge.map((item) => ({
-          id: item.id, digest: item.digest,
         })),
       },
     };
@@ -9544,9 +9349,6 @@ export class TaskService {
       })),
       businessModuleSourceWorkspace: backup,
       repositoryProfiles: source.repository_profiles?.map((item) => ({ ...item })),
-      engineeringKnowledge: (source.engineering_knowledge ?? [])
-        .map((item) => ({ ...item })),
-      engineeringKnowledgeSourceWorkspace: backup,
       hostSkillSnapshotSourceWorkspace: backup,
       preserveUndefinedRepositorySkills,
       reuseTaskId: id,
@@ -10271,8 +10073,6 @@ export class TaskService {
         businessModuleSourceWorkspace: task.summary.workspace,
         repositoryProfiles: (task.summary.repository_profiles ?? [])
           .filter((profile) => profile.repository === repository.url),
-        engineeringKnowledge: task.summary.engineering_knowledge,
-        engineeringKnowledgeSourceWorkspace: task.summary.workspace,
         preserveUndefinedRepositorySkills,
       });
       repository.task_id = child.id;
@@ -11942,8 +11742,6 @@ export class TaskService {
     let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
       entries: [], skill_paths: [], warnings: [],
     };
-    let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
-      = { entries: [], warnings: [] };
     try {
       if (!task.cwd) throw new Error("开发助手缺少代码工作区");
       if (continued) {
@@ -11968,15 +11766,6 @@ export class TaskService {
       for (const warning of businessModuleKnowledge.warnings) {
         this.options.log?.(
           `[developer-assistant-business-module] 任务 ${task.summary.id}: ${warning}`);
-      }
-      engineeringKnowledge = materializeEngineeringKnowledge({
-        selected: task.summary.engineering_knowledge,
-        taskWorkspace: workspace,
-        runtimeWorkspace: task.cwd,
-      });
-      for (const warning of engineeringKnowledge.warnings) {
-        this.options.log?.(
-          `[developer-assistant-engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
       }
       task.containerWorkspace = task.cwd;
       container = await this.startCodingContainer(task, {
@@ -12061,7 +11850,6 @@ export class TaskService {
         repositorySkillPaths,
         repositorySkillResources,
         businessModuleKnowledge,
-        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, task.cwd),
         provider: modelBundle.choice?.provider ?? this.options.provider,
         model: modelBundle.choice?.model ?? this.options.model,
@@ -13819,8 +13607,6 @@ export class TaskService {
       let businessModuleKnowledge: MaterializedBusinessModuleKnowledge = {
         entries: [], skill_paths: [], warnings: [],
       };
-      let engineeringKnowledge: ReturnType<typeof materializeEngineeringKnowledge>
-        = { entries: [], warnings: [] };
       let hasDependencyHandoff = false;
       let knowledgeMaterialized = false;
       let activeWorkflowProfile = task.summary.workflow_profile;
@@ -13984,15 +13770,6 @@ export class TaskService {
           this.options.log?.(
             `[business-module-knowledge] 任务 ${task.summary.id}: ${warning}`);
         }
-        engineeringKnowledge = materializeEngineeringKnowledge({
-          selected: task.summary.engineering_knowledge,
-          taskWorkspace: workspace,
-          runtimeWorkspace: cwd,
-        });
-        for (const warning of engineeringKnowledge.warnings) {
-          this.options.log?.(
-            `[engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
-        }
         knowledgeMaterialized = true;
         // 仓库可在受版本控制的 .mae-flow-defaults.json 里声明一条
         // 「执行补充」。只在首次 clone 后读取一次,作为 repository 层
@@ -14025,8 +13802,7 @@ export class TaskService {
         }
         activeWorkflowProfile = reconcileWorkflowProfileAssets(
           task.summary.workflow_profile,
-          [...businessModuleKnowledge.entries.map((item) => item.relative_path),
-            ...engineeringKnowledge.entries.map((item) => item.relative_path)],
+          businessModuleKnowledge.entries.map((item) => item.relative_path),
         );
         // 定格方案必须先于 bootstrapManaged 落地：bootstrap 会机械执行
         // init/current，内核要在第一条阶段指令里就读到它。文件是下单时
@@ -14266,19 +14042,9 @@ export class TaskService {
           this.options.log?.(
             `[business-module-knowledge] 任务 ${task.summary.id}: ${warning}`);
         }
-        engineeringKnowledge = materializeEngineeringKnowledge({
-          selected: task.summary.engineering_knowledge,
-          taskWorkspace: workspace,
-          runtimeWorkspace: cwd,
-        });
-        for (const warning of engineeringKnowledge.warnings) {
-          this.options.log?.(
-            `[engineering-knowledge] 任务 ${task.summary.id}: ${warning}`);
-        }
         activeWorkflowProfile = reconcileWorkflowProfileAssets(
           task.summary.workflow_profile,
-          [...businessModuleKnowledge.entries.map((item) => item.relative_path),
-            ...engineeringKnowledge.entries.map((item) => item.relative_path)],
+          businessModuleKnowledge.entries.map((item) => item.relative_path),
         );
       }
       const workflowSupplement = workflowProfilePrompt(
@@ -14452,7 +14218,6 @@ export class TaskService {
         repositorySkillPaths,
         repositorySkillResources,
         businessModuleKnowledge,
-        engineeringKnowledge,
         knowledgeTrace: this.knowledgeTrace(task, cwd),
         currentStep: () => this.currentStepLabel(task),
         // 上下文撑爆时自愈压缩用的锚:与主动压缩同一个内核现场,

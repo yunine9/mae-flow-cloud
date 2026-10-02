@@ -9,7 +9,6 @@ export interface ComponentRepository {
   enabled: boolean;
 }
 export interface ComponentResearchRecord {
-  source_policy?: "code-only-v1";
   pipeline?: { tasks: Array<{ id: string; title: string; status: string; feedback?: string }> };
   material_ids?: string[];
   update_document_revision?: string;
@@ -18,13 +17,10 @@ export interface ComponentResearchRecord {
   skill?: { name: string; digest: string };
   section_history?: Array<{ at: string; operator: string; section: ComponentResearchSection }>;
   update_document_id?: string;
-  mode?: "topic" | "all" | "component";
+  mode?: "topic" | "all";
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
   review_turns?: ComponentResearchReviewTurn[];
-  parent_id?: string;
-  children?: ComponentResearchRecord[];
-  progress?: { total: number; done: number; failed: number; cancelled: number; running: number; queued: number; adopted: number };
   component: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;

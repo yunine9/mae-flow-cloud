@@ -9,13 +9,18 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync 
 import { retryKnowledgeDeletions } from "./componentKnowledgeDeletion.ts";
 import { join } from "node:path";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
-import { listKnowledgeCandidateCatalog } from "./knowledgeCandidates.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
 import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
-import { consolidateSearchCatalog, type KnowledgeApplicability } from "./knowledgeConsolidationStore.ts";
+export interface KnowledgeApplicability {
+  modules: string[];
+  repositories: string[];
+  languages: string[];
+  versions: string[];
+  localPaths?: string[];
+}
 
 export interface KnowledgeContext {
   repo: string;
@@ -66,7 +71,7 @@ export function resolveKnowledgeModules(dataDir: string, context: Pick<Knowledge
   return { modules, warnings };
 }
 
-export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false, raw = false): {
+export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false): {
   assets: SearchableKnowledge[]; warnings: string[];
 } {
   const assets: SearchableKnowledge[] = [];
@@ -86,26 +91,9 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
       content: doc.content, revision: doc.revision, productVersions: doc.product_versions,
       applicability: {modules:doc.module_ids,repositories:doc.repositories,languages:doc.technologies,versions:doc.product_versions} });
   }
-  const candidates = listKnowledgeCandidateCatalog(dataDir);
-  warnings.push(...candidates.warnings);
-  for (const row of candidates.candidates) {
-    if (row.status !== "published" || row.nature !== "engineering" || row.form === "skill"
-        || !matchesRepos(row.repositories)
-        || (row.business_module_ids.length && !row.business_module_ids.some(id => moduleIds.has(id)))) continue;
-    // Do not hard-filter technologies based on an incomplete startup profile.
-    // Preserve them in applicability text for the agent's current action.
-    assets.push({ id: `team:${row.id}`, title: row.title, kind: row.form,
-      scope: row.repositories.length ? `代码仓：${row.repositories.join("、")}`
-        : row.business_module_ids.length ? `业务模块：${row.business_module_ids.join("、")}` : "团队通用",
-      summary: row.summary, whenToUse: [row.when_to_use, row.technologies.length
-        ? `适用技术：${row.technologies.join("、")}` : ""].filter(Boolean).join("；"),
-      content: row.content, revision: row.digest, productVersions: knowledgeProductVersions(row.content),
-      applicability:{modules:row.business_module_ids,repositories:row.repositories,languages:row.technologies,versions:knowledgeProductVersions(row.content)} });
-  }
   for (const module of modules) for (const asset of module.assets) {
     if (asset.status !== "published" || asset.form === "skill" || !matchesRepos(asset.repositories)) continue;
-    // Published business candidates are materialized in their module. Do not
-    // offer a stale duplicate copy from the submission record.
+    // 模块库是业务资产的正文来源，检索只读取已发布的当前版本。
     try {
       const doc = readBusinessKnowledgeAsset(dataDir, module.id, asset.id);
       assets.push({ id: `module:${module.id}:${asset.id}`, title: asset.title, kind: asset.form,
@@ -130,7 +118,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   // visible as unconfirmed rather than being guessed from document revisions.
   const scoped = assets.filter(a => !context.productVersion || !a.productVersions.length
     || a.productVersions.includes(context.productVersion));
-  return {assets:raw ? scoped : [...consolidateSearchCatalog(dataDir, scoped.filter(a => !isComponentKnowledge(a))), ...scoped.filter(isComponentKnowledge)],warnings};
+  return {assets: scoped,warnings};
 }
 
 export interface KnowledgeHit {
@@ -172,14 +160,6 @@ export class KnowledgeSearch {
     return state?.key === key ? state : { state: "queued" };
   }
 
-  async searchDocument(id: string, query: string) {
-    return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 5, id);
-  }
-
-  async searchLibrary(query: string) {
-    return this.search({ repo: "", repositories: [], moduleIds: [] }, query, 10, undefined, true);
-  }
-
   componentContext(context: KnowledgeContext) {
     const catalog = this.catalog(context), derived = componentCards(catalog.assets);
     return { mode: derived.cards.length <= 12 ? "full" : "search", count: derived.cards.length,
@@ -217,10 +197,10 @@ export class KnowledgeSearch {
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
-  async search(context: KnowledgeContext, query: string, limit = 5, onlyId?: string, library = false, componentsOnly = false): Promise<KnowledgeSearchResult> {
+  async search(context: KnowledgeContext, query: string, limit = 5, componentsOnly = false): Promise<KnowledgeSearchResult> {
     const readCatalog = () => {
-      const value = onlyId || library ? collectSearchableKnowledge(this.dataDir, context, true) : this.catalog(context);
-      return { ...value, assets: value.assets.filter(a => (!onlyId || a.id === onlyId) && (!componentsOnly || isComponentKnowledge(a))) };
+      const value = this.catalog(context);
+      return { ...value, assets: value.assets.filter(a => !componentsOnly || isComponentKnowledge(a)) };
     };
     const catalog = readCatalog(), derived = this.sidecar ? this.registerCards(catalog.assets) : componentCards(catalog.assets);
     const language = componentQueryLanguage(query);

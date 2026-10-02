@@ -1,6 +1,6 @@
 export interface CaseResult {
   id: string;
-  kind: "retrieval" | "guard" | "agent" | "scope" | "generation" | "consolidation";
+  kind: "retrieval" | "guard" | "agent" | "scope" | "generation";
   passed: boolean;
   elapsed_ms: number;
   error?: string;
@@ -42,7 +42,6 @@ export function summarize(cases: CaseResult[]) {
       invalid_output: cases.filter(c => c.kind === "generation" && c.outcome === "invalid_output").length,
       execution_errors: cases.filter(c => c.kind === "generation" && c.outcome === "execution_error").length,
       semantic_accuracy: null },
-    consolidation: { total: cases.filter(c => c.kind === "consolidation").length, passed: cases.filter(c => c.kind === "consolidation" && c.passed).length },
     agents: ["with-knowledge", "without-knowledge", "generated-context"].map(arm => {
       const rows = cases.filter(c => c.kind === "agent" && c.arm === arm);
       return { arm, total: rows.length, passed: rows.filter(c => c.passed).length };

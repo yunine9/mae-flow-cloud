@@ -8,16 +8,15 @@ import { CloudSession } from "../src/sessionDriver.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
-import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
 
-for (const probe of [false, true]) test(`任意领域 Skill 自行安排写作与只读评审，源码、资料和豆包可组合使用（${probe ? "单模块" : "正式"}）`, async () => {
+test("任意领域 Skill 自行安排写作与只读评审，源码、资料和豆包可组合使用", async () => {
   const root = mkdtempSync(join(tmpdir(), "domain-skill-agent-")), repo = join(root, "repo"), cli = join(root, "doubao");
   const env = { MAE_FLOW_WXDOUBAO_BIN: cli, WXDOUBAO_USERID: "fixture-user", WXDOUBAO_TOKEN: "fixture-credential" };
   const previous = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]])); Object.assign(process.env, env);
   mkdirSync(repo); execFileSync("git", ["init", "-q", repo]); mkdirSync(join(repo, "src"));
   writeFileSync(join(repo, "src/order.ts"), "export function cancel() { return 'reverse'; }\n");
-  mkdirSync(join(repo, "docs")); writeFileSync(join(repo, "docs/old.md"), "OLD_PROBE_DOCUMENT"); writeFileSync(join(repo, "AGENTS.md"), "OLD_PROBE_AGENT");
+  mkdirSync(join(repo, "docs")); writeFileSync(join(repo, "docs/old.md"), "旧文档内容"); writeFileSync(join(repo, "AGENTS.md"), "仓内说明");
   execFileSync("git", ["-C", repo, "add", "."]); execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "fixture"]);
   const revision = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   writeFileSync(cli, `#!${process.execPath}\nconsole.log(JSON.stringify({result:{structuredContent:{text:"AR20260001：历史重复扣款后改用冲正，失败需人工核对",url:"https://example.test/decision"}}}));\n`, { mode: 0o700 });
@@ -42,7 +41,7 @@ for (const probe of [false, true]) test(`任意领域 Skill 自行安排写作�
       assert.equal(config.excludeAgentFiles, true); assert.equal(config.allowedTools.includes("bash"), false);
       assert.match(prompt, /METHOD_A/); assert.doesNotMatch(prompt, /先用.*phase-|前两个模块|knowledge_research|知识正文写作要求/);
       if (!data.step) {
-        assert.equal(config.resumeSession, true); assert.equal(data.probe?.module, probe ? "订单" : undefined);
+        assert.equal(config.resumeSession, true);
         await call("business_knowledge", { tool: "knowledge_search", question: "ROOT_SHARED AR20260001 取消约束" });
         await call("knowledge_work", { action: "schedule", steps: [
           { id: "answer", title: "解释规则", instructions: "读资料及源码后写一份问答", depends_on: [], readonly: false },
@@ -61,7 +60,6 @@ for (const probe of [false, true]) test(`任意领域 Skill 自行安排写作�
         const raw = await call("knowledge_evidence", { action: "read", evidence_id: shared.entries[0].evidence_id });
         assert.match(raw.content, /AR20260001/);
         for (const tool of ["ar_fur_info", "ar_idp_docs", "ar_history_similar"]) await call("business_knowledge", { tool, ar_code: "AR20260001" });
-        if (probe) await call("component_source", { action: "read", component_id: "repo-1", path: "docs/old.md", include_platform: true }, true);
         // component_source returns plain source, so use the raw tool here.
         const source = await config.extraTools.find((t: any) => t.name === "component_source").execute("read", { action: "read", component_id: "repo-1", path: "src/order.ts" }, new AbortController().signal);
         assert.equal(!!source.isError, false);
@@ -82,8 +80,7 @@ for (const probe of [false, true]) test(`任意领域 Skill 自行安排写作�
   });
   const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => ({ root: repo, revision }) }));
   try {
-    createBusinessModule(root, { id: "trade", name: "交易", description: "交易", owner: "expert", repositories: ["https://example.test/orders.git"] }, "expert");
-    const job = probe ? service.createProbe({ module_id: "trade", probe_module: "订单", instructions: "只研究订单取消，不读取 legacy/payment.ts；正文只写业务规则", material_ids: [material.id] }, "expert") : service.create({ issue_no: "REQ-skill", title: "订单", scope: "取消", instructions: "只研究订单取消，不读取 legacy/payment.ts；正文只写业务规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/orders.git", branch: "main" }] }, "expert");
+    const job = service.create({ issue_no: "REQ-skill", title: "订单", scope: "取消", instructions: "只研究订单取消，不读取 legacy/payment.ts；正文只写业务规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/orders.git", branch: "main" }] }, "expert");
     for (let i = 0; i < 1000 && !["done", "failed"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
     const final = service.get(job.id); assert.equal(final.status, "done", final.error);
     assert.equal(final.documents.length, 1); assert.equal(final.documents[0].content, body); assert.equal(sessions.length, 3);

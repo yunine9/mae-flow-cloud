@@ -10,22 +10,19 @@ import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } 
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { componentKnowledgeCatalog } from "../src/componentKnowledgeCatalog.ts";
 import { componentKnowledgeArtifacts } from "../src/componentKnowledgeArtifacts.ts";
-import { readConsolidation, writeConsolidation } from "../src/knowledgeConsolidationStore.ts";
 import { componentKnowledgeRoute } from "../src/componentKnowledgeRoutes.ts";
 import { MemorySidecar } from "../src/memorySidecar.ts";
 
 const mirror = (dir: string, id: string) => join(dir, "corpus", "_knowledge", `${createHash("sha256").update(id).digest("hex")}.md`);
 function seedMirror(dir: string, id: string) { const path = mirror(dir, id); mkdirSync(join(dir, "corpus", "_knowledge"), { recursive: true }); writeFileSync(path, `---\nknowledge_id: "${id}"\nasset_status: published\n---\n# 线程池\n使用线程池执行后台任务。\n`); return path; }
 
-test("删除历史与新版组件知识：正文、派生检查、全文副本和已整理专题的索引一并退出，其他资料保留", async () => {
+test("删除历史与新版组件知识：正文、派生检查、全文副本的索引一并退出，其他资料保留", async () => {
   const f = consumptionFixture();
   try {
     const current = f.publish(), legacy = saveKnowledgeDocument(f.data, { title: "历史组件知识", content: "旧格式正文", active: false, research_source: { job_id: "cr-old" } }, "user");
     const ordinary = saveKnowledgeDocument(f.data, { title: "业务资料", content: "业务规则" }, "user");
     const mapping = componentKnowledgeCatalog(f.data, f.context).paradigms[0].mapping_id;
-    const state = readConsolidation(f.data);
-    state.topics.push({ id: "topic-old", published: { sources: [{ id: legacy.id, revision: legacy.revision }] } } as any); writeConsolidation(f.data, state);
-    const paths = [current.id, legacy.id, "topic-old"].map(id => seedMirror(f.data, id));
+    const paths = [current.id, legacy.id].map(id => seedMirror(f.data, id));
     const kept = seedMirror(f.data, ordinary.id), removed: string[] = [];
     const search = new KnowledgeSearch(f.data, { remove: async (path: string) => { assert.equal(existsSync(path), false); removed.push(path); return true; } } as any);
     const selected = [current, legacy].map(({ id, revision }) => ({ id, revision }));

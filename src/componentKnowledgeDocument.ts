@@ -1,7 +1,7 @@
 import type { SearchableKnowledge } from "./knowledgeSearch.ts";
 import type { ComponentPolicy } from "./componentKnowledgeTypes.ts";
 import { effectiveComponentPolicy } from "./componentKnowledgePolicy.ts";
-import { validateComponentParadigm, readComponentArtifact, type ComponentParadigm } from "./componentParadigms.ts";
+import { validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
 
 export interface PublishedComponentParadigm extends ComponentParadigm {
   mapping_id: string; source_digest: string; policy: ComponentPolicy;
@@ -15,11 +15,6 @@ export function publishedComponentParadigms(asset: Pick<SearchableKnowledge, "id
   if (!front || !/^schema:.*mfc\.component-/m.test(front[1])) return [];
   const lines = asset.content.split(/\r?\n/);
   const source = { document_id: asset.id, document_revision: asset.revision, product_versions: asset.productVersions, source_repositories: [] as string[], mapping_id: "", source_digest: "", policy: effectiveComponentPolicy(undefined, "") };
-  if (/^schema: "mfc\.component-paradigm\/v1"$/m.test(front[1])) {
-    const doc = readComponentArtifact(asset.content);
-    return [{ ...doc.paradigm, id: doc.id, title: doc.title, revision: doc.revision, ...source,
-      start_line: front[0].split(/\r?\n/).length, end_line: lines.length }];
-  }
   if (!/^schema: "mfc\.component-guide\/v1"$/m.test(front[1])) throw new Error("不支持的组件知识 schema");
   const headers = front[1].split(/\r?\n/);
   if (headers.length !== 2 || !headers[1].startsWith("component_paradigms: ")) throw new Error("组件联合文档头部格式不完整或包含重复字段");

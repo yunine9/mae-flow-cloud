@@ -91,10 +91,8 @@ export class KnowledgeMrPublisher {
       else if (previous.sync_state !== "done") throw new Error(previous.sync_error || "已合入文档尚未同步，请重试同步后继续更新");
     }
     const continueBranch = previous && !["merged", "closed", "unchanged"].includes(oldState ?? "");
-    const newBranch = job.cleanup_only
-      ? `${target.branch}_${identity.credential.username.split("\\").pop()}_${issue}`
-      : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
-    const branch = continueBranch && (!job.cleanup_only || previous!.mr_attempted || previous!.url) ? previous!.branch : newBranch;
+    const newBranch = `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
+    const branch = continueBranch ? previous!.branch : newBranch;
     const docs: Array<DomainDocument & { metadata_for?: string }> = job.documents.filter(d => d.selected && d.target_id === target.id).flatMap(doc => {
       if (!job.component_research_id) return [doc];
       const parts = componentArchiveParts(doc.content), metadata = doc.component_metadata ?? parts.component_metadata;
@@ -119,8 +117,8 @@ export class KnowledgeMrPublisher {
     // 未核对或核对的已不是当前远端时给出去哪核对的错误，在保存尝试记录前拒绝，免得差异记录被新分支挤进历史。
     const unreviewed = diverged ? docs.filter(doc => diverged!.has(doc.path) && (!doc.remote_review?.reviewed || doc.remote_review.target_content !== diverged!.get(doc.path))) : [];
     if (unreviewed.length) throw new Error(divergedMessage(documentPaths(docs, unreviewed.map(doc => doc.path))));
-    const requestedCleanup = (docs.length || job.cleanup_only) ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
-    const cleanup = requestedCleanup && (job.cleanup_only || ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id)) ? requestedCleanup : undefined;
+    const requestedCleanup = docs.length ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
+    const cleanup = requestedCleanup && ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id) ? requestedCleanup : undefined;
     if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
     if (!cleanup && !diverged && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
     // 新建 MR 使用关联单据的准确描述；已有 MR 继续复用，不改写远端标题。
@@ -199,7 +197,7 @@ export class KnowledgeMrPublisher {
       }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
       if (!remote && tree === before) { publication.cleanup_id = cleanup?.id ?? publication.cleanup_id; publication.state = "unchanged"; publication.revision = parent; const result = await this.refresh(job, publication, operator); save(result); return result; }
-      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", cloudCommitSubject(issue, "feat", job.cleanup_only ? "清理萃取前旧知识" : `更新${job.title}知识`)])).trim();
+      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", cloudCommitSubject(issue, "feat", `更新${job.title}知识`)])).trim();
       publication.revision = sha; saveAttempt();
       if (sha !== remote) await git(["push", target.repository, `${sha}:refs/heads/${branch}`]);
       publication.cleanup_id = cleanup?.id ?? publication.cleanup_id;

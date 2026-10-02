@@ -607,7 +607,7 @@ export interface WorkflowPlanItem {
 }
 
 export interface WorkflowAssetRef {
-  registry: "business_knowledge" | "engineering_knowledge" | "team_skill"
+  registry: "business_knowledge" | "team_skill"
     | "repository_skill" | "platform_capability";
   id: string;
   version: string;
@@ -973,9 +973,6 @@ export interface TaskSummary {
   business_modules?: SelectedBusinessModule[];
   business_module?: { id: string; name: string };
   business_module_history?: Array<{ at: string; by: string; from?: { id: string; name: string }; to?: { id: string; name: string } }>;
-  engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
-    digest: string; bytes: number; snapshot_path: string;
-  }>;
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 持续检视明细；原始材料仍按来源留在各自账本。 */
@@ -1220,75 +1217,6 @@ export async function getKnowledgeInsights(): Promise<TeamKnowledgeInsights> {
   return parseJson(response);
 }
 
-export interface KnowledgeCandidateRecord {
-  id: string;
-  source_task_id: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  nature: Exclude<KnowledgeNature, "unclassified">;
-  form: KnowledgeForm;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-  content: string;
-  digest: string;
-  bytes: number;
-  status: "pending" | "published" | "rejected";
-  submitted_at: string;
-  submitted_by: string;
-  decided_at?: string;
-  decided_by?: string;
-  decision_note?: string;
-  published_target?: string;
-}
-
-export async function createKnowledgeCandidate(taskId: string, input: {
-  title: string;
-  summary: string;
-  when_to_use: string;
-  nature: Exclude<KnowledgeNature, "unclassified">;
-  form: KnowledgeForm;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-  content: string;
-}): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/knowledge-candidates`, {
-    method: "POST", body: JSON.stringify(input),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function listKnowledgeCandidates(): Promise<KnowledgeCandidateRecord[]> {
-  const response = await fetch("/knowledge-candidates");
-  if (!response.ok) throw new Error(await errorText(response));
-  return (await parseJson<{ candidates: KnowledgeCandidateRecord[] }>(response)).candidates;
-}
-
-export async function publishKnowledgeCandidate(
-  id: string,
-  input: { asset_id?: string; directory?: string; note?: string } = {},
-): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/publish`, {
-    method: "POST", body: JSON.stringify(input),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function rejectKnowledgeCandidate(
-  id: string,
-  reason: string,
-): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/reject`, {
-    method: "POST", body: JSON.stringify({ reason }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
 export interface LaunchBlocker {
   key: string;
@@ -1323,7 +1251,6 @@ export interface LaunchOptions {
   workflow_standard?: WorkflowStandardBase;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
-  engineering_knowledge: EngineeringKnowledgeLaunchOption[];
   team_skills: HostSkillShelfEntry[];
 }
 
@@ -1349,19 +1276,13 @@ export interface LaunchBusinessKnowledgePreview
   bytes: number;
 }
 
-export interface LaunchEngineeringKnowledgePreview
-  extends EngineeringKnowledgeLaunchOption, LaunchKnowledgeMatchedScope {
-  digest: string;
-  bytes: number;
-}
-
 export interface LaunchTeamSkillPreview
   extends HostSkillShelfEntry, LaunchKnowledgeMatchedScope {
   package_digest: string;
 }
 
 export interface LaunchKnowledgePreviewNotice {
-  source: "business_modules" | "engineering_knowledge" | "team_skills"
+  source: "business_modules" | "team_skills"
     | "repository_profiles";
   code: "catalog_unavailable" | "catalog_warning" | "limit_applied"
     | "selection_invalid";
@@ -1376,20 +1297,11 @@ export interface LaunchKnowledgePreview {
     technologies: string[];
     business_module_ids: string[];
     workflow_business_module_ids: string[];
-    workflow_engineering_knowledge_ids: string[];
     workflow_team_skill_ids: string[];
   };
   business_knowledge: LaunchBusinessKnowledgePreview[];
-  engineering_knowledge: LaunchEngineeringKnowledgePreview[];
   team_skills: LaunchTeamSkillPreview[];
   selection_digest: string;
-  limits: { engineering_knowledge: {
-    max_assets: number;
-    max_total_bytes: number;
-    matched: number;
-    selected: number;
-    omitted: number;
-  } };
   warnings: LaunchKnowledgePreviewNotice[];
   errors: LaunchKnowledgePreviewNotice[];
 }
@@ -1413,17 +1325,6 @@ export async function getLaunchKnowledgePreview(input: {
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
-}
-
-export interface EngineeringKnowledgeLaunchOption {
-  id: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  form: Exclude<KnowledgeForm, "skill">;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
 }
 
 export interface RepositoryProfile {
@@ -1918,8 +1819,6 @@ export interface HostSkillShelfEntry {
   /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
   loadable: boolean;
   effect?: HostSkillEffect;
-  /** 待裁决的修订候选数(沉淀环起草、尚未采纳/丢弃的草稿)。 */
-  candidates?: number;
 }
 
 export interface HostSkillShelf {
@@ -2011,20 +1910,6 @@ export async function getSkillDocument(
   return parseJson(response);
 }
 
-export async function uploadSkill(
-  directory: string,
-  files: SkillUploadFile[],
-  metadata?: SkillKnowledgeMetadataInput,
-): Promise<SkillOperationRecord> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
-    method: "PUT",
-    body: JSON.stringify({ files, ...metadata }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-/** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
 export interface SkillExtractionJob {
   id: string;
   status: "running" | "done" | "failed";
@@ -2075,19 +1960,6 @@ export async function submitSkill(
     `/skills/${encodeURIComponent(directory)}/submissions`, {
       method: "POST",
       body: JSON.stringify({ files, ...metadata }),
-    });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function updateSkillLanguages(
-  directory: string,
-  languages: string[],
-): Promise<SkillOperationRecord> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/languages`, {
-      method: "PATCH",
-      body: JSON.stringify({ languages }),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
@@ -2168,70 +2040,6 @@ export async function rollbackSkill(
     });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
-}
-
-/** 修订候选(沉淀环):agent 从任务现场起草的 SKILL.md 草稿。 */
-export interface SkillCandidateRecord {
-  id: string;
-  directory: string;
-  created_at: string;
-  operator: string;
-  status: "drafted" | "adopted" | "discarded";
-  evidence_tasks: string[];
-  adopted_at?: string;
-  adopted_by?: string;
-}
-
-export async function distillSkill(
-  directory: string,
-): Promise<SkillCandidateRecord> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/distill`, { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function listSkillCandidates(
-  directory: string,
-): Promise<SkillCandidateRecord[]> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/candidates`);
-  if (!response.ok) throw new Error(await errorText(response));
-  return (await parseJson<{ candidates?: SkillCandidateRecord[] }>(response)).candidates ?? [];
-}
-
-export async function getSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<{
-  record: SkillCandidateRecord;
-  skill: string;
-  notes: string;
-  evidence: string;
-}> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}`);
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function adoptSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<SkillOperationRecord> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}/adopt`, { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function discardSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<void> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!response.ok) throw new Error(await errorText(response));
 }
 
 export interface TeamKnowledgeInsights {

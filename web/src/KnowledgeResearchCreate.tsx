@@ -31,7 +31,7 @@ export function KnowledgeResearchCreate({ moduleKey = "", initialKind, onBack, o
     } catch(e) { setError((e as Error).message); } finally { setBusy(false); }
   }
   const canCreate = mode === "domain" ? !!module && !!issue.trim() && !!issueDescription.trim() && (!module.repositories.length || !!branch.trim()) : mode === "component" ? !!language && !!selectedComponents.length && (scope === "all" || !!goal.trim()) : !!destination && !!repo.trim() && !!goal.trim();
-  return <section className="knowledge-create" aria-label="研究知识"><header className="knowledge-create-header"><div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2>研究知识</h2></div>{mode !== "skill-extraction" && <ExtractionSkillEditor kind={mode} />}</header>
+  return <section className="knowledge-create" aria-label="研究知识"><header className="knowledge-create-header"><div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2>研究知识</h2></div>{mode === "domain" && <ExtractionSkillEditor kind={mode} />}</header>
     <div className="knowledge-create-modes" role="group" aria-label="研究方式">{([["domain","业务知识",BookOpen],["component","组件用法",Boxes],["skill-extraction","制作 Skill",Puzzle]] as const).map(([id,label,Icon]) => <button key={id} type="button" aria-pressed={mode===id} onClick={() => {setMode(id);setError("");}}><Icon size={16} />{label}</button>)}</div>
     {error && <p role="alert" className="text-danger mb-4">{error}</p>}
     <form onSubmit={e => { e.preventDefault(); if (canCreate && !busy) void create(); }}><div className="knowledge-create-grid"><div className="knowledge-create-fields">

@@ -33,12 +33,12 @@ function state(status: string): Pick<KnowledgeTaskRow, "status_label" | "group">
 
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
   const row: KnowledgeTaskRow = {
-    id: job.id, kind: "domain", title: job.title, scope: job.probe ? `效果验证 · ${job.probe.module}` : job.scope,
+    id: job.id, kind: "domain", title: job.title, scope: job.scope,
     operator: job.operator, created_at: validTime(job.created_at), status: job.status, ...state(job.status),
     stage: job.stage, error: job.error, latest_note: latestKnowledgeResearchNote(job.evidence),
   };
   if (job.status === "running") row.status_label = ["revise", "update"].includes(job.turns.at(-1)?.mode ?? "") ? "修改中" : "研究中";
-  if (job.status !== "done" || job.probe) return row;
+  if (job.status !== "done") return row;
   const pendingProposal = job.turns.some(turn => turn.proposals.some(proposal => proposal.status === "pending"));
   const unpublished = job.documents.some(document => {
     if (document.published_document_revision !== undefined) return document.published_document_revision !== document.revision;
@@ -64,9 +64,8 @@ export function componentKnowledgeTask(record: ResearchRecord): KnowledgeTaskRow
   };
   if (record.status === "running") row.status_label = record.review_turns?.some(turn => ["queued", "running"].includes(turn.status) && turn.mode !== "discuss") ? "修改中" : "研究中";
   if (record.status !== "done" || record.challenge) return row;
-  const children = record.children;
-  const published = record.document_id || (children?.length && children.every(child => !!child.document_id));
-  const draft = record.draft || record.document || children?.some(child => child.draft || child.document);
+  const published = record.document_id;
+  const draft = record.draft || record.document;
   if (published) return { ...row, status_label: "已发布" };
   if (draft || record.review_turns?.some(turn => turn.proposal?.status === "pending")) return { ...row, status_label: "待检视", group: "attention" };
   return row;
@@ -96,7 +95,7 @@ export function skillSubmissionTask(record: SkillSubmissionRecord): KnowledgeTas
 
 export interface KnowledgeTaskSources {
   dataDir: string;
-  domain: { list(probes?: boolean): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined };
+  domain: { list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined };
   component: { list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord };
   skillExtractionJob(id: string): ExtractionJobRecord | undefined;
 }
@@ -108,7 +107,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
     try { read(); } catch { warnings.push(`${label}暂时无法读取，请在原任务入口查看`); }
   };
   collect("领域萃取", () => {
-    for (const job of [...sources.domain.list(), ...sources.domain.list(true)]) tasks.push(domainKnowledgeTask(sources.domain.get(job.id)));
+    for (const job of sources.domain.list()) tasks.push(domainKnowledgeTask(sources.domain.get(job.id)));
   });
   collect("基础组件萃取", () => {
     for (const record of sources.component.list()) {
@@ -120,12 +119,6 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
           if (status === "failed") Object.assign(row, { status_label: "已发布 · 归档待处理", group: "attention" });
           else if (status === "running") row.status_label = "已发布 · 归档中";
         }
-      }
-      // 旧版批量记录的子任务动态不在父记录中；保留其真实发生时间。
-      if (!row.latest_note && record.child_ids?.length) {
-        const notes = record.child_ids.map(id => latestKnowledgeResearchNote(sources.component.get(id).evidence))
-          .filter((note): note is NonNullable<typeof note> => !!note);
-        row.latest_note = notes.filter(note => note.at).sort((a, b) => Date.parse(b.at!) - Date.parse(a.at!))[0];
       }
       tasks.push(row);
     }

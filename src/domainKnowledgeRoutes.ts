@@ -1,4 +1,3 @@
-import { generatedAgentRules } from "./knowledgeCleanup.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { join } from "node:path";
 import type { TaskService } from "./taskService.ts";
@@ -19,23 +18,11 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
       if (request.method === "GET" && parts[1]) return json(response, 200, readKnowledgeMaterial(materialRoot, parts[1]));
     } else {
       const manager = service.getDomainKnowledgeExtraction();
-      if (parts[1] === "probes" && !parts[2]) {
-        if (request.method === "GET") return json(response, 200, { records: manager.list(true) });
-        if (request.method === "POST") return json(response, 202, manager.createProbe(await readBody(request, 3 * 1024 * 1024), operator));
-      }
-      if (request.method === "GET") return json(response, 200, parts[1] ? manager.get(parts[1]) : { records: manager.list(), knowledge_target: readKnowledgeRepoConfig(service.options.dataDir) ?? null });
+      if (request.method === "GET" && !parts[2]) return json(response, 200, parts[1] ? manager.get(parts[1]) : { records: manager.list(), knowledge_target: readKnowledgeRepoConfig(service.options.dataDir) ?? null });
       if (request.method === "POST") {
         const body = await readBody(request, 3 * 1024 * 1024);
         if (!parts[1]) return json(response, 202, manager.create(body, operator));
         const id = parts[1];
-        if (parts[2] === "source-cleanup") return json(response, 200, await manager.sourceCleanupAction(id, parts[3], body, operator));
-        if (parts[2] === "cleanup-template") {
-          const job = manager.get(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === body.target_id);
-          if (!target) throw new Error("请选择规范文件的目标仓");
-          return json(response, 200, { content: generatedAgentRules(job, target, String(body.path || "AGENTS.md")) });
-        }
-        if (parts[2] === "cleanup-preview") return json(response, 200, await manager.previewCleanup(id, body.target_id, body, operator));
-        if (parts[2] === "cleanup-confirm") return json(response, 200, manager.confirmCleanup(id, body.plan_id, body.confirmed, body.preserve_paths));
         if (parts[2] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no, body.issue_description));
         if (parts[2] === "archive-targets") return json(response, 200, manager.configureArchive(id, body));
         if (parts[2] === "run") return json(response, 202, manager.run(id, body, operator));
@@ -58,5 +45,8 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
       }
     }
     return json(response, 404, { error: "未知知识萃取操作" });
-  } catch (error) { return json(response, 400, { error: error instanceof Error ? error.message : "知识萃取操作失败" }); }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "知识萃取操作失败";
+    return json(response, message === "领域萃取任务不存在或已删除" ? 404 : 400, { error: message });
+  }
 }

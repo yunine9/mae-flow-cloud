@@ -237,7 +237,7 @@ export function resolveWorkspaceTarget(
 
 function initialView(user: AuthUser): View {
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
-  if (["kbPage", "knowledgeDocument", "platformSkill", "knowledgeDocuments", "knowledgePage", "componentResearch", "domainExtraction"].some(key => new URLSearchParams(location.search).has(key))) return "library";
+  if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) return "library";
   if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
@@ -1351,9 +1351,9 @@ export function App() {
     // 不变量对表:进出页签、history 同步写完后按当前 URL 重读快照——
     // 进入问题处理拿到深链 id(有则直达工作台),离开则随归位清成空串。
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
-    if (["kbPage", "knowledgeDocument", "platformSkill", "knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments"].some(key => new URLSearchParams(location.search).has(key))) {
+    if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "knowledgePage", "componentResearch", "domainExtraction", "knowledgeDocuments", "researchDocument", "component", "knowledgeProbe", "knowledgeView", "platformSkill"]) url.searchParams.delete(key);
+      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());

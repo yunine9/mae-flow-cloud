@@ -653,32 +653,6 @@ export function updateHostSkillKnowledgeMetadata(
   });
 }
 
-/** 兼容已经发布的语言编辑接口；新模型统一写 technologies。 */
-export function updateHostSkillLanguages(
-  dataDir: string,
-  directory: string,
-  languages: string[],
-  operator: string,
-): Promise<SkillOperationRecord> {
-  const current = readHostSkillDocument(dataDir, directory);
-  const previous = readSkillKnowledgeMetadata(current.content);
-  let normalized: KnowledgeAssetMetadata;
-  try {
-    normalized = normalizeKnowledgeAssetMetadata({
-      nature: previous.nature === "unclassified" ? "engineering" : previous.nature,
-      form: "skill",
-      business_module_ids: previous.business_module_ids,
-      repositories: previous.repositories,
-      technologies: languages,
-    }, { fixedForm: "skill" });
-  } catch (error) {
-    throw new SkillLibraryError(
-      error instanceof Error ? error.message : String(error));
-  }
-  return updateHostSkillKnowledgeMetadata(
-    dataDir, directory, normalized, operator);
-}
-
 /** 上传载荷 → 暂存目录 + 完整验收(路径/密钥/预算/装载器)。上架与
  * 提交待审共用同一道闸:待审区也是可读区,不合格的包一步都不许进。 */
 function materializeToStaging(

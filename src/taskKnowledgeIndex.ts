@@ -21,9 +21,6 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
   MaterializedBusinessKnowledgeEntry,
 } from "./businessModuleRuntime.ts";
-import type {
-  MaterializedEngineeringKnowledgeEntry,
-} from "./engineeringKnowledgeRuntime.ts";
 
 const INDEX_DIR = ".mae-flow-work";
 const INDEX_FILE = "TASK_KNOWLEDGE_INDEX.md";
@@ -65,38 +62,6 @@ function readablePath(
   }
 }
 
-function engineeringSection(
-  workspace: string,
-  entries: MaterializedEngineeringKnowledgeEntry[],
-  warnings: string[],
-): string[] {
-  const labels = { document: "文档", rule: "规则", example: "示例" } as const;
-  const lines: string[] = [];
-  for (const item of entries) {
-    const path = readablePath(workspace, item.path);
-    if (!path) {
-      warnings.push(`${item.title}：工程知识正文不在当前 Agent 工作区，未加入索引`);
-      continue;
-    }
-    lines.push(
-      `- ${oneLine(item.title)}（${labels[item.form]}）`,
-      `  - 摘要：${oneLine(item.summary)}`,
-      `  - 何时读取：${oneLine(item.when_to_use)}`,
-      ...(item.technologies.length
-        ? [`  - 技术栈：${item.technologies.map((value) => oneLine(value, 80)).join(" / ")}`]
-        : []),
-      ...(item.repositories.length
-        ? [`  - 适用仓库：${item.repositories.map((value) => `\`${code(value)}\``).join(" / ")}`]
-        : []),
-      ...(item.business_module_ids.length
-        ? [`  - 模块上下文：${item.business_module_ids.map((value) => oneLine(value, 100)).join(" / ")}`]
-        : []),
-      `  - 按需读取：\`${code(path)}\``,
-    );
-  }
-  return lines;
-}
-
 function businessSection(
   workspace: string,
   entries: MaterializedBusinessKnowledgeEntry[],
@@ -128,13 +93,10 @@ function businessSection(
 
 export function materializeTaskKnowledgeIndex(options: {
   workspace: string;
-  engineeringKnowledge?: MaterializedEngineeringKnowledgeEntry[];
   businessKnowledge?: MaterializedBusinessKnowledgeEntry[];
 }): MaterializedTaskKnowledgeIndex {
   const warnings: string[] = [];
   const workspace = resolve(options.workspace);
-  const engineering = engineeringSection(
-    workspace, options.engineeringKnowledge ?? [], warnings);
   const business = businessSection(
     workspace, options.businessKnowledge ?? [], warnings);
   const root = join(workspace, INDEX_DIR);
@@ -148,7 +110,7 @@ export function materializeTaskKnowledgeIndex(options: {
     if (!contained(realpathSync(workspace), realpathSync(root))) {
       throw new Error("知识索引目录越出当前 Agent 工作区");
     }
-    if (!engineering.length && !business.length) {
+    if (!business.length) {
       rmSync(path, { force: true });
       return { warnings };
     }
@@ -161,7 +123,6 @@ export function materializeTaskKnowledgeIndex(options: {
       "> Skill 由独立 Skill 索引提供，同样按需读取正文。",
     ];
     if (business.length) lines.push("", "## 业务模块知识", "", ...business);
-    if (engineering.length) lines.push("", "## 团队工程知识", "", ...engineering);
     const content = `${lines.join("\n")}\n`;
     rmSync(temporary, { force: true });
     writeFileSync(temporary, content, { encoding: "utf-8", mode: 0o440 });

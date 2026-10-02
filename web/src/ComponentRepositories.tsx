@@ -114,11 +114,11 @@ export function ComponentRepositories() {
                 disabled={!row.enabled}
                 onClick={() =>
                   location.assign(
-                    `/?knowledgeDocuments=1&componentResearch=new`,
+                    `/?kbPage=module&kbModule=engineering%3A${encodeURIComponent(row.languages[0] ?? "agnostic")}`,
                   )
                 }
               >
-                萃取知识
+                查看组件知识
               </Button>
             </article>
           ))}

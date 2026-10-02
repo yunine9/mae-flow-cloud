@@ -49,7 +49,7 @@ export function createKnowledgeTool(options: {
           if (!research) return reply("组件萃取暂不可用，继续当前任务。");
           if (input.action === "components") return reply(JSON.stringify(componentRepositories(research.dir).filter(c => c.enabled)));
           const record = input.action === "research" ? research.start({ language: input.language ?? "", topic: input.query ?? "" }, options.researchOperator?.() ?? "本地部署") : research.get(input.id ?? "");
-          return reply(JSON.stringify({ ...record, key: undefined, url: `/?knowledgeDocuments=1&componentResearch=${record.id}` }) + "\n草稿须人工审查采纳才进入知识库；继续独立工作，不循环轮询。");
+          return reply(JSON.stringify({ ...record, key: undefined, url: `/?kbPage=task&kbKind=component&kbTask=${record.id}` }) + "\n草稿须人工审查采纳才进入知识库；继续独立工作，不循环轮询。");
         }
         const service = options.service();
         if (!service) { observe({moment:input.action === "read" ? "expand" : "search",ids:[],status:"unavailable",reason:"unavailable",requested_id:input.id});
@@ -75,7 +75,7 @@ export function createKnowledgeTool(options: {
         if (input.action === "search") {
           const query = input.query?.trim();
           if (!query) return reply("请提供当前要解决的具体问题 query。");
-          const result = await service.search(context, query, 5, undefined, false, input.scope === "components");
+          const result = await service.search(context, query, 5, input.scope === "components");
           observe({ moment: "search", query, plan, ids: result.hits.map(hit => hit.id),
             status: !result.available ? "unavailable" : result.hits.length ? "ready" : "empty",
             assets: result.hits.map(hit => ({id:hit.id,revision:hit.revision,start_line:hit.start_line,end_line:hit.end_line,heading:hit.heading,card_id:hit.card_id,retrieval:hit.retrieval})) });

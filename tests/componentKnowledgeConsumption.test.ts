@@ -7,7 +7,6 @@ import { componentKnowledgeCatalog, publishedComponentParadigms } from "../src/c
 import { checkComponentKnowledge } from "../src/componentKnowledgeCheck.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
-import { componentArtifact } from "../src/componentParadigms.ts";
 
 test("正式组件知识按仓库、语言和产品版本消费；无 replaces 可选型，修订/停用立即生效，草稿隔离", () => {
   const f = consumptionFixture();
@@ -33,8 +32,6 @@ test("正式组件知识按仓库、语言和产品版本消费；无 replaces �
     assert.equal(componentKnowledgeCatalog(f.data, f.context, ["cpp"]).rules.length, 0);
     f.publish([componentSection()], { scope: "repository", repositories: ["https://example.test/other.git"] });
     assert.equal(componentKnowledgeCatalog(f.data, f.context, ["cpp"]).paradigms.length, 0);
-    f.publish([componentSection()], { content: componentArtifact(componentSection()) });
-    assert.equal(componentKnowledgeCatalog(f.data, f.context, ["cpp"]).paradigms.length, 1, "独立导入的规范化 Markdown 也可消费");
     f.publish([componentSection()], { content: doc.content.replace("mfc.component-guide/v1", "mfc.component-guide/v99") });
     assert.match(componentKnowledgeCatalog(f.data, f.context, ["cpp"]).warnings.join(), /schema/);
   } finally { f.cleanup(); }

@@ -8,14 +8,6 @@ import {
 
 test("发起页知识目录容忍旧字段与坏记录，不让单项数据拖垮整页", () => {
   const catalog = normalizeLaunchKnowledgeCatalog({
-    engineering_knowledge: [
-      { id: "guide", title: "构建指南", form: "unknown",
-        technologies: ["java"] },
-      { id: "guide", title: "重复记录" },
-      { id: "missing-language", title: "缺语言" },
-      { title: "没有 ID" },
-      null,
-    ],
     team_skills: [
       { path: "review/SKILL.md", name: "review", nature: "engineering",
         technologies: ["java"] },
@@ -27,16 +19,6 @@ test("发起页知识目录容忍旧字段与坏记录，不让单项数据拖�
     ],
   });
 
-  assert.deepEqual(catalog.engineering, [{
-    id: "guide",
-    title: "构建指南",
-    summary: "",
-    when_to_use: "",
-    form: "document",
-    business_module_ids: [],
-    repositories: [],
-    technologies: ["java"],
-  }]);
   assert.deepEqual(catalog.skills, [{
     path: "review/SKILL.md",
     name: "review",

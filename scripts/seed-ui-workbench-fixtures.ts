@@ -529,10 +529,6 @@ for (const [index, scenario] of WORKBENCH_UI_SCENARIOS.entries()) {
         repository: "mae-flow-cloud", selected: true, ts: iso(24),
         session_id: "main", session_role: "main", action: "read",
         observed_path: ".agents/frontend/SKILL.md" },
-      { id: "knowledge-2", task_id: id, kind: "engineering_knowledge",
-        name: "无障碍基线", path: "knowledge/accessibility.md",
-        selected: true, ts: iso(20), session_id: "main",
-        session_role: "main", action: "used" },
     ]);
   }
 

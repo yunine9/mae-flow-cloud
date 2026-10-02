@@ -119,7 +119,7 @@ async function render(out: string): Promise<void> {
   const css = bundledCss();
   mkdirSync(out, { recursive: true });
   const vite = await createServer({
-    root: "web", server: { middlewareMode: true }, appType: "custom", logLevel: "silent",
+    root: join(resolve(flag("--source-root") ?? "."), "web"), server: { middlewareMode: true }, appType: "custom", logLevel: "silent",
   });
   try {
     const { TaskWorkspace } = await vite.ssrLoadModule("/src/TaskWorkspace.tsx");
@@ -127,7 +127,7 @@ async function render(out: string): Promise<void> {
     const noop = () => undefined;
     const scenes: Array<{ name: string; html: string }> = [];
     const failures: string[] = [];
-    for (const fixture of loadFixtures()) {
+    for (const fixture of args.includes("--only-knowledge") ? [] : loadFixtures()) {
       const task = fixture.summary;
       const variants: Array<[string, () => React.ReactElement]> = [
         ["workspace", () => React.createElement(TaskWorkspace, {
@@ -151,6 +151,30 @@ async function render(out: string): Promise<void> {
         for (const theme of themes) {
           scenes.push({ name: `${fixture.id}-${variant}-${theme}`, html: page(theme, markup, css) });
         }
+      }
+    }
+    // 生产线界面以前没有进入截图集，删入口与页面时仅对拍任务卡会漏验。
+    if (args.includes("--only-knowledge")) {
+      const { KnowledgeLibrary } = await vite.ssrLoadModule("/src/KnowledgeLibrary.tsx");
+      const { KnowledgeResearchCreate } = await vite.ssrLoadModule("/src/KnowledgeResearchCreate.tsx");
+      const { KnowledgeAssetsWorkspace } = await vite.ssrLoadModule("/src/KnowledgeAssets.tsx");
+      const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
+      Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "http://localhost/?kbPage=home", search: "?kbPage=home" } });
+      try {
+        const variants: Array<[string, () => React.ReactElement]> = [
+          ["knowledge-home", () => React.createElement(KnowledgeLibrary, { category: "documents", onCategoryChange: noop, uploadRequest: 0, onOpenTask: noop, onManage: noop })],
+          ...(["domain", "component", "skill-extraction"] as const).map(kind => [`knowledge-create-${kind}`, () => React.createElement(KnowledgeResearchCreate, { initialKind: kind, onBack: noop, onCreated: noop })] as [string, () => React.ReactElement]),
+          ["knowledge-skills", () => React.createElement(KnowledgeAssetsWorkspace, { onOpenTask: noop })],
+        ];
+        for (const [name, make] of variants) {
+          try {
+            const markup = renderToStaticMarkup(make());
+            for (const theme of themes) scenes.push({ name: `${name}-${theme}`, html: page(theme, markup, css) });
+          } catch (error) { failures.push(`${name}: ${String(error).split("\n")[0]}`); }
+        }
+      } finally {
+        if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation);
+        else Reflect.deleteProperty(globalThis, "location");
       }
     }
     for (const scene of scenes) writeFileSync(join(out, `${scene.name}.html`), scene.html);
@@ -178,7 +202,7 @@ async function shoot(out: string, names: string[], widths: number[]): Promise<vo
       await new Promise<void>((resolveJob) => {
         const child = spawn(CHROME, [
           "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
-          "--force-device-scale-factor=1", `--window-size=${job.width},1800`,
+          "--force-device-scale-factor=1", `--window-size=${job.width},${args.includes("--only-knowledge") ? Math.round(job.width * 9 / 16) : 1800}`,
           "--virtual-time-budget=1500", `--screenshot=${toBrowserPath(png)}`,
           toBrowserFileUrl(join(out, `${job.name}.html`)),
         ], { stdio: "ignore" });

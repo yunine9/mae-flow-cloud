@@ -1,6 +1,5 @@
 import { listKnowledgeDocuments, readKnowledgeDocument, eraseKnowledgeDocument, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 import { listKnowledgeDeletions, readKnowledgeDeletion, writeKnowledgeDeletion, type KnowledgeDeletion } from "./knowledgeDeletionStore.ts";
-import { readConsolidation } from "./knowledgeConsolidationStore.ts";
 import type { KnowledgeSearch } from "./knowledgeSearch.ts";
 
 // 旧萃取结果可能没有结构化 frontmatter，仍必须可以删除。
@@ -25,7 +24,6 @@ export async function retryKnowledgeDeletions(dir: string, search: Pick<Knowledg
 export async function deleteComponentDocuments(dir: string, input: unknown, operator: string, search: Pick<KnowledgeSearch, "removeFromIndex">) {
   if (!Array.isArray(input) || !input.length || input.length > 100 || input.some(d => !d || typeof d.id !== "string" || typeof d.revision !== "string")) throw new Error("请选择 1–100 份组件知识");
   if (new Set(input.map(d => d.id)).size !== input.length) throw new Error("请勿重复选择知识");
-  const topics = readConsolidation(dir).topics;
   // 整批先校验，避免旧页面误删他人刚更新的知识。
   const records: KnowledgeDeletion[] = input.map(({ id, revision }) => {
     const previous = readKnowledgeDeletion(dir, id);
@@ -37,7 +35,7 @@ export async function deleteComponentDocuments(dir: string, input: unknown, oper
     if (!componentDocument(doc)) throw new Error("此入口只能删除组件知识");
     if (doc.revision !== revision) throw new Error("知识已更新，请刷新后删除");
     return { id, title: doc.title, revision, operator, research_job_id: doc.research_source?.job_id, at: new Date().toISOString(), index_state: "pending",
-      index_ids: [id, ...topics.filter(t => t.published?.sources.some(s => s.id === id)).map(t => t.id)] };
+      index_ids: [id] };
   });
   for (const record of records) {
     writeKnowledgeDeletion(dir, record);

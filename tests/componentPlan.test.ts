@@ -78,7 +78,7 @@ test("组件过多时 context 要求检索；普通文档不能被当成组件�
     f.publish(Array.from({length:13},(_,i)=>componentSection(i === 0 ? "java" : "cpp", `pool-${i}`)));
     const s = setup(f), context = s.search.componentContext(f.context);
     assert.equal(context.mode, "search"); assert.deepEqual(context.hits, []);
-    const result = await s.search.search(f.context, "Java 后台任务", 5, undefined, false, true);
+    const result = await s.search.search(f.context, "Java 后台任务", 5, true);
     assert.equal(result.hits.length, 1); assert.equal(result.hits[0].card_id, "java/pool/pool-0");
   } finally { f.cleanup(); }
 });
@@ -109,7 +109,7 @@ test("真实 memsearch 只索引一张短卡片，换说法召回、读取原文
   const f = consumptionFixture(), sidecar = new MemorySidecar({ python, script: join(process.cwd(), "harness/memsearch-sidecar.py"), corpusDir: join(f.data, "corpus"), milvusPath: join(f.data, "index.db"), env: {HF_HUB_OFFLINE:"1",TRANSFORMERS_OFFLINE:"1"}, budgets: {ingestMs:20000} });
   try {
     const doc = f.publish(), search = new KnowledgeSearch(f.data, sidecar); await search.prepare();
-    const result = await search.search(f.context, "C++ 把工作放到线程池异步执行，关闭时等待结束", 5, undefined, false, true);
+    const result = await search.search(f.context, "C++ 把工作放到线程池异步执行，关闭时等待结束", 5, true);
     assert.equal(result.hits[0]?.id, doc.id); assert.equal(result.hits[0].retrieval, "memsearch");
     assert.equal(result.hits[0].card_id, "cpp/pool/pool-submit"); assert.match(search.read(f.context, doc.id)!.content, /完整示例|最佳示例/);
     const sources = componentIndexSources(f.data, doc.id)!; assert.deepEqual(sources, [`component-card:${doc.id}:pool-submit`]);

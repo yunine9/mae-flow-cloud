@@ -1,10 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
-import { componentArtifact, readComponentArtifact, exportComponentArtifacts, deriveComponentArtifacts, validateComponentParadigm } from "../src/componentParadigms.ts";
+import { readComponentArtifact, exportComponentArtifacts, deriveComponentArtifacts, validateComponentParadigm } from "../src/componentParadigms.ts";
 import type { ResearchSection } from "../src/componentResearchDocument.ts";
 export const paradigmSection = (id = "paradigm-pool-submit"): ResearchSection => ({
   id, title: "后台执行任务", repository_ids: ["base"], revision: 1, selected: true, related_ids: [],
@@ -16,10 +12,9 @@ export const paradigmSection = (id = "paradigm-pool-submit"): ResearchSection =>
     usage_evidence: ["everycode-" + "b".repeat(24)], open_questions: [],
   },
 });
-test("干净 Markdown 与独立元数据往返一致，兼容旧 frontmatter，派生覆盖无替代关系的能力并排除 legacy", () => {
+test("B1验收1、B1验收3：只使用干净 Markdown 与独立元数据，派生覆盖无替代关系的能力并排除 legacy", () => {
   const section = paradigmSection(); const plain = paradigmSection("paradigm-pool-wait"); plain.paradigm!.replaces.identifiers = []; plain.paradigm!.need = "等待任务完成";
   const legacy = paradigmSection("paradigm-pool-old"); legacy.paradigm!.status = "legacy";
-  assert.deepEqual(readComponentArtifact(componentArtifact(section)).paradigm, section.paradigm);
   const exported = exportComponentArtifacts([section, plain, legacy]);
   assert.equal(exported.catalog.length, 3); assert.equal(exported.rules.length, 1); assert.equal(exported.enabled, false);
   for (const entry of exported.catalog) assert.ok(exported.files[entry.path], "程序索引必须能定位实际范式文件");
@@ -36,40 +31,26 @@ test("干净 Markdown 与独立元数据往返一致，兼容旧 frontmatter，�
   assert.match(markdown, /Pool::Submit/); assert.match(markdown, /p.Wait/);
   assert.deepEqual(JSON.parse(sources[path]).evidence, section.paradigm!.evidence);
   assert.deepEqual(readComponentArtifact(markdown, sources[path]).paradigm, section.paradigm);
-  const missing = { ...sources }; delete missing[path]; assert.throws(() => deriveComponentArtifacts(missing), /frontmatter/);
+  const missing = { ...sources }; delete missing[path]; assert.throws(() => deriveComponentArtifacts(missing), /元数据/);
   const orphan = { ...sources }; delete orphan[path.replace(/\.metadata\.json$/, ".md")]; assert.throws(() => deriveComponentArtifacts(orphan), /缺少对应文档/);
   assert.throws(() => deriveComponentArtifacts({ ...sources, [path]: JSON.stringify({ ...metadata, schema: "unknown" }) }), /格式/);
 
 });
 test("程序读取严格拒绝坏字段、类型、版本、路径、重复编号，不静默漏掉文档", () => {
-  const source = componentArtifact(paradigmSection());
-  for (const text of [source.replace('schema: "mfc.component-paradigm/v1"','schema: "v2"'), source.replace('need: "后台执行任务"\n',''),
-    source.replace('need: "后台执行任务"','need: null'), source.replace('need: "后台执行任务"','need: "后台执行任务"\nneed: "重复"'),
-    source.replace('api: ["Pool::Submit"]', 'api: "Pool::Submit"'), source.replace('status: "recommended"','status: "published"'),
-    source.replace('replaces: {','unknown: true\nreplaces: {')]) assert.throws(() => readComponentArtifact(text));
-  assert.throws(() => deriveComponentArtifacts({ "components/pool/wrong.md": source }), /路径/);
+  const exported = exportComponentArtifacts([paradigmSection()]);
+  const path = exported.catalog[0].path, source = exported.files[path];
+  const metadata = JSON.parse(exported.files[path.replace(/\.md$/, ".metadata.json")]);
+  for (const fields of [{ ...metadata, schema: "unknown" }, { ...metadata, need: undefined }, { ...metadata, need: null },
+    { ...metadata, api: "Pool::Submit" }, { ...metadata, status: "published" }, { ...metadata, extra: true }]) {
+    assert.throws(() => readComponentArtifact(source, JSON.stringify(fields)));
+  }
+  assert.throws(() => readComponentArtifact(source, undefined), /元数据/);
+  assert.throws(() => readComponentArtifact(`---\n${source}`, JSON.stringify(metadata)), /格式/);
+  assert.throws(() => deriveComponentArtifacts({ "components/pool/wrong.md": source,
+    "components/pool/wrong.metadata.json": JSON.stringify(metadata) }), /路径/);
   const p = paradigmSection().paradigm!; assert.throws(() => validateComponentParadigm({ ...p, extra: true } as any, ["base"]), /未知/);
   assert.throws(() => validateComponentParadigm({ ...p, replaces: { ...p.replaces, hidden: true } } as any, ["base"]));
   for (const path of ["AGENTS.md", "docs/old.cpp", "../pool.cpp"]) assert.throws(() => validateComponentParadigm({ ...p, evidence: [{ ...p.evidence[0], path }] }, ["base"]));
   assert.throws(() => validateComponentParadigm({ ...p, evidence: [null] } as any, ["base"]));
   assert.throws(() => validateComponentParadigm({ ...p, usage_evidence: [] }, ["base"]), /调用证据/);
-});
-test("导出包可通过独立命令重新提取，错误输入退出非零且不输出半份派生文件", () => {
-  const dir = mkdtempSync(join(tmpdir(), "component-artifacts-"));
-  try {
-    const file = join(dir, "bundle.json"), out = join(dir, "derived"); writeFileSync(file, JSON.stringify(exportComponentArtifacts([paradigmSection()])));
-    const run = () => spawnSync(process.execPath, ["--import", "tsx", resolve("scripts/derive-component-knowledge.ts"), file, out], { encoding: "utf8" });
-    const success = run(); assert.equal(success.status, 0, success.stderr); assert.equal(JSON.parse(success.stdout).documents, 1);
-    assert.match(readFileSync(join(out, "mapping-table.md"), "utf8"), /后台执行任务/);
-    const original = exportComponentArtifacts([paradigmSection()]);
-    const rulePath = Object.keys(original.files).find(p => p.includes("/rules/"))!.replace(/^derived\//, "");
-    assert.ok(existsSync(join(out, rulePath)));
-    const changed = paradigmSection(); changed.paradigm!.status = "legacy";
-    writeFileSync(file, JSON.stringify(exportComponentArtifacts([changed]))); assert.equal(run().status, 0);
-    assert.equal(existsSync(join(out, rulePath)), false, "转为 legacy 后过期规则必须移除");
-    const before = readFileSync(join(out, "catalog.json"), "utf8");
-    writeFileSync(file, JSON.stringify({ files: { "components/pool/bad.md": "# bad" } }));
-    const failed = run(); assert.notEqual(failed.status, 0); assert.match(failed.stderr, /frontmatter/);
-    assert.equal(readFileSync(join(out, "catalog.json"), "utf8"), before);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

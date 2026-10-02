@@ -132,36 +132,11 @@ npm run benchmark:knowledge -- --generation --split development --pipeline --rep
 npm run benchmark:knowledge -- --generation-replay PATH/report.json --pipeline --repeats 2
 ```
 
-`--pipeline` 取本轮生成的资源归属和版本配置经验，通过 `MemoryStore` 模拟审核采纳并等待真实索引就绪，再由真实 `TaskService.taskMemoryContext`、ONNX 检索和 `CloudSession` 提供给新的代码任务。消费者只看到正常需求、API 声明与自动注入的结论，不能读取原始复盘意见或评分文件。消费夹具关闭无关的每日专题调度，专题模型由独立组评测。代码检查沿用拥有句柄、借用句柄和版本单位的独立 C++ 行为检查：同一份资源经验在拥有与借用条件下应产生相反的清理行为。
+`--pipeline` 取本轮生成的资源归属和版本配置经验，通过 `MemoryStore` 模拟审核采纳并等待真实索引就绪，再由真实 `TaskService.taskMemoryContext`、ONNX 检索和 `CloudSession` 提供给新的代码任务。消费者只看到正常需求、API 声明与自动注入的结论，不能读取原始复盘意见或评分文件。代码检查沿用拥有句柄、借用句柄和版本单位的独立 C++ 行为检查：同一份资源经验在拥有与借用条件下应产生相反的清理行为。
 
 每个案例必须同时满足：相关生成经验实际进入上下文、代码编译成功、行为断言通过。记录 `expected_memory_ids`、`observed_memory_ids` 和 `context_injected`，保存模拟采纳记录及真实 `memory-usage.jsonl`。缺少有效生成结果记为 `source_unavailable`，保留为链路失败，不跳过后宣称全通过。回放时 `--repeats` 应与来源中已有的生成轮数一致。
 
 这里的采纳由 benchmark 模拟，不改生产审核规则，也不表示生成结果已经获得人工质量认可。通过检查只证明这三个固定任务中的可执行行为，不能证明所有语义正确。与 `--agent` 的有/无工具对照分开报告。
-
-### 专题整理和来源维护
-
-```bash
-npm run benchmark:knowledge -- --consolidation
-```
-
-调用真实 `KnowledgeConsolidation` 和 `runKnowledgeConsolidationAgent`，使用两个独立案例：合并时保留上传限制、校验、失败处理与例外；同版本资料相互矛盾时保留两方证据并列出冲突。分别检查事实/冲突、待审不可读、模拟采纳后可读、来源更新后专题失效并回退原文、旧专题拒读、停用来源拒读，共 12 项。`--repeats` 当前只影响生成与代码任务，专题组每次运行两次模型调用。
-
-自动事实检查只核对固定事实是否保留，不判断完整语义；专题输出仍需复核。来源修订号失效检测不等于业务源码语义漂移检测。
-
-### 真实长文档回归
-
-另有 `harness/knowledge-manual-probe.py` 使用未裁剪的公开 Google C++ Style Guide，检查 12 个主题和 2 个无关问题、原文行号、代码围栏、更新后的旧索引移除。首次可联网获取；固定回归应使用已缓存文件并核对报告 SHA256。它补充合成语料，不能替代独立业务事件。
-
-```bash
-env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
-  -u http_proxy -u https_proxy -u all_proxy \
-  HF_HUB_OFFLINE=1 NO_PROXY=localhost,127.0.0.1 no_proxy=localhost,127.0.0.1 \
-  .local/memsearch-venv/bin/python harness/knowledge-manual-probe.py \
-  --document .local/knowledge-manual-probe-v2/google-cppguide.md \
-  --output .local/knowledge-benchmark/manual-NEW
-```
-
-移除代理仅作用于这次本地 Milvus 进程连接；不要修改机器的全局代理设置。
 
 ## 设计依据
 

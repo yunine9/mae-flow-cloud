@@ -28,7 +28,7 @@ import {
 } from "../src/issueFlow/prompt.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
-test("技能源目录:标准 skill 形态齐全,物化幂等且内容一致", () => {
+test("B1验收2：问题流技能源目录保持标准形态，物化幂等且内容一致", () => {
   // vendor/mattpocock/ 下是原封照搬的外部技能(同步时整目录覆盖,不本地
   // 改),与平台自有技能同一张清单注册。
   const expected = [

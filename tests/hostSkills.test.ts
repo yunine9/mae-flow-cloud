@@ -374,12 +374,12 @@ test("精确选择仓 A 的 Skill,不会顺带装载同目录仓 B Skill", async
 
 test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入上下文", async () => {
   const workspace = mfcTemp("mfc-repo-knowledge-");
-  const engineeringPath = join(workspace, "team-build.md");
-  writeFileSync(engineeringPath,
-    "# 团队构建知识\n\nENGINEERING-KNOWLEDGE-BODY-MARKER\n");
+  const businessPath = join(workspace, "team-build.md");
+  writeFileSync(businessPath,
+    "# 业务模块知识\n\nBUSINESS-KNOWLEDGE-BODY-MARKER\n");
   const model = new ScriptedModelServer([
-    { text: "索引显示团队构建知识相关，按需读取。", tool: {
-      name: "read", input: { path: engineeringPath },
+    { text: "索引显示业务模块知识相关，按需读取。", tool: {
+      name: "read", input: { path: businessPath },
     } },
     { text: "已读取所需正文，完成。" },
   ]);
@@ -397,15 +397,15 @@ test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入�
     transcript: new TranscriptStore(join(workspace, "transcript.jsonl"), "main"),
     gate: new GateService({ workspace, cwd: workspace }),
     humanGate: new HumanGate(join(workspace, "waiting.json")),
-    engineeringKnowledge: { warnings: [], entries: [{
-      id: "engineering-1",
-      title: "团队构建知识",
+    businessModuleKnowledge: { warnings: [], skill_paths: [], entries: [{
+      id: "business-1",
+      title: "业务模块知识",
       summary: "仅在构建超时时参考",
       when_to_use: "构建长时间无结果时",
       form: "document",
-      business_module_ids: [], repositories: [], technologies: ["java"],
-      digest: "digest-2", bytes: 1,
-      relative_path: "team-build.md", path: engineeringPath,
+      module_id: "orders", module_name: "订单", module_owner: "owner", repositories: [],
+      digest: "digest-2", version: 1,
+      relative_path: "team-build.md", path: businessPath,
     }] },
     knowledgeTrace: new KnowledgeTrace(
       join(workspace, "knowledge-events.jsonl"),
@@ -418,17 +418,17 @@ test("知识只以索引进入首轮；正文被 Agent 按需读取后才进入�
     const firstRequest = JSON.stringify(model.requests[0]);
     assert.match(firstRequest, /本任务知识索引/);
     assert.match(firstRequest, /仅在构建超时时参考/);
-    assert.doesNotMatch(firstRequest, /ENGINEERING-KNOWLEDGE-BODY-MARKER/,
-      "默认勾选不能把团队工程知识正文偷渡进首轮上下文");
+    assert.doesNotMatch(firstRequest, /BUSINESS-KNOWLEDGE-BODY-MARKER/,
+      "默认勾选不能把业务模块知识正文偷渡进首轮上下文");
     assert.match(JSON.stringify(model.requests),
-      /ENGINEERING-KNOWLEDGE-BODY-MARKER/,
+      /BUSINESS-KNOWLEDGE-BODY-MARKER/,
       "Agent 主动 Read 后，对应正文才应进入后续请求");
     const usage = knowledgeUsageSnapshot({ workspace })!;
-    assert.ok(usage.events.some((event) => event.id === "engineering-1"
+    assert.ok(usage.events.some((event) => event.id === "business-1"
       && event.action === "available"));
-    assert.ok(usage.events.some((event) => event.id === "engineering-1"
+    assert.ok(usage.events.some((event) => event.id === "business-1"
       && event.action === "read"));
-    assert.ok(!usage.events.some((event) => event.id === "engineering-1"
+    assert.ok(!usage.events.some((event) => event.id === "business-1"
       && event.action === "loaded"), "索引可见不能冒充正文已加载");
   } finally {
     session.dispose();

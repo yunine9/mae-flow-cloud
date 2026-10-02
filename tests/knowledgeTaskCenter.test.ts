@@ -40,8 +40,6 @@ test("领域研究完成不等于发布；发布后新稿与归档失败仍可�
   job.status = "running";
   assert.equal(domainKnowledgeTask(job).group, "running");
   assert.equal(domainKnowledgeTask(job).started_at, undefined);
-  job.status = "done"; job.probe = { module: "结算" };
-  assert.equal(domainKnowledgeTask(job).group, "completed");
 });
 
 test("组件研究保留执行结束，但不把创建当开始；发布与待审稿分开", () => {
@@ -71,7 +69,7 @@ test("中心读取既有记录与重启状态，来源不可用会显示警告�
     writeFileSync(join(dataDir, "knowledge-extract", "not-a-job"), "");
     const job = domain();
     const result = listKnowledgeTasks({ dataDir,
-      domain: { list: probes => probes ? [] : [{ id: job.id }], get: () => job },
+      domain: { list: () => [{ id: job.id }], get: () => job },
       component: { list: () => { throw new Error("unavailable"); }, get: () => { throw new Error("missing"); } },
       skillExtractionJob: id => ({ id, status: "failed", repo: "repo", intent: "参考仓制作", operator: "alice", started_at: "2026-09-30T02:00:00Z", error: "服务重启中断" }),
     });

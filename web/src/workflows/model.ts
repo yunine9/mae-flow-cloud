@@ -39,7 +39,6 @@ export const statusBadgeVariants = {
 
 export const registryLabels: Record<WorkflowAssetRef["registry"], string> = {
   business_knowledge: "业务知识",
-  engineering_knowledge: "工程知识",
   team_skill: "团队 Skill",
   repository_skill: "代码仓 Skill",
   platform_capability: "平台能力",

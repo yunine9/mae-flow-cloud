@@ -10,7 +10,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { SelectedRepositorySkill } from "./repositorySkillRuntime.ts";
 import type { SelectedBusinessModule } from "./businessModuleRuntime.ts";
-import type { SelectedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 
 export type KnowledgeKind = "rules" | "document" | "skill";
 export type KnowledgeAction = "available" | "loaded" | "read" | "searched";
@@ -244,7 +243,6 @@ export function knowledgeUsageSnapshot(options: {
   workspace: string;
   selectedSkills?: SelectedRepositorySkill[];
   businessModules?: SelectedBusinessModule[];
-  engineeringKnowledge?: SelectedEngineeringKnowledge[];
 }): TaskKnowledgeUsage | undefined {
   const events = parseEvents(resolve(options.workspace, "knowledge-events.jsonl"));
   const resources = new Map<string, TaskKnowledgeResource>();
@@ -282,16 +280,6 @@ export function knowledgeUsageSnapshot(options: {
       asset_version: asset.version,
     });
   }
-  for (const item of options.engineeringKnowledge ?? []) seed({
-    id: item.id,
-    kind: item.form === "rule" ? "rules" : "document",
-    name: item.title,
-    path: `.mae-flow-work/team-engineering-knowledge/${item.id}.md`,
-    description: item.summary,
-    digest: item.digest,
-    selected: true,
-    scope: "team",
-  });
   for (const event of events) {
     seed(event);
     const item = resources.get(event.id)!;

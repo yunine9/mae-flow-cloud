@@ -9,14 +9,12 @@ import { KnowledgeSearch } from "../../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../../src/knowledgeTools.ts";
 import { saveKnowledgeDocument, type KnowledgeDocument } from "../../src/knowledgeDocuments.ts";
 import { createBusinessModule } from "../../src/businessModuleLibrary.ts";
-import { createKnowledgeCandidate, decideKnowledgeCandidate } from "../../src/knowledgeCandidates.ts";
 import { createMemoryContext } from "../../src/memoryContext.ts";
 import { MemoryStore } from "../../src/taskMemory.ts";
 import { documents, queries, REPO, SUITE_VERSION, type QueryFixture } from "./fixtures.ts";
 import { summarize, scoreRanking, compareReports, type CaseResult } from "./scoring.ts";
 import { runAgentCases } from "./agent.ts";
 import { runPipelineCases } from "./pipeline.ts";
-import { runConsolidationCases } from "./consolidation.ts";
 import { runScopeCases } from "./scope.ts";
 import { runGenerationCases, replayGenerationCases } from "./generation.ts";
 
@@ -24,13 +22,12 @@ const { values } = parseArgs({ options: {
   output: { type: "string" }, python: { type: "string" }, baseline: { type: "string" },
   "generation-replay": { type: "string" }, generation: { type: "boolean", default: false }, split: { type: "string", default: "development" },
   pipeline: { type: "boolean", default: false },
-  consolidation: { type: "boolean", default: false },
   agent: { type: "boolean", default: false }, models: { type: "string" }, provider: { type: "string", default: "glm" },
   model: { type: "string" }, repeats: { type: "string", default: "1" }, "timeout-ms": { type: "string", default: "180000" },
   help: { type: "boolean" },
 } });
 if (values.help) {
-  console.log("npm run benchmark:knowledge -- [--output DIR] [--python PATH] [--baseline REPORT.json] [--generation --split development|holdout|all | --generation-replay REPORT.json] [--pipeline] [--consolidation] [--agent] [--models FILE --provider NAME --model ID --repeats 1 --timeout-ms 180000]");
+  console.log("npm run benchmark:knowledge -- [--output DIR] [--python PATH] [--baseline REPORT.json] [--generation --split development|holdout|all | --generation-replay REPORT.json] [--pipeline] [--agent] [--models FILE --provider NAME --model ID --repeats 1 --timeout-ms 180000]");
   process.exit(0);
 }
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -42,16 +39,16 @@ if (!Number.isInteger(repeats) || repeats < 1 || repeats > 20 || !Number.isInteg
 const models = resolve(values.models ?? ".local/models.json");
 if(values["generation-replay"] && values.generation) throw new Error("generation 与 generation-replay 不能同时使用");
 if(values.pipeline && ((!values.generation && !values["generation-replay"]) || values.generation && values.split==="holdout")) throw new Error("pipeline 需要 --generation --split development/all 或 --generation-replay REPORT.json");
-const useModel = values.agent || values.generation || values.consolidation || values.pipeline;
+const useModel = values.agent || values.generation || values.pipeline;
 if (!["development","holdout","all"].includes(values.split!)) throw new Error("split 必须为 development、holdout 或 all");
 const model = useModel ? values.model ?? JSON.parse(readFileSync(models,"utf8")).providers[values.provider!]?.models?.[0]?.id : null;
 if (useModel && !model) throw new Error("未找到模型配置；请指定 --models、--provider 和 --model");
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
-const fixtureHash = sha(["fixtures.ts","generation-fixtures.ts","consolidation-fixtures.ts","scope.ts"].map(p => readFileSync(join(root,"harness/knowledge-benchmark",p),"utf8")).join("\n"));
-const evaluatorHash = sha(["scoring.ts","agent.ts","generation.ts","consolidation.ts","pipeline.ts","scope.ts","run.ts"].map(p => readFileSync(join(root,"harness/knowledge-benchmark",p),"utf8")).join("\n"));
+const fixtureHash = sha(["fixtures.ts","generation-fixtures.ts","scope.ts"].map(p => readFileSync(join(root,"harness/knowledge-benchmark",p),"utf8")).join("\n"));
+const evaluatorHash = sha(["scoring.ts","agent.ts","generation.ts","pipeline.ts","scope.ts","run.ts"].map(p => readFileSync(join(root,"harness/knowledge-benchmark",p),"utf8")).join("\n"));
 const replay = values["generation-replay"] ? JSON.parse(readFileSync(resolve(values["generation-replay"]),"utf8")) : undefined;
 if(replay && replay.fixture_hash !== fixtureHash) throw new Error("语料发生变化，不能回放旧模型输出");
-const runConfig = { embedding: "gpahal/bge-m3-onnx-int8", generation_replay: replay ? sha(JSON.stringify(replay)) : null, agent: values.agent, pipeline:values.pipeline, consolidation:values.consolidation, generation: values.generation, split: values.generation ? values.split : null, provider: useModel ? values.provider : null, model, repeats: useModel ? repeats : 0, timeout_ms: useModel ? timeoutMs : null };
+const runConfig = { embedding: "gpahal/bge-m3-onnx-int8", generation_replay: replay ? sha(JSON.stringify(replay)) : null, agent: values.agent, pipeline:values.pipeline, generation: values.generation, split: values.generation ? values.split : null, provider: useModel ? values.provider : null, model, repeats: useModel ? repeats : 0, timeout_ms: useModel ? timeoutMs : null };
 const report: any = { schema_version: 2, suite_version: SUITE_VERSION, fixture_hash: fixtureHash, evaluator_hash: evaluatorHash,
   replay_model_config: replay?.run_config, run_config: runConfig, started_at: new Date().toISOString(), fixture_type: "synthetic; production corpus is never read", cases: [],
   limitations: ["固定的虚构样例不代表生产准确率", "检索命中不等于正确应用", "Agent 对照比较 knowledge 工具是否可用；pipeline 单独验证生成经验的自动注入，均未覆盖 Skill 触发", "未验证知识引用的业务源码语义是否过期", "真实模型存在随机性；repeats 测量重复稳定性，不增加独立事件数", "生成评测只自动检查证据及概念契约，需人工复核语义，不等同生成质量准确率", "scope 使用真实 TaskService 装配和确定性检索替身，检验范围判断，不测召回"] };
@@ -65,7 +62,7 @@ const data = join(out,"data"); mkdirSync(data);
 report.output = out;
 report.code = { head: execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim(),
   working_tree: execFileSync("git",["status","--short"],{encoding:"utf8"}).trim().split("\n").filter(Boolean),
-  source_hash: sha(["src/taskService.ts","src/deliveryExperienceAgent.ts","src/knowledgeWritingGuidance.ts","src/memoryDraft.ts","src/memoryTools.ts","src/knowledgeExtractionSkills.ts","src/memoryUsage.ts","src/deliveryExperience.ts","src/knowledgeConsolidationAgent.ts","src/knowledgeConsolidation.ts","src/knowledgeSearch.ts","src/knowledgeTools.ts","src/memoryContext.ts","src/taskMemory.ts","src/sessionDriver.ts","src/memorySidecar.ts","src/knowledgeDocuments.ts","src/knowledgeConsolidationStore.ts","harness/knowledge_retrieval.py","harness/knowledge_chunks.py","harness/memsearch-sidecar.py"].map(p=>readFileSync(p,"utf8")).join("\n")) };
+  source_hash: sha(["src/taskService.ts","src/deliveryExperienceAgent.ts","src/knowledgeWritingGuidance.ts","src/memoryDraft.ts","src/memoryTools.ts","src/knowledgeExtractionSkills.ts","src/memoryUsage.ts","src/deliveryExperience.ts","src/knowledgeSearch.ts","src/knowledgeTools.ts","src/memoryContext.ts","src/taskMemory.ts","src/sessionDriver.ts","src/memorySidecar.ts","src/knowledgeDocuments.ts","harness/knowledge_retrieval.py","harness/knowledge_chunks.py","harness/memsearch-sidecar.py"].map(p=>readFileSync(p,"utf8")).join("\n")) };
 report.runtime = { node: process.version, platform: process.platform, arch: process.arch,
   python_packages: JSON.parse(execFileSync(python,["-c",'import json,importlib.metadata as m; print(json.dumps({p:m.version(p) for p in ["memsearch","milvus-lite","pymilvus","onnxruntime"]}))'],{encoding:"utf8",timeout:15000})) };
 const cases: CaseResult[] = report.cases;
@@ -80,11 +77,6 @@ for (const fixture of documents) {
   const doc = saveKnowledgeDocument(data,{ technologies:["cpp"], ...input },"benchmark");
   docs.set(key,doc); keys.set(doc.id,key);
 }
-const pending = createKnowledgeCandidate(data,{source_task_id:"benchmark", title:"未采纳的超时配置",summary:"待审草稿",when_to_use:"读取超时",nature:"engineering",form:"document",technologies:["cpp"],content:"# 请求超时\n2.7B 应读取 request_timeout_pending，单位小时。"},"benchmark");
-keys.set(`team:${pending.id}`,"pending");
-const skill = createKnowledgeCandidate(data,{source_task_id:"benchmark",title:"读取超时技能",summary:"超时技能",when_to_use:"读取超时",nature:"engineering",form:"skill",technologies:["cpp"],content:"---\nname: timeout-helper\ndescription: 读取超时配置\n---\n# 超时技能\n按需核对版本。"},"benchmark");
-decideKnowledgeCandidate(data, skill.id, "published", "benchmark");
-keys.set(`team:${skill.id}`,"skill");
 const store = new MemoryStore(data);
 const memory = store.record({source:"user_note",judged_by:"human",author:"benchmark",scope:"platform",repo:"shared",paths:[],task:"benchmark",evidence:"fixture",trigger:"执行写入接口遇到超时",conclusion:"重试前先检查幂等保障。"});
 store.review(memory.id,"benchmark",{decision:"accepted",revision:1}); keys.set(memory.id,"memory");
@@ -133,8 +125,6 @@ try {
     } catch(error) { record({id:`retrieval/${q.id}`,kind:"retrieval",positive:q.expected.length>0,passed:false,error:String(error),elapsed_ms:Math.round(performance.now()-start)}); }
   }
   await guard("ambiguous-module",()=>{ const result=search.catalog(context()); return {passed:result.warnings.some(w=>w.includes("多个业务模块")) && !result.assets.some(a=>["alarm","order","name"].includes(keys.get(a.id)??"")),warnings:result.warnings}; });
-  await guard("published-skill-excluded",()=>({passed:!search.read(context(),`team:${skill.id}`)}));
-  await guard("pending-not-readable",()=>({passed:!search.read(context(),`team:${pending.id}`)}));
   await guard("disabled-not-readable",()=>({passed:!search.read(context(),docs.get("disabled")!.id)}));
   await guard("cross-module-read",()=>({passed:!search.read(context({module:"alarm"}),docs.get("order")!.id)}));
   await guard("wrong-version-read",()=>({passed:!search.read(context({version:"2.7B"}),docs.get("v26")!.id)}));
@@ -179,7 +169,6 @@ try {
   if (replay && !interrupted) replayGenerationCases(resolve(values["generation-replay"]!),out,record);
   if (values.generation && !interrupted) await runGenerationCases({out,models,provider:values.provider!,model:model!,repeats,timeoutMs,signal:controller.signal,record,split:values.split as "development"|"holdout"|"all"});
   if (values.pipeline && !interrupted) await runPipelineCases({out,data,sidecar,search,models,provider:values.provider!,model:model!,repeats,timeoutMs,signal:controller.signal,record});
-  if (values.consolidation && !interrupted) await runConsolidationCases({out,models,provider:values.provider!,model:model!,timeoutMs,signal:controller.signal,record});
   if (values.agent && !interrupted) await runAgentCases({out,search,models,provider:values.provider!,model:model!,repeats,timeoutMs,signal:controller.signal,record});
 } catch(error) { report.fatal_error=String(error); console.error(String(error)); }
 finally {

@@ -12,7 +12,7 @@ const report: ComponentKnowledgeCheckReport = { mode: "observe", trigger: "mr", 
 window.fetch = async (input: RequestInfo | URL) => {
   const path = String(input);
   const value = path === "/knowledge-documents" ? { documents: [{ ...doc, id: "kd-first", title: "其他文档" }, doc] }
-    : path.startsWith("/knowledge-documents/") ? doc : path === "/business-modules" ? { modules: [] } : {};
+    : path.startsWith("/knowledge-documents/") ? doc : path === "/business-modules" ? { modules: [] } : path === "/component-repositories" ? { components: [] } : path === "/skills" ? { skills: [], operations: [] } : path.startsWith("/knowledge-review") ? { notes: [] } : {};
   return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
 };
 async function main() {
@@ -27,8 +27,8 @@ async function main() {
   const second = document.createElement("div"); document.body.append(second);
   const library = createRoot(second);
   flushSync(() => library.render(<KnowledgeLibrary category="documents" onCategoryChange={() => {}} uploadRequest={0} onOpenTask={() => {}} onManage={() => {}} />));
-  for (let i = 0; i < 80 && !second.querySelector(".kd-doc-header h2"); i++) await new Promise(r => setTimeout(r, 20));
-  if (second.querySelector(".kd-doc-header h2")?.textContent !== doc.title) throw new Error("知识深链未选择目标文档");
+  for (let i = 0; i < 80 && !second.querySelector(".km-document .md"); i++) await new Promise(r => setTimeout(r, 20));
+  if (!second.querySelector(".km-document .md")?.textContent?.includes("正式文档正文与完整示例")) throw new Error("知识深链未选择目标文档");
   library.unmount(); second.remove();
   document.getElementById("result")!.textContent = JSON.stringify({ passed: true, width: innerWidth });
 }

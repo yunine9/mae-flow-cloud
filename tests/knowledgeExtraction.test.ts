@@ -77,7 +77,7 @@ test("parseExtractionDraft:必须显式带标记,闲聊不当草稿", () => {
   assert.match(parsed.draft, /迁移注意/);
   assert.match(parsed.notes, /默认值不确定/);
   assert.ok(!parsed.draft.includes("===NOTES==="));
-  // 蒸馏那边允许整段兜底,提取这边不允许:缺标记就是没产出。
+  // 缺标记就是没有草稿，不能把闲聊当成待审查正文。
   assert.equal(parseExtractionDraft("这是一份没有标记的草稿"), undefined);
   assert.equal(parseExtractionDraft("===SKILL===\n只有一半"), undefined);
 });

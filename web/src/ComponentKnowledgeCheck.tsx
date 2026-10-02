@@ -18,7 +18,7 @@ export function ComponentKnowledgeCheck({ report }: { report?: ComponentKnowledg
       <ul className="mt-3 space-y-3">{report.findings.map((f, i) => <li key={i} className="break-words border-t border-line pt-3">
         <strong>{f.path}:{f.line}</strong><p>{f.need}：核对是否使用 {f.component} / {f.api.join("、")}</p>
         <p className="text-muted-foreground">适用条件：{f.applicability}</p>
-        <a className="text-primary" href={`/?knowledgeDocuments=1&knowledgeDocument=${encodeURIComponent(f.document_id)}`}>查看知识依据</a>
+        <a className="text-primary" href={`/?kbPage=module&kbModule=unassigned&knowledgeDocument=${encodeURIComponent(f.document_id)}`}>查看知识依据</a>
         <span className="ml-2 text-xs text-muted-foreground">{f.paradigm_id} · 原文第 {f.document_line} 行</span>
       </li>)}</ul>
     </details>}

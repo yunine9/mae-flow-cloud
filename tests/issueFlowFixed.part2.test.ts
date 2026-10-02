@@ -307,8 +307,8 @@ test("环境预热:拉仓收口进 analyze 时后台启动,收据落台账不上
     service.answer(created.id, {
       state_version: gate.gate!.state_version, code: "issue",
     });
-    await until(() => service.get(created.id).status === "suspended"
-      ? service.get(created.id) : undefined, "挂起");
+    assert.equal(service.get(created.id).status, "archived",
+      "确认结论按 ADR-0048 直接归档，预热结果不改变终态");
     assert.equal(warmupWorkspaces.length, 1, "收过收据不重跑");
   } finally {
     await service.shutdown().catch(() => undefined);
@@ -363,8 +363,8 @@ test("环境预热 fail-open:执行器异常落基建收据,主流程照走", as
     service.answer(created.id, {
       state_version: gate.gate!.state_version, code: "issue",
     });
-    await until(() => service.get(created.id).status === "suspended"
-      ? service.get(created.id) : undefined, "挂起");
+    assert.equal(service.get(created.id).status, "archived",
+      "预热失败不阻止确认结论后直接归档");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();
@@ -830,4 +830,3 @@ test("环境验证闸·月光不代答:一档全自动下验证卡仍只等真�
     await platform.stop();
   }
 });
-

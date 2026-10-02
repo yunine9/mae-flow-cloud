@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -14,7 +14,6 @@ import { wxdoubaoTool } from "./wxdoubao.ts";
 import type { DomainDocumentContent, DomainExecution, KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import { DomainSkillWork, IncompleteDomainResearch, type SkillWorkResult, type SkillWorkStep } from "./domainSkillWork.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
-import { probeExcludedPath } from "./domainKnowledgeProbe.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { businessKnowledgeEvidenceId, knowledgeEvidenceTool } from "./domainResearchEvidence.ts";
 
@@ -48,8 +47,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     input.evidence(event);
     return evidenceId;
   };
-  const excludePath = input.job.probe ? probeExcludedPath(researchRepositories) : undefined;
-  const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), observe, excludePath);
+  const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), observe);
   const documentTool = defineTool({
     name: "knowledge_draft", label: "保存领域知识草稿",
     description: "read 列出文档摘要，id 读取当前正文与来源；save 新建或完善本轮研究草稿，人工改过或已发布的文档受保护。修订/更新模式仅对选中文档生成建议。目标编号 domain 为知识仓，repo-* 为对应业务仓；新文件使用默认文档目录，已有文件保持完整路径。不能更换已有文件路径、修改源码、创建 MR 或直接采纳建议。",
@@ -88,7 +86,6 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     parameters: Type.Object({ repository_id: Type.String() }),
     async execute(_id: string, params: { repository_id: string }) {
       try {
-        if (input.job.probe) throw new Error("临时验证不读取历史差异，请按屏蔽范围读取当前源码");
         const repo = researchRepositories.find(r => r.id === params.repository_id), previous = input.turn.previous_revisions?.[params.repository_id];
         if (!repo || !previous) throw new Error("该仓没有可比较的旧版本");
         const current = await source(repo);
@@ -101,7 +98,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const materials = input.job.material_ids.map(id => readKnowledgeMaterial(join(options.dataDir, "knowledge-materials"), id));
   const snapshots = new Map<string, Promise<KnowledgeCodeSnapshot>>();
   const snapshot = (repo: KnowledgeRepository) => {
-    if (!snapshots.has(repo.id)) snapshots.set(repo.id, source(repo).then(prepared => scanKnowledgeCode(repo, prepared, signal, excludePath ? path => excludePath(path, repo.id) : undefined)));
+    if (!snapshots.has(repo.id)) snapshots.set(repo.id, source(repo).then(prepared => scanKnowledgeCode(repo, prepared, signal)));
     return snapshots.get(repo.id)!;
   };
   const structureTool = defineTool({ name: "knowledge_structure", label: "查看源码结构",
@@ -131,14 +128,11 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     phase: work.state.result?.status === "complete" ? "complete" : "research",
     capabilities: work.state.steps.map(s => ({ id: s.id, title: s.title, repository_ids: [], state: s.status === "done" || s.status === "discarded" ? "researched" : s.status === "failed" ? "blocked" : "pending",
       findings: s.result?.summary ?? s.error ?? "", sources: [], document_ids: s.result?.document_ids ?? [] })) } });
-  const legacyPath = join(input.root, "knowledge-pipeline", input.turn.id, "state.json");
-  const legacy = existsSync(legacyPath) ? JSON.parse(readFileSync(legacyPath, "utf8")) : input.turn.research;
   const context = { mode: input.turn.mode, title: input.job.title, scope: input.job.scope, instructions: input.job.instructions, repositories: researchRepositories,
     archive_targets: [input.job.knowledge_target, ...input.job.repositories], archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
     revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
     materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })), ar_codes: input.job.ar_codes,
-    documents: input.read().map(documentSummary), probe: input.job.probe, continued: input.turn.pipeline_continue ?? 0,
-    legacy_progress_available: !!legacy };
+    documents: input.read().map(documentSummary), continued: input.turn.pipeline_continue ?? 0 };
   const execute = async (step?: SkillWorkStep): Promise<SkillWorkResult> => {
     const readonly = input.turn.mode === "discuss" || step?.readonly === true;
     const sessionRoot = step ? join(runRoot, "steps", step.id, String(step.attempts)) : join(runRoot, "coordinator");
@@ -162,14 +156,13 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       },
     });
     const workTool = defineTool({ name: "knowledge_work", label: "Skill 工作记录",
-      description: "list/read 查看当前工作；legacy 读取迁移前的研究记录。主会话可 schedule 保存任意步骤（id、title、instructions、depends_on、readonly），run 按编号在独立会话执行，discard 说明原因后放弃。步骤和评审安排由 Skill 决定，平台不会生成阶段。已完成步骤 run 直接返回已保存结果。",
-      parameters: Type.Object({ action: Type.Union((step ? ["list", "read", "legacy"] : ["list", "read", "legacy", "schedule", "run", "discard"]).map(s => Type.Literal(s))),
+      description: "list/read 查看当前工作。主会话可 schedule 保存任意步骤（id、title、instructions、depends_on、readonly），run 按编号在独立会话执行，discard 说明原因后放弃。步骤和评审安排由 Skill 决定，平台不会生成阶段。已完成步骤 run 直接返回已保存结果。",
+      parameters: Type.Object({ action: Type.Union((step ? ["list", "read"] : ["list", "read", "schedule", "run", "discard"]).map(s => Type.Literal(s))),
         id: Type.Optional(Type.String()), reason: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })),
         steps: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), instructions: Type.String(), depends_on: Type.Array(Type.String()), readonly: Type.Boolean() }))) }),
       execute: async (_id: string, args: any) => {
         try {
           signal.throwIfAborted();
-          if (args.action === "legacy") return reply(legacy ?? null);
           if (args.action === "list") return reply({ total: work.state.steps.length, steps: work.state.steps.slice(args.start ?? 0, (args.start ?? 0) + 30).map(({ instructions: _, result: __, ...s }) => s) });
           if (args.action === "read") return reply(args.id ? work.state.steps.find(s => s.id === args.id) ?? null : work.state);
           if (step || result) throw new Error("当前会话不能安排或执行其他步骤");

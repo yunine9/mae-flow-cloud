@@ -1377,7 +1377,7 @@ test("Agent 卡推荐投影:推荐原文换算成命中选项的投影码,多题
   }
 });
 
-test("问题流专用部署(--issue-only):需求流程停用,问题流不受影响", () => {
+test("B1验收2：问题流专用部署(--issue-only)保留独立服务与需求禁用契约", () => {
   const dataDir = mfcTemp("mfc-issue-only-");
   const service = new TaskService({
     dataDir, provider: "p", model: "m", modelsJson: {}, maxConcurrent: 1,

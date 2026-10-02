@@ -193,7 +193,7 @@ test("MR 被关闭:通知给出路;取消仍可达", async () => {
     "关闭事实入账");
     const mr = scene.service.get(scene.id).mrs![0];
     assert.ok(!mr.merged_at, "被关闭的 MR 不记合入");
-    assert.equal(lubanText(scene.luban).includes("有 MR 被关闭"), true,
+    await until(() => lubanText(scene.luban).includes("有 MR 被关闭"),
       "关闭通知带返工出路");
 
     // ADR-0034/0057:手动归档已退役——被关闭的 MR 不算交付,人只能
