@@ -22,7 +22,7 @@ const receipt = (job: DomainKnowledgeJob, targetId: string, previous?: DomainPub
   documents: job.documents.map(d => ({ id: d.id, path: d.path, content: d.content, revision: d.revision, knowledge_document_id: d.knowledge_document_id, knowledge_revision: d.published_revision })),
 });
 
-test("发布先保存正式版本，归档失败及重试不撤销知识、不重复发布", async () => {
+test("生产线验收14：发布先保存正式版本，归档失败及重试不撤销知识、不重复发布", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-local-publish-")); let calls = 0;
   const service = new DomainKnowledgeExtraction(dir, async input => extract(input), { publish: async (job, target, previous, _operator, save) => {
     calls++; assert.ok(readKnowledgeDocument(dir, job.documents[0].knowledge_document_id!).content);
@@ -40,7 +40,8 @@ test("发布先保存正式版本，归档失败及重试不撤销知识、不�
     assert.equal(readKnowledgeDocument(dir, id).revision, version.revision);
     await service.publish(job.id, "author", { document_ids: ["orders"] });
     assert.equal(service.get(job.id).archive_batches!.length, 1, "重按发布不追加相同批次");
-    service.retryArchive(job.id, "author"); await until(() => service.get(job.id).archive_batches?.[0].state === "done");
+    await until(() => service.get(job.id).archive_batches?.[0].state === "done");
+    service.retryArchive(job.id, "author");
     assert.equal(calls, 2); assert.equal(listKnowledgeDocumentVersions(dir, id).length, 1);
     const second = await service.publish(job.id, "author", { document_ids: ["refunds"], expected_revisions: { refunds: 1 } });
     assert.equal(second.archive_batches!.length, 2); assert.equal(listKnowledgeDocuments(dir).length, 2);
@@ -48,7 +49,7 @@ test("发布先保存正式版本，归档失败及重试不撤销知识、不�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("正式知识发起增量研究固定身份和来源基线，人工修改使旧建议无法发布", async () => {
+test("生产线验收14：正式知识发起增量研究固定身份和来源基线，人工修改使旧建议无法发布", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-incremental-"));
   const service = new DomainKnowledgeExtraction(dir, async input => {
     if (input.turn.mode === "extract") return extract(input);
@@ -78,7 +79,7 @@ test("正式知识发起增量研究固定身份和来源基线，人工修改�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("服务重启接续持久归档批次，始终使用已发布快照", async () => {
+test("生产线验收14：服务重启接续持久归档批次，始终使用已发布快照", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-resume-"));
   const initial = new DomainKnowledgeExtraction(dir, async input => extract(input)); let resumed: DomainKnowledgeExtraction | undefined;
   try {

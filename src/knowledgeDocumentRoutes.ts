@@ -3,6 +3,15 @@ import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
 
+function assertNotResearching(service: TaskService, documentId: string) {
+  const domain = service.getDomainKnowledgeExtraction(), component = service.getComponentResearch();
+  const activeDomain = domain.list().some(job => ["queued", "running"].includes(job.status)
+    && job.documents.some(document => document.knowledge_document_id === documentId));
+  const activeComponent = component.list().some(record => ["queued", "running"].includes(record.status)
+    && (record.document_id === documentId || record.update_document_id === documentId));
+  if (activeDomain || activeComponent) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
+}
+
 export async function knowledgeDocumentRoute(request: IncomingMessage, response: ServerResponse, parts: string[], service: TaskService,
   operator: string, readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
@@ -27,6 +36,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       return json(response, 202, service.getDomainKnowledgeExtraction().beginUpdate(id, body, operator));
     }
     if (request.method === "POST" && id && parts[2] === "restore") {
+      assertNotResearching(service, id);
       const body = await readBody(request, 8192);
       if (typeof body.expected_revision !== "string") throw new Error("请提供当前知识版本");
       const old = readKnowledgeDocumentVersion(dir, id, String(body.revision));
@@ -46,6 +56,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       return json(response, 202, { ok: true });
     }
     if (request.method === "POST" && id?.startsWith("kd-") && parts.length === 2) {
+      assertNotResearching(service, id);
       const body = await readBody(request, 3 * 1024 * 1024);
       const previous = readKnowledgeDocument(dir, id);
       if (body.content !== undefined && typeof body.expected_revision !== "string") throw new Error("请提供编辑时的知识版本，避免覆盖他人修改");

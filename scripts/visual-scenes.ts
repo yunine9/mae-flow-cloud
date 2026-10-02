@@ -158,6 +158,7 @@ async function render(out: string): Promise<void> {
       const { KnowledgeLibrary } = await vite.ssrLoadModule("/src/KnowledgeLibrary.tsx");
       const { KnowledgeResearchCreate } = await vite.ssrLoadModule("/src/KnowledgeResearchCreate.tsx");
       const { KnowledgeAssetsWorkspace } = await vite.ssrLoadModule("/src/KnowledgeAssets.tsx");
+      const { KnowledgeTaskCenter } = await vite.ssrLoadModule("/src/KnowledgeTaskCenter.tsx");
       const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
       Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "http://localhost/?kbPage=home", search: "?kbPage=home" } });
       try {
@@ -165,6 +166,10 @@ async function render(out: string): Promise<void> {
           ["knowledge-home", () => React.createElement(KnowledgeLibrary, { category: "documents", onCategoryChange: noop, uploadRequest: 0, onOpenTask: noop, onManage: noop })],
           ...(["domain", "component", "skill-extraction"] as const).map(kind => [`knowledge-create-${kind}`, () => React.createElement(KnowledgeResearchCreate, { initialKind: kind, onBack: noop, onCreated: noop })] as [string, () => React.ReactElement]),
           ["knowledge-skills", () => React.createElement(KnowledgeAssetsWorkspace, { onOpenTask: noop })],
+          ["knowledge-task-warning", () => React.createElement(KnowledgeTaskCenter, { onOpen: noop, onBack: noop, data: {
+            tasks: [], summary: { running: 0, attention: 1, total: 0 },
+            warnings: ["请检查损坏的知识记录：domain-extraction/dkx-00000000-0000-4000-8000-000000000001/job.json；其余任务照常可用"],
+          } })],
         ];
         for (const [name, make] of variants) {
           try {

@@ -1,5 +1,5 @@
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
-import { exportComponentArtifacts } from "./componentParadigms.ts";
+import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
 /** Background research is an inspectable draft, not a task or a delivery gate. */
 import { randomUUID } from "node:crypto";
@@ -8,10 +8,9 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { durableWriteFileSync } from "./durableWrite.ts";
 import {
   componentKey,
   componentRepositories,
@@ -83,17 +82,92 @@ export interface ResearchExecution {
   readDocument?: () => ResearchDocument;
   editDocument?: (edit: ResearchDocumentEdit) => ResearchDocument;
 }
+
+const stopBudgetMs = 60_000;
+const stopTimeoutReason = "停止超时：执行体 60 秒内未退出，已强制释放";
+const recordStatuses = ["queued", "running", "done", "failed", "cancelled"];
+const object = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
+const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
+const fields = (value: Record<string, any>, names: string[]) => names.every(name => typeof value[name] === "string");
+const optionalStrings = (value: Record<string, any>, names: string[]) => names.every(name => value[name] === undefined || typeof value[name] === "string");
+const revisions = (value: unknown) => object(value) && Object.values(value).every(revision => typeof revision === "string");
+const skill = (value: unknown) => object(value) && fields(value, ["name", "digest"]);
+function validComponent(value: unknown): boolean {
+  return object(value) && fields(value, ["id", "name", "repository", "branch", "path", "description"])
+    && strings(value.languages) && typeof value.enabled === "boolean";
+}
+function validSection(value: unknown, repositoryIds: string[]): boolean {
+  const valid = object(value) && fields(value, ["id", "title", "content", "interfaces", "integration", "example", "sources"])
+    && strings(value.repository_ids) && strings(value.related_ids) && typeof value.selected === "boolean"
+    && Number.isSafeInteger(value.revision) && value.revision >= 0 && (value.paradigm === undefined || object(value.paradigm));
+  if (valid && object(value) && value.paradigm) validateComponentParadigm(value.paradigm, repositoryIds);
+  return valid;
+}
+function validReviewTurn(value: unknown, repositoryIds: string[]): boolean {
+  return object(value) && fields(value, ["id", "section_id", "message", "operator", "created_at"])
+    && ["discuss", "rework", "update"].includes(value.mode) && recordStatuses.includes(value.status)
+    && optionalStrings(value, ["reply", "error", "finished_at"])
+    && (value.skill === undefined || skill(value.skill))
+    && (value.previous_revisions === undefined || revisions(value.previous_revisions))
+    && (value.base_revision === undefined || Number.isSafeInteger(value.base_revision))
+    && (value.proposal === undefined || (object(value.proposal) && ["pending", "accepted", "discarded"].includes(value.proposal.status)
+      && Number.isSafeInteger(value.proposal.base_revision) && validSection(value.proposal.section, repositoryIds)));
+}
+function validPipeline(value: unknown): boolean {
+  return object(value) && value.version === 1 && typeof value.skill === "string" && Array.isArray(value.tasks)
+    && value.tasks.every(task => object(task) && fields(task, ["id", "title", "spec"])
+      && ["inventory", "plan", "contracts", "paradigm", "pitfalls", "index", "synthesis"].includes(task.phase)
+      && ["pending", "running", "done", "failed"].includes(task.status) && strings(task.dependencies)
+      && Number.isSafeInteger(task.attempts) && task.attempts >= 0 && optionalStrings(task, ["component", "feedback"])
+      && (task.result === undefined || (object(task.result) && typeof task.result.findings === "string" && strings(task.result.open_questions)
+        && (task.result.components === undefined || (Array.isArray(task.result.components) && task.result.components.every(component => object(component)
+          && fields(component, ["id", "title", "scope"]) && strings(component.repository_ids))))
+        && (task.result.paradigms === undefined || (Array.isArray(task.result.paradigms) && task.result.paradigms.every(paradigm => object(paradigm)
+          && fields(paradigm, ["id", "title", "need"])))))));
+}
+function validResearchRecord(value: unknown, id: string): value is ResearchRecord {
+  const components = object(value) ? value.components ?? [value.component] : [];
+  const repositoryIds: string[] = Array.isArray(components) ? components.filter(object).map(component => component.id).filter(id => typeof id === "string") : [];
+  return object(value) && value.id === id && fields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"])
+    && optionalStrings(value, ["deleted_at", "deleted_by", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"])
+    && (value.mode === undefined || ["topic", "all"].includes(value.mode)) && (value.format === undefined || value.format === "joint-document")
+    && (value.use_latest_skill === undefined || typeof value.use_latest_skill === "boolean")
+    && (value.skill === undefined || skill(value.skill))
+    && recordStatuses.includes(value.status) && validComponent(value.component)
+    && (value.components === undefined || (Array.isArray(value.components) && value.components.every(validComponent)))
+    && Array.isArray(value.evidence) && value.evidence.every(object)
+    && (value.revisions === undefined || revisions(value.revisions))
+    && (value.material_ids === undefined || strings(value.material_ids))
+    && (value.document === undefined || (object(value.document) && typeof value.document.overview === "string"
+      && Array.isArray(value.document.sections) && value.document.sections.every(section => validSection(section, repositoryIds))))
+    && (value.review_turns === undefined || (Array.isArray(value.review_turns) && value.review_turns.every(turn => validReviewTurn(turn, repositoryIds))))
+    && (value.review_turns === undefined || value.review_turns.every(turn => !["queued", "running"].includes(turn.status)
+      || (value.document !== undefined && value.document.sections.some(section => section.id === turn.section_id))))
+    && (value.section_history === undefined || (Array.isArray(value.section_history) && value.section_history.every(history => object(history)
+      && fields(history, ["at", "operator"]) && validSection(history.section, repositoryIds))))
+    && (value.pipeline === undefined || validPipeline(value.pipeline))
+    && (value.update_metadata === undefined || (object(value.update_metadata) && fields(value.update_metadata, ["title", "scope"])
+      && strings(value.update_metadata.module_ids) && strings(value.update_metadata.repositories)))
+    && (value.challenge === undefined || (object(value.challenge) && fields(value.challenge, ["item_id", "source_digest", "language", "claim"]) && strings(value.challenge.repository_ids)));
+}
+interface RunningResearch {
+  controller: AbortController;
+  work: Promise<void>;
+  released: Promise<void>;
+  release: () => void;
+  stopTimer?: ReturnType<typeof setTimeout>;
+  review?: ResearchReviewTurn;
+}
 export class ComponentResearch {
   private records = new Map<string, ResearchRecord>();
-  private running = new Map<
-    string,
-    { controller: AbortController; work: Promise<void> }
-  >();
+  private running = new Map<string, RunningResearch>();
+  private readWarnings: string[] = [];
   private stopped = false;
   constructor(
     readonly dir: string,
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
+    private onStopTimeout: (record: ResearchRecord) => void = () => {},
   ) {
     const root = join(dir, "component-research");
     if (existsSync(root))
@@ -101,22 +175,28 @@ export class ComponentResearch {
         if (!/^cr-[a-f0-9-]{36}$/.test(name)) continue;
         const path = join(root, name, "record.json");
         if (!existsSync(path)) continue;
-        const record: ResearchRecord = JSON.parse(readFileSync(path, "utf8"));
-        this.records.set(record.id, record);
-        if (!record.deleted_at && ["queued", "running"].includes(record.status)) {
-          for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) {
-            turn.status = "queued"; turn.error = undefined;
+        try {
+          const record: unknown = JSON.parse(readFileSync(path, "utf8"));
+          if (!validResearchRecord(record, name)) throw new Error("组件研究记录格式无效");
+          if (!record.deleted_at && ["queued", "running"].includes(record.status)) {
+            for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) {
+              turn.status = "queued"; turn.error = undefined;
+            }
+            this.update(record, {
+              status: "queued",
+              stage: "接续原研究会话",
+              error: undefined,
+              finished_at: undefined,
+            });
           }
-          this.update(record, {
-            status: "queued",
-            stage: "接续原研究会话",
-            error: undefined,
-            finished_at: undefined,
-          });
+          this.records.set(record.id, record);
+        } catch {
+          this.readWarnings.push(`记录损坏或无法读取：component-research/${name}/record.json`);
         }
       }
     queueMicrotask(() => this.pump());
   }
+  warnings(): string[] { return [...this.readWarnings]; }
   list(summaryOnly = false) {
     return [...this.records.values()]
       .filter(r => !r.deleted_at)
@@ -215,8 +295,7 @@ export class ComponentResearch {
     const root = this.root(record.id);
     mkdirSync(root, { recursive: true });
     const path = join(root, "record.json");
-    writeFileSync(path + ".tmp", JSON.stringify(record), { mode: 0o600 });
-    renameSync(path + ".tmp", path);
+    durableWriteFileSync(path, JSON.stringify(record), { mode: 0o600 });
   }
   private pump() {
     if (this.stopped) return;
@@ -225,6 +304,9 @@ export class ComponentResearch {
       if (record.deleted_at || record.status !== "queued" || this.running.has(record.id)) continue;
       const controller = new AbortController();
       const review = record.review_turns?.find(turn => turn.status === "queued");
+      let release!: () => void;
+      const released = new Promise<void>(resolve => { release = resolve; });
+      const entry: RunningResearch = { controller, work: Promise.resolve(), released, release, review };
       if (review) review.status = "running";
       const previousDocument = record.document ? structuredClone(record.document) : undefined;
       if (review) review.base_revision ??= review.proposal?.base_revision ?? previousDocument?.sections.find(section => section.id === review.section_id)?.revision;
@@ -306,11 +388,46 @@ export class ComponentResearch {
           }
         })
         .finally(() => {
+          if (this.running.get(record.id) !== entry) return;
+          clearTimeout(entry.stopTimer);
           this.running.delete(record.id);
+          entry.release();
           this.pump();
         });
-      this.running.set(record.id, { controller, work });
+      entry.work = work;
+      this.running.set(record.id, entry);
     }
+  }
+  private abortRunning(record: ResearchRecord) {
+    const entry = this.running.get(record.id);
+    if (!entry) return;
+    entry.controller.abort();
+    entry.stopTimer ??= setTimeout(() => {
+      if (this.running.get(record.id) !== entry) return;
+      if (entry.review) {
+        entry.review.status = "failed"; entry.review.error = stopTimeoutReason;
+        entry.review.finished_at = new Date().toISOString();
+      }
+      try {
+        this.update(record, { status: "failed", stage: "萃取失败", error: stopTimeoutReason, finished_at: new Date().toISOString() });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code;
+        const reason = `${code ? `${code}：` : ""}${error instanceof Error ? error.message : String(error)}`;
+        record.error = `${stopTimeoutReason}；状态记录保存失败：${reason}`;
+        if (entry.review) entry.review.error = record.error;
+        this.readWarnings.push(`记录保存失败：component-research/${record.id}/record.json；${reason}；并发槽位已释放`);
+      } finally {
+        if (this.running.get(record.id) === entry) {
+          this.running.delete(record.id);
+          entry.release();
+        }
+        try { this.pump(); }
+        finally {
+          try { this.onStopTimeout(structuredClone(record)); }
+          catch (error) { this.readWarnings.push(`请检查停止超时通知失败：component-research/${record.id}/record.json；${error instanceof Error ? error.message : String(error)}`); }
+        }
+      }
+    }, stopBudgetMs);
   }
   stop(id: string) {
     const record = this.records.get(id);
@@ -318,7 +435,7 @@ export class ComponentResearch {
     if (["queued", "running"].includes(record.status)) {
       for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "cancelled";
       this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()});
-      this.running.get(id)?.controller.abort();
+      this.abortRunning(record);
     }
     return this.get(id);
   }
@@ -378,7 +495,7 @@ export class ComponentResearch {
   editSection(id: string, input: { section: ResearchSection; base_revision: number }, operator: string) {
     const record = this.records.get(id), section = record?.document?.sections.find(s => s.id === input.section?.id);
     if (!record?.document || record.deleted_at || record.document_id || !section) throw new Error("当前章节不可修改");
-    if (["queued", "running"].includes(record.status) && !record.review_turns?.some(t => ["queued", "running"].includes(t.status))) throw new Error("首次萃取正在写入，请等待完成");
+    if (["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
     if (section.revision !== input.base_revision) throw new Error("章节已有新版本，请比较后重新保存");
     const document = editResearchDocument(record.document, { action: "section", section: input.section }, (record.components ?? [record.component]).map(c => c.id));
     const metadata = document.sections.find(s => s.id === section.id)?.paradigm;
@@ -410,6 +527,8 @@ export class ComponentResearch {
     this.update(record, {}); return this.get(id);
   }
   restoreSection(id: string, sectionId: string, revision: number, baseRevision: number, operator: string) {
+    const record = this.records.get(id);
+    if (record && ["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
     const previous = this.records.get(id)?.section_history?.find(h => h.section.id === sectionId && h.section.revision === revision);
     if (!previous) throw new Error("未找到该历史版本");
     return this.editSection(id, { section: previous.section, base_revision: baseRevision }, operator);
@@ -523,7 +642,8 @@ export class ComponentResearch {
           error: undefined,
         });
       }
-    for (const r of this.running.values()) r.controller.abort();
-    await Promise.allSettled([...this.running.values()].map((r) => r.work));
+    const entries = [...this.running.entries()];
+    for (const [id] of entries) this.abortRunning(this.records.get(id)!);
+    await Promise.all(entries.map(([, entry]) => entry.released));
   }
 }

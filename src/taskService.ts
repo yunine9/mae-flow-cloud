@@ -2017,6 +2017,9 @@ export class TaskService {
     if (!process.env.MAE_FLOW_DESKTOP_NOTIFY) {
       process.env.MAE_FLOW_NO_NOTIFY ??= "1";
     }
+    // 服务启动即接续研究和归档，不等待用户首次打开知识页面。
+    this.getDomainKnowledgeExtraction();
+    this.getComponentResearch();
   }
 
   async refreshDeliveryPlatformCheck(): Promise<DeliveryPlatformCheck | undefined> {
@@ -5524,6 +5527,12 @@ export class TaskService {
     return this.domainKnowledgeExtraction ??= createDomainKnowledgeExtraction({
       dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
       credential: operator => this.options.gitCredential?.(operator), onIndexed: () => this.prepareKnowledgeIndex(),
+      onStopTimeout: job => {
+        if (!this.options.notifier) return;
+        this.bypass(undefined, "知识研究停止超时通知", this.options.notifier.notifyOutcome({ taskId: job.id, account: job.operator,
+          status: "failed", summary: `${job.title}：${job.error}`,
+          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=research&kbKind=domain&kbTask=${encodeURIComponent(job.id)}` }));
+      },
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
       source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "业务知识研究", enabled: true }, operator, signal),
     });
@@ -5532,6 +5541,12 @@ export class TaskService {
   getComponentResearch(): ComponentResearch {
     return this.componentResearch ??= createComponentKnowledgeExtraction({
       dataDir: this.options.dataDir, onIndexed: () => this.prepareKnowledgeIndex(),
+      onStopTimeout: record => {
+        if (!this.options.notifier) return;
+        this.bypass(undefined, "组件研究停止超时通知", this.options.notifier.notifyOutcome({ taskId: record.id, account: record.operator,
+          status: "failed", summary: `${record.topic || record.language}：${record.error}`,
+          link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=research&kbKind=component&kbTask=${encodeURIComponent(record.id)}` }));
+      },
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
       source: (component, operator, signal) => this.componentResearchSource(component, operator, signal),
     });

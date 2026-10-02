@@ -159,8 +159,11 @@ export function runGitProcess(
     env?: NodeJS.ProcessEnv;
     timeoutMs: number;
     maxBuffer?: number;
+    signal?: AbortSignal;
   },
 ): Promise<AsyncGitResult> {
+  const aborted = () => options.signal?.reason instanceof Error ? options.signal.reason : new Error("Git 操作已停止");
+  if (options.signal?.aborted) return Promise.resolve({ status: null, stdout: "", stderr: "", signal: null, timedOut: false, error: aborted() });
   return new Promise((resolveResult) => {
     const detached = process.platform !== "win32";
     const child = spawn("git", args, {
@@ -178,6 +181,7 @@ export function runGitProcess(
     let overflow: Error | undefined;
     let timedOut = false;
     let spawnError: Error | undefined;
+    let abortError: Error | undefined;
     const append = (target: Buffer[], chunk: Buffer, stream: "stdout" | "stderr") => {
       const current = stream === "stdout" ? stdoutBytes : stderrBytes;
       const remaining = maxBuffer - current;
@@ -208,21 +212,24 @@ export function runGitProcess(
       killGroup();
     }, options.timeoutMs);
     timer.unref?.();
+    const abort = () => { abortError ??= aborted(); killGroup(); };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
     child.once("error", (error) => {
       spawnError = error;
     });
     child.once("close", (status, signal) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       resolveResult({
-        status: (spawnError || overflow || timedOut) ? null : status,
+        status: (spawnError || overflow || timedOut || abortError) ? null : status,
         signal,
         timedOut,
         stdout: Buffer.concat(stdout).toString("utf-8"),
         stderr: Buffer.concat(stderr).toString("utf-8"),
-        ...((spawnError ?? overflow) ? { error: spawnError ?? overflow } : {}),
+        ...((spawnError ?? overflow ?? abortError) ? { error: spawnError ?? overflow ?? abortError } : {}),
       });
     });
   });
 }
-
 

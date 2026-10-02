@@ -96,7 +96,8 @@ export function KnowledgeTaskCenter({ onOpen, onBack, data, onSummaryChange }: {
   const needle = query.trim().toLocaleLowerCase();
   const visible = current?.tasks.filter(task => (filter === "current" ? task.group !== "completed" : task.group === filter)
     && (!needle || [task.title, task.operator, task.scope, kindLabels[task.kind]].some(value => value?.toLocaleLowerCase().includes(needle)))) ?? [];
-  const counts = { current: current?.tasks.filter(task => task.group !== "completed").length ?? 0, running: current?.summary.running ?? 0,
+  const visibleWarnings = filter === "current" || filter === "attention" ? current?.warnings.filter(warning => !needle || warning.toLocaleLowerCase().includes(needle)) ?? [] : [];
+  const counts = { current: current ? current.summary.running + current.summary.attention : 0, running: current?.summary.running ?? 0,
     attention: current?.summary.attention ?? 0, completed: current?.tasks.filter(task => task.group === "completed").length ?? 0 };
   const pageSize = 20, pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const shownPage = Math.min(pageIndex, pageCount - 1), pageTasks = visible.slice(shownPage * pageSize, (shownPage + 1) * pageSize);
@@ -109,11 +110,12 @@ export function KnowledgeTaskCenter({ onOpen, onBack, data, onSummaryChange }: {
       <label className="knowledge-task-search"><SearchIcon size={15} /><input aria-label="搜索知识任务" placeholder="搜索任务、归属或操作人" value={query} onChange={event => { setQuery(event.target.value); setPageIndex(0); }} /></label>
       {!controlled && <Button variant="ghost" size="sm" onClick={() => setRefresh(value => value + 1)} title="刷新任务"><RefreshCwIcon size={15} /></Button>}
     </div>
-    {(error || !!current?.warnings.length) && <div className="knowledge-task-warning" role="status">{error || current?.warnings.join("；")}{current && error ? "。当前保留上次加载的数据。" : ""}</div>}
+    {error && <div className="knowledge-task-warning" role="status">{error}{current ? "。当前保留上次加载的数据。" : ""}</div>}
     <div className="knowledge-task-table">
       <div className="knowledge-task-columns" aria-hidden="true"><span>任务 / 归属</span><span>状态</span><span>发起 / 操作人</span><span>开始时间</span><span>运行时长</span><span>最近公开研究动态</span><span /></div>
+      {visibleWarnings.map(warning => <div key={warning} className="knowledge-task-warning" role="status">{warning}</div>)}
       {!current && !error ? <div className="knowledge-task-empty">正在加载知识任务…</div>
-        : !visible.length ? <div className="knowledge-task-empty">{query || filter !== "current" ? "没有符合条件的任务" : counts.completed ? "当前没有需要跟进的任务，可在“已完成”中查看历史记录。" : "还没有知识任务。新建萃取或导入 Skill 后可在这里跟进。"}</div>
+        : !visible.length && !visibleWarnings.length ? <div className="knowledge-task-empty">{query || filter !== "current" ? "没有符合条件的任务" : counts.completed ? "当前没有需要跟进的任务，可在“已完成”中查看历史记录。" : "还没有知识任务。新建萃取或导入 Skill 后可在这里跟进。"}</div>
           : pageTasks.map(task => <TaskRow key={`${task.kind}:${task.id}`} task={task} now={now} onOpen={onOpen} />)}
     </div>
     {pageCount > 1 && <nav className="knowledge-task-pagination" aria-label="知识任务分页"><span>共 {visible.length} 项，每页 {pageSize} 项</span><div><Button variant="outline" disabled={shownPage === 0} onClick={() => setPageIndex(shownPage - 1)}>上一页</Button><span>{shownPage + 1} / {pageCount}</span><Button variant="outline" disabled={shownPage + 1 >= pageCount} onClick={() => setPageIndex(shownPage + 1)}>下一页</Button></div></nav>}

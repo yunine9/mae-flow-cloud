@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { DomainKnowledgeExtraction } from "./domainKnowledgeExtraction.ts";
 import type { ComponentResearch } from "./componentResearch.ts";
 import { readHostSkillPackage, scanForSecrets } from "./hostSkillLibrary.ts";
 import { readKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
+import { durableWriteFileSync } from "./durableWrite.ts";
 
 import type { KnowledgeReviewKind, KnowledgeReviewNote, KnowledgeReviewNoteInput } from "./knowledgeReviewNoteTypes.ts";
 export type { KnowledgeReviewKind, KnowledgeReviewNote, KnowledgeReviewNoteInput } from "./knowledgeReviewNoteTypes.ts";
@@ -45,13 +46,31 @@ function read(sources: KnowledgeReviewSources, kind: KnowledgeReviewKind, jobId:
   if (!existsSync(path)) return [];
   const notes = JSON.parse(readFileSync(path, "utf8"));
   if (!Array.isArray(notes)) throw new Error("批注记录无法读取，请检查存储文件");
+  if (kind === "domain" || kind === "component") {
+    const domain = kind === "domain" ? sources.domain.get(jobId) : undefined;
+    const component = kind === "component" ? sources.component.get(jobId) : undefined;
+    let changed = false;
+    for (const note of notes as KnowledgeReviewNote[]) {
+      if (note.status !== "submitted" || !note.turn_id) continue;
+      const domainTurn = domain?.turns.find(turn => turn.id === note.turn_id);
+      const componentTurn = component?.review_turns?.find(turn => turn.id === note.turn_id);
+      const turn = domainTurn ?? componentTurn;
+      if (!turn) continue;
+      const discarded = domainTurn?.proposals.some(proposal => proposal.document.id === note.document_id && proposal.status === "discarded")
+        || componentTurn?.section_id === note.document_id && componentTurn.proposal?.section.id === note.document_id && componentTurn.proposal.status === "discarded";
+      if (["failed", "cancelled"].includes(turn.status) || discarded) {
+        note.status = "open";
+        changed = true;
+      }
+    }
+    if (changed) save(sources, kind, jobId, notes);
+  }
   return notes;
 }
 function save(sources: KnowledgeReviewSources, kind: KnowledgeReviewKind, jobId: string, notes: KnowledgeReviewNote[]) {
   const path = file(sources, kind, jobId);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(`${path}.tmp`, JSON.stringify(notes), { mode: 0o600 });
-  renameSync(`${path}.tmp`, path);
+  durableWriteFileSync(path, JSON.stringify(notes), { mode: 0o600 });
 }
 function string(value: unknown, label: string, limit: number, required = false): string | undefined {
   if (value == null && !required) return undefined;

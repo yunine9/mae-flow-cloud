@@ -38,7 +38,7 @@ test("工作草稿持续修正，手动重试保留原轮次；人工修改不�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("领域修订建议不覆盖人工编辑，版本冲突、恢复和重启保留真实状态", async () => {
+test("生产线验收14（F23）：研究中拒绝编辑，结束后的人工修改仍受版本冲突、恢复与重启保护", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-extraction-"));
   let release: () => void = () => {};
   const service = new DomainKnowledgeExtraction(dir, async input => {
@@ -62,8 +62,10 @@ test("领域修订建议不覆盖人工编辑，版本冲突、恢复和重启�
     assert.equal(service.get(job.id).documents[0].revision, 1);
     service.run(job.id, { mode: "revise", document_ids: [document.id], message: "核对取消" }, "expert");
     await until(() => service.get(job.id).status === "running"); await new Promise(resolve => setTimeout(resolve, 5));
-    service.edit(job.id, { document: { ...document, content: "人工修订" }, base_revision: 1 }, "editor");
+    assert.throws(() => service.edit(job.id, { document: { ...document, content: "人工修订" }, base_revision: 1 }, "editor"), /研究进行中：请先停止，或等本轮结束后再改/);
+    assert.equal(service.get(job.id).documents[0].content, document.content);
     release(); await until(() => service.get(job.id).status === "done");
+    service.edit(job.id, { document: { ...document, content: "人工修订" }, base_revision: 1 }, "editor");
     const turn = service.get(job.id).turns.at(-1)!;
     assert.equal(turn.proposals[0].base_revision, 1);
     assert.equal(service.get(job.id).documents[0].content, "人工修订");
@@ -75,7 +77,7 @@ test("领域修订建议不覆盖人工编辑，版本冲突、恢复和重启�
     assert.deepEqual(restart.get(job.id), JSON.parse(JSON.stringify(restored))); await restart.shutdown();
   } finally { release(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
-test("停止后迟到结果不复活；路径和归档目标不能通过模型或人工编辑越界", async () => {
+test("生产线验收14：停止后迟到结果不复活；路径和归档目标不能通过模型或人工编辑越界", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-extraction-"));
   const service = new DomainKnowledgeExtraction(dir, async input => {
     assert.throws(() => input.save({ ...document, path: "../../README.md" }), /路径/);
@@ -91,7 +93,7 @@ test("停止后迟到结果不复活；路径和归档目标不能通过模型�
     assert.throws(() => service.edit(job.id, { document: { ...document, path: "domains/orders/new.md" }, base_revision: 1 }, "editor"), /归档位置/);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
-test("MR 部分失败保存已经发生的分支事实，重试复用分支且不影响其他仓", async () => {
+test("生产线验收14：MR 部分失败保存已经发生的分支事实，重试复用分支且不影响其他仓", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-extraction-"));
   let calls = 0;
   const service = new DomainKnowledgeExtraction(dir, async input => extract(input), {

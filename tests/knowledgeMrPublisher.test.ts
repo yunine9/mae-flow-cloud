@@ -32,7 +32,7 @@ test("逐文件归档真实提交根目录与子目录，已有根目录规范�
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("真实 Git 文档归档复用开放 MR、保留前批、合入只更新归档状态、新一轮保留其他文件及人工修改", async () => {
+test("生产线验收14：真实 Git 文档归档复用开放 MR、保留前批、合入只更新归档状态、新一轮保留其他文件及人工修改", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-publish-")), remote = join(root, "remote.git"), source = join(root, "source");
   mkdirSync(source); const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git(source, "init", "-b", "main"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.test");
@@ -362,7 +362,7 @@ test("合入后归档仓被直接修改：记录差异不覆盖平台正文，�
       if (choice === "absorb") {
         // 核对之后远端又被改：旧核对不能放行，仍提示重新核对。
         writeFileSync(join(source, path), "# 订单\n平台发布的规则\n业务方直接补充的规则\n业务方第二次修改\n"); git(source, "add", path); git(source, "commit", "-m", "business edit 2"); git(source, "push", remote, "HEAD:refs/heads/main");
-        await service.publish(id, "author"); service.retryArchive(id, "author");
+        await service.publish(id, "author");
         await settled(() => service.get(id).archive_batches!.at(-1)!.state === "failed");
         assert.match(service.get(id).archive_batches!.at(-1)!.error!, /^请核对远端差异/); assert.equal(mrs.length, 1);
         job = await service.readRemote(id, "orders", "author");
@@ -370,7 +370,6 @@ test("合入后归档仓被直接修改：记录差异不覆盖平台正文，�
         service.reconcile(id, { document: { ...job.documents[0], content: decided }, base_revision: job.documents[0].revision, snapshot_id: job.documents[0].remote_review!.id }, "author");
       }
       await service.publish(id, "author");
-      service.retryArchive(id, "author");
       await settled(() => ["done", "failed"].includes(service.get(id).archive_batches!.at(-1)!.state));
       const last = service.get(id).archive_batches!.at(-1)!;
       assert.deepEqual(service.get(id).archive_batches!.map(b => b.state), choice === "absorb" ? ["done", "superseded", "superseded", "done"] : ["done", "done"]);

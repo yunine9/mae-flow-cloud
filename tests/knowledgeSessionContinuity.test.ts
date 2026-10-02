@@ -95,7 +95,7 @@ test("组件萃取重启保留通过的小任务并创建新会话；明确停�
   } finally { release(); await service.shutdown(); await model.stop(); if (oldEc === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = oldEc; rmSync(f.dir, { recursive: true, force: true }); }
 });
 
-test("领域修订建议在重启前落盘，接续保留原文版本并保护期间的人工修改", async () => {
+test("生产线验收14：领域修订建议在重启前落盘，停止后可编辑、主动接续保护人工版本", async () => {
   const f = fixture(); let saved = false;
   let service = new DomainKnowledgeExtraction(f.dir, async input => {
     if (input.turn.mode === "extract") { input.save({ ...document, layer: "domain" }, { content: null, revision: f.revision }); return "首次完成"; }
@@ -107,20 +107,19 @@ test("领域修订建议在重启前落盘，接续保留原文版本并保护�
     const job = service.create({ issue_no: "REQ1", title: "业务", scope: "规则", repositories: [{ repository: "https://example.test/business.git", branch: "master" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "master", docs_path: "docs/knowledge" } }, "expert");
     await until(() => service.get(job.id).status === "done");
     service.run(job.id, { mode: "revise", document_ids: [document.id], message: "补充规则" }, "expert");
-    await until(() => saved); await service.shutdown();
+    await until(() => saved);
+    assert.throws(() => service.edit(job.id, { document: { ...document, layer: "domain", content: "人工新版本" }, base_revision: 1 }, "editor"), /研究进行中/);
+    service.stop(job.id); await service.shutdown();
     const turn = service.get(job.id).turns.at(-1)!;
     assert.equal(turn.proposals[0].document.content, "待审查建议");
     service.edit(job.id, { document: { ...document, layer: "domain", content: "人工新版本" }, base_revision: 1 }, "editor");
-    // 模拟强制退出留下的 running 状态，仍接续同一轮。
-    const path = join(f.dir, "domain-extraction", job.id, "job.json");
-    const disk = JSON.parse(readFileSync(path, "utf8")); disk.status = "running"; disk.turns.at(-1).status = "running";
-    writeFileSync(path, JSON.stringify(disk));
     service = new DomainKnowledgeExtraction(f.dir, async input => {
       assert.equal(input.turn.id, turn.id);
       assert.equal(input.turn.proposals[0].document.content, "待审查建议");
       input.save({ ...document, layer: "domain", content: "接续后的建议" });
       return "修订完成";
     });
+    service.resume(job.id, "expert");
     await until(() => service.get(job.id).status === "done");
     assert.equal(service.get(job.id).turns.at(-1)!.proposals[0].base_revision, 1);
     assert.throws(() => service.decide(job.id, turn.id, document.id, "accept", "expert"), /新版本/);

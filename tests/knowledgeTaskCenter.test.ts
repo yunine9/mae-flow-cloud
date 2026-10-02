@@ -62,7 +62,7 @@ test("Skill 审核等待不能作为运行时长，重启中断无结束时间�
   assert.equal(knowledgeTaskElapsed(extraction), "4 分 10 秒");
 });
 
-test("中心读取既有记录与重启状态，来源不可用会显示警告而不隐藏其他任务", () => {
+test("生产线验收3：中心读取既有记录与重启状态，来源不可用会计入待处理告警而不隐藏其他任务", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "knowledge-task-center-"));
   try {
     mkdirSync(join(dataDir, "knowledge-extract", "ke-123"), { recursive: true });
@@ -75,7 +75,7 @@ test("中心读取既有记录与重启状态，来源不可用会显示警告�
     });
     assert.equal(result.tasks.length, 2);
     assert.equal(result.tasks[0].id, "ke-123");
-    assert.deepEqual(result.summary, { running: 0, attention: 2, total: 2 });
+    assert.deepEqual(result.summary, { running: 0, attention: 3, total: 2 });
     assert.equal(result.warnings.length, 1);
     assert.match(result.warnings[0], /基础组件萃取/);
     assert.equal("documents" in result.tasks[1], false);

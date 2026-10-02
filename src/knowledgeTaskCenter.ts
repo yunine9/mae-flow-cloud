@@ -6,6 +6,7 @@ import type { ExtractionJobRecord } from "./knowledgeExtraction.ts";
 import { listSkillSubmissions, type SkillSubmissionRecord } from "./hostSkillLibrary.ts";
 import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "./knowledgeTaskCenterTypes.ts";
 import { knowledgeArchiveState } from "./knowledgeArchiveStatus.ts";
+import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
 function validTime(value: unknown): string | undefined {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -95,14 +96,16 @@ export function skillSubmissionTask(record: SkillSubmissionRecord): KnowledgeTas
 
 export interface KnowledgeTaskSources {
   dataDir: string;
-  domain: { list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined };
-  component: { list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord };
+  domain: { list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined; warnings?(): string[] };
+  component: { list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord; warnings?(): string[] };
   skillExtractionJob(id: string): ExtractionJobRecord | undefined;
 }
 
 /** 只读投影：各自的研究记录仍是状态来源，中心不保存第二份任务。 */
 export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTaskCenterData {
   const tasks: KnowledgeTaskRow[] = [], warnings: string[] = [];
+  warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
+  listKnowledgeDocuments(sources.dataDir, warnings);
   const collect = (label: string, read: () => void) => {
     try { read(); } catch { warnings.push(`${label}暂时无法读取，请在原任务入口查看`); }
   };
@@ -137,7 +140,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   tasks.sort((a, b) => Date.parse(b.created_at ?? b.started_at ?? "") - Date.parse(a.created_at ?? a.started_at ?? "") || a.id.localeCompare(b.id));
   return { tasks, warnings, summary: {
     running: tasks.filter(task => task.group === "running").length,
-    attention: tasks.filter(task => task.group === "attention").length,
+    attention: tasks.filter(task => task.group === "attention").length + warnings.length,
     total: tasks.length,
   } };
 }

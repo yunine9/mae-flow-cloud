@@ -1,6 +1,6 @@
 import { componentArchiveParts, componentArchiveMetadata, componentMetadataPath, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
 import { cleanupDocumentVersions, cleanupEntries, previewKnowledgeCleanup } from "./knowledgeCleanup.ts";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
@@ -20,11 +20,36 @@ const documentPaths = (documents: Array<{ id: string; path: string; metadata_for
 // #447：平台发布即生效、Git 只归档。合入后归档仓被直接修改时两边都不自动覆盖，只请人核对。
 const divergedMessage = (paths: string[]) => `请核对远端差异后再发布：归档仓中的 ${paths.join("、")} 在 MR 合入后被直接修改过，与平台发布版本不同。请读取远端版本并保存合并稿（可吸收远端改动或保留平台版本），确认后再发布；平台正文未被覆盖`;
 export class KnowledgeMrPublisher {
+  private stopped = false;
+  private active = new Map<AbortController, Promise<unknown>>();
   constructor(private options: {
     dataDir: string; platformUrl: () => string | undefined;
     credential: (operator: string) => (MergeRequestCredential & { email?: string }) | undefined;
     onIndexed: () => void;
-  }) {}
+  }) {
+    // kill -9 不执行 finally。知识归档的仓和凭据放在同一个专用根，
+    // 起服清扫只处理这个根，不能误删问题流或需求交付正在用的 Git 凭据。
+    const area = this.temporaryRoot();
+    for (const name of readdirSync(area).filter(name => name.startsWith("publish-"))) rmSync(join(area, name), { recursive: true, force: true });
+  }
+  private temporaryRoot() {
+    const area = join(this.options.dataDir, "knowledge-publication-tmp");
+    if (existsSync(area) && (!lstatSync(area).isDirectory() || lstatSync(area).isSymbolicLink())) throw new Error("知识归档临时目录不是可信普通目录");
+    mkdirSync(area, { recursive: true, mode: 0o700 });
+    return area;
+  }
+  private assertActive() { if (this.stopped) throw new Error("知识归档服务已停止"); }
+  async shutdown() {
+    this.stopped = true;
+    for (const controller of this.active.keys()) controller.abort(new Error("知识归档服务已停止"));
+    if (!this.active.size) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([Promise.allSettled([...this.active.values()]), new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("知识归档关停超时：Git 操作 60 秒内未退出")), 60_000);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
   private identity(operator: string) {
     const credential = this.options.credential(operator), platformUrl = this.options.platformUrl();
     if (!credential?.username || !credential.password || !credential.email) throw new Error("请先配置个人 Git 账号、令牌和提交邮箱，归档不会使用系统只读凭据");
@@ -39,25 +64,39 @@ export class KnowledgeMrPublisher {
     return view.mrState;
   }
   private async withGit<T>(operator: string, work: (git: (args: string[], allowFailure?: boolean) => Promise<string>, root: string) => Promise<T>) {
-    const identity = this.identity(operator), sandbox = new HostGitSandbox(this.options.dataDir), prepared = sandbox.prepare(identity.credential);
-    const area = join(this.options.dataDir, "knowledge-publication-tmp"); mkdirSync(area, { recursive: true });
-    const root = mkdtempSync(join(area, "publish-"));
-    const git = async (args: string[], allowFailure = false) => {
-      const env = { ...prepared.env };
-      for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
-      const result = await runGitProcess([...prepared.args, ...gitCommitIdentityConfigs(identity.credential).flatMap(([key, value]) => ["-c", `${key}=${value}`]), ...args], { cwd: root, env, timeoutMs: 90_000 });
-      if (result.status !== 0 && !allowFailure) {
-        const output = `${result.stderr}\n${result.stdout}`;
-        if (commitHookRejection(output)) {
-          const sha = rejectedCommitSha(output);
-          throw new Error(`CodeHub 拒绝推送：提交说明不符合仓库规范${sha ? `（提交 ${sha.slice(0, 12)}）` : ""}，请检查仓库提交格式要求`);
-        }
-        throw new Error("知识文档 Git 操作失败，请检查个人权限、分支和网络；未覆盖远端提交");
+    this.assertActive();
+    const identity = this.identity(operator), controller = new AbortController();
+    const root = mkdtempSync(join(this.temporaryRoot(), "publish-")), sandbox = new HostGitSandbox(root);
+    const operation = (async () => {
+      let prepared: ReturnType<HostGitSandbox["prepare"]> | undefined;
+      try {
+        prepared = sandbox.prepare(identity.credential);
+        const git = async (args: string[], allowFailure = false) => {
+          controller.signal.throwIfAborted();
+          const env = { ...prepared!.env };
+          for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
+          const result = await runGitProcess([...prepared!.args, ...gitCommitIdentityConfigs(identity.credential).flatMap(([key, value]) => ["-c", `${key}=${value}`]), ...args], { cwd: root, env, timeoutMs: 90_000, signal: controller.signal });
+          controller.signal.throwIfAborted();
+          if (result.status !== 0 && !allowFailure) {
+            const output = `${result.stderr}\n${result.stdout}`;
+            if (commitHookRejection(output)) {
+              const sha = rejectedCommitSha(output);
+              throw new Error(`CodeHub 拒绝推送：提交说明不符合仓库规范${sha ? `（提交 ${sha.slice(0, 12)}）` : ""}，请检查仓库提交格式要求`);
+            }
+            throw new Error("知识文档 Git 操作失败，请检查个人权限、分支和网络；未覆盖远端提交");
+          }
+          return result.status === 0 ? result.stdout : "";
+        };
+        await git(["init", "--bare"]);
+        return await work(git, root);
+      } finally {
+        sandbox.cleanup(prepared);
+        rmSync(root, { recursive: true, force: true });
       }
-      return result.status === 0 ? result.stdout : "";
-    };
-    try { await git(["init", "--bare"]); return await work(git, root); }
-    finally { sandbox.cleanup(prepared); rmSync(root, { recursive: true, force: true }); }
+    })();
+    this.active.set(controller, operation);
+    try { return await operation; }
+    finally { this.active.delete(controller); }
   }
   private async content(git: (args: string[]) => Promise<string>, revision: string, path: string) {
     knowledgeRelativePath(path, !path.endsWith(".metadata.json"));
@@ -72,6 +111,7 @@ export class KnowledgeMrPublisher {
     return git(["show", `${revision}:${path}`]);
   }
   async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (p: DomainPublication) => void): Promise<DomainPublication> {
+    this.assertActive();
     const issue = knowledgeIssueNumber(job.issue_no);
     const identity = this.identity(operator);
     if (previous?.mr_attempted && !previous.url) {
@@ -215,6 +255,7 @@ export class KnowledgeMrPublisher {
     });
   }
   async refresh(job: DomainKnowledgeJob, publication: DomainPublication, operator: string): Promise<DomainPublication> {
+    this.assertActive();
     return (await this.inspect(job, publication, operator)).result;
   }
   /** 远端正文只在内存里交给发布核对，不落盘；记录只留路径与 target_revision，人从读取远端拿原文。 */
@@ -247,6 +288,7 @@ export class KnowledgeMrPublisher {
     return { result, diverged };
   }
   async previewCleanup(job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) {
+    this.assertActive();
     const publication = job.publications.find(p => p.target_id === target.id);
     const state = publication?.url ? await this.state(target, publication, operator) : undefined;
     return this.withGit(operator, async git => {
@@ -261,6 +303,7 @@ export class KnowledgeMrPublisher {
     });
   }
   async readRemote(job: DomainKnowledgeJob, doc: DomainDocument, operator: string): Promise<DomainRemoteReview> {
+    this.assertActive();
     const target = [job.knowledge_target, ...job.repositories].find(r => r.id === doc.target_id)!;
     const publication = job.publications.find(p => p.target_id === target.id);
     const state = publication?.url ? await this.state(target, publication, operator) : undefined;

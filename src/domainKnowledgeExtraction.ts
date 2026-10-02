@@ -1,18 +1,20 @@
 import { componentArchiveParts, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
-import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
+import { listKnowledgeDocuments, readKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { IncompleteDomainResearch } from "./domainSkillWork.ts";
+import { durableWriteFileSync } from "./durableWrite.ts";
+import { knowledgeDeleted } from "./knowledgeDeletionStore.ts";
 
-import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution, DomainRemoteReview, KnowledgeCleanupPlan } from "./domainKnowledgeTypes.ts";
+import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution, DomainRemoteReview, KnowledgeCleanupPlan } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
 
 export function knowledgeIssueNumber(value: unknown): string {
@@ -43,10 +45,79 @@ function repository(input: any, id: string): KnowledgeRepository {
     path: input.path ? knowledgeRelativePath(input.path) : "", docs_path: knowledgeRelativePath(input.docs_path || "docs/knowledge") };
 }
 
+const STOP_BUDGET_MS = 60_000;
+const STOP_TIMEOUT = "停止超时：执行体 60 秒内未退出，已强制释放";
+const isRecord = (value: any): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
+function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
+  const strings = (values: any) => Array.isArray(values) && values.every(value => typeof value === "string");
+  const fields = (value: any, keys: string[]) => isRecord(value) && keys.every(key => typeof value[key] === "string");
+  const revisionMap = (value: any) => isRecord(value) && Object.values(value).every(revision => typeof revision === "string");
+  const nullableText = (value: any) => value === null || typeof value === "string";
+  const content = (doc: any) => isRecord(doc) && ["id", "title", "target_id", "path", "content", "sources"].every(key => typeof doc[key] === "string") && ["domain", "repository"].includes(doc.layer);
+  const document = (doc: any) => content(doc) && Number.isSafeInteger(doc.revision) && doc.revision > 0
+    && typeof doc.selected === "boolean" && nullableText(doc.base_content) && typeof doc.base_revision === "string"
+    && Array.isArray(doc.history) && doc.history.every((history: any) => fields(history, ["content", "sources", "title", "operator", "at"])
+      && Number.isSafeInteger(history.revision) && history.revision > 0)
+    && (doc.remote_review === undefined || fields(doc.remote_review, ["id", "target_revision"])
+      && nullableText(doc.remote_review.target_content) && typeof doc.remote_review.reviewed === "boolean")
+    && (doc.component_metadata === undefined || typeof doc.component_metadata === "string");
+  const target = (target: any) => isRecord(target) && ["id", "repository", "branch", "docs_path"].every(key => typeof target[key] === "string");
+  const publishedDocument = (doc: any) => fields(doc, ["id", "path", "content"]) && Number.isSafeInteger(doc.revision) && doc.revision > 0;
+  const publication = (p: any) => isRecord(p) && typeof p.target_id === "string" && typeof p.branch === "string"
+    && ["pending", "opened", "merged", "failed", "closed", "unchanged"].includes(p.state) && Array.isArray(p.documents) && p.documents.every(publishedDocument)
+    && (p.attempted_documents === undefined || Array.isArray(p.attempted_documents) && p.attempted_documents.every(publishedDocument))
+    && (p.diverged_paths === undefined || strings(p.diverged_paths))
+    && (p.sync_state === undefined || ["pending", "done", "failed", "diverged"].includes(p.sync_state));
+  const research = (research: any) => isRecord(research) && typeof research.inventory_complete === "boolean"
+    && ["research", "review", "complete"].includes(research.phase) && Array.isArray(research.capabilities)
+    && research.capabilities.every((capability: any) => fields(capability, ["id", "title", "findings"])
+      && ["pending", "researched", "blocked"].includes(capability.state) && strings(capability.repository_ids) && strings(capability.document_ids)
+      && Array.isArray(capability.sources) && capability.sources.every((source: any) => fields(source, ["repository_id", "path"])));
+  const entry = (entry: any) => fields(entry, ["path", "mode", "oid"]);
+  const cleanup = (plan: any) => fields(plan, ["id", "target_id", "target_revision"]) && typeof plan.confirmed === "boolean"
+    && strings(plan.directories) && strings(plan.document_versions) && Array.isArray(plan.target_entries) && plan.target_entries.every(entry)
+    && (plan.branch_entries === undefined || Array.isArray(plan.branch_entries) && plan.branch_entries.every(entry))
+    && (plan.preserve_paths === undefined || strings(plan.preserve_paths));
+  return isRecord(value) && value.id === id && ["title", "scope", "operator", "created_at", "stage"].every(key => typeof value[key] === "string")
+    && ["idle", "queued", "running", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
+    && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids) && strings(value.ar_codes)
+    && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
+    && (value.source_repositories === undefined || Array.isArray(value.source_repositories) && value.source_repositories.every(target))
+    && (value.cleanup_plans === undefined || Array.isArray(value.cleanup_plans) && value.cleanup_plans.every(cleanup))
+    && (value.technologies === undefined || strings(value.technologies))
+    && Array.isArray(value.documents) && value.documents.every((doc: any) => document(doc)
+      && [value.knowledge_target, ...value.repositories].some(target => target.id === doc.target_id))
+    && Array.isArray(value.turns) && value.turns.every((turn: any) => isRecord(turn)
+      && fields(turn, ["id", "message", "operator", "created_at"]) && ["extract", "discuss", "revise", "update"].includes(turn.mode) && strings(turn.document_ids)
+      && ["queued", "running", "done", "failed", "cancelled"].includes(turn.status) && Array.isArray(turn.proposals)
+      && (turn.research === undefined || research(turn.research))
+      && (turn.revisions === undefined || revisionMap(turn.revisions)) && (turn.previous_revisions === undefined || revisionMap(turn.previous_revisions))
+      && turn.proposals.every((proposal: any) => isRecord(proposal) && content(proposal.document) && Number.isSafeInteger(proposal.base_revision)
+        && ["pending", "accepted", "discarded"].includes(proposal.status)))
+    && (!["queued", "running"].includes(value.status) || value.turns.some((turn: any) => ["queued", "running"].includes(turn.status)))
+    && Array.isArray(value.publications) && value.publications.every(publication)
+    && (value.publication_history === undefined || Array.isArray(value.publication_history) && value.publication_history.every(publication))
+    && (value.archive_batches === undefined || Array.isArray(value.archive_batches) && value.archive_batches.every((batch: any) => isRecord(batch)
+      && fields(batch, ["id", "created_at", "operator"]) && ["pending", "running", "done", "failed", "superseded"].includes(batch.state)
+      && Array.isArray(batch.documents) && batch.documents.every(document) && Array.isArray(batch.targets) && batch.targets.every(target)
+      && batch.documents.every((doc: any) => batch.targets.some((target: any) => target.id === doc.target_id))
+      && Array.isArray(batch.publications) && batch.publications.every(publication)));
+}
+
+interface DomainRunning {
+  controller: AbortController;
+  work: Promise<void>;
+  released: Promise<void>;
+  release: () => void;
+  turn: DomainTurn;
+  stopTimer?: ReturnType<typeof setTimeout>;
+}
+
 export class DomainKnowledgeExtraction {
   private jobs = new Map<string, DomainKnowledgeJob>();
-  private running = new Map<string, { controller: AbortController; work: Promise<void> }>();
-  private publishing = new Set<string>();
+  private running = new Map<string, DomainRunning>();
+  private readWarnings: string[] = [];
+  private publishing = new Map<string, symbol>();
   private archiving = new Map<string, Promise<void>>();
   private archiveQueue: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -55,29 +126,54 @@ export class DomainKnowledgeExtraction {
     refresh?: (job: DomainKnowledgeJob, publication: DomainPublication, operator: string) => Promise<DomainPublication>;
     previewCleanup?: (job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) => Promise<KnowledgeCleanupPlan>;
     readRemote?: (job: DomainKnowledgeJob, document: DomainDocument, operator: string) => Promise<DomainRemoteReview>;
+    onStopTimeout?: (job: DomainKnowledgeJob) => void;
+    shutdown?: () => Promise<void>;
   } = {}) {
     const root = join(dataDir, "domain-extraction");
     if (existsSync(root)) for (const name of readdirSync(root).filter(n => /^dkx-[a-f0-9-]{36}$/.test(n))) {
       const path = join(root, name, "job.json");
       if (!existsSync(path)) continue;
-      const job: DomainKnowledgeJob = JSON.parse(readFileSync(path, "utf8"));
-      this.jobs.set(job.id, job);
-      for (const batch of job.archive_batches ?? []) if (batch.state === "running") batch.state = "pending";
-      if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
-        job.status = "queued"; job.stage = "接续原研究会话";
-        for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "queued"; turn.error = undefined; }
-        this.persist(job);
+      try {
+        const job: unknown = JSON.parse(readFileSync(path, "utf8"));
+        if (!validStoredJob(job, name)) throw new Error("记录形状无效");
+        let changed = false;
+        for (const batch of job.archive_batches ?? []) if (batch.state === "running") { batch.state = "pending"; changed = true; }
+        if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
+          job.status = "queued"; job.stage = "接续原研究会话"; changed = true;
+          for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) { turn.status = "queued"; turn.error = undefined; }
+        }
+        if (changed) this.persist(job);
+        this.jobs.set(job.id, job);
+      } catch {
+        // repros/r8 实测：单条坏文件不能阻断其他记录，不删除或重写现场。
+        this.readWarnings.push(`请检查损坏的知识记录：domain-extraction/${name}/job.json；其余任务照常可用`);
       }
     }
     queueMicrotask(() => { this.pump(); for (const job of this.jobs.values()) this.scheduleArchive(job.id); });
   }
   private root(id: string) { return join(this.dataDir, "domain-extraction", id); }
   private live(id: string) { const job = this.jobs.get(id); if (!job || job.deleted_at) throw new Error("领域萃取任务不存在或已删除"); return job; }
+  private acquirePublication(id: string) {
+    if (this.stopped) throw new Error("服务正在停止");
+    if (this.publishing.has(id)) throw new Error("正在归档或核对远端，请等待当前操作完成");
+    const owner = Symbol(id);
+    this.publishing.set(id, owner);
+    return owner;
+  }
+  private releasePublication(id: string, owner: symbol) {
+    if (this.publishing.get(id) !== owner) return false;
+    this.publishing.delete(id);
+    return true;
+  }
+  private assertPublicationOwner(id: string, owner: symbol) {
+    if (this.publishing.get(id) !== owner) throw new Error("服务已停止，迟到结果未保存");
+  }
   private persist(job: DomainKnowledgeJob) {
     mkdirSync(this.root(job.id), { recursive: true });
     const path = join(this.root(job.id), "job.json");
-    writeFileSync(`${path}.tmp`, JSON.stringify(job), { mode: 0o600 }); renameSync(`${path}.tmp`, path);
+    durableWriteFileSync(path, JSON.stringify(job), { mode: 0o600 });
   }
+  warnings() { return [...this.readWarnings]; }
   get(id: string) { return structuredClone(this.live(id)); }
   list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...structuredClone(job), documents: job.documents.map(({ content: _, history: __, base_content: ___, remote_review: ____, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
   componentArchive(researchId: string) {
@@ -100,7 +196,9 @@ export class DomainKnowledgeExtraction {
       repositories: [], knowledge_target: target, material_ids: [], ar_codes: [], use_wxdoubao: false,
       status: "done", stage: "待审查提交内容", revisions: {}, documents: [], turns: [], evidence: [], publications: [],
     };
-    if (this.publishing.has(job.id)) throw new Error("正在归档，请稍后准备文档");
+    this.assertEditable(job);
+    const owner = this.acquirePublication(job.id);
+    try {
     if (existing && input.base_revision !== job.documents[0].revision) throw new Error("归档草稿已有新版本，请刷新后重新准备");
     const changedTarget = JSON.stringify(job.knowledge_target) !== JSON.stringify(target) || job.documents[0]?.path !== path;
     if (job.publications.length && (changedTarget || job.issue_no !== issue_no)) throw new Error("已发起归档，不能更换目标仓、分支、路径或关联单号");
@@ -123,6 +221,7 @@ export class DomainKnowledgeExtraction {
     Object.assign(job, { title: input.title, issue_no, issue_description: issue_description ?? (job.issue_no === issue_no ? job.issue_description : undefined), knowledge_target: target, documents: [next],
       component_source: input.research_source ?? job.component_source, stage: "待审查提交内容" });
     this.jobs.set(job.id, job); this.persist(job); return this.get(job.id);
+    } finally { this.releasePublication(job.id, owner); this.scheduleArchive(job.id); }
   }
   create(input: any, operator: string) { return this.createJob(input, operator); }
   beginUpdate(documentId: string, input: { message?: string; expected_revision?: string; material_ids?: string[]; ar_codes?: string[] }, operator: string) {
@@ -298,6 +397,8 @@ export class DomainKnowledgeExtraction {
       if (job.deleted_at || job.status !== "queued" || this.running.has(job.id)) continue;
       const turn = job.turns.find(t => t.status === "queued")!;
       const controller = new AbortController(), base = structuredClone(job.documents);
+      let release!: () => void;
+      const entry: DomainRunning = { controller, turn, work: Promise.resolve(), released: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
       turn.document_revisions ??= Object.fromEntries(base.map(doc => [doc.id, doc.revision]));
       const earlierTurns = job.turns.slice(0, job.turns.indexOf(turn)).reverse();
       const workingDocuments = base.map(doc => {
@@ -311,6 +412,7 @@ export class DomainKnowledgeExtraction {
       job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
       const work = Promise.resolve().then(async () => {
         try {
+          if (controller.signal.aborted) return;
           const reply = await this.execute({ job: { ...this.get(job.id), documents: structuredClone(workingDocuments) }, turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(turn.mode === "extract" ? job.documents : workingDocuments),
             update: patch => { if (!controller.signal.aborted && !job.deleted_at) { const { research, ...rest } = patch; Object.assign(job, rest); if (research) turn.research = structuredClone(research); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
@@ -355,13 +457,29 @@ export class DomainKnowledgeExtraction {
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;
           turn.status = "failed"; job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = error instanceof IncompleteDomainResearch ? "研究尚未完成，草稿与进度保留" : "本轮失败，已有文档保留";
-        } finally { this.persist(job); }
-      }).finally(() => { this.running.delete(job.id); this.pump(); });
-      this.running.set(job.id, { controller, work });
+        } finally { if (!controller.signal.aborted && this.running.get(job.id) === entry) this.persist(job); }
+      }).finally(() => {
+        // 强制释放后可能已有新一轮，旧 finally 不能释放新一轮的槽位或再落旧盘。
+        if (this.running.get(job.id) !== entry) return;
+        clearTimeout(entry.stopTimer); this.running.delete(job.id); entry.release(); this.pump();
+      });
+      entry.work = work; this.running.set(job.id, entry);
     }
+  }
+  private assertEditable(job: DomainKnowledgeJob) {
+    let status = job.status;
+    if (job.component_research_id) {
+      const path = join(this.dataDir, "component-research", job.component_research_id, "record.json");
+      if (existsSync(path)) {
+        try { status = JSON.parse(readFileSync(path, "utf8")).status; }
+        catch { throw new Error(`请检查损坏的知识记录：component-research/${job.component_research_id}/record.json`); }
+      }
+    }
+    if (["queued", "running"].includes(status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
   }
   edit(id: string, input: { document: DomainDocumentContent; base_revision: number }, operator: string) {
     const job = this.live(id), doc = job.documents.find(d => d.id === input.document?.id);
+    this.assertEditable(job);
     if (!doc || this.publishing.has(id)) throw new Error("文档不存在或正在归档");
     if (input.base_revision !== doc.revision) throw new Error("文档已有新版本，请比较差异后重新保存");
     this.validateDocument(job, input.document);
@@ -384,6 +502,7 @@ export class DomainKnowledgeExtraction {
     proposal.status = decision === "accept" ? "accepted" : "discarded"; this.persist(job); return this.get(id);
   }
   restore(id: string, documentId: string, revision: number, baseRevision: number, operator: string) {
+    this.assertEditable(this.live(id));
     const doc = this.live(id).documents.find(d => d.id === documentId), previous = doc?.history.find(h => h.revision === revision);
     if (!doc || !previous) throw new Error("历史版本不存在");
     this.edit(id, { document: { ...doc, content: previous.content, title: previous.title, sources: previous.sources }, base_revision: baseRevision }, operator);
@@ -394,12 +513,17 @@ export class DomainKnowledgeExtraction {
     const job = this.live(id), doc = job.documents.find(d => d.id === documentId);
     if (job.archive_configured === false) throw new Error("请先在入库与更新中保存归档位置");
     if (!doc || !this.options.readRemote) throw new Error("无法读取该文档的远端版本");
-    if (this.publishing.has(id)) throw new Error("正在归档，请稍后读取");
-    this.publishing.add(id);
-    try { doc.remote_review = await this.options.readRemote(this.get(id), structuredClone(doc), operator); this.persist(job); return this.get(id); }
-    finally { this.publishing.delete(id); }
+    const owner = this.acquirePublication(id);
+    try {
+      const review = await this.options.readRemote(this.get(id), structuredClone(doc), operator);
+      this.assertPublicationOwner(id, owner);
+      doc.remote_review = review; this.persist(job); return this.get(id);
+    }
+    catch (error) { this.assertPublicationOwner(id, owner); throw error; }
+    finally { this.releasePublication(id, owner); this.scheduleArchive(id); }
   }
   reconcile(id: string, input: { document: DomainDocumentContent; base_revision: number; snapshot_id: string }, operator: string) {
+    this.assertEditable(this.live(id));
     const doc = this.live(id).documents.find(d => d.id === input.document?.id);
     if (!doc?.remote_review || doc.remote_review.id !== input.snapshot_id) throw new Error("远端比较版本已变化，请重新读取并核对");
     this.edit(id, input, operator);
@@ -416,9 +540,39 @@ export class DomainKnowledgeExtraction {
     if (["queued", "running"].includes(job.status)) {
       job.status = "cancelled"; job.stage = "已停止，草稿保留";
       job.turns.filter(t => ["queued", "running"].includes(t.status)).forEach(t => t.status = "cancelled");
-      this.running.get(id)?.controller.abort(); this.persist(job);
+      const entry = this.running.get(id);
+      if (entry) this.stopExecution(job, entry);
+      this.persist(job);
     }
     return this.get(id);
+  }
+  private stopExecution(job: DomainKnowledgeJob, entry: DomainRunning) {
+    entry.controller.abort();
+    if (entry.stopTimer) return;
+    entry.stopTimer = setTimeout(() => {
+      if (this.running.get(job.id) !== entry) return;
+      this.running.delete(job.id); entry.release();
+      try {
+        if (!job.deleted_at) {
+          job.status = "failed"; job.stage = STOP_TIMEOUT; job.error = STOP_TIMEOUT;
+          entry.turn.status = "failed"; entry.turn.error = STOP_TIMEOUT;
+          try { this.persist(job); }
+          catch (error) {
+            const code = (error as NodeJS.ErrnoException)?.code;
+            const reason = `${code ? `${code}：` : ""}${error instanceof Error ? error.message : String(error)}`;
+            job.error = `${STOP_TIMEOUT}；状态记录保存失败：${reason}`;
+            entry.turn.error = job.error;
+            this.readWarnings.push(`请检查状态记录保存失败：domain-extraction/${job.id}/job.json；${reason}；并发槽位已释放`);
+          }
+          try { this.options.onStopTimeout?.(this.get(job.id)); }
+          catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            this.readWarnings.push(`请检查停止超时通知失败：domain-extraction/${job.id}/job.json；${reason}；并发槽位已释放`);
+          }
+        }
+      } finally { this.pump(); }
+    }, STOP_BUDGET_MS);
+    entry.stopTimer.unref?.();
   }
   remove(id: string, operator: string) {
     const existing = this.jobs.get(id);
@@ -435,13 +589,15 @@ export class DomainKnowledgeExtraction {
     const job = this.live(id), target = [job.knowledge_target, ...job.repositories].find(t => t.id === targetId);
     if (job.archive_configured === false) throw new Error("请先保存归档位置再预览清理范围");
     if (!target || !this.options.previewCleanup) throw new Error("无法预览此仓的清理范围");
-    if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
-    this.publishing.add(id);
+    if (["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成");
+    const owner = this.acquirePublication(id);
     try {
       const plan = await this.options.previewCleanup(this.get(id), target, input, operator);
+      this.assertPublicationOwner(id, owner);
       job.cleanup_plans = [...(job.cleanup_plans ?? []).filter(p => p.target_id !== targetId), plan];
       this.persist(job); return this.get(id);
-    } finally { this.publishing.delete(id); }
+    } catch (error) { this.assertPublicationOwner(id, owner); throw error; }
+    finally { this.releasePublication(id, owner); this.scheduleArchive(id); }
   }
   confirmCleanup(id: string, planId: string, confirmed: boolean, preservePaths?: unknown) {
     const job = this.live(id), plan = job.cleanup_plans?.find(p => p.id === planId);
@@ -475,6 +631,9 @@ export class DomainKnowledgeExtraction {
   }
   async publish(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> } = {}) {
     const job = this.live(id);
+    if (this.stopped) throw new Error("服务正在停止");
+    const owner = this.acquirePublication(id);
+    try {
     if (["queued", "running"].includes(job.status)) throw new Error("请等待本轮研究完成或停止后发布");
     if (input.document_ids && (!Array.isArray(input.document_ids) || input.document_ids.some(id => !job.documents.some(d => d.id === id)))) throw new Error("请选择本次发布的知识文档");
     const selected = job.documents.filter(d => input.document_ids ? input.document_ids.includes(d.id) : d.selected);
@@ -496,24 +655,14 @@ export class DomainKnowledgeExtraction {
             return location?.repository === target.repository && location.branch === target.branch && location.path === doc.path;
           });
       if (previous && doc.published_revision && previous.revision !== doc.published_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
-      const content = doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content;
+      const content = (doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content).replace(/\r\n/g, "\n");
       if (previous && !doc.published_revision && previous.content !== content) throw new Error("旧研究尚未绑定当前正式知识版本，请从正式知识的更新入口继续，保留已有人工修改");
       if (!previous && target.repository && existing.some(d => {
         const location = d.archive_target ?? d.source;
         return location?.repository === target.repository && location.branch === target.branch && location.path === doc.path;
       })) throw new Error(`${doc.path} 已有正式知识，请从该知识的更新入口继续，避免重复发布`);
-      return { doc, target, previous };
-    });
-    const destinations = new Set<string>();
-    for (const { doc, target } of prepared) if (target.repository) {
-      const destination = JSON.stringify([target.repository, target.branch, doc.path]);
-      if (destinations.has(destination)) throw new Error(`${doc.path} 在本批次指向同一归档仓和分支，请调整路径后发布，未写入正式知识`);
-      destinations.add(destination);
-    }
-    for (const { doc, target, previous } of prepared) {
-      const content = doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content;
       const source = job.source_repositories?.find(repository => repository.id === doc.target_id) ?? target;
-      const published = saveKnowledgeDocument(this.dataDir, { ...previous, title: doc.title, content,
+      const formal = prepareKnowledgeDocument(this.dataDir, { ...previous, title: doc.title, content,
         scope: previous?.scope ?? (job.component_research_id ? "platform" : doc.layer === "domain" && job.module_id ? "module" : doc.layer === "repository" ? "repository" : "platform"),
         module_ids: previous?.module_ids ?? (doc.layer === "domain" && job.module_id ? [job.module_id] : []),
         repositories: previous?.repositories ?? (doc.layer === "repository" ? [source.repository] : []),
@@ -523,52 +672,138 @@ export class DomainKnowledgeExtraction {
           repository: target.repository, branch: target.branch, path: doc.path,
           source_revisions: { ...job.revisions }, material_ids: [...job.material_ids], skill: job.skill },
       }, operator, previous?.id, { expectedRevision: previous?.revision, maxContentBytes: job.component_research_id ? 16 * 1024 * 1024 : undefined });
-      doc.knowledge_document_id = published.id; doc.published_revision = published.revision;
-      doc.published_document_revision = doc.revision; doc.published_at = published.history.at(-1)!.at;
+      const archive = doc.component_metadata ? componentArchiveParts(formal.document.content) : { content: formal.document.content, component_metadata: undefined };
+      return { doc, target, formal, archive };
+    });
+    const destinations = new Set<string>();
+    for (const { doc, target } of prepared) if (target.repository) {
+      const destination = JSON.stringify([target.repository, target.branch, doc.path]);
+      if (destinations.has(destination)) throw new Error(`${doc.path} 在本批次指向同一归档仓和分支，请调整路径后发布，未写入正式知识`);
+      destinations.add(destination);
     }
-    // Each batch retains the exact published text, even if the next research edits its draft.
-    const documents = structuredClone(selected).map(doc => ({ ...doc, selected: true }));
+    // 真 kill -9 可发生在正式文件 rename 与下一次 job 写盘之间，先用现有批次保存精确版本。
+    // 重启按实际正式版本过滤批次，再补齐已写成功篇的发布字段，不把未写成篇当作已发布。
+    // 正式库会归一化换行；批次和研究记录必须保存同一正文，避免崩溃恢复归档旧字节。
+    for (const { doc, archive } of prepared) Object.assign(doc, archive);
+    const documents = prepared.map(({ doc, formal }) => ({ ...structuredClone(doc), selected: true,
+      knowledge_document_id: formal.document.id, published_revision: formal.document.revision,
+      published_document_revision: doc.revision, published_at: formal.document.history.at(-1)!.at }));
     const duplicate = job.archive_batches?.find(batch => batch.documents.length === documents.length
       && documents.every(doc => batch.documents.some(old => old.knowledge_document_id === doc.knowledge_document_id && old.published_revision === doc.published_revision)));
     if (!duplicate) (job.archive_batches ??= []).push({ id: randomUUID(), created_at: new Date().toISOString(), operator,
       state: "pending", documents, targets: structuredClone([job.knowledge_target, ...job.repositories]), issue_no: job.issue_no, issue_description: job.issue_description, publications: [] });
-    this.persist(job); this.scheduleArchive(id);
+    else this.requeueContinuableBatch(job, duplicate, operator);
+    this.persist(job);
+    for (const { doc, formal } of prepared) {
+      const published = writePreparedKnowledgeDocument(this.dataDir, formal);
+      doc.knowledge_document_id = published.id; doc.published_revision = published.revision;
+      doc.published_document_revision = doc.revision; doc.published_at = published.history.at(-1)!.at;
+      this.persist(job);
+    }
     return this.get(id);
+    } finally { this.releasePublication(id, owner); this.scheduleArchive(id); }
+  }
+  private currentBatchDocuments(batch: DomainArchiveBatch) {
+    return batch.documents.filter(doc => {
+      if (!doc.knowledge_document_id || !doc.published_revision) return true;
+      try { return readKnowledgeDocument(this.dataDir, doc.knowledge_document_id).revision === doc.published_revision; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof Error && error.message === "知识已删除") return false;
+        throw error;
+      }
+    });
+  }
+  /** 关闭 MR 与已核对的远端差异共用同一继续条件，历史版本不重新推送。 */
+  private archiveCanContinue(job: DomainKnowledgeJob, batch: DomainArchiveBatch) {
+    if (batch.state === "superseded" || ["pending", "running"].includes(batch.state)) return false;
+    const documents = this.currentBatchDocuments(batch);
+    if (!documents.length) return false;
+    const publications = batch.publications.map(saved => job.publications.find(current => current.target_id === saved.target_id && current.branch === saved.branch) ?? saved);
+    const diverged = publications.filter(publication => publication.state === "merged" && publication.sync_state === "diverged");
+    for (const publication of diverged) {
+      const target = batch.targets.find(target => target.id === publication.target_id);
+      const targetIds = new Set(batch.targets.filter(candidate => candidate.repository === target?.repository && candidate.branch === target?.branch).map(candidate => candidate.id));
+      const affected = documents.filter(doc => targetIds.has(doc.target_id)
+        && (!publication.diverged_paths?.length || publication.diverged_paths.includes(doc.path) || publication.diverged_paths.includes(doc.archive_path ?? doc.path)));
+      if (!affected.length || affected.some(doc => {
+        const current = job.documents.find(current => current.id === doc.id);
+        return !current?.remote_review?.reviewed || current.content !== doc.content || current.component_metadata !== doc.component_metadata;
+      })) return false;
+    }
+    return batch.state === "failed" || publications.some(publication => ["failed", "closed"].includes(publication.state) || publication.sync_state === "failed") || diverged.length > 0;
+  }
+  private requeueContinuableBatch(job: DomainKnowledgeJob, batch: DomainArchiveBatch, operator: string) {
+    if (!this.archiveCanContinue(job, batch)) return false;
+    batch.state = "pending"; batch.error = undefined; batch.operator = operator;
+    if (!batch.publications.some(publication => publication.mr_attempted || publication.url || publication.mr_id !== undefined)) {
+      batch.issue_no = job.issue_no; batch.issue_description = job.issue_description;
+      batch.targets = structuredClone([job.knowledge_target, ...job.repositories]);
+      batch.documents = batch.documents.map(doc => { const current = job.documents.find(current => current.id === doc.id); return current ? { ...doc, path: current.path, archive_path: current.archive_path } : doc; });
+    } else if (!batch.issue_description) batch.issue_description = job.issue_description;
+    batch.documents = batch.documents.map(doc => {
+      const current = job.documents.find(current => current.id === doc.id);
+      return current?.remote_review?.reviewed && current.content === doc.content && current.component_metadata === doc.component_metadata
+        ? { ...doc, remote_review: structuredClone(current.remote_review) } : doc;
+    });
+    return true;
+  }
+  private supersedeUnavailableFailure(job: DomainKnowledgeJob, batch: DomainArchiveBatch) {
+    if (batch.state !== "failed" || this.currentBatchDocuments(batch).length) return false;
+    batch.superseded_documents = batch.documents.flatMap(doc => {
+      if (!doc.knowledge_document_id || !doc.published_revision) return [];
+      let current: ReturnType<typeof readKnowledgeDocument> | undefined;
+      try { current = readKnowledgeDocument(this.dataDir, doc.knowledge_document_id); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (!(error instanceof Error) || error.message !== "知识已删除")) throw error;
+      }
+      const draft = job.documents.find(draft => draft.id === doc.id);
+      if (!current && draft?.knowledge_document_id !== doc.knowledge_document_id && !knowledgeDeleted(this.dataDir, doc.knowledge_document_id)) return [];
+      return [{ document_id: doc.id, knowledge_document_id: doc.knowledge_document_id, published_revision: doc.published_revision,
+        current_revision: current?.revision, reason: current ? "newer_version" as const : "deleted" as const }];
+    });
+    batch.state = "superseded"; batch.error = undefined;
+    return true;
   }
   retryArchive(id: string, operator: string) {
-    const job = this.live(id);
-    if (this.archiving.has(id)) throw new Error("归档正在进行");
-    for (const batch of job.archive_batches ?? []) if (batch.state === "failed") {
-      batch.state = "pending"; batch.error = undefined; batch.operator = operator;
-      if (!batch.publications.some(p => p.mr_attempted || p.url || p.mr_id !== undefined)) {
-        batch.issue_no = job.issue_no; batch.issue_description = job.issue_description;
-        batch.targets = structuredClone([job.knowledge_target, ...job.repositories]);
-        batch.documents = batch.documents.map(doc => { const current = job.documents.find(d => d.id === doc.id); return current ? { ...doc, path: current.path, archive_path: current.archive_path } : doc; });
-      } else if (!batch.issue_description) batch.issue_description = job.issue_description;
-      // 批次快照取自发布那一刻，之后人读取远端并确认“保留平台版本”时正文不变、不会产生新批次；
-      // 只有确认稿正是本批要归档的正文时才带上这次核对，吸收了远端改动的确认稿须重新发布。
-      batch.documents = batch.documents.map(doc => {
-        const current = job.documents.find(d => d.id === doc.id);
-        return current?.remote_review?.reviewed && current.content === doc.content && current.component_metadata === doc.component_metadata
-          ? { ...doc, remote_review: structuredClone(current.remote_review) } : doc;
-      });
-    }
-    this.persist(job); this.scheduleArchive(id); return this.get(id);
+    const job = this.live(id), owner = this.acquirePublication(id);
+    try {
+      let changed = false;
+      for (const batch of job.archive_batches ?? []) if (this.requeueContinuableBatch(job, batch, operator)) changed = true;
+      if (changed) this.persist(job);
+      return this.get(id);
+    } finally { this.releasePublication(id, owner); this.scheduleArchive(id); }
   }
   private scheduleArchive(id: string) {
-    if (this.stopped || this.archiving.has(id)) return;
-    const job = this.jobs.get(id), first = job?.archive_batches?.find(batch => !["done", "superseded"].includes(batch.state));
-    if (!job || job.deleted_at || !first || first.state === "failed") return;
+    if (this.stopped || this.archiving.has(id) || this.publishing.has(id)) return;
+    const job = this.jobs.get(id);
+    if (!job || job.deleted_at) return;
+    const owner = this.acquirePublication(id);
+    let changed = false;
+    for (const batch of job.archive_batches ?? []) {
+      try { if (this.supersedeUnavailableFailure(job, batch)) changed = true; }
+      catch { /* 正式知识损坏会单独告警，不能把它当成已删除而跳过失败批次。 */ }
+    }
+    if (changed) {
+      try { this.persist(job); }
+      catch (error) { this.releasePublication(id, owner); throw error; }
+    }
+    const first = job.archive_batches?.find(batch => !["done", "superseded"].includes(batch.state));
+    if (!first || first.state === "failed") { this.releasePublication(id, owner); return; }
     const work = this.archiveQueue.then(async () => {
-      if (this.stopped) return;
-      this.publishing.add(id);
       try {
+        if (this.stopped) return;
         for (const batch of job.archive_batches ?? []) {
-          if (this.stopped || batch.state === "failed") break;
+          if (this.stopped) break;
+          if (batch.state === "failed") {
+            try { if (this.supersedeUnavailableFailure(job, batch)) this.persist(job); }
+            catch { /* 保留需要人检查的失败记录，不推断损坏知识的版本。 */ }
+            if (batch.state === "failed") break;
+          }
           if (["done", "superseded"].includes(batch.state)) continue;
           batch.state = "running"; this.persist(job);
           try {
             batch.superseded_documents = [];
+            let restored = false;
             const documents = batch.documents.filter(doc => {
               if (!doc.knowledge_document_id || !doc.published_revision) return true;
               let current: ReturnType<typeof readKnowledgeDocument> | undefined;
@@ -576,11 +811,23 @@ export class DomainKnowledgeExtraction {
               catch (error) {
                 if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (!(error instanceof Error) || error.message !== "知识已删除")) throw error;
               }
-              if (current?.revision === doc.published_revision) return true;
+              if (current?.revision === doc.published_revision) {
+                const draft = job.documents.find(draft => draft.id === doc.id);
+                if (draft && draft.revision === doc.revision && draft.content === doc.content && draft.component_metadata === doc.component_metadata
+                  && (draft.knowledge_document_id !== current.id || draft.published_revision !== current.revision || draft.published_document_revision !== doc.revision)) {
+                  draft.knowledge_document_id = current.id; draft.published_revision = current.revision;
+                  draft.published_document_revision = doc.revision; draft.published_at = current.history.at(-1)!.at;
+                  restored = true;
+                }
+                return true;
+              }
+              const draft = job.documents.find(draft => draft.id === doc.id);
+              if (!current && draft?.knowledge_document_id !== doc.knowledge_document_id && !knowledgeDeleted(this.dataDir, doc.knowledge_document_id)) return false;
               batch.superseded_documents!.push({ document_id: doc.id, knowledge_document_id: doc.knowledge_document_id,
                 published_revision: doc.published_revision, current_revision: current?.revision, reason: current ? "newer_version" : "deleted" });
               return false;
             });
+            if (restored) this.persist(job);
             if (!documents.length) { batch.state = "superseded"; batch.error = undefined; this.persist(job); continue; }
             if (!this.options.publish) throw new Error("知识已发布；尚未配置 Git 归档能力");
             knowledgeIssueNumber(batch.issue_no);
@@ -598,6 +845,7 @@ export class DomainKnowledgeExtraction {
               const grouped = { ...snapshot, documents: snapshot.documents.filter(d => targets.some(t => t.id === d.target_id))
                 .map(d => ({ ...d, target_id: target.id, archive_path: d.archive_path ?? d.path })) };
               const save = (publication: DomainPublication) => {
+                this.assertPublicationOwner(id, owner);
                 publication = { ...publication, updated_at: new Date().toISOString() };
                 const index = job.publications.findIndex(p => p.target_id === target.id);
                 if (index >= 0 && job.publications[index].branch !== publication.branch) (job.publication_history ??= []).push(structuredClone(job.publications[index]));
@@ -613,44 +861,82 @@ export class DomainKnowledgeExtraction {
                   && p.documents.some(d => d.knowledge_document_id && ids.has(d.knowledge_document_id));
               })).sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
               const previous = related[0] ? { ...related[0], target_id: target.id } : job.publications.find(p => p.target_id === target.id);
-              try { save(await this.options.publish(grouped, target, previous, batch.operator, save)); }
+              try {
+                const publication = await this.options.publish(grouped, target, previous, batch.operator, save);
+                this.assertPublicationOwner(id, owner); save(publication);
+              }
               catch (error) {
+                this.assertPublicationOwner(id, owner);
                 const latest = job.publications.find(p => p.target_id === target.id) ?? { target_id: target.id, branch: `codex/knowledge-${job.id}-${target.id}`, documents: [], state: "failed" as const };
                 save({ ...latest, state: latest.state === "merged" ? "merged" : "failed", error: error instanceof Error ? error.message : "归档失败" });
                 throw error;
               }
             }
+            this.assertPublicationOwner(id, owner);
             batch.state = "done"; batch.error = undefined;
-          } catch (error) { batch.state = "failed"; batch.error = error instanceof Error ? error.message : "归档失败"; }
+          } catch (error) {
+            this.assertPublicationOwner(id, owner);
+            batch.state = "failed"; batch.error = error instanceof Error ? error.message : "归档失败";
+          }
           this.persist(job);
         }
-      } finally { this.publishing.delete(id); }
-    }).finally(() => this.archiving.delete(id));
+      } finally { this.releasePublication(id, owner); }
+    }).finally(() => {
+      this.releasePublication(id, owner);
+      if (this.archiving.get(id) === work) this.archiving.delete(id);
+      this.scheduleArchive(id);
+    });
     this.archiveQueue = work.catch(() => undefined);
     this.archiving.set(id, work);
   }
   async refresh(id: string, operator: string) {
     const job = this.live(id);
     if (!this.options.refresh) throw new Error("未配置 MR 状态查询");
-    if (this.publishing.has(id)) throw new Error("正在归档，请稍后刷新");
-    this.publishing.add(id);
+    const owner = this.acquirePublication(id);
     try {
       for (let i = 0; i < job.publications.length; i++) if (job.publications[i].url || job.publications[i].state === "unchanged") {
-        try { job.publications[i] = await this.options.refresh(this.get(id), job.publications[i], operator); }
-        catch (error) { job.publications[i].error = error instanceof Error ? error.message : "MR 状态查询失败"; }
-        for (const batch of job.archive_batches ?? []) batch.publications = batch.publications.map(p => p.branch === job.publications[i].branch ? structuredClone(job.publications[i]) : p);
+        const publication = job.publications[i];
+        let result: DomainPublication;
+        try { result = await this.options.refresh(this.get(id), structuredClone(publication), operator); }
+        catch (error) { this.assertPublicationOwner(id, owner); result = { ...publication, error: error instanceof Error ? error.message : "MR 状态查询失败" }; }
+        this.assertPublicationOwner(id, owner);
+        const fields = { state: result.state, error: result.error, sync_state: result.sync_state, sync_error: result.sync_error,
+          diverged_paths: result.diverged_paths, target_revision: result.target_revision, updated_at: result.updated_at };
+        Object.assign(publication, fields);
+        for (const batch of job.archive_batches ?? []) for (const saved of batch.publications) {
+          if (saved.target_id === publication.target_id && saved.branch === publication.branch) Object.assign(saved, structuredClone(fields));
+        }
         this.persist(job);
       }
       return this.get(id);
-    } finally { this.publishing.delete(id); }
+    } finally { this.releasePublication(id, owner); this.scheduleArchive(id); }
   }
   async shutdown() {
     this.stopped = true;
     for (const job of this.jobs.values()) if (!job.deleted_at && ["queued", "running"].includes(job.status)) {
       job.status = "queued"; job.stage = "等待接续原研究会话";
       for (const turn of job.turns) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
-      this.running.get(job.id)?.controller.abort(); this.persist(job);
+      this.persist(job);
     }
-    await Promise.allSettled([...this.running.values()].map(r => r.work).concat([...this.archiving.values()]));
+    for (const [id, entry] of this.running) this.stopExecution(this.jobs.get(id)!, entry);
+    // 发布器取消 Git 与研究停止并行使用同一个预算，不能串行各等 60 秒。
+    const settling = Promise.allSettled([...this.running.values()].map(r => r.released)
+      .concat([...this.archiving.values()], this.options.shutdown?.() ?? Promise.resolve()));
+    let timer: ReturnType<typeof setTimeout> | undefined, expired = false;
+    try { await Promise.race([settling, new Promise<void>(resolve => { timer = setTimeout(() => { expired = true; resolve(); }, STOP_BUDGET_MS); timer.unref?.(); })]); }
+    finally {
+      clearTimeout(timer);
+      // 已关停的管理器不再拥有这些异步操作；迟到回调须按原 owner 丢弃，不能覆盖新实例。
+      this.publishing.clear(); this.archiving.clear();
+      if (expired) for (const job of this.jobs.values()) {
+        const active = job.archive_batches?.filter(batch => batch.state === "running") ?? [];
+        if (!active.length) continue;
+        const reason = "知识归档停止超时：操作 60 秒内未退出，已停止等待";
+        for (const batch of active) { batch.state = "failed"; batch.error = reason; }
+        try { this.persist(job); }
+        catch { this.readWarnings.push(`请检查归档停止记录的保存失败：domain-extraction/${job.id}/job.json`); }
+        this.options.onStopTimeout?.({ ...this.get(job.id), error: reason });
+      }
+    }
   }
 }
