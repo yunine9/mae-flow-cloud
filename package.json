@@ -20,7 +20,9 @@
     "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts",
     "runtime": "tsx src/executionRuntime.ts",
-    "test:affected": "tsx scripts/affected-tests.ts"
+    "test:affected": "tsx scripts/affected-tests.ts",
+    "benchmark:knowledge": "tsx harness/knowledge-benchmark/run.ts",
+    "benchmark:knowledge:feedback": "tsx harness/knowledge-benchmark/feedback.ts"
   },
   "dependencies": {
     "@ast-grep/cli": "0.45.3",

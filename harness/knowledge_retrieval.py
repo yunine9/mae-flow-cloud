@@ -115,7 +115,7 @@ async def index_document(ms, path, checkpoint=None):
     with their subject. Original Markdown stays untouched.
     """
     from memsearch.chunker import Chunk, compute_chunk_id
-    from knowledge_chunks import split_markdown
+    from knowledge_chunks import index_sections
     text = path.read_text(encoding="utf-8")
     body = re.sub(r"\A---\r?\n.*?\r?\n---(?:\r?\n|$)", "", text, count=1, flags=re.S)
     title_match = re.search(r"^#\s+(.+)$", body, re.M)
@@ -128,7 +128,7 @@ async def index_document(ms, path, checkpoint=None):
         chunks = [Chunk(content=f"资料主题：{title}\n章节：{c.heading}\n{c.content}", source=source,
                         heading=c.heading or title, heading_level=1,
                         start_line=c.start_line, end_line=c.end_line)
-                  for c in split_markdown(text)]
+                  for c in index_sections(text)]
     model = ms._embedder.model_name
     old = ms._store.hashes_by_source(source)
     def ident(chunk):
