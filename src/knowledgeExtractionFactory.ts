@@ -1,30 +1,26 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { ComponentResearch, type ResearchRecord } from "./componentResearch.ts";
+import { ComponentResearch } from "./componentResearch.ts";
 import { runComponentResearch } from "./componentResearchAgent.ts";
 import { DomainKnowledgeExtraction } from "./domainKnowledgeExtraction.ts";
 import { runDomainKnowledge, type DomainAgentOptions } from "./domainKnowledgeAgent.ts";
 import { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
 import { runKnowledgeCommand, KnowledgeProcessError } from "./knowledgeProcess.ts";
 import { knowledgeGitFailure } from "./knowledgeProductionErrors.ts";
-import type { DomainKnowledgeJob } from "./domainKnowledgeTypes.ts";
 
 export type { ComponentResearch, DomainKnowledgeExtraction };
 
-export function createDomainKnowledgeExtraction(options: DomainAgentOptions & ConstructorParameters<typeof KnowledgeMrPublisher>[0] & { onStopTimeout?: (job: DomainKnowledgeJob) => void }) {
+export function createDomainKnowledgeExtraction(options: DomainAgentOptions & ConstructorParameters<typeof KnowledgeMrPublisher>[0] & { onIndexed: () => void }) {
   const publisher = new KnowledgeMrPublisher(options);
   return new DomainKnowledgeExtraction(options.dataDir, input => runDomainKnowledge(input, options), {
-    previewCleanup: (...args) => publisher.previewCleanup(...args),
     publish: (...args) => publisher.publish(...args),
-    refresh: (...args) => publisher.refresh(...args),
-    readRemote: (...args) => publisher.readRemote(...args),
+    onIndexed: options.onIndexed,
     shutdown: () => publisher.shutdown(),
-    onStopTimeout: options.onStopTimeout,
   });
 }
 
-export function createComponentKnowledgeExtraction(options: Parameters<typeof runComponentResearch>[1] & { dataDir: string; onIndexed: () => void; onStopTimeout?: (record: ResearchRecord) => void; archiveFor?: ConstructorParameters<typeof ComponentResearch>[4] }) {
-  return new ComponentResearch(options.dataDir, input => runComponentResearch(input, options), options.onIndexed, options.onStopTimeout, options.archiveFor);
+export function createComponentKnowledgeExtraction(options: Parameters<typeof runComponentResearch>[1] & { dataDir: string; onIndexed: () => void; archiveFor?: ConstructorParameters<typeof ComponentResearch>[3] }) {
+  return new ComponentResearch(options.dataDir, input => runComponentResearch(input, options), options.onIndexed, options.archiveFor);
 }
 
 async function knowledgeSourceCommand(args: string[], options: Omit<Parameters<typeof runKnowledgeCommand>[2], "timeoutMs" | "maxBytes">) {

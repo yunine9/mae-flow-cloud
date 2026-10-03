@@ -76,9 +76,11 @@ async function run() {
     await select("已完成"); assertWarnings([]);
     document.getElementById("production-matrix")!.click();
     await until(() => tab("待处理")!.querySelector("span")?.textContent === String(fixture.matrix.summary.attention), "后端组合状态场景");
-    await select("待处理"); assertWarnings([]);
-    check(rows().length === fixture.matrix.tasks.length, "全部领域/组件组合状态都在后端指定待处理组");
-    for (const task of fixture.matrix.tasks) {
+    for (const [group, label] of [["attention", "待处理"], ["running", "进行中"], ["completed", "已完成"]] as const) {
+    await select(label); assertWarnings([]);
+    const expectedTasks = fixture.matrix.tasks.filter(task => task.group === group);
+    check(rows().length === expectedTasks.length, "领域/组件人工归档状态沿用后端指定分组");
+    for (const task of expectedTasks) {
       const production = task.production!;
       check(production, `${task.title} 缺少后台详情投影`);
       const row = rows().find(row => row.querySelector(".knowledge-task-title")?.textContent === task.title)!;
@@ -89,12 +91,11 @@ async function run() {
       row.click();
       const selected = opened.at(-1)!;
       check(selected.kind === task.kind && selected.id === task.id, `${task.title} 点击保留对象身份`);
-      check(JSON.stringify(selected.action) === JSON.stringify(production.next_action), `${task.title} 点击必须保留完整后端动作（view、href、document_id）`);
+      check(JSON.stringify(selected.action) === JSON.stringify(production.next_action), `${task.title} 点击必须保留完整后端动作`);
+    }
     }
     await select("当前任务");
-    check(rows().length === fixture.matrix.tasks.length, "组合状态不会误归已完成而从当前任务消失");
-    await select("进行中"); check(rows().length === 0, "研究已失败的组合任务不能前端改推为进行中");
-    await select("已完成"); check(rows().length === 0, "等待处理的组合任务不能前端改推为已完成");
+    check(rows().length === fixture.matrix.tasks.filter(task => task.group !== "completed").length, "当前任务只包含后端进行中或待处理的任务");
     check(!errors.length, errors.join("；"));
     check(document.documentElement.scrollWidth <= innerWidth, "1366桌面不横向溢出");
     return { passed: true, width: innerWidth, height: innerHeight };

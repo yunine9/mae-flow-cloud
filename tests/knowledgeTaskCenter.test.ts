@@ -29,12 +29,10 @@ test("领域研究完成不等于发布；发布后新稿与归档失败仍可�
   assert.equal(domainKnowledgeTask(job).status_label, "待审查");
   job.documents[0].knowledge_document_id = "kd-1";
   job.documents[0].published_document_revision = 2;
-  assert.equal(domainKnowledgeTask(job).status_label, "已入库");
-  job.publications = [{ target_id: "domain", branch: "b", state: "merged", documents: [], sync_state: "diverged", diverged_paths: ["a.md"] }];
-  assert.deepEqual([domainKnowledgeTask(job).status_label, domainKnowledgeTask(job).group], ["已入库 · 远端待核对", "attention"], "合入后归档仓被改须提醒人核对");
-  job.publications = [];
-  job.archive_batches = [{ id: "archive", created_at: job.created_at, operator: "alice", state: "failed", documents: [], targets: [], publications: [] }];
-  assert.equal(domainKnowledgeTask(job).status_label, "已入库 · 归档待处理");
+  assert.equal(domainKnowledgeTask(job).status_label, "已发布（未归档）");
+  job.documents[0].published_revision = "formal";
+  job.archive_batches = [{ id: "archive", issue_no: "REQ-MANUAL", created_at: job.created_at, operator: "alice", state: "failed", documents: structuredClone(job.documents), targets: [job.knowledge_target], publications: [], error: "Git失败" }];
+  assert.equal(domainKnowledgeTask(job).status_label, "归档失败");
   job.archive_batches = [];
   job.documents[0].revision = 3;
   assert.equal(domainKnowledgeTask(job).status_label, "待审查");
@@ -48,7 +46,7 @@ test("组件研究保留执行结束，但不把创建当开始；发布与待�
   assert.equal(componentKnowledgeTask(record).group, "attention");
   assert.equal(knowledgeTaskElapsed(componentKnowledgeTask(record)), "—");
   record.document_id = "kd-1";
-  assert.equal(componentKnowledgeTask(record).status_label, "已入库 · 未归档");
+  assert.equal(componentKnowledgeTask(record).status_label, "已发布（未归档）");
 });
 
 test("Skill 审核等待不能作为运行时长，重启中断无结束时间不继续计时", () => {
@@ -84,18 +82,19 @@ test("生产线验收3：中心读取既有记录与重启状态，来源不可�
 });
 
 
-test("归档在后台进行时任务仍直接打开文稿，旧归档失败不覆盖新版本状态", () => {
+test("人工归档进行时提供归档入口，旧版本失败不覆盖新版本状态", () => {
   const job = domain();
   Object.assign(job.documents[0], { knowledge_document_id: "kd-1", published_document_revision: 2, published_revision: "new" });
   job.archive_batches = [
-    { id: "old", created_at: job.created_at, operator: "alice", state: "failed", documents: [{ ...job.documents[0], published_revision: "old" }], targets: [], publications: [] },
-    { id: "new", created_at: job.created_at, operator: "alice", state: "running", documents: [{ ...job.documents[0] }], targets: [], publications: [] },
+    { id: "old", created_at: job.created_at, operator: "alice", state: "failed", issue_no: "REQ-OLD", documents: [{ ...job.documents[0], published_revision: "old" }], targets: [job.knowledge_target], publications: [] },
+    { id: "new", created_at: job.created_at, operator: "alice", state: "running", issue_no: "REQ-NEW", documents: [{ ...job.documents[0] }], targets: [job.knowledge_target], publications: [] },
   ];
-  assert.equal(domainKnowledgeTask(job).status_label, "已入库 · 归档中");
-  assert.equal(domainKnowledgeTask(job).group, "completed");
-  assert.equal(knowledgeTaskAction(domainKnowledgeTask(job)).view, "review");
+  assert.equal(domainKnowledgeTask(job).status_label, "归档中");
+  assert.equal(domainKnowledgeTask(job).group, "running");
+  assert.equal(knowledgeTaskAction(domainKnowledgeTask(job)).view, "archive");
   job.archive_batches[1].state = "done";
-  assert.equal(domainKnowledgeTask(job).status_label, "已入库");
+  job.archive_batches[1].publications = [{ target_id: "domain", branch: "codex/manual", state: "opened", documents: [], url: "https://example.test/mr/1" }];
+  assert.equal(domainKnowledgeTask(job).status_label, "已归档");
   job.status = "running";
   assert.equal(knowledgeTaskAction(domainKnowledgeTask(job)).view, "progress");
   job.status = "cancelled";
@@ -107,9 +106,10 @@ test("组件归档失败仍打开已发布文稿，和领域任务一样保留�
   try {
     const record = { id: "component-1", status: "done", topic: "线程池", document_id: "kd-1", evidence: [] } as unknown as ResearchRecord;
     const archive = domain();
-    archive.archive_batches = [{ id: "failed", created_at: archive.created_at, operator: "alice", state: "failed", documents: [], targets: [], publications: [] }];
+    Object.assign(archive.documents[0], { knowledge_document_id: "kd-1", published_revision: "formal", published_document_revision: 2 });
+    archive.archive_batches = [{ id: "failed", issue_no: "REQ-MANUAL", created_at: archive.created_at, operator: "alice", state: "failed", documents: structuredClone(archive.documents), targets: [archive.knowledge_target], publications: [] }];
     const result = listKnowledgeTasks({ dataDir, domain: { list: () => [], get: () => archive, componentArchive: () => archive }, component: { list: () => [record], get: () => record }, skillExtractionJob: () => undefined });
-    assert.equal(result.tasks[0].status_label, "已入库 · 归档待处理");
+    assert.equal(result.tasks[0].status_label, "归档失败");
     assert.equal(result.summary.attention, 1);
     assert.equal(knowledgeTaskAction(result.tasks[0]).view, "archive");
   } finally { rmSync(dataDir, { recursive: true, force: true }); }

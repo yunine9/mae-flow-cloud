@@ -21,13 +21,13 @@ import {
 import { KNOWLEDGE_LANGUAGE_OPTIONS, knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
   componentRequest,
+  publishComponentResearch,
   type ComponentRepository,
   type ComponentResearchRecord,
 } from "./componentResearchApi";
 import { getBusinessModules, type BusinessModule } from "./api";
 import { Markdown } from "./markdown";
 import { ComponentResearchReview, latestComponentProposal } from "./ComponentResearchReview";
-import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 function Choice({
   label,
   value,
@@ -99,7 +99,6 @@ export function ComponentResearch({
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [reviewBlocked, setReviewBlocked] = useState(false);
-  const [archiveRefresh, setArchiveRefresh] = useState(0);
   const [archiveOpenRequest, setArchiveOpenRequest] = useState(0);
   const [publishSettingsOpen, setPublishSettingsOpen] = useState(false);
   const publishing = useRef(false);
@@ -108,8 +107,8 @@ export function ComponentResearch({
   const [stage, setStage] = useState("review");
   useEffect(() => {
     const archiveStage = new URLSearchParams(location.search).get("kbStage");
-    if (archiveStage === "publish" || archiveStage === "remote") { setStage("review"); setArchiveOpenRequest(value => value + 1); }
-    else if (surface) setStage(surface === "knowledge" ? "review" : "progress");
+    if (archiveStage === "publish") { setStage("review"); setArchiveOpenRequest(value => value + 1); }
+    else { setArchiveOpenRequest(0); if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }
   }, [surface, focusId]);
   const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
@@ -118,7 +117,7 @@ export function ComponentResearch({
   const load = async () => {
     const result = await componentRequest<{
       records: ComponentResearchRecord[];
-    }>("/component-research");
+    }>("/component-research", undefined, AbortSignal.timeout(30_000));
     setRecords(result.records);
   };
   useEffect(() => {
@@ -189,7 +188,7 @@ export function ComponentResearch({
   }, [current?.draft, editing]);
   function selectRecord(id: string) {
     const archiveStage = new URLSearchParams(location.search).get("kbStage");
-    setSelected(id); setStage(archiveStage === "publish" || archiveStage === "remote" ? "review" : surface === "workbench" ? "progress" : "review");
+    setSelected(id); setStage(archiveStage === "publish" ? "review" : surface === "workbench" ? "progress" : "review");
     const url = new URL(location.href);
     if (id === "history") {
       url.searchParams.set("kbPage", "tasks");
@@ -235,56 +234,24 @@ export function ComponentResearch({
     publishing.current = true;
     setBusy(true); setError("");
     try {
-      let prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}`);
-      if (prepared.status !== "done") throw new Error("请等待本轮研究完成后确认并发布");
-      const selectedSections = prepared.document?.sections.filter(section => section.selected) ?? [];
-      const inspectedSections = current.document?.sections.filter(section => section.selected) ?? [];
-      if (prepared.document_id !== current.document_id || selectedSections.length !== inspectedSections.length || selectedSections.some(section => {
-        const inspected = inspectedSections.find(item => item.id === section.id);
-        return !inspected || inspected.revision !== section.revision
-          || latestComponentProposal(current, section.id)?.id !== latestComponentProposal(prepared, section.id)?.id;
-      })) {
-        setDetail(prepared);
-        throw new Error("文稿已有新修改，请重新检视后发布");
-      }
-      const proposals = selectedSections.flatMap(section => {
-        const turn = latestComponentProposal(prepared, section.id);
-        if (!turn?.proposal) return [];
-        if (turn.status !== "done") throw new Error(`“${section.title}”的修改尚未完成，请先查看研究过程`);
-        if (turn.proposal.base_revision !== section.revision) throw new Error(`“${section.title}”已发生变化，请先查看修订差异，处理冲突后再发布`);
-        return [turn];
-      });
-      // Validate the entire selection before accepting any candidate.
-      for (const turn of proposals) {
-        prepared = await componentRequest<ComponentResearchRecord>(`/component-research/${prepared.id}/proposal`, { turn_id: turn.id, decision: "accept" });
-        setDetail(prepared);
-      }
-      await componentRequest<{ id: string }>(`/component-research/${prepared.id}/adopt`, {
-        title, ...(prepared.document ? {} : { content: draft }), scope,
+      const result = await publishComponentResearch(current.id, {
+        title, ...(current.document ? {} : { content: draft }), scope,
         module_ids: module ? [module] : [], repositories: repos.split("\n").map(s => s.trim()).filter(Boolean),
+        sections: current.document?.sections.filter(section => section.selected).map(section => ({
+          id: section.id, revision: section.revision, proposal_id: latestComponentProposal(current, section.id)?.id ?? null,
+        })) ?? [],
+        document_id: current.document_id ?? null,
+        update_document_id: current.update_document_id ?? null,
+        update_document_revision: current.update_document_revision,
       });
-      setDetail(await componentRequest<ComponentResearchRecord>(`/component-research/${prepared.id}`));
-      // Knowledge is already live. Archive failures must not turn this into a failed publication.
-      try {
-        const endpoint = `/component-research/${current.id}/archive`;
-        const result = await componentRequest<{ archive: DomainKnowledgeJob | null }>(endpoint);
-        const reusesMr = result.archive?.production?.archive.issue_description_required === false;
-        if (result.archive?.issue_no && (result.archive.issue_description || reusesMr) && result.archive.knowledge_target.repository) {
-          const archive = await componentRequest<DomainKnowledgeJob>(endpoint, {
-            title, ...(current.document ? {} : { content: draft }),
-            target: result.archive.knowledge_target,
-            filename: result.archive.documents[0]?.path.split("/").at(-1),
-            issue_no: result.archive.issue_no, issue_description: result.archive.issue_description, base_revision: result.archive.documents[0]?.revision,
-          });
-          await componentRequest<DomainKnowledgeJob>(`${endpoint}/publish`, {
-            document_ids: archive.documents.map(d => d.id),
-            expected_revisions: Object.fromEntries(archive.documents.map(d => [d.id, d.revision])),
-          });
-        }
-      } catch (e) { setError((e as Error).message); }
-      setArchiveRefresh(value => value + 1);
+      setDetail(result);
       void load().catch(() => {});
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) {
+      setError((e as Error).message);
+      try {
+        setDetail(await componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}`, undefined, AbortSignal.timeout(30_000)));
+      } catch { /* 保留发布错误；下一次任务刷新仍会读取后台事实。 */ }
+    }
     finally { publishing.current = false; setBusy(false); }
   }
   const switchTaskView = (next: "progress" | "review") => {
@@ -299,8 +266,11 @@ export function ComponentResearch({
       <KnowledgeBackButton onClick={onClose} destination={backLabel} />
       <div className="flex min-w-0 flex-1 items-center gap-3"><h2 className="truncate text-base font-semibold" title={current.topic}>{current.topic}</h2>
         <span className={`shrink-0 text-sm ${current.production?.group === "attention" ? "text-amber-700" : "text-muted-foreground"}`}>{current.production?.status_label}</span></div>
+      <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} openRequest={archiveOpenRequest} onArchiveAction={() => {
+        void componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}`, undefined, AbortSignal.timeout(30_000))
+          .then(next => setDetail(previous => previous?.id === current.id ? next : previous)).catch(reason => setError(reason.message));
+      }} />
       <div hidden={stage !== "review"} className="flex shrink-0 items-center gap-2">
-        {current.production?.archive.visible && <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} compact refreshKey={archiveRefresh} openRequest={archiveOpenRequest} compareDocumentId={new URLSearchParams(location.search).get("kbStage") === "remote" ? new URLSearchParams(location.search).get("knowledgeDocument") ?? undefined : undefined} onOpenKnowledge={onAdopt} />}
         {current.production?.research_actions.filter(action => ["publish", "update"].includes(action.id)).map(action => action.id === "update"
           ? <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>{action.label}</Button>
           : <span key={action.id} className="flex items-center gap-2"><Button variant="ghost" onClick={() => setPublishSettingsOpen(true)}><Settings2 size={16} />发布设置</Button><Button disabled={busy || reviewBlocked || !title.trim() || (current.document ? !current.document.sections.some(s => s.selected) : !draft.trim()) || (scope === "module" && !module) || (scope === "repository" && !repos.trim())} onClick={() => void publishKnowledge()}>{busy ? "正在发布…" : action.label}</Button></span>)}
@@ -340,6 +310,7 @@ export function ComponentResearch({
     <header className="flex items-center gap-3 pr-8">
       <KnowledgeBackButton onClick={() => selectRecord("history")} destination="萃取记录" />
       <h2 className="min-w-0 flex-1 truncate text-lg font-semibold" title={current.topic}>{current.document.overview.match(/^#\s+(.+)$/m)?.[1] ?? "萃取结果"}</h2>
+      <ComponentKnowledgeArchive record={current} />
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="萃取结果操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
         <DropdownMenuItem onClick={() => setStage("progress")}>执行详情</DropdownMenuItem>
         <DropdownMenuItem onClick={() => setStage("inputs")}>来源范围</DropdownMenuItem>
@@ -391,7 +362,7 @@ export function ComponentResearch({
                   <FileText size={21} /><strong title={current.topic}>{current.topic}</strong><span className="studio-job-status">{current.production?.status_label}</span>
                   <div className="studio-result-actions"><Button variant="ghost" onClick={() => { studio?.openExecution("component", current.id); setStage("progress"); }}><History size={16} />萃取过程</Button>
                     {stage !== "review" && <Button variant="ghost" onClick={() => setStage("review")}>阅读成果</Button>}
-                    <Button onClick={() => setStage("publish")}>Git 归档</Button>
+                    <ComponentKnowledgeArchive record={current} />
                     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
                       <DropdownMenuItem onClick={() => { studio?.openExecution("component"); selectRecord("new"); }}>新建萃取任务</DropdownMenuItem>
@@ -403,6 +374,7 @@ export function ComponentResearch({
                     <h2 className="line-clamp-2 flex-1 text-xl font-semibold" title={current.topic}>{current.topic}</h2>
                     {!focused && current.production?.research_actions.filter(action => ["stop", "resume"].includes(action.id)).map(action => <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage(action.id === "resume" ? "retry" : "stop")}>{action.label}</Button>)}
                     {!focused && <Button variant="outline" disabled={busy} onClick={() => setDeleting(true)}>删除任务</Button>}
+                    <ComponentKnowledgeArchive record={current} />
                   </div>
                   <p className="mt-2 text-muted-foreground">
                     {current.components?.length ?? 1} 个组件仓 ·{" "}
@@ -455,7 +427,6 @@ export function ComponentResearch({
                     ) : (
                       <Markdown text={draft} />
                     )}</>}
-                    {stage === "publish" && <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} title={title} content={draft} />}
                     {stage === "publish" && (current.document_id ? (
                       <div className="mt-5 flex gap-3"><Button variant="outline" disabled={busy} onClick={() => void manage("begin-update")}>更新这篇文档</Button><Button
                         className="mt-5"
@@ -504,37 +475,14 @@ export function ComponentResearch({
                         <Button
                           disabled={
                             busy ||
-                            current.status !== "done" ||
+                            !current.production?.research_actions.some(action => action.id === "publish") ||
                             (!!current.document && !current.document.sections.some(section => section.selected)) ||
                             !draft.trim() ||
                             !title.trim() ||
                             (scope === "module" && !module) ||
                             (scope === "repository" && !repos.trim())
                           }
-                          onClick={async () => {
-                            setBusy(true);
-                            setError("");
-                            try {
-                              const doc = await componentRequest<{
-                                id: string;
-                              }>(`/component-research/${current.id}/adopt`, {
-                                title,
-                                ...(current.document ? {} : { content: draft }),
-                                scope,
-                                module_ids: module ? [module] : [],
-                                repositories: repos
-                                  .split("\n")
-                                  .map((s) => s.trim())
-                                  .filter(Boolean),
-                              });
-                              await load();
-                              onAdopt(doc.id);
-                            } catch (e) {
-                              setError((e as Error).message);
-                            } finally {
-                              setBusy(false);
-                            }
-                          }}
+                          onClick={() => void publishKnowledge()}
                         >
                           {current.document ? `确认采纳 ${current.document.sections.filter(section => section.selected).length} 项为一篇知识文档` : "确认采纳到知识库"}
                         </Button>

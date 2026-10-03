@@ -5,18 +5,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { DomainKnowledgeExtraction, type DomainExecution, type DomainKnowledgeJob } from "../src/domainKnowledgeExtraction.ts";
+import { DomainKnowledgeExtraction, type DomainExecution } from "../src/domainKnowledgeExtraction.ts";
 
 const config = (n: number) => ({ title: `订单${n}`, scope: "订单规则", issue_no: "REQ-1", repositories: [{ repository: `https://example.test/orders${n}.git`, branch: "main" }],
   knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });
 async function flush() { for (let i = 0; i < 4; i++) await setImmediate(); }
 
-test("生产线验收2：领域执行体忽略abort，60秒释放槽位、记failed并通知，旧完成不能释放新执行权", async t => {
+test("生产线验收2：领域执行体忽略abort，60秒释放槽位、记failed，旧完成不能释放新执行权", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dir = mkdtempSync(join(tmpdir(), "knowledge-stop-domain-"));
-  const executions: Array<{ input: DomainExecution; release: (reply: string) => void }> = [], notifications: string[] = [];
-  const service = new DomainKnowledgeExtraction(dir, input => new Promise<string>(release => executions.push({ input, release })),
-    { onStopTimeout: (job: { id: string }) => { notifications.push(job.id); } } as any);
+  const executions: Array<{ input: DomainExecution; release: (reply: string) => void }> = [];
+  const service = new DomainKnowledgeExtraction(dir, input => new Promise<string>(release => executions.push({ input, release })));
   try {
     const a = service.create(config(1), "alice"), b = service.create(config(2), "bob");
     await flush();
@@ -30,7 +29,6 @@ test("生产线验收2：领域执行体忽略abort，60秒释放槽位、记fai
       assert.equal(service.get(id).status, "failed");
       assert.match(service.get(id).error ?? "", /停止超时.*60 秒内未退出.*已强制释放/);
     }
-    assert.deepEqual(notifications.sort(), [a.id, b.id].sort());
     assert.equal(service.get(c.id).status, "running", "其他人的排队研究获得释放的槽位");
     service.resume(a.id, "alice"); await flush();
     assert.equal(executions.length, 4);
@@ -71,17 +69,17 @@ test("生产线验收2：领域shutdown对忽略abort的执行体也只有60秒�
 });
 
 for (const action of ["stop", "shutdown"] as const) {
-  test(`生产线验收2：领域${action === "stop" ? "停止" : "关停"}超时记录一次落盘 EIO 和通知抛错，仍在60秒释放并如实说明保存失败`, { timeout: 3_000 }, async t => {
+  test(`生产线验收2：领域${action === "stop" ? "停止" : "关停"}超时记录一次落盘 EIO，仍在60秒释放并如实说明保存失败`, { timeout: 3_000 }, async t => {
     const fs = (await import("node:fs")).default;
     const { syncBuiltinESMExports } = await import("node:module");
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const dir = mkdtempSync(join(tmpdir(), "production-domain-timeout-eio-"));
-    const started: string[] = [], releases: Array<() => void> = [], notices: DomainKnowledgeJob[] = [];
+    const started: string[] = [], releases: Array<() => void> = [];
     const service = new DomainKnowledgeExtraction(dir, async input => {
       started.push(input.job.id);
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";
-    }, { onStopTimeout: job => { notices.push(job); throw new Error("测试通知服务暂时不可用"); } });
+    });
     const first = service.create(config(1), "alice"); service.create(config(2), "bob"); await flush();
     const queued = service.create(config(3), "carol");
     let returned = false, closing: Promise<void> | undefined;
@@ -97,17 +95,14 @@ for (const action of ["stop", "shutdown"] as const) {
     try {
       t.mock.timers.tick(59_999); await flush();
       assert.equal(service.get(first.id).status, action === "stop" ? "cancelled" : "queued"); assert.equal(returned, false);
-      assert.doesNotThrow(() => t.mock.timers.tick(1), "状态保存和通知抛错均不能冒泡或阻断预算收尾");
+      assert.doesNotThrow(() => t.mock.timers.tick(1), "状态保存抛错不能冒泡或阻断预算收尾");
       await flush();
       assert.equal(failures, 1); assert.equal(service.get(first.id).status, "failed");
       assert.match(service.get(first.id).error ?? "", /停止超时.*60 秒内未退出.*已强制释放.*状态记录保存失败.*EIO/);
       assert.match(service.get(first.id).turns.at(-1)!.error ?? "", /状态记录保存失败.*EIO/);
-      const notice = notices.find(job => job.id === first.id);
-      assert.equal(notice?.operator, "alice"); assert.equal(notice?.status, "failed"); assert.match(notice?.error ?? "", /停止超时.*状态记录保存失败.*EIO/);
       assert.ok(service.warnings().some(warning => warning.includes(`domain-extraction/${first.id}/job.json`) && warning.includes("EIO")));
-      assert.ok(service.warnings().some(warning => warning.includes(`domain-extraction/${first.id}/job.json`) && warning.includes("通知失败") && warning.includes("测试通知服务暂时不可用")));
       assert.equal(fs.readFileSync(path, "utf8"), before, "失败的原子提交保持上一份权威记录字节不变");
-      if (action === "stop") assert.ok(started.includes(queued.id), "写盘失败和通知异常也释放槽位给其他人");
+      if (action === "stop") assert.ok(started.includes(queued.id), "写盘失败也释放槽位给其他人");
       else { assert.equal(returned, true); assert.ok(!started.includes(queued.id), "关停不启动排队工作"); }
     } finally {
       interception.mock.restore(); syncBuiltinESMExports();

@@ -74,11 +74,11 @@ test("生产线验收1（F4/r7）：无人访问知识接口，领域及组件�
   }
 });
 
-test("生产线验收1（F4/r7）：研究已完成也主动重排宕机时的领域与组件归档批次", { timeout: 3_000 }, async () => {
+test("生产线验收1（F4/r7）：研究已完成时宕机中的人工归档记失败，不接续Git或重新研究", { timeout: 3_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-knowledge-startup-archive-"));
   const jobs = [domain("done"), { ...domain("done"), component_research_id: `cr-${randomUUID()}` }];
   const paths = jobs.map(job => {
-    job.archive_batches = [{ id: "original-batch", created_at: createdAt, operator: "alice", state: "running", documents: [], targets: [], publications: [] }];
+    job.archive_batches = [{ id: "original-batch", created_at: createdAt, operator: "alice", state: "running", issue_no: "REQ-MANUAL", documents: [], targets: [], publications: [] }];
     return save(dataDir, "domain-extraction", job.id, "job.json", job);
   });
   const service = new TaskService({ dataDir, provider: "", model: "", modelsJson: {}, maxConcurrent: 0 });
@@ -89,7 +89,8 @@ test("生产线验收1（F4/r7）：研究已完成也主动重排宕机时的�
       assert.equal(saved.status, "done", "只接续归档，不重新研究");
       assert.equal(saved.id, jobs[index].id);
       assert.equal(saved.archive_batches![0].id, "original-batch");
-      assert.equal(saved.archive_batches![0].state, "superseded", "重排后空批次按现有规则结束，不能停在 running");
+      assert.equal(saved.archive_batches![0].state, "failed", "中断人工操作不能停在 running或自动启动Git");
+      assert.match(saved.archive_batches![0].error ?? "", /重启.*手动重试/);
       assert.equal(saved.component_research_id, jobs[index].component_research_id);
     }
   } finally {

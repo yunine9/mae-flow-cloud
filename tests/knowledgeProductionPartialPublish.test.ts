@@ -49,15 +49,17 @@ test("生产线验收4：跨文档发布遇到停用模块，预检失败且全�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收4/F6：全部预检通过后第二篇正式 rename 遇到 EIO，已生效第一篇落盘并独立归档", { timeout: 20_000 }, async t => {
+test("生产线验收4/F6：全部预检通过后第二篇正式 rename 遇到 EIO，已生效第一篇落盘且仅可人工归档", { timeout: 20_000 }, async t => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-partial-publish-"));
   const seen: DomainPublication["documents"][] = [];
+  let indexed = 0;
   let release!: () => void, restarted: DomainKnowledgeExtraction | undefined;
   const gate = new Promise<void>(resolve => { release = resolve; });
   const service = new DomainKnowledgeExtraction(dir, async input => {
     for (const id of ["one", "two"]) input.save({ id, title: id === "one" ? "第一篇领域规则" : "第二篇领域规则", target_id: "domain", path: `domains/${id}.md`, layer: "domain", content: `# ${id}\r\n有效规则正文`, sources: "固定版本源码" }, { revision: "a".repeat(40), content: null });
     return "研究完成";
   }, {
+    onIndexed: () => { indexed++; },
     publish: async (job, target) => {
       const documents: DomainPublication["documents"] = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision, knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision }));
       seen.push(documents);
@@ -82,6 +84,7 @@ test("生产线验收4/F6：全部预检通过后第二篇正式 rename 遇到 E
       await assert.rejects(service.publish(job.id, "alice"), (error: any) => error?.code === "EIO");
     } finally { intercepted.mock.restore(); syncBuiltinESMExports(); }
     assert.equal(formalRenames, 2, "故障必须发生在预检已通过后的第二次正式写入");
+    assert.equal(indexed, 1, "部分发布成功的第一篇也必须更新既有知识索引");
     const formal = listKnowledgeDocuments(dir);
     assert.equal(formal.length, 1); assert.equal(formal[0].research_source?.document_id, "one");
     const disk = JSON.parse(readFileSync(join(dir, "domain-extraction", job.id, "job.json"), "utf8")) as DomainKnowledgeJob;
@@ -96,14 +99,18 @@ test("生产线验收4/F6：全部预检通过后第二篇正式 rename 遇到 E
     assert.ok(pending.some(batch => batch.documents.some(document => document.knowledge_document_id === formal[0].id && document.published_revision === formal[0].revision)), "第一篇必须关联精确版本的待归档批次");
     const failed = disk.archive_batches?.flatMap(batch => batch.documents).find(document => document.id === "two");
     if (failed?.knowledge_document_id) assert.equal(existsSync(join(dir, "knowledge-documents", `${failed.knowledge_document_id}.json`)), false);
-    await until(() => seen.length === 1, "已生效第一篇没有进入归档");
+    assert.equal(seen.length, 0, "部分平台发布失败也不能自动归档");
+    const preview = service.previewArchive(job.id);
+    const archiving = service.createArchive(job.id, { issue_no: "REQ-PARTIAL", expected_revisions: preview.expected_revisions }, "alice");
+    await until(() => seen.length === 1, "人工归档没有在5秒预算内开始");
     assert.deepEqual(seen[0].map(document => [document.id, document.knowledge_document_id, document.knowledge_revision, document.content]), [["one", formal[0].id, formal[0].revision, formal[0].content]], "归档只能使用实际写成的第一篇");
     const versions = listKnowledgeDocumentVersions(dir, formal[0].id).map(version => version.document.revision);
     assert.deepEqual(versions, [formal[0].revision]);
 
     release();
-    await until(() => !service.get(job.id).archive_batches?.some(batch => ["pending", "running"].includes(batch.state)), "部分发布归档未在5秒内收口");
-    assert.doesNotThrow(() => service.retryArchive(job.id, "alice"), "归档完成后必须释放本任务的操作锁");
+    await within(archiving, 5000, "人工归档未在5秒预算内完成");
+    const manual = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
+    await assert.doesNotReject(service.retryArchive(job.id, "alice", { batch_id: manual.id }), "归档完成后必须释放本任务的操作锁");
     await within(service.shutdown(), 5000, "原管理器未在5秒内关停");
     let repeated = 0;
     restarted = new DomainKnowledgeExtraction(dir, async () => { repeated++; throw new Error("重启不应重新研究"); }, { publish: async () => { repeated++; throw new Error("已归档版本不应重复归档"); } });

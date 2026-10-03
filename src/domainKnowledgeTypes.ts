@@ -16,13 +16,6 @@ export interface DomainDocument extends DomainDocumentContent {
   published_revision?: string;
   published_document_revision?: number;
   published_at?: string;
-  remote_review?: DomainRemoteReview;
-}
-export interface DomainRemoteReview {
-  target_metadata?: string | null; branch_metadata?: string | null;
-  id: string; target_content: string | null; target_revision: string;
-  branch?: string; branch_content?: string | null; branch_revision?: string;
-  reviewed: boolean;
 }
 export interface DomainTurn {
   id: string; mode: "extract" | "discuss" | "revise" | "update"; document_ids: string[]; message: string; operator: string;
@@ -44,26 +37,11 @@ export interface DomainResearch {
   phase: "research" | "review" | "complete";
   finish_requested?: boolean;
 }
-export interface KnowledgeCleanupPlan {
-  id: string; target_id: string; directories: string[]; confirmed: boolean;
-  target_revision: string; target_entries: Array<{ path: string; mode: string; oid: string }>;
-  branch?: string; branch_entries?: KnowledgeCleanupPlan["target_entries"];
-  agent?: { path: string; content: string; target_content: string | null; branch_content?: string | null };
-  document_versions: string[];
-  preserve_paths?: string[];
-}
 export interface DomainPublication {
-  target_id: string; state: "pending" | "opened" | "merged" | "failed" | "closed" | "unchanged";
+  target_id: string; state: "pending" | "opened" | "failed";
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
   documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; metadata_for?: string; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
-  /** diverged：MR 已合入，但归档仓里的文档之后被直接改过；平台正文不动，等人读取远端核对后再发布。 */
-  sync_state?: "pending" | "done" | "failed" | "diverged";
-  sync_error?: string;
-  /** 与平台发布版本不同的归档文件；对应远端版本为 target_revision。 */
-  diverged_paths?: string[];
-  cleanup_id?: string; removed_paths?: string[];
-  target_revision?: string;
   updated_at?: string;
 }
 export interface DomainArchiveBatch {
@@ -95,7 +73,6 @@ export interface DomainKnowledgeJob {
   documents: DomainDocument[]; turns: DomainTurn[]; evidence: Array<Record<string, unknown>>; publications: DomainPublication[];
   publication_history?: DomainPublication[];
   archive_batches?: DomainArchiveBatch[];
-  cleanup_plans?: KnowledgeCleanupPlan[];
 }
 export interface DomainExecution {
   job: DomainKnowledgeJob; turn: DomainTurn; root: string; signal: AbortSignal;

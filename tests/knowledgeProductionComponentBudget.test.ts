@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ComponentResearch, type ResearchExecution, type ResearchRecord } from "../src/componentResearch.ts";
+import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { saveKnowledgeReviewNote, type KnowledgeReviewSources } from "../src/knowledgeReviewNotes.ts";
 
@@ -21,11 +21,11 @@ async function settle(): Promise<void> {
   for (let turn = 0; turn < 20; turn++) await Promise.resolve();
 }
 
-test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽位、记失败并通知，原任务可继续且迟到结果不影响新一轮", { timeout: 3_000 }, async t => {
+test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽位、记失败且不通知，原任务可继续且迟到结果不影响新一轮", { timeout: 3_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-budget-"));
   saveComponentRepository(dataDir, config, "alice");
-  const started: ResearchExecution[] = [], finish: Array<() => void> = [], notices: ResearchRecord[] = [];
+  const started: ResearchExecution[] = [], finish: Array<() => void> = [];
   const research = new ComponentResearch(dataDir, async input => {
     started.push(input);
     writeDocument(input);
@@ -33,7 +33,7 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     input.update({ stage: "迟到执行体试图覆盖状态" });
     input.evidence({ tool: "late-result" });
     return "迟到的草稿";
-  }, () => {}, record => notices.push(record));
+  });
   try {
     const first = research.start({ mode: "all", language: "cpp" }, "alice");
     const second = research.start({ mode: "all", language: "cpp" }, "bob");
@@ -53,8 +53,6 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
       assert.equal(failed.status, "failed");
       assert.equal(failed.error, timeoutReason);
     }
-    assert.deepEqual(notices.map(record => [record.id, record.operator, record.status, record.error]).sort(),
-      [[first.id, "alice", "failed", timeoutReason], [second.id, "bob", "failed", timeoutReason]].sort());
     assert.ok(started.some(input => input.record.id === third.id), "别人的排队研究获得释放的槽位");
     assert.equal(research.retry(first.id, "alice").id, first.id, "原研究可在保留已有草稿的基础上继续");
     await settle();
@@ -69,7 +67,6 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     await settle();
     assert.equal(research.get(fourth.id).status, "queued", "第三个研究和接续中的研究仍占两个有效槽位");
     assert.equal(started.length, 4);
-    assert.equal(notices.length, 2, "每个超时执行体只通知一次");
   } finally {
     const stopping = research.shutdown();
     t.mock.timers.tick(60_000);
@@ -85,11 +82,10 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-shutdown-budget-"));
   saveComponentRepository(dataDir, config, "alice");
   let release = () => {}, returned = false;
-  const notices: ResearchRecord[] = [];
   const research = new ComponentResearch(dataDir, async () => {
     await new Promise<void>(resolve => { release = resolve; });
     return "关停后的迟到草稿";
-  }, () => {}, record => notices.push(record));
+  });
   const job = research.start({ language: "cpp", topic: "关停预算" }, "alice");
   await settle();
   const stopping = research.shutdown().then(() => { returned = true; });
@@ -102,8 +98,6 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
     assert.equal(returned, true, "关停不能无限等待执行体");
     assert.equal(research.get(job.id).status, "failed");
     assert.equal(research.get(job.id).error, timeoutReason);
-    assert.equal(notices.length, 1);
-    assert.equal(notices[0].operator, "alice");
     const failed = research.get(job.id);
     release(); await settle();
     assert.deepEqual(research.get(job.id), failed, "关停预算后的结果丢弃");
@@ -113,15 +107,14 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
   }
 });
 
-test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止，预算后不误记失败或通知", { timeout: 3_000 }, async t => {
+test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止，预算后不误记失败", { timeout: 3_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-responsive-"));
   saveComponentRepository(dataDir, config, "alice");
-  const notices: ResearchRecord[] = [];
   const research = new ComponentResearch(dataDir, async input => {
     await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true }));
     return "已响应停止";
-  }, () => {}, record => notices.push(record));
+  });
   try {
     const job = research.start({ language: "cpp", topic: "响应停止" }, "alice");
     await settle(); research.stop(job.id); await settle();
@@ -129,7 +122,6 @@ test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止�
     assert.equal(research.get(job.id).status, "cancelled");
     assert.equal(research.get(job.id).stage, "已停止");
     assert.equal(research.get(job.id).error, undefined);
-    assert.deepEqual(notices, []);
   } finally {
     await research.shutdown();
     rmSync(dataDir, { recursive: true, force: true });
@@ -174,18 +166,72 @@ for (const action of ["edit", "restore"] as const) {
 }
 
 for (const action of ["stop", "shutdown"] as const) {
-  test(`生产线验收2（F3）：组件${action === "stop" ? "停止" : "关停"}超时记录一次落盘 EIO，仍在60秒释放槽位并通知失败原因`, { timeout: 3_000 }, async t => {
+  test(`生产线验收2/3：组件${action === "stop" ? "停止" : "关停"}首次记录EIO也立即取消执行并在60秒释放，不跳过其他研究`, { timeout: 3_000 }, async t => {
+    const fs = (await import("node:fs")).default;
+    const { syncBuiltinESMExports } = await import("node:module");
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-initial-stop-eio-"));
+    saveComponentRepository(dataDir, config, "alice");
+    const started: ResearchExecution[] = [], releases: Array<() => void> = [];
+    const research = new ComponentResearch(dataDir, async input => {
+      started.push(input);
+      await new Promise<void>(resolve => releases.push(resolve));
+      input.update({ stage: "迟到状态" }); input.evidence({ tool: "迟到证据" });
+      return "迟到正文";
+    });
+    const rename = fs.renameSync;
+    let injected = false, stopping: Promise<unknown> | undefined;
+    try {
+      const first = research.start({ language: "cpp", topic: "首条研究" }, "alice");
+      const second = research.start({ language: "cpp", topic: "另一条研究" }, "bob");
+      await settle();
+      fs.renameSync = ((from, to) => {
+        if (!injected && String(to) === join(dataDir, "component-research", first.id, "record.json")) {
+          injected = true; throw Object.assign(new Error("模拟首条停止记录EIO"), { code: "EIO" });
+        }
+        return rename(from, to);
+      }) as typeof fs.renameSync;
+      syncBuiltinESMExports();
+      if (action === "stop") { try { research.stop(first.id); } catch (error) { assert.equal((error as NodeJS.ErrnoException).code, "EIO"); } }
+      else stopping = research.shutdown().catch(error => error);
+      assert.ok(injected);
+      assert.ok(started[0].signal.aborted, "停止写盘失败也必须取消执行并安装预算");
+      if (action === "shutdown") assert.ok(started[1].signal.aborted, "单条写盘失败不能跳过其他执行体");
+      fs.renameSync = rename; syncBuiltinESMExports();
+      t.mock.timers.tick(60_000); await settle();
+      if (stopping) await stopping;
+      assert.equal(research.get(first.id).status, "failed");
+      assert.match(research.get(first.id).error!, /60 秒/);
+      const failed = research.get(first.id);
+      releases[0](); await settle();
+      assert.deepEqual(research.get(first.id), failed, "迟到写入不覆盖失败事实");
+      if (action === "stop") {
+        research.start({ language: "cpp", topic: "后续研究" }, "carol");
+        await settle(); assert.equal(started.length, 3, "预算释放后其他研究获得槽位");
+      } else assert.equal(research.get(second.id).status, "failed");
+      assert.ok(research.warnings().some(warning => warning.includes(`component-research/${first.id}/record.json`) && warning.includes("EIO")));
+    } finally {
+      fs.renameSync = rename; syncBuiltinESMExports();
+      const shutdown = research.shutdown(); for (const release of releases) release();
+      t.mock.timers.tick(60_000); await settle(); await shutdown;
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const action of ["stop", "shutdown"] as const) {
+  test(`生产线验收2（F3）：组件${action === "stop" ? "停止" : "关停"}超时记录一次落盘 EIO，仍在60秒释放槽位并保留失败原因`, { timeout: 3_000 }, async t => {
     const fs = (await import("node:fs")).default;
     const { syncBuiltinESMExports } = await import("node:module");
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-timeout-eio-"));
     saveComponentRepository(dataDir, config, "alice");
-    const started: string[] = [], releases: Array<() => void> = [], notices: ResearchRecord[] = [];
+    const started: string[] = [], releases: Array<() => void> = [];
     const research = new ComponentResearch(dataDir, async input => {
       started.push(input.record.id);
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";
-    }, () => {}, record => { notices.push(record); throw new Error("测试通知同步失败"); });
+    });
     const first = research.start({ language: "cpp", topic: "第一个研究" }, "alice");
     research.start({ language: "cpp", topic: "第二个研究" }, "bob");
     await settle();
@@ -211,12 +257,7 @@ for (const action of ["stop", "shutdown"] as const) {
       assert.equal(failures, 1);
       assert.equal(research.get(first.id).status, "failed");
       assert.match(research.get(first.id).error ?? "", /停止超时.*EIO/);
-      const notice = notices.find(record => record.id === first.id);
-      assert.equal(notice?.operator, "alice");
-      assert.equal(notice?.status, "failed");
-      assert.match(notice?.error ?? "", /停止超时.*EIO/);
       assert.ok(research.warnings().some(warning => warning.includes(`component-research/${first.id}/record.json`) && warning.includes("EIO")));
-      assert.ok(research.warnings().some(warning => warning.includes(first.id) && warning.includes("测试通知同步失败")));
       assert.equal(fs.readFileSync(path, "utf8"), before, "失败的原子提交没有损坏上一份权威记录");
       if (action === "stop") assert.ok(started.includes(queued.id), "写盘失败也释放槽位给其他人");
       else {

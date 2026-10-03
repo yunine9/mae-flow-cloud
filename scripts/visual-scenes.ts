@@ -15,6 +15,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
 import React from "../web/node_modules/react/index.js";
 import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
@@ -22,12 +23,12 @@ import { createServer } from "../web/node_modules/vite/dist/node/index.js";
 import {
   projectRepairStopped, projectStatusLabel, projectTaskFocus,
 } from "../src/taskFocus.ts";
-import { domainKnowledgeTask } from "../src/knowledgeTaskCenter.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
-import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
+import type { ResearchRecord } from "../src/componentResearch.ts";
 import type { SkillSubmissionRecord } from "../src/hostSkillLibrary.ts";
 import { componentDeletionView } from "../src/componentKnowledgeDeletion.ts";
 import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
+import { knowledgeManualArchiveFixtures } from "../tests/fixtures/knowledgeManualArchiveFixture.ts";
 
 /** 浏览器可执行文件:环境变量优先;缺省先找 playwright 缓存里的 Linux
  * 无头壳——WSL 上走 Windows Edge 互操作要跨 interop+9p,同页实测 8.7s
@@ -121,11 +122,16 @@ function page(theme: string, body: string, css: string): string {
 
 async function render(out: string): Promise<void> {
   const themes = (flag("--themes") ?? "light,dark").split(",");
-  const widths = (flag("--widths") ?? (args.includes("--only-knowledge") ? "1920,1680,1600,1440,1366" : "1440,1200,900,600,390")).split(",").map(Number);
+  const backgroundOnly = args.includes("--only-production-background");
+  const knowledgeOnly = args.includes("--only-knowledge") || backgroundOnly;
+  const widths = (flag("--widths") ?? (knowledgeOnly ? "1920,1680,1600,1440,1366" : "1440,1200,900,600,390")).split(",").map(Number);
+  const source = resolve(flag("--source-root") ?? ".");
+  const { projectKnowledgeProduction }: typeof import("../src/knowledgeProductionState.ts") = await import(pathToFileURL(join(source, "src/knowledgeProductionState.ts")).href);
+  const { domainKnowledgeTask }: typeof import("../src/knowledgeTaskCenter.ts") = await import(pathToFileURL(join(source, "src/knowledgeTaskCenter.ts")).href);
   const css = bundledCss();
   mkdirSync(out, { recursive: true });
   const vite = await createServer({
-    root: join(resolve(flag("--source-root") ?? "."), "web"), server: { middlewareMode: true }, appType: "custom", logLevel: "silent",
+    root: join(source, "web"), server: { middlewareMode: true }, appType: "custom", logLevel: "silent",
   });
   try {
     const { TaskWorkspace } = await vite.ssrLoadModule("/src/TaskWorkspace.tsx");
@@ -133,7 +139,7 @@ async function render(out: string): Promise<void> {
     const noop = () => undefined;
     const scenes: Array<{ name: string; html: string }> = [];
     const failures: string[] = [];
-    for (const fixture of args.includes("--only-knowledge") ? [] : loadFixtures()) {
+    for (const fixture of knowledgeOnly ? [] : loadFixtures()) {
       const task = fixture.summary;
       const variants: Array<[string, () => React.ReactElement]> = [
         ["workspace", () => React.createElement(TaskWorkspace, {
@@ -160,21 +166,22 @@ async function render(out: string): Promise<void> {
       }
     }
     // 生产线界面以前没有进入截图集，删入口与页面时仅对拍任务卡会漏验。
-    if (args.includes("--only-knowledge")) {
+    if (knowledgeOnly) {
       const { KnowledgeLibrary } = await vite.ssrLoadModule("/src/KnowledgeLibrary.tsx");
       const { KnowledgeResearchCreate } = await vite.ssrLoadModule("/src/KnowledgeResearchCreate.tsx");
       const { KnowledgeAssetsWorkspace } = await vite.ssrLoadModule("/src/KnowledgeAssets.tsx");
       const { KnowledgeTaskCenter } = await vite.ssrLoadModule("/src/KnowledgeTaskCenter.tsx");
       const { DomainKnowledgePublicationStatus } = await vite.ssrLoadModule("/src/DomainKnowledgePublicationStatus.tsx");
       // 同一份原始事实在前后各经后端投影，不能用截图夹具掩盖状态误判。
-      const productionJobs = ["同步失败", "远端待核对", "MR 已关闭", "归档与研究均失败"].map((title, index) => ({
-        id: `dkx-visual-${index}`, title, scope: "订单规则", operator: "alice", created_at: "2026-09-06T01:00:00Z",
-        status: index === 3 ? "failed" : "done", stage: "", revisions: {}, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false,
-        knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/knowledge", branch: "main", path: "", docs_path: "docs" },
-        documents: [{ id: "doc", title: "订单规则", target_id: "domain", path: "docs/orders.md", layer: "domain", content: "订单规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [], knowledge_document_id: "kd-visual", published_document_revision: 2, published_revision: "formal-v2" }],
-        turns: [], evidence: [], publications: [{ target_id: "domain", branch: "knowledge/orders", state: index === 2 ? "closed" : index === 3 ? "failed" : "merged", documents: [],
-          ...(index === 0 ? { sync_state: "failed", sync_error: "已合入，平台同步失败：存储暂不可写" } : index === 1 ? { sync_state: "diverged", sync_error: "归档仓正文已变化，请核对远端版本", diverged_paths: ["docs/orders.md"] } : { error: index === 2 ? "MR 已关闭" : "Git 推送失败" }) }],
-      } as DomainKnowledgeJob));
+      const manual = await knowledgeManualArchiveFixtures();
+      const productionJobs = [manual.partial.job, manual.domainReady.job, manual.completed.job, manual.partial.job].map((record, index) => {
+        const job = structuredClone(record);
+        job.id = `dkx-visual-${index}`;
+        job.title = ["单仓归档失败", "已发布待归档", "MR 已创建", "归档与研究均失败"][index];
+        if (index === 3) { job.status = "failed"; job.error = "研究读取源码失败，请检查仓库连接后继续研究。"; }
+        job.production = projectKnowledgeProduction({ kind: "domain", record: job });
+        return job;
+      });
       const productionRows = productionJobs.map(domainKnowledgeTask);
       const previousLocation = Object.getOwnPropertyDescriptor(globalThis, "location");
       Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "http://localhost/?kbPage=home", search: "?kbPage=home" } });
@@ -192,7 +199,7 @@ async function render(out: string): Promise<void> {
               attention: productionRows.filter(row => row.group === "attention").length, total: productionRows.length },
           } })],
           ["knowledge-archive-sync-failed", () => React.createElement("div", { style: { padding: 24 } }, React.createElement(DomainKnowledgePublicationStatus, {
-            job: { ...productionJobs[0], production: (productionRows[0] as any).production }, onConfigure: noop, onAction: async () => true, onCompare: noop,
+            job: { ...productionJobs[0], production: (productionRows[0] as any).production }, onConfigure: noop,
           }))],
         ];
         for (const [name, make] of variants) {
@@ -201,10 +208,9 @@ async function render(out: string): Promise<void> {
             for (const theme of themes) scenes.push({ name: `${name}-${theme}`, html: page(theme, markup, css) });
           } catch (error) { failures.push(`${name}: ${String(error).split("\n")[0]}`); }
         }
-        if (args.includes("--production-detail")) {
-          const source = resolve(flag("--source-root") ?? ".");
+        if (args.includes("--production-detail") || backgroundOnly) {
           const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeProductionVisual.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' },
-            plugins: [{ name: "visual-source", setup(builder) { builder.onResolve({ filter: /^\.\.\/\.\.\/web\/src\/(KnowledgeSkillTask|ComponentKnowledgeDelete)$/ }, args => ({ path: join(source, `web/src/${args.path.split("/").at(-1)}.tsx`) })); } }] });
+            plugins: [{ name: "visual-source", setup(builder) { builder.onResolve({ filter: /^\.\.\/\.\.\/web\/src\/(KnowledgeSkillTask|ComponentKnowledgeDelete|ComponentResearch)$/ }, args => ({ path: join(source, `web/src/${args.path.split("/").at(-1)}.tsx`) })); } }] });
           stop();
           const content = "---\nname: file-guide\ndescription: 文件组件操作指南\n---\n\n# 文件组件\n\n读取指定文件，核对错误处理，再保存修订。";
           for (const status of ["pending", "approving", "approved", "rejected"] as const) {
@@ -221,6 +227,38 @@ async function render(out: string): Promise<void> {
           const json = JSON.stringify({ kind: "component-deletion", response: deletion }).replaceAll("<", "\\u003c");
           const markup = `<div id="visual-app"></div><script id="visual-fixture" type="application/json">${json}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`;
           for (const theme of themes) scenes.push({ name: `knowledge-component-deletion-${theme}`, html: page(theme, markup, css) });
+          const component = { id: "component-file", name: "文件组件", repository: "https://example.test/file.git", branch: "main", path: "src", languages: ["cpp"], description: "文件句柄与异步回调", enabled: true };
+          const componentRecord: ResearchRecord = { id: "cr-00000000-0000-4000-8000-000000000010", key: "visual-component", language: "cpp", topic: "文件组件使用指南", mode: "all", format: "joint-document", operator: "alice", created_at: "2026-09-06T01:00:00Z", status: "done", stage: "待审查", component, components: [component], revisions: { [component.id]: "a".repeat(40) }, evidence: [], document: {
+            overview: "# 文件组件使用指南\n\n文件组件提供句柄管理与异步读取。调用方先停止回调，再释放句柄，所有等待都须有明确超时。",
+            sections: ["打开与关闭", "异步读取"].map((title, index) => ({ id: `section-${index}`, title, repository_ids: [component.id], selected: true, revision: 3,
+              content: `## ${title}\n\n${index ? "取消读取后等待正在执行的回调结束；超时后报告失败，不能假称文件已安全关闭。" : "打开失败时返回错误；关闭操作只执行一次，释放前先确认异步读取已经结束。"}`,
+              interfaces: "Open(path) / Cancel(handle) / Close(handle)", integration: "链接 file，使用 include/file.h 提供的接口。", example: "示例尚未编译验证。\n```cpp\nCancel(handle);\nClose(handle);\n```", sources: "src/file.cpp:1-80 @ 固定源码版本", related_ids: [],
+            })),
+          } };
+          componentRecord.review_turns = componentRecord.document!.sections.map((section, index) => ({ id: `review-visual-${index}`, section_id: section.id, mode: "rework", message: "请明确关闭顺序与等待预算", operator: "alice", status: "done", created_at: componentRecord.created_at,
+            proposal: { status: "pending", base_revision: section.revision, section: { ...section, content: `${section.content}\n\n最新修订：取消后最多等待 60 秒；用完预算如实记录失败并通知负责人。` } } }));
+          const formalId = manual.componentReady.record.document_id!, formalRevision = manual.componentReady.record.published_revision!;
+          for (const state of ["publish-ready", "published-no-git", "published-missing-archive"] as const) {
+            const record = structuredClone(componentRecord), sourceFixture = state === "published-no-git" ? manual.unconfigured : manual.componentReady;
+            const job = structuredClone(sourceFixture.job); job.component_research_id = record.id;
+            if (state === "publish-ready") { delete job.documents[0].knowledge_document_id; delete job.documents[0].published_revision; delete job.documents[0].published_document_revision; }
+            else { record.document_id = formalId; record.published_revision = formalRevision; record.stage = "已入库"; record.review_turns!.forEach(turn => { turn.proposal!.status = "accepted"; }); }
+            record.production = projectKnowledgeProduction({ kind: "component", record, archive: job });
+            job.production = projectKnowledgeProduction({ kind: "domain", record: job });
+            const fixture = { kind: "component-research", id: record.id, interaction: state === "publish-ready" ? "publication-settings" : "archive-settings", response: record, archive_preview: sourceFixture.preview };
+            const json = JSON.stringify(fixture).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
+            const markup = `<div id="visual-app" style="height:100vh"></div><script id="visual-fixture" type="application/json">${json}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`;
+            for (const theme of themes) scenes.push({ name: `knowledge-background-component-${state}-${theme}`, html: page(theme, markup, css) });
+          }
+          const trackingJob = structuredClone(productionJobs[0]);
+          trackingJob.title = "文件组件手动归档失败";
+          trackingJob.production = projectKnowledgeProduction({ kind: "domain", record: trackingJob });
+          const trackingRow = domainKnowledgeTask(trackingJob);
+          const trackingVariants: Array<[string, React.ReactElement]> = [
+            ["knowledge-background-tracking-failed-task", React.createElement(KnowledgeTaskCenter, { onOpen: noop, onBack: noop, data: { tasks: [trackingRow], warnings: [], summary: { running: Number(trackingRow.group === "running"), attention: Number(trackingRow.group === "attention"), total: 1 } } })],
+            ["knowledge-background-tracking-failed-archive", React.createElement("div", { style: { padding: 24 } }, React.createElement(DomainKnowledgePublicationStatus, { job: trackingJob, onConfigure: noop }))],
+          ];
+          for (const [name, element] of trackingVariants) for (const theme of themes) scenes.push({ name: `${name}-${theme}`, html: page(theme, renderToStaticMarkup(element), css) });
         }
       } finally {
         if (previousLocation) Object.defineProperty(globalThis, "location", previousLocation);
@@ -228,6 +266,7 @@ async function render(out: string): Promise<void> {
       }
     }
     if (args.includes("--only-production-deletion")) scenes.splice(0, scenes.length, ...scenes.filter(scene => scene.name.startsWith("knowledge-component-deletion-")));
+    if (backgroundOnly) scenes.splice(0, scenes.length, ...scenes.filter(scene => scene.name.startsWith("knowledge-background-")));
     for (const scene of scenes) writeFileSync(join(out, `${scene.name}.html`), scene.html);
     writeFileSync(join(out, "scenes.json"), JSON.stringify({ widths, scenes: scenes.map((s) => s.name), failures }, null, 2));
     console.log(`[visual] ${scenes.length} 个场景写入 ${out}${failures.length ? `;${failures.length} 个渲染失败` : ""}`);
@@ -253,7 +292,7 @@ async function shoot(out: string, names: string[], widths: number[]): Promise<vo
       await new Promise<void>((resolveJob) => {
         const child = spawn(CHROME, [
           "--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
-          "--force-device-scale-factor=1", `--window-size=${job.width},${args.includes("--only-knowledge") ? Math.round(job.width * 9 / 16) : 1800}`,
+          "--force-device-scale-factor=1", `--window-size=${job.width},${args.includes("--only-knowledge") || args.includes("--only-production-background") ? Math.round(job.width * 9 / 16) : 1800}`,
           "--virtual-time-budget=1500", `--screenshot=${toBrowserPath(png)}`,
           toBrowserFileUrl(join(out, `${job.name}.html`)),
         ], { stdio: "ignore" });

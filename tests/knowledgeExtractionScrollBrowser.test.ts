@@ -35,7 +35,8 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       const fixture = kind === "domain" ? "knowledgeLibrary" : "componentResearchReview";
       const bundle = await build({ entryPoints: [resolve(`tests/browser/${fixture}.tsx`)], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });
       const html = join(root, `${kind}.html`);
-      const fixtureData = kind === "domain" ? `window.__KNOWLEDGE_LIBRARY_FIXTURES__=${JSON.stringify(knowledgeLibraryProductionFixtures())};`
+      const domainFixture = kind === "domain" ? await knowledgeLibraryProductionFixtures() : undefined;
+      const fixtureData = kind === "domain" ? `window.__KNOWLEDGE_LIBRARY_FIXTURES__=${JSON.stringify(domainFixture)};`
         : `window.__COMPONENT_REVIEW_PRODUCTIONS__=${JSON.stringify({ initial: projectKnowledgeProduction({ kind: "component", record: { id: "cr-browser", topic: "基础组件联合使用指南", status: "done", stage: "草稿待审查", language: "cpp", operator: "专家", created_at: "2026-09-21T08:00:00Z", evidence: [], review_turns: [], document: { overview: "组件使用指南", sections: Array.from({ length: 35 }, (_, i) => ({ id: `cap-${i}`, title: i === 0 ? "安全打开与关闭" : i === 1 ? "异步读取与取消" : i === 2 ? "批量写入与错误恢复" : `组件能力 ${i + 1}：资源管理与错误恢复`, revision: 1, selected: true })) } } as unknown as ResearchRecord }) })};`;
       writeFileSync(html, `<!doctype html><meta charset="utf-8"><style>${css} #result {display:none} ${kind === "component" ? ".knowledge-extraction-content main { padding-bottom: 320px; }" : ""}</style><div style="padding:24px"><h1 style="height:52px">知识库</h1><div id="app"></div><footer style="height:200px">页面下方内容</footer></div><pre id="result"></pre><script>${fixtureData.replaceAll("</script", "<\\/script")}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`);
       const { targetId } = await send("Target.createTarget", { url: "about:blank" });
@@ -56,7 +57,7 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
       // 领域任务按 #447 进入知识库的专注页(研究过程自己滚动);组件夹具仍是页面内的萃取工作区。
       const scroller = kind === "domain" ? ".knowledge-task-progress" : ".knowledge-extraction-content";
       const outerTop = () => evaluate(`document.querySelector(${JSON.stringify(scroller)}).scrollTop`);
-      const url = kind === "domain" ? "?scrollCheck=1&kbPage=task&kbKind=domain&kbTask=dkx-running" : "?scrollCheck=1&kbPage=task&kbKind=component&kbTask=cr-browser";
+      const url = kind === "domain" ? `?scrollCheck=1&kbPage=task&kbKind=domain&kbTask=${domainFixture!.running.id}` : "?scrollCheck=1&kbPage=task&kbKind=component&kbTask=cr-browser";
       for (const [width, height] of [[1920, 1080], [1366, 768]]) {
         await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
         await send("Page.navigate", { url: `${pathToFileURL(html)}${url}` }, sessionId);

@@ -14,22 +14,20 @@ const config = { title: "订单", scope: "订单规则", issue_no: "REQ-1", repo
 const content = { id: "orders", title: "订单", target_id: "domain", path: "domains/orders.md", layer: "domain" as const, content: "第一版", sources: "代码来源" };
 async function until(check: () => boolean) { for (let i = 0; i < 200; i++) { if (check()) return; await new Promise(r => setTimeout(r, 5)); } throw new Error("本地研究验证超时"); }
 
-test("生产线验收14（F23）：领域运行中 edit、restore、reconcile 均拒绝，意见可保存且版本不变", async () => {
+test("生产线验收14（F23）：领域运行中 edit、restore 均拒绝，意见可保存且版本不变", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-edit-guard-"));
   const manager = new DomainKnowledgeExtraction(dir, async input => {
     if (input.turn.mode === "extract") { input.save(content, { revision: "a".repeat(40), content: null }); return "完成"; }
     if (!input.signal.aborted) await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true })); return "结束";
-  }, { readRemote: async () => ({ id: "snapshot", target_revision: "b".repeat(40), target_content: "远端", reviewed: false }) });
+  });
   try {
     const job = manager.create(config, "alice"); await until(() => manager.get(job.id).status === "done");
     manager.edit(job.id, { document: { ...content, content: "第二版" }, base_revision: 1 }, "alice");
-    await manager.readRemote(job.id, content.id, "alice");
     manager.run(job.id, { mode: "revise", document_ids: [content.id], message: "核对" }, "alice");
     const before = manager.get(job.id).documents[0];
     for (const change of [
       () => manager.edit(job.id, { document: { ...content, content: "覆盖" }, base_revision: before.revision }, "bob"),
       () => manager.restore(job.id, content.id, 1, before.revision, "bob"),
-      () => manager.reconcile(job.id, { document: { ...content, content: "覆盖" }, base_revision: before.revision, snapshot_id: "snapshot" }, "bob"),
     ]) assert.throws(change, /研究进行中：请先停止，或等本轮结束后再改/);
     const notes = saveKnowledgeReviewNote({ dataDir: dir, domain: manager, component: {} as any }, "domain", job.id,
       { document_id: content.id, scope: "document", note: "请补充依据" }, "bob");
@@ -79,7 +77,7 @@ test("生产线验收3：领域活动状态缺少活动轮次或嵌套容器损�
     knowledge_target: { id: "domain", name: "知识仓", repository: "", branch: "main", path: "", docs_path: "domains" }, material_ids: [], ar_codes: [], use_wxdoubao: true,
     status: "done", stage: "等待审查", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
   const orphan = { ...content, target_id: "missing", revision: 1, selected: true, history: [], base_content: null, base_revision: "" };
-  const mutations: Record<string, unknown>[] = [{ status: "queued" }, { status: "running" }, { source_repositories: {} }, { cleanup_plans: {} },
+  const mutations: Record<string, unknown>[] = [{ status: "queued" }, { status: "running" }, { source_repositories: {} },
     { turns: [{ id: "t", status: "done", mode: "extract", document_ids: [], proposals: [], message: 42, operator: "a", created_at: "now" }] },
     { turns: [{ id: "t", status: "done", mode: "extract", document_ids: [], proposals: [], message: "x", operator: "a", created_at: "now", research: { capabilities: {} } }] },
     { publications: [{ target_id: "domain", branch: "x", state: "opened", documents: [{}] }] },

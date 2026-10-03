@@ -18,6 +18,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
       if (request.method === "GET" && parts[1]) return json(response, 200, readKnowledgeMaterial(materialRoot, parts[1]));
     } else {
       const manager = service.getDomainKnowledgeExtraction();
+      if (request.method === "GET" && parts[1] && parts[2] === "archive" && parts[3] === "preview") return json(response, 200, manager.previewArchive(parts[1]));
       if (request.method === "GET" && !parts[2]) return json(response, 200, parts[1] ? manager.get(parts[1]) : { records: manager.list(), knowledge_target: readKnowledgeRepoConfig(service.options.dataDir) ?? null });
       if (request.method === "POST") {
         const body = await readBody(request, 3 * 1024 * 1024);
@@ -33,15 +34,13 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         if (parts[2] === "proposal") return json(response, 200, manager.decide(id, body.turn_id, body.document_id, body.decision, operator));
         if (parts[2] === "restore") return json(response, 200, manager.restore(id, body.document_id, body.revision, body.base_revision, operator));
         if (parts[2] === "selection") return json(response, 200, manager.select(id, body.ids, body.selected));
-        if (parts[2] === "remote") return json(response, 200, await manager.readRemote(id, body.document_id, operator));
-        if (parts[2] === "reconcile") return json(response, 200, manager.reconcile(id, body, operator));
+        if (parts[2] === "archive" && parts[3] === "create") return json(response, 200, await manager.createArchive(id, body, operator));
+        if (parts[2] === "archive" && parts[3] === "retry") return json(response, 200, await manager.retryArchive(id, operator, body));
         if (parts[2] === "publish") {
           const published = await manager.publish(id, operator, body);
           service.prepareKnowledgeIndex();
           return json(response, 200, published);
         }
-        if (parts[2] === "archive-retry") return json(response, 202, manager.retryArchive(id, operator));
-        if (parts[2] === "refresh") return json(response, 200, await manager.refresh(id, operator));
       }
     }
     return json(response, 404, { error: "未知知识萃取操作" });

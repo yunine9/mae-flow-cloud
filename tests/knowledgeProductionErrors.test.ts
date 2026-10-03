@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
-import { fetchMrGates, readMrFailureBody } from "../src/mrGateClient.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { readMrFailureBody } from "../src/mrGateClient.ts";
 import { knowledgeFailureDisposition } from "../src/knowledgeProductionErrors.ts";
 import { syncKnowledgeSource } from "../src/knowledgeExtractionFactory.ts";
 import { HostGitSandbox } from "../src/hostGitSandbox.ts";
@@ -37,9 +38,10 @@ async function fixture(password = "fixture-password") {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const platformUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => platformUrl,
-    credential: () => ({ username: "Fixture", password, email: "fixture@example.test" }), onIndexed: () => {} });
+    credential: () => ({ username: "Fixture", password, email: "fixture@example.test" }) });
   const target = { id: "domain", name: "领域仓", repository: remote, branch: "main", path: "", docs_path: "docs/domain" };
-  const doc: DomainKnowledgeJob["documents"][number] = { id: "states", title: "状态", target_id: target.id, path: "docs/domain/states.md", layer: "domain", content: "# 状态", sources: "source", revision: 1, selected: true, base_content: null, base_revision: git(source, "rev-parse", "HEAD"), history: [] };
+  const formal = saveKnowledgeDocument(root, { title: "状态", content: "# 状态", scope: "platform" }, "alice");
+  const doc: DomainKnowledgeJob["documents"][number] = { id: "states", title: "状态", target_id: target.id, path: "docs/domain/states.md", layer: "domain", content: "# 状态", sources: "source", revision: 1, selected: true, base_content: null, base_revision: "", knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1, history: [] };
   const job: DomainKnowledgeJob = { id: "dkx-error-fixture", issue_no: "REQ-1", issue_description: "整理订单状态", title: "订单", scope: "状态", operator: "alice", created_at: new Date().toISOString(), repositories: [], knowledge_target: target,
     material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, documents: [doc], turns: [], evidence: [], publications: [] };
   let saved: DomainPublication | undefined;
@@ -48,7 +50,13 @@ async function fixture(password = "fixture-password") {
     async close() { await publisher.shutdown(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); } };
 }
 
-test("生产线验收9：r9 真实 Git 创建 MR 的400保留配置原文，查询401指出个人设置而不让人无效重试", async () => {
+function failedReceipt(f: Awaited<ReturnType<typeof fixture>>): DomainPublication {
+  return { target_id: "domain", branch: "codex/knowledge-fixture", state: "failed", mr_attempted: true,
+    documents: f.job.documents.map(doc => ({ id: doc.id, path: doc.path, content: doc.content, revision: doc.revision,
+      knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision })) };
+}
+
+test("生产线验收9：r9 真实 Git 创建 MR 的400保留配置原文，人工重试401指出个人设置而不让人无效重试", async () => {
   const f = await fixture();
   try {
     f.response.create = 400; f.response.reason = "知识归档命令未配置单号关联，请在 mr_create_knowledge 中配置 {dts_no}";
@@ -57,13 +65,13 @@ test("生产线验收9：r9 真实 Git 创建 MR 的400保留配置原文，查�
       assert.match(error.message, /联系.*管理员.*mr_create_knowledge/); assert.doesNotMatch(error.message, /重试|稍后/); return true;
     });
     assert.equal(f.saved()?.mr_attempted, true, "确定的拒绝仍保留已经推送的分支事实");
-    f.response.gates = 401; f.response.reason = "token expired";
-    const opened: DomainPublication = { ...f.saved()!, url: "https://example.test/repo/merge_requests/1", mr_id: 1, state: "opened" };
-    await assert.rejects(f.publisher.publish(f.job, f.target, opened, "alice", f.save), (error: Error) => {
+    f.response.create = 401; f.response.reason = "token expired";
+    await assert.rejects(f.publisher.publish(f.job, f.target, f.saved(), "alice", f.save), (error: Error) => {
       assert.match(error.message, /HTTP 401/); assert.ok(error.message.includes(f.response.reason));
       assert.match(error.message, /个人设置.*CodeHub.*令牌/); assert.doesNotMatch(error.message, /重试|稍后/); return true;
     });
-    assert.equal(f.requests.filter(path => path === "/mr").length, 1, "鉴权失败不再次创建 MR");
+    assert.equal(f.requests.filter(path => path === "/mr/discover").length, 1, "人工重试先确认原分支是否已有MR");
+    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0, "创建后的MR状态不参与归档");
   } finally { await f.close(); }
 });
 
@@ -73,66 +81,51 @@ const deterministic = [
   { status: 403, reason: "permission denied", next: /权限|管理员/ },
   { status: 404, reason: "repository not found", next: /地址|仓库|管理员/ },
 ];
-for (const operation of ["create", "gates", "discover"] as const) for (const { status, reason, next } of deterministic) {
+for (const operation of ["create", "discover"] as const) for (const { status, reason, next } of deterministic) {
   test(`生产线验收9：MR ${operation} HTTP ${status}带平台原文和可执行下一步，确定性错误不提示重试`, async () => {
     const f = await fixture();
     try {
       f.response[operation] = status; f.response.reason = reason;
       const previous: DomainPublication | undefined = operation === "create" ? undefined
-        : { target_id: "domain", branch: "codex/knowledge-fixture", state: "opened", documents: [], ...(operation === "gates" ? { url: "https://example.test/repo/merge_requests/1", mr_id: 1 } : { mr_attempted: true }) };
+        : failedReceipt(f);
       await assert.rejects(f.publisher.publish(f.job, f.target, previous, "alice", f.save), (error: Error) => {
         assert.match(error.message, new RegExp(`HTTP ${status}`)); assert.ok(error.message.includes(reason));
-        assert.equal(knowledgeFailureDisposition(error), "stall", "后台跟踪与错误文案使用同一确定性分类");
+        assert.equal(knowledgeFailureDisposition(error), "stall", "人工下一步与错误文案使用同一确定性分类");
         assert.match(error.message, next); assert.doesNotMatch(error.message, /重试|稍后/); return true;
       });
     } finally { await f.close(); }
   });
 }
 
-for (const operation of ["create", "gates", "discover"] as const) for (const status of [429, 503]) {
+for (const operation of ["create", "discover"] as const) for (const status of [429, 503]) {
   test(`生产线验收9：MR ${operation} HTTP ${status}如实显示暂时故障与平台原文`, async () => {
     const f = await fixture();
     try {
       f.response[operation] = status; f.response.reason = status === 429 ? "rate limit exceeded" : "gateway unavailable";
       const previous: DomainPublication | undefined = operation === "create" ? undefined
-        : { target_id: "domain", branch: "codex/knowledge-fixture", state: "opened", documents: [], ...(operation === "gates" ? { url: "https://example.test/repo/merge_requests/1", mr_id: 1 } : { mr_attempted: true }) };
+        : failedReceipt(f);
       await assert.rejects(f.publisher.publish(f.job, f.target, previous, "alice", f.save), (error: Error) => {
         assert.match(error.message, new RegExp(`HTTP ${status}`)); assert.ok(error.message.includes(f.response.reason));
-        assert.equal(knowledgeFailureDisposition(error), "retry", "暂时故障可交给后续有预算的重试");
+        assert.equal(knowledgeFailureDisposition(error), "retry", "暂时故障如实保留，修好后由人手动重试");
         assert.match(error.message, /暂时|稍后|重试/); assert.doesNotMatch(error.message, /更新个人令牌|联系管理员配置/); return true;
       });
     } finally { await f.close(); }
   });
 }
 
-for (const operation of ["create", "gates", "discover"] as const) {
+for (const operation of ["create", "discover"] as const) {
   test(`生产线验收9：MR ${operation}连接中断保留网络原文并说明暂时故障`, async () => {
     const f = await fixture();
     try {
-      f.response.disconnect = operation === "create" ? "/mr" : operation === "gates" ? "/mr/gates" : "/mr/discover";
+      f.response.disconnect = operation === "create" ? "/mr" : "/mr/discover";
       const previous: DomainPublication | undefined = operation === "create" ? undefined
-        : { target_id: "domain", branch: "codex/knowledge-fixture", state: "opened", documents: [], ...(operation === "gates" ? { url: "https://example.test/repo/merge_requests/1", mr_id: 1 } : { mr_attempted: true }) };
+        : failedReceipt(f);
       await assert.rejects(f.publisher.publish(f.job, f.target, previous, "alice", f.save), (error: Error) => {
         assert.match(error.message, /fetch failed|socket|connection|网络/i); assert.match(error.message, /暂时|稍后|重试/); return true;
       });
     } finally { await f.close(); }
   });
 }
-
-test("生产线验收9：共享 MR 查询默认仍只回状态码，知识归档显式启用的原文最多300字符", async () => {
-  const f = await fixture();
-  try {
-    f.response.gates = 401; f.response.reason = "token expired；" + "详细说明".repeat(150);
-    const options = { platformUrl: f.platformUrl, headers: {}, repo: f.target.repository, requireExisting: true,
-      delivery: { mr_id: 1, source_branch: "codex/fixture", target_branch: "main" } };
-    let original = "", detail = "";
-    assert.equal(await fetchMrGates({ ...options, onFailure: reason => { original = reason; } }), undefined);
-    assert.equal(original, "HTTP 401", "问题流与交付默认路径不读取或改变错误正文");
-    assert.equal(await fetchMrGates({ ...options, includeFailureBody: true, onFailure: reason => { detail = reason; } }), undefined);
-    assert.ok(detail.startsWith("HTTP 401：")); assert.equal(detail.slice("HTTP 401：".length).length, 300);
-    assert.ok(detail.includes("token expired"));
-  } finally { await f.close(); }
-});
 
 test("生产线验收9：MR 平台回显个人令牌时，保留平台原因且隐藏凭据", async () => {
   const f = await fixture();
@@ -241,7 +234,7 @@ test("生产线验收9：F13发现 MR 收到200响应头后断连仍说明暂时
   });
   try {
     f.response.disconnectAfterHeaders = "/mr/discover";
-    const previous: DomainPublication = { target_id: "domain", branch: "codex/knowledge-fixture", state: "pending", documents: [], mr_attempted: true };
+    const previous: DomainPublication = { ...failedReceipt(f), state: "pending" };
     const result = f.publisher.publish(f.job, f.target, previous, "alice", f.save).then(() => undefined, error => error as Error);
     await headersReceived; f.disconnectBody();
     const error = await result; assert.ok(error instanceof Error);

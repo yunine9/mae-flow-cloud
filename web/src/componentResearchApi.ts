@@ -50,6 +50,20 @@ export interface ComponentResearchReviewTurn {
   proposal?: { base_revision: number; section: ComponentResearchSection; status: "pending" | "accepted" | "discarded" };
   reply?: string; error?: string; created_at: string; finished_at?: string;
 }
+export interface ComponentResearchPublicationInput {
+  title: string;
+  content?: string;
+  scope: string;
+  module_ids: string[];
+  repositories: string[];
+  sections: Array<{ id: string; revision: number; proposal_id: string | null }>;
+  document_id: string | null;
+  update_document_id: string | null;
+  update_document_revision?: string;
+}
+export async function publishComponentResearch(id: string, input: ComponentResearchPublicationInput) {
+  return componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(id)}/publish`, input, AbortSignal.timeout(30_000));
+}
 export async function componentRequest<T>(
   path: string,
   body?: unknown,

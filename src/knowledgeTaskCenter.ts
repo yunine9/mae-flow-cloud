@@ -24,7 +24,7 @@ export function latestKnowledgeResearchNote(evidence: Array<Record<string, unkno
 }
 
 function projection(input: Parameters<typeof projectKnowledgeProduction>[0]) {
-  const production = projectKnowledgeProduction(input);
+  const production = input.kind === "domain" && input.record.production ? input.record.production : projectKnowledgeProduction(input);
   return { status_label: production.status_label, group: production.group, next_action: production.next_action, production };
 }
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
@@ -86,6 +86,8 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
     }
   });
   collect("Skill 导入", () => tasks.push(...listSkillSubmissions(sources.dataDir, warnings).map(skillSubmissionTask)));
+  // get() 可能在读取精确正式ID时发现坏文件，中心须在本次响应就给出告警。
+  warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   warnings.splice(0, warnings.length, ...new Set(warnings));
   tasks.sort((a, b) => Date.parse(b.created_at ?? b.started_at ?? "") - Date.parse(a.created_at ?? a.started_at ?? "") || a.id.localeCompare(b.id));
   return { tasks, warnings, summary: {

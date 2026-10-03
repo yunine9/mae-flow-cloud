@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
 import { runGitProcess } from "../src/hostGitSandbox.ts";
-import { createDomainKnowledgeExtraction } from "../src/knowledgeExtractionFactory.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 
 async function within<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -32,7 +32,7 @@ function running(pid: number) {
 }
 const credentials = { username: "fixture", password: "fixture-password", email: "fixture@example.test" };
 function publisher(dir: string) {
-  return new KnowledgeMrPublisher({ dataDir: dir, platformUrl: () => "http://127.0.0.1:1", credential: () => credentials, onIndexed: () => {} });
+  return new KnowledgeMrPublisher({ dataDir: dir, platformUrl: () => "http://127.0.0.1:1", credential: () => credentials });
 }
 interface GitMarker { pid: number; child: number; cwd: string; helper?: string }
 function fixture(block: "push" | "fetch") {
@@ -64,6 +64,8 @@ if(args.includes(${JSON.stringify(block)})) {
   const target = { id: "domain", name: "知识仓", repository: remote, branch: "main", path: "", docs_path: "domains" };
   const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "领域规则", scope: "订单", issue_no: "REQ-1", issue_description: "领域知识归档", operator: "alice", created_at: "2026-10-02T00:00:00Z", status: "done", stage: "待审查", knowledge_target: target, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false, revisions: {}, turns: [], evidence: [], publications: [],
     documents: [{ id: "orders", title: "订单规则", path: "domains/orders.md", target_id: "domain", layer: "domain", content: "# 订单\n规则正文", sources: "固定版本源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
+  const formal = saveKnowledgeDocument(dir, { title: job.title, content: job.documents[0].content, scope: "platform" }, "alice");
+  Object.assign(job.documents[0], { knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 });
   return {
     dir, remote, marker, heartbeat, job, target,
     info: () => JSON.parse(readFileSync(marker, "utf8")) as GitMarker,
@@ -133,23 +135,7 @@ test("生产线验收14/F26：关停终止归档 push 与子进程，凭据和�
     assert.equal(readFileSync(f.heartbeat, "utf8"), last, "关停后子进程不得继续写入");
     assert.deepEqual(readdirSync(root), [], "关停后临时仓和其中的凭据均应清空");
     assert.equal(existsSync(join(f.dir, ".runtime", "host-git")), false, "不得把知识归档凭据放回共享目录");
-    await assert.rejects(service.readRemote(f.job, f.job.documents[0], "alice"), /停止|关闭|关停/);
-  } finally { await f.cleanup(work); }
-});
-
-test("生产线验收14/F26：领域工厂关停接到发布器，终止正在读远端的 Git", { skip: process.platform === "win32", timeout: 15000 }, async () => {
-  const f = fixture("fetch"), folder = join(f.dir, "domain-extraction", f.job.id);
-  mkdirSync(folder, { recursive: true }); writeFileSync(join(folder, "job.json"), JSON.stringify(f.job));
-  const service = createDomainKnowledgeExtraction({ dataDir: f.dir, platformUrl: () => "http://127.0.0.1:1", credential: () => credentials, onIndexed: () => {}, model: () => undefined, source: async () => { throw new Error("不应启动研究"); } });
-  const work = service.readRemote(f.job.id, "orders", "alice");
-  void work.catch(() => undefined);
-  try {
-    await until(() => existsSync(f.marker), "读取远端 Git 未启动");
-    const info = f.info();
-    await within(service.shutdown(), 1500, "领域工厂没有接通发布器关停");
-    await assert.rejects(within(work, 1500, "关停后远端读取仍未结束"), /Git 操作失败|停止|关闭|关停/);
-    await until(() => !running(info.pid) && !running(info.child), "领域关停留下了 Git 子进程");
-    assert.deepEqual(readdirSync(join(f.dir, "knowledge-publication-tmp")), []);
+    await assert.rejects(service.publish(f.job, f.target, undefined, "alice", () => {}), /停止|关闭|关停/);
   } finally { await f.cleanup(work); }
 });
 

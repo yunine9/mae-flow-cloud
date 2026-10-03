@@ -22,30 +22,26 @@ const receipt = (job: DomainKnowledgeJob, targetId: string, previous?: DomainPub
   documents: job.documents.map(d => ({ id: d.id, path: d.path, content: d.content, revision: d.revision, knowledge_document_id: d.knowledge_document_id, knowledge_revision: d.published_revision })),
 });
 
-test("生产线验收14：发布先保存正式版本，归档失败及重试不撤销知识、不重复发布", async () => {
+test("生产线验收5/14：平台先保存正式版本，人工归档失败及重试不撤销知识、不重复发布", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-local-publish-")); let calls = 0;
   const service = new DomainKnowledgeExtraction(dir, async input => extract(input), { publish: async (job, target, previous, _operator, save) => {
     calls++; assert.ok(readKnowledgeDocument(dir, job.documents[0].knowledge_document_id!).content);
-    const publication = receipt(job, target.id, previous); save(publication);
-    if (calls === 1) throw new Error("Git 暂时不可用");
-    return publication;
+    const publication = receipt(job, target.id, previous); save({ ...publication, state: "pending", url: undefined });
+    if (calls === 1) throw new Error("Git 暂时不可用"); return publication;
   } });
   try {
     const job = service.create(config, "author"); await until(() => service.get(job.id).status === "done");
     const published = await service.publish(job.id, "author", { document_ids: ["orders"], expected_revisions: { orders: 1 } });
-    const id = published.documents[0].knowledge_document_id!;
-    assert.equal(listKnowledgeDocuments(dir).length, 1);
-    const version = readKnowledgeDocument(dir, id);
-    await until(() => service.get(job.id).archive_batches?.[0].state === "failed");
+    const id = published.documents[0].knowledge_document_id!, version = readKnowledgeDocument(dir, id);
+    assert.equal(calls, 0); assert.equal(listKnowledgeDocuments(dir).length, 1);
+    const preview = service.previewArchive(job.id); await service.createArchive(job.id, { issue_no: "REQ-EXPORT", expected_revisions: preview.expected_revisions }, "author");
+    const batch = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!; assert.equal(batch.state, "failed");
     assert.equal(readKnowledgeDocument(dir, id).revision, version.revision);
-    await service.publish(job.id, "author", { document_ids: ["orders"] });
-    assert.equal(service.get(job.id).archive_batches!.length, 1, "重按发布不追加相同批次");
-    await until(() => service.get(job.id).archive_batches?.[0].state === "done");
-    service.retryArchive(job.id, "author");
-    assert.equal(calls, 2); assert.equal(listKnowledgeDocumentVersions(dir, id).length, 1);
+    await service.publish(job.id, "author", { document_ids: ["orders"] }); assert.equal(calls, 1, "重按平台发布不代替人工归档重试");
+    await service.retryArchive(job.id, "author", { batch_id: batch.id }); assert.equal(calls, 2);
+    await service.retryArchive(job.id, "author", { batch_id: batch.id }); assert.equal(calls, 2); assert.equal(listKnowledgeDocumentVersions(dir, id).length, 1);
     const second = await service.publish(job.id, "author", { document_ids: ["refunds"], expected_revisions: { refunds: 1 } });
-    assert.equal(second.archive_batches!.length, 2); assert.equal(listKnowledgeDocuments(dir).length, 2);
-    assert.equal(second.archive_batches![0].documents[0].published_revision, version.revision);
+    assert.equal(listKnowledgeDocuments(dir).length, 2); assert.equal(second.archive_batches!.find(row => row.id === batch.id)!.documents[0].published_revision, version.revision);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -60,7 +56,6 @@ test("生产线验收14：正式知识发起增量研究固定身份和来源基
   try {
     const job = service.create(config, "author"); await until(() => service.get(job.id).status === "done");
     const published = await service.publish(job.id, "author", { document_ids: ["orders"] });
-    await until(() => service.get(job.id).archive_batches?.[0].state === "failed");
     const id = published.documents[0].knowledge_document_id!, original = readKnowledgeDocument(dir, id);
     const update = service.beginUpdate(id, { expected_revision: original.revision, message: "核对新代码" }, "researcher");
     await until(() => service.get(update.id).status === "done");
@@ -71,7 +66,6 @@ test("生产线验收14：正式知识发起增量研究固定身份和来源基
     assert.equal(changed.content, "增量研究的新规则"); assert.equal(listKnowledgeDocuments(dir).length, 1);
     assert.equal(changed.research_source?.source_revisions?.["repo-1"], "c".repeat(40));
     assert.equal(readKnowledgeDocumentVersion(dir, id, original.revision).document.content, original.content);
-    await until(() => service.get(update.id).archive_batches?.[0].state === "failed");
     const manual = saveKnowledgeDocument(dir, { content: "专家刚补充的规则" }, "expert", id, { expectedRevision: changed.revision });
     await assert.rejects(service.publish(update.id, "reviewer"), /正式知识已有新版本/);
     assert.equal(readKnowledgeDocument(dir, id).revision, manual.revision);
@@ -79,50 +73,27 @@ test("生产线验收14：正式知识发起增量研究固定身份和来源基
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收14：服务重启接续持久归档批次，始终使用已发布快照", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-resume-"));
-  const initial = new DomainKnowledgeExtraction(dir, async input => extract(input)); let resumed: DomainKnowledgeExtraction | undefined;
-  try {
-    const job = initial.create(config, "author"); await until(() => initial.get(job.id).status === "done");
-    await initial.publish(job.id, "author", { document_ids: ["orders"] });
-    await until(() => initial.get(job.id).archive_batches?.[0].state === "failed"); await initial.shutdown();
-    const path = join(dir, "domain-extraction", job.id, "job.json"), saved = JSON.parse(readFileSync(path, "utf8"));
-    saved.archive_batches[0].state = "running"; saved.documents[0].content = "发布后新写的未发布草稿"; writeFileSync(path, JSON.stringify(saved));
-    resumed = new DomainKnowledgeExtraction(dir, async () => "unused", { publish: async (snapshot, target) => {
-      assert.equal(snapshot.documents[0].content, "orders 原始规则"); return receipt(snapshot, target.id);
-    } });
-    await until(() => resumed!.get(job.id).archive_batches?.[0].state === "done");
-    assert.equal(readKnowledgeDocument(dir, saved.documents[0].knowledge_document_id).content, "orders 原始规则");
-  } finally { await initial.shutdown(); await resumed?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("同仓同分支的多目标合成一个 MR，正式知识的新研究复用该 MR", async () => {
+test("生产线验收5/6/14：同仓同分支多逻辑目标合一个人工MR，新正式版本创建新MR而不复用旧版本", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-batch-target-")); let calls = 0;
   const service = new DomainKnowledgeExtraction(dir, async input => {
-    if (input.turn.mode === "extract") {
-      for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: target.id,
-        target_id: target.id, path: `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: "原始知识", sources: "代码" });
-    } else input.save({ ...input.read()[0], content: "更新知识" });
-    return "完成";
+    if (input.turn.mode === "extract") for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: target.id,
+      target_id: target.id, path: `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: "原始知识", sources: "代码" });
+    else input.save({ ...input.read()[0], content: "更新知识" }); return "完成";
   }, { publish: async (job, target, previous) => {
-    calls++;
-    if (calls === 1) assert.equal(job.documents.length, 2, "逻辑目标不同但归档仓分支相同，应合成一批");
-    else assert.equal(previous?.url, "https://example.test/mr/1", "新研究沿用同一正式知识的开放 MR");
-    return receipt(job, target.id, previous);
+    calls++; assert.equal(previous, undefined, "每个新正式版本都是新MR");
+    if (calls === 1) assert.equal(job.documents.length, 2, "同物理仓分支输出全部逻辑目录");
+    return { ...receipt(job, target.id), branch: `codex/manual-${calls}`, url: `https://example.test/mr/${calls}` };
   } });
   try {
-    const { knowledge_target: _, ...initial } = config;
-    const created = service.create(initial, "author"); await until(() => service.get(created.id).status === "done");
-    let job = service.get(created.id);
-    job = service.configureArchive(job.id, { base_revision: 0, targets: [job.knowledge_target, ...job.repositories].map(t => ({ ...t, repository: config.knowledge_target.repository, branch: "main" })) });
-    await service.publish(job.id, "author"); await until(() => service.get(job.id).archive_batches?.[0].state === "done");
-    assert.equal(calls, 1); assert.equal(service.get(job.id).publications.length, 1);
+    const { knowledge_target: _, ...initial } = config; const created = service.create(initial, "author"); await until(() => service.get(created.id).status === "done");
+    let job = service.get(created.id); job = service.configureArchive(job.id, { base_revision: 0, targets: [job.knowledge_target, ...job.repositories].map(target => ({ ...target, repository: config.knowledge_target.repository, branch: "main" })) });
+    await service.publish(job.id, "author"); const preview = service.previewArchive(job.id); assert.equal(preview.targets.length, 1); assert.equal(preview.targets[0].files.length, 2);
+    await service.createArchive(job.id, { issue_no: "REQ-FIRST", expected_revisions: preview.expected_revisions }, "author"); assert.equal(calls, 1); assert.equal(service.get(job.id).publications.length, 1);
     const formal = readKnowledgeDocument(dir, service.get(job.id).documents[0].knowledge_document_id!);
-    const update = service.beginUpdate(formal.id, { expected_revision: formal.revision }, "author");
-    await until(() => service.get(update.id).status === "done");
-    const turn = service.get(update.id).turns[0]; service.decide(update.id, turn.id, "domain", "accept", "author");
-    await service.publish(update.id, "author"); await until(() => service.get(update.id).archive_batches?.[0].state === "done");
-    assert.equal(calls, 2); assert.equal(listKnowledgeDocuments(dir).length, 2);
+    const update = service.beginUpdate(formal.id, { expected_revision: formal.revision }, "author"); await until(() => service.get(update.id).status === "done");
+    service.decide(update.id, service.get(update.id).turns[0].id, "domain", "accept", "author"); await service.publish(update.id, "author");
+    await service.createArchive(update.id, { issue_no: "REQ-SECOND", expected_revisions: service.previewArchive(update.id).expected_revisions }, "author");
+    assert.equal(calls, 2); assert.equal(listKnowledgeDocuments(dir).length, 2); assert.equal(service.get(created.id).publications[0].url, "https://example.test/mr/1");
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -140,7 +111,6 @@ test("不同仓同路径分批发布保留独立正式身份，同仓同路径�
     ] }, "author");
     await until(() => { const current = service.get(job.id); assert.notEqual(current.status, "failed", current.error); return current.status === "done"; });
     await service.publish(job.id, "author", { document_ids: ["repo-1"] });
-    await until(() => service.get(job.id).archive_batches?.[0].state === "failed");
     const second = await service.publish(job.id, "author", { document_ids: ["repo-2"] });
     const documents = second.documents.map(d => readKnowledgeDocument(dir, d.knowledge_document_id!));
     assert.notEqual(documents[0].id, documents[1].id);
@@ -166,39 +136,23 @@ test("不同仓同路径分批发布保留独立正式身份，同仓同路径�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("旧归档失败后新版已归档，重试旧批次跳过过时正文并保留仍有效的项", async () => {
-  for (const partial of [false, true]) {
-    const dir = mkdtempSync(join(tmpdir(), "knowledge-obsolete-archive-"));
-    let calls = 0; const remote = new Map<string, string>();
-    const service = new DomainKnowledgeExtraction(dir, async input => {
-      if (input.turn.mode === "extract") return extract(input);
-      input.save({ ...input.read()[0], content: "orders 新正式版本" }); return "完成";
-    }, { publish: async (job, target, previous, _operator, save) => {
-      calls++;
-      if (calls === 3) assert.deepEqual(job.documents.map(d => d.id), ["refunds"], "部分过时批次只归档仍为正式版的项");
-      for (const doc of job.documents) remote.set(doc.knowledge_document_id!, doc.content);
-      const publication = receipt(job, target.id, previous); save(publication);
-      if (calls === 1) throw new Error("MR 回执失败");
-      return publication;
-    } });
-    try {
-      const initial = service.create(config, "author"); await until(() => service.get(initial.id).status === "done");
-      const v1 = await service.publish(initial.id, "author", { document_ids: partial ? ["orders", "refunds"] : ["orders"] });
-      await until(() => service.get(initial.id).archive_batches?.[0].state === "failed");
-      const id = v1.documents[0].knowledge_document_id!;
-      const update = service.beginUpdate(id, {}, "author"); await until(() => service.get(update.id).status === "done");
-      service.decide(update.id, service.get(update.id).turns[0].id, "orders", "accept", "author");
-      await service.publish(update.id, "author"); await until(() => service.get(update.id).archive_batches?.[0].state === "done");
-      assert.equal(remote.get(id), "orders 新正式版本");
-      service.retryArchive(initial.id, "author");
-      await until(() => service.get(initial.id).archive_batches?.[0].state === (partial ? "done" : "superseded"));
-      const old = service.get(initial.id).archive_batches![0];
-      assert.equal(calls, partial ? 3 : 2, "全批过时不能再次调用 Git 发布");
-      assert.equal(remote.get(id), "orders 新正式版本", "旧重试不能让开放 MR 回退正文");
-      assert.equal(old.superseded_documents?.[0].knowledge_document_id, id);
-      assert.equal(old.superseded_documents?.[0].current_revision, readKnowledgeDocument(dir, id).revision);
-    } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
-  }
+test("生产线验收5/14：新正式版本不自动续推旧失败MR，显式重试旧记录保持原精确历史版本", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-historical-manual-")); let calls = 0; const contents: string[][] = [];
+  const service = new DomainKnowledgeExtraction(dir, async input => extract(input), { publish: async (job, target, previous, _operator, save) => {
+    calls++; contents.push(job.documents.map(document => document.content));
+    const publication = receipt(job, target.id, previous); save({ ...publication, state: "pending", url: undefined });
+    if (calls === 1) throw new Error("MR回执失败"); return publication;
+  } });
+  try {
+    const job = service.create(config, "author"); await until(() => service.get(job.id).status === "done"); await service.publish(job.id, "author", { document_ids: ["orders"] });
+    await service.createArchive(job.id, { issue_no: "REQ-HISTORY", expected_revisions: service.previewArchive(job.id).expected_revisions }, "author");
+    const batch = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!, document = service.get(job.id).documents[0];
+    service.edit(job.id, { document: { ...document, content: "orders 新正式版本" }, base_revision: document.revision }, "author"); await service.publish(job.id, "author", { document_ids: ["orders"] });
+    assert.equal(calls, 1); assert.equal(service.previewArchive(job.id).status_label, "已发布（未归档）");
+    await service.retryArchive(job.id, "author", { batch_id: batch.id });
+    assert.deepEqual(contents, [["orders 原始规则"], ["orders 原始规则"]]);
+    assert.equal(readKnowledgeDocument(dir, document.knowledge_document_id!).content, "orders 新正式版本");
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("仓内知识改到其他仓归档后，正式适用范围仍归属原业务源码仓", async () => {

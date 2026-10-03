@@ -109,13 +109,15 @@ test("生产线验收14：MR 部分失败保存已经发生的分支事实，重
   try {
     const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
     await service.publish(job.id, "expert");
-    await until(() => service.get(job.id).archive_batches?.[0].state === "failed");
+    const preview = service.previewArchive(job.id);
+    await service.createArchive(job.id, { issue_no: config.issue_no, expected_revisions: preview.expected_revisions }, "expert");
     assert.equal(service.get(job.id).publications[0].state, "failed");
-    service.retryArchive(job.id, "expert");
-    await until(() => service.get(job.id).archive_batches?.[0].state === "done");
+    const batch = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
+    await service.retryArchive(job.id, "expert", { batch_id: batch.id });
     assert.equal(service.get(job.id).publications[0].state, "opened");
     assert.equal(calls, 2);
-    assert.throws(() => service.setIssueNumber(job.id, "REQ-other"), /不能更改/);
+    assert.equal(service.setIssueNumber(job.id, "REQ-other").issue_no, "REQ-other");
+    assert.equal(service.get(job.id).archive_batches!.find(row => row.id === batch.id)!.issue_no, config.issue_no);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -162,23 +164,6 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     assert.ok(result.turns[0].reply?.includes("等待审查"));
     assert.equal(git("rev-parse", "HEAD"), revision); assert.equal(result.publications.length, 0);
   } finally { await service.shutdown(); await model.stop(); rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("远端核对须绑定最新快照和人工稿版本，保存后保留历史", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "domain-reconcile-")); let snapshot = 0;
-  const service = new DomainKnowledgeExtraction(dir, async input => extract(input), {
-    readRemote: async () => ({ id: String(++snapshot), target_content: "人工远端内容", target_revision: "b".repeat(40), reviewed: false }),
-  });
-  try {
-    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
-    await service.readRemote(job.id, document.id, "expert");
-    await service.readRemote(job.id, document.id, "expert");
-    assert.throws(() => service.reconcile(job.id, { document, base_revision: 1, snapshot_id: "1" }, "expert"), /远端比较版本/);
-    const result = service.reconcile(job.id, { document: { ...document, content: "人工远端内容\n新的核对依据" }, base_revision: 1, snapshot_id: "2" }, "expert");
-    assert.equal(result.documents[0].remote_review?.reviewed, true); assert.equal(result.documents[0].revision, 2);
-    assert.equal(result.documents[0].history[0].content, document.content);
-    assert.throws(() => service.reconcile(job.id, { document, base_revision: 1, snapshot_id: "2" }, "expert"), /新版本/);
-  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("Skill 连续完善草稿，超过四轮保留原上下文，明确提交结果才结束", async () => {
@@ -228,43 +213,32 @@ test("旧草稿可补填单号，创建 MR 前拦截缺失单号且重启保留�
     service = new DomainKnowledgeExtraction(dir, async () => "unused", { publish: async () => { throw new Error("不应执行发布"); } });
     const published = await service.publish(job.id, "expert");
     assert.ok(published.documents[0].knowledge_document_id, "缺少单号不阻止平台发布");
-    await until(() => service!.get(job.id).archive_batches?.[0].state === "failed");
-    assert.match(service.get(job.id).archive_batches![0].error!, /关联单号/);
+    await assert.rejects(service.createArchive(job.id, { issue_no: "", expected_revisions: service.previewArchive(job.id).expected_revisions }, "expert"), /关联单号/);
     assert.equal(service.setIssueNumber(job.id, "  REQ-legacy  ").issue_no, "REQ-legacy");
     assert.equal(JSON.parse(readFileSync(path, "utf8")).issue_no, "REQ-legacy");
   } finally { await original.shutdown(); await service?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("旧任务补齐单号描述后重试使用准确标题，批次、重启与增量更新保留描述", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "domain-issue-description-"));
-  const description = "修复订单取消后的状态回退";
-  let createdTitles: string[] = [];
-  let service = new DomainKnowledgeExtraction(dir, async input => extract(input), {
-    publish: async (job, target) => {
-      const title = knowledgeIssueDescription(job.issue_description, { required: true })!;
-      createdTitles.push(title);
-      return { target_id: target.id, branch: "codex/description", state: "opened", url: "https://example.test/mr/description", documents: [] };
-    },
-  });
+test("生产线验收5/14：人工归档原样保存单号描述，后续预填修改不改变已创建MR的标题，重启及增量研究保留预填", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-issue-description-")), description = "修复订单取消后的状态回退";
+  const createdTitles: string[] = [];
+  let service = new DomainKnowledgeExtraction(dir, async input => extract(input), { publish: async (job, target) => {
+    createdTitles.push(knowledgeIssueDescription(job.issue_description, { required: true })!);
+    return { target_id: target.id, branch: "codex/description", state: "opened", url: "https://example.test/mr/description", documents: [] };
+  } });
   try {
-    const legacy = service.create(config, "expert"); await until(() => service.get(legacy.id).status === "done");
-    await service.publish(legacy.id, "expert"); await until(() => service.get(legacy.id).archive_batches?.[0].state === "failed");
-    assert.match(service.get(legacy.id).archive_batches![0].error!, /准确描述/);
-    assert.equal(createdTitles.length, 0);
-    const supplemented = service.setIssueNumber(legacy.id, config.issue_no, `  ${description}  `);
-    assert.equal(supplemented.issue_description, description);
-    assert.equal(supplemented.archive_batches![0].issue_description, description);
-    service.retryArchive(legacy.id, "expert"); await until(() => service.get(legacy.id).archive_batches?.[0].state === "done");
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done"); await service.publish(job.id, "expert");
+    service.setIssueNumber(job.id, config.issue_no, `  ${description}  `);
+    await service.createArchive(job.id, { issue_no: config.issue_no, issue_description: description, expected_revisions: service.previewArchive(job.id).expected_revisions }, "expert");
     assert.deepEqual(createdTitles, [description]);
-    assert.throws(() => service.setIssueNumber(legacy.id, config.issue_no, "其他单号描述"), /不能更改/);
-    assert.equal(service.setIssueNumber(legacy.id, config.issue_no).issue_description, description, "旧调用不会清空已有描述");
-    const published = service.get(legacy.id).documents[0].knowledge_document_id!;
-    await service.shutdown();
-    service = new DomainKnowledgeExtraction(dir, async () => "已核对");
-    assert.equal(service.get(legacy.id).issue_description, description);
-    assert.equal(service.get(legacy.id).archive_batches![0].issue_description, description);
-    const update = service.beginUpdate(published, {}, "expert");
-    assert.equal(update.issue_description, description);
+    const batch = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
+    service.setIssueNumber(job.id, config.issue_no, "后续预填描述");
+    assert.equal(service.get(job.id).archive_batches!.find(row => row.id === batch.id)!.issue_description, description);
+    const published = service.get(job.id).documents[0].knowledge_document_id!;
+    await service.shutdown(); service = new DomainKnowledgeExtraction(dir, async () => "已核对");
+    assert.equal(service.get(job.id).issue_description, "后续预填描述");
+    assert.equal(service.get(job.id).archive_batches!.find(row => row.id === batch.id)!.issue_description, description);
+    const update = service.beginUpdate(published, {}, "expert"); assert.equal(update.issue_description, "后续预填描述");
     await until(() => service.get(update.id).status === "done");
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -110,7 +110,7 @@ test("生产线验收13/F21：领域失败后重新创建同请求可发起新�
   } finally { await within(manager.shutdown(), "失败研究管理器未在5秒内关停"); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收5/F24：未配置 Git 仍能创建研究，发布明确指出未配置并链接本任务归档设置", { timeout: 15_000 }, async () => {
+test("生产线验收5/F24：未配置 Git 仍能创建研究，发布不受Git限制，手动预览明确指出未配置并提供任务设置动作", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-config-"));
   const manager = new DomainKnowledgeExtraction(dir, async input => {
     input.save({ id: "orders", title: "订单规则", target_id: "domain", path: `${input.job.knowledge_target.docs_path}/orders.md`, layer: "domain", content: "有效规则正文", sources: "固定版本源码" });
@@ -121,21 +121,20 @@ test("生产线验收5/F24：未配置 Git 仍能创建研究，发布明确指�
     const job = manager.create(request, "alice");
     await until(() => manager.get(job.id).status === "done", "无归档配置的研究未在5秒内完成");
     assert.equal(manager.get(job.id).archive_configured, false);
-    await assert.rejects(manager.publish(job.id, "alice"), (error: Error) => {
-      assert.match(error.message, /未配置 Git 归档仓/);
-      assert.ok(error.message.includes(`kbTask=${job.id}`), "设置链接必须属于当前领域任务");
-      assert.match(error.message, /kbPage=task/, "归档设置链接必须打开已有任务");
-      assert.match(error.message, /kbStage=publish/);
-      return true;
-    });
-    assert.equal(manager.get(job.id).documents[0].published_revision, undefined, "未配置归档时不能伪造已发布版本");
+    await manager.publish(job.id, "alice");
+    assert.ok(manager.get(job.id).documents[0].published_revision, "未配置归档也能正式发布");
+    const preview = manager.previewArchive(job.id);
+    assert.equal(preview.status_label, "已发布（未归档）");
+    assert.match(preview.targets[0].message, /未配置 Git 归档仓/);
+    assert.equal(preview.actions[0].id, "configure");
+    assert.equal(preview.actions[0].href, undefined, "领域任务沿用任务内归档设置，不跳到不能更改现任务目标的全局页");
   } finally { await within(manager.shutdown(), "无归档配置的管理器未在5秒内关停"); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("生产线验收14/F25：领域删除确认列出未完成及失败归档，保留每篇路径、MR和原因", { timeout: 20_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-domain-delete-view-"));
   let restored: DomainKnowledgeExtraction | undefined;
-  const names = ["pending", "failed", "opened", "closed", "diverged", "complete", "superseded"];
+  const names = ["pending", "failed", "opened", "complete", "superseded"];
   const manager = new DomainKnowledgeExtraction(dir, async input => {
     for (const id of names) input.save({ id, title: `${id}规则`, target_id: "domain", path: `domains/${id}.md`, layer: "domain", content: `${id}正文`, sources: "固定版本源码" }, { revision: "a".repeat(40), content: null });
     return "研究完成";
@@ -145,13 +144,13 @@ test("生产线验收14/F25：领域删除确认列出未完成及失败归档�
     await until(() => manager.get(original.id).status === "done", "删除预览夹具未在5秒内研究完成");
     await within(manager.shutdown(), "删除预览夹具管理器未关停");
     const path = join(dir, "domain-extraction", original.id, "job.json"), job = JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob;
-    const locations = { pending: "pending", failed: "failed", opened: "opened", closed: "closed", diverged: "merged", complete: "merged", superseded: "failed" } as const;
+    const locations = { pending: "pending", failed: "failed", opened: "opened", complete: "opened", superseded: "failed" } as const;
     job.archive_batches = job.documents.map(document => {
       const formal = saveKnowledgeDocument(dir, { title: document.title, content: document.content, research_source: { job_id: job.id, document_id: document.id, repository: job.knowledge_target.repository, branch: "main", path: document.path } }, "alice");
       Object.assign(document, { knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: document.revision, published_at: formal.history.at(-1)!.at });
       const name = document.id as keyof typeof locations;
       const publications: DomainPublication[] = name === "pending" ? [] : [{ target_id: "domain", branch: `codex/${name}`, state: locations[name], url: `https://example.test/mr/${name}`, documents: [{ id: document.id, path: document.path, content: document.content, revision: document.revision, knowledge_document_id: formal.id, knowledge_revision: formal.revision }],
-        ...(name === "failed" ? { error: "测试归档鉴权失败" } : {}), ...(name === "diverged" ? { sync_state: "diverged", sync_error: "归档仓被直接修改", diverged_paths: [document.path] } : {}), ...(name === "complete" ? { sync_state: "done" } : {}) }];
+        ...(name === "failed" ? { error: "测试归档鉴权失败" } : {}) }];
       return { id: `batch-${name}`, created_at: new Date().toISOString(), operator: "alice", state: name === "pending" ? "pending" as const : name === "failed" ? "failed" as const : name === "superseded" ? "superseded" as const : "done" as const, error: name === "failed" ? "测试归档鉴权失败" : undefined,
         documents: [structuredClone(document)], targets: [structuredClone(job.knowledge_target)], issue_no: job.issue_no, issue_description: job.issue_description, publications };
     });
@@ -159,13 +158,13 @@ test("生产线验收14/F25：领域删除确认列出未完成及失败归档�
     restored = new DomainKnowledgeExtraction(dir, async () => { throw new Error("删除预览不应开始研究"); });
     const view = restored.deletionView(job.id);
     assert.equal(view.title, job.title); assert.match(view.message, /归档/);
-    assert.deepEqual(new Set(view.archive_batches.map(batch => batch.id)), new Set(["batch-pending", "batch-failed", "batch-opened", "batch-closed", "batch-diverged"]), "已完成和已被新版替代的批次不应重复列为删除风险");
+    assert.deepEqual(new Set(view.archive_batches.map(batch => batch.id)), new Set(["batch-pending", "batch-failed"]), "已完成和已被新版替代的批次不应重复列为删除风险");
     const failed = view.archive_batches.find(batch => batch.id === "batch-failed")!;
     assert.equal(failed.error, "测试归档鉴权失败");
     assert.deepEqual(failed.documents.map(document => [document.id, document.title, document.path]), [["failed", "failed规则", "domains/failed.md"]]);
     assert.equal(failed.publications[0].url, "https://example.test/mr/failed");
-    assert.equal(view.archive_batches.find(batch => batch.id === "batch-diverged")!.publications[0].sync_error, "归档仓被直接修改");
-    assert.equal(readFileSync(path, "utf8"), JSON.stringify(job), "查看删除确认不能改写来源或归档记录");
+    const beforePreview = readFileSync(path, "utf8"); restored.deletionView(job.id);
+    assert.equal(readFileSync(path, "utf8"), beforePreview, "查看删除确认不能改写来源或归档记录");
   } finally {
     await within(manager.shutdown(), "测试原删除预览管理器未关停");
     if (restored) await within(restored.shutdown(), "测试删除预览管理器未关停");

@@ -22,7 +22,9 @@ import {
   saveKnowledgeDocument,
   readKnowledgeDocument,
   readKnowledgeDocumentVersion,
-  listKnowledgeDocuments,
+  prepareKnowledgeDocument,
+  writePreparedKnowledgeDocument,
+  type PreparedKnowledgeDocument,
 } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { editResearchDocument, researchDocumentMarkdown, sectionReady,
@@ -33,6 +35,8 @@ export interface ComponentChallenge {
 export interface ResearchRecord {
   /** 服务端读取时计算，不写入 record.json。 */
   production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
+  /** 一次发布的耐久意图；正式库和文稿提交后清除。 */
+  publication_intent?: ComponentPublicationIntent;
   challenge?: ComponentChallenge;
   id: string;
   pipeline?: ComponentPipelineState;
@@ -66,6 +70,17 @@ export interface ResearchRecord {
   update_metadata?: { title: string; scope: string; module_ids: string[]; repositories: string[] };
   section_history?: Array<{ at: string; operator: string; section: ResearchSection }>;
   evidence: Array<Record<string, unknown>>;
+}
+export interface ComponentPublicationIntent {
+  formal: PreparedKnowledgeDocument;
+  record: Omit<ResearchRecord, "production" | "publication_intent">;
+}
+export interface ComponentPublishInput extends Record<string, unknown> {
+  sections: Array<{ id: string; revision: number; proposal_id: string | null }>;
+  document_id: string | null;
+  update_document_id: string | null;
+  update_document_revision?: string;
+  title: string;
 }
 export interface ResearchInput {
   mode?: "topic" | "all";
@@ -151,7 +166,24 @@ function validResearchRecord(value: unknown, id: string): value is ResearchRecor
     && (value.pipeline === undefined || validPipeline(value.pipeline))
     && (value.update_metadata === undefined || (object(value.update_metadata) && fields(value.update_metadata, ["title", "scope"])
       && strings(value.update_metadata.module_ids) && strings(value.update_metadata.repositories)))
-    && (value.challenge === undefined || (object(value.challenge) && fields(value.challenge, ["item_id", "source_digest", "language", "claim"]) && strings(value.challenge.repository_ids)));
+    && (value.challenge === undefined || (object(value.challenge) && fields(value.challenge, ["item_id", "source_digest", "language", "claim"]) && strings(value.challenge.repository_ids)))
+    && (value.publication_intent === undefined || validPublicationIntent(value.publication_intent, id));
+}
+function validPublicationIntent(value: unknown, id: string): value is ComponentPublicationIntent {
+  if (!object(value) || !object(value.formal) || !object(value.formal.document) || !object(value.record)) return false;
+  const formal = value.formal.document;
+  const location = (value: unknown, names: string[]) => value === undefined || object(value) && fields(value, names);
+  return /^kd-[a-f0-9-]{36}$/.test(formal.id) && fields(formal, ["id", "title", "content", "when_to_use", "revision"])
+    && /^[a-f0-9]{64}$/.test(formal.revision) && ["platform", "module", "repository"].includes(formal.scope) && typeof formal.active === "boolean"
+    && [formal.module_ids, formal.repositories, formal.technologies, formal.product_versions].every(strings)
+    && Array.isArray(formal.history) && formal.history.length > 0 && formal.history.every(history => object(history)
+      && fields(history, ["at", "operator", "action"]) && Number.isFinite(Date.parse(history.at)) && optionalStrings(history, ["revision"]))
+    && location(formal.source, ["repository", "branch", "path", "revision"]) && location(formal.archive_target, ["repository", "branch", "path"])
+    && location(formal.research_source, ["job_id", "repository", "branch", "path"])
+    && (value.formal.previous_revision === null || typeof value.formal.previous_revision === "string" && /^[a-f0-9]{64}$/.test(value.formal.previous_revision))
+    && typeof value.formal.unchanged === "boolean"
+    && value.record.production === undefined && value.record.publication_intent === undefined && validResearchRecord(value.record, id)
+    && value.record.status === "done" && value.record.document_id === formal.id && value.record.published_revision === formal.revision;
 }
 interface RunningResearch {
   controller: AbortController;
@@ -170,7 +202,6 @@ export class ComponentResearch {
     readonly dir: string,
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
-    private onStopTimeout: (record: ResearchRecord) => void = () => {},
     private archiveFor: (id: string) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
   ) {
     const root = join(dir, "component-research");
@@ -214,8 +245,32 @@ export class ComponentResearch {
   get(id: string): ResearchRecord {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
-    const record = structuredClone(r);
-    return { ...record, production: projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }) };
+    let record = structuredClone(r);
+    if (r.publication_intent) {
+      // 意图不能代替正式事实；只有真实文件已提交精确版本，才显示已接受文稿和入库状态。
+      try {
+        const formal = readKnowledgeDocument(this.dir, r.publication_intent.formal.document.id);
+        if (formal.revision === r.publication_intent.formal.document.revision) record = {
+          ...structuredClone(r.publication_intent.record), deleted_at: r.deleted_at, deleted_by: r.deleted_by,
+          publication_intent: structuredClone(r.publication_intent),
+        };
+      } catch { /* 正式文件缺失、损坏或已删除时保留原文稿，任务中心会点名坏文件。 */ }
+    }
+    const formalId = record.document_id ?? record.update_document_id;
+    const current_revisions: Record<string, string> = {};
+    if (formalId) {
+      try { current_revisions[formalId] = readKnowledgeDocument(this.dir, formalId).revision; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof Error && error.message === "知识已删除")) {
+          const warning = `请检查知识记录：knowledge-documents/${formalId}.json；${error instanceof Error ? error.message : String(error)}`;
+          if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
+        }
+      }
+    }
+    return { ...record, production: projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions }) };
+  }
+  private assertPublicationComplete(record?: ResearchRecord) {
+    if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");
   }
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
@@ -426,11 +481,7 @@ export class ComponentResearch {
           this.running.delete(record.id);
           entry.release();
         }
-        try { this.pump(); }
-        finally {
-          try { this.onStopTimeout(structuredClone(record)); }
-          catch (error) { this.readWarnings.push(`请检查停止超时通知失败：component-research/${record.id}/record.json；${error instanceof Error ? error.message : String(error)}`); }
-        }
+        this.pump();
       }
     }, stopBudgetMs);
   }
@@ -439,8 +490,9 @@ export class ComponentResearch {
     if (!record || record.deleted_at) throw new Error("萃取任务不存在");
     if (["queued", "running"].includes(record.status)) {
       for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "cancelled";
-      this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()});
-      this.abortRunning(record);
+      try { this.update(record, {status:"cancelled", stage:"已停止", finished_at:new Date().toISOString()}); }
+      catch (error) { this.warnStopWrite(record, error); throw error; }
+      finally { this.abortRunning(record); }
     }
     return this.get(id);
   }
@@ -454,6 +506,7 @@ export class ComponentResearch {
   retry(id: string, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const record = this.get(id);
+    this.assertPublicationComplete(record);
     if (record.deleted_at) throw new Error("萃取任务已删除");
     if (record.format === "joint-document") {
       if (["queued", "running"].includes(record.status)) return record;
@@ -471,6 +524,7 @@ export class ComponentResearch {
   }
   selectSections(id: string, ids: string[], selected: boolean) {
     const record = this.records.get(id);
+    this.assertPublicationComplete(record);
     if (!record?.document || record.deleted_at || record.document_id) throw new Error("当前草稿不可修改");
     if (["queued", "running"].includes(record.status)) throw new Error("请等待本轮完成再调整采纳清单");
     if (!Array.isArray(ids) || !ids.length || typeof selected !== "boolean"
@@ -481,6 +535,7 @@ export class ComponentResearch {
   review(id: string, input: { section_id: string; mode: "discuss" | "rework" | "update"; message: string; use_latest_skill?: boolean; material_ids?: string[] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const record = this.records.get(id);
+    this.assertPublicationComplete(record);
     if (!record?.document || record.deleted_at || record.document_id) throw new Error("当前草稿不可讨论或返工");
     if (this.running.has(id) || ["queued", "running"].includes(record.status)) throw new Error("请等待本轮完成或停止后再继续对话");
     if (!record.document.sections.some(section => section.id === input.section_id)) throw new Error("请先选择要讨论或返工的组件");
@@ -499,6 +554,7 @@ export class ComponentResearch {
   }
   editSection(id: string, input: { section: ResearchSection; base_revision: number }, operator: string) {
     const record = this.records.get(id), section = record?.document?.sections.find(s => s.id === input.section?.id);
+    this.assertPublicationComplete(record);
     if (!record?.document || record.deleted_at || record.document_id || !section) throw new Error("当前章节不可修改");
     if (["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
     if (section.revision !== input.base_revision) throw new Error("章节已有新版本，请比较后重新保存");
@@ -518,6 +574,7 @@ export class ComponentResearch {
   }
   decideProposal(id: string, turnId: string, decision: "accept" | "discard", operator: string) {
     const record = this.records.get(id), turn = record?.review_turns?.find(t => t.id === turnId);
+    this.assertPublicationComplete(record);
     if (!record || record.deleted_at || record.document_id || !turn?.proposal) throw new Error("修订建议不存在或草稿已归档");
     if (decision === "accept" && turn.status !== "done") throw new Error("本轮尚未完成独立评审，不能采纳修订建议");
     if (!["accept", "discard"].includes(decision)) throw new Error("请选择采纳或放弃");
@@ -533,14 +590,17 @@ export class ComponentResearch {
   }
   restoreSection(id: string, sectionId: string, revision: number, baseRevision: number, operator: string) {
     const record = this.records.get(id);
+    this.assertPublicationComplete(record);
     if (record && ["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
     const previous = this.records.get(id)?.section_history?.find(h => h.section.id === sectionId && h.section.revision === revision);
     if (!previous) throw new Error("未找到该历史版本");
     return this.editSection(id, { section: previous.section, base_revision: baseRevision }, operator);
   }
   beginUpdate(id: string, operator: string) {
-    const record = this.records.get(id);
-    if (!record?.document || record.deleted_at) throw new Error("请选择已入库的联合文档");
+    const raw = this.records.get(id);
+    if (!raw?.document || raw.deleted_at) throw new Error("请选择已入库的联合文档");
+    const record = this.get(id);
+    if (!record.document) throw new Error("请选择已入库的联合文档");
     const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
     const published = formalId ? readKnowledgeDocument(this.dir, formalId) : undefined;
     if (!published) throw new Error("请选择已入库的联合文档");
@@ -550,8 +610,8 @@ export class ComponentResearch {
       else baseline = readKnowledgeDocumentVersion(this.dir, published.id, record.published_revision).document.content;
     }
     if (published.content.trim() !== baseline.trim()) throw new Error("正式文档已由其他入口修改，请先核对当前文档，避免覆盖人工更新");
-    this.update(record, { update_document_id: published.id, update_document_revision: published.revision,
-      document_id: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories }, stage: "选择受影响章节，生成更新建议", operator });
+    this.commitPublicationRecord({ ...record, update_document_id: published.id, update_document_revision: published.revision,
+      document_id: undefined, publication_intent: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories }, stage: "选择受影响章节，生成更新建议", operator });
     return this.get(id);
   }
   markdown(id: string) {
@@ -571,20 +631,100 @@ export class ComponentResearch {
     });
     return { ...exported, files: { ...exported.files, "evidence/everycode.json": JSON.stringify(references, null, 2) + "\n" } };
   }
-  archiveDraft(id: string, input: { title?: string; content?: string }) {
-    const record = this.get(id);
-    if (record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿完成后归档");
-    if (!record.document_id) this.assertSelectedChangesConfirmed(record);
-    if (record.document && (!record.document.sections.some(s => s.selected) || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
-    const title = String(input.title ?? record.topic).trim();
-    const content = record.document ? researchDocumentMarkdown(title, record.document, true) : String(input.content ?? record.draft ?? "");
-    return { research_id: id, title, content, language: record.language, knowledge_document_id: record.document_id ?? record.update_document_id, knowledge_revision: record.document_id ? record.published_revision : record.update_document_revision,
-      research_source: { job_id: id, repository: record.component.repository, branch: record.component.branch, path: record.component.path,
-        revision: record.revision, components: record.components?.map(c => ({ id: c.id, repository: c.repository, branch: c.branch, path: c.path, revision: record.revisions?.[c.id] })) },
-      sources: (record.components ?? [record.component]).map(c => `${c.name}：${c.repository} · ${c.branch} · ${c.path || "全仓"} @ ${record.revisions?.[c.id] ?? record.revision ?? "版本未记录"}`).join("\n") };
+  /** 同一次操作预检全部已选建议，再按意图提交正式库与文稿，归档由人另行触发。 */
+  publish(id: string, input: ComponentPublishInput, operator: string): ResearchRecord {
+    if (this.stopped) throw new Error("服务正在停止");
+    const record = this.records.get(id);
+    if (!record || record.challenge || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿完成后发布");
+    if (record.publication_intent) { this.finishPublication(record); return this.get(id); }
+    if (!object(input) || input.document_id !== (record.document_id ?? null) || input.update_document_id !== (record.update_document_id ?? null)
+      || input.update_document_revision !== record.update_document_revision) throw new Error("正式知识绑定或版本已变化，请刷新后发布");
+    const accepted = structuredClone(record);
+    delete accepted.production; delete accepted.publication_intent;
+    const selected = record.document?.sections.filter(section => section.selected) ?? [];
+    if (!Array.isArray(input.sections) || input.sections.length !== selected.length || new Set(input.sections.map(item => item?.id)).size !== selected.length
+      || input.sections.some(item => !object(item) || !selected.some(section => section.id === item.id))) throw new Error("请选择完整且不重复的组件清单，刷新后重新发布");
+    if (record.document && !selected.length) throw new Error("请选择至少一个已完成组件");
+    for (const section of selected) {
+      const viewed = input.sections.find(item => item.id === section.id)!;
+      if (viewed.revision !== section.revision) throw new Error("章节已有新版本，请比较后重新发布");
+      const latest = [...record.review_turns ?? []].reverse().find(turn => turn.section_id === section.id && turn.proposal?.status === "pending");
+      if (!Object.hasOwn(viewed, "proposal_id") || viewed.proposal_id !== (latest?.id ?? null)) throw new Error("组件修改建议已有变化，请重新检视后发布");
+      if (!latest) continue;
+      if (latest.status !== "done") throw new Error("修改建议尚未完成，请等待本轮结束后发布");
+      if (latest.proposal!.base_revision !== section.revision) throw new Error("修改建议基线冲突，请比较章节最新版本后发布");
+      const document = editResearchDocument(accepted.document!, { action: "section", section: structuredClone(latest.proposal!.section) },
+        (record.components ?? [record.component]).map(component => component.id));
+      const metadata = document.sections.find(item => item.id === section.id)?.paradigm;
+      if (metadata) {
+        if (metadata.language !== record.language) throw new Error("范式语言与研究语言不一致");
+        for (const ref of metadata.evidence) if (!record.evidence.some(evidence => evidence.tool === "component_source" && evidence.action === "read" && evidence.status === "returned"
+          && evidence.component_id === ref.repository_id && evidence.path === ref.path && evidence.revision === ref.revision
+          && Number(evidence.start) <= ref.start && Number(evidence.end) >= ref.end)) throw new Error("引用必须对应本任务已读取的基础仓代码范围");
+        for (const evidenceId of metadata.usage_evidence) if (!record.evidence.some(evidence => evidence.evidence_id === evidenceId && evidence.tool === "code_search"
+          && evidence.action === "read" && evidence.status === "returned" && evidence.content)) throw new Error("调用证据必须对应本任务已取得的 everycode 原文");
+      }
+      (accepted.section_history ??= []).push({ at: new Date().toISOString(), operator, section: structuredClone(section) });
+      accepted.document = document;
+      for (const turn of accepted.review_turns ?? []) if (turn.section_id === section.id && turn.proposal?.status === "pending") turn.proposal.status = turn.id === latest.id ? "accepted" : "discarded";
+    }
+    if (accepted.document?.sections.some(section => section.selected && !sectionReady(section))) throw new Error("请选择已完成且含最佳示例的组件");
+    const formalId = record.document_id ?? record.update_document_id;
+    const previous = formalId ? readKnowledgeDocument(this.dir, formalId) : undefined;
+    const baseline = record.update_document_id ? record.update_document_revision : record.published_revision;
+    if (previous && (!baseline || previous.revision !== baseline)) throw new Error("正式知识已有新版本，请比较最新内容后发布，未覆盖他人修改");
+    const title = String(input.title ?? previous?.title ?? record.topic).trim();
+    const content = accepted.document ? researchDocumentMarkdown(title, accepted.document, true) : String(input.content ?? accepted.draft ?? "");
+    scanForSecrets("组件知识.md", Buffer.from(content));
+    const research_source = { job_id: id, repository: record.component.repository, branch: record.component.branch, path: record.component.path,
+      revision: record.revision, components: record.components?.map(component => ({ id: component.id, repository: component.repository,
+        branch: component.branch, path: component.path, revision: record.revisions?.[component.id] })) };
+    const formal = prepareKnowledgeDocument(this.dir, { ...previous, ...input, title, content, technologies: [record.language], research_source,
+      when_to_use: input.when_to_use ?? previous?.when_to_use ?? `${record.language} / ${record.topic}`, active: previous?.active ?? true,
+    }, operator, formalId, { expectedRevision: baseline, maxContentBytes: accepted.document ? 16 * 1024 * 1024 : undefined });
+    Object.assign(accepted, { document_id: formal.document.id, published_revision: formal.document.revision, update_document_id: undefined,
+      update_document_revision: undefined, update_metadata: { title: formal.document.title, scope: formal.document.scope,
+        module_ids: formal.document.module_ids, repositories: formal.document.repositories },
+      stage: "已入库", draft: accepted.document ? researchDocumentMarkdown(title, accepted.document) : content });
+    const intent: ComponentPublicationIntent = { formal, record: accepted };
+    this.commitPublicationRecord({ ...structuredClone(record), publication_intent: intent });
+    this.finishPublication(this.records.get(id)!);
+    return this.get(id);
+  }
+  recoverPublications() {
+    for (const record of [...this.records.values()]) {
+      if (!record.publication_intent || record.deleted_at) continue;
+      try { this.finishPublication(record); }
+      catch (error) {
+        const warning = `组件发布未完成：component-research/${record.id}/record.json；${error instanceof Error ? error.message : "请检查发布意图"}`;
+        if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
+      }
+    }
+  }
+  private commitPublicationRecord(record: ResearchRecord) {
+    const { production: _, ...raw } = record;
+    mkdirSync(this.root(record.id), { recursive: true });
+    durableWriteFileSync(join(this.root(record.id), "record.json"), JSON.stringify(raw), { mode: 0o600 });
+    this.records.set(record.id, raw);
+  }
+  private finishPublication(record: ResearchRecord) {
+    const intent = record.publication_intent!;
+    let current: ReturnType<typeof readKnowledgeDocument> | undefined;
+    try { current = readKnowledgeDocument(this.dir, intent.formal.document.id); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (current && current.revision !== intent.formal.document.revision && current.revision !== intent.formal.previous_revision) throw new Error("正式知识已有新版本，发布意图未覆盖其他人的修改");
+    // 人工恢复旧正文会复用内容版本号，但历史已前进；不能把它误当尚未提交的原基线。
+    if (current && current.revision !== intent.formal.document.revision
+      && JSON.stringify(current.history) !== JSON.stringify(intent.formal.document.history.slice(0, -1))) {
+      throw new Error("正式知识已有人工修改或恢复历史，发布意图未覆盖其他人的修改");
+    }
+    if (current?.revision !== intent.formal.document.revision) writePreparedKnowledgeDocument(this.dir, intent.formal);
+    this.onAdopt();
+    this.commitPublicationRecord(structuredClone(intent.record));
   }
   adopt(id: string, input: Record<string, unknown>, operator: string) {
     const record = this.records.get(id);
+    this.assertPublicationComplete(record);
     if (!record || record.challenge || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
     const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
     if (formalId && !record.update_document_id) {
@@ -634,19 +774,25 @@ export class ComponentResearch {
   private assertSelectedChangesConfirmed(record: ResearchRecord) {
     if (record.review_turns?.some(turn => turn.proposal?.status === "pending" && record.document?.sections.some(section => section.id === turn.section_id && section.selected))) throw new Error("所选组件有尚未确认的修改，请先确认或放弃后发布");
   }
+  private warnStopWrite(record: ResearchRecord, error: unknown) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    this.readWarnings.push(`停止记录保存失败：component-research/${record.id}/record.json；${code ? `${code}：` : ""}${error instanceof Error ? error.message : String(error)}；执行已取消，请检查磁盘`);
+  }
   async shutdown() {
     this.stopped = true;
+    const failures: unknown[] = [];
     for (const r of this.records.values())
       if (!r.deleted_at && ["queued", "running"].includes(r.status)) {
         for (const turn of r.review_turns ?? []) if (["queued", "running"].includes(turn.status)) turn.status = "queued";
-        this.update(r, {
+        try { this.update(r, {
           status: "queued",
           stage: "等待接续原研究会话",
           error: undefined,
-        });
+        }); } catch (error) { this.warnStopWrite(r, error); failures.push(error); }
       }
     const entries = [...this.running.entries()];
     for (const [id] of entries) this.abortRunning(this.records.get(id)!);
     await Promise.all(entries.map(([, entry]) => entry.released));
+    if (failures.length) throw failures[0];
   }
 }

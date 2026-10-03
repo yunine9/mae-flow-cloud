@@ -18,8 +18,8 @@ test("36 篇文稿只发布勾选的变化稿，随请求固定每篇当前版�
   assert.deepEqual(domainPublicationInput(project(job)), { document_ids: [], expected_revisions: {} });
 });
 
-test("生产线验收8：缺本地入库版本不从历史MR猜版本，待合入MR不能冒充平台入库", () => {
-  const job = { publications: [{ state: "opened", documents: [{ id: "doc", revision: 3 }] }], publication_history: [{ state: "merged", documents: [{ id: "doc", revision: 2 }] }], documents: [{ id: "doc", revision: 3, knowledge_document_id: "kd-1", selected: true }] } as unknown as DomainKnowledgeJob;
+test("生产线验收8：缺平台入库版本不从当前或历史归档MR猜版本", () => {
+  const job = { publications: [{ state: "opened", documents: [{ id: "doc", revision: 3 }] }], publication_history: [{ state: "opened", documents: [{ id: "doc", revision: 2 }] }], documents: [{ id: "doc", revision: 3, knowledge_document_id: "kd-1", selected: true }] } as unknown as DomainKnowledgeJob;
   assert.equal(project(job).production?.documents[0].published_revision, undefined);
   assert.equal(domainDocumentHasChanges(project(job), job.documents[0]), true);
   job.documents[0].published_document_revision = 3;

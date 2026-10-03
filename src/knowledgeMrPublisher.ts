@@ -1,5 +1,4 @@
 import { componentArchiveParts, componentArchiveMetadata, componentMetadataPath, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
-import { cleanupDocumentVersions, cleanupEntries, previewKnowledgeCleanup } from "./knowledgeCleanup.ts";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -7,26 +6,19 @@ import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
 import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
-import { fetchMrGates, readMrFailureBody } from "./mrGateClient.ts";
-import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
-import { listKnowledgeDocuments, saveKnowledgeDocument } from "./knowledgeDocuments.ts";
+import { readMrFailureBody } from "./mrGateClient.ts";
+import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeHttpFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
+import { readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
-import type { DomainDocument, DomainRemoteReview } from "./domainKnowledgeTypes.ts";
+import type { DomainDocument } from "./domainKnowledgeTypes.ts";
 
-const markdown = (doc: { content: string; sources: string }, _job: DomainKnowledgeJob) => doc.content;
-// 组件结构文件随正文走，提示与核对入口都落在正文路径上。
-const documentPaths = (documents: Array<{ id: string; path: string; metadata_for?: string }>, paths: string[]) =>
-  [...new Set(paths.map(path => { const file = documents.find(d => d.path === path); return file?.metadata_for ? documents.find(d => d.id === file.metadata_for)?.path ?? path : path; }))];
-// #447：平台发布即生效、Git 只归档。合入后归档仓被直接修改时两边都不自动覆盖，只请人核对。
-const divergedMessage = (paths: string[]) => `请核对远端差异后再发布：归档仓中的 ${paths.join("、")} 在 MR 合入后被直接修改过，与平台发布版本不同。请读取远端版本并保存合并稿（可吸收远端改动或保留平台版本），确认后再发布；平台正文未被覆盖`;
 export class KnowledgeMrPublisher {
   private stopped = false;
   private active = new Map<AbortController, Promise<unknown>>();
   constructor(private options: {
     dataDir: string; platformUrl: () => string | undefined;
     credential: (operator: string) => (MergeRequestCredential & { email?: string }) | undefined;
-    onIndexed: () => void;
   }) {
     // kill -9 不执行 finally。知识归档的仓和凭据放在同一个专用根，
     // 起服清扫只处理这个根，不能误删问题流或需求交付正在用的 Git 凭据。
@@ -39,7 +31,7 @@ export class KnowledgeMrPublisher {
     mkdirSync(area, { recursive: true, mode: 0o700 });
     return area;
   }
-  private assertActive() { if (this.stopped) throw new Error("知识归档服务已停止"); }
+  private assertActive(signal?: AbortSignal) { signal?.throwIfAborted(); if (this.stopped) throw new Error("知识归档服务已停止"); }
   async shutdown() {
     this.stopped = true;
     for (const controller of this.active.keys()) controller.abort(new Error("知识归档服务已停止"));
@@ -57,29 +49,21 @@ export class KnowledgeMrPublisher {
     if (!platformUrl) throw new Error("未配置 MR 平台服务");
     return { credential, platformUrl, headers: { "x-mfc-git-user": encodeURIComponent(credential.username), "x-mfc-git-token": encodeURIComponent(credential.password) } };
   }
-  private async state(target: KnowledgeRepository, publication: DomainPublication, operator: string) {
-    const { platformUrl, headers, credential } = this.identity(operator);
-    let failure = "MR 查询未返回有效状态";
-    const view = await fetchMrGates({ platformUrl, headers, repo: target.repository, requireExisting: true, includeFailureBody: true,
-      onFailure: reason => { failure = reason; },
-      delivery: { source_branch: publication.branch, target_branch: target.branch, mr_id: publication.mr_id, mr_url: publication.url } });
-    if (!view) throw knowledgeMrFailure(failure, "MR 状态查询", [credential.password]);
-    return view.mrState;
-  }
-  private async withGit<T>(operator: string, work: (git: (args: string[], allowFailure?: boolean) => Promise<string>, root: string) => Promise<T>) {
-    this.assertActive();
+  private async withGit<T>(operator: string, work: (git: (args: string[], allowFailure?: boolean) => Promise<string>, root: string, signal: AbortSignal) => Promise<T>, signal?: AbortSignal) {
+    this.assertActive(signal);
     const identity = this.identity(operator), controller = new AbortController();
+    const operationSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
     const root = mkdtempSync(join(this.temporaryRoot(), "publish-")), sandbox = new HostGitSandbox(root);
     const operation = (async () => {
       let prepared: ReturnType<HostGitSandbox["prepare"]> | undefined;
       try {
         prepared = sandbox.prepare(identity.credential);
         const git = async (args: string[], allowFailure = false) => {
-          controller.signal.throwIfAborted();
+          operationSignal.throwIfAborted(); this.assertActive(signal);
           const env = { ...prepared!.env };
           for (const key of ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"]) delete env[key];
-          const result = await runGitProcess([...prepared!.args, ...gitCommitIdentityConfigs(identity.credential).flatMap(([key, value]) => ["-c", `${key}=${value}`]), ...args], { cwd: root, env, timeoutMs: 90_000, signal: controller.signal });
-          controller.signal.throwIfAborted();
+          const result = await runGitProcess([...prepared!.args, ...gitCommitIdentityConfigs(identity.credential).flatMap(([key, value]) => ["-c", `${key}=${value}`]), ...args], { cwd: root, env, timeoutMs: 90_000, signal: operationSignal });
+          operationSignal.throwIfAborted(); this.assertActive(signal);
           if (result.status !== 0 && !allowFailure) {
             const output = `${result.stderr}\n${result.stdout}`;
             if (commitHookRejection(output)) {
@@ -91,7 +75,9 @@ export class KnowledgeMrPublisher {
           return result.status === 0 ? result.stdout : "";
         };
         await git(["init", "--bare"]);
-        return await work(git, root);
+        const result = await work(git, root, operationSignal);
+        operationSignal.throwIfAborted(); this.assertActive(signal);
+        return result;
       } finally {
         sandbox.cleanup(prepared);
         rmSync(root, { recursive: true, force: true });
@@ -113,229 +99,105 @@ export class KnowledgeMrPublisher {
     if (!/^100(?:644|755) blob /.test(entry)) throw new Error("文档路径不是普通文件，未写入");
     return git(["show", `${revision}:${path}`]);
   }
-  async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (p: DomainPublication) => void): Promise<DomainPublication> {
-    this.assertActive();
-    const issue = knowledgeIssueNumber(job.issue_no);
-    const identity = this.identity(operator);
-    if (previous?.mr_attempted && !previous.url) {
-      const query = new URLSearchParams({ repo: target.repository, source_branch: previous.branch, target_branch: target.branch });
-      let response: Response, body: { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
-      try {
-        response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: AbortSignal.timeout(15_000) });
-        if (!response.ok) {
-          const detail = await readMrFailureBody(response).catch(error => error instanceof Error ? error.message : String(error));
-          throw new Error(`HTTP ${response.status}${detail ? `：${detail}` : ""}`);
-        }
-        try { body = await response.json() as typeof body; }
-        catch (error) {
-          if (error instanceof SyntaxError) throw new Error("交付平台响应不完整：原分支 MR 查询响应不是合法 JSON");
-          throw error;
-        }
-      } catch (error) { throw knowledgeMrFailure(error, "原分支 MR 查询", [identity.credential.password]); }
-      if (!Array.isArray(body.mrs) || body.mrs.length > 1 || body.mrs.some(mr => mr.source_branch !== previous!.branch || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
-      if (body.mrs[0]) previous = { ...previous, url: body.mrs[0].url, mr_id: body.mrs[0].id };
-    }
-    const oldState = previous?.url ? await this.state(target, previous, operator) : previous?.state;
-    let diverged: Map<string, string | null> | undefined;
-    if (oldState === "merged" && previous) {
-      const inspected = await this.inspect(job, previous, operator); previous = inspected.result; save(previous);
-      // 远端被改过不是故障：人读取远端、确认合并稿后即可继续，下面逐文件核对确认的是否就是当前远端。
-      if (previous.sync_state === "diverged") diverged = inspected.diverged;
-      else if (previous.sync_state !== "done") throw new Error(previous.sync_error || "已合入文档尚未同步，请重试同步后继续更新");
-    }
-    const continueBranch = previous && !["merged", "closed", "unchanged"].includes(oldState ?? "");
-    const newBranch = `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`;
-    const branch = continueBranch ? previous!.branch : newBranch;
-    const docs: Array<DomainDocument & { metadata_for?: string }> = job.documents.filter(d => d.selected && d.target_id === target.id).flatMap(doc => {
-      if (!job.component_research_id) return [doc];
-      const parts = componentArchiveParts(doc.content), metadata = doc.component_metadata ?? parts.component_metadata;
-      const clean = { ...doc, content: parts.content };
+  async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string,
+    save: (publication: DomainPublication) => void, signal?: AbortSignal): Promise<DomainPublication> {
+    this.assertActive(signal);
+    const issue = knowledgeIssueNumber(job.issue_no), identity = this.identity(operator);
+    const logicalTargets = new Map([job.knowledge_target, ...job.repositories].filter(candidate => candidate.repository === target.repository
+      && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
+    const docs: Array<DomainDocument & { metadata_for?: string }> = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
+      if (!doc.knowledge_document_id || !doc.published_revision) throw new Error("请先发布所选知识，再手动归档正式版本");
+      const formal = readKnowledgeDocumentVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
+      const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
+      if (!job.component_research_id) {
+        if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
+        return [outgoing];
+      }
+      const parts = componentArchiveParts(formal.content), requested = componentArchiveParts(doc.content);
+      const metadata = doc.component_metadata ?? requested.component_metadata;
+      if (parts.content !== requested.content || parts.component_metadata !== metadata) throw new Error("组件归档正文或结构与所选正式版本不一致，请重新预览");
+      const clean = { ...outgoing, content: parts.content };
       if (!metadata) return [clean];
       const content = componentArchiveMetadata(parts.content, metadata);
       restoreComponentArchive(parts.content, content);
-      const review = doc.remote_review;
-      return [clean, { ...doc, id: `${doc.id}::metadata`, metadata_for: doc.id, path: componentMetadataPath(doc.path),
-        archive_path: doc.archive_path ? componentMetadataPath(doc.archive_path) : undefined, content, base_content: null,
-        remote_review: review ? { ...review, target_content: review.target_metadata ?? null, branch_content: review.branch_metadata ?? null } : undefined }];
+      return [clean, { ...clean, id: `${doc.id}::metadata`, metadata_for: doc.id, path: componentMetadataPath(outgoing.path),
+        archive_path: doc.archive_path ? componentMetadataPath(doc.archive_path) : undefined, content }];
     });
-    // A later publication adds to the open MR. Its smaller selection must not
-    // withdraw documents already published by an earlier batch.
-    if (continueBranch) for (const old of new Map([...(previous?.documents ?? []), ...(previous?.attempted_documents ?? [])].map(doc => [doc.id, doc])).values()) {
-      if (docs.some(doc => doc.id === old.id)) continue;
-      docs.push({ ...old, title: old.path, target_id: target.id, layer: target.id === "domain" ? "domain" : "repository",
-        selected: true, sources: "先前发布批次", base_content: old.base_content ?? null, base_revision: "", history: [], archive_path: old.path,
-        published_revision: old.knowledge_revision });
-    }
-    // 实测死锁（2026-10）：只要上一 MR 合入后远端被改过，后续发布永远卡在这里。人工核对过当前远端内容的文件放行，
-    // 未核对或核对的已不是当前远端时给出去哪核对的错误，在保存尝试记录前拒绝，免得差异记录被新分支挤进历史。
-    const unreviewed = diverged ? docs.filter(doc => diverged!.has(doc.path) && (!doc.remote_review?.reviewed || doc.remote_review.target_content !== diverged!.get(doc.path))) : [];
-    if (unreviewed.length) throw new Error(divergedMessage(documentPaths(docs, unreviewed.map(doc => doc.path))));
-    const requestedCleanup = docs.length ? job.cleanup_plans?.find(p => p.target_id === target.id && p.confirmed) : undefined;
-    const cleanup = requestedCleanup && ![...(job.publication_history ?? []), ...(previous ? [previous] : [])].some(p => p.cleanup_id === requestedCleanup.id) ? requestedCleanup : undefined;
-    if (cleanup && JSON.stringify(cleanup.document_versions) !== JSON.stringify(cleanupDocumentVersions(job, target.id))) throw new Error("提交文档已变化，请重新预览并确认清理范围");
-    if (!cleanup && !diverged && oldState === "merged" && previous && docs.length === previous.documents.length && docs.every(doc => previous!.documents.some(old => old.id === doc.id && old.content === markdown(doc, job)))) return { ...previous, state: "merged" };
-    // 新建 MR 使用关联单据的准确描述；已有 MR 继续复用，不改写远端标题。
-    const mrTitle = continueBranch && previous?.url ? undefined : knowledgeIssueDescription(job.issue_description, { required: true });
-    const publication: DomainPublication = { cleanup_id: previous?.cleanup_id, removed_paths: previous?.removed_paths, target_id: target.id, branch, state: "pending", ...(continueBranch ? { url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}),
-      documents: docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for, content: markdown(doc, job), revision: doc.revision,
-        knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision,
-        base_content: oldState === "merged" ? previous?.documents.find(d => d.id === doc.id)?.content ?? doc.base_content : previous?.documents.find(d => d.id === doc.id)?.base_content ?? doc.base_content })) };
+    if (!docs.length) throw new Error("请选择至少一篇已发布知识进行归档");
+    const documents: DomainPublication["documents"] = docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for,
+      content: doc.content, revision: doc.revision, knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision }));
+    if (new Set(documents.map(doc => doc.path)).size !== documents.length) throw new Error("归档文件路径不能重复");
     for (const doc of docs) {
-      if (!knowledgeRelativePath(doc.path, !doc.metadata_for).startsWith(`${target.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
-      scanForSecrets(doc.path, Buffer.from(markdown(doc, job)));
+      const logicalTarget = logicalTargets.get(doc.target_id)!;
+      if (!knowledgeRelativePath(doc.path, !doc.metadata_for).startsWith(`${logicalTarget.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
+      scanForSecrets(doc.path, Buffer.from(doc.content));
     }
-    // Keep the last confirmed push separate from the attempted content. A timeout may
-    // happen before or after the server accepts a push; either known version is safe.
-    const saveAttempt = () => save({ ...publication, documents: continueBranch ? previous!.documents : [], attempted_documents: publication.documents });
+    const documentKey = (values: DomainPublication["documents"]) => JSON.stringify(values.map(doc => [doc.id, doc.path, doc.content, doc.revision,
+      doc.knowledge_document_id, doc.knowledge_revision]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+    const continuing = !!previous && previous.target_id === target.id
+      && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
+    // 同一精确版本的失败恢复沿用已落盘分支；新版本独立建MR，不受旧MR的合入或关闭影响。
+    let publication: DomainPublication = { target_id: target.id, branch: continuing ? previous!.branch : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`,
+      state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}) };
+    const saveLive = (value: DomainPublication) => { this.assertActive(signal); save(structuredClone(value)); };
+    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
+    if (continuing && publication.mr_attempted) {
+      const query = new URLSearchParams({ repo: target.repository, source_branch: publication.branch, target_branch: target.branch });
+      const discoverSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+      let body: { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
+      try {
+        const response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: discoverSignal });
+        this.assertActive(discoverSignal);
+        if (!response.ok) {
+          const failure = knowledgeHttpFailure(response, `HTTP ${response.status}`);
+          const detail = await readMrFailureBody(response, discoverSignal).catch(error => error instanceof Error ? error.message : String(error));
+          this.assertActive(discoverSignal); failure.message += detail ? `：${detail}` : ""; throw failure;
+        }
+        try { body = await response.json() as typeof body; this.assertActive(discoverSignal); }
+        catch (error) { if (error instanceof SyntaxError) throw new Error("交付平台响应不完整：原分支 MR 查询响应不是合法 JSON"); throw error; }
+      } catch (error) { this.assertActive(signal); throw knowledgeMrFailure(error, "原分支 MR 查询", [identity.credential.password]); }
+      if (!Array.isArray(body.mrs) || body.mrs.length > 1 || body.mrs.some(mr => mr.source_branch !== publication.branch
+        || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
+      if (body.mrs[0]) {
+        publication = { ...publication, state: "opened", url: body.mrs[0].url, mr_id: body.mrs[0].id };
+        saveLive(publication); return publication;
+      }
+    }
+    const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
+    const saveAttempt = () => saveLive({ ...publication, documents: continuing ? previous!.documents : [], attempted_documents: documents });
     saveAttempt();
-    return this.withGit(operator, async (git, root) => {
+    return this.withGit(operator, async (git, root, operationSignal) => {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
-      const targetSha = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      const remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${branch}`])).trim().split(/\s/)[0];
-      let parent = targetSha;
+      const targetRevision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
+      const remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      let parent = targetRevision;
       if (remote) {
-        await git(["fetch", "--no-tags", target.repository, `refs/heads/${branch}`]);
+        if (!continuing || !publication.revision || remote !== publication.revision) throw knowledgeGitFailure("non_fast_forward", "归档分支已有人工修改");
+        await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
         parent = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
       }
-      if (cleanup) {
-        const targetEntries = await cleanupEntries(git, targetSha, cleanup.directories, cleanup.agent?.path);
-        if (JSON.stringify(targetEntries) !== JSON.stringify(cleanup.target_entries)) throw new Error("清理范围内的目标分支文件已变化，请重新预览确认");
-        const currentEntries = await cleanupEntries(git, parent, cleanup.directories, cleanup.agent?.path);
-        const expectedEntries = remote && cleanup.branch === branch ? cleanup.branch_entries ?? cleanup.target_entries : cleanup.target_entries;
-        for (const entry of currentEntries) {
-          const expected = expectedEntries.find(e => e.path === entry.path);
-          if (expected?.oid === entry.oid && expected.mode === entry.mode) continue;
-          const draft = docs.find(d => d.path === entry.path), generated = draft ? markdown(draft, job) : entry.path === cleanup.agent?.path ? cleanup.agent.content : undefined;
-          if (generated !== undefined && await this.content(git, parent, entry.path) === generated) continue;
-          throw new Error(`${entry.path} 在清理预览后已有修改，请重新核对，未删除`);
-        }
-        if (cleanup.agent) await this.content(git, parent, cleanup.agent.path);
-      }
-      const cleanupIncludes = (path: string) => !!cleanup && !cleanup.preserve_paths?.includes(path) && (cleanup.directories.some(dir => path === dir || path.startsWith(`${dir}/`)) || cleanup.agent?.path === path);
-      for (const doc of docs) {
-        const current = await this.content(git, parent, doc.path);
-        const old = previous?.documents.find(d => d.id === doc.id);
-        const attempted = previous?.attempted_documents?.find(d => d.id === doc.id);
-        const review = doc.remote_review?.reviewed ? doc.remote_review : undefined;
-        const expected = remote && review?.branch === branch ? review.branch_content : !remote && review ? review.target_content : remote || oldState === "merged" ? old ? old.content : doc.base_content : old?.base_content ?? doc.base_content;
-        if (!cleanupIncludes(doc.path) && current !== expected && current !== attempted?.content && current !== markdown(doc, job)) throw new Error(`${doc.path} 已有他人修改，请先核对目标文档再更新，未覆盖原文`);
-        const targetCurrent = await this.content(git, targetSha, doc.path);
-        // An open MR must also be reviewed against target-branch edits since extraction.
-        if (!cleanupIncludes(doc.path) && remote && targetCurrent !== (review ? review.target_content : doc.base_content) && targetCurrent !== old?.content && targetCurrent !== markdown(doc, job)) throw new Error(`${doc.path} 的目标分支已更新，请先处理文档冲突`);
-      }
-      const mergeBase = remote ? (await git(["merge-base", parent, targetSha])).trim() : targetSha;
-      const mergeTarget = remote && mergeBase !== targetSha;
-      // Integrate the reviewed target branch so resolving a document conflict also
-      // resolves the MR's ancestry. Never resolve unrelated source conflicts here.
-      if (mergeTarget) {
-        await git(["read-tree", "-i", "-m", mergeBase, parent, targetSha]);
-        const conflicts = (await git(["ls-files", "--unmerged", "-z"])).split("\0").filter(Boolean).map(row => row.slice(row.indexOf("\t") + 1));
-        if (conflicts.some(path => !docs.some(d => d.path === path) && !cleanupIncludes(path))) throw new Error("MR 包含文档范围外的合并冲突，请由仓维护者先处理源码冲突");
-      } else await git(["read-tree", parent]);
-      if (cleanup) {
-        const removed = [...new Set([...cleanup.target_entries, ...(cleanup.branch_entries ?? [])].map(e => e.path))]
-          .filter(path => !cleanup.preserve_paths?.includes(path));
-        for (const path of removed) await git(["--work-tree", root, "update-index", "--force-remove", "--", path]);
-        publication.removed_paths = removed.filter(path => !docs.some(doc => doc.path === path) && path !== cleanup.agent?.path);
-        if (cleanup.agent && !cleanup.preserve_paths?.includes(cleanup.agent.path)) {
-          const file = join(root, "knowledge-agent.tmp"); writeFileSync(file, cleanup.agent.content, { mode: 0o600 });
-          const blob = (await git(["hash-object", "-w", file])).trim();
-          await git(["update-index", "--add", "--cacheinfo", "100644", blob, cleanup.agent.path]);
-        }
-      }
-      for (const doc of publication.documents) {
+      await git(["read-tree", parent]);
+      for (const doc of documents) {
+        await this.content(git, parent, doc.path);
         const file = join(root, "knowledge-content.tmp"); writeFileSync(file, doc.content, { mode: 0o600 });
         const blob = (await git(["hash-object", "-w", file])).trim();
         await git(["update-index", "--add", "--cacheinfo", "100644", blob, doc.path]);
       }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
-      if (!remote && tree === before) { publication.cleanup_id = cleanup?.id ?? publication.cleanup_id; publication.state = "unchanged"; publication.revision = parent; const result = await this.refresh(job, publication, operator); save(result); return result; }
-      const sha = tree === before && !mergeTarget ? parent : (await git(["commit-tree", tree, "-p", parent, ...(mergeTarget ? ["-p", targetSha] : []), "-m", cloudCommitSubject(issue, "feat", `更新${job.title}知识`)])).trim();
-      publication.revision = sha; saveAttempt();
-      if (sha !== remote) await git(["push", target.repository, `${sha}:refs/heads/${branch}`]);
-      publication.cleanup_id = cleanup?.id ?? publication.cleanup_id;
-      save(publication);
-      if (!publication.url) {
-        // The adapter deduplicates by repository and source/target branches.
-        publication.mr_attempted = true; save(publication);
-        let receipt;
-        try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: branch, targetBranch: target.branch, title: mrTitle!, credential: identity.credential, dtsNo: issue, purpose: "knowledge" }); }
-        catch (error) { throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
-        if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后重试");
-        publication.url = receipt.url; publication.mr_id = receipt.id;
-      }
-      publication.state = "opened"; save(publication); return publication;
-    });
-  }
-  async refresh(job: DomainKnowledgeJob, publication: DomainPublication, operator: string): Promise<DomainPublication> {
-    this.assertActive();
-    return (await this.inspect(job, publication, operator)).result;
-  }
-  /** 远端正文只在内存里交给发布核对，不落盘；记录只留路径与 target_revision，人从读取远端拿原文。 */
-  private async inspect(job: DomainKnowledgeJob, publication: DomainPublication, operator: string) {
-    const target = [job.knowledge_target, ...job.repositories].find(r => r.id === publication.target_id)!;
-    const state = publication.state === "unchanged" ? "unchanged" : await this.state(target, publication, operator), result: DomainPublication = { ...publication, state, error: undefined };
-    const diverged = new Map<string, string | null>();
-    if (state !== "merged" && state !== "unchanged") return { result, diverged };
-    result.sync_state = "pending"; result.sync_error = undefined; result.diverged_paths = undefined;
-    try { await this.withGit(operator, async git => {
-      await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
-      const revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      result.target_revision = revision;
-      for (const saved of publication.documents) {
-        const content = await this.content(git, revision, saved.path);
-        if (content !== saved.content) diverged.set(saved.path, content);
-      }
-      if (diverged.size) return;
-      for (const path of publication.removed_paths ?? []) {
-        if ((await cleanupEntries(git, revision, [path])).length) continue;
-        for (const old of listKnowledgeDocuments(this.options.dataDir).filter(d => d.active && (d.archive_target ?? d.source)?.repository === target.repository && (d.archive_target ?? d.source)?.branch === target.branch && (d.archive_target ?? d.source)?.path === path)) saveKnowledgeDocument(this.options.dataDir, { ...old, active: false }, operator, old.id);
-      }
-      this.options.onIndexed();
-    });
-    if (diverged.size) {
-      result.sync_state = "diverged"; result.diverged_paths = documentPaths(publication.documents, [...diverged.keys()]);
-      result.sync_error = divergedMessage(result.diverged_paths);
-    } else result.sync_state = "done"; }
-    catch (error) { diverged.clear(); result.sync_state = "failed"; result.sync_error = error instanceof Error ? error.message : "已合入，知识文档同步失败"; }
-    return { result, diverged };
-  }
-  async previewCleanup(job: DomainKnowledgeJob, target: KnowledgeRepository, input: unknown, operator: string) {
-    this.assertActive();
-    const publication = job.publications.find(p => p.target_id === target.id);
-    const state = publication?.url ? await this.state(target, publication, operator) : undefined;
-    return this.withGit(operator, async git => {
-      await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
-      const targetRevision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      let branch: { name: string; revision: string } | undefined;
-      if (publication && !["merged", "closed", "unchanged"].includes(state ?? publication.state) && (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim()) {
-        await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
-        branch = { name: publication.branch, revision: (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim() };
-      }
-      return previewKnowledgeCleanup(git, job, target, input, targetRevision, branch);
-    });
-  }
-  async readRemote(job: DomainKnowledgeJob, doc: DomainDocument, operator: string): Promise<DomainRemoteReview> {
-    this.assertActive();
-    const target = [job.knowledge_target, ...job.repositories].find(r => r.id === doc.target_id)!;
-    const publication = job.publications.find(p => p.target_id === target.id);
-    const state = publication?.url ? await this.state(target, publication, operator) : undefined;
-    return this.withGit(operator, async git => {
-      await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
-      const target_revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      const result: DomainRemoteReview = { id: randomUUID(), target_revision, target_content: await this.content(git, target_revision, doc.path), reviewed: false };
-      if (publication && state !== "merged" && state !== "closed" && (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim()) {
-        await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
-        result.branch = publication.branch; result.branch_revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-        result.branch_content = await this.content(git, result.branch_revision, doc.path);
-      }
-      if (job.component_research_id) {
-        const path = componentMetadataPath(doc.path);
-        result.target_metadata = await this.content(git, target_revision, path);
-        if (result.branch_revision) result.branch_metadata = await this.content(git, result.branch_revision, path);
-      }
-      scanForSecrets("远端知识文档", Buffer.from(JSON.stringify(result)));
-      return result;
-    });
+      // 纯适用范围新版本也独立尝试建MR；平台拒绝无差异时如实返回原文，不虚写成功。
+      const revision = remote && tree === before ? parent : (await git(["commit-tree", tree, "-p", parent, "-m", cloudCommitSubject(issue, "feat", `更新${job.title}知识`)])).trim();
+      publication.revision = revision; saveAttempt();
+      if (revision !== remote) await git(["push", target.repository, `${revision}:refs/heads/${publication.branch}`]);
+      saveLive(publication);
+      publication.mr_attempted = true; saveLive(publication);
+      let receipt;
+      try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: publication.branch,
+        targetBranch: target.branch, title, credential: identity.credential, dtsNo: issue, purpose: "knowledge", signal: operationSignal, includeFailureMetadata: true }); }
+      catch (error) { operationSignal.throwIfAborted(); this.assertActive(signal); throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
+      operationSignal.throwIfAborted(); this.assertActive(signal);
+      if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后手动重试");
+      publication.url = receipt.url; publication.mr_id = receipt.id; publication.state = "opened";
+      saveLive(publication); return publication;
+    }, signal);
   }
 }

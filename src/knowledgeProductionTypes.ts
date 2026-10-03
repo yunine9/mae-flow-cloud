@@ -1,20 +1,25 @@
 /** 生产状态的只读 HTTP 契约，前端只渲染这里的文案和动作。 */
 export interface KnowledgeProductionAction {
-  id: string; label: string; view: "progress" | "review" | "archive"; href?: string; document_id?: string;
+  id: string; label: string; view: "progress" | "review" | "archive"; href?: string; document_id?: string; target_id?: string; batch_id?: string;
+}
+export interface KnowledgeArchivePreview {
+  job_id: string; title: string; status_label: string; message: string; actions: KnowledgeProductionAction[];
+  issue_no?: string; issue_description?: string; expected_revisions: Record<string, string>;
+  targets: Array<{ id: string; name: string; repository: string; branch: string; docs_path: string; configured: boolean;
+    status_label: string; message: string; error?: string; url?: string; actions: KnowledgeProductionAction[];
+    files: Array<{ id: string; title: string; path: string; content: string; knowledge_document_id: string; knowledge_revision: string; metadata_for?: string }> }>;
 }
 export interface KnowledgeDomainDeletionView {
   title: string; message: string;
   archive_batches: Array<{ id: string; state: string; error?: string;
     documents: Array<{ id: string; title: string; path: string }>;
-    publications: Array<{ target_id: string; branch: string; state: string; url?: string; error?: string; sync_state?: string; sync_error?: string }> }>;
+    publications: Array<{ target_id: string; branch: string; state: string; url?: string; error?: string }> }>;
 }
 export interface KnowledgeDocumentState {
   id: string; changed: boolean; status_label: string; published_revision?: number; proposal_problem?: string; knowledge_document_id?: string;
-  needs_remote_review: boolean; remote_review_message?: string;
 }
 export interface KnowledgePublicationState {
   key: string; target: string; status_label: string; url?: string; error?: string;
-  comparisons: KnowledgeProductionAction[];
 }
 export interface KnowledgeProductionView {
   status_label: string; group: "running" | "attention" | "completed"; next_action: KnowledgeProductionAction;
@@ -31,7 +36,6 @@ export interface KnowledgeProductionView {
   archive: {
     visible: boolean; state: "failed" | "running" | "opened" | "done"; group: "running" | "attention" | "completed";
     status_label: string; title: string; message: string; actions: KnowledgeProductionAction[];
-    target_locked: boolean; locked_target_ids: string[]; issue_description_required: boolean;
     publications: KnowledgePublicationState[];
     batches: Array<{ id: string; status_label: string; title: string; publications: KnowledgePublicationState[]; superseded: Array<{ id: string; label: string }> }>;
   };

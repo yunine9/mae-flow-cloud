@@ -4,20 +4,19 @@ import { KnowledgeLibrary } from "../../web/src/KnowledgeLibrary";
 import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 import type { KnowledgeDocument } from "../../web/src/knowledgeDocumentsApi";
 import type { ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
-import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
-import type { KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
+import type { knowledgeLibraryProductionFixtures } from "../fixtures/knowledgeLibraryProduction";
 
 const pause = (ms = 90) => new Promise(resolve => setTimeout(resolve, ms));
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };
 const repository = { id: "orders", name: "订单服务", repository: "https://example.test/orders.git", branch: "master", path: "", docs_path: "docs/business" };
-const fixtures = (window as unknown as { __KNOWLEDGE_LIBRARY_FIXTURES__: { job: DomainKnowledgeJob; running: DomainKnowledgeJob; created: DomainKnowledgeJob; openedJob: DomainKnowledgeJob; divergedJob: DomainKnowledgeJob; taskRows: Record<string, KnowledgeTaskRow>; projections: Record<string, KnowledgeProductionView> } }).__KNOWLEDGE_LIBRARY_FIXTURES__;
+const fixtures = (window as unknown as { __KNOWLEDGE_LIBRARY_FIXTURES__: Awaited<ReturnType<typeof knowledgeLibraryProductionFixtures>> }).__KNOWLEDGE_LIBRARY_FIXTURES__;
 const job = fixtures.job, running = fixtures.running;
 // 萃取滚轮测试(knowledgeExtractionScrollBrowser)复用本夹具:?scrollCheck=1 时不跑下面的整链脚本,
 // 并给进行中任务补足一屏放不下的研究动态,让时间线真的需要滚动。
 const scrollCheck = new URLSearchParams(location.search).has("scrollCheck");
 if (scrollCheck) running.evidence = Array.from({ length: 55 }, (_, index) => ({ tool: "component_source", action: "list", path: `src/business/module-${index}`, preview: "目录结果\n" + "src/business/a.ts\n".repeat(80), at: new Date(Date.parse("2026-09-30T01:00:00Z") + index * 1000).toISOString(), status: "returned" }));
 const jobs: DomainKnowledgeJob[] = [job, running];
-const documents: KnowledgeDocument[] = [{ id: "kd-current", title: "现行交易规则", content: job.documents[2].content, scope: "module", module_ids: ["trade"], repositories: [], technologies: [], product_versions: [], when_to_use: "订单业务", active: true, revision: "formal-1", history: [], source: { repository: job.knowledge_target.repository, branch: "master", path: "docs/current.md", revision: "fixture" }, research_source: { job_id: job.id, repository: repository.repository, branch: "master", path: "docs/current.md" } }];
+const documents: KnowledgeDocument[] = [{ id: job.documents[2].knowledge_document_id!, title: "现行交易规则", content: job.documents[2].content, scope: "module", module_ids: ["trade"], repositories: [], technologies: [], product_versions: [], when_to_use: "订单业务", active: true, revision: job.documents[2].published_revision!, history: [], source: { repository: job.knowledge_target.repository, branch: "master", path: "docs/current.md", revision: "fixture" }, research_source: { job_id: job.id, repository: repository.repository, branch: "master", path: "docs/current.md" } }];
 // 工程语言 → 基础组件:文件组件的正式指南(按组件仓地址归到组件)及其一条派生规则。
 documents.push({ id: "kd-file-guide", title: "文件组件指南", content: "---\nschema: mfc.component-guide/v1\n---\n# 文件组件指南\n\n打开文件后必须关闭句柄。", scope: "component", module_ids: [], repositories: ["https://example.test/file.git"], technologies: ["cpp"], product_versions: [], when_to_use: "C++ 文件读写", active: true, revision: "file-1", history: [], source: { repository: "https://example.test/knowledge.git", branch: "master", path: "docs/file-guide.md", revision: "fixture" } });
 const governance: ComponentGovernanceSnapshot = { revision: 3, warnings: [], challenges: [], retention: "按当前版本与去重样本统计。", items: [{ id: "rule-fopen", kind: "rule", original: "fopen", source_digest: "digest-file",
@@ -30,7 +29,6 @@ const modules = [
   { id: "alarm", name: "告警管理", description: "告警规则", status: "active", repositories: ["https://example.test/alarm.git"], assets: [] },
 ];
 const calls: Array<{ path: string; input?: any }> = [], errors: string[] = [];
-let backgroundArchiveOpened = false;
 window.addEventListener("error", e => errors.push(e.message));
 window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
 window.fetch = async (url, options) => {
@@ -57,16 +55,18 @@ window.fetch = async (url, options) => {
   } else if (path === `/domain-extraction/${job.id}/publish`) {
     for (const item of job.documents.filter(document => input.document_ids.includes(document.id))) {
       check(input.expected_revisions[item.id] === item.revision, "publication submits the reviewed draft revision");
-      item.knowledge_document_id = `kd-${item.id}`; item.published_document_revision = item.revision; item.published_revision = `formal-${item.id}`;
+      const formal = fixtures.publishedJob.documents.find(document => document.id === item.id)!;
+      Object.assign(item, { knowledge_document_id: formal.knowledge_document_id, published_document_revision: formal.published_document_revision, published_revision: formal.published_revision });
       documents.push({ ...documents[0], id: item.knowledge_document_id, title: item.title, content: item.content, revision: item.published_revision, repositories: item.layer === "repository" ? [repository.repository] : [], source: { ...documents[0].source!, path: item.path } });
     }
-    job.archive_batches = [{ id: "batch-1", created_at: "2026-09-30T02:00:00Z", operator: "dev", state: "pending", documents: structuredClone(job.documents.filter(d => input.document_ids.includes(d.id))), targets: [job.knowledge_target, repository], publications: [] }]; job.production = fixtures.projections.published; result = job;
-  } else if (path === `/domain-extraction/${job.id}/refresh`) {
-    // #447：合入后归档仓被直接修改，后端给出状态与文案，前端只显示并提供核对入口。
-    Object.assign(job, structuredClone(fixtures.divergedJob), { production: fixtures.projections.diverged });
-    result = job;
+    job.production = fixtures.projections.published; result = job;
+  } else if (path === `/domain-extraction/${job.id}/archive/preview`) {
+    result = fixtures.archivePreview;
+  } else if (path === `/domain-extraction/${job.id}/archive/create`) {
+    check(JSON.stringify(input.expected_revisions) === JSON.stringify(fixtures.archivePreview.expected_revisions), "manual archive binds every current formal version");
+    check(input.target_ids === undefined, "manual creation archives every target");
+    Object.assign(job, structuredClone(fixtures.openedJob)); result = fixtures.archivedPreview;
   } else if (/^\/domain-extraction\/dkx-[^/]+$/.test(path)) {
-    if (path === `/domain-extraction/${job.id}` && backgroundArchiveOpened && job.archive_batches?.[0].state === "pending") Object.assign(job, structuredClone(fixtures.openedJob));
     result = jobs.find(item => item.id === path.split("/")[2]);
   }
   else if (path === "/skills/order-check/submissions") result = { directory: "order-check", id: "submission-1", status: "pending" };
@@ -168,31 +168,23 @@ async function run() {
   const filename = document.querySelector<HTMLButtonElement>('button[title="docs/business/integration.md · 订单服务职责"]')!; filename.click(); await pause();
   check(job.documents.every(item => item.selected), "opening a file does not change selection");
   await click("确认并发布（2）");
-  await clickSelector('[aria-label="发布记录与 Git 归档状态"]');
-  await waitFor('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]');
   const published = calls.filter(call => call.path.endsWith("/publish"));
   check(published.length === 1 && JSON.stringify(published[0].input.document_ids) === JSON.stringify(["states", "integration"]), "one POST publishes exactly the two changed manuscripts");
   check(published[0].input.expected_revisions.states === 2 && published[0].input.expected_revisions.integration === 1, "batch carries each draft revision");
   check(new URLSearchParams(location.search).get("kbReview") === "1", "publication stays in review");
-  check(document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("Git 正在后台归档"), "publication dialog keeps archive progress available");
-  check(job.archive_batches?.[0].state === "pending" && documents.some(document => document.id === "kd-states") && documents.some(document => document.id === "kd-integration"), "platform knowledge is immediately live while Git is still pending");
-  backgroundArchiveOpened = true;
-  for (let i = 0; i < 60 && !button("刷新 MR 状态"); i++) await pause();
-  check(button("刷新 MR 状态") && document.querySelector('a[href="https://example.test/mr/1"]'), "backend GET reports the opened MR before refresh is offered");
-  await click("刷新 MR 状态");
-  const divergedAlert = document.querySelector('[role="dialog"] [role="alert"]');
-  check(divergedAlert?.textContent?.includes("请核对远端差异后再发布") && document.querySelector('[role="dialog"] [aria-label="知识发布与 Git 归档状态"]')?.textContent?.includes("待核对"), "merged archive edited in Git asks the reviewer to compare, using backend text");
-  await click("核对 states.md 的远端差异");
-  // 关闭后 base-ui 保留 data-closed 节点等退场动画，无头 Chrome 里不一定结束，只认未关闭的对话框。
-  const statusDialog = '[role="dialog"]:not([data-closed]) [aria-label="知识发布与 Git 归档状态"]';
-  for (let i = 0; i < 20 && document.querySelector(statusDialog); i++) await pause();
-  check(!document.querySelector(statusDialog), "compare entry closes the publication dialog");
-  check(button("读取远端版本并比较"), "compare entry opens the remote merge view of that manuscript");
-  await clickSelector('[aria-label="发布记录与 Git 归档状态"]');
-  await waitFor(statusDialog);
-  const formalLink = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"]:not([data-closed]) button')].find(item => item.textContent?.trim() === "查看正式知识");
-  check(formalLink && visible(formalLink), "publication dialog offers the formal knowledge link");
-  formalLink!.click(); await pause(); await waitFor('[aria-label="交易业务知识阅读器"] .knowledge-markdown');
+  check(!job.archive_batches?.length && !calls.some(call => /\/archive(?:\/|$)/.test(call.path)), "platform publication neither prepares archive nor creates MR");
+  check(fixtures.publishedJob.documents.every(document => documents.some(item => item.id === document.knowledge_document_id)), "platform knowledge is immediately live before manual archive");
+  await click("归档"); await waitFor('[role="dialog"] input[aria-label="归档关联单号"]');
+  check(document.querySelector<HTMLInputElement>('[aria-label="归档关联单号"]')?.value === job.issue_no, "archive uses the task's issue number");
+  for (const file of fixtures.archivePreview.targets.flatMap(target => target.files)) check(document.querySelector('[role="dialog"]')?.textContent?.includes(file.path), "archive lists every formal file, including unchanged knowledge");
+  const create = fixtures.archivePreview.actions.find(action => action.id === "create-archive")!;
+  await click(create.label);
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes(fixtures.archivedPreview.status_label), "manual creation displays backend archived fact");
+  check(document.querySelector('a[href="https://example.test/mr/1"]'), "created MR is directly accessible");
+  check(calls.filter(call => call.path.endsWith("/archive/create")).length === 1 && !calls.some(call => /\/(refresh|remote|reconcile|cleanup-preview)$/.test(call.path)), "one manual archive request ends at MR creation");
+  document.querySelector<HTMLButtonElement>('[role="dialog"] [data-slot="dialog-close"]')!.click(); await pause();
+  await clickSelector('button[title="docs/business/states.md · 订单状态规则"]');
+  await click("查看正式知识"); await waitFor('[aria-label="交易业务知识阅读器"] .knowledge-markdown');
   check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("取消前核对发货状态"), "published file resolves real module from fallback route");
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "newly published knowledge");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');

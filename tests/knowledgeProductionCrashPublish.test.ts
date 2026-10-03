@@ -109,11 +109,16 @@ finally{clearTimeout(startup)}
         return { target_id: target.id, branch: "codex/recovered-crash", state: "opened", url: "https://example.test/mr/1", mr_id: 1, documents };
       },
     });
-    await until(() => seen.length > 0 && !service!.get(checkpoint.job_id).archive_batches?.some(batch => ["pending", "running"].includes(batch.state)), "重启没有接续已生效版本的归档批次");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(seen.length, 0, "重启不能自动启动Git/MR");
+    const recovered = service.get(checkpoint.job_id);
+    assert.equal(recovered.documents.find(document => document.id === "one")?.published_revision, checkpoint.revision);
+    assert.equal(recovered.documents.find(document => document.id === "two")?.published_revision, undefined);
+    await service.createArchive(checkpoint.job_id, { issue_no: "REQ-CRASH", expected_revisions: service.previewArchive(checkpoint.job_id).expected_revisions }, "alice");
     assert.equal(researchCalls, 0);
     assert.equal(seen.length, 1, "同一已生效版本只归档一次");
     assert.deepEqual(seen[0].map(document => [document.id, document.knowledge_document_id, document.knowledge_revision, document.content]), [["one", checkpoint.id, checkpoint.revision, formal[0].content]], "未写成的第二篇不得在重启后自动入库或归档");
-    assert.deepEqual(listKnowledgeDocuments(dir), formal, "重启只恢复归档，不重写或丢失正式知识");
+    assert.deepEqual(listKnowledgeDocuments(dir), formal, "重启恢复发布记录，人工归档不重写或丢失正式知识");
     assert.deepEqual(listKnowledgeDocumentVersions(dir, checkpoint.id).map(version => version.document.revision), versionsBefore, "重启不能重复生成正式版本");
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");

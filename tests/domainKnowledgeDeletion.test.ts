@@ -55,10 +55,10 @@ test("归档中拒绝删除，完成后删除保留 MR 和草稿来源", async (
   });
   try {
     const job = service.create(config, "user"); await wait(() => service.get(job.id).status === "done");
-    const publication = service.publish(job.id, "user"); await wait(() => started);
-    assert.throws(() => service.remove(job.id, "user"), /正在归档/); assert.equal(service.list().length, 1);
+    await service.publish(job.id, "user");
+    const publication = service.createArchive(job.id, { issue_no: "REQ-delete", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user"); await wait(() => started);
+    assert.throws(() => service.remove(job.id, "user"), /正在发布或归档/); assert.equal(service.list().length, 1);
     finish(); await publication;
-    for (let i = 0; i < 100 && service.get(job.id).archive_batches?.[0].state !== "done"; i++) await new Promise(r => setTimeout(r, 5));
     assert.deepEqual(service.remove(job.id, "user"), { deleted: true });
     execution!.update({ stage: "已结束任务的迟到写入" }); execution!.evidence({ tool: "late" });
     assert.throws(() => execution!.save(document), /已停止/);

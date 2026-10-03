@@ -52,7 +52,7 @@ export function KnowledgeLibrary({ onCategoryChange, onOpenTask, onManage }: {
       history.pushState(history.state, "", new URL(action.href, location.href)); setRoute(readRoute()); return;
     }
     navigate("task", { kbKind: kind, kbTask: id, kbReview: review ? "1" : "",
-      kbStage: action?.view === "archive" ? "publish" : action?.id === "compare" ? "remote" : "",
+      kbStage: action?.view === "archive" ? "publish" : "",
       knowledgeDocument: action?.document_id ?? "" });
   }
   const focused = route.page === "module" || route.page === "task";
