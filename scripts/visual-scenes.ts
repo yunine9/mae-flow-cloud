@@ -187,7 +187,7 @@ async function render(out: string): Promise<void> {
       Object.defineProperty(globalThis, "location", { configurable: true, value: { href: "http://localhost/?kbPage=home", search: "?kbPage=home" } });
       try {
         const variants: Array<[string, () => React.ReactElement]> = [
-          ["knowledge-home", () => React.createElement(KnowledgeLibrary, { category: "documents", onCategoryChange: noop, uploadRequest: 0, onOpenTask: noop, onManage: noop })],
+          ["knowledge-home", () => React.createElement(KnowledgeLibrary, { onOpenTask: noop })],
           ...(["domain", "component", "skill-extraction"] as const).map(kind => [`knowledge-create-${kind}`, () => React.createElement(KnowledgeResearchCreate, { initialKind: kind, onBack: noop, onCreated: noop })] as [string, () => React.ReactElement]),
           ["knowledge-skills", () => React.createElement(KnowledgeAssetsWorkspace, { onOpenTask: noop })],
           ["knowledge-task-warning", () => React.createElement(KnowledgeTaskCenter, { onOpen: noop, onBack: noop, data: {

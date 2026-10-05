@@ -122,7 +122,7 @@ test("P2 叫法统一:同一对象不再身兼「工作流方案/工作流资产
   assert.doesNotMatch(detail, /工作流资产/, "详情返回键统一叫「工作流」");
   const library = readFileSync(
     join(here, "..", "web/src/workflows/WorkflowLibrary.tsx"), "utf-8");
-  assert.match(library, /团队资产 \/ 工作流/, "面包屑锚点保持「团队资产 / 工作流」");
+  assert.match(library, /配置中心 \/ 团队工作流/, "团队资产视图拆散后，面包屑指向配置中心");
   assert.doesNotMatch(library, /工作流资产/, "错误横幅等文案不再叫「工作流资产」");
   // #256 收尾划转(#252 验收):帮助中心文案与固定工作流卡的
   // aria-label 同题同判,余量清零。

@@ -64,7 +64,8 @@ test("生产线验收8/D5：Skill 真实磁盘详情、列表与制作详情 HTT
       assert.deepEqual(list.submissions.find((value: any) => value.id === record.id).production, expected, "生产列表不能重新猜状态");
       assert.deepEqual(center.tasks.find((row: any) => row.id === id).production, expected);
       assert.equal(expected.review.readonly, record.status !== "pending");
-      assert.deepEqual(expected.research_actions.map(action => action.id), record.status === "pending" ? ["reject", "publish"] : []);
+      assert.deepEqual(expected.research_actions.map(action => action.id), record.status === "pending" ? ["reject", "publish"] : record.status === "rejected" ? ["resubmit"] : []);
+      if (record.status === "rejected") assert.equal(expected.next_action.label, "修改后重新提交", "B6/D9：退回后有出路，不是只能看");
       if (record.status === "approving") assert.equal(pack.production.status_label, "审核通过中");
     }
     for (const job of jobs) {
@@ -73,6 +74,7 @@ test("生产线验收8/D5：Skill 真实磁盘详情、列表与制作详情 HTT
       assert.deepEqual(center.tasks.find((row: any) => row.id === job.id).production, expected);
       assert.deepEqual(expected.research_actions.map(action => action.id), job.status === "done" ? ["review"] : []);
       if (job.status === "failed") assert.equal(expected.next_action.id, "progress", "Skill 制作没有接续入口，失败下一步必须能查看原因");
+      if (job.status === "done") assert.equal(expected.status_label, "待提交", "B6/D9：制作 Skill 的草稿由发起人编辑提交，不在这里再叫待审查");
     }
   } finally {
     await within(service.shutdown(), 5_000, "Skill 状态服务关停超过5秒预算");
@@ -156,4 +158,37 @@ test("生产线验收8/D5：1366桌面 Skill 唯一任务页渲染后端状态�
     const value = JSON.parse(result);
     assert.equal(value.error, undefined, value.error); assert.equal(value.passed, true); assert.equal(value.width, 1366);
   } finally { stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("B6/D9：制作 Skill 提交审查后任务即结束，任务中心只剩提交那一条待审查", { timeout: 20_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-made-once-"));
+  const service = new TaskService({ dataDir: dir, provider: "", model: "", modelsJson: {}, maxConcurrent: 0 });
+  const server = createTaskServer(service);
+  try {
+    const job: ExtractionJobRecord = { id: "ke-made-once", status: "done", repo: "https://example.test/reference.git", intent: "制作参考 Skill",
+      operator: "alice", started_at: "2026-10-05T00:00:00Z", finished_at: "2026-10-05T00:01:00Z", draft };
+    persistExtractionJob(join(dir, "knowledge-extract", job.id), job);
+    const submission = await submitHostSkill(dir, "made-once", files, "alice", metadata);
+    await within(new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); }), 5_000, "Skill HTTP 启动超过5秒预算");
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(5_000) });
+    const bad = await post(`/knowledge/skill-extract/${job.id}/submitted`, { submission_id: "made-once/not-there" });
+    assert.equal(bad.status, 400, "提交号必须指向真实提交");
+    const marked = await post(`/knowledge/skill-extract/${job.id}/submitted`, { submission_id: `made-once/${submission.id}` });
+    assert.equal(marked.status, 200, await marked.clone().text());
+    const detail = await marked.json() as any;
+    assert.equal(detail.production.status_label, "已提交审查");
+    assert.equal(detail.production.group, "completed");
+    assert.match(detail.production.next_action.href, new RegExp(`kbKind=skill-submission&kbTask=made-once%2F${submission.id}`));
+    assert.deepEqual(detail.production.research_actions, [], "已提交后不再给编辑并提交");
+    const center = await (await fetch(`${base}/knowledge-tasks`, { signal: AbortSignal.timeout(5_000) })).json() as any;
+    const attention = center.tasks.filter((row: any) => row.production.group === "attention").map((row: any) => row.id);
+    assert.deepEqual(attention, [`made-once/${submission.id}`], "同一个 Skill 在任务中心只有一条等人处理");
+    const missing = await post("/knowledge/skill-extract/ke-nope/submitted", { submission_id: `made-once/${submission.id}` });
+    assert.equal(missing.status, 404);
+  } finally {
+    await within(service.shutdown(), 5_000, "Skill 状态服务关停超过5秒预算");
+    if (server.listening) await within(new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }), 5_000, "Skill HTTP 关停超过5秒预算");
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

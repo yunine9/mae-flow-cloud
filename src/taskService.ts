@@ -429,7 +429,7 @@ import {
   type HostSkillShelfEntry,
 } from "./hostSkillShelf.ts";
 import { materializeHostSkills } from "./hostSkillRuntime.ts";
-import { readHostSkillDocument, scanForSecrets, recoverSkillSubmissions } from "./hostSkillLibrary.ts";
+import { readHostSkillDocument, scanForSecrets, recoverSkillSubmissions, readSkillSubmissionPackage, SkillLibraryError } from "./hostSkillLibrary.ts";
 import {
   EXTRACTION_TIMEOUT_MS,
   buildExtractionMission,
@@ -1943,7 +1943,7 @@ export class TaskService {
       if (!this.options.notifier || !task.summary.luban_account) return;
       await this.options.notifier.notifyOutcome({ taskId: task.summary.id, account: task.summary.luban_account,
         status: "交付后经验草稿已生成", summary: `本次交付整理出 ${count} 条经验草稿，请尽快审核内容与适用范围，可修改后决定哪些采纳入库。`,
-        link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?experience=1&memory_id=${firstId}&source_task=${task.summary.id}` });
+        link: `${(this.notificationLinkBase() ?? "").replace(/\/$/, "")}/?kbPage=experience&memory_id=${firstId}&source_task=${task.summary.id}` });
     },
   }));
   private readonly deliverySummaries = new DeliverySummaries<TaskState>(task => ({
@@ -2729,6 +2729,20 @@ export class TaskService {
       this.runSkillExtraction(record).finally(() => {
         this.extractionActive = false;
       }));
+    return { ...record };
+  }
+
+  /** 制作 Skill 的草稿已由人编辑并提交审查：记下提交号，制作任务随之结束。 */
+  markSkillExtractionSubmitted(id: string, submissionId: string): ExtractionJobRecord {
+    const job = this.skillExtractionJob(id);
+    if (!job) throw new NotFoundError("提取任务不存在");
+    if (job.status !== "done" || !job.draft) throw new SkillLibraryError("草稿尚未生成，不能记为已提交");
+    const [directory, submission, ...rest] = submissionId.split("/");
+    if (!directory || !submission || rest.length) throw new SkillLibraryError("提交编号无效");
+    readSkillSubmissionPackage(this.options.dataDir, directory, submission);
+    const record = { ...job, submission_id: submissionId };
+    if (this.extractionJobs.has(id)) this.extractionJobs.set(id, record);
+    persistExtractionJob(this.extractionRoot(id), record, this.options.log);
     return { ...record };
   }
 

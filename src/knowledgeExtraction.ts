@@ -33,6 +33,9 @@ export interface ExtractionJobRecord {
   draft?: string;
   notes?: string;
   error?: string;
+  /** 草稿已提交到 Skill 库审查（"目录/提交号"）。制作任务到此结束，审查只在那条提交上做一次，
+   * 不再在任务中心留两条"待审查"（D9：制作 Skill 只审一次）。 */
+  submission_id?: string;
 }
 
 /** 内置提取 skill 正文。读不到按缺陷抛错——它是发布件的一部分,

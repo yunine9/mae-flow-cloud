@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryTaskTokens, OriginCounts } from "../../src/deliveryAnalyticsTypes";
+import { KnowledgeInsightsPanel } from "./KnowledgeFlywheel";
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
 import { cn } from "cn";
 import { getIssueOnceGenerated, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow } from "./api";
@@ -370,9 +371,9 @@ export function RegistrationAnalyticsTab() {
     </Sheet>
   </div>;
 }
-export function DeliveryAnalytics() {
+export function DeliveryAnalytics({ onOpenTask }: { onOpenTask: (taskId: string) => void }) {
   const detailTitle = useRef<HTMLHeadingElement>(null);
-  const [tab, setTab] = useState<"requirement" | "issue" | "registration">("requirement");
+  const [tab, setTab] = useState<"requirement" | "issue" | "registration" | "knowledge">("requirement");
   const [report, setReport] = useState<DeliveryAnalysisReport>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -404,11 +405,11 @@ export function DeliveryAnalytics() {
   const detailTokens = aggregateDeliveryTokens(detailRows.map(r => r.id), report?.task_tokens, selectedParent ? selected ?? undefined : undefined);
   return <div className="delivery-analysis">
     <div className="delivery-toolbar"><div className="delivery-tabs">
-      {([["requirement", "需求交付"], ["issue", "DTS"], ["registration", "登记问题"]] as const).map(([key, label]) =>
+      {([["requirement", "需求交付"], ["issue", "DTS"], ["registration", "登记问题"], ["knowledge", "知识使用效能"]] as const).map(([key, label]) =>
         tab === key
           ? <strong key={key}>{label}</strong>
           : <button key={key} type="button" className="text-sm text-muted-foreground transition-colors hover:text-text-strong" aria-pressed={false} onClick={() => setTab(key)}>{label}</button>)}
-    </div><Button variant="outline" onClick={() => void refresh(true)} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} />{busy ? "正在读取" : "刷新数据"}</Button></div>
+    </div>{tab !== "knowledge" && <Button variant="outline" onClick={() => void refresh(true)} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} />{busy ? "正在读取" : "刷新数据"}</Button>}</div>
     {tab === "requirement" && <>
     <div className="delivery-filters">
       <AnalysisFilter label="时间" value={days} onChange={setDays} items={[{value:"30",label:"近 30 天"},{value:"90",label:"近 90 天"},{value:"",label:"全部时间"}]} />
@@ -436,5 +437,6 @@ export function DeliveryAnalytics() {
     </>}
     {tab === "issue" && <IssueAnalyticsTab />}
     {tab === "registration" && <RegistrationAnalyticsTab />}
+    {tab === "knowledge" && <KnowledgeInsightsPanel onOpenTask={onOpenTask} />}
   </div>;
 }

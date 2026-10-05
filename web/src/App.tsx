@@ -29,10 +29,10 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  createUser, deleteUser, getBuildInfo, getKnowledgeInsights, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
+  createUser, deleteUser, getBuildInfo, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
   login, logout, putCommitter, putUserDisplayName, resetUserPassword,
   type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
-  type ReviewRequest, type TeamKnowledgeInsights, type UserRole,
+  type ReviewRequest, type UserRole,
 } from "./api";
 import type { IssueChildTab } from "./issues/IssueBoard";
 import { ConfirmDialogHost, confirmDialog } from "./ConfirmDialog";
@@ -72,14 +72,11 @@ import {
   type LaunchGateState,
 } from "./launchGate";
 import { startVisiblePolling } from "./visiblePolling";
-import { KnowledgeInsightsBoard } from "./KnowledgeFlywheel";
-import { MemoryBoard } from "./MemoryBoard";
 import { KnowledgeAssetsWorkspace } from "./KnowledgeAssets";
 import { WishWall, type WishWallDraft } from "./WishWall";
 import { QuickWishButton } from "./WishQuickCreate";
 import { userLabel } from "./UserPicker";
 import { BusinessModuleLibrary } from "./BusinessModuleLibrary";
-import { WorkflowAssetWorkspace } from "./workflows";
 import {
   knowledgeAssetPath,
   readKnowledgeAssetFocus,
@@ -106,15 +103,15 @@ type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
 type TeamTaskTab = "current" | "archive";
-type TeamAssetTab = "documents" | "knowledge" | "modules" | "workflows" | "insights" | "memories";
+/** 原"团队资产"视图 2026-10 已拆散（经验进知识库、工作流进配置中心、使用效能进交付分析）；
+ * 只剩发起页知识清单深链的全文查看，随消费批次退役模块资产时一并删除。 */
+type TeamAssetTab = "knowledge" | "modules";
 
 const APP_VIEWS = new Set<View>([
   "team", "teamIssues", "mine", "issues", "profile", "users", "settings",
   "library", "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
 ]);
-const TEAM_ASSET_TABS = new Set<TeamAssetTab>(["documents",
-  "knowledge", "modules", "workflows", "insights", "memories",
-]);
+const TEAM_ASSET_TABS = new Set<TeamAssetTab>(["knowledge", "modules"]);
 
 function appHistoryState(view: View, teamAssetTab?: TeamAssetTab,
   issueChildTab?: IssueChildTab) {
@@ -238,7 +235,6 @@ export function resolveWorkspaceTarget(
 function initialView(user: AuthUser): View {
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
   if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) return "library";
-  if (new URLSearchParams(location.search).get("experience") === "1") return "knowledge";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
   if (readKnowledgeAssetFocus()) return "knowledge";
   // 环境管理深链:对全部角色生效(台账登录即可读写,ADR-0020)。
@@ -722,18 +718,12 @@ export function App() {
   // 是全量(服务端只对非 admin 收窄),与 teamIssues 重复,故 admin 不拉。
   const [myIssues, setMyIssues] = useState<IssueSummary[]>([]);
   const [teamUsers, setTeamUsers] = useState<AuthUser[]>([]);
-  const [knowledgeInsights, setKnowledgeInsights] = useState<TeamKnowledgeInsights>();
-  const [knowledgeInsightsLoading, setKnowledgeInsightsLoading] = useState(false);
-  const [knowledgeInsightsError, setKnowledgeInsightsError] = useState("");
-  const [knowledgeCategory, setKnowledgeCategory] = useState<"documents" | "skills">("documents");
-  const [knowledgeUploadRequest] = useState(0);
   const [teamAssetTab, setTeamAssetTab] = useState<TeamAssetTab>(() =>
-    new URLSearchParams(location.search).get("experience") === "1" ? "memories" : readKnowledgeAssetFocus()?.kind === "business" ? "modules" : readKnowledgeAssetFocus() ? "knowledge" : "memories");
+    readKnowledgeAssetFocus()?.kind === "business" ? "modules" : "knowledge");
   const [knowledgeFocus, setKnowledgeFocus] = useState<KnowledgeAssetFocus | undefined>(
     readKnowledgeAssetFocus,
   );
   /** 下单选择器"查看方案"带过来的直达目标;资产库挂载时消费。 */
-  const [workflowFocusId, setWorkflowFocusId] = useState("");
   const [helpArticleId, setHelpArticleId] = useState(() => {
     const match = location.pathname.match(/^\/help(?:\/([^/]+))?\/?$/);
     if (!match?.[1]) return "getting-started";
@@ -807,14 +797,11 @@ export function App() {
     const syncKnowledgeRoute = (event: PopStateEvent) => {
       const focus = readKnowledgeAssetFocus();
       setKnowledgeFocus(focus);
-      if (new URLSearchParams(location.search).get("experience") === "1") {
-        setView("knowledge"); setTeamAssetTab("memories"); return;
-      }
       if (!focus) {
         const restoredView = viewFromHistoryState(event.state);
         const restoredTab = teamAssetTabFromHistoryState(event.state);
         const restoredIssueChild = issueChildTabFromHistoryState(event.state);
-        if (restoredView) setView(restoredView === "knowledge" && restoredTab === "documents" ? "library" : restoredView);
+        if (restoredView) setView(restoredView);
         if (restoredTab) setTeamAssetTab(restoredTab);
         // 后退/前进还原问题处理子页签;admin 的强制口径在渲染处兜底。
         if (restoredIssueChild) setIssueChildTab(restoredIssueChild);
@@ -968,22 +955,6 @@ export function App() {
     void listUsers().then(setTeamUsers).catch(() => setTeamUsers([]));
   }, [session?.username, session?.role, view]);
 
-  function refreshKnowledgeInsights(): void {
-    setKnowledgeInsightsLoading(true);
-    setKnowledgeInsightsError("");
-    void getKnowledgeInsights().then(setKnowledgeInsights).catch((cause) => {
-      setKnowledgeInsightsError(cause instanceof Error ? cause.message : String(cause));
-    }).finally(() => setKnowledgeInsightsLoading(false));
-  }
-
-  // 知识聚合要读取多份任务足迹，独立低频刷新，不能跟 1.5 秒任务心跳
-  // 绑在一起。开发成员也能看团队只读视图，和现有任务可见性一致。
-  useEffect(() => {
-    if (!session || view !== "knowledge" || teamAssetTab !== "insights") return;
-    refreshKnowledgeInsights();
-    const timer = window.setInterval(refreshKnowledgeInsights, 60_000);
-    return () => window.clearInterval(timer);
-  }, [session?.username, view, teamAssetTab]);
 
   useEffect(() => {
     if (view !== "mine" || !targetTaskId || tasks.length === 0) return;
@@ -1087,8 +1058,6 @@ export function App() {
     await logout().catch(() => undefined);
     setTasks([]);
     setTeamIssues([]);
-    setKnowledgeInsights(undefined);
-    setKnowledgeInsightsError("");
     setMineScope("all");
     setTaskSync({ kind: "loading" });
     launchGateRequest.current += 1;
@@ -1246,11 +1215,11 @@ export function App() {
       : "登记问题并指派责任人，或处理指派到你名下的问题：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     library: { title: "知识库", description: "" },
-    knowledge: { title: "团队资产", description: "管理团队通用知识、模块知识和工作流；代码仓内容始终由 Git 管理。" },
+    knowledge: { title: "知识全文", description: "下单时匹配到的模块知识或 Skill 原文。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
     settings: { title: "服务设置", description: "集中管理模型网关和团队运行策略；部署链路在此只读自检。" },
-    environments: { title: "配置中心", description: "统一维护环境与基础映射，供需求、问题单和团队资产直接使用。" },
+    environments: { title: "配置中心", description: "统一维护环境、基础映射和团队工作流，供需求、问题单和知识库直接使用。" },
     deliveryAnalysis: { title: "交付分析", description: "从首次提交到最终合入，看清代码保留与后续返工。" },
     help: { title: "使用帮助", description: "用大白话讲清每个功能：什么时候用、点哪里、接下来会发生什么。" },
   }[view];
@@ -1308,10 +1277,6 @@ export function App() {
       target === "knowledge" ? teamAssetTab : undefined), "", "/");
   };
   const selectView = (next: View) => {
-    if (next !== "knowledge" && new URLSearchParams(location.search).has("experience")) {
-      const url = new URL(location.href); url.searchParams.delete("experience"); url.searchParams.delete("source_task"); url.searchParams.delete("memory_id");
-      history.replaceState(history.state, "", url);
-    }
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
     if (next === "library") {
@@ -1353,27 +1318,11 @@ export function App() {
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
     if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument"]) url.searchParams.delete(key);
+      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "source_task", "memory_id"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());
     setView(next);
-  };
-  const selectTeamAssetTab = (next: TeamAssetTab) => {
-    const url = new URL(location.href);
-    if (next === "memories") url.searchParams.set("experience", "1");
-    else { url.searchParams.delete("experience"); url.searchParams.delete("source_task"); url.searchParams.delete("memory_id"); }
-    history.replaceState(history.state, "", url);
-    setTeamAssetTab(next);
-    if (!knowledgeFocus) {
-      if (location.pathname === "/") {
-        history.replaceState(appHistoryState("knowledge", next), "",
-          location.pathname + location.search);
-      }
-      return;
-    }
-    setKnowledgeFocus(undefined);
-    history.pushState(appHistoryState("knowledge", next), "", next === "memories" ? "/?experience=1" : "/");
   };
   return <PeopleProvider key={session.username} known={[...teamUsers, session]}><SidebarProvider
     style={{ "--sidebar-width": "228px" } as React.CSSProperties}>
@@ -1467,13 +1416,7 @@ export function App() {
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div className={view === "knowledge" ? "team-assets-heading" : undefined}>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>
-          {view === "knowledge" ? <>
-          <nav className="team-assets-tabs" aria-label="团队资产类型">
-            <button type="button" className={teamAssetTab === "memories" ? "active" : ""} onClick={() => selectTeamAssetTab("memories")}><strong>经验沉淀</strong></button>
-            <button type="button" className={teamAssetTab === "workflows" ? "active" : ""} onClick={() => selectTeamAssetTab("workflows")}><strong>工作流</strong></button>
-            <button type="button" className={teamAssetTab === "insights" ? "active" : ""} onClick={() => selectTeamAssetTab("insights")}><strong>使用效能</strong></button>
-          </nav>
-          </> : <p className={cn("m-0 text-sm text-(--muted)", view === "mine" && "flex flex-wrap items-center gap-2")}>{view === "mine" && <span className="font-mono text-sm font-medium leading-[1.4] text-(--muted) after:ml-2 after:content-['·'] after:text-(--faint)"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p>}
+          {<p className={cn("m-0 text-sm text-(--muted)", view === "mine" && "flex flex-wrap items-center gap-2")}>{view === "mine" && <span className="font-mono text-sm font-medium leading-[1.4] text-(--muted) after:ml-2 after:content-['·'] after:text-(--faint)"><PersonName account={session.username} /></span>}<span>{viewHeader.description}</span></p>}
 
         </div>
         <div className="flex items-center justify-end gap-3 max-[1080px]:flex-wrap max-[760px]:w-full max-[760px]:justify-start">
@@ -1504,7 +1447,7 @@ export function App() {
       </header>}
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
-        (dtsWide || view === "library" || (view === "knowledge" && ["memories", "documents"].includes(teamAssetTab))) ? "max-w-none" : "max-w-(--page-width)",
+        (dtsWide || view === "library") ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]", view === "library" && "knowledge-app-main")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
@@ -1543,12 +1486,12 @@ export function App() {
           </TeamWorldTabs>
         </section>}
 
-        {view === "library" && <KnowledgeLibrary category={knowledgeCategory} onCategoryChange={setKnowledgeCategory} uploadRequest={knowledgeUploadRequest}
+        {view === "library" && <KnowledgeLibrary
           onOpenTask={id => { const target = tasks.find(task => task.id === id); if (target) openArtifacts(target); else location.assign(`/work/${encodeURIComponent(id)}`); }}
-          onManage={focus => { setKnowledgeFocus(focus); const tab = focus ? focus.kind === "business" ? "modules" : "knowledge" : "memories"; history.pushState(appHistoryState("knowledge", tab), "", focus ? knowledgeAssetPath(focus) : "/?experience=1"); setTeamAssetTab(tab); setView("knowledge"); }} />}
+ />}
 
         {view === "knowledge" && <section className="team-assets-workspace">
-          {["knowledge", "modules"].includes(teamAssetTab) && <Button variant="outline" className="self-start" onClick={() => selectView("library")}>← 返回知识库</Button>}
+          <Button variant="outline" className="self-start" onClick={() => selectView("mine")}>← 返回我的需求</Button>
           {teamAssetTab === "knowledge" ? <KnowledgeAssetsWorkspace
             admin={session.role === "admin"}
             initialAsset={knowledgeFocus}
@@ -1556,26 +1499,9 @@ export function App() {
               const target = tasks.find((task) => task.id === taskId);
               if (target) openArtifacts(target);
             }}
-          /> : teamAssetTab === "insights" ? <KnowledgeInsightsBoard
-            insights={knowledgeInsights}
-            loading={knowledgeInsightsLoading}
-            error={knowledgeInsightsError}
-            onRetry={refreshKnowledgeInsights}
-            onOpenTask={(taskId) => {
-              const target = tasks.find((task) => task.id === taskId);
-              if (target) openArtifacts(target);
-            }}
-          /> : teamAssetTab === "memories" ? <MemoryBoard
-            onOpenTask={(taskId) => {
-              const target = tasks.find((task) => task.id === taskId);
-              if (target) openArtifacts(target);
-              else location.assign(`/work/${encodeURIComponent(taskId)}`);
-            }}
-          /> : teamAssetTab === "modules" ? <BusinessModuleLibrary
+          /> : <BusinessModuleLibrary
             initialAsset={knowledgeFocus?.kind === "business"
-              ? knowledgeFocus : undefined} />
-            : <WorkflowAssetWorkspace initialWorkflowId={workflowFocusId
-              || undefined} />}
+              ? knowledgeFocus : undefined} />}
         </section>}
 
         {view === "wishes" && <WishWall viewer={session} draft={wishDraft}
@@ -1626,7 +1552,11 @@ export function App() {
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
         {view === "environments" && <ConfigurationCenter admin={session.role === "admin"} />}
-        {view === "deliveryAnalysis" && <DeliveryAnalytics />}
+        {view === "deliveryAnalysis" && <DeliveryAnalytics onOpenTask={(taskId) => {
+          const target = tasks.find((task) => task.id === taskId);
+          if (target) openArtifacts(target);
+          else location.assign(`/work/${encodeURIComponent(taskId)}`);
+        }} />}
         {view === "help" && <Suspense fallback={<div className="help-loading">使用帮助加载中…</div>}>
           <HelpCenter viewer={session}
             initialArticleId={helpArticleId}
@@ -1653,7 +1583,6 @@ export function App() {
         setLaunchOpen(false);
         setKnowledgeFocus(target);
         setTeamAssetTab(target.kind === "business" ? "modules" : "knowledge");
-        setWorkflowFocusId("");
         setView("knowledge");
         const next = knowledgeAssetPath(target);
         if (location.pathname + location.search !== next) {
@@ -1662,18 +1591,12 @@ export function App() {
         }
       }}
       onOpenWorkflowAssets={(workflowId) => {
+        // 团队工作流只在配置中心维护（团队资产视图已拆散），带 id 直达该方案。
         setLaunchOpen(false);
         setKnowledgeFocus(undefined);
-        setTeamAssetTab("workflows");
-        // 从下单选择器带 id 直达该方案详情(复制/编辑都在那里),
-        // 不再把人扔到资产库首页自己找(审计 P1-9)。
-        setWorkflowFocusId(workflowId ?? "");
-        setView("knowledge");
-        if (location.pathname + location.search !== "/") {
-          history.pushState(appHistoryState("knowledge", "workflows"), "", "/");
-        } else {
-          history.replaceState(appHistoryState("knowledge", "workflows"), "", "/");
-        }
+        history.pushState(appHistoryState("environments"), "",
+          `/configuration?tab=workflows${workflowId ? `&workflow=${encodeURIComponent(workflowId)}` : ""}`);
+        setView("environments");
       }} />}
     <QuickWishButton onOpenWall={() => {
       // 快速许愿的「查看许愿墙」也可能从 /issues/X 工作台点出,同样

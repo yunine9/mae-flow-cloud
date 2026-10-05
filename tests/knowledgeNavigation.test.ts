@@ -37,7 +37,7 @@ test("残缺或未知知识深链不会误导航", () => {
 });
 
 
-test("管理员和开发者均有独立的一级知识库入口", () => {
+test("B6验收：管理员和开发者均有独立的一级知识库入口，团队资产视图已拆散", () => {
   const app = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");
   const nav = app.slice(app.indexOf('<SidebarContent aria-label="视图切换"'), app.indexOf('</SidebarContent>'));
   const sections = nav.split('</> : <>');
@@ -48,12 +48,17 @@ test("管理员和开发者均有独立的一级知识库入口", () => {
     assert.match(section, /<NavButton view="library"[^>]+label="知识库"/);
     assert.doesNotMatch(section, /<NavButton view="knowledge"/);
   }
-  // 去掉侧栏按钮不等于删掉团队经验:它仍可从知识库「＋新增」菜单和 ?experience=1 深链到达,
-  // 两条路都落到 view="knowledge" 的经验页签。
-  assert.match(app, /get\("experience"\) === "1"\) return "knowledge"/, "experience 深链仍打开团队资产视图");
-  assert.match(app, /onManage=\{focus => \{[^}]*"\/\?experience=1"[^}]*setView\("knowledge"\)/, "知识库的维护入口切到团队资产视图");
+  // B6（2026-10 团队资产视图拆散）：经验进知识库，工作流只在配置中心，使用效能进交付分析。
+  assert.doesNotMatch(app, /experience=1|team-assets-tabs|selectTeamAssetTab|<MemoryBoard|KnowledgeInsightsBoard|<WorkflowAssetWorkspace/,
+    "App 不再有团队资产页签、经验旧深链或重复的工作流/效能页面");
+  assert.match(app, /\/configuration\?tab=workflows/, "发起页「编辑工作流」改跳配置中心");
   const library = readFileSync(new URL("../web/src/KnowledgeLibrary.tsx", import.meta.url), "utf8");
-  assert.match(library, /onClick=\{\(\) => onManage\(\)\}>团队经验与维护</, "知识库新增菜单保留团队经验入口");
+  assert.doesNotMatch(library, /团队经验与维护|onManage/, "＋新增菜单不再挂团队经验与维护");
+  assert.equal(library.match(/className="knowledge-hub-add-option"/g)?.length, 2, "＋新增菜单只有研究知识、导入 Skill 两项");
+  assert.match(library, /onClick=\{\(\) => navigate\("experience"\)\}><Lightbulb size=\{16\} \/>团队经验</, "知识库页头有团队经验入口");
+  assert.match(library, /route\.page === "experience" && [^\n]*<MemoryBoard onOpenTask=\{onOpenTask\} \/>/, "团队经验页就在知识库内");
+  const delivery = readFileSync(new URL("../web/src/DeliveryAnalytics.tsx", import.meta.url), "utf8");
+  assert.match(delivery, /\["knowledge", "知识使用效能"\]/, "使用效能是交付分析的一个页签");
 });
 
 

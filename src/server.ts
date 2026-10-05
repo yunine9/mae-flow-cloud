@@ -1588,6 +1588,11 @@ export function createTaskServer(
             if (metadata) saveKnowledgeSkillContext(service.options.dataDir, job.id, metadata);
             return json(response, 200, { ...job, knowledge_scope: metadata, production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "submitted") {
+            const body = await readBody(request, 8192);
+            const job = service.markSkillExtractionSubmitted(decodeURIComponent(parts[2]), String(body.submission_id ?? ""));
+            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id), production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
+          }
           if (request.method === "GET" && parts.length === 3) {
             const job = service.skillExtractionJob(
               decodeURIComponent(parts[2]));
@@ -1598,6 +1603,7 @@ export function createTaskServer(
           }
         } catch (error) {
           if (error instanceof SkillLibraryError) return json(response, 400, { error: error.message });
+          if (error instanceof NotFoundError) return json(response, 404, { error: error.message });
           if (error instanceof TaskControlError) {
             return json(response, 409, { error: error.message });
           }

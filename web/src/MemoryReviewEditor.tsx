@@ -56,7 +56,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
       <h3 className="flex items-center gap-2 border-b border-border p-4 font-semibold"><FileText className="size-5 text-primary" />事实与依据</h3>
       <div className="grid gap-4 p-4">
         <div className="text-sm text-muted-foreground">{record.source_repo ?? record.repo} · {record.task || "成员主动记录"}<p className="mt-1 break-all">来源标识：{record.evidence === "manual" ? "手工新增" : record.evidence}</p></div>
-        {record.merged_into && <a className="rounded-md border p-3 text-primary underline" href={`/?experience=1&memory_id=${record.merged_into}`}>本条已合并停用，查看保留的目标经验</a>}
+        {record.merged_into && <a className="rounded-md border p-3 text-primary underline" href={`/?kbPage=experience&memory_id=${record.merged_into}`}>本条已合并停用，查看保留的目标经验</a>}
         {(record.problem || record.quote) && <div className="rounded-lg border border-border p-4">
           <h4 className="mb-3 flex items-center gap-2 font-medium"><MessageSquareQuote className="size-4" />{record.source === "delivery_review" ? "首次问题与最终修正" : "原始反馈"}</h4>
           {record.problem && <p className="whitespace-pre-wrap break-words">{record.problem}</p>}
@@ -75,7 +75,7 @@ export function MemoryReviewEditor({ record, taskId, onChanged, onDismiss, onDir
             <p className="mt-1 text-muted-foreground">范围：{row.module ? `模块 ${row.module}` : row.scope === "platform" ? "平台通用" : row.repo} · 版本：{row.product_versions?.join("、") || "未限定"}</p>
             <p className="mt-2 whitespace-pre-wrap">{row.conclusion}</p>
             {row.maintenance_note && <p className="mt-2">维护说明：{row.maintenance_note}</p>}
-            {row.merged_into && <a className="text-primary underline" href={`/?experience=1&memory_id=${row.merged_into}`}>查看合并目标</a>}
+            {row.merged_into && <a className="text-primary underline" href={`/?kbPage=experience&memory_id=${row.merged_into}`}>查看合并目标</a>}
             {editable && <Button variant="outline" size="sm" className="mt-2" onClick={() => {
               const old = row.conclusion.split(boundaryMarker); setTrigger(row.trigger); setConclusion(old[0]); setExceptions(old.slice(1).join("\n适用例外：").trim());
               setDimension(row.dimension); setScope(row.scope); setModule(row.module ?? ""); setRepo(row.repo); setVersions(row.product_versions ?? []); setNote(`恢复版本 ${row.revision ?? 1}`);

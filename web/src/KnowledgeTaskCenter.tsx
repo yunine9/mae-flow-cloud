@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRightIcon, CheckCircle2Icon, ChevronRightIcon, CircleDotIcon, Clock3Icon, ListChecksIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronRightIcon, CircleDotIcon, Clock3Icon, ListChecksIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { PersonName } from "./People";
@@ -49,7 +49,7 @@ function TaskRow({ task, now, onOpen }: { task: KnowledgeTaskRow; now: number; o
       </> : <><p className="is-muted">暂无公开研究动态</p>{task.stage && <small title={task.stage}>{task.stage}</small>}</>}
       {task.error && <small className="knowledge-task-error" title={task.error}>{task.error}</small>}
     </div>
-    <ArrowUpRightIcon size={15} className="knowledge-task-open" />
+    <span className="knowledge-task-open">{task.next_action.label}<ChevronRightIcon size={14} aria-hidden /></span>
   </button>;
 }
 

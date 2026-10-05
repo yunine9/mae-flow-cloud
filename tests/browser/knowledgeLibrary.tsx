@@ -70,11 +70,12 @@ window.fetch = async (url, options) => {
     result = jobs.find(item => item.id === path.split("/")[2]);
   }
   else if (path === "/skills/order-check/submissions") result = { directory: "order-check", id: "submission-1", status: "pending" };
+  else if (path === "/skills/order-check/submissions/submission-1") result = { record: { directory: "order-check", id: "submission-1", status: "pending", operator: "alice", created_at: "2026-10-05T00:00:00Z", skill_digest: "a", package_digest: "b", files: 1, bytes: 10 }, files: [{ path: "SKILL.md", bytes: 10, content: "---\nname: order-check\n---" }] };
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
 };
 const root = createRoot(document.getElementById("app")!);
-root.render(<KnowledgeLibrary category="documents" onCategoryChange={() => {}} uploadRequest={0} onOpenTask={() => {}} onManage={() => {}} />);
+root.render(<KnowledgeLibrary onOpenTask={() => {}} />);
 const visible = (element: Element) => !!element.getClientRects().length;
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => visible(item) && item.textContent?.trim() === text);
 async function click(text: string) { const target = button(text); check(target, `missing button ${text}`); for (let i = 0; i < 60 && target!.disabled; i++) await pause(); check(!target!.disabled, `button not ready ${text}`); target!.click(); await pause(); }
@@ -194,14 +195,14 @@ async function run() {
   check(button("开始研究")?.disabled, "a related issue requires its description before research starts");
   check(!document.body.textContent?.includes("补充业务 AR") && !document.querySelector('[aria-label*="AR"]'), "knowledge research no longer exposes the supplementary AR field");
   await fill('[aria-label="单号描述"]', "修复告警重复通知并核对恢复规则");
-  await click("开始研究"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
+  await click("开始研究"); await waitFor('[aria-label="研究过程记录"]');
   const created = calls.find(call => call.path === "/domain-extraction" && call.input);
   check(created?.input.module_id === "alarm" && created.input.baseline_branch === "master", "create submits actual module id and baseline branch");
   check(created?.input.issue_description === "修复告警重复通知并核对恢复规则", "research submits the supplied issue description for an accurate MR title");
   check(!Object.prototype.hasOwnProperty.call(created?.input, "ar_codes"), "research does not submit removed supplementary AR data");
-  check(new URLSearchParams(location.search).get("kbPage") === "tasks", "creation returns to the knowledge task center");
-  await clickSelector('[aria-label$="打开领域萃取：告警管理研究"]'); await waitFor('[aria-label="研究过程记录"]');
-  await click("返回任务中心"); await waitFor('[aria-label="知识任务中心"]');
+  const opened = new URLSearchParams(location.search);
+  check(opened.get("kbPage") === "task" && opened.get("kbKind") === "domain" && opened.get("kbTask") === jobs.at(-1)!.id, "B6/P1-6: creation opens the new task directly");
+  await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]'); await chooseNew("导入 Skill");
   check(!document.querySelector('textarea'), "import is package-only, with no pasted document input");
   await pick([new File(["ordinary document"], "notes.pdf", { type: "application/pdf" })]);
@@ -211,7 +212,9 @@ async function run() {
   // Chrome 虚拟时间与文件 I/O 使用不同的时钟；已知内存内容直接返回，避免等待被虚拟计时器提前耗尽。
   for (const [file, content] of [[skill, skillText], [reference, referenceText]] as const) Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode(content).buffer });
   Object.defineProperty(skill, "webkitRelativePath", { value: "order-check/SKILL.md" }); Object.defineProperty(reference, "webkitRelativePath", { value: "order-check/references/rules.md" });
-  await pick([skill, reference]); await chooseDestination("交易", "交易业务"); await click("提交并审查"); await waitFor('[aria-label="知识任务中心"]');
+  await pick([skill, reference]); await chooseDestination("交易", "交易业务"); await click("提交并审查"); await waitFor('[aria-label="Skill 知识任务"]');
+  const importedRoute = new URLSearchParams(location.search);
+  check(importedRoute.get("kbKind") === "skill-submission" && importedRoute.get("kbTask") === "order-check/submission-1", "B6/P1-6: import opens the new submission directly");
   const submission = calls.find(call => call.path === "/skills/order-check/submissions");
   check(submission?.input.business_module_ids[0] === "trade" && submission.input.files.some((file: any) => file.path === "references/rules.md"), "Skill submission preserves relative attachments and real module ownership");
   const decodeFile = (path: string) => new TextDecoder().decode(Uint8Array.from(atob(submission!.input.files.find((file: any) => file.path === path).content_base64), character => character.charCodeAt(0)));

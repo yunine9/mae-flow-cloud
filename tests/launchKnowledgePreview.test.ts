@@ -94,7 +94,8 @@ test("查看全文前保存技术画像草稿，返回根路径恢复来源视�
   assert.match(appSource,
     /const restoredView = viewFromHistoryState\(event\.state\)/);
   assert.match(appSource,
-    /history\.pushState\(appHistoryState\("knowledge", "workflows"\), "", "\/"\)/);
+    /history\.pushState\(appHistoryState\("environments"\), "",\s*`\/configuration\?tab=workflows/,
+    "编辑工作流改去配置中心，并压入历史，后退能回到来源视图");
   assert.match(appSource,
     /else if \(\/\^\\\/help[\s\S]*history\.pushState\(appHistoryState\(next/,
     "从帮助页进入根视图也必须记录目标，前进不能掉回角色默认页");
@@ -113,7 +114,7 @@ test("仓库技术栈是新任务必填项，直接跟随交付仓且不能藏�
   assert.match(pickerSource, /本单仍采用你刚选的结果/);
 });
 
-test("历史全文使用响应版本元数据，帮助返回保留团队资产页签", () => {
+test("历史全文使用响应版本元数据，进入帮助前记住来源视图", () => {
   assert.match(businessSource,
     /title: value\.asset\.title, content: value\.content/,
     "历史正文不能套用当前目录行的标题");
@@ -123,7 +124,4 @@ test("历史全文使用响应版本元数据，帮助返回保留团队资产�
   assert.match(appSource,
     /if \(next === "help"\)[\s\S]*history\.replaceState\(appHistoryState\(view,[\s\S]*history\.pushState\(appHistoryState\("help"\)/,
     "进入帮助前必须把来源视图写回当前历史项");
-  assert.match(appSource,
-    /if \(!knowledgeFocus\)[\s\S]*history\.replaceState\(appHistoryState\("knowledge", next\)/,
-    "根路径切换团队资产页签也要更新可恢复状态");
 });

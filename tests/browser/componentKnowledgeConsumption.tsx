@@ -26,7 +26,7 @@ async function main() {
   // 保留检查卡截图，同时用实际知识库页面验证深链不是只打开文档列表。
   const second = document.createElement("div"); document.body.append(second);
   const library = createRoot(second);
-  flushSync(() => library.render(<KnowledgeLibrary category="documents" onCategoryChange={() => {}} uploadRequest={0} onOpenTask={() => {}} onManage={() => {}} />));
+  flushSync(() => library.render(<KnowledgeLibrary onOpenTask={() => {}} />));
   for (let i = 0; i < 80 && !second.querySelector(".km-document .md"); i++) await new Promise(r => setTimeout(r, 20));
   if (!second.querySelector(".km-document .md")?.textContent?.includes("正式文档正文与完整示例")) throw new Error("知识深链未选择目标文档");
   library.unmount(); second.remove();

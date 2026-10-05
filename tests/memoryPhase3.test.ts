@@ -252,7 +252,7 @@ test("经验审查集中于团队资产，任务页只提供导航，不散落�
   const board = readFileSync(resolve(process.cwd(), "web/src/MemoryBoard.tsx"), "utf8");
   assert.match(board, /MemoryReviewEditor/);
   const footprint = readFileSync(resolve(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf8");
-  assert.match(footprint, /experience=1/);
+  assert.match(footprint, /kbPage=experience/);
   assert.doesNotMatch(footprint, /MemoryReviewEditor|reviewTaskMemory/);
 });
 

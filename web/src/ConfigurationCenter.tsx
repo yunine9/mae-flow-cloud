@@ -27,7 +27,7 @@ export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
         <Button key={id} variant={tab === id ? "default" : "ghost"}
           aria-pressed={tab === id} onClick={() => { setTab(id); history.replaceState(history.state, "", `/configuration?tab=${id}`); }}>{label}</Button>)}
     </nav>
-    {tab === "workflows" ? <WorkflowAssetWorkspace /> : tab === "components" ? <ComponentRepositories /> : tab === "environments" ? <EnvironmentRegistry /> : tab === "knowledge" ? <KnowledgeRepoPane /> : <MappingList key={tab} kind={tab} />}
+    {tab === "workflows" ? <WorkflowAssetWorkspace initialWorkflowId={new URLSearchParams(location.search).get("workflow") || undefined} /> : tab === "components" ? <ComponentRepositories /> : tab === "environments" ? <EnvironmentRegistry /> : tab === "knowledge" ? <KnowledgeRepoPane /> : <MappingList key={tab} kind={tab} />}
   </section>;
 }
 

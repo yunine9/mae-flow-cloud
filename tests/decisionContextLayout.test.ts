@@ -519,7 +519,7 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   // 工具类卡壳;契约锚转向 aria-labelledby(仍是同一块记忆区)。
   assert.match(footprint, /aria-labelledby="knowledge-memories-title"/);
   assert.match(footprint, /查看经验沉淀/);
-  assert.match(footprint, /experience=1/);
+  assert.match(footprint, /kbPage=experience/);
   assert.doesNotMatch(footprint, /reviewTaskMemory|withdrawTaskMemory/, "审查操作集中于团队资产");
   const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
   // 2026-09-03 第二期(1553e0d)把任务页的沉淀入口连同导航条数一起砍掉:

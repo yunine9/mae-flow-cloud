@@ -213,7 +213,7 @@ export function KnowledgeFootprint({ usage, utMethod, taskId, taskStatus, canSyn
       <strong id="knowledge-memories-title" className="text-base">经验沉淀</strong>
       <p className="my-2 text-sm text-muted-foreground">自动整理 {memories.filter(item => !item.withdrawn && !item.superseded_by).length} 条记录，
         其中 {memories.filter(item => !item.withdrawn && !item.superseded_by && (item.review?.status ?? "pending") === "pending").length} 条待确认。不影响任务继续。</p>
-      <a className="inline-flex rounded-md border border-border px-3 py-2 text-sm font-medium text-primary" href={`/?experience=1&source_task=${encodeURIComponent(taskId)}`}>查看经验沉淀</a>
+      <a className="inline-flex rounded-md border border-border px-3 py-2 text-sm font-medium text-primary" href={`/?kbPage=experience&source_task=${encodeURIComponent(taskId)}`}>查看经验沉淀</a>
     </section>
     <section aria-labelledby="knowledge-memory-usage-title"
       className="mx-3.5 mb-3.5 rounded-lg border border-line bg-surface p-3.5">

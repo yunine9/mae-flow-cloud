@@ -4,13 +4,13 @@
  * 2026-09-01 拆分:资产管理(上架/审核/沉淀候选)搬去 KnowledgeAssets,
  * 这里只剩"看数"。原因是两件事的心智完全不同——一边要动手裁决,一边
  * 是只读观察,挤在一根竖轴上谁都看不清,而且管理区一展开就把统计顶到
- * 屏外。现在它们是团队资产下的两个同级页签。
+ * 屏外。2026-10 团队资产视图拆散后,它是"交付分析"下的一个页签。
  *
  * #226 去 legacy:knowledge-flywheel/rank/ranking/opportunities 容器配方
  * 工具类化;指标格(四格大数)与资产榜的列结构原样保留,只换皮。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ComponentProps } from "react";
 import { Database, Check, RotateCwIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import type {
   KnowledgeKind,
   TeamKnowledgeInsights,
 } from "./api";
+import { getKnowledgeInsights } from "./api";
 
 const KIND_LABEL: Record<KnowledgeKind, string> = {
   rules: "项目规则",
@@ -348,4 +349,23 @@ export function KnowledgeInsightsBoard({
         className="mr-1.5">口径</Badge>任务需求、附件与产出文档只留在单任务现场，项目规则只属于相关仓库；团队页只统计正式模块知识和 Skill，交付结果仅作相关性参考。</footer>
     </>}
   </section>;
+}
+
+/** 交付分析页签用的自加载外壳：进页签才读、每分钟刷新一次（读多份任务足迹，不跟任务心跳绑）。 */
+export function KnowledgeInsightsPanel({ onOpenTask }: { onOpenTask: (taskId: string) => void }) {
+  const [insights, setInsights] = useState<TeamKnowledgeInsights>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = () => {
+    setLoading(true); setError("");
+    void getKnowledgeInsights().then(setInsights)
+      .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => {
+    refresh();
+    const timer = window.setInterval(refresh, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <KnowledgeInsightsBoard insights={insights} loading={loading} error={error} onRetry={refresh} onOpenTask={onOpenTask} />;
 }

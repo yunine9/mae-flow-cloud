@@ -1926,6 +1926,8 @@ export interface SkillExtractionJob {
   draft?: string;
   notes?: string;
   error?: string;
+  /** 草稿已提交到 Skill 库审查（"目录/提交号"）。 */
+  submission_id?: string;
 }
 
 /** 定向知识提取:从参考仓起草 SKILL.md。起草是异步的,拿 id 轮询。 */
