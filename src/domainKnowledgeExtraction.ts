@@ -14,6 +14,7 @@ import { IncompleteDomainResearch } from "./domainSkillWork.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
+import { continuingReviewProposal, assertLatestReviewProposal, assertReviewRevision, assertNoPendingReviewProposals, type ReviewProposal } from "./knowledgeReviewCore.ts";
 
 import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
@@ -604,6 +605,10 @@ export class DomainKnowledgeExtraction {
     if (job.documents.some(doc => doc.id !== input.id && doc.target_id === input.target_id && doc.path === path)) throw new Error("该目标文件已有草稿，请更新原编号");
     scanForSecrets("领域知识草稿", Buffer.from(JSON.stringify(input)));
   }
+  private reviewProposals(turns: readonly DomainTurn[]): ReviewProposal<DomainDocumentContent>[] {
+    return turns.flatMap(turn => turn.proposals.map(proposal => ({ turn_id: turn.id, document_id: proposal.document.id,
+      turn_status: turn.status, status: proposal.status, base_revision: proposal.base_revision, value: proposal.document })));
+  }
   private pump() {
     if (this.stopped) return;
     for (const job of this.jobs.values()) {
@@ -614,14 +619,12 @@ export class DomainKnowledgeExtraction {
       let release!: () => void;
       const entry: DomainRunning = { controller, turn, work: Promise.resolve(), released: new Promise<void>(resolve => { release = resolve; }), release: () => release() };
       turn.document_revisions ??= Object.fromEntries(base.map(doc => [doc.id, doc.revision]));
-      const earlierTurns = job.turns.slice(0, job.turns.indexOf(turn)).reverse();
+      const proposals = this.reviewProposals(job.turns), turnIds = job.turns.map(turn => turn.id);
       const workingDocuments = base.map(doc => {
         if (turn.mode === "extract") return doc;
-        const resumed = turn.proposals.find(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision);
-        const previous = earlierTurns.find(previous => previous.status === "done" && previous.proposals.some(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision));
-        const proposal = resumed ?? previous?.proposals.find(proposal => proposal.document.id === doc.id && proposal.status === "pending" && proposal.base_revision === doc.revision);
+        const proposal = continuingReviewProposal(proposals, doc.id, doc.revision, turn.id, turnIds);
         // 后续意见接着已完成的新稿修改，正文与发布基线仍等人工确认。
-        return proposal ? { ...doc, title: proposal.document.title, content: proposal.document.content, sources: proposal.document.sources } : doc;
+        return proposal ? { ...doc, title: proposal.value.title, content: proposal.value.content, sources: proposal.value.sources } : doc;
       });
       job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
       const work = Promise.resolve().then(async () => {
@@ -694,7 +697,7 @@ export class DomainKnowledgeExtraction {
     const job = this.live(id), doc = job.documents.find(d => d.id === input.document?.id);
     this.assertEditable(job);
     if (!doc || this.publishing.has(id)) throw new Error("文档不存在或正在归档");
-    if (input.base_revision !== doc.revision) throw new Error("文档已有新版本，请比较差异后重新保存");
+    assertReviewRevision(doc.revision, input.base_revision, "文档已有新版本，请比较差异后重新保存");
     this.validateDocument(job, input.document);
     if (doc.target_id !== input.document.target_id || doc.path !== input.document.path || doc.layer !== input.document.layer) throw new Error("不能通过编辑改变归档位置");
     return { job, doc };
@@ -711,8 +714,9 @@ export class DomainKnowledgeExtraction {
     if (decision === "accept" && ["queued", "running"].includes(job.status)) throw new Error("当前研究仍在进行，请等待完成后再确认修改");
     if (proposal.status !== "pending") return this.get(id);
     if (decision === "accept") {
-      if (turn!.status !== "done") throw new Error("本轮修改尚未完成，请重试完成后再确认");
-      if (job.turns.slice(job.turns.indexOf(turn!) + 1).some(later => later.proposals.some(item => item.document.id === documentId && item.status === "pending"))) throw new Error("已有更新的修改建议，请重新检视；如需使用此建议，请先放弃后续建议");
+      const document = job.documents.find(document => document.id === documentId);
+      if (!document) throw new Error("文档不存在或正在归档");
+      assertLatestReviewProposal(this.reviewProposals(job.turns), turnId, documentId, document.revision, ["queued", "running"].includes(job.status));
       this.edit(id, { document: proposal.document, base_revision: proposal.base_revision }, operator);
       for (const old of job.turns.flatMap(item => item.proposals)) if (old !== proposal && old.document.id === documentId && old.status === "pending") old.status = "discarded";
     }
@@ -804,12 +808,12 @@ export class DomainKnowledgeExtraction {
     if (input.document_ids && (!Array.isArray(input.document_ids) || input.document_ids.some(id => !job.documents.some(d => d.id === id)))) throw new Error("请选择本次发布的知识文档");
     const selected = job.documents.filter(d => input.document_ids ? input.document_ids.includes(d.id) : d.selected);
     if (!selected.length) throw new Error("请至少选择一份文档");
-    if (job.turns.some(turn => turn.proposals.some(proposal => proposal.status === "pending" && selected.some(doc => doc.id === proposal.document.id)))) throw new Error("所选文档有尚未确认的修改，请先确认或放弃后发布");
+    assertNoPendingReviewProposals(this.reviewProposals(job.turns), selected.map(document => document.id));
     // Check every baseline before writing any member of this publication.
     const existing = listKnowledgeDocuments(this.dataDir);
     const prepared = selected.map(doc => {
       this.validateDocument(job, doc);
-      if (input.expected_revisions && input.expected_revisions[doc.id] !== doc.revision) throw new Error("草稿已有新版本，请刷新后重新发布");
+      if (input.expected_revisions) assertReviewRevision(doc.revision, input.expected_revisions[doc.id], "草稿已有新版本，请刷新后重新发布");
       const target = [job.knowledge_target, ...job.repositories].find(t => t.id === doc.target_id)!;
       const formalId = projectKnowledgeProduction({ kind: "domain", record: job }).documents.find(item => item.id === doc.id)?.knowledge_document_id;
       const previous = formalId ? readKnowledgeDocument(this.dataDir, formalId)

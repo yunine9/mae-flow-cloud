@@ -60,7 +60,7 @@ test("知识任务与审阅接口要求登录，匿名读取和提交不能触�
     assert.equal(savedResponse.status, 200);
     const saved = await savedResponse.json() as { notes: KnowledgeReviewNote[] };
     assert.equal(saved.notes[0].operator, "reviewer");
-    assert.equal(saved.notes[0].revision, undefined);
+    assert.equal(Object.hasOwn(saved.notes[0], "revision"), false, "意见不记版本，靠引用原文与前后文定位");
     assert.equal((await request(`${path}/apply`, "", { note_ids: [saved.notes[0].id] })).status, 401, "真实意见 ID 也不能绕过登录");
     const pending = await (await request(path, cookie)).json() as { notes: KnowledgeReviewNote[] };
     assert.equal(pending.notes[0].status, "open");
@@ -77,7 +77,7 @@ test("知识任务与审阅接口要求登录，匿名读取和提交不能触�
     const publishedResponse = await request(publishedPath, cookie, { document_id: document.id, scope: "line", line: 2, note: "核对异常情况" });
     assert.equal(publishedResponse.status, 200);
     const published = await publishedResponse.json() as { notes: KnowledgeReviewNote[] };
-    assert.equal(published.notes[0].revision, undefined);
+    assert.equal(Object.hasOwn(published.notes[0], "revision"), false, "意见不记版本，靠引用原文与前后文定位");
     assert.equal((await request(`${publishedPath}/resolve`, "", { note_ids: [published.notes[0].id] })).status, 401);
     saveKnowledgeDocument(dataDir, { content: "# 规则\n已核对异常情况" }, "reviewer", document.id);
     const resolvedResponse = await request(`${publishedPath}/resolve`, cookie, { note_ids: [published.notes[0].id] });

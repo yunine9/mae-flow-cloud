@@ -103,6 +103,31 @@ test("生产线验收10/14（F8/D4）：一个真实 HTTP publish 接受全部�
   }
 });
 
+test("B5验收1/生产线验收10/14：组件只保留耐久publish写入口，旧adopt返回404且不写正式库", { timeout: 20_000 }, async () => {
+  const dir = temporary(), { research, manager } = managers(dir);
+  const host = new TaskService({ dataDir: dir, provider: "", model: "", modelsJson: {}, maxConcurrent: 0 });
+  const previousResearch = host.getComponentResearch(), previousManager = host.getDomainKnowledgeExtraction();
+  (host as any).componentResearch = research; (host as any).domainKnowledgeExtraction = manager;
+  const server = createTaskServer(host);
+  try {
+    const record = await seed(dir, research);
+    await within(new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); }), 5_000, "单路发布HTTP启动超过预算");
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const old = await fetch(`${base}/component-research/${record.id}/adopt`, { method: "POST", body: JSON.stringify({ title: "旧入口不可发布", scope: "platform" }), signal: AbortSignal.timeout(5_000) });
+    assert.equal(old.status, 404, "旧发布入口必须退役，不做代理");
+    assert.equal(listKnowledgeDocuments(dir).length, 0);
+    const response = await fetch(`${base}/component-research/${record.id}/publish`, { method: "POST", body: JSON.stringify(input(record)), signal: AbortSignal.timeout(5_000) });
+    assert.equal(response.status, 200, await response.clone().text());
+    const published = await response.json() as ResearchRecord;
+    assert.equal(listKnowledgeDocuments(dir).length, 1);
+    assert.equal(readKnowledgeDocument(dir, published.document_id!).research_source?.job_id, record.id);
+  } finally {
+    await close(research, manager); await close(previousResearch, previousManager); await within(host.shutdown(), 5_000, "单路发布宿主关停超过预算");
+    if (server.listening) await within(new Promise<void>((resolve, reject) => { server.close(error => error ? reject(error) : resolve()); server.closeAllConnections(); }), 5_000, "单路发布HTTP关停超过预算");
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("生产线验收10/14（F8）：后一个所选建议基线冲突时全体预检失败，前一个建议、正式库和原记录字节都不改", { timeout: 15_000 }, async () => {
   const dir = temporary(), { research, manager } = managers(dir);
   try {
@@ -285,7 +310,6 @@ test("生产线验收10/14（F8）：正式提交事务未完成时编辑、选�
       () => research.decideProposal(record.id, turn.id, "accept", "editor"),
       () => research.decideProposal(record.id, turn.id, "discard", "editor"),
       () => research.retry(record.id, "editor"),
-      () => research.adopt(record.id, { title: "绕过固定事务" }, "editor"),
     ];
     for (const action of actions) {
       assert.throws(action, /发布.*未完成|未完成.*发布|补建归档|新修订/);

@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
+import { knowledgeDocumentRoute } from "../src/knowledgeDocumentRoutes.ts";
+import { ComponentResearch } from "../src/componentResearch.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 import type { TaskService } from "../src/taskService.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
@@ -233,5 +235,68 @@ test("生产线验收5/14：领域手动归档HTTP公开preview/create/retry，�
   } finally {
     if (server) await within(new Promise<void>((done, reject) => { server!.close(error => error ? reject(error) : done()); server!.closeAllConnections(); }), "HTTP关停超过5秒预算");
     await close(state.manager); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("B5已发布小改/生产线验收5/8/14：HTTP编辑仅生成平台新版本，人工归档才新建MR并保留旧版本和旧MR", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-http-edit-")), state = harness(dir);
+  const component = new ComponentResearch(dir, async () => { throw new Error("编辑领域知识不应启动组件研究"); });
+  let server: ReturnType<typeof createServer> | undefined;
+  try {
+    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const initial = state.manager.previewArchive(id);
+    const archived = await state.manager.createArchive(id, { issue_no: "REQ-FIRST", expected_revisions: initial.expected_revisions }, "exporter");
+    const formal = readKnowledgeDocument(dir, Object.keys(initial.expected_revisions)[0]);
+    const firstBatch = structuredClone(state.manager.get(id).archive_batches!.find(batch => batch.state === "done")!);
+    const recordBeforeEdit = readFileSync(batchPath(dir, id), "utf8");
+    const service = { options: { dataDir: dir }, getDomainKnowledgeExtraction: () => state.manager,
+      getComponentResearch: () => component, prepareKnowledgeIndex() {} } as unknown as TaskService;
+    const readBody = async (request: IncomingMessage) => {
+      const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      return JSON.parse(Buffer.concat(chunks).toString() || "{}");
+    };
+    server = createServer((request, response) => {
+      const parts = request.url!.slice(1).split("/"), route = parts[0] === "knowledge-documents" ? knowledgeDocumentRoute : domainKnowledgeRoute;
+      void route(request, response, parts, service, "editor", readBody,
+        (out, status, value) => { out.writeHead(status, { "content-type": "application/json" }); out.end(JSON.stringify(value)); });
+    });
+    server.requestTimeout = 5_000;
+    await within(new Promise<void>((done, reject) => { server!.once("error", reject); server!.listen(0, "127.0.0.1", done); }), "HTTP启动超过5秒预算");
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(body), signal: AbortSignal.timeout(5_000) });
+    const content = formal.content + "\n人工核对：取消订单后保留原始支付凭证。";
+    const editedResponse = await post(`/knowledge-documents/${formal.id}`, { content, expected_revision: formal.revision });
+    assert.equal(editedResponse.status, 200);
+    const edited = await editedResponse.json() as typeof formal;
+    assert.equal(edited.id, formal.id); assert.notEqual(edited.revision, formal.revision); assert.equal(edited.content, content);
+    assert.equal(readKnowledgeDocument(dir, formal.id).content, content);
+    await settle(); assert.equal(state.calls.length, 1, "直接编辑不能触发Git或追加旧MR");
+    assert.equal(readFileSync(batchPath(dir, id), "utf8"), recordBeforeEdit, "平台小改不能修改原归档记录");
+
+    const oldVersionResponse = await fetch(`${base}/knowledge-documents/${formal.id}/versions/${formal.revision}`, { signal: AbortSignal.timeout(5_000) });
+    assert.equal(oldVersionResponse.status, 200);
+    assert.equal((await oldVersionResponse.json() as { document: typeof formal }).document.content, formal.content);
+    const stale = await post(`/knowledge-documents/${formal.id}`, { content: "过期页面不能覆盖新正文", expected_revision: formal.revision });
+    assert.equal(stale.status, 400); assert.match((await stale.json() as { error: string }).error, /已有新版本/);
+    assert.equal(readKnowledgeDocument(dir, formal.id).content, content); assert.equal(state.calls.length, 1);
+
+    const previewResponse = await fetch(`${base}/domain-extraction/${id}/archive/preview`, { signal: AbortSignal.timeout(5_000) });
+    assert.equal(previewResponse.status, 200); const preview = await previewResponse.json() as Preview;
+    assert.equal(preview.status_label, "已发布（未归档）");
+    assert.equal(preview.expected_revisions[formal.id], edited.revision); assert.equal(preview.targets[0].files[0].content, content);
+    const secondResponse = await post(`/domain-extraction/${id}/archive/create`, { issue_no: "REQ-SECOND", expected_revisions: preview.expected_revisions });
+    assert.equal(secondResponse.status, 200); const second = await secondResponse.json() as Preview;
+    assert.equal(second.status_label, "已归档"); assert.notEqual(second.targets[0].url, archived.targets[0].url);
+    assert.equal(state.calls.length, 2); assert.equal(state.calls[1].previous, undefined);
+    const batches = state.manager.get(id).archive_batches!;
+    assert.deepEqual(batches.find(batch => batch.id === firstBatch.id), firstBatch);
+    const latest = batches.find(batch => batch.id !== firstBatch.id && batch.state === "done")!;
+    assert.notEqual(latest.publications[0].branch, firstBatch.publications[0].branch);
+    assert.equal(latest.issue_no, "REQ-SECOND"); assert.equal(latest.publications[0].documents[0].knowledge_revision, edited.revision);
+  } finally {
+    if (server) await within(new Promise<void>((done, reject) => { server!.close(error => error ? reject(error) : done()); server!.closeAllConnections(); }), "HTTP关停超过5秒预算");
+    await within(component.shutdown(), "组件管理器关停超过5秒预算"); await close(state.manager);
+    rmSync(dir, { recursive: true, force: true });
   }
 });

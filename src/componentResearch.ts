@@ -19,7 +19,6 @@ import {
 } from "./componentRepositories.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import {
-  saveKnowledgeDocument,
   readKnowledgeDocument,
   readKnowledgeDocumentVersion,
   prepareKnowledgeDocument,
@@ -29,6 +28,8 @@ import {
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { editResearchDocument, researchDocumentMarkdown, sectionReady,
   type ResearchSection, type ResearchDocument, type ResearchDocumentEdit, type ResearchReviewTurn } from "./componentResearchDocument.ts";
+import { assertLatestReviewProposal, assertNoPendingReviewProposals, assertReviewRevision,
+  continuingReviewProposal, type ReviewProposal } from "./knowledgeReviewCore.ts";
 export interface ComponentChallenge {
   item_id: string; source_digest: string; language: string; repository_ids: string[]; claim: string;
 }
@@ -81,6 +82,12 @@ export interface ComponentPublishInput extends Record<string, unknown> {
   update_document_id: string | null;
   update_document_revision?: string;
   title: string;
+}
+function reviewProposals(record: ResearchRecord): ReviewProposal<ResearchSection>[] {
+  return (record.review_turns ?? []).flatMap(turn => turn.proposal ? [{
+    turn_id: turn.id, document_id: turn.section_id, turn_status: turn.status,
+    status: turn.proposal.status, base_revision: turn.proposal.base_revision, value: turn.proposal.section,
+  }] : []);
 }
 export interface ResearchInput {
   mode?: "topic" | "all";
@@ -372,13 +379,12 @@ export class ComponentResearch {
       if (review) review.base_revision ??= review.proposal?.base_revision ?? previousDocument?.sections.find(section => section.id === review.section_id)?.revision;
       let revisedDocument = previousDocument;
       if (review && revisedDocument) {
-        const earlierTurns = record.review_turns!.slice(0, record.review_turns!.indexOf(review)).reverse();
+        const proposals = reviewProposals(record);
         revisedDocument = { ...revisedDocument, sections: revisedDocument.sections.map(section => {
-          const resumed = section.id === review.section_id && review.proposal?.status === "pending" && review.proposal.base_revision === section.revision ? review.proposal : undefined;
-          const previous = earlierTurns.find(previous => previous.status === "done" && previous.section_id === section.id && previous.proposal?.status === "pending" && previous.proposal.base_revision === section.revision);
-          const proposal = resumed ?? previous?.proposal;
+          const proposal = continuingReviewProposal(proposals, section.id, section.revision, review.id,
+            record.review_turns!.map(turn => turn.id));
           // 接着已完成的候选稿修改，原章节版本与选择状态保留到确认时。
-          return proposal ? { ...structuredClone(proposal.section), revision: section.revision, selected: section.selected } : section;
+          return proposal ? { ...structuredClone(proposal.value), revision: section.revision, selected: section.selected } : section;
         }) };
       }
       this.update(record, { status: "running", error: undefined, stage: review ? (review.mode === "discuss" ? "正在回答组件问题" : "正在返工指定组件") : "准备组件源码" });
@@ -557,7 +563,7 @@ export class ComponentResearch {
     this.assertPublicationComplete(record);
     if (!record?.document || record.deleted_at || record.document_id || !section) throw new Error("当前章节不可修改");
     if (["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
-    if (section.revision !== input.base_revision) throw new Error("章节已有新版本，请比较后重新保存");
+    assertReviewRevision(section.revision, input.base_revision, "章节已有新版本，请比较后重新保存");
     const document = editResearchDocument(record.document, { action: "section", section: input.section }, (record.components ?? [record.component]).map(c => c.id));
     const metadata = document.sections.find(s => s.id === section.id)?.paradigm;
     if (metadata) {
@@ -581,7 +587,10 @@ export class ComponentResearch {
     if (decision === "accept" && ["queued", "running"].includes(record.status)) throw new Error("当前研究仍在进行，请等待完成后再确认修改");
     if (turn.proposal.status !== "pending") return this.get(id);
     if (decision === "accept") {
-      if (record.review_turns!.slice(record.review_turns!.indexOf(turn) + 1).some(later => later.section_id === turn.section_id && later.proposal?.status === "pending")) throw new Error("已有更新的修改建议，请重新检视；如需使用此建议，请先放弃后续建议");
+      const section = record.document?.sections.find(section => section.id === turn.section_id);
+      if (!section) throw new Error("当前章节不可修改");
+      assertLatestReviewProposal(reviewProposals(record), turn.id, turn.section_id, section.revision,
+        ["queued", "running"].includes(record.status));
       this.editSection(id, { section: turn.proposal.section, base_revision: turn.proposal.base_revision }, operator);
       for (const old of record.review_turns ?? []) if (old !== turn && old.section_id === turn.section_id && old.proposal?.status === "pending") old.proposal.status = "discarded";
     }
@@ -609,9 +618,13 @@ export class ComponentResearch {
       if (published.revision === record.published_revision) baseline = published.content;
       else baseline = readKnowledgeDocumentVersion(this.dir, published.id, record.published_revision).document.content;
     }
-    if (published.content.trim() !== baseline.trim()) throw new Error("正式文档已由其他入口修改，请先核对当前文档，避免覆盖人工更新");
+    // 正式文档在阅读页编辑或恢复过时，研究稿是分章节结构，无法吸收那份 Markdown 改动。
+    // 以前直接拒绝，人就再也发不起更新（死路）；现在照常开始，如实提示别处的修改不会带入，
+    // 旧版本仍在版本历史里可对比，发布前由人审查决定。
+    const manualChanged = published.content.trim() !== baseline.trim();
     this.commitPublicationRecord({ ...record, update_document_id: published.id, update_document_revision: published.revision,
-      document_id: undefined, publication_intent: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories }, stage: "选择受影响章节，生成更新建议", operator });
+      document_id: undefined, publication_intent: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories },
+      stage: manualChanged ? "选择受影响章节，生成更新建议。注意：正式文档在别处改过，本次更新以研究稿为基础，别处的修改不会自动带入，可在版本历史中对比" : "选择受影响章节，生成更新建议", operator });
     return this.get(id);
   }
   markdown(id: string) {
@@ -647,12 +660,12 @@ export class ComponentResearch {
     if (record.document && !selected.length) throw new Error("请选择至少一个已完成组件");
     for (const section of selected) {
       const viewed = input.sections.find(item => item.id === section.id)!;
-      if (viewed.revision !== section.revision) throw new Error("章节已有新版本，请比较后重新发布");
+      assertReviewRevision(section.revision, viewed.revision, "章节已有新版本，请比较后重新发布");
       const latest = [...record.review_turns ?? []].reverse().find(turn => turn.section_id === section.id && turn.proposal?.status === "pending");
       if (!Object.hasOwn(viewed, "proposal_id") || viewed.proposal_id !== (latest?.id ?? null)) throw new Error("组件修改建议已有变化，请重新检视后发布");
       if (!latest) continue;
-      if (latest.status !== "done") throw new Error("修改建议尚未完成，请等待本轮结束后发布");
-      if (latest.proposal!.base_revision !== section.revision) throw new Error("修改建议基线冲突，请比较章节最新版本后发布");
+      assertLatestReviewProposal(reviewProposals(record), latest.id, section.id, section.revision, false,
+        "修改建议基线冲突，请比较章节最新版本后发布");
       const document = editResearchDocument(accepted.document!, { action: "section", section: structuredClone(latest.proposal!.section) },
         (record.components ?? [record.component]).map(component => component.id));
       const metadata = document.sections.find(item => item.id === section.id)?.paradigm;
@@ -668,6 +681,7 @@ export class ComponentResearch {
       accepted.document = document;
       for (const turn of accepted.review_turns ?? []) if (turn.section_id === section.id && turn.proposal?.status === "pending") turn.proposal.status = turn.id === latest.id ? "accepted" : "discarded";
     }
+    assertNoPendingReviewProposals(reviewProposals(accepted), selected.map(section => section.id));
     if (accepted.document?.sections.some(section => section.selected && !sectionReady(section))) throw new Error("请选择已完成且含最佳示例的组件");
     const formalId = record.document_id ?? record.update_document_id;
     const previous = formalId ? readKnowledgeDocument(this.dir, formalId) : undefined;
@@ -719,60 +733,9 @@ export class ComponentResearch {
       throw new Error("正式知识已有人工修改或恢复历史，发布意图未覆盖其他人的修改");
     }
     if (current?.revision !== intent.formal.document.revision) writePreparedKnowledgeDocument(this.dir, intent.formal);
-    this.onAdopt();
+    // 相同正式版本的重复发布不应重复触发正式库变更回调。
+    if (!intent.formal.unchanged) this.onAdopt();
     this.commitPublicationRecord(structuredClone(intent.record));
-  }
-  adopt(id: string, input: Record<string, unknown>, operator: string) {
-    const record = this.records.get(id);
-    this.assertPublicationComplete(record);
-    if (!record || record.challenge || record.deleted_at || record.status !== "done") throw new Error("请等待组件草稿生成后采纳");
-    const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
-    if (formalId && !record.update_document_id) {
-      const published = readKnowledgeDocument(this.dir, formalId);
-      this.update(record, { document_id: formalId, published_revision: published.revision, stage: "已入库" });
-      return published;
-    }
-    this.assertSelectedChangesConfirmed(record);
-    if (record.document && (!record.document.sections.some(s => s.selected)
-        || record.document.sections.some(s => s.selected && !sectionReady(s)))) throw new Error("请选择至少一个已完成且含最佳示例的组件");
-    const content = record.document ? researchDocumentMarkdown(String(input.title ?? record.topic), record.document, true)
-      : String(input.content ?? record.draft ?? "");
-    scanForSecrets("组件知识.md", Buffer.from(content));
-    const previous = record.update_document_id ? readKnowledgeDocument(this.dir, record.update_document_id) : undefined;
-    if (previous && previous.revision !== record.update_document_revision) throw new Error("正式文档已发生变化，请先比较最新版本，未覆盖他人修改");
-    const document = saveKnowledgeDocument(
-      this.dir,
-      {
-        ...previous,
-        ...input,
-        title:
-          input.title ??
-          `${record.language} · ${record.topic}`.slice(0, 160),
-        content,
-        technologies: [record.language],
-        research_source: {
-          job_id: id,
-          repository: record.component.repository,
-          branch: record.component.branch,
-          path: record.component.path,
-          revision: record.revision,
-          components: record.components?.map(c => ({id:c.id, repository:c.repository, branch:c.branch, path:c.path, revision:record.revisions?.[c.id]})),
-        },
-        when_to_use:
-          input.when_to_use ??
-          `${record.language} / ${record.topic}`,
-        active: true,
-      },
-      operator,
-      record.update_document_id,
-      record.document ? { maxContentBytes: 16 * 1024 * 1024 } : {},
-    );
-    this.update(record, { document_id: document.id, published_revision: document.revision, stage: "已采纳为知识" });
-    this.onAdopt();
-    return document;
-  }
-  private assertSelectedChangesConfirmed(record: ResearchRecord) {
-    if (record.review_turns?.some(turn => turn.proposal?.status === "pending" && record.document?.sections.some(section => section.id === turn.section_id && section.selected))) throw new Error("所选组件有尚未确认的修改，请先确认或放弃后发布");
   }
   private warnStopWrite(record: ResearchRecord, error: unknown) {
     const code = (error as NodeJS.ErrnoException)?.code;

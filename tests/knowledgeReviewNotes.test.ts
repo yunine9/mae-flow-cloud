@@ -37,20 +37,17 @@ test("批注按文稿持久化并保留选中位置，不要求版本；非法�
     assert.equal(result.notes[0].status, "open");
     assert.equal(result.notes[0].operator, "alice");
     assert.equal(result.notes[0].document_title, "业务规则");
-    assert.equal(result.notes[0].revision, undefined);
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "domain", "dkx-1"), JSON.parse(JSON.stringify(result)));
-    const compatible = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", revision: 2, scope: "document", note: "旧页面也可继续提意见" }, "alice");
-    assert.equal(compatible.notes[1].revision, undefined, "旧客户端携带的版本不进入新批注");
     assert.throws(() => listKnowledgeReviewNotes(f.sources, "domain", "../dkx-1"), /编号无效/);
-    assert.equal(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes.length, 2);
+    assert.equal(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes.length, 1);
   } finally { f.cleanup(); }
 });
 
 test("文稿更新后仍把所选意见交给原领域修订入口，并记录该轮；不能重复提交", () => {
   const f = fixture();
   try {
-    saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", revision: 3, scope: "document", note: "补充失败处理" }, "alice");
-    const notes = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "api", revision: 2, scope: "document", note: "增加示例" }, "bob").notes;
+    saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "补充失败处理" }, "alice");
+    const notes = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "api", scope: "document", note: "增加示例" }, "bob").notes;
     f.domainJob.documents[0].revision = 4; f.domainJob.documents[0].content = "已调整后的正文";
     const result = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [notes[0].id] }, "reviewer");
     assert.equal(result.notes[0].status, "submitted");
@@ -72,7 +69,7 @@ test("文稿更新后仍把所选意见交给原领域修订入口，并记录�
 test("文稿删除或原修订入口拒绝时保留未处理意见，不假装成功", () => {
   const f = fixture();
   try {
-    const { notes } = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", revision: 3, scope: "document", note: "补充边界" }, "alice");
+    const { notes } = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "rules", scope: "document", note: "补充边界" }, "alice");
     const removed = f.domainJob.documents.shift()!;
     assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [notes[0].id] }, "alice"), /不存在/);
     f.domainJob.documents.unshift({ ...removed, revision: 4 });
@@ -88,7 +85,6 @@ test("组件批注按现有单章节返工边界提交，跨章节不会部分�
   try {
     saveKnowledgeReviewNote(f.sources, "component", "cr-1", { document_id: "pool", scope: "line", line: 1, note: "说明回收时机" }, "alice");
     const { notes } = saveKnowledgeReviewNote(f.sources, "component", "cr-1", { document_id: "cache", scope: "document", note: "增加失效示例" }, "alice");
-    assert.ok(notes.every(note => note.revision === undefined));
     f.componentJob.document!.sections[0].revision = 5;
     assert.throws(() => applyKnowledgeReviewNotes(f.sources, "component", "cr-1", { note_ids: notes.map(note => note.id) }, "alice"), /一个章节/);
     assert.equal(f.calls.length, 0);
@@ -108,7 +104,6 @@ test("正式文档意见保存后可刷新查看，修改正文后直接标为�
     const other = saveKnowledgeDocument(f.dataDir, { title: "其他规则", content: "其他文档" }, "alice");
     const input = { document_id: doc.id, scope: "line" as const, line: 2, quote: "第二行", note: "补充异常处理" };
     const saved = saveKnowledgeReviewNote(f.sources, "published", doc.id, input, "alice");
-    assert.equal(saved.notes[0].revision, undefined);
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", doc.id), JSON.parse(JSON.stringify(saved)));
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "published", doc.id, { ...input, document_id: other.id }, "alice"), /不存在/);
     assert.throws(() => listKnowledgeReviewNotes(f.sources, "published", `../${doc.id}`), /编号无效/);
@@ -120,8 +115,8 @@ test("正式文档意见保存后可刷新查看，修改正文后直接标为�
     assert.equal(resolved.notes[0].quote, "第二行", "正文更新不抹掉原意见引用");
     assert.deepEqual(resolveKnowledgeReviewNotes(f.sources, "published", doc.id, { note_ids: [saved.notes[0].id] }, "alice"), resolved, "重复处理不改写处理人");
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", doc.id), resolved);
-    const next = saveKnowledgeReviewNote(f.sources, "published", doc.id, { ...input, revision: doc.revision, note: "再次补充" }, "alice");
-    assert.equal(next.notes.length, 2); assert.equal(next.notes[1].revision, undefined, "旧客户端带版本也不会将意见绑定到旧正文");
+    const next = saveKnowledgeReviewNote(f.sources, "published", doc.id, { ...input, note: "再次补充" }, "alice");
+    assert.equal(next.notes.length, 2);
     assert.throws(() => applyKnowledgeReviewNotes(f.sources, "published", doc.id, { note_ids: [next.notes[1].id] }, "alice"), /先更新文档/);
     assert.equal(f.calls.length, 0);
   } finally { f.cleanup(); }
@@ -139,7 +134,7 @@ test("Skill Markdown 意见按包和文件隔离，更新包后仍可处理，�
     await uploadHostSkill(f.dataDir, "another-skill", files("其他包说明"), "alice", metadata);
     const input = { document_id: "references/guide.md", scope: "document" as const, note: "补充使用示例" };
     const saved = saveKnowledgeReviewNote(f.sources, "skill", "review_skill.v1", input, "alice");
-    assert.equal(saved.notes[0].document_id, input.document_id); assert.equal(saved.notes[0].revision, undefined);
+    assert.equal(saved.notes[0].document_id, input.document_id);
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "skill", "review_skill.v1", { ...input, document_id: "../SKILL.md" }, "alice"), /不存在/);
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "skill", "review_skill.v1", { ...input, document_id: "scripts/run.txt" }, "alice"), /不存在/);
     assert.throws(() => listKnowledgeReviewNotes(f.sources, "skill", "../review_skill.v1"), /编号无效/);
@@ -157,7 +152,7 @@ test("Skill Markdown 意见按包和文件隔离，更新包后仍可处理，�
 test("组件章节的意见可在人工修改后标为已处理，不触发新研究", () => {
   const f = fixture();
   try {
-    const { notes } = saveKnowledgeReviewNote(f.sources, "component", "cr-1", { document_id: "pool", revision: 4, scope: "line", line: 1, note: "补充连接释放时机" }, "alice");
+    const { notes } = saveKnowledgeReviewNote(f.sources, "component", "cr-1", { document_id: "pool", scope: "line", line: 1, note: "补充连接释放时机" }, "alice");
     f.componentJob.document!.sections[0].revision = 5;
     const resolved = resolveKnowledgeReviewNotes(f.sources, "component", "cr-1", { note_ids: [notes[0].id] }, "bob");
     assert.equal(resolved.notes[0].status, "resolved"); assert.equal(f.calls.length, 0);

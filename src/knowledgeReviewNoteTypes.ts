@@ -1,8 +1,6 @@
 export type KnowledgeReviewKind = "domain" | "component" | "published" | "skill";
 export interface KnowledgeReviewNoteInput {
   document_id: string;
-  /** 兼容旧批注记录，新批注不保存版本。 */
-  revision?: number | string;
   scope: "line" | "document" | "study";
   line?: number;
   line_end?: number;

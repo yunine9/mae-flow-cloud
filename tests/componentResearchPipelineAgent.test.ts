@@ -8,6 +8,7 @@ import { CloudSession } from "../src/sessionDriver.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
+import { componentPublishInput } from "./fixtures/componentPublish.ts";
 
 for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源隔离、独立回读、程序提取和局部修订`, async () => {
   const dir = mkdtempSync(join(tmpdir(), "component-agent-")), repo = join(dir, "base"), ec = join(dir, "ec"); const old = process.env.MAE_FLOW_EC_BIN;
@@ -105,7 +106,7 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     const report = await finished(run.id);
     assert.equal(sessions.length, beforeChallenge + 1, "挑战只运行一个独立只读会话，不走整套萃取");
     assert.match(report.draft!, /核对代码/); assert.equal(report.document?.sections.length, 0);
-    assert.throws(() => service.adopt(run.id, {}, "expert"), /草稿/);
+    assert.throws(() => service.publish(run.id, componentPublishInput(report), "expert"), /草稿/);
     assert.equal(service.get(job.id).document!.sections.length, 4, "挑战不改写原文档");
   } finally { await service.shutdown(); intercepted.mock.restore(); if (old === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = old; rmSync(dir, { recursive: true, force: true }); }
 });

@@ -101,16 +101,6 @@ export async function componentResearchRoute(
           202,
           research.start(await readBody(request, 8192), operator),
         );
-      if (request.method === "POST" && parts[2] === "adopt")
-        return json(
-          response,
-          200,
-          research.adopt(
-            parts[1],
-            await readBody(request, 3 * 1024 * 1024),
-            operator,
-          ),
-        );
     }
     return json(response, 404, { error: "未知组件知识操作" });
   } catch (error) {

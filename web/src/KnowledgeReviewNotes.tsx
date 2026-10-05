@@ -9,7 +9,7 @@ import type { KnowledgeReviewNote, KnowledgeReviewKind } from "../../src/knowled
 
 /** 意见针对整篇文档保存，研究草稿可交给已有 Agent 修订流程。 */
 export function KnowledgeReviewNotes({ kind, jobId, documentId, children, toolbarTarget, commentOnly = false, onEdit, working = false, openRequest = 0 }: {
-  kind: KnowledgeReviewKind; jobId: string; documentId: string; revision?: number | string; children: ReactNode;
+  kind: KnowledgeReviewKind; jobId: string; documentId: string; children: ReactNode;
   toolbarTarget?: HTMLElement | null; commentOnly?: boolean; onEdit?: (message: string) => void; working?: boolean; openRequest?: number;
 }) {
   const comments = kind === "published" || kind === "skill" || commentOnly;
