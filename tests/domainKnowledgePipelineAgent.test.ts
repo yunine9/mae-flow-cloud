@@ -42,7 +42,7 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
       assert.match(prompt, /METHOD_A/); assert.doesNotMatch(prompt, /先用.*phase-|前两个模块|knowledge_research|知识正文写作要求/);
       if (!data.step) {
         assert.equal(config.resumeSession, true);
-        await call("business_knowledge", { tool: "knowledge_search", question: "ROOT_SHARED AR20260001 取消约束" });
+        await call("business_knowledge", { question: "ROOT_SHARED AR20260001 取消约束" });
         await call("knowledge_work", { action: "schedule", steps: [
           { id: "answer", title: "解释规则", instructions: "读资料及源码后写一份问答", depends_on: [], readonly: false },
           { id: "check", title: "核对结论", instructions: "回查资料并评审问答", depends_on: ["answer"], readonly: true },
@@ -59,12 +59,11 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
         assert.ok(shared.entries[0].evidence_id);
         const raw = await call("knowledge_evidence", { action: "read", evidence_id: shared.entries[0].evidence_id });
         assert.match(raw.content, /AR20260001/);
-        for (const tool of ["ar_fur_info", "ar_idp_docs", "ar_history_similar"]) await call("business_knowledge", { tool, ar_code: "AR20260001" });
         // component_source returns plain source, so use the raw tool here.
         const source = await config.extraTools.find((t: any) => t.name === "component_source").execute("read", { action: "read", component_id: "repo-1", path: "src/order.ts" }, new AbortController().signal);
         assert.equal(!!source.isError, false);
         await config.extraTools.find((t: any) => t.name === "knowledge_material").execute("material", { id: material.id }, new AbortController().signal);
-        const queried = await config.extraTools.find((t: any) => t.name === "business_knowledge").execute("query", { tool: "knowledge_search", question: "取消为什么改为冲正，失败怎么处理" }, new AbortController().signal);
+        const queried = await config.extraTools.find((t: any) => t.name === "business_knowledge").execute("query", { question: "取消为什么改为冲正，失败怎么处理" }, new AbortController().signal);
         assert.equal(!!queried.isError, false);
         if (data.step.readonly) {
           assert.equal((await call("knowledge_draft", { action: "read", id: "guide" })).content, body);
@@ -89,12 +88,12 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
     for (const config of sessions) {
       const system = (config.additionalSystemInstructions ?? []).join("\n");
       assert.match(system, /上传资料与无线豆包/); assert.match(system, /business_knowledge/); assert.match(system, /knowledge_material/);
-      assert.match(system, /knowledge_evidence/); assert.match(system, /不能编造单号/);
+      assert.match(system, /knowledge_evidence/); assert.match(system, /基站、网管/);
     }
     assert.equal(final.turns[0].revisions?.["repo-1"], revision);
     assert.ok(final.evidence.some(e => e.tool === "knowledge_material")); assert.ok(final.evidence.some(e => e.tool === "business_knowledge"));
     assert.equal(final.evidence.filter(e => e.tool === "knowledge_evidence" && e.action === "read").length, 2);
-    for (const action of ["ar_fur_info", "ar_idp_docs", "ar_history_similar"]) assert.ok(final.evidence.some(e => e.tool === "business_knowledge" && e.action === action && e.status === "available"));
+    assert.ok(final.evidence.every(e => e.tool !== "business_knowledge" || e.action === "knowledge_search"), "无线豆包只做知识检索");
     assert.equal(skills.current("component").digest, originalComponent);
     const state = JSON.parse(readFileSync(join(root, "domain-extraction", job.id, "skill-runs", final.turns[0].id, "work.json"), "utf8"));
     assert.deepEqual(state.steps.map((s: any) => s.id), ["answer", "check"]);

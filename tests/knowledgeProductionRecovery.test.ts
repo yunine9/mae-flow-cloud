@@ -21,7 +21,7 @@ function save(dataDir: string, directory: string, id: string, name: string, reco
 }
 function domain(status: DomainKnowledgeJob["status"]): DomainKnowledgeJob {
   return { id: `dkx-${randomUUID()}`, title: "订单", scope: "订单规则", issue_no: "REQ-1", operator: "alice", created_at: createdAt,
-    repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false, knowledge_target: target,
+    repositories: [], material_ids: [], knowledge_target: target,
     status, stage: "研究中", revisions: { domain: "kept-revision" }, documents: [], evidence: [], publications: [],
     turns: status === "done" ? [] : [{ id: "original-turn", mode: "extract", document_ids: [], message: "订单", operator: "alice", status: status as "queued" | "running", created_at: createdAt, proposals: [] }],
     archive_batches: [] };

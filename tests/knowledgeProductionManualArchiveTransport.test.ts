@@ -51,7 +51,7 @@ async function fixture() {
   const target = { id: "domain", name: "领域仓", repository: remote, branch: "main", path: "", docs_path: "docs/domain" };
   const formal = saveKnowledgeDocument(root, { title: "订单规则", content: "# 订单规则", scope: "platform" }, "alice");
   const job: DomainKnowledgeJob = { id: "dkx-manual-archive-transport", issue_no: "REQ-1", issue_description: "整理订单规则", title: "订单", scope: "规则", operator: "alice", created_at: new Date().toISOString(),
-    repositories: [], knowledge_target: target, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, turns: [], evidence: [], publications: [],
+    repositories: [], knowledge_target: target, material_ids: [], status: "done", stage: "待审查", revisions: {}, turns: [], evidence: [], publications: [],
     documents: [{ id: "orders", title: "订单规则", target_id: "domain", path: "docs/domain/orders.md", layer: "domain", content: "# 订单规则", sources: "固定版本源码", revision: 1, selected: true, base_content: null, base_revision: "", knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1, history: [] }] };
   const publication: DomainPublication = { target_id: "domain", branch: "codex/knowledge-fixture", state: "failed", mr_attempted: true,
     documents: job.documents.map(doc => ({ id: doc.id, path: doc.path, content: doc.content, revision: doc.revision,

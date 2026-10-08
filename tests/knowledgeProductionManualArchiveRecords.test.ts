@@ -13,7 +13,7 @@ const target = { id: "domain", name: "知识仓", repository: "https://example.t
 function record(dir: string): DomainKnowledgeJob {
   const formal = saveKnowledgeDocument(dir, { title: "正式领域知识", content: "已审查的正式规则" }, "alice");
   return { id: `dkx-${randomUUID()}`, title: "订单域", scope: "订单规则", operator: "alice", created_at: "2026-10-03T00:00:00Z", status: "done", stage: "已发布", issue_no: "REQ-ARCHIVE",
-    knowledge_target: target, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false, revisions: {}, turns: [], evidence: [], publications: [],
+    knowledge_target: target, repositories: [], material_ids: [], revisions: {}, turns: [], evidence: [], publications: [],
     documents: [{ id: "rules", title: formal.title, target_id: "domain", path: "domains/rules.md", layer: "domain", content: formal.content, sources: "源码",
       selected: true, revision: 1, base_content: null, base_revision: "", history: [], knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 }] };
 }

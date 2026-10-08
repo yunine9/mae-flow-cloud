@@ -14,7 +14,7 @@ import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 
 const repository = { id: "orders", name: "订单", repository: "https://example.test/orders.git", branch: "main", path: "", docs_path: "domains" };
 function domainRecord(): DomainKnowledgeJob {
-  return { id: `dkx-${randomUUID()}`, title: "正常领域研究", scope: "订单规则", operator: "alice", created_at: "2026-10-02T00:00:00Z", repositories: [repository], knowledge_target: { ...repository, id: "domain" }, material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "等待审查", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+  return { id: `dkx-${randomUUID()}`, title: "正常领域研究", scope: "订单规则", operator: "alice", created_at: "2026-10-02T00:00:00Z", repositories: [repository], knowledge_target: { ...repository, id: "domain" }, material_ids: [], status: "done", stage: "等待审查", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
 }
 function componentRecord(): ResearchRecord {
   return { id: `cr-${randomUUID()}`, component: { id: "orders", name: "订单", repository: repository.repository, branch: "main", path: "", languages: ["java"], enabled: true, description: "" }, language: "java", topic: "正常组件研究", operator: "alice", key: "fixture", status: "done", created_at: "2026-10-02T00:00:00Z", stage: "等待审查", evidence: [] };

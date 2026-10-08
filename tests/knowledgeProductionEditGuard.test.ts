@@ -44,7 +44,7 @@ for (const kind of ["domain", "component"] as const) test(`生产线验收14（F
   const repository = { id: "domain", name: "知识仓", repository: "https://example.test/knowledge.git", branch: "main", path: "", docs_path: "domains" };
   const record = kind === "domain" ? {
     id, title: "订单", scope: "订单", operator: "alice", created_at: new Date().toISOString(), repositories: [], knowledge_target: repository,
-    material_ids: [], ar_codes: [], use_wxdoubao: true, status: "running", stage: "研究中", revisions: {}, evidence: [], publications: [],
+    material_ids: [], status: "running", stage: "研究中", revisions: {}, evidence: [], publications: [],
     documents: [{ ...content, content: formal.content, revision: 1, selected: true, history: [], base_content: null, base_revision: "a".repeat(40), knowledge_document_id: formal.id }],
     turns: [{ id: "original", mode: "extract", document_ids: [], message: "订单", operator: "alice", created_at: new Date().toISOString(), status: "running", proposals: [] }],
   } : {
@@ -74,7 +74,7 @@ for (const kind of ["domain", "component"] as const) test(`生产线验收14（F
 test("生产线验收3：领域活动状态缺少活动轮次或嵌套容器损坏时，隔离且不改原字节", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-nested-corrupt-"));
   const base: DomainKnowledgeJob = { id: "", title: "好任务", scope: "订单", operator: "alice", created_at: new Date().toISOString(), repositories: [],
-    knowledge_target: { id: "domain", name: "知识仓", repository: "", branch: "main", path: "", docs_path: "domains" }, material_ids: [], ar_codes: [], use_wxdoubao: true,
+    knowledge_target: { id: "domain", name: "知识仓", repository: "", branch: "main", path: "", docs_path: "domains" }, material_ids: [],
     status: "done", stage: "等待审查", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
   const orphan = { ...content, target_id: "missing", revision: 1, selected: true, history: [], base_content: null, base_revision: "" };
   const mutations: Record<string, unknown>[] = [{ status: "queued" }, { status: "running" }, { source_repositories: {} },

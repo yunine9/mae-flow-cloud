@@ -16,7 +16,7 @@ import type { ResearchRecord } from "../src/componentResearch.ts";
 
 function domain(): DomainKnowledgeJob {
   return { id: "dkx-1", title: "结算", scope: "结算", operator: "alice", created_at: "2026-09-30T01:00:00Z", status: "done", stage: "", revisions: {}, repositories: [],
-    knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/k", branch: "main", path: "", docs_path: "docs" }, material_ids: [], ar_codes: [], use_wxdoubao: false,
+    knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/k", branch: "main", path: "", docs_path: "docs" }, material_ids: [],
     documents: [{ id: "doc", title: "规则", target_id: "domain", path: "docs/a.md", layer: "domain", content: "规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [], knowledge_document_id: "kd-1", published_document_revision: 2, published_revision: "r" }],
     turns: [], evidence: [], publications: [] };
 }

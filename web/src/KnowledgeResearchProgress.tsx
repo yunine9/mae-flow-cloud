@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Markdown } from "./markdown";
 
 type Evidence = Record<string, unknown>;
-const actions: Record<string, string> = { list: "浏览目录", tree: "浏览目录", read: "读取文件", search: "搜索源码", kw: "搜索跨仓调用", nls: "查找相关代码", knowledge_search: "检索业务知识", ar_fur_info: "查询功能信息", ar_idp_docs: "查询设计文档", ar_mr_diff: "查询代码变更", ar_history_similar: "查询相似历史" };
+const actions: Record<string, string> = { list: "浏览目录", tree: "浏览目录", read: "读取文件", search: "搜索源码", kw: "搜索跨仓调用", nls: "查找相关代码", knowledge_search: "查询无线豆包" };
 const failed = (event: Evidence) => !!event.error || ["failed", "error"].includes(String(event.status));
 const text = (value: unknown) => value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
 function summary(event: Evidence) {

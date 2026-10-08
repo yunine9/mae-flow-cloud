@@ -43,7 +43,7 @@ async function fixture(password = "fixture-password") {
   const formal = saveKnowledgeDocument(root, { title: "状态", content: "# 状态", scope: "platform" }, "alice");
   const doc: DomainKnowledgeJob["documents"][number] = { id: "states", title: "状态", target_id: target.id, path: "docs/domain/states.md", layer: "domain", content: "# 状态", sources: "source", revision: 1, selected: true, base_content: null, base_revision: "", knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1, history: [] };
   const job: DomainKnowledgeJob = { id: "dkx-error-fixture", issue_no: "REQ-1", issue_description: "整理订单状态", title: "订单", scope: "状态", operator: "alice", created_at: new Date().toISOString(), repositories: [], knowledge_target: target,
-    material_ids: [], use_wxdoubao: false, ar_codes: [], status: "done", stage: "待审查", revisions: {}, documents: [doc], turns: [], evidence: [], publications: [] };
+    material_ids: [], status: "done", stage: "待审查", revisions: {}, documents: [doc], turns: [], evidence: [], publications: [] };
   let saved: DomainPublication | undefined;
   const save = (value: DomainPublication) => { saved = structuredClone(value); };
   return { root, publisher, platformUrl, target, job, response, requests, save, saved: () => saved, disconnectBody: () => incomplete?.destroy(),

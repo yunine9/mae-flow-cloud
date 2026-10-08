@@ -25,7 +25,7 @@ export async function extractionConfigurationRoute(request: IncomingMessage, res
       const close = () => controller.abort();
       response.once("close", close);
       try {
-        const result = await callWxdoubao("knowledge_search", { question: "知识库连接验证" }, { signal: controller.signal });
+        const result = await callWxdoubao({ question: "知识库连接验证" }, { signal: controller.signal });
         return json(response, 200, { configured: true, state: result.state, message: result.state === "empty" ? "连接成功，本次查询无结果" : "连接和检索权限正常" });
       } finally { response.removeListener("close", close); }
     }

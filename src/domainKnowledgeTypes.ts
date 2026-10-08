@@ -65,7 +65,7 @@ export interface DomainKnowledgeJob {
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
   source_repositories?: KnowledgeRepository[];
   archive_configured?: boolean; archive_revision?: number;
-  material_ids: string[]; use_wxdoubao: boolean; ar_codes: string[];
+  material_ids: string[];
   deleted_at?: string; deleted_by?: string;
   status: "idle" | "queued" | "running" | "done" | "failed" | "cancelled"; stage: string; error?: string;
   revisions: Record<string, string>; skill?: { name: string; digest: string };

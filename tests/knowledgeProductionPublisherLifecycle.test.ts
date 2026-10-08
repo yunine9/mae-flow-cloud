@@ -62,7 +62,7 @@ if(args.includes(${JSON.stringify(block)})) {
   chmodSync(script, 0o700);
   process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
   const target = { id: "domain", name: "知识仓", repository: remote, branch: "main", path: "", docs_path: "domains" };
-  const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "领域规则", scope: "订单", issue_no: "REQ-1", issue_description: "领域知识归档", operator: "alice", created_at: "2026-10-02T00:00:00Z", status: "done", stage: "待审查", knowledge_target: target, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false, revisions: {}, turns: [], evidence: [], publications: [],
+  const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "领域规则", scope: "订单", issue_no: "REQ-1", issue_description: "领域知识归档", operator: "alice", created_at: "2026-10-02T00:00:00Z", status: "done", stage: "待审查", knowledge_target: target, repositories: [], material_ids: [], revisions: {}, turns: [], evidence: [], publications: [],
     documents: [{ id: "orders", title: "订单规则", path: "domains/orders.md", target_id: "domain", layer: "domain", content: "# 订单\n规则正文", sources: "固定版本源码", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };
   const formal = saveKnowledgeDocument(dir, { title: job.title, content: job.documents[0].content, scope: "platform" }, "alice");
   Object.assign(job.documents[0], { knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 });

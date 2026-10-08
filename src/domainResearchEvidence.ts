@@ -3,7 +3,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 export function isBusinessKnowledgeEvidence(event: Record<string, unknown>): boolean {
-  return (event.tool === "business_knowledge" && event.action !== "ar_mr_diff" && event.status === "available")
+  return (event.tool === "business_knowledge" && event.status === "available")
     || (event.tool === "knowledge_material" && event.status === "returned");
 }
 
@@ -16,7 +16,7 @@ export function knowledgeEvidenceTool(records: () => Array<Record<string, unknow
       if ((params.action ?? (params.evidence_id ? "read" : "list")) === "list") {
         const seen = new Set<string>(), query = params.query?.trim().toLowerCase();
         const matches = records().slice().reverse().filter(event => {
-          if (!isBusinessKnowledgeEvidence(event) && !(event.tool === "business_knowledge" && event.action !== "ar_mr_diff" && ["empty", "failed"].includes(String(event.status)))) return false;
+          if (!isBusinessKnowledgeEvidence(event) && !(event.tool === "business_knowledge" && ["empty", "failed"].includes(String(event.status)))) return false;
           const key = String(event.evidence_id ?? JSON.stringify([event.tool, event.action, event.query, event.status, event.error_code]));
           if (seen.has(key)) return false;
           seen.add(key);

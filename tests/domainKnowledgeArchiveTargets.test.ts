@@ -29,8 +29,8 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
   });
   try {
     const module = createBusinessModule(root, { id: "trade", name: "交易", description: "交易业务", owner: "user", repositories: [source.repository] }, "user");
-    const defaults = service.create({ module_id: module.id, issue_no: "REQ-default", use_wxdoubao: false }, "user");
-    assert.equal(defaults.repositories[0].branch, "master"); assert.equal(defaults.knowledge_target.branch, "master"); assert.equal(defaults.use_wxdoubao, true);
+    const defaults = service.create({ module_id: module.id, issue_no: "REQ-default" }, "user");
+    assert.equal(defaults.repositories[0].branch, "master"); assert.equal(defaults.knowledge_target.branch, "master");
     await done(service, defaults.id);
     const initial = service.create({ module_id: module.id, baseline_branch: "release/current", issue_no: "REQ-1", instructions: "只萃取退款模块，不读取 old.md", title: "不能覆盖模块名", repositories: [{ ...source, repository: "https://example.test/unmaintained.git" }] }, "user");
     assert.equal(initial.title, module.name);

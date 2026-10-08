@@ -4,14 +4,14 @@
 
 ## 输入与资料
 
-上下文提供 mode、scope、repositories、archive_targets、materials、ar_codes、已有文档摘要及用户反馈。单模块验证的 probe.module 是本次研究范围；仅研究它，依赖按需核对，不扩展为全领域。验证模式中平台屏蔽源码仓所有 docs/、AGENTS.md 和配置文档目录，本次上传资料和无线豆包继续可用。
+上下文提供 mode、scope、repositories、archive_targets、materials、已有文档摘要及用户反馈。单模块验证的 probe.module 是本次研究范围；仅研究它，依赖按需核对，不扩展为全领域。验证模式中平台屏蔽源码仓所有 docs/、AGENTS.md 和配置文档目录，本次上传资料和无线豆包继续可用。
 
 - extraction_skill：省略 path 查看包内文件，指定 path 读方法或模板；文件名由 Skill 自己定义。
 - component_source：按仓编号 list/search/read 固定版本源码；按需定位构建文件和调用，不要求宿主预扫描所有仓。
 - knowledge_structure：按需查看指定仓的构建单元和依赖候选，候选关系仍需读取源码核实。
 - knowledge_source_check：检查代码引用的路径、行号、符号是否存在；评审时调用并处理错误。结论是否成立仍需阅读源码和业务资料判断。
 - knowledge_material：读取上传资料及章节、图片。
-- business_knowledge：调用无线豆包，查证方法见平台系统提示。
+- business_knowledge：调用无线豆包查询基站、网管等无线业务背景，用法见平台系统提示。
 - knowledge_evidence：搜索和回读已保存的原始资料与查询结果。
 - knowledge_source_changes：更新时比较已固定的旧、新源码版本。
 - knowledge_draft：read 查看文档；save 保存草稿或修订建议。使用 archive_targets 中的 id 和 docs_path；讨论及只读步骤不能写文档，不能直接发布或采纳。

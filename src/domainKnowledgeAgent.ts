@@ -134,7 +134,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const context = { mode: input.turn.mode, title: input.job.title, scope: input.job.scope, instructions: input.job.instructions, repositories: researchRepositories,
     archive_targets: [input.job.knowledge_target, ...input.job.repositories], archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
     revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
-    materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })), ar_codes: input.job.ar_codes,
+    materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })),
     documents: input.read().map(documentSummary), continued: input.turn.pipeline_continue ?? 0 };
   const execute = async (step?: SkillWorkStep): Promise<SkillWorkResult> => {
     const readonly = input.turn.mode === "discuss" || step?.readonly === true;

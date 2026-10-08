@@ -92,7 +92,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
   return isRecord(value) && value.id === id && ["title", "scope", "operator", "created_at", "stage"].every(key => typeof value[key] === "string")
     && (value.key === undefined || typeof value.key === "string")
     && ["idle", "queued", "running", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
-    && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids) && strings(value.ar_codes)
+    && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids)
     && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
     && (value.source_repositories === undefined || Array.isArray(value.source_repositories) && value.source_repositories.every(target))
     && (value.technologies === undefined || strings(value.technologies))
@@ -267,7 +267,7 @@ export class DomainKnowledgeExtraction {
       const path = componentArchivePath(target.docs_path, formal);
       job = { id: `dkx-${randomUUID()}`, title: formal.title, scope: "正式组件知识手动归档", operator, created_at: new Date().toISOString(),
         component_research_id: input.research_id, technologies: formal.technologies, repositories: [], knowledge_target: target,
-        archive_configured: !!target.repository, material_ids: [], ar_codes: [], use_wxdoubao: false, status: "done", stage: "已发布", revisions: {},
+        archive_configured: !!target.repository, material_ids: [], status: "done", stage: "已发布", revisions: {},
         documents: [{ id: "component-guide", title: formal.title, target_id: "domain", path, layer: "domain", content, sources: formal.research_source?.path || "正式知识库",
           revision: 1, selected: true, base_content: null, base_revision: "", history: [], knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 }],
         turns: [], evidence: [], publications: [], archive_batches: [] };
@@ -444,7 +444,7 @@ export class DomainKnowledgeExtraction {
     try { await work; } finally { if (this.archiving.get(job.id) === work) this.archiving.delete(job.id); }
   }
   create(input: any, operator: string) { return this.createJob(input, operator); }
-  beginUpdate(documentId: string, input: { message?: string; expected_revision?: string; material_ids?: string[]; ar_codes?: string[] }, operator: string) {
+  beginUpdate(documentId: string, input: { message?: string; expected_revision?: string; material_ids?: string[] }, operator: string) {
     const published = readKnowledgeDocument(this.dataDir, documentId);
     if (input.expected_revision && input.expected_revision !== published.revision) throw new Error("知识已有新版本，请刷新后发起更新");
     const original = this.jobs.get(published.research_source?.job_id ?? "");
@@ -462,7 +462,7 @@ export class DomainKnowledgeExtraction {
       material_ids: published.research_source?.material_ids ?? original.material_ids };
     this.jobs.set(job.id, job); this.persist(job);
     return this.run(job.id, { mode: "update", document_ids: [document.id], message: input.message?.trim() || "核对来源变化，更新受影响知识；保留现有人工内容，无变化时说明原因",
-      material_ids: input.material_ids, ar_codes: input.ar_codes }, operator);
+      material_ids: input.material_ids }, operator);
   }
   private createJob(input: any, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
@@ -489,15 +489,14 @@ export class DomainKnowledgeExtraction {
     };
     if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
     const material_ids = this.materialIds(input.material_ids ?? []);
-    const ar_codes = this.arCodes(input.ar_codes ?? []);
-    scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions, ar_codes })));
+    scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!knowledge_target.repository, archive_revision: 0,
-      material_ids, ar_codes, use_wxdoubao: true, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+      material_ids, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     // 请求键在创建时保存；后续维护不会改变原请求的身份。
     const requestKey = (value: DomainKnowledgeJob) => JSON.stringify([value.title, value.scope, value.instructions,
       value.issue_no, value.issue_description, value.module_id, value.source_repositories, value.knowledge_target,
-      value.archive_configured, value.material_ids, value.ar_codes]);
+      value.archive_configured, value.material_ids]);
     job.key = requestKey(job);
     const previous = [...this.jobs.values()].reverse().find(existing => !existing.component_research_id && !existing.deleted_at
       && existing.operator === operator && !["failed", "cancelled"].includes(existing.status)
@@ -568,11 +567,7 @@ export class DomainKnowledgeExtraction {
     if (bytes > 100 * 1024 * 1024) throw new Error("本次资料总容量不能超过 100 MiB");
     return unique;
   }
-  private arCodes(codes: unknown): string[] {
-    if (!Array.isArray(codes) || codes.length > 30 || codes.some(code => typeof code !== "string" || !/^[A-Za-z0-9_.-]{1,120}$/.test(code))) throw new Error("AR 编号格式无效，最多 30 项");
-    return [...new Set(codes)] as string[];
-  }
-  run(id: string, input: { mode: DomainTurn["mode"]; document_ids?: string[]; message?: string; use_latest_skill?: boolean; material_ids?: string[]; ar_codes?: string[] }, operator: string) {
+  run(id: string, input: { mode: DomainTurn["mode"]; document_ids?: string[]; message?: string; use_latest_skill?: boolean; material_ids?: string[] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const job = this.live(id);
     if (job.component_research_id) throw new Error("请在基础组件萃取任务中生成修订建议");
@@ -583,8 +578,6 @@ export class DomainKnowledgeExtraction {
     if (!message || message.length > 20000) throw new Error("请填写本轮问题或修订要求，最多 20000 字");
     scanForSecrets("研究意见", Buffer.from(message));
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
-    if (input.ar_codes) job.ar_codes = this.arCodes(input.ar_codes);
-    job.use_wxdoubao = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;

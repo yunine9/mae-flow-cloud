@@ -76,7 +76,7 @@ test("生产线验收13/F21：归档、关联信息与补充资料变更后原�
     const materialId = `material-${randomUUID()}`, material = "补充订单规则";
     mkdirSync(join(dir, "knowledge-materials", materialId), { recursive: true });
     writeFileSync(join(dir, "knowledge-materials", materialId, "material.json"), JSON.stringify({ id: materialId, name: "订单补充.txt", scope: "本次萃取任务", version: "", bytes: Buffer.byteLength(material), digest: createHash("sha256").update(material).digest("hex"), state: "ready", sections: [{ location: "全文", text: material }] }));
-    manager.run(first.id, { mode: "update", document_ids: ["orders"], message: "核对补充订单资料", material_ids: [materialId], ar_codes: ["AR-EDITED"] }, "alice");
+    manager.run(first.id, { mode: "update", document_ids: ["orders"], message: "核对补充订单资料", material_ids: [materialId] }, "alice");
     await until(() => manager.get(first.id).status === "done", "补充资料研究未在5秒内完成");
     assert.equal(manager.create(domainRequest, "alice").id, first.id, "后续维护不得改掉原创建请求的身份");
     assert.equal(calls, 2); assert.equal(manager.list().length, 1);

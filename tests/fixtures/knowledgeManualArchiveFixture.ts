@@ -19,8 +19,7 @@ export async function knowledgeManualArchiveFixtures() {
     const local = saveKnowledgeDocument(dir, { title: "正式仓内说明", content: "# 正式仓内说明\n\n调用方处理超时。" }, "alice");
     const nextGuide = saveKnowledgeDocument(dir, { title: "新任务的正式组件指引", content: '---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: []\n---\n\n# 新任务的正式组件指引\n\n新任务已审查的正式正文。', technologies: ["cpp"] }, "alice");
     const base = { id: "dkx-00000000-0000-4000-8000-000000000001", title: "知识手动归档", scope: "知识生产", operator: "alice", created_at: "2026-10-03T00:00:00Z",
-      status: "done" as const, stage: "已入库", issue_no: "REQ-MANUAL", issue_description: "保存已审查的正式知识版本", revisions: {}, material_ids: [], ar_codes: [],
-      use_wxdoubao: false, knowledge_target: target, repositories: [], archive_configured: true, turns: [], evidence: [], publications: [], archive_batches: [] };
+      status: "done" as const, stage: "已入库", issue_no: "REQ-MANUAL", issue_description: "保存已审查的正式知识版本", revisions: {}, material_ids: [], knowledge_target: target, repositories: [], archive_configured: true, turns: [], evidence: [], publications: [], archive_batches: [] };
     const doc = (formal: typeof guide, id: string, targetId: string, path: string) => ({ id, title: formal.title, target_id: targetId, path, layer: "domain" as const,
       content: "尚未发布的新草稿，不能出现在归档弹窗", sources: "src/file.cpp", revision: 2, selected: false, history: [], base_content: null, base_revision: "",
       knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 });

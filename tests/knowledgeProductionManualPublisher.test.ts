@@ -41,7 +41,7 @@ async function fixture() {
   const formal = saveKnowledgeDocument(dir, { title: "订单规则", content: "# 订单\n已发布第一版\n", scope: "platform" }, "alice");
   const target = { id: "domain", name: "知识仓", repository: remote, branch: "main", path: "", docs_path: "domains" };
   const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "订单规则", scope: "订单", issue_no: "REQ-130", issue_description: "归档订单已发布版本", operator: "alice",
-    created_at: "2026-10-03T00:00:00.000Z", status: "done", stage: "已入库", knowledge_target: target, repositories: [], material_ids: [], ar_codes: [], use_wxdoubao: false,
+    created_at: "2026-10-03T00:00:00.000Z", status: "done", stage: "已入库", knowledge_target: target, repositories: [], material_ids: [],
     revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "orders", title: formal.title, target_id: "domain", layer: "domain", path: "domains/orders.md",
       content: formal.content, sources: "固定版本源码", selected: true, revision: 1, base_content: null, base_revision: "", history: [],
       knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 }] };

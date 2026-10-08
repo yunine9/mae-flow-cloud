@@ -10,7 +10,7 @@ import type { SkillSubmissionRecord } from "../src/hostSkillLibrary.ts";
 import { knowledgeTaskElapsed, knowledgeTaskAction } from "../web/src/knowledgeTaskCenterApi.ts";
 
 function domain(): DomainKnowledgeJob {
-  return { id: "domain-1", title: "结算", scope: "结算模块", operator: "alice", created_at: "2026-09-30T01:00:00Z", status: "done", stage: "本轮完成，等待审查", revisions: {}, repositories: [], knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/knowledge", branch: "main", path: "", docs_path: "docs" }, material_ids: [], ar_codes: [], use_wxdoubao: false, documents: [{ id: "doc", title: "结算规则", target_id: "domain", path: "docs/a.md", layer: "domain", content: "规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [] }], turns: [], evidence: [], publications: [] };
+  return { id: "domain-1", title: "结算", scope: "结算模块", operator: "alice", created_at: "2026-09-30T01:00:00Z", status: "done", stage: "本轮完成，等待审查", revisions: {}, repositories: [], knowledge_target: { id: "domain", name: "知识仓", repository: "https://code.example/knowledge", branch: "main", path: "", docs_path: "docs" }, material_ids: [], documents: [{ id: "doc", title: "结算规则", target_id: "domain", path: "docs/a.md", layer: "domain", content: "规则", sources: "", selected: true, revision: 2, base_content: null, base_revision: "", history: [] }], turns: [], evidence: [], publications: [] };
 }
 
 test("研究动态只取最新公开研究文字，保留真实时间，跳过工具原文", () => {
