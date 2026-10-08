@@ -11,7 +11,7 @@
 - knowledge_structure：按需查看指定仓的构建单元和依赖候选，候选关系仍需读取源码核实。
 - knowledge_source_check：检查代码引用的路径、行号、符号是否存在；评审时调用并处理错误。结论是否成立仍需阅读源码和业务资料判断。
 - knowledge_material：读取上传资料及章节、图片。
-- business_knowledge：调用无线豆包，具体查询见 materials.md。
+- business_knowledge：调用无线豆包，查证方法见平台系统提示。
 - knowledge_evidence：搜索和回读已保存的原始资料与查询结果。
 - knowledge_source_changes：更新时比较已固定的旧、新源码版本。
 - knowledge_draft：read 查看文档；save 保存草稿或修订建议。使用 archive_targets 中的 id 和 docs_path；讨论及只读步骤不能写文档，不能直接发布或采纳。

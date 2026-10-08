@@ -84,6 +84,13 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
     for (let i = 0; i < 1000 && !["done", "failed"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
     const final = service.get(job.id); assert.equal(final.status, "done", final.error);
     assert.equal(final.documents.length, 1); assert.equal(final.documents[0].content, body); assert.equal(sessions.length, 3);
+    // 调试用的 Skill 只写了研究方法，没有资料与豆包的用法；平台系统提示仍须进每个会话（主会话、写作步骤、只读评审）。
+    assert.ok(!Object.keys(files).some(path => /material/.test(path)));
+    for (const config of sessions) {
+      const system = (config.additionalSystemInstructions ?? []).join("\n");
+      assert.match(system, /上传资料与无线豆包/); assert.match(system, /business_knowledge/); assert.match(system, /knowledge_material/);
+      assert.match(system, /knowledge_evidence/); assert.match(system, /不能编造单号/);
+    }
     assert.equal(final.turns[0].revisions?.["repo-1"], revision);
     assert.ok(final.evidence.some(e => e.tool === "knowledge_material")); assert.ok(final.evidence.some(e => e.tool === "business_knowledge"));
     assert.equal(final.evidence.filter(e => e.tool === "knowledge_evidence" && e.action === "read").length, 2);

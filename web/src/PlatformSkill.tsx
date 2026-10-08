@@ -58,6 +58,7 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
     <header className="flex items-start justify-between gap-4"><div>
       <h2 className="text-lg font-semibold">{showUpload ? "上传 Skill" : skill?.name ?? platformSkillLabels[kind]}</h2>
     </div><div className="flex gap-2">{skill?.can_manage && !showUpload && <Button variant="outline" onClick={() => setShowUpload(true)}>上传新版本</Button>}{studio && skill && !showUpload && <Button onClick={() => studio.openExecution(kind)}>使用此 Skill</Button>}</div></header>
+    {kind === "domain" && !showUpload && <p className="text-sm text-muted-foreground">上传资料与无线豆包的用法由平台系统提示固定提供，对任何版本的 Skill 都生效；本 Skill 只决定研究方法、步骤安排和文档组织，调试时替换它不会丢掉这两类业务来源。</p>}
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="text-primary">{notice}</p>}
     {skill?.can_manage && showUpload && <div className="rounded-xl border border-line bg-muted/30 p-4 space-y-3">

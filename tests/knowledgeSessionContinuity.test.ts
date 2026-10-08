@@ -61,6 +61,8 @@ test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不�
     assert.equal(result.documents.length, 1); assert.equal(result.documents[0].revision, 1);
     assert.equal(result.evidence.filter(e => e.tool === "component_source" && e.action === "read").length, 1);
     assert.match(JSON.stringify(model.requests.at(-1)), /ORIGINAL_CONTEXT/);
+    // 资料与无线豆包的用法走系统提示词（不在 Skill 包里），重启接续后的会话也带着。
+    for (const request of [model.requests[0], model.requests.at(-1)]) assert.match(JSON.stringify((request as any).system), /平台说明，适用于本任务的每个会话/);
     assert.match(readFileSync(join(f.dir, "domain-extraction", job.id, "skill-runs", turnId, "coordinator", "events.jsonl"), "utf8"), /"context_restored":true/);
   } finally { release(); await service.shutdown(); await model.stop(); rmSync(f.dir, { recursive: true, force: true }); }
 });
