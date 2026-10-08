@@ -27,7 +27,7 @@ export interface KnowledgeProductionView {
   research_actions: KnowledgeProductionAction[];
   knowledge_document_id?: string;
   platform_message?: string;
-  navigation: { working_label?: string; ready_message?: string; ready_action_label?: string };
+  navigation: { ready_message?: string; ready_action_label?: string };
   documents: KnowledgeDocumentState[];
   review: { readonly: boolean; selection_message?: string; active_message?: string;
     sections: Array<{ id: string; status_label: string; proposal_message?: string; proposal_problem?: string }>;

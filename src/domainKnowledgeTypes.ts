@@ -19,6 +19,8 @@ export interface DomainDocument extends DomainDocumentContent {
 export interface DomainTurn {
   id: string; mode: "extract" | "discuss" | "revise" | "update"; document_ids: string[]; message: string; operator: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled"; created_at: string; reply?: string; error?: string;
+  /** 本轮实际开跑与收口时间；任务中心的「开始时间 / 运行时长」取最近一轮，不含排队和审查等待。 */
+  started_at?: string; finished_at?: string;
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean; previous_revisions?: Record<string, string>;
   revisions?: Record<string, string>;

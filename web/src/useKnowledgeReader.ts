@@ -29,6 +29,12 @@ export function useKnowledgeReader() {
       .map(node => ({ node, top: node.scrollTop, left: node.scrollLeft }));
     updateFullscreen(next);
   }
-  return { fullscreen, setFullscreen, showTree, frameRef,
+  // 正文优先：侧栏（如讨论）打开时目录让位，关掉再恢复原样；让位期间手动展开照常生效。
+  const beforeYield = useRef<boolean | undefined>(undefined);
+  const yieldTree = useCallback((active: boolean) => {
+    if (active && beforeYield.current === undefined) { setShowTree(value => { beforeYield.current = value; return false; }); }
+    if (!active && beforeYield.current !== undefined) { const previous = beforeYield.current; beforeYield.current = undefined; setShowTree(previous); }
+  }, []);
+  return { fullscreen, setFullscreen, showTree, frameRef, yieldTree,
     toggleTree: () => { manualTree.current = true; setShowTree(value => !value); } };
 }

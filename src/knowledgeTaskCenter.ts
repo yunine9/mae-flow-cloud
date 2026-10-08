@@ -28,13 +28,15 @@ function projection(input: Parameters<typeof projectKnowledgeProduction>[0]) {
   return { status_label: production.status_label, group: production.group, next_action: production.next_action, production };
 }
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
+  // 只看最近一轮：新一轮还在排队时显示「—」，不把上一轮的历时当成这一轮的。
+  const ran = job.turns.at(-1);
   return { id: job.id, kind: "domain", title: job.title, scope: job.scope, operator: job.operator,
-    created_at: validTime(job.created_at), status: job.status, ...projection({ kind: "domain", record: job }),
+    created_at: validTime(job.created_at), started_at: validTime(ran?.started_at), finished_at: validTime(ran?.finished_at), status: job.status, ...projection({ kind: "domain", record: job }),
     stage: job.stage, error: job.error, latest_note: latestKnowledgeResearchNote(job.evidence) };
 }
 export function componentKnowledgeTask(record: ResearchRecord, archive?: DomainKnowledgeJob): KnowledgeTaskRow {
   return { id: record.id, kind: "component", title: record.topic || `${record.language} 基础组件萃取`, scope: record.language,
-    operator: record.operator, created_at: validTime(record.created_at), finished_at: validTime(record.finished_at),
+    operator: record.operator, created_at: validTime(record.created_at), started_at: validTime(record.started_at), finished_at: validTime(record.finished_at),
     status: record.status, ...projection({ kind: "component", record, archive }), stage: record.stage, error: record.error,
     latest_note: latestKnowledgeResearchNote(record.evidence) };
 }

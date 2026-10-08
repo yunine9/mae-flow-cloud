@@ -62,9 +62,9 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             <label className="grid gap-1 text-sm">单号描述<Input aria-label="归档单号描述" maxLength={2000} disabled={busy} value={description} onChange={event => setDescription(event.target.value)} /></label>
           </div>
           {preview.targets.map(target => <section key={target.id} className="space-y-3 rounded-lg border border-line p-4" aria-label={`${target.name}归档`}>
-            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{target.name}</h3><span className="text-sm">{target.status_label}</span></div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{target.name}</h3>{target.status_label !== preview.status_label && <span className="text-sm">{target.status_label}</span>}</div>
             <p className="break-all text-sm text-muted-foreground">{[target.repository, target.branch, target.docs_path].filter(Boolean).join(" · ")}</p>
-            <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>
+            {target.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>}
             {target.error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{target.error}</p>}
             {target.url && <a className="text-sm font-medium text-primary underline" href={target.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
             <ul className="m-0 list-none space-y-2 p-0">{target.files.map(file => <li key={file.id} className="rounded border border-line bg-surface-2 px-3 py-2 text-sm">
@@ -73,7 +73,8 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             </li>)}</ul>
             {!!target.actions.length && <div className="flex flex-wrap items-center gap-3">{target.actions.map(item => renderAction(item, target.id))}</div>}
           </section>)}
-          {!!preview.actions.length && <div className="flex flex-wrap items-center justify-end gap-3">{preview.actions.map(item => renderAction(item))}</div>}
+          {/* 主动作贴底：多仓时文件清单很长，1366×768 下按钮曾落在首屏之外要滚动才能找到。 */}
+          {!!preview.actions.length && <div className="sticky -bottom-4 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-3 border-t border-line bg-popover px-4 py-3">{preview.actions.map(item => renderAction(item))}</div>}
         </div>}
       </DialogContent>
     </Dialog>

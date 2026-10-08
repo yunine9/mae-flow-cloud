@@ -41,10 +41,25 @@ test("领域研究完成不等于发布；发布后新稿与归档失败仍可�
   assert.equal(domainKnowledgeTask(job).started_at, undefined);
 });
 
+test("领域任务的开始时间与运行时长取最近一轮实际开跑到收口，新一轮排队时不沿用上一轮", () => {
+  const job = domain();
+  const turn = (id: string, extra: Partial<DomainKnowledgeJob["turns"][number]>) => ({ id, mode: "extract" as const, document_ids: [], message: "", operator: "alice", status: "done" as const, created_at: "2026-09-30T01:00:00Z", proposals: [], ...extra });
+  job.turns = [turn("t1", { started_at: "2026-09-30T01:05:00Z", finished_at: "2026-09-30T01:17:30Z" })];
+  assert.equal(domainKnowledgeTask(job).started_at, "2026-09-30T01:05:00Z");
+  assert.equal(knowledgeTaskElapsed(domainKnowledgeTask(job)), "12 分 30 秒");
+  job.turns.push(turn("t2", { mode: "discuss", status: "queued", created_at: "2026-09-30T02:00:00Z" })); job.status = "queued";
+  assert.equal(domainKnowledgeTask(job).started_at, undefined);
+  assert.equal(knowledgeTaskElapsed(domainKnowledgeTask(job)), "—");
+  job.turns[1] = { ...job.turns[1], status: "running", started_at: "2026-09-30T02:01:00Z" }; job.status = "running";
+  assert.equal(knowledgeTaskElapsed(domainKnowledgeTask(job), Date.parse("2026-09-30T02:01:42Z")), "42 秒");
+});
+
 test("组件研究保留执行结束，但不把创建当开始；发布与待审稿分开", () => {
   const record = { id: "component-1", language: "cpp", topic: "线程池", operator: "bob", status: "done", created_at: "2026-09-30T01:00:00Z", finished_at: "2026-09-30T01:10:00Z", stage: "待审查", draft: "# 线程池", evidence: [] } as unknown as ResearchRecord;
   assert.equal(componentKnowledgeTask(record).group, "attention");
   assert.equal(knowledgeTaskElapsed(componentKnowledgeTask(record)), "—");
+  record.started_at = "2026-09-30T01:02:00Z";
+  assert.equal(knowledgeTaskElapsed(componentKnowledgeTask(record)), "8 分 0 秒");
   record.document_id = "kd-1";
   assert.equal(componentKnowledgeTask(record).status_label, "已发布（未归档）");
 });

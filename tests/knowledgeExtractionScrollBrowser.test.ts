@@ -21,8 +21,10 @@ test("萃取滚轮：内部区域可滚动，到边界后继续滚动外层，�
   let socket: WebSocket | undefined, nextId = 0;
   const pending = new Map<number, { resolve: (value: any) => void; reject: (reason: any) => void; timer: ReturnType<typeof setTimeout> }>();
   try {
-    await until(() => existsSync(join(root, "profile", "DevToolsActivePort")));
-    const [port, endpoint] = readFileSync(join(root, "profile", "DevToolsActivePort"), "utf8").trim().split("\n");
+    // 文件先建后写：8 路并发下读到空文件，端口是 undefined，WebSocket 报 Invalid URL（2026-10-08 实测）。
+    const activePort = join(root, "profile", "DevToolsActivePort");
+    await until(() => existsSync(activePort) && readFileSync(activePort, "utf8").trim().split("\n").length === 2);
+    const [port, endpoint] = readFileSync(activePort, "utf8").trim().split("\n");
     socket = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
     await new Promise<void>((resolve, reject) => { socket!.onopen = () => resolve(); socket!.onerror = reject; });
     socket.onmessage = message => { const data = JSON.parse(String(message.data)), entry = pending.get(data.id); if (entry) { clearTimeout(entry.timer); pending.delete(data.id); data.error ? entry.reject(data.error) : entry.resolve(data.result); } };

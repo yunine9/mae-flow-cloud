@@ -89,7 +89,7 @@ test("生产线验收14：停止后迟到结果不复活；路径和归档目标
   try {
     const job = service.create(config, "expert"); await until(() => service.get(job.id).documents.length > 0);
     service.stop(job.id); await service.shutdown();
-    const stopped = service.get(job.id); assert.equal(stopped.status, "cancelled"); assert.equal(stopped.documents.length, 1); assert.equal(stopped.turns[0].reply, undefined);
+    const stopped = service.get(job.id); assert.equal(stopped.status, "cancelled"); assert.equal(stopped.documents.length, 1); assert.equal(stopped.turns[0].reply, undefined); assert.ok(stopped.turns[0].started_at && stopped.turns[0].finished_at);
     assert.throws(() => service.edit(job.id, { document: { ...document, path: "domains/orders/new.md" }, base_revision: 1 }, "editor"), /归档位置/);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -144,7 +144,7 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     { tool: { name: "knowledge_draft", input: { action: "read", id: "states" } } },
     { tool: { name: "knowledge_draft", input: { action: "read", id: "implementation" } } },
     { tool: { name: "knowledge_work", input: { action: "list" } } },
-    { tool: { name: "knowledge_work_result", input: { summary: "已保存领域规则及仓内实现知识，等待审查。", document_ids: ["states", "implementation"] } } },
+    { tool: { name: "knowledge_work_result", input: { summary: "已保存领域规则及仓内实现知识（依据 repo-1:README.md），等待审查。", document_ids: ["states", "implementation"] } } },
     { text: "业务知识已保存" },
   ], "scripted-v1", { linear: true });
   await model.start();
@@ -162,6 +162,9 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     assert.ok(tools.includes("extraction_skill")); assert.ok(tools.includes("knowledge_material"));
     assert.ok(!tools.includes("bash") && !tools.includes("write") && tools.includes("business_knowledge"));
     assert.ok(result.turns[0].reply?.includes("等待审查"));
+    // 答复给人看：仓内编号换成仓名，并记下本轮实际开跑与收口时间供任务中心算历时。
+    assert.ok(result.turns[0].reply?.includes("交易仓:README.md") && !result.turns[0].reply.includes("repo-1:"), result.turns[0].reply);
+    assert.ok(Date.parse(result.turns[0].finished_at!) >= Date.parse(result.turns[0].started_at!));
     assert.equal(git("rev-parse", "HEAD"), revision); assert.equal(result.publications.length, 0);
   } finally { await service.shutdown(); await model.stop(); rmSync(dir, { recursive: true, force: true }); }
 });

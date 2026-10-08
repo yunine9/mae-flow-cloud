@@ -60,6 +60,8 @@ export interface ResearchRecord {
   deleted_at?: string;
   deleted_by?: string;
   created_at: string;
+  /** 最近一次实际开跑；任务中心按它和 finished_at 算运行时长，不含排队。 */
+  started_at?: string;
   finished_at?: string;
   stage: string;
   revision?: string;
@@ -153,7 +155,7 @@ function validResearchRecord(value: unknown, id: string): value is ResearchRecor
   const components = object(value) ? value.components ?? [value.component] : [];
   const repositoryIds: string[] = Array.isArray(components) ? components.filter(object).map(component => component.id).filter(id => typeof id === "string") : [];
   return object(value) && value.id === id && fields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"])
-    && optionalStrings(value, ["deleted_at", "deleted_by", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"])
+    && optionalStrings(value, ["deleted_at", "deleted_by", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"])
     && (value.mode === undefined || value.mode === "all") && (value.format === undefined || value.format === "joint-document")
     && (value.use_latest_skill === undefined || typeof value.use_latest_skill === "boolean")
     && (value.skill === undefined || skill(value.skill))
@@ -347,7 +349,7 @@ export class ComponentResearch {
           return proposal ? { ...structuredClone(proposal.value), revision: section.revision, selected: section.selected } : section;
         }) };
       }
-      this.update(record, { status: "running", error: undefined, stage: review ? ({ discuss: "正在回答组件问题", supplement: "正在补充遗漏能力" } as Record<string, string>)[review.mode] ?? "正在返工指定组件" : "准备组件源码" });
+      this.update(record, { status: "running", error: undefined, started_at: new Date().toISOString(), finished_at: undefined, stage: review ? ({ discuss: "正在回答组件问题", supplement: "正在补充遗漏能力" } as Record<string, string>)[review.mode] ?? "正在返工指定组件" : "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
       const work = Promise.resolve()
         .then(async () => {

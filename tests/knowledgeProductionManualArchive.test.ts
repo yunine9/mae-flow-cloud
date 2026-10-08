@@ -12,6 +12,7 @@ import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowled
 import type { TaskService } from "../src/taskService.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { domainKnowledgeTask } from "../src/knowledgeTaskCenter.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 // Public contract is named locally for the initial RED run; production will
 // expose this same readonly HTTP shape from knowledgeProductionTypes.ts.
@@ -94,6 +95,21 @@ test("生产线验收5/8/14：归档预览读取当前正式版本、预填任�
     assert.equal(preview.targets[0].files[0].knowledge_revision, next.revision);
     assert.equal(preview.expected_revisions[next.id], next.revision);
     assert.equal(JSON.stringify(listKnowledgeDocuments(dir)), snapshot); assert.equal(state.calls.length, beforeCalls);
+  } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("知识仓配置成本地路径时，归档预览就说明不能建 MR 并只给归档设置入口，不等人点了创建才报错", { timeout: 10_000 }, async () => {
+  // 知识仓配置收本地路径（拉仓可用），建 MR 只收 HTTP/HTTPS；2026-10-08 走查实测预览照常给「创建归档 MR」，点了才报错。
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-local-")), state = harness(dir, { noGit: true });
+  try {
+    saveKnowledgeRepoConfig(dir, join(dir, "knowledge.git"), { branch: "main", docs_path: "domains" });
+    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const preview = manual(state.manager).previewArchive(id);
+    assert.equal(preview.targets[0].configured, false);
+    assert.match(preview.targets[0].message, /不能用于创建 MR：仓库地址须为不带凭据的 HTTP\/HTTPS 地址/);
+    assert.deepEqual(preview.actions.map(action => action.id), ["configure"]);
+    await assert.rejects(manual(state.manager).createArchive(id, { issue_no: "REQ-LOCAL", expected_revisions: preview.expected_revisions }, "reviewer"), /HTTP\/HTTPS/);
+    assert.equal(state.calls.length, 0);
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 

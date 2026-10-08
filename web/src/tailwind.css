@@ -343,7 +343,6 @@ body:has(.knowledge-hub.is-focused) .wish-quick-fab { display:none; }
 .knowledge-hub.is-focused > .knowledge-hub-task > .knowledge-create { min-height:0; overflow:auto; }
 .knowledge-task-view-tabs { display:flex; align-items:center; gap:4px; flex-shrink:0; margin-left:8px; }
 .knowledge-task-document-count { display:inline-flex; justify-content:center; min-width:22px; padding:0 5px; border-radius:5px; background:var(--surface-2); font-size:12px; font-variant-numeric:tabular-nums; }
-.knowledge-task-working { display:inline-flex; align-items:center; gap:6px; margin-left:6px; color:var(--muted); font-size:13px; white-space:nowrap; }
 .knowledge-task-ready { display:flex; flex-shrink:0; align-items:center; gap:10px; margin:10px 16px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--surface-2); font-size:14px; }
 .knowledge-task-ready > span { flex:1; }
 .knowledge-task-ready > svg { color:var(--accent); }

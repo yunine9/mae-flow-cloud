@@ -39,7 +39,7 @@ export function knowledgeRelativePath(value: unknown, markdown = false): string 
 }
 function repository(input: any, id: string): KnowledgeRepository {
   const url = String(input?.repository ?? "").trim(), branch = String(input?.branch ?? "").trim();
-  if (!/^https?:\/\//.test(url) || new URL(url).username || new URL(url).password) throw new Error("请填写不带凭据的 HTTP/HTTPS 仓库地址");
+  if (!/^https?:\/\//.test(url) || new URL(url).username || new URL(url).password) throw new Error("仓库地址须为不带凭据的 HTTP/HTTPS 地址");
   assertRepositoryCloneAddress(url);
   if (!branch || branch.length > 255 || branch.startsWith("-") || /[\s\\~^:?*\[\x00-\x1f]|\.\.|@\{|\/\/|\.$|\/$|\.lock(?:\/|$)/.test(branch)) throw new Error("请填写有效的目标分支");
   return { id, name: String(input.name ?? "").trim().slice(0, 100) || id, repository: url, branch,
@@ -304,14 +304,17 @@ export class DomainKnowledgeExtraction {
     const perTarget = groups.length > 1;
     const targets = groups.map(({ target, ids }) => {
       const publication = batch?.publications.find(publication => ids.includes(publication.target_id));
-      const configured = !!target.repository.trim();
+      // 知识仓配置收本地路径（拉仓可用），建 MR 却只收 HTTP/HTTPS；预览不先用同一把尺量，
+      // 人要点了「创建归档 MR」才看到报错（2026-10-08 走查实测）。量不过就按未配置处理并说出原因。
+      const problem = target.repository.trim() ? (() => { try { repository(target, target.id); return ""; } catch (error) { return (error as Error).message; } })() : "";
+      const configured = !!target.repository.trim() && !problem;
       const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
       const actions: KnowledgeProductionAction[] = !configured ? perTarget ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
         : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
-        message: !configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "归档失败" ? "此仓归档失败，原因见下方；处理后重试此仓，重试复用同一分支。"
-          : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出当前已发布的正式知识，创建 MR 后归档结束。",
+        message: problem ? `归档仓设置不能用于创建 MR：${problem}。请在 Git 归档设置中修改。` : !configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "归档失败" ? "此仓归档失败，原因见下方；处理后重试此仓，重试复用同一分支。"
+          : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "",
         error: publication?.error || (status_label === "归档失败" ? batch?.error : undefined), url: publication?.url, actions,
         files: documents.filter(document => ids.includes(document.target_id)).flatMap(document => {
           const file = { id: document.id, title: document.title, path: document.archive_path ?? document.path, content: document.content,
@@ -324,7 +327,7 @@ export class DomainKnowledgeExtraction {
     const actions: KnowledgeProductionAction[] = status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
       : status_label === "已发布（未归档）" && targets.length && targets.every(target => target.configured) ? [action({ id: "create-archive", label: "创建归档 MR", view: "archive" })]
         : perTarget || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
-    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "平台发布与 Git 归档分开；填写关联单号后手动创建 MR。",
+    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。",
       issue_no: batch?.issue_no ?? job.issue_no, issue_description: batch?.issue_description ?? job.issue_description, expected_revisions: Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), actions, targets })) as KnowledgeArchivePreview;
   }
   async createArchive(id: string, input: { issue_no: string; issue_description?: string; expected_revisions: Record<string, string> }, operator: string) {
@@ -629,7 +632,7 @@ export class DomainKnowledgeExtraction {
         // 后续意见接着已完成的新稿修改，正文与发布基线仍等人工确认。
         return proposal ? { ...doc, title: proposal.value.title, content: proposal.value.content, sources: proposal.value.sources } : doc;
       });
-      job.status = "running"; job.stage = "研究中"; turn.status = "running"; this.persist(job);
+      job.status = "running"; job.stage = "研究中"; turn.status = "running"; turn.started_at = new Date().toISOString(); turn.finished_at = undefined; this.persist(job);
       const work = Promise.resolve().then(async () => {
         try {
           if (controller.signal.aborted) return;
@@ -672,10 +675,12 @@ export class DomainKnowledgeExtraction {
           if (!reply.trim()) throw new Error("本轮没有返回结果");
           scanForSecrets("研究答复", Buffer.from(reply));
           if (turn.mode === "extract" && !job.documents.length) throw new Error("尚未生成领域知识草稿，已保存内容保留");
-          turn.reply = reply; turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查";
+          // Agent 按仓编号（repo-1 等）引用代码以便校验；给人看的回复换成仓名，路径与行号保留。
+          const named = (job.source_repositories ?? job.repositories).reduce((text, repo) => text.split(`${repo.id}:`).join(`${repo.name}:`), reply);
+          turn.reply = named; turn.status = "done"; turn.finished_at = new Date().toISOString(); job.status = "done"; job.stage = "本轮完成，等待审查";
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;
-          turn.status = "failed"; job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = error instanceof IncompleteDomainResearch ? "研究尚未完成，草稿与进度保留" : "本轮失败，已有文档保留";
+          turn.status = "failed"; turn.finished_at = new Date().toISOString(); job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = error instanceof IncompleteDomainResearch ? "研究尚未完成，草稿与进度保留" : "本轮失败，已有文档保留";
         } finally { if (!controller.signal.aborted && this.running.get(job.id) === entry) this.persist(job); }
       }).finally(() => {
         // 强制释放后可能已有新一轮，旧 finally 不能释放新一轮的槽位或再落旧盘。
@@ -741,7 +746,7 @@ export class DomainKnowledgeExtraction {
     const job = this.live(id);
     if (["queued", "running"].includes(job.status)) {
       job.status = "cancelled"; job.stage = "已停止，草稿保留";
-      job.turns.filter(t => ["queued", "running"].includes(t.status)).forEach(t => t.status = "cancelled");
+      job.turns.filter(t => ["queued", "running"].includes(t.status)).forEach(t => { if (t.status === "running") t.finished_at = new Date().toISOString(); t.status = "cancelled"; });
       const entry = this.running.get(id);
       if (entry) this.stopExecution(job, entry);
       this.persist(job);
