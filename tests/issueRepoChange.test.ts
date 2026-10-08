@@ -335,10 +335,17 @@ test("remove 模块绑定仓打回(端点门禁与 #240 工具①同款);未绑�
     // 单方向 diff(只移除):增段不得出现空段落——便签换成移除段首行,
     // 带拍板语义。模块绑定仓(alpha)之外都可移除。
     service.requestRepoChanges(id, { add: [], remove: [delta] });
-    const note = readStateFile(dataDir, id).stage_note ?? "";
+    const afterRemove = readStateFile(dataDir, id);
+    const note = afterRemove.stage_note ?? "";
     assert.match(note, /移除本会话的代码仓/);
-    assert.match(note, /与本问题无关/, "便签带拍板语义");
     assert.doesNotMatch(note, /新增了代码仓/, "空方向不出空段");
+    // 拍板语义钉在便签全文(parked_notices,续跑随行注入模型):stage_note
+    // 是首行截 120 字的展示摘要,macOS $TMPDIR 路径(/var/folders/…约 100 字)
+    // 会把拍板句挤出截断窗(Linux /tmp 下才侥幸可见)。
+    const parked = afterRemove.parked_notices?.at(-1) ?? "";
+    assert.match(parked, /移除本会话的代码仓/);
+    assert.match(parked, /与本问题无关/, "便签带拍板语义");
+    assert.doesNotMatch(parked, /新增了代码仓/, "空方向不出空段");
   } finally {
     await service.shutdown().catch(() => undefined);
     await model.stop();

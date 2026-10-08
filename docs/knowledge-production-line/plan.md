@@ -314,8 +314,8 @@ B3 把它们收敛成一个服务端函数（D5）。
 
 ## 7. 测试基线
 
-- `baseline-failures-af235632.txt` 列出 af235632 上 `npm test` 的 25 条既有失败，都与知识生产线无关（问题流、DTS、交付等）。其中"全部合入后停止追踪新意见"是偶发失败，单独跑能通过。
-- 每批 `npm test` 的失败集合不超出快层基线。`test:full` 另有 `baseline-full-failures-bb607c66.txt`：用户在不含 B1 改动的干净 bb607c66 副本，以同样的 `--test-concurrency=8` 对拍 8 个文件，35 条中失败 12 条，名单完全一致；对拍日志为 `/private/tmp/mfc-b1-head-baseline-full.log`。重仿真的判定口径与快层相同，失败集合不超出“快层基线 ∪ 本清单”。清单里的用例变成通过不算问题；这 12 条和快层既有失败均不在本整改范围内，不修。
+- 快层既有失败已于 2026-10-08 清零（原 `baseline-failures-af235632.txt` 的 24 条：19 条是代码早已有意改动、测试没跟上；5 条是真问题，改了代码），清单删除；此后 `npm test` 以 0 失败为准。
+- `test:full` 另有 `baseline-full-failures-bb607c66.txt`：用户在不含 B1 改动的干净 bb607c66 副本，以同样的 `--test-concurrency=8` 对拍 8 个文件，35 条中失败 12 条，名单完全一致；对拍日志为 `/private/tmp/mfc-b1-head-baseline-full.log`。重仿真的判定口径与快层相同，失败集合不超出本清单。清单里的用例变成通过不算问题；这 12 条和快层既有失败均不在本整改范围内，不修。
 - 常用命令：
   - `npm run typecheck`（还要跑 `cd web && npx tsc -b`）
   - `npm test`

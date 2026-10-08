@@ -168,6 +168,8 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
     assert.equal(contractChild.blocked_by, undefined);
     await service.cancel(contractChild.id, "tester");
     await service.cancel(filterChild.id, "tester");
+    assert.equal(service.get(parent.id)?.status, "canceled",
+      "全部子任务取消时主任务也取消，不冒充交付完成");
 
     assert.equal(contractChild.delivery_scope, undefined);
     assert.equal(filterChild.delivery_scope, undefined);
@@ -215,8 +217,10 @@ test("单仓拆分:同 AR 单号确认→串行子任务+任务书+全局 Story 
       join(dataDir, filterChild.id, "chain-plan.md"), "utf-8");
     assert.match(plan, /单仓拆分方案/, "CHAIN 正文随子任务落盘");
 
-    // 全部子任务真实完成后父任务才收口。
+    // 全部子任务真实完成后父任务才收口。以下手工改写子任务状态仅为验证
+    // 汇总；另起一个汇总现场（同 chainAnalysis，bf1e30dc）。
     const internal = service as any;
+    internal.tasks.get(parent.id).summary.status = "coordinating";
     for (const child of [contractChild, filterChild]) {
       const state = internal.tasks.get(child.id);
       state.summary.status = "completed";

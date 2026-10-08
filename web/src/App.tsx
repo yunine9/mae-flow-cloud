@@ -1412,7 +1412,9 @@ export function App() {
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
     <div className="min-h-screen min-w-0 bg-(--canvas)">
       {view !== "library" && <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
-        (dtsWide || view === "knowledge") ? "max-w-none" : "max-w-(--page-width)",
+        // 与主区同一判据（标题条只在非 library 视图渲染）：783431e2 把 knowledge 移出主区
+        // 全宽时漏了这里，宽屏上标题条与内容左边缘错开。
+        dtsWide ? "max-w-none" : "max-w-(--page-width)",
         "max-[1080px]:px-7 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-3.5 max-[760px]:px-[18px] max-[760px]:pt-[26px] max-[480px]:px-[13px]")}>
         <div className={view === "knowledge" ? "team-assets-heading" : undefined}>
           <h1 className="mb-2 text-[28px] font-[650] leading-[1.25] tracking-[-0.035em] text-(--text-strong) max-[760px]:text-xl">{viewHeader.title}</h1>

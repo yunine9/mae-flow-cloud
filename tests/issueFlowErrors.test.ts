@@ -5,7 +5,7 @@
  * 1. toHttpError 纯函数:每族域错误 → 确定的 HTTP 码,未登记的族不猜
  *    (返回 undefined 交服务器兜底 500);
  * 2. 真路由直调:DTS 网关查询失败(原 500/502/409 三种出口)在拉单/
- *    详情/图代理/关联转正四条路归一为 502;未配置归一为 409;既有
+ *    详情/图代理三条路归一为 502(关联转正已退役);未配置归一为 409;既有
  *    404/409 与材料层 400 不漂移。
  *
  * 路由测试手搓请求/响应对象,不养 HTTP 服务器(测试 seam 评审口径)。
@@ -139,7 +139,7 @@ function seedSuspendedSession(dataDir: string): void {
   }));
 }
 
-test("DTS 网关查询失败:拉单/详情/图代理/关联转正四条路同码 502", async () => {
+test("DTS 网关查询失败:拉单/详情/图代理三条路同码 502", async () => {
   const dataDir = mfcTemp("mfc-issue-err-502-");
   seedSuspendedSession(dataDir);
   const service = new IssueFlowService({
@@ -160,13 +160,6 @@ test("DTS 网关查询失败:拉单/详情/图代理/关联转正四条路同码
       { service, dts: unreachableGateway,
         url: "/issues/dts-file?path=%2Fv1%2Fnfs%2Fx.png" });
     assert.equal(file.status, 502, "图代理本来就是 502,不漂移");
-
-    const associate = await issueCall("POST",
-      ["issues", "issue-1", "associate"],
-      { service, dts: unreachableGateway, payload: { ticket: "DTS-2026-1001" } });
-    assert.equal(associate.status, 502,
-      "关联转正原来是包一层 409,现与网关失败同码");
-    assert.match(associate.body.error, /DTS 网关不可达/);
   } finally {
     await service.shutdown().catch(() => undefined);
   }
@@ -175,8 +168,9 @@ test("DTS 网关查询失败:拉单/详情/图代理/关联转正四条路同码
 test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功)", async () => {
   const dataDir = mfcTemp("mfc-issue-err-409-");
   seedSuspendedSession(dataDir);
-  // 服务与路由都不给网关:路由走 requireDts 守卫,服务走 associate 的
-  // 未配置档——两处都必须是 DtsGatewayUnconfiguredError(409)。
+  // 服务与路由都不给网关:路由走 requireDts 守卫,必须是
+  // DtsGatewayUnconfiguredError(409)。关联转正已退役(5c34dd51,恒 410,
+  // 退役契约见 issueTicketTemplate.test.ts)。
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
   });
@@ -191,13 +185,6 @@ test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功
     const file = await issueCall("GET", ["issues", "dts-file"],
       { service, url: "/issues/dts-file?path=%2Fv1%2Fnfs%2Fx.png" });
     assert.equal(file.status, 409, "图代理原来是 502,现归一到环境档");
-
-    const associate = await issueCall("POST",
-      ["issues", "issue-1", "associate"],
-      { service, payload: { ticket: "DTS-2026-1001" } });
-    assert.equal(associate.status, 409,
-      "关联转正的未配置档保持 409(原先按控制错误也是 409)");
-    assert.match(associate.body.error, /网关未配置/);
   } finally {
     await service.shutdown().catch(() => undefined);
   }

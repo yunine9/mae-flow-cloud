@@ -4036,25 +4036,6 @@ export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
 }
 
-/** 一次率二轴(口径:CONTEXT「一次修复成功率」「一次定位成功率」词条)。
- * 服务端全台账聚合,分母=完成交付;rate 为 null 表示分母 0(还没有
- * 完成交付的会话),前端显示 —。 */
-export interface IssueOnceRate {
-  total: number;
-  /** 一次定位成功率:分析报告版本数 ≤1。 */
-  localization: { passed: number; rate: number | null };
-  /** 一次修复成功率:从未验证未通过。 */
-  repair: { passed: number; rate: number | null };
-  per_session: {
-    id: string; reviews: number;
-    localization_pass: boolean; repair_pass: boolean;
-  }[];
-}
-
-export function getIssueOnceRates(): Promise<IssueOnceRate> {
-  return issueFetch("/issues/stats");
-}
-
 /** 首次生成占比与 90%AI生成达标率(ADR-0045,工单 #342):终态伴生
  *  快照(code-origin.json)的读侧聚合,工作量口径(增删行均计)。
  *  分母=有数据(伴生在场且有工作变更行)的完成交付会话;rate null=分母 0

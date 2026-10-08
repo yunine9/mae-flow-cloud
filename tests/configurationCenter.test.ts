@@ -10,6 +10,7 @@ import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
+import { MODULE_ID, seedModule } from "./issueFlowFixed.helpers.ts";
 
 const settings = { provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 };
 test("全局版本映射持久化、重复和无效分支拒绝；损坏文件不被覆盖", () => {
@@ -90,7 +91,9 @@ test("版本 API：匿名拒绝，普通成员可增改删，服务端控制 ID 
     // 到不了版本校验;夹具带上登记页恒有的 assignee 再验失效版本 400。
     const invalid = await issueCall({ title: "失效版本", ticket: "DTS20260099", product_version: "不存在", assignee: "dev" });
     assert.equal(invalid.status, 400, "失效配置应提示用户刷新，不作为服务故障 500");
-    const auto = await issueCall({ title: "DTS 自动关联", source: "dts", ticket: (await dts.listByOwner("dev"))[0].ticket });
+    // DTS 发起必带模块(ADR-0056,65532d4f):列上带出或人工改选,服务端不补猜。
+    seedModule(dir, join(dir, "seed-repo.git"));
+    const auto = await issueCall({ title: "DTS 自动关联", source: "dts", ticket: (await dts.listByOwner("dev"))[0].ticket, module_id: MODULE_ID });
     assert.equal(auto.status, 201);
     const autoState = await auto.json() as { baseline: string; product_version: string };
     assert.equal(autoState.baseline, "release/2.6");

@@ -578,13 +578,14 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
   ];
   const model = new ScriptedModelServer(script);
   await model.start();
-  // 单号门禁在阶段门禁之后把守:种子落在 push_branch 开放的 fix 阶段
-  // (阶段已收口,收口即返工续推,不牵催办),单号缺席由机械门禁打回。
+  // 单号门禁在阶段门禁之后把守:push_branch 自 #373(ADR-0050)起为
+  // 「提交 MR·跑绿」独占,种子落在 mr_green(阶段已收口,不牵催办),
+  // 单号缺席由机械门禁打回。
   seedRecoverableIssue(dataDir, "issue-1", {
     title: "无单号问题",
     repo_url: origin, repo_urls: [origin],
     scenario: "ticket", round: 1,
-    stage: "fix", stage_states: ["done", "done", "done", "done", "pending"],
+    stage: "mr_green", stage_states: ["done", "done", "done", "done", "done"],
     status: "running",
   });
   const service = new IssueFlowService({

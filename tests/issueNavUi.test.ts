@@ -139,14 +139,14 @@ test("DTS 列表子页签全宽:页面平铺屏幕,标题条同步对齐,其余�
   // 一起放开 max-width——标题条不随内容全宽就会悬在书页宽上错位。
   assert.match(app, /const dtsWide = view === "issues" && activeIssueChild === "dts";/,
     "全宽判据只认 DTS 子页签");
-  // #228 换装:is-wide 修饰类退役,全宽改由条件工具类直译(max-w 二选一),
-  // 不再有 legacy css 全宽规则可钉。回忆视图(#276 后续)共享同一档全宽;
-  // 1aa3bd98 起手册(documents)与回忆(memories)两页签都放开。
+  // #228 换装:is-wide 修饰类退役,全宽改由条件工具类直译(max-w 二选一)。
+  // 知识域各页的全宽判据随知识库改版几经变化(3db3fe9b/783431e2),
+  // 这里只钉问题域不变量:标题条与主区都以 dtsWide 打头放开。
   assert.match(app,
-    /\(dtsWide \|\| \(view === "knowledge" && \["memories", "documents"\]\.includes\(teamAssetTab\)\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
+    /<header className=\{cn\("mx-auto flex w-full[^"]*",\s*\n(?:\s*\/\/[^\n]*\n)*\s*dtsWide \? "max-w-none" : "max-w-\(--page-width\)"/,
     "标题条随全宽切换(左边缘与内容对齐)");
   assert.match(app,
-    /main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n?\s*\(dtsWide \|\| \(view === "knowledge" && \["memories", "documents"\]\.includes\(teamAssetTab\)\)\) \? "max-w-none" : "max-w-\(--page-width\)"/,
+    /<main className=\{cn\("mx-auto w-full px-10 pb-\[72px\]",\s*\n\s*\(dtsWide \|\| [^?]*\) \? "max-w-none" : "max-w-\(--page-width\)"/,
     "主区随 DTS 子页签切换");
   // 页头随子页签换文案:整域静态说明对子页签无信息量。
   assert.match(app, /issueChildHeaders/,
@@ -188,6 +188,7 @@ test("父行徽章:开发侧挂名下进行中的问题数,与页内「进行中
     "列表页「进行中」筛选与计数同用 isIssueActive");
   // 数据同源:徽章列表走 GET /issues(归属或登记人是自己,ADR-0031),
   // 不许前端从 scope=all 里自筛(服务端收窄规则一变两处就漂)。
-  assert.match(app, /session\?\.role === "admin"\s*\n?\s*\? Promise\.resolve<IssueSummary\[\]>\(\[\]\) : listIssues\(\)/,
+  // a874049c 起旁栏各路各自 then 落状态(慢请求不拖任务列表)。
+  assert.match(app, /session\?\.role === "admin" \? Promise\.resolve\(\)\s*\n?\s*: listIssues\(\)\.then\(setMyIssues\)/,
     "本人问题列表走 listIssues,admin 不拉(其 GET /issues 是全量)");
 });

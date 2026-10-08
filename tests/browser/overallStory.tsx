@@ -23,7 +23,7 @@ window.fetch = async (input, init) => {
   if (path.endsWith("/overall-story/confirm")) { confirmed = true; body = status(); }
   else if (path.includes("/overall-story/revisions/")) body = { diff: "@@ -0,0 +1,2 @@\n+# 整体 Story\n+整体验收口径" };
   else if (path.endsWith("/overall-story")) { if (init?.method === "POST") generated++; body = status(); }
-  else if (path.endsWith("/artifacts")) body = generated ? [{ name: artifact, kind: "doc", purpose: "overall_story", story_published: true, label: "整体 Story", bytes: 200, modified_at: "2026-09-08" }] : [];
+  else if (/\/artifacts(?:\?|$)/.test(path)) body = generated ? [{ name: artifact, kind: "doc", purpose: "overall_story", story_published: true, label: "story.md", bytes: 200, modified_at: "2026-09-08" }] : [];
   else if (path.includes("/artifacts/")) body = { kind: "doc", content: "# 跨模块需求整体 Story\n\n## 用户场景\n\n用户提交任务后，可以在工作台查看整个需求的处理状态。\n\n## 整体验收\n\n1. 前端展示服务端返回的状态。\n2. 接口失败时保留用户输入，支持重试。\n\n## 来源\n\n用户工作台 · child-1\n\n服务接口 · child-2" };
   else if (path.endsWith("/annotations")) body = { items: [], checks: [], closures: [] };
   else if (path.endsWith("/developer-assistant")) body = { state: "idle", messages: [], tools: [], availability: { available: false, code: "not_editable", mode: "unavailable", reason: "任务已完成" } };
@@ -49,35 +49,35 @@ async function button(text: string) {
 async function run() {
   (await button("文档")).click();
   await pause(150);
-  if (document.querySelector(".overall-story-tools") || storyRequests.length) {
+  if (document.querySelector('[aria-label="story.md 维护"]') || storyRequests.length) {
     throw new Error("child task exposed overall Story generation or requested its API");
   }
   generated = 1; // 主任务分析已产出全局 Story；页面只维护已有文档。
   renderTask();
   for (let i = 0; i < 50 && document.querySelector(".ws-parent-task"); i++) await pause(20);
   (await button("产出文档")).click();
-  (await button("更新 Story")).click();
+  (await button("更新 story.md")).click();
   for (let i = 0; i < 40 && generated !== 2; i++) await pause(50);
   for (let i = 0; i < 40 && !document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story"); i++) await pause(50);
   if (!document.querySelector(".ws-doc")?.textContent?.includes("跨模块需求整体 Story")) throw new Error("updated Story did not reach reader");
   (await button("来源与版本")).click();
-  (await button("确认这版整体 Story")).click();
+  (await button("确认这版 story.md")).click();
   const select = document.querySelector<HTMLButtonElement>('[role="combobox"][aria-label="更新对比版本"]')!;
   select.click(); await pause(100);
   const version = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(option => option.textContent?.includes("第 2 版"));
   if (!version) throw new Error("revision option missing");
   version.click();
   await pause(100);
-  if (!document.querySelector(".overall-story-diff")?.textContent?.includes("整体验收口径")) throw new Error("diff missing");
+  if (!document.querySelector('[aria-label="story.md 维护"]')?.textContent?.includes("整体验收口径")) throw new Error("diff missing");
   const reader = document.querySelector(".ws-doc")!;
   let detached = false;
   const observer = new MutationObserver(() => { if (!reader.isConnected) detached = true; });
   observer.observe(document.getElementById("app")!, { childList: true, subtree: true });
   sourceChanged = true;
-  for (let i = 0; i < 130 && !document.querySelector(".overall-story-tools")?.textContent?.includes("待同步"); i++) await pause(50);
+  for (let i = 0; i < 130 && !document.querySelector('[aria-label="story.md 维护"]')?.textContent?.includes("待同步"); i++) await pause(50);
   observer.disconnect();
   if (generated !== 2 || detached) throw new Error("source changes triggered generation or unmounted reader");
-  if (!document.querySelector(".overall-story-tools")?.textContent?.includes("待同步")) throw new Error("stale warning missing");
+  if (!document.querySelector('[aria-label="story.md 维护"]')?.textContent?.includes("待同步")) throw new Error("stale warning missing");
   if (document.documentElement.scrollWidth > window.innerWidth + 1) throw new Error("page overflow");
   if (errors.length) throw new Error(errors.join(";"));
   return { childEntryHidden: true, generated, confirmed, diff: true, stale: true, readerStable: true, width: window.innerWidth };

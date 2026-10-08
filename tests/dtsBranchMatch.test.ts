@@ -138,27 +138,29 @@ test("HTTP:dts 发起按包含匹配快照分支,未配置即 400,显式版本�
       method: "POST", headers: { cookie }, body: JSON.stringify(body),
     });
 
+    // 模块发起闸(ADR-0056,65532d4f):DTS 来源必带模块且闸在分支闸之前,
+    // 夹具先种模块并随单带 module_id,下面测的才是分支闸。
+    seedModule(dir, join(dir, "seed-repo.git"));
     const ticket = (await dts.listByOwner("dev"))[0].ticket;
-    const auto = await create({ title: "自动带分支", source: "dts", ticket });
+    const auto = await create({ title: "自动带分支", source: "dts", ticket, module_id: MODULE_ID });
     assert.equal(auto.status, 201);
     const autoState = await auto.json() as { baseline: string; product_version: string };
     assert.equal(autoState.product_version, GROUP, "多命中取最长");
     assert.equal(autoState.baseline, GROUP_BRANCH, "解析结果快照为基线");
 
     dts.detail = async ticket => ({ ...await originalDetail(ticket), version: "V9R1C99X" });
-    const unmatched = await create({ title: "版本没配过", source: "dts", ticket });
+    const unmatched = await create({ title: "版本没配过", source: "dts", ticket, module_id: MODULE_ID });
     assert.equal(unmatched.status, 400, "未配置分支禁止发起(兜底退役)");
     assert.match((await unmatched.json() as { error: string }).error, /未配置分支/);
 
     dts.detail = async ticket => ({ ...await originalDetail(ticket), version: undefined });
-    const noVersion = await create({ title: "老单没有版本", source: "dts", ticket });
+    const noVersion = await create({ title: "老单没有版本", source: "dts", ticket, module_id: MODULE_ID });
     assert.equal(noVersion.status, 400, "读不到版本同尺拒绝:没有分支就不发车");
     assert.match((await noVersion.json() as { error: string }).error, /未配置分支/);
 
     // 手工登记路径不受影响:显式 product_version 仍走精确解析。
     // 无单登记有模块与环境两道既有闸(仓从模块带、现场凭据要齐),
     // 夹具按 HTTP wire 形带上(backend_password 是 routes 读的字段名)。
-    seedModule(dir, join(dir, "seed-repo.git"));
     const manual = await create({
       title: "手工登记", assignee: "dev", product_version: SHORT,
       module_id: MODULE_ID,
@@ -280,19 +282,20 @@ test("无基线的会话不受影响:仍按默认分支克隆并切修复分支"
 const registration = readFileSync(
   new URL("../web/src/issues/Registration.tsx", import.meta.url), "utf-8");
 
-test("UI 契约:分支列在列,未配置深链配置中心,选择框在 DTS 列表退役", () => {
-  // 列骨架:分支列有自己的列宽把手(可拖拽)与表头;列在版本与状态之间。
-  // 9:8 → 10:9:#350 发起备注列入列(launch 与 module 之间)。
-  assert.match(registration, /DtsColResizeHandle colKey="branch" label="分支"/);
-  assert.match(registration, /\{renderCol\("branch"\)\}/);
-  assert.match(registration, /const colCount = moduleCol \? 10 : 9;/);
-  // 未命中:深链配置中心「版本与分支」页签,文案带「未配置分支」。
-  assert.match(registration, /未配置分支,前往配置/);
+test("UI 契约:分支列退役,未配置信号收拢到版本过滤提示条并深链配置中心,选择框在 DTS 列表退役", () => {
+  // 65532d4f(2026-09-24,ADR-0038 修订):版本/分支列退役并入工具栏版本组
+  // 过滤,未配置分支的信号收拢到过滤框旁的红色提示条。
+  assert.doesNotMatch(registration, /colKey="branch"/, "分支列已退役");
+  assert.doesNotMatch(registration, /renderCol\("branch"\)/);
+  // 未命中:提示条点名版本组并深链配置中心「版本与分支」页签。
+  assert.match(registration, /未配置分支映射/);
   assert.match(registration, /href="\/configuration\?tab=versions"/);
-  // 勾选闸:未配置分支的行禁勾(与已发起同格),全选不含它们。
-  assert.match(registration, /disabled=\{!!mineLive \|\| !ticket\.branch\}/);
+  // 勾选闸(逐单强制项不变):未配置分支的行禁勾(与已发起、未匹配模块
+  // 同格,ADR-0056),全选不含它们。
   assert.match(registration,
-    /\.filter\(\(t\) => !mineLiveByTicket\.has\(t\.ticket\) && !!t\.branch\)/);
+    /disabled=\{!!mineLive \|\| !ticket\.branch \|\| !resolvedModule\}/);
+  assert.match(registration,
+    /\.filter\(\(t\) => !mineLiveByTicket\.has\(t\.ticket\) && !!t\.branch\b/);
   // 选择框退役:DTS 列表不再挂 ProductVersionPicker,登记表单保留
   // 唯一一处;旧的"精确匹配/沿用基线"说明文案随选择框删除。
   assert.equal(
