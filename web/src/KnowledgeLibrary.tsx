@@ -86,7 +86,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
         ? <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
       {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, action) => openTask(kind, id, action.view !== "progress", action)} onSummaryChange={setSummary} />}
-      {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} onBack={() => navigate("home")} onCreated={(kind, id) => openTask(kind, id)} />}
+      {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} onBack={() => navigate("home")} onCreated={(kind, id) => openTask(kind, id)} onCreatedMany={() => navigate("tasks")} />}
       {route.page === "import" && <KnowledgeSkillImport moduleKey={route.module} onBack={() => navigate("home")} onCreated={id => openTask("skill-submission", id, true)} />}
       {route.page === "experience" && <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><MemoryBoard onOpenTask={onOpenTask} /></div>}
       {route.page === "task" && <div className="knowledge-hub-task">

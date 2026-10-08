@@ -18,7 +18,7 @@ export interface ComponentResearchRecord {
   skill?: { name: string; digest: string };
   section_history?: Array<{ at: string; operator: string; section: ComponentResearchSection }>;
   update_document_id?: string;
-  mode?: "topic" | "all";
+  mode?: "all";
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
   review_turns?: ComponentResearchReviewTurn[];
@@ -44,7 +44,7 @@ export interface ComponentResearchSection {
   related_ids: string[]; revision: number;
 }
 export interface ComponentResearchReviewTurn {
-  id: string; section_id: string; mode: "discuss" | "rework" | "update"; message: string; operator: string;
+  id: string; section_id: string; mode: "discuss" | "rework" | "update" | "supplement"; added_section_ids?: string[]; message: string; operator: string;
   status: "queued" | "running" | "done" | "failed" | "cancelled";
   skill?: { name: string; digest: string };
   proposal?: { base_revision: number; section: ComponentResearchSection; status: "pending" | "accepted" | "discarded" };

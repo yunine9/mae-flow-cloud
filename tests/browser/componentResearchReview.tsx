@@ -38,6 +38,12 @@ window.fetch = async (url, options) => {
     result = record;
   } else if (path.endsWith("/review")) {
     calls.push({action:"review",...body});
+    if (body.mode === "supplement") {
+      const base = record.document!.sections[0];
+      record.document!.sections.push({ ...base, id: "cap-pool", title: "连接池超时回收", revision: 1, selected: true, related_ids: [] });
+      record.review_turns!.push({ id: `turn-${calls.length}`, ...body, added_section_ids: ["cap-pool"], operator: "专家", status: "done", reply: "补充了连接池超时回收。", created_at: new Date().toISOString() });
+      return new Response(JSON.stringify(record), { headers: { "Content-Type": "application/json" } });
+    }
     const section = record.document!.sections.find(s => s.id === body.section_id)!;
     const proposal = body.mode === "rework" ? { base_revision: section.revision, section: { ...section, revision: section.revision + 1, content: section.content + " 返工已补充取消时的资源释放说明。" }, status: "pending" as const } : undefined;
     record.review_turns!.push({proposal,id:`turn-${calls.length}`,...body,operator:"专家",status:"done",reply:"已核对来源，仅处理当前能力，其他组件保持原样。",created_at:new Date().toISOString()});
@@ -103,6 +109,21 @@ async function run() {
   next.click();await pause();
   check(reader.scrollTop === 0 && list.scrollTop === 180, "switching component resets document only");
   list.scrollTop = 0;
+  const sectionCount = record.document!.sections.length;
+  await click("补充遗漏能力");
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes("文件基础库、异步调用库"), "supplement dialog names the research scope");
+  const gap = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="遗漏的能力说明"]')!;
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(gap,"漏了连接池的超时回收");
+  gap.dispatchEvent(new Event("input",{bubbles:true}));await pause();
+  await click("开始补充");
+  const supplement = calls.filter(c => c.action === "review").at(-1);
+  check(supplement.mode === "supplement" && supplement.section_id === "" && supplement.message === "漏了连接池的超时回收", "supplement is a review turn bound to no existing capability");
+  check(record.document!.sections.length === sectionCount + 1, "supplement adds a capability");
+  const addedLink = [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(b => b.textContent?.trim() === "连接池超时回收");
+  check(addedLink, `dialog lists the added capability: ${document.querySelector('[role="dialog"]')?.textContent}`); addedLink!.click(); await pause();
+  check(!document.querySelector('[role="dialog"]:not([data-closed])'), "jumping to the added capability closes the dialog");
+  check(document.querySelector('[aria-label="组件详细文档"]')?.textContent?.includes("连接池超时回收"), `added capability opens for item review: ${document.querySelector('[aria-label="组件详细文档"]')?.textContent?.slice(0, 80)}`);
+  check(boxes().length === sectionCount + 1 && boxes().at(-1)!.checked, "added capability appears selected in the directory");
   const workspace = document.querySelector('[aria-label="组件审核工作区"]')!;
   check(workspace.scrollWidth <= workspace.clientWidth + 2,"desktop workspace horizontal overflow");
   check(document.documentElement.scrollWidth <= innerWidth + 2,"desktop page horizontal overflow");
@@ -110,11 +131,21 @@ async function run() {
   document.querySelector<HTMLButtonElement>('[aria-label="文稿更多操作"]')!.click(); await pause();
   const artifactsAction = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("查看派生产物"));
   check(artifactsAction, "artifact preview remains in the more menu"); artifactsAction!.click(); await pause();
-  check(document.querySelector('[role="dialog"]')?.textContent?.includes("规则未启用"), "derived candidates cannot claim enabled");
+  check(document.querySelector('[role="dialog"]:not([data-closed])')?.textContent?.includes("规则未启用"), "derived candidates cannot claim enabled");
   check(button("下载结构化产物"), "structured artifact export available");
   check(document.documentElement.scrollWidth <= innerWidth + 2, "artifact preview does not overflow desktop");
+  // 知识库阅读页的统一审查：开研究对话时让出目录，正文宽度基本不缩水；收起后目录回来。
+  root.render(<ComponentResearch key="knowledge" open focused focusId="cr-browser" surface="knowledge" onClose={() => {}} onAdopt={() => {}} />);
+  for (let i=0;i<60 && !button("研究对话");i++) await pause();
+  const readerWidth = () => document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!.getBoundingClientRect().width;
+  const widthBefore = readerWidth();
+  await click("研究对话");
+  check(document.querySelector('[aria-label="组件专家对话"]') && !document.querySelector('[aria-label="组件能力目录"]'), "opening the dialogue yields the directory to the body");
+  check(readerWidth() >= widthBefore - 120, `body keeps most of its width while the dialogue is open: ${widthBefore} -> ${readerWidth()}`);
+  await click("研究对话 · 收起");
+  check(document.querySelector('[aria-label="组件能力目录"]'), "closing the dialogue restores the directory");
   check(!errors.length,errors.join(";"));
-  document.querySelector("main")!.scrollTop = 0;
+
   return {passed:true,width:innerWidth,selected:boxes().filter(b => b.checked).length,turns:record.review_turns!.length};
 }
 if (!new URLSearchParams(location.search).has("scrollCheck")) run().then(value => {document.getElementById("result")!.textContent = JSON.stringify(value);})

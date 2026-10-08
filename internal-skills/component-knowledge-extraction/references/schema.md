@@ -26,7 +26,7 @@ replaces.identifiers 写精确符号，如 std::thread、Executors.newFixedThrea
 
 ## 导出的文件与程序读取
 
-每份正文有独立路径：components/<component>/<task.id>.md，推荐用法放在 paradigms/ 子目录。Markdown 不带 frontmatter 和来源清单，只含可读的知识正文、接口、接入依赖与完整示例。
+以下是「下载结构化产物」包的格式，供程序重提取，不是 Git 归档格式。每份正文有独立路径：components/<component>/<task.id>.md，推荐用法放在 paradigms/ 子目录。Markdown 不带 frontmatter 和来源清单，只含可读的知识正文、接口、接入依赖与完整示例。
 
 同路径的 <task.id>.metadata.json 保存 schema="mfc.component-paradigm/v2"、id、title、revision 和全部 paradigm 字段。证据、内部状态及调查缺口只放结构化字段。正文与元数据共同构成一份产物，不另写第二份知识。
 
@@ -34,13 +34,13 @@ replaces.identifiers 写精确符号，如 std::thread、Executors.newFixedThrea
 
 catalog 的 path 指向实际 Markdown。元数据缺失、非法字段、孤立元数据或重复编号均报错，不静默输出半份结果。旧版 frontmatter 文档仍可读取，新导出使用正文与 JSON 分开的格式。
 
-联合 Markdown 下载同样只含知识。Git 归档提交两份配套文件：指南 .md 与同名 .metadata.json（mfc.component-guide/v2，包含 component_paradigms 和正文摘要 content_sha256）。合入后读取同一 Git 版本的这两份文件并校验一致性，再恢复正式知识的内部结构；文件缺失或正文摘要不一致时提示同步失败，不使用错配的规则。正式入库仍保留现有内部格式以兼容检索与规则消费；其中的机器字段不属于阅读和下载正文。包内 evidence/everycode.json 保存原始调用代码，完整产物通过结构化产物入口取得。
+一次研究对应一个组件，审查发布后是该组件的一篇正式知识。Markdown 下载与 Git 归档都只含这一篇知识正文：归档由人手动触发，路径为「配置的目录/语言/知识标题.md」（标题即组件功能名，如「文件操作」），创建 MR 即结束，平台不读回仓里的文件。结构化字段只保存在平台正式库，供检索与规则消费，不属于阅读、下载和归档正文。包内 evidence/everycode.json 保存原始调用代码，完整产物通过结构化产物入口取得。
 
 独立重提取命令：`node --import tsx scripts/derive-component-knowledge.ts <导出的JSON包或解包目录> [输出目录]`。无输出目录时仅校验和输出摘要；错误输入非零退出，不覆盖已有结果；重复生成会移除上次清单中的过期规则。
 
 ## 正式知识如何用于开发
 
-草稿导出仍是预览。人工采纳或 MR 归档同步为启用的正式知识后，平台从正式 Markdown 提取范式，按任务仓库、模块、语言及明确声明的产品版本选择。选型映射和派生规则分别维护启用策略；新内容默认为 shadow，只记录命中，不向开发 Agent 提示。文档采纳不等于规则启用。
+草稿导出仍是预览。人工审查发布即成为正式知识，平台从正式知识提取范式，按任务仓库、模块、语言及明确声明的产品版本选择。选型映射和派生规则分别维护启用策略；新内容默认为 shadow，只记录命中，不向开发 Agent 提示。文档采纳不等于规则启用。
 
 组件知识工作台以文档阅读为入口，代码检查设置和实际命中按需打开。负责人可启用 warning、限定路径或设为 off；平台不提供阻断提交的 error 级别。人工策略存于 component-governance/rule-policy.json，开发工具不能修改。
 

@@ -50,6 +50,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   const timer = setTimeout(() => { totalExpired = true; controller.abort(new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE)); }, 48 * 60 * 60_000); timer.unref();
   const root = join(input.root, "component-pipeline"), snapshots: KnowledgeCodeSnapshot[] = [];
   const revisions = { ...input.record.revisions };
+  const supplementAdded = new Set<string>();
   const evidence = [...input.record.evidence];
   try {
     for (const component of components) {
@@ -64,6 +65,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
     const session = async (task: ComponentWork, reviewResult?: ComponentWorkResult) => {
       signal.throwIfAborted();
       const reviewing = !!reviewResult, discussing = input.review?.mode === "discuss" || !!input.record.challenge;
+      const supplementing = !reviewing && input.review?.mode === "supplement";
       const sessionId = randomUUID(), dir = join(root, "sessions", sessionId), agentDir = join(dir, "agent");
       mkdirSync(agentDir, { recursive: true }); writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
       const sourceReads: Array<Record<string, unknown>> = [], callerReads = new Set<string>(), draftReads = new Map<string, number>();
@@ -110,17 +112,24 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               draftReads.set(s.id, s.revision); return reply(s);
             }
             if (reviewing || discussing || result) throw new Error("当前会话不能修改草稿");
+            if (supplementing && args.action !== "section") throw new Error("补充只能保存新的能力项（契约、范式、陷阱或导航），不能修改概述");
             if (args.action === "overview") {
               if (task.phase !== "synthesis") throw new Error("只有汇总任务可写概述");
               input.editDocument!({ action: "overview", overview: args.overview }); saved = true; return reply({ saved: true });
             }
             const s = args.section;
-            if (args.action !== "section" || !s || s.id !== task.id || !["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) throw new Error("只能保存当前任务编号的章节");
-            if (s.paradigm?.kind !== task.phase || s.paradigm?.component !== task.component) throw new Error("产物类型和组件必须与当前任务一致");
+            if (supplementing) {
+              // 补充轮没有预先排好的任务编号：新项编号和产物类型由研究者按发现定，"只能新增"由文稿编辑规则把关。
+              if (!s || !["contracts", "paradigm", "pitfalls", "index"].includes(s.paradigm?.kind)) throw new Error("补充只能保存新的能力项（契约、范式、陷阱或导航）");
+              if (doc.sections.some(old => old.id === s.id) && !supplementAdded.has(s.id)) throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样；需要改已有项请人在该项上返工");
+            } else {
+              if (args.action !== "section" || !s || s.id !== task.id || !["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) throw new Error("只能保存当前任务编号的章节");
+              if (s.paradigm?.kind !== task.phase || s.paradigm?.component !== task.component) throw new Error("产物类型和组件必须与当前任务一致");
+            }
             if (input.review && draftReads.get(s.id) !== doc.sections.find(old => old.id === s.id)?.revision) throw new Error("修订前必须读取当前章节全文");
             await verifyMetadata(s.paradigm, true);
             if (!Array.isArray(s.repository_ids) || s.paradigm.evidence.some((e: any) => !s.repository_ids.includes(e.repository_id))) throw new Error("章节来源仓需包含所有基础仓证据");
-            if (!doc.sections.some(old => old.id === s.id)) input.editDocument!({ action: "outline", entries: [{ id: s.id, title: s.title, repository_ids: s.repository_ids }] });
+            if (!doc.sections.some(old => old.id === s.id)) { input.editDocument!({ action: "outline", entries: [{ id: s.id, title: s.title, repository_ids: s.repository_ids }] }); if (supplementing) supplementAdded.add(s.id); }
             const next = input.editDocument!({ action: "section", section: { ...s, sources: componentSources(s.paradigm) } }); saved = true;
             return reply(next.sections.find(row => row.id === s.id));
           } catch (error) { return failure(error); }
@@ -177,7 +186,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         codeSearchTool(observe, { captureRead: true, excludePath: excludedComponentSource })];
       const prompt = `你是组件知识${reviewing ? "独立评审者" : "研究者"}，只处理当前任务。先读取 references/platform-pipeline.md、references/schema.md 及 references/${reviewing ? "phase-review" : `phase-${task.phase}`}.md。事实来源只限基础仓代码与 everycode，不使用上传资料、豆包、旧知识文档或会话指令作为证据。工具提交结果才算完成。\n` +
         extractionSkillMission(skill, { task, review_result: reviewResult, mode: input.review?.mode ?? "extract", language: input.record.language,
-          topic: input.record.topic, scope: input.record.mode === "all" ? "全部能力" : "仅指定主题；相关依赖按需核对", components, revisions,
+          topic: input.record.topic, scope: "本组件的全部能力；依赖的其他组件通过 everycode 核对真实调用", components, revisions,
           structure: task.phase === "inventory" ? knowledgeStructure(snapshots) : undefined,
           feedback: input.review ? { message: input.review.message, previous_revisions: input.review.previous_revisions } : undefined });
       const driver = await CloudSession.create({ taskId: `${input.record.id}-${sessionId}`, workspace: dir, agentDir, resumeSession: false, excludeAgentFiles: true,
@@ -203,6 +212,22 @@ export async function runComponentResearch(input: ResearchExecution, options: {
       const response = await session({ id: "challenge", phase: "inventory", title: "寻找合理反例", status: "running", attempts: 1, dependencies: [],
         spec: `待验证主张（仅为假设，不能作为证据）：${input.record.challenge.claim}\n独立寻找必须保留原生写法、组件无法替代的合理场景。读取基础仓实现边界，并使用 everycode 搜索、展开消费方调用。不要修改文档或启用规则。结果说明：找到反例 / 当前未找到 / 证据不足；逐条列出基础仓固定版本、代码位置、消费方调用位置及不能替代的原因。未找到不等于证明正确，记录搜索范围、版本未知与待确认问题。` });
       return response.result!.findings + (response.result!.open_questions.length ? "\n\n待确认：\n" + response.result!.open_questions.join("\n") : "");
+    }
+    if (input.review?.mode === "supplement") {
+      const before = new Set(input.readDocument!().sections.map(s => s.id));
+      const work: ComponentWork = { id: "supplement", title: "补充遗漏能力", phase: "inventory", dependencies: [], status: "running", attempts: 1,
+        spec: "专家指出文稿遗漏了能力。先 research_document read 看清已有能力，不要重复已有项；在本次研究范围的组件仓内核对用户所说的遗漏，"
+          + "每个确有依据的新能力用新编号保存为 contracts、paradigm、pitfalls 或 index 章节（按对应 phase 文件要求写，含接口、集成依赖、完整示例与证据）。"
+          + "已有能力不改；查无依据就如实说明，不要硬凑。" };
+      const response = await session(work);
+      // 每个新增项都独立评审，与全量研究同一道门槛；任一不过整轮不并入。
+      for (const added of input.readDocument!().sections.filter(s => !before.has(s.id))) {
+        const check: ComponentWork = { id: added.id, title: added.title, phase: added.paradigm!.kind, component: added.paradigm!.component, dependencies: [], status: "running", attempts: 1,
+          spec: "评审本轮补充的新能力项：是否确为文稿遗漏、证据与示例是否成立。" };
+        const review = await session(check, response.result!);
+        if (!review.verdict?.pass) throw new Error(`新增能力「${added.title}」独立评审未通过：${review.verdict?.feedback}`);
+      }
+      return response.result!.findings;
     }
     if (input.review) {
       const section = input.readDocument!().sections.find(s => s.id === input.review!.section_id)!;

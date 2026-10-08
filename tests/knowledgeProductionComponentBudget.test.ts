@@ -11,6 +11,10 @@ const timeoutReason = "停止超时：执行体 60 秒内未退出，已强制�
 const config = { name: "文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["cpp"] };
 const section = (ids: string[]) => ({ id: "files", title: "文件处理", repository_ids: ids, content: "文件处理约束。", interfaces: "Close(handle)",
   integration: "链接 files 库。", example: "```cpp\nClose(handle);\n```", sources: "src/file.cpp:1", related_ids: [] });
+/** 一个组件只有一次研究：要占满并发槽位就登记多个组件。 */
+function componentIds(dataDir: string, count: number) {
+  return Array.from({ length: count }, (_, i) => saveComponentRepository(dataDir, { ...config, name: `文件组件 ${i}`, repository: `https://example.test/files-${i}.git` }, "alice").id);
+}
 function writeDocument(input: ResearchExecution) {
   const ids = input.record.components!.map(component => component.id);
   input.editDocument!({ action: "overview", overview: "文件处理组件的依赖关系。" });
@@ -24,7 +28,7 @@ async function settle(): Promise<void> {
 test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽位、记失败且不通知，原任务可继续且迟到结果不影响新一轮", { timeout: 3_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-budget-"));
-  saveComponentRepository(dataDir, config, "alice");
+  const ids = componentIds(dataDir, 4);
   const started: ResearchExecution[] = [], finish: Array<() => void> = [];
   const research = new ComponentResearch(dataDir, async input => {
     started.push(input);
@@ -35,10 +39,10 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     return "迟到的草稿";
   });
   try {
-    const first = research.start({ mode: "all", language: "cpp" }, "alice");
-    const second = research.start({ mode: "all", language: "cpp" }, "bob");
+    const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
+    const second = research.start({ language: "cpp", component_id: ids[1] }, "bob");
     await settle();
-    const third = research.start({ mode: "all", language: "cpp" }, "carol");
+    const third = research.start({ language: "cpp", component_id: ids[2] }, "carol");
     assert.equal(started.length, 2);
     assert.equal(research.get(third.id).status, "queued");
     research.stop(first.id); research.stop(second.id);
@@ -63,7 +67,7 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     assert.deepEqual(research.get(first.id), resumed, "旧执行体迟到返回不能改状态、草稿或证据");
     assert.throws(() => research.review(first.id, { section_id: "files", mode: "discuss", message: "不要并发新一轮" }, "alice"), /本轮完成|停止后/,
       "旧执行体 finally 不能释放新执行体的槽位");
-    const fourth = research.start({ mode: "all", language: "cpp" }, "dave");
+    const fourth = research.start({ language: "cpp", component_id: ids[3] }, "dave");
     await settle();
     assert.equal(research.get(fourth.id).status, "queued", "第三个研究和接续中的研究仍占两个有效槽位");
     assert.equal(started.length, 4);
@@ -86,7 +90,7 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
     await new Promise<void>(resolve => { release = resolve; });
     return "关停后的迟到草稿";
   });
-  const job = research.start({ language: "cpp", topic: "关停预算" }, "alice");
+  const job = research.start({ language: "cpp" }, "alice");
   await settle();
   const stopping = research.shutdown().then(() => { returned = true; });
   try {
@@ -116,7 +120,7 @@ test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止�
     return "已响应停止";
   });
   try {
-    const job = research.start({ language: "cpp", topic: "响应停止" }, "alice");
+    const job = research.start({ language: "cpp" }, "alice");
     await settle(); research.stop(job.id); await settle();
     t.mock.timers.tick(60_000); await settle();
     assert.equal(research.get(job.id).status, "cancelled");
@@ -139,7 +143,7 @@ for (const action of ["edit", "restore"] as const) {
       return "讨论结束";
     });
     try {
-      const job = research.start({ mode: "all", language: "cpp" }, "alice");
+      const job = research.start({ language: "cpp" }, "alice");
       await settle();
       const original = research.get(job.id).document!.sections[0];
       research.editSection(job.id, { section: { ...original, content: "人工保存的第二版" }, base_revision: original.revision }, "alice");
@@ -171,7 +175,7 @@ for (const action of ["stop", "shutdown"] as const) {
     const { syncBuiltinESMExports } = await import("node:module");
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-initial-stop-eio-"));
-    saveComponentRepository(dataDir, config, "alice");
+    const ids = componentIds(dataDir, 4);
     const started: ResearchExecution[] = [], releases: Array<() => void> = [];
     const research = new ComponentResearch(dataDir, async input => {
       started.push(input);
@@ -182,8 +186,8 @@ for (const action of ["stop", "shutdown"] as const) {
     const rename = fs.renameSync;
     let injected = false, stopping: Promise<unknown> | undefined;
     try {
-      const first = research.start({ language: "cpp", topic: "首条研究" }, "alice");
-      const second = research.start({ language: "cpp", topic: "另一条研究" }, "bob");
+      const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
+      const second = research.start({ language: "cpp", component_id: ids[1] }, "bob");
       await settle();
       fs.renameSync = ((from, to) => {
         if (!injected && String(to) === join(dataDir, "component-research", first.id, "record.json")) {
@@ -206,7 +210,7 @@ for (const action of ["stop", "shutdown"] as const) {
       releases[0](); await settle();
       assert.deepEqual(research.get(first.id), failed, "迟到写入不覆盖失败事实");
       if (action === "stop") {
-        research.start({ language: "cpp", topic: "后续研究" }, "carol");
+        research.start({ language: "cpp", component_id: ids[2] }, "carol");
         await settle(); assert.equal(started.length, 3, "预算释放后其他研究获得槽位");
       } else assert.equal(research.get(second.id).status, "failed");
       assert.ok(research.warnings().some(warning => warning.includes(`component-research/${first.id}/record.json`) && warning.includes("EIO")));
@@ -225,17 +229,17 @@ for (const action of ["stop", "shutdown"] as const) {
     const { syncBuiltinESMExports } = await import("node:module");
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-timeout-eio-"));
-    saveComponentRepository(dataDir, config, "alice");
+    const ids = componentIds(dataDir, 4);
     const started: string[] = [], releases: Array<() => void> = [];
     const research = new ComponentResearch(dataDir, async input => {
       started.push(input.record.id);
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";
     });
-    const first = research.start({ language: "cpp", topic: "第一个研究" }, "alice");
-    research.start({ language: "cpp", topic: "第二个研究" }, "bob");
+    const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
+    research.start({ language: "cpp", component_id: ids[1] }, "bob");
     await settle();
-    const queued = research.start({ language: "cpp", topic: "别人的排队研究" }, "carol");
+    const queued = research.start({ language: "cpp", component_id: ids[2] }, "carol");
     let returned = false;
     let closing: Promise<void> | undefined;
     if (action === "stop") research.stop(first.id);

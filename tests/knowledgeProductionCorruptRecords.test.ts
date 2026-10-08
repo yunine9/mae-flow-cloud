@@ -165,12 +165,13 @@ test("生产线验收3（F5）：活动组件讨论缺少文稿或对应章节�
   }
 });
 
-test("生产线验收3（F5）：合法多仓组件章节可引用任务另一仓的范式证据，重启读取采用写入口的完整范围", async () => {
+test("生产线验收3（F5）：范式证据只认本组件仓，引用其他组件仓的研究如实失败；重启读取与写入口一致", async () => {
   const { saveComponentRepository } = await import("../src/componentRepositories.ts");
   const dir = mkdtempSync(join(tmpdir(), "mfc-component-multi-repository-read-"));
   const first = saveComponentRepository(dir, { name: "订单组件", repository: "https://example.test/orders.git", branch: "main", path: "src", languages: ["java"] }, "alice");
   const second = saveComponentRepository(dir, { name: "公共文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["java"] }, "alice");
-  const evidence = { repository_id: second.id, path: "src/Files.java", revision: "a".repeat(40), start: 1, end: 3 };
+  const evidence = { repository_id: first.id, path: "src/Orders.java", revision: "a".repeat(40), start: 1, end: 3 };
+  let cited = evidence;
   let initial: ComponentResearch | undefined, restarted: ComponentResearch | undefined;
   try {
     initial = new ComponentResearch(dir, async input => {
@@ -179,12 +180,20 @@ test("生产线验收3（F5）：合法多仓组件章节可引用任务另一�
       input.editDocument!({ action: "section", section: { id: "orders", title: "订单保存", repository_ids: [first.id], content: "订单保存约束。", interfaces: "save(order)", integration: "依赖公共文件组件。",
         example: "```java\nFiles.save(order);\n```", sources: "公共文件实现", related_ids: [],
         paradigm: { kind: "contracts", component: "orders", language: "java", status: "unverified", need: "保存订单", api: ["Files.save"], applicability: "公共文件组件可用。",
-          replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [evidence], usage_evidence: [], open_questions: [] } } });
-      return "跨仓草稿已保存";
+          replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [cited], usage_evidence: [], open_questions: [] } } });
+      return "草稿已保存";
     });
-    const job = initial.start({ mode: "all", language: "java" }, "alice");
+    // 一个组件一次研究：依赖组件的用法走 everycode 调用证据，不能冒充本组件的实现依据。
+    cited = { ...evidence, repository_id: second.id };
+    const misplaced = initial.start({ language: "java", component_id: first.id }, "alice");
     for (let turn = 0; turn < 20; turn++) await Promise.resolve();
-    assert.equal(initial.get(job.id).status, "done");
+    assert.equal(initial.get(misplaced.id).status, "failed");
+    assert.match(initial.get(misplaced.id).error!, /基础仓固定版本/);
+    initial.remove(misplaced.id, "alice");
+    cited = evidence;
+    const job = initial.start({ language: "java", component_id: first.id }, "alice");
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    assert.equal(initial.get(job.id).status, "done", initial.get(job.id).error);
     const before = initial.get(job.id);
     const path = join(dir, "component-research", job.id, "record.json"), bytes = readFileSync(path, "utf8");
     await initial.shutdown();

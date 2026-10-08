@@ -7,7 +7,7 @@ export interface KnowledgeArchivePreview {
   issue_no?: string; issue_description?: string; expected_revisions: Record<string, string>;
   targets: Array<{ id: string; name: string; repository: string; branch: string; docs_path: string; configured: boolean;
     status_label: string; message: string; error?: string; url?: string; actions: KnowledgeProductionAction[];
-    files: Array<{ id: string; title: string; path: string; content: string; knowledge_document_id: string; knowledge_revision: string; metadata_for?: string }> }>;
+    files: Array<{ id: string; title: string; path: string; content: string; knowledge_document_id: string; knowledge_revision: string }> }>;
 }
 export interface KnowledgeDomainDeletionView {
   title: string; message: string;

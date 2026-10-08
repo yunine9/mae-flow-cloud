@@ -30,7 +30,7 @@ export function executeFile(
                 new Error(
                   error.name === "AbortError" ? "操作已取消"
                     : error.code === "ENOENT" ? `${file === "git" ? "Git" : "ec"} 工具未安装或路径错误`
-                    : error.code === "EACCES" ? "当前服务账户无权执行工具"
+                    : error.code === "EACCES" ? `当前服务账户无权执行 ${file === "git" ? "Git" : "ec"}（${file}），请检查该文件的执行权限`
                     : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "返回内容过大，请缩小搜索或读取范围"
                     : error.killed ? "操作超时，请缩小范围后重试"
                     : file === "git" ? "本地源码操作失败，请检查仓库、版本和路径" : "ec 调用失败，请检查工具配置、凭据和网络",

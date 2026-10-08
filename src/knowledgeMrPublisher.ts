@@ -1,4 +1,4 @@
-import { componentArchiveParts, componentArchiveMetadata, componentMetadataPath, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
+import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -88,7 +88,7 @@ export class KnowledgeMrPublisher {
     finally { this.active.delete(controller); }
   }
   private async content(git: (args: string[]) => Promise<string>, revision: string, path: string) {
-    knowledgeRelativePath(path, !path.endsWith(".metadata.json"));
+    knowledgeRelativePath(path, true);
     const segments = path.split("/");
     for (let i = 1; i < segments.length; i++) {
       const parent = await git(["--literal-pathspecs", "ls-tree", revision, "--", segments.slice(0, i).join("/")]);
@@ -105,7 +105,7 @@ export class KnowledgeMrPublisher {
     const issue = knowledgeIssueNumber(job.issue_no), identity = this.identity(operator);
     const logicalTargets = new Map([job.knowledge_target, ...job.repositories].filter(candidate => candidate.repository === target.repository
       && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
-    const docs: Array<DomainDocument & { metadata_for?: string }> = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
+    const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
       if (!doc.knowledge_document_id || !doc.published_revision) throw new Error("请先发布所选知识，再手动归档正式版本");
       const formal = readKnowledgeDocumentVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
       const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
@@ -113,23 +113,18 @@ export class KnowledgeMrPublisher {
         if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
         return [outgoing];
       }
+      // 平台不读回 Git 里的组件知识，结构化字段只留在正式库；仓里只放给人读的一篇正文（2026-10-08 用户）。
       const parts = componentArchiveParts(formal.content), requested = componentArchiveParts(doc.content);
-      const metadata = doc.component_metadata ?? requested.component_metadata;
-      if (parts.content !== requested.content || parts.component_metadata !== metadata) throw new Error("组件归档正文或结构与所选正式版本不一致，请重新预览");
-      const clean = { ...outgoing, content: parts.content };
-      if (!metadata) return [clean];
-      const content = componentArchiveMetadata(parts.content, metadata);
-      restoreComponentArchive(parts.content, content);
-      return [clean, { ...clean, id: `${doc.id}::metadata`, metadata_for: doc.id, path: componentMetadataPath(outgoing.path),
-        archive_path: doc.archive_path ? componentMetadataPath(doc.archive_path) : undefined, content }];
+      if (parts.content !== requested.content) throw new Error("组件归档正文与所选正式版本不一致，请重新预览");
+      return [{ ...outgoing, content: parts.content }];
     });
     if (!docs.length) throw new Error("请选择至少一篇已发布知识进行归档");
-    const documents: DomainPublication["documents"] = docs.map(doc => ({ id: doc.id, path: doc.path, metadata_for: doc.metadata_for,
+    const documents: DomainPublication["documents"] = docs.map(doc => ({ id: doc.id, path: doc.path,
       content: doc.content, revision: doc.revision, knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision }));
     if (new Set(documents.map(doc => doc.path)).size !== documents.length) throw new Error("归档文件路径不能重复");
     for (const doc of docs) {
       const logicalTarget = logicalTargets.get(doc.target_id)!;
-      if (!knowledgeRelativePath(doc.path, !doc.metadata_for).startsWith(`${logicalTarget.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
+      if (!knowledgeRelativePath(doc.path, true).startsWith(`${logicalTarget.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
       scanForSecrets(doc.path, Buffer.from(doc.content));
     }
     const documentKey = (values: DomainPublication["documents"]) => JSON.stringify(values.map(doc => [doc.id, doc.path, doc.content, doc.revision,

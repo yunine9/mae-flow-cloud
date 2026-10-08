@@ -40,7 +40,7 @@ async function fixture() {
   (service as any).componentResearch = research; (service as any).domainKnowledgeExtraction = manager;
   const server = createTaskServer(service);
   saveComponentRepository(dir, { name: "文件组件", repository: "https://example.test/file.git", branch: "main", path: "src", languages: ["cpp"] }, "alice");
-  const initial = research.start({ mode: "all", language: "cpp", refresh: true }, "alice");
+  const initial = research.start({ language: "cpp" }, "alice");
   await until(() => research.get(initial.id).status === "done", "草稿未在5秒预算完成");
   const firstRecord = research.publish(initial.id, body(research.get(initial.id)) as any, "alice");
   const first = readKnowledgeDocument(dir, firstRecord.document_id!);

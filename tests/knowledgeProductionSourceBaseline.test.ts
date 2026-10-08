@@ -106,7 +106,7 @@ test("生产线验收12：F17组件接续研究请求本轮固定SHA，不拿换
       source: async (_component, _operator, _signal, baselineRevisions?: string[]) => { requested = baselineRevisions; throw new Error("FIXTURE_SOURCE_STOP"); } });
   });
   try {
-    const job = service.start({ language: "java", mode: "topic", topic: "订单" }, "bob"); await terminal(() => service.get(job.id));
+    const job = service.start({ language: "java" }, "bob"); await terminal(() => service.get(job.id));
     assert.match(service.get(job.id).error ?? "", /FIXTURE_SOURCE_STOP/); assert.deepEqual(requested, [f.base]);
   } finally { await service.shutdown(); if (previousEc === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = previousEc; rmSync(f.root, { recursive: true, force: true }); }
 });

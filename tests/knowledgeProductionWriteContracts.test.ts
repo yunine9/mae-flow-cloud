@@ -127,6 +127,7 @@ test("生产线验收5/F24：未配置 Git 仍能创建研究，发布不受Git�
     assert.equal(preview.status_label, "已发布（未归档）");
     assert.match(preview.targets[0].message, /未配置 Git 归档仓/);
     assert.equal(preview.actions[0].id, "configure");
+    assert.equal([...preview.actions, ...preview.targets.flatMap(target => target.actions)].filter(action => action.label === "Git 归档设置").length, 1, "设置入口只出现一次");
     assert.equal(preview.actions[0].href, undefined, "领域任务沿用任务内归档设置，不跳到不能更改现任务目标的全局页");
   } finally { await within(manager.shutdown(), "无归档配置的管理器未在5秒内关停"); rmSync(dir, { recursive: true, force: true }); }
 });

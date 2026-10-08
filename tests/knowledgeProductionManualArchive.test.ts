@@ -305,3 +305,26 @@ test("B5已发布小改/生产线验收5/8/14：HTTP编辑仅生成平台新版�
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("一个组件一篇：组件归档只列一篇正文，按语言分目录、按知识标题（组件功能）命名，改名随新版本生效", { timeout: 10_000 }, async () => {
+  const { componentArchivePath } = await import("../src/componentKnowledgeArchiveFormat.ts");
+  const { saveKnowledgeRepoConfig } = await import("../src/knowledgeRepoConfig.ts");
+  assert.equal(componentArchivePath("docs/components", { title: "文件操作", technologies: ["cpp"] }), "docs/components/cpp/文件操作.md");
+  assert.equal(componentArchivePath("docs/components", { title: " 读写/锁:<句柄> ", technologies: [] }), "docs/components/agnostic/读写-锁-句柄.md", "路径字符换成短横线，不产生子目录");
+  assert.equal(componentArchivePath("docs/components", { title: "../..", technologies: ["java"] }), "docs/components/java/组件知识.md", "不能借标题跳出目录");
+  const dir = mkdtempSync(join(tmpdir(), "mfc-component-archive-name-"));
+  const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("归档预览不运行模型"); });
+  try {
+    saveKnowledgeRepoConfig(dir, "https://example.test/knowledge.git", { branch: "main", docs_path: "docs/components" });
+    const formal = saveKnowledgeDocument(dir, { title: "文件操作", technologies: ["cpp"],
+      content: '---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: []\n---\n\n# 文件操作\n\n打开文件后用 Close 释放句柄。' }, "alice");
+    const first = manual(manager).previewComponentArchive({ research_id: "cr-name", knowledge_document_id: formal.id }, "alice");
+    const files = first.targets.flatMap(target => target.files);
+    assert.deepEqual(files.map(file => file.path), ["docs/components/cpp/文件操作.md"]);
+    assert.doesNotMatch(files[0].content, /schema:|component_paradigms/, "只提交给人读的正文");
+    const renamed = saveKnowledgeDocument(dir, { ...formal, title: "文件读写" }, "alice", formal.id, { expectedRevision: formal.revision });
+    const second = manual(manager).previewComponentArchive({ research_id: "cr-name", knowledge_document_id: formal.id, knowledge_revision: renamed.revision }, "alice");
+    assert.deepEqual(second.targets.flatMap(target => target.files).map(file => file.path), ["docs/components/cpp/文件读写.md"]);
+    assert.equal(second.job_id, first.job_id, "同一组件始终是同一个归档任务");
+  } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});

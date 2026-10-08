@@ -4,7 +4,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
 import { ComponentKnowledgeArchive } from "./ComponentKnowledgeArchive";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
-import { KnowledgeTaskNavigation } from "./KnowledgeTaskNavigation";
+import { KnowledgeTaskReady, KnowledgeTaskTabs } from "./KnowledgeTaskNavigation";
 import { KnowledgeExtractionWorkspace, KnowledgeExtractionStages } from "./KnowledgeExtractionWorkspace";
 import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,11 +18,10 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select";
-import { KNOWLEDGE_LANGUAGE_OPTIONS, knowledgeLanguageLabel } from "./KnowledgeLanguages";
+import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
   componentRequest,
   publishComponentResearch,
-  type ComponentRepository,
   type ComponentResearchRecord,
 } from "./componentResearchApi";
 import { getBusinessModules, type BusinessModule } from "./api";
@@ -80,11 +79,8 @@ export function ComponentResearch({
   backLabel?: string;
   onAdopt: (id: string) => void;
 }) {
-  const [components, setComponents] = useState<ComponentRepository[]>([]),
-    [records, setRecords] = useState<ComponentResearchRecord[]>([]),
+  const [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
-  const [language, setLanguage] = useState(""), [topic, setTopic] = useState("");
-  const [mode, setMode] = useState<"all" | "topic">("all");
   const [selected, setSelected] = useState(() => {
       const params = new URLSearchParams(location.search);
       return params.get("kbKind") === "component" ? params.get("kbTask") ?? "" : "";
@@ -110,10 +106,8 @@ export function ComponentResearch({
     if (archiveStage === "publish") { setStage("review"); setArchiveOpenRequest(value => value + 1); }
     else { setArchiveOpenRequest(0); if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }
   }, [surface, focusId]);
-  const [componentsLoaded, setComponentsLoaded] = useState(false);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
-  const matchingComponents = components.filter(c => c.enabled && c.languages.includes(language));
   const load = async () => {
     const result = await componentRequest<{
       records: ComponentResearchRecord[];
@@ -134,13 +128,6 @@ export function ComponentResearch({
       }
     };
     void refresh();
-    void componentRequest<{ components: ComponentRepository[] }>(
-      "/component-repositories",
-    )
-      .then((r) => {
-        if (active) { setComponents(r.components); setComponentsLoaded(true); }
-      })
-      .catch((e) => setError(e.message));
     void getBusinessModules()
       .then((r) => {
         if (active) setModules(r.modules);
@@ -153,7 +140,7 @@ export function ComponentResearch({
     };
   }, [open]);
   useEffect(() => {
-    if (!open || !selected || ["new", "history"].includes(selected)) return;
+    if (!open || !selected || selected === "history") return;
     let active = true;
     const refresh = async () => {
       try {
@@ -174,9 +161,8 @@ export function ComponentResearch({
   }, [open, selected]);
   useEffect(() => {
     setTitle(
-      current?.update_metadata?.title ?? (current
-        ? `${knowledgeLanguageLabel(current.language)} · ${current.topic}`.slice(0, 160)
-        : ""),
+      // 标题即归档文件名：默认取登记的组件名，发布前可改成功能名（如「文件操作」）。
+      current?.update_metadata?.title ?? current?.topic.slice(0, 160) ?? "",
     );
     setEditing(false);
     setScope(current?.update_metadata?.scope ?? "platform");
@@ -194,31 +180,14 @@ export function ComponentResearch({
       url.searchParams.set("kbPage", "tasks");
       url.searchParams.delete("kbKind"); url.searchParams.delete("kbTask"); url.searchParams.delete("kbReview");
     } else {
-      url.searchParams.set("kbPage", id && id !== "new" ? "task" : "research");
+      url.searchParams.set("kbPage", id ? "task" : "research");
       url.searchParams.set("kbKind", "component");
-      if (id && id !== "new") url.searchParams.set("kbTask", id);
+      if (id) url.searchParams.set("kbTask", id);
       else { url.searchParams.delete("kbTask"); url.searchParams.delete("kbReview"); }
     }
     history.replaceState(history.state, "", url);
   }
   useEffect(() => { if (focusId) selectRecord(focusId); }, [focusId]);
-  async function start() {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await componentRequest<ComponentResearchRecord>(
-        "/component-research",
-        { language, mode, ...(mode === "topic" ? { topic } : {}) },
-      );
-      await load();
-      setDetail(r);
-      selectRecord(r.id);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
   async function manage(action: "stop" | "delete" | "retry" | "begin-update") {
     if (!current) return;
     setBusy(true); setError("");
@@ -265,7 +234,8 @@ export function ComponentResearch({
     <header className="knowledge-reading-toolbar flex shrink-0 items-center gap-3 border-b border-line px-4 py-2">
       <KnowledgeBackButton onClick={onClose} destination={backLabel} />
       <div className="flex min-w-0 flex-1 items-center gap-3"><h2 className="truncate text-base font-semibold" title={current.topic}>{current.topic}</h2>
-        <span className={`shrink-0 text-sm ${current.production?.group === "attention" ? "text-amber-700" : "text-muted-foreground"}`}>{current.production?.status_label}</span></div>
+        <span className={`shrink-0 text-sm ${current.production?.group === "attention" ? "text-amber-700" : "text-muted-foreground"}`}>{current.production?.status_label}</span>
+        <KnowledgeTaskTabs value={stage} onChange={switchTaskView} documentCount={current.document || current.draft ? 1 : 0} view={current.production} disabled={busy} /></div>
       <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} openRequest={archiveOpenRequest} onArchiveAction={() => {
         void componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}`, undefined, AbortSignal.timeout(30_000))
           .then(next => setDetail(previous => previous?.id === current.id ? next : previous)).catch(reason => setError(reason.message));
@@ -277,7 +247,7 @@ export function ComponentResearch({
         {current.production?.knowledge_document_id && <Button onClick={() => onAdopt(current.production!.knowledge_document_id!)}>查看知识</Button>}
       </div>
     </header>
-    <KnowledgeTaskNavigation value={stage} onChange={switchTaskView} documentCount={current.document || current.draft ? 1 : 0} view={current.production} disabled={busy} />
+    <KnowledgeTaskReady value={stage} onChange={switchTaskView} view={current.production} disabled={busy} />
     {error && <p role="alert" className="shrink-0 px-4 py-2 text-danger">{error}</p>}
     <Dialog open={publishSettingsOpen} onOpenChange={setPublishSettingsOpen}><DialogContent className="tw-root max-h-[85dvh] overflow-auto sm:max-w-xl">
       <DialogHeader><DialogTitle>发布设置</DialogTitle></DialogHeader>
@@ -323,7 +293,6 @@ export function ComponentResearch({
   </section>;
   return (
     <KnowledgeExtractionWorkspace hideHeader={surface === "knowledge" && !!current} codeOnly title={focused ? "本篇文档的萃取过程" : "基础组件萃取"} onClose={onClose} backLabel={backLabel}
-      onNew={focused ? undefined : () => { selectRecord("new"); setError(""); }}
       sidebar={!focused && surface !== "knowledge" ? <div>
             <Choice label="任务状态" value={statusFilter} onChange={setStatusFilter} items={[{value:"all",label:"全部任务"},{value:"active",label:"进行中"},{value:"done",label:"已完成"},{value:"failed",label:"失败"},{value:"cancelled",label:"已停止"}]} />
             {records.filter(r => statusFilter === "all" || (statusFilter === "active" ? ["queued", "running"].includes(r.status) : r.status === statusFilter)).map((r) => (
@@ -353,9 +322,7 @@ export function ComponentResearch({
                 {error}
               </p>
             )}
-            {!selected || selected === "history" ? <div className="p-8 text-muted-foreground">选择一条萃取记录查看进度与草稿，或发起新的萃取。</div> : selected !== "new" && !current ? <p className="p-8" role="status">正在加载萃取记录…</p> : !current ? (
-              <p className="p-8 text-muted-foreground">在左侧选择任务，查看进度、来源证据和草稿。</p>
-            ) : (
+            {!selected || selected === "history" ? <div className="p-8 text-muted-foreground">选择一条萃取记录查看进度与草稿，或发起新的萃取。</div> : !current ? <p className="p-8" role="status">正在加载萃取记录…</p> : (
               <>
                 {surface === "knowledge" ? <header className="studio-result-toolbar">
                   <KnowledgeBackButton onClick={onClose} destination={backLabel} />
@@ -365,7 +332,6 @@ export function ComponentResearch({
                     <ComponentKnowledgeArchive record={current} />
                     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => { studio?.openExecution("component"); selectRecord("new"); }}>新建萃取任务</DropdownMenuItem>
                       {!focused && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
                     </DropdownMenuContent></DropdownMenu>
                   </div>
@@ -494,35 +460,6 @@ export function ComponentResearch({
             )}
           </main>
 
-      <Dialog open={selected === "new"} onOpenChange={open => { if (!open) selectRecord("history"); }}>
-        <DialogContent className="tw-root sm:max-w-[640px] max-h-[85vh] overflow-auto">
-          <DialogHeader><DialogTitle>新建萃取任务</DialogTitle></DialogHeader>
-          {error && <p role="alert" className="text-danger">{error}</p>}
-              <div className="mx-auto grid max-w-2xl gap-5 py-4">
-                <Choice label="萃取语言" value={language} onChange={setLanguage}
-                  items={KNOWLEDGE_LANGUAGE_OPTIONS.filter(l => l.id !== "agnostic").map(l => ({value: l.id, label: l.label}))} />
-                <div className="grid grid-cols-2 gap-3" role="group" aria-label="萃取方式">
-                  {([['all', '全部基础组件'], ['topic', '指定主题']] as const).map(([value, label]) => <button type="button" key={value} aria-pressed={mode === value} className={`rounded-xl border p-4 text-left ${mode === value ? "border-primary bg-primary/5" : "border-line"}`} onClick={() => setMode(value)}><strong className="block">{label}</strong></button>)}
-                </div>
-                <p className="text-muted-foreground">{!componentsLoaded ? "正在读取组件仓配置…" : language ? matchingComponents.length ? `覆盖 ${matchingComponents.length} 个已启用的 ${knowledgeLanguageLabel(language)} 组件仓` : `尚未配置已启用的 ${knowledgeLanguageLabel(language)} 组件仓，请先到配置中心添加。` : "请选择需要萃取的语言。"}</p>
-                <a className="text-primary underline" href="/configuration?tab=components">维护基础组件仓 ↗</a>
-                {mode === "topic" && <label className="grid gap-2">
-                  研究主题
-                  <Textarea
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    placeholder="例如：文件组件的句柄归属、异常清理及 UT Mock 方式"
-                  />
-                </label>}
-                <Button
-                  disabled={busy || !componentsLoaded || !matchingComponents.length || !language || (mode === "topic" && !topic.trim())}
-                  onClick={() => void start()}
-                >
-                  {busy ? "发起中…" : mode === "all" ? "一键萃取全部组件" : "开始后台萃取"}
-                </Button>
-              </div>
-        </DialogContent>
-      </Dialog>
       <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除萃取任务？</DialogTitle></DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<p>正在执行的任务会停止。已经采纳的知识文档和来源记录会保留。</p><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleting(false)}>取消</Button><Button disabled={busy} onClick={() => void manage("delete")}>确认删除</Button></div></DialogContent></Dialog>
     </KnowledgeExtractionWorkspace>
   );

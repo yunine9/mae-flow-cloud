@@ -65,7 +65,7 @@ for (const action of ["budget", "human"] as const) {
           reject = fail; signal!.addEventListener("abort", () => fail(new DOMException("This operation was aborted", "AbortError")), { once: true }); entered();
         }) });
     });
-    const job = service.start({ language: "java", mode: "topic", topic: "订单" }, "alice");
+    const job = service.start({ language: "java" }, "alice");
     try {
       await started;
       if (action === "budget") {

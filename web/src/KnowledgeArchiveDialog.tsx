@@ -63,11 +63,11 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
           </div>
           {preview.targets.map(target => <section key={target.id} className="space-y-3 rounded-lg border border-line p-4" aria-label={`${target.name}归档`}>
             <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{target.name}</h3><span className="text-sm">{target.status_label}</span></div>
-            <p className="break-all text-sm text-muted-foreground">{target.repository} · {target.branch} · {target.docs_path}</p>
+            <p className="break-all text-sm text-muted-foreground">{[target.repository, target.branch, target.docs_path].filter(Boolean).join(" · ")}</p>
             <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>
             {target.error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{target.error}</p>}
             {target.url && <a className="text-sm font-medium text-primary underline" href={target.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
-            <ul className="space-y-2">{target.files.map(file => <li key={file.id} className="rounded border border-line bg-surface-2 px-3 py-2 text-sm">
+            <ul className="m-0 list-none space-y-2 p-0">{target.files.map(file => <li key={file.id} className="rounded border border-line bg-surface-2 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2"><code className="break-all">{file.path}</code><span className="text-xs text-muted-foreground" title={`${file.knowledge_document_id}@${file.knowledge_revision}`}>{file.knowledge_revision.slice(0, 12)}</span></div>
               <details className="mt-2"><summary className="cursor-pointer text-muted-foreground">{file.title}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{file.content}</pre></details>
             </li>)}</ul>

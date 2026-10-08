@@ -7,7 +7,7 @@ import { DomainKnowledgePublicationStatus } from "./DomainKnowledgePublicationSt
 import { KnowledgeReviewNotes } from "./KnowledgeReviewNotes";
 import { KnowledgeContentSearch } from "./KnowledgeContentSearch";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
-import { KnowledgeTaskNavigation } from "./KnowledgeTaskNavigation";
+import { KnowledgeTaskReady, KnowledgeTaskTabs } from "./KnowledgeTaskNavigation";
 import { confirmDomainPublication, domainDocumentHasChanges, domainProposalProblem, domainPublicationInput, domainReviewDocument, latestDomainProposal } from "./domainKnowledgePublication";
 import { KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
 import { resolveKnowledgeReference } from "./knowledgeStructure";
@@ -128,6 +128,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
     {job ? <><header className={`studio-result-toolbar${focused ? " domain-focused-toolbar" : ""}`}>
       {onBack && <KnowledgeBackButton onClick={onBack} destination="任务中心" />}
       <FileText size={21} /><strong title={job.title}>{job.title}</strong><span className={`studio-job-status ${active ? "is-active" : ""}`}>{lifecycle}</span>
+      <KnowledgeTaskTabs value={currentStage} onChange={changeView} documentCount={job.documents.length} view={job.production} disabled={!!edit || busy} />
       <div className="studio-result-actions">
         <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onChanged={() => {
           void componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}`, undefined, AbortSignal.timeout(30_000))
@@ -143,7 +144,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
         </DropdownMenuContent></DropdownMenu>
       </div>
     </header>
-      <KnowledgeTaskNavigation value={currentStage} onChange={changeView} documentCount={job.documents.length} view={job.production} disabled={!!edit || busy} />
+      <KnowledgeTaskReady value={currentStage} onChange={changeView} view={job.production} disabled={!!edit || busy} />
       {error && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-danger">{error}</p>}
       {job.production?.platform_message && <p className="shrink-0 px-4 py-2 text-xs text-muted-foreground">{job.production.platform_message}</p>}
       {currentStage === "review" && publicationProblem && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-amber-700">{publicationProblem}</p>}

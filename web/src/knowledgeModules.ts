@@ -29,7 +29,9 @@ const languageNames: Record<string, string> = { agnostic: "通用 / 语言无关
 export const repositoryKey = (value: string) => value.trim().replace(/\/$/, "").replace(/\.git$/, "");
 export const repositoryName = (value: string) => repositoryKey(value).split(/[/:]/).filter(Boolean).at(-1) || value;
 export function knowledgeFilePath(doc: KnowledgeDocument): string {
-  return doc.form === "skill" ? "SKILL.md" : doc.source?.path || doc.research_source?.path || doc.title;
+  // 组件研究的 research_source.path 是组件源码目录（如 src），不是知识文件；当文件名用会让树里出现一个叫 src 的"文件"。
+  const researchPath = doc.research_source?.components ? "" : doc.research_source?.path;
+  return doc.form === "skill" ? "SKILL.md" : doc.source?.path || researchPath || doc.title;
 }
 export function knowledgeFileName(doc: KnowledgeDocument): string {
   return knowledgeFilePath(doc).split("/").at(-1) || doc.title;
@@ -106,6 +108,9 @@ export function projectKnowledgeModules(input: {
   }
   if (unassigned.documents.length) modules.push(unassigned);
   for (const module of modules) {
+    // 组件分组只列已有知识的组件：研究统一从「研究知识」发起、在任务中心跟踪（按语言全量或指定组件），
+    // 目录不再先摆出登记的空组件再挂"发起研究"（2026-10-08 用户：都统一作为萃取任务即可）。
+    if (module.category === "engineering") module.repositories = module.repositories.filter(group => group.documents.length);
     module.documentCount = module.documents.filter(d => d.active && d.form !== "skill").length;
     module.skillCount = module.documents.filter(d => d.active && d.form === "skill").length;
     module.inactiveCount = module.documents.filter(d => !d.active).length;

@@ -43,7 +43,8 @@ export interface ResearchRecord {
   pipeline?: ComponentPipelineState;
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
-  mode?: "topic" | "all";
+  /** 研究一个组件的全部能力；反例研究不设。 */
+  mode?: "all";
   format?: "joint-document";
   document?: ResearchDocument;
   review_turns?: ResearchReviewTurn[];
@@ -90,11 +91,8 @@ function reviewProposals(record: ResearchRecord): ReviewProposal<ResearchSection
   }] : []);
 }
 export interface ResearchInput {
-  mode?: "topic" | "all";
   component_id?: string;
   language: string;
-  topic?: string;
-  refresh?: boolean;
   material_ids?: string[];
 }
 export interface ResearchExecution {
@@ -130,7 +128,8 @@ function validSection(value: unknown, repositoryIds: string[]): boolean {
 }
 function validReviewTurn(value: unknown, repositoryIds: string[]): boolean {
   return object(value) && fields(value, ["id", "section_id", "message", "operator", "created_at"])
-    && ["discuss", "rework", "update"].includes(value.mode) && recordStatuses.includes(value.status)
+    && ["discuss", "rework", "update", "supplement"].includes(value.mode) && recordStatuses.includes(value.status)
+    && (value.added_section_ids === undefined || strings(value.added_section_ids))
     && optionalStrings(value, ["reply", "error", "finished_at"])
     && (value.skill === undefined || skill(value.skill))
     && (value.previous_revisions === undefined || revisions(value.previous_revisions))
@@ -155,7 +154,7 @@ function validResearchRecord(value: unknown, id: string): value is ResearchRecor
   const repositoryIds: string[] = Array.isArray(components) ? components.filter(object).map(component => component.id).filter(id => typeof id === "string") : [];
   return object(value) && value.id === id && fields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"])
     && optionalStrings(value, ["deleted_at", "deleted_by", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"])
-    && (value.mode === undefined || ["topic", "all"].includes(value.mode)) && (value.format === undefined || value.format === "joint-document")
+    && (value.mode === undefined || value.mode === "all") && (value.format === undefined || value.format === "joint-document")
     && (value.use_latest_skill === undefined || typeof value.use_latest_skill === "boolean")
     && (value.skill === undefined || skill(value.skill))
     && recordStatuses.includes(value.status) && validComponent(value.component)
@@ -167,7 +166,7 @@ function validResearchRecord(value: unknown, id: string): value is ResearchRecor
       && Array.isArray(value.document.sections) && value.document.sections.every(section => validSection(section, repositoryIds))))
     && (value.review_turns === undefined || (Array.isArray(value.review_turns) && value.review_turns.every(turn => validReviewTurn(turn, repositoryIds))))
     && (value.review_turns === undefined || value.review_turns.every(turn => !["queued", "running"].includes(turn.status)
-      || (value.document !== undefined && value.document.sections.some(section => section.id === turn.section_id))))
+      || (value.document !== undefined && (turn.mode === "supplement" || value.document.sections.some(section => section.id === turn.section_id)))))
     && (value.section_history === undefined || (Array.isArray(value.section_history) && value.section_history.every(history => object(history)
       && fields(history, ["at", "operator"]) && validSection(history.section, repositoryIds))))
     && (value.pipeline === undefined || validPipeline(value.pipeline))
@@ -279,53 +278,26 @@ export class ComponentResearch {
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");
   }
+  /** 一个组件一次研究一篇知识（2026-10-08 用户）：同组件已有研究就打开它，补充与刷新走「补充遗漏能力」「更新知识」。 */
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
-    const material_ids: string[] = [];
-    const language = normalizeKnowledgeLanguages([input.language])[0];
-    const components = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
-    if (!components.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
-    if (input.mode && !["all", "topic"].includes(input.mode)) throw new Error("不支持的萃取方式");
-    if (input.mode === "all") return this.startAll(components, language, operator, input.refresh, material_ids);
-    const component = components[0];
-    const topic = String(input.topic ?? "").trim();
-    if (!topic || topic.length > 1000)
-      throw new Error("请填写具体萃取主题，最多 1000 字");
-    const key = JSON.stringify([
-      components.map(componentKey).sort(),
-      language,
-      topic.replace(/\s+/g, " ").toLowerCase(), material_ids,
-    ]);
-    const previous = [...this.records.values()]
-      .reverse()
-      .find(
-        (r) =>
-          r.key === key && r.operator === operator && !r.deleted_at && !["failed", "cancelled"].includes(r.status),
-      );
-    if (previous && (!input.refresh || previous.status !== "done"))
-      return this.get(previous.id);
-    if (
-      [...this.records.values()].filter((r) => r.status === "queued").length >=
-      50
-    )
-      throw new Error("待萃取队列已满，请稍后再试");
-    const record: ResearchRecord = {
-      id: `cr-${randomUUID()}`,
-      component,
-      components,
-      material_ids,
-      language,
-      topic,
-      operator,
-      key,
-      status: "queued",
-      created_at: new Date().toISOString(),
-      stage: "等待萃取",
-      evidence: [],
-    };
-    this.records.set(record.id, record);
-    this.update(record, {});
+    // 一个组件只有一次研究：主题、全量模式与强制重做都已取消，旧字段明确拒绝，免得调用方以为生效了。
+    const unknown = Object.keys(input ?? {}).filter(key => !["component_id", "language", "material_ids"].includes(key));
+    if (unknown.length) throw new Error(`组件研究不支持参数：${unknown.join("、")}；按组件发起，修改已有知识请用更新知识`);
+    const language =normalizeKnowledgeLanguages([input.language])[0];
+    const candidates = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
+    if (!candidates.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
+    const component = input.component_id ? candidates.find(c => c.id === input.component_id) : candidates.length === 1 ? candidates[0] : undefined;
+    if (!component) throw new Error(input.component_id ? "所选组件不存在，或未登记该语言" : "该语言登记了多个组件，请选择要研究的组件");
+    const key = JSON.stringify(["component", language, componentKey(component)]);
+    const previous = [...this.records.values()].reverse().find(r => r.key === key && !r.deleted_at && !r.challenge);
+    if (previous) return this.get(previous.id);
+    if ([...this.records.values()].filter(r => r.status === "queued").length >= 50) throw new Error("待萃取队列已满，请稍后再试");
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component, components: [component], material_ids: [],
+      language, topic: component.name, operator, key, status: "queued", created_at: new Date().toISOString(),
+      format: "joint-document", document: { overview: "", sections: [] }, review_turns: [], stage: "等待组件研究", evidence: [] };
+    this.records.set(record.id, record); this.update(record, {});
     this.pump();
     return this.get(record.id);
   }
@@ -341,18 +313,6 @@ export class ComponentResearch {
       language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
       created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {}); this.pump(); return this.get(record.id);
-  }
-  private startAll(components: ComponentRepository[], language: string, operator: string, refresh = false, material_ids: string[] = []) {
-    const key = JSON.stringify(["joint-document", language, components.map(componentKey).sort(), material_ids]);
-    const previous = [...this.records.values()].reverse().find(r => r.mode === "all" && r.key === key && r.operator === operator && !r.deleted_at);
-    if (previous && (!refresh || ["queued", "running"].includes(this.get(previous.id).status))) return this.get(previous.id);
-    const parent: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component: components[0], components, material_ids,
-      language, topic: "基础组件联合使用指南", operator, key, status: "queued", created_at: new Date().toISOString(),
-      format: "joint-document", document: { overview: "", sections: [] }, review_turns: [],
-      stage: "等待跨仓联合萃取", evidence: [] };
-    this.records.set(parent.id, parent); this.update(parent, {});
-    this.pump();
-    return this.get(parent.id);
   }
   private root(id: string) {
     return join(this.dir, "component-research", id);
@@ -387,7 +347,7 @@ export class ComponentResearch {
           return proposal ? { ...structuredClone(proposal.value), revision: section.revision, selected: section.selected } : section;
         }) };
       }
-      this.update(record, { status: "running", error: undefined, stage: review ? (review.mode === "discuss" ? "正在回答组件问题" : "正在返工指定组件") : "准备组件源码" });
+      this.update(record, { status: "running", error: undefined, stage: review ? ({ discuss: "正在回答组件问题", supplement: "正在补充遗漏能力" } as Record<string, string>)[review.mode] ?? "正在返工指定组件" : "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
       const work = Promise.resolve()
         .then(async () => {
@@ -404,7 +364,9 @@ export class ComponentResearch {
                   const document = editResearchDocument(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }, edit, (record.components ?? [record.component]).map(c => c.id), review);
                   if (review) {
                     revisedDocument = document;
-                    if (review.mode !== "discuss") review.proposal = { base_revision: review.base_revision!,
+                    if (review.mode === "supplement") {
+                      if (edit.action === "outline") review.added_section_ids = [...review.added_section_ids ?? [], ...edit.entries!.map(entry => entry.id)];
+                    } else if (review.mode !== "discuss") review.proposal = { base_revision: review.base_revision!,
                       section: structuredClone(document.sections.find(s => s.id === review.section_id)!), status: "pending" };
                     this.update(record, {});
                   }
@@ -426,7 +388,17 @@ export class ComponentResearch {
               if (review.mode === "rework" && !review.proposal) {
                 throw new Error("本轮没有更新指定组件，原稿已保留；请继续说明返工要求");
               }
-              review.status = "done"; review.reply = draft; review.finished_at = new Date().toISOString();
+              if (review.mode === "supplement") {
+                // 新项整体通过才并入：半份补充混进人审过的文稿，比没补更难收拾。
+                const added = revisedDocument!.sections.filter(section => review.added_section_ids?.includes(section.id));
+                if (!added.length) throw new Error("本轮没有找到可补充的能力，原稿已保留；请具体说明遗漏的能力、接口或场景");
+                const unfinished = added.filter(section => !sectionReady(section)).map(section => section.title);
+                if (unfinished.length) throw new Error(`补充的能力尚不完整（${unfinished.join("、")}），需要接口、集成依赖、最佳示例和来源；原稿已保留，可重试`);
+                record.document = { ...record.document!, sections: [...record.document!.sections, ...structuredClone(added).map(section => ({ ...section, selected: true }))] };
+              }
+              // Agent 按仓库编号引用代码，程序据此校验；给人看的回复换成组件名，路径与行号保留。
+              const named = (record.components ?? [record.component]).reduce((text, component) => text.split(`${component.id}:`).join(`${component.name}:`), draft);
+              review.status = "done"; review.reply = named; review.finished_at = new Date().toISOString();
             } else if (!record.challenge && record.document && (!record.document.overview.trim() || !record.document.sections.length
                 || record.document.sections.some(section => !sectionReady(section)))) {
               throw new Error("联合草稿尚不完整：需要跨仓关系说明，以及每项组件的接口、集成依赖、最佳示例和来源；已写内容保留，可继续研究");
@@ -442,6 +414,7 @@ export class ComponentResearch {
             if (review) {
               review.status = "failed"; review.error = error instanceof Error ? error.message : "本轮失败";
               review.finished_at = new Date().toISOString();
+              if (review.mode === "supplement") review.added_section_ids = undefined;
               // 返工失败不能把半份修订覆盖专家原稿。
               record.draft = researchDocumentMarkdown(record.topic, record.document!);
             }
@@ -516,7 +489,7 @@ export class ComponentResearch {
     if (record.deleted_at) throw new Error("萃取任务已删除");
     if (record.format === "joint-document") {
       if (["queued", "running"].includes(record.status)) return record;
-      if (record.document_id) throw new Error("已采纳的草稿保留原样；请新建联合萃取任务");
+      if (record.document_id) throw new Error("已发布的知识保留原样；需要修改请用「更新知识」");
       if (this.running.has(id)) throw new Error("上一轮正在停止，请稍后重试");
       const lastTurn = record.review_turns?.at(-1);
       if (lastTurn && ["failed", "cancelled"].includes(lastTurn.status)) {
@@ -526,7 +499,7 @@ export class ComponentResearch {
       this.update(live, { status: "queued", error: undefined, finished_at: undefined, stage: "继续联合研究，保留已有组件" });
       this.pump(); return this.get(id);
     }
-    return this.start({language:record.language, topic:record.topic, refresh:true}, operator);
+    throw new Error("该研究记录不支持重试，请重新发起");
   }
   selectSections(id: string, ids: string[], selected: boolean) {
     const record = this.records.get(id);
@@ -538,16 +511,17 @@ export class ComponentResearch {
     for (const section of record.document.sections) if (ids.includes(section.id)) section.selected = selected;
     this.update(record, {}); return this.get(id);
   }
-  review(id: string, input: { section_id: string; mode: "discuss" | "rework" | "update"; message: string; use_latest_skill?: boolean; material_ids?: string[] }, operator: string) {
+  review(id: string, input: { section_id: string; mode: ResearchReviewTurn["mode"]; message: string; use_latest_skill?: boolean; material_ids?: string[] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const record = this.records.get(id);
     this.assertPublicationComplete(record);
     if (!record?.document || record.deleted_at || record.document_id) throw new Error("当前草稿不可讨论或返工");
     if (this.running.has(id) || ["queued", "running"].includes(record.status)) throw new Error("请等待本轮完成或停止后再继续对话");
-    if (!record.document.sections.some(section => section.id === input.section_id)) throw new Error("请先选择要讨论或返工的组件");
+    const supplement = input.mode === "supplement";
+    if (supplement ? input.section_id : !record.document.sections.some(section => section.id === input.section_id)) throw new Error(supplement ? "补充遗漏能力不针对已有能力项" : "请先选择要讨论或返工的组件");
     if (record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用代码来源的研究后再修订");
     const message = String(input.message ?? "").trim();
-    if (!["discuss", "rework", "update"].includes(input.mode) || !message || message.length > 20_000) throw new Error("请填写讨论或返工要求，最多 20000 字");
+    if (!["discuss", "rework", "update", "supplement"].includes(input.mode) || !message || message.length > 20_000) throw new Error(supplement ? "请说明遗漏了哪些能力、接口或场景，最多 20000 字" : "请填写讨论或返工要求，最多 20000 字");
     scanForSecrets("专家讨论", Buffer.from(message));
     if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
     record.review_turns ??= [];
@@ -555,7 +529,7 @@ export class ComponentResearch {
       mode: input.mode, message, operator, status: "queued", created_at: new Date().toISOString(),
       ...(input.mode === "update" ? { previous_revisions: { ...record.revisions } } : {}) });
     if (input.mode === "update") record.revisions = {};
-    this.update(record, { use_latest_skill: input.use_latest_skill === true, status: "queued", stage: input.mode === "discuss" ? "等待回答组件问题" : "等待指定组件返工", error: undefined, finished_at: undefined });
+    this.update(record, { use_latest_skill: input.use_latest_skill === true, status: "queued", stage: ({ discuss: "等待回答组件问题", supplement: "等待补充遗漏能力" } as Record<string, string>)[input.mode] ?? "等待指定组件返工", error: undefined, finished_at: undefined });
     this.pump(); return this.get(id);
   }
   editSection(id: string, input: { section: ResearchSection; base_revision: number }, operator: string) {

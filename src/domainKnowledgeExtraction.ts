@@ -1,4 +1,4 @@
-import { componentArchiveParts, componentMetadataPath, restoreComponentArchive } from "./componentKnowledgeArchiveFormat.ts";
+import { componentArchiveParts, componentArchivePath } from "./componentKnowledgeArchiveFormat.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
@@ -65,7 +65,7 @@ function validMrUrl(value: unknown): value is string {
 function validPublication(value: any): value is DomainPublication {
   const documents = (value: any) => Array.isArray(value) && value.every(document => isRecord(document)
     && ["id", "path", "content"].every(key => typeof document[key] === "string") && Number.isSafeInteger(document.revision) && document.revision > 0
-    && ["knowledge_document_id", "knowledge_revision", "metadata_for"].every(key => document[key] === undefined || typeof document[key] === "string"));
+    && ["knowledge_document_id", "knowledge_revision"].every(key => document[key] === undefined || typeof document[key] === "string"));
   return isRecord(value) && typeof value.target_id === "string" && typeof value.branch === "string" && ["pending", "opened", "failed"].includes(value.state)
     && documents(value.documents) && (value.attempted_documents === undefined || documents(value.attempted_documents))
     && (value.url === undefined || validMrUrl(value.url)) && (value.state !== "opened" || validMrUrl(value.url))
@@ -82,8 +82,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
   const document = (doc: any) => content(doc) && Number.isSafeInteger(doc.revision) && doc.revision > 0
     && typeof doc.selected === "boolean" && nullableText(doc.base_content) && typeof doc.base_revision === "string"
     && Array.isArray(doc.history) && doc.history.every((history: any) => fields(history, ["content", "sources", "title", "operator", "at"])
-      && Number.isSafeInteger(history.revision) && history.revision > 0)
-    && (doc.component_metadata === undefined || typeof doc.component_metadata === "string");
+      && Number.isSafeInteger(history.revision) && history.revision > 0);
   const target = (target: any) => isRecord(target) && ["id", "repository", "branch", "docs_path"].every(key => typeof target[key] === "string");
   const research = (research: any) => isRecord(research) && typeof research.inventory_complete === "boolean"
     && ["research", "review", "complete"].includes(research.phase) && Array.isArray(research.capabilities)
@@ -243,7 +242,7 @@ export class DomainKnowledgeExtraction {
         return [];
       }
       let parts;
-      try { parts = job.component_research_id ? componentArchiveParts(formal.content) : { content: formal.content, component_metadata: undefined }; }
+      try { parts = { content: job.component_research_id ? componentArchiveParts(formal.content).content : formal.content }; }
       catch {
         const warning = `请检查损坏的组件知识结构：knowledge-documents/${document.knowledge_document_id}.json；其余任务照常可用`;
         if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
@@ -264,13 +263,12 @@ export class DomainKnowledgeExtraction {
     if (!job) {
       const configured = readKnowledgeRepoConfig(this.dataDir);
       const target: KnowledgeRepository = { id: "domain", name: "组件知识仓", repository: configured?.url ?? "", branch: configured?.branch ?? "master", path: "", docs_path: configured?.docs_path ?? "docs/knowledge/components" };
-      const parts = componentArchiveParts(formal.content);
-      const path = formal.archive_target?.repository === target.repository && formal.archive_target.branch === target.branch
-        ? formal.archive_target.path : `${target.docs_path}/${formal.id}.md`;
+      const { content } = componentArchiveParts(formal.content);
+      const path = componentArchivePath(target.docs_path, formal);
       job = { id: `dkx-${randomUUID()}`, title: formal.title, scope: "正式组件知识手动归档", operator, created_at: new Date().toISOString(),
         component_research_id: input.research_id, technologies: formal.technologies, repositories: [], knowledge_target: target,
         archive_configured: !!target.repository, material_ids: [], ar_codes: [], use_wxdoubao: false, status: "done", stage: "已发布", revisions: {},
-        documents: [{ id: "component-guide", title: formal.title, target_id: "domain", path, layer: "domain", ...parts, sources: formal.research_source?.path || "正式知识库",
+        documents: [{ id: "component-guide", title: formal.title, target_id: "domain", path, layer: "domain", content, sources: formal.research_source?.path || "正式知识库",
           revision: 1, selected: true, base_content: null, base_revision: "", history: [], knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 }],
         turns: [], evidence: [], publications: [], archive_batches: [] };
       this.persist(job); this.jobs.set(job.id, job);
@@ -280,7 +278,14 @@ export class DomainKnowledgeExtraction {
       if (configured) {
         const candidate = structuredClone(job), docs_path = configured.docs_path ?? job.knowledge_target.docs_path;
         candidate.knowledge_target = { ...job.knowledge_target, repository: configured.url, branch: configured.branch ?? "master", docs_path };
-        candidate.documents[0].path = `${docs_path}/${formal.id}.md`; candidate.archive_configured = true;
+        candidate.documents[0].path = componentArchivePath(docs_path, formal); candidate.archive_configured = true;
+        this.persist(candidate); Object.assign(job, candidate);
+      }
+    } else if (!job.documents[0].archive_path && job.documents[0].published_revision !== formal.revision && !job.archive_batches?.some(batch => batch.state === "running")) {
+      // 标题改名必然产生新正式版本，文件名跟着走；同一版本不动路径，失败批次的重试仍对得上原路径。已开的 MR 保留各自当时的路径。
+      const path = componentArchivePath(job.knowledge_target.docs_path, formal);
+      if (job.documents[0].path !== path || job.documents[0].title !== formal.title) {
+        const candidate = structuredClone(job); candidate.documents[0].path = path; candidate.documents[0].title = formal.title;
         this.persist(candidate); Object.assign(job, candidate);
       }
     }
@@ -294,11 +299,14 @@ export class DomainKnowledgeExtraction {
     const batch = this.matchingManualBatch(job, documents);
     const action = (value: KnowledgeProductionAction) => ({ ...value, href: value.id === "configure" ? job.component_research_id ? "/configuration?tab=knowledge" : undefined
       : `?kbPage=task&kbKind=${job.component_research_id ? "component" : "domain"}&kbTask=${encodeURIComponent(job.component_research_id ?? id)}&kbStage=publish` });
-    const targets = archiveRepositoryGroups([job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id))).map(({ target, ids }) => {
+    const groups = archiveRepositoryGroups([job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id)));
+    // 「Git 归档设置」只出现一次：单仓放在弹窗底部动作里，多仓才放到各个未配置的仓旁边。
+    const perTarget = groups.length > 1;
+    const targets = groups.map(({ target, ids }) => {
       const publication = batch?.publications.find(publication => ids.includes(publication.target_id));
       const configured = !!target.repository.trim();
       const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
-      const actions: KnowledgeProductionAction[] = !configured ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })]
+      const actions: KnowledgeProductionAction[] = !configured ? perTarget ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
         : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
@@ -308,14 +316,14 @@ export class DomainKnowledgeExtraction {
         files: documents.filter(document => ids.includes(document.target_id)).flatMap(document => {
           const file = { id: document.id, title: document.title, path: document.archive_path ?? document.path, content: document.content,
             knowledge_document_id: document.knowledge_document_id!, knowledge_revision: document.published_revision! };
-          return document.component_metadata ? [file, { ...file, id: `${document.id}-metadata`, path: componentMetadataPath(file.path), content: document.component_metadata, metadata_for: document.id }] : [file];
+          return [file];
         }) };
     });
     const status_label = targets.some(target => target.status_label === "归档失败") || batch?.state === "failed" ? "归档失败"
       : batch?.state === "running" ? "归档中" : targets.length && targets.every(target => target.status_label === "已归档") ? "已归档" : "已发布（未归档）";
     const actions: KnowledgeProductionAction[] = status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
       : status_label === "已发布（未归档）" && targets.length && targets.every(target => target.configured) ? [action({ id: "create-archive", label: "创建归档 MR", view: "archive" })]
-        : !targets.length || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
+        : perTarget || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
     return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "平台发布与 Git 归档分开；填写关联单号后手动创建 MR。",
       issue_no: batch?.issue_no ?? job.issue_no, issue_description: batch?.issue_description ?? job.issue_description, expected_revisions: Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), actions, targets })) as KnowledgeArchivePreview;
   }
@@ -706,7 +714,7 @@ export class DomainKnowledgeExtraction {
   }
   edit(id: string, input: { document: DomainDocumentContent; base_revision: number }, operator: string) {
     const { job, doc } = this.editableDocument(id, input);
-    doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, component_metadata: doc.component_metadata, sources: doc.sources, operator, at: new Date().toISOString() });
+    doc.history.push({ revision: doc.revision, title: doc.title, content: doc.content, sources: doc.sources, operator, at: new Date().toISOString() });
     Object.assign(doc, { title: input.document.title, content: input.document.content, sources: input.document.sources, revision: doc.revision + 1, human_edited: true }); this.persist(job); return this.get(id);
   }
   decide(id: string, turnId: string, documentId: string, decision: "accept" | "discard", operator: string) {
@@ -729,7 +737,6 @@ export class DomainKnowledgeExtraction {
     const doc = this.live(id).documents.find(d => d.id === documentId), previous = doc?.history.find(h => h.revision === revision);
     if (!doc || !previous) throw new Error("历史版本不存在");
     this.edit(id, { document: { ...doc, content: previous.content, title: previous.title, sources: previous.sources }, base_revision: baseRevision }, operator);
-    doc.component_metadata = previous.component_metadata;
     this.persist(this.live(id)); return this.get(id);
   }
   select(id: string, ids: string[], selected: boolean) {
@@ -804,6 +811,8 @@ export class DomainKnowledgeExtraction {
   async publish(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> } = {}) {
     const job = this.live(id);
     if (this.stopped) throw new Error("服务正在停止");
+    // 组件归档任务只装一篇渲染后的正文，结构化字段留在正式库；从这里发布会丢掉它们。
+    if (job.component_research_id) throw new Error("组件知识请在基础组件萃取任务中修改和发布");
     const owner = this.acquirePublication(id);
     try {
     if (["queued", "running"].includes(job.status)) throw new Error("请等待本轮研究完成或停止后发布");
@@ -821,7 +830,7 @@ export class DomainKnowledgeExtraction {
       const previous = formalId ? readKnowledgeDocument(this.dataDir, formalId)
         : undefined;
       if (previous && doc.published_revision && previous.revision !== doc.published_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
-      const content = (doc.component_metadata ? restoreComponentArchive(doc.content, doc.component_metadata) : doc.content).replace(/\r\n/g, "\n");
+      const content = doc.content.replace(/\r\n/g, "\n");
       if (previous && !doc.published_revision) throw new Error("正式知识版本未绑定，请从该知识的更新入口继续");
       if (!previous && target.repository && existing.some(d => {
         const location = d.archive_target ?? d.source;
@@ -838,7 +847,7 @@ export class DomainKnowledgeExtraction {
           repository: target.repository, branch: target.branch, path: doc.path,
           source_revisions: { ...job.revisions }, material_ids: [...job.material_ids], skill: job.skill },
       }, operator, previous?.id, { expectedRevision: previous?.revision, maxContentBytes: job.component_research_id ? 16 * 1024 * 1024 : undefined });
-      const archive = doc.component_metadata ? componentArchiveParts(formal.document.content) : { content: formal.document.content, component_metadata: undefined };
+      const archive = { content: formal.document.content };
       return { doc, target, formal, archive };
     });
     const destinations = new Set<string>();

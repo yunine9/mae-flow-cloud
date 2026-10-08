@@ -64,3 +64,18 @@ test("已归档或已删除模块的旧知识不会被误分到工程语言", ()
   assert.equal(result.modules.length, 1);
   assert.equal(result.modules[0].key, "unassigned");
 });
+
+test("组件目录只列已有知识的组件：登记了但未研究的组件不先占位，研究统一从萃取任务发起", () => {
+  const idle: ComponentRepository = { ...component, id: "rpc", name: "RPC 框架", repository: "https://git.example/rpc.git" };
+  const result = projectKnowledgeModules({ documents: [document("timer-doc", { technologies: ["cpp"], research_source: { job_id: "cr-1", repository: component.repository, branch: "main", path: "", components: [{ id: "timer" }] } })],
+    businessModules: [], components: [component, idle] });
+  const cpp = result.modules.find(m => m.key === "engineering:cpp")!;
+  assert.deepEqual(cpp.repositories.map(group => [group.id, group.documents.map(doc => doc.id)]), [["timer", ["timer-doc"]]]);
+});
+
+test("组件研究来源里的源码目录不当知识文件名：只发布在平台的组件知识按标题显示", () => {
+  const doc = document("kd-guide", { title: "FileIO 使用指引", research_source: { job_id: "cr-1", repository: component.repository, branch: "main", path: "src", components: [{ id: "timer" }] } });
+  assert.equal(knowledgeFileName(doc), "FileIO 使用指引");
+  assert.equal(knowledgeFileName(document("kd-domain", { research_source: { job_id: "dkx-1", repository: "https://git.example/alarm.git", branch: "main", path: "docs/rule.md" } })), "rule.md", "领域研究的来源路径就是文稿路径");
+  assert.equal(knowledgeFileName({ ...doc, source: { repository: "https://git.example/kb.git", branch: "main", path: "docs/fileio.md", revision: "sha" } }), "fileio.md", "归档后按归档文件名");
+});

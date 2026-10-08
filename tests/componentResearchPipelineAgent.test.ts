@@ -60,6 +60,18 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
         await call("code_search", { action: "kw", query: "submit" });
         const used = await call("code_search", { action: "read", repository: "consumer", path: "src/use.cpp", start: 1, end: 2 });
         const evidenceId = used.content[0].text.match(/everycode-[a-f0-9]{24}/)![0];
+        const section = (id: string, title: string, api: string) => ({ id, title, repository_ids: [c.id], content: `说明 ${api} 的用法`, interfaces: api, integration: "基于实际构建", example: `未编译验证\n\`\`\`cpp\n${api}();\n\`\`\``, related_ids: [],
+          paradigm: { kind: "paradigm", component: "pool", language, status: "recommended", need: `调用 ${api}`, api: [api], applicability: "当前固定版本", replaces: { identifiers: [], imports: [], patterns: [] },
+            evidence: [{ repository_id: c.id, path, revision, start: 1, end: 2 }], usage_evidence: [evidenceId], open_questions: [] } });
+        if (task.id === "supplement") {
+          assert.equal(mode, "supplement");
+          await call("research_document", { action: "read" });
+          assert.match((await call("research_document", { action: "overview", overview: "重写概述" }, true)).content[0].text, /不能修改概述/);
+          assert.match((await call("research_document", { action: "section", section: section("paradigm-pool-submit", "提交任务", "submit") }, true)).content[0].text, /只能填写本轮新增/);
+          await call("research_document", { action: "section", section: section("paradigm-pool-wait", "等待任务完成", "wait") });
+          await call("component_work_result", { findings: `补充等待用法 \`${c.id}:${path}:1-2\``, open_questions: [] });
+          return { status: "turn_finished" };
+        }
         if (mode !== "discuss" && ["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) {
           if (mode !== "extract") await call("research_document", { action: "read", id: task.id });
           await call("research_document", { action: "section", section: { id: task.id, title: task.title, repository_ids: [c.id], content: mode === "extract" ? "明确等待完成后释放" : "已根据源码修订", interfaces: "submit", integration: "基于实际构建", example: "未编译验证\n```cpp\nsubmit();\n```", related_ids: [],
@@ -76,8 +88,8 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
   const service = new ComponentResearch(dir, input => runComponentResearch(input, { dataDir: dir, model: () => ({ provider: "test", model: "test", json: {} }), source: async () => ({ root: repo, revision }) }));
   const finished = async (id: string) => { for (let i = 0; i < 1500 && ["queued", "running"].includes(service.get(id).status); i++) await new Promise(r => setTimeout(r, 10)); const result = service.get(id); assert.equal(result.status, "done", result.error); return result; };
   try {
-    assert.throws(() => service.start({ language, topic: "任务", material_ids: ["old-upload"] }, "expert"), /仅使用/);
-    const job = service.start({ language, mode: "topic", topic: "任务池" }, "expert"); const done = await finished(job.id);
+    assert.throws(() => service.start({ language, material_ids: ["old-upload"] }, "expert"), /仅使用/);
+    const job = service.start({ language }, "expert"); const done = await finished(job.id);
     assert.equal(done.document?.sections.length, 4); assert.ok(done.pipeline?.tasks.every(t => t.status === "done")); assert.equal(rejectedReview, 7);
     assert.equal(new Set(sessions.map(s => s.workspace)).size, sessions.length);
     const artifacts = service.artifacts(job.id); assert.equal(artifacts.catalog.length, 4); assert.equal(artifacts.rules.length, 1); assert.match(artifacts.mapping, /提交后台任务/);
@@ -98,6 +110,14 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     const accepted = service.decideProposal(job.id, revised.review_turns!.at(-1)!.id, "accept", "expert");
     assert.match(accepted.document!.sections.find(s => s.id === "paradigm-pool-submit")!.content, /修订/);
     assert.throws(() => service.review(job.id, { section_id: "paradigm-pool-submit", mode: "discuss", message: "问题", material_ids: ["x"] }, "expert"), /仅使用/);
+    const beforeSupplement = sessions.length;
+    service.review(job.id, { section_id: "", mode: "supplement", message: "漏了等待任务完成的用法" }, "expert"); const supplemented = await finished(job.id);
+    assert.equal(sessions.length, beforeSupplement + 2, "补充一个研究会话，加上对新增项的独立评审");
+    assert.deepEqual(supplemented.document!.sections.slice(0, 4), accepted.document!.sections, "已有能力原样保留");
+    const added = supplemented.document!.sections.at(-1)!;
+    assert.equal(added.id, "paradigm-pool-wait"); assert.equal(added.selected, true); assert.match(added.sources, /src/, "来源由程序按证据生成");
+    assert.deepEqual(supplemented.review_turns!.at(-1)!.added_section_ids, ["paradigm-pool-wait"]);
+    assert.equal(service.artifacts(job.id).catalog.length, 5, "新增范式进入程序提取");
     const beforeChallenge = sessions.length;
     const challenge = { item_id: "component-test", source_digest: "a".repeat(64), repository_ids: [c.id], language,
       claim: "原生线程全部改成 Pool.submit（待验证）" };
@@ -107,7 +127,7 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     assert.equal(sessions.length, beforeChallenge + 1, "挑战只运行一个独立只读会话，不走整套萃取");
     assert.match(report.draft!, /核对代码/); assert.equal(report.document?.sections.length, 0);
     assert.throws(() => service.publish(run.id, componentPublishInput(report), "expert"), /草稿/);
-    assert.equal(service.get(job.id).document!.sections.length, 4, "挑战不改写原文档");
+    assert.equal(service.get(job.id).document!.sections.length, 5, "挑战不改写原文档");
   } finally { await service.shutdown(); intercepted.mock.restore(); if (old === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -128,7 +148,7 @@ test("组件萃取失败保留模型连接错误和重试次数", async () => {
     dataDir: dir, model: () => ({ provider: "test", model: "test", json: {} }), source: async () => ({ root: repo, revision }),
   }));
   try {
-    const job = service.start({ language: "cpp", mode: "topic", topic: "任务池" }, "expert");
+    const job = service.start({ language: "cpp" }, "expert");
     for (let i = 0; i < 500 && ["queued", "running"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
     const failed = service.get(job.id);
     assert.equal(failed.status, "failed");

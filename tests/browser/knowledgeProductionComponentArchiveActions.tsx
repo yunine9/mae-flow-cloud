@@ -34,7 +34,8 @@ async function run() {
   check(requests.length === 1 && requests[0].method === "GET" && requests[0].path.endsWith("/archive/preview"), "打开弹窗只读取归档预览");
   check(!dialog!.textContent?.includes("尚未发布的新草稿"), "归档不能展示未发布草稿");
   for (const file of fixture.componentReady.preview.targets.flatMap(target => target.files)) check(dialog!.textContent?.includes(file.path), `缺少正式文件 ${file.path}`);
-  check(fixture.componentReady.preview.targets[0].files.some(file => file.path.endsWith(".metadata.json")), "组件配套结构文件必须随正文列出");
+  const componentFiles = fixture.componentReady.preview.targets.flatMap(target => target.files);
+  check(componentFiles.length === 1 && componentFiles[0].path.endsWith(".md"), "一个组件只归档一篇正文，不带结构文件");
   check(!buttons().some(button => /读取远端|保存合并稿|清理预览|刷新 MR/.test(button.textContent ?? "")), "弹窗不提供旧远端与跟踪机制");
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause();
   preview = fixture.domainReady.preview; requests.length = 0;

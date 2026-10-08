@@ -78,7 +78,7 @@ test("组件萃取重启保留通过的小任务并创建新会话；明确停�
   const options = { dataDir: f.dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: f.source, revision: f.revision }) };
   let service = new ComponentResearch(f.dir, input => runComponentResearch(input, options));
   try {
-    const job = service.start({ language: "cpp", topic: "接口规则" }, "expert");
+    const job = service.start({ language: "cpp" }, "expert");
     await until(() => paused); await service.shutdown(); release(); await model.stop();
     assert.equal(service.get(job.id).status, "queued");
     assert.equal(service.get(job.id).pipeline!.tasks.find(t => t.id === "inventory")!.status, "done");
@@ -89,7 +89,8 @@ test("组件萃取重启保留通过的小任务并创建新会话；明确停�
     assert.equal(service.get(job.id).status, "done", service.get(job.id).error);
     assert.equal(service.get(job.id).evidence.filter(e => e.pipeline_task === "inventory").length, inventoryReads);
     assert.equal(service.get(job.id).document!.sections.length, 4);
-    const stopped = service.start({ language: "cpp", topic: "停止用例" }, "expert"); service.stop(stopped.id); await service.shutdown();
+    service.remove(job.id, "expert");
+    const stopped = service.start({ language: "cpp" }, "expert"); assert.notEqual(stopped.id, job.id); service.stop(stopped.id); await service.shutdown();
     service = new ComponentResearch(f.dir, async () => { throw new Error("不应执行已停止任务"); });
     assert.equal(service.get(stopped.id).status, "cancelled");
   } finally { release(); await service.shutdown(); await model.stop(); if (oldEc === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = oldEc; rmSync(f.dir, { recursive: true, force: true }); }

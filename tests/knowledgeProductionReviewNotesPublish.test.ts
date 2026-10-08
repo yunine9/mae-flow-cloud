@@ -62,7 +62,7 @@ async function fixture(kind: Kind) {
       domain.select(jobId, [otherId], false);
     } else {
       saveComponentRepository(dataDir, { name: "文件组件", repository: "https://example.test/component.git", branch: "main", path: "src", languages: ["cpp"] }, "alice");
-      const job = component.start({ mode: "all", language: "cpp", topic: "组件意见发布" }, "alice");
+      const job = component.start({ language: "cpp" }, "alice");
       jobId = job.id; selectedId = "cap-0"; otherId = "cap-1";
       await until(() => component.get(jobId).status === "done", "组件意见测试草稿未在3秒内完成");
       component.selectSections(jobId, [otherId, "cap-2"], false);

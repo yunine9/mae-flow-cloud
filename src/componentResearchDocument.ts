@@ -23,8 +23,11 @@ export interface ResearchDocument {
 }
 export interface ResearchReviewTurn {
   id: string;
+  /** 补充遗漏能力不针对任何已有项，为空串。 */
   section_id: string;
-  mode: "discuss" | "rework" | "update";
+  mode: "discuss" | "rework" | "update" | "supplement";
+  /** 补充轮新增的能力项编号；完成并通过独立评审后才并入文稿。 */
+  added_section_ids?: string[];
   previous_revisions?: Record<string, string>;
   base_revision?: number;
   skill?: { name: string; digest: string };
@@ -49,7 +52,16 @@ export function sectionReady(section: ResearchSection): boolean {
 }
 export function editResearchDocument(document: ResearchDocument, edit: ResearchDocumentEdit,
   repositoryIds: string[], review?: ResearchReviewTurn): ResearchDocument {
-  if (review && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
+  if (review?.mode === "supplement") {
+    // 补充只往文稿里加新项：已有能力和概述都已经过人审，改它们要走该项的返工，不能借补充之名重写。
+    if (edit.action === "overview") throw new Error("补充遗漏能力只能新增能力项，不能修改概述");
+    if (edit.action === "outline" && edit.entries?.some(entry => document.sections.some(section => section.id === entry.id))) {
+      throw new Error("补充只能新增能力项；已有能力请在该项上返工");
+    }
+    if (edit.action === "section" && !review.added_section_ids?.includes(edit.section?.id ?? "")) {
+      throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样");
+    }
+  } else if (review && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
     throw new Error("本轮只能修改指定组件；讨论不会修改草稿，其他组件保持原样");
   }
   scanForSecrets("组件知识草稿", Buffer.from(JSON.stringify(edit)));

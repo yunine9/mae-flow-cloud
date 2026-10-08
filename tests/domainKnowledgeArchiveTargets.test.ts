@@ -43,7 +43,10 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
     assert.deepEqual(job.documents.map(d => d.path), ["business/domains/rules.md", "business/local/rules.md"]);
     await service.publish(job.id, "user");
     assert.ok(service.get(job.id).documents.every(d => d.knowledge_document_id), "没有Git配置也能发布正式知识");
-    assert.equal(service.previewArchive(job.id).actions[0].id, "configure");
+    const unconfigured = service.previewArchive(job.id);
+    assert.ok(unconfigured.targets.length > 1);
+    assert.deepEqual(unconfigured.targets.map(target => target.actions.map(action => action.id)), unconfigured.targets.map(target => target.configured ? [] : ["configure"]), "多仓时设置入口只放在未配置的仓旁边");
+    assert.ok(!unconfigured.actions.some(action => action.id === "configure"), "多仓时底部不再重复设置入口");
     assert.throws(() => service.configureArchive(job.id, { targets: [{ ...job.knowledge_target, docs_path: "../bad" }], base_revision: 0 }), /仓库地址|路径/);
     job = service.configureArchive(job.id, { base_revision: 0, targets: [{ ...job.knowledge_target, repository: "https://example.test/knowledge.git" }, ...job.repositories] });
     service.run(job.id, { mode: "revise", document_ids: job.documents.map(d => d.id), message: "补充" }, "user");

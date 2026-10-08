@@ -57,8 +57,10 @@ function managers(dir: string) {
   return { research, manager };
 }
 async function seed(dir: string, research: ComponentResearch) {
-  if (!componentRepositories(dir).length) saveComponentRepository(dir, { name: "文件组件", repository: "https://example.test/component.git", branch: "main", path: "src", languages: ["cpp"] }, "alice");
-  const record = research.start({ mode: "all", language: "cpp", topic: "组件发布边界", refresh: true }, "alice");
+  // 一个组件只有一次研究：每次播种登记一个新组件，得到各自独立的研究。
+  const index = componentRepositories(dir).length;
+  const component = saveComponentRepository(dir, { name: index ? `文件组件 ${index}` : "文件组件", repository: `https://example.test/component${index || ""}.git`, branch: "main", path: "src", languages: ["cpp"] }, "alice");
+  const record = research.start({ language: "cpp", component_id: component.id }, "alice");
   await until(() => research.get(record.id).status === "done", "组件测试草稿未在5秒内完成");
   return research.get(record.id);
 }

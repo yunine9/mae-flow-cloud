@@ -5,7 +5,7 @@ import { publishedComponentParadigms } from "./componentKnowledgeDocument.ts";
 const digest = (content: string) => createHash("sha256").update(content).digest("hex");
 const schema = "mfc.component-guide/v2";
 
-/** 上库正文与程序字段分开存放；旧联合文档可直接转换。 */
+/** 正文给人读、结构字段给程序：归档进 Git 只放正文，结构字段随派生产物导出。 */
 export function componentArchiveParts(text: string) {
   const content = componentKnowledgeMarkdown(text) + "\n";
   const front = /^---\r?\nschema: "mfc\.component-guide\/v1"\r?\ncomponent_paradigms: ([^\r\n]+)\r?\n---/.exec(text);
@@ -19,7 +19,7 @@ export function componentArchiveMetadata(content: string, metadata: string): str
   return JSON.stringify({ schema, content_sha256: digest(content), component_paradigms: value.component_paradigms }, null, 2) + "\n";
 }
 
-/** 只用同一 Git 版本中的正文和结构文件恢复程序消费，避免错配旧规则。 */
+/** 派生产物里的正文与结构文件按摘要配对还原，避免错配旧规则。 */
 export function restoreComponentArchive(content: string, metadata: string): string {
   const value = JSON.parse(metadata);
   if (value.schema !== schema || value.content_sha256 !== digest(content)) throw new Error("组件知识正文与结构文件不一致，请更新配套文件后同步");
@@ -28,4 +28,9 @@ export function restoreComponentArchive(content: string, metadata: string): stri
   return canonical;
 }
 
-export const componentMetadataPath = (path: string) => path.replace(/\.md$/, ".metadata.json");
+/** 一个组件一篇，按语言分目录、按知识标题（组件功能，如「文件操作」）命名；标题里不能进路径的字符换成短横线。 */
+export function componentArchivePath(docsPath: string, formal: { title: string; technologies: string[] }) {
+  const name = formal.title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "-").replace(/\s+/g, " ").replace(/-{2,}/g, "-")
+    .replace(/^[\s.-]+|[\s.-]+$/g, "").slice(0, 80) || "组件知识";
+  return `${docsPath}/${formal.technologies[0] ?? "agnostic"}/${name}.md`;
+}

@@ -24,7 +24,7 @@ export async function knowledgeManualArchiveFixtures() {
     const doc = (formal: typeof guide, id: string, targetId: string, path: string) => ({ id, title: formal.title, target_id: targetId, path, layer: "domain" as const,
       content: "尚未发布的新草稿，不能出现在归档弹窗", sources: "src/file.cpp", revision: 2, selected: false, history: [], base_content: null, base_revision: "",
       knowledge_document_id: formal.id, published_revision: formal.revision, published_document_revision: 1 });
-    const componentRecord = { id: "cr-00000000-0000-4000-8000-000000000001", key: "manual-browser", topic: "文件组件知识", language: "cpp", mode: "topic", operator: "alice", status: "done", stage: "已入库",
+    const componentRecord = { id: "cr-00000000-0000-4000-8000-000000000001", key: "manual-browser", topic: "文件组件知识", language: "cpp", mode: "all", operator: "alice", status: "done", stage: "已入库",
       created_at: base.created_at, component, components: [component], evidence: [], document_id: guide.id, published_revision: guide.revision, draft: "待发布草稿" } as ResearchRecord;
     async function project(job: DomainKnowledgeJob) {
       const folder = join(dir, "domain-extraction", job.id); fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(join(folder, "job.json"), JSON.stringify(job));

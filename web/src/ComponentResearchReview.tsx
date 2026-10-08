@@ -15,7 +15,7 @@ import { Markdown } from "./markdown";
 import { componentRequest, type ComponentResearchRecord, type ComponentResearchSection } from "./componentResearchApi";
 
 function sectionMarkdown(section: ComponentResearchSection, includeMetadata = true) {
-  return [...(/^\s*#\s/.test(section.content) ? [] : [`# ${section.title}`]), ...(includeMetadata && section.paradigm ? [`**状态：${({ recommended: "推荐", legacy: "历史写法", unverified: "待核实" } as Record<string, string>)[section.paradigm.status] ?? section.paradigm.status}**\n\n**需求：** ${section.paradigm.need}\n\n**适用条件：** ${section.paradigm.applicability}`] : []), componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces) || "待研究",
+  return [...(/^\s*#\s/.test(section.content) ? [] : [`# ${section.title}`]), ...(includeMetadata && section.paradigm ? [`**${({ recommended: "推荐", legacy: "历史写法", unverified: "待核实" } as Record<string, string>)[section.paradigm.status] ?? section.paradigm.status}** · 需求：${section.paradigm.need} · 适用：${section.paradigm.applicability}`] : []), componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces) || "待研究",
     "### 集成产物与依赖", componentKnowledgeMarkdown(section.integration) || "待研究", "### 最佳示例", componentKnowledgeMarkdown(section.example) || "待补充（本项尚未完成）"].join("\n\n");
 }
 export function latestComponentProposal(record: ComponentResearchRecord, sectionId: string) {
@@ -31,7 +31,12 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   const searchableContent = useRef<HTMLDivElement>(null);
   const [notesToolbar, setNotesToolbar] = useState<HTMLSpanElement | null>(null);
   const [reviewing, setReviewing] = useState(false);
-  const [showDiscussion, setShowDiscussion] = useState(false);
+  const [showDiscussion, setShowDiscussion] = useState(false), [treeBeforeDiscussion, setTreeBeforeDiscussion] = useState(true);
+  // 正文优先：开对话时让出左侧目录给正文，关掉对话再恢复原样，正文宽度基本不因对话缩水。
+  function toggleDiscussion() {
+    if (showDiscussion) { setShowDiscussion(false); setTreeVisible(treeBeforeDiscussion); return; }
+    setTreeBeforeDiscussion(treeVisible); setTreeVisible(false); setShowDiscussion(true);
+  }
   const [treeVisible, setTreeVisible] = useState(true);
   const [selected, setSelected] = useState(sections[0]?.id ?? "");
   const [message, setMessage] = useState("");
@@ -42,6 +47,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   const [artifacts, setArtifacts] = useState<{ mapping: string; rules: unknown[]; files: Record<string, string> }>();
   const [metadataText, setMetadataText] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [supplementing, setSupplementing] = useState(false), [supplementMessage, setSupplementMessage] = useState("");
   const active = record.production?.working;
   const readonly = record.production?.review.readonly;
   const section = sections.find(item => item.id === selected) ?? sections[0];
@@ -54,7 +60,9 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   const previewSection = previewSections.find(item => item.id === section?.id);
   const showingProposal = !!section && previewSection !== section;
   const versions = (record.section_history ?? []).filter(h => h.section.id === section?.id);
-  const turns = (record.review_turns ?? []).filter(turn => turn.section_id === section?.id);
+  const turns = (record.review_turns ?? []).filter(turn => turn.mode !== "supplement" && turn.section_id === section?.id);
+  const supplements = (record.review_turns ?? []).filter(turn => turn.mode === "supplement");
+  const scope = (record.components ?? [record.component]).map(component => component.name).join("、");
   const searchKey = view === "document" ? `${record.id}:document:${record.topic}:${record.document!.overview}:${previewSections.map(item => `${item.id}:${item.revision}:${item.content}`).join("|")}` : `${record.id}:component:${section?.id}:${section?.revision}:${proposal?.id}:${proposal?.status}:${proposal?.proposal?.status}`;
   const sectionPreview = previewSection && <div ref={searchableContent}><KnowledgeMarkdown text={sectionMarkdown(previewSection)} focus={knowledgeFocus} /></div>;
   useEffect(() => { onBlockedChange?.(busy || active || !!editor); return () => onBlockedChange?.(false); }, [busy, active, editor, onBlockedChange]);
@@ -89,7 +97,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
       {(view === "document" || !!section && detailTab === "content" && editor?.id !== section.id) && <KnowledgeContentSearch contentRef={searchableContent} contentKey={searchKey} contentSelector=".md" />}
       <div className="research-review-views shrink-0" role="group" aria-label="审查视图"><Button size="sm" aria-pressed={view === "component"} variant={view === "component" ? "secondary" : "ghost"} onClick={() => setView("component")}>{unified ? "逐项审查" : "逐项审核"}</Button>
         <Button size="sm" aria-pressed={view === "document"} variant={view === "document" ? "secondary" : "ghost"} onClick={() => setView("document")}>完整文档</Button></div>
-      {unified && view === "component" && <Button size="sm" variant="ghost" aria-expanded={showDiscussion} onClick={() => setShowDiscussion(value => !value)}>研究对话{showDiscussion ? " · 收起" : ""}</Button>}
+      {unified && view === "component" && <Button size="sm" variant="ghost" aria-expanded={showDiscussion} onClick={toggleDiscussion}>研究对话{showDiscussion ? " · 收起" : ""}</Button>}
       {unified && <span ref={setNotesToolbar} className="flex items-center" />}
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="文稿更多操作" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
         {sections.some(s => s.paradigm) && <DropdownMenuItem disabled={active} onClick={async () => { try { setArtifacts(await componentRequest(`/component-research/${record.id}/artifacts`)); } catch (e) { setError((e as Error).message); } }}>查看派生产物</DropdownMenuItem>}
@@ -99,6 +107,25 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
     <Dialog open={!!artifacts} onOpenChange={open => { if (!open) setArtifacts(undefined); }}><DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-4xl">
       <DialogHeader><DialogTitle>派生预览 · 规则未启用</DialogTitle></DialogHeader>
       {artifacts && <section aria-label="组件派生产物"><Button variant="outline" size="sm" onClick={() => { const url = URL.createObjectURL(new Blob([JSON.stringify(artifacts, null, 2)], { type: "application/json" })); const a = document.createElement("a"); a.href = url; a.download = "component-artifacts.json"; a.click(); URL.revokeObjectURL(url); }}>下载结构化产物</Button><Markdown text={artifacts.mapping} /><p>{Object.keys(artifacts.files).length} 个文件 · {artifacts.rules.length} 条规则候选</p><details><summary>文件与程序提取结果</summary><pre className="whitespace-pre-wrap break-all text-sm">{JSON.stringify(artifacts, null, 2)}</pre></details></section>}
+    </DialogContent></Dialog>
+    <Dialog open={supplementing} onOpenChange={setSupplementing}><DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-xl">
+      <DialogHeader><DialogTitle>补充遗漏能力</DialogTitle></DialogHeader>
+      <p className="text-sm text-muted-foreground">说明文稿漏了哪些能力、接口或场景。Agent 只在本次研究的组件仓（{scope}）里查找，只新增能力项，不改已有内容；新增项经独立评审后并入目录并默认勾选，照常逐项审查后发布。</p>
+      <div className="max-h-[260px] space-y-3 overflow-auto" aria-live="polite">
+        {[...supplements].reverse().map(turn => { const label = record.production?.review.turns.find(item => item.id === turn.id)?.status_label;
+          const added = turn.status === "done" ? sections.filter(item => turn.added_section_ids?.includes(item.id)) : [];
+          return <article key={turn.id} className="space-y-1 border-b border-line pb-3 text-sm">
+            <p className="text-xs text-muted-foreground">{turn.operator} · {new Date(turn.created_at).toLocaleString()} · {label}</p>
+            <p className="whitespace-pre-wrap break-words">{turn.message}</p>
+            {turn.error && <p className="text-danger">{turn.error}</p>}
+            {!!added.length && <p>已补充：{added.map(item => <button key={item.id} className="knowledge-inline-link mr-2" onClick={() => { setSupplementing(false); setView("component"); navigateKnowledge(item.id); }}>{item.title}</button>)}</p>}
+          </article>; })}
+      </div>
+      {!readonly && <><Textarea aria-label="遗漏的能力说明" rows={4} maxLength={20000} placeholder="例如：漏了连接池的超时回收；异步调用的取消接口也没写。" value={supplementMessage} onChange={e => setSupplementMessage(e.target.value)} />
+        <div className="flex justify-end gap-2"><Button variant="outline" onClick={() => setSupplementing(false)}>关闭</Button>
+          <Button disabled={busy || active || !supplementMessage.trim()} onClick={async () => { if (await request("review", { section_id: "", mode: "supplement", message: supplementMessage })) setSupplementMessage(""); }}>开始补充</Button></div>
+        {error && <p className="text-sm text-danger">{error}</p>}
+        {active && <p className="text-sm text-muted-foreground">研究进行中，本轮结束后才能发起补充。</p>}</>}
     </DialogContent></Dialog>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {view === "document" ? <div className="research-review-panes" style={!treeVisible ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
@@ -114,8 +141,9 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
         {treeVisible && <KnowledgeOutline title={record.topic} items={outlineItems} currentId={section?.id} onNavigate={navigateKnowledge} onSelection={readonly ? undefined : (id, selected) => void request("selection", { ids: [id], selected })} disabled={busy || active || !!editor} label="组件能力目录" itemLabel={unified ? "能力" : undefined} itemUnit={unified ? "项" : undefined} actions={!readonly && <>
           <button disabled={busy || active || readonly || !!editor || !sections.length} className="text-primary disabled:opacity-40 hover:underline" onClick={() => void request("selection", { ids: sections.map(s => s.id), selected: true })}>全选</button>
           <button disabled={busy || active || readonly || !!editor || !sections.length} className="text-primary disabled:opacity-40 hover:underline" onClick={() => void request("selection", { ids: sections.map(s => s.id), selected: false })}>全不选</button>
+          <button disabled={busy || !!editor} className="text-primary disabled:opacity-40 hover:underline" onClick={() => { setSupplementing(true); setError(""); }}>补充遗漏能力{supplements.some(turn => ["queued", "running"].includes(turn.status)) ? " · 进行中" : ""}</button>
         </>} />}
-        <div className="research-reader" style={unified ? { display: "grid", gridTemplateColumns: showDiscussion ? "minmax(0, 1fr) 280px" : "minmax(0, 1fr)", padding: 0, overflow: "hidden" } : undefined}>
+        <div className="research-reader" style={unified ? { display: "grid", gridTemplateColumns: showDiscussion ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", padding: 0, overflow: "hidden" } : undefined}>
           {section ? <>
             <div ref={reader} tabIndex={0} aria-label="组件详细文档" className="research-document-content studio-paper" style={unified ? { padding: "16px 28px 28px", overflow: "auto", minWidth: 0, minHeight: 0 } : undefined}>
               <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="章节内容视图">
