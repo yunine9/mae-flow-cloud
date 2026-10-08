@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
+import { deliveryBranchName } from "./deliveryBranchName.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
 import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { readMrFailureBody } from "./mrGateClient.ts";
@@ -163,12 +164,13 @@ export class KnowledgeMrPublisher {
     save: (publication: KnowledgeCleanupPublication) => void, signal?: AbortSignal): Promise<KnowledgeCleanupPublication> {
     this.assertActive(signal);
     const issue = knowledgeIssueNumber(job.issue_no), selected = this.cleanupPaths(input, 1000);
+    const branch = deliveryBranchName(target.branch, this.identity(operator).credential.username, issue);
     if (plan.target_id !== target.id || !selected.length || selected.some(path => !plan.entries.some(entry => entry.path === path))) throw new Error("请选择预览中的待删文件");
     const samePlan = previous?.cleanup_plan_id === plan.id;
     const continuing = samePlan && JSON.stringify(previous!.removed_paths) === JSON.stringify(selected);
     if (samePlan && !continuing && (previous!.revision || previous!.mr_attempted || previous!.url)) throw new Error("原清理分支已确定删除范围，请按原范围重试");
     let publication: KnowledgeCleanupPublication = continuing ? { ...structuredClone(previous!), state: "pending", error: undefined }
-      : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch: `codex/knowledge-${job.id}-cleanup-${target.id}-${randomUUID().slice(0, 8)}` };
+      : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch };
     const saveLive = (value: KnowledgeCleanupPublication) => { this.assertActive(signal); save(structuredClone(value)); };
     if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
     if (publication.mr_attempted) {
@@ -179,9 +181,14 @@ export class KnowledgeMrPublisher {
     return this.withGit(operator, async (git, root, operationSignal) => {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
       const base = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      const remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      let remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      // 未推送的旧失败记录可改名；已在远端的分支仍沿原记录恢复，避免重复 MR。
+      if (!remote && publication.branch !== branch) {
+        publication.branch = branch; publication.revision = undefined; publication.mr_attempted = undefined; saveLive(publication);
+        remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${branch}`])).trim().split(/\s/)[0];
+      }
       if (remote) {
-        if (!continuing || !publication.revision || remote !== publication.revision) throw knowledgeGitFailure("non_fast_forward", "清理分支已有人工修改");
+        if (!continuing || !publication.revision || remote !== publication.revision) throw knowledgeGitFailure("non_fast_forward", "同名清理分支已有提交，请先核对本单原分支");
         await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
       } else {
         const entries = await this.cleanupEntries(git, base, plan.paths);

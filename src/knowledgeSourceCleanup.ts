@@ -41,7 +41,7 @@ export class KnowledgeSourceCleanup {
       catch (error) {
         signal.throwIfAborted();
         const latest = state.publications.find(publication => publication.target_id === target.id);
-        persist({ target_id: target.id, cleanup_plan_id: plan.id, removed_paths: plan.selected_paths!, branch: `codex/knowledge-${job.id}-cleanup-${target.id}-${plan.id}`, documents: [], ...latest,
+        persist({ target_id: target.id, cleanup_plan_id: plan.id, removed_paths: plan.selected_paths!, branch: "", documents: [], ...latest,
           state: "failed", error: error instanceof Error ? error.message : "清理 MR 创建失败" });
       }
     }
