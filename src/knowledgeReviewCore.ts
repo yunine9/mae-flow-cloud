@@ -2,7 +2,7 @@
 export interface ReviewProposal<T = unknown> {
   turn_id: string;
   document_id: string;
-  turn_status: "queued" | "running" | "done" | "failed" | "cancelled";
+  turn_status: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
   status: "pending" | "accepted" | "discarded";
   base_revision: number;
   value: T;
