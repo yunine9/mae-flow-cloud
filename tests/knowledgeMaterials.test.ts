@@ -108,3 +108,21 @@ with zipfile.ZipFile(root/'expanded.zip','w',compression=zipfile.ZIP_DEFLATED) a
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("#449：ZIP 中超过 5 MiB 的合法业务文本可完整解析并分段读取", async () => {
+  const root = mkdtempSync(join(tmpdir(), "knowledge-zip-text-budget-"));
+  try {
+    execFileSync("python3", ["-c", `import zipfile,sys
+with zipfile.ZipFile(sys.argv[1], 'w', compression=zipfile.ZIP_DEFLATED) as z:
+ for i in range(2):z.writestr(str(i)+'.md', ('退款规则\\n'*800000)+'文档结尾'+str(i))`, join(root, "business.zip")]);
+    const material = await saveKnowledgeMaterial(root, { name: "business.zip", content_base64: readFileSync(join(root, "business.zip")).toString("base64") });
+    assert.equal(material.state, "ready", material.error);
+    assert.ok(Buffer.byteLength(material.sections.map(s => s.text).join("")) > 8 * 1024 * 1024);
+    for (let i = 0; i < 2; i++) assert.ok(material.sections.some(s => s.location.startsWith(`${i}.md`) && s.text.includes(`文档结尾${i}`)), `文档 ${i} 不能截断`);
+    const { knowledgeMaterialTool } = await import("../src/knowledgeMaterials.ts");
+    const tool: any = knowledgeMaterialTool([material], root);
+    const result = await tool.execute("read", { id: material.id, start: material.sections.length, count: 1 });
+    const read = JSON.parse((result.content[0] as any).text);
+    assert.equal(read.sections.length, 1); assert.match(read.sections[0].text, /文档结尾1/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

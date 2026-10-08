@@ -8,6 +8,8 @@ export function ExtractionSkillEditor({ kind }: { kind: "component" | "domain" }
 export function openExtractionSkill(kind: "component" | "domain") {
   const url = new URL(location.href);
   url.search = extractionSkillSearch(url.search, kind);
-  history.pushState(history.state, "", url);
+  // 从未提交的研究表单过来，页面的返回与「使用此 Skill」都回到原入口。
+  const fromResearch = new URLSearchParams(location.search).get("kbPage") === "research";
+  history.pushState({ ...history.state, knowledgeResearchReturn: fromResearch ? location.search : undefined }, "", url);
   dispatchEvent(new PopStateEvent("popstate"));
 }

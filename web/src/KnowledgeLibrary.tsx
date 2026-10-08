@@ -6,7 +6,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { KnowledgeModuleHome } from "./KnowledgeModuleHome";
 import { KnowledgeModuleReader } from "./KnowledgeModuleReader";
 import { KnowledgeTaskCenter, KnowledgeTaskCapsule, KnowledgeExperienceCapsule } from "./KnowledgeTaskCenter";
-import { KnowledgeResearchCreate } from "./KnowledgeResearchCreate";
+import { KnowledgeResearchCreate, type KnowledgeResearchDraft } from "./KnowledgeResearchCreate";
 import { KnowledgeSkillImport } from "./KnowledgeSkillImport";
 import { KnowledgeSkillTask } from "./KnowledgeSkillTask";
 import { DomainKnowledgeExtraction } from "./DomainKnowledgeExtraction";
@@ -30,6 +30,7 @@ function readRoute() {
 }
 export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [route, setRoute] = useState(readRoute);
+  const [researchDraft, setResearchDraft] = useState<KnowledgeResearchDraft>();
   const [summary, setSummary] = useState({ running: 0, attention: 0, total: 0 });
   useEffect(() => { const sync = () => setRoute(readRoute()); addEventListener("popstate", sync); return () => removeEventListener("popstate", sync); }, []);
   // 任务中心页自己轮询并通过 onSummaryChange 回报数量，这里只在别的页轮询，避免两处同时每 5 秒请求。
@@ -52,7 +53,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
     for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "kbStage", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill", "source_task", "memory_id"]) url.searchParams.delete(key);
     url.searchParams.set("kbPage", page);
     for (const [key, value] of Object.entries(values)) if (value) url.searchParams.set(key, value);
-    history.pushState(history.state, "", url); setRoute(readRoute());
+    history.pushState({ ...history.state, knowledgeResearchReturn: undefined }, "", url); setRoute(readRoute());
   }
   function openTask(kind: Kind, id: string, review = false, action?: KnowledgeProductionAction) {
     if (id === "new" || !id) { navigate("research", { kbKind: kind }); return; }
@@ -67,8 +68,13 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   // 全屏态的样式让容器里每个子元素各占满一行宽：只容得下一个工作区。经验页、平台 Skill 页是
   // "返回按钮 + 内容"两段，进全屏会把内容挤成几十像素（2026-10-08 真服务实测），所以留在页内。
   const platformSkill = route.page === "module" && route.module === "platform" && ["platform-skill-domain", "platform-skill-component"].includes(route.document);
+  const returnSearch = platformSkill && typeof history.state?.knowledgeResearchReturn === "string" && new URLSearchParams(history.state.knowledgeResearchReturn).get("kbPage") === "research" ? history.state.knowledgeResearchReturn as string : undefined;
+  function returnToResearch() {
+    const url = new URL(location.href); url.search = returnSearch!;
+    history.pushState({ ...history.state, knowledgeResearchReturn: undefined }, "", url); setRoute(readRoute());
+  }
   const focused = route.page === "task" || (route.page === "module" && !platformSkill);
-  return <KnowledgeStudioContext.Provider value={{ view: route.review ? "knowledge" : "workbench", openExecution: (kind, id) => openTask(kind, id ?? "new"), openResult: (kind, id) => openTask(kind, id, true) }}>
+  return <KnowledgeStudioContext.Provider value={{ view: route.review ? "knowledge" : "workbench", openExecution: (kind, id) => returnSearch && !id ? returnToResearch() : openTask(kind, id ?? "new"), openResult: (kind, id) => openTask(kind, id, true) }}>
     <section className={`knowledge-hub ${focused ? "is-focused" : ""}`} aria-label="知识库">
       <header className="knowledge-hub-header">
         <div className="knowledge-page-title"><button type="button" className="knowledge-hub-brand" onClick={() => navigate("home")}><strong>知识库</strong></button></div>
@@ -83,10 +89,10 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       </header>
       {route.page === "home" && <KnowledgeModuleHome onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
       {route.page === "module" && (platformSkill
-        ? <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
+        ? <div className="knowledge-hub-task"><KnowledgeBackButton destination={returnSearch ? "研究知识" : "知识库"} onClick={() => returnSearch ? returnToResearch() : navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
       {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, action) => openTask(kind, id, action.view !== "progress", action)} onSummaryChange={setSummary} />}
-      {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} onBack={() => navigate("home")} onCreated={(kind, id) => openTask(kind, id)} onCreatedMany={() => navigate("tasks")} onOpenDocument={(id, key) => navigate("module", { kbModule: key, knowledgeDocument: id })} />}
+      {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} draft={researchDraft} onDraftChange={setResearchDraft} onBack={() => navigate("home")} onCreated={(kind, id) => { setResearchDraft(undefined); openTask(kind, id); }} onCreatedMany={() => { setResearchDraft(undefined); navigate("tasks"); }} onOpenDocument={(id, key) => navigate("module", { kbModule: key, knowledgeDocument: id })} />}
       {route.page === "import" && <KnowledgeSkillImport moduleKey={route.module} onBack={() => navigate("home")} onCreated={id => openTask("skill-submission", id, true)} />}
       {route.page === "experience" && <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><MemoryBoard onOpenTask={onOpenTask} /></div>}
       {route.page === "task" && <div className="knowledge-hub-task">

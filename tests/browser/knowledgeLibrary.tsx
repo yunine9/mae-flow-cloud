@@ -208,6 +208,9 @@ async function run() {
   check(document.querySelector(".knowledge-hub.is-focused") && focusedHoldsOne(), "a focused task page holds exactly one workspace");
   await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
+  await chooseNew("研究知识");
+  check(document.querySelector<HTMLInputElement>('input[placeholder="需求或问题单号"]')?.value === "" && document.querySelector<HTMLInputElement>('[aria-label="单号描述"]')?.value === "", "研究创建成功后清理草稿，下次创建从空表单开始");
+  await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
   check(document.querySelector('.knowledge-hub-header [aria-label="团队经验，0 条已采纳，0 条待确认"]'), "header experience capsule reports counts read from /memory-insights");
   await clickSelector('.knowledge-hub-header [aria-label^="团队经验"]'); await waitFor('[aria-label="经验沉淀"]');
   check(document.body.textContent?.includes("经验沉淀") && focusedHoldsOne(), "B6: team experience keeps its back button and board readable instead of squeezing them into one focused row");
