@@ -11,7 +11,7 @@ import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeHttpFailure,
 import { readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
-import type { DomainDocument } from "./domainKnowledgeTypes.ts";
+import type { DomainDocument, KnowledgeCleanupPlan, KnowledgeCleanupPublication } from "./domainKnowledgeTypes.ts";
 
 export class KnowledgeMrPublisher {
   private stopped = false;
@@ -98,6 +98,104 @@ export class KnowledgeMrPublisher {
     if (!entry) return null;
     if (!/^100(?:644|755) blob /.test(entry)) throw new Error("文档路径不是普通文件，未写入");
     return git(["show", `${revision}:${path}`]);
+  }
+  private cleanupPaths(paths: unknown, limit = 20): string[] {
+    if (!Array.isArray(paths) || paths.length > limit || paths.some(path => typeof path !== "string")) throw new Error(`每仓最多选择 ${limit} 条清理目录或文件路径`);
+    return [...new Set(paths.map(path => knowledgeRelativePath(path)))].sort();
+  }
+  private async cleanupEntries(git: (args: string[]) => Promise<string>, revision: string, paths: string[]) {
+    if (!paths.length) return [];
+    const result = await git(["--literal-pathspecs", "ls-tree", "-r", "-z", revision, "--", ...paths]);
+    const entries = result.split("\0").filter(Boolean).map(line => {
+      const match = /^(\d{6}) (blob|commit) ([a-f0-9]+)\t([\s\S]+)$/.exec(line);
+      if (!match || match[2] !== "blob") throw new Error("清理范围包含子模块，请移除该路径");
+      const path = knowledgeRelativePath(match[4]);
+      if (!paths.some(scope => path === scope || path.startsWith(`${scope}/`))) throw new Error("清理预览超出指定路径");
+      return { path, mode: match[1], oid: match[3] };
+    }).sort((a, b) => a.path.localeCompare(b.path));
+    if (entries.length > 1000) throw new Error("每仓最多预览 1000 个旧文件，请缩小清理范围");
+    return entries;
+  }
+  async previewCleanup(target: KnowledgeRepository, input: unknown, operator: string, signal?: AbortSignal): Promise<KnowledgeCleanupPlan> {
+    const paths = this.cleanupPaths(input);
+    return this.withGit(operator, async git => {
+      await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
+      const target_revision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
+      const entries = await this.cleanupEntries(git, target_revision, paths);
+      return { id: `cleanup-${randomUUID()}`, target_id: target.id, paths, target_revision, entries, selected_paths: entries.map(entry => entry.path) };
+    }, signal);
+  }
+  private async discoverMr(target: KnowledgeRepository, publication: DomainPublication, operator: string, signal?: AbortSignal) {
+    const identity = this.identity(operator), query = new URLSearchParams({ repo: target.repository, source_branch: publication.branch, target_branch: target.branch });
+    const operationSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
+    let body: { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
+    try {
+      const response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: operationSignal });
+      this.assertActive(operationSignal);
+      if (!response.ok) {
+        const failure = knowledgeHttpFailure(response, `HTTP ${response.status}`);
+        const detail = await readMrFailureBody(response, operationSignal).catch(error => error instanceof Error ? error.message : String(error));
+        this.assertActive(operationSignal); failure.message += detail ? `：${detail}` : ""; throw failure;
+      }
+      try { body = await response.json() as typeof body; this.assertActive(operationSignal); }
+      catch (error) { if (error instanceof SyntaxError) throw new Error("交付平台响应不完整：原分支 MR 查询响应不是合法 JSON"); throw error; }
+    } catch (error) { this.assertActive(signal); throw knowledgeMrFailure(error, "原分支 MR 查询", [identity.credential.password]); }
+    if (!Array.isArray(body.mrs) || body.mrs.length > 1 || body.mrs.some(mr => mr.source_branch !== publication.branch
+      || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
+    return body.mrs[0];
+  }
+  private async openMr<T extends DomainPublication>(job: Pick<DomainKnowledgeJob, "title" | "issue_no" | "issue_description">,
+    target: KnowledgeRepository, publication: T, operator: string, save: (publication: T) => void, signal: AbortSignal): Promise<T> {
+    const identity = this.identity(operator), issue = knowledgeIssueNumber(job.issue_no);
+    const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
+    publication.mr_attempted = true; save(publication);
+    let receipt;
+    try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: publication.branch,
+      targetBranch: target.branch, title, credential: identity.credential, dtsNo: issue, purpose: "knowledge", signal, includeFailureMetadata: true }); }
+    catch (error) { signal.throwIfAborted(); this.assertActive(signal); throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
+    this.assertActive(signal);
+    if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后手动重试");
+    publication.url = receipt.url; publication.mr_id = receipt.id; publication.state = "opened";
+    save(publication); return publication;
+  }
+  async publishCleanup(job: Pick<DomainKnowledgeJob, "id" | "title" | "issue_no" | "issue_description">, target: KnowledgeRepository,
+    plan: KnowledgeCleanupPlan, input: unknown, previous: KnowledgeCleanupPublication | undefined, operator: string,
+    save: (publication: KnowledgeCleanupPublication) => void, signal?: AbortSignal): Promise<KnowledgeCleanupPublication> {
+    this.assertActive(signal);
+    const issue = knowledgeIssueNumber(job.issue_no), selected = this.cleanupPaths(input, 1000);
+    if (plan.target_id !== target.id || !selected.length || selected.some(path => !plan.entries.some(entry => entry.path === path))) throw new Error("请选择预览中的待删文件");
+    const samePlan = previous?.cleanup_plan_id === plan.id;
+    const continuing = samePlan && JSON.stringify(previous!.removed_paths) === JSON.stringify(selected);
+    if (samePlan && !continuing && (previous!.revision || previous!.mr_attempted || previous!.url)) throw new Error("原清理分支已确定删除范围，请按原范围重试");
+    let publication: KnowledgeCleanupPublication = continuing ? { ...structuredClone(previous!), state: "pending", error: undefined }
+      : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch: `codex/knowledge-${job.id}-cleanup-${target.id}-${randomUUID().slice(0, 8)}` };
+    const saveLive = (value: KnowledgeCleanupPublication) => { this.assertActive(signal); save(structuredClone(value)); };
+    if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
+    if (publication.mr_attempted) {
+      const found = await this.discoverMr(target, publication, operator, signal);
+      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return publication; }
+    }
+    saveLive(publication);
+    return this.withGit(operator, async (git, root, operationSignal) => {
+      await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
+      const base = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
+      const remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      if (remote) {
+        if (!continuing || !publication.revision || remote !== publication.revision) throw knowledgeGitFailure("non_fast_forward", "清理分支已有人工修改");
+        await git(["fetch", "--no-tags", target.repository, `refs/heads/${publication.branch}`]);
+      } else {
+        const entries = await this.cleanupEntries(git, base, plan.paths);
+        if (JSON.stringify(entries) !== JSON.stringify(plan.entries)) throw new Error("清理范围内的文件已变化，请重新预览，尚未删除文件");
+        await git(["read-tree", base]);
+        // 删除只改临时仓的索引；Git 在 bare 仓执行此命令时仍要求显式工作树位置。
+        for (const path of selected) await git(["--work-tree", root, "update-index", "--force-remove", "--", path]);
+        const tree = (await git(["write-tree"])).trim();
+        publication.revision = (await git(["commit-tree", tree, "-p", base, "-m", cloudCommitSubject(issue, "feat", "清理萃取前旧知识")])).trim();
+        saveLive(publication);
+        await git(["push", target.repository, `${publication.revision}:refs/heads/${publication.branch}`]);
+      }
+      return this.openMr(job, target, publication, operator, saveLive, operationSignal);
+    }, signal);
   }
   async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string,
     save: (publication: DomainPublication) => void, signal?: AbortSignal): Promise<DomainPublication> {

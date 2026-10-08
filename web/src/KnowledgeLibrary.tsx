@@ -10,6 +10,7 @@ import { KnowledgeResearchCreate, type KnowledgeResearchDraft } from "./Knowledg
 import { KnowledgeSkillImport } from "./KnowledgeSkillImport";
 import { KnowledgeSkillTask } from "./KnowledgeSkillTask";
 import { DomainKnowledgeExtraction } from "./DomainKnowledgeExtraction";
+import type { KnowledgeCleanupDraft } from "./KnowledgeSourceCleanup";
 import { ComponentResearch } from "./ComponentResearch";
 import { PlatformSkillPane, type PlatformSkillKind } from "./PlatformSkill";
 import { KnowledgeStudioContext, type ExtractionKind } from "./KnowledgeStudioContext";
@@ -31,6 +32,7 @@ function readRoute() {
 export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [route, setRoute] = useState(readRoute);
   const [researchDraft, setResearchDraft] = useState<KnowledgeResearchDraft>();
+  const [cleanupDrafts, setCleanupDrafts] = useState<Record<string, KnowledgeCleanupDraft>>({});
   const [summary, setSummary] = useState({ running: 0, attention: 0, total: 0 });
   useEffect(() => { const sync = () => setRoute(readRoute()); addEventListener("popstate", sync); return () => removeEventListener("popstate", sync); }, []);
   // 任务中心页自己轮询并通过 onSummaryChange 回报数量，这里只在别的页轮询，避免两处同时每 5 秒请求。
@@ -96,7 +98,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       {route.page === "import" && <KnowledgeSkillImport moduleKey={route.module} onBack={() => navigate("home")} onCreated={id => openTask("skill-submission", id, true)} />}
       {route.page === "experience" && <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><MemoryBoard onOpenTask={onOpenTask} /></div>}
       {route.page === "task" && <div className="knowledge-hub-task">
-        {route.kind === "domain" && <DomainKnowledgeExtraction focused onBack={() => navigate("tasks")} onViewKnowledge={id => navigate("module", { kbModule: "unassigned", knowledgeDocument: id })} key={route.id} focusId={route.id} surface={route.review ? "knowledge" : "workbench"} />}
+        {route.kind === "domain" && <DomainKnowledgeExtraction focused onBack={() => navigate("tasks")} onViewKnowledge={id => navigate("module", { kbModule: "unassigned", knowledgeDocument: id })} key={route.id} focusId={route.id} surface={route.review ? "knowledge" : "workbench"} cleanupDraft={cleanupDrafts[route.id]} onCleanupDraftChange={draft => setCleanupDrafts(current => ({ ...current, [route.id]: draft }))} />}
         {route.kind === "component" && <ComponentResearch key={route.id} open focused focusId={route.id} surface={route.review ? "knowledge" : "workbench"} onClose={() => navigate("tasks")} backLabel="任务中心" onAdopt={id => navigate("module", { kbModule: "unassigned", knowledgeDocument: id })} />}
         {(route.kind === "skill-extraction" || route.kind === "skill-submission") && <KnowledgeSkillTask kind={route.kind} id={route.id} onBack={() => navigate("tasks")} onSubmitted={id => openTask("skill-submission", id, true)} />}
       </div>}

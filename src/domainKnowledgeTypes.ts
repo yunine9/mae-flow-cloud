@@ -52,6 +52,18 @@ export interface DomainArchiveBatch {
   superseded_documents?: Array<{ document_id: string; knowledge_document_id: string; published_revision: string;
     current_revision?: string; reason: "newer_version" | "deleted" }>;
 }
+export interface KnowledgeCleanupPlan {
+  id: string; target_id: string; paths: string[]; target_revision: string;
+  entries: Array<{ path: string; mode: string; oid: string }>;
+  selected_paths?: string[];
+}
+export interface KnowledgeCleanupPublication extends DomainPublication {
+  cleanup_plan_id: string; removed_paths: string[];
+}
+export interface KnowledgeSourceCleanupState {
+  repositories: KnowledgeRepository[]; plans: KnowledgeCleanupPlan[];
+  publications: KnowledgeCleanupPublication[]; started?: boolean;
+}
 export interface DomainKnowledgeJob {
   /** 创建请求的规范化键；后续归档、关联信息与资料维护不改变它。 */
   key?: string;
@@ -66,6 +78,7 @@ export interface DomainKnowledgeJob {
     components?: Array<{ id: string; repository: string; branch: string; path: string; revision?: string }> };
   repositories: KnowledgeRepository[]; knowledge_target: KnowledgeRepository;
   source_repositories?: KnowledgeRepository[];
+  source_cleanup?: KnowledgeSourceCleanupState;
   archive_configured?: boolean; archive_revision?: number;
   material_ids: string[];
   deleted_at?: string; deleted_by?: string;

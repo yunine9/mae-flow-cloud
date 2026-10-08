@@ -24,6 +24,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         const body = await readBody(request, 3 * 1024 * 1024);
         if (!parts[1]) return json(response, 202, manager.create(body, operator));
         const id = parts[1];
+        if (parts[2] === "source-cleanup") return json(response, 200, await manager.sourceCleanupAction(id, parts[3], body, operator));
         if (parts[2] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no, body.issue_description));
         if (parts[2] === "archive-targets") return json(response, 200, manager.configureArchive(id, body));
         if (parts[2] === "run") return json(response, 202, manager.run(id, body, operator));

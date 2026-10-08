@@ -1,6 +1,7 @@
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 import { KnowledgeReadingFrame } from "./KnowledgeReadingFrame";
 import { KnowledgeResearchProgress } from "./KnowledgeResearchProgress";
+import { KnowledgeSourceCleanup, type KnowledgeCleanupDraft } from "./KnowledgeSourceCleanup";
 import { DomainKnowledgeArchiveTargets } from "./DomainKnowledgeArchiveTargets";
 import { DomainKnowledgeFileTree } from "./DomainKnowledgeFileTree";
 import { DomainKnowledgePublicationStatus } from "./DomainKnowledgePublicationStatus";
@@ -28,7 +29,7 @@ import { Markdown } from "./markdown";
 import type { DomainKnowledgeJob, DomainDocument } from "../../src/domainKnowledgeTypes";
 
 const body = (doc: { content: string; sources: string }) => doc.content;
-export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, onBack, focused = false }: { focusId?: string; surface?: "knowledge" | "workbench"; onViewKnowledge?: (documentId: string) => void; onBack?: () => void; focused?: boolean }) {
+export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, onBack, focused = false, cleanupDraft, onCleanupDraftChange }: { focusId?: string; surface?: "knowledge" | "workbench"; onViewKnowledge?: (documentId: string) => void; onBack?: () => void; focused?: boolean; cleanupDraft?: KnowledgeCleanupDraft; onCleanupDraftChange?: (draft: KnowledgeCleanupDraft) => void }) {
   const studio = useKnowledgeStudio();
   const [instructions, setInstructions] = useState("");
   const [records, setRecords] = useState<DomainKnowledgeJob[]>([]), [job, setJob] = useState<DomainKnowledgeJob>(), [selected, setSelected] = useState(() => {
@@ -52,7 +53,8 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
   const [related, setRelated] = useState(false), [showDiscussion, setShowDiscussion] = useState(false);
   const [documentId, setDocumentId] = useState(() => new URLSearchParams(location.search).get("knowledgeDocument") ?? ""), [tab, setTab] = useState<"content" | "diff" | "history" | "sources">("content"), [stage, setStage] = useState("review");
   const [message, setMessage] = useState(""), [latest, setLatest] = useState(false), [edit, setEdit] = useState<DomainDocument>();
-  const currentStage = stage;
+  const preparingCleanup = !!job?.source_cleanup && !job.source_cleanup.started;
+  const currentStage = preparingCleanup ? "progress" : stage;
   useEffect(() => { if (new URLSearchParams(location.search).get("kbStage") === "publish") setArchiveOpenRequest(value => value + 1); else setArchiveOpenRequest(0); if (surface) setStage(surface === "knowledge" ? "review" : "progress"); }, [surface, focusId]);
   const active = job?.production?.working, document = job?.documents.find(d => d.id === documentId) ?? job?.documents[0];
   const turns = job?.turns.filter(t => t.document_ids.includes(document?.id ?? "")) ?? [];
@@ -128,7 +130,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
     {job ? <><header className={`studio-result-toolbar${focused ? " domain-focused-toolbar" : ""}`}>
       {onBack && <KnowledgeBackButton onClick={onBack} destination="任务中心" />}
       <FileText size={21} /><strong title={job.title}>{job.title}</strong><span className={`studio-job-status ${active ? "is-active" : ""}`}>{lifecycle}</span>
-      <KnowledgeTaskTabs value={currentStage} onChange={changeView} documentCount={job.documents.length} view={job.production} disabled={!!edit || busy} />
+      {!preparingCleanup && <KnowledgeTaskTabs value={currentStage} onChange={changeView} documentCount={job.documents.length} view={job.production} disabled={!!edit || busy} />}
       <div className="studio-result-actions">
         <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onChanged={() => {
           void componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}`, undefined, AbortSignal.timeout(30_000))
@@ -136,7 +138,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
         }} />
         {job.production?.research_actions.map(item => item.id === "stop" ? <Button key={item.id} variant="outline" disabled={busy} onClick={() => void action("stop")}>{item.label}</Button> : item.id === "resume" ? <Button key={item.id} disabled={busy} onClick={() => { void action("resume", { use_latest_skill: latest || !job.turns.at(-1)?.research }); changeView("progress"); }}>{item.label}</Button> : currentStage === "review" && (item.id === "update" ? <Button key={item.id} disabled={busy || !document} onClick={() => { setTab("content"); setNotesOpenRequest(value => value + 1); }}>{item.label}</Button> : <Button key={item.id} disabled={busy || !!edit || !publicationCount || !!publicationProblem} title={publicationProblem} onClick={() => void publishSelected()}><ArrowUpRight size={17} />{busy ? "正在发布…" : `${item.label}（${publicationCount}）`}</Button>))}
         <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
+          {!preparingCleanup && <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>}
           {!active && job.status === "done" && job.turns.at(-1)?.mode === "extract" && <DropdownMenuItem disabled={busy} onClick={() => { void action("resume", { use_latest_skill: latest || !job.turns.at(-1)?.research }); changeView("progress"); }}>继续深入研究</DropdownMenuItem>}
           <DropdownMenuItem onClick={() => openExtractionSkill("domain")}>查看 Skill</DropdownMenuItem>
           <DropdownMenuItem onClick={() => { studio?.openExecution("domain"); setOpen(true); }}>新建萃取任务</DropdownMenuItem>
@@ -144,13 +146,13 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
         </DropdownMenuContent></DropdownMenu>
       </div>
     </header>
-      <KnowledgeTaskReady value={currentStage} onChange={changeView} view={job.production} disabled={!!edit || busy} />
+      {!preparingCleanup && <KnowledgeTaskReady value={currentStage} onChange={changeView} view={job.production} disabled={!!edit || busy} />}
       {error && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-danger">{error}</p>}
-      {job.production?.platform_message && <p className="shrink-0 px-4 py-2 text-xs text-muted-foreground">{job.production.platform_message}</p>}
+      {!preparingCleanup && job.production?.platform_message && <p className="shrink-0 px-4 py-2 text-xs text-muted-foreground">{job.production.platform_message}</p>}
       {currentStage === "review" && publicationProblem && <p role="alert" className="shrink-0 px-4 py-2 text-sm text-amber-700">{publicationProblem}</p>}
       {job.error && <p className="mb-3 text-danger">{job.error}</p>}
       {currentStage === "inputs" && <div className="knowledge-task-progress space-y-4"><p>{job.scope}</p>{job.instructions && <div><h4 className="font-medium">本次要求</h4><p className="mt-2 whitespace-pre-wrap break-words">{job.instructions}</p></div>}{(job.source_repositories ?? job.repositories).map(repo => <div key={repo.id} className="rounded border border-line p-3 text-sm"><strong>{repo.name}</strong><p className="break-all">{repo.repository} · {repo.branch} · {repo.path || "全仓"}</p><p>读取版本：{job.revisions[repo.id]?.slice(0, 12) ?? "未读取"}</p></div>)}<p>已关联 {job.material_ids.length} 份上传资料</p><KnowledgeMaterialUpload materials={extraMaterials} onChange={setExtraMaterials} onBusy={setUploading} /><Button disabled={busy || uploading || active || !document} onClick={() => void action("run", { mode: "update", document_ids: job.documents.map(d => d.id), message: "核对补充资料与当前来源，更新受影响文档；未变化内容保留", material_ids: [...new Set([...job.material_ids, ...extraMaterials.map(m => m.id)])], use_latest_skill: latest })}>用补充资料生成更新建议</Button></div>}
-      <div hidden={currentStage !== "progress"} className="knowledge-task-progress space-y-4">{!!job.turns.at(-1)?.research?.capabilities.length && <details className="rounded border border-line p-3"><summary className="cursor-pointer text-sm">{job.production?.review.progress_message}</summary><ul className="mt-3 list-none space-y-2 p-0 text-sm">{job.turns.at(-1)!.research!.capabilities.map(c => <li key={c.id}><strong>{c.title}</strong> · {job.production?.review.capabilities.find(item => item.id === c.id)?.status_label}{c.findings && <p className="whitespace-pre-wrap text-muted-foreground">{c.findings}</p>}</li>)}</ul></details>}<KnowledgeResearchProgress key={job.id} evidence={job.evidence} /></div>
+      <div hidden={currentStage !== "progress"} className="knowledge-task-progress space-y-4">{preparingCleanup ? <KnowledgeSourceCleanup key={job.id} task={job} draft={cleanupDraft} onDraftChange={onCleanupDraftChange} onBusy={value => { if (selectedRef.current === job.id) setBusy(value); }} onChange={next => { if (selectedRef.current === next.id) setJob(next); }} /> : <>{!!job.turns.at(-1)?.research?.capabilities.length && <details className="rounded border border-line p-3"><summary className="cursor-pointer text-sm">{job.production?.review.progress_message}</summary><ul className="mt-3 list-none space-y-2 p-0 text-sm">{job.turns.at(-1)!.research!.capabilities.map(c => <li key={c.id}><strong>{c.title}</strong> · {job.production?.review.capabilities.find(item => item.id === c.id)?.status_label}{c.findings && <p className="whitespace-pre-wrap text-muted-foreground">{c.findings}</p>}</li>)}</ul></details>}<KnowledgeResearchProgress key={job.id} evidence={job.evidence} /></>}</div>
       <div hidden={currentStage !== "review"} className="knowledge-task-review" style={currentStage === "review" ? { display: "flex", flex: "1 1 0", minHeight: 0, flexDirection: "column", overflow: "hidden" } : undefined}><KnowledgeReadingFrame focused={focused} sidePanelOpen={showDiscussion} documentActions={<><span ref={setNotesToolbar} className="flex items-center" />{document && tab === "content" && edit?.id !== document.id && <KnowledgeContentSearch contentRef={searchableContent} contentKey={`${job.id}:${document.id}:${document.revision}:${proposalTurn?.id ?? ""}:${reviewDocument?.content ?? ""}`} contentSelector=".md" />}<Button size="sm" variant="ghost" onClick={() => setTab("content")}>正文</Button><Button size="sm" variant="ghost" disabled={!document || busy || active || !!proposal} title={proposal ? "当前修改待确认，可提意见继续调整，或放弃修改后人工编辑。" : undefined} onClick={() => { setEdit(structuredClone(document)); setTab("content"); }}>{document?.knowledge_document_id ? "修改为新稿" : "编辑"}</Button><DropdownMenu><DropdownMenuTrigger render={<Button size="icon" variant="ghost" aria-label="更多领域文档操作" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end">{([["diff", "修订差异"], ["sources", "来源"], ["history", "历史版本"]] as const).map(([value, label]) => <DropdownMenuItem key={value} onClick={() => setTab(value)}>{label}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu></>} title={document?.path.split("/").at(-1) ?? "知识文档"} actions={<Button size="sm" variant="ghost" onClick={() => setShowDiscussion(!showDiscussion)}>{showDiscussion ? "收起讨论" : "讨论与修订"}</Button>}><div className="research-review-panes">
         <DomainKnowledgeFileTree job={job} currentId={document?.id} onNavigate={navigateKnowledge} disabled={busy || active} onSelection={(id, selected) => void action("selection", { ids: [id], selected })} onSelections={(ids, selected) => void action("selection", { ids, selected })} />
         <div className="research-reader" style={{ gridTemplateColumns: showDiscussion ? "minmax(0, 1fr) 300px" : "minmax(0, 1fr)" }}>{document ? <><div className="research-document-content studio-paper">
