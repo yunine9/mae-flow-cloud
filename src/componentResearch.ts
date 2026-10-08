@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { recordArray, recordCheck, recordFields, recordObject, recordReadReason, recordStrings, KnowledgeRecordFormatError } from "./knowledgeRecordValidation.ts";
 import {
   componentKey,
   componentRepositories,
@@ -114,68 +115,109 @@ const recordStatuses = ["queued", "running", "done", "failed", "cancelled"];
 const object = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(item => typeof item === "string");
 const fields = (value: Record<string, any>, names: string[]) => names.every(name => typeof value[name] === "string");
-const optionalStrings = (value: Record<string, any>, names: string[]) => names.every(name => value[name] === undefined || typeof value[name] === "string");
-const revisions = (value: unknown) => object(value) && Object.values(value).every(revision => typeof revision === "string");
-const skill = (value: unknown) => object(value) && fields(value, ["name", "digest"]);
-function validComponent(value: unknown): boolean {
-  return object(value) && fields(value, ["id", "name", "repository", "branch", "path", "description"])
-    && strings(value.languages) && typeof value.enabled === "boolean";
+function recordRevisions(value: unknown, path: string) {
+  recordObject(value, path);
+  recordCheck(Object.values(value).every(revision => typeof revision === "string"), path, "版本必须是文本");
 }
-function validSection(value: unknown, repositoryIds: string[]): boolean {
-  const valid = object(value) && fields(value, ["id", "title", "content", "interfaces", "integration", "example", "sources"])
-    && strings(value.repository_ids) && strings(value.related_ids) && typeof value.selected === "boolean"
-    && Number.isSafeInteger(value.revision) && value.revision >= 0 && (value.paradigm === undefined || object(value.paradigm));
-  if (valid && object(value) && value.paradigm) validateComponentParadigm(value.paradigm, repositoryIds);
-  return valid;
+function recordSkill(value: unknown, path: string) {
+  recordObject(value, path); recordFields(value, ["name", "digest"], `${path}.`);
 }
-function validReviewTurn(value: unknown, repositoryIds: string[]): boolean {
-  return object(value) && fields(value, ["id", "section_id", "message", "operator", "created_at"])
-    && ["discuss", "rework", "update", "supplement"].includes(value.mode) && recordStatuses.includes(value.status)
-    && (value.added_section_ids === undefined || strings(value.added_section_ids))
-    && optionalStrings(value, ["reply", "error", "finished_at"])
-    && (value.skill === undefined || skill(value.skill))
-    && (value.previous_revisions === undefined || revisions(value.previous_revisions))
-    && (value.base_revision === undefined || Number.isSafeInteger(value.base_revision))
-    && (value.proposal === undefined || (object(value.proposal) && ["pending", "accepted", "discarded"].includes(value.proposal.status)
-      && Number.isSafeInteger(value.proposal.base_revision) && validSection(value.proposal.section, repositoryIds)));
+function checkComponent(value: unknown, path: string) {
+  recordObject(value, path);
+  recordFields(value, ["id", "name", "repository", "branch", "path", "description"], `${path}.`);
+  recordStrings(value.languages, `${path}.languages`);
+  recordCheck(typeof value.enabled === "boolean", `${path}.enabled`, "必须是布尔值");
 }
-function validPipeline(value: unknown): boolean {
-  return object(value) && value.version === 1 && typeof value.skill === "string" && Array.isArray(value.tasks)
-    && value.tasks.every(task => object(task) && fields(task, ["id", "title", "spec"])
-      && ["inventory", "plan", "contracts", "paradigm", "pitfalls", "index", "synthesis"].includes(task.phase)
-      && ["pending", "running", "done", "failed"].includes(task.status) && strings(task.dependencies)
-      && Number.isSafeInteger(task.attempts) && task.attempts >= 0 && optionalStrings(task, ["component", "feedback"])
-      && (task.result === undefined || (object(task.result) && typeof task.result.findings === "string" && strings(task.result.open_questions)
-        && (task.result.components === undefined || (Array.isArray(task.result.components) && task.result.components.every(component => object(component)
-          && fields(component, ["id", "title", "scope"]) && strings(component.repository_ids))))
-        && (task.result.paradigms === undefined || (Array.isArray(task.result.paradigms) && task.result.paradigms.every(paradigm => object(paradigm)
-          && fields(paradigm, ["id", "title", "need"])))))));
+function checkSection(value: unknown, repositoryIds: string[], path: string) {
+  recordObject(value, path);
+  recordFields(value, ["id", "title", "content", "interfaces", "integration", "example", "sources"], `${path}.`);
+  recordStrings(value.repository_ids, `${path}.repository_ids`); recordStrings(value.related_ids, `${path}.related_ids`);
+  recordCheck(typeof value.selected === "boolean", `${path}.selected`, "必须是布尔值");
+  recordCheck(Number.isSafeInteger(value.revision) && value.revision >= 0, `${path}.revision`, "必须是非负整数");
+  if (value.paradigm !== undefined) {
+    recordObject(value.paradigm, `${path}.paradigm`);
+    try { validateComponentParadigm(value.paradigm as Parameters<typeof validateComponentParadigm>[0], repositoryIds); }
+    catch { throw new KnowledgeRecordFormatError(`${path}.paradigm 不符合当前组件规则或来源范围`); }
+  }
 }
-function validResearchRecord(value: unknown, id: string): value is ResearchRecord {
-  const components = object(value) ? value.components ?? [value.component] : [];
-  const repositoryIds: string[] = Array.isArray(components) ? components.filter(object).map(component => component.id).filter(id => typeof id === "string") : [];
-  return object(value) && value.id === id && fields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"])
-    && optionalStrings(value, ["deleted_at", "deleted_by", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"])
-    && (value.mode === undefined || value.mode === "all") && (value.format === undefined || value.format === "joint-document")
-    && (value.use_latest_skill === undefined || typeof value.use_latest_skill === "boolean")
-    && (value.skill === undefined || skill(value.skill))
-    && recordStatuses.includes(value.status) && validComponent(value.component)
-    && (value.components === undefined || (Array.isArray(value.components) && value.components.every(validComponent)))
-    && Array.isArray(value.evidence) && value.evidence.every(object)
-    && (value.revisions === undefined || revisions(value.revisions))
-    && (value.material_ids === undefined || strings(value.material_ids))
-    && (value.document === undefined || (object(value.document) && typeof value.document.overview === "string"
-      && Array.isArray(value.document.sections) && value.document.sections.every(section => validSection(section, repositoryIds))))
-    && (value.review_turns === undefined || (Array.isArray(value.review_turns) && value.review_turns.every(turn => validReviewTurn(turn, repositoryIds))))
-    && (value.review_turns === undefined || value.review_turns.every(turn => !["queued", "running"].includes(turn.status)
-      || (value.document !== undefined && (turn.mode === "supplement" || value.document.sections.some(section => section.id === turn.section_id)))))
-    && (value.section_history === undefined || (Array.isArray(value.section_history) && value.section_history.every(history => object(history)
-      && fields(history, ["at", "operator"]) && validSection(history.section, repositoryIds))))
-    && (value.pipeline === undefined || validPipeline(value.pipeline))
-    && (value.update_metadata === undefined || (object(value.update_metadata) && fields(value.update_metadata, ["title", "scope"])
-      && strings(value.update_metadata.module_ids) && strings(value.update_metadata.repositories)))
-    && (value.challenge === undefined || (object(value.challenge) && fields(value.challenge, ["item_id", "source_digest", "language", "claim"]) && strings(value.challenge.repository_ids)))
-    && (value.publication_intent === undefined || validPublicationIntent(value.publication_intent, id));
+function checkReviewTurn(value: unknown, repositoryIds: string[], path: string) {
+  recordObject(value, path);
+  recordFields(value, ["id", "section_id", "message", "operator", "created_at"], `${path}.`);
+  recordCheck(["discuss", "rework", "update", "supplement"].includes(value.mode), `${path}.mode`, "不是受支持的研究操作");
+  recordCheck(recordStatuses.includes(value.status), `${path}.status`, "不是受支持的任务状态");
+  if (value.added_section_ids !== undefined) recordStrings(value.added_section_ids, `${path}.added_section_ids`);
+  recordFields(value, ["reply", "error", "finished_at"], `${path}.`, true);
+  if (value.skill !== undefined) recordSkill(value.skill, `${path}.skill`);
+  if (value.previous_revisions !== undefined) recordRevisions(value.previous_revisions, `${path}.previous_revisions`);
+  if (value.base_revision !== undefined) recordCheck(Number.isSafeInteger(value.base_revision), `${path}.base_revision`, "必须是整数");
+  if (value.proposal !== undefined) {
+    recordObject(value.proposal, `${path}.proposal`);
+    recordCheck(["pending", "accepted", "discarded"].includes(value.proposal.status), `${path}.proposal.status`, "不是受支持的建议状态");
+    recordCheck(Number.isSafeInteger(value.proposal.base_revision), `${path}.proposal.base_revision`, "必须是整数");
+    checkSection(value.proposal.section, repositoryIds, `${path}.proposal.section`);
+  }
+}
+function checkPipeline(value: unknown, path: string) {
+  recordObject(value, path);
+  recordCheck(value.version === 1, `${path}.version`, "不是受支持的研究版本");
+  recordFields(value, ["skill"], `${path}.`);
+  recordArray(value.tasks, `${path}.tasks`, (task, path) => {
+    recordObject(task, path); recordFields(task, ["id", "title", "spec"], `${path}.`);
+    recordCheck(["inventory", "plan", "contracts", "paradigm", "pitfalls", "index", "synthesis"].includes(task.phase), `${path}.phase`, "不是受支持的研究步骤");
+    recordCheck(["pending", "running", "done", "failed"].includes(task.status), `${path}.status`, "不是受支持的步骤状态");
+    recordStrings(task.dependencies, `${path}.dependencies`);
+    recordCheck(Number.isSafeInteger(task.attempts) && task.attempts >= 0, `${path}.attempts`, "必须是非负整数");
+    recordFields(task, ["component", "feedback"], `${path}.`, true);
+    if (task.result === undefined) return;
+    recordObject(task.result, `${path}.result`); recordFields(task.result, ["findings"], `${path}.result.`);
+    recordStrings(task.result.open_questions, `${path}.result.open_questions`);
+    if (task.result.components !== undefined) recordArray(task.result.components, `${path}.result.components`, (component, path) => {
+      recordObject(component, path); recordFields(component, ["id", "title", "scope"], `${path}.`);
+      recordStrings(component.repository_ids, `${path}.repository_ids`);
+    });
+    if (task.result.paradigms !== undefined) recordArray(task.result.paradigms, `${path}.result.paradigms`, (paradigm, path) => {
+      recordObject(paradigm, path); recordFields(paradigm, ["id", "title", "need"], `${path}.`);
+    });
+  });
+}
+function validResearchRecord(value: unknown, id: string, path = ""): value is ResearchRecord {
+  recordObject(value, path || "组件研究记录");
+  const field = (name: string) => `${path}${name}`;
+  recordCheck(value.id === id, field("id"), "与任务目录不一致");
+  recordFields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"], path);
+  recordFields(value, ["deleted_at", "deleted_by", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"], path, true);
+  if (value.mode !== undefined) recordCheck(value.mode === "all", field("mode"), "不是当前组件研究方式");
+  if (value.format !== undefined) recordCheck(value.format === "joint-document", field("format"), "不是当前组件文稿格式");
+  if (value.use_latest_skill !== undefined) recordCheck(typeof value.use_latest_skill === "boolean", field("use_latest_skill"), "必须是布尔值");
+  if (value.skill !== undefined) recordSkill(value.skill, field("skill"));
+  recordCheck(recordStatuses.includes(value.status), field("status"), "不是受支持的任务状态");
+  checkComponent(value.component, field("component"));
+  if (value.components !== undefined) recordArray(value.components, field("components"), checkComponent);
+  const components = value.components ?? [value.component], repositoryIds = components.map((component: Record<string, any>) => component.id);
+  recordArray(value.evidence, field("evidence"), recordObject);
+  if (value.revisions !== undefined) recordRevisions(value.revisions, field("revisions"));
+  if (value.material_ids !== undefined) recordStrings(value.material_ids, field("material_ids"));
+  if (value.document !== undefined) {
+    recordObject(value.document, field("document")); recordFields(value.document, ["overview"], field("document."));
+    recordArray(value.document.sections, field("document.sections"), (section, path) => checkSection(section, repositoryIds, path));
+  }
+  if (value.review_turns !== undefined) recordArray(value.review_turns, field("review_turns"), (turn, path) => {
+    checkReviewTurn(turn, repositoryIds, path);
+    if (["queued", "running"].includes(turn.status)) recordCheck(value.document !== undefined && (turn.mode === "supplement" || value.document.sections.some((section: ResearchSection) => section.id === turn.section_id)), `${path}.section_id`, "正在执行的研究操作缺少对应文稿或能力项");
+  });
+  if (value.section_history !== undefined) recordArray(value.section_history, field("section_history"), (history, path) => {
+    recordObject(history, path); recordFields(history, ["at", "operator"], `${path}.`); checkSection(history.section, repositoryIds, `${path}.section`);
+  });
+  if (value.pipeline !== undefined) checkPipeline(value.pipeline, field("pipeline"));
+  if (value.update_metadata !== undefined) {
+    recordObject(value.update_metadata, field("update_metadata")); recordFields(value.update_metadata, ["title", "scope"], field("update_metadata."));
+    for (const name of ["module_ids", "repositories"]) recordStrings(value.update_metadata[name], field(`update_metadata.${name}`));
+  }
+  if (value.challenge !== undefined) {
+    recordObject(value.challenge, field("challenge")); recordFields(value.challenge, ["item_id", "source_digest", "language", "claim"], field("challenge.")); recordStrings(value.challenge.repository_ids, field("challenge.repository_ids"));
+  }
+  if (value.publication_intent !== undefined) recordCheck(validPublicationIntent(value.publication_intent, id), field("publication_intent"), "发布记录格式不完整");
+  return true;
 }
 function validPublicationIntent(value: unknown, id: string): value is ComponentPublicationIntent {
   if (!object(value) || !object(value.formal) || !object(value.formal.document) || !object(value.record)) return false;
@@ -185,12 +227,12 @@ function validPublicationIntent(value: unknown, id: string): value is ComponentP
     && /^[a-f0-9]{64}$/.test(formal.revision) && ["platform", "module", "repository"].includes(formal.scope) && typeof formal.active === "boolean"
     && [formal.module_ids, formal.repositories, formal.technologies, formal.product_versions].every(strings)
     && Array.isArray(formal.history) && formal.history.length > 0 && formal.history.every(history => object(history)
-      && fields(history, ["at", "operator", "action"]) && Number.isFinite(Date.parse(history.at)) && optionalStrings(history, ["revision"]))
+      && fields(history, ["at", "operator", "action"]) && Number.isFinite(Date.parse(history.at)) && (history.revision === undefined || typeof history.revision === "string"))
     && location(formal.source, ["repository", "branch", "path", "revision"]) && location(formal.archive_target, ["repository", "branch", "path"])
     && location(formal.research_source, ["job_id", "repository", "branch", "path"])
     && (value.formal.previous_revision === null || typeof value.formal.previous_revision === "string" && /^[a-f0-9]{64}$/.test(value.formal.previous_revision))
     && typeof value.formal.unchanged === "boolean"
-    && value.record.production === undefined && value.record.publication_intent === undefined && validResearchRecord(value.record, id)
+    && value.record.production === undefined && value.record.publication_intent === undefined && validResearchRecord(value.record, id, "publication_intent.record.")
     && value.record.status === "done" && value.record.document_id === formal.id && value.record.published_revision === formal.revision;
 }
 interface RunningResearch {
@@ -218,9 +260,17 @@ export class ComponentResearch {
         if (!/^cr-[a-f0-9-]{36}$/.test(name)) continue;
         const path = join(root, name, "record.json");
         if (!existsSync(path)) continue;
+        let record: ResearchRecord;
         try {
-          const record: unknown = JSON.parse(readFileSync(path, "utf8"));
-          if (!validResearchRecord(record, name)) throw new Error("组件研究记录格式无效");
+          const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+          if (!validResearchRecord(parsed, name)) throw new Error("组件研究记录格式无效");
+          record = parsed;
+        } catch (error) {
+          this.readWarnings.push(`记录损坏或无法读取：component-research/${name}/record.json；${recordReadReason(error)}`);
+          continue;
+        }
+        this.records.set(record.id, record);
+        try {
           if (!record.deleted_at && ["queued", "running"].includes(record.status)) {
             for (const turn of record.review_turns ?? []) if (["queued", "running"].includes(turn.status)) {
               turn.status = "queued"; turn.error = undefined;
@@ -232,9 +282,11 @@ export class ComponentResearch {
               finished_at: undefined,
             });
           }
-          this.records.set(record.id, record);
-        } catch {
-          this.readWarnings.push(`记录损坏或无法读取：component-research/${name}/record.json`);
+        } catch (error) {
+          // 记录已经读对，恢复保存失败不能把它藏起来，也不能在未保存状态时自动开跑。
+          const reason = recordReadReason(error);
+          Object.assign(record, { status: "failed", stage: "恢复研究记录失败", error: reason });
+          this.readWarnings.push(`恢复研究记录保存失败：component-research/${name}/record.json；${reason}`);
         }
       }
     queueMicrotask(() => this.pump());
@@ -325,6 +377,7 @@ export class ComponentResearch {
     mkdirSync(root, { recursive: true });
     const path = join(root, "record.json");
     durableWriteFileSync(path, JSON.stringify(record), { mode: 0o600 });
+    this.readWarnings = this.readWarnings.filter(warning => !warning.startsWith(`恢复研究记录保存失败：component-research/${record.id}/record.json；`));
   }
   private pump() {
     if (this.stopped) return;

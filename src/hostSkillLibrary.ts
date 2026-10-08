@@ -39,6 +39,7 @@ import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { KnowledgeRecordFormatError, recordCheck, recordFields, recordObject, recordReadReason, recordStrings } from "./knowledgeRecordValidation.ts";
 import {
   normalizeKnowledgeAssetMetadata,
   readSkillKnowledgeMetadata,
@@ -821,16 +822,17 @@ export function listSkillSubmissions(
     if (!dir.isDirectory()) continue;
     let entries: Dirent[];
     try { entries = readdirSync(join(root, dir.name), { withFileTypes: true }); }
-    catch {
-      warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}，无法读取提交目录`);
+    catch (error) {
+      warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}，无法读取提交目录；${recordReadReason(error)}`);
       continue;
     }
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
         records.push(readSubmission(dataDir, dir.name, entry.name));
-      } catch {
-        warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}/${entry.name}/submission.json`);
+      } catch (error) {
+        warnings?.push(error instanceof SkillLibraryError ? error.message
+          : `记录损坏：${SUBMISSIONS_DIR}/${dir.name}/${entry.name}/submission.json；${recordReadReason(error)}`);
       }
     }
   }
@@ -838,29 +840,30 @@ export function listSkillSubmissions(
 }
 
 function validSubmission(value: unknown, directory: string, id: string): value is SkillSubmissionRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const text = (key: string) => typeof record[key] === "string" && !!record[key];
-  const time = (key: string) => text(key) && Number.isFinite(Date.parse(record[key] as string));
+  recordObject(value, "Skill 提交记录");
   const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
-  const strings = (key: string) => Array.isArray(record[key]) && (record[key] as unknown[]).every(value => typeof value === "string");
-  if (record.id !== id || !/^[A-Za-z0-9_-]{1,100}$/.test(id) || record.directory !== directory
-      || !text("operator") || !time("created_at") || !digest(record.skill_digest) || !digest(record.package_digest)
-      || !Object.hasOwn(record, "base_package_digest") || !(record.base_package_digest === null || digest(record.base_package_digest))
-      || !["pending", "approving", "approved", "rejected"].includes(String(record.status))
-      || !Number.isInteger(record.files) || (record.files as number) < 1 || (record.files as number) > MAX_FILES
-      || !Number.isInteger(record.bytes) || (record.bytes as number) < 1 || (record.bytes as number) > MAX_PACKAGE_BYTES
-      || !["business", "engineering"].includes(String(record.nature))
-      || !["business_module_ids", "repositories", "technologies"].every(strings)
-      || (record.reject_reason !== undefined && typeof record.reject_reason !== "string")) return false;
-  if (record.status !== "pending" && (!time("decided_at") || !text("decided_by"))) return false;
-  if (record.decided_at !== undefined && !time("decided_at")) return false;
-  if (record.decided_by !== undefined && !text("decided_by")) return false;
+  const time = (key: string) => recordCheck(typeof value[key] === "string" && !!value[key] && Number.isFinite(Date.parse(value[key])), key, "缺失或不是有效时间");
+  recordCheck(value.id === id && /^[A-Za-z0-9_-]{1,100}$/.test(id), "id", "与提交目录不一致或不是有效编号");
+  recordCheck(value.directory === directory, "directory", "与 Skill 目录不一致");
+  recordFields(value, ["operator"]); recordCheck(!!value.operator, "operator", "缺失提交人"); time("created_at");
+  recordCheck(digest(value.skill_digest), "skill_digest", "缺失或不是有效的内容指纹");
+  recordCheck(digest(value.package_digest), "package_digest", "缺失或不是有效的包指纹");
+  recordCheck(Object.hasOwn(value, "base_package_digest"), "base_package_digest", "缺失，无法确认审核基于哪个已发布版本，请重新提交 Skill");
+  recordCheck(value.base_package_digest === null || digest(value.base_package_digest), "base_package_digest", "必须为空或有效的已发布版本指纹");
+  recordCheck(["pending", "approving", "approved", "rejected"].includes(String(value.status)), "status", "不是受支持的审核状态");
+  recordCheck(Number.isInteger(value.files) && value.files >= 1 && value.files <= MAX_FILES, "files", "不是有效的包文件数量");
+  recordCheck(Number.isInteger(value.bytes) && value.bytes >= 1 && value.bytes <= MAX_PACKAGE_BYTES, "bytes", "不是有效的包大小");
+  recordCheck(["business", "engineering"].includes(String(value.nature)), "nature", "缺失或不是业务知识、工程知识");
+  for (const name of ["business_module_ids", "repositories", "technologies"]) recordStrings(value[name], name);
+  recordFields(value, ["reject_reason"], "", true);
+  if (value.status !== "pending" || value.decided_at !== undefined) time("decided_at");
+  if (value.status !== "pending" || value.decided_by !== undefined) recordCheck(typeof value.decided_by === "string" && !!value.decided_by, "decided_by", "缺失审核人");
+  try { assertDirectoryName(directory); }
+  catch { throw new KnowledgeRecordFormatError("directory 不是有效的 Skill 目录名"); }
   try {
-    assertDirectoryName(directory);
-    normalizeKnowledgeAssetMetadata({ nature: record.nature, form: "skill", business_module_ids: record.business_module_ids,
-      repositories: record.repositories, technologies: record.technologies });
-  } catch { return false; }
+    normalizeKnowledgeAssetMetadata({ nature: value.nature, form: "skill", business_module_ids: value.business_module_ids,
+      repositories: value.repositories, technologies: value.technologies });
+  } catch { throw new KnowledgeRecordFormatError("nature、business_module_ids、repositories 或 technologies 不符合知识归属规则"); }
   return true;
 }
 
@@ -874,12 +877,12 @@ function readSubmission(
     throw new SkillLibraryError(`没有这份提交: ${directory}/${id}`);
   }
   try {
-    if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new Error("审核记录不是普通文件");
+    if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new KnowledgeRecordFormatError("审核记录必须是普通文件，不能是目录或符号链接");
     const record: unknown = JSON.parse(readFileSync(path, "utf-8"));
     if (!validSubmission(record, directory, id)) throw new Error("审核记录形状不完整或基线缺失");
     return record;
   } catch (error) {
-    throw new SkillLibraryError(`记录损坏：${SUBMISSIONS_DIR}/${directory}/${id}/submission.json；${error instanceof Error ? error.message : String(error)}`);
+    throw new SkillLibraryError(`记录损坏：${SUBMISSIONS_DIR}/${directory}/${id}/submission.json；${recordReadReason(error)}`);
   }
 }
 

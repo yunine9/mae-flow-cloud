@@ -14,6 +14,23 @@ const files = (label = "原始草稿", attachment = "核对版本与取消操作
   { path: "references/checklist.md", content_base64: Buffer.from(`# 审查清单\n\n${attachment}\n`).toString("base64") },
 ];
 const temporary = () => fs.mkdtempSync(join(tmpdir(), "knowledge-skill-reliability-"));
+
+test("#450：Skill 列表保留具体校验原因，缺失基线和 JSON 损坏分别说明且不泄漏正文", async () => {
+  const dir = temporary();
+  try {
+    const good = await library.submitHostSkill(dir, directory, files(), "alice", metadata);
+    const path = join(dir, "skill-submissions", directory, good.id, "submission.json");
+    const missing = { ...good } as Partial<SkillSubmissionRecord>; delete missing.base_package_digest;
+    fs.writeFileSync(path, JSON.stringify(missing));
+    const warnings: string[] = [];
+    assert.deepEqual(library.listSkillSubmissions(dir, warnings), []);
+    assert.match(warnings[0], /base_package_digest.*缺失/);
+    fs.writeFileSync(path, '{"private_note":"DO_NOT_EXPOSE_450",');
+    warnings.length = 0; library.listSkillSubmissions(dir, warnings);
+    assert.match(warnings[0], /JSON/);
+    assert.doesNotMatch(warnings[0], /DO_NOT_EXPOSE_450/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
 const recordPath = (dir: string, record: Pick<SkillSubmissionRecord, "directory" | "id">) => join(dir, "skill-submissions", record.directory, record.id, "submission.json");
 const diskRecord = (dir: string, record: SkillSubmissionRecord) => JSON.parse(fs.readFileSync(recordPath(dir, record), "utf8"));
 const listWithWarnings = library.listSkillSubmissions as (dir: string, warnings?: string[]) => SkillSubmissionRecord[];

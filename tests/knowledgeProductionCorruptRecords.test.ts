@@ -4,6 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { ComponentResearch, type ResearchRecord } from "../src/componentResearch.ts";
 import { listKnowledgeDocuments, prepareKnowledgeDocument, readKnowledgeDocument, saveKnowledgeDocument, writePreparedKnowledgeDocument } from "../src/knowledgeDocuments.ts";
@@ -21,6 +23,50 @@ function componentRecord(): ResearchRecord {
 }
 function write(dir: string, relative: string, content: string) { const path = join(dir, relative); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); return path; }
 function assertWarnings(warnings: string[], paths: string[]) { for (const path of paths) assert.ok(warnings.some(warning => warning.includes(path)), `告警应点名 ${path}`); }
+
+test("#450：组件记录格式告警指出具体字段，JSON 错误不泄漏正文", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "issue450-component-format-"));
+  const invalid = componentRecord(), malformed = componentRecord();
+  let service: ComponentResearch | undefined;
+  try {
+    write(dir, `component-research/${invalid.id}/record.json`, JSON.stringify({ ...invalid, document: { overview: "正文", sections: [{ id: "invalid", title: "无效能力" }] } }));
+    write(dir, `component-research/${malformed.id}/record.json`, '{"private_note":"DO_NOT_EXPOSE_450",');
+    service = new ComponentResearch(dir, async () => "unused");
+    const warnings = service.warnings();
+    assert.match(warnings.find(w => w.includes(invalid.id))!, /document\.sections\[0\]\.content/);
+    assert.match(warnings.find(w => w.includes(malformed.id))!, /JSON/);
+    assert.ok(warnings.every(w => !w.includes("DO_NOT_EXPOSE_450")));
+  } finally { await service?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#450：启动恢复写盘失败不把有效组件记录误报损坏或从列表丢弃", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "issue450-component-resume-"));
+  const record = componentRecord(); record.status = "running"; record.format = "joint-document";
+  let service: ComponentResearch | undefined, writes: ReturnType<typeof t.mock.method> | undefined, executions = 0;
+  const path = write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  const original = readFileSync(path, "utf8"), rename = fs.renameSync;
+  try {
+    writes = t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === path) throw Object.assign(new Error("injected persistence failure"), { code: "EIO" });
+      return rename(from, to);
+    }); syncBuiltinESMExports();
+    service = new ComponentResearch(dir, async () => { executions++; return "unused"; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(service.list().length, 1, "读取有效的任务必须保留可见");
+    assert.equal(service.get(record.id).status, "failed", "写盘失败不能自动继续执行");
+    assert.equal(executions, 0);
+    assert.match(service.warnings().join("\n"), /恢复.*保存失败.*EIO/);
+    assert.doesNotMatch(service.warnings().join("\n"), /记录损坏/);
+    assert.equal(readFileSync(path, "utf8"), original);
+    writes.mock.restore(); syncBuiltinESMExports();
+    service.retry(record.id, "alice");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(executions, 1, "磁盘恢复后人工重试应能继续原任务");
+    assert.equal(service.get(record.id).status, "done");
+    assert.deepEqual(service.warnings(), [], "成功保存后清除恢复失败告警");
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).status, "done");
+  } finally { writes?.mock.restore(); syncBuiltinESMExports(); await service?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 // 从 r8 搬入：每个读取器必须隔离单条坏记录，不能让正常邻居消失。
 test("生产线验收3：领域与组件隔离语法坏及合法 JSON 坏形状记录，正常邻居可用且原坏文件不变", async () => {
