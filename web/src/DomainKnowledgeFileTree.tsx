@@ -4,8 +4,9 @@ import { Input } from "@/components/ui/input";
 import type { DomainKnowledgeJob, DomainDocument } from "../../src/domainKnowledgeTypes";
 import { domainDocumentHasChanges } from "./domainKnowledgePublication";
 
-export function DomainKnowledgeFileTree({ job, currentId, disabled, onNavigate, onSelection, onSelections }: {
+export function DomainKnowledgeFileTree({ job, currentId, currentWorkId, onWorkNavigate, disabled, onNavigate, onSelection, onSelections }: {
   job: DomainKnowledgeJob; currentId?: string; disabled?: boolean;
+  currentWorkId?: string; onWorkNavigate?: (turnId: string, id: string) => void;
   onNavigate: (id: string) => void; onSelection: (id: string, selected: boolean) => void;
   onSelections?: (ids: string[], selected: boolean) => void;
 }) {
@@ -37,14 +38,15 @@ export function DomainKnowledgeFileTree({ job, currentId, disabled, onNavigate, 
       </li>)}</>;
   }
   const visible = job.documents.filter(doc => !needle || `${targets.find(t => t.id === doc.target_id)?.name} ${doc.path}`.toLocaleLowerCase().includes(needle)).sort((a, b) => a.path.localeCompare(b.path));
+  const workDocuments = (job.work_documents ?? []).filter(document => !needle || document.title.toLocaleLowerCase().includes(needle));
   return <aside className="research-capabilities" aria-label="领域知识文件导航">
-    <div className="research-capabilities-header"><strong>文件 <span>{job.documents.length}</span></strong>
-      <label className="my-2 flex items-center gap-2 text-xs text-muted-foreground">{selection(job.documents, "全部变化文稿")}选择全部变化文稿 <span>{job.documents.filter(doc => domainDocumentHasChanges(job, doc)).length}</span></label>
+    <div className="research-capabilities-header"><strong>文件 <span>{job.documents.length + (job.work_documents?.length ?? 0)}</span></strong>
+      {!!job.documents.length && <label className="my-2 flex items-center gap-2 text-xs text-muted-foreground">{selection(job.documents, "全部变化文稿")}选择全部变化文稿 <span>{job.documents.filter(doc => domainDocumentHasChanges(job, doc)).length}</span></label>}
       <div className="research-capability-search"><Search size={16} /><Input aria-label="搜索知识文件" placeholder="搜索文件…" value={query} onChange={e => setQuery(e.target.value)} /></div>
     </div>
-    <nav className="research-capability-list" aria-label="知识仓库与文件"><ul className="m-0 list-none space-y-2 p-2">{targets.map(target => {
+    <nav className="research-capability-list" aria-label="知识仓库与文件">{!!workDocuments.length && <div className="p-2"><strong className="px-2 text-xs text-muted-foreground">过程文稿</strong><ul className="m-0 list-none p-0">{workDocuments.map(document => <li key={`${document.turn_id}:${document.id}`}><button className={`flex w-full min-w-0 items-center gap-2 rounded px-2 py-2 text-left text-sm ${currentWorkId === `${document.turn_id}:${document.id}` ? "bg-primary/10 text-primary" : "hover:bg-muted"}`} aria-current={currentWorkId === `${document.turn_id}:${document.id}` ? "page" : undefined} onClick={() => onWorkNavigate?.(document.turn_id, document.id)}><FileText size={15} className="shrink-0" /><span className="min-w-0 break-words">{document.title}</span></button></li>)}</ul></div>}<ul className="m-0 list-none space-y-2 p-2">{targets.map(target => {
       const docs = visible.filter(doc => doc.target_id === target.id);
       return docs.length ? directory(target.id, target.name || "知识仓", docs, () => tree(docs, 0, target.id)) : null;
-    })}</ul>{!visible.length && <p className="p-3 text-sm text-muted-foreground">{needle ? "没有匹配的文件" : "生成的文件会显示在这里"}</p>}</nav>
+    })}</ul>{!visible.length && !workDocuments.length && <p className="p-3 text-sm text-muted-foreground">{needle ? "没有匹配的文件" : "生成的文件会显示在这里"}</p>}</nav>
   </aside>;
 }

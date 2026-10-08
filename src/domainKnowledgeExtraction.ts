@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
-import { IncompleteDomainResearch } from "./domainSkillWork.ts";
+import { IncompleteDomainResearch, readSkillWorkDocuments, type SkillWorkResult } from "./domainSkillWork.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
@@ -92,7 +92,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
       && Array.isArray(capability.sources) && capability.sources.every((source: any) => fields(source, ["repository_id", "path"])));
   return isRecord(value) && value.id === id && ["title", "scope", "operator", "created_at", "stage"].every(key => typeof value[key] === "string")
     && (value.key === undefined || typeof value.key === "string")
-    && ["idle", "queued", "running", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
+    && ["idle", "queued", "running", "paused", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
     && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids)
     && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
     && (value.source_repositories === undefined || Array.isArray(value.source_repositories) && value.source_repositories.every(target))
@@ -110,12 +110,16 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
       && [value.knowledge_target, ...value.repositories].some(target => target.id === doc.target_id))
     && Array.isArray(value.turns) && value.turns.every((turn: any) => isRecord(turn)
       && fields(turn, ["id", "message", "operator", "created_at"]) && ["extract", "discuss", "revise", "update"].includes(turn.mode) && strings(turn.document_ids)
-      && ["queued", "running", "done", "failed", "cancelled"].includes(turn.status) && Array.isArray(turn.proposals)
+      && ["queued", "running", "paused", "done", "failed", "cancelled"].includes(turn.status) && Array.isArray(turn.proposals)
+      && (turn.waiting === undefined || fields(turn.waiting, ["id", "summary"]) && strings(turn.waiting.document_ids) && strings(turn.waiting.work_document_ids))
+      && (turn.status !== "paused" || !!turn.waiting)
+      && (turn.human_replies === undefined || Array.isArray(turn.human_replies) && turn.human_replies.every((reply: any) => fields(reply, ["request_id", "message", "operator", "at"])))
       && (turn.research === undefined || research(turn.research))
       && (turn.revisions === undefined || revisionMap(turn.revisions)) && (turn.previous_revisions === undefined || revisionMap(turn.previous_revisions))
       && turn.proposals.every((proposal: any) => isRecord(proposal) && content(proposal.document) && Number.isSafeInteger(proposal.base_revision)
         && ["pending", "accepted", "discarded"].includes(proposal.status)))
     && (!["queued", "running"].includes(value.status) || value.turns.some((turn: any) => ["queued", "running"].includes(turn.status)))
+    && (value.status !== "paused" || value.turns.at(-1)?.status === "paused")
     && Array.isArray(value.publications) && value.publications.every(validPublication)
     && (value.publication_history === undefined || Array.isArray(value.publication_history) && value.publication_history.every(validPublication))
     && (value.archive_batches === undefined || Array.isArray(value.archive_batches) && value.archive_batches.every((batch: any) => isRecord(batch)
@@ -144,7 +148,7 @@ export class DomainKnowledgeExtraction {
   private publishing = new Map<string, symbol>();
   private archiving = new Map<string, Promise<void>>();
   private stopped = false;
-  constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string>, private options: {
+  constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string | SkillWorkResult>, private options: {
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void, signal?: AbortSignal) => Promise<DomainPublication>;
     onIndexed?: () => void;
     shutdown?: () => Promise<void>;
@@ -232,10 +236,19 @@ export class DomainKnowledgeExtraction {
   warnings() { return [...this.readWarnings]; }
   get(id: string): DomainKnowledgeJob {
     const job = structuredClone(this.live(id));
+    job.work_documents = job.turns.flatMap(turn => {
+      if (!/^[a-f0-9-]{36}$/.test(turn.id)) return [];
+      try { return readSkillWorkDocuments(join(this.root(id), "skill-runs", turn.id, "work.json")).map(document => ({ ...document, turn_id: turn.id })); }
+      catch (error) {
+        const warning = `过程文稿读取失败：${id}/${turn.id}；${error instanceof Error ? error.message : String(error)}`;
+        if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
+        return [];
+      }
+    });
     const current_revisions = Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
     return { ...job, production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(id) };
   }
-  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...this.get(job.id), documents: job.documents.map(({ content: _, history: __, base_content: ___, ...doc }) => doc), evidence: [], turns: [], publications: [], publication_history: [] })); }
+  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...this.get(job.id), documents: job.documents.map(({ content: _, history: __, base_content: ___, ...doc }) => doc), work_documents: [], evidence: [], turns: [], publications: [], publication_history: [] })); }
   componentArchive(researchId: string) {
     const job = [...this.jobs.values()].find(job => !job.deleted_at && job.component_research_id === researchId);
     return job ? this.get(job.id) : undefined;
@@ -610,6 +623,7 @@ export class DomainKnowledgeExtraction {
     if (this.stopped) throw new Error("服务正在停止");
     const job = this.live(id);
     if (job.component_research_id) throw new Error("请在基础组件萃取任务中生成修订建议");
+    if (job.status === "paused") throw new Error("请先答复当前待确认内容，再继续研究");
     if (this.running.has(id) || this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待本轮完成或停止后继续");
     if (!["extract", "discuss", "revise", "update"].includes(input.mode)) throw new Error("未知研究操作");
     const ids = [...new Set(input.document_ids ?? [])], message = String(input.message ?? "").trim();
@@ -623,18 +637,28 @@ export class DomainKnowledgeExtraction {
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
     this.persist(job); this.pump(); return this.get(id);
   }
-  resume(id: string, operator: string, useLatestSkill = false) {
+  resume(id: string, operator: string, useLatestSkill = false, reply?: { request_id: string; message: string }) {
     if (this.stopped) throw new Error("服务正在停止");
     const job = this.live(id), turn = job.turns.at(-1);
     if (job.component_research_id || this.running.has(id) || this.publishing.has(id) || !turn
-        || !["failed", "cancelled", "done"].includes(job.status)) throw new Error("当前任务不能接续");
+        || !["failed", "cancelled", "done", "paused"].includes(job.status)) throw new Error("当前任务不能接续");
     if (job.status === "done" && turn.mode !== "extract") throw new Error("请选择文档发起新的修订");
-    turn.pipeline_continue = (turn.pipeline_continue ?? 0) + 1;
-    turn.status = "queued"; turn.operator = operator; turn.error = undefined;
-    if (useLatestSkill) { turn.use_latest_skill = true; turn.skill = undefined; }
-    if (turn.research) { turn.research.phase = "research"; turn.research.finish_requested = false; }
-    job.status = "queued"; job.stage = "接续原研究会话"; job.error = undefined;
-    this.persist(job); this.pump(); return this.get(id);
+    if (job.status === "paused") {
+      if (!reply) throw new Error("请提交本次待确认内容的答复");
+      if (reply.request_id !== turn.waiting?.id) throw new Error("待确认内容已变化，请刷新后重新答复");
+      if (typeof reply.message !== "string" || !reply.message.trim() || reply.message.length > 20000) throw new Error("请填写答复，最多 20000 字");
+      scanForSecrets("研究答复", Buffer.from(reply.message));
+    } else if (reply) throw new Error("待确认内容已变化，请刷新后重新答复");
+    // 答复先保存成功再启动；写盘失败不能在内存里替人消耗这次确认。
+    const next = structuredClone(job), nextTurn = next.turns.at(-1)!;
+    if (reply) (nextTurn.human_replies ??= []).push({ request_id: reply.request_id, message: reply.message, operator, at: new Date().toISOString() });
+    delete nextTurn.waiting;
+    nextTurn.pipeline_continue = (nextTurn.pipeline_continue ?? 0) + 1;
+    nextTurn.status = "queued"; nextTurn.operator = operator; nextTurn.error = undefined;
+    if (useLatestSkill) { nextTurn.use_latest_skill = true; nextTurn.skill = undefined; }
+    if (nextTurn.research) { nextTurn.research.phase = "research"; nextTurn.research.finish_requested = false; }
+    next.status = "queued"; next.stage = "接续原研究会话"; next.error = undefined;
+    this.persist(next); Object.assign(job, next); this.pump(); return this.get(id);
   }
   private validateDocument(job: DomainKnowledgeJob, input: DomainDocumentContent) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,100}$/.test(input.id) || !input.title?.trim() || input.title.length > 160 || !input.content?.trim() || !input.sources?.trim()) throw new Error("文档需要稳定编号、标题、正文与来源");
@@ -673,7 +697,7 @@ export class DomainKnowledgeExtraction {
       const work = Promise.resolve().then(async () => {
         try {
           if (controller.signal.aborted) return;
-          const reply = await this.execute({ job: { ...this.get(job.id), documents: structuredClone(workingDocuments) }, turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
+          const result = await this.execute({ job: { ...this.get(job.id), documents: structuredClone(workingDocuments) }, turn: structuredClone(turn), root: this.root(job.id), signal: controller.signal,
             read: () => structuredClone(turn.mode === "extract" ? job.documents : workingDocuments),
             update: patch => { if (!controller.signal.aborted && !job.deleted_at) { const { research, ...rest } = patch; Object.assign(job, rest); if (research) turn.research = structuredClone(research); if (patch.skill) turn.skill = patch.skill; if (patch.revisions) turn.revisions = { ...turn.revisions, ...patch.revisions }; this.persist(job); } },
             evidence: event => { if (!controller.signal.aborted && !job.deleted_at) { scanForSecrets("研究记录", Buffer.from(JSON.stringify(event))); job.evidence.push({ at: new Date().toISOString(), ...event }); this.persist(job); } },
@@ -709,12 +733,18 @@ export class DomainKnowledgeExtraction {
             },
           });
           if (controller.signal.aborted || job.deleted_at) return;
+          const reply = typeof result === "string" ? result : result.summary;
           if (!reply.trim()) throw new Error("本轮没有返回结果");
           scanForSecrets("研究答复", Buffer.from(reply));
-          if (turn.mode === "extract" && !job.documents.length) throw new Error("尚未生成领域知识草稿，已保存内容保留");
+          const paused = typeof result !== "string" && result.status === "paused";
+          if (!paused && turn.mode === "extract" && !job.documents.length) throw new Error("尚未生成领域知识草稿，已保存内容保留");
           // Agent 按仓编号（repo-1 等）引用代码以便校验；给人看的回复换成仓名，路径与行号保留。
           const named = (job.source_repositories ?? job.repositories).reduce((text, repo) => text.split(`${repo.id}:`).join(`${repo.name}:`), reply);
-          turn.reply = named; turn.status = "done"; turn.finished_at = new Date().toISOString(); job.status = "done"; job.stage = "本轮完成，等待审查";
+          turn.reply = named; turn.finished_at = new Date().toISOString();
+          if (paused) {
+            turn.waiting = { id: randomUUID(), summary: named, document_ids: result.document_ids, work_document_ids: result.work_document_ids ?? [] };
+            turn.status = "paused"; job.status = "paused"; job.stage = "等待你确认或补充";
+          } else { turn.status = "done"; job.status = "done"; job.stage = "本轮完成，等待审查"; }
         } catch (error) {
           if (controller.signal.aborted || job.deleted_at) return;
           turn.status = "failed"; turn.finished_at = new Date().toISOString(); job.status = "failed"; job.error = turn.error = error instanceof Error ? error.message : "研究失败"; job.stage = error instanceof IncompleteDomainResearch ? "研究尚未完成，草稿与进度保留" : "本轮失败，已有文档保留";
@@ -781,9 +811,9 @@ export class DomainKnowledgeExtraction {
   }
   stop(id: string) {
     const job = this.live(id);
-    if (["queued", "running"].includes(job.status)) {
+    if (["queued", "running", "paused"].includes(job.status)) {
       job.status = "cancelled"; job.stage = "已停止，草稿保留";
-      job.turns.filter(t => ["queued", "running"].includes(t.status)).forEach(t => { if (t.status === "running") t.finished_at = new Date().toISOString(); t.status = "cancelled"; });
+      job.turns.filter(t => ["queued", "running", "paused"].includes(t.status)).forEach(t => { if (t.status === "running") t.finished_at = new Date().toISOString(); t.status = "cancelled"; delete t.waiting; });
       const entry = this.running.get(id);
       if (entry) this.stopExecution(job, entry);
       this.persist(job);

@@ -1,6 +1,7 @@
 export interface KnowledgeRepository {
   id: string; name: string; repository: string; branch: string; path: string; docs_path: string;
 }
+export interface DomainWorkDocument { id: string; title: string; content: string }
 export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
@@ -18,7 +19,9 @@ export interface DomainDocument extends DomainDocumentContent {
 }
 export interface DomainTurn {
   id: string; mode: "extract" | "discuss" | "revise" | "update"; document_ids: string[]; message: string; operator: string;
-  status: "queued" | "running" | "done" | "failed" | "cancelled"; created_at: string; reply?: string; error?: string;
+  status: "queued" | "running" | "paused" | "done" | "failed" | "cancelled"; created_at: string; reply?: string; error?: string;
+  waiting?: { id: string; summary: string; document_ids: string[]; work_document_ids: string[] };
+  human_replies?: Array<{ request_id: string; message: string; operator: string; at: string }>;
   /** 本轮实际开跑与收口时间；任务中心的「开始时间 / 运行时长」取最近一轮，不含排队和审查等待。 */
   started_at?: string; finished_at?: string;
   skill?: { name: string; digest: string };
@@ -69,6 +72,8 @@ export interface DomainKnowledgeJob {
   key?: string;
   /** 只在读取响应中计算，磁盘记录不保存另一份状态。 */
   production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
+  /** 从本轮工作记录读取全文，过程文稿不进入知识发布和 Git 归档。 */
+  work_documents?: Array<DomainWorkDocument & { turn_id: string }>;
   deletion?: import("./knowledgeProductionTypes").KnowledgeDomainDeletionView;
   id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
@@ -82,7 +87,7 @@ export interface DomainKnowledgeJob {
   archive_configured?: boolean; archive_revision?: number;
   material_ids: string[];
   deleted_at?: string; deleted_by?: string;
-  status: "idle" | "queued" | "running" | "done" | "failed" | "cancelled"; stage: string; error?: string;
+  status: "idle" | "queued" | "running" | "paused" | "done" | "failed" | "cancelled"; stage: string; error?: string;
   revisions: Record<string, string>; skill?: { name: string; digest: string };
   documents: DomainDocument[]; turns: DomainTurn[]; evidence: Array<Record<string, unknown>>; publications: DomainPublication[];
   publication_history?: DomainPublication[];

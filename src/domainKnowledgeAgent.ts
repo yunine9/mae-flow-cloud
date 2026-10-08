@@ -135,7 +135,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     archive_targets: [input.job.knowledge_target, ...input.job.repositories], archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
     revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
     materials: materials.map(({ sections, ...m }) => ({ ...m, sections: sections.length })),
-    documents: input.read().map(documentSummary), continued: input.turn.pipeline_continue ?? 0 };
+    documents: input.read().map(documentSummary), continued: input.turn.pipeline_continue ?? 0, human_replies: input.turn.human_replies ?? [] };
   const execute = async (step?: SkillWorkStep): Promise<SkillWorkResult> => {
     const readonly = input.turn.mode === "discuss" || step?.readonly === true;
     const sessionRoot = step ? join(runRoot, "steps", step.id, String(step.attempts)) : join(runRoot, "coordinator");
@@ -144,30 +144,38 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     let result: SkillWorkResult | undefined;
     const resultTool = defineTool({ name: "knowledge_work_result", label: "保存执行结果",
       description: "保存本次执行的结论、文档编号与自由格式数据。主会话 status=complete 表示本轮结束，paused 表示保留进度等待用户接续；独立步骤只提交自身结果。",
-      parameters: Type.Object({ summary: Type.String(), document_ids: Type.Array(Type.String()), data: Type.Optional(Type.Unknown()), status: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("paused")])) }),
+      parameters: Type.Object({ summary: Type.String(), document_ids: Type.Array(Type.String()), work_document_ids: Type.Optional(Type.Array(Type.String())), data: Type.Optional(Type.Unknown()), status: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("paused")])) }),
       execute: async (_id: string, args: SkillWorkResult) => {
         try {
           signal.throwIfAborted();
+          if (result) throw new Error("本次结果已经保存");
           if (!args.summary.trim() || args.document_ids.some(id => !input.read().some(d => d.id === id) && !input.turn.proposals.some(p => p.document.id === id))) throw new Error("请填写执行结论并引用已有文档");
+          if (args.work_document_ids?.some(id => !work.state.documents?.some(document => document.id === id))) throw new Error("请引用已经保存的过程文稿");
           scanForSecrets("Skill 执行结果", Buffer.from(JSON.stringify(args)));
           if (step && args.status === "paused") throw new Error("请将待处理问题交回主会话，由主会话保存暂停结果");
           const next = { ...args, status: args.status ?? "complete" };
           if (!step && input.turn.mode === "extract" && next.status === "complete" && !input.read().length) throw new Error("尚未保存任何知识文档，请保存产物或说明暂停原因");
-          if (!step) work.finish(next);
-          result = next; progress(); return reply({ saved: true });
+          result = step ? next : work.finish(next);
+          progress(); return reply({ saved: true });
         } catch (error) { return failure(error); }
       },
     });
     const workTool = defineTool({ name: "knowledge_work", label: "Skill 工作记录",
-      description: "list/read 查看当前工作。主会话可 schedule 保存任意步骤（id、title、instructions、depends_on、readonly），run 按编号在独立会话执行，discard 说明原因后放弃。步骤和评审安排由 Skill 决定，平台不会生成阶段。已完成步骤 run 直接返回已保存结果。",
-      parameters: Type.Object({ action: Type.Union((step ? ["list", "read"] : ["list", "read", "schedule", "run", "discard"]).map(s => Type.Literal(s))),
+      description: "list/read 查看当前工作；save_document 用 document 的 id、title、content 保存供人审阅的完整规划或中间文稿，read_document 读取正文。过程文稿不进入知识发布。主会话可 schedule 保存任意步骤，run 在独立会话执行，discard 说明原因后放弃。步骤由 Skill 决定，已完成步骤直接复用结果。",
+      parameters: Type.Object({ action: Type.Union((step ? ["list", "read", "read_document", "save_document"] : ["list", "read", "schedule", "run", "discard", "read_document", "save_document"]).map(s => Type.Literal(s))),
         id: Type.Optional(Type.String()), reason: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })),
+        document: Type.Optional(Type.Object({ id: Type.String(), title: Type.String(), content: Type.String() })),
         steps: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), instructions: Type.String(), depends_on: Type.Array(Type.String()), readonly: Type.Boolean() }))) }),
       execute: async (_id: string, args: any) => {
         try {
           signal.throwIfAborted();
           if (args.action === "list") return reply({ total: work.state.steps.length, steps: work.state.steps.slice(args.start ?? 0, (args.start ?? 0) + 30).map(({ instructions: _, result: __, ...s }) => s) });
           if (args.action === "read") return reply(args.id ? work.state.steps.find(s => s.id === args.id) ?? null : work.state);
+          if (args.action === "read_document") return reply(args.id ? work.state.documents?.find(document => document.id === args.id) ?? null : work.state.documents ?? []);
+          if (args.action === "save_document") {
+            if (readonly || result) throw new Error("当前会话不能保存过程文稿");
+            work.saveDocument(args.document); return reply({ saved: true, id: args.document.id });
+          }
           if (step || result) throw new Error("当前会话不能安排或执行其他步骤");
           if (args.action === "schedule") { work.schedule(args.steps ?? []); progress(); return reply({ saved: true }); }
           if (args.action === "discard") { work.discard(args.id, args.reason ?? ""); progress(); return reply({ saved: true }); }
@@ -186,7 +194,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     const tools = [...baseTools.filter(t => t.name !== "knowledge_draft"), guardedDraft, workTool, resultTool].map(tool => ({ ...tool,
       execute: async (...args: Parameters<typeof tool.execute>) => { signal.throwIfAborted(); const response = await (tool.execute as Function)(...args); if (!response.isError) activity++; return response; },
     }));
-    const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 明确结束或暂停。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。";
+    const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 明确结束或暂停。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。需要用户审阅的规划、清单和中间文稿，用 knowledge_work 的 save_document 保存完整 Markdown 正文，不能只说文稿已生成或把全文仅放在普通回复、data 里。需要用户确认或补充时，主会话保存 status=paused，summary 说明需要回答什么、答复后做什么，并通过 work_document_ids 或 document_ids 引用待审阅内容。收到答复后读取 human_replies 原话；continued 只是接续次数，是否确认以 human_replies 原话为准，不能把修改意见当成批准。";
     const session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}-${step?.id ?? "main"}`, workspace: sessionRoot, agentDir,
       resumeSession: !step, excludeAgentFiles: true, provider: model.provider, model: model.model,
       // 资料与无线豆包是平台能力，进系统提示词；Skill 只管研究方法，换包调试也不丢业务来源。
@@ -218,8 +226,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   try {
     signal.throwIfAborted(); progress();
     const result = work.state.result ?? await execute();
-    if (result.status === "paused") throw new IncompleteDomainResearch(result.summary);
-    return result.summary;
+    return result;
   } catch (error) {
     if (totalExpired && !input.signal.aborted) throw new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE);
     throw error;
