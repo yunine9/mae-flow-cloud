@@ -878,7 +878,10 @@ function readSubmission(
   }
   try {
     if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new KnowledgeRecordFormatError("审核记录必须是普通文件，不能是目录或符号链接");
-    const record: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    recordObject(parsed, "Skill 提交记录");
+    // 旧提交未保存基线，按尚未上架读取；当前已有正式包时，审核仍要求基于它重新提交。
+    const record = { base_package_digest: null, ...parsed };
     if (!validSubmission(record, directory, id)) throw new Error("审核记录形状不完整或基线缺失");
     return record;
   } catch (error) {

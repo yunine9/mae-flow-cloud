@@ -7,7 +7,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-for (const scenario of ["description", "return", "reuse", "history", "method"] as const) {
+for (const scenario of ["description", "return", "reuse", "history", "method", "cleanup"] as const) {
   test(`研究表单保留输入：${scenario}`, { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
     const root = mkdtempSync(join(tmpdir(), "knowledge-research-draft-"));
     try {

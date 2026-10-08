@@ -18,7 +18,7 @@ export interface ComponentResearchRecord {
   skill?: { name: string; digest: string };
   section_history?: Array<{ at: string; operator: string; section: ComponentResearchSection }>;
   update_document_id?: string;
-  mode?: "all";
+  mode?: "all" | "component";
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
   review_turns?: ComponentResearchReviewTurn[];

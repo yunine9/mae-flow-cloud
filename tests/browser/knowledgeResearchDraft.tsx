@@ -47,6 +47,7 @@ async function run() {
   await waitFor('[aria-label="研究知识"]'); await pause();
   await fill('[aria-label="单号描述"]', description);
   await fill('input[placeholder="需求或问题单号"]', issue);
+  if (scenario === "cleanup") { document.querySelector<HTMLInputElement>('input[aria-label="萃取前清理旧知识"]')!.click(); await pause(); }
   if (scenario === "description") {
     check(value('[aria-label="单号描述"]') === description, "填单号后，先填写的单号描述被清空");
     await fill('input[placeholder="需求或问题单号"]', "REQ-450");
@@ -96,9 +97,11 @@ async function run() {
     check(value('.field-pair input') === branch && value('textarea') === goal, "返回后基准分支或研究要求丢失");
     check(document.querySelector('[aria-label="业务资料上传"]')?.textContent?.includes("业务.md"), "返回后上传资料丢失");
     check(document.querySelector('[aria-label="知识归属"]')?.textContent?.includes("交易业务"), "返回后业务模块丢失");
-    await click("开始研究");
+    if (scenario === "cleanup") check(document.querySelector<HTMLInputElement>('input[aria-label="萃取前清理旧知识"]')?.checked, "查看方法后清理选择不能丢失");
+    await click(scenario === "cleanup" ? "进入旧知识清理" : "开始研究");
     const submitted = calls.find(c => c.path === "/domain-extraction" && c.input)?.input;
     check(submitted?.issue_no === issue && submitted.issue_description === description && submitted.baseline_branch === branch && submitted.instructions === goal && submitted.material_ids[0] === "material-fixture", "恢复后的全部信息需进入创建请求");
+    check(scenario === "cleanup" ? submitted.prepare_cleanup === true : submitted.prepare_cleanup === undefined, "清理须是显式可选，默认不改变直接研究");
     // 创建失败后离开再回来，也必须保留输入。
     await click("萃取方法"); await waitFor('[aria-label="平台 Skill 详情"]'); await click("使用此 Skill");
     check(value('[aria-label="单号描述"]') === description, "创建失败不能删除草稿");

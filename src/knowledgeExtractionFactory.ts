@@ -5,6 +5,7 @@ import { runComponentResearch } from "./componentResearchAgent.ts";
 import { DomainKnowledgeExtraction } from "./domainKnowledgeExtraction.ts";
 import { runDomainKnowledge, type DomainAgentOptions } from "./domainKnowledgeAgent.ts";
 import { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
+import { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 import { runKnowledgeCommand, KnowledgeProcessError } from "./knowledgeProcess.ts";
 import { knowledgeGitFailure } from "./knowledgeProductionErrors.ts";
 
@@ -14,6 +15,7 @@ export function createDomainKnowledgeExtraction(options: DomainAgentOptions & Co
   const publisher = new KnowledgeMrPublisher(options);
   return new DomainKnowledgeExtraction(options.dataDir, input => runDomainKnowledge(input, options), {
     publish: (...args) => publisher.publish(...args),
+    sourceCleanup: new KnowledgeSourceCleanup(publisher),
     onIndexed: options.onIndexed,
     shutdown: () => publisher.shutdown(),
   });

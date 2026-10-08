@@ -73,6 +73,12 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     status_label = "归档中"; group = "running"; next_action = archiveActions[0] ?? { id: "progress", label: "查看进展", view: "progress" };
   } else if (input.kind === "domain" && record.status === "paused") {
     status_label = "等待你确认"; group = "attention"; next_action = { id: "respond", label: "查看待确认内容", view: "progress" };
+  } else if (input.kind === "domain" && input.record.source_cleanup && !input.record.source_cleanup.started) {
+    const cleanup = input.record.source_cleanup;
+    const ready = cleanup.plans.length === cleanup.repositories.length && cleanup.plans.every(plan => !(plan.selected_paths ?? plan.entries.map(entry => entry.path)).length
+      || cleanup.publications.some(publication => publication.target_id === plan.target_id && publication.url));
+    status_label = ready ? "待开始萃取" : cleanup.publications.some(publication => publication.state === "failed") ? "清理 MR 创建失败" : "待清理旧知识";
+    group = "attention"; next_action = { id: "progress", label: ready ? "开始萃取" : "清理旧知识", view: "progress" };
   } else if (record.status === "failed" || record.status === "cancelled" || record.status === "idle") {
     status_label = record.status === "failed" ? "执行失败" : record.status === "cancelled" ? "已停止" : "待开始";
     group = "attention"; next_action = input.kind === "skill-extraction" ? { id: "progress", label: "查看失败原因", view: "progress" } : { id: "resume", label: "继续研究", view: "progress" };
@@ -110,7 +116,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   if (input.kind === "domain" || input.kind === "component") {
     if (working) research_actions.push({ id: "stop", label: "停止本轮", view: "progress" });
     else if (record.status === "paused") { /* 待确认卡片承接答复，不能用普通接续按钮替人确认。 */ }
-    else if (["failed", "cancelled", "idle"].includes(record.status)) research_actions.push({ id: "resume", label: "继续研究", view: "progress" });
+    else if (["failed", "cancelled", "idle"].includes(record.status) && !(input.kind === "domain" && input.record.source_cleanup && !input.record.source_cleanup.started)) research_actions.push({ id: "resume", label: "继续研究", view: "progress" });
     else if (documentCount) research_actions.push(published && !documents.some(document => document.changed) && !(input.kind === "component" && input.record.update_document_id)
       ? { id: "update", label: "更新知识", view: "review" } : { id: "publish", label: "确认并发布", view: "review" });
   }

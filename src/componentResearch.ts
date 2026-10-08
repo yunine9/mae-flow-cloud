@@ -44,8 +44,8 @@ export interface ResearchRecord {
   pipeline?: ComponentPipelineState;
   skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
-  /** 研究一个组件的全部能力；反例研究不设。 */
-  mode?: "all";
+  /** 新研究覆盖一个组件的全部能力；component 是旧记录中的方式，读取时保留。 */
+  mode?: "all" | "component";
   format?: "joint-document";
   document?: ResearchDocument;
   review_turns?: ResearchReviewTurn[];
@@ -186,7 +186,7 @@ function validResearchRecord(value: unknown, id: string, path = ""): value is Re
   recordCheck(value.id === id, field("id"), "与任务目录不一致");
   recordFields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"], path);
   recordFields(value, ["deleted_at", "deleted_by", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"], path, true);
-  if (value.mode !== undefined) recordCheck(value.mode === "all", field("mode"), "不是当前组件研究方式");
+  if (value.mode !== undefined) recordCheck(["all", "component"].includes(value.mode), field("mode"), "不是受支持的组件研究方式");
   if (value.format !== undefined) recordCheck(value.format === "joint-document", field("format"), "不是当前组件文稿格式");
   if (value.use_latest_skill !== undefined) recordCheck(typeof value.use_latest_skill === "boolean", field("use_latest_skill"), "必须是布尔值");
   if (value.skill !== undefined) recordSkill(value.skill, field("skill"));

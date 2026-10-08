@@ -45,6 +45,7 @@ test("知识任务与审阅接口要求登录，匿名读取和提交不能触�
       assert.equal((await request(`${anonymousPath}/apply`, "", { note_ids: ["unknown"] })).status, 401);
       assert.equal((await request(`${anonymousPath}/resolve`, "", { note_ids: ["unknown"] })).status, 401);
     }
+    for (const action of ["preview", "publish", "start"]) assert.equal((await request(`/domain-extraction/${job.id}/source-cleanup/${action}`, "", {})).status, 401, "匿名清理或开始研究必须拒绝");
     assert.equal(executions, 1, "匿名请求不能触发新的研究回合");
     const login = await request("/auth/login", "", { username: "reviewer", password: "reviewer-fixture-password" });
     assert.equal(login.status, 200);

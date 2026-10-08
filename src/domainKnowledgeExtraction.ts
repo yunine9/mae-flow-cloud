@@ -15,6 +15,7 @@ import { durableWriteFileSync } from "./durableWrite.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
 import { continuingReviewProposal, assertLatestReviewProposal, assertReviewRevision, assertNoPendingReviewProposals, type ReviewProposal } from "./knowledgeReviewCore.ts";
+import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 
 import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
@@ -95,6 +96,15 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
     && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids)
     && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
     && (value.source_repositories === undefined || Array.isArray(value.source_repositories) && value.source_repositories.every(target))
+    && (value.source_cleanup === undefined || isRecord(value.source_cleanup)
+      && (value.source_cleanup.started === undefined || typeof value.source_cleanup.started === "boolean")
+      && Array.isArray(value.source_cleanup.repositories) && value.source_cleanup.repositories.every(target)
+      && Array.isArray(value.source_cleanup.plans) && Array.isArray(value.source_cleanup.publications)
+      && (value.source_cleanup.started === true || value.source_cleanup.plans.every((plan: any) => fields(plan, ["id", "target_id", "target_revision"])
+        && strings(plan.paths) && Array.isArray(plan.entries) && plan.entries.every((entry: any) => fields(entry, ["path", "mode", "oid"]))
+        && (plan.selected_paths === undefined || strings(plan.selected_paths) && plan.selected_paths.every((path: string) => plan.entries.some((entry: any) => entry.path === path))))
+        && value.source_cleanup.publications.every((publication: any) => typeof publication.cleanup_plan_id === "string"
+          && strings(publication.removed_paths) && validPublication(publication))))
     && (value.technologies === undefined || strings(value.technologies))
     && Array.isArray(value.documents) && value.documents.every((doc: any) => document(doc)
       && [value.knowledge_target, ...value.repositories].some(target => target.id === doc.target_id))
@@ -142,6 +152,7 @@ export class DomainKnowledgeExtraction {
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void, signal?: AbortSignal) => Promise<DomainPublication>;
     onIndexed?: () => void;
     shutdown?: () => Promise<void>;
+    sourceCleanup?: KnowledgeSourceCleanup;
   } = {}) {
     const root = join(dataDir, "domain-extraction");
     if (existsSync(root)) for (const name of readdirSync(root).filter(n => /^dkx-[a-f0-9-]{36}$/.test(n))) {
@@ -483,6 +494,7 @@ export class DomainKnowledgeExtraction {
   private createJob(input: any, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description);
+    if (input.prepare_cleanup !== undefined && typeof input.prepare_cleanup !== "boolean") throw new Error("萃取前清理须为布尔值");
     const module_id = input.module_id ? String(input.module_id) : undefined;
     if (module_id) {
       const module = readBusinessModule(this.dataDir, module_id);
@@ -509,18 +521,42 @@ export class DomainKnowledgeExtraction {
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!knowledge_target.repository, archive_revision: 0,
       material_ids, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+    if (input.prepare_cleanup) {
+      const targets = archiveRepositoryGroups([knowledge_target, ...repositories].filter(target => target.repository)).map(group => group.target);
+      if (!targets.length) throw new Error("没有可清理的来源仓，请配置业务仓或知识仓");
+      job.source_cleanup = { repositories: structuredClone(targets), plans: [], publications: [] };
+      job.stage = "等待人工清理旧知识";
+    }
     // 请求键在创建时保存；后续维护不会改变原请求的身份。
     const requestKey = (value: DomainKnowledgeJob) => JSON.stringify([value.title, value.scope, value.instructions,
       value.issue_no, value.issue_description, value.module_id, value.source_repositories, value.knowledge_target,
-      value.archive_configured, value.material_ids]);
+      value.archive_configured, value.material_ids, ...(value.source_cleanup ? ["prepare-cleanup"] : [])]);
     job.key = requestKey(job);
     const previous = [...this.jobs.values()].reverse().find(existing => !existing.component_research_id && !existing.deleted_at
       && existing.operator === operator && !["failed", "cancelled"].includes(existing.status)
-      && existing.turns[0]?.mode === "extract" && existing.key === job.key);
+      && (existing.turns[0]?.mode === "extract" || existing.source_cleanup && !existing.source_cleanup.started) && existing.key === job.key);
     if (previous) return this.get(previous.id);
     if ([...this.jobs.values()].filter(job => ["queued", "running"].includes(job.status)).length >= 50) throw new Error("当前研究队列已满，请稍后创建");
     this.jobs.set(job.id, job); this.persist(job);
+    if (job.source_cleanup) return this.get(job.id);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
+  }
+  async sourceCleanupAction(id: string, action: string, input: any, operator: string) {
+    const job = this.live(id);
+    if (!job.source_cleanup || job.source_cleanup.started) throw new Error("当前任务不在萃取前清理阶段");
+    if (this.publishing.has(id)) throw new Error("清理操作正在进行，请等待完成");
+    if (action === "start") {
+      return this.run(id, { mode: "extract", message: job.scope }, operator);
+    }
+    if (!this.options.sourceCleanup) throw new Error("清理 MR 服务未配置");
+    const owner = this.acquirePublication(id);
+    try {
+      const candidate = structuredClone(job);
+      await this.options.sourceCleanup.action(candidate, action, input, operator, () => {
+        this.assertPublicationOwner(id, owner); this.persist(candidate); Object.assign(job, structuredClone(candidate));
+      }, AbortSignal.timeout(5 * 60_000));
+      return this.get(id);
+    } finally { this.releasePublication(id, owner); }
   }
   configureArchive(id: string, input: { targets: unknown; documents?: unknown; base_revision?: number }) {
     const job = this.live(id);
@@ -595,6 +631,7 @@ export class DomainKnowledgeExtraction {
     if (!message || message.length > 20000) throw new Error("请填写本轮问题或修订要求，最多 20000 字");
     scanForSecrets("研究意见", Buffer.from(message));
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
+    if (input.mode === "extract" && job.source_cleanup) job.source_cleanup.started = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
