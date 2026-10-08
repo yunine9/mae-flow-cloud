@@ -325,6 +325,33 @@ test("责任人答复直达 CodeHub:入信箱不绑版本,发送后转 addressed
   }
 });
 
+test("发送在途时责任人再答复另一条:两拍串行、按 id 合回信箱,不拿旧快照冲掉新条目", async () => {
+  // 2026-10-08 读码发现:信箱发送先读快照、逐条 await 平台、最后整份写回;
+  // 在途期间责任人答复同步落盘的新条目会被旧快照覆盖,悄悄丢回复。
+  const scene = await reviewFixture({ seed: { id: "P1", body: "日志级别不对" } });
+  try {
+    scene.seedDiscussion({ id: "P2", body: "缺少超时测试", file: "b.cpp", line: 3, severity: "major", author: "检视人老王" });
+    const store = reviewStore(scene.issueDir);
+    await until(() => ["P1", "P2"].every(id => store.list().some(item => item.external_review?.discussion_id === id)), "两条意见同步");
+    const note = (id: string) => store.list().find(item => item.external_review?.discussion_id === id)!;
+    const release = scene.platform.holdNextDiscussionReply("P1");
+    scene.service.updateExternalReview(scene.id, note("P1").id, { reply: "已改为 warn 级别" });
+    await until(() => scene.platform.seenIdentity.some(entry => entry.path === "/mr/discussions/P1/reply"), "P1 回复已在途");
+    scene.service.updateExternalReview(scene.id, note("P2").id, { reply: "超时测试见 TimeoutTest" });
+    const p1 = scene.platform.discussions.find(item => item.id === "P1")!, p2 = scene.platform.discussions.find(item => item.id === "P2")!;
+    // 扣住 500ms:不串行的话第二拍会在这段时间里发完 P2 并写回信箱,放行后
+    // 第一拍再用旧快照整份覆盖,P2 条目从信箱消失。串行时 P2 必须排在后面。
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.equal(p2.replies.length, 0, "前一拍在途时后一拍排队,不并发发送");
+    release();
+    await until(() => p1.replies.length === 1 && p2.replies.length === 1, "两条答复都发到平台");
+    const outbox = JSON.parse(readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf-8"));
+    assert.deepEqual(outbox.items.map((item: any) => [item.discussion_id, item.status]).sort(), [["P1", "delivered"], ["P2", "delivered"]]);
+  } finally {
+    await scene.stop();
+  }
+});
+
 test("责任人答复勾选代点已解决:远端讨论标 resolved(2026-09-18 拍板)", async () => {
   const scene = await reviewFixture({
     seed: { id: "O1", body: "建议补充单元测试覆盖超时分支" },
@@ -401,7 +428,13 @@ test("全部合入后停止追踪新意见,在途回复照常发送", async () =
     assert.equal((await scene.service.mergeStatus(scene.id)).all_merged,
       true, "合入事实已观测");
     const m1 = scene.platform.discussions.find((item) => item.id === "M1")!;
-    await until(() => m1.replies.length > 0, "合入后在途回复仍发送");
+    // 失败时带上信箱与会话现场：全量并发下偶发超时(2026-10-08 两次复现)，单跑与压 CPU 都复现不了。
+    await until(() => m1.replies.length > 0, "合入后在途回复仍发送").catch(error => {
+      const outbox = existsSync(join(scene.issueDir, "mr-review-outbox.json")) ? readFileSync(join(scene.issueDir, "mr-review-outbox.json"), "utf8") : "(无信箱)";
+      const snapshot = scene.service.get(scene.id);
+      const audit = join(scene.issueDir, "audit", "dispatch.jsonl");
+      throw new Error(`${(error as Error).message}\n信箱=${outbox}\nstatus=${snapshot.status} stage=${snapshot.stage}\n发送账=${existsSync(audit) ? readFileSync(audit, "utf8") : "(无)"}`);
+    });
     // 合入后到达的意见不再追踪(账保留,监看不再拉新)。
     scene.platform.seedDiscussion({
       id: "M2", body: "合入后的新报告", file: "b.cpp", line: 2,
