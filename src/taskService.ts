@@ -19670,7 +19670,14 @@ export class TaskService {
       }
       // 提交说明属于编码指导，传输层只核对授权目标与真实 SHA。
       // 平台远端自身拒绝时仍如实回报，不在这里另设格式否决权。
-      if (!metadataOnlySha) await this.componentKnowledge(task)?.check({ target: sha, trigger: "mr" });
+      // 组件知识检查只观察不裁决(mode=observe)：它自身的任何故障都不能
+      // 变成推送失败——旁路一律 fail-open,原因进日志。
+      if (!metadataOnlySha) {
+        try { await this.componentKnowledge(task)?.check({ target: sha, trigger: "mr" }); }
+        catch (error) {
+          this.options.log?.(`任务 ${task.summary.id} 组件知识检查未完成（不影响推送）：${String(error)}`);
+        }
+      }
       const objects = gitView.objectDirectory;
       const staging = join(sandbox.dir, "transport.git");
       const initialized = await transportGit(["init", "--quiet", "--bare", staging]);

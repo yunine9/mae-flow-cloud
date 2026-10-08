@@ -108,7 +108,9 @@ test("单 writer 竞态：Build-Fix 中收到人工意见会停净旧执行权�
     assert.equal(abort.signal.aborted, true, "旧 Build-Fix 必须先收到中止信号");
     assert.equal(internal.prepushActive, undefined, "确认旧执行权释放后才能派新轮");
     assert.equal(service.get(id)!.status, "queued");
-    assert.equal(internal.pendingMainSteers, undefined,
+    // 会话交接(46ce8ad7 起保留 Pi 会话)会把"无未送达 steer"归一成 []，
+    // 竞态前就已是 []；守的是"没有意见被停在无人消费的队列里"，不是字段形状。
+    assert.deepEqual(internal.pendingMainSteers ?? [], [],
       "不能把意见交给已不存在的 Build-Fix driver 后无人消费");
     assert.ok(service.get(id)!.feedback?.some((item) =>
       item.source === "workspace" && item.status === "repairing"));

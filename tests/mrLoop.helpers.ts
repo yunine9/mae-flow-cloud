@@ -94,7 +94,7 @@ export function buildService(
   } = {},
   prepushRunner?: PrePushRunner,
 ): TaskService {
-  return new TaskService({
+  const service = new TaskService({
     dataDir, provider: "maeflow", model: "scripted-v1", modelsJson,
     // 主流程剧本按次序消费；经验旁路使用独立假响应，不消耗下一幕。
     memoryDrafter: async () => JSON.stringify({ trigger: "修改交付代码时", scope: "one_off", conclusion: "测试候选，待人工确认。" }),
@@ -106,6 +106,14 @@ export function buildService(
     ...(prepushRunner
       ? { prepush: { enabled: true, runner: prepushRunner } } : {}),
   });
+  // 与 delivery.helpers.ts 同理(ec3011b0):首次 MR 旁路摘要(0d350630)
+  // 走同一个线性假模型，会在首轮 MR 创建后抢走后续修复幕——实测修复
+  // bash 幕被摘要会话领走("Tool bash not found")，主会话只剩收尾文本，
+  // 逐条回执缺失，修复环停在 halted。摘要本身由 deliverySummary.test.ts
+  // 独立验证，本夹具只验证 MR 闭环状态机。
+  (service as unknown as { deliverySummaries: { start: () => void } })
+    .deliverySummaries.start = () => {};
+  return service;
 }
 
 export function mrModel(script: Scene[], dataDir: string): ScriptedModelServer {

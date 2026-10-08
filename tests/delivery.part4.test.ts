@@ -145,8 +145,9 @@ test("停机后的回程票:人工办完外部事项,重跑续推到绿灯收口
 });
 
 test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", async () => {
-  // 恢复会保留旧上下文，但最新执行契约与修复使命仍须重新下发，
-  // 检查最近的用户文本，不能把历史第一条开场当成当前输入。
+  // 重建/重启恢复的会话走 launch,每次开场重发最新执行契约(与请求 0
+  // 同一路径),不能拿历史里旧开场冒充当前输入;进程内续用的原会话则
+  // 契约已在本进程下发的开场里,修复使命作为最新输入送达。
   const platform = new FakeGitPlatform();
   platform.initBare(makeSourceRepo(), mkdtempSync(join(tmpdir(), "mfc-p-")));
   platform.statusQueue.push("failed");
@@ -156,32 +157,33 @@ test("Cloud 固有执行契约进每次会话开场,修复会话也不例外", a
     [...walkScript(true), ...repairScenes(true)],
     dataDir, { linear: true });
   await model.start();
-  const service = new TaskService({
-    dataDir, provider: "maeflow", model: "scripted-v1",
-    modelsJson: model.modelsJson(),
-    host: {
-      kernelRoot: KERNEL_ROOT,
-      repoPath: platform.barePath,
-      python: "python3",
-      continuousReview: true,
-    },
-    delivery: { platformUrl: platform.baseUrl, repairRounds: 2 },
-  });
+  // 走共享夹具:它屏蔽首次 MR 旁路摘要(ec3011b0)。直接 new 时摘要会话
+  // 领走线性剧本的修复幕,修复会话拿不到剧本、永远等不到绿灯(实测超时)。
+  const service = buildService(platform, dataDir, model.modelsJson(),
+    { repairRounds: 2 });
   try {
     const id = service.create("交付 REQ9:流水线代行").id;
     await until(() => service.get(id)!.status === "await_merge", "修复后全绿");
-    const latestUser = (at: number) => JSON.stringify(
+    const userTexts = (at: number): string[] =>
       ((model.requests[at] as any).messages ?? [])
         .filter((m: any) => m.role === "user" && (typeof m.content === "string"
-          || m.content?.some((block: any) => block.type === "text"))).at(-1)?.content ?? "");
-    // 首跑会话(请求 0)与修复会话(请求 2)的开场都带环境事实
+          || m.content?.some((block: any) => block.type === "text")))
+        .map((m: any) => JSON.stringify(m.content));
+    const latestUser = (at: number) => userTexts(at).at(-1) ?? "";
+    // 首跑会话(请求 0)开场带环境事实
     assert.match(latestUser(0), /Cloud 执行契约/);
-    assert.match(latestUser(2), /Cloud 执行契约/);
-    assert.match(latestUser(2), /分别如实记录.*不能互相冒充/);
-    assert.match(latestUser(2), /无需先修完所有旧问题/);
-    assert.doesNotMatch(latestUser(2), /也不要 push/);
-    assert.match(latestUser(2), /不要编造命令、结果、数量或绿灯/);
-    assert.match(latestUser(2), /当前目标是处理本轮流水线失败/, "修复使命也在场");
+    // 修复轮(请求 2):46ce8ad7 起宿主操作/首轮交付后在同一进程内续用原
+    // Pi 会话(docs/issue-395-session-continuity.md),不再重建会话重发整份
+    // 启动提示——契约就在这条会话本进程下发的开场里。守的是"修复时模型
+    // 眼前有契约 + 本轮修复使命",所以契约查整段上下文,使命查最新输入。
+    const repairContext = userTexts(2).join("\n");
+    assert.match(userTexts(2)[0] ?? "", /Cloud 执行契约/,
+      "修复轮续用原会话,本进程下发的开场契约仍在上下文");
+    assert.match(repairContext, /分别如实记录.*不能互相冒充/);
+    assert.match(repairContext, /无需先修完所有旧问题/);
+    assert.doesNotMatch(repairContext, /也不要 push/);
+    assert.match(repairContext, /不要编造命令、结果、数量或绿灯/);
+    assert.match(latestUser(2), /当前目标是处理本轮流水线失败/, "修复使命作为最新输入下发");
   } finally {
     await model.stop();
     await platform.stop();

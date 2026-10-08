@@ -20,10 +20,19 @@ export class ComponentKnowledgeConsumption {
   async check(input: { target?: string; paths?: string[]; trigger: ComponentKnowledgeCheckReport["trigger"] }) {
     const report = await checkComponentKnowledge({ cwd: this.options.cwd, baseline: this.options.baseline(), catalog: this.catalog(), ...input });
     if (input.trigger === "mr" && this.options.plan) {
-      const plan = this.options.plan(); report.plans = [];
-      for (const path of plan.recordedPaths()) {
-        try { const result = await plan.check(path, input.target); report.plans.push({ path, findings: result.findings }); }
-        catch (e) { report.plans.push({ path, findings: [], error: e instanceof Error ? e.message : String(e) }); }
+      report.plans = [];
+      // 组件计划核对是观察(blocks_delivery=false)。读足迹/建计划本身失败
+      // 也只记进报告——原来 recordedPaths() 在逐条 try 之外,读足迹一抛
+      // 就冒泡到宿主 push,把一次正常推送整个打断(delivery.part6 实测
+      // TypeError 从 readMemoryUsage 一路抛到 pushFromHost)。
+      try {
+        const plan = this.options.plan();
+        for (const path of plan.recordedPaths()) {
+          try { const result = await plan.check(path, input.target); report.plans.push({ path, findings: result.findings }); }
+          catch (e) { report.plans.push({ path, findings: [], error: e instanceof Error ? e.message : String(e) }); }
+        }
+      } catch (e) {
+        report.warnings.push(`组件计划核对未完成：${e instanceof Error ? e.message : String(e)}`);
       }
     }
     try { const repository = this.options.context().repositories[0] ?? this.options.context().repo;

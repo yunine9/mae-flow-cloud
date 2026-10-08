@@ -88,3 +88,18 @@ test("治理接口从真实目录取当前版本，拒绝伪造条目，反例�
     assert.equal(componentGovernance(f.data).items.find(i => i.id === item.id)!.policy.level, "warning");
   } finally { f.cleanup(); }
 });
+
+test("MR 组件计划核对只观察：读计划足迹失败记进报告，不抛给宿主 push", async () => {
+  // delivery.part6 实测：recordedPaths() 读足迹抛错曾一路冒泡到 pushFromHost，
+  // 把一次正常推送整个打断。观察类检查的故障只能如实记账，不能变成推送失败。
+  const f = consumptionFixture();
+  try {
+    const sha = f.git("rev-parse", "HEAD");
+    const c = new ComponentKnowledgeConsumption({ dataDir: f.data, cwd: f.cwd, context: () => f.context,
+      languages: () => ["cpp"], baseline: () => "main",
+      plan: () => ({ recordedPaths: () => { throw new TypeError("足迹不可读"); } }) as never });
+    const report = await c.check({ target: sha, trigger: "mr" });
+    assert.deepEqual(report.plans, []);
+    assert.ok(report.warnings.some(w => /组件计划核对未完成：足迹不可读/.test(w)), report.warnings.join());
+  } finally { f.cleanup(); }
+});
