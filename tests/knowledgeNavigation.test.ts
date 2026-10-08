@@ -55,7 +55,7 @@ test("B6验收：管理员和开发者均有独立的一级知识库入口，团
   const library = readFileSync(new URL("../web/src/KnowledgeLibrary.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(library, /团队经验与维护|onManage/, "＋新增菜单不再挂团队经验与维护");
   assert.equal(library.match(/className="knowledge-hub-add-option"/g)?.length, 2, "＋新增菜单只有研究知识、导入 Skill 两项");
-  assert.match(library, /onClick=\{\(\) => navigate\("experience"\)\}><Lightbulb size=\{16\} \/>团队经验</, "知识库页头有团队经验入口");
+  assert.match(library, /<KnowledgeExperienceCapsule [^\n]*onClick=\{\(\) => navigate\("experience"\)\} \/>/, "知识库页头的团队经验与知识任务同款状态卡（2026-10-08 用户选定）");
   assert.match(library, /route\.page === "experience" && [^\n]*<MemoryBoard onOpenTask=\{onOpenTask\} \/>/, "团队经验页就在知识库内");
   const delivery = readFileSync(new URL("../web/src/DeliveryAnalytics.tsx", import.meta.url), "utf8");
   assert.match(delivery, /\["knowledge", "知识使用效能"\]/, "使用效能是交付分析的一个页签");

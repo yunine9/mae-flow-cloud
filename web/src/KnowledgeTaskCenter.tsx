@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2Icon, ChevronRightIcon, CircleDotIcon, Clock3Icon, ListChecksIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { CheckCircle2Icon, ChevronRightIcon, CircleDotIcon, Clock3Icon, LightbulbIcon, ListChecksIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { PersonName } from "./People";
@@ -23,6 +23,17 @@ export function KnowledgeTaskCapsule({ summary, onClick, active = false }: {
   return <button type="button" className={`knowledge-task-capsule${summary?.running ? " is-running" : ""}${active ? " is-active" : ""}`} onClick={onClick} aria-pressed={active} aria-label={`知识任务中心${summary ? `，${summary.running} 项进行中，${summary.attention} 项待处理` : ""}`}>
     <span className="knowledge-task-emblem" aria-hidden="true"><span className="knowledge-task-orbit" /><ListChecksIcon size={18} /></span>
     <span className="knowledge-task-caption"><strong>知识任务</strong><span className="knowledge-task-summary">{summary ? <><span className="knowledge-task-capsule-running">进行中 <b>{summary.running}</b></span><span className={`knowledge-task-capsule-attention${summary.attention ? " has-attention" : ""}`}>待处理 <b>{summary.attention}</b></span></> : <span>查看研究与审查进度</span>}</span></span>
+    <ChevronRightIcon size={16} className="knowledge-task-chevron" aria-hidden="true" />
+  </button>;
+}
+
+/** 与知识任务卡同款：经验没有"进行中"，只报已采纳与待确认；读不到时只说入口用途，不显示 0 冒充事实。 */
+export function KnowledgeExperienceCapsule({ counts, onClick, active = false }: {
+  counts?: { pending: number; accepted: number } | null; onClick: () => void; active?: boolean;
+}) {
+  return <button type="button" className={`knowledge-task-capsule${active ? " is-active" : ""}`} onClick={onClick} aria-pressed={active} aria-label={`团队经验${counts ? `，${counts.accepted} 条已采纳，${counts.pending} 条待确认` : ""}`}>
+    <span className="knowledge-task-emblem" aria-hidden="true"><span className="knowledge-task-orbit" /><LightbulbIcon size={18} /></span>
+    <span className="knowledge-task-caption"><strong>团队经验</strong><span className="knowledge-task-summary">{counts ? <><span>已采纳 <b>{counts.accepted}</b></span><span className={`knowledge-task-capsule-attention${counts.pending ? " has-attention" : ""}`}>待确认 <b>{counts.pending}</b></span></> : <span>交付中沉淀的做法</span>}</span></span>
     <ChevronRightIcon size={16} className="knowledge-task-chevron" aria-hidden="true" />
   </button>;
 }

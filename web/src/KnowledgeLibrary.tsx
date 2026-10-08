@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, Upload, Sparkles, Lightbulb } from "lucide-react";
+import { ChevronDown, Plus, Upload, Sparkles } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeModuleHome } from "./KnowledgeModuleHome";
 import { KnowledgeModuleReader } from "./KnowledgeModuleReader";
-import { KnowledgeTaskCenter, KnowledgeTaskCapsule } from "./KnowledgeTaskCenter";
+import { KnowledgeTaskCenter, KnowledgeTaskCapsule, KnowledgeExperienceCapsule } from "./KnowledgeTaskCenter";
 import { KnowledgeResearchCreate } from "./KnowledgeResearchCreate";
 import { KnowledgeSkillImport } from "./KnowledgeSkillImport";
 import { KnowledgeSkillTask } from "./KnowledgeSkillTask";
@@ -14,6 +14,8 @@ import { ComponentResearch } from "./ComponentResearch";
 import { PlatformSkillPane, type PlatformSkillKind } from "./PlatformSkill";
 import { KnowledgeStudioContext, type ExtractionKind } from "./KnowledgeStudioContext";
 import { MemoryBoard } from "./MemoryBoard";
+import { getMemoryInsights } from "./api";
+import { memoryCounts } from "./memoryPresentation";
 import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
 
 type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "experience";
@@ -38,6 +40,13 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
     const refresh = async () => { try { const r = await fetch("/knowledge-tasks"); if (!r.ok) return; const data = await r.json(); if (live && data.summary) setSummary(data.summary); } catch { /* 任务中心提供重试及错误信息。 */ } };
     void refresh(); const timer = setInterval(refresh, 5000); return () => { live = false; clearInterval(timer); };
   }, [onTasksPage]);
+  // 经验变化慢，不轮询：进出页面时各读一次，从经验页审完回来就是新数。读失败卡片只显示入口说明（旁路 fail-open）。
+  const [experience, setExperience] = useState<{ pending: number; accepted: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    getMemoryInsights().then(value => { if (live) setExperience(memoryCounts(value.memories)); }).catch(() => { if (live) setExperience(null); });
+    return () => { live = false; };
+  }, [route.page]);
   function navigate(page: Page, values: Record<string, string> = {}) {
     const url = new URL(location.href);
     for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "kbStage", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill", "source_task", "memory_id"]) url.searchParams.delete(key);
@@ -64,7 +73,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       <header className="knowledge-hub-header">
         <div className="knowledge-page-title"><button type="button" className="knowledge-hub-brand" onClick={() => navigate("home")}><strong>知识库</strong></button></div>
         <div className="knowledge-hub-actions">
-          <Button variant={route.page === "experience" ? "secondary" : "outline"} aria-pressed={route.page === "experience"} onClick={() => navigate("experience")}><Lightbulb size={16} />团队经验</Button>
+          <KnowledgeExperienceCapsule counts={experience} active={route.page === "experience"} onClick={() => navigate("experience")} />
           <KnowledgeTaskCapsule summary={summary} active={route.page === "tasks"} onClick={() => navigate("tasks")} />
           <DropdownMenu><DropdownMenuTrigger render={<Button className="knowledge-hub-add" />}><Plus size={18} />新增<ChevronDown size={14} /></DropdownMenuTrigger><DropdownMenuContent align="end" sideOffset={10} className="knowledge-hub-add-menu">
             <DropdownMenuItem className="knowledge-hub-add-option" onClick={() => navigate("research", { kbModule: route.module })}><span className="knowledge-hub-add-icon"><Sparkles size={19} /></span><span><strong>研究知识</strong><small>萃取领域、基础组件，或制作 Skill</small></span></DropdownMenuItem>

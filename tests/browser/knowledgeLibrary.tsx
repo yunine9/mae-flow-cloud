@@ -148,7 +148,7 @@ async function run() {
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "module opened from home");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
   checkLibraryNavigationRestored();
-  await clickSelector(".knowledge-task-capsule"); await waitFor('[aria-label$="打开领域萃取：支付规则研究中"]');
+  await clickSelector('.knowledge-task-capsule[aria-label^="知识任务中心"]'); await waitFor('[aria-label$="打开领域萃取：支付规则研究中"]');
   await clickSelector('[aria-label$="打开领域萃取：支付规则研究中"]'); await waitFor('[aria-label="研究过程记录"]');
   check(new URLSearchParams(location.search).get("kbReview") !== "1", "running task opens execution rather than review");
   check(document.querySelector('[aria-label="研究过程记录"]')?.textContent?.includes("退款与取消"), "task detail reuses recorded research progress");
@@ -208,7 +208,8 @@ async function run() {
   check(document.querySelector(".knowledge-hub.is-focused") && focusedHoldsOne(), "a focused task page holds exactly one workspace");
   await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
-  await click("团队经验"); await waitFor('[aria-label="经验沉淀"]');
+  check(document.querySelector('.knowledge-hub-header [aria-label="团队经验，0 条已采纳，0 条待确认"]'), "header experience capsule reports counts read from /memory-insights");
+  await clickSelector('.knowledge-hub-header [aria-label^="团队经验"]'); await waitFor('[aria-label="经验沉淀"]');
   check(document.body.textContent?.includes("经验沉淀") && focusedHoldsOne(), "B6: team experience keeps its back button and board readable instead of squeezing them into one focused row");
   check(document.querySelector('.knowledge-hub-header button[aria-pressed="true"]')?.textContent?.includes("团队经验"), "B6: team experience stays under the library header with its entry pressed");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]'); await chooseNew("导入 Skill");

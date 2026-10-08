@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { memoryPreparation, memorySearchPresentation } from "../web/src/memoryPresentation.ts";
+import { memoryCounts, memoryPreparation, memorySearchPresentation } from "../web/src/memoryPresentation.ts";
 
 test("检索加载和请求失败不能冒充未启用；刷新失败不能冒充仍然在线", () => {
   assert.equal(memorySearchPresentation().state, "unknown");
@@ -28,4 +28,17 @@ test("模型正在整理、成功和失败分别呈现；失败仍保留记忆",
   assert.equal(failed.label, "待确认");
   assert.match(failed.title, /原记录保留/);
   assert.equal(memoryPreparation({ source: "user_note" }).label, "待确认");
+});
+
+test("页头经验卡与「待确认」页签同一口径：停用、并入、归档不计；无审查权的候选不算待我确认", () => {
+  assert.deepEqual(memoryCounts([
+    { can_review: true },
+    { can_review: true, review: { status: "pending" } },
+    { can_review: false },
+    { review: { status: "accepted" } },
+    { review: { status: "accepted" }, withdrawn: true },
+    { can_review: true, superseded_by: "c-merged-1" },
+    { review: { status: "accepted" }, archived: true },
+    { review: { status: "rejected" } },
+  ]), { pending: 2, accepted: 1 });
 });
