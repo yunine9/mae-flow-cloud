@@ -2,7 +2,7 @@ import { KNOWLEDGE_WRITING_GUIDANCE } from "./knowledgeWritingGuidance.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -84,12 +84,18 @@ export class KnowledgeExtractionSkills {
       }
       const loaded = loadSkills({ cwd: staging, agentDir: staging, skillPaths: [staging], includeDefaults: false });
       if (loaded.skills.length !== 1) throw new Error("请提供一个标准 Skill，SKILL.md 需要有效的 name 和 description");
+      // 引用缺失只提示不拦截（#448）：方法里常写指向产出文档的示例链接（如 ../architecture.md），
+      // 它们本就不在包内；真写错的包内引用也交给人判断，不挡调试 Skill。
+      const warnings: string[] = [];
       for (const [filePath, content] of Object.entries(files)) {
         if (!filePath.endsWith(".md")) continue;
         for (const match of content.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)) {
           if (/^[a-z][a-z0-9+.-]*:/i.test(match[1])) continue;
-          if (!Object.hasOwn(files, join(dirname(filePath), match[1])))
-            throw new Error(`Skill 引用文件不存在：${match[1]}`);
+          const target = posix.normalize(posix.join(posix.dirname(filePath), match[1]));
+          if (Object.hasOwn(files, target)) continue;
+          warnings.push(target.startsWith("../") || target === ".."
+            ? `${filePath} 引用了包外文件 ${match[1]}：不会随 Skill 上传，萃取时读不到；若是产出文档的示例链接可忽略`
+            : `${filePath} 引用的 ${match[1]} 不在包内，萃取时读不到，请确认路径`);
         }
       }
       const next = snapshot(loaded.skills[0].name, files, kind), root = join(this.root, name), versionId = randomUUID();
@@ -98,7 +104,7 @@ export class KnowledgeExtractionSkills {
       writeFileSync(join(root, "versions", `${versionId}.json`), JSON.stringify({ ...old, version_id: versionId, archived_at: new Date().toISOString(), operator, action }), { mode: 0o600 });
       writeFileSync(join(root, "current.json.tmp"), JSON.stringify(next), { mode: 0o600 });
       renameSync(join(root, "current.json.tmp"), join(root, "current.json"));
-      return this.current(kind);
+      return { ...this.current(kind), warnings: [...new Set(warnings)] };
     } finally { rmSync(dirname(staging), { recursive: true, force: true }); }
   }
   save(kind: ExtractionKind, files: Record<string, string>, expectedDigest: string, operator: string) {

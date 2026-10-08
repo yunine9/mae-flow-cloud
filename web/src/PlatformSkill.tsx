@@ -9,6 +9,8 @@ export const platformSkillLabels = { component: "基础组件萃取", domain: "�
 export interface PlatformSkill {
   name: string; digest: string; files: Record<string, string>; can_manage: boolean;
   versions: Array<{ version_id: string; archived_at: string; operator: string }>;
+  /** 保存时发现的引用缺失：只提示，不拦截保存（#448）。 */
+  warnings?: string[];
 }
 export const platformSkillRequest = (kind: PlatformSkillKind, body?: unknown) =>
   componentRequest<PlatformSkill>(`/knowledge-extraction/skills/${kind}`, body);
@@ -48,8 +50,10 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
     if (!skill || !pending) return;
     setBusy(true); setError("");
     try {
-      setSkill(await platformSkillRequest(kind, { files: pending, expected_digest: skill.digest }));
-      setPending(undefined); setShowUpload(false); setNotice("已更新，新萃取任务会使用此 Skill；正在运行的任务继续使用原版本。"); onSaved();
+      const saved = await platformSkillRequest(kind, { files: pending, expected_digest: skill.digest });
+      setSkill(saved);
+      setPending(undefined); setShowUpload(false); onSaved();
+      setNotice(["已更新，新萃取任务会使用此 Skill；正在运行的任务继续使用原版本。", ...(saved.warnings?.length ? ["请留意以下引用：", ...saved.warnings.map(item => `· ${item}`)] : [])].join("\n"));
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
@@ -60,7 +64,7 @@ export function PlatformSkillPane({ kind, upload = false, onSaved }: {
     </div><div className="flex gap-2">{skill?.can_manage && !showUpload && <Button variant="outline" onClick={() => setShowUpload(true)}>上传新版本</Button>}{studio && skill && !showUpload && <Button onClick={() => studio.openExecution(kind)}>使用此 Skill</Button>}</div></header>
     {kind === "domain" && !showUpload && <p className="text-sm text-muted-foreground">上传资料与无线豆包的用法由平台系统提示固定提供，对任何版本的 Skill 都生效；本 Skill 只决定研究方法、步骤安排和文档组织，调试时替换它不会丢掉这两类业务来源。</p>}
     {error && <p role="alert" className="text-danger">{error}</p>}
-    {notice && <p role="status" className="text-primary">{notice}</p>}
+    {notice && <p role="status" className="whitespace-pre-line text-primary">{notice}</p>}
     {skill?.can_manage && showUpload && <div className="rounded-xl border border-line bg-muted/30 p-4 space-y-3">
       <p className="text-sm">上传包含 SKILL.md 的标准 Skill 目录；只有一个文件时可直接上传 SKILL.md。上传前可预览内容。</p>
       <input ref={directory} hidden type="file" multiple {...{ webkitdirectory: "" }} aria-label="上传平台 Skill 目录" onChange={e => { void pick(e.target.files); e.target.value = ""; }} />
