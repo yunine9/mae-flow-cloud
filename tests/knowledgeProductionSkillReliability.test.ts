@@ -15,16 +15,22 @@ const files = (label = "原始草稿", attachment = "核对版本与取消操作
 ];
 const temporary = () => fs.mkdtempSync(join(tmpdir(), "knowledge-skill-reliability-"));
 
-test("#450：Skill 列表保留具体校验原因，缺失基线和 JSON 损坏分别说明且不泄漏正文", async () => {
+test("#450：旧 Skill 缺基线仍可读，非法基线和 JSON 损坏分别说明且不泄漏正文", async () => {
   const dir = temporary();
   try {
     const good = await library.submitHostSkill(dir, directory, files(), "alice", metadata);
     const path = join(dir, "skill-submissions", directory, good.id, "submission.json");
     const missing = { ...good } as Partial<SkillSubmissionRecord>; delete missing.base_package_digest;
     fs.writeFileSync(path, JSON.stringify(missing));
+    const bytes = fs.readFileSync(path, "utf8");
     const warnings: string[] = [];
+    assert.deepEqual(library.listSkillSubmissions(dir, warnings), [{ ...good, base_package_digest: null }]);
+    assert.deepEqual(warnings, []);
+    assert.equal(library.readSkillSubmissionPackage(dir, directory, good.id).record.base_package_digest, null);
+    assert.equal(fs.readFileSync(path, "utf8"), bytes, "列表和预览不能自动改写旧记录");
+    fs.writeFileSync(path, JSON.stringify({ ...good, base_package_digest: "invalid" }));
     assert.deepEqual(library.listSkillSubmissions(dir, warnings), []);
-    assert.match(warnings[0], /base_package_digest.*缺失/);
+    assert.match(warnings[0], /base_package_digest/);
     fs.writeFileSync(path, '{"private_note":"DO_NOT_EXPOSE_450",');
     warnings.length = 0; library.listSkillSubmissions(dir, warnings);
     assert.match(warnings[0], /JSON/);

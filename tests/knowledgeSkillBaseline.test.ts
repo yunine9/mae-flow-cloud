@@ -94,7 +94,7 @@ test("审核等待期间直接发布新版或下线均使原提交失效，不�
   }
 });
 
-test("生产线验收3/14（F20）：缺基线审核记录逐条隔离并点名，不被批准且不覆盖正式包或坏字节", async () => {
+test("#450：缺基线的旧 Skill 可读，但不能覆盖已更新的正式包，也不改写旧记录", async () => {
   const dir = fixture();
   try {
     await uploadHostSkill(dir, directory, files("old official"), "admin", metadata);
@@ -103,12 +103,33 @@ test("生产线验收3/14（F20）：缺基线审核记录逐条隔离并点名�
     const legacy = JSON.parse(readFileSync(path, "utf8")); delete legacy.base_package_digest; writeFileSync(path, JSON.stringify(legacy));
     await uploadHostSkill(dir, directory, files("later official"), "admin", metadata);
     const badBytes = readFileSync(path, "utf8"), live = readHostSkillPackage(dir, directory), operations = listSkillOperations(dir);
-    await assert.rejects(approveSkillSubmission(dir, directory, pending.id, "admin"), /记录损坏：skill-submissions\/baseline-review\/[^/]+\/submission\.json/);
+    await assert.rejects(approveSkillSubmission(dir, directory, pending.id, "admin"), /最新版本重新提交/);
     const warnings: string[] = [];
-    assert.deepEqual(listSkillSubmissions(dir, warnings), []);
-    assert.ok(warnings.some(warning => warning.includes(`skill-submissions/${directory}/${pending.id}/submission.json`)));
+    assert.deepEqual(listSkillSubmissions(dir, warnings), [{ ...pending, base_package_digest: null }]);
+    assert.deepEqual(warnings, []);
     assert.equal(readFileSync(path, "utf8"), badBytes);
     assert.deepEqual(readHostSkillPackage(dir, directory), live);
     assert.deepEqual(listSkillOperations(dir), operations);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("#450：尚无正式包的旧 Skill 缺基线按 null 读取，人工审核后正常上架并保存当前格式", async () => {
+  const dir = fixture();
+  try {
+    const pending = await submitHostSkill(dir, directory, files("legacy first publication"), "alice", metadata);
+    const path = join(dir, "skill-submissions", directory, pending.id, "submission.json");
+    const legacy = JSON.parse(readFileSync(path, "utf8")); delete legacy.base_package_digest;
+    writeFileSync(path, JSON.stringify(legacy));
+    await approveSkillSubmission(dir, directory, pending.id, "admin");
+    assert.equal(readHostSkillPackage(dir, directory).package_digest, pending.package_digest);
+    const approved = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(approved.status, "approved"); assert.equal(approved.base_package_digest, null);
+    delete approved.base_package_digest; writeFileSync(path, JSON.stringify(approved));
+    const bytes = readFileSync(path, "utf8"), warnings: string[] = [];
+    assert.equal(listSkillSubmissions(dir, warnings)[0].status, "approved", "已审核的旧提交保留原裁决");
+    assert.deepEqual(warnings, []);
+    await assert.rejects(approveSkillSubmission(dir, directory, pending.id, "admin"), /已经裁决/);
+    assert.equal(readFileSync(path, "utf8"), bytes);
+    assert.equal(readHostSkillPackage(dir, directory).package_digest, pending.package_digest);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

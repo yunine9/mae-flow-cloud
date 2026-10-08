@@ -24,6 +24,25 @@ function componentRecord(): ResearchRecord {
 function write(dir: string, relative: string, content: string) { const path = join(dir, relative); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); return path; }
 function assertWarnings(warnings: string[], paths: string[]) { for (const path of paths) assert.ok(warnings.some(warning => warning.includes(path)), `告警应点名 ${path}`); }
 
+test("#450：旧组件 mode=component、status=done 仍在知识任务中心可见，读取不改原记录", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "issue450-component-legacy-"));
+  const record = { ...componentRecord(), mode: "component", draft: "已有组件知识正文" };
+  const path = write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  const bytes = readFileSync(path, "utf8");
+  let service: ComponentResearch | undefined, executions = 0;
+  try {
+    service = new ComponentResearch(dir, async () => { executions++; return "unused"; });
+    const center = listKnowledgeTasks({ dataDir: dir, component: service,
+      domain: { list: () => [], get: () => { throw new Error("无领域任务"); } }, skillExtractionJob: () => undefined });
+    assert.deepEqual(center.warnings, [], "已完成的旧格式记录不应误报损坏");
+    assert.deepEqual(center.tasks.map(task => [task.id, task.status]), [[record.id, "done"]]);
+    assert.equal(service.get(record.id).draft, record.draft);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(executions, 0, "读取已完成的旧记录不能重新执行");
+    assert.equal(readFileSync(path, "utf8"), bytes);
+  } finally { await service?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("#450：组件记录格式告警指出具体字段，JSON 错误不泄漏正文", async () => {
   const dir = mkdtempSync(join(tmpdir(), "issue450-component-format-"));
   const invalid = componentRecord(), malformed = componentRecord();
