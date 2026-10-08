@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, openSync, closeSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME
   ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
@@ -26,16 +26,11 @@ test("工作台后台轮询保留文档、图表和差异正文，真实改动�
       + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
     for (const mode of ["doc", "diff"]) {
       const dump = join(dir, `${mode}.html`);
-      const fd = openSync(dump, "w");
-      try {
-        execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run",
+      
+      await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run",
           "--disable-extensions", `--user-data-dir=${join(dir, mode)}`,
           "--window-size=1920,1080", "--virtual-time-budget=6000", "--dump-dom",
-          `file://${html}?mode=${mode}`], { timeout: 8000, stdio: ["ignore", fd, "ignore"] });
-      } catch (error) {
-        // macOS Chrome 有时已输出结果但清理未退出；下面必须拿到完整断言结果。
-        if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-      } finally { closeSync(fd); }
+          `file://${html}?mode=${mode}`], dump);
       const result = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
       assert.ok(result, `${mode}: browser did not finish`);
       const value = JSON.parse(result);
@@ -64,14 +59,10 @@ test("任务深链与状态刷新不等待 2.5 秒的旁栏接口", {
     const html = join(dir, "check.html"), dump = join(dir, "result.html");
     writeFileSync(html, '<!doctype html><meta charset="utf-8"><div id="app"></div><pre id="result"></pre><script>'
       + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
-    const fd = openSync(dump, "w");
-    try {
-      execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+    
+    await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
         `--user-data-dir=${join(dir, "chrome")}`, "--window-size=1920,1080", "--virtual-time-budget=5000",
-        "--dump-dom", `file://${html}?task=entry`], { timeout: 10000, stdio: ["ignore", fd, "ignore"] });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-    } finally { closeSync(fd); }
+        "--dump-dom", `file://${html}?task=entry`], dump);
     const result = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
     assert.ok(result, "browser did not finish");
     const value = JSON.parse(result);

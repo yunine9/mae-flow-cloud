@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, openSync, closeSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
 import { renderArchify } from "../src/archifyRender.ts";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 test("架构视图真实浏览器：迟到旧图不能覆盖新版，读取失败卸载旧图，空态可回 Story", {
@@ -26,14 +26,9 @@ test("架构视图真实浏览器：迟到旧图不能覆盖新版，读取失�
     writeFileSync(path, '<!doctype html><meta charset="utf-8"><style>:root { --line:#e3e3ef; --surface:#fff; --surface-soft:#f7f7fc; --text:#292a40; --muted:#777b91; --accent:#6256df; --attention:#b87910; --z-modal:100; } body { margin:0; font:14px system-ui; color:var(--text); } #result, #jump-class { display:none; }</style><style>' + readFileSync(resolve("web/src/tailwind.css"), "utf8") + '</style><div id="app"></div><pre id="result"></pre><script>'
       + result.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
     if (process.env.MFC_ARCHITECTURE_EVIDENCE) writeFileSync(process.env.MFC_ARCHITECTURE_EVIDENCE, readFileSync(path));
-    const dump = join(dir, "dump.html"), fd = openSync(dump, "w");
-    try {
-      execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
-        `--user-data-dir=${join(dir, "chrome")}`, "--virtual-time-budget=10000", "--dump-dom", `file://${path}`],
-      { timeout: 20000, stdio: ["ignore", fd, "ignore"] });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-    } finally { closeSync(fd); }
+    const dump = join(dir, "dump.html");
+    await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+        `--user-data-dir=${join(dir, "chrome")}`, "--virtual-time-budget=10000", "--dump-dom", `file://${path}`], dump);
     const outcome = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
     assert.ok(outcome, "浏览器未完成测试");
     assert.deepEqual(JSON.parse(outcome), { onlyArchify: true, missingTabsHidden: true, raceProtected: true, staleRemoved: true, failureReadable: true, emptyReadable: true, opened: true });

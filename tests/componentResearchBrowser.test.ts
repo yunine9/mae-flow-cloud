@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, openSync, closeSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 function reviewProductionFixtures() {
@@ -43,14 +43,11 @@ test("生产线验收8：桌面审核使用后端投影，默认全选、单项�
       +JSON.stringify(reviewProductionFixtures()).replaceAll("</script","<\\/script")+';</script><script>'
       +built.outputFiles[0].text.replaceAll("</script","<\\/script")+"</script>");
     for (const [width,height] of [[1920,1080],[1366,768]]) {
-      const dump = join(dir,`${width}.html`), fd = openSync(dump,"w");
-      try {
-        execFileSync(chrome,["--headless=new","--disable-gpu","--no-first-run","--disable-extensions",`--user-data-dir=${join(dir,String(width))}`,
+      const dump = join(dir,`${width}.html`);
+      await browserResultDump(chrome, ["--headless=new","--disable-gpu","--no-first-run","--disable-extensions",`--user-data-dir=${join(dir,String(width))}`,
           `--window-size=${width},${height}`,"--virtual-time-budget=7000","--dump-dom",
           ...(process.env.MFC_RESEARCH_SCREENSHOT_DIR ? [`--screenshot=${join(process.env.MFC_RESEARCH_SCREENSHOT_DIR,`research-${width}.png`)}`] : []),
-          `file://${html}?kbPage=task&kbKind=component&kbTask=cr-browser`],{timeout:25000,stdio:["ignore",fd,"ignore"]});
-      } catch (error) {if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;}
-      finally {closeSync(fd);}
+          `file://${html}?kbPage=task&kbKind=component&kbTask=cr-browser`], dump);
       const output = readFileSync(dump,"utf8");
       if (process.env.MFC_RESEARCH_SCREENSHOT_DIR) writeFileSync(join(process.env.MFC_RESEARCH_SCREENSHOT_DIR, `research-${width}.html`), output);
       const result = output.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];

@@ -10,9 +10,11 @@
  * 依赖图口径(诚实边界,写在前面):
  * - 静态相对 import(import/export from "./x.ts"、动态 import("./x"))——
  *   覆盖 src/tests 的 TS 内部依赖,解析 .ts/.tsx/index;
- * - 字符串路径引用(["']src/…|web/src/…|assets/…|kernel/…["'])——UI 契约
- *   测试用 readFileSync(resolve("web/src/App.tsx")) 读源码文本断言,
- *   不走 import,纯 import 图会漏掉它们;
+ * - 字符串路径引用(["']src/…|web/src/…|assets/…|kernel/…|tests/browser/…["'])——
+ *   UI 契约测试用 readFileSync(resolve("web/src/App.tsx")) 读源码文本断言,
+ *   真浏览器测试用 resolve("tests/browser/x.tsx") 交 esbuild 打包,都不走
+ *   import,纯 import 图会漏掉它们(2026-10-08 补 tests/browser:改 web 组件
+ *   原先捞不到对应的浏览器测试);
  * - 已删除的源文件映射不到边(图只扫现存文件)——删模块会连坐破坏
  *   引用方,typecheck/gate 兜底;配置类改动(package.json/CI/脚本)同理,
  *   无映射时提示跑 npm run gate,宁可多跑不静默漏跑。
@@ -63,7 +65,7 @@ function resolveRelative(from: string, spec: string): string | undefined {
 }
 
 const importPattern = /(?:import|export)[^'";]*?from\s*["'](\.[^"']+)["']|import\(\s*["'](\.[^"']+)["']\s*\)|require\(\s*["'](\.[^"']+)["']\s*\)/g;
-const stringRefPattern = /["']((?:src|web\/src|assets|kernel)\/[^"']+?\.(?:ts|tsx|md|json|mjs|py))["']/g;
+const stringRefPattern = /["']((?:src|web\/src|assets|kernel|tests\/browser)\/[^"']+?\.(?:ts|tsx|md|json|mjs|py))["']/g;
 
 /** 反向邻接:被依赖方 → 引用它的文件(只扫现存文件,见头注边界)。 */
 const reverse = new Map<string, Set<string>>();
