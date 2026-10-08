@@ -55,7 +55,10 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       kbStage: action?.view === "archive" ? "publish" : "",
       knowledgeDocument: action?.document_id ?? "" });
   }
-  const focused = route.page === "module" || route.page === "task" || route.page === "experience";
+  // 全屏态的样式让容器里每个子元素各占满一行宽：只容得下一个工作区。经验页、平台 Skill 页是
+  // "返回按钮 + 内容"两段，进全屏会把内容挤成几十像素（2026-10-08 真服务实测），所以留在页内。
+  const platformSkill = route.page === "module" && route.module === "platform" && ["platform-skill-domain", "platform-skill-component"].includes(route.document);
+  const focused = route.page === "task" || (route.page === "module" && !platformSkill);
   return <KnowledgeStudioContext.Provider value={{ view: route.review ? "knowledge" : "workbench", openExecution: (kind, id) => openTask(kind, id ?? "new"), openResult: (kind, id) => openTask(kind, id, true) }}>
     <section className={`knowledge-hub ${focused ? "is-focused" : ""}`} aria-label="知识库">
       <header className="knowledge-hub-header">
@@ -70,7 +73,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
         </div>
       </header>
       {route.page === "home" && <KnowledgeModuleHome onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
-      {route.page === "module" && (route.module === "platform" && ["platform-skill-domain", "platform-skill-component"].includes(route.document)
+      {route.page === "module" && (platformSkill
         ? <div className="knowledge-hub-task"><KnowledgeBackButton onClick={() => navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
       {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, action) => openTask(kind, id, action.view !== "progress", action)} onSummaryChange={setSummary} />}

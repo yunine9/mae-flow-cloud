@@ -301,7 +301,9 @@ export class DomainKnowledgeExtraction {
       const actions: KnowledgeProductionAction[] = !configured ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })]
         : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
-        message: publication?.error || (status_label === "归档失败" ? batch?.error : undefined) || (!configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出当前已发布的正式知识，创建 MR 后归档结束。"),
+        // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
+        message: !configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "归档失败" ? "此仓归档失败，原因见下方；处理后重试此仓，重试复用同一分支。"
+          : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出当前已发布的正式知识，创建 MR 后归档结束。",
         error: publication?.error || (status_label === "归档失败" ? batch?.error : undefined), url: publication?.url, actions,
         files: documents.filter(document => ids.includes(document.target_id)).flatMap(document => {
           const file = { id: document.id, title: document.title, path: document.archive_path ?? document.path, content: document.content,
@@ -314,7 +316,7 @@ export class DomainKnowledgeExtraction {
     const actions: KnowledgeProductionAction[] = status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
       : status_label === "已发布（未归档）" && targets.length && targets.every(target => target.configured) ? [action({ id: "create-archive", label: "创建归档 MR", view: "archive" })]
         : !targets.length || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
-    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: batch?.error || (status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "平台发布与 Git 归档分开；填写关联单号后手动创建 MR。"),
+    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "平台发布与 Git 归档分开；填写关联单号后手动创建 MR。",
       issue_no: batch?.issue_no ?? job.issue_no, issue_description: batch?.issue_description ?? job.issue_description, expected_revisions: Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), actions, targets })) as KnowledgeArchivePreview;
   }
   async createArchive(id: string, input: { issue_no: string; issue_description?: string; expected_revisions: Record<string, string> }, operator: string) {

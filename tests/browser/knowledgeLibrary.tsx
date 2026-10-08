@@ -71,6 +71,7 @@ window.fetch = async (url, options) => {
   }
   else if (path === "/skills/order-check/submissions") result = { directory: "order-check", id: "submission-1", status: "pending" };
   else if (path === "/skills/order-check/submissions/submission-1") result = { record: { directory: "order-check", id: "submission-1", status: "pending", operator: "alice", created_at: "2026-10-05T00:00:00Z", skill_digest: "a", package_digest: "b", files: 1, bytes: 10 }, files: [{ path: "SKILL.md", bytes: 10, content: "---\nname: order-check\n---" }] };
+  else if (path === "/memory-insights") result = { generated_at: "2026-10-08T00:00:00Z", drafting: 0, sidecar: "absent", repos: [], memories: [] };
   else throw new Error(`unexpected request: ${path}`);
   return new Response(JSON.stringify(result), { headers: { "content-type": "application/json" } });
 };
@@ -202,7 +203,14 @@ async function run() {
   check(!Object.prototype.hasOwnProperty.call(created?.input, "ar_codes"), "research does not submit removed supplementary AR data");
   const opened = new URLSearchParams(location.search);
   check(opened.get("kbPage") === "task" && opened.get("kbKind") === "domain" && opened.get("kbTask") === jobs.at(-1)!.id, "B6/P1-6: creation opens the new task directly");
+  // 全屏态容器的样式让每个子元素各占满一行宽，多一个子元素就把内容挤成几十像素（真服务实测团队经验页 42px）。
+  const focusedHoldsOne = () => !document.querySelector(".knowledge-hub.is-focused > .knowledge-hub-task > :nth-child(2)");
+  check(document.querySelector(".knowledge-hub.is-focused") && focusedHoldsOne(), "a focused task page holds exactly one workspace");
   await click("返回任务中心"); await waitFor('[aria-label$="打开领域萃取：告警管理研究"]');
+  await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
+  await click("团队经验"); await waitFor('[aria-label="经验沉淀"]');
+  check(document.body.textContent?.includes("经验沉淀") && focusedHoldsOne(), "B6: team experience keeps its back button and board readable instead of squeezing them into one focused row");
+  check(document.querySelector('.knowledge-hub-header button[aria-pressed="true"]')?.textContent?.includes("团队经验"), "B6: team experience stays under the library header with its entry pressed");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]'); await chooseNew("导入 Skill");
   check(!document.querySelector('textarea'), "import is package-only, with no pasted document input");
   await pick([new File(["ordinary document"], "notes.pdf", { type: "application/pdf" })]);

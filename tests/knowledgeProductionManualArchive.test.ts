@@ -19,7 +19,7 @@ interface Preview {
   job_id: string; title: string; status_label: string; message: string; issue_no?: string;
   expected_revisions: Record<string, string>;
   actions: Array<{ id: string; label: string; href?: string; target_id?: string; batch_id?: string }>;
-  targets: Array<{ id: string; repository: string; branch: string; configured: boolean; status_label: string; url?: string;
+  targets: Array<{ id: string; repository: string; branch: string; configured: boolean; status_label: string; message: string; error?: string; url?: string;
     actions: Preview["actions"]; files: Array<{ path: string; content: string; knowledge_document_id: string; knowledge_revision: string }> }>;
 }
 interface ManualManager {
@@ -118,6 +118,11 @@ test("生产线验收5/6/8/14：多目标手动归档保存部分成功，失败
     const preview = api.previewArchive(id);
     const created = await api.createArchive(id, { issue_no: "REQ-EXPORT", expected_revisions: preview.expected_revisions }, "exporter");
     assert.equal(created.status_label, "归档失败"); assert.equal(created.targets.find(target => target.id === "domain")?.status_label, "已归档");
+    // 弹窗把顶部说明、仓说明、仓红字都渲染出来：原因只许落在红字一处（曾三处同句叠着显示）。
+    const reason = created.targets.find(target => target.id === "repo-1")?.error ?? "";
+    assert.ok(reason, "失败仓带原因");
+    const texts = [created.message, ...created.targets.flatMap(target => [target.message, target.error ?? ""])];
+    assert.equal(texts.filter(text => text.includes(reason)).length, 1, `失败原因只出现一次：${JSON.stringify(texts)}`);
     const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
     const failed = stored.archive_batches!.find(batch => batch.state === "failed")!;
     assert.equal(failed.issue_no, "REQ-EXPORT"); assert.equal(failed.operator, "exporter");
