@@ -12,7 +12,7 @@ async function done(service: DomainKnowledgeExtraction, id: string) {
   for (let i = 0; i < 200; i++) { const job = service.get(id); if (job.status === "done") return job; if (job.status === "failed") throw new Error(job.error); await new Promise(r => setTimeout(r, 5)); }
   throw new Error("萃取未完成");
 }
-test("归档后选位置：Skill 默认值、不提前要求知识仓、路径重映射、旧比较失效与研究范围保留", async () => {
+test("生产线验收5/14：平台发布与人工归档分开，Skill默认值、归档路径重映射与研究范围保留", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-targets-"));
   const skills = new KnowledgeExtractionSkills(root), skill = skills.current("domain");
   await skills.save("domain", { ...skill.files, "references/archive-defaults.md": '# 默认\n```json\n{"domain_directory":"business/domains","repository_directory":"business/local"}\n```' }, skill.digest, "admin");
@@ -25,28 +25,30 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     }
     return "done";
   }, {
-    previewCleanup: async (_job, target) => ({ id: "cleanup", target_id: target.id, directories: [target.docs_path], confirmed: false, target_revision: "abc", target_entries: [], document_versions: [] }),
-    readRemote: async () => ({ id: "snapshot", target_content: "旧目录的原文", target_revision: "abc", reviewed: true }),
     publish: async (job, target) => ({ target_id: target.id, state: "opened", url: "https://example.test/mr/1", branch: "codex/knowledge-test", documents: job.documents.filter(d => d.target_id === target.id).map(d => ({ id: d.id, path: d.path, revision: d.revision, content: d.content })) }),
   });
   try {
     const module = createBusinessModule(root, { id: "trade", name: "交易", description: "交易业务", owner: "user", repositories: [source.repository] }, "user");
-    const defaults = service.create({ module_id: module.id, issue_no: "REQ-default", use_wxdoubao: false }, "user");
-    assert.equal(defaults.repositories[0].branch, "master"); assert.equal(defaults.knowledge_target.branch, "master"); assert.equal(defaults.use_wxdoubao, true);
+    const defaults = service.create({ module_id: module.id, issue_no: "REQ-default" }, "user");
+    assert.equal(defaults.repositories[0].branch, "master"); assert.equal(defaults.knowledge_target.branch, "master");
     await done(service, defaults.id);
-    const initial = service.create({ module_id: module.id, baseline_branch: "release/current", issue_no: "REQ-1", title: "不能覆盖模块名", repositories: [{ ...source, repository: "https://example.test/unmaintained.git" }] }, "user");
+    const initial = service.create({ module_id: module.id, baseline_branch: "release/current", issue_no: "REQ-1", instructions: "只萃取退款模块，不读取 old.md", title: "不能覆盖模块名", repositories: [{ ...source, repository: "https://example.test/unmaintained.git" }] }, "user");
     assert.equal(initial.title, module.name);
+    assert.equal(initial.instructions, "只萃取退款模块，不读取 old.md");
     assert.equal(initial.repositories[0].repository, source.repository);
     assert.equal(initial.repositories[0].branch, "release/current");
-    assert.match(initial.scope, /完整研究/);
+    assert.match(initial.scope, /交易业务/);
     let job = await done(service, initial.id);
     assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
     assert.deepEqual(job.documents.map(d => d.path), ["business/domains/rules.md", "business/local/rules.md"]);
-    await assert.rejects(service.publish(job.id, "user"), /归档位置/);
+    await service.publish(job.id, "user");
+    assert.ok(service.get(job.id).documents.every(d => d.knowledge_document_id), "没有Git配置也能发布正式知识");
+    const unconfigured = service.previewArchive(job.id);
+    assert.ok(unconfigured.targets.length > 1);
+    assert.deepEqual(unconfigured.targets.map(target => target.actions.map(action => action.id)), unconfigured.targets.map(target => target.configured ? [] : ["configure"]), "多仓时设置入口只放在未配置的仓旁边");
+    assert.ok(!unconfigured.actions.some(action => action.id === "configure"), "多仓时底部不再重复设置入口");
     assert.throws(() => service.configureArchive(job.id, { targets: [{ ...job.knowledge_target, docs_path: "../bad" }], base_revision: 0 }), /仓库地址|路径/);
     job = service.configureArchive(job.id, { base_revision: 0, targets: [{ ...job.knowledge_target, repository: "https://example.test/knowledge.git" }, ...job.repositories] });
-    await service.readRemote(job.id, "domain", "user");
-    await service.previewCleanup(job.id, "domain", {}, "user");
     service.run(job.id, { mode: "revise", document_ids: job.documents.map(d => d.id), message: "补充" }, "user");
     job = await done(service, job.id);
     const sources = structuredClone(job.source_repositories);
@@ -57,13 +59,19 @@ test("归档后选位置：Skill 默认值、不提前要求知识仓、路径�
     assert.deepEqual(service.get(job.id), before, "failed configuration is atomic");
     job = service.configureArchive(job.id, { targets, base_revision: 1 });
     assert.deepEqual(job.source_repositories, sources);
-    assert.equal(job.cleanup_plans?.length, 0); assert.equal(job.documents[0].remote_review, undefined); assert.equal(job.documents[0].base_revision, "");
+    assert.equal(job.documents[0].base_revision, "");
     assert.deepEqual(job.documents.map(d => d.path), ["new/domain/rules.md", "new/repo/rules.md"]);
     assert.deepEqual(job.turns.at(-1)!.proposals.map(p => p.document.path), job.documents.map(d => d.path));
     assert.ok(job.documents.every(d => d.content.includes("人工内容")));
-    job = await service.publish(job.id, "user");
+    for (const proposal of job.turns.at(-1)!.proposals) service.decide(job.id, job.turns.at(-1)!.id, proposal.document.id, "accept", "user");
+    await service.publish(job.id, "user");
+    await service.createArchive(job.id, { issue_no: "REQ-1", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user");
+    job = service.get(job.id);
+    assert.equal(job.archive_batches!.find(batch => !!batch.issue_no)!.state, "done");
     assert.equal(job.publications[1].documents[0].path, "new/repo/rules.md");
-    assert.throws(() => service.configureArchive(job.id, { targets: [{ ...targets[0], docs_path: "other" }], base_revision: 2 }), /已发起归档/);
+    const changed = service.configureArchive(job.id, { targets: [{ ...targets[0], docs_path: "other" }], base_revision: 2 });
+    assert.equal(changed.knowledge_target.docs_path, "other");
+    assert.equal(changed.archive_batches!.find(batch => !!batch.issue_no)!.targets[0].docs_path, "new/domain", "已创建人工MR目标保持原样");
     service.run(job.id, { mode: "update", document_ids: job.documents.map(d => d.id), message: "核对新版本" }, "user");
     await done(service, job.id);
     const restored = new DomainKnowledgeExtraction(root, async () => "unused");
@@ -80,7 +88,7 @@ test("逐文件归档支持根目录与其他目录，保留修订和冲突保�
       assert.throws(() => input.save({ id: "escape", title: "非法扩展", path: "AGENTS.md", target_id: "domain", layer: "domain", content: "规则", sources: "源码", archive_path: "AGENTS.md" } as any), /默认目录/);
     } else for (const doc of input.read().filter(d => input.turn.document_ids.includes(d.id))) input.save({ ...doc, content: "更新建议" });
     return "done";
-  }, { readRemote: async (_job, doc) => ({ id: "remote", target_content: doc.path === "AGENTS.md" ? "已有根目录规范" : null, target_revision: "a".repeat(40), reviewed: false }) });
+  });
   try {
     let job = await done(service, service.create({ issue_no: "REQ-files", title: "领域", scope: "完整研究", repositories: [source] }, "user").id);
     const targets = [{ ...job.knowledge_target, repository: "https://example.test/knowledge.git" }];
@@ -90,13 +98,10 @@ test("逐文件归档支持根目录与其他目录，保留修订和冲突保�
     assert.deepEqual(service.get(job.id), before);
     job = service.configureArchive(job.id, { targets, base_revision: 0, documents: [{ id: "AGENTS", path: "AGENTS.md" }, { id: "rules", path: "docs/domain/rules.md" }, { id: "extra", path: "guides/extra.md" }] });
     assert.deepEqual(job.documents.map(d => d.path), ["AGENTS.md", "docs/domain/rules.md", "guides/extra.md"]);
-    job = await service.readRemote(job.id, "AGENTS", "user");
-    assert.equal(job.documents[0].remote_review?.target_content, "已有根目录规范");
     service.run(job.id, { mode: "revise", document_ids: ["AGENTS"], message: "更新规范" }, "user");
     job = await done(service, job.id);
     assert.equal(job.turns.at(-1)!.proposals[0].document.path, "AGENTS.md");
     job = service.configureArchive(job.id, { targets, base_revision: 1, documents: [{ id: "AGENTS", path: "docs/AGENTS.md" }] });
-    assert.equal(job.documents[0].remote_review, undefined);
     assert.equal(job.turns.at(-1)!.proposals[0].document.path, "docs/AGENTS.md");
     const restarted = new DomainKnowledgeExtraction(root, async () => "unused");
     assert.equal(restarted.get(job.id).documents[0].archive_path, "docs/AGENTS.md"); await restarted.shutdown();

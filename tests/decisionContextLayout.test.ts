@@ -189,7 +189,7 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   // 提交按钮在 1400px 之下还被"提问题"浮钮压着。
   const card = readFileSync(join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
   assert.match(card, /export function isChainReviewWaiting\(task: TaskSummary\)/);
-  assert.match(card, /if \(isChainReviewWaiting\(task\)\) return "确认拆分方案";/);
+  assert.match(card, /if \(isChainReviewWaiting\(task\)\).*"确认开发方案".*"确认拆分方案";/);
   assert.match(card, /className="chain-decision-facts"/);
   assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
     "阶段数和左侧图共用同一个拓扑函数");
@@ -519,7 +519,7 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   // 工具类卡壳;契约锚转向 aria-labelledby(仍是同一块记忆区)。
   assert.match(footprint, /aria-labelledby="knowledge-memories-title"/);
   assert.match(footprint, /查看经验沉淀/);
-  assert.match(footprint, /experience=1/);
+  assert.match(footprint, /kbPage=experience/);
   assert.doesNotMatch(footprint, /reviewTaskMemory|withdrawTaskMemory/, "审查操作集中于团队资产");
   const workspace = readFileSync(join(process.cwd(), "web/src/TaskWorkspace.tsx"), "utf-8");
   // 2026-09-03 第二期(1553e0d)把任务页的沉淀入口连同导航条数一起砍掉:
@@ -535,7 +535,7 @@ test("任务记忆兼容契约:取消批注去向选择，保留历史记忆列�
   assert.match(memory, /appendFileSync\(this\.indexPath/, "索引只追加");
 });
 
-test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、这单用到的只读", () => {
+test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发助手、首改目录钩子、知识使用记录只读", () => {
   const service = readFileSync(join(process.cwd(), "src/taskService.ts"), "utf-8");
   assert.equal((service.match(/memoryContext: \(\) => this\.taskMemoryContext\(task\)/g) ?? []).length, 2,
     "主会话与开发助手通过独立工厂接入每轮记忆");
@@ -549,7 +549,7 @@ test("任务记忆第二期契约:sidecar 可选、工具挂主会话与开发�
   const serve = readFileSync(join(process.cwd(), "src/executionRuntime.ts"), "utf-8");
   assert.match(serve, /flag\("--memsearch"\)/);
   const footprint = readFileSync(join(process.cwd(), "web/src/KnowledgeFootprint.tsx"), "utf-8");
-  assert.match(footprint, /这单用到的/);
+  assert.match(footprint, /知识使用记录/);
   assert.match(footprint, /listTaskMemoryUsage\(taskId\)/);
   const server = readFileSync(join(process.cwd(), "src/server.ts"), "utf-8");
   assert.match(server, /parts\[3\] === "usage"/);

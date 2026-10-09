@@ -20,7 +20,7 @@ test("删除运行与排队任务：中止执行、拒绝迟到写入、重启�
     return "迟到的回复";
   });
   try {
-    const first = service.create(config, "user"), second = service.create(config, "user"), queued = service.create(config, "user");
+    const first = service.create({ ...config, title: "运行任务一" }, "user"), second = service.create({ ...config, title: "运行任务二" }, "user"), queued = service.create({ ...config, title: "排队任务" }, "user");
     await wait(() => executions.length === 2);
     assert.equal(service.get(queued.id).status, "queued");
     assert.deepEqual(service.remove(queued.id, "user"), { deleted: true });
@@ -55,8 +55,9 @@ test("归档中拒绝删除，完成后删除保留 MR 和草稿来源", async (
   });
   try {
     const job = service.create(config, "user"); await wait(() => service.get(job.id).status === "done");
-    const publication = service.publish(job.id, "user"); await wait(() => started);
-    assert.throws(() => service.remove(job.id, "user"), /正在归档/); assert.equal(service.list().length, 1);
+    await service.publish(job.id, "user");
+    const publication = service.createArchive(job.id, { issue_no: "REQ-delete", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user"); await wait(() => started);
+    assert.throws(() => service.remove(job.id, "user"), /正在发布或归档/); assert.equal(service.list().length, 1);
     finish(); await publication;
     assert.deepEqual(service.remove(job.id, "user"), { deleted: true });
     execution!.update({ stage: "已结束任务的迟到写入" }); execution!.evidence({ tool: "late" });

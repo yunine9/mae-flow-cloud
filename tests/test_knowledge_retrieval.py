@@ -62,4 +62,30 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
         hits = await self.run_search('问题', [self.hit('a', .4, '候选')], [], {'a': {}}, model='another-model')
         self.assertEqual(len(hits), 1)
 
+
+class IndexReplacementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reindex_drops_stale_titles_only_after_success(self):
+        import tempfile
+        if importlib.util.find_spec('memsearch') is None:
+            self.skipTest('requires memsearch environment')
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'guide.md'
+            path.write_text('# 手册\n\n## 规则\n必须关闭自有句柄。\n\n## 例外\n借用句柄不能关闭。')
+            embedded=[];deleted=[]
+            async def embed(chunks):
+                embedded.extend(chunks)
+                return len(chunks)
+            store=SimpleNamespace(hashes_by_source=lambda _: {'old-title','old-body'},delete_by_hashes=lambda hashes:deleted.extend(hashes))
+            ms=SimpleNamespace(_embedder=SimpleNamespace(model_name='test'),_store=store,_embed_and_store=embed)
+            await m.index_document(ms,path)
+            self.assertEqual(set(deleted),{'old-title','old-body'})
+            self.assertEqual(len(embedded),2)
+            self.assertTrue(all(c.heading.startswith('手册 > ') for c in embedded))
+            self.assertEqual(embedded[0].content.split('\n',2)[2], '\n'.join(path.read_text().splitlines()[embedded[0].start_line-1:embedded[0].end_line]))
+            deleted.clear()
+            async def fail(_):raise RuntimeError('embedding unavailable')
+            ms._embed_and_store=fail
+            with self.assertRaises(RuntimeError):await m.index_document(ms,path)
+            self.assertEqual(deleted,[])
+
 if __name__ == '__main__': unittest.main()

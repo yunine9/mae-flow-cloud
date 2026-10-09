@@ -895,8 +895,8 @@ export function GitDiff({
               <Button type="button" variant="outline" size="sm" aria-expanded={!treeHidden}
                 onClick={() => setTreeHidden(value => !value)}>{treeHidden ? "展开目录" : "收起目录"}</Button>
               <div className="diff-view-toggle" aria-label="差异显示方式">
-                <button type="button" aria-pressed={!unified} onClick={() => setUnified(false)}>左右对比</button>
-                <button type="button" aria-pressed={unified} onClick={() => setUnified(true)}>上下对比</button>
+                <Button type="button" variant="ghost" size="xs" className="h-auto" aria-pressed={!unified} onClick={() => setUnified(false)}>左右对比</Button>
+                <Button type="button" variant="ghost" size="xs" className="h-auto" aria-pressed={unified} onClick={() => setUnified(true)}>上下对比</Button>
               </div>
               {active && (active.additions > 0 || active.deletions > 0) && (
                 <small className={GIT.detailHeadStats}><b className={GIT.totalPlus}>+{active.additions}</b>

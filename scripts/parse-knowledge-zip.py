@@ -13,7 +13,6 @@ class BundleError(ValueError):
 
 def parse_bundle(path):
     sections, images, warnings = [], [], []
-    text_bytes = 0
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
         if len(entries) > 1000 or sum(i.file_size for i in entries) > 100 * 1024 * 1024:
@@ -45,9 +44,6 @@ def parse_bundle(path):
             if len(data) > 10 * 1024 * 1024:
                 raise BundleError("ZIP 内文件超过大小限制")
             if suffix in (".md", ".markdown", ".txt"):
-                text_bytes += len(data)
-                if text_bytes > 5 * 1024 * 1024:
-                    raise BundleError("ZIP 中文本总量不能超过 5 MiB")
                 try:
                     text = data.decode("utf-8-sig")
                     if "\x00" in text:
@@ -84,6 +80,7 @@ def parse_bundle(path):
                 images.append({"id": asset_id, "path": name, "mimeType": mime, "bytes": len(data)})
     result = {"sections": sections, "images": images, "warnings": warnings}
     output = json.dumps(result, ensure_ascii=False)
-    if len(output.encode()) > 6 * 1024 * 1024:
+    # 文本按片段读取；解析预算与 100 MiB 解压上限配套，另留 JSON 定位信息的空间。
+    if len(output.encode()) > 128 * 1024 * 1024:
         raise BundleError("ZIP 解析结果过大，请拆成多个资料包")
     return output

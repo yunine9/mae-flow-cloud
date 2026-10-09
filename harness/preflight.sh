@@ -227,7 +227,9 @@ DRILL_ARGS=()
 [ -n "$MEMSEARCH" ] && [ -x "$MEMSEARCH" ] && DRILL_ARGS+=(--memsearch "$MEMSEARCH")
 [ -n "$MODELS" ] && DRILL_ARGS+=(--models "$MODELS")
 [ -n "$PROVIDER" ] && DRILL_ARGS+=(--provider "$PROVIDER")
-if npx tsx harness/memory-drill.ts "${DRILL_ARGS[@]}" > /tmp/preflight-memory-drill.log 2>&1; then
+# macOS 自带 bash 3.2 在 set -u 下展开空数组直接报 unbound variable(实测:不带参数跑到这里中断),
+# 用 ${arr[@]+...} 只在非空时展开。
+if npx tsx harness/memory-drill.ts ${DRILL_ARGS[@]+"${DRILL_ARGS[@]}"} > /tmp/preflight-memory-drill.log 2>&1; then
   ok "4.8 记忆三期链路($(tail -1 /tmp/preflight-memory-drill.log))"
 else
   bad "4.8 记忆三期链路演练失败(日志 /tmp/preflight-memory-drill.log)"

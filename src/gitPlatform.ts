@@ -97,6 +97,7 @@ export class FakeGitPlatform {
   discussionListFailures = 0;
   /** 假平台也兑现幂等键，覆盖“远端成功、本地来不及记账”的重放窗。 */
   private readonly discussionReplyIdempotency = new Set<string>();
+  private readonly discussionReplyHolds = new Map<string, Promise<void>>();
   /** 冲突门禁:true=conflict_passed 不过(真件由平台判,假件测试拨)。 */
   conflictGate = false;
   /** 等人类门禁覆盖(approvers_passed 等):不设=通过。
@@ -277,7 +278,16 @@ export class FakeGitPlatform {
                 .map(({ replies: _r, resolved: _s, ...rest }) => rest) });
             }
           } else if (request.method === "POST" && replyMatch) {
-            reply(200, this.replyDiscussion(replyMatch[1], body));
+            const hold = this.discussionReplyHolds.get(replyMatch[1]);
+            if (hold) {
+              // 只扣住一次：放行后同讨论的后续回复照常即时应答。
+              this.discussionReplyHolds.delete(replyMatch[1]);
+              const id = replyMatch[1];
+              void hold.then(() => {
+                try { reply(200, this.replyDiscussion(id, body)); }
+                catch (error) { reply(400, { error: String(error) }); }
+              });
+            } else reply(200, this.replyDiscussion(replyMatch[1], body));
           } else if (request.method === "POST"
               && /^\/mr\/discussions\/([^/]+)\/resolve$/.test(url.pathname)) {
             // 仅标已解决、不跟帖(问题流「忽略」,2026-09-18)。
@@ -431,6 +441,14 @@ export class FakeGitPlatform {
     if (idempotencyKey) this.discussionReplyIdempotency.add(idempotencyKey);
     if (body.resolve === true) discussion.resolved = true;
     return { ok: true };
+  }
+
+  /** 测试注入:扣住下一次对该讨论的回复应答,直到调用返回的 release——用来撑开
+   *  "发送在途时别处往信箱追加"的竞态窗口。 */
+  holdNextDiscussionReply(id: string): () => void {
+    let release!: () => void;
+    this.discussionReplyHolds.set(id, new Promise<void>((resolve) => { release = resolve; }));
+    return release;
   }
 
   failNextDiscussionReplies(id: string, count = 1): void {

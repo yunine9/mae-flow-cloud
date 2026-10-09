@@ -226,6 +226,43 @@ test("HTTP 头名常量允许整包上传，仍扫描后续凭据并保持错误
     `${headers}\n-----BEGIN PRIVATE KEY-----`)), /私钥块/);
 });
 
+test("头名例外只匹配完整常量声明，不能放行形似头名的密码或值前缀", () => {
+  for (const header of ['X_ACCESS_TOKEN = "x-access-token"',
+    'const X_ACCESS_TOKEN = "X-Access-Token";', 'API_KEY = \'x-api-key\'',
+    '{"X_API_KEY":"X-API-Key"}']) {
+    assert.doesNotThrow(() => scanForSecrets("headers.md", Buffer.from(header)), header);
+  }
+  const secrets = ['password = "correct-horse-battery-staple"',
+    'PASSWORD = "x-access-token"', 'secret = "x-api-key"',
+    'api_key = "x-api-key"', 'OTHER_TOKEN = "x-access-token"',
+    'X_ACCESS_TOKEN = "x-access-token$private"',
+    'X_ACCESS_TOKEN = "x-access-token!private"',
+    'X_ACCESS_TOKEN = "x-access-token" + privateSuffix',
+    'X_ACCESS_TOKEN = "x-access-token""private"',
+    'X_ACCESS_TOKEN = x-access-token'];
+  for (const secret of secrets) {
+    for (const text of [secret, `API_KEY = "x-api-key"\n${secret}`, `${secret}\nAPI_KEY = "x-api-key"`]) {
+      assert.throws(() => scanForSecrets("mixed.md", Buffer.from(text)), SkillLibraryError, secret);
+    }
+  }
+});
+
+test("真实上传拒绝连字符口令，失败更新和待审提交均不留下可读凭据", async () => {
+  const dataDir = mfcTemp("mfc-skill-secret-phrase-");
+  const safe = skillMd("请求头", 'X_ACCESS_TOKEN = "x-access-token"');
+  await uploadHostSkill(dataDir, "header-guide", [{path:"SKILL.md",content_base64:encode(safe)}], "admin", ENGINEERING_METADATA);
+  const before = readHostSkillDocument(dataDir, "header-guide").content;
+  const unsafe = [
+    {path:"SKILL.md",content_base64:encode(safe)},
+    {path:"references/config.md",content_base64:encode('password = "correct-horse-battery-staple"')},
+  ];
+  await assert.rejects(uploadHostSkill(dataDir, "header-guide", unsafe, "admin", ENGINEERING_METADATA), SkillLibraryError);
+  assert.equal(readHostSkillDocument(dataDir, "header-guide").content, before);
+  assert.equal(existsSync(join(dataDir,"skills","header-guide","references","config.md")),false);
+  await assert.rejects(submitHostSkill(dataDir, "new-guide", unsafe, "member", ENGINEERING_METADATA), SkillLibraryError);
+  assert.equal(listSkillSubmissions(dataDir).length,0);
+});
+
 test("fail-closed:密钥、密钥容器文件名、坏 frontmatter、路径越界都拒收且不落盘", async () => {
   const dataDir = mfcTemp("mfc-skill-guard-");
   const cases: Array<{ why: RegExp; files: Parameters<typeof uploadHostSkill>[2] }> = [
@@ -318,7 +355,7 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
       && /版本号不合法/.test(error.message));
 });
 
-test("路由权限:登录成员共同维护;留痕带操作人", async () => {
+test("B1验收1：Skill 提交审查是唯一上架入口，直传与旧语言动作退役", async () => {
   const dir = mfcTemp("mfc-skill-route-");
   const dataDir = join(dir, "data");
   const auth = new LocalAuth(join(dir, "auth.json"));
@@ -348,12 +385,21 @@ test("路由权限:登录成员共同维护;留痕带操作人", async () => {
       technologies: ["cpp"], files: [
       { path: "SKILL.md", content_base64: encode(skillMd("路由演练")) },
     ] });
-    const denied = await fetch(`${base}/skills/route-demo`, {
-      method: "PUT", headers: { cookie: dev }, body: payload,
+    for (const cookie of [dev, boss]) {
+      const direct = await fetch(`${base}/skills/route-demo`, {
+        method: "PUT", headers: { cookie }, body: payload,
+      });
+      assert.equal(direct.status, 404, "直传入口退役，管理员也不能绕过审查");
+    }
+    const pending = await fetch(`${base}/skills/route-demo/submissions`, {
+      method: "POST", headers: { cookie: dev }, body: payload,
     });
-    assert.equal(denied.status, 200, "团队成员可以维护知识 Skill");
-    const accepted = await fetch(`${base}/skills/route-demo`, {
-      method: "PUT", headers: { cookie: boss }, body: payload,
+    assert.equal(pending.status, 200);
+    const submission = await pending.json() as { id: string };
+    assert.equal(listHostSkillShelf(dataDir).skills.length, 0,
+      "提交草稿只进入待审区，不能直接上架");
+    const accepted = await fetch(`${base}/skills/route-demo/submissions/${submission.id}/approve`, {
+      method: "POST", headers: { cookie: boss },
     });
     assert.equal(accepted.status, 200);
 
@@ -396,8 +442,8 @@ test("路由权限:登录成员共同维护;留痕带操作人", async () => {
       method: "PATCH", headers: { cookie: boss },
       body: JSON.stringify({ languages: ["agnostic", "java"] }),
     });
-    assert.equal(badLegacyTags.status, 400,
-      "旧语言接口也不能制造含混分类");
+    assert.equal(badLegacyTags.status, 404,
+      "旧语言编辑动作已退役");
 
     const coupled = await fetch(`${base}/skills/route-demo/classification`, {
       method: "PATCH", headers: { cookie: boss },
@@ -419,9 +465,9 @@ test("路由权限:登录成员共同维护;留痕带操作人", async () => {
       "业务型 Skill 不能挂到不存在的模块");
     assert.match(await unknownModule.text(), /没有业务模块/);
 
-    const badUpload = await fetch(`${base}/skills/route-demo`, {
-      method: "PUT", headers: { cookie: boss },
-      body: JSON.stringify({ files: [{ path: "SKILL.md",
+    const badUpload = await fetch(`${base}/skills/route-demo/submissions`, {
+      method: "POST", headers: { cookie: boss },
+      body: JSON.stringify({ ...ENGINEERING_METADATA, files: [{ path: "SKILL.md",
         content_base64: encode(skillMd("坏的", "token = ghp_abcdefghijkl")) }] }),
     });
     assert.equal(badUpload.status, 400, "掩码扫描把关在路由上同样生效");
@@ -434,15 +480,16 @@ test("路由权限:登录成员共同维护;留痕带操作人", async () => {
       { headers: { cookie: dev } })).json() as {
         versions: Array<{ version_id: string }>;
       };
-    assert.equal(versions.versions.length, 3,
-      "成员更新、改分类与下线都形成独立可回退版本");
+    assert.equal(versions.versions.length, 2,
+      "审查上架后，改分类与下线都形成独立可回退版本");
     const rollback = await fetch(`${base}/skills/route-demo/rollback`, {
       method: "POST", headers: { cookie: boss },
       body: JSON.stringify({ version: versions.versions[0].version_id }),
     });
     assert.equal(rollback.status, 200, "下线可以按版本痕回退");
   } finally {
-    server.close();
+    await service.shutdown();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

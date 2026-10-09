@@ -1,4 +1,4 @@
-> 平台适配：本文中的 `_work/`、`spec` 和输出文件是研究内容的组织说明。实际任务从当前上下文与 `knowledge_work` 读取；中间发现用 `knowledge_work_result` 保存，最终正文用 `knowledge_draft` 保存到平台给出的目标和 docs_path。不得自行写本地文件。输出协议以 [平台执行协议](platform-pipeline.md) 为准。
+> 通过 step.instructions 与 knowledge_work 读取本步骤的范围、问题和已有结果；中间内容保存到 knowledge_work_result.data，最终文档通过 knowledge_draft 保存。下面的 knowledge/ 和 repos/ 是相对平台归档目标的文档组织，不是本机目录。工具参数见 [平台工具接口](platform-pipeline.md)。
 
 # 评审阶段：独立、挑剔地评审一份产出
 
@@ -9,8 +9,8 @@
 ## 输入
 
 - 被评审的文件（提示中列出）。
-- 被评审任务的 spec：其中的 questions（hop 的 `hop.questions`、cross 的 `item.questions`）是这份产出必须回应的。
-- 确定性引用校验结果 `_work/refcheck/<任务id>.json`：其中每个 error 都必须作为问题列出。
+- 被评审任务说明：其中的 questions（hop 的 `hop.questions`、cross 的 `item.questions`）是这份产出必须回应的。
+- 调用 knowledge_source_check 检查作者 sources 与 data.findings 中的代码引用，逐项处理返回的错误。
 - 对 hop 任务，可以查看 findings 了解证据来源。
 
 ## 评审步骤
@@ -18,12 +18,12 @@
 **第一步：硬性检查（任何一项不满足即 revise）**
 
 1. 引用校验 errors 为 0。
-2. 每条事实性陈述都有出处（代码引用、〔文档〕、〔问答〕、〔提交〕），或明确标注为推断并给出依据。
-3. spec 中的每个问题，要么在文中回答，要么出现在待确认问题中，没有被静默跳过。
+2. 每条事实都能在作者 sources 或 data.findings 中找到依据；正文中的推断明确说明适用限制，内部引用编号不进入正文。
+3. 步骤说明中的每个问题，要么在文中回答，要么出现在待确认问题中，没有被静默跳过。
 4. 没有复述业务文档（功能介绍、操作步骤、参数说明）。
 5. 没有可以直接从代码读出的填充内容：目录/文件/函数清单、签名罗列、逐行流程叙述。
 6. 没有空泛表述（"相关模块""进行处理""等等""负责管理"之类）。
-7. 最终文档（knowledge/、repos/ 下）有完整 frontmatter。
+7. 最终文档独立可读，无生成者、草稿状态、证据编号和执行过程。
 
 **第二步：抽查证据真实性（必须亲自做）**
 
@@ -38,11 +38,12 @@
 - `pass`：硬性检查全部满足，抽查无误，价值检查没有重大问题。
 - `revise`：其他所有情况。
 
-## 产出：评审结果 JSON（路径见提示）
+## 产出：knowledge_work_result.data
 
 ```json
 {
-  "verdict": "revise",
+  "pass": false,
+  "feedback": "需要作者处理的具体问题",
   "summary": "一两句话总体评价",
   "spot_checks": [
     {"ref": "backend:src/son/mro/MroTask.cpp:120-168", "claim": "文中说法", "result": "属实 / 不符：……"}

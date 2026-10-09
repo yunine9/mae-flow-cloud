@@ -2,6 +2,7 @@ import { SessionCompaction } from "./sessionCompaction.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
 import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
 import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
+import type { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
 import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
 /**
@@ -54,7 +55,6 @@ import {
   type KnowledgeResourceRef,
 } from "./knowledgeTrace.ts";
 import type { MaterializedBusinessModuleKnowledge } from "./businessModuleRuntime.ts";
-import type { MaterializedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 import { materializeTaskKnowledgeIndex } from "./taskKnowledgeIndex.ts";
 import {
   createInspectImageTool,
@@ -427,11 +427,11 @@ export interface CloudSessionOptions {
   extraTools?: unknown[];
   /** 宿主的固定工作指令，主/子会话及恢复时都进入系统提示，不随对话压缩。 */
   additionalSystemInstructions?: readonly string[];
+  /** 组件新增代码检查；主、子和恢复会话共用，知识查询沿用 knowledge。 */
+  componentKnowledge?: ComponentKnowledgeConsumption;
   /** 创建任务时固定的业务模块知识。非 Skill 只进入统一轻量索引；
    * 正文保留为工作区文件，由 Agent 使用 Read/Grep 按需读取。 */
   businessModuleKnowledge?: MaterializedBusinessModuleKnowledge;
-  /** 已发布且与本任务画像匹配的团队工程文档、规则和示例；正文按需读。 */
-  engineeringKnowledge?: MaterializedEngineeringKnowledge;
   knowledgeTrace?: KnowledgeTrace;
   /** 上下文超限自愈用的锚点提供者(通常是内核现场 current/config)。
    * 不给就用需求原话兜底——锚永远来自权威,不由云端编造。 */
@@ -1085,8 +1085,6 @@ export class CloudSession {
           && /^name:\s*["']?mae-first-build["']?\s*$/m.test(readFileSync(skillPaths[i], "utf8"))) skillPaths.splice(i, 1);
       }
     }
-    const engineeringKnowledgeEntries = (this.options.engineeringKnowledge?.entries ?? [])
-      .filter((item) => existsSync(item.path) && statSync(item.path).isFile());
     const businessModuleKnowledge = this.options.businessModuleKnowledge;
     const moduleKnowledgeEntries = (businessModuleKnowledge?.entries ?? [])
       .filter((item) => {
@@ -1098,26 +1096,11 @@ export class CloudSession {
       });
     const knowledgeIndex = materializeTaskKnowledgeIndex({
       workspace,
-      engineeringKnowledge: engineeringKnowledgeEntries,
       businessKnowledge: moduleKnowledgeEntries,
     });
     for (const warning of knowledgeIndex.warnings) {
       this.options.log?.(
         `[task-knowledge-index] 任务 ${this.options.taskId}: ${warning}`);
-    }
-    for (const item of engineeringKnowledgeEntries) {
-      const resource: KnowledgeResourceRef = {
-        id: item.id,
-        kind: item.form === "rule" ? "rules" : "document",
-        name: item.title,
-        path: item.relative_path,
-        description: item.summary,
-        digest: item.digest,
-        selected: true,
-        scope: "team",
-      };
-      this.options.knowledgeTrace?.register(item.path, resource);
-      this.options.knowledgeTrace?.record("available", config.sessionId, resource);
     }
     for (const item of moduleKnowledgeEntries) {
       const resource: KnowledgeResourceRef = {
@@ -1229,12 +1212,16 @@ export class CloudSession {
             pi.on("tool_call", async (event: any) =>
               this.onToolCall(config.sessionId, event));
             pi.on("tool_result", async (event: any) => {
+              const componentNote = await this.options.componentKnowledge?.afterTool(
+                TOOL_NAME_MAP[event.toolName] ?? event.toolName, event.input ?? {},
+              ).catch(error => `组件使用检查未完成：${String(error)}`);
               try {
                 const note = await this.options.hostHooks?.toolResultNote?.({
                   name: TOOL_NAME_MAP[event.toolName] ?? event.toolName,
                   input: event.input ?? {},
                 });
-                if (note) return { content: [...event.content, { type: "text", text: note }] };
+                const notes = [note, componentNote].filter(Boolean);
+                if (notes.length) return { content: [...event.content, { type: "text", text: notes.join("\n\n") }] };
               } catch (error) {
                 this.kernelFailures.push(String(error));
                 return { content: [...event.content, { type: "text",
@@ -1751,7 +1738,7 @@ export class CloudSession {
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
         "子 Agent 不能提问、不能再派子 Agent。" +
-        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型与规范分析请派发 component-knowledge-agent，任务卡提供计划路径与代码入口。" : ""),
+        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型请派发 component-plan-agent 执行 component-plan Skill，任务卡提供计划路径与代码入口。" : ""),
       parameters: Type.Object({
         subagent_type: Type.String({
           description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",

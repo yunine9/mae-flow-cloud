@@ -1,7 +1,6 @@
 export type KnowledgeAssetFocus =
   | { kind: "business"; moduleId: string; assetId: string;
       version: number; digest: string }
-  | { kind: "engineering"; candidateId: string; digest: string }
   | { kind: "skill"; directory: string; digest: string;
       packageDigest: string };
 
@@ -25,9 +24,6 @@ export function knowledgeAssetPath(target: KnowledgeAssetFocus): string {
     query.set("module", target.moduleId);
     query.set("asset", target.assetId);
     query.set("version", String(target.version));
-    query.set("digest", target.digest);
-  } else if (target.kind === "engineering") {
-    query.set("asset", target.candidateId);
     query.set("digest", target.digest);
   } else {
     query.set("asset", target.directory);
@@ -54,9 +50,6 @@ export function readKnowledgeAssetFocus(
       ? { kind, moduleId, assetId: asset, version, digest: contentDigest }
       : undefined;
   }
-  if (kind === "engineering") {
-    return { kind, candidateId: asset, digest: contentDigest };
-  }
   if (kind === "skill") {
     const packageDigest = digest(query.get("package_digest"));
     return packageDigest
@@ -73,9 +66,12 @@ export function knowledgeAssetElementId(
   return `knowledge-${kind}-${parts.map(encodeURIComponent).join("-")}`;
 }
 
-/** An explicit subpage wins over remembered task IDs in the same URL. */
-export function knowledgeLibraryPage(search: string): "documents" | "component" | "domain" {
-  const query = new URLSearchParams(search), page = query.get("knowledgePage");
-  if (page === "documents" || page === "component" || page === "domain") return page;
-  return query.has("domainExtraction") ? "domain" : query.has("componentResearch") ? "component" : "documents";
+/** 萃取方法继续使用现有阅读页和平台 Skill 详情，不保留旧页面入口。 */
+export function extractionSkillSearch(search: string, kind: "component" | "domain"): string {
+  const query = new URLSearchParams(search);
+  for (const key of ["kbPage", "kbKind", "kbModule", "kbTask", "kbReview", "knowledgeDocument"]) query.delete(key);
+  query.set("kbPage", "module");
+  query.set("kbModule", "platform");
+  query.set("knowledgeDocument", `platform-skill-${kind}`);
+  return `?${query.toString()}`;
 }

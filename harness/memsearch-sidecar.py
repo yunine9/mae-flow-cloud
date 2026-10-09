@@ -128,6 +128,20 @@ class Sidecar:
                     await self.yield_reads()
         return {"ok": True, "chunks": count}
 
+    async def remove(self, req: dict) -> dict:
+        path = Path(str(req.get("path", ""))).expanduser().resolve()
+        if not path.is_relative_to(self.corpus / "_knowledge") or path.suffix != ".md":
+            raise ValueError("只能删除知识检索副本的索引")
+        # 宿主先删副本，避免排队的 ingest 或 reindex 将其重新写回。
+        if path.exists():
+            raise ValueError("请先删除知识检索副本")
+        hashes = list(self.ms._store.hashes_by_source(str(path)))
+        self.ms._store.delete_by_source(str(path))
+        if self.ms._store.hashes_by_source(str(path)):
+            raise RuntimeError("索引尚未删除完整，请重试")
+        getattr(self, "_indexed_files", {}).pop(str(path), None)
+        return {"ok": True, "chunks": len(hashes)}
+
     async def ensure_indexed(self, path: Path) -> int:
         stat = path.stat()
         fingerprint = (stat.st_mtime_ns, stat.st_size)

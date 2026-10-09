@@ -52,11 +52,11 @@ test("混合问题卡必须逐题完整作答", () => {
   assert.doesNotMatch(decisions, /optionsAllPicked\s*\|\|\s*freeAnswered/);
 });
 
-test("知识全文链接只接管普通点击，保留浏览器修饰键行为", () => {
+test("B1验收3：保留的知识全文链接只接管普通点击，保留浏览器修饰键行为", () => {
   assert.match(launch,
     /return !\(event\.metaKey \|\| event\.ctrlKey \|\| event\.shiftKey \|\| event\.altKey\)/);
   assert.equal((launch.match(/if \(!isPlainKnowledgeActivation\(event\)\) return;/g)
-    ?? []).length, 4, "完整清单和三类快捷知识都必须保留修饰键");
+    ?? []).length, 3, "完整清单、业务知识和 Skill 快捷入口都必须保留修饰键");
 });
 
 test("手工登记区分目录失败与空目录，并提供重试和真实必填口径", () => {

@@ -11,7 +11,7 @@ window.addEventListener("unhandledrejection", e => errors.push(String(e.reason))
 window.fetch = async input => {
   const path = String(input);
   let value: unknown;
-  if (path.endsWith("/artifacts")) value = published ? [{ name, kind: "doc", label: "交付摘要.md", bytes: 100, modified_at: "2026-09-19" }] : [];
+  if (/\/artifacts(?:\?|$)/.test(path)) value = published ? [{ name, kind: "doc", label: "交付摘要.md", bytes: 100, modified_at: "2026-09-19" }] : [];
   else if (path.includes("/artifacts/")) value = { content: "# 交付摘要\n首次交付快照\n```plantuml\n@startuml\nA -> B: 查询\n@enduml\n```\n## 测试情况\n空结果：未确认" };
   else if (path.endsWith("/conversation")) value = { items: [], problems: [] };
   else if (path.endsWith("/annotations")) value = { items: [], checks: [], closures: [] };

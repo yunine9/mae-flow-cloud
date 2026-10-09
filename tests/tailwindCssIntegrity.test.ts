@@ -142,8 +142,11 @@ test("tailwind.css:#257 终态——退役孤儿绝迹,preflight 基座在位", 
  *  >2,500 的目标经证据化 recalibration 判定不可达(余量属于 Out-of-scope
  *  的生成 DOM 皮肤与领域件皮,逐段普查见 #257 收口账),本棘轮防回涨。
  *  7615 → 7843:5625cc98 新增 .help-tip 组件类(帮助图标即时悬停提示)
- *  的正当余量,按本棘轮留痕条款上调。 */
-const TAILWIND_FINAL_LINES = 7843;
+ *  的正当余量,按本棘轮留痕条款上调。
+ *  7843 → 8422:9 月底知识工作室皮(3db3fe9b、ad232cd5 并入共享样式)提交时
+ *  已到 8197 行却没同步上调;2026-10 知识库新前台的五个独立样式文件按
+ *  "只留 tailwind.css"约定并回(+225 行)。两笔都是知识库页面的正当余量。 */
+const TAILWIND_FINAL_LINES = 8422;
 const cssRaw = readFileSync(cssPath, "utf8");
 
 test("tailwind.css:终态行数棘轮——只许更少不许回涨", () => {

@@ -237,6 +237,7 @@ test("grill/build 多次 end_turn 只会停机，绝不能强行完成或交付"
     const { root, cwd, kernelRoot } = fixture(current, false);
     const service = serviceFor(root, kernelRoot);
     const task = taskState(root, cwd);
+    (service as any).tasks.set(task.summary.id, task);
     let continues = 0;
     task.driver = {
       takeUndeliveredSteers: () => [],
@@ -263,6 +264,7 @@ test("external_verify 的 end_turn 是宿主等待，不催 Agent 也不 complet
   const { root, cwd, kernelRoot } = fixture("external_verify", true);
   const service = serviceFor(root, kernelRoot);
   const task = taskState(root, cwd);
+  (service as any).tasks.set(task.summary.id, task);
   let continues = 0;
   task.driver = {
     takeUndeliveredSteers: () => [],
@@ -347,6 +349,7 @@ for (const failure of [undefined, `${KERNEL_UNAVAILABLE}：测试故障`]) {
     const { root, cwd, kernelRoot } = fixture("external_verify", true);
     const service: any = serviceFor(root, kernelRoot);
     const task = taskState(root, cwd);
+    (service as any).tasks.set(task.summary.id, task);
     task.summary.delivery = { loop: { kind: "ci", review_source: "platform" } };
     task.driver = { takeUndeliveredSteers: () => [], finalReply: () => "已完成",
       dispose: () => {}, continueWith: () => { assert.fail("不能因基础设施故障叫 Agent 补回执"); } };

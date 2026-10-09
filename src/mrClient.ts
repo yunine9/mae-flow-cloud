@@ -8,6 +8,9 @@
  * 请求体会被外部动作台账记进投影),90s 预算,错误带状态码上浮。
  */
 
+import { readMrFailureBody } from "./mrGateClient.ts";
+import { knowledgeHttpFailure } from "./knowledgeProductionErrors.ts";
+
 export interface MergeRequestCredential {
   username: string;
   password: string;
@@ -25,6 +28,9 @@ export interface MergeRequestCall {
   credential?: MergeRequestCredential;
   timeoutMs?: number;
   purpose?: "knowledge";
+  /** 知识发布显式启用；共享客户端的原默认行为保持不变。 */
+  signal?: AbortSignal;
+  includeFailureMetadata?: boolean;
 }
 
 export interface MergeRequestReceipt {
@@ -64,7 +70,9 @@ export async function createMergeRequest(
   }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), call.timeoutMs ?? 90_000);
+  const signal = call.signal ? AbortSignal.any([controller.signal, call.signal]) : controller.signal;
   try {
+    if (call.signal || call.includeFailureMetadata) signal.throwIfAborted();
     const response = await fetch(`${call.platformUrl.replace(/\/+$/, "")}/mr`, {
       method: "POST",
       headers,
@@ -76,14 +84,24 @@ export async function createMergeRequest(
         ...(call.dtsNo ? { dts_no: call.dtsNo } : {}),
         ...(call.purpose ? { purpose: call.purpose } : {}),
       }),
-      signal: controller.signal,
+      signal,
     });
+    if (call.signal || call.includeFailureMetadata) signal.throwIfAborted();
     if (!response.ok) {
+      if (call.includeFailureMetadata) {
+        const failure = knowledgeHttpFailure(response, `MR 创建失败 HTTP ${response.status}`);
+        const detail = await readMrFailureBody(response, signal).catch(error => error instanceof Error ? error.message : String(error));
+        signal.throwIfAborted();
+        failure.message += detail ? `: ${detail}` : "";
+        throw failure;
+      }
       const text = await response.text().catch(() => "");
+      call.signal?.throwIfAborted();
       throw new Error(`MR 创建失败 HTTP ${response.status}`
         + (text ? `: ${text.slice(0, 300)}` : ""));
     }
     const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (call.signal || call.includeFailureMetadata) signal.throwIfAborted();
     const url = String(body.url ?? "");
     if (!url) {
       throw new Error(`平台返回里没有 MR 链接(url): ${JSON.stringify(body).slice(0, 300)}`);

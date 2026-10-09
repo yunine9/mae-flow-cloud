@@ -39,7 +39,7 @@ test("无线豆包实际响应有引用编号，重启后原文可分页回查�
     const tool = wxdoubaoTool(new AbortController().signal, event => {
       const id = businessKnowledgeEvidenceId(event); records.push({ ...event, evidence_id: id }); return id;
     }, { evidencePaging: true });
-    const response = await tool.execute("query", { tool: "knowledge_search", question: "为什么月底不能立即取消" }, undefined, undefined, {} as never);
+    const response = await tool.execute("query", { question: "为什么月底不能立即取消" }, undefined, undefined, {} as never);
     const data = JSON.parse((response.content[0] as { text: string }).text); assert.ok(data.evidence_id);
     assert.equal(data.content.length, 8000); assert.equal(data.next_start, 8001); assert.equal(data.data, undefined);
     const restored = JSON.parse(JSON.stringify(records)), read = knowledgeEvidenceTool(() => restored);
@@ -50,10 +50,9 @@ test("无线豆包实际响应有引用编号，重启后原文可分页回查�
     const next = parse(await read.execute("page", { evidence_id: data.evidence_id, start: first.next_start, count: 100 }, undefined, undefined, {} as never));
     assert.equal(next.content.length, 100); assert.equal(next.query.question, "为什么月底不能立即取消");
     writeFileSync(executable, `#!${process.execPath}\nconsole.log(JSON.stringify({result:{structuredContent:[]}}));`, { mode: 0o700 });
-    const empty = parse(await tool.execute("empty", { tool: "knowledge_search", question: "暂无资料" }, undefined, undefined, {} as never));
+    const empty = parse(await tool.execute("empty", { question: "暂无资料" }, undefined, undefined, {} as never));
     assert.equal(empty.state, "empty"); assert.equal(empty.evidence_id, undefined);
     assert.equal(businessKnowledgeEvidenceId({ tool: "business_knowledge", status: "failed" }), undefined);
-    assert.equal(businessKnowledgeEvidenceId({ tool: "business_knowledge", action: "ar_mr_diff", status: "available", result: "代码补丁" }), undefined, "代码差异不是业务意图的来源");
   } finally {
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
     rmSync(root, { recursive: true, force: true });
@@ -67,8 +66,7 @@ test("共享资料目录按内容检索、去重和分页，只有回读检索�
     { tool: "business_knowledge", action: "knowledge_search", status: "available", evidence_id: "new", query: { question: "结算取消" }, result: { text: "更新后的规则，关联 AR123" }, at: "2026-09-22" },
     { tool: "knowledge_evidence", action: "read", status: "returned", evidence_id: "new" },
     { tool: "business_knowledge", action: "knowledge_search", status: "empty", query: { question: "其他规则" } },
-    { tool: "business_knowledge", action: "ar_fur_info", status: "failed", error: "身份不匹配", error_code: "authentication" },
-    { tool: "business_knowledge", action: "ar_mr_diff", status: "available", result: "辅助代码，AR123" },
+    { tool: "business_knowledge", action: "knowledge_search", status: "failed", error: "身份不匹配", error_code: "authentication" },
     { tool: "knowledge_material", status: "returned", evidence_id: "material", material_id: "m1", locations: ["章节 1"] },
   ];
   const reads: Array<Record<string, unknown>> = [], tool = knowledgeEvidenceTool(() => JSON.parse(JSON.stringify(records)), e => reads.push(e));

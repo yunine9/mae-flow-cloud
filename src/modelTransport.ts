@@ -17,6 +17,10 @@
  * 由 pi 的错误路径如实收口。10 分钟是"已知失败区间的两倍",不是上限的证明。
  */
 import { Agent } from "undici";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 export const MODEL_STREAM_IDLE_TIMEOUT_MS = 600_000;
 
@@ -52,4 +56,53 @@ export function withModelTransport<T extends StreamRuntime>(
   runtime.streamSimple = (model, context, options) =>
     streamSimple(model, context, { ...(options ?? {}), fetch: options?.fetch ?? fetch });
   return runtime;
+}
+
+/** 单发无工具补全。超时即弃,不做任何重试——起草是旁路,人可以再点。 */
+export async function draftWithModel(input: {
+  modelsJson: Record<string, unknown>;
+  provider: string;
+  model: string;
+  system: string;
+  user: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const agentDir = mkdtempSync(join(tmpdir(), "mfc-model-reply-"));
+  try {
+    writeFileSync(join(agentDir, "models.json"),
+      JSON.stringify(input.modelsJson));
+    const runtime = await ModelRuntime.create({
+      modelsPath: join(agentDir, "models.json"),
+    });
+    const model = runtime.getModel(input.provider, input.model);
+    if (!model) {
+      throw new Error(
+        `models.json 里找不到模型 ${input.provider}/${input.model}`);
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(),
+      input.timeoutMs ?? 180_000);
+    try {
+      const reply = await runtime.completeSimple(model, {
+        systemPrompt: input.system,
+        messages: [{
+          role: "user", content: input.user, timestamp: Date.now(),
+        }],
+      }, { signal: controller.signal } as never);
+      const text = (reply.content ?? [])
+        .filter((item): item is { type: "text"; text: string } =>
+          (item as { type?: string }).type === "text")
+        .map((item) => item.text).join("\n").trim();
+      if (!text) {
+        throw new Error(
+          `模型没有返回草稿(stopReason=${String((reply as {
+            stopReason?: string }).stopReason ?? "?")})`);
+      }
+      return text;
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    rmSync(agentDir, { recursive: true, force: true });
+  }
 }

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, openSync, closeSync, rmSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 test("真实浏览器：工作过程、合并日志、终态弹窗回放、同号事件与阅读位置", {
@@ -21,15 +21,10 @@ test("真实浏览器：工作过程、合并日志、终态弹窗回放、同�
     writeFileSync(html, '<!doctype html><meta charset="utf-8"><style>' + css
       + '</style><div id="app" style="max-width:1200px;margin:30px auto"></div><pre id="result"></pre><script>'
       + built.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
-    const fd = openSync(dump, "w");
-    try {
-      execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+    
+    await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
         `--user-data-dir=${join(dir, "chrome")}`, "--window-size=1920,1080",
-        "--screenshot=/tmp/build-fix-progress.png", "--virtual-time-budget=6000", "--dump-dom", `file://${html}`],
-      { timeout: 20000, stdio: ["ignore", fd, "ignore"] });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-    } finally { closeSync(fd); }
+        "--screenshot=/tmp/build-fix-progress.png", "--virtual-time-budget=6000", "--dump-dom", `file://${html}`], dump);
     const raw = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
     assert.ok(raw, "browser did not finish");
     const result = JSON.parse(raw);

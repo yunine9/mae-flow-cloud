@@ -20,7 +20,14 @@
 
 代码可以靠 ZIP 带进去(内核快照在里面),但 `node_modules` **不在仓里**,
 必须能装出来。要装的东西:运行时 `@earendil-works/pi-coding-agent@0.84.1`、
-`pg`、`typebox`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
+`pg`、`typebox`、`@ast-grep/cli@0.45.3`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
+
+组件知识的新增代码检查在宿主使用随 npm 安装的 ast-grep，不依赖 Python 调度器。
+安装时保留 optionalDependencies，离线包需包含目标系统对应的 `@ast-grep/cli-*` 原生包。
+可用 `node_modules/.bin/ast-grep --version` 自检；工具缺失时页面显示“组件使用检查未完成”，不会伪造检查通过。
+组件知识工作台默认只记录候选，人工填写负责人、理由及路径范围后才提示；不阻断提交。
+策略及样本保存在数据目录 `component-governance/`，备份数据目录时一并保留。
+工作台可选择已有需求工作区抽取存量代码样本；独立反例研究仍需要可用的基础仓凭据、模型和 everycode。
 
 风险点是 `@earendil-works/pi-coding-agent` 未必在内网 npm 镜像里,而
 **`tsx` 是零构建的命门**——它依赖 esbuild,那是**平台专属二进制**。

@@ -72,6 +72,12 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
 - 测试即契约:真假件共同语义写在测试里;裁判尽量用真件(临时 PG
   集群、真 docker、真 kill -9),没有条件时**显式 skip 并明说**,
   静默跳过等于假装测过。
+- **本地验证只跑受影响的**(用户 2026-10-08:每次跑全量太影响交付效率):
+  改完跑 `npm run gate` + `npm run test:affected`,过了就提交推送;
+  `npm test` 全量与重仿真族交给 CI 三分片,不在每次改动后本地跑,
+  更不为复现偶发失败反复跑全量——给断言补上现场诊断,如实列进汇报。
+  真浏览器测试导出 DOM 一律走 `tests/fixtures/browserResultDump.ts`
+  (读到结果即收 Chrome),别再 execFileSync 干等超时。
 - 零构建:tsx 直跑,无 build 步;web/ 是唯一有构建的目录(Vite)。
   但零构建**不等于不查类型**:改完跑 `npm run typecheck`(tsx 不看
   类型,字段名写错会静默变 undefined——实测吃过亏)。
@@ -80,7 +86,8 @@ Mae-Flow 云端服务:pi(pi-mono)进程内集成 + Mae-Flow 内核宿主适配�
 ## 常用命令
 
 ```bash
-npm test                 # 快层默认(排除 delivery/mrLoop 等重仿真族;并发缺省 8,实测 20 路反慢且抖)
+npm run test:affected    # 本地默认:按 git 改动反查受影响测试(--base origin/main 对拍已提交改动,--dry 只列清单)
+npm test                 # 快层全量(约 3 分钟;排除 delivery/mrLoop 等重仿真族;平时交 CI)
 npm run test:full        # 全量(分钟级,重仿真族在此;平时交 CI 三分片,本地跑须闲时)
 npm run typecheck        # 零构建≠不查类型(tsx 不看类型,写错字段名会静默)
 npm run gate             # 推送闸门:typecheck+web 构建+秒级契约测试(hooksPath=.githooks 则 push 前自动跑)

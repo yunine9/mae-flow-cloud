@@ -23,7 +23,7 @@ import {
   MEMORY_DRAFT_BUDGET_MS, buildMemoryDraftPrompt, parseMemoryDraft,
   renderDirectoryDigestFallback,
 } from "../src/memoryDraft.ts";
-import { draftWithModel } from "../src/skillDistiller.ts";
+import { draftWithModel } from "../src/modelTransport.ts";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {
@@ -83,7 +83,9 @@ async function main(): Promise<void> {
     const before = memoryWeight(finalized, store.ledger.stats().get(record.id) ?? EMPTY_STATS);
     store.ledger.append({ kind: "rework", id: record.id, task: "drill-2", note: finalized.paths[0] });
     const after = memoryWeight(finalized, store.ledger.stats().get(record.id) ?? EMPTY_STATS);
-    assert(after < before, "返工没有压低权重");
+    // c28e4cfc 起"返工只记关联、不判定经验有害"：返工进效果账，但不再压低权重。
+    assert((store.ledger.stats().get(record.id) ?? EMPTY_STATS).reworks === 1, "返工没有记进效果账");
+    assert(after === before, "返工不应改变经验权重");
 
     // 3. 目录摘要兜底
     const many = Array.from({ length: 16 }, (_, index) => store.record({

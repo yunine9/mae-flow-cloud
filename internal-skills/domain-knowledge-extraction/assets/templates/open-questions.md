@@ -1,11 +1,3 @@
----
-title: 待专家确认问题清单
-type: open-questions
-related_code: []
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # 待专家确认问题清单
 
 <统计：问题总数 N；按模块与优先级的分布。>
@@ -16,7 +8,7 @@ status: draft
 
 ### 请教：<角色>
 
-#### [高] Q-<来源任务id>-<序号>
+#### [高] <业务问题标题>
 - 范围：<……>
 - 问题：<……>
 - 已知：<……>

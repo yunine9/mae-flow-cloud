@@ -1,51 +1,25 @@
-/**
- * 知识资产管理台:左列表 + 右详情的主从版式。
- *
- * 旧版把货架、待审提交、任务沉淀候选、上架表单、全文、历史版本、修订
- * 候选全部就地展开,一根竖轴越点越长(实测空态 928px,点两下表单 1526px,
- * 再展一份全文 1840px)。现在**左栏只负责"选哪一项",右栏负责"这一项的
- * 全部细节和动作"**:两栏各自滚动、页面高度不随点击变化。
- *
- * 三类东西共用一份列表是刻意的——它们是同一件事的三个阶段(已上架 /
- * 等着人裁决的提交 / 任务现场冒出来的候选),分成三张并列大卡片反而
- * 逼人在竖轴上找关系。
- *
- * #226 去 legacy:ka-* 容器配方整段退役,标记换 shadcn 组件
- * (Button/Badge/Empty/Alert/Spinner)+ 工具类;ka-list/ka-detail 的
- * 双栏各自限高滚动用 max-[1080px]: 变体直接表达(旧 @media 块同删)。
- */
+/** Skill 管理：已上架内容与待审提交在同一页维护，所有新包和更新都先提交审查。 */
 
 import { Markdown } from "./markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import {
-  adoptSkillCandidate,
   approveSkillSubmission,
-  discardSkillCandidate,
-  distillSkill,
   getBusinessModules,
-  getSkillCandidate,
   getSkillDocument,
   getSkillExtraction,
   getSkillLibrary,
-  listSkillCandidates,
   listSkillSubmissions,
   listSkillVersions,
-  listKnowledgeCandidates as listTaskKnowledgeCandidates,
   offlineSkill,
-  publishKnowledgeCandidate,
-  rejectKnowledgeCandidate,
   rejectSkillSubmission,
   rollbackSkill,
   startSkillExtraction,
   submitSkill,
   updateSkillKnowledgeMetadata,
-  uploadSkill,
   type BusinessModule,
   type HostSkillDocument,
   type HostSkillShelf,
-  type KnowledgeCandidateRecord,
-  type SkillCandidateRecord,
   type SkillExtractionJob,
   type SkillOperationRecord,
   type SkillSubmissionRecord,
@@ -73,7 +47,7 @@ import {
 import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Alert, AlertAction, AlertDescription } from "@/components/Alert";
+import { Alert, AlertAction } from "@/components/Alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -85,13 +59,8 @@ import { Spinner } from "@/components/Spinner";
 import { CircleOffIcon, PanelLeftIcon, SearchIcon } from "lucide-react";
 import { cn } from "cn";
 
-type EngineeringAssetFocus = Extract<KnowledgeAssetFocus,
-  { kind: "engineering" }>;
 type SkillAssetFocus = Extract<KnowledgeAssetFocus, { kind: "skill" }>;
 type SkillEntry = HostSkillShelf["skills"][number];
-
-const FORM_LABEL = { document: "文档", skill: "Skill", rule: "规则",
-  example: "示例" } as const;
 
 const OPERATION_LABEL: Record<SkillOperationRecord["action"], string> = {
   upload: "上架",
@@ -103,13 +72,12 @@ const OPERATION_LABEL: Record<SkillOperationRecord["action"], string> = {
   reject: "驳回",
 };
 
-/** 左栏分段。三段是同一条流水线的三个阶段,不是三个模块。 */
-type Segment = "shelf" | "submissions" | "candidates";
+/** 左栏区分正式 Skill 与待审提交。 */
+type Segment = "shelf" | "submissions";
 
 const SEGMENT_LABEL: Record<Segment, string> = {
   shelf: "已上架",
   submissions: "待审提交",
-  candidates: "任务沉淀",
 };
 
 /** 右栏在展示什么。上架表单和操作留痕也是"详情",不再挤进列表上方。 */
@@ -117,12 +85,11 @@ type Selection =
   | { kind: "none" }
   | { kind: "skill"; directory: string }
   | { kind: "submission"; directory: string; id: string }
-  | { kind: "candidate"; id: string }
   | { kind: "upload" }
   | { kind: "operations" };
 
 /** Skill 详情里的子页。旧版这些都是就地往下顶的折叠块。 */
-type DetailTab = "document" | "versions" | "revisions" | "metadata";
+type DetailTab = "document" | "versions" | "metadata";
 
 /** 行状态徽标词表(原 .ka-flag 色板 1:1 收编):危险=destructive、
  * 警示=warning、成功=success、弱化=neutral;性质词表对齐
@@ -243,11 +210,7 @@ function skillFlag(skill: SkillEntry): { tone: FlagTone; text: string;
 
 /** 共享版式:字段小标签 / 正文块 / 详情栏内边距。 */
 const FIELD_LABEL = "text-sm font-bold whitespace-nowrap text-muted-foreground";
-function DocBlock({ children }: { children: ReactNode }) {
-  return <pre className="max-h-[60vh] overflow-auto rounded-md border
-    border-line bg-muted p-3 font-mono text-xs/relaxed whitespace-pre-wrap
-    break-words">{children}</pre>;
-}
+
 function DetailPane({ id, children }: {
   id?: string;
   children: ReactNode;
@@ -279,8 +242,7 @@ function TrailRow({ children }: { children: ReactNode }) {
   </li>;
 }
 
-export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initialUpload = false,
-  onOpenTask }: {
+export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initialUpload = false }: {
   embedded?: boolean;
   initialUpload?: boolean;
   admin?: boolean;
@@ -291,16 +253,12 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   const canManageKnowledge = true;
   const skillFocus: SkillAssetFocus | undefined =
     initialAsset?.kind === "skill" ? initialAsset : undefined;
-  const engineeringFocus: EngineeringAssetFocus | undefined =
-    initialAsset?.kind === "engineering" ? initialAsset : undefined;
 
   // ---- 数据 ----
   const [library, setLibrary] = useState<
     HostSkillShelf & { operations: SkillOperationRecord[] }>();
   const [submissions, setSubmissions] = useState<SkillSubmissionRecord[]>([]);
   const [businessModules, setBusinessModules] = useState<BusinessModule[]>([]);
-  const [taskCandidates, setTaskCandidates] =
-    useState<KnowledgeCandidateRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -321,12 +279,6 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   const documentRequest = useRef(0);
   const [versions, setVersions] = useState<SkillVersionRecord[]>();
   const [versionsFor, setVersionsFor] = useState("");
-  const [revisions, setRevisions] = useState<SkillCandidateRecord[]>();
-  const [revisionsFor, setRevisionsFor] = useState("");
-  const [revisionOpen, setRevisionOpen] = useState("");
-  const [revisionDetail, setRevisionDetail] =
-    useState<{ skill: string; notes: string; evidence: string }>();
-  const [distilling, setDistilling] = useState(false);
   const [metadataDraft, setMetadataDraft] =
     useState<SkillMetadataDraft>({ ...EMPTY_SKILL_METADATA });
   const [confirmOffline, setConfirmOffline] = useState("");
@@ -366,12 +318,10 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
     listSkillSubmissions().then(setSubmissions).catch(() => undefined),
     getBusinessModules().then((data) => setBusinessModules(data.modules))
       .catch(() => undefined),
-    listTaskKnowledgeCandidates().then(setTaskCandidates)
-      .catch(() => undefined),
   ]).finally(() => setLoading(false));
   useEffect(() => { void refresh(); }, []);
 
-  const extractJobId = extractJob?.status === "running"
+  const extractJobId = extractJob && ["queued", "running"].includes(extractJob.status)
     ? extractJob.id : undefined;
   useEffect(() => {
     if (!extractJobId) return;
@@ -399,8 +349,6 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   const operations = library?.operations ?? [];
   const skills = shelf?.skills ?? [];
   const pendingSubmissions = submissions
-    .filter((item) => item.status === "pending");
-  const pendingCandidates = taskCandidates
     .filter((item) => item.status === "pending");
 
   const skillOf = (directory: string) => skills.find((item) =>
@@ -483,32 +431,12 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
     void loadDocument(skillFocus.directory, skillFocus);
   }, [skillFocus, library]);
 
-  useEffect(() => {
-    if (!engineeringFocus || loading) return;
-    setSegment("candidates");
-    const candidate = taskCandidates.find((item) =>
-      item.id === engineeringFocus.candidateId);
-    if (!candidate) {
-      setError("要核对的工程知识已不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
-      return;
-    }
-    setSelection({ kind: "candidate", id: engineeringFocus.candidateId });
-    if (candidate.digest !== engineeringFocus.digest) {
-      setError(`工程知识 ${candidate.title} 已发生变化（清单 ${
-        engineeringFocus.digest.slice(0, 8)}，当前 ${
-        candidate.digest.slice(0, 8)}）；已停止展开，不能把当前全文当作同一版本`);
-      return;
-    }
-    setError("");
-  }, [taskCandidates, engineeringFocus, loading]);
-
   // 深链落在列表深处时,左栏要把高亮行滚进视野;右栏在讲哪一项,左栏
   // 就得看得见哪一项,否则人会以为自己点错了。
   useEffect(() => {
     const id = selection.kind === "skill"
       ? knowledgeAssetElementId("skill", selection.directory)
-      : selection.kind === "candidate"
-        ? knowledgeAssetElementId("engineering", selection.id) : "";
+      : "";
     if (!id) return;
     requestAnimationFrame(() => globalThis.document.getElementById(id)
       ?.scrollIntoView({ block: "nearest" }));
@@ -520,7 +448,6 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
       await work();
       await refresh();
       if (versionsFor) setVersions(await listSkillVersions(versionsFor));
-      if (revisionsFor) setRevisions(await listSkillCandidates(revisionsFor));
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     } finally {
@@ -533,8 +460,10 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
     const encoded = await encodeUpload(list);
     if (target) {
       // 行内更新:目录已定,选完即提交。
-      await run(() => uploadSkill(
-        target, encoded.files, updateMetadataRef.current));
+      await run(async () => {
+        const record = await submitSkill(target, encoded.files, updateMetadataRef.current);
+        setNote(`已提交 ${record.directory} 的更新，审查通过后生效。`);
+      });
       return;
     }
     setPending({ files: encoded.files, skipped: encoded.skipped });
@@ -576,11 +505,6 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   const submitPackage = () => pending && void run(async () => {
     const metadata = skillMetadataInput(uploadClassification);
     if (!metadata) return;
-    if (canManageKnowledge) {
-      await uploadSkill(uploadName, pending.files, metadata);
-      finishUpload(`已上架 ${uploadName}，下一个匹配的任务即可装载。`);
-      return;
-    }
     const record = await submitSkill(uploadName, pending.files, metadata);
     finishUpload(`已提交待审(${record.directory}/${record.id}，`
       + `${record.files} 个文件)。管理员审核通过后即上架生效。`);
@@ -591,36 +515,10 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
     if (!metadata) return;
     const files: SkillUploadFile[] = [
       { path: "SKILL.md", content_base64: encodeText(draftText) }];
-    if (canManageKnowledge) {
-      await uploadSkill(uploadName, files, metadata);
-      finishUpload(`已上架 ${uploadName}，下一个匹配的任务即可装载。`);
-      return;
-    }
     const record = await submitSkill(uploadName, files, metadata);
     finishUpload(`已提交待审(${record.directory}/${record.id})。`
       + "管理员审核通过后即上架生效。");
   });
-
-  const canManageCandidate = (candidate: KnowledgeCandidateRecord) => canManageKnowledge
-    || candidate.nature === "business"
-      && candidate.business_module_ids.every((id) =>
-        businessModules.find((module) => module.id === id)?.can_manage);
-
-  const decideCandidate = async (candidate: KnowledgeCandidateRecord,
-    decision: "publish" | "reject") => {
-    setBusy(true); setError("");
-    try {
-      if (decision === "publish") {
-        await publishKnowledgeCandidate(candidate.id);
-      } else {
-        await rejectKnowledgeCandidate(candidate.id, rejectReason);
-        setRejectFor(""); setRejectReason("");
-      }
-      await refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "知识候选处理失败");
-    } finally { setBusy(false); }
-  };
 
   const languageCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -652,20 +550,13 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
       .toLowerCase().includes(term)));
   const visibleSubmissions = submissions.filter((item) => !term
     || `${item.directory} ${item.operator}`.toLowerCase().includes(term));
-  const visibleCandidates = taskCandidates.filter((item) =>
-    matchesFilters(item) && (!term
-      || `${item.title} ${item.summary} ${item.submitted_by}`
-        .toLowerCase().includes(term)));
-
   const counts: Record<Segment, number> = {
     shelf: skills.length,
     submissions: submissions.length,
-    candidates: taskCandidates.length,
   };
   const attention: Record<Segment, number> = {
     shelf: skills.filter((skill) => skillFlag(skill)).length,
     submissions: pendingSubmissions.length,
-    candidates: pendingCandidates.length,
   };
 
   const selectedSkill = selection.kind === "skill"
@@ -673,25 +564,11 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   const selectedSubmission = selection.kind === "submission"
     ? submissions.find((item) => item.id === selection.id
       && item.directory === selection.directory) : undefined;
-  const selectedCandidate = selection.kind === "candidate"
-    ? taskCandidates.find((item) => item.id === selection.id) : undefined;
-
   const openVersions = (directory: string) => void (async () => {
     setDetailTab("versions");
     if (versionsFor === directory && versions) return;
     setVersionsFor(directory); setVersions(undefined);
     try { setVersions(await listSkillVersions(directory)); }
-    catch (cause) {
-      setError(String(cause instanceof Error ? cause.message : cause));
-    }
-  })();
-
-  const openRevisions = (directory: string) => void (async () => {
-    setDetailTab("revisions");
-    setRevisionOpen(""); setRevisionDetail(undefined);
-    if (revisionsFor === directory && revisions) return;
-    setRevisionsFor(directory); setRevisions(undefined);
-    try { setRevisions(await listSkillCandidates(directory)); }
     catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause));
     }
@@ -778,7 +655,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
         <Button type="button" size="sm"
           variant={selection.kind === "upload" ? "secondary" : "default"}
           aria-pressed={selection.kind === "upload"} onClick={openUpload}>
-          {canManageKnowledge ? "上架 Skill" : "提交 Skill"}</Button>
+          提交 Skill</Button>
       </div>
     </div>}
 
@@ -795,7 +672,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
         "rounded-lg border border-line bg-surface shadow-(--shadow-xs)")}>
         <nav className="flex gap-0.5 border-b border-line px-1.5 pt-1.5"
           aria-label="资产阶段">
-          {(["shelf", "submissions", "candidates"] as const).map((value) =>
+          {(["shelf", "submissions"] as const).map((value) =>
             <button type="button" key={value}
               className={cn("-mb-px inline-flex min-h-8 items-center gap-1.5",
                 "border-b-2 px-2.5 text-sm font-bold transition-colors",
@@ -860,7 +737,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
               : shelf && !shelf.root_exists && !canManageKnowledge
                 ? "本部署尚未放置 Skill 形态知识。管理员上架后，匹配的新任务即可使用。"
                 : `货架是空的——${canManageKnowledge
-                  ? "点右上「上架 Skill」传入含 SKILL.md 的技能包。"
+                  ? "点右上「提交 Skill」导入含 SKILL.md 的技能包，审查通过后上架。"
                   : "管理员上架后,新任务即自动装载。"}`}</EmptyDescription></Empty>}
 
           {segment === "submissions" && visibleSubmissions.map((item) =>
@@ -895,38 +772,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
           {segment === "submissions" && !visibleSubmissions.length && !loading
             && <Empty className="border p-4"><EmptyDescription>还没有待审提交。开发者提交的技能包会先落在这里，管理员通过后才上架。</EmptyDescription></Empty>}
 
-          {segment === "candidates" && visibleCandidates.map((candidate) =>
-            <button type="button" role="listitem" key={candidate.id}
-              id={knowledgeAssetElementId("engineering", candidate.id)}
-              className={cn("grid w-full gap-1 rounded-md border border-transparent",
-                "p-2 text-left transition-colors hover:bg-muted",
-                selection.kind === "candidate"
-                  && selection.id === candidate.id
-                  && "border-primary/40 bg-primary/5")}
-              aria-current={selection.kind === "candidate"
-                && selection.id === candidate.id ? "true" : undefined}
-              onClick={() => { setSelection({ kind: "candidate",
-                id: candidate.id }); setRejectFor(""); setRejectReason(""); }}>
-              <span className="flex items-baseline gap-1.5">
-                <strong className="min-w-0 truncate text-sm font-semibold
-                  text-foreground">{candidate.title}</strong>
-                <Badge variant={FLAG_VARIANT[candidate.status === "pending"
-                  ? "attention" : candidate.status === "published"
-                    ? "success" : "muted"]}>{candidate.status === "pending"
-                  ? "待审核" : candidate.status === "published"
-                    ? "已发布" : "暂不接纳"}</Badge>
-              </span>
-              <span className="line-clamp-2 text-sm/relaxed
-                text-muted-foreground">{candidate.summary}</span>
-              <span className="flex flex-wrap gap-1">
-                <Badge variant={NATURE_VARIANT[candidate.nature]}>
-                  {candidate.nature === "business" ? "业务" : "工程"}</Badge>
-                <Badge variant="neutral">{FORM_LABEL[candidate.form]}</Badge>
-                <Badge variant="neutral">{candidate.submitted_by}</Badge>
-              </span>
-            </button>)}
-          {segment === "candidates" && !visibleCandidates.length && !loading
-            && <Empty className="border p-4"><EmptyDescription>还没有任务沉淀候选。开发者可在任务页提交，不会自动发布。</EmptyDescription></Empty>}
+
         </div>
       </div>}
 
@@ -935,12 +781,12 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
         {selection.kind === "none" && <Empty className="min-h-60 p-7">
           <EmptyMedia variant="icon"><PanelLeftIcon aria-hidden /></EmptyMedia>
           <EmptyTitle>从左边选一项</EmptyTitle>
-          <EmptyDescription>选中后这里显示它的全文、版本、修订候选和可做的动作；
+          <EmptyDescription>选中后这里显示它的全文、版本和可做的动作；
             页面不会再往下长。</EmptyDescription>
         </Empty>}
 
         {selection.kind === "upload" && <UploadPane
-          admin={canManageKnowledge} busy={busy}
+          busy={busy}
           modules={businessModules}
           classification={uploadClassification}
           onClassification={setUploadClassification}
@@ -1004,37 +850,6 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
           onVersions={() => openVersions(selection.directory)}
           onRollback={(versionId) => void run(() =>
             rollbackSkill(selection.directory, versionId))}
-          revisions={revisionsFor === selection.directory
-            ? revisions : undefined}
-          onRevisions={() => openRevisions(selection.directory)}
-          revisionOpen={revisionOpen} revisionDetail={revisionDetail}
-          onRevisionOpen={(id) => void (async () => {
-            if (revisionOpen === id) {
-              setRevisionOpen(""); setRevisionDetail(undefined); return;
-            }
-            setRevisionOpen(id); setRevisionDetail(undefined);
-            try {
-              setRevisionDetail(
-                await getSkillCandidate(selection.directory, id));
-            } catch (cause) {
-              setError(String(cause instanceof Error ? cause.message : cause));
-            }
-          })()}
-          distilling={distilling}
-          onDistill={() => void (async () => {
-            setDistilling(true); setError("");
-            try {
-              await distillSkill(selection.directory);
-              await refresh();
-              setRevisions(await listSkillCandidates(selection.directory));
-            } catch (cause) {
-              setError(String(cause instanceof Error ? cause.message : cause));
-            } finally { setDistilling(false); }
-          })()}
-          onAdopt={(id) => void run(() =>
-            adoptSkillCandidate(selection.directory, id))}
-          onDiscard={(id) => void run(() =>
-            discardSkillCandidate(selection.directory, id))}
           metadataDraft={metadataDraft} onMetadataDraft={setMetadataDraft}
           onOpenMetadata={() => {
             setMetadataDraft(editableMetadata(selectedSkill));
@@ -1134,85 +949,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
           </div>}
         </DetailPane>}
 
-        {selection.kind === "candidate" && !selectedCandidate
-          && <Empty className="min-h-60 p-7">
-          <EmptyMedia variant="icon"><CircleOffIcon aria-hidden /></EmptyMedia>
-          <EmptyTitle>这条沉淀候选已不存在</EmptyTitle>
-          <EmptyDescription>左边重新选一项。</EmptyDescription></Empty>}
 
-        {selection.kind === "candidate" && selectedCandidate && <DetailPane
-          id={`${knowledgeAssetElementId("engineering",
-            selectedCandidate.id)}-document`}>
-          <PaneHead title={selectedCandidate.title}
-            note={`${selectedCandidate.id} · 版本 ${
-              selectedCandidate.digest.slice(0, 8)} · ${
-              selectedCandidate.submitted_by}`}
-            extra={<Badge variant={FLAG_VARIANT[
-              selectedCandidate.status === "pending"
-                ? "attention" : selectedCandidate.status === "published"
-                  ? "success" : "muted"]}>{
-              selectedCandidate.status === "pending" ? "待审核"
-                : selectedCandidate.status === "published"
-                  ? "已发布闭环" : "暂不接纳"}</Badge>} />
-          <SkillMetadataTags nature={selectedCandidate.nature}
-            formLabel={FORM_LABEL[selectedCandidate.form]}
-            moduleIds={selectedCandidate.business_module_ids}
-            repositories={selectedCandidate.repositories}
-            technologies={selectedCandidate.nature === "engineering"
-              ? selectedCandidate.technologies : []}
-            modules={businessModules} />
-          <p className="max-w-[74ch] text-sm/relaxed text-text">{
-            selectedCandidate.summary}</p>
-          <dl className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))]
-            gap-x-4 gap-y-2 rounded-md bg-muted p-2.5">
-            <div className="grid min-w-0 gap-0.5"><dt className="text-xs
-              font-bold text-faint">何时使用</dt><dd className="text-sm/relaxed
-              break-all text-text">{selectedCandidate.when_to_use}</dd></div>
-            {selectedCandidate.published_target && <div className="grid
-              min-w-0 gap-0.5"><dt className="text-xs font-bold text-faint">
-              发布到</dt><dd className="font-mono text-sm break-all text-text">{
-              selectedCandidate.published_target}</dd></div>}
-            {selectedCandidate.decision_note && <div className="grid min-w-0
-              gap-0.5"><dt className="text-xs font-bold text-faint">裁决说明</dt>
-              <dd className="text-sm/relaxed break-all text-text">{
-                selectedCandidate.decision_note}</dd></div>}
-          </dl>
-          {engineeringFocus?.candidateId === selectedCandidate.id
-            && engineeringFocus.digest !== selectedCandidate.digest
-            ? <Alert variant="destructive" role="alert" className="my-2">
-              <AlertDescription>
-                清单版本 {engineeringFocus.digest.slice(0, 8)} 与当前版本 {
-                  selectedCandidate.digest.slice(0, 8)} 不同；当前正文未作为同一版展开。
-              </AlertDescription>
-            </Alert>
-            : <DocBlock>{selectedCandidate.content}</DocBlock>}
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() =>
-              onOpenTask(selectedCandidate.source_task_id)}>
-              来源 {selectedCandidate.source_task_id}</Button>
-            {selectedCandidate.status === "pending"
-              && canManageCandidate(selectedCandidate) && (
-              rejectFor === selectedCandidate.id ? <>
-                <Input className="min-w-55 flex-1" value={rejectReason}
-                  onChange={(event) => setRejectReason(event.target.value)}
-                  placeholder="必须说明原因，便于提交人修订" />
-                <Button size="sm"
-                  disabled={!rejectReason.trim() || busy}
-                  onClick={() => void decideCandidate(
-                    selectedCandidate, "reject")}>确认驳回</Button>
-                <Button variant="outline" size="sm"
-                  onClick={() => setRejectFor("")}>取消</Button>
-              </> : <>
-                <Button size="sm" disabled={busy}
-                  onClick={() => void decideCandidate(
-                    selectedCandidate, "publish")}>
-                  {busy ? "处理中…" : "接纳并发布"}</Button>
-                <Button variant="outline" size="sm" disabled={busy}
-                  onClick={() => setRejectFor(selectedCandidate.id)}>
-                  暂不接纳</Button>
-              </>)}
-          </div>
-        </DetailPane>}
       </div>
     </div>
 
@@ -1230,11 +967,10 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   </section>;
 }
 
-/** Skill 详情。四个子页共用一个头,切页不改变面板高度。 */
+/** Skill 详情共用一个头，切换全文、版本与范围时保持面板高度。 */
 function SkillDetail({ skill, directory, embedded = false, admin, busy, modules, tab, onTab,
   document, documentReady, blocked, focus, versions, onVersions, onRollback,
-  revisions, onRevisions, revisionOpen, revisionDetail, onRevisionOpen,
-  distilling, onDistill, onAdopt, onDiscard, metadataDraft, onMetadataDraft,
+  metadataDraft, onMetadataDraft,
   onOpenMetadata, onSaveMetadata, onUpdate, confirmOffline, onOffline }: {
   skill: SkillEntry;
   embedded?: boolean;
@@ -1252,15 +988,6 @@ function SkillDetail({ skill, directory, embedded = false, admin, busy, modules,
   versions?: SkillVersionRecord[];
   onVersions: () => void;
   onRollback: (versionId: string) => void;
-  revisions?: SkillCandidateRecord[];
-  onRevisions: () => void;
-  revisionOpen: string;
-  revisionDetail?: { skill: string; notes: string; evidence: string };
-  onRevisionOpen: (id: string) => void;
-  distilling: boolean;
-  onDistill: () => void;
-  onAdopt: (id: string) => void;
-  onDiscard: (id: string) => void;
   metadataDraft: SkillMetadataDraft;
   onMetadataDraft: (draft: SkillMetadataDraft) => void;
   onOpenMetadata: () => void;
@@ -1343,7 +1070,6 @@ function SkillDetail({ skill, directory, embedded = false, admin, busy, modules,
 
     <nav className="flex gap-0.5 border-b border-line" aria-label="Skill 详情视图">
       {([ ["document", "全文"], ["versions", "历史版本"],
-        ["revisions", `修订候选${skill.candidates ? `（${skill.candidates}）` : ""}`],
         ...(admin ? [[ "metadata", "适用范围" ] as [DetailTab, string]] : []),
       ] as Array<[DetailTab, string]>).map(([value, label]) =>
         <button type="button" key={value}
@@ -1354,7 +1080,6 @@ function SkillDetail({ skill, directory, embedded = false, admin, busy, modules,
               : "border-transparent text-muted-foreground hover:text-foreground")}
           onClick={() => {
             if (value === "versions") onVersions();
-            else if (value === "revisions") onRevisions();
             else if (value === "metadata") onOpenMetadata();
             else onTab(value);
           }}>{label}</button>)}
@@ -1392,57 +1117,6 @@ function SkillDetail({ skill, directory, embedded = false, admin, busy, modules,
       </ul>
     </div>}
 
-    {tab === "revisions" && <div className="grid gap-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-3
-        rounded-md border border-dashed border-line-strong p-2.5">
-        <p className="m-0 max-w-[60ch] text-sm/relaxed
-          text-muted-foreground">沉淀环:从读过该 skill 的任务现场起草修订稿,采纳前不影响任何任务。</p>
-        <Button size="sm" disabled={busy || distilling} onClick={onDistill}>
-          {distilling ? "起草中…(约一分钟)" : "起草修订稿"}</Button>
-      </div>
-      {!revisions && <p className="flex items-center gap-2 text-sm
-        text-muted-foreground"><Spinner className="size-3.5" />
-        读取候选…</p>}
-      {revisions && revisions.length === 0
-        && <Empty className="border p-4"><EmptyDescription>还没有修订候选。</EmptyDescription></Empty>}
-      {revisions?.map((candidate) => <div className="grid gap-1.5
-        rounded-md border border-line p-2.5" key={candidate.id}>
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5
-          text-sm text-muted-foreground">
-          <strong className="text-foreground">{candidate.status === "drafted"
-            ? "待裁决" : candidate.status === "adopted" ? "已采纳" : "已丢弃"}
-          </strong>
-          <span>{candidate.operator} 起草 · 证据 {
-            candidate.evidence_tasks.length} 单</span>
-          <time dateTime={candidate.created_at} className="ml-auto
-            text-faint">{stamp(candidate.created_at)}</time>
-          <Button variant="ghost" size="xs" disabled={busy}
-            onClick={() => onRevisionOpen(candidate.id)}>
-            {revisionOpen === candidate.id ? "收起" : "查看"}</Button>
-          {candidate.status === "drafted" && <>
-            <Button size="xs" disabled={busy}
-              onClick={() => onAdopt(candidate.id)}>采纳上架</Button>
-            <Button variant="outline" size="xs" disabled={busy}
-              onClick={() => onDiscard(candidate.id)}>丢弃</Button>
-          </>}
-        </div>
-        {revisionOpen === candidate.id && <div className="grid gap-2">
-          {!revisionDetail && <p className="flex items-center gap-2 text-sm
-            text-muted-foreground"><Spinner className="size-3.5" />
-            读取草稿…</p>}
-          {revisionDetail && <>
-            <p className="m-0 text-sm/relaxed text-muted-foreground">
-              修订说明:{revisionDetail.notes || "(无)"}</p>
-            <DocBlock>{revisionDetail.skill}</DocBlock>
-            <details><summary className="cursor-pointer text-sm
-              text-primary">起草依据的现场证据</summary>
-              <DocBlock>{revisionDetail.evidence || "(无)"}</DocBlock>
-            </details>
-          </>}
-        </div>}
-      </div>)}
-    </div>}
-
     {tab === "metadata" && admin && <div className="grid gap-2.5">
       <p className="text-sm/relaxed text-muted-foreground">Skill 形态不变；修改会形成新版本，历史任务不受影响。</p>
       <SkillMetadataEditor value={metadataDraft} modules={modules}
@@ -1455,12 +1129,11 @@ function SkillDetail({ skill, directory, embedded = false, admin, busy, modules,
 }
 
 /** 上架/提交表单。整份表单住在右栏,展开不再顶动列表。 */
-function UploadPane({ admin, busy, modules, classification, onClassification,
+function UploadPane({ busy, modules, classification, onClassification,
   name, onName, pending, onPick, missing, extractedDraftReady, onSubmit,
   extractOpen, onExtractOpen, repo, onRepo, intent, onIntent, hint, onHint,
   job, extractBusy, extractError, onStart, draft, onDraft, onSubmitDraft,
   onClose }: {
-  admin: boolean;
   busy: boolean;
   modules: BusinessModule[];
   classification: SkillMetadataDraft;
@@ -1490,14 +1163,14 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
   onSubmitDraft: () => void;
   onClose: () => void;
 }) {
-  const verb = admin ? "上架" : "提交";
+  const verb = "提交";
   const blocked = missing.length > 0;
   const missingText = `提交前还需：${missing.join("、")}`;
   return <DetailPane>
     <PaneHead title={`${verb} Skill`}
       note={`选含 SKILL.md 的技能包目录(frontmatter 需有 name/description)。
           上传前服务端会做密钥掩码扫描——skill 权限全开,令牌/密码一律拒收。
-          ${admin ? "" : "提交后由管理员审核,通过即上架。"}`}
+          提交后由管理员审查，通过即上架。`}
       actions={<Button variant="ghost" size="sm"
         onClick={onClose}>关闭</Button>} />
 
@@ -1515,8 +1188,8 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
         onClick={onSubmit}>
         {busy ? `${verb}中`
           : extractedDraftReady && !pending
-            ? `用草稿${admin ? "上架" : "提交审核"}`
-            : `确认${admin ? "上架" : "提交审核"}${
+            ? "用草稿提交审查"
+            : `确认提交审查${
               pending ? `（${pending.files.length} 个文件）` : ""}`}</Button>
     </div>
     {(pending || extractedDraftReady) && blocked
@@ -1561,10 +1234,10 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
               onChange={(event) => onHint(event.target.value)} /></label>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={extractBusy || job?.status === "running"
+          <Button disabled={extractBusy || !!job?.production?.working
               || !repo.trim() || !intent.trim()}
             onClick={onStart}>
-            {job?.status === "running" ? "提取中…" : "开始提取"}</Button>
+            {job?.production?.working ? job.production.status_label : "开始提取"}</Button>
           {job?.status === "running" && <small className="text-sm/relaxed
             text-faint">
             只读会话正在读仓起草;完成后草稿出现在下方,可离开本页稍后再来。</small>}
@@ -1584,7 +1257,7 @@ function UploadPane({ admin, busy, modules, classification, onClassification,
             <Button disabled={busy || !draft.trim() || blocked}
               title={blocked ? missingText : undefined}
               onClick={onSubmitDraft}>
-              {busy ? `${verb}中` : `用草稿${admin ? "上架" : "提交审核"}`}</Button>
+              {busy ? `${verb}中` : "用草稿提交审查"}</Button>
             <small className="text-sm/relaxed text-faint">{blocked
               ? `${missingText}；请在上方补齐。`
               : "目录名与知识属性已就绪，可直接提交。"}</small>

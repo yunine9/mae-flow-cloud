@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync, openSync, closeSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { build } from "../web/node_modules/esbuild/lib/main.js";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 test("批注真实浏览器：责任人答复、闭环、重开、统一转交状态与删除", {
@@ -30,15 +30,10 @@ test("批注真实浏览器：责任人答复、闭环、重开、统一转交�
       + '</style><style>body { padding:32px; } #app { max-width:880px; margin:auto; } #result { display:none; }</style><div class="workspace-studio task-workspace-v2"><div id="app" class="workspace-review-notes"></div></div><pre id="result"></pre><script>'
       + result.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>");
     if (process.env.MFC_ANNOTATION_EVIDENCE) writeFileSync(process.env.MFC_ANNOTATION_EVIDENCE, readFileSync(path));
-    const dump = join(dir, "dump.html"), fd = openSync(dump, "w");
-    try {
-      execFileSync(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+    const dump = join(dir, "dump.html");
+    await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
         ...(process.env.MFC_ANNOTATION_SCREENSHOT ? [`--screenshot=${process.env.MFC_ANNOTATION_SCREENSHOT}`, "--window-size=1100,850"] : []),
-        `--user-data-dir=${join(dir, "chrome")}`, "--virtual-time-budget=10000", "--dump-dom", `file://${path}`],
-      { timeout: 20000, stdio: ["ignore", fd, "ignore"] });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ETIMEDOUT") throw error;
-    } finally { closeSync(fd); }
+        `--user-data-dir=${join(dir, "chrome")}`, "--virtual-time-budget=10000", "--dump-dom", `file://${path}`], dump);
     const outcome = readFileSync(dump, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
     assert.ok(outcome, "浏览器未完成测试");
     assert.equal(outcome, "passed");

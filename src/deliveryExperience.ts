@@ -4,6 +4,7 @@ import type { TaskSummary } from "./taskService.ts";
 import { MemoryStore, MEMORY_DIMENSIONS, type MemoryInput } from "./taskMemory.ts";
 import { summaryGit, type DeliverySummaryInput, type DeliverySummarySessionOptions } from "./deliverySummaryAgent.ts";
 import { runDeliveryExperienceAgent } from "./deliveryExperienceAgent.ts";
+import { memoryFeedbackEvidence } from "./memoryFeedback.ts";
 
 type Owner = { cwd?: string; summary: TaskSummary };
 type Options = DeliverySummarySessionOptions & { store: MemoryStore; repo: string; module?: string;
@@ -13,7 +14,10 @@ type Runner = (input: DeliverySummaryInput, signal: AbortSignal, options: Delive
 const read = (path: string): any => { try { return JSON.parse(readFileSync(path, "utf8")); } catch { return undefined; } };
 
 export function parseDeliveryExperiences(text: string, evidence: Set<string>, module?: string): Array<Pick<MemoryInput, "dimension" | "trigger" | "scope" | "module" | "paths" | "problem" | "conclusion"> & { evidence_ids: string[] }> {
-  const parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, ""));
+  // A single explicit JSON block is unambiguous even when the model adds a preface.
+  // Multiple blocks remain invalid; all evidence and field validation stays below.
+  const blocks = [...text.matchAll(/^```(?:json)?\s*\n([\s\S]*?)^```\s*$/gm)];
+  const parsed = JSON.parse(blocks.length === 1 ? blocks[0][1] : text.trim());
   if (!Array.isArray(parsed?.drafts)) throw new Error("经验草稿输出格式错误");
   return parsed.drafts.map((d: any) => {
     if (!d || !MEMORY_DIMENSIONS.includes(d.dimension) || !["one_off", "local", "general", "platform"].includes(d.scope)
@@ -82,10 +86,12 @@ export class DeliveryExperiences<T extends Owner> {
         if (!head || !/^[a-f0-9]{40,64}$/i.test(base) || !/^[a-f0-9]{40,64}$/i.test(head)) throw new Error("缺少交付版本，无法对比");
         await summaryGit(task.cwd!, ["cat-file", "-e", `${base}^{commit}`]);
         await summaryGit(task.cwd!, ["cat-file", "-e", `${head}^{commit}`]);
-        const evidence = options.evidence();
+        const feedback = memoryFeedbackEvidence(snapshot.workspace, options.store);
+        const evidence: ReturnType<Options["evidence"]> = [...options.evidence(), ...feedback.records];
         const ids = new Set(["diff", ...evidence.map(e => e.id)]);
         writeFileSync(join(root,"evidence.json"),JSON.stringify(evidence),{mode:0o600});
         const context = JSON.stringify({ requirement: snapshot.continuation?.state === "active" ? snapshot.continuation.text : snapshot.requirement, module: options.module,
+          memory_usage_available: feedback.available,
           base, head, merged_sha: snapshot.delivery!.merged_sha, evidence_count: evidence.length, evidence: evidence.slice(0,100).map(e => ({id:e.id,summary:String(e.note ?? e.summary ?? "").slice(0,300)})),
           verification: { prepush: snapshot.delivery!.prepush, checks: snapshot.delivery!.checks },
           existing_experiences: options.store.list().filter(r => r.task === snapshot.id || (r.review?.status === "accepted" && (r.scope === "platform" || r.repo === options.repo || (options.module && r.module === options.module)))).slice(-50).map(r => ({ id:r.id, trigger:r.trigger, conclusion:r.conclusion })),
@@ -111,7 +117,7 @@ export class DeliveryExperiences<T extends Owner> {
             quote:(`首次交付 ${base}\n最终交付 ${head}\nMR ${snapshot.delivery!.mr_url}\n依据 ${evidence_ids.join("、")}\n` + evidence.filter(e => evidence_ids.includes(e.id)).map(e => String(e.note ?? e.summary ?? "")).join("\n").slice(0, 350)).slice(0, 450) });
           saved.push(record.id);
         }
-        writeFileSync(join(snapshot.workspace, "交付经验复盘.md"), `# 交付经验复盘\n\n首次交付：${base}\n最终交付源版本：${head}\nMR：${snapshot.delivery!.mr_url}\n\n` + (saved.length ? saved.map((id, i) => `- [${drafts[i].trigger}（待审查）](/?experience=1&memory_id=${id})`).join("\n") : "本次未提炼出有充分依据的新增可复用经验。") + "\n", {mode:0o600});
+        writeFileSync(join(snapshot.workspace, "交付经验复盘.md"), `# 交付经验复盘\n\n首次交付：${base}\n最终交付源版本：${head}\nMR：${snapshot.delivery!.mr_url}\n\n` + (saved.length ? saved.map((id, i) => `- [${drafts[i].trigger}（待审查）](/?kbPage=experience&memory_id=${id})`).join("\n") : "本次未提炼出有充分依据的新增可复用经验。") + "\n", {mode:0o600});
         const completed = { status:"completed", finished_at:new Date().toISOString(), base, head, ids:saved, notified:!saved.length };
         save(completed);
         try { options.onPublished?.(); } catch (e) { options.log?.(`经验草稿已保存，投影刷新失败：${String(e)}`); }

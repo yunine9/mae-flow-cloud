@@ -1,8 +1,8 @@
-> 平台适配：本文中的 `_work/`、`spec` 和输出文件是研究内容的组织说明。实际任务从当前上下文与 `knowledge_work` 读取；中间发现用 `knowledge_work_result` 保存，最终正文用 `knowledge_draft` 保存到平台给出的目标和 docs_path。不得自行写本地文件。输出协议以 [平台执行协议](platform-pipeline.md) 为准。
+> 通过 step.instructions 与 knowledge_work 读取本步骤的范围、问题和已有结果；中间内容保存到 knowledge_work_result.data，最终文档通过 knowledge_draft 保存。下面的 knowledge/ 和 repos/ 是相对平台归档目标的文档组织，不是本机目录。工具参数见 [平台工具接口](platform-pipeline.md)。
 
 # 跨模块写作：一条跨模块链路或一个跨仓契约
 
-任务 spec 中 `type` 为 `chain` 或 `contract`，`item` 是规划阶段给出的条目，其中 `questions` 是必须回答的问题。
+步骤说明中 `type` 为 `chain` 或 `contract`，`item` 是规划阶段给出的条目，其中 `questions` 是必须回答的问题。
 
 ## 通用要求
 

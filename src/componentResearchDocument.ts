@@ -1,7 +1,10 @@
+import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
+import { validateComponentParadigm, componentSources, type ComponentParadigm } from "./componentParadigms.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
 /** 一项是可独立理解、使用和审查的能力，可能由多个仓共同提供。 */
 export interface ResearchSection {
+  paradigm?: ComponentParadigm;
   id: string;
   title: string;
   repository_ids: string[];
@@ -20,8 +23,11 @@ export interface ResearchDocument {
 }
 export interface ResearchReviewTurn {
   id: string;
+  /** 补充遗漏能力或整体返工不限定单项，为空串。 */
   section_id: string;
-  mode: "discuss" | "rework" | "update";
+  mode: "discuss" | "rework" | "update" | "supplement";
+  /** 补充轮新增的能力项编号；完成并通过独立评审后才并入文稿。 */
+  added_section_ids?: string[];
   previous_revisions?: Record<string, string>;
   base_revision?: number;
   skill?: { name: string; digest: string };
@@ -40,19 +46,31 @@ export interface ResearchDocumentEdit {
   entries?: Array<{ id: string; title: string; repository_ids: string[] }>;
   section?: Omit<ResearchSection, "selected" | "revision">;
 }
+export function isWholeResearchReview(review?: Pick<ResearchReviewTurn, "mode" | "section_id">) {
+  return review?.mode === "rework" && review.section_id === "";
+}
 export function sectionReady(section: ResearchSection): boolean {
   return [section.content, section.interfaces, section.integration, section.sources].every(value => typeof value === "string" && !!value.trim())
     && /```[^\n]*\n[\s\S]*?\S[\s\S]*?\n```/.test(section.example ?? "");
 }
 export function editResearchDocument(document: ResearchDocument, edit: ResearchDocumentEdit,
   repositoryIds: string[], review?: ResearchReviewTurn): ResearchDocument {
-  if (review && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
+  if (review?.mode === "supplement") {
+    // 补充只往文稿里加新项：已有能力和概述都已经过人审，改它们要走该项的返工，不能借补充之名重写。
+    if (edit.action === "overview") throw new Error("补充遗漏能力只能新增能力项，不能修改概述");
+    if (edit.action === "outline" && edit.entries?.some(entry => document.sections.some(section => section.id === entry.id))) {
+      throw new Error("补充只能新增能力项；已有能力请在该项上返工");
+    }
+    if (edit.action === "section" && !review.added_section_ids?.includes(edit.section?.id ?? "")) {
+      throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样");
+    }
+  } else if (review && !isWholeResearchReview(review) && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
     throw new Error("本轮只能修改指定组件；讨论不会修改草稿，其他组件保持原样");
   }
   scanForSecrets("组件知识草稿", Buffer.from(JSON.stringify(edit)));
   const next = structuredClone(document);
   const check = (entry: { id: string; title: string; repository_ids: string[] }) => {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/.test(entry.id) || !entry.title?.trim()) throw new Error("组件须有稳定编号和名称");
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,199}$/.test(entry.id) || !entry.title?.trim()) throw new Error("组件须有稳定编号和名称");
     if (!entry.repository_ids?.length || entry.repository_ids.some(id => !repositoryIds.includes(id))) {
       throw new Error("组件来源必须对应本次研究范围内的仓库");
     }
@@ -76,7 +94,9 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
   } else if (edit.action === "section" && edit.section) {
     const section = edit.section;
     check(section);
+    if (section.paradigm) { validateComponentParadigm(section.paradigm, repositoryIds); section.sources = componentSources(section.paradigm); }
     const index = next.sections.findIndex(item => item.id === section.id);
+    if (index >= 0 && next.sections[index].paradigm && !section.paradigm) throw new Error("不能删除已有范式的结构化字段");
     if (index < 0) throw new Error("请先将组件加入能力清单，再写正文");
     if (!sectionReady({ ...section, selected: true, revision: 1 })) {
       throw new Error("每个组件都必须写用法、公共接口、集成产物/依赖、来源和含代码块的最佳示例；未验证的示例须如实标注");
@@ -89,14 +109,15 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
   return next;
 }
 
-export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false): string {
+export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false, includeMetadata = true): string {
   const sections = document.sections.filter(section => !selectedOnly || section.selected);
-  return [`# ${title}`, document.overview,
+  const metadata = sections.filter(s => s.paradigm).map(s => ({ id: s.id, title: s.title, revision: s.revision, ...s.paradigm }));
+  return [includeMetadata && metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", ...(/^\s*#\s/.test(document.overview) ? [] : [`# ${title}`]), componentKnowledgeMarkdown(document.overview),
     "## 组件目录", ...sections.map(section => `- [${section.title}](#component-${section.id})`),
     ...sections.map(section => [
       `<a id="component-${section.id}"></a>`, `## ${section.title}`,
-      ...(sectionReady(section) ? [section.content, "### 公共接口", section.interfaces,
-        "### 集成产物与依赖", section.integration, "### 最佳示例", section.example, "### 来源", section.sources]
+      ...(sectionReady(section) ? [componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces),
+        "### 集成产物与依赖", componentKnowledgeMarkdown(section.integration), "### 最佳示例", componentKnowledgeMarkdown(section.example)]
         : ["> 本组件尚未完成研究，不能作为已确认的使用指南。"]),
       ...(section.related_ids.length ? ["### 关联组件", ...section.related_ids.map(id => {
         const related = document.sections.find(item => item.id === id);

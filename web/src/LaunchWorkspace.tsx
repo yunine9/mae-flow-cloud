@@ -482,7 +482,6 @@ export function LaunchWorkspace({
     repositoryTechnologies, workflowSelection]);
   const expectedKnowledgePreviewKey = JSON.stringify(previewInput);
   const matchingModuleKnowledge = knowledgePreview?.business_knowledge ?? [];
-  const matchingEngineeringKnowledge = knowledgePreview?.engineering_knowledge ?? [];
   const matchingTeamSkills = knowledgePreview?.team_skills ?? [];
   const repositoryName = (value: string) => value.replace(/\/+$/, "")
     .split("/").at(-1)?.replace(/\.git$/i, "") || value;
@@ -495,8 +494,7 @@ export function LaunchWorkspace({
       `仓库：${repositoryName(repository)}`));
     return scopes.join(" · ") || "团队通用";
   };
-  const matchedTeamKnowledgeCount = matchingEngineeringKnowledge.length
-    + matchingTeamSkills.length;
+  const matchedTeamKnowledgeCount = matchingTeamSkills.length;
   const deliveryLocationVisible = !!options;
   const selectedModuleKnowledgeCount = matchingModuleKnowledge.length;
   const selectedKnowledgeCount = selectedModuleKnowledgeCount
@@ -1431,7 +1429,7 @@ export function LaunchWorkspace({
                         : `${selectedKnowledgeCount} 项`}</em>
                 </header>
                 <p className="mt-2.5 mb-0 text-[13px] leading-normal text-faint">
-                  下单页只展示 Mae-Flow 平台管理的业务知识、工程知识和 Skill；仓库里的 <code>AGENTS.md</code>、仓内文档、项目规则等仍由 Agent 运行时自行读取，但不在下单界面列出或包装成“本任务知识”。
+                  下单页只展示 Mae-Flow 平台管理的业务知识和 Skill；仓库里的 <code>AGENTS.md</code>、仓内文档、项目规则等仍由 Agent 运行时自行读取，但不在下单界面列出或包装成“本任务知识”。
                 </p>
                 {knowledgePreviewLoading || !previewSettled ? (
                   <div className="mt-2.5 rounded-lg bg-surface px-[11px] py-2.5 text-xs text-muted-foreground">正在核对知识名称、版本与作用域…</div>
@@ -1469,21 +1467,6 @@ export function LaunchWorkspace({
                               version: item.version, digest: item.digest });
                           }}>
                           <b className="rounded-md bg-(--accent-soft) px-[5px] py-[3px] text-xs text-primary">业务</b><span className="grid min-w-0 gap-0.5"><strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-strong">{item.title}</strong>
-                            <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{describeMatchedScope(item)}</small></span>
-                        </a>
-                      ))}
-                      {matchingEngineeringKnowledge.map((item) => (
-                        <a key={`engineering/${item.id}`}
-                          className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-2 rounded-lg border border-line bg-surface px-[9px] py-2 no-underline transition-[border-color,transform] hover:-translate-y-px hover:border-[color-mix(in_srgb,var(--accent)_50%,var(--line))]"
-                          href={knowledgeAssetPath({ kind: "engineering",
-                            candidateId: item.id, digest: item.digest })}
-                          onClick={(event) => {
-                            if (!isPlainKnowledgeActivation(event)) return;
-                            event.preventDefault(); persistDraft();
-                            onOpenKnowledgeAsset({ kind: "engineering",
-                              candidateId: item.id, digest: item.digest });
-                          }}>
-                          <b className="rounded-md bg-(--accent-soft) px-[5px] py-[3px] text-xs text-primary">工程</b><span className="grid min-w-0 gap-0.5"><strong className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-strong">{item.title}</strong>
                             <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">{describeMatchedScope(item)}</small></span>
                         </a>
                       ))}
@@ -1595,7 +1578,7 @@ export function LaunchWorkspace({
                   ? "核对中" : knowledgePreview?.complete
                     ? knowledgePreview.degraded ? "部分降级" : "权威预览"
                     : "需要处理"} className="mb-px"
-                  note="仅展示业务知识、工程知识与平台团队 Skill；逐项可进入团队资产查看全文" />
+                  note="仅展示业务知识与平台团队 Skill；逐项可进入团队资产查看全文" />
                 <div className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-3.5 rounded-lg border border-line bg-surface px-3 py-[11px] max-[680px]:grid-cols-[repeat(2,minmax(0,1fr))] max-[680px]:gap-y-0">
                   <span className="grid min-w-[68px] gap-px max-[680px]:min-w-0"><strong className="text-[18px] text-text-strong">{selectedModuleKnowledgeCount}</strong>
                     <small className="text-xs text-muted-foreground">模块知识</small></span>
@@ -1651,25 +1634,6 @@ export function LaunchWorkspace({
                           onOpenKnowledgeAsset({ kind: "business",
                             moduleId: item.module_id, assetId: item.id,
                             version: item.version, digest: item.digest });
-                        }} />)}
-                  </section>}
-                  {!knowledgePreviewLoading && previewSettled
-                    && matchingEngineeringKnowledge.length > 0 && <section
-                    className="[&:not(:first-of-type)]:border-t [&:not(:first-of-type)]:border-line">
-                    <header className="flex min-h-[33px] items-center justify-between gap-2.5 bg-surface-2 px-3 py-[7px]"><strong className="text-xs text-text">工程知识</strong>
-                      <em className="text-xs not-italic text-muted-foreground">{matchingEngineeringKnowledge.length} 项</em></header>
-                    {matchingEngineeringKnowledge.map((item) =>
-                      <LaunchKnowledgeRow key={item.id} form={item.form}
-                        title={item.title} summary={item.summary}
-                        whenToUse={item.when_to_use}
-                        version={`版本 ${item.digest.slice(0, 8)}`}
-                        scope={describeMatchedScope(item)}
-                        href={knowledgeAssetPath({ kind: "engineering",
-                          candidateId: item.id, digest: item.digest })}
-                        onOpen={() => {
-                          persistDraft();
-                          onOpenKnowledgeAsset({ kind: "engineering",
-                            candidateId: item.id, digest: item.digest });
                         }} />)}
                   </section>}
                   {!knowledgePreviewLoading && previewSettled

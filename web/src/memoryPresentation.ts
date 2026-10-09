@@ -25,3 +25,12 @@ export function memoryReviewFocus(search: string): string | undefined {
   const id = new URLSearchParams(search).get("memory_id");
   return id && /^c-[a-z0-9]+-[a-f0-9]+$/.test(id) ? id : undefined;
 }
+
+/** 页头卡片与经验页「待确认」页签共用一个口径：停用、并入、归档的都不算在手。 */
+export function memoryCounts(rows: Array<{ can_review?: boolean; withdrawn?: boolean; superseded_by?: string; archived?: boolean; review?: { status: string } }>) {
+  const active = rows.filter(row => !row.withdrawn && !row.superseded_by && !row.archived);
+  return {
+    pending: active.filter(row => row.can_review && (row.review?.status ?? "pending") === "pending").length,
+    accepted: active.filter(row => row.review?.status === "accepted").length,
+  };
+}

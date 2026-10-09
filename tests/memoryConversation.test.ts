@@ -42,10 +42,10 @@ test("对话记录无需文件或检视意见：保留原话、只生成候选�
     assert.equal(records[0].evidence, "agent:call-natural-memory");
     assert.equal(result.details.memory_id, records[0].id);
     const link = new URL(result.details.review_url, "http://localhost");
-    assert.equal(link.searchParams.get("experience"), "1");
+    assert.equal(link.searchParams.get("kbPage"), "experience");
     assert.equal(memoryReviewFocus(link.search), records[0].id);
-    assert.match(result.content[0].text, /已保存到「团队资产 → 经验沉淀」/);
-    assert.match(result.content[0].text, /\[查看这条经验\]\(\/\?experience=1&memory_id=c-/);
+    assert.match(result.content[0].text, /已保存到「知识库 → 团队经验」/);
+    assert.match(result.content[0].text, /\[查看这条经验\]\(\/\?kbPage=experience&memory_id=c-/);
     assert.equal(service.readMemoryInsight(memoryReviewFocus(link.search)!)?.record.quote, original);
     assert.equal(state.summary.status, before.status);
     assert.deepEqual(state.summary.waiting, before.waiting);
@@ -60,7 +60,7 @@ test("保存失败不伪造成功回执和审查链接", async () => {
 });
 
 test("经验深链只接受有效记录 ID，不把任意参数当导航目标", () => {
-  assert.equal(memoryReviewFocus("?experience=1&memory_id=c-abc-012def"), "c-abc-012def");
+  assert.equal(memoryReviewFocus("?kbPage=experience&memory_id=c-abc-012def"), "c-abc-012def");
   for (const search of ["", "?memory_id=", "?memory_id=../../secret", "?memory_id=https://outside.example", "?memory_id=c-abc-XYZ"]) {
     assert.equal(memoryReviewFocus(search), undefined);
   }

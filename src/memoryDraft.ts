@@ -1,3 +1,4 @@
+import { KNOWLEDGE_WRITING_GUIDANCE } from "./knowledgeWritingGuidance.ts";
 /**
  * 旁路提炼可复用的经验草稿。模型只建议结论与范围，不替人采纳；失败保留原始候选。
  * 目录摘要工具保留供现有调用方使用，不改变任务运行。
@@ -17,6 +18,7 @@ const SCOPES: MemoryScope[] = ["one_off", "local", "general", "platform"];
 
 export function buildMemoryDraftPrompt(record: MemoryRecord): { system: string; user: string } {
   const system = [
+    KNOWLEDGE_WRITING_GUIDANCE,
     "你在为软件团队从任务记录中提炼可复用经验。输入是一次处理的来源材料，不自动证明结论正确或可推广。",
     "整理为待人工确认的经验候选，不是已经成立的规范。只回 JSON:",
     "conclusion 提炼可复用做法、证据依据和适用例外；不能只复述‘已修复’。证据不足时明确缺什么，不凭一次绿灯推导普遍结论。",

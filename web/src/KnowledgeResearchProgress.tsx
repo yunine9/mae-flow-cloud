@@ -3,11 +3,11 @@ import { Button } from "@/components/ui/button";
 import { Markdown } from "./markdown";
 
 type Evidence = Record<string, unknown>;
-const actions: Record<string, string> = { list: "浏览目录", tree: "浏览目录", read: "读取文件", search: "搜索源码", kw: "搜索跨仓调用", nls: "查找相关代码", knowledge_search: "检索业务知识", ar_fur_info: "查询功能信息", ar_idp_docs: "查询设计文档", ar_mr_diff: "查询代码变更", ar_history_similar: "查询相似历史" };
+const actions: Record<string, string> = { list: "浏览目录", tree: "浏览目录", read: "读取文件", search: "搜索源码", kw: "搜索跨仓调用", nls: "查找相关代码", knowledge_search: "查询无线豆包" };
 const failed = (event: Evidence) => !!event.error || ["failed", "error"].includes(String(event.status));
 const text = (value: unknown) => value == null ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
 function summary(event: Evidence) {
-  const query = event.query && typeof event.query === "object" ? (event.query as Evidence).question ?? (event.query as Evidence).ar_code : event.query;
+  const query = event.query && typeof event.query === "object" ? (event.query as Evidence).question : event.query;
   const context = text(query || (Array.isArray(event.keywords) ? event.keywords.join("、") : "") || event.path || (event.action === "list" ? "仓库根目录" : event.preview));
   return text(event.error || context || "查看详细记录").replace(/[#*`]/g, "").replace(/\s+/g, " ").slice(0, 180);
 }
@@ -20,9 +20,9 @@ export function KnowledgeResearchProgress({ evidence }: { evidence: Evidence[] }
   const visible = entries.slice(-limit).reverse(), errors = evidence.filter(failed).length;
   return <section ref={root} className="knowledge-progress" aria-label="研究过程记录">
     <header className="knowledge-progress-toolbar"><div><strong>研究动态 <span className="text-muted-foreground font-normal">· {evidence.length} 条</span></strong><p className="mt-1 text-sm text-muted-foreground">最新动态在前，展开查看详情{errors > 0 && <span className="knowledge-progress-error"> · {errors} 条异常</span>}</p></div>
-      <Button variant="ghost" size="sm" onClick={() => root.current?.querySelectorAll("details[open]").forEach(node => { (node as HTMLDetailsElement).open = false; })}>全部折叠</Button>
+      {evidence.length > 0 && <Button variant="ghost" size="sm" onClick={() => root.current?.querySelectorAll("details[open]").forEach(node => { (node as HTMLDetailsElement).open = false; })}>全部折叠</Button>}
     </header>
-    {!evidence.length ? <p className="knowledge-progress-empty">研究开始后，Agent 的工作进展会显示在这里。</p> : <div className="knowledge-progress-entries">
+    {!evidence.length ? <p className="knowledge-progress-empty">还没有研究动态；Agent 每读一份源码或资料、每完成一步，都会在这里记一条。</p> : <div className="knowledge-progress-entries">
       <ol>{visible.map(({ event, index }) => {
         const error = failed(event), timestamp = typeof event.at === "string" ? new Date(event.at) : undefined;
         const action = event.tool === "research_note" ? "分析与整理" : event.tool === "knowledge_source_changes" ? "核对来源变化" : actions[String(event.action)] ?? "研究进展";

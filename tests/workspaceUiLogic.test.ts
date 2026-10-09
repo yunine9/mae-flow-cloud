@@ -20,6 +20,7 @@ const vite = await createServer({
   logLevel: "silent",
 });
 const app = await vite.ssrLoadModule("/src/App.tsx");
+const people = await vite.ssrLoadModule("/src/People.tsx");
 const workspace = await vite.ssrLoadModule("/src/TaskWorkspace.tsx");
 const taskCard = await vite.ssrLoadModule("/src/TaskCard.tsx");
 const deliveryList = await vite.ssrLoadModule("/src/DeliveryFileList.tsx");
@@ -344,6 +345,17 @@ test("个人行动清单能关联别人归属的 Committer 检视，且缺详情
     "pending review 仍须占一项，不能让侧栏有角标而行动区显示已清空");
   assert.equal(temporarilyMissing[0].task, undefined);
   assert.equal(temporarilyMissing[0].action, "任务暂不可用");
+
+  for (const [item, message] of [
+    [visible[0], "邀请你检视代码与交付材料"],
+    [temporarilyMissing[0], "邀请你检视；任务详情暂未同步，请稍后刷新"],
+  ] as const) {
+    const html = renderToStaticMarkup(React.createElement(people.PeopleProvider, {
+      known: [{ username: "alice", display_name: "张三" }],
+    }, item.detail));
+    assert.equal(html, `<span title="alice">张三</span> ${message}`);
+    assert.equal(renderToStaticMarkup(item.detail), `<span title="alice">alice</span> ${message}`);
+  }
 });
 
 test("空任务目录完成加载后能判定 /work 深链失效，加载中不抢跑", () => {

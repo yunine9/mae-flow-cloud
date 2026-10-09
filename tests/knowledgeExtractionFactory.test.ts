@@ -17,6 +17,6 @@ test("知识源码装配同步指定分支，复用缓存并保留取消行为",
     assert.deepEqual(await syncKnowledgeSource(cache, source, "main", sandbox), { root: cache, revision: git("rev-parse", "HEAD") });
     git("commit", "-q", "--allow-empty", "-m", "second");
     assert.equal((await syncKnowledgeSource(cache, source, "main", sandbox)).revision, git("rev-parse", "HEAD"));
-    await assert.rejects(syncKnowledgeSource(cache, source, "main", sandbox, AbortSignal.abort()), /源码同步失败/);
+    await assert.rejects(syncKnowledgeSource(cache, source, "main", sandbox, AbortSignal.abort()), (error: Error) => error.name === "AbortError");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

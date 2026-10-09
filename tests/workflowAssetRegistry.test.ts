@@ -9,11 +9,8 @@ import {
   publishBusinessKnowledgeAsset,
 } from "../src/businessModuleLibrary.ts";
 import { snapshotBusinessModules } from "../src/businessModuleRuntime.ts";
-import { snapshotEngineeringKnowledge } from "../src/engineeringKnowledgeRuntime.ts";
 import { uploadHostSkill } from "../src/hostSkillLibrary.ts";
 import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
-import { createKnowledgeCandidate, decideKnowledgeCandidate } from
-  "../src/knowledgeCandidates.ts";
 import { listWorkflowAssetCatalog } from "../src/workflowAssetRegistry.ts";
 import { resolveWorkflowAssets } from "../src/workflowAssetResolution.ts";
 import { mfcTemp } from "./mfcTmp.ts";
@@ -30,12 +27,6 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
       id: "diagnosis", title: "订单问题定位", summary: "定位订单状态异常",
       when_to_use: "订单状态不一致时", form: "skill", content: "先核对状态机。",
     }, "alice");
-    const candidate = createKnowledgeCandidate(dataDir, {
-      source_task_id: "task-1", title: "TypeScript 排障", summary: "TS 排障步骤",
-      when_to_use: "类型检查失败时", nature: "engineering", form: "rule",
-      technologies: ["typescript"], content: "先运行 tsc。",
-    }, "alice");
-    decideKnowledgeCandidate(dataDir, candidate.id, "published", "admin");
     await uploadHostSkill(dataDir, "review-helper", [{
       path: "SKILL.md",
       content_base64: Buffer.from([
@@ -49,14 +40,11 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     const catalog = listWorkflowAssetCatalog({ dataDir });
     const business = catalog.items.find((item) =>
       item.ref.registry === "business_knowledge")!;
-    const engineering = catalog.items.find((item) =>
-      item.ref.registry === "engineering_knowledge")!;
     const skill = catalog.items.find((item) =>
       item.ref.registry === "team_skill")!;
     assert.equal(business.ref.business_module_id, "order");
     assert.equal(business.ref.version, String(module.assets[0].version));
     assert.match(business.ref.digest, /^sha256:/);
-    assert.equal(engineering.ref.id, candidate.id);
     assert.equal(skill.ref.id, "review-helper");
     assert.equal("content" in business, false, "目录不能把正文灌给浏览器");
 
@@ -78,18 +66,13 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     const businessModules = snapshotBusinessModules({
       dataDir, taskWorkspace: workspace, moduleIds: ["order"], repositories: [],
     });
-    const engineeringKnowledge = snapshotEngineeringKnowledge({
-      dataDir, taskWorkspace: workspace, repositories: [],
-      technologies: ["typescript"], businessModuleIds: ["order"],
-      selectedIds: [candidate.id],
-    });
     const definition = {
       schema: "mae-flow-workflow-definition/1",
       base: { standard_id: "std", standard_version: "1",
         catalog_digest: `sha256:${"a".repeat(64)}` },
       applicability: { business_module_ids: ["order"], repositories: [],
         technologies: ["typescript"] },
-      edits: [business, engineering, skill].map((asset, index) => ({
+      edits: [business, skill].map((asset, index) => ({
         edit_id: `asset-${index}`,
         stage_id: "stage",
         op: "add",
@@ -106,19 +89,19 @@ test("统一资产目录返回真实版本身份，任务解析只接受对拍�
     };
     const resolved = resolveWorkflowAssets({
       definition, dataDir, repositories: [], technologies: ["typescript"],
-      businessModules, engineeringKnowledge, repositorySkills: [],
+      businessModules, repositorySkills: [],
       hostSkillSnapshotRoot,
     });
     assert.deepEqual(resolved.map((item) => item.state),
-      ["available", "available", "available"]);
-    assert.ok(resolved[0].snapshot_path && resolved[1].snapshot_path,
+      ["available", "available"]);
+    assert.ok(resolved[0].snapshot_path,
       "知识正文只以任务快照路径进入 manifest");
 
     const changed = structuredClone(definition);
     changed.edits[0].item.asset_ref.digest = `sha256:${"f".repeat(64)}`;
     assert.equal(resolveWorkflowAssets({
       definition: changed, dataDir, repositories: [], technologies: ["typescript"],
-      businessModules, engineeringKnowledge, repositorySkills: [],
+      businessModules, repositorySkills: [],
       hostSkillSnapshotRoot,
     })[0].state, "unavailable", "摘要不符不能拿同名最新版冒充固定版本");
   });

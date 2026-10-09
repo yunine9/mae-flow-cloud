@@ -1,3 +1,4 @@
+import { completedInRange, validateCompletionRange, type CompletionRange } from "../completionRange.ts";
 import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
 import { postMrDiscussionReply, postMrDiscussionResolve } from "../mrDiscussionReply.ts";
@@ -826,6 +827,8 @@ function reviveResumeNotice(note?: string): string {
  * respond_review 落批注账后由平台扫描装箱(ADR-0052 单通道),信箱是
  * 发送的唯一真相。 */
 const MR_REPLY_OUTBOX_FILE = "mr-review-outbox.json";
+/** 单条回复发送的等待预算：平台挂住不响应时按失败记一次重试，不让监看环无限等。 */
+const MR_REPLY_SEND_TIMEOUT_MS = 30_000;
 
 /** SKILL.md frontmatter 的 description(没有就空串):只认文件开头
  * `---` 包围块里的 description 行,多余内容一律不猜——清单卡上的
@@ -1283,7 +1286,7 @@ export class IssueFlowService {
    *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。
    *  一次定位/验证/解决三根过程率轴与 /issues/stats 同源(this.onceRates
    *  的既有判定),分母=范围内完成交付全集——不随伴生在缺漂移。 */
-  onceGeneratedStats(days?: number): IssueOnceGeneratedStats {
+  onceGeneratedStats(days?: number, range: CompletionRange = {}): IssueOnceGeneratedStats {
     const runtime = this.options.settings?.runtime?.();
     const configured = Number(
       (runtime as Record<string, unknown> | undefined)
@@ -1291,6 +1294,7 @@ export class IssueFlowService {
     const threshold = Number.isFinite(configured) && configured > 0 && configured <= 100
       ? configured
       : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
+    validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
     // 收集范围内全部完成交付会话(判定事实 + 结论时刻)。
     const collected: Array<{ live: LiveIssue; concludedAt: string }> = [];
@@ -1301,6 +1305,7 @@ export class IssueFlowService {
       if (!state.ticket?.trim()) continue;
       const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
       const atMs = Date.parse(concludedAt);
+      if (!completedInRange(state.conclusion?.at, range)) continue;
       if (cutoff !== undefined && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       collected.push({ live, concludedAt });
     }
@@ -1427,7 +1432,8 @@ export class IssueFlowService {
    *  一律不进,不给挂起设统计口径。一次定位分母=非问题+确认是问题
    *  (取消不构成一次研究);版本数从分析版本账现读(取消会话没有
    *  终态冻结,同账同源不漂移),登记人缺席按归属兜底(CONTEXT 口径)。 */
-  registrationStats(days?: number): IssueRegistrationStats {
+  registrationStats(days?: number, range: CompletionRange = {}): IssueRegistrationStats {
+    validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
     const rows: IssueRegistrationSessionRow[] = [];
     for (const live of this.live.values()) {
@@ -1440,6 +1446,7 @@ export class IssueFlowService {
       if (!canceled && !concluded) continue;
       const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
       const atMs = Date.parse(concludedAt);
+      if (!completedInRange(state.conclusion?.at ?? (canceled ? state.updated_at : undefined), range)) continue;
       if (cutoff !== undefined
         && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       const versionCount = listAnalysisVersions(live.root).length;
@@ -6162,7 +6169,22 @@ export class IssueFlowService {
    *  回复;HTTP 重试超限标 failed 交人工(不再注入,防平台持续故障下
    *  无限循环)。发送成功→意见转 addressed(Agent 已回复,待检视人
    *  核验,②-Q3:处理≠验收)。 */
-  private async flushMrReviewReplies(live: LiveIssue): Promise<void> {
+  private readonly replyFlushes = new Map<string, Promise<void>>();
+
+  /** 同一会话的信箱发送串行：监看环与责任人答复/忽略的即时一拍会并发
+   *  进来，两边各拿一份信箱快照发送再整份写回，后写的会把先写的条目
+   *  冲掉（2026-10-08 读码发现）。排在前一拍之后跑，前一拍失败不连坐。 */
+  private flushMrReviewReplies(live: LiveIssue): Promise<void> {
+    const previous = this.replyFlushes.get(live.id) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.flushMrReviewRepliesOnce(live));
+    this.replyFlushes.set(live.id, next);
+    void next.catch(() => undefined).finally(() => {
+      if (this.replyFlushes.get(live.id) === next) this.replyFlushes.delete(live.id);
+    });
+    return next;
+  }
+
+  private async flushMrReviewRepliesOnce(live: LiveIssue): Promise<void> {
     // 终态复核(体检 C-H5):取消/归档落在迭代内,不再向平台发送
     // 已装箱回复——终态会话不该再产生外部副作用。
     if (isTerminal(live.state.status)) return;
@@ -6223,6 +6245,7 @@ export class IssueFlowService {
             requestId: item.id,
             issueId: live.id,
             headers: pipelineHeaders(credential),
+            signal: AbortSignal.timeout(MR_REPLY_SEND_TIMEOUT_MS),
           });
           item.status = "delivered";
           item.delivered_at = new Date().toISOString();
@@ -6244,6 +6267,7 @@ export class IssueFlowService {
           requestId: item.id,
           issueId: live.id,
           headers: pipelineHeaders(credential),
+          signal: AbortSignal.timeout(MR_REPLY_SEND_TIMEOUT_MS),
         });
         item.status = "delivered";
         item.delivered_at = new Date().toISOString();
@@ -6274,7 +6298,17 @@ export class IssueFlowService {
             error: item.last_error });
       }
     }
-    if (dirty) this.writeMrReviewOutbox(live, outbox);
+    if (dirty) {
+      // 发送期间别处可能已往信箱追加（责任人答复/忽略同步落盘）：按 id 把
+      // 本拍处理过的条目合回最新信箱，不拿发送前的旧快照整份覆盖。
+      const handled = new Map(pending.map((item) => [item.id, item]));
+      const fresh = this.readMrReviewOutbox(live);
+      fresh.items = fresh.items.map((item) => handled.get(item.id) ?? item);
+      for (const item of pending) {
+        if (!fresh.items.some((row) => row.id === item.id)) fresh.items.push(item);
+      }
+      this.writeMrReviewOutbox(live, fresh);
+    }
   }
 
   /** 责任人答复直达 CodeHub(ADR-0032):经出站信箱原样发布,复用

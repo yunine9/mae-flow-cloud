@@ -24,6 +24,7 @@
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { deliveryBranchName } from "../deliveryBranchName.ts";
 import { Type } from "typebox";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -180,7 +181,7 @@ function fail(text: string): never {
 }
 
 export function expectedBranch(state: IssueSessionState): string {
-  return `master_${state.account}_${state.ticket}`;
+  return deliveryBranchName("master", state.account, state.ticket!);
 }
 
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后

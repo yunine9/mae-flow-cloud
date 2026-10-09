@@ -1,7 +1,7 @@
 /** 经验沉淀的唯一审查入口：候选留档、人工采纳与使用足迹集中展示。 */
 import { useEffect, useMemo, useState } from "react";
 import { getMemoryInsights, readMemoryInsight, createMemoryDraft, type MemoryInsights, type MemoryRecord } from "./api";
-import { memoryPreparation, memorySearchPresentation, memoryReviewFocus } from "./memoryPresentation";
+import { memoryPreparation, memorySearchPresentation, memoryReviewFocus, memoryCounts } from "./memoryPresentation";
 import { MemoryReviewEditor } from "./MemoryReviewEditor";
 import { Button } from "./components/ui/button";
 import { Textarea } from "./components/ui/textarea";
@@ -60,7 +60,7 @@ export function MemoryBoard({ onOpenTask }: { onOpenTask?: (taskId: string) => v
     && (tab === "all" || (tab === "rejected" ? row.archived || row.withdrawn || row.superseded_by || row.review?.status === "rejected" : (row.review?.status ?? "pending") === tab))
     && (tab !== "pending" || row.can_review)
     && (!query.trim() || `${row.trigger} ${row.conclusion} ${row.repo}`.includes(query.trim()))), [insights, sourceTask, tab, query, scopeFilter]);
-  const pending = (insights?.memories ?? []).filter(row => row.can_review && !row.withdrawn && !row.superseded_by && !row.archived && (row.review?.status ?? "pending") === "pending").length;
+  const { pending } = memoryCounts(insights?.memories ?? []);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(rows.length / 10) - 1));
   async function dismiss() { if (dirty && !await confirmDialog({ title: "尚未保存的编辑将被放弃，继续吗？", danger: true })) return; clearFocus(); }
   async function open(id: string) {

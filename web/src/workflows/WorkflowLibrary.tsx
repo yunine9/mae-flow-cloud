@@ -46,7 +46,7 @@ export function WorkflowLibrary({
   }, [query, scope, workflows]);
   return <section className="wf-library" aria-labelledby="wf-library-title">
     <header className="wf-library-head">
-      <div><span className="wf-kicker">团队资产 / 工作流</span>
+      <div><span className="wf-kicker">配置中心 / 团队工作流</span>
         <h2 id="wf-library-title">工作流</h2>
         <p>普通任务直接使用平台标准方案；这里只管理需要精确编排的专业方案。</p>
       </div>

@@ -117,7 +117,7 @@ export function TaskCard({
   const ownerOnly = isOwnerOnlyWaiting(task);
   const decides = canOperate || (canDecide && !ownerOnly);
   const childRepositories = task.requirement_graph?.stage === "confirmed"
-    ? task.requirement_graph.repositories.filter((repository) => repository.task_id)
+    ? task.requirement_graph.repositories.filter((repository) => repository.task_id && repository.task_id !== task.id)
     : [];
   const notifyHttpError = task.notify?.last_error
     ?.match(/HTTP\s+\d{3}/)?.[0];
@@ -678,7 +678,7 @@ function waitingStepTitle(task: TaskSummary): string | undefined {
   if (isClarificationWaiting(task)) return "需要补充信息";
   // 原来落到兜底的"需要你的决策":上面一栏刚写完"当前需要处理",两个
   // 标题摞一起没一个说是在确认什么(用户实测截图"很丑")。
-  if (isChainReviewWaiting(task)) return "确认拆分方案";
+  if (isChainReviewWaiting(task)) return task.requirement_graph?.repositories.length === 1 ? "确认开发方案" : "确认拆分方案";
   if (step === "host_push_confirm") return "确认本次推送";
   if (step === "cloud_push_confirm") return "最终检视：确认这版代码可直接推送";
   if (isPushConfirmation(task.waiting)) return "代码检视";
@@ -929,6 +929,7 @@ export function WaitingCard({
     : chainReview && confirmsChainChoice
       ? !chainProjectionReady
         ? "模块拆分与依赖图尚未就绪"
+        : task.requirement_graph?.repositories.length === 1 ? "确认并在本任务继续开发"
         : (task.requirement_graph?.repositories.length ?? 0) > 0
           ? `确认并创建 ${task.requirement_graph!.repositories.length} 个模块任务`
           : "确认分析结论并结束"

@@ -1,4 +1,5 @@
 import { resourceBlocked } from "../repositoryResourcePolicy.ts";
+import { deliveryBranchName } from "../deliveryBranchName.ts";
 /**
  * 问题会话的首轮提示词与 playbook 改编技能。
  *
@@ -233,10 +234,7 @@ export function issueRegistrationMeta(
     ...(state.baseline ? { baseline: state.baseline } : {}),
     ...(state.ticket
       ? { ticket: state.ticket,
-        // 修复分支的派生式与 tools.ts 的 expectedBranch 一字不差
-        // (master_<工号>_<单号>):prompt.ts 不反向 import tools.ts
-        // (tools 已 import 本模块,倒边成环),故此处就地展开。
-        repair_branch: `master_${state.account}_${state.ticket}` }
+        repair_branch: deliveryBranchName("master", state.account, state.ticket) }
       : {}),
     ...(knowledgeReady(state)
       ? { knowledge_repo: {
@@ -419,7 +417,7 @@ export function issueFixedOpeningPrompt(
       || "- 代码仓: (未登记——AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     knowledgeRepoLine(state),
     ...(scenario === "ticket" && state.ticket
-      ? [`- 修复分支 master_${state.account}_${state.ticket}`]
+      ? [`- 修复分支 ${deliveryBranchName("master", state.account, state.ticket)}`]
       : []),
     ...environmentLines(meta),
     inheritedNote,

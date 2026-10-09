@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { compile } from './compile.ts';
-import { draftWithModel } from '../../src/skillDistiller.ts';
+import { draftWithModel } from '../../src/modelTransport.ts';
 import { renderArchify } from '../../src/archifyRender.ts';
 const out = resolve(process.env.ARCHIFY_PROBE_OUT || '.local/archify-probe');
 mkdirSync(out, { recursive: true });

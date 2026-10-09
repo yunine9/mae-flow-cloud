@@ -107,7 +107,7 @@ export type MemoryLedgerKind =
   | "push"       // 宿主三时刻推给了 Agent
   | "search"     // Agent 检索命中
   | "expand"     // Agent 展开全文
-  | "rework"     // 推送之后同路径又被人提了意见(效果账的负项,§6)
+  | "rework"     // 提供经验后同路径出现意见，仅记录关联，不判定经验有害
   | "unanchored" // 消费时发现路径在现场不存在(首次记一行)
   | "archive"    // 沉底归档
   | "restore";   // 从归档捞回(重建索引时可用;暂无入口)
@@ -117,6 +117,7 @@ export interface MemoryLedgerRow {
   kind: MemoryLedgerKind;
   id: string;
   task?: string;
+  revision?: string;
   /** push 的时刻 / archive 的原因 / rework 的路径。 */
   note?: string;
 }
@@ -137,7 +138,7 @@ const DAY_MS = 86_400_000;
 
 /**
  * 排序权重(§5「不筛只排」+ §6 效果反馈)。人判 > 流水线;一年减半;
- * 被 Agent 真用过(检索/展开)加一点,推了之后同路径返工减得更狠;
+ * 检索/展开提供相关性信号；同文件意见没有因果归属，不用于质量扣分。
  * general 比 local 略重。只影响推不推、排第几,不影响进不进库。
  */
 export function memoryWeight(
@@ -149,9 +150,8 @@ export function memoryWeight(
   const ageDays = Math.max(0, (now - new Date(record.at).getTime()) / DAY_MS);
   const decay = Number.isFinite(ageDays) ? Math.pow(0.5, ageDays / 365) : 0.5;
   const used = Math.min(0.5, stats.hits * 0.1);
-  const rework = Math.min(0.8, stats.reworks * 0.4);
   const scope = record.scope === "general" ? 0.1 : 0;
-  return Math.max(0.05, base * decay + used + scope - rework);
+  return Math.max(0.05, base * decay + used + scope);
 }
 
 export function readJsonlRows<T>(path: string): T[] {

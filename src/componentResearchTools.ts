@@ -30,7 +30,7 @@ export function executeFile(
                 new Error(
                   error.name === "AbortError" ? "操作已取消"
                     : error.code === "ENOENT" ? `${file === "git" ? "Git" : "ec"} 工具未安装或路径错误`
-                    : error.code === "EACCES" ? "当前服务账户无权执行工具"
+                    : error.code === "EACCES" ? `当前服务账户无权执行 ${file === "git" ? "Git" : "ec"}（${file}），请检查该文件的执行权限`
                     : error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "返回内容过大，请缩小搜索或读取范围"
                     : error.killed ? "操作超时，请缩小范围后重试"
                     : file === "git" ? "本地源码操作失败，请检查仓库、版本和路径" : "ec 调用失败，请检查工具配置、凭据和网络",
@@ -199,16 +199,20 @@ export function componentSourceTool(
               .join("\n");
           if (end < lines.length) text += `\n后续从 ${end + 1} 行读取`;
         }
+        // 引用校验只能认可实际返回的完整行，不能把截断后的行视为已读。
+        const delivered = text.length > 30000 ? text.slice(0, text.lastIndexOf("\n", 30000)) : text;
+        const readLines = input.action === "read" ? [...delivered.matchAll(/^(\d+):/gm)].map(m => Number(m[1])) : [];
         onUse({
           tool: "component_source",
           ...input,
+          ...(input.action === "read" ? { start: readLines[0] ?? 0, end: readLines.at(-1) ?? 0 } : {}),
           path,
           revision,
           status: "returned",
           characters: text.length,
           preview: evidencePreview(text),
         });
-        return reply(text.length > 30000 ? text.slice(0, 30000) + "\n返回内容已截断，请缩小 path 或 start/end 范围继续读取。" : text);
+        return reply(text.length > 30000 ? delivered + "\n返回内容已截断，请缩小 path 或 start/end 范围继续读取。" : text);
       } catch (e) {
         onUse({
           tool: "component_source",
@@ -221,7 +225,7 @@ export function componentSourceTool(
     },
   });
 }
-export function codeSearchTool(onUse: (record: object) => void) {
+export function codeSearchTool(onUse: (record: Record<string, unknown>) => unknown, options?: { captureRead?: boolean; excludePath?: (path: string) => boolean }) {
   return defineTool({
     name: "code_search",
     label: "Sourcegraph 代码搜索",
@@ -268,15 +272,18 @@ export function codeSearchTool(onUse: (record: object) => void) {
             ))
         )
           throw new Error("请提供查询或仓库与文件路径");
+        if (input.action === "read" && options?.excludePath?.(String(input.path))) throw new Error("组件研究只读取代码与构建配置，不读取文档或 Agent 指令");
         const text = await executeFile(ecBinary(), args, undefined, signal);
-        onUse({
+        if (options?.captureRead) scanForSecrets("everycode 返回", Buffer.from(text));
+        const evidenceId = onUse({
           tool: "code_search",
           ...input,
           status: "returned",
           characters: text.length,
           preview: evidencePreview(text),
+          ...(options?.captureRead && input.action === "read" ? { content: text.slice(0, 30000) } : {}),
         });
-        return reply(text.slice(0, 30000));
+        return reply((typeof evidenceId === "string" ? `证据编号：${evidenceId}\n` : "") + text.slice(0, 30000));
       } catch (e) {
         onUse({
           tool: "code_search",

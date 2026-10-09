@@ -11,14 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { materializeTaskKnowledgeIndex } from "../src/taskKnowledgeIndex.ts";
 
-test("统一知识索引只给摘要与路径，业务/工程正文均不进入索引", () => {
+test("统一知识索引只给摘要与路径，业务正文不进入索引", () => {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-task-knowledge-index-"));
   const businessPath = join(workspace, ".mae-flow-work", "business", "refund.md");
-  const engineeringPath = join(workspace, ".mae-flow-work", "engineering", "build.md");
   mkdirSync(join(workspace, ".mae-flow-work", "business"), { recursive: true });
-  mkdirSync(join(workspace, ".mae-flow-work", "engineering"), { recursive: true });
   writeFileSync(businessPath, "BUSINESS-BODY-MUST-NOT-BE-IN-INDEX\n");
-  writeFileSync(engineeringPath, "ENGINEERING-BODY-MUST-NOT-BE-IN-INDEX\n");
 
   const index = materializeTaskKnowledgeIndex({
     workspace,
@@ -30,14 +27,6 @@ test("统一知识索引只给摘要与路径，业务/工程正文均不进入�
       repositories: [], version: 2, digest: "business-digest",
       relative_path: ".mae-flow-work/business/refund.md", path: businessPath,
     }],
-    engineeringKnowledge: [{
-      id: "engineering-build", title: "慢构建排障",
-      summary: "区分依赖下载、编译与环境故障",
-      when_to_use: "构建长时间没有结果时", form: "document",
-      business_module_ids: [], repositories: [], technologies: ["java"],
-      digest: "engineering-digest", bytes: 40,
-      relative_path: ".mae-flow-work/engineering/build.md", path: engineeringPath,
-    }],
   });
 
   assert.deepEqual(index.warnings, []);
@@ -45,11 +34,7 @@ test("统一知识索引只给摘要与路径，业务/工程正文均不进入�
   assert.match(index.content!, /## 业务模块知识/);
   assert.match(index.content!, /退款边界/);
   assert.match(index.content!, /修改退款流程或状态机时/);
-  assert.match(index.content!, /## 团队工程知识/);
-  assert.match(index.content!, /区分依赖下载、编译与环境故障/);
-  assert.match(index.content!, /\.mae-flow-work\/engineering\/build\.md/);
   assert.doesNotMatch(index.content!, /BUSINESS-BODY-MUST-NOT-BE-IN-INDEX/);
-  assert.doesNotMatch(index.content!, /ENGINEERING-BODY-MUST-NOT-BE-IN-INDEX/);
   assert.doesNotMatch(index.content!, /代码仓自带知识/,
     "代码仓 docs 不属于平台知识索引");
   assert.equal(readFileSync(index.path!, "utf-8"), index.content);
@@ -64,10 +49,10 @@ test("正文不在 Agent 工作区时明确跳过，不泄露外部路径", () =
   writeFileSync(outside, "OUTSIDE-SECRET\n");
   const index = materializeTaskKnowledgeIndex({
     workspace,
-    engineeringKnowledge: [{
+    businessKnowledge: [{
       id: "outside", title: "越界知识", summary: "不应进入索引",
-      when_to_use: "永不", form: "document", business_module_ids: [],
-      repositories: [], technologies: [], digest: "outside", bytes: 1,
+      when_to_use: "永不", form: "document", module_id: "orders", module_name: "订单", module_owner: "owner",
+      repositories: [], version: 1, digest: "outside",
       relative_path: "outside.md", path: outside,
     }],
   });

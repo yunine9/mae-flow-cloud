@@ -1,3 +1,6 @@
+import type { CompletionRange } from "../../src/completionRange";
+import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
+import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 export type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
 import type { DependencyAdjustment, EarlyStartInput, EarlyStartPreview } from "../../src/dependencySchedulingTypes";
@@ -624,7 +627,7 @@ export interface WorkflowPlanItem {
 }
 
 export interface WorkflowAssetRef {
-  registry: "business_knowledge" | "engineering_knowledge" | "team_skill"
+  registry: "business_knowledge" | "team_skill"
     | "repository_skill" | "platform_capability";
   id: string;
   version: string;
@@ -990,9 +993,6 @@ export interface TaskSummary {
   business_modules?: SelectedBusinessModule[];
   business_module?: { id: string; name: string };
   business_module_history?: Array<{ at: string; by: string; from?: { id: string; name: string }; to?: { id: string; name: string } }>;
-  engineering_knowledge?: Array<EngineeringKnowledgeLaunchOption & {
-    digest: string; bytes: number; snapshot_path: string;
-  }>;
   /** Cloud 的知识消费观测，不参与内核裁决。 */
   knowledge_usage?: TaskKnowledgeUsage;
   /** 持续检视明细；原始材料仍按来源留在各自账本。 */
@@ -1090,6 +1090,7 @@ export interface TaskSummary {
     last_error?: string;
   };
   delivery?: {
+    component_knowledge?: ComponentKnowledgeCheckReport;
     /** 最近一次推送的起点，仅用于代码增量展示。 */
     last_push_base_sha?: string;
     mr_url?: string;
@@ -1236,75 +1237,6 @@ export async function getKnowledgeInsights(): Promise<TeamKnowledgeInsights> {
   return parseJson(response);
 }
 
-export interface KnowledgeCandidateRecord {
-  id: string;
-  source_task_id: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  nature: Exclude<KnowledgeNature, "unclassified">;
-  form: KnowledgeForm;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-  content: string;
-  digest: string;
-  bytes: number;
-  status: "pending" | "published" | "rejected";
-  submitted_at: string;
-  submitted_by: string;
-  decided_at?: string;
-  decided_by?: string;
-  decision_note?: string;
-  published_target?: string;
-}
-
-export async function createKnowledgeCandidate(taskId: string, input: {
-  title: string;
-  summary: string;
-  when_to_use: string;
-  nature: Exclude<KnowledgeNature, "unclassified">;
-  form: KnowledgeForm;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
-  content: string;
-}): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/knowledge-candidates`, {
-    method: "POST", body: JSON.stringify(input),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function listKnowledgeCandidates(): Promise<KnowledgeCandidateRecord[]> {
-  const response = await fetch("/knowledge-candidates");
-  if (!response.ok) throw new Error(await errorText(response));
-  return (await parseJson<{ candidates: KnowledgeCandidateRecord[] }>(response)).candidates;
-}
-
-export async function publishKnowledgeCandidate(
-  id: string,
-  input: { asset_id?: string; directory?: string; note?: string } = {},
-): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/publish`, {
-    method: "POST", body: JSON.stringify(input),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function rejectKnowledgeCandidate(
-  id: string,
-  reason: string,
-): Promise<KnowledgeCandidateRecord> {
-  const response = await fetch(`/knowledge-candidates/${encodeURIComponent(id)}/reject`, {
-    method: "POST", body: JSON.stringify({ reason }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
 /** 下单表单的数据源:可选模型清单(≤1 个时不必展示下拉)与当前默认。 */
 export interface LaunchBlocker {
   key: string;
@@ -1339,7 +1271,6 @@ export interface LaunchOptions {
   workflow_standard?: WorkflowStandardBase;
   /** 已发布的可选业务模块摘要；知识正文不会随目录接口返回。 */
   business_modules: BusinessModuleLaunchOption[];
-  engineering_knowledge: EngineeringKnowledgeLaunchOption[];
   team_skills: HostSkillShelfEntry[];
 }
 
@@ -1365,19 +1296,13 @@ export interface LaunchBusinessKnowledgePreview
   bytes: number;
 }
 
-export interface LaunchEngineeringKnowledgePreview
-  extends EngineeringKnowledgeLaunchOption, LaunchKnowledgeMatchedScope {
-  digest: string;
-  bytes: number;
-}
-
 export interface LaunchTeamSkillPreview
   extends HostSkillShelfEntry, LaunchKnowledgeMatchedScope {
   package_digest: string;
 }
 
 export interface LaunchKnowledgePreviewNotice {
-  source: "business_modules" | "engineering_knowledge" | "team_skills"
+  source: "business_modules" | "team_skills"
     | "repository_profiles";
   code: "catalog_unavailable" | "catalog_warning" | "limit_applied"
     | "selection_invalid";
@@ -1392,20 +1317,11 @@ export interface LaunchKnowledgePreview {
     technologies: string[];
     business_module_ids: string[];
     workflow_business_module_ids: string[];
-    workflow_engineering_knowledge_ids: string[];
     workflow_team_skill_ids: string[];
   };
   business_knowledge: LaunchBusinessKnowledgePreview[];
-  engineering_knowledge: LaunchEngineeringKnowledgePreview[];
   team_skills: LaunchTeamSkillPreview[];
   selection_digest: string;
-  limits: { engineering_knowledge: {
-    max_assets: number;
-    max_total_bytes: number;
-    matched: number;
-    selected: number;
-    omitted: number;
-  } };
   warnings: LaunchKnowledgePreviewNotice[];
   errors: LaunchKnowledgePreviewNotice[];
 }
@@ -1429,17 +1345,6 @@ export async function getLaunchKnowledgePreview(input: {
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
-}
-
-export interface EngineeringKnowledgeLaunchOption {
-  id: string;
-  title: string;
-  summary: string;
-  when_to_use: string;
-  form: Exclude<KnowledgeForm, "skill">;
-  business_module_ids: string[];
-  repositories: string[];
-  technologies: string[];
 }
 
 export interface RepositoryProfile {
@@ -1818,6 +1723,7 @@ export interface TaskKnowledgeResource {
   available_count: number;
   loaded_count: number;
   read_count: number;
+  search_count?: number;
   first_at?: string;
   last_at?: string;
 }
@@ -1933,8 +1839,6 @@ export interface HostSkillShelfEntry {
   /** false = pi 装载器不认(缺 name/description 等),放了也不进会话。 */
   loadable: boolean;
   effect?: HostSkillEffect;
-  /** 待裁决的修订候选数(沉淀环起草、尚未采纳/丢弃的草稿)。 */
-  candidates?: number;
 }
 
 export interface HostSkillShelf {
@@ -1952,6 +1856,7 @@ export interface SkillKnowledgeMetadataInput {
 
 /** 资产库操作留痕(谁/何时/什么动作/什么指纹),服务端逐条记录。 */
 export interface SkillOperationRecord {
+  production?: KnowledgeProductionView;
   at: string;
   operator: string;
   action: "upload" | "update" | "offline" | "rollback"
@@ -1966,11 +1871,12 @@ export interface SkillOperationRecord {
 
 /** 开发者提交的待审 skill 包:人人可提交,管理员审核上架。 */
 export interface SkillSubmissionRecord {
+  production?: KnowledgeProductionView;
   id: string;
   directory: string;
   operator: string;
   created_at: string;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approving" | "approved" | "rejected";
   skill_digest: string;
   package_digest: string;
   files: number;
@@ -2026,32 +1932,22 @@ export async function getSkillDocument(
   return parseJson(response);
 }
 
-export async function uploadSkill(
-  directory: string,
-  files: SkillUploadFile[],
-  metadata?: SkillKnowledgeMetadataInput,
-): Promise<SkillOperationRecord> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`, {
-    method: "PUT",
-    body: JSON.stringify({ files, ...metadata }),
-  });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-/** 开发者提交待审:与上架同一道验收闸,通过后进待审区等管理员裁决。 */
 export interface SkillExtractionJob {
+  production?: KnowledgeProductionView;
   id: string;
-  status: "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed";
   repo: string;
   intent: string;
   path_hint?: string;
   operator: string;
-  started_at: string;
+  created_at?: string;
+  started_at?: string;
   finished_at?: string;
   draft?: string;
   notes?: string;
   error?: string;
+  /** 草稿已提交到 Skill 库审查（"目录/提交号"）。 */
+  submission_id?: string;
 }
 
 /** 定向知识提取:从参考仓起草 SKILL.md。起草是异步的,拿 id 轮询。 */
@@ -2090,19 +1986,6 @@ export async function submitSkill(
     `/skills/${encodeURIComponent(directory)}/submissions`, {
       method: "POST",
       body: JSON.stringify({ files, ...metadata }),
-    });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function updateSkillLanguages(
-  directory: string,
-  languages: string[],
-): Promise<SkillOperationRecord> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/languages`, {
-      method: "PATCH",
-      body: JSON.stringify({ languages }),
     });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
@@ -2183,70 +2066,6 @@ export async function rollbackSkill(
     });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
-}
-
-/** 修订候选(沉淀环):agent 从任务现场起草的 SKILL.md 草稿。 */
-export interface SkillCandidateRecord {
-  id: string;
-  directory: string;
-  created_at: string;
-  operator: string;
-  status: "drafted" | "adopted" | "discarded";
-  evidence_tasks: string[];
-  adopted_at?: string;
-  adopted_by?: string;
-}
-
-export async function distillSkill(
-  directory: string,
-): Promise<SkillCandidateRecord> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/distill`, { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function listSkillCandidates(
-  directory: string,
-): Promise<SkillCandidateRecord[]> {
-  const response = await fetch(
-    `/skills/${encodeURIComponent(directory)}/candidates`);
-  if (!response.ok) throw new Error(await errorText(response));
-  return (await parseJson<{ candidates?: SkillCandidateRecord[] }>(response)).candidates ?? [];
-}
-
-export async function getSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<{
-  record: SkillCandidateRecord;
-  skill: string;
-  notes: string;
-  evidence: string;
-}> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}`);
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function adoptSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<SkillOperationRecord> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}/adopt`, { method: "POST" });
-  if (!response.ok) throw new Error(await errorText(response));
-  return parseJson(response);
-}
-
-export async function discardSkillCandidate(
-  directory: string,
-  id: string,
-): Promise<void> {
-  const response = await fetch(`/skills/${encodeURIComponent(directory)}`
-    + `/candidates/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!response.ok) throw new Error(await errorText(response));
 }
 
 export interface TeamKnowledgeInsights {
@@ -2973,8 +2792,11 @@ export interface MemoryUsageRow {
   /** 首改目录时推的是目录摘要而不是逐条。 */
   digest?: boolean;
   ts: string;
-  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context";
-  status?: "ready" | "unavailable";
+  moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check" | "component_plan";
+  plan?: { path: string; capability?: string; operation: string; errors?: number; warnings?: number };
+  status?: "ready" | "unavailable" | "empty" | "rejected";
+  assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string; card_id?: string; retrieval?: string }>;
+  check?: { trigger: string; head?: string; findings: number; hints: number; rules_digest: string };
   ids: string[];
   query?: string;
   phase?: string;
@@ -4240,25 +4062,6 @@ export function listAllIssues(): Promise<IssueSummary[]> {
   return issueFetch("/issues?scope=all").then((body) => body.issues ?? []);
 }
 
-/** 一次率二轴(口径:CONTEXT「一次修复成功率」「一次定位成功率」词条)。
- * 服务端全台账聚合,分母=完成交付;rate 为 null 表示分母 0(还没有
- * 完成交付的会话),前端显示 —。 */
-export interface IssueOnceRate {
-  total: number;
-  /** 一次定位成功率:分析报告版本数 ≤1。 */
-  localization: { passed: number; rate: number | null };
-  /** 一次修复成功率:从未验证未通过。 */
-  repair: { passed: number; rate: number | null };
-  per_session: {
-    id: string; reviews: number;
-    localization_pass: boolean; repair_pass: boolean;
-  }[];
-}
-
-export function getIssueOnceRates(): Promise<IssueOnceRate> {
-  return issueFetch("/issues/stats");
-}
-
 /** 首次生成占比与 90%AI生成达标率(ADR-0045,工单 #342):终态伴生
  *  快照(code-origin.json)的读侧聚合,工作量口径(增删行均计)。
  *  分母=有数据(伴生在场且有工作变更行)的完成交付会话;rate null=分母 0
@@ -4331,8 +4134,15 @@ export interface IssueOnceGenerated {
   per_session: IssueOnceGeneratedSessionRow[];
 }
 
-export function getIssueOnceGenerated(days?: number): Promise<IssueOnceGenerated> {
-  return issueFetch(`/issues/once-generated${days ? `?days=${days}` : ""}`);
+function completionStatsQuery(days?: number, range: CompletionRange = {}) {
+  const query = new URLSearchParams();
+  if (days) query.set("days", String(days));
+  if (range.from) query.set("completed_from", range.from);
+  if (range.before) query.set("completed_before", range.before);
+  return query.size ? `?${query}` : "";
+}
+export function getIssueOnceGenerated(days?: number, range?: CompletionRange): Promise<IssueOnceGenerated> {
+  return issueFetch(`/issues/once-generated${completionStatsQuery(days, range)}`);
 }
 
 /** 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
@@ -4372,9 +4182,9 @@ export interface IssueRegistrationStats {
 }
 
 export function getIssueRegistrationStats(
-  days?: number,
+  days?: number, range?: CompletionRange,
 ): Promise<IssueRegistrationStats> {
-  return issueFetch(`/issues/registration-stats${days ? `?days=${days}` : ""}`);
+  return issueFetch(`/issues/registration-stats${completionStatsQuery(days, range)}`);
 }
 
 /** 单会话首次生成明细(伴生快照原样,会话详情下钻的证据面)。

@@ -1,7 +1,6 @@
 /** 工作流编辑器使用的统一只读资产目录。正文不出接口。 */
 
 import { listBusinessModules } from "./businessModuleLibrary.ts";
-import { publishedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import type {
   WorkflowAssetForm,
@@ -103,32 +102,6 @@ export function listWorkflowAssetCatalog(options: {
     }
   } catch (error) {
     warnings.push(`业务知识目录不可用：${String(error)}`);
-  }
-  try {
-    for (const asset of publishedEngineeringKnowledge(options.dataDir)) {
-      items.push({
-        ref: {
-          registry: "engineering_knowledge",
-          id: asset.id,
-          version: "1",
-          digest: digest(asset.digest),
-          nature: "engineering",
-          form: asset.form,
-        },
-        type: "knowledge",
-        title: asset.title,
-        summary: asset.summary,
-        when_to_use: asset.when_to_use,
-        nature: "engineering",
-        form: asset.form,
-        business_module_ids: [...asset.business_module_ids],
-        repositories: [...asset.repositories],
-        technologies: [...asset.technologies],
-        availability: "available",
-      });
-    }
-  } catch (error) {
-    warnings.push(`工程知识目录不可用：${String(error)}`);
   }
   try {
     const shelf = listHostSkillShelf(options.dataDir);

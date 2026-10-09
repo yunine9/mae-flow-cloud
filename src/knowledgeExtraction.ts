@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 export const EXTRACTION_TIMEOUT_MS = 10 * 60_000;
 
-export type ExtractionJobStatus = "running" | "done" | "failed";
+export type ExtractionJobStatus = "queued" | "running" | "done" | "failed";
 
 export interface ExtractionJobRecord {
   id: string;
@@ -27,12 +27,16 @@ export interface ExtractionJobRecord {
   intent: string;
   path_hint?: string;
   operator: string;
-  started_at: string;
+  created_at?: string;
+  started_at?: string;
   finished_at?: string;
   /** 成功时的草稿与说明;失败时 error 是给人看的分类原因。 */
   draft?: string;
   notes?: string;
   error?: string;
+  /** 草稿已提交到 Skill 库审查（"目录/提交号"）。制作任务到此结束，审查只在那条提交上做一次，
+   * 不再在任务中心留两条"待审查"（D9：制作 Skill 只审一次）。 */
+  submission_id?: string;
 }
 
 /** 内置提取 skill 正文。读不到按缺陷抛错——它是发布件的一部分,
@@ -70,9 +74,7 @@ export function buildExtractionMission(input: {
   ].join("\n");
 }
 
-/** 与 skillDistiller.parseDraft 同一对标记,但提取草稿必须显式带标记:
- * 蒸馏的候选区允许粗糙,提取草稿要直接回填人的编辑框,整段当草稿会把
- * 模型的闲聊一起灌进去。 */
+/** 提取草稿必须显式带标记；草稿直接回填编辑框，不能把模型闲聊混进正文。 */
 export function parseExtractionDraft(
   text: string,
 ): { draft: string; notes: string } | undefined {

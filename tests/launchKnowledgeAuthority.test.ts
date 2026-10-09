@@ -17,10 +17,6 @@ import {
   createBusinessModule,
   publishBusinessKnowledgeAsset,
 } from "../src/businessModuleLibrary.ts";
-import {
-  createKnowledgeCandidate,
-  decideKnowledgeCandidate,
-} from "../src/knowledgeCandidates.ts";
 import { createTaskServer } from "../src/server.ts";
 import {
   availableUtGenerationMethod,
@@ -41,27 +37,6 @@ function service(dataDir: string): TaskService {
 function profile(technologies: string[]) {
   return [{ repository: "https://code.example/team/orders.git",
     technologies, confirmed: true }];
-}
-
-function publishEngineering(
-  dataDir: string,
-  index: number,
-  content = `工程知识 ${index}`,
-  repository = "https://code.example/team/orders.git",
-) {
-  const pending = createKnowledgeCandidate(dataDir, {
-    source_task_id: "task-source",
-    title: `工程知识 ${index}`,
-    summary: `摘要 ${index}`,
-    when_to_use: "修改 Java 服务时",
-    nature: "engineering",
-    form: "rule",
-    repositories: [repository],
-    technologies: ["java"],
-    content,
-  }, "developer");
-  return decideKnowledgeCandidate(
-    dataDir, pending.id, "published", "admin");
 }
 
 test("UT 生成方式只看本任务实际装载的 Skill，不受全局货架干扰", () => {
@@ -141,68 +116,6 @@ function workflowDefinition(moduleId: string, asset: {
   };
 }
 
-test("发起前预匹配与任务快照共用 40 项上限和稳定版本身份", () => {
-  const dataDir = mfcTemp("mfc-launch-authority-count-");
-  for (let index = 0; index < 41; index += 1) {
-    publishEngineering(dataDir, index);
-  }
-  const taskService = service(dataDir);
-  const input = { repositories: [profile([])[0].repository],
-    repositoryProfiles: profile(["java"]) };
-  const preview = taskService.previewLaunchKnowledge(input);
-  assert.equal(preview.engineering_knowledge.length, 40);
-  assert.deepEqual(preview.limits.engineering_knowledge, {
-    max_assets: 40,
-    max_total_bytes: 4 * 1024 * 1024,
-    matched: 41,
-    selected: 40,
-    omitted: 1,
-  });
-  assert.equal(preview.warnings.some((warning) =>
-    warning.source === "engineering_knowledge"
-      && warning.code === "limit_applied"), true);
-  assert.equal(preview.complete, true,
-    "容量上限是权威选择的一部分，不是目录降级");
-
-  const task = taskService.create("核对预匹配", {
-    repo: input.repositories[0],
-    repositoryProfiles: profile(["java"]).map((item) => ({
-      ...item, updated_at: new Date().toISOString(), updated_by: "tester",
-    })),
-    knowledgePreviewDigest: preview.selection_digest,
-  });
-  assert.deepEqual(task.engineering_knowledge?.map((item) => item.id),
-    preview.engineering_knowledge.map((item) => item.id),
-    "页面预览必须就是任务最终固定的有序集合");
-  assert.match(preview.engineering_knowledge[0].digest, /^[a-f0-9]{64}$/);
-  assert.deepEqual(preview.engineering_knowledge[0].matched_repositories,
-    input.repositories);
-  assert.deepEqual(preview.engineering_knowledge[0].matched_technologies,
-    ["java"]);
-});
-
-test("4 MiB 上限与任务创建对拍，不能把匹配项全数冒充已注入", () => {
-  const dataDir = mfcTemp("mfc-launch-authority-bytes-");
-  const content = "x".repeat(256 * 1024);
-  for (let index = 0; index < 17; index += 1) {
-    publishEngineering(dataDir, index, content);
-  }
-  const taskService = service(dataDir);
-  const input = { repositories: [profile([])[0].repository],
-    repositoryProfiles: profile(["java"]) };
-  const preview = taskService.previewLaunchKnowledge(input);
-  assert.equal(preview.engineering_knowledge.length, 16);
-  assert.equal(preview.limits.engineering_knowledge.omitted, 1);
-  const task = taskService.create("核对字节限额", {
-    repo: input.repositories[0],
-    repositoryProfiles: profile(["java"]).map((item) => ({
-      ...item, updated_at: new Date().toISOString(), updated_by: "tester",
-    })),
-  });
-  assert.deepEqual(task.engineering_knowledge?.map((item) => item.id),
-    preview.engineering_knowledge.map((item) => item.id));
-});
-
 test("工作流引用强制并入业务模块；预览返回管理定位、版本与真正命中交集",
   () => {
     const dataDir = mfcTemp("mfc-launch-authority-flow-");
@@ -248,7 +161,6 @@ test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配
   mkdirSync(join(dataDir, "business-modules", "broken"), { recursive: true });
   writeFileSync(join(dataDir, "business-modules", "broken", "module.json"),
     "{broken");
-  writeFileSync(join(dataDir, "knowledge-candidates"), "not-a-directory");
   const preview = service(dataDir).previewLaunchKnowledge({});
   assert.equal(preview.complete, true,
     "可选目录损坏要明确降级，但不能阻塞一项本来不依赖它的任务");
@@ -256,68 +168,6 @@ test("目录损坏显式返回 source 告警与 degraded，不伪装成零匹配
   assert.equal(preview.warnings.some((warning) =>
     warning.source === "business_modules"
       && warning.code === "catalog_warning"), true);
-  assert.equal(preview.warnings.some((warning) =>
-    warning.source === "engineering_knowledge"
-      && warning.code === "catalog_unavailable"), true);
-});
-
-test("自动匹配工程知识损坏时明确降级；旧 digest 拒绝，新清单可继续", () => {
-  const dataDir = mfcTemp("mfc-launch-authority-corrupt-");
-  const repository = "https://code.example/team/orders.git";
-  const candidate = publishEngineering(dataDir, 1);
-  const taskService = service(dataDir);
-  const repositoryProfiles = [{
-    repository, technologies: ["java"], confirmed: true,
-    updated_at: new Date().toISOString(), updated_by: "tester",
-  }];
-  const input = { repositories: [repository], repositoryProfiles };
-  const trusted = taskService.previewLaunchKnowledge(input);
-  assert.equal(trusted.complete, true);
-  assert.deepEqual(trusted.engineering_knowledge.map((item) => item.id),
-    [candidate.id]);
-
-  const file = join(dataDir, "knowledge-candidates", `${candidate.id}.json`);
-  const stored = JSON.parse(readFileSync(file, "utf-8")) as {
-    content: string;
-  };
-  stored.content = "# 被替换但未重签的正文\n";
-  writeFileSync(file, `${JSON.stringify(stored, null, 2)}\n`);
-
-  const degraded = taskService.previewLaunchKnowledge(input);
-  assert.equal(degraded.complete, true,
-    "自动匹配项是可选增强，损坏时按明确的空清单继续");
-  assert.equal(degraded.degraded, true);
-  assert.deepEqual(degraded.engineering_knowledge, []);
-  assert.equal(degraded.warnings.some((warning) =>
-    warning.source === "engineering_knowledge"
-      && warning.code === "catalog_warning"
-      && warning.message.includes(candidate.id)
-      && warning.message.includes("正文与发布指纹不一致")), true);
-
-  const explicitlySelected = taskService.previewLaunchKnowledge({
-    ...input,
-    selectedEngineeringKnowledgeIds: [candidate.id],
-  });
-  assert.equal(explicitlySelected.complete, false,
-    "用户或工作流点名的资产损坏不能悄悄退化掉");
-  assert.equal(explicitlySelected.errors.some((notice) =>
-    notice.source === "engineering_knowledge"
-      && notice.code === "selection_invalid"), true);
-
-  assert.throws(() => taskService.create("不能固定损坏的知识清单", {
-    repo: repository,
-    repositoryProfiles,
-    knowledgePreviewDigest: trusted.selection_digest,
-  }), /知识清单已变化/);
-  assert.deepEqual(taskService.list(), []);
-  assert.equal(existsSync(join(dataDir, "task-1")), false,
-    "旧指纹必须在 task id 分配和现场创建前拒绝");
-  const created = taskService.create("降级为无工程知识继续", {
-    repo: repository,
-    repositoryProfiles,
-    knowledgePreviewDigest: degraded.selection_digest,
-  });
-  assert.deepEqual(created.engineering_knowledge ?? [], []);
 });
 
 test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固定", () => {
@@ -422,7 +272,10 @@ test("技术画像记忆失败时，本单仍使用已核对画像而不静默�
     const dataDir = mfcTemp("mfc-launch-profile-write-");
     const repository = mfcTemp("mfc-launch-profile-repo-");
     execFileSync("git", ["init", "--quiet", "--bare", repository]);
-    const engineering = publishEngineering(dataDir, 1, undefined, repository);
+    const skillRoot = join(dataDir, "skills", "java-review");
+    mkdirSync(skillRoot, { recursive: true });
+    writeFileSync(join(skillRoot, "SKILL.md"), ["---", "name: java-review", "description: Java review",
+      "knowledge_nature: engineering", "technologies: [java]", "---", "# Java review", "Review Java changes."].join("\n"));
     // profiles.json 故意做成目录，让“记住供下次使用”失败；当前请求的
     // 画像仍然是合法输入，不能因此从 Java 匹配退化成无技术栈。
     mkdirSync(join(dataDir, "repository-profiles", "profiles.json"), {
@@ -435,8 +288,7 @@ test("技术画像记忆失败时，本单仍使用已核对画像而不静默�
     const preview = taskService.previewLaunchKnowledge({
       repositories: [repository], repositoryProfiles,
     });
-    assert.deepEqual(preview.engineering_knowledge.map((item) => item.id),
-      [engineering.id]);
+    assert.deepEqual(preview.team_skills.map((item) => item.name), ["java-review"]);
     const server = createTaskServer(taskService);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const base = `http://127.0.0.1:${
@@ -474,12 +326,11 @@ test("技术画像记忆失败时，本单仍使用已核对画像而不静默�
       });
       assert.equal(response.status, 201, await response.clone().text());
       const task = await response.json() as {
-        engineering_knowledge?: Array<{ id: string }>;
+        team_skills?: Array<{ name: string }>;
         repository_profiles?: Array<{ technologies: string[] }>;
       };
       assert.deepEqual(task.repository_profiles?.[0].technologies, ["java"]);
-      assert.deepEqual(task.engineering_knowledge?.map((item) => item.id),
-        [engineering.id]);
+      assert.deepEqual(task.team_skills?.map((item) => item.name), ["java-review"]);
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) =>
         error ? reject(error) : resolve()));

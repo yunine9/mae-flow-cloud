@@ -1,3 +1,4 @@
+import { KNOWLEDGE_WRITING_GUIDANCE } from "./knowledgeWritingGuidance.ts";
 /** Agent 的仓库记忆检索、展开和主动记录。仓库由宿主固定，索引不可用不阻断正本读写。 */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
@@ -89,10 +90,11 @@ export function createMemoryTools(backend: MemoryToolBackend) {
     name: "corpus_write", label: "沉淀经验候选",
     promptSnippet: "corpus_write: 用户说‘帮我沉淀/记住这条经验’时，保存候选并返回该条审查链接，不改变任务流程。",
     promptGuidelines: [
+      KNOWLEDGE_WRITING_GUIDANCE,
       "用户在对话里明确说‘帮我沉淀一下’、‘记住这个规范供以后复用’时，结合上下文调用 corpus_write；不要求先有检视意见、代码改动或构建失败。普通‘这次这样改’不是要求沉淀，不给每次开发对话增加记忆提醒。",
       "自动经验整理由宿主在 MR 合入、任务完成后集中启动；开发过程中不要自行调用 corpus_write 批量提炼检视意见或构建修复，仅响应用户明确的记录请求。",
       "保留用户原话到 user_statement。忠实区分人的明确约定与自己的推论，不擅自扩大范围；提炼可迁移的判断方法与必要前提，结论另起一段以‘适用例外：’说明边界。流程经验可不填 paths，不为记录经验追问无关的文件位置。",
-      "只有 corpus_write 确认保存成功后，才在当前对话简短告知‘已保存到团队资产 → 经验沉淀，待审查’，并原样附上工具返回的‘查看这条经验’链接。不要只口头答应记住，也不要把待确认说成已经采纳或全局生效。",
+      "只有 corpus_write 确认保存成功后，才在当前对话简短告知‘已保存到知识库 → 团队经验，待审查’，并原样附上工具返回的‘查看这条经验’链接。不要只口头答应记住，也不要把待确认说成已经采纳或全局生效。",
       "仅记录经验不会授权修改代码、推送、举审批卡或暂停任务。保存后按用户原有任务继续；保存失败如实说明，不宣称已沉淀，不反复重试阻塞当前开发。",
     ],
     description: "当用户自然表达‘帮我沉淀一下/记住这个规范’时保存经验候选，并在成功后回复审查链接。可来自对话中的流程总结、人的约定或具体纠正，不要求关联文件。从具体经验提炼可迁移的判断方法和因果，去掉偶然的任务/文件名但保留必要前提；不要泛化业务特例或只写注意质量。写清适用条件、结论依据和不适用情形。保存后等待责任人采纳，不进入正式检索或自动注入。不存凭据、令牌或整段日志。仓库与任务来源由宿主固定。",
@@ -109,8 +111,8 @@ export function createMemoryTools(backend: MemoryToolBackend) {
         conclusion: String(params.conclusion ?? "").trim(), paths: params.paths ?? [],
         scope: params.scope ?? "local",
         ...(params.user_statement ? { quote: String(params.user_statement).trim().slice(0, 600) } : {}) }, callId);
-      const link = `/?experience=1&memory_id=${encodeURIComponent(record.id)}`;
-      return { content: [{ type: "text" as const, text: `已保存到「团队资产 → 经验沉淀」（待确认候选）。\n[查看这条经验](${link})\n经验 ID：${record.id}。采纳后才可复用；当前任务继续，不等待审核。请在回复用户时保留此链接。` }],
+      const link = `/?kbPage=experience&memory_id=${encodeURIComponent(record.id)}`;
+      return { content: [{ type: "text" as const, text: `已保存到「知识库 → 团队经验」（待确认候选）。\n[查看这条经验](${link})\n经验 ID：${record.id}。采纳后才可复用；当前任务继续，不等待审核。请在回复用户时保留此链接。` }],
         details: { memory_id: record.id, review_url: link, status: "pending" } };
     },
   });

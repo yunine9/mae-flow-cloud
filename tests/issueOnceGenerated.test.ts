@@ -231,3 +231,19 @@ test("onceGeneratedFeatureRows:share/lines 缺失的行不崩不进聚合(#353)"
     share: 90, total_lines: 100,
   }], "只聚合 share 与 lines 都在场的行;share 由工作行重算(90/100),不取入参");
 });
+
+test("#457 DTS 完成日期按结论时刻过滤，结束边界不计入，聚合与明细范围一致", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "issue-completion-range-"));
+  for (const [id, at] of [["issue-start", "2026-10-08T16:00:00.000Z"], ["issue-end", "2026-10-09T15:59:59.999Z"], ["issue-next", "2026-10-09T16:00:00.000Z"]]) {
+    seedSession(dataDir, { id, created_at: "2026-08-01T00:00:00Z", status: "archived", conclusion: { kind: "delivered", summary: "完成", at } });
+    seedCompanion(dataDir, id, { first: 90, rework: 10, external: 0 });
+  }
+  const service = new IssueFlowService({ dataDir, provider: "p", model: "m", modelsJson: {} });
+  try {
+    const query = new URLSearchParams({ completed_from: "2026-10-08T16:00:00.000Z", completed_before: "2026-10-09T16:00:00.000Z" });
+    const { status, body } = await callRoute(service, `/issues/once-generated?${query}`, ["issues", "once-generated"]);
+    assert.equal(status, 200); assert.equal(body.delivered, 2); assert.equal(body.total, 2);
+    assert.deepEqual((body.per_session as Array<{id: string}>).map(row => row.id), ["issue-end", "issue-start"]);
+    assert.equal((body.localization as {total: number}).total, 2);
+  } finally { await service.shutdown(); (await import("node:fs")).rmSync(dataDir, { recursive: true, force: true }); }
+});

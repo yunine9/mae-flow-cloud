@@ -81,8 +81,8 @@ export function RequirementGraph({
   const [annotationBusy, setAnnotationBusy] = useState(false);
   const [annotationError, setAnnotationError] = useState("");
   if (!graph || !requirementGraphVisible(task)) return null;
-  const candidateCount = task.repositories?.length
-    ?? graph.repository_assessments?.length
+  const candidateCount = graph.repository_assessments?.length
+    ?? task.repositories?.length
     ?? graph.repositories.length;
   const projectionReady = graph.stage === "confirmed"
     || graph.projection_state === "ready";
@@ -91,6 +91,7 @@ export function RequirementGraph({
     ...graph.repositories.map((repository) => repository.assignee)
       .filter((account): account is string => !!account),
   ])].filter((account) => account !== task.luban_account);
+  const inMain = graph.repositories.length === 1 && (!graph.repositories[0].task_id || graph.repositories[0].task_id === task.id);
   const generated = graph.repositories.filter((repository) => repository.task_id).length;
   const completed = graph.repositories.filter((repository) =>
     repository.task_status === "completed").length;
@@ -149,6 +150,7 @@ export function RequirementGraph({
       <small>{!projectionReady
         ? graph.projection_state === "invalid" ? "分析产物需要修正" : "正在生成分析产物"
         : graph.repositories.length === 0 ? "确认后结束 · 无需开发"
+        : inMain ? graph.stage === "confirmed" ? "在本任务开发与交付" : "待确认 · 在本任务继续开发"
         : generated < graph.repositories.length
           ? `待确认 · ${graph.repositories.length} 个模块任务`
           : `${completed}/${graph.repositories.length} 个模块任务已完成`}</small>
@@ -177,7 +179,7 @@ export function RequirementGraph({
       <div className="requirement-root-task" data-review-anchor={planAnchor}>
         <span>主任务</span>
         <div><strong>{task.title ?? task.requirement}</strong>
-          <small>{task.ticket ?? task.id} · 先排查候选仓，再按实际改动模块创建任务</small></div>
+          <small>{task.ticket ?? task.id} · 先排查候选仓，再按实际交付范围推进</small></div>
         <em className={task.status}>{childStatusText[task.status] ?? task.status}</em>
       </div>
       <div className="requirement-split-label">
@@ -185,6 +187,7 @@ export function RequirementGraph({
           ? `正在排查 ${candidateCount} 个候选仓，不会直接按仓建任务`
           : graph.repositories.length === 0
             ? "全部候选仓均无需修改，不生成开发任务"
+            : inMain ? graph.stage === "confirmed" ? "方案已确认，由本任务完成开发与交付" : "一个交付单元，确认后在本任务继续开发"
             : generated
               ? `已创建 ${generated} 个模块任务`
               : `确认方案后创建 ${graph.repositories.length} 个模块任务`}</span>
@@ -279,7 +282,7 @@ export function RequirementGraph({
                         && <i>{annotationCount(anchor)}</i>}
                     </button>;
                   })()}
-                  {repository.task_id && <button type="button"
+                  {repository.task_id && repository.task_id !== task.id && <button type="button"
                     onClick={() => onOpenTask?.(repository.task_id!)}>查看子任务</button>}
                 </div>
                 {repository.task_id && <span className={`repo-task-status ${
@@ -362,6 +365,7 @@ export function RequirementGraph({
       {task.status === "waiting_for_human" && <p className="requirement-graph-note">
         {!projectionReady
           ? "当前只能退回让 Agent 补齐产物，不能用候选仓占位数据创建任务。"
+          : inMain ? "核对完成后，请在右侧确认并在本任务继续开发，或退回修改。"
           : graph.repositories.length > 0
             ? `核对完成后，请在右侧确认创建 ${graph.repositories.length} 个模块任务，或退回修改。`
             : "核对完成后，请在右侧确认分析结论并结束，或退回修改。"}

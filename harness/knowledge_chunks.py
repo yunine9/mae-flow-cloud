@@ -102,3 +102,35 @@ def split_markdown(text, max_chars=6000):
 
     divide(first, len(lines), [])
     return output
+
+
+def index_sections(text, max_chars=6000):
+    """Do not rank a structural parent heading separately from its child topics.
+
+    Source ranges remain lossless in split_markdown. A heading-only leaf may
+    itself be a rule, so only ancestors repeated in the next section's heading
+    trail are omitted. Never filter by text length or strip code-like headings.
+    """
+    sections = split_markdown(text, max_chars)
+    result = []
+    for i, section in enumerate(sections):
+        lines = [line for line in section.content.splitlines() if line.strip()]
+        title_only = (len(lines) == 1 and re.fullmatch(r' {0,3}#{1,6}\s+.+', lines[0]) is not None
+                      or len(lines) == 2 and not lines[0].startswith(('    ', '\t'))
+                      and re.fullmatch(r' {0,3}(=+|-+)\s*', lines[1]) is not None)
+        def heading_level(content):
+            content_lines = [line for line in content.splitlines() if line.strip()]
+            if not content_lines:
+                return 0
+            marker = re.match(r'^ {0,3}(#{1,6})\s+', content_lines[0])
+            if marker:
+                return len(marker[1])
+            if len(content_lines) > 1 and re.fullmatch(r' {0,3}(=+|-+)\s*', content_lines[1]):
+                return 1 if content_lines[1].lstrip()[0] == '=' else 2
+            return 0
+        has_child = (i + 1 < len(sections) and bool(section.heading)
+                     and heading_level(sections[i + 1].content) > heading_level(section.content)
+                     and sections[i + 1].heading.startswith(section.heading + ' > '))
+        if not (title_only and has_child):
+            result.append(section)
+    return result

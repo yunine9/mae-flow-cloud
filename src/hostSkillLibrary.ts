@@ -33,10 +33,13 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
+import { durableWriteFileSync } from "./durableWrite.ts";
+import { KnowledgeRecordFormatError, recordCheck, recordFields, recordObject, recordReadReason, recordStrings } from "./knowledgeRecordValidation.ts";
 import {
   normalizeKnowledgeAssetMetadata,
   readSkillKnowledgeMetadata,
@@ -51,6 +54,7 @@ const MAX_FILES = 400;
 const MAX_DEPTH = 8;
 /** 版本痕不设上限会无限吃盘;超过后修剪最老的(操作留痕永不修剪)。 */
 const MAX_VERSIONS_PER_SKILL = 20;
+const APPROVAL_BUDGET_MS = 60_000;
 
 const LIVE_DIR = "skills";
 const VERSIONS_DIR = "skill-versions";
@@ -120,9 +124,11 @@ export interface SkillSubmissionRecord {
   directory: string;
   operator: string;
   created_at: string;
-  status: "pending" | "approved" | "rejected";
+  status: "pending" | "approving" | "approved" | "rejected";
   skill_digest: string;
   package_digest: string;
+  /** 提交时生效整包的版本；null 表示尚未上架，缺失不能证明审查基线。 */
+  base_package_digest: string | null;
   files: number;
   bytes: number;
   nature: KnowledgeAssetMetadata["nature"];
@@ -134,7 +140,22 @@ export interface SkillSubmissionRecord {
   reject_reason?: string;
 }
 
-/** 疑似密钥的形态清单。占位符和 HTTP 头名称不作为凭据；
+/** 仅识别已知头名的完整常量值，不凭连字符外形豁免密码或配置值。 */
+function isHeaderNameConstant(match: RegExpMatchArray): boolean {
+  const before = match.input!.slice(0, match.index);
+  const name = (before.match(/[\p{L}\p{N}_$-]*$/u)?.[0] ?? "") + match[1];
+  const headers: Record<string, string> = {
+    X_ACCESS_TOKEN: "x-access-token", X_API_KEY: "x-api-key", API_KEY: "x-api-key",
+  };
+  if (!Object.hasOwn(headers, name) || headers[name] !== match[2].toLowerCase()) return false;
+  const quote = match[0].match(/[:=]\s*(["'])[^"']*$/)?.[1];
+  const after = match.input!.slice(match.index! + match[0].length);
+  // 必须是完整字面量；后缀字符、拼接表达式、未加引号的配置值都不豁免。
+  return !!quote && after[0] === quote
+    && /^[ \t]*(?:$|\r?\n|[,;)}\]`]|\/\/|#|\/\*)/.test(after.slice(1));
+}
+
+/** 疑似密钥的形态清单。占位符和已识别的 HTTP 头名常量不作为凭据；
  * 跳过这些匹配后，仍继续检查同一文件中的其他内容。 */
 const SECRET_PATTERNS: Array<{
   label: string; pattern: RegExp; skip?: (match: RegExpMatchArray) => boolean;
@@ -142,8 +163,7 @@ const SECRET_PATTERNS: Array<{
   {
     label: "密钥赋值",
     pattern: /(api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?((?=[A-Za-z0-9_\-./+]*[A-Za-z])[A-Za-z0-9_\-./+]{8,})/i,
-    // 例如 X_ACCESS_TOKEN = "x-access-token"，值是头名称而非令牌。
-    skip: (match) => /^[a-z]+(?:-[a-z]+)+$/.test(match[2]),
+    skip: isHeaderNameConstant,
   },
   { label: "Bearer 凭据", pattern: /Bearer\s+(?=[A-Za-z0-9\-._~+/]*[A-Za-z])[A-Za-z0-9\-._~+/]{16,}/ },
   { label: "私钥块", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
@@ -208,6 +228,50 @@ export function readHostSkillDocument(
   };
 }
 
+/** 只读当前包，所有路径仍按上传规则校验；不跟随软链接。 */
+export function readHostSkillPackage(dataDir: string, directory: string) {
+  const document = readHostSkillDocument(dataDir, directory);
+  const files = readSkillPackageFiles(join(dataDir, LIVE_DIR, directory));
+  return { ...document, files };
+}
+
+function readSkillPackageFiles(packageRoot: string) {
+  if (!lstatSync(packageRoot).isDirectory()) throw new SkillLibraryError("Skill 包目录无效");
+  const files: Array<{ path: string; bytes: number; content?: string }> = [];
+  let total = 0;
+  function visit(relative: string, depth: number) {
+    if (depth > 16) throw new SkillLibraryError("Skill 目录层级过深");
+    for (const entry of readdirSync(join(packageRoot, relative), { withFileTypes: true })) {
+      const path = relative ? `${relative}/${entry.name}` : entry.name;
+      assertPackagePath(path);
+      if (entry.isSymbolicLink()) throw new SkillLibraryError("Skill 包不能包含软链接");
+      if (entry.isDirectory()) { visit(path, depth + 1); continue; }
+      if (!entry.isFile()) throw new SkillLibraryError("Skill 包包含不支持的文件类型");
+      if (files.length >= 500) throw new SkillLibraryError("Skill 包文件数量过多");
+      const raw = readFileSync(join(packageRoot, path)); total += raw.byteLength;
+      if (total > 20 * 1024 * 1024) throw new SkillLibraryError("Skill 包超过 20 MiB");
+      let content: string | undefined;
+      if (raw.byteLength <= 128 * 1024 && !raw.includes(0)) {
+        try { content = new TextDecoder("utf-8", { fatal: true }).decode(raw); } catch { /* 二进制附件保留文件信息。 */ }
+      }
+      files.push({ path, bytes: raw.byteLength, ...(content === undefined ? {} : { content }) });
+    }
+  }
+  visit("", 0);
+  files.sort((a,b) => a.path === "SKILL.md" ? -1 : b.path === "SKILL.md" ? 1 : a.path.localeCompare(b.path));
+  return files;
+}
+
+export function readSkillSubmissionPackage(dataDir: string, directory: string, id: string) {
+  assertDirectoryName(directory);
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new SkillLibraryError("提交编号无效");
+  const record = readSubmission(dataDir, directory, id);
+  const root = join(submissionRoot(dataDir, directory), id, "package");
+  const files = readSkillPackageFiles(root);
+  if (packageDigest(root) !== record.package_digest) throw new SkillLibraryError("提交包已变化，请重新提交后审查");
+  return { record, files };
+}
+
 function assertPackagePath(path: string): void {
   const segments = path.split("/");
   if (segments.length > MAX_DEPTH) {
@@ -232,7 +296,34 @@ export function scanForSecrets(path: string, content: Buffer): void {
       `文件名即密钥容器,skill 是权限全开的公开指南,不能收: ${path}`);
   }
   if (!looksTextual(content)) return;
-  const text = content.toString("utf-8");
+  const pending = [{ path, text: content.toString("utf-8") }];
+  while (pending.length) {
+    const item = pending.pop()!;
+    scanSecretText(item.path, item.text);
+    // 研究工具传入 JSON 文档。检查解码后的正文，不能让转义引号掩盖赋值。
+    let value: unknown;
+    try { value = JSON.parse(item.text); } catch { continue; }
+    const fields: unknown[] = [value];
+    const fieldPath = `${path}（JSON 文本字段）`;
+    while (fields.length) {
+      const field = fields.pop();
+      if (typeof field === "string") pending.push({ path: fieldPath, text: field });
+      else if (Array.isArray(field)) {
+        for (const child of field) fields.push(child);
+      } else if (field && typeof field === "object") {
+        for (const [key, child] of Object.entries(field)) {
+          // 同时检查解码后的键值关系，例如值中用 Unicode 转义书写的密码。
+          if (typeof child === "string") {
+            scanSecretText(fieldPath, `${JSON.stringify(key)}: ${JSON.stringify(child)}`);
+          }
+          fields.push(child);
+        }
+      }
+    }
+  }
+}
+
+function scanSecretText(path: string, text: string): void {
   for (const { label, pattern, skip } of SECRET_PATTERNS) {
     for (const match of text.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))) {
       if (skip?.(match)) continue;
@@ -437,7 +528,9 @@ function installStaged(
   action: "upload" | "update" | "rollback",
   staged: ReturnType<typeof validateStaged>,
   detail?: string,
+  checkBudget: () => void = () => {},
 ): SkillOperationRecord {
+  checkBudget();
   const liveRoot = join(dataDir, LIVE_DIR);
   mkdirSync(liveRoot, { recursive: true });
   chmodSync(liveRoot, 0o755);
@@ -446,6 +539,7 @@ function installStaged(
     archiveLive(dataDir, directory,
       action === "rollback" ? "rollback" : "update", operator);
   }
+  checkBudget();
   renameSync(join(stagingRoot, directory), live);
   const record: SkillOperationRecord = {
     at: new Date().toISOString(),
@@ -458,6 +552,7 @@ function installStaged(
     bytes: staged.bytes,
     ...(detail ? { detail } : {}),
   };
+  checkBudget();
   appendOperation(dataDir, record);
   return record;
 }
@@ -468,6 +563,19 @@ function serialized<T>(work: () => T): Promise<T> {
   const next = writeQueue.then(work);
   writeQueue = next.catch(() => undefined);
   return next;
+}
+
+/** 等待写队列也计入预算；过期请求不能在调用人收到失败后继续安装。 */
+function approvalWithinBudget<T>(work: (checkBudget: () => void) => T): Promise<T> {
+  const deadline = Date.now() + APPROVAL_BUDGET_MS;
+  let expired = false, timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = () => new SkillLibraryError("Skill 审批超过60秒预算，已停止；已保存的审核通过意图将在服务启动时接续，请检查提交记录");
+  const checkBudget = () => { if (expired || Date.now() >= deadline) throw timeout(); };
+  const queued = serialized(() => { checkBudget(); return work(checkBudget); });
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { expired = true; reject(timeout()); }, APPROVAL_BUDGET_MS);
+  });
+  return Promise.race([queued, budget]).finally(() => clearTimeout(timer));
 }
 
 function stageDirectory(dataDir: string, directory: string): string {
@@ -566,32 +674,6 @@ export function updateHostSkillKnowledgeMetadata(
   });
 }
 
-/** 兼容已经发布的语言编辑接口；新模型统一写 technologies。 */
-export function updateHostSkillLanguages(
-  dataDir: string,
-  directory: string,
-  languages: string[],
-  operator: string,
-): Promise<SkillOperationRecord> {
-  const current = readHostSkillDocument(dataDir, directory);
-  const previous = readSkillKnowledgeMetadata(current.content);
-  let normalized: KnowledgeAssetMetadata;
-  try {
-    normalized = normalizeKnowledgeAssetMetadata({
-      nature: previous.nature === "unclassified" ? "engineering" : previous.nature,
-      form: "skill",
-      business_module_ids: previous.business_module_ids,
-      repositories: previous.repositories,
-      technologies: languages,
-    }, { fixedForm: "skill" });
-  } catch (error) {
-    throw new SkillLibraryError(
-      error instanceof Error ? error.message : String(error));
-  }
-  return updateHostSkillKnowledgeMetadata(
-    dataDir, directory, normalized, operator);
-}
-
 /** 上传载荷 → 暂存目录 + 完整验收(路径/密钥/预算/装载器)。上架与
  * 提交待审共用同一道闸:待审区也是可读区,不合格的包一步都不许进。 */
 function materializeToStaging(
@@ -647,7 +729,7 @@ function writeSubmissionRecord(
   dataDir: string,
   record: SkillSubmissionRecord,
 ): void {
-  writeFileSync(
+  durableWriteFileSync(
     join(submissionRoot(dataDir, record.directory), record.id,
       "submission.json"),
     JSON.stringify(record), { mode: 0o644 });
@@ -673,6 +755,17 @@ export function submitHostSkill(
     try {
       const staged = materializeToStaging(
         stagingRoot, directory, files, metadata);
+      const live = join(dataDir, LIVE_DIR, directory);
+      const basePackageDigest = existsSync(live) ? packageDigest(live) : null;
+      const duplicate = listSkillSubmissions(dataDir).find(record =>
+        record.directory === directory && ["pending", "approving"].includes(record.status)
+        && record.package_digest === staged.packageDigestValue
+        && record.base_package_digest === basePackageDigest);
+      if (duplicate) {
+        // 只复用仍待处理且基线相同的提交，退回与正式版本变化后都能重新提交。
+        readSkillSubmissionPackage(dataDir, directory, duplicate.id);
+        return duplicate;
+      }
       const stamp = new Date().toISOString().replace(/[-:.]/g, "");
       let id = stamp;
       for (let seq = 1;
@@ -690,6 +783,7 @@ export function submitHostSkill(
         status: "pending",
         skill_digest: staged.skillDigest,
         package_digest: staged.packageDigestValue,
+        base_package_digest: basePackageDigest,
         files: staged.files,
         bytes: staged.bytes,
         nature: staged.nature,
@@ -716,27 +810,61 @@ export function submitHostSkill(
   });
 }
 
-/** 全部提交记录(含已裁决的:审核史也是台账)。读侧 fail-open。 */
+/** 逐条读取台账；坏件保留原字节，并通过现有告警渠道点名。 */
 export function listSkillSubmissions(
   dataDir: string,
+  warnings?: string[],
 ): SkillSubmissionRecord[] {
   const root = join(dataDir, SUBMISSIONS_DIR);
   if (!existsSync(root)) return [];
   const records: SkillSubmissionRecord[] = [];
   for (const dir of readdirSync(root, { withFileTypes: true })) {
     if (!dir.isDirectory()) continue;
-    for (const entry of readdirSync(join(root, dir.name),
-      { withFileTypes: true })) {
+    let entries: Dirent[];
+    try { entries = readdirSync(join(root, dir.name), { withFileTypes: true }); }
+    catch (error) {
+      warnings?.push(`记录损坏：${SUBMISSIONS_DIR}/${dir.name}，无法读取提交目录；${recordReadReason(error)}`);
+      continue;
+    }
+    for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       try {
-        records.push(JSON.parse(readFileSync(
-          join(root, dir.name, entry.name, "submission.json"), "utf-8")));
-      } catch {
-        // 坏记录跳过:待审区读侧不硬崩。
+        records.push(readSubmission(dataDir, dir.name, entry.name));
+      } catch (error) {
+        warnings?.push(error instanceof SkillLibraryError ? error.message
+          : `记录损坏：${SUBMISSIONS_DIR}/${dir.name}/${entry.name}/submission.json；${recordReadReason(error)}`);
       }
     }
   }
   return records.sort((left, right) => right.id.localeCompare(left.id));
+}
+
+function validSubmission(value: unknown, directory: string, id: string): value is SkillSubmissionRecord {
+  recordObject(value, "Skill 提交记录");
+  const digest = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const time = (key: string) => recordCheck(typeof value[key] === "string" && !!value[key] && Number.isFinite(Date.parse(value[key])), key, "缺失或不是有效时间");
+  recordCheck(value.id === id && /^[A-Za-z0-9_-]{1,100}$/.test(id), "id", "与提交目录不一致或不是有效编号");
+  recordCheck(value.directory === directory, "directory", "与 Skill 目录不一致");
+  recordFields(value, ["operator"]); recordCheck(!!value.operator, "operator", "缺失提交人"); time("created_at");
+  recordCheck(digest(value.skill_digest), "skill_digest", "缺失或不是有效的内容指纹");
+  recordCheck(digest(value.package_digest), "package_digest", "缺失或不是有效的包指纹");
+  recordCheck(Object.hasOwn(value, "base_package_digest"), "base_package_digest", "缺失，无法确认审核基于哪个已发布版本，请重新提交 Skill");
+  recordCheck(value.base_package_digest === null || digest(value.base_package_digest), "base_package_digest", "必须为空或有效的已发布版本指纹");
+  recordCheck(["pending", "approving", "approved", "rejected"].includes(String(value.status)), "status", "不是受支持的审核状态");
+  recordCheck(Number.isInteger(value.files) && value.files >= 1 && value.files <= MAX_FILES, "files", "不是有效的包文件数量");
+  recordCheck(Number.isInteger(value.bytes) && value.bytes >= 1 && value.bytes <= MAX_PACKAGE_BYTES, "bytes", "不是有效的包大小");
+  recordCheck(["business", "engineering"].includes(String(value.nature)), "nature", "缺失或不是业务知识、工程知识");
+  for (const name of ["business_module_ids", "repositories", "technologies"]) recordStrings(value[name], name);
+  recordFields(value, ["reject_reason"], "", true);
+  if (value.status !== "pending" || value.decided_at !== undefined) time("decided_at");
+  if (value.status !== "pending" || value.decided_by !== undefined) recordCheck(typeof value.decided_by === "string" && !!value.decided_by, "decided_by", "缺失审核人");
+  try { assertDirectoryName(directory); }
+  catch { throw new KnowledgeRecordFormatError("directory 不是有效的 Skill 目录名"); }
+  try {
+    normalizeKnowledgeAssetMetadata({ nature: value.nature, form: "skill", business_module_ids: value.business_module_ids,
+      repositories: value.repositories, technologies: value.technologies });
+  } catch { throw new KnowledgeRecordFormatError("nature、business_module_ids、repositories 或 technologies 不符合知识归属规则"); }
+  return true;
 }
 
 function readSubmission(
@@ -748,53 +876,119 @@ function readSubmission(
   if (!existsSync(path)) {
     throw new SkillLibraryError(`没有这份提交: ${directory}/${id}`);
   }
-  return JSON.parse(readFileSync(path, "utf-8"));
+  try {
+    if (!lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) throw new KnowledgeRecordFormatError("审核记录必须是普通文件，不能是目录或符号链接");
+    const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+    recordObject(parsed, "Skill 提交记录");
+    // 旧提交未保存基线，按尚未上架读取；当前已有正式包时，审核仍要求基于它重新提交。
+    const record = { base_package_digest: null, ...parsed };
+    if (!validSubmission(record, directory, id)) throw new Error("审核记录形状不完整或基线缺失");
+    return record;
+  } catch (error) {
+    throw new SkillLibraryError(`记录损坏：${SUBMISSIONS_DIR}/${directory}/${id}/submission.json；${recordReadReason(error)}`);
+  }
 }
 
-/** 审核通过 → 上架。重走完整验收(与回退同纪律),操作留痕记提交人
- * 与审核人两个名字。 */
+function stageSubmission(dataDir: string, record: SkillSubmissionRecord, checkBudget: () => void) {
+  checkBudget();
+  const stagingRoot = stageDirectory(dataDir, record.directory);
+  try {
+    copyOrdinaryDirectory(join(submissionRoot(dataDir, record.directory), record.id, "package"), join(stagingRoot, record.directory));
+    checkBudget();
+    normalizePermissions(join(stagingRoot, record.directory));
+    const staged = validateStaged(stagingRoot, record.directory);
+    if (staged.packageDigestValue !== record.package_digest || staged.skillDigest !== record.skill_digest) {
+      throw new SkillLibraryError("提交包已变化，请重新提交后审查");
+    }
+    checkBudget();
+    return { stagingRoot, staged };
+  } catch (error) {
+    rmSync(stagingRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** 意图是安装权限的依据；若安装已完成，只补审核结果，不能再次归档或覆盖。 */
+function finishApproval(dataDir: string, record: SkillSubmissionRecord, prepared: ReturnType<typeof stageSubmission>, checkBudget: () => void): SkillOperationRecord {
+  checkBudget();
+  const live = join(dataDir, LIVE_DIR, record.directory);
+  const currentDigest = existsSync(live) ? packageDigest(live) : null;
+  const installDetail = `审核通过 ${record.operator} 的提交 ${record.id}`;
+  const installationRecorded = listSkillOperations(dataDir, Number.MAX_SAFE_INTEGER).some(operation => operation && typeof operation === "object" && !Array.isArray(operation)
+    && operation.directory === record.directory
+    && operation.package_digest === record.package_digest && operation.detail === installDetail && ["upload", "update"].includes(operation.action));
+  checkBudget();
+  let installed: SkillOperationRecord;
+  // 精确安装台账证明这次审批已生效；后来下线或回退不撤销历史裁决，只补终态。
+  if (installationRecorded || currentDigest === record.package_digest) {
+    installed = {
+      at: record.decided_at!, operator: record.decided_by!, action: record.base_package_digest === null ? "upload" : "update",
+      directory: record.directory, skill_digest: record.skill_digest, package_digest: record.package_digest,
+      files: record.files, bytes: record.bytes, detail: installDetail,
+    };
+    // kill 可能发生在换包 rename 后、操作留痕前；按原意图补足，不重复换包。
+    checkBudget();
+    if (!installationRecorded) appendOperation(dataDir, installed);
+  } else {
+    if (currentDigest !== null && currentDigest !== record.base_package_digest) {
+      throw new SkillLibraryError("当前 Skill 包在审核通过后又发生变化，未覆盖正式包；请核对提交包与当前版本");
+    }
+    installed = installStaged(dataDir, prepared.stagingRoot, record.directory, record.decided_by!,
+      record.base_package_digest === null ? "upload" : "update", prepared.staged, installDetail, checkBudget);
+  }
+  const approvalDetail = `通过 ${record.operator} 的提交 ${record.id}`;
+  const decided = { ...record, status: "approved" as const };
+  const recorded = listSkillOperations(dataDir, Number.MAX_SAFE_INTEGER).some(operation => operation && typeof operation === "object" && !Array.isArray(operation)
+    && operation.action === "approve"
+    && operation.directory === record.directory && operation.package_digest === record.package_digest && operation.detail === approvalDetail);
+  checkBudget();
+  if (!recorded) appendOperation(dataDir, {
+    at: record.decided_at!, operator: record.decided_by!, action: "approve", directory: record.directory,
+    skill_digest: record.skill_digest, package_digest: record.package_digest, detail: approvalDetail,
+  });
+  checkBudget();
+  writeSubmissionRecord(dataDir, decided);
+  return installed;
+}
+
+/** 审核结果先耐久保存为意图，换包中断后仍知道原审核人和精确内容。 */
 export function approveSkillSubmission(
-  dataDir: string,
-  directory: string,
-  id: string,
-  approver: string,
+  dataDir: string, directory: string, id: string, approver: string,
 ): Promise<SkillOperationRecord> {
-  return serialized(() => {
+  return approvalWithinBudget(checkBudget => {
     assertDirectoryName(directory);
     const record = readSubmission(dataDir, directory, id);
-    if (record.status !== "pending") {
-      throw new SkillLibraryError(
-        `提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    if (record.status !== "pending") throw new SkillLibraryError(`提交 ${id} 已经裁决过(${record.status}),不能重复审核`);
+    const live = join(dataDir, LIVE_DIR, directory);
+    const currentDigest = existsSync(live) ? packageDigest(live) : null;
+    if (currentDigest !== record.base_package_digest) {
+      throw new SkillLibraryError("当前 Skill 包在提交后已发生变化，请基于最新版本重新提交；本次仍保持待审核，未覆盖已发布内容");
     }
-    const stagingRoot = stageDirectory(dataDir, directory);
+    const prepared = stageSubmission(dataDir, record, checkBudget);
     try {
-      cpSync(join(submissionRoot(dataDir, directory), id, "package"),
-        join(stagingRoot, directory), { recursive: true });
-      normalizePermissions(join(stagingRoot, directory));
-      const staged = validateStaged(stagingRoot, directory);
-      const exists = existsSync(join(dataDir, LIVE_DIR, directory));
-      const installed = installStaged(dataDir, stagingRoot, directory,
-        approver, exists ? "update" : "upload", staged,
-        `审核通过 ${record.operator} 的提交 ${id}`);
-      const decided: SkillSubmissionRecord = {
-        ...record,
-        status: "approved",
-        decided_at: new Date().toISOString(),
-        decided_by: approver,
-      };
-      writeSubmissionRecord(dataDir, decided);
-      appendOperation(dataDir, {
-        at: decided.decided_at!,
-        operator: approver,
-        action: "approve",
-        directory,
-        skill_digest: record.skill_digest,
-        package_digest: record.package_digest,
-        detail: `通过 ${record.operator} 的提交 ${id}`,
-      });
-      return installed;
-    } finally {
-      rmSync(stagingRoot, { recursive: true, force: true });
+      const intent = { ...record, status: "approving" as const, decided_at: new Date().toISOString(), decided_by: approver };
+      checkBudget();
+      writeSubmissionRecord(dataDir, intent);
+      return finishApproval(dataDir, intent, prepared, checkBudget);
+    } finally { rmSync(prepared.stagingRoot, { recursive: true, force: true }); }
+  });
+}
+
+/** 服务启动只接续已审批的意图；单条失败保留原记录并点名，不能阻挡邻居。 */
+export function recoverSkillSubmissions(dataDir: string, warnings: string[] = []): Promise<void> {
+  return approvalWithinBudget(checkBudget => {
+    const records = listSkillSubmissions(dataDir, warnings);
+    for (const record of records) {
+      if (record.status !== "approving") continue;
+      const path = `${SUBMISSIONS_DIR}/${record.directory}/${record.id}/submission.json`;
+      try {
+        checkBudget();
+        const prepared = stageSubmission(dataDir, record, checkBudget);
+        try { finishApproval(dataDir, record, prepared, checkBudget); }
+        finally { rmSync(prepared.stagingRoot, { recursive: true, force: true }); }
+      } catch (error) {
+        warnings.push(`审核通过尚未完成：${path}；${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   });
 }

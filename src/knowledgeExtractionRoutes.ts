@@ -3,18 +3,17 @@ import { KnowledgeExtractionSkills, type ExtractionKind } from "./knowledgeExtra
 import { wxdoubaoConfig, callWxdoubao, WxdoubaoError } from "./wxdoubao.ts";
 
 export async function extractionConfigurationRoute(request: IncomingMessage, response: ServerResponse, parts: string[],
-  dataDir: string, operator: string, canManage: boolean,
+  dataDir: string, operator: string,
   readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   try {
     if (parts[1] === "skills" && ["component", "domain"].includes(parts[2])) {
       const skills = methodStore(dataDir), kind = parts[2] as ExtractionKind;
-      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: canManage });
+      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: true });
       if (request.method === "POST" && [undefined, "rollback"].includes(parts[3])) {
-        if (!canManage) return json(response, 403, { error: "仅管理员可发布或回退萃取方法" });
         const body = await readBody(request, 2 * 1024 * 1024);
         const result = parts[3] === "rollback" ? await skills.rollback(kind, body.version_id, body.expected_digest, operator)
           : await skills.save(kind, body.files, body.expected_digest, operator);
-        return json(response, 200, { ...result, can_manage: canManage });
+        return json(response, 200, { ...result, can_manage: true });
       }
     }
     if (parts[1] === "wxdoubao" && request.method === "GET") {
@@ -26,7 +25,7 @@ export async function extractionConfigurationRoute(request: IncomingMessage, res
       const close = () => controller.abort();
       response.once("close", close);
       try {
-        const result = await callWxdoubao("knowledge_search", { question: "知识库连接验证" }, { signal: controller.signal });
+        const result = await callWxdoubao({ question: "知识库连接验证" }, { signal: controller.signal });
         return json(response, 200, { configured: true, state: result.state, message: result.state === "empty" ? "连接成功，本次查询无结果" : "连接和检索权限正常" });
       } finally { response.removeListener("close", close); }
     }

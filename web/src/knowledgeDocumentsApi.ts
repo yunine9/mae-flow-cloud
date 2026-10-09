@@ -5,7 +5,7 @@ export interface KnowledgeDocument {
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
   when_to_use: string; active: boolean; revision: string;
   source?: { repository: string; branch: string; path: string; revision: string };
-  research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string };
+  research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string; components?: Array<{ id: string }> };
   history: Array<{ at: string; operator: string; action: string }>;
   indexing?: { state: string; sections?: number; error?: string }; lines?: number;
 }
@@ -15,7 +15,7 @@ export async function documentRequest<T>(path = "", body?: unknown): Promise<T> 
   const response = await fetch(`/knowledge-documents${path}`, body === undefined ? undefined : {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
-  const data = await response.json();
+  const data = await response.json() as T & { error?: string };
   if (!response.ok) throw new Error(data.error || "请求失败");
   return data;
 }

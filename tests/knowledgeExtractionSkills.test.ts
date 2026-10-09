@@ -37,6 +37,18 @@ test("无效或越界的 Skill 更新不替换当前包", async () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("萃取方法允许头名说明，拒绝夹带口令且保留已发布版本", async () => {
+  const root=mkdtempSync(join(tmpdir(),"extraction-secret-"));
+  try {
+    const skills=new KnowledgeExtractionSkills(root),original=skills.current("component");
+    const files={...original.files,"references/headers.md":'X_ACCESS_TOKEN = "X-Access-Token"'};
+    const accepted=await skills.save("component",files,original.digest,"expert");
+    await assert.rejects(skills.save("component",{...files,"references/config.md":'password = "correct-horse-battery-staple"'},accepted.digest,"expert"),/疑似密钥/);
+    assert.equal(skills.current("component").digest,accepted.digest);
+    assert.deepEqual(skills.current("component").files,files);
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
+
 test("标准 Skill 可按平台用途上传，保留原名、引用与文本附件，运行中的版本不变", async () => {
   const root = mkdtempSync(join(tmpdir(), "platform-skill-"));
   try {
@@ -66,5 +78,22 @@ test("标准 Skill 可按平台用途上传，保留原名、引用与文本附�
     const restored = await store.rollback("domain", saved.versions[0].version_id, saved.digest, "admin");
     assert.equal(restored.name, initial.name);
     assert.equal(restored.digest, initial.digest);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("#448 引用缺失只提示不拦截：包外示例链接与包内写错的路径都照常保存，并逐条说明", async () => {
+  const root = mkdtempSync(join(tmpdir(), "extraction-skills-"));
+  try {
+    const skills = new KnowledgeExtractionSkills(root), original = skills.current("domain");
+    const files = { ...original.files,
+      "SKILL.md": original.files["SKILL.md"] + "\n\n模块文档链回总览：[架构](../architecture.md)\n",
+      "references/workflow.md": original.files["references/workflow.md"] + "\n另见 [遗漏](missing.md)。\n" };
+    const saved = await skills.save("domain", files, original.digest, "expert");
+    assert.notEqual(saved.digest, original.digest, "保存必须生效");
+    assert.equal(saved.warnings.length, 2);
+    assert.match(saved.warnings[0], /SKILL\.md 引用了包外文件 \.\.\/architecture\.md：不会随 Skill 上传/);
+    assert.match(saved.warnings[1], /references\/workflow\.md 引用的 missing\.md 不在包内/);
+    // 包内真实存在的相对引用不提示。
+    assert.ok(!saved.warnings.some(item => item.includes("platform-pipeline.md")));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

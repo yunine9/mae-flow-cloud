@@ -1,6 +1,40 @@
 import { readJson } from "./jsonBody.ts";
 import type { GateItem, GateView } from "./mergeWatch.ts";
 
+/** 错误只读取前 300 字符，响应未结束也有独立的 10 秒预算。 */
+export async function readMrFailureBody(response: Response, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  const reading = (async () => {
+    const decoder = new TextDecoder(); let text = "";
+    while (text.length < 300) {
+      const part = await reader.read();
+      signal?.throwIfAborted();
+      if (part.done) return (text + decoder.decode()).slice(0, 300);
+      text += decoder.decode(part.value, { stream: true });
+    }
+    return text.slice(0, 300);
+  })();
+  try {
+    const waits: Promise<string>[] = [reading, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("MR 平台错误正文读取超时（10 秒）")), 10_000);
+      timer.unref?.();
+    })];
+    if (signal) waits.push(new Promise<never>((_, reject) => {
+      abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+    }));
+    return await Promise.race(waits);
+  } finally {
+    clearTimeout(timer); if (abort) signal!.removeEventListener("abort", abort);
+    void reader.cancel().catch(() => undefined);
+  }
+}
+
 /** 查询指定 MR 的平台事实。监控允许缺失生命周期字段；再次交付必须
  * 严格核对。不可得仍返回 undefined，但失败原因必须交给调用方分类，
  * 不能让一次网络抖动和确定性鉴权错误都变成直接停摆。 */

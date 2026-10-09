@@ -1,3 +1,4 @@
+import { isMainTaskDelivery } from "../../src/requirementDecisionContract";
 import { useState } from "react";
 import { continueTaskDelivery, type TaskSummary } from "./api";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ export function TaskContinueDelivery({ task, canOperate, onChanged }: {
 }) {
   const pending = !!task.continuation && task.continuation.state !== "active";
   const eligible = task.status === "completed" && !task.requirement_analysis_requested
-    && (!task.requirement_graph || !!task.parent_task_id)
+    && (!task.requirement_graph || !!task.parent_task_id || isMainTaskDelivery(task))
     && (pending || ["merged", "已合入"].includes(task.delivery?.mr_state ?? ""));
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");

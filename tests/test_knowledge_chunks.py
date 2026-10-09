@@ -48,4 +48,34 @@ class ChunksTests(unittest.TestCase):
         self.assertIn('| id |', table.content)
         self.assert_ranges(text, chunks)
 
+
+class IndexSectionTests(unittest.TestCase):
+    def test_structural_parent_titles_are_context_not_standalone_search_hits(self):
+        from knowledge_chunks import index_sections
+        text = '# 手册\n\n## 释放资源\n必须 close。\n\n## 借用\n不得 close。'
+        rows = index_sections(text)
+        self.assertEqual([c.heading for c in rows], ['手册 > 释放资源', '手册 > 借用'])
+        self.assertEqual(rows[0].start_line, 3)
+        self.assertEqual(rows[0].content, '\n'.join(text.splitlines()[2:5]))
+
+    def test_short_rules_and_heading_only_leaf_rules_are_not_discarded(self):
+        from knowledge_chunks import index_sections
+        for text in ['# 禁止盲目重试', '# 手册\n\n## 禁止盲目重试', '# 手册\n说明只有一行。\n## 参数\n0 表示关闭。']:
+            rows = index_sections(text)
+            self.assertTrue(any('禁止盲目重试' in c.content or '说明只有一行' in c.content for c in rows))
+
+    def test_setext_parents_and_fenced_or_indented_heading_like_code(self):
+        from knowledge_chunks import index_sections
+        text='手册\n====\n\n规则\n----\n不能丢弃。\n\n## 示例\n```md\n# 这是示例\n```\n\n    # 这也是示例\n'
+        rows=index_sections(text)
+        self.assertFalse(any(c.content.strip()=='手册\n====' for c in rows))
+        self.assertTrue(any('```md\n# 这是示例\n```' in c.content for c in rows))
+        self.assertTrue(any('    # 这也是示例' in c.content for c in rows))
+
+    def test_literal_separator_in_sibling_heading_does_not_make_it_a_child(self):
+        from knowledge_chunks import index_sections
+        rows=index_sections('# 禁止覆盖\n\n# 禁止覆盖 > 其他说明\n正文。')
+        self.assertEqual(len(rows),2)
+        self.assertEqual(rows[0].content.strip(),'# 禁止覆盖')
+
 if __name__ == '__main__': unittest.main()

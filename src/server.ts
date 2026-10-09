@@ -1,3 +1,9 @@
+import { readHostSkillPackage, readSkillSubmissionPackage } from "./hostSkillLibrary.ts";
+import { readKnowledgeSkillContext, saveKnowledgeSkillContext } from "./knowledgeSkillContext.ts";
+import { listKnowledgeTasks } from "./knowledgeTaskCenter.ts";
+import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
+import { listKnowledgeReviewNotes, saveKnowledgeReviewNote, applyKnowledgeReviewNotes, resolveKnowledgeReviewNotes, type KnowledgeReviewKind, type KnowledgeReviewNoteInput } from "./knowledgeReviewNotes.ts";
+import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
 import { continuationHistoryZip } from "./taskContinuation.ts";
 import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
@@ -23,19 +29,14 @@ import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
  *   GET/PUT/DELETE /business-modules/:id/assets/:asset  → 查看/发布/归档模块知识
  *   GET  /skills                                        → Skill 货架 + 操作留痕
  *   GET  /skills/:dir/versions                          → 归档版本痕(可回退点)
- *   PUT  /skills/:dir          {files:[{path,content_base64}]} → 上传/更新(管理员)
  *   GET  /skills/submissions                            → 待审/已裁决提交台账(登录即可)
  *   POST /skills/:dir/submissions {files:[…]}           → 开发者提交待审(登录即可,同一道验收闸)
  *   POST /skills/:dir/submissions/:id/approve           → 审核通过并上架(管理员)
  *   POST /skills/:dir/submissions/:id/reject {reason?}  → 驳回留痕(管理员)
  *   DELETE /skills/:dir                                 → 下线并归档(管理员)
  *   POST /skills/:dir/rollback {version}                → 回退归档版本(管理员)
- *   POST /skills/:dir/distill                           → 从任务现场起草修订稿(管理员)
- *   GET  /skills/:dir/candidates[/:id]                  → 修订候选列表/详情
  *   POST /knowledge/skill-extract {repo,intent,path_hint?} → 定向提取起草(登录即可)
  *   GET  /knowledge/skill-extract/:id                   → 提取任务状态/草稿
- *   POST /skills/:dir/candidates/:id/adopt              → 采纳候选,走上架闸(管理员)
- *   DELETE /skills/:dir/candidates/:id                  → 丢弃候选(管理员)
  *   GET  /tasks/:id                                     → 详情(含待办)
  *   POST /tasks/:id/decision   {state_version,decision,notes?}
  *        → 200;版本冲突/已被抢先 → 409 "任务状态已变化"(先到决定生效)
@@ -78,6 +79,7 @@ import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
 import { currentStoryFile, readCurrentStoryArchitecture } from "./overallStoryStore.ts";
 import { readArchitectureStory } from "./storyArchitectureSource.ts";
+import { isMainTaskDelivery } from "./requirementDecisionContract.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
@@ -163,16 +165,8 @@ import {
   rollbackHostSkill,
   submitHostSkill,
   updateHostSkillKnowledgeMetadata,
-  updateHostSkillLanguages,
   uploadHostSkill,
 } from "./hostSkillLibrary.ts";
-import {
-  SkillDistillError,
-  adoptSkillCandidate,
-  discardSkillCandidate,
-  listSkillCandidates,
-  readSkillCandidate,
-} from "./skillDistiller.ts";
 import {
   BusinessModuleError,
   archiveBusinessKnowledgeAsset,
@@ -196,13 +190,6 @@ import {
   resolveRepositoryProfiles,
   saveRepositoryProfile,
 } from "./repositoryProfiles.ts";
-import {
-  KnowledgeCandidateError,
-  createKnowledgeCandidate,
-  decideKnowledgeCandidate,
-  listKnowledgeCandidates as listTeamKnowledgeCandidates,
-  readKnowledgeCandidate as readTeamKnowledgeCandidate,
-} from "./knowledgeCandidates.ts";
 import {
   WorkflowAssetError,
   WorkflowAssetLibrary,
@@ -414,7 +401,7 @@ export function createTaskServer(
     const url = new URL(request.url ?? "/", "http://localhost");
     const parts = url.pathname.split("/").filter(Boolean);
     if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
-        && ["knowledge-candidates", "business-modules", "skills", "memories"].includes(parts[0])) {
+        && ["business-modules", "skills", "memories"].includes(parts[0])) {
       response.once("finish", () => {
         if (response.statusCode < 300) service.prepareKnowledgeIndex?.();
       });
@@ -1130,11 +1117,11 @@ export function createTaskServer(
         || parts[0] === "reviews" || parts[0] === "repository-skills"
         || parts[0] === "repositories"
         || parts[0] === "skills" || parts[0] === "business-modules"
-        || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
-        || ["domain-extraction", "knowledge-materials", "knowledge-extraction"].includes(parts[0])
+        || parts[0] === "component-knowledge" || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
+        || ["domain-extraction", "knowledge-materials", "knowledge-extraction", "knowledge-tasks", "knowledge-review"].includes(parts[0])
         || parts[0] === "knowledge-repo"
         || parts[0] === "repository-profiles"
-        || parts[0] === "knowledge-candidates" || parts[0] === "knowledge-documents"
+        || parts[0] === "knowledge-documents"
         || parts[0] === "workflow-assets"
         || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
@@ -1259,9 +1246,6 @@ export function createTaskServer(
             selectedBusinessModuleIds:
               Array.isArray(body.selected_business_module_ids)
                 ? body.selected_business_module_ids.map(String) : undefined,
-            selectedEngineeringKnowledgeIds:
-              Array.isArray(body.selected_engineering_knowledge_ids)
-                ? body.selected_engineering_knowledge_ids.map(String) : undefined,
             selectedHostSkillPaths:
               Array.isArray(body.selected_host_skill_paths)
                 ? body.selected_host_skill_paths.map(String) : undefined,
@@ -1301,114 +1285,29 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
+      if (parts[0] === "knowledge-tasks" && request.method === "GET" && parts.length === 1) {
+        return json(response, 200, listKnowledgeTasks({ dataDir: service.options.dataDir,
+          domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch(),
+          skillExtractionJob: id => service.skillExtractionJob(id), warnings: () => service.knowledgeRecordWarnings() }));
+      }
+      if (parts[0] === "knowledge-review") {
+        const sources = { dataDir: service.options.dataDir, domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch() };
+        const kind = parts[1] as KnowledgeReviewKind, id = decodeURIComponent(parts[2] ?? "");
+        try {
+          if (request.method === "GET" && parts.length === 3) return json(response, 200, listKnowledgeReviewNotes(sources, kind, id));
+          if (request.method === "POST" && parts.length === 3) return json(response, 200, saveKnowledgeReviewNote(sources, kind, id, await readBody(request) as unknown as KnowledgeReviewNoteInput, viewer?.username ?? "本地部署"));
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "apply") return json(response, 202, applyKnowledgeReviewNotes(sources, kind, id, await readBody(request) as { note_ids: string[] }, viewer?.username ?? "本地部署"));
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "resolve") return json(response, 200, resolveKnowledgeReviewNotes(sources, kind, id, await readBody(request) as { note_ids: string[] }, viewer?.username ?? "本地部署"));
+          return json(response, 404, { error: "未知知识审阅接口" });
+        } catch (error) { return json(response, 400, { error: (error as Error).message }); }
+      }
+      if (parts[0] === "component-knowledge") return componentKnowledgeRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["component-repositories", "component-research"].includes(parts[0])) return componentResearchRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
       if (["domain-extraction", "knowledge-materials"].includes(parts[0])) return domainKnowledgeRoute(request, response, parts, service,
         viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-extraction") return extractionConfigurationRoute(request, response, parts, service.options.dataDir,
-        viewer?.username ?? "本地部署", !options.auth || viewer?.role === "admin", readBody, json);
+        viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
-      if (parts[0] === "knowledge-candidates") {
-        const operator = viewer?.username ?? "本地部署";
-        const admin = !options.auth || viewer?.role === "admin";
-        try {
-          if (request.method === "GET" && parts.length === 1) {
-            return json(response, 200,
-              { candidates: listTeamKnowledgeCandidates(service.options.dataDir) });
-          }
-          if (request.method === "GET" && parts.length === 2) {
-            return json(response, 200, readTeamKnowledgeCandidate(
-              service.options.dataDir, decodeURIComponent(parts[1])));
-          }
-          if (request.method === "POST" && parts.length === 3
-              && parts[2] === "publish") {
-            const candidate = readTeamKnowledgeCandidate(
-              service.options.dataDir, decodeURIComponent(parts[1]));
-            const body = await readBody(request);
-            if (candidate.nature === "business") {
-              const modules = candidate.business_module_ids.map((moduleId) =>
-                readBusinessModule(service.options.dataDir, moduleId));
-              const unauthorized = modules.filter((module) =>
-                !canManageBusinessModule(module, viewer?.username, admin));
-              if (unauthorized.length) {
-                return json(response, 403,
-                  { error: `请登录后发布业务知识；无权限模块：${unauthorized.map((module) => module.name).join("、")}` });
-              }
-              const assetId = String(body.asset_id ?? candidate.id);
-              const publicationScopes = modules.map((module) => ({
-                module,
-                repositories: candidate.repositories.filter((repository) =>
-                  module.repositories.some((candidateRepository) =>
-                    repositoryIdentity(candidateRepository)
-                      === repositoryIdentity(repository))),
-              }));
-              const missingRepositoryScope = candidate.repositories.length
-                ? publicationScopes.filter((scope) =>
-                  scope.repositories.length === 0) : [];
-              if (missingRepositoryScope.length) {
-                return json(response, 400, { error:
-                  `知识限定的代码仓与以下业务模块没有交集：${missingRepositoryScope.map((scope) => scope.module.name).join("、")}；请修正知识作用域后再发布` });
-              }
-              for (const { module, repositories } of publicationScopes) {
-                publishBusinessKnowledgeAsset(service.options.dataDir, module.id, {
-                  id: assetId,
-                  title: candidate.title,
-                  summary: candidate.summary,
-                  when_to_use: candidate.when_to_use,
-                  form: candidate.form,
-                  repositories,
-                  content: candidate.content,
-                }, operator);
-              }
-              return json(response, 200, decideKnowledgeCandidate(
-                service.options.dataDir, candidate.id, "published", operator, {
-                  note: typeof body.note === "string" ? body.note : undefined,
-                  published_target: `business-modules/${modules.map((module) => module.id).join(",")}/${assetId}`,
-                }));
-            }
-            if (candidate.form === "skill") {
-              const directory = String(body.directory ?? candidate.id);
-              const skill = [
-                "---",
-                `name: ${directory}`,
-                `description: ${JSON.stringify(candidate.summary)}`,
-                "---", "", `# ${candidate.title}`, "", candidate.content,
-              ].join("\n");
-              await uploadHostSkill(service.options.dataDir, directory, [{
-                path: "SKILL.md",
-                content_base64: Buffer.from(skill, "utf-8").toString("base64"),
-              }], operator, candidate);
-              return json(response, 200, decideKnowledgeCandidate(
-                service.options.dataDir, candidate.id, "published", operator, {
-                  note: typeof body.note === "string" ? body.note : undefined,
-                  published_target: `skills/${directory}`,
-                }));
-            }
-            return json(response, 200, decideKnowledgeCandidate(
-              service.options.dataDir, candidate.id, "published", operator, {
-                note: typeof body.note === "string" ? body.note : undefined,
-                published_target: `engineering-knowledge/${candidate.id}`,
-              }));
-          }
-          if (request.method === "POST" && parts.length === 3
-              && parts[2] === "reject") {
-            const candidate = readTeamKnowledgeCandidate(
-              service.options.dataDir, decodeURIComponent(parts[1]));
-            const body = await readBody(request);
-            return json(response, 200, decideKnowledgeCandidate(
-              service.options.dataDir, candidate.id, "rejected", operator, {
-                note: String(body.reason ?? ""),
-              }));
-          }
-        } catch (error) {
-          if (error instanceof KnowledgeCandidateError
-              || error instanceof BusinessModuleError
-              || error instanceof SkillLibraryError) {
-            return json(response, 400, { error: error.message });
-          }
-          throw error;
-        }
-        return json(response, 404, { error: "未知知识候选接口" });
-      }
       // 许愿墙是团队公共入口，但不是公共互联网资源：正文和截图都要求
       // 登录。每个人可发布、点赞和移除自己的内容；管理员负责明确接纳
       // 与闭环，拒绝必须说明原因。
@@ -1700,13 +1599,21 @@ export function createTaskServer(
         try {
           if (request.method === "POST" && parts.length === 2) {
             const body = await readBody(request);
-            return json(response, 200, service.startSkillExtraction({
+            const metadata = body.nature ? skillMetadataFromBody(service.options.dataDir, body) : undefined;
+            const job = service.startSkillExtraction({
               repo: String(body.repo ?? ""),
               intent: String(body.intent ?? ""),
               pathHint: typeof body.path_hint === "string"
                 ? body.path_hint : undefined,
               operator,
-            }));
+            });
+            if (metadata) saveKnowledgeSkillContext(service.options.dataDir, job.id, metadata);
+            return json(response, 200, { ...job, knowledge_scope: metadata, production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
+          }
+          if (request.method === "POST" && parts.length === 4 && parts[3] === "submitted") {
+            const body = await readBody(request, 8192);
+            const job = service.markSkillExtractionSubmitted(decodeURIComponent(parts[2]), String(body.submission_id ?? ""));
+            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id), production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
           if (request.method === "GET" && parts.length === 3) {
             const job = service.skillExtractionJob(
@@ -1714,9 +1621,11 @@ export function createTaskServer(
             if (!job) {
               return json(response, 404, { error: "提取任务不存在" });
             }
-            return json(response, 200, job);
+            return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id), production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
         } catch (error) {
+          if (error instanceof SkillLibraryError) return json(response, 400, { error: error.message });
+          if (error instanceof NotFoundError) return json(response, 404, { error: error.message });
           if (error instanceof TaskControlError) {
             return json(response, 409, { error: error.message });
           }
@@ -1737,6 +1646,13 @@ export function createTaskServer(
           });
         }
         try {
+          if (request.method === "GET" && parts.length === 4 && parts[2] === "submissions") {
+            const pack = readSkillSubmissionPackage(dataDir, decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
+            return json(response, 200, { ...pack, production: projectKnowledgeProduction({ kind: "skill-submission", record: pack.record }) });
+          }
+          if (request.method === "GET" && parts.length === 3 && parts[2] === "package") {
+            return json(response, 200, readHostSkillPackage(dataDir, decodeURIComponent(parts[1])));
+          }
           if (request.method === "GET" && parts.length === 3
               && parts[2] === "versions") {
             return json(response, 200, {
@@ -1744,28 +1660,14 @@ export function createTaskServer(
                 dataDir, decodeURIComponent(parts[1])),
             });
           }
-          // 修订候选(沉淀环):读=登录即可(检视草稿是团队的事),
-          // 起草/采纳/丢弃归管理员——采纳复用资产库同一道上架闸。
-          if (request.method === "GET" && parts.length === 3
-              && parts[2] === "candidates") {
-            return json(response, 200, {
-              candidates: listSkillCandidates(
-                dataDir, decodeURIComponent(parts[1])),
-            });
-          }
-          if (request.method === "GET" && parts.length === 4
-              && parts[2] === "candidates") {
-            return json(response, 200, readSkillCandidate(
-              dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3])));
-          }
           // 提交待审(2026-08-27 用户拍板:人人可提交,管理员审核
           // 上架)。提交走与上架同一道完整验收闸;读列表登录即可
           // ——谁提交了什么、裁决结果如何是团队可见的台账。
           if (request.method === "GET" && parts.length === 2
               && parts[1] === "submissions") {
+            const warnings: string[] = [];
             return json(response, 200,
-              { submissions: listSkillSubmissions(dataDir) });
+              { submissions: listSkillSubmissions(dataDir, warnings).map(record => ({ ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) })), warnings });
           }
           if (request.method === "GET" && parts.length === 2) {
             return json(response, 200, readHostSkillDocument(
@@ -1774,36 +1676,20 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 3
               && parts[2] === "submissions") {
             const body = await readBody(request);
-            return json(response, 200, await submitHostSkill(
+            const record = await submitHostSkill(
               dataDir, decodeURIComponent(parts[1]),
               Array.isArray(body.files) ? body.files : [],
               viewer?.username ?? "本地部署",
-              skillMetadataFromBody(dataDir, body)));
+              skillMetadataFromBody(dataDir, body));
+            return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
           const operator = viewer?.username ?? "本地部署";
-          if (request.method === "PUT" && parts.length === 2) {
-            const body = await readBody(request);
-            return json(response, 200, await uploadHostSkill(
-              dataDir, decodeURIComponent(parts[1]),
-              Array.isArray(body.files) ? body.files : [], operator,
-              skillMetadataFromBody(dataDir, body)));
-          }
           if (request.method === "PATCH" && parts.length === 3
               && parts[2] === "classification") {
             const body = await readBody(request);
             return json(response, 200, await updateHostSkillKnowledgeMetadata(
               dataDir, decodeURIComponent(parts[1]),
               skillMetadataFromBody(dataDir, body), operator));
-          }
-          if (request.method === "PATCH" && parts.length === 3
-              && parts[2] === "languages") {
-            const body = await readBody(request);
-            if (!Array.isArray(body.languages)) {
-              throw new SkillLibraryError("适用语言必须是数组");
-            }
-            return json(response, 200, await updateHostSkillLanguages(
-              dataDir, decodeURIComponent(parts[1]),
-              body.languages.map(String), operator));
           }
           if (request.method === "DELETE" && parts.length === 2) {
             return json(response, 200, await offlineHostSkill(
@@ -1816,40 +1702,24 @@ export function createTaskServer(
               dataDir, decodeURIComponent(parts[1]),
               String(body.version ?? ""), operator));
           }
-          if (request.method === "POST" && parts.length === 3
-              && parts[2] === "distill") {
-            return json(response, 200, await service.distillSkillDraft(
-              decodeURIComponent(parts[1]), operator));
-          }
-          if (request.method === "POST" && parts.length === 5
-              && parts[2] === "candidates" && parts[4] === "adopt") {
-            return json(response, 200, await adoptSkillCandidate(
-              dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3]), operator));
-          }
-          if (request.method === "DELETE" && parts.length === 4
-              && parts[2] === "candidates") {
-            discardSkillCandidate(dataDir,
-              decodeURIComponent(parts[1]), decodeURIComponent(parts[3]));
-            return json(response, 200, { ok: true });
-          }
           if (request.method === "POST" && parts.length === 5
               && parts[2] === "submissions" && parts[4] === "approve") {
-            return json(response, 200, await approveSkillSubmission(
-              dataDir, decodeURIComponent(parts[1]),
-              decodeURIComponent(parts[3]), operator));
+            const directory = decodeURIComponent(parts[1]), id = decodeURIComponent(parts[3]);
+            const operation = await approveSkillSubmission(dataDir, directory, id, operator);
+            const { record } = readSkillSubmissionPackage(dataDir, directory, id);
+            return json(response, 200, { ...operation, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
           if (request.method === "POST" && parts.length === 5
               && parts[2] === "submissions" && parts[4] === "reject") {
             const body = await readBody(request);
-            return json(response, 200, await rejectSkillSubmission(
+            const record = await rejectSkillSubmission(
               dataDir, decodeURIComponent(parts[1]),
               decodeURIComponent(parts[3]), operator,
-              typeof body.reason === "string" ? body.reason : undefined));
+              typeof body.reason === "string" ? body.reason : undefined);
+            return json(response, 200, { ...record, production: projectKnowledgeProduction({ kind: "skill-submission", record }) });
           }
         } catch (error) {
-          if (error instanceof SkillLibraryError
-              || error instanceof SkillDistillError) {
+          if (error instanceof SkillLibraryError) {
             return json(response, 400, { error: error.message });
           }
           if (error instanceof TaskControlError) {
@@ -2241,9 +2111,6 @@ export function createTaskServer(
         const selectedBusinessModuleIds =
           Array.isArray(body.selected_business_module_ids)
             ? body.selected_business_module_ids.map(String) : undefined;
-        const selectedEngineeringKnowledgeIds =
-          Array.isArray(body.selected_engineering_knowledge_ids)
-            ? body.selected_engineering_knowledge_ids.map(String) : undefined;
         let knowledgePreviewDigest = body.knowledge_preview_digest === undefined
           ? undefined : String(body.knowledge_preview_digest).trim();
         if (body.knowledge_preview_digest !== undefined
@@ -2345,13 +2212,11 @@ export function createTaskServer(
             const preview = service.previewLaunchKnowledge({
               repositories: repos?.length ? repos : repo ? [repo] : [],
               selectedBusinessModuleIds,
-              selectedEngineeringKnowledgeIds,
               selectedHostSkillPaths,
               repositoryProfiles,
               workflowDefinition,
             });
             const matched = preview.business_knowledge.length
-              + preview.engineering_knowledge.length
               + preview.team_skills.length;
             if (!preview.complete || matched > 0) {
               return json(response, 409, {
@@ -2395,7 +2260,7 @@ export function createTaskServer(
               repositorySkillCatalogToken,
               selectedRepositorySkillIds,
               selectedHostSkillPaths,
-              selectedBusinessModuleIds, selectedEngineeringKnowledgeIds,
+              selectedBusinessModuleIds,
               businessModuleId,
               repositoryProfiles,
               requireRepositoryProfiles: requestedRepositories.length > 0,
@@ -2497,52 +2362,6 @@ export function createTaskServer(
           const revision = service.requirementRevision(id, parts[3]);
           if (!revision) return json(response, 404, { error: "这一轮修改的记录不存在" });
           return json(response, 200, revision);
-        }
-        if (request.method === "POST" && parts.length === 3
-            && parts[2] === "knowledge-candidates") {
-          const target = service.get(id);
-          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
-          if (!canOperate(viewer, target.luban_account, !!options.auth)) {
-            return json(response, 403, { error: "只能从自己的任务沉淀知识" });
-          }
-          const body = await readBody(request);
-          const moduleIds = Array.isArray(body.business_module_ids)
-            ? body.business_module_ids.map(String) : [];
-          const availableModules = new Set(
-            (target.business_modules ?? []).map((module) => module.id));
-          if (moduleIds.some((moduleId: string) => !availableModules.has(moduleId))) {
-            return json(response, 400,
-              { error: "知识关联了本任务未选择的业务模块" });
-          }
-          const candidateRepositories = Array.isArray(body.repositories)
-            ? body.repositories.map(String) : [];
-          const availableRepositories = new Set(target.repositories ?? []);
-          if (candidateRepositories.some((repository: string) =>
-            !availableRepositories.has(repository))) {
-            return json(response, 400,
-              { error: "知识适用仓库不属于本任务" });
-          }
-          try {
-            return json(response, 201, createKnowledgeCandidate(
-              service.options.dataDir, {
-                source_task_id: id,
-                title: String(body.title ?? ""),
-                summary: String(body.summary ?? ""),
-                when_to_use: String(body.when_to_use ?? ""),
-                nature: String(body.nature ?? "") as KnowledgeAssetMetadata["nature"],
-                form: String(body.form ?? "") as KnowledgeAssetMetadata["form"],
-                business_module_ids: moduleIds,
-                repositories: candidateRepositories,
-                technologies: Array.isArray(body.technologies)
-                  ? body.technologies.map(String) : [],
-                content: String(body.content ?? ""),
-              }, viewer?.username ?? target.luban_account ?? "本地部署"));
-          } catch (error) {
-            if (error instanceof KnowledgeCandidateError) {
-              return json(response, 400, { error: error.message });
-            }
-            throw error;
-          }
         }
         if (request.method === "DELETE" && parts.length === 2) {
           const target = service.get(id);
@@ -3299,7 +3118,7 @@ export function createTaskServer(
             pipelineRoot: join(target.workspace, "pipeline"),
             taskMaterialRoot: target.workspace,
             publishedStory: !!currentStoryFile(target.workspace),
-            analysisStory: target.requirement_graph && !target.parent_task_id
+            analysisStory: target.requirement_graph && !target.parent_task_id && !isMainTaskDelivery(target)
               ? `${target.ticket ?? target.id}/story.md` : undefined,
           };
           if (parts.length === 3) {

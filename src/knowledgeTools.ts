@@ -1,23 +1,29 @@
+import type { MemoryUsageEvent } from "./memoryUsage.ts";
 import { componentRepositories } from "./componentRepositories.ts";
 import type { ComponentResearch } from "./componentResearch.ts";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { KnowledgeSearch, KnowledgeContext } from "./knowledgeSearch.ts";
+import { COMPONENT_PLAN_TEMPLATE, type ComponentPlan } from "./componentPlan.ts";
 
 export function createKnowledgeTool(options: {
   research?: () => ComponentResearch;
   researchOperator?: () => string;
   service: () => KnowledgeSearch | undefined;
   context: () => KnowledgeContext;
-  onUse?: (event: { moment: "search" | "expand"; query?: string; ids: string[] }) => void;
+  plan?: () => ComponentPlan;
+  onUse?: (event: MemoryUsageEvent) => void;
 }) {
   const reply = (text: string, details: object = {}) => ({ content: [{ type: "text" as const, text }], details });
+  const observe = (event: MemoryUsageEvent) => {
+    try { options.onUse?.(event); } catch { /* Observation must not change a successful read. */ }
+  };
   return defineTool({
     name: "knowledge", label: "检索团队知识",
-    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 返回候选及适用条件，read 按 id 展开正文。Skill 不在本工具中检索，通过会话已有技能目录按需加载。候选不是权威答案，核对产品版本和例外后使用。索引不可用时继续工作，不阻塞任务。",
+    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 返回候选，组件只索引检索卡片；read 读取正式原文。component_context 提供 component-plan 模板和小规模卡片目录；plan 的 validate/check_impl/gaps 校验现有实施计划、对照实现及列出组件缺口。Skill 不在本工具中检索，通过会话已有技能目录按需加载。索引不可用时继续工作，不阻塞任务。",
     promptSnippet: "knowledge: search 查团队、模块、仓库知识及已采纳经验；read 展开正文。",
     promptGuidelines: [
-      "检索不到内部基础组件用法时，用 knowledge(action=research, language=cpp, query=具体问题，如文件句柄归属与错误清理) 覆盖该语言全部已启用组件仓发起后台萃取。用返回的记录 ID 调 research_status 查看。继续其他独立工作，不循环轮询；草稿未经人工采纳，必须核对源码证据，不能称为团队规范。正常 search 不会触发萃取。",
+      "检索不到内部基础组件用法时，先用 knowledge(action=components) 找到组件，再用 knowledge(action=research, language=cpp, component_id=组件编号) 对该组件发起后台萃取；同一组件已有研究时直接返回原记录。用返回的记录 ID 调 research_status 查看。继续其他独立工作，不循环轮询；草稿未经人工采纳，必须核对源码证据，不能称为团队规范。正常 search 不会触发萃取。",
       "修改代码、配置、编写设计或执行构建之前，用 knowledge(action=search, query=具体问题) 检索相关规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本，不只搜‘C++’或‘开发规范’。",
       "例如：准备改异步回调，搜索‘C++ 异步回调 对象销毁 生命周期’；后来发现需要改 YAML，再搜索‘该配置用途 YAML 修改规范’。准备首次构建，搜索‘该仓库 C++ 首次构建 UT 依赖 命令’。",
       "先看适用条件、来源和版本；需要完整依据时用 knowledge(action=read, id=搜索结果ID, start_line=命中起始行, end_line=命中结束行, revision=结果版本) 直接读取命中章节，保留规则、示例和例外。结果提示后续行时按需继续读取。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
@@ -25,7 +31,10 @@ export function createKnowledgeTool(options: {
       "没有相关结果或检索暂不可用，按代码和现有证据继续，不反复空查或等待。发现知识与现场冲突时说明冲突，不擅自改写已采纳结论。",
     ],
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("search"), Type.Literal("read"), Type.Literal("components"), Type.Literal("research"), Type.Literal("research_status")]),
+      action: Type.Union([Type.Literal("search"), Type.Literal("read"), Type.Literal("component_context"), Type.Literal("plan"), Type.Literal("components"), Type.Literal("research"), Type.Literal("research_status")]),
+      operation: Type.Optional(Type.Union([Type.Literal("validate"), Type.Literal("check_impl"), Type.Literal("gaps")])),
+      scope: Type.Optional(Type.Literal("components")),
+      plan_path: Type.Optional(Type.String({ maxLength: 1000 })), capability: Type.Optional(Type.String({ pattern: "^C[1-9][0-9]*$" })),
       component_id: Type.Optional(Type.String()), language: Type.Optional(Type.String()),
       query: Type.Optional(Type.String({ maxLength: 4000 })),
       id: Type.Optional(Type.String({ maxLength: 200 })),
@@ -33,36 +42,59 @@ export function createKnowledgeTool(options: {
       end_line: Type.Optional(Type.Integer({ minimum: 1 })),
       revision: Type.Optional(Type.String()),
     }),
-    async execute(_callId: string, input: { action: string; component_id?: string; language?: string; query?: string; id?: string; start_line?: number; end_line?: number; revision?: string }) {
+    async execute(_callId: string, input: { action: string; operation?: string; scope?: string; plan_path?: string; capability?: string; component_id?: string; language?: string; query?: string; id?: string; start_line?: number; end_line?: number; revision?: string }) {
       try {
         if (["components", "research", "research_status"].includes(input.action)) {
           const research = options.research?.();
           if (!research) return reply("组件萃取暂不可用，继续当前任务。");
           if (input.action === "components") return reply(JSON.stringify(componentRepositories(research.dir).filter(c => c.enabled)));
-          const record = input.action === "research" ? research.start({ language: input.language ?? "", topic: input.query ?? "" }, options.researchOperator?.() ?? "本地部署") : research.get(input.id ?? "");
-          return reply(JSON.stringify({ ...record, key: undefined, url: `/?knowledgeDocuments=1&componentResearch=${record.id}` }) + "\n草稿须人工审查采纳才进入知识库；继续独立工作，不循环轮询。");
+          const record = input.action === "research" ? research.start({ language: input.language ?? "", component_id: input.component_id }, options.researchOperator?.() ?? "本地部署") : research.get(input.id ?? "");
+          return reply(JSON.stringify({ ...record, key: undefined, url: `/?kbPage=task&kbKind=component&kbTask=${record.id}` }) + "\n草稿须人工审查采纳才进入知识库；继续独立工作，不循环轮询。");
         }
         const service = options.service();
-        if (!service) return reply("知识检索暂不可用；继续当前任务，不反复重试等待。");
+        if (!service) { observe({moment:input.action === "read" ? "expand" : "search",ids:[],status:"unavailable",reason:"unavailable",requested_id:input.id});
+          return reply("知识检索暂不可用；继续当前任务，不反复重试等待。"); }
         const context = options.context();
+        const planService = options.plan?.();
+        const plan = input.plan_path && planService ? { path: planService.path(input.plan_path).relative, capability: input.capability, operation: input.action } : undefined;
+        if (input.action === "component_context") {
+          const result = service.componentContext(context);
+          observe({ moment: "context", plan, ids: result.hits.map(h => h.id), assets: result.hits, status: "ready" });
+          return reply(JSON.stringify(result) + "\n把以下表格放入现有 implementation 文档；不另建计划。使用时填范式的 card_id，来源版本填 id@revision。卡片不是完整契约，确认前仍须 read 原文。\n" + COMPONENT_PLAN_TEMPLATE, result);
+        }
+        if (input.action === "plan") {
+          if (!planService) return reply("当前会话没有计划工作区，不能检查计划；继续分析并说明缺口。");
+          if (input.operation === "gaps") return reply(JSON.stringify({ gaps: planService.gaps() }));
+          if (!input.plan_path) return reply("请提供现有 implementation 文档的 plan_path。");
+          if (!["validate", "check_impl"].includes(input.operation ?? "")) return reply("operation 请选择 validate、check_impl 或 gaps。");
+          const result = input.operation === "validate" ? planService.validate(input.plan_path) : await planService.check(input.plan_path);
+          const errors = "errors" in result ? result.errors.length : result.findings.length;
+          observe({ moment: "component_plan", ids: [], status: errors ? "rejected" : "ready", plan: { path: result.path, operation: input.operation!, errors, warnings: result.warnings.length } });
+          return reply(JSON.stringify(result) + "\n这是计划核对结果，不新增交付门禁。", result);
+        }
         if (input.action === "search") {
           const query = input.query?.trim();
           if (!query) return reply("请提供当前要解决的具体问题 query。");
-          const result = await service.search(context, query);
-          options.onUse?.({ moment: "search", query, ids: result.hits.map(hit => hit.id) });
+          const result = await service.search(context, query, 5, input.scope === "components");
+          observe({ moment: "search", query, plan, ids: result.hits.map(hit => hit.id),
+            status: !result.available ? "unavailable" : result.hits.length ? "ready" : "empty",
+            assets: result.hits.map(hit => ({id:hit.id,revision:hit.revision,start_line:hit.start_line,end_line:hit.end_line,heading:hit.heading,card_id:hit.card_id,retrieval:hit.retrieval})) });
           const warning = result.warnings.length ? `\n提示：${result.warnings.join("；")}` : "";
           if (!result.available) return reply(result.warnings.join("；"), { available: false });
           if (!result.hits.length) return reply("未找到足够相关的知识；继续根据现场证据工作，不代表相关知识一定不存在。" + warning, { available: true, hits: [] });
           return reply("以下是候选知识，不是已验证适用的答案。核对条件，必要时用 knowledge read 展开正文。\n"
-            + result.hits.map(hit => `- (${hit.id}) ${hit.title}\n  ${hit.scope}；${hit.versionNote}\n  章节：${hit.heading ?? hit.title}；原文行：${hit.start_line ?? 1}-${hit.end_line ?? "未定位"}；revision=${hit.revision}\n  适用条件：${hit.whenToUse}\n  摘要：${hit.summary}`).join("\n") + warning, result);
+            + result.hits.map(hit => `- (${hit.id}) ${hit.title}${hit.card_id ? `；card-id: ${hit.card_id}；检索方式：${hit.retrieval}` : ""}\n  ${hit.scope}；${hit.versionNote}\n  章节：${hit.heading ?? hit.title}；原文行：${hit.start_line ?? 1}-${hit.end_line ?? "未定位"}；revision=${hit.revision}\n  适用条件：${hit.whenToUse}\n  摘要：${hit.summary}${hit.contracts?.length ? `\n  相关契约：${JSON.stringify(hit.contracts)}` : ""}`).join("\n") + warning, result);
         }
         if (input.action !== "read" || !input.id) return reply("read 需要提供搜索结果中的 id。");
         const asset = service.read(context, input.id);
-        if (!asset) return reply("该知识取不到：已停用、已不适用于当前任务或不存在；不要沿用旧结论。");
-        if (input.revision && input.revision !== asset.revision) return reply("文档已更新，请重新 search 定位章节，不沿用旧版本行号。");
+        if (!asset) { observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"not_accessible"});
+          return reply("该知识取不到：已停用、已不适用于当前任务或不存在；不要沿用旧结论。"); }
+        if (input.revision && input.revision !== asset.revision) { observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"revision_changed"});
+          return reply("文档已更新，请重新 search 定位章节，不沿用旧版本行号。"); }
         const lines = asset.content.split("\n");
         const start = Math.max(1, input.start_line ?? 1);
         if (start > lines.length || (input.end_line !== undefined && input.end_line < start)) {
+          observe({moment:"expand",ids:[],requested_id:input.id,status:"rejected",reason:"invalid_range"});
           return reply(`读取范围无效；该文档共 ${lines.length} 行，请使用搜索返回的原文行号。`);
         }
         const end = Math.min(lines.length, input.end_line ?? start + 119, start + 599);
@@ -74,14 +106,16 @@ export function createKnowledgeTool(options: {
           selected.push(line); size += line.length;
         }
         const next = start + selected.length;
-        options.onUse?.({ moment: "expand", ids: [asset.id] });
+        observe({ moment: "expand", plan, ids: [asset.id],status:"ready",assets:[{id:asset.id,revision:asset.revision,start_line:start,end_line:start+selected.length-1}] });
         return reply(`${asset.title}\n范围：${asset.scope}\n文档修订：${asset.revision}（不是产品版本）\n`
           + `产品版本：${asset.productVersions.join("、") || "未单独声明，请核对正文"}\n`
           + `适用条件：${asset.whenToUse}\n共 ${lines.length} 行，从 ${start} 行开始：\n`
           + selected.join("\n") + (next <= lines.length ? `\n后续原文从第 ${next} 行继续读取；勿把未读取的例外当作不存在。` : ""),
           { id: asset.id, revision: asset.revision, total_lines: lines.length, start_line: start, end_line: next - 1, next_line: next <= lines.length ? next : undefined });
       } catch (error) {
+        if (input.action === "plan" || input.plan_path) return reply(error instanceof Error ? error.message : "计划检查未完成");
         if (["components", "research", "research_status"].includes(input.action)) return reply(error instanceof Error ? error.message : "萃取暂不可用");
+        observe({moment:input.action === "read" ? "expand" : "search",ids:[],requested_id:input.id,status:"unavailable",reason:"unavailable"});
         return reply("知识读取暂不可用；继续当前任务，不反复重试等待。");
       }
     },

@@ -22,7 +22,6 @@ const MAX_INSTRUCTIONS = 2_000;
 
 export type WorkflowAssetRegistry =
   | "business_knowledge"
-  | "engineering_knowledge"
   | "team_skill"
   | "repository_skill"
   | "platform_capability";
@@ -293,7 +292,7 @@ function normalizeAssetRef(value: unknown, label: string): WorkflowAssetRef {
   }
   const input = value as Record<string, unknown>;
   const registry = String(input.registry ?? "") as WorkflowAssetRegistry;
-  if (!["business_knowledge", "engineering_knowledge", "team_skill",
+  if (!["business_knowledge", "team_skill",
     "repository_skill", "platform_capability"].includes(registry)) {
     throw new Error(`${label}引用了不支持的资产库`);
   }

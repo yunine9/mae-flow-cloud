@@ -1,3 +1,4 @@
+import { componentPipelineScript } from "./componentPipelineFixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -25,6 +26,8 @@ import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { collectSearchableKnowledge } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
 import { editResearchDocument, researchDocumentMarkdown } from "../src/componentResearchDocument.ts";
+import { readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { componentPublishInput, publishComponentKnowledge } from "./fixtures/componentPublish.ts";
 const sectionData = (id: string, repository_ids: string[]) => ({ id, title: `能力 ${id}`, repository_ids,
   content: "适用场景、错误处理与资源生命周期。", interfaces: "include/file.h:1 Close(handle)",
   integration: "CMake target file，对应 libfile.so；Java 对应发布的 JAR/依赖坐标。",
@@ -89,9 +92,10 @@ test("配置必填语言、拒绝凭据和越界路径，普通操作者可编�
     rmSync(dir, { recursive: true, force: true });
   }
 });
-test("按组件、主题和语言复用研究；并发有界；草稿不检索，采纳后才入库且可追溯", async () => {
+test("B5验收1/生产线验收10/14：一个组件一次研究并复用；并发有界；草稿不检索，单路发布后入库且可追溯", async () => {
   const dir = temporary();
   const row = saveComponentRepository(dir, config, "alice");
+  const other = saveComponentRepository(dir, { ...config, name: "日期组件", repository: "https://code.example/date.git", languages: ["cpp"] }, "alice");
   let release!: () => void;
   const hold = new Promise<void>((r) => (release = r));
   let concurrent = 0,
@@ -105,25 +109,30 @@ test("按组件、主题和语言复用研究；并发有界；草稿不检索�
       input.evidence({ tool: "component_source", path: "src/file.cpp" });
       await hold;
       concurrent--;
-      return "# 文件资源\n用完成后关闭句柄。";
+      return writeJoint(input);
     },
     () => adopts++,
   );
   try {
-    const input = { component_id: row.id, language: "cpp", topic: "资源释放" };
+    const input = { component_id: row.id, language: "cpp" };
     const first = research.start(input, "alice");
-    assert.equal(research.start(input, "alice").id, first.id);
+    assert.equal(research.start(input, "bob").id, first.id, "同一组件不分操作者，只有一次研究");
+    assert.deepEqual(first.components?.map(c => c.id), [row.id]);
+    assert.equal(first.topic, "文件组件");
+    assert.throws(() => research.start({ language: "cpp" }, "alice"), /请选择要研究的组件/);
     assert.throws(
       () => research.start({ ...input, language: "python" }, "alice"),
       /语言/,
     );
+    assert.throws(() => research.start({ component_id: other.id, language: "java" }, "alice"), /未登记该语言/);
     const java = research.start({ ...input, language: "java" }, "alice");
     assert.notEqual(java.id, first.id);
-    const third = research.start({ ...input, topic: "UT" }, "alice");
-    assert.equal(third.status, "queued");
+    const third = research.start({ component_id: other.id, language: "cpp" }, "alice");
+    assert.deepEqual(third.components?.map(c => c.id), [other.id]);
+    assert.equal(third.status, "running");
     release();
     await until(() => research.list().every((r) => r.status === "done"));
-    assert.equal(max, 2);
+    assert.equal(max, 3, "三个独立组件可同时研究，不再受旧并发 2 限制");
     assert.equal(
       collectSearchableKnowledge(dir, {
         repo: "",
@@ -132,10 +141,12 @@ test("按组件、主题和语言复用研究；并发有界；草稿不检索�
       }).assets.length,
       0,
     );
-    const doc = research.adopt(first.id, { scope: "platform" }, "bob");
+    const doc = publishComponentKnowledge(research, dir, first.id, { scope: "platform" }, "bob");
     assert.deepEqual(doc.technologies, ["cpp"]);
     assert.equal(doc.research_source?.job_id, first.id);
-    assert.equal(research.adopt(first.id, {}, "alice").id, doc.id);
+    const repeated = publishComponentKnowledge(research, dir, first.id, {}, "alice");
+    assert.equal(repeated.id, doc.id);
+    assert.equal(repeated.revision, doc.revision, "重复发布沿用同一正式版本");
     assert.equal(adopts, 1);
     assert.ok(
       collectSearchableKnowledge(dir, {
@@ -144,7 +155,9 @@ test("按组件、主题和语言复用研究；并发有界；草稿不检索�
         moduleIds: [],
       }).assets.some((a) => a.id === doc.id),
     );
-    const fresh = research.start({ ...input, refresh: true }, "alice");
+    assert.equal(research.start(input, "alice").id, first.id, "已发布的组件再次发起回到原研究，改动走更新知识");
+    research.remove(first.id, "alice");
+    const fresh = research.start(input, "alice");
     assert.notEqual(fresh.id, first.id);
     await until(() => research.get(fresh.id).status === "done");
     await research.shutdown();
@@ -160,7 +173,7 @@ test("按组件、主题和语言复用研究；并发有界；草稿不检索�
 test("重启接续原任务；任务 knowledge 可发起并读取记录，不依赖搜索索引在线", async () => {
   const dir = temporary();
   const row = saveComponentRepository(dir, config, "alice");
-  const research = new ComponentResearch(dir, async () => "# 草稿");
+  const research = new ComponentResearch(dir, async input => writeJoint(input));
   try {
     const tool = createKnowledgeTool({
       service: () => undefined,
@@ -176,7 +189,8 @@ test("重启接续原任务；任务 knowledge 可发起并读取记录，不依
       language: "cpp",
       query: "文件读取",
     });
-    assert.match(result.content[0].text, /componentResearch/);
+    const started = JSON.parse(result.content[0].text.split("\n")[0]);
+    assert.equal(started.url, `/?kbPage=task&kbKind=component&kbTask=${started.id}`);
     await until(() => research.list()[0].status === "done");
     const job = research.list()[0];
     const status = await call(tool, { action: "research_status", id: job.id });
@@ -186,7 +200,7 @@ test("重启接续原任务；任务 knowledge 可发起并读取记录，不依
     const stale = JSON.parse(readFileSync(path, "utf8"));
     stale.status = "running";
     writeFileSync(path, JSON.stringify(stale));
-    const reloaded = new ComponentResearch(dir, async () => "接续完成");
+    const reloaded = new ComponentResearch(dir, async input => writeJoint(input));
     assert.equal(reloaded.get(job.id).status, "queued");
     await until(() => reloaded.get(job.id).status === "done");
     assert.equal(reloaded.get(job.id).error, undefined);
@@ -218,38 +232,9 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     { mode: 0o700 },
   );
   process.env.MAE_FLOW_EC_BIN = fakeEc;
+  writeFileSync(join(dir, "AGENTS.md"), "FORBIDDEN_COMPONENT_CONTEXT_SENTINEL");
   const row = saveComponentRepository(dir, config, "alice");
-  const model = new ScriptedModelServer([
-    { tool: { name: "extraction_skill", input: { path: "references/api-boundary.md" } } },
-    {
-      tool: {
-        name: "component_source",
-        input: { action: "read", path: "src/file.cpp" },
-      },
-    },
-    {
-      tool: {
-        name: "code_search",
-        input: { action: "kw", query: "lang:C++ Close" },
-      },
-    },
-    {
-      tool: {
-        name: "code_search",
-        input: {
-          action: "read",
-          repository: "consumer",
-          path: "src/use.cpp",
-          start: 1,
-          end: 30,
-        },
-      },
-    },
-    { tool: { name: "research_document", input: { action: "outline", entries: [{ id: "close", title: "能力 close", repository_ids: [row.id] }] } } },
-    { tool: { name: "research_document", input: { action: "overview", overview: "文件句柄与跨仓调用的资源释放关系" } } },
-    { tool: { name: "research_document", input: { action: "section", section: sectionData("close", [row.id]) } } },
-    { text: "已完成并保存组件及示例。" },
-  ]);
+  const model = new ScriptedModelServer(componentPipelineScript(row.id, "src/file.cpp", revision, "consumer/src/use.cpp:12 Close(handle); revision unknown\n").script, "scripted-v1", { linear: true });
   await model.start();
   const research = new ComponentResearch(dir, (input) =>
     runComponentResearch(input, {
@@ -274,26 +259,23 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     );
     assert.match(pinned.content[0].text, /void Close/);
     assert.doesNotMatch(pinned.content[0].text, /WORKTREE/);
-    const batch = research.start({ mode: "all", language: "cpp" }, "alice");
+    const batch = research.start({ language: "cpp" }, "alice");
     const job = research.get(batch.id);
     await until(() => ["done", "failed"].includes(research.get(job.id).status));
     const done = research.get(job.id);
     assert.equal(done.status, "done", done.error);
     assert.match(JSON.stringify(model.requests[0]), /component-knowledge-extraction/);
+    assert.doesNotMatch(JSON.stringify(model.requests), /FORBIDDEN_COMPONENT_CONTEXT_SENTINEL/);
     assert.match(JSON.stringify(model.requests.at(-1)), /不是 public 的都能用/);
     assert.match(JSON.stringify(model.requests.at(-1)), /interface 是优先线索，不是固定白名单/);
     assert.match(JSON.stringify(model.requests.at(-1)), /重点关注 interface\/、idl\//);
     assert.match(JSON.stringify(model.requests.at(-1)), /#include.*CMakeLists\.txt.*target_link_libraries/);
     assert.match(JSON.stringify(model.requests.at(-1)), /sdk\/pom\.xml；存在时必须实际读取/);
-    assert.equal(done.document?.sections.length, 1);
+    assert.equal(done.document?.sections.length, 4);
     assert.equal(done.revision, revision);
     assert.ok(done.evidence.some(e => e.tool === "research_note"));
-    assert.equal(
-      done.evidence.filter(e => e.tool !== "research_note").length,
-      3,
-      JSON.stringify(model.requests.at(-1)),
-    );
-    assert.match(done.draft!, /版本未知/);
+    assert.ok(done.evidence.some(e => e.tool === "code_search" && e.action === "read" && e.evidence_id));
+    assert.doesNotMatch(done.draft!, /未提供时为未知|### 来源/);
     const toolNames = (model.requests[0].tools as Array<{ name: string }>).map(
       (t) => t.name,
     );
@@ -312,8 +294,8 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
       "WORKTREE MODIFIED\n",
     );
     process.env.MAE_FLOW_EC_BIN = join(dir, "missing-ec");
-    const failed = research.start(
-      { component_id: row.id, language: "cpp", topic: "异常清理" },
+    research.remove(job.id, "alice");
+    const failed = research.start({ component_id: row.id, language: "cpp" },
       "alice",
     );
     await until(() => research.get(failed.id).status === "failed");
@@ -325,6 +307,12 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     );
     assert.match(failTool.content[0].text, /ec 工具未安装或路径错误/);
     assert.equal((events[0] as any).status, "failed");
+    // 本机实测：~/.local/bin/ec 存在但没有执行权限，旧提示只说"无权执行工具"，不知道是哪个文件。
+    const blocked = join(dir, "blocked-ec");
+    writeFileSync(blocked, "#!/bin/sh\n", { mode: 0o600 });
+    process.env.MAE_FLOW_EC_BIN = blocked;
+    const forbidden = await call(codeSearchTool(() => {}), { action: "kw", query: "Close" });
+    assert.ok(forbidden.content[0].text.includes(`无权执行 ec（${blocked}）`), forbidden.content[0].text);
   } finally {
     await research.shutdown();
     await model.stop();
@@ -398,7 +386,7 @@ test("源码缓存增量同步、同仓准备串行，旧研究仍能读取固�
   }
 });
 
-test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝", async () => {
+test("HTTP 配置、萃取、查看及单路发布走同一记录，非法语言拒绝", async () => {
   const { TaskService } = await import("../src/taskService.ts");
   const { createTaskServer } = await import("../src/server.ts");
   const dir = temporary();
@@ -411,7 +399,7 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
   });
   const research = new ComponentResearch(
     dir,
-    async input => input.review ? "已答复所选组件的问题" : input.record.document ? writeJoint(input) : "# 测试草稿\n来源：测试夹具，非真实内部范式",
+    async input => input.review ? `已答复所选组件的问题，见 \`${input.record.component!.id}:src/file.cpp:1\`` : writeJoint(input),
   );
   (service as any).componentResearch = research;
   const server = createTaskServer(service);
@@ -424,15 +412,20 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
       body: JSON.stringify(body),
     });
   try {
+    const governanceResponse = await fetch(url + "/component-knowledge");
+    assert.equal(governanceResponse.status, 200);
+    assert.deepEqual((await governanceResponse.json() as any).items, []);
+    assert.equal((await post("/component-knowledge/sample", { task_id: "missing" })).status, 400);
     const configResponse = await post("/component-repositories", config);
     assert.equal(configResponse.status, 200);
     const component: any = await configResponse.json();
+    assert.equal((await post("/component-research", { language: "cpp", material_ids: ["old-upload"] })).status, 400);
+    assert.match((await (await post("/component-research", { language: "cpp", topic: "UT" })).json() as any).error, /不支持参数：topic/);
     assert.equal(
       (
         await post("/component-research", {
           component_id: component.id,
           language: "python",
-          topic: "UT",
         })
       ).status,
       400,
@@ -440,29 +433,10 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     const launched = await post("/component-research", {
       component_id: component.id,
       language: "cpp",
-      topic: "UT",
     });
     assert.equal(launched.status, 202);
-    const record: any = await launched.json();
-    await until(() => research.get(record.id).status === "done");
-    const detail: any = await (
-      await fetch(`${url}/component-research/${record.id}`)
-    ).json();
-    assert.match(detail.draft, /测试草稿/);
-    const adopted = await post(`/component-research/${record.id}/adopt`, {
-      title: "范式",
-      scope: "platform",
-    });
-    assert.equal(adopted.status, 200);
-    const doc: any = await adopted.json();
-    assert.deepEqual(doc.technologies, ["cpp"]);
-    const docs: any = await (await fetch(`${url}/knowledge-documents`)).json();
-    assert.equal(docs.documents[0].id, doc.id);
-    const all = await post("/component-research", {mode:"all",language:"cpp"});
-    assert.equal(all.status, 202);
-    const batch: any = await all.json();
+    const batch: any = await launched.json();
     assert.equal(batch.format, "joint-document");
-    assert.equal(batch.children, undefined);
     await until(() => research.get(batch.id).status === "done");
     const progress: any = await (await fetch(`${url}/component-research/${batch.id}`)).json();
     assert.equal(progress.document.sections.length, 2);
@@ -471,12 +445,35 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
     const download = await fetch(`${url}/component-research/${batch.id}/document`);
     assert.match(download.headers.get("content-type")!, /text\/markdown/);
     assert.doesNotMatch(await download.text(), /## 能力 cap-0/);
+    const artifactsResponse = await fetch(`${url}/component-research/${batch.id}/artifacts`);
+    assert.equal(artifactsResponse.status, 200);
+    const artifacts: any = await artifactsResponse.json();
+    assert.equal(artifacts.schema, "mfc.component-paradigm/v2");
+    assert.equal(artifacts.enabled, false);
+    assert.ok(artifacts.files["derived/catalog.json"]);
     assert.equal((await post(`/component-research/${batch.id}/review`, {section_id:"unknown",mode:"discuss",message:"问题"})).status, 400);
     assert.equal((await post(`/component-research/${batch.id}/review`, {section_id:"cap-0",mode:"discuss",message:"头文件对应哪个库？"})).status, 202);
     await until(() => research.get(batch.id).status === "done");
     assert.match(research.get(batch.id).review_turns![0].reply!, /所选组件/);
+    assert.match(research.get(batch.id).review_turns![0].reply!, /`文件组件:src\/file\.cpp:1`/, "给人看的回复用组件名");
+    assert.doesNotMatch(research.get(batch.id).review_turns![0].reply!, new RegExp(component.id), "不露出仓库编号");
     assert.equal(research.get(batch.id).document!.sections[0].selected, false);
-    assert.equal((await post("/component-research", {mode:"unknown",language:"cpp"})).status, 400);
+    const detail: any = await (
+      await fetch(`${url}/component-research/${batch.id}`)
+    ).json();
+    const published = await post(`/component-research/${batch.id}/publish`, componentPublishInput(detail, {
+      title: "范式",
+      scope: "platform",
+    }));
+    assert.equal(published.status, 200);
+    const publishedRecord: any = await published.json();
+    assert.equal(publishedRecord.id, batch.id);
+    assert.ok(publishedRecord.document_id);
+    const doc = readKnowledgeDocument(dir, publishedRecord.document_id);
+    assert.deepEqual(doc.technologies, ["cpp"]);
+    const docs: any = await (await fetch(`${url}/knowledge-documents`)).json();
+    assert.equal(docs.documents[0].id, doc.id);
+    assert.equal((await post("/component-research", {mode:"all",language:"cpp"})).status, 400);
   } finally {
     await service.shutdown();
     await new Promise<void>((r) => server.close(() => r()));
@@ -484,26 +481,26 @@ test("HTTP 配置、萃取、查看及采纳走同一记录，非法语言拒绝
   }
 });
 
-test("按语言快照全部启用组件仓，忽略旧单仓输入；配置变化重新研究", async () => {
+test("按组件快照配置，多组件须指定、停用组件不可选；配置变化重新研究", async () => {
   const dir = temporary();
   const first = saveComponentRepository(dir, config, "alice");
-  const second = saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git", languages:["cpp"]}, "alice");
-  saveComponentRepository(dir, {...config, name:"Java组件", repository:"https://code.example/java.git", languages:["java"]}, "alice");
-  saveComponentRepository(dir, {...config, name:"停用组件", repository:"https://code.example/off.git", enabled:false}, "alice");
+  saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git", languages:["cpp"]}, "alice");
+  const off = saveComponentRepository(dir, {...config, name:"停用组件", repository:"https://code.example/off.git", enabled:false}, "alice");
   const executions: any[] = [];
-  const research = new ComponentResearch(dir, async input => { executions.push(input.record); return "# 范式"; });
+  const research = new ComponentResearch(dir, async input => { executions.push(input.record); return writeJoint(input); });
   try {
-    const job = research.start({language:"cpp", topic:"日期", component_id:first.id}, "alice");
-    assert.deepEqual(job.components?.map(c => c.id).sort(), [first.id, second.id].sort());
-    assert.equal(research.start({language:"cpp", topic:"日期"}, "alice").id, job.id);
+    assert.throws(() => research.start({ language:"cpp" }, "alice"), /请选择要研究的组件/);
+    assert.throws(() => research.start({ language:"cpp", component_id:off.id }, "alice"), /不存在/);
+    const job = research.start({ language:"cpp", component_id:first.id }, "alice");
+    assert.deepEqual(job.components?.map(c => c.id), [first.id]);
     await until(() => research.get(job.id).status === "done");
-    assert.equal(executions[0].components.length, 2);
-    saveComponentRepository(dir, {id:second.id, enabled:false}, "alice");
-    const next = research.start({language:"cpp", topic:"日期"}, "alice");
+    assert.equal(executions[0].components.length, 1);
+    saveComponentRepository(dir, {id:first.id, path:"include"}, "alice");
+    const next = research.start({ language:"cpp", component_id:first.id }, "alice");
     assert.notEqual(next.id, job.id);
-    assert.equal(next.components?.length, 1);
-    assert.equal(research.get(job.id).components?.length, 2, "历史范围不被当前配置覆盖");
-    assert.throws(() => research.start({language:"python",topic:"日期"}, "alice"), /语言/);
+    assert.equal(next.component?.path, "include");
+    assert.equal(research.get(job.id).component?.path, "src", "历史范围不被当前配置覆盖");
+    assert.throws(() => research.start({ language:"python", component_id:first.id }, "alice"), /语言/);
   } finally { await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
 });
 
@@ -553,13 +550,15 @@ test("停止和删除不会被迟到结果复活；删除保留已采纳知识�
   saveComponentRepository(dir, config, "alice");
   let release!: () => void;
   const hold = new Promise<void>(r => release = r);
+  let calls = 0;
   const research = new ComponentResearch(dir, async input => {
-    if (input.record.topic === "慢任务") { await hold; input.update({stage:"迟到更新"}); }
-    if (input.record.topic === "失败") throw new Error("测试失败");
-    return "# 组件范式\n测试内容";
+    calls++;
+    if (calls === 1) { await hold; input.update({stage:"迟到更新"}); }
+    if (calls === 2) throw new Error("测试失败");
+    return writeJoint(input);
   });
   try {
-    const slow = research.start({language:"cpp",topic:"慢任务"}, "alice");
+    const slow = research.start({ language:"cpp" }, "alice");
     await until(() => research.get(slow.id).status === "running");
     research.stop(slow.id);
     release();
@@ -569,12 +568,13 @@ test("停止和删除不会被迟到结果复活；删除保留已采纳知识�
     research.remove(slow.id, "bob");
     assert.ok(!research.list().some(r => r.id === slow.id));
     assert.equal(research.get(slow.id).deleted_by, "bob");
-    const fail = research.start({language:"cpp",topic:"失败"}, "alice");
+    const fail = research.start({ language:"cpp" }, "alice");
     await until(() => research.get(fail.id).status === "failed");
-    assert.notEqual(research.retry(fail.id, "alice").id, fail.id);
-    const done = research.start({language:"cpp",topic:"完成"}, "alice");
+    assert.equal(research.start({ language:"cpp" }, "alice").id, fail.id, "失败的研究也是这个组件的那一次研究");
+    const done = research.retry(fail.id, "alice");
+    assert.equal(done.id, fail.id, "重试原地继续");
     await until(() => research.get(done.id).status === "done");
-    const doc = research.adopt(done.id, {scope:"platform"}, "alice");
+    const doc = publishComponentKnowledge(research, dir, done.id, {scope:"platform"}, "alice");
     research.remove(done.id, "bob");
     assert.ok(research.get(done.id).draft, "来源追溯保留");
     const {readKnowledgeDocument} = await import("../src/knowledgeDocuments.ts");
@@ -583,7 +583,7 @@ test("停止和删除不会被迟到结果复活；删除保留已采纳知识�
   } finally { release(); await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
 });
 
-test("全量跨仓只执行一次，细粒度能力默认全选，筛选后采纳为单篇文档", async t => {
+test("一个组件只执行一次研究，细粒度能力默认全选，筛选后采纳为该组件的单篇文档", async t => {
   const dir = temporary();
   const one = saveComponentRepository(dir, config, "alice");
   const two = saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git"}, "alice");
@@ -593,59 +593,59 @@ test("全量跨仓只执行一次，细粒度能力默认全选，筛选后采�
   const research = new ComponentResearch(dir, async input => {
     executions.push(input.record.id);
     assert.equal(input.record.mode, "all");
-    assert.deepEqual(input.record.components?.map(c => c.id).sort(), [one.id, two.id].sort());
+    assert.deepEqual(input.record.components?.map(c => c.id), [input.record.component!.id]);
     writeJoint(input, 32);
-    input.editDocument!({ action: "section", section: { ...sectionData("cap-0", [one.id, two.id]), related_ids: ["cap-1"] } });
+    input.editDocument!({ action: "section", section: { ...sectionData("cap-0", [input.record.component!.id]), related_ids: ["cap-1"] } });
     return "完成";
   });
   t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
-  const batch = research.start({mode:"all",language:"C++"}, "alice");
-  assert.equal(batch.children, undefined);
-  assert.equal(research.start({mode:"all",language:"cpp"}, "alice").id, batch.id);
+  const batch = research.start({ language:"C++", component_id:one.id }, "alice");
+  assert.equal(research.start({ language:"cpp", component_id:one.id }, "alice").id, batch.id);
+  assert.notEqual(research.start({ language:"cpp", component_id:two.id }, "alice").id, batch.id, "另一个组件是另一次研究");
   await until(() => research.get(batch.id).status === "done");
   const complete = research.get(batch.id);
-  assert.equal(executions.length, 1);
+  await until(() => research.list().every(r => r.status === "done"));
+  assert.equal(executions.filter(id => id === batch.id).length, 1);
   assert.equal(complete.document!.sections.length, 32);
   assert.ok(complete.document!.sections.every(section => section.selected));
   assert.equal((complete.draft!.match(/### 最佳示例/g) ?? []).length, 32);
-  assert.equal(research.list(true).length, 1);
-  assert.equal(research.list(true)[0].document, undefined);
+  assert.equal(research.list(true).length, 2);
+  assert.ok(research.list(true).every(r => r.document === undefined));
   assert.throws(() => research.selectSections(batch.id, ["unknown"], false), /有效/);
   research.selectSections(batch.id, complete.document!.sections.map(s => s.id), false);
-  assert.throws(() => research.adopt(batch.id, {scope:"platform"}, "alice"), /请选择至少一个/);
+  assert.throws(() => publishComponentKnowledge(research, dir, batch.id, {scope:"platform"}, "alice"), /请选择至少一个/);
   research.selectSections(batch.id, ["cap-0"], true);
-  const archiveDraft = research.archiveDraft(batch.id, { title: "归档标题", content: "不能替换结构化内容" });
-  assert.match(archiveDraft.content, /## 能力 cap-0/);
-  assert.doesNotMatch(archiveDraft.content, /## 能力 cap-1\b|不能替换结构化内容/);
-  const doc = research.adopt(batch.id, {scope:"platform",content:"不可覆盖结构化草稿"}, "alice");
+  const doc = publishComponentKnowledge(research, dir, batch.id, {scope:"platform",content:"不可覆盖结构化草稿"}, "alice");
   assert.match(doc.content, /## 能力 cap-0/);
   assert.doesNotMatch(doc.content, /## 能力 cap-1\b|不可覆盖结构化草稿/);
   assert.match(doc.content, /未纳入本次文档/);
-  assert.equal(doc.research_source?.components?.length, 2);
-  assert.equal(research.adopt(batch.id, {}, "alice").id, doc.id);
+  assert.deepEqual(doc.research_source?.components?.map(c => c.id), [one.id]);
+  const repeated = publishComponentKnowledge(research, dir, batch.id, {}, "alice");
+  assert.equal(repeated.id, doc.id);
+  assert.equal(repeated.revision, doc.revision);
   assert.throws(() => research.review(batch.id, { section_id:"cap-0",mode:"rework",message:"修改" }, "alice"), /不可/);
   research.remove(batch.id, "alice");
-  assert.equal(research.list().length, 0);
+  assert.equal(research.list().length, 1);
   assert.equal(research.get(batch.id).document_id, doc.id);
   assert.throws(() => research.retry(batch.id, "alice"), /删除/);
 });
 
-test("53 个仓在同一研究上下文，停止后迟到章节和结果不能覆盖草稿", async t => {
+test("53 个组件仓时只研究所选组件，停止后迟到章节和结果不能覆盖草稿", async t => {
   const dir = temporary();
-  for (let i=0; i<53; i++) saveComponentRepository(dir, {...config, name:`组件 ${i}`, repository:`https://code.example/c${i}.git`}, "alice");
+  const rows = Array.from({length:53}, (_, i) => saveComponentRepository(dir, {...config, name:`组件 ${i}`, repository:`https://code.example/c${i}.git`}, "alice"));
   let count = 0;
   const research = new ComponentResearch(dir, async input => {
     count++;
-    assert.equal(input.record.components?.length, 53);
+    assert.deepEqual(input.record.components?.map(c => c.id), [rows[7].id]);
     writeJoint(input);
     await new Promise<void>(resolve => input.signal.aborted ? resolve() : input.signal.addEventListener("abort", () => resolve(), {once:true}));
     assert.throws(() => input.editDocument!({action:"overview",overview:"迟到内容"}), /停止/);
     return "# 迟到草稿";
   });
   t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
-  const batch = research.start({mode:"all",language:"cpp"}, "alice");
+  const batch = research.start({ language:"cpp", component_id:rows[7].id }, "alice");
   await until(() => count === 1);
-  assert.equal(research.start({mode:"all",language:"cpp",refresh:true}, "alice").id, batch.id);
+  assert.equal(research.start({ language:"cpp", component_id:rows[7].id }, "alice").id, batch.id);
   research.stop(batch.id);
   await new Promise(r => setTimeout(r, 30));
   assert.equal(count, 1);
@@ -656,12 +656,12 @@ test("53 个仓在同一研究上下文，停止后迟到章节和结果不能�
   assert.equal(research.list().length, 0);
 });
 
-test("重启中断保留章节、勾选与对话，继续研究沿用原始跨仓范围", async t => {
+test("重启中断保留章节、勾选与对话，继续研究沿用原始组件范围", async t => {
   const dir = temporary();
-  saveComponentRepository(dir, config, "alice");
+  const row = saveComponentRepository(dir, config, "alice");
   saveComponentRepository(dir, {...config,name:"日期",repository:"https://code.example/date.git"}, "alice");
   const initial = new ComponentResearch(dir, async input => writeJoint(input));
-  const batch = initial.start({mode:"all",language:"cpp"}, "alice");
+  const batch = initial.start({ language:"cpp", component_id:row.id }, "alice");
   await until(() => initial.get(batch.id).status === "done");
   initial.selectSections(batch.id, ["cap-1"], false);
   await initial.shutdown();
@@ -671,7 +671,7 @@ test("重启中断保留章节、勾选与对话，继续研究沿用原始跨�
   writeFileSync(file,JSON.stringify({...state,status:"running",review_turns:[{id:"turn",section_id:"cap-0",mode:"discuss",message:"补充说明",operator:"alice",status:"running",created_at:new Date().toISOString()}]}));
   let runs = 0;
   const recovered = new ComponentResearch(dir, async ({record,review}) => {
-    runs++; assert.equal(record.components?.length, 2);
+    runs++; assert.deepEqual(record.components?.map(c => c.id), [row.id]);
     assert.equal(review?.section_id,"cap-0");assert.equal(review?.mode,"discuss");
     return "# 重试完成";
   });
@@ -704,7 +704,7 @@ test("对话只读；局部返工只替换指定章节，失败与停止均保�
     return "已核对接口，仅修订所选组件的错误处理示例。";
   });
   t.after(async () => { await research.shutdown(); rmSync(dir,{recursive:true,force:true}); });
-  const job = research.start({mode:"all",language:"cpp"},"alice");
+  const job = research.start({ language:"cpp" },"alice");
   await until(() => research.get(job.id).status === "done");
   const original = research.get(job.id).document!;
   research.review(job.id,{section_id:"cap-0",mode:"discuss",message:"为什么需要清理？"},"expert");
@@ -751,13 +751,127 @@ test("缺最佳示例不能完成，已保存能力允许继续补齐而不重�
     return "已保存";
   });
   t.after(async () => {await research.shutdown();rmSync(dir,{recursive:true,force:true});});
-  const job = research.start({mode:"all",language:"cpp"},"alice");
+  const job = research.start({ language:"cpp" },"alice");
   await until(() => research.get(job.id).status === "failed");
   const preserved = research.get(job.id).document!.sections[0];
-  assert.throws(() => research.adopt(job.id,{scope:"platform"},"alice"), /生成后/);
+  assert.throws(() => publishComponentKnowledge(research, dir, job.id,{scope:"platform"},"alice"), /完成后发布/);
   research.retry(job.id,"alice");
   await until(() => research.get(job.id).status === "done");
   assert.deepEqual(research.get(job.id).document!.sections[0],preserved);
+});
+
+test("B5验收1/生产线验收10/14：组件发布拒绝未检视或过期建议，并发冲突保留原稿，单次确认采用最新建议", async t => {
+  const { listKnowledgeDocuments } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    const section = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;
+    input.editDocument!({ action: "section", section: { ...section, content: input.review.message } });
+    if (input.review.message === "未完成的修改") throw new Error("研究失败");
+    return "修改完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  for (const message of ["旧建议", "新建议"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "alice");
+    await until(() => research.get(job.id).status === "done");
+  }
+  const viewed = componentPublishInput(research.get(job.id));
+  assert.throws(() => research.publish(job.id, { ...viewed, sections: viewed.sections.map(section => ({ ...section, proposal_id: null })) }, "alice"), /修改建议已有变化/);
+  const oldProposalId = research.get(job.id).review_turns![0].id;
+  assert.throws(() => research.publish(job.id, { ...viewed, sections: viewed.sections.map(section => section.id === "cap-0" ? { ...section, proposal_id: oldProposalId } : section) }, "alice"), /修改建议已有变化/);
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["pending", "pending"]);
+  assert.equal(listKnowledgeDocuments(dir).length, 0, "未检视或过期建议均不能写正式库");
+  const section = research.get(job.id).document!.sections[0];
+  research.editSection(job.id, { section: { ...section, content: "其他人修改的正文" }, base_revision: section.revision }, "bob");
+  assert.throws(() => research.publish(job.id, componentPublishInput(research.get(job.id)), "alice"), /基线冲突/);
+  assert.throws(() => research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice"), /新版本/);
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["pending", "pending"]);
+  assert.equal(listKnowledgeDocuments(dir).length, 0);
+  research.review(job.id, { section_id: "cap-1", mode: "rework", message: "未完成的修改" }, "alice");
+  await until(() => research.get(job.id).status === "failed");
+  assert.throws(() => research.decideProposal(job.id, research.get(job.id).review_turns!.at(-1)!.id, "accept", "alice"), /尚未完成/);
+  research.review(job.id, { section_id: "cap-0", mode: "rework", message: "最终确认的修改" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  research.selectSections(job.id, ["cap-1"], false);
+  const published = publishComponentKnowledge(research, dir, job.id, {}, "alice");
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["discarded", "discarded", "pending", "accepted"]);
+  assert.match(published.content, /最终确认的修改/); assert.doesNotMatch(published.content, /未完成的修改/);
+  const repeated = publishComponentKnowledge(research, dir, job.id, {}, "alice");
+  assert.equal(repeated.id, published.id, "重复发布保持幂等，未选章节的意见仍保留");
+  assert.equal(repeated.revision, published.revision);
+  assert.equal(research.get(job.id).review_turns![2].proposal!.status, "pending", "未选章节的意见仍保留");
+});
+
+test("组件连续整体意见接着上一轮候选修改，原稿与发布基线保留到确认", async t => {
+  const dir = temporary();
+  saveComponentRepository(dir, config, "alice");
+  const seen: string[] = [];
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    const document = input.readDocument!(), section = document.sections[0];
+    assert.deepEqual(input.record.document, document, "执行快照和读取工具使用同一份候选内容");
+    assert.equal(input.record.draft, researchDocumentMarkdown(input.record.topic, document));
+    seen.push(section.content);
+    input.editDocument!({ action: "section", section: { ...section, content: section.content + `\n${input.review.message}` } });
+    return "修改完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const original = research.get(job.id).document!;
+  for (const message of ["补充第一轮边界", "补充第二轮示例"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "expert");
+    await until(() => ["done", "failed"].includes(research.get(job.id).status));
+    assert.equal(research.get(job.id).status, "done", research.get(job.id).error);
+  }
+  const pending = research.get(job.id), content = original.sections[0].content;
+  assert.deepEqual(seen, [content, content + "\n补充第一轮边界"]);
+  assert.deepEqual(pending.document, original, "待确认候选不会修改原稿");
+  assert.equal(pending.document_id, undefined);
+  assert.equal(pending.review_turns!.at(-1)!.proposal!.base_revision, original.sections[0].revision);
+  assert.equal(pending.review_turns!.at(-1)!.proposal!.section.content, content + "\n补充第一轮边界\n补充第二轮示例");
+  research.editSection(job.id, { section: { ...original.sections[0], content: "人工保存的新正文" }, base_revision: original.sections[0].revision }, "editor");
+  research.review(job.id, { section_id: "cap-0", mode: "rework", message: "核对人工正文" }, "expert");
+  await until(() => ["done", "failed"].includes(research.get(job.id).status));
+  assert.equal(research.get(job.id).status, "done", research.get(job.id).error);
+  assert.equal(seen.at(-1), "人工保存的新正文", "版本已变更时不会沿用过期候选");
+  const latest = research.get(job.id).review_turns!.at(-1)!;
+  const confirmed = research.decideProposal(job.id, latest.id, "accept", "expert");
+  assert.equal(confirmed.document!.sections[0].content, "人工保存的新正文\n核对人工正文");
+  assert.equal(confirmed.document!.sections[0].revision, original.sections[0].revision + 2);
+  assert.deepEqual(confirmed.document!.sections[1], original.sections[1]);
+});
+
+test("组件确认竞态：不覆盖较新建议，研究进行中不能确认，放弃新建议后可确认旧建议", async t => {
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  let release = () => {}, discussing = false;
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    if (input.review.mode === "discuss") { await new Promise<void>(resolve => { release = resolve; discussing = true; }); return "讨论完成"; }
+    const section = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;
+    input.editDocument!({ action: "section", section: { ...section, content: input.review.message } }); return "修改完成";
+  });
+  t.after(async () => { release(); await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  for (const message of ["已阅读的旧建议", "刚生成的新建议"]) {
+    research.review(job.id, { section_id: "cap-0", mode: "rework", message }, "alice");
+    await until(() => research.get(job.id).status === "done");
+  }
+  const [old, latest] = research.get(job.id).review_turns!;
+  assert.throws(() => research.decideProposal(job.id, old.id, "accept", "alice"), /更新的修改建议/);
+  assert.deepEqual(research.get(job.id).review_turns!.map(turn => turn.proposal!.status), ["pending", "pending"]);
+  assert.equal(research.get(job.id).document!.sections[0].revision, 1);
+  research.review(job.id, { section_id: "cap-0", mode: "discuss", message: "继续讨论" }, "alice");
+  await until(() => discussing);
+  assert.throws(() => research.decideProposal(job.id, latest.id, "accept", "alice"), /当前研究仍在进行/);
+  release(); await until(() => research.get(job.id).status === "done");
+  research.decideProposal(job.id, latest.id, "discard", "alice");
+  const accepted = research.decideProposal(job.id, old.id, "accept", "alice");
+  assert.equal(accepted.document!.sections[0].content, "已阅读的旧建议");
+  assert.deepEqual(accepted.review_turns!.slice(0, 2).map(turn => turn.proposal!.status), ["accepted", "discarded"]);
 });
 
 test("结构化章节拒绝未知来源、空示例和悬空关联；Markdown 保留真实依赖", () => {
@@ -780,9 +894,9 @@ test("超过普通上传容量的联合长文可完整采纳，后续调整范�
     return "完成";
   });
   t.after(async () => {await research.shutdown();rmSync(dir,{recursive:true,force:true});});
-  const job = research.start({mode:"all",language:"cpp"},"alice");
+  const job = research.start({ language:"cpp" },"alice");
   await until(() => research.get(job.id).status === "done");
-  const doc = research.adopt(job.id,{scope:"platform"},"alice");
+  const doc = publishComponentKnowledge(research, dir, job.id,{scope:"platform"},"alice");
   assert.ok(Buffer.byteLength(doc.content) > 2 * 1024 * 1024);
   assert.ok(doc.content.includes(longContent));
   const { saveKnowledgeDocument } = await import("../src/knowledgeDocuments.ts");
@@ -795,17 +909,125 @@ test("已采纳组件更新沿用同一知识条目及名称范围，人工版�
   const dir = temporary(); saveComponentRepository(dir, config, "alice");
   const research = new ComponentResearch(dir, async input => writeJoint(input));
   t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
-  const job = research.start({ mode: "all", language: "cpp" }, "alice");
+  const job = research.start({ language: "cpp" }, "alice");
   await until(() => research.get(job.id).status === "done");
-  const first = research.adopt(job.id, { title: "团队定制的组件指南", scope: "repository", repositories: [config.repository] }, "alice");
+  const first = publishComponentKnowledge(research, dir, job.id, { title: "团队定制的组件指南", scope: "repository", repositories: [config.repository] }, "alice");
   const update = research.beginUpdate(job.id, "bob");
   assert.equal(update.update_metadata?.title, first.title); assert.equal(update.update_metadata?.scope, "repository");
   assert.deepEqual(update.update_metadata?.repositories, [config.repository]);
   const section = update.document!.sections[0];
   research.editSection(job.id, { section: { ...section, content: section.content + "\n人工补充" }, base_revision: section.revision }, "bob");
-  const second = research.adopt(job.id, update.update_metadata!, "bob");
+  const second = publishComponentKnowledge(research, dir, job.id, update.update_metadata!, "bob");
   assert.equal(second.id, first.id); assert.equal(second.title, first.title); assert.equal(second.scope, first.scope); assert.match(second.content, /人工补充/);
+  assert.notEqual(second.revision, first.revision, "人工修改形成同一正式条目的新版本");
   research.beginUpdate(job.id, "bob");
   saveKnowledgeDocument(dir, { content: "另一维护人的正文" }, "other", first.id);
-  assert.throws(() => research.adopt(job.id, {}, "bob"), /正式文档已发生变化/);
+  assert.throws(() => publishComponentKnowledge(research, dir, job.id, {}, "bob"), /正式知识已有新版本/);
+});
+
+test("B5缺口3：正式文档在别处改过后仍可发起更新，如实提示别处修改不会带入", async t => {
+  const { saveKnowledgeDocument, readKnowledgeDocument } = await import("../src/knowledgeDocuments.ts");
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => writeJoint(input));
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  const first = publishComponentKnowledge(research, dir, job.id, { title: "组件指南" }, "alice");
+  const edited = saveKnowledgeDocument(dir, { content: "阅读页里人工改过的正文" }, "other", first.id, { expectedRevision: first.revision });
+  const update = research.beginUpdate(job.id, "bob");
+  assert.equal(update.update_document_revision, edited.revision, "以当前正式版本为发布基线，不会被版本锁永久拒绝");
+  assert.match(update.stage ?? "", /别处的修改不会自动带入/);
+  const section = update.document!.sections[0];
+  research.editSection(job.id, { section: { ...section, content: section.content + "\n更新补充" }, base_revision: section.revision }, "bob");
+  const { saveKnowledgeReviewNote, listKnowledgeReviewNotes } = await import("../src/knowledgeReviewNotes.ts");
+  const sources = { dataDir: dir, component: research } as unknown as Parameters<typeof saveKnowledgeReviewNote>[0];
+  saveKnowledgeReviewNote(sources, "component", job.id, { document_id: section.id, scope: "document", note: "下次再补异常示例" }, "carol");
+  const second = publishComponentKnowledge(research, dir, job.id, update.update_metadata!, "bob");
+  assert.equal(second.id, first.id); assert.match(second.content, /更新补充/);
+  assert.equal(listKnowledgeReviewNotes(sources, "component", job.id).notes[0].status, "open", "B5：未处理意见不拦发布，保持原状");
+  assert.equal(readKnowledgeDocument(dir, first.id).revision, second.revision);
+});
+
+test("补充遗漏能力：只能新增能力项，经整轮完成才并入并默认勾选；空补充、不完整、失败与停止都保留原稿", async t => {
+  const dir = temporary();
+  saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    assert.equal(input.review.mode, "supplement"); assert.equal(input.review.section_id, "");
+    const ids = input.record.components!.map(c => c.id), existing = input.readDocument!().sections[0];
+    assert.throws(() => input.editDocument!({ action: "overview", overview: "改概述" }), /不能修改概述/);
+    assert.throws(() => input.editDocument!({ action: "section", section: { ...existing, content: "借补充改已有项" } }), /只能填写本轮新增/);
+    assert.throws(() => input.editDocument!({ action: "outline", entries: [{ id: existing.id, title: existing.title, repository_ids: ids }] }), /已有能力请在该项上返工/);
+    const message = input.review.message;
+    if (message === "查无") return "核对后未发现遗漏。";
+    input.editDocument!({ action: "outline", entries: [{ id: "cap-pool", title: "连接池超时回收", repository_ids: ids }] });
+    if (message === "不完整") return "只列了目录。";
+    input.editDocument!({ action: "section", section: { ...sectionData("cap-pool", ids), title: "连接池超时回收" } });
+    if (message === "失败") throw new Error("评审未通过");
+    if (message === "停止") await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true }));
+    return "补充了连接池超时回收。";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice");
+  await until(() => research.get(job.id).status === "done");
+  research.selectSections(job.id, ["cap-1"], false);
+  const original = research.get(job.id).document!;
+  assert.throws(() => research.review(job.id, { section_id: "cap-0", mode: "supplement", message: "x" }, "expert"), /不针对已有能力项/);
+  for (const [message, reason] of [["查无", /没有找到可补充的能力/], ["不完整", /补充的能力尚不完整（连接池超时回收）/], ["失败", /评审未通过/]] as const) {
+    research.review(job.id, { section_id: "", mode: "supplement", message }, "expert");
+    await until(() => research.get(job.id).status === "failed");
+    const turn = research.get(job.id).review_turns!.at(-1)!;
+    assert.match(turn.error ?? "", reason); assert.equal(turn.added_section_ids, undefined, "失败轮不留下看似已补充的编号");
+    assert.deepEqual(research.get(job.id).document, original, `${message}：原稿与勾选保持不变`);
+  }
+  research.retry(job.id, "expert");
+  await until(() => research.get(job.id).status === "failed");
+  assert.equal(research.get(job.id).review_turns!.at(-1)!.mode, "supplement", "重试按原补充要求重放");
+  research.review(job.id, { section_id: "", mode: "supplement", message: "停止" }, "expert");
+  await until(() => research.get(job.id).status === "running");
+  await new Promise(resolve => setTimeout(resolve, 20));
+  research.stop(job.id);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(research.get(job.id).document, original);
+  research.review(job.id, { section_id: "", mode: "supplement", message: "漏了连接池超时回收" }, "expert");
+  assert.match(research.get(job.id).stage, /^(等待|正在)补充遗漏能力$/);
+  await until(() => research.get(job.id).status === "done");
+  const supplemented = research.get(job.id);
+  assert.deepEqual(supplemented.document!.sections.map(s => [s.id, s.selected]), [["cap-0", true], ["cap-1", false], ["cap-pool", true]], "新项追加并默认勾选，已有勾选不变");
+  assert.deepEqual(supplemented.document!.sections.slice(0, 2), original.sections, "已有能力原样保留");
+  assert.equal(supplemented.document!.overview, original.overview);
+  assert.deepEqual(supplemented.review_turns!.at(-1)!.added_section_ids, ["cap-pool"]);
+  assert.match(supplemented.draft ?? "", /连接池超时回收/);
+  await research.shutdown();
+  const reopened = new ComponentResearch(dir, async () => "不应运行");
+  assert.deepEqual(reopened.get(job.id).document!.sections.map(s => s.id), ["cap-0", "cap-1", "cap-pool"], "补充轮记录可跨重启读取");
+  await reopened.shutdown();
+});
+
+test("#457 整体返工原子更新概述及多项文稿，新增内容可审阅，失败不覆盖原稿", async t => {
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    assert.equal(input.review.section_id, "");
+    const ids = input.record.components!.map(c => c.id);
+    input.editDocument!({ action: "overview", overview: "删除重复介绍，补充整体使用边界。" });
+    for (const section of input.readDocument!().sections) input.editDocument!({ action: "section", section: { ...section, content: `${section.content}\n修订后的边界说明。` } });
+    input.editDocument!({ action: "outline", entries: [{ id: "missing", title: "遗漏的异常恢复", repository_ids: ids }] });
+    input.editDocument!({ action: "section", section: sectionData("missing", ids) });
+    if (input.review.message === "失败") throw new Error("独立评审失败");
+    return "全部文稿修订完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice"); await until(() => research.get(job.id).status === "done");
+  research.selectSections(job.id, ["cap-1"], false);
+  const original = research.get(job.id).document;
+  research.review(job.id, { section_id: "", mode: "rework", message: "失败" }, "alice"); await until(() => research.get(job.id).status === "failed");
+  assert.deepEqual(research.get(job.id).document, original);
+  research.review(job.id, { section_id: "", mode: "rework", message: "补充并去重" }, "alice"); await until(() => research.get(job.id).status === "done");
+  const result = research.get(job.id);
+  assert.match(result.document!.overview, /整体使用边界/);
+  assert.deepEqual(result.document!.sections.map(s => [s.id, s.selected]), [["cap-0", true], ["cap-1", false], ["missing", true]]);
+  assert.match(result.document!.sections[1].content, /修订后的边界/);
+  assert.equal(result.section_history!.length, 2);
+  assert.equal(result.document_id, undefined, "只修改草稿，不自动发布");
 });

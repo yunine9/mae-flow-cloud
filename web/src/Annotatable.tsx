@@ -45,6 +45,8 @@ export function Annotatable({
   onOpenAnnotations,
   renderInlineReview,
   addDraft,
+  allowImages = true,
+  savedMessage = "已记下，可在批注与检视中统一处理。",
   children,
 }: {
   taskId: string;
@@ -56,6 +58,8 @@ export function Annotatable({
   items: ReadonlyArray<MaterialAnnotation>;
   /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
+  allowImages?: boolean;
+  savedMessage?: string;
   onAdded: () => void;
   /** 已圈过的行通过图标查看意见；正文仍然只用于阅读。 */
   onOpenAnnotations?: (ids: string[]) => void;
@@ -93,6 +97,7 @@ export function Annotatable({
   const fileInput = useRef<HTMLInputElement | null>(null);
 
   async function attachFiles(files: Iterable<File>) {
+    if (!allowImages) return;
     for (const file of files) {
       if (!file.type.startsWith("image/")) continue;
       setUploading((count) => count + 1);
@@ -354,7 +359,7 @@ export function Annotatable({
       }
       // 保存只落账，不自动打开处理面板或转交 Agent。
       setThread(undefined);
-      setReceipt("已记下，可在批注与检视中统一处理。");
+      setReceipt(savedMessage);
       setDraft(undefined);
       setNote("");
       onAdded();
@@ -467,6 +472,7 @@ export function Annotatable({
             placeholder="写下检视意见…"
             onChange={(event) => setNote(event.target.value)}
             onPaste={(event) => {
+              if (!allowImages) return;
               const files = [...event.clipboardData.files].filter((file) => file.type.startsWith("image/"));
               if (!files.length) return;
               event.preventDefault();
@@ -480,7 +486,7 @@ export function Annotatable({
               }
             }}
           />
-            <div className="annot-editor-images">
+            {allowImages && <div className="annot-editor-images">
               {images.map((image) => (
                 <span key={image.path} className="annot-image-chip" title={image.path}>
                   <img src={image.preview} alt={image.label ?? "附图"} />
@@ -497,7 +503,7 @@ export function Annotatable({
                   void attachFiles(event.target.files ?? []);
                   event.target.value = "";
                 }} />
-            </div>
+            </div>}
           {error && <Alert variant="destructive" className="mb-3">{error}</Alert>}
           <div className="annot-editor-actions">
             <span>⌘/Ctrl + Enter 记下 · Esc 取消</span>

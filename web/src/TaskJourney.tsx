@@ -7,6 +7,7 @@ import { Markdown } from "./markdown";
 import { startVisiblePolling } from "./visiblePolling";
 import { journeyCurrent, recentJourney } from "./journeyModel";
 import { PrepushLiveLog, prepushActive } from "./PrepushLiveLog";
+import { ComponentKnowledgeCheck } from "./ComponentKnowledgeCheck";
 import { cn } from "cn";
 
 const labels: Record<TimelineEntry["kind"], string> = {
@@ -95,6 +96,7 @@ export function TaskJourney({ task, onLogs, onTiming }: {
     {(task.execution_plan_alerts ?? []).length > 0 && <Alert variant="warning" className="mb-2">
       {(task.execution_plan_alerts ?? []).map((line, index) => <p className="m-0" key={index}>{line}</p>)}
     </Alert>}
+    <ComponentKnowledgeCheck report={task.delivery?.component_knowledge} />
     {task.delivery?.prepush && <PrepushLiveLog taskId={task.id}
       active={prepushActive(task.delivery.prepush.state, task.delivery.prepush_runtime)}
       title={`Build-Fix · 编译与测试${task.delivery.prepush.round ? ` · 当前第 ${task.delivery.prepush.round} 轮` : ""}`}

@@ -187,7 +187,7 @@ test("push 检视先给这次修改入口，同时保留完整交付阅读", () 
   assert.match(workspace, /activeDeliveryScope=\{isPushConfirmation\(task\.waiting\)[^]*diffScope/,
     "决策卡必须知道左侧当前显示的范围，不能只拿到一个盲跳回调");
   assert.match(workspace,
-    /readPushReviewDiff\(task\.id, diffScope\)/,
+    /readPushReviewDiff\(task\.id, diffScope, signal\)/,
     "跳转后必须读取服务端固化的比较锚，不能在浏览器猜 Git revision");
   assert.doesNotMatch(workspace, /selectable=|initialSelectedPaths=|onSelectionChange=\{setDeliverySelection/);
 
@@ -213,10 +213,14 @@ test("工作台打开后列表卡只保留待办信号，不重复渲染整张�
     /decisionMode=\{artifactTaskId === task\.id \? "signal" : "form"\}/);
 });
 
-test("工作区其他改动默认折叠但不隐藏事实", () => {
-  assert.match(gitDiff, /const \[localGroupOpen, setLocalGroupOpen\]/);
-  assert.match(gitDiff, /工作区其他改动 · 默认仅留本地/);
-  assert.match(gitDiff, /localGroupOpen && renderTreeNodes\(localTree/);
+test("工作区未提交改动与已提交改动同树展示，以标记区分而不隐藏", () => {
+  // bac04f7d/e1a85466:撤掉交付勾选后不再分"将推送/仅留本地"两组折叠,
+  // 全部文件进同一棵树,未提交的只打标记——事实仍不隐藏。
+  const tree = readFileSync(resolve("web/src/ChangeFileTree.tsx"), "utf8");
+  assert.match(gitDiff, /<ChangeFileTree files=\{treeFiles\}/);
+  assert.match(tree,
+    /!\["committed", "committed_working"\]\.includes\(data\.file\.stage\) && <span className="change-local-dot"/);
+  assert.doesNotMatch(gitDiff, /localGroupOpen|工作区其他改动 · 默认仅留本地/);
 });
 
 test("代码审阅统计基于实际差异，不依赖文件勾选", () => {
@@ -285,7 +289,7 @@ test("需求确认复用标准决定卡，并收成一个明确的通过按钮",
 
 
 test("增量浏览独立于审批卡，完整浏览保留按文件加载", () => {
-  assert.match(workspace, /readDiffReview\(task.id\)/);
+  assert.match(workspace, /readDiffReview\(task\.id, signal\)/);
   assert.match(workspace, /const pushReview = \(browsingReview.*\?\? approvalReview/);
   assert.match(workspace, /manifest=\{!scopedDiff/);
   assert.doesNotMatch(workspace, /selectable=|deliverySelection/);

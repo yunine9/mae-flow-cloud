@@ -1,13 +1,3 @@
----
-title: <模块名> · <仓名> 仓内设计要点
-type: repo-design
-module: <模块id>
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <模块名>（<仓名>）
 
 本文只记录在本仓中修改该模块时需要知道的内容。端到端链路见上层知识库 `chains/<模块id>/README.md`。

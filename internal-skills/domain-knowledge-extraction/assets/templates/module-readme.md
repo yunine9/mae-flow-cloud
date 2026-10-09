@@ -1,13 +1,3 @@
----
-title: <模块名>
-type: module-index
-module: <模块id>
-related_code:
-  - <仓名>:<路径或glob>
-generated_by: domain-knowledge-extraction
-status: draft
----
-
 # <模块名>
 
 <业务目的，一两句，附出处。>

@@ -11,7 +11,6 @@ import {
   type WorkflowResolvedAsset,
 } from "./workflowDefinition.ts";
 import type { SelectedBusinessModule } from "./businessModuleRuntime.ts";
-import type { SelectedEngineeringKnowledge } from "./engineeringKnowledgeRuntime.ts";
 import type { SelectedRepositorySkill } from "./repositorySkillRuntime.ts";
 
 function bareDigest(value: string): string {
@@ -33,7 +32,6 @@ function references(value: unknown): WorkflowAssetRef[] {
 
 export function workflowKnowledgeSelections(value: unknown): {
   businessModuleIds: string[];
-  engineeringKnowledgeIds: string[];
   teamSkillIds: string[];
 } {
   const refs = references(value);
@@ -41,8 +39,6 @@ export function workflowKnowledgeSelections(value: unknown): {
     businessModuleIds: [...new Set(refs.flatMap((ref) =>
       ref.registry === "business_knowledge" && ref.business_module_id
         ? [ref.business_module_id] : []))],
-    engineeringKnowledgeIds: [...new Set(refs.flatMap((ref) =>
-      ref.registry === "engineering_knowledge" ? [ref.id] : []))],
     teamSkillIds: [...new Set(refs.flatMap((ref) =>
       ref.registry === "team_skill" ? [ref.id] : []))],
   };
@@ -76,20 +72,6 @@ function businessAsset(
     `业务知识 ${module.name}/${ref.id} 不适用于本任务代码仓`);
 }
 
-function engineeringAsset(
-  ref: WorkflowAssetRef,
-  assets: SelectedEngineeringKnowledge[],
-): WorkflowResolvedAsset {
-  const byId = assets.find((item) => item.id === ref.id);
-  if (!byId) return unavailable(ref,
-    `工程知识 ${ref.id} 未进入本任务快照或不适用于当前仓库/技术`);
-  if (bareDigest(byId.digest) !== bareDigest(ref.digest)) {
-    return unavailable(ref, `工程知识 ${ref.id} 的固定摘要已不可用`);
-  }
-  return { ...ref, state: "available",
-    snapshot_path: `.mae-flow-work/team-engineering-knowledge/${byId.id}.md` };
-}
-
 function repositorySkill(
   ref: WorkflowAssetRef,
   skills: SelectedRepositorySkill[],
@@ -110,7 +92,6 @@ export function resolveWorkflowAssets(options: {
   repositories: string[];
   technologies: string[];
   businessModules: SelectedBusinessModule[];
-  engineeringKnowledge: SelectedEngineeringKnowledge[];
   repositorySkills?: SelectedRepositorySkill[];
   /** 任务创建路径必须对拍任务内固定快照，不能回头读取会漂移的货架。 */
   hostSkillSnapshotRoot?: string;
@@ -122,9 +103,6 @@ export function resolveWorkflowAssets(options: {
     }
     if (ref.registry === "business_knowledge") {
       return businessAsset(ref, options.businessModules);
-    }
-    if (ref.registry === "engineering_knowledge") {
-      return engineeringAsset(ref, options.engineeringKnowledge);
     }
     if (ref.registry === "repository_skill") {
       return repositorySkill(ref, options.repositorySkills ?? []);

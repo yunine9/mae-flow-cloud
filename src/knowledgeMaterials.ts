@@ -27,7 +27,7 @@ export async function saveKnowledgeMaterial(root: string, input: { name: string;
   writeFileSync(file, bytes, { mode: 0o600 });
   try {
     const raw = await runKnowledgeCommand(process.env.MAE_FLOW_PYTHON_BIN || "python3", [fileURLToPath(new URL("../scripts/parse-knowledge-material.py", import.meta.url)), file],
-      { signal, timeoutMs: 60_000, maxBytes: 8 * 1024 * 1024 }).catch(() => { throw new Error("资料解析失败，请检查文件格式与解析器；PDF 需要 pdftotext，扫描件需要先做 OCR"); });
+      { signal, timeoutMs: 60_000, maxBytes: (extname(input.name).toLowerCase() === ".zip" ? 128 : 8) * 1024 * 1024 }).catch(() => { throw new Error("资料解析失败，请检查文件格式与解析器；PDF 需要 pdftotext，扫描件需要先做 OCR"); });
     scanForSecrets(input.name, Buffer.from(raw));
     const parsed = JSON.parse(raw);
     if (parsed.error) throw new Error(parsed.error);

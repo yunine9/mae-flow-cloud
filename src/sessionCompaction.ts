@@ -33,8 +33,11 @@ export function estimateContextSize(value: unknown): number {
   if (!value || typeof value !== "object") return 0;
   const item = value as Record<string, unknown>;
   if (item.type === "image") return 4096;
+  // 工具结果的 details（如 edit 的整段 diff/patch）只给界面看，不发给模型；
+  // 计入会让长单行文档的一次小编辑误触发压缩（requirementEditing 长需求用例实锤）。
+  const uiOnly = item.role === "toolResult" ? ["details"] : [];
   return Object.entries(item).reduce((n, [key, val]) =>
-    n + (["usage", "timestamp", "cost", "thinkingSignature", "signature"].includes(key)
+    n + (["usage", "timestamp", "cost", "thinkingSignature", "signature", ...uiOnly].includes(key)
       ? 0 : estimateContextSize(val) + 4), 8);
 }
 
@@ -239,6 +242,7 @@ export class SessionCompaction {
       `当前任务现场（优先于以上历史）：\n${anchor}` }]) {
       const record = { ...message } as Record<string, any>;
       delete record.usage; // 只删除消息元数据，不能删掉工具参数中同名的业务字段。
+      if (record.role === "toolResult") delete record.details; // 仅界面展示，模型从未见过
       if (Array.isArray(record.content)) record.content = record.content.map((block: any) =>
         block.type === "image" ? { type: "text", text: "[图片内容见原会话]" }
           : block.type === "thinking" ? { type: "thinking", thinking: block.thinking } : block);

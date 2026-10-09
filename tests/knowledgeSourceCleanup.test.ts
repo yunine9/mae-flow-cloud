@@ -1,89 +1,204 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createServer } from "node:http";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { KnowledgeSourceCleanup, type SourceCleanupTask } from "../src/knowledgeSourceCleanup.ts";
-import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
+import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
+import { KnowledgeSourceCleanup } from "../src/knowledgeSourceCleanup.ts";
+import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import type { KnowledgeCleanupPublication } from "../src/domainKnowledgeTypes.ts";
 
+const config = { issue_no: "REQ-cleanup", issue_description: "清理旧知识并重新萃取", title: "订单", scope: "订单业务规则",
+  repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/old" }] };
 const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-function repository(root: string) {
-  const source = join(root, "source"), remote = join(root, "remote.git"); mkdirSync(source);
-  git(source, "init", "-b", "master"); git(source, "config", "user.name", "fixture"); git(source, "config", "user.email", "fixture@example.test");
-  mkdirSync(join(source, "docs/old"), { recursive: true });
-  writeFileSync(join(source, "docs/old/rules.md"), "POISON_OLD_KNOWLEDGE"); writeFileSync(join(source, "docs/old/image.png"), "obsolete-image");
-  writeFileSync(join(source, "AGENTS.md"), "POISON_OLD_RULES"); writeFileSync(join(source, "code.ts"), "export const truth = 'current';");
-  git(source, "add", "."); git(source, "commit", "-m", "fixture"); git(root, "clone", "--bare", source, remote);
-  return { source, remote };
-}
-test("领域清理只提交删除 MR，响应丢失复用分支，创建后不查询合入状态", async () => {
-  const root = mkdtempSync(join(tmpdir(), "knowledge-source-cleanup-")), { source, remote } = repository(root);
-  const mrs: Array<{ id: number; url: string; source_branch: string; target_branch: string; state: string }> = [];
-  let loseResponse = true, gateQueries = 0;
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url!, "http://fixture"); response.setHeader("content-type", "application/json");
-    if (url.pathname === "/mr/gates") { gateQueries++; response.end(JSON.stringify({ mr_state: mrs.find(m => String(m.id) === url.searchParams.get("mr"))?.state, gates: [] })); }
-    else if (url.pathname === "/mr/discover") response.end(JSON.stringify({ mrs: mrs.filter(m => m.source_branch === url.searchParams.get("source_branch")) }));
-    else if (url.pathname === "/mr") {
-      let text = ""; for await (const part of request) text += part;
-      const body = JSON.parse(text); assert.equal(body.dts_no, "REQ-cleanup"); assert.match(body.title, /知识清理/);
-      const mr = { id: mrs.length + 1, url: `https://example.test/mr/${mrs.length + 1}`, source_branch: body.source_branch, target_branch: body.target_branch, state: "opened" }; mrs.push(mr);
-      if (loseResponse) { loseResponse = false; response.statusCode = 502; response.end("{}"); } else response.end(JSON.stringify(mr));
-    } else { response.statusCode = 404; response.end("{}"); }
-  });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }), onIndexed: () => {} });
-  const prepare = new KnowledgeSourceCleanup(publisher);
-  const repo = { id: "repo-1", name: "交易仓", repository: remote, branch: "master", path: "", docs_path: "docs/old" };
-  const task: SourceCleanupTask = { id: "dkx-preparation", issue_no: "REQ-cleanup", operator: "dev", created_at: new Date().toISOString(), source_cleanup: prepare.create([repo]) };
-  let writes = 0; const save = () => { writes++; };
+
+test("萃取前清理：勾选后先保存待清理任务，不执行研究；重启保留，人工开始后才执行", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-prepare-")); let executions = 0;
+  const execute = async () => { executions++; return "已完成"; };
+  let manager = new DomainKnowledgeExtraction(dir, execute);
   try {
-    task.source_cleanup!.publications.push({ target_id: repo.id, branch: "codex/knowledge-old-cleanup", state: "failed", revision: "abcdef123456", documents: [] });
-    const paths_by_target = { [repo.id]: ["docs/old", "AGENTS.md"] };
-    await prepare.action(task, "publish", { paths_by_target }, "dev", save); assert.equal(task.source_cleanup!.publications[0].state, "failed");
-    assert.equal(task.source_cleanup!.plans[0].target_entries.length, 3);
-    await prepare.action(task, "publish", { paths_by_target }, "dev", save); assert.equal(mrs.length, 1, "lost response recovers the same MR");
-    const publication = task.source_cleanup!.publications[0]; assert.equal(publication.state, "opened");
-    assert.equal(publication.branch, "master_Fixture_REQ-cleanup", "清理分支采用基线分支_Git工号_单号，工号不使用登录名");
-    assert.equal(git(remote, "ls-tree", "-r", "--name-only", publication.branch), "code.ts", "MR contains only deletions, never draft additions");
-    assert.match(git(remote, "show", "master:docs/old/rules.md"), /POISON/);
-    assert.equal(git(remote, "log", "-1", "--format=%s", publication.branch).trim(), "[REQ_cleanup][feat]清理萃取前旧知识");
-    const queriesBefore = gateQueries;
-    await prepare.action(task, "publish", { paths_by_target }, "dev", save);
-    assert.equal(gateQueries, queriesBefore, "created MR is retained without state checks");
-    assert.equal(mrs.length, 1);
-    task.source_cleanup!.started = true; await assert.rejects(prepare.action(task, "preview", { target_id: repo.id, paths: ["code.ts"] }, "dev", save), /已经开始/);
-    assert.ok(writes > 4);
-  } finally { await new Promise<void>(resolve => server.close(() => resolve())); rmSync(root, { recursive: true, force: true }); }
+    const job = manager.create({ ...config, prepare_cleanup: true }, "alice");
+    assert.equal(job.status, "idle", "选择清理后不能直接开始萃取");
+    assert.equal(job.production?.status_label, "待清理旧知识");
+    assert.equal(job.turns.length, 0); assert.equal(executions, 0);
+    assert.equal((job as any).source_cleanup.repositories.length, 1);
+    await manager.shutdown(); manager = new DomainKnowledgeExtraction(dir, execute);
+    assert.equal(manager.get(job.id).status, "idle"); assert.equal(executions, 0);
+    await (manager as any).sourceCleanupAction(job.id, "start", {}, "alice");
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(executions, 1);
+    assert.equal((manager.get(job.id) as any).source_cleanup.started, true);
+  } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("领域任务提供可选清理，未创建或未合入 MR 都不阻塞手动开始；重启保留准备状态", async () => {
-  const root = mkdtempSync(join(tmpdir(), "domain-preparation-"));
-  let executes = 0;
-  const unused = async () => { throw new Error("手动开始不应调用 MR API"); };
-  const sourceCleanup = new KnowledgeSourceCleanup({ previewCleanup: unused, publish: unused });
-  const manager = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
-  const config = { issue_no: "REQ-prepare", title: "订单", scope: "订单规则", repositories: [1, 2].map(id => ({ repository: `https://example.test/repo${id}.git`, branch: "master" })) };
+test("清理预览与 MR：保留勾选外文件，只删除预览中的旧文件，响应丢失重试沿用 MR", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-git-")), source = join(dir, "source"), remote = join(dir, "remote.git");
+  mkdirSync(source); git(source, "init", "-b", "main"); git(source, "config", "user.name", "fixture"); git(source, "config", "user.email", "fixture@example.test");
+  mkdirSync(join(source, "docs/old"), { recursive: true });
+  writeFileSync(join(source, "docs/old/remove.md"), "旧知识"); writeFileSync(join(source, "docs/old/keep.md"), "保留的知识");
+  writeFileSync(join(source, "AGENTS.md"), "保留的仓库指引"); writeFileSync(join(source, "code.ts"), "export const truth = 1;");
+  git(source, "add", "."); git(source, "commit", "-m", "fixture"); git(dir, "clone", "--bare", source, remote);
+  const mrs: any[] = []; let loseResponse = true, queries = 0;
+  const server = createServer(async (req, res) => {
+    res.setHeader("content-type", "application/json"); const url = new URL(req.url!, "http://fixture");
+    if (url.pathname === "/mr/discover") { queries++; res.end(JSON.stringify({ mrs })); }
+    else if (url.pathname === "/mr") {
+      let text = ""; for await (const part of req) text += part;
+      const body = JSON.parse(text); assert.equal(body.dts_no, config.issue_no); assert.equal(body.title, config.issue_description);
+      const mr = { id: 1, url: "https://example.test/mr/1", source_branch: body.source_branch, target_branch: body.target_branch }; mrs.push(mr);
+      if (loseResponse) { loseResponse = false; res.statusCode = 502; res.end("{}"); } else res.end(JSON.stringify(mr));
+    } else { res.statusCode = 404; res.end("{}"); }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const publisher = new KnowledgeMrPublisher({ dataDir: dir, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`,
+    credential: () => ({ username: "fixture", password: "fixture-password", email: "fixture@example.test" }) });
+  const target = { id: "repo-1", name: "订单仓", repository: remote, branch: "main", path: "", docs_path: "docs/old" };
+  const job = { id: "cleanup-fixture", ...config };
+  let publication: any;
   try {
-    const job = manager.create(config, "dev"); assert.equal(job.status, "idle"); assert.equal(executes, 0); assert.equal(job.turns.length, 0);
-    const restart = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
-    assert.equal(restart.get(job.id).status, "idle");
-    const started = await restart.sourceCleanupAction(job.id, "start", {}, "dev"); assert.ok(started.source_cleanup?.started);
-    for (let i = 0; i < 100 && ["queued", "running"].includes(restart.get(job.id).status); i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(executes, 1);
-    await restart.shutdown();
-    // A persisted open cleanup MR is a capability receipt, not a gate.
-    const pending = manager.create(config, "dev");
-    const { readFileSync } = await import("node:fs");
-    const file = join(root, "domain-extraction", pending.id, "job.json"), stored = JSON.parse(readFileSync(file, "utf8"));
-    stored.source_cleanup.publications = [{ target_id: "repo-1", branch: "codex/cleanup", state: "opened", url: "https://example.test/mr/1", documents: [] }];
-    writeFileSync(file, JSON.stringify(stored));
-    const resumed = new DomainKnowledgeExtraction(root, async () => { executes++; return "done"; }, { sourceCleanup });
-    await resumed.sourceCleanupAction(pending.id, "start", {}, "dev");
-    for (let i = 0; i < 100 && executes < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
-    assert.equal(executes, 2); await resumed.shutdown();
-  } finally { await manager.shutdown(); rmSync(root, { recursive: true, force: true }); }
+    let plan = await publisher.previewCleanup(target, ["docs/old", "AGENTS.md"], "alice");
+    assert.deepEqual(plan.entries.map((entry: any) => entry.path), ["AGENTS.md", "docs/old/keep.md", "docs/old/remove.md"]);
+    for (const path of [".", "/", ".git", "../outside"]) await assert.rejects(publisher.previewCleanup(target, [path], "alice"), /相对路径/);
+    writeFileSync(join(source, "docs/old/keep.md"), "人工刚更新的知识"); git(source, "add", "."); git(source, "commit", "-m", "update old knowledge"); git(source, "push", remote, "HEAD:main");
+    await assert.rejects(publisher.publishCleanup(job, target, plan, ["docs/old/remove.md"], undefined, "alice", () => {}), /已变化.*重新预览/);
+    assert.equal(mrs.length, 0);
+    plan = await publisher.previewCleanup(target, ["docs/old", "AGENTS.md"], "alice");
+    await assert.rejects((publisher as any).publishCleanup(job, target, plan, ["code.ts"], undefined, "alice", () => {}), /预览/);
+    const save = (next: any) => { publication = structuredClone(next); };
+    await assert.rejects((publisher as any).publishCleanup(job, target, plan, ["docs/old/remove.md"], undefined, "alice", save), /502|MR 创建/);
+    assert.ok(publication.revision); assert.equal(mrs.length, 1);
+    assert.equal(publication.branch, "main_fixture_REQ-cleanup", "清理 MR 沿用需求的分支命名要求");
+    assert.equal(git(remote, "log", "-1", "--format=%s", publication.branch), "[REQ_cleanup][feat]清理萃取前旧知识", "保持原提交信息");
+    const firstBranch = publication.branch;
+    publication = await (publisher as any).publishCleanup(job, target, plan, ["docs/old/remove.md"], publication, "alice", save);
+    assert.equal(publication.branch, firstBranch); assert.equal(publication.url, mrs[0].url); assert.equal(mrs.length, 1);
+    assert.equal(git(remote, "ls-tree", "-r", "--name-only", publication.branch), "AGENTS.md\ncode.ts\ndocs/old/keep.md");
+    assert.equal(git(remote, "show", "main:docs/old/remove.md"), "旧知识", "基准分支须保持不变，等待人审查合入");
+    const before = queries;
+    await (publisher as any).publishCleanup(job, target, plan, ["docs/old/remove.md"], publication, "alice", save);
+    assert.equal(queries, before, "已有 MR 不再查询状态或创建第二个 MR");
+    assert.equal(readFileSync(join(source, "code.ts"), "utf8"), "export const truth = 1;");
+  } finally { await publisher.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("清理分支：多仓按各自基准分支命名，旧失败记录按远端实际状态恢复，同名外部分支不被覆盖", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-naming-")), requests: any[] = [];
+  const targets = ["master", "release/current"].map((branch, index) => {
+    const source = join(dir, `source-${index}`), remote = join(dir, `remote-${index}.git`);
+    mkdirSync(source); git(source, "init", "-b", branch); git(source, "config", "user.name", "fixture"); git(source, "config", "user.email", "fixture@example.test");
+    mkdirSync(join(source, "docs")); writeFileSync(join(source, "docs/old.md"), "旧知识"); writeFileSync(join(source, "code.ts"), "源码");
+    git(source, "add", "."); git(source, "commit", "-m", "fixture"); git(dir, "clone", "--bare", source, remote);
+    return { id: `repo-${index + 1}`, name: `仓-${index + 1}`, repository: remote, branch, path: "", docs_path: "docs" };
+  });
+  const server = createServer(async (req, res) => {
+    let text = ""; for await (const part of req) text += part; requests.push(JSON.parse(text));
+    res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ id: requests.length, url: `https://example.test/mr/${requests.length}` }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const publisher = new KnowledgeMrPublisher({ dataDir: dir, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`,
+    credential: () => ({ username: "git-worker", password: "fixture-password", email: "fixture@example.test" }) });
+  const job = { id: "naming-fixture", ...config, issue_no: "REQ123", issue_description: "核对订单规则" };
+  try {
+    for (const target of targets) {
+      const plan = await publisher.previewCleanup(target, ["docs"], "platform-login");
+      const previous: KnowledgeCleanupPublication = { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: ["docs/old.md"], branch: "codex/knowledge-old-failure",
+        revision: "a".repeat(40), state: "failed", documents: [] };
+      const publication = await publisher.publishCleanup(job, target, plan, ["docs/old.md"], previous, "platform-login", () => {});
+      assert.equal(publication.branch, `${target.branch}_git-worker_REQ123`, "工号采用个人 Git 账号，与需求交付一致");
+      assert.equal(git(target.repository, "log", "-1", "--format=%s", publication.branch), "[REQ123][feat]清理萃取前旧知识");
+      assert.equal(requests.at(-1).source_branch, publication.branch); assert.equal(requests.at(-1).target_branch, target.branch);
+      assert.equal(requests.at(-1).title, job.issue_description); assert.equal(requests.at(-1).dts_no, job.issue_no);
+    }
+    const target = targets[0], plan = await publisher.previewCleanup(target, ["docs"], "platform-login");
+    const oldBranch = "codex/knowledge-pushed-old", oldRevision = git(target.repository, "rev-parse", "master_git-worker_REQ123");
+    git(target.repository, "update-ref", `refs/heads/${oldBranch}`, oldRevision);
+    const old: KnowledgeCleanupPublication = { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: ["docs/old.md"], branch: oldBranch,
+      revision: oldRevision, state: "failed", documents: [] };
+    const resumed = await publisher.publishCleanup(job, target, plan, ["docs/old.md"], old, "platform-login", () => {});
+    assert.equal(resumed.branch, oldBranch, "已经推送的旧分支保持原记录，不擅自更名或重写远端");
+    assert.equal(git(target.repository, "rev-parse", oldBranch), oldRevision); assert.equal(requests.at(-1).source_branch, oldBranch);
+    const branch = "master_git-worker_REQ456", before = git(target.repository, "rev-parse", "master");
+    git(target.repository, "update-ref", `refs/heads/${branch}`, before);
+    await assert.rejects(publisher.publishCleanup({ ...job, issue_no: "REQ456" }, target, plan, ["docs/old.md"], undefined, "platform-login", () => {}), /已有|同名/);
+    assert.equal(git(target.repository, "rev-parse", branch), before); assert.equal(requests.length, 3, "同名外部分支不能推送或创建 MR");
+  } finally { await publisher.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(dir, { recursive: true, force: true }); }
+});
+
+function cleanupFixture(dir: string, calls: string[], failures = false) {
+  let fail = failures;
+  const publisher: Pick<KnowledgeMrPublisher, "previewCleanup" | "publishCleanup"> = {
+    async previewCleanup(target, paths) {
+      const entries = (paths as string[]).map(path => ({ path: `${path}/old.md`, mode: "100644", oid: "a".repeat(40) }));
+      return { id: `plan-${target.id}`, target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40), entries, selected_paths: entries.map(entry => entry.path) };
+    },
+    async publishCleanup(job, target, plan, paths, previous, operator, save) {
+      calls.push(target.id);
+      const publication: KnowledgeCleanupPublication = { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: paths as string[], documents: [], branch: previous?.branch || `codex/cleanup-${target.id}`, state: "pending" };
+      save(publication);
+      if (fail && target.id === "repo-2") { fail = false; throw new Error("暂时无法创建 MR"); }
+      return { ...publication, state: "opened", url: `https://example.test/mr/${target.id}` };
+    },
+  };
+  const options = { sourceCleanup: new KnowledgeSourceCleanup(publisher) };
+  return { options, manager: new DomainKnowledgeExtraction(dir, async () => "done", options) };
+}
+
+test("清理 HTTP：多仓部分失败保留成功 MR，重启不自动执行，人工重试只处理失败仓", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-http-")), calls: string[] = [];
+  const fixture = cleanupFixture(dir, calls, true); let manager = fixture.manager;
+  const service = { options: { dataDir: dir }, getDomainKnowledgeExtraction: () => manager } as any;
+  const server = createServer(async (request, response) => {
+    const parts = request.url!.split("/").filter(Boolean);
+    await domainKnowledgeRoute(request, response, parts, service, "alice", async req => {
+      let text = ""; for await (const part of req) text += part; return JSON.parse(text);
+    }, (res, status, value) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(value)); });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as any).port}`;
+  const post = async (path: string, body: any) => {
+    const response = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal(response.status, 200); return await response.json() as any;
+  };
+  try {
+    const job = manager.create({ ...config, prepare_cleanup: true, repositories: [config.repositories[0], { ...config.repositories[0], repository: "https://example.test/payments.git" }] }, "alice");
+    const endpoint = `/domain-extraction/${job.id}/source-cleanup`;
+    await post(`${endpoint}/preview`, { paths_by_target: { "repo-1": ["docs/old"], "repo-2": ["docs/old"] } });
+    const input = { selected_paths_by_target: { "repo-1": ["docs/old/old.md"], "repo-2": ["docs/old/old.md"] } };
+    const partial = await post(`${endpoint}/publish`, input);
+    assert.deepEqual(calls, ["repo-1", "repo-2"]);
+    assert.equal(partial.source_cleanup.publications[0].state, "opened"); assert.equal(partial.source_cleanup.publications[1].state, "failed");
+    assert.equal(partial.production.status_label, "清理 MR 创建失败");
+    await manager.shutdown(); manager = new DomainKnowledgeExtraction(dir, async () => "done", fixture.options);
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(calls.length, 2);
+    const recovered = await post(`${endpoint}/publish`, input);
+    assert.deepEqual(calls, ["repo-1", "repo-2", "repo-2"]);
+    assert.equal(recovered.production.status_label, "待开始萃取");
+    assert.equal(recovered.source_cleanup.publications[0].url, partial.source_cleanup.publications[0].url);
+    assert.equal(recovered.turns.length, 0, "创建 MR 后不能自动开始研究");
+  } finally { await manager.shutdown(); await new Promise<void>(resolve => server.close(() => resolve())); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("清理保存 EIO：选中文件保存失败不创建 MR、不污染原记录，解除故障后可重试", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-save-")), calls: string[] = [];
+  const { manager } = cleanupFixture(dir, calls);
+  let mock: ReturnType<typeof t.mock.method> | undefined;
+  try {
+    const job = manager.create({ ...config, prepare_cleanup: true }, "alice");
+    await manager.sourceCleanupAction(job.id, "preview", { paths_by_target: { "repo-1": ["docs/old"] } }, "alice");
+    const path = join(dir, "domain-extraction", job.id, "job.json"), bytes = readFileSync(path, "utf8"), rename = fs.renameSync;
+    const before = manager.get(job.id).source_cleanup;
+    mock = t.mock.method(fs, "renameSync", (from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to) === path) throw Object.assign(new Error("测试 EIO"), { code: "EIO" }); return rename(from, to);
+    }); syncBuiltinESMExports();
+    const input = { selected_paths_by_target: { "repo-1": ["docs/old/old.md"] } };
+    await assert.rejects(manager.sourceCleanupAction(job.id, "publish", input, "alice"), /EIO/);
+    assert.equal(calls.length, 0); assert.equal(readFileSync(path, "utf8"), bytes); assert.deepEqual(manager.get(job.id).source_cleanup, before);
+    mock.mock.restore(); syncBuiltinESMExports();
+    await manager.sourceCleanupAction(job.id, "publish", input, "alice"); assert.equal(calls.length, 1);
+  } finally { mock?.mock.restore(); syncBuiltinESMExports(); await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

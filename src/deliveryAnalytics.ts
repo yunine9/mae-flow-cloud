@@ -212,7 +212,7 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
       return { id: task.id, delivery_id: task.delivery_generation ?? "initial", started_at: task.delivery_started_at ?? task.created_at, title: task.title || task.requirement.split("\n")[0], parent_id: task.parent_task_id,
         parent_title: task.parent_task_id ? names.get(task.parent_task_id) : undefined,
         repo: cleanRepository(task.repo_url ?? ""), languages, modules: businessModule ? [businessModule.name] : [], business_module: businessModule,
-        merged,
+        merged, completed_at: task.status === "completed" ? task.completed_at : undefined,
         at: task.completed_at ?? task.updated_at ?? task.created_at, mr_url: safeMrUrl(task.delivery?.mr_url), metric,
         unavailable: metric ? undefined : stored?.metric && stored.metric.head === head && !stored.metric.initial_implementation ? "统计口径已更新，需重新采集首轮实现范围" : stored?.head === head && stored?.error ? stored.error
           : head ? "尚无本次推送的统计快照；历史任务不会猜测归因" : "尚未推送代码" };
