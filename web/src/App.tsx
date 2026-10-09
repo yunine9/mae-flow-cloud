@@ -594,7 +594,7 @@ export interface PersonalActionItem {
   task?: TaskSummary;
   kicker: string;
   title: string;
-  detail: string;
+  detail: ReactNode;
   action: string;
   href?: string;
 }
@@ -652,8 +652,8 @@ export function buildPersonalActionItems({
       kicker: "Committer 检视",
       title: review.task_title,
       detail: task
-        ? `$<PersonName account={review.requester} /> 邀请你检视代码与交付材料`
-        : `$<PersonName account={review.requester} /> 邀请你检视；任务详情暂未同步，请稍后刷新`,
+        ? <><PersonName account={review.requester} /> 邀请你检视代码与交付材料</>
+        : <><PersonName account={review.requester} /> 邀请你检视；任务详情暂未同步，请稍后刷新</>,
       action: task ? "开始检视" : "任务暂不可用",
     });
   }
