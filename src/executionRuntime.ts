@@ -45,6 +45,7 @@ import {
 } from "./lubanApproval.ts";
 import { FakeGitPlatform } from "./gitPlatform.ts";
 import { IssueFlowService } from "./issueFlow/service.ts";
+import { startAutoClaimScheduler } from "./issueFlow/autoClaim.ts";
 import { setupDebugIssue } from "./issueFlow/debugIssue.ts";
 import { IssueFlowLubanApproval } from "./issueFlow/lubanApproval.ts";
 import {
@@ -1207,6 +1208,19 @@ async function main(): Promise<void> {
   const issueDiskSweepInterval = setInterval(issueDiskSweep, 24 * 3_600_000);
   issueDiskSweepTimer.unref?.();
   issueDiskSweepInterval.unref?.();
+
+  // 问题流自动接单(ADR-0061):定时扫描名单内责任人名下的 DTS 单,
+  // 同尺校验全过才发起,发不了静默跳过落审计。间隔旋钮现读现判
+  // (缺省半小时,0=关),单飞防重入;纯旁路 fail-open,unref() 不阻
+  // 进程退出。只接正式入口——测试/旁路直连形态不起定时器,要扫描
+  // 直接调 runAutoClaimTick。
+  startAutoClaimScheduler({
+    dts: issueDtsGateway,
+    issueFlow,
+    auth,
+    settings,
+    log: (message) => console.log(`  ${message}`),
+  });
 
   // 正式前端:--web <dist> 显式指定;web/dist 存在时自动接上
   // (构建过就用正式版,没构建就是零构建演示页,永远有页面可开)。

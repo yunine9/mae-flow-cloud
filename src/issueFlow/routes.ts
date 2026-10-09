@@ -257,8 +257,9 @@ function requireDts(dts: DtsGateway | undefined): DtsGateway {
 }
 
 /** 分支匹配的配置读取(ADR-0038):配置文件损坏时按"零配置"处理——
- * 列表分支列全体按未配置呈现,发起全部拒绝,不为坏配置炸掉拉单页。 */
-function configuredVersionRows(dataDir: string) {
+ * 列表分支列全体按未配置呈现,发起全部拒绝,不为坏配置炸掉拉单页。
+ * 自动接单扫描(ADR-0061)同款消费。 */
+export function configuredVersionRows(dataDir: string) {
   try {
     return listProductVersions(dataDir);
   } catch {
@@ -276,9 +277,10 @@ function withDtsBranch<T extends { version?: string }>(
 }
 
 /** DTS 模块强匹配的模块库索引(ADR-0056):在架业务模块按「名称
- *  trim 后」建 name→ids 映射;重名收敛到同键多 id,查询端多命中即
- *  未匹配。每次请求建一次,列表与详情共用。 */
-function dtsFeatureModuleIndex(dataDir: string): Map<string, string[]> {
+ * trim 后」建 name→ids 映射;重名收敛到同键多 id,查询端多命中即
+ * 未匹配。每次请求建一次,列表与详情共用。自动接单扫描(ADR-0061)
+ * 每拍建一次,同款消费。 */
+export function dtsFeatureModuleIndex(dataDir: string): Map<string, string[]> {
   const index = new Map<string, string[]>();
   try {
     for (const mod of listBusinessModules(dataDir).modules) {
@@ -294,15 +296,25 @@ function dtsFeatureModuleIndex(dataDir: string): Map<string, string[]> {
   return index;
 }
 
+/** 特性名→模块 ID 的强匹配单点(ADR-0056):完全相等且唯一命中才
+ * 返回,未命中/多命中 undefined。列表带出与自动接单(ADR-0061)
+ * 共用这一个判定,永不漂移。 */
+export function matchDtsModule(
+  index: Map<string, string[]>, featureName: string | undefined,
+): string | undefined {
+  const feature = featureName?.trim();
+  const hits = feature ? index.get(feature) : undefined;
+  return hits?.length === 1 ? hits[0] : undefined;
+}
+
 /** 给单据补模块(列表与详情同源,ADR-0056):特性名 trim 后与模块
  *  名称完全相等且唯一命中才带出;未命中/多命中不加字段,前端按
  *  「未匹配」呈现走必填。 */
 function withDtsModule<T extends { featureName?: string }>(
   index: Map<string, string[]>, ticket: T,
 ): T {
-  const feature = ticket.featureName?.trim();
-  const hits = feature ? index.get(feature) : undefined;
-  return hits?.length === 1 ? { ...ticket, module_id: hits[0] } : ticket;
+  const moduleId = matchDtsModule(index, ticket.featureName);
+  return moduleId ? { ...ticket, module_id: moduleId } : ticket;
 }
 
 /** 处理 /issues/* 请求;返回 false 表示与问题域无关。 */

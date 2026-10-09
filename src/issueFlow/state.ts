@@ -377,6 +377,11 @@ export interface IssueSessionState {
    * create 时定格进状态——发起后不可改,终身不随全局改档;缺席=
    * 跟随全局(tierOf 现读责任人的账号设置)。 */
   intervention_tier?: IssueInterventionTier;
+  /** 自动接单(ADR-0061):本会话由平台定时扫描自动发起(发起方式=
+   * 自动)。纯展示标记:流程语义与人工发起完全一致(同一条校验链、
+   * 同一套五阶段与闸、统计照走),工作台据此挂「自动接单」徽标。
+   * 缺席=人工发起。 */
+  auto_claim?: true;
   source: IssueSource;
   /** 可空:先研究后补单是问题流的一等场景。绑定前推送/MR 被机械拒绝。 */
   ticket?: string;

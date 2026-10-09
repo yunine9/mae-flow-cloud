@@ -553,6 +553,9 @@ export interface IssueCreateInput {
   /** 会话级介入档位(ADR-0057):DTS 列表发起前按单选定,create 定格
    * 进状态,发起后不可改;缺席=跟随全局。 */
   interventionTier?: IssueInterventionTier;
+  /** 自动接单(ADR-0061):调度器发起时置位——发起方式=自动的展示
+   * 标记进状态;流程语义零分叉,校验链与人工发起完全同一条。 */
+  autoClaim?: boolean;
   environment?: IssueEnvironmentInput;
 }
 
@@ -1818,6 +1821,7 @@ export class IssueFlowService {
       ...(input.remark?.trim() ? { remark: input.remark.trim() } : {}),
       ...(input.interventionTier
         ? { intervention_tier: input.interventionTier } : {}),
+      ...(input.autoClaim ? { auto_claim: true as const } : {}),
       source: input.source ?? "manual",
       ...(ticket ? { ticket } : {}),
       ...(repoUrls.length
@@ -1866,6 +1870,18 @@ export class IssueFlowService {
         link: this.issueLink(id),
       }).catch((error) =>
         this.log(`[issue-flow] ${id} 指派通知失败(旁路,流程照走): `
+          + String(error)));
+    }
+    // 自动接单通知(ADR-0061):发起人是系统,指派通知的"登记人递来"
+    // 叙事不成立——换自动接单文案点名来源。同样旁路 fail-open。
+    if (input.autoClaim && this.options.notifier) {
+      this.options.notifier.notifyAutoClaim({
+        taskId: id,
+        account,
+        title,
+        link: this.issueLink(id),
+      }).catch((error) =>
+        this.log(`[issue-flow] ${id} 自动接单通知失败(旁路,流程照走): `
           + String(error)));
     }
     void this.pump();

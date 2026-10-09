@@ -1,0 +1,229 @@
+/**
+ * 自动接单(ADR-0061)单拍扫描契约测试。
+ *
+ * runAutoClaimTick 是纯旁路的扫描-过滤-发起一拍,依赖已收窄成结构
+ * 接口(AutoClaimIssueFlow/Auth/Settings),这里用记录器假件驱动:
+ * - 同尺过滤矩阵:状态/版本映射/参与标记/模块强匹配逐闸断言,
+ *   宁可漏发不可错发;
+ * - 发起身份:责任人自登记(account=assignee=reporter)+ 发起方式=
+ *   自动标记,create 硬闸抛错即静默跳过;
+ * - 名单现读现判:空名单不碰网关,加名单下一拍生效;
+ * - 审计账:claimed/skipped/list_failed 落 issue-auto-claim.jsonl
+ *   (configureAudit 注入进程账目录,断言落盘行)。
+ *
+ * 不起真 IssueFlowService:create 的硬闸语义(去重/凭据门)由服务侧
+ * 测试覆盖,这里断言的是"调度器把对的输入交给 create、把拒绝如实
+ * 记账"。
+ */
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { configureAudit } from "../src/issueFlow/audit.ts";
+import {
+  DTS_CLAIMABLE_STATUS,
+  runAutoClaimTick,
+  type AutoClaimIssueFlow,
+} from "../src/issueFlow/autoClaim.ts";
+import type { DtsGateway, DtsTicketBrief } from "../src/issueFlow/gateways.ts";
+import type { IssueCreateInput, IssueSummary } from "../src/issueFlow/service.ts";
+import { mfcTemp } from "./mfcTmp.ts";
+
+const CLAIMABLE = DTS_CLAIMABLE_STATUS;
+const VERSION_GROUP = "V100R025C10SPC010";
+const B_VERSION = `${VERSION_GROUP}B009`;
+
+function seedFixture(dataDir: string): void {
+  // 版本与分支映射(配置中心数据面):v1 参与自动接单,v2 不参与。
+  writeFileSync(join(dataDir, "product-versions.json"), JSON.stringify([
+    { id: "v1", version: VERSION_GROUP, branch: "master", auto_claim: true },
+    { id: "v2", version: "V90R001", branch: "legacy" },
+  ]));
+  createBusinessModule(dataDir, {
+    id: "pay-core", name: "支付核心", description: "收单与清结算",
+    owner: "dev1", repositories: ["https://codehub.example.com/pay/core.git"],
+  }, "tester");
+}
+
+/** 单据行夹具:字段即 DTS listByOwner 的 brief 形状。 */
+function brief(overrides: Partial<DtsTicketBrief> & { ticket: string }): DtsTicketBrief {
+  return {
+    title: `问题 ${overrides.ticket}`,
+    status: CLAIMABLE,
+    version: B_VERSION,
+    featureName: "支付核心",
+    ...overrides,
+  };
+}
+
+interface FakeDepsOptions {
+  accounts?: string[];
+  briefs?: DtsTicketBrief[];
+  /** 按账号抛错模拟网关异常。 */
+  failAccounts?: string[];
+  /** create 抛错模拟服务端硬闸(去重/凭据门等)。 */
+  createError?: Error;
+  knobs?: Record<string, unknown>;
+}
+
+function fakeDeps(dataDir: string, options: FakeDepsOptions = {}) {
+  const created: IssueCreateInput[] = [];
+  const listed: string[] = [];
+  const summary = (input: IssueCreateInput): IssueSummary => ({
+    id: `issue-${created.length + 1}`, account: input.account,
+    created_at: "", updated_at: "", title: input.title,
+    description: "", source: input.source ?? "dts",
+    status: "queued", stage: "dts_info",
+    ...(input.ticket ? { ticket: input.ticket } : {}),
+  } as unknown as IssueSummary);
+  const deps = {
+    dts: {
+      async listByOwner(account: string) {
+        listed.push(account);
+        if (options.failAccounts?.includes(account)) {
+          throw new Error("MCP 网关超时");
+        }
+        return options.briefs ?? [];
+      },
+      async detail() {
+        throw new Error("测试不查详情");
+      },
+      async proxyFile() {
+        throw new Error("测试不取文件");
+      },
+    } satisfies DtsGateway,
+    issueFlow: {
+      dataDir,
+      create(input: IssueCreateInput): IssueSummary {
+        if (options.createError) throw options.createError;
+        created.push(input);
+        return summary(input);
+      },
+    } satisfies AutoClaimIssueFlow,
+    auth: { issueAutoClaimAccounts: () => options.accounts ?? [] },
+    settings: { runtime: () => ({ ...(options.knobs ?? {}) }) },
+  };
+  return { deps, created, listed };
+}
+
+function auditRows(dataDir: string): Array<Record<string, unknown>> {
+  const file = join(dataDir, "logs", "issue-auto-claim.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf-8").trim().split("\n")
+    .filter(Boolean).map((line) => JSON.parse(line));
+}
+
+test("同尺过滤矩阵:各闸各挡,全过的单才发起", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  const { deps, created } = fakeDeps(dataDir, {
+    accounts: ["dev1"],
+    briefs: [
+      brief({ ticket: "DTS1", status: "待验证" }),
+      brief({ ticket: "DTS2", status: undefined }),
+      brief({ ticket: "DTS3", version: "V88R001C00" }),
+      brief({ ticket: "DTS4", version: "V90R001C10B002" }),
+      brief({ ticket: "DTS5", featureName: "未登记的特性" }),
+      brief({ ticket: "DTS6" }),
+    ],
+  });
+  const outcome = await runAutoClaimTick(deps);
+  // 六张单只有一张全过:宁可漏发不可错发。
+  assert.equal(created.length, 1);
+  assert.equal(outcome.claimed.length, 1);
+  assert.equal(outcome.skipped, 5);
+  const input = created[0];
+  assert.equal(input.ticket, "DTS6");
+  // 发起身份=责任人自登记(ADR-0031),发起方式=自动(ADR-0061)。
+  assert.equal(input.account, "dev1");
+  assert.equal(input.assignee, "dev1");
+  assert.equal(input.reporter, "dev1");
+  assert.equal(input.source, "dts");
+  assert.equal(input.autoClaim, true);
+  assert.equal(input.moduleId, "pay-core");
+  // 产品版本取配置中心命中的版本组(不是单据的 B 版原文)。
+  assert.equal(input.productVersion, VERSION_GROUP);
+});
+
+test("create 硬闸拒绝(如凭据门)→ 静默跳过并落审计原因", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  configureAudit(join(dataDir, "logs"));
+  const { deps, created } = fakeDeps(dataDir, {
+    accounts: ["dev1"],
+    briefs: [brief({ ticket: "DTSOK" })],
+    createError: new Error(
+      "责任人 dev1 的 Git 令牌未配置(个人设置 → 个人接入)"),
+  });
+  const outcome = await runAutoClaimTick(deps);
+  assert.equal(created.length, 0);
+  assert.equal(outcome.skipped, 1);
+  const rows = auditRows(dataDir).filter((row) => row.ticket === "DTSOK");
+  assert.ok(rows.some((row) => row.kind === "auto_claim.skipped"
+    && String(row.reason).includes("发起被拒")
+    && String(row.reason).includes("Git 令牌未配置")));
+});
+
+test("名单现读现判:空名单不碰网关,加名单下一拍生效", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  let accounts: string[] = [];
+  const { deps, listed, created } = fakeDeps(dataDir, {
+    briefs: [brief({ ticket: "DTSOK" })],
+  });
+  const live = deps as typeof deps & {
+    auth: { issueAutoClaimAccounts(): string[] };
+  };
+  live.auth.issueAutoClaimAccounts = () => accounts;
+  await runAutoClaimTick(deps);
+  assert.deepEqual(listed, []);
+  assert.equal(created.length, 0);
+  accounts = ["dev1"];
+  const outcome = await runAutoClaimTick(deps);
+  assert.deepEqual(listed, ["dev1"]);
+  assert.equal(outcome.claimed.length, 1);
+});
+
+test("DTS 网关异常只跳过该账号,其他名单用户照扫", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  configureAudit(join(dataDir, "logs"));
+  const { deps, listed, created } = fakeDeps(dataDir, {
+    accounts: ["dev1", "dev2"],
+    failAccounts: ["dev1"],
+    briefs: [brief({ ticket: "DTSOK" })],
+  });
+  const outcome = await runAutoClaimTick(deps);
+  assert.deepEqual(listed, ["dev1", "dev2"]);
+  assert.equal(created.length, 1);
+  assert.equal(created[0].account, "dev2");
+  assert.equal(outcome.claimed.length, 1);
+  const failures = auditRows(dataDir)
+    .filter((row) => row.kind === "auto_claim.list_failed");
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].account, "dev1");
+});
+
+test("审计账:claimed 带会话 id,skipped 带可读原因", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-");
+  seedFixture(dataDir);
+  configureAudit(join(dataDir, "logs"));
+  await runAutoClaimTick(fakeDeps(dataDir, {
+    accounts: ["dev1"],
+    briefs: [
+      brief({ ticket: "DTSPASS" }),
+      brief({ ticket: "DTSOLD", version: "V90R001C10B002" }),
+    ],
+  }).deps);
+  const rows = auditRows(dataDir);
+  const claimed = rows.find((row) => row.kind === "auto_claim.claimed");
+  assert.ok(claimed);
+  assert.equal(claimed.ticket, "DTSPASS");
+  assert.match(String(claimed.issue_id), /^issue-\d+$/);
+  assert.match(String(claimed.msg), /自动接单发起 DTSPASS/);
+  const skipped = rows.find((row) => row.kind === "auto_claim.skipped");
+  assert.ok(skipped);
+  assert.equal(skipped.reason, "版本组未标记参与自动接单");
+});

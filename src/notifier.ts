@@ -52,6 +52,8 @@ export interface NotificationTemplates {
   review?: string;
   /** 问题登记指派(ADR-0031):测试登记问题指派责任人时的一次性通知。 */
   assigned?: string;
+  /** 问题自动接单(ADR-0061):平台替责任人自动发起名下 DTS 单。 */
+  auto_claimed?: string;
 }
 
 /** 各类别占位符白名单。构造期校验:模板里出现表外名字=配错,
@@ -63,6 +65,7 @@ const TEMPLATE_VARIABLES: Record<keyof NotificationTemplates, string[]> = {
   outcome: ["task_id", "status", "summary", "account", "link"],
   review: ["task_id", "summary", "account", "sender_account", "link"],
   assigned: ["reporter", "title", "account", "link"],
+  auto_claimed: ["title", "account", "link"],
 };
 
 /** 默认模板=引入模板机制前的固定文案,一字不差:不配置就是零变化。 */
@@ -73,6 +76,9 @@ const DEFAULT_TEMPLATES: Required<NotificationTemplates> = {
   assigned:
     "【Mae-Flow】{reporter} 登记了问题「{title}」并指派你为责任人\n"
     + "打开链接查看分析进展:{link}",
+  auto_claimed:
+    "【Mae-Flow】系统自动接单:你名下的问题单「{title}」已自动发起"
+    + "问题会话\n打开链接查看分析进展:{link}",
 };
 
 /** 合并默认值并校验占位符。写错变量名的模板投出去,用户看到的
@@ -452,6 +458,46 @@ export class Notifier {
         account: input.account,
         link: input.link,
       })),
+      attempts: 0,
+      delivered: false,
+      settled: false,
+      last_error: "",
+    };
+    this.records.set(key, record);
+    await this.deliverTracked(record);
+    return record;
+  }
+
+  /** 自动接单通知(ADR-0061):平台定时扫描替责任人发起名下 DTS 单后
+   *  一次性送达。同问题幂等(恢复重放不重发);发送失败由调用方旁路,
+   *  不改发起结果。 */
+  async notifyAutoClaim(input: {
+    taskId: string;
+    /** 责任人=收件人:单子在他的名下,发起也以他的身份(自登记)。 */
+    account: string;
+    title: string;
+    link: string;
+  }): Promise<NotifyRecord> {
+    const key = `${input.taskId}:auto-claimed`;
+    const existing = this.records.get(key);
+    if (existing) {
+      await this.deliverTracked(existing);
+      return existing;
+    }
+    const summary = `系统自动接单:「${input.title}」已发起问题会话`;
+    const record: NotifyRecord = {
+      waiting_id: key,
+      task_id: input.taskId,
+      account: input.account,
+      step: "auto_claimed",
+      summary,
+      link: input.link,
+      text: withPluginActivationNotice(renderTemplate(
+        this.templates.auto_claimed, {
+          title: input.title,
+          account: input.account,
+          link: input.link,
+        })),
       attempts: 0,
       delivered: false,
       settled: false,

@@ -51,6 +51,10 @@ export interface RuntimeKnobs {
   /** 环境验证卡守闸阈值(分钟,#248):mr_green 收口后超过该值仍无
    * 验证卡,守闸器向小鲁班报警(纯报警不举卡)。缺省 120;0=关闭。 */
   env_verify_watchdog_minutes?: number;
+  /** 问题流自动接单扫描间隔(秒,ADR-0061):自动接单名单内责任人
+   *  名下符合条件的新 DTS 单按此节奏自动发起。缺省 1800(半小时);
+   *  0=关闭(功能总开关)。现读现判,改了下一拍生效,无需重启。 */
+  issue_auto_claim_interval_s?: number;
   poll_interval_s?: number;
   poll_timeout_s?: number;
   /** 现场保留期(天):终态任务过期后回收克隆等重货,台账原样留下。
@@ -296,6 +300,10 @@ export class RuntimeSettings {
         knob(patch.env_verify_watchdog_minutes, "环境验证卡守闸阈值")
         ?? (("env_verify_watchdog_minutes" in patch)
           ? undefined : this.runtime().env_verify_watchdog_minutes),
+      issue_auto_claim_interval_s:
+        knob(patch.issue_auto_claim_interval_s, "自动接单扫描间隔")
+        ?? (("issue_auto_claim_interval_s" in patch)
+          ? undefined : this.runtime().issue_auto_claim_interval_s),
       poll_interval_s: knob(patch.poll_interval_s, "轮询间隔", 1)
         ?? (("poll_interval_s" in patch) ? undefined : this.runtime().poll_interval_s),
       poll_timeout_s: knob(patch.poll_timeout_s, "轮询预算", 1)

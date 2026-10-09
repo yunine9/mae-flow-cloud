@@ -145,6 +145,7 @@ import {
   RequirementBundleError,
 } from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
+import { DEFAULT_ISSUE_AUTO_CLAIM_INTERVAL_S } from "./issueFlow/autoClaim.ts";
 import {
   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
   ISSUE_REPO_RECLAIM_DEFAULT,
@@ -709,6 +710,19 @@ export function createTaskServer(
               return json(response, 400, { error: humanError(error) });
             }
           }
+          // 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出
+          // 即停。与管理员账号互斥的守卫在 LocalAuth(它知道角色)。
+          if (request.method === "PUT" && parts.length === 4
+              && parts[3] === "issue-auto-claim") {
+            const body = await readBody(request);
+            try {
+              const user = options.auth!.setIssueAutoClaim(
+                decodeURIComponent(parts[2]), body.on === true);
+              return json(response, 200, user);
+            } catch (error) {
+              return json(response, 400, { error: humanError(error) });
+            }
+          }
           if (request.method === "PUT" && parts.length === 4
               && parts[3] === "display-name") {
             const body = await readBody(request);
@@ -819,6 +833,9 @@ export function createTaskServer(
                 // 守闸器阈值缺省(#248):与 service 旋钮同源,两处不漂移。
                 env_verify_watchdog_minutes:
                   ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT,
+                // 自动接单扫描间隔缺省(ADR-0061):与调度器同源常量,
+                // 缺省半小时,0=关(总开关)。
+                issue_auto_claim_interval_s: DEFAULT_ISSUE_AUTO_CLAIM_INTERVAL_S,
                 repair_rounds: service.options.delivery?.repairRounds ?? null,
                 poll_interval_s:
                   (service.options.delivery?.pollIntervalMs ?? 10_000) / 1000,
@@ -1386,7 +1403,11 @@ export function createTaskServer(
             const body = await readBody(request);
             return json(response, request.method === "POST" ? 201 : 200,
               saveProductVersion(dataDir, { version: body.version, branch: body.branch,
-                id: parts.length === 2 ? decodeURIComponent(parts[1]) : undefined }));
+                id: parts.length === 2 ? decodeURIComponent(parts[1]) : undefined,
+                // 参与自动接单标记(ADR-0061):缺席=沿用已存值(服务端
+                // 口径),老客户端编辑版本名不悄悄改勾选。
+                auto_claim: body.auto_claim === undefined
+                  ? undefined : body.auto_claim === true }));
           }
           if (request.method === "DELETE" && parts.length === 2) {
             deleteProductVersion(dataDir, decodeURIComponent(parts[1]));

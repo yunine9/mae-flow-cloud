@@ -302,6 +302,10 @@ export function IssueSessionView({
             title="你正在查看归属人的问题会话:操作控件已隐藏,信息面完整可看">
             查看模式:归属人 {detail.account} 的会话
           </Badge>}
+          {/* 自动接单徽标(ADR-0061):发起方式=自动的展示标记——流程
+              语义与人工发起完全一致,徽标只回答"这单是谁发起的"。 */}
+          {detail.auto_claim
+            && <Badge variant="info" title="平台定时扫描自动发起(自动接单):校验链与人工发起同尺,推进仍按责任人介入档位">自动接单</Badge>}
           <IssueStatusBadge status={detail.status}>
             {issueStatusText(detail)}
           </IssueStatusBadge>

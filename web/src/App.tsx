@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/table";
 import {
   createUser, deleteUser, getBuildInfo, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
-  login, logout, putCommitter, putUserDisplayName, resetUserPassword,
+  login, logout, putCommitter, putUserDisplayName, putUserIssueAutoClaim, resetUserPassword,
   type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type UserRole,
 } from "./api";
@@ -1859,6 +1859,18 @@ function UsersBoard({ me }: { me: string }) {
       setError(reason instanceof Error ? reason.message : "Committer 名单更新失败");
     }
   }
+  // 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出即停;
+  // 只对开发成员可开,管理员账号服务端也拒收。
+  async function toggleIssueAutoClaim(user: AuthUser) {
+    setError(""); setMessage("");
+    try {
+      await putUserIssueAutoClaim(user.username, !user.issue_auto_claim);
+      setMessage(`${user.username} 已${user.issue_auto_claim ? "移出" : "加入"}自动接单名单`);
+      await refreshUsers();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "自动接单名单更新失败");
+    }
+  }
   async function submitReset(event: React.FormEvent) {
     event.preventDefault(); if (busy) return;
     setBusy(true); setError(""); setMessage("");
@@ -1915,7 +1927,7 @@ function UsersBoard({ me }: { me: string }) {
     </div>
     <section className="rounded-[12px] border border-(--line) bg-(--surface) p-6 shadow-xs" aria-labelledby="user-list-title">
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知。</p></div>
+        <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知;自动接单名单内的开发成员,名下符合条件的新问题单由平台定时自动发起(ADR-0061)。</p></div>
         <span className="text-[13px] font-medium tabular-nums text-muted-foreground">{users.length} 人</span>
       </div>
       {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
@@ -1930,6 +1942,7 @@ function UsersBoard({ me }: { me: string }) {
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">角色</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">默认入口</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">Committer</TableHead>
+              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">自动接单</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -1949,6 +1962,11 @@ function UsersBoard({ me }: { me: string }) {
                 {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
                     交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
                 <TableCell className="px-4 py-3"><label className={cn("inline-flex min-w-[92px] items-center justify-center gap-[7px] rounded-[8px] border px-[9px] py-[7px] text-sm transition-colors", user.committer ? "border-(--success)/30 bg-(--success-soft) text-(--success)" : "border-(--line) bg-(--surface) text-(--muted)")}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
+                {/* 自动接单名单(ADR-0061):唯一开关,在名单即开、移出即停;
+                    名单内责任人名下符合条件的新 DTS 单由平台定时自动发起。 */}
+                <TableCell className="px-4 py-3">{user.role === "admin"
+                  ? <span className="text-xs text-(--faint)" title="管理员不处理问题单,不参与自动接单">不参与</span>
+                  : <label className={cn("inline-flex min-w-[92px] items-center justify-center gap-[7px] rounded-[8px] border px-[9px] py-[7px] text-sm transition-colors", user.issue_auto_claim ? "border-(--success)/30 bg-(--success-soft) text-(--success)" : "border-(--line) bg-(--surface) text-(--muted)")}><Switch size="sm" checked={!!user.issue_auto_claim} onCheckedChange={() => void toggleIssueAutoClaim(user)} />{user.issue_auto_claim ? "已开启" : "已关闭"}</label>}</TableCell>
                 <TableCell className="px-4 py-3"><span className="inline-flex gap-2">
                   <button type="button" className={userActionButton} onClick={() => {
                     setResetFor(resetFor === user.username ? "" : user.username);
@@ -1965,7 +1983,7 @@ function UsersBoard({ me }: { me: string }) {
                 </span></TableCell>
               </TableRow>
               {resetFor === user.username && <TableRow className="border-(--line)">
-                <TableCell colSpan={5} className="px-4 pb-3">
+                <TableCell colSpan={6} className="px-4 pb-3">
                   <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={submitReset}>
                     <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
                       onChange={(event) => setResetPassword(event.target.value)} />
@@ -1975,7 +1993,7 @@ function UsersBoard({ me }: { me: string }) {
                 </TableCell>
               </TableRow>}
               {nameFor === user.username && <TableRow className="border-(--line)">
-                <TableCell colSpan={5} className="px-4 pb-3">
+                <TableCell colSpan={6} className="px-4 pb-3">
                   <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={saveDisplayName}>
                     <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
                       maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />
