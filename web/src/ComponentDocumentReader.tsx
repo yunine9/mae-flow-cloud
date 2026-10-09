@@ -1,3 +1,4 @@
+import { ResizableKnowledgePanes } from "./ResizableKnowledgePanes";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, FileText, Folder, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
@@ -73,8 +74,8 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
       {actions}
       <Button size="sm" variant="outline" aria-label={fullscreen ? "退出全屏" : "全屏阅读"} onClick={() => setFullscreen(!fullscreen)}>{fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}{fullscreen ? "退出全屏" : "全屏阅读"}</Button>
     </header>
-    <div className="flex min-h-0 flex-1">
-      {treeVisible && <nav className="component-reader-tree flex w-[260px] shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
+    <ResizableKnowledgePanes className="flex min-h-0 flex-1" treeHidden={!treeVisible}>
+      {treeVisible && <nav className="component-reader-tree flex shrink-0 flex-col border-r border-line bg-surface-2/30" aria-label={treeLabel}>
         <div className="relative p-3"><Search size={16} className="absolute left-6 top-6 text-muted-foreground" /><Input aria-label="搜索文档" placeholder="搜索文档" className="pl-9" value={query} onChange={e => setQuery(e.target.value)} /></div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2 text-sm">{tree(visible)}{!visible.length && <p className="p-3 text-muted-foreground">{query ? "没有匹配的文档" : "暂无文档"}</p>}</div>
       </nav>}
@@ -86,7 +87,7 @@ export function ComponentDocumentReader({ files, selected, onSelect, actions, me
         </> : <pre className="whitespace-pre text-sm leading-relaxed">{file.content}</pre>)}
         {file?.metadata && <details className="mt-8 border-t border-line pt-4"><summary className="cursor-pointer text-sm text-muted-foreground">结构化字段</summary><pre className="mt-3 overflow-auto whitespace-pre-wrap break-words text-sm">{file.metadata}</pre></details>}
       </div>
-    </div>
+    </ResizableKnowledgePanes>
   </div>;
   return <>
     {!fullscreen && <div className="component-reader-frame min-h-[360px] overflow-hidden rounded-lg border border-line" style={{ height }}><div className="knowledge-reading-host" ref={mountReader} /></div>}{createPortal(body, host)}
