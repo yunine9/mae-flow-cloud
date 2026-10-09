@@ -1,3 +1,5 @@
+import { CompletionDateFilter, completionDateRange, type CompletionDates } from "./CompletionDateFilter";
+import { completedInRange } from "../../src/completionRange";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, ExternalLink, HelpCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -81,17 +83,20 @@ export function IssueAnalyticsTab() {
   const [stats, setStats] = useState<IssueOnceGenerated>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [days, setDays] = useState("");
+  const [dates, setDates] = useState<CompletionDates>({ from: "", to: "" });
   const [module, setModule] = useState("*");
   const [dim, setDim] = useState<"feature" | "session" | "repo">("feature");
   const [selected, setSelected] = useState<string | null>(null);
-  const load = async (range: string) => {
-    setBusy(true); setError("");
-    try { setStats(await getIssueOnceGenerated(range ? Number(range) : undefined)); }
-    catch (e) { setError(e instanceof Error ? e.message : "加载失败"); }
-    finally { setBusy(false); }
-  };
-  useEffect(() => { void load(days); }, [days]);
+  useEffect(() => {
+    let live = true;
+    setStats(undefined); setError("");
+    if (dates.from && dates.to && dates.from > dates.to) { setBusy(false); return; }
+    setBusy(true);
+    void getIssueOnceGenerated(undefined, completionDateRange(dates)).then(value => { if (live) setStats(value); })
+      .catch(error => { if (live) setError(error instanceof Error ? error.message : "加载失败"); })
+      .finally(() => { if (live) setBusy(false); });
+    return () => { live = false; };
+  }, [dates]);
   // 表格只呈现有统计数据的会话;pending/unsupported/no_code 计入范围计数。
   const rows = useMemo(() => (stats?.per_session ?? [])
     .filter((row) => row.state === "ok")
@@ -121,8 +126,7 @@ export function IssueAnalyticsTab() {
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="flex flex-wrap items-center gap-3">
-      <AnalysisFilter label="时间" value={days} onChange={setDays}
-        items={[{ value: "30", label: "近 30 天" }, { value: "90", label: "近 90 天" }, { value: "", label: "全部时间" }]} />
+      <CompletionDateFilter value={dates} onChange={setDates} />
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <BarChart3 size={15} />完成交付 {delivered}
         {stats && stats.pending + stats.no_code + stats.unsupported > 0 &&
@@ -225,17 +229,20 @@ export function RegistrationAnalyticsTab() {
   const [stats, setStats] = useState<IssueRegistrationStats>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [days, setDays] = useState("");
+  const [dates, setDates] = useState<CompletionDates>({ from: "", to: "" });
   const [dim, setDim] = useState<"module" | "reporter" | "session">("module");
   const [module, setModule] = useState("*");
   const [selected, setSelected] = useState<IssueRegistrationSessionRow | null>(null);
-  const load = async (range: string) => {
-    setBusy(true); setError("");
-    try { setStats(await getIssueRegistrationStats(range ? Number(range) : undefined)); }
-    catch (e) { setError(e instanceof Error ? e.message : "加载失败"); }
-    finally { setBusy(false); }
-  };
-  useEffect(() => { void load(days); }, [days]);
+  useEffect(() => {
+    let live = true;
+    setStats(undefined); setError("");
+    if (dates.from && dates.to && dates.from > dates.to) { setBusy(false); return; }
+    setBusy(true);
+    void getIssueRegistrationStats(undefined, completionDateRange(dates)).then(value => { if (live) setStats(value); })
+      .catch(error => { if (live) setError(error instanceof Error ? error.message : "加载失败"); })
+      .finally(() => { if (live) setBusy(false); });
+    return () => { live = false; };
+  }, [dates]);
   const rows = useMemo(() => (stats?.per_session ?? [])
     .filter((row) => module === "*" || row.module === module), [stats, module]);
   const modules = stats?.by_module ?? [];
@@ -264,8 +271,7 @@ export function RegistrationAnalyticsTab() {
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="flex flex-wrap items-center gap-3">
-      <AnalysisFilter label="时间" value={days} onChange={setDays}
-        items={[{ value: "30", label: "近 30 天" }, { value: "90", label: "近 90 天" }, { value: "", label: "全部时间" }]} />
+      <CompletionDateFilter value={dates} onChange={setDates} />
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <BarChart3 size={15} />研究完成 {stats?.total ?? 0}
         {help("结论已出的无单会话:非问题 + 确认是问题 + 取消。研究进行中与存量挂起一律不进任何数字。")}
@@ -379,7 +385,7 @@ export function DeliveryAnalytics({ onOpenTask }: { onOpenTask: (taskId: string)
   const [busy, setBusy] = useState(false);
   const [repo, setRepo] = useState(""); const [module, setModule] = useState("*");
   const [page, setPage] = useState(0);
-  const [days, setDays] = useState("90"); const [query, setQuery] = useState("");
+  const [dates, setDates] = useState<CompletionDates>({ from: "", to: "" }); const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(new URLSearchParams(location.search).get("deliveryTask"));
   async function refresh(retry = false) {
     setBusy(true); setError("");
@@ -389,15 +395,15 @@ export function DeliveryAnalytics({ onOpenTask }: { onOpenTask: (taskId: string)
   }
   useEffect(() => { void refresh(); }, []);
   const rows = useMemo(() => (report?.rows ?? []).filter(row => (!repo || row.repo === repo) && (module === "*" || (row.business_module?.id ?? "") === module)
-    && (!days || new Date(row.at).getTime() >= Date.now() - Number(days) * 86400000)
-    && (!query || `${row.id} ${row.parent_id ?? ""} ${row.parent_title ?? ""} ${row.title}`.toLowerCase().includes(query.toLowerCase()))), [report, repo, module, days, query]);
+    && (!(dates.from && dates.to && dates.from > dates.to) && completedInRange(row.completed_at, completionDateRange(dates)))
+    && (!query || `${row.id} ${row.parent_id ?? ""} ${row.parent_title ?? ""} ${row.title}`.toLowerCase().includes(query.toLowerCase()))), [report, repo, module, dates, query]);
   const merged = rows.filter(row => row.merged), summary = aggregateDelivery(merged);
   const moduleRows = useMemo(() => (report?.rows ?? []).filter(row => (!repo || row.repo === repo)
-    && (!days || new Date(row.at).getTime() >= Date.now() - Number(days) * 86400000)
-    && (!query || `${row.id} ${row.parent_id ?? ""} ${row.parent_title ?? ""} ${row.title}`.toLowerCase().includes(query.toLowerCase()))), [report, repo, days, query]);
+    && (!(dates.from && dates.to && dates.from > dates.to) && completedInRange(row.completed_at, completionDateRange(dates)))
+    && (!query || `${row.id} ${row.parent_id ?? ""} ${row.parent_title ?? ""} ${row.title}`.toLowerCase().includes(query.toLowerCase()))), [report, repo, dates, query]);
   const moduleGroups = aggregateDeliveryModules(moduleRows);
   const groupRows = useMemo(() => { const groups = new Map<string, DeliveryAnalysisRow[]>(); for (const row of rows) { const key = row.parent_id ?? row.id; groups.set(key, [...(groups.get(key) ?? []), row]); } return [...groups]; }, [rows]);
-  useEffect(() => setPage(0), [repo, module, days, query]);
+  useEffect(() => setPage(0), [repo, module, dates, query]);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(groupRows.length / 10) - 1));
   const selectedParent = (report?.rows ?? []).some(row => row.parent_id === selected);
   const detailRows = rows.filter(row => row.id === selected || row.parent_id === selected);
@@ -412,13 +418,13 @@ export function DeliveryAnalytics({ onOpenTask }: { onOpenTask: (taskId: string)
     </div>{tab !== "knowledge" && <Button variant="outline" onClick={() => void refresh(true)} disabled={busy}><RefreshCw className={busy ? "animate-spin" : ""} />{busy ? "正在读取" : "刷新数据"}</Button>}</div>
     {tab === "requirement" && <>
     <div className="delivery-filters">
-      <AnalysisFilter label="时间" value={days} onChange={setDays} items={[{value:"30",label:"近 30 天"},{value:"90",label:"近 90 天"},{value:"",label:"全部时间"}]} />
+      <CompletionDateFilter value={dates} onChange={setDates} />
       <AnalysisFilter label="代码仓" value={repo} onChange={setRepo} items={[{value:"",label:"全部代码仓"}, ...[...new Set(report?.rows.map(r => r.repo).filter(Boolean))].map(r => ({value:r!,label:r!}))]} />
       <AnalysisFilter label="业务模块" value={module} onChange={setModule} items={[{value:"*",label:"全部模块"}, ...[...new Map((report?.rows ?? []).map(row => [row.business_module?.id ?? "", row.business_module?.name ?? "未关联模块"])).entries()].map(([value,label]) => ({value,label}))]} />
       <Input aria-label="搜索任务" placeholder="搜索 task ID 或需求名称" value={query} onChange={e => setQuery(e.target.value)} />
     </div>
     {error && <p role="alert" className="delivery-error">{error}</p>}
-    <div className="delivery-scope"><BarChart3 size={18} /><span>团队汇总仅计已合入交付 · {summary.available} / {merged.length} 次交付有统计证据 · 同一任务可多次交付，主任务不重复计数</span></div>
+    <div className="delivery-scope"><BarChart3 size={18} /><span>团队汇总仅计已合入交付 · {summary.available} / {merged.length} 次交付有统计证据 · 按任务完成时间筛选，同一任务可多次交付，主任务不重复计数</span></div>
     <div className="delivery-overview-grid"><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(summary.total)} 行</span></h2><Donut counts={summary.retained} /></section>
     <section className="delivery-card"><h2>业务模块交付占比 <span>已合入需求的交付代码行数</span></h2>
       <div className="delivery-module-bars">{moduleGroups.map(group => <button key={group.id} className="delivery-module-row" aria-pressed={module === group.id}

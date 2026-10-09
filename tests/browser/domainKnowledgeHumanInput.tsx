@@ -40,6 +40,7 @@ function render() { root.render(<DomainKnowledgeExtraction focusId={current.id} 
 render();
 async function run() {
   await waitFor('[aria-label="待确认内容"]');
+  check(!document.querySelector('.knowledge-review-notes .animate-spin'), "等待人工确认时不冒充 Agent 正在修改");
   check(document.querySelector('.studio-job-status')?.textContent === "等待你确认", "pause is displayed as waiting");
   check(!document.querySelector('[role="alert"]'), "normal pause has no error banner");
   const documentTab = [...document.querySelectorAll<HTMLButtonElement>('.knowledge-task-view-tabs button')].find(item => item.textContent?.startsWith("文稿"));

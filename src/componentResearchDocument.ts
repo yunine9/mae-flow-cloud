@@ -23,7 +23,7 @@ export interface ResearchDocument {
 }
 export interface ResearchReviewTurn {
   id: string;
-  /** 补充遗漏能力不针对任何已有项，为空串。 */
+  /** 补充遗漏能力或整体返工不限定单项，为空串。 */
   section_id: string;
   mode: "discuss" | "rework" | "update" | "supplement";
   /** 补充轮新增的能力项编号；完成并通过独立评审后才并入文稿。 */
@@ -46,6 +46,9 @@ export interface ResearchDocumentEdit {
   entries?: Array<{ id: string; title: string; repository_ids: string[] }>;
   section?: Omit<ResearchSection, "selected" | "revision">;
 }
+export function isWholeResearchReview(review?: Pick<ResearchReviewTurn, "mode" | "section_id">) {
+  return review?.mode === "rework" && review.section_id === "";
+}
 export function sectionReady(section: ResearchSection): boolean {
   return [section.content, section.interfaces, section.integration, section.sources].every(value => typeof value === "string" && !!value.trim())
     && /```[^\n]*\n[\s\S]*?\S[\s\S]*?\n```/.test(section.example ?? "");
@@ -61,7 +64,7 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
     if (edit.action === "section" && !review.added_section_ids?.includes(edit.section?.id ?? "")) {
       throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样");
     }
-  } else if (review && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
+  } else if (review && !isWholeResearchReview(review) && (review.mode === "discuss" || edit.action !== "section" || edit.section?.id !== review.section_id)) {
     throw new Error("本轮只能修改指定组件；讨论不会修改草稿，其他组件保持原样");
   }
   scanForSecrets("组件知识草稿", Buffer.from(JSON.stringify(edit)));

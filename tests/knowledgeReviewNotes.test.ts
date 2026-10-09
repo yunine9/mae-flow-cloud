@@ -108,7 +108,7 @@ test("正式文档意见保存后可刷新查看，修改正文后直接标为�
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "published", doc.id, { ...input, document_id: other.id }, "alice"), /不存在/);
     assert.throws(() => listKnowledgeReviewNotes(f.sources, "published", `../${doc.id}`), /编号无效/);
     assert.throws(() => resolveKnowledgeReviewNotes(f.sources, "published", other.id, { note_ids: [saved.notes[0].id] }, "alice"), /不存在/);
-    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "published", other.id), { notes: [] });
+    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "published", other.id), { notes: [], submissions: {} });
     saveKnowledgeDocument(f.dataDir, { content: "改后的正文\n已补充异常处理" }, "bob", doc.id);
     const resolved = resolveKnowledgeReviewNotes(f.sources, "published", doc.id, { note_ids: [saved.notes[0].id] }, "bob");
     assert.equal(resolved.notes[0].status, "resolved"); assert.equal(resolved.notes[0].resolved_by, "bob");
@@ -138,7 +138,7 @@ test("Skill Markdown 意见按包和文件隔离，更新包后仍可处理，�
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "skill", "review_skill.v1", { ...input, document_id: "../SKILL.md" }, "alice"), /不存在/);
     assert.throws(() => saveKnowledgeReviewNote(f.sources, "skill", "review_skill.v1", { ...input, document_id: "scripts/run.txt" }, "alice"), /不存在/);
     assert.throws(() => listKnowledgeReviewNotes(f.sources, "skill", "../review_skill.v1"), /编号无效/);
-    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "skill", "another-skill"), { notes: [] });
+    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "skill", "another-skill"), { notes: [], submissions: {} });
     assert.throws(() => resolveKnowledgeReviewNotes(f.sources, "skill", "another-skill", { note_ids: [saved.notes[0].id] }, "alice"), /不存在/);
     await uploadHostSkill(f.dataDir, "review_skill.v1", files("已补充使用示例"), "bob", metadata);
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "skill", "review_skill.v1"), JSON.parse(JSON.stringify(saved)));
@@ -172,7 +172,7 @@ test("目录里的业务模块资料沿用稳定 ID 保存批注，文件名安�
     const result = saveKnowledgeReviewNote(f.sources, "published", id, { document_id: id, scope: "line", line: 2, note: "补充失败条件" }, "alice");
     assert.equal(result.notes[0].document_id, id); assert.equal(result.notes[0].document_title, "订单规则");
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", id), JSON.parse(JSON.stringify(result)));
-    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "published", otherId), { notes: [] });
+    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "published", otherId), { notes: [], submissions: {} });
     assert.throws(() => resolveKnowledgeReviewNotes(f.sources, "published", otherId, { note_ids: [result.notes[0].id] }, "alice"), /不存在/);
     assert.match(readdirSync(join(f.dataDir, "knowledge-review", "published"))[0], /^asset-[a-f0-9]{64}\.json$/);
     for (const bad of ["module:orders:../rules", "module:orders:rules\0", "module:orders:" + "a".repeat(512)]) assert.throws(() => listKnowledgeReviewNotes(f.sources, "published", bad), /编号无效/);
@@ -182,5 +182,28 @@ test("目录里的业务模块资料沿用稳定 ID 保存批注，文件名安�
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", id), resolved);
     const skillId = "module:orders:legacy-skill";
     assert.equal(saveKnowledgeReviewNote(f.sources, "published", skillId, { document_id: skillId, scope: "document", note: "补充模块 Skill 示例" }, "alice").notes[0].document_title, "模块 Skill");
+  } finally { f.cleanup(); }
+});
+
+test("#457 整体意见不绑定某一文档，领域覆盖全部文稿，组件交给整体返工", () => {
+  const f = fixture();
+  try {
+    const domain = saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", { document_id: "", scope: "study", note: "缺少异常恢复，几份文稿介绍重复" }, "alice");
+    f.domainJob.documents.shift();
+    const applied = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [domain.notes[0].id] }, "alice");
+    assert.deepEqual((f.calls[0].input as any).document_ids, ["api"]);
+    assert.match((f.calls[0].input as any).message, /本次任务的全部文稿/);
+    assert.equal(applied.submissions[applied.turn_id!].working, true);
+    assert.match(applied.submissions[applied.turn_id!].status_label, /等待 Agent/);
+    f.domainJob.turns[0].status = "done";
+    assert.match(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").submissions[applied.turn_id!].status_label, /修改完成/);
+    const component = saveKnowledgeReviewNote(f.sources, "component", "cr-1", { document_id: "", scope: "study", note: "补充缺失内容，删除重复介绍" }, "alice");
+    const result = applyKnowledgeReviewNotes(f.sources, "component", "cr-1", { note_ids: [component.notes[0].id] }, "alice");
+    assert.equal((f.calls[1].input as any).section_id, "");
+    f.componentJob.review_turns![0].status = "failed"; f.componentJob.review_turns![0].error = "来源读取失败";
+    const failed = listKnowledgeReviewNotes(f.sources, "component", "cr-1");
+    assert.equal(failed.notes[0].status, "open");
+    assert.equal(failed.submissions[result.turn_id!].working, false);
+    assert.equal(failed.submissions[result.turn_id!].error, "来源读取失败");
   } finally { f.cleanup(); }
 });

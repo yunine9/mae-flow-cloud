@@ -5,10 +5,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { knowledgeFileName, loadKnowledgeModules, type KnowledgeModule, type KnowledgeModuleCategory, type KnowledgeModuleData } from "./knowledgeModules";
+import type { KnowledgeTaskCenterData } from "../../src/knowledgeTaskCenterTypes";
 
 export interface KnowledgeModuleHomeProps {
   onOpenModule: (key: string) => void;
   onOpenDocument?: (id: string, moduleKey: string) => void;
+  moduleActivity?: KnowledgeTaskCenterData["module_activity"];
+  onOpenResearch?: (id: string) => void;
 }
 
 function maintenance(module: KnowledgeModule) {
@@ -17,7 +20,7 @@ function maintenance(module: KnowledgeModule) {
   return { label: "已有积累", color: "bg-primary", note: "已有启用的知识。维护时间缺失时不推断内容新旧。" };
 }
 
-export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeModuleHomeProps) {
+export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivity = [], onOpenResearch }: KnowledgeModuleHomeProps) {
   const [filterOpen,setFilterOpen] = useState(false);
   const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState("");
   const [category, setCategory] = useState<"all" | KnowledgeModuleCategory>("all"), [query, setQuery] = useState(""), [reload, setReload] = useState(0);
@@ -50,9 +53,10 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
       return <section key={group} className="grid gap-3" aria-label={label}>
         <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">{group === "business" ? <BookOpen size={16} /> : group === "engineering" ? <Code2 size={16} /> : <FolderOpen size={16} />}{label}<span className="ml-1 tabular-nums">{modules.length}</span></h3>
         <div className="km-module-grid">{modules.map(module => {
-          const state = maintenance(module), hits = needle ? module.documents.filter(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle)).slice(0, 3) : [];
+          const activity = module.category === "business" ? moduleActivity.find(item => `business:${item.module_id}` === module.key) : undefined;
+          const state = activity ? { label: activity.status_label, color: "bg-primary animate-pulse", note: "该模块有任务正在执行，点击查看任务详情。" } : maintenance(module), hits = needle ? module.documents.filter(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle)).slice(0, 3) : [];
           return <Card key={module.key} className="group border-line transition-colors hover:border-line-strong">
-            <Button variant="ghost" className="h-auto w-full items-start justify-start whitespace-normal p-5 text-left" onClick={() => onOpenModule(module.key)} aria-label={`打开${module.name}知识目录`}>
+            <Button variant="ghost" className="h-auto w-full items-start justify-start whitespace-normal p-5 text-left" onClick={() => activity && onOpenResearch ? onOpenResearch(activity.task_id) : onOpenModule(module.key)} aria-label={activity ? `查看${module.name}建设任务` : `打开${module.name}知识目录`}>
               <div className="grid min-w-0 flex-1 gap-4"><div className="flex min-w-0 items-start justify-between gap-3"><div className="min-w-0"><h3 className="text-lg font-semibold leading-snug">{module.name}</h3><p className="mt-1 line-clamp-2 text-sm font-normal text-muted-foreground">{module.description || (module.category === "business" ? "模块整体规则、关联仓知识与 Skill" : "基础组件知识与 Skill")}</p></div><ChevronRight size={18} className="mt-1 text-muted-foreground" /></div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-normal"><span>文档 <strong className="font-medium tabular-nums">{module.documentCount}</strong></span><span>Skill <strong className="font-medium tabular-nums">{module.skillCount}</strong></span>{module.inactiveCount > 0 && <span className="text-muted-foreground">已停用 {module.inactiveCount}</span>}</div>
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs font-normal text-muted-foreground"><span className="inline-flex items-center gap-1.5" title={state.note}><span className={`size-2 rounded-full ${state.color}`} />{state.label}</span><span>{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "维护时间未知"}</span></div>

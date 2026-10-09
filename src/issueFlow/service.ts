@@ -1,3 +1,4 @@
+import { completedInRange, validateCompletionRange, type CompletionRange } from "../completionRange.ts";
 import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
 import { postMrDiscussionReply, postMrDiscussionResolve } from "../mrDiscussionReply.ts";
@@ -1282,7 +1283,7 @@ export class IssueFlowService {
    *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。
    *  一次定位/验证/解决三根过程率轴与 /issues/stats 同源(this.onceRates
    *  的既有判定),分母=范围内完成交付全集——不随伴生在缺漂移。 */
-  onceGeneratedStats(days?: number): IssueOnceGeneratedStats {
+  onceGeneratedStats(days?: number, range: CompletionRange = {}): IssueOnceGeneratedStats {
     const runtime = this.options.settings?.runtime?.();
     const configured = Number(
       (runtime as Record<string, unknown> | undefined)
@@ -1290,6 +1291,7 @@ export class IssueFlowService {
     const threshold = Number.isFinite(configured) && configured > 0 && configured <= 100
       ? configured
       : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
+    validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
     // 收集范围内全部完成交付会话(判定事实 + 结论时刻)。
     const collected: Array<{ live: LiveIssue; concludedAt: string }> = [];
@@ -1300,6 +1302,7 @@ export class IssueFlowService {
       if (!state.ticket?.trim()) continue;
       const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
       const atMs = Date.parse(concludedAt);
+      if (!completedInRange(state.conclusion?.at, range)) continue;
       if (cutoff !== undefined && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       collected.push({ live, concludedAt });
     }
@@ -1426,7 +1429,8 @@ export class IssueFlowService {
    *  一律不进,不给挂起设统计口径。一次定位分母=非问题+确认是问题
    *  (取消不构成一次研究);版本数从分析版本账现读(取消会话没有
    *  终态冻结,同账同源不漂移),登记人缺席按归属兜底(CONTEXT 口径)。 */
-  registrationStats(days?: number): IssueRegistrationStats {
+  registrationStats(days?: number, range: CompletionRange = {}): IssueRegistrationStats {
+    validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
     const rows: IssueRegistrationSessionRow[] = [];
     for (const live of this.live.values()) {
@@ -1439,6 +1443,7 @@ export class IssueFlowService {
       if (!canceled && !concluded) continue;
       const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
       const atMs = Date.parse(concludedAt);
+      if (!completedInRange(state.conclusion?.at ?? (canceled ? state.updated_at : undefined), range)) continue;
       if (cutoff !== undefined
         && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       const versionCount = listAnalysisVersions(live.root).length;

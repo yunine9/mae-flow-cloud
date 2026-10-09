@@ -133,6 +133,9 @@ test("路由:只数结论已出;进行中/挂起/有单不进;days 按结论时�
   try {
     const { body } = await issueGet(["issues", "registration-stats"], service);
     assert.equal(body.total, 3, "分母=研究完成(取消计入;挂起/进行中/有单不进)");
+    const ranged = service.registrationStats(undefined, { from: iso(now - 2 * DAY), before: iso(now - DAY) });
+    assert.deepEqual(ranged.per_session.map(row => row.id), ["issue-a"], "#457 按完成日期区间包含起点，排除区间外及创建时间");
+    assert.equal(ranged.total, 1); assert.equal(ranged.by_module[0].total, 1);
     assert.equal(body.non_issue, 1);
     assert.equal(body.issue_confirmed, 1);
     assert.equal(body.canceled, 1);

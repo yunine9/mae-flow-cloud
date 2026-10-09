@@ -63,6 +63,14 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
         const section = (id: string, title: string, api: string) => ({ id, title, repository_ids: [c.id], content: `说明 ${api} 的用法`, interfaces: api, integration: "基于实际构建", example: `未编译验证\n\`\`\`cpp\n${api}();\n\`\`\``, related_ids: [],
           paradigm: { kind: "paradigm", component: "pool", language, status: "recommended", need: `调用 ${api}`, api: [api], applicability: "当前固定版本", replaces: { identifiers: [], imports: [], patterns: [] },
             evidence: [{ repository_id: c.id, path, revision, start: 1, end: 2 }], usage_evidence: [evidenceId], open_questions: [] } });
+        if (task.id === "whole-review") {
+          await call("research_document", { action: "read" });
+          await call("research_document", { action: "read", id: "paradigm-pool-submit" });
+          await call("research_document", { action: "overview", overview: "整体修订：提交与等待的边界" });
+          await call("research_document", { action: "section", section: section("paradigm-pool-submit", "提交任务", "submit") });
+          await call("component_work_result", { findings: `已按整体意见修订 \`${c.id}:${path}:1-2\``, open_questions: [] });
+          return { status: "turn_finished" };
+        }
         if (task.id === "supplement") {
           assert.equal(mode, "supplement");
           await call("research_document", { action: "read" });
@@ -118,6 +126,13 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
     assert.equal(added.id, "paradigm-pool-wait"); assert.equal(added.selected, true); assert.match(added.sources, /src/, "来源由程序按证据生成");
     assert.deepEqual(supplemented.review_turns!.at(-1)!.added_section_ids, ["paradigm-pool-wait"]);
     assert.equal(service.artifacts(job.id).catalog.length, 5, "新增范式进入程序提取");
+    const beforeWhole = sessions.length;
+    service.review(job.id, { section_id: "", mode: "rework", message: "精简概述和提交任务中的重复内容" }, "expert");
+    const whole = await finished(job.id);
+    assert.equal(sessions.length, beforeWhole + 3, "整体修订后独立评审发生变化的章节及概述");
+    assert.equal(whole.document!.overview, "整体修订：提交与等待的边界");
+    assert.equal(whole.document!.sections.length, 5);
+    assert.deepEqual(whole.document!.sections.find(s => s.id === added.id), added, "未涉及章节保持原样");
     const beforeChallenge = sessions.length;
     const challenge = { item_id: "component-test", source_digest: "a".repeat(64), repository_ids: [c.id], language,
       claim: "原生线程全部改成 Pool.submit（待验证）" };

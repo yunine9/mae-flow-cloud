@@ -29,6 +29,7 @@ export interface KnowledgeTaskSummary {
 
 export interface KnowledgeTaskCenterData {
   tasks: KnowledgeTaskRow[];
+  module_activity: Array<{ module_id: string; status_label: string; task_id: string }>;
   summary: KnowledgeTaskSummary;
   warnings: string[];
 }

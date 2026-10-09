@@ -401,3 +401,18 @@ test("task-12：纯JSON配置修改正常统计，Markdown与二进制不进入�
   const final = await collectDeliveryCode(f.summary, f.cwd, next);
   assert.equal(Object.values(final.retained).reduce((a, b) => a + b, 0), 7);
 });
+
+test("#457 完成日期过滤不回退到创建或更新时间，结束日按浏览器本地整天包含", async () => {
+  const { completedInRange, validateCompletionRange } = await import("../src/completionRange.ts");
+  const task = { id: "completion-date", workspace: join(tmpdir(), "completion-date-fixture"), title: "早创建晚完成", requirement: "test", status: "completed", created_at: "2026-08-01T00:00:00Z", updated_at: "2026-10-12T00:00:00Z", completed_at: "2026-10-09T15:59:59.999Z", delivery: { mr_state: "merged" } } as TaskSummary;
+  const range = { from: "2026-10-08T16:00:00.000Z", before: "2026-10-09T16:00:00.000Z" };
+  const row = buildDeliveryAnalysis([task]).rows[0];
+  assert.equal(row.completed_at, task.completed_at);
+  assert.equal(completedInRange(row.completed_at, range), true);
+  assert.equal(completedInRange("2026-10-08T15:59:59.999Z", range), false);
+  assert.equal(completedInRange(range.before, range), false);
+  assert.equal(buildDeliveryAnalysis([{ ...task, status: "running" }]).rows[0].completed_at, undefined);
+  assert.equal(completedInRange(buildDeliveryAnalysis([{ ...task, completed_at: undefined }]).rows[0].completed_at, range), false);
+  assert.throws(() => validateCompletionRange({ from: "invalid" }), /无效/);
+  assert.throws(() => validateCompletionRange({ from: range.before, before: range.from }), /开始日期/);
+});

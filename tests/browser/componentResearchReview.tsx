@@ -28,6 +28,7 @@ window.fetch = async (url, options) => {
   const path = String(url), body = options?.body ? JSON.parse(String(options.body)) : undefined;
   let result: unknown;
   if (path === "/component-repositories") result = {components:repos};
+  else if (path.startsWith("/knowledge-review/")) result = { notes: [], submissions: {} };
   else if (path === "/business-modules") result = {modules:[]};
   else if (path === "/component-research") result = {records:[record]};
   else if (path.endsWith("/artifacts")) result = { mapping: "# 组件选择表\n\n需要安全释放资源 → Close（SDK v2）", rules: [], files: { "components/file/paradigms/close.md": "# 安全释放\n正文" } };

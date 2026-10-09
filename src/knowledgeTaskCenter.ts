@@ -63,6 +63,7 @@ export interface KnowledgeTaskSources {
 /** 只读投影：各自的研究记录仍是状态来源，中心不保存第二份任务。 */
 export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTaskCenterData {
   const tasks: KnowledgeTaskRow[] = [], warnings: string[] = [];
+  const modules = new Map<string, string>();
   warnings.push(...sources.warnings?.() ?? []);
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   listKnowledgeDocuments(sources.dataDir, warnings);
@@ -70,7 +71,11 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
     try { read(); } catch { warnings.push(`${label}暂时无法读取，请在原任务入口查看`); }
   };
   collect("领域萃取", () => {
-    for (const job of sources.domain.list()) tasks.push(domainKnowledgeTask(sources.domain.get(job.id)));
+    for (const job of sources.domain.list()) {
+      const record = sources.domain.get(job.id);
+      tasks.push(domainKnowledgeTask(record));
+      if (record.module_id) modules.set(record.id, record.module_id);
+    }
   });
   collect("基础组件萃取", () => {
     for (const record of sources.component.list()) {
@@ -92,7 +97,15 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   warnings.splice(0, warnings.length, ...new Set(warnings));
   tasks.sort((a, b) => Date.parse(b.created_at ?? b.started_at ?? "") - Date.parse(a.created_at ?? a.started_at ?? "") || a.id.localeCompare(b.id));
-  return { tasks, warnings, summary: {
+  // 同模块有多个进行中任务时，目录入口指向列表中最新的一项。
+  const moduleActivity = new Map<string, { module_id: string; status_label: string; task_id: string }>();
+  for (const task of tasks) {
+    const moduleId = modules.get(task.id);
+    if (moduleId && task.group === "running" && !moduleActivity.has(moduleId)) {
+      moduleActivity.set(moduleId, { module_id: moduleId, status_label: "建设中", task_id: task.id });
+    }
+  }
+  return { tasks, warnings, module_activity: [...moduleActivity.values()], summary: {
     running: tasks.filter(task => task.group === "running").length,
     attention: tasks.filter(task => task.group === "attention").length + warnings.length,
     total: tasks.length,

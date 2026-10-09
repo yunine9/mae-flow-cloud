@@ -13,7 +13,7 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { checkEc, languageComponentSourceTool, codeSearchTool, evidencePreview } from "./componentResearchTools.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool } from "./knowledgeExtractionSkills.ts";
-import { researchDocumentMarkdown, type ResearchSection } from "./componentResearchDocument.ts";
+import { isWholeResearchReview, researchDocumentMarkdown, type ResearchSection } from "./componentResearchDocument.ts";
 import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult } from "./componentResearchPipeline.ts";
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
 import type { ResearchExecution } from "./componentResearch.ts";
@@ -66,6 +66,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
       signal.throwIfAborted();
       const reviewing = !!reviewResult, discussing = input.review?.mode === "discuss" || !!input.record.challenge;
       const supplementing = !reviewing && input.review?.mode === "supplement";
+      const wholeReview = !reviewing && isWholeResearchReview(input.review);
       const sessionId = randomUUID(), dir = join(root, "sessions", sessionId), agentDir = join(dir, "agent");
       mkdirSync(agentDir, { recursive: true }); writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
       const sourceReads: Array<Record<string, unknown>> = [], callerReads = new Set<string>(), draftReads = new Map<string, number>();
@@ -100,7 +101,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         if (p.kind === "paradigm" && p.status === "recommended" && !p.usage_evidence.length) throw new Error("推荐范式需要展开的真实调用；未找到时标记 unverified 并说明缺口");
       };
       const draftTool = defineTool({ name: "research_document", label: "组件范式草稿",
-        description: "read 省略 id 列目录，id 读全文。写作只保存当前任务编号的章节，overview 仅供 synthesis；评审和讨论只读。范式字段为权威数据，来源由程序生成。",
+        description: wholeReview ? "read 省略 id 列目录，id 读全文。可修订概述、已有章节或新增章节；修订前先读取原稿。范式字段为权威数据，来源由程序生成。" : "read 省略 id 列目录，id 读全文。写作只保存当前任务编号的章节，overview 仅供 synthesis；评审和讨论只读。范式字段为权威数据，来源由程序生成。",
         parameters: Type.Object({ action: Type.Union(["read", ...(!reviewing && !discussing ? ["section", "overview"] : [])].map(s => Type.Literal(s))),
           id: Type.Optional(Type.String()), overview: Type.Optional(Type.String()), section: Type.Optional(sectionSchema) }),
         execute: async (_id: string, args: any) => {
@@ -114,7 +115,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
             if (reviewing || discussing || result) throw new Error("当前会话不能修改草稿");
             if (supplementing && args.action !== "section") throw new Error("补充只能保存新的能力项（契约、范式、陷阱或导航），不能修改概述");
             if (args.action === "overview") {
-              if (task.phase !== "synthesis") throw new Error("只有汇总任务可写概述");
+              if (task.phase !== "synthesis" && !wholeReview) throw new Error("只有汇总任务可写概述");
               input.editDocument!({ action: "overview", overview: args.overview }); saved = true; return reply({ saved: true });
             }
             const s = args.section;
@@ -122,7 +123,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               // 补充轮没有预先排好的任务编号：新项编号和产物类型由研究者按发现定，"只能新增"由文稿编辑规则把关。
               if (!s || !["contracts", "paradigm", "pitfalls", "index"].includes(s.paradigm?.kind)) throw new Error("补充只能保存新的能力项（契约、范式、陷阱或导航）");
               if (doc.sections.some(old => old.id === s.id) && !supplementAdded.has(s.id)) throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样；需要改已有项请人在该项上返工");
-            } else {
+            } else if (!wholeReview) {
               if (args.action !== "section" || !s || s.id !== task.id || !["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) throw new Error("只能保存当前任务编号的章节");
               if (s.paradigm?.kind !== task.phase || s.paradigm?.component !== task.component) throw new Error("产物类型和组件必须与当前任务一致");
             }
@@ -212,6 +213,23 @@ export async function runComponentResearch(input: ResearchExecution, options: {
       const response = await session({ id: "challenge", phase: "inventory", title: "寻找合理反例", status: "running", attempts: 1, dependencies: [],
         spec: `待验证主张（仅为假设，不能作为证据）：${input.record.challenge.claim}\n独立寻找必须保留原生写法、组件无法替代的合理场景。读取基础仓实现边界，并使用 everycode 搜索、展开消费方调用。不要修改文档或启用规则。结果说明：找到反例 / 当前未找到 / 证据不足；逐条列出基础仓固定版本、代码位置、消费方调用位置及不能替代的原因。未找到不等于证明正确，记录搜索范围、版本未知与待确认问题。` });
       return response.result!.findings + (response.result!.open_questions.length ? "\n\n待确认：\n" + response.result!.open_questions.join("\n") : "");
+    }
+    if (isWholeResearchReview(input.review)) {
+      const before = input.readDocument!();
+      const work: ComponentWork = { id: "whole-review", title: "按整体意见修订文稿", phase: "inventory", dependencies: [], status: "running", attempts: 1,
+        spec: "先读取全部文稿，结合用户整体意见处理遗漏、重复与不准确的内容。可更新概述、修订已有能力或新增有依据的能力；没有被要求改动的内容保持原样。新增与修改内容都要核对代码与调用证据。" };
+      const response = await session(work);
+      const after = input.readDocument!();
+      for (const section of after.sections.filter(item => JSON.stringify(item) !== JSON.stringify(before.sections.find(old => old.id === item.id)))) {
+        const review = await session({ id: section.id, title: section.title, phase: section.paradigm!.kind, component: section.paradigm!.component,
+          dependencies: [], status: "running", attempts: 1, spec: "核对整体意见对应的修订是否成立，并检查来源、接口与示例。" }, response.result!);
+        if (!review.verdict?.pass) throw new Error(`能力「${section.title}」独立评审未通过：${review.verdict?.feedback}`);
+      }
+      if (after.overview !== before.overview) {
+        const review = await session({ ...work, id: "whole-review-overview", phase: "synthesis", title: "核对修订后的概述" }, response.result!);
+        if (!review.verdict?.pass) throw new Error(`概述独立评审未通过：${review.verdict?.feedback}`);
+      }
+      return response.result!.findings;
     }
     if (input.review?.mode === "supplement") {
       const before = new Set(input.readDocument!().sections.map(s => s.id));

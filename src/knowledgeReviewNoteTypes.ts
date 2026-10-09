@@ -1,4 +1,14 @@
 export type KnowledgeReviewKind = "domain" | "component" | "published" | "skill";
+export interface KnowledgeReviewSubmission {
+  working: boolean;
+  status_label: string;
+  error?: string;
+}
+export interface KnowledgeReviewNotesResult {
+  notes: KnowledgeReviewNote[];
+  submissions: Record<string, KnowledgeReviewSubmission>;
+  turn_id?: string;
+}
 export interface KnowledgeReviewNoteInput {
   document_id: string;
   scope: "line" | "document" | "study";

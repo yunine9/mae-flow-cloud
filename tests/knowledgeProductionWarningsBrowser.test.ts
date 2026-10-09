@@ -43,7 +43,7 @@ function productionMatrix(): KnowledgeTaskCenterData {
     assert.ok(task.next_action.href?.includes("kbPage=task"));
     tasks.push(task);
   }
-  return { tasks, warnings: [], summary: { running: tasks.filter(task => task.group === "running").length, attention: tasks.filter(task => task.group === "attention").length, total: tasks.length } };
+  return { module_activity: [], tasks, warnings: [], summary: { running: tasks.filter(task => task.group === "running").length, attention: tasks.filter(task => task.group === "attention").length, total: tasks.length } };
 }
 
 test("生产线验收3/F5 与生产线验收8/F10–F12：桌面任务中心保留坏文件告警，组合状态和完整动作沿用后端真实投影",

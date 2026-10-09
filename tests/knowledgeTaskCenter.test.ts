@@ -129,3 +129,19 @@ test("组件归档失败仍打开已发布文稿，和领域任务一样保留�
     assert.equal(knowledgeTaskAction(result.tasks[0]).view, "archive");
   } finally { rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("#457 模块建设状态来自进行中任务，选最新任务，已完成和失败不冒充建设中", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "knowledge-module-running-"));
+  try {
+    const jobs = [
+      { ...domain(), id: "old", module_id: "trade", status: "running" as const },
+      { ...domain(), id: "new", module_id: "trade", status: "queued" as const, created_at: "2026-10-09T00:00:00Z" },
+      { ...domain(), id: "done", module_id: "other" },
+      { ...domain(), id: "failed", module_id: "failed", status: "failed" as const },
+    ];
+    const source = { dataDir, domain: { list: () => jobs, get: (id: string) => jobs.find(job => job.id === id)! }, component: { list: () => [], get: () => { throw new Error("unused"); } }, skillExtractionJob: () => undefined };
+    assert.deepEqual(listKnowledgeTasks(source).module_activity, [{ module_id: "trade", task_id: "new", status_label: "建设中" }]);
+    jobs[0].status = "done" as any; jobs[1].status = "done" as any;
+    assert.deepEqual(listKnowledgeTasks(source).module_activity, []);
+  } finally { rmSync(dataDir, { recursive: true, force: true }); }
+});

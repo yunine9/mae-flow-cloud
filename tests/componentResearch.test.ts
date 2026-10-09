@@ -1003,3 +1003,31 @@ test("补充遗漏能力：只能新增能力项，经整轮完成才并入并�
   assert.deepEqual(reopened.get(job.id).document!.sections.map(s => s.id), ["cap-0", "cap-1", "cap-pool"], "补充轮记录可跨重启读取");
   await reopened.shutdown();
 });
+
+test("#457 整体返工原子更新概述及多项文稿，新增内容可审阅，失败不覆盖原稿", async t => {
+  const dir = temporary(); saveComponentRepository(dir, config, "alice");
+  const research = new ComponentResearch(dir, async input => {
+    if (!input.review) return writeJoint(input);
+    assert.equal(input.review.section_id, "");
+    const ids = input.record.components!.map(c => c.id);
+    input.editDocument!({ action: "overview", overview: "删除重复介绍，补充整体使用边界。" });
+    for (const section of input.readDocument!().sections) input.editDocument!({ action: "section", section: { ...section, content: `${section.content}\n修订后的边界说明。` } });
+    input.editDocument!({ action: "outline", entries: [{ id: "missing", title: "遗漏的异常恢复", repository_ids: ids }] });
+    input.editDocument!({ action: "section", section: sectionData("missing", ids) });
+    if (input.review.message === "失败") throw new Error("独立评审失败");
+    return "全部文稿修订完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir, { recursive: true, force: true }); });
+  const job = research.start({ language: "cpp" }, "alice"); await until(() => research.get(job.id).status === "done");
+  research.selectSections(job.id, ["cap-1"], false);
+  const original = research.get(job.id).document;
+  research.review(job.id, { section_id: "", mode: "rework", message: "失败" }, "alice"); await until(() => research.get(job.id).status === "failed");
+  assert.deepEqual(research.get(job.id).document, original);
+  research.review(job.id, { section_id: "", mode: "rework", message: "补充并去重" }, "alice"); await until(() => research.get(job.id).status === "done");
+  const result = research.get(job.id);
+  assert.match(result.document!.overview, /整体使用边界/);
+  assert.deepEqual(result.document!.sections.map(s => [s.id, s.selected]), [["cap-0", true], ["cap-1", false], ["missing", true]]);
+  assert.match(result.document!.sections[1].content, /修订后的边界/);
+  assert.equal(result.section_history!.length, 2);
+  assert.equal(result.document_id, undefined, "只修改草稿，不自动发布");
+});

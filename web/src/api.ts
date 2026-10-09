@@ -1,3 +1,4 @@
+import type { CompletionRange } from "../../src/completionRange";
 import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
 import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
@@ -4108,8 +4109,15 @@ export interface IssueOnceGenerated {
   per_session: IssueOnceGeneratedSessionRow[];
 }
 
-export function getIssueOnceGenerated(days?: number): Promise<IssueOnceGenerated> {
-  return issueFetch(`/issues/once-generated${days ? `?days=${days}` : ""}`);
+function completionStatsQuery(days?: number, range: CompletionRange = {}) {
+  const query = new URLSearchParams();
+  if (days) query.set("days", String(days));
+  if (range.from) query.set("completed_from", range.from);
+  if (range.before) query.set("completed_before", range.before);
+  return query.size ? `?${query}` : "";
+}
+export function getIssueOnceGenerated(days?: number, range?: CompletionRange): Promise<IssueOnceGenerated> {
+  return issueFetch(`/issues/once-generated${completionStatsQuery(days, range)}`);
 }
 
 /** 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
@@ -4149,9 +4157,9 @@ export interface IssueRegistrationStats {
 }
 
 export function getIssueRegistrationStats(
-  days?: number,
+  days?: number, range?: CompletionRange,
 ): Promise<IssueRegistrationStats> {
-  return issueFetch(`/issues/registration-stats${days ? `?days=${days}` : ""}`);
+  return issueFetch(`/issues/registration-stats${completionStatsQuery(days, range)}`);
 }
 
 /** 单会话首次生成明细(伴生快照原样,会话详情下钻的证据面)。

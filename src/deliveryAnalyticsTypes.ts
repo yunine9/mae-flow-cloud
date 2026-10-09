@@ -28,6 +28,7 @@ export interface DeliveryAnalysisRow {
   id: string;
   delivery_id?: string;
   started_at?: string;
+  completed_at?: string;
   title: string;
   parent_id?: string;
   parent_title?: string;

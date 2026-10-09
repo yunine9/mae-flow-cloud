@@ -27,7 +27,7 @@ import {
   type PreparedKnowledgeDocument,
 } from "./knowledgeDocuments.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
-import { editResearchDocument, researchDocumentMarkdown, sectionReady,
+import { editResearchDocument, isWholeResearchReview, researchDocumentMarkdown, sectionReady,
   type ResearchSection, type ResearchDocument, type ResearchDocumentEdit, type ResearchReviewTurn } from "./componentResearchDocument.ts";
 import { assertLatestReviewProposal, assertNoPendingReviewProposals, assertReviewRevision,
   continuingReviewProposal, type ReviewProposal } from "./knowledgeReviewCore.ts";
@@ -203,7 +203,7 @@ function validResearchRecord(value: unknown, id: string, path = ""): value is Re
   }
   if (value.review_turns !== undefined) recordArray(value.review_turns, field("review_turns"), (turn, path) => {
     checkReviewTurn(turn, repositoryIds, path);
-    if (["queued", "running"].includes(turn.status)) recordCheck(value.document !== undefined && (turn.mode === "supplement" || value.document.sections.some((section: ResearchSection) => section.id === turn.section_id)), `${path}.section_id`, "正在执行的研究操作缺少对应文稿或能力项");
+    if (["queued", "running"].includes(turn.status)) recordCheck(value.document !== undefined && (turn.mode === "supplement" || isWholeResearchReview(turn as ResearchReviewTurn) || value.document.sections.some((section: ResearchSection) => section.id === turn.section_id)), `${path}.section_id`, "正在执行的研究操作缺少对应文稿或能力项");
   });
   if (value.section_history !== undefined) recordArray(value.section_history, field("section_history"), (history, path) => {
     recordObject(history, path); recordFields(history, ["at", "operator"], `${path}.`); checkSection(history.section, repositoryIds, `${path}.section`);
@@ -402,7 +402,7 @@ export class ComponentResearch {
           return proposal ? { ...structuredClone(proposal.value), revision: section.revision, selected: section.selected } : section;
         }) };
       }
-      this.update(record, { status: "running", error: undefined, started_at: new Date().toISOString(), finished_at: undefined, stage: review ? ({ discuss: "正在回答组件问题", supplement: "正在补充遗漏能力" } as Record<string, string>)[review.mode] ?? "正在返工指定组件" : "准备组件源码" });
+      this.update(record, { status: "running", error: undefined, started_at: new Date().toISOString(), finished_at: undefined, stage: review ? isWholeResearchReview(review) ? "正在修订全部文稿" : ({ discuss: "正在回答组件问题", supplement: "正在补充遗漏能力" } as Record<string, string>)[review.mode] ?? "正在返工指定组件" : "准备组件源码" });
       // Defer execution until the running entry exists (also handles synchronous failures).
       const work = Promise.resolve()
         .then(async () => {
@@ -421,7 +421,7 @@ export class ComponentResearch {
                     revisedDocument = document;
                     if (review.mode === "supplement") {
                       if (edit.action === "outline") review.added_section_ids = [...review.added_section_ids ?? [], ...edit.entries!.map(entry => entry.id)];
-                    } else if (review.mode !== "discuss") review.proposal = { base_revision: review.base_revision!,
+                    } else if (review.mode !== "discuss" && !isWholeResearchReview(review)) review.proposal = { base_revision: review.base_revision!,
                       section: structuredClone(document.sections.find(s => s.id === review.section_id)!), status: "pending" };
                     this.update(record, {});
                   }
@@ -440,7 +440,7 @@ export class ComponentResearch {
             if (!draft.trim()) throw new Error("模型未产出草稿");
             scanForSecrets("组件知识草稿.md", Buffer.from(draft));
             if (review) {
-              if (review.mode === "rework" && !review.proposal) {
+              if (review.mode === "rework" && !isWholeResearchReview(review) && !review.proposal) {
                 throw new Error("本轮没有更新指定组件，原稿已保留；请继续说明返工要求");
               }
               if (review.mode === "supplement") {
@@ -450,6 +450,19 @@ export class ComponentResearch {
                 const unfinished = added.filter(section => !sectionReady(section)).map(section => section.title);
                 if (unfinished.length) throw new Error(`补充的能力尚不完整（${unfinished.join("、")}），需要接口、集成依赖、最佳示例和来源；原稿已保留，可重试`);
                 record.document = { ...record.document!, sections: [...record.document!.sections, ...structuredClone(added).map(section => ({ ...section, selected: true }))] };
+              }
+              if (isWholeResearchReview(review)) {
+                if (!revisedDocument?.overview.trim() || !revisedDocument.sections.length || revisedDocument.sections.some(section => !sectionReady(section))) {
+                  throw new Error("整体修订尚不完整，原稿已保留，请补充后重试");
+                }
+                record.section_history ??= [];
+                for (const section of record.document!.sections) {
+                  const changed = revisedDocument.sections.find(item => item.id === section.id);
+                  if (changed && JSON.stringify(changed) !== JSON.stringify(section)) record.section_history.push({ at: new Date().toISOString(), operator: review.operator, section: structuredClone(section) });
+                }
+                record.document = structuredClone(revisedDocument);
+                // 整体修订从当前候选稿继续，旧候选内容已纳入这份草稿；发布仍由人单独确认。
+                for (const previous of record.review_turns ?? []) if (previous.proposal?.status === "pending") previous.proposal.status = "accepted";
               }
               // Agent 按仓库编号引用代码，程序据此校验；给人看的回复换成组件名，路径与行号保留。
               const named = (record.components ?? [record.component]).reduce((text, component) => text.split(`${component.id}:`).join(`${component.name}:`), draft);
@@ -573,7 +586,7 @@ export class ComponentResearch {
     if (!record?.document || record.deleted_at || record.document_id) throw new Error("当前草稿不可讨论或返工");
     if (this.running.has(id) || ["queued", "running"].includes(record.status)) throw new Error("请等待本轮完成或停止后再继续对话");
     const supplement = input.mode === "supplement";
-    if (supplement ? input.section_id : !record.document.sections.some(section => section.id === input.section_id)) throw new Error(supplement ? "补充遗漏能力不针对已有能力项" : "请先选择要讨论或返工的组件");
+    if (supplement ? input.section_id : !isWholeResearchReview(input) && !record.document.sections.some(section => section.id === input.section_id)) throw new Error(supplement ? "补充遗漏能力不针对已有能力项" : "请先选择要讨论或返工的组件");
     if (record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用代码来源的研究后再修订");
     const message = String(input.message ?? "").trim();
     if (!["discuss", "rework", "update", "supplement"].includes(input.mode) || !message || message.length > 20_000) throw new Error(supplement ? "请说明遗漏了哪些能力、接口或场景，最多 20000 字" : "请填写讨论或返工要求，最多 20000 字");
@@ -584,7 +597,7 @@ export class ComponentResearch {
       mode: input.mode, message, operator, status: "queued", created_at: new Date().toISOString(),
       ...(input.mode === "update" ? { previous_revisions: { ...record.revisions } } : {}) });
     if (input.mode === "update") record.revisions = {};
-    this.update(record, { use_latest_skill: input.use_latest_skill === true, status: "queued", stage: ({ discuss: "等待回答组件问题", supplement: "等待补充遗漏能力" } as Record<string, string>)[input.mode] ?? "等待指定组件返工", error: undefined, finished_at: undefined });
+    this.update(record, { use_latest_skill: input.use_latest_skill === true, status: "queued", stage: isWholeResearchReview(input) ? "等待整体文稿修订" : ({ discuss: "等待回答组件问题", supplement: "等待补充遗漏能力" } as Record<string, string>)[input.mode] ?? "等待指定组件返工", error: undefined, finished_at: undefined });
     this.pump(); return this.get(id);
   }
   editSection(id: string, input: { section: ResearchSection; base_revision: number }, operator: string) {

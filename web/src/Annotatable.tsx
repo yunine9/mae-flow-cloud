@@ -46,6 +46,7 @@ export function Annotatable({
   renderInlineReview,
   addDraft,
   allowImages = true,
+  savedMessage = "已记下，可在批注与检视中统一处理。",
   children,
 }: {
   taskId: string;
@@ -58,6 +59,7 @@ export function Annotatable({
   /** 用户停止后材料仍可读但不新增；已交付任务仍可留下归档批注。 */
   enabled?: boolean;
   allowImages?: boolean;
+  savedMessage?: string;
   onAdded: () => void;
   /** 已圈过的行通过图标查看意见；正文仍然只用于阅读。 */
   onOpenAnnotations?: (ids: string[]) => void;
@@ -357,7 +359,7 @@ export function Annotatable({
       }
       // 保存只落账，不自动打开处理面板或转交 Agent。
       setThread(undefined);
-      setReceipt("已记下，可在批注与检视中统一处理。");
+      setReceipt(savedMessage);
       setDraft(undefined);
       setNote("");
       onAdded();

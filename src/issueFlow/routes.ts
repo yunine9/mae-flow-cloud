@@ -759,10 +759,10 @@ export async function handleIssueRoutes(
     if (method === "GET" && parts[1] === "once-generated"
       && parts.length === 2) {
       // days=时间过滤(按结论时刻近 N 天;缺省=全部)。
-      const days = Number(new URL(request.url ?? "", "http://x")
-        .searchParams.get("days") ?? "");
+      const query = new URL(request.url ?? "", "http://x").searchParams;
+      const days = Number(query.get("days") ?? "");
       return done(200, issueFlow.onceGeneratedStats(
-        Number.isFinite(days) && days > 0 ? days : undefined));
+        Number.isFinite(days) && days > 0 ? days : undefined, { from: query.get("completed_from") ?? undefined, before: query.get("completed_before") ?? undefined }));
     }
 
     // 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
@@ -770,10 +770,10 @@ export async function handleIssueRoutes(
     // 读开放与 stats 同权(查看模式)。
     if (method === "GET" && parts[1] === "registration-stats"
       && parts.length === 2) {
-      const days = Number(new URL(request.url ?? "", "http://x")
-        .searchParams.get("days") ?? "");
+      const query = new URL(request.url ?? "", "http://x").searchParams;
+      const days = Number(query.get("days") ?? "");
       return done(200, issueFlow.registrationStats(
-        Number.isFinite(days) && days > 0 ? days : undefined));
+        Number.isFinite(days) && days > 0 ? days : undefined, { from: query.get("completed_from") ?? undefined, before: query.get("completed_before") ?? undefined }));
     }
 
     // 单会话首次生成明细(伴生快照原样):会话详情下钻的证据面。

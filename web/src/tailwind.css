@@ -7838,6 +7838,7 @@ body:has(.workspace-studio) .wish-quick-fab {
 .delivery-filters label { display: flex; align-items: center; gap: 8px; }
 .delivery-filters select, .delivery-filters input { min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 6px 12px; max-width: 320px; }
 .delivery-filters input { flex: 1; min-width: 230px; margin-left: auto; }
+.delivery-filters input[type="date"] { flex:none; min-width:160px; width:160px; margin-left:0; }
 .delivery-scope { font-size: 14px; }
 .delivery-overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
 .delivery-module-bars { display: grid; gap: 16px; max-height: 320px; overflow-y: auto; padding-right: 4px; }
