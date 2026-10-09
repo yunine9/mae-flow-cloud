@@ -189,7 +189,7 @@ test("拆分方案确认卡:标题点名、事实条代替散文、卡上只填�
   // 提交按钮在 1400px 之下还被"提问题"浮钮压着。
   const card = readFileSync(join(process.cwd(), "web/src/TaskCard.tsx"), "utf8");
   assert.match(card, /export function isChainReviewWaiting\(task: TaskSummary\)/);
-  assert.match(card, /if \(isChainReviewWaiting\(task\)\) return "确认拆分方案";/);
+  assert.match(card, /if \(isChainReviewWaiting\(task\)\).*"确认开发方案".*"确认拆分方案";/);
   assert.match(card, /className="chain-decision-facts"/);
   assert.match(card, /chainStages\(task\.requirement_graph\)\.length/,
     "阶段数和左侧图共用同一个拓扑函数");

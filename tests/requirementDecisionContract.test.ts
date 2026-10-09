@@ -22,6 +22,8 @@ test("确认判断不将否定、备注引用或历史自由文案当作拆单�
   }
   assert.equal(confirmsRequirementGraph("确认并生成任务"), true);
   assert.equal(confirmsRequirementGraph("确认分析结论"), true);
+  assert.equal(confirmsRequirementGraph("确认并继续开发"), true);
+  assert.equal(confirmsRequirementGraph("暂不确认并继续开发"), false);
   const source = { questions: [{ question: "处理方式", options: ["确认不生成任务", "暂不确认，生成任务前先修改"] }] };
   assert.deepEqual(requirementDecisionContract(source, true), source);
 });

@@ -24,7 +24,7 @@ import { resumePrePushVerification } from "./prepushRecovery.ts";
 import { fetchMrDiscussions, observeMrDiscussions, discussionRevision, discussionKey, type DiscussionItem, type DiscussionFetch } from "./mrDiscussions.ts";
 import { postMrDiscussionReply } from "./mrDiscussionReply.ts";
 import { reconcileRemoteDelivery, remoteDeliveryAllowsProceed, observePublishedBranch, mergedIncludesLocalHead, needsRemoteRecovery, type RemoteReconcileHost } from "./remoteDeliveryReconcile.ts";
-import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM } from "./requirementDecisionContract.ts";
+import { requirementDecisionContract, confirmsRequirementGraph, REQUIREMENT_GRAPH_CONFIRM, REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM, REQUIREMENT_GRAPH_CONTINUE, isMainTaskDelivery } from "./requirementDecisionContract.ts";
 import { recoverTaskCwd } from "./taskWorkspaceRecovery.ts";
 import { retireKernelReviewRequest } from "./kernelReviewRequest.ts";
 import { CI_MISSION_END, shouldVerifyCiPush } from "./ciMission.ts";
@@ -133,6 +133,7 @@ import { TaskHostLedger, hostResumeMission, createTaskHostTools, finishTaskHostO
 import { prepareHostPush } from "./hostPushPreparation.ts";
 import { deliveryCommitTree } from "./deliveryCommitTree.ts";
 import { canHandoffReview, handoffReview } from "./reviewHandoff.ts";
+import { prepareMainTaskDelivery, mainTaskDeliveryContext } from "./requirementSingleDelivery.ts";
 import { materializeAnalysisDecisions } from "./analysisDecisionContext.ts";
 import {
   dirname as pathDirname,
@@ -4922,7 +4923,7 @@ export class TaskService {
     return readArtifact(root, artifact, {
       pipelineRoot: join(task.summary.workspace, "pipeline"),
       taskMaterialRoot: task.summary.workspace,
-      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id
+      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id && !isMainTaskDelivery(task.summary)
         ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
       publishedStory: this.hasPublishedOverallStory(task),
     })?.content;
@@ -4942,7 +4943,7 @@ export class TaskService {
     return (await readArtifactAsync(root, artifact, {
       pipelineRoot: join(task.summary.workspace, "pipeline"),
       taskMaterialRoot: task.summary.workspace,
-      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id
+      analysisStory: task.summary.requirement_graph && !task.summary.parent_task_id && !isMainTaskDelivery(task.summary)
         ? `${task.summary.ticket ?? task.summary.id}/story.md` : undefined,
       publishedStory: this.hasPublishedOverallStory(task),
     }))?.content;
@@ -5356,7 +5357,7 @@ export class TaskService {
   /** 拆分提议工具:只有单仓直接开发的主任务才挂;分析单、子任务不挂。 */
   private splitTools(task: TaskState): unknown[] {
     const summary = task.summary;
-    if (summary.parent_task_id || this.isRequirementAnalysis(task)
+    if (summary.parent_task_id || this.isRequirementAnalysis(task) || isMainTaskDelivery(summary)
         || (summary.repositories?.length ?? 0) !== 1) return [];
     return [createSplitProposalTool((input, callId) => this.proposeSplit(task, input, callId))];
   }
@@ -5372,6 +5373,7 @@ export class TaskService {
     callId: string,
   ): Promise<string> {
     const summary = task.summary;
+    if (isMainTaskDelivery(summary)) return "方案已确认由本任务完整交付，按已确认范围继续开发，不再提议拆分。";
     if (summary.parent_task_id) {
       return "本单是拆分后的交付单元子任务,不能再拆;按任务书范围继续。";
     }
@@ -7369,7 +7371,7 @@ export class TaskService {
     const collaborators = [...new Set((options.collaborators ?? [])
       .map((account) => String(account).trim())
       .filter((account) => account && account !== options.account))];
-    if (collaborators.length && !analysisParent) {
+    if (collaborators.length && !analysisParent && !options.collaboratorsTrusted) {
       throw new Error("只有先分析再拆分的主任务可以邀请讨论参与人");
     }
     if (collaborators.length > 20) {
@@ -9323,7 +9325,7 @@ export class TaskService {
       );
     }
     const generatedChildren = task.summary.requirement_graph?.repositories
-      .flatMap((repository) => repository.task_id ? [repository.task_id] : [])
+      .flatMap((repository) => repository.task_id && repository.task_id !== id ? [repository.task_id] : [])
       ?? [];
     if (generatedChildren.length) {
       throw new TaskControlError(
@@ -9897,7 +9899,7 @@ export class TaskService {
     return [
       `# 当前单元任务书：${label}`,
       "",
-      "> **这是当前子任务的执行入口和范围边界。** 整体拆分方案用于"
+      "> **这是当前任务的执行入口和范围边界。** 整体方案用于"
         + "核对上下游，原始需求用于按需核对背景、约束和验收来源；不得仅因"
         + "参考材料涉及其他模块，就擅自扩大本单元范围。",
       "",
@@ -9931,7 +9933,7 @@ export class TaskService {
       "## 执行边界",
       "",
       "- 按职责完成模块实现与验证；公共骨架按契约、装配和编译验收，不冒充业务可用。参考路径不是修改白名单。",
-      "- 全局 Story 定义模块职责、关键类与接口、4+1 和验收依据；子 Spec 细化模块测试设计，子 Story 细化实现。",
+      "- 全局 Story 定义模块职责、关键类与接口、4+1 和验收依据；开发阶段的 Spec 细化模块测试设计，Story 细化实现。",
       "- 上游已合入时，核对当前代码接口与全局 Story；设计修订时同步核对变化及影响，不把旧快照当作最新约定。",
       "- 局部兼容调整自主完成并说明；影响验收、兼容性或其他模块的变化优先交责任人判断，不因文件变化机械阻断。",
       "- 不得重新询问主任务已经确认的事项，也不得把其他单元的工作收进本单元。",
@@ -10010,6 +10012,16 @@ export class TaskService {
     if (!artifact?.content) {
       throw new TaskControlError(
         "已确认的整体拆分方案暂时无法读取，未生成子任务；请刷新后重试");
+    }
+    if (graph.repositories.length === 1) {
+      materializeDeliveryDocument(task.summary.workspace, DELIVERY_CHAIN_SOURCE, artifact.content);
+      writeFileSync(join(task.summary.workspace, DELIVERY_UNIT_SOURCE),
+        this.deliveryUnitBrief(task, graph.repositories[0], order, incoming), { mode: 0o600 });
+      graph.stage = "confirmed";
+      graph.repositories[0].task_id = task.summary.id;
+      this.persist(task, true);
+      this.adoptRequirementStory(task);
+      return;
     }
     // 确认事实先落盘，再逐个建单。persist 的展示投影会刷新 analysis 图，
     // 若到循环末尾才 confirmed，后续 task_id/stage 会写进被替换的旧对象。
@@ -10107,7 +10119,8 @@ export class TaskService {
   }
 
   private adoptRequirementStory(task: TaskState): void {
-    if (task.summary.requirement_graph?.source_document !== "story.md") return;
+    if (task.summary.requirement_graph?.source_document !== "story.md"
+        || (isMainTaskDelivery(task.summary) && !this.isRequirementAnalysis(task))) return;
     const plan = currentRequirementPlan(task.summary, task.cwd);
     if (!plan?.content) return;
     if (!readStoryState(task.summary.workspace).current
@@ -10135,6 +10148,7 @@ export class TaskService {
         this.options.log?.(`全局 Story ${revision} 向 ${child.summary.id} 同步失败，下次启动重试: ${cause}`);
       }
     }
+    if (isMainTaskDelivery(parent.summary)) return;
     const id = `story-${revision}`;
     const alreadyRecorded = parent.summary.cross_repository_updates?.some((item) => item.id === id);
     const message = `全局 Story 已发布版本 ${revision}。请读取 ${AGENT_DELIVERY_CHAIN}，`
@@ -10246,6 +10260,7 @@ export class TaskService {
   ): Promise<TaskSummary> {
     const task = this.tasks.get(id);
     if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    if (isMainTaskDelivery(task.summary) && !this.isRequirementAnalysis(task)) return { ...task.summary };
     if (!this.isRequirementAnalysis(task)) {
       throw new NotFoundError("该任务不是多仓需求分析单,没有需求图可确认");
     }
@@ -10256,7 +10271,7 @@ export class TaskService {
       skillSelection?.repository_tickets);
     const alreadyGenerated = task.summary.requirement_graph?.repositories
       .every((repository) => repository.task_id) ?? false;
-    if (alreadyGenerated && task.summary.status !== "waiting_for_human") {
+    if (alreadyGenerated && !isMainTaskDelivery(task.summary) && task.summary.status !== "waiting_for_human") {
       return { ...task.summary };
     }
     if (task.summary.status === "waiting_for_human" && task.summary.waiting) {
@@ -10270,7 +10285,8 @@ export class TaskService {
       }
       const expectedConfirmation = task.summary.requirement_graph
           ?.repositories.length
-        ? REQUIREMENT_GRAPH_CONFIRM : REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM;
+        ? task.summary.requirement_graph.repositories.length === 1 ? REQUIREMENT_GRAPH_CONTINUE : REQUIREMENT_GRAPH_CONFIRM
+        : REQUIREMENT_GRAPH_NO_CHANGE_CONFIRM;
       const decision = questions[0]?.options?.find((option) =>
         confirmsRequirementGraph(option)) ?? expectedConfirmation;
       await this.decide(id, {
@@ -10282,34 +10298,35 @@ export class TaskService {
         repository_tickets: skillSelection?.repository_tickets,
         // 收尾令随决定送达:确认后父会话再举卡会被系统代答赶下台
         // (autoAnswerFor 的分析单兜底),但第一选择是它自己别举。
-        notes: "模块开发任务由平台自动生成与调度,不归本会话跟进;"
+        notes: "方案确认后由平台接续开发：一个单元在本任务继续，多个单元生成子任务；"
           + "请写一段简短收尾说明后立即结束,不要再提问。",
       });
       // decide 会在标准选项命中时生成任务；这里再走一次幂等兜底，
       // 让模型即使把选项写成“方案通过”也不会丢掉拆单动作。
-      this.createRepositoryDeliveries(task);
+      if (this.isRequirementAnalysis(task)) this.createRepositoryDeliveries(task);
       return { ...task.summary };
     }
-    if (!["completed", "failed", "canceled"].includes(task.summary.status)) {
+    if (task.summary.status === "canceled") throw new TaskControlError("任务已取消，不能继续确认方案");
+    if (!["completed", "failed"].includes(task.summary.status)) {
       throw new NotFoundError("需求分析尚未进入人工检视，暂不能确认方案");
     }
-    if (skillSelection?.repository_assignees) {
+    if (skillSelection?.repository_assignees && !alreadyGenerated) {
       this.assignRequirementRepositories(id, skillSelection.repository_assignees,
         skillSelection.repository_tickets);
     }
     this.createRepositoryDeliveries(task);
-    this.bypass(undefined, "任务泵", this.pump());
+    await this.finishRequirementAnalysis(task);
     return { ...task.summary };
   }
 
-  /** 父分析会话确认后硬收口。有交付单元时主任务进入 coordinating；
-   * 全部候选仓都无需修改时没有子任务可等，分析结论本身就是任务终态。 */
+  /** 确认后结束分析会话：一个单元在本任务开发，多个单元汇总子任务，零单元完成。 */
   private async finishRequirementAnalysis(task: TaskState): Promise<void> {
-    task.controlEpoch += 1;
+    const epoch = ++task.controlEpoch;
+    const inMain = isMainTaskDelivery(task.summary);
     task.pauseRequested = false;
     this.removeFromQueue(task.summary.id);
     const hasDeliveries = (task.summary.requirement_graph?.repositories.length ?? 0) > 0;
-    task.summary.status = hasDeliveries ? "coordinating" : "completed";
+    task.summary.status = inMain ? "waiting_for_human" : hasDeliveries ? "coordinating" : "completed";
     if (hasDeliveries) delete task.summary.completed_at;
     else task.summary.completed_at = new Date().toISOString();
     task.mission = undefined;
@@ -10330,12 +10347,14 @@ export class TaskService {
       task.container = undefined;
     }
     if (task.prepushAbort === prepushAbort) task.prepushAbort = undefined;
+    if (task.controlEpoch !== epoch) return;
     const failures = cleanup.flatMap((result, index) =>
       result.status === "rejected"
         ? [`${index === 0 ? "会话中止" : "容器回收"}: ${String(result.reason)}`]
         : []);
     if (failures.length) {
-      task.summary.detail = (hasDeliveries
+      if (inMain) task.summary.status = "failed";
+      task.summary.detail = (inMain ? "分析资源尚未释放，未启动开发，请重试方案确认：" : hasDeliveries
         ? "子任务已开始推进，但分析资源未能确认释放："
         : "分析结论已确认且无需修改代码，但分析资源未能确认释放：")
         + failures.join("；") + "。服务重启会按 ownership 再清扫";
@@ -10343,7 +10362,16 @@ export class TaskService {
       this.options.log?.(`任务 ${task.summary.id} 分析收口清理不完整: `
         + failures.join(" | "));
     }
-    this.reconcileRequirementParent(task);
+    if (inMain) {
+      if (failures.length) return;
+      const previous = { summary: task.summary, cwd: task.cwd, mission: task.mission,
+        resume: task.resume, progressCache: task.progressCache, pendingResume: task.pendingResume };
+      try {
+        prepareMainTaskDelivery(task, this.options.dataDir);
+        this.persist(task, true);
+      } catch (cause) { Object.assign(task, previous); throw cause; }
+      if (!this.queue.includes(task.summary.id)) this.queue.push(task.summary.id);
+    } else this.reconcileRequirementParent(task);
     this.bypass(undefined, "任务泵", this.pump());
   }
 
@@ -10704,6 +10732,13 @@ export class TaskService {
       return;
     }
     this.markResolvedDecisionAnnotations(task, waiting);
+    if (this.isRequirementAnalysis(task) && [...Object.values(waiting.answers ?? {}), waiting.decision]
+        .some(answer => confirmsRequirementGraph(answer ?? ""))) {
+      this.createRepositoryDeliveries(task);
+      if (task.driver) this.bypass(task, "分析确认恢复", task.driver.resumeWithDecision(waiting).then(() => undefined));
+      await this.finishRequirementAnalysis(task);
+      return;
+    }
     if (waiting.step === CLOUD_REQUIREMENT_ANALYSIS_CONFIRM_STEP) {
       this.finishRequirementAnalysisEntryDecision(task, waiting);
       return;
@@ -11143,7 +11178,7 @@ export class TaskService {
         // "确认后又举卡让人检视子任务"的窗口(预答兜底退居末防线)。
         // 会话直接终止；主任务转为 coordinating 汇总子任务，不在这里
         // 冒充整个跨仓需求已经完成。
-        task.summary.waiting = undefined;
+        if (!isMainTaskDelivery(task.summary)) task.summary.waiting = undefined;
         // 决定必须先回注再掐会话:会话此刻停在 AskUserQuestion 工具里
         // 等这份决定,不解开它 abort 会一直等回合收束(实测挂死——
         // 等待必须带出路,不许无限等的红线在自己身上也成立)。回注是
@@ -11156,9 +11191,14 @@ export class TaskService {
         return { ...task.summary };
       } catch (cause) {
         task.summary.detail =
-          `确认已收到,但生成模块任务失败:${String(cause)}。`
+          `确认已收到，但后续交付未能启动：${String(cause)}。`
           + "可在需求图面板重试确认";
         this.options.log?.(`任务 ${id} 生成模块交付失败: ${String(cause)}`);
+        if (isMainTaskDelivery(task.summary)) {
+          task.summary.status = "failed";
+          this.persist(task);
+          return { ...task.summary };
+        }
       }
     }
     // push 前确认卡:没有会话停在 AskUserQuestion 里等这份决定(卡由
@@ -13743,7 +13783,7 @@ export class TaskService {
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
           cwd, task.summary.requirement, task.summary.requirement_document,
-          Boolean(task.summary.parent_task_id));
+          Boolean(task.summary.parent_task_id) || isMainTaskDelivery(task.summary));
         this.hardenAgentGitBoundary(agentDir, cwd);
         let deliveryUnitReady = false;
         try {
@@ -13959,8 +13999,9 @@ export class TaskService {
           requirementPath,
         );
         const inheritedRequirement = deliveryUnitReady ? [
+          mainTaskDeliveryContext(task.summary, cwd),
           "【当前交付单元 · 必读顺序】先完整读取 .mae-flow-unit.md。"
-            + "它是本子任务的主任务书和范围边界；然后读取"
+            + "它是当前任务的任务书和范围边界；然后读取"
             + " .mae-flow-chain.md 理解上下游，最后按需查阅"
             + " .mae-flow-requirement.md 核对用户原始需求。"
             + "后两份是背景与约束参考，不得据此擅自扩大当前单元范围。"
@@ -19780,9 +19821,9 @@ export class TaskService {
       // 才开始,别让模型以为此刻该跑 mae-flow 命令。
       `你正在执行云端平台的需求分析(交付前置阶段):把一个需求的职责`
         + `与依赖理清楚,拆成可分工的**交付单元**(一个单元=一个仓里的`
-        + `一个功能模块（含自身实现与测试），或必要的公共准备单元),供人检视确认。注意:此阶段**不在`
+        + `一个功能模块（含自身实现与测试），或必要的公共准备单元),供人检视确认；一个单元即可完成时不拆子任务。注意:此阶段**不在`
         + ` Mae-Flow 内核流程里**,不要执行任何 mae-flow 命令;各单元的`
-        + `正式交付流程会在方案确认后的独立任务中由内核主导。此阶段`
+        + `正式交付流程由内核主导：单个单元在原任务继续，多个单元才分别建子任务。此阶段`
         + `只读分析,禁止修改业务代码、提交或启动交付;工作区已在 git`
         + ` 配置层禁用推送,push 必然失败。`,
       `仓库清单（仓库名 | 原始地址 | 本地只读分析路径）:\n${repositories}`,
@@ -19801,7 +19842,7 @@ export class TaskService {
             ? `\n它建议的切法:\n${task.summary.split_escalation.suggested_units
                 .map((unit, index) => `${index + 1}. ${unit}`).join("\n")}`
             : ""
-        }\n以此为起点,但仍按下面的步骤走完澄清与划分方向卡;改动面要自己`
+        }\n以此为起点，仍须核实是否需要拆分；改动面要自己`
         + `重新核实,切法可以推翻。`,
       ] : []),
       materializeAnalysisDecisions(task.summary.workspace, artifactDir),
@@ -19829,8 +19870,8 @@ export class TaskService {
         + "分别写出『需要修改』或『无需修改』及代码证据；候选仓只是排查"
         + "范围，绝不能因为被选中就默认生成任务。无需修改的仓保留结论，"
         + "但不得进入交付单元。",
-      "第三步:划分方向卡(固定动作,不可跳过)。把改动面盘点用"
-        + " AskUserQuestion 摆给用户,问「打算怎么拆分,有什么讲究?」,"
+      "第三步:判断是否需要拆分。一个完整交付单元即可完成时，直接完善方案并进入方案确认，不必另问拆分方向。确需多个独立交付单元时，把改动面盘点用"
+        + " AskUserQuestion 摆给用户，讨论职责边界和真实依赖，"
         + "并给出你建议的切法;用户可以给方向、指定某块归谁,也可以答"
         + "「你看着切」。协作者可能在这张卡上批注插话,他们的意见随决定"
         + "一起到达,必须逐条消化。",
@@ -19866,12 +19907,12 @@ export class TaskService {
         + "dependencies 只写确实必须等待前置交付的边；只有契约依赖、可以基于替身先做的关系写入 Story，"
         + "不要全部转换成合入等待。没有硬依赖写空数组，不允许执行依赖循环；同仓也只按真实依赖安排执行；先最小公共基础、再独立模块并行，不要仅因同仓添加依赖。边界不清时先解决不确定性或说明具体等待原因。"
         + "平台沿用现有版本和摘要一致性检查；送审后修改须换修订并同步两份产物，不新增 hook 或测试用例门禁。",
-      "方案写完后必须调用 AskUserQuestion。存在模块交付单元时，请用户选择"
+      "方案写完后必须调用 AskUserQuestion。只有一个交付单元时，请用户选择「需要修改」或「确认并继续开发」；多个单元时请选择"
         + "「需要修改」或「确认并生成任务」；如果所有候选仓都无需修改，"
         + "请选择「需要修改」或「确认分析结论」。用户选择需要修改时，"
         + "结合随决定提交的批注"
         + "继续修订同一份方案，再次发起检视；确认前不得收尾。"
-        + "用户确认后：模块开发任务由平台自动生成与调度（无改动时直接结束），"
+        + "用户确认后：平台会结束本次分析会话；一个单元由原任务接续开发，多个单元才生成子任务，无改动时直接结束。后续执行"
         + "**不归你跟进**"
         + "——写一段简短收尾说明后立即结束，禁止再调用 AskUserQuestion、"
         + "禁止替用户检视或跟进任何子任务。",
@@ -20367,12 +20408,12 @@ export class TaskService {
           if (task.driver && (task.nudgeCount ?? 0) < 5) {
             task.nudgeCount = (task.nudgeCount ?? 0) + 1;
             this.options.log?.(
-              `任务 ${task.summary.id} 催办继续需求分析（尚未完成确认与拆单）`);
+              `任务 ${task.summary.id} 催办继续需求分析（尚未完成方案确认）`);
             await this.settle(task, task.driver.continueWith(
-              "需求分析尚未完成方案确认与拆单。先核对已有人工答复，不要重复追问已回答的问题。请继续当前分析，"
+              "需求分析尚未完成方案确认。先核对已有人工答复，不要重复追问已回答的问题。请继续当前分析，"
               + "不要执行任何 mae-flow/init/current/done 命令。若全局 Story（旧现场为 CHAIN）"
               + "和 requirement-graph.json 已经完整且同步，立即按开场要求举起"
-              + "拆分方案确认卡；否则先补完分析产物再举卡。"), epoch);
+              + "方案确认卡（一个单元选“确认并继续开发”，多个单元选“确认并生成任务”，无需修改选“确认分析结论”）；否则先补完分析产物再举卡。"), epoch);
             break;
           }
           task.lastReply = task.driver?.finalReply();
@@ -20382,7 +20423,7 @@ export class TaskService {
           const cleanupFailure = await this.stopTaskContainer(
             task, "需求分析提前结束后");
           task.summary.status = "failed";
-          task.summary.detail = "Agent 连续结束需求分析但方案确认与拆单尚未完成，"
+          task.summary.detail = "Agent 连续结束需求分析但方案确认尚未完成，"
             + "已保留分析产物，请重跑后从现有方案继续"
             + (cleanupFailure ? `；${cleanupFailure}` : "");
           this.persist(task);

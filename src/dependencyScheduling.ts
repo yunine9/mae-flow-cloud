@@ -33,7 +33,7 @@ function worker(summary: TaskSummary): boolean {
   return !["canceled", "coordinating"].includes(summary.status)
     && !(summary.status === "failed" && !summary.delivery?.mr_url && !summary.delivery?.git_push) && !summary.requirement_analysis_requested
     && summary.requirement_graph?.stage !== "analysis"
-    && !summary.requirement_graph?.repositories.some(node => !!node.task_id);
+    && !summary.requirement_graph?.repositories.some(node => !!node.task_id && node.task_id !== summary.id);
 }
 function repo(summary: TaskSummary): string {
   return repositoryIdentity(summary.repo_url || summary.repositories?.[0] || "");

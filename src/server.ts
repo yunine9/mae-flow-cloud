@@ -79,6 +79,7 @@ import { isIssueInterventionTier } from "./auth.ts";
 import { storyArchitecture } from "./storyArchitecture.ts";
 import { currentStoryFile, readCurrentStoryArchitecture } from "./overallStoryStore.ts";
 import { readArchitectureStory } from "./storyArchitectureSource.ts";
+import { isMainTaskDelivery } from "./requirementDecisionContract.ts";
 import { renderArchify, ARCHIFY_COMMIT } from "./archifyRender.ts";
 import {
   closeSync,
@@ -3096,7 +3097,7 @@ export function createTaskServer(
             pipelineRoot: join(target.workspace, "pipeline"),
             taskMaterialRoot: target.workspace,
             publishedStory: !!currentStoryFile(target.workspace),
-            analysisStory: target.requirement_graph && !target.parent_task_id
+            analysisStory: target.requirement_graph && !target.parent_task_id && !isMainTaskDelivery(target)
               ? `${target.ticket ?? target.id}/story.md` : undefined,
           };
           if (parts.length === 3) {
