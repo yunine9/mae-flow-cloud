@@ -6,7 +6,13 @@ import { spawnSync } from "node:child_process";
 
 export class ConfigurationInputError extends Error {}
 
-export interface ProductVersion { id: string; version: string; branch: string }
+export interface ProductVersion {
+  id: string; version: string; branch: string;
+  /** 参与自动接单(ADR-0061):true=该版本组名下状态合适的新 DTS 单
+   *  会被自动接单扫描发起;缺席=false。版本组粒度——勾一个组,组内
+   *  全部 B 版命中;未标记的老版本被自动接单静默忽略。 */
+  auto_claim?: boolean;
+}
 const file = (dataDir: string) => join(dataDir, "product-versions.json");
 export function listProductVersions(dataDir: string): ProductVersion[] {
   if (!existsSync(file(dataDir))) return [];
@@ -29,7 +35,15 @@ export function saveProductVersion(dataDir: string, input: Partial<ProductVersio
   if (rows.some(row => row.id !== input.id && row.version.toLowerCase() === version.toLowerCase())) {
     throw new ConfigurationInputError("该版本已配置，请编辑现有映射");
   }
-  const row = { id: input.id || randomUUID(), version, branch };
+  // 参与自动接单标记(ADR-0061):显式给值即按值,缺席沿用已存值——
+  // 编辑版本名/分支的旧客户端不带这个字段,不该悄悄把名单勾掉。
+  const existing = input.id ? rows.find(row => row.id === input.id) : undefined;
+  const autoClaim = input.auto_claim === undefined
+    ? existing?.auto_claim === true : input.auto_claim === true;
+  const row: ProductVersion = {
+    id: input.id || randomUUID(), version, branch,
+    ...(autoClaim ? { auto_claim: true } : {}),
+  };
   const next = input.id ? rows.map(old => old.id === input.id ? row : old) : [...rows, row];
   write(dataDir, next);
   return row;
