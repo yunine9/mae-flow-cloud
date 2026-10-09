@@ -1,3 +1,4 @@
+import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { componentArchiveParts, componentArchivePath } from "./componentKnowledgeArchiveFormat.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
@@ -148,12 +149,16 @@ export class DomainKnowledgeExtraction {
   private publishing = new Map<string, symbol>();
   private archiving = new Map<string, Promise<void>>();
   private stopped = false;
+  private capacity: KnowledgeTaskCapacity;
   constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string | SkillWorkResult>, private options: {
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void, signal?: AbortSignal) => Promise<DomainPublication>;
     onIndexed?: () => void;
     shutdown?: () => Promise<void>;
     sourceCleanup?: KnowledgeSourceCleanup;
+    capacity?: KnowledgeTaskCapacity;
   } = {}) {
+    this.capacity = options.capacity ?? new KnowledgeTaskCapacity();
+    this.capacity.register(() => this.running.size, () => this.pump());
     const root = join(dataDir, "domain-extraction");
     if (existsSync(root)) for (const name of readdirSync(root).filter(n => /^dkx-[a-f0-9-]{36}$/.test(n))) {
       const path = join(root, name, "job.json");
@@ -536,7 +541,6 @@ export class DomainKnowledgeExtraction {
       && existing.operator === operator && !["failed", "cancelled"].includes(existing.status)
       && (existing.turns[0]?.mode === "extract" || existing.source_cleanup && !existing.source_cleanup.started) && existing.key === job.key);
     if (previous) return this.get(previous.id);
-    if ([...this.jobs.values()].filter(job => ["queued", "running"].includes(job.status)).length >= 50) throw new Error("当前研究队列已满，请稍后创建");
     this.jobs.set(job.id, job); this.persist(job);
     if (job.source_cleanup) return this.get(job.id);
     return this.run(job.id, { mode: "extract", message: scope }, operator);
@@ -679,7 +683,7 @@ export class DomainKnowledgeExtraction {
   private pump() {
     if (this.stopped) return;
     for (const job of this.jobs.values()) {
-      if (this.running.size >= 2) return;
+      if (!this.capacity.canStart()) return;
       if (job.deleted_at || job.status !== "queued" || this.running.has(job.id)) continue;
       const turn = job.turns.find(t => t.status === "queued")!;
       const controller = new AbortController(), base = structuredClone(job.documents);
@@ -752,7 +756,7 @@ export class DomainKnowledgeExtraction {
       }).finally(() => {
         // 强制释放后可能已有新一轮，旧 finally 不能释放新一轮的槽位或再落旧盘。
         if (this.running.get(job.id) !== entry) return;
-        clearTimeout(entry.stopTimer); this.running.delete(job.id); entry.release(); this.pump();
+        clearTimeout(entry.stopTimer); this.running.delete(job.id); entry.release(); this.capacity.wake();
       });
       entry.work = work; this.running.set(job.id, entry);
     }
@@ -839,7 +843,7 @@ export class DomainKnowledgeExtraction {
             this.readWarnings.push(`请检查状态记录保存失败：domain-extraction/${job.id}/job.json；${reason}；并发槽位已释放`);
           }
         }
-      } finally { this.pump(); }
+      } finally { this.capacity.wake(); }
     }, STOP_BUDGET_MS);
     entry.stopTimer.unref?.();
   }

@@ -1,3 +1,4 @@
+import { KnowledgeTaskCapacity } from "../src/knowledgeTaskCapacity.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -6,6 +7,11 @@ import { join } from "node:path";
 import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { saveKnowledgeReviewNote, type KnowledgeReviewSources } from "../src/knowledgeReviewNotes.ts";
+
+// 用两个名额构造拥塞，停止预算测试不依赖部署默认容量。
+function withTwoSlots(...args: ConstructorParameters<typeof ComponentResearch>) {
+  return new ComponentResearch(args[0], args[1], args[2], args[3], new KnowledgeTaskCapacity(2));
+}
 
 const timeoutReason = "停止超时：执行体 60 秒内未退出，已强制释放";
 const config = { name: "文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["cpp"] };
@@ -30,7 +36,7 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-budget-"));
   const ids = componentIds(dataDir, 4);
   const started: ResearchExecution[] = [], finish: Array<() => void> = [];
-  const research = new ComponentResearch(dataDir, async input => {
+  const research = withTwoSlots(dataDir, async input => {
     started.push(input);
     writeDocument(input);
     await new Promise<void>(resolve => finish.push(resolve));
@@ -86,7 +92,7 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-shutdown-budget-"));
   saveComponentRepository(dataDir, config, "alice");
   let release = () => {}, returned = false;
-  const research = new ComponentResearch(dataDir, async () => {
+  const research = withTwoSlots(dataDir, async () => {
     await new Promise<void>(resolve => { release = resolve; });
     return "关停后的迟到草稿";
   });
@@ -115,7 +121,7 @@ test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止�
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-responsive-"));
   saveComponentRepository(dataDir, config, "alice");
-  const research = new ComponentResearch(dataDir, async input => {
+  const research = withTwoSlots(dataDir, async input => {
     await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true }));
     return "已响应停止";
   });
@@ -137,7 +143,7 @@ for (const action of ["edit", "restore"] as const) {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-running-edit-"));
     saveComponentRepository(dataDir, config, "alice");
     let release = () => {};
-    const research = new ComponentResearch(dataDir, async input => {
+    const research = withTwoSlots(dataDir, async input => {
       if (!input.review) { writeDocument(input); return "初稿已保存"; }
       await new Promise<void>(resolve => { release = resolve; });
       return "讨论结束";
@@ -177,7 +183,7 @@ for (const action of ["stop", "shutdown"] as const) {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-initial-stop-eio-"));
     const ids = componentIds(dataDir, 4);
     const started: ResearchExecution[] = [], releases: Array<() => void> = [];
-    const research = new ComponentResearch(dataDir, async input => {
+    const research = withTwoSlots(dataDir, async input => {
       started.push(input);
       await new Promise<void>(resolve => releases.push(resolve));
       input.update({ stage: "迟到状态" }); input.evidence({ tool: "迟到证据" });
@@ -231,7 +237,7 @@ for (const action of ["stop", "shutdown"] as const) {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-timeout-eio-"));
     const ids = componentIds(dataDir, 4);
     const started: string[] = [], releases: Array<() => void> = [];
-    const research = new ComponentResearch(dataDir, async input => {
+    const research = withTwoSlots(dataDir, async input => {
       started.push(input.record.id);
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";

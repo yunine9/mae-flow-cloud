@@ -1,3 +1,4 @@
+import { KnowledgeTaskCapacity } from "../src/knowledgeTaskCapacity.ts";
 // repros/r1 实测：停止后的执行体可能忽略 abort，状态不能代替并发槽位释放。
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -7,6 +8,11 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { DomainKnowledgeExtraction, type DomainExecution } from "../src/domainKnowledgeExtraction.ts";
 
+// 用两个名额构造拥塞，停止预算测试不依赖部署默认容量。
+function withTwoSlots(dir: string, execute: ConstructorParameters<typeof DomainKnowledgeExtraction>[1]) {
+  return new DomainKnowledgeExtraction(dir, execute, { capacity: new KnowledgeTaskCapacity(2) });
+}
+
 const config = (n: number) => ({ title: `订单${n}`, scope: "订单规则", issue_no: "REQ-1", repositories: [{ repository: `https://example.test/orders${n}.git`, branch: "main" }],
   knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });
 async function flush() { for (let i = 0; i < 4; i++) await setImmediate(); }
@@ -15,7 +21,7 @@ test("生产线验收2：领域执行体忽略abort，60秒释放槽位、记fai
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dir = mkdtempSync(join(tmpdir(), "knowledge-stop-domain-"));
   const executions: Array<{ input: DomainExecution; release: (reply: string) => void }> = [];
-  const service = new DomainKnowledgeExtraction(dir, input => new Promise<string>(release => executions.push({ input, release })));
+  const service = withTwoSlots(dir, input => new Promise<string>(release => executions.push({ input, release })));
   try {
     const a = service.create(config(1), "alice"), b = service.create(config(2), "bob");
     await flush();
@@ -51,7 +57,7 @@ test("生产线验收2：领域shutdown对忽略abort的执行体也只有60秒�
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dir = mkdtempSync(join(tmpdir(), "knowledge-shutdown-domain-"));
   let release!: (reply: string) => void;
-  const service = new DomainKnowledgeExtraction(dir, () => new Promise<string>(r => { release = r; }));
+  const service = withTwoSlots(dir, () => new Promise<string>(r => { release = r; }));
   try {
     const job = service.create(config(1), "alice"); await flush();
     let closed = false;
@@ -75,7 +81,7 @@ for (const action of ["stop", "shutdown"] as const) {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const dir = mkdtempSync(join(tmpdir(), "production-domain-timeout-eio-"));
     const started: string[] = [], releases: Array<() => void> = [];
-    const service = new DomainKnowledgeExtraction(dir, async input => {
+    const service = withTwoSlots(dir, async input => {
       started.push(input.job.id);
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";

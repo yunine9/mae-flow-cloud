@@ -1,3 +1,4 @@
+import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
@@ -253,7 +254,9 @@ export class ComponentResearch {
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
     private archiveFor: (id: string) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
+    private capacity = new KnowledgeTaskCapacity(),
   ) {
+    this.capacity.register(() => this.running.size, () => this.pump());
     const root = join(dir, "component-research");
     if (existsSync(root))
       for (const name of readdirSync(root)) {
@@ -347,7 +350,6 @@ export class ComponentResearch {
     const key = JSON.stringify(["component", language, componentKey(component)]);
     const previous = [...this.records.values()].reverse().find(r => r.key === key && !r.deleted_at && !r.challenge);
     if (previous) return this.get(previous.id);
-    if ([...this.records.values()].filter(r => r.status === "queued").length >= 50) throw new Error("待萃取队列已满，请稍后再试");
     const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component, components: [component], material_ids: [],
       language, topic: component.name, operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [], stage: "等待组件研究", evidence: [] };
@@ -362,7 +364,6 @@ export class ComponentResearch {
     if (existing) return this.get(existing.id);
     const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
     if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
-    if ([...this.records.values()].filter(r => r.status === "queued").length >= 50) throw new Error("研究队列已满，请稍后再试");
     const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, component: components[0], components,
       language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
       created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
@@ -382,7 +383,7 @@ export class ComponentResearch {
   private pump() {
     if (this.stopped) return;
     for (const record of this.records.values()) {
-      if (this.running.size >= 2) break;
+      if (!this.capacity.canStart()) break;
       if (record.deleted_at || record.status !== "queued" || this.running.has(record.id)) continue;
       const controller = new AbortController();
       const review = record.review_turns?.find(turn => turn.status === "queued");
@@ -499,7 +500,7 @@ export class ComponentResearch {
           clearTimeout(entry.stopTimer);
           this.running.delete(record.id);
           entry.release();
-          this.pump();
+          this.capacity.wake();
         });
       entry.work = work;
       this.running.set(record.id, entry);
@@ -528,7 +529,7 @@ export class ComponentResearch {
           this.running.delete(record.id);
           entry.release();
         }
-        this.pump();
+        this.capacity.wake();
       }
     }, stopBudgetMs);
   }

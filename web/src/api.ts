@@ -1917,12 +1917,13 @@ export async function getSkillDocument(
 export interface SkillExtractionJob {
   production?: KnowledgeProductionView;
   id: string;
-  status: "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed";
   repo: string;
   intent: string;
   path_hint?: string;
   operator: string;
-  started_at: string;
+  created_at?: string;
+  started_at?: string;
   finished_at?: string;
   draft?: string;
   notes?: string;

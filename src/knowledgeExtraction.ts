@@ -18,7 +18,7 @@ import { fileURLToPath } from "node:url";
 
 export const EXTRACTION_TIMEOUT_MS = 10 * 60_000;
 
-export type ExtractionJobStatus = "running" | "done" | "failed";
+export type ExtractionJobStatus = "queued" | "running" | "done" | "failed";
 
 export interface ExtractionJobRecord {
   id: string;
@@ -27,7 +27,8 @@ export interface ExtractionJobRecord {
   intent: string;
   path_hint?: string;
   operator: string;
-  started_at: string;
+  created_at?: string;
+  started_at?: string;
   finished_at?: string;
   /** 成功时的草稿与说明;失败时 error 是给人看的分类原因。 */
   draft?: string;

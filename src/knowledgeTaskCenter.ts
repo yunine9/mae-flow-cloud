@@ -42,7 +42,7 @@ export function componentKnowledgeTask(record: ResearchRecord, archive?: DomainK
 }
 export function skillExtractionTask(record: ExtractionJobRecord): KnowledgeTaskRow {
   return { id: record.id, kind: "skill-extraction", title: record.intent, scope: record.repo, operator: record.operator,
-    started_at: validTime(record.started_at), finished_at: validTime(record.finished_at), status: record.status,
+    created_at: validTime(record.created_at), started_at: validTime(record.started_at), finished_at: validTime(record.finished_at), status: record.status,
     ...projection({ kind: "skill-extraction", record }), error: record.error };
 }
 export function skillSubmissionTask(record: SkillSubmissionRecord): KnowledgeTaskRow {

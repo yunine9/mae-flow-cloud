@@ -129,10 +129,10 @@ test("B5验收1/生产线验收10/14：一个组件一次研究并复用；并�
     assert.notEqual(java.id, first.id);
     const third = research.start({ component_id: other.id, language: "cpp" }, "alice");
     assert.deepEqual(third.components?.map(c => c.id), [other.id]);
-    assert.equal(third.status, "queued");
+    assert.equal(third.status, "running");
     release();
     await until(() => research.list().every((r) => r.status === "done"));
-    assert.equal(max, 2);
+    assert.equal(max, 3, "三个独立组件可同时研究，不再受旧并发 2 限制");
     assert.equal(
       collectSearchableKnowledge(dir, {
         repo: "",

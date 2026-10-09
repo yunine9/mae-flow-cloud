@@ -321,7 +321,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   ]).finally(() => setLoading(false));
   useEffect(() => { void refresh(); }, []);
 
-  const extractJobId = extractJob?.status === "running"
+  const extractJobId = extractJob && ["queued", "running"].includes(extractJob.status)
     ? extractJob.id : undefined;
   useEffect(() => {
     if (!extractJobId) return;
@@ -1234,10 +1234,10 @@ function UploadPane({ busy, modules, classification, onClassification,
               onChange={(event) => onHint(event.target.value)} /></label>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button disabled={extractBusy || job?.status === "running"
+          <Button disabled={extractBusy || !!job?.production?.working
               || !repo.trim() || !intent.trim()}
             onClick={onStart}>
-            {job?.status === "running" ? "提取中…" : "开始提取"}</Button>
+            {job?.production?.working ? job.production.status_label : "开始提取"}</Button>
           {job?.status === "running" && <small className="text-sm/relaxed
             text-faint">
             只读会话正在读仓起草;完成后草稿出现在下方,可离开本页稍后再来。</small>}

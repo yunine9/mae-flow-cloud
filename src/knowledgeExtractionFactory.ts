@@ -1,3 +1,4 @@
+import type { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ComponentResearch } from "./componentResearch.ts";
@@ -11,18 +12,19 @@ import { knowledgeGitFailure } from "./knowledgeProductionErrors.ts";
 
 export type { ComponentResearch, DomainKnowledgeExtraction };
 
-export function createDomainKnowledgeExtraction(options: DomainAgentOptions & ConstructorParameters<typeof KnowledgeMrPublisher>[0] & { onIndexed: () => void }) {
+export function createDomainKnowledgeExtraction(options: DomainAgentOptions & ConstructorParameters<typeof KnowledgeMrPublisher>[0] & { onIndexed: () => void; capacity?: KnowledgeTaskCapacity }) {
   const publisher = new KnowledgeMrPublisher(options);
   return new DomainKnowledgeExtraction(options.dataDir, input => runDomainKnowledge(input, options), {
     publish: (...args) => publisher.publish(...args),
     sourceCleanup: new KnowledgeSourceCleanup(publisher),
     onIndexed: options.onIndexed,
+    capacity: options.capacity,
     shutdown: () => publisher.shutdown(),
   });
 }
 
-export function createComponentKnowledgeExtraction(options: Parameters<typeof runComponentResearch>[1] & { dataDir: string; onIndexed: () => void; archiveFor?: ConstructorParameters<typeof ComponentResearch>[3] }) {
-  return new ComponentResearch(options.dataDir, input => runComponentResearch(input, options), options.onIndexed, options.archiveFor);
+export function createComponentKnowledgeExtraction(options: Parameters<typeof runComponentResearch>[1] & { dataDir: string; onIndexed: () => void; capacity?: KnowledgeTaskCapacity; archiveFor?: ConstructorParameters<typeof ComponentResearch>[3] }) {
+  return new ComponentResearch(options.dataDir, input => runComponentResearch(input, options), options.onIndexed, options.archiveFor, options.capacity);
 }
 
 async function knowledgeSourceCommand(args: string[], options: Omit<Parameters<typeof runKnowledgeCommand>[2], "timeoutMs" | "maxBytes">) {

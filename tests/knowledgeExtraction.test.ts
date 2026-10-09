@@ -4,7 +4,7 @@
  * - 草稿必须显式带 ===SKILL===/===NOTES=== 标记,模型闲聊不许混进草稿;
  * - 克隆是真只读(git 配置层 pushurl 毒化),不是提示词嘱咐;
  * - 草稿过密钥扫描,命中整份作废;
- * - 同一时刻只跑一单;克隆失败/重启中断都如实分类报错,不装完成。
+ * - 与其他知识任务共用 50 个执行名额;克隆失败/重启中断都如实分类报错,不装完成。
  */
 
 import { test } from "node:test";
@@ -109,10 +109,6 @@ test("端到端:剧本会话产草稿;克隆真只读;job 留档", async () => {
       operator: "alice",
     });
     assert.equal(job.status, "running");
-    // 单飞闸:第一单还在跑,第二单如实拒绝。
-    assert.throws(() => service.startSkillExtraction({
-      repo: "/tmp/whatever", intent: "x", operator: "bob",
-    }), TaskControlError);
     const done = await until(() => {
       const current = service.skillExtractionJob(job.id);
       return current?.status !== "running" ? current : undefined;
@@ -131,9 +127,6 @@ test("端到端:剧本会话产草稿;克隆真只读;job 留档", async () => {
     // 留档 0600 且可回读(重启后回答"后来怎么样了"靠它)。
     const jobFile = join(root, "job.json");
     assert.equal(statSync(jobFile).mode & 0o777, 0o600);
-    // 收口后单飞闸放开,能再跑下一单。
-    await until(() => (service as any).extractionActive === false
-      ? true : undefined, "单飞闸复位");
   } finally {
     await model.stop();
   }

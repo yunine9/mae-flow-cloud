@@ -1,3 +1,4 @@
+import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
 import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
@@ -1974,6 +1975,7 @@ export class TaskService {
   });
 
   constructor(readonly options: TaskServiceOptions) {
+    this.knowledgeTaskCapacity.register(() => this.extractionRunning.size, () => this.pumpSkillExtraction());
     this.reviews = new ReviewStore(join(options.dataDir, "reviews.jsonl"),
       (id) => this.tasks.get(id)?.summary.status === "canceled");
     if (options.memory) {
@@ -2681,13 +2683,14 @@ export class TaskService {
   // ---- 定向知识提取(知识库侧旁路,不建任务、不碰交付链) ----
 
   private extractionJobs = new Map<string, ExtractionJobRecord>();
-  private extractionActive = false;
+  private knowledgeTaskCapacity = new KnowledgeTaskCapacity();
+  private extractionRunning = new Set<string>();
 
   private extractionRoot(id: string): string {
     return join(this.options.dataDir, "knowledge-extract", id);
   }
 
-  /** 发起一次定向提取:同一时刻只跑一单(控成本),会话带硬预算。 */
+  /** 与领域、组件萃取共用执行名额，满额后排队。 */
   startSkillExtraction(input: {
     repo: string;
     intent: string;
@@ -2706,9 +2709,7 @@ export class TaskService {
     if (pathHint && (pathHint.startsWith("/") || pathHint.includes(".."))) {
       throw new TaskControlError("路径提示只接受仓内相对路径");
     }
-    if (this.extractionActive) {
-      throw new TaskControlError("已有一次提取在进行中,请稍候再试");
-    }
+    if (this.shuttingDown) throw new TaskControlError("服务正在关闭，请稍后再试");
     if (!this.activeModelChoice()) {
       throw new TaskControlError("模型网关未配置,无法提取(管理页 → 模型网关)");
     }
@@ -2716,21 +2717,33 @@ export class TaskService {
       Math.random().toString(36).slice(2, 8)}`;
     const record: ExtractionJobRecord = {
       id,
-      status: "running",
+      status: "queued",
       repo,
       intent,
       ...(pathHint ? { path_hint: pathHint } : {}),
       operator: input.operator,
-      started_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
     };
     this.extractionJobs.set(id, record);
-    this.extractionActive = true;
     persistExtractionJob(this.extractionRoot(id), record, this.options.log);
-    this.bypass(undefined, "定向知识提取",
-      this.runSkillExtraction(record).finally(() => {
-        this.extractionActive = false;
-      }));
+    this.pumpSkillExtraction();
     return { ...record };
+  }
+
+  private pumpSkillExtraction() {
+    if (this.shuttingDown) return;
+    for (const record of this.extractionJobs.values()) {
+      if (!this.knowledgeTaskCapacity.canStart()) return;
+      if (record.status !== "queued") continue;
+      record.status = "running";
+      record.started_at = new Date().toISOString();
+      this.extractionRunning.add(record.id);
+      persistExtractionJob(this.extractionRoot(record.id), record, this.options.log);
+      this.bypass(undefined, "定向知识提取", this.runSkillExtraction(record).finally(() => {
+        this.extractionRunning.delete(record.id);
+        this.knowledgeTaskCapacity.wake();
+      }));
+    }
   }
 
   /** 制作 Skill 的草稿已由人编辑并提交审查：记下提交号，制作任务随之结束。 */
@@ -2752,7 +2765,7 @@ export class TaskService {
     if (live) return { ...live };
     if (!/^[a-z0-9-]{1,64}$/.test(id)) return undefined;
     const stored = readExtractionJob(this.extractionRoot(id));
-    if (stored?.status === "running") {
+    if (stored && ["queued", "running"].includes(stored.status)) {
       // 服务重启把跑一半的 job 带走了:如实报中断,不装完成不装原因。
       return {
         ...stored,
@@ -5544,6 +5557,7 @@ export class TaskService {
   knowledgeRecordWarnings(): string[] { return [...this.skillRecoveryWarnings]; }
   getDomainKnowledgeExtraction(): DomainKnowledgeExtraction {
     return this.domainKnowledgeExtraction ??= createDomainKnowledgeExtraction({
+      capacity: this.knowledgeTaskCapacity,
       dataDir: this.options.dataDir, platformUrl: () => this.effectivePlatformUrl(),
       credential: operator => this.options.gitCredential?.(operator), onIndexed: () => this.prepareKnowledgeIndex(),
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
@@ -5553,6 +5567,7 @@ export class TaskService {
   private componentResearch?: ComponentResearch;
   getComponentResearch(): ComponentResearch {
     return this.componentResearch ??= createComponentKnowledgeExtraction({
+      capacity: this.knowledgeTaskCapacity,
       dataDir: this.options.dataDir, onIndexed: () => this.prepareKnowledgeIndex(),
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
       source: (component, operator, signal, baselineRevisions) => this.componentResearchSource(component, operator, signal, baselineRevisions),
