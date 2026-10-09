@@ -146,6 +146,8 @@ function RuntimeCard({ view, onSaved }: {
   const [repair, setRepair] = useState(text(runtime.repair_rounds));
   const [watchdog, setWatchdog] = useState(
     text(runtime.env_verify_watchdog_minutes));
+  const [autoClaim, setAutoClaim] = useState(
+    text(runtime.issue_auto_claim_interval_s));
   const [interval, setInterval_] = useState(text(runtime.poll_interval_s));
   const [timeout_, setTimeout_] = useState(text(runtime.poll_timeout_s));
   const [retention, setRetention] = useState(
@@ -168,6 +170,7 @@ function RuntimeCard({ view, onSaved }: {
         issue_build_products_cooldown_hours: productsCooldown.trim(),
         repair_rounds: repair.trim(),
         env_verify_watchdog_minutes: watchdog.trim(),
+        issue_auto_claim_interval_s: autoClaim.trim(),
         poll_interval_s: interval.trim(),
         poll_timeout_s: timeout_.trim(),
         workspace_retention_days: retention.trim(),
@@ -208,6 +211,11 @@ function RuntimeCard({ view, onSaved }: {
         defaultText={`${defaults.env_verify_watchdog_minutes} 分钟`}
         note="MR 全绿收口后超过该时长仍没有环境验证卡,平台主动提醒归属人(防静默漏卡,不举卡);0 表示关闭"
         value={watchdog} onChange={setWatchdog} />
+      <KnobField label="自动接单扫描间隔（秒）"
+        defaultText={defaults.issue_auto_claim_interval_s === 0
+          ? "关闭" : `${defaults.issue_auto_claim_interval_s} 秒（${defaults.issue_auto_claim_interval_s / 60} 分钟）`}
+        note="定时扫描自动接单名单内责任人名下的新问题单并发起（人员名单在账号管理页维护，参与版本在配置中心勾选）；0 表示关闭"
+        value={autoClaim} onChange={setAutoClaim} />
       <KnobField label="流水线检查间隔（秒）" defaultText={`${defaults.poll_interval_s} 秒`}
         note="生效于下一轮检查"
         value={interval} onChange={setInterval_} />

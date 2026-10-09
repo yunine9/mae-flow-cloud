@@ -105,8 +105,8 @@ function MappingList({ kind }: { kind: string }) {
   }
   useEffect(() => { void refresh(); }, []);
   const rows = modulesMode
-    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, refs: m.reference_component_repos ?? [], status: m.status }))
-    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", refs: [] as string[], status: "active" as const }));
+    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, refs: m.reference_component_repos ?? [], status: m.status, auto: false }))
+    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", refs: [] as string[], status: "active" as const, auto: v.auto_claim === true }));
   const filtered = rows.filter(row => `${row.name} ${row.value}`.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -124,6 +124,15 @@ function MappingList({ kind }: { kind: string }) {
       setEdit(undefined); await refresh();
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
+  // 参与自动接单(ADR-0061):勾一组=组内全部 B 版单进入自动接单扫描;
+  // PUT 全量送 version/branch,缺席字段的沿用语义在服务端兜底。
+  async function toggleAutoClaim(row: typeof rows[number], on: boolean) {
+    setError("");
+    try {
+      await productVersionRequest("PUT", { id: row.id, version: row.name, branch: row.value, auto_claim: on });
+      await refresh();
+    } catch (e) { setError(message(e)); }
+  }
   return <div className="rounded-xl border border-line bg-surface p-5 shadow-sm">
     <div className="mb-5 flex items-center gap-3">
       <Input className="max-w-md" aria-label="搜索配置" placeholder={modulesMode ? "搜索模块名称、代码仓" : "搜索版本、分支"}
@@ -137,11 +146,12 @@ function MappingList({ kind }: { kind: string }) {
     {!!warnings.length && <p role="alert" className="mb-3 text-attention">{warnings.join("；")}</p>}
     <p className="mb-4 text-sm text-muted-foreground">{modulesMode
       ? "维护模块与代码仓的映射。知识请在团队资产上传，并选择这里的模块。所有成员均可维护。"
-      : "一个版本对应一个固定分支。需求与问题单选择版本后自动带出分支；已有任务不受后续修改影响。"}</p>
+      : "一个版本对应一个固定分支。需求与问题单选择版本后自动带出分支；已有任务不受后续修改影响。勾选「自动接单」的版本组,组内新问题单才会被平台自动发起(老版本不勾即静默忽略)。"}</p>
     <table className="w-full table-fixed text-left text-base">
       <thead className="border-y border-line bg-surface-2"><tr>
         <th className="w-1/4 p-4 font-medium">{modulesMode ? "业务模块" : "产品版本"}</th>
         <th className="p-4 font-medium">{modulesMode ? "关联代码仓" : "对应分支"}</th>
+        {!modulesMode && <th className="w-28 p-4 font-medium">自动接单</th>}
         <th className="w-44 p-4 font-medium">操作</th>
       </tr></thead>
       <tbody>{!loading && filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE).map(row => <tr key={row.id} className="border-b border-line">
@@ -152,6 +162,11 @@ function MappingList({ kind }: { kind: string }) {
           <Button variant="outline" size="sm" onClick={() => { setAllRepos(modules.find(m => m.id === row.id)); setRepoQuery(""); }}>
             查看全部 {modules.find(m => m.id === row.id)?.repositories.length ?? 0} 个</Button>
         </div> : <code className="break-all text-sm">{row.value}</code>}</td>
+        {!modulesMode && <td className="p-4">
+          <label className="flex items-center gap-2 text-sm" title="勾选后,该版本组名下状态合适的新 DTS 单由平台定时自动发起">
+            <Checkbox checked={row.auto} onCheckedChange={checked => void toggleAutoClaim(row, checked === true)} />
+            {row.auto ? "参与" : "不参与"}
+          </label></td>}
         <td className="p-4"><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => { setError(""); setEdit(row); }}>编辑</Button>
           {!modulesMode && <Button variant="ghost" size="sm" onClick={async () => {
             if (!await confirmDialog({ title: `删除版本「${row.name}」？`, message: "已有任务保留原分支。", confirmLabel: "删除" })) return;

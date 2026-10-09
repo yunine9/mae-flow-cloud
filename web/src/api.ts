@@ -66,6 +66,9 @@ export interface AuthUser {
   role: UserRole;
   /** 管理员配置的可选检视人；不是角色，也不会自动收到任务通知。 */
   committer?: boolean;
+  /** 自动接单名单(ADR-0061):true=在名单,名下符合条件的新 DTS 单
+   *  由平台定时自动发起。管理员唯一开关,用户无个人开关。 */
+  issue_auto_claim?: boolean;
   /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
    * 明文永远不会出现在任何 API 响应里。 */
   git_token_hint?: string;
@@ -428,6 +431,21 @@ export async function putCommitter(
 ): Promise<AuthUser> {
   const response = await fetch(
     `/auth/users/${encodeURIComponent(username)}/committer`, {
+      method: "PUT",
+      body: JSON.stringify({ on }),
+    });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出即停。
+ *  管理员账号服务端拒收(管理员不处理问题单)。 */
+export async function putUserIssueAutoClaim(
+  username: string,
+  on: boolean,
+): Promise<AuthUser> {
+  const response = await fetch(
+    `/auth/users/${encodeURIComponent(username)}/issue-auto-claim`, {
       method: "PUT",
       body: JSON.stringify({ on }),
     });
@@ -3378,6 +3396,8 @@ export interface SettingsView {
     repair_rounds?: number;
     /** 守闸器阈值(分钟,#248);0=关闭。 */
     env_verify_watchdog_minutes?: number;
+    /** 自动接单扫描间隔(秒,ADR-0061);缺省 1800(半小时),0=关闭。 */
+    issue_auto_claim_interval_s?: number;
     poll_interval_s?: number;
     poll_timeout_s?: number;
     workspace_retention_days?: number;
@@ -3431,6 +3451,7 @@ export interface SettingsView {
       issue_build_products_cooldown_hours: number;
       repair_rounds: number | null;
       env_verify_watchdog_minutes: number;
+      issue_auto_claim_interval_s: number;
       poll_interval_s: number;
       poll_timeout_s: number;
       workspace_retention_days: number;
@@ -3930,6 +3951,9 @@ export interface IssueSummary {
   /** 会话级介入档位(ADR-0057):发起前按单选定并定格,发起后不可改;
    * 缺席=跟随全局。列表据此显示「特例档名 / 跟随全局」。 */
   intervention_tier?: "1" | "2" | "3";
+  /** 自动接单(ADR-0061):发起方式=自动的展示标记;流程语义与人工
+   * 发起完全一致,会话页据此挂「自动接单」徽标。缺席=人工发起。 */
+  auto_claim?: true;
   source: "manual" | "dts";
   ticket?: string;
   repo_url?: string;
@@ -5351,7 +5375,12 @@ export async function startTaskEarly(taskId: string, input: EarlyStartInput): Pr
   return parseJson(response);
 }
 
-export interface ProductVersion { id: string; version: string; branch: string }
+export interface ProductVersion {
+  id: string; version: string; branch: string;
+  /** 参与自动接单(ADR-0061):true=该版本组名下状态合适的新 DTS 单
+   *  会被自动接单扫描发起;缺席=false(老版本缺省不参与)。 */
+  auto_claim?: boolean;
+}
 export function productVersionRequest(method?: "GET"): Promise<{ versions: ProductVersion[] }>;
 export function productVersionRequest(method: "POST" | "PUT", row: Partial<ProductVersion>): Promise<ProductVersion>;
 export function productVersionRequest(method: "DELETE", row: Partial<ProductVersion>): Promise<{ ok: true }>;
