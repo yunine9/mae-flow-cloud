@@ -82,6 +82,43 @@ test("明确暂缓与真正 PASS 分开显示，历史归档不把已闭环记�
   assert.match(store.list().find(r => r.id === "new")!.resolution!, /权威核验已通过/);
 });
 
+test("人工判断批次按逐条结果展示，已处理项等待核验；重建索引不把整批都判成人工待办", t => {
+  const dir = mkdtempSync(join(tmpdir(), "feedback-human-results-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const store = new FeedbackStore(join(dir, "index.jsonl"));
+  const rows = [record("pipeline-human", "pipeline", fresh), record("mr-human", "mr_discussion"),
+    record("workspace-explained", "workspace"), record("push-not-applicable", "push_confirmation"), record("build-fixed", "build_fix")];
+  const results = [
+    { id: rows[0].id, status: "needs_human", summary: "流水线要求需要管理员确认" },
+    { id: rows[1].id, status: "needs_human", summary: "接口修改需要检视人决定" },
+    { id: rows[2].id, status: "explained", summary: "已解释边界，等待作者验收" },
+    { id: rows[3].id, status: "not_applicable", summary: "该条不适用，等待责任人确认" },
+    { id: rows[4].id, status: "fixed", summary: "已修改配置，等待机器核验" },
+  ];
+  const kernel = state("needs_human", rows);
+  Object.assign(kernel.delivery_loop.batches[0], { results });
+  store.upsert(rows.map(row => ({ ...row, status: "needs_human", resolution: "旧整批投影" })));
+  const assertFacts = () => {
+    const shown = store.list();
+    assert.deepEqual(rows.map(row => shown.find(item => item.id === row.id)!.status),
+      ["needs_human", "needs_human", "awaiting_verification", "awaiting_verification", "awaiting_verification"]);
+    for (const result of results) {
+      const item = shown.find(item => item.id === result.id)!;
+      assert.equal(item.summary, rows.find(row => row.id === result.id)!.summary);
+      assert.equal(item.resolution, result.summary);
+    }
+    assert.equal(kernel.delivery_loop.batches[0].status, "needs_human", "展示不能替内核裁决或解除等待人工");
+  };
+  projectKernelFeedback(kernel, store, store.list());
+  assertFacts();
+  const log = readFileSync(store.path, "utf8");
+  projectKernelFeedback(kernel, store, store.list());
+  assert.equal(readFileSync(store.path, "utf8"), log, "相同事实重复投影不写额外操作");
+  rmSync(store.path);
+  projectKernelFeedback(kernel, store, []);
+  assertFacts();
+});
+
 test("反馈面板与会话流的每种状态都有中文标签，结束和暂缓不称为处理中", () => {
   const statuses: FeedbackStatus[] = ["open", "repairing", "addressed", "awaiting_verification", "closed", "needs_human", "deferred", "superseded", "superseded_by_merge"];
   for (const status of statuses) assert.ok(feedbackStatusLabel({ source: "pipeline", status }));

@@ -195,6 +195,6 @@ test("交付失败长文本在右侧行动栏内换行，不横向冲出工作�
   // #227 换装:.ws-verify-focus/.ws-verify-focus-waiting 皮肤类退役,断行
   // 契约改由工具类直接钉在元素上。
   assert.match(workspace, /交付验证进行中/);
-  assert.match(workspace, /<p className="min-w-0 max-w-full \[overflow-wrap:anywhere\] break-words text-sm text-text">/,
+  assert.match(workspace, /<p className="min-w-0 max-w-full whitespace-pre-wrap \[overflow-wrap:anywhere\] break-words text-sm text-text">/,
     "远端 Hook 正则、commit SHA 和英文错误都必须在卡片内断行");
 });

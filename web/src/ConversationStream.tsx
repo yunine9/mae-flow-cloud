@@ -832,13 +832,21 @@ export function ConversationStream({
         });
       case "external": {
         if (!thread) {
+          const pipeline = ["pipeline", "build_fix"].includes(item.source);
+          const human = pipeline ? item.items.filter(entry => entry.status === "needs_human") : [];
           return message({
             key: item.id, who: "external", name: item.author ?? SOURCE_LABEL[item.source] ?? item.source,
             ts: item.ts,
             tag: <em className={cn(CONV.tag, CONV.tagTone.src)}>{SOURCE_LABEL[item.source] ?? item.source}</em>,
-            children: digest(
-              `提了 ${item.items.length} 条意见，${feedbackSummary(item.items)}`,
-              []),
+            children: human.length ? <section aria-label="流水线人工处理回执" className="grid min-w-0 gap-3">
+              <p className={CONV.lead}>{SOURCE_LABEL[item.source]}有 {human.length} 项需要人工判断</p>
+              {human.map(entry => <article key={entry.id} className="grid gap-2 text-sm">
+                <p className="m-0 whitespace-pre-wrap break-words">{entry.summary}</p>
+                {entry.resolution && <div className="grid gap-1"><strong className="text-xs">Agent 的原因说明与处理建议</strong><p className="m-0 whitespace-pre-wrap break-words">{entry.resolution}</p></div>}
+              </article>)}
+              <button type="button" className={CONV.act} onClick={() => onOpenReview([])}>查看流水线反馈</button>
+            </section> : digest(
+              `${item.source === "mr_discussion" ? "提了" : "收到"} ${item.items.length} 条${item.source === "mr_discussion" ? "代码检视意见" : pipeline ? "流水线反馈" : `${SOURCE_LABEL[item.source] ?? "交付"}反馈`}，${feedbackSummary(item.items)}`, []),
           });
         }
         return message({

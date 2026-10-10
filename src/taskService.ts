@@ -2,7 +2,7 @@ import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
 import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
-import { resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
+import { humanFeedbackReason, resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
 import { gitNullPaths, recoverQuotedGitPaths } from "./gitPaths.ts";
 import { correctKernelTicket } from "./kernelDelivery.ts";
 import { closeMergeRequest } from "./mrClient.ts";
@@ -18279,7 +18279,7 @@ export class TaskService {
         const resumed = resumeRecordedFeedback({ host, cwd: task.cwd, workspace: task.summary.workspace,
           taskId: task.summary.id, state, batch });
         this.syncFeedbackStoreFromKernel(task, false, resumed ? undefined : state);
-        return batch.status === "needs_human" ? "反馈中仍有需要人工判断的条目" : undefined;
+        return batch.status === "needs_human" ? humanFeedbackReason(batch.items, batch.results) : undefined;
       }
     } catch (error) {
       if (error instanceof KernelUnavailableError) {
@@ -18405,13 +18405,12 @@ export class TaskService {
       for (const result of results) {
         store.resolve(result.id,
           result.status === "needs_human" ? "needs_human"
-            : record.status === "awaiting_verification"
+            : record.status === "awaiting_verification" || record.status === "needs_human"
               ? "awaiting_verification" : "closed",
           result.summary);
       }
       this.syncFeedbackStoreFromKernel(task);
-      return results.some((item) => item.status === "needs_human")
-        ? "反馈中仍有需要人工判断的条目" : undefined;
+      return humanFeedbackReason(batchItems, results);
     } catch (error) {
       if (error instanceof KernelUnavailableError) {
         return `${error.message}；反馈批次 ${batchId} 的回执登记尚未确认，将自动重试`;

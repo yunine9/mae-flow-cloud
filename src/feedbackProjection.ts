@@ -40,7 +40,11 @@ export function projectKernelFeedback(state: Record<string, any>, store: Feedbac
       const sourceSha = String(item?.observed_sha || item?.source_id || "").split(":")[0];
       const historicalPipeline = source === "pipeline" && !!published
         && /^[a-f0-9]{40,64}$/i.test(sourceSha) && sourceSha !== published;
+      const result: any = results.get(id);
       let projected = deferred ? "deferred" as const : status;
+      // 整批在等人工决定时，已解释的其他条目仍待核验；不能跟着变成人工问题。
+      if (!deferred && status === "needs_human" && result
+          && result.status !== "needs_human") projected = "awaiting_verification";
       if (status === "superseded_by_merge" && !sourceNeedsHumanAuthority) {
         projected = "superseded_by_merge";
       } else if (historicalPipeline && status !== "closed" && !deferred) {
@@ -52,7 +56,6 @@ export function projectKernelFeedback(state: Record<string, any>, store: Feedbac
           projected = existing?.status ?? "open";
         }
       }
-      const result: any = results.get(id);
       // 结束调度不等于验证通过；原告警、逐条回执和内核验证结果均保留。
       const resolution = projected === "superseded"
         ? `已被新版本 ${String(published || batch.superseded_by_push || "").slice(0, 12)} 替代，原失败记录保留，不代表验证通过`

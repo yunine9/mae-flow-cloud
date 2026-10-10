@@ -1,5 +1,17 @@
 import type { Annotation } from "./annotations.ts";
-import { recordKernelFeedbackResult, type KernelFeedbackResultItem, type KernelDeliveryHost } from "./kernelDelivery.ts";
+import { recordKernelFeedbackResult, type KernelFeedbackItem, type KernelFeedbackResultItem, type KernelDeliveryHost } from "./kernelDelivery.ts";
+
+/** 只展示已登记的逐条人工决定，不把整批状态当成每条的处理结果。 */
+export function humanFeedbackReason(items: Pick<KernelFeedbackItem, "id" | "source">[], results: KernelFeedbackResultItem[]): string | undefined {
+  const sources = new Map(items.map(item => [item.id, item.source]));
+  const labels: Record<string, string> = {
+    pipeline: "流水线验证", build_fix: "构建验证", mr_discussion: "MR 代码检视",
+    workspace: "工作台意见", conflict: "合并冲突", scope: "交付范围", push_confirmation: "推送确认",
+  };
+  const reasons = results.filter(result => result.status === "needs_human")
+    .map(result => `${labels[sources.get(result.id) ?? ""] ?? "交付反馈"}：${result.summary}`);
+  return reasons.length ? `等待你决定以下反馈的处理方案：\n\n${reasons.join("\n\n")}` : undefined;
+}
 
 /** 作者已闭环或撤回的旧意见，不再要求 Agent 为同一条补答复。 */
 export function resolvedWorkspaceFeedback(item: { id: string; source_revision?: number }, annotation?: Annotation): KernelFeedbackResultItem | undefined {

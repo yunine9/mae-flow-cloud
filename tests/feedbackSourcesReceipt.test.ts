@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
@@ -280,8 +280,10 @@ test("工作台批注来源:Agent 逐条回应(不带证据)登记进真内核",
       evidence: ["main.ts:1"],
     });
     const failure = (service as any).recordActiveFeedbackResult(internal);
-    assert.equal(failure, "反馈中仍有需要人工判断的条目",
-      "needs_clarification 如实上报需要人工,不是登记失败");
+    assert.match(failure, /工作台/, "需要人工判断时明确说明反馈来源");
+    assert.match(failure, /两种命名都合理，需要作者定/,
+      "needs_clarification 的具体判断保留在停机原因中");
+    assert.doesNotMatch(failure, /该路径不可达，已在文档说明/, "已解释条目不混入待人工原因");
     const batch = readState(cwd).delivery_loop.batches.find(
       (item: any) => item.batch_id === "fb-ws");
     assert.ok(batch.result_digest, "内核已登记本批回执");
@@ -289,10 +291,60 @@ test("工作台批注来源:Agent 逐条回应(不带证据)登记进真内核",
       ["explained", "needs_human"]);
     assert.equal((service as any).recordActiveFeedbackResult(internal), failure,
       "结果重放仍保留真正需要人工判断的意见");
+    const shown = service.get(internal.summary.id)?.feedback?.find(item => item.id === `ws:${second.id}`);
+    assert.equal(shown?.source, "workspace");
+    assert.equal(shown?.summary, second.note);
+    assert.match(shown?.resolution ?? "", /两种命名都合理，需要作者定/);
     assert.equal(readState(cwd).current, "feedback_triage");
   } finally {
     await stop();
   }
+});
+
+test("需要人工的混合反馈保留流水线和 MR 逐条原因，重放与丢失索引恢复不吞摘要", async () => {
+  const { service, internal, workspace, cwd, open, stop } = await watchingService("human-summary");
+  const api = service as any;
+  try {
+    const batchId = "fb-human-summary";
+    open(batchId, [
+      { id: "pipeline:human", source: "pipeline", source_id: "COMPILE", source_revision: 0,
+        kind: "quality_failure", summary: "流水线需要调整测试配置", verification: "机器门禁" },
+      { id: "mr:human", source: "mr_discussion", source_id: "discussion-human", source_revision: 0,
+        kind: "code_review", summary: "检视人要求更改公共接口", verification: "reviewer" },
+      { id: "build:explained", source: "build_fix", source_id: "build-explained", source_revision: 0,
+        kind: "quality_failure", summary: "旧配置告警", verification: "机器门禁" },
+    ]);
+    const results = [
+      { id: "pipeline:human", status: "needs_human", summary: "目标分支 UT 要求需要仓库管理员确认。" },
+      { id: "mr:human", status: "needs_human", summary: "检视人要求修改接口，调用契约需要作者决定。" },
+      { id: "build:explained", status: "explained", summary: "这条已解释，无需人工处理。" },
+    ];
+    writeFileSync(api.feedbackResultPath(internal, batchId), JSON.stringify({ schema: "mae-flow-feedback-results/1", batch_id: batchId, results }));
+    const failure = api.recordActiveFeedbackResult(internal);
+    assert.match(failure, /流水线.*目标分支 UT 要求需要仓库管理员确认/);
+    assert.match(failure, /MR.*检视人要求修改接口，调用契约需要作者决定/);
+    assert.doesNotMatch(failure, /这条已解释|旧配置告警/);
+    const recorded = readState(cwd).delivery_loop.batches.find((batch: any) => batch.batch_id === batchId);
+    assert.equal(recorded.status, "needs_human", "展示原因不能替代人工裁决或自动放行");
+    assert.deepEqual(recorded.results.map(({ id, status, summary }: any) => ({ id, status, summary })), results);
+    assert.equal(service.get(internal.summary.id)?.feedback?.find(item => item.id === "build:explained")?.status,
+      "awaiting_verification", "首次登记的已解释条目等待核验，不跟着整批人工待办或自动闭环");
+    assert.equal(api.recordActiveFeedbackResult(internal), failure, "结果已登记后的重放显示同一份具体原因");
+    const projected = service.get(internal.summary.id)?.feedback ?? [];
+    assert.equal(projected.find(item => item.id === "build:explained")?.status, "awaiting_verification");
+    for (const result of results.filter(result => result.status === "needs_human")) {
+      assert.equal(projected.find(item => item.id === result.id)?.resolution, result.summary);
+    }
+    rmSync(join(workspace, "feedback", "index.jsonl"));
+    assert.equal(api.recordActiveFeedbackResult(internal), failure, "展示来自权威逐条结果，不依赖可重建索引是否存在");
+    const restored = service.get(internal.summary.id)?.feedback ?? [];
+    assert.equal(restored.find(item => item.id === "build:explained")?.status, "awaiting_verification",
+      "索引恢复后的逐条状态与首次登记一致");
+    for (const result of results.filter(result => result.status === "needs_human")) {
+      assert.equal(restored.find(item => item.id === result.id)?.resolution, result.summary);
+    }
+    assert.equal(readState(cwd).current, "feedback_triage");
+  } finally { await stop(); }
 });
 
 test("Build-Fix 来源:回执文件不存在=这批还没人处理,恢复时重新派单而不是停摆", async () => {

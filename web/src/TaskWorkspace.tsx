@@ -1509,8 +1509,13 @@ export function TaskWorkspace({
   // 工作台来源的反馈已经以批注卡片的身份在场(带作者裁决权),不重复列。
   const machineFeedback = (task.feedback ?? [])
     .filter((item) => item.source !== "mr_discussion" && item.source !== "workspace");
+  const importedMrIds = new Set(notes.flatMap(item => item.external_review ? [item.external_review.discussion_id] : []));
+  const mrFeedback = (task.feedback ?? []).filter(item => item.source === "mr_discussion" && !importedMrIds.has(item.source_id));
+  const pipelineHumanFeedback = machineFeedback.filter(item =>
+    ["pipeline", "build_fix"].includes(item.source) && item.status === "needs_human");
+  const codeReviewCount = notes.length + mrFeedback.length;
   const reviewRecordCount = notes.length
-    + machineFeedback.length;
+    + machineFeedback.length + mrFeedback.length;
   // 抽屉顶部筛选条:三节共用一套档位。批注按作者/裁决就绪归档,反馈按
   // 状态归档(needs_human 压在人这;closed 已闭环;其余在 Agent 或门禁手里)。
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>("all");
@@ -1535,11 +1540,17 @@ export function TaskWorkspace({
     closureOf(item.id)?.bucket ?? "agent";
   const reviewCounts = { all: reviewRecordCount, mine: 0, agent: 0, closed: 0 };
   for (const item of notes) reviewCounts[noteCategory(item)] += 1;
-  for (const item of machineFeedback) {
+  for (const item of [...machineFeedback, ...mrFeedback]) {
     reviewCounts[feedbackCategory(item)] += 1;
   }
   const filteredMachine = reviewFilter === "all" ? machineFeedback
     : machineFeedback.filter((item) => feedbackCategory(item) === reviewFilter);
+  const filteredMr = reviewFilter === "all" ? mrFeedback
+    : mrFeedback.filter(item => feedbackCategory(item) === reviewFilter);
+  function openPipelineFeedback() {
+    setReviewFilter("mine"); setReviewPanelOpen(true);
+    setReviewRevealRequest(request => request + 1);
+  }
   useEffect(() => {
     if (reviewPanelOpen) {
       const feedback = workspaceRoot.current?.querySelector<HTMLElement>("#ws-review-canvas");
@@ -1669,12 +1680,22 @@ export function TaskWorkspace({
         <MergeWaitLine task={task} canOperate={canOperate} />
       )}
       {!waiting && task.status === "verifying" && (
-        <div className="grid gap-2 rounded-xl border border-line bg-surface p-4">
-          <strong className="text-[15px] text-text-strong">交付验证进行中</strong>
-          {task.delivery?.waiting_on ? (
-            <p className="min-w-0 max-w-full [overflow-wrap:anywhere] break-words text-sm text-text">{task.delivery.waiting_on}</p>
+        <div aria-label="交付验证" className="grid gap-2 rounded-xl border border-line bg-surface p-4">
+          <strong className="text-[15px] text-text-strong">{pipelineHumanFeedback.length ? "流水线待人工处理" : "交付验证进行中"}</strong>
+          <div aria-label="验证反馈来源统计" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"><span>代码检视 {codeReviewCount} 条</span><span>流水线与交付反馈 {machineFeedback.length} 条</span></div>
+          {pipelineHumanFeedback.length ? <section aria-label="流水线人工处理" className="grid gap-3">
+            <p className="m-0 text-sm text-text">以下 {pipelineHumanFeedback.length} 项需要你判断，流水线反馈与代码检视分别记录。</p>
+            {pipelineHumanFeedback.map(item => <article key={item.id} className="grid min-w-0 gap-2 rounded-lg border border-attention/40 bg-attention/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2"><strong className="text-sm">{FEEDBACK_SOURCE_LABEL[item.source]}反馈</strong><Badge variant="warning">{feedbackStatusLabel(item)}</Badge></div>
+              <p className="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">{item.summary}</p>
+              {item.resolution && <div className="grid gap-1 border-l-2 border-l-attention/50 pl-2.5"><strong className="text-xs text-text-strong">Agent 的原因说明与处理建议</strong><p className="m-0 whitespace-pre-wrap break-words text-sm leading-relaxed">{item.resolution}</p></div>}
+            </article>)}
+            <p className="m-0 text-xs text-muted-foreground">{canOperate ? "核对原因与建议，并通过补充处理要求告诉 Agent 采用哪种方案。" : <>请联系任务责任人 <PersonName account={task.luban_account} fallback="或协作者" /> 确认处理方案。</>}</p>
+            <Button size="sm" variant="outline" className="w-fit" onClick={openPipelineFeedback}>查看流水线反馈</Button>
+          </section> : task.delivery?.waiting_on ? (
+            <p className="min-w-0 max-w-full whitespace-pre-wrap [overflow-wrap:anywhere] break-words text-sm text-text">{task.delivery.waiting_on}</p>
           ) : (
-            <p className="m-0 text-sm leading-relaxed text-muted-foreground">{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
+            <p className="m-0 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{task.detail || "流水线运行与自动修复由系统跟进；需要人时会在这里出卡。"}</p>
           )}
           {canOperate && repairStopped(task) && (
             <div className="grid gap-2">
@@ -1741,6 +1762,9 @@ export function TaskWorkspace({
 
   const reviewWorkspaceContent = (
     <div className="workspace-review-notes">
+      <div aria-label="反馈来源统计" className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span>代码检视 {codeReviewCount} 条</span><span>流水线与交付反馈 {machineFeedback.length} 条</span>
+      </div>
       {/* (#210)手搓 role=tablist 换 base-ui Tabs 原语(键盘箭头归原语);
           #227 换装:.review-filter 皮肤类退役,筛选档位改胶囊工具类
           (选中=墨底、等我确认有积压=attention 描边),语义与词表原样。 */}
@@ -1795,10 +1819,13 @@ export function TaskWorkspace({
             在原文、产出文档或代码上圈选，即可原位写下反馈。
           </div>
         )}
+        {filteredMr.length > 0 && <FeedbackList kicker="CODEHUB REVIEW" title="CodeHub 代码检视"
+          hint="来自检视人的代码意见；处理状态由对应检视记录决定，与流水线验证分别记录。"
+          items={filteredMr} mrUrl={task.delivery?.mr_url} />}
         {filteredMachine.length > 0 && <FeedbackList
           kicker="AUTOMATED GATES"
-          title="来自流水线与机器门禁的告警"
-          hint="流水线红灯、Build-Fix、合并冲突、推送前复检等不是人提的意见，由对应机器门禁核验；内核判定通过即闭环。"
+          title="流水线与交付反馈"
+          hint="流水线失败、自动修复、合并冲突和推送前复检分别保留原因及处理结果。需要人工判断的条目请先核对建议并补充处理要求，是否通过仍以实际核验为准。"
           items={filteredMachine} />}
       </section>
     </div>

@@ -153,7 +153,7 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.doesNotMatch(html, /按字数还是按任务\?/, "回执正文不在流里重复");
   assert.doesNotMatch(html, /class="conv-receipts"/, "逐条回执列表只在线程视图");
   assert.match(html, /CodeHub 检视/);
-  assert.match(html, /提了 1 条意见，1 条待闭环/);
+  assert.match(html, /提了 1 条代码检视意见，1 条待闭环/);
   assert.doesNotMatch(html, /移动端入口别竖排/, "外部意见正文也只在抽屉");
   assert.ok((html.match(/打开检视意见/g) ?? []).length >= 3);
   assert.doesNotMatch(html, /看这条的处理记录/, "非线程视图不再逐条给入口");
@@ -167,6 +167,28 @@ test("回合摊开最后一段、折叠此前的,工具步骤折成一行;历史
   assert.match(threaded, /按字数还是按任务\?/);
   assert.match(threaded, /需要补充信息/);
   assert.match(threaded, /看这条的处理记录/);
+});
+
+test("流水线人工反馈默认展示完整原因与方案，代码检视仍单独呈现", () => {
+  const resolution = "DT增量覆盖率0.00%，UT未部署到流水线采集位置且需核对产品链接库。\n\n"
+    + "方案A：调整UT部署位置及CMakeLists链接库配置，推送后使用绑定SHA的流水线验证。\n\n"
+    + "容器缺少DEVELOPENV_ROOT，无法本地编译，需要责任人确认该处理方案。\n\n"
+    + "已核对实际报告和构建配置。".repeat(50) + "回执末尾仍完整可见。";
+  for (const source of ["pipeline", "build_fix"] as const) {
+    const external: ConversationItem = { kind: "external", id: `ext-${source}`, ts: T3, source,
+      items: [{ id: "dt-coverage", summary: "DT覆盖率0%，流水线验证未通过", status: "needs_human", resolution }] };
+    const html = render({ items: [external, items.at(-1)!] });
+    assert.match(html, /aria-label="流水线人工处理回执"/);
+    assert.match(html, /有 1 项需要人工判断/);
+    assert.match(html, /DT覆盖率0%，流水线验证未通过/);
+    assert.match(html, /方案A：调整UT部署位置及CMakeLists链接库配置/);
+    assert.match(html, /容器缺少DEVELOPENV_ROOT/);
+    assert.match(html, /回执末尾仍完整可见。/);
+    assert.doesNotMatch(html, /展开完整报告|line-clamp|<details/);
+    assert.match(html, /查看流水线反馈/);
+    assert.match(html, /提了 1 条代码检视意见，1 条待闭环/);
+    assert.doesNotMatch(html, /移动端入口别竖排/);
+  }
 });
 
 test("栏头一行放标题与筛选,锚条一行并入状态与责任,不再各占一行", () => {
