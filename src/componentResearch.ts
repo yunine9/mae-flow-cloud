@@ -3,6 +3,7 @@ import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
+import { componentWorkDocuments, type ComponentWorkDocument } from "./componentResearchPreview.ts";
 /** Background research is an inspectable draft, not a task or a delivery gate. */
 import { randomUUID } from "node:crypto";
 import {
@@ -39,6 +40,8 @@ export interface ComponentChallenge {
 export interface ResearchRecord {
   /** 服务端读取时计算，不写入 record.json。 */
   production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
+  /** 服务端读取时从已保存的盘点和规划结果展开，不写入 record.json。 */
+  work_documents?: ComponentWorkDocument[];
   /** 一次发布的耐久意图；正式库和文稿提交后清除。 */
   publication_intent?: ComponentPublicationIntent;
   challenge?: ComponentChallenge;
@@ -355,7 +358,7 @@ export class ComponentResearch {
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map((r) =>
         structuredClone(
-          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, review_turns: undefined, evidence: [] } : this.get(r.id),
+          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, work_documents: [], review_turns: undefined, evidence: [] } : this.get(r.id),
         ),
       );
   }
@@ -387,6 +390,7 @@ export class ComponentResearch {
     const needsGuideCompletion = record.document?.sections.some(incompleteGuideSection)
       || record.review_turns?.some(turn => turn.proposal?.status === "pending" && incompleteGuideSection(turn.proposal.section));
     fillReadableResearchFields(record);
+    record.work_documents = componentWorkDocuments(record.pipeline);
     const production = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions });
     if (needsGuideCompletion) production.platform_message = [production.platform_message,
       "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");

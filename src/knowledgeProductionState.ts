@@ -107,6 +107,8 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     next_action = draft ? { id: "review", label: makingSkill ? "编辑并提交" : "审查成果", view: "review" } : { id: "knowledge", label: "查看知识", view: "review" };
   }
   const documentCount = input.kind === "domain" ? input.record.documents.length + (input.record.work_documents?.length ?? 0) : input.kind === "component" ? input.record.document?.sections.length ?? Number(!!input.record.draft) : 0;
+  const workDocumentCount = input.kind === "component" ? input.record.work_documents?.length ?? 0 : 0;
+  const readableCount = documentCount + workDocumentCount;
   const readonly = input.kind === "component" ? !!input.record.document_id : input.kind === "skill-submission" ? input.record.status !== "pending" : false;
   const sections = input.kind === "component" ? input.record.document?.sections ?? [] : [];
   const componentTurns = input.kind === "component" ? input.record.review_turns ?? [] : [];
@@ -124,6 +126,14 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     { id: "reject", label: "需要调整", view: "review" }, { id: "publish", label: "发布 Skill", view: "review" });
   if (input.kind === "skill-submission" && input.record.status === "rejected") research_actions.push({ id: "resubmit", label: "修改后重新提交", view: "review" });
   if (input.kind === "skill-extraction" && input.record.status === "done" && input.record.draft && !input.record.submission_id) research_actions.push({ id: "review", label: "编辑并提交", view: "review" });
+  let ready_message: string | undefined;
+  if (readableCount) {
+    if (!documentCount && workDocumentCount) ready_message = working ? "已有过程文稿可以先阅读，组件用法仍在生成。" : "已生成的过程文稿已保留，可先阅读后继续研究。";
+    else if (working) ready_message = "已有文稿可以先审阅，后续内容仍在生成。";
+    else if (record.status === "paused") ready_message = "请先审阅当前文稿，再确认或提出调整意见。";
+    else if (next_action.view === "archive") ready_message = `${status_label}；请打开归档查看记录。`;
+    else ready_message = group === "attention" ? "请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读；要交付到代码仓时，再点「归档」填写单号创建 MR。" : "知识已入库，可继续阅读文稿；要交付到代码仓时点「归档」填写单号创建 MR。";
+  }
   const view: KnowledgeProductionView = { status_label, group, next_action, working, modifying, documents,
     research_actions,
     review: { readonly,
@@ -142,8 +152,8 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     knowledge_document_id: formalId,
     platform_message: published && (working || documents.some(document => document.changed) || input.kind === "component" && !!input.record.update_document_id) ? "修改期间继续使用已入库知识，确认发布后再更新。" : undefined,
     // 进行中的状态只在标题行的状态标签里说一次；页签并进标题行后，旁边再挂一个"研究中"就重复了。
-    navigation: { ready_message: documentCount ? working ? "已有文稿可以先审阅，后续内容仍在生成。" : record.status === "paused" ? "请先审阅当前文稿，再确认或提出调整意见。" : next_action.view === "archive" ? `${status_label}；请打开归档查看记录。` : group === "attention" ? "请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读；要交付到代码仓时，再点「归档」填写单号创建 MR。" : "知识已入库，可继续阅读文稿；要交付到代码仓时点「归档」填写单号创建 MR。" : undefined,
-      ready_action_label: documentCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },
+    navigation: { ready_message,
+      ready_action_label: readableCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },
     archive: { visible: !!published, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
       status_label: archiveLabel, title: published ? `${published} 份知识已发布，平台立即可读` : "Git 归档记录",
       message: currentBatches.find(batch => batch.state === "failed")?.error || current.find(publication => publication.state === "failed")?.error

@@ -22,6 +22,7 @@ export interface ComponentResearchRecord {
   mode?: "all" | "component";
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
+  work_documents?: Array<{ id: string; title: string; content: string; status_label: string }>;
   review_turns?: ComponentResearchReviewTurn[];
   source_repositories?: ComponentRepository[];
   component?: ComponentRepository;
