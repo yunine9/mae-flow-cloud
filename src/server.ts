@@ -147,6 +147,7 @@ import {
   RequirementBundleError,
 } from "./requirementBundle.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
+import { autoClaimNextRunAt } from "./issueFlow/autoClaim.ts";
 import { DEFAULT_ISSUE_AUTO_CLAIM_INTERVAL_S } from "./issueFlow/autoClaim.ts";
 import {
   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
@@ -602,6 +603,21 @@ export function createTaskServer(
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
+        // 自动接单开关(ADR-0061,2026-10-10 修订迁入个人设置):个人
+        // 自助,谁登录改谁的,缺省关闭。管理员账号在 LocalAuth 拒收
+        // (管理员不写问题会话,开了也轮不到)。翻转下一拍扫描生效。
+        if (request.method === "PUT" && parts[1] === "me"
+            && parts[2] === "issue-auto-claim") {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          const body = await readBody(request);
+          try {
+            options.auth!.setIssueAutoClaim(viewer.username, body.on === true);
+          } catch (error) {
+            return json(response, 400, { error: humanError(error) });
+          }
+          return json(response, 200,
+            options.auth!.sessionView(viewer.username));
+        }
         // 个人 Git 令牌:谁登录改谁的,写完只回掩码(只写不读)。
         if (request.method === "PUT" && parts[1] === "me"
             && parts[2] === "git-token") {
@@ -714,19 +730,8 @@ export function createTaskServer(
               return json(response, 400, { error: humanError(error) });
             }
           }
-          // 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出
-          // 即停。与管理员账号互斥的守卫在 LocalAuth(它知道角色)。
-          if (request.method === "PUT" && parts.length === 4
-              && parts[3] === "issue-auto-claim") {
-            const body = await readBody(request);
-            try {
-              const user = options.auth!.setIssueAutoClaim(
-                decodeURIComponent(parts[2]), body.on === true);
-              return json(response, 200, user);
-            } catch (error) {
-              return json(response, 400, { error: humanError(error) });
-            }
-          }
+          // (自动接单开关已迁入个人设置:PUT /auth/me/issue-auto-claim,
+          // ADR-0061 2026-10-10 修订——按人代开名单制退役。)
           if (request.method === "PUT" && parts.length === 4
               && parts[3] === "display-name") {
             const body = await readBody(request);
@@ -978,6 +983,21 @@ export function createTaskServer(
       // 问题流 API(/issues/*):独立于任务命名空间;未启用时由路由
       // 自己 404。必须先于静态托管兜底(非 /tasks 的 GET 会被接管)。
       if (parts[0] === "issues") {
+        // 自动接单下次发起时刻(ADR-0061 修订):个人设置问号悬停卡的
+        // 数据源。调度器未装配(测试/旁路形态)或间隔为 0 时为 null,
+        // 前端显示「已暂停」。GET 且两级路径,若放行会给 SPA 深链,先截。
+        if (request.method === "GET" && parts[1] === "auto-claim"
+            && parts.length === 2) {
+          if (!viewer) return json(response, 401, { error: "尚未登录" });
+          // 间隔改 0 后旧定时器要到点才重排,窗口期内排程时刻是陈旧的
+          // ——暂停口径以当前旋钮为准,现读现判。
+          const intervalSeconds = service.options.settings?.runtime()
+            .issue_auto_claim_interval_s;
+          return json(response, 200, {
+            next_run_at: intervalSeconds === 0
+              ? null : autoClaimNextRunAt(),
+          });
+        }
         // GET /issues 与 /issues/:id 既是 API 也是问题工作台的深链地址
         // (裸 /issues=登记页,带 id=会话工作台;小鲁班通知点开即达)。
         // 与 /tasks/:id 的旧通知兼容同一判别式:浏览器导航(Accept 要

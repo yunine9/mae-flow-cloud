@@ -1,5 +1,6 @@
 /**
- * 问题流自动接单(ADR-0061):定时扫描自动接单名单内开发责任人名下的
+ * 问题流自动接单(ADR-0061;2026-10-10 修订开关迁入个人设置):定时
+ * 扫描已开启自动接单(个人自助开关,缺省关闭)的开发责任人名下的
  * DTS 单,把符合条件的新单以责任人自登记形态自动发起为问题会话。
  *
  * 纪律(ADR-0061 拍板):
@@ -13,9 +14,9 @@
  * - 唯一流控是回合并发额度(issue_max_turns 排队),单拍不限流,
  *   名下积压多拍自然消化。
  * - 调度器只接在正式入口(executionRuntime);间隔旋钮现读现判
- *   (issue_auto_claim_interval_s,缺省半小时,0=关闭),单飞防重入,
- *   unref() 不阻进程退出;测试/旁路直连形态不起定时器,要扫描直接调
- *   runAutoClaimTick。
+ *   (issue_auto_claim_interval_s,缺省半小时,0=暂停——个人开关原样
+ *   保留,恢复间隔即续),单飞防重入,unref() 不阻进程退出;测试/旁路
+ *   直连形态不起定时器,要扫描直接调 runAutoClaimTick。
  */
 
 import { matchProductVersion } from "../configurationCenter.ts";
@@ -156,6 +157,16 @@ export async function runAutoClaimTick(deps: AutoClaimDeps): Promise<AutoClaimOu
   return outcome;
 }
 
+/** 下次扫描时刻(epoch ms;null=未排程——调度器未装配,或间隔旋钮
+ *  为 0 管理员暂停)。个人设置的问号悬停卡经 GET /issues/auto-claim
+ *  读取;调度器每次排程刷新,测试/旁路形态不装配恒为 null。 */
+let scheduledNextRunAt: number | null = null;
+
+export function autoClaimNextRunAt(): string | null {
+  return scheduledNextRunAt === null
+    ? null : new Date(scheduledNextRunAt).toISOString();
+}
+
 /** 装配定时器:自续链 setTimeout(间隔旋钮现读现判,改了下一拍生效;
  *  0=关闭时空转重查),单飞防重入。unref() 不阻进程退出。 */
 export function startAutoClaimScheduler(deps: AutoClaimDeps): void {
@@ -179,6 +190,7 @@ export function startAutoClaimScheduler(deps: AutoClaimDeps): void {
   };
   const schedule = (): void => {
     const delay = intervalMs();
+    scheduledNextRunAt = delay > 0 ? Date.now() + delay : null;
     const timer = setTimeout(() => {
       void run().finally(schedule);
     }, delay > 0 ? delay : RECHECK_MS);
