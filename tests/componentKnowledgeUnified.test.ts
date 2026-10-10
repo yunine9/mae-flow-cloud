@@ -38,7 +38,7 @@ test("同一 knowledge 工具直接查询结构化组件，读正文记录版本
   } finally { f.cleanup(); }
 });
 
-test("普通文档仍经共享搜索服务；组件只索引短卡片，来源修订即时更新", async () => {
+test("普通文档仍经共享搜索服务；组件返回短卡片，来源修订即时更新", async () => {
   const f = consumptionFixture();
   try {
     const doc = f.publish(); let ingested = 0, ordinaryId = "";

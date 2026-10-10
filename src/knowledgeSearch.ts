@@ -160,11 +160,21 @@ export class KnowledgeSearch {
     return state?.key === key ? state : { state: "queued" };
   }
 
-  componentContext(context: KnowledgeContext) {
+  componentContext(context: KnowledgeContext, offset = 0) {
     const catalog = this.catalog(context), derived = componentCards(catalog.assets);
-    return { mode: derived.cards.length <= 12 ? "full" : "search", count: derived.cards.length,
-      hits: derived.cards.length <= 12 ? derived.cards.map(c => componentCardHit(c, "full")) : [],
-      warnings: [...catalog.warnings, ...derived.warnings] };
+    // 固定顺序避免文档更新时间变化打乱下一页；每次仍重新核对当前适用范围与版本。
+    const cards = derived.cards.sort((a, b) => a.asset.id < b.asset.id ? -1 : a.asset.id > b.asset.id ? 1 : 0);
+    const validOffset = Number.isSafeInteger(offset) && offset >= 0;
+    const start = validOffset ? Math.min(offset, cards.length) : 0, pageSize = 12, maxChars = 12_000;
+    const hits: KnowledgeHit[] = [];
+    for (const card of cards.slice(start, start + pageSize)) {
+      const hit = componentCardHit(card, "full");
+      if (JSON.stringify([...hits, hit]).length > maxChars) break;
+      hits.push(hit);
+    }
+    return { mode: start === 0 && hits.length === cards.length ? "full" : "paged", count: cards.length, offset: start, page_size: pageSize,
+      next_offset: start + hits.length < cards.length ? start + hits.length : null, hits,
+      warnings: [...catalog.warnings, ...derived.warnings, ...(!validOffset ? ["目录 offset 无效，已从第一页返回。"] : [])] };
   }
 
   private registerCards(assets: SearchableKnowledge[]) {
@@ -177,7 +187,7 @@ export class KnowledgeSearch {
     return derived;
   }
 
-  /** Prepare the same search index; component documents contribute short cards only. */
+  /** 组件索引包含正式用法和接入配置；对外命中仍只返回短卡片及原文位置。 */
   async prepare(): Promise<void> {
     if (!this.sidecar) return;
     await retryKnowledgeDeletions(this.dataDir, this);
@@ -213,16 +223,16 @@ export class KnowledgeSearch {
     };
     const fallback = (extra: string[]): KnowledgeSearchResult => ({ available: derived.cards.length > 0 || !ordinary.length,
       hits: fresh(localComponentCards(derived.cards, query, limit)), warnings: [...warnings, ...extra] });
-    if (!this.sidecar) return fallback(["memsearch 暂不可用；组件改用本地卡片检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
+    if (!this.sidecar) return fallback(["memsearch 暂不可用；组件改用本地正式用法检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
     const inputs = [...ordinary, ...derived.cards.map(c => c.asset)];
     if (!inputs.length) return { available: true, hits: [], warnings };
     const sources = inputs.map(a => ({ id: a.id, path: this.mirror(a) }));
     const jobs = sources.map(source => this.ensureIndexed(source.path));
     const ready = await within(Promise.all(jobs).then(values => values.every(Boolean)), 1200);
     const searchable = sources.filter(source => this.indexed.get(source.path) === this.indexKey(source.path));
-    if (!searchable.length) return fallback(["索引尚未就绪，组件使用本地卡片检索。"]);
+    if (!searchable.length) return fallback(["索引尚未就绪，组件使用本地正式用法检索。"]);
     const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000).catch(() => undefined);
-    if (!hits) return fallback(["memsearch 查询未完成，组件使用本地卡片检索。"]);
+    if (!hits) return fallback(["memsearch 查询未完成，组件使用本地正式用法检索。"]);
     const byCard = new Map(derived.cards.map(c => [c.asset.id, c]));
     const found: KnowledgeHit[] = hits.flatMap(hit => {
       const card = byCard.get(hit.id);

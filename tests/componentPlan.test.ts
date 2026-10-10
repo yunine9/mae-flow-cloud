@@ -24,14 +24,15 @@ function setup(f: ReturnType<typeof consumptionFixture>, search = new KnowledgeS
   return { events, path, plan, tool, run, row, search };
 }
 
-test("issue 446 skill 取代旧任务方法，派生卡片仅含推荐范式且包含稳定来源", () => {
+test("编码前分析技能交回职责和依据，派生卡片仅含推荐范式且包含稳定来源", () => {
   const recommended = componentSection(), legacy = componentSection("cpp", "old-pool"); legacy.paradigm!.status = "legacy";
   const out = exportComponentArtifacts([recommended, legacy]);
   const files = Object.keys(out.files).filter(path => path.startsWith("derived/cards/"));
   assert.equal(files.length, 1); assert.match(out.files[files[0]], /card-id: cpp\/pool\/pool-submit/);
   assert.match(out.files[files[0]], /要做的事：执行后台任务/); assert.match(out.files[files[0]], /替代的原始写法：std::thread/);
-  assert.match(COMPONENT_ANALYST_MISSION, /component-plan 的 Cloud 适配版/);
-  assert.match(COMPONENT_ANALYST_MISSION, /不能代替这项设计判断/); assert.match(COMPONENT_ANALYST_MISSION, /operation=check_impl/);
+  assert.match(COMPONENT_ANALYST_MISSION, /编码前组件分析/);
+  assert.match(COMPONENT_ANALYST_MISSION, /不直接修改计划或业务代码/);
+  assert.match(COMPONENT_ANALYST_MISSION, /主 Agent 负责整合并传递所选资料给编码 Agent/);
 });
 
 test("同一 knowledge 工具完成 context/search/read/validate，真实检索记录写回原计划且幂等", async () => {
@@ -72,12 +73,13 @@ test("拒绝旧版本和非推荐范式；不使用有依据，缺少检索记�
   } finally { f.cleanup(); }
 });
 
-test("组件过多时 context 要求检索；普通文档不能被当成组件卡片，查询按语言限制", async () => {
+test("组件目录过多时仍可翻页浏览，查询按语言限制", async () => {
   const f = consumptionFixture();
   try {
     f.publish(Array.from({length:13},(_,i)=>componentSection(i === 0 ? "java" : "cpp", `pool-${i}`)));
     const s = setup(f), context = s.search.componentContext(f.context);
-    assert.equal(context.mode, "search"); assert.deepEqual(context.hits, []);
+    assert.equal(context.mode, "paged"); assert.equal(context.hits.length, 12); assert.equal(context.next_offset, 12);
+    assert.equal(s.search.componentContext(f.context, context.next_offset!).hits.length, 1);
     const result = await s.search.search(f.context, "Java 后台任务", 5, true);
     assert.equal(result.hits.length, 1); assert.equal(result.hits[0].card_id, "java/pool/pool-0");
   } finally { f.cleanup(); }
@@ -104,7 +106,7 @@ test("实现对照发现遗漏、计划外接口；提交检查复用原计划�
   } finally { f.cleanup(); }
 });
 
-test("真实 memsearch 只索引一张短卡片，换说法召回、读取原文；删除后卡片和全文旧索引一起清理", { timeout: 60000 }, async t => {
+test("真实 memsearch 索引正式用法，换说法返回短卡片；删除后派生索引一起清理", { timeout: 60000 }, async t => {
   const python = process.env.MFC_MEMSEARCH_PYTHON; if (!python) return t.skip("需要真实 memsearch 环境");
   const f = consumptionFixture(), sidecar = new MemorySidecar({ python, script: join(process.cwd(), "harness/memsearch-sidecar.py"), corpusDir: join(f.data, "corpus"), milvusPath: join(f.data, "index.db"), env: {HF_HUB_OFFLINE:"1",TRANSFORMERS_OFFLINE:"1"}, budgets: {ingestMs:20000} });
   try {
@@ -115,7 +117,8 @@ test("真实 memsearch 只索引一张短卡片，换说法召回、读取原文
     const sources = componentIndexSources(f.data, doc.id)!; assert.deepEqual(sources, [`component-card:${doc.id}:pool-submit`]);
     const { createHash } = await import("node:crypto");
     const path = join(f.data, "corpus/_knowledge", `${createHash("sha256").update(sources[0]).digest("hex")}.md`);
-    assert.equal(sidecar.indexedSections(path), 1); assert.doesNotMatch(readFileSync(path,"utf8"), /```cpp/);
+    assert.ok((sidecar.indexedSections(path) ?? 0) >= 1); assert.match(readFileSync(path,"utf8"), /```cpp/);
+    assert.match(readFileSync(path,"utf8"), /接入配置/); assert.doesNotMatch(JSON.stringify(result.hits), /```cpp/);
     assert.equal((await deleteComponentDocuments(f.data, [doc], "expert", search)).pending.length, 0);
     assert.equal(existsSync(path), false); assert.equal(componentIndexSources(f.data, doc.id), undefined);
     assert.equal(await sidecar.reindex(), 0); assert.deepEqual((await search.search(f.context,"线程池")).hits, []);

@@ -1,7 +1,7 @@
 import { SessionCompaction } from "./sessionCompaction.ts";
 export { looksLikeContextOverflow, compactionInstructions } from "./sessionCompaction.ts";
 import { GIT_COMMIT_IDENTITY_GUIDANCE } from "./gitCommitIdentity.ts";
-import { COMPONENT_ANALYST, COMPONENT_ANALYST_MISSION, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools } from "./componentKnowledgePlanning.ts";
+import { COMPONENT_ANALYST, COMPONENT_PLANNING_GUIDANCE, childKnowledgeTools, componentAnalysisPrompt, type ComponentAnalysisContext } from "./componentKnowledgePlanning.ts";
 import type { ComponentKnowledgeConsumption } from "./componentKnowledgeConsumption.ts";
 import { renderAgentDecision } from "./ownerDecisionContext.ts";
 import { openSessionCheckpoint, restorePendingToolResults, type SessionCheckpoint } from "./sessionCheckpoint.ts";
@@ -373,6 +373,8 @@ export interface CloudSessionOptions {
   resumeSession?: boolean;
   currentStep?: () => string;
   memoryContext?: () => (messages: any[]) => Promise<any[]>;
+  /** 仅在组件分析子会话启动时给出有界能力目录，不根据读代码行为选组件。 */
+  componentAnalysisContext?: () => ComponentAnalysisContext;
   /** 容器隔离(设计文档):换掉内建 bash 的执行后端,命令进任务
    * 容器跑;工具仍叫 bash,门禁与 transcript 看到的世界不变。
    * 子会话经同一 openSession 装配,天然同套隔离。 */
@@ -1738,7 +1740,7 @@ export class CloudSession {
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
         "子 Agent 不能提问、不能再派子 Agent。" +
-        (childKnowledgeTools(this.options.extraTools).length ? "实施计划的组件选型请派发 component-plan-agent 执行 component-plan Skill，任务卡提供计划路径与代码入口。" : ""),
+        (childKnowledgeTools(this.options.extraTools).length ? "实施环节开始编码前，派发 component-plan-agent 分析本次全部工作项可复用的组件；返回报告由主 Agent 整合到现有 implementation。" : ""),
       parameters: Type.Object({
         subagent_type: Type.String({
           description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",
@@ -1819,13 +1821,22 @@ export class CloudSession {
           this.refusalTool(childId, "Task",
             "Task", "Dispatch Agent", refusal),
         ],
-        // 复用同一知识上下文；阶段推进、推送和知识写入仍只归主会话。
+        // 复用同一知识范围；阶段推进和推送工具只归主会话。
         extraTools: childKnowledgeTools(this.options.extraTools),
       });
       this.childSessions.set(childId, child);
-      await child.prompt([String(params.prompt ?? ""),
-        ...(params.subagent_type === COMPONENT_ANALYST ? [COMPONENT_ANALYST_MISSION] : []),
-      ].join("\n\n"));
+      let prompt = String(params.prompt ?? "");
+      if (params.subagent_type === COMPONENT_ANALYST) {
+        let directory: ComponentAnalysisContext | undefined;
+        let directoryError: string | undefined;
+        try { directory = this.options.componentAnalysisContext?.(); }
+        catch (error) {
+          directoryError = String(error);
+          this.options.log?.(`组件分析启动目录读取未完成：${directoryError}`);
+        }
+        prompt = componentAnalysisPrompt(prompt, directory, directoryError);
+      }
+      await child.prompt(prompt);
     } catch (error) {
       lifecycle = child ? "interrupted" : "failed";
       setupError = String(error);
