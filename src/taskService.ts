@@ -8587,6 +8587,7 @@ export class TaskService {
             && readDeveloperAssistant(workspace).state === "acquiring") {
           this.activatePendingDeveloperAssistant(task);
         }
+        if (this.recoverFailedEarlyPipeline(task)) { requeued += 1; continue; }
         const prepushRecovery = this.reconcileInterruptedPrePush(task);
         if (prepushRecovery !== "none") {
           if (prepushRecovery === "scheduled") requeued += 1;
@@ -16971,6 +16972,36 @@ export class TaskService {
         task.pipelinePollSha = undefined; task.pipelinePollEpoch = undefined;
       }
     }
+  }
+
+  /** #461 的旧提前结束文案限定升级恢复；新版本再次失败不会重复自动重跑。 */
+  private recoverFailedEarlyPipeline(task: TaskState): boolean {
+    const { summary } = task, delivery = summary.delivery;
+    if (summary.status !== "failed"
+        || summary.detail !== "Agent 提前结束，内核当前步骤是 build，尚未到 delivery_watch"
+        || !task.cwd || summary.workspace_reclaimed_at || this.isRequirementAnalysis(task)
+        || !validPushReceipt(delivery?.git_push) || delivery.sha !== delivery.git_push.sha
+        || this.hasDeliveryMr(task) || delivery.stalled
+        || ["pause", "cancel"].includes(summary.control?.last_action ?? "")
+        || task.humanGate.all().some(record => record.status === "waiting")
+        || new TaskHostLedger(summary).pending()) return false;
+    try {
+      if (JSON.parse(readFileSync(join(task.cwd, ".mae-flow.json"), "utf8")).current !== "build") return false;
+    } catch { return false; }
+    const assistant = readDeveloperAssistant(summary.workspace);
+    if (["acquiring", "working", "ready", "returning", "running"].includes(assistant.state)
+        || (assistant.handoff && assistant.handoff.state !== "returned")) return false;
+    task.mission = [task.mission,
+      "服务升级已修正提前推送后的等待指引。保留已有代码、提交、推送收据和用户决定，从 current 继续当前任务。"
+      + "核对实现、自检与提交完成后执行 done，按后续归档和交付指引继续；流水线尚无运行或查询失败不阻止 build done。"
+      + "到 current 明确的宿主等待点再结束回合等待。已推送不代表验证通过，实际失败和未验证项如实报告。",
+    ].filter(Boolean).join("\n\n");
+    summary.status = "queued";
+    summary.detail = "服务升级已恢复提前推送后误等流水线的任务，将从原 build 步骤继续";
+    task.resume = true;
+    this.persist(task, true);
+    if (!this.queue.includes(summary.id)) this.queue.push(summary.id);
+    return true;
   }
 
   /** 修复旧版“build + verifying、Agent 已退出”的现场；真实推送收据始终保留。 */

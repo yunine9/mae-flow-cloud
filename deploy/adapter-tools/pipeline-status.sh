@@ -408,6 +408,11 @@ pipelines = fetch_url(
     f'?sha={urllib.parse.quote(sha, safe="")}&per_page=5&order_by=id&sort=desc'
 )
 
+# 只有成功取得的空数组才表示没有运行；查询失败不能让宿主继续空等。
+if not isinstance(pipelines, list):
+    log_err('流水线列表查询失败或响应不是 JSON 数组，无法判断运行状态')
+    sys.exit(1)
+
 if not pipelines:
     log_err('流水线查询返回空')
     print(json.dumps([]))

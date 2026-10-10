@@ -119,16 +119,26 @@ CODEHUB_TOKEN 支持）、原有 MCP 客户端及 token 配置。查询桥 API �
 
 ### 提前推送与流水线观察
 
-`pipeline_trigger.observe_only: true` 用于 CodeHub 由 push/MR 自动触发的部署。
+`pipeline_trigger: {"observe_only": true}` 用于 CodeHub 由 push/MR 自动触发的部署，
+不再配置不会执行的 `command` 或固定 `running`。
 此时 `/pipeline/trigger` 复用已有的状态查询链，不执行额外 rerun，原样返回
 实际运行记录；空结果表示尚未发现流水线，不再固定返回 `running`。
-需要真正执行触发命令的其他适配层继续使用原配置，不设置此字段。
-部署时同步本目录配置补丁并重启 adapter；仅升级 serve 也会在状态轮询返回
-空记录后纠正旧版 `running` 显示。
+查询失败仍报告平台错误，不能当成空结果。需要真正执行触发命令的其他
+适配层继续配置 `command` 和结果抽取，不设置 `observe_only: true`。
+部署时同步本目录配置补丁并重启 adapter 与 serve；仅升级宿主无法删除
+旧 adapter 配置里的固定状态，也无法修复旧查询脚本吞掉的 HTTP 错误。
 
 Cloud 在编码阶段允许提前推送、创建 MR 和验证。提前验证只记录提交状态，
 同时续接当前目标；只有内核交接或纯 CI 修复目标已完成后才由验证接管。
 重启会恢复现有代码现场和监听，不清空推送收据；暂停和待答复保持原状态。
+
+Issue #461 的旧失败任务也会在 serve 启动时自动恢复：旧报错为
+“Agent 提前结束，内核当前步骤是 build，尚未到 delivery_watch”，工作区仍在
+build、已有推送收据且未创建 MR 时，重新排队并从当前步骤继续，无需手动重试。
+恢复保留原代码、用户答复与验证结果；人工暂停、取消、待答复、接管或其他
+明确停摆的任务保持原状。新版本再次失败不会因重启反复恢复。
+部署须同步随版本发布的 `kernel/`；若设置了 `MAE_FLOW_HOME`，也要更新其实际
+指向的内核目录，确保恢复的会话读取新的 build 指引。
 
 ## AR 单号纠正
 

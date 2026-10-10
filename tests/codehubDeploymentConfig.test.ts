@@ -45,10 +45,7 @@ test("deployment gate lifecycle, SHA and failed gate stay independent", async ()
 });
 
 test("自动触发入口查询真实流水线，空记录不伪造 running", async () => {
-  assert(!config.pipeline_trigger.command.includes("rerun"));
-  assert(!config.pipeline_trigger.command.includes("{mr}"));
-  assert(config.pipeline_trigger.command.includes("--fail"));
-  assert(config.pipeline_trigger.command.at(-1).includes("?sha={sha}"));
+  assert.deepEqual(config.pipeline_trigger, { observe_only: true });
   for (const output of [[], [{sha, id: 1, status: "failed", checks: []}], [{sha, id: 1, status: "success", checks: []}]]) {
     await fixture("pipeline_status", output, async (adapter) => {
       const result = await adapter.handle("POST", "/pipeline/trigger", query,
@@ -136,6 +133,7 @@ test("deployment merge tool cannot produce a config missing MR discovery or disc
     const result = spawnSync("python3", [script, source, destination, resolve(".")], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const candidate = JSON.parse(readFileSync(destination, "utf8"));
+    assert.deepEqual(candidate.pipeline_trigger, { observe_only: true });
     assert.equal(candidate.port, 9988);
     assert.equal(candidate.token_file, "/run/secrets/codehub");
     assert.deepEqual(candidate.local_extension, { enabled: true });
@@ -149,6 +147,27 @@ test("deployment merge tool cannot produce a config missing MR discovery or disc
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
+});
+
+test("deployment validation permits command-free observation only for pipeline_trigger", () => {
+  const result = spawnSync("python3", ["-c", String.raw`
+import copy, json, pathlib, runpy
+module = runpy.run_path('deploy/adapter-tools/merge-adapter-config.py')
+root = pathlib.Path('.').resolve()
+config = json.loads(pathlib.Path('deploy/adapter-config/mr-pipeline.patch.json').read_text().replace('@REPO_DIR@', str(root)))
+config['pipeline_trigger'] = {'observe_only': True}
+module['validate'](config, root)
+for endpoint, spec in [('pipeline_trigger', {}), ('pipeline_trigger', {'observe_only': False}), ('pipeline_trigger', {'observe_only': 'true'}), ('mr_create', {'observe_only': True}), ('pipeline_status', {'observe_only': True})]:
+    invalid = copy.deepcopy(config)
+    invalid[endpoint] = spec
+    try:
+        module['validate'](invalid, root)
+    except ValueError as error:
+        assert endpoint in str(error), str(error)
+    else:
+        raise AssertionError(endpoint + ' unexpectedly accepted without a command')
+`], { encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("prod and test installations replace all old production script paths with their own repo", () => {

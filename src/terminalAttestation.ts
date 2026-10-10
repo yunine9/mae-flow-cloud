@@ -86,9 +86,12 @@ export function inspectKernelPosition(
     return { kind: "invalid", reason: "内核状态文件不可解析，不能推断终态" };
   }
   const current = typeof state.current === "string" ? state.current : "";
+  const kind = kernelPositionKind(current, declaredTerminal(kernelRoot, current));
   return {
-    kind: kernelPositionKind(current, declaredTerminal(kernelRoot, current)),
-    reason: current ? `内核当前步骤是 ${current}，尚未到 delivery_watch`
+    kind,
+    reason: kind === "terminal" ? `内核当前步骤是 ${current}，已到流程终态`
+      : kind === "external_verify" || kind === "delivery_watch" ? `内核当前步骤是 ${current}，已进入宿主验证等待点`
+      : current ? `内核当前步骤是 ${current}，尚未进入宿主验证等待点（external_verify 或 delivery_watch）`
       : "内核 current 缺失，不能推断交付就绪态",
   };
 }

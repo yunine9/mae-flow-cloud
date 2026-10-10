@@ -420,20 +420,25 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         try { response = recovering ? await getPipelineStatus(call) : await triggerPipeline(call); }
         catch (error) {
           host.assertActive();
-          operation.result = `流水线请求结果尚未核实：${safeMessage(host, error)}。继续查询该 SHA，不重复触发，也不阻塞当前工作。`;
+          operation.result = `流水线请求结果尚未核实：${safeMessage(host, error)}。宿主继续查询该 SHA，不重复触发。`;
           operation.state = "failed"; ledger.update(operation);
           const handedOff = await host.acceptPipeline(operation.sha!, undefined);
           host.summary.delivery = { ...host.summary.delivery, pipeline: "查询失败，正在重试" }; host.persist();
-          if (handedOff === false) host.resume(operation.result, undefined, operation);
+          if (handedOff === false) {
+            operation.result += EARLY_PIPELINE_CONTINUATION;
+            ledger.update(operation);
+            host.resume(operation.result, undefined, operation);
+          }
           return true;
         }
         host.assertActive();
         operation.pipeline_receipt = observedPipelineRun(operation.sha!, response);
         ledger.update(operation);
       }
-      operation.result = `流水线结果（${operation.sha}）：${safeMessage(host, JSON.stringify(operation.pipeline_receipt))}。旧 SHA 告警仅作历史，等待本次验证结果，不要重复修复旧告警。`;
-      if (!operation.pipeline_receipt) operation.result = `已查询提交 ${operation.sha}，尚未发现有效流水线；宿主将继续监听。推送不保证自动触发，MR 尚未创建时可按需要创建 MR。继续当前工作，不要重复修复旧 SHA 告警。`;
+      operation.result = `流水线结果（${operation.sha}）：${safeMessage(host, JSON.stringify(operation.pipeline_receipt))}。宿主监听本次提交，旧 SHA 告警仅作历史。`;
+      if (!operation.pipeline_receipt) operation.result = `已查询提交 ${operation.sha}，尚未发现有效流水线；宿主将继续监听。推送不保证自动触发，MR 尚未创建时可按需要创建 MR。`;
       const handedOff = await host.acceptPipeline(operation.sha!, operation.pipeline_receipt);
+      if (handedOff === false) operation.result += EARLY_PIPELINE_CONTINUATION;
       operation.state = "succeeded";
       ledger.update(operation);
       if (handedOff !== false) return true; // 正式验证接管；提前验证则继续走下方同一目标续接。
@@ -563,6 +568,8 @@ export function taskHostGoal(host: TaskHostRuntime): string {
 
 const GUIDANCE = DECISION_SYNC_GUIDANCE + " 原始答复可用 task_context(view=instructions, keyword=来源编号) 查询。" + "任务内已有授权贯穿宿主操作，不因工作阶段重复确认。先查 task_context 了解真实现场；代码编辑、提交、编译和 UT 继续使用任务容器的文件/Bash 工具。基线预热保留，但最终交付不自动补跑 Build-Fix；过程中可以自主编译和执行 UT，无需等待审批；按改动影响选择验证范围，记录命令、范围、版本和结果。独立 Build-Fix 仅在需要时用 retry_verification 主动请求，预热成功不代表改动验证通过。需要平台能力时直接调用宿主工具。文件勾选机制已取消，旧清单不限制当前任务，不需要恢复路径或扩大范围。责任人改变目标后用 task_control 登记，不能只口头答应；只有明确放弃或延期的条目才 defer_feedback。宿主操作返回 queued 后结束本轮，让平台执行；普通操作完成后沿用原会话，只需处理返回结果和受影响的内容，不要重新熟悉整个任务；queued 不等于成功。不要读取令牌或修改平台控制文件。";
 
+const EARLY_PIPELINE_CONTINUATION = "提前验证由宿主在后台监听，继续按 current 完成当前步骤；build 的实现、自检和提交完成后执行 done，流水线通过不是 build done 的前提。到 current 明确的宿主等待点再结束回合等待。";
+
 export function createTaskHostTools(host: TaskHostRuntime) {
   const reply = (value: unknown, error = false) => ({ content: [{ type: "text" as const,
     text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }], details: {}, isError: error });
@@ -605,14 +612,17 @@ export function createTaskHostTools(host: TaskHostRuntime) {
         target: Type.Optional(Type.String()), repo: Type.Optional(Type.String({ description: "pull_repo 仅克隆关联仓供分析，不更新当前 MR 分支；当前分支用 sync_branch 同步。地址须来自任务或责任人指令" })), feedback_id: Type.Optional(Type.String({ description: "暂缓时指定一条完整反馈 ID，原样复制" })) }),
       execute: async (id: string, input: HostRequest) => guarded(async () => ({ ...await queueTaskHostOperation(host, id, input),
         next: "立即结束本轮，平台执行后会带结果继续。不要在 queued 时报告成功。" })) }),
-    defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。可在编码中提前验证，宿主监听结果并续接尚未完成的工作。尚无运行记录不等于验证失败，不要反复触发或修复旧 SHA 告警。",
+    defineTool({ name: "task_pipeline", label: "流水线查询与触发", description: "查询本任务已推送提交的流水线状态和日志，或在已有交付授权下触发验证；不改变工作目标。" + EARLY_PIPELINE_CONTINUATION + "尚无运行记录不等于验证失败，不要反复触发或修复旧 SHA 告警。",
       parameters: Type.Object({ action: Type.Union([Type.Literal("status"), Type.Literal("trigger")]) }),
       execute: async (id: string, input: { action: string }) => guarded(async () => {
         const sha = host.summary.delivery?.git_push?.sha ?? host.summary.delivery?.sha;
         if (!sha || !host.platformUrl) throw new Error("尚无已推送提交或未配置流水线平台");
         const call = { platformUrl: host.platformUrl, sha, repo: host.summary.repo_url, mr: host.summary.delivery?.mr_id === undefined ? undefined : String(host.summary.delivery.mr_id), credential: host.credential };
-        if (input.action === "status") return observedPipelineRun(sha, await getPipelineStatus(call))
-          ?? { sha, status: "not_found", message: "尚未发现本次提交的有效流水线；不代表运行中或失败。" };
+        if (input.action === "status") {
+          const run = observedPipelineRun(sha, await getPipelineStatus(call));
+          return run ? { ...run, message: EARLY_PIPELINE_CONTINUATION }
+            : { sha, status: "not_found", message: "尚未发现本次提交的有效流水线；不代表运行中或失败。" + EARLY_PIPELINE_CONTINUATION };
+        }
         if (input.action !== "trigger") throw new Error("未知流水线操作");
         return { ...await queueTaskHostOperation(host, id, { action: "trigger_pipeline", reason: "触发当前已推送提交的流水线" }), next: "立即结束本轮，由宿主执行并带回结果；queued 不等于成功。" };
       }) }),

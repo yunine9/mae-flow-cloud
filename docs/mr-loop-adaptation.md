@@ -400,8 +400,11 @@ npm run adapter -- --config adapter.json --selftest
   exists...: !N`;REST 重复建**静默 200 空 body**。两种形状都别赌——
   适配层已加 `mr_lookup` 先查后建,创建失败再回查一次兜竞态;
 - **D5 触发**:push 自动触发流水线,不需要显式 trigger——
-  `pipeline_trigger` 配成查询 `actual_head_pipeline` 的只读命令 +
-  `status: {"const": "running"}` 即可(§11);注意 `is_valid: false`
+  `pipeline_trigger` 配置为 `{"observe_only": true}`，复用
+  `pipeline_status` 查询实际运行，不单独配置命令或固定状态(§11)。
+  2026-10-10 勘误：旧文档建议只读命令配 `status: {"const": "running"}`，
+  会把空记录误报为正在运行，已撤销此建议；查询失败也必须保留失败事实，
+  不能翻译为“没有流水线”。注意 `is_valid: false`
   表示 MR 头上还没有有效流水线(挂着的可能是旧分支的过期结果),适配层
   这时**不要**把旧灯翻译成终态;
 - **C1 CLI 三代不兼容**:Python codehub.exe v0.4.9(已装)与设计契约
@@ -454,9 +457,7 @@ npm run adapter -- --config adapter.json --selftest
     // 但 mr_lookup 在前面已经把已存在的单接走了,这条只处理真创建。
   },
   "pipeline_trigger": {   // D5:push 自动触发,这里只是查询,不产生副作用
-    "command": ["curl", "-sf", "-H", "X-Auth-Token: {token}",
-      "https://<host>/api/v3/projects/{repo_path}/merge_requests/{mr}/pipelines/latest"],
-    "status": {"const": "running"}   // 交给宿主轮询 pipeline_status 收敛
+    "observe_only": true  // 直接使用下面的 pipeline_status，空记录保持为空
   },
   "pipeline_status": {
     // 2026-08-28 起支持降级链(candidates,首个成功赢,逐路记因,

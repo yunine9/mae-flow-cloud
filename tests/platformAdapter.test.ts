@@ -24,6 +24,42 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlatformAdapter } from "../src/platformAdapter.ts";
 
+test("只观察自动流水线不需要触发命令，自检和调用都保留真实查询失败", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-observe-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "adapter.json");
+  const cli = fakeCli(dir);
+  makeAdapter(dir, cli);
+  const config = JSON.parse(readFileSync(path, "utf8"));
+  config.pipeline_trigger = { observe_only: true };
+  config.pipeline_status = { command: [process.execPath, cli, "boom", "--token", "{token}"] };
+  writeFileSync(path, JSON.stringify(config));
+  const adapter = new PlatformAdapter(path, () => {});
+  await assert.rejects(adapter.handle("POST", "/pipeline/trigger", new URLSearchParams(),
+    { repo: "r", sha: "abc" }, {}), /token 无效/);
+  const report = await adapter.selftest({ repo: "r", sha: "abc" });
+  assert.match(report, /pipeline_trigger.*observe_only.*pipeline_status/);
+  assert.match(report, /GET \/pipeline\/status -> 失败:.*token 无效/s);
+  assert.doesNotMatch(report, /svc-token-0000/);
+});
+
+test("只观察模式只豁免流水线触发命令，真正触发和其他端点仍须有命令", t => {
+  const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-config-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, "adapter.json");
+  makeAdapter(dir, fakeCli(dir));
+  const base = JSON.parse(readFileSync(path, "utf8"));
+  for (const trigger of [{}, { observe_only: false }, { observe_only: "true" }]) {
+    writeFileSync(path, JSON.stringify({ ...base, pipeline_trigger: trigger }));
+    assert.throws(() => new PlatformAdapter(path, () => {}), /pipeline_trigger.command/);
+  }
+  for (const section of ["mr_create", "pipeline_status"]) {
+    writeFileSync(path, JSON.stringify({ ...base, pipeline_trigger: { observe_only: true },
+      [section]: { observe_only: true } }));
+    assert.throws(() => new PlatformAdapter(path, () => {}), new RegExp(`${section}.*command`));
+  }
+});
+
 test("流水线材料可传超过 8 MiB 的完整日志，目录模式也不截成 512 KiB", async t => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-large-log-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

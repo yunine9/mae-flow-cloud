@@ -34,7 +34,7 @@
  *   },
  *   "pipeline_trigger": {
  *     "command": [...同上占位符,外加 {sha}...],
- *     "status": {"json": "data.state"},    // 或 {"const": "running"}
+ *     "status": {"json": "data.state"},
  *     "log": {"json": "data.fail_log"},    // 可选
  *     "checks": {"json": "data.jobs"},     // 可选，建议配置以便诊断
  *     "check_dimension": {"json": "quality_dimension"},
@@ -59,6 +59,9 @@
  *     "check_status_map": {...}
  *   }
  * }
+ *
+ * push/MR 自动触发的平台只需 "pipeline_trigger": {"observe_only": true}，
+ * 此时复用 pipeline_status 的真实结果，不配置触发命令或固定状态。
  *
  * 占位符:{repo} {source_branch} {target_branch} {title} {sha} {mr}
  *        注意:{mr} 在 status/gates/discussions 是 MR iid，在 artifacts
@@ -94,8 +97,6 @@ import {
 type Extract = { json?: string; regex?: string; const?: string };
 
 interface CommandSpec {
-  /** 平台通过 push/MR 自动触发时，只观察现有运行；空查询不伪造 running。 */
-  observe_only?: boolean;
   command: string[];
   timeout_s?: number;
   /** 命令输出**就是宿主契约 JSON**(pipeline_status: {runs:[...]})——
@@ -142,6 +143,10 @@ interface CommandSpec {
    * 否则 platformAdapter 拒绝执行(fail-closed 防重复发言)。 */
   idempotency_no_cli_key?: boolean;
 }
+
+/** 自动触发的平台复用状态查询；真正触发的平台仍须配置可执行命令。 */
+type PipelineTriggerSpec = (CommandSpec & { observe_only?: false })
+  | { observe_only: true };
 
 /** 列表型端点(门禁/讨论/材料):items 指到数组,fields 逐字段抽。 */
 interface ListSpec extends CommandSpec {
@@ -207,7 +212,7 @@ interface AdapterConfig {
   mr_discover?: CommandSpec;
   /** 单号纠正成功后关闭旧 MR。未配置时保留旧 MR 并明确报告清理失败。 */
   mr_close?: CommandSpec;
-  pipeline_trigger: CommandSpec;
+  pipeline_trigger: PipelineTriggerSpec;
   pipeline_status: Degradable<CommandSpec>;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
    * 不配=对应 HTTP 路由回 404,宿主 fail-open 回纯流水线语义。 */
@@ -407,12 +412,14 @@ export class PlatformAdapter {
     // 部署配置语义:坏了拒绝启动。带着一半配置起服,比不起服更害人。
     const raw = readFileSync(configPath, "utf-8");
     this.config = JSON.parse(raw) as AdapterConfig;
-    for (const section of
-        ["mr_create", "pipeline_trigger"] as const) {
-      const spec = this.config[section];
-      if (!Array.isArray(spec?.command) || spec.command.length === 0) {
-        throw new Error(`配置缺 ${section}.command(argv 数组)`);
-      }
+    const mrCreate = this.config.mr_create;
+    if (!Array.isArray(mrCreate?.command) || mrCreate.command.length === 0) {
+      throw new Error("配置缺 mr_create.command(argv 数组)");
+    }
+    const trigger = this.config.pipeline_trigger;
+    if (trigger?.observe_only !== true
+        && (!Array.isArray(trigger?.command) || trigger.command.length === 0)) {
+      throw new Error("配置缺 pipeline_trigger.command(argv 数组)");
     }
     // pipeline_status 允许降级链:每个候选都要是完整可执行的 spec。
     const statusCandidates = this.config.pipeline_status
@@ -809,7 +816,7 @@ export class PlatformAdapter {
     }
     if (method === "POST" && path === "/pipeline/trigger") {
       const spec = this.config.pipeline_trigger;
-      if (spec.observe_only) {
+      if (spec.observe_only === true) {
         const result = await this.handle("GET", "/pipeline/status", new URLSearchParams({
           sha: String(body.sha ?? ""), repo: String(body.repo ?? ""), mr: String(body.mr ?? ""),
         }), {}, headers);
@@ -1081,12 +1088,15 @@ export class PlatformAdapter {
     const lines: string[] = ["== adapter selftest =="];
     const mask = (parts: string[]) => parts
       .map((part) => part.replace(/\{token\}/g, "<token>")).join(" ");
+    const trigger = this.config.pipeline_trigger;
+    lines.push(trigger.observe_only === true
+      ? "[配置] pipeline_trigger: observe_only，复用 pipeline_status，只观察已有运行"
+      : `[配置] pipeline_trigger(只印不执行): ${mask(trigger.command)}`);
     const sections: Array<[string, CommandSpec | undefined]> = [
       ["mr_create(只印不执行)", this.config.mr_create],
       ["mr_close(只印不执行)", this.config.mr_close],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["mr_discover(全生命周期查找)", this.config.mr_discover],
-      ["pipeline_trigger(只印不执行)", this.config.pipeline_trigger],
       ["mr_gates", this.config.mr_gates],
       ["mr_discussions", this.config.mr_discussions],
       ["discussion_reply(只印不执行)", this.config.discussion_reply],

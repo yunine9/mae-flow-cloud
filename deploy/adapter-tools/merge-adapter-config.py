@@ -48,7 +48,11 @@ def commands(spec):
 
 
 def validate(config, root):
-    missing = [name for name in REQUIRED_ENDPOINTS if not commands(config.get(name))]
+    missing = [name for name in REQUIRED_ENDPOINTS
+               if not commands(config.get(name))
+               and not (name == "pipeline_trigger"
+                        and isinstance(config.get(name), dict)
+                        and config[name].get("observe_only") is True)]
     if missing:
         fail("缺少持续交付必备端点或命令: %s" % ", ".join(missing))
     unresolved = [name for name in REQUIRED_ENDPOINTS

@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TaskService } from "../src/taskService.ts";
-import { queueTaskHostOperation, finishTaskHostOperation, TaskHostLedger } from "../src/taskHostTools.ts";
+import { queueTaskHostOperation, finishTaskHostOperation, TaskHostLedger, createTaskHostTools } from "../src/taskHostTools.ts";
 import { parsePipelineStatus, triggerPipeline } from "../src/pipelineClient.ts";
 import { PlatformAdapter } from "../src/platformAdapter.ts";
 
@@ -101,9 +101,32 @@ test("提前查询失败继续原目标并重试观察，不重复触发；出�
   await queueTaskHostOperation(host, "early-check", { action: "trigger_pipeline", reason: "提前检查" });
   await finishTaskHostOperation(host);
   assert.equal(task.summary.status, "queued"); assert.match(task.mission, /queryENE.sh/);
+  assert.match(task.mission, /执行 done/);
   assert.equal(task.summary.delivery.pipeline, "查询失败，正在重试");
   f.outage(false); f.response({ runs: [{ sha, status: "running" }] });
   await until(() => task.summary.delivery.pipeline === "running");
+  assert.equal(f.triggers(), 1);
+});
+
+for (const status of ["not_found", "running", "success", "failed"]) test(`build 提前验证 ${status} 后继续步骤，工具查询也说明 done 不等待流水线`, async t => {
+  const f = await fixture(t), { task, service } = f;
+  f.response({ runs: status === "not_found" ? [] : [{ sha, status }] });
+  const host = service.taskHostRuntime(task);
+  const tool = createTaskHostTools(host).find(tool => tool.name === "task_pipeline")!;
+  const result = await (tool.execute as any)("query-before-done", { action: "status" });
+  const reply = JSON.parse(result.content[0].text);
+  assert.equal(reply.status, status);
+  assert.match(reply.message, /流水线通过不是 build done 的前提/);
+  assert.equal(task.summary.status, "running", "只读查询不结束工作或推进内核");
+  await queueTaskHostOperation(host, "early-check", { action: "trigger_pipeline", reason: "提前验证" });
+  await finishTaskHostOperation(host);
+  assert.equal(task.summary.status, "queued");
+  assert.match(task.mission, /queryENE.sh/);
+  assert.match(task.mission, /执行 done/);
+  assert.doesNotMatch(task.mission, /等待本次验证结果/);
+  assert.equal(task.summary.delivery.pipeline, status);
+  assert.equal(task.summary.delivery.mr_url, undefined);
+  assert.equal(JSON.parse(readFileSync(join(task.cwd, ".mae-flow.json"), "utf8")).current, "build");
   assert.equal(f.triggers(), 1);
 });
 
