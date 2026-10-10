@@ -1,6 +1,6 @@
 ---
 name: component-knowledge-extraction
-description: 仅从基础组件仓代码与 everycode 真实调用，分任务萃取组件契约、推荐范式和误用陷阱，独立评审后生成可程序解析的知识草稿与派生预览。
+description: 依据基础组件仓代码与 everycode 真实调用，分任务萃取组件契约、推荐范式和误用陷阱，独立评审后生成可程序解析的知识草稿与派生预览。
 ---
 
 # 组件范式萃取
@@ -9,7 +9,7 @@ description: 仅从基础组件仓代码与 everycode 真实调用，分任务�
 
 ## 来源与判断
 
-事实来源只有基础仓代码及 everycode 实际展开的调用代码。接口、实现、测试、构建和发布配置用于核对能力与约束；跨仓调用用于发现场景、变体与误用。调用多不等于推荐，公开声明不等于受支持入口。平台不提供上传资料或无线豆包。
+依据基础仓代码及 everycode 实际展开的调用代码研究组件用法。接口、实现、测试、构建和发布配置用于核对能力与约束；跨仓调用用于发现场景、变体与误用。调用多不等于推荐，公开声明不等于受支持入口。
 
 首先读 [平台协议](references/platform-pipeline.md) 和 [产物格式](references/schema.md)。核对接口与示例时读 [接口边界](references/api-boundary.md) 和 [组件研究](references/component.md)。阶段分别读 [盘点](references/phase-inventory.md)、[规划](references/phase-plan.md)、[契约](references/phase-contracts.md)、[范式](references/phase-paradigm.md)、[陷阱](references/phase-pitfalls.md)、[导航](references/phase-index.md)、[汇总](references/phase-synthesis.md)。独立评审读 [评审标准](references/phase-review.md)。范式正文参考 [模板](assets/templates/paradigm.md)。保存与修订遵循 [草稿约定](references/draft-contract.md)。
 

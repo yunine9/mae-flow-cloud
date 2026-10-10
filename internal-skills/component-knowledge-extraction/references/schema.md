@@ -20,7 +20,7 @@ paradigm 字段全部必填，空集合用 []：
 | usage_evidence | 实际展开并回读的 everycode-* 编号列表 |
 | open_questions | 未确认问题列表 |
 
-基础仓引用：repository_id、path、revision、start、end。revision 使用上下文固定值；行号从 1 开始，必须真实读过全部范围。不能引用目录、旧知识文档或 Agent 指令。范式推荐状态还需要实际展开的调用证据，暂无调用时保留 unverified 草稿。
+基础仓引用：repository_id、path、revision、start、end。revision 使用上下文固定值；行号从 1 开始，必须真实读过全部范围。不能引用目录或 Agent 指令。范式推荐状态还需要实际展开的调用证据，暂无调用时保留 unverified 草稿。
 
 replaces.identifiers 写精确符号，如 std::thread、Executors.newFixedThreadPool；imports 写实际导入对象；patterns 写不能可靠机械匹配的写法描述。有合法用途的原生 API 不可笼统列为禁用项，具体例外写入 applicability。legacy 不进入推荐选择表或规则。没有 replaces 的推荐能力仍进入选择表。
 
