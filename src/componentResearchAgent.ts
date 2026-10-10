@@ -17,7 +17,7 @@ import { KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool 
 import { isWholeResearchReview, type ResearchSection } from "./componentResearchDocument.ts";
 import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult } from "./componentResearchPipeline.ts";
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
-import { researchDraftContext, type ResearchExecution } from "./componentResearch.ts";
+import { researchDraftContext, researchSourceRepositories, type ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 
@@ -49,7 +49,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   input.update({ skill: { name: skill.name, digest: skill.digest }, analysis_skill: { name: analysisSkill.name, digest: analysisSkill.digest }, use_latest_skill: false, format: "joint-document",
     ...(input.record.document ? {} : { document: { overview: "", sections: [] } }) });
   await checkEc(input.signal);
-  const components = input.record.components ?? [input.record.component];
+  const components = researchSourceRepositories(input.record);
   const controller = new AbortController(), signal = AbortSignal.any([input.signal, controller.signal]);
   let totalExpired = false;
   const timer = setTimeout(() => { totalExpired = true; controller.abort(new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE)); }, 48 * 60 * 60_000); timer.unref();
@@ -208,7 +208,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
             status: "recommended 需要完整模板和调用、测试依据；未验证研究可留空代码字段且只保留在任务内",
           },
           technology_stack: { id: input.record.language, name: technologyStack?.name ?? input.record.language },
-          topic: input.record.topic, scope: "本组件的全部能力；依赖的其他组件通过 everycode 核对真实调用", components, revisions,
+          topic: input.record.topic, scope: "按技术栈分析文件操作、数据库操作、P2P 等功能能力；参考仓提供代码线索，一个能力可跨仓实现，真实组件与场景由分析确定", source_repositories: components, revisions,
           module: pipeline?.state.tasks.find(t => t.id === "inventory")?.result?.components?.find(module => module.id === task.component),
           structure: task.phase === "inventory" ? knowledgeStructure(snapshots) : undefined,
           feedback: input.review ? { message: input.review.message, previous_revisions: input.review.previous_revisions } : undefined });

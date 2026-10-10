@@ -26,7 +26,7 @@ test("组件只允许目录中的技术栈；停用保留旧关联，删除后�
     assert.equal(saveComponentRepository(dir, { id: row.id, name: "平台组件新版" }, "dev").languages[0], "platform-stack");
     assert.throws(() => saveComponentRepository(dir, { ...component, name: "新组件" }, "dev"), /已停用/);
     const research = new ComponentResearch(dir, async () => { throw new Error("不应启动研究"); });
-    assert.throws(() => research.start({ component_id: row.id, language: "platform-stack" }, "dev"), /已停用/);
+    assert.throws(() => research.start({ repository_ids: [row.id], language: "platform-stack" }, "dev"), /已停用/);
     deleteTechnologyStack(dir, "platform-stack", "dev");
     assert.deepEqual(componentRepositories(dir)[0].languages, []);
     assert.equal(componentRepositories(dir)[0].enabled, false);

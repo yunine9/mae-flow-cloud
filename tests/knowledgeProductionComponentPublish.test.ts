@@ -59,10 +59,10 @@ function managers(dir: string) {
 }
 async function seed(dir: string, research: ComponentResearch) {
   seedTechnologyStacks(dir, ["cpp"]);
-  // 一个组件只有一次研究：每次播种登记一个新组件，得到各自独立的研究。
+  // 每次播种指定新的参考来源范围，得到独立的研究记录用于验证发布。
   const index = componentRepositories(dir).length;
   const component = saveComponentRepository(dir, { name: index ? `文件组件 ${index}` : "文件组件", repository: `https://example.test/component${index || ""}.git`, branch: "main", path: "src", languages: ["cpp"] }, "alice");
-  const record = research.start({ language: "cpp", component_id: component.id }, "alice");
+  const record = research.start({ language: "cpp", repository_ids: [component.id]}, "alice");
   await until(() => research.get(record.id).status === "done", "组件测试草稿未在5秒内完成");
   return research.get(record.id);
 }

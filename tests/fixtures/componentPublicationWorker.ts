@@ -2,11 +2,11 @@ import fs from "node:fs";
 import { componentGuideEvidence, componentGuideOverview, componentGuideSection } from "./componentGuide.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { ComponentResearch, type ResearchExecution } from "../../src/componentResearch.ts";
+import { ComponentResearch, researchSourceRepositories, type ResearchExecution } from "../../src/componentResearch.ts";
 import { DomainKnowledgeExtraction } from "../../src/domainKnowledgeExtraction.ts";
 
 export function componentPublicationExecute(input: ResearchExecution): Promise<string> {
-  const repositoryIds = (input.record.components ?? [input.record.component]).map(component => component.id);
+  const repositoryIds = researchSourceRepositories(input.record).map(component => component.id);
   input.update({ revisions: Object.fromEntries(repositoryIds.map(id => [id, "a".repeat(40)])) });
   if (input.review) {
     const section = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;

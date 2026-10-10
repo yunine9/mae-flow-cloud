@@ -55,6 +55,43 @@ const withPipeline = async (body: (pipeline: ComponentResearchPipeline, file: st
   finally { rmSync(dir, { recursive: true, force: true }); }
 };
 
+test("两个来源仓盘点三个功能组件，P2P 跨仓，按能力独立规划而不是逐仓建组件", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "component-capability-boundaries-"));
+  const sourceIds = ["reference-a", "reference-b"];
+  const capabilities = [
+    { id: "file-operations", title: "文件操作", repository_ids: [sourceIds[0]], scope: "读取、写入和关闭文件；reference-a:src/files.cpp" },
+    { id: "database-operations", title: "数据库操作", repository_ids: [sourceIds[0]], scope: "连接、查询和事务；reference-a:src/database.cpp" },
+    { id: "p2p", title: "P2P 通信", repository_ids: sourceIds, scope: "发现节点并收发数据；reference-a:src/peer.cpp、reference-b:src/transport.cpp" },
+  ];
+  const pipeline = new ComponentResearchPipeline(join(directory, "state.json"), "capability-analysis", sourceIds);
+  const executed: ComponentWork[] = [];
+  const plans = deferred();
+  let startedPlans = 0;
+  try {
+    await pipeline.run({ signal: new AbortController().signal,
+      execute: async task => {
+        executed.push(task);
+        if (task.phase === "inventory") return { findings: "文件和数据库能力共用来源仓，P2P 的门面与传输实现跨仓协作。", open_questions: [], components: capabilities };
+        if (task.phase === "plan") {
+          if (++startedPlans === capabilities.length) plans.resolve();
+          await plans.promise;
+        }
+        return { findings: `已核对 ${task.title} 的源码、调用与测试`, open_questions: [],
+          ...(task.phase === "plan" ? { paradigms: [{ id: "use", title: `${task.title}完整用法`, need: `完成${task.title}` }] } : {}) };
+      }, review: async () => undefined, changed() {},
+    });
+    assert.equal(executed.filter(task => task.phase === "inventory").length, 1);
+    assert.deepEqual(executed.filter(task => task.phase === "plan").map(task => task.component), capabilities.map(component => component.id));
+    assert.ok(executed.filter(task => task.component).every(task => !sourceIds.includes(task.component!)));
+    for (const capability of capabilities) {
+      assert.deepEqual(JSON.parse(pipeline.state.tasks.find(task => task.id === `plan-${capability.id}`)!.spec), capability);
+      const usage = pipeline.state.tasks.find(task => task.id === `paradigm-${capability.id}-use`)!;
+      assert.deepEqual(JSON.parse(usage.spec).module.repository_ids, capability.repository_ids);
+    }
+    assert.deepEqual(pipeline.state.tasks.find(task => task.id === "synthesis")!.dependencies, capabilities.map(component => `index-${component.id}`));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("默认三个独立模块并行，评审占用并发位置且通过后才释放后续任务", async () => {
   await withPipeline(async pipeline => {
     const firstThreeStarted = deferred(), fourthStarted = deferred(), firstReviewStarted = deferred();

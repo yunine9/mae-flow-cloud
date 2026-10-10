@@ -76,7 +76,7 @@ export function componentSourceTool(
 ) {
   return defineTool({
     name: "component_source",
-    label: "读取组件源码",
+    label: "读取参考源码",
     description:
       '只读本次固定版本的源码。list 默认列当前层的目录与文件，逐层指定 path 深入；recursive:true 按文件分页。默认排除平台生成目录，include_platform:true 可查看。read 读文件。search 多关键词用 keywords 数组，任意一个命中即可；完整短语用 query，两者只填一个。默认忽略大小写。每次只搜索指定仓，其他仓须分别调用。不能修改源码。',
     parameters: Type.Object({
@@ -311,19 +311,21 @@ export function languageComponentSourceTool(
   const sources = new Map<string, Promise<{root: string; revision: string}>>();
   return defineTool({
     ...base,
-    description: `按 component_id 选择本次研究清单中的一个仓。未提供 ID 时仅在一个仓时自动选择。${base.description}`,
-    parameters: Type.Object({ ...base.parameters.properties, component_id: Type.Optional(Type.String()) }),
+    description: `按 repository_id 选择参考来源仓；这是代码来源编号，功能组件由能力分析确定。未提供 ID 时仅在一个来源仓时自动选择。${base.description}`,
+    parameters: Type.Object({ ...base.parameters.properties, repository_id: Type.Optional(Type.String()), component_id: Type.Optional(Type.String({ description: "旧固定方法的来源仓编号；新方法使用 repository_id。" })) }),
     async execute(id: string, input: any, signal, onUpdate, context) {
-      const component = components.find(c => c.id === input.component_id) ?? (!input.component_id && components.length === 1 ? components[0] : undefined);
-      if (!component) return { ...reply("请指定本次组件清单中的 component_id"), isError: true };
+      if (input.repository_id && input.component_id && input.repository_id !== input.component_id) return { ...reply("参考来源仓编号不一致"), isError: true };
+      const sourceId = input.repository_id ?? input.component_id;
+      const component = components.find(c => c.id === sourceId) ?? (!sourceId && components.length === 1 ? components[0] : undefined);
+      if (!component) return { ...reply("请指定本次参考来源仓的 repository_id"), isError: true };
       try {
         if (!sources.has(component.id)) sources.set(component.id, prepare(component));
         const source = await sources.get(component.id)!;
-        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, component_id: component.id, repository: component.repository }), `${component.id} (${component.repository})`, excludePath ? path => excludePath(path, component.id) : undefined).execute(id, input, signal, onUpdate, context);
+        return await componentSourceTool(source.root, source.revision, component.path, event => onUse({ ...event, repository_id: component.id, component_id: component.id, repository: component.repository }), `${component.id} (${component.repository})`, excludePath ? path => excludePath(path, component.id) : undefined).execute(id, input, signal, onUpdate, context);
       } catch (error) {
         sources.delete(component.id);
         const message = error instanceof Error ? error.message : "源码准备失败";
-        onUse({ tool: "component_source", action: input.action, component_id: component.id, repository: component.repository, status: "failed", error: message });
+        onUse({ tool: "component_source", action: input.action, repository_id: component.id, component_id: component.id, repository: component.repository, status: "failed", error: message });
         return { ...reply(message), isError: true };
       }
     },

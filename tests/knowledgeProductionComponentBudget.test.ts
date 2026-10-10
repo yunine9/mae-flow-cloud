@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
+import { ComponentResearch, researchSourceRepositories, type ResearchExecution } from "../src/componentResearch.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { saveKnowledgeReviewNote, type KnowledgeReviewSources } from "../src/knowledgeReviewNotes.ts";
 
@@ -18,13 +18,13 @@ function withTwoSlots(...args: ConstructorParameters<typeof ComponentResearch>) 
 const timeoutReason = "停止超时：执行体 60 秒内未退出，已强制释放";
 const config = { name: "文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["cpp"] };
 const section = (ids: string[]) => componentGuideSection("files", ids, { title: "文件处理", content: "文件处理约束。" });
-/** 一个组件只有一次研究：要占满并发槽位就登记多个组件。 */
+/** 用不同参考来源范围构造独立研究，验证共享调度预算。 */
 function componentIds(dataDir: string, count: number) {
   seedTechnologyStacks(dataDir, config.languages);
   return Array.from({ length: count }, (_, i) => saveComponentRepository(dataDir, { ...config, name: `文件组件 ${i}`, repository: `https://example.test/files-${i}.git` }, "alice").id);
 }
 function writeDocument(input: ResearchExecution) {
-  const ids = input.record.components!.map(component => component.id);
+  const ids = researchSourceRepositories(input.record).map(component => component.id);
   for (const event of componentGuideEvidence("cpp", ids)) input.evidence(event);
   input.editDocument!({ action: "overview", overview: componentGuideOverview("文件处理组件的依赖关系。") });
   input.editDocument!({ action: "outline", entries: [{ id: "files", title: "文件处理", repository_ids: ids }] });
@@ -48,10 +48,10 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     return "迟到的草稿";
   });
   try {
-    const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
-    const second = research.start({ language: "cpp", component_id: ids[1] }, "bob");
+    const first = research.start({ language: "cpp", repository_ids: [ids[0]]}, "alice");
+    const second = research.start({ language: "cpp", repository_ids: [ids[1]]}, "bob");
     await settle();
-    const third = research.start({ language: "cpp", component_id: ids[2] }, "carol");
+    const third = research.start({ language: "cpp", repository_ids: [ids[2]]}, "carol");
     assert.equal(started.length, 2);
     assert.equal(research.get(third.id).status, "queued");
     research.stop(first.id); research.stop(second.id);
@@ -76,7 +76,7 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
     assert.deepEqual(research.get(first.id), resumed, "旧执行体迟到返回不能改状态、草稿或证据");
     assert.throws(() => research.review(first.id, { section_id: "files", mode: "discuss", message: "不要并发新一轮" }, "alice"), /本轮完成|停止后/,
       "旧执行体 finally 不能释放新执行体的槽位");
-    const fourth = research.start({ language: "cpp", component_id: ids[3] }, "dave");
+    const fourth = research.start({ language: "cpp", repository_ids: [ids[3]]}, "dave");
     await settle();
     assert.equal(research.get(fourth.id).status, "queued", "第三个研究和接续中的研究仍占两个有效槽位");
     assert.equal(started.length, 4);
@@ -198,8 +198,8 @@ for (const action of ["stop", "shutdown"] as const) {
     const rename = fs.renameSync;
     let injected = false, stopping: Promise<unknown> | undefined;
     try {
-      const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
-      const second = research.start({ language: "cpp", component_id: ids[1] }, "bob");
+      const first = research.start({ language: "cpp", repository_ids: [ids[0]]}, "alice");
+      const second = research.start({ language: "cpp", repository_ids: [ids[1]]}, "bob");
       await settle();
       fs.renameSync = ((from, to) => {
         if (!injected && String(to) === join(dataDir, "component-research", first.id, "record.json")) {
@@ -222,7 +222,7 @@ for (const action of ["stop", "shutdown"] as const) {
       releases[0](); await settle();
       assert.deepEqual(research.get(first.id), failed, "迟到写入不覆盖失败事实");
       if (action === "stop") {
-        research.start({ language: "cpp", component_id: ids[2] }, "carol");
+        research.start({ language: "cpp", repository_ids: [ids[2]]}, "carol");
         await settle(); assert.equal(started.length, 3, "预算释放后其他研究获得槽位");
       } else assert.equal(research.get(second.id).status, "failed");
       assert.ok(research.warnings().some(warning => warning.includes(`component-research/${first.id}/record.json`) && warning.includes("EIO")));
@@ -248,10 +248,10 @@ for (const action of ["stop", "shutdown"] as const) {
       await new Promise<void>(resolve => releases.push(resolve));
       return "迟到结果";
     });
-    const first = research.start({ language: "cpp", component_id: ids[0] }, "alice");
-    research.start({ language: "cpp", component_id: ids[1] }, "bob");
+    const first = research.start({ language: "cpp", repository_ids: [ids[0]]}, "alice");
+    research.start({ language: "cpp", repository_ids: [ids[1]]}, "bob");
     await settle();
-    const queued = research.start({ language: "cpp", component_id: ids[2] }, "carol");
+    const queued = research.start({ language: "cpp", repository_ids: [ids[2]]}, "carol");
     let returned = false;
     let closing: Promise<void> | undefined;
     if (action === "stop") research.stop(first.id);

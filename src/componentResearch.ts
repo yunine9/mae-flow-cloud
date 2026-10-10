@@ -20,7 +20,7 @@ import {
   type ComponentRepository,
 } from "./componentRepositories.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
-import { requireTechnologyStacks } from "./technologyStacks.ts";
+import { requireTechnologyStacks, listTechnologyStacks } from "./technologyStacks.ts";
 import {
   readKnowledgeDocument,
   readKnowledgeDocumentVersion,
@@ -47,12 +47,15 @@ export interface ResearchRecord {
   skill?: { name: string; digest: string };
   analysis_skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
-  /** 新研究覆盖一个组件的全部能力；component 是旧记录中的方式，读取时保留。 */
+  /** 全量研究按技术栈分析能力；component 方式仅用于读取旧记录。 */
   mode?: "all" | "component";
   format?: "joint-document";
   document?: ResearchDocument;
   review_turns?: ResearchReviewTurn[];
-  component: ComponentRepository;
+  /** 参考源码快照，与盘点得到的功能组件目录分别保存。 */
+  source_repositories?: ComponentRepository[];
+  /** 旧记录中的参考仓字段。 */
+  component?: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;
   material_ids?: string[];
@@ -97,9 +100,12 @@ function reviewProposals(record: ResearchRecord): ReviewProposal<ResearchSection
   }] : []);
 }
 export interface ResearchInput {
-  component_id?: string;
+  repository_ids?: string[];
   language: string;
   material_ids?: string[];
+}
+export function researchSourceRepositories(record: Pick<ResearchRecord, "source_repositories" | "components" | "component">): ComponentRepository[] {
+  return record.source_repositories ?? record.components ?? (record.component ? [record.component] : []);
 }
 export interface ResearchExecution {
   record: ResearchRecord;
@@ -238,9 +244,11 @@ function validResearchRecord(value: unknown, id: string, path = ""): value is Re
   if (value.skill !== undefined) recordSkill(value.skill, field("skill"));
   if (value.analysis_skill !== undefined) recordSkill(value.analysis_skill, field("analysis_skill"));
   recordCheck(recordStatuses.includes(value.status), field("status"), "不是受支持的任务状态");
-  checkComponent(value.component, field("component"));
+  if (value.component !== undefined) checkComponent(value.component, field("component"));
   if (value.components !== undefined) recordArray(value.components, field("components"), checkComponent);
-  const components = value.components ?? [value.component], repositoryIds = components.map((component: Record<string, any>) => component.id);
+  if (value.source_repositories !== undefined) recordArray(value.source_repositories, field("source_repositories"), checkComponent);
+  const sources = researchSourceRepositories(value as ResearchRecord), repositoryIds = sources.map(source => source.id);
+  recordCheck(sources.length > 0 && new Set(repositoryIds).size === sources.length, field("source_repositories"), "参考来源仓不能为空或重复");
   recordArray(value.evidence, field("evidence"), recordObject);
   if (value.revisions !== undefined) recordRevisions(value.revisions, field("revisions"));
   if (value.material_ids !== undefined) recordStrings(value.material_ids, field("material_ids"));
@@ -387,24 +395,26 @@ export class ComponentResearch {
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");
   }
-  /** 一个组件一次研究一篇知识（2026-10-08 用户）：同组件已有研究就打开它，补充与刷新走「补充遗漏能力」「更新知识」。 */
+  /** 技术栈和参考范围相同则接续；功能组件由独立分析会话确定。 */
   start(input: ResearchInput, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
-    // 一个组件只有一次研究：主题、全量模式与强制重做都已取消，旧字段明确拒绝，免得调用方以为生效了。
-    const unknown = Object.keys(input ?? {}).filter(key => !["component_id", "language", "material_ids"].includes(key));
-    if (unknown.length) throw new Error(`组件研究不支持参数：${unknown.join("、")}；按组件发起，修改已有知识请用更新知识`);
+    const unknown = Object.keys(input ?? {}).filter(key => !["repository_ids", "language", "material_ids"].includes(key));
+    if (unknown.length) throw new Error(`组件研究不支持参数：${unknown.join("、")}；按技术栈发起，参考仓由 repository_ids 指定，组件由能力分析确定`);
     const language =normalizeKnowledgeLanguages([input.language])[0];
     const candidates = componentRepositories(this.dir).filter(c => c.enabled && c.languages.includes(language));
-    if (!candidates.length) throw new Error("请先在配置中心启用该语言的基础组件仓");
-    const component = input.component_id ? candidates.find(c => c.id === input.component_id) : candidates.length === 1 ? candidates[0] : undefined;
-    if (!component) throw new Error(input.component_id ? "所选组件不存在，或未登记该语言" : "该语言登记了多个组件，请选择要研究的组件");
-    const key = JSON.stringify(["component", language, componentKey(component)]);
+    if (!candidates.length) throw new Error("请先在配置中心启用该技术栈的参考来源仓");
+    if (input.repository_ids !== undefined && (!Array.isArray(input.repository_ids) || !input.repository_ids.length
+      || input.repository_ids.some(id => typeof id !== "string" || !id.trim()) || new Set(input.repository_ids).size !== input.repository_ids.length)) throw new Error("参考仓编号需为非空且不重复的数组");
+    const sources = candidates.filter(source => !input.repository_ids || input.repository_ids.includes(source.id)).sort((a, b) => a.id.localeCompare(b.id));
+    if (input.repository_ids && sources.length !== input.repository_ids.length) throw new Error("参考仓不存在、已停用或未登记该技术栈");
+    const key = JSON.stringify(["capability", language, sources.map(componentKey).sort()]);
     const previous = [...this.records.values()].reverse().find(r => r.key === key && !r.deleted_at && !r.challenge);
     if (previous) return this.get(previous.id);
     requireTechnologyStacks(this.dir, [language]);
-    const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component, components: [component], material_ids: [],
-      language, topic: component.name, operator, key, status: "queued", created_at: new Date().toISOString(),
+    const name = listTechnologyStacks(this.dir).find(stack => stack.id === language)?.name ?? language;
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", source_repositories: sources, material_ids: [],
+      language, topic: `${name} 组件知识`, operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [], stage: "等待组件研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {});
     this.pump();
@@ -418,7 +428,7 @@ export class ComponentResearch {
     requireTechnologyStacks(this.dir, [challenge.language]);
     const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
     if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
-    const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, component: components[0], components,
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, source_repositories: components,
       language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
       created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {}); this.pump(); return this.get(record.id);
@@ -471,7 +481,7 @@ export class ComponentResearch {
                 readDocument: () => structuredClone(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }),
                 editDocument: (edit: ResearchDocumentEdit) => {
                   if (controller.signal.aborted || record.deleted_at || record.status !== "running") throw new Error("本轮已停止，未修改草稿");
-                  const document = editResearchDocument(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }, edit, (record.components ?? [record.component]).map(c => c.id), review);
+                  const document = editResearchDocument(review ? revisedDocument! : record.document ?? { overview: "", sections: [] }, edit, researchSourceRepositories(record).map(c => c.id), review);
                   if (review) {
                     revisedDocument = document;
                     if (review.mode === "supplement") {
@@ -519,8 +529,8 @@ export class ComponentResearch {
                 // 整体修订从当前候选稿继续，旧候选内容已纳入这份草稿；发布仍由人单独确认。
                 for (const previous of record.review_turns ?? []) if (previous.proposal?.status === "pending") previous.proposal.status = "accepted";
               }
-              // Agent 按仓库编号引用代码，程序据此校验；给人看的回复换成组件名，路径与行号保留。
-              const named = (record.components ?? [record.component]).reduce((text, component) => text.split(`${component.id}:`).join(`${component.name}:`), draft);
+              // Agent 按来源仓编号引用代码，程序据此校验；给人看的回复换成仓名，路径与行号保留。
+              const named = researchSourceRepositories(record).reduce((text, source) => text.split(`${source.id}:`).join(`${source.name}:`), draft);
               review.status = "done"; review.reply = named; review.finished_at = new Date().toISOString();
             } else if (!record.challenge && record.document && (!record.document.overview.trim() || !record.document.sections.length
                 || record.document.sections.some(section => !sectionReady(section)
@@ -662,7 +672,7 @@ export class ComponentResearch {
     if (!record?.document || record.deleted_at || record.document_id || !section) throw new Error("当前章节不可修改");
     if (["queued", "running"].includes(record.status)) throw new Error("研究进行中：请先停止，或等本轮结束后再改");
     assertReviewRevision(section.revision, input.base_revision, "章节已有新版本，请比较后重新保存");
-    const document = editResearchDocument(record.document, { action: "section", section: input.section }, (record.components ?? [record.component]).map(c => c.id));
+    const document = editResearchDocument(record.document, { action: "section", section: input.section }, researchSourceRepositories(record).map(c => c.id));
     const metadata = document.sections.find(s => s.id === section.id)?.paradigm;
     if (metadata) {
       if (metadata.language !== record.language) throw new Error("范式语言与研究语言不一致");
@@ -768,7 +778,7 @@ export class ComponentResearch {
       assertLatestReviewProposal(reviewProposals(record), latest.id, section.id, section.revision, false,
         "修改建议基线冲突，请比较章节最新版本后发布");
       const document = editResearchDocument(accepted.document!, { action: "section", section: structuredClone(latest.proposal!.section) },
-        (record.components ?? [record.component]).map(component => component.id));
+        researchSourceRepositories(record).map(source => source.id));
       const metadata = document.sections.find(item => item.id === section.id)?.paradigm;
       if (metadata) {
         if (metadata.language !== record.language) throw new Error("范式语言与研究语言不一致");
@@ -790,9 +800,10 @@ export class ComponentResearch {
     const title = String(input.title ?? previous?.title ?? record.topic).trim();
     const content = accepted.document ? researchDocumentMarkdown(title, accepted.document, true) : String(input.content ?? accepted.draft ?? "");
     scanForSecrets("组件知识.md", Buffer.from(content));
-    const research_source = { job_id: id, repository: record.component.repository, branch: record.component.branch, path: record.component.path,
-      revision: record.revision, components: record.components?.map(component => ({ id: component.id, repository: component.repository,
-        branch: component.branch, path: component.path, revision: record.revisions?.[component.id] })) };
+    const sources = researchSourceRepositories(record), primarySource = sources[0];
+    const research_source = { job_id: id, repository: primarySource.repository, branch: primarySource.branch, path: primarySource.path,
+      revision: record.revisions?.[primarySource.id] ?? record.revision, components: sources.map(source => ({ id: source.id, repository: source.repository,
+        branch: source.branch, path: source.path, revision: record.revisions?.[source.id] })) };
     const formal = prepareKnowledgeDocument(this.dir, { ...previous, ...input, title, content, technologies: [record.language], research_source,
       when_to_use: input.when_to_use ?? previous?.when_to_use ?? `${record.language} / ${record.topic}`, active: previous?.active ?? true,
     }, operator, formalId, { expectedRevision: baseline, maxContentBytes: accepted.document ? 16 * 1024 * 1024 : undefined });

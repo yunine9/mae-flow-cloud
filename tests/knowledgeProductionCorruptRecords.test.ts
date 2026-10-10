@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { ComponentResearch, researchDraftContext, type ResearchRecord } from "../src/componentResearch.ts";
+import { ComponentResearch, researchDraftContext, researchSourceRepositories, type ResearchRecord } from "../src/componentResearch.ts";
 import { ComponentResearchPipeline } from "../src/componentResearchPipeline.ts";
 import { listKnowledgeDocuments, prepareKnowledgeDocument, readKnowledgeDocument, saveKnowledgeDocument, writePreparedKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
@@ -29,12 +29,12 @@ function assertWarnings(warnings: string[], paths: string[]) { for (const path o
 
 function legacyComponentGuide(status: "done" | "failed" = "done"): ResearchRecord {
   const record = componentRecord(); record.status = status; record.format = "joint-document";
-  const section = { ...componentGuideSection("files", [record.component.id], { language: "java" }), selected: true, revision: 2 };
+  const section = { ...componentGuideSection("files", [researchSourceRepositories(record)[0].id], { language: "java" }), selected: true, revision: 2 };
   delete (section as Partial<typeof section>).unit_tests;
   delete (section.paradigm as Partial<NonNullable<typeof section.paradigm>>).test_evidence;
   section.content = "旧版使用正文，保留人工确认的限制。";
   record.document = { overview: "旧版组件总览", sections: [section] }; record.draft = "旧版整篇文稿";
-  record.evidence = componentGuideEvidence("java", [record.component.id]);
+  record.evidence = componentGuideEvidence("java", [researchSourceRepositories(record)[0].id]);
   record.section_history = [{ at: record.created_at, operator: "alice", section: { ...structuredClone(section), revision: 1 } }];
   record.review_turns = [{ id: "old-review", section_id: section.id, mode: "rework", message: "原意见", operator: "alice", created_at: record.created_at,
     status: "done", proposal: { status: "discarded", base_revision: 1, section: structuredClone(section) } }];
@@ -117,7 +117,7 @@ test("组件旧稿兼容：整体修订能够读到原稿，补齐新格式后�
     assert.match(input.record.draft!, /旧版组件总览/); assert.match(input.record.draft!, /保留人工确认/);
     assert.equal(input.readDocument!().sections[0].content, record.document!.sections[0].content);
     input.editDocument!({ action: "overview", overview: componentGuideOverview("修订后的文件组件用途。", "使用 JDK 11。") });
-    input.editDocument!({ action: "section", section: componentGuideSection("files", [record.component.id], { language: "java" }) });
+    input.editDocument!({ action: "section", section: componentGuideSection("files", [researchSourceRepositories(record)[0].id], { language: "java" }) });
     return "已核对并补齐测试示例，等待人工审查。";
   });
   try {
@@ -158,10 +158,10 @@ test("组件旧稿兼容：在途旧记录仍接续原任务，缺少新增字�
 for (const legacy of [true, false]) test(`组件接续：${legacy ? "旧 pipeline 全部 done 不重做，旧稿进入审查但不能发布" : "新版空 UT 即使 pipeline 全部 done 也不能冒充完成"}`, { timeout: 5_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "component-completed-pipeline-")), record = legacyComponentGuide();
   const pipelineFile = join(dir, "component-research", record.id, "component-pipeline", "state.json");
-  const original = new ComponentResearchPipeline(pipelineFile, "same-method", [record.component.id]);
+  const original = new ComponentResearchPipeline(pipelineFile, "same-method", [researchSourceRepositories(record)[0].id]);
   await original.run({ signal: new AbortController().signal,
     execute: async task => ({ findings: "已保存的模拟研究结果", open_questions: [],
-      ...(task.phase === "inventory" ? { components: [{ id: "files", title: "文件处理", repository_ids: [record.component.id], scope: "src/files.java" }] } : {}),
+      ...(task.phase === "inventory" ? { components: [{ id: "files", title: "文件处理", repository_ids: [researchSourceRepositories(record)[0].id], scope: "src/files.java" }] } : {}),
       ...(task.phase === "plan" ? { paradigms: [{ id: "write", title: "写入文件", need: "保存数据" }] } : {}) }),
     review: async () => undefined, changed() {},
   });
@@ -169,11 +169,11 @@ for (const legacy of [true, false]) test(`组件接续：${legacy ? "旧 pipelin
   const persistedPipeline = JSON.parse(readFileSync(pipelineFile, "utf8"));
   record.status = "running"; record.pipeline = persistedPipeline;
   record.document!.sections[0].id = sectionId; record.review_turns = []; record.section_history = [];
-  if (!legacy) record.document = { overview: componentGuideOverview(), sections: [{ ...componentGuideSection(sectionId, [record.component.id], { language: "java" }), unit_tests: "", selected: true, revision: 2 }] };
+  if (!legacy) record.document = { overview: componentGuideOverview(), sections: [{ ...componentGuideSection(sectionId, [researchSourceRepositories(record)[0].id], { language: "java" }), unit_tests: "", selected: true, revision: 2 }] };
   write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
   let authors = 0, reviews = 0;
   const service = new ComponentResearch(dir, async input => {
-    const resumed = new ComponentResearchPipeline(pipelineFile, "same-method", [record.component.id]);
+    const resumed = new ComponentResearchPipeline(pipelineFile, "same-method", [researchSourceRepositories(record)[0].id]);
     await resumed.run({ signal: input.signal,
       execute: async () => { authors++; throw new Error("done 项不能重做"); },
       review: async () => { reviews++; throw new Error("done 项不能重审"); },
@@ -419,7 +419,7 @@ test("生产线验收3（F5）：活动组件讨论缺少文稿或对应章节�
   }
 });
 
-test("生产线验收3（F5）：范式证据只认本组件仓，引用其他组件仓的研究如实失败；重启读取与写入口一致", async () => {
+test("生产线验收3（F5）：范式证据只认任务参考范围，范围外仓的证据如实失败；重启读取与写入口一致", async () => {
   const { saveComponentRepository } = await import("../src/componentRepositories.ts");
   const dir = mkdtempSync(join(tmpdir(), "mfc-component-multi-repository-read-"));
   seedTechnologyStacks(dir, ["java"]);
@@ -438,15 +438,15 @@ test("生产线验收3（F5）：范式证据只认本组件仓，引用其他�
           replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [cited], usage_evidence: [], test_evidence: [], open_questions: [] } } });
       return "草稿已保存";
     });
-    // 一个组件一次研究：依赖组件的用法走 everycode 调用证据，不能冒充本组件的实现依据。
+    // 明确限定参考来源范围时，未纳入范围的仓不能成为该任务的源码依据。
     cited = { ...evidence, repository_id: second.id };
-    const misplaced = initial.start({ language: "java", component_id: first.id }, "alice");
+    const misplaced = initial.start({ language: "java", repository_ids: [first.id]}, "alice");
     for (let turn = 0; turn < 20; turn++) await Promise.resolve();
     assert.equal(initial.get(misplaced.id).status, "failed");
     assert.match(initial.get(misplaced.id).error!, /基础仓固定版本/);
     initial.remove(misplaced.id, "alice");
     cited = evidence;
-    const job = initial.start({ language: "java", component_id: first.id }, "alice");
+    const job = initial.start({ language: "java", repository_ids: [first.id]}, "alice");
     for (let turn = 0; turn < 20; turn++) await Promise.resolve();
     assert.equal(initial.get(job.id).status, "done", initial.get(job.id).error);
     const before = initial.get(job.id);

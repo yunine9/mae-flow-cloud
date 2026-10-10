@@ -23,7 +23,8 @@ export interface ComponentResearchRecord {
   format?: "joint-document";
   document?: { overview: string; sections: ComponentResearchSection[] };
   review_turns?: ComponentResearchReviewTurn[];
-  component: ComponentRepository;
+  source_repositories?: ComponentRepository[];
+  component?: ComponentRepository;
   components?: ComponentRepository[];
   revisions?: Record<string, string>;
   language: string;
@@ -37,6 +38,17 @@ export interface ComponentResearchRecord {
   error?: string;
   document_id?: string;
   evidence: Array<Record<string, unknown>>;
+}
+export function componentResearchSources(record: ComponentResearchRecord): ComponentRepository[] {
+  return (record.source_repositories ?? record.components ?? [record.component])
+    .filter((source): source is ComponentRepository => source !== undefined);
+}
+export interface ComponentResearchCreateInput {
+  language: string;
+  repository_ids?: string[];
+}
+export function createComponentResearch(input: ComponentResearchCreateInput): Promise<ComponentResearchRecord> {
+  return componentRequest<ComponentResearchRecord>("/component-research", input);
 }
 export interface ComponentResearchSection {
   paradigm?: { kind: string; component: string; language: string; status: string; need: string; api: string[]; applicability: string; replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; evidence: Array<{ repository_id: string; path: string; revision: string; start: number; end: number }>; usage_evidence: string[]; test_evidence: string[]; open_questions: string[] };

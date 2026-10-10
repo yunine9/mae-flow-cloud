@@ -22,6 +22,7 @@ import {
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import {
   componentRequest,
+  componentResearchSources,
   publishComponentResearch,
   type ComponentResearchRecord,
 } from "./componentResearchApi";
@@ -163,7 +164,7 @@ export function ComponentResearch({
   }, [open, selected]);
   useEffect(() => {
     setTitle(
-      // 标题即归档文件名：默认取登记的组件名，发布前可改成功能名（如「文件操作」）。
+      // 标题即归档文件名：默认取研究主题，发布前可按实际功能能力修改。
       current?.update_metadata?.title ?? current?.topic.slice(0, 160) ?? "",
     );
     setEditing(false);
@@ -269,9 +270,9 @@ export function ComponentResearch({
         : <p className="p-6 text-muted-foreground">文稿生成后可在这里检视。</p>}
     </div>
     <div hidden={stage !== "progress"} className="min-h-0 flex-1 overflow-auto p-5">
-      <div className="mb-4 flex items-center gap-3 text-sm"><span className="mr-auto text-muted-foreground">{current.components?.length ?? 1} 个组件仓 · {knowledgeLanguageLabel(current.language)} · {current.operator}</span>
+      <div className="mb-4 flex items-center gap-3 text-sm"><span className="mr-auto text-muted-foreground">{componentResearchSources(current).length} 个来源仓 · {knowledgeLanguageLabel(current.language)} · {current.operator}</span>
         {current.production?.research_actions.filter(action => ["stop", "resume"].includes(action.id)).map(action => <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage(action.id === "resume" ? "retry" : "stop")}>{action.label}</Button>)}
-        <details className="relative"><summary className="cursor-pointer text-muted-foreground">来源范围</summary><div className="absolute right-0 z-10 mt-2 w-[480px] max-w-[80vw] rounded-lg border border-line bg-surface p-4 shadow-lg">{(current.components ?? [current.component]).map(component => <p key={component.id} className="mb-2 break-all">{component.name} · {component.repository} · {component.branch} · {component.path || "根目录"}<br />读取版本：{current.revisions?.[component.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}</div></details>
+        <details className="relative"><summary className="cursor-pointer text-muted-foreground">来源范围</summary><div className="absolute right-0 z-10 mt-2 w-[480px] max-w-[80vw] rounded-lg border border-line bg-surface p-4 shadow-lg">{componentResearchSources(current).map(source => <p key={source.id} className="mb-2 break-all">{source.name} · {source.repository} · {source.branch} · {source.path || "根目录"}<br />读取版本：{current.revisions?.[source.id] ?? (!current.source_repositories && !current.components ? current.revision : undefined) ?? "尚未读取"}</p>)}</div></details>
       </div>
       {current.error && <p role="alert" className="mb-4 text-danger">{current.error}</p>}
       {current.pipeline && <p className="mb-4 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(task => task.status === "done").length}/{current.pipeline.tasks.length} 项通过</p>}
@@ -309,7 +310,7 @@ export function ComponentResearch({
               >
                 <strong className="line-clamp-2" title={r.topic}>{r.topic}</strong>
                 <span className="mt-2 block text-sm text-muted-foreground">
-                  {knowledgeLanguageLabel(r.language)} · {r.components?.length ?? 1} 个组件仓
+                  {knowledgeLanguageLabel(r.language)} · {componentResearchSources(r).length} 个来源仓
                 </span>
                 <span className="mt-1 block text-sm">{r.stage}</span><time className="mt-1 block text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</time>
               </button>
@@ -345,7 +346,7 @@ export function ComponentResearch({
                     <ComponentKnowledgeArchive record={current} />
                   </div>
                   <p className="mt-2 text-muted-foreground">
-                    {current.components?.length ?? 1} 个组件仓 ·{" "}
+                    {componentResearchSources(current).length} 个来源仓 ·{" "}
                     {knowledgeLanguageLabel(current.language)} ·{" "}
                     {current.operator}
                   </p>
@@ -365,7 +366,7 @@ export function ComponentResearch({
                   <summary className="cursor-pointer font-medium">
                     源码范围与调用来源
                   </summary>
-                  {stage === "inputs" && (current.components ?? [current.component]).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (current.components ? "尚未读取" : current.revision ?? "尚未读取")}</p>)}
+                  {stage === "inputs" && componentResearchSources(current).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (!current.source_repositories && !current.components ? current.revision : undefined) ?? "尚未读取"}</p>)}
                   {stage === "inputs" && <p className="mt-3 text-sm">来源限定为基础仓固定版本代码与 everycode 真实调用。{current.material_ids?.length ? "此历史记录曾关联上传资料，重新研究须新建任务。" : ""}</p>}
                 </details>}
                 {stage === "progress" && <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} />}

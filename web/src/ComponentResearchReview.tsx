@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuIte
 import { FileText, Download, MoreHorizontal, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { diffLines } from "diff";
 import { Markdown } from "./markdown";
-import { componentRequest, type ComponentResearchRecord, type ComponentResearchSection } from "./componentResearchApi";
+import { componentRequest, componentResearchSources, type ComponentResearchRecord, type ComponentResearchSection } from "./componentResearchApi";
 
 function sectionMarkdown(section: ComponentResearchSection) {
   const title = `# ${section.title}`;
@@ -68,7 +68,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   const versions = (record.section_history ?? []).filter(h => h.section.id === section?.id);
   const turns = (record.review_turns ?? []).filter(turn => turn.mode !== "supplement" && turn.section_id === section?.id);
   const supplements = (record.review_turns ?? []).filter(turn => turn.mode === "supplement");
-  const scope = (record.components ?? [record.component]).map(component => component.name).join("、");
+  const scope = componentResearchSources(record).map(source => source.name).join("、");
   const searchKey = view === "document" ? `${record.id}:document:${guide}` : `${record.id}:component:${section?.id}:${section?.revision}:${proposal?.id}:${proposal?.status}:${proposal?.proposal?.status}`;
   const sectionPreview = previewSection && <div ref={searchableContent}><KnowledgeMarkdown text={sectionMarkdown(previewSection)} focus={knowledgeFocus} /></div>;
   useEffect(() => { onBlockedChange?.(busy || active || !!editor); return () => onBlockedChange?.(false); }, [busy, active, editor, onBlockedChange]);
@@ -117,7 +117,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
     </DialogContent></Dialog>
     <Dialog open={supplementing} onOpenChange={setSupplementing}><DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-xl">
       <DialogHeader><DialogTitle>补充遗漏能力</DialogTitle></DialogHeader>
-      <p className="text-sm text-muted-foreground">说明文稿漏了哪些能力、接口或场景。Agent 只在本次研究的组件仓（{scope}）里查找，只新增能力项，不改已有内容；新增项经独立评审后并入目录并默认勾选，照常逐项审查后发布。</p>
+      <p className="text-sm text-muted-foreground">说明文稿漏了哪些能力、接口或场景。Agent 在本次研究的来源仓（{scope}）中核对源码和实际调用，按功能能力补充组件用法；新增项经独立评审后并入目录并默认勾选，照常逐项审查后发布。</p>
       <div className="max-h-[260px] space-y-3 overflow-auto" aria-live="polite">
         {[...supplements].reverse().map(turn => { const label = record.production?.review.turns.find(item => item.id === turn.id)?.status_label;
           const added = turn.status === "done" ? sections.filter(item => turn.added_section_ids?.includes(item.id)) : [];
@@ -186,7 +186,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
                 {record.production?.review.active_message && <p className="mt-2 text-sm text-muted-foreground">{record.production.review.active_message}</p>}
               </>}
             </section>}
-          </> : <div className="rounded-lg border border-line p-5"><Markdown text={record.document!.overview || "正在联合阅读组件仓，梳理公开接口、构建目标与调用关系。"} /></div>}
+          </> : <div className="rounded-lg border border-line p-5"><Markdown text={record.document!.overview || "正在阅读来源仓，分析文件操作、数据库操作等功能能力与实际用法。"} /></div>}
         </div>
       </div>}
   </section>;

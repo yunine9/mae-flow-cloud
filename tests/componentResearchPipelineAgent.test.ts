@@ -59,6 +59,8 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
       assert.match((await call("extraction_skill", { path: "SKILL.md" })).content[0].text, new RegExp(`name: ${expectedSkill}`));
       assert.ok(!prompt.includes("FORBIDDEN_AGENT_CONTEXT"));
       assert.deepEqual(data.technology_stack, { id: language, name: "团队运行平台" }, "配置名称进入研究上下文，产物仍按稳定ID关联");
+      assert.deepEqual(data.source_repositories.map((source: { id: string }) => source.id), [c.id], "仓配置只作为参考来源进入会话");
+      assert.equal(data.components, undefined, "不能把仓配置清单称为组件清单");
       if (task.phase === "inventory") {
         const scanned = JSON.parse((await call("component_structure", {})).content[0].text);
         assert.ok(scanned.candidates.every((s: any) => !s.path.startsWith("docs/")));
@@ -71,7 +73,7 @@ for (const language of ["cpp", "java"]) test(`组件流程 ${language}：来源�
       const agentDenied = await call("component_source", { action: "read", path: "AGENTS.md", include_platform: true }, true); assert.ok(agentDenied.isError);
       const callerDenied = await call("code_search", { action: "read", repository: "consumer", path: "docs/old.md" }, true); assert.ok(callerDenied.isError);
       if (review_result) { const early = await call("component_work_result", { pass: true, feedback: "未读" }, true); assert.ok(early.isError); rejectedReview++; }
-      const source = await call("component_source", { action: "read", component_id: c.id, path, start: 1, end: 2 });
+      const source = await call("component_source", { action: "read", repository_id: c.id, path, start: 1, end: 2 });
       assert.ok(!JSON.stringify(source).includes("UNCOMMITTED_DIFFERENT_SOURCE"));
       if (review_result) {
         if (["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) {

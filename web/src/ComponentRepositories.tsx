@@ -49,8 +49,8 @@ export function ComponentRepositories() {
       <div className="mb-5 flex items-center gap-3">
         <Input
           className="max-w-md"
-          aria-label="搜索基础组件"
-          placeholder="搜索组件、仓库或技术栈"
+          aria-label="搜索来源仓"
+          placeholder="搜索仓库名称、地址或技术栈"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -73,7 +73,7 @@ export function ComponentRepositories() {
         </Button>
       </div>
       <p className="mb-5 text-muted-foreground">
-        维护可研究的源码范围与技术栈。按需同步源码、查找真实调用，提炼为待审查的知识草稿。所有团队成员均可维护。
+        维护组件研究的参考来源仓与技术栈。组件按文件操作、数据库操作等功能能力分析；一个仓可以提供多个组件的实现，同一组件也可以跨仓。所有团队成员均可维护。
         业务模块也可在这里订阅「参考组件仓」：问题会话开场只注入订阅条目的说明，AI 据此决定是否拉取源码研读。
       </p>
       {error && (
@@ -161,10 +161,10 @@ export function ComponentRepositories() {
               }}
             >
               {[
-                ["name", "组件名称"],
+                ["name", "仓库名称"],
                 ["repository", "代码仓地址（HTTP / HTTPS）"],
                 ["branch", "分支"],
-                ["path", "组件目录（留空表示根目录）"],
+                ["path", "源码范围（留空表示根目录）"],
               ].map(([key, label]) => (
                 <label key={key} className="grid gap-2">
                   {label}
@@ -200,9 +200,9 @@ export function ComponentRepositories() {
                 {!catalog.loading && !catalog.stacks.some(s => s.enabled) && <small>请先在<a href="/configuration?tab=technologies" target="_blank" rel="noreferrer" className="text-primary underline">配置中心 → 技术栈</a>添加。</small>}
               </label>
               <label className="grid gap-2">
-                组件说明
+                来源说明
                 <Textarea
-                  placeholder="写何时需要读取：问题会话的 AI 据此决定是否拉取源码。也可说明接口及发布线索，例如重点关注 interface/、idl/，结合 sdk/pom.xml 分析；有疑点的能力也可保留供专家核对。"
+                  placeholder="写何时需要读取：问题会话的 AI 据此决定是否拉取源码。说明这个来源仓提供的实现、接口和发布线索，便于核对组件用法。"
                   value={edit.description ?? ""}
                   onChange={(e) =>
                     setEdit({ ...edit, description: e.target.value })

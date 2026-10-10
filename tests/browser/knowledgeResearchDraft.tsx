@@ -5,7 +5,21 @@ import { KnowledgeLibrary } from "../../web/src/KnowledgeLibrary";
 const pause = () => new Promise(resolve => setTimeout(resolve, 90));
 const check = (ok: unknown, message: string) => { if (!ok) throw new Error(message); };
 const scenario = new URLSearchParams(location.search).get("scenario");
+const componentScenario = scenario?.startsWith("component");
 const calls: Array<{ path: string; input?: any }> = [];
+const sourceRepositories = [
+  { id: "core", name: "基础实现来源仓", enabled: true, languages: ["cpp"], repository: "https://example.test/core.git", branch: "main", path: "", description: "" },
+  { id: "network", name: "网络实现来源仓", enabled: true, languages: ["cpp"], repository: "https://example.test/network.git", branch: "main", path: "src", description: "" },
+  { id: "disabled", name: "停用来源不应出现", enabled: false, languages: ["cpp"], repository: "https://example.test/disabled.git", branch: "main", path: "", description: "" },
+  { id: "java", name: "Java参考来源仓", enabled: true, languages: ["java"], repository: "https://example.test/java.git", branch: "main", path: "", description: "" },
+];
+const componentRecord = { id: "cr-functional", source_repositories: sourceRepositories.filter(source => source.enabled && source.languages.includes("cpp")),
+  language: "cpp", topic: "C++ 组件知识", operator: "专家", status: "running", stage: "分析功能能力", created_at: "2026-10-10T00:00:00Z", evidence: [],
+  pipeline: { tasks: [{ id: "inventory", title: "分析功能能力", status: "done", result: { components: [
+    { id: "file-operations", title: "文件操作", repository_ids: ["core"], scope: "读写与关闭" },
+    { id: "database-operations", title: "数据库操作", repository_ids: ["core", "network"], scope: "连接和查询" },
+    { id: "p2p", title: "P2P", repository_ids: ["network"], scope: "发现与传输" },
+  ] } }] } };
 const skill = { name: "领域萃取方法", digest: "a".repeat(64), can_manage: true, versions: [], files: { "SKILL.md": "# 领域萃取方法\n\n先阅读业务材料。" } };
 const componentSkills = {
   "component-analysis": { ...skill, name: "组件模块分析", can_manage: false, files: { "SKILL.md": "# 组件模块分析\n\n按源码边界划分模块。" } },
@@ -17,8 +31,13 @@ window.fetch = async (url, options) => {
   if (path === "/business-modules") result = { modules: [{ id: "trade", name: "交易业务", repositories: ["https://example.test/trade.git"], status: "active", assets: [] }], warnings: [], operations: [] };
   else if (path === "/knowledge-tasks") result = { tasks: [], summary: { running: 0, attention: 0, total: 0 }, warnings: [] };
   else if (path === "/memory-insights") result = { memories: [], repos: [] };
-  else if (path === "/technology-stacks") result = { stacks: scenario === "component-methods" ? [{ id: "cpp", name: "C++", enabled: true }] : [] };
-  else if (path === "/component-repositories") result = { components: scenario === "component-methods" ? ["pool", "files"].map(id => ({ id, name: id, enabled: true, languages: ["cpp"], repository: `https://example.test/${id}.git`, branch: "main" })) : [] };
+  else if (path === "/technology-stacks") result = { stacks: componentScenario ? [{ id: "cpp", name: "C++", enabled: true }, { id: "java", name: "Java", enabled: true }] : [] };
+  else if (path === "/component-repositories") result = { components: componentScenario ? sourceRepositories : [] };
+  else if (path === "/component-research" && input) {
+    check(Object.keys(input).length === 1 && input.language === "cpp", "按技术栈启动一次完整能力研究，不传仓当组件的ID");
+    result = componentRecord;
+  } else if (path === "/component-research") result = { records: [componentRecord] };
+  else if (path === "/component-research/cr-functional") result = componentRecord;
   else if (path === "/knowledge-documents") result = { documents: [] };
   else if (path === "/skills") result = { skills: [], operations: [], warnings: [] };
   else if (path === "/knowledge-extraction/skills/domain") {
@@ -54,12 +73,34 @@ const description = "核对退款规则", issue = "REQ-449", goal = "只研究�
 const value = (selector: string) => document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value;
 async function run() {
   await waitFor('[aria-label="研究知识"]'); await pause();
+  if (componentScenario) {
+    const sources = document.querySelector('[aria-label="参考来源仓列表"]');
+    check(sources?.querySelectorAll("li").length === 2 && sources.textContent?.includes("基础实现来源仓") && sources.textContent?.includes("网络实现来源仓"), "技术栈需显示全部启用的参考仓");
+    check(!sources?.textContent?.includes("停用来源") && !sources?.textContent?.includes("Java参考"), "停用和其他技术栈来源不得混入");
+    check(!document.querySelector('[aria-label="组件"]') && !document.body.textContent?.includes("每个组件各建一个任务"), "来源仓不能作为组件选择目标");
+    check(document.body.textContent?.includes("一个来源仓可以包含多个组件") && document.body.textContent?.includes("同一个组件也可以涉及多个来源仓"), "应说明功能能力与来源仓是多对多关系");
+  }
+  if (scenario === "component-start") {
+    const select = document.querySelector<HTMLButtonElement>('[aria-label="技术栈"]')!;
+    select.click(); await pause();
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(item => item.textContent?.trim() === "Java")!.click(); await pause();
+    check(document.querySelector('[aria-label="参考来源仓列表"]')?.textContent?.includes("Java参考来源仓"), "切换技术栈应更新来源范围");
+    check(document.querySelector('[aria-label="参考来源仓列表"]')?.querySelectorAll("li").length === 1, "切换后不能保留旧技术栈的来源仓");
+    select.click(); await pause();
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(item => item.textContent?.trim() === "C++")!.click(); await pause();
+    await click("开始研究"); await waitFor('[aria-label="组件文稿审查"]');
+    const posts = calls.filter(call => call.path === "/component-research" && call.input);
+    check(posts.length === 1 && posts[0].input.language === "cpp" && Object.keys(posts[0].input).length === 1, "两个来源仓只创建一个技术栈研究任务");
+    check(document.body.textContent?.includes("2 个来源仓") && !document.body.textContent?.includes("个组件仓"), "任务工作台来源计数不可冒充组件数量");
+    const scope = [...document.querySelectorAll<HTMLElement>("summary")].find(item => visible(item) && item.textContent?.trim() === "来源范围");
+    check(scope, "新任务应可展开来源范围"); scope!.click(); await pause();
+    check(document.body.textContent?.includes("基础实现来源仓") && document.body.textContent?.includes("网络实现来源仓"), "新任务source_repositories需完整展示且无需旧component字段");
+    check(document.documentElement.scrollWidth <= innerWidth + 2, "桌面研究入口不能横向溢出");
+    if (!(window as any).__KEEP_RESEARCH_PREVIEW__) root.unmount();
+    return { passed: true };
+  }
   if (scenario === "component-methods") {
     check(button("模块分析方法") && button("用法萃取方法") && !button("萃取方法"), "组件研究应提供两个清晰方法入口");
-    const componentSelect = document.querySelector<HTMLButtonElement>('[aria-label="组件"]')!;
-    componentSelect.click(); await pause();
-    const all = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(e => e.textContent?.includes("全部组件"));
-    check(all, "组件选择应允许研究全部组件"); all!.click(); await pause();
     for (const [label, kind] of [["模块分析方法", "component-analysis"], ["用法萃取方法", "component"]]) {
       await click(label); await waitFor('[aria-label="平台 Skill 详情"]');
       check(new URLSearchParams(location.search).get("knowledgeDocument") === `platform-skill-${kind}`, "方法应打开独立的 Skill 页面");
@@ -69,7 +110,7 @@ async function run() {
       await click("使用此 Skill"); await waitFor('[aria-label="研究知识"]');
       check(new URLSearchParams(location.search).get("kbModule") === "engineering:cpp", "使用组件方法应回到原组件研究入口");
       check(document.querySelector('[aria-label="技术栈"]')?.textContent?.includes("C++"), "查看方法后技术栈不能丢失");
-      check(document.querySelector('[aria-label="组件"]')?.textContent?.includes("全部组件"), "查看方法后全部组件选择不能丢失");
+      check(document.querySelector('[aria-label="参考来源仓列表"]')?.querySelectorAll("li").length === 2 && !document.querySelector('[aria-label="组件"]'), "查看方法后应恢复整个技术栈来源范围，不出现仓当组件的选择");
       check(button("模块分析方法") && button("用法萃取方法"), "返回后仍应是组件模式");
     }
     check(!calls.some(c => c.path.startsWith("/knowledge-extraction/skills/component") && c.input), "阅读和返回组件方法不产生写入请求");

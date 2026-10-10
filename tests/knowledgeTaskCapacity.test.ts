@@ -49,13 +49,13 @@ test("三类知识任务合计并发 50，第 51 个排队；完成、失败和�
   const skill = (i: number) => service.startSkillExtraction({ repo: "https://example.test/reference.git", intent: `参考规则 ${i}`, operator: "alice" });
   try {
     const domains = Array.from({ length: 20 }, (_, i) => domain.create(domainInput(i), "alice"));
-    const components = componentIds.slice(0, 20).map(component_id => component.start({ component_id, language: "cpp" }, "bob"));
+    const components = componentIds.slice(0, 20).map(repository_id => component.start({ repository_ids: [repository_id], language: "cpp" }, "bob"));
     const skills = Array.from({ length: 10 }, (_, i) => skill(i));
     await flush();
     assert.equal(active, 50); assert.equal(peak, 50);
     assert.ok([...domains, ...components, ...skills].every(job => job.status === "running"));
 
-    const queuedComponent = component.start({ component_id: componentIds[20], language: "cpp" }, "bob");
+    const queuedComponent = component.start({ repository_ids: [componentIds[20]], language: "cpp" }, "bob");
     assert.equal(queuedComponent.status, "queued");
     holds.get(skills[0].id)!.finish(); await flush();
     assert.equal(component.get(queuedComponent.id).status, "running", "Skill 完成后可唤醒组件任务");

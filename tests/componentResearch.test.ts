@@ -11,7 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
+import { ComponentResearch, researchSourceRepositories, type ResearchExecution } from "../src/componentResearch.ts";
+import { ComponentResearchPipeline } from "../src/componentResearchPipeline.ts";
+import { componentCards } from "../src/componentKnowledgeCards.ts";
 import { createTechnologyStack } from "../src/technologyStacks.ts";
 import {
   componentRepositories,
@@ -36,7 +38,7 @@ const sectionData = (id: string, repository_ids: string[], language = "cpp") => 
   paradigm: { kind: "paradigm" as const, component: "file", language, status: "recommended" as const, need: `关闭句柄 ${id}`, api: ["Close"], applicability: "当前固定版本的文件句柄", replaces: { identifiers: [], imports: [], patterns: [] },
     evidence: repository_ids.map(repository => fixtureEvidence(repository).reference), usage_evidence: [fixtureEvidence(repository_ids[0]).usageId], test_evidence: [fixtureEvidence(repository_ids[0]).testId], open_questions: [] } });
 function writeJoint(input: ResearchExecution, count = 2) {
-  const ids = input.record.components!.map(c => c.id);
+  const ids = researchSourceRepositories(input.record).map(c => c.id);
   recordFixtureEvidence(input);
   input.editDocument!({ action: "overview", overview: guideOverview("文件与日期能力跨仓协作，初始化先于调用；按构建依赖组合。") });
   input.editDocument!({ action: "outline", entries: Array.from({length:count}, (_, i) => ({ id:`cap-${i}`, title:`能力 cap-${i}`, repository_ids:ids })) });
@@ -75,7 +77,7 @@ test("配置必填语言、拒绝凭据和越界路径，普通操作者可编�
   try {
     assert.throws(
       () => saveComponentRepository(dir, { ...config, languages: [] }, "alice"),
-      /语言/,
+      /语言|技术栈/,
     );
     assert.throws(
       () =>
@@ -106,7 +108,7 @@ test("配置必填语言、拒绝凭据和越界路径，普通操作者可编�
     rmSync(dir, { recursive: true, force: true });
   }
 });
-test("B5验收1/生产线验收10/14：一个组件一次研究并复用；并发有界；草稿不检索，单路发布后入库且可追溯", async () => {
+test("B5验收1/生产线验收10/14：同技术栈与来源范围复用研究；共享并发，草稿隔离且发布可追溯", async () => {
   const dir = temporary();
   const row = saveComponentRepository(dir, config, "alice");
   const other = saveComponentRepository(dir, { ...config, name: "日期组件", repository: "https://code.example/date.git", languages: ["cpp"] }, "alice");
@@ -128,25 +130,25 @@ test("B5验收1/生产线验收10/14：一个组件一次研究并复用；并�
     () => adopts++,
   );
   try {
-    const input = { component_id: row.id, language: "cpp" };
+    const input = { repository_ids: [row.id], language: "cpp" };
     const first = research.start(input, "alice");
-    assert.equal(research.start(input, "bob").id, first.id, "同一组件不分操作者，只有一次研究");
-    assert.deepEqual(first.components?.map(c => c.id), [row.id]);
-    assert.equal(first.topic, "文件组件");
-    assert.throws(() => research.start({ language: "cpp" }, "alice"), /请选择要研究的组件/);
+    assert.equal(research.start(input, "bob").id, first.id, "同技术栈与来源范围不分操作者，只有一次研究");
+    assert.deepEqual(researchSourceRepositories(first).map(c => c.id), [row.id]);
+    assert.notEqual(first.topic, row.name, "来源仓名称不能成为组件知识的默认主题");
     assert.throws(
       () => research.start({ ...input, language: "python" }, "alice"),
-      /语言/,
+      /语言|技术栈/,
     );
-    assert.throws(() => research.start({ component_id: other.id, language: "java" }, "alice"), /未登记该语言/);
+    assert.throws(() => research.start({ repository_ids: [other.id], language: "java" }, "alice"), /来源|语言|技术栈/);
     const java = research.start({ ...input, language: "java" }, "alice");
     assert.notEqual(java.id, first.id);
-    const third = research.start({ component_id: other.id, language: "cpp" }, "alice");
-    assert.deepEqual(third.components?.map(c => c.id), [other.id]);
+    const third = research.start({ language: "cpp" }, "alice");
+    assert.deepEqual(new Set(researchSourceRepositories(third).map(c => c.id)), new Set([row.id, other.id]));
+    assert.equal(research.start({ language: "cpp", repository_ids: [other.id, row.id] }, "alice").id, third.id, "默认来源和同集合不同顺序必须复用");
     assert.equal(third.status, "running");
     release();
     await until(() => research.list().every((r) => r.status === "done"));
-    assert.equal(max, 3, "三个独立组件可同时研究，不再受旧并发 2 限制");
+    assert.equal(max, 3, "三个独立研究范围可同时执行");
     assert.equal(
       collectSearchableKnowledge(dir, {
         repo: "",
@@ -169,7 +171,7 @@ test("B5验收1/生产线验收10/14：一个组件一次研究并复用；并�
         moduleIds: [],
       }).assets.some((a) => a.id === doc.id),
     );
-    assert.equal(research.start(input, "alice").id, first.id, "已发布的组件再次发起回到原研究，改动走更新知识");
+    assert.equal(research.start(input, "alice").id, first.id, "已发布的同范围研究再次发起回到原研究，改动走更新知识");
     research.remove(first.id, "alice");
     const fresh = research.start(input, "alice");
     assert.notEqual(fresh.id, first.id);
@@ -199,7 +201,7 @@ test("重启接续原任务；任务 knowledge 可发起并读取记录，不依
     assert.match(components.content[0].text, /文件组件/);
     const result = await call(tool, {
       action: "research",
-      component_id: row.id,
+      repository_ids: [row.id],
       language: "cpp",
       query: "文件读取",
     });
@@ -312,7 +314,7 @@ test("真实 Git + Pi 会话 + ec 替身：读取固定版本、查真实调用�
     );
     process.env.MAE_FLOW_EC_BIN = join(dir, "missing-ec");
     research.remove(job.id, "alice");
-    const failed = research.start({ component_id: row.id, language: "cpp" },
+    const failed = research.start({ repository_ids: [row.id], language: "cpp" },
       "alice",
     );
     await until(() => research.get(failed.id).status === "failed");
@@ -416,7 +418,7 @@ test("HTTP 配置、萃取、查看及单路发布走同一记录，非法语言
   });
   const research = new ComponentResearch(
     dir,
-    async input => input.review ? `已答复所选组件的问题，见 \`${input.record.component!.id}:src/file.cpp:1\`` : writeJoint(input),
+    async input => input.review ? `已答复所选组件的问题，见 \`${researchSourceRepositories(input.record)[0].id}:src/file.cpp:1\`` : writeJoint(input),
   );
   (service as any).componentResearch = research;
   const server = createTaskServer(service);
@@ -441,14 +443,14 @@ test("HTTP 配置、萃取、查看及单路发布走同一记录，非法语言
     assert.equal(
       (
         await post("/component-research", {
-          component_id: component.id,
+          repository_ids: [component.id],
           language: "python",
         })
       ).status,
       400,
     );
     const launched = await post("/component-research", {
-      component_id: component.id,
+      repository_ids: [component.id],
       language: "cpp",
     });
     assert.equal(launched.status, 202);
@@ -498,27 +500,84 @@ test("HTTP 配置、萃取、查看及单路发布走同一记录，非法语言
   }
 });
 
-test("按组件快照配置，多组件须指定、停用组件不可选；配置变化重新研究", async () => {
+test("按技术栈默认快照全部启用参考仓，拒绝旧仓即组件参数；来源配置变化重新研究", async () => {
   const dir = temporary();
   const first = saveComponentRepository(dir, config, "alice");
-  saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git", languages:["cpp"]}, "alice");
-  const off = saveComponentRepository(dir, {...config, name:"停用组件", repository:"https://code.example/off.git", enabled:false}, "alice");
-  const executions: any[] = [];
+  const second = saveComponentRepository(dir, {...config, name:"日期来源", repository:"https://code.example/date.git", languages:["cpp"]}, "alice");
+  const off = saveComponentRepository(dir, {...config, name:"停用来源", repository:"https://code.example/off.git", enabled:false}, "alice");
+  const executions: ResearchExecution["record"][] = [];
   const research = new ComponentResearch(dir, async input => { executions.push(input.record); return writeJoint(input); });
   try {
-    assert.throws(() => research.start({ language:"cpp" }, "alice"), /请选择要研究的组件/);
-    assert.throws(() => research.start({ language:"cpp", component_id:off.id }, "alice"), /不存在/);
-    const job = research.start({ language:"cpp", component_id:first.id }, "alice");
-    assert.deepEqual(job.components?.map(c => c.id), [first.id]);
+    assert.throws(() => research.start({ language:"cpp", component_id:first.id } as never, "alice"), /不支持参数.*component_id/);
+    assert.throws(() => research.start({ language:"cpp", repository_ids:[off.id] }, "alice"), /不存在|停用|来源/);
+    const job = research.start({ language:"cpp" }, "alice");
+    assert.deepEqual(new Set(researchSourceRepositories(job).map(c => c.id)), new Set([first.id, second.id]));
+    assert.equal(job.component, undefined, "新记录不把第一来源仓指定为组件");
+    assert.equal(job.components, undefined, "来源仓必须保存在规范来源字段中");
     await finished(research, job.id);
-    assert.equal(executions[0].components.length, 1);
+    assert.equal(researchSourceRepositories(executions[0]).length, 2);
     saveComponentRepository(dir, {id:first.id, path:"include"}, "alice");
-    const next = research.start({ language:"cpp", component_id:first.id }, "alice");
+    const next = research.start({ language:"cpp" }, "alice");
     assert.notEqual(next.id, job.id);
-    assert.equal(next.component?.path, "include");
-    assert.equal(research.get(job.id).component?.path, "src", "历史范围不被当前配置覆盖");
-    assert.throws(() => research.start({ language:"python", component_id:first.id }, "alice"), /语言/);
+    assert.equal(researchSourceRepositories(next).find(c => c.id === first.id)?.path, "include");
+    assert.equal(researchSourceRepositories(research.get(job.id)).find(c => c.id === first.id)?.path, "src", "历史范围不被当前配置覆盖");
+    saveComponentRepository(dir, {...config, name:"新增来源", repository:"https://code.example/new.git", languages:["cpp"]}, "alice");
+    const expanded = research.start({ language:"cpp" }, "alice");
+    assert.notEqual(expanded.id, next.id, "参考来源集合变化不能复用旧范围研究");
+    assert.equal(researchSourceRepositories(expanded).length, 3);
+    assert.throws(() => research.start({ language:"python", repository_ids:[first.id] }, "alice"), /语言|技术栈/);
   } finally { await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test("技术栈一次研究读取两仓，盘点文件、数据库及跨仓 P2P 能力，发布卡片保留功能组件身份", async t => {
+  const dir = temporary();
+  const first = saveComponentRepository(dir, { ...config, name:"参考来源 A" }, "alice");
+  const second = saveComponentRepository(dir, { ...config, name:"参考来源 B", repository:"https://code.example/transport.git" }, "alice");
+  const capabilities = [
+    { id:"file-operations", title:"文件操作", repository_ids:[first.id], scope:"src/files.cpp：读取、写入和关闭文件" },
+    { id:"database-operations", title:"数据库操作", repository_ids:[first.id], scope:"src/database.cpp：查询与事务" },
+    { id:"p2p", title:"P2P 通信", repository_ids:[first.id, second.id], scope:"src/peer.cpp + src/transport.cpp：发现节点并交换数据" },
+  ];
+  const phases: string[] = [];
+  let executions = 0;
+  const research = new ComponentResearch(dir, async input => {
+    executions++;
+    const sources = researchSourceRepositories(input.record);
+    assert.deepEqual(new Set(sources.map(source => source.id)), new Set([first.id, second.id]));
+    recordFixtureEvidence(input);
+    const pipeline = new ComponentResearchPipeline(join(input.root, "capability-fixture.json"), "fixture-analysis", sources.map(source => source.id));
+    await pipeline.run({ signal:input.signal,
+      execute:async task => {
+        phases.push(task.id);
+        if (task.phase === "inventory") return { findings:"文件操作、数据库操作是独立功能；P2P 门面与传输实现跨仓协作。", open_questions:[], components:capabilities };
+        if (task.phase === "paradigm") {
+          const capability = capabilities.find(capability => capability.id === task.component)!;
+          const section = sectionData(task.id, capability.repository_ids);
+          section.title = `${capability.title}完整用法`;
+          section.paradigm.component = capability.id;
+          section.paradigm.need = capability.title;
+          input.editDocument!({ action:"outline", entries:[{ id:section.id, title:section.title, repository_ids:section.repository_ids }] });
+          input.editDocument!({ action:"section", section });
+        }
+        if (task.phase === "synthesis") input.editDocument!({ action:"overview", overview:guideOverview("文件操作、数据库操作和 P2P 通信分别解决不同开发需求。") });
+        return { findings:`完成 ${task.title}`, open_questions:[],
+          ...(task.phase === "plan" ? { paradigms:[{ id:"use", title:`${task.title}完整用法`, need:task.title }] } : {}) };
+      }, review:async () => undefined, changed:state => input.update({ pipeline:state }),
+    });
+    return "功能组件指南已完成";
+  });
+  t.after(async () => { await research.shutdown(); rmSync(dir,{recursive:true,force:true}); });
+  const job = research.start({ language:"cpp" }, "alice");
+  assert.equal(research.start({ language:"cpp" }, "bob").id, job.id);
+  await finished(research, job.id);
+  assert.equal(executions, 1);
+  assert.equal(phases.filter(id => id === "inventory").length, 1);
+  assert.deepEqual(phases.filter(id => id.startsWith("plan-")), capabilities.map(capability => `plan-${capability.id}`));
+  const document = publishComponentKnowledge(research, dir, job.id, { scope:"platform" }, "alice");
+  const assets = collectSearchableKnowledge(dir,{ repo:"", repositories:[], moduleIds:[] }).assets;
+  const cards = componentCards(assets.filter(asset => asset.id === document.id)).cards;
+  assert.deepEqual(new Set(cards.map(card => card.paradigm.component)), new Set(capabilities.map(capability => capability.id)));
+  assert.deepEqual(new Set(cards.find(card => card.paradigm.component === "p2p")!.paradigm.evidence.map(ref => ref.repository_id)), new Set([first.id, second.id]));
 });
 
 test("跨组件读取按 ID 路由、固定版本且延迟准备，证据保留仓库", async () => {
@@ -600,7 +659,7 @@ test("停止和删除不会被迟到结果复活；删除保留已采纳知识�
   } finally { release(); await research.shutdown(); rmSync(dir,{recursive:true,force:true}); }
 });
 
-test("一个组件只执行一次研究，细粒度能力默认全选，筛选后采纳为该组件的单篇文档", async t => {
+test("同来源范围只执行一次研究，细粒度能力默认全选，筛选后采纳为单篇文档", async t => {
   const dir = temporary();
   const one = saveComponentRepository(dir, config, "alice");
   const two = saveComponentRepository(dir, {...config, name:"日期组件", repository:"https://code.example/date.git"}, "alice");
@@ -610,15 +669,15 @@ test("一个组件只执行一次研究，细粒度能力默认全选，筛选�
   const research = new ComponentResearch(dir, async input => {
     executions.push(input.record.id);
     assert.equal(input.record.mode, "all");
-    assert.deepEqual(input.record.components?.map(c => c.id), [input.record.component!.id]);
+    assert.equal(researchSourceRepositories(input.record).length, 1);
     writeJoint(input, 32);
-    input.editDocument!({ action: "section", section: { ...sectionData("cap-0", [input.record.component!.id]), related_ids: ["cap-1"] } });
+    input.editDocument!({ action: "section", section: { ...sectionData("cap-0", [researchSourceRepositories(input.record)[0].id]), related_ids: ["cap-1"] } });
     return "完成";
   });
   t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
-  const batch = research.start({ language:"C++", component_id:one.id }, "alice");
-  assert.equal(research.start({ language:"cpp", component_id:one.id }, "alice").id, batch.id);
-  assert.notEqual(research.start({ language:"cpp", component_id:two.id }, "alice").id, batch.id, "另一个组件是另一次研究");
+  const batch = research.start({ language:"C++", repository_ids: [one.id]}, "alice");
+  assert.equal(research.start({ language:"cpp", repository_ids: [one.id]}, "alice").id, batch.id);
+  assert.notEqual(research.start({ language:"cpp", repository_ids: [two.id]}, "alice").id, batch.id, "不同参考来源范围是另一份研究，组件仍由分析生成");
   await finished(research, batch.id);
   const complete = research.get(batch.id);
   await until(() => research.list().every(r => r.status === "done"));
@@ -648,22 +707,22 @@ test("一个组件只执行一次研究，细粒度能力默认全选，筛选�
   assert.throws(() => research.retry(batch.id, "alice"), /删除/);
 });
 
-test("53 个组件仓时只研究所选组件，停止后迟到章节和结果不能覆盖草稿", async t => {
+test("技术栈的 53 个参考仓进入同一研究范围，停止后迟到章节和结果不能覆盖草稿", async t => {
   const dir = temporary();
   const rows = Array.from({length:53}, (_, i) => saveComponentRepository(dir, {...config, name:`组件 ${i}`, repository:`https://code.example/c${i}.git`}, "alice"));
   let count = 0;
   const research = new ComponentResearch(dir, async input => {
     count++;
-    assert.deepEqual(input.record.components?.map(c => c.id), [rows[7].id]);
+    assert.deepEqual(new Set(researchSourceRepositories(input.record).map(c => c.id)), new Set(rows.map(row => row.id)));
     writeJoint(input);
     await new Promise<void>(resolve => input.signal.aborted ? resolve() : input.signal.addEventListener("abort", () => resolve(), {once:true}));
     assert.throws(() => input.editDocument!({action:"overview",overview:"迟到内容"}), /停止/);
     return "# 迟到草稿";
   });
   t.after(async () => { await research.shutdown(); rmSync(dir, {recursive:true,force:true}); });
-  const batch = research.start({ language:"cpp", component_id:rows[7].id }, "alice");
+  const batch = research.start({ language:"cpp" }, "alice");
   await until(() => count === 1);
-  assert.equal(research.start({ language:"cpp", component_id:rows[7].id }, "alice").id, batch.id);
+  assert.equal(research.start({ language:"cpp" }, "alice").id, batch.id);
   research.stop(batch.id);
   await new Promise(r => setTimeout(r, 30));
   assert.equal(count, 1);
@@ -679,7 +738,7 @@ test("重启中断保留章节、勾选与对话，继续研究沿用原始组�
   const row = saveComponentRepository(dir, config, "alice");
   saveComponentRepository(dir, {...config,name:"日期",repository:"https://code.example/date.git"}, "alice");
   const initial = new ComponentResearch(dir, async input => writeJoint(input));
-  const batch = initial.start({ language:"cpp", component_id:row.id }, "alice");
+  const batch = initial.start({ language:"cpp", repository_ids: [row.id]}, "alice");
   await finished(initial, batch.id);
   initial.selectSections(batch.id, ["cap-1"], false);
   await initial.shutdown();
@@ -689,7 +748,7 @@ test("重启中断保留章节、勾选与对话，继续研究沿用原始组�
   writeFileSync(file,JSON.stringify({...state,status:"running",review_turns:[{id:"turn",section_id:"cap-0",mode:"discuss",message:"补充说明",operator:"alice",status:"running",created_at:new Date().toISOString()}]}));
   let runs = 0;
   const recovered = new ComponentResearch(dir, async ({record,review}) => {
-    runs++; assert.deepEqual(record.components?.map(c => c.id), [row.id]);
+    runs++; assert.deepEqual(researchSourceRepositories(record).map(c => c.id), [row.id]);
     assert.equal(review?.section_id,"cap-0");assert.equal(review?.mode,"discuss");
     return "# 重试完成";
   });
@@ -910,7 +969,7 @@ test("超过普通上传容量的联合长文可完整采纳，后续调整范�
   const longContent = "完整使用细节。".repeat(150_000);
   const research = new ComponentResearch(dir,async input => {
     writeJoint(input,1);
-    input.editDocument!({action:"section",section:{...sectionData("cap-0",input.record.components!.map(c => c.id)),content:usageContent(longContent)}});
+    input.editDocument!({action:"section",section:{...sectionData("cap-0",researchSourceRepositories(input.record).map(c => c.id)),content:usageContent(longContent)}});
     return "完成";
   });
   t.after(async () => {await research.shutdown();rmSync(dir,{recursive:true,force:true});});
@@ -974,7 +1033,7 @@ test("补充遗漏能力：只能新增能力项，经整轮完成才并入并�
   const research = new ComponentResearch(dir, async input => {
     if (!input.review) return writeJoint(input);
     assert.equal(input.review.mode, "supplement"); assert.equal(input.review.section_id, "");
-    const ids = input.record.components!.map(c => c.id), existing = input.readDocument!().sections[0];
+    const ids = researchSourceRepositories(input.record).map(c => c.id), existing = input.readDocument!().sections[0];
     assert.throws(() => input.editDocument!({ action: "overview", overview: "改概述" }), /不能修改概述/);
     assert.throws(() => input.editDocument!({ action: "section", section: { ...existing, content: "借补充改已有项" } }), /只能填写本轮新增/);
     assert.throws(() => input.editDocument!({ action: "outline", entries: [{ id: existing.id, title: existing.title, repository_ids: ids }] }), /已有能力请在该项上返工/);
@@ -1029,7 +1088,7 @@ test("#457 整体返工原子更新概述及多项文稿，新增内容可审阅
   const research = new ComponentResearch(dir, async input => {
     if (!input.review) return writeJoint(input);
     assert.equal(input.review.section_id, "");
-    const ids = input.record.components!.map(c => c.id);
+    const ids = researchSourceRepositories(input.record).map(c => c.id);
     input.editDocument!({ action: "overview", overview: guideOverview("删除重复介绍，补充整体使用边界。") });
     for (const section of input.readDocument!().sections) input.editDocument!({ action: "section", section: { ...section, content: `${section.content}\n修订后的边界说明。` } });
     input.editDocument!({ action: "outline", entries: [{ id: "missing", title: "遗漏的异常恢复", repository_ids: ids }] });

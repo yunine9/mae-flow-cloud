@@ -146,7 +146,7 @@ async function componentAdapter(): Promise<ReviewAdapter> {
     async close() { await bounded(manager.shutdown(), "组件管理器关停"); rmSync(dir, { recursive: true, force: true }); },
   };
   try {
-    const record = manager.start({ component_id: repository.id, language: "cpp" }, "researcher");
+    const record = manager.start({ repository_ids: [repository.id], language: "cpp" }, "researcher");
     jobId = record.id; await until(() => manager.get(jobId).status === "done", "组件初始研究"); return adapter;
   } catch (error) { await adapter.close(); throw error; }
 }

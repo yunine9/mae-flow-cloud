@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Scene } from "../src/scriptedModel.ts";
-import type { ResearchExecution } from "../src/componentResearch.ts";
+import { researchSourceRepositories, type ResearchExecution } from "../src/componentResearch.ts";
 export const fixtureRevision = "a".repeat(40);
 export const fixtureCaller = '#include "file.h"\nint main() { Handle handle{}; Close(handle); return handle.closed ? 0 : 1; }\n';
 export const fixtureUnitTest = '#include "file.h"\n#include <cassert>\nint main() { Handle handle{}; assert(!handle.closed); Close(handle); assert(handle.closed); }\n';
@@ -19,7 +19,7 @@ export function fixtureEvidence(repositoryId: string) {
   ] };
 }
 export function recordFixtureEvidence(input: ResearchExecution) {
-  for (const component of input.record.components ?? [input.record.component]) fixtureEvidence(component.id).events.forEach(input.evidence);
+  for (const component of researchSourceRepositories(input.record)) fixtureEvidence(component.id).events.forEach(input.evidence);
 }
 export function componentPipelineScript(repositoryId: string, path: string, revision: string, callerContent: string, testContent = fixtureUnitTest) {
   const script: Scene[] = [], offsets: Record<string, number> = {};
@@ -29,7 +29,7 @@ export function componentPipelineScript(repositoryId: string, path: string, revi
   for (const [id, phase] of [["inventory", "inventory"], ["plan-pool", "plan"], ["contracts-pool", "contracts"], ["paradigm-pool-submit", "paradigm"], ["pitfalls-pool", "pitfalls"], ["index-pool", "index"], ["synthesis", "synthesis"]]) {
     offsets[id] = script.length;
     call("extraction_skill", { path: "references/api-boundary.md" });
-    call("component_source", { action: "read", component_id: repositoryId, path, start: 1, end: 1 });
+    call("component_source", { action: "read", repository_id: repositoryId, path, start: 1, end: 1 });
     call("code_search", { action: "kw", query: "Close" });
     call("code_search", { action: "read", repository: "consumer", path: "src/use.cpp", start: 1, end: 30 });
     if (phase === "paradigm") {
@@ -47,7 +47,7 @@ export function componentPipelineScript(repositoryId: string, path: string, revi
       ...(phase === "plan" ? { paradigms: [{ id: "submit", title: "释放资源", need: "安全释放" }] } : {}) });
     script.push({ text: "本项已完成" });
     call("extraction_skill", { path: "references/api-boundary.md" });
-    call("component_source", { action: "read", component_id: repositoryId, path, start: 1, end: 1 });
+    call("component_source", { action: "read", repository_id: repositoryId, path, start: 1, end: 1 });
     call("research_document", { action: "read", ...(writes ? { id } : {}) });
     if (writes) call("component_work", { evidence_id: usage });
     if (phase === "paradigm") call("component_work", { evidence_id: testEvidence });
