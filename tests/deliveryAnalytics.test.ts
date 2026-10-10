@@ -50,6 +50,38 @@ test("真实 Git：首次保留、CI、检视、反复修改分别计数；最�
   assert.equal(aggregateDelivery(report.rows).firstPercent, 2 / 3 * 100);
 });
 
+test("#462 已完成交付保留待对账文案时仍计为已合入，未完成任务不提前计入", async t => {
+  const f = fixture(t);
+  f.write("feature.cpp", "int feature = 1;\n");
+  const head = f.commit("实现"); f.publish(head);
+  await collectDeliveryCode(f.summary, f.cwd, head);
+  f.summary.completed_at = "2026-09-21T10:00:00.000Z";
+  const pending = "已合入（内核终态待对账）";
+  const cases: Array<[TaskSummary["status"], string | undefined, boolean]> = [
+    ["completed", pending, true], ["completed", "已合入", true], ["completed", "merged", true],
+    ["verifying", pending, false], ["await_merge", pending, false], ["canceled", pending, false],
+    ["completed", "等待合入", false], ["completed", "已关闭", false], ["completed", undefined, false],
+  ];
+  for (const [status, mrState, expected] of cases) {
+    f.summary.status = status; f.summary.delivery!.mr_state = mrState;
+    const original = structuredClone(f.summary);
+    const report = buildDeliveryAnalysis([f.summary]);
+    assert.equal(report.rows[0].merged, expected, `${status} / ${mrState}`);
+    assert.equal(aggregateDelivery(report.rows.filter(row => row.merged)).total, expected ? 1 : 0);
+    assert.equal(aggregateDeliveryModules(report.rows).length, expected ? 1 : 0);
+    assert.deepEqual(f.summary, original, "统计读取不改写任务或合入事实");
+  }
+  f.summary.status = "running";
+  f.summary.delivery_history = [{ id: "initial", started_at: f.summary.created_at, archive: join(f.workspace, "delivery-history", "initial"),
+    completed_at: f.summary.completed_at, delivery: { ...f.summary.delivery!, mr_state: pending } }];
+  f.summary.delivery_generation = "second";
+  f.summary.delivery = {};
+  f.summary.completed_at = undefined;
+  const report = buildDeliveryAnalysis([f.summary]);
+  assert.deepEqual(report.rows.map(row => row.merged), [true, false], "历史交付与本轮交付分别判断");
+  assert.equal(aggregateDelivery(report.rows.filter(row => row.merged)).total, 1);
+});
+
 test("目标分支的外来修改与合并提交不算任务首次提交或返工", async t => {
   const f = fixture(t);
   f.write("feature.cpp", "int own = 1;\n"); const first = f.commit("own");

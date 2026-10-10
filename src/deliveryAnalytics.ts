@@ -196,7 +196,8 @@ export function buildDeliveryAnalysis(tasks: TaskSummary[], modules: Array<{ id:
         .find(p => repositoryIdentity(p.repository) === repository && p.technologies.length) : undefined;
       const languages = [...new Set(profile?.technologies ?? [])].filter(language => language !== "agnostic");
       const stored = read(task), head = task.delivery?.git_push?.sha;
-      const merged = task.status === "completed" && ["merged", "已合入"].includes(task.delivery?.mr_state ?? "");
+      // 已完成记录可能保留待对账文案；统计合入事实不依赖该文案是否清理。
+      const merged = task.status === "completed" && ["merged", "已合入", "已合入（内核终态待对账）"].includes(task.delivery?.mr_state ?? "");
       // merged_sha identifies the target commit (different after squash/rebase).
       // Statistics describe the confirmed pushed source, which must still match.
       const metric = head && stored?.metric && (stored.metric.published_head ?? stored.metric.head) === head && stored.metric.initial_implementation ? structuredClone(stored.metric) : undefined;
