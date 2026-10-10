@@ -943,12 +943,14 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   自动幂等;重启后 recover() 会以现场文件为源把投影补齐,PG 里的
   数据可整库重建——备份优先级远低于数据目录。
 - **数据目录就是命根**:task.json / waiting.json / events.jsonl /
-  transcript.jsonl / auth.json / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
+  transcript.jsonl / auth.json / auth.json.sessions / 仓库克隆(内核状态文件在里面)全在 `--data` 下。
   备份它=备份一切;丢它=任务从头来。
 - **本地登录**:正式模式首次启动必须提供 `MAE_FLOW_ADMIN_PASSWORD`
   (至少 10 个字符),可用 `MAE_FLOW_ADMIN_USER` 指定初始管理员账号。
   之后由管理员在页面创建成员。`auth.json` 只保存 scrypt 加盐哈希且权限
-  为 `0600`;会话只驻进程内,8 小时过期,重启后全部重新登录。开发成员可
+  为 `0600`。会话令牌哈希保存在同目录的 `auth.json.sessions`（权限 `0600`），
+  不按时间自动退出，使用同一数据目录重启会保留登录。浏览器 Cookie 有效期
+  为一年，页面检查身份时会续期；主动退出、重置密码或删除账号会撤销会话。开发成员可
   查看全团队任务,但只能创建到自己名下并处理自己的审批/重跑;管理员可
   操作全部任务。对外提供页面时必须由反向代理终止 HTTPS,并传递
   `X-Forwarded-Proto: https`,服务会据此给会话 Cookie 加 `Secure`。

@@ -546,6 +546,8 @@ export function createTaskServer(
         if (request.method === "GET" && parts[1] === "me"
             && parts.length === 2) {
           if (!viewer) return json(response, 401, { error: "尚未登录" });
+          // 只在即时身份查询续期，慢请求不携带可能覆盖后来登录的旧 Cookie。
+          response.setHeader("set-cookie", sessionCookie(sessionToken!, request));
           return json(response, 200,
             options.auth!.sessionView(viewer.username));
         }
@@ -3310,7 +3312,7 @@ function sessionCookie(
   const secure = request.headers["x-forwarded-proto"] === "https"
     ? "; Secure"
     : "";
-  const age = expired ? 0 : 8 * 60 * 60;
+  const age = expired ? 0 : 365 * 24 * 60 * 60;
   return `mae_flow_session=${encodeURIComponent(token)}; Path=/; HttpOnly; `
     + `SameSite=Strict; Max-Age=${age}${secure}`;
 }

@@ -11,7 +11,9 @@ async function within<T>(work: Promise<T>, ms: number, message: string): Promise
 export async function browserResultDump(browser: string, args: string[], output: string): Promise<string> {
   const fd = openSync(output, "w");
   const child = spawn(browser, args, { detached: true, stdio: ["ignore", fd, "ignore"] });
-  const closed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => resolve()); });
+  let exited = false;
+  child.once("exit", () => { exited = true; });
+  const closed = new Promise<void>((resolve, reject) => { child.once("error", reject); child.once("close", () => { exited = true; resolve(); }); });
   void closed.catch(() => undefined);
   let finished = false;
   try {
@@ -27,9 +29,14 @@ export async function browserResultDump(browser: string, args: string[], output:
   } finally {
     finished = true;
     try {
-      if (child.pid) {
+      if (child.pid && !exited) {
         try { process.kill(-child.pid, "SIGKILL"); }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+        catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          // macOS 上 Chrome 自行退出与进程组清理可能同时发生；只在确认退出后忽略 EPERM。
+          if (code === "EPERM") await within(closed, 5_000, "浏览器进程组无法停止，且浏览器未自行退出");
+          else if (code !== "ESRCH") throw error;
+        }
       }
       await within(closed, 5_000, "桌面浏览器终止后超过5秒退出预算");
     } finally { closeSync(fd); }

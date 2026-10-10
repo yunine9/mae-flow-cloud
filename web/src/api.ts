@@ -290,8 +290,8 @@ async function errorText(response: Response): Promise<string> {
   return String(body.error ?? `HTTP ${response.status}`);
 }
 
-export async function getSession(): Promise<AuthUser | null> {
-  const response = await fetch("/auth/me");
+export async function getSession(signal?: AbortSignal): Promise<AuthUser | null> {
+  const response = await fetch("/auth/me", { signal });
   if (response.status === 401) return null;
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);

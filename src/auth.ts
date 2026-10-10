@@ -77,6 +77,8 @@ export interface CollaborationAssignee {
 
 interface StoredUser extends AuthUser {
   password_hash: string;
+  /** 密码重置时随账号一起保存；旧会话文件即使写失败也不能恢复登录。 */
+  session_version?: number;
   created_at: string;
   disabled: boolean;
   /** 个人 Git 平台令牌(PAT)。密码是哈希,这个必须明文存——git 要用
@@ -134,14 +136,11 @@ export class LocalAuth {
   private users = new Map<string, StoredUser>();
   private retiredUsernames = new Set<string>();
   /** 键是令牌的 sha256 hex——内存里也不留原始令牌,与落盘口径一致。 */
-  private sessions = new Map<string, { username: string; expiresAt: number }>();
+  private sessions = new Map<string, { username: string; user_session_version: number }>();
   private failures = new Map<string, FailureWindow>();
   private readonly sessionsFile: string;
 
-  constructor(
-    readonly file: string,
-    private readonly sessionTtlMs = 8 * 60 * 60_000,
-  ) {
+  constructor(readonly file: string) {
     this.sessionsFile = `${file}.sessions`;
     this.load();
     this.loadSessions();
@@ -267,6 +266,7 @@ export class LocalAuth {
     if (!stored) throw new Error(`账号 ${username} 不存在`);
     validateCredentials(stored.username, password);
     stored.password_hash = hashPassword(password);
+    stored.session_version = (stored.session_version ?? 0) + 1;
     for (const [token, session] of this.sessions) {
       if (session.username === username) this.sessions.delete(token);
     }
@@ -530,10 +530,12 @@ export class LocalAuth {
   }
 
   createSession(user: AuthUser): string {
+    const stored = this.users.get(user.username);
+    if (!stored || stored.disabled) throw new Error("账号不可登录");
     const token = randomBytes(32).toString("base64url");
     this.sessions.set(sessionKey(token), {
       username: user.username,
-      expiresAt: Date.now() + this.sessionTtlMs,
+      user_session_version: stored.session_version ?? 0,
     });
     this.persistSessions();
     return token;
@@ -544,13 +546,10 @@ export class LocalAuth {
     const key = sessionKey(token);
     const session = this.sessions.get(key);
     if (!session) return undefined;
-    if (session.expiresAt <= Date.now()) {
-      this.sessions.delete(key);
-      this.persistSessions();
-      return undefined;
-    }
     const user = this.users.get(session.username);
-    return user && !user.disabled ? publicUser(user) : undefined;
+    return user && !user.disabled
+      && session.user_session_version === (user.session_version ?? 0)
+      ? publicUser(user) : undefined;
   }
 
   endSession(token: string | undefined): void {
@@ -599,28 +598,32 @@ export class LocalAuth {
     try {
       if (!existsSync(this.sessionsFile)) return;
       const parsed = JSON.parse(readFileSync(this.sessionsFile, "utf-8"));
-      if (parsed?.version !== 1 || !Array.isArray(parsed.sessions)) return;
+      if (![1, 2].includes(parsed?.version) || !Array.isArray(parsed.sessions)) return;
       const now = Date.now();
       for (const item of parsed.sessions) {
         if (typeof item?.token_sha256 !== "string"
-            || typeof item?.username !== "string"
-            || typeof item?.expiresAt !== "number"
-            || item.expiresAt <= now) continue;
+            || typeof item?.username !== "string") continue;
+        // 部署时保留仍有效的旧登录；已经过期的旧令牌不重新启用。
+        if (parsed.version === 1 && (typeof item.expiresAt !== "number"
+            || !Number.isFinite(item.expiresAt) || item.expiresAt <= now)) continue;
+        const user = this.users.get(item.username);
+        if (!user || user.disabled) continue;
+        const version = user.session_version ?? 0;
+        if (parsed.version === 1 ? version !== 0 : item.user_session_version !== version) continue;
         this.sessions.set(item.token_sha256,
-          { username: item.username, expiresAt: item.expiresAt });
+          { username: item.username, user_session_version: version });
       }
+      if (parsed.version === 1) this.persistSessions();
     } catch { /* 损坏就当没有:代价只是全员重登一次 */ }
   }
 
   private persistSessions(): void {
     try {
       mkdirSync(dirname(this.sessionsFile), { recursive: true });
-      const now = Date.now();
       const temp = `${this.sessionsFile}.tmp`;
       writeFileSync(temp, JSON.stringify({
-        version: 1,
+        version: 2,
         sessions: [...this.sessions.entries()]
-          .filter(([, session]) => session.expiresAt > now)
           .map(([token_sha256, session]) => ({ token_sha256, ...session })),
       }), { encoding: "utf-8", mode: 0o600 });
       renameSync(temp, this.sessionsFile);

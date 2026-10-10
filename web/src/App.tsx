@@ -693,6 +693,12 @@ export function App() {
   const [density, setDensity] = useState<Density>(() =>
     document.documentElement.dataset.density === "compact" ? "compact" : "comfortable");
   const [session, setSession] = useState<AuthUser | null>();
+  const authGeneration = useRef(0);
+  const authRequests = useRef(new Set<AbortController>());
+  const signOutInFlight = useRef(false);
+  const [sessionLoadFailed, setSessionLoadFailed] = useState(false);
+  const [sessionChecking, setSessionChecking] = useState(true);
+  const [sessionRetry, setSessionRetry] = useState(0);
   const [buildHash, setBuildHash] = useState<string | null>(null);
   const [view, setView] = useState<View>("team");
   const [mineScope, setMineScope] = useState<MineScope>("all");
@@ -851,16 +857,42 @@ export function App() {
     return () => removeEventListener("popstate", syncEnvironmentRoute);
   }, [session?.username, session?.role]);
 
-  useEffect(() => {
-    void getSession().then((user) => {
-      setSession(user);
-      if (user) {
-        setView(initialView(user));
-        // 问题会话深链直达:子页签一并落「问题会话」(首启/刷新同理)。
-        if (readIssueRoute()) setIssueChildTab("sessions");
-      }
-    }).catch(() => setSession(null));
+  useEffect(() => () => {
+    authGeneration.current += 1;
+    for (const request of authRequests.current) request.abort();
   }, []);
+
+  useEffect(() => {
+    if (session !== undefined) return;
+    const generation = authGeneration.current;
+    let stopped = false;
+    let inFlight = false;
+    let request: AbortController | undefined;
+    const load = async () => {
+      if (inFlight || stopped) return;
+      inFlight = true;
+      setSessionChecking(true);
+      request = new AbortController();
+      try {
+        const user = await readSession(request);
+        if (stopped || authGeneration.current !== generation) return;
+        authGeneration.current += 1;
+        setSessionLoadFailed(false);
+        setSession(user);
+        if (user) {
+          setView(initialView(user));
+          if (readIssueRoute()) setIssueChildTab("sessions");
+        }
+      } catch {
+        if (!stopped && authGeneration.current === generation) setSessionLoadFailed(true);
+      } finally {
+        inFlight = false;
+        if (!stopped && authGeneration.current === generation) setSessionChecking(false);
+      }
+    };
+    const stop = startVisiblePolling(() => void load(), 3000, document);
+    return () => { stopped = true; stop(); request?.abort(); };
+  }, [session === undefined, sessionRetry]);
 
   useEffect(() => {
     getBuildInfo().then((info) => setBuildHash(info.build_hash)).catch(() => {});
@@ -900,13 +932,16 @@ export function App() {
   ]);
 
   function refresh(): Promise<void> {
+    if (!session || signOutInFlight.current) return Promise.resolve();
+    const generation = authGeneration.current;
+    const currentSession = () => authGeneration.current === generation;
     // 旁栏各自更新，慢请求或接口未启用都不能拖住任务列表和任务深链。
     if (!sidebarRefreshInFlight.current) {
       const sidebars = Promise.allSettled([
-        listMyReviews().then(setMyReviews),
-        listAllIssues().then(setTeamIssues),
+        listMyReviews().then((rows) => { if (currentSession()) setMyReviews(rows); }),
+        listAllIssues().then((rows) => { if (currentSession()) setTeamIssues(rows); }),
         session?.role === "admin" ? Promise.resolve()
-          : listIssues().then(setMyIssues),
+          : listIssues().then((rows) => { if (currentSession()) setMyIssues(rows); }),
       ]);
       sidebarRefreshInFlight.current = sidebars;
       void sidebars.finally(() => {
@@ -920,13 +955,18 @@ export function App() {
       : current);
     const running = (async () => {
       try {
-        setTasks((await listTasks()).sort(byUrgency));
+        const rows = await listTasks();
+        if (!currentSession()) return;
+        setTasks(rows.sort(byUrgency));
         setTaskSync({ kind: "live", last_success_at: new Date().toISOString() });
       } catch (cause) {
+        if (!currentSession()) return;
         // 网络抖动不能把用户踢回登录页；只有 /auth/me 明确返回未登录才退出。
         let current: AuthUser | null | undefined;
-        try { current = await getSession(); } catch { current = undefined; }
+        try { current = await readSession(); } catch { current = undefined; }
+        if (!currentSession()) return;
         if (current === null) {
+          invalidateSessionRequests();
           setSession(null);
           return;
         }
@@ -951,8 +991,38 @@ export function App() {
   }, [session?.username]);
 
   useEffect(() => {
+    if (!session) return;
+    const generation = authGeneration.current;
+    let stopped = false;
+    let inFlight = false;
+    let request: AbortController | undefined;
+    const check = async () => {
+      if (stopped || inFlight || signOutInFlight.current) return;
+      inFlight = true;
+      request = new AbortController();
+      try {
+        const current = await readSession(request);
+        if (!stopped && authGeneration.current === generation && current === null) {
+          invalidateSessionRequests();
+          setSession(null);
+        }
+      } catch { /* 临时连接故障保留当前身份，下次可见或定时检查时再试。 */ }
+      finally { inFlight = false; }
+    };
+    const stop = startVisiblePolling(() => void check(), 60 * 60 * 1000, document, { runOnStart: false });
+    return () => { stopped = true; stop(); request?.abort(); };
+  }, [session?.username]);
+
+  useEffect(() => {
     if (session?.role !== "admin" || view !== "team") return;
-    void listUsers().then(setTeamUsers).catch(() => setTeamUsers([]));
+    const generation = authGeneration.current;
+    let alive = true;
+    void listUsers().then((rows) => {
+      if (alive && authGeneration.current === generation) setTeamUsers(rows);
+    }).catch(() => {
+      if (alive && authGeneration.current === generation) setTeamUsers([]);
+    });
+    return () => { alive = false; };
   }, [session?.username, session?.role, view]);
 
 
@@ -1046,21 +1116,49 @@ export function App() {
     return () => { delete document.body.dataset.view; };
   }, [view]);
 
-  if (session === undefined) return <LoadingScreen />;
-  if (session === null) return <LoginScreen onAuthenticated={(user) => {
+  async function readSession(request = new AbortController()): Promise<AuthUser | null> {
+    authRequests.current.add(request);
+    // 服务重启或连接挂起时仍须结束本次查验，随后继续自动重试。
+    const timeout = window.setTimeout(() => request.abort(), 10_000);
+    try { return await getSession(request.signal); }
+    finally { window.clearTimeout(timeout); authRequests.current.delete(request); }
+  }
+
+  function invalidateSessionRequests(): number {
+    authGeneration.current += 1;
+    for (const request of authRequests.current) request.abort();
+    refreshInFlight.current = undefined;
+    sidebarRefreshInFlight.current = undefined;
     launchGateRequest.current += 1;
+    setTasks([]);
+    setTeamIssues([]);
+    setMyIssues([]);
+    setMyReviews([]);
+    setTeamUsers([]);
+    setArtifactTaskId("");
+    setArtifactTaskSnapshot(undefined);
+    setTaskSync({ kind: "loading" });
+    return authGeneration.current;
+  }
+
+  if (session === undefined) return sessionLoadFailed
+    ? <SessionConnectionScreen checking={sessionChecking} onRetry={() => setSessionRetry((retry) => retry + 1)} />
+    : <LoadingScreen />;
+  if (session === null) return <LoginScreen onAuthenticated={(user) => {
+    invalidateSessionRequests();
     setLaunchGate({ kind: "checking" });
     setSession(user); setMineScope("all");
     setView(initialView(user));
   }} />;
 
   async function signOut() {
-    await logout().catch(() => undefined);
-    setTasks([]);
-    setTeamIssues([]);
+    if (signOutInFlight.current) return;
+    signOutInFlight.current = true;
+    const generation = invalidateSessionRequests();
+    try { await logout().catch(() => undefined); }
+    finally { signOutInFlight.current = false; }
+    if (authGeneration.current !== generation) return;
     setMineScope("all");
-    setTaskSync({ kind: "loading" });
-    launchGateRequest.current += 1;
     setLaunchGate({ kind: "checking" });
     setSession(null);
   }
@@ -1817,6 +1915,17 @@ function LoginScreen({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
 function LoadingScreen() {
   {/* #218:整屏结构与文案保留,加载动效统一走 Spinner(原先内部无动画)。 */}
   return <main className="flex min-h-screen items-center justify-center gap-2.5 bg-(--canvas) text-base text-(--muted)"><BrandMark /><Spinner aria-hidden className="size-4 shrink-0" /><span>正在进入工作台…</span></main>;
+}
+
+function SessionConnectionScreen({ checking, onRetry }: { checking: boolean; onRetry: () => void }) {
+  return <main className="flex min-h-screen items-center justify-center bg-(--canvas) px-6">
+    <section className="grid max-w-md gap-4 rounded-xl border border-(--line) bg-(--surface) p-8" aria-labelledby="session-connection-title">
+      <BrandMark />
+      <div role="alert"><h1 id="session-connection-title" className="mb-2 text-xl font-semibold text-(--text-strong)">暂时无法连接服务</h1>
+        <p className="m-0 text-base text-(--muted)">正在自动重试，连接恢复后会继续进入工作台。</p></div>
+      <Button type="button" onClick={onRetry} disabled={checking}>{checking ? "正在重新连接…" : "重新连接"}</Button>
+    </section>
+  </main>;
 }
 
 function UsersBoard({ me }: { me: string }) {

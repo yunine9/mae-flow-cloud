@@ -238,7 +238,9 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json
 ```
 
 账号保存在数据目录的 `auth.json`（scrypt 加盐哈希、文件权限 `0600`）；
-登录会话保存在进程内、有效期 8 小时，服务重启后需重新登录。
+登录会话的令牌哈希保存在同目录的 `auth.json.sessions`（权限 `0600`），
+不按时间自动退出，同一数据目录下重启服务会保留登录。浏览器 Cookie
+有效期为一年，页面检查身份时会续期；主动退出、重置密码或删除账号会撤销会话。
 
 probe 现场留档在 `.probe/`,serve 的任务现场在 `.tasks/<task-id>/`
 (transcript/events/waiting/子 Agent transcript),每个文件都能直接打开看。
