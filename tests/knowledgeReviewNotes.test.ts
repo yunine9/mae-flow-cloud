@@ -9,6 +9,7 @@ import { uploadHostSkill } from "../src/hostSkillLibrary.ts";
 import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), "knowledge-review-notes-"));
@@ -124,6 +125,7 @@ test("正式文档意见保存后可刷新查看，修改正文后直接标为�
 
 test("Skill Markdown 意见按包和文件隔离，更新包后仍可处理，拒绝越界路径与其他文件", async () => {
   const f = fixture();
+  seedTechnologyStacks(f.dataDir, ["java"]);
   const skill = "---\nname: review-skill\ndescription: 审阅测试\n---\n\n# Skill\n查看参考文档。";
   const metadata = { nature: "engineering" as const, business_module_ids: [], repositories: [], technologies: ["java"] };
   const files = (text: string) => [{ path: "SKILL.md", content_base64: Buffer.from(skill).toString("base64") },

@@ -1,117 +1,72 @@
-import {
-  Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "cn";
+import { useEffect } from "react";
+import { useTechnologyStacks } from "./useTechnologyStacks";
+import { technologyStackLabel } from "./technologyStacks";
 
-export const KNOWLEDGE_LANGUAGE_OPTIONS = [
-  { id: "agnostic", label: "通用 / 语言无关" },
-  { id: "java", label: "Java" },
-  { id: "cpp", label: "C++" },
-  { id: "c", label: "C" },
-  { id: "csharp", label: "C#" },
-  { id: "javascript", label: "JavaScript" },
-  { id: "typescript", label: "TypeScript" },
-  { id: "python", label: "Python" },
-  { id: "go", label: "Go" },
-  { id: "rust", label: "Rust" },
-  { id: "kotlin", label: "Kotlin" },
-  { id: "groovy", label: "Groovy" },
-  { id: "shell", label: "Shell" },
-  { id: "sql", label: "SQL" },
-] as const;
+export function knowledgeLanguageLabel(id: string): string { return technologyStackLabel(id); }
 
-const LABELS = new Map<string, string>(
-  KNOWLEDGE_LANGUAGE_OPTIONS.map((item) => [item.id, item.label]));
-
-export function knowledgeLanguageLabel(id: string): string {
-  return LABELS.get(id) ?? id;
+export function KnowledgeLanguageTags({ languages, empty = "未标注技术栈" }: {
+  languages?: readonly string[] | null; empty?: string;
+}) {
+  const { stacks } = useTechnologyStacks();
+  const normalized = Array.isArray(languages) ? languages.filter((id): id is string => typeof id === "string" && !!id) : [];
+  if (!normalized.length) return <span className="inline-block text-xs text-faint">{empty}</span>;
+  return <span className="flex flex-wrap gap-1">{normalized.map(id => <Badge key={id} variant="brand"
+    className="border border-primary/30 font-semibold">{technologyStackLabel(id, stacks)}</Badge>)}</span>;
 }
 
-export function KnowledgeLanguageTags({ languages, empty = "未标注语言" }: {
-  languages?: readonly string[] | null;
-  empty?: string;
+/** 共用配置目录；停用项只保留已有引用，仍允许移除原选择。 */
+export function KnowledgeLanguagePicker({ value, onChange, includeAgnostic = true }: {
+  value: string[]; onChange: (value: string[]) => void; includeAgnostic?: boolean;
 }) {
-  const normalized = Array.isArray(languages)
-    ? languages.filter((id): id is string => typeof id === "string" && !!id)
-    : [];
-  if (!normalized.length) {
-    return <span className="inline-block text-xs text-faint">{empty}</span>;
+  const { stacks, loading, loaded, error, reload, deletedIds } = useTechnologyStacks();
+  useEffect(() => {
+    const keep = (id: string) => !deletedIds.includes(id) && (!loaded || !!error || id === "agnostic" || stacks.some(item => item.id === id));
+    if (value.some(id => !keep(id))) onChange(value.filter(keep));
+  }, [value, stacks, loaded, error, deletedIds, onChange]);
+  const options = stacks.filter(item => item.enabled || value.includes(item.id)).map(item => ({
+    id: item.id, label: item.name + (item.enabled ? "" : "（已停用）"),
+  }));
+  for (const id of value) if (id !== "agnostic" && !options.some(item => item.id === id)) {
+    options.push({ id, label: `${id}（未配置）` });
   }
-  return <span className="flex flex-wrap gap-1">
-    {/* #216:原 .knowledge-language-tags em 徽标收编为 Badge brand(存量
-        --accent 紫原色),发丝描边一并保留。 */}
-    {normalized.map((id) => <Badge key={id} variant="brand"
-      className="border border-primary/30 font-semibold">{knowledgeLanguageLabel(id)}</Badge>)}
-  </span>;
-}
-
-/** 语言只是工程语境，可多选；选择“语言无关”时自动清掉具体语言。 */
-export function KnowledgeLanguagePicker({ value, onChange,
-  includeAgnostic = true }: {
-  value: string[];
-  onChange: (value: string[]) => void;
-  includeAgnostic?: boolean;
-}) {
-  const toggle = (id: string) => {
-    if (value.includes(id)) {
-      onChange(value.filter((item) => item !== id));
-      return;
-    }
-    if (id === "agnostic") {
-      onChange([id]);
-      return;
-    }
-    onChange([...value.filter((item) => item !== "agnostic"), id]);
-  };
-  const options = !includeAgnostic
-    ? KNOWLEDGE_LANGUAGE_OPTIONS.filter((item) => item.id !== "agnostic")
-    : KNOWLEDGE_LANGUAGE_OPTIONS;
-  return <div className="flex flex-wrap gap-1.5"
-    role="group" aria-label="适用语言，可多选">
-    {options.map((option) => <button type="button"
-      key={option.id} aria-pressed={value.includes(option.id)}
-      className={cn("rounded-full border px-2.5 py-1 text-sm transition-colors",
-        value.includes(option.id)
-          ? "border-primary bg-primary/5 font-bold text-primary"
-          : "border-line bg-surface text-muted-foreground hover:border-line-strong")}
-      onClick={() => toggle(option.id)}>{option.label}</button>)}
+  if (includeAgnostic || value.includes("agnostic")) options.unshift({ id: "agnostic", label: "通用 / 技术栈无关" });
+  const toggle = (id: string) => onChange(value.includes(id) ? value.filter(item => item !== id)
+    : id === "agnostic" ? [id] : [...value.filter(item => item !== "agnostic"), id]);
+  return <div className="grid gap-2">
+    <div className="flex flex-wrap gap-1.5" role="group" aria-label="适用技术栈，可多选">
+      {options.map(option => <button type="button" key={option.id} aria-pressed={value.includes(option.id)}
+        disabled={loading || !!error}
+        className={cn("rounded-full border px-2.5 py-1 text-sm transition-colors disabled:opacity-50",
+          value.includes(option.id) ? "border-primary bg-primary/5 font-bold text-primary" : "border-line bg-surface text-muted-foreground hover:border-line-strong")}
+        onClick={() => toggle(option.id)}>{option.label}</button>)}
+    </div>
+    {loading && <p role="status" className="text-sm text-muted-foreground">正在读取技术栈…</p>}
+    {error && <p role="alert" className="text-sm text-danger">{error} <button type="button" className="underline" onClick={() => { void reload().catch(() => {}); }}>重试</button></p>}
+    {!loading && !error && !stacks.some(item => item.enabled) && <p className="text-sm text-muted-foreground">暂无启用的技术栈，请在<a className="text-primary underline" href="/configuration?tab=technologies" target="_blank" rel="noreferrer">配置中心 → 技术栈</a>添加。</p>}
   </div>;
 }
 
 export function KnowledgeLanguageFilter({ value, onChange, counts }: {
-  value: string;
-  onChange: (value: string) => void;
-  counts?: Map<string, number>;
+  value: string; onChange: (value: string) => void; counts?: Map<string, number>;
 }) {
+  const { stacks } = useTechnologyStacks();
+  const ids = [...new Set([...stacks.map(item => item.id), ...(counts?.keys() ?? []), ...(value !== "all" && value !== "untagged" ? [value] : [])])];
+  const options = ids.map(id => ({ value: id, label: `${technologyStackLabel(id, stacks)}${counts?.has(id) ? `（${counts.get(id)}）` : ""}` }));
   return <label className="flex flex-none items-center gap-2">
-    <span className="text-sm font-bold text-muted-foreground">工程语境</span>
-    <Select value={value}
-      items={[{ value: "all", label: "全部语言" }, { value: "untagged", label: "未标注" },
-        ...KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => ({
-          value: option.id,
-          label: `${option.label}${counts?.has(option.id) ? `（${counts.get(option.id)}）` : ""}`,
-        }))]}
-      onValueChange={(next) => onChange(next ?? "all")}>
-      <SelectTrigger aria-label="工程语境"><SelectValue /></SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          <SelectItem value="all">全部语言</SelectItem>
-          <SelectItem value="untagged">未标注</SelectItem>
-          {KNOWLEDGE_LANGUAGE_OPTIONS.map((option) => <SelectItem
-            value={option.id} key={option.id}>{option.label}{
-              counts?.has(option.id) ? `（${counts.get(option.id)}）` : ""}</SelectItem>)}
-        </SelectGroup>
-      </SelectContent>
+    <span className="text-sm font-bold text-muted-foreground">技术栈</span>
+    <Select value={value} items={[{ value: "all", label: "全部技术栈" }, { value: "untagged", label: "未标注" }, ...options]}
+      onValueChange={next => onChange(next ?? "all")}>
+      <SelectTrigger aria-label="技术栈筛选"><SelectValue /></SelectTrigger>
+      <SelectContent><SelectGroup><SelectItem value="all">全部技术栈</SelectItem><SelectItem value="untagged">未标注</SelectItem>
+        {options.map(option => <SelectItem value={option.value} key={option.value}>{option.label}</SelectItem>)}
+      </SelectGroup></SelectContent>
     </Select>
   </label>;
 }
 
-export function matchesKnowledgeLanguage(
-  languages: string[],
-  filter: string,
-): boolean {
-  if (filter === "all") return true;
-  if (filter === "untagged") return languages.length === 0;
-  return languages.includes(filter);
+export function matchesKnowledgeLanguage(languages: string[], filter: string): boolean {
+  return filter === "all" || (filter === "untagged" ? !languages.length : languages.includes(filter));
 }

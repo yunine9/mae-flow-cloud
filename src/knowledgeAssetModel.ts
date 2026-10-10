@@ -98,7 +98,8 @@ export function normalizeKnowledgeAssetMetadata(input: {
   business_module_ids?: unknown;
   repositories?: unknown;
   technologies?: unknown;
-}, options: { allowUnclassified?: boolean; fixedForm?: KnowledgeForm } = {}): KnowledgeAssetMetadata {
+}, options: { allowUnclassified?: boolean; fixedForm?: KnowledgeForm;
+  allowIncompleteEngineering?: boolean } = {}): KnowledgeAssetMetadata {
   const rawNature = input.nature === undefined
     ? "unclassified" : String(input.nature).trim().toLowerCase();
   if (!["business", "engineering", "unclassified"].includes(rawNature)) {
@@ -124,7 +125,8 @@ export function normalizeKnowledgeAssetMetadata(input: {
       throw new Error("业务知识不能标工程语言；若正文包含实现方法，请拆出一项工程知识");
     }
   }
-  if (rawNature === "engineering" && !technologies.length) {
+  if (rawNature === "engineering" && !technologies.length
+      && !options.allowIncompleteEngineering) {
     throw new Error("工程知识必须至少选择一种适用语言");
   }
   return {
@@ -160,7 +162,8 @@ export function readSkillKnowledgeMetadata(content: string): KnowledgeAssetMetad
     business_module_ids: modules,
     repositories,
     technologies: technologies.length ? technologies : legacyLanguages,
-  }, { allowUnclassified: true, fixedForm: "skill" });
+  }, { allowUnclassified: true, fixedForm: "skill",
+    allowIncompleteEngineering: true });
 }
 
 function withoutField(lines: string[], field: RegExp): string[] {
@@ -180,9 +183,10 @@ function withoutField(lines: string[], field: RegExp): string[] {
 export function writeSkillKnowledgeMetadata(
   content: string,
   input: KnowledgeAssetMetadata,
+  options: { allowIncompleteEngineering?: boolean } = {},
 ): string {
   const value = normalizeKnowledgeAssetMetadata(input,
-    { fixedForm: "skill" });
+    { fixedForm: "skill", ...options });
   // 清理历史 languages；新字段叫 technologies，避免再把语言当知识归属。
   let result = writeSkillLanguages(content, []);
   const match = /^(---\s*\r?\n)([\s\S]*?)(\r?\n---(?:\s*\r?\n|$))/.exec(result);
@@ -207,6 +211,16 @@ export function writeSkillKnowledgeMetadata(
   return `${match[1]}${next}${match[3]}${result.slice(match[0].length)}`;
 }
 
+/** 删除目录项只移除关联；工程性质和正文保留，空关联等待重新选择。 */
+export function clearSkillTechnology(content: string, technologyId: string): string {
+  const metadata = readSkillKnowledgeMetadata(content);
+  if (!metadata.technologies.includes(technologyId)) return content;
+  return writeSkillKnowledgeMetadata(content, {
+    ...metadata,
+    technologies: metadata.technologies.filter((id) => id !== technologyId),
+  }, { allowIncompleteEngineering: true });
+}
+
 export function repositoryIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
@@ -220,6 +234,7 @@ export function knowledgeMatchesTask(metadata: KnowledgeAssetMetadata, context: 
   // 绕过匹配进入任务。匹配失败应回到知识治理端修正，而不是让任务
   // 发起人临时猜选。
   if (metadata.nature === "unclassified") return false;
+  if (metadata.nature === "engineering" && !metadata.technologies.length) return false;
   const taskRepositories = new Set(context.repositories.map(repositoryIdentity));
   if (metadata.repositories.length && !metadata.repositories.some((item) =>
     taskRepositories.has(repositoryIdentity(item)))) return false;
@@ -246,6 +261,7 @@ export function knowledgeMatchesIssueSession(
   context: { repositories: string[]; businessModuleIds: string[] },
 ): boolean {
   if (metadata.nature === "unclassified") return false;
+  if (metadata.nature === "engineering" && !metadata.technologies.length) return false;
   if (metadata.nature === "engineering"
       && !metadata.repositories.length
       && !metadata.business_module_ids.length) return true;

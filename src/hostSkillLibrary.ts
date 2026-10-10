@@ -39,6 +39,7 @@ import { dirname, join, resolve } from "node:path";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 import { packageDigest } from "./hostSkillRuntime.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { KnowledgeRecordFormatError, recordCheck, recordFields, recordObject, recordReadReason, recordStrings } from "./knowledgeRecordValidation.ts";
 import {
   normalizeKnowledgeAssetMetadata,
@@ -485,6 +486,9 @@ function validateStaged(stagingRoot: string, directory: string): {
     throw new SkillLibraryError(
       "Skill 必须明确标为业务知识或工程知识，并补齐对应作用域标签");
   }
+  if (metadata.nature === "engineering" && !metadata.technologies.length) {
+    throw new SkillLibraryError("工程 Skill 必须至少选择一种技术栈");
+  }
   const { files, bytes } = packageStats(packageRoot);
   if (files > MAX_FILES) {
     throw new SkillLibraryError(`包内文件数超过 ${MAX_FILES}`);
@@ -519,6 +523,17 @@ function validateStaged(stagingRoot: string, directory: string): {
   };
 }
 
+function requireSkillTechnologyReferences(dataDir: string, directory: string, technologies: string[]): void {
+  try {
+    const live = join(dataDir, LIVE_DIR, directory, "SKILL.md");
+    const previous = existsSync(live)
+      ? readSkillKnowledgeMetadata(readFileSync(live, "utf8")).technologies : [];
+    requireTechnologyStackChanges(dataDir, technologies, previous);
+  } catch (error) {
+    throw new SkillLibraryError(error instanceof Error ? error.message : String(error));
+  }
+}
+
 /** 把验收过的暂存包换进生效位:旧版先归档,再原子换名。 */
 function installStaged(
   dataDir: string,
@@ -531,6 +546,7 @@ function installStaged(
   checkBudget: () => void = () => {},
 ): SkillOperationRecord {
   checkBudget();
+  requireSkillTechnologyReferences(dataDir, directory, staged.technologies);
   const liveRoot = join(dataDir, LIVE_DIR);
   mkdirSync(liveRoot, { recursive: true });
   chmodSync(liveRoot, 0o755);
@@ -755,6 +771,7 @@ export function submitHostSkill(
     try {
       const staged = materializeToStaging(
         stagingRoot, directory, files, metadata);
+      requireSkillTechnologyReferences(dataDir, directory, staged.technologies);
       const live = join(dataDir, LIVE_DIR, directory);
       const basePackageDigest = existsSync(live) ? packageDigest(live) : null;
       const duplicate = listSkillSubmissions(dataDir).find(record =>
@@ -897,6 +914,7 @@ function stageSubmission(dataDir: string, record: SkillSubmissionRecord, checkBu
     checkBudget();
     normalizePermissions(join(stagingRoot, record.directory));
     const staged = validateStaged(stagingRoot, record.directory);
+    requireSkillTechnologyReferences(dataDir, record.directory, staged.technologies);
     if (staged.packageDigestValue !== record.package_digest || staged.skillDigest !== record.skill_digest) {
       throw new SkillLibraryError("提交包已变化，请重新提交后审查");
     }

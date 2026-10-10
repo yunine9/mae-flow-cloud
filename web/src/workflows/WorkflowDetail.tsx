@@ -5,6 +5,8 @@ import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList,
 } from "@/components/ui/breadcrumb";
 import type { WorkflowAssetDetail } from "../api";
+import { technologyStackLabel } from "../technologyStacks";
+import { useTechnologyStacks } from "../useTechnologyStacks";
 import { statusBadgeVariants, statusLabels } from "./model";
 
 export function WorkflowDetail({
@@ -32,6 +34,7 @@ export function WorkflowDetail({
   onReject?: () => void;
   onArchive?: () => void;
 }) {
+  const { stacks } = useTechnologyStacks();
   if (loading) return <section className="wf-detail"><div className="wf-empty large">
     <strong>正在读取工作流…</strong><span>稍后会显示草稿和历史版本。</span>
   </div></section>;
@@ -67,12 +70,12 @@ export function WorkflowDetail({
       {/* 说内容不报数:"3 个限定条件"回答不了"适用于哪"(审计 P2-17) */}
       {(() => {
         const scope = draft.definition.applicability;
-        const parts = [...scope.repositories, ...scope.technologies,
+        const parts = [...scope.repositories, ...scope.technologies.map(id => technologyStackLabel(id, stacks)),
           ...scope.business_module_ids];
         return <div><small>适用范围</small>
-          <strong>{parts.length ? parts.slice(0, 2).join("、")
+          <strong>{asset.technology_assignment_required ? "待补技术栈关联" : parts.length ? parts.slice(0, 2).join("、")
             + (parts.length > 2 ? "…" : "") : "不限"}</strong>
-          <span title={parts.join("、")}>{parts.length
+          <span title={parts.join("、")}>{asset.technology_assignment_required ? "补充技术栈关联后才能发布" : parts.length
             ? `共 ${parts.length} 项限定` : "全部任务可选"}</span></div>;
       })()}
     </div>
@@ -98,7 +101,8 @@ export function WorkflowDetail({
         <dl><div><dt>精确变更</dt><dd>{draft.definition.edits.length} 项</dd></div>
           <div><dt>业务模块</dt><dd>{listOrAll(draft.definition.applicability.business_module_ids)}</dd></div>
           <div><dt>代码仓</dt><dd>{listOrAll(draft.definition.applicability.repositories)}</dd></div>
-          <div><dt>技术</dt><dd>{listOrAll(draft.definition.applicability.technologies)}</dd></div></dl>
+          <div><dt>技术栈</dt><dd>{asset.technology_assignment_required ? "待补技术栈关联"
+            : listOrAll(draft.definition.applicability.technologies.map(id => technologyStackLabel(id, stacks)))}</dd></div></dl>
         <footer>更新于 {formatDate(draft.updated_at)} · {draft.updated_by}</footer></article>
       <article><header><span><small>发布历史</small><strong>{versions.length} 个不可变版本</strong></span></header>
         {versions.length ? <ol className="wf-version-list">{[...versions].reverse().map((version) => <li key={version.version}>

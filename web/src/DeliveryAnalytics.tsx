@@ -1,10 +1,11 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
 import { CompletionDateFilter, completionDateRange, type CompletionDates } from "./CompletionDateFilter";
 import { completedInRange } from "../../src/completionRange";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, ExternalLink, HelpCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { knowledgeLanguageLabel } from "../../src/knowledgeLanguages";
+import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -64,6 +65,7 @@ function Donut({ counts }: { counts: OriginCounts }) {
   </div><div className="delivery-legend">{categories.map(c => <div key={c.key}><i style={{ background: c.color }} /><span>{c.label}</span><b>{num(counts[c.key])} 行</b><small>{percent(total ? counts[c.key] / total * 100 : null)}</small></div>)}</div></div>;
 }
 function TaskLanguages({ tasks }: { tasks: DeliveryAnalysisRow[] }) {
+  useTechnologyStacks();
   const languages = [...new Set(tasks.flatMap(t => t.languages?.length ? t.languages : ["unknown"]))];
   return <span className="inline-flex flex-wrap gap-1.5" title="任务对应代码仓的技术栈">{languages.map(language =>
     <Badge key={language} variant="secondary" className="h-auto px-2 py-1 text-sm">{language === "unknown" ? "未标注" : knowledgeLanguageLabel(language)}</Badge>)}</span>;

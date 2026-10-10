@@ -1,3 +1,4 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ProductVersionPicker } from "./ProductVersionPicker";
 import { RepositoryResourceNotice } from "./RepositoryResourceNotice";
 import { PersonName } from "./People";
@@ -307,6 +308,7 @@ export function LaunchWorkspace({
   onOpenWorkflowAssets?: (workflowId?: string) => void;
   onOpenKnowledgeAsset: (target: KnowledgeAssetFocus) => void;
 }) {
+  useTechnologyStacks();
   const [restoredDraft] = useState(() =>
     readStored<LaunchDraft>(storageKey("draft", session.username)));
   const [savedPreferences] = useState(() =>
@@ -489,7 +491,7 @@ export function LaunchWorkspace({
     const scopes = item.matched_business_module_ids.map((id) =>
       `模块：${businessModuleNames.get(id) ?? id}`);
     scopes.push(...item.matched_technologies.map((technology) =>
-      `语言：${knowledgeLanguageLabel(technology)}`));
+      `技术栈：${knowledgeLanguageLabel(technology)}`));
     scopes.push(...item.matched_repositories.map((repository) =>
       `仓库：${repositoryName(repository)}`));
     return scopes.join(" · ") || "团队通用";

@@ -37,7 +37,14 @@ import {
 } from "../src/hostSkillLibrary.ts";
 import { listHostSkillShelf } from "../src/hostSkillShelf.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
-import { mfcTemp } from "./mfcTmp.ts";
+import { mfcTemp as unconfiguredTemp } from "./mfcTmp.ts";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
+
+function mfcTemp(prefix: string): string {
+  const dir = unconfiguredTemp(prefix);
+  for (const name of ["Java", "C++", "JavaScript"]) createTechnologyStack(dir, { name }, "fixture");
+  return dir;
+}
 
 const encode = (text: string) => Buffer.from(text, "utf-8").toString("base64");
 
@@ -358,6 +365,7 @@ test("下线归档可回退;不存在的下线与坏版本号回退明确报错"
 test("B1验收1：Skill 提交审查是唯一上架入口，直传与旧语言动作退役", async () => {
   const dir = mfcTemp("mfc-skill-route-");
   const dataDir = join(dir, "data");
+  for (const name of ["Java", "C++", "JavaScript"]) createTechnologyStack(dataDir, { name }, "fixture");
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("boss", "administrator-pass");
   auth.createUser("dev", "developer-pass-1", "developer");

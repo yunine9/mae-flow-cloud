@@ -13,6 +13,7 @@ import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 function domain(): DomainKnowledgeJob {
   return { id: "dkx-1", title: "结算", scope: "结算", operator: "alice", created_at: "2026-09-30T01:00:00Z", status: "done", stage: "", revisions: {}, repositories: [],
@@ -94,6 +95,7 @@ async function within<T>(work: Promise<T>, milliseconds: number, message: string
 
 test("生产线验收8：真实磁盘与TaskService启动后，任务中心、领域和组件列表详情的状态分组下一步及归档字段完全一致", { timeout: 30_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-production-http-state-"));
+  seedTechnologyStacks(dir, ["java"]);
   const cases = [
     { name: "归档失败", research: "failed" as const, archiveState: "failed" as const, label: "归档失败", group: "attention", action: "archive" },
     { name: "只有研究失败", research: "failed" as const, label: "执行失败", group: "attention", action: "resume" },

@@ -1,3 +1,4 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 import { MoreHorizontal, FileText, History, Settings2 } from "lucide-react";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -79,6 +80,7 @@ export function ComponentResearch({
   backLabel?: string;
   onAdopt: (id: string) => void;
 }) {
+  useTechnologyStacks();
   const [records, setRecords] = useState<ComponentResearchRecord[]>([]),
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [selected, setSelected] = useState(() => {

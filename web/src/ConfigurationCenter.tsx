@@ -1,5 +1,6 @@
 import { WorkflowAssetWorkspace } from "./workflows";
 import { ComponentRepositories } from "./ComponentRepositories";
+import { TechnologyStacks } from "./TechnologyStackSettings";
 import { useEffect, useState } from "react";
 import { EnvironmentRegistry } from "./EnvironmentRegistry";
 import { getBusinessModules, createBusinessModule, updateBusinessModule,
@@ -17,8 +18,8 @@ const PAGE_SIZE = 10;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const shortRepo = (repo: string) => repo.split(/[/:]/).filter(Boolean).pop()?.replace(/\.git$/, "") || repo;
 export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
-  const [tab, setTab] = useState(() => { const tab = new URLSearchParams(location.search).get("tab"); return tab === "workflows" || tab === "components" || tab === "modules" || tab === "versions" || (admin && tab === "knowledge") ? tab : "environments"; });
-  const tabs: Array<[string, string]> = [["environments", "环境管理"], ["versions", "版本与分支"], ["modules", "模块与代码仓"], ["components", "基础组件仓"], ["workflows", "团队工作流"],
+  const [tab, setTab] = useState(() => { const tab = new URLSearchParams(location.search).get("tab"); return tab === "workflows" || tab === "components" || tab === "technologies" || tab === "modules" || tab === "versions" || (admin && tab === "knowledge") ? tab : "environments"; });
+  const tabs: Array<[string, string]> = [["environments", "环境管理"], ["versions", "版本与分支"], ["modules", "模块与代码仓"], ["technologies", "技术栈"], ["components", "基础组件仓"], ["workflows", "团队工作流"],
     // 知识仓(#286):全局强制的运营决策,仅管理员可见可维护(ADR-0033)。
     ...(admin ? [["knowledge", "知识仓"] as [string, string]] : [])];
   return <section className="tw-root grid gap-5 text-base">
@@ -27,7 +28,7 @@ export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
         <Button key={id} variant={tab === id ? "default" : "ghost"}
           aria-pressed={tab === id} onClick={() => { setTab(id); history.replaceState(history.state, "", `/configuration?tab=${id}`); }}>{label}</Button>)}
     </nav>
-    {tab === "workflows" ? <WorkflowAssetWorkspace initialWorkflowId={new URLSearchParams(location.search).get("workflow") || undefined} /> : tab === "components" ? <ComponentRepositories /> : tab === "environments" ? <EnvironmentRegistry /> : tab === "knowledge" ? <KnowledgeRepoPane /> : <MappingList key={tab} kind={tab} />}
+    {tab === "workflows" ? <WorkflowAssetWorkspace initialWorkflowId={new URLSearchParams(location.search).get("workflow") || undefined} /> : tab === "technologies" ? <TechnologyStacks /> : tab === "components" ? <ComponentRepositories /> : tab === "environments" ? <EnvironmentRegistry /> : tab === "knowledge" ? <KnowledgeRepoPane /> : <MappingList key={tab} kind={tab} />}
   </section>;
 }
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 import {
   knowledgeMatchesTask,
   normalizeKnowledgeAssetMetadata,
@@ -77,6 +78,8 @@ test("统一模型：性质与作用域强制；业务模块和工程语言均�
 
 test("仓库技术画像首次人工确认并复用；新任务不接受空技术栈", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-repository-profile-"));
+  createTechnologyStack(dataDir, { id: "cpp", name: "C++" }, "admin");
+  createTechnologyStack(dataDir, { id: "javascript", name: "JavaScript" }, "admin");
   const repository = "https://code.example/team/mixed.git";
   assert.equal(resolveRepositoryProfiles(dataDir, [repository])[0].profile,
     undefined);

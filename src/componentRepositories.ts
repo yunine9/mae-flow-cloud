@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 export interface ComponentRepository {
   id: string;
@@ -73,6 +74,7 @@ export function saveComponentRepository(
     throw new Error("组件路径必须是仓内相对路径");
   const languages = normalizeKnowledgeLanguages(value.languages ?? []);
   if (!languages.length) throw new Error("请选择组件适用语言");
+  requireTechnologyStackChanges(dir, languages, old?.languages);
   const row: ComponentRepository = {
     id: old?.id ?? randomUUID(),
     name,

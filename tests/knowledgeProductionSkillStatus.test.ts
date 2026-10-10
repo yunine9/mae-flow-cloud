@@ -10,6 +10,7 @@ import { persistExtractionJob, type ExtractionJobRecord } from "../src/knowledge
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const metadata = { nature: "engineering" as const, business_module_ids: [], repositories: [], technologies: ["cpp"] };
@@ -26,6 +27,7 @@ function intent(dir: string, record: SkillSubmissionRecord): SkillSubmissionReco
   return next;
 }
 async function samples(dir: string) {
+  seedTechnologyStacks(dir, ["cpp"]);
   const records: SkillSubmissionRecord[] = [];
   for (const status of ["pending", "approving", "approved", "rejected"] as const) {
     let record = await submitHostSkill(dir, `status-${status}`, files, "alice", metadata);
@@ -85,6 +87,7 @@ test("生产线验收8/D5：Skill 真实磁盘详情、列表与制作详情 HTT
 
 test("生产线验收8/D5：Skill 提交、批准与退回的 HTTP 写入响应即时返回对应只读生产状态", { timeout: 20_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-http-write-status-"));
+  seedTechnologyStacks(dir, ["cpp"]);
   const service = new TaskService({ dataDir: dir, provider: "", model: "", modelsJson: {}, maxConcurrent: 0 });
   const server = createTaskServer(service);
   try {
@@ -162,6 +165,7 @@ test("生产线验收8/D5：1366桌面 Skill 唯一任务页渲染后端状态�
 
 test("B6/D9：制作 Skill 提交审查后任务即结束，任务中心只剩提交那一条待审查", { timeout: 20_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-made-once-"));
+  seedTechnologyStacks(dir, ["cpp"]);
   const service = new TaskService({ dataDir: dir, provider: "", model: "", modelsJson: {}, maxConcurrent: 0 });
   const server = createTaskServer(service);
   try {

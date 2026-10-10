@@ -25,6 +25,7 @@ import {
   type WorkflowAssetRecord,
 } from "../src/workflowAssetLibrary.ts";
 import { workflowDigest } from "../src/workflowDefinition.ts";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 
 function definition(technologies: string[] = []) {
   return {
@@ -45,6 +46,9 @@ function definition(technologies: string[] = []) {
 
 function library() {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-wf-assets-"));
+  for (const id of ["java", "go", "rust", "python", "koa"]) {
+    createTechnologyStack(dataDir, { id, name: id }, "admin");
+  }
   return {
     library: new WorkflowAssetLibrary(dataDir),
     root: join(dataDir, "workflow-assets"),

@@ -6,6 +6,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/in
 import { Empty, EmptyContent, EmptyDescription, EmptyTitle } from "@/components/Empty";
 import { Badge } from "@/components/ui/badge";
 import type { WorkflowAssetSummary } from "../api";
+import { technologyStackLabel, type TechnologyStack } from "../technologyStacks";
+import { useTechnologyStacks } from "../useTechnologyStacks";
 import { statusBadgeVariants, statusLabels } from "./model";
 
 export function WorkflowLibrary({
@@ -33,6 +35,7 @@ export function WorkflowLibrary({
   onRefresh?: () => void;
   notice?: string;
 }) {
+  const { stacks } = useTechnologyStacks();
   const [scope, setScope] = useState<"active" | "archived">("active");
   const [query, setQuery] = useState("");
   const activeCount = workflows.filter((item) => item.status !== "archived").length;
@@ -100,7 +103,7 @@ export function WorkflowLibrary({
               <Badge variant={statusBadgeVariants[workflow.status]}>{statusLabels[workflow.status]}</Badge></span>
             <p>{workflow.description || "暂无说明，打开后可查看精确编排。"}</p>
             {/* 列表直接回答"适用于哪"(审计 P2-14),不逼人点详情 */}
-            <span className="wf-workflow-scope">{applicabilityText(workflow)}</span>
+            <span className="wf-workflow-scope">{applicabilityText(workflow, stacks)}</span>
             <span className="wf-workflow-owner">{workflow.scope === "team" ? "团队" : "个人"}
               <i>·</i> Owner <PersonName account={workflow.owner} /><i>·</i>{formatTime(workflow.updated_at)}</span>
           </span>
@@ -132,12 +135,13 @@ export function WorkflowLibrary({
   </section>;
 }
 
-function applicabilityText(workflow: WorkflowAssetSummary): string {
+function applicabilityText(workflow: WorkflowAssetSummary, stacks: readonly TechnologyStack[]): string {
+  if (workflow.technology_assignment_required) return "待补技术栈关联";
   const scope = workflow.applicability;
   if (!scope) return "适用范围：未声明（旧资产，打开详情查看）";
   const parts = [
     scope.repositories.length && `仓库 ${scope.repositories.join("、")}`,
-    scope.technologies.length && `技术栈 ${scope.technologies.join("、")}`,
+    scope.technologies.length && `技术栈 ${scope.technologies.map(id => technologyStackLabel(id, stacks)).join("、")}`,
     scope.business_module_ids.length
       && `业务域 ${scope.business_module_ids.join("、")}`,
   ].filter(Boolean) as string[];
@@ -146,6 +150,7 @@ function applicabilityText(workflow: WorkflowAssetSummary): string {
 
 function statusHint(workflow: WorkflowAssetSummary): string {
   if (workflow.status === "archived") return "已归档，仅保留历史任务";
+  if (workflow.technology_assignment_required) return "补充技术栈关联后才能发布";
   if (workflow.status === "pending_review") return "审核通过后可供新任务选择";
   if (workflow.status === "draft") return "发布后可供新任务选择";
   return "当前版本不可用于新任务";

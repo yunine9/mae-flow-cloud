@@ -151,20 +151,20 @@ export function SkillMetadataEditor({ value, modules, onChange }: {
     {value.nature === "engineering" && <div className="grid gap-2
       rounded-md bg-muted p-2.5">
       <span className="grid gap-0.5"><strong className="text-sm
-        text-foreground">适用语言（必选，可多选）</strong><small
+        text-foreground">适用技术栈（必选，可多选）</strong><small
         className="text-sm text-faint">
-        必须至少选择一种语言；仓库语言由用户首次选择并由系统记忆。</small></span>
+        必须至少选择一种技术栈；清单统一在配置中心维护。</small></span>
       <KnowledgeLanguagePicker value={value.technologies}
         includeAgnostic={false}
         onChange={(technologies) => onChange({ ...value, technologies })} />
       {!value.technologies.length && <p className="m-0 rounded-md
         bg-attention-soft p-2 text-sm/relaxed text-attention">
-        请选择至少一种适用语言；匹配不上应由知识治理者修正标签。</p>}
+        请选择至少一种适用技术栈；匹配不上应由知识治理者修正标签。</p>}
     </div>}
 
     <p className="m-0 border-l-3 border-line-strong p-2 text-sm/relaxed
       text-faint">
-      性质看正文，不看挂载位置。业务知识按模块匹配，工程知识按语言匹配；若正文同时讲两类内容，请拆成两项知识。</p>
+      性质看正文，不看挂载位置。业务知识按模块匹配，工程知识按技术栈匹配；若正文同时讲两类内容，请拆成两项知识。</p>
   </div>;
 }
 
@@ -192,6 +192,6 @@ export function SkillMetadataTags({ nature, formLabel = "Skill 形态",
       className="max-w-45 truncate">{repository.replace(/\/+$/, "")
         .split("/").at(-1)?.replace(/\.git$/i, "") || repository}</Badge>)}
     {nature === "engineering" && <KnowledgeLanguageTags
-      languages={technologies} empty="缺少语言标签 · 需治理" />}
+      languages={technologies} empty="待补技术栈关联" />}
   </span>;
 }

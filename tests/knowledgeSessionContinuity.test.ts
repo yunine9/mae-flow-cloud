@@ -12,6 +12,7 @@ import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 async function until(check: () => boolean) {
   for (let i = 0; i < 500; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); }
@@ -71,6 +72,7 @@ test("组件萃取重启保留通过的小任务并创建新会话；明确停�
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve), oldEc = process.env.MAE_FLOW_EC_BIN;
   const ec = join(f.dir, "ec"); writeFileSync(ec, "#!/bin/sh\necho 'caller code'\n", { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+  seedTechnologyStacks(f.dir, ["cpp"]);
   const row = saveComponentRepository(f.dir, { name: "组件", repository: "https://example.test/component.git", branch: "master", path: "", languages: ["cpp"] }, "expert");
   const fixtureScript = componentPipelineScript(row.id, "code.ts", f.revision, "caller code\n");
   let model = new ScriptedModelServer(fixtureScript.script, "scripted-v1", { linear: true, beforeScene: async ({ index }) => {

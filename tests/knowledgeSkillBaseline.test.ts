@@ -7,6 +7,7 @@ import {
   approveSkillSubmission, listSkillOperations, listSkillSubmissions, listSkillVersions,
   offlineHostSkill, readHostSkillPackage, readSkillSubmissionPackage, submitHostSkill, uploadHostSkill,
 } from "../src/hostSkillLibrary.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const directory = "baseline-review";
 const metadata = { nature: "engineering" as const, form: "skill" as const,
@@ -15,7 +16,11 @@ const files = (label: string) => [
   { path: "SKILL.md", content_base64: Buffer.from(`---\nname: ${directory}\ndescription: Review async state updates.\n---\n# Review\n\n${label}\nRead references/checklist.md before reviewing.\n`).toString("base64") },
   { path: "references/checklist.md", content_base64: Buffer.from(`# Checklist\n\n${label}\nVerify cancellation before updating state.\n`).toString("base64") },
 ];
-const fixture = () => mkdtempSync(join(tmpdir(), "knowledge-skill-baseline-"));
+const fixture = () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-skill-baseline-"));
+  seedTechnologyStacks(dir, ["typescript"]);
+  return dir;
+};
 
 test("两份基于同一版本的待审 Skill 串行上架，后一个不能覆盖先发布的更新", async () => {
   const dir = fixture();

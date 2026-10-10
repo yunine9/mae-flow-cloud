@@ -10,9 +10,11 @@ import { createKnowledgeTool } from "../src/knowledgeTools.ts";
 import { knowledgeDocumentCatalog } from "../src/knowledgeDocumentCatalog.ts";
 import { MemorySidecar } from "../src/memorySidecar.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const context = { repo: "a", repositories: ["https://code.example/a.git"], moduleIds: [], productVersion: "2.7B" };
 function seed(dir: string) {
+  seedTechnologyStacks(dir, ["cpp"]);
   createBusinessModule(dir, { id: "alarm", name: "告警模块", description: "跨仓告警", owner: "owner",
     repositories: [context.repositories[0], "https://code.example/b.git"] }, "owner");
   publishBusinessKnowledgeAsset(dir, "alarm", { id: "dedup", title: "告警重复事件", summary: "事件去重",

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -57,6 +58,7 @@ function managers(dir: string) {
   return { research, manager };
 }
 async function seed(dir: string, research: ComponentResearch) {
+  seedTechnologyStacks(dir, ["cpp"]);
   // 一个组件只有一次研究：每次播种登记一个新组件，得到各自独立的研究。
   const index = componentRepositories(dir).length;
   const component = saveComponentRepository(dir, { name: index ? `文件组件 ${index}` : "文件组件", repository: `https://example.test/component${index || ""}.git`, branch: "main", path: "src", languages: ["cpp"] }, "alice");

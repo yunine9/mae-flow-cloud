@@ -5,11 +5,14 @@ import { knowledgeDeleted, listKnowledgeDeletions } from "./knowledgeDeletionSto
 import { join } from "node:path";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 export interface KnowledgeDocument {
   id: string; title: string; content: string; scope: "platform" | "module" | "repository";
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
   when_to_use: string; active: boolean; revision: string;
+  /** 删除最后一个技术栈后，补齐关联才能重新启用。 */
+  technology_assignment_required?: true;
   source?: { repository: string; branch: string; path: string; revision: string };
   archive_target?: { repository: string; branch: string; path: string };
   research_source?: { job_id:string; document_id?: string; repository:string; branch:string; path:string; revision?:string; source_revisions?: Record<string, string>; material_ids?: string[]; skill?: { name: string; digest: string }; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
@@ -32,7 +35,8 @@ function storedDocument(value: unknown, id: string): KnowledgeDocument {
     || !["platform", "module", "repository"].includes(record.scope) || typeof record.active !== "boolean"
     || !text(record.revision) || !/^[a-f0-9]{64}$/.test(record.revision)
     || ![record.module_ids, record.repositories, record.technologies, record.product_versions].every(list)
-    || !text(record.when_to_use) || !Array.isArray(record.history) || !record.history.length
+    || !text(record.when_to_use) || record.technology_assignment_required !== undefined && record.technology_assignment_required !== true
+    || !Array.isArray(record.history) || !record.history.length
     || record.history.some(item => !item || typeof item !== "object" || !text(item.at) || !Number.isFinite(Date.parse(item.at))
       || !text(item.operator) || !text(item.action) || item.revision !== undefined && !text(item.revision))
     || !location(record.source, ["repository", "branch", "path", "revision"])
@@ -107,7 +111,7 @@ export interface PreparedKnowledgeDocument {
 }
 /** 预检只读磁盘，并确定精确的正式版本，供发布器先保存归档批次。 */
 export function prepareKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string,
-  options: { maxContentBytes?: number; expectedRevision?: string } = {}): PreparedKnowledgeDocument {
+  options: { maxContentBytes?: number; expectedRevision?: string; technologyAssignmentRequired?: true } = {}): PreparedKnowledgeDocument {
   const previous = id ? readKnowledgeDocument(dir, id) : undefined;
   if (options.expectedRevision !== undefined && previous?.revision !== options.expectedRevision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const merged = { ...previous, ...input };
@@ -128,8 +132,17 @@ export function prepareKnowledgeDocument(dir: string, input: Record<string, unkn
   for (const moduleId of module_ids) if (readBusinessModule(dir, moduleId).status !== "active") throw new Error("所选业务模块已停用");
   if (scope === "repository" && !repositories.length) throw new Error("请填写适用代码仓地址");
   if (merged.active !== undefined && typeof merged.active !== "boolean") throw new Error("文档状态不正确");
+  const technologies = normalizeKnowledgeLanguages(merged.technologies ?? []);
+  const concreteTechnologies = technologies.filter((id) => id !== "agnostic");
+  requireTechnologyStackChanges(dir, concreteTechnologies, previous?.technologies.filter((id) => id !== "agnostic"));
+  const technologyAssignmentRequired = !concreteTechnologies.length
+    && (previous?.technology_assignment_required === true || options.technologyAssignmentRequired === true);
+  if (technologyAssignmentRequired && merged.active !== false) {
+    throw new Error("该知识的技术栈已删除，请先补充技术栈关联再启用");
+  }
   const fields = { title, content, scope: scope as KnowledgeDocument["scope"], module_ids, repositories,
-    technologies: normalizeKnowledgeLanguages(merged.technologies ?? []), product_versions: strings(merged.product_versions ?? []),
+    technologies, product_versions: strings(merged.product_versions ?? []),
+    ...(technologyAssignmentRequired ? { technology_assignment_required: true as const } : {}),
     when_to_use: String(merged.when_to_use ?? "").trim().slice(0, 1000), active: merged.active !== false,
     research_source: merged.research_source as KnowledgeDocument["research_source"],
     archive_target: merged.archive_target as KnowledgeDocument["archive_target"],
@@ -153,7 +166,8 @@ export function writePreparedKnowledgeDocument(dir: string, prepared: PreparedKn
   const previous = existsSync(target) ? readKnowledgeDocument(dir, document.id) : undefined;
   if ((previous?.revision ?? null) !== prepared.previous_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const verified = prepareKnowledgeDocument(dir, { ...document }, document.history.at(-1)!.operator, previous?.id,
-    { expectedRevision: previous?.revision, maxContentBytes: Math.max(2 * 1024 * 1024, Buffer.byteLength(document.content)) });
+    { expectedRevision: previous?.revision, maxContentBytes: Math.max(2 * 1024 * 1024, Buffer.byteLength(document.content)),
+      ...(document.technology_assignment_required ? { technologyAssignmentRequired: true } : {}) });
   if (verified.document.revision !== document.revision) throw new Error("准备的正式知识版本已变化，请重新发布");
   if (prepared.unchanged) {
     if (!previous || previous.revision !== document.revision) throw new Error("正式知识已有新版本，请重新发布");

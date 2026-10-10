@@ -12,6 +12,7 @@ import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 // RED 时旧实现会忽略第六参；类型断言只让测试观察公开调用，不替实现补取版本。
 const syncWithBaselines = syncKnowledgeSource as (root: string, repository: string, branch: string, sandbox: PreparedHostGit,
@@ -98,6 +99,7 @@ for (const available of [true, false]) {
 test("生产线验收12：F17组件接续研究请求本轮固定SHA，不拿换令牌后的仓库HEAD替代", async () => {
   const f = sourceFixture(), ec = join(f.root, "ec"), previousEc = process.env.MAE_FLOW_EC_BIN;
   f.advance(); writeFileSync(ec, `#!${process.execPath}\nconsole.log('fixture ec tools');\n`, { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+  seedTechnologyStacks(f.root, ["java"]);
   const component = saveComponentRepository(f.root, { name: "基础库", repository: "https://example.test/base.git", branch: "main", path: "src", languages: ["java"] }, "bob");
   let requested: string[] | undefined;
   const service = new ComponentResearch(f.root, input => {

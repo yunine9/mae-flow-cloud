@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { test } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -55,6 +56,7 @@ for (const action of ["budget", "human"] as const) {
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const root = mkdtempSync(join(tmpdir(), "production-component-total-budget-")), ec = join(root, "ec"), previousEc = process.env.MAE_FLOW_EC_BIN;
     writeFileSync(ec, `#!${process.execPath}\nconsole.log('fixture ec tools');\n`, { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+    seedTechnologyStacks(root, ["java"]);
     saveComponentRepository(root, { name: "基础库", repository: "https://example.test/base.git", branch: "main", path: "src", languages: ["java"] }, "alice");
     let entered!: () => void, reject!: (error: Error) => void;
     const started = new Promise<void>(resolve => { entered = resolve; });

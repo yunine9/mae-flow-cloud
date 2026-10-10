@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
 import { listKnowledgeDocuments, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 test("生产线验收5/14：人工归档所选正式知识原样推根目录和子目录，只改MR分支且保留其他文件", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-path-publish-")), source = join(root, "source"), remote = join(root, "remote.git");
@@ -39,6 +40,7 @@ test("生产线验收5/14：组件正式版本手动归档只提交一篇正文�
   const { componentSection } = await import("./componentConsumptionFixture.ts");
   const { publishedComponentParadigms } = await import("../src/componentKnowledgeDocument.ts");
   const root = mkdtempSync(join(tmpdir(), "component-clean-publish-")), source = join(root, "source"), remote = join(root, "remote.git");
+  seedTechnologyStacks(root, ["cpp"]);
   mkdirSync(source);
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   git(source, "init", "-b", "main"); git(source, "config", "user.name", "Fixture"); git(source, "config", "user.email", "fixture@example.test");

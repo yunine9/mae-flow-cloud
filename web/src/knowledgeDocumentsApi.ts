@@ -3,7 +3,7 @@ export interface KnowledgeDocument {
   external?: boolean; form?: string; scope_label?: string; focus?: KnowledgeAssetFocus;
   id: string; title: string; content?: string; scope: "platform" | "module" | "repository";
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
-  when_to_use: string; active: boolean; revision: string;
+  when_to_use: string; technology_assignment_required?: true; active: boolean; revision: string;
   source?: { repository: string; branch: string; path: string; revision: string };
   research_source?: { job_id:string; repository:string; branch:string; path:string; revision?:string; components?: Array<{ id: string }> };
   history: Array<{ at: string; operator: string; action: string }>;

@@ -54,6 +54,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import {
   normalizeWorkflowDefinition,
   workflowDigest,
@@ -120,6 +122,8 @@ export interface WorkflowAssetRecord {
    * "这个方案适用于哪"(审计 P2-14),不能逼人逐个点详情;缺席=
    * 旧资产,前端按未声明处理。 */
   applicability?: WorkflowDefinition["applicability"];
+  /** 删除最后一个技术栈后，补齐关联才能重新发布。 */
+  technology_assignment_required?: true;
   created_at: string;
   updated_at: string;
 }
@@ -157,6 +161,7 @@ export interface WorkflowAssetSummary {
   /** 归档只影响这一位:新任务不能再选它;已有引用与历史都在。 */
   selectable_for_tasks: boolean;
   applicability?: WorkflowDefinition["applicability"];
+  technology_assignment_required?: true;
   updated_at: string;
 }
 
@@ -253,7 +258,7 @@ export class WorkflowAssetLibrary {
   private readonly oplogPath: string;
   private readonly fault?: WorkflowAssetFaultHook;
 
-  constructor(dataDir: string, options: WorkflowAssetLibraryOptions = {}) {
+  constructor(private readonly dataDir: string, options: WorkflowAssetLibraryOptions = {}) {
     this.root = join(dataDir, "workflow-assets");
     this.oplogPath = join(this.root, "operations.jsonl");
     this.fault = options.faultInjection;
@@ -416,6 +421,8 @@ export class WorkflowAssetLibrary {
         record.status === "published" && record.latest_version > 0,
       ...(record.applicability
         ? { applicability: record.applicability } : {}),
+      ...(record.technology_assignment_required
+        ? { technology_assignment_required: true as const } : {}),
       updated_at: record.updated_at,
     };
   }
@@ -447,6 +454,8 @@ export class WorkflowAssetLibrary {
     const owner = normalizeActor(input.owner, "owner");
     const actor = normalizeActor(input.actor ?? owner, "actor");
     const definition = normalizeWorkflowDefinition(input.definition);
+    definition.applicability.technologies = requireTechnologyStackChanges(
+      this.dataDir, definition.applicability.technologies);
     const digest = workflowDigest(definition);
     const at = nowIso();
 
@@ -660,6 +669,9 @@ export class WorkflowAssetLibrary {
     }
     const actor = normalizeActor(input.actor, "actor");
     const definition = normalizeWorkflowDefinition(input.definition);
+    definition.applicability.technologies = requireTechnologyStackChanges(
+      this.dataDir, definition.applicability.technologies,
+      draft.definition.applicability.technologies);
     const digest = workflowDigest(definition);
     const at = nowIso();
     const next: WorkflowDraftRecord = {
@@ -680,6 +692,7 @@ export class WorkflowAssetLibrary {
     record.draft_revision = next.revision;
     record.draft_digest = digest;
     record.applicability = definition.applicability;
+    if (definition.applicability.technologies.length) delete record.technology_assignment_required;
     record.updated_at = at;
     // 改已发布资产 = 开新草稿周期:published → draft;vN 原样躺着。
     if (record.status === "published") record.status = "draft";
@@ -688,6 +701,36 @@ export class WorkflowAssetLibrary {
   }
 
   // -- 生命周期:draft → pending_review → published;archived 终态 --
+  /** 配置目录删除只清理当前关联；已发布版本仍供历史任务追溯。 */
+  removeTechnologyReference(id: string, technologyId: string, actorInput: string): void {
+    const record = this.readAssetStrict(id);
+    const draft = this.readDraftStrict(id);
+    const matches = (value: string) => {
+      try { return normalizeKnowledgeLanguages([value])[0] === technologyId; }
+      catch { return value === technologyId; }
+    };
+    const technologies = draft.definition.applicability.technologies.filter((value) => !matches(value));
+    const draftChanged = technologies.length !== draft.definition.applicability.technologies.length;
+    if (!draftChanged && !record.applicability?.technologies.some(matches)) return;
+    const actor = normalizeActor(actorInput, "actor");
+    const at = nowIso();
+    const definition = normalizeWorkflowDefinition({ ...draft.definition,
+      applicability: { ...draft.definition.applicability, technologies } });
+    const next = { ...draft, definition, digest: workflowDigest(definition),
+      revision: draft.revision + (draftChanged ? 1 : 0), updated_at: at, updated_by: actor };
+    this.logOperation("remove_technology", id, actor, { technology_id: technologyId,
+      revision: next.revision, digest: next.digest });
+    if (draftChanged) this.atomicWriteJson(join(this.assetDir(id), "draft.json"), next);
+    record.applicability = definition.applicability;
+    if (!technologies.length) record.technology_assignment_required = true;
+    else delete record.technology_assignment_required;
+    record.draft_revision = next.revision;
+    record.draft_digest = next.digest;
+    record.updated_at = at;
+    if (record.status !== "archived") record.status = "draft";
+    this.writeAsset(record);
+  }
+
   submitForReview(id: string, input: { actor: string }): WorkflowAssetSummary {
     return this.transition(id, input.actor, "submit", ["draft"],
       "pending_review");
@@ -741,6 +784,11 @@ export class WorkflowAssetLibrary {
         `当前状态 ${record.status} 不能执行 approve(需要 pending_review)`);
     }
     const draft = this.readDraftStrict(id);
+    if (record.technology_assignment_required && !draft.definition.applicability.technologies.length) {
+      throw new WorkflowAssetError("invalid_input", "工作流的技术栈关联已清空，请补齐技术栈后重新发布");
+    }
+    requireTechnologyStackChanges(this.dataDir, draft.definition.applicability.technologies,
+      draft.definition.applicability.technologies);
     const version = record.latest_version + 1;
     const versionRecord: WorkflowVersionRecord = {
       schema: WORKFLOW_VERSION_SCHEMA,

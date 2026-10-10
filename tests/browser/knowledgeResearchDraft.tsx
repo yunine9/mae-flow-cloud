@@ -13,6 +13,7 @@ window.fetch = async (url, options) => {
   if (path === "/business-modules") result = { modules: [{ id: "trade", name: "交易业务", repositories: ["https://example.test/trade.git"], status: "active", assets: [] }], warnings: [], operations: [] };
   else if (path === "/knowledge-tasks") result = { tasks: [], summary: { running: 0, attention: 0, total: 0 }, warnings: [] };
   else if (path === "/memory-insights") result = { memories: [], repos: [] };
+  else if (path === "/technology-stacks") result = { stacks: [] };
   else if (path === "/component-repositories") result = { components: [] };
   else if (path === "/knowledge-documents") result = { documents: [] };
   else if (path === "/skills") result = { skills: [], operations: [], warnings: [] };

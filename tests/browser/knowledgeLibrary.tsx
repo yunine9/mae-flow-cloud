@@ -41,6 +41,7 @@ window.fetch = async (url, options) => {
   else if (path.startsWith("/knowledge-documents/")) { const id = decodeURIComponent(path.split("/")[2]); result = documents.find(item => item.id === id); }
   else if (path === "/skills") result = { skills: [], operations: [], warnings: [] };
   else if (path === "/business-modules") result = { modules, warnings: [], operations: [] };
+  else if (path === "/technology-stacks") result = { stacks: [{ id: "cpp", name: "C++", enabled: true }] };
   else if (path === "/component-repositories") result = { components: [{ id: "file", name: "文件组件", repository: "https://example.test/file.git", branch: "master", path: "", languages: ["cpp"], enabled: true, description: "" }] };
   else if (path === "/component-knowledge") result = governance;
   else if (path === "/component-research") result = { records: [] };
@@ -90,7 +91,7 @@ async function waitFor(selector: string) { for (let i = 0; i < 60 && !document.q
 async function fill(selector: string, value: string) { const field = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector); check(field, `missing field ${selector}`); Object.getOwnPropertyDescriptor(field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(field, value); field!.dispatchEvent(new Event("input", { bubbles: true })); await pause(); }
 async function chooseDestination(query: string, label: string) {
   await clickSelector('[role="combobox"][aria-label="知识归属"]');
-  await fill('input[aria-label="搜索模块或语言"]', query);
+  await fill('input[aria-label="搜索模块或技术栈"]', query);
   const options = [...document.querySelectorAll<HTMLElement>('[role="option"]')].filter(visible);
   check(options.length === 1 && options[0].textContent?.includes(label), "destination search filters within an in-page popover");
   options[0].click(); await pause();
@@ -123,7 +124,7 @@ async function run() {
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "published module");
   await click("返回知识库"); await waitFor('[aria-label="打开交易业务知识目录"]');
   checkLibraryNavigationRestored();
-  check(document.querySelector('[aria-label="业务模块"]') && document.querySelector('[aria-label="工程语言"]'), "home groups modules and languages");
+  check(document.querySelector('[aria-label="业务模块"]') && document.querySelector('[aria-label="技术栈"]'), "home groups modules and languages");
   check(button("新增") && !button("研究知识") && !button("导入 Skill"), "home exposes one new menu without duplicate research or import buttons");
   // 组件规则治理挂在"工程语言 → 基础组件"下:选中组件文档后切到「规则」页签,级别按钮打开同一套设置对话框。
   await clickSelector('[aria-label="打开C++知识目录"]'); await waitFor('[aria-label="模块知识目录"] [aria-label="基础组件"]');

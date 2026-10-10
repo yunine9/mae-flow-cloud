@@ -227,6 +227,8 @@ import type {
   WorkflowSourceRef,
   WorkflowStandardSnapshot,
 } from "./workflowDefinition.ts";
+import { normalizeWorkflowDefinition } from "./workflowDefinition.ts";
+import { requireTechnologyStacks } from "./technologyStacks.ts";
 import {
   probeDeliveryPlatform,
   type DeliveryPlatformCheck,
@@ -7532,7 +7534,15 @@ export class TaskService {
     }
     if (options.requireRepositoryProfiles && repositories.length) {
       repositoryProfiles = requireRepositoryProfiles(
-        repositories, repositoryProfiles);
+        repositories, repositoryProfiles, this.options.dataDir);
+    }
+    repositoryProfiles = repositoryProfiles.map((profile) => ({
+      ...profile, technologies: [...profile.technologies],
+    }));
+    if (options.workflowDefinition !== undefined && !options.workflowProfile
+        && !options.hostSkillSnapshotSourceWorkspace) {
+      requireTechnologyStacks(this.options.dataDir,
+        normalizeWorkflowDefinition(options.workflowDefinition).applicability.technologies);
     }
     const profileTechnologies = [...new Set(repositoryProfiles
       .flatMap((profile) => profile.technologies))];

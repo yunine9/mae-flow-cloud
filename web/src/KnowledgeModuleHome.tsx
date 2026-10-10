@@ -1,3 +1,4 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
 import { useEffect, useState } from "react";
 import { Building2, SlidersHorizontal, ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Code2, FolderOpen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ function maintenance(module: KnowledgeModule) {
 }
 
 export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivity = [], onOpenResearch }: KnowledgeModuleHomeProps) {
+  const { stacks } = useTechnologyStacks();
   const [filterOpen,setFilterOpen] = useState(false);
   const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState("");
   const [category, setCategory] = useState<"all" | KnowledgeModuleCategory>("all"), [query, setQuery] = useState(""), [reload, setReload] = useState(0);
@@ -28,7 +30,7 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivi
     let live = true; setError("");
     void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); });
     return () => { live = false; };
-  }, [reload]);
+  }, [reload, stacks]);
   const needle = query.trim().toLocaleLowerCase();
   const visible = (data?.modules ?? []).filter(m => (category === "all" || m.category === category)
     && (!needle || `${m.name} ${m.description}`.toLocaleLowerCase().includes(needle) || m.documents.some(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle))));
@@ -37,17 +39,17 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivi
     <header className="km-home-heading">
       <h2>{{all:"知识目录",business:"业务知识",engineering:"工程知识",unassigned:"待整理"}[category]}</h2>
       <div className="km-home-filterbar">
-        {data && <span className="km-home-count">{visible.length} {category === "business" ? "个模块" : category === "engineering" ? "个语言目录" : "个目录"}</span>}
+        {data && <span className="km-home-count">{visible.length} {category === "business" ? "个模块" : category === "engineering" ? "个技术栈目录" : "个目录"}</span>}
         <Popover open={filterOpen} onOpenChange={setFilterOpen}>
           <PopoverTrigger render={<Button variant="outline" className="km-category-trigger" />}><SlidersHorizontal size={18}/><span>知识分类</span><strong>{{all:"全部",business:"业务",engineering:"工程",unassigned:"待整理"}[category]}</strong><ChevronDown size={15}/></PopoverTrigger>
-          <PopoverContent align="end" sideOffset={10} className="tw-root km-category-panel" aria-label="按知识分类筛选"><div className="km-category-disc" role="group" aria-label="知识分类">{([["business","业务",Building2],["engineering","工程",Code2],["all","全部",null]] as const).map(([value,label,Icon])=><button type="button" key={value} data-category={value} aria-pressed={category===value} onClick={()=>{setCategory(value);}}>{Icon&&<Icon size={21}/>}<span>{label}</span></button>)}<div className="km-category-indicator" style={{transform:`rotate(${category==="business"?-90:category==="engineering"?90:0}deg)`}}/></div><p className="text-center text-xs text-muted-foreground">业务按模块，工程按语言</p><Button size="sm" variant="ghost" className="text-primary" onClick={()=>setFilterOpen(false)}>收起</Button></PopoverContent>
+          <PopoverContent align="end" sideOffset={10} className="tw-root km-category-panel" aria-label="按知识分类筛选"><div className="km-category-disc" role="group" aria-label="知识分类">{([["business","业务",Building2],["engineering","工程",Code2],["all","全部",null]] as const).map(([value,label,Icon])=><button type="button" key={value} data-category={value} aria-pressed={category===value} onClick={()=>{setCategory(value);}}>{Icon&&<Icon size={21}/>}<span>{label}</span></button>)}<div className="km-category-indicator" style={{transform:`rotate(${category==="business"?-90:category==="engineering"?90:0}deg)`}}/></div><p className="text-center text-xs text-muted-foreground">业务按模块，工程按技术栈</p><Button size="sm" variant="ghost" className="text-primary" onClick={()=>setFilterOpen(false)}>收起</Button></PopoverContent>
         </Popover>
       </div>
     </header>
     {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm"><span>知识目录读取失败：{error}</span><Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
     {!data && !error && <p role="status" className="py-12 text-center text-muted-foreground">正在读取知识目录…</p>}
     {data?.warnings.map(warning => <p key={warning} role="status" className="text-sm text-attention">{warning}</p>)}
-    {([['business', '业务模块'], ['engineering', '工程语言'], ['unassigned', '待整理']] as const).map(([group, label]) => {
+    {([['business', '业务模块'], ['engineering', '技术栈'], ['unassigned', '待整理']] as const).map(([group, label]) => {
       const modules = visible.filter(m => m.category === group);
       if (!modules.length) return null;
       return <section key={group} className="grid gap-3" aria-label={label}>

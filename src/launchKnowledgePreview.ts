@@ -17,6 +17,7 @@ import {
   type KnowledgeAssetMetadata,
 } from "./knowledgeAssetModel.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { requireTechnologyStacks } from "./technologyStacks.ts";
 import {
   listHostSkillShelf,
   type HostSkillShelfEntry,
@@ -27,11 +28,13 @@ import {
   type RepositoryProfile,
 } from "./repositoryProfiles.ts";
 import { workflowKnowledgeSelections } from "./workflowAssetResolution.ts";
+import { normalizeWorkflowDefinition } from "./workflowDefinition.ts";
 
 export type LaunchKnowledgePreviewSource =
   | "business_modules"
   | "team_skills"
-  | "repository_profiles";
+  | "repository_profiles"
+  | "workflow";
 
 export interface LaunchKnowledgePreviewNotice {
   source: LaunchKnowledgePreviewSource;
@@ -234,16 +237,28 @@ export function previewLaunchKnowledge(
   const technologies: string[] = [];
   for (const profile of profiles ?? []) {
     try {
-      technologies.push(...normalizeKnowledgeLanguages(profile.technologies)
-        .filter((technology) => technology !== "agnostic"));
+      const selected = normalizeKnowledgeLanguages(profile.technologies)
+        .filter((technology) => technology !== "agnostic");
+      if (!profile.confirmed || !selected.length) {
+        throw new Error("请先确认代码仓技术栈");
+      }
+      technologies.push(...requireTechnologyStacks(dataDir, selected));
     } catch (error) {
-      degraded = true;
-      warnings.push({ source: "repository_profiles",
-        code: "catalog_warning",
-        message: `代码仓 ${profile.repository} 的技术画像无效，已退化为按代码仓匹配：${String(error)}` });
+      errors.push({ source: "repository_profiles",
+        code: "selection_invalid",
+        message: `代码仓 ${profile.repository} 的技术栈选择无效：${String(error)}` });
     }
   }
   const uniqueTechnologies = [...new Set(technologies)];
+  if (input.workflowDefinition !== undefined) {
+    try {
+      requireTechnologyStacks(dataDir,
+        normalizeWorkflowDefinition(input.workflowDefinition).applicability.technologies);
+    } catch (error) {
+      errors.push({ source: "workflow", code: "selection_invalid",
+        message: `工作流的技术栈选择无效：${String(error)}` });
+    }
+  }
   const selections = effectiveLaunchKnowledgeSelections({
     selectedBusinessModuleIds: input.selectedBusinessModuleIds,
     workflowDefinition: input.workflowDefinition,

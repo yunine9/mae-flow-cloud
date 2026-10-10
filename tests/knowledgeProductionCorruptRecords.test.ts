@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -233,6 +234,7 @@ test("生产线验收3（F5）：活动组件讨论缺少文稿或对应章节�
 test("生产线验收3（F5）：范式证据只认本组件仓，引用其他组件仓的研究如实失败；重启读取与写入口一致", async () => {
   const { saveComponentRepository } = await import("../src/componentRepositories.ts");
   const dir = mkdtempSync(join(tmpdir(), "mfc-component-multi-repository-read-"));
+  seedTechnologyStacks(dir, ["java"]);
   const first = saveComponentRepository(dir, { name: "订单组件", repository: "https://example.test/orders.git", branch: "main", path: "src", languages: ["java"] }, "alice");
   const second = saveComponentRepository(dir, { name: "公共文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["java"] }, "alice");
   const evidence = { repository_id: first.id, path: "src/Orders.java", revision: "a".repeat(40), start: 1, end: 3 };

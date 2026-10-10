@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { TaskService } from "../src/taskService.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { skillExtractionTask } from "../src/knowledgeTaskCenter.ts";
 import type { ExtractionJobRecord } from "../src/knowledgeExtraction.ts";
 import type { DomainExecution } from "../src/domainKnowledgeTypes.ts";
@@ -41,6 +42,7 @@ test("三类知识任务合计并发 50，第 51 个排队；完成、失败和�
   });
   const domainInput = (i: number) => ({ title: `领域 ${i}`, scope: `规则 ${i}`, issue_no: "REQ-50", repositories: [],
     knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });
+  seedTechnologyStacks(dir, ["cpp"]);
   const componentIds = Array.from({ length: 21 }, (_, i) => saveComponentRepository(dir, {
     name: `组件 ${i}`, repository: `https://example.test/component-${i}.git`, branch: "main", path: "", languages: ["cpp"],
   }, "alice").id);

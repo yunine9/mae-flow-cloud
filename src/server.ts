@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import { traceHttpRequest, sanitizeBrowserTimings } from "./runtimeDiagnostics.ts";
 import { MemoryStore } from "./taskMemory.ts";
 import { listProductVersions, saveProductVersion, deleteProductVersion } from "./configurationCenter.ts";
+import { listTechnologyStacks, createTechnologyStack, updateTechnologyStack, requireTechnologyStacks, TechnologyStackError } from "./technologyStacks.ts";
+import { deleteTechnologyStack } from "./technologyStackDeletion.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
@@ -1120,6 +1122,7 @@ export function createTaskServer(
         || parts[0] === "component-knowledge" || parts[0] === "product-versions" || parts[0] === "component-repositories" || parts[0] === "component-research"
         || ["domain-extraction", "knowledge-materials", "knowledge-extraction", "knowledge-tasks", "knowledge-review"].includes(parts[0])
         || parts[0] === "knowledge-repo"
+        || parts[0] === "technology-stacks"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-documents"
         || parts[0] === "workflow-assets"
@@ -1226,8 +1229,9 @@ export function createTaskServer(
                 && (!Number.isInteger(version) || version < 1)) {
               return json(response, 400, { error: "工作流方案版本不合法" });
             }
-            workflowDefinition = getWorkflowAssets()
-              .getPublished(id, version).definition;
+            const published = getWorkflowAssets().getPublished(id, version);
+            requireTechnologyStacks(service.options.dataDir, published.definition.applicability.technologies);
+            workflowDefinition = published.definition;
           }
           const repositories = Array.isArray(body.repos)
             ? body.repos.map(String)
@@ -1392,6 +1396,27 @@ export function createTaskServer(
         return json(response, 404, { error: "未知许愿墙接口" });
       }
       // 配置中心与环境台账一样，由所有已登录成员维护。
+      if (parts[0] === "technology-stacks") {
+        try {
+          const dataDir = service.options.dataDir;
+          const operator = viewer?.username ?? "本地部署";
+          if (request.method === "GET" && parts.length === 1) {
+            return json(response, 200, { stacks: listTechnologyStacks(dataDir) });
+          }
+          if (request.method === "POST" && parts.length === 1) {
+            return json(response, 201, { stack: createTechnologyStack(dataDir, await readBody(request), operator) });
+          }
+          if (request.method === "PUT" && parts.length === 2) {
+            return json(response, 200, { stack: updateTechnologyStack(dataDir, decodeURIComponent(parts[1]), await readBody(request), operator) });
+          }
+          if (request.method === "DELETE" && parts.length === 2) {
+            await deleteTechnologyStack(dataDir, decodeURIComponent(parts[1]), operator);
+            return json(response, 200, { ok: true });
+          }
+          return json(response, 405, { error: "不支持的技术栈配置操作" });
+        } catch (error) { return json(response, 400, { error: humanError(error) }); }
+      }
+
       if (parts[0] === "product-versions") {
         try {
           const dataDir = service.options.dataDir;
@@ -1600,6 +1625,7 @@ export function createTaskServer(
           if (request.method === "POST" && parts.length === 2) {
             const body = await readBody(request);
             const metadata = body.nature ? skillMetadataFromBody(service.options.dataDir, body) : undefined;
+            if (metadata) requireTechnologyStacks(service.options.dataDir, metadata.technologies);
             const job = service.startSkillExtraction({
               repo: String(body.repo ?? ""),
               intent: String(body.intent ?? ""),
@@ -1624,7 +1650,7 @@ export function createTaskServer(
             return json(response, 200, { ...job, knowledge_scope: readKnowledgeSkillContext(service.options.dataDir, job.id), production: projectKnowledgeProduction({ kind: "skill-extraction", record: job }) });
           }
         } catch (error) {
-          if (error instanceof SkillLibraryError) return json(response, 400, { error: error.message });
+          if (error instanceof SkillLibraryError || error instanceof TechnologyStackError) return json(response, 400, { error: error.message });
           if (error instanceof NotFoundError) return json(response, 404, { error: error.message });
           if (error instanceof TaskControlError) {
             return json(response, 409, { error: error.message });
@@ -2125,7 +2151,7 @@ export function createTaskServer(
                   technologies: Array.isArray(item.technologies)
                     ? item.technologies.map(String) : [],
                   confirmed: item.confirmed !== false,
-                }, account ?? "本地部署")];
+                }, account ?? "本地部署", service.options.dataDir)];
               } catch (error) {
                 service.options.log?.(
                   `仓库技术画像无效(本单不采用): ${String(error)}`);
@@ -2143,7 +2169,7 @@ export function createTaskServer(
                 .flatMap((item) => item.profile ? [{ ...item.profile }] : []);
             }
             repositoryProfiles = requireRepositoryProfiles(
-              requestedRepositories, repositoryProfiles);
+              requestedRepositories, repositoryProfiles, service.options.dataDir);
             if (providedRepositoryProfiles !== undefined) {
               repositoryProfiles = repositoryProfiles.map((current) => {
                 try {
@@ -2199,6 +2225,7 @@ export function createTaskServer(
               return json(response, 400, { error: "工作流方案版本不合法" });
             }
             const published = getWorkflowAssets().getPublished(id, version);
+            requireTechnologyStacks(service.options.dataDir, published.definition.applicability.technologies);
             workflowDefinition = published.definition;
             workflowSource = {
               kind: "workflow",

@@ -23,6 +23,7 @@ import {
   TaskService,
 } from "../src/taskService.ts";
 import { WorkflowAssetLibrary } from "../src/workflowAssetLibrary.ts";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 function service(dataDir: string): TaskService {
@@ -214,6 +215,7 @@ test("团队 Skill 预览复用快照包验收，坏包不会冒充最终已固�
 test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变化清单放行",
   () => {
     const dataDir = mfcTemp("mfc-launch-authority-digest-");
+    createTechnologyStack(dataDir, { id: "java", name: "Java" }, "admin");
     const repository = "https://code.example/team/orders.git";
     createBusinessModule(dataDir, {
       id: "orders", name: "订单域", description: "订单边界", owner: "owner",
@@ -270,6 +272,7 @@ test("知识清单指纹绑定创建：旧清单拒绝且不占 task id，未变
 test("技术画像记忆失败时，本单仍使用已核对画像而不静默缩小匹配范围",
   async () => {
     const dataDir = mfcTemp("mfc-launch-profile-write-");
+    createTechnologyStack(dataDir, { id: "java", name: "Java" }, "admin");
     const repository = mfcTemp("mfc-launch-profile-repo-");
     execFileSync("git", ["init", "--quiet", "--bare", repository]);
     const skillRoot = join(dataDir, "skills", "java-review");

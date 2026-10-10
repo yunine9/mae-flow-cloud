@@ -7,6 +7,8 @@
  */
 import { useMemo, useState } from "react";
 import type { WorkflowAssetCatalogItem } from "../api";
+import { technologyStackLabel } from "../technologyStacks";
+import { useTechnologyStacks } from "../useTechnologyStacks";
 import { assetKey, registryLabels } from "./model";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,12 +52,14 @@ export function AssetPicker({
   onClose?: () => void;
   title?: string;
 }) {
+  const { stacks } = useTechnologyStacks();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<AssetCategory>("all");
   const visible = useMemo(() => assets.filter((asset) => {
     const needle = query.trim().toLocaleLowerCase();
     const matchesQuery = !needle || [asset.title, asset.summary, asset.ref.id,
-      asset.when_to_use ?? "", ...asset.technologies].join(" ")
+      asset.when_to_use ?? "", ...asset.technologies,
+      ...asset.technologies.map(id => technologyStackLabel(id, stacks))].join(" ")
       .toLocaleLowerCase().includes(needle);
     const matchesCategory = category === "all"
       || (category === "business" && asset.nature === "business")
@@ -64,7 +68,7 @@ export function AssetPicker({
       || (category === "capability"
         && ["agent", "tool", "capability"].includes(asset.type));
     return matchesQuery && matchesCategory;
-  }), [assets, category, query]);
+  }), [assets, category, query, stacks]);
 
   return <Dialog open onOpenChange={(open) => { if (!open) onClose?.(); }}>
     {/* portal 弹层自带 .tw-root 归一(同 EnvironmentPicker 的教训)。 */}
@@ -126,7 +130,7 @@ export function AssetPicker({
                     {shortRepository(asset.ref.repository)}</b>}
                   {asset.technologies.slice(0, 2).map((item) => <b key={item}
                     className="rounded border border-line px-1 text-[10px] font-medium text-muted-foreground">
-                    {item}</b>)}
+                    {technologyStackLabel(item, stacks)}</b>)}
                 </span>
                 {asset.warning && <span
                   className="rounded bg-danger-soft px-1.5 py-0.5 text-xs text-danger">{asset.warning}</span>}

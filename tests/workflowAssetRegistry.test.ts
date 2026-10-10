@@ -14,10 +14,12 @@ import { materializeHostSkills } from "../src/hostSkillRuntime.ts";
 import { listWorkflowAssetCatalog } from "../src/workflowAssetRegistry.ts";
 import { resolveWorkflowAssets } from "../src/workflowAssetResolution.ts";
 import { mfcTemp } from "./mfcTmp.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 test("统一资产目录返回真实版本身份，任务解析只接受对拍成功的精确资产",
   async () => {
     const dataDir = mfcTemp("mfc-workflow-registry-");
+    seedTechnologyStacks(dataDir, ["typescript"]);
     const workspace = mfcTemp("mfc-workflow-snapshot-");
     createBusinessModule(dataDir, {
       id: "order", name: "订单", description: "订单业务", owner: "alice",

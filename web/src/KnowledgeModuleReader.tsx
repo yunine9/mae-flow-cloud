@@ -1,3 +1,4 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ResizableKnowledgePanes } from "./ResizableKnowledgePanes";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw } from "lucide-react";
@@ -50,6 +51,7 @@ function readablePath(doc: ModuleDocument): string[] {
 }
 
 export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, onResearch }: KnowledgeModuleReaderProps) {
+  const { stacks } = useTechnologyStacks();
   const [updating, setUpdating] = useState(false), [updateMessage, setUpdateMessage] = useState(""), [updateBusy, setUpdateBusy] = useState(false), [updateError, setUpdateError] = useState("");
   const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState(""), [reload, setReload] = useState(0);
   const [selected, setSelected] = useState(selectedDocumentId || ""), [skillPath, setSkillPath] = useState("SKILL.md");
@@ -81,7 +83,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     }
     return request;
   }
-  useEffect(() => { let live = true; setError(""); void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); }); return () => { live = false; }; }, [moduleKey, reload]);
+  useEffect(() => { let live = true; setError(""); void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); }); return () => { live = false; }; }, [moduleKey, reload, stacks]);
   useEffect(() => {
     if (!module) return;
     const id = selectedDocumentId && module.documents.some(d => d.id === selectedDocumentId) ? selectedDocumentId : module.documents.some(d => d.id === selected) ? selected : module.documents.find(d => d.form !== "skill" && !module.repositories.some(r => r.documents.some(item => item.id === d.id)))?.id || module.documents[0]?.id || "";
@@ -103,7 +105,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     }
     void read(); article.current?.scrollTo({ top: 0 });
     return () => { live = false; };
-  }, [current?.id, reload]);
+  }, [current?.id, current?.revision, reload]);
   const engineering = module?.category === "engineering";
   useEffect(() => {
     // 规则数与规则页签是旁路：读取失败只在组件处提示，不挡正文阅读。
@@ -190,7 +192,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
             const facts = [path !== current.title ? path : "", current.when_to_use && !current.title.includes(current.when_to_use.split(" / ").at(-1) ?? "") ? current.when_to_use : ""].filter(Boolean);
             const title = !shownBody?.trimStart().startsWith(`# ${current.title}\n`);
             if (!facts.length && current.active && !title) return null;
-            return <header className="mb-3 border-b border-line pb-2">{(facts.length || !current.active) && <div className="flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={14} /> : <FileText size={14} />}<span className="break-all">{facts.join(" · ")}</span>{!current.active && <Badge variant="secondary">已停用</Badge>}</div>}{title && <h2 className="mt-1 text-xl font-semibold leading-snug">{current.title}</h2>}</header>;
+            return <header className="mb-3 border-b border-line pb-2">{(facts.length || !current.active) && <div className="flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={14} /> : <FileText size={14} />}<span className="break-all">{facts.join(" · ")}</span>{!current.active && <Badge variant="secondary">{current.technology_assignment_required ? "待补技术栈关联" : "已停用"}</Badge>}</div>}{title && <h2 className="mt-1 text-xl font-semibold leading-snug">{current.title}</h2>}</header>;
           })()}
           <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); setUpdating(true); setUpdateError(""); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
           {current.form === "skill" && detail && !skillFiles && <p className="mt-6 text-xs text-muted-foreground">已读取 SKILL.md；当前接口未提供包内附件清单。</p>}

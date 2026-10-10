@@ -10,6 +10,7 @@ import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { createBusinessModule, updateBusinessModule, readBusinessModule } from "../src/businessModuleLibrary.ts";
 import { saveComponentRepository, componentRepositories } from "../src/componentRepositories.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const web = "https://codehub-y.huawei.com/MAE-M/FMEMate/FMEMateService/";
 const clone = "https://szv-y.codehub.huawei.com/MAE-M/FMEMate/FMEMateService.git";
@@ -32,6 +33,7 @@ test("配置中心模块及组件仓保存使用同一规则，失败不覆盖�
   assert.throws(() => updateBusinessModule(dir, "domain", { repositories: [web] }, "owner"), /网页\/API/);
   assert.deepEqual(readBusinessModule(dir, "domain").repositories, [clone]);
   const component = { name: "CBB", repository: clone, branch: "master", languages: ["cpp"] };
+  seedTechnologyStacks(dir, component.languages);
   assert.throws(() => saveComponentRepository(dir, { ...component, repository: web }, "owner"), /网页\/API/);
   const saved = saveComponentRepository(dir, component, "owner");
   assert.throws(() => saveComponentRepository(dir, { id: saved.id, repository: web }, "owner"), /网页\/API/);
@@ -56,6 +58,7 @@ test("真实下单接口拦截网页地址，探测保持逐仓结果且合法�
   execFileSync("git", ["init", "--bare", "--quiet", repo]);
   const service = new TaskService({ dataDir: join(dir, "tasks"), provider: "test", model: "test", modelsJson: {},
     maxConcurrent: 0, host: { kernelRoot: join(dir, "no-kernel") } });
+  seedTechnologyStacks(service.options.dataDir, ["cpp"]);
   createBusinessModule(service.options.dataDir, { id: "domain", name: "业务", description: "测试", owner: "owner", repositories: [repo] }, "owner");
   // 本例隔离无关的 MR/流水线部署检查，Git 地址探测仍运行真实命令。
   const launchOptions = service.launchOptions.bind(service);

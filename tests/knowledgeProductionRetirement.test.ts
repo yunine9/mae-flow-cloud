@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 function createService(dataDir: string, host?: { kernelRoot: string; repoPath: string }): TaskService {
   return new TaskService({
@@ -128,6 +129,7 @@ test("B1验收3：模块管理、资产消费与发起预览保留当前版本",
 test("B1验收3：Skill 保留提交、审查、读取与定向提取校验入口",
   { timeout: 15_000 }, async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-retained-skill-api-"));
+    seedTechnologyStacks(dataDir, ["cpp"]);
     const service = createService(dataDir);
     const server = createTaskServer(service);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import * as library from "../src/hostSkillLibrary.ts";
 import type { SkillSubmissionRecord, SkillUploadFile } from "../src/hostSkillLibrary.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const directory = "reliable-review";
 const metadata = { nature: "engineering" as const, business_module_ids: [], repositories: [], technologies: ["typescript"] };
@@ -13,7 +14,11 @@ const files = (label = "原始草稿", attachment = "核对版本与取消操作
   { path: "SKILL.md", content_base64: Buffer.from(`---\nname: ${name}\ndescription: Review reliable knowledge publication.\n---\n# 审查指南\n\n${label}\n先读 references/checklist.md。\n`).toString("base64") },
   { path: "references/checklist.md", content_base64: Buffer.from(`# 审查清单\n\n${attachment}\n`).toString("base64") },
 ];
-const temporary = () => fs.mkdtempSync(join(tmpdir(), "knowledge-skill-reliability-"));
+const temporary = () => {
+  const dir = fs.mkdtempSync(join(tmpdir(), "knowledge-skill-reliability-"));
+  seedTechnologyStacks(dir, ["typescript"]);
+  return dir;
+};
 
 test("#450：旧 Skill 缺基线仍可读，非法基线和 JSON 损坏分别说明且不泄漏正文", async () => {
   const dir = temporary();

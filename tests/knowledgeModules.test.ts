@@ -79,3 +79,18 @@ test("组件研究来源里的源码目录不当知识文件名：只发布在�
   assert.equal(knowledgeFileName(document("kd-domain", { research_source: { job_id: "dkx-1", repository: "https://git.example/alarm.git", branch: "main", path: "docs/rule.md" } })), "rule.md", "领域研究的来源路径就是文稿路径");
   assert.equal(knowledgeFileName({ ...doc, source: { repository: "https://git.example/kb.git", branch: "main", path: "docs/fileio.md", revision: "sha" } }), "fileio.md", "归档后按归档文件名");
 });
+
+
+test("工程目录使用配置名称，改名不改变引用，删除后的知识仍在待整理可读", () => {
+  const documents = [document("custom-guide", { technologies: ["framework-x"] })];
+  const input = { documents, businessModules: [], components: [] };
+  const before = projectKnowledgeModules({ ...input, technologyStacks: [{ id: "framework-x", name: "团队框架", enabled: true }] });
+  const after = projectKnowledgeModules({ ...input, technologyStacks: [{ id: "framework-x", name: "团队新框架", enabled: false }] });
+  assert.equal(before.modules[0].name, "团队框架");
+  assert.equal(after.modules[0].name, "团队新框架");
+  assert.equal(after.modules[0].key, before.modules[0].key);
+  const removed = projectKnowledgeModules({ ...input, documents: [document("custom-guide", { technologies: [], active: false })], technologyStacks: [] });
+  assert.equal(removed.modules[0].key, "unassigned");
+  assert.equal(removed.modules[0].documents[0].id, "custom-guide");
+  assert.equal(removed.modules[0].inactiveCount, 1);
+});

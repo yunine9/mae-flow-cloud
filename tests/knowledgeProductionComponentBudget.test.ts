@@ -1,4 +1,5 @@
 import { KnowledgeTaskCapacity } from "../src/knowledgeTaskCapacity.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -19,6 +20,7 @@ const section = (ids: string[]) => ({ id: "files", title: "文件处理", reposi
   integration: "链接 files 库。", example: "```cpp\nClose(handle);\n```", sources: "src/file.cpp:1", related_ids: [] });
 /** 一个组件只有一次研究：要占满并发槽位就登记多个组件。 */
 function componentIds(dataDir: string, count: number) {
+  seedTechnologyStacks(dataDir, config.languages);
   return Array.from({ length: count }, (_, i) => saveComponentRepository(dataDir, { ...config, name: `文件组件 ${i}`, repository: `https://example.test/files-${i}.git` }, "alice").id);
 }
 function writeDocument(input: ResearchExecution) {
@@ -90,6 +92,7 @@ test("生产线验收2（F3）：组件执行体忽略 abort，60 秒释放槽�
 test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不响应 abort 的任务如实失败", { timeout: 3_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-shutdown-budget-"));
+  seedTechnologyStacks(dataDir, config.languages);
   saveComponentRepository(dataDir, config, "alice");
   let release = () => {}, returned = false;
   const research = withTwoSlots(dataDir, async () => {
@@ -120,6 +123,7 @@ test("生产线验收2（F3）：组件服务关停同样只等待 60 秒，不�
 test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止，预算后不误记失败", { timeout: 3_000 }, async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-stop-responsive-"));
+  seedTechnologyStacks(dataDir, config.languages);
   saveComponentRepository(dataDir, config, "alice");
   const research = withTwoSlots(dataDir, async input => {
     await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -141,6 +145,7 @@ test("生产线验收2（F3）：组件执行体响应 abort 时保持已停止�
 for (const action of ["edit", "restore"] as const) {
   test(`生产线验收14（F23）：组件研究进行中拒绝${action === "edit" ? "人工编辑" : "恢复历史版本"}，意见仍能保存且不改草稿`, { timeout: 3_000 }, async () => {
     const dataDir = mkdtempSync(join(tmpdir(), "mfc-component-running-edit-"));
+    seedTechnologyStacks(dataDir, config.languages);
     saveComponentRepository(dataDir, config, "alice");
     let release = () => {};
     const research = withTwoSlots(dataDir, async input => {

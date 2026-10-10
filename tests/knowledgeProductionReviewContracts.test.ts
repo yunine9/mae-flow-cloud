@@ -7,6 +7,7 @@ import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 type Item = { id: string; content: string; revision: number; selected: boolean };
 type Suggestion = { turn_id: string; document_id: string; status: "pending" | "accepted" | "discarded"; base_revision: number; content: string };
@@ -94,6 +95,7 @@ async function domainAdapter(): Promise<ReviewAdapter> {
 
 async function componentAdapter(): Promise<ReviewAdapter> {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-review-contract-component-")), seen: ReviewAdapter["seen"] = [];
+  seedTechnologyStacks(dir, ["cpp"]);
   const repository = saveComponentRepository(dir, { name: "规则库", repository: "https://example.test/rules.git", branch: "main", path: "src", languages: ["cpp"] }, "researcher");
   const manager = new ComponentResearch(dir, async input => {
     if (!input.review) {

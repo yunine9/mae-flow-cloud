@@ -20,6 +20,7 @@ import {
   type ComponentRepository,
 } from "./componentRepositories.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
+import { requireTechnologyStacks } from "./technologyStacks.ts";
 import {
   readKnowledgeDocument,
   readKnowledgeDocumentVersion,
@@ -350,6 +351,7 @@ export class ComponentResearch {
     const key = JSON.stringify(["component", language, componentKey(component)]);
     const previous = [...this.records.values()].reverse().find(r => r.key === key && !r.deleted_at && !r.challenge);
     if (previous) return this.get(previous.id);
+    requireTechnologyStacks(this.dir, [language]);
     const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", component, components: [component], material_ids: [],
       language, topic: component.name, operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [], stage: "等待组件研究", evidence: [] };
@@ -362,6 +364,7 @@ export class ComponentResearch {
     const existing = [...this.records.values()].find(r => !r.deleted_at && r.challenge?.item_id === challenge.item_id
       && r.challenge.source_digest === challenge.source_digest && ["queued", "running"].includes(r.status));
     if (existing) return this.get(existing.id);
+    requireTechnologyStacks(this.dir, [challenge.language]);
     const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
     if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
     const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, component: components[0], components,

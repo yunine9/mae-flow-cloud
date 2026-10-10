@@ -13,6 +13,7 @@ import type { TaskService } from "../src/taskService.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { domainKnowledgeTask } from "../src/knowledgeTaskCenter.ts";
 import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 // Public contract is named locally for the initial RED run; production will
 // expose this same readonly HTTP shape from knowledgeProductionTypes.ts.
@@ -329,6 +330,7 @@ test("一个组件一篇：组件归档只列一篇正文，按语言分目录�
   assert.equal(componentArchivePath("docs/components", { title: " 读写/锁:<句柄> ", technologies: [] }), "docs/components/agnostic/读写-锁-句柄.md", "路径字符换成短横线，不产生子目录");
   assert.equal(componentArchivePath("docs/components", { title: "../..", technologies: ["java"] }), "docs/components/java/组件知识.md", "不能借标题跳出目录");
   const dir = mkdtempSync(join(tmpdir(), "mfc-component-archive-name-"));
+  seedTechnologyStacks(dir, ["cpp"]);
   const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("归档预览不运行模型"); });
   try {
     saveKnowledgeRepoConfig(dir, "https://example.test/knowledge.git", { branch: "main", docs_path: "docs/components" });

@@ -6,10 +6,12 @@ import type { DomainKnowledgeJob, DomainPublication } from "../../src/domainKnow
 import type { ResearchRecord } from "../../src/componentResearch.ts";
 import { saveKnowledgeDocument } from "../../src/knowledgeDocuments.ts";
 import { projectKnowledgeProduction } from "../../src/knowledgeProductionState.ts";
+import { seedTechnologyStacks } from "./technologyStacks.ts";
 
 /** 浏览器收到真实管理器的文案与动作，不在夹具里复制状态机。 */
 export async function knowledgeManualArchiveFixtures() {
   const dir = fs.mkdtempSync(join(tmpdir(), "knowledge-manual-archive-fixture-"));
+  seedTechnologyStacks(dir, ["cpp"]);
   const component = { id: "file", name: "文件组件", repository: "https://example.test/file.git", branch: "main", path: "src", languages: ["cpp"], description: "文件句柄", enabled: true };
   const target = { id: "domain", name: "知识仓", repository: "https://example.test/knowledge.git", branch: "main", path: "", docs_path: "docs" };
   const sourceTarget = { ...target, id: "source", name: "业务仓", repository: "https://example.test/business.git", docs_path: "docs/business" };

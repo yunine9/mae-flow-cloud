@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 import {
   WorkflowAssetError,
   WorkflowAssetLibrary,
@@ -49,6 +50,7 @@ function faultOn(suffixes: () => string[]): WorkflowAssetFaultHook {
 
 function harness() {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-wf-faults-"));
+  for (const id of ["java", "go", "rust"]) createTechnologyStack(dataDir, { id, name: id }, "admin");
   let targets: string[] = [];
   const assets = new WorkflowAssetLibrary(dataDir, {
     faultInjection: faultOn(() => targets),

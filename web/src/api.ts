@@ -728,6 +728,7 @@ export interface WorkflowAssetSummary {
   draft_revision: number;
   copied_from?: WorkflowExecutionProfile["source"];
   selectable_for_tasks: boolean;
+  technology_assignment_required?: true;
   /** 最新已知适用范围;缺席=旧资产未声明,列表按"未限定"展示。 */
   applicability?: {
     business_module_ids: string[];

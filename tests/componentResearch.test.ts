@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
+import { createTechnologyStack } from "../src/technologyStacks.ts";
 import {
   componentRepositories,
   saveComponentRepository,
@@ -39,7 +40,11 @@ function writeJoint(input: ResearchExecution, count = 2) {
   for (let i = 0; i < count; i++) input.editDocument!({ action: "section", section: sectionData(`cap-${i}`, ids) });
   return "联合草稿已保存";
 }
-const temporary = () => mkdtempSync(join(tmpdir(), "component-research-"));
+const temporary = () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-research-"));
+  for (const name of ["C++", "Java"]) createTechnologyStack(dir, { name }, "fixture");
+  return dir;
+};
 const config = {
   name: "文件组件",
   repository: "https://code.example/cbb.git",

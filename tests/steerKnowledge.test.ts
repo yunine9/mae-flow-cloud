@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { ScriptedModelServer, type Scene } from "../src/scriptedModel.ts";
 import { TaskService, TaskControlError } from "../src/taskService.ts";
 import { uploadHostSkill } from "../src/hostSkillLibrary.ts";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import {
   createBusinessModule,
   publishBusinessKnowledgeAsset,
@@ -81,6 +82,7 @@ function skillMd(name: string, body: string): string {
 async function seedSkill(
   dataDir: string, directory: string, body: string,
 ): Promise<void> {
+  seedTechnologyStacks(dataDir, ["java"]);
   await uploadHostSkill(dataDir, directory, [
     { path: "SKILL.md", content_base64: encode(skillMd(directory, body)) },
   ], "admin", METADATA);

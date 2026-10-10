@@ -1,3 +1,5 @@
+import { useTechnologyStacks } from "./useTechnologyStacks";
+import { technologyStackLabel } from "./technologyStacks";
 /** Skill 管理：已上架内容与待审提交在同一页维护，所有新包和更新都先提交审查。 */
 
 import { Markdown } from "./markdown";
@@ -195,6 +197,10 @@ function skillFlag(skill: SkillEntry): { tone: FlagTone; text: string;
     return { tone: "danger", text: "不可装载",
       title: "pi 装载器未接受,任何会话都不会带上它;检查 SKILL.md frontmatter 的 name/description" };
   }
+  if (skill.nature === "engineering" && !skill.technologies.length) {
+    return { tone: "attention", text: "待补关联",
+      title: "请补充适用技术栈；补齐前不会自动匹配给任务" };
+  }
   if (skill.nature === "unclassified") {
     return { tone: "attention", text: "未治理",
       title: "缺少强制知识标签；补齐前不会自动匹配给任何任务" };
@@ -249,6 +255,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
   initialAsset?: KnowledgeAssetFocus;
   onOpenTask: (taskId: string) => void;
 }) {
+  const { deletedIds } = useTechnologyStacks();
   // 团队知识基于信任共同维护；登录边界由服务端保留。
   const canManageKnowledge = true;
   const skillFocus: SkillAssetFocus | undefined =
@@ -319,7 +326,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
     getBusinessModules().then((data) => setBusinessModules(data.modules))
       .catch(() => undefined),
   ]).finally(() => setLoading(false));
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); }, [deletedIds.join(",")]);
 
   const extractJobId = extractJob && ["queued", "running"].includes(extractJob.status)
     ? extractJob.id : undefined;
@@ -584,7 +591,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
       ? "归属业务模块" : "",
     uploadClassification.nature === "engineering"
         && !uploadClassification.technologies.length
-      ? "适用语言" : "",
+      ? "适用技术栈" : "",
   ].filter(Boolean);
   // 提取回来的草稿也是一份可提交的正文:没选技能包时主按钮直接走草稿,
   // 不逼人先去下面那块里找另一个按钮。
@@ -727,7 +734,7 @@ export function KnowledgeAssetsWorkspace({ initialAsset, embedded = false, initi
                   businessModules.find((module) => module.id === id)?.name
                     ?? id}</Badge>)}
                 {skill.technologies.slice(0, 3).map((technology) =>
-                  <Badge key={technology} variant="neutral">{technology}</Badge>)}
+                  <Badge key={technology} variant="neutral">{technologyStackLabel(technology)}</Badge>)}
               </span>
             </button>;
           })}

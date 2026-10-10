@@ -1,3 +1,4 @@
+import { listTechnologyStacks } from "./technologyStacks.ts";
 import { scanComponentInterfaces } from "./componentCodeInventory.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -37,6 +38,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
   dataDir: string; model: () => { provider: string; model: string; json: unknown } | undefined;
   source: (component: ComponentRepository, operator: string, signal?: AbortSignal, baselineRevisions?: string[]) => Promise<{ root: string; revision: string }>;
 }) {
+  const technologyStack = listTechnologyStacks(options.dataDir).find(stack => stack.id === input.record.language);
   const model = options.model(); if (!model) throw new Error("请在模型网关配置主模型");
   if (input.record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用基础仓代码与 everycode 的研究");
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("component", join(input.root, "component-pipeline-skill.json"), input.record.use_latest_skill);
@@ -187,6 +189,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         codeSearchTool(observe, { captureRead: true, excludePath: excludedComponentSource })];
       const prompt = `你是组件知识${reviewing ? "独立评审者" : "研究者"}，只处理当前任务。先读取 references/platform-pipeline.md、references/schema.md 及 references/${reviewing ? "phase-review" : `phase-${task.phase}`}.md。事实来源只限基础仓代码与 everycode，不使用上传资料、豆包、旧知识文档或会话指令作为证据。工具提交结果才算完成。\n` +
         extractionSkillMission(skill, { task, review_result: reviewResult, mode: input.review?.mode ?? "extract", language: input.record.language,
+          technology_stack: { id: input.record.language, name: technologyStack?.name ?? input.record.language },
           topic: input.record.topic, scope: "本组件的全部能力；依赖的其他组件通过 everycode 核对真实调用", components, revisions,
           structure: task.phase === "inventory" ? knowledgeStructure(snapshots) : undefined,
           feedback: input.review ? { message: input.review.message, previous_revisions: input.review.previous_revisions } : undefined });

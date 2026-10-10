@@ -10,11 +10,13 @@ import { MemoryStore } from '../src/taskMemory.ts';
 import { createBusinessModule } from '../src/businessModuleLibrary.ts';
 import { TaskService } from '../src/taskService.ts';
 import { createTaskServer } from '../src/server.ts';
+import { createTechnologyStack } from '../src/technologyStacks.ts';
 const context={repo:'repo',repositories:['https://code.example/team/repo.git'],moduleIds:[],productVersion:'2.7B'};
 test('手册发布进入统一知识检索；模块、仓库、版本范围生效；修改和停用留痕',()=>{
  const dir=mkdtempSync(join(tmpdir(),'knowledge-documents-'));
  try {
   createBusinessModule(dir,{id:'module',name:'模块',description:'示例模块',owner:'owner',repositories:context.repositories},'owner');
+  createTechnologyStack(dir,{name:'C++'},'fixture');
   const doc=saveKnowledgeDocument(dir,{title:'规范.md',content:'# 规范\n## 文件\n释放资源',scope:'module',module_ids:['module'],technologies:['cpp'],product_versions:['2.7B']},'member');
   assert.ok(collectSearchableKnowledge(dir,context).assets.some(a=>a.id===doc.id));
   assert.equal(collectSearchableKnowledge(dir,{...context,productVersion:'2.6B'}).assets.length,0);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ function body(record: ResearchRecord) {
 }
 async function fixture() {
   const dir = fs.mkdtempSync(join(tmpdir(), "knowledge-component-intent-rollback-"));
+  seedTechnologyStacks(dir, ["cpp"]);
   const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("发布意图不能运行模型"); }, {
     publish: async (job, target) => ({ target_id: target.id, state: "opened", branch: "codex/component-intent", url: "https://example.test/mr/1", mr_id: 1,
       documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,

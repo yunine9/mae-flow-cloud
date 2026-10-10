@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +62,7 @@ async function fixture(kind: Kind) {
       await until(() => domain.get(jobId).status === "done", "领域意见测试草稿未在3秒内完成");
       domain.select(jobId, [otherId], false);
     } else {
+      seedTechnologyStacks(dataDir, ["cpp"]);
       saveComponentRepository(dataDir, { name: "文件组件", repository: "https://example.test/component.git", branch: "main", path: "src", languages: ["cpp"] }, "alice");
       const job = component.start({ language: "cpp" }, "alice");
       jobId = job.id; selectedId = "cap-0"; otherId = "cap-1";

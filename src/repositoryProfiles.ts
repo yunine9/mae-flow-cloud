@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
+import { requireTechnologyStacks } from "./technologyStacks.ts";
 
 const ROOT = "repository-profiles";
 const FILE = "profiles.json";
@@ -38,6 +39,7 @@ type RepositoryProfileSelection = Pick<RepositoryProfile,
 export function requireRepositoryProfiles<T extends RepositoryProfileSelection>(
   repositories: string[],
   profiles: T[],
+  dataDir?: string,
 ): T[] {
   const uniqueRepositories = [...new Set(repositories.map(validateRepository))];
   const byIdentity = new Map(profiles.map((profile) =>
@@ -53,6 +55,13 @@ export function requireRepositoryProfiles<T extends RepositoryProfileSelection>(
         "代码仓 " + name + " 还没有选择技术栈，请先在发起页确认",
       );
     }
+    if (dataDir !== undefined) {
+      try { requireTechnologyStacks(dataDir, profile.technologies); }
+      catch (error) {
+        throw new RepositoryProfileError(
+          error instanceof Error ? error.message : String(error));
+      }
+    }
     return profile;
   });
 }
@@ -66,6 +75,7 @@ export interface RepositoryProfileResolution {
 export function normalizeRepositoryProfile(
   input: { repository: string; technologies?: string[]; confirmed?: boolean },
   operator: string,
+  dataDir?: string,
 ): RepositoryProfile {
   const repository = validateRepository(input.repository);
   let technologies: string[];
@@ -78,6 +88,13 @@ export function normalizeRepositoryProfile(
   }
   if (!technologies.length) {
     throw new RepositoryProfileError("请至少选择一种仓库技术栈");
+  }
+  if (dataDir !== undefined) {
+    try { technologies = requireTechnologyStacks(dataDir, technologies); }
+    catch (error) {
+      throw new RepositoryProfileError(
+        error instanceof Error ? error.message : String(error));
+    }
   }
   return {
     repository,
@@ -164,7 +181,7 @@ export function saveRepositoryProfile(
   input: { repository: string; technologies?: string[]; confirmed?: boolean },
   operator: string,
 ): RepositoryProfile {
-  const profile = normalizeRepositoryProfile(input, operator);
+  const profile = normalizeRepositoryProfile(input, operator, dataDir);
   const { repository, technologies } = profile;
   const identity = repositoryIdentity(repository);
   const all = readAll(dataDir).filter((item) =>
