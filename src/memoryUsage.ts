@@ -5,14 +5,11 @@ import type { MemoryStore } from "./taskMemory.ts";
 
 export interface MemoryUsageEvent {
   moment: "launch" | "phase" | "edit" | "search" | "expand" | "context" | "component_check" | "component_plan";
-  session_id?: string;
   plan?: { path: string; capability?: string; operation: string; errors?: number; warnings?: number };
   check?: { trigger: string; head?: string; findings: number; hints: number; rules_digest: string };
   status?: "ready" | "unavailable" | "empty" | "rejected";
   /** Exact current sources exposed by this operation; this records access, not correct application. */
   assets?: Array<{ id: string; revision: string; start_line?: number; end_line?: number; heading?: string; card_id?: string; retrieval?: string }>;
-  /** 自动提供资料时的代码关联；complete 仅表示资料包包含全部示例，不代表适用性已确认。 */
-  components?: Array<{ id: string; paradigm_id: string; kind: "api" | "replacement"; path?: string; tool: string; call_id?: string; symbols: string[]; complete: boolean }>;
   requested_id?: string;
   reason?: "unavailable" | "not_accessible" | "revision_changed" | "invalid_range";
   ids: string[]; query?: string; phase?: string; dir?: string; digest?: boolean;

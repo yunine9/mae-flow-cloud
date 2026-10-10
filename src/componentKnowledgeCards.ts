@@ -15,26 +15,53 @@ export interface ComponentCard { source: SearchableKnowledge; paradigm: Publishe
 export const componentQueryLanguage = (query: string) => /c\+\+|\bcpp\b|\bcxx\b/i.test(query) ? "cpp" : /\bjava\b/i.test(query) ? "java" : /\bc\b/i.test(query) ? "c" : undefined;
 
 /** 接入配置由正式指南统一提供；导航中的其他用法不能成为当前卡片的检索内容。 */
-function componentGuideIntroduction(content: string): string {
-  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
-  const selected: string[] = [];
+function componentGuideIntroductionRange(content: string) {
+  const lines = content.split(/\r?\n/), front = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(content)?.[0];
+  const start = front ? front.split(/\r?\n/).length - (front.endsWith("\n") ? 1 : 0) : 0;
+  let end = start;
   let fence = "";
-  for (const line of body.split(/\r?\n/)) {
+  for (const line of lines.slice(start)) {
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
       if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = "";
     } else if (marker) fence = marker[1];
     else if (/^ {0,3}##\s+用法导航\s*#*\s*$/.test(line) || /^<a id="component-[a-z0-9-]+"><\/a>$/.test(line)) break;
-    selected.push(line);
+    end++;
   }
-  return selected.join("\n").trim();
+  return { start_line: start + 1, end_line: end };
+}
+
+/** 从同一正式修订读取公共配置与所选用法；不携带其他用法正文或巨大的全库元数据。 */
+export function componentUsageDocument(source: SearchableKnowledge, paradigmId: string) {
+  const p = publishedComponentParadigms(source).find(p => p.id === paradigmId);
+  if (!p) return;
+  const lines = source.content.split(/\r?\n/), introduction = componentGuideIntroductionRange(source.content);
+  const ranges = [
+    { heading: "公共用途与接入配置", ...introduction },
+    { heading: p.title.length <= 160 ? p.title : p.title.slice(0, 159).replace(/[\uD800-\uDBFF]$/, "") + "…", start_line: p.start_line, end_line: p.end_line },
+  ];
+  let text = `选定用法：${p.id}\n组件：${p.component}；语言：${p.language}\n要做的事：${p.need}\n`
+    + `适用条件（正式文档元数据）：${p.applicability}\n接口声明：${p.api.join("、")}\n`
+    + `文档范围：${source.scope}\n产品适用版本：${source.productVersions.join("、") || "未单独声明，请核对正文与实际依赖"}\n`
+    + "源码依据（所选用法的正式文档元数据；源码修订与文档修订不同）：\n"
+    + p.evidence.map(e => `- 仓库：${e.repository_id}；路径：${e.path}；源码修订：${e.revision}；行：${e.start}–${e.end}`).join("\n")
+    + `\n调用证据：${p.usage_evidence.join("、")}\n测试证据：${p.test_evidence.join("、")}`
+    + (p.open_questions.length ? `\n尚待核实：\n${p.open_questions.map(question => `- ${question}`).join("\n")}` : "") + "\n\n";
+  const sections = ranges.map(range => {
+    const start_offset = text.length;
+    text += `【${range.heading}；原文第 ${range.start_line}–${range.end_line} 行】\n`
+      + lines.slice(range.start_line - 1, range.end_line).join("\n") + "\n\n";
+    return { ...range, start_offset, end_offset: text.length };
+  });
+  return { text, sections };
 }
 
 export function componentCards(assets: SearchableKnowledge[]) {
   const cards: ComponentCard[] = [], warnings: string[] = [];
   for (const source of assets.filter(isComponentKnowledge)) {
     try {
-      const introduction = componentGuideIntroduction(source.content), lines = source.content.split(/\r?\n/);
+      const range = componentGuideIntroductionRange(source.content), lines = source.content.split(/\r?\n/);
+      const introduction = lines.slice(range.start_line - 1, range.end_line).join("\n").trim();
       for (const p of publishedComponentParadigms(source)) {
         if (p.kind !== "paradigm" || p.status !== "recommended") continue;
         const usage = lines.slice(p.start_line - 1, p.end_line).join("\n");
@@ -62,7 +89,7 @@ export function componentCardHit(card: ComponentCard, retrieval: "memsearch" | "
   return { id: source.id, title: excerpt(source.title, 160), kind: source.kind, scope: excerpt(source.scope, 240), revision: source.revision,
     productVersions, whenToUse: excerpt(p.applicability, 240), heading: excerpt(p.title, 160), start_line: p.start_line, end_line: p.end_line,
     card_id: componentCardId(p), paradigm_id: p.id, retrieval,
-    summary: excerpt(`${p.need}；${p.component} / ${p.api.join("、")}`, 440) + "；仅摘要，完整接口、条件和约束请读原文。",
+    summary: excerpt(`要做的事：${p.need}；相关接口：${p.component} / ${p.api.join("、")}`, 440) + "；仅摘要，完整接口、条件和约束请读原文。",
     contracts: publishedComponentParadigms(source).filter(c => c.kind === "contracts" && c.component === p.component && c.language === p.language && c.status === "recommended")
       .slice(0, 3).map(c => ({ id: c.document_id, revision: c.document_revision, start_line: c.start_line, end_line: c.end_line })),
     versionNote: source.productVersions.length ? excerpt(`适用产品版本：${productVersions.join("、")}`, 160)

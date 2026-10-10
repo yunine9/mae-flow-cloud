@@ -4,22 +4,15 @@ import type { KnowledgeContext } from "./knowledgeSearch.ts";
 import type { ComponentPlan } from "./componentPlan.ts";
 import { componentKnowledgeCatalog, type ComponentKnowledgeCatalog } from "./componentKnowledgeCatalog.ts";
 import { checkComponentKnowledge, componentCheckMessage, type ComponentKnowledgeCheckReport } from "./componentKnowledgeCheck.ts";
-import { createComponentKnowledgeContext } from "./componentKnowledgeContext.ts";
-import type { MemoryUsageEvent } from "./memoryUsage.ts";
 
-/** 自动资料和代码检查共用正式知识源，主动查阅仍使用 knowledge。 */
+/** 代码检查现读统一的正式知识源，不提供独立的选型或知识查询工具。 */
 export class ComponentKnowledgeConsumption {
   private lastNote = "";
   constructor(private options: {
     dataDir: string; cwd: string; context: () => KnowledgeContext; languages: () => string[]; baseline: () => string;
     plan?: () => ComponentPlan;
     onReport?: (report: ComponentKnowledgeCheckReport) => void;
-    onContextUse?: (event: MemoryUsageEvent) => void;
   }) {}
-  createContext(sessionId?: string) {
-    return createComponentKnowledgeContext({ ...this.options,
-      onUse: event => this.options.onContextUse?.({ ...event, session_id: sessionId }) });
-  }
   catalog(): ComponentKnowledgeCatalog {
     try { return componentKnowledgeCatalog(this.options.dataDir, this.options.context(), this.options.languages()); }
     catch (error) { return { paradigms: [], rules: [], digest: "unavailable", warnings: [`组件正式知识读取未完成：${String(error)}`] }; }

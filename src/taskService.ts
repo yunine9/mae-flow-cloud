@@ -5302,7 +5302,6 @@ export class TaskService {
     if (!task.cwd || this.isRequirementAnalysis(task)) return undefined;
     return new ComponentKnowledgeConsumption({ dataDir: this.options.dataDir, cwd: task.cwd,
       plan: () => this.componentPlan(task),
-      onContextUse: event => this.logMemoryUsage(task, event),
       context: () => {
         const module = task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
         return { repo: this.memoryRepo(task), repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
@@ -5323,6 +5322,14 @@ export class TaskService {
           check: { trigger: report.trigger, head: report.head, findings: report.findings.length,
             hints: report.findings.filter(f => f.level === "warning" && !f.exempt_reason).length, rules_digest: report.rules_digest } }); },
     });
+  }
+
+  private componentAnalysisContext(task: TaskState) {
+    const directory = this.getKnowledgeSearch().componentContext(this.taskKnowledgeContext(task));
+    this.logMemoryUsage(task, { moment: "context", phase: "component_analysis",
+      ids: directory.hits.map(hit => hit.id), assets: directory.hits,
+      status: directory.warnings.length ? "unavailable" : directory.hits.length ? "ready" : "empty" });
+    return directory;
   }
 
   /** 平台与本仓有效记忆；仅仓库记忆检查路径是否仍存在。 */
@@ -11926,6 +11933,7 @@ export class TaskService {
         // 人在接管,提醒是给自动跑的主 Agent 的。
         extraTools: this.memoryTools(task),
         componentKnowledge: this.componentKnowledge(task),
+        componentAnalysisContext: () => this.componentAnalysisContext(task),
         memoryContext: () => this.taskMemoryContext(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
@@ -14284,6 +14292,7 @@ export class TaskService {
         extraTools: [...(this.memoryTools(task) ?? []), ...this.splitTools(task), ...createTaskHostTools(this.taskHostRuntime(task, epoch))],
         componentKnowledge: this.componentKnowledge(task),
         memoryContext: () => this.taskMemoryContext(task),
+        componentAnalysisContext: () => this.componentAnalysisContext(task),
         // 分析卡上残留的 repo-N 序号机械换成仓库名(prompt 已按名称呼,
         // 这是第二道)。编码会话没有序号清单,不挂。
         humanizeQuestionText: analysisOnly
@@ -15457,6 +15466,7 @@ export class TaskService {
       driver = await CloudSession.create({
         taskId: `${task.summary.id}:prepush:${request.round}`,
         componentKnowledge: this.componentKnowledge(task),
+        componentAnalysisContext: () => this.componentAnalysisContext(task),
         extraTools: this.memoryTools(task)?.filter((tool: any) => tool.name === "knowledge"),
         workspace: task.cwd,
         agentDir,
