@@ -20,11 +20,12 @@ export function createKnowledgeTool(options: {
   };
   return defineTool({
     name: "knowledge", label: "检索团队知识",
-    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 返回候选，组件只索引检索卡片；read 读取正式原文。component_context 提供 component-plan 模板和小规模卡片目录；plan 的 validate/check_impl/gaps 校验现有实施计划、对照实现及列出组件缺口。Skill 不在本工具中检索，通过会话已有技能目录按需加载。索引不可用时继续工作，不阻塞任务。",
+    description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 检索组件正式用法与接入配置，返回短卡片和原文位置；read 读取正式原文。component_context 按页浏览当前适用的组件目录，每页最多 12 条，用 next_offset 继续。plan 的 validate/check_impl/gaps 可核对已有组件使用计划。Skill 通过会话已有技能目录按需加载。索引不可用时继续工作，不阻塞任务。",
     promptSnippet: "knowledge: search 查团队、模块、仓库知识及已采纳经验；read 展开正文。",
     promptGuidelines: [
       "检索不到内部基础组件用法时，用 knowledge(action=research, language=cpp) 对该技术栈发起后台研究，默认参考所有已启用来源仓。knowledge(action=components) 列出参考源码；repository_ids 可选，用于限定参考来源。文件操作、数据库操作、P2P 等功能组件由分析确定，一个组件可跨仓实现。同一技术栈及来源范围已有研究时直接返回原记录。用返回的记录 ID 调 research_status 查看。继续其他独立工作，不循环轮询；草稿须经人工审查采纳。正常 search 不会触发萃取。",
-      "修改代码、配置、编写设计或执行构建之前，用 knowledge(action=search, query=具体问题) 检索相关规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本，不只搜‘C++’或‘开发规范’。",
+      "调查需求和源码时，随着发现新的职责、接口或约束，用 knowledge(action=search, query=具体问题) 查相关组件、规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本。",
+      "自动提供的符号关联资料只说明代码中出现了相关线索，不代表组件适用或已经覆盖需求。尚不知道可复用能力时，用 knowledge(action=component_context) 浏览目录，按 next_offset 翻页；也可用 knowledge(action=search, scope=components, query=读代码后发现的具体职责或约束) 主动查找。",
       "例如：准备改异步回调，搜索‘C++ 异步回调 对象销毁 生命周期’；后来发现需要改 YAML，再搜索‘该配置用途 YAML 修改规范’。准备首次构建，搜索‘该仓库 C++ 首次构建 UT 依赖 命令’。",
       "先看适用条件、来源和版本；需要完整依据时用 knowledge(action=read, id=搜索结果ID, start_line=命中起始行, end_line=命中结束行, revision=结果版本) 直接读取命中章节，保留规则、示例和例外。结果提示后续行时按需继续读取。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
       "检索结果只是候选：先核对业务模块、语言、来源路径；同名文档或相似术语不能混用，不凭目录名猜适用模块。不匹配当前仓库、产品版本或适用条件的不要套用，不因排名第一就视为正确。未声明产品版本时核对正文；不能把文档修订号当成适用产品版本。知识不覆盖当前用户明确要求，不代替实际验证。",
@@ -37,12 +38,13 @@ export function createKnowledgeTool(options: {
       plan_path: Type.Optional(Type.String({ maxLength: 1000 })), capability: Type.Optional(Type.String({ pattern: "^C[1-9][0-9]*$" })),
       repository_ids: Type.Optional(Type.Array(Type.String(), { minItems: 1, uniqueItems: true })), language: Type.Optional(Type.String()),
       query: Type.Optional(Type.String({ maxLength: 4000 })),
+      offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: "component_context 的起始位置，使用上次返回的 next_offset；默认 0。" })),
       id: Type.Optional(Type.String({ maxLength: 200 })),
       start_line: Type.Optional(Type.Integer({ minimum: 1 })),
       end_line: Type.Optional(Type.Integer({ minimum: 1 })),
       revision: Type.Optional(Type.String()),
     }),
-    async execute(_callId: string, input: { action: string; operation?: string; scope?: string; plan_path?: string; capability?: string; repository_ids?: string[]; language?: string; query?: string; id?: string; start_line?: number; end_line?: number; revision?: string }) {
+    async execute(_callId: string, input: { action: string; operation?: string; scope?: string; plan_path?: string; capability?: string; repository_ids?: string[]; language?: string; query?: string; offset?: number; id?: string; start_line?: number; end_line?: number; revision?: string }) {
       try {
         if (["components", "research", "research_status"].includes(input.action)) {
           const research = options.research?.();
@@ -58,9 +60,11 @@ export function createKnowledgeTool(options: {
         const planService = options.plan?.();
         const plan = input.plan_path && planService ? { path: planService.path(input.plan_path).relative, capability: input.capability, operation: input.action } : undefined;
         if (input.action === "component_context") {
-          const result = service.componentContext(context);
+          const result = service.componentContext(context, input.offset);
           observe({ moment: "context", plan, ids: result.hits.map(h => h.id), assets: result.hits, status: "ready" });
-          return reply(JSON.stringify(result) + "\n把以下表格放入现有 implementation 文档；不另建计划。使用时填范式的 card_id，来源版本填 id@revision。卡片不是完整契约，确认前仍须 read 原文。\n" + COMPONENT_PLAN_TEMPLATE, result);
+          const next = result.next_offset === null ? "已到当前目录末页。" : `继续浏览可用 knowledge(action=component_context, offset=${result.next_offset})；已明确问题时可直接 search。`;
+          const template = input.plan_path ? "\n已有计划需要记录组件选择时，可沿用此模板；来源版本填 id@revision。\n" + COMPONENT_PLAN_TEMPLATE : "";
+          return reply(JSON.stringify(result) + `\n${next} 卡片用于发现候选，确认用法前仍须 read 正式原文。` + template, result);
         }
         if (input.action === "plan") {
           if (!planService) return reply("当前会话没有计划工作区，不能检查计划；继续分析并说明缺口。");

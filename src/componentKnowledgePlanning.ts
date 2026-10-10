@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 
-/** issue 446 skill 是唯一的组件分析工作方法，直接进入真实子会话。 */
+/** 需要集中比较组件时使用的可选分析方法，直接进入真实子会话。 */
 export const COMPONENT_ANALYST = "component-plan-agent";
 export const COMPONENT_ANALYST_MISSION = readFileSync(new URL("../skills/component-plan/SKILL.md", import.meta.url), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
 export const COMPONENT_PLANNING_GUIDANCE = [
-  "制定 implementation 实施计划、尚未写业务代码时，需要组件选型则用 Task(subagent_type=component-plan-agent, description=制定组件使用计划, prompt=完整任务上下文) 执行 component-plan Skill；纯文案或无组件变化的小修复可跳过。",
-  "任务卡提供需求、实际仓库/模块/语言/版本、相关代码入口、已有 implementation 的准确路径；只更新其中组件使用计划，保留其他内容。派发期间不同时编辑该文件，可以继续独立勘察。",
-  "子 Agent 返回后读取同一计划，把组件选择与设计约束落实到实施任务；需求未变不重复派发。实现完成后用 knowledge(action=plan, operation=check_impl, plan_path=实施计划路径) 对照。不能派发时主 Agent 用 knowledge 的 component_context/search/read/plan 完成同样工作，不新建阶段或等待流程。",
+  "随着读取或修改代码，平台会提供与已观察接口、导入或原始写法相关的组件资料。先结合当前代码理解职责；同名或替代候选不代表已经确认适用，已有封装承担的责任不要在调用方重复实现。",
+  "发现需要尚未了解的能力时，用 knowledge 的 search/component_context/read 查找正式指南，核对接入配置、适用条件和实际依赖。目录可翻页，未命中不等于没有组件。",
+  "需要集中比较多个组件时，可用 Task(subagent_type=component-plan-agent, description=分析组件用法, prompt=实际代码入口、能力问题、仓库/语言/版本及已有实施计划路径) 执行 component-plan Skill。主 Agent 也可直接查阅；不为此新增阶段、审批或等待流程。",
 ].join("\n");
 
 /** 子会话只继承统一知识与当前任务计划能力，不继承宿主动作或知识写入工具。 */

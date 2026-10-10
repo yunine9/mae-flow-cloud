@@ -1206,9 +1206,11 @@ export class CloudSession {
           name: "mae-flow-gate",
           factory: (pi: any) => {
             const memoryContext = this.options.memoryContext?.();
-            if (memoryContext) pi.on("context", async (event: any) => ({
-              messages: await memoryContext(event.messages),
-            }));
+            const componentContext = this.options.componentKnowledge?.createContext(config.sessionId);
+            if (memoryContext || componentContext) pi.on("context", async (event: any) => {
+              const messages = memoryContext ? await memoryContext(event.messages) : event.messages;
+              return { messages: componentContext ? await componentContext(messages) : messages };
+            });
             pi.on("tool_call", async (event: any) =>
               this.onToolCall(config.sessionId, event));
             pi.on("tool_result", async (event: any) => {

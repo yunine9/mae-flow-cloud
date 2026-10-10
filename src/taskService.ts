@@ -5302,6 +5302,7 @@ export class TaskService {
     if (!task.cwd || this.isRequirementAnalysis(task)) return undefined;
     return new ComponentKnowledgeConsumption({ dataDir: this.options.dataDir, cwd: task.cwd,
       plan: () => this.componentPlan(task),
+      onContextUse: event => this.logMemoryUsage(task, event),
       context: () => {
         const module = task.summary.business_module ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
         return { repo: this.memoryRepo(task), repositories: [...new Set([...(task.summary.repositories ?? []), ...(task.summary.repo_url ? [task.summary.repo_url] : [])])],
