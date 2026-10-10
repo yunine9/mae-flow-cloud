@@ -30,6 +30,7 @@ const modules = [
   { id: "alarm", name: "告警管理", description: "告警规则", status: "active", repositories: ["https://example.test/alarm.git"], assets: [] },
 ];
 const calls: Array<{ path: string; input?: any }> = [], errors: string[] = [];
+const deletionView = () => ({ documents: documents.filter(doc => doc.id === "kd-file-guide" || doc.id === "kd-date-guide"), pending: [], git_message: "平台删除不改动 Git 归档，请自行决定是否在归档仓删除对应文件。" });
 window.addEventListener("error", e => errors.push(e.message));
 window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
 window.fetch = async (url, options) => {
@@ -45,6 +46,13 @@ window.fetch = async (url, options) => {
   else if (path === "/technology-stacks") result = { stacks: [{ id: "cpp", name: "C++", enabled: true }] };
   else if (path === "/component-repositories") result = { components: [{ id: "file", name: "基础仓", repository: "https://example.test/file.git", branch: "master", path: "", languages: ["cpp"], enabled: true, description: "" }] };
   else if (path === "/component-knowledge") result = governance;
+  else if (path === "/component-knowledge/documents") result = deletionView();
+  else if (path === "/component-knowledge/delete") {
+    check(input.documents.length === 1 && input.documents[0].id === "kd-date-guide" && input.documents[0].revision === "file-1", "delete submits only the selected component and its current revision");
+    const index = documents.findIndex(doc => doc.id === "kd-date-guide");
+    check(index >= 0, "the selected document still exists before deletion"); documents.splice(index, 1);
+    result = deletionView();
+  }
   else if (path === "/component-research") result = { records: [] };
   else if (path.startsWith("/knowledge-review/")) result = { notes: [] };
   else if (path === "/domain-extraction") {
@@ -127,6 +135,13 @@ async function run() {
   checkLibraryNavigationRestored();
   check(document.querySelector('[aria-label="业务模块"]') && document.querySelector('[aria-label="技术栈"]'), "home groups modules and languages");
   check(button("新增") && !button("研究知识") && !button("导入 Skill"), "home exposes one new menu without duplicate research or import buttons");
+  await clickSelector('button[aria-label="管理知识"]'); await waitFor('[role="menuitem"]');
+  const deleteMenu = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("删除组件知识"));
+  check(deleteMenu, "library home exposes component knowledge deletion"); deleteMenu!.click();
+  await waitFor('input[aria-label="全选组件知识"]');
+  check(document.querySelectorAll('[role="dialog"] input[type="checkbox"]:checked').length === 0, "batch management does not preselect unrelated knowledge");
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes("平台删除不改动 Git 归档"), "delete dialog explains the Git archive boundary");
+  await clickSelector('[role="dialog"] [data-slot="dialog-close"]');
   // 组件逐篇可直接打开，来源相同也不能合并目录或串用规则。
   await clickSelector('[aria-label="打开C++知识目录"]'); await waitFor('[aria-label="模块知识目录"] [aria-label="基础组件"]');
   const componentRows = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="基础组件"] button')];
@@ -142,7 +157,7 @@ async function run() {
   check(rulesTab?.textContent?.includes("1"), "rules tab shows the rule count"); rulesTab!.click(); await waitFor('[aria-label="组件规则"] table');
   check(document.querySelector('[aria-label="组件规则"] table')?.textContent?.includes("用文件组件打开文件"), "rules tab lists the component's rules");
   await clickSelector('button[aria-label="设置级别：用文件组件打开文件"]'); await waitFor('[role="dialog"] select[aria-label="使用状态"]');
-  const levelDialog = document.querySelector<HTMLElement>('[role="dialog"]')!, levelSelect = levelDialog.querySelector<HTMLSelectElement>('select[aria-label="使用状态"]')!;
+  const levelSelect = document.querySelector<HTMLSelectElement>('[role="dialog"] select[aria-label="使用状态"]')!, levelDialog = levelSelect.closest<HTMLElement>('[role="dialog"]')!;
   check(levelDialog.textContent?.includes("检查 fopen") && levelSelect.value === "shadow" && [...levelSelect.options].map(o => o.textContent).join("/") === "只记录/提示/关闭", "level button opens the shared policy dialog");
   levelDialog.querySelector<HTMLButtonElement>('[data-slot="dialog-close"]')?.click(); await pause();
   check(!calls.some(call => call.path.endsWith("/policy")), "opening the level dialog does not change the policy");
@@ -154,6 +169,20 @@ async function run() {
   check(dateRules?.textContent?.includes("0"), "shared repository evidence does not include another component's rules");
   dateRules!.click(); await pause();
   check(!document.querySelector('[aria-label="组件规则"] table') && !document.querySelector('[aria-label="组件规则"]')?.textContent?.includes("fopen"), "component rules stay isolated by document");
+  await clickSelector('button[aria-label="管理组件知识"]'); await waitFor('[role="menuitem"]');
+  [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find(item => item.textContent?.includes("删除组件知识"))!.click();
+  await waitFor('input[aria-label="全选组件知识"]');
+  check(document.querySelectorAll('[role="dialog"] input[type="checkbox"]:checked').length === 1, "reader preselects only the current component");
+  await click("删除所选（1）");
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes("日期组件指南") && !document.querySelector('[role="dialog"]')?.textContent?.includes("文件组件指南"), "confirmation lists only the selected component");
+  await click("返回选择");
+  check(!calls.some(call => call.path === "/component-knowledge/delete"), "cancelling confirmation sends no delete request");
+  await click("删除所选（1）"); await click("确认删除知识及索引");
+  check(document.querySelector('[role="dialog"]')?.textContent?.includes("知识及 memsearch 索引已删除"), "completed deletion remains visible after the reader refreshes");
+  await clickSelector('[role="dialog"] [data-slot="dialog-close"]');
+  await fill('input[aria-label="搜索组件或 Skill"]', "");
+  check(document.querySelectorAll('[aria-label="基础组件"] button').length === 1 && !document.querySelector('[aria-label="基础组件"]')?.textContent?.includes("日期组件指南"), "deleted component disappears without a page reload");
+  check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("打开文件后必须关闭句柄"), "reader moves to a remaining component instead of showing deleted content");
   await click("返回知识库"); await waitFor('[aria-label="打开交易业务知识目录"]');
   await clickSelector('[aria-label="打开交易业务知识目录"]'); await waitFor('[aria-label="模块知识目录"]');
   check(["领域模块知识", "仓内知识", "Skill"].every(label => document.querySelector(`[aria-label="模块知识目录"] [aria-label="${label}"]`)), "business reader has the three agreed groups");

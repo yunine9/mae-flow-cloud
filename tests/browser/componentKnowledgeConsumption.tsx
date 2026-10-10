@@ -12,7 +12,7 @@ const report: ComponentKnowledgeCheckReport = { mode: "observe", trigger: "mr", 
 window.fetch = async (input: RequestInfo | URL) => {
   const path = String(input);
   const value = path === "/knowledge-documents" ? { documents: [{ ...doc, id: "kd-first", title: "其他文档" }, doc] }
-    : path.startsWith("/knowledge-documents/") ? doc : path === "/business-modules" ? { modules: [] } : path === "/component-repositories" ? { components: [] } : path === "/skills" ? { skills: [], operations: [] } : path.startsWith("/knowledge-review") ? { notes: [] } : {};
+    : path.startsWith("/knowledge-documents/") ? doc : path === "/business-modules" ? { modules: [] } : path === "/component-repositories" ? { components: [] } : path === "/component-knowledge" ? { revision: 0, items: [], warnings: [], challenges: [] } : path === "/skills" ? { skills: [], operations: [] } : path.startsWith("/knowledge-review") ? { notes: [] } : {};
   return new Response(JSON.stringify(value), { status: 200, headers: { "content-type": "application/json" } });
 };
 async function main() {

@@ -10,15 +10,15 @@ async function request(path: string, body?: unknown): Promise<Snapshot> {
   if (!response.ok) throw new Error(data.error || "删除失败");
   return data;
 }
-export function ComponentKnowledgeDelete({ open, onClose, onChanged }: { open: boolean; onClose: () => void; onChanged: () => void }) {
+export function ComponentKnowledgeDelete({ open, onClose, onChanged, initialDocumentId }: { open: boolean; onClose: () => void; onChanged: () => void; initialDocumentId?: string }) {
   const [data, setData] = useState<Snapshot>(), [selected, setSelected] = useState<string[]>([]);
   const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(""), [message, setMessage] = useState("");
   useEffect(() => {
     if (!open) return;
     let live = true; setData(undefined); setSelected([]); setConfirm(false); setError(""); setMessage("");
-    void request("documents").then(value => { if (live) setData(value); }).catch(e => { if (live) setError(e.message); });
+    void request("documents").then(value => { if (live) { setData(value); setSelected(initialDocumentId && value.documents.some(doc => doc.id === initialDocumentId) ? [initialDocumentId] : []); } }).catch(e => { if (live) setError(e.message); });
     return () => { live = false; };
-  }, [open]);
+  }, [open, initialDocumentId]);
   async function remove(retry = false) {
     setBusy(true); setError(""); setMessage("");
     try {

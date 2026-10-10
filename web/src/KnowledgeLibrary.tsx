@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, Plus, Upload, Sparkles } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Plus, Trash2, Upload, Sparkles } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeModuleHome } from "./KnowledgeModuleHome";
 import { KnowledgeModuleReader } from "./KnowledgeModuleReader";
+import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
 import { KnowledgeTaskCenter, KnowledgeTaskCapsule, KnowledgeExperienceCapsule } from "./KnowledgeTaskCenter";
 import { KnowledgeResearchCreate, type KnowledgeResearchDraft } from "./KnowledgeResearchCreate";
 import { KnowledgeSkillImport } from "./KnowledgeSkillImport";
@@ -32,6 +33,7 @@ function readRoute() {
 }
 export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [route, setRoute] = useState(readRoute);
+  const [deletingComponents, setDeletingComponents] = useState(false), [catalogVersion, setCatalogVersion] = useState(0);
   const [researchDraft, setResearchDraft] = useState<KnowledgeResearchDraft>();
   const [cleanupDrafts, setCleanupDrafts] = useState<Record<string, KnowledgeCleanupDraft>>({});
   const [summary, setSummary] = useState({ running: 0, attention: 0, total: 0 });
@@ -89,9 +91,10 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
             <DropdownMenuItem className="knowledge-hub-add-option" onClick={() => navigate("research", { kbModule: route.module })}><span className="knowledge-hub-add-icon"><Sparkles size={19} /></span><span><strong>研究知识</strong><small>萃取领域、基础组件，或制作 Skill</small></span></DropdownMenuItem>
             <DropdownMenuItem className="knowledge-hub-add-option" onClick={() => navigate("import", { kbModule: route.module })}><span className="knowledge-hub-add-icon"><Upload size={19} /></span><span><strong>导入 Skill</strong><small>导入完整技能包，归入模块或语言</small></span></DropdownMenuItem>
           </DropdownMenuContent></DropdownMenu>
+          <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="管理知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => setDeletingComponents(true)}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
         </div>
       </header>
-      {route.page === "home" && <KnowledgeModuleHome moduleActivity={moduleActivity} onOpenResearch={id => openTask("domain", id)} onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
+      {route.page === "home" && <KnowledgeModuleHome key={catalogVersion} moduleActivity={moduleActivity} onOpenResearch={id => openTask("domain", id)} onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
       {route.page === "module" && (platformSkill
         ? <div className="knowledge-hub-task"><KnowledgeBackButton destination={returnSearch ? "研究知识" : "知识库"} onClick={() => returnSearch ? returnToResearch() : navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
@@ -104,6 +107,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
         {route.kind === "component" && <ComponentResearch key={route.id} open focused focusId={route.id} surface={route.review ? "knowledge" : "workbench"} onClose={() => navigate("tasks")} backLabel="任务中心" onAdopt={id => navigate("module", { kbModule: "unassigned", knowledgeDocument: id })} />}
         {(route.kind === "skill-extraction" || route.kind === "skill-submission") && <KnowledgeSkillTask kind={route.kind} id={route.id} onBack={() => navigate("tasks")} onSubmitted={id => openTask("skill-submission", id, true)} />}
       </div>}
+      <ComponentKnowledgeDelete open={deletingComponents} onClose={() => setDeletingComponents(false)} onChanged={() => setCatalogVersion(n => n + 1)} />
     </section>
   </KnowledgeStudioContext.Provider>;
 }

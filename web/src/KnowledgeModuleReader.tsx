@@ -1,7 +1,7 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ResizableKnowledgePanes } from "./ResizableKnowledgePanes";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,8 @@ import { componentRequest } from "./componentResearchApi";
 import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { KnowledgeVersions } from "./KnowledgeVersions";
 import { ComponentKnowledgeWorkspace } from "./ComponentKnowledgeWorkspace";
+import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
 import { KnowledgeContentSearch } from "./KnowledgeContentSearch";
@@ -65,6 +67,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const [notesToolbar, setNotesToolbar] = useState<HTMLSpanElement | null>(null);
   const [governance, setGovernance] = useState<ComponentGovernanceSnapshot>(), [governanceError, setGovernanceError] = useState(""), [governanceReload, setGovernanceReload] = useState(0);
   const [componentTab, setComponentTab] = useState<"usage" | "rules">("usage");
+  const [deleting, setDeleting] = useState(false), [deleteDocumentId, setDeleteDocumentId] = useState<string>();
   const requestedModule = data?.modules.find(m => m.key === moduleKey);
   const module = selectedDocumentId && !requestedModule?.documents.some(d => d.id === selectedDocumentId)
     ? data?.modules.find(m => m.documents.some(d => d.id === selectedDocumentId)) ?? requestedModule
@@ -172,7 +175,9 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
-      <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" /></div>
+      <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
+        {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+      </div>
     </header>
     {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
     <ResizableKnowledgePanes className="km-reader-panes" treeHidden={!showTree}>
@@ -207,5 +212,6 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       </div>
     </ResizableKnowledgePanes>
     <Dialog open={updating} onOpenChange={setUpdating}><DialogContent className="tw-root max-w-xl"><DialogHeader><DialogTitle>基于已发布版本更新</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">{detail?.title} · 当前版本 {detail?.revision.slice(0, 10)}。研究产出先进入文稿审查，发布前当前知识保持生效。</p>{detail?.research_source?.job_id.startsWith("dkx-") ? <Textarea aria-label="本次更新要求" rows={3} value={updateMessage} onChange={e=>setUpdateMessage(e.target.value)} placeholder="需要关注哪些变化？留空则核对来源并生成增量建议。"/> : <p className="text-sm text-muted-foreground">创建后按能力核对来源、修改文稿，再统一发布。</p>}{updateError&&<p role="alert" className="text-danger text-sm">{updateError}</p>}<div className="flex justify-end gap-2"><Button variant="outline" onClick={()=>setUpdating(false)}>取消</Button><Button disabled={updateBusy||!detail} onClick={async()=>{if(!detail?.research_source)return;setUpdateBusy(true);setUpdateError("");try{const source=detail.research_source.job_id;const result=source.startsWith("dkx-")?await documentRequest<{id:string}>(`/${detail.id}/update-research`,{expected_revision:detail.revision,message:updateMessage||undefined}):await componentRequest<{id:string}>(`/component-research/${source}/begin-update`,{});setUpdating(false);onResearch(result.id);}catch(e){setUpdateError((e as Error).message);}finally{setUpdateBusy(false);}}}>{updateBusy?"正在创建…":"创建更新任务"}</Button></div></DialogContent></Dialog>
+    <ComponentKnowledgeDelete open={deleting} initialDocumentId={deleteDocumentId} onClose={() => setDeleting(false)} onChanged={() => { setReload(n => n + 1); setGovernanceReload(n => n + 1); }} />
   </section>;
 }
