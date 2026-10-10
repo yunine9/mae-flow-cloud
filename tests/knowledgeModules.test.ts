@@ -32,11 +32,12 @@ test("跨模块知识按明确适用模块出现，各目录按资产ID去重", 
   assert.deepEqual(result.modules.map(m => [m.key, m.documentCount]), [["business:alarm", 1], ["business:upgrade", 1]]);
 });
 
-test("显式适用仓归入绑定业务仓，组件文稿只归基础组件组", () => {
+test("显式适用仓归入业务仓，组件知识直接列出而不按基础仓分组", () => {
   const result = projectKnowledgeModules({ documents: [document("repo", { repositories: ["https://git.example/alarm/"] }), document("timer-doc", { technologies: ["cpp"], repositories: [component.repository] }), document("general-cpp", { technologies: ["cpp"] })], businessModules: [module("alarm")], components: [component] });
   assert.equal(result.modules.find(m => m.key === "business:alarm")!.repositories[0].documents[0].id, "repo");
   const cpp = result.modules.find(m => m.key === "engineering:cpp")!;
-  assert.deepEqual(cpp.repositories.map(r => [r.name, r.documents.map(d => d.id)]), [["定时器", ["timer-doc"]], ["待关联基础组件", ["general-cpp"]]]);
+  assert.deepEqual(cpp.repositories, []);
+  assert.deepEqual(cpp.documents.map(doc => doc.id), ["timer-doc", "general-cpp"]);
 });
 
 test("Skill 归属从货架补齐，内部萃取Skill不进入模块且文件mtime不冒充维护记录", () => {
@@ -65,12 +66,17 @@ test("已归档或已删除模块的旧知识不会被误分到工程语言", ()
   assert.equal(result.modules[0].key, "unassigned");
 });
 
-test("组件目录只列已有知识的组件：登记了但未研究的组件不先占位，研究统一从萃取任务发起", () => {
+test("同一基础仓的组件按各自名称逐项保留；来源配置不产生额外目录或重复文稿", () => {
   const idle: ComponentRepository = { ...component, id: "rpc", name: "RPC 框架", repository: "https://git.example/rpc.git" };
-  const result = projectKnowledgeModules({ documents: [document("timer-doc", { technologies: ["cpp"], research_source: { job_id: "cr-1", repository: component.repository, branch: "main", path: "", components: [{ id: "timer" }] } })],
+  const source = { job_id: "cr-1", repository: component.repository, branch: "main", path: "", components: [{ id: "timer" }, { id: "rpc" }] };
+  const timer = document("timer-doc", { title: "定时器", technologies: ["cpp"], research_source: source });
+  const rpc = document("rpc-doc", { title: "RPC 框架", technologies: ["cpp"], research_source: source });
+  const result = projectKnowledgeModules({ documents: [timer, rpc, timer],
     businessModules: [], components: [component, idle] });
   const cpp = result.modules.find(m => m.key === "engineering:cpp")!;
-  assert.deepEqual(cpp.repositories.map(group => [group.id, group.documents.map(doc => doc.id)]), [["timer", ["timer-doc"]]]);
+  assert.deepEqual(cpp.repositories, []);
+  assert.deepEqual(cpp.documents.map(doc => [doc.id, doc.title]), [["timer-doc", "定时器"], ["rpc-doc", "RPC 框架"]]);
+  assert.equal(cpp.documentCount, 2);
 });
 
 test("组件研究来源里的源码目录不当知识文件名：只发布在平台的组件知识按标题显示", () => {

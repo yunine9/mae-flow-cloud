@@ -84,7 +84,7 @@ export function projectKnowledgeModules(input: {
   const modules: KnowledgeModule[] = business.map(m => ({ key: `business:${m.id}`, id: m.id, name: m.name, description: m.description, category: "business", documents: [], repositories: m.repositories.map(r => ({ id: repositoryKey(r), name: repositoryName(r), documents: [] })), documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }));
   function language(id: string) {
     let module = modules.find(m => m.key === `engineering:${id}`);
-    if (!module) { module = { key: `engineering:${id}`, id, name: technologyStackLabel(id, input.technologyStacks ?? []), description: "基础组件知识与团队 Skill", category: "engineering", documents: [], repositories: input.components.filter(c => c.enabled && c.languages.includes(id)).map(c => ({ id: c.id, name: c.name, documents: [] })), documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }; modules.push(module); }
+    if (!module) { module = { key: `engineering:${id}`, id, name: technologyStackLabel(id, input.technologyStacks ?? []), description: "基础组件知识与团队 Skill", category: "engineering", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }; modules.push(module); }
     return module;
   }
   for (const component of input.components.filter(c => c.enabled)) for (const id of component.languages) language(id);
@@ -95,23 +95,19 @@ export function projectKnowledgeModules(input: {
     if (!targets.length) unassigned.documents.push(doc);
     for (const target of targets) {
       target.documents.push(doc);
-      if (doc.form === "skill") continue;
-      const groups = target.category === "business"
-        ? target.repositories.filter(g => doc.repositories.some(r => repositoryKey(r) === g.id))
-        : target.repositories.filter(g => doc.componentIds?.includes(g.id) || input.components.some(c => c.id === g.id && doc.repositories.some(r => repositoryKey(r) === repositoryKey(c.repository))));
+      // 工程知识逐篇展示，基础仓只作为来源；领域知识保留明确的适用仓分组。
+      if (doc.form === "skill" || target.category !== "business") continue;
+      const groups = target.repositories.filter(g => doc.repositories.some(r => repositoryKey(r) === g.id));
       for (const group of groups) group.documents.push(doc);
-      if (!groups.length && (target.category === "engineering" || doc.repositories.length)) {
+      if (!groups.length && doc.repositories.length) {
         let unknown = target.repositories.find(g => g.id === "unassigned");
-        if (!unknown) { unknown = { id: "unassigned", name: target.category === "engineering" ? "待关联基础组件" : "待确认关联仓", documents: [] }; target.repositories.push(unknown); }
+        if (!unknown) { unknown = { id: "unassigned", name: "待确认关联仓", documents: [] }; target.repositories.push(unknown); }
         unknown.documents.push(doc);
       }
     }
   }
   if (unassigned.documents.length) modules.push(unassigned);
   for (const module of modules) {
-    // 组件分组只列已有知识的组件：研究统一从「研究知识」发起、在任务中心跟踪（按技术栈全量或指定组件），
-    // 目录不再先摆出登记的空组件再挂"发起研究"（2026-10-08 用户：都统一作为萃取任务即可）。
-    if (module.category === "engineering") module.repositories = module.repositories.filter(group => group.documents.length);
     module.documentCount = module.documents.filter(d => d.active && d.form !== "skill").length;
     module.skillCount = module.documents.filter(d => d.active && d.form === "skill").length;
     module.inactiveCount = module.documents.filter(d => !d.active).length;

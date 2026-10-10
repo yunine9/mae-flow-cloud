@@ -17,7 +17,7 @@ import { KnowledgeReviewNotes } from "./KnowledgeReviewNotes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { blankKnowledgeMetadata, KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
-import { knowledgeFilePath, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type KnowledgeModuleData, type KnowledgeModuleGroup, type ModuleDocument } from "./knowledgeModules";
+import { knowledgeFilePath, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type KnowledgeModuleData, type ModuleDocument } from "./knowledgeModules";
 
 export interface KnowledgeModuleReaderProps {
   moduleKey: string;
@@ -113,7 +113,8 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     if (engineering) void loadComponentGovernance().then(value => { if (live) setGovernance(value); }).catch(e => { if (live) { setGovernance(undefined); setGovernanceError((e as Error).message); } });
     return () => { live = false; };
   }, [engineering, reload, governanceReload]);
-  const currentComponent = engineering ? module?.repositories.find(r => r.id !== "unassigned" && r.documents.some(d => d.id === current?.id)) : undefined;
+  const currentComponent = engineering && current && current.form !== "skill"
+    ? { id: current.id, name: current.title, documents: [current] } : undefined;
   const componentRules = governance && currentComponent ? rulesForComponent(governance, currentComponent) : [];
   useEffect(() => { setComponentTab("usage"); }, [currentComponent?.id]);
   const needle = query.trim().toLocaleLowerCase(), visible = useMemo(() => (module?.documents ?? []).filter(d => !needle || `${d.title} ${knowledgeFilePath(d)}`.toLocaleLowerCase().includes(needle)), [module, needle]);
@@ -138,21 +139,24 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       {!visible.some(d => d.form === "skill") && <p className="px-2 py-2 text-xs text-muted-foreground">暂无 Skill</p>}
     </section>;
   }
-  function repositoryCount(repository: KnowledgeModuleGroup) {
-    // 基础组件数规则（会不会提示 Agent 比文档数更有意义）；规则读不到时退回文档数，不显示成 0。
-    if (!engineering || repository.id === "unassigned") return <small className="text-xs text-muted-foreground">{repository.documents.length}</small>;
-    if (!governance) return <small className="text-xs text-muted-foreground" title="规则读取失败，显示文档数">{repository.documents.length}</small>;
-    const count = rulesForComponent(governance, repository).length;
-    return <small className="shrink-0 text-xs text-muted-foreground" title={`${count} 条规则`}>{count} 规则</small>;
+  function componentList() {
+    const documents = visible.filter(doc => doc.form !== "skill").sort((a, b) => a.title.localeCompare(b.title, "zh-CN"));
+    return <section aria-label="基础组件"><h3 className="mb-2 text-xs font-medium text-muted-foreground">基础组件</h3>
+      {documents.map(doc => <Button key={doc.id} variant="ghost" aria-current={selected === doc.id ? "page" : undefined} className={`km-tree-row h-auto min-h-9 justify-start gap-2 whitespace-normal px-2 py-2 text-left ${selected === doc.id ? "bg-primary/10 text-primary" : ""}`} onClick={() => choose(doc)}>
+        <Puzzle size={16} className="shrink-0" /><span className="min-w-0 flex-1 break-words text-sm">{doc.title}</span>
+        {governance && <small className="shrink-0 text-xs text-muted-foreground">{rulesForComponent(governance, { id: doc.id, name: doc.title, documents: [doc] }).length} 规则</small>}
+      </Button>)}
+      {!documents.length && <p className="px-2 py-2 text-xs text-muted-foreground">{needle ? "没有匹配的组件" : "暂无组件知识"}</p>}
+      {governanceError && <p className="px-2 py-1 text-xs text-muted-foreground">规则读取失败，组件文档仍可阅读。</p>}
+    </section>;
   }
   function repositoryList() {
-    return <section aria-label={module?.category === "business" ? "仓内知识" : "基础组件"}><h3 className="mb-2 text-xs font-medium text-muted-foreground">{module?.category === "business" ? "仓内知识" : "基础组件"}</h3>
+    return <section aria-label="仓内知识"><h3 className="mb-2 text-xs font-medium text-muted-foreground">仓内知识</h3>
       {module?.repositories.filter(r => !needle || r.documents.some(d => visibleIds.has(d.id))).map(repository => {
         const open = !!needle || expandedRepository === repository.id;
-        return <div key={repository.id} className="mb-1"><Button variant="ghost" className="km-tree-row h-auto min-h-9 justify-start gap-2 whitespace-normal px-2 text-left" aria-expanded={open} onClick={() => setExpandedRepository(open ? "" : repository.id)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<GitBranch size={15} className="text-muted-foreground" /><span className="flex-1 text-sm">{repository.name}</span>{repositoryCount(repository)}</Button>{open && <div className="ml-3 border-l border-line pl-2">{repository.documents.length ? <FileTree files={files(repository.documents)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无知识</p>}</div>}</div>;
+        return <div key={repository.id} className="mb-1"><Button variant="ghost" className="km-tree-row h-auto min-h-9 justify-start gap-2 whitespace-normal px-2 text-left" aria-expanded={open} onClick={() => setExpandedRepository(open ? "" : repository.id)}>{open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<GitBranch size={15} className="text-muted-foreground" /><span className="flex-1 text-sm">{repository.name}</span><small className="text-xs text-muted-foreground">{repository.documents.length}</small></Button>{open && <div className="ml-3 border-l border-line pl-2">{repository.documents.length ? <FileTree files={files(repository.documents)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无知识</p>}</div>}</div>;
       })}
       {!module?.repositories.length && <p className="px-2 py-2 text-xs text-muted-foreground">暂无关联项</p>}
-      {engineering && governanceError && <p className="px-2 py-1 text-xs text-muted-foreground">规则读取失败，暂显示文档数。</p>}
     </section>;
   }
   const rootDocuments = visible.filter(d => d.form !== "skill" && !module?.repositories.some(r => r.documents.some(item => item.id === d.id)));
@@ -172,8 +176,8 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     </header>
     {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
     <ResizableKnowledgePanes className="km-reader-panes" treeHidden={!showTree}>
-      {showTree && <aside className="km-tree grid content-start gap-5 border-r border-line bg-muted/30 p-3" aria-label="模块知识目录"><Input aria-label="搜索模块内文件" placeholder="查找文件…" value={query} onChange={e => setQuery(e.target.value)} />
-        {module?.category === "engineering" ? <>{skillList()}{repositoryList()}</> : <><section aria-label={module?.category === "business" ? "领域模块知识" : "文档"}><h3 className="mb-2 text-xs font-medium text-muted-foreground">{module?.category === "business" ? "领域模块知识" : "文档"}</h3>{rootDocuments.length ? <FileTree files={files(rootDocuments)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无文档</p>}</section>{module?.category === "business" && repositoryList()}{skillList()}</>}
+      {showTree && <aside className="km-tree grid content-start gap-5 border-r border-line bg-muted/30 p-3" aria-label="模块知识目录"><Input aria-label={engineering ? "搜索组件或 Skill" : "搜索模块内文件"} placeholder={engineering ? "查找组件或 Skill…" : "查找文件…"} value={query} onChange={e => setQuery(e.target.value)} />
+        {module?.category === "engineering" ? <>{componentList()}{skillList()}</> : <><section aria-label={module?.category === "business" ? "领域模块知识" : "文档"}><h3 className="mb-2 text-xs font-medium text-muted-foreground">{module?.category === "business" ? "领域模块知识" : "文档"}</h3>{rootDocuments.length ? <FileTree files={files(rootDocuments)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无文档</p>}</section>{module?.category === "business" && repositoryList()}{skillList()}</>}
       </aside>}
       <div ref={article} className="km-document px-6 pt-3 pb-6" aria-label="知识正文" tabIndex={0}>
         {!data && !error ? <p role="status" className="py-12 text-center text-muted-foreground">正在读取知识目录…</p> : !module ? <p className="py-12 text-center text-muted-foreground">该目录不存在，或当前没有可读取的归属信息。</p> : !current ? <div className="grid justify-items-center gap-3 py-16 text-muted-foreground"><BookOpen size={28} /><p>这个目录还没有知识</p></div> : <div className="km-document-body">
