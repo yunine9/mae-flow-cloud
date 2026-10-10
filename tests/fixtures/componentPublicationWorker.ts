@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { componentGuideEvidence, componentGuideOverview, componentGuideSection } from "./componentGuide.ts";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { ComponentResearch, type ResearchExecution } from "../../src/componentResearch.ts";
@@ -12,13 +13,12 @@ export function componentPublicationExecute(input: ResearchExecution): Promise<s
     input.editDocument!({ action: "section", section: { ...section, content: `${section.content}\n本轮修订：${input.review.message}` } });
     return Promise.resolve("本轮建议已完成");
   }
-  input.editDocument!({ action: "overview", overview: "按源码证据选择组件能力，正式知识与 Git 归档分别记录。" });
+  for (const event of componentGuideEvidence(input.record.language, repositoryIds)) input.evidence(event);
+  input.editDocument!({ action: "overview", overview: componentGuideOverview("文件组件提供临时文件创建、写入和关闭能力。") });
   input.editDocument!({ action: "outline", entries: [0, 1, 2].map(index => ({ id: `cap-${index}`, title: `能力 ${index}`, repository_ids: repositoryIds })) });
-  for (let index = 0; index < 3; index++) input.editDocument!({ action: "section", section: {
-    id: `cap-${index}`, title: `能力 ${index}`, repository_ids: repositoryIds, related_ids: [], content: `能力 ${index} 的边界与失败处理。`,
-    interfaces: "include/file.h:1 Close(handle)", integration: "CMake target file，对应 libfile.so。",
-    example: "测试夹具示例，未编译验证。\n```cpp\nClose(handle);\n```", sources: "src/file.cpp:1 @ 固定测试版本。",
-  } });
+  for (let index = 0; index < 3; index++) input.editDocument!({ action: "section", section:
+    componentGuideSection(`cap-${index}`, repositoryIds, { title: `能力 ${index}`, content: `能力 ${index} 的边界与失败处理。`, language: input.record.language }),
+  });
   return Promise.resolve("联合草稿已完成");
 }
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { componentGuideEvidence, componentGuideOverview, componentGuideSection } from "./fixtures/componentGuide.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import { test } from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -8,7 +9,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { ComponentResearch, type ResearchRecord } from "../src/componentResearch.ts";
+import { ComponentResearch, researchDraftContext, type ResearchRecord } from "../src/componentResearch.ts";
+import { ComponentResearchPipeline } from "../src/componentResearchPipeline.ts";
 import { listKnowledgeDocuments, prepareKnowledgeDocument, readKnowledgeDocument, saveKnowledgeDocument, writePreparedKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
 import { writeKnowledgeDeletion } from "../src/knowledgeDeletionStore.ts";
@@ -24,6 +26,192 @@ function componentRecord(): ResearchRecord {
 }
 function write(dir: string, relative: string, content: string) { const path = join(dir, relative); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, content); return path; }
 function assertWarnings(warnings: string[], paths: string[]) { for (const path of paths) assert.ok(warnings.some(warning => warning.includes(path)), `告警应点名 ${path}`); }
+
+function legacyComponentGuide(status: "done" | "failed" = "done"): ResearchRecord {
+  const record = componentRecord(); record.status = status; record.format = "joint-document";
+  const section = { ...componentGuideSection("files", [record.component.id], { language: "java" }), selected: true, revision: 2 };
+  delete (section as Partial<typeof section>).unit_tests;
+  delete (section.paradigm as Partial<NonNullable<typeof section.paradigm>>).test_evidence;
+  section.content = "旧版使用正文，保留人工确认的限制。";
+  record.document = { overview: "旧版组件总览", sections: [section] }; record.draft = "旧版整篇文稿";
+  record.evidence = componentGuideEvidence("java", [record.component.id]);
+  record.section_history = [{ at: record.created_at, operator: "alice", section: { ...structuredClone(section), revision: 1 } }];
+  record.review_turns = [{ id: "old-review", section_id: section.id, mode: "rework", message: "原意见", operator: "alice", created_at: record.created_at,
+    status: "done", proposal: { status: "discarded", base_revision: 1, section: structuredClone(section) } }];
+  return record;
+}
+
+for (const status of ["done", "failed"] as const) test(`组件旧稿兼容：缺少 UT 新字段的 ${status} 记录、历史和建议可读，不改推荐事实或磁盘`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-legacy-guide-")), record = legacyComponentGuide(status);
+  const bytes = JSON.stringify(record), path = write(dir, `component-research/${record.id}/record.json`, bytes);
+  let executions = 0;
+  const service = new ComponentResearch(dir, async () => { executions++; return "不能自动执行旧稿"; });
+  try {
+    assert.deepEqual(service.warnings(), []);
+    assert.equal(service.list().length, 1);
+    const loaded = service.get(record.id);
+    assert.equal(loaded.status, status); assert.equal(loaded.draft, record.draft);
+    for (const section of [loaded.document!.sections[0], loaded.section_history![0].section, loaded.review_turns![0].proposal!.section]) {
+      assert.equal(section.content, record.document!.sections[0].content);
+      assert.equal(section.unit_tests, ""); assert.deepEqual(section.paradigm!.test_evidence, []);
+      assert.equal(section.paradigm!.status, "recommended", "历史推荐判断不在读取时偷偷改写");
+    }
+    assert.match(loaded.production!.platform_message!, /仅供研究参考.*补齐单元测试示例与测试证据/);
+    if (status === "done") assert.throws(() => service.publish(record.id, { title: record.topic, document_id: null, update_document_id: null,
+      sections: [{ id: "files", revision: 2, proposal_id: null }] }, "alice"), /已完成.*最佳示例/);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(executions, 0); assert.equal(readFileSync(path, "utf8"), bytes);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("组件旧稿兼容：发布意图中的旧文稿、历史与建议可读，读取不提交正式知识", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-legacy-intent-")), record = legacyComponentGuide();
+  const formal = prepareKnowledgeDocument(dir, { title: "旧组件指南", content: "原来确认的正式正文" }, "alice");
+  record.publication_intent = { formal, record: { ...structuredClone(record), document_id: formal.document.id, published_revision: formal.document.revision } };
+  const bytes = JSON.stringify(record), path = write(dir, `component-research/${record.id}/record.json`, bytes);
+  const service = new ComponentResearch(dir, async () => { throw new Error("读取意图不能重新研究"); });
+  try {
+    assert.deepEqual(service.warnings(), []);
+    const intent = service.get(record.id).publication_intent!;
+    for (const section of [intent.record.document!.sections[0], intent.record.section_history![0].section, intent.record.review_turns![0].proposal!.section]) {
+      assert.equal(section.unit_tests, ""); assert.deepEqual(section.paradigm!.test_evidence, []);
+      assert.equal(section.paradigm!.status, "recommended");
+    }
+    assert.equal(existsSync(join(dir, "knowledge-documents", `${formal.document.id}.json`)), false);
+    assert.equal(readFileSync(path, "utf8"), bytes);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("组件旧稿兼容：新增字段已有错误类型仍隔离，正文、历史、建议及发布意图都不能被补空掩盖", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-invalid-guide-fields-"));
+  const records: Array<{ id: string; path: string; bytes: string }> = [];
+  for (const location of ["document", "history", "proposal", "intent"] as const) for (const field of ["unit_tests", "test_evidence"] as const) {
+    const record = legacyComponentGuide();
+    if (location === "intent") {
+      const formal = prepareKnowledgeDocument(dir, { title: "旧组件指南", content: "已有正文" }, "alice");
+      record.publication_intent = { formal, record: { ...structuredClone(record), document_id: formal.document.id, published_revision: formal.document.revision } };
+    }
+    const section = location === "history" ? record.section_history![0].section : location === "proposal" ? record.review_turns![0].proposal!.section
+      : location === "intent" ? record.publication_intent!.record.document!.sections[0] : record.document!.sections[0];
+    if (field === "unit_tests") (section as unknown as Record<string, unknown>).unit_tests = null;
+    else (section.paradigm as unknown as Record<string, unknown>).test_evidence = "不是数组";
+    const bytes = JSON.stringify(record), path = write(dir, `component-research/${record.id}/record.json`, bytes);
+    records.push({ id: record.id, path, bytes });
+  }
+  const service = new ComponentResearch(dir, async () => "不能执行损坏记录");
+  try {
+    assert.equal(service.list().length, 0); assert.equal(service.warnings().length, records.length);
+    for (const record of records) {
+      assert.ok(service.warnings().some(warning => warning.includes(record.id)));
+      assert.equal(readFileSync(record.path, "utf8"), record.bytes);
+    }
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("组件旧稿兼容：整体修订能够读到原稿，补齐新格式后仍需人工发布", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-legacy-rework-")), record = legacyComponentGuide();
+  write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  let executions = 0;
+  const service = new ComponentResearch(dir, async input => {
+    executions++;
+    assert.match(input.record.draft!, /旧版组件总览/); assert.match(input.record.draft!, /保留人工确认/);
+    assert.equal(input.readDocument!().sections[0].content, record.document!.sections[0].content);
+    input.editDocument!({ action: "overview", overview: componentGuideOverview("修订后的文件组件用途。", "使用 JDK 11。") });
+    input.editDocument!({ action: "section", section: componentGuideSection("files", [record.component.id], { language: "java" }) });
+    return "已核对并补齐测试示例，等待人工审查。";
+  });
+  try {
+    service.review(record.id, { section_id: "", mode: "rework", message: "补齐测试示例" }, "alice");
+    for (let turn = 0; turn < 30; turn++) await Promise.resolve();
+    const revised = service.get(record.id);
+    assert.equal(executions, 1); assert.equal(revised.status, "done", revised.error);
+    assert.ok(revised.document!.sections[0].unit_tests.includes("assert"));
+    assert.equal(revised.document_id, undefined);
+    assert.equal(revised.section_history!.at(-1)!.section.content, record.document!.sections[0].content);
+    assert.ok(!revised.production!.platform_message?.includes("旧版组件草稿"));
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("组件旧稿兼容：在途旧记录仍接续原任务，缺少新增字段不使其从列表消失", { timeout: 3_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-legacy-running-")), record = legacyComponentGuide();
+  record.status = "running";
+  write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  let executions = 0;
+  const service = new ComponentResearch(dir, async input => {
+    executions++;
+    assert.equal(input.record.id, record.id);
+    assert.equal(input.readDocument!().sections[0].content, record.document!.sections[0].content);
+    await new Promise<void>((resolve, reject) => {
+      const budget = setTimeout(() => reject(new Error("模拟旧研究未在 2 秒内停止")), 2_000);
+      input.signal.addEventListener("abort", () => { clearTimeout(budget); resolve(); }, { once: true });
+    });
+    return "已响应停止";
+  });
+  try {
+    for (let turn = 0; turn < 20; turn++) await Promise.resolve();
+    assert.equal(executions, 1); assert.deepEqual(service.warnings(), []);
+    assert.equal(service.list()[0].id, record.id); assert.equal(service.get(record.id).status, "running");
+    assert.equal(service.get(record.id).document!.sections[0].unit_tests, "");
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const legacy of [true, false]) test(`组件接续：${legacy ? "旧 pipeline 全部 done 不重做，旧稿进入审查但不能发布" : "新版空 UT 即使 pipeline 全部 done 也不能冒充完成"}`, { timeout: 5_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-completed-pipeline-")), record = legacyComponentGuide();
+  const pipelineFile = join(dir, "component-research", record.id, "component-pipeline", "state.json");
+  const original = new ComponentResearchPipeline(pipelineFile, "same-method", [record.component.id]);
+  await original.run({ signal: new AbortController().signal,
+    execute: async task => ({ findings: "已保存的模拟研究结果", open_questions: [],
+      ...(task.phase === "inventory" ? { components: [{ id: "files", title: "文件处理", repository_ids: [record.component.id], scope: "src/files.java" }] } : {}),
+      ...(task.phase === "plan" ? { paradigms: [{ id: "write", title: "写入文件", need: "保存数据" }] } : {}) }),
+    review: async () => undefined, changed() {},
+  });
+  const sectionId = "paradigm-files-write";
+  const persistedPipeline = JSON.parse(readFileSync(pipelineFile, "utf8"));
+  record.status = "running"; record.pipeline = persistedPipeline;
+  record.document!.sections[0].id = sectionId; record.review_turns = []; record.section_history = [];
+  if (!legacy) record.document = { overview: componentGuideOverview(), sections: [{ ...componentGuideSection(sectionId, [record.component.id], { language: "java" }), unit_tests: "", selected: true, revision: 2 }] };
+  write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  let authors = 0, reviews = 0;
+  const service = new ComponentResearch(dir, async input => {
+    const resumed = new ComponentResearchPipeline(pipelineFile, "same-method", [record.component.id]);
+    await resumed.run({ signal: input.signal,
+      execute: async () => { authors++; throw new Error("done 项不能重做"); },
+      review: async () => { reviews++; throw new Error("done 项不能重审"); },
+      changed: state => input.update({ pipeline: state }),
+    });
+    return legacy ? researchDraftContext(input.record, input.readDocument!()) : "结束当前模拟执行";
+  });
+  try {
+    for (let turn = 0; turn < 40; turn++) await Promise.resolve();
+    const resumed = service.get(record.id);
+    assert.equal(authors, 0); assert.equal(reviews, 0);
+    assert.deepEqual(resumed.pipeline, persistedPipeline);
+    assert.equal(resumed.status, legacy ? "done" : "failed", resumed.error);
+    if (legacy) {
+      assert.match(resumed.production!.platform_message!, /仅供研究参考/);
+      assert.equal(resumed.document!.sections[0].content, record.document!.sections[0].content);
+      assert.throws(() => service.publish(record.id, { title: record.topic, document_id: null, update_document_id: null,
+        sections: [{ id: sectionId, revision: 2, proposal_id: null }] }, "alice"), /已完成.*最佳示例/);
+    } else assert.match(resumed.error!, /联合草稿尚不完整/);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("组件旧稿兼容：已发布旧稿开始更新不把显示用空字段写回，重启仍可读", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-legacy-begin-update-")), record = legacyComponentGuide();
+  const formal = saveKnowledgeDocument(dir, { title: "旧组件指南", content: "原正式正文" }, "alice");
+  record.document_id = formal.id; record.published_revision = formal.revision;
+  const path = write(dir, `component-research/${record.id}/record.json`, JSON.stringify(record));
+  const service = new ComponentResearch(dir, async () => "不自动研究已完成旧稿");
+  let restarted: ComponentResearch | undefined;
+  try {
+    assert.equal(service.beginUpdate(record.id, "alice").update_document_id, formal.id);
+    const saved = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(Object.hasOwn(saved.document.sections[0], "unit_tests"), false);
+    assert.equal(Object.hasOwn(saved.document.sections[0].paradigm, "test_evidence"), false);
+    restarted = new ComponentResearch(dir, async () => "不自动研究已完成旧稿");
+    assert.deepEqual(restarted.warnings(), []); assert.equal(restarted.get(record.id).status, "done");
+  } finally { await service.shutdown(); await restarted?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("#450：旧组件 mode=component、status=done 仍在知识任务中心可见，读取不改原记录", async () => {
   const dir = mkdtempSync(join(tmpdir(), "issue450-component-legacy-"));
@@ -242,12 +430,12 @@ test("生产线验收3（F5）：范式证据只认本组件仓，引用其他�
   let initial: ComponentResearch | undefined, restarted: ComponentResearch | undefined;
   try {
     initial = new ComponentResearch(dir, async input => {
-      input.editDocument!({ action: "overview", overview: "订单组件通过公共文件组件保存数据。" });
+      input.editDocument!({ action: "overview", overview: componentGuideOverview("订单组件通过公共文件组件保存数据。", "依赖公共文件组件。") });
       input.editDocument!({ action: "outline", entries: [{ id: "orders", title: "订单保存", repository_ids: [first.id] }] });
       input.editDocument!({ action: "section", section: { id: "orders", title: "订单保存", repository_ids: [first.id], content: "订单保存约束。", interfaces: "save(order)", integration: "依赖公共文件组件。",
-        example: "```java\nFiles.save(order);\n```", sources: "公共文件实现", related_ids: [],
+        example: "```java\nFiles.save(order);\n```", unit_tests: "", sources: "公共文件实现", related_ids: [],
         paradigm: { kind: "contracts", component: "orders", language: "java", status: "unverified", need: "保存订单", api: ["Files.save"], applicability: "公共文件组件可用。",
-          replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [cited], usage_evidence: [], open_questions: [] } } });
+          replaces: { identifiers: [], imports: [], patterns: [] }, evidence: [cited], usage_evidence: [], test_evidence: [], open_questions: [] } } });
       return "草稿已保存";
     });
     // 一个组件一次研究：依赖组件的用法走 everycode 调用证据，不能冒充本组件的实现依据。

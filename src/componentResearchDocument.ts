@@ -1,4 +1,4 @@
-import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
+import { componentGuideMarkdown, componentGuideOverview, componentUsageMarkdown, compareComponentSections, validateComponentField } from "./componentKnowledgeMarkdown.ts";
 import { validateComponentParadigm, componentSources, type ComponentParadigm } from "./componentParadigms.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
@@ -13,6 +13,7 @@ export interface ResearchSection {
   interfaces: string;
   integration: string;
   example: string;
+  unit_tests: string;
   sources: string;
   related_ids: string[];
   revision: number;
@@ -50,8 +51,22 @@ export function isWholeResearchReview(review?: Pick<ResearchReviewTurn, "mode" |
   return review?.mode === "rework" && review.section_id === "";
 }
 export function sectionReady(section: ResearchSection): boolean {
-  return [section.content, section.interfaces, section.integration, section.sources].every(value => typeof value === "string" && !!value.trim())
-    && /```[^\n]*\n[\s\S]*?\S[\s\S]*?\n```/.test(section.example ?? "");
+  try { validateResearchSection(section); return true; } catch { return false; }
+}
+export function validateComponentOverview(overview: string) {
+  componentGuideOverview(overview);
+}
+export function validateResearchSection(section: Omit<ResearchSection, "selected" | "revision">) {
+  if (!section.paradigm) throw new Error("章节缺少结构化范式字段，请使用当前组件研究格式");
+  validateComponentParadigm(section.paradigm, section.repository_ids);
+  if (typeof section.unit_tests !== "string") throw new Error("请填写 unit_tests；研究章节无需单元测试时显式填写空串");
+  if (section.paradigm.kind === "paradigm" && section.paradigm.status === "recommended") {
+    componentUsageMarkdown(section);
+    validateComponentField(section.integration, "接入配置");
+  } else {
+    if (typeof section.content !== "string" || !section.content.trim()) throw new Error("研究正文不能为空");
+    if ([section.interfaces, section.integration, section.example].some(value => typeof value !== "string")) throw new Error("研究章节的接口、接入配置、示例须为文本；无需填写时显式留空");
+  }
 }
 export function editResearchDocument(document: ResearchDocument, edit: ResearchDocumentEdit,
   repositoryIds: string[], review?: ResearchReviewTurn): ResearchDocument {
@@ -76,8 +91,9 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
     }
   };
   if (edit.action === "overview") {
-    if (!edit.overview?.trim()) throw new Error("请说明跨仓依赖、分层与组合使用关系");
-    next.overview = edit.overview;
+    const overview = edit.overview ?? "";
+    validateComponentOverview(overview);
+    next.overview = overview;
   } else if (edit.action === "outline") {
     if (!edit.entries?.length) throw new Error("请提交发现的组件能力清单");
     for (const entry of edit.entries) {
@@ -89,7 +105,7 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
         }
         continue;
       }
-      next.sections.push({ ...entry, selected: true, content: "", interfaces: "", integration: "", example: "", sources: "", related_ids: [], revision: 0 });
+      next.sections.push({ ...entry, selected: true, content: "", interfaces: "", integration: "", example: "", unit_tests: "", sources: "", related_ids: [], revision: 0 });
     }
   } else if (edit.action === "section" && edit.section) {
     const section = edit.section;
@@ -98,9 +114,7 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
     const index = next.sections.findIndex(item => item.id === section.id);
     if (index >= 0 && next.sections[index].paradigm && !section.paradigm) throw new Error("不能删除已有范式的结构化字段");
     if (index < 0) throw new Error("请先将组件加入能力清单，再写正文");
-    if (!sectionReady({ ...section, selected: true, revision: 1 })) {
-      throw new Error("每个组件都必须写用法、公共接口、集成产物/依赖、来源和含代码块的最佳示例；未验证的示例须如实标注");
-    }
+    validateResearchSection(section);
     if (!Array.isArray(section.related_ids) || section.related_ids.some(id => id === section.id || !next.sections.some(item => item.id === id))) {
       throw new Error("关联组件须使用清单中其他组件的编号");
     }
@@ -110,20 +124,10 @@ export function editResearchDocument(document: ResearchDocument, edit: ResearchD
 }
 
 export function researchDocumentMarkdown(title: string, document: ResearchDocument, selectedOnly = false, includeMetadata = true): string {
-  const sections = document.sections.filter(section => !selectedOnly || section.selected);
-  const metadata = sections.filter(s => s.paradigm).map(s => ({ id: s.id, title: s.title, revision: s.revision, ...s.paradigm }));
-  return [includeMetadata && metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", ...(/^\s*#\s/.test(document.overview) ? [] : [`# ${title}`]), componentKnowledgeMarkdown(document.overview),
-    "## 组件目录", ...sections.map(section => `- [${section.title}](#component-${section.id})`),
-    ...sections.map(section => [
-      `<a id="component-${section.id}"></a>`, `## ${section.title}`,
-      ...(sectionReady(section) ? [componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces),
-        "### 集成产物与依赖", componentKnowledgeMarkdown(section.integration), "### 最佳示例", componentKnowledgeMarkdown(section.example)]
-        : ["> 本组件尚未完成研究，不能作为已确认的使用指南。"]),
-      ...(section.related_ids.length ? ["### 关联组件", ...section.related_ids.map(id => {
-        const related = document.sections.find(item => item.id === id);
-        return sections.some(item => item.id === id) ? `- [${related?.title ?? id}](#component-${id})`
-          : `- ${related?.title ?? id}（未纳入本次文档，使用时仍需核对该依赖）`;
-      })] : []),
-    ].join("\n\n")),
-  ].filter(Boolean).join("\n\n");
+  const sections = document.sections.filter(section => !selectedOnly || section.selected).sort(compareComponentSections);
+  for (const section of sections) if (section.paradigm) validateComponentParadigm(section.paradigm, section.repository_ids);
+  const metadata = sections.filter(section => section.paradigm && (!selectedOnly || section.paradigm.kind === "paradigm" && section.paradigm.status === "recommended"))
+    .map(section => ({ id: section.id, title: section.title, revision: section.revision, ...section.paradigm }));
+  const body = componentGuideMarkdown(title, document.overview, sections, selectedOnly);
+  return [includeMetadata && metadata.length ? `---\nschema: "mfc.component-guide/v1"\ncomponent_paradigms: ${JSON.stringify(metadata)}\n---` : "", body].filter(Boolean).join("\n\n");
 }

@@ -1,4 +1,4 @@
-import { componentPipelineScript } from "./componentPipelineFixture.ts";
+import { componentPipelineScript, fixtureUnitTest } from "./componentPipelineFixture.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -71,10 +71,10 @@ test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不�
 test("组件萃取重启保留通过的小任务并创建新会话；明确停止不复活", async () => {
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve), oldEc = process.env.MAE_FLOW_EC_BIN;
-  const ec = join(f.dir, "ec"); writeFileSync(ec, "#!/bin/sh\necho 'caller code'\n", { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
+  const ec = join(f.dir, "ec"); writeFileSync(ec, `#!/usr/bin/env node\nprocess.stdout.write(process.argv[4]?.includes("tests/") ? ${JSON.stringify(fixtureUnitTest)} : "caller code\\n");\n`, { mode: 0o700 }); process.env.MAE_FLOW_EC_BIN = ec;
   seedTechnologyStacks(f.dir, ["cpp"]);
   const row = saveComponentRepository(f.dir, { name: "组件", repository: "https://example.test/component.git", branch: "master", path: "", languages: ["cpp"] }, "expert");
-  const fixtureScript = componentPipelineScript(row.id, "code.ts", f.revision, "caller code\n");
+  const fixtureScript = componentPipelineScript(row.id, "code.ts", f.revision, "caller code\n", fixtureUnitTest);
   let model = new ScriptedModelServer(fixtureScript.script, "scripted-v1", { linear: true, beforeScene: async ({ index }) => {
     if (index === fixtureScript.offsets["plan-pool"] && !paused) { paused = true; await hold; }
   } });

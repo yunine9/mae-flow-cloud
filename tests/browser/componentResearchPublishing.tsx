@@ -4,6 +4,7 @@ import { ComponentResearch } from "../../web/src/ComponentResearch";
 import { KnowledgeStudioContext } from "../../web/src/KnowledgeStudioContext";
 import type { ComponentResearchRecord } from "../../web/src/componentResearchApi";
 import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
+import { componentGuideOverview, componentGuideSection } from "../fixtures/componentGuide";
 
 const pause = () => new Promise(resolve => setTimeout(resolve, 80));
 const check = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
@@ -11,7 +12,7 @@ const repository = { id: "file", name: "文件组件", repository: "https://exam
 const fixtures = (window as unknown as { __COMPONENT_PUBLISHING_FIXTURES__: { projections: Record<string, KnowledgeProductionView> } }).__COMPONENT_PUBLISHING_FIXTURES__;
 const projections = fixtures.projections;
 const record: ComponentResearchRecord = { id: "cr-publish", topic: "文件组件使用指南", language: "cpp", status: "done", stage: "待审查", operator: "dev", created_at: "2026-09-30T00:00:00Z", component: repository, components: [repository], evidence: [], production: projections.initial, format: "joint-document", document: {
-  overview: "# 文件组件使用指南", sections: ["打开与关闭", "异步读取"].map((title, index) => ({ id: `section-${index}`, title, repository_ids: [repository.id], selected: true, revision: 3, content: `# ${title}\n\n${"由调用方负责释放句柄。\n\n".repeat(40)}`, interfaces: "Open / Close", integration: "链接 file", example: "调用 Close 释放句柄。", sources: "src/file.cpp", related_ids: [] })),
+  overview: componentGuideOverview(), sections: ["打开与关闭", "异步读取"].map((title, index) => ({ ...componentGuideSection(`section-${index}`, [repository.id], { title, component: index === 0 ? "file-open" : "file-read", content: "由调用方负责释放句柄。\n\n".repeat(40) }), selected: true, revision: 3 })),
 } };
 record.review_turns = record.document!.sections.map((section, index) => ({
   id: `proposal-${index}`, section_id: section.id, mode: "rework", message: "请明确资源释放顺序", operator: "dev", status: "done", created_at: record.created_at,
@@ -70,7 +71,8 @@ async function run() {
   check(!buttons().some(button => button.textContent === "审阅与修订"), "no second review entry");
   check(!document.body.textContent?.includes("查看 Skill"), "platform skill controls stay hidden");
   check(calls.some(call => call.path === "/knowledge-review/component/cr-publish"), "existing annotation wrapper connected");
-  const originalReader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
+  let originalReader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
+  check(originalReader.textContent?.includes("单元测试示例") && originalReader.textContent.includes("assert(std::fread(buffer, 1, 5, file) == 5)"), "candidate review includes concrete unit-test assertions");
   check(originalReader.textContent?.includes("最新修改：先取消回调，再释放句柄。"), "current complete candidate appears directly in manuscript");
   check(record.document!.sections[0].revision === 3 && !record.document!.sections[0].content.includes("最新修改"), "preview leaves the accepted draft unchanged");
   originalReader.scrollTop = 210; await pause();
@@ -83,6 +85,12 @@ async function run() {
   await click(projections.initial.navigation.ready_action_label!);
   check(document.querySelector('[aria-label="组件详细文档"]') === originalReader && originalReader.scrollTop === 210, "switching back preserves manuscript DOM and reading position");
   check(document.querySelectorAll('[aria-label="组件审核工作区"]').length === 1, "switching does not append duplicate review instances");
+  await click("完整文档");
+  const fullGuide = document.querySelector('[aria-label="完整文档阅读区"] .knowledge-markdown')!;
+  check(fullGuide.textContent?.includes("单元测试示例") && fullGuide.textContent.includes("assert(std::fread(buffer, 1, 5, file) == 5)"), "full candidate guide preserves UT code");
+  check(!/推荐|待核实|待研究|未编译验证/.test(fullGuide.textContent ?? ""), "full candidate guide contains no internal status labels");
+  await click("逐项审查");
+  originalReader = document.querySelector<HTMLElement>('[aria-label="组件详细文档"]')!;
   await click("确认并发布");
   check(document.querySelector('[role="alert"]')?.textContent?.includes("异步读取"), "stale selected candidate explains which capability conflicts");
   check(!calls.some(call => /\/(proposal|adopt)$/.test(call.path)), "preflight validates every selected candidate before any write");

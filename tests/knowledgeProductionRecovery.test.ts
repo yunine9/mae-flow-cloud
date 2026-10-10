@@ -1,5 +1,6 @@
 // 从 r7-lazy-recovery 翻转：启动即接续，不靠访问知识接口触发。
 import assert from "node:assert/strict";
+import { componentGuideOverview } from "./fixtures/componentGuide.ts";
 import { test } from "node:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,8 +30,8 @@ function domain(status: DomainKnowledgeJob["status"]): DomainKnowledgeJob {
 function componentRecord(status: "queued" | "running"): ResearchRecord {
   return { id: `cr-${randomUUID()}`, component, components: [component], language: "cpp", topic: "文件处理", operator: "alice", key: status,
     status, created_at: createdAt, stage: "研究中", format: "joint-document", revisions: { [component.id]: "kept-revision" },
-    document: { overview: "已保存的跨仓说明", sections: [{ id: "files", title: "文件处理", repository_ids: [component.id], selected: true,
-      revision: 0, content: "", interfaces: "", integration: "", example: "", sources: "", related_ids: [] }] }, evidence: [{ tool: "previous-source", path: "src/file.cpp" }],
+    document: { overview: componentGuideOverview("已保存的跨仓说明"), sections: [{ id: "files", title: "文件处理", repository_ids: [component.id], selected: true,
+      revision: 0, content: "", interfaces: "", integration: "", example: "", unit_tests: "", sources: "", related_ids: [] }] }, evidence: [{ tool: "previous-source", path: "src/file.cpp" }],
     review_turns: [{ id: "original-review", section_id: "files", mode: "discuss", message: "补充说明", operator: "alice", status, created_at: createdAt }] };
 }
 async function settleStartup(): Promise<void> {

@@ -62,19 +62,17 @@ test("B6验收：管理员和开发者均有独立的一级知识库入口，团
 });
 
 
-test("B1验收1：领域萃取方法使用现有阅读页，组件创建页不暴露方法维护", () => {
+test("领域与组件的两个方法均使用现有阅读页，导航清除旧任务并保留页面参数", () => {
   const current = "?kbPage=research&kbKind=domain&kbModule=business%3Atrade&kbTask=dkx-old&kbReview=1&knowledgeDocument=kd-old&theme=cloud";
-  const search = extractionSkillSearch(current, "domain"), query = new URLSearchParams(search);
-  assert.equal(query.get("kbPage"), "module");
-  assert.equal(query.get("kbModule"), "platform");
-  assert.equal(query.get("knowledgeDocument"), "platform-skill-domain");
-  assert.equal(query.get("theme"), "cloud");
-  for (const key of ["kbKind", "kbTask", "kbReview"]) assert.equal(query.has(key), false, key);
-  assert.equal(extractionSkillSearch(search, "domain"), search);
-  const create = readFileSync(new URL("../web/src/KnowledgeResearchCreate.tsx", import.meta.url), "utf8");
-  assert.match(create, /mode === "domain" && <ExtractionSkillEditor/);
-  const library = readFileSync(new URL("../web/src/KnowledgeLibrary.tsx", import.meta.url), "utf8");
-  assert.match(library, /route\.page === "module"[\s\S]*PlatformSkillPane/);
+  for (const kind of ["domain", "component", "component-analysis"] as const) {
+    const search = extractionSkillSearch(current, kind), query = new URLSearchParams(search);
+    assert.equal(query.get("kbPage"), "module");
+    assert.equal(query.get("kbModule"), "platform");
+    assert.equal(query.get("knowledgeDocument"), `platform-skill-${kind}`);
+    assert.equal(query.get("theme"), "cloud");
+    for (const key of ["kbKind", "kbTask", "kbReview"]) assert.equal(query.has(key), false, key);
+    assert.equal(extractionSkillSearch(search, kind), search);
+  }
 });
 
 test("B1验收1：任务和配置链接打开当前阅读页，不经过旧页面", () => {

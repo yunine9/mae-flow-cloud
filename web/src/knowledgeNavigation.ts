@@ -67,7 +67,7 @@ export function knowledgeAssetElementId(
 }
 
 /** 萃取方法继续使用现有阅读页和平台 Skill 详情，不保留旧页面入口。 */
-export function extractionSkillSearch(search: string, kind: "component" | "domain"): string {
+export function extractionSkillSearch(search: string, kind: "component" | "component-analysis" | "domain"): string {
   const query = new URLSearchParams(search);
   for (const key of ["kbPage", "kbKind", "kbModule", "kbTask", "kbReview", "knowledgeDocument"]) query.delete(key);
   query.set("kbPage", "module");

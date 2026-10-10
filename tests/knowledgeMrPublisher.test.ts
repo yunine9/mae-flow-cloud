@@ -50,7 +50,7 @@ test("生产线验收5/14：组件正式版本手动归档只提交一篇正文�
   const publisher = new KnowledgeMrPublisher({ dataDir: root, platformUrl: () => `http://127.0.0.1:${(server.address() as any).port}`, credential: () => ({ username: "Fixture", password: "fixture-password", email: "fixture@example.test" }) });
   const target = { id: "domain", name: "组件知识仓", repository: remote, branch: "main", path: "", docs_path: "docs/components" };
   const section = componentSection();
-  const formalContent = researchDocumentMarkdown("任务池使用指南", { overview: "提交后台任务并在退出前等待完成。", sections: [section] }, true);
+  const formalContent = researchDocumentMarkdown("任务池使用指南", { overview: "## 组件用途\n提交后台任务并在退出前等待完成。\n\n## 接入配置\n链接 pool v2 并保留任务的完整生命周期。", sections: [section] }, true);
   const { content } = componentArchiveParts(formalContent);
   const path = "docs/components/cpp/任务池使用指南.md";
   const job: DomainKnowledgeJob = { id: "dkx-clean-guide", component_research_id: "cr-components", title: "任务池使用指南", issue_no: "REQ-guide", issue_description: "补齐任务池的安全使用指南", scope: "组件归档", operator: "expert", created_at: "now", repositories: [], knowledge_target: target, material_ids: [], status: "done", stage: "审查", revisions: {}, turns: [], evidence: [], publications: [], documents: [{ id: "guide", title: "任务池使用指南", path, target_id: "domain", layer: "domain", content, sources: "核对过的源码与调用", revision: 1, selected: true, base_content: null, base_revision: "", history: [] }] };

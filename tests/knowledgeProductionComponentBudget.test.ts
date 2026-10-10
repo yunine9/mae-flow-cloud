@@ -1,3 +1,4 @@
+import { componentGuideContent, componentGuideEvidence, componentGuideOverview, componentGuideSection } from "./fixtures/componentGuide.ts";
 import { KnowledgeTaskCapacity } from "../src/knowledgeTaskCapacity.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 import assert from "node:assert/strict";
@@ -16,8 +17,7 @@ function withTwoSlots(...args: ConstructorParameters<typeof ComponentResearch>) 
 
 const timeoutReason = "停止超时：执行体 60 秒内未退出，已强制释放";
 const config = { name: "文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["cpp"] };
-const section = (ids: string[]) => ({ id: "files", title: "文件处理", repository_ids: ids, content: "文件处理约束。", interfaces: "Close(handle)",
-  integration: "链接 files 库。", example: "```cpp\nClose(handle);\n```", sources: "src/file.cpp:1", related_ids: [] });
+const section = (ids: string[]) => componentGuideSection("files", ids, { title: "文件处理", content: "文件处理约束。" });
 /** 一个组件只有一次研究：要占满并发槽位就登记多个组件。 */
 function componentIds(dataDir: string, count: number) {
   seedTechnologyStacks(dataDir, config.languages);
@@ -25,7 +25,8 @@ function componentIds(dataDir: string, count: number) {
 }
 function writeDocument(input: ResearchExecution) {
   const ids = input.record.components!.map(component => component.id);
-  input.editDocument!({ action: "overview", overview: "文件处理组件的依赖关系。" });
+  for (const event of componentGuideEvidence("cpp", ids)) input.evidence(event);
+  input.editDocument!({ action: "overview", overview: componentGuideOverview("文件处理组件的依赖关系。") });
   input.editDocument!({ action: "outline", entries: [{ id: "files", title: "文件处理", repository_ids: ids }] });
   input.editDocument!({ action: "section", section: section(ids) });
 }
@@ -157,7 +158,7 @@ for (const action of ["edit", "restore"] as const) {
       const job = research.start({ language: "cpp" }, "alice");
       await settle();
       const original = research.get(job.id).document!.sections[0];
-      research.editSection(job.id, { section: { ...original, content: "人工保存的第二版" }, base_revision: original.revision }, "alice");
+      research.editSection(job.id, { section: { ...original, content: componentGuideContent("人工保存的第二版") }, base_revision: original.revision }, "alice");
       research.review(job.id, { section_id: "files", mode: "discuss", message: "讨论当前版本" }, "alice");
       await settle();
       const before = research.get(job.id);
@@ -169,7 +170,7 @@ for (const action of ["edit", "restore"] as const) {
       }, "bob");
       assert.equal(notes.notes[0].status, "open", "研究中仍能提意见");
       assert.throws(() => action === "edit"
-        ? research.editSection(job.id, { section: { ...before.document!.sections[0], content: "研究中人工改写" }, base_revision: before.document!.sections[0].revision }, "bob")
+        ? research.editSection(job.id, { section: { ...before.document!.sections[0], content: componentGuideContent("研究中人工改写") }, base_revision: before.document!.sections[0].revision }, "bob")
         : research.restoreSection(job.id, "files", original.revision, before.document!.sections[0].revision, "bob"),
       /研究进行中：请先停止，或等本轮结束后再改/);
       assert.deepEqual(research.get(job.id), before, "被拒绝的操作不改正文、版本或研究状态");

@@ -6,10 +6,11 @@ export async function extractionConfigurationRoute(request: IncomingMessage, res
   dataDir: string, operator: string,
   readBody: (request: IncomingMessage, limit?: number) => Promise<any>, json: (response: ServerResponse, status: number, value: any) => unknown) {
   try {
-    if (parts[1] === "skills" && ["component", "domain"].includes(parts[2])) {
+    if (parts[1] === "skills" && ["component", "component-analysis", "domain"].includes(parts[2])) {
       const skills = methodStore(dataDir), kind = parts[2] as ExtractionKind;
-      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: true });
+      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: kind === "domain" });
       if (request.method === "POST" && [undefined, "rollback"].includes(parts[3])) {
+        if (kind !== "domain") return json(response, 405, { error: "组件研究 Skill 由平台版本维护，仅供查看" });
         const body = await readBody(request, 2 * 1024 * 1024);
         const result = parts[3] === "rollback" ? await skills.rollback(kind, body.version_id, body.expected_digest, operator)
           : await skills.save(kind, body.files, body.expected_digest, operator);

@@ -14,10 +14,10 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { checkEc, languageComponentSourceTool, codeSearchTool, evidencePreview } from "./componentResearchTools.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool } from "./knowledgeExtractionSkills.ts";
-import { isWholeResearchReview, researchDocumentMarkdown, type ResearchSection } from "./componentResearchDocument.ts";
+import { isWholeResearchReview, type ResearchSection } from "./componentResearchDocument.ts";
 import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult } from "./componentResearchPipeline.ts";
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
-import type { ResearchExecution } from "./componentResearch.ts";
+import { researchDraftContext, type ResearchExecution } from "./componentResearch.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 
@@ -25,11 +25,11 @@ const list = () => Type.Array(Type.String());
 const reference = Type.Object({ repository_id: Type.String(), path: Type.String(), revision: Type.String(), start: Type.Integer({ minimum: 1 }), end: Type.Integer({ minimum: 1 }) });
 const metadata = Type.Object({ kind: Type.Union(["contracts", "paradigm", "pitfalls", "index"].map(s => Type.Literal(s))), component: Type.String(), language: Type.String(),
   status: Type.Union(["recommended", "legacy", "unverified"].map(s => Type.Literal(s))), need: Type.String(), api: list(), applicability: Type.String(),
-  replaces: Type.Object({ identifiers: list(), imports: list(), patterns: list() }), evidence: Type.Array(reference), usage_evidence: list(), open_questions: list() });
+  replaces: Type.Object({ identifiers: list(), imports: list(), patterns: list() }), evidence: Type.Array(reference), usage_evidence: list(), test_evidence: list(), open_questions: list() });
 const sectionSchema = Type.Object({ id: Type.String(), title: Type.String(), repository_ids: list(), content: Type.String(), interfaces: Type.String(), integration: Type.String(),
-  example: Type.String(), related_ids: list(), paradigm: metadata });
+  example: Type.String(), unit_tests: Type.String(), related_ids: list(), paradigm: metadata });
 const resultSchema = Type.Object({ findings: Type.String(), open_questions: list(),
-  components: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), repository_ids: list(), scope: Type.String() }))),
+  components: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), repository_ids: list(), scope: Type.String(), dependencies: Type.Optional(list()) }))),
   paradigms: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String(), need: Type.String() }))) });
 const reply = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], details: {} });
 const failure = (error: unknown) => ({ ...reply(error instanceof Error ? error.message : String(error)), isError: true });
@@ -37,13 +37,16 @@ const failure = (error: unknown) => ({ ...reply(error instanceof Error ? error.m
 export async function runComponentResearch(input: ResearchExecution, options: {
   dataDir: string; model: () => { provider: string; model: string; json: unknown } | undefined;
   source: (component: ComponentRepository, operator: string, signal?: AbortSignal, baselineRevisions?: string[]) => Promise<{ root: string; revision: string }>;
+  concurrency?: number;
 }) {
   const technologyStack = listTechnologyStacks(options.dataDir).find(stack => stack.id === input.record.language);
   const model = options.model(); if (!model) throw new Error("请在模型网关配置主模型");
   if (input.record.material_ids?.length) throw new Error("历史任务含上传资料，请新建仅使用基础仓代码与 everycode 的研究");
-  const skill = new KnowledgeExtractionSkills(options.dataDir).pin("component", join(input.root, "component-pipeline-skill.json"), input.record.use_latest_skill);
+  const skills = new KnowledgeExtractionSkills(options.dataDir);
+  const skill = skills.pin("component", join(input.root, "component-pipeline-skill.json"), input.record.use_latest_skill);
+  const analysisSkill = skills.pin("component-analysis", join(input.root, "component-analysis-skill.json"), input.record.use_latest_skill);
   if (!skill.files["references/platform-pipeline.md"]) throw new Error("组件 Skill 尚未适配分任务与结构化产物协议，请更新组件萃取 Skill 后新建研究");
-  input.update({ skill: { name: skill.name, digest: skill.digest }, use_latest_skill: false, format: "joint-document",
+  input.update({ skill: { name: skill.name, digest: skill.digest }, analysis_skill: { name: analysisSkill.name, digest: analysisSkill.digest }, use_latest_skill: false, format: "joint-document",
     ...(input.record.document ? {} : { document: { overview: "", sections: [] } }) });
   await checkEc(input.signal);
   const components = input.record.components ?? [input.record.component];
@@ -63,16 +66,18 @@ export async function runComponentResearch(input: ResearchExecution, options: {
     }
     input.update({ revisions, ...(components.length === 1 ? { revision: revisions[components[0].id] } : {}) });
     const interfaces = await scanComponentInterfaces(snapshots, signal);
-    const pipeline = input.review ? undefined : new ComponentResearchPipeline(join(root, "state.json"), skill.digest, components.map(c => c.id));
+    const methodDigest = createHash("sha256").update(JSON.stringify([analysisSkill.digest, skill.digest])).digest("hex");
+    const pipeline = input.review ? undefined : new ComponentResearchPipeline(join(root, "state.json"), methodDigest, components.map(c => c.id), skill.digest);
     const session = async (task: ComponentWork, reviewResult?: ComponentWorkResult) => {
       signal.throwIfAborted();
       const reviewing = !!reviewResult, discussing = input.review?.mode === "discuss" || !!input.record.challenge;
+      const sessionSkill = !input.review && !input.record.challenge && ["inventory", "plan"].includes(task.phase) ? analysisSkill : skill;
       const supplementing = !reviewing && input.review?.mode === "supplement";
       const wholeReview = !reviewing && isWholeResearchReview(input.review);
       const sessionId = randomUUID(), dir = join(root, "sessions", sessionId), agentDir = join(dir, "agent");
       mkdirSync(agentDir, { recursive: true }); writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
       const sourceReads: Array<Record<string, unknown>> = [], callerReads = new Set<string>(), draftReads = new Map<string, number>();
-      let searched = false, saved = false, overviewRead = false, result: ComponentWorkResult | undefined, verdict: { pass: boolean; feedback: string } | undefined;
+      let searched = false, searchedTests = false, saved = false, overviewRead = false, result: ComponentWorkResult | undefined, verdict: { pass: boolean; feedback: string } | undefined;
       const observe = (event: Record<string, unknown>) => {
         signal.throwIfAborted();
         const row = { ...event, pipeline_task: task.id, pipeline_session: sessionId };
@@ -80,8 +85,9 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         if (event.tool === "component_source" && event.action === "read" && event.status === "returned") sourceReads.push(event);
         if (event.tool === "code_search" && event.status === "returned") {
           searched = true;
+          if (event.purpose === "unit-test" && ["kw", "nls"].includes(String(event.action))) searchedTests = true;
           if (event.action === "read" && typeof event.content === "string" && event.content.trim() && !["[]", "{}", "null"].includes(event.content.trim())) {
-            id = `everycode-${createHash("sha256").update(JSON.stringify([event.repository, event.path, event.start, event.end, event.content])).digest("hex").slice(0, 24)}`;
+            id = `everycode-${createHash("sha256").update(JSON.stringify([event.purpose ?? "usage", event.repository, event.path, event.start, event.end, event.content])).digest("hex").slice(0, 24)}`;
             Object.assign(row, { evidence_id: id }); callerReads.add(id);
           }
         }
@@ -98,8 +104,10 @@ export async function runComponentResearch(input: ResearchExecution, options: {
           if (requireReads && !sourceReads.some(r => r.component_id === ref.repository_id && r.path === ref.path && r.revision === ref.revision
             && Number(r.start ?? 1) <= ref.start && Math.min(Number(r.end ?? Number(r.start ?? 1) + 159), Number(r.start ?? 1) + 399) >= ref.end)) throw new Error("必须亲自读取引用的基础仓代码行范围");
         }
-        for (const id of p.usage_evidence) if (!evidence.some(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.status === "returned" && e.content)
-          || (requireReads && !callerReads.has(id))) throw new Error("必须读取已实际取得的 everycode 调用证据");
+        for (const [purpose, ids] of [["usage", p.usage_evidence], ["unit-test", p.test_evidence]] as const) {
+          for (const id of ids) if (!evidence.some(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.status === "returned" && e.content && (e.purpose ?? "usage") === purpose)
+            || (requireReads && !callerReads.has(id))) throw new Error(purpose === "unit-test" ? "必须读取已实际取得的 everycode 单元测试证据" : "必须读取已实际取得的 everycode 调用证据");
+        }
         if (p.kind === "paradigm" && p.status === "recommended" && !p.usage_evidence.length) throw new Error("推荐范式需要展开的真实调用；未找到时标记 unverified 并说明缺口");
       };
       const draftTool = defineTool({ name: "research_document", label: "组件范式草稿",
@@ -139,7 +147,7 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         },
       });
       const resultTool = defineTool({ name: "component_work_result", label: reviewing ? "提交独立评审" : "提交研究结果",
-        description: "任务结束前必须提交。作者需实际读取源码；规划与范式需搜索调用。评审需回读产物及全部结构化来源。退回写明位置和修改建议。",
+        description: "任务结束前必须提交。作者实际读取源码，用法同时检索调用和单元测试；评审回读产物、源码、调用与测试证据。退回写明位置和修改建议。",
         parameters: reviewing ? Type.Object({ pass: Type.Boolean(), feedback: Type.String() }) : resultSchema,
         execute: async (_id: string, params: any) => {
           try {
@@ -157,8 +165,9 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               }
               verdict = { pass: params.pass, feedback: params.feedback };
             } else {
-              if (!discussing && !["inventory", "plan"].includes(task.phase) && !saved) throw new Error("必须先保存本项产物");
+              if (!discussing && !["inventory", "plan", "pitfalls"].includes(task.phase) && !saved) throw new Error("必须先保存本项产物");
               if (((!discussing && ["inventory", "plan", "paradigm"].includes(task.phase)) || input.record.challenge) && !searched) throw new Error("必须通过 everycode 查找实际调用，并如实记录缺口");
+              if (!discussing && task.phase === "paradigm" && !searchedTests) throw new Error("请通过 everycode 检索本用法的单元测试，purpose 使用 unit-test，并展开对应测试代码");
               if (!params.findings?.trim() || !Array.isArray(params.open_questions)) throw new Error("请保存具体结论与待确认问题");
               const refs = await validateKnowledgeReferences(params.findings, snapshots, signal); if (refs.errors.length) throw new Error(refs.errors.join("；"));
               result = structuredClone(params);
@@ -184,13 +193,23 @@ export async function runComponentResearch(input: ResearchExecution, options: {
         parameters: Type.Object({ start: Type.Optional(Type.Integer({ minimum: 0 })), count: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })) }),
         execute: async (_id: string, args: { start?: number; count?: number }) => { const start = args.start ?? 0, count = Math.min(100, args.count ?? 30); return reply({ total: interfaces.length, candidates: interfaces.slice(start, start + count), next_start: start + count < interfaces.length ? start + count : undefined }); },
       });
-      const tools = [structureTool, extractionSkillTool(skill), draftTool, resultTool, workTool,
+      const tools = [structureTool, extractionSkillTool(sessionSkill), draftTool, resultTool, workTool,
         languageComponentSourceTool(components, async c => snapshots.find(s => s.repository.id === c.id)!, observe, excludedComponentSource),
         codeSearchTool(observe, { captureRead: true, excludePath: excludedComponentSource })];
-      const prompt = `你是组件知识${reviewing ? "独立评审者" : "研究者"}，只处理当前任务。先读取 references/platform-pipeline.md、references/schema.md 及 references/${reviewing ? "phase-review" : `phase-${task.phase}`}.md。事实来源只限基础仓代码与 everycode，不使用上传资料、豆包、旧知识文档或会话指令作为证据。工具提交结果才算完成。\n` +
-        extractionSkillMission(skill, { task, review_result: reviewResult, mode: input.review?.mode ?? "extract", language: input.record.language,
+      const phaseReference = reviewing ? "references/phase-review.md" : input.record.challenge ? "references/api-boundary.md" : input.review ? "references/draft-contract.md" : `references/phase-${task.phase}.md`;
+      const prompt = `执行当前小任务，围绕模块范围读取基础仓代码及 everycode 实际调用和测试。先读取 references/platform-pipeline.md、references/schema.md 及 ${phaseReference}。用结构化工具保存结果；正文严格遵循组件指南模板。平台保存格式以 output_contract 为准，固定的旧 Skill 仍可用于研究方法。\n` +
+        extractionSkillMission(sessionSkill, { task, review_result: reviewResult, mode: input.review?.mode ?? "extract", language: input.record.language,
+          output_contract: {
+            overview: "## 组件用途\n具体用途及适用对象\n\n## 接入配置\n真实依赖与配置",
+            content: "### 适用场景\n具体需求与前提\n\n### 使用步骤\n完整操作顺序\n\n### 使用约束\n确定的条件与行为；有确证误用时追加 ### 常见误用",
+            interfaces: "受支持接口正文，标题由平台生成", integration: "真实接入依赖和配置正文，标题由平台生成",
+            example: "完整使用代码块", unit_tests: "完整单元测试代码块、fixture/mock、断言及实际构建运行配置",
+            evidence: "源码引用、usage_evidence 调用原文、test_evidence 单元测试原文分别保存，当前会话实际回读",
+            status: "recommended 需要完整模板和调用、测试依据；未验证研究可留空代码字段且只保留在任务内",
+          },
           technology_stack: { id: input.record.language, name: technologyStack?.name ?? input.record.language },
           topic: input.record.topic, scope: "本组件的全部能力；依赖的其他组件通过 everycode 核对真实调用", components, revisions,
+          module: pipeline?.state.tasks.find(t => t.id === "inventory")?.result?.components?.find(module => module.id === task.component),
           structure: task.phase === "inventory" ? knowledgeStructure(snapshots) : undefined,
           feedback: input.review ? { message: input.review.message, previous_revisions: input.review.previous_revisions } : undefined });
       const driver = await CloudSession.create({ taskId: `${input.record.id}-${sessionId}`, workspace: dir, agentDir, resumeSession: false, excludeAgentFiles: true,
@@ -261,10 +280,10 @@ export async function runComponentResearch(input: ResearchExecution, options: {
       }
       return response.result!.findings;
     }
-    await pipeline!.run({ signal, execute: async t => (await session(t)).result!,
+    await pipeline!.run({ signal, concurrency: options.concurrency, execute: async t => (await session(t)).result!,
       review: async (t, r) => { const v = (await session(t, r)).verdict!; return v.pass ? undefined : v.feedback; },
-      changed: state => input.update({ pipeline: state, stage: state.tasks.find(t => t.status === "running")?.title ?? "组件范式研究" }) });
-    return researchDocumentMarkdown(input.record.topic, input.readDocument!());
+      changed: state => input.update({ pipeline: state, stage: state.tasks.filter(t => t.status === "running").map(t => t.title).join("、") || "组件用法研究" }) });
+    return researchDraftContext(input.record, input.readDocument!());
   } catch (error) {
     if (totalExpired && !input.signal.aborted) throw new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE);
     throw error;

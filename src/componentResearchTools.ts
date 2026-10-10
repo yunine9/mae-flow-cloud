@@ -230,7 +230,7 @@ export function codeSearchTool(onUse: (record: Record<string, unknown>) => unkno
     name: "code_search",
     label: "Sourcegraph 代码搜索",
     description:
-      "通过内网 ec 查询真实调用。kw query 可带 repo: 和 lang:；nls 为模糊搜索；read 用搜索返回的仓库名、完整路径读上下文。勿把片段当完整语义；返回未标明版本时注明版本未知。",
+      "通过 everycode 检索真实调用和单元测试。purpose 区分 usage 与 unit-test；kw query 可带 repo: 和 lang:，nls 用于场景搜索，repos 查仓库，read 按返回的仓库名、完整路径展开代码、测试准备、断言和构建上下文。",
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal("repos"),
@@ -239,6 +239,7 @@ export function codeSearchTool(onUse: (record: Record<string, unknown>) => unkno
         Type.Literal("read"),
       ]),
       query: Type.Optional(Type.String()),
+      purpose: Type.Optional(Type.Union([Type.Literal("usage"), Type.Literal("unit-test")])),
       repository: Type.Optional(Type.String()),
       path: Type.Optional(Type.String()),
       start: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -246,6 +247,7 @@ export function codeSearchTool(onUse: (record: Record<string, unknown>) => unkno
     }),
     async execute(_id: string, input: any, signal) {
       try {
+        if (!["usage", "unit-test"].includes(input.purpose ?? "usage")) throw new Error("purpose 请使用 usage 或 unit-test");
         const args =
           input.action === "read"
             ? [
@@ -278,6 +280,7 @@ export function codeSearchTool(onUse: (record: Record<string, unknown>) => unkno
         const evidenceId = onUse({
           tool: "code_search",
           ...input,
+          purpose: input.purpose ?? "usage",
           status: "returned",
           characters: text.length,
           preview: evidencePreview(text),

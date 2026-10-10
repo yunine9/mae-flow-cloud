@@ -1,53 +1,72 @@
-# 组件正文与结构化产物协议
+# 字段格式与最终指南
 
-## 写作工具输入
+## 保存章节
 
-research_document section 字段：id（严格等于 task.id）、title、repository_ids、content、interfaces、integration、example、related_ids、paradigm。example 包含真实代码块和是否编译验证的说明。sources 是平台内部追溯字段，不追加到 Markdown，也不由模型另写一份。
+research_document section 接收 id、title、repository_ids、content、interfaces、integration、example、unit_tests、related_ids、paradigm。常规萃取的 id 等于当前 task.id；整体修订与补充遵循 [保存与修订](draft-contract.md) 的编号规则。title 使用开发者能识别的用途名称。sources 由平台保留追溯信息，不写入正文。
 
-paradigm 字段全部必填，空集合用 []：
+kind=paradigm、status=recommended 的 content 必须且仅按下列三级标题组织，各区块有实质内容：
 
-| 字段 | 类型与要求 |
+```markdown
+### 适用场景
+具体需求、使用前提和适用范围。
+### 使用步骤
+按真实调用顺序说明操作。
+### 使用约束
+确定的行为边界、失败处理和资源责任。
+```
+
+有确证误用时在末尾追加“### 常见误用”，写清触发条件、后果和正确做法。细分内容可用四级及以下标题。
+
+| 字段 | 内容 |
 |---|---|
-| kind | contracts / paradigm / pitfalls / index，等于任务阶段 |
+| interfaces | 关键接口、参数和返回行为 |
+| integration | 已核对的依赖、导入、构建和配置；组件层由平台汇总相同配置 |
+| example | 完整使用代码及语言代码围栏，说明文字分别写入对应内容字段 |
+| unit_tests | 完整单元测试 Markdown，含测试代码、断言、fixture/mock、实际构建运行配置；推荐用法必填，内部研究项无需填写时显式填空串 |
+| related_ids | 当前已有章节的稳定编号列表 |
+
+推荐用法的 interfaces、integration、example、unit_tests 不重复一级至三级标题，平台插入“关键接口”“完整示例”“单元测试示例”等固定标题。unit_tests 可用四级标题区分测试准备、用例和执行配置。推荐用法的 example 与 unit_tests 各包含完整非空代码块。
+
+unverified、legacy 以及 contracts、pitfalls、index 属于内部研究项：content 保存有实质内容的研究记录，仍提供完整结构化元数据与真实基础仓来源；interfaces、integration、example、unit_tests 可以显式留空。缺少测试依据时保留事实与缺口，不补造代码。这些研究项留在原任务中，不进入正式指南。
+
+## 结构化依据
+
+paradigm 字段全部提供，空集合用 []：
+
+| 字段 | 要求 |
+|---|---|
+| kind | contracts / paradigm / pitfalls / index，与阶段一致 |
 | component | task.component 的稳定编号 |
-| language | 当前研究语言 |
-| status | recommended / legacy / unverified |
-| need | 开发者要完成的具体工作，不写成“某 API 的用法” |
-| api | 真实关键符号的字符串列表；paradigm 至少一项 |
-| applicability | 适用场景、依赖和版本条件；未知处如实写明 |
-| replaces | identifiers、imports、patterns 三个字符串列表 |
-| evidence | 至少一条基础仓代码引用，见下 |
-| usage_evidence | 实际展开并回读的 everycode-* 编号列表 |
-| open_questions | 未确认问题列表 |
+| language | 当前研究技术栈编号 |
+| status | recommended / legacy / unverified，如实记录确认情况 |
+| need | 使用方要完成的具体工作 |
+| api | 真实关键符号；用法至少一项 |
+| applicability | 已确认的适用范围、依赖和版本条件 |
+| replaces | identifiers、imports、patterns 三个列表，仅记录有依据的替代主张 |
+| evidence | 基础仓引用，字段为 repository_id、path、revision、start、end |
+| usage_evidence | purpose="usage" 实际展开的 everycode-* 编号 |
+| test_evidence | purpose="unit-test" 实际展开的 everycode-* 编号 |
+| open_questions | 研究中尚未解决的问题，不写入指南正文 |
 
-基础仓引用：repository_id、path、revision、start、end。revision 使用上下文固定值；行号从 1 开始，必须真实读过全部范围。不能引用目录或 Agent 指令。范式推荐状态还需要实际展开的调用证据，暂无调用时保留 unverified 草稿。
+基础仓引用采用上下文固定版本和真实读取的行号；每个调用与测试编号都需当前会话回读。recommended 用法需有真实调用和测试证据。内部研究项的 usage_evidence、test_evidence 没有实际取得时填空数组。open_questions 与确认状态分别表达事实，记录其他问题不影响已经核实的用法。
 
-replaces.identifiers 写精确符号，如 std::thread、Executors.newFixedThreadPool；imports 写实际导入对象；patterns 写不能可靠机械匹配的写法描述。有合法用途的原生 API 不可笼统列为禁用项，具体例外写入 applicability。legacy 不进入推荐选择表或规则。没有 replaces 的推荐能力仍进入选择表。
+## 保存概述
 
-## 导出的文件与程序读取
+research_document overview 只包含两个二级区块，顺序固定、均有实际内容：
 
-以下是「下载结构化产物」包的格式，供程序重提取，不是 Git 归档格式。每份正文有独立路径：components/<component>/<task.id>.md，推荐用法放在 paradigms/ 子目录。Markdown 不带 frontmatter 和来源清单，只含可读的知识正文、接口、接入依赖与完整示例。
+```markdown
+## 组件用途
+说明组件解决的问题及适用对象。
+## 接入配置
+列出真实依赖、构建目标、配置和初始化前提。
+```
 
-同路径的 <task.id>.metadata.json 保存 schema="mfc.component-paradigm/v2"、id、title、revision 和全部 paradigm 字段。证据、内部状态及调查缺口只放结构化字段。正文与元数据共同构成一份产物，不另写第二份知识。
+总标题与用法导航由平台生成。最终一组件一指南；每项用法按适用场景、关键接口、使用步骤、完整示例、单元测试示例、使用约束、可选常见误用的顺序组织。模板见 [指南结构](../assets/templates/guide.md) 和 [用法字段](../assets/templates/paradigm.md)。
 
-平台导出后重新读取每对文件，生成 derived/catalog.json、derived/mapping-table.md、derived/rule-candidates.json，以及适用语言的 ast-grep 规则、正反样例和报告。规则状态由平台管理；自然语言 patterns 不伪装为可执行规则。模型不手工维护派生文件。
+## 正文与结构化导出
 
-catalog 的 path 指向实际 Markdown。元数据缺失、非法字段、孤立元数据或重复编号均报错，不静默输出半份结果。旧版 frontmatter 文档仍可读取，新导出使用正文与 JSON 分开的格式。
+正式指南只采用已选择且完整的 recommended 用法，发布、阅读、下载与 Git 归档保持同一篇组件正文。证据编号、源码位置、研究过程、存疑状态和运行记录保存到平台元数据。
 
-一次研究对应一个组件，审查发布后是该组件的一篇正式知识。Markdown 下载与 Git 归档都只含这一篇知识正文：归档由人手动触发，路径为「配置的目录/语言/知识标题.md」（标题即组件功能名，如「文件操作」），创建 MR 即结束，平台不读回仓里的文件。结构化字段只保存在平台正式库，供检索与规则消费，不属于阅读、下载和归档正文。包内 evidence/everycode.json 保存原始调用代码，完整产物通过结构化产物入口取得。
+结构化下载包另保留每项内容及其 metadata.json、原始 everycode 证据和程序生成的目录、映射及规则候选。使用平台提供的导出与校验入口；模型只维护来源字段，不手工派生另一份文件。
 
-独立重提取命令：`node --import tsx scripts/derive-component-knowledge.ts <导出的JSON包或解包目录> [输出目录]`。无输出目录时仅校验和输出摘要；错误输入非零退出，不覆盖已有结果；重复生成会移除上次清单中的过期规则。
-
-## 正式知识如何用于开发
-
-草稿导出仍是预览。人工审查发布即成为正式知识，平台从正式知识提取范式，按任务仓库、模块、语言及明确声明的产品版本选择。选型映射和派生规则分别维护启用策略；新内容默认为 shadow，只记录命中，不向开发 Agent 提示。文档采纳不等于规则启用。
-
-组件知识工作台以文档阅读为入口，代码检查设置和实际命中按需打开。负责人可启用 warning、限定路径或设为 off；平台不提供阻断提交的 error 级别。人工策略存于 component-governance/rule-policy.json，开发工具不能修改。
-
-组件选择沿用 component-plan Skill 和统一 knowledge 工具：按需检索卡片、读取完整知识、核对实施计划。同一份正式知识产生检索卡片和检查规则，不另建一套知识入口。新规则默认为 shadow，只记录命中；人工启用后才提供提示。
-
-编辑/写入和 Bash 工具结束后，平台检查新增代码；宿主推送前按真实提交与目标分支共同祖先检查。两处使用同一派生器，排除组件自身实现。报告区分完成、无适用规则和未完成；候选观察仅供工作台查看。程序故障不会伪造通过，不改变需求状态或自动重试。
-
-源范式正文、接口或范围变化后，旧启用决定回到候选；其他章节修订不影响本项。人工停用继续保留。误报反馈需具体理由，只豁免同仓、同规则版本、同代码内容及位置的后续提示。反馈统计按去重样本计算，评审退回不自动视为知识有害；反例和质量错误进入复查列表，不自动修改策略。
-
-反例研究使用单独的新会话，只读取基础仓与 everycode；寻找合理保留原生 API 的场景，输出证据、反例或证据不足。结果不能直接采纳为范式，也不会自动启用规则。文档抽查每个组件随机选择至多 2 篇已采纳范式；连续发现错误时调整萃取方法并重新研究该组件。
+规则候选记录精确替代关系和适用条件；正式知识发布与规则启用分别由用户决定。反例研究只提交核对结果，不修改用户的启用决定。

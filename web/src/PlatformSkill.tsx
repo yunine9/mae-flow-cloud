@@ -5,8 +5,8 @@ import { ComponentDocumentReader } from "./ComponentDocumentReader";
 import { componentRequest } from "./componentResearchApi";
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 
-export type PlatformSkillKind = "component" | "domain";
-export const platformSkillLabels = { component: "基础组件萃取", domain: "领域知识萃取" };
+export type PlatformSkillKind = "component" | "component-analysis" | "domain";
+export const platformSkillLabels = { component: "组件用法萃取", "component-analysis": "组件模块分析", domain: "领域知识萃取" };
 export interface PlatformSkill {
   name: string; digest: string; files: Record<string, string>; can_manage: boolean;
   versions: Array<{ version_id: string; archived_at: string; operator: string }>;
@@ -24,6 +24,7 @@ export function PlatformSkillPane({ kind, onSaved }: {
   const [skill, setSkill] = useState<PlatformSkill>(), [pending, setPending] = useState<Record<string, string>>();
   const [path, setPath] = useState("SKILL.md");
   const [error, setError] = useState(""), [notice, setNotice] = useState(""), [busy, setBusy] = useState(false);
+  const canManage = kind === "domain" && !!skill?.can_manage;
   const directory = useRef<HTMLInputElement>(null), file = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let live = true;
@@ -31,7 +32,7 @@ export function PlatformSkillPane({ kind, onSaved }: {
     return () => { live = false; };
   }, [kind]);
   async function pick(list: FileList | null) {
-    if (!list?.length) return;
+    if (!canManage || !list?.length) return;
     setError(""); setNotice(""); setPending(undefined); setBusy(true);
     try {
       const files: Record<string, string> = {};
@@ -47,7 +48,7 @@ export function PlatformSkillPane({ kind, onSaved }: {
     finally { setBusy(false); }
   }
   async function save() {
-    if (!skill || !pending) return;
+    if (!canManage || !skill || !pending) return;
     setBusy(true); setError("");
     try {
       const saved = await platformSkillRequest(kind, { files: pending, expected_digest: skill.digest });
@@ -61,11 +62,11 @@ export function PlatformSkillPane({ kind, onSaved }: {
   return <div className="tw-root platform-skill-pane space-y-5 p-6" aria-label="平台 Skill 详情">
     <header className="flex items-start justify-between gap-4"><div>
       <h2 className="text-lg font-semibold">{pending ? "预览新方法" : skill?.name ?? platformSkillLabels[kind]}</h2>
-    </div><div className="flex shrink-0 gap-2">{pending ? <><Button variant="outline" disabled={busy} onClick={() => { setPending(undefined); setPath("SKILL.md"); }}>取消</Button><Button disabled={busy} onClick={() => void save()}>{busy ? "更新中…" : "确认更新"}</Button></> : <>{skill?.can_manage && <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" disabled={busy} />}>{busy ? "读取中…" : "更新方法"}</DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => directory.current?.click()}>选择 Skill 目录</DropdownMenuItem><DropdownMenuItem onClick={() => file.current?.click()}>选择 SKILL.md</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}{studio && skill && <Button disabled={busy} onClick={() => studio.openExecution(kind)}>使用此 Skill</Button>}</>}</div></header>
+    </div><div className="flex shrink-0 gap-2">{pending ? <><Button variant="outline" disabled={busy} onClick={() => { setPending(undefined); setPath("SKILL.md"); }}>取消</Button><Button disabled={busy} onClick={() => void save()}>{busy ? "更新中…" : "确认更新"}</Button></> : <>{canManage && <DropdownMenu><DropdownMenuTrigger render={<Button variant="outline" disabled={busy} />}>{busy ? "读取中…" : "更新方法"}</DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => directory.current?.click()}>选择 Skill 目录</DropdownMenuItem><DropdownMenuItem onClick={() => file.current?.click()}>选择 SKILL.md</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}{studio && skill && <Button disabled={busy} onClick={() => studio.openExecution(kind === "component-analysis" ? "component" : kind)}>使用此 Skill</Button>}</>}</div></header>
     {kind === "domain" && !pending && <p className="text-sm text-muted-foreground">上传资料与无线豆包的用法由平台系统提示固定提供，对任何版本的 Skill 都生效；本 Skill 只决定研究方法、步骤安排和文档组织，调试时替换它不会丢掉这两类业务来源。</p>}
     {error && <p role="alert" className="text-danger">{error}</p>}
     {notice && <p role="status" className="whitespace-pre-line text-primary">{notice}</p>}
-    {skill?.can_manage && <>
+    {canManage && <>
       <input ref={directory} hidden type="file" multiple {...{ webkitdirectory: "" }} aria-label="上传平台 Skill 目录" onChange={e => { void pick(e.target.files); e.target.value = ""; }} />
       <input ref={file} hidden type="file" accept=".md" aria-label="上传平台 SKILL.md" onChange={e => { void pick(e.target.files); e.target.value = ""; }} />
     </>}

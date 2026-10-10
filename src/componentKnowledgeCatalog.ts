@@ -50,7 +50,7 @@ export function componentKnowledgeCatalog(dataDir: string, context: KnowledgeCon
     if (p.source_repositories.some(r => context.repositories.some(current => repositoryIdentity(current) === repositoryIdentity(r)))) continue;
     const { id, title, revision, document_id, document_revision, start_line, end_line, product_versions, source_repositories, mapping_id, source_digest, policy, ...paradigm } = p;
     const candidates = deriveComponentParadigms([{ id, title, revision, paradigm, selected: true, repository_ids: paradigm.evidence.map(e => e.repository_id),
-      content: "", interfaces: "", integration: "", example: "", sources: "", related_ids: [] }]).rules;
+      content: "", interfaces: "", integration: "", example: "", unit_tests: "", sources: "", related_ids: [] }]).rules;
     for (const candidate of candidates) {
       const unique = createHash("sha256").update(`${document_id}:${candidate.id}`).digest("hex").slice(0, 24);
       const files = componentRuleFiles([{ ...candidate, id: unique }]);

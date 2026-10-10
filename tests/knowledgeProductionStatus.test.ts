@@ -1,5 +1,6 @@
 // r5 翻转：任务中心与详情都使用后端投影，优先显示需要人处理的归档事实。
 import assert from "node:assert/strict";
+import { componentGuideOverview, componentGuideSection, componentGuideEvidence } from "./fixtures/componentGuide.ts";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -157,8 +158,10 @@ test("生产线验收8：真实磁盘与TaskService启动后，任务中心、�
 test("生产线验收8：组件已绑定更新基线且修订章节有内容，研究动作应确认发布当前草稿而非再发起更新", () => {
   const record = component();
   record.update_document_id = record.document_id; record.update_document_revision = "a".repeat(64); delete record.document_id;
-  record.document = { overview: "修订后的组件说明", sections: [{ id: "files", title: "文件处理", repository_ids: [record.component.id], selected: true, revision: 2,
-    content: "补充失败时的资源释放", interfaces: "Close(handle)", integration: "链接文件组件库", example: "```cpp\nClose(handle);\n```", sources: "src/file.cpp:1", related_ids: [] }] };
+  record.evidence = componentGuideEvidence(record.language, [record.component.id]);
+  record.document = { overview: componentGuideOverview("修订后的组件说明", "使用 JDK 11 或更新版本。"), sections: [{
+    ...componentGuideSection("files", [record.component.id], { title: "文件处理", content: "补充失败时的资源释放", language: record.language }), selected: true, revision: 2,
+  }] };
   const projected = projectKnowledgeProduction({ kind: "component", record });
   assert.equal(projected.status_label, "待审查"); assert.equal(projected.group, "attention");
   assert.equal(projected.next_action.id, "review");

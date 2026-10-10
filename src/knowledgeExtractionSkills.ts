@@ -9,14 +9,14 @@ import { Type } from "typebox";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
 
-export type ExtractionKind = "component" | "domain";
+export type ExtractionKind = "component" | "component-analysis" | "domain";
 export interface ExtractionSkillSnapshot {
   name: string; kind?: ExtractionKind; digest: string; captured_at: string; files: Record<string, string>;
 }
 const defaults = fileURLToPath(new URL("../internal-skills/", import.meta.url));
 const skillName = (kind: ExtractionKind) => {
-  if (!["component", "domain"].includes(kind)) throw new Error("未知萃取 Skill");
-  return `${kind}-knowledge-extraction`;
+  if (!["component", "component-analysis", "domain"].includes(kind)) throw new Error("未知萃取 Skill");
+  return kind === "component-analysis" ? "component-module-analysis" : `${kind}-knowledge-extraction`;
 };
 function readPackage(root: string): Record<string, string> {
   const files: Record<string, string> = {};
@@ -55,6 +55,8 @@ export class KnowledgeExtractionSkills {
   readonly root: string;
   constructor(dataDir: string) { this.root = join(dataDir, "extraction-methods"); }
   current(kind: ExtractionKind) {
+    // 组件研究的方法随平台版本交付，旧上传包不能覆盖仓库维护的方法。
+    if (kind !== "domain") return { ...bundledExtractionSkill(kind), versions: [] };
     const name = skillName(kind), file = join(this.root, name, "current.json");
     const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) as ExtractionSkillSnapshot : bundledExtractionSkill(kind);
     if ((current.kind ? current.kind !== kind : current.name !== name) || snapshot(current.name, current.files).digest !== current.digest) throw new Error("Skill 包校验失败");
@@ -74,7 +76,7 @@ export class KnowledgeExtractionSkills {
         || Object.entries(files).some(([path, content]) => !/^[\p{L}\p{N}][\p{L}\p{N}._/-]*$/u.test(path)
           || path.split("/").some(segment => !segment || segment.startsWith(".")) || typeof content !== "string" || content.includes("\0"))
         || Buffer.byteLength(JSON.stringify(files)) > 1024 * 1024) throw new Error("请提供含 SKILL.md 的完整文本 Skill 包，路径不能越界，最多 1 MiB、100 个文件");
-    knowledgeArchiveDefaults(files, kind);
+    if (kind !== "component-analysis") knowledgeArchiveDefaults(files, kind);
     const staging = join(this.root, `staging-${randomUUID()}`, name);
     try {
       for (const [path, content] of Object.entries(files)) {
@@ -108,10 +110,14 @@ export class KnowledgeExtractionSkills {
     } finally { rmSync(dirname(staging), { recursive: true, force: true }); }
   }
   save(kind: ExtractionKind, files: Record<string, string>, expectedDigest: string, operator: string) {
-    return this.serialize(() => this.install(kind, files, expectedDigest, operator, "update"));
+    return this.serialize(() => {
+      if (kind !== "domain") throw new Error("组件研究 Skill 由平台版本维护，仅供查看");
+      return this.install(kind, files, expectedDigest, operator, "update");
+    });
   }
   rollback(kind: ExtractionKind, version: string, expectedDigest: string, operator: string) {
     return this.serialize(() => {
+      if (kind !== "domain") throw new Error("组件研究 Skill 由平台版本维护，仅供查看");
       if (!/^[a-f0-9-]{36}$/.test(version)) throw new Error("无效的 Skill 版本");
       const previous = JSON.parse(readFileSync(join(this.root, skillName(kind), "versions", `${version}.json`), "utf8"));
       return this.install(kind, previous.files, expectedDigest, operator, "rollback");

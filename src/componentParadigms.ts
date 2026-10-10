@@ -1,4 +1,4 @@
-import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
+import { componentUsageMarkdown, compareComponentSections, validateComponentField, validateComponentUsageMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { componentRuleFiles } from "./componentRuleCandidates.ts";
 import { componentCardId, componentCardText } from "./componentKnowledgeCards.ts";
 import { createHash } from "node:crypto";
@@ -15,6 +15,7 @@ export interface ComponentParadigm {
   replaces: { identifiers: string[]; imports: string[]; patterns: string[] };
   evidence: ComponentCodeReference[];
   usage_evidence: string[];
+  test_evidence: string[];
   open_questions: string[];
 }
 export const validComponentId = (id: unknown): id is string => typeof id === "string" && /^[a-z0-9][a-z0-9-]{0,59}$/.test(id);
@@ -26,19 +27,20 @@ export function excludedComponentSource(path: string) {
 const strings = (v: unknown, max = 100): v is string[] => Array.isArray(v) && v.length <= max && v.every(s => typeof s === "string" && !!s.trim() && s.length <= 2000);
 export function validateComponentParadigm(p: ComponentParadigm, repositoryIds: string[]) {
   const exact = (value: unknown, keys: string[]) => !!value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(k => Object.hasOwn(value, k));
-  if (!exact(p, ["kind", "component", "language", "status", "need", "api", "applicability", "replaces", "evidence", "usage_evidence", "open_questions"]) || !exact(p.replaces, ["identifiers", "imports", "patterns"])) throw new Error("范式字段缺失或包含未知字段");
+  if (!exact(p, ["kind", "component", "language", "status", "need", "api", "applicability", "replaces", "evidence", "usage_evidence", "test_evidence", "open_questions"]) || !exact(p.replaces, ["identifiers", "imports", "patterns"])) throw new Error("范式字段缺失或包含未知字段");
   if (!p || !["contracts", "paradigm", "pitfalls", "index"].includes(p.kind) || !validComponentId(p.component)
     || !/^[a-z][a-z0-9.+#-]{0,31}$/.test(p.language) || !["recommended", "legacy", "unverified"].includes(p.status)
     || typeof p.need !== "string" || !p.need.trim() || p.need.length > 1000
     || typeof p.applicability !== "string" || !p.applicability.trim() || p.applicability.length > 4000
     || !strings(p.api) || (p.kind === "paradigm" && !p.api.length)
-    || !strings(p.open_questions) || !strings(p.usage_evidence)
-    || p.usage_evidence.some(id => !/^everycode-[a-f0-9]{24}$/.test(id))) throw new Error("范式需要合法的类型、组件、语言、状态、需求、适用条件、API 和证据编号");
+    || !strings(p.open_questions) || !strings(p.usage_evidence) || !strings(p.test_evidence)
+    || [...p.usage_evidence, ...p.test_evidence].some(id => !/^everycode-[a-f0-9]{24}$/.test(id))) throw new Error("范式需要合法的类型、组件、语言、状态、需求、适用条件、API 和证据编号");
   if (!p.replaces || !strings(p.replaces.identifiers) || !strings(p.replaces.imports) || !strings(p.replaces.patterns)) throw new Error("替代写法需要 identifiers、imports、patterns 列表");
   if (p.replaces.identifiers.some(s => !/^[A-Za-z_$~][\w$~]*(?:(?:::|\.)[A-Za-z_$~][\w$~]*)*$/.test(s))) throw new Error("被替代的标识符不能包含调用参数或任意表达式");
   if (["c", "cpp"].includes(p.language) && p.replaces.imports.some(s => !/^(<[^<>\s]+>|"[^"\s]+")$/.test(s))) throw new Error("C/C++ imports 必须是完整 include 对象");
   if (p.language === "java" && p.replaces.imports.some(s => !/^[a-z_][\w]*(\.[A-Za-z_$][\w$]*)+(\.\*)?$/.test(s))) throw new Error("Java imports 必须是完整包导入");
   if (p.kind === "paradigm" && p.status === "recommended" && !p.usage_evidence.length) throw new Error("推荐范式需要 everycode 调用证据；缺少时请标记 unverified");
+  if (p.kind === "paradigm" && p.status === "recommended" && !p.test_evidence.length) throw new Error("推荐范式需要 everycode 测试证据；缺少时请标记 unverified");
   if (!Array.isArray(p.evidence) || !p.evidence.length || p.evidence.length > 100 || p.evidence.some(r =>
     !exact(r, ["repository_id", "path", "revision", "start", "end"]) || typeof r.repository_id !== "string" || !/^[\p{L}\p{N}_.-]+$/u.test(r.repository_id) || !repositoryIds.includes(r.repository_id) || typeof r.path !== "string" || !r.path || r.path.startsWith("/")
     || /[\\\x00-\x1f]/.test(r.path) || r.path.split("/").some(s => !s || s === "." || s === "..") || excludedComponentSource(r.path)
@@ -46,18 +48,19 @@ export function validateComponentParadigm(p: ComponentParadigm, repositoryIds: s
 }
 export function componentSources(p: ComponentParadigm) {
   return [...p.evidence.map(r => `\`${r.repository_id}:${r.path}:${r.start}-${r.end}\` @ ${r.revision}`),
-    ...p.usage_evidence.map(id => `everycode 调用证据：${id}（版本以原始返回为准，未提供时为未知）`)].join("\n\n");
+    ...p.usage_evidence.map(id => `everycode 调用证据：${id}（版本以原始返回为准，未提供时为未知）`),
+    ...p.test_evidence.map(id => `everycode 测试证据：${id}（版本以原始返回为准，未提供时为未知）`)].join("\n\n");
 }
 /** 派生产物始终是预览；是否启用必须由正式知识消费方另行决定。 */
 export function deriveComponentParadigms(sections: ResearchSection[]) {
-  const catalog = sections.filter(s => s.selected && s.paradigm).map(s => {
+  const catalog = sections.filter(s => s.selected && s.paradigm).sort(compareComponentSections).map(s => {
     validateComponentParadigm(s.paradigm!, s.repository_ids);
     return { id: s.id, title: s.title, revision: s.revision, path: componentArtifactPath(s.id, s.paradigm!), ...s.paradigm! };
   });
   const recommended = catalog.filter(p => p.kind === "paradigm" && p.status === "recommended");
   const cell = (s: string) => s.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
   const mapping = ["# 组件选择表（预览）", "只在列出的适用条件下选择组件；详细步骤和来源见对应范式。", "| 需求 | 组件 / API | 适用条件 | 范式 |", "|---|---|---|---|",
-    ...recommended.map(p => `| ${cell(p.need)} | ${cell(p.component + " / " + p.api.join("、"))} | ${cell(p.applicability)} | [${p.id}](../${p.path}) |`)].join("\n");
+    ...recommended.map(p => `| ${cell(p.need)} | ${cell(p.api.join("、"))} | ${cell(p.applicability)} | [${cell(p.title)}](../${p.path}) |`)].join("\n");
   const rules = recommended.flatMap(p => (["identifiers", "imports"] as const).flatMap(kind => p.replaces[kind].map(value => ({
     id: createHash("sha256").update(JSON.stringify([p.id, p.language, kind, value])).digest("hex").slice(0, 24),
     state: "candidate" as const, language: p.language, kind, value, paradigm_id: p.id,
@@ -73,7 +76,7 @@ export const COMPONENT_EXPORT_SCHEMA = "mfc.component-paradigm/v2";
 export function readComponentArtifact(text: string, metadataJson: string | undefined) {
   if (!metadataJson || !text.trim() || /^---\r?\n/.test(text)) throw new Error("组件文档与独立元数据格式不一致");
   const fields = JSON.parse(metadataJson);
-  const keys = ["schema", "id", "title", "revision", "kind", "component", "language", "status", "need", "api", "applicability", "replaces", "evidence", "usage_evidence", "open_questions"];
+  const keys = ["schema", "id", "title", "revision", "kind", "component", "language", "status", "need", "api", "applicability", "replaces", "evidence", "usage_evidence", "test_evidence", "open_questions"];
   if (!fields || typeof fields !== "object" || Array.isArray(fields) || Object.keys(fields).length !== keys.length
     || keys.some(k => !Object.hasOwn(fields, k)) || fields.schema !== COMPONENT_EXPORT_SCHEMA
     || typeof fields.id !== "string" || !/^[a-z0-9][a-z0-9-]{0,199}$/.test(fields.id)
@@ -81,6 +84,11 @@ export function readComponentArtifact(text: string, metadataJson: string | undef
   const { schema: _, id, title, revision, ...metadata } = fields;
   const p = metadata as ComponentParadigm;
   validateComponentParadigm(p, Array.isArray(p.evidence) ? p.evidence.map(e => e?.repository_id) : []);
+  if (p.kind !== "paradigm" || p.status !== "recommended") throw new Error("正式组件产物只包含已推荐的用法；研究记录请在原任务查看");
+  const body = /^# [^\n]+\n\n## 接入配置\n\n([\s\S]*?)\n\n(### 适用场景[\s\S]*)$/.exec(text);
+  if (!body) throw new Error("组件用法正文缺少标题、接入配置或固定用法模板");
+  validateComponentField(body[1], "接入配置");
+  validateComponentUsageMarkdown(body[2]);
   return { id: id as string, title: title as string, revision: revision as number, paradigm: p, body: text };
 }
 /** 从实际导出的 Markdown 重新提取，再派生，确保导出格式就是程序的输入契约。 */
@@ -98,7 +106,7 @@ export function deriveComponentArtifacts(files: Record<string, string>) {
     if (path !== expected || ids.has(doc.id)) throw new Error(`组件产物路径或编号重复：${doc.id}`);
     ids.add(doc.id);
     return { ...doc, selected: true, repository_ids: [...new Set(doc.paradigm.evidence.map(e => e.repository_id))],
-      content: doc.body, interfaces: "", integration: "", example: "", sources: "", related_ids: [] } satisfies ResearchSection;
+      content: doc.body, interfaces: "", integration: "", example: "", unit_tests: "", sources: "", related_ids: [] } satisfies ResearchSection;
   });
   return { ...deriveComponentParadigms(sections), digest: createHash("sha256").update(JSON.stringify(sortedFiles)).digest("hex") };
 }
@@ -107,13 +115,13 @@ function componentArtifactPath(id: string, p: ComponentParadigm) {
 }
 export function exportComponentArtifacts(sections: ResearchSection[]) {
   const files: Record<string, string> = {};
-  for (const s of sections.filter(s => s.selected && s.paradigm)) {
+  const selected = sections.filter(s => s.selected && s.paradigm).sort(compareComponentSections);
+  for (const s of selected) validateComponentParadigm(s.paradigm!, s.repository_ids);
+  for (const s of selected.filter(s => s.paradigm!.kind === "paradigm" && s.paradigm!.status === "recommended")) {
     const path = componentArtifactPath(s.id, s.paradigm!);
     if (Object.hasOwn(files, path)) throw new Error("组件产物路径重复");
-    validateComponentParadigm(s.paradigm!, s.repository_ids);
-    const body = [componentKnowledgeMarkdown(s.content), "## 公共接口", componentKnowledgeMarkdown(s.interfaces), "## 集成产物与依赖", componentKnowledgeMarkdown(s.integration),
-      "## 完整示例", componentKnowledgeMarkdown(s.example)].join("\n\n");
-    files[path] = `${/^\s*#\s/.test(body) ? "" : `# ${s.title}\n\n`}${body.trim()}\n`;
+    validateComponentField(s.integration, "接入配置");
+    files[path] = `# ${s.title}\n\n## 接入配置\n\n${s.integration.trim()}\n\n${componentUsageMarkdown(s)}\n`;
     files[path.replace(/\.md$/, ".metadata.json")] = JSON.stringify({ schema: COMPONENT_EXPORT_SCHEMA, id: s.id, title: s.title, revision: s.revision, ...s.paradigm }, null, 2) + "\n";
   }
   const derived = deriveComponentArtifacts(files);

@@ -16,6 +16,7 @@ export interface ComponentResearchRecord {
   update_metadata?: { title: string; scope: string; module_ids: string[]; repositories: string[] };
   id: string;
   skill?: { name: string; digest: string };
+  analysis_skill?: { name: string; digest: string };
   section_history?: Array<{ at: string; operator: string; section: ComponentResearchSection }>;
   update_document_id?: string;
   mode?: "all" | "component";
@@ -38,9 +39,9 @@ export interface ComponentResearchRecord {
   evidence: Array<Record<string, unknown>>;
 }
 export interface ComponentResearchSection {
-  paradigm?: { kind: string; component: string; language: string; status: string; need: string; api: string[]; applicability: string; replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; evidence: Array<{ repository_id: string; path: string; revision: string; start: number; end: number }>; usage_evidence: string[]; open_questions: string[] };
+  paradigm?: { kind: string; component: string; language: string; status: string; need: string; api: string[]; applicability: string; replaces: { identifiers: string[]; imports: string[]; patterns: string[] }; evidence: Array<{ repository_id: string; path: string; revision: string; start: number; end: number }>; usage_evidence: string[]; test_evidence: string[]; open_questions: string[] };
   id: string; title: string; repository_ids: string[]; selected: boolean;
-  content: string; interfaces: string; integration: string; example: string; sources: string;
+  content: string; interfaces: string; integration: string; example: string; unit_tests: string; sources: string;
   related_ids: string[]; revision: number;
 }
 export interface ComponentResearchReviewTurn {

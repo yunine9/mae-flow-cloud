@@ -1,27 +1,56 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeExtractionSkills, extractionSkillTool, extractionSkillMission } from "../src/knowledgeExtractionSkills.ts";
 
-test("两个 Skill 独立更新和回退，已固定的完整包不受线上修改影响", async () => {
+test("组件两套方法仅随仓库发布，忽略旧上传且研究固定版本不受新发布影响", async () => {
+  const root = mkdtempSync(join(tmpdir(), "component-method-pair-"));
+  try {
+    const store = new KnowledgeExtractionSkills(root), original = store.current("component-analysis");
+    const extraction = store.current("component"), path = join(root, "task", "analysis.json");
+    assert.equal(original.name, "component-module-analysis");
+    const pinned = store.pin("component-analysis", path);
+    for (const kind of ["component", "component-analysis"] as const) {
+      const method = store.current(kind), directory = join(store.root, method.name);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, "current.json"), "旧上传的无效包");
+      assert.equal(store.current(kind).digest, method.digest);
+      await assert.rejects(store.save(kind, method.files, method.digest, "expert"), /平台版本维护.*查看/);
+      await assert.rejects(store.rollback(kind, "invalid", method.digest, "expert"), /平台版本维护.*查看/);
+    }
+    // 模拟仓库发布的新版本，而不是开放生产上传接口。
+    const files = { ...original.files, "references/phase-plan.md": original.files["references/phase-plan.md"] + "\n核对场景对应的单元测试。\n" };
+    const next = { ...original, files, digest: createHash("sha256").update(JSON.stringify(Object.entries(files).sort(([a], [b]) => a.localeCompare(b)))).digest("hex") };
+    const current = store.current.bind(store);
+    store.current = kind => kind === "component-analysis" ? next : current(kind);
+    assert.notEqual(next.digest, original.digest);
+    assert.equal(store.current("component").digest, extraction.digest);
+    assert.deepEqual(store.pin("component-analysis", path), pinned);
+    assert.equal(store.pin("component-analysis", join(root, "task", "new-analysis.json")).digest, next.digest);
+    assert.throws(() => store.pin("component", path), /校验/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("领域 Skill 更新和回退，已固定的完整包不受线上修改影响", async () => {
   const root = mkdtempSync(join(tmpdir(), "extraction-skills-"));
   try {
-    const skills = new KnowledgeExtractionSkills(root), original = skills.current("component"), domain = skills.current("domain");
-    const path = join(root, "round", "skill.json"), pinned = skills.pin("component", path);
-    const files = { ...original.files, "references/component.md": original.files["references/component.md"] + "\n新增研究方法\n" };
-    const next = await skills.save("component", files, original.digest, "expert");
+    const skills = new KnowledgeExtractionSkills(root), original = skills.current("domain"), component = skills.current("component");
+    const path = join(root, "round", "skill.json"), pinned = skills.pin("domain", path);
+    const files = { ...original.files, "references/domain.md": original.files["references/domain.md"] + "\n新增研究方法\n" };
+    const next = await skills.save("domain", files, original.digest, "expert");
     assert.notEqual(next.digest, original.digest);
-    assert.equal(skills.current("domain").digest, domain.digest);
-    assert.deepEqual(skills.pin("component", path), pinned);
-    assert.equal(skills.pin("component", path, true).digest, next.digest);
-    assert.equal(JSON.parse(readFileSync(join(root, "round", "skill-packages", `${pinned.digest}.json`), "utf8")).files["references/component.md"], original.files["references/component.md"]);
-    await assert.rejects(skills.save("component", files, original.digest, "other"), /已被更新/);
+    assert.equal(skills.current("component").digest, component.digest);
+    assert.deepEqual(skills.pin("domain", path), pinned);
+    assert.equal(skills.pin("domain", path, true).digest, next.digest);
+    assert.equal(JSON.parse(readFileSync(join(root, "round", "skill-packages", `${pinned.digest}.json`), "utf8")).files["references/domain.md"], original.files["references/domain.md"]);
+    await assert.rejects(skills.save("domain", files, original.digest, "other"), /已被更新/);
     const tool: any = extractionSkillTool(pinned);
-    assert.equal((await tool.execute("read", { path: "references/component.md" })).content[0].text, original.files["references/component.md"]);
+    assert.equal((await tool.execute("read", { path: "references/domain.md" })).content[0].text, original.files["references/domain.md"]);
     assert.equal((await tool.execute("read", { path: "../../outside" })).isError, true);
-    const restored = await skills.rollback("component", next.versions[0].version_id, next.digest, "expert");
+    const restored = await skills.rollback("domain", next.versions[0].version_id, next.digest, "expert");
     assert.equal(restored.digest, original.digest);
     assert.match(extractionSkillMission(pinned, { mode: "revise" }), /"mode":"revise"/);
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -40,12 +69,12 @@ test("无效或越界的 Skill 更新不替换当前包", async () => {
 test("萃取方法允许头名说明，拒绝夹带口令且保留已发布版本", async () => {
   const root=mkdtempSync(join(tmpdir(),"extraction-secret-"));
   try {
-    const skills=new KnowledgeExtractionSkills(root),original=skills.current("component");
+    const skills=new KnowledgeExtractionSkills(root),original=skills.current("domain");
     const files={...original.files,"references/headers.md":'X_ACCESS_TOKEN = "X-Access-Token"'};
-    const accepted=await skills.save("component",files,original.digest,"expert");
-    await assert.rejects(skills.save("component",{...files,"references/config.md":'password = "correct-horse-battery-staple"'},accepted.digest,"expert"),/疑似密钥/);
-    assert.equal(skills.current("component").digest,accepted.digest);
-    assert.deepEqual(skills.current("component").files,files);
+    const accepted=await skills.save("domain",files,original.digest,"expert");
+    await assert.rejects(skills.save("domain",{...files,"references/config.md":'password = "correct-horse-battery-staple"'},accepted.digest,"expert"),/疑似密钥/);
+    assert.equal(skills.current("domain").digest,accepted.digest);
+    assert.deepEqual(skills.current("domain").files,files);
   } finally {rmSync(root,{recursive:true,force:true});}
 });
 

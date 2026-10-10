@@ -23,7 +23,7 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
   const request = (path: string, cookie = "", body?: unknown) => fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { cookie, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const login = async (user: string) => (await request("/auth/login", "", { username: user, password: `${user}-fixture-password` })).headers.get("set-cookie")!.split(";")[0];
   try {
-    for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/knowledge-extraction/skills/domain"]) assert.equal((await request(path)).status, 401);
+    for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/knowledge-extraction/skills/domain", "/knowledge-extraction/skills/component-analysis"]) assert.equal((await request(path)).status, 401);
     const dev = await login("dev"), admin = await login("admin");
     const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, true);
     assert.equal((await request("/knowledge-extraction/skills/domain", "", { files: skill.files, expected_digest: skill.digest })).status, 401);
@@ -33,8 +33,19 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
     assert.ok(updated.digest !== skill.digest);
     assert.equal((await request("/knowledge-extraction/skills/domain", admin, { files: skill.files, expected_digest: skill.digest })).status, 400, "并发上传不能覆盖其他人的新版本");
     const componentSkill: any = await (await request("/knowledge-extraction/skills/component", dev)).json();
-    assert.equal(componentSkill.can_manage, true);
-    assert.equal((await request("/knowledge-extraction/skills/component", dev, { files: componentSkill.files, expected_digest: componentSkill.digest })).status, 200);
+    assert.equal(componentSkill.can_manage, false);
+    assert.equal((await request("/knowledge-extraction/skills/component", dev, { files: componentSkill.files, expected_digest: componentSkill.digest })).status, 405);
+    assert.equal((await request("/knowledge-extraction/skills/component/rollback", admin, { version_id: "old", expected_digest: componentSkill.digest })).status, 405);
+    const analysisPath = "/knowledge-extraction/skills/component-analysis";
+    const analysisSkill: any = await (await request(analysisPath, dev)).json();
+    assert.equal(analysisSkill.name, "component-module-analysis"); assert.equal(analysisSkill.can_manage, false);
+    const revisedAnalysis = { ...analysisSkill.files, "SKILL.md": analysisSkill.files["SKILL.md"] + "\n按源码边界分析独立模块。\n" };
+    assert.equal((await request(analysisPath, "", { files: revisedAnalysis, expected_digest: analysisSkill.digest })).status, 401);
+    assert.equal((await request(analysisPath, dev, { files: revisedAnalysis, expected_digest: analysisSkill.digest })).status, 405);
+    assert.equal((await request(analysisPath, admin, { files: revisedAnalysis, expected_digest: analysisSkill.digest })).status, 405);
+    assert.equal((await (await request("/knowledge-extraction/skills/component", dev)).json() as any).digest, componentSkill.digest);
+    assert.equal((await request(`${analysisPath}/rollback`, dev, { version_id: "old", expected_digest: analysisSkill.digest })).status, 405);
+    assert.equal((await (await request(analysisPath, dev)).json() as any).digest, analysisSkill.digest);
     const upload = await request("/knowledge-materials", dev, { name: "rules.txt", content_base64: Buffer.from("业务资料测试").toString("base64") }); assert.equal(upload.status, 201);
     const material: any = await upload.json(); assert.equal(material.state, "ready");
     const start = await request("/domain-extraction", dev, { issue_no: "REQ-123", title: "领域", scope: "规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/business.git", branch: "main", docs_path: "docs" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } });

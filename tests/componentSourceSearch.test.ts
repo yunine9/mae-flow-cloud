@@ -4,7 +4,33 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
-import { languageComponentSourceTool } from "../src/componentResearchTools.ts";
+import { codeSearchTool, languageComponentSourceTool } from "../src/componentResearchTools.ts";
+
+test("everycode 区分调用与测试检索，读取完整测试上下文并保留用途", async () => {
+  const root = mkdtempSync(join(tmpdir(), "everycode-test-evidence-")), previous = process.env.MAE_FLOW_EC_BIN;
+  const events: Array<Record<string, unknown>> = [];
+  try {
+    const binary = join(root, "ec");
+    writeFileSync(binary, `#!${process.execPath}\nconst args = process.argv.slice(2);\nif (args[0] === 'read') console.log('TEST(File, Close) { ASSERT_EQ(Close(handle), 0); }');\nelse console.log('consumer/tests/file_test.cpp');\n`, { mode: 0o700 });
+    process.env.MAE_FLOW_EC_BIN = binary;
+    const tool = codeSearchTool(event => events.push(event), { captureRead: true });
+    const call = async (input: object): Promise<any> => tool.execute("test", input as never, undefined, undefined, {} as never);
+    await call({ action: "kw", query: "Close lang:cpp" });
+    await call({ action: "kw", query: "Close repo:consumer lang:cpp", purpose: "unit-test" });
+    const result = await call({ action: "read", repository: "consumer", path: "tests/file_test.cpp", start: 1, end: 40, purpose: "unit-test" });
+    assert.ok(!result.isError);
+    assert.match(result.content.map(item => item.type === "text" ? item.text : "").join("\n"), /ASSERT_EQ/);
+    assert.equal(events[0].purpose, "usage");
+    assert.equal(events[1].purpose, "unit-test");
+    assert.equal(events[2].purpose, "unit-test");
+    assert.equal(events[2].path, "tests/file_test.cpp");
+    assert.match(String(events[2].content), /ASSERT_EQ/);
+    assert.equal((await call({ action: "kw", query: "Close", purpose: "other" })).isError, true);
+  } finally {
+    if (previous === undefined) delete process.env.MAE_FLOW_EC_BIN; else process.env.MAE_FLOW_EC_BIN = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("源码搜索支持多词任意命中、短语、大小写与逐仓范围", async () => {
   const root = mkdtempSync(join(tmpdir(), "source-search-"));

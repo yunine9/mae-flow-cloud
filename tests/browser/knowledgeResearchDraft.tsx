@@ -7,19 +7,27 @@ const check = (ok: unknown, message: string) => { if (!ok) throw new Error(messa
 const scenario = new URLSearchParams(location.search).get("scenario");
 const calls: Array<{ path: string; input?: any }> = [];
 const skill = { name: "领域萃取方法", digest: "a".repeat(64), can_manage: true, versions: [], files: { "SKILL.md": "# 领域萃取方法\n\n先阅读业务材料。" } };
+const componentSkills = {
+  "component-analysis": { ...skill, name: "组件模块分析", can_manage: false, files: { "SKILL.md": "# 组件模块分析\n\n按源码边界划分模块。" } },
+  component: { ...skill, name: "组件用法萃取", can_manage: false, files: { "SKILL.md": "# 组件用法萃取\n\n按模板编写用法及单元测试。" } },
+};
 window.fetch = async (url, options) => {
   const path = String(url), input = options?.body ? JSON.parse(String(options.body)) : undefined;
   calls.push({ path, input }); let result: unknown;
   if (path === "/business-modules") result = { modules: [{ id: "trade", name: "交易业务", repositories: ["https://example.test/trade.git"], status: "active", assets: [] }], warnings: [], operations: [] };
   else if (path === "/knowledge-tasks") result = { tasks: [], summary: { running: 0, attention: 0, total: 0 }, warnings: [] };
   else if (path === "/memory-insights") result = { memories: [], repos: [] };
-  else if (path === "/technology-stacks") result = { stacks: [] };
-  else if (path === "/component-repositories") result = { components: [] };
+  else if (path === "/technology-stacks") result = { stacks: scenario === "component-methods" ? [{ id: "cpp", name: "C++", enabled: true }] : [] };
+  else if (path === "/component-repositories") result = { components: scenario === "component-methods" ? ["pool", "files"].map(id => ({ id, name: id, enabled: true, languages: ["cpp"], repository: `https://example.test/${id}.git`, branch: "main" })) : [] };
   else if (path === "/knowledge-documents") result = { documents: [] };
   else if (path === "/skills") result = { skills: [], operations: [], warnings: [] };
   else if (path === "/knowledge-extraction/skills/domain") {
     if (input) Object.assign(skill, { files: input.files, digest: "b".repeat(64) });
     result = skill;
+  } else if (path === "/knowledge-extraction/skills/component-analysis" || path === "/knowledge-extraction/skills/component") {
+    const current = componentSkills[path.endsWith("component-analysis") ? "component-analysis" : "component"];
+    check(!input, "仓库维护的组件方法不允许页面上传更新");
+    result = current;
   } else if (path === "/knowledge-materials") result = { id: "material-fixture", name: input.name, version: "v2", scope: "本次萃取任务", state: "ready", sections: 2 };
   // 验证创建请求即结束，不让模拟研究体掩盖草稿是否清理。
   else if (path === "/domain-extraction" && input) return new Response(JSON.stringify({ error: "fixture: create unavailable" }), { status: 500 });
@@ -46,6 +54,29 @@ const description = "核对退款规则", issue = "REQ-449", goal = "只研究�
 const value = (selector: string) => document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)?.value;
 async function run() {
   await waitFor('[aria-label="研究知识"]'); await pause();
+  if (scenario === "component-methods") {
+    check(button("模块分析方法") && button("用法萃取方法") && !button("萃取方法"), "组件研究应提供两个清晰方法入口");
+    const componentSelect = document.querySelector<HTMLButtonElement>('[aria-label="组件"]')!;
+    componentSelect.click(); await pause();
+    const all = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(e => e.textContent?.includes("全部组件"));
+    check(all, "组件选择应允许研究全部组件"); all!.click(); await pause();
+    for (const [label, kind] of [["模块分析方法", "component-analysis"], ["用法萃取方法", "component"]]) {
+      await click(label); await waitFor('[aria-label="平台 Skill 详情"]');
+      check(new URLSearchParams(location.search).get("knowledgeDocument") === `platform-skill-${kind}`, "方法应打开独立的 Skill 页面");
+      check(document.querySelector('[aria-label="Skill 文件正文"]')?.textContent?.includes(kind === "component-analysis" ? "按源码边界划分模块" : "用法及单元测试"), "两个入口不能显示同一份方法");
+      check(!button("更新方法") && !button("确认更新") && !button("回退") && !button("选择 Skill 目录") && !button("选择 SKILL.md"), "组件方法页面只读，不提供更新或回退操作");
+      check(!document.querySelector('input[aria-label="上传平台 Skill 目录"]') && !document.querySelector('input[aria-label="上传平台 SKILL.md"]'), "组件方法页面不挂载上传控件");
+      await click("使用此 Skill"); await waitFor('[aria-label="研究知识"]');
+      check(new URLSearchParams(location.search).get("kbModule") === "engineering:cpp", "使用组件方法应回到原组件研究入口");
+      check(document.querySelector('[aria-label="技术栈"]')?.textContent?.includes("C++"), "查看方法后技术栈不能丢失");
+      check(document.querySelector('[aria-label="组件"]')?.textContent?.includes("全部组件"), "查看方法后全部组件选择不能丢失");
+      check(button("模块分析方法") && button("用法萃取方法"), "返回后仍应是组件模式");
+    }
+    check(!calls.some(c => c.path.startsWith("/knowledge-extraction/skills/component") && c.input), "阅读和返回组件方法不产生写入请求");
+    check(document.documentElement.scrollWidth <= innerWidth + 2, "桌面组件方法入口不能横向溢出");
+    if (!(window as any).__KEEP_RESEARCH_PREVIEW__) root.unmount();
+    return { passed: true };
+  }
   await fill('[aria-label="单号描述"]', description);
   await fill('input[placeholder="需求或问题单号"]', issue);
   if (scenario === "cleanup") { document.querySelector<HTMLInputElement>('input[aria-label="萃取前清理旧知识"]')!.click(); await pause(); }

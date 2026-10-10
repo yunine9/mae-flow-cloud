@@ -1,11 +1,12 @@
 import { Button } from "@/components/ui/button";
 import { extractionSkillSearch } from "./knowledgeNavigation";
+import type { PlatformSkillKind } from "./PlatformSkill";
 
 /** 萃取页只保留导航，查看和上传统一放在知识库的 Skill 页面。 */
-export function ExtractionSkillEditor({ kind }: { kind: "component" | "domain" }) {
-  return <Button variant="outline" onClick={() => openExtractionSkill(kind)}>萃取方法</Button>;
+export function ExtractionSkillEditor({ kind, label = "萃取方法" }: { kind: PlatformSkillKind; label?: string }) {
+  return <Button variant="outline" onClick={() => openExtractionSkill(kind)}>{label}</Button>;
 }
-export function openExtractionSkill(kind: "component" | "domain") {
+export function openExtractionSkill(kind: PlatformSkillKind) {
   const url = new URL(location.href);
   url.search = extractionSkillSearch(url.search, kind);
   // 从未提交的研究表单过来，页面的返回与「使用此 Skill」都回到原入口。

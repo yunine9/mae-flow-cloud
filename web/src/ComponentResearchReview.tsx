@@ -1,4 +1,4 @@
-import { componentKnowledgeMarkdown } from "../../src/componentKnowledgeMarkdown";
+import { componentGuideMarkdown, componentUsageMarkdown, compareComponentSections } from "../../src/componentKnowledgeMarkdown";
 import { ComponentDocumentReader } from "./ComponentDocumentReader";
 import { KnowledgeOutline } from "./KnowledgeOutline";
 import { KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
@@ -14,9 +14,11 @@ import { diffLines } from "diff";
 import { Markdown } from "./markdown";
 import { componentRequest, type ComponentResearchRecord, type ComponentResearchSection } from "./componentResearchApi";
 
-function sectionMarkdown(section: ComponentResearchSection, includeMetadata = true) {
-  return [...(/^\s*#\s/.test(section.content) ? [] : [`# ${section.title}`]), ...(includeMetadata && section.paradigm ? [`**${({ recommended: "推荐", legacy: "历史写法", unverified: "待核实" } as Record<string, string>)[section.paradigm.status] ?? section.paradigm.status}** · 需求：${section.paradigm.need} · 适用：${section.paradigm.applicability}`] : []), componentKnowledgeMarkdown(section.content), "### 公共接口", componentKnowledgeMarkdown(section.interfaces) || "待研究",
-    "### 集成产物与依赖", componentKnowledgeMarkdown(section.integration) || "待研究", "### 最佳示例", componentKnowledgeMarkdown(section.example) || "待补充（本项尚未完成）"].join("\n\n");
+function sectionMarkdown(section: ComponentResearchSection) {
+  const title = `# ${section.title}`;
+  if (section.paradigm?.kind !== "paradigm" || section.paradigm.status !== "recommended") return [title, section.content].filter(Boolean).join("\n\n");
+  try { return `${title}\n\n${componentUsageMarkdown(section)}`; }
+  catch (error) { return `${title}\n\n> 文稿格式需要修订：${error instanceof Error ? error.message : String(error)}`; }
 }
 export function latestComponentProposal(record: ComponentResearchRecord, sectionId: string) {
   return [...(record.review_turns ?? [])].reverse().find(turn => turn.section_id === sectionId && turn.proposal?.status === "pending");
@@ -25,7 +27,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   unified?: boolean; onBlockedChange?: (blocked: boolean) => void;
   readerHeight?: string; record: ComponentResearchRecord; onChanged: (record: ComponentResearchRecord) => void;
 }) {
-  const sections = record.document!.sections;
+  const sections = [...record.document!.sections].sort(compareComponentSections);
   const documentTitle = record.document!.overview.match(/^#\s+(.+)$/m)?.[1] ?? record.topic;
   const reader = useRef<HTMLDivElement>(null);
   const searchableContent = useRef<HTMLDivElement>(null);
@@ -58,12 +60,16 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
       ? { ...candidate.proposal.section, id: item.id, revision: item.revision, selected: item.selected } : item;
   });
   const previewSection = previewSections.find(item => item.id === section?.id);
+  const guideSections = previewSections.filter(item => item.selected && item.paradigm?.kind === "paradigm" && item.paradigm.status === "recommended");
+  let guide = "", guideError = "";
+  try { guide = componentGuideMarkdown(record.topic, record.document!.overview, guideSections); }
+  catch (error) { guideError = error instanceof Error ? error.message : String(error); }
   const showingProposal = !!section && previewSection !== section;
   const versions = (record.section_history ?? []).filter(h => h.section.id === section?.id);
   const turns = (record.review_turns ?? []).filter(turn => turn.mode !== "supplement" && turn.section_id === section?.id);
   const supplements = (record.review_turns ?? []).filter(turn => turn.mode === "supplement");
   const scope = (record.components ?? [record.component]).map(component => component.name).join("、");
-  const searchKey = view === "document" ? `${record.id}:document:${record.topic}:${record.document!.overview}:${previewSections.map(item => `${item.id}:${item.revision}:${item.content}`).join("|")}` : `${record.id}:component:${section?.id}:${section?.revision}:${proposal?.id}:${proposal?.status}:${proposal?.proposal?.status}`;
+  const searchKey = view === "document" ? `${record.id}:document:${guide}` : `${record.id}:component:${section?.id}:${section?.revision}:${proposal?.id}:${proposal?.status}:${proposal?.proposal?.status}`;
   const sectionPreview = previewSection && <div ref={searchableContent}><KnowledgeMarkdown text={sectionMarkdown(previewSection)} focus={knowledgeFocus} /></div>;
   useEffect(() => { onBlockedChange?.(busy || active || !!editor); return () => onBlockedChange?.(false); }, [busy, active, editor, onBlockedChange]);
   useEffect(() => { setArtifacts(undefined); }, [record.id, sections.map(s => `${s.id}:${s.revision}:${s.selected}`).join("|")]);
@@ -71,7 +77,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   function navigateKnowledge(id: string, line?: number) {
     if (editor && (editor.id !== id || line !== undefined)) { setError("请先保存或取消当前编辑，再跳转章节。"); return; }
     setSelected(id); setMessage(""); setError(""); setDetailTab("content");
-    setKnowledgeFocus(old => ({ line, token: (old?.token ?? 0) + 1 }));
+    setKnowledgeFocus(old => ({ line, ...(view === "document" && line === undefined ? { anchor: `component-${id}` } : {}), token: (old?.token ?? 0) + 1 }));
   }
   const outlineItems = previewSections.map(item => ({ id: item.id, title: item.title, content: sectionMarkdown(item), selected: item.selected,
     status: record.production?.review.sections.find(section => section.id === item.id)?.status_label }));
@@ -86,7 +92,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
   }
   if (!unified && !reviewing) return <section aria-label="组件萃取文档">
     <ComponentDocumentReader height={readerHeight} selected={selected || "overview"} onSelect={setSelected}
-      files={[{ id: "overview", path: [documentTitle, "总览.md"], content: componentKnowledgeMarkdown(record.document!.overview) }, ...sections.map(s => ({ id: s.id, path: s.paradigm ? [documentTitle, s.paradigm.component, `${sections.filter(other => other.paradigm?.component === s.paradigm?.component && other.paradigm?.kind === s.paradigm?.kind).length > 1 ? s.title : ({ contracts: "使用契约", paradigm: "推荐用法", pitfalls: "误用与边界", index: "使用导航" } as Record<string, string>)[s.paradigm.kind] ?? s.title}.md`] : [documentTitle, `${s.title}.md`], content: sectionMarkdown(s, false), searchText: s.title, metadata: s.paradigm ? JSON.stringify(s.paradigm, null, 2) : undefined }))]}
+      files={[{ id: "overview", path: [documentTitle, "使用指南.md"], content: guideError ? `文稿格式需要修订：${guideError}` : guide }, ...sections.map(s => ({ id: s.id, path: [documentTitle, "逐项审查", `${s.title}.md`], content: sectionMarkdown(s), searchText: s.title, metadata: s.paradigm ? JSON.stringify(s.paradigm, null, 2) : undefined }))]}
       actions={<><Button variant="ghost" onClick={() => setReviewing(true)}>审阅与修订</Button><a className="px-2 text-sm text-primary" href={`/component-research/${record.id}/document`} download>下载 Markdown</a></>} />
   </section>;
   return <section aria-label="组件审核工作区" className="research-review" style={unified ? { flex: "1 1 0", height: readerHeight, minHeight: 0, margin: 0, border: 0, borderRadius: 0 } : undefined}>
@@ -96,8 +102,8 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
       <Button variant="ghost" size="sm" aria-expanded={treeVisible} onClick={() => setTreeVisible(value => !value)}>{treeVisible ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}{treeVisible ? "收起目录" : "展开目录"}</Button>
       <strong className="mr-auto flex min-w-0 items-center gap-2 text-sm" title={record.production?.review.selection_message}><FileText size={16} className="shrink-0" /><span className="truncate">{view === "document" ? "完整文档" : section?.title || documentTitle}</span></strong>
       {(view === "document" || !!section && detailTab === "content" && editor?.id !== section.id) && <KnowledgeContentSearch contentRef={searchableContent} contentKey={searchKey} contentSelector=".md" />}
-      <div className="research-review-views shrink-0" role="group" aria-label="审查视图"><Button size="sm" aria-pressed={view === "component"} variant={view === "component" ? "secondary" : "ghost"} onClick={() => setView("component")}>{unified ? "逐项审查" : "逐项审核"}</Button>
-        <Button size="sm" aria-pressed={view === "document"} variant={view === "document" ? "secondary" : "ghost"} onClick={() => setView("document")}>完整文档</Button></div>
+      <div className="research-review-views shrink-0" role="group" aria-label="审查视图"><Button size="sm" aria-pressed={view === "component"} variant={view === "component" ? "secondary" : "ghost"} onClick={() => { setView("component"); setKnowledgeFocus(undefined); }}>{unified ? "逐项审查" : "逐项审核"}</Button>
+        <Button size="sm" aria-pressed={view === "document"} variant={view === "document" ? "secondary" : "ghost"} onClick={() => { setView("document"); setKnowledgeFocus(undefined); }}>完整文档</Button></div>
       {unified && view === "component" && <Button size="sm" variant="ghost" aria-expanded={showDiscussion} onClick={toggleDiscussion}>研究对话{showDiscussion ? " · 收起" : ""}</Button>}
       {unified && <span ref={setNotesToolbar} className="flex items-center" />}
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="文稿更多操作" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
@@ -130,12 +136,9 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
     </DialogContent></Dialog>
     {error && <p role="alert" className="text-danger">{error}</p>}
     {view === "document" ? <div className="research-review-panes" style={!treeVisible ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
-      {treeVisible && <KnowledgeOutline title={record.topic} items={outlineItems} currentId={section?.id} onNavigate={navigateKnowledge} label="文档组件目录" itemLabel={unified ? "能力" : undefined} itemUnit={unified ? "项" : undefined} />}
-      <div ref={reader} tabIndex={0} aria-label="完整文档阅读区" className="research-reader research-full-document studio-paper"><p className="mb-4 text-sm text-muted-foreground">完整萃取成果（含未勾选项）；下载与入库仅包含勾选项。</p>
-        <div ref={searchableContent}><Markdown text={`# ${record.topic}\n\n${record.document!.overview || "正在联合研究，章节将逐步保存…"}`} />
-        {previewSections.map(item => <section key={item.id} className="mt-6 border-t border-line pt-4"><KnowledgeMarkdown text={sectionMarkdown(item)} focus={item.id === section?.id ? knowledgeFocus : undefined} />
-          {!!item.related_ids.length && <p className="mt-3 text-sm">关联知识：{item.related_ids.map(id => <button key={id} className="knowledge-inline-link" onClick={() => navigateKnowledge(id)}>{sections.find(s => s.id === id)?.title ?? id}</button>)}</p>}
-        </section>)}</div>
+      {treeVisible && <KnowledgeOutline title={record.topic} items={outlineItems.filter(item => guideSections.some(section => section.id === item.id))} currentId={section?.id} onNavigate={navigateKnowledge} label="文档组件目录" itemLabel={unified ? "能力" : undefined} itemUnit={unified ? "项" : undefined} />}
+      <div ref={reader} tabIndex={0} aria-label="完整文档阅读区" className="research-reader research-full-document studio-paper"><p className="mb-4 text-sm text-muted-foreground">完整文档按当前选择展示，可在逐项审查中调整。</p>
+        <div ref={searchableContent}>{guideError ? <p role="alert" className="text-danger">文稿格式需要修订：{guideError}</p> : <KnowledgeMarkdown text={guide} focus={knowledgeFocus} />}</div>
       </div>
     </div>
       : <div className="research-review-panes" style={!treeVisible ? { gridTemplateColumns: "minmax(0, 1fr)" } : undefined}>
@@ -153,7 +156,7 @@ export function ComponentResearchReview({ record, onChanged, unified = false, on
                 {!readonly && <Button size="sm" variant="outline" disabled={busy || active || !!proposal} title={proposal ? "请先在修订差异中放弃当前修改，再人工编辑" : undefined} onClick={() => { setEditor(structuredClone(section)); setMetadataText(section.paradigm ? JSON.stringify(section.paradigm, null, 2) : ""); setDetailTab("content"); }}>人工编辑</Button>}
               </div>
               {detailTab === "content" && (editor?.id === section.id ? <div className="grid gap-3">
-                {([['title', '标题'], ['content', '用法'], ['interfaces', '公共接口'], ['integration', '集成与依赖'], ['example', '示例'], ['sources', '来源']] as const).map(([key, label]) => <label key={key} className="grid gap-1">{label}<Textarea aria-label={`编辑${label}`} value={editor[key]} rows={key === "title" ? 1 : 6} disabled={key === "sources" && !!editor.paradigm} onChange={e => setEditor({ ...editor, [key]: e.target.value })} /></label>)}
+                {([['title', '标题'], ['content', '适用场景、使用步骤与使用约束'], ['interfaces', '关键接口'], ['integration', '接入配置'], ['example', '完整示例'], ['unit_tests', '单元测试示例'], ['sources', '来源']] as const).map(([key, label]) => <label key={key} className="grid gap-1">{label}<Textarea aria-label={`编辑${label}`} value={editor[key]} rows={key === "title" ? 1 : 6} disabled={key === "sources" && !!editor.paradigm} onChange={e => setEditor({ ...editor, [key]: e.target.value })} /></label>)}
                 {editor.paradigm && <label className="grid gap-1">范式结构化字段（与正文同版本保存）<Textarea aria-label="编辑范式字段" rows={16} value={metadataText} onChange={e => setMetadataText(e.target.value)} /></label>}
                 <div className="flex gap-2"><Button disabled={busy} onClick={async () => { try { const updated = editor.paradigm ? { ...editor, paradigm: JSON.parse(metadataText) } : editor; if (await request("edit-section", { section: updated, base_revision: editor.revision })) { setEditor(undefined); setArtifacts(undefined); } } catch { setError("范式字段必须是有效 JSON"); } }}>保存人工版本</Button><Button variant="outline" onClick={() => setEditor(undefined)}>取消编辑</Button></div>
               </div> : <KnowledgeReviewNotes refreshToken={record} kind="component" jobId={record.id} documentId={section.id} commentOnly={readonly} toolbarTarget={notesToolbar} working={active}>{sectionPreview}</KnowledgeReviewNotes>)}

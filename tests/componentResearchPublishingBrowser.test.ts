@@ -7,11 +7,12 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
+import { componentGuideOverview, componentGuideSection } from "./fixtures/componentGuide.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 function publishingFixtures() {
   const record = { id: "cr-publish", topic: "文件组件使用指南", language: "cpp", status: "done", stage: "待审查", operator: "dev", created_at: "2026-09-30T00:00:00Z", evidence: [],
-    document: { overview: "# 文件组件使用指南", sections: ["打开与关闭", "异步读取"].map((title, index) => ({ id: `section-${index}`, title, repository_ids: ["file"], selected: true, revision: 3, content: "由调用方负责释放句柄。", interfaces: "Open / Close", integration: "链接 file", example: "调用 Close 释放句柄。", sources: "src/file.cpp", related_ids: [] })) } } as unknown as ResearchRecord;
+    document: { overview: componentGuideOverview(), sections: ["打开与关闭", "异步读取"].map((title, index) => ({ ...componentGuideSection(`section-${index}`, ["file"], { title, component: index === 0 ? "file-open" : "file-read", content: "由调用方负责释放句柄。" }), selected: true, revision: 3 })) } } as unknown as ResearchRecord;
   record.review_turns = record.document!.sections.map((section, index) => ({ id: `proposal-${index}`, section_id: section.id, mode: "rework", message: "请明确资源释放顺序", operator: "dev", status: "done", created_at: record.created_at,
     proposal: { base_revision: index === 0 ? section.revision : section.revision - 1, status: "pending", section: { ...section, content: `${section.content}\n\n最新修改：先取消回调，再释放句柄。` } } }));
   const initial = projectKnowledgeProduction({ kind: "component", record });

@@ -71,7 +71,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   }
   // 全屏态的样式让容器里每个子元素各占满一行宽：只容得下一个工作区。经验页、平台 Skill 页是
   // "返回按钮 + 内容"两段，进全屏会把内容挤成几十像素（2026-10-08 真服务实测），所以留在页内。
-  const platformSkill = route.page === "module" && route.module === "platform" && ["platform-skill-domain", "platform-skill-component"].includes(route.document);
+  const platformSkill = route.page === "module" && route.module === "platform" && ["platform-skill-domain", "platform-skill-component", "platform-skill-component-analysis"].includes(route.document);
   const returnSearch = platformSkill && typeof history.state?.knowledgeResearchReturn === "string" && new URLSearchParams(history.state.knowledgeResearchReturn).get("kbPage") === "research" ? history.state.knowledgeResearchReturn as string : undefined;
   function returnToResearch() {
     const url = new URL(location.href); url.search = returnSearch!;

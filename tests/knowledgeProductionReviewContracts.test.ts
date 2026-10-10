@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { componentGuideContent, componentGuideEvidence, componentGuideOverview, componentGuideSection, componentGuideText } from "./fixtures/componentGuide.ts";
 import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,8 +41,9 @@ async function bounded<T>(work: Promise<T>, label: string): Promise<T> {
     timer = setTimeout(() => reject(new Error(`${label}未在5秒预算内完成`)), 5_000);
   })]); } finally { clearTimeout(timer); }
 }
-const section = (id: string, repositoryId: string, content: string) => ({ id, title: id === "rules" ? "规则" : "相邻能力", repository_ids: [repositoryId], content,
-  interfaces: "src/rules.cpp:1 ApplyRule()", integration: "链接规则库并初始化上下文", example: "未编译验证。\n```cpp\nApplyRule();\n```", sources: "src/rules.cpp:1 @ 固定源码版本", related_ids: [] });
+const section = (id: string, repositoryId: string, content: string) => componentGuideSection(id, [repositoryId], {
+  title: id === "rules" ? "规则" : "相邻能力", content,
+});
 
 async function domainAdapter(): Promise<ReviewAdapter> {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-review-contract-domain-")), seen: ReviewAdapter["seen"] = [];
@@ -99,13 +101,14 @@ async function componentAdapter(): Promise<ReviewAdapter> {
   const repository = saveComponentRepository(dir, { name: "规则库", repository: "https://example.test/rules.git", branch: "main", path: "src", languages: ["cpp"] }, "researcher");
   const manager = new ComponentResearch(dir, async input => {
     if (!input.review) {
-      input.editDocument!({ action: "overview", overview: "规则与相邻能力的使用说明。" });
+      for (const event of componentGuideEvidence("cpp", [repository.id])) input.evidence(event);
+      input.editDocument!({ action: "overview", overview: componentGuideOverview("规则与相邻能力的使用说明。") });
       input.editDocument!({ action: "outline", entries: [section("rules", repository.id, original), section("neighbor", repository.id, neighbor)].map(({ id, title, repository_ids }) => ({ id, title, repository_ids })) });
       input.editDocument!({ action: "section", section: section("rules", repository.id, original) });
       input.editDocument!({ action: "section", section: section("neighbor", repository.id, neighbor) });
     } else {
       const current = input.readDocument!().sections.find(section => section.id === input.review!.section_id)!;
-      seen.push({ message: input.review.message, content: current.content });
+      seen.push({ message: input.review.message, content: componentGuideText(current.content) });
       input.editDocument!({ action: "section", section: { ...current, content: `${current.content}\n${input.review.message}` } });
       if (input.review.message === "核对失败") throw new Error("来源核对未完成");
     }
@@ -116,9 +119,9 @@ async function componentAdapter(): Promise<ReviewAdapter> {
     seen,
     read() {
       const record = manager.get(jobId);
-      return { status: record.status, documents: record.document!.sections.map(({ id, content, revision, selected }) => ({ id, content, revision, selected })),
+      return { status: record.status, documents: record.document!.sections.map(({ id, content, revision, selected }) => ({ id, content: componentGuideText(content), revision, selected })),
         suggestions: (record.review_turns ?? []).flatMap(turn => turn.proposal ? [{ turn_id: turn.id, document_id: turn.section_id, status: turn.proposal.status,
-          base_revision: turn.proposal.base_revision, content: turn.proposal.section.content }] : []), formal_id: record.document_id };
+          base_revision: turn.proposal.base_revision, content: componentGuideText(turn.proposal.section.content) }] : []), formal_id: record.document_id };
     },
     async revise(message, documentId = "rules") {
       const record = manager.review(jobId, { section_id: documentId, mode: "rework", message }, "reviewer"), turnId = record.review_turns!.at(-1)!.id;
@@ -128,7 +131,7 @@ async function componentAdapter(): Promise<ReviewAdapter> {
     decide(turnId, decision) { manager.decideProposal(jobId, turnId, decision, "reviewer"); },
     edit(content, expectedRevision, documentId = "rules") {
       const section = manager.get(jobId).document!.sections.find(section => section.id === documentId)!;
-      manager.editSection(jobId, { section: { ...section, content }, base_revision: expectedRevision }, "editor");
+      manager.editSection(jobId, { section: { ...section, content: componentGuideContent(content) }, base_revision: expectedRevision }, "editor");
     },
     restore(revision, expectedRevision, documentId = "rules") { manager.restoreSection(jobId, documentId, revision, expectedRevision, "editor"); },
     select(documentId, selected) { manager.selectSections(jobId, [documentId], selected); },

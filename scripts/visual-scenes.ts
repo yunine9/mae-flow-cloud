@@ -25,6 +25,7 @@ import {
 } from "../src/taskFocus.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import type { ResearchRecord } from "../src/componentResearch.ts";
+import { componentGuideEvidence, componentGuideOverview, componentGuideSection } from "../tests/fixtures/componentGuide.ts";
 import type { SkillSubmissionRecord } from "../src/hostSkillLibrary.ts";
 import { componentDeletionView } from "../src/componentKnowledgeDeletion.ts";
 import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
@@ -228,11 +229,12 @@ async function render(out: string): Promise<void> {
           const markup = `<div id="visual-app"></div><script id="visual-fixture" type="application/json">${json}</script><script>${bundle.outputFiles[0].text.replaceAll("</script", "<\\/script")}</script>`;
           for (const theme of themes) scenes.push({ name: `knowledge-component-deletion-${theme}`, html: page(theme, markup, css) });
           const component = { id: "component-file", name: "文件组件", repository: "https://example.test/file.git", branch: "main", path: "src", languages: ["cpp"], description: "文件句柄与异步回调", enabled: true };
-          const componentRecord: ResearchRecord = { id: "cr-00000000-0000-4000-8000-000000000010", key: "visual-component", language: "cpp", topic: "文件组件使用指南", mode: "all", format: "joint-document", operator: "alice", created_at: "2026-09-06T01:00:00Z", status: "done", stage: "待审查", component, components: [component], revisions: { [component.id]: "a".repeat(40) }, evidence: [], document: {
-            overview: "# 文件组件使用指南\n\n文件组件提供句柄管理与异步读取。调用方先停止回调，再释放句柄，所有等待都须有明确超时。",
-            sections: ["打开与关闭", "异步读取"].map((title, index) => ({ id: `section-${index}`, title, repository_ids: [component.id], selected: true, revision: 3,
-              content: `## ${title}\n\n${index ? "取消读取后等待正在执行的回调结束；超时后报告失败，不能假称文件已安全关闭。" : "打开失败时返回错误；关闭操作只执行一次，释放前先确认异步读取已经结束。"}`,
-              interfaces: "Open(path) / Cancel(handle) / Close(handle)", integration: "链接 file，使用 include/file.h 提供的接口。", example: "示例尚未编译验证。\n```cpp\nCancel(handle);\nClose(handle);\n```", sources: "src/file.cpp:1-80 @ 固定源码版本", related_ids: [],
+          const componentRecord: ResearchRecord = { id: "cr-00000000-0000-4000-8000-000000000010", key: "visual-component", language: "cpp", topic: "文件组件使用指南", mode: "all", format: "joint-document", operator: "alice", created_at: "2026-09-06T01:00:00Z", status: "done", stage: "待审查", component, components: [component], revisions: { [component.id]: "a".repeat(40) }, evidence: componentGuideEvidence("cpp", [component.id]), document: {
+            overview: componentGuideOverview("文件组件提供句柄管理与异步读取。调用方先停止回调，再释放句柄，所有等待都须有明确超时。"),
+            sections: ["打开与关闭", "异步读取"].map((title, index) => ({
+              ...componentGuideSection(`section-${index}`, [component.id], { title,
+                content: index ? "取消读取后等待正在执行的回调结束；超时后报告失败。" : "打开失败时返回错误；关闭操作只执行一次，释放前确认读取已经结束。" }),
+              selected: true, revision: 3,
             })),
           } };
           componentRecord.review_turns = componentRecord.document!.sections.map((section, index) => ({ id: `review-visual-${index}`, section_id: section.id, mode: "rework", message: "请明确关闭顺序与等待预算", operator: "alice", status: "done", created_at: componentRecord.created_at,

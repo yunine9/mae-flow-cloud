@@ -2,6 +2,7 @@ import type { SearchableKnowledge } from "./knowledgeSearch.ts";
 import type { ComponentPolicy } from "./componentKnowledgeTypes.ts";
 import { effectiveComponentPolicy } from "./componentKnowledgePolicy.ts";
 import { validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
+import { validateComponentUsageMarkdown } from "./componentKnowledgeMarkdown.ts";
 
 export interface PublishedComponentParadigm extends ComponentParadigm {
   mapping_id: string; source_digest: string; policy: ComponentPolicy;
@@ -21,17 +22,23 @@ export function publishedComponentParadigms(asset: Pick<SearchableKnowledge, "id
   const entries = JSON.parse(headers[1].slice("component_paradigms: ".length));
   if (!Array.isArray(entries) || !entries.length) throw new Error("组件联合文档没有结构化产物");
   const seen = new Set<string>();
-  return entries.map(entry => {
+  const validated = entries.map(entry => {
     const { id, title, revision, ...metadata } = entry;
     if (typeof id !== "string" || !/^[a-z0-9][a-z0-9-]{0,199}$/.test(id) || seen.has(id)
       || typeof title !== "string" || !title.trim() || !Number.isInteger(revision) || revision < 1) throw new Error("组件范式编号、标题或版本无效");
     seen.add(id);
     validateComponentParadigm(metadata, Array.isArray(metadata.evidence) ? metadata.evidence.map(e => e?.repository_id) : []);
+    return { id, title, revision, metadata };
+  });
+  return validated.filter(entry => entry.metadata.kind === "paradigm" && entry.metadata.status === "recommended").map(({ id, title, revision, metadata }) => {
     const anchors = lines.flatMap((line, index) => line === `<a id="component-${id}"></a>` ? [index] : []);
     if (anchors.length !== 1) throw new Error(`范式 ${id} 缺少唯一正文位置`);
     const start = anchors[0], next = lines.findIndex((line, index) => index > start && /^<a id="component-[a-z0-9-]+"><\/a>$/.test(line));
     const body = lines.slice(start, next < 0 ? lines.length : next).join("\n");
-    if (!["### 公共接口", "### 集成产物与依赖", "### 最佳示例"].every(h => body.includes(h)) || !body.includes("```")) throw new Error(`范式 ${id} 正文不完整，不能用于开发`);
+    const content = /^<a id="component-[a-z0-9-]+"><\/a>\n\n## [^\n]+\n\n([\s\S]+)$/.exec(body);
+    if (!content) throw new Error(`范式 ${id} 正文缺少用法标题与内容`);
+    try { validateComponentUsageMarkdown(content[1]); }
+    catch (error) { throw new Error(`范式 ${id} 正文不完整：${error instanceof Error ? error.message : String(error)}`); }
     return { ...metadata, id, title, revision, ...source, start_line: start + 1, end_line: next < 0 ? lines.length : next };
   });
 }

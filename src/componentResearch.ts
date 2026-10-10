@@ -45,6 +45,7 @@ export interface ResearchRecord {
   id: string;
   pipeline?: ComponentPipelineState;
   skill?: { name: string; digest: string };
+  analysis_skill?: { name: string; digest: string };
   use_latest_skill?: boolean;
   /** 新研究覆盖一个组件的全部能力；component 是旧记录中的方式，读取时保留。 */
   mode?: "all" | "component";
@@ -124,6 +125,14 @@ function recordRevisions(value: unknown, path: string) {
 function recordSkill(value: unknown, path: string) {
   recordObject(value, path); recordFields(value, ["name", "digest"], `${path}.`);
 }
+function assertEverycodeEvidence(metadata: { usage_evidence: string[]; test_evidence: string[] }, evidence: Array<Record<string, unknown>>) {
+  for (const [purpose, ids] of [["usage", metadata.usage_evidence], ["unit-test", metadata.test_evidence]] as const) {
+    for (const id of ids) if (!evidence.some(item => item.evidence_id === id && item.tool === "code_search" && item.action === "read"
+      && item.status === "returned" && item.content && (item.purpose ?? "usage") === purpose)) {
+      throw new Error(purpose === "unit-test" ? "单元测试证据必须对应本任务已取得的 everycode 测试原文" : "调用证据必须对应本任务已取得的 everycode 原文");
+    }
+  }
+}
 function checkComponent(value: unknown, path: string) {
   recordObject(value, path);
   recordFields(value, ["id", "name", "repository", "branch", "path", "description"], `${path}.`);
@@ -132,15 +141,49 @@ function checkComponent(value: unknown, path: string) {
 }
 function checkSection(value: unknown, repositoryIds: string[], path: string) {
   recordObject(value, path);
-  recordFields(value, ["id", "title", "content", "interfaces", "integration", "example", "sources"], `${path}.`);
+  // 旧记录可读不等于符合新发布标准；默认值只用于读取副本，原字段与历史状态保留。
+  const readable = { ...value, ...(!Object.hasOwn(value, "unit_tests") ? { unit_tests: "" } : {}) };
+  recordFields(readable, ["id", "title", "content", "interfaces", "integration", "example", "unit_tests", "sources"], `${path}.`);
   recordStrings(value.repository_ids, `${path}.repository_ids`); recordStrings(value.related_ids, `${path}.related_ids`);
   recordCheck(typeof value.selected === "boolean", `${path}.selected`, "必须是布尔值");
   recordCheck(Number.isSafeInteger(value.revision) && value.revision >= 0, `${path}.revision`, "必须是非负整数");
   if (value.paradigm !== undefined) {
     recordObject(value.paradigm, `${path}.paradigm`);
-    try { validateComponentParadigm(value.paradigm as Parameters<typeof validateComponentParadigm>[0], repositoryIds); }
+    const metadata: Record<string, any> = { ...value.paradigm, ...(!Object.hasOwn(value.paradigm, "test_evidence") ? { test_evidence: [] } : {}) };
+    try {
+      if ((!Object.hasOwn(value, "unit_tests") || !Object.hasOwn(value.paradigm, "test_evidence"))
+        && metadata.kind === "paradigm" && metadata.status === "recommended" && Array.isArray(metadata.test_evidence) && !metadata.test_evidence.length) {
+        recordCheck(Array.isArray(metadata.usage_evidence) && metadata.usage_evidence.length > 0, `${path}.paradigm.usage_evidence`, "推荐用法须保留已有调用依据");
+        // 仅以内部研究的规则校验旧资料；不改其已存推荐状态，也不补造测试证据。
+        validateComponentParadigm({ ...metadata, status: "unverified" } as Parameters<typeof validateComponentParadigm>[0], repositoryIds);
+      } else validateComponentParadigm(metadata as Parameters<typeof validateComponentParadigm>[0], repositoryIds);
+    }
     catch { throw new KnowledgeRecordFormatError(`${path}.paradigm 不符合当前组件规则或来源范围`); }
   }
+}
+function legacyGuideSection(section: ResearchSection) {
+  return !Object.hasOwn(section, "unit_tests") || !!section.paradigm && !Object.hasOwn(section.paradigm, "test_evidence");
+}
+function incompleteGuideSection(section: ResearchSection) {
+  return legacyGuideSection(section) || section.paradigm && (
+    section.paradigm.kind === "paradigm" && section.paradigm.status === "recommended"
+      && (!section.unit_tests?.trim() || !section.paradigm.test_evidence?.length));
+}
+function fillReadableResearchFields(record: ResearchRecord) {
+  const section = (value: ResearchSection) => {
+    if (!Object.hasOwn(value, "unit_tests")) value.unit_tests = "";
+    if (value.paradigm && !Object.hasOwn(value.paradigm, "test_evidence")) value.paradigm.test_evidence = [];
+  };
+  record.document?.sections.forEach(section);
+  record.section_history?.forEach(history => section(history.section));
+  record.review_turns?.forEach(turn => { if (turn.proposal) section(turn.proposal.section); });
+  if (record.publication_intent) fillReadableResearchFields(record.publication_intent.record);
+}
+/** 旧稿供模型修订时保留原文；保存章节与正式发布仍各自执行当前格式校验。 */
+export function researchDraftContext(record: Pick<ResearchRecord, "topic" | "draft">, document: ResearchDocument) {
+  if (!document.sections.some(legacyGuideSection)) return researchDocumentMarkdown(record.topic, document);
+  return [document.overview, ...document.sections.map(section => [`# ${section.title}`, section.content,
+    section.interfaces, section.integration, section.example, section.unit_tests ?? ""].filter(Boolean).join("\n\n"))].filter(Boolean).join("\n\n") || record.draft || "";
 }
 function checkReviewTurn(value: unknown, repositoryIds: string[], path: string) {
   recordObject(value, path);
@@ -176,6 +219,7 @@ function checkPipeline(value: unknown, path: string) {
     if (task.result.components !== undefined) recordArray(task.result.components, `${path}.result.components`, (component, path) => {
       recordObject(component, path); recordFields(component, ["id", "title", "scope"], `${path}.`);
       recordStrings(component.repository_ids, `${path}.repository_ids`);
+      if (component.dependencies !== undefined) recordStrings(component.dependencies, `${path}.dependencies`);
     });
     if (task.result.paradigms !== undefined) recordArray(task.result.paradigms, `${path}.result.paradigms`, (paradigm, path) => {
       recordObject(paradigm, path); recordFields(paradigm, ["id", "title", "need"], `${path}.`);
@@ -192,6 +236,7 @@ function validResearchRecord(value: unknown, id: string, path = ""): value is Re
   if (value.format !== undefined) recordCheck(value.format === "joint-document", field("format"), "不是当前组件文稿格式");
   if (value.use_latest_skill !== undefined) recordCheck(typeof value.use_latest_skill === "boolean", field("use_latest_skill"), "必须是布尔值");
   if (value.skill !== undefined) recordSkill(value.skill, field("skill"));
+  if (value.analysis_skill !== undefined) recordSkill(value.analysis_skill, field("analysis_skill"));
   recordCheck(recordStatuses.includes(value.status), field("status"), "不是受支持的任务状态");
   checkComponent(value.component, field("component"));
   if (value.components !== undefined) recordArray(value.components, field("components"), checkComponent);
@@ -331,7 +376,13 @@ export class ComponentResearch {
         }
       }
     }
-    return { ...record, production: projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions }) };
+    const needsGuideCompletion = record.document?.sections.some(incompleteGuideSection)
+      || record.review_turns?.some(turn => turn.proposal?.status === "pending" && incompleteGuideSection(turn.proposal.section));
+    fillReadableResearchFields(record);
+    const production = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions });
+    if (needsGuideCompletion) production.platform_message = [production.platform_message,
+      "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");
+    return { ...record, production };
   }
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");
@@ -412,7 +463,7 @@ export class ComponentResearch {
         .then(async () => {
           try {
             const draft = await this.execute({
-              record: { ...structuredClone(record), ...(review && revisedDocument ? { document: structuredClone(revisedDocument), draft: researchDocumentMarkdown(record.topic, revisedDocument) } : {}) },
+              record: { ...structuredClone(record), ...(review && revisedDocument ? { document: structuredClone(revisedDocument), draft: researchDraftContext(record, revisedDocument) } : {}) },
               root: this.root(record.id),
               signal: controller.signal,
               review: review ? structuredClone(review) : undefined,
@@ -429,7 +480,7 @@ export class ComponentResearch {
                       section: structuredClone(document.sections.find(s => s.id === review.section_id)!), status: "pending" };
                     this.update(record, {});
                   }
-                  else this.update(record, { document, draft: researchDocumentMarkdown(record.topic, document) });
+                  else this.update(record, { document, draft: researchDraftContext(record, document) });
                   return structuredClone(document);
                 },
               },
@@ -472,13 +523,14 @@ export class ComponentResearch {
               const named = (record.components ?? [record.component]).reduce((text, component) => text.split(`${component.id}:`).join(`${component.name}:`), draft);
               review.status = "done"; review.reply = named; review.finished_at = new Date().toISOString();
             } else if (!record.challenge && record.document && (!record.document.overview.trim() || !record.document.sections.length
-                || record.document.sections.some(section => !sectionReady(section)))) {
+                || record.document.sections.some(section => !sectionReady(section)
+                  && !(legacyGuideSection(section) && record.pipeline?.tasks.some(task => task.id === section.id && task.status === "done"))))) {
               throw new Error("联合草稿尚不完整：需要跨仓关系说明，以及每项组件的接口、集成依赖、最佳示例和来源；已写内容保留，可继续研究");
             }
             this.update(record, {
               status: "done",
               stage: record.challenge ? "反例研究已完成，请人工判断" : review ? "本轮已完成，等待专家继续审查" : "草稿待审查",
-              draft: !record.challenge && record.document ? researchDocumentMarkdown(record.topic, record.document) : draft,
+              draft: !record.challenge && record.document ? researchDraftContext(record, record.document) : draft,
               finished_at: new Date().toISOString(),
             });
           } catch (error) {
@@ -488,7 +540,7 @@ export class ComponentResearch {
               review.finished_at = new Date().toISOString();
               if (review.mode === "supplement") review.added_section_ids = undefined;
               // 返工失败不能把半份修订覆盖专家原稿。
-              record.draft = researchDocumentMarkdown(record.topic, record.document!);
+              record.draft = researchDraftContext(record, record.document!);
             }
             this.update(record, {
               status: "failed",
@@ -617,11 +669,11 @@ export class ComponentResearch {
       for (const ref of metadata.evidence) if (!record.evidence.some(e => e.tool === "component_source" && e.action === "read" && e.status === "returned"
         && e.component_id === ref.repository_id && e.path === ref.path && e.revision === ref.revision
         && Number(e.start) <= ref.start && Number(e.end) >= ref.end)) throw new Error("引用必须对应本任务已读取的基础仓代码范围");
-      for (const id of metadata.usage_evidence) if (!record.evidence.some(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.status === "returned" && e.content)) throw new Error("调用证据必须对应本任务已取得的 everycode 原文");
+      assertEverycodeEvidence(metadata, record.evidence);
     }
     record.section_history ??= [];
     record.section_history.push({ at: new Date().toISOString(), operator, section: structuredClone(section) });
-    this.update(record, { document, draft: researchDocumentMarkdown(record.topic, document) });
+    this.update(record, { document, draft: researchDraftContext(record, document) });
     return this.get(id);
   }
   decideProposal(id: string, turnId: string, decision: "accept" | "discard", operator: string) {
@@ -656,10 +708,13 @@ export class ComponentResearch {
     if (!raw?.document || raw.deleted_at) throw new Error("请选择已入库的联合文档");
     const record = this.get(id);
     if (!record.document) throw new Error("请选择已入库的联合文档");
+    // get 的默认空字段仅供显示；开始更新仍以实际提交的原始记录为准。
+    const original = raw.publication_intent && record.document_id === raw.publication_intent.formal.document.id
+      && record.published_revision === raw.publication_intent.formal.document.revision ? raw.publication_intent.record : raw;
     const formalId = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id) }).knowledge_document_id;
     const published = formalId ? readKnowledgeDocument(this.dir, formalId) : undefined;
     if (!published) throw new Error("请选择已入库的联合文档");
-    let baseline = researchDocumentMarkdown(published.title, record.document, true);
+    let baseline = original.document!.sections.some(legacyGuideSection) ? researchDraftContext(original, original.document!) : researchDocumentMarkdown(published.title, record.document, true);
     if (record.published_revision) {
       if (published.revision === record.published_revision) baseline = published.content;
       else baseline = readKnowledgeDocumentVersion(this.dir, published.id, record.published_revision).document.content;
@@ -668,7 +723,7 @@ export class ComponentResearch {
     // 以前直接拒绝，人就再也发不起更新（死路）；现在照常开始，如实提示别处的修改不会带入，
     // 旧版本仍在版本历史里可对比，发布前由人审查决定。
     const manualChanged = published.content.trim() !== baseline.trim();
-    this.commitPublicationRecord({ ...record, update_document_id: published.id, update_document_revision: published.revision,
+    this.commitPublicationRecord({ ...structuredClone(original), update_document_id: published.id, update_document_revision: published.revision,
       document_id: undefined, publication_intent: undefined, update_metadata: { title: published.title, scope: published.scope, module_ids: published.module_ids, repositories: published.repositories },
       stage: manualChanged ? "选择受影响章节，生成更新建议。注意：正式文档在别处改过，本次更新以研究稿为基础，别处的修改不会自动带入，可在版本历史中对比" : "选择受影响章节，生成更新建议", operator });
     return this.get(id);
@@ -682,11 +737,11 @@ export class ComponentResearch {
     const record = this.get(id);
     if (record.deleted_at) throw new Error("萃取任务已删除");
     const exported = exportComponentArtifacts(record.document?.sections ?? []);
-    const ids = new Set(exported.catalog.flatMap(p => p.usage_evidence));
+    const ids = new Set(exported.catalog.flatMap(p => [...p.usage_evidence, ...p.test_evidence]));
     const references = [...ids].map(id => {
       const e = record.evidence.find(e => e.evidence_id === id && e.tool === "code_search" && e.action === "read" && e.content);
       if (!e) throw new Error(`缺少 everycode 原始证据：${id}`);
-      return { id, repository: e.repository, path: e.path, start: e.start ?? 1, end: e.end ?? 160, content: e.content, revision: null, version_note: "原始返回未结构化提供版本，具体版本以正文为准" };
+      return { id, purpose: e.purpose ?? "usage", repository: e.repository, path: e.path, start: e.start ?? 1, end: e.end ?? 160, content: e.content, revision: null, version_note: "原始返回未结构化提供版本，具体版本以正文为准" };
     });
     return { ...exported, files: { ...exported.files, "evidence/everycode.json": JSON.stringify(references, null, 2) + "\n" } };
   }
@@ -720,8 +775,7 @@ export class ComponentResearch {
         for (const ref of metadata.evidence) if (!record.evidence.some(evidence => evidence.tool === "component_source" && evidence.action === "read" && evidence.status === "returned"
           && evidence.component_id === ref.repository_id && evidence.path === ref.path && evidence.revision === ref.revision
           && Number(evidence.start) <= ref.start && Number(evidence.end) >= ref.end)) throw new Error("引用必须对应本任务已读取的基础仓代码范围");
-        for (const evidenceId of metadata.usage_evidence) if (!record.evidence.some(evidence => evidence.evidence_id === evidenceId && evidence.tool === "code_search"
-          && evidence.action === "read" && evidence.status === "returned" && evidence.content)) throw new Error("调用证据必须对应本任务已取得的 everycode 原文");
+        assertEverycodeEvidence(metadata, record.evidence);
       }
       (accepted.section_history ??= []).push({ at: new Date().toISOString(), operator, section: structuredClone(section) });
       accepted.document = document;
