@@ -69,8 +69,8 @@ export interface AuthUser {
   role: UserRole;
   /** 管理员配置的可选检视人；不是角色，也不会自动收到任务通知。 */
   committer?: boolean;
-  /** 自动接单名单(ADR-0061):true=在名单,名下符合条件的新 DTS 单
-   *  由平台定时自动发起。管理员唯一开关,用户无个人开关。 */
+  /** 自动接单开关(ADR-0061,2026-10-10 修订迁入个人设置):true=本人
+   *  已开启,名下符合条件的新 DTS 单由平台定时自动发起。缺省关闭。 */
   issue_auto_claim?: boolean;
   /** 个人 Git 令牌的掩码提示(••••末4位);没配则缺席。只写不读:
    * 明文永远不会出现在任何 API 响应里。 */
@@ -441,17 +441,23 @@ export async function putCommitter(
   return parseJson(response);
 }
 
-/** 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出即停。
- *  管理员账号服务端拒收(管理员不处理问题单)。 */
-export async function putUserIssueAutoClaim(
-  username: string,
-  on: boolean,
-): Promise<AuthUser> {
-  const response = await fetch(
-    `/auth/users/${encodeURIComponent(username)}/issue-auto-claim`, {
-      method: "PUT",
-      body: JSON.stringify({ on }),
-    });
+/** 自动接单开关(ADR-0061,2026-10-10 修订):个人自助,谁登录改谁的,
+ *  缺省关闭。管理员账号服务端拒收(管理员不处理问题单)。 */
+export async function putMyIssueAutoClaim(on: boolean): Promise<AuthUser> {
+  const response = await fetch("/auth/me/issue-auto-claim", {
+    method: "PUT",
+    body: JSON.stringify({ on }),
+  });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+/** 自动接单下次发起时刻(个人设置问号悬停卡的数据源)。null=调度器
+ *  未装配或管理员把扫描间隔设为 0(前端显示「已暂停」)。 */
+export async function getIssueAutoClaimNextRun(): Promise<{
+  next_run_at: string | null;
+}> {
+  const response = await fetch("/issues/auto-claim");
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

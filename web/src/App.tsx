@@ -28,9 +28,10 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  createUser, deleteUser, getBuildInfo, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
-  login, logout, putCommitter, putUserDisplayName, putUserIssueAutoClaim, resetUserPassword,
+  createUser, deleteUser, getBuildInfo, getIssueAutoClaimNextRun, getLaunchOptions, getSession, getTask, isIssueActive, listAllIssues, listIssues, listMyReviews, listTasks, listUsers,
+  login, logout, putCommitter, putMyIssueAutoClaim, putUserDisplayName, resetUserPassword,
   type AuthUser, type IssueSummary, type TaskStatus, type TaskSummary,
   type ReviewRequest, type UserRole,
 } from "./api";
@@ -454,6 +455,92 @@ function IssueInterventionSetting({
   </section>;
 }
 
+/** 下次发起时刻的界面格式(本地时区,YYYY-MM-DD HH:mm:ss)。 */
+function formatNextRunAt(iso: string): string {
+  const at = new Date(iso);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} `
+    + `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
+}
+
+/** 自动接单(ADR-0061;2026-10-10 修订迁入个人设置):个人自助开关,
+ *  缺省关闭。说明只留一句,「符合条件」的规则与下次发起时间收进问号
+ *  悬停;管理员保留两根全局杠杆:扫描间隔(0=全停,悬停显示已暂停)
+ *  与配置中心按版本组勾选「参与自动接单」。 */
+function IssueAutoClaimSetting({
+  session,
+  onChanged,
+}: {
+  session: AuthUser;
+  onChanged: (patch: Partial<AuthUser>) => Promise<void>;
+}) {
+  const [on, setOn] = useState(session.issue_auto_claim === true);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [nextRunAt, setNextRunAt] = useState<string | null | undefined>(
+    undefined);
+  useEffect(() => {
+    let alive = true;
+    getIssueAutoClaimNextRun()
+      .then((view) => { if (alive) setNextRunAt(view.next_run_at); })
+      .catch(() => { /* 调度缺席(测试/旁路形态)时悬停卡显示已暂停 */ });
+    return () => { alive = false; };
+  }, []);
+  async function toggle(next: boolean) {
+    if (busy || next === on) return;
+    setBusy(true);
+    try {
+      const user = await putMyIssueAutoClaim(next);
+      const applied = user.issue_auto_claim === true;
+      setOn(applied);
+      setNote(applied
+        ? "自动接单已开启:下一拍扫描起,名下符合条件的新问题单由平台代你发起"
+        : "自动接单已关闭:不再自动发起名下新单,进行中的会话照常推进");
+      await onChanged({ issue_auto_claim: applied });
+    } catch (cause) {
+      setNote(String((cause as Error).message ?? cause));
+    } finally { setBusy(false); }
+  }
+  return <section className="rounded-[12px] border border-(--line) bg-[radial-gradient(circle_at_100%_0,color-mix(in_srgb,var(--accent)_10%,transparent),transparent_42%),var(--surface)] p-[22px] shadow-sm max-[480px]:p-[17px]" aria-labelledby="issue-auto-claim-title">
+    <header className="grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-3 max-[480px]:grid-cols-[38px_minmax(0,1fr)]">
+      <span className="grid size-[42px] place-items-center rounded-xl border border-(--accent)/20 bg-(--accent-soft) text-(--accent) [&_svg]:size-5 max-[480px]:size-[38px]" aria-hidden><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5" /><path d="M10 5.5V10l3 1.8" /></svg></span>
+      <div><h2 id="issue-auto-claim-title" className="m-0 text-[19px] tracking-[-0.025em] text-(--text-strong)">自动接单</h2></div>
+      <label className="flex items-center gap-[9px] text-sm font-bold text-(--muted)">
+        <Switch size="sm" checked={on} disabled={busy}
+          onCheckedChange={(value) => void toggle(value === true)} />
+        <span className={on ? "text-(--accent)" : undefined}>{on ? "已开启" : "已关闭"}</span>
+      </label>
+    </header>
+    <p className="my-3.5 text-sm text-(--muted)">
+      开启后,平台定时扫描你名下符合条件的新问题单并自动发起问题会话
+      <Tooltip>
+        <TooltipTrigger render={
+          <button type="button" aria-label="什么单会被自动发起,下次发起是什么时候"
+            className="ml-1.5 inline-grid size-[17px] place-items-center rounded-full border border-(--faint) text-[11px] font-bold leading-none text-(--faint) transition-colors hover:border-(--accent) hover:text-(--accent)">?</button>
+        } />
+        <TooltipContent side="bottom" align="start"
+          className="block max-w-sm rounded-lg border border-(--line) bg-(--surface) p-3.5 text-left leading-[1.7] text-(--text) shadow-md">
+          <span className="font-semibold">「符合条件」指同时满足:</span>
+          <ul className="ml-4 list-disc text-(--muted)">
+            <li>单据状态为「开发人员实施修改」</li>
+            <li>单据版本所在版本组已在配置中心勾选「参与自动接单」</li>
+            <li>单据特性名与某个业务模块完全匹配</li>
+          </ul>
+          {/* 读取完成才显示这一行:加载中不占位,读取失败不误显「已暂停」。 */}
+          {nextRunAt !== undefined && <span
+            className="mt-2 block border-t border-(--line-soft) pt-2 text-(--muted)">
+            下次发起:{nextRunAt === null
+              ? "已暂停(管理员关闭了扫描)"
+              : formatNextRunAt(nextRunAt)}
+          </span>}
+        </TooltipContent>
+      </Tooltip>
+      。
+    </p>
+    {note && <p className="mt-[11px] text-sm text-(--success)" role="status">{note}</p>}
+  </section>;
+}
+
 function ThemeSwitch({ theme, onChange }: {
   theme: Theme;
   onChange: (theme: Theme) => void;
@@ -550,6 +637,9 @@ export function PersonalSettingsPage({
       onSessionPatch(patch);
       await onTasksChanged();
     }} />
+    {/* 自动接单是问题处理侧的个人开关:管理员不写问题会话,不给这张卡。 */}
+    {session.role !== "admin" && <IssueAutoClaimSetting session={session}
+      onChanged={async (patch) => { onSessionPatch(patch); }} />}
     <section aria-labelledby="personal-connections-title">
       <div className="mb-[11px] flex items-end justify-between gap-[18px] px-0.5 max-[760px]:flex-col max-[760px]:items-start max-[760px]:gap-[5px]">
         <div><h2 id="personal-connections-title" className="mt-[5px] text-[19px] leading-[1.2] tracking-[-0.025em] text-(--text-strong)">个人接入</h2></div>
@@ -1968,18 +2058,6 @@ function UsersBoard({ me }: { me: string }) {
       setError(reason instanceof Error ? reason.message : "Committer 名单更新失败");
     }
   }
-  // 自动接单名单(ADR-0061):管理员唯一开关,在名单即开、移出即停;
-  // 只对开发成员可开,管理员账号服务端也拒收。
-  async function toggleIssueAutoClaim(user: AuthUser) {
-    setError(""); setMessage("");
-    try {
-      await putUserIssueAutoClaim(user.username, !user.issue_auto_claim);
-      setMessage(`${user.username} 已${user.issue_auto_claim ? "移出" : "加入"}自动接单名单`);
-      await refreshUsers();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "自动接单名单更新失败");
-    }
-  }
   async function submitReset(event: React.FormEvent) {
     event.preventDefault(); if (busy) return;
     setBusy(true); setError(""); setMessage("");
@@ -2036,7 +2114,7 @@ function UsersBoard({ me }: { me: string }) {
     </div>
     <section className="rounded-[12px] border border-(--line) bg-(--surface) p-6 shadow-xs" aria-labelledby="user-list-title">
       <div className="mb-3 flex items-baseline justify-between gap-4">
-        <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知;自动接单名单内的开发成员,名下符合条件的新问题单由平台定时自动发起(ADR-0061)。</p></div>
+        <div><h2 id="user-list-title" className="mt-1.5 text-[21px] text-(--text-strong)">现有账号</h2><p className="mb-0 mt-1.5 text-sm text-(--muted)">Committer 只在开发主动邀请检视时收到通知。</p></div>
         <span className="text-[13px] font-medium tabular-nums text-muted-foreground">{users.length} 人</span>
       </div>
       {/* #220 手搓 div 网格表换 Table 原语:表头/行/单元格语义归 table,
@@ -2051,7 +2129,6 @@ function UsersBoard({ me }: { me: string }) {
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">角色</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">默认入口</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">Committer</TableHead>
-              <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">自动接单</TableHead>
               <TableHead className="h-11 bg-(--surface-soft) px-4 text-xs font-bold text-(--muted)">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -2071,11 +2148,6 @@ function UsersBoard({ me }: { me: string }) {
                 {/* 手搓 toggle 换 Switch 原语:开关态(role=switch/aria-checked)
                     交原语,on 态 pill 底色由 .on 类保留,文案与受控请求原样。 */}
                 <TableCell className="px-4 py-3"><label className={cn("inline-flex min-w-[92px] items-center justify-center gap-[7px] rounded-[8px] border px-[9px] py-[7px] text-sm transition-colors", user.committer ? "border-(--success)/30 bg-(--success-soft) text-(--success)" : "border-(--line) bg-(--surface) text-(--muted)")}><Switch size="sm" checked={!!user.committer} onCheckedChange={() => void toggleCommitter(user)} />{user.committer ? "已加入" : "加入名单"}</label></TableCell>
-                {/* 自动接单名单(ADR-0061):唯一开关,在名单即开、移出即停;
-                    名单内责任人名下符合条件的新 DTS 单由平台定时自动发起。 */}
-                <TableCell className="px-4 py-3">{user.role === "admin"
-                  ? <span className="text-xs text-(--faint)" title="管理员不处理问题单,不参与自动接单">不参与</span>
-                  : <label className={cn("inline-flex min-w-[92px] items-center justify-center gap-[7px] rounded-[8px] border px-[9px] py-[7px] text-sm transition-colors", user.issue_auto_claim ? "border-(--success)/30 bg-(--success-soft) text-(--success)" : "border-(--line) bg-(--surface) text-(--muted)")}><Switch size="sm" checked={!!user.issue_auto_claim} onCheckedChange={() => void toggleIssueAutoClaim(user)} />{user.issue_auto_claim ? "已开启" : "已关闭"}</label>}</TableCell>
                 <TableCell className="px-4 py-3"><span className="inline-flex gap-2">
                   <button type="button" className={userActionButton} onClick={() => {
                     setResetFor(resetFor === user.username ? "" : user.username);
@@ -2092,7 +2164,7 @@ function UsersBoard({ me }: { me: string }) {
                 </span></TableCell>
               </TableRow>
               {resetFor === user.username && <TableRow className="border-(--line)">
-                <TableCell colSpan={6} className="px-4 pb-3">
+                <TableCell colSpan={5} className="px-4 pb-3">
                   <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={submitReset}>
                     <Input type="password" value={resetPassword} placeholder="新密码,至少 10 个字符" minLength={10} autoComplete="new-password" autoFocus required
                       onChange={(event) => setResetPassword(event.target.value)} />
@@ -2102,7 +2174,7 @@ function UsersBoard({ me }: { me: string }) {
                 </TableCell>
               </TableRow>}
               {nameFor === user.username && <TableRow className="border-(--line)">
-                <TableCell colSpan={6} className="px-4 pb-3">
+                <TableCell colSpan={5} className="px-4 pb-3">
                   <form className="flex items-center gap-2.5 px-4 pb-3 max-[480px]:flex-wrap" onSubmit={saveDisplayName}>
                     <Input value={nameDraft} placeholder="姓名，例如 张三（清空则只显示工号）"
                       maxLength={40} autoFocus onChange={(event) => setNameDraft(event.target.value)} />

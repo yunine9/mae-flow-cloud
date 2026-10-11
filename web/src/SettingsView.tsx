@@ -213,8 +213,8 @@ function RuntimeCard({ view, onSaved }: {
         value={watchdog} onChange={setWatchdog} />
       <KnobField label="自动接单扫描间隔（秒）"
         defaultText={defaults.issue_auto_claim_interval_s === 0
-          ? "关闭" : `${defaults.issue_auto_claim_interval_s} 秒（${defaults.issue_auto_claim_interval_s / 60} 分钟）`}
-        note="定时扫描自动接单名单内责任人名下的新问题单并发起（人员名单在账号管理页维护，参与版本在配置中心勾选）；0 表示关闭"
+          ? "暂停" : `${defaults.issue_auto_claim_interval_s} 秒（${defaults.issue_auto_claim_interval_s / 60} 分钟）`}
+        note="定时扫描已开启自动接单（开关在个人设置）的责任人名下的新问题单并发起（参与版本在配置中心勾选）；0 表示暂停，各人的开关原样保留，恢复间隔即续"
         value={autoClaim} onChange={setAutoClaim} />
       <KnobField label="流水线检查间隔（秒）" defaultText={`${defaults.poll_interval_s} 秒`}
         note="生效于下一轮检查"

@@ -35,8 +35,9 @@ export interface AuthUser {
   role: UserRole;
   /** 可被任务责任人主动邀请检视。它是能力标记，不是第三种角色。 */
   committer?: boolean;
-  /** 自动接单名单(ADR-0061):true=在名单,名下符合条件的新 DTS 单
-   *  由平台定时自动发起。管理员维护,用户无个人开关。 */
+  /** 自动接单开关(ADR-0061,2026-10-10 修订迁入个人设置):true=本人
+   *  已开启,名下符合条件的新 DTS 单由平台定时自动发起。个人自助,
+   *  缺省关闭。 */
   issue_auto_claim?: boolean;
 }
 
@@ -63,6 +64,8 @@ export interface AuthSessionUser extends AuthUser {
   push_confirmation: boolean;
   /** 问题处理介入档位(按流剥离):与需求侧两轴互不带动。 */
   issue_intervention_tier: IssueInterventionTier;
+  /** 自动接单开关(ADR-0061 修订):本人当前态,个人设置显示与翻转。 */
+  issue_auto_claim: boolean;
 }
 
 /** 跨仓分工只暴露“能不能接活”和缺项名称，绝不暴露任何令牌提示或
@@ -107,9 +110,9 @@ interface StoredUser extends AuthUser {
    * 二档「优先报告」,全员从二档起步不继承需求侧。稀疏存储:二档
    * 即缺省不落盘,只落显式的 1/3。 */
   issue_intervention_tier?: IssueInterventionTier;
-  /** 自动接单名单(ADR-0061):true=管理员已把该开发责任人加入自动
-   * 接单名单,名下符合条件的新 DTS 单由平台定时自动发起。唯一开关:
-   * 用户无个人开关,在名单即开、移出即停。稀疏存储:缺席=不在名单。 */
+  /** 自动接单开关(ADR-0061,2026-10-10 修订迁入个人设置):true=本人
+   *  已开启,名下符合条件的新 DTS 单由平台定时自动发起。缺省关闭,
+   *  稀疏存储:缺席=关闭。管理员账号在 setIssueAutoClaim 拒收。 */
   issue_auto_claim?: boolean;
 }
 
@@ -403,14 +406,14 @@ export class LocalAuth {
     return publicUser(stored);
   }
 
-  /** 自动接单名单(ADR-0061):管理员唯一开关——在名单即开、移出即停、
-   * 重加即再开,单一真相源,用户没有个人开关。管理员账号不收:
-   * 管理员不写问题会话,名单里挂着也永远轮不到他。 */
+  /** 自动接单开关(ADR-0061;2026-10-10 修订迁入个人设置):本人自助
+   * 开关,缺省关闭。管理员账号不收:管理员不写问题会话,开了也永远
+   * 轮不到他。 */
   setIssueAutoClaim(username: string, on: boolean): AuthUser {
     const stored = this.users.get(username);
     if (!stored) throw new Error(`账号 ${username} 不存在`);
     if (on && stored.role === "admin") {
-      throw new Error("管理员不处理问题单,不能加入自动接单名单");
+      throw new Error("管理员不处理问题单,不能开启自动接单");
     }
     if (on) stored.issue_auto_claim = true;
     else delete stored.issue_auto_claim;
@@ -418,14 +421,20 @@ export class LocalAuth {
     return publicUser(stored);
   }
 
-  /** 自动接单扫描的名单读取口:在名单且未停用的开发责任人,现读现判
-   * ——名单增删下一拍生效,不必重启。 */
+  /** 自动接单开关读取口:已开启且未停用的开发责任人,现读现判
+   * ——开关翻转下一拍生效,不必重启。 */
   issueAutoClaimAccounts(): string[] {
     return [...this.users.values()]
       .filter((user) => user.issue_auto_claim
         && !user.disabled && user.role === "developer")
       .map((user) => user.username)
       .sort((a, b) => a.localeCompare(b));
+  }
+
+  /** 本人开关的当前态(个人设置显示与翻转的基准)。 */
+  issueAutoClaimEnabled(username: string | undefined): boolean {
+    if (!username) return false;
+    return !!this.users.get(username)?.issue_auto_claim;
   }
 
   moonlightEnabled(username: string | undefined): boolean {
@@ -486,6 +495,7 @@ export class LocalAuth {
       moonlight: this.moonlightEnabled(username),
       push_confirmation: this.pushConfirmationEnabled(username),
       issue_intervention_tier: this.issueInterventionTier(username),
+      issue_auto_claim: this.issueAutoClaimEnabled(username),
     };
   }
 

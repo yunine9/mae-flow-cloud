@@ -1209,9 +1209,10 @@ async function main(): Promise<void> {
   issueDiskSweepTimer.unref?.();
   issueDiskSweepInterval.unref?.();
 
-  // 问题流自动接单(ADR-0061):定时扫描名单内责任人名下的 DTS 单,
-  // 同尺校验全过才发起,发不了静默跳过落审计。间隔旋钮现读现判
-  // (缺省半小时,0=关),单飞防重入;纯旁路 fail-open,unref() 不阻
+  // 问题流自动接单(ADR-0061;开关在个人设置,缺省关闭):定时扫描
+  // 已开启自动接单的责任人名下的 DTS 单,同尺校验全过才发起,发不了
+  // 静默跳过落审计。间隔旋钮现读现判(缺省半小时,0=暂停——个人开关
+  // 原样保留,恢复即续),单飞防重入;纯旁路 fail-open,unref() 不阻
   // 进程退出。只接正式入口——测试/旁路直连形态不起定时器,要扫描
   // 直接调 runAutoClaimTick。
   startAutoClaimScheduler({

@@ -20,14 +20,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { AddressInfo } from "node:net";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { configureAudit } from "../src/issueFlow/audit.ts";
 import {
   DTS_CLAIMABLE_STATUS,
+  autoClaimNextRunAt,
   runAutoClaimTick,
+  startAutoClaimScheduler,
   type AutoClaimIssueFlow,
 } from "../src/issueFlow/autoClaim.ts";
 import type { DtsGateway, DtsTicketBrief } from "../src/issueFlow/gateways.ts";
+import { TaskService } from "../src/taskService.ts";
+import { createTaskServer } from "../src/server.ts";
+import { LocalAuth } from "../src/auth.ts";
+import { IssueFlowService } from "../src/issueFlow/service.ts";
 import type { IssueCreateInput, IssueSummary } from "../src/issueFlow/service.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -166,7 +173,7 @@ test("create 硬闸拒绝(如凭据门)→ 静默跳过并落审计原因", asyn
     && String(row.reason).includes("Git 令牌未配置")));
 });
 
-test("名单现读现判:空名单不碰网关,加名单下一拍生效", async () => {
+test("开关现读现判:未开启不碰网关,开启后下一拍生效", async () => {
   const dataDir = mfcTemp("mfc-autoclaim-");
   seedFixture(dataDir);
   let accounts: string[] = [];
@@ -226,4 +233,97 @@ test("审计账:claimed 带会话 id,skipped 带可读原因", async () => {
   const skipped = rows.find((row) => row.kind === "auto_claim.skipped");
   assert.ok(skipped);
   assert.equal(skipped.reason, "版本组未标记参与自动接单");
+});
+
+test("个人自助开关(2026-10-10 修订):本人翻转生效,管理员拒收,下次发起接口未装配为已暂停", async () => {
+  const dir = mfcTemp("mfc-autoclaim-http-");
+  const auth = new LocalAuth(join(dir, "auth.json"));
+  auth.bootstrapAdmin("admin", "admin-password");
+  auth.createUser("dev", "dev-password", "developer");
+  const issues = new IssueFlowService({
+    dataDir: dir, provider: "test", model: "test", modelsJson: {},
+    deferRecovery: true, maxConcurrentTurns: 0,
+  });
+  const server = createTaskServer(
+    new TaskService({
+      dataDir: dir, provider: "test", model: "test", modelsJson: {},
+    }), {
+      auth, issueFlow: issues,
+    });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const cookieOf = async (username: string, password: string) =>
+      (await fetch(`${base}/auth/login`, {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      })).headers.get("set-cookie")!.split(";")[0];
+    const dev = await cookieOf("dev", "dev-password");
+    const admin = await cookieOf("admin", "admin-password");
+
+    // 缺省关闭:sessionView 带当前态。
+    const me = await fetch(`${base}/auth/me`, { headers: { cookie: dev } });
+    assert.equal((await me.json() as { issue_auto_claim: boolean })
+      .issue_auto_claim, false);
+
+    // 下次发起接口:调度器未装配(测试形态)→ null,前端显示已暂停;
+    // 未登录 401。
+    const next = await fetch(`${base}/issues/auto-claim`, {
+      headers: { cookie: dev },
+    });
+    assert.equal(next.status, 200);
+    assert.equal((await next.json() as { next_run_at: string | null })
+      .next_run_at, null);
+    assert.equal((await fetch(`${base}/issues/auto-claim`)).status, 401);
+
+    // 本人开启:自助路由翻转,扫描读取口随即看到他(现读现判)。
+    const put = await fetch(`${base}/auth/me/issue-auto-claim`, {
+      method: "PUT", headers: { cookie: dev },
+      body: JSON.stringify({ on: true }),
+    });
+    assert.equal(put.status, 200);
+    assert.equal((await put.json() as { issue_auto_claim: boolean })
+      .issue_auto_claim, true);
+    assert.deepEqual(auth.issueAutoClaimAccounts(), ["dev"]);
+
+    // 管理员给自己开 → LocalAuth 拒收转 400。
+    const adminPut = await fetch(`${base}/auth/me/issue-auto-claim`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ on: true }),
+    });
+    assert.equal(adminPut.status, 400);
+
+    // 关闭即移出。
+    await fetch(`${base}/auth/me/issue-auto-claim`, {
+      method: "PUT", headers: { cookie: dev },
+      body: JSON.stringify({ on: false }),
+    });
+    assert.deepEqual(auth.issueAutoClaimAccounts(), []);
+
+    // 退役的管理员名单路由:落回 404 未知身份接口,防复活回归。
+    const legacy = await fetch(`${base}/auth/users/dev/issue-auto-claim`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ on: true }),
+    });
+    assert.equal(legacy.status, 404);
+  } finally {
+    await issues.shutdown();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("调度器排程:装配即有下次扫描时刻,间隔改 0 重排后转入已暂停", async () => {
+  const dataDir = mfcTemp("mfc-autoclaim-sched-");
+  // knobs 对象在闭包里被 runtime() 现读,测试中途改值即模拟管理页热改。
+  const knobs: Record<string, unknown> = { issue_auto_claim_interval_s: 1 };
+  const { deps } = fakeDeps(dataDir, { accounts: ["dev1"], knobs });
+  startAutoClaimScheduler(deps);
+  // 排程同步完成:装配即有时刻;1 秒一拍,重排持续在刷。
+  assert.ok(autoClaimNextRunAt(), "装配后应有下次扫描时刻");
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.ok(autoClaimNextRunAt());
+  // 旋钮改 0:下一拍到点(≤1s)重排后为 null——个人开关不动,扫描暂停。
+  knobs.issue_auto_claim_interval_s = 0;
+  await new Promise((resolve) => setTimeout(resolve, 1300));
+  assert.equal(autoClaimNextRunAt(), null);
 });
