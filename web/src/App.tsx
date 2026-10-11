@@ -1416,7 +1416,7 @@ export function App() {
     // Board 重挂时的 initialOpenId 从此与地址栏一致。
     if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) {
       const url = new URL(location.href);
-      for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "source_task", "memory_id"]) url.searchParams.delete(key);
+      for (const key of ["kbPage", "kbAsk", "kbModule", "kbKind", "kbTask", "kbReview", "knowledgeDocument", "source_task", "memory_id"]) url.searchParams.delete(key);
       history.replaceState(appHistoryState(next, next === "knowledge" ? teamAssetTab : undefined), "", url);
     }
     setIssueRouteId(readIssueRoute());

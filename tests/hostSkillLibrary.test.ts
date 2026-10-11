@@ -254,6 +254,46 @@ test("头名例外只匹配完整常量声明，不能放行形似头名的密�
   }
 });
 
+test("同名敏感属性引用可作为代码显示，字面量、拼接和不完整表达式仍拒绝", () => {
+  const references = ["apiKey: args.apiKey,", "token: metadata.token,", "api_key = config.api_key;",
+    "password: options.auth.password}", "98: apiKey: args.apiKey,"];
+  for (const reference of references) {
+    assert.doesNotThrow(() => scanForSecrets("code.md", Buffer.from(reference)), reference);
+  }
+  const rejected = ['apiKey: "args.apiKey",', "apiKey: 'args.apiKey',", '"apiKey": args.apiKey,',
+    '"apiKey: args.apiKey,"', "'apiKey: args.apiKey,'", "`apiKey: args.apiKey,`",
+    'const cfg = "user=demo, apiKey: args.apiKey,";',
+    "const cfg = 'user=demo, apiKey: args.apiKey,';", "const cfg = `user=demo, apiKey: args.apiKey,`;",
+    "const cfg = { apiKey: args.apiKey, };",
+    "apiKey: args.apiKey+fixtureSuffix,", 'apiKey: args.apiKey + "fixture-suffix",',
+    'apiKey: args.apiKey\n + "fixture-suffix",', "apiKey: args.apiKey$fixture,", "apiKey: args.apiKey.bad,",
+    "apiKey: args.apiKeyValue,", "myapiKey: args.apiKey,", "apiKey: arbitraryVariable,",
+    "apiKey: args.APIKEY,", "apiKey: args.apiKey", "apiKey: args.apiKey // unfinished",
+    'apiKey: args.apiKey /* comment */ + "fixture-suffix",', '{"apiKey":"args.apiKey"}'];
+  for (const content of rejected) {
+    assert.throws(() => scanForSecrets("code.md", Buffer.from(content)), SkillLibraryError, content);
+  }
+  for (const content of ['password: "fixture-only-password",', "Bearer abcdefghijklmnopqrst", "-----BEGIN PRIVATE KEY-----"]) {
+    assert.throws(() => scanForSecrets("code.md", Buffer.from(`${references.join("\n")}\n${content}`)), SkillLibraryError, content);
+  }
+});
+
+test("真实Skill上传接受属性引用，后续密钥仍拒绝且不覆盖原包", async () => {
+  const dataDir = mfcTemp("mfc-skill-property-reference-"), reference = "apiKey: args.apiKey,";
+  await uploadHostSkill(dataDir, "property-guide", [{
+    path: "SKILL.md", content_base64: encode(skillMd("代码配置引用", reference)),
+  }], "admin", ENGINEERING_METADATA);
+  const original = readHostSkillDocument(dataDir, "property-guide").content;
+  for (const content of ['apiKey: "args.apiKey",', 'const cfg = "apiKey: args.apiKey,";',
+    'apiKey: args.apiKey + "fixture-suffix",',
+    `${reference}\npassword: "fixture-only-password",`]) {
+    await assert.rejects(uploadHostSkill(dataDir, "property-guide", [{
+      path: "SKILL.md", content_base64: encode(skillMd("代码配置引用", content)),
+    }], "admin", ENGINEERING_METADATA), SkillLibraryError);
+    assert.equal(readHostSkillDocument(dataDir, "property-guide").content, original);
+  }
+});
+
 test("真实上传拒绝连字符口令，失败更新和待审提交均不留下可读凭据", async () => {
   const dataDir = mfcTemp("mfc-skill-secret-phrase-");
   const safe = skillMd("请求头", 'X_ACCESS_TOKEN = "x-access-token"');

@@ -156,6 +156,19 @@ function isHeaderNameConstant(match: RegExpMatchArray): boolean {
     && /^[ \t]*(?:$|\r?\n|[,;)}\]`]|\/\/|#|\/\*)/.test(after.slice(1));
 }
 
+/** 仅豁免独立代码行的完整同名属性引用；引号、拼接和截断表达式仍检查。 */
+function isCodePropertyReference(match: RegExpMatchArray): boolean {
+  const text = match.input!, index = match.index!;
+  const before = text.slice(text.lastIndexOf("\n", index - 1) + 1, index);
+  if (!/^[ \t]*(?:\d+:[ \t]*)?$/.test(before)) return false;
+  const prefix = match[0].slice(0, -match[2].length);
+  if (!/^[A-Za-z_-]+[ \t]*[:=][ \t]*$/.test(prefix)) return false;
+  const value = match[2];
+  if (!/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$/.test(value)
+    || value.split(".").at(-1) !== match[1]) return false;
+  return /^[ \t]*[,;)}\]]/.test(text.slice(index + match[0].length));
+}
+
 /** 疑似密钥的形态清单。占位符和已识别的 HTTP 头名常量不作为凭据；
  * 跳过这些匹配后，仍继续检查同一文件中的其他内容。 */
 const SECRET_PATTERNS: Array<{
@@ -164,7 +177,7 @@ const SECRET_PATTERNS: Array<{
   {
     label: "密钥赋值",
     pattern: /(api[_-]?key|secret|token|passwd|password|access[_-]?key)["']?\s*[:=]\s*["']?((?=[A-Za-z0-9_\-./+]*[A-Za-z])[A-Za-z0-9_\-./+]{8,})/i,
-    skip: isHeaderNameConstant,
+    skip: match => isHeaderNameConstant(match) || isCodePropertyReference(match),
   },
   { label: "Bearer 凭据", pattern: /Bearer\s+(?=[A-Za-z0-9\-._~+/]*[A-Za-z])[A-Za-z0-9\-._~+/]{16,}/ },
   { label: "私钥块", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
@@ -300,24 +313,35 @@ export function scanForSecrets(path: string, content: Buffer): void {
   const pending = [{ path, text: content.toString("utf-8") }];
   while (pending.length) {
     const item = pending.pop()!;
-    scanSecretText(item.path, item.text);
-    // 研究工具传入 JSON 文档。检查解码后的正文，不能让转义引号掩盖赋值。
+    // 结构化 JSON 先解码，编码不应改变代码或密钥的判定。
     let value: unknown;
-    try { value = JSON.parse(item.text); } catch { continue; }
-    const fields: unknown[] = [value];
+    try { value = JSON.parse(item.text); } catch {
+      scanSecretText(item.path, item.text);
+      continue;
+    }
+    if (!value || typeof value !== "object") {
+      // 顶层引号字符串仍按字面量检查，再解码检查其中的转义文本。
+      scanSecretText(item.path, item.text);
+      if (typeof value === "string") pending.push({ path: item.path, text: value });
+      continue;
+    }
     const fieldPath = `${path}（JSON 文本字段）`;
-    while (fields.length) {
-      const field = fields.pop();
-      if (typeof field === "string") pending.push({ path: fieldPath, text: field });
-      else if (Array.isArray(field)) {
-        for (const child of field) fields.push(child);
-      } else if (field && typeof field === "object") {
-        for (const [key, child] of Object.entries(field)) {
-          // 同时检查解码后的键值关系，例如值中用 Unicode 转义书写的密码。
-          if (typeof child === "string") {
-            scanSecretText(fieldPath, `${JSON.stringify(key)}: ${JSON.stringify(child)}`);
-          }
-          fields.push(child);
+    // 已验证 JSON 合法；逐个解码字符串也保留重复键，避免后一个值遮住前一个密钥。
+    const strings = [...item.text.matchAll(/"(?:[^"\\]|\\.)*"/g)];
+    for (let index = 0; index < strings.length; index++) {
+      const token = strings[index], decoded: string = JSON.parse(token[0]);
+      pending.push({ path: fieldPath, text: decoded });
+      const next = strings[index + 1];
+      const after = item.text.slice(token.index! + token[0].length, next?.index);
+      const assigned = next && /^\s*:\s*$/.test(after)
+        ? JSON.stringify(JSON.parse(next[0]))
+        : after.match(/^\s*:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*(?=[,}\]])/)?.[1];
+      if (assigned !== undefined) {
+        const relation = `${JSON.stringify(decoded)}: ${assigned}`;
+        const assignment = SECRET_PATTERNS[0].pattern.exec(relation);
+        // 这里只检查属性赋值；正文中的代码留给解码后的独立文本检查。
+        if (assignment && assignment.index + assignment[1].length === JSON.stringify(decoded).length - 1) {
+          scanSecretText(fieldPath, relation);
         }
       }
     }
@@ -331,8 +355,7 @@ function scanSecretText(path: string, text: string): void {
       const line = text.slice(0, match.index).split("\n").length;
       throw new SkillLibraryError(
         `疑似${label}(${path}:${line} ${maskedExcerpt(match[0])})。`
-        + `skill 文件权限全开、人人可读,任何令牌/密码都不能出现;`
-        + `请改成 <token> 之类的占位符再上传`);
+        + `资料中不能包含实际令牌或密码，请替换为 <token> 等占位符`);
     }
   }
 }

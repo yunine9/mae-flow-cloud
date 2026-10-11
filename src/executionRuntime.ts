@@ -1234,7 +1234,7 @@ async function main(): Promise<void> {
   // 内网是明文 http(会话 cookie 可被同网段嗅探,正式部署前加反代
   // TLS);工作机合盖=全员断线,它是工作站不是服务器。
   const server = createTaskServer(service, {
-    webRoot, auth, lubanApproval, issueFlow, mcpGateway,
+    webRoot, auth, lubanApproval, lubanKnowledgeToken: lubanPluginToken, issueFlow, mcpGateway,
     // 问题路由直连所需的 DTS 网关与台账日志(与问题服务同一实例/口径)。
     dts: issueDtsGateway,
     log: issueLog,
