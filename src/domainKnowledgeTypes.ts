@@ -72,6 +72,8 @@ export interface KnowledgeSourceCleanupState {
   publications: KnowledgeCleanupPublication[]; started?: boolean;
 }
 export interface DomainKnowledgeJob {
+  /** 重新萃取的原任务，用于重复请求时返回同一个新任务。 */
+  reextract_of?: string;
   /** 创建请求的规范化键；后续归档、关联信息与资料维护不改变它。 */
   key?: string;
   /** 只在读取响应中计算，磁盘记录不保存另一份状态。 */

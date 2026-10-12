@@ -97,6 +97,7 @@ export function ComponentResearch({
     [module, setModule] = useState(""),
     [repos, setRepos] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [reextracting, setReextracting] = useState(false);
   const [reviewBlocked, setReviewBlocked] = useState(false);
   const [archiveOpenRequest, setArchiveOpenRequest] = useState(0);
   const [publishSettingsOpen, setPublishSettingsOpen] = useState(false);
@@ -201,13 +202,14 @@ export function ComponentResearch({
     history.replaceState(history.state, "", url);
   }
   useEffect(() => { if (focusId) selectRecord(focusId); }, [focusId]);
-  async function manage(action: "stop" | "delete" | "retry" | "begin-update") {
-    if (!current) return;
+  async function manage(action: "stop" | "delete" | "retry" | "begin-update" | "reextract") {
+    if (!current || busy) return;
     setBusy(true); setError("");
     try {
       const result = await componentRequest<ComponentResearchRecord>(`/component-research/${current.id}/${action}`, {});
       if (action === "delete") { setDeleting(false); setDetail(undefined); selectRecord("history"); }
-      else { setDetail(result); selectRecord(result.id); if (action === "begin-update") studio?.openResult("component", result.id); }
+      else { setDetail(result); selectRecord(result.id); if (action === "begin-update") studio?.openResult("component", result.id);
+        if (action === "reextract") { setReextracting(false); setStage("progress"); studio?.openExecution("component", result.id); } }
       await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
@@ -250,6 +252,7 @@ export function ComponentResearch({
       <div className="mt-2 flex flex-wrap gap-2">{current.work_documents.map(document => <Button key={document.id} size="sm" variant="outline" onClick={() => { setWorkDocumentId(document.id); switchTaskView("review"); }}>{document.title}</Button>)}</div>
     </section>;
   }
+  const reextractDialog = <Dialog open={reextracting} onOpenChange={setReextracting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>重新萃取？</DialogTitle></DialogHeader><p>复用技术栈和参考仓范围，使用最新 Skill 创建新任务。原任务会停止并移除，原文稿不带入新任务；已发布知识和 MR 保留。</p>{error && <p role="alert" className="text-danger">{error}</p>}<div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setReextracting(false)}>取消</Button><Button disabled={busy} onClick={() => void manage("reextract")}>{busy ? "正在重新萃取…" : "确认重新萃取"}</Button></div></DialogContent></Dialog>;
   if (surface && current) return <section className="tw-root component-knowledge-review" aria-label="组件文稿审查" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden" }}>
     <header className="knowledge-reading-toolbar flex shrink-0 items-center gap-3 border-b border-line px-4 py-2">
       <KnowledgeBackButton onClick={onClose} destination={backLabel} />
@@ -266,7 +269,9 @@ export function ComponentResearch({
           : <span key={action.id} className="flex items-center gap-2"><Button variant="ghost" onClick={() => setPublishSettingsOpen(true)}><Settings2 size={16} />发布设置</Button><Button disabled={busy || reviewBlocked || !title.trim() || (current.document ? !current.document.sections.some(s => s.selected) : !draft.trim()) || (scope === "module" && !module) || (scope === "repository" && !repos.trim())} onClick={() => void publishKnowledge()}>{busy ? "正在发布…" : action.label}</Button></span>)}
         {current.production?.knowledge_document_id && <Button onClick={() => onAdopt(current.production!.knowledge_document_id!)}>查看知识</Button>}
       </div>
+      <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem disabled={busy || editing} onClick={() => { setError(""); setReextracting(true); }}>重新萃取</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
     </header>
+    {reextractDialog}
     <KnowledgeTaskReady value={stage} onChange={switchTaskView} view={current.production} disabled={busy} />
     {error && <p role="alert" className="shrink-0 px-4 py-2 text-danger">{error}</p>}
     <Dialog open={publishSettingsOpen} onOpenChange={setPublishSettingsOpen}><DialogContent className="tw-root max-h-[85dvh] overflow-auto sm:max-w-xl">
@@ -305,11 +310,13 @@ export function ComponentResearch({
       <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" aria-label="萃取结果操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root">
         <DropdownMenuItem onClick={() => setStage("progress")}>执行详情</DropdownMenuItem>
         <DropdownMenuItem onClick={() => setStage("inputs")}>来源范围</DropdownMenuItem>
+        <DropdownMenuItem disabled={busy || editing} onClick={() => { setError(""); setReextracting(true); }}>重新萃取</DropdownMenuItem>
         <DropdownMenuItem onClick={() => setStage("publish")}>入库与更新</DropdownMenuItem>
       </DropdownMenuContent></DropdownMenu>
       {current.document_id ? <Button onClick={() => onAdopt(current.document_id!)}>查看已采纳知识</Button> : <Button disabled={busy || !current.document?.sections.length || ["queued", "running"].includes(current.status)} onClick={() => setStage("publish")}>采纳知识</Button>}
     </header>
     {error && <p role="alert" className="text-danger">{error}</p>}
+    {reextractDialog}
     <ComponentResearchReview key={`review:${current.id}`} record={current} workDocumentId={workDocumentId} onWorkDocumentSelect={setWorkDocumentId} onChanged={record => { setDetail(record); void load(); }} readerHeight="calc(96dvh - 110px)" />
   </section>;
   return (
@@ -353,6 +360,7 @@ export function ComponentResearch({
                     <ComponentKnowledgeArchive record={current} />
                     <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多组件萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>
+                      <DropdownMenuItem disabled={busy || editing} onClick={() => { setError(""); setReextracting(true); }}>重新萃取</DropdownMenuItem>
                       {!focused && <DropdownMenuItem disabled={busy} onClick={() => setDeleting(true)}>删除任务</DropdownMenuItem>}
                     </DropdownMenuContent></DropdownMenu>
                   </div>
@@ -481,6 +489,7 @@ export function ComponentResearch({
             )}
           </main>
 
+      {reextractDialog}
       <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除萃取任务？</DialogTitle></DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<p>正在执行的任务会停止。已经采纳的知识文档和来源记录会保留。</p><div className="flex justify-end gap-3"><Button variant="outline" onClick={() => setDeleting(false)}>取消</Button><Button disabled={busy} onClick={() => void manage("delete")}>确认删除</Button></div></DialogContent></Dialog>
     </KnowledgeExtractionWorkspace>
   );
