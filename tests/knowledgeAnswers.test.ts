@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "../src/knowledgeAnswers.ts";
 import type { KnowledgeAnswerRecord, KnowledgeAnswerRunner } from "../src/knowledgeAnswerTypes.ts";
+import { parseKnowledgeAnswerComposition } from "../src/knowledgeAnswerComposition.ts";
 
 const pause = (ms = 5) => new Promise(resolve => setTimeout(resolve, ms));
 async function finished(service: KnowledgeAnswers, id: string, owner = "alice"): Promise<KnowledgeAnswerRecord> {
@@ -13,6 +14,35 @@ async function finished(service: KnowledgeAnswers, id: string, owner = "alice"):
   throw new Error("问答未结束");
 }
 const fixture = () => mkdtempSync(join(tmpdir(), "knowledge-answers-"));
+
+test("#471 长引用答案完成并落盘，重启后可读取完整原文和行范围链接", async () => {
+  const dir = fixture(), original = "实际规则。".repeat(600) + "\n末尾例外不得省略。";
+  let executions = 0;
+  const run: KnowledgeAnswerRunner = async input => {
+    executions++;
+    const sources = Array.from({ length: 8 }, (_, index) => input.addEvidence({ kind: "knowledge", title: `规则 ${index + 1}`, content: original, source_id: `rule-${index}` }));
+    return parseKnowledgeAnswerComposition(JSON.stringify({ points: sources.map(source => ({
+      kind: "answer", body: `依据 ${source.title} 的完整结论。`, basis: [{ evidence_id: source.id, start_line: 1, end_line: 2 }],
+    })) }), sources);
+  };
+  let service = new KnowledgeAnswers(dir, run);
+  try {
+    const start = service.create({ question: "多份规则的适用条件是什么？" }, "alice").record;
+    const done = await finished(service, start.id);
+    assert.equal(done.status, "done", done.error);
+    assert.ok(JSON.stringify(done.answer).length <= 24_000);
+    assert.equal(done.answer!.evidence_ids.length, 8);
+    assert.match(done.answer!.markdown, /第 1–2 行/);
+    await service.shutdown();
+    service = new KnowledgeAnswers(dir, run);
+    const restored = service.get(start.id, "alice");
+    assert.equal(restored.status, "done");
+    assert.deepEqual(restored.answer, done.answer);
+    assert.deepEqual(restored.evidence, done.evidence);
+    for (const source of restored.evidence) assert.equal(source.content, original);
+    assert.equal(executions, 1);
+  } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("问答持久保存真实来源，检查完成前没有答案，各人记录隔离", async () => {
   const dir = fixture(); let release!: () => void;

@@ -7,7 +7,7 @@ export class KnowledgeAnswerCompositionError extends KnowledgeAnswerError {}
 interface CompositionPoint {
   kind: "answer" | "recommendation";
   body: string;
-  basis: Array<{ evidence_id: string; quote: string }>;
+  basis: Array<{ evidence_id: string; quote: string; start_line?: number; end_line?: number }>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -139,7 +139,7 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
       if (keys(item, "end_line,evidence_id,start_line")) {
         const quote = rangeQuote(source, item.start_line, item.end_line);
         allowed.add(source.id);
-        return { evidence_id: source.id, quote };
+        return { evidence_id: source.id, quote, start_line: item.start_line as number, end_line: item.end_line as number };
       }
       if (!keys(item, "evidence_id,quote") || !text(item.quote, 1200)) {
         throw new KnowledgeAnswerCompositionError("来源原句的字段、长度或来源编号不正确");
@@ -155,17 +155,31 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
     validateCodeFences(point.body);
     points.push({ kind: point.kind, body: point.body.trim(), basis });
   }
-  const rendered = points.map(point => {
+  const render = (inlineQuotes: boolean) => points.map(point => {
     const quotes = point.basis.map(basis => {
       const source = sources.get(basis.evidence_id)!;
+      if (!inlineQuotes) {
+        const location = basis.start_line === undefined ? "" : `，第 ${basis.start_line}–${basis.end_line} 行`;
+        return `[原文 ${source.id}${location}](#evidence-${source.id})`;
+      }
       const label = escapeMarkdown(source.title.replace(/\s+/g, " ").trim() || "来源");
       const quotation = basis.quote.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${escapeMarkdown(line)}`).join("\n");
       return `${quotation}\n\n[${label}](#evidence-${source.id})`;
     }).join("\n\n");
     const body = point.kind === "recommendation" ? `**建议做法：**\n\n${point.body}` : point.body;
-    return `${body}\n\n**来源原句：**\n\n${quotes}`;
+    return `${body}\n\n**${inlineQuotes ? "来源原句：" : "来源原文（点击查看）："}**\n\n${quotes}`;
   });
-  const markdown = rendered.join("\n\n") || "本次查阅的资料不足以确认这些问题，具体缺口见未确认项。";
+  const resultFor = (rendered: string[]): KnowledgeAnswerResult => {
+    const markdown = rendered.join("\n\n") || "本次查阅的资料不足以确认这些问题，具体缺口见未确认项。";
+    return { markdown, evidence_ids: [...new Set(knowledgeAnswerCitations(markdown))], unknowns };
+  };
+  let rendered = render(true), result = resultFor(rendered);
+  // 原文已另存为证据。平台展开造成的膨胀改用完整原件链接，不裁句，也不让模型重新作答。
+  if (JSON.stringify(result).length > maxChars) {
+    rendered = render(false);
+    result = resultFor(rendered);
+  }
+  const { markdown } = result;
   const links = knowledgeAnswerCitations(markdown);
   const expectedLinks = rendered.flatMap(part => knowledgeAnswerCitations(part));
   const basisIds = new Set(points.flatMap(point => point.basis.map(item => item.evidence_id)));
@@ -173,7 +187,6 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
     || [...basisIds].some(id => !links.includes(id))) {
     throw new KnowledgeAnswerCompositionError("最终答案的实际来源链接不完整，未展示被正文遮住的引用");
   }
-  const result: KnowledgeAnswerResult = { markdown, evidence_ids: [...new Set(links)], unknowns };
   if (markdown.length > maxChars || JSON.stringify(result).length > maxChars) overBudget();
   return parseKnowledgeAnswer(JSON.stringify(result), evidence, maxChars);
 }

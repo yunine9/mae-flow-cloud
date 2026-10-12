@@ -161,6 +161,12 @@ async function run() {
   const workspace = document.querySelector<HTMLElement>('[aria-label="知识问答工作区"]')!;
   check(workspace.getBoundingClientRect().right <= innerWidth + 1 && document.documentElement.scrollWidth <= innerWidth + 2, "desktop layout has no horizontal overflow");
   check(workspace.querySelector(".ka-main")!.getBoundingClientRect().width > 290, "answer remains readable with citation pane open");
+  first.answer!.markdown = "完整结论及例外保持原样。\n\n**来源原文（点击查看）：**\n\n[原文 ev-fixed，第 42–45 行](#evidence-ev-fixed)";
+  await remount(); await waitFor('[aria-label="知识回答"]');
+  check(document.querySelector('[aria-label="知识回答"]')?.textContent?.includes("完整结论及例外保持原样。"), "compact citations retain the full answer body");
+  await click("原文 ev-fixed，第 42–45 行"); await waitFor('[aria-label="本次引用原文"]');
+  check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes(quotedText), "compact line-range citation opens the complete original snapshot");
+  check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("a".repeat(40)), "compact citation preserves the original revision");
   await click("有问题"); await fill("回答反馈说明", "还需要确认时间推进的测试工具"); await click("提交反馈");
   check(first.feedback?.useful === false && first.feedback.comment.includes("测试工具"), "feedback is saved for the answer");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "不能丢掉的新问题");

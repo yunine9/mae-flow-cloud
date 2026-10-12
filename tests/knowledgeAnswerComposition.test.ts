@@ -20,6 +20,44 @@ const parse = (points: unknown[] = [point()], unknowns: unknown[] = [], sources 
   parseKnowledgeAnswerComposition(JSON.stringify(submission(points, unknowns)), sources, maxChars);
 const range = (start_line: unknown, end_line: unknown, evidence_id = "ev-1") => ({ evidence_id, start_line, end_line });
 
+test("#471 多份长引用不使合法答案失败，完整正文和引用行范围保留，原件不截断", () => {
+  const sources = Array.from({ length: 8 }, (_, index) => {
+    const quote = `条件 ${index + 1}：${"说明".repeat(1700)}\n例外：条件不满足时不得执行。`;
+    return evidence({ id: `ev-${index + 1}`, title: `规则 ${index + 1}`, content: (quote + "\n其他内容：").padEnd(index === 7 ? 4288 : 4300, "文") });
+  });
+  assert.equal(sources.reduce((total, source) => total + source.content.length, 0), 34388);
+  const originals = structuredClone(sources);
+  const points = sources.map((source, index) => point({
+    body: `第 ${index + 1} 项：满足条件才执行，例外仍然适用。`, basis: [range(1, 2, source.id)],
+  }));
+  const raw = JSON.stringify(submission(points, ["部署版本尚未确认。"]));
+  assert.ok(raw.length < 24_000);
+  const result = parseKnowledgeAnswerComposition(raw, sources);
+  assert.ok(JSON.stringify(result).length <= 24_000);
+  for (const item of points) assert.ok(result.markdown.includes(item.body));
+  for (const source of sources) assert.ok(result.markdown.includes(`[原文 ${source.id}，第 1–2 行](#evidence-${source.id})`));
+  assert.match(result.markdown, /来源原文（点击查看）/);
+  assert.deepEqual(result.evidence_ids, sources.map(source => source.id));
+  assert.deepEqual(result.unknowns, ["部署版本尚未确认。"]);
+  assert.deepEqual(sources, originals);
+});
+
+test("#471 接近提交上限的正文与多来源引用仍完整保留，标题和转义膨胀不耗尽正文空间", () => {
+  const sources = Array.from({ length: 3 }, (_, index) => evidence({ id: `ev-${index + 1}`,
+    title: "<长标题>[伪链接](#evidence-missing)".repeat(100), content: "&<原文条件>".repeat(500) }));
+  const points = Array.from({ length: 6 }, (_, index) => point({ kind: index === 0 ? "recommendation" : "answer",
+    body: `第${index + 1}项。${"保留正文和例外。".repeat(450)}`, basis: sources.map(source => range(1, 1, source.id)) }));
+  const raw = JSON.stringify(submission(points, ["部署情况未知。"]));
+  assert.ok(raw.length > 22_000 && raw.length <= 24_000);
+  const result = parseKnowledgeAnswerComposition(raw, sources);
+  assert.ok(JSON.stringify(result).length <= 24_000);
+  for (const item of points) assert.ok(result.markdown.includes(item.body));
+  assert.match(result.markdown, /^\*\*建议做法：\*\*/);
+  assert.deepEqual(result.unknowns, ["部署情况未知。"]);
+  assert.deepEqual(result.evidence_ids, sources.map(source => source.id));
+  assert.doesNotMatch(result.markdown, /missing|&lt;|<长标题>/);
+});
+
 test("宿主按完整正文与真实原句显示，不另生成标题、前提或总结，代码完整保留", () => {
   const body = "已支付、尚未履约且不超过30分钟（含30分钟）时允许自助取消。\n\n```js\nif (state !== 'PAID') return false;\n\nreturn ageMinutes <= 30;\n```";
   const secondBody = "仍限已支付、尚未履约的订单：超过30分钟应转人工审核。";
@@ -71,7 +109,7 @@ test("建议仍须有实际basis，不能编造引用、借其他事项来源或
   assert.throws(() => parse([unconfirmed("[建议依据](#evidence-ev-1)")]), KnowledgeAnswerCompositionError);
 });
 
-test("建议和事实共用正文与事项上限，宿主固定标签也计入完整渲染预算", () => {
+test("建议和事实共用正文与事项上限，长引文改为链接后仍保留建议标签", () => {
   for (const body of ["", " ", null, 1, "字".repeat(4001)]) {
     assert.throws(() => parse([point({ kind: "recommendation", body })]), KnowledgeAnswerCompositionError);
   }
@@ -88,10 +126,14 @@ test("建议和事实共用正文与事项上限，宿主固定标签也计入�
   const withoutLabel = { ...result, markdown: result.markdown.slice(label.length) };
   const smallerBudget = Math.max(raw.length, JSON.stringify(withoutLabel).length, withoutLabel.markdown.length);
   assert.ok(JSON.stringify(result).length > smallerBudget, "固定标签不能在预算之外免费添加");
-  assert.throws(() => parseKnowledgeAnswerComposition(raw, sources, smallerBudget), /预算/);
+  const compact = parseKnowledgeAnswerComposition(raw, sources, smallerBudget);
+  assert.ok(compact.markdown.startsWith(label));
+  assert.ok(compact.markdown.includes(points[0].body));
+  assert.ok(JSON.stringify(compact).length <= smallerBudget);
   const exact = Math.max(raw.length, result.markdown.length, JSON.stringify(result).length);
   assert.deepEqual(parseKnowledgeAnswerComposition(raw, sources, exact), result);
-  assert.throws(() => parseKnowledgeAnswerComposition(raw, sources, exact - 1), /预算/);
+  assert.deepEqual(parseKnowledgeAnswerComposition(raw, sources, exact - 1), compact);
+  assert.throws(() => parseKnowledgeAnswerComposition(raw, sources, raw.length - 1), /预算/);
 });
 
 test("全部未确认时保留具体未知项，不强迫编造结论或引用", () => {
@@ -260,17 +302,20 @@ test("正文未闭合的代码块必须拒绝，不能吞掉宿主前提和引�
   assert.ok(parse([point({ body: "````js\n\n```\n\nallow();\n````" })]).markdown);
 });
 
-test("原始JSON、完整渲染和unknowns共同受预算约束，不能截断后通过", () => {
+test("原始JSON和最终结果仍受预算约束，链接展示保留正文和unknowns", () => {
   const points = [point()], unknowns = ["未取得部署信息。"], raw = JSON.stringify(submission(points, unknowns));
   const result = parseKnowledgeAnswerComposition(raw, [evidence()]);
   const exact = Math.max(raw.length, JSON.stringify(result).length);
   assert.deepEqual(parseKnowledgeAnswerComposition(raw, [evidence()], exact), result);
   assert.throws(() => parseKnowledgeAnswerComposition(raw, [evidence()], exact - 1), /预算/);
+  assert.throws(() => parseKnowledgeAnswerComposition(raw, [evidence()], raw.length - 1), /预算/);
   assert.throws(() => parseKnowledgeAnswerComposition(" ".repeat(24_000) + raw, [evidence()]), /预算/);
   const heavyQuote = "[x](#evidence-fake) ".repeat(20).trim();
   const expanded = [point({ body: "结论。", basis: [{ evidence_id: "ev-1", quote: heavyQuote }] })];
   const expandedRaw = JSON.stringify(submission(expanded));
-  assert.throws(() => parseKnowledgeAnswerComposition(expandedRaw, [evidence({ content: heavyQuote })], expandedRaw.length), /预算/);
+  const escaped = parseKnowledgeAnswerComposition(expandedRaw, [evidence({ content: heavyQuote })], expandedRaw.length);
+  assert.ok(escaped.markdown.includes("结论。"));
+  assert.deepEqual(knowledgeAnswerCitations(escaped.markdown), ["ev-1"]);
   for (const maximum of [0, -1, 1.5, Infinity]) assert.throws(() => parseKnowledgeAnswerComposition(raw, [evidence()], maximum), /预算/);
 });
 
@@ -385,5 +430,7 @@ test("range真实内容即使含假指针与HTML也只渲染实际来源，代�
   assert.throws(() => parseKnowledgeAnswerComposition(raw, [source], raw.length), /预算/);
   const exact = Math.max(raw.length, JSON.stringify(parse(points, [], [source])).length);
   assert.ok(parse(points, [], [source], exact).markdown);
-  assert.throws(() => parse(points, [], [source], exact - 1), /预算/);
+  const compact = parse(points, [], [source], exact - 1);
+  assert.ok(JSON.stringify(compact).length <= exact - 1);
+  assert.deepEqual(knowledgeAnswerCitations(compact.markdown), [source.id, source.id]);
 });

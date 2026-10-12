@@ -67,7 +67,7 @@ export interface KnowledgeAnswerRunnerOptions {
 export { parseKnowledgeAnswer } from "./knowledgeAnswerComposition.ts";
 
 export function knowledgeAnswerStructuredPrompt(stage: "answering", maxChars: number, repair = false): string {
-  return ANSWER_PROMPT + `\n输出 JSON 及平台渲染的答复总长度分别最多 ${maxChars} 字符；精简表述，保留必要条件、例外和未知项。\n${JSON_ENCODING}`
+  return ANSWER_PROMPT + `\n输出 JSON 总长度最多 ${maxChars} 字符；精简表述，保留必要条件、例外和未知项。原文由平台展示，引用较长时显示可点击的原文链接，无需为平台展开后的长度改写或缩减原文条件。\n${JSON_ENCODING}`
     + (repair ? `\n${FORMAT_REPAIR}` : "");
 }
 
