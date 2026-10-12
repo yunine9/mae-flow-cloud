@@ -17,6 +17,7 @@ test("知识源码装配同步指定分支，复用缓存并保留取消行为",
     assert.deepEqual(await syncKnowledgeSource(cache, source, "main", sandbox), { root: cache, revision: git("rev-parse", "HEAD") });
     git("commit", "-q", "--allow-empty", "-m", "second");
     assert.equal((await syncKnowledgeSource(cache, source, "main", sandbox)).revision, git("rev-parse", "HEAD"));
+    assert.equal((await syncKnowledgeSource(cache, source, "", sandbox)).revision, git("rev-parse", "HEAD"), "未登记分支时读取真实远端 HEAD，不猜 main/master");
     await assert.rejects(syncKnowledgeSource(cache, source, "main", sandbox, AbortSignal.abort()), (error: Error) => error.name === "AbortError");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

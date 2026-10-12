@@ -6,6 +6,20 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { codeSearchTool, languageComponentSourceTool } from "../src/componentResearchTools.ts";
 
+test("Every Code 可注入执行器并保留独立参数和取消信号", async () => {
+  const controller = new AbortController(), query = 'Close " ; $(echo injected)';
+  const calls: Array<{ file: string; args: string[]; cwd?: string; signal?: AbortSignal }> = [];
+  const tool = codeSearchTool(() => {}, { executor: async (file, args, cwd, signal) => {
+    calls.push({ file, args, cwd, signal }); return "真实代码";
+  } });
+  const result = await tool.execute("test", { action: "kw", query }, controller.signal, undefined, {} as never);
+  assert.ok(!(result as any).isError);
+  assert.deepEqual(calls[0].args, ["kw", query]);
+  assert.equal(calls[0].cwd, undefined); assert.equal(calls[0].signal, controller.signal);
+  await tool.execute("read", { action: "read", repository: "repo", path: "code.cpp", start: 5, end: 9 }, controller.signal, undefined, {} as never);
+  assert.deepEqual(calls[1].args, ["read", "repo", "code.cpp", "--start:=5", "--end:=9"]);
+});
+
 test("everycode 区分调用与测试检索，读取完整测试上下文并保留用途", async () => {
   const root = mkdtempSync(join(tmpdir(), "everycode-test-evidence-")), previous = process.env.MAE_FLOW_EC_BIN;
   const events: Array<Record<string, unknown>> = [];

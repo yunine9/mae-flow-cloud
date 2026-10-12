@@ -1,7 +1,7 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ResizableKnowledgePanes } from "./ResizableKnowledgePanes";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, GitBranch, Lightbulb, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ export interface KnowledgeModuleReaderProps {
   selectedDocumentId?: string;
   onBack: () => void;
   onResearch: (jobId: string, documentId?: string) => void;
+  onAsk?: (moduleKey: string, documentId?: string) => void;
 }
 interface SkillFile { path: string; content?: string; bytes?: number }
 interface SkillPackage { content: string; digest: string; package_digest: string; files: SkillFile[] }
@@ -52,7 +53,7 @@ function readablePath(doc: ModuleDocument): string[] {
   return path.length ? path : [doc.title];
 }
 
-export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, onResearch }: KnowledgeModuleReaderProps) {
+export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, onResearch, onAsk }: KnowledgeModuleReaderProps) {
   const { stacks } = useTechnologyStacks();
   const [updating, setUpdating] = useState(false), [updateMessage, setUpdateMessage] = useState(""), [updateBusy, setUpdateBusy] = useState(false), [updateError, setUpdateError] = useState("");
   const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState(""), [reload, setReload] = useState(0);
@@ -175,7 +176,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
-      <div className="flex shrink-0 items-center gap-2"><Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
+      <div className="flex shrink-0 items-center gap-2">{onAsk && <Button variant="outline" size="sm" onClick={() => onAsk(moduleKey, current?.form === "skill" ? undefined : current?.id)}><MessageSquare size={15} />提问</Button>}<Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
         {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
       </div>
     </header>

@@ -41,7 +41,8 @@ export async function syncKnowledgeSource(root: string, repository: string, bran
   const git = (args: string[]) => knowledgeSourceCommand([...sandbox.args, ...args], { cwd: root, env: sandbox.env, signal });
   if (!existsSync(join(root, "HEAD"))) await git(["init", "--bare"]);
   await git(["config", "remote.origin.url", repository]);
-  await git(["fetch", "--depth=1", "--no-tags", "origin", `refs/heads/${branch}`]);
+  // 模块只登记仓库地址时读取远端默认分支；实际提交仍在本次读取中固定。
+  await git(["fetch", "--depth=1", "--no-tags", "origin", branch ? `refs/heads/${branch}` : "HEAD"]);
   // 补旧 SHA 会改变 FETCH_HEAD，先固定本轮版本，不能把差异基线当成最新版本。
   const revision = await git(["rev-parse", "FETCH_HEAD^{commit}"]);
   const hasRevision = async (sha: string) => {

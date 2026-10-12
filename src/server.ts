@@ -9,6 +9,8 @@ import { domainKnowledgeRoute } from "./domainKnowledgeRoutes.ts";
 import { extractionConfigurationRoute } from "./knowledgeExtractionRoutes.ts";
 import { componentResearchRoute } from "./componentResearchRoutes.ts";
 import { knowledgeDocumentRoute } from "./knowledgeDocumentRoutes.ts";
+import { knowledgeAnswerRoute, lubanKnowledgeRoute } from "./knowledgeAnswerRoutes.ts";
+import { KnowledgeAnswerError, type KnowledgeAnswers } from "./knowledgeAnswers.ts";
 import { randomUUID } from "node:crypto";
 import { traceHttpRequest, sanitizeBrowserTimings } from "./runtimeDiagnostics.ts";
 import { MemoryStore } from "./taskMemory.ts";
@@ -361,6 +363,8 @@ export function createTaskServer(
     webRoot?: string;
     auth?: LocalAuth;
     lubanApproval?: LubanApprovalGateway;
+    lubanKnowledgeToken?: string;
+    knowledgeAnswers?: KnowledgeAnswers;
     issueFlow?: import("./issueFlow/service.ts").IssueFlowService;
     mcpGateway?: import("./issueFlow/gateways.ts").McpGateway;
     /** DTS 网关:问题路由直连拉单/详情/内嵌图代理(服务不再转手)。 */
@@ -472,6 +476,12 @@ export function createTaskServer(
           text: reply.text,
           ...(reply.replayed ? { replayed: true } : {}),
         });
+      }
+      if (parts[0] === "integrations" && parts[1] === "luban" && parts[2] === "knowledge" && parts.length === 3) {
+        return lubanKnowledgeRoute(request, response, () => options.knowledgeAnswers ?? service.getKnowledgeAnswers(), {
+          token: options.lubanKnowledgeToken,
+          accountEnabled: account => !!options.auth?.sessionView(account),
+        }, readBody, json);
       }
       /** 当前登录者自己缺的配置。两样都是"以本人身份做事"的凭据:
        * Git 令牌决定 push 与 MR 发起人是谁,通知令牌决定消息以谁的
@@ -1147,6 +1157,7 @@ export function createTaskServer(
         || parts[0] === "technology-stacks"
         || parts[0] === "repository-profiles"
         || parts[0] === "knowledge-documents"
+        || parts[0] === "knowledge-answers"
         || parts[0] === "workflow-assets"
         || parts[0] === "wishes";
       // 兼容已经发出去的旧通知。/tasks/:id 是 JSON API，但旧链接若由
@@ -1334,6 +1345,8 @@ export function createTaskServer(
       if (parts[0] === "knowledge-extraction") return extractionConfigurationRoute(request, response, parts, service.options.dataDir,
         viewer?.username ?? "本地部署", readBody, json);
       if (parts[0] === "knowledge-documents") return knowledgeDocumentRoute(request, response, parts, service, viewer?.username ?? "本地部署", readBody, json);
+      if (parts[0] === "knowledge-answers") return knowledgeAnswerRoute(request, response, parts,
+        options.knowledgeAnswers ?? service.getKnowledgeAnswers(), service.options.dataDir, viewer?.username ?? "本地部署", readBody, json, service.getKnowledgeSearch());
       // 许愿墙是团队公共入口，但不是公共互联网资源：正文和截图都要求
       // 登录。每个人可发布、点赞和移除自己的内容；管理员负责明确接纳
       // 与闭环，拒绝必须说明原因。
@@ -3269,6 +3282,7 @@ export function createTaskServer(
       }
       return json(response, 404, { error: "未知路径" });
     } catch (error) {
+      if (error instanceof KnowledgeAnswerError) return json(response, error.status, { error: error.message });
       if (error instanceof RequestBodyTooLargeError) {
         return json(response, 413, { error: error.message });
       }

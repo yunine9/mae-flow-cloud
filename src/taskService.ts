@@ -1,5 +1,7 @@
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
+import { KnowledgeAnswers, KnowledgeAnswerError } from "./knowledgeAnswers.ts";
+import { createKnowledgeAnswerRunner } from "./knowledgeAnswerRunner.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
 import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
 import { humanFeedbackReason, resolvedWorkspaceFeedback, resumeRecordedFeedback } from "./feedbackCompletion.ts";
@@ -2389,7 +2391,8 @@ export class TaskService {
         work: Promise<unknown>;
       }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
-        { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() }];
+        { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() },
+        { taskId: "knowledge-answers", role: "知识问答", work: this.knowledgeAnswers?.shutdown() ?? Promise.resolve() }];
       for (const task of this.tasks.values()) {
         discardRetainedSession(task);
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -5603,6 +5606,17 @@ export class TaskService {
   private knowledgeSearch?: KnowledgeSearch;
   getKnowledgeSearch(): KnowledgeSearch {
     return this.knowledgeSearch ??= new KnowledgeSearch(this.options.dataDir, this.memorySidecar);
+  }
+
+  private knowledgeAnswers?: KnowledgeAnswers;
+  getKnowledgeAnswers(): KnowledgeAnswers {
+    if (this.shuttingDown) throw new KnowledgeAnswerError(503, "问答服务正在停止，请稍后重试");
+    return this.knowledgeAnswers ??= new KnowledgeAnswers(this.options.dataDir, createKnowledgeAnswerRunner({
+      dataDir: this.options.dataDir,
+      model: owner => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels(owner).json } : undefined; },
+      search: () => this.getKnowledgeSearch(),
+      source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "问答来源", enabled: true }, operator, signal),
+    }));
   }
 
   private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;

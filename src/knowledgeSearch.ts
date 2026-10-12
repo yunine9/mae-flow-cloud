@@ -146,7 +146,7 @@ export class KnowledgeSearch {
   private states = new Map<string, { key: string; state: "queued" | "indexing" | "failed"; error?: string }>();
   constructor(private dataDir: string, private sidecar?: MemorySidecar) {}
 
-  catalog(context: KnowledgeContext) { return collectSearchableKnowledge(this.dataDir, context); }
+  catalog(context: KnowledgeContext, all = false) { return collectSearchableKnowledge(this.dataDir, context, all); }
 
   documentStatus(asset: SearchableKnowledge) {
     if (isComponentKnowledge(asset)) {
@@ -207,9 +207,9 @@ export class KnowledgeSearch {
     if (failed) throw new Error(`${failed} 份资料未完成索引；原文仍可读取，后续查询可重试索引`);
   }
 
-  async search(context: KnowledgeContext, query: string, limit = 5, componentsOnly = false): Promise<KnowledgeSearchResult> {
+  async search(context: KnowledgeContext, query: string, limit = 5, componentsOnly = false, all = false): Promise<KnowledgeSearchResult> {
     const readCatalog = () => {
-      const value = this.catalog(context);
+      const value = this.catalog(context, all);
       return { ...value, assets: value.assets.filter(a => !componentsOnly || isComponentKnowledge(a)) };
     };
     const catalog = readCatalog(), derived = this.sidecar ? this.registerCards(catalog.assets) : componentCards(catalog.assets);
@@ -258,8 +258,8 @@ export class KnowledgeSearch {
     return { available: true, hits: fresh(unique).slice(0, limit), warnings };
   }
 
-  read(context: KnowledgeContext, id: string) {
-    return this.catalog(context).assets.find(a => a.id === id);
+  read(context: KnowledgeContext, id: string, all = false) {
+    return this.catalog(context, all).assets.find(a => a.id === id);
   }
 
   async removeFromIndex(id: string): Promise<boolean> {

@@ -225,7 +225,7 @@ export function componentSourceTool(
     },
   });
 }
-export function codeSearchTool(onUse: (record: Record<string, unknown>) => unknown, options?: { captureRead?: boolean; excludePath?: (path: string) => boolean }) {
+export function codeSearchTool(onUse: (record: Record<string, unknown>) => unknown, options?: { captureRead?: boolean; excludePath?: (path: string) => boolean; executor?: typeof executeFile }) {
   return defineTool({
     name: "code_search",
     label: "Sourcegraph 代码搜索",
@@ -275,7 +275,7 @@ export function codeSearchTool(onUse: (record: Record<string, unknown>) => unkno
         )
           throw new Error("请提供查询或仓库与文件路径");
         if (input.action === "read" && options?.excludePath?.(String(input.path))) throw new Error("组件研究只读取代码与构建配置，不读取文档或 Agent 指令");
-        const text = await executeFile(ecBinary(), args, undefined, signal);
+        const text = await (options?.executor ?? executeFile)(ecBinary(), args, undefined, signal);
         if (options?.captureRead) scanForSecrets("everycode 返回", Buffer.from(text));
         const evidenceId = onUse({
           tool: "code_search",

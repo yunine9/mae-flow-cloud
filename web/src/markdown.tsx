@@ -17,15 +17,20 @@ function inline(
   text: string,
   resolveImage?: (path: string) => string | undefined,
   onOpenKnowledgeLink?: (href: string) => void,
+  renderKnowledgeLinkLabel?: (label: string, href: string) => ReactNode,
 ): ReactNode[] {
+  // 来源标题可带转义方括号；只有接管标签显示的调用方启用这类标签。
+  const tokens = renderKnowledgeLinkLabel
+    ? /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\[(?:\\.|[^\]\\])+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g
+    : /(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g;
   return text
-    .split(/(!\[[^\]]*\]\([^)]+\)|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\)|\{\{(?:blue|green|red)\|[^}]+\}\})/g)
+    .split(tokens)
     .filter(Boolean)
     .map((piece, index) => {
       if (piece.startsWith("**") && piece.endsWith("**")) {
         // 加粗内递归走同一 inline:结构化描述常见「加粗内嵌截图」,退化
         // 成纯文本会把图吞掉。
-        return <b key={index}>{inline(piece.slice(2, -2), resolveImage, onOpenKnowledgeLink)}</b>;
+        return <b key={index}>{inline(piece.slice(2, -2), resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</b>;
       }
       if (piece.startsWith("`") && piece.endsWith("`")) {
         return <code key={index} className="md-code">{piece.slice(1, -1)}</code>;
@@ -43,10 +48,12 @@ function inline(
         return <strong key={index}
           className={`md-emphasis tone-${emphasis[1]}`}>{emphasis[2]}</strong>;
       }
-      const link = piece.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+      const link = piece.match(renderKnowledgeLinkLabel
+        ? /^\[((?:\\.|[^\]\\])+)\]\(([^)]+)\)$/
+        : /^\[([^\]]+)\]\(([^)]+)\)$/);
       if (link && onOpenKnowledgeLink) {
         const href = link[2].replace(/^<(.+)>$/, "$1");
-        if (!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return <button key={index} type="button" className="knowledge-inline-link" onClick={() => onOpenKnowledgeLink(href)}>{link[1]}</button>;
+        if (!/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href)) return <button key={index} type="button" className="knowledge-inline-link" onClick={() => onOpenKnowledgeLink(href)}>{renderKnowledgeLinkLabel ? renderKnowledgeLinkLabel(link[1], href) : link[1]}</button>;
       }
       if (link && (/^\//.test(link[2]) || /^https?:\/\//.test(link[2]))) {
         return (
@@ -86,11 +93,17 @@ export function Markdown({
   onOpenArchitecture,
   showLineNumbers = false,
   onOpenKnowledgeLink,
+  renderQuotedText,
+  renderKnowledgeLinkLabel,
 }: {
   text: string;
   /** 仅文档阅读入口开启；对话与决策卡沿用普通 Markdown。 */
   showLineNumbers?: boolean;
   onOpenKnowledgeLink?: (href: string) => void;
+  /** 调用方可把引用按纯文本显示；缺省继续解析行内格式。 */
+  renderQuotedText?: (row: string) => ReactNode;
+  /** 调用方可显示知识链接的文字；缺省保留链接标签原文。 */
+  renderKnowledgeLinkLabel?: (label: string, href: string) => ReactNode;
   resolveImage?: (path: string) => string | undefined;
   onOpenArchitecture?: (line: number) => void;
 }) {
@@ -120,12 +133,15 @@ export function Markdown({
     // 内核面板用的是同一个属性名,两边的批注语义因此对得上。
     const at = index + 1;
     // fenced code:PlantUML 直接画图,其余语言至少按代码块如实呈现。
-    const fence = line.match(/^\s*```([^`]*)\s*$/);
+    const fence = /^[\t ]*(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence) {
-      const language = fence[1].trim().toLowerCase();
+      const language = fence[2].trim().toLowerCase();
       const source: string[] = [];
       index += 1;
-      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+      while (index < lines.length) {
+        const closing = /^[\t ]*(`{3,}|~{3,})(.*)$/.exec(lines[index]);
+        if (closing && closing[1][0] === fence[1][0]
+          && closing[1].length >= fence[1].length && !closing[2].trim()) break;
         source.push(lines[index]);
         index += 1;
       }
@@ -175,13 +191,13 @@ export function Markdown({
         <table key={key++} className="md-table" data-l={at} data-line-end={index}>
           {head && (
             <thead><tr data-l={head.at}>
-              {head.cells.map((cell, i) => <th key={i}>{inline(cell, resolveImage, onOpenKnowledgeLink)}</th>)}
+              {head.cells.map((cell, i) => <th key={i}>{inline(cell, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</th>)}
             </tr></thead>
           )}
           <tbody>
             {body.map((row, r) => (
               <tr key={r} data-l={row.at}>
-                {row.cells.map((cell, i) => <td key={i}>{inline(cell, resolveImage, onOpenKnowledgeLink)}</td>)}
+                {row.cells.map((cell, i) => <td key={i}>{inline(cell, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -203,7 +219,7 @@ export function Markdown({
       blocks.push(
         <ul key={key++} className="md-list">
           {items.map((item, i) => (
-            <li key={i} data-l={item.at}>{inline(item.text, resolveImage, onOpenKnowledgeLink)}</li>
+            <li key={i} data-l={item.at}>{inline(item.text, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</li>
           ))}
         </ul>);
       continue;
@@ -226,7 +242,7 @@ export function Markdown({
         <ol key={key++} className="md-list md-ordered">
           {items.map((item, i) => (
             <li key={i} value={Number(item.mark)} data-l={item.at}>
-              {inline(item.text, resolveImage, onOpenKnowledgeLink)}
+              {inline(item.text, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}
             </li>
           ))}
         </ol>);
@@ -247,7 +263,7 @@ export function Markdown({
       }
       blocks.push(
         <blockquote key={key++} className="md-quote" data-l={at} data-line-end={index}>
-          {quoted.map((row, i) => <p key={i} className="md-p" data-l={at + i}>{inline(row, resolveImage, onOpenKnowledgeLink)}</p>)}
+          {quoted.map((row, i) => <p key={i} className="md-p" data-l={at + i}>{renderQuotedText ? renderQuotedText(row) : inline(row, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</p>)}
         </blockquote>);
       continue;
     }
@@ -258,7 +274,7 @@ export function Markdown({
         <div key={key++}
           className={`md-heading md-h${Math.min(heading[1].length, 4)}`}
           data-l={at}>
-          {inline(heading[2], resolveImage, onOpenKnowledgeLink)}
+          {inline(heading[2], resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}
         </div>);
       index += 1;
       continue;
@@ -280,7 +296,7 @@ export function Markdown({
         </pre>);
       continue;
     }
-    blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line, resolveImage, onOpenKnowledgeLink)}</p>);
+    blocks.push(<p key={key++} className="md-p" data-l={at}>{inline(line, resolveImage, onOpenKnowledgeLink, renderKnowledgeLinkLabel)}</p>);
     index += 1;
   }
   if (!showLineNumbers) return <div className="md">{blocks}</div>;

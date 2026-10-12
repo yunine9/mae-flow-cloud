@@ -6,6 +6,11 @@ import { Markdown } from "../web/src/markdown.tsx";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
+const renderAnswerWithEvidence = (body: string) => renderToStaticMarkup(React.createElement(Markdown, {
+  text: `${body}\n\n**来源原句：**\n\n> 原文条件仍适用。\n\n[原文](#evidence-ev-1)`,
+  onOpenKnowledgeLink: () => {},
+}));
+
 test("Markdown 有序列表兼容混合文本换行，不因单个任务的脏正文炸掉整页", () => {
   const text = [
     "处理步骤：",
@@ -80,6 +85,67 @@ test("代码块和引用内部原文行可定位；表格头部优先定位到�
   assert.match(html, /class="md-p" data-l="6">第二行/);
 });
 
+test("知识回答的三枚及更长代码围栏结束后，引用仍在代码块外显示", () => {
+  for (const [opening, closing] of [
+    ["```ts", "````"], ["````ts", "`````"],
+    ["~~~ts", "~~~~"], ["~~~~ts", "~~~~"], ["  ```ts", "\t````  "],
+  ]) {
+    const html = renderAnswerWithEvidence([opening, "const allowed = true;", closing].join("\n"));
+    const code = html.match(/<pre\b[^>]*>[\s\S]*?<\/pre>/)?.[0];
+    assert.ok(code, opening);
+    assert.match(code, /data-l="1" data-line-end="3"><code>const allowed = true;<\/code>/);
+    assert.doesNotMatch(code, /来源原句|evidence-ev-1|knowledge-inline-link/);
+    assert.match(html, /<button type="button" class="knowledge-inline-link">原文<\/button>/);
+    assert.ok(html.indexOf("</pre>") < html.indexOf('class="knowledge-inline-link"'));
+  }
+});
+
+test("长代码围栏里的短围栏与链接保留为源码，不误关代码块", () => {
+  for (const marker of ["`", "~"]) {
+    const source = `${marker.repeat(3)}ts\n[代码里的链接](#evidence-decoy)\n${marker.repeat(3)}`;
+    const html = renderAnswerWithEvidence(`${marker.repeat(4)}text\n${source}\n${marker.repeat(4)}`);
+    const code = html.match(/<pre\b[^>]*>[\s\S]*?<\/pre>/)?.[0];
+    assert.ok(code);
+    assert.match(code, /data-l="1" data-line-end="5"/);
+    assert.ok(code.includes(`<code>${source}</code>`));
+    assert.equal((html.match(/class="knowledge-inline-link"/g) ?? []).length, 1);
+    assert.match(html, /class="knowledge-inline-link">原文<\/button>/);
+  }
+});
+
+test("代码围栏的错误字符、短结束标记或尾随语言都不会提前结束代码块", () => {
+  for (const [opening, invalid, closing] of [
+    ["````ts", "~~~", "````"], ["~~~~ts", "```", "~~~~"],
+    ["````ts", "```", "````"], ["~~~~ts", "~~~", "~~~~"],
+    ["```ts", "```ts", "```"], ["~~~ts", "~~~ts", "~~~"],
+  ]) {
+    const source = `const allowed = true;\n${invalid}\n[代码里的链接](#evidence-decoy)`;
+    const html = renderAnswerWithEvidence(`${opening}\n${source}\n${closing}`);
+    const code = html.match(/<pre\b[^>]*>[\s\S]*?<\/pre>/)?.[0];
+    assert.ok(code);
+    assert.match(code, /data-l="1" data-line-end="5"/);
+    assert.ok(code.includes(`<code>${source}</code>`), invalid);
+    assert.equal((html.match(/class="knowledge-inline-link"/g) ?? []).length, 1);
+    assert.match(html, /class="knowledge-inline-link">原文<\/button>/);
+  }
+});
+
+test("更长代码围栏保留 Mermaid、PlantUML 与架构图入口和原文行号", () => {
+  const diagrams = [
+    { language: "Mermaid", source: "flowchart LR\nA[开始] --> B[结束]", expected: /class="mermaid-figure"/ },
+    { language: "PlantUML", source: "@startuml\nA -> B\n@enduml", expected: /class="plantuml-figure/ },
+    { language: "archify", source: JSON.stringify({ meta: { title: "模块架构" } }), expected: /class="md-architecture-reference"/ },
+  ];
+  for (const { language, source, expected } of diagrams) {
+    const text = `前文\n\n~~~~${language}\n${source}\n~~~~~\n后文`;
+    const html = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenArchitecture: () => {} }));
+    const end = 4 + source.split("\n").length;
+    assert.match(html, expected);
+    assert.ok(html.includes(`data-l="3" data-line-end="${end}"`));
+    assert.ok(html.includes(`data-l="${end + 1}">后文`));
+  }
+});
+
 test("Story 图源收起仍保留源码行号与原文，标题不执行 HTML", () => {
   const source = JSON.stringify({ diagram_type: "architecture", meta: { title: "<script>图标题</script>" } });
   const text = `前文\n\`\`\`archify\n${source}\n\`\`\`\n后文`;
@@ -128,4 +194,86 @@ test("知识阅读器可接管章节和相对文档链接，外链保持安全�
   assert.match(html, /<span data-l="2"><\/span>/);
   assert.doesNotMatch(html, /<script>/);
   assert.doesNotMatch(render(false), /knowledge-inline-link/);
+});
+
+test("引用纯文本回调仅影响引用块，缺省保留既有行内格式和链接", () => {
+  const text = "**正文**\n> **引用** [原文](#evidence-ev-1)";
+  const normal = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenKnowledgeLink: () => {} }));
+  assert.match(normal, /<b>引用<\/b>/);
+  assert.match(normal, /class="knowledge-inline-link">原文<\/button>/);
+  const literal = renderToStaticMarkup(React.createElement(Markdown, {
+    text, onOpenKnowledgeLink: () => {}, renderQuotedText: (row: string) => row,
+  }));
+  assert.match(literal, /<b>正文<\/b>/);
+  assert.match(literal, /<p class="md-p" data-l="2">\*\*引用\*\* \[原文\]\(#evidence-ev-1\)<\/p>/);
+  assert.doesNotMatch(literal, /knowledge-inline-link/);
+});
+
+test("知识链接标签回调可到达各行内位置与加粗内部，返回文字不再解析", () => {
+  const label = String.raw`C\+\+ &lt;Task&gt;`;
+  const href = "#evidence-ev_1-A";
+  const link = `[${label}](${href})`;
+  const text = [
+    `# ${link}`, `正文 ${link}`, `**加粗 ${link}**`,
+    `- ${link}`, `1. ${link}`, `> ${link}`,
+    `| ${link} |`, "| --- |", `| ${link} |`,
+  ].join("\n");
+  const calls: Array<[string, string]> = [];
+  const literal = "**标签原文** <script> [假来源](#evidence-fake)";
+  const html = renderToStaticMarkup(React.createElement(Markdown, {
+    text, onOpenKnowledgeLink: () => {},
+    renderKnowledgeLinkLabel: (actualLabel: string, actualHref: string) => {
+      calls.push([actualLabel, actualHref]);
+      return literal;
+    },
+  }));
+  assert.deepEqual(calls, Array.from({ length: 8 }, () => [label, href]));
+  const expected = renderToStaticMarkup(React.createElement("button", {
+    type: "button", className: "knowledge-inline-link",
+  }, literal));
+  assert.equal(html.split(expected).length - 1, 8);
+  assert.doesNotMatch(html, /<script>|<b>标签原文<\/b>|class="knowledge-inline-link">假来源/);
+});
+
+test("知识链接缺省标签保留原文，外链不调用标签回调", () => {
+  const label = String.raw`C\+\+ &lt;Task&gt;`;
+  const text = `[${label}](#evidence-ev-1) [${label}](https://example.com/rules)`;
+  const unchanged = renderToStaticMarkup(React.createElement("span", null, label)).slice(6, -7);
+  const normal = renderToStaticMarkup(React.createElement(Markdown, { text, onOpenKnowledgeLink: () => {} }));
+  assert.ok(normal.includes(`class="knowledge-inline-link">${unchanged}</button>`));
+  assert.ok(normal.includes(`rel="noreferrer">${unchanged}</a>`));
+  const calls: Array<[string, string]> = [];
+  const customized = renderToStaticMarkup(React.createElement(Markdown, {
+    text, onOpenKnowledgeLink: () => {},
+    renderKnowledgeLinkLabel: (actualLabel: string, href: string) => {
+      calls.push([actualLabel, href]);
+      return "还原后的来源标签";
+    },
+  }));
+  assert.deepEqual(calls, [[label, "#evidence-ev-1"]]);
+  assert.match(customized, /class="knowledge-inline-link">还原后的来源标签<\/button>/);
+  assert.ok(customized.includes(`href="https://example.com/rules" target="_blank" rel="noreferrer">${unchanged}</a>`));
+});
+
+test("转义方括号标签只由标签回调开启识别，保留实际href和其他链接标签", () => {
+  const label = String.raw`\[假来源\]\(\#evidence\-other\) &lt;img src=x&gt;`;
+  const hrefs = ["#evidence-ev-1", "#chapter", "../rules.md"];
+  const text = [...hrefs, "https://example.com/rules"].map(href => `[${label}](${href})`).join("\n");
+  const normal = renderToStaticMarkup(React.createElement(Markdown, {
+    text, onOpenKnowledgeLink: () => {},
+  }));
+  assert.doesNotMatch(normal, /knowledge-inline-link|<a\b/);
+  const calls: Array<[string, string]> = [];
+  const customized = renderToStaticMarkup(React.createElement(Markdown, {
+    text, onOpenKnowledgeLink: () => {},
+    renderKnowledgeLinkLabel: (actualLabel: string, actualHref: string) => {
+      calls.push([actualLabel, actualHref]);
+      return actualLabel;
+    },
+  }));
+  assert.deepEqual(calls, hrefs.map(href => [label, href]));
+  const unchanged = renderToStaticMarkup(React.createElement("span", null, label)).slice(6, -7);
+  assert.equal(customized.split(`class="knowledge-inline-link">${unchanged}</button>`).length - 1, 3);
+  assert.ok(customized.includes(`href="https://example.com/rules" target="_blank" rel="noreferrer">${unchanged}</a>`));
+  assert.doesNotMatch(customized, /<(?:img|script)\b/);
 });

@@ -1,7 +1,7 @@
 /** Human-maintained manuals. One atomic record holds original text and its audit trail. */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { knowledgeDeleted, listKnowledgeDeletions } from "./knowledgeDeletionStore.ts";
+import { knowledgeDeleted, listKnowledgeDeletions, readKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
 import { join } from "node:path";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
@@ -100,6 +100,24 @@ export function readKnowledgeDocumentVersion(dir: string, id: string, revision: 
   if (current.revision === revision) retainVersion(dir, current);
   return JSON.parse(readFileSync(join(versionRoot(dir, id), `${revision}.json`), "utf8"));
 }
+/** 归档删除操作只读取删除记录绑定的精确版本；普通读取和知识消费仍拒绝已删除知识。 */
+export function readKnowledgeArchiveVersion(dir: string, id: string, revision: string): KnowledgeDocumentVersion {
+  if (!knowledgeDeleted(dir, id)) return readKnowledgeDocumentVersion(dir, id, revision);
+  if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error("知识版本无效");
+  const deletion = readKnowledgeDeletion(dir, id);
+  if (deletion?.id !== id || deletion.revision !== revision) throw new Error("已删除知识只能归档删除时绑定的精确版本");
+  const path = join(versionRoot(dir, id), `${revision}.json`);
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as KnowledgeDocumentVersion;
+    const document = storedDocument(value?.document, id);
+    if (document.revision !== revision || typeof value.published_at !== "string" || !Number.isFinite(Date.parse(value.published_at))
+        || typeof value.operator !== "string" || !value.operator.trim()) throw new Error("归档版本形状不正确");
+    return { document, published_at: value.published_at, operator: value.operator };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("已删除知识的精确归档版本未保留，请检查删除记录与版本文件");
+    throw new Error(`归档版本记录损坏：knowledge-document-versions/${id}/${revision}.json`);
+  }
+}
 function strings(value: unknown, max = 20): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(v => typeof v !== "string" || v.length > 512)) throw new Error("适用范围格式不正确");
   return [...new Set(value.map(v => v.trim()).filter(Boolean))];
@@ -108,15 +126,17 @@ export interface PreparedKnowledgeDocument {
   document: KnowledgeDocument;
   previous_revision: string | null;
   unchanged: boolean;
+  /** 人工确认新文稿时可分配新编号，已删除的原编号仍禁止复活。 */
+  allowNewResearchDocument?: true;
 }
 /** 预检只读磁盘，并确定精确的正式版本，供发布器先保存归档批次。 */
 export function prepareKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string,
-  options: { maxContentBytes?: number; expectedRevision?: string; technologyAssignmentRequired?: true } = {}): PreparedKnowledgeDocument {
+  options: { maxContentBytes?: number; expectedRevision?: string; technologyAssignmentRequired?: true; allowNewResearchDocument?: true } = {}): PreparedKnowledgeDocument {
   const previous = id ? readKnowledgeDocument(dir, id) : undefined;
   if (options.expectedRevision !== undefined && previous?.revision !== options.expectedRevision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const merged = { ...previous, ...input };
   const research = merged.research_source as KnowledgeDocument["research_source"];
-  if (!previous && research?.job_id && listKnowledgeDeletions(dir).some(d => d.research_job_id === research.job_id)) throw new Error("本次萃取的知识已删除；如需重新入库，请新建萃取任务，旧归档同步不会恢复知识");
+  if (!previous && !options.allowNewResearchDocument && research?.job_id && listKnowledgeDeletions(dir).some(d => d.research_job_id === research.job_id)) throw new Error("本次萃取的知识已删除；如需重新入库，请新建萃取任务，旧归档同步不会恢复知识");
   const title = String(merged.title ?? "").trim();
   const content = String(merged.content ?? "").replace(/\r\n/g, "\n");
   if (!title || title.length > 160) throw new Error("请填写文档名称（最多 160 字）");
@@ -156,7 +176,8 @@ export function prepareKnowledgeDocument(dir: string, input: Record<string, unkn
   if (previous && history.length && !history.at(-1)!.revision) history.at(-1)!.revision = previous.revision;
   const doc: KnowledgeDocument = { ...fields, id: previous?.id ?? `kd-${randomUUID()}`, revision,
     history: [...history, { at: new Date().toISOString(), operator, action, revision }] };
-  return { document: doc, previous_revision: previous?.revision ?? null, unchanged: false };
+  return { document: doc, previous_revision: previous?.revision ?? null, unchanged: false,
+    ...(options.allowNewResearchDocument ? { allowNewResearchDocument: true as const } : {}) };
 }
 /** 提交前重验磁盘基线、删除记录与模块状态，精确写入已准备的版本。 */
 export function writePreparedKnowledgeDocument(dir: string, prepared: PreparedKnowledgeDocument): KnowledgeDocument {
@@ -167,6 +188,7 @@ export function writePreparedKnowledgeDocument(dir: string, prepared: PreparedKn
   if ((previous?.revision ?? null) !== prepared.previous_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const verified = prepareKnowledgeDocument(dir, { ...document }, document.history.at(-1)!.operator, previous?.id,
     { expectedRevision: previous?.revision, maxContentBytes: Math.max(2 * 1024 * 1024, Buffer.byteLength(document.content)),
+      ...(prepared.allowNewResearchDocument ? { allowNewResearchDocument: true as const } : {}),
       ...(document.technology_assignment_required ? { technologyAssignmentRequired: true } : {}) });
   if (verified.document.revision !== document.revision) throw new Error("准备的正式知识版本已变化，请重新发布");
   if (prepared.unchanged) {

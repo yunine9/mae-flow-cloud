@@ -12,7 +12,7 @@ import { extractionSkillTool, KnowledgeExtractionSkills, type ExtractionSkillSna
 import { knowledgeMaterialTool, readKnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { wxdoubaoTool } from "./wxdoubao.ts";
 import { DOMAIN_KNOWLEDGE_SOURCES_PROMPT } from "./domainKnowledgeSourcesPrompt.ts";
-import type { DomainDocumentContent, DomainExecution, KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
+import { knowledgeRelativePath, type DomainDocumentContent, type DomainExecution, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import { DomainSkillWork, IncompleteDomainResearch, type SkillWorkResult, type SkillWorkStep } from "./domainSkillWork.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
@@ -52,11 +52,11 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   };
   const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), observe);
   const documentTool = defineTool({
-    name: "knowledge_draft", label: "保存领域知识草稿",
-    description: "read 列出文档摘要，id 读取当前正文与来源；save 新建或完善本轮研究草稿，人工改过或已发布的文档受保护。修订/更新模式仅对选中文档生成建议。目标编号 domain 为知识仓，repo-* 为对应业务仓；新文件使用默认文档目录，已有文件保持完整路径。不能更换已有文件路径、修改源码、创建 MR 或直接采纳建议。",
-    parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("save")]), id: Type.Optional(Type.String()),
+    name: "knowledge_draft", label: "管理领域知识文稿",
+    description: "read 列出本任务文档，id 读取正文与来源；save 可新增文档、修改任意本任务文稿或沿用原 id 改目录及文件名；delete 用 id 标记文稿删除。重点文稿编号只说明本轮关注点，不限制关联文档修改。目标编号 domain 为知识仓，repo-* 为对应归档仓，支持仓内合法 Markdown 路径，包括 module-map.md、AGENTS.md。新增和删除进入待审阅草稿，已有文稿修改生成建议；用户确认并发布后正式知识才变化，Git 文件变更由人工归档统一提交。",
+    parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("save"), Type.Literal("delete")]), id: Type.Optional(Type.String()),
       document: Type.Optional(Type.Object({ id: Type.String(), title: Type.String(), target_id: Type.String(), path: Type.String(), layer: Type.Union([Type.Literal("domain"), Type.Literal("repository")]), content: Type.String(), sources: Type.String() })) }),
-    async execute(_id: string, params: { action: "read" | "save"; id?: string; document?: DomainDocumentContent }) {
+    async execute(_id: string, params: { action: "read" | "save" | "delete"; id?: string; document?: DomainDocumentContent }) {
       try {
         if (params.action === "read") {
           const docs = input.read();
@@ -65,13 +65,19 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           if (!data) throw new Error("文档不在本次研究范围");
           return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: {} };
         }
+        if (params.action === "delete") {
+          if (!params.id || !input.remove) throw new Error("请填写本任务中要删除的文稿编号");
+          const removed = input.remove(params.id);
+          return reply({ id: removed.id, deleted: true, state: "draft", revision: removed.revision });
+        }
         const doc = params.document;
         if (!doc) throw new Error("缺少草稿内容");
+        doc.path = knowledgeRelativePath(doc.path, true);
         const previous = input.read().find(d => d.id === doc.id);
         let baseline: { content: string | null; revision: string } | undefined;
         if (!previous && input.job.archive_configured !== false) {
           const target = [input.job.knowledge_target, ...input.job.repositories].find(r => r.id === doc.target_id);
-          if (!target || !doc.path.startsWith(`${target.docs_path}/`) || /(^|\/)\.\.?($|\/)|[\\\x00-\x1f]/.test(doc.path)) throw new Error("无效的归档路径");
+          if (!target) throw new Error("归档仓不在本次任务范围");
           const prepared = await options.source(target, input.turn.operator, signal);
           const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", prepared.revision, "--", doc.path], prepared.root, signal);
           if (entry && !/^100644 blob |^100755 blob /.test(entry)) throw new Error("目标路径不是普通文档文件");
@@ -79,7 +85,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           baseline = { content, revision: prepared.revision };
         }
         const saved = input.save(doc, baseline);
-        return { content: [{ type: "text" as const, text: JSON.stringify({ id: saved.id, saved: true, state: input.turn.mode === "extract" ? "draft" : "proposal" }) }], details: {} };
+        const proposal = previous && (input.turn.mode !== "extract" || previous.human_edited || previous.knowledge_document_id
+          || previous.research_turn_id && previous.research_turn_id !== input.turn.id);
+        return { content: [{ type: "text" as const, text: JSON.stringify({ id: saved.id, saved: true, state: proposal ? "proposal" : "draft" }) }], details: {} };
       } catch (error) { return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : "草稿操作失败" }], details: {}, isError: true }; }
     },
   });
@@ -237,7 +245,7 @@ const failure = (error: unknown) => ({ ...reply({ error: error instanceof Error 
 
 function documentSummary(doc: ReturnType<DomainExecution["read"]>[number]) {
   return { id: doc.id, title: doc.title, target_id: doc.target_id, path: doc.path, layer: doc.layer,
-    revision: doc.revision, characters: doc.content.length, human_edited: doc.human_edited };
+    revision: doc.revision, characters: doc.content.length, human_edited: doc.human_edited, deleted: doc.deleted === true };
 }
 
 /** 研究方法只来自所选包；业务来源（资料与无线豆包）的用法由系统提示词提供，不在这里重复。 */
