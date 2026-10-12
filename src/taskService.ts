@@ -5584,7 +5584,7 @@ export class TaskService {
       dataDir: this.options.dataDir, onIndexed: () => this.prepareKnowledgeIndex(),
       model: () => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels().json } : undefined; },
       source: (component, operator, signal, baselineRevisions) => this.componentResearchSource(component, operator, signal, baselineRevisions),
-      archiveFor: id => this.getDomainKnowledgeExtraction().componentArchive(id),
+      archiveFor: (id, summaryOnly) => this.getDomainKnowledgeExtraction().componentArchive(id, summaryOnly),
     });
   }
   private componentSourceLocks = new Map<string, Promise<unknown>>();

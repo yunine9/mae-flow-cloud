@@ -74,6 +74,7 @@ function progress() { return document.querySelector<HTMLElement>('[aria-label="ç
   check(!requests.includes("/knowledge-tasks") && !requests.includes("/memory-insights"), "background scans must remain paused while reading");
   history.pushState(history.state, "", "?kbPage=tasks"); dispatchEvent(new PopStateEvent("popstate"));
   await until(() => aborted === 1 && requests.includes("/knowledge-tasks"), "leaving task must abort detail and restore task-center loading");
+  check(!requests.includes("/memory-insights"), "opening task center must not scan experience records");
   check(errors.length === 0, errors.join("; "));
   check(document.documentElement.scrollWidth <= innerWidth + 2, "desktop page overflows horizontally");
   document.getElementById("result")!.textContent = JSON.stringify({ passed: true, kind, firstRenderMs, detailRequests, maximumInFlight, aborted });

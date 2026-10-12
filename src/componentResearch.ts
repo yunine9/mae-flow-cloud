@@ -1,5 +1,6 @@
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
+import { componentKnowledgeTask } from "./knowledgeTaskCenter.ts";
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
@@ -24,6 +25,7 @@ import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import { requireTechnologyStacks, listTechnologyStacks } from "./technologyStacks.ts";
 import {
   readKnowledgeDocument,
+  readKnowledgeDocumentFacts,
   readKnowledgeDocumentVersion,
   prepareKnowledgeDocument,
   writePreparedKnowledgeDocument,
@@ -310,7 +312,7 @@ export class ComponentResearch {
     readonly dir: string,
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
-    private archiveFor: (id: string) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
+    private archiveFor: (id: string, summaryOnly?: boolean) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
     private capacity = new KnowledgeTaskCapacity(),
   ) {
     this.capacity.register(() => this.running.size, () => this.pump());
@@ -358,14 +360,14 @@ export class ComponentResearch {
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .map(r => this.get(r.id, summaryOnly));
   }
-  get(id: string, summaryOnly = false): ResearchRecord {
+  private view(id: string, summaryOnly = false): ResearchRecord {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
     let record = r;
     if (r.publication_intent) {
       // 意图不能代替正式事实；只有真实文件已提交精确版本，才显示已接受文稿和入库状态。
       try {
-        const formal = readKnowledgeDocument(this.dir, r.publication_intent.formal.document.id);
+        const formal = readKnowledgeDocumentFacts(this.dir, r.publication_intent.formal.document.id);
         if (formal.revision === r.publication_intent.formal.document.revision) record = {
           ...r.publication_intent.record, deleted_at: r.deleted_at, deleted_by: r.deleted_by,
           publication_intent: r.publication_intent,
@@ -375,7 +377,7 @@ export class ComponentResearch {
     const formalId = record.document_id ?? record.update_document_id;
     const current_revisions: Record<string, string> = {};
     if (formalId) {
-      try { current_revisions[formalId] = readKnowledgeDocument(this.dir, formalId).revision; }
+      try { current_revisions[formalId] = readKnowledgeDocumentFacts(this.dir, formalId).revision; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof Error && error.message === "知识已删除")) {
           const warning = `请检查知识记录：knowledge-documents/${formalId}.json；${error instanceof Error ? error.message : String(error)}`;
@@ -385,18 +387,25 @@ export class ComponentResearch {
     }
     const needsGuideCompletion = record.document?.sections.some(incompleteGuideSection)
       || record.review_turns?.some(turn => turn.proposal?.status === "pending" && incompleteGuideSection(turn.proposal.section));
-    const work_documents = componentWorkDocuments(record.pipeline);
-    const production = projectKnowledgeProduction({ kind: "component", record: { ...record, work_documents }, archive: this.archiveFor(id), current_revisions });
+    const work_documents = componentWorkDocuments(record.pipeline, summaryOnly);
+    const production = projectKnowledgeProduction({ kind: "component", record: { ...record, work_documents }, archive: this.archiveFor(id, summaryOnly), current_revisions });
     if (needsGuideCompletion) production.platform_message = [production.platform_message,
       "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");
+    return { ...record, work_documents, production };
+  }
+  taskRows() {
+    return [...this.records.values()].filter(record => !record.deleted_at).map(record => componentKnowledgeTask(this.view(record.id, true)));
+  }
+  get(id: string, summaryOnly = false): ResearchRecord {
+    let record = this.view(id, summaryOnly);
     if (summaryOnly) {
       // 分项结果、草稿历史和发布意图可能重复保存全文，列表不传这些详情。
       const { draft, document, pipeline, section_history, review_turns, publication_intent, evidence, work_documents: work, ...metadata } = record;
-      return structuredClone({ ...metadata, work_documents: [], evidence: [], production });
+      return structuredClone({ ...metadata, work_documents: [], evidence: [] });
     }
     record = structuredClone(record);
     fillReadableResearchFields(record);
-    return { ...record, work_documents, production };
+    return record;
   }
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");

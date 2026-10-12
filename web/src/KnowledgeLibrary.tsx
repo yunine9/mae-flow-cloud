@@ -52,11 +52,11 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   // 经验变化慢，不轮询：进出页面时各读一次，从经验页审完回来就是新数。读失败卡片只显示入口说明（旁路 fail-open）。
   const [experience, setExperience] = useState<{ pending: number; accepted: number } | null>(null);
   useEffect(() => {
-    if (onTaskPage) return;
+    if (onTaskPage || onTasksPage) return;
     let live = true;
     getMemoryInsights().then(value => { if (live) setExperience(memoryCounts(value.memories)); }).catch(() => { if (live) setExperience(null); });
     return () => { live = false; };
-  }, [route.page, onTaskPage]);
+  }, [route.page, onTaskPage, onTasksPage]);
   function navigate(page: Page, values: Record<string, string> = {}) {
     const url = new URL(location.href);
     for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbAsk", "kbReview", "kbStage", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill", "source_task", "memory_id"]) url.searchParams.delete(key);
