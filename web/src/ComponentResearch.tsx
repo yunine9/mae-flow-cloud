@@ -86,7 +86,7 @@ export function ComponentResearch({
     [modules, setModules] = useState<BusinessModule[]>([]);
   const [selected, setSelected] = useState(() => {
       const params = new URLSearchParams(location.search);
-      return params.get("kbKind") === "component" ? params.get("kbTask") ?? "" : "";
+      return focusId && focusId !== "history" ? focusId : params.get("kbKind") === "component" ? params.get("kbTask") ?? "" : "";
     }),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -112,14 +112,16 @@ export function ComponentResearch({
   }, [surface, focusId]);
   const [detail, setDetail] = useState<ComponentResearchRecord>();
   const current = detail?.id === selected ? detail : undefined;
+  const showList = !focused;
   const load = async () => {
+    if (!showList) return;
     const result = await componentRequest<{
       records: ComponentResearchRecord[];
     }>("/component-research", undefined, AbortSignal.timeout(30_000));
     setRecords(result.records);
   };
   useEffect(() => {
-    if (!open) return;
+    if (!open || !showList) return;
     let active = true;
     const refresh = async () => {
       try {
@@ -132,34 +134,40 @@ export function ComponentResearch({
       }
     };
     void refresh();
-    void getBusinessModules()
-      .then((r) => {
-        if (active) setModules(r.modules);
-      })
-      .catch((e) => setError(e.message));
     const timer = setInterval(() => void refresh(), 4000);
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [open]);
+  }, [open, showList]);
+  useEffect(() => {
+    if (!open || !showList && !publishSettingsOpen && stage !== "publish") return;
+    let active = true;
+    void getBusinessModules().then(result => { if (active) setModules(result.modules); }).catch(e => { if (active) setError(e.message); });
+    return () => { active = false; };
+  }, [open, showList, publishSettingsOpen, stage]);
   useEffect(() => {
     if (!open || !selected || selected === "history") return;
-    let active = true;
+    let active = true, loading = false;
+    const controller = new AbortController();
     const refresh = async () => {
+      if (loading) return;
+      loading = true;
       try {
         const result = await componentRequest<ComponentResearchRecord>(
           `/component-research/${encodeURIComponent(selected)}`,
+          undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
         );
         if (active) setDetail(result);
       } catch (e) {
         if (active) setError((e as Error).message);
-      }
+      } finally { loading = false; }
     };
     void refresh();
     const timer = setInterval(() => void refresh(), 4000);
     return () => {
       active = false;
+      controller.abort();
       clearInterval(timer);
     };
   }, [open, selected]);

@@ -54,7 +54,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
   const [instructions, setInstructions] = useState("");
   const [records, setRecords] = useState<DomainKnowledgeJob[]>([]), [job, setJob] = useState<DomainKnowledgeJob>(), [selected, setSelected] = useState(() => {
     const params = new URLSearchParams(location.search);
-    return params.get("kbKind") === "domain" ? params.get("kbTask") ?? "" : "";
+    return focusId && focusId !== "new" ? focusId : params.get("kbKind") === "domain" ? params.get("kbTask") ?? "" : "";
   });
   const selectedRef = useRef(selected);
   const searchableContent = useRef<HTMLDivElement>(null);
@@ -109,12 +109,15 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
     if (edit) { setError("请先保存或取消当前编辑，再查看过程文稿。"); return; }
     setWorkDocumentId(`${turnId}:${id}`); setShowDiscussion(false); setTab("content"); changeView("review");
   }
-  async function refreshList() { const result = await componentRequest<{ records: DomainKnowledgeJob[] }>("/domain-extraction"); setRecords(result.records); }
-  useEffect(() => { void getBusinessModules().then(result => setModules(result.modules.filter(m => m.status === "active"))).catch(e => setError(e.message)); void refreshList().catch(e => setError(e.message)); }, []);
+  const showList = !focused && surface !== "knowledge";
+  async function refreshList() { if (!showList) return; const result = await componentRequest<{ records: DomainKnowledgeJob[] }>("/domain-extraction"); setRecords(result.records); }
+  useEffect(() => { if (showList) void refreshList().catch(e => setError(e.message)); }, [showList]);
+  useEffect(() => { if (open) void getBusinessModules().then(result => setModules(result.modules.filter(m => m.status === "active"))).catch(e => setError(e.message)); }, [open]);
   useEffect(() => {
-    if (!selected || busy) return; let live = true;
-    const load = async () => { try { const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${selected}`); if (live && selectedRef.current === selected) setJob(next); } catch (e) { if (live && selectedRef.current === selected) setError((e as Error).message); } };
-    void load(); const timer = setInterval(() => void load(), 4000); return () => { live = false; clearInterval(timer); };
+    if (!selected || busy) return; let live = true, loading = false;
+    const controller = new AbortController();
+    const load = async () => { if (loading) return; loading = true; try { const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${selected}`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])); if (live && selectedRef.current === selected) setJob(next); } catch (e) { if (live && selectedRef.current === selected) setError((e as Error).message); } finally { loading = false; } };
+    void load(); const timer = setInterval(() => void load(), 4000); return () => { live = false; controller.abort(); clearInterval(timer); };
   }, [selected, busy]);
   function select(id: string) {
     const url = new URL(location.href);

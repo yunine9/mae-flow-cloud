@@ -12,6 +12,22 @@ function summary(event: Evidence) {
   return text(event.error || context || "查看详细记录").replace(/[#*`]/g, "").replace(/\s+/g, " ").slice(0, 180);
 }
 
+function ResearchProgressEntry({ event }: { event: Evidence }) {
+  const [expanded, setExpanded] = useState(false), [rawExpanded, setRawExpanded] = useState(false);
+  const error = failed(event), timestamp = typeof event.at === "string" ? new Date(event.at) : undefined;
+  const action = event.tool === "research_note" ? "分析与整理" : event.tool === "knowledge_source_changes" ? "核对来源变化" : actions[String(event.action)] ?? "研究进展";
+  return <details className="knowledge-progress-entry" onToggle={e => { if (e.target === e.currentTarget) { setExpanded(e.currentTarget.open); if (!e.currentTarget.open) setRawExpanded(false); } }}><summary>
+    {timestamp && !Number.isNaN(timestamp.getTime()) && <time dateTime={String(event.at)}>{timestamp.toLocaleTimeString("zh-CN", { hour12: false })}</time>}
+    <span className={`knowledge-progress-dot${error ? " is-error" : ""}`} /><span className="knowledge-progress-action">{action}</span><span className="knowledge-progress-summary" title={summary(event)}>{summary(event)}</span>
+    {error ? <span className="knowledge-progress-error">异常</span> : event.status === "empty" ? <span className="text-muted-foreground">无结果</span> : null}
+  </summary>{expanded && <div className="knowledge-progress-detail">
+    {event.path != null && <p className="break-all text-muted-foreground">文件：{text(event.path)}</p>}{event.repository != null && <p className="break-all text-muted-foreground">仓库：{text(event.repository)}</p>}{event.error != null && <p className="text-danger whitespace-pre-wrap">{text(event.error)}</p>}
+    {event.preview != null && (event.tool === "research_note" ? <Markdown text={text(event.preview)} /> : <pre>{text(event.preview)}</pre>)}
+    {event.result != null && <pre>{text(event.result)}</pre>}
+    <details className="mt-3 text-sm text-muted-foreground" onToggle={e => { if (e.target === e.currentTarget) setRawExpanded(e.currentTarget.open); }}><summary className="cursor-pointer">完整记录</summary>{rawExpanded && <pre>{JSON.stringify(event, null, 2)}</pre>}</details>
+  </div>}</details>;
+}
+
 export function KnowledgeResearchProgress({ evidence }: { evidence: Evidence[] }) {
   const root = useRef<HTMLElement>(null);
   const [limit, setLimit] = useState(40);
@@ -23,20 +39,7 @@ export function KnowledgeResearchProgress({ evidence }: { evidence: Evidence[] }
       {evidence.length > 0 && <Button variant="ghost" size="sm" onClick={() => root.current?.querySelectorAll("details[open]").forEach(node => { (node as HTMLDetailsElement).open = false; })}>全部折叠</Button>}
     </header>
     {!evidence.length ? <p className="knowledge-progress-empty">还没有研究动态；Agent 每读一份源码或资料、每完成一步，都会在这里记一条。</p> : <div className="knowledge-progress-entries">
-      <ol>{visible.map(({ event, index }) => {
-        const error = failed(event), timestamp = typeof event.at === "string" ? new Date(event.at) : undefined;
-        const action = event.tool === "research_note" ? "分析与整理" : event.tool === "knowledge_source_changes" ? "核对来源变化" : actions[String(event.action)] ?? "研究进展";
-        return <li key={index}><details className="knowledge-progress-entry"><summary>
-          {timestamp && !Number.isNaN(timestamp.getTime()) && <time dateTime={String(event.at)}>{timestamp.toLocaleTimeString("zh-CN", { hour12: false })}</time>}
-          <span className={`knowledge-progress-dot${error ? " is-error" : ""}`} /><span className="knowledge-progress-action">{action}</span><span className="knowledge-progress-summary" title={summary(event)}>{summary(event)}</span>
-          {error ? <span className="knowledge-progress-error">异常</span> : event.status === "empty" ? <span className="text-muted-foreground">无结果</span> : null}
-        </summary><div className="knowledge-progress-detail">
-          {event.path != null && <p className="break-all text-muted-foreground">文件：{text(event.path)}</p>}{event.repository != null && <p className="break-all text-muted-foreground">仓库：{text(event.repository)}</p>}{event.error != null && <p className="text-danger whitespace-pre-wrap">{text(event.error)}</p>}
-          {event.preview != null && (event.tool === "research_note" ? <Markdown text={text(event.preview)} /> : <pre>{text(event.preview)}</pre>)}
-          {event.result != null && <pre>{text(event.result)}</pre>}
-          <details className="mt-3 text-sm text-muted-foreground"><summary className="cursor-pointer">完整记录</summary><pre>{JSON.stringify(event, null, 2)}</pre></details>
-        </div></details></li>;
-      })}</ol>
+      <ol>{visible.map(({ event, index }) => <li key={index}><ResearchProgressEntry event={event} /></li>)}</ol>
       {entries.length > limit && <Button variant="ghost" size="sm" className="m-3" onClick={() => setLimit(current => current + 40)}>查看更早的 {Math.min(40, entries.length - limit)} 条动态</Button>}
     </div>}
   </section>;

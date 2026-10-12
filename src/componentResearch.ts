@@ -356,23 +356,19 @@ export class ComponentResearch {
     return [...this.records.values()]
       .filter(r => !r.deleted_at)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .map((r) =>
-        structuredClone(
-          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, work_documents: [], review_turns: undefined, evidence: [] } : this.get(r.id),
-        ),
-      );
+      .map(r => this.get(r.id, summaryOnly));
   }
-  get(id: string): ResearchRecord {
+  get(id: string, summaryOnly = false): ResearchRecord {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
-    let record = structuredClone(r);
+    let record = r;
     if (r.publication_intent) {
       // 意图不能代替正式事实；只有真实文件已提交精确版本，才显示已接受文稿和入库状态。
       try {
         const formal = readKnowledgeDocument(this.dir, r.publication_intent.formal.document.id);
         if (formal.revision === r.publication_intent.formal.document.revision) record = {
-          ...structuredClone(r.publication_intent.record), deleted_at: r.deleted_at, deleted_by: r.deleted_by,
-          publication_intent: structuredClone(r.publication_intent),
+          ...r.publication_intent.record, deleted_at: r.deleted_at, deleted_by: r.deleted_by,
+          publication_intent: r.publication_intent,
         };
       } catch { /* 正式文件缺失、损坏或已删除时保留原文稿，任务中心会点名坏文件。 */ }
     }
@@ -389,12 +385,18 @@ export class ComponentResearch {
     }
     const needsGuideCompletion = record.document?.sections.some(incompleteGuideSection)
       || record.review_turns?.some(turn => turn.proposal?.status === "pending" && incompleteGuideSection(turn.proposal.section));
-    fillReadableResearchFields(record);
-    record.work_documents = componentWorkDocuments(record.pipeline);
-    const production = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions });
+    const work_documents = componentWorkDocuments(record.pipeline);
+    const production = projectKnowledgeProduction({ kind: "component", record: { ...record, work_documents }, archive: this.archiveFor(id), current_revisions });
     if (needsGuideCompletion) production.platform_message = [production.platform_message,
       "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");
-    return { ...record, production };
+    if (summaryOnly) {
+      // 分项结果、草稿历史和发布意图可能重复保存全文，列表不传这些详情。
+      const { draft, document, pipeline, section_history, review_turns, publication_intent, evidence, work_documents: work, ...metadata } = record;
+      return structuredClone({ ...metadata, work_documents: [], evidence: [], production });
+    }
+    record = structuredClone(record);
+    fillReadableResearchFields(record);
+    return { ...record, work_documents, production };
   }
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");

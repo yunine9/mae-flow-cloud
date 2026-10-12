@@ -268,7 +268,17 @@ export class DomainKnowledgeExtraction {
     const current_revisions = Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
     return { ...job, production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(id) };
   }
-  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...this.get(job.id), documents: job.documents.map(({ content: _, history: __, base_content: ___, ...doc }) => doc), work_documents: [], evidence: [], turns: [], publications: [], publication_history: [] })); }
+  list() {
+    return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => {
+        // 列表只读元数据，先排除全文和历史，再复制；不能先加载整份详情再丢弃。
+        const { documents, turns, evidence, publications, publication_history, archive_batches, work_documents, ...metadata } = job;
+        const current_revisions = Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
+        return structuredClone({ ...metadata, documents: documents.map(({ content, history, base_content, ...document }) => document),
+          work_documents: [], evidence: [], turns: [], publications: [], publication_history: [],
+          production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(job.id) });
+      });
+  }
   componentArchive(researchId: string) {
     const job = [...this.jobs.values()].find(job => !job.deleted_at && job.component_research_id === researchId);
     return job ? this.get(job.id) : undefined;
@@ -295,7 +305,7 @@ export class DomainKnowledgeExtraction {
         if (strict) throw new Error(warning);
         return [];
       }
-      return [{ ...structuredClone(document), ...parts, title: formal.title, selected: true, history: [],
+      return [{ ...structuredClone({ ...document, ...parts, history: [] }), title: formal.title, selected: true,
         knowledge_document_id: formal.id, published_revision: formal.revision,
         published_document_revision: document.revision, published_at: formal.history.at(-1)?.at }];
     });
