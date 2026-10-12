@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, MessageSquare, MoreHorizontal, Plus, Trash2, Upload, Sparkles } from "lucide-react";
+import { ChevronDown, MoreHorizontal, Plus, Trash2, Upload, Sparkles } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { KnowledgeModuleHome } from "./KnowledgeModuleHome";
 import { KnowledgeModuleReader } from "./KnowledgeModuleReader";
-import { KnowledgeAnswers } from "./KnowledgeAnswers";
+import { openKnowledgeAnswer } from "./KnowledgeAnswerPage";
 import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
 import { KnowledgeTaskCenter, KnowledgeTaskCapsule, KnowledgeExperienceCapsule } from "./KnowledgeTaskCenter";
 import { KnowledgeResearchCreate, type KnowledgeResearchDraft } from "./KnowledgeResearchCreate";
@@ -22,15 +22,15 @@ import { memoryCounts } from "./memoryPresentation";
 import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
 import type { KnowledgeTaskCenterData } from "../../src/knowledgeTaskCenterTypes";
 
-type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "experience" | "ask";
+type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "experience";
 type Kind = ExtractionKind | "skill-extraction" | "skill-submission";
 function readRoute() {
   const q = new URLSearchParams(location.search), page = q.get("kbPage");
-  const valid = ["home", "module", "tasks", "research", "import", "task", "experience", "ask"].includes(page ?? "");
+  const valid = ["home", "module", "tasks", "research", "import", "task", "experience"].includes(page ?? "");
   const kind = q.get("kbKind") as Kind | null;
   return { page: (valid ? page : "home") as Page,
     module: q.get("kbModule") ?? "", document: q.get("knowledgeDocument") ?? "",
-    kind: kind ?? "domain", id: q.get("kbTask") ?? "", answer: q.get("kbAsk") ?? "", review: q.get("kbReview") === "1" };
+    kind: kind ?? "domain", id: q.get("kbTask") ?? "", review: q.get("kbReview") === "1" };
 }
 export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [route, setRoute] = useState(readRoute);
@@ -88,7 +88,6 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       <header className="knowledge-hub-header">
         <div className="knowledge-page-title"><button type="button" className="knowledge-hub-brand" onClick={() => navigate("home")}><strong>知识库</strong></button></div>
         <div className="knowledge-hub-actions">
-          <Button variant={route.page === "ask" ? "secondary" : "outline"} aria-pressed={route.page === "ask"} onClick={() => navigate("ask")}><MessageSquare size={17} />知识问答</Button>
           <KnowledgeExperienceCapsule counts={experience} active={route.page === "experience"} onClick={() => navigate("experience")} />
           <KnowledgeTaskCapsule summary={onTaskPage ? null : summary} active={route.page === "tasks"} onClick={() => navigate("tasks")} />
           <DropdownMenu><DropdownMenuTrigger render={<Button className="knowledge-hub-add" />}><Plus size={18} />新增<ChevronDown size={14} /></DropdownMenuTrigger><DropdownMenuContent align="end" sideOffset={10} className="knowledge-hub-add-menu">
@@ -101,8 +100,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
       {route.page === "home" && <KnowledgeModuleHome key={catalogVersion} moduleActivity={moduleActivity} onOpenResearch={id => openTask("domain", id)} onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
       {route.page === "module" && (platformSkill
         ? <div className="knowledge-hub-task"><KnowledgeBackButton destination={returnSearch ? "研究知识" : "知识库"} onClick={() => returnSearch ? returnToResearch() : navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} onSaved={() => {}} /></div>
-        : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onAsk={(moduleKey, documentId) => navigate("ask", { kbModule: moduleKey, knowledgeDocument: documentId ?? "" })} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
-      {route.page === "ask" && <KnowledgeAnswers answerId={route.answer} moduleKey={route.module} documentId={route.document} onSelect={id => navigate("ask", { kbAsk: id })} />}
+        : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onAsk={(moduleKey, documentId) => openKnowledgeAnswer("", moduleKey, documentId)} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}
       {route.page === "tasks" && <KnowledgeTaskCenter onBack={() => navigate("home")} onOpen={(kind, id, action) => openTask(kind, id, action.view !== "progress", action)} onSummaryChange={setSummary} />}
       {route.page === "research" && <KnowledgeResearchCreate moduleKey={route.module} initialKind={route.kind} draft={researchDraft} onDraftChange={setResearchDraft} onBack={() => navigate("home")} onCreated={(kind, id) => { setResearchDraft(undefined); openTask(kind, id); }} onOpenDocument={(id, key) => navigate("module", { kbModule: key, knowledgeDocument: id })} />}
       {route.page === "import" && <KnowledgeSkillImport moduleKey={route.module} onBack={() => navigate("home")} onCreated={id => openTask("skill-submission", id, true)} />}
