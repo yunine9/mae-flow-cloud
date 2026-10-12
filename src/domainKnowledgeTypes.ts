@@ -8,10 +8,14 @@ export interface DomainDocumentContent {
 export interface DomainDocument extends DomainDocumentContent {
   research_turn_id?: string;
   human_edited?: boolean;
+  /** 文稿删除也先审阅，确认发布后移出正式库，再通过人工归档删除 Git 文件。 */
+  deleted?: boolean;
   /** 用户在归档设置中指定的完整相对路径；模型输出不能设置此字段。 */
   archive_path?: string;
   revision: number; selected: boolean; base_content: string | null; base_revision: string;
-  history: Array<{ revision: number; content: string; sources: string; title: string; operator: string; at: string }>;
+  /** 改名前的 Git 基线位置；归档时只删除内容仍与已知版本一致的旧文件。 */
+  base_path?: string;
+  history: Array<{ revision: number; content: string; sources: string; title: string; path?: string; deleted?: boolean; operator: string; at: string }>;
   knowledge_document_id?: string;
   published_revision?: string;
   published_document_revision?: number;
@@ -44,7 +48,7 @@ export interface DomainResearch {
 export interface DomainPublication {
   target_id: string; state: "pending" | "opened" | "failed";
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
-  documents: Array<{ id: string; path: string; content: string; revision: number; base_content?: string | null; knowledge_document_id?: string; knowledge_revision?: string }>;
+  documents: Array<{ id: string; path: string; content: string; revision: number; deleted?: boolean; base_content?: string | null; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
   updated_at?: string;
 }
@@ -96,6 +100,7 @@ export interface DomainKnowledgeJob {
 export interface DomainExecution {
   job: DomainKnowledgeJob; turn: DomainTurn; root: string; signal: AbortSignal;
   save: (document: DomainDocumentContent, baseline?: { content: string | null; revision: string }) => DomainDocumentContent;
+  remove?: (id: string) => DomainDocument;
   read: () => DomainDocument[];
   update: (patch: { revisions?: Record<string, string>; skill?: DomainKnowledgeJob["skill"]; stage?: string; research?: DomainResearch }) => void;
   evidence: (event: Record<string, unknown>) => void;

@@ -9,7 +9,8 @@ import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./co
 import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { readMrFailureBody } from "./mrGateClient.ts";
 import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeHttpFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
-import { readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
+import { listKnowledgeDocuments, readKnowledgeArchiveVersion } from "./knowledgeDocuments.ts";
+import { readKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import type { DomainDocument, KnowledgeCleanupPlan, KnowledgeCleanupPublication } from "./domainKnowledgeTypes.ts";
@@ -99,6 +100,30 @@ export class KnowledgeMrPublisher {
     if (!entry) return null;
     if (!/^100(?:644|755) blob /.test(entry)) throw new Error("文档路径不是普通文件，未写入");
     return git(["show", `${revision}:${path}`]);
+  }
+  /** 只有已推送的文件快照能证明旧文件身份；待归档草稿与修订历史不能作为删除依据。 */
+  private archivedDocuments(job: DomainKnowledgeJob, target: KnowledgeRepository, previous?: DomainPublication): DomainPublication["documents"] {
+    const documents: DomainPublication["documents"] = [];
+    const frozen = new Set<string>();
+    const sameTarget = (value?: KnowledgeRepository) => value?.repository === target.repository && value.branch === target.branch;
+    for (const batch of job.archive_batches ?? []) for (const publication of batch.publications) {
+      frozen.add(JSON.stringify([publication.branch, publication.revision]));
+      if (publication.revision && sameTarget(batch.targets.find(value => value.id === publication.target_id))) documents.push(...publication.documents.filter(document => !document.deleted));
+    }
+    // 本次重试的 previous 来自当前归档批次，其目标已经由调用方固定。
+    if (previous?.revision && sameTarget([job.knowledge_target, ...job.repositories].find(value => value.id === previous.target_id))) documents.push(...previous.documents.filter(document => !document.deleted));
+    for (const publication of [...job.publications, ...job.publication_history ?? []]) {
+      if (!publication.revision || frozen.has(JSON.stringify([publication.branch, publication.revision]))) continue;
+      // 旧记录没有冻结目标配置，不能用后来修改过的仓配置猜旧文件所在仓和分支。
+      for (const document of publication.documents) {
+        if (document.deleted || !document.knowledge_document_id || !document.knowledge_revision) continue;
+        try {
+          const location = readKnowledgeArchiveVersion(this.options.dataDir, document.knowledge_document_id, document.knowledge_revision).document.archive_target;
+          if (location?.repository === target.repository && location.branch === target.branch) documents.push(document);
+        } catch { /* 缺少精确正式版本时，这份旧记录不能授权删除文件。 */ }
+      }
+    }
+    return documents;
   }
   private cleanupPaths(paths: unknown, limit = 20): string[] {
     if (!Array.isArray(paths) || paths.length > limit || paths.some(path => typeof path !== "string")) throw new Error(`每仓最多选择 ${limit} 条清理目录或文件路径`);
@@ -212,7 +237,10 @@ export class KnowledgeMrPublisher {
       && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
     const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
       if (!doc.knowledge_document_id || !doc.published_revision) throw new Error("请先发布所选知识，再手动归档正式版本");
-      const formal = readKnowledgeDocumentVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
+      const deletion = readKnowledgeDeletion(this.options.dataDir, doc.knowledge_document_id);
+      if (doc.deleted && (!deletion || deletion.revision !== doc.published_revision || doc.published_document_revision !== doc.revision)) throw new Error("请先确认发布当前删除文稿，再归档 Git 删除操作");
+      if (!doc.deleted && deletion) throw new Error("知识已删除，旧归档操作不能重新写入文档");
+      const formal = readKnowledgeArchiveVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
       const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
       if (!job.component_research_id) {
         if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
@@ -225,15 +253,23 @@ export class KnowledgeMrPublisher {
     });
     if (!docs.length) throw new Error("请选择至少一篇已发布知识进行归档");
     const documents: DomainPublication["documents"] = docs.map(doc => ({ id: doc.id, path: doc.path,
-      content: doc.content, revision: doc.revision, knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision }));
+      content: doc.content, revision: doc.revision, knowledge_document_id: doc.knowledge_document_id, knowledge_revision: doc.published_revision,
+      ...(doc.deleted ? { deleted: true } : {}) }));
     if (new Set(documents.map(doc => doc.path)).size !== documents.length) throw new Error("归档文件路径不能重复");
     for (const doc of docs) {
-      const logicalTarget = logicalTargets.get(doc.target_id)!;
-      if (!knowledgeRelativePath(doc.path, true).startsWith(`${logicalTarget.docs_path}/`) && doc.path !== doc.archive_path) throw new Error("归档文件超出指定目录或已设置的文件路径");
+      knowledgeRelativePath(doc.path, true);
       scanForSecrets(doc.path, Buffer.from(doc.content));
     }
+    const archived = this.archivedDocuments(job, target, previous);
+    const knownFiles = new Map(docs.map(doc => {
+      const files = archived.filter(file => file.id === doc.id && (!file.knowledge_document_id || file.knowledge_document_id === doc.knowledge_document_id))
+        .map(file => ({ path: knowledgeRelativePath(file.path, true), content: file.content }));
+      if (typeof doc.base_content === "string") files.push({ path: knowledgeRelativePath(doc.base_path ?? doc.path, true), content: doc.base_content });
+      if (doc.deleted) files.push({ path: doc.path, content: doc.content });
+      return [doc.id, files];
+    }));
     const documentKey = (values: DomainPublication["documents"]) => JSON.stringify(values.map(doc => [doc.id, doc.path, doc.content, doc.revision,
-      doc.knowledge_document_id, doc.knowledge_revision]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+      doc.knowledge_document_id, doc.knowledge_revision, doc.deleted === true]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
     const continuing = !!previous && previous.target_id === target.id
       && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
     // 同一精确版本的失败恢复沿用已落盘分支；新版本独立建MR，不受旧MR的合入或关闭影响。
@@ -277,7 +313,39 @@ export class KnowledgeMrPublisher {
         parent = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
       }
       await git(["read-tree", parent]);
+      const removed = new Map<string, string>();
+      for (const doc of docs) {
+        const known = knownFiles.get(doc.id)!;
+        const moving = !!doc.base_path && doc.base_path !== doc.path || known.some(file => file.path !== doc.path);
+        if (!moving && !doc.deleted) continue;
+        const action = doc.deleted ? "删除" : "改名";
+        const destination = doc.deleted ? null : await this.content(git, parent, doc.path);
+        // 精确分支恢复时，远端 SHA 已经核对为本次保存的版本；不能因落盘窗口再重复提交。
+        const committedAttempt = !!remote && continuing && destination === doc.content;
+        if (destination !== null && !committedAttempt && !known.some(file => file.path === doc.path && file.content === destination)) {
+          throw new Error(`改名目标 ${doc.path} 已有其他文件或内容已变化，未覆盖；请调整文件路径或先核对冲突`);
+        }
+        const oldPaths = [...known.map(file => file.path), ...(doc.base_path ? [knowledgeRelativePath(doc.base_path, true)] : []), ...(doc.deleted ? [doc.path] : [])].filter(path => doc.deleted || path !== doc.path);
+        for (const path of new Set(oldPaths)) {
+          if (documents.some(file => file.id !== doc.id && file.path === path)) throw new Error(`${action}原路径 ${path} 被其他文档使用，未删除；请先调整冲突路径`);
+          const content = await this.content(git, parent, path);
+          if (content === null) continue;
+          if (!known.some(file => file.path === path)) throw new Error(`${action}原文件 ${path} 无法核对已知内容，未删除；请先核对原文件`);
+          if (!known.some(file => file.path === path && file.content === content)) throw new Error(`${action}原文件 ${path} 已被修改，未删除；请先核对最新内容`);
+          if (removed.has(path) && removed.get(path) !== doc.knowledge_document_id) throw new Error(`${action}原路径 ${path} 对应多篇知识，未删除；请先核对文件归属`);
+          removed.set(path, doc.knowledge_document_id!);
+        }
+      }
+      for (const [path, knowledgeId] of removed) {
+        const owner = listKnowledgeDocuments(this.options.dataDir).find(formal => {
+          const location = formal.archive_target ?? formal.source;
+          return formal.id !== knowledgeId && location?.repository === target.repository && location.branch === target.branch && location.path === path;
+        });
+        if (owner) throw new Error(`原路径 ${path} 已被其他正式知识使用，未删除；请先核对文件归属`);
+        await git(["--work-tree", root, "--literal-pathspecs", "update-index", "--force-remove", "--", path]);
+      }
       for (const doc of documents) {
+        if (doc.deleted) continue;
         await this.content(git, parent, doc.path);
         const file = join(root, "knowledge-content.tmp"); writeFileSync(file, doc.content, { mode: 0o600 });
         const blob = (await git(["hash-object", "-w", file])).trim();

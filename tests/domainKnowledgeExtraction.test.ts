@@ -25,7 +25,8 @@ test("工作草稿持续修正，手动重试保留原轮次；人工修改不�
       await new Promise<void>(resolve => input.signal.addEventListener("abort", () => resolve(), { once: true }));
     } else {
       assert.equal(input.turn.id, turnId);
-      assert.throws(() => input.save({ ...document, content: "覆盖人工内容" }), /人工修改/);
+      input.save({ ...document, content: "Agent 新建议" });
+      assert.equal(input.read()[0].content, "Agent 新建议", "可继续处理人工文稿，结果仍等待审阅");
     }
     return "研究结束";
   });
@@ -35,6 +36,7 @@ test("工作草稿持续修正，手动重试保留原轮次；人工修改不�
     service.edit(job.id, { document: { ...document, content: "人工修改" }, base_revision: 2 }, "editor");
     service.resume(job.id, "expert"); await until(() => service.get(job.id).status === "done");
     assert.equal(service.get(job.id).turns.length, 1); assert.equal(service.get(job.id).documents[0].content, "人工修改");
+    assert.equal(service.get(job.id).turns[0].proposals[0].document.content, "Agent 新建议");
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -90,7 +92,11 @@ test("生产线验收14：停止后迟到结果不复活；路径和归档目标
     const job = service.create(config, "expert"); await until(() => service.get(job.id).documents.length > 0);
     service.stop(job.id); await service.shutdown();
     const stopped = service.get(job.id); assert.equal(stopped.status, "cancelled"); assert.equal(stopped.documents.length, 1); assert.equal(stopped.turns[0].reply, undefined); assert.ok(stopped.turns[0].started_at && stopped.turns[0].finished_at);
-    assert.throws(() => service.edit(job.id, { document: { ...document, path: "domains/orders/new.md" }, base_revision: 1 }, "editor"), /归档位置/);
+    const renamed = service.edit(job.id, { document: { ...document, path: "domains/orders/new.md" }, base_revision: 1 }, "editor");
+    assert.equal(renamed.documents[0].path, "domains/orders/new.md", "停止后允许在原文档目录内改名");
+    assert.equal(renamed.documents[0].base_path, document.path);
+    assert.throws(() => service.edit(job.id, { document: { ...document, path: "../../README.md" }, base_revision: 2 }, "editor"), /路径/);
+    assert.throws(() => service.edit(job.id, { document: { ...document, target_id: "repo-1", layer: "repository", path: "docs/business/new.md" }, base_revision: 2 }, "editor"), /归档仓/);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 test("生产线验收14：MR 部分失败保存已经发生的分支事实，重试复用分支且不影响其他仓", async () => {

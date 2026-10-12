@@ -79,13 +79,13 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("逐文件归档支持根目录与其他目录，保留修订和冲突保护，不能由模型扩大写入范围", async () => {
+test("逐文件归档支持任务内根目录与其他 Markdown 路径，保留修订和冲突保护", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-file-paths-"));
   const service = new DomainKnowledgeExtraction(root, async input => {
     if (input.turn.mode === "extract") {
       const target = input.job.knowledge_target;
       for (const name of ["AGENTS", "rules", "extra"]) input.save({ id: name, title: name, path: `${target.docs_path}/${name}.md`, target_id: "domain", layer: "domain", content: "原稿", sources: "源码" });
-      assert.throws(() => input.save({ id: "escape", title: "非法扩展", path: "AGENTS.md", target_id: "domain", layer: "domain", content: "规则", sources: "源码", archive_path: "AGENTS.md" } as any), /默认目录/);
+      assert.throws(() => input.save({ id: "escape", title: "非法扩展", path: ".git/AGENTS.md", target_id: "domain", layer: "domain", content: "规则", sources: "源码", archive_path: "AGENTS.md" } as any), /相对路径/);
     } else for (const doc of input.read().filter(d => input.turn.document_ids.includes(d.id))) input.save({ ...doc, content: "更新建议" });
     return "done";
   });

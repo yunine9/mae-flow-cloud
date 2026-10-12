@@ -30,7 +30,7 @@ function documentState(job: DomainKnowledgeJob, document: DomainDocument): Knowl
   const proposal_problem = !pending ? undefined : pending.turn.status !== "done" ? `${name} 的修改尚未完成，完成后才能确认发布。`
     : pending.proposal.base_revision !== document.revision ? `${name} 的正文已变化，请重新修改或放弃这份修改结果后再发布。` : undefined;
   return { id: document.id, changed, published_revision: document.published_document_revision, knowledge_document_id: document.knowledge_document_id,
-    status_label: changed ? "待审查" : "已入库", proposal_problem };
+    status_label: document.deleted ? changed ? "待删除" : "已删除" : changed ? "待审查" : "已入库", proposal_problem };
 }
 function publicationState(job: DomainKnowledgeJob, publication: DomainPublication): KnowledgePublicationState {
   const target = [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id;
@@ -55,6 +55,10 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     : input.kind === "domain" ? input.record.documents[0]?.knowledge_document_id : undefined;
   const published = input.kind === "domain" ? input.record.documents.filter(document => !!document.knowledge_document_id && (!input.current_revisions || !!input.current_revisions[document.knowledge_document_id])).length
     : input.kind === "component" ? Number(!!formalId && (!input.current_revisions || !!input.current_revisions[formalId])) : 0;
+  const confirmedDeletions = input.kind === "domain" ? input.record.documents.filter(document => document.deleted
+    && document.published_document_revision === document.revision && !!document.knowledge_document_id
+    && (!input.current_revisions || !!input.current_revisions[document.knowledge_document_id])).length : 0;
+  const onlyDeletions = confirmedDeletions > 0 && confirmedDeletions === published;
   const currentBatches = job ? currentKnowledgeArchiveBatches(job, input.kind === "domain" || input.kind === "component" ? input.current_revisions : undefined) : [];
   const current = currentBatches.flatMap(batch => batch.publications);
   const archiveFailed = currentBatches.some(batch => batch.state === "failed") || current.some(publication => publication.state === "failed");
@@ -132,7 +136,10 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     else if (working) ready_message = "已有文稿可以先审阅，后续内容仍在生成。";
     else if (record.status === "paused") ready_message = "请先审阅当前文稿，再确认或提出调整意见。";
     else if (next_action.view === "archive") ready_message = `${status_label}；请打开归档查看记录。`;
-    else ready_message = group === "attention" ? "请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读；要交付到代码仓时，再点「归档」填写单号创建 MR。" : "知识已入库，可继续阅读文稿；要交付到代码仓时点「归档」填写单号创建 MR。";
+    else ready_message = group === "attention" ? input.kind === "domain" && input.record.documents.some(document => document.deleted && documents.find(item => item.id === document.id)?.changed)
+      ? "请审查文稿：勾选要确认的变化，点「确认并发布」后发布正文或从正式知识库删除已标记的文稿；要交付到代码仓时，再点「归档」填写单号创建 MR。"
+      : "请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读；要交付到代码仓时，再点「归档」填写单号创建 MR。"
+      : onlyDeletions ? "文档删除已确认，可手工归档。" : confirmedDeletions ? "文稿变更已确认，可继续审阅；要交付到代码仓时点「归档」填写单号创建 MR。" : "知识已入库，可继续阅读文稿；要交付到代码仓时点「归档」填写单号创建 MR。";
   }
   const view: KnowledgeProductionView = { status_label, group, next_action, working, modifying, documents,
     research_actions,
@@ -155,9 +162,9 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     navigation: { ready_message,
       ready_action_label: readableCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },
     archive: { visible: !!published, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
-      status_label: archiveLabel, title: published ? `${published} 份知识已发布，平台立即可读` : "Git 归档记录",
+      status_label: archiveLabel, title: onlyDeletions ? "文档删除已确认，可手工归档" : confirmedDeletions ? `${published} 份文稿变更已确认，可手工归档` : published ? `${published} 份知识已发布，平台立即可读` : "Git 归档记录",
       message: currentBatches.find(batch => batch.state === "failed")?.error || current.find(publication => publication.state === "failed")?.error
-        || (archiveRunning ? "正在创建人工归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : "平台知识已发布；如需 Git 归档，请手动填写关联单号并创建 MR。"),
+        || (archiveRunning ? "正在创建人工归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : onlyDeletions ? "文档删除已确认，可手工归档。" : confirmedDeletions ? "文稿变更已确认；如需 Git 归档，请手动填写关联单号并创建 MR。" : "平台知识已发布；如需 Git 归档，请手动填写关联单号并创建 MR。"),
       actions: archiveActions, publications: job ? [...job.publications, ...job.publication_history ?? []].map(publication => publicationState(job, publication)) : [],
       batches: (job?.archive_batches ?? []).filter(batch => !!batch.issue_no).map((batch, index) => ({ id: batch.id, title: `第 ${index + 1} 批 · ${batch.issue_no} · ${batch.documents.length} 份`,
         status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已发布（未归档）" }[batch.state],
