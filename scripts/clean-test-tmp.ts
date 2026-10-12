@@ -1,8 +1,9 @@
 /**
- * 测试套件的 /tmp 卫生:清扫 /tmp/mfc-* 中 mtime 超过 24h 的残留目录(issue #34)。
+ * 测试套件的 /tmp 卫生:清扫 /tmp/mfc-* 中 mtime 超过 24h 且带本家族
+ * 标记的残留目录(issue #34)。
  *
  * 为什么要清:进程被杀/超时/崩溃时测试的 mkdtemp 目录就留下了,多次
- * 累积后塞满 tmpfs,套件批量 ENOSPC 假失败,只能手动 rm -rf 救回来。
+ * 累积后塞满 /tmp,套件批量 ENOSPC 假失败,只能手动 rm -rf 救回来。
  *
  * 分工(2026-09-07 起):重型家族(issue/assistant)已改走 tests/mfcTmp.ts
  * 的 mfcTemp() 自清理——文件跑完当场删,本脚本的"24h 安全窗"退居异常
@@ -12,11 +13,19 @@
  * mfc-* 目录不能动。24h 安全窗就是给它们的——活着的测试目录 mtime 是
  * 分钟级新鲜,永远落不进清扫范围;能超窗的只有异常残留。
  *
+ * 为什么还要认标记(2026-10-12 起,ADR-0061 部署期实测):mfc-* 是本仓
+ * 的签名前缀,agent 会照它给 worktree/检出起名(/tmp/mfc-personal 被当
+ * 残留实删一次,连带测试归因作废)。所以超窗之外加一道身份核验:只删
+ * 带 mfcTemp 标记文件(.mfc-test-tmp)的目录——那是本家族自建的铁证;
+ * 无标记的超窗目录(外来物,或直建 mkdtempSync 家族的旧残留)一律保留。
+ * 代价:直建家族的崩溃兜底收窄(它们本就靠测试内 rmSync 自清),换来
+ * 外来目录绝对安全;/tmp 已落磁盘,残留不再是 tmpfs 危机。
+ *
  * npm test 入口前置本脚本。清扫只是旁路,自身任何失败都告警放行
  * (exit 0),绝不挡住测试——同本仓"旁路 fail-open"的纪律。
  */
 
-import { lstatSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -24,6 +33,10 @@ import { forceRm } from "../tests/mfcRm.ts";
 
 /** 安全窗:目录 mtime 距今超过这个时长才认定是异常残留。 */
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** 家族标记文件名:mfcTemp() 建目录即落,清扫器只认它——超窗且无标记
+ *  的 mfc-* 目录视为外来物(如 git worktree),一律保留。 */
+export const SWEEP_MARKER = ".mfc-test-tmp";
 
 export interface SweepResult {
   /** 删掉的目录名(不含路径)。 */
@@ -57,6 +70,11 @@ export function sweepStaleMfcTmp(
     }
     if (now - mtimeMs <= maxAgeMs) {
       result.kept += 1;
+      continue;
+    }
+    // 身份核验:超窗但无家族标记,是外来物(worktree/检出/别的项目),
+    // 不是测试残留——保留,且不计入台账(kept 只数本家族)。
+    if (!existsSync(join(full, SWEEP_MARKER))) {
       continue;
     }
     try {

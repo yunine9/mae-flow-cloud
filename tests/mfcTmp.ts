@@ -12,11 +12,11 @@
  * 那部分残留仍由它在 24h 后收走。
  */
 
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after } from "node:test";
-import { sweepStaleMfcTmp } from "../scripts/clean-test-tmp.ts";
+import { SWEEP_MARKER, sweepStaleMfcTmp } from "../scripts/clean-test-tmp.ts";
 import { forceRm } from "./mfcRm.ts";
 
 export { forceRm };
@@ -42,9 +42,14 @@ after(() => {
   for (const dir of created) forceRm(dir);
 });
 
-/** mkdtempSync 的自清理替身:前缀照旧(mfc-<家族>-),多记一笔账。 */
+/** mkdtempSync 的自清理替身:前缀照旧(mfc-<家族>-),多记一笔账。
+ *  同时落家族标记(SWEEP_MARKER):清扫器只删带标记的超窗目录——
+ *  没有它,agent 照本前缀起的 worktree/检出会被当残留误删
+ *  (2026-10-12 /tmp/mfc-personal 实毁,详见 clean-test-tmp.ts 头注)。 */
 export function mfcTemp(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, SWEEP_MARKER),
+    new Date().toISOString() + "\n");
   created.add(dir);
   return dir;
 }
