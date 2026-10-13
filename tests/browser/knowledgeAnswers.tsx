@@ -1,12 +1,17 @@
 import React from "../../web/node_modules/react";
 import { createRoot } from "../../web/node_modules/react-dom/client";
-import { KnowledgeLibrary } from "../../web/src/KnowledgeLibrary";
+import { App } from "../../web/src/App";
+import { openKnowledgeAnswer } from "../../web/src/KnowledgeAnswerPage";
 import type { KnowledgeAnswerRecord } from "../../src/knowledgeAnswerTypes";
 
 const pause = (ms = 80) => new Promise(resolve => setTimeout(resolve, ms));
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message); };
 const materialPreview = new URLSearchParams(location.search).get("preview") === "materials";
 const errors: string[] = [], calls: Array<{ path: string; method: string; input?: any }> = [];
+const previewRecord = (window as typeof window & { __knowledgeAnswerPreview?: KnowledgeAnswerRecord }).__knowledgeAnswerPreview;
+let copied = "", failCopy = false;
+if (!previewRecord) Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { if (failCopy) throw new Error("clipboard blocked"); copied = text; } } });
+let role = "developer";
 let account = "alice", serial = 0, rejectStart = false, materialSerial = 0, holdUpload = false, releaseUpload: (() => void) | undefined;
 let holdHistory = false, releaseHistory: (() => void) | undefined;
 const timestamp = (increment = 0) => new Date(Date.parse("2026-10-10T08:00:00Z") + increment).toISOString();
@@ -16,12 +21,18 @@ const escapedQuote = String.raw`thread\_local &lt;Task&gt; &amp; Pool\.submit\(\
 const completedAnswer = (body: string) => ({ markdown: `${body} 当前读取提交中的任务池重试实现；集成环境配置尚未确认。\n\n${"`".repeat(4)}ts\nretryLimit = 3;\n${"`".repeat(5)}\n\n**来源原句：**\n\n> retryLimit = 3;\n> ${escapedQuote}\n\n[实现依据 C\\+\\+ \\[固定版\\]](#evidence-ev-fixed)`, evidence_ids: [evidence.id], unknowns: ["集成环境是否覆盖该配置仍需确认。"] });
 const records: KnowledgeAnswerRecord[] = [{ id: "qa-existing", owner: account, question: "任务失败怎么重试？", context: { module_ids: ["trade"] }, status: "done", stage: "done", created_at: timestamp(), updated_at: timestamp(), evidence: [evidence], activity: [{ at: timestamp(), stage: "checking", message: "已检查回答结构、引用编号和原文片段" }], warnings: [], answer: completedAnswer("该提交中的重试次数上限为三次。") }];
 
+if (previewRecord) records.splice(0, records.length, previewRecord);
+
 window.addEventListener("error", event => errors.push(event.message));
 window.addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
 window.fetch = async (url, options) => {
   const path = String(url), method = options?.method || "GET", input = options?.body ? JSON.parse(String(options.body)) : undefined;
   calls.push({ path, method, input }); let result: unknown;
-  if (path === "/auth/me") result = { username: account, role: "developer" };
+  if (path === "/auth/me") result = { username: account, role };
+  else if (["/tasks", "/auth/users", "/auth/people", "/reviews/mine"].includes(path)) result = [];
+  else if (path.startsWith("/issues")) result = { issues: [] };
+  else if (path === "/launch-options") result = { blockers: [] };
+  else if (path === "/build-info") result = { build_hash: "UI-DEMO" };
   else if (path === "/knowledge-tasks") result = { summary: { running: 0, attention: 0, total: 0 }, module_activity: [] };
   else if (path === "/memory-insights") result = { memories: [] };
   else if (path === "/knowledge-answers/catalog") result = {
@@ -40,6 +51,7 @@ window.fetch = async (url, options) => {
     result = { id: `material-00000000-0000-0000-0000-${String(materialSerial).padStart(12, "0")}`, name: input.name, version: input.version, scope: input.scope, state: "ready", sections: 2, images: [{ path: "figure.png" }], warnings: ["图片仅保留，尚未核验图中文字。"] };
   }
   else if (path === "/knowledge-answers" && method === "POST") {
+    if (previewRecord) return new Response(JSON.stringify({ error: "这是本地阅读示例。新问题请到正式服务中提交。" }), { status: 400 });
     if (rejectStart) return new Response(JSON.stringify({ error: "服务暂时不可用" }), { status: 503 });
     serial += 1;
     const record: KnowledgeAnswerRecord = { id: `qa-${serial}`, owner: account, question: input.question, context: input.context, status: "running", stage: "checking", created_at: timestamp(serial * 1000), updated_at: timestamp(serial * 1000), evidence: [evidence], warnings: [], activity: [{ at: timestamp(), stage: "checking", message: "正在检查回答结构、引用编号和原文片段" }], answer: { markdown: "尚未完成的中间回答不能展示", evidence_ids: [evidence.id], unknowns: [] } };
@@ -63,10 +75,10 @@ window.fetch = async (url, options) => {
 };
 
 let root = createRoot(document.getElementById("app")!);
-const render = () => root.render(<KnowledgeLibrary onOpenTask={() => {}} />);
+const render = () => root.render(<App />);
 render();
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.getAttribute("aria-label") === label || item.textContent?.trim() === label);
-async function click(label: string) { const item = button(label); check(item, `missing button: ${label}`); item!.click(); await pause(); }
+async function click(label: string) { const item = button(label); check(item, `missing button: ${label}`); item!.focus(); item!.click(); await pause(); }
 async function openReadEvidence() {
   const item = document.querySelector<HTMLButtonElement>('[aria-label="本次已查阅资料"] button');
   check(item, "already-read source has an original snapshot entry"); item!.click(); await pause();
@@ -100,10 +112,19 @@ function navigateAnswer(id = "") {
 
 async function run() {
   await waitFor('[aria-label="知识问答问题"]'); await pause();
-  check(button("知识问答")?.getAttribute("aria-pressed") === "true", "top level Q&A entry is active");
+  check(button("知识问答")?.hasAttribute("data-active"), "top level Q&A entry is active");
+  check(!document.querySelector('section[aria-label="知识库"]'), "Q&A is independent of the library management workspace");
+  check(!calls.some(call => call.path === "/knowledge-tasks" || call.path === "/memory-insights"), "opening Q&A does not poll the library task catalog");
+  await click("知识库"); await waitFor('[aria-label="知识目录"]');
+  await click("知识问答"); await waitFor('[aria-label="知识问答问题"]');
+  history.back(); await waitFor('[aria-label="知识目录"]');
+  history.forward(); await waitFor('[aria-label="知识问答问题"]');
+  openKnowledgeAnswer("", "business:trade", "kd-pool"); await remount();
+  check(document.querySelector<HTMLSelectElement>('[aria-label="问答相关模块"]')?.value === "trade" && document.querySelector<HTMLSelectElement>('[aria-label="问答参考文档"]')?.value === "kd-pool", "document question scope survives direct entry and reload");
+  await click("补充范围与参考文档（已补充）");
   check(document.body.textContent?.includes("根据实际查阅的资料回答") && !document.body.textContent?.includes("核对依据后"), "composer describes source-based answering without claiming semantic approval");
   await fill("知识问答问题", "异步任务重试的 UT 怎么写？");
-  await click("补充范围与参考文档（可选）"); await choose("问答相关模块", "trade"); await choose("问答参考文档", "kd-pool");
+  await click("补充范围与参考文档（已补充）"); await choose("问答相关模块", "trade"); await choose("问答参考文档", "kd-pool");
   await click("补充原始资料（可选）");
   const submitBox = button("提问")!.getBoundingClientRect(), mainBox = document.querySelector(".ka-main")!.getBoundingClientRect();
   check(submitBox.top >= mainBox.top && submitBox.bottom <= mainBox.bottom, "question action remains visible when attachments expand on desktop");
@@ -150,17 +171,25 @@ async function run() {
   await waitFor('[aria-label="知识回答"]');
   check(!document.querySelector('[aria-label="回答进度"]'), "polling automatically reaches the completed response");
   check(!document.querySelector('[aria-label="本次已查阅资料"]') && document.querySelector('[aria-label="回答依据"]'), "completed answers show their actual citations rather than all research materials");
+  await click("复制回答");
+  check(copied.includes("使用任务池的可控时钟测试重试边界") && copied.includes("集成环境是否覆盖该配置仍需确认") && copied.includes("回答依据") && !copied.includes("来源原句"), "copy keeps the answer, uncertainty, and source list without embedded quotations");
+  failCopy = true; await click("复制回答");
+  check(document.querySelector(".ka-copy-status")?.textContent?.includes("复制失败"), "blocked clipboard reports failure without losing the answer"); failCopy = false;
   const renderedAnswer = document.querySelector('[aria-label="知识回答"]')!;
-  check(renderedAnswer.textContent?.includes("当前读取提交中的任务池重试实现；集成环境配置尚未确认"), "completed answer retains its specific conditions in the body");
-  check(renderedAnswer.querySelector("blockquote")?.textContent?.includes("retryLimit = 3;") && renderedAnswer.querySelector("button")?.textContent === "实现依据 C++ [固定版]", "host-rendered original quote and source link remain visible with the answer");
-  check(renderedAnswer.querySelectorAll("blockquote p")[1]?.textContent === quotedText, "actual original quote text is preserved without visible escapes or entity changes");
-  check(renderedAnswer.querySelectorAll("button").length === 1 && !renderedAnswer.querySelector("blockquote button"), "literal source links do not become buttons; the actual source link stays outside the code and quote");
-  await click("实现依据 C++ [固定版]"); await waitFor('[aria-label="本次引用原文"]');
+  check(!renderedAnswer.querySelector("blockquote") && !renderedAnswer.textContent?.includes("来源原句"), "original quotations stay outside the answer body");
+  check(renderedAnswer.querySelector("pre")?.textContent?.includes("retryLimit = 3;"), "answer code examples remain readable");
+  await click("查看来源：实现依据 C++ [固定版]"); await waitFor('[aria-label="本次引用原文"]');
   check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("本次固定版本原文") && document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("a".repeat(40)), "citation opens the actual preserved snapshot and version");
   check(!calls.some(call => call.path.startsWith("/knowledge-documents/")), "citation does not substitute a current source document");
   const workspace = document.querySelector<HTMLElement>('[aria-label="知识问答工作区"]')!;
   check(workspace.getBoundingClientRect().right <= innerWidth + 1 && document.documentElement.scrollWidth <= innerWidth + 2, "desktop layout has no horizontal overflow");
   check(workspace.querySelector(".ka-main")!.getBoundingClientRect().width > 290, "answer remains readable with citation pane open");
+  first.answer!.markdown = "完整结论及例外保持原样。\n\n**来源原文（点击查看）：**\n\n[原文 ev-fixed，第 42–45 行](#evidence-ev-fixed)";
+  await remount(); await waitFor('[aria-label="知识回答"]');
+  check(document.querySelector('[aria-label="知识回答"]')?.textContent?.includes("完整结论及例外保持原样。"), "compact citations retain the full answer body");
+  await click("查看来源：原文 ev-fixed，第 42–45 行"); await waitFor('[aria-label="本次引用原文"]');
+  check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes(quotedText), "compact line-range citation opens the complete original snapshot");
+  check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("a".repeat(40)), "compact citation preserves the original revision");
   await click("有问题"); await fill("回答反馈说明", "还需要确认时间推进的测试工具"); await click("提交反馈");
   check(first.feedback?.useful === false && first.feedback.comment.includes("测试工具"), "feedback is saved for the answer");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "不能丢掉的新问题");
@@ -206,10 +235,19 @@ async function run() {
   check(selectedHistory()?.includes("回答完成"), "selected answer updates history to completed even when timestamps are equal");
   holdHistory = false; releaseHistory!(); await pause();
   check(selectedHistory()?.includes("回答完成") && !selectedHistory()?.includes("查阅资料"), "late history snapshot cannot replace a completed answer with its previous running status");
-  account = "alice"; navigateAnswer("qa-existing"); await remount(); await waitFor('[aria-label="知识回答"]'); await click("实现依据 C++ [固定版]");
+  account = "alice"; navigateAnswer("qa-existing"); await remount(); await waitFor('[aria-label="知识回答"]'); await click("查看来源：实现依据 C++ [固定版]");
+  check(document.querySelector('[aria-label="本段引用原句"]')?.textContent?.includes(quotedText), "clicked paragraph exposes its exact literal quotation in the side panel");
+  document.querySelector('[aria-label="本次引用原文"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause();
+  check(!document.querySelector('[aria-label="本次引用原文"]') && document.activeElement?.getAttribute("aria-label") === "查看来源：实现依据 C++ [固定版]", "Escape closes source panel and restores source button focus");
+  role = "admin"; await remount(); await waitFor('[aria-label="知识回答"]');
+  check(button("知识问答")?.hasAttribute("data-active"), "admin can also directly enter Q&A");
+  await click("新问题"); await fill("搜索历史问题", "不存在的历史问题");
+  check(!document.querySelector(".ka-history-item") && document.body.textContent?.includes("没有找到相关问题"), "history can be filtered without changing the draft");
+  await fill("搜索历史问题", "");
+  navigateAnswer("qa-existing"); await waitFor('[aria-label="知识回答"]'); await click("查看来源：实现依据 C++ [固定版]");
   if (materialPreview) { navigateAnswer(); await waitFor('[aria-label="移除 私人参考.md"]'); }
   check(!errors.length, errors.join("; "));
   return { passed: true, width: innerWidth, created: serial, references: records[0].answer?.evidence_ids.length };
 }
 
-run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); root.unmount(); });
+if (!previewRecord) run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); root.unmount(); });

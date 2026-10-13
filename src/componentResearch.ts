@@ -1,5 +1,6 @@
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
+import { componentKnowledgeTask } from "./knowledgeTaskCenter.ts";
 import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
@@ -24,6 +25,7 @@ import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import { requireTechnologyStacks, listTechnologyStacks } from "./technologyStacks.ts";
 import {
   readKnowledgeDocument,
+  readKnowledgeDocumentFacts,
   readKnowledgeDocumentVersion,
   prepareKnowledgeDocument,
   writePreparedKnowledgeDocument,
@@ -38,6 +40,8 @@ export interface ComponentChallenge {
   item_id: string; source_digest: string; language: string; repository_ids: string[]; claim: string;
 }
 export interface ResearchRecord {
+  /** 重新萃取的原任务，用于重复请求时返回同一个新任务。 */
+  reextract_of?: string;
   /** 服务端读取时计算，不写入 record.json。 */
   production?: import("./knowledgeProductionTypes").KnowledgeProductionView;
   /** 服务端读取时从已保存的盘点和规划结果展开，不写入 record.json。 */
@@ -240,7 +244,7 @@ function validResearchRecord(value: unknown, id: string, path = ""): value is Re
   const field = (name: string) => `${path}${name}`;
   recordCheck(value.id === id, field("id"), "与任务目录不一致");
   recordFields(value, ["id", "language", "topic", "operator", "key", "created_at", "stage"], path);
-  recordFields(value, ["deleted_at", "deleted_by", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"], path, true);
+  recordFields(value, ["deleted_at", "deleted_by", "reextract_of", "started_at", "finished_at", "revision", "draft", "error", "document_id", "update_document_id", "update_document_revision", "published_revision"], path, true);
   if (value.mode !== undefined) recordCheck(["all", "component"].includes(value.mode), field("mode"), "不是受支持的组件研究方式");
   if (value.format !== undefined) recordCheck(value.format === "joint-document", field("format"), "不是当前组件文稿格式");
   if (value.use_latest_skill !== undefined) recordCheck(typeof value.use_latest_skill === "boolean", field("use_latest_skill"), "必须是布尔值");
@@ -310,7 +314,7 @@ export class ComponentResearch {
     readonly dir: string,
     private execute: (input: ResearchExecution) => Promise<string>,
     private onAdopt: () => void = () => {},
-    private archiveFor: (id: string) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
+    private archiveFor: (id: string, summaryOnly?: boolean) => import("./domainKnowledgeTypes.ts").DomainKnowledgeJob | undefined = () => undefined,
     private capacity = new KnowledgeTaskCapacity(),
   ) {
     this.capacity.register(() => this.running.size, () => this.pump());
@@ -356,30 +360,26 @@ export class ComponentResearch {
     return [...this.records.values()]
       .filter(r => !r.deleted_at)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .map((r) =>
-        structuredClone(
-          summaryOnly ? { ...this.get(r.id), draft: undefined, document: undefined, work_documents: [], review_turns: undefined, evidence: [] } : this.get(r.id),
-        ),
-      );
+      .map(r => this.get(r.id, summaryOnly));
   }
-  get(id: string): ResearchRecord {
+  private view(id: string, summaryOnly = false): ResearchRecord {
     const r = this.records.get(id);
     if (!r) throw new Error("萃取记录不存在");
-    let record = structuredClone(r);
+    let record = r;
     if (r.publication_intent) {
       // 意图不能代替正式事实；只有真实文件已提交精确版本，才显示已接受文稿和入库状态。
       try {
-        const formal = readKnowledgeDocument(this.dir, r.publication_intent.formal.document.id);
+        const formal = readKnowledgeDocumentFacts(this.dir, r.publication_intent.formal.document.id);
         if (formal.revision === r.publication_intent.formal.document.revision) record = {
-          ...structuredClone(r.publication_intent.record), deleted_at: r.deleted_at, deleted_by: r.deleted_by,
-          publication_intent: structuredClone(r.publication_intent),
+          ...r.publication_intent.record, deleted_at: r.deleted_at, deleted_by: r.deleted_by,
+          publication_intent: r.publication_intent,
         };
       } catch { /* 正式文件缺失、损坏或已删除时保留原文稿，任务中心会点名坏文件。 */ }
     }
     const formalId = record.document_id ?? record.update_document_id;
     const current_revisions: Record<string, string> = {};
     if (formalId) {
-      try { current_revisions[formalId] = readKnowledgeDocument(this.dir, formalId).revision; }
+      try { current_revisions[formalId] = readKnowledgeDocumentFacts(this.dir, formalId).revision; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !(error instanceof Error && error.message === "知识已删除")) {
           const warning = `请检查知识记录：knowledge-documents/${formalId}.json；${error instanceof Error ? error.message : String(error)}`;
@@ -389,18 +389,31 @@ export class ComponentResearch {
     }
     const needsGuideCompletion = record.document?.sections.some(incompleteGuideSection)
       || record.review_turns?.some(turn => turn.proposal?.status === "pending" && incompleteGuideSection(turn.proposal.section));
-    fillReadableResearchFields(record);
-    record.work_documents = componentWorkDocuments(record.pipeline);
-    const production = projectKnowledgeProduction({ kind: "component", record, archive: this.archiveFor(id), current_revisions });
+    const work_documents = componentWorkDocuments(record.pipeline, summaryOnly);
+    const production = projectKnowledgeProduction({ kind: "component", record: { ...record, work_documents }, archive: this.archiveFor(id, summaryOnly), current_revisions });
     if (needsGuideCompletion) production.platform_message = [production.platform_message,
       "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");
-    return { ...record, production };
+    return { ...record, work_documents, production };
+  }
+  taskRows() {
+    return [...this.records.values()].filter(record => !record.deleted_at).map(record => componentKnowledgeTask(this.view(record.id, true)));
+  }
+  get(id: string, summaryOnly = false): ResearchRecord {
+    let record = this.view(id, summaryOnly);
+    if (summaryOnly) {
+      // 分项结果、草稿历史和发布意图可能重复保存全文，列表不传这些详情。
+      const { draft, document, pipeline, section_history, review_turns, publication_intent, evidence, work_documents: work, ...metadata } = record;
+      return structuredClone({ ...metadata, work_documents: [], evidence: [] });
+    }
+    record = structuredClone(record);
+    fillReadableResearchFields(record);
+    return record;
   }
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");
   }
   /** 技术栈和参考范围相同则接续；功能组件由独立分析会话确定。 */
-  start(input: ResearchInput, operator: string) {
+  start(input: ResearchInput, operator: string, reextractSource?: ResearchRecord) {
     if (this.stopped) throw new Error("服务正在停止");
     if (input.material_ids !== undefined && (!Array.isArray(input.material_ids) || input.material_ids.length)) throw new Error("组件萃取仅使用基础仓代码与 everycode，不接收上传资料");
     const unknown = Object.keys(input ?? {}).filter(key => !["repository_ids", "language", "material_ids"].includes(key));
@@ -410,29 +423,30 @@ export class ComponentResearch {
     if (!candidates.length) throw new Error("请先在配置中心启用该技术栈的参考来源仓");
     if (input.repository_ids !== undefined && (!Array.isArray(input.repository_ids) || !input.repository_ids.length
       || input.repository_ids.some(id => typeof id !== "string" || !id.trim()) || new Set(input.repository_ids).size !== input.repository_ids.length)) throw new Error("参考仓编号需为非空且不重复的数组");
-    const sources = candidates.filter(source => !input.repository_ids || input.repository_ids.includes(source.id)).sort((a, b) => a.id.localeCompare(b.id));
-    if (input.repository_ids && sources.length !== input.repository_ids.length) throw new Error("参考仓不存在、已停用或未登记该技术栈");
+    const selected = candidates.filter(source => !input.repository_ids || input.repository_ids.includes(source.id)).sort((a, b) => a.id.localeCompare(b.id));
+    if (input.repository_ids && selected.length !== input.repository_ids.length) throw new Error("参考仓不存在、已停用或未登记该技术栈");
+    const sources = structuredClone(reextractSource ? researchSourceRepositories(reextractSource) : selected);
     const key = JSON.stringify(["capability", language, sources.map(componentKey).sort()]);
     const previous = [...this.records.values()].reverse().find(r => r.key === key && !r.deleted_at && !r.challenge);
-    if (previous) return this.get(previous.id);
+    if (previous && !reextractSource) return this.get(previous.id);
     requireTechnologyStacks(this.dir, [language]);
     const name = listTechnologyStacks(this.dir).find(stack => stack.id === language)?.name ?? language;
-    const record: ResearchRecord = { id: `cr-${randomUUID()}`, mode: "all", source_repositories: sources, material_ids: [],
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, reextract_of: reextractSource?.id, mode: "all", source_repositories: sources, material_ids: [],
       language, topic: `${name} 组件知识`, operator, key, status: "queued", created_at: new Date().toISOString(),
       format: "joint-document", document: { overview: "", sections: [] }, review_turns: [], stage: "等待组件研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {});
     this.pump();
     return this.get(record.id);
   }
-  startChallenge(challenge: ComponentChallenge, operator: string) {
+  startChallenge(challenge: ComponentChallenge, operator: string, reextractOf?: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const existing = [...this.records.values()].find(r => !r.deleted_at && r.challenge?.item_id === challenge.item_id
       && r.challenge.source_digest === challenge.source_digest && ["queued", "running"].includes(r.status));
-    if (existing) return this.get(existing.id);
+    if (existing && !reextractOf) return this.get(existing.id);
     requireTechnologyStacks(this.dir, [challenge.language]);
     const components = componentRepositories(this.dir).filter(c => c.enabled && challenge.repository_ids.includes(c.id));
     if (!components.length) throw new Error("反例研究需要源文档对应的基础仓配置，请先恢复该组件仓配置");
-    const record: ResearchRecord = { id: `cr-${randomUUID()}`, challenge, source_repositories: components,
+    const record: ResearchRecord = { id: `cr-${randomUUID()}`, reextract_of: reextractOf, challenge, source_repositories: components,
       language: challenge.language, topic: "组件规则反例研究", operator, key: JSON.stringify(challenge), status: "queued",
       created_at: new Date().toISOString(), stage: "等待独立反例研究", evidence: [] };
     this.records.set(record.id, record); this.update(record, {}); this.pump(); return this.get(record.id);
@@ -619,6 +633,17 @@ export class ComponentResearch {
     // Preserve provenance of adopted knowledge; hide the task from management lists.
     this.update(record, {deleted_at:new Date().toISOString(), deleted_by:operator});
     return { deleted: true };
+  }
+  reextract(id: string, operator: string) {
+    const replacement = [...this.records.values()].find(record => record.reextract_of === id && !record.deleted_at);
+    if (replacement) { if (!this.records.get(id)?.deleted_at) this.remove(id, operator); return this.get(replacement.id); }
+    const original = this.get(id);
+    if (original.deleted_at) throw new Error("萃取任务已删除");
+    this.assertPublicationComplete(original);
+    const next = original.challenge ? this.startChallenge(structuredClone(original.challenge), operator, id)
+      : this.start({ language: original.language, repository_ids: researchSourceRepositories(original).map(source => source.id) }, operator, original);
+    this.remove(id, operator);
+    return next;
   }
   retry(id: string, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");

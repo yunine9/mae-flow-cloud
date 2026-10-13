@@ -116,6 +116,24 @@ test("建议与原文判断分项提交，宿主固定标示建议且共用真�
   assert.equal(f.disposed(), 1);
 });
 
+test("#471 引文展开超限由平台改为来源链接，不重新请求模型", async () => {
+  const content = "规则正文。".repeat(600) + "\n例外必须保留。";
+  const points = Array.from({ length: 8 }, (_, index) => ({ kind: "answer", body: `第 ${index + 1} 项完整结论及例外。`,
+    basis: [{ evidence_id: "e1", start_line: 1, end_line: 2 }] }));
+  const f = fixture({ content, run: async request => {
+    assert.match(request.system, /输出 JSON 总长度最多/);
+    assert.doesNotMatch(request.system, /输出 JSON 及平台渲染/);
+    return output({ points });
+  } });
+  const result = await f.runner(f.input);
+  assert.deepEqual(f.requests.map(request => request.stage), ["researching", "answering"]);
+  assert.ok(JSON.stringify(result).length <= 24_000);
+  for (const point of points) assert.ok(result.markdown.includes(point.body));
+  assert.match(result.markdown, /第 1–2 行/);
+  assert.equal(f.input.record.evidence[0].content, content);
+  assert.equal(f.disposed(), 1);
+});
+
 test("提交格式失败与原句失败共用一次重试，第三次不会启动", async () => {
   let attempts = 0;
   const f = fixture({ run: async () => {

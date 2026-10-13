@@ -23,7 +23,7 @@ import {
 } from "./agentPlatformPaths.ts";
 
 export const DEVELOPER_ASSISTANT_SESSION = "developer-assistant";
-const MAX_MESSAGES = 60;
+const DISPLAY_MESSAGE_LIMIT = 60;
 const MAX_MESSAGE_CHARS = 12_000;
 const MAX_TOOL_RESULT_CHARS = 8_000;
 
@@ -111,8 +111,7 @@ export function readDeveloperAssistant(
       state,
       messages: (Array.isArray(row.messages) ? row.messages : [])
         .map(cleanMessage)
-        .filter((item): item is DeveloperAssistantMessage => Boolean(item))
-        .slice(-MAX_MESSAGES),
+        .filter((item): item is DeveloperAssistantMessage => Boolean(item)),
       ...(handoff ? { handoff } : {}),
       ...(String(row.updated_at ?? "").trim()
         ? { updated_at: String(row.updated_at) } : {}),
@@ -136,7 +135,8 @@ export function writeDeveloperAssistant(
 ): DeveloperAssistantSnapshot {
   const normalized = {
     ...snapshot,
-    messages: snapshot.messages.slice(-MAX_MESSAGES),
+    // 页面和模型上下文各自取最近消息，持久化不裁掉人的历史输入。
+    messages: snapshot.messages,
     updated_at: new Date().toISOString(),
   };
   const path = snapshotPath(workspace);
@@ -229,7 +229,7 @@ export function developerAssistantConversation(
     // Array#sort is stable: equal-millisecond user messages retain their
     // persisted conversation order instead of being shuffled by random ids.
     .sort((left, right) => left.at.localeCompare(right.at))
-    .slice(-MAX_MESSAGES);
+    .slice(-DISPLAY_MESSAGE_LIMIT);
 }
 
 function shortJson(value: unknown, limit: number): string {

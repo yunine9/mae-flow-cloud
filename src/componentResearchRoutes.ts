@@ -85,9 +85,10 @@ export async function componentResearchRoute(
         service.prepareKnowledgeIndex();
         return json(response, 200, published);
       }
-      if (request.method === "POST" && parts[1] && ["stop", "delete", "retry"].includes(parts[2])) {
-        const result = parts[2] === "stop" ? research.stop(parts[1]) : parts[2] === "delete" ? research.remove(parts[1], operator) : research.retry(parts[1], operator);
-        return json(response, 200, result);
+      if (request.method === "POST" && parts[1] && ["stop", "delete", "retry", "reextract"].includes(parts[2])) {
+        const result = parts[2] === "stop" ? research.stop(parts[1]) : parts[2] === "delete" ? research.remove(parts[1], operator)
+          : parts[2] === "reextract" ? research.reextract(parts[1], operator) : research.retry(parts[1], operator);
+        return json(response, parts[2] === "reextract" ? 202 : 200, result);
       }
       if (request.method === "GET")
         return json(

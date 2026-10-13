@@ -46,6 +46,7 @@ test("B6验收：管理员和开发者均有独立的一级知识库入口，团
   // (原断言要求两个按钮并存,是收口前的旧口径)。
   for (const section of sections) {
     assert.match(section, /<NavButton view="library"[^>]+label="知识库"/);
+    assert.match(section, /<NavButton view="answers"[^>]+label="知识问答"/);
     assert.doesNotMatch(section, /<NavButton view="knowledge"/);
   }
   // B6（2026-10 团队资产视图拆散）：经验进知识库，工作流只在配置中心，使用效能进交付分析。

@@ -1,23 +1,10 @@
 /**
- * 问题会话工作区回收(纯旁路):终态会话过了保留期,删掉能再生的重货,
- * 台账原样留下。需求流 reclaimIdleWorkspaces(src/workspaceReclaim.ts,
- * 2026-08-22)的问题流对应物——问题单的仓克隆/ref/pipeline 镜像此前
- * 永不回收,服务器磁盘只涨不降。
+ * 问题会话临时目录回收：只处理已归档或取消且超过保留期的会话。
+ * 分析报告、图片、流水线日志、现场日志及未知目录默认保留。
+ * 失败任务仍可恢复，不清理；容器仍在运行或路径越界时也不清理。
  *
- * 与需求流先例刻意不同的两点,都是拍板(2026-09-03,spec #79 第 6 项):
- *
- * 1. **用"删什么"点名清单,不用"留什么"白名单。** 需求流现场以克隆为
- *    主体,白名单(留台账、清其余)才点得全;问题会话的现场根目录下
- *    台账条目又碎又多(issue.json/events/transcript/waiting/feedback/
- *    reviews/issue-images/...),白名单漏一条就是烧台账。所以这里反着
- *    来:只删下面点名的重货目录,没点名的——包括以后新增的未知条目
- *    ——一律保留。"不确定属于重货还是台账的倾向保留"是红线原文。
- *
- * 2. **保守四保险,一票否决**:状态终态(归档/取消/失败,isTerminal)×
- *    终态时间过保留期 × 容器探活不在跑 × 路径边界在本 dataDir 内。
- *    非终态一概不碰;保留期 0 = 永不回收;判不了年纪(没有可信终态
- *    时间)不下手。回收纯旁路 fail-open:单会话失败不影响其他会话,
- *    更不影响服务。
+ * 代码回收由 IssueFlowService 单独负责，遵守 issue_repo_reclaim 开关，
+ * 并等待代码统计完成。这里不能再删 repo，否则会绕过开关和等待条件。
  *
  * 解耦纪律:本模块不 import IssueFlowService/TaskService——扫盘自己来,
  * 容器探活由调用方注入谓词,保留期由调用方传入(serve 复用需求流的
@@ -31,7 +18,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { isTerminal, loadState } from "./issueFlow/state.ts";
+import { loadState } from "./issueFlow/state.ts";
 import { humanBytes, withinDataDir } from "./workspaceReclaim.ts";
 
 /**
@@ -40,13 +27,6 @@ import { humanBytes, withinDataDir } from "./workspaceReclaim.ts";
  * 烧的是复盘现场。
  */
 export const ISSUE_RECLAIM_HEAVY: readonly string[] = [
-  "repo",         // 平铺的全部代码仓克隆(2026-08-28 后唯一布局),最大重货
-  "ref",          // 平铺前的老布局参考仓,存量终态会话可能还留着
-  "pipeline",     // 流水线镜像产物(红灯日志、构建输出)。需求流把这类
-                  // 日志当交付证据保留,问题流仍可删:权威裁决在平台流水
-                  // 线本身,且本回收只对终态+过保留期的会话动手——到那
-                  // 时本地留档的复盘价值已被平台侧取代,留着只剩占盘。
-  "local-logs",   // 网管抓取的现场日志(转正路径明确不带:新一轮要拉新日志)
   "pi-agent",     // Agent 运行时目录(需求流同款回收:models.json 躺着密钥)
   "vision-cache", // 图片分析缓存(名字即语义,inspect_image 时可重建)
   ".ops-tools",   // 分发进会话的 ops 二进制(每次开容器 stageOpsBinaries 重放)
@@ -64,7 +44,7 @@ function instant(value: unknown): number {
 
 export type IssueReclaimSkipCode =
   | "retention_off"      // 保留期 0 = 永不回收
-  | "not_terminal"       // 非终态(running/waiting_user/idle/suspended/queued)
+  | "not_terminal"       // 除归档和取消外，均保留现场供继续处理或恢复
   | "container_running"  // 容器探活为真(belt-and-suspenders)
   | "no_timestamp"       // 判不了年纪:没有可信的终态时间
   | "not_expired";       // 终态但未过保留期
@@ -83,7 +63,7 @@ export interface IssueReclaimCandidate {
   status: string;
   /** 结论时刻(归档/转正收口必写,归档路的终态锚)。 */
   concluded_at?: string;
-  /** 最后一次落盘时刻(saveState 盖章;取消/失败路的终态锚)。 */
+  /** 取消时没有结论时刻，使用最后一次状态写入时间。 */
   updated_at?: string;
 }
 
@@ -92,7 +72,7 @@ export interface IssueReclaimCandidate {
  * 动作自己身上(删除必须自证,不信调用方)。
  *
  * 终态时间锚的选取:归档/转正三条路都写 conclusion.at(结论时刻,语义
- * 就叫"收口");取消/失败没有专门的终态字段,但它们的终态落盘就是最后
+ * 就叫"收口");取消没有专门的终态字段,但它的终态落盘就是最后
  * 一次 saveState——updated_at 即收口时刻。所以 [conclusion.at,
  * updated_at] 取第一个读得动的;两个都读不出来**不回收**,宁可留着占
  * 地方,也不许猜着删(与需求流 judgeReclaim 同一纪律)。
@@ -109,10 +89,10 @@ export function judgeIssueReclaim(
   if (!(retentionDays > 0)) {
     return { reclaim: false, reason: "保留期配置为 0,永不回收", skip: "retention_off" };
   }
-  if (!isTerminal(issue.status as Parameters<typeof isTerminal>[0])) {
+  if (!["archived", "canceled"].includes(issue.status)) {
     return {
       reclaim: false,
-      reason: `状态 ${issue.status} 不是终态(还在运行、等人或待续聊),不碰`,
+      reason: `状态 ${issue.status} 不可自动回收(仍可继续处理或恢复)`,
       skip: "not_terminal",
     };
   }
@@ -284,7 +264,7 @@ export function reclaimIssueWorkspaces(
       summary.freed += result.freed;
       options.log?.(`回收问题现场 ${state.id}(${verdict.reason}):释放 `
         + `${humanBytes(result.freed)},删除 ${result.removed.join("、")}`
-        + `;台账、材料元数据与未知条目保留`);
+        + `;文档、日志、过程记录与未知条目保留`);
     } catch (error) {
       // 回收是旁路:单个会话翻车绝不影响其他会话,更不影响服务。
       summary.failed += 1;

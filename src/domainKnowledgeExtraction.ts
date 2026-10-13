@@ -1,6 +1,6 @@
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { componentArchiveParts, componentArchivePath } from "./componentKnowledgeArchiveFormat.ts";
-import { listKnowledgeDocuments, readKnowledgeDocument, readKnowledgeArchiveVersion, eraseKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
+import { listKnowledgeDocuments, readKnowledgeDocument, readKnowledgeDocumentFacts, readKnowledgeArchiveVersion, readKnowledgeArchiveVersionFacts, eraseKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { knowledgeDeleted, readKnowledgeDeletion, writeKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
-import { IncompleteDomainResearch, readSkillWorkDocuments, type SkillWorkResult } from "./domainSkillWork.ts";
+import { IncompleteDomainResearch, readSkillWorkDocuments, readSkillWorkDocumentSummaries, type SkillWorkResult } from "./domainSkillWork.ts";
+import { domainKnowledgeTask } from "./knowledgeTaskCenter.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
@@ -98,6 +99,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
       && Array.isArray(capability.sources) && capability.sources.every((source: any) => fields(source, ["repository_id", "path"])));
   return isRecord(value) && value.id === id && ["title", "scope", "operator", "created_at", "stage"].every(key => typeof value[key] === "string")
     && (value.key === undefined || typeof value.key === "string")
+    && (value.reextract_of === undefined || typeof value.reextract_of === "string")
     && ["idle", "queued", "running", "paused", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
     && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids)
     && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
@@ -254,24 +256,65 @@ export class DomainKnowledgeExtraction {
     eraseKnowledgeDocument(this.dataDir, document.id);
   }
   warnings() { return [...this.readWarnings]; }
-  get(id: string): DomainKnowledgeJob {
-    const job = structuredClone(this.live(id));
-    job.work_documents = job.turns.flatMap(turn => {
+  private currentFormalRevisions(job: DomainKnowledgeJob) {
+    const current: Record<string, string> = {};
+    for (const document of job.documents) {
+      if (!document.knowledge_document_id) continue;
+      try {
+        const formal = document.deleted && document.published_revision
+          ? readKnowledgeArchiveVersionFacts(this.dataDir, document.knowledge_document_id, document.published_revision)
+          : readKnowledgeDocumentFacts(this.dataDir, document.knowledge_document_id);
+        if (job.component_research_id && "component_archive_valid" in formal && formal.component_archive_valid === false) {
+          const warning = `请检查损坏的组件知识结构：knowledge-documents/${document.knowledge_document_id}.json；其余任务照常可用`;
+          if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
+          continue;
+        }
+        current[formal.id] = formal.revision;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT" || error instanceof Error && error.message === "知识已删除") continue;
+        const warning = `请检查损坏的知识记录：knowledge-documents/${document.knowledge_document_id}.json；其余任务照常可用`;
+        if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
+      }
+    }
+    return current;
+  }
+  private view(job: DomainKnowledgeJob, summaryOnly = false): DomainKnowledgeJob {
+    const readWork = summaryOnly ? readSkillWorkDocumentSummaries : readSkillWorkDocuments;
+    const work_documents = job.turns.flatMap(turn => {
       if (!/^[a-f0-9-]{36}$/.test(turn.id)) return [];
-      try { return readSkillWorkDocuments(join(this.root(id), "skill-runs", turn.id, "work.json")).map(document => ({ ...document, turn_id: turn.id })); }
+      try { return readWork(join(this.root(job.id), "skill-runs", turn.id, "work.json")).map(document => ({ ...document, turn_id: turn.id })); }
       catch (error) {
-        const warning = `过程文稿读取失败：${id}/${turn.id}；${error instanceof Error ? error.message : String(error)}`;
+        const warning = `过程文稿读取失败：${job.id}/${turn.id}；${error instanceof Error ? error.message : String(error)}`;
         if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
         return [];
       }
     });
-    const current_revisions = Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
-    return { ...job, production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(id) };
+    const current_revisions = summaryOnly ? this.currentFormalRevisions(job)
+      : Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
+    const record = { ...job, work_documents };
+    return { ...record, production: projectKnowledgeProduction({ kind: "domain", record, current_revisions }), deletion: this.deletionView(job.id) };
   }
-  list() { return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => ({ ...this.get(job.id), documents: job.documents.map(({ content: _, history: __, base_content: ___, ...doc }) => doc), work_documents: [], evidence: [], turns: [], publications: [], publication_history: [] })); }
-  componentArchive(researchId: string) {
+  get(id: string): DomainKnowledgeJob { return structuredClone(this.view(this.live(id))); }
+  taskRows() {
+    return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).map(job => ({
+      ...domainKnowledgeTask(this.view(job, true)), module_id: job.module_id,
+    }));
+  }
+  list() {
+    return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).map(job => {
+        // 列表只读元数据，先排除全文和历史，再复制；不能先加载整份详情再丢弃。
+        const { documents, turns, evidence, publications, publication_history, archive_batches, work_documents, ...metadata } = job;
+        const current_revisions = this.currentFormalRevisions(job);
+        return structuredClone({ ...metadata, documents: documents.map(({ content, history, base_content, ...document }) => document),
+          work_documents: [], evidence: [], turns: [], publications: [], publication_history: [],
+          production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(job.id) });
+      });
+  }
+  componentArchive(researchId: string, summaryOnly = false) {
     const job = [...this.jobs.values()].find(job => !job.deleted_at && job.component_research_id === researchId);
-    return job ? this.get(job.id) : undefined;
+    // 摘要只供状态投影读取，不复制文稿全文；用户详情仍返回独立副本。
+    return job ? summaryOnly ? this.view(job, true) : this.get(job.id) : undefined;
   }
   private formalArchiveDocuments(job: DomainKnowledgeJob, strict = false): DomainDocument[] {
     return job.documents.flatMap(document => {
@@ -295,7 +338,7 @@ export class DomainKnowledgeExtraction {
         if (strict) throw new Error(warning);
         return [];
       }
-      return [{ ...structuredClone(document), ...parts, title: formal.title, selected: true, history: [],
+      return [{ ...structuredClone({ ...document, ...parts, history: [] }), title: formal.title, selected: true,
         knowledge_document_id: formal.id, published_revision: formal.revision,
         published_document_revision: document.revision, published_at: formal.history.at(-1)?.at }];
     });
@@ -493,6 +536,18 @@ export class DomainKnowledgeExtraction {
     try { await work; } finally { if (this.archiving.get(job.id) === work) this.archiving.delete(job.id); }
   }
   create(input: any, operator: string) { return this.createJob(input, operator); }
+  reextract(id: string, operator: string) {
+    const replacement = [...this.jobs.values()].find(job => job.reextract_of === id && !job.deleted_at);
+    if (replacement) { this.remove(id, operator); return this.get(replacement.id); }
+    const original = this.live(id);
+    if (original.component_research_id) throw new Error("请在基础组件萃取中管理对应任务");
+    if (this.publishing.has(id)) throw new Error("正在发布或归档，请等待当前操作完成后再重新萃取");
+    const next = this.createJob({ title: original.title, scope: original.scope, instructions: original.instructions,
+      issue_no: original.issue_no, issue_description: original.issue_description, module_id: original.module_id,
+      repositories: original.source_repositories ?? original.repositories, material_ids: original.material_ids }, operator, original);
+    this.remove(id, operator);
+    return next;
+  }
   beginUpdate(documentId: string, input: { message?: string; expected_revision?: string; material_ids?: string[] }, operator: string) {
     const published = readKnowledgeDocument(this.dataDir, documentId);
     if (input.expected_revision && input.expected_revision !== published.revision) throw new Error("知识已有新版本，请刷新后发起更新");
@@ -517,7 +572,7 @@ export class DomainKnowledgeExtraction {
     for (const publication of [...original.publication_history ?? [], ...original.publications]) remember(publication);
     for (const batch of original.archive_batches ?? []) for (const publication of batch.publications) remember(publication);
     const job: DomainKnowledgeJob = { ...structuredClone(original), id: `dkx-${randomUUID()}`, operator,
-      created_at: new Date().toISOString(), deleted_at: undefined, deleted_by: undefined, status: "idle", stage: "准备增量研究",
+      created_at: new Date().toISOString(), deleted_at: undefined, deleted_by: undefined, reextract_of: undefined, status: "idle", stage: "准备增量研究",
       documents: [document], turns: [], evidence: [], archive_batches: [], publications: [], publication_history: [...archiveHistory.values()],
       revisions: { ...(published.research_source?.source_revisions ?? original.revisions) },
       material_ids: published.research_source?.material_ids ?? original.material_ids };
@@ -525,12 +580,12 @@ export class DomainKnowledgeExtraction {
     return this.run(job.id, { mode: "update", document_ids: [document.id], message: input.message?.trim() || "核对来源变化，更新受影响知识；保留现有人工内容，无变化时说明原因",
       material_ids: input.material_ids }, operator);
   }
-  private createJob(input: any, operator: string) {
+  private createJob(input: any, operator: string, reextractSource?: DomainKnowledgeJob) {
     if (this.stopped) throw new Error("服务正在停止");
     const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description);
     if (input.prepare_cleanup !== undefined && typeof input.prepare_cleanup !== "boolean") throw new Error("萃取前清理须为布尔值");
     const module_id = input.module_id ? String(input.module_id) : undefined;
-    if (module_id) {
+    if (module_id && !reextractSource) {
       const module = readBusinessModule(this.dataDir, module_id);
       if (module.status !== "active") throw new Error("业务模块已停用");
       input = { ...input, title: module.name, scope: `业务模块：${module.name}。模块说明：${module.description}`,
@@ -545,14 +600,14 @@ export class DomainKnowledgeExtraction {
     const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(this.dataDir).current("domain").files, "domain");
     const repositories = input.repositories.map((r: any, i: number) => repository({ ...r, docs_path: r.docs_path || defaults.repository_directory }, `repo-${i + 1}`));
     const configured = readKnowledgeRepoConfig(this.dataDir);
-    const knowledge_target = input.knowledge_target ? repository(input.knowledge_target, "domain") : {
+    const knowledge_target = reextractSource ? structuredClone(reextractSource.knowledge_target) : input.knowledge_target ? repository(input.knowledge_target, "domain") : {
       id: "domain", name: "领域知识仓", repository: configured?.url || "", branch: configured?.branch || "master", path: "",
       docs_path: configured?.docs_path || defaults.domain_directory,
     };
     if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
     const material_ids = this.materialIds(input.material_ids ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions })));
-    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories, knowledge_target,
+    const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, reextract_of: reextractSource?.id, title, scope, instructions, issue_no, issue_description, module_id, operator, created_at: new Date().toISOString(), repositories: structuredClone(reextractSource?.repositories ?? repositories), knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!knowledge_target.repository, archive_revision: 0,
       material_ids, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     if (input.prepare_cleanup) {
@@ -569,7 +624,7 @@ export class DomainKnowledgeExtraction {
     const previous = [...this.jobs.values()].reverse().find(existing => !existing.component_research_id && !existing.deleted_at
       && existing.operator === operator && !["failed", "cancelled"].includes(existing.status)
       && (existing.turns[0]?.mode === "extract" || existing.source_cleanup && !existing.source_cleanup.started) && existing.key === job.key);
-    if (previous) return this.get(previous.id);
+    if (previous && !reextractSource) return this.get(previous.id);
     this.jobs.set(job.id, job); this.persist(job);
     if (job.source_cleanup) return this.get(job.id);
     return this.run(job.id, { mode: "extract", message: scope }, operator);

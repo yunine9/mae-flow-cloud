@@ -59,7 +59,7 @@ export function saveComponentPolicy(dir: string, id: string, digest: string, inp
   // 策略原子保存；操作记录独立保留，开发会话不会写策略。
   const history = read<any[]>(dir, "policy-history", []);
   write(dir, "rule-policy", file);
-  write(dir, "policy-history", [...history, { id, ...policy }].slice(-1000));
+  write(dir, "policy-history", [...history, { id, ...policy }]);
   return file;
 }
 export interface ComponentObservation extends ComponentKnowledgeFinding {
@@ -85,7 +85,8 @@ export function recordComponentObservations(dir: string, repository: string, rep
     const id = componentObservationId(repository, f);
     entries.delete(id); entries.set(id, { ...f, id, repository, checked_at: report.checked_at, head: report.head });
   }
-  write(dir, "observations", [...entries.values()].slice(-2000));
+  // 人工反馈引用命中编号；新样本不能挤掉已有样本及其判断依据。
+  write(dir, "observations", [...entries.values()]);
 }
 export function addComponentFeedback(dir: string, input: Record<string, unknown>, operator: string) {
   const kind = input.kind, reason = String(input.reason ?? "").trim();
@@ -97,5 +98,5 @@ export function addComponentFeedback(dir: string, input: Record<string, unknown>
     kind: kind as ComponentFeedback["kind"], reason, operator, at: new Date().toISOString(), ...(observation ? { observation_id: observation.id } : {}) };
   if (observation && (observation.rule_id !== row.item_id || observation.source_digest !== row.source_digest)) throw new Error("反馈与命中版本不一致");
   const previous = componentFeedback(dir).filter(f => !(f.item_id === row.item_id && f.source_digest === row.source_digest && f.operator === operator && f.observation_id === row.observation_id && f.kind === row.kind));
-  write(dir, "feedback", [...previous, row].slice(-2000)); return row;
+  write(dir, "feedback", [...previous, row]); return row;
 }

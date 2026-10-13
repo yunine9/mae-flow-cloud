@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import type { DomainWorkDocument } from "./domainKnowledgeTypes.ts";
+import { FileProjectionCache } from "./fileProjectionCache.ts";
 
 export class IncompleteDomainResearch extends Error {}
 export type SkillWorkDocument = DomainWorkDocument;
@@ -18,6 +19,12 @@ export function readSkillWorkDocuments(file: string): SkillWorkDocument[] {
   const documents = state.documents ?? [];
   if (!Array.isArray(documents) || !documents.every(validWorkDocument)) throw new Error("过程文稿记录形状无效");
   return documents;
+}
+const workDocumentSummaries = new FileProjectionCache<SkillWorkDocument[]>();
+export function readSkillWorkDocumentSummaries(file: string): SkillWorkDocument[] {
+  if (!existsSync(file)) return [];
+  return workDocumentSummaries.read(file, () => readSkillWorkDocuments(file).map(({ id, title }) => ({ id, title, content: "" })))
+    .map(document => ({ ...document }));
 }
 export interface SkillWorkStep {
   id: string; title: string; instructions: string; depends_on: string[]; readonly: boolean;

@@ -1137,9 +1137,8 @@ async function main(): Promise<void> {
     } catch (error) {
       console.log(`[serve] 现场回收失败(不影响服务): ${String(error)}`);
     }
-    // 问题流工作区回收(#84):与需求流同一个保留期旋钮(管理页设置,
-    // 两流一个口径,0=永不)、同一个每日节奏,不新起定时器。容器探活
-    // 是保险丝(终态会话容器应已停);纯旁路 fail-open。
+    // 问题单这里只清已归档或取消会话的临时目录；代码回收由 issueDiskSweep
+    // 与归档入口负责，避免绕过 issue_repo_reclaim 开关及代码统计等待。
     try {
       const sweptIssues = reclaimIssueWorkspaces({
         dataDir,
@@ -1150,7 +1149,7 @@ async function main(): Promise<void> {
       if (sweptIssues.reclaimed) {
         console.log(`[serve] 问题现场回收 ${sweptIssues.reclaimed} 个会话,`
           + `释放 ${humanBytes(sweptIssues.freed)}(保留期 `
-          + `${retentionDays} 天;台账与材料元数据保留)`
+          + `${retentionDays} 天;文档、日志与过程记录保留)`
           + (sweptIssues.skipped_container
             ? `,容器在跑跳过 ${sweptIssues.skipped_container} 个`
             : ""));

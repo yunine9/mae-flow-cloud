@@ -6,7 +6,7 @@ import type { ExtractionJobRecord } from "./knowledgeExtraction.ts";
 import { listSkillSubmissions, type SkillSubmissionRecord } from "./hostSkillLibrary.ts";
 import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "./knowledgeTaskCenterTypes.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
-import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
+import { listKnowledgeDocumentFacts } from "./knowledgeDocuments.ts";
 
 function validTime(value: unknown): string | undefined {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -24,7 +24,7 @@ export function latestKnowledgeResearchNote(evidence: Array<Record<string, unkno
 }
 
 function projection(input: Parameters<typeof projectKnowledgeProduction>[0]) {
-  const production = input.kind === "domain" && input.record.production ? input.record.production : projectKnowledgeProduction(input);
+  const production = (input.kind === "domain" || input.kind === "component" && !input.archive) && input.record.production ? input.record.production : projectKnowledgeProduction(input);
   return { status_label: production.status_label, group: production.group, next_action: production.next_action, production };
 }
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
@@ -55,8 +55,8 @@ export function skillSubmissionTask(record: SkillSubmissionRecord): KnowledgeTas
 export interface KnowledgeTaskSources {
   dataDir: string;
   warnings?(): string[];
-  domain: { list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined; warnings?(): string[] };
-  component: { list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord; warnings?(): string[] };
+  domain: { taskRows?(): Array<KnowledgeTaskRow & { module_id?: string }>; list(): Array<{ id: string }>; get(id: string): DomainKnowledgeJob; componentArchive?(id: string): DomainKnowledgeJob | undefined; warnings?(): string[] };
+  component: { taskRows?(): KnowledgeTaskRow[]; list(summaryOnly?: boolean): ResearchRecord[]; get(id: string): ResearchRecord; warnings?(): string[] };
   skillExtractionJob(id: string): ExtractionJobRecord | undefined;
 }
 
@@ -66,11 +66,17 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   const modules = new Map<string, string>();
   warnings.push(...sources.warnings?.() ?? []);
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
-  listKnowledgeDocuments(sources.dataDir, warnings);
+  listKnowledgeDocumentFacts(sources.dataDir, warnings);
   const collect = (label: string, read: () => void) => {
     try { read(); } catch { warnings.push(`${label}暂时无法读取，请在原任务入口查看`); }
   };
   collect("领域萃取", () => {
+    if (sources.domain.taskRows) {
+      for (const { module_id, ...task } of sources.domain.taskRows()) {
+        tasks.push(task); if (module_id) modules.set(task.id, module_id);
+      }
+      return;
+    }
     for (const job of sources.domain.list()) {
       const record = sources.domain.get(job.id);
       tasks.push(domainKnowledgeTask(record));
@@ -78,6 +84,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
     }
   });
   collect("基础组件萃取", () => {
+    if (sources.component.taskRows) { tasks.push(...sources.component.taskRows()); return; }
     for (const record of sources.component.list()) {
       tasks.push(componentKnowledgeTask(record, sources.domain.componentArchive?.(record.id)));
     }

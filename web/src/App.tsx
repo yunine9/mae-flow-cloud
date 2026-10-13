@@ -1,3 +1,4 @@
+import { KnowledgeAnswerPage, openKnowledgeAnswer } from "./KnowledgeAnswerPage";
 import { KnowledgeLibrary } from "./KnowledgeLibrary";
 import { PeopleProvider, PersonName, usePersonName } from "./People";
 import { DeliveryAnalytics } from "./DeliveryAnalytics";
@@ -99,7 +100,7 @@ const HelpCenter = lazy(() =>
 // 只装需求)与团队问题(teamIssues,只装问题会话);页内领域切换器随
 // 之退场,问题处理(issues)仍是个人操作台,与"我的需求"对位。
 type View = "team" | "teamIssues" | "mine" | "issues" | "profile" | "users"
-  | "settings" | "library" | "knowledge" | "wishes" | "help" | "environments" | "deliveryAnalysis";
+  | "settings" | "library" | "answers" | "knowledge" | "wishes" | "help" | "environments" | "deliveryAnalysis";
 type Theme = "light" | "dark";
 type Density = "comfortable" | "compact";
 type MineScope = "all" | "waiting" | "intervention" | "active" | "delivered";
@@ -110,7 +111,7 @@ type TeamAssetTab = "knowledge" | "modules";
 
 const APP_VIEWS = new Set<View>([
   "team", "teamIssues", "mine", "issues", "profile", "users", "settings",
-  "library", "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
+  "library", "answers", "knowledge", "wishes", "help", "environments", "deliveryAnalysis",
 ]);
 const TEAM_ASSET_TABS = new Set<TeamAssetTab>(["knowledge", "modules"]);
 
@@ -234,6 +235,7 @@ export function resolveWorkspaceTarget(
 }
 
 function initialView(user: AuthUser): View {
+  if (new URLSearchParams(location.search).get("kbPage") === "ask") return "answers";
   if (new URLSearchParams(location.search).has("deliveryAnalysis")) return "deliveryAnalysis";
   if (["kbPage"].some(key => new URLSearchParams(location.search).has(key))) return "library";
   if (/^\/help(?:\/|$)/.test(location.pathname)) return "help";
@@ -661,6 +663,7 @@ function BrandMark({ className }: { className?: string }) {
 }
 
 function NavIcon({ name }: { name: View }) {
+  if (name === "answers") return <svg viewBox="0 0 24 24" aria-hidden><path d="M5 4.75h14a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5h-8l-5 3v-3H5a1.5 1.5 0 0 1-1.5-1.5v-10A1.5 1.5 0 0 1 5 4.75Z" /><path d="M8 9h8M8 13h5" /></svg>;
   if (name === "deliveryAnalysis") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4 19V5M4 19h16M8 15v-4M12 15V7M16 15v-6" /></svg>;
   if (name === "team") return <svg viewBox="0 0 24 24" aria-hidden><path d="M4.75 19.25V11.5h4v7.75h-4Zm5.75 0V4.75h4v14.5h-4Zm5.75 0V8h4v11.25h-4Z" /></svg>;
   if (name === "teamIssues") return <svg viewBox="0 0 24 24" aria-hidden><circle cx="12" cy="13.5" r="4.25" /><path d="M12 9.25V6.5M7 11 5.25 9.5M17 11l1.75-1.5M6.25 16.5H4M20 16.5h-2.25M8 18.5 6.5 20M16 18.5l1.5 1.5" /></svg>;
@@ -894,7 +897,8 @@ export function App() {
       const focus = readKnowledgeAssetFocus();
       setKnowledgeFocus(focus);
       if (!focus) {
-        const restoredView = viewFromHistoryState(event.state);
+        const kbPage = new URLSearchParams(location.search).get("kbPage");
+        const restoredView = kbPage ? (kbPage === "ask" ? "answers" : "library") : viewFromHistoryState(event.state);
         const restoredTab = teamAssetTabFromHistoryState(event.state);
         const restoredIssueChild = issueChildTabFromHistoryState(event.state);
         if (restoredView) setView(restoredView);
@@ -1403,6 +1407,7 @@ export function App() {
       : "登记问题并指派责任人，或处理指派到你名下的问题：先定位，后补单，非问题也是合法结论。" },
     profile: { title: "个人设置", description: "集中管理任务审批方式、CodeHub 提交身份和小鲁班通知。" },
     library: { title: "知识库", description: "" },
+    answers: { title: "知识问答", description: "" },
     knowledge: { title: "知识全文", description: "下单时匹配到的模块知识或 Skill 原文。" },
     wishes: { title: "许愿墙", description: "汇聚真实诉求和使用问题；每一个声音都应该被看见、被回应、被闭环。" },
     users: { title: "账号管理", description: "创建本地账号并分配管理员或开发权限。" },
@@ -1467,6 +1472,7 @@ export function App() {
   const selectView = (next: View) => {
     const leavingKnowledgeFocus = readKnowledgeAssetFocus();
     if (leavingKnowledgeFocus) setKnowledgeFocus(undefined);
+    if (next === "answers") { openKnowledgeAnswer(); setIssueRouteId(""); setView("answers"); return; }
     if (next === "library") {
       history.pushState(appHistoryState("library"), "", "/?kbPage=home"); setIssueRouteId(""); setView("library"); return;
     }
@@ -1536,6 +1542,7 @@ export function App() {
                   onSelect={selectView} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
+                <NavButton view="answers" current={view} onSelect={selectView} label="知识问答" />
 
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 台账对 admin 同样是团队资源而非系统工具(ADR-0020:admin 可
@@ -1574,6 +1581,7 @@ export function App() {
                 <NavButton view="teamIssues" current={view} onSelect={selectView} label="团队DTS" badge={issueWaitingCount} />
                 <NavButton view="wishes" current={view} onSelect={selectView} label="许愿墙" />
                 <NavButton view="library" current={view} onSelect={selectView} label="知识库" />
+                <NavButton view="answers" current={view} onSelect={selectView} label="知识问答" />
 
                 <NavButton view="deliveryAnalysis" current={view} onSelect={selectView} label="交付分析" />
                 {/* 环境台账是全局团队资源(登录即可读写,ADR-0020):与团队资产
@@ -1599,7 +1607,7 @@ export function App() {
     {/* 工作台壳(#228 工具类化):书页宽由 max-w 条件直译,DTS 全宽时
         与主区一起放开(不再有 is-wide 修饰类与 legacy 全宽规则)。 */}
     <div className="min-h-screen min-w-0 bg-(--canvas)">
-      {view !== "library" && <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
+      {view !== "library" && view !== "answers" && <header className={cn("mx-auto flex w-full items-end justify-between gap-6 px-10 pb-[26px] pt-8",
         // 与主区同一判据（标题条只在非 library 视图渲染）：783431e2 把 knowledge 移出主区
         // 全宽时漏了这里，宽屏上标题条与内容左边缘错开。
         dtsWide ? "max-w-none" : "max-w-(--page-width)",
@@ -1637,8 +1645,8 @@ export function App() {
       </header>}
       {/* 全宽时标题条与内容区同步放开,左边缘对齐(不再悬在书页宽)。 */}
       <main className={cn("mx-auto w-full px-10 pb-[72px]",
-        (dtsWide || view === "library") ? "max-w-none" : "max-w-(--page-width)",
-        "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]", view === "library" && "knowledge-app-main")}>
+        (dtsWide || view === "library" || view === "answers") ? "max-w-none" : "max-w-(--page-width)",
+        "max-[1080px]:px-7 max-[760px]:px-[18px] max-[760px]:pb-[52px] max-[480px]:px-[13px]", view === "library" && "knowledge-app-main", view === "answers" && "ka-app-main")}>
         {view === "team" && <section className="min-w-0">
           <TeamWorldTabs domain="requirement" tab={teamTaskTab}
             onSelect={setTeamTaskTab}>
@@ -1676,6 +1684,7 @@ export function App() {
           </TeamWorldTabs>
         </section>}
 
+        {view === "answers" && <KnowledgeAnswerPage />}
         {view === "library" && <KnowledgeLibrary
           onOpenTask={id => { const target = tasks.find(task => task.id === id); if (target) openArtifacts(target); else location.assign(`/work/${encodeURIComponent(id)}`); }}
  />}

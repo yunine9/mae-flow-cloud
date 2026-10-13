@@ -26,6 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
+import { reclaimIssueWorkspaces } from "../src/issueFlowWorkspaceReclaim.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 /** 伪造一个 issue 目录:issue.json + repo/ 树(源码/产物可各自带
@@ -124,12 +125,14 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
 });
 
 test("旋钮解耦:issue_repo_reclaim=0 只关整仓回收,产物清理按自己的旋钮走", async () => {
-  const { service, issuesRoot } = makeService({ issue_repo_reclaim: 0 });
+  const { service, dataDir, issuesRoot } = makeService({ issue_repo_reclaim: 0 });
   const canceled = fabricateIssue(issuesRoot, "issue-1", "canceled");
   const idleStale = fabricateIssue(issuesRoot, "issue-2", "idle",
     { oldProducts: true });
 
   const result = await service.sweepTerminalRepos();
+  // 每日清理两条入口都会执行，临时目录清扫不能绕过代码回收开关。
+  reclaimIssueWorkspaces({ dataDir, retentionDays: 14, now: Date.parse("2027-01-01T00:00:00Z") });
   assert.equal(result.reclaimed, 0, "整仓回收被旋钮关掉");
   assert.ok(existsSync(join(canceled, "repo")), "终态现场保留");
   assert.ok(!existsSync(join(idleStale, "repo", "demo", "target")),

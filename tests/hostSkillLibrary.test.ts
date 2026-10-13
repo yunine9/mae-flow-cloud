@@ -57,6 +57,24 @@ const ENGINEERING_METADATA = {
   business_module_ids: [], repositories: [], technologies: ["java"],
 };
 
+test("Skill 超过 20 次更新仍保留最早正文和附件，并可回退", async () => {
+  const dataDir = mfcTemp("mfc-skill-history-");
+  for (let version = 1; version <= 23; version++) {
+    await uploadHostSkill(dataDir, "java-autout", [
+      { path: "SKILL.md", content_base64: encode(skillMd(`单测写法 v${version}`)) },
+      { path: "references/example.md", content_base64: encode(`UT 示例 v${version}`) },
+    ], "maintainer", ENGINEERING_METADATA);
+  }
+  const versions = listSkillVersions(dataDir, "java-autout");
+  assert.equal(versions.length, 22);
+  const first = versions.find(version => readFileSync(join(dataDir, "skill-versions", "java-autout", version.version_id, "references/example.md"), "utf8") === "UT 示例 v1");
+  assert.ok(first, "最早的示例附件不能因更新次数多而消失");
+  await rollbackHostSkill(dataDir, "java-autout", first.version_id, "maintainer");
+  assert.equal(readHostSkillDocument(dataDir, "java-autout").content, skillMd("单测写法 v1"));
+  assert.equal(readFileSync(join(dataDir, "skills", "java-autout", "references/example.md"), "utf8"), "UT 示例 v1");
+  assert.equal(listSkillVersions(dataDir, "java-autout").length, 23);
+});
+
 test("上传→货架可见且权限归一;更新归档旧版;回退按版本痕复原", async () => {
   const dataDir = mfcTemp("mfc-skill-lib-");
   await assert.rejects(uploadHostSkill(dataDir, "missing-tags", [

@@ -21,5 +21,5 @@ export function componentGovernance(dir: string) {
   }).sort((a, b) => Number(b.needs_review) - Number(a.needs_review) || a.paradigm.component.localeCompare(b.paradigm.component) || a.id.localeCompare(b.id));
   let revision = -1;
   try { revision = readComponentPolicies(dir).revision; } catch { /* catalog 已显示损坏原因，禁止覆盖。 */ }
-  return { revision, items, warnings: catalog.warnings, retention: "显示最近 2000 条去重命中和 2000 条反馈；误报率仅统计当前版本中已人工判断的样本，不代表所有代码。" };
+  return { revision, items, warnings: catalog.warnings, retention: "命中、反馈和策略历史持续保留；每项展示最近 10 条命中和 30 条反馈，统计使用当前版本的全部记录。误报率仅统计已人工判断的样本，不代表所有代码。" };
 }

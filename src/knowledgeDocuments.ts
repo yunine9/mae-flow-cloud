@@ -7,6 +7,8 @@ import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { normalizeKnowledgeLanguages } from "./knowledgeLanguages.ts";
 import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { FileProjectionCache } from "./fileProjectionCache.ts";
+import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
 export interface KnowledgeDocument {
   id: string; title: string; content: string; scope: "platform" | "module" | "repository";
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
@@ -54,6 +56,32 @@ export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocumen
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
     throw new Error(`记录损坏：knowledge-documents/${id}.json`);
   }
+}
+export type KnowledgeDocumentFacts = Pick<KnowledgeDocument, "id" | "revision"> & { component_archive_valid?: false };
+const documentFacts = new FileProjectionCache<KnowledgeDocumentFacts>();
+function knowledgeDocumentFacts(document: KnowledgeDocument): KnowledgeDocumentFacts {
+  let component_archive_valid: false | undefined;
+  if (/^---\r?\nschema: "mfc\.component-guide\/v1"\r?\n/.test(document.content)) {
+    try { componentArchiveParts(document.content); } catch { component_archive_valid = false; }
+  }
+  return { id: document.id, revision: document.revision, ...(component_archive_valid === false ? { component_archive_valid } : {}) };
+}
+export function readKnowledgeDocumentFacts(dir: string, id: string): KnowledgeDocumentFacts {
+  if (knowledgeDeleted(dir, id)) throw new Error("知识已删除");
+  return { ...documentFacts.read(file(dir, id), () => knowledgeDocumentFacts(readKnowledgeDocument(dir, id))) };
+}
+/** 任务中心只需发现坏记录，不必每次读取并保留所有知识正文。 */
+export function listKnowledgeDocumentFacts(dir: string, warnings?: string[]): KnowledgeDocumentFacts[] {
+  if (!existsSync(root(dir))) return [];
+  const facts: KnowledgeDocumentFacts[] = [];
+  for (const name of readdirSync(root(dir)).filter(name => /^kd-[a-f0-9-]{36}\.json$/.test(name) && !knowledgeDeleted(dir, name.slice(0, -5)))) {
+    try { facts.push(readKnowledgeDocumentFacts(dir, name.slice(0, -5))); }
+    catch {
+      const warning = `请检查损坏的知识记录：knowledge-documents/${name}；其余任务照常可用`;
+      if (warnings && !warnings.includes(warning)) warnings.push(warning);
+    }
+  }
+  return facts;
 }
 export function eraseKnowledgeDocument(dir: string, id: string) {
   if (!knowledgeDeleted(dir, id)) throw new Error("请先记录知识删除操作");
@@ -117,6 +145,17 @@ export function readKnowledgeArchiveVersion(dir: string, id: string, revision: s
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("已删除知识的精确归档版本未保留，请检查删除记录与版本文件");
     throw new Error(`归档版本记录损坏：knowledge-document-versions/${id}/${revision}.json`);
   }
+}
+const archiveVersionFacts = new FileProjectionCache<KnowledgeDocumentFacts>();
+/** 删除归档的列表摘要仍逐次核对删除记录，只复用未变化的精确版本文件校验。 */
+export function readKnowledgeArchiveVersionFacts(dir: string, id: string, revision: string): KnowledgeDocumentFacts {
+  const load = () => knowledgeDocumentFacts(readKnowledgeArchiveVersion(dir, id, revision).document);
+  if (!knowledgeDeleted(dir, id)) return load();
+  if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error("知识版本无效");
+  const deletion = readKnowledgeDeletion(dir, id);
+  if (deletion?.id !== id || deletion.revision !== revision) throw new Error("已删除知识只能归档删除时绑定的精确版本");
+  try { return { ...archiveVersionFacts.read(join(versionRoot(dir, id), `${revision}.json`), load) }; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return load(); throw error; }
 }
 function strings(value: unknown, max = 20): string[] {
   if (!Array.isArray(value) || value.length > max || value.some(v => typeof v !== "string" || v.length > 512)) throw new Error("适用范围格式不正确");

@@ -54,13 +54,14 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
   const [instructions, setInstructions] = useState("");
   const [records, setRecords] = useState<DomainKnowledgeJob[]>([]), [job, setJob] = useState<DomainKnowledgeJob>(), [selected, setSelected] = useState(() => {
     const params = new URLSearchParams(location.search);
-    return params.get("kbKind") === "domain" ? params.get("kbTask") ?? "" : "";
+    return focusId && focusId !== "new" ? focusId : params.get("kbKind") === "domain" ? params.get("kbTask") ?? "" : "";
   });
   const selectedRef = useRef(selected);
   const searchableContent = useRef<HTMLDivElement>(null);
   const [notesToolbar, setNotesToolbar] = useState<HTMLSpanElement | null>(null);
   const [notesOpenRequest, setNotesOpenRequest] = useState(0);
   const [deleting, setDeleting] = useState(false);
+  const [reextracting, setReextracting] = useState(false);
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [modules, setModules] = useState<BusinessModule[]>([]), [moduleId, setModuleId] = useState("");
   const [issueNo, setIssueNo] = useState(""), [issueDescription, setIssueDescription] = useState("");
@@ -109,12 +110,15 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
     if (edit) { setError("请先保存或取消当前编辑，再查看过程文稿。"); return; }
     setWorkDocumentId(`${turnId}:${id}`); setShowDiscussion(false); setTab("content"); changeView("review");
   }
-  async function refreshList() { const result = await componentRequest<{ records: DomainKnowledgeJob[] }>("/domain-extraction"); setRecords(result.records); }
-  useEffect(() => { void getBusinessModules().then(result => setModules(result.modules.filter(m => m.status === "active"))).catch(e => setError(e.message)); void refreshList().catch(e => setError(e.message)); }, []);
+  const showList = !focused && surface !== "knowledge";
+  async function refreshList() { if (!showList) return; const result = await componentRequest<{ records: DomainKnowledgeJob[] }>("/domain-extraction"); setRecords(result.records); }
+  useEffect(() => { if (showList) void refreshList().catch(e => setError(e.message)); }, [showList]);
+  useEffect(() => { if (open) void getBusinessModules().then(result => setModules(result.modules.filter(m => m.status === "active"))).catch(e => setError(e.message)); }, [open]);
   useEffect(() => {
-    if (!selected || busy) return; let live = true;
-    const load = async () => { try { const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${selected}`); if (live && selectedRef.current === selected) setJob(next); } catch (e) { if (live && selectedRef.current === selected) setError((e as Error).message); } };
-    void load(); const timer = setInterval(() => void load(), 4000); return () => { live = false; clearInterval(timer); };
+    if (!selected || busy) return; let live = true, loading = false;
+    const controller = new AbortController();
+    const load = async () => { if (loading) return; loading = true; try { const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${selected}`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)])); if (live && selectedRef.current === selected) setJob(next); } catch (e) { if (live && selectedRef.current === selected) setError((e as Error).message); } finally { loading = false; } };
+    void load(); const timer = setInterval(() => void load(), 4000); return () => { live = false; controller.abort(); clearInterval(timer); };
   }, [selected, busy]);
   function select(id: string) {
     const url = new URL(location.href);
@@ -152,6 +156,16 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
       setRecords(current => current.filter(record => record.id !== id));
     } catch (error) { setError((error as Error).message); } finally { setBusy(false); }
   }
+  async function reextract() {
+    if (!job || busy || edit) return;
+    setBusy(true); setError("");
+    try {
+      const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}/reextract`, {});
+      setReextracting(false); select(next.id); setJob(next); setStage("progress");
+      studio?.openExecution("domain", next.id);
+      await refreshList();
+    } catch (error) { setError((error as Error).message); } finally { setBusy(false); }
+  }
   async function run(mode: "discuss" | "revise" | "update") {
     if (document && await action("run", { mode, document_ids: related ? job!.documents.filter(d => d.selected).map(d => d.id) : [document.id], message, use_latest_skill: latest })) setMessage("");
   }
@@ -172,6 +186,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
           {!preparingCleanup && <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>}
           {!active && job.status === "done" && job.turns.at(-1)?.mode === "extract" && <DropdownMenuItem disabled={busy} onClick={() => { void action("resume", { use_latest_skill: latest || !job.turns.at(-1)?.research }); changeView("progress"); }}>继续深入研究</DropdownMenuItem>}
           <DropdownMenuItem onClick={() => openExtractionSkill("domain")}>查看 Skill</DropdownMenuItem>
+          <DropdownMenuItem disabled={busy || !!edit} onClick={() => { setError(""); setReextracting(true); }}>重新萃取</DropdownMenuItem>
           <DropdownMenuItem onClick={() => { studio?.openExecution("domain"); setOpen(true); }}>新建萃取任务</DropdownMenuItem>
           <DropdownMenuItem disabled={busy} onClick={() => { setError(""); setDeleting(true); }}>删除任务</DropdownMenuItem>
         </DropdownMenuContent></DropdownMenu>
@@ -208,6 +223,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
       </form>}</KnowledgeReadingFrame></div>
       {currentStage === "publish" && <div className="knowledge-task-progress space-y-4"><div className="flex items-start justify-between gap-4"><h3 className="font-semibold">Git 归档设置</h3><KnowledgeBackButton onClick={() => changeView("review")} destination="文稿" /></div><DomainKnowledgeArchiveTargets job={job} disabled={busy || active || !!edit} onChange={setJob} />{edit && <p className="text-sm text-muted-foreground">请先保存或取消正文编辑，再调整归档位置。</p>}</div>}
     </> : <p className="p-8 text-muted-foreground">{selected ? "正在加载任务…" : "选择历史任务，或新建领域萃取。"}</p>}
+    <Dialog open={reextracting} onOpenChange={setReextracting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>重新萃取？</DialogTitle></DialogHeader><p>复用单号、上传资料和研究配置，使用最新 Skill 创建新任务。原任务会停止并移除，原文稿不带入新任务；已发布知识和 MR 保留。</p>{error && <p role="alert" className="text-danger">{error}</p>}<div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setReextracting(false)}>取消</Button><Button disabled={busy} onClick={() => void reextract()}>{busy ? "正在重新萃取…" : "确认重新萃取"}</Button></div></DialogContent></Dialog>
     <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除领域萃取任务？</DialogTitle></DialogHeader><p className="font-medium">{job?.title}</p><p className="text-sm text-muted-foreground">{job?.deletion?.message}</p>{job?.deletion?.archive_batches.map(batch => <div key={batch.id} className="rounded border border-line p-3 text-sm"><strong>{batch.id}</strong>{batch.error && <p className="text-danger">{batch.error}</p>}<ul>{batch.documents.map(document => <li key={document.id}>{document.title} · {document.path}</li>)}</ul>{batch.publications.map(publication => <p key={`${publication.target_id}:${publication.branch}`}>{publication.error}{publication.url && <a className="ml-2 text-primary underline" href={publication.url} target="_blank" rel="noreferrer">查看 MR</a>}</p>)}</div>)}{error && <p role="alert" className="text-danger">{error}</p>}<div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setDeleting(false)}>取消</Button><Button variant="destructive" disabled={busy} onClick={() => void remove()}>确认删除</Button></div></DialogContent></Dialog>
     <Dialog open={open} onOpenChange={setOpen}><DialogContent className="tw-root sm:max-w-[850px] max-h-[90vh] overflow-auto"><DialogHeader><DialogTitle>新建领域知识萃取</DialogTitle></DialogHeader>{error && <p role="alert" className="text-danger">{error}</p>}<div className="space-y-5"><label className="grid gap-2">业务模块<select aria-label="萃取业务模块" className="rounded border border-line bg-surface p-2" value={moduleId} onChange={e => setModuleId(e.target.value)}><option value="">请选择业务模块</option>{modules.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{module && <p className="text-sm">{module.name} · 已关联 {module.repositories.length} 个代码仓</p>}<label className="grid gap-2">统一基准分支<Input aria-label="统一基准分支" value={baselineBranch} onChange={e => setBaselineBranch(e.target.value)} placeholder="master" /><span className="text-sm text-muted-foreground">本次关联仓库统一读取此分支。</span></label><><div className="grid grid-cols-[240px_minmax(0,1fr)] gap-3"><label className="grid gap-2">关联单号（必填）<Input aria-label="领域萃取关联单号" required maxLength={120} value={issueNo} onChange={e => setIssueNo(e.target.value)} placeholder="填写本次知识归档关联的需求或问题单号" /><span className="text-sm text-muted-foreground">本任务创建的所有 MR 关联此单号。</span></label><label className="grid gap-2">单号描述（必填）<Input aria-label="领域萃取单号描述" required maxLength={2000} value={issueDescription} onChange={e => setIssueDescription(e.target.value)} placeholder="从关联单据复制准确描述" /><span className="text-sm text-muted-foreground">从关联单据复制准确描述，将原样用作 MR 标题</span></label></div><p className="text-sm text-muted-foreground">归档仓和文档目录可在「Git 归档设置」调整，系统会带出默认位置。</p></><label className="grid gap-2">本次要求（可选）<Textarea aria-label="本次萃取要求" rows={4} maxLength={20000} value={instructions} onChange={e => setInstructions(e.target.value)} placeholder={"例如：只萃取订单模块的退款流程；不要读取 docs/ 和 legacy/payment.ts；用业务人员能看懂的语言说明规则。"} /></label><KnowledgeMaterialUpload materials={materials} onChange={setMaterials} onBusy={setUploading} /><Button disabled={busy || uploading || !issueNo.trim() || !issueDescription.trim() || !module || (!!module.repositories.length && !baselineBranch.trim())} onClick={async () => { setBusy(true); setError(""); try { const next = await componentRequest<DomainKnowledgeJob>("/domain-extraction", { issue_no: issueNo, issue_description: issueDescription, module_id: moduleId, instructions: instructions.trim() || undefined, baseline_branch: baselineBranch, material_ids: materials.map(m => m.id) }); select(next.id); setJob(next); setStage("progress"); setOpen(false); setInstructions(""); await refreshList(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}>开始萃取</Button></div></DialogContent></Dialog>
   </KnowledgeExtractionWorkspace>;

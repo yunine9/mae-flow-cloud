@@ -1,34 +1,14 @@
 /**
- * 现场回收(纯旁路):终态任务过了保留期,删掉能再生的重货,台账原样留下。
- *
- * 为什么需要它:每个任务把整个仓克隆进自己的现场,只涨不消。本机那个
- * 五模块玩具仓单任务就 3.7MB,其中克隆占 2.2MB;换成真实业务仓,10-20 个人
- * 用下去磁盘是按周算的。以前**一条回收策略都没有**——不是策略宽松,是压根
- * 没有(2026-08-22 查出来的)。
- *
- * 两条口径,都是有意的:
- *
- * 1. **只清编译环境,交付历史一个字节都不动。** 用户 2026-08-22 的原话是
- *    "可以清除编译环境啥的,但是交付历史数据啥的不要清除"。
- *    删的只有:代码克隆(多仓时还有 repositories/ 下那一堆)、pi 会话
- *    临时目录。留的是:task.json(含交付账本 delivery——MR 地址、
- *    流水线结论都在里面)、事件账本、transcript(含子 Agent 证据)、
- *    prepush 各轮收据、流水线事实与日志、批注和检视意见——
- *    **那是人自己写的字**。这条保证有用例钉死(tests/workspaceReclaim)。
- *
- * 2. **用"留什么"白名单,不用"删什么"黑名单。** 克隆目录名是按仓库地址
- *    算出来的(cloneRepo:`basename(source)` 去掉 `.git`),多仓需求还会
- *    在 repositories/ 下再克隆若干个——黑名单天生点不全名字,漏一个就等于
- *    没回收,而且以后每加一种现场目录都得记得回来补。白名单反过来:
- *    以后新增的东西默认被回收,**要留就必须显式写进 KEEP 并说清为什么**。
- *
- * 只碰真终态(completed/failed/canceled)。await_merge 和 verifying 还等着
- * 人合入或等着流水线,现场可能还要看,不碰——代价是这两种状态的单不会被
- * 回收,已如实记进 README 已知边界。
+ * 已结束任务过了保留期，只回收代码克隆和明确的临时运行目录。
+ * 需求原文、修订、图片、Story、交付摘要及其他任务材料默认保留。
+ * 仓内过程文档先保存到任务的 archived-documents，保存失败就不删代码。
  */
 
 import {
+  cpSync,
   existsSync,
+  lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -36,7 +16,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 /** 克隆被删之前,把内核阶段真相抄一份留档。
  *
@@ -46,29 +26,13 @@ import { join, sep } from "node:path";
  * 活状态读。 */
 export const KERNEL_STATE_SNAPSHOT = "kernel-state.reclaimed.json";
 
-/** 回收后必须留下的现场条目(工作区根一级)。
- * 加条目就是在说"这东西删不得",请连理由一起写。 */
-export const RECLAIM_KEEP: readonly string[] = [
-  "task.json",           // 没它 recover() 认不出这个任务,历史整个消失
-  "events.jsonl",        // 事件账本
-  "transcript.jsonl",    // 质量契约证据
-  "transcript",          // 子 Agent transcript(内核 hook 绑定的那套布局)
-  "prepush",             // 推送前验证各 attempt 的 events/transcript
-  "waiting.json",        // 等待卡留痕
-  "annotations.jsonl",   // 批注:人自己写的字,永远不回收
-  "reviews",             // 检视意见:同上
-  "review_replies.md",   // 同上
-  "pipeline-facts.json", // 流水线事实(绑 SHA 的结论)
-  "pipeline",            // 流水线日志:平台上两周后可能也没了,它是交付证据
-  "chain-plan.md",       // 多仓链方案,几 KB
-  "unit-brief.md",       // 子任务自己的主任务书,回收后仍需可追溯
-  "delivery-history",   // 同一任务此前每次合入的执行记录和交付材料
-  KERNEL_STATE_SNAPSHOT,
-];
+/** 文档副本保留原单号目录和文件名，现有文档读取与下载入口可以继续使用。 */
+export const ARCHIVED_DOCUMENTS_DIR = "archived-documents";
+const TEMPORARY_RUNTIME_DIRS = ["pi-agent", "requirement-review-agent"];
 
-/** 只有真终态才回收:还等着人或等着流水线的单,现场可能还要看。 */
+/** 失败任务仍可恢复，保留代码和会话；只有完成或明确取消才自动回收。 */
 export const RECLAIMABLE_STATUS: readonly string[] = [
-  "completed", "failed", "canceled",
+  "completed", "canceled",
 ];
 
 export interface ReclaimCandidate {
@@ -114,7 +78,7 @@ export function judgeReclaim(
   if (!RECLAIMABLE_STATUS.includes(task.status)) {
     return {
       reclaim: false,
-      reason: `状态 ${task.status} 不是真终态(还等着人或等着流水线)`,
+      reason: `状态 ${task.status} 不可自动回收(可能恢复、还等着人或流水线)`,
     };
   }
   if (options.busy) {
@@ -195,12 +159,7 @@ export function withinDataDir(workspace: string, dataDir: string): boolean {
   }
 }
 
-/**
- * 真删。KEEP 之外的一级条目全清。
- *
- * 整个过程 fail-open:回收是纯旁路,删不动就少释放一点磁盘,绝不许它
- * 把任务读写或服务启动带下水。单个条目删失败也不中断,继续删下一个。
- */
+/** 只回收明确的运行目录，不再删除“不在保留名单”的任意文件。 */
 export function reclaimWorkspace(
   workspace: string,
   options: { cwd?: string; dataDir: string },
@@ -230,20 +189,58 @@ export function reclaimWorkspace(
     }
   }
 
-  const keep = new Set(RECLAIM_KEEP);
-  let entries: string[] = [];
+  const codeRoots = new Set<string>();
   try {
-    entries = readdirSync(workspace);
-  } catch {
-    return { removed, freed, snapshotted };
+    for (const entry of readdirSync(workspace, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const path = join(workspace, entry.name);
+      if ((entry.name === "repositories" || existsSync(join(path, ".git"))) && withinDataDir(path, workspace)) codeRoots.add(resolve(path));
+    }
+    if (options.cwd && withinDataDir(options.cwd, workspace)
+      && (existsSync(join(options.cwd, ".git")) || resolve(options.cwd) === resolve(workspace, "repositories"))) codeRoots.add(resolve(options.cwd));
+
+    // 主代码仓的文稿保留在副本根；多仓来源的文稿分别保存，避免同名文档覆盖。
+    const sources = new Set(codeRoots);
+    const repositories = join(workspace, "repositories");
+    if (codeRoots.has(resolve(repositories))) {
+      for (const entry of readdirSync(repositories, { withFileTypes: true })) {
+        const path = join(repositories, entry.name);
+        if (entry.isDirectory() && withinDataDir(path, workspace)) sources.add(path);
+      }
+    }
+    const primary = options.cwd && sources.has(resolve(options.cwd)) ? resolve(options.cwd)
+      : [...sources].find(path => existsSync(join(path, ".mae-flow-work")));
+    const archive = join(workspace, ARCHIVED_DOCUMENTS_DIR);
+    const assertNoLinks = (path: string) => {
+      const walk = (path: string) => {
+        const info = lstatSync(path);
+        if (info.isSymbolicLink()) throw new Error(`文档路径包含符号链接：${path}`);
+        if (info.isDirectory()) for (const name of readdirSync(path)) walk(join(path, name));
+      };
+      if (existsSync(path)) walk(path);
+    };
+    if (existsSync(archive)) assertNoLinks(archive);
+    for (const source of sources) {
+      const target = source === primary ? archive : join(archive, "source-materials", relative(workspace, source));
+      for (const name of [".mae-flow-work", ".mae-flow-requirement.md"]) {
+        const from = join(source, name);
+        if (!existsSync(from)) continue;
+        assertNoLinks(from);
+        mkdirSync(target, { recursive: true });
+        cpSync(from, join(target, name), { recursive: true, preserveTimestamps: true });
+      }
+    }
+  } catch (error) {
+    return { removed, freed, snapshotted, refused: `文档保存失败，保留代码现场：${String(error)}` };
   }
-  for (const name of entries) {
-    if (keep.has(name)) continue;
-    const target = join(workspace, name);
+
+  const targets = new Set([...codeRoots, ...TEMPORARY_RUNTIME_DIRS.map(name => join(workspace, name))]);
+  for (const target of targets) {
+    if (!existsSync(target)) continue;
     const size = sizeOf(target);
     try {
       rmSync(target, { recursive: true, force: true });
-      removed.push(name);
+      removed.push(relative(workspace, target));
       freed += size;
     } catch {
       // 单个条目删不动(权限/占用)不中断,下一个接着来。

@@ -35,6 +35,20 @@ function event(
   };
 }
 
+test("开发助手超过 60 条消息后，最初的人话在再次读取和追加后仍保存", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "mfc-assistant-history-"));
+  for (let index = 0; index < 65; index++) {
+    appendDeveloperAssistantMessage(workspace, index % 2 ? "assistant" : "user", `历史原话 ${index}`, "ready");
+  }
+  assert.equal(readDeveloperAssistant(workspace).messages.length, 65);
+  const next = appendDeveloperAssistantMessage(workspace, "user", "重新打开后继续", "ready");
+  assert.equal(next.messages.length, 66);
+  assert.equal(next.messages[0].text, "历史原话 0");
+  const stored = JSON.parse(readFileSync(join(workspace, "developer-assistant.json"), "utf8"));
+  assert.equal(stored.messages[0].text, "历史原话 0");
+  assert.equal(stored.messages.at(-1).text, "重新打开后继续");
+});
+
 test("开发助手门禁绕开流程命令限制，但保留内核/Git/凭据边界", () => {
   const gate = developerAssistantGateContract();
   const decide = (tool: string, value: string) => gate(

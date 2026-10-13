@@ -32,6 +32,7 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
           body.request_id === undefined && body.message === undefined ? undefined : { request_id: body.request_id, message: body.message }));
         if (parts[2] === "stop") return json(response, 200, manager.stop(id));
         if (parts[2] === "delete") return json(response, 200, manager.remove(id, operator));
+        if (parts[2] === "reextract") return json(response, 202, manager.reextract(id, operator));
         if (parts[2] === "edit") return json(response, 200, manager.edit(id, body, operator));
         if (parts[2] === "proposal") return json(response, 200, manager.decide(id, body.turn_id, body.document_id, body.decision, operator));
         if (parts[2] === "restore") return json(response, 200, manager.restore(id, body.document_id, body.revision, body.base_revision, operator));
