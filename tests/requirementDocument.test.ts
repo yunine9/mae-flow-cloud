@@ -27,7 +27,7 @@ test("Markdown 设计文档:只认 .md，限制大小，短文仍直接进入上
     /只支持.*\.md/);
   assert.throws(() => requirementDocumentMeta(
     "x".repeat(MAX_REQUIREMENT_DOCUMENT_BYTES + 1), "design.md"),
-  /不能超过 512 KiB/);
+  /不能超过 8192 KiB/);
 
   const meta = requirementDocumentMeta("# 目标\n完成上传", "方案.MD");
   assert.deepEqual(meta, {

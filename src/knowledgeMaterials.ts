@@ -1,17 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { runKnowledgeCommand } from "./knowledgeProcess.ts";
+import { convertDocument, type DocumentSection, type DocumentImage } from "./documentConversion.ts";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 
 export interface KnowledgeMaterial {
   id: string; name: string; scope: string; version: string; bytes: number; digest: string;
-  state: "ready" | "failed"; error?: string; sections: Array<{ location: string; text: string }>;
+  state: "ready" | "failed"; error?: string; sections: DocumentSection[];
   uploaded_at?: string; warnings?: string[];
-  images?: Array<{ id: string; path: string; mimeType: string; bytes: number }>;
+  images?: DocumentImage[];
+  documents?: Array<{ path: string }>;
 }
 const supported = new Set([".md", ".txt", ".docx", ".pdf", ".xlsx", ".pptx", ".zip"]);
 export async function saveKnowledgeMaterial(root: string, input: { name: string; content_base64: string; scope?: string; version?: string }, signal?: AbortSignal): Promise<KnowledgeMaterial> {
@@ -26,19 +26,15 @@ export async function saveKnowledgeMaterial(root: string, input: { name: string;
   const file = join(folder, `source${extname(input.name).toLowerCase()}`);
   writeFileSync(file, bytes, { mode: 0o600 });
   try {
-    const raw = await runKnowledgeCommand(process.env.MAE_FLOW_PYTHON_BIN || "python3", [fileURLToPath(new URL("../scripts/parse-knowledge-material.py", import.meta.url)), file],
-      { signal, timeoutMs: 60_000, maxBytes: (extname(input.name).toLowerCase() === ".zip" ? 128 : 8) * 1024 * 1024 }).catch(() => { throw new Error("资料解析失败，请检查文件格式与解析器；PDF 需要 pdftotext，扫描件需要先做 OCR"); });
-    scanForSecrets(input.name, Buffer.from(raw));
-    const parsed = JSON.parse(raw);
-    if (parsed.error) throw new Error(parsed.error);
-    record.sections = Array.isArray(parsed) ? parsed : parsed.sections;
-    if (!Array.isArray(parsed)) { record.images = parsed.images; record.warnings = parsed.warnings; }
+    const parsed = await convertDocument(file, { name: input.name, signal });
+    scanForSecrets(input.name, Buffer.from(JSON.stringify(parsed)));
+    Object.assign(record, parsed);
     if (!record.sections.some(s => s.text.trim()) && !record.images?.length) throw new Error("未提取到可读文本或图片，请补充可检索文档或 OCR 结果");
     record.state = "ready";
   } catch (error) { record.error = signal?.aborted ? "资料解析已取消" : error instanceof Error ? error.message : "资料解析失败"; }
   finally {
-    for (const entry of readdirSync(folder)) if (entry.startsWith("parse-pdf-")) rmSync(join(folder, entry), { recursive: true, force: true });
-    if (record.state === "failed") { rmSync(join(folder, "images"), { recursive: true, force: true }); record.sections = []; record.images = []; }
+    for (const entry of readdirSync(folder)) if (/^parse-(?:pdf|document|bundle)-/.test(entry)) rmSync(join(folder, entry), { recursive: true, force: true });
+    if (record.state === "failed") { rmSync(join(folder, "images"), { recursive: true, force: true }); record.sections = []; record.images = []; record.documents = []; }
   }
   writeFileSync(join(folder, "material.json"), JSON.stringify(record), { mode: 0o600 });
   return record;
@@ -47,10 +43,20 @@ export function readKnowledgeMaterial(root: string, id: string): KnowledgeMateri
   if (!/^material-[a-f0-9-]{36}$/.test(id) || !existsSync(join(root, id, "material.json"))) throw new Error("资料不存在");
   return JSON.parse(readFileSync(join(root, id, "material.json"), "utf8"));
 }
+export function readKnowledgeMaterialImage(root: string, id: string, imagePath: string): { asset: DocumentImage; content: Buffer } {
+  const material = readKnowledgeMaterial(root, id);
+  const asset = material.state === "ready" && material.images?.find(image => image.path === imagePath);
+  if (!asset || !/^[a-f0-9]{64}$/.test(asset.id) || !["image/png", "image/jpeg", "image/gif", "image/webp"].includes(asset.mimeType))
+    throw new Error("图片不在本次资料中，或资料解析失败");
+  const content = readFileSync(join(root, id, "images", asset.id));
+  if (content.length !== asset.bytes || content.length > 10 * 1024 * 1024 || createHash("sha256").update(content).digest("hex") !== asset.id)
+    throw new Error("图片文件不完整或已改变，请重新上传资料");
+  return { asset, content };
+}
 export function knowledgeMaterialTool(materials: KnowledgeMaterial[], root?: string, observe?: (event: Record<string, unknown>) => unknown) {
   return defineTool({
     name: "knowledge_material", label: "读取上传资料",
-    description: "列出本任务上传资料、解析警告、章节和 ZIP 图片路径；按资料编号及章节序号读取正文。用 id + image_path 读取图片内容，每次一张。Markdown 相对图片链接按文档所在目录对应到图片路径，不能仅凭文件名推断图片内容。未填写的版本为未知，上传时间不代表业务版本。",
+    description: "列出本任务上传资料、解析警告、章节和图片路径；按资料编号及章节序号读取正文。用 id + image_path 读取图片内容，每次一张。Markdown 相对图片链接按章节 source_path 所在目录对应到图片路径，不能仅凭文件名推断图片内容。未填写的版本为未知，上传时间不代表业务版本。",
     parameters: Type.Object({ id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 1 })), count: Type.Optional(Type.Integer({ minimum: 1, maximum: 10 })), image_path: Type.Optional(Type.String()) }),
     async execute(_id: string, input: { id?: string; start?: number; count?: number; image_path?: string }, _signal?: AbortSignal, _onUpdate?: unknown, context?: Pick<ExtensionContext, "model">) {
       const material = materials.find(m => m.id === input.id);
@@ -61,7 +67,7 @@ export function knowledgeMaterialTool(materials: KnowledgeMaterial[], root?: str
         if (context?.model && !context.model.input.includes("image"))
           return { content: [{ type: "text" as const, text: "当前萃取模型不支持图片，尚未读取该图片；请在模型配置中使用支持图片的模型，或补充文字说明。不能推断图中内容。" }], details: {}, isError: true };
         try {
-          const data = readFileSync(join(root, material.id, "images", asset.id)).toString("base64");
+          const data = readKnowledgeMaterialImage(root, material.id, asset.path).content.toString("base64");
           const evidenceId = observe?.({ tool: "knowledge_material", action: "image", status: "returned", material_id: material.id, name: material.name, digest: material.digest, version: material.version, image_path: asset.path });
           return { content: [{ type: "text" as const, text: `${material.name} / ${asset.path}${typeof evidenceId === "string" ? `\n证据编号：${evidenceId}` : ""}` },
             { type: "image" as const, data, mimeType: asset.mimeType }], details: {} };

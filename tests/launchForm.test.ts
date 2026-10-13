@@ -1124,32 +1124,29 @@ test("分析主任务先选讨论参与人，拆分后再逐单元填写执行�
     "逐单元分工必须自动写回服务端，不能只活在 React state 里");
 });
 
-test("ZIP 图文需求只显示渲染预览，不再重复摆一份只读原文框", () => {
+test("需求多份资料预览与补充说明并存，创建时传原始材料标识", () => {
   const source = readFileSync(join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  // #214/#229 换装后:Textarea 组件渲染;材料包预览壳走工具类(原
-  // .requirement-bundle-preview 家族退役),max-h 限高即"内部滚动"契约。
-  assert.match(source, /\{!requirementBundle && <Textarea/);
-  assert.doesNotMatch(source, /readOnly=\{Boolean\(requirementBundle\)\}/);
-  assert.match(source, /requirementBundle && <div className="mt-2\.5 max-h-\[520px\]/);
+  assert.match(source, /KnowledgeMaterialUpload purpose="requirement"/);
+  assert.match(source, /previewRequirementMaterials/);
+  assert.match(source, /requirementMaterialIds: requirementMaterials.length/);
+  assert.match(source, /required=\{!requirementMaterials.length\}/);
+  assert.doesNotMatch(source, /setRequirement\(preview.requirement\)/,
+    "预览不能覆盖用户补充说明或造成重复拼接");
 });
 
-test("下单草稿在关闭、刷新和 ZIP 材料场景都不会丢失", () => {
+test("下单草稿在关闭、刷新和多份资料场景都保留材料标识", () => {
   const source = readFileSync(
     join(process.cwd(), "web/src/LaunchWorkspace.tsx"), "utf-8");
-  assert.match(source, /requirementBundleName\?: string/,
-    "ZIP 只延后图片恢复，不能删除整张表单草稿");
+  assert.match(source, /requirementMaterials\?: MaterialSummary\[\]/);
+  assert.match(source, /validDraft\?\.requirementMaterials \?\? \[\]/);
   assert.match(source, /latestDraft\.current = \{/,
     "卸载时应能取得最后一次渲染的完整值");
   assert.match(source, /window\.addEventListener\("pagehide", flushDraft\)/,
     "刷新和关闭标签页必须同步落盘");
   assert.match(source, /也覆盖父页面切栏目、快捷入口把发起弹层直接卸载/);
-  // #229 换装:退出钮走 shadcn Button outline 皮,onClick 同步落盘不变。
   assert.match(source,
     /variant="outline" size="sm" onClick=\{\(\) => \{[\s\S]*?persistDraft\(\);[\s\S]*?onClose\(\);/,
     "主动退出不能等防抖计时器碰运气");
-  assert.doesNotMatch(source,
-    /if \(requirementBundle\) \{[\s\S]{0,180}localStorage\.removeItem/,
-    "ZIP 材料不能再触发整份草稿删除");
 });
 
 test("修复轮手刹只恢复当前草稿，不会从上一张任务偷偷带入", () => {

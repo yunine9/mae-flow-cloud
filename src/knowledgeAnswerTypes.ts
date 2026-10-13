@@ -33,6 +33,8 @@ export interface KnowledgeAnswerEvidence {
   location?: string;
   truncated?: boolean;
   url?: string;
+  /** 本轮实际返回给模型的原图，按摘要核对，不能由文字片段冒充。 */
+  image?: { path: string; digest: string; mime_type: string };
 }
 
 export interface KnowledgeAnswerResult {

@@ -446,3 +446,52 @@ test("答案工具参数流等待中取消仍立即返回并清理临时认证",
   await model.dispose();
   assert.equal(existsSync(dirname(configPath)), false);
 });
+
+test("研究工具收到实际模型，图片按视觉预算计入并原样进入下一轮", async () => {
+  const signal = new AbortController().signal, contexts: any[] = [], data = "A".repeat(300_000);
+  let calls = 0;
+  const selected = { id: "vision", api: "openai-completions", input: ["text", "image"], maxTokens: 4096, contextWindow: 128_000 } as any;
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "vision", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => selected,
+      streamSimple: (_model, context) => {
+        contexts.push(structuredClone(context));
+        return stream(calls++ === 0 ? response([{ type: "toolCall", id: "image-1", name: "image_source", arguments: {} }], "toolUse") : response([{ type: "text", text: "已看到图" }]));
+      } }),
+  });
+  try {
+    const tool = { name: "image_source", label: "读图", description: "原始图片", parameters: Type.Object({}),
+      execute: async (_id: string, _args: unknown, _signal: unknown, _update: unknown, ctx: any) => {
+        assert.equal(ctx.model, selected);
+        return { content: [{ type: "text" as const, text: "图片引用 e1" }, { type: "image" as const, data, mimeType: "image/png" }], details: {} };
+      } };
+    const result = await model.run(request(signal, { stage: "researching", tools: [tool], maxRounds: 2, maxToolCalls: 1, maxContextChars: 20_000 }));
+    assert.equal(result.complete, true);
+    assert.equal(contexts[1].messages.at(-1).content[1].data, data);
+    assert.equal(contexts[1].messages.at(-1).isError, false);
+    const answer = await model.run(request(signal, { user: "根据原图回答", images: [{ label: "e1 原图", data, mimeType: "image/png" }], maxContextChars: 20_000 }));
+    assert.equal(answer.complete, true);
+    assert.deepEqual(contexts[2].messages[0].content, [{ type: "text", text: "根据原图回答" }, { type: "text", text: "e1 原图" }, { type: "image", data, mimeType: "image/png" }]);
+    const over = await model.run(request(signal, { images: Array.from({ length: 6 }, () => ({ label: "原图", data, mimeType: "image/png" })), maxContextChars: 20_000 }));
+    assert.equal(over.reason, "context_limit");
+    assert.equal(contexts.length, 3, "图片也有总预算，不能靠短元数据无限加入");
+  } finally { await model.dispose(); }
+});
+
+test("纯文本模型不能接收回答图片，长工具文字仍受上下文预算限制", async () => {
+  const signal = new AbortController().signal, contexts: any[] = []; let calls = 0;
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "text", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => ({ id: "text", api: "openai-completions", input: ["text"], maxTokens: 4096, contextWindow: 128_000 } as any),
+      streamSimple: (_model, context) => {
+        contexts.push(structuredClone(context));
+        return stream(calls++ === 0 ? response([{ type: "toolCall", id: "large-1", name: "source", arguments: {} }], "toolUse") : response([{ type: "text", text: "仅有缺口" }]));
+      } }),
+  });
+  try {
+    await assert.rejects(model.run(request(signal, { images: [{ label: "原图", data: "AAAA", mimeType: "image/png" }] })), /不支持图片/);
+    const tool = { name: "source", label: "读取", description: "正文", parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text" as const, text: "原文".repeat(8000) }], details: {} }) };
+    assert.equal((await model.run(request(signal, { stage: "researching", tools: [tool], maxRounds: 2, maxToolCalls: 1, maxContextChars: 20_000 }))).complete, true);
+    assert.equal(contexts[1].messages.at(-1).isError, true);
+    assert.match(contexts[1].messages.at(-1).content[0].text, /超过上下文预算/);
+  } finally { await model.dispose(); }
+});

@@ -1484,7 +1484,7 @@ export function TaskWorkspace({
   // 全局 Story 的设计图入口沿用主任务的分析可见性。
   const hasRequirementGraph = requirementGraphVisible(task);
   const materialHeading = materialView === "source"
-    ? { kicker: "REQUEST SOURCE", title: "需求原文" }
+    ? { kicker: "REQUEST SOURCE", title: "当前需求" }
     : materialView === "chain"
     ? { kicker: "ARCHITECTURE", title: "架构图" }
     : materialView === "diff"
@@ -2037,7 +2037,7 @@ export function TaskWorkspace({
                     </TabsTrigger>
                   </> : <>
                     <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
-                      <span>需求原文</span>
+                      <span>当前需求</span>
                     </TabsTrigger>
                     <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
                       <span>产出文档</span><i>{documents.length}</i>
@@ -2133,7 +2133,7 @@ export function TaskWorkspace({
                 placeholder={materialView === "diff"
                   ? "搜索当前代码变更"
                   : materialView === "source"
-                    ? "搜索当前需求原文"
+                    ? "搜索当前需求"
                     : `搜索 ${activeMeta?.label ?? "当前文档"}`}
                 onChange={(event) => setMaterialSearchQuery(event.target.value)}
                 onKeyDown={(event) => {
@@ -2222,6 +2222,23 @@ export function TaskWorkspace({
             )}
             {locationNotice && locationExcerpt && !moduleLocation && !moduleLocationRetry && <AnnotationExcerpt item={locationExcerpt} onOpen={() => { setLocationNotice(""); setLocationExcerpt(undefined); }} />}
             {materialView === "source" ? (
+              <>
+              {!!task.requirement_document?.sources?.length && <section aria-label="需求原始文件" className="mb-4 rounded-lg border border-line bg-surface-2 p-3 text-sm">
+                <strong>{task.requirement_document.sources.length} 份原始文件</strong>
+                <p className="mt-1 text-xs text-muted-foreground">全部资料共同构成下方当前需求；批注修改保留在当前需求中，原文件可下载核对。</p>
+                <ul className="mt-2 grid gap-1.5">
+                  {task.requirement_document.sources.map(source => <li key={source.id} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 break-all">{source.name}{source.document_count && source.document_count > 1 ? ` · ${source.document_count} 份文档` : ""}</span>
+                    <a className="shrink-0 text-primary underline" download={source.name}
+                      href={`/tasks/${encodeURIComponent(task.id)}/requirement-sources?path=${encodeURIComponent(source.path)}`}
+                      aria-label={`下载原文件 ${source.name}`}>下载原文件</a>
+                  </li>)}
+                </ul>
+                {!!task.requirement_document.warnings?.length && <details className="mt-2 text-amber-700">
+                  <summary>解析提醒（{task.requirement_document.warnings.length}）</summary>
+                  <ul>{task.requirement_document.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+                </details>}
+              </section>}
               <Annotatable
                 taskId={task.id}
                 artifact={TASK_REQUIREMENT_ARTIFACT}
@@ -2299,6 +2316,7 @@ export function TaskWorkspace({
                   )}
                 </article>
               </Annotatable>
+              </>
             ) : materialView === "chain" ? (
               // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
               <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine}

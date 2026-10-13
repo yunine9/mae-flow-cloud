@@ -7,7 +7,7 @@ export class KnowledgeAnswerCompositionError extends KnowledgeAnswerError {}
 interface CompositionPoint {
   kind: "answer" | "recommendation";
   body: string;
-  basis: Array<{ evidence_id: string; quote: string; start_line?: number; end_line?: number }>;
+  basis: Array<{ evidence_id: string; quote?: string; image?: boolean; start_line?: number; end_line?: number }>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -136,6 +136,11 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
       if (!record(item) || !source || !/^[A-Za-z0-9_-]+$/.test(source.id) || typeof source.content !== "string") {
         throw new KnowledgeAnswerCompositionError("来源原句的字段、长度或来源编号不正确");
       }
+      if (source.image) {
+        if (!keys(item, "evidence_id")) throw new KnowledgeAnswerCompositionError("图片依据只引用图片编号，不能伪造原文行号或引文");
+        allowed.add(source.id);
+        return { evidence_id: source.id, image: true };
+      }
       if (keys(item, "end_line,evidence_id,start_line")) {
         const quote = rangeQuote(source, item.start_line, item.end_line);
         allowed.add(source.id);
@@ -158,16 +163,17 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
   const render = (inlineQuotes: boolean) => points.map(point => {
     const quotes = point.basis.map(basis => {
       const source = sources.get(basis.evidence_id)!;
+      if (basis.image) return `[图片：${escapeMarkdown(source.title.replace(/\s+/g, " ").trim() || source.id)}](#evidence-${source.id})`;
       if (!inlineQuotes) {
         const location = basis.start_line === undefined ? "" : `，第 ${basis.start_line}–${basis.end_line} 行`;
         return `[原文 ${source.id}${location}](#evidence-${source.id})`;
       }
       const label = escapeMarkdown(source.title.replace(/\s+/g, " ").trim() || "来源");
-      const quotation = basis.quote.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${escapeMarkdown(line)}`).join("\n");
+      const quotation = basis.quote!.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${escapeMarkdown(line)}`).join("\n");
       return `${quotation}\n\n[${label}](#evidence-${source.id})`;
     }).join("\n\n");
     const body = point.kind === "recommendation" ? `**建议做法：**\n\n${point.body}` : point.body;
-    return `${body}\n\n**${inlineQuotes ? "来源原句：" : "来源原文（点击查看）："}**\n\n${quotes}`;
+    return `${body}\n\n**${point.basis.some(item => item.image) ? "来源依据（点击查看）：" : inlineQuotes ? "来源原句：" : "来源原文（点击查看）："}**\n\n${quotes}`;
   });
   const resultFor = (rendered: string[]): KnowledgeAnswerResult => {
     const markdown = rendered.join("\n\n") || "本次查阅的资料不足以确认这些问题，具体缺口见未确认项。";

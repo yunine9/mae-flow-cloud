@@ -9,7 +9,7 @@ import {
   getLaunchOptions,
   listCollaborationAssignees,
   listWorkflowAssets,
-  previewRequirementBundle,
+  previewRequirementMaterials,
   probeRepositories,
   type AuthUser,
   type CollaborationAssignee,
@@ -17,7 +17,7 @@ import {
   type LaunchKnowledgePreview,
   type LaunchOptions,
   type RepositoryProbeResult,
-  type RequirementBundlePreview,
+  type RequirementMaterialsPreview,
   type TaskSummary,
   type WorkflowAssetSummary,
 } from "./api";
@@ -37,6 +37,7 @@ import {
   type WorkflowSchemeSelection,
 } from "./workflows";
 import { Markdown } from "./markdown";
+import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
 import { Empty, EmptyDescription } from "@/components/Empty";
 import { Alert, AlertTitle } from "@/components/Alert";
 import { Badge } from "@/components/ui/badge";
@@ -51,17 +52,13 @@ import type { ComponentProps, ReactNode } from "react";
 // 问题单入口已迁往「问题处理」页(/issues,见 web/src/issues/):
 // 问题流是"先研究后补单"的动态对话,与需求的固定交付流水线分属
 // 两个范式,不再共用发起表单。这里只保留需求入口。
-const MAX_MARKDOWN_BYTES = 512 * 1024;
-const INLINE_MARKDOWN_BYTES = 32 * 1024;
-const MAX_REQUIREMENT_BUNDLE_BYTES = 30 * 1024 * 1024;
 const LAUNCH_DRAFT_VERSION = 1;
 type LaunchDraft = {
   version: 1;
   updatedAt: string;
   title: string;
   requirement: string;
-  requirementDocumentName: string;
-  requirementBundleName?: string;
+  requirementMaterials?: MaterialSummary[];
   repos: string[];
   repositoryTickets?: string[];
   collaborators?: string[];
@@ -82,26 +79,6 @@ type LaunchPreferences = {
   baseline?: string;
   lane?: string;
 };
-
-type RequirementBundleDraft = {
-  name: string;
-  contentBase64: string;
-  preview: RequirementBundlePreview;
-};
-
-function fileBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`读取 ${file.name || "文件"} 失败`));
-    reader.onload = () => {
-      const value = String(reader.result ?? "");
-      const comma = value.indexOf(",");
-      if (comma < 0) reject(new Error("文件编码失败"));
-      else resolve(value.slice(comma + 1));
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 function storageKey(kind: "draft" | "preferences", account: string): string {
   return `mae-flow:launch:${kind}:${account}`;
@@ -153,7 +130,6 @@ const KNOWLEDGE_FORM_LABEL = {
  * 简写取 tokens,不再按家族复制配方。 */
 const SECTION = "min-w-0 rounded-lg border border-line px-[18px] pt-[17px] pb-[18px] bg-[color-mix(in_srgb,var(--surface-soft)_72%,var(--surface))]";
 const FIELD_LABEL = "mb-[7px] block text-sm font-bold text-muted-foreground";
-const FIELD_NOTE = "text-sm leading-normal text-faint";
 
 /** 区块头(原 .launch-section-head):编号盒 + 标题/注记 + 右置"必填"药丸。 */
 function SectionHead({ step, title, note, mark, className }: {
@@ -318,18 +294,39 @@ export function LaunchWorkspace({
     ? restoredDraft : undefined;
   const [requirement, setRequirement] = useState(
     validDraft?.requirement ?? "");
-  const [requirementDocumentName, setRequirementDocumentName] = useState(
-    validDraft?.requirementDocumentName ?? "");
-  const [documentError, setDocumentError] = useState(
-    validDraft?.requirementBundleName
-      ? `上次使用了 ${validDraft.requirementBundleName}；文字草稿已恢复，图片材料请重新上传 ZIP。`
-      : "");
-  const [requirementBundleDraftName, setRequirementBundleDraftName] = useState(
-    validDraft?.requirementBundleName ?? "");
-  const [requirementBundle, setRequirementBundle] =
-    useState<RequirementBundleDraft>();
+  const [requirementMaterials, setRequirementMaterials] = useState<MaterialSummary[]>(
+    validDraft?.requirementMaterials ?? []);
+  const [materialPreview, setMaterialPreview] = useState<{
+    key: string; preview?: RequirementMaterialsPreview; error?: string;
+  }>();
+  const [materialPreviewRetry, setMaterialPreviewRetry] = useState(0);
   const [documentLoading, setDocumentLoading] = useState(false);
-  const [draggingDocument, setDraggingDocument] = useState(false);
+  const materialPreviewKey = JSON.stringify([requirement,
+    requirementMaterials.map(material => [material.id, material.state])]);
+  const materialPreviewBlocked = requirementMaterials.length > 0 && (
+    requirementMaterials.some(material => material.state !== "ready")
+    || materialPreview?.key !== materialPreviewKey || !materialPreview.preview);
+  useEffect(() => {
+    if (!requirementMaterials.length || requirementMaterials.some(material => material.state !== "ready")) return;
+    const controller = new AbortController();
+    const key = materialPreviewKey;
+    const timer = window.setTimeout(() => {
+      void previewRequirementMaterials(requirementMaterials.map(material => material.id), requirement, controller.signal)
+        .then(preview => {
+          if (controller.signal.aborted) return;
+          const ids = new Set(preview.sources.map(source => source.id));
+          if (ids.size !== requirementMaterials.length
+              || requirementMaterials.some(material => !ids.has(material.id))) {
+            throw new Error("预览未包含全部已上传资料，请重试或重新上传缺失资料。");
+          }
+          setMaterialPreview({ key, preview });
+        }).catch(cause => {
+          if (!controller.signal.aborted) setMaterialPreview({ key,
+            error: cause instanceof Error ? cause.message : "需求资料预览失败" });
+        });
+    }, 200);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [materialPreviewKey, materialPreviewRetry]);
   const [businessModuleId, setBusinessModuleId] = useState(validDraft?.businessModuleId ?? "");
   const [moduleRefreshError, setModuleRefreshError] = useState("");
   const [title, setTitle] = useState(validDraft?.title ?? "");
@@ -514,7 +511,7 @@ export function LaunchWorkspace({
   const previewSettled = knowledgePreviewKey === expectedKnowledgePreviewKey;
   const knowledgeBlocked = knowledgePreviewLoading || !previewSettled
     || !!knowledgePreviewError || !knowledgePreview?.complete;
-  const blocked = optionsLoading || documentLoading
+  const blocked = optionsLoading || documentLoading || materialPreviewBlocked
     || blockers.length > 0 || !!optionsError
     || knowledgeBlocked || repositoryProbeBlocked || repositoryTicketBlocked
     || repositoryTechnologyBlocked || collaboratorBlocked;
@@ -695,9 +692,7 @@ export function LaunchWorkspace({
     updatedAt: new Date().toISOString(),
     title,
     requirement,
-    requirementDocumentName,
-    requirementBundleName: requirementBundle?.name
-      || requirementBundleDraftName || undefined,
+    requirementMaterials,
     repos,
     repositoryTickets,
     collaborators,
@@ -730,12 +725,11 @@ export function LaunchWorkspace({
   useEffect(() => {
     const timer = window.setTimeout(persistDraft, 300);
     return () => window.clearTimeout(timer);
-  }, [title, requirement, requirementDocumentName, repos, repositoryTickets,
+  }, [title, requirement, requirementMaterials, repos, repositoryTickets,
     collaborators, ticket,
     baseline, productVersion, lane, repairRounds, taskInstructions,
     selectedBusinessModuleIds, businessModuleId, moduleSelectionTouched,
-    workflowSelection, repositoryTechnologies, requirementBundle,
-    requirementBundleDraftName,
+    workflowSelection, repositoryTechnologies,
     session.username]);
 
   useEffect(() => {
@@ -789,7 +783,7 @@ export function LaunchWorkspace({
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !submitting) {
+      if (event.key === "Escape" && !submitting && !documentLoading) {
         persistDraft();
         onClose();
       }
@@ -799,7 +793,7 @@ export function LaunchWorkspace({
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [onClose, submitting]);
+  }, [onClose, submitting, documentLoading]);
 
   function changeRepository(index: number, value: string) {
     setRepos((current) => current.map(
@@ -827,69 +821,9 @@ export function LaunchWorkspace({
     setBaseline(value);
   }
 
-  async function loadMarkdown(file: File | undefined) {
-    if (!file) return;
-    setDocumentError("");
-    if (!file.name.toLowerCase().endsWith(".md")) {
-      setDocumentError("仅支持 .md 格式的 Markdown 文档");
-      return;
-    }
-    if (file.size > MAX_MARKDOWN_BYTES) {
-      setDocumentError("文档不能超过 512 KiB；请拆成主设计文档与仓内参考资料");
-      return;
-    }
-    try {
-      const content = await file.text();
-      if (!content.trim()) {
-        setDocumentError("这个 Markdown 文件没有可用正文");
-        return;
-      }
-      if (content.includes("\0")) {
-        setDocumentError("文件包含二进制内容，请上传 UTF-8 编码的 Markdown 文档");
-        return;
-      }
-      setRequirement(content);
-      setRequirementDocumentName(file.name);
-      setRequirementBundle(undefined);
-      setRequirementBundleDraftName("");
-    } catch {
-      setDocumentError("文件读取失败，请确认文件可访问后重试");
-    }
-  }
-
-  async function loadRequirementBundle(file: File): Promise<void> {
-    setDocumentError("");
-    if (file.size > MAX_REQUIREMENT_BUNDLE_BYTES) {
-      setDocumentError("需求材料包不能超过 30 MB");
-      return;
-    }
-    setDocumentLoading(true);
-    try {
-      const contentBase64 = await fileBase64(file);
-      const preview = await previewRequirementBundle(file.name, contentBase64);
-      setRequirement(preview.requirement);
-      setRequirementDocumentName(preview.document_name);
-      setRequirementBundle({ name: file.name, contentBase64, preview });
-      setRequirementBundleDraftName(file.name);
-    } catch (cause) {
-      setDocumentError(cause instanceof Error ? cause.message : "材料包解析失败");
-    } finally {
-      setDocumentLoading(false);
-    }
-  }
-
-  function loadRequirementFile(file: File | undefined): void {
-    if (!file) return;
-    if (file.name.toLowerCase().endsWith(".zip")) {
-      void loadRequirementBundle(file);
-    } else {
-      void loadMarkdown(file);
-    }
-  }
-
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!title.trim() || !requirement.trim() || submitting || blocked) return;
+    if (!title.trim() || (!requirement.trim() && !requirementMaterials.length) || submitting || blocked) return;
     if (!businessModules.some(module => module.id === businessModuleId)) {
       setError("请选择所属业务模块；暂无模块时，请先到配置中心创建");
       return;
@@ -939,13 +873,8 @@ export function LaunchWorkspace({
               && repositoryTechnologies.every((item) =>
                 item.confirmed && item.technologies.length > 0)
             ? asRepositoryProfiles(repositoryTechnologies) : undefined,
-          requirementDocumentName: requirementDocumentName || undefined,
-          requirementBundle: requirementBundle
-            ? {
-                name: requirementBundle.name,
-                contentBase64: requirementBundle.contentBase64,
-              }
-            : undefined,
+          requirementMaterialIds: requirementMaterials.length
+            ? requirementMaterials.map(material => material.id) : undefined,
         },
       );
       const usedRepos = repos.map((item) => item.trim()).filter(Boolean);
@@ -992,7 +921,7 @@ export function LaunchWorkspace({
         <Button type="button" variant="outline" size="sm" onClick={() => {
           persistDraft();
           onClose();
-        }} disabled={submitting} aria-label="取消创建任务">
+        }} disabled={submitting || documentLoading} aria-label="取消创建任务">
           <svg viewBox="0 0 20 20" aria-hidden><path d="m6 6 8 8M14 6l-8 8" /></svg>
           <span>取消</span>
         </Button>
@@ -1018,18 +947,16 @@ export function LaunchWorkspace({
               <small className="inline-flex items-center gap-1.5 text-sm text-muted-foreground max-[760px]:hidden">
                 <i aria-hidden className="size-1.5 rounded-full bg-primary" /> 必填项始终可见</small>
             </div>
-            {(title.trim() || requirement.trim() || repos.some((repo) => repo.trim()))
+            {(title.trim() || requirement.trim() || requirementMaterials.length > 0 || repos.some((repo) => repo.trim()))
               && draftSavedAt && <div className="-mt-1 mb-3.5 flex items-center justify-between gap-3 rounded-lg border border-line bg-surface-2 px-[11px] py-[9px] text-sm text-muted-foreground" role="status">
                 <span>草稿已自动保存 · {new Date(draftSavedAt).toLocaleTimeString([], {
                   hour: "2-digit", minute: "2-digit",
                 })}</span>
-                <Button type="button" variant="ghost" size="sm" className="text-primary" onClick={() => {
+                <Button type="button" variant="ghost" size="sm" className="text-primary" disabled={submitting || documentLoading} onClick={() => {
                   setTitle("");
                   setRequirement("");
-                  setRequirementDocumentName("");
-                  setRequirementBundle(undefined);
-                  setRequirementBundleDraftName("");
-                  setDocumentError("");
+                  setRequirementMaterials([]);
+                  setMaterialPreview(undefined);
                   setRepos([""]);
                   setRepositoryTickets([""]);
                   setCollaborators([]);
@@ -1085,91 +1012,42 @@ export function LaunchWorkspace({
                     placeholder="例如：修复通知模板变量缺失"
                     autoFocus required />
                 </label>
-                <div
-                  className={cn("rounded-xl border border-transparent pt-1 transition-[border-color,background,box-shadow] max-[480px]:p-2",
-                    draggingDocument
-                      ? "border-primary bg-(--accent-soft) ring-3 ring-[color-mix(in_srgb,var(--accent)_10%,transparent)]"
-                      : undefined)}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "copy";
-                    setDraggingDocument(true);
-                  }}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-                      setDraggingDocument(false);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setDraggingDocument(false);
-                    loadRequirementFile(event.dataTransfer.files[0]);
-                  }}>
-                  <div className="mb-2 flex items-center justify-between gap-3 max-[480px]:flex-col max-[480px]:items-start">
-                    {requirementBundle
-                      ? <span className="text-sm font-bold text-muted-foreground">需求文档</span>
-                      : <label htmlFor="launch-requirement" className="text-sm font-bold text-muted-foreground">需求文档</label>}
-                    <label className="relative inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[color-mix(in_srgb,var(--accent)_28%,var(--line))] bg-surface px-[9px] py-1.5 text-sm font-bold text-primary transition-colors hover:border-primary hover:bg-(--accent-soft) max-[480px]:w-full max-[480px]:justify-center">
-                      <input type="file" accept=".md,.zip,text/markdown,application/zip"
-                        className="pointer-events-none absolute size-px opacity-0"
-                        onChange={(event) => {
-                          loadRequirementFile(event.target.files?.[0]);
-                          event.target.value = "";
-                        }} />
-                      <svg viewBox="0 0 20 20" aria-hidden className="size-3.5 fill-none stroke-current stroke-[1.6] [stroke-linecap:round] [stroke-linejoin:round]"><path d="M10 13V4m0 0L6.5 7.5M10 4l3.5 3.5M4 12.5v2.25A1.25 1.25 0 0 0 5.25 16h9.5A1.25 1.25 0 0 0 16 14.75V12.5" /></svg>
-                      选择 .md / .zip
-                    </label>
-                  </div>
-                  {!requirementBundle && <Textarea
-                    id="launch-requirement"
-                    className="min-h-65 resize-y"
-                    value={requirement}
-                    onChange={(event) => {
-                      setRequirement(event.target.value);
-                      setDocumentError("");
-                      setRequirementBundleDraftName("");
-                      if (!event.target.value) setRequirementDocumentName("");
-                    }}
-                    placeholder="粘贴完整需求说明、背景、范围和验收标准；支持 Markdown"
-                    rows={12}
-                    required
-                  />}
-                  {requirementDocumentName && <div className="mt-2 grid grid-cols-[auto_minmax(0,auto)_minmax(0,1fr)_auto] items-center gap-2 rounded-lg bg-[color-mix(in_srgb,var(--success-soft)_72%,var(--surface))] px-2.5 py-2 text-muted-foreground max-[480px]:grid-cols-[auto_minmax(0,1fr)_auto]">
-                    <span aria-hidden className="rounded-md border border-[color-mix(in_srgb,var(--success)_28%,transparent)] px-[5px] py-[3px] font-mono text-xs font-extrabold text-success">{requirementBundle ? "ZIP" : "MD"}</span>
-                    <strong title={requirementBundle?.name ?? requirementDocumentName} className="overflow-hidden text-ellipsis whitespace-nowrap text-sm text-text-strong">
-                      {requirementBundle?.name ?? requirementDocumentName}
-                    </strong>
-                    <small className="overflow-hidden text-ellipsis whitespace-nowrap text-sm max-[480px]:col-[2/-1] max-[480px]:row-start-2 max-[480px]:whitespace-normal">{requirementBundle
-                      ? `${requirementBundle.preview.assets.length} 张图片 · 已通过材料包校验`
-                      : new Blob([requirement]).size > INLINE_MARKDOWN_BYTES
-                      ? "长文档 · 原文完整保留，Agent 按章节分段读取"
-                      : "已载入 · 正文会完整交给 Agent"}</small>
-                    <Button type="button" variant="destructive" size="xs" onClick={() => {
-                      setRequirement(""); setRequirementDocumentName("");
-                      setRequirementBundle(undefined);
-                      setRequirementBundleDraftName("");
-                      setDocumentError("");
-                    }}>移除</Button>
+                <div className="space-y-3 pt-1">
+                  <label className="grid gap-2 text-sm font-bold text-muted-foreground" htmlFor="launch-requirement">
+                    {requirementMaterials.length ? "补充说明（可选）" : "需求说明"}
+                    <Textarea id="launch-requirement" className="min-h-40 resize-y font-normal"
+                      value={requirement} onChange={event => setRequirement(event.target.value)}
+                      placeholder="可直接填写需求，也可上传多份文档；这里填写的说明会与所有文档一起保留"
+                      rows={6} required={!requirementMaterials.length} disabled={submitting} />
+                  </label>
+                  <KnowledgeMaterialUpload purpose="requirement" materials={requirementMaterials}
+                    onChange={setRequirementMaterials} onBusy={setDocumentLoading} disabled={submitting} />
+                  {requirementMaterials.length > 0 && <div aria-label="完整需求预览" className="rounded-lg border border-line bg-surface p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3 border-b border-line pb-2 text-sm">
+                      <strong>完整需求预览</strong><span className="text-muted-foreground">补充说明与全部资料共同构成需求</span>
+                    </div>
+                    {materialPreview?.key === materialPreviewKey && materialPreview.error
+                      ? <div role="alert" className="flex items-center gap-3 text-sm text-danger">
+                          <span>{materialPreview.error}</span><Button type="button" size="xs" variant="outline"
+                            onClick={() => { setMaterialPreview(undefined); setMaterialPreviewRetry(value => value + 1); }}>重试预览</Button>
+                        </div>
+                      : materialPreviewBlocked
+                        ? <p role="status" className="text-sm text-muted-foreground">{requirementMaterials.some(material => material.state !== "ready")
+                            ? "请先处理解析失败的资料，完整预览将包含所有已上传文件。" : "正在合并全部资料并生成预览…"}</p>
+                        : materialPreview?.preview && <>
+                            {!!materialPreview.preview.warnings.length && <details className="mb-3 text-sm text-amber-700">
+                              <summary>有 {materialPreview.preview.warnings.length} 条解析提醒</summary>
+                              <ul>{materialPreview.preview.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+                            </details>}
+                            <div className="max-h-[520px] overflow-auto">
+                              <Markdown showLineNumbers text={materialPreview.preview.requirement}
+                                resolveImage={path => {
+                                  const asset = materialPreview.preview?.assets.find(item => item.path === path);
+                                  return asset ? `data:${asset.mime_type};base64,${asset.content_base64}` : undefined;
+                                }} />
+                            </div>
+                          </>}
                   </div>}
-                  {requirementBundle && <div className="mt-2.5 max-h-[520px] overflow-auto rounded-lg border border-line bg-surface p-3">
-                    <div className="mb-[9px] flex items-baseline justify-between gap-2.5 border-b border-line pb-2"><strong className="text-[13px] text-text-strong">材料包预览</strong><small className="text-sm text-faint">图片能正常显示后再发起任务</small></div>
-                    <Markdown showLineNumbers text={requirementBundle.preview.requirement}
-                      resolveImage={(path) => {
-                        const asset = requirementBundle.preview.assets.find(
-                          (item) => item.path === path);
-                        return asset
-                          ? `data:${asset.mime_type};base64,${asset.content_base64}`
-                          : undefined;
-                      }} />
-                  </div>}
-                  {documentError && <div className="mt-2 text-sm text-danger" role="alert">{documentError}</div>}
-                  <small className={FIELD_NOTE}>{documentLoading
-                    ? "正在校验并生成预览…"
-                    : requirementBundle
-                      ? `当前采用 ${requirementBundle.preview.document_name}；需要修改请重新打包上传`
-                    : requirement
-                    ? `${requirement.split(/\r?\n/).length} 行 · ${requirement.length} 字符，原文将完整保留`
-                    : "可直接粘贴或导入 .md；图文需求可导入 ZIP 材料包"}</small>
                 </div>
               </section>
 
@@ -1686,7 +1564,9 @@ export function LaunchWorkspace({
                   (bottom 负值吃掉 main 的下内边距)。 */}
               <footer className="sticky bottom-[-28px] z-[4] col-span-full flex min-h-[62px] items-center justify-between gap-4 border-t border-line bg-[color-mix(in_srgb,var(--surface)_96%,transparent)] px-0.5 pt-3 max-[760px]:flex-col max-[760px]:items-stretch">
                 <div className="grid gap-[3px]"><strong className="text-sm text-text-strong">{blocked
-                  ? collaboratorBlocked
+                  ? documentLoading || materialPreviewBlocked
+                    ? "需求资料尚未准备完整"
+                  : collaboratorBlocked
                     ? "参与人尚未就绪"
                   : repositoryTicketBlocked
                     ? "请补齐逐仓 AR 单号"
@@ -1702,7 +1582,9 @@ export function LaunchWorkspace({
                       ? "知识清单尚未核对完整"
                       : "暂时不能发起"
                   : "信息确认后即可启动"}</strong><small>{blocked
-                  ? collaboratorBlocked
+                  ? documentLoading || materialPreviewBlocked
+                    ? "请查看需求资料中的上传、解析或预览结果后重试"
+                  : collaboratorBlocked
                     ? "请移除个人设置未就绪的参与人，再发起主任务"
                   : repositoryTicketBlocked
                     ? "每个已填写的代码仓都需要自己的 AR 单号，且单号不能含空格"
@@ -1724,6 +1606,8 @@ export function LaunchWorkspace({
                     ? "正在发起"
                     : optionsLoading
                       ? "读取配置中"
+                    : documentLoading || materialPreviewBlocked
+                      ? "需求资料未就绪"
                     : collaboratorBlocked
                       ? "参与人未就绪"
                     : repositoryTicketBlocked

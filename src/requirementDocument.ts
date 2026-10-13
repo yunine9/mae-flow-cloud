@@ -14,9 +14,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { RequirementAssetMeta } from "./requirementBundle.ts";
+import type { RequirementSourceMeta } from "./requirementMaterials.ts";
 import { reanchor, TASK_REQUIREMENT_ARTIFACT } from "./annotations.ts";
 
-export const MAX_REQUIREMENT_DOCUMENT_BYTES = 512 * 1024;
+export const MAX_REQUIREMENT_DOCUMENT_BYTES = 8 * 1024 * 1024;
 export const INLINE_REQUIREMENT_DOCUMENT_BYTES = 32 * 1024;
 export const STORED_REQUIREMENT_DOCUMENT = "requirement-input.md";
 export const AGENT_REQUIREMENT_DOCUMENT = ".mae-flow-requirement.md";
@@ -30,6 +31,8 @@ export interface RequirementDocumentMeta {
   context_mode: "inline" | "file";
   bundle_name?: string;
   assets?: RequirementAssetMeta[];
+  sources?: RequirementSourceMeta[];
+  warnings?: string[];
 }
 
 function normalizedName(name: string | undefined): string | undefined {
@@ -50,7 +53,7 @@ export function requirementDocumentMeta(
   const bytes = Buffer.byteLength(content, "utf-8");
   if (bytes > maxBytes) {
     throw new Error(`设计文档不能超过 ${Math.floor(maxBytes / 1024)} KiB；`
-      + "请拆成主设计文档与仓内参考资料");
+      + "请减少重复内容或拆分为独立需求，不会截断正文");
   }
   const name = normalizedName(uploadedName);
   if (!name && bytes <= INLINE_REQUIREMENT_DOCUMENT_BYTES) return undefined;
@@ -148,18 +151,23 @@ export function requirementContext(
   meta: RequirementDocumentMeta | undefined,
   readablePath?: string,
 ): string {
+  const sourceInstruction = meta?.sources?.length
+    ? `本需求由 ${meta.sources.length} 份上传资料共同构成，没有主文档。当前需求正文已完整收录各份资料的解析文字，并可能包含人工批注确认后的修改。请逐份核对来源章节、约束和验收标准，不得只读第一份或目录；原件仅供核对，不得用原件覆盖当前需求中的修改。\n`
+      + meta.sources.map((source, index) => `${index + 1}. ${source.name}（原件：${source.path}）`).join("\n")
+    : "";
   const imageInstruction = meta?.assets?.length
     ? `需求文档包含 ${meta.assets.length} 张必须核对的图片。图片已在工作区按 Markdown 相对路径落盘；请使用 InspectImage 逐张读取（单次最多 4 张时分批），不得只根据文件名猜测。`
     : "";
   if (meta?.context_mode !== "file") {
-    return [content, imageInstruction].filter(Boolean).join("\n\n");
+    return [sourceInstruction, content, imageInstruction].filter(Boolean).join("\n\n");
   }
   const outline = headings(content);
   const preview = content.slice(0, 2_400).trimEnd();
   return [
-    `用户提供了一份较长的 Markdown 设计文档（${meta.name}，`
-      + `${meta.bytes} 字节），完整原文保存在 ${readablePath
+    `当前需求文档较长（${meta.name}，`
+      + `${meta.bytes} 字节），完整正文保存在 ${readablePath
         ?? AGENT_REQUIREMENT_DOCUMENT}。`,
+    sourceInstruction,
     "这份文件是需求原文，不是可选参考。先读取标题结构，再用 Read 的"
       + " offset/limit 按章节分段阅读；不要一次回显全文，也不要只看开头。"
       + "背景、范围、约束和验收标准都必须核对，后续需要时可再次读取原文。",

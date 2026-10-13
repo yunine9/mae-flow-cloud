@@ -287,3 +287,31 @@ test("原始资料只能读取用户显式编号，按章节位置分段，未�
     assert.equal((await run(unrelated, "knowledge_material", {})).data.materials.length, 0);
   } finally { f.cleanup(); }
 });
+
+test("原始图片实际返回后生成可回查证据，拒绝非视觉模型、越界路径与被改动字节", async () => {
+  const f = fixture();
+  try {
+    const id = "material-33333333-3333-3333-3333-333333333333";
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1kAAAAASUVORK5CYII=", "base64");
+    const digest = createHash("sha256").update(png).digest("hex"), folder = join(f.dir, "knowledge-materials", id);
+    mkdirSync(join(folder, "images"), { recursive: true }); writeFileSync(join(folder, "images", digest), png);
+    writeFileSync(join(folder, "material.json"), JSON.stringify({ id, name: "设计.docx", scope: "订单", version: "v1", bytes: png.length,
+      digest: "a".repeat(64), state: "ready", sections: [{ location: "转换文本", source_path: "设计.docx", text: "图示规则" }],
+      images: [{ id: digest, path: "images/figure.png", mimeType: "image/png", bytes: png.length }] }));
+    const q = execution({ material_ids: [id] }), sources = createKnowledgeAnswerSources(q.input, { dataDir: f.dir, search: new KnowledgeSearch(f.dir) });
+    const tool = sources.tools.find(tool => tool.name === "knowledge_material")!;
+    const call = (path: string, input = ["text", "image"]) => tool.execute("image", { id, image_path: path }, undefined, undefined, { model: { input } } as any) as Promise<any>;
+    assert.equal((await call("images/figure.png", ["text"])).isError, true); assert.equal(q.record.evidence.length, 0);
+    assert.equal((await call("../source.docx")).isError, true); assert.equal(q.record.evidence.length, 0);
+    const result = await call("images/figure.png");
+    assert.equal(result.isError, undefined); assert.deepEqual(result.content[1], { type: "image", data: png.toString("base64"), mimeType: "image/png" });
+    assert.equal(q.record.evidence.length, 1);
+    assert.deepEqual(q.record.evidence[0].image, { path: "images/figure.png", digest, mime_type: "image/png" });
+    assert.match(q.record.evidence[0].content, /未执行 OCR.*不包含图中文字/);
+    assert.match(q.record.evidence[0].location!, /原文件 SHA256=.*图片 SHA256=/);
+    const listing = await run(sources, "knowledge_material", {});
+    assert.deepEqual(listing.data.materials[0].images_not_read, []);
+    writeFileSync(join(folder, "images", digest), Buffer.alloc(png.length));
+    assert.equal((await call("images/figure.png")).isError, true); assert.equal(q.record.evidence.length, 1);
+  } finally { f.cleanup(); }
+});

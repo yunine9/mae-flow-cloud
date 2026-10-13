@@ -7,7 +7,7 @@ import { listBusinessModules } from "./businessModuleLibrary.ts";
 import { componentRepositories, type ComponentRepository } from "./componentRepositories.ts";
 import { componentCards, componentUsageDocument } from "./componentKnowledgeCards.ts";
 import { codeSearchTool, ecBinary, languageComponentSourceTool } from "./componentResearchTools.ts";
-import { readKnowledgeMaterial, type KnowledgeMaterial } from "./knowledgeMaterials.ts";
+import { readKnowledgeMaterial, readKnowledgeMaterialImage, type KnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { wxdoubaoTool, wxdoubaoConfig } from "./wxdoubao.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { KnowledgeProcessError, runKnowledgeCommand } from "./knowledgeProcess.ts";
@@ -50,12 +50,12 @@ const pageEnd = (text: string, start: number, size = PAGE) => {
   if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1]) && /[\uDC00-\uDFFF]/.test(text[end])) end--;
   return end;
 };
-function materialEvidenceScope(material: KnowledgeMaterial): string {
+function materialEvidenceScope(material: KnowledgeMaterial, readImages = new Set<string>()): string {
   const scope = String(material.scope || "资料范围未说明").slice(0, 500);
   const warnings = (Array.isArray(material.warnings) ? material.warnings : []).map(String);
   const shown = warnings.slice(0, 4).map((warning, index) => `解析警告 ${index + 1}：${warning.length > 300 ? warning.slice(0, 300) + "…（警告正文已省略）" : warning}`);
   const omitted = warnings.length > shown.length ? `；另有 ${warnings.length - shown.length} 条解析警告未展开，完整记录保存在该资料元数据中` : "";
-  const images = Array.isArray(material.images) ? material.images.length : 0;
+  const images = Array.isArray(material.images) ? material.images.filter(image => !readImages.has(image.path)).length : 0;
   return `${scope}；依据为本页解析文本${images ? `；${images} 张图片尚未读取，不能推断图中条件` : ""}`
     + (shown.length ? `；${shown.join("；")}${omitted}` : "");
 }
@@ -326,6 +326,7 @@ export function createKnowledgeAnswerSources(input: KnowledgeAnswerExecution, op
   };
 
   const materialRoot = join(options.dataDir, "knowledge-materials"), materials = new Map<string, KnowledgeMaterial>();
+  const readMaterialImages = new Map<string, Set<string>>();
   for (const id of selected.material_ids ?? []) {
     try {
       const value = readKnowledgeMaterial(materialRoot, id);
@@ -337,23 +338,39 @@ export function createKnowledgeAnswerSources(input: KnowledgeAnswerExecution, op
   }
   const material = defineTool({
     name: "knowledge_material", label: "查阅明确提供的原始资料",
-    description: "仅访问本次提问明确提供的资料编号。省略 id 列章节；read 指定 id、section（从1开始）及offset，按next_offset续读。未填写业务版本为未知，上传时间不代表版本。图片未读不能推断图中内容。",
-    parameters: Type.Object({ id: Type.Optional(Type.String()), section: Type.Optional(Type.Integer({ minimum: 1 })), offset: Type.Optional(Type.Integer({ minimum: 0 })) }),
-    async execute(_id, args: any) {
+    description: "仅访问本次提问明确提供的资料编号。省略 id 列章节和图片；指定 id、section（从1开始）及offset，按next_offset续读。用 id + image_path 实际读取一张图片并取得引用编号；Markdown 相对链接按章节 source_path 所在目录解析。未填写业务版本为未知，上传时间不代表版本。图片未读不能推断图中内容。",
+    parameters: Type.Object({ id: Type.Optional(Type.String()), section: Type.Optional(Type.Integer({ minimum: 1 })), offset: Type.Optional(Type.Integer({ minimum: 0 })), image_path: Type.Optional(Type.String()) }),
+    async execute(_id, args: any, _signal, _onUpdate, ctx) {
       if (!args.id) return reply({ materials: [...materials.values()].map(m => ({ id: m.id, name: m.name, scope: m.scope, version: m.version || null,
-        state: m.state, warnings: m.warnings, sections: m.sections.map((s, i) => ({ section: i + 1, location: s.location, characters: s.text.length })),
-        images_not_read: m.images?.map(i => i.path) ?? [] })) });
+        state: m.state, warnings: m.warnings, sections: m.sections.map((s, i) => ({ section: i + 1, location: s.location, source_path: s.source_path, characters: s.text.length })),
+        images: m.images, images_not_read: m.images?.filter(i => !readMaterialImages.get(m.id)?.has(i.path)).map(i => i.path) ?? [] })) });
       const value = materials.get(args.id);
       if (!value) throw new Error("资料不在用户本次明确提供的范围，不能访问其他上传资料");
       if (value.state !== "ready") throw new Error("资料解析失败，不能据此回答；请补充可读资料");
+      if (args.image_path !== undefined) {
+        const asset = value.images?.find(image => image.path === args.image_path);
+        if (!asset || !/^[a-f0-9]{64}$/.test(asset.id)) throw new Error("图片不在本次明确提供的资料中");
+        if (ctx?.model && !ctx.model.input.includes("image")) throw new Error("当前问答模型不支持图片，尚未读取该图片；请使用支持图片的模型或补充文字说明，不能推断图中内容。");
+        const { content: bytes } = readKnowledgeMaterialImage(materialRoot, value.id, asset.path);
+        const imageDigest = asset.id;
+        const content = `已实际返回原始图片：${value.name} / ${asset.path}。图片 SHA256=${imageDigest}。未执行 OCR；此记录仅证明图片已返回，不包含图中文字。需要核对图中规则时，用 knowledge_material 的 id=${value.id}、image_path=${asset.path} 重新读取图片。`;
+        const evidence = save({ kind: "material", title: `${value.name} / ${asset.path}`, content, source_id: value.id, path: asset.path,
+          revision: value.version || undefined, scope: `${value.scope}；依据为本次实际返回的原始图片，未执行 OCR`,
+          location: `图片 ${asset.path}；原文件 SHA256=${value.digest}；图片 SHA256=${imageDigest}`,
+          image: { path: asset.path, digest: imageDigest, mime_type: asset.mimeType } });
+        if (!readMaterialImages.has(value.id)) readMaterialImages.set(value.id, new Set());
+        readMaterialImages.get(value.id)!.add(asset.path);
+        return { content: [{ type: "text" as const, text: JSON.stringify({ evidence_id: evidence.id, content, version: value.version || null, image_path: asset.path }) },
+          { type: "image" as const, data: bytes.toString("base64"), mimeType: asset.mimeType }], details: {} };
+      }
       const section = value.sections[(args.section ?? 1) - 1], start = args.offset ?? 0;
       if (!section || !Number.isSafeInteger(start) || start < 0 || start >= section.text.length) throw new Error("资料章节或 offset 无效");
       const end = pageEnd(section.text, start), content = section.text.slice(start, end);
       const evidence = save({ kind: "material", title: value.name, content, source_id: value.id, revision: value.version || undefined,
-        scope: materialEvidenceScope(value), location: `${section.location}，字符 ${start}–${end}；原文件 SHA256=${value.digest}`, truncated: end < section.text.length });
-      return reply({ evidence_id: evidence.id, content, version: value.version || null, location: section.location,
+        scope: materialEvidenceScope(value, readMaterialImages.get(value.id)), location: `${section.location}，字符 ${start}–${end}；原文件 SHA256=${value.digest}`, truncated: end < section.text.length });
+      return reply({ evidence_id: evidence.id, content, version: value.version || null, location: section.location, source_path: section.source_path,
         next_offset: end < section.text.length ? end : null, next_section: (args.section ?? 1) < value.sections.length ? (args.section ?? 1) + 1 : null,
-        note: "只读到该章节本页；资料上传时间不证明业务版本，图片内容尚未核验。" });
+        note: "只读到该章节本页；资料上传时间不证明业务版本。图中内容需通过 image_path 实际读取。" });
     },
   });
   const evidence = defineTool({

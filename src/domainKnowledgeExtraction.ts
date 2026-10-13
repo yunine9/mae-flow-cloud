@@ -703,7 +703,11 @@ export class DomainKnowledgeExtraction {
   private materialIds(ids: unknown): string[] {
     if (!Array.isArray(ids) || ids.length > 30 || ids.some(id => typeof id !== "string")) throw new Error("最多关联 30 份资料");
     const unique = [...new Set(ids)] as string[];
-    const bytes = unique.reduce((sum, id) => sum + readKnowledgeMaterial(join(this.dataDir, "knowledge-materials"), id).bytes, 0);
+    const bytes = unique.reduce((sum, id) => {
+      const material = readKnowledgeMaterial(join(this.dataDir, "knowledge-materials"), id);
+      if (material.state !== "ready") throw new Error(`资料 ${material.name} 解析失败，请重新上传或移除后再开始研究：${material.error ?? "没有可读内容"}`);
+      return sum + material.bytes;
+    }, 0);
     if (bytes > 100 * 1024 * 1024) throw new Error("本次资料总容量不能超过 100 MiB");
     return unique;
   }

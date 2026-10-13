@@ -35,7 +35,8 @@ function readDraft(account: string): QuestionDraft | undefined {
     const draft = value as QuestionDraft;
     if (typeof draft.question !== "string" || !draft.context || typeof draft.context !== "object") return;
     const materials = Array.isArray(draft.materials) ? [...new Map(draft.materials.filter(material => material && typeof material === "object"
-      && typeof material.id === "string" && /^material-[a-f0-9-]{36}$/.test(material.id)
+      && typeof material.id === "string" && (/^material-[a-f0-9-]{36}$/.test(material.id)
+        || (material.state === "failed" && /^upload-failed-[a-f0-9-]{36}$/.test(material.id)))
       && typeof material.name === "string" && typeof material.version === "string" && typeof material.scope === "string"
       && ["ready", "failed"].includes(material.state) && Number.isInteger(material.sections) && material.sections >= 0)
       .map(material => [material.id, {
@@ -54,8 +55,10 @@ function readDraft(account: string): QuestionDraft | undefined {
   } catch { /* 浏览器禁用存储时，仍可在本页提问。 */ }
 }
 
-function EvidencePane({ evidence, quote, onClose }: { evidence: KnowledgeAnswerEvidence; quote?: string; onClose: () => void }) {
+function EvidencePane({ answerId, evidence, quote, onClose }: { answerId: string; evidence: KnowledgeAnswerEvidence; quote?: string; onClose: () => void }) {
   const pane = useRef<HTMLElement>(null);
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [evidence.id]);
   useEffect(() => { pane.current?.focus(); pane.current?.scrollTo(0, 0); }, [evidence.id, quote]);
   return <aside ref={pane} tabIndex={-1} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }} className="ka-evidence" aria-label="本次引用原文">
     <header><div><small>{sourceLabels[evidence.kind]}</small><h3>{evidence.title}</h3></div><Button variant="ghost" size="icon-sm" aria-label="关闭引用原文" onClick={onClose}><X size={16} /></Button></header>
@@ -69,7 +72,12 @@ function EvidencePane({ evidence, quote, onClose }: { evidence: KnowledgeAnswerE
     </dl></details>
     <p className="ka-evidence-note">这里保存的是本次回答实际查阅的内容。</p>
     {evidence.truncated && <p className="ka-notice">来源返回内容不完整，以下仅为实际查阅部分。</p>}
-    {quote !== undefined ? <><section className="ka-quoted-source" aria-label="本段引用原句"><h4>本段引用</h4><pre className="ka-evidence-content" tabIndex={0}>{quote}</pre></section><details className="ka-full-source"><summary>查看本次查阅的完整内容</summary><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre></details></> : <pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>}
+    {evidence.image ? <section aria-label="本次查阅图片" className="space-y-3">
+      <img src={`/knowledge-answers/${encodeURIComponent(answerId)}/evidence/${encodeURIComponent(evidence.id)}/image`}
+        alt={evidence.title} className="h-auto max-w-full rounded-lg border border-line" onError={() => setImageFailed(true)} />
+      {imageFailed && <p role="alert" className="ka-notice">本次查阅的图片暂时无法显示，请稍后重试。</p>}
+      <h4>图片核对说明</h4><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>
+    </section> : quote !== undefined ? <><section className="ka-quoted-source" aria-label="本段引用原句"><h4>本段引用</h4><pre className="ka-evidence-content" tabIndex={0}>{quote}</pre></section><details className="ka-full-source"><summary>查看本次查阅的完整内容</summary><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre></details></> : <pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>}
   </aside>;
 }
 
@@ -177,7 +185,8 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   }, [answerId, refresh]);
 
   async function submit(input: KnowledgeAnswerInput, clearDraft = false) {
-    if (busy || uploading || !input.question.trim()) return;
+    if (busy || uploading || !input.question.trim()
+        || (clearDraft && draft.materials.some(material => material.state !== "ready"))) return;
     setBusy(true); setActionError("");
     try {
       const next = await startKnowledgeAnswer({ question: input.question.trim(), context: input.context });
@@ -247,7 +256,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
           {showMaterials && <div className="ka-material-upload"><KnowledgeMaterialUpload purpose="question" materials={draft.materials} onChange={changeMaterials} onBusy={setUploading} disabled={!draftReady || busy} /></div>}
           {catalogError && <p className="ka-notice">范围选项加载失败，仍可直接提问。<button type="button" onClick={() => setRefresh(value => value + 1)}>重试</button></p>}
           {actionError && <p role="alert" className="ka-error">{actionError}</p>}
-          <div className="ka-submit"><small>{uploading ? "资料正在上传并解析，请稍候" : draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "默认查阅所有可用的正式知识"}</small><Button type="submit" disabled={!draftReady || busy || uploading || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
+          <div className="ka-submit"><small>{uploading ? "资料正在上传并解析，请稍候" : draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "默认查阅所有可用的正式知识"}</small><Button type="submit" disabled={!draftReady || busy || uploading || draft.materials.some(material => material.state !== "ready") || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
         </form>
         {!draft.question && <div className="ka-examples" aria-label="提问示例">{[
           { icon: BookOpen, title: "理解业务规则", text: "这条业务规则有哪些适用条件？在哪里实现？" },
@@ -281,6 +290,6 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
         </>}
       </div>}
     </main>
-    {evidence && <EvidencePane evidence={evidence} quote={selectedQuote} onClose={closeEvidence} />}
+    {record && evidence && <EvidencePane answerId={record.id} evidence={evidence} quote={selectedQuote} onClose={closeEvidence} />}
   </section>;
 }

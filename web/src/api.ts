@@ -899,6 +899,16 @@ export interface FeedbackRecord {
   updated_at: string;
 }
 
+export interface RequirementSourceMeta {
+  id: string;
+  name: string;
+  path: string;
+  bytes: number;
+  digest: string;
+  document_count?: number;
+  locations?: string[];
+}
+
 export interface TaskSummary {
   continuation?: { id: string; text: string; actor: string; at: string; state: "preparing" | "failed" | "active"; error?: string; branch: string; baseline: string };
   delivery_history?: Array<{ id: string; started_at: string; completed_at: string; delivery: TaskSummary["delivery"]; request?: string; archive: string }>;
@@ -932,6 +942,8 @@ export interface TaskSummary {
     bytes: number;
     context_mode: "inline" | "file";
     bundle_name?: string;
+    sources?: RequirementSourceMeta[];
+    warnings?: string[];
     assets?: Array<{
       path: string;
       source_path: string;
@@ -2157,7 +2169,7 @@ export async function createTask(
     repositoryProfiles?: Array<Pick<RepositoryProfile,
       "repository" | "technologies" | "confirmed">>;
     requirementDocumentName?: string;
-    requirementBundle?: { name: string; contentBase64: string };
+    requirementMaterialIds?: string[];
   },
   // 返回创建结果:调用方靠它把新任务当场打开/高亮。原来丢弃 201 响应
   // 体,下单成功零反馈,人会怀疑没提交成功再点一次(2026-08-30 审计)。
@@ -2167,12 +2179,7 @@ export async function createTask(
     body: JSON.stringify({
       requirement,
       requirement_document_name: extras?.requirementDocumentName,
-      requirement_bundle: extras?.requirementBundle
-        ? {
-            name: extras.requirementBundle.name,
-            content_base64: extras.requirementBundle.contentBase64,
-          }
-        : undefined,
+      requirement_material_ids: extras?.requirementMaterialIds,
       title: extras?.title?.trim() || undefined,
       account: account || undefined,
       repo: extras?.repo || undefined,
@@ -2205,10 +2212,10 @@ export async function createTask(
   return await response.json() as TaskSummary;
 }
 
-export interface RequirementBundlePreview {
-  bundle_name: string;
-  document_name: string;
+export interface RequirementMaterialsPreview {
   requirement: string;
+  document_name: string;
+  sources: RequirementSourceMeta[];
   assets: Array<{
     path: string;
     source_path: string;
@@ -2216,15 +2223,18 @@ export interface RequirementBundlePreview {
     bytes: number;
     content_base64: string;
   }>;
+  warnings: string[];
 }
 
-export async function previewRequirementBundle(
-  name: string,
-  contentBase64: string,
-): Promise<RequirementBundlePreview> {
-  const response = await fetch("/requirement-bundles/preview", {
+export async function previewRequirementMaterials(
+  materialIds: string[],
+  requirement: string,
+  signal?: AbortSignal,
+): Promise<RequirementMaterialsPreview> {
+  const response = await fetch("/requirement-materials/preview", {
     method: "POST",
-    body: JSON.stringify({ name, content_base64: contentBase64 }),
+    body: JSON.stringify({ material_ids: materialIds, requirement }),
+    signal,
   });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);

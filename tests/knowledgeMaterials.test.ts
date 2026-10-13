@@ -15,8 +15,14 @@ test("上传资料保留原文件、版本与定位，不能读的资料如实�
     assert.deepEqual(readFileSync(join(root, material.id, "source.md")), markdown);
     const failed = await saveKnowledgeMaterial(root, { name: "损坏.docx", content_base64: markdown.toString("base64") }); assert.equal(failed.state, "failed"); assert.ok(failed.error);
     await assert.rejects(saveKnowledgeMaterial(root, { name: "../secret.md", content_base64: markdown.toString("base64") }), /文件名/);
-    // Tiny real Office packages verify the parser without external libraries.
-    execFileSync("python3", ["-c", `import zipfile,sys\nfrom pathlib import Path\np=Path(sys.argv[1])\nwith zipfile.ZipFile(p/'sample.docx','w') as z:z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>订单规则</w:t></w:r></w:p></w:body></w:document>')\nwith zipfile.ZipFile(p/'sample.pptx','w') as z:z.writestr('ppt/slides/slide1.xml','<a:root xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:p><a:r><a:t>演示业务</a:t></a:r></a:p></a:root>')`, root]);
+    // Real Office packages exercise the installed anymd binary.
+    execFileSync("python3", ["-c", `import zipfile,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+with zipfile.ZipFile(p/'sample.docx','w') as z:z.writestr('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>订单规则</w:t></w:r></w:p></w:body></w:document>')
+with zipfile.ZipFile(p/'sample.pptx','w') as z:
+ z.writestr('ppt/presentation.xml','<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst/></p:presentation>')
+ z.writestr('ppt/slides/slide1.xml','<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>演示业务</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>')`, root]);
     for (const extension of ["docx", "pptx"]) {
       const parsed = await saveKnowledgeMaterial(root, { name: `sample.${extension}`, content_base64: readFileSync(join(root, `sample.${extension}`)).toString("base64") });
       assert.equal(parsed.state, "ready", parsed.error); assert.ok(parsed.sections[0].location);
@@ -24,7 +30,7 @@ test("上传资料保留原文件、版本与定位，不能读的资料如实�
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("DOCX 表格与 XLSX 缓存值保留行列定位", async () => {
+test("DOCX 表格转为 Markdown，XLSX 缓存值保留行列定位", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-tables-"));
   try {
     execFileSync("python3", ["-c", `import zipfile,sys
@@ -37,13 +43,13 @@ with zipfile.ZipFile(p/'table.xlsx','w') as z:
  z.writestr('xl/_rels/workbook.xml.rels','<Relationships><Relationship Id="r1" Target="worksheets/sheet1.xml"/></Relationships>')
  z.writestr('xl/worksheets/sheet1.xml','<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>订单金额</t></is></c><c r="B1"><f>1+2</f><v>3</v></c></row></sheetData></worksheet>')`, root]);
     const word = await saveKnowledgeMaterial(root, { name: "table.docx", content_base64: readFileSync(join(root, "table.docx")).toString("base64") });
-    assert.equal(word.state, "ready", word.error); assert.match(word.sections[0].location, /表格 1 · 行 1/); assert.match(word.sections[0].text, /列 1: 订单 \| 列 2: 取消/);
+    assert.equal(word.state, "ready", word.error); assert.match(word.sections[0].location, /table.docx · 转换文本 · 行 1/); assert.match(word.sections[0].text, /订单.*\|.*取消/);
     const excel = await saveKnowledgeMaterial(root, { name: "table.xlsx", content_base64: readFileSync(join(root, "table.xlsx")).toString("base64") });
     assert.equal(excel.state, "ready", excel.error); assert.match(excel.sections[0].location, /工作表 规则 · 行 1/); assert.match(excel.sections[0].text, /A1: 订单金额.*B1: 3.*文件缓存/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("PDF 解析真实文本及页码；空白 PDF 不冒充可读资料", { skip: !process.env.MAE_FLOW_PDFTOTEXT_BIN && "通过 MAE_FLOW_PDFTOTEXT_BIN 指定 Poppler" }, async () => {
+test("PDF 使用 anymd 解析真实文本及页码；空白 PDF 不冒充可读资料", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-pdf-"));
   const pdf = (text: string) => {
     const stream = `BT /F1 12 Tf 40 700 Td (${text}) Tj ET`;

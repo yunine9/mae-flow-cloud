@@ -284,6 +284,13 @@ import {
   storeRequirementAssets,
   type RequirementAsset,
 } from "./requirementBundle.ts";
+import {
+  loadRequirementSources,
+  materializeRequirementSources,
+  readRequirementSource as readStoredRequirementSource,
+  storeRequirementSources,
+  type RequirementSource,
+} from "./requirementMaterials.ts";
 import { readJson } from "./jsonBody.ts";
 import { fetchMrGates } from "./mrGateClient.ts";
 import {
@@ -3011,7 +3018,16 @@ export class TaskService {
       : undefined;
   }
 
-  /** 任务始终只有一份当前需求文档。需求确认阶段只允许专用 Agent
+  requirementSource(id: string, path: string): { name: string; content: Buffer } | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const source = readStoredRequirementSource(
+      task.summary.workspace, task.summary.requirement_document, path);
+    return source ? { name: source.meta.name, content: source.content } : undefined;
+  }
+
+  /** 多份来源合成当前需求正文；确认后只修订正文，不从原件重新生成。
+   * 需求确认阶段只允许专用 Agent
    * 根据已提交批注更新，避免人与 Agent 双写。 */
   private applyRequirementContent(
     task: TaskState,
@@ -3034,8 +3050,11 @@ export class TaskService {
     if (next && previous) {
       next = {
         ...next,
+        ...(previous.sources?.length ? { context_mode: "file" as const } : {}),
         ...(previous.bundle_name ? { bundle_name: previous.bundle_name } : {}),
         ...(previous.assets?.length ? { assets: previous.assets } : {}),
+        ...(previous.sources?.length ? { sources: previous.sources } : {}),
+        ...(previous.warnings?.length ? { warnings: previous.warnings } : {}),
       };
     }
     task.summary.requirement = content;
@@ -7228,6 +7247,8 @@ export class TaskService {
       /** ZIP 材料包已由入口解析并改写为安全相对路径的图片。 */
       requirementBundleName?: string;
       requirementAssets?: RequirementAsset[];
+      requirementSources?: RequirementSource[];
+      requirementWarnings?: string[];
       /** Chain 拆单内部标记；外部下单绝不设置。子任务 requirement 仍是
        * 原始需求，单元任务书单独落盘，不再拼到长文档末尾。 */
       internalRequirement?: boolean;
@@ -7294,15 +7315,19 @@ export class TaskService {
       options.internalRequirement
         ? MAX_REQUIREMENT_DOCUMENT_BYTES * 2
         : MAX_REQUIREMENT_DOCUMENT_BYTES);
-    if (options.requirementBundleName || options.requirementAssets?.length) {
+    if (options.requirementBundleName || options.requirementAssets?.length || options.requirementSources?.length) {
       if (!requirementDocument) {
-        throw new Error("ZIP 材料包必须包含可读取的 Markdown 文档");
+        throw new Error("需求资料必须包含可读取的完整正文");
       }
       requirementDocument = {
         ...requirementDocument,
+        ...(options.requirementSources?.length ? { context_mode: "file" as const } : {}),
         bundle_name: options.requirementBundleName,
         assets: options.requirementAssets?.map(
           ({ content: _content, ...asset }) => asset) ?? [],
+        sources: options.requirementSources?.map(
+          ({ content: _content, ...source }) => source),
+        warnings: options.requirementWarnings,
       };
     }
     // 交付方式:选项是内核的领地,现读它的 flow.json 校验
@@ -7609,6 +7634,9 @@ export class TaskService {
     mkdirSync(workspace, { recursive: true });
     if (options.requirementAssets?.length) {
       storeRequirementAssets(workspace, options.requirementAssets);
+    }
+    if (options.requirementSources?.length) {
+      storeRequirementSources(workspace, options.requirementSources);
     }
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
@@ -9407,6 +9435,8 @@ export class TaskService {
       requirementBundleName: source.requirement_document?.bundle_name,
       requirementAssets: loadRequirementAssets(
         workspace, source.requirement_document),
+      requirementSources: loadRequirementSources(workspace, source.requirement_document),
+      requirementWarnings: source.requirement_document?.warnings,
       internalRequirement: Boolean(source.parent_task_id),
       parentTaskId: source.parent_task_id,
       blockedBy: source.blocked_by ? [...source.blocked_by] : undefined,
@@ -10028,6 +10058,8 @@ export class TaskService {
       task.summary.requirement = parent.summary.requirement;
       task.summary.requirement_document = parent.summary.requirement_document
         ? structuredClone(parent.summary.requirement_document) : undefined;
+      materializeRequirementAssets(parent.summary.workspace, task.summary.workspace, task.summary.requirement_document);
+      materializeRequirementSources(parent.summary.workspace, task.summary.workspace, task.summary.requirement_document);
       storeRequirementDocument(task.summary.workspace,
         task.summary.requirement, task.summary.requirement_document);
       this.persist(task);
@@ -10141,6 +10173,8 @@ export class TaskService {
         requirementBundleName: task.summary.requirement_document?.bundle_name,
         requirementAssets: loadRequirementAssets(
           task.summary.workspace, task.summary.requirement_document),
+        requirementSources: loadRequirementSources(task.summary.workspace, task.summary.requirement_document),
+        requirementWarnings: task.summary.requirement_document?.warnings,
         blockedBy: blockers,
         repositorySkills: preserveUndefinedRepositorySkills
           ? undefined
@@ -13753,6 +13787,8 @@ export class TaskService {
         task.cwd = cwd;
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
+        materializeRequirementSources(
+          workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
@@ -13827,6 +13863,8 @@ export class TaskService {
         }
         task.cwd = cwd;
         materializeRequirementAssets(
+          workspace, cwd, task.summary.requirement_document);
+        materializeRequirementSources(
           workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }

@@ -221,7 +221,7 @@ export class KnowledgeAnswers {
           if (!evidence.content || evidence.content.length > 40_000) throw new Error("来源片段过长，请分页读取");
           const digest = createHash("sha256").update(evidence.content).digest("hex");
           const identity = JSON.stringify([evidence.kind, evidence.title, digest, evidence.source_id, evidence.revision,
-            evidence.repository, evidence.path, evidence.scope, evidence.start_line, evidence.end_line, evidence.location, !!evidence.truncated, evidence.url]);
+            evidence.repository, evidence.path, evidence.scope, evidence.start_line, evidence.end_line, evidence.location, !!evidence.truncated, evidence.url, evidence.image]);
           const previous = snapshots.get(identity); if (previous) return copy(previous);
           if (record.evidence.length >= 80 || record.evidence.reduce((total, row) => total + row.content.length, 0) + evidence.content.length > 240_000) throw new Error("本轮已取得的来源达到预算，请围绕已有依据回答并说明缺口");
           const saved: KnowledgeAnswerEvidence = { ...evidence, id: knowledgeAnswerEvidenceId(record.evidence.length), digest, retrieved_at: new Date().toISOString() };

@@ -23,6 +23,7 @@ export interface KnowledgeAnswerModelRequest {
   stage: "researching" | "answering";
   system: string;
   user: string;
+  images?: Array<{ label: string; data: string; mimeType: string }>;
   tools: KnowledgeAnswerTool[];
   /** 回答阶段唯一的终结工具，只接收答案，不执行来源查询或产生副作用。 */
   outputTool?: Pick<KnowledgeAnswerTool, "name" | "description" | "parameters">;
@@ -45,6 +46,19 @@ export interface KnowledgeAnswerModel {
   run(request: KnowledgeAnswerModelRequest): Promise<KnowledgeAnswerModelOutput>;
   inputBudgetChars?: number;
   dispose(): void | Promise<void>;
+}
+
+/** Base64 是传输编码，不能当作正文 token；每张图片预留独立的视觉输入预算。 */
+function contextCharacters(value: unknown): number {
+  let images = 0;
+  const text = JSON.stringify(value, (_key, entry) => {
+    if (entry && typeof entry === "object" && entry.type === "image") {
+      images++;
+      return { type: "image", mimeType: entry.mimeType };
+    }
+    return entry;
+  });
+  return text.length + images * 4096;
 }
 type AnswerStage = KnowledgeAnswerModelRequest["stage"];
 type ObservedEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "omitted" | "unknown";
@@ -150,7 +164,11 @@ export async function createKnowledgeAnswerModel(options: KnowledgeAnswerModelOp
         if (outputTool && (request.stage !== "answering" || request.tools.length || request.maxRounds !== 1)) {
           throw new KnowledgeAnswerError("答案提交只允许一个独立回答请求，不混用来源工具或继续对话");
         }
-        const messages: Message[] = [{ role: "user", content: request.user, timestamp: Date.now() }];
+        if (request.images?.length && !model.input?.includes("image")) throw new KnowledgeAnswerError("当前问答模型不支持图片，不能基于尚未读取的图片生成答案");
+        const messages: Message[] = [{ role: "user", content: request.images?.length
+          ? [{ type: "text" as const, text: request.user }, ...request.images.flatMap(image => [
+            { type: "text" as const, text: image.label }, { type: "image" as const, data: image.data, mimeType: image.mimeType }])]
+          : request.user, timestamp: Date.now() }];
         const contextBudget = Math.min(request.maxContextChars, inputBudgetChars);
         let toolCalls = 0;
         try {
@@ -158,7 +176,7 @@ export async function createKnowledgeAnswerModel(options: KnowledgeAnswerModelOp
             throwIfAnswerStopped(signal, request.deadlineAt);
             const definitions = (outputTool ? [outputTool] : [...tools.values()])
               .map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
-            if (request.system.length + JSON.stringify(messages).length + JSON.stringify(definitions).length > contextBudget) {
+            if (request.system.length + contextCharacters(messages) + JSON.stringify(definitions).length > contextBudget) {
               return { text: "", complete: false, reason: "context_limit" };
             }
             const began = performance.now(), meta = { stage: request.stage, round: round + 1 };
@@ -277,9 +295,10 @@ export async function createKnowledgeAnswerModel(options: KnowledgeAnswerModelOp
               try {
                 const args = tool.prepareArguments ? tool.prepareArguments(call.arguments) : call.arguments;
                 if (!Check(tool.parameters, args)) throw new KnowledgeAnswerError("工具参数不符合定义");
-                const value = await waitForAnswerOperation(Promise.resolve(tool.execute(call.id, args, signal, undefined, { hasUI: false } as any)), signal);
+                const value = await waitForAnswerOperation(Promise.resolve(tool.execute(call.id, args, signal, undefined, { hasUI: false, model } as any)), signal);
                 throwIfAnswerStopped(signal, request.deadlineAt);
-                if (!Array.isArray(value?.content) || value.content.some(block => block.type !== "text")) throw new KnowledgeAnswerError("问答工具必须返回文本材料");
+                if (!Array.isArray(value?.content) || value.content.some(block => block.type !== "text" && block.type !== "image")) throw new KnowledgeAnswerError("问答工具只能返回文本或原始图片");
+                if (value.content.some(block => block.type === "image") && !model.input?.includes("image")) throw new KnowledgeAnswerError("当前问答模型不支持图片，尚未读取图中内容");
                 result = value;
                 if ((value as any).isError) request.warn("来源工具未完成一次查询，不能据此认定相关知识不存在");
               } catch (error) {
@@ -288,7 +307,7 @@ export async function createKnowledgeAnswerModel(options: KnowledgeAnswerModelOp
                 result = { isError: true, content: [{ type: "text", text: "此次查询未完成或参数无效，没有取得可确认的新证据。请检查参数或使用其他适用来源，不能据此断言知识不存在。" }] };
               }
               // 超长工具回复不进入历史；来源保存的原文仍受 runner 的独立证据预算保护。
-              if (JSON.stringify(result.content).length > contextBudget / 2) {
+              if (contextCharacters(result.content) > contextBudget / 2) {
                 request.warn("一次工具返回超过研究上下文预算，请使用较小范围或分页读取");
                 result = { isError: true, content: [{ type: "text", text: "返回内容超过上下文预算，本条未展开。请缩小读取范围或分页；未展开的内容不代表不存在。" }] };
               }

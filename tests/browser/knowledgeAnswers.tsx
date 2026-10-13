@@ -128,7 +128,7 @@ async function run() {
   await click("补充原始资料（可选）");
   const submitBox = button("提问")!.getBoundingClientRect(), mainBox = document.querySelector(".ka-main")!.getBoundingClientRect();
   check(submitBox.top >= mainBox.top && submitBox.bottom <= mainBox.bottom, "question action remains visible when attachments expand on desktop");
-  check(document.body.textContent?.includes("尚未核验图片内容") && !document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("自动用于本次萃取"), "question attachment copy states text-only reading without extraction claims");
+  check(document.body.textContent?.includes("按问题核对文字与相关图片") && !document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("自动用于本次萃取"), "question attachment copy describes image reading without extraction claims");
   const versionDetails = document.querySelector('[aria-label="知识问答资料上传"] details') as HTMLDetailsElement;
   versionDetails.open = true; await fill("资料版本（可选）", "v2.1");
   holdUpload = true;
@@ -190,6 +190,15 @@ async function run() {
   await click("查看来源：原文 ev-fixed，第 42–45 行"); await waitFor('[aria-label="本次引用原文"]');
   check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes(quotedText), "compact line-range citation opens the complete original snapshot");
   check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("a".repeat(40)), "compact citation preserves the original revision");
+  first.evidence.push({ id: "ev-image", kind: "material", title: "已读取的流程图", content: "图中显示重试三次后停止。",
+    digest: "image-digest", retrieved_at: timestamp(), image: { path: "images/flow.png", digest: "image-digest", mime_type: "image/png" } });
+  first.answer!.evidence_ids.push("ev-image");
+  first.answer!.markdown += "\n\n> 不应伪装成图片原句\n\n[流程图](#evidence-ev-image)";
+  await remount(); await waitFor('[aria-label="知识回答"]');
+  const imageCitation = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="回答依据"] button')].find(item => item.textContent?.includes("已读取的流程图"));
+  check(imageCitation, "image source appears in the answer evidence list"); imageCitation!.click(); await waitFor('[aria-label="本次查阅图片"]');
+  check(document.querySelector<HTMLImageElement>('[aria-label="本次查阅图片"] img')?.getAttribute("src") === "/knowledge-answers/qa-1/evidence/ev-image/image", "image evidence uses this answer's preserved image route");
+  check(document.querySelector('[aria-label="本次查阅图片"]')?.textContent?.includes("图片核对说明") && !document.querySelector('[aria-label="本段引用原句"]'), "image interpretation is not presented as an exact source quotation");
   await click("有问题"); await fill("回答反馈说明", "还需要确认时间推进的测试工具"); await click("提交反馈");
   check(first.feedback?.useful === false && first.feedback.comment.includes("测试工具"), "feedback is saved for the answer");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "不能丢掉的新问题");
