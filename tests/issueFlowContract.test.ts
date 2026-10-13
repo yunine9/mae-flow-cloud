@@ -174,6 +174,9 @@ function bareOrigin(root: string): string {
   execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
   execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441)。
+  execFileSync("git", ["-C", seed, "branch", "br_V100R026C10_release"],
+    { env: GIT_ENV });
   const origin = join(root, "origin.git");
   execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
   return origin;
@@ -326,6 +329,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
+      baseline: "br_V100R026C10_release",
       environment: {
         hosts: ["10.0.0.8"],
         backendPassword: "env-shared-secret",
@@ -387,7 +391,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       assigned_repos: undefined,
       module: undefined,
       module_id: undefined,
-      baseline: undefined,
+      baseline: "br_V100R026C10_release",
       environment: {
         credential_ref: "vault-ref",
         name: "10.0.0.8",
@@ -561,6 +565,7 @@ test("返工轮全绿再通知:验证卡走等待卡通道,同卡只发一次,�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     const analysisGate = await until(() => {
       const issue = service.get(created.id);

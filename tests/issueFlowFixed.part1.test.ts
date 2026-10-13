@@ -149,6 +149,7 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
+      baseline: "br_V100R026C10_release",
       environment: {
         hosts: ["10.0.0.8"],
         backendPassword: "env-shared-secret",
@@ -676,6 +677,7 @@ test("create_mr 标题平台代笔(2026-09-07):标题=DTS 单据标题;拿不到
     created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     title: "登录超时", description: "", source: "dts", ticket: "DTS-2026-1001",
     repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
+    baseline: "br_V100R026C10_release",
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "in_progress"],
     status: "idle", stage: "mr_green", stage_note: "",
@@ -732,6 +734,62 @@ test("create_mr 标题平台代笔(2026-09-07):标题=DTS 单据标题;拿不到
         && /单据标题为空/.test(error.message));
     assert.equal(platform.seen.filter((entry) => entry.url === "/mr").length, 1,
       "打回的两次都不能建出 MR");
+  } finally {
+    await platform.stop();
+  }
+});
+
+test("create_mr 目标分支缺省=会话基线(#441):登记产品版本映射的基线优先,无基线维持 master", async () => {
+  const platform = new LoopPlatform();
+  await platform.start();
+  const build = (baseline?: string) => {
+    const base: IssueSessionState = {
+      id: "issue-1", account: "dev",
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      title: "登录超时", description: "", source: "dts", ticket: "DTS-2026-1001",
+      repo_url: "/tmp/x.git", repo_urls: ["/tmp/x.git"],
+      ...(baseline ? { baseline } : {}),
+      scenario: "ticket", round: 1,
+      stage_states: ["done", "done", "done", "done", "in_progress"],
+      status: "idle", stage: "mr_green", stage_note: "",
+      stage_at: new Date().toISOString(),
+      pushes: [{ repo: "/tmp/x.git", branch: "master_dev_DTS-2026-1001",
+        sha: "a".repeat(40), at: new Date().toISOString() }],
+    };
+    const tools = createIssueTools({
+      state: base,
+      workspace: "/tmp/ws",
+      dataRoot: "/tmp/data",
+      persist: () => undefined,
+      dts: new MockDtsGateway(),
+      platformUrl: platform.baseUrl,
+      pullRepo: async (url) => ({
+        dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(12),
+      }),
+    }) as Array<{ name: string; execute: (id: string, params: any) => Promise<unknown> }>;
+    const tool = tools.find((item) => item.name === "create_mr");
+    assert.ok(tool, "mr_green 阶段应注册 create_mr");
+    return tool!;
+  };
+  try {
+    // 有基线:AI 不传 target_branch 也打向基线,不再静默落 master
+    // (2026-09-27 现场:26C10 会话的修复 MR 被默认打到 master)。
+    await build("br_V100R026C10_release").execute("x", {});
+    assert.equal(platform.seen.find((entry) => entry.url === "/mr")?.body?.target_branch,
+      "br_V100R026C10_release",
+      "缺省目标=会话基线");
+    // 无基线(直连接口/存量会话)如实拒绝,不猜目标。
+    await assert.rejects(() => build(undefined).execute("x", {}),
+      /会话没有基线分支/,
+      "无基线不传参被拒,不静默落 master");
+    // 显式传参仍然赢过缺省链(多目标交付是 AI 的裁量权,2026-08-28)。
+    await build("br_V100R026C10_release").execute("x",
+      { target_branch: "br_V100R025C00_release" });
+    assert.equal(
+      platform.seen.filter((entry) => entry.url === "/mr").at(-1)?.body?.target_branch,
+      "br_V100R025C00_release");
+    assert.equal(platform.seen.filter((entry) => entry.url === "/mr").length, 2,
+      "被拒的那次不该建出 MR");
   } finally {
     await platform.stop();
   }
@@ -2256,6 +2314,7 @@ test("红灯修复轮预算:0=关掉自动修复,红灯留痕请人工不再开�
       ticket: TICKET,
       source: "dts",
       repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     // ① 分析确认闸放行 → 走到 MR 提交,回合收口(idle 等流水线)。
     await until(() => {

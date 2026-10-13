@@ -126,7 +126,7 @@ export interface IssueMrRecord {
   /** MR 所属仓(地址);多仓会话一仓一 MR,各记各的。 */
   repo: string;
   branch: string;
-  /** 目标分支(create_mr 申报,缺省 master):合入事实核对要成对分支。 */
+  /** 目标分支(create_mr 申报,缺省=会话基线):合入事实核对要成对分支。 */
   target?: string;
   title: string;
   url?: string;
