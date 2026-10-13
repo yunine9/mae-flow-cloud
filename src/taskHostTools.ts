@@ -21,6 +21,7 @@ import { FeedbackStore } from "./feedbackStore.ts";
 import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import { getPipelineStatus, triggerPipeline, type PipelineCredential, type PipelineRun } from "./pipelineClient.ts";
 import { createMergeRequest } from "./mrClient.ts";
+import { mrParticipantsMessage, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
 import { controlKernelFeedback, attestKernelHost, type KernelDeliveryHost } from "./kernelDelivery.ts";
 
 const HOST_ACTIONS = ["set_target", "defer_feedback", "push", "create_mr", "retry_verification", "sync_branch", "pull_repo", "trigger_pipeline", "stop_verification", "restart_session"] as const;
@@ -49,7 +50,7 @@ export interface HostOperation {
   push_waiting_id?: string;
   review_handoff?: boolean;
   push_receipt?: NonNullable<NonNullable<TaskSummary["delivery"]>["git_push"]>;
-  mr_receipt?: { url: string; id?: string | number };
+  mr_receipt?: { url: string; id?: string | number; participants?: MrParticipantsResult };
   trigger_started?: boolean;
   pipeline_receipt?: PipelineRun;
 }
@@ -120,6 +121,8 @@ export interface TaskHostRuntime {
   kernel?: KernelDeliveryHost;
   platformUrl?: string;
   credential?: PipelineCredential;
+  mrParticipants?(): MrParticipants | undefined;
+  retryMrParticipants?(): Promise<void>;
   assertActive(): void;
   annotations(): Annotation[];
   decisions?(): WaitingRecord[];
@@ -387,7 +390,8 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
-        operation.result = `已存在 MR：${host.summary.delivery.mr_url}`;
+        if (host.summary.delivery.mr_participants?.status === "failed") await host.retryMrParticipants?.();
+        operation.result = `已存在 MR：${host.summary.delivery.mr_url}。${mrParticipantsMessage(host.summary.delivery.mr_participants)}`;
       } else {
         if (host.summary.delivery?.git_push?.sha !== operation.sha) throw new Error("当前提交尚未取得真实推送收据，请先推送");
         if (!operation.target_branch) throw new Error("旧操作缺少固定的 MR 目标分支，请重新发起创建 MR");
@@ -398,12 +402,13 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
         }
         const receipt = operation.mr_receipt ?? await createMergeRequest({ platformUrl: host.platformUrl,
           repo: host.summary.repo_url, sourceBranch: operation.branch!, targetBranch: operation.target_branch,
-          title: title!, dtsNo: host.summary.ticket, credential: host.credential });
-        operation.mr_receipt = { url: receipt.url, id: receipt.id };
+          title: title!, dtsNo: host.summary.ticket, credential: host.credential, participants: host.mrParticipants?.() });
+        operation.mr_receipt = { url: receipt.url, id: receipt.id, participants: receipt.participants };
         ledger.update(operation);
-        host.summary.delivery = { ...host.summary.delivery, mr_url: receipt.url, mr_id: receipt.id, source_branch: operation.branch, target_branch: operation.target_branch };
+        host.summary.delivery = { ...host.summary.delivery, mr_url: receipt.url, mr_id: receipt.id, mr_participants: receipt.participants,
+          source_branch: operation.branch, target_branch: operation.target_branch };
         host.persist();
-        operation.result = `已创建 MR：${receipt.url}；未宣告验证通过或任务完成。`;
+        operation.result = `已创建 MR：${receipt.url}；${mrParticipantsMessage(receipt.participants)}未宣告验证通过或任务完成。`;
       }
       host.watch();
     } else if (input.action === "sync_branch") {

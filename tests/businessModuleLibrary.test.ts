@@ -108,6 +108,45 @@ test("业务模块全员维护；知识正文按版本发布且归档不删除�
   }, "admin-a"), BusinessModuleError);
 });
 
+test("模块 MR 默认人员按模块保存，省略保留、显式空名单清除，非法输入不覆盖配置", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-module-mr-people-"));
+  const participants = {
+    reviewers: ["external-reviewer"],
+    approval_approvers: ["external-approver"],
+  };
+  const created = createBusinessModule(dataDir, {
+    id: "payments", name: "支付模块", description: "支付业务", owner: "owner",
+    repositories: ["https://code.example/pay.git", "https://code.example/refund.git"],
+    mr_participants: { ...participants, reviewers: [" external-reviewer ", "external-reviewer"] },
+  }, "member");
+  assert.deepEqual(created.mr_participants, participants);
+  assert.deepEqual(readBusinessModule(dataDir, created.id).mr_participants, participants);
+  assert.deepEqual(updateBusinessModule(dataDir, created.id, {
+    description: "同模块的全部代码仓共用默认人员",
+  }, "another-member").mr_participants, participants);
+  const revision = readBusinessModule(dataDir, created.id).revision;
+  for (const invalid of [null, [], "external-reviewer", { reviewers: "external-reviewer" },
+    { reviewers: [123] }, { reviewers: ["bad account"] }, { assignees: ["owner"] }]) {
+    assert.throws(() => updateBusinessModule(dataDir, created.id, {
+      mr_participants: invalid,
+    }, "member"), BusinessModuleError);
+    assert.equal(readBusinessModule(dataDir, created.id).revision, revision);
+  }
+  assert.deepEqual(readBusinessModule(dataDir, created.id).mr_participants, participants);
+  const cleared = updateBusinessModule(dataDir, created.id, {
+    mr_participants: { reviewers: [], approval_approvers: [] },
+  }, "member");
+  assert.equal(cleared.mr_participants, undefined);
+  const saved = JSON.parse(readFileSync(join(dataDir, "business-modules", created.id, "module.json"), "utf-8"));
+  assert.equal(Object.hasOwn(saved, "mr_participants"), false);
+  writeFileSync(join(dataDir, "business-modules", created.id, "module.json"),
+    JSON.stringify({ ...saved, mr_participants: { reviewers: "corrupt-account-list" } }));
+  const catalog = listBusinessModules(dataDir);
+  assert.deepEqual(catalog.modules, [], "非法持久化人员配置不能被静默当作未配置");
+  assert.equal(catalog.warnings.length, 1);
+  assert.match(catalog.warnings[0], /payments:.*MR/);
+});
+
 test("模块参考组件仓订阅:存登记表条目引用,悬空引用拒绝,失效后保存打回", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-refcomp-"));
   writeComponentRepositories(dataDir, [
@@ -241,6 +280,40 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     });
     assert.equal(memberCreate.status, 201);
     assert.equal((await memberCreate.json() as { owner: string }).owner, "owner");
+    const participants = {
+      reviewers: ["codehub-reviewer"],
+      approval_approvers: ["codehub-approver"],
+    };
+    const participantCreate = await fetch(`${base}/business-modules`, {
+      method: "POST", headers: { cookie: viewer },
+      body: JSON.stringify({ id: "mr-people", name: "MR 人员", description: "模块默认人员",
+        repositories: ["https://code.example/pay.git"], mr_participants: participants }),
+    });
+    assert.equal(participantCreate.status, 201, "普通成员可以填写未在本平台注册的 CodeHub 账号");
+    assert.deepEqual((await participantCreate.json() as { mr_participants: unknown }).mr_participants,
+      participants);
+    const participantUpdate = await fetch(`${base}/business-modules/mr-people`, {
+      method: "PUT", headers: { cookie: owner }, body: JSON.stringify({ name: "改名保留默认人员" }),
+    });
+    assert.equal(participantUpdate.status, 200);
+    assert.deepEqual((await participantUpdate.json() as { mr_participants: unknown }).mr_participants,
+      participants);
+    for (const method of ["POST", "PUT"]) {
+      const invalidParticipants = await fetch(`${base}/business-modules${method === "PUT" ? "/mr-people" : ""}`, {
+        method, headers: { cookie: viewer }, body: JSON.stringify({
+          id: "invalid-mr-people", name: "非法人员", description: "不能把错误类型当作空配置",
+          repositories: ["https://code.example/pay.git"], mr_participants: { reviewers: "owner" },
+        }),
+      });
+      assert.equal(invalidParticipants.status, 400, `${method} 必须校验原始人员输入`);
+    }
+    const participantClear = await fetch(`${base}/business-modules/mr-people`, {
+      method: "PUT", headers: { cookie: viewer }, body: JSON.stringify({
+        mr_participants: { reviewers: [], approval_approvers: [] },
+      }),
+    });
+    assert.equal(participantClear.status, 200);
+    assert.equal((await participantClear.json() as { mr_participants?: unknown }).mr_participants, undefined);
     // 内网 HTTP 页面无需浏览器 crypto.randomUUID，省略 ID 由服务端生成。
     const generatedIds: string[] = [];
     for (let i = 0; i < 2; i++) {

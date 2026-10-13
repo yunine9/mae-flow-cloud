@@ -47,6 +47,8 @@ import {
 } from "../sessionDriver.ts";
 import { pipelineHeaders } from "../pipelineClient.ts";
 import { fetchMrGates } from "../mrGateClient.ts";
+import { updateMergeRequestParticipants } from "../mrClient.ts";
+import { mrParticipantsMessage } from "../mrParticipants.ts";
 import type { GateView } from "../mergeWatch.ts";
 import {
   fetchMrDiscussions,
@@ -1614,6 +1616,30 @@ export class IssueFlowService {
   session(id: string): { state: IssueSessionState; root: string } {
     const live = this.require(id);
     return { state: live.state, root: live.root };
+  }
+
+  /** 人员补设独立于代码交付；完成的会话也可以补设仍开放的 MR。 */
+  async retryMrParticipants(id: string, repository: string): Promise<IssueSummary> {
+    const live = this.require(id);
+    const repo = repository.trim();
+    if (!repo) throw new IssueControlError("请选择需要补设人员的代码仓");
+    const mr = live.state.mrs?.find(item => repositoryIdentity(item.repo) === repositoryIdentity(repo));
+    if (!mr?.url || !mr.participants || mr.participants.status !== "failed") {
+      throw new IssueControlError("该仓没有需要补设人员的 MR");
+    }
+    if (mr.merged_at || mr.closed_at) throw new IssueControlError("MR 已合入或关闭，不能补设人员");
+    if (!this.options.platformUrl) throw new IssueControlError("交付平台未配置，无法补设 MR 人员");
+    const result = await updateMergeRequestParticipants({
+      platformUrl: this.options.platformUrl, repo: mr.repo, mr: mr.iid ?? mr.url,
+      participants: mr.participants.requested,
+      credential: this.options.gitCredential?.(live.state.account),
+    });
+    mr.participants = result;
+    recordTransition(live.state, {
+      source: "platform", note: `MR ${mr.url}：${mrParticipantsMessage(result)}`,
+    });
+    saveState(live.root, live.state);
+    return this.project(live);
   }
 
   // ---- 视图旁路:耗时与卡点(只读,fail-open);过程文档数据面在 documents.ts ----

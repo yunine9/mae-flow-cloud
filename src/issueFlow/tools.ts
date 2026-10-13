@@ -87,7 +87,9 @@ import {
   remoteBranchState,
   type GitCredential,
 } from "./issueGit.ts";
-import { createMergeRequest } from "../mrClient.ts";
+import { createMergeRequest, updateMergeRequestParticipants } from "../mrClient.ts";
+import { resolveModuleMrParticipants } from "../moduleMrParticipants.ts";
+import { mrParticipantsMessage, type MrParticipantsResult } from "../mrParticipants.ts";
 
 /** MR 状态复核结果(#321):MR 生命周期与源分支最新提交的现查事实。
  * 验绿门(complete_stage 申报放行)与监看器终态处理共用同一判断——
@@ -174,6 +176,12 @@ export interface IssueToolContext {
 
 function ok(text: string) {
   return { content: [{ type: "text" as const, text }], details: {} };
+}
+
+function mrParticipantsNote(result: MrParticipantsResult | undefined): string {
+  return mrParticipantsMessage(result) + (result?.status === "failed"
+    ? "。MR 链接已保留，可到 MR 页面补充；再次调用 create_mr 只补设人员，不会重新创建 MR 或重跑交付。"
+    : "");
 }
 
 function fail(text: string): never {
@@ -1004,6 +1012,22 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         fail("会话没有基线分支(登记未带产品版本),无法确定 MR 目标:"
           + "请显式传 target_branch");
       }
+      const previous = state.mrs?.find((item) => item.repo === repo.url
+        && item.branch === pushRecord.branch && item.target === target);
+      if (previous?.url && previous.participants?.status === "failed"
+          && !previous.closed_at && !previous.merged_at) {
+        const requested = previous.participants.requested;
+        previous.participants = await updateMergeRequestParticipants({
+          platformUrl, repo: repo.url, mr: previous.iid ?? previous.url,
+          participants: requested, credential: ctx.gitCredential?.(),
+        });
+        const note = mrParticipantsNote(previous.participants);
+        recordTransition(state, {
+          source: "platform", note: `MR ${previous.url}：${note}`,
+        });
+        ctx.persist();
+        return ok(`已有 MR：${previous.url}\n${note}`);
+      }
       const title = await issueMrTitle(ctx, state.ticket);
       const receipt = await createMergeRequest({
         platformUrl,
@@ -1013,25 +1037,34 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         title,
         dtsNo: state.ticket,
         credential: ctx.gitCredential?.(),
+        participants: resolveModuleMrParticipants(ctx.dataRoot, state.module_id, repo.url),
       });
       const mrs = state.mrs ??= [];
+      const participants = previous?.url === receipt.url
+          && previous.participants?.status === "applied"
+          && receipt.participants?.status !== "failed"
+        ? previous.participants : receipt.participants;
       const record = {
         repo: repo.url, branch: pushRecord.branch, target,
         title,
         url: receipt.url,
         ...(receipt.id !== undefined ? { iid: String(receipt.id) } : {}),
         at: new Date().toISOString(),
+        ...(participants ? { participants } : {}),
       };
       const slot = mrs.findIndex((item) => item.repo === repo.url);
       if (slot >= 0) mrs[slot] = record; else mrs.push(record);
       recordTransition(state, {
         source: "platform",
-        note: `MR 已创建: ${receipt.url}`,
+        note: `MR 已创建: ${receipt.url}`
+          + (participants ? `\n${mrParticipantsNote(participants)}` : ""),
       });
       ctx.persist();
       ctx.onMrCreated?.(repo.url);
       return ok(`MR 已创建: ${receipt.url}\n(source ${pushRecord.branch} → ${target},`
-        + `仓 ${repo.url},关联单号 ${state.ticket})。${promptCopy("receipts",
+        + `仓 ${repo.url},关联单号 ${state.ticket})。`
+        + (participants ? `${mrParticipantsNote(participants)}\n` : "")
+        + `${promptCopy("receipts",
           "mr.receipt.fixed")}`);
     },
   }));

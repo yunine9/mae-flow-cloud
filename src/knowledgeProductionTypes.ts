@@ -1,3 +1,5 @@
+import type { MrParticipantsResult } from "./mrParticipants.ts";
+
 /** 生产状态的只读 HTTP 契约，前端只渲染这里的文案和动作。 */
 export interface KnowledgeProductionAction {
   id: string; label: string; view: "progress" | "review" | "archive"; href?: string; document_id?: string; target_id?: string; batch_id?: string;
@@ -6,7 +8,7 @@ export interface KnowledgeArchivePreview {
   job_id: string; title: string; status_label: string; message: string; actions: KnowledgeProductionAction[];
   issue_no?: string; issue_description?: string; expected_revisions: Record<string, string>;
   targets: Array<{ id: string; name: string; repository: string; branch: string; docs_path: string; configured: boolean;
-    status_label: string; message: string; error?: string; url?: string; actions: KnowledgeProductionAction[];
+    status_label: string; message: string; error?: string; url?: string; mr_participants?: MrParticipantsResult; actions: KnowledgeProductionAction[];
     files: Array<{ id: string; title: string; path: string; content: string; knowledge_document_id: string; knowledge_revision: string }> }>;
 }
 export interface KnowledgeDomainDeletionView {
@@ -19,7 +21,7 @@ export interface KnowledgeDocumentState {
   id: string; changed: boolean; status_label: string; published_revision?: number; proposal_problem?: string; knowledge_document_id?: string;
 }
 export interface KnowledgePublicationState {
-  key: string; target: string; status_label: string; url?: string; error?: string;
+  key: string; target: string; status_label: string; url?: string; error?: string; mr_participants?: MrParticipantsResult;
 }
 export interface KnowledgeProductionView {
   status_label: string; group: "running" | "attention" | "completed"; next_action: KnowledgeProductionAction;

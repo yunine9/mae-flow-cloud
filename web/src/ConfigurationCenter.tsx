@@ -4,8 +4,10 @@ import { TechnologyStacks } from "./TechnologyStackSettings";
 import { useEffect, useState } from "react";
 import { EnvironmentRegistry } from "./EnvironmentRegistry";
 import { getBusinessModules, createBusinessModule, updateBusinessModule,
-  productVersionRequest, knowledgeRepoRequest,
-  type BusinessModule, type ProductVersion, type KnowledgeRepoConfig } from "./api";
+  productVersionRequest, knowledgeRepoRequest, listPeople,
+  type BusinessModule, type MrParticipants, type PersonIdentity, type ProductVersion, type KnowledgeRepoConfig } from "./api";
+import { UserPicker } from "./UserPicker";
+import { MR_PARTICIPANT_ACCOUNT_PATTERN } from "../../src/mrParticipants";
 import { componentRequest, type ComponentRepository } from "./componentResearchApi";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { confirmDialog } from "./ConfirmDialog";
 
 const PAGE_SIZE = 10;
+const MR_ROLES: Array<[keyof MrParticipants, string]> = [
+  ["reviewers", "默认检视人"], ["approval_approvers", "审批人"],
+];
+type MrParticipantInputs = Record<keyof MrParticipants, string>;
+const participantInputs = (people?: MrParticipants): MrParticipantInputs => ({
+  reviewers: people?.reviewers.join(", ") ?? "",
+  approval_approvers: people?.approval_approvers.join(", ") ?? "",
+});
+const participantAccounts = (value = "") => [...new Set(value.split(/[\s,，;；、]+/).filter(Boolean))];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const shortRepo = (repo: string) => repo.split(/[/:]/).filter(Boolean).pop()?.replace(/\.git$/, "") || repo;
 export function ConfigurationCenter({ admin = false }: { admin?: boolean }) {
@@ -90,9 +101,24 @@ function MappingList({ kind }: { kind: string }) {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; refs?: string[]; status?: "active" | "archived" }>();
+  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; refs?: string[]; status?: "active" | "archived"; mrParticipants?: MrParticipantInputs }>();
   const [allRepos, setAllRepos] = useState<BusinessModule>();
   const [repoQuery, setRepoQuery] = useState("");
+  const [people, setPeople] = useState<PersonIdentity[]>([]);
+  const [peopleLoading, setPeopleLoading] = useState(false);
+  const [peopleError, setPeopleError] = useState(false);
+  const editingModule = modulesMode && !!edit;
+  useEffect(() => {
+    if (!editingModule) return;
+    let active = true;
+    setPeopleLoading(true); setPeopleError(false);
+    void listPeople().then(rows => {
+      if (active) setPeople(rows);
+    }).catch(() => {
+      if (active) setPeopleError(true);
+    }).finally(() => { if (active) setPeopleLoading(false); });
+    return () => { active = false; };
+  }, [editingModule]);
   async function refresh() {
     setLoading(true); setError("");
     try {
@@ -107,8 +133,8 @@ function MappingList({ kind }: { kind: string }) {
   }
   useEffect(() => { void refresh(); }, []);
   const rows = modulesMode
-    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, refs: m.reference_component_repos ?? [], status: m.status, auto: false }))
-    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", refs: [] as string[], status: "active" as const, auto: v.auto_claim === true }));
+    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, refs: m.reference_component_repos ?? [], status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants) }))
+    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", refs: [] as string[], status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs() }));
   const filtered = rows.filter(row => `${row.name} ${row.value}`.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -119,6 +145,10 @@ function MappingList({ kind }: { kind: string }) {
       if (modulesMode) {
         const input = { name: edit.name, description: edit.description?.trim() || edit.name,
           repositories: edit.value.split("\n").map(v => v.trim()).filter(Boolean),
+          mr_participants: {
+            reviewers: participantAccounts(edit.mrParticipants?.reviewers),
+            approval_approvers: participantAccounts(edit.mrParticipants?.approval_approvers),
+          },
           reference_component_repos: edit.refs ?? [], status: edit.status };
         if (edit.id) await updateBusinessModule(edit.id, input);
         else await createBusinessModule(input);
@@ -157,7 +187,11 @@ function MappingList({ kind }: { kind: string }) {
         <th className="w-44 p-4 font-medium">操作</th>
       </tr></thead>
       <tbody>{!loading && filtered.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE).map(row => <tr key={row.id} className="border-b border-line">
-        <td className="p-4 break-words font-medium">{row.name}{row.status === "archived" && <span className="ml-2 text-sm text-muted-foreground">已归档</span>}</td>
+        <td className="p-4 break-words font-medium">{row.name}{row.status === "archived" && <span className="ml-2 text-sm text-muted-foreground">已归档</span>}
+          {modulesMode && <p className="mt-1 text-sm font-normal text-muted-foreground">{MR_ROLES
+            .filter(([key]) => row.mrParticipants[key])
+            .map(([key, label]) => `${label} ${participantAccounts(row.mrParticipants[key]).length} 人`).join(" · ") || "未配置 MR 默认人员"}</p>}
+        </td>
         <td className="p-4">{modulesMode ? <div className="flex flex-wrap items-center gap-2">
           {row.value.split("\n").filter(Boolean).slice(0, 3).map(repo => <span key={repo} title={repo}
             className="max-w-44 truncate rounded-md bg-surface-2 px-2 py-1 text-sm">{shortRepo(repo)}</span>)}
@@ -191,6 +225,34 @@ function MappingList({ kind }: { kind: string }) {
             placeholder="每行一个代码仓地址" onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>
             : <label className="grid gap-2">分支名称<Input required value={edit.value} onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>}
           {modulesMode && <label className="grid gap-2">模块说明（可选）<Input value={edit.description ?? ""} onChange={e => setEdit({ ...edit, description: e.target.value })} /></label>}
+          {modulesMode && <fieldset className="grid gap-3 rounded-md border border-line p-3">
+            <legend className="px-1 font-medium">MR 默认人员（可选）</legend>
+            <p className="text-sm text-muted-foreground">本模块全部代码仓共用。本模块的知识归档和清理 MR 同样使用这份名单。创建新 MR 时自动添加，已有 MR 不随配置修改。可多选平台账号，也可手动填写未注册平台的 CodeHub 账号。</p>
+            {peopleLoading && <p role="status" className="text-sm text-muted-foreground">正在读取平台账号…</p>}
+            {peopleError && <p role="status" className="text-sm text-attention">平台账号暂时无法加载，已配置人员仍保留，也可手动填写账号。</p>}
+            {MR_ROLES.map(([key, label]) => {
+              const selected = participantAccounts(edit.mrParticipants?.[key]);
+              // 外部账号或已删除的平台账号仍可查看和取消，不能因候选缺席丢失配置。
+              const options = [...people.map(person => ({ ...person,
+                disabled: !MR_PARTICIPANT_ACCOUNT_PATTERN.test(person.username) && !selected.includes(person.username),
+                detail: MR_PARTICIPANT_ACCOUNT_PATTERN.test(person.username) ? undefined : "账号格式不支持",
+              })), ...selected.filter(username => !people.some(person => person.username === username))
+                .map(username => ({ username, detail: "其他账号" }))];
+              const change = (value: string) => setEdit({ ...edit,
+                mrParticipants: { ...participantInputs(), ...edit.mrParticipants, [key]: value } });
+              return <div key={key} className="grid gap-2 text-sm">
+                <span>{label}</span>
+                <UserPicker multiple wrapSelection ariaLabel={`选择${label}`} options={options} value={selected}
+                  disabled={peopleLoading || busy} emptyLabel={`选择${label}（可多选）`}
+                  placeholder="搜索姓名或账号" onChange={accounts => change(accounts.join(", "))} />
+                <details>
+                  <summary className="cursor-pointer text-xs text-muted-foreground">手动填写 CodeHub 账号</summary>
+                  <Input className="mt-2" aria-label={`${label} CodeHub 账号`} value={edit.mrParticipants?.[key] ?? ""}
+                    placeholder="多个账号用逗号或空格分隔" disabled={busy} onChange={e => change(e.target.value)} />
+                </details>
+              </div>;
+            })}
+          </fieldset>}
           {modulesMode && <fieldset className="grid gap-2">
             <legend className="text-sm text-muted-foreground">参考组件仓（可选）——问题会话开场只注入这里勾选组件的「何时需要读取」描述，AI 据此决定是否拉取源码研读</legend>
             <div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border border-line p-2">

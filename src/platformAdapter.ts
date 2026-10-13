@@ -87,6 +87,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { appendAudit } from "./issueFlow/audit.ts";
+import { hasMrParticipants, normalizeMrParticipants, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
 import {
   PIPELINE_DIMENSIONS,
   parsePipelineDefects,
@@ -212,6 +213,8 @@ interface AdapterConfig {
   mr_discover?: CommandSpec;
   /** 单号纠正成功后关闭旧 MR。未配置时保留旧 MR 并明确报告清理失败。 */
   mr_close?: CommandSpec;
+  /** 独立设置 MR 人员；命令必须返回 MrParticipantsResult JSON。 */
+  mr_participants?: CommandSpec;
   pipeline_trigger: PipelineTriggerSpec;
   pipeline_status: Degradable<CommandSpec>;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
@@ -546,6 +549,7 @@ export class PlatformAdapter {
       dts_no: String(body.dts_no ?? ""),
       sha: String(body.sha ?? ""),
       mr: String(body.mr ?? ""),
+      participants: body.participants === undefined ? "" : JSON.stringify(body.participants),
       id: String(body.id ?? ""),
       body: String(body.body ?? ""),
       resolve: String(body.resolve ?? ""),
@@ -706,6 +710,28 @@ export class PlatformAdapter {
     }
   }
 
+  /** 人员设置失败独立返回，不能抹掉已经创建成功的 MR。 */
+  private async setMrParticipants(
+    values: Record<string, string>, requested: MrParticipants,
+  ): Promise<MrParticipantsResult> {
+    if (!hasMrParticipants(requested)) return { status: "skipped", requested, message: "未配置 MR 人员，无需更新" };
+    const spec = this.config.mr_participants;
+    if (!spec?.contract) return { status: "failed", requested, message: "平台未配置 MR 人员更新能力，请更新 adapter 配置" };
+    const redact = (message: string) => [values.token, this.serviceToken].filter(Boolean)
+      .reduce((text, secret) => text.split(secret).join("<token>"), message).slice(0, 1000);
+    try {
+      const result = JSON.parse(await this.run(spec, { ...values, participants: JSON.stringify(requested) }));
+      if (!result || !["applied", "failed", "skipped"].includes(result.status)
+          || JSON.stringify(normalizeMrParticipants(result.requested)) !== JSON.stringify(requested)) {
+        throw new AdapterError("人员更新命令未返回匹配的结果与请求名单");
+      }
+      return { status: result.status, requested,
+        ...(typeof result.message === "string" ? { message: redact(result.message) } : {}) };
+    } catch (error) {
+      return { status: "failed", requested, message: redact(error instanceof Error ? error.message : String(error)) };
+    }
+  }
+
   private gatePassed(spec: ListSpec, raw: unknown): boolean {
     const accepted = (spec.passed_values
       ?? ["true", "1", "passed", "success", "yes"])
@@ -786,12 +812,16 @@ export class PlatformAdapter {
       } };
     }
     if (method === "POST" && path === "/mr") {
+      const requested = body.participants === undefined ? undefined : normalizeMrParticipants(body.participants);
       const values = this.values(body, headers);
       if (body.purpose === "knowledge" && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(values.dts_no)) throw new AdapterError("知识归档必须填写一个有效的关联单号");
       // 先查后建:同分支对已有开着的 MR 就复用,不去撞平台的幂等
       // 语义(CLI 报 stderr / REST 静默 200 空 body,形状不统一)。
       const found = await this.lookupMr(values);
-      if (found) return { status: 201, payload: found };
+      const reused = (mr: { url: string; id?: string }) => ({ status: 201, payload: { ...mr,
+        ...(hasMrParticipants(requested) ? { participants: { status: "skipped", requested,
+          message: "已有 MR 保留原人员设置；如需调整，请在 CodeHub 中维护" } satisfies MrParticipantsResult } : {}) } });
+      if (found) return reused(found);
       const spec = body.purpose === "knowledge" ? this.config.mr_create_knowledge ?? this.config.mr_create : this.config.mr_create;
       if (body.purpose === "knowledge" && !spec.command.some(arg => arg.includes("{dts_no}"))) throw new AdapterError("知识归档命令未配置单号关联，请在 mr_create_knowledge 中配置 {dts_no}");
       let stdout: string;
@@ -801,7 +831,7 @@ export class PlatformAdapter {
         // 创建失败再查一次兜竞态(查后建之间别人建了同分支对的 MR,
         // 平台会拒绝):查到了就复用,查不到才把创建的报错如实抛出。
         const retried = await this.lookupMr(values);
-        if (retried) return { status: 201, payload: retried };
+        if (retried) return reused(retried);
         throw error;
       }
       let parsedCache: unknown;
@@ -812,7 +842,16 @@ export class PlatformAdapter {
       return { status: 201, payload: {
         url: String(url ?? ""),
         ...(id !== undefined ? { id: String(id) } : {}),
+        ...(hasMrParticipants(requested) ? { participants: await this.setMrParticipants({ ...values,
+          mr: String(id ?? url ?? "") }, requested) } : {}),
       } };
+    }
+    if (method === "POST" && path === "/mr/participants") {
+      const requested = normalizeMrParticipants(body.participants);
+      if (!String(body.repo ?? "").trim() || !String(body.mr ?? "").trim()) {
+        return { status: 400, payload: { error: "人员设置必须指定仓库和 MR" } };
+      }
+      return { status: 200, payload: await this.setMrParticipants(this.values(body, headers), requested) };
     }
     if (method === "POST" && path === "/pipeline/trigger") {
       const spec = this.config.pipeline_trigger;
@@ -1095,6 +1134,7 @@ export class PlatformAdapter {
     const sections: Array<[string, CommandSpec | undefined]> = [
       ["mr_create(只印不执行)", this.config.mr_create],
       ["mr_close(只印不执行)", this.config.mr_close],
+      ["mr_participants(只印不执行)", this.config.mr_participants],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["mr_discover(全生命周期查找)", this.config.mr_discover],
       ["mr_gates", this.config.mr_gates],

@@ -1545,6 +1545,7 @@ export function createTaskServer(
               maintainers,
               repositories: Array.isArray(body.repositories)
                 ? body.repositories.map(String) : [],
+              mr_participants: body.mr_participants,
               reference_component_repos: Array.isArray(
                 body.reference_component_repos)
                 ? body.reference_component_repos.map(String) : [],
@@ -1580,6 +1581,7 @@ export function createTaskServer(
                 repositories: body.repositories === undefined
                   ? undefined : Array.isArray(body.repositories)
                     ? body.repositories.map(String) : [],
+                mr_participants: body.mr_participants,
                 reference_component_repos:
                   body.reference_component_repos === undefined
                     ? undefined : Array.isArray(body.reference_component_repos)
@@ -2334,6 +2336,15 @@ export function createTaskServer(
           const body = await readBody(request);
           if (typeof body.module_id !== "string") return json(response, 400, { error: "module_id 必须为字符串" });
           try { return json(response, 200, service.setBusinessModule(id, body.module_id, viewer?.username ?? "本地部署")); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
+        }
+        if (request.method === "POST" && parts.length === 3 && parts[2] === "mr-participants") {
+          const task = service.get(id);
+          if (!task) return json(response, 404, { error: "任务不存在" });
+          if (options.auth && viewer?.username !== task.luban_account) {
+            return json(response, 403, { error: "只有任务责任人可以重试 MR 人员设置" });
+          }
+          try { return json(response, 200, await service.retryMrParticipants(id)); }
           catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "GET" && parts.length === 2) {

@@ -19,6 +19,7 @@ import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./kn
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
 import { continuingReviewProposal, assertLatestReviewProposal, assertReviewRevision, assertNoPendingReviewProposals, type ReviewProposal } from "./knowledgeReviewCore.ts";
 import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
+import { MR_PARTICIPANT_ROLES, normalizeMrParticipants } from "./mrParticipants.ts";
 
 import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
@@ -71,10 +72,17 @@ function validPublication(value: any): value is DomainPublication {
     && ["id", "path", "content"].every(key => typeof document[key] === "string") && Number.isSafeInteger(document.revision) && document.revision > 0
     && ["knowledge_document_id", "knowledge_revision"].every(key => document[key] === undefined || typeof document[key] === "string")
     && (document.deleted === undefined || typeof document.deleted === "boolean"));
+  const participants = (value: any) => {
+    if (!isRecord(value) || !["applied", "failed", "skipped"].includes(value.status)
+      || !isRecord(value.requested) || !MR_PARTICIPANT_ROLES.every(role => Array.isArray(value.requested[role]))
+      || value.message !== undefined && typeof value.message !== "string") return false;
+    try { normalizeMrParticipants(value.requested); return true; } catch { return false; }
+  };
   return isRecord(value) && typeof value.target_id === "string" && typeof value.branch === "string" && ["pending", "opened", "failed"].includes(value.state)
     && documents(value.documents) && (value.attempted_documents === undefined || documents(value.attempted_documents))
     && (value.url === undefined || validMrUrl(value.url)) && (value.state !== "opened" || validMrUrl(value.url))
     && (value.mr_attempted === undefined || typeof value.mr_attempted === "boolean")
+    && (value.mr_participants === undefined || participants(value.mr_participants))
     && ["revision", "error", "updated_at"].every(key => value[key] === undefined || typeof value[key] === "string")
     && (value.mr_id === undefined || typeof value.mr_id === "string" || typeof value.mr_id === "number" && Number.isFinite(value.mr_id));
 }
@@ -399,12 +407,13 @@ export class DomainKnowledgeExtraction {
       const configured = !!target.repository.trim() && !problem;
       const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
       const actions: KnowledgeProductionAction[] = !configured ? perTarget ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
-        : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
+        : publication?.state === "opened" && publication.mr_participants?.status === "failed" ? [action({ id: "retry-archive", label: "重试设置人员", view: "archive", target_id: target.id, batch_id: batch!.id })]
+          : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
         message: problem ? `归档仓设置不能用于创建 MR：${problem}。请在 Git 归档设置中修改。` : !configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "归档失败" ? "此仓归档失败，原因见下方；处理后重试此仓，重试复用同一分支。"
           : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "",
-        error: publication?.error || (status_label === "归档失败" ? batch?.error : undefined), url: publication?.url, actions,
+        error: publication?.error || (status_label === "归档失败" ? batch?.error : undefined), url: publication?.url, mr_participants: publication?.mr_participants, actions,
         files: documents.filter(document => ids.includes(document.target_id)).flatMap(document => {
           const file = { id: document.id, title: document.title, path: document.archive_path ?? document.path, content: document.content,
             knowledge_document_id: document.knowledge_document_id!, knowledge_revision: document.published_revision! };
@@ -454,7 +463,10 @@ export class DomainKnowledgeExtraction {
       const batch = job.archive_batches?.find(batch => batch.id === input?.batch_id && !!batch.issue_no);
       if (!batch || batch.state === "superseded") throw new Error("人工归档记录不存在");
       if (input.target_id && !batch.targets.some(target => target.id === input.target_id)) throw new Error("归档目标不存在");
-      const targets = archiveRepositoryGroups(batch.targets).filter(group => (!input.target_id || group.ids.includes(input.target_id)) && batch.publications.find(publication => group.ids.includes(publication.target_id))?.state !== "opened");
+      const targets = archiveRepositoryGroups(batch.targets).filter(group => {
+        const publication = batch.publications.find(publication => group.ids.includes(publication.target_id));
+        return (!input.target_id || group.ids.includes(input.target_id)) && (publication?.state !== "opened" || publication.mr_participants?.status === "failed");
+      });
       if (targets.length) await this.runManualArchive(job, batch, targets.flatMap(group => group.ids), operator, owner);
       else if (batch.state !== "done" && batch.targets.length && archiveRepositoryGroups(batch.targets).every(group =>
         batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened" && validMrUrl(publication.url)))) {
@@ -482,13 +494,18 @@ export class DomainKnowledgeExtraction {
     };
     const fail = (reason: string, targetId?: string, previous?: DomainPublication) => {
       const update = (candidate: DomainKnowledgeJob, batch: DomainArchiveBatch) => {
-        batch.state = "failed"; batch.error = reason;
         if (targetId) {
-          const saved = batch.publications.find(publication => publication.target_id === targetId);
+          const saved = batch.publications.find(publication => publication.target_id === targetId) ?? previous;
+          // 已保存的 MR 创建事实不因后续人员补设异常而变成归档失败。
+          const publication: DomainPublication = saved?.state === "opened" && validMrUrl(saved.url)
+            ? { ...saved, ...(saved.mr_participants?.status === "failed" ? { mr_participants: { ...saved.mr_participants, message: reason } } : {}) }
+            : { ...(saved ?? { target_id: targetId, branch: "", documents: [] }), state: "failed", error: reason };
           batch.publications = [...batch.publications.filter(publication => publication.target_id !== targetId),
-            { ...(saved ?? previous ?? { target_id: targetId, branch: "", documents: [] }), state: "failed", error: reason }];
+            publication];
           candidate.publications = structuredClone(batch.publications);
         }
+        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) ? "done" : "failed";
+        batch.error = batch.state === "failed" ? reason : undefined;
       };
       try { commit(update); }
       catch (error) {
@@ -499,12 +516,15 @@ export class DomainKnowledgeExtraction {
       }
     };
     const work = (async () => {
-      try { commit((_, batch) => { batch.state = "running"; batch.error = undefined; }); }
+      try { commit((_, batch) => {
+        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) ? "done" : "running";
+        batch.error = undefined;
+      }); }
       catch (error) { fail(error instanceof Error ? error.message : String(error)); return; }
       for (const { target, ids } of archiveRepositoryGroups(original.targets).filter(group => group.ids.some(id => targetIds.includes(id)))) {
         this.assertPublicationOwner(job.id, owner);
         const previous = currentBatch().publications.find(publication => ids.includes(publication.target_id));
-        if (previous?.state === "opened") continue;
+        if (previous?.state === "opened" && previous.mr_participants?.status !== "failed") continue;
         const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, accepting = true;
         const save = (publication: DomainPublication) => {
           if (!accepting || controller.signal.aborted) return;
