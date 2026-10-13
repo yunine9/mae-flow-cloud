@@ -381,19 +381,23 @@ test("范围不能超出真实已读行或声明末行，截断来源也不补�
   }
 });
 
-test("4000字符完整行可引用，4001拒绝且不人为截断，旧抄句仍保留1200上限", () => {
+test("4000字符完整行直接展示，更长原文改为来源链接且不截断，旧抄句仍保留1200上限", () => {
   const paragraph = "段".repeat(502) + "。", atLimit = "字".repeat(3999) + "。", tooLong = "字".repeat(4000) + "。";
   assert.equal(paragraph.length, 503);
   for (const content of [paragraph, atLimit]) {
     const result = parse([point({ basis: [range(1, 1)] })], [], [evidence({ content })]);
     assert.ok(result.markdown.includes(`> ${content}`));
   }
-  assert.throws(() => parse([point({ basis: [range(1, 1)] })], [], [evidence({ content: tooLong })]), /4000|截断/);
+  const source = evidence({ content: tooLong });
+  const result = parse([point({ basis: [range(1, 1)] })], [], [source]);
+  assert.ok(result.markdown.includes("[原文 ev-1，第 1–1 行](#evidence-ev-1)"));
+  assert.ok(!result.markdown.includes(tooLong.slice(0, 100)));
+  assert.equal(source.content, tooLong);
   assert.throws(() => parse([point({ basis: [{ evidence_id: "ev-1", quote: atLimit }] })], [], [evidence({ content: atLimit })]), /长度/);
-  assert.throws(() => parse([point({ basis: [range(1, 1)] })], [], [evidence({ content: " \t" })]), /4000/);
+  assert.throws(() => parse([point({ basis: [range(1, 1)] })], [], [evidence({ content: " \t" })]), /不能为空/);
 });
 
-test("范围保留真实换行与空白，字符预算包含CRLF，不先规范空白再放宽长度", () => {
+test("范围保留真实换行与空白，CRLF计入直接展示长度，超限仍可打开完整来源", () => {
   const source = evidence({ content: "  第一句\r\n\t第二句  ", start_line: 20, end_line: 21 });
   const result = parse([point({ basis: [range(20, 21)] })], [], [source]);
   assert.ok(result.markdown.includes(">   第一句\n> \t第二句  "));
@@ -402,7 +406,9 @@ test("范围保留真实换行与空白，字符预算包含CRLF，不先规范�
   assert.ok(parse([point({ basis: [range(1, 2)] })], [], [evidence({ content: atLimit })]).markdown);
   const tooLong = "字".repeat(3998) + "\r\n尾";
   assert.equal(tooLong.length, 4001);
-  assert.throws(() => parse([point({ basis: [range(1, 2)] })], [], [evidence({ content: tooLong })]), /4000/);
+  const longSource = evidence({ content: tooLong });
+  assert.match(parse([point({ basis: [range(1, 2)] })], [], [longSource]).markdown, /原文 ev-1，第 1–2 行/);
+  assert.equal(longSource.content, tooLong);
 });
 
 test("重复range兼容原有引用行为，分离范围不拼接，metadata不能充当正文行", () => {

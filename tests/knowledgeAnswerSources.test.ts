@@ -9,6 +9,7 @@ import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import { createKnowledgeAnswerSources, knowledgeAnswerSourceCatalog } from "../src/knowledgeAnswerSources.ts";
+import { parseKnowledgeAnswerComposition } from "../src/knowledgeAnswerComposition.ts";
 import type { KnowledgeAnswerExecution, KnowledgeAnswerContext, KnowledgeAnswerRecord } from "../src/knowledgeAnswerTypes.ts";
 import { consumptionFixture, componentSection } from "./componentConsumptionFixture.ts";
 
@@ -241,6 +242,35 @@ setInterval(()=>{},1000);`);
     for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
     restore(); f.cleanup();
   }
+});
+
+test("#476 豆包多文档JSON展开保留字段，单个长正文仍可引用且不丢失原文", async () => {
+  const f = fixture();
+  const documents = [{ title: "DSON介绍", content: "背景正文。".repeat(1600) + "必须保留的条件和例外。", metadata: { version: "v1" } },
+    { title: "PNP介绍", content: "另一份资料。" }];
+  const bin = executable(f.dir, "");
+  const restore = withEnv({ MAE_FLOW_WXDOUBAO_BIN: bin, WXDOUBAO_USERID: "qa-user", WXDOUBAO_TOKEN: "test-source-credential", MAE_FLOW_WXDOUBAO_TIMEOUT_MS: "1000" });
+  try {
+    for (const value of [documents, JSON.stringify(documents)]) {
+      writeFileSync(bin, `#!${process.execPath}\nconsole.log(JSON.stringify({result:{structuredContent:${JSON.stringify(value)}}}));`);
+      const q = execution(), sources = createKnowledgeAnswerSources(q.input, { dataDir: f.dir, search: new KnowledgeSearch(f.dir) });
+      const returned = await run(sources, "business_knowledge", { question: "介绍一下DSON和PNP" });
+      assert.equal(returned.result.isError, undefined);
+      assert.equal(returned.data.complete, true);
+      const source = q.record.evidence[0];
+      assert.equal(source.kind, "wireless");
+      assert.equal(source.content, returned.data.content);
+      assert.equal(source.digest, createHash("sha256").update(source.content).digest("hex"));
+      assert.deepEqual(JSON.parse(source.content.slice(source.content.indexOf("\n") + 1)), documents);
+      const lines = source.content.split("\n"), line = lines.findIndex(value => value.includes(documents[0].content)) + 1;
+      assert.ok(lines.length > 3, "多个文档及其字段不再压成一行");
+      assert.ok(line > 0 && lines[line - 1].length > 4000);
+      const answer = parseKnowledgeAnswerComposition(JSON.stringify({ points: [{ kind: "answer", body: "无线背景说明。",
+        basis: [{ evidence_id: source.id, start_line: line, end_line: line }] }] }), q.record.evidence);
+      assert.ok(answer.markdown.includes(`[原文 ${source.id}，第 ${line}–${line} 行](#evidence-${source.id})`));
+      assert.ok(source.content.includes(documents[0].content));
+    }
+  } finally { restore(); f.cleanup(); }
 });
 
 test("豆包只保存实际展示的背景页，未核验原文明确，取消后不会新增证据", async () => {

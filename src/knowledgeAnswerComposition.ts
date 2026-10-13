@@ -77,11 +77,11 @@ function rangeQuote(source: KnowledgeAnswerEvidence, start: unknown, end: unknow
   const { startLine, lines } = knowledgeAnswerSourceLines(source);
   const maximum = Math.min(startLine + lines.length - 1, source.end_line ?? Infinity);
   if (start < startLine || end > maximum) throw new KnowledgeAnswerCompositionError("引用的行范围不在本次实际读取的原文中");
-  // 保留原文件的换行形式，长度预算按实际所取文字计算，不扩展、拼接或截断。
+  // 保留原文件的换行形式，不扩展、拼接或截断；长原文在展示时改用来源链接。
   const separators = source.content.split(/(\r\n|[\n\r\u2028\u2029])/).filter((_part, index) => index % 2 === 1);
   const quote = lines.slice(start - startLine, end - startLine + 1)
     .map((line, index) => line + (start + index < end ? separators[start - startLine + index] : "")).join("");
-  if (!text(quote, 4000)) throw new KnowledgeAnswerCompositionError("来源行范围的实际原文须为1至4000字符，不会截断长行");
+  if (!quote.trim()) throw new KnowledgeAnswerCompositionError("来源行范围的实际原文不能为空");
   return quote;
 }
 
@@ -179,7 +179,8 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
     const markdown = rendered.join("\n\n") || "本次查阅的资料不足以确认这些问题，具体缺口见未确认项。";
     return { markdown, evidence_ids: [...new Set(knowledgeAnswerCitations(markdown))], unknowns };
   };
-  let rendered = render(true), result = resultFor(rendered);
+  const inlineQuotes = points.every(point => point.basis.every(basis => !basis.quote || basis.quote.length <= 4000));
+  let rendered = render(inlineQuotes), result = resultFor(rendered);
   // 原文已另存为证据。平台展开造成的膨胀改用完整原件链接，不裁句，也不让模型重新作答。
   if (JSON.stringify(result).length > maxChars) {
     rendered = render(false);

@@ -30,6 +30,18 @@ const reply = (data: unknown, isError = false) => ({
 });
 const textOf = (result: any): string => result.content?.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n") ?? "";
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+function wirelessEvidenceText(value: unknown): string {
+  if (typeof value === "string") {
+    const original = value;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed === null || typeof parsed !== "object") return value;
+      value = parsed;
+    } catch { return original; }
+  }
+  // 多文档结果按 JSON 结构展开，保留全部字段；长正文不截断、不伪造原文行。
+  return JSON.stringify(value, null, 2);
+}
 async function executeEveryCode(file: string, args: string[], cwd?: string, signal?: AbortSignal): Promise<string> {
   try {
     return await runKnowledgeCommand(file, args, { cwd, signal, timeoutMs: 30_000, maxBytes: 1024 * 1024,
@@ -264,7 +276,7 @@ export function createKnowledgeAnswerSources(input: KnowledgeAnswerExecution, op
       const tool = wxdoubaoTool(input.signal, event => {
         if (event.status === "failed") { input.warn(String(event.error)); return; }
         if (event.status !== "available") return;
-        const text = typeof event.result === "string" ? event.result : JSON.stringify(event.result);
+        const text = wirelessEvidenceText(event.result);
         wirelessKey = `wireless:${digest(text)}`;
         retain(wirelessKey, { text: "无线豆包背景回复；未核验原始文档和版本，不能证明本系统需求、设计或历史原因。\n" + text,
           evidence: { kind: "wireless", title: "无线豆包背景资料", scope: "无线通用背景；原始文档未核验" } });
