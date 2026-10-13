@@ -1,10 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { DomainKnowledgeExtraction } from '../../src/domainKnowledgeExtraction.ts';
 import { runDomainKnowledge } from '../../src/domainKnowledgeAgent.ts';
-import { KnowledgeExtractionSkills } from '../../src/knowledgeExtractionSkills.ts';
+import { parseFrontmatter } from '@earendil-works/pi-coding-agent';
+import type { ExtractionSkillSnapshot } from '../../src/knowledgeExtractionSkills.ts';
+import { domainExecutionContract } from '../../src/domainKnowledgeExecution.ts';
+import { knowledgeArchiveDefaults } from '../../src/knowledgeArchiveDefaults.ts';
+import { scanForSecrets } from '../../src/hostSkillLibrary.ts';
 import { saveKnowledgeMaterial } from '../../src/knowledgeMaterials.ts';
 import { createFixture, hash, instructions, MATERIALS, SUITE_VERSION } from './fixtures.ts';
 import { assessRun, FACTS, filesUnder } from './scoring.ts';
@@ -95,9 +99,13 @@ export async function run(options: Options) {
     // The evaluator and expectations are outside the allowed source roots. The research tools cannot read them.
     write('expected-facts.json', FACTS.map(({ id, expected, source }) => ({ id, expected, source })));
     write('input.json', { title: '订单与库存知识', scope: '研究订单生命周期与库存预留的完整行为、跨仓交互、错误处理及业务边界。', instructions: instructions(options.profile), profile: options.profile });
-    const skills = new KnowledgeExtractionSkills(data);
-    await skills.save('domain', skillFiles, skills.current('domain').digest, 'benchmark');
-    const skill = skills.current('domain'); write('skill.json', { name: skill.name, digest: skill.digest, files: skill.files });
+    const { frontmatter } = parseFrontmatter<{ name?: string; description?: string }>(skillFiles['SKILL.md']);
+    if (!frontmatter.name || !frontmatter.description) throw new Error('评测方法需要有效的 name 和 description');
+    domainExecutionContract(skillFiles); knowledgeArchiveDefaults(skillFiles, 'domain');
+    for (const [path, content] of Object.entries(skillFiles)) scanForSecrets(path, Buffer.from(content));
+    const skill: ExtractionSkillSnapshot = { name: frontmatter.name, kind: 'domain',
+      digest: hash(JSON.stringify(Object.entries(skillFiles).sort(([a], [b]) => a.localeCompare(b)))), captured_at: new Date().toISOString(), files: skillFiles };
+    write('skill.json', { name: skill.name, digest: skill.digest, files: skill.files });
     const materials = await Promise.all(MATERIALS.map(m => saveKnowledgeMaterial(join(data, 'knowledge-materials'), { name: m.name, version: m.version, content_base64: Buffer.from(m.content).toString('base64') })));
     if (materials.some(m => m.state !== 'ready')) throw new Error('合成业务资料未成功解析');
     const scorerDigest = hash(readFileSync(fileURLToPath(new URL('./scoring.ts', import.meta.url))));
@@ -109,11 +117,19 @@ export async function run(options: Options) {
     if (interrupted || Date.now() >= started + options.budgetMs) throw new Error('任务已中断或准备阶段已用完整体预算，未请求模型');
     const deny = join(out, 'external-lookup-disabled.cjs'); writeFileSync(deny, `#!${process.execPath}\nprocess.stderr.write('External business lookup is disabled in this synthetic benchmark.');process.exit(1);\n`, { mode: 0o700 });
     process.env.MAE_FLOW_WXDOUBAO_BIN = deny; delete process.env.WXDOUBAO_USERID; delete process.env.WXDOUBAO_TOKEN;
-    const createService = () => new DomainKnowledgeExtraction(data, input => runDomainKnowledge(input, { dataDir: data,
+    const createService = () => new DomainKnowledgeExtraction(data, input => {
+      // 评测选择的包只固定到本次任务；重启继续沿用同一副本，不修改平台公共方法。
+      const pinned = join(input.root, 'skill.json');
+      if (!existsSync(pinned)) {
+        mkdirSync(input.root, { recursive: true });
+        writeFileSync(`${pinned}.tmp`, JSON.stringify(skill), { mode: 0o600 }); renameSync(`${pinned}.tmp`, pinned);
+      }
+      return runDomainKnowledge(input, { dataDir: data,
       model: () => ({ provider: options.provider, model: options.model, json: modelJson }), source: async repository => {
         const source = fixture.sources.find(s => s.repository.id === repository.id); if (!source) throw new Error('只能读取固定合成仓');
         return { root: source.root, revision: source.revision };
-      } }));
+      } });
+    });
     service = createService();
     const input = JSON.parse(readFileSync(join(out, 'input.json'), 'utf8'));
     const job = service.create({ issue_no: 'BENCH-SYNTHETIC', ...input, repositories: fixture.sources.map(s => s.repository), material_ids: materials.map(m => m.id) }, 'benchmark'); jobId = job.id;

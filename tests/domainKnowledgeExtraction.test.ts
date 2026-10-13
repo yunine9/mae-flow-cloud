@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction, knowledgeIssueDescription, type DomainExecution, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
+import { runGenericDomainKnowledge as runDomainKnowledge } from "./helpers/extractionSkillFixture.ts";
 import { ScriptedModelServer } from "../src/scriptedModel.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
 import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
@@ -163,7 +163,7 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
     assert.equal(result.turns[0].research?.phase, "complete"); assert.match(JSON.stringify(model.requests), /执行结果尚未保存/);
     assert.equal(result.documents.length, 2); assert.equal(result.documents[0].base_revision, ""); assert.equal(result.archive_configured, false); assert.equal(result.revisions["repo-1"], revision);
     assert.match(JSON.stringify(result.evidence), /latest-ready/); assert.notEqual(revision, staleRevision);
-    assert.equal(result.turns[0].skill?.name, "domain-knowledge-extraction");
+    assert.equal(result.turns[0].skill?.name, "generic-domain-fixture");
     const tools = (model.requests[0].tools as Array<{ name: string }>).map(t => t.name);
     assert.ok(tools.includes("extraction_skill")); assert.ok(tools.includes("knowledge_material"));
     assert.ok(!tools.includes("bash") && !tools.includes("write") && tools.includes("business_knowledge"));

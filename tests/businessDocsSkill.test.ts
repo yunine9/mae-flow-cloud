@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,29 +23,27 @@ function readPackage(relative = "", files: Record<string, string> = {}): Record<
   return files;
 }
 
-// Issue 475 附件原始模板的 SHA-256；适配执行方式时保留原文档体系与图表深度。
-const originalTemplates: Record<string, string> = {
-  "templates/domain/architecture.md": "9d3c3d443bf54ca24957203874ba43451c71232717f8dc7ed4cb26119b03b186",
-  "templates/domain/domain-agents.md": "87f1c87c5ae4806b5cfb5db4568fe866bdc8101a98a23aca48daf5244a7ddbc1",
-  "templates/domain/domain.md": "036fea6468d86fcc256cae7ec21d04c861c90e25370f69d7b6114477eeb9fb8c",
-  "templates/domain/external-system.md": "5d9199bfdd4694b93133cf981631ee29e620cfa18d76116b53a4f986f03fa7af",
-  "templates/domain/glossary.md": "3b8622a9bd5467f8905c24d5cf4fa91888f5a86b19d56343ad65afe3df9c4430",
-  "templates/domain/interface-contract.md": "c4b3e3c6515e6d7ac073f7bea32370a6de2a57e4764e32b13c210e39e118a03b",
-  "templates/domain/root-agents.md": "8dd005b14be7c14d8621dce00a2d1b175407cfd08b2159f478f8c8c32e083f93",
-  "templates/repo/business-rules.md": "b5bc0d3fdda79f8419b948d04a4b32b002892fbb2d99d15b96b55fa94b015f34",
-  "templates/repo/coding-conventions.md": "0cb3df1ebb44650fed9c84d4da81639f7032bfd1e79041dcfac964c6f285626a",
-  "templates/repo/experience.md": "df1ddf95cd21bb11797994000f9b909502304973e3b2bfbc12186d6c2165ca02",
-  "templates/repo/module-doc.md": "00519755c2121cf105edf20e241f03d559027d5c0372611597b13e0217bc82e3",
-  "templates/repo/module-map.md": "49d86457a4c1768a304150e7e66242c675932305f056ae3e4c80f41f48d426b8",
-  "templates/repo/repo-agents.md": "263755545d857d45a77739c993ab54e54d42be6c3b3d5cd72924730c9f10c873",
-};
+// 保留附件的全部文档类型；模板的示例与说明随平台方法一起精修。
+const requiredTemplates = [
+  "templates/domain/architecture.md",
+  "templates/domain/domain-agents.md",
+  "templates/domain/domain.md",
+  "templates/domain/external-system.md",
+  "templates/domain/glossary.md",
+  "templates/domain/interface-contract.md",
+  "templates/domain/root-agents.md",
+  "templates/repo/business-rules.md",
+  "templates/repo/coding-conventions.md",
+  "templates/repo/experience.md",
+  "templates/repo/module-doc.md",
+  "templates/repo/module-map.md",
+  "templates/repo/repo-agents.md"
+];
 
-test("业务文档适配包保留附件全部 13 个原始模板，执行引用完整", () => {
+test("内置业务方法保留全部 13 种文档模板，执行引用完整", () => {
   const files = readPackage();
-  assert.deepEqual(Object.keys(files).filter(path => path.startsWith("templates/")).sort(), Object.keys(originalTemplates).sort());
-  for (const [path, digest] of Object.entries(originalTemplates)) {
-    assert.equal(createHash("sha256").update(files[path]).digest("hex"), digest, path);
-  }
+  assert.deepEqual(Object.keys(files).filter(path => path.startsWith("templates/")).sort(), requiredTemplates.slice().sort());
+  for (const path of requiredTemplates) assert.ok(files[path].trim().length > 100, `${path} 需要完整模板`);
   for (const name of ["plan", "plan-template", "generate-domain", "generate-repo", "verify-doc"]) {
     assert.ok(files[`prompts/${name}.md`], `缺少附件执行提示词 ${name}`);
   }
@@ -60,29 +58,36 @@ test("业务文档适配包保留附件全部 13 个原始模板，执行引用�
   assert.equal(domainExecutionContract(files), "reviewed-document-plan");
 });
 
-test("业务文档完整包可通过现有领域方法安装，默认方法与已固定任务保持原版", async () => {
+test("新任务直接固定完整内置方法，历史上传不覆盖，运行中旧固定包仍可接续", async () => {
   const root = mkdtempSync(join(tmpdir(), "business-docs-package-"));
   try {
     const files = readPackage(), store = new KnowledgeExtractionSkills(root);
-    const original = store.current("domain"), defaultDigest = bundledExtractionSkill("domain").digest;
-    assert.equal(original.name, "domain-knowledge-extraction");
-    const oldPath = join(root, "old-task", "skill.json"), old = store.pin("domain", oldPath);
-    const saved = await store.save("domain", files, original.digest, "package-test");
+    const saved = store.current("domain");
     assert.equal(saved.name, "business-docs-generator");
     assert.equal(saved.kind, "domain");
-    assert.deepEqual(saved.files, files, "上传需保留提示词和模板，不能只安装 SKILL.md");
-    assert.equal(bundledExtractionSkill("domain").digest, defaultDigest);
-    assert.equal(store.pin("domain", oldPath).digest, old.digest);
+    assert.deepEqual(saved.files, files, "新任务直接使用全部提示词、引用与两层模板");
+    assert.equal(saved.digest, bundledExtractionSkill("domain").digest);
+    const legacyFiles = { "SKILL.md": "---\nname: domain-knowledge-extraction\ndescription: 旧版领域方法\n---\n保留旧任务原方法。" };
+    const old = { name: "domain-knowledge-extraction", digest: createHash("sha256").update(JSON.stringify(Object.entries(legacyFiles).sort(([a], [b]) => a.localeCompare(b)))).digest("hex"),
+      files: legacyFiles, captured_at: "2026-10-01T00:00:00Z" };
+    const oldPath = join(root, "old-task", "skill.json"); mkdirSync(dirname(oldPath), { recursive: true });
+    writeFileSync(oldPath, JSON.stringify(old));
+    const override = join(store.root, "domain-knowledge-extraction", "current.json"); mkdirSync(dirname(override), { recursive: true });
+    writeFileSync(override, JSON.stringify(old));
+    assert.equal(store.current("domain").digest, saved.digest);
+    assert.equal(readFileSync(override, "utf8"), JSON.stringify(old), "旧上传记录保留原样");
+    assert.deepEqual(store.pin("domain", oldPath), old, "旧无kind固定包不被更名或替换");
     const pinned = store.pin("domain", join(root, "new-task", "skill.json"));
     assert.equal(pinned.digest, saved.digest);
+    assert.equal(store.pin("domain", join(root, "new-task", "skill.json")).digest, saved.digest, "新包再次加载可通过kind校验");
     const tool: any = extractionSkillTool(pinned);
     for (const path of Object.keys(files)) {
       const result = await tool.execute("package-read", { path });
       assert.equal(result.content[0].text, files[path], path);
     }
-    // 上传提示只应来自附件模板的产物示例链接，执行提示词不应有遗漏引用。
-    assert.ok(saved.warnings.every(warning => warning.startsWith("templates/")), saved.warnings.join("\n"));
+    assert.equal(store.pin("domain", oldPath, true).digest, saved.digest, "明确使用最新方法才更新旧任务");
     const archive = join(dirname(oldPath), "skill-packages", `${old.digest}.json`);
     assert.equal(JSON.parse(readFileSync(archive, "utf8")).digest, old.digest);
+    await assert.rejects(store.save("domain", files, saved.digest, "admin"), /平台版本维护/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
+import { runGenericDomainKnowledge as runDomainKnowledge } from "./helpers/extractionSkillFixture.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";

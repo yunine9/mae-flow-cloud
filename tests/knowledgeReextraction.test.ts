@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { DomainKnowledgeExtraction, type DomainExecution } from "../src/domainKnowledgeExtraction.ts";
 import { ComponentResearch, type ResearchExecution } from "../src/componentResearch.ts";
 import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { domainSkillFixture, pinDomainSkillFixture } from "./helpers/extractionSkillFixture.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { createTechnologyStack } from "../src/technologyStacks.ts";
@@ -31,8 +32,10 @@ function domainMethod(input: DomainExecution, dir: string) {
 test("领域重新萃取复用单号、上传资料、源码和归档配置，读取最新 Skill，保留正式知识；重复请求及重启不多建任务", async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-domain-reextract-"));
   const material = await businessMaterial(dir), skills = new KnowledgeExtractionSkills(dir);
+  let methodFiles = skills.current("domain").files;
   let latestDigest = "", replacementRun: DomainExecution | undefined;
   const service = new DomainKnowledgeExtraction(dir, async input => {
+    pinDomainSkillFixture(input.root, methodFiles);
     const digest = domainMethod(input, dir);
     if (input.job.reextract_of) { latestDigest = digest; replacementRun = input; await waitForStop(input.signal); }
     else input.save(document, { content: null, revision: "a".repeat(40) });
@@ -43,7 +46,9 @@ test("领域重新萃取复用单号、上传资料、源码和归档配置，�
     await until(() => service.get(original.id).status === "done");
     const published = await service.publish(original.id, "alice"), formal = readKnowledgeDocument(dir, published.documents[0].knowledge_document_id!);
     const current = skills.current("domain");
-    const latest = await skills.save("domain", { ...current.files, "references/domain.md": current.files["references/domain.md"] + "\n重新萃取验收：检查最新方法。\n" }, current.digest, "alice");
+    // 模拟平台发布新的方法，只为新测试任务固定新包，已有任务不变。
+    methodFiles = { ...current.files, "SKILL.md": current.files["SKILL.md"] + "\n重新萃取验收：检查最新方法。\n" };
+    const latest = domainSkillFixture(methodFiles);
     const next = service.reextract(original.id, "bob");
     assert.notEqual(next.id, original.id); assert.equal(next.reextract_of, original.id); assert.equal(next.operator, "bob");
     for (const key of ["title", "scope", "instructions", "issue_no", "issue_description", "module_id", "material_ids", "repositories", "source_repositories", "knowledge_target"] as const) assert.deepEqual(next[key], published[key], key);

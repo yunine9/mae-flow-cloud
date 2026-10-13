@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
 
 const source = { repository: "https://example.test/source.git", name: "业务仓", branch: "main" };
 async function done(service: DomainKnowledgeExtraction, id: string) {
@@ -14,8 +13,6 @@ async function done(service: DomainKnowledgeExtraction, id: string) {
 }
 test("生产线验收5/14：平台发布与人工归档分开，Skill默认值、归档路径重映射与研究范围保留", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-targets-"));
-  const skills = new KnowledgeExtractionSkills(root), skill = skills.current("domain");
-  await skills.save("domain", { ...skill.files, "references/archive-defaults.md": '# 默认\n```json\n{"domain_directory":"business/domains","repository_directory":"business/local"}\n```' }, skill.digest, "admin");
   const service = new DomainKnowledgeExtraction(root, async input => {
     if (input.turn.mode === "extract") for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: target.name, target_id: target.id, path: `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: "# 规则\n人工内容", sources: "源码" });
     else {
@@ -40,7 +37,7 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
     assert.match(initial.scope, /交易业务/);
     let job = await done(service, initial.id);
     assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
-    assert.deepEqual(job.documents.map(d => d.path), ["business/domains/rules.md", "business/local/rules.md"]);
+    assert.deepEqual(job.documents.map(d => d.path), ["domain-docs/rules.md", "docs/rules.md"]);
     await service.publish(job.id, "user");
     assert.ok(service.get(job.id).documents.every(d => d.knowledge_document_id), "没有Git配置也能发布正式知识");
     const unconfigured = service.previewArchive(job.id);

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { CloudSession } from "../src/sessionDriver.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
+import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
@@ -23,7 +23,6 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
   const material = await businessMaterial(root), sessions: any[] = [];
   const skills = new KnowledgeExtractionSkills(root), originalComponent = skills.current("component").digest;
   const files = { "SKILL.md": "---\nname: settlement-guide\ndescription: 研究冲正规则。\n---\nMETHOD_A：按 [方法](guide/way.md) 调查后保存任意组织的文档。", "guide/way.md": "阅读源码、资料和豆包，单独复核，具体步骤由本方法安排。" };
-  await skills.save("domain", files, skills.current("domain").digest, "expert");
   const body = "# 已结算订单的取消\n\n采用冲正保留审计链。失败时由财务核对。";
   const document = { id: "guide", title: "冲正", layer: "domain", target_id: "domain", path: "domains/answers/settlement.md", content: body, sources: "已读取的源码、上传资料与豆包" };
   const intercepted = mock.method(CloudSession, "create", async (config: any) => {
@@ -77,7 +76,7 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
       return { status: "turn_finished" };
     }, dispose() {}, abort: async () => {}, startResume: async () => { throw new Error("不应补充会话"); } } as any;
   });
-  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => ({ root: repo, revision }) }));
+  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledgeFixture(files, input, { dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => ({ root: repo, revision }) }));
   try {
     const job = service.create({ issue_no: "REQ-skill", title: "订单", scope: "取消", instructions: "只研究订单取消，不读取 legacy/payment.ts；正文只写业务规则", material_ids: [material.id], repositories: [{ repository: "https://example.test/orders.git", branch: "main" }] }, "expert");
     for (let i = 0; i < 1000 && !["done", "failed"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
@@ -101,8 +100,9 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
   } finally { await service.shutdown(); intercepted.mock.restore(); for (const [k, v] of Object.entries(previous)) if (v === undefined) delete process.env[k]; else process.env[k] = v; rmSync(root, { recursive: true, force: true }); }
 });
 
-test("替换为单篇 Skill 即改变输出，不读取源码、不强制评审和领域文档，也不按特殊文件名分流", async () => {
-  const root = mkdtempSync(join(tmpdir(), "domain-skill-swap-")), skills = new KnowledgeExtractionSkills(root);
+test("任务固定为单篇 Skill 即改变输出，不读取源码、不强制评审和领域文档，也不按特殊文件名分流", async () => {
+  const root = mkdtempSync(join(tmpdir(), "domain-skill-swap-"));
+  let method: Record<string, string> = {};
   let runs = 0, sources = 0;
   const intercepted = mock.method(CloudSession, "create", async (config: any) => ({
     start: async (prompt: string) => {
@@ -120,12 +120,12 @@ test("替换为单篇 Skill 即改变输出，不读取源码、不强制评审�
       return { status: "turn_finished" };
     }, dispose() {}, abort: async () => {},
   }) as any);
-  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => { sources++; throw new Error("不应读取源码"); } }));
+  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledgeFixture(method, input, { dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => { sources++; throw new Error("不应读取源码"); } }));
   try {
     const jobs: string[] = [];
     for (const version of ["A", "B"]) {
-      await skills.save("domain", { "SKILL.md": `---\nname: method-${version.toLowerCase()}\ndescription: 自定义领域方法。\n---\nONLY_ONE_PAGE VERSION_${version}，只按 [说明](custom/how.md) 写一篇文档。`, "custom/how.md": "自由正文。",
-        ...(version === "B" ? { "references/platform-pipeline.md": "这是普通附件文件，不表示启动平台流水线。" } : {}) }, skills.current("domain").digest, "expert");
+      method = { "SKILL.md": `---\nname: method-${version.toLowerCase()}\ndescription: 自定义领域方法。\n---\nONLY_ONE_PAGE VERSION_${version}，只按 [说明](custom/how.md) 写一篇文档。`, "custom/how.md": "自由正文。",
+        ...(version === "B" ? { "references/platform-pipeline.md": "这是普通附件文件，不表示启动平台流水线。" } : {}) };
       const job = service.create({ issue_no: "REQ-skill", title: "业务", scope: "已知范围", repositories: version === "B" ? [] : [{ repository: "https://example.test/repo.git", branch: "main" }] }, "expert"); jobs.push(job.id);
       for (let i = 0; i < 200 && !["done", "failed"].includes(service.get(job.id).status); i++) await new Promise(r => setTimeout(r, 10));
       assert.equal(service.get(job.id).status, "done", service.get(job.id).error);

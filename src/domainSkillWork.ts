@@ -41,6 +41,8 @@ export interface SkillWorkStep {
   review_attempts?: number; budget_start?: number; review_budget_start?: number;
 }
 export interface SkillWorkCallbacks {
+  /** 候选已持久化后做确定性检查；运行条件不足时抛出并保留候选，不消耗评审次数。 */
+  validate?(step: SkillWorkStep, result: SkillWorkResult): Promise<SkillWorkReview | undefined>;
   review(step: SkillWorkStep, result: SkillWorkResult): Promise<SkillWorkReview>;
   fingerprint(ids: string[]): string;
 }
@@ -148,15 +150,28 @@ export class DomainSkillWork {
     if (step.review && !callbacks) throw new Error("此步骤需要独立评审与文稿版本核对");
     if (step.status === "done") {
       const currentFingerprint = step.review && step.result ? callbacks!.fingerprint(documentIds(step, step.result)) : undefined;
-      if (!step.review || step.result?.review?.pass && step.reviewed_fingerprint === currentFingerprint) return step.result!;
+      const reusable = !step.review || step.result?.review?.pass && step.reviewed_fingerprint === currentFingerprint;
+      let validation: SkillWorkReview | undefined;
+      try { validation = reusable ? await callbacks?.validate?.(structuredClone(step), structuredClone(step.result!)) : undefined; }
+      catch (error) {
+        // 已通过版本暂时无法复核时保留评审凭据；环境恢复后可直接复用，不重新消耗预算。
+        delete this.state.result;
+        step.error = error instanceof Error ? error.message : String(error); this.persist(); throw error;
+      }
+      signal.throwIfAborted();
+      if (reusable && (!validation || validation.pass)) {
+        if (step.error) { delete step.error; this.persist(); }
+        return step.result!;
+      }
       // 已通过的正文后来正常修改，为新版本提供有限评审预算；失败或重启不走这条路径。
       if (step.result?.review?.pass && step.reviewed_fingerprint !== currentFingerprint) {
         step.budget_start = step.attempts; step.review_budget_start = step.review_attempts ?? 0;
       }
       step.candidate ??= structuredClone(step.result!);
       if (step.candidate) delete step.candidate.review;
+      if (validation && !validation.pass) step.candidate!.review = validation;
       delete step.result; delete step.reviewed_fingerprint; delete this.state.result;
-      step.status = "pending"; step.error = "文稿已变化，需要重新读取并评审当前正文"; this.persist();
+      step.status = "pending"; step.error = validation?.feedback ?? "文稿已变化，需要重新读取并评审当前正文"; this.persist();
     }
     if (step.depends_on.some(id => this.state.steps.find(s => s.id === id)?.status !== "done")) throw new Error("依赖步骤尚未完成");
     const execution = { signal, writing: false, callbacks };
@@ -167,7 +182,7 @@ export class DomainSkillWork {
         signal.throwIfAborted();
         if (step.review && (step.review_attempts ?? 0) - (step.review_budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`独立评审已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未通过；${step.error ?? "请检查文稿和评审记录后接续"}`);
         if (!step.candidate || step.candidate.review?.pass === false) {
-          if (step.review && step.attempts - (step.budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`研究与修订已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未完成；${step.error ?? "请检查已保存的草稿后接续"}`);
+          if ((step.review || callbacks?.validate) && step.attempts - (step.budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`研究与修订已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未完成；${step.error ?? "请检查已保存的草稿后接续"}`);
           step.attempts++; execution.writing = true;
           const attempt = structuredClone(step); // 把上次候选及退回意见交给修订会话。
           delete step.candidate; delete step.candidate_fingerprint; this.persist();
@@ -185,6 +200,11 @@ export class DomainSkillWork {
           } finally { execution.writing = false; }
         }
         const candidate = step.candidate!;
+        const validation = await callbacks?.validate?.(structuredClone(step), structuredClone(candidate));
+        signal.throwIfAborted();
+        if (validation && !validation.pass) {
+          candidate.review = validation; step.error = validation.feedback; this.persist(); continue;
+        }
         if (!step.review) {
           step.result = structuredClone(candidate); step.status = "done"; delete step.error; this.persist(); return step.result;
         }

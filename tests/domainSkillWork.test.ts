@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { DomainSkillWork, type SkillWorkResult } from "../src/domainSkillWork.ts";
+import { DomainSkillWork, type SkillWorkCallbacks, type SkillWorkResult } from "../src/domainSkillWork.ts";
 
 const step = (id: string, depends_on: string[] = []) => ({ id, title: id, instructions: "任意 Skill 的工作说明", depends_on, readonly: false });
 test("通用工作记录只执行 Skill 提供的步骤，拒绝环路，断点复用结果与显式暂停", async () => {
@@ -206,6 +206,136 @@ test("评审请求失败有持久上限，恢复后仅重试已保存候选的�
     await restored.run("guide", execute, f.signal, { ...callbacks, review: async () => { reviews++; return { pass: true, feedback: "连接恢复，回读当前正文通过" }; } });
     assert.equal(writes, 1); assert.equal(reviews, 4);
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("候选语法校验先于独立评审，错误反馈交回作者，修订通过后才评审", async () => {
+  const f = reviewedFixture(); let writes = 0, checks = 0, reviews = 0;
+  const feedback = "guide 第 2 张 PlantUML 的第 4 行语法错误，请修正参与者别名";
+  try {
+    const result = await f.work.run("guide", async current => {
+      writes++;
+      if (writes === 2) {
+        assert.equal(current.error, feedback);
+        assert.equal(current.candidate?.review?.pass, false);
+      }
+      return candidate();
+    }, f.signal, {
+      fingerprint: () => `version-${writes}`,
+      validate: async (_step, value) => {
+        checks++;
+        assert.deepEqual(value.document_ids, ["guide"]);
+        assert.equal(JSON.parse(readFileSync(f.file, "utf8")).steps[0].candidate.summary, "文稿已保存", "校验前候选已经落盘");
+        return checks === 1 ? { pass: false, feedback } : undefined;
+      },
+      review: async () => { reviews++; return { pass: true, feedback: "语法通过后独立回查业务依据" }; },
+    });
+    assert.equal(writes, 2); assert.equal(checks, 2); assert.equal(reviews, 1);
+    assert.equal(f.work.state.steps[0].attempts, 2); assert.equal(f.work.state.steps[0].review_attempts, 1);
+    assert.equal(f.work.state.steps[0].reviewed_fingerprint, "version-2");
+    assert.equal(result.review?.feedback, "语法通过后独立回查业务依据");
+    assert.deepEqual(result.data, { pass: "旧 Skill 自由数据" });
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("语法持续失败最多三次写作，重启不会补修订预算或启动无效文稿评审", async () => {
+  const f = reviewedFixture(); let writes = 0, checks = 0, reviews = 0;
+  const execute = async () => { writes++; return candidate(); };
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => `version-${writes}`,
+    validate: async () => { checks++; return { pass: false, feedback: "guide 第 1 张 PlantUML 仍有语法错误" }; },
+    review: async () => { reviews++; return { pass: true, feedback: "不应评审未通过语法验证的文稿" }; },
+  };
+  try {
+    await assert.rejects(f.work.run("guide", execute, f.signal, callbacks), /已尝试 3 次/);
+    assert.equal(writes, 3); assert.equal(checks, 3); assert.equal(reviews, 0);
+    assert.equal(f.work.state.steps[0].status, "failed"); assert.equal(f.work.state.steps[0].result, undefined);
+    assert.equal(f.work.state.steps[0].review_attempts ?? 0, 0);
+    assert.equal(f.work.state.steps[0].candidate?.review?.pass, false);
+    const restored = new DomainSkillWork(f.file, "skill");
+    await assert.rejects(restored.run("guide", execute, f.signal, callbacks), /已尝试 3 次/);
+    assert.equal(writes, 3); assert.equal(checks, 3); assert.equal(reviews, 0);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("验证器不可用立即保留候选且不消耗评审或额外修订次数，重启恢复后只校验与评审", async () => {
+  const f = reviewedFixture(); let writes = 0, checks = 0, reviews = 0;
+  const execute = async () => { writes++; return candidate(); };
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => "version-1",
+    validate: async () => { checks++; throw new Error("服务端没有 Java，PlantUML 尚未验证"); },
+    review: async () => { reviews++; return { pass: true, feedback: "恢复后独立读取当前正文通过" }; },
+  };
+  try {
+    await assert.rejects(f.work.run("guide", execute, f.signal, callbacks), /服务端没有 Java/);
+    assert.equal(writes, 1); assert.equal(checks, 1); assert.equal(reviews, 0);
+    const saved = f.work.state.steps[0];
+    assert.equal(saved.status, "failed"); assert.equal(saved.attempts, 1); assert.equal(saved.review_attempts ?? 0, 0);
+    assert.equal(saved.result, undefined); assert.deepEqual(saved.candidate, candidate());
+    assert.equal(saved.candidate_fingerprint, "version-1");
+    const restored = new DomainSkillWork(f.file, "skill");
+    assert.deepEqual(restored.state.steps[0].candidate, candidate());
+    const result = await restored.run("guide", execute, f.signal, { ...callbacks,
+      validate: async () => { checks++; return undefined; },
+    });
+    assert.equal(writes, 1, "依赖恢复只重试验证，不能覆盖已保存的候选文稿");
+    assert.equal(checks, 2); assert.equal(reviews, 1); assert.equal(result.review?.pass, true);
+    assert.equal(restored.state.steps[0].attempts, 1); assert.equal(restored.state.steps[0].review_attempts, 1);
+    assert.equal(restored.state.steps[0].reviewed_fingerprint, "version-1");
+    restored.finish({ summary: "当前文稿验证与独立评审均通过", document_ids: ["guide"] }, callbacks.fingerprint);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("已用满三次评审预算的完成文稿遇临时验证故障，重启恢复后复用原评审且不重写", async () => {
+  const f = reviewedFixture(); let writes = 0, checks = 0, reviews = 0, available = true;
+  const execute = async () => { writes++; return candidate(); };
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => "version-1",
+    validate: async () => { checks++; if (!available) throw new Error("PlantUML 进程暂时不可用"); return undefined; },
+    review: async () => {
+      reviews++;
+      if (reviews < 3) throw new Error("评审请求连接暂时中断");
+      return { pass: true, feedback: "第三次请求已回读当前正文并通过" };
+    },
+  };
+  try {
+    const completed = await f.work.run("guide", execute, f.signal, callbacks);
+    f.work.finish({ status: "complete", summary: "已核对完成", document_ids: ["guide"] }, callbacks.fingerprint);
+    assert.equal(writes, 1); assert.equal(reviews, 3); assert.equal(checks, 3);
+    available = false;
+    await assert.rejects(f.work.run("guide", execute, f.signal, callbacks), /进程暂时不可用/);
+    assert.equal(f.work.state.result, undefined, "不能保留环境尚未复核时的整体完成结论");
+    const restored = new DomainSkillWork(f.file, "skill");
+    const saved = restored.state.steps[0];
+    assert.equal(saved.status, "done"); assert.match(saved.error ?? "", /进程暂时不可用/);
+    assert.deepEqual(saved.result, completed); assert.equal(saved.reviewed_fingerprint, "version-1");
+    assert.equal(saved.attempts, 1); assert.equal(saved.review_attempts, 3);
+    assert.equal(saved.review_budget_start ?? 0, 0, "环境故障和服务重启均不补评审预算");
+    available = true;
+    const reused = await restored.run("guide", execute, f.signal, callbacks);
+    assert.deepEqual(reused, completed); assert.equal(saved.error, undefined);
+    assert.equal(writes, 1); assert.equal(reviews, 3); assert.equal(checks, 5);
+    assert.equal(saved.reviewed_fingerprint, "version-1");
+    restored.finish({ status: "complete", summary: "环境恢复，复用当前版本的通过结论", document_ids: ["guide"] }, callbacks.fingerprint);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("旧方法未登记独立评审时仍执行候选校验，语法修订也限制为三次", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-validation-only-"));
+  const work = new DomainSkillWork(join(dir, "work.json"), "legacy-skill"); let writes = 0, checks = 0;
+  work.schedule([{ ...step("guide"), expected_document_ids: ["guide"] }]);
+  try {
+    await assert.rejects(work.run("guide", async () => {
+      writes++;
+      assert.ok(writes <= 3, "旧方法不能因没有 review 而无限重写");
+      return candidate();
+    }, new AbortController().signal, {
+      fingerprint: () => `version-${writes}`,
+      validate: async () => { checks++; return { pass: false, feedback: "PlantUML 语法错误，需修改文稿" }; },
+      review: async () => { throw new Error("旧方法没有登记独立评审"); },
+    }), /已尝试 3 次/);
+    assert.equal(writes, 3); assert.equal(checks, 3);
+    assert.equal(work.state.steps[0].status, "failed"); assert.equal(work.state.steps[0].result, undefined);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("取消后提交工具拒绝迟到候选，写作者不能伪造独立评审", async () => {

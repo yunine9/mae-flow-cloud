@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -19,6 +20,7 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { businessKnowledgeEvidenceId, knowledgeEvidenceTool } from "./domainResearchEvidence.ts";
 import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 import { domainDocumentFingerprint, domainExecutionContract, DOMAIN_EXECUTION_INSTRUCTIONS, workOverview, workStepSummary, pageRows, runnableWave } from "./domainKnowledgeExecution.ts";
+import { createKnowledgeDiagramChecker, knowledgeDiagramFeedback } from "./domainKnowledgeDiagrams.ts";
 
 export interface DomainAgentOptions {
   dataDir: string;
@@ -28,6 +30,7 @@ export interface DomainAgentOptions {
 export async function runDomainKnowledge(input: DomainExecution, options: DomainAgentOptions) {
   const model = options.model();
   if (!model) throw new Error("请在模型网关配置主模型");
+  const savedDocumentIds = new Set<string>();
   const runController = new AbortController(), signal = AbortSignal.any([input.signal, runController.signal]);
   const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill && !input.turn.skill);
   const executionContract = domainExecutionContract(skill.files);
@@ -89,6 +92,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         }
         beforeWrite();
         const saved = input.save(doc, baseline);
+        savedDocumentIds.add(saved.id);
         const proposal = previous && (input.turn.mode !== "extract" || previous.human_edited || previous.knowledge_document_id
           || previous.research_turn_id && previous.research_turn_id !== input.turn.id);
         return { content: [{ type: "text" as const, text: JSON.stringify({ id: saved.id, saved: true, state: proposal ? "proposal" : "draft" }) }], details: {} };
@@ -142,6 +146,43 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const work = new DomainSkillWork(join(runRoot, "work.json"), skill.digest, input.turn.pipeline_continue);
   let runningBatch = false;
   const fingerprint = (ids: string[]) => domainDocumentFingerprint(input.read(), ids);
+  const checkDiagrams = createKnowledgeDiagramChecker({ signal, cacheDir: join(options.dataDir, "cache", "knowledge-plantuml") });
+  const checkDocumentDiagrams = async (id: string) => {
+    const documents = input.read(), version = domainDocumentFingerprint(documents, [id]), document = documents.find(item => item.id === id && !item.deleted)!;
+    const report = await checkDiagrams(document.content);
+    if (fingerprint([id]) !== version) throw new Error(`文稿 ${id} 在图校验期间变化，请重新校验当前正文`);
+    return { document_id: id, fingerprint: version, ...report };
+  };
+  const validateDiagrams = async (ids: string[]) => {
+    // 一批只读取两次全文快照，避免逐图文稿校验时反复复制整个大型知识库。
+    const documents = input.read(), version = domainDocumentFingerprint(documents, ids);
+    const selected = new Map(documents.map(document => [document.id, document]));
+    for (const id of new Set(ids)) {
+      const report = await checkDiagrams(selected.get(id)!.content);
+      if (report.status === "unavailable") throw new IncompleteDomainResearch(knowledgeDiagramFeedback(id, report) + "\n图语法尚未验证；保留候选文稿，恢复渲染条件后接续，无需因运行环境问题重写。");
+      if (report.status === "invalid") return { pass: false, feedback: knowledgeDiagramFeedback(id, report) + "\n按错误位置修正并重新校验；保留真实业务节点、条件和异常分支。" };
+    }
+    if (fingerprint(ids) !== version) throw new Error("文稿在图校验期间变化，请重新校验当前正文");
+  };
+  const completionDocumentIds = (result: SkillWorkResult) => {
+    const proposed = new Set(input.turn.proposals.filter(item => item.status !== "discarded").map(item => item.document.id));
+    const returned = new Set(result.document_ids);
+    return input.read().filter(document => !document.deleted && (input.turn.mode === "extract" || savedDocumentIds.has(document.id)
+      || document.research_turn_id === input.turn.id || proposed.has(document.id) || returned.has(document.id))).map(document => document.id);
+  };
+  const checkWorkDiagrams = async (id: string) => {
+    const document = work.state.documents?.find(item => item.id === id);
+    if (!document) throw new Error("过程文稿尚未保存");
+    const content = document.content, report = await checkDiagrams(content);
+    if (work.state.documents?.find(item => item.id === id)?.content !== content) throw new Error("过程文稿在图校验期间变化，请重新校验");
+    return { work_document_id: id, fingerprint: createHash("sha256").update(content).digest("hex"), ...report };
+  };
+  const requireWorkDiagrams = async (id?: string) => {
+    if (!id) return;
+    const report = await checkWorkDiagrams(id);
+    if (report.status !== "valid") throw new IncompleteDomainResearch(knowledgeDiagramFeedback(id, report)
+      + (report.status === "unavailable" ? "\n过程文稿已保留，恢复渲染条件后接续。" : "\n请修正已保存过程文稿中的图，再继续登记计划或结束。"));
+  };
   const progress = () => input.update({ research: { inventory_complete: work.state.result?.status === "complete",
     phase: work.state.result?.status === "complete" ? "complete" : "research",
     capabilities: work.state.steps.map(s => ({ id: s.id, title: s.title, repository_ids: [], state: s.status === "done" || s.status === "discarded" ? "researched" : s.status === "failed" ? "blocked" : "pending",
@@ -159,6 +200,21 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
     let result: SkillWorkResult | undefined;
     const reviewedDocuments = new Map<string, string>();
+    const reviewedDiagrams = new Map<string, string>();
+    const diagramTool = defineTool({ name: "knowledge_diagram_check", label: "校验文稿 PlantUML",
+      description: "用平台本地 PlantUML 渲染器检查已保存文稿的全部图。document_id（知识文稿）和 work_document_id（过程文稿）必须且只能填写一个。按 start/limit 返回图诊断（默认10、最多20）。valid 只证明图语法可渲染，total=0 表示未发现图；invalid 返回图序号和文稿行号；unavailable 表示 Java、运行库或渲染条件不足，不能视为语法通过或要求反复改稿。修改正文后须重新校验。",
+      parameters: Type.Object({ document_id: Type.Optional(Type.String()), work_document_id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })) }),
+      execute: async (_id: string, args: { document_id?: string; work_document_id?: string; start?: number; limit?: number }) => {
+        try {
+          if (!!args.document_id === !!args.work_document_id) throw new Error("请且仅填写 document_id 或 work_document_id");
+          if (args.document_id && work.state.steps.some(other => other.id !== step?.id && other.status === "running" && !other.readonly && other.expected_document_ids?.includes(args.document_id!))) throw new Error("该文稿正在其他步骤修改，请声明依赖并等待它完成");
+          const report = args.document_id ? await checkDocumentDiagrams(args.document_id) : await checkWorkDiagrams(args.work_document_id!);
+          if (reviewing && args.document_id && report.status === "valid") reviewedDiagrams.set(args.document_id, report.fingerprint);
+          const page = pageRows(report.diagrams, args.start, Math.min(20, args.limit ?? 10), "diagrams");
+          return reply({ ...report, diagrams: page.diagrams, next_start: page.next_start });
+        } catch (error) { return failure(error); }
+      },
+    });
     const resultTool = defineTool({ name: "knowledge_work_result", label: "保存执行结果", executionMode: "sequential",
       description: "保存本次执行的结论、文档编号与自由格式数据。主会话 status=complete 表示本轮结束，paused 表示保留进度等待用户接续；独立步骤只提交自身结果。",
       parameters: Type.Object({ summary: Type.String(), document_ids: Type.Array(Type.String()), work_document_ids: Type.Optional(Type.Array(Type.String())), data: Type.Optional(Type.Unknown()), status: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("paused")])),
@@ -180,6 +236,11 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
             for (const id of ids) {
               if (reviewedDocuments.get(id) !== fingerprint([id])) throw new Error(`请先用 knowledge_draft read 读取 ${id} 的当前完整正文，再提交评审`);
               if (!next.document_ids.includes(id)) throw new Error(`评审结果缺少文稿 ${id}`);
+              if (next.review.pass && input.turn.mode !== "discuss" && !work.state.steps.find(item => item.id === step!.id)?.readonly) {
+                const report = await checkDocumentDiagrams(id);
+                if (report.status !== "valid") throw new Error(knowledgeDiagramFeedback(id, report));
+                if (report.total && reviewedDiagrams.get(id) !== report.fingerprint) throw new Error(`请先用 knowledge_diagram_check 查看 ${id} 当前版本的实际图校验结果，再提交通过评审`);
+              }
             }
           } else if (step) {
             if (step.expected_document_ids && next.document_ids.some(id => !step.expected_document_ids!.includes(id))) throw new Error("步骤结果只能引用本步骤预定文稿，新增范围请交回主会话登记");
@@ -194,6 +255,11 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
             const excluded = new Set(plan.exclusions?.map(item => item.document_id));
             const unreviewed = input.read().filter(document => !document.deleted && !covered.has(document.id) && !excluded.has(document.id));
             if (unreviewed.length) throw new Error(`还有 ${unreviewed.length} 篇文稿尚未纳入独立评审计划：${unreviewed.slice(0, 30).map(document => document.id).join("、")}`);
+          }
+          if (!step && input.turn.mode !== "discuss" && next.status === "complete") {
+            const validation = await validateDiagrams(completionDocumentIds(next));
+            if (validation) throw new Error(validation.feedback);
+            await requireWorkDiagrams(work.state.plan?.work_document_id);
           }
           result = step ? next : work.finish(next, fingerprint);
           progress(); return reply({ saved: true });
@@ -227,12 +293,17 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           }
           if (step || result) throw new Error("当前会话不能安排或执行其他步骤");
           if (runningBatch) throw new Error("已有执行批次正在运行，请等待返回后再修改计划或执行其他工作");
-          if (args.action === "plan") { work.setPlan({ document_ids: args.document_ids, work_document_id: args.work_document_id, exclusions: args.exclusions }); return reply({ saved: true, total: work.state.plan!.document_ids.length }); }
+          if (args.action === "plan") {
+            await requireWorkDiagrams(args.work_document_id);
+            work.setPlan({ document_ids: args.document_ids, work_document_id: args.work_document_id, exclusions: args.exclusions }); return reply({ saved: true, total: work.state.plan!.document_ids.length });
+          }
           if (args.action === "schedule") { work.schedule(args.steps ?? []); progress(); return reply({ saved: true }); }
           if (args.action === "discard") { work.discard(args.id, args.reason ?? ""); progress(); return reply({ saved: true }); }
           if (args.action !== "run") throw new Error("未知工作操作");
           const runStep = (id: string) => work.run(id, async child => { progress(); return execute(child); }, signal, {
             fingerprint,
+            validate: (child, candidate) => child.readonly || input.turn.mode === "discuss" ? Promise.resolve(undefined)
+              : validateDiagrams([...new Set([...(child.expected_document_ids ?? []), ...candidate.document_ids])]),
             review: async (child, candidate) => {
               progress();
               const reviewed = await execute({ ...child, readonly: true, candidate,
@@ -257,7 +328,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
               try { await runStep(completed.id); } catch (error) { signal.throwIfAborted(); }
             }
             return reply({ ...workOverview(work.state),
-              complete: work.state.steps.every(item => item.status === "done" || item.status === "discarded") });
+              complete: work.state.steps.every(item => item.status === "done" && !item.error || item.status === "discarded") });
           } finally { runningBatch = false; progress(); }
         } catch (error) { return failure(error); }
       },
@@ -277,7 +348,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       return response;
     } };
     let activity = 0;
-    const tools = [...baseTools, guardedDraft, workTool, resultTool].map(tool => ({ ...tool,
+    const tools = [...baseTools, guardedDraft, diagramTool, workTool, resultTool].map(tool => ({ ...tool,
       execute: async (...args: Parameters<typeof tool.execute>) => { signal.throwIfAborted(); const response = await (tool.execute as Function)(...args); if (!response.isError) activity++; return response; },
     }));
     const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 明确结束或暂停。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。需要用户审阅的规划、清单和中间文稿，用 knowledge_work 的 save_document 保存完整 Markdown 正文，不能只说文稿已生成或把全文仅放在普通回复、data 里。需要用户确认或补充时，主会话保存 status=paused，summary 说明需要回答什么、答复后做什么，并通过 work_document_ids 或 document_ids 引用待审阅内容。收到答复后读取 human_replies 原话；continued 只是接续次数，是否确认以 human_replies 原话为准，不能把修改意见当成批准。";
@@ -318,6 +389,12 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   try {
     signal.throwIfAborted(); progress();
     const result = work.state.result ?? await execute();
+    // 包括重启后直接读取的历史完成结果，避免旧缓存绕过当前图校验。
+    if (input.turn.mode !== "discuss" && result.status !== "paused") {
+      const validation = await validateDiagrams(completionDocumentIds(result));
+      if (validation) throw new IncompleteDomainResearch(validation.feedback);
+      await requireWorkDiagrams(work.state.plan?.work_document_id);
+    }
     return result;
   } catch (error) {
     if (totalExpired && !input.signal.aborted) throw new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE);

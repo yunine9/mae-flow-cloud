@@ -5,8 +5,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 import { ScriptedModelServer, type Scene, type ScriptedModelOptions } from "../src/scriptedModel.ts";
 import type { SkillDocumentPlan, SkillWorkStep } from "../src/domainSkillWork.ts";
 
@@ -39,12 +38,11 @@ async function until(check: () => boolean, context: () => string) {
 
 async function fixture(script: Scene[], options: ScriptedModelOptions = {}) {
   const dir = mkdtempSync(join(tmpdir(), "domain-reviewed-recovery-"));
-  const skills = new KnowledgeExtractionSkills(dir);
-  await skills.save("domain", { "SKILL.md": "---\nname: reviewed-recovery\ndescription: 逐篇写作并独立评审。\nexecution: reviewed-document-plan\n---\n登记完整文稿计划，执行所有工作，明确报告完成与缺口。" }, skills.current("domain").digest, "tester");
+  const method = { "SKILL.md": "---\nname: reviewed-recovery\ndescription: 逐篇写作并独立评审。\nexecution: reviewed-document-plan\n---\n登记完整文稿计划，执行所有工作，明确报告完成与缺口。" };
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true, ...options });
   try { await model.start(); }
   catch (error) { await model.stop(); rmSync(dir, { recursive: true, force: true }); throw error; }
-  const createService = () => new DomainKnowledgeExtraction(dir, input => runDomainKnowledge(input, { dataDir: dir,
+  const createService = () => new DomainKnowledgeExtraction(dir, input => runDomainKnowledgeFixture(method, input, { dataDir: dir,
     model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }),
     source: async () => { throw new Error("本用例只读取输入，不访问代码仓"); },
   }));

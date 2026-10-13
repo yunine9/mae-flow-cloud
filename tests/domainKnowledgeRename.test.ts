@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { CloudSession } from "../src/sessionDriver.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { DomainKnowledgeExtraction, type DomainDocumentContent, type DomainKnowledgeJob, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { runDomainKnowledgeFixture, genericDomainSkillFixture } from "./helpers/extractionSkillFixture.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 
 async function finished(service: DomainKnowledgeExtraction, id: string) {
@@ -55,8 +55,7 @@ test("#466 Agent 用原编号改业务路径并更新三仓目录与 AGENTS：�
   execFileSync("git", ["init", "-q", repo]); execFileSync("git", ["-C", repo, "add", "."]);
   execFileSync("git", ["-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "fixture"]);
   const revision = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const skills = new KnowledgeExtractionSkills(root);
-  await skills.save("domain", { "SKILL.md": "---\nname: business-paths\ndescription: 按业务概念组织文稿。\n---\n使用稳定文档编号维护正文与路径，更新相关目录和阅读入口。" }, skills.current("domain").digest, "expert");
+  const method = { "SKILL.md": "---\nname: business-paths\ndescription: 按业务概念组织文稿。\n---\n使用稳定文档编号维护正文与路径，更新相关目录和阅读入口。" };
   let phase: "extract" | "rename" | "refine" | "discard" = "extract", readonlyChecks = 0;
   const allIds = [1, 2, 3].flatMap(number => businessDocuments(number).map(document => document.id));
   const intercepted = mock.method(CloudSession, "create", async (config: any) => ({
@@ -106,7 +105,7 @@ test("#466 Agent 用原编号改业务路径并更新三仓目录与 AGENTS：�
       return { status: "turn_finished" };
     }, dispose() {}, abort: async () => {}, startResume: async () => { throw new Error("已保存结果不应再次补充会话"); },
   }) as any);
-  const execute = (input: Parameters<typeof runDomainKnowledge>[0]) => runDomainKnowledge(input, { dataDir: root,
+  const execute = (input: Parameters<typeof runDomainKnowledge>[0]) => runDomainKnowledgeFixture(method, input, { dataDir: root,
     model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => ({ root: repo, revision }) });
   let service = new DomainKnowledgeExtraction(root, execute);
   try {
@@ -322,7 +321,7 @@ test("#466 从正式知识发起更新保留已发生的归档快照，原编号
       return { status: "turn_finished" };
     }, dispose() {}, abort: async () => {}, startResume: async () => { throw new Error("已保存结果不应追加模型会话"); },
   }) as any);
-  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root,
+  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledgeFixture(genericDomainSkillFixture, input, { dataDir: root,
     model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => ({ root: repo, revision: sourceRevision }) }), {
     publish: async (job, target, _previous, _operator, save) => {
       archiveCalls++;

@@ -31,6 +31,7 @@ export const DOMAIN_EXECUTION_INSTRUCTIONS = `# 平台研究执行方式
 - 先 save_document 保存完整规划，再 knowledge_work plan 登记全部 document_ids 与 work_document_id。漏排的必交文稿会阻止完成；移除旧编号必须逐项提供 exclusions 原因。
 - 主会话通过 knowledge_work schedule 登记步骤。每篇的 expected_document_ids 指定必须交付的文稿，review.instructions 指定独立只读评审要求。run 指定 id 执行一步，省略 id 按依赖执行，采用可靠文稿方法时默认并发3个子会话，concurrency 可选1至4；写入同一文稿的步骤串行，未知写入范围的步骤串行，单项失败不丢失其他成果。保存计划本身不会启动执行。
 - 有 review 的步骤由平台保存写作候选、启动独立评审，退回后携带具体意见修订，最多三轮。只读评审用 knowledge_draft read 回读全部预定文稿，并回查原始证据；用 knowledge_work_result 的 review:{pass,feedback} 提交判断，不能只说工具执行成功。通过时也说明核对范围，退回时说明错误位置、依据和需要修改的内容。
+- 含 PlantUML 的文稿保存后，用 knowledge_diagram_check 查看实际渲染诊断，修正 invalid 后重新保存并校验。独立评审也查看当前版本的图诊断，再核对图中业务关系；valid 只代表语法可渲染，total=0 不代表满足模板的图要求。unavailable 表示运行条件不足：写作者仍提交已保存候选，平台保留该候选并停止本项，主会话继续其他独立项后说明具体阻碍。运行条件恢复后按原编号接续，无需重写候选。
 - list/read_plan/knowledge_draft read 无 id 均分页，默认30项、最多100项；read 无 id 只提供有界工作摘要。完整过程文稿与单项结果按 id 读取，不能将全仓源码和历史结果不断追加到主会话。子步骤 save_document 编号采用 步骤编号--名称；证据与缺口落盘，下一步骤和恢复后回读原始依据。
 - 独立步骤只处理 step.instructions；它不能安排其他步骤。写作提交候选后，平台负责启动所登记的评审。需要额外研究时将具体缺口交回主会话。
 - 中断后先读取现有工作和文稿，复用已完成结果。主会话只有在本轮计划全部落实后才提交 complete；有无法推进的实际阻碍则保存 paused，明确缺口和已有成果。按照 Skill 自动连续生成时，正常文稿之间无需人工确认。
@@ -53,7 +54,7 @@ export function workOverview(state: DomainSkillWork["state"]) {
   for (const step of state.steps) counts[step.status] = (counts[step.status] ?? 0) + 1;
   return { total: state.steps.length, counts, plan: state.plan && { total: state.plan.document_ids.length,
     work_document_id: state.plan.work_document_id, excluded: state.plan.exclusions?.length ?? 0 },
-    steps: state.steps.filter(step => step.status !== "done" && step.status !== "discarded").slice(0, 30).map(workStepSummary),
+    steps: state.steps.filter(step => step.status !== "discarded" && (step.status !== "done" || step.error)).slice(0, 30).map(workStepSummary),
     documents: { total: state.documents?.length ?? 0 }, result: state.result && { status: state.result.status, summary: state.result.summary.slice(0, 1200) },
     continued: state.continued, detail: "list/read_plan 分页读取，read+id 查看单项，read_document+id 读取过程正文" };
 }

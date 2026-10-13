@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { CloudSession } from "../src/sessionDriver.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { runDomainKnowledge, type DomainAgentOptions } from "../src/domainKnowledgeAgent.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { type DomainAgentOptions } from "../src/domainKnowledgeAgent.ts";
+import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 import { domainExecutionContract, workOverview, pageRows, runnableWave } from "../src/domainKnowledgeExecution.ts";
 
 const document = (id: string, content = "# 规则\n未结算取消才释放库存。") => ({ id, title: id, target_id: "domain", path: `domain-docs/${id}.md`, layer: "domain" as const, content, sources: "本次资料中的取消规则" });
@@ -15,10 +15,9 @@ const step = (id: string, depends_on: string[] = []) => ({ id, title: id, instru
   expected_document_ids: [id], review: { instructions: "独立核对当前文稿的条件与依据" } });
 type Call = (name: string, args: any, expectedError?: boolean) => Promise<any>;
 
-async function fixture(handler: (context: any, call: Call, config: any) => Promise<void>, source?: DomainAgentOptions["source"], repositories: any[] = []) {
+async function fixture(handler: (context: any, call: Call, config: any) => Promise<void>, source?: DomainAgentOptions["source"], repositories: any[] = [], nextTurn?: Parameters<DomainKnowledgeExtraction["run"]>[1]) {
   const root = mkdtempSync(join(tmpdir(), "domain-reviewed-plan-"));
-  const skills = new KnowledgeExtractionSkills(root);
-  await skills.save("domain", { "SKILL.md": "---\nname: reviewed-documents\ndescription: 完整规划并逐篇核对。\nexecution: reviewed-document-plan\n---\n生成全部已规划文稿。" }, skills.current("domain").digest, "tester");
+  const method = { "SKILL.md": "---\nname: reviewed-documents\ndescription: 完整规划并逐篇核对。\nexecution: reviewed-document-plan\n---\n生成全部已规划文稿。" };
   const intercepted = mock.method(CloudSession, "create", async (config: any) => ({
     start: async (prompt: string) => {
       const context = JSON.parse(prompt.split("本轮上下文：\n").at(-1)!);
@@ -31,11 +30,19 @@ async function fixture(handler: (context: any, call: Call, config: any) => Promi
       return { status: "turn_finished" };
     }, startResume: async () => { throw new Error("本用例应保存结果或暂停"); }, dispose() {}, abort: async () => {},
   }) as any);
-  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root,
+  const service = new DomainKnowledgeExtraction(root, input => runDomainKnowledgeFixture(method, input, { dataDir: root,
     model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: source ?? (async () => { throw new Error("本用例不访问源码"); }) }));
   try {
     const job = service.create({ title: "业务知识", scope: "完整研究", issue_no: "REQ-475", repositories }, "tester");
-    for (let attempt = 0; attempt < 1000 && !["done", "failed", "paused"].includes(service.get(job.id).status); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    const wait = async () => {
+      for (let attempt = 0; attempt < 1000 && !["done", "failed", "paused"].includes(service.get(job.id).status); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    };
+    await wait();
+    if (nextTurn) {
+      assert.equal(service.get(job.id).status, "done", service.get(job.id).error);
+      service.run(job.id, nextTurn, "tester");
+      await wait();
+    }
     return service.get(job.id);
   } finally { await service.shutdown(); intercepted.mock.restore(); rmSync(root, { recursive: true, force: true }); }
 }
@@ -211,4 +218,74 @@ test("已完成文稿重评与依赖它的后续步骤不在同一并发批次",
   assert.deepEqual(runnableWave([a, b], new Set(), 3).map(step => step.id), ["a"]);
   assert.deepEqual(runnableWave([a, b], new Set(["a"]), 3).map(step => step.id), ["b"]);
   assert.equal(runnableWave([b, a], new Set(), 3).length, 1);
+});
+
+const diagramMissingEnd = "# 取消规则\n```plantuml\n@startuml\nAlice -> Bob : 取消\n```";
+
+for (const mode of ["revise", "update"] as const) test(`${mode} 省略结果文稿编号仍不能绕过本轮已保存修改的图校验`, async () => {
+  const job = await fixture(async (context, call) => {
+    if (context.mode !== "extract") {
+      assert.equal(context.mode, mode); assert.equal(context.step, undefined);
+      await call("knowledge_draft", { action: "save", document: document("one", diagramMissingEnd) });
+      const diagnostic = await call("knowledge_diagram_check", { document_id: "one" });
+      assert.equal(diagnostic.document_id, "one"); assert.equal(diagnostic.status, "invalid");
+      assert.equal(diagnostic.total, 1); assert.equal(diagnostic.checked, 1);
+      const rejected = await call("knowledge_work_result", { summary: "已修改完成但漏报文稿", document_ids: [] }, true);
+      assert.match(rejected.error, /one/); assert.match(rejected.error, /@enduml/);
+      await call("knowledge_work_result", { status: "paused", summary: "候选图缺少结束标记，尚未完成修订", document_ids: [] });
+    } else if (!context.step) {
+      await call("knowledge_work", { action: "save_document", document: { id: "plan", title: "完整规划", content: "生成 one 并独立核对" } });
+      await call("knowledge_work", { action: "plan", document_ids: ["one"], work_document_id: "plan" });
+      await call("knowledge_work", { action: "schedule", steps: [step("one")] });
+      await call("knowledge_work", { action: "run" });
+      await call("knowledge_work_result", { summary: "第一版完整", document_ids: ["one"] });
+    } else if (context.reviewing) {
+      await call("knowledge_draft", { action: "read", id: "one" });
+      await call("knowledge_work_result", { summary: "当前正文已核对", document_ids: ["one"], review: { pass: true, feedback: "适用条件正确" } });
+    } else {
+      await call("knowledge_draft", { action: "save", document: document("one") });
+      await call("knowledge_work_result", { summary: "第一版已保存", document_ids: ["one"] });
+    }
+  }, undefined, [], { mode, document_ids: ["one"], message: "补充取消流程图" });
+  assert.equal(job.status, "paused", job.error);
+  assert.equal(job.turns.at(-1)?.mode, mode);
+  assert.equal(job.turns.at(-1)?.proposals[0].document.content, diagramMissingEnd, "失败校验保留修订候选");
+  assert.equal(job.documents[0].content, document("one").content, "尚未审阅的修订不覆盖原正文");
+});
+
+test("过程规划可以显式检查图，坏图阻止登记计划及修改规划后的完成", async () => {
+  const job = await fixture(async (context, call) => {
+    if (!context.step) {
+      await call("knowledge_work", { action: "save_document", document: { id: "plan", title: "完整规划", content: diagramMissingEnd } });
+      await call("knowledge_diagram_check", {}, true);
+      await call("knowledge_diagram_check", { document_id: "one", work_document_id: "plan" }, true);
+      const diagnostic = await call("knowledge_diagram_check", { work_document_id: "plan" });
+      assert.equal(diagnostic.work_document_id, "plan"); assert.equal(diagnostic.status, "invalid");
+      assert.equal(diagnostic.total, 1); assert.equal(diagnostic.checked, 1);
+      assert.match(diagnostic.diagrams[0].error, /@enduml/);
+      const rejected = await call("knowledge_work", { action: "plan", document_ids: ["one"], work_document_id: "plan" }, true);
+      assert.match(rejected.error, /plan/); assert.match(rejected.error, /@enduml/);
+      assert.equal(await call("knowledge_work", { action: "read_plan" }), null);
+      assert.equal((await call("knowledge_work", { action: "read_document", id: "plan" })).content, diagramMissingEnd);
+      await call("knowledge_work", { action: "save_document", document: { id: "plan", title: "完整规划", content: "生成 one 并独立核对" } });
+      const corrected = await call("knowledge_diagram_check", { work_document_id: "plan" });
+      assert.equal(corrected.status, "valid"); assert.equal(corrected.total, 0);
+      assert.notEqual(corrected.fingerprint, diagnostic.fingerprint, "图诊断对应实际过程正文版本");
+      await call("knowledge_work", { action: "plan", document_ids: ["one"], work_document_id: "plan" });
+      await call("knowledge_work", { action: "schedule", steps: [step("one")] });
+      await call("knowledge_work", { action: "run" });
+      await call("knowledge_work", { action: "save_document", document: { id: "plan", title: "完整规划", content: diagramMissingEnd } });
+      const unfinished = await call("knowledge_work_result", { summary: "文稿完成但规划图损坏", document_ids: ["one"] }, true);
+      assert.match(unfinished.error, /plan/); assert.match(unfinished.error, /@enduml/);
+      await call("knowledge_work_result", { status: "paused", summary: "规划图仍需修正，完整过程正文已保留", document_ids: ["one"], work_document_ids: ["plan"] });
+    } else if (context.reviewing) {
+      await call("knowledge_draft", { action: "read", id: "one" });
+      await call("knowledge_work_result", { summary: "已核对当前正文", document_ids: ["one"], review: { pass: true, feedback: "文稿完整且适用条件正确" } });
+    } else {
+      await call("knowledge_draft", { action: "save", document: document("one") });
+      await call("knowledge_work_result", { summary: "已保存文稿", document_ids: ["one"] });
+    }
+  });
+  assert.equal(job.status, "paused", job.error);
+  assert.deepEqual(job.turns.at(-1)?.waiting?.work_document_ids, ["plan"]);
 });

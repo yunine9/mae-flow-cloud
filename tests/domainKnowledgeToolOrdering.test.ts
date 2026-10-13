@@ -7,9 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 
 type ToolCall = { name: string; input: Record<string, unknown> };
 const call = (name: string, input: Record<string, unknown>): ToolCall => ({ name, input });
@@ -83,9 +82,8 @@ test("真实 Pi 同一回复保存、执行及完成按序排队，保存等待�
   try {
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const skills = new KnowledgeExtractionSkills(root);
-    await skills.save("domain", { "SKILL.md": "---\nname: tool-ordering\ndescription: 逐篇核对文稿\nexecution: reviewed-document-plan\n---\n按完整计划保存文稿并独立评审。" }, skills.current("domain").digest, "tester");
-    service = new DomainKnowledgeExtraction(root, input => runDomainKnowledge(input, { dataDir: root,
+    const method = { "SKILL.md": "---\nname: tool-ordering\ndescription: 逐篇核对文稿\nexecution: reviewed-document-plan\n---\n按完整计划保存文稿并独立评审。" };
+    service = new DomainKnowledgeExtraction(root, input => runDomainKnowledgeFixture(method, input, { dataDir: root,
       model: () => ({ provider: "maeflow", model: "ordering-v1", json: { providers: { maeflow: { baseUrl, api: "anthropic-messages", apiKey: "scripted", models: [{ id: "ordering-v1" }] } } } }),
       source: async () => { sourceEntered = true; await sourceReady; return { root: repo, revision }; },
     }));
