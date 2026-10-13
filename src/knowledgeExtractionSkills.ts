@@ -8,6 +8,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { loadSkills } from "@earendil-works/pi-coding-agent";
+import { domainExecutionContract } from "./domainKnowledgeExecution.ts";
 
 export type ExtractionKind = "component" | "component-analysis" | "domain";
 export interface ExtractionSkillSnapshot {
@@ -77,6 +78,7 @@ export class KnowledgeExtractionSkills {
           || path.split("/").some(segment => !segment || segment.startsWith(".")) || typeof content !== "string" || content.includes("\0"))
         || Buffer.byteLength(JSON.stringify(files)) > 1024 * 1024) throw new Error("请提供含 SKILL.md 的完整文本 Skill 包，路径不能越界，最多 1 MiB、100 个文件");
     if (kind !== "component-analysis") knowledgeArchiveDefaults(files, kind);
+    if (kind === "domain") domainExecutionContract(files);
     const staging = join(this.root, `staging-${randomUUID()}`, name);
     try {
       for (const [path, content] of Object.entries(files)) {

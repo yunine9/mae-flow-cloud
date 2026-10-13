@@ -53,7 +53,7 @@ test("任意领域 Skill 自行安排写作与只读评审，源码、资料和�
         const reviewed = await call("knowledge_work", { action: "run", id: "check" }); assert.equal(reviewed.data.pass, true);
         await call("knowledge_work_result", { summary: "本方法的写作与评审完成", document_ids: ["guide"], data: { custom: true } });
       } else {
-        assert.equal(config.resumeSession, false);
+        assert.equal(config.resumeSession, true, "独立步骤恢复自己的会话，仍不继承主会话私有历史");
         assert.doesNotMatch(prompt, /ROOT_SHARED/, "独立步骤没有主会话的私有上下文");
         const shared = await call("knowledge_evidence", { action: "list", query: "ROOT_SHARED" });
         assert.ok(shared.entries[0].evidence_id);

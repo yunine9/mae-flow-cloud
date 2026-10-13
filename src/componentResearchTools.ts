@@ -1,5 +1,5 @@
 import { scanForSecrets } from "./hostSkillLibrary.ts";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,107 @@ export function executeFile(
           : resolve(stdout),
     ),
   );
+}
+
+/** 先在流中选择源码页，避免大文件尚未分页就撞上 execFile 的缓冲上限。 */
+async function streamGitOutput(args: string[], cwd: string, signal: AbortSignal | undefined, consume: (chunk: string) => void) {
+  if (signal?.aborted) throw new Error("操作已取消");
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, EC_DEBUG: "0", GIT_TERMINAL_PROMPT: "0" } });
+    let failure: Error | undefined, settled = false;
+    const stop = (error: Error) => { failure ??= error; child.kill("SIGKILL"); };
+    const abort = () => stop(new Error("操作已取消"));
+    const timer = setTimeout(() => stop(new Error("操作超时，请缩小范围后重试")), 30_000); timer.unref();
+    const finish = (error?: Error) => {
+      if (settled) return; settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve();
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      if (failure) return;
+      try { consume(chunk); } catch (error) { stop(error instanceof Error ? error : new Error(String(error))); }
+    });
+    // 不保存 stderr，避免大批诊断把新的流式读取变成无界缓冲。
+    child.stderr.resume();
+    child.stdout.on("error", error => stop(error));
+    child.stderr.on("error", error => stop(error));
+    child.once("error", error => finish(Object.assign(new Error((error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "Git 工具未安装或路径错误" : "无法启动本地源码读取"), { code: (error as NodeJS.ErrnoException).code })));
+    child.once("close", (code, killedBy) => finish(failure ?? (code === 0 && !killedBy ? undefined
+      : new Error("本地源码操作失败，请检查仓库、版本和路径"))));
+  });
+}
+
+/** 清单必须完整；超出资源预算时明确失败，不把部分文件当作全仓盘点。 */
+export async function listGitTreePaths(root: string, revision: string, path = "", signal?: AbortSignal) {
+  const files: string[] = [];
+  let pending = "", characters = 0;
+  await streamGitOutput(["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", revision, "--", ...(path ? [path] : [])], root, signal, chunk => {
+    let offset = 0;
+    for (;;) {
+      const end = chunk.indexOf("\0", offset), fragment = chunk.slice(offset, end < 0 ? undefined : end);
+      pending += fragment;
+      if (pending.length > 65_536) throw new Error("单个源码路径超过读取预算，无法完整列出目录");
+      if (end < 0) break;
+      if (pending) {
+        characters += pending.length;
+        if (characters > 32 * 1024 * 1024 || files.length >= 1_000_000) throw new Error("源码目录清单超过完整读取预算，请缩小配置的研究路径后重试");
+        files.push(pending);
+      }
+      pending = ""; offset = end + 1;
+    }
+  });
+  if (pending) throw new Error("源码目录输出不完整，不能作为完整盘点使用");
+  return files;
+}
+
+/** 构建文件需要完整解析；保留明确上限，不能用截断的 JSON/XML 推断依赖。 */
+export async function readGitBuildFile(root: string, revision: string, path: string, signal?: AbortSignal) {
+  const chunks: string[] = []; let bytes = 0;
+  await streamGitOutput(["show", `${revision}:${path}`], root, signal, chunk => {
+    bytes += Buffer.byteLength(chunk);
+    if (bytes > 16 * 1024 * 1024) throw new Error(`构建文件 ${path} 超过 16 MiB 完整解析预算，无法完成源码盘点`);
+    chunks.push(chunk);
+  });
+  return chunks.join("");
+}
+
+export interface GitBlobPage { lines: Array<{ number: number; text: string }>; totalLines: number; nextLine?: number; symbolFound: boolean }
+/** 未选中的行只计数；单行或当前页过长时不保存半行，也不将半行登记为已读取。 */
+export async function readGitBlobPage(root: string, revision: string, path: string,
+  options: { start?: number; end?: number; maxCharacters?: number; symbol?: string } = {}, signal?: AbortSignal): Promise<GitBlobPage> {
+  const start = options.start ?? 0, end = options.end ?? 0, limit = options.maxCharacters ?? 30_000;
+  const lines: GitBlobPage["lines"] = [];
+  let number = 1, current = "", characters = 0, nextLine: number | undefined, symbolTail = "", symbolFound = false;
+  const record = () => {
+    if (number >= start && number <= end && nextLine === undefined) {
+      if (characters + current.length + String(number).length + 3 > limit) nextLine = number;
+      else { lines.push({ number, text: current }); characters += current.length + String(number).length + 3; }
+    }
+    current = "";
+  };
+  await streamGitOutput(["show", `${revision}:${path}`], root, signal, chunk => {
+    if (options.symbol && !symbolFound) {
+      const combined = symbolTail + chunk; symbolFound = combined.includes(options.symbol);
+      symbolTail = symbolFound || options.symbol.length < 2 ? "" : combined.slice(-(options.symbol.length - 1));
+    }
+    let offset = 0;
+    for (;;) {
+      const newline = chunk.indexOf("\n", offset), stop = newline < 0 ? chunk.length : newline;
+      if (number >= start && number <= end && nextLine === undefined) {
+        const fragment = chunk.slice(offset, stop);
+        if (characters + current.length + fragment.length + String(number).length + 3 > limit) { nextLine = number; current = ""; }
+        else current += fragment;
+      }
+      if (newline < 0) break;
+      record(); number++; offset = newline + 1;
+    }
+  });
+  record();
+  return { lines, totalLines: number, nextLine: nextLine ?? (end < number ? end + 1 : undefined), symbolFound };
 }
 export const ecBinary = () =>
   process.env.MAE_FLOW_EC_BIN ||
@@ -114,21 +215,7 @@ export function componentSourceTool(
         if (excludePath?.(path)) throw new Error("本次验证屏蔽了既有文档与 AGENTS.md，请读取源码或本次上传资料");
         let text = "";
         if (input.action === "list") {
-          text = await executeFile(
-            "git",
-            [
-              ...(excludePath ? ["-c", "core.quotepath=false"] : []),
-              "--literal-pathspecs",
-              "ls-tree",
-              "-r",
-              "--name-only",
-              revision,
-              "--",
-              ...(path ? [path] : []),
-            ],
-            root, signal,
-          );
-          const all = text.trimEnd().split("\n").filter(Boolean);
+          const all = await listGitTreePaths(root, revision, path, signal);
           const files = all.filter(p => !excludePath?.(p) && (input.include_platform || !isResearchPlatformPath(p)));
           const prefix = path ? `${path}/` : "";
           const entries = input.recursive ? files : [...new Set(files.map(p => {
@@ -136,8 +223,15 @@ export function componentSourceTool(
             return relative.includes("/") ? `${prefix}${relative.split("/")[0]}/` : p;
           }))];
           const start = Math.max(1, input.start ?? 1);
-          const end = Math.min(entries.length, input.end ?? start + 99, start + 199);
-          text = `目录共 ${entries.length} 项，本次 ${start}–${end} 项；业务范围文件 ${files.length} 个，排除平台及依赖文件 ${all.length - files.length} 个\n${entries.slice(start - 1, end).join("\n")}`;
+          const wantedEnd = Math.min(entries.length, input.end ?? start + 99, start + 199);
+          const page: string[] = []; let characters = 0;
+          for (const entry of entries.slice(start - 1, wantedEnd)) {
+            if (characters + entry.length + 1 > 29_000) break;
+            page.push(entry); characters += entry.length + 1;
+          }
+          if (!page.length && start <= wantedEnd) throw new Error("单个目录项超过返回预算，无法完整列出该路径");
+          const end = start + page.length - 1;
+          text = `目录共 ${entries.length} 项，本次 ${start}–${end} 项；业务范围文件 ${files.length} 个，排除平台及依赖文件 ${all.length - files.length} 个\n${page.join("\n")}`;
           if (end < entries.length) text += `\n后续请用 list start=${end + 1} 继续，或指定 path 分目录读取`;
         }
         else if (input.action === "search") {
@@ -183,21 +277,12 @@ export function componentSourceTool(
           const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", revision, "--", path], root, signal);
           if (!entry.trim()) throw new Error(`当前版本下文件不存在：${path}。请先用 list 查找完整仓内路径，再 read；不要反复猜测文件名。`);
           if (/^040000 tree /.test(entry)) throw new Error(`路径是目录：${path}。请用 list 列出文件后再 read。`);
-          const content = await executeFile(
-            "git",
-            ["show", `${revision}:${path}`],
-            root, signal,
-          );
-          const lines = content.split("\n"),
-            start = Math.max(1, input.start ?? 1),
-            end = Math.min(lines.length, input.end ?? start + 159, start + 399);
-          text =
-            `${path} @ ${revision}\n` +
-            lines
-              .slice(start - 1, end)
-              .map((s, i) => `${start + i}: ${s}`)
-              .join("\n");
-          if (end < lines.length) text += `\n后续从 ${end + 1} 行读取`;
+          const start = Math.max(1, input.start ?? 1), end = Math.min(input.end ?? start + 159, start + 399);
+          const header = `${path} @ ${revision}\n`;
+          const page = await readGitBlobPage(root, revision, path, { start, end, maxCharacters: Math.max(0, 29_500 - header.length) }, signal);
+          if (!page.lines.length && page.nextLine === start && start <= page.totalLines) throw new Error(`第 ${start} 行超过完整行返回预算，无法作为已读取源码返回；请通过符号搜索定位其它可读片段`);
+          text = header + page.lines.map(line => `${line.number}: ${line.text}`).join("\n");
+          if (page.nextLine !== undefined && page.nextLine <= page.totalLines) text += `\n后续从 ${page.nextLine} 行读取`;
         }
         // 引用校验只能认可实际返回的完整行，不能把截断后的行视为已读。
         const delivered = text.length > 30000 ? text.slice(0, text.lastIndexOf("\n", 30000)) : text;
