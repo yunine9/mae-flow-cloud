@@ -42,5 +42,5 @@ export function mrParticipantsMessage(result: MrParticipantsResult | undefined):
   if (!result) return "";
   if (result.status === "applied") return "已按模块配置设置 MR 人员。";
   if (result.status === "skipped") return result.message ?? "已有 MR 保留原人员设置。";
-  return `MR 人员设置未完成：${result.message ?? "请重试人员设置或到 CodeHub 补充人员"}`;
+  return "";
 }

@@ -122,7 +122,6 @@ export interface TaskHostRuntime {
   platformUrl?: string;
   credential?: PipelineCredential;
   mrParticipants?(): MrParticipants | undefined;
-  retryMrParticipants?(): Promise<void>;
   assertActive(): void;
   annotations(): Annotation[];
   decisions?(): WaitingRecord[];
@@ -390,7 +389,6 @@ async function executeTaskHostOperation(host: TaskHostRuntime): Promise<boolean>
     } else if (input.action === "create_mr") {
       if (!host.platformUrl) throw new Error("未配置 MR 平台");
       if (host.summary.delivery?.mr_url) {
-        if (host.summary.delivery.mr_participants?.status === "failed") await host.retryMrParticipants?.();
         operation.result = `已存在 MR：${host.summary.delivery.mr_url}。${mrParticipantsMessage(host.summary.delivery.mr_participants)}`;
       } else {
         if (host.summary.delivery?.git_push?.sha !== operation.sha) throw new Error("当前提交尚未取得真实推送收据，请先推送");

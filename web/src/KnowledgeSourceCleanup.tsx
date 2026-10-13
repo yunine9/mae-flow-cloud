@@ -29,13 +29,12 @@ export function KnowledgeSourceCleanup({ task, draft, onDraftChange, onChange, o
   const pending = state.repositories.filter(repo => selected[repo.id]?.length && !state.publications.some(publication => publication.target_id === repo.id && publication.url));
   const pendingFiles = pending.reduce((sum, repo) => sum + (selected[repo.id]?.length ?? 0), 0);
   const failed = state.publications.some(publication => publication.state === "failed");
-  async function request(action: "preview" | "publish" | "start", targetId?: string) {
+  async function request(action: "preview" | "publish" | "start") {
     if (submitting.current) return;
     submitting.current = true; setBusy(true); onBusy?.(true); setError("");
     const body = action === "preview" ? { paths_by_target: Object.fromEntries(state.repositories.map(repo => [repo.id,
       (paths[repo.id] ?? "").split("\n").map(path => path.trim()).filter(Boolean)])) }
-      : action === "publish" ? { selected_paths_by_target: Object.fromEntries(state.repositories.map(repo => [repo.id, selected[repo.id] ?? []])),
-        ...(targetId ? { target_id: targetId } : {}) } : {};
+      : action === "publish" ? { selected_paths_by_target: Object.fromEntries(state.repositories.map(repo => [repo.id, selected[repo.id] ?? []])) } : {};
     try {
       const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${task.id}/source-cleanup/${action}`, body, AbortSignal.timeout(5 * 60_000));
       if (alive.current) { onChange(next); if (action === "preview") setEditing(false); }
@@ -57,11 +56,8 @@ export function KnowledgeSourceCleanup({ task, draft, onDraftChange, onChange, o
           </details></>}
         {publication?.error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{publication.error}</p>}
         {publication?.url && <a className="text-sm font-medium text-primary underline" href={publication.url} target="_blank" rel="noreferrer">查看清理 MR ↗</a>}
-        {publication?.mr_participants && <p role={publication.mr_participants.status === "failed" ? "alert" : "status"}
-          className={`whitespace-pre-wrap break-words text-sm ${publication.mr_participants.status === "failed" ? "text-attention" : "text-muted-foreground"}`}>
-          {mrParticipantsMessage(publication.mr_participants)}</p>}
-        {publication?.url && publication.mr_participants?.status === "failed" && <Button type="button" size="sm" variant="outline"
-          disabled={busy} onClick={() => void request("publish", repo.id)}>重试设置人员</Button>}
+        {mrParticipantsMessage(publication?.mr_participants) && <p role="status" className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
+          {mrParticipantsMessage(publication?.mr_participants)}</p>}
       </section>;
     })}
     <div className="sticky bottom-0 -mx-4 flex items-center justify-between gap-4 border-t border-line bg-surface px-4 py-3">

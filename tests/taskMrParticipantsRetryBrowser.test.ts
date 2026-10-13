@@ -9,7 +9,7 @@ import { browserResultDump } from "./fixtures/browserResultDump.ts";
 const chrome = process.env.MFC_TEST_CHROME
   ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-test("任务工作台及详情只允许责任人重试未结束任务和未关闭 MR 的人员设置", {
+test("任务人员设置失败静默，保留 MR 链接、正常操作及成功说明", {
   skip: !existsSync(chrome) && "需要真实 Chrome；设置 MFC_TEST_CHROME 后运行",
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-mr-participants-retry-"));
@@ -37,7 +37,7 @@ test("任务工作台及详情只允许责任人重试未结束任务和未关�
     const result = JSON.parse(raw);
     assert.equal(result.error, undefined, result.error);
     assert.equal(result.passed, true);
-    assert.equal(result.scenarios.length, 10);
+    assert.equal(result.scenarios.length, 12);
     assert.equal(result.width, 1920);
   } finally {
     stop();

@@ -16,14 +16,14 @@ const job: DomainKnowledgeJob = { id: "dkx-479", title: "订单知识", scope: "
 job.archive_batches = [{ id: "batch-479", created_at: job.created_at, operator: job.operator, issue_no: "REQ479", state: "done",
   documents: structuredClone(job.documents), targets: [target], publications: [receipt] }];
 job.production = projectKnowledgeProduction({ kind: "domain", record: job });
-let preview: KnowledgeArchivePreview = { job_id: job.id, title: "知识归档", status_label: "已归档", message: "MR 已创建，后续合入由人处理。", issue_no: "REQ479",
+const preview: KnowledgeArchivePreview = { job_id: job.id, title: "知识归档", status_label: "已归档", message: "MR 已创建，后续合入由人处理。", issue_no: "REQ479",
   expected_revisions: { "kd-1": "r1" }, actions: [], targets: [{ ...target, configured: true, status_label: "已归档", message: "", url: receipt.url,
-    mr_participants: receipt.mr_participants, files: [], actions: [{ id: "retry-archive", label: "重试设置人员", view: "archive", batch_id: "batch-479", target_id: target.id }] }] };
+    mr_participants: receipt.mr_participants, files: [], actions: [] }] };
 const cleanup = structuredClone(job);
 cleanup.source_cleanup = { repositories: [target], plans: [{ id: "plan-479", target_id: target.id, target_revision: "a", paths: ["docs"],
   entries: [{ path: "docs/old.md", mode: "100644", oid: "b" }], selected_paths: ["docs/old.md"] }],
   publications: [{ ...receipt, cleanup_plan_id: "plan-479", removed_paths: ["docs/old.md"] }] };
-let release: (() => void) | undefined, retryFailed = true;
+let release: (() => void) | undefined;
 const requests: Array<{ path: string; body: any }> = [], errors: string[] = [];
 window.addEventListener("error", event => errors.push(event.message));
 window.addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
@@ -32,13 +32,8 @@ window.fetch = async (input, init) => {
   requests.push({ path, body });
   if (path.endsWith("/archive/preview")) return new Response(JSON.stringify(preview));
   await new Promise<void>(resolve => { release = resolve; });
-  if (path.endsWith("/archive/retry")) {
-    if (retryFailed) { retryFailed = false; return new Response(JSON.stringify({ error: "人员接口暂时不可用" }), { status: 503 }); }
-    preview = { ...preview, targets: preview.targets.map(row => ({ ...row, mr_participants: { ...receipt.mr_participants!, status: "applied" }, actions: [] })) };
-    return new Response(JSON.stringify(preview));
-  }
-  if (path.endsWith("/source-cleanup/publish")) {
-    cleanup.source_cleanup!.publications[0].mr_participants = { ...receipt.mr_participants!, status: "applied" };
+  if (path.endsWith("/source-cleanup/start")) {
+    cleanup.source_cleanup!.started = true;
     return new Response(JSON.stringify(cleanup));
   }
   throw new Error(`不应请求 ${path}`);
@@ -51,40 +46,38 @@ async function until(test: () => unknown, message: string) {
   check(test(), message);
 }
 const root = createRoot(document.getElementById("app")!);
+function checkSilentFailure(scope: ParentNode = document) {
+  check(!scope.querySelector('[role="alert"]'), "人员失败仍显示警告节点");
+  check(!scope.textContent?.includes("人员服务暂时不可用"), "人员失败仍显示原因");
+  check(!scope.textContent?.includes("MR 人员设置未完成"), "人员失败仍显示失败提示");
+  check(!button("重试设置人员", scope), "人员失败仍有专用重试入口");
+}
 async function run() {
   root.render(<DomainKnowledgePublicationStatus job={job} disabled />);
-  await until(() => button("重试设置人员"), "人员失败缺少明确入口");
-  check(button("重试设置人员")!.disabled, "禁用状态仍可重试");
+  await until(() => button("归档"), "人员失败改变了正常归档入口");
+  check(button("归档")!.disabled, "禁用状态仍可打开归档");
+  checkSilentFailure();
   check(document.body.textContent?.includes("已归档") && document.querySelector(`a[href="${receipt.url}"]`), "人员失败丢失归档状态或MR链接");
   root.render(<DomainKnowledgePublicationStatus job={job} />); await pause();
-  button("重试设置人员")!.click();
-  await until(() => document.querySelector('[role="dialog"]')?.textContent?.includes("人员服务暂时不可用"), "预览没有人员结果");
+  button("归档")!.click();
+  await until(() => document.querySelector('[role="dialog"]')?.textContent?.includes("已归档"), "归档预览没有正常结果");
   const dialog = () => document.querySelector('[role="dialog"]')!;
-  root.render(<DomainKnowledgePublicationStatus job={job} disabled />); await pause();
-  check(button("重试设置人员", dialog())!.disabled, "弹窗已打开时未遵循外部禁用状态");
-  root.render(<DomainKnowledgePublicationStatus job={job} />); await pause();
-  button("重试设置人员", dialog())!.click();
-  await until(() => !!release, "未调用已有归档重试");
-  check(button("重试设置人员", dialog())!.disabled, "重试进行中按钮未禁用");
-  check(dialog().querySelector(`a[href="${receipt.url}"]`), "重试期间丢失MR链接");
-  check(requests.at(-1)?.path.endsWith("/archive/retry") && requests.at(-1)?.body.batch_id === "batch-479" && requests.at(-1)?.body.target_id === target.id, "人员重试没有指定原批次和仓");
-  release!(); release = undefined;
-  await until(() => dialog().textContent?.includes("人员接口暂时不可用") && !button("重试设置人员", dialog())!.disabled, "失败后不能继续重试");
-  button("重试设置人员", dialog())!.click(); await until(() => !!release, "第二次重试未调用");
-  release!(); release = undefined;
-  await until(() => dialog().textContent?.includes("已按模块配置设置 MR 人员。"), "成功结果未显示");
-  check(!button("重试设置人员", dialog()), "成功后仍显示重试");
-  check(!requests.some(request => request.path.endsWith("/archive/create")), "补人错误地创建归档");
-  root.render(<KnowledgeSourceCleanup task={cleanup} onChange={next => root.render(<KnowledgeSourceCleanup task={next} onChange={() => {}} />)} />);
+  checkSilentFailure(dialog());
+  check(dialog().querySelector(`a[href="${receipt.url}"]`), "归档预览丢失MR链接");
+  check(!button("创建归档 MR", dialog()), "人员失败导致已经归档的内容再次创建MR");
+  let changed: DomainKnowledgeJob | undefined;
+  root.render(<KnowledgeSourceCleanup task={cleanup} onChange={next => { changed = next; root.render(<KnowledgeSourceCleanup task={next} onChange={() => {}} />); }} />);
   await until(() => document.querySelector('[aria-label="萃取前清理旧知识"]'), "清理界面未显示");
+  checkSilentFailure();
   check(button("开始萃取") && !button("开始萃取")!.disabled, "人员失败阻塞后续萃取");
-  button("重试设置人员")!.click(); await until(() => !!release, "清理人员重试没有请求");
-  check(button("重试设置人员")!.disabled, "清理重试进行中仍可重复点击");
-  check(requests.at(-1)?.path.endsWith("/source-cleanup/publish") && requests.at(-1)?.body.target_id === target.id, "清理补人没有限定目标仓");
-  check(requests.at(-1)?.body.selected_paths_by_target.domain.join() === "docs/old.md", "人员重试丢失原清理范围");
+  check(document.querySelector(`a[href="${receipt.url}"]`), "人员失败丢失清理MR链接");
+  button("开始萃取")!.click(); await until(() => !!release, "正常开始萃取没有请求");
+  check(button("开始萃取")!.disabled, "萃取请求进行中仍可重复点击");
+  check(requests.at(-1)?.path.endsWith("/source-cleanup/start"), "人员失败改变了正常开始萃取动作");
   release!(); release = undefined;
-  await until(() => document.body.textContent?.includes("已按模块配置设置 MR 人员。") && !button("重试设置人员"), "清理人员结果未更新");
-  check(button("开始萃取") && document.querySelector(`a[href="${receipt.url}"]`), "补人后丢失原MR或开始萃取操作");
+  await until(() => changed?.source_cleanup?.started, "人员失败阻止保存开始萃取结果");
+  checkSilentFailure();
+  check(requests.length === 2 && requests[0].path.endsWith("/archive/preview"), "显示人员失败意外触发了补设或重复归档");
   check(!errors.length, errors.join("; "));
   check(document.documentElement.scrollWidth <= innerWidth, "桌面界面横向溢出");
   return { passed: true, width: innerWidth };
