@@ -319,6 +319,18 @@ function knowledgeRepoLine(state: IssueSessionState): string {
     + "缺领域事实先翻它的目录;不可修改、不可交付)";
 }
 
+/** 统一检索工具引导行(ADR-0062):knowledge 工具常驻问题会话,正式
+ *  知识(团队文档/业务知识/已采纳经验)优先走它;知识仓克隆在场
+ *  时声明主次——工具检索的是平台权威正本,克隆是可能滞后的人读副本。
+ *  用「业务知识」不用「业务模块知识」:后者是需求侧消费形态名
+ *  (CONTEXT.md 该词条 Avoid)。 */
+function knowledgeToolLine(state: IssueSessionState): string {
+  return knowledgeReady(state)
+    ? "- 团队知识: 正式文档、业务知识与已采纳经验优先用 knowledge 工具检索"
+      + "(权威正本,实时可查);repo/ 下知识仓克隆只作补充参考"
+    : "- 团队知识: 正式文档、业务知识与已采纳经验用 knowledge 工具检索";
+}
+
 /** 阶段名(固定流程词表;无场景的存量现场按原始键兜底显示)。 */
 export function stageLabelOf(state: IssueSessionState): string {
   return state.scenario
@@ -416,6 +428,7 @@ export function issueFixedOpeningPrompt(
     repoLines(state)
       || "- 代码仓: (未登记——AskUserQuestion 问用户要地址,再 pull_repo 拉取)",
     knowledgeRepoLine(state),
+    knowledgeToolLine(state),
     ...(scenario === "ticket" && state.ticket
       ? [`- 修复分支 ${deliveryBranchName("master", state.account, state.ticket)}`]
       : []),

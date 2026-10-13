@@ -899,6 +899,10 @@ async function main(): Promise<void> {
     : undefined;
   const issueFlow = new IssueFlowService({
     dataDir, provider, model, modelsJson, settings,
+    // 知识检索与需求侧共享同一 KnowledgeSearch(全进程一个 memsearch
+    // 常驻子进程)。晚绑定:service 在下方才构造,闭包只在会话回合
+    // 时调用(ADR-0062)。
+    knowledgeSearch: () => service.getKnowledgeSearch(),
     // 必须等统一容器清扫完成后再恢复并启动；否则构造期恢复出的新 issue
     // 容器可能被紧随其后的“上次进程孤儿清扫”误杀。
     deferRecovery: true,

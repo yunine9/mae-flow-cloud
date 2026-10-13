@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { componentUsageDocument } from "../src/componentKnowledgeCards.ts";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
+import type { ComponentResearch } from "../src/componentResearch.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { componentSection, consumptionFixture } from "./componentConsumptionFixture.ts";
 
@@ -16,7 +17,9 @@ test("按需求发现能力后，可一次读取公共接入配置和所选完�
     sibling.content = sibling.content.replace("业务需要后台执行有限任务。", "SIBLING_BODY_MUST_NOT_APPEAR");
     sibling.paradigm!.evidence = [{ ...sibling.paradigm!.evidence[0], path: "src/sibling-only.cpp", revision: "d".repeat(40) }];
     const doc = f.publish([target, sibling]), service = new KnowledgeSearch(f.data), events: any[] = [];
-    const tool: any = createKnowledgeTool({ service: () => service, context: () => f.context, onUse: event => events.push(event) });
+    // 需求侧形态(ADR-0062):research 在场,组件研究指引完整;问题侧
+    // 只读装配的指引裁剪由 issueKnowledgeRetrieval.test.ts 单独把关。
+    const tool: any = createKnowledgeTool({ service: () => service, context: () => f.context, onUse: event => events.push(event), research: () => ({}) as unknown as ComponentResearch });
     const found = await tool.execute("find", { action: "search", scope: "components", query: "后台任务执行完成等待" });
     const hit = found.details.hits.find((hit: any) => hit.paradigm_id === target.id);
     assert.ok(hit); assert.match(hit.summary, /要做的事/);

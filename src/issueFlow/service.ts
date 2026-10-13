@@ -60,6 +60,10 @@ import type { Notifier, NotifyQuestion } from "../notifier.ts";
 import { isIssueInterventionTier, type IssueInterventionTier } from "../auth.ts";
 import { EventLog, type SemanticEvent } from "../semanticEvents.ts";
 import { TranscriptStore } from "../transcriptStore.ts";
+import { createKnowledgeTool } from "../knowledgeTools.ts";
+import type { KnowledgeContext, KnowledgeSearch } from "../knowledgeSearch.ts";
+import { KnowledgeTrace } from "../knowledgeTrace.ts";
+import { repoSlug } from "../taskMemory.ts";
 import { GateService } from "../gateService.ts";
 import { HumanGate, renderDecision, type WaitingRecord } from "../humanGate.ts";
 import {
@@ -485,6 +489,19 @@ export function issueKnowledgeContext(state: IssueSessionState): {
   };
 }
 
+/** 统一检索工具的问题会话口径(ADR-0062):与货架匹配同源(登记仓+
+ *  绑定模块),补产品版本供知识检索按版本收窄。repo 用 slug 形态,
+ *  与需求侧 memoryRepo 同语义(经验归属按 slug 匹配)。 */
+export function issueToolKnowledgeContext(state: IssueSessionState): KnowledgeContext {
+  const base = issueKnowledgeContext(state);
+  return {
+    repo: repoSlug(base.repositories[0]),
+    repositories: base.repositories,
+    moduleIds: base.businessModuleIds,
+    productVersion: state.product_version,
+  };
+}
+
 /** vault 行·后台凭据:playbook 契约三个系统账号同密码,按形状存三套,
  * vault 校验与工具取密(sopuser)都不用特判。 */
 function backendVaultRow(
@@ -603,6 +620,10 @@ export interface IssueFlowOptions {
   provider: string;
   model: string;
   modelsJson: Record<string, unknown>;
+  /** 平台统一知识检索(ADR-0062):问题会话以只读子集消费正式知识。
+   *  惰性闭包——TaskService 在 issueFlow 之后装配,回合时才调用;
+   *  缺省=本部署不挂检索工具,行为与历史一致。 */
+  knowledgeSearch?: () => KnowledgeSearch | undefined;
   /** 认证失败(401)重试的退避间隔表,透传给会话驱动;缺省 10s/30s。
    *  测试注快值,部署不传。 */
   authRetryDelaysMs?: number[];
@@ -4116,11 +4137,27 @@ export class IssueFlowService {
       // - 子内提问/再派发由框架拒绝工具打回,主 Agent 凭报告举卡;
       // - 派发纪律(子只做只读任务/证据指针化/预算写进任务卡)由
       //   适配层约束。预热专员会话保持关闭(专职编译,无需派发)。
-      extraTools: createIssueTools(context),
+      // 平台统一知识检索(ADR-0062,只读消费边界):只读子集——不传
+      // research/plan,生产动作在这个会话域不存在;子 Agent 经
+      // childKnowledgeTools 自动继承只读同款。
+      extraTools: [
+        ...createIssueTools(context),
+        ...(this.options.knowledgeSearch ? [createKnowledgeTool({
+          service: this.options.knowledgeSearch,
+          context: () => issueToolKnowledgeContext(live.state),
+        })] : []),
+      ],
       // 视觉旁路(与需求侧同一套配置语义):配了有效角色才注入
       // inspect_image,主上下文只收文字结论。
       vision: this.visionCapability(live.root),
       currentStep: () => live.state.stage_note || live.state.stage,
+      // 知识足迹(ADR-0062):只记宿主可观察事实,写失败只记日志;
+      // 读侧投影(UI/飞轮)后置,先攒数据。
+      knowledgeTrace: new KnowledgeTrace(
+        join(live.root, "knowledge-events.jsonl"), live.id, live.root,
+        () => live.state.stage_note || live.state.stage,
+        (message) => this.log(`[issue-knowledge] ${message}`),
+      ),
       compactAnchor: () => {
         if (live.state.stage !== "fix") return issueCompactAnchor(live.state);
         const pointer = this.analysisReportPointer(live);

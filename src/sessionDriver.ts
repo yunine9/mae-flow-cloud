@@ -1733,14 +1733,20 @@ export class CloudSession {
 
   private dispatchTool() {
     const driver = this;
+    // 组件计划指引只教给配备了组件能力目录的会话(需求侧传入);
+    // 问题流等旁路会话挂只读 knowledge 后不能被顺带指向任务侧的
+    // component-plan-agent 流程——那是 ADR-0062 明确不接的语义。
+    const componentPlanning = Boolean(
+      childKnowledgeTools(this.options.extraTools).length
+      && this.options.componentAnalysisContext);
     return defineTool({
       name: "Task",
       label: "Dispatch Agent",
-      promptGuidelines: childKnowledgeTools(this.options.extraTools).length ? [COMPONENT_PLANNING_GUIDANCE] : [],
+      promptGuidelines: componentPlanning ? [COMPONENT_PLANNING_GUIDANCE] : [],
       description:
         "派发一个子 Agent 完成任务卡并返回其最终报告(等价旧插件的 Task 工具)。" +
         "子 Agent 不能提问、不能再派子 Agent。" +
-        (childKnowledgeTools(this.options.extraTools).length ? "实施环节开始编码前，派发 component-plan-agent 分析本次全部工作项可复用的组件；返回报告由主 Agent 整合到现有 implementation。" : ""),
+        (componentPlanning ? "实施环节开始编码前，派发 component-plan-agent 分析本次全部工作项可复用的组件；返回报告由主 Agent 整合到现有 implementation。" : ""),
       parameters: Type.Object({
         subagent_type: Type.String({
           description: "子 Agent 类型,如 ut-generator-agent 或 reviewer-agent",
