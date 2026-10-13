@@ -53,6 +53,8 @@ export function UserPicker(props: {
   disabled?: boolean;
   placeholder?: string;
   emptyLabel?: string;
+  /** 多人名单需要完整展示时，让已选姓名和账号自动换行。 */
+  wrapSelection?: boolean;
 } & ({ multiple: true; value: string[]; onChange: (usernames: string[]) => void }
   | { multiple?: false; value: string; onChange: (username: string) => void })) {
   const {
@@ -62,6 +64,7 @@ export function UserPicker(props: {
     disabled = false,
     placeholder = "搜索姓名或工号",
     emptyLabel = "请选择成员",
+    wrapSelection = false,
   } = props;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -84,12 +87,19 @@ export function UserPicker(props: {
     }}>
       <PopoverTrigger
         render={<button type="button" disabled={disabled}
-          className={`${userControlClass} flex items-center justify-between gap-2 text-left`}
+          className={`${userControlClass} flex justify-between gap-2 text-left ${wrapSelection ? "h-auto min-h-9 items-start" : "items-center"}`}
           aria-label={ariaLabel} aria-expanded={open}>
           {label && <span className="shrink-0 text-muted-foreground">{label}</span>}
-          <span className="min-w-0 truncate">{selectedLabel || emptyLabel}</span>
+          {wrapSelection && selectedValues.length > 0
+            ? <span className="flex min-w-0 flex-1 flex-wrap gap-1">
+              {selectedValues.map(username => <span key={username}
+                className="max-w-full rounded bg-surface-2 px-1.5 py-0.5 text-xs [overflow-wrap:anywhere]">
+                {userLabel(options.find(item => item.username === username) ?? { username })}
+              </span>)}
+            </span>
+            : <span className="min-w-0 truncate">{selectedLabel || emptyLabel}</span>}
           <ChevronDown aria-hidden
-            className={`size-4 shrink-0 text-muted-foreground transition-transform${open ? " rotate-180" : ""}`} />
+            className={`size-4 shrink-0 text-muted-foreground transition-transform${wrapSelection ? " mt-0.5" : ""}${open ? " rotate-180" : ""}`} />
         </button>} />
       {/* 弹层 portal 到 body：必须自带 .tw-root 归一（见 EnvironmentPicker 文件头）。 */}
       <PopoverContent align="start"

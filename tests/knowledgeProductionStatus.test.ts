@@ -55,6 +55,27 @@ test("生产线验收8：明确提供当前正式版本时，旧MR不代表新�
   }
 });
 
+test("知识 MR 人员失败保留已归档状态、链接和正常知识操作，只增加人员重试入口", () => {
+  const job = domain(); job.archive_batches = [manualBatch(job, "done")];
+  const publication = job.archive_batches[0].publications[0];
+  publication.mr_participants = { status: "failed", requested: { reviewers: ["reviewer"], approval_approvers: [] }, message: "人员设置服务暂不可用" };
+  job.publications = [publication];
+  const view = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(view.status_label, "已归档"); assert.equal(view.group, "completed");
+  assert.equal(view.archive.state, "opened"); assert.equal(view.archive.publications[0].url, publication.url);
+  assert.deepEqual(view.archive.publications[0].mr_participants, publication.mr_participants);
+  assert.equal(view.archive.actions[0].label, "重试设置人员");
+  assert.equal(view.next_action.id, "knowledge"); assert.ok(view.research_actions.some(action => action.id === "update"));
+  publication.mr_participants.status = "applied";
+  assert.equal(projectKnowledgeProduction({ kind: "domain", record: job }).archive.actions[0].label, "归档");
+
+  job.source_cleanup = { repositories: [job.knowledge_target],
+    plans: [{ id: "cleanup", target_id: "domain", target_revision: "a", paths: ["docs"], entries: [{ path: "docs/old.md", mode: "100644", oid: "b" }], selected_paths: ["docs/old.md"] }],
+    publications: [{ ...publication, cleanup_plan_id: "cleanup", removed_paths: ["docs/old.md"],
+      mr_participants: { ...publication.mr_participants, status: "failed" } }] };
+  assert.equal(projectKnowledgeProduction({ kind: "domain", record: job }).status_label, "待开始萃取");
+});
+
 test("生产线验收8：旧平台恢复pending没有人工单号，不显示正在归档也不制造归档失败", () => {
   const job = domain(); job.archive_batches = [{ ...manualBatch(job, "running"), issue_no: undefined, state: "pending", publications: [] }];
   assert.equal(knowledgeArchiveState(job), "done"); assert.equal(domainKnowledgeTask(job).status_label, "已发布（未归档）");

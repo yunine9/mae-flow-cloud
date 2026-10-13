@@ -5,11 +5,12 @@
  * platformAdapter.ts)的 POST /mr——它负责真正的 codehub CLI 调用、
  * 模板占位符(含 {dts_no} → --e2e-issues 单号关联)、输出抽取与幂等。
  * 这里只做 HTTP 形状:个人身份走 percent 编码请求头(令牌不进请求体,
- * 请求体会被外部动作台账记进投影),90s 预算,错误带状态码上浮。
+ * 请求体会被外部动作台账记进投影),按操作设置超时预算,错误带状态码上浮。
  */
 
 import { readMrFailureBody } from "./mrGateClient.ts";
 import { knowledgeHttpFailure } from "./knowledgeProductionErrors.ts";
+import { hasMrParticipants, normalizeMrParticipants, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
 
 export interface MergeRequestCredential {
   username: string;
@@ -31,6 +32,7 @@ export interface MergeRequestCall {
   /** 知识发布显式启用；共享客户端的原默认行为保持不变。 */
   signal?: AbortSignal;
   includeFailureMetadata?: boolean;
+  participants?: MrParticipants;
 }
 
 export interface MergeRequestReceipt {
@@ -40,6 +42,48 @@ export interface MergeRequestReceipt {
    * 回了什么",恢复时要拿它对远端真实状态——抽剩 url/id 再入账等于自己
    * 把证据裁掉了,所以整体原样带出。 */
   raw: Record<string, unknown>;
+  participants?: MrParticipantsResult;
+}
+
+function participantResult(requested: MrParticipants, raw: unknown): MrParticipantsResult {
+  const value = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  if (!["applied", "failed", "skipped"].includes(String(value.status))) {
+    return { status: "failed", requested, message: "适配器未返回人员设置结果，请确认已部署人员设置能力" };
+  }
+  return { status: value.status as MrParticipantsResult["status"], requested,
+    ...(typeof value.message === "string" ? { message: value.message } : {}) };
+}
+
+/** 人员补设有自己的结果，不能把已经存在的 MR 误报为创建失败。 */
+export async function updateMergeRequestParticipants(call: {
+  platformUrl: string; repo: string; mr: string | number;
+  participants: MrParticipants; credential?: MergeRequestCredential;
+  signal?: AbortSignal;
+}): Promise<MrParticipantsResult> {
+  call.signal?.throwIfAborted();
+  const requested = normalizeMrParticipants(call.participants);
+  if (!hasMrParticipants(requested)) return { status: "skipped", requested, message: "未配置 MR 默认人员" };
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (call.credential) {
+    headers["x-mfc-git-user"] = encodeURIComponent(call.credential.username);
+    headers["x-mfc-git-token"] = encodeURIComponent(call.credential.password);
+  }
+  const signal = call.signal ? AbortSignal.any([call.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000);
+  try {
+    const response = await fetch(`${call.platformUrl.replace(/\/+$/, "")}/mr/participants`, {
+      method: "POST", headers,
+      body: JSON.stringify({ repo: call.repo, mr: call.mr, participants: requested }),
+      signal,
+    });
+    call.signal?.throwIfAborted();
+    if (!response.ok) return { status: "failed", requested, message: `人员设置接口 HTTP ${response.status}，请检查适配器与 CodeHub 权限后重试` };
+    const result = participantResult(requested, await response.json());
+    call.signal?.throwIfAborted();
+    return result;
+  } catch {
+    call.signal?.throwIfAborted();
+    return { status: "failed", requested, message: "人员设置结果暂时无法确认；重试时会先核对远端名单" };
+  }
 }
 
 export async function closeMergeRequest(call: {
@@ -61,6 +105,7 @@ export async function closeMergeRequest(call: {
 export async function createMergeRequest(
   call: MergeRequestCall,
 ): Promise<MergeRequestReceipt> {
+  const participants = call.participants ? normalizeMrParticipants(call.participants) : undefined;
   const headers: Record<string, string> = {
     "content-type": "application/json",
   };
@@ -69,7 +114,8 @@ export async function createMergeRequest(
     headers["x-mfc-git-token"] = encodeURIComponent(call.credential.password);
   }
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), call.timeoutMs ?? 90_000);
+  // 带人员设置时覆盖查找、创建/竞态补查及人员回读，避免 MR 已建却先丢失回执。
+  const timer = setTimeout(() => controller.abort(), call.timeoutMs ?? (hasMrParticipants(participants) ? 210_000 : 90_000));
   const signal = call.signal ? AbortSignal.any([controller.signal, call.signal]) : controller.signal;
   try {
     if (call.signal || call.includeFailureMetadata) signal.throwIfAborted();
@@ -83,6 +129,7 @@ export async function createMergeRequest(
         title: call.title,
         ...(call.dtsNo ? { dts_no: call.dtsNo } : {}),
         ...(call.purpose ? { purpose: call.purpose } : {}),
+        ...(hasMrParticipants(participants) ? { participants } : {}),
       }),
       signal,
     });
@@ -111,6 +158,7 @@ export async function createMergeRequest(
       ...(body.id !== undefined && body.id !== null && body.id !== ""
         ? { id: body.id as string | number } : {}),
       raw: body,
+      ...(hasMrParticipants(participants) ? { participants: participantResult(participants, body.participants) } : {}),
     };
   } finally {
     clearTimeout(timer);

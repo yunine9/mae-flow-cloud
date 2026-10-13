@@ -35,7 +35,8 @@ function documentState(job: DomainKnowledgeJob, document: DomainDocument): Knowl
 function publicationState(job: DomainKnowledgeJob, publication: DomainPublication): KnowledgePublicationState {
   const target = [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id;
   const status_label = { pending: "归档中", opened: "已归档", failed: "归档失败" }[publication.state];
-  return { key: `${publication.target_id}:${publication.branch}`, target, status_label, url: publication.url, error: publication.error };
+  return { key: `${publication.target_id}:${publication.branch}`, target, status_label, url: publication.url, error: publication.error,
+    mr_participants: publication.mr_participants };
 }
 
 /** 唯一的生产状态投影。先看需要人处理的归档事实，再看研究结果；不从旧记录补猜入库版本。 */
@@ -69,7 +70,9 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   })));
   const archiveState = archiveRunning ? "running" : archiveFailed ? "failed" : archiveOpened ? "opened" : "done";
   const archiveLabel = archiveRunning ? "归档中" : archiveFailed ? "归档失败" : archiveOpened ? "已归档" : "已发布（未归档）";
-  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: "归档", view: "archive" })] : [];
+  const participantsFailed = current.some(publication => publication.url && publication.mr_participants?.status === "failed");
+  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive",
+    label: participantsFailed && !archiveFailed && !archiveRunning ? "重试设置人员" : "归档", view: "archive" })] : [];
   let status_label: string, group: KnowledgeTaskGroup, next_action: KnowledgeProductionAction;
   if (archiveFailed) {
     status_label = "归档失败"; group = "attention"; next_action = archiveActions[0] ?? { id: "review", label: "审查成果", view: "review" };

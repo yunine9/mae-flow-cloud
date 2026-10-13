@@ -341,5 +341,17 @@
     "id": {
       "json": "iid"
     }
+  },
+  "mr_participants": {
+    "command": [
+      "python3",
+      "@REPO_DIR@/deploy/adapter-tools/mr-participants.py",
+      "{repo_path}",
+      "{mr}",
+      "{participants}",
+      "{token}"
+    ],
+    "contract": true,
+    "timeout_s": 30
   }
 }

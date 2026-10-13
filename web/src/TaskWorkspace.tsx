@@ -52,6 +52,7 @@ import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskContinueDelivery } from "./TaskContinueDelivery";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
+import { MrParticipantsNotice } from "./MrParticipantsNotice";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -1562,6 +1563,10 @@ export function TaskWorkspace({
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const canContributeReview = canOperate
     || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
+  const canRetryMrParticipants = canOperate
+    && viewerUsername === (task.luban_account ?? "本地用户")
+    && !["completed", "canceled"].includes(task.status)
+    && !["merged", "closed", "已合入", "已关闭"].includes(task.delivery?.mr_state ?? "");
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
@@ -1679,6 +1684,9 @@ export function TaskWorkspace({
       {!waiting && task.status === "await_merge" && (
         <MergeWaitLine task={task} canOperate={canOperate} />
       )}
+      {task.delivery?.mr_participants?.status === "failed" && <MrParticipantsNotice key={task.delivery.mr_url}
+        result={task.delivery.mr_participants} endpoint={`/tasks/${encodeURIComponent(task.id)}/mr-participants`}
+        canRetry={canRetryMrParticipants} onChanged={onChanged} />}
       {!waiting && task.status === "verifying" && (
         <div aria-label="交付验证" className="grid gap-2 rounded-xl border border-line bg-surface p-4">
           <strong className="text-[15px] text-text-strong">{pipelineHumanFeedback.length ? "流水线待人工处理" : "交付验证进行中"}</strong>
@@ -1972,7 +1980,7 @@ export function TaskWorkspace({
       </header>
       <TaskContinueDelivery key={task.id} task={task} canOperate={canOperate} onChanged={onChanged} />
 
-      {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
+      {taskInspector && <TaskInspector task={task} canOperate={canOperate} canRetryMrParticipants={canRetryMrParticipants} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
       {warmupOpen && <OverlayDialog ariaLabel="开工前编译详情" title="开工前编译与准备状态" onClose={() => setWarmupOpen(false)}>
         <WarmupPanel task={task} />

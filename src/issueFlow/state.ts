@@ -23,6 +23,7 @@ import { durableWriteFileSync } from "../durableWrite.ts";
 import { join } from "node:path";
 import type { IssueInterventionTier } from "../auth.ts";
 import type { FeedbackRecord } from "../feedbackStore.ts";
+import type { MrParticipantsResult } from "../mrParticipants.ts";
 import { IssueControlError } from "./errors.ts";
 import type { IssueWarmupReceipt } from "./warmup.ts";
 import { validateRepoUrl } from "./issueGit.ts";
@@ -132,6 +133,8 @@ export interface IssueMrRecord {
   url?: string;
   iid?: string;
   at: string;
+  /** MR 链接与人员设置分别记结果，人员设置失败不丢掉已创建的 MR。 */
+  participants?: MrParticipantsResult;
   /** 合入事实(ADR-0022,监听轮询向平台读取):时刻为首次观测,
    * 不冒充平台动作时间;merged_sha 照平台返回记,不要求与验绿 SHA
    * 相同——合入的是 merge/squash 产物。 */

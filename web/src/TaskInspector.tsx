@@ -11,6 +11,7 @@ import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "cn";
+import { MrParticipantsNotice } from "./MrParticipantsNotice";
 
 export type TaskInspectorKind = "details" | "usage" | "workflow" | "logs" | "timing";
 const titles: Record<TaskInspectorKind, string> = {
@@ -20,8 +21,8 @@ const titles: Record<TaskInspectorKind, string> = {
 };
 
 /** 任务详情及其子页共用居中 Dialog，保留焦点管理与 Esc 关闭。 */
-export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, canOperate, onChanged }: {
-  canOperate?: boolean; onChanged?: () => void;
+export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, canOperate, canRetryMrParticipants, onChanged }: {
+  canOperate?: boolean; canRetryMrParticipants?: boolean; onChanged?: () => void;
   task: TaskSummary; kind: TaskInspectorKind; onClose: () => void;
   onInspect: (kind: TaskInspectorKind) => void; onOpenProcess: () => void;
 }) {
@@ -93,6 +94,11 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, c
               <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>合入请求</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery?.mr_url ? <Button variant="outline" size="sm" render={<a href={task.delivery.mr_url} target="_blank" rel="noreferrer" />}>
                 打开合入请求 · {task.delivery.mr_state || "查看状态"} ↗</Button> : "尚未记录合入请求"}</dd></div>
               {task.delivery?.pipeline && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery.pipeline}</dd></div>}
+              {task.delivery?.mr_participants && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={dtc}>MR 人员</dt><dd className="m-0">
+                <MrParticipantsNotice key={task.delivery.mr_url} result={task.delivery.mr_participants}
+                  endpoint={`/tasks/${encodeURIComponent(task.id)}/mr-participants`}
+                  canRetry={canRetryMrParticipants} onChanged={onChanged} />
+              </dd></div>}
               {task.delivery?.loop?.failure && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线失败原文</dt><dd className="m-0 whitespace-pre-wrap font-mono text-xs leading-[1.8]">{task.delivery.loop.failure}</dd></div>}
               {task.workspace_reclaimed_at && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>现场回收</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.workspace_reclaimed_at, { year: true })}
                 <p className="mt-1 text-xs text-muted-foreground">需求与交付文档仍可阅读和下载，过程记录、交付账本、流水线证据与批注仍保留；代码差异不再可看。</p></dd></div>}

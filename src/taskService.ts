@@ -603,7 +603,9 @@ import {
   deliveryStopped, projectRepairStopped, projectStatusLabel, projectTaskFocus, type TaskFocus,
 } from "./taskFocus.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
-import { createMergeRequest } from "./mrClient.ts";
+import { createMergeRequest, updateMergeRequestParticipants } from "./mrClient.ts";
+import { resolveModuleMrParticipants } from "./moduleMrParticipants.ts";
+import type { MrParticipantsResult } from "./mrParticipants.ts";
 import { MR_DESCRIPTION_STEP, askMrDescription, savedMrDescription } from "./mrDescription.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
@@ -1148,6 +1150,7 @@ export interface TaskSummary {
     mr_url?: string;
     /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
     mr_id?: number | string;
+    mr_participants?: MrParticipantsResult;
     /** 交付分支对(门禁查询与冲突修复都要用,重启后不靠重读状态文件)。 */
     source_branch?: string;
     target_branch?: string;
@@ -12265,10 +12268,53 @@ export class TaskService {
   }
 
   private async createDeliveryMr(task: TaskState, input: Parameters<typeof createMergeRequest>[0]): ReturnType<typeof createMergeRequest> {
-    const work = createMergeRequest(input);
+    const previous = task.summary.delivery;
+    const work = createMergeRequest({ ...input,
+      participants: this.taskMrParticipants(task, input.repo) });
     task.mrCreateActive = work;
-    try { return await work; }
+    try {
+      const result = await work;
+      if (previous?.mr_participants && previous.mr_url === result.url) result.participants = previous.mr_participants;
+      return result;
+    }
     finally { if (task.mrCreateActive === work) task.mrCreateActive = undefined; }
+  }
+
+  private taskMrParticipants(task: TaskState, repository = task.summary.repo_url) {
+    const module = task.summary.business_module
+      ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+    return resolveModuleMrParticipants(this.options.dataDir, module?.id, repository);
+  }
+
+  private mrParticipantUpdates = new Map<string, Promise<TaskSummary>>();
+
+  retryMrParticipants(id: string): Promise<TaskSummary> {
+    const active = this.mrParticipantUpdates.get(id);
+    if (active) return active;
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const delivery = task.summary.delivery;
+    const repo = task.summary.repo_url;
+    const platformUrl = this.effectivePlatformUrl();
+    if (!delivery?.mr_url || !repo || !platformUrl || delivery.mr_participants?.status !== "failed") {
+      throw new TaskControlError("当前没有需要重试的 MR 人员设置");
+    }
+    if (["completed", "canceled"].includes(task.summary.status)
+        || ["merged", "closed", "已合入", "已关闭"].includes(delivery.mr_state ?? "")) {
+      throw new TaskControlError("交付已结束，不能重新设置 MR 人员");
+    }
+    const work = updateMergeRequestParticipants({ platformUrl, repo, mr: delivery.mr_id ?? delivery.mr_url,
+      participants: delivery.mr_participants.requested,
+      credential: this.options.gitCredential?.(task.summary.luban_account),
+    }).then(result => {
+      const current = task.summary.delivery;
+      if (!current || current.mr_url !== delivery.mr_url) throw new TaskControlError("MR 已变化，请刷新任务后重试");
+      current.mr_participants = result;
+      this.persist(task);
+      return this.get(id)!;
+    }).finally(() => this.mrParticipantUpdates.delete(id));
+    this.mrParticipantUpdates.set(id, work);
+    return work;
   }
 
   /** 用户主动纠正 AR：一次程序化迁移，不调用模型、不追加检视或验证。 */
@@ -12340,7 +12386,7 @@ export class TaskService {
     const correction = task.summary.ticket_correction!;
     const journal = JSON.parse(readFileSync(path, "utf8")) as {
       before: TaskSummary; plan?: TicketRewrite; local?: boolean; remote_checked?: boolean; old_remote?: string;
-      pushed?: TaskSummary["delivery"]; mr?: { url: string; id?: string | number }; projected?: boolean;
+      pushed?: TaskSummary["delivery"]; mr?: { url: string; id?: string | number; participants?: MrParticipantsResult }; projected?: boolean;
       closed?: boolean; deleted?: boolean;
     };
     const save = (message: string) => { correction.message = message; writeCorrectionJson(path, journal); this.persist(task); };
@@ -12435,7 +12481,7 @@ export class TaskService {
       if (!platformUrl || !plan || !journal.pushed) throw new Error("缺少创建新 MR 的平台配置或推送记录");
       journal.mr = await createMergeRequest({ platformUrl, repo, sourceBranch: plan.branch,
         targetBranch: oldDelivery?.target_branch ?? journal.before.baseline ?? "master", title: correction.title,
-        dtsNo: correction.ticket, credential });
+        dtsNo: correction.ticket, credential, participants: this.taskMrParticipants(task, repo) });
       save("新 MR 已创建，正在同步任务与内核引用");
     }
     if (!journal.projected) {
@@ -12466,7 +12512,7 @@ export class TaskService {
       if (journal.pushed?.git_push) task.summary.delivery = { ...task.summary.delivery,
         git_push: journal.pushed.git_push, sha: journal.pushed.git_push.sha };
       if (journal.mr) task.summary.delivery = { ...task.summary.delivery, mr_url: journal.mr.url,
-        mr_id: journal.mr.id, mr_state: "opened", merged_sha: undefined };
+        mr_id: journal.mr.id, mr_participants: journal.mr.participants, mr_state: "opened", merged_sha: undefined };
       const oldPrepush = journal.before.delivery?.prepush;
       if (oldPrepush?.sha && plan?.sha_map[oldPrepush.sha]) {
         const previous = { sha: oldPrepush.sha, workspace_fingerprint: oldPrepush.workspace_fingerprint };
@@ -12937,6 +12983,7 @@ export class TaskService {
     task.summary.delivery = {
       mr_url: delivery.mr_url,
       mr_id: delivery.mr_id,
+      mr_participants: delivery.mr_participants,
       source_branch: delivery.source_branch,
       target_branch: delivery.target_branch,
       mr_state: delivery.mr_state,
@@ -13542,6 +13589,8 @@ export class TaskService {
       summary: task.summary, cwd: task.cwd, dataDir: this.options.dataDir,
       kernel: this.options.host, platformUrl: this.effectivePlatformUrl(),
       credential: this.options.gitCredential?.(task.summary.luban_account),
+      mrParticipants: () => this.taskMrParticipants(task),
+      retryMrParticipants: async () => { await this.retryMrParticipants(task.summary.id); },
       assertActive: () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested
             || ["paused", "pausing", "completed"].includes(task.summary.status)) {
@@ -16841,7 +16890,7 @@ export class TaskService {
                finishedAt: new Date().toISOString() });
       // MR 一创建就落盘并监听，不能等流水线请求成功，更不能等到绿灯。
       task.summary.delivery = { ...task.summary.delivery,
-        mr_url: mr.url, mr_id: mr.id, source_branch: branch,
+        mr_url: mr.url, mr_id: mr.id, mr_participants: mr.participants, source_branch: branch,
         target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
       this.ensureMergeWatch(task);
@@ -16881,6 +16930,7 @@ export class TaskService {
         last_push_base_sha: task.summary.delivery?.last_push_base_sha,
         git_push: pushReceipt,
         mr_url: mr.url,
+        mr_participants: mr.participants,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
         // codehubcli 给 iid;没有也不碍事,适配层还能按分支对查)。
         ...(mr.id !== undefined ? { mr_id: mr.id } : {}),

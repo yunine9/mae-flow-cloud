@@ -124,3 +124,43 @@ test("生产线验收9：问题流与需求共享MR查询默认失败字符串�
     assert.equal(result, undefined); assert.equal(reason, "HTTP 429");
   } finally { await f.close(); }
 });
+
+for (const cancel of ["caller", "shutdown"] as const) {
+  test(`知识MR人员补设${cancel}取消会中断HTTP且不保存迟到结果`, { timeout: 15_000 }, async () => {
+    const f = await fixture(), controller = new AbortController(), reason = new Error("人员补设已取消");
+    const requested = { reviewers: ["reviewer"], approval_approvers: ["approver"] };
+    const previous: DomainPublication = { ...f.publication, state: "opened", url: "https://example.test/repo/merge_requests/1", mr_id: 1,
+      mr_participants: { status: "failed", requested, message: "尚未确认" } };
+    f.response.hold = "/mr/participants";
+    const work = publish(f.publisher, f.job, f.target, previous, f.save, controller.signal); void work.catch(() => undefined);
+    try {
+      await ready(() => f.requests.includes("/mr/participants"), "人员补设请求未到达平台");
+      const savedBeforeCancel = f.saved.length;
+      if (cancel === "caller") controller.abort(reason);
+      else await bounded(f.publisher.shutdown(), "发布器关停未取消人员补设");
+      await assert.rejects(bounded(work, "人员补设取消未返回"), /人员补设已取消|知识归档服务已停止/);
+      await ready(() => f.closed.has("/mr/participants"), "人员补设HTTP连接未取消");
+      assert.equal(f.saved.length, savedBeforeCancel, "取消后不再保存人员结果");
+      assert.equal(f.saved.at(-1)?.mr_participants?.status, "failed");
+      assert.deepEqual(f.requests, ["/mr/participants"], "只补设人员，不查询或重新创建MR");
+    } finally { controller.abort(reason); await f.close(work); }
+  });
+}
+
+test("知识MR人员补设忽略abort的迟到成功不能写回", { timeout: 15_000 }, async t => {
+  const f = await fixture(), controller = new AbortController(), reason = new Error("人员补设已取消");
+  const requested = { reviewers: ["reviewer"], approval_approvers: [] };
+  const previous: DomainPublication = { ...f.publication, state: "opened", url: "https://example.test/repo/merge_requests/1", mr_id: 1,
+    mr_participants: { status: "failed", requested } };
+  let release!: (response: Response) => void, called = false;
+  t.mock.method(globalThis, "fetch", async () => { called = true; return new Promise<Response>(resolve => { release = resolve; }); });
+  const work = publish(f.publisher, f.job, f.target, previous, f.save, controller.signal); void work.catch(() => undefined);
+  try {
+    await ready(() => called, "人员补设调用未开始");
+    const savedBeforeCancel = f.saved.length; controller.abort(reason);
+    release(Response.json({ status: "applied", requested }));
+    await assert.rejects(bounded(work, "迟到的人员补设调用未结束"), /人员补设已取消/);
+    assert.equal(f.saved.length, savedBeforeCancel); assert.equal(f.saved.at(-1)?.mr_participants?.status, "failed");
+    assert.equal(previous.mr_participants?.status, "failed", "不修改调用方保存的原失败快照");
+  } finally { controller.abort(reason); t.mock.restoreAll(); await f.close(work); }
+});

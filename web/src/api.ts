@@ -1,4 +1,5 @@
 import type { CompletionRange } from "../../src/completionRange";
+import type { MrParticipantsResult } from "../../src/mrParticipants";
 import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
 import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import type { AnnotationSubmissionView } from "../../src/annotationSubmissionView";
@@ -1110,6 +1111,7 @@ export interface TaskSummary {
   };
   delivery?: {
     component_knowledge?: ComponentKnowledgeCheckReport;
+    mr_participants?: MrParticipantsResult;
     /** 最近一次推送的起点，仅用于代码增量展示。 */
     last_push_base_sha?: string;
     mr_url?: string;
@@ -1456,6 +1458,8 @@ export interface BusinessKnowledgeAsset {
   updated_by: string;
 }
 
+export type MrParticipants = import("../../src/mrParticipants").MrParticipants;
+
 export interface BusinessModule {
   id: string;
   name: string;
@@ -1463,6 +1467,7 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  mr_participants?: MrParticipants;
   /** 参考组件仓订阅(ADR-0054):公共组件仓登记表条目 id 引用。 */
   reference_component_repos?: string[];
   status: "active" | "archived";
@@ -1525,6 +1530,7 @@ export async function createBusinessModule(input: {
   maintainers?: string[];
   repositories: string[];
   reference_component_repos?: string[];
+  mr_participants?: MrParticipants;
 }): Promise<BusinessModule> {
   const response = await fetch("/business-modules", {
     method: "POST",
@@ -1538,7 +1544,7 @@ export async function updateBusinessModule(
   id: string,
   patch: Partial<Pick<BusinessModule,
     "name" | "description" | "owner" | "maintainers" | "repositories"
-    | "reference_component_repos" | "status">>,
+    | "reference_component_repos" | "mr_participants" | "status">>,
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
     method: "PUT",
@@ -3919,7 +3925,7 @@ export interface IssueSummary {
   /** 推送账(按仓,一仓一分支)。 */
   pushes?: Array<{ repo: string; branch: string; sha: string; at: string }>;
   /** MR 账(按仓,一仓一 MR;merged_*=合入事实,ADR-0022)。 */
-  mrs?: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
+  mrs?: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string; participants?: MrParticipantsResult }>;
   /** 环境预热收据(对齐清单⑤):running 时工作台直播编译,结束折叠。 */
   warmup?: {
     status: "running" | "passed" | "infrastructure_failure" | "skipped";
@@ -4539,7 +4545,7 @@ export interface IssueLogListing {
 export interface IssueMaterials {
   ticket?: string;
   pushes: Array<{ repo: string; branch: string; sha: string; at: string }>;
-  mrs: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string }>;
+  mrs: Array<{ repo: string; branch: string; target?: string; title: string; url?: string; iid?: string; at: string; merged_at?: string; merged_sha?: string; closed_at?: string; participants?: MrParticipantsResult }>;
   changes: IssueWorkspaceChange[];
   logs: IssueLogListing;
 }

@@ -6,7 +6,9 @@ import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { deliveryBranchName } from "./deliveryBranchName.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
-import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
+import { createMergeRequest, updateMergeRequestParticipants, type MergeRequestCredential } from "./mrClient.ts";
+import { readModuleMrParticipants } from "./moduleMrParticipants.ts";
+import { hasMrParticipants } from "./mrParticipants.ts";
 import { readMrFailureBody } from "./mrGateClient.ts";
 import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeHttpFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
 import { listKnowledgeDocuments, readKnowledgeArchiveVersion } from "./knowledgeDocuments.ts";
@@ -41,7 +43,7 @@ export class KnowledgeMrPublisher {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([Promise.allSettled([...this.active.values()]), new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("知识归档关停超时：Git 操作 60 秒内未退出")), 60_000);
+        timer = setTimeout(() => reject(new Error("知识归档关停超时：归档操作 60 秒内未退出")), 60_000);
       })]);
     } finally { if (timer) clearTimeout(timer); }
   }
@@ -170,21 +172,44 @@ export class KnowledgeMrPublisher {
       || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
     return body.mrs[0];
   }
-  private async openMr<T extends DomainPublication>(job: Pick<DomainKnowledgeJob, "title" | "issue_no" | "issue_description">,
+  private async retryMrParticipants<T extends DomainPublication>(target: KnowledgeRepository, publication: T, operator: string,
+    save: (publication: T) => void, signal?: AbortSignal): Promise<T> {
+    this.assertActive(signal);
+    if (!publication.url || publication.mr_participants?.status !== "failed") return publication;
+    const identity = this.identity(operator), controller = new AbortController();
+    const operationSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
+    const operation = (async () => {
+      const result = await updateMergeRequestParticipants({ platformUrl: identity.platformUrl, repo: target.repository,
+        mr: publication.mr_id ?? publication.url!, participants: publication.mr_participants!.requested,
+        credential: identity.credential, signal: operationSignal });
+      this.assertActive(operationSignal);
+      publication.mr_participants = result;
+      save(publication); return publication;
+    })();
+    this.active.set(controller, operation);
+    try { return await operation; }
+    finally { this.active.delete(controller); }
+  }
+  private async openMr<T extends DomainPublication>(job: Pick<DomainKnowledgeJob, "title" | "issue_no" | "issue_description" | "module_id">,
     target: KnowledgeRepository, publication: T, operator: string, save: (publication: T) => void, signal: AbortSignal): Promise<T> {
+    this.assertActive(signal);
     const identity = this.identity(operator), issue = knowledgeIssueNumber(job.issue_no);
     const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
+    // 先保存这一次的名单。创建回执丢失或模块配置变化后，仍能按原请求单独补设。
+    const participants = publication.mr_participants?.requested ?? readModuleMrParticipants(this.options.dataDir, job.module_id);
+    if (hasMrParticipants(participants)) publication.mr_participants = { status: "failed", requested: structuredClone(participants), message: "MR 人员设置结果尚未确认" };
     publication.mr_attempted = true; save(publication);
     let receipt;
     try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: publication.branch,
-      targetBranch: target.branch, title, credential: identity.credential, dtsNo: issue, purpose: "knowledge", signal, includeFailureMetadata: true }); }
+      targetBranch: target.branch, title, credential: identity.credential, dtsNo: issue, purpose: "knowledge", participants, signal, includeFailureMetadata: true }); }
     catch (error) { signal.throwIfAborted(); this.assertActive(signal); throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
     this.assertActive(signal);
     if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后手动重试");
     publication.url = receipt.url; publication.mr_id = receipt.id; publication.state = "opened";
+    if (receipt.participants) publication.mr_participants = receipt.participants;
     save(publication); return publication;
   }
-  async publishCleanup(job: Pick<DomainKnowledgeJob, "id" | "title" | "issue_no" | "issue_description">, target: KnowledgeRepository,
+  async publishCleanup(job: Pick<DomainKnowledgeJob, "id" | "title" | "issue_no" | "issue_description" | "module_id">, target: KnowledgeRepository,
     plan: KnowledgeCleanupPlan, input: unknown, previous: KnowledgeCleanupPublication | undefined, operator: string,
     save: (publication: KnowledgeCleanupPublication) => void, signal?: AbortSignal): Promise<KnowledgeCleanupPublication> {
     this.assertActive(signal);
@@ -197,10 +222,10 @@ export class KnowledgeMrPublisher {
     let publication: KnowledgeCleanupPublication = continuing ? { ...structuredClone(previous!), state: "pending", error: undefined }
       : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch };
     const saveLive = (value: KnowledgeCleanupPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
+    if (publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
     if (publication.mr_attempted) {
       const found = await this.discoverMr(target, publication, operator, signal);
-      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return publication; }
+      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
     }
     saveLive(publication);
     return this.withGit(operator, async (git, root, operationSignal) => {
@@ -232,7 +257,7 @@ export class KnowledgeMrPublisher {
   async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string,
     save: (publication: DomainPublication) => void, signal?: AbortSignal): Promise<DomainPublication> {
     this.assertActive(signal);
-    const issue = knowledgeIssueNumber(job.issue_no), identity = this.identity(operator);
+    const issue = knowledgeIssueNumber(job.issue_no); this.identity(operator);
     const logicalTargets = new Map([job.knowledge_target, ...job.repositories].filter(candidate => candidate.repository === target.repository
       && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
     const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
@@ -274,32 +299,17 @@ export class KnowledgeMrPublisher {
       && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
     // 同一精确版本的失败恢复沿用已落盘分支；新版本独立建MR，不受旧MR的合入或关闭影响。
     let publication: DomainPublication = { target_id: target.id, branch: continuing ? previous!.branch : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`,
-      state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id, mr_attempted: previous!.mr_attempted } : {}) };
+      state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id,
+        mr_attempted: previous!.mr_attempted, mr_participants: structuredClone(previous!.mr_participants) } : {}) };
     const saveLive = (value: DomainPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
+    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
     if (continuing && publication.mr_attempted) {
-      const query = new URLSearchParams({ repo: target.repository, source_branch: publication.branch, target_branch: target.branch });
-      const discoverSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000);
-      let body: { mrs?: Array<{ id: string | number; url: string; source_branch: string; target_branch: string }> };
-      try {
-        const response = await fetch(`${identity.platformUrl.replace(/\/+$/, "")}/mr/discover?${query}`, { headers: identity.headers, signal: discoverSignal });
-        this.assertActive(discoverSignal);
-        if (!response.ok) {
-          const failure = knowledgeHttpFailure(response, `HTTP ${response.status}`);
-          const detail = await readMrFailureBody(response, discoverSignal).catch(error => error instanceof Error ? error.message : String(error));
-          this.assertActive(discoverSignal); failure.message += detail ? `：${detail}` : ""; throw failure;
-        }
-        try { body = await response.json() as typeof body; this.assertActive(discoverSignal); }
-        catch (error) { if (error instanceof SyntaxError) throw new Error("交付平台响应不完整：原分支 MR 查询响应不是合法 JSON"); throw error; }
-      } catch (error) { this.assertActive(signal); throw knowledgeMrFailure(error, "原分支 MR 查询", [identity.credential.password]); }
-      if (!Array.isArray(body.mrs) || body.mrs.length > 1 || body.mrs.some(mr => mr.source_branch !== publication.branch
-        || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
-      if (body.mrs[0]) {
-        publication = { ...publication, state: "opened", url: body.mrs[0].url, mr_id: body.mrs[0].id };
-        saveLive(publication); return publication;
+      const found = await this.discoverMr(target, publication, operator, signal);
+      if (found) {
+        publication = { ...publication, state: "opened", url: found.url, mr_id: found.id };
+        saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal);
       }
     }
-    const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
     const saveAttempt = () => saveLive({ ...publication, documents: continuing ? previous!.documents : [], attempted_documents: documents });
     saveAttempt();
     return this.withGit(operator, async (git, root, operationSignal) => {
@@ -357,15 +367,7 @@ export class KnowledgeMrPublisher {
       publication.revision = revision; saveAttempt();
       if (revision !== remote) await git(["push", target.repository, `${revision}:refs/heads/${publication.branch}`]);
       saveLive(publication);
-      publication.mr_attempted = true; saveLive(publication);
-      let receipt;
-      try { receipt = await createMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, sourceBranch: publication.branch,
-        targetBranch: target.branch, title, credential: identity.credential, dtsNo: issue, purpose: "knowledge", signal: operationSignal, includeFailureMetadata: true }); }
-      catch (error) { operationSignal.throwIfAborted(); this.assertActive(signal); throw knowledgeMrFailure(error, "MR 创建", [identity.credential.password]); }
-      operationSignal.throwIfAborted(); this.assertActive(signal);
-      if (!/^https?:\/\//.test(receipt.url)) throw new Error("MR 链接无效，请恢复平台查询后手动重试");
-      publication.url = receipt.url; publication.mr_id = receipt.id; publication.state = "opened";
-      saveLive(publication); return publication;
+      return this.openMr(job, target, publication, operator, saveLive, operationSignal);
     }, signal);
   }
 }
