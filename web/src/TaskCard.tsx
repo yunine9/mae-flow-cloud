@@ -499,7 +499,7 @@ export function TaskCard({
               <div className="rounded-md bg-surface-2 px-3 py-2.5 text-[13px] leading-relaxed text-muted-foreground">
                 任务现场已于 {formatLocalDateTime(task.workspace_reclaimed_at)} 回收
                 （超过保留期，释放代码克隆等可再生的大件）。
-                过程记录、交付账本、流水线证据与批注都还在，代码差异不再可看。
+                需求与交付文档仍可阅读和下载，过程记录、交付账本、流水线证据与批注都还在；代码差异不再可看。
               </div>
             )}
             <ExecutionPanel task={task} />

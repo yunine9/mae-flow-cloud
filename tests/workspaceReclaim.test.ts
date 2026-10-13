@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,9 +20,10 @@ import {
   judgeReclaim,
   reclaimWorkspace,
   KERNEL_STATE_SNAPSHOT,
-  RECLAIM_KEEP,
+  ARCHIVED_DOCUMENTS_DIR,
   withinDataDir,
 } from "../src/workspaceReclaim.ts";
+import { listArtifacts, readArtifact, resolveArtifactRoot, bundleArtifactDocuments } from "../src/artifacts.ts";
 
 const DAY = 24 * 60 * 60_000;
 const NOW = Date.parse("2026-08-22T12:00:00Z");
@@ -186,7 +187,7 @@ test("交付历史一个字节都不动——用户点名要求,逐项验", () =
   assert.ok(existsSync(join(workspace, "review_replies.md")));
 });
 
-test("编译环境清干净:克隆目录名不固定,黑名单点不全,所以用白名单", () => {
+test("只清明确的代码克隆和临时运行目录", () => {
   const { workspace, dataDir } = fullWorkspace();
   const result = reclaimWorkspace(
     workspace, { cwd: join(workspace, "notify-service"), dataDir });
@@ -220,10 +221,80 @@ test("回收是幂等的:再来一次不炸,也没什么可删了", () => {
   const again = reclaimWorkspace(workspace, { cwd: join(workspace, "notify-service"), dataDir });
   assert.deepEqual(again.removed, []);
   assert.equal(again.freed, 0);
-  // 第二遍现场里只剩 KEEP 名单里的东西。
-  for (const name of readdirSync(workspace)) {
-    assert.ok(RECLAIM_KEEP.includes(name), `${name} 不在保留名单里却活了下来`);
+  assert.ok(existsSync(join(workspace, "task.json")));
+  assert.ok(existsSync(join(workspace, "annotations.jsonl")));
+});
+
+test("回收代码后需求与新增文档、修订历史、图片、Story 和交付摘要原样保留，原入口可阅读和下载过程文档", () => {
+  const { workspace, dataDir } = fullWorkspace(), cwd = join(workspace, "notify-service");
+  const files = {
+    "requirement-input.md": "完整需求正文",
+    "requirement-history/revision.before.md": "需求修改前的正文",
+    "requirement-history/revision.diff": "需求修改差异",
+    "overall-story/state.json": JSON.stringify({ current: "00000000-0000-0000-0000-000000000001", revisions: [{ id: "00000000-0000-0000-0000-000000000001" }] }),
+    "overall-story/revisions/00000000-0000-0000-0000-000000000001/story.md": "全局 Story 正文",
+    "交付摘要.md": "这次交付的摘要",
+    "交付经验复盘.md": "这次交付的复盘",
+    "delivery-summary/state.json": "摘要生成记录",
+    "delivery-experience/state.json": "经验整理记录",
+    "新增加的文档目录/设计说明.md": "未来新增的文档也不能误删",
+  };
+  for (const [name, content] of Object.entries(files)) {
+    mkdirSync(join(workspace, name, ".."), { recursive: true });
+    writeFileSync(join(workspace, name), content);
   }
+  const work = join(cwd, ".mae-flow-work", "REQ1");
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(work, ".ticket-id"), "REQ1");
+  writeFileSync(join(work, "spec.md"), "# 需求约束\n全文保留");
+  writeFileSync(join(work, "story.md"), "# 本次 Story\n全文保留");
+  writeFileSync(join(work, "diagram.png"), Buffer.from([0, 1, 2, 255]));
+  const assets = join(workspace, ".mae-flow-work", "requirement-assets");
+  mkdirSync(assets, { recursive: true });
+  writeFileSync(join(assets, "uploaded.png"), Buffer.from([3, 4, 5, 255]));
+
+  const result = reclaimWorkspace(workspace, { cwd, dataDir });
+  assert.equal(result.refused, undefined); assert.equal(existsSync(cwd), false, "代码克隆可以删除");
+  for (const [name, content] of Object.entries(files)) assert.equal(readFileSync(join(workspace, name), "utf8"), content, name);
+  assert.deepEqual(readFileSync(join(assets, "uploaded.png")), Buffer.from([3, 4, 5, 255]));
+  const root = resolveArtifactRoot(workspace, cwd);
+  assert.equal(root, join(workspace, ARCHIVED_DOCUMENTS_DIR));
+  assert.deepEqual(readFileSync(join(root!, ".mae-flow-work", "REQ1", "diagram.png")), Buffer.from([0, 1, 2, 255]));
+  const sources = { taskMaterialRoot: workspace };
+  for (const name of ["REQ1/spec.md", "REQ1/story.md", "task-materials/交付摘要.md", "task-materials/交付经验复盘.md", "task-materials/overall-story.md"]) {
+    assert.ok(listArtifacts(root, sources).some(item => item.name === name), name);
+    assert.ok(readArtifact(root, name, sources)?.content, name);
+  }
+  assert.ok(bundleArtifactDocuments(root, sources), "原打包下载入口仍有完整文档");
+  assert.deepEqual(reclaimWorkspace(workspace, { cwd, dataDir }).removed, []);
+});
+
+test("多仓回收先保存分析文档和各仓文稿，同名单号的文稿不会覆盖", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-reclaim-multiple-")), workspace = join(dataDir, "task-1"), cwd = join(workspace, "repositories");
+  for (const repo of ["", "1-core", "2-api"]) {
+    const root = join(cwd, repo, ".mae-flow-work", "REQ1");
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "spec.md"), repo || "总体设计");
+  }
+  const result = reclaimWorkspace(workspace, { cwd, dataDir });
+  assert.equal(result.refused, undefined); assert.equal(existsSync(cwd), false);
+  const archive = join(workspace, ARCHIVED_DOCUMENTS_DIR);
+  assert.equal(readFileSync(join(archive, ".mae-flow-work", "REQ1", "spec.md"), "utf8"), "总体设计");
+  for (const repo of ["1-core", "2-api"]) assert.equal(readFileSync(join(archive, "source-materials", "repositories", repo, ".mae-flow-work", "REQ1", "spec.md"), "utf8"), repo);
+});
+
+test("文档无法安全保存时不删除代码，未知目录和错误 cwd 也不能成为清理目标", () => {
+  const { workspace, dataDir } = fullWorkspace(), cwd = join(workspace, "notify-service");
+  const work = join(cwd, ".mae-flow-work", "REQ1");
+  mkdirSync(work, { recursive: true });
+  symlinkSync(join(workspace, "task.json"), join(work, "spec.md"));
+  const refused = reclaimWorkspace(workspace, { cwd, dataDir });
+  assert.match(refused.refused!, /文档保存失败/); assert.deepEqual(refused.removed, []); assert.ok(existsSync(cwd));
+  unlinkSync(join(work, "spec.md"));
+  const documents = join(workspace, "new-documents");
+  mkdirSync(documents); writeFileSync(join(documents, "design.md"), "设计原文");
+  assert.equal(reclaimWorkspace(workspace, { cwd: documents, dataDir }).refused, undefined);
+  assert.equal(readFileSync(join(documents, "design.md"), "utf8"), "设计原文");
 });
 
 test("现场不存在时不炸,而且按越界处理:删除动作宁可不做", () => {

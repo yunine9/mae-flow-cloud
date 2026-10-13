@@ -95,7 +95,7 @@ export function TaskInspector({ task, kind, onClose, onInspect, onOpenProcess, c
               {task.delivery?.pipeline && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{task.delivery.pipeline}</dd></div>}
               {task.delivery?.loop?.failure && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>流水线失败原文</dt><dd className="m-0 whitespace-pre-wrap font-mono text-xs leading-[1.8]">{task.delivery.loop.failure}</dd></div>}
               {task.workspace_reclaimed_at && <div className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-[18px]"><dt className={cn(dtc, "pt-[3px]")}>现场回收</dt><dd className="m-0 text-base leading-[1.7] [overflow-wrap:anywhere]">{formatLocalDateTime(task.workspace_reclaimed_at, { year: true })}
-                <p className="mt-1 text-xs text-muted-foreground">过程记录、交付账本、流水线证据与批注仍保留，代码差异不再可看。</p></dd></div>}
+                <p className="mt-1 text-xs text-muted-foreground">需求与交付文档仍可阅读和下载，过程记录、交付账本、流水线证据与批注仍保留；代码差异不再可看。</p></dd></div>}
             </dl>
             <Button type="button" variant="outline" size="sm"
               className="mt-4 w-fit" onClick={onOpenProcess}>查看工作过程 →</Button>

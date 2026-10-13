@@ -227,7 +227,7 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="任务现场保留期（天）"
         defaultText={defaults.workspace_retention_days === 0
           ? "永不回收" : `${defaults.workspace_retention_days} 天`}
-        note="终态任务过期后回收代码克隆等可再生的大件；过程记录、证据与批注永久保留。0 表示永不回收"
+        note="已结束任务过期后回收代码克隆和临时运行目录；需求与交付文档、图片、历史记录及批注永久保留。0 表示永不回收"
         value={retention} onChange={setRetention} />
       <Button type="submit" disabled={busy} className="col-span-full sm:col-span-1">{busy ? "正在保存…" : "保存运行参数"}</Button>
       <Feedback message={message} />
