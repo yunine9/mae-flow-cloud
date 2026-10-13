@@ -970,7 +970,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "精确相等),不用也不能自拟。",
     parameters: Type.Object({
       target_branch: Type.Optional(Type.String({
-        description: "目标分支,缺省 master",
+        description: "目标分支;缺省会话基线分支(登记产品版本映射)",
       })),
       repo: Type.Optional(Type.String({
         description: "目标代码仓地址;缺省首个登记仓。必须是会话登记过的仓",
@@ -993,7 +993,17 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       if (!pushRecord) {
         fail(promptCopy("receipts", "mr.no_push", { repo: repo.url }));
       }
-      const target = String(params.target_branch ?? "").trim() || "master";
+      // 目标分支缺省=会话基线(#441):登记必选产品版本(2026-09-18,自动
+      // 接单同样以映射命中为闸),版本映射分支就是合入口径,AI 不传参
+      // 也打不偏——2026-09-27 现场即因这里静默落 master,把 26C10 的
+      // 修复 MR 打到了 master。无基线(直连接口/存量会话)如实拒绝,
+      // 不再猜;多目标交付仍由 AI 显式传参(2026-08-28 裁量权)。
+      const target = String(params.target_branch ?? "").trim()
+        || String(state.baseline ?? "").trim();
+      if (!target) {
+        fail("会话没有基线分支(登记未带产品版本),无法确定 MR 目标:"
+          + "请显式传 target_branch");
+      }
       const title = await issueMrTitle(ctx, state.ticket);
       const receipt = await createMergeRequest({
         platformUrl,

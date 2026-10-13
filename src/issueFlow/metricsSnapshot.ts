@@ -766,7 +766,8 @@ function diffOnePushChain(
   state: IssueSessionState,
   group: { repo: string; branch: string; shas: string[] },
 ): IssueMetricsPushDiffRepoOk {
-  // 首笔的分支起点界:该仓该分支 MR 申报的目标分支(缺省 master)的
+  // 首笔的分支起点界:该仓该分支 MR 申报的目标分支(申报缺省=会话
+  // 基线,存量无目标记账退 master)的
   // 本地远端跟踪引用;没有 MR 的仓退回克隆的缺省远端分支(origin/HEAD)。
   const mr = (state.mrs ?? []).find((record) =>
     record.repo === group.repo && record.branch === group.branch);
