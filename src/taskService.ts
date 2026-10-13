@@ -284,6 +284,13 @@ import {
   storeRequirementAssets,
   type RequirementAsset,
 } from "./requirementBundle.ts";
+import {
+  loadRequirementSources,
+  materializeRequirementSources,
+  readRequirementSource as readStoredRequirementSource,
+  storeRequirementSources,
+  type RequirementSource,
+} from "./requirementMaterials.ts";
 import { readJson } from "./jsonBody.ts";
 import { fetchMrGates } from "./mrGateClient.ts";
 import {
@@ -596,7 +603,9 @@ import {
   deliveryStopped, projectRepairStopped, projectStatusLabel, projectTaskFocus, type TaskFocus,
 } from "./taskFocus.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
-import { createMergeRequest } from "./mrClient.ts";
+import { createMergeRequest, updateMergeRequestParticipants } from "./mrClient.ts";
+import { resolveModuleMrParticipants } from "./moduleMrParticipants.ts";
+import type { MrParticipantsResult } from "./mrParticipants.ts";
 import { MR_DESCRIPTION_STEP, askMrDescription, savedMrDescription } from "./mrDescription.ts";
 import {
   DEVELOPER_ASSISTANT_SESSION,
@@ -1141,6 +1150,7 @@ export interface TaskSummary {
     mr_url?: string;
     /** MR 标识(平台返回的 id/iid):门禁与讨论查询要带回去。 */
     mr_id?: number | string;
+    mr_participants?: MrParticipantsResult;
     /** 交付分支对(门禁查询与冲突修复都要用,重启后不靠重读状态文件)。 */
     source_branch?: string;
     target_branch?: string;
@@ -2495,9 +2505,9 @@ export class TaskService {
       environment.MFC_MAE_BASELINE = task.summary.baseline ?? "";
       const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
       try {
-        await prepareMaeBuildSupport({ root, dataDir: this.options.dataDir, repositories: [repository], log: this.options.log, user: this.options.isolation?.user,
+        await prepareMaeBuildSupport({ root, workspace: task.cwd, dataDir: this.options.dataDir, repositories: [repository], log: this.options.log, user: this.options.isolation?.user,
           clone: async (url, target, ref) => { await this.cloneRepo(dirname(target), sandbox, undefined, url, ref, basename(target), true, true); } });
-        volumes = [...volumes, ...maeBuildVolumes(root)];
+        volumes = [...volumes, ...maeBuildVolumes(root, task.cwd)];
       } catch (error) { environment.MFC_MAE_BUILD_ERROR = String(error); this.options.log?.(`[mae-build] ${task.summary.id} 构建资源未就绪: ${String(error)}`); }
       finally { this.cleanupHostGitCredential(sandbox); }
     }
@@ -3011,7 +3021,16 @@ export class TaskService {
       : undefined;
   }
 
-  /** 任务始终只有一份当前需求文档。需求确认阶段只允许专用 Agent
+  requirementSource(id: string, path: string): { name: string; content: Buffer } | undefined {
+    const task = this.tasks.get(id);
+    if (!task) return undefined;
+    const source = readStoredRequirementSource(
+      task.summary.workspace, task.summary.requirement_document, path);
+    return source ? { name: source.meta.name, content: source.content } : undefined;
+  }
+
+  /** 多份来源合成当前需求正文；确认后只修订正文，不从原件重新生成。
+   * 需求确认阶段只允许专用 Agent
    * 根据已提交批注更新，避免人与 Agent 双写。 */
   private applyRequirementContent(
     task: TaskState,
@@ -3034,8 +3053,11 @@ export class TaskService {
     if (next && previous) {
       next = {
         ...next,
+        ...(previous.sources?.length ? { context_mode: "file" as const } : {}),
         ...(previous.bundle_name ? { bundle_name: previous.bundle_name } : {}),
         ...(previous.assets?.length ? { assets: previous.assets } : {}),
+        ...(previous.sources?.length ? { sources: previous.sources } : {}),
+        ...(previous.warnings?.length ? { warnings: previous.warnings } : {}),
       };
     }
     task.summary.requirement = content;
@@ -7228,6 +7250,8 @@ export class TaskService {
       /** ZIP 材料包已由入口解析并改写为安全相对路径的图片。 */
       requirementBundleName?: string;
       requirementAssets?: RequirementAsset[];
+      requirementSources?: RequirementSource[];
+      requirementWarnings?: string[];
       /** Chain 拆单内部标记；外部下单绝不设置。子任务 requirement 仍是
        * 原始需求，单元任务书单独落盘，不再拼到长文档末尾。 */
       internalRequirement?: boolean;
@@ -7294,15 +7318,19 @@ export class TaskService {
       options.internalRequirement
         ? MAX_REQUIREMENT_DOCUMENT_BYTES * 2
         : MAX_REQUIREMENT_DOCUMENT_BYTES);
-    if (options.requirementBundleName || options.requirementAssets?.length) {
+    if (options.requirementBundleName || options.requirementAssets?.length || options.requirementSources?.length) {
       if (!requirementDocument) {
-        throw new Error("ZIP 材料包必须包含可读取的 Markdown 文档");
+        throw new Error("需求资料必须包含可读取的完整正文");
       }
       requirementDocument = {
         ...requirementDocument,
+        ...(options.requirementSources?.length ? { context_mode: "file" as const } : {}),
         bundle_name: options.requirementBundleName,
         assets: options.requirementAssets?.map(
           ({ content: _content, ...asset }) => asset) ?? [],
+        sources: options.requirementSources?.map(
+          ({ content: _content, ...source }) => source),
+        warnings: options.requirementWarnings,
       };
     }
     // 交付方式:选项是内核的领地,现读它的 flow.json 校验
@@ -7609,6 +7637,9 @@ export class TaskService {
     mkdirSync(workspace, { recursive: true });
     if (options.requirementAssets?.length) {
       storeRequirementAssets(workspace, options.requirementAssets);
+    }
+    if (options.requirementSources?.length) {
+      storeRequirementSources(workspace, options.requirementSources);
     }
     let issueEnvironments: IssueEnvironmentRef[] = [];
     let businessModules: SelectedBusinessModule[] = [];
@@ -9407,6 +9438,8 @@ export class TaskService {
       requirementBundleName: source.requirement_document?.bundle_name,
       requirementAssets: loadRequirementAssets(
         workspace, source.requirement_document),
+      requirementSources: loadRequirementSources(workspace, source.requirement_document),
+      requirementWarnings: source.requirement_document?.warnings,
       internalRequirement: Boolean(source.parent_task_id),
       parentTaskId: source.parent_task_id,
       blockedBy: source.blocked_by ? [...source.blocked_by] : undefined,
@@ -10028,6 +10061,8 @@ export class TaskService {
       task.summary.requirement = parent.summary.requirement;
       task.summary.requirement_document = parent.summary.requirement_document
         ? structuredClone(parent.summary.requirement_document) : undefined;
+      materializeRequirementAssets(parent.summary.workspace, task.summary.workspace, task.summary.requirement_document);
+      materializeRequirementSources(parent.summary.workspace, task.summary.workspace, task.summary.requirement_document);
       storeRequirementDocument(task.summary.workspace,
         task.summary.requirement, task.summary.requirement_document);
       this.persist(task);
@@ -10141,6 +10176,8 @@ export class TaskService {
         requirementBundleName: task.summary.requirement_document?.bundle_name,
         requirementAssets: loadRequirementAssets(
           task.summary.workspace, task.summary.requirement_document),
+        requirementSources: loadRequirementSources(task.summary.workspace, task.summary.requirement_document),
+        requirementWarnings: task.summary.requirement_document?.warnings,
         blockedBy: blockers,
         repositorySkills: preserveUndefinedRepositorySkills
           ? undefined
@@ -12231,10 +12268,53 @@ export class TaskService {
   }
 
   private async createDeliveryMr(task: TaskState, input: Parameters<typeof createMergeRequest>[0]): ReturnType<typeof createMergeRequest> {
-    const work = createMergeRequest(input);
+    const previous = task.summary.delivery;
+    const work = createMergeRequest({ ...input,
+      participants: this.taskMrParticipants(task, input.repo) });
     task.mrCreateActive = work;
-    try { return await work; }
+    try {
+      const result = await work;
+      if (previous?.mr_participants && previous.mr_url === result.url) result.participants = previous.mr_participants;
+      return result;
+    }
     finally { if (task.mrCreateActive === work) task.mrCreateActive = undefined; }
+  }
+
+  private taskMrParticipants(task: TaskState, repository = task.summary.repo_url) {
+    const module = task.summary.business_module
+      ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
+    return resolveModuleMrParticipants(this.options.dataDir, module?.id, repository);
+  }
+
+  private mrParticipantUpdates = new Map<string, Promise<TaskSummary>>();
+
+  retryMrParticipants(id: string): Promise<TaskSummary> {
+    const active = this.mrParticipantUpdates.get(id);
+    if (active) return active;
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
+    const delivery = task.summary.delivery;
+    const repo = task.summary.repo_url;
+    const platformUrl = this.effectivePlatformUrl();
+    if (!delivery?.mr_url || !repo || !platformUrl || delivery.mr_participants?.status !== "failed") {
+      throw new TaskControlError("当前没有需要重试的 MR 人员设置");
+    }
+    if (["completed", "canceled"].includes(task.summary.status)
+        || ["merged", "closed", "已合入", "已关闭"].includes(delivery.mr_state ?? "")) {
+      throw new TaskControlError("交付已结束，不能重新设置 MR 人员");
+    }
+    const work = updateMergeRequestParticipants({ platformUrl, repo, mr: delivery.mr_id ?? delivery.mr_url,
+      participants: delivery.mr_participants.requested,
+      credential: this.options.gitCredential?.(task.summary.luban_account),
+    }).then(result => {
+      const current = task.summary.delivery;
+      if (!current || current.mr_url !== delivery.mr_url) throw new TaskControlError("MR 已变化，请刷新任务后重试");
+      current.mr_participants = result;
+      this.persist(task);
+      return this.get(id)!;
+    }).finally(() => this.mrParticipantUpdates.delete(id));
+    this.mrParticipantUpdates.set(id, work);
+    return work;
   }
 
   /** 用户主动纠正 AR：一次程序化迁移，不调用模型、不追加检视或验证。 */
@@ -12306,7 +12386,7 @@ export class TaskService {
     const correction = task.summary.ticket_correction!;
     const journal = JSON.parse(readFileSync(path, "utf8")) as {
       before: TaskSummary; plan?: TicketRewrite; local?: boolean; remote_checked?: boolean; old_remote?: string;
-      pushed?: TaskSummary["delivery"]; mr?: { url: string; id?: string | number }; projected?: boolean;
+      pushed?: TaskSummary["delivery"]; mr?: { url: string; id?: string | number; participants?: MrParticipantsResult }; projected?: boolean;
       closed?: boolean; deleted?: boolean;
     };
     const save = (message: string) => { correction.message = message; writeCorrectionJson(path, journal); this.persist(task); };
@@ -12401,7 +12481,7 @@ export class TaskService {
       if (!platformUrl || !plan || !journal.pushed) throw new Error("缺少创建新 MR 的平台配置或推送记录");
       journal.mr = await createMergeRequest({ platformUrl, repo, sourceBranch: plan.branch,
         targetBranch: oldDelivery?.target_branch ?? journal.before.baseline ?? "master", title: correction.title,
-        dtsNo: correction.ticket, credential });
+        dtsNo: correction.ticket, credential, participants: this.taskMrParticipants(task, repo) });
       save("新 MR 已创建，正在同步任务与内核引用");
     }
     if (!journal.projected) {
@@ -12432,7 +12512,7 @@ export class TaskService {
       if (journal.pushed?.git_push) task.summary.delivery = { ...task.summary.delivery,
         git_push: journal.pushed.git_push, sha: journal.pushed.git_push.sha };
       if (journal.mr) task.summary.delivery = { ...task.summary.delivery, mr_url: journal.mr.url,
-        mr_id: journal.mr.id, mr_state: "opened", merged_sha: undefined };
+        mr_id: journal.mr.id, mr_participants: journal.mr.participants, mr_state: "opened", merged_sha: undefined };
       const oldPrepush = journal.before.delivery?.prepush;
       if (oldPrepush?.sha && plan?.sha_map[oldPrepush.sha]) {
         const previous = { sha: oldPrepush.sha, workspace_fingerprint: oldPrepush.workspace_fingerprint };
@@ -12903,6 +12983,7 @@ export class TaskService {
     task.summary.delivery = {
       mr_url: delivery.mr_url,
       mr_id: delivery.mr_id,
+      mr_participants: delivery.mr_participants,
       source_branch: delivery.source_branch,
       target_branch: delivery.target_branch,
       mr_state: delivery.mr_state,
@@ -13508,6 +13589,8 @@ export class TaskService {
       summary: task.summary, cwd: task.cwd, dataDir: this.options.dataDir,
       kernel: this.options.host, platformUrl: this.effectivePlatformUrl(),
       credential: this.options.gitCredential?.(task.summary.luban_account),
+      mrParticipants: () => this.taskMrParticipants(task),
+      retryMrParticipants: async () => { await this.retryMrParticipants(task.summary.id); },
       assertActive: () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested
             || ["paused", "pausing", "completed"].includes(task.summary.status)) {
@@ -13753,6 +13836,8 @@ export class TaskService {
         task.cwd = cwd;
         materializeRequirementAssets(
           workspace, cwd, task.summary.requirement_document);
+        materializeRequirementSources(
+          workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
         requirementPath = materializeRequirementDocument(
@@ -13827,6 +13912,8 @@ export class TaskService {
         }
         task.cwd = cwd;
         materializeRequirementAssets(
+          workspace, cwd, task.summary.requirement_document);
+        materializeRequirementSources(
           workspace, cwd, task.summary.requirement_document);
         // 批注附图与需求图片同命:现场重建后 Agent 工作区里得有(旁路)。
         try { materializeReviewAssets(workspace, cwd); } catch { /* 图缺了页面仍能提示 */ }
@@ -16803,7 +16890,7 @@ export class TaskService {
                finishedAt: new Date().toISOString() });
       // MR 一创建就落盘并监听，不能等流水线请求成功，更不能等到绿灯。
       task.summary.delivery = { ...task.summary.delivery,
-        mr_url: mr.url, mr_id: mr.id, source_branch: branch,
+        mr_url: mr.url, mr_id: mr.id, mr_participants: mr.participants, source_branch: branch,
         target_branch: baseline, git_push: pushReceipt };
       this.persist(task);
       this.ensureMergeWatch(task);
@@ -16843,6 +16930,7 @@ export class TaskService {
         last_push_base_sha: task.summary.delivery?.last_push_base_sha,
         git_push: pushReceipt,
         mr_url: mr.url,
+        mr_participants: mr.participants,
         // 平台给了 MR 标识就记下:门禁/讨论查询要带回去(假件给 id,
         // codehubcli 给 iid;没有也不碍事,适配层还能按分支对查)。
         ...(mr.id !== undefined ? { mr_id: mr.id } : {}),

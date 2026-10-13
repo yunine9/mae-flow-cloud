@@ -1,5 +1,6 @@
 import { KnowledgeArchiveDialog } from "./KnowledgeArchiveDialog";
 import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
+import { mrParticipantsMessage } from "../../src/mrParticipants";
 
 export function DomainKnowledgePublicationStatus({ job, disabled, onConfigure, onChanged, compact = false, openRequest = 0 }: {
   job: DomainKnowledgeJob; disabled?: boolean; onConfigure?: () => void; onChanged?: () => void; compact?: boolean; openRequest?: number;
@@ -15,6 +16,9 @@ export function DomainKnowledgePublicationStatus({ job, disabled, onConfigure, o
     {view.publications.map(item => <div key={item.key} className="text-sm"><span>{item.target} · {item.status_label}</span>
       {item.url && <a className="ml-3 text-primary underline" href={item.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
       {item.error && <p className="mt-1 whitespace-pre-wrap break-words text-danger">{item.error}</p>}
+      {item.mr_participants && <p role={item.mr_participants.status === "failed" ? "alert" : "status"}
+        className={`mt-1 whitespace-pre-wrap break-words ${item.mr_participants.status === "failed" ? "text-attention" : "text-muted-foreground"}`}>
+        {mrParticipantsMessage(item.mr_participants)}</p>}
     </div>)}
   </section>;
 }

@@ -4,6 +4,8 @@ import { KnowledgeAnswerError, type KnowledgeAnswers } from "./knowledgeAnswers.
 import type { KnowledgeAnswerRecord } from "./knowledgeAnswerTypes.ts";
 import { knowledgeAnswerSourceCatalog } from "./knowledgeAnswerSources.ts";
 import type { KnowledgeSearch } from "./knowledgeSearch.ts";
+import { join } from "node:path";
+import { readKnowledgeMaterialImage } from "./knowledgeMaterials.ts";
 
 type Json = (response: ServerResponse, status: number, value: unknown) => unknown;
 type ReadBody = (request: IncomingMessage, limit?: number) => Promise<any>;
@@ -13,10 +15,27 @@ export async function knowledgeAnswerRoute(request: IncomingMessage, response: S
   response.setHeader("cache-control", "no-store");
   try {
     if (request.method === "GET" && parts.length === 2 && parts[1] === "catalog") return json(response, 200, knowledgeAnswerSourceCatalog(dataDir, search));
-    if (request.method === "GET" && parts.length === 1) return json(response, 200, { answers: answers.list(owner).map(record => ({ ...record, evidence: [], activity: record.activity.slice(-3) })) });
+    if (request.method === "GET" && parts.length === 1) return json(response, 200, { answers: answers.list(owner) });
     if (request.method === "POST" && parts.length === 1) return json(response, 202, answers.create(await readBody(request, 64 * 1024), owner).record);
     const id = decodeURIComponent(parts[1] ?? "");
+    if (request.method === "GET" && parts.length === 5 && parts[2] === "evidence" && parts[4] === "image") {
+      const record = answers.get(id, owner);
+      const evidence = record.evidence.find(item => item.id === parts[3]);
+      if (evidence?.kind !== "material" || !evidence.source_id || !evidence.image
+          || !record.context?.material_ids?.includes(evidence.source_id))
+        return json(response, 404, { error: "本次问答没有读取这张图片" });
+      const { asset, content } = readKnowledgeMaterialImage(join(dataDir, "knowledge-materials"), evidence.source_id, evidence.image.path);
+      if (asset.id !== evidence.image.digest || asset.mimeType !== evidence.image.mime_type)
+        return json(response, 409, { error: "图片与本次查阅时的内容不一致" });
+      response.writeHead(200, { "content-type": asset.mimeType, "content-length": content.length,
+        "x-content-type-options": "nosniff", "content-disposition": "inline", "cache-control": "private, no-store" });
+      return response.end(content);
+    }
     if (request.method === "GET" && parts.length === 2) return json(response, 200, answers.get(id, owner));
+    if (request.method === "DELETE" && parts.length === 2) {
+      answers.remove(id, owner);
+      return json(response, 200, { deleted: true });
+    }
     if (request.method === "POST" && parts.length === 3 && parts[2] === "cancel") return json(response, 200, answers.cancel(id, owner));
     if (request.method === "POST" && parts.length === 3 && parts[2] === "feedback") return json(response, 200, answers.feedback(id, owner, await readBody(request, 8192)));
     return json(response, 404, { error: "未知知识问答接口" });

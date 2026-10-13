@@ -52,6 +52,7 @@ import { KnowledgeFootprint } from "./KnowledgeFootprint";
 import { TaskJourney } from "./TaskJourney";
 import { TaskContinueDelivery } from "./TaskContinueDelivery";
 import { TaskInspector, type TaskInspectorKind } from "./TaskInspector";
+import { MrParticipantsNotice } from "./MrParticipantsNotice";
 import { taskHealthFacts } from "./taskHealth";
 import { relativeTime } from "./time";
 import { startVisiblePolling } from "./visiblePolling";
@@ -1484,7 +1485,7 @@ export function TaskWorkspace({
   // 全局 Story 的设计图入口沿用主任务的分析可见性。
   const hasRequirementGraph = requirementGraphVisible(task);
   const materialHeading = materialView === "source"
-    ? { kicker: "REQUEST SOURCE", title: "需求原文" }
+    ? { kicker: "REQUEST SOURCE", title: "当前需求" }
     : materialView === "chain"
     ? { kicker: "ARCHITECTURE", title: "架构图" }
     : materialView === "diff"
@@ -1562,6 +1563,10 @@ export function TaskWorkspace({
   const nextAction = workspaceNextActionCopy(task, Boolean(waiting));
   const canContributeReview = canOperate
     || isInvitedReviewParticipant(task, viewerUsername) || !!reviewAssignment;
+  const canRetryMrParticipants = canOperate
+    && viewerUsername === (task.luban_account ?? "本地用户")
+    && !["completed", "canceled"].includes(task.status)
+    && !["merged", "closed", "已合入", "已关闭"].includes(task.delivery?.mr_state ?? "");
   const canCreateAnnotation = canCreateWorkspaceAnnotation(task.status);
   // 多仓分析过程中的普通澄清也处于 analysis；分工只应在最终 Chain 方案
   // 检视卡出现。判据和卡片标题共用 isChainReviewWaiting,别两处各抄一份。
@@ -1679,6 +1684,9 @@ export function TaskWorkspace({
       {!waiting && task.status === "await_merge" && (
         <MergeWaitLine task={task} canOperate={canOperate} />
       )}
+      {task.delivery?.mr_participants?.status === "failed" && <MrParticipantsNotice key={task.delivery.mr_url}
+        result={task.delivery.mr_participants} endpoint={`/tasks/${encodeURIComponent(task.id)}/mr-participants`}
+        canRetry={canRetryMrParticipants} onChanged={onChanged} />}
       {!waiting && task.status === "verifying" && (
         <div aria-label="交付验证" className="grid gap-2 rounded-xl border border-line bg-surface p-4">
           <strong className="text-[15px] text-text-strong">{pipelineHumanFeedback.length ? "流水线待人工处理" : "交付验证进行中"}</strong>
@@ -1972,7 +1980,7 @@ export function TaskWorkspace({
       </header>
       <TaskContinueDelivery key={task.id} task={task} canOperate={canOperate} onChanged={onChanged} />
 
-      {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
+      {taskInspector && <TaskInspector task={task} canOperate={canOperate} canRetryMrParticipants={canRetryMrParticipants} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
         onInspect={setTaskInspector} onOpenProcess={() => { setTaskInspector(undefined); selectWorkspaceView("execution"); }} />}
       {warmupOpen && <OverlayDialog ariaLabel="开工前编译详情" title="开工前编译与准备状态" onClose={() => setWarmupOpen(false)}>
         <WarmupPanel task={task} />
@@ -2037,7 +2045,7 @@ export function TaskWorkspace({
                     </TabsTrigger>
                   </> : <>
                     <TabsTrigger value="source" className={`h-auto flex-none${materialTabOn("source") ? " on" : ""}`}>
-                      <span>需求原文</span>
+                      <span>当前需求</span>
                     </TabsTrigger>
                     <TabsTrigger value="doc" className={`h-auto flex-none${materialTabOn("doc") ? " on" : ""}`}>
                       <span>产出文档</span><i>{documents.length}</i>
@@ -2133,7 +2141,7 @@ export function TaskWorkspace({
                 placeholder={materialView === "diff"
                   ? "搜索当前代码变更"
                   : materialView === "source"
-                    ? "搜索当前需求原文"
+                    ? "搜索当前需求"
                     : `搜索 ${activeMeta?.label ?? "当前文档"}`}
                 onChange={(event) => setMaterialSearchQuery(event.target.value)}
                 onKeyDown={(event) => {
@@ -2222,6 +2230,23 @@ export function TaskWorkspace({
             )}
             {locationNotice && locationExcerpt && !moduleLocation && !moduleLocationRetry && <AnnotationExcerpt item={locationExcerpt} onOpen={() => { setLocationNotice(""); setLocationExcerpt(undefined); }} />}
             {materialView === "source" ? (
+              <>
+              {!!task.requirement_document?.sources?.length && <section aria-label="需求原始文件" className="mb-4 rounded-lg border border-line bg-surface-2 p-3 text-sm">
+                <strong>{task.requirement_document.sources.length} 份原始文件</strong>
+                <p className="mt-1 text-xs text-muted-foreground">全部资料共同构成下方当前需求；批注修改保留在当前需求中，原文件可下载核对。</p>
+                <ul className="mt-2 grid gap-1.5">
+                  {task.requirement_document.sources.map(source => <li key={source.id} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 break-all">{source.name}{source.document_count && source.document_count > 1 ? ` · ${source.document_count} 份文档` : ""}</span>
+                    <a className="shrink-0 text-primary underline" download={source.name}
+                      href={`/tasks/${encodeURIComponent(task.id)}/requirement-sources?path=${encodeURIComponent(source.path)}`}
+                      aria-label={`下载原文件 ${source.name}`}>下载原文件</a>
+                  </li>)}
+                </ul>
+                {!!task.requirement_document.warnings?.length && <details className="mt-2 text-amber-700">
+                  <summary>解析提醒（{task.requirement_document.warnings.length}）</summary>
+                  <ul>{task.requirement_document.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>
+                </details>}
+              </section>}
               <Annotatable
                 taskId={task.id}
                 artifact={TASK_REQUIREMENT_ARTIFACT}
@@ -2299,6 +2324,7 @@ export function TaskWorkspace({
                   )}
                 </article>
               </Annotatable>
+              </>
             ) : materialView === "chain" ? (
               // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
               <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine}

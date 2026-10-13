@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { componentRepositories } from "./componentRepositories.ts";
+import { normalizeMrParticipants, type MrParticipants } from "./mrParticipants.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -63,6 +64,8 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  /** 本模块全部关联代码仓共用的新 MR 默认人员。 */
+  mr_participants?: MrParticipants;
   /** 参考组件仓订阅(2026-09-23,ADR-0054):公共组件仓登记表条目的
    * id 引用,存引用不抄地址——登记表地址变更模块零跟进。问题会话
    * 开场只注入本模块订阅条目的描述;历史模块无此字段,读作空。 */
@@ -161,6 +164,17 @@ function moduleRepositories(values: string[]): string[] {
   return unique;
 }
 
+function moduleMrParticipants(value: unknown): MrParticipants | undefined {
+  if (value === undefined) return undefined;
+  try {
+    const participants = normalizeMrParticipants(value);
+    return Object.values(participants).some((accounts) => accounts.length)
+      ? participants : undefined;
+  } catch (error) {
+    throw new BusinessModuleError(error instanceof Error ? error.message : "MR 默认人员配置不合法");
+  }
+}
+
 /** 参考组件仓订阅(ADR-0054):从公共组件仓登记表多选条目 id,存引用
  * 不抄地址。悬空引用保存打回——订阅的条目事后被删/登记表不可读时,
  * 任何再保存都要求先清理订阅,失效引用不许静默滞留。停用条目允许
@@ -215,6 +229,7 @@ function parseModule(value: unknown): BusinessModule {
   }
   return {
     ...module,
+    mr_participants: moduleMrParticipants(module.mr_participants),
     reference_component_repos: Array.isArray(module.reference_component_repos)
       ? module.reference_component_repos.map(String) : [],
     assets: module.assets.map((asset) => ({
@@ -328,6 +343,7 @@ export function createBusinessModule(
     owner: string;
     maintainers?: string[];
     repositories?: string[];
+    mr_participants?: unknown;
     reference_component_repos?: string[];
   },
   operator: string,
@@ -346,6 +362,7 @@ export function createBusinessModule(
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
     repositories: moduleRepositories(input.repositories ?? []),
+    mr_participants: moduleMrParticipants(input.mr_participants),
     reference_component_repos: referenceComponentRepos(
       dataDir, input.reference_component_repos ?? []),
     status: "active",
@@ -370,6 +387,7 @@ export function updateBusinessModule(
     owner?: string;
     maintainers?: string[];
     repositories?: string[];
+    mr_participants?: unknown;
     reference_component_repos?: string[];
     status?: BusinessModuleStatus;
   },
@@ -396,6 +414,8 @@ export function updateBusinessModule(
       : usernames(patch.maintainers, owner),
     repositories: patch.repositories === undefined
       ? current.repositories : moduleRepositories(patch.repositories),
+    mr_participants: patch.mr_participants === undefined
+      ? current.mr_participants : moduleMrParticipants(patch.mr_participants),
     // 订阅校验永远按保存后的最终值跑(不只校验补丁):条目事后被删,
     // 带着悬空引用的任何再保存都打回,迫使先清理——失效不静默滞留。
     reference_component_repos: referenceComponentRepos(

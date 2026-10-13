@@ -1,3 +1,5 @@
+import type { MrParticipantsResult } from "./mrParticipants.ts";
+
 export interface KnowledgeRepository {
   id: string; name: string; repository: string; branch: string; path: string; docs_path: string;
 }
@@ -48,6 +50,8 @@ export interface DomainResearch {
 export interface DomainPublication {
   target_id: string; state: "pending" | "opened" | "failed";
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
+  /** 人员设置独立于 MR 创建结果；失败时仍保留已创建的 MR。 */
+  mr_participants?: MrParticipantsResult;
   documents: Array<{ id: string; path: string; content: string; revision: number; deleted?: boolean; base_content?: string | null; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
   updated_at?: string;

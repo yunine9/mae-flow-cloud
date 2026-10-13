@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, BookOpen, Check, ChevronDown, ChevronUp, Code2, Copy, FileText, LoaderCircle, MessageSquare, Plus, Search, Send, Square, ThumbsDown, ThumbsUp, X } from "lucide-react";
+import { ArrowUpRight, BookOpen, Check, ChevronDown, ChevronUp, Code2, Copy, FileText, LoaderCircle, MessageSquare, Plus, Search, Send, Square, ThumbsDown, ThumbsUp, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getSession } from "./api";
 import { answerParts } from "./knowledgeAnswerPresentation";
 import { KnowledgeAnswerMarkdown } from "./KnowledgeAnswerMarkdown";
 import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
-import { cancelKnowledgeAnswer, getKnowledgeAnswer, getKnowledgeAnswerCatalog, getKnowledgeAnswers, knowledgeAnswerRunning, newerKnowledgeAnswer, questionContext, sendKnowledgeAnswerFeedback, startKnowledgeAnswer, type KnowledgeAnswerCatalog, type KnowledgeAnswerContext, type KnowledgeAnswerEvidence, type KnowledgeAnswerInput, type KnowledgeAnswerRecord } from "./knowledgeAnswersApi";
+import { deleteKnowledgeAnswer, KnowledgeAnswerRequestError, cancelKnowledgeAnswer, getKnowledgeAnswer, getKnowledgeAnswerCatalog, getKnowledgeAnswers, knowledgeAnswerRunning, newerKnowledgeAnswer, questionContext, sendKnowledgeAnswerFeedback, startKnowledgeAnswer, type KnowledgeAnswerCatalog, type KnowledgeAnswerContext, type KnowledgeAnswerEvidence, type KnowledgeAnswerInput, type KnowledgeAnswerRecord, type KnowledgeAnswerSummary } from "./knowledgeAnswersApi";
 import "./KnowledgeAnswers.css";
 
 const sourceLabels = { knowledge: "知识文档", code: "仓库代码", everycode: "Every Code", wireless: "无线豆包", material: "原始资料" };
 const stages = { queued: "等待开始", researching: "查阅资料", answering: "整理回答", checking: "检查引用", done: "回答完成" };
-const statusLabel = (record: KnowledgeAnswerRecord) => record.status === "failed" ? "回答失败" : record.status === "cancelled" ? "已停止" : stages[record.stage];
+const statusLabel = (record: KnowledgeAnswerSummary) => record.status === "failed" ? "回答失败" : record.status === "cancelled" ? "已停止" : stages[record.stage];
 const messageOf = (error: unknown) => error instanceof Error ? error.message : "请求失败，请稍后重试。";
 const draftKey = (account: string) => `mae-flow:knowledge-answer:draft:${account}`;
 const elapsed = (created: string, now: number) => {
@@ -35,7 +36,8 @@ function readDraft(account: string): QuestionDraft | undefined {
     const draft = value as QuestionDraft;
     if (typeof draft.question !== "string" || !draft.context || typeof draft.context !== "object") return;
     const materials = Array.isArray(draft.materials) ? [...new Map(draft.materials.filter(material => material && typeof material === "object"
-      && typeof material.id === "string" && /^material-[a-f0-9-]{36}$/.test(material.id)
+      && typeof material.id === "string" && (/^material-[a-f0-9-]{36}$/.test(material.id)
+        || (material.state === "failed" && /^upload-failed-[a-f0-9-]{36}$/.test(material.id)))
       && typeof material.name === "string" && typeof material.version === "string" && typeof material.scope === "string"
       && ["ready", "failed"].includes(material.state) && Number.isInteger(material.sections) && material.sections >= 0)
       .map(material => [material.id, {
@@ -54,8 +56,10 @@ function readDraft(account: string): QuestionDraft | undefined {
   } catch { /* 浏览器禁用存储时，仍可在本页提问。 */ }
 }
 
-function EvidencePane({ evidence, quote, onClose }: { evidence: KnowledgeAnswerEvidence; quote?: string; onClose: () => void }) {
+function EvidencePane({ answerId, evidence, quote, onClose }: { answerId: string; evidence: KnowledgeAnswerEvidence; quote?: string; onClose: () => void }) {
   const pane = useRef<HTMLElement>(null);
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [evidence.id]);
   useEffect(() => { pane.current?.focus(); pane.current?.scrollTo(0, 0); }, [evidence.id, quote]);
   return <aside ref={pane} tabIndex={-1} onKeyDown={event => { if (event.key === "Escape") { event.stopPropagation(); onClose(); } }} className="ka-evidence" aria-label="本次引用原文">
     <header><div><small>{sourceLabels[evidence.kind]}</small><h3>{evidence.title}</h3></div><Button variant="ghost" size="icon-sm" aria-label="关闭引用原文" onClick={onClose}><X size={16} /></Button></header>
@@ -69,7 +73,12 @@ function EvidencePane({ evidence, quote, onClose }: { evidence: KnowledgeAnswerE
     </dl></details>
     <p className="ka-evidence-note">这里保存的是本次回答实际查阅的内容。</p>
     {evidence.truncated && <p className="ka-notice">来源返回内容不完整，以下仅为实际查阅部分。</p>}
-    {quote !== undefined ? <><section className="ka-quoted-source" aria-label="本段引用原句"><h4>本段引用</h4><pre className="ka-evidence-content" tabIndex={0}>{quote}</pre></section><details className="ka-full-source"><summary>查看本次查阅的完整内容</summary><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre></details></> : <pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>}
+    {evidence.image ? <section aria-label="本次查阅图片" className="space-y-3">
+      <img src={`/knowledge-answers/${encodeURIComponent(answerId)}/evidence/${encodeURIComponent(evidence.id)}/image`}
+        alt={evidence.title} className="h-auto max-w-full rounded-lg border border-line" onError={() => setImageFailed(true)} />
+      {imageFailed && <p role="alert" className="ka-notice">本次查阅的图片暂时无法显示，请稍后重试。</p>}
+      <h4>图片核对说明</h4><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>
+    </section> : quote !== undefined ? <><section className="ka-quoted-source" aria-label="本段引用原句"><h4>本段引用</h4><pre className="ka-evidence-content" tabIndex={0}>{quote}</pre></section><details className="ka-full-source"><summary>查看本次查阅的完整内容</summary><pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre></details></> : <pre className="ka-evidence-content" tabIndex={0}>{evidence.content}</pre>}
   </aside>;
 }
 
@@ -79,7 +88,7 @@ function EvidenceList({ title, items, selectedId, onSelect }: { title: string; i
 }
 
 export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelect }: Props) {
-  const [history, setHistory] = useState<KnowledgeAnswerRecord[]>([]), [historyError, setHistoryError] = useState("");
+  const [history, setHistory] = useState<KnowledgeAnswerSummary[]>([]), [historyError, setHistoryError] = useState("");
   const [catalog, setCatalog] = useState<KnowledgeAnswerCatalog>(), [catalogError, setCatalogError] = useState("");
   const [record, setRecord] = useState<KnowledgeAnswerRecord>(), [loadError, setLoadError] = useState("");
   const [draft, setDraft] = useState<QuestionDraft>({ question: "", context: questionContext(moduleKey, documentId), materials: [] });
@@ -93,6 +102,9 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   const [selectedQuote, setSelectedQuote] = useState<string>();
   const [copyState, setCopyState] = useState("");
   const [questionExpanded, setQuestionExpanded] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<KnowledgeAnswerSummary>();
+  const [deleteError, setDeleteError] = useState("");
+  const deletedIds = useRef(new Set<string>());
   const evidenceTrigger = useRef<HTMLElement | null>(null);
   const main = useRef<HTMLElement>(null);
   function openEvidence(id: string, quote?: string) {
@@ -142,7 +154,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
       setHistory(current => {
         // 列表可能晚于单条更新返回；保留本页已取得的新记录和最终状态。
         const merged = new Map(current.map(item => [item.id, item]));
-        for (const item of result.answers) merged.set(item.id, newerKnowledgeAnswer(merged.get(item.id), item));
+        for (const item of result.answers) if (!deletedIds.current.has(item.id)) merged.set(item.id, newerKnowledgeAnswer(merged.get(item.id), item));
         return [...merged.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
       });
     }).catch(error => { if (!controller.signal.aborted) setHistoryError(messageOf(error)); });
@@ -151,7 +163,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   }, [refresh]);
 
   function receive(next: KnowledgeAnswerRecord) {
-    if (!mounted.current) return;
+    if (!mounted.current || deletedIds.current.has(next.id)) return;
     setHistory(current => {
       const previous = current.find(item => item.id === next.id);
       return [newerKnowledgeAnswer(previous, next), ...current.filter(item => item.id !== next.id)].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -162,14 +174,19 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
     main.current?.scrollTo(0, 0); setQuestionExpanded(false); setCopyState(""); setSelectedQuote(undefined);
     setRecord(undefined); setLoadError(""); setActionError(""); setSelectedEvidence(""); setFeedbackChoice(undefined); setFeedbackComment("");
     if (!answerId) return;
-    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, failures = 0;
     async function poll() {
       try {
         const next = await getKnowledgeAnswer(answerId, controller.signal);
-        if (controller.signal.aborted) return;
-        receive(next); setLoadError("");
+        if (controller.signal.aborted || deletedIds.current.has(answerId)) return;
+        failures = 0; receive(next); setLoadError("");
         if (knowledgeAnswerRunning(next)) timer = setTimeout(() => { void poll(); }, 1500);
-      } catch (error) { if (!controller.signal.aborted) setLoadError(messageOf(error)); }
+      } catch (error) {
+        if (controller.signal.aborted || deletedIds.current.has(answerId)) return;
+        const retry = !(error instanceof KnowledgeAnswerRequestError) || error.status === 429 || error.status >= 500;
+        setLoadError(retry ? `连接暂时中断，正在自动重连。${messageOf(error)}` : messageOf(error));
+        if (retry) timer = setTimeout(() => { void poll(); }, Math.min(1500 * 2 ** failures++, 15000));
+      }
     }
     void poll();
     // 离开页面只停止浏览器轮询，服务端继续回答。
@@ -177,7 +194,8 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   }, [answerId, refresh]);
 
   async function submit(input: KnowledgeAnswerInput, clearDraft = false) {
-    if (busy || uploading || !input.question.trim()) return;
+    if (busy || uploading || !input.question.trim()
+        || (clearDraft && draft.materials.some(material => material.state !== "ready"))) return;
     setBusy(true); setActionError("");
     try {
       const next = await startKnowledgeAnswer({ question: input.question.trim(), context: input.context });
@@ -193,6 +211,21 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
     setBusy(true); setActionError("");
     try { receive(await cancelKnowledgeAnswer(record.id)); }
     catch (error) { if (mounted.current) setActionError(messageOf(error)); }
+    finally { if (mounted.current) setBusy(false); }
+  }
+  function askDelete(item: KnowledgeAnswerSummary) { setDeleteError(""); setDeleteTarget(item); }
+  async function remove() {
+    if (!deleteTarget || busy) return;
+    const id = deleteTarget.id;
+    setBusy(true); setDeleteError("");
+    try {
+      await deleteKnowledgeAnswer(id);
+      if (!mounted.current) return;
+      deletedIds.current.add(id);
+      setHistory(current => current.filter(item => item.id !== id));
+      setDeleteTarget(undefined);
+      if (selectedId.current === id) { setRecord(undefined); onSelect(""); }
+    } catch (error) { if (mounted.current) setDeleteError(messageOf(error)); }
     finally { if (mounted.current) setBusy(false); }
   }
   async function feedback() {
@@ -226,7 +259,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
       <label className="ka-history-search"><Search size={14} /><input aria-label="搜索历史问题" placeholder="搜索历史问题" value={historyQuery} onChange={event => setHistoryQuery(event.target.value)} /></label>
       <div className="ka-history-label">最近问答<span>{history.length}</span></div>
       {historyError && <div role="alert" className="ka-error">{historyError}<Button variant="ghost" size="sm" onClick={() => setRefresh(value => value + 1)}>重试加载</Button></div>}
-      <nav>{visibleHistory.map(item => <button type="button" key={item.id} className="ka-history-item" aria-current={answerId === item.id ? "page" : undefined} onClick={() => onSelect(item.id)}><span>{item.question}</span><small><i className={`ka-status-dot is-${item.status}`} />{statusLabel(item)} · {new Date(item.created_at).toLocaleDateString("zh-CN")}</small></button>)}</nav>
+      <nav>{visibleHistory.map(item => <div className="ka-history-row" key={item.id}><button type="button" className="ka-history-item" aria-current={answerId === item.id ? "page" : undefined} onClick={() => onSelect(item.id)}><span>{item.question}</span><small><i className={`ka-status-dot is-${item.status}`} />{statusLabel(item)} · {new Date(item.created_at).toLocaleDateString("zh-CN")}</small></button><Button variant="ghost" size="icon-sm" className="ka-delete" aria-label={`删除问题：${item.question}`} title="删除问题" disabled={busy} onClick={() => askDelete(item)}><Trash2 size={14} /></Button></div>)}</nav>
       {history.length > 0 && !visibleHistory.length && <p className="ka-history-empty">没有找到相关问题</p>}
       {!history.length && !historyError && <div className="ka-history-empty"><MessageSquare size={24} /><span>你的问答会保存在这里</span></div>}
     </aside>
@@ -247,7 +280,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
           {showMaterials && <div className="ka-material-upload"><KnowledgeMaterialUpload purpose="question" materials={draft.materials} onChange={changeMaterials} onBusy={setUploading} disabled={!draftReady || busy} /></div>}
           {catalogError && <p className="ka-notice">范围选项加载失败，仍可直接提问。<button type="button" onClick={() => setRefresh(value => value + 1)}>重试</button></p>}
           {actionError && <p role="alert" className="ka-error">{actionError}</p>}
-          <div className="ka-submit"><small>{uploading ? "资料正在上传并解析，请稍候" : draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "默认查阅所有可用的正式知识"}</small><Button type="submit" disabled={!draftReady || busy || uploading || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
+          <div className="ka-submit"><small>{uploading ? "资料正在上传并解析，请稍候" : draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "默认查阅所有可用的正式知识"}</small><Button type="submit" disabled={!draftReady || busy || uploading || draft.materials.some(material => material.state !== "ready") || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
         </form>
         {!draft.question && <div className="ka-examples" aria-label="提问示例">{[
           { icon: BookOpen, title: "理解业务规则", text: "这条业务规则有哪些适用条件？在哪里实现？" },
@@ -259,7 +292,7 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
         {loadError && <p role="alert" className="ka-error">{loadError}<Button variant="outline" size="sm" onClick={() => setRefresh(value => value + 1)}>重试加载</Button></p>}
         {!record && !loadError && <p role="status" className="ka-loading"><LoaderCircle className="ka-spinner" size={17} />正在加载问答…</p>}
         {record && <>
-          <header className="ka-question"><small><MessageSquare size={14} />你的问题{moduleNames.length ? ` · ${moduleNames.join("、")}` : ""}</small><h2 className={record.question.length > 120 && !questionExpanded ? "is-collapsed" : undefined}>{record.question}</h2>{record.question.length > 120 && <button type="button" className="ka-question-expand" aria-expanded={questionExpanded} onClick={() => setQuestionExpanded(value => !value)}>{questionExpanded ? "收起问题" : "展开完整问题"}</button>}</header>
+          <header className="ka-question"><small><MessageSquare size={14} />你的问题{moduleNames.length ? ` · ${moduleNames.join("、")}` : ""}<Button variant="ghost" size="sm" className="ka-delete-question" disabled={busy} onClick={() => askDelete(record)}><Trash2 size={14} />删除问题</Button></small><h2 className={record.question.length > 120 && !questionExpanded ? "is-collapsed" : undefined}>{record.question}</h2>{record.question.length > 120 && <button type="button" className="ka-question-expand" aria-expanded={questionExpanded} onClick={() => setQuestionExpanded(value => !value)}>{questionExpanded ? "收起问题" : "展开完整问题"}</button>}</header>
           {knowledgeAnswerRunning(record) && <section className="ka-progress" aria-label="回答进度" aria-live="polite"><div><LoaderCircle className="ka-spinner" size={18} /><strong>{statusLabel(record)}</strong><small aria-label="本次已等待时长">已等待 {elapsed(record.created_at, now)}</small><Button variant="outline" size="sm" onClick={() => { void stop(); }} disabled={busy}><Square size={13} />停止</Button></div><p>{record.activity.at(-1)?.message || "问答已提交，正在准备查阅资料。"}</p><small>离开页面不会停止回答，可以稍后回来查看。</small></section>}
 
           {record.status !== "done" && <EvidenceList title="本次已查阅资料" items={record.evidence} selectedId={selectedEvidence} onSelect={openEvidence} />}
@@ -281,6 +314,14 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
         </>}
       </div>}
     </main>
-    {evidence && <EvidencePane evidence={evidence} quote={selectedQuote} onClose={closeEvidence} />}
+    <Dialog open={!!deleteTarget} onOpenChange={open => { if (!open && !busy) setDeleteTarget(undefined); }}>
+      <DialogContent className="tw-root max-h-[80vh] max-w-lg overflow-auto"><DialogHeader><DialogTitle>删除这条问题？</DialogTitle></DialogHeader>
+        <p className="break-words text-sm text-muted-foreground">{deleteTarget?.question}</p>
+        <p className="text-sm">将删除这条问题、回答和本次查阅快照，知识库文档和上传原件仍保留。{deleteTarget && knowledgeAnswerRunning(deleteTarget) ? "正在进行的问答也会停止。" : ""}</p>
+        {deleteError && <p role="alert" className="ka-error">{deleteError}</p>}
+        <div className="flex justify-end gap-2"><Button variant="outline" disabled={busy} onClick={() => setDeleteTarget(undefined)}>取消</Button><Button variant="destructive" disabled={busy} onClick={() => { void remove(); }}>{busy ? "正在删除…" : "确认删除"}</Button></div>
+      </DialogContent>
+    </Dialog>
+    {record && evidence && <EvidencePane answerId={record.id} evidence={evidence} quote={selectedQuote} onClose={closeEvidence} />}
   </section>;
 }

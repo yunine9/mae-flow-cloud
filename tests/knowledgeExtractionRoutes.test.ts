@@ -15,7 +15,7 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
   const auth = new LocalAuth(join(root, "auth.json")); auth.bootstrapAdmin("admin", "admin-fixture-password"); auth.createUser("dev", "dev-fixture-password", "developer");
   const service = new TaskService({ dataDir: root, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const domain = new DomainKnowledgeExtraction(root, async input => {
-    input.save({ id: "rules", title: "规则", target_id: "domain", path: "domains/rules.md", layer: "domain", content: "# 规则\n测试内容", sources: "测试资料" }, { content: null, revision: "a".repeat(40) }); return "已保存";
+    input.save({ id: "rules", title: "规则", target_id: "domain", path: `${input.job.knowledge_target.docs_path}/rules.md`, layer: "domain", content: "# 规则\n测试内容", sources: "测试资料" }, { content: null, revision: "a".repeat(40) }); return "已保存";
   });
   (service as any).domainKnowledgeExtraction = domain;
   const server = createTaskServer(service, { auth }); await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -25,13 +25,14 @@ test("知识萃取 HTTP 权限、上传关联、修订与 Git 正文管理边界
   try {
     for (const path of ["/domain-extraction", "/knowledge-materials/material-unknown", "/knowledge-extraction/skills/domain", "/knowledge-extraction/skills/component-analysis"]) assert.equal((await request(path)).status, 401);
     const dev = await login("dev"), admin = await login("admin");
-    const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json(); assert.equal(skill.can_manage, true);
+    const skill: any = await (await request("/knowledge-extraction/skills/domain", dev)).json();
+    assert.equal(skill.can_manage, false); assert.equal(skill.name, "business-docs-generator");
     assert.equal((await request("/knowledge-extraction/skills/domain", "", { files: skill.files, expected_digest: skill.digest })).status, 401);
-    const files = { ...skill.files, "references/domain.md": skill.files["references/domain.md"] + "\n核对新增规则。\n" };
-    assert.equal((await request("/knowledge-extraction/skills/domain", dev, { files, expected_digest: skill.digest })).status, 200);
-    const updated: any = await (await request("/knowledge-extraction/skills/domain", dev)).json();
-    assert.ok(updated.digest !== skill.digest);
-    assert.equal((await request("/knowledge-extraction/skills/domain", admin, { files: skill.files, expected_digest: skill.digest })).status, 400, "并发上传不能覆盖其他人的新版本");
+    for (const actor of [dev, admin]) {
+      assert.equal((await request("/knowledge-extraction/skills/domain", actor, { files: skill.files, expected_digest: skill.digest })).status, 405);
+      assert.equal((await request("/knowledge-extraction/skills/domain/rollback", actor, { version_id: "old", expected_digest: skill.digest })).status, 405);
+    }
+    assert.equal((await (await request("/knowledge-extraction/skills/domain", dev)).json() as any).digest, skill.digest);
     const componentSkill: any = await (await request("/knowledge-extraction/skills/component", dev)).json();
     assert.equal(componentSkill.can_manage, false);
     assert.equal((await request("/knowledge-extraction/skills/component", dev, { files: componentSkill.files, expected_digest: componentSkill.digest })).status, 405);

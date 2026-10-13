@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { EventLog } from "../src/semanticEvents.ts";
 import { GateService } from "../src/gateService.ts";
 import { HumanGate } from "../src/humanGate.ts";
@@ -18,58 +19,30 @@ import { TranscriptStore } from "../src/transcriptStore.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
 import {
   materializeRequirementAssets,
-  parseRequirementBundle,
   storeRequirementAssets,
 } from "../src/requirementBundle.ts";
+import { saveKnowledgeMaterial } from "../src/knowledgeMaterials.ts";
+import { buildRequirementMaterials } from "../src/requirementMaterials.ts";
 import { requirementContext, type RequirementDocumentMeta } from "../src/requirementDocument.ts";
 
 function zip(files: Array<{ name: string; content: Buffer | string }>): Buffer {
-  const locals: Buffer[] = [];
-  const centrals: Buffer[] = [];
-  let offset = 0;
-  for (const file of files) {
-    const name = Buffer.from(file.name, "utf-8");
-    const content = Buffer.isBuffer(file.content)
-      ? file.content : Buffer.from(file.content, "utf-8");
-    const local = Buffer.alloc(30);
-    local.writeUInt32LE(0x04034b50, 0);
-    local.writeUInt16LE(20, 4);
-    local.writeUInt16LE(0x800, 6);
-    local.writeUInt32LE(content.length, 18);
-    local.writeUInt32LE(content.length, 22);
-    local.writeUInt16LE(name.length, 26);
-    locals.push(local, name, content);
-    const central = Buffer.alloc(46);
-    central.writeUInt32LE(0x02014b50, 0);
-    central.writeUInt16LE(0x0314, 4);
-    central.writeUInt16LE(20, 6);
-    central.writeUInt16LE(0x800, 8);
-    central.writeUInt32LE(content.length, 20);
-    central.writeUInt32LE(content.length, 24);
-    central.writeUInt16LE(name.length, 28);
-    central.writeUInt32LE(offset, 42);
-    centrals.push(central, name);
-    offset += local.length + name.length + content.length;
-  }
-  const directory = Buffer.concat(centrals);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(files.length, 8);
-  end.writeUInt16LE(files.length, 10);
-  end.writeUInt32LE(directory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  return Buffer.concat([...locals, directory, end]);
+  return execFileSync("python3", ["-c", "import io,json,base64,sys,zipfile\nb=io.BytesIO()\nwith zipfile.ZipFile(b,'w') as z:\n for f in json.load(sys.stdin): z.writestr(f['name'],base64.b64decode(f['content']))\nsys.stdout.buffer.write(b.getvalue())"], {
+    input: JSON.stringify(files.map(file => ({ name: file.name, content: Buffer.from(file.content).toString("base64") }))),
+  });
 }
 
 test("ZIP 图文需求端到端：Agent 收到完整原文、读取真实图片并使用识图结果", async () => {
   const root = mkdtempSync(join(tmpdir(), "mfc-requirement-agent-"));
-  const parsed = parseRequirementBundle("蓝色发布.zip", zip([
+  const material = await saveKnowledgeMaterial(root, { name: "蓝色发布.zip", content_base64: zip([
     {
       name: "方案/发布设计.md",
       content: "# 蓝色发布拓扑\n\n这是不可丢失的原文验收句。\n\n![发布拓扑](图片/拓扑.png)",
     },
+    { name: "约束/验收.md", content: "# 第二份文档\n这是另一份文档里不可丢失的独立验收条件。" },
     { name: "方案/图片/拓扑.png", content: visionProbePng() },
-  ]).toString("base64"));
+  ]).toString("base64") });
+  assert.equal(material.state, "ready", material.error);
+  const parsed = buildRequirementMaterials(root, [material.id]);
   const imagePath = parsed.assets[0].path;
   const main = new ScriptedModelServer([
     {
@@ -96,7 +69,7 @@ test("ZIP 图文需求端到端：Agent 收到完整原文、读取真实图片�
     storeRequirementAssets(taskWorkspace, parsed.assets);
     const meta: RequirementDocumentMeta = {
       name: parsed.document_name,
-      bundle_name: parsed.bundle_name,
+      sources: parsed.sources.map(({ content: _, ...source }) => source),
       bytes: Buffer.byteLength(parsed.requirement),
       context_mode: "inline",
       assets: parsed.assets.map(({ content: _content, ...asset }) => asset),
@@ -136,6 +109,7 @@ test("ZIP 图文需求端到端：Agent 收到完整原文、读取真实图片�
       "普通编码会话必须保留 Bash，不能被需求修订专项白名单误伤");
     const firstRequest = JSON.stringify(main.requests[0]);
     assert.match(firstRequest, /不可丢失的原文验收句/);
+    assert.match(firstRequest, /另一份文档里不可丢失的独立验收条件/);
     assert.ok(firstRequest.includes(imagePath), "Agent 首轮必须拿到真实图片相对路径");
     assert.match(firstRequest, /InspectImage/);
     assert.equal(vision.requests.length, 1, "必须真实发起一次视觉模型请求");
@@ -149,4 +123,3 @@ test("ZIP 图文需求端到端：Agent 收到完整原文、读取真实图片�
     rmSync(root, { recursive: true, force: true });
   }
 });
-

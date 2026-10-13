@@ -129,6 +129,24 @@ test("关联仓行融入交付事实(ADR-0027):角色标同步计算,无事实�
   assert.match(delivered, /abc1234567/);
 });
 
+test("MR 人员失败显示在关联仓行，仅责任人可重试仍开放的 MR，交付归档不隐藏入口", () => {
+  const mr: NonNullable<IssueDetail["mrs"]>[number] = {
+    repo: "https://git.example.test/team/alpha.git", branch: "fix", title: "修复",
+    at: "2026-10-13T00:00:00.000Z", url: "https://git.example.test/team/alpha/merge_requests/9", iid: "9",
+    participants: { status: "failed", requested: {
+      reviewers: ["reviewer1"], approval_approvers: ["approver1"],
+    }, message: "CodeHub 权限不足" },
+  };
+  const html = render({ status: "archived", mrs: [mr] });
+  assert.match(html, /CodeHub 权限不足/);
+  assert.match(html, /重试设置人员/);
+  assert.match(html, /merge_requests\/9/);
+  assert.doesNotMatch(render({ mrs: [mr] }, false), /重试设置人员/);
+  assert.doesNotMatch(render({ mrs: [{ ...mr, merged_at: mr.at }] }), /重试设置人员/);
+  assert.doesNotMatch(render({ mrs: [{ ...mr, closed_at: mr.at }] }), /重试设置人员/);
+  assert.doesNotMatch(render({ mrs: [{ ...mr, participants: { ...mr.participants!, status: "applied" } }] }), /重试设置人员/);
+});
+
 test("主动拉取/下载按钮(#267/#268):关态两钮全无(三态计数防闪现),终态/查看模式缺席拉取钮", () => {
   const html = render();
   // SSR 不跑 effects,logFileCount 停在"读取中"三态——拉取/下载两钮

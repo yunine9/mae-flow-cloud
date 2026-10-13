@@ -20,7 +20,7 @@
 
 代码可以靠 ZIP 带进去(内核快照在里面),但 `node_modules` **不在仓里**,
 必须能装出来。要装的东西:运行时 `@earendil-works/pi-coding-agent@0.84.1`、
-`pg`、`typebox`、`@ast-grep/cli@0.45.3`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
+`pg`、`typebox`、`@ast-grep/cli@0.45.3`、`@sylphx/anymd@8.5.3`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
 
 组件知识的新增代码检查在宿主使用随 npm 安装的 ast-grep，不依赖 Python 调度器。
 安装时保留 optionalDependencies，离线包需包含目标系统对应的 `@ast-grep/cli-*` 原生包。
@@ -28,6 +28,20 @@
 组件知识工作台默认只记录候选，人工填写负责人、理由及路径范围后才提示；不阻断提交。
 策略及样本保存在数据目录 `component-governance/`，备份数据目录时一并保留。
 工作台可选择已有需求工作区抽取存量代码样本；独立反例研究仍需要可用的基础仓凭据、模型和 everycode。
+
+需求开发、业务知识研究及知识问答的补充资料共用本地文档解析。PDF、DOCX、PPTX 使用固定版
+`@sylphx/anymd@8.5.3` CLI，明确传 `--no-ocr --images refs`；不启动 MCP 服务，不下载 OCR 模型，
+不需要另装 Poppler。MD/TXT 原文保留，XLSX 继续保留工作表、单元格、公式与文件缓存值，不计算公式。
+ZIP 可包含以上文档及 PNG/JPEG/GIF/WebP；支持的文档任意一份解析失败，整份资料如实失败，
+不只读取首份文档。图片复制到资料目录后改为相对链接，不依赖 anymd 临时缓存。
+
+安装时同时保留 anymd 的 optionalDependencies：Linux x64 使用
+`@sylphx/anymd-linux-x64-gnu@8.5.3`，Linux arm64 使用对应的 `linux-arm64-gnu` 包；
+它们要求 glibc，不能把 Alpine/musl 或 macOS 安装目录直接当 Linux 依赖包。
+在目标宿主执行 `node node_modules/@sylphx/anymd/bin/anymd.js --version`，应返回 `anymd 8.5.3`，
+再上传一份带图片的 DOCX/PPTX 和一份有文本层的 PDF，确认文字、来源位置及图片均可读取。
+扫描 PDF 不在本次 OCR 范围内；转换器也不保证覆盖矢量图、装饰图片与全部版式，页面会显示解析提醒。
+转换依赖运行 Cloud 的宿主，不能只装进任务构建镜像。
 
 风险点是 `@earendil-works/pi-coding-agent` 未必在内网 npm 镜像里,而
 **`tsx` 是零构建的命门**——它依赖 esbuild,那是**平台专属二进制**。

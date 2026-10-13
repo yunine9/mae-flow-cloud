@@ -144,10 +144,7 @@ import {
   type WishStatus,
 } from "./wishWall.ts";
 import type { LubanApprovalGateway } from "./lubanApproval.ts";
-import {
-  parseRequirementBundle,
-  RequirementBundleError,
-} from "./requirementBundle.ts";
+import { buildRequirementMaterials } from "./requirementMaterials.ts";
 import { handleIssueRoutes } from "./issueFlow/routes.ts";
 import { autoClaimNextRunAt } from "./issueFlow/autoClaim.ts";
 import { DEFAULT_ISSUE_AUTO_CLAIM_INTERVAL_S } from "./issueFlow/autoClaim.ts";
@@ -1548,6 +1545,7 @@ export function createTaskServer(
               maintainers,
               repositories: Array.isArray(body.repositories)
                 ? body.repositories.map(String) : [],
+              mr_participants: body.mr_participants,
               reference_component_repos: Array.isArray(
                 body.reference_component_repos)
                 ? body.reference_component_repos.map(String) : [],
@@ -1583,6 +1581,7 @@ export function createTaskServer(
                 repositories: body.repositories === undefined
                   ? undefined : Array.isArray(body.repositories)
                     ? body.repositories.map(String) : [],
+                mr_participants: body.mr_participants,
                 reference_component_repos:
                   body.reference_component_repos === undefined
                     ? undefined : Array.isArray(body.reference_component_repos)
@@ -2040,53 +2039,36 @@ export function createTaskServer(
         }
         return json(response, 404, { error: "未知路径" });
       }
-      if (request.method === "POST"
-          && url.pathname === "/requirement-bundles/preview") {
-        if (options.auth && !viewer) {
-          return json(response, 401, { error: "请先登录" });
-        }
+      if (request.method === "POST" && url.pathname === "/requirement-materials/preview") {
+        if (options.auth && !viewer) return json(response, 401, { error: "请先登录" });
         try {
-          const body = await readBody(request, 42 * 1024 * 1024);
-          const bundle = parseRequirementBundle(body.name, body.content_base64);
+          const body = await readBody(request, 12 * 1024 * 1024);
+          const result = buildRequirementMaterials(join(service.options.dataDir, "knowledge-materials"),
+            body.material_ids, body.requirement);
           return json(response, 200, {
-            bundle_name: bundle.bundle_name,
-            document_name: bundle.document_name,
-            requirement: bundle.requirement,
-            assets: bundle.assets.map((asset) => ({
-              path: asset.path,
-              source_path: asset.source_path,
-              mime_type: asset.mime_type,
-              bytes: asset.bytes,
-              content_base64: asset.content.toString("base64"),
-            })),
+            ...result,
+            sources: result.sources.map(({ content: _content, ...source }) => source),
+            assets: result.assets.map(({ content, ...asset }) => ({ ...asset, content_base64: content.toString("base64") })),
           });
         } catch (error) {
-          if (error instanceof RequirementBundleError) {
-            return json(response, 400, { error: error.message });
-          }
-          throw error;
+          return json(response, 400, { error: humanError(error) });
         }
       }
       if (request.method === "POST" && url.pathname === "/tasks") {
         const body = await readBody(request, 42 * 1024 * 1024);
-        let requirementBundle: ReturnType<typeof parseRequirementBundle> | undefined;
+        let requirementMaterials: ReturnType<typeof buildRequirementMaterials> | undefined;
         try {
-          if (body.requirement_bundle) {
-            requirementBundle = parseRequirementBundle(
-              body.requirement_bundle.name,
-              body.requirement_bundle.content_base64,
-            );
+          if (body.requirement_material_ids !== undefined) {
+            requirementMaterials = buildRequirementMaterials(join(service.options.dataDir, "knowledge-materials"),
+              body.requirement_material_ids, body.requirement);
           }
         } catch (error) {
-          if (error instanceof RequirementBundleError) {
-            return json(response, 400, { error: error.message });
-          }
-          throw error;
+          return json(response, 400, { error: humanError(error) });
         }
         const title = body.title === undefined
           ? undefined : String(body.title).trim() || undefined;
         const requirement = String(
-          requirementBundle?.requirement ?? body.requirement ?? "").trim();
+          requirementMaterials?.requirement ?? body.requirement ?? "").trim();
         if (!requirement) {
           return json(response, 400, { error: "requirement 不能为空" });
         }
@@ -2113,7 +2095,7 @@ export function createTaskServer(
         // 单人/测试)沿用请求体里的账号。
         const account = viewer?.username
           ?? (body.account ? String(body.account) : undefined);
-        const requirementDocumentName = requirementBundle?.document_name
+        const requirementDocumentName = requirementMaterials?.document_name
           ?? (body.requirement_document_name === undefined
             ? undefined : String(body.requirement_document_name));
         // 任务级可配(用户拍板):交付代码仓、交付方式(选项来自内核)、修复轮预算。
@@ -2312,8 +2294,9 @@ export function createTaskServer(
             {
               title, account, repo, repos,
               requirementDocumentName,
-              requirementBundleName: requirementBundle?.bundle_name,
-              requirementAssets: requirementBundle?.assets,
+              requirementAssets: requirementMaterials?.assets,
+              requirementSources: requirementMaterials?.sources,
+              requirementWarnings: requirementMaterials?.warnings,
               lane, ticket, repositoryTickets, repositoryAssignees,
               collaborators,
               baseline, productVersion: body.product_version === undefined ? undefined : String(body.product_version), model,
@@ -2353,6 +2336,15 @@ export function createTaskServer(
           const body = await readBody(request);
           if (typeof body.module_id !== "string") return json(response, 400, { error: "module_id 必须为字符串" });
           try { return json(response, 200, service.setBusinessModule(id, body.module_id, viewer?.username ?? "本地部署")); }
+          catch (error) { return json(response, 400, { error: humanError(error) }); }
+        }
+        if (request.method === "POST" && parts.length === 3 && parts[2] === "mr-participants") {
+          const task = service.get(id);
+          if (!task) return json(response, 404, { error: "任务不存在" });
+          if (options.auth && viewer?.username !== task.luban_account) {
+            return json(response, 403, { error: "只有任务责任人可以重试 MR 人员设置" });
+          }
+          try { return json(response, 200, await service.retryMrParticipants(id)); }
           catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
         if (request.method === "GET" && parts.length === 2) {
@@ -2402,6 +2394,19 @@ export function createTaskServer(
             "cache-control": "private, max-age=86400",
           });
           return response.end(asset.content);
+        }
+        if (request.method === "GET" && parts.length === 3
+            && parts[2] === "requirement-sources") {
+          const source = service.requirementSource(id, url.searchParams.get("path") ?? "");
+          if (!source) return json(response, 404, { error: "需求原件不存在" });
+          response.writeHead(200, {
+            "content-type": "application/octet-stream",
+            "content-length": source.content.length,
+            "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(source.name)}`,
+            "x-content-type-options": "nosniff",
+            "cache-control": "private, no-store",
+          });
+          return response.end(source.content);
         }
         if (request.method === "GET" && parts.length === 3
             && parts[2] === "requirement-asset") {

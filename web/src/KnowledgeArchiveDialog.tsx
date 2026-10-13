@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction, KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
+import { mrParticipantsMessage } from "../../src/mrParticipants";
 
 export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onChanged, openRequest = 0 }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
@@ -27,7 +28,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
-    if (!preview || submitting.current) return;
+    if (!preview || disabled || loading || submitting.current) return;
     submitting.current = true; setBusy(true); setError("");
     const owner = generation.current;
     try {
@@ -42,9 +43,9 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
   function renderAction(action: KnowledgeProductionAction, targetId?: string) {
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
-      : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
+      : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
-      disabled={busy || loading || action.id === "create-archive" && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
+      disabled={disabled || busy || loading || action.id === "create-archive" && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
   }
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;
@@ -67,6 +68,9 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             {target.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>}
             {target.error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{target.error}</p>}
             {target.url && <a className="text-sm font-medium text-primary underline" href={target.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
+            {target.mr_participants && <p role={target.mr_participants.status === "failed" ? "alert" : "status"}
+              className={`whitespace-pre-wrap break-words text-sm ${target.mr_participants.status === "failed" ? "text-attention" : "text-muted-foreground"}`}>
+              {mrParticipantsMessage(target.mr_participants)}</p>}
             <ul className="m-0 list-none space-y-2 p-0">{target.files.map(file => <li key={file.id} className="rounded border border-line bg-surface-2 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2"><code className="break-all">{file.path}</code><span className="text-xs text-muted-foreground" title={`${file.knowledge_document_id}@${file.knowledge_revision}`}>{file.knowledge_revision.slice(0, 12)}</span></div>
               <details className="mt-2"><summary className="cursor-pointer text-muted-foreground">{file.title}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{file.content}</pre></details>

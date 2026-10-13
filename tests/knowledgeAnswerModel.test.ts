@@ -70,6 +70,31 @@ test("研究后的两次回答都重建消息，不载入编码工具，临时�
   assert.equal(seen[0].options.signal.aborted, true);
 });
 
+test("同轮只读查询并行但最多三项，乱序完成仍按调用顺序返回且不超工具预算", async () => {
+  const signal = new AbortController().signal, started: string[] = [], seen: any[] = [];
+  const releases = new Map<string, () => void>();
+  const calls = Array.from({ length: 5 }, (_, index) => ({ type: "toolCall", id: `c${index}`, name: "read_source", arguments: {} }));
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "m", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => ({ id: "m", api: "openai-completions", maxTokens: 4096, contextWindow: 128_000 } as any),
+      streamSimple: (_model, context) => { seen.push(structuredClone(context)); return stream(seen.length % 2 === 1 ? response(calls, "toolUse") : response([{ type: "text", text: "资料查阅结束" }])); } }),
+  });
+  const tools = [{ name: "read_source", label: "读取资料", description: "只读", parameters: Type.Object({}),
+    execute: async (id: string) => { started.push(id); await new Promise<void>(resolve => releases.set(id, resolve)); return { content: [{ type: "text" as const, text: id }], details: {} }; } }];
+  const waitFor = async (count: number) => { for (let n = 0; n < 100 && started.length < count; n++) await new Promise(resolve => setTimeout(resolve, 1)); assert.equal(started.length, count); };
+  try {
+    const pending = model.run(request(signal, { stage: "researching", tools, maxRounds: 2, maxToolCalls: 5 }));
+    await waitFor(3); releases.get("c2")!(); releases.get("c1")!(); releases.get("c0")!();
+    await waitFor(5); releases.get("c4")!(); releases.get("c3")!();
+    assert.equal((await pending).complete, true);
+    assert.deepEqual(seen[1].messages.filter((message: any) => message.role === "toolResult").map((message: any) => message.toolCallId), calls.map(call => call.id));
+    started.length = 0; releases.clear();
+    const limited = model.run(request(signal, { stage: "researching", tools, maxRounds: 2, maxToolCalls: 2 }));
+    await waitFor(2); releases.get("c1")!(); releases.get("c0")!();
+    assert.equal((await limited).reason, "tool_limit");
+    assert.deepEqual(started, ["c0", "c1"]);
+  } finally { for (const resolve of releases.values()) resolve(); await model.dispose(); }
+});
+
 test("研究用原生low、回答用原生medium，GLM5.3兼容路径回答用high且保留思考", async () => {
   const glm = { api: "anthropic-messages", id: "glm-5.3", reasoning: false } as const;
   for (const stage of ["researching", "answering"] as const) {
@@ -445,4 +470,53 @@ test("答案工具参数流等待中取消仍立即返回并清理临时认证",
   await assert.rejects(pending, /取消|时间预算/);
   await model.dispose();
   assert.equal(existsSync(dirname(configPath)), false);
+});
+
+test("研究工具收到实际模型，图片按视觉预算计入并原样进入下一轮", async () => {
+  const signal = new AbortController().signal, contexts: any[] = [], data = "A".repeat(300_000);
+  let calls = 0;
+  const selected = { id: "vision", api: "openai-completions", input: ["text", "image"], maxTokens: 4096, contextWindow: 128_000 } as any;
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "vision", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => selected,
+      streamSimple: (_model, context) => {
+        contexts.push(structuredClone(context));
+        return stream(calls++ === 0 ? response([{ type: "toolCall", id: "image-1", name: "image_source", arguments: {} }], "toolUse") : response([{ type: "text", text: "已看到图" }]));
+      } }),
+  });
+  try {
+    const tool = { name: "image_source", label: "读图", description: "原始图片", parameters: Type.Object({}),
+      execute: async (_id: string, _args: unknown, _signal: unknown, _update: unknown, ctx: any) => {
+        assert.equal(ctx.model, selected);
+        return { content: [{ type: "text" as const, text: "图片引用 e1" }, { type: "image" as const, data, mimeType: "image/png" }], details: {} };
+      } };
+    const result = await model.run(request(signal, { stage: "researching", tools: [tool], maxRounds: 2, maxToolCalls: 1, maxContextChars: 20_000 }));
+    assert.equal(result.complete, true);
+    assert.equal(contexts[1].messages.at(-1).content[1].data, data);
+    assert.equal(contexts[1].messages.at(-1).isError, false);
+    const answer = await model.run(request(signal, { user: "根据原图回答", images: [{ label: "e1 原图", data, mimeType: "image/png" }], maxContextChars: 20_000 }));
+    assert.equal(answer.complete, true);
+    assert.deepEqual(contexts[2].messages[0].content, [{ type: "text", text: "根据原图回答" }, { type: "text", text: "e1 原图" }, { type: "image", data, mimeType: "image/png" }]);
+    const over = await model.run(request(signal, { images: Array.from({ length: 6 }, () => ({ label: "原图", data, mimeType: "image/png" })), maxContextChars: 20_000 }));
+    assert.equal(over.reason, "context_limit");
+    assert.equal(contexts.length, 3, "图片也有总预算，不能靠短元数据无限加入");
+  } finally { await model.dispose(); }
+});
+
+test("纯文本模型不能接收回答图片，长工具文字仍受上下文预算限制", async () => {
+  const signal = new AbortController().signal, contexts: any[] = []; let calls = 0;
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "text", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => ({ id: "text", api: "openai-completions", input: ["text"], maxTokens: 4096, contextWindow: 128_000 } as any),
+      streamSimple: (_model, context) => {
+        contexts.push(structuredClone(context));
+        return stream(calls++ === 0 ? response([{ type: "toolCall", id: "large-1", name: "source", arguments: {} }], "toolUse") : response([{ type: "text", text: "仅有缺口" }]));
+      } }),
+  });
+  try {
+    await assert.rejects(model.run(request(signal, { images: [{ label: "原图", data: "AAAA", mimeType: "image/png" }] })), /不支持图片/);
+    const tool = { name: "source", label: "读取", description: "正文", parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text" as const, text: "原文".repeat(8000) }], details: {} }) };
+    assert.equal((await model.run(request(signal, { stage: "researching", tools: [tool], maxRounds: 2, maxToolCalls: 1, maxContextChars: 20_000 }))).complete, true);
+    assert.equal(contexts[1].messages.at(-1).isError, true);
+    assert.match(contexts[1].messages.at(-1).content[0].text, /超过上下文预算/);
+  } finally { await model.dispose(); }
 });

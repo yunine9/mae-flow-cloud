@@ -69,6 +69,14 @@ test("正式问答与插件共用服务：登录、归属、真实引用、持�
     assert.ok(reply.text.includes("还需要确认：\n- 实际部署提交尚未提供。"));
     assert.deepEqual(reply.answer.unknowns, own.answer!.unknowns);
     assert.equal(executions, 2);
+    const summaries = await (await request("/knowledge-answers", undefined, alice)).json() as { answers: Array<Record<string, unknown>> };
+    assert.ok(summaries.answers.every(item => !("answer" in item) && !("evidence" in item)));
+    const remove = (cookie = "") => fetch(`${base}/knowledge-answers/${record.id}`, { method: "DELETE", headers: { cookie } });
+    assert.equal((await remove()).status, 401);
+    assert.equal((await remove(bob)).status, 404);
+    assert.equal((await remove(alice)).status, 200);
+    assert.equal((await request(`/knowledge-answers/${record.id}`, undefined, alice)).status, 404);
+    assert.ok(answers.get(plugin.id, "alice"), "删除单条问答不影响其他问题");
   } finally {
     await answers.shutdown(); await service.shutdown();
     if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));

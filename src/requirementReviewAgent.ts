@@ -11,6 +11,7 @@ import type { GateContract, GateDecision } from "./gateService.ts";
 import type { RequirementDocumentMeta } from "./requirementDocument.ts";
 import { reanchorRequirementAnnotations } from "./requirementDocument.ts";
 import { materializeRequirementAssets } from "./requirementBundle.ts";
+import { materializeRequirementSources } from "./requirementMaterials.ts";
 import { isReviewAssetPath, materializeReviewAssets } from "./reviewAssets.ts";
 
 export const REQUIREMENT_REVIEW_DOCUMENT = "requirement.md";
@@ -55,6 +56,7 @@ export function prepareRequirementReviewWorkspace(
   writeFileSync(join(reviewRoot, REQUIREMENT_REVIEW_DOCUMENT), requirement,
     { encoding: "utf-8", mode: 0o600 });
   materializeRequirementAssets(taskWorkspace, reviewRoot, meta);
+  materializeRequirementSources(taskWorkspace, reviewRoot, meta);
   // 图片是本轮输入；复制失败由修订会话报告失败，不让 Agent 猜图或用 Bash 补救。
   materializeReviewAssets(taskWorkspace, reviewRoot);
 }
@@ -78,6 +80,7 @@ export function createRequirementReviewGateContract(
   meta?: RequirementDocumentMeta,
 ): GateContract {
   const requirementImages = new Set(meta?.assets?.map((asset) => asset.path));
+  const requirementSources = new Set(meta?.sources?.map((source) => source.path));
   return (tool, value) => {
     if (tool === "Bash") {
       return denied(
@@ -89,7 +92,7 @@ export function createRequirementReviewGateContract(
     if (tool === "Read") {
       return target === REQUIREMENT_REVIEW_DOCUMENT
           || target === REQUIREMENT_REVIEW_RECEIPTS
-          || isReviewAssetPath(target) || requirementImages.has(target)
+          || isReviewAssetPath(target) || requirementImages.has(target) || requirementSources.has(target)
         ? { action: "allow" }
         : denied(`本会话只允许读取 ${REQUIREMENT_REVIEW_DOCUMENT}、回执和需求附图，已阻止：${value}`);
     }
@@ -117,7 +120,7 @@ export function requirementReviewMission(input: {
 }, requirement?: string): string {
   return [
     "你是需求文档编辑 Agent，只负责落实本轮人工检视意见。",
-    "当前工作目录包含本轮可编辑副本、回执和只读图片附件。",
+    "当前工作目录包含本轮可编辑副本、回执和只读原件、图片附件。多份资料共同构成需求，只修改当前需求中批注指向的内容，保留其他来源的约束；原件供核对，不要重新合并原件覆盖之前的修订。",
     "本会话只提供 read、edit、write，以及已配置时的 inspect_image；没有命令终端，不需要列目录或执行脚本校验 JSON。",
     `需求文档：${REQUIREMENT_REVIEW_DOCUMENT}`,
     `逐条回执：${REQUIREMENT_REVIEW_RECEIPTS}`,

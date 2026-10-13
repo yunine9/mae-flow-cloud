@@ -134,6 +134,23 @@ test("#471 引文展开超限由平台改为来源链接，不重新请求模型
   assert.equal(f.disposed(), 1);
 });
 
+test("#476 已读原文的8174字符长行可引用，不因展示长度重新生成答案", async () => {
+  const content = "资料说明\n" + "原文".repeat(4080) + "相关条件和例外必须完整保留。";
+  assert.equal(content.split("\n")[1].length, 8174);
+  const f = fixture({ content, run: async request => {
+    assert.doesNotMatch(request.system, /原文最多4000字符/);
+    return output({ points: [{ kind: "answer", body: "依据原文解释，条件和例外均保留。",
+      basis: [{ evidence_id: "e1", start_line: 2, end_line: 2 }] }] });
+  } });
+  const result = await f.runner(f.input);
+  assert.deepEqual(f.requests.map(request => request.stage), ["researching", "answering"]);
+  assert.match(result.markdown, /依据原文解释，条件和例外均保留。/);
+  assert.ok(result.markdown.includes("[原文 e1，第 2–2 行](#evidence-e1)"));
+  assert.deepEqual(result.evidence_ids, ["e1"]);
+  assert.equal(f.input.record.evidence[0].content, content);
+  assert.equal(f.disposed(), 1);
+});
+
 test("提交格式失败与原句失败共用一次重试，第三次不会启动", async () => {
   let attempts = 0;
   const f = fixture({ run: async () => {
@@ -206,6 +223,7 @@ test("不存在的引句只允许一次全新回答修复，不把错误输出�
   assert.equal(f.requests[1].user, f.requests[2].user);
   assert.doesNotMatch(f.requests[2].user + f.requests[2].system, /BAD_OUTPUT_POISON|ACTUAL_SOURCE_DOES_NOT_CONTAIN_THIS|PLAN_POISON|RESEARCH_SUMMARY/);
   assert.match(f.requests[2].system, /格式或引用校验/);
+  assert.match(f.requests[2].system, /具体原因：引用的原句不在本次实际证据中/);
   assert.deepEqual(JSON.parse(f.requests[2].user).received_evidence, JSON.parse(f.requests[1].user).received_evidence);
   assert.doesNotMatch(result.markdown, /BAD_OUTPUT_POISON/);
   assert.equal(f.input.record.evidence.length, 1);

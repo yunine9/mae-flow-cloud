@@ -33,6 +33,8 @@ export interface KnowledgeAnswerEvidence {
   location?: string;
   truncated?: boolean;
   url?: string;
+  /** 本轮实际返回给模型的原图，按摘要核对，不能由文字片段冒充。 */
+  image?: { path: string; digest: string; mime_type: string };
 }
 
 export interface KnowledgeAnswerResult {
@@ -71,5 +73,7 @@ export interface KnowledgeAnswerExecution {
   addEvidence(evidence: Omit<KnowledgeAnswerEvidence, "id" | "digest" | "retrieved_at">): KnowledgeAnswerEvidence;
   warn(message: string): void;
 }
+
+export type KnowledgeAnswerSummary = Pick<KnowledgeAnswerRecord, "id" | "question" | "status" | "stage" | "created_at" | "updated_at">;
 
 export type KnowledgeAnswerRunner = (input: KnowledgeAnswerExecution) => Promise<KnowledgeAnswerResult>;

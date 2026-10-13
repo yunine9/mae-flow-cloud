@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { CloudSession } from "../src/sessionDriver.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
+import { runGenericDomainKnowledge as runDomainKnowledge } from "./helpers/extractionSkillFixture.ts";
 import { DomainKnowledgeExtraction, type DomainDocumentContent, type DomainKnowledgeJob, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 

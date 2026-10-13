@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { extractionSkillSearch } from "./knowledgeNavigation";
 import type { PlatformSkillKind } from "./PlatformSkill";
 
-/** 萃取页只保留导航，查看和上传统一放在知识库的 Skill 页面。 */
+/** 萃取页只保留导航，在知识库的 Skill 页面阅读随平台发布的方法。 */
 export function ExtractionSkillEditor({ kind, label = "萃取方法" }: { kind: PlatformSkillKind; label?: string }) {
   return <Button variant="outline" onClick={() => openExtractionSkill(kind)}>{label}</Button>;
 }

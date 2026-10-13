@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { CloudSession } from "../src/sessionDriver.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
-import { KnowledgeExtractionSkills } from "../src/knowledgeExtractionSkills.ts";
+import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
 
 async function until(check: () => boolean) {
@@ -16,8 +16,7 @@ async function until(check: () => boolean) {
 
 test("#451 任意 Skill 的中间文稿可即时审阅，多次人工答复沿原会话继续，重启不代答", async () => {
   const root = mkdtempSync(join(tmpdir(), "domain-human-input-"));
-  const skills = new KnowledgeExtractionSkills(root);
-  await skills.save("domain", { "SKILL.md": "---\nname: opaque-method\ndescription: 任意三段方法。\n---\nBLACK_BOX_METHOD，没有固定模块或阶段名称。" }, skills.current("domain").digest, "expert");
+  const method = { "SKILL.md": "---\nname: opaque-method\ndescription: 任意三段方法。\n---\nBLACK_BOX_METHOD，没有固定模块或阶段名称。" };
   const content = "# 中间文稿\n\n" + "完整正文不能截断。\n".repeat(1500) + "\n全文末尾标记";
   let sessions = 0, childRuns = 0, release!: () => void, saved = false;
   const hold = new Promise<void>(resolve => release = resolve);
@@ -54,7 +53,7 @@ test("#451 任意 Skill 的中间文稿可即时审阅，多次人工答复沿�
       return { status: "turn_finished" };
     }, dispose() {}, abort: async () => {}, startResume: async () => { throw new Error("不应反复催促已保存暂停结果的会话"); },
   }) as any);
-  const execute = (input: Parameters<typeof runDomainKnowledge>[0]) => runDomainKnowledge(input, {
+  const execute = (input: Parameters<typeof runDomainKnowledge>[0]) => runDomainKnowledgeFixture(method, input, {
     dataDir: root, model: () => ({ provider: "fixture", model: "fixture", json: {} }), source: async () => { throw new Error("方法不要求读取源码"); },
   });
   let service = new DomainKnowledgeExtraction(root, execute);

@@ -13,6 +13,7 @@ let copied = "", failCopy = false;
 if (!previewRecord) Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { if (failCopy) throw new Error("clipboard blocked"); copied = text; } } });
 let role = "developer";
 let account = "alice", serial = 0, rejectStart = false, materialSerial = 0, holdUpload = false, releaseUpload: (() => void) | undefined;
+let failRead = false, failDelete = false;
 let holdHistory = false, releaseHistory: (() => void) | undefined;
 const timestamp = (increment = 0) => new Date(Date.parse("2026-10-10T08:00:00Z") + increment).toISOString();
 const quotedText = String.raw`thread_local <Task> & Pool.submit() \path [literal](#evidence-other)`;
@@ -41,7 +42,7 @@ window.fetch = async (url, options) => {
     sources: [{ kind: "knowledge", label: "知识文档", available: true, detail: "正式知识与组件指南" }, { kind: "everycode", label: "Every Code", available: true, detail: "已配置，实际可用性以查询为准" }],
   };
   else if (path === "/knowledge-answers" && method === "GET") {
-    const snapshot = structuredClone(records.filter(item => item.owner === account));
+    const snapshot = records.filter(item => item.owner === account).map(({ id, question, status, stage, created_at, updated_at }) => ({ id, question, status, stage, created_at, updated_at }));
     if (holdHistory) await new Promise<void>(resolve => { releaseHistory = resolve; });
     result = { answers: snapshot };
   }
@@ -59,8 +60,13 @@ window.fetch = async (url, options) => {
   }
   else if (path.startsWith("/knowledge-answers/")) {
     const [id, action] = path.slice("/knowledge-answers/".length).split("/");
+    if (failRead && method === "GET") { failRead = false; return new Response(JSON.stringify({ error: "临时网络异常" }), { status: 503 }); }
     const record = records.find(item => item.id === id && item.owner === account);
     check(record, "only the current account can read its answers");
+    if (method === "DELETE") {
+      if (failDelete) return new Response(JSON.stringify({ error: "暂时无法删除，请重试" }), { status: 503 });
+      records.splice(records.indexOf(record!), 1); return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+    }
     if (action === "cancel") { record!.status = "cancelled"; record!.updated_at = timestamp(20000); }
     if (action === "feedback") record!.feedback = { useful: input.useful, comment: input.comment, at: timestamp(21000) };
     result = record;
@@ -128,7 +134,7 @@ async function run() {
   await click("补充原始资料（可选）");
   const submitBox = button("提问")!.getBoundingClientRect(), mainBox = document.querySelector(".ka-main")!.getBoundingClientRect();
   check(submitBox.top >= mainBox.top && submitBox.bottom <= mainBox.bottom, "question action remains visible when attachments expand on desktop");
-  check(document.body.textContent?.includes("尚未核验图片内容") && !document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("自动用于本次萃取"), "question attachment copy states text-only reading without extraction claims");
+  check(document.body.textContent?.includes("按问题核对文字与相关图片") && !document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("自动用于本次萃取"), "question attachment copy describes image reading without extraction claims");
   const versionDetails = document.querySelector('[aria-label="知识问答资料上传"] details') as HTMLDetailsElement;
   versionDetails.open = true; await fill("资料版本（可选）", "v2.1");
   holdUpload = true;
@@ -190,6 +196,15 @@ async function run() {
   await click("查看来源：原文 ev-fixed，第 42–45 行"); await waitFor('[aria-label="本次引用原文"]');
   check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes(quotedText), "compact line-range citation opens the complete original snapshot");
   check(document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("a".repeat(40)), "compact citation preserves the original revision");
+  first.evidence.push({ id: "ev-image", kind: "material", title: "已读取的流程图", content: "图中显示重试三次后停止。",
+    digest: "image-digest", retrieved_at: timestamp(), image: { path: "images/flow.png", digest: "image-digest", mime_type: "image/png" } });
+  first.answer!.evidence_ids.push("ev-image");
+  first.answer!.markdown += "\n\n> 不应伪装成图片原句\n\n[流程图](#evidence-ev-image)";
+  await remount(); await waitFor('[aria-label="知识回答"]');
+  const imageCitation = [...document.querySelectorAll<HTMLButtonElement>('[aria-label="回答依据"] button')].find(item => item.textContent?.includes("已读取的流程图"));
+  check(imageCitation, "image source appears in the answer evidence list"); imageCitation!.click(); await waitFor('[aria-label="本次查阅图片"]');
+  check(document.querySelector<HTMLImageElement>('[aria-label="本次查阅图片"] img')?.getAttribute("src") === "/knowledge-answers/qa-1/evidence/ev-image/image", "image evidence uses this answer's preserved image route");
+  check(document.querySelector('[aria-label="本次查阅图片"]')?.textContent?.includes("图片核对说明") && !document.querySelector('[aria-label="本段引用原句"]'), "image interpretation is not presented as an exact source quotation");
   await click("有问题"); await fill("回答反馈说明", "还需要确认时间推进的测试工具"); await click("提交反馈");
   check(first.feedback?.useful === false && first.feedback.comment.includes("测试工具"), "feedback is saved for the answer");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "不能丢掉的新问题");
@@ -235,6 +250,33 @@ async function run() {
   check(selectedHistory()?.includes("回答完成"), "selected answer updates history to completed even when timestamps are equal");
   holdHistory = false; releaseHistory!(); await pause();
   check(selectedHistory()?.includes("回答完成") && !selectedHistory()?.includes("查阅资料"), "late history snapshot cannot replace a completed answer with its previous running status");
+  failRead = true; await remount();
+  await waitFor('[role="alert"]');
+  check(document.querySelector('[role="alert"]')?.textContent?.includes("正在自动重连"), "transient read failure explains automatic recovery");
+  await waitFor('[aria-label="知识回答"]');
+  check(!document.querySelector('[role="alert"]'), "polling recovers after one transient failure without user reload");
+  for (const id of ["qa-2", "qa-3", "qa-4", "qa-1"]) {
+    const target = records.find(item => item.id === id)!;
+    navigateAnswer(id); await pause(); await waitFor('.ka-question');
+    if (id === "qa-4") { holdHistory = true; releaseHistory = undefined; await remount(); await waitFor('[aria-label="回答进度"]'); }
+    await click("删除问题"); await waitFor('[role="dialog"]');
+    check(document.querySelector('[role="dialog"]')?.textContent?.includes("上传原件仍保留"), "delete dialog states which data is retained");
+    if (id === "qa-4") check(document.querySelector('[role="dialog"]')?.textContent?.includes("问答也会停止"), "running deletion also explains cancellation");
+    if (id === "qa-2") {
+      await click("取消"); check(records.includes(target), "canceling deletion keeps the question"); await click("删除问题");
+    }
+    if (id === "qa-3") {
+      failDelete = true; await click("确认删除");
+      check(document.querySelector('[role="dialog"] [role="alert"]')?.textContent?.includes("暂时无法删除") && records.includes(target), "failed deletion keeps the question and offers retry");
+      failDelete = false;
+    }
+    await click("确认删除"); await waitFor('[aria-label="知识问答问题"]');
+    check(!records.includes(target), "delete supports completed, failed, cancelled, and running questions");
+    if (id === "qa-4") { holdHistory = false; releaseHistory!(); await pause(); }
+    check(document.querySelectorAll(".ka-history-item").length === records.filter(item => item.owner === account).length, "late list responses cannot restore deleted history");
+  }
+  await remount(); await waitFor('[aria-label="知识问答问题"]');
+  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "Alice 的私人草稿", "deletion preserves the unsent question draft");
   account = "alice"; navigateAnswer("qa-existing"); await remount(); await waitFor('[aria-label="知识回答"]'); await click("查看来源：实现依据 C++ [固定版]");
   check(document.querySelector('[aria-label="本段引用原句"]')?.textContent?.includes(quotedText), "clicked paragraph exposes its exact literal quotation in the side panel");
   document.querySelector('[aria-label="本次引用原文"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause();

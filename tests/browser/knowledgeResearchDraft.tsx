@@ -20,7 +20,7 @@ const componentRecord = { id: "cr-functional", source_repositories: sourceReposi
     { id: "database-operations", title: "数据库操作", repository_ids: ["core", "network"], scope: "连接和查询" },
     { id: "p2p", title: "P2P", repository_ids: ["network"], scope: "发现与传输" },
   ] } }] } };
-const skill = { name: "领域萃取方法", digest: "a".repeat(64), can_manage: true, versions: [], files: { "SKILL.md": "# 领域萃取方法\n\n先阅读业务材料。" } };
+const skill = { name: "领域萃取方法", digest: "a".repeat(64), can_manage: false, versions: [], files: { "SKILL.md": "# 领域萃取方法\n\n先阅读业务材料。" } };
 const componentSkills = {
   "component-analysis": { ...skill, name: "组件模块分析", can_manage: false, files: { "SKILL.md": "# 组件模块分析\n\n按源码边界划分模块。" } },
   component: { ...skill, name: "组件用法萃取", can_manage: false, files: { "SKILL.md": "# 组件用法萃取\n\n按模板编写用法及单元测试。" } },
@@ -137,23 +137,12 @@ async function run() {
     await click("萃取方法"); await waitFor('[aria-label="平台 Skill 详情"]');
     check(!button("开始研究"), "方法阅读页不显示研究表单");
     if (scenario === "method") {
-      check(button("更新方法") && !button("上传新版本") && !button("保存并用于新任务"), "方法页只显示一个更新入口");
-      await click("更新方法"); await waitFor('[role="menuitem"]');
-      check([...document.querySelectorAll('[role="menuitem"]')].map(e => e.textContent?.trim()).join("/") === "选择 Skill 目录/选择 SKILL.md", "更新入口提供整包和单文件两种选择");
-      await click("更新方法");
-      const content = "# 修订方法\n\n核对退款规则后独立复核。";
-      const file = new File([content], "SKILL.md");
-      Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode(content).buffer });
-      await pick('input[aria-label="上传平台 SKILL.md"]', [file]);
-      check(button("确认更新") && button("取消") && !button("更新方法") && !button("使用此 Skill"), "预览阶段只有确认更新和取消");
-      check(document.querySelector('[aria-label="Skill 文件正文"]')?.textContent?.includes("独立复核"), "更新前显示新方法预览");
-      check(!calls.some(c => c.path.endsWith("/domain") && c.input), "选择文件不直接更新公共方法");
-      await click("取消");
-      check(document.querySelector('[aria-label="Skill 文件正文"]')?.textContent?.includes("先阅读业务材料"), "取消预览恢复当前方法");
-      await pick('input[aria-label="上传平台 SKILL.md"]', [file]); await click("确认更新");
-      const writes = calls.filter(c => c.path === "/knowledge-extraction/skills/domain" && c.input);
-      check(writes.length === 1 && writes[0].input.files["SKILL.md"] === content && writes[0].input.expected_digest === "a".repeat(64), "确认只提交一次完整内容和当前版本");
-      check(button("更新方法") && !button("确认更新") && document.querySelector('[role="status"]')?.textContent?.includes("已更新"), "更新完成回到方法阅读页");
+      check(!button("更新方法") && !button("确认更新") && !button("回退"), "领域方法随平台发布，仅供阅读");
+      check(!document.querySelector('input[aria-label="上传平台 Skill 目录"]') && !document.querySelector('input[aria-label="上传平台 SKILL.md"]'), "领域方法页不再挂载上传控件");
+      check(document.querySelector('[aria-label="Skill 文件正文"]')?.textContent?.includes("先阅读业务材料"), "方法正文仍可阅读");
+      check(document.querySelector('[aria-label="平台 Skill 详情"]')?.textContent?.includes("无需上传"), "说明方法随平台更新");
+      check(button("使用此 Skill"), "保留返回研究入口");
+      check(!calls.some(c => c.path === "/knowledge-extraction/skills/domain" && c.input), "阅读内置方法不发起写入");
       check(document.documentElement.scrollWidth <= innerWidth + 2, "方法页不能横向溢出");
       if (!(window as any).__KEEP_RESEARCH_PREVIEW__) root.unmount();
       return { passed: true };

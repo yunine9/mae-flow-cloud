@@ -5,7 +5,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findJava, renderPlantUml, PLANTUML_JAR } from "../src/plantumlRender.ts";
@@ -52,4 +52,58 @@ test("真渲染:语法错误照样给图(标出错行)并标 syntax_error", { sk
 test("真渲染:预算到期终止,不无限等", { skip: SKIP }, async () => {
   const result = await renderPlantUml("A -> B", { timeoutMs: 1 });
   assert.match(result.error ?? "", /超过 .* 秒/);
+});
+
+test("真渲染:错误图二次缓存命中仍保留 syntax_error，状态与 SVG 保存在同一份完整缓存", { skip: SKIP }, async () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), "mfc-puml-invalid-cache-"));
+  try {
+    const source = "@startuml\n[Notification] : 六字段含 tenantId\n@enduml";
+    const first = await renderPlantUml(source, { cacheDir, sandbox: true });
+    assert.equal(first.error, undefined, first.error); assert.equal(first.syntax_error, true);
+    const second = await renderPlantUml(source, { cacheDir, sandbox: true });
+    assert.equal(second.error, undefined, second.error); assert.equal(second.cached, true);
+    assert.equal(second.syntax_error, true); assert.equal(second.svg, first.svg);
+    const files = readdirSync(cacheDir);
+    assert.equal(files.length, 1); assert.match(files[0], /\.json$/);
+    const cached = JSON.parse(readFileSync(join(cacheDir, files[0]), "utf8"));
+    assert.equal(cached.version, 1); assert.equal(cached.syntax_error, true); assert.equal(cached.svg, first.svg);
+  } finally { rmSync(cacheDir, { recursive: true, force: true }); }
+});
+
+test("真渲染:缓存损坏或缺少明确错误状态时重新检查，错误图不能因缺字段变成成功", { skip: SKIP }, async () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), "mfc-puml-damaged-cache-"));
+  try {
+    const source = "@startuml\n[Notification] : 六字段含 tenantId\n@enduml";
+    const first = await renderPlantUml(source, { cacheDir, sandbox: true });
+    assert.equal(first.error, undefined, first.error); assert.equal(first.syntax_error, true);
+    const files = readdirSync(cacheDir); assert.equal(files.length, 1);
+    const cachePath = join(cacheDir, files[0]);
+    const brokenRecords = [
+      '{"version":1,"svg":',
+      JSON.stringify({ version: 1, svg: first.svg }),
+      JSON.stringify({ version: 1, svg: first.svg, syntax_error: "false" }),
+    ];
+    for (const broken of brokenRecords) {
+      writeFileSync(cachePath, broken);
+      const retried = await renderPlantUml(source, { cacheDir, sandbox: true });
+      assert.equal(retried.error, undefined, retried.error);
+      assert.notEqual(retried.cached, true, "不完整状态不得被当成已验证缓存");
+      assert.equal(retried.syntax_error, true, "重新渲染仍应识别真实语法错误");
+      const restored = JSON.parse(readFileSync(cachePath, "utf8"));
+      assert.equal(restored.version, 1); assert.equal(restored.syntax_error, true);
+      assert.deepEqual(readdirSync(cacheDir), files, "原子替换后不遗留临时缓存文件");
+    }
+  } finally { rmSync(cacheDir, { recursive: true, force: true }); }
+});
+
+test("预先取消时直接拒绝，不进入运行库查找或产生渲染缓存", async () => {
+  const cacheDir = mkdtempSync(join(tmpdir(), "mfc-puml-aborted-"));
+  try {
+    const controller = new AbortController(), reason = new Error("任务已取消");
+    controller.abort(reason);
+    await assert.rejects(renderPlantUml("@startuml\nA -> B\n@enduml", {
+      signal: controller.signal, cacheDir, jar: "/nonexistent/plantuml.jar",
+    }), error => error === reason);
+    assert.deepEqual(readdirSync(cacheDir), []);
+  } finally { rmSync(cacheDir, { recursive: true, force: true }); }
 });

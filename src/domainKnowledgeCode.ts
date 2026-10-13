@@ -1,4 +1,4 @@
-import { executeFile, isResearchPlatformPath } from "./componentResearchTools.ts";
+import { isResearchPlatformPath, listGitTreePaths, readGitBlobPage, readGitBuildFile } from "./componentResearchTools.ts";
 import type { KnowledgeRepository } from "./domainKnowledgeTypes.ts";
 
 export interface KnowledgeCodeSnapshot {
@@ -6,11 +6,11 @@ export interface KnowledgeCodeSnapshot {
   build_units: Array<{ path: string; targets: string[]; dependencies: string[] }>;
 }
 export async function scanKnowledgeCode(repository: KnowledgeRepository, source: { root: string; revision: string }, signal: AbortSignal, excludePath?: (path: string) => boolean) {
-  const files = (await executeFile("git", ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", source.revision, "--", ...(repository.path ? [repository.path] : [])], source.root, signal))
-    .split("\0").filter(p => p && !isResearchPlatformPath(p) && !excludePath?.(p));
+  const files = (await listGitTreePaths(source.root, source.revision, repository.path, signal))
+    .filter(p => !isResearchPlatformPath(p) && !excludePath?.(p));
   const build_units: KnowledgeCodeSnapshot["build_units"] = [];
   for (const path of files.filter(f => /(^|\/)(CMakeLists\.txt|pom\.xml|package\.json)$/.test(f))) {
-    const content = await executeFile("git", ["show", `${source.revision}:${path}`], source.root, signal);
+    const content = await readGitBuildFile(source.root, source.revision, path, signal);
     let targets: string[] = [], dependencies: string[] = [];
     if (path.endsWith("CMakeLists.txt")) {
       const clean = content.replace(/#[^\n]*/g, "");
@@ -35,6 +35,76 @@ export function knowledgeStructure(snapshots: KnowledgeCodeSnapshot[]) {
     dependency_edges: s.build_units.flatMap(unit => unit.dependencies.flatMap(dependency => snapshots.flatMap(other => other.build_units.filter(candidate => candidate.targets.includes(dependency)).map(candidate => ({ from: `${s.repository.id}:${unit.path}`, to: `${other.repository.id}:${candidate.path}`, dependency }))))),
     build_files: s.files.filter(f => /(^|\/)(CMakeLists\.txt|pom\.xml|build\.gradle(?:\.kts)?|package\.json|go\.mod|Cargo\.toml)$/.test(f)),
     note: "构建依赖由 CMake/Maven/npm 文本静态提取，只作候选：不执行构建，不解析变量、条件或外部下载依赖。读取真实调用和 import/include 后核实业务模块；目录列表最多 400 项，完整目录使用 component_source 分页。" }));
+}
+
+/** 同一个 start 分别用于四类结果，直到所有集合都没有下一页。 */
+export function knowledgeStructurePage(snapshots: KnowledgeCodeSnapshot[], repositoryId: string, start = 0) {
+  if (!Number.isSafeInteger(start) || start < 0) throw new Error("结构盘点的 start 必须是非负安全整数");
+  const snapshot = snapshots.find(s => s.repository.id === repositoryId);
+  if (!snapshot) throw new Error("仓不在研究范围");
+  const pageSize = 30, pageEnd = start + pageSize;
+  const nextStart = (total: number) => pageEnd < total ? pageEnd : undefined;
+  const preview = (values: string[]) => ({
+    values: values.slice(0, 8).map(value => value.length > 256 ? value.slice(0, 256) + "…" : value),
+    complete: values.length <= 8 && values.every(value => value.length <= 256),
+  });
+  const build_units = snapshot.build_units.slice(start, pageEnd).map(unit => {
+    const targets = preview(unit.targets), dependencies = preview(unit.dependencies);
+    return {
+      path: unit.path,
+      targets_preview: targets.values, targets_total: unit.targets.length, targets_preview_complete: targets.complete,
+      dependencies_preview: dependencies.values, dependencies_total: unit.dependencies.length, dependencies_preview_complete: dependencies.complete,
+      source: { tool: "component_source", action: "read", repository_id: repositoryId, path: unit.path, start: 1 },
+    };
+  });
+  const build_files: string[] = [], directories: string[] = [], seenDirectories = new Set<string>();
+  let build_files_total = 0, directories_total = 0;
+  for (const file of snapshot.files) {
+    if (/(^|\/)(CMakeLists\.txt|pom\.xml|build\.gradle(?:\.kts)?|package\.json|go\.mod|Cargo\.toml)$/.test(file)) {
+      if (build_files_total >= start && build_files_total < pageEnd) build_files.push(file);
+      build_files_total++;
+    }
+    const slash = file.lastIndexOf("/"), directory = slash < 0 ? "" : file.slice(0, slash);
+    if (directory && !seenDirectories.has(directory)) {
+      seenDirectories.add(directory);
+      if (directories_total >= start && directories_total < pageEnd) directories.push(directory);
+      directories_total++;
+    }
+  }
+
+  // 同名 target 可能对应多个仓、多个构建单元。索引只保存候选引用，边只生成当前页。
+  const targets = new Map<string, Array<{ repositoryId: string; path: string }>>();
+  for (const other of snapshots) for (const unit of other.build_units) {
+    const candidate = { repositoryId: other.repository.id, path: unit.path };
+    for (const target of new Set(unit.targets)) {
+      const candidates = targets.get(target);
+      if (candidates) candidates.push(candidate); else targets.set(target, [candidate]);
+    }
+  }
+  const dependency_edges: Array<{ from: string; to: string; dependency: string; dependency_truncated: boolean }> = [];
+  let dependency_edges_total = 0;
+  for (const unit of snapshot.build_units) for (const dependency of unit.dependencies) {
+    const candidates = targets.get(dependency);
+    if (!candidates) continue;
+    const first = Math.max(0, start - dependency_edges_total), end = Math.min(candidates.length, pageEnd - dependency_edges_total);
+    for (let i = first; i < end; i++) dependency_edges.push({
+      from: `${repositoryId}:${unit.path}`, to: `${candidates[i].repositoryId}:${candidates[i].path}`,
+      dependency: dependency.length > 256 ? dependency.slice(0, 256) + "…" : dependency,
+      dependency_truncated: dependency.length > 256,
+    });
+    dependency_edges_total += candidates.length;
+    if (!Number.isSafeInteger(dependency_edges_total)) throw new Error("构建依赖数量超出可精确分页范围");
+  }
+  const build_units_total = snapshot.build_units.length;
+  return {
+    repository_id: repositoryId, revision: snapshot.revision, files: snapshot.files.length, start, page_size: pageSize,
+    build_units, build_units_total, build_units_next_start: nextStart(build_units_total),
+    build_files, build_files_total, build_files_next_start: nextStart(build_files_total),
+    dependency_edges, dependency_edges_total, dependency_edges_next_start: nextStart(dependency_edges_total),
+    directories, directories_total, directories_next_start: nextStart(directories_total),
+    next_start: nextStart(Math.max(build_units_total, build_files_total, dependency_edges_total, directories_total)),
+    note: "四类结果分别按 start 分页，每类最多 30 项；使用 next_start 继续，直到所有集合读完。构建单元的 targets_preview/dependencies_preview 最多 8 项，每项最多 256 字符；*_preview_complete=false 表示预览不完整，完整内容按 source 入口分页读取构建文件。dependency_truncated=true 时依赖名也只是预览，须读取 from 指向的文件。构建依赖由 CMake/Maven/npm 文本静态提取，只作候选：不执行构建，不解析变量、条件或外部下载依赖；请读取真实调用和 import/include 核实。",
+  };
 }
 export function codeReferences(text: string): string[] {
   const refs = [...text.matchAll(/`([\p{L}\p{N}_.-]+:[^`\s]+)`/gu)].map(m => m[1]).filter(r => !/^[a-z]+:\/\//i.test(r));
@@ -67,12 +137,13 @@ export async function validateKnowledgeReferences(text: string, snapshots: Knowl
     if (!files.length) { errors.push(`${ref}：当前版本和研究范围内没有匹配文件`); continue; }
     if (match[2] || match[4]) {
       if (!snapshot.files.includes(path)) { errors.push(`${ref}：行号或符号必须指向文件`); continue; }
-      const text = await executeFile("git", ["show", `${snapshot.revision}:${path}`], snapshot.root, signal);
+      const source = await readGitBlobPage(snapshot.root, snapshot.revision, path,
+        { symbol: match[4]?.split("::").at(-1)!.replace(/\(\)$/, "") }, signal);
       if (match[2]) {
         const start = Number(match[2]), end = Number(match[3] ?? match[2]);
-        if (start < 1 || end < start || end > text.split("\n").length) { errors.push(`${ref}：行号越界`); continue; }
+        if (start < 1 || end < start || end > source.totalLines) { errors.push(`${ref}：行号越界`); continue; }
       }
-      if (match[4] && !text.includes(match[4].split("::").at(-1)!.replace(/\(\)$/, ""))) { errors.push(`${ref}：符号不存在`); continue; }
+      if (match[4] && !source.symbolFound) { errors.push(`${ref}：符号不存在`); continue; }
     }
     checked.push(ref);
   }

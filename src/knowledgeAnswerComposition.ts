@@ -7,7 +7,7 @@ export class KnowledgeAnswerCompositionError extends KnowledgeAnswerError {}
 interface CompositionPoint {
   kind: "answer" | "recommendation";
   body: string;
-  basis: Array<{ evidence_id: string; quote: string; start_line?: number; end_line?: number }>;
+  basis: Array<{ evidence_id: string; quote?: string; image?: boolean; start_line?: number; end_line?: number }>;
 }
 
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -77,11 +77,11 @@ function rangeQuote(source: KnowledgeAnswerEvidence, start: unknown, end: unknow
   const { startLine, lines } = knowledgeAnswerSourceLines(source);
   const maximum = Math.min(startLine + lines.length - 1, source.end_line ?? Infinity);
   if (start < startLine || end > maximum) throw new KnowledgeAnswerCompositionError("引用的行范围不在本次实际读取的原文中");
-  // 保留原文件的换行形式，长度预算按实际所取文字计算，不扩展、拼接或截断。
+  // 保留原文件的换行形式，不扩展、拼接或截断；长原文在展示时改用来源链接。
   const separators = source.content.split(/(\r\n|[\n\r\u2028\u2029])/).filter((_part, index) => index % 2 === 1);
   const quote = lines.slice(start - startLine, end - startLine + 1)
     .map((line, index) => line + (start + index < end ? separators[start - startLine + index] : "")).join("");
-  if (!text(quote, 4000)) throw new KnowledgeAnswerCompositionError("来源行范围的实际原文须为1至4000字符，不会截断长行");
+  if (!quote.trim()) throw new KnowledgeAnswerCompositionError("来源行范围的实际原文不能为空");
   return quote;
 }
 
@@ -136,6 +136,11 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
       if (!record(item) || !source || !/^[A-Za-z0-9_-]+$/.test(source.id) || typeof source.content !== "string") {
         throw new KnowledgeAnswerCompositionError("来源原句的字段、长度或来源编号不正确");
       }
+      if (source.image) {
+        if (!keys(item, "evidence_id")) throw new KnowledgeAnswerCompositionError("图片依据只引用图片编号，不能伪造原文行号或引文");
+        allowed.add(source.id);
+        return { evidence_id: source.id, image: true };
+      }
       if (keys(item, "end_line,evidence_id,start_line")) {
         const quote = rangeQuote(source, item.start_line, item.end_line);
         allowed.add(source.id);
@@ -158,22 +163,24 @@ export function parseKnowledgeAnswerComposition(raw: string, evidence: readonly 
   const render = (inlineQuotes: boolean) => points.map(point => {
     const quotes = point.basis.map(basis => {
       const source = sources.get(basis.evidence_id)!;
+      if (basis.image) return `[图片：${escapeMarkdown(source.title.replace(/\s+/g, " ").trim() || source.id)}](#evidence-${source.id})`;
       if (!inlineQuotes) {
         const location = basis.start_line === undefined ? "" : `，第 ${basis.start_line}–${basis.end_line} 行`;
         return `[原文 ${source.id}${location}](#evidence-${source.id})`;
       }
       const label = escapeMarkdown(source.title.replace(/\s+/g, " ").trim() || "来源");
-      const quotation = basis.quote.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${escapeMarkdown(line)}`).join("\n");
+      const quotation = basis.quote!.split(/\r\n|[\n\r\u2028\u2029]/).map(line => `> ${escapeMarkdown(line)}`).join("\n");
       return `${quotation}\n\n[${label}](#evidence-${source.id})`;
     }).join("\n\n");
     const body = point.kind === "recommendation" ? `**建议做法：**\n\n${point.body}` : point.body;
-    return `${body}\n\n**${inlineQuotes ? "来源原句：" : "来源原文（点击查看）："}**\n\n${quotes}`;
+    return `${body}\n\n**${point.basis.some(item => item.image) ? "来源依据（点击查看）：" : inlineQuotes ? "来源原句：" : "来源原文（点击查看）："}**\n\n${quotes}`;
   });
   const resultFor = (rendered: string[]): KnowledgeAnswerResult => {
     const markdown = rendered.join("\n\n") || "本次查阅的资料不足以确认这些问题，具体缺口见未确认项。";
     return { markdown, evidence_ids: [...new Set(knowledgeAnswerCitations(markdown))], unknowns };
   };
-  let rendered = render(true), result = resultFor(rendered);
+  const inlineQuotes = points.every(point => point.basis.every(basis => !basis.quote || basis.quote.length <= 4000));
+  let rendered = render(inlineQuotes), result = resultFor(rendered);
   // 原文已另存为证据。平台展开造成的膨胀改用完整原件链接，不裁句，也不让模型重新作答。
   if (JSON.stringify(result).length > maxChars) {
     rendered = render(false);

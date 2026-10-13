@@ -9,6 +9,7 @@ import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import { createKnowledgeAnswerSources, knowledgeAnswerSourceCatalog } from "../src/knowledgeAnswerSources.ts";
+import { parseKnowledgeAnswerComposition } from "../src/knowledgeAnswerComposition.ts";
 import type { KnowledgeAnswerExecution, KnowledgeAnswerContext, KnowledgeAnswerRecord } from "../src/knowledgeAnswerTypes.ts";
 import { consumptionFixture, componentSection } from "./componentConsumptionFixture.ts";
 
@@ -243,6 +244,35 @@ setInterval(()=>{},1000);`);
   }
 });
 
+test("#476 豆包多文档JSON展开保留字段，单个长正文仍可引用且不丢失原文", async () => {
+  const f = fixture();
+  const documents = [{ title: "DSON介绍", content: "背景正文。".repeat(1600) + "必须保留的条件和例外。", metadata: { version: "v1" } },
+    { title: "PNP介绍", content: "另一份资料。" }];
+  const bin = executable(f.dir, "");
+  const restore = withEnv({ MAE_FLOW_WXDOUBAO_BIN: bin, WXDOUBAO_USERID: "qa-user", WXDOUBAO_TOKEN: "test-source-credential", MAE_FLOW_WXDOUBAO_TIMEOUT_MS: "1000" });
+  try {
+    for (const value of [documents, JSON.stringify(documents)]) {
+      writeFileSync(bin, `#!${process.execPath}\nconsole.log(JSON.stringify({result:{structuredContent:${JSON.stringify(value)}}}));`);
+      const q = execution(), sources = createKnowledgeAnswerSources(q.input, { dataDir: f.dir, search: new KnowledgeSearch(f.dir) });
+      const returned = await run(sources, "business_knowledge", { question: "介绍一下DSON和PNP" });
+      assert.equal(returned.result.isError, undefined);
+      assert.equal(returned.data.complete, true);
+      const source = q.record.evidence[0];
+      assert.equal(source.kind, "wireless");
+      assert.equal(source.content, returned.data.content);
+      assert.equal(source.digest, createHash("sha256").update(source.content).digest("hex"));
+      assert.deepEqual(JSON.parse(source.content.slice(source.content.indexOf("\n") + 1)), documents);
+      const lines = source.content.split("\n"), line = lines.findIndex(value => value.includes(documents[0].content)) + 1;
+      assert.ok(lines.length > 3, "多个文档及其字段不再压成一行");
+      assert.ok(line > 0 && lines[line - 1].length > 4000);
+      const answer = parseKnowledgeAnswerComposition(JSON.stringify({ points: [{ kind: "answer", body: "无线背景说明。",
+        basis: [{ evidence_id: source.id, start_line: line, end_line: line }] }] }), q.record.evidence);
+      assert.ok(answer.markdown.includes(`[原文 ${source.id}，第 ${line}–${line} 行](#evidence-${source.id})`));
+      assert.ok(source.content.includes(documents[0].content));
+    }
+  } finally { restore(); f.cleanup(); }
+});
+
 test("豆包只保存实际展示的背景页，未核验原文明确，取消后不会新增证据", async () => {
   const f = fixture();
   const bin = executable(f.dir, 'console.log(JSON.stringify({result:{structuredContent:{data:{text:"无线背景内容。".repeat(6000)}}}}));');
@@ -285,5 +315,33 @@ test("原始资料只能读取用户显式编号，按章节位置分段，未�
     assert.ok(first.data.next_offset > 0); assert.equal(q.record.evidence.length, 1);
     const unrelated = createKnowledgeAnswerSources(execution().input, { dataDir: f.dir, search: new KnowledgeSearch(f.dir) });
     assert.equal((await run(unrelated, "knowledge_material", {})).data.materials.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("原始图片实际返回后生成可回查证据，拒绝非视觉模型、越界路径与被改动字节", async () => {
+  const f = fixture();
+  try {
+    const id = "material-33333333-3333-3333-3333-333333333333";
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aK1kAAAAASUVORK5CYII=", "base64");
+    const digest = createHash("sha256").update(png).digest("hex"), folder = join(f.dir, "knowledge-materials", id);
+    mkdirSync(join(folder, "images"), { recursive: true }); writeFileSync(join(folder, "images", digest), png);
+    writeFileSync(join(folder, "material.json"), JSON.stringify({ id, name: "设计.docx", scope: "订单", version: "v1", bytes: png.length,
+      digest: "a".repeat(64), state: "ready", sections: [{ location: "转换文本", source_path: "设计.docx", text: "图示规则" }],
+      images: [{ id: digest, path: "images/figure.png", mimeType: "image/png", bytes: png.length }] }));
+    const q = execution({ material_ids: [id] }), sources = createKnowledgeAnswerSources(q.input, { dataDir: f.dir, search: new KnowledgeSearch(f.dir) });
+    const tool = sources.tools.find(tool => tool.name === "knowledge_material")!;
+    const call = (path: string, input = ["text", "image"]) => tool.execute("image", { id, image_path: path }, undefined, undefined, { model: { input } } as any) as Promise<any>;
+    assert.equal((await call("images/figure.png", ["text"])).isError, true); assert.equal(q.record.evidence.length, 0);
+    assert.equal((await call("../source.docx")).isError, true); assert.equal(q.record.evidence.length, 0);
+    const result = await call("images/figure.png");
+    assert.equal(result.isError, undefined); assert.deepEqual(result.content[1], { type: "image", data: png.toString("base64"), mimeType: "image/png" });
+    assert.equal(q.record.evidence.length, 1);
+    assert.deepEqual(q.record.evidence[0].image, { path: "images/figure.png", digest, mime_type: "image/png" });
+    assert.match(q.record.evidence[0].content, /未执行 OCR.*不包含图中文字/);
+    assert.match(q.record.evidence[0].location!, /原文件 SHA256=.*图片 SHA256=/);
+    const listing = await run(sources, "knowledge_material", {});
+    assert.deepEqual(listing.data.materials[0].images_not_read, []);
+    writeFileSync(join(folder, "images", digest), Buffer.alloc(png.length));
+    assert.equal((await call("images/figure.png")).isError, true); assert.equal(q.record.evidence.length, 1);
   } finally { f.cleanup(); }
 });

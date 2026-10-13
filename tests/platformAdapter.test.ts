@@ -24,6 +24,60 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlatformAdapter } from "../src/platformAdapter.ts";
 
+test("MR 人员独立更新：创建失败信息不丢 MR，复用不覆盖，补设不重建", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "mfc-adapter-participants-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const cli = join(directory, "cli.mjs"), calls = join(directory, "calls.jsonl");
+  const configPath = join(directory, "adapter.json");
+  writeFileSync(cli, `import { appendFileSync } from 'node:fs';
+const [mode, ...args] = process.argv.slice(2);
+appendFileSync(${JSON.stringify(calls)}, JSON.stringify({mode,args})+'\\n');
+if(mode === 'create') console.log(JSON.stringify({url:'https://codehub.test/g/r/merge_requests/7',iid:7}));
+else if(mode === 'lookup') console.log(JSON.stringify({url:'https://codehub.test/g/r/merge_requests/7',iid:7}));
+else if(mode === 'invalid') console.log('{}');
+else if(mode === 'crash') { console.error('fixture-secret'); process.exit(2); }
+else console.log(JSON.stringify({status:mode,requested:JSON.parse(args[2]),message:mode==='failed'?'人员读取字段尚未配置':undefined}));`);
+  const requested = { reviewers: ["alice"], approval_approvers: ["bob"] };
+  const base = {
+    token: "fixture-secret", mr_create: { command: [process.execPath, cli, "create"], url: { json: "url" }, id: { json: "iid" } },
+    pipeline_trigger: { observe_only: true }, pipeline_status: { command: [process.execPath, cli, "invalid"] },
+    mr_participants: { command: [process.execPath, cli, "failed", "{repo_path}", "{mr}", "{participants}", "{token}"], contract: true },
+  };
+  const adapter = (patch: Record<string, unknown> = {}) => {
+    writeFileSync(configPath, JSON.stringify({ ...base, ...patch }));
+    return new PlatformAdapter(configPath, () => {});
+  };
+  const input = { repo: "https://codehub.test/g/r.git", source_branch: "s", target_branch: "main", title: "t", participants: requested };
+  const created = await adapter().handle("POST", "/mr", new URLSearchParams(), input, { "x-mfc-git-token": "personal-token" });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.payload, { url: "https://codehub.test/g/r/merge_requests/7", id: "7", participants: {
+    status: "failed", requested, message: "人员读取字段尚未配置" } });
+  let history = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(history.map(row => row.mode), ["create", "failed"]);
+  assert.deepEqual(history[1].args, ["g%2Fr", "7", JSON.stringify(requested), "personal-token"]);
+  const applied = await adapter({ mr_participants: { ...base.mr_participants,
+    command: base.mr_participants.command.map(part => part === "failed" ? "applied" : part) } })
+    .handle("POST", "/mr/participants", new URLSearchParams(), { repo: input.repo, mr: "7", participants: requested }, {});
+  assert.deepEqual(applied, { status: 200, payload: { status: "applied", requested } });
+  const reused = await adapter({ mr_lookup: { command: [process.execPath, cli, "lookup"], url: { json: "url" }, id: { json: "iid" } } })
+    .handle("POST", "/mr", new URLSearchParams(), input, {});
+  assert.equal((reused.payload as any).participants.status, "skipped");
+  history = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
+  assert.deepEqual(history.map(row => row.mode), ["create", "failed", "applied", "lookup"]);
+  const absent = await adapter({ mr_participants: undefined }).handle("POST", "/mr", new URLSearchParams(), input, {});
+  assert.equal((absent.payload as any).participants.status, "failed");
+  assert.equal((absent.payload as any).id, "7");
+  const malformed = await adapter({ mr_participants: { command: [process.execPath, cli, "invalid"], contract: true } })
+    .handle("POST", "/mr/participants", new URLSearchParams(), { repo: input.repo, mr: 7, participants: requested }, {});
+  assert.equal((malformed.payload as any).status, "failed");
+  const crashed = await adapter({ mr_participants: { command: [process.execPath, cli, "crash"], contract: true } })
+    .handle("POST", "/mr", new URLSearchParams(), input, {});
+  assert.equal(crashed.status, 201);
+  assert.equal((crashed.payload as any).id, "7");
+  assert.equal((crashed.payload as any).participants.status, "failed");
+  assert.doesNotMatch(JSON.stringify(crashed.payload), /fixture-secret/);
+});
+
 test("只观察自动流水线不需要触发命令，自检和调用都保留真实查询失败", async t => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-adapter-observe-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));

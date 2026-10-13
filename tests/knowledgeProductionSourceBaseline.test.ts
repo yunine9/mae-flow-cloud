@@ -8,7 +8,7 @@ import { CloudSession } from "../src/sessionDriver.ts";
 import { HostGitSandbox, type PreparedHostGit } from "../src/hostGitSandbox.ts";
 import { syncKnowledgeSource } from "../src/knowledgeExtractionFactory.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { runDomainKnowledge } from "../src/domainKnowledgeAgent.ts";
+import { runGenericDomainKnowledge as runDomainKnowledge } from "./helpers/extractionSkillFixture.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";

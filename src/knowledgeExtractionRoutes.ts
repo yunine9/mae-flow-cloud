@@ -8,13 +8,9 @@ export async function extractionConfigurationRoute(request: IncomingMessage, res
   try {
     if (parts[1] === "skills" && ["component", "component-analysis", "domain"].includes(parts[2])) {
       const skills = methodStore(dataDir), kind = parts[2] as ExtractionKind;
-      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: kind === "domain" });
+      if (request.method === "GET" && parts.length === 3) return json(response, 200, { ...skills.current(kind), can_manage: false });
       if (request.method === "POST" && [undefined, "rollback"].includes(parts[3])) {
-        if (kind !== "domain") return json(response, 405, { error: "组件研究 Skill 由平台版本维护，仅供查看" });
-        const body = await readBody(request, 2 * 1024 * 1024);
-        const result = parts[3] === "rollback" ? await skills.rollback(kind, body.version_id, body.expected_digest, operator)
-          : await skills.save(kind, body.files, body.expected_digest, operator);
-        return json(response, 200, { ...result, can_manage: true });
+        return json(response, 405, { error: "萃取 Skill 由平台版本维护，仅供查看；请在代码仓修改后发布" });
       }
     }
     if (parts[1] === "wxdoubao" && request.method === "GET") {

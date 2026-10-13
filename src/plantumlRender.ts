@@ -13,8 +13,8 @@
  * 标出错行的错误图(退出码 200),照样返回给人看,并标 syntax_error。
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -35,10 +35,11 @@ export interface PlantUmlResult {
 }
 
 let javaCommand: string | null | undefined;
+let javaProbeFailedAt = 0;
 
-/** 找 Java:JAVA_HOME 优先,其次 PATH。结果缓存——一次进程里不会变。 */
+/** 找 Java:JAVA_HOME 优先,其次 PATH。失败只缓存 30 秒，补齐环境后可接续。 */
 export function findJava(): string | undefined {
-  if (javaCommand !== undefined) return javaCommand ?? undefined;
+  if (javaCommand || javaCommand === null && Date.now() - javaProbeFailedAt < 30_000) return javaCommand ?? undefined;
   // Homebrew 的 openjdk@N 是 keg-only,不进 PATH(2026-09-06 本机装 JDK 21 实锤):
   // 按固定前缀探一遍,免得每台开发机都得改 shell 配置。
   const brewKegs = ["/opt/homebrew/opt", "/usr/local/opt"].flatMap((root) => {
@@ -60,12 +61,14 @@ export function findJava(): string | undefined {
     }
   }
   javaCommand = null;
+  javaProbeFailedAt = Date.now();
   return undefined;
 }
 
 /** 测试与自检用:重置 Java 探测缓存。 */
 export function resetJavaProbe(): void {
   javaCommand = undefined;
+  javaProbeFailedAt = 0;
 }
 
 export function plantUmlCacheKey(source: string): string {
@@ -74,8 +77,9 @@ export function plantUmlCacheKey(source: string): string {
 
 export async function renderPlantUml(
   source: string,
-  options: { cacheDir?: string; jar?: string; timeoutMs?: number } = {},
+  options: { cacheDir?: string; jar?: string; timeoutMs?: number; signal?: AbortSignal; sandbox?: boolean } = {},
 ): Promise<PlantUmlResult> {
+  options.signal?.throwIfAborted();
   const text = String(source ?? "");
   if (!text.trim()) return { error: "没有 PlantUML 源码" };
   if (Buffer.byteLength(text) > PLANTUML_SOURCE_LIMIT) {
@@ -86,19 +90,23 @@ export async function renderPlantUml(
   const java = findJava();
   if (!java) return { error: "服务端没有 Java,无法出图(生产宿主应带 JDK)" };
 
-  const key = plantUmlCacheKey(text);
-  const cachePath = options.cacheDir ? join(options.cacheDir, `${key}.svg`) : undefined;
-  const flagPath = options.cacheDir ? join(options.cacheDir, `${key}.syntax-error`) : undefined;
+  const key = plantUmlCacheKey(`${jar}\0${options.sandbox ? "SANDBOX" : "default"}\0${text}`);
+  const cachePath = options.cacheDir ? join(options.cacheDir, `${key}.json`) : undefined;
   if (cachePath && existsSync(cachePath)) {
-    return { svg: readFileSync(cachePath, "utf-8"), cached: true,
-      ...(flagPath && existsSync(flagPath) ? { syntax_error: true } : {}) };
+    try {
+      const cached = JSON.parse(readFileSync(cachePath, "utf-8"));
+      if (cached.version === 1 && typeof cached.svg === "string" && /^<(?:svg|\?xml)/.test(cached.svg)
+          && typeof cached.syntax_error === "boolean") return { svg: cached.svg, cached: true, ...(cached.syntax_error ? { syntax_error: true } : {}) };
+    } catch { /* 不完整或损坏的缓存重新渲染，不能把缺少错误标记当成功。 */ }
   }
 
   // 源码里的 @startuml/@enduml 缺席时补上:文档里常常只写正文。
   const wrapped = /@start\w+/.test(text) ? text : `@startuml\n${text}\n@enduml\n`;
+  options.signal?.throwIfAborted();
   const outcome = await new Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean }>((done) => {
     const child = spawn(java, [
       "-Djava.awt.headless=true", "-Dfile.encoding=UTF-8",
+      ...(options.sandbox ? ["-DPLANTUML_SECURITY_PROFILE=SANDBOX"] : []),
       "-jar", jar, "-tsvg", "-pipe", "-Playout=smetana", "-charset", "UTF-8",
     ], { stdio: ["pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
@@ -106,14 +114,19 @@ export async function renderPlantUml(
     let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); },
       options.timeoutMs ?? PLANTUML_TIMEOUT_MS);
+    const abort = () => { child.kill("SIGKILL"); };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
     child.stdout.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
     child.on("error", (error) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       done({ code: null, stdout: "", stderr: String(error), timedOut: false });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
       done({ code, stdout: Buffer.concat(out).toString("utf-8"),
         stderr: Buffer.concat(err).toString("utf-8"), timedOut });
     });
@@ -121,19 +134,23 @@ export async function renderPlantUml(
     child.stdin.end(wrapped);
   });
 
+  options.signal?.throwIfAborted();
   if (outcome.timedOut) return { error: `出图超过 ${(options.timeoutMs ?? PLANTUML_TIMEOUT_MS) / 1000} 秒,已终止` };
+  if (outcome.code !== 0 && outcome.code !== 200) return { error: `PlantUML 进程失败(退出码 ${outcome.code ?? "?"}): ${outcome.stderr.trim().slice(0, 300) || "未正常结束"}` };
   const svg = outcome.stdout.trim();
   if (!svg.startsWith("<svg") && !svg.startsWith("<?xml")) {
     return { error: `PlantUML 进程失败(退出码 ${outcome.code ?? "?"}): ${outcome.stderr.trim().slice(0, 300) || "没有输出"}` };
   }
-  // 退出码 200 = 语法错误,PlantUML 已把出错行画进图里;其它非零一并当图给人看。
-  const syntaxError = outcome.code !== 0;
+  // 仅明确的语法错误退回作者修订；被终止等进程故障不能伪装成语法错误。
+  const syntaxError = outcome.code === 200;
   if (cachePath) {
+    const temporary = `${cachePath}.${randomUUID()}.tmp`;
     try {
       mkdirSync(dirname(cachePath), { recursive: true });
-      writeFileSync(cachePath, svg);
-      if (syntaxError && flagPath) writeFileSync(flagPath, "");
+      writeFileSync(temporary, JSON.stringify({ version: 1, svg, syntax_error: syntaxError }), { mode: 0o600 });
+      renameSync(temporary, cachePath);
     } catch { /* 缓存是旁路 */ }
+    finally { try { unlinkSync(temporary); } catch { /* 已重命名或没有临时文件。 */ } }
   }
   return { svg, ...(syntaxError ? { syntax_error: true } : {}) };
 }
