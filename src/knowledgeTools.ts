@@ -19,20 +19,24 @@ export function createKnowledgeTool(options: {
   const observe = (event: MemoryUsageEvent) => {
     try { options.onUse?.(event); } catch { /* Observation must not change a successful read. */ }
   };
+  // 组件研究指引只在实际注入了 research 后端时教学：问题单等旁路
+  // 会话不往知识库写、也不发起研究，不能教 Agent 调一个注定
+  // 「暂不可用」的动作。
+  const researchGuideline = "当前任务明确要求开展组件研究时，用 knowledge(action=research, language=cpp) 对该技术栈发起后台研究，默认参考所有已启用来源仓。knowledge(action=components) 列出参考源码；repository_ids 可选，用于限定参考来源。文件操作、数据库操作、P2P 等功能组件由分析确定，一个组件可跨仓实现。同一技术栈及来源范围已有研究时直接返回原记录。用返回的记录 ID 调 research_status 查看。继续其他独立工作，不循环轮询；草稿须经人工审查采纳。检索没有命中不自动发起研究。";
+  const baseGuidelines = [
+    "调查需求和源码时，随着发现新的职责、接口或约束，用 knowledge(action=search, query=具体问题) 查相关组件、规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本。",
+    "尚不知道可复用能力或组件名称时，用 knowledge(action=component_context) 浏览能力目录，按 next_offset 翻页。按要做的事和适用场景理解候选；也可用 knowledge(action=search, scope=components, query=调查需求或源码后发现的具体职责或约束) 主动查找，不要求先知道接口名。",
+    "例如：准备改异步回调，搜索‘C++ 异步回调 对象销毁 生命周期’；后来发现需要改 YAML，再搜索‘该配置用途 YAML 修改规范’。准备首次构建，搜索‘该仓库 C++ 首次构建 UT 依赖 命令’。",
+    "组件候选用 knowledge(action=read, id=文档ID, revision=结果修订号, paradigm_id=用法编号) 从头读取公共用途、接入配置与选定用法。按返回的 next_offset 保持同一 revision 连续续读，直到 complete=true，再确认完整条件、示例和尾部约束；只读命中片段不能代替这份依据。",
+    "普通文档先看适用条件、来源和版本，再用 knowledge(action=read, id=搜索结果ID, start_line=命中起始行, end_line=命中结束行, revision=结果版本) 读取规则和例外。结果提示后续行时按需继续读取。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
+    "检索结果只是候选：先核对业务模块、语言、来源路径；同名文档或相似术语不能混用，不凭目录名猜适用模块。不匹配当前仓库、产品版本或适用条件的不要套用，不因排名第一就视为正确。未声明产品版本时核对正文；不能把文档修订号当成适用产品版本。知识不覆盖当前用户明确要求，不代替实际验证。",
+    "没有相关结果或检索暂不可用，按代码和现有证据继续，不反复空查或等待。发现知识与现场冲突时说明冲突，不擅自改写已采纳结论。",
+  ];
   return defineTool({
     name: "knowledge", label: "检索团队知识",
     description: "统一查找已发布的团队文档、业务模块知识和已采纳经验。search 按要解决的问题检索，返回短卡片和原文位置；read 带 paradigm_id 和 revision 读取公共接入配置及选定组件用法，按 next_offset 续读到 complete=true。普通文档按行读取。component_context 按页浏览当前适用的能力目录，每页最多 12 条，用 next_offset 继续。plan 的 validate/check_impl/gaps 可核对已有组件使用计划。Skill 通过会话已有技能目录按需加载。索引不可用时继续工作，不阻塞任务。",
     promptSnippet: "knowledge: search 查团队、模块、仓库知识及已采纳经验；read 展开正文。",
-    promptGuidelines: [
-      "当前任务明确要求开展组件研究时，用 knowledge(action=research, language=cpp) 对该技术栈发起后台研究，默认参考所有已启用来源仓。knowledge(action=components) 列出参考源码；repository_ids 可选，用于限定参考来源。文件操作、数据库操作、P2P 等功能组件由分析确定，一个组件可跨仓实现。同一技术栈及来源范围已有研究时直接返回原记录。用返回的记录 ID 调 research_status 查看。继续其他独立工作，不循环轮询；草稿须经人工审查采纳。检索没有命中不自动发起研究。",
-      "调查需求和源码时，随着发现新的职责、接口或约束，用 knowledge(action=search, query=具体问题) 查相关组件、规范和经验。查询写清准备做什么、关键技术或现象，保留命令、接口名、错误码和产品版本。",
-      "尚不知道可复用能力或组件名称时，用 knowledge(action=component_context) 浏览能力目录，按 next_offset 翻页。按要做的事和适用场景理解候选；也可用 knowledge(action=search, scope=components, query=调查需求或源码后发现的具体职责或约束) 主动查找，不要求先知道接口名。",
-      "例如：准备改异步回调，搜索‘C++ 异步回调 对象销毁 生命周期’；后来发现需要改 YAML，再搜索‘该配置用途 YAML 修改规范’。准备首次构建，搜索‘该仓库 C++ 首次构建 UT 依赖 命令’。",
-      "组件候选用 knowledge(action=read, id=文档ID, revision=结果修订号, paradigm_id=用法编号) 从头读取公共用途、接入配置与选定用法。按返回的 next_offset 保持同一 revision 连续续读，直到 complete=true，再确认完整条件、示例和尾部约束；只读命中片段不能代替这份依据。",
-      "普通文档先看适用条件、来源和版本，再用 knowledge(action=read, id=搜索结果ID, start_line=命中起始行, end_line=命中结束行, revision=结果版本) 读取规则和例外。结果提示后续行时按需继续读取。同一问题已查过且条件未变化，继续复用，不在每次读文件、改代码前重复搜索。遇到新的问题再查。",
-      "检索结果只是候选：先核对业务模块、语言、来源路径；同名文档或相似术语不能混用，不凭目录名猜适用模块。不匹配当前仓库、产品版本或适用条件的不要套用，不因排名第一就视为正确。未声明产品版本时核对正文；不能把文档修订号当成适用产品版本。知识不覆盖当前用户明确要求，不代替实际验证。",
-      "没有相关结果或检索暂不可用，按代码和现有证据继续，不反复空查或等待。发现知识与现场冲突时说明冲突，不擅自改写已采纳结论。",
-    ],
+    promptGuidelines: options.research ? [researchGuideline, ...baseGuidelines] : baseGuidelines,
     parameters: Type.Object({
       action: Type.Union([Type.Literal("search"), Type.Literal("read"), Type.Literal("component_context"), Type.Literal("plan"), Type.Literal("components"), Type.Literal("research"), Type.Literal("research_status")]),
       operation: Type.Optional(Type.Union([Type.Literal("validate"), Type.Literal("check_impl"), Type.Literal("gaps")])),
