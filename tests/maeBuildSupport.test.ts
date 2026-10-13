@@ -62,6 +62,52 @@ test('仅适配 MAE HTTPS 仓；宿主固定四仓版本、复用并拒绝污染
   writeFileSync(join(root, 'MAEBuild/fixture'), 'changed');
   await assert.rejects(prepareMaeBuildSupport(input), /已被修改/);
 });
+for (const main of MAE_BUILD_REPOSITORIES) {
+  test(`需求容器：${main.name} 作为主仓时可写，修改或提交后仍可重建`, async t => {
+    const { TaskService } = await import('../src/taskService.ts');
+    const { TaskContainer } = await import('../src/containerRuntime.ts');
+    const dir = temp(t), root = join(dir, 'task'), workspace = join(root, main.name);
+    for (const repo of MAE_BUILD_REPOSITORIES) await cloneFixture(repo.url, join(root, repo.name));
+    const service = new TaskService({ dataDir: join(dir, 'data'), provider: 'fixture', model: 'fixture', modelsJson: {} });
+    try {
+      const task = { cwd: workspace, summary: { id: 'task-57', workspace: root, repo_url: main.url } };
+      for (const state of ['clean', 'modified', 'committed']) {
+        if (state === 'modified') writeFileSync(join(workspace, 'fixture'), 'task changes');
+        if (state === 'committed') git(workspace, '-c', 'user.name=fixture', '-c', 'user.email=fixture@localhost', 'commit', '-am', 'task changes');
+        const mounts = await (service as any).taskContainerMounts(task, []);
+        assert.equal(mounts.environment.MFC_MAE_BUILD_ERROR, undefined, state);
+        const container = new TaskContainer('fixture/build:test', workspace, 'mfc-mae-main', undefined,
+          mounts.volumes, {}, { environment: mounts.environment });
+        assert.doesNotThrow(() => (container as any).validateConfiguration(), state);
+        const args: string[] = (container as any).runArgs();
+        const volumes = args.filter((_, index) => args[index - 1] === '-v');
+        assert.deepEqual(volumes.filter(volume => volume.split(':')[1] === workspace), [`${workspace}:${workspace}:rw`]);
+        const manifest = JSON.parse(readFileSync(join(root, 'MAEServiceBuildCache/mfc-support.json'), 'utf8'));
+        assert.equal(manifest[main.name], undefined, '主仓不固定为辅助仓版本');
+        for (const helper of MAE_BUILD_REPOSITORIES.filter(repo => repo !== main)) {
+          const path = join(root, helper.name);
+          assert.ok(volumes.includes(`${path}:${path}:ro`), helper.name);
+          assert.match(manifest[helper.name], /^[a-f0-9]{40,64}$/);
+        }
+        const cache = join(root, 'MAEServiceBuildCache');
+        assert.ok(volumes.includes(`${cache}:${cache}:rw`));
+      }
+    } finally { await service.shutdown(); }
+  });
+}
+test('多仓工作区中的同源仓不会排除工作区外的辅助仓', async t => {
+  const { TaskService } = await import('../src/taskService.ts');
+  const dir = temp(t), root = join(dir, 'task'), workspace = join(root, 'repositories');
+  await cloneFixture(MAE_BUILD_REPOSITORIES[0].url, join(workspace, 'MAEStarterParent'));
+  for (const repo of MAE_BUILD_REPOSITORIES) await cloneFixture(repo.url, join(root, repo.name));
+  const service = new TaskService({ dataDir: join(dir, 'data'), provider: 'fixture', model: 'fixture', modelsJson: {} });
+  try {
+    const mounts = await (service as any).taskContainerMounts({ cwd: workspace,
+      summary: { id: 'task-56', workspace: root, repo_url: MAE_BUILD_REPOSITORIES[0].url } }, []);
+    assert.equal(mounts.environment.MFC_MAE_BUILD_ERROR, undefined);
+    for (const volume of maeBuildVolumes(root)) assert.ok(mounts.volumes.includes(volume));
+  } finally { await service.shutdown(); }
+});
 test('辅助仓父目录不能借符号链接越出任务现场', async t => {
   const dir = temp(t), outside = join(dir, 'outside'), root = join(dir, 'task'); mkdirSync(outside); symlinkSync(outside, root);
   await assert.rejects(prepareMaeBuildSupport({ root, dataDir: join(dir, 'data'), repositories: [MAE_BUILD_REPOSITORIES[0].url], clone: cloneFixture }), /符号链接/);

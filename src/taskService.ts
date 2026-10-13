@@ -2495,9 +2495,9 @@ export class TaskService {
       environment.MFC_MAE_BASELINE = task.summary.baseline ?? "";
       const sandbox = this.prepareHostGitSandbox(this.options.gitCredential?.(task.summary.luban_account));
       try {
-        await prepareMaeBuildSupport({ root, dataDir: this.options.dataDir, repositories: [repository], log: this.options.log, user: this.options.isolation?.user,
+        await prepareMaeBuildSupport({ root, workspace: task.cwd, dataDir: this.options.dataDir, repositories: [repository], log: this.options.log, user: this.options.isolation?.user,
           clone: async (url, target, ref) => { await this.cloneRepo(dirname(target), sandbox, undefined, url, ref, basename(target), true, true); } });
-        volumes = [...volumes, ...maeBuildVolumes(root)];
+        volumes = [...volumes, ...maeBuildVolumes(root, task.cwd)];
       } catch (error) { environment.MFC_MAE_BUILD_ERROR = String(error); this.options.log?.(`[mae-build] ${task.summary.id} 构建资源未就绪: ${String(error)}`); }
       finally { this.cleanupHostGitCredential(sandbox); }
     }

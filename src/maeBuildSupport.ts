@@ -31,6 +31,8 @@ const preparing = new Map<string, Promise<void>>();
 /** 同一任务只解析一次 master 并固定 SHA；重建容器不更新辅助仓。 */
 export async function prepareMaeBuildSupport(input: {
   root: string; dataDir: string; repositories: readonly string[]; user?: string;
+  /** 已由任务以可写方式挂载的工作仓，不作为只读辅助仓准备或固定版本。 */
+  workspace?: string;
   clone: (url: string, target: string, ref: string) => Promise<void>;
   log?: (message: string) => void;
 }): Promise<boolean> {
@@ -50,6 +52,10 @@ export async function prepareMaeBuildSupport(input: {
       const pinned = existsSync(ledger) ? JSON.parse(readFileSync(ledger, "utf8")) as Record<string, string> : {};
       for (const repo of MAE_BUILD_REPOSITORIES) {
         const target = join(root, repo.name);
+        if (input.workspace && resolve(target) === resolve(input.workspace)) {
+          delete pinned[repo.name];
+          continue;
+        }
         if (!existsSync(target)) {
           if (pinned[repo.name]) throw new Error(`已固定的 MAE 辅助仓缺失: ${repo.name}；请恢复该任务构建资源`);
           input.log?.(`[mae-build] 准备辅助仓 ${repo.name} (${repo.ref})`);
@@ -97,8 +103,10 @@ export async function prepareMaeBuildSupport(input: {
   return true;
 }
 
-export function maeBuildVolumes(root: string): string[] {
-  return [...MAE_BUILD_REPOSITORIES.map((repo) => `${join(root, repo.name)}:${join(root, repo.name)}:ro`),
+export function maeBuildVolumes(root: string, workspace?: string): string[] {
+  return [...MAE_BUILD_REPOSITORIES
+    .filter((repo) => !workspace || resolve(root, repo.name) !== resolve(workspace))
+    .map((repo) => `${join(root, repo.name)}:${join(root, repo.name)}:ro`),
     `${join(root, "MAEServiceBuildCache")}:${join(root, "MAEServiceBuildCache")}:rw`];
 }
 
