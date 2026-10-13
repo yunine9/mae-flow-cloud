@@ -264,7 +264,7 @@ export const ISSUE_DELIVERY_STATUSES = [
 ] as const;
 
 export interface IssueDeliveryBreakdown {
-  /** 问题总数:不含已取消(已取消只进档案,与需求侧"已取消仅保留在档案"同口径)。 */
+  /** 问题总数:不含已取消(已取消在团队DTS整页不展示,2026-10-13)。 */
   total: number;
   /** 处理中:再剔除已闭环(archived)。 */
   active: number;
