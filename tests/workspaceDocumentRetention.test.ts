@@ -6,6 +6,32 @@ import { join } from "node:path";
 import { TaskService } from "../src/taskService.ts";
 import { listArtifactsAsync, readArtifactAsync, bundleArtifactDocuments } from "../src/artifacts.ts";
 
+test("失败需求超过保留期，清扫和服务重启都保留恢复现场", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-failed-retention-")), workspace = join(dataDir, "task-1"), cwd = join(workspace, "orders");
+  mkdirSync(join(cwd, ".git"), { recursive: true });
+  mkdirSync(join(workspace, "pi-agent"));
+  writeFileSync(join(cwd, "pending.cpp"), "还未推送的修改");
+  writeFileSync(join(workspace, "pi-agent", "session.jsonl"), "恢复所需会话");
+  writeFileSync(join(workspace, "task.json"), JSON.stringify({ cwd, summary: {
+    id: "task-1", ticket: "REQ1", requirement: "待恢复需求", status: "failed", workspace,
+    repo_url: "https://example.test/orders.git", created_at: "2026-08-01T00:00:00Z", completed_at: "2026-08-02T00:00:00Z",
+  } }));
+  const options = { dataDir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0,
+    host: { kernelRoot: join(dataDir, "no-kernel") }, workspaceRetentionDays: 14 };
+  const services: TaskService[] = [];
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const service = new TaskService(options); services.push(service);
+      assert.equal(service.recover().restored, 1);
+      assert.equal(service.reclaimIdleWorkspaces(Date.parse("2026-10-13T00:00:00Z")).reclaimed, 0);
+      assert.equal(service.get("task-1")!.status, "failed");
+      assert.equal(service.get("task-1")!.workspace_reclaimed_at, undefined);
+      assert.equal(readFileSync(join(cwd, "pending.cpp"), "utf8"), "还未推送的修改");
+      assert.equal(readFileSync(join(workspace, "pi-agent", "session.jsonl"), "utf8"), "恢复所需会话");
+    }
+  } finally { for (const service of services) await service.shutdown(); rmSync(dataDir, { recursive: true, force: true }); }
+});
+
 test("归档需求回收代码后及服务重启后，原任务仍可列出、阅读和下载文稿，需求原文与修订不丢失", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-archived-documents-")), workspace = join(dataDir, "task-1"), cwd = join(workspace, "orders");
   mkdirSync(join(cwd, ".git"), { recursive: true });

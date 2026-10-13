@@ -106,14 +106,14 @@ test("还等着人或等着流水线的单,现场不碰", () => {
   // await_merge:MR 建了等人合入,现场可能还要看;
   // verifying:流水线还在跑。两个都不是"这单办完了"。
   for (const status of ["await_merge", "verifying", "waiting_for_human",
-                        "running", "paused", "queued"]) {
+                        "running", "paused", "queued", "failed"]) {
     const verdict = judgeReclaim(
       candidate({ status }), { now: NOW, retentionDays: 14 });
     assert.equal(verdict.reclaim, false, `${status} 不该被回收`);
-    assert.match(verdict.reason, /不是真终态/);
+    assert.match(verdict.reason, /不可自动回收/);
   }
-  // failed / canceled 是真终态,一样回收。
-  for (const status of ["failed", "canceled"]) {
+  // 明确取消的任务可以回收，失败任务必须留出恢复机会。
+  for (const status of ["canceled"]) {
     assert.equal(judgeReclaim(candidate({ status }),
       { now: NOW, retentionDays: 14 }).reclaim, true);
   }

@@ -1,15 +1,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { consumptionFixture, enableComponentHints } from "./componentConsumptionFixture.ts";
 import { ComponentKnowledgeConsumption } from "../src/componentKnowledgeConsumption.ts";
 import { componentGovernance } from "../src/componentKnowledgeGovernance.ts";
-import { readComponentPolicies, saveComponentPolicy, componentObservations, addComponentFeedback } from "../src/componentKnowledgePolicy.ts";
+import { readComponentPolicies, saveComponentPolicy, componentObservations, addComponentFeedback, recordComponentObservations, componentFeedback, applyComponentExemptions } from "../src/componentKnowledgePolicy.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { componentKnowledgeRoute } from "../src/componentKnowledgeRoutes.ts";
 
 const consumer = (f: ReturnType<typeof consumptionFixture>) => new ComponentKnowledgeConsumption({ dataDir: f.data, cwd: f.cwd, context: () => f.context, languages: () => ["cpp"], baseline: () => "main" });
+
+test("超过旧数量上限后，人工误报判断、命中依据和策略历史仍在", async () => {
+  const f = consumptionFixture();
+  try {
+    f.publish(); enableComponentHints(f);
+    const c = consumer(f), report = await c.check({ trigger: "sample" });
+    const observation = componentObservations(f.data)[0];
+    assert.ok(observation);
+    const root = join(f.data, "component-governance");
+    const input = { item_id: observation.rule_id, source_digest: observation.source_digest, observation_id: observation.id, kind: "false_positive", reason: "这里是已确认的底层实现" };
+    const original = addComponentFeedback(f.data, input, "reviewer");
+    // 模拟已有历史数据到达旧阈值，再通过真实写入口增加一条。
+    writeFileSync(join(root, "observations.json"), JSON.stringify([observation, ...Array.from({ length: 1999 }, (_, n) => ({ ...observation, id: `old-${n}`, path: `old-${n}.cpp` }))]));
+    recordComponentObservations(f.data, observation.repository, { ...report, findings: [{ ...report.findings[0], path: "new.cpp" }] });
+    assert.equal(componentObservations(f.data).length, 2001);
+    assert.ok(componentObservations(f.data).some(item => item.id === observation.id));
+    writeFileSync(join(root, "feedback.json"), JSON.stringify([original, ...Array.from({ length: 1999 }, (_, n) => ({ ...original, id: `feedback-${n}`, observation_id: undefined, kind: "quality_ok", operator: `person-${n}` }))]));
+    addComponentFeedback(f.data, { ...input, observation_id: undefined, kind: "quality_ok" }, "new-reviewer");
+    assert.equal(componentFeedback(f.data).length, 2001);
+    const checked = { ...report, findings: report.findings.map(finding => ({ ...finding })) };
+    applyComponentExemptions(f.data, observation.repository, checked);
+    assert.equal(checked.findings[0].exempt_reason, input.reason, "新反馈不能使已确认的误报再次提示");
+    addComponentFeedback(f.data, { ...input, kind: "useful", reason: "重新确认这次需要提示" }, "reviewer");
+    const history = JSON.parse(readFileSync(join(root, "policy-history.json"), "utf8"));
+    writeFileSync(join(root, "policy-history.json"), JSON.stringify(Array.from({ length: 1000 }, (_, n) => ({ ...history[0], reason: `历史判断 ${n}` }))));
+    policy(f, c.catalog().rules[0], "off");
+    const stored = JSON.parse(readFileSync(join(root, "policy-history.json"), "utf8"));
+    assert.equal(stored.length, 1001);
+    assert.equal(stored[0].reason, "历史判断 0");
+  } finally { f.cleanup(); }
+});
 function policy(f: ReturnType<typeof consumptionFixture>, item: { id: string; source_digest: string }, level: string, scope: string[] = []) {
   return saveComponentPolicy(f.data, item.id, item.source_digest, { revision: readComponentPolicies(f.data).revision, source_digest: item.source_digest, level, scope, owner: "线程池负责人", reason: "已核对实际使用边界" }, "reviewer");
 }

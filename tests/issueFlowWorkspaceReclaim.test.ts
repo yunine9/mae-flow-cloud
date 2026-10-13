@@ -111,7 +111,11 @@ test("过期终态会话:重货被清,台账一个字节不少", () => {
   });
 
   assert.equal(summary.reclaimed, 1);
-  assert.ok(summary.freed > 2048, `应释放出 local-logs 那 2KB,实际 ${summary.freed}`);
+  assert.ok(summary.freed > 0, "临时运行目录应被清理");
+  assert.equal(readFileSync(join(root, "pipeline", "mr-42", "build.log"), "utf8"), "BUILD FAILURE");
+  assert.equal(readFileSync(join(root, "local-logs", "网管A", "alarm.log"), "utf8"), "x".repeat(2048));
+  assert.ok(existsSync(join(root, "repo", "order-service", "pom.xml")), "代码由遵守回收开关的服务入口处理");
+  assert.ok(existsSync(join(root, "ref", "legacy-repo", "README.md")), "未知旧布局材料默认保留");
   // 重货点名清掉。
   for (const name of ISSUE_RECLAIM_HEAVY) {
     assert.equal(existsSync(join(root, name)), false, `${name} 是重货,该清`);
@@ -138,7 +142,7 @@ test("过期终态会话:重货被清,台账一个字节不少", () => {
 
 test("非终态一概不碰:running/waiting_user/idle/suspended/queued 全样", () => {
   for (const status of ["running", "waiting_user", "idle", "suspended",
-                        "queued"]) {
+                        "queued", "failed"]) {
     const dataDir = newDataDir();
     const root = sessionRoot(dataDir, "issue-1", { status });
     const before = readdirSync(root).sort();
@@ -197,7 +201,8 @@ test("单会话 issue.json 读爆,不影响其余会话回收", () => {
 
   assert.equal(summary.failed, 1, "坏档会话计一次失败");
   assert.equal(summary.reclaimed, 1, "好会话照常回收");
-  assert.equal(existsSync(join(good, "repo")), false);
+  assert.equal(existsSync(join(good, "pi-agent")), false);
+  assert.ok(existsSync(join(good, "repo")));
   assert.ok(existsSync(join(good, "issue.json")));
   assert.ok(existsSync(join(bad, "repo", "order-service", "pom.xml")),
     "坏档会话一个字节都不许动");
@@ -252,12 +257,12 @@ test("判据:保留期 0 永不、没有终态时间不下手、取消路退到 
   assert.equal(off.skip, "retention_off");
 
   const ageless = judgeIssueReclaim(
-    { id: "issue-1", status: "failed" },
+    { id: "issue-1", status: "canceled" },
     { now: NOW, retentionDays: 14 });
   assert.equal(ageless.reclaim, false);
   assert.match(ageless.reason, /判不了年纪/);
 
-  // canceled/failed 没有结论时刻,终态落盘就是最后一次 saveState——
+  // canceled 没有结论时刻,终态落盘就是最后一次 saveState——
   // updated_at 即收口锚。
   const canceled = judgeIssueReclaim(
     { id: "issue-1", status: "canceled", updated_at: daysAgo(30) },

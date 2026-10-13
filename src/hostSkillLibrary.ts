@@ -53,8 +53,6 @@ const MAX_SKILL_BYTES = 128 * 1024;
 const MAX_PACKAGE_BYTES = 16 * 1024 * 1024;
 const MAX_FILES = 400;
 const MAX_DEPTH = 8;
-/** 版本痕不设上限会无限吃盘;超过后修剪最老的(操作留痕永不修剪)。 */
-const MAX_VERSIONS_PER_SKILL = 20;
 const APPROVAL_BUDGET_MS = 60_000;
 
 const LIVE_DIR = "skills";
@@ -434,7 +432,7 @@ export function listSkillVersions(
     right.version_id.localeCompare(left.version_id));
 }
 
-/** 归档当前生效版本并返回版本痕;超出上限修剪最老的归档。 */
+/** 归档当前生效版本；历史任务可能仍引用它，不能按版本数量删除。 */
 function archiveLive(
   dataDir: string,
   directory: string,
@@ -468,12 +466,6 @@ function archiveLive(
   writeFileSync(
     join(versionRoot, `${versionId}.json`), JSON.stringify(record),
     { mode: 0o644 });
-  const all = listSkillVersions(dataDir, directory);
-  for (const stale of all.slice(MAX_VERSIONS_PER_SKILL)) {
-    rmSync(join(versionRoot, stale.version_id),
-      { recursive: true, force: true });
-    rmSync(join(versionRoot, `${stale.version_id}.json`), { force: true });
-  }
   return record;
 }
 

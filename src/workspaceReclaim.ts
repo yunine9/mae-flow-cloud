@@ -30,9 +30,9 @@ export const KERNEL_STATE_SNAPSHOT = "kernel-state.reclaimed.json";
 export const ARCHIVED_DOCUMENTS_DIR = "archived-documents";
 const TEMPORARY_RUNTIME_DIRS = ["pi-agent", "requirement-review-agent"];
 
-/** 只有真终态才回收:还等着人或等着流水线的单,现场可能还要看。 */
+/** 失败任务仍可恢复，保留代码和会话；只有完成或明确取消才自动回收。 */
 export const RECLAIMABLE_STATUS: readonly string[] = [
-  "completed", "failed", "canceled",
+  "completed", "canceled",
 ];
 
 export interface ReclaimCandidate {
@@ -78,7 +78,7 @@ export function judgeReclaim(
   if (!RECLAIMABLE_STATUS.includes(task.status)) {
     return {
       reclaim: false,
-      reason: `状态 ${task.status} 不是真终态(还等着人或等着流水线)`,
+      reason: `状态 ${task.status} 不可自动回收(可能恢复、还等着人或流水线)`,
     };
   }
   if (options.busy) {
