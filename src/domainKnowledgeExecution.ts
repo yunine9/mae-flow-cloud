@@ -29,12 +29,13 @@ export const DOMAIN_EXECUTION_INSTRUCTIONS = `# 平台研究执行方式
 - Skill 引用与模板用 extraction_skill 读取；源码用 component_source，按返回的续读位置继续分页，每个仓分别搜索。需要跨仓构建依赖候选时用 knowledge_structure 的 include_dependencies:true，再读真实调用核实。
 - 本地规划文件映射为 knowledge_work save_document/read_document 的完整过程文稿；文稿映射为 knowledge_draft。target_id 表示归档仓，path 是该仓内的相对路径。
 - 先 save_document 保存完整规划，再 knowledge_work plan 登记全部 document_ids 与 work_document_id。漏排的必交文稿会阻止完成；移除旧编号必须逐项提供 exclusions 原因。
-- 主会话通过 knowledge_work schedule 登记步骤。每篇的 expected_document_ids 指定必须交付的文稿，review.instructions 指定独立只读评审要求。run 指定 id 执行一步，省略 id 按依赖执行，采用可靠文稿方法时默认并发3个子会话，concurrency 可选1至4；写入同一文稿的步骤串行，未知写入范围的步骤串行，单项失败不丢失其他成果。保存计划本身不会启动执行。
-- 有 review 的步骤由平台保存写作候选、启动独立评审，退回后携带具体意见修订，最多三轮。只读评审用 knowledge_draft read 回读全部预定文稿，并回查原始证据；用 knowledge_work_result 的 review:{pass,feedback} 提交判断，不能只说工具执行成功。通过时也说明核对范围，退回时说明错误位置、依据和需要修改的内容。
+- 主会话通过 knowledge_work schedule 登记步骤。expected_document_ids 指知识文稿编号；step.review.instructions 是平台另启会话评审这些知识文稿的配置。只读步骤有明确的已有知识文稿编号时也可使用此配置，复核中不改写正文。run 指定 id 执行一步，省略 id 按依赖执行，采用可靠文稿方法时默认并发3个子会话，concurrency 可选1至4；写入同一文稿的步骤串行，未知写入范围的步骤串行，单项失败不丢失其他成果。保存计划本身不会启动执行。
+- 只读调查或规划核查不交付知识文稿，登记时省略 expected_document_ids 和 step.review。规划核查的判断放在 knowledge_work_result.review:{pass,feedback}，document_ids=[]；current-plan 属于过程文稿，可通过 work_document_ids 引用。结果中的 review 是本次判断，不是再启动一次自动评审的配置。核查未通过或遇到来源阻碍时提交 pass=false 及具体反馈，由主会话安排后续。
+- 带 step.review 的步骤先提交知识文稿候选或已有文稿编号，再由平台启动独立评审，退回后携带具体意见接续，最多三轮。reviewing=true 的评审会话用 knowledge_draft read 回读全部预定文稿及原始证据，通过 knowledge_work_result.review:{pass,feedback} 提交判断。通过时说明核对范围，退回时说明错误位置、依据和需要修改的内容；保存成功不代表质量通过。
 - 含 PlantUML 的文稿保存后，用 knowledge_diagram_check 查看实际渲染诊断，修正 invalid 后重新保存并校验。独立评审也查看当前版本的图诊断，再核对图中业务关系；valid 只代表语法可渲染，total=0 不代表满足模板的图要求。unavailable 表示运行条件不足：写作者仍提交已保存候选，平台保留该候选并停止本项，主会话继续其他独立项后说明具体阻碍。运行条件恢复后按原编号接续，无需重写候选。
 - list/read_plan/knowledge_draft read 无 id 均分页，默认30项、最多100项；read 无 id 只提供有界工作摘要。完整过程文稿与单项结果按 id 读取，不能将全仓源码和历史结果不断追加到主会话。子步骤 save_document 编号采用 步骤编号--名称；证据与缺口落盘，下一步骤和恢复后回读原始依据。
-- 独立步骤只处理 step.instructions；它不能安排其他步骤。写作提交候选后，平台负责启动所登记的评审。需要额外研究时将具体缺口交回主会话。
-- 中断后先读取现有工作和文稿，复用已完成结果。主会话只有在本轮计划全部落实后才提交 complete；有无法推进的实际阻碍则保存 paused，明确缺口和已有成果。按照 Skill 自动连续生成时，正常文稿之间无需人工确认。
+- 独立步骤只处理 step.instructions；它不能安排其他步骤或提交 status=paused。正常结果省略 status，具体缺口写入 summary/data，核查结论使用 review。结果保存后结束本会话；宿主报告无法继续时保留错误与已有成果并结束本次回复，交回主会话，不反复提交相同被拒参数或补造文稿。
+- 中断后先读取现有工作和文稿，复用已完成结果，未完成步骤按原编号接续。修复执行配置不要求重建计划、更换方法版本或重做已完成调查。主会话只有在本轮计划全部落实后才提交 complete；有无法推进的实际阻碍则保存 paused，明确缺口和已有成果。按照 Skill 自动连续生成时，正常文稿之间无需人工确认。
 - 收到人工答复时以 human_replies 原话为准，continued 仅是接续次数。讨论只读，修订和更新遵守用户限定范围；人工审查和归档沿用平台入口。`;
 
 /** 默认上下文仅携带索引；正文、候选 data 和历史通过单项读取取得。 */

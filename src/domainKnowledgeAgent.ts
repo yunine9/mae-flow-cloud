@@ -201,6 +201,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     const agentDir = join(sessionRoot, "agent"); mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
     let result: SkillWorkResult | undefined;
+    let session: CloudSession | undefined;
+    let rejectedResults = 0;
+    let submissionFailure: IncompleteDomainResearch | undefined;
     const reviewedDocuments = new Map<string, string>();
     const reviewedDiagrams = new Map<string, string>();
     const diagramTool = defineTool({ name: "knowledge_diagram_check", label: "校验文稿 PlantUML",
@@ -218,8 +221,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       },
     });
     const resultTool = defineTool({ name: "knowledge_work_result", label: "保存执行结果", executionMode: "sequential",
-      description: "保存本次执行的结论、文档编号与自由格式数据。主会话 status=complete 表示本轮结束，paused 表示保留进度等待用户接续；独立步骤只提交自身结果。",
-      parameters: Type.Object({ summary: Type.String(), document_ids: Type.Array(Type.String()), work_document_ids: Type.Optional(Type.Array(Type.String())), data: Type.Optional(Type.Unknown()), status: Type.Optional(Type.Union([Type.Literal("complete"), Type.Literal("paused")])),
+      description: step ? "保存本步骤的结论、文档编号与自由格式数据；省略 status 或填写 complete。只读核查没有知识文稿时 document_ids 填 []，可用 review:{pass,feedback} 返回通过或不通过的核查结论。需要补充或调整的内容写入结论，交由主会话处理；子步骤不能暂停整项研究。"
+        : "保存本轮执行的结论、文档编号与自由格式数据。status=complete 表示本轮结束，paused 表示保留进度等待用户接续。",
+      parameters: Type.Object({ summary: Type.String(), document_ids: Type.Array(Type.String()), work_document_ids: Type.Optional(Type.Array(Type.String())), data: Type.Optional(Type.Unknown()), status: Type.Optional(step ? Type.Literal("complete") : Type.Union([Type.Literal("complete"), Type.Literal("paused")])),
         review: Type.Optional(Type.Object({ pass: Type.Boolean(), feedback: Type.String() })) }),
       execute: async (_id: string, args: SkillWorkResult) => {
         try {
@@ -229,7 +233,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           if (!args.summary.trim() || args.document_ids.some(id => !input.read().some(d => d.id === id) && !input.turn.proposals.some(p => p.document.id === id))) throw new Error("请填写执行结论并引用已有文档");
           if (args.work_document_ids?.some(id => !work.state.documents?.some(document => document.id === id))) throw new Error("请引用已经保存的过程文稿");
           scanForSecrets("Skill 执行结果", Buffer.from(JSON.stringify(args)));
-          if (step && args.status === "paused") throw new Error("请将待处理问题交回主会话，由主会话保存暂停结果");
+          if (step && args.status === "paused") throw new Error("子步骤请省略 status 或填写 complete，将待处理问题写入 summary/data；核查未通过时用 review:{pass:false,feedback} 返回结论，由主会话决定后续处理");
           const next = { ...args, status: args.status ?? "complete" };
           if (!step && input.turn.mode === "extract" && next.status === "complete" && !input.read().length) throw new Error("尚未保存任何知识文档，请保存产物或说明暂停原因");
           if (reviewing) {
@@ -351,15 +355,31 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     } };
     let activity = 0;
     const tools = [...baseTools, guardedDraft, diagramTool, workTool, resultTool].map(tool => ({ ...tool,
-      execute: async (...args: Parameters<typeof tool.execute>) => { signal.throwIfAborted(); const response = await (tool.execute as Function)(...args); if (!response.isError) activity++; return response; },
+      execute: async (...args: Parameters<typeof tool.execute>) => { signal.throwIfAborted(); if (submissionFailure) return failure(submissionFailure); const response = await (tool.execute as Function)(...args); if (!response.isError) activity++; return response; },
     }));
-    const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 明确结束或暂停。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。需要用户审阅的规划、清单和中间文稿，用 knowledge_work 的 save_document 保存完整 Markdown 正文，不能只说文稿已生成或把全文仅放在普通回复、data 里。需要用户确认或补充时，主会话保存 status=paused，summary 说明需要回答什么、答复后做什么，并通过 work_document_ids 或 document_ids 引用待审阅内容。收到答复后读取 human_replies 原话；continued 只是接续次数，是否确认以 human_replies 原话为准，不能把修改意见当成批准。";
-    const session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}-${step?.id ?? "main"}${reviewing ? `-review-${step!.review_attempts}` : ""}`, workspace: sessionRoot, agentDir,
+    const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 提交本会话结果，只有主会话可以暂停整项研究。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。需要用户审阅的规划、清单和中间文稿，由有写入权限的会话用 knowledge_work 的 save_document 保存完整 Markdown 正文，不能只说文稿已生成或把全文仅放在普通回复、data 里。需要用户确认或补充时，主会话保存 status=paused，summary 说明需要回答什么、答复后做什么，并通过 work_document_ids 或 document_ids 引用待审阅内容。收到答复后读取 human_replies 原话；continued 只是接续次数，是否确认以 human_replies 原话为准，不能把修改意见当成批准。";
+    session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}-${step?.id ?? "main"}${reviewing ? `-review-${step!.review_attempts}` : ""}`, workspace: sessionRoot, agentDir,
       resumeSession: true, excludeAgentFiles: true, provider: model.provider, model: model.model,
       // 来源研究方法随固定 Skill 包读取；系统提示只保留平台执行约定。
       additionalSystemInstructions: [DOMAIN_EXECUTION_INSTRUCTIONS],
       allowedTools: tools.map(t => t.name), extraTools: tools, allowHumanQuestions: false, allowSubagents: false,
       eventLog: new EventLog(join(sessionRoot, "events.jsonl"), event => {
+        // 参数校验可能在工具 execute 前拒绝调用，因此从驱动结果统一计数。
+        // 只限制反复提交被拒的子会话；研究耗时、正常读取不影响这个计数。
+        if (step && !result && !submissionFailure && !signal.aborted && event.kind === "tool_finished"
+            && event.payload.name === "knowledge_work_result") {
+          let rejected = event.payload.is_error === true;
+          // Pi 将正常返回的工具调用记为非异常；本工具的业务拒绝仍在 JSON.error 中。
+          if (!rejected) {
+            try { rejected = typeof JSON.parse(String(event.payload.result))?.error === "string"; }
+            catch { /* 非 JSON 的参数校验错误由 is_error 表示。 */ }
+          }
+          if (rejected && ++rejectedResults >= 3) {
+            submissionFailure = new IncompleteDomainResearch(`步骤 ${step.id} 连续 3 次提交结果被拒绝，已停止重复提交并交回主会话；已有过程和草稿保留。最后原因：${String(event.payload.result ?? "结果未被接受").slice(0, 2000)}`);
+            // abort 等待当前工具返回；此处不能 await，防止等待自身结束。
+            void session?.abort().catch(() => undefined);
+          }
+        }
         if (event.kind === "assistant_message") observe({ tool: "research_note", step_id: step?.id, review: reviewing, preview: evidencePreview(String(event.payload.text ?? "")) });
         if (event.kind === "session_ended" && event.payload.reason === "failed") observe({ tool: "research_error", step_id: step?.id, review: reviewing,
           preview: evidencePreview(String(event.payload.detail ?? "会话失败")) });
@@ -368,22 +388,27 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       gate: new GateService({ workspace: sessionRoot, cwd: sessionRoot, failClosed: true }), humanGate: new HumanGate(join(sessionRoot, "waiting.json")),
       currentStep: () => step?.title ?? "执行领域知识 Skill", compactAnchor: () => JSON.stringify({ ...context, documents: pageRows(input.read().filter(document => !step || step.expected_document_ids?.includes(document.id) || step.candidate?.document_ids.includes(document.id)).map(documentSummary), 0, 30, "items"),
         skill: { name: skill.name, digest: skill.digest, execution: executionContract, instruction: "通过 extraction_skill 先回读 SKILL.md，再按当前职责读取本步骤所需的方法、来源规则和模板" }, step: step && { ...workStepSummary(step), instructions: step.instructions, review: step.review }, reviewing,
-        work: workOverview(work.state) }),
+        readonly, work: workOverview(work.state) }),
     });
-    const abort = () => { void session.abort().catch(() => undefined); };
+    const abort = () => { void session!.abort().catch(() => undefined); };
     signal.addEventListener("abort", abort, { once: true });
     try {
       signal.throwIfAborted(); input.update({ stage: step?.title ?? "执行领域知识 Skill" });
       let outcome = await session.start(instruction + "\n" + domainSkillMission(skill, { ...context, documents: pageRows(input.read().filter(document => !step || step.expected_document_ids?.includes(document.id) || step.candidate?.document_ids.includes(document.id)).map(documentSummary), 0, 30, "items"), step: step && { ...workStepSummary(step), instructions: step.instructions, review: step.review }, readonly, reviewing, work: workOverview(work.state) }));
       let idle = 0, observed = 0;
-      while (!result && outcome.status === "turn_finished") {
+      while (!result && !submissionFailure && outcome.status === "turn_finished") {
         signal.throwIfAborted(); idle = activity === observed ? idle + 1 : 0; observed = activity;
         if (idle >= 3) break;
-        outcome = await session.startResume("执行结果尚未保存。请继续按 Skill 处理；完成后调用 knowledge_work_result，需要用户接续时保存 paused 结果。不要把普通回复当作已完成。");
+        outcome = await session.startResume(step
+          ? "本步骤结果尚未保存。请继续按 Skill 处理并调用 knowledge_work_result，省略 status 或填写 complete。只读核查无知识文稿时 document_ids 填 []；核查未通过也应保存 review:{pass:false,feedback}。需要补充或调整的内容写入结论交回主会话，不要提交 paused 或用普通回复代替保存。"
+          : "执行结果尚未保存。请继续按 Skill 处理；完成后调用 knowledge_work_result，需要用户接续时保存 paused 结果。不要把普通回复当作已完成。");
       }
       signal.throwIfAborted();
+      if (submissionFailure) throw submissionFailure;
       if (!result) throw new IncompleteDomainResearch(`Skill 未保存执行结果，过程和草稿已保留：${outcome.detail ?? outcome.reason ?? outcome.status}`);
       writeFileSync(join(sessionRoot, "result.json"), JSON.stringify(result), { mode: 0o600 }); return result;
+    } catch (error) {
+      throw submissionFailure ?? error;
     } finally { signal.removeEventListener("abort", abort); session.dispose(); }
   };
   let totalExpired = false;

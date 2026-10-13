@@ -48,6 +48,13 @@ export interface SkillWorkCallbacks {
 }
 const REVIEW_ATTEMPTS = 3;
 const documentIds = (step: SkillWorkStep, result: SkillWorkResult) => [...new Set([...(step.expected_document_ids ?? []), ...result.document_ids])].sort();
+function normalizeReadonlyReview(step: Pick<SkillWorkStep, "instructions" | "readonly" | "expected_document_ids" | "review">) {
+  // 未指定待评知识文稿的只读核查直接返回结论，不再启动一层文稿评审；结果中的 review 仍保留。
+  if (step.readonly === true && !step.expected_document_ids?.length && step.review) {
+    step.instructions += `\n\n补充核查要求：\n${step.review.instructions}`;
+    delete step.review;
+  }
+}
 /** 只保存 Skill 自己安排的工作；不解释模块、阶段或文档类型。 */
 export class DomainSkillWork {
   readonly state: { version: 1; skill: string; steps: SkillWorkStep[]; documents?: SkillWorkDocument[]; plan?: SkillDocumentPlan; result?: SkillWorkResult; previous_results?: SkillWorkResult[]; continued?: number };
@@ -56,6 +63,7 @@ export class DomainSkillWork {
     this.state = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { version: 1, skill, steps: [] };
     if (this.state.version !== 1) throw new Error("不支持的 Skill 执行记录版本");
     for (const step of this.state.steps) {
+      normalizeReadonlyReview(step);
       if (step.status === "running") { step.status = "failed"; step.error = step.error ? `${step.error}\n执行中断，可按原编号接续` : "执行中断，可按原编号接续"; }
       // 只有用户明确接续才补充有限预算，进程重启保留已经使用的次数。
       if (continued > (this.state.continued ?? 0)) {
@@ -103,12 +111,14 @@ export class DomainSkillWork {
     if (!steps.length || steps.length > 100 || this.state.steps.length + steps.length > 5000) throw new Error("请分批保存工作步骤，单批最多 100 项，总计最多 5000 项");
     scanForSecrets("Skill 工作步骤", Buffer.from(JSON.stringify(steps)));
     const next = structuredClone(this.state.steps);
-    for (const step of steps) {
+    for (const input of steps) {
+      const step = structuredClone(input);
       if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,159}$/.test(step.id) || !step.title.trim() || !step.instructions.trim() || typeof step.readonly !== "boolean") throw new Error("步骤需要有效编号、标题、执行说明和读写权限");
       if (step.expected_document_ids !== undefined && (!Array.isArray(step.expected_document_ids) || !step.expected_document_ids.length
           || step.expected_document_ids.length > 5000 || new Set(step.expected_document_ids).size !== step.expected_document_ids.length
           || step.expected_document_ids.some(id => !validDocumentId(id)))) throw new Error("预定文稿需要有效且不重复的文稿编号");
       if (step.review !== undefined && (typeof step.review?.instructions !== "string" || !step.review.instructions.trim())) throw new Error("独立评审需要具体的评审说明");
+      normalizeReadonlyReview(step);
       const old = next.find(s => s.id === step.id);
       if (old) {
         if (["title", "instructions", "depends_on", "readonly", "expected_document_ids", "review"].some(k => JSON.stringify(old[k as keyof SkillWorkStep]) !== JSON.stringify(step[k as keyof typeof step]))) throw new Error("已有步骤不能改写，请使用新编号保存修订工作");
@@ -148,11 +158,13 @@ export class DomainSkillWork {
     if (!step || ["running", "discarded"].includes(step.status)) throw new Error("步骤不存在、已放弃或正在执行");
     signal.throwIfAborted();
     if (step.review && !callbacks) throw new Error("此步骤需要独立评审与文稿版本核对");
+    const validatesDocuments = !step.readonly || !!step.review;
+    const revisesDocuments = !!step.review || validatesDocuments && !!callbacks?.validate;
     if (step.status === "done") {
       const currentFingerprint = step.review && step.result ? callbacks!.fingerprint(documentIds(step, step.result)) : undefined;
       const reusable = !step.review || step.result?.review?.pass && step.reviewed_fingerprint === currentFingerprint;
       let validation: SkillWorkReview | undefined;
-      try { validation = reusable ? await callbacks?.validate?.(structuredClone(step), structuredClone(step.result!)) : undefined; }
+      try { validation = reusable && validatesDocuments ? await callbacks?.validate?.(structuredClone(step), structuredClone(step.result!)) : undefined; }
       catch (error) {
         // 已通过版本暂时无法复核时保留评审凭据；环境恢复后可直接复用，不重新消耗预算。
         delete this.state.result;
@@ -181,8 +193,8 @@ export class DomainSkillWork {
       for (;;) {
         signal.throwIfAborted();
         if (step.review && (step.review_attempts ?? 0) - (step.review_budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`独立评审已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未通过；${step.error ?? "请检查文稿和评审记录后接续"}`);
-        if (!step.candidate || step.candidate.review?.pass === false) {
-          if ((step.review || callbacks?.validate) && step.attempts - (step.budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`研究与修订已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未完成；${step.error ?? "请检查已保存的草稿后接续"}`);
+        if (!step.candidate || revisesDocuments && step.candidate.review?.pass === false) {
+          if (revisesDocuments && step.attempts - (step.budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`研究与修订已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未完成；${step.error ?? "请检查已保存的草稿后接续"}`);
           step.attempts++; execution.writing = true;
           const attempt = structuredClone(step); // 把上次候选及退回意见交给修订会话。
           delete step.candidate; delete step.candidate_fingerprint; this.persist();
@@ -200,7 +212,7 @@ export class DomainSkillWork {
           } finally { execution.writing = false; }
         }
         const candidate = step.candidate!;
-        const validation = await callbacks?.validate?.(structuredClone(step), structuredClone(candidate));
+        const validation = validatesDocuments ? await callbacks?.validate?.(structuredClone(step), structuredClone(candidate)) : undefined;
         signal.throwIfAborted();
         if (validation && !validation.pass) {
           candidate.review = validation; step.error = validation.feedback; this.persist(); continue;

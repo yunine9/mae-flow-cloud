@@ -59,6 +59,150 @@ function reviewedFixture() {
   return { dir, file, work, signal: new AbortController().signal };
 }
 
+test("无知识文稿的只读核查不启动自动评审，保留不通过结论且重复登记语义一致", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-readonly-review-")), file = join(dir, "work.json");
+  const extraInstructions = "核查完整规划\n逐项核对事件订阅、定时入口与文稿清单，说明来源缺口。";
+  const definition = { ...step("review-plan"), readonly: true, review: { instructions: extraInstructions } };
+  const normalizedInstructions = `${definition.instructions}\n\n补充核查要求：\n${extraInstructions}`;
+  const verdict: SkillWorkResult = { summary: "规划缺少事件入口", document_ids: [], review: { pass: false, feedback: "请补查订单事件订阅入口" }, data: { pass: "原方法自定义字段" } };
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => "no-documents",
+    validate: async () => assert.fail("只读核查没有需要自动校验的知识文稿"),
+    review: async () => assert.fail("规划结论不能再启动一层知识文稿评审"),
+  };
+  try {
+    let work = new DomainSkillWork(file, "skill");
+    work.schedule([definition]); work.schedule([definition]);
+    assert.equal(work.state.steps.length, 1); assert.equal(work.state.steps[0].review, undefined);
+    assert.equal(work.state.steps[0].instructions, normalizedInstructions, "自动评审字段中的完整核查要求转入当前步骤，重复登记不重复追加");
+    assert.equal(definition.instructions, step("review-plan").instructions, "登记时保留调用方原说明");
+    assert.deepEqual(definition.review, { instructions: extraInstructions }, "登记时不修改调用方对象");
+    const result = await work.run("review-plan", async () => verdict, new AbortController().signal, callbacks);
+    assert.deepEqual(result, verdict); assert.equal(work.state.steps[0].status, "done");
+    work = new DomainSkillWork(file, "skill");
+    work.schedule([definition]);
+    work = new DomainSkillWork(file, "skill");
+    assert.equal(work.state.steps[0].instructions, normalizedInstructions, "多次重启及再次登记原定义后，核查要求只保留一份");
+    assert.deepEqual(await work.run("review-plan", async () => assert.fail("已保存的不通过结论也应直接复用"), new AbortController().signal, callbacks), verdict);
+    assert.equal(work.state.steps[0].attempts, 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("历史只读核查误配置在原编号原依赖恢复，不被已耗尽的文稿预算挡住", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-readonly-recovery-")), file = join(dir, "work.json");
+  const extraInstructions = "核查完整规划\n必须回读订单事件注册与夜间清理入口，分别核对场景清单和排除理由。";
+  const definition = { ...step("review-plan", ["research"]), readonly: true, review: { instructions: extraInstructions } };
+  const normalizedInstructions = `${definition.instructions}\n\n补充核查要求：\n${extraInstructions}`;
+  const original = { version: 1, skill: "fixed-old-skill", continued: 0,
+    steps: [
+      { ...step("research"), readonly: true, status: "done", attempts: 1, result: { summary: "已调查业务入口", document_ids: [], data: { evidence_index: ["repo-1:src/order.ts:1"] } } },
+      { ...definition, status: "failed", attempts: 3, budget_start: 0, review_attempts: 0, error: "独立评审需要至少一份待评审文稿" },
+      { ...reviewedStep("guide"), depends_on: ["review-plan"], status: "pending", attempts: 0 },
+    ],
+    documents: [{ id: "current-plan", title: "完整规划", content: "# 规划\n\n已完成调查，计划生成 guide。" }],
+    plan: { document_ids: ["guide"], work_document_id: "current-plan" },
+  };
+  const verdict: SkillWorkResult = { summary: "原规划范围已核查", document_ids: [], review: { pass: true, feedback: "已对照真实入口与全部计划条目" } };
+  try {
+    writeFileSync(file, JSON.stringify(original));
+    let work = new DomainSkillWork(file, "fixed-old-skill");
+    const persisted = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(persisted.steps[1].review, undefined, "兼容修正立即落盘，不等待重新执行");
+    assert.equal(persisted.steps[1].instructions, normalizedInstructions, "历史 review.instructions 中独有的要求完整保留");
+    assert.equal(persisted.steps[1].attempts, 3); assert.equal(persisted.steps[1].budget_start, 0);
+    assert.equal(persisted.continued, 0, "恢复不冒充一次人工接续或补预算");
+    assert.deepEqual(persisted.steps[0], original.steps[0]); assert.deepEqual(persisted.steps[2], original.steps[2]);
+    work = new DomainSkillWork(file, "fixed-old-skill");
+    work.schedule([definition]); work.schedule([definition]);
+    work = new DomainSkillWork(file, "fixed-old-skill");
+    assert.equal(work.state.steps[1].instructions, normalizedInstructions, "迁移后反复重启和登记原定义不再追加要求");
+    let calls = 0;
+    const result = await work.run("review-plan", async current => {
+      calls++; assert.equal(current.id, "review-plan"); assert.deepEqual(current.depends_on, ["research"]);
+      assert.equal(current.review, undefined);
+      assert.equal(current.instructions, normalizedInstructions, "恢复执行仍收到原步骤及完整补充要求");
+      work.recordCandidate(current.id, verdict);
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).steps[1].candidate, verdict);
+      return verdict;
+    }, new AbortController().signal, {
+      fingerprint: () => "no-documents",
+      validate: async () => assert.fail("历史误配的写作预算不能约束只读核查"),
+      review: async () => assert.fail("不对规划启动知识文稿评审"),
+    });
+    assert.deepEqual(result, verdict); assert.equal(calls, 1);
+    assert.equal(work.state.steps[1].attempts, 4, "保留真实历史次数，只增加当前核查的一次执行");
+    assert.equal(work.state.steps[1].error, undefined);
+    assert.deepEqual(work.state.steps.map(item => item.id), original.steps.map(item => item.id));
+    assert.deepEqual(work.state.steps[0], original.steps[0]); assert.deepEqual(work.state.steps[2], original.steps[2]);
+    assert.deepEqual(work.state.documents, original.documents); assert.deepEqual(work.state.plan, original.plan);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("只读核查提交不通过候选后中断，重启保留结论且不重新调查", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-readonly-candidate-")), file = join(dir, "work.json"), controller = new AbortController();
+  const verdict: SkillWorkResult = { summary: "核查发现缺口", document_ids: [], review: { pass: false, feedback: "计划未覆盖定时入口" } };
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => "no-documents",
+    validate: async () => assert.fail("只读候选不进行文稿校验"),
+    review: async () => assert.fail("不能自动重评只读结论"),
+  };
+  try {
+    let work = new DomainSkillWork(file, "skill");
+    work.schedule([{ ...step("review-plan"), readonly: true, review: { instructions: "核查完整规划" } }]);
+    await assert.rejects(work.run("review-plan", async () => {
+      work.recordCandidate("review-plan", verdict); controller.abort(); return verdict;
+    }, controller.signal, callbacks));
+    assert.deepEqual(work.state.steps[0].candidate, verdict);
+    work = new DomainSkillWork(file, "skill");
+    assert.deepEqual(await work.run("review-plan", async () => assert.fail("已经保存核查候选，不能重复调查"), new AbortController().signal, callbacks), verdict);
+    assert.equal(work.state.steps[0].status, "done"); assert.equal(work.state.steps[0].attempts, 1);
+    assert.deepEqual(new DomainSkillWork(file, "skill").state.steps[0].result, verdict);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("历史自动评审留下的负面候选保持原文与不通过判断，不伪造规划通过", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-readonly-negative-")), file = join(dir, "work.json");
+  const verdict: SkillWorkResult = { summary: "已读取关联文稿", document_ids: ["guide"],
+    review: { pass: false, feedback: "文稿遗漏取消条件，不能通过" } };
+  try {
+    writeFileSync(file, JSON.stringify({ version: 1, skill: "skill", steps: [{ ...step("review-plan"), readonly: true,
+      review: { instructions: "核查规划" }, status: "failed", attempts: 3, review_attempts: 3, candidate: verdict }] }));
+    const work = new DomainSkillWork(file, "skill");
+    const result = await work.run("review-plan", async () => assert.fail("保留已取得的负面依据，交回主会话判断"), new AbortController().signal, {
+      fingerprint: () => "existing-document",
+      validate: async () => assert.fail("不重新校验已解除自动评审配置的只读步骤"),
+      review: async () => assert.fail("不自动重评"),
+    });
+    assert.deepEqual(result, verdict, "不改写结论范围、引用编号或不通过反馈");
+    assert.equal(work.state.steps[0].attempts, 3); assert.equal(work.state.steps[0].review_attempts, 3);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).steps[0].result.review.pass, false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("明确指定知识文稿的只读步骤仍保留独立评审和版本核对", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-readonly-documents-")), file = join(dir, "work.json");
+  let version = "version-1", calls = 0, reviews = 0;
+  const callbacks: SkillWorkCallbacks = {
+    fingerprint: () => version,
+    review: async (_step, value) => {
+      reviews++; assert.equal(value.review, undefined, "首次核查不能代替登记的独立评审");
+      return { pass: true, feedback: "独立读取当前文稿与来源，通过" };
+    },
+  };
+  try {
+    let work = new DomainSkillWork(file, "skill");
+    const definition = { ...reviewedStep("guide"), readonly: true };
+    work.schedule([definition, { ...step("write-without-ids"), review: { instructions: "依据实际候选编号评审" } }]);
+    assert.deepEqual(work.state.steps[0].review, definition.review);
+    assert.ok(work.state.steps[1].review, "可写步骤仍可按实际候选编号启动评审");
+    const result = await work.run("guide", async () => { calls++; return { ...candidate(), review: { pass: true, feedback: "首次核查自报通过" } }; }, new AbortController().signal, callbacks);
+    assert.equal(result.review?.feedback, "独立读取当前文稿与来源，通过"); assert.equal(reviews, 1);
+    work = new DomainSkillWork(file, "skill"); version = "version-2";
+    await work.run("guide", async () => assert.fail("文稿版本变化只需重评已保存候选"), new AbortController().signal, callbacks);
+    assert.equal(calls, 1); assert.equal(reviews, 2); assert.equal(work.state.steps[0].reviewed_fingerprint, version);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("预定文稿不完整时不能提交结果，也不启动评审", async () => {
   const f = reviewedFixture(); let reviews = 0;
   try {

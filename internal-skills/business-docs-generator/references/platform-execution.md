@@ -118,9 +118,50 @@ summary/data 随步骤结果持久保存；只读单元不能调用 save_documen
 
 ## 规划核查
 
-主会话安排 readonly=true 的独立规划核查，instructions 指向 current-plan、prompts/plan.md、prompts/plan-template.md 与调查结果索引，要求读取 read_plan 全部清单/排除分页、knowledge_diagram_check({work_document_id:"current-plan"}) 当前报告及真实入口，核对正文对应和全部适用产物。大范围可分仓或业务域核查，汇总全部范围结论。返回 document_ids=[] 与 review，summary 写核查范围；不要给这种无知识文稿的步骤配置 expected_document_ids 或自动文稿 review。
+区分两个位置的 review：
 
-普通只读步骤的 done 只表示已提交结果，不等于 review.pass=true。主会话必须读取各项结论并修正遗漏，再安排新的核查编号；没有新证据或修订时不反复重建相同核查。仍有未调查范围或来源失败时不能宣布规划已穷尽。
+| 字段 | 谁填写、何时填写 | 含义 |
+|------|------------------|------|
+| knowledge_work schedule 中的 step.review.instructions | 主会话登记知识文稿步骤时 | 平台在本步提交文稿后另启独立会话，评审指定的知识文稿 |
+| knowledge_work_result.review: {pass, feedback} | 当前核查/评审会话返回结果时 | 本次核查是否通过及具体依据；不会再启动一次评审 |
+
+规划 current-plan 是过程文稿。主会话安排 readonly=true 的独立核查，省略 expected_document_ids 与 step.review；instructions 指向 current-plan、prompts/plan.md、prompts/plan-template.md 与调查结果索引。核查读取 read_plan 全部清单/排除分页、knowledge_diagram_check({work_document_id:"current-plan"}) 当前报告及真实入口，核对正文对应和全部适用产物。大范围可分仓或业务域核查。
+
+下面是一对首次登记与子会话返回的示例。登记前规划已保存、相关调查已完成；有前序依赖时填实际步骤编号。已有核查步骤中断时按原编号 run，不为接续重新登记它。
+
+主会话调用 knowledge_work：
+
+```json
+{
+  "action": "schedule",
+  "steps": [{
+    "id": "review-plan",
+    "title": "独立核查当前文档规划",
+    "instructions": "按 prompts/verify-doc.md 的规划核查部分读取 current-plan、完整 read_plan 清单、当前过程稿图表报告及相关调查索引，回查业务入口与适用资料，判断覆盖是否完整。用 knowledge_work_result 返回 summary、document_ids=[]、work_document_ids=[current-plan] 和 review:{pass,feedback}；具体来源缺口放 data。这里只核查规划，不生成知识文稿。",
+    "depends_on": [],
+    "readonly": true
+  }]
+}
+```
+
+核查子会话调用 knowledge_work_result，反馈内容替换为实际发现：
+
+```json
+{
+  "summary": "规划核查已完成；定时触发场景仍缺少对应文稿。",
+  "document_ids": [],
+  "work_document_ids": ["current-plan"],
+  "review": {
+    "pass": false,
+    "feedback": "在实际入口及调查结果中发现的定时场景尚未对应到规划条目。请按所附原始位置补充场景与文稿清单，再核查受影响范围。"
+  },
+  "data": {"missing_scope": "实际遗漏范围及源码/资料位置"}
+}
+```
+
+pass=false、图校验 invalid/unavailable 或来源缺口都是可以提交的核查结论，不需要生成知识文稿来提交，也不传 status=paused。没有问题时返回 pass=true 并说明实际核查范围。document_ids 保持空数组，过程稿仅放 work_document_ids；已有知识文稿的真正复核则走下一节的知识文稿步骤。
+
+普通只读步骤的 done 只表示已提交结果，不等于结果的 review.pass=true。主会话读取各项结论并处理遗漏；规划实质修订后的新一轮核查使用新编号，中断或执行配置修正则接续原步骤。没有新证据或修订时不反复重建相同核查。仍有未调查范围或来源失败时不能宣布规划已穷尽。
 
 ## 每篇写作与评审
 
@@ -145,7 +186,9 @@ summary/data 随步骤结果持久保存；只读单元不能调用 save_documen
 
 示例中的业务、范围和路径由实际规划替换。instructions 带具体源码范围与待验证问题，不能只写“生成文档”或“核对质量”。依赖填确实需要先完成的步骤编号，编号与说明保存后不再改写。
 
-登记完整清单后 knowledge_work 的 run 操作省略 id，本方法默认 concurrency=3，也可指定 1～4；填 id 则只运行该步骤。只有依赖满足且 expected_document_ids 写入集合不交叉的步骤才能并行，未声明写入范围的可写步骤串行执行。每篇候选保存后，宿主先做真实图表校验，再按 review.instructions 开只读会话；具体错误携带反馈修订，最多自动三轮。图校验 unavailable 保留候选、中断本项且不消耗修订次数，主会话继续其他独立工作后报告阻碍。
+对已经保存的知识文稿作只读复核，也可以登记 readonly=true、expected_document_ids=[实际知识文稿编号] 和 step.review.instructions。该步骤读取并返回已有文稿编号，由平台启动独立评审；反馈需要改稿时交回主会话安排可写步骤，保持当前只读权限。这与不产生知识文稿的规划核查不同，current-plan 不能填入 expected_document_ids。
+
+登记完整清单后 knowledge_work 的 run 操作省略 id，本方法默认 concurrency=3，也可指定 1～4；填 id 则只运行该步骤。只有依赖满足且 expected_document_ids 写入集合不交叉的步骤才能并行，未声明写入范围的可写步骤串行执行。每篇候选保存后，宿主先做真实图表校验，再按 step.review.instructions 开只读会话；具体错误携带反馈修订，最多自动三轮。图校验 unavailable 保留候选、中断本项且不消耗修订次数，主会话继续其他独立工作后报告阻碍。
 
 写作只修改 expected_document_ids 内的文稿。需要修改关联导航或发现新产物时交回主会话登记，不在本篇偷偷改写。需要读取其他步骤正在生成的文稿时等待其完成，并将对方写作步骤列入 depends_on；不能靠碰巧先执行来代替真实依赖。文档类型列表表示阅读层级，不要求把不相关文稿排成串行链。
 
@@ -180,9 +223,9 @@ knowledge_draft save 的 document 包含 id、title、target_id、path、layer�
 
 ## 恢复与完成
 
-恢复时先用 knowledge_work read 取摘要，分页 list/read_plan，按步骤 id 读候选、结果与反馈，再按知识文稿 id 核对正文和版本；需要核对范围时读取 current-plan。done 的通过结果仅在对应正文未变化时复用，run 会重新核对版本。失败步骤在剩余预算内按原编号重试，实质新调查结论或工作说明改变时才创建新编号并记录替代关系。达到三轮上限且无新进展时保留阻碍，不靠换编号重复同一工作。discard 只适用于已有替代安排或确实超出本轮范围的步骤，不能用它消除未通过的必需文稿。
+恢复时先用 knowledge_work read 取摘要，分页 list/read_plan，按步骤 id 读候选、结果与反馈，再按知识文稿 id 核对正文和版本；需要核对范围时读取 current-plan。done 的通过结果仅在对应正文未变化时复用，run 会重新核对版本。失败步骤在剩余预算内按原编号重试，实质新调查结论或工作说明改变时才创建新编号并记录替代关系。执行配置修正仍保留原步骤、依赖、调查和文稿；恢复不要求更换 Skill 版本或重做已完成工作。达到三轮上限且无新进展时保留阻碍，不靠换编号重复同一工作。discard 只适用于已有替代安排或确实超出本轮范围的步骤，不能用它消除未通过的必需文稿。
 
-独立会话不能安排下一步或自行切换任务范围。调查返回明确未核实范围；写作保存已核实内容并在 summary/data 写出具体缺口，由独立评审判断能否通过，不能用候选保存代替完成。主会话在 run 返回后先推进不依赖失败项的工作；只有实际来源/权限/模型服务问题或已用尽有效修订机会导致无法继续时，保存 paused 并说明条件。不会因固定篇数、普通反馈或文稿之间需要切换而主动暂停。
+独立会话不能安排下一步或自行切换任务范围。调查返回明确未核实范围，规划核查用结果的 review.pass=false 表达缺口；写作保存已核实内容并在 summary/data 写出具体缺口，由独立评审判断能否通过。子会话正常结果省略 status，保存成功后结束；宿主报告当前步骤无法继续时保留错误与已有成果并结束本次回复，交回主会话，不反复提交被拒参数或补造文稿。主会话在 run 返回后先推进不依赖失败项的工作；只有实际来源/权限/模型服务问题或已用尽有效修订机会导致无法继续时，保存 paused 并说明条件。不会因固定篇数、普通反馈或文稿之间需要切换而主动暂停。
 
 完成前核对全部清单行都有真实文稿、最新版本通过的独立评审、有效导航和完整场景。导航改动也用带 review 的步骤执行，expected_document_ids 覆盖每个改动文稿。阻塞条目保留为未完成，主会话保存 paused 并说明具体条件；中途不因达到固定文档数量暂停。
 

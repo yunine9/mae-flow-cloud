@@ -57,5 +57,5 @@
 - knowledge_draft save 使用稳定 id、实际 target_id、仓内 path、layer=repository、完整 content 和字符串 sources；正文不能只交增量片段。sources 记录本次实际读取的仓编号、revision、文件/行或符号、资料章节及其支撑的结论。
 - 保存后逐份调用 knowledge_diagram_check，参数 document_id 为实际编号，并按 next_start 读取全部报告。invalid 按实际 error 修正再保存/校验；绘图或修错时按需读 [PlantUML 指南](../references/plantuml.md)。unavailable 保留候选与实际依赖阻碍，不当成语法错，不删关键图或分支，不声称通过。
 - 用 knowledge_work_result 提交 summary 和已保存的全部预期文稿编号；新发现与阻碍用 data 给具体范围、依据及所需工作。宿主在候选后先校验图，再启动独立评审；保存成功、语法 valid 或作者自检不等于业务评审通过。
-- 平台根据 review.instructions 启动独立只读评审。收到反馈后回读当前文稿和依据，逐项修订原编号、保存完整候选并重新提交；写作会话不自行返回通过，不安排子步骤。
+- 平台根据 step.review.instructions 启动独立只读评审。收到反馈后回读当前文稿和依据，逐项修订原编号、保存完整候选并重新提交；写作会话不自行返回通过，不安排子步骤。
 - 原始来源缺失时明确影响，继续完成不依赖缺口的部分；不能把现有但未读的源码标成未知，也不能虚构结论填满模板。

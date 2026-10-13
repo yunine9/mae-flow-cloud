@@ -66,7 +66,7 @@
 
 6. **保存并登记完整规划**：按 `prompts/plan-template.md` 保存 Markdown，使用 knowledge_work save_document，id=current-plan。正文保留全部产物条目、范围边界和调查结果编号，不复制源码或全部调查报告。填写稳定 document_id、实际 target_id、仓内 path、模板及写作步骤；instructions 带本条目必要字段和证据索引，不要求每个 writer 加载整份规划。用 knowledge_diagram_check({work_document_id:"current-plan"}) 查图，按 next_start 读完报告；invalid 修正正文再查，unavailable 保留规划与依赖问题。图通过后用 action=plan、work_document_id=current-plan 登记全部 document_ids，宿主登记前也会校验。规划不进入知识发布；已登记产物是否齐全由宿主检查，业务完整性仍需独立核查。
 
-7. **独立核查**：由主会话安排 readonly=true 的独立步骤，读取本提示词、规划模板、current-plan 和 read_plan 全部清单/排除说明分页，用 knowledge_diagram_check 的 work_document_id=current-plan 读取当前图表报告，按调查索引回查各仓业务入口和相关资料中的业务范围。核对清单与正文一一对应、入口到功能/场景有对应、适用文档类型齐全；不能把未读资料、来源失败或无线通用背景当成已经确认的系统范围。大范围可分仓或业务域核查，主会话汇总各范围结论。用 knowledge_work_result 返回 review: {pass, feedback} 和 document_ids=[]；invalid/unavailable 不能通过。普通只读步骤的 done 只表示返回结果，主会话须检查 review.pass；有明确修订后再用新编号核查，没有新证据的相同失败不反复重建步骤。新发现先补正文和 plan；旧排除项保留原因。
+7. **独立核查**：主会话按 [规划核查配对示例](../references/platform-execution.md#规划核查) 登记 readonly=true 的步骤，省略 expected_document_ids 与 step.review。核查读取本提示词、规划模板、current-plan 和 read_plan 全部清单/排除说明分页，用 knowledge_diagram_check 的 work_document_id=current-plan 读取当前图表报告，按调查索引回查各仓业务入口和相关资料中的业务范围。核对清单与正文一一对应、入口到功能/场景有对应、适用文档类型齐全；不能把未读资料、来源失败或无线通用背景当成已经确认的系统范围。大范围可分仓或业务域核查，主会话汇总各范围结论。核查结果通过 knowledge_work_result.review: {pass, feedback} 返回，document_ids=[]，省略 status；图 invalid/unavailable 或来源阻碍返回 pass=false 和具体原因，仍可保存结论。普通只读步骤的 done 只表示返回结果，主会话须检查结果的 review.pass。规划实质修订后才安排新一轮核查；中断或执行配置修正接续原步骤，不重建规划或重复既有调查。新发现先补正文和 plan；旧排除项保留原因。
 
 ## 三、规划输出格式
 
