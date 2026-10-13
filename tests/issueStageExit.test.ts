@@ -47,6 +47,9 @@ function bareOrigin(root: string): string {
   execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
   execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441)。
+  execFileSync("git", ["-C", seed, "branch", "br_V100R026C10_release"],
+    { env: GIT_ENV });
   const origin = join(root, "origin.git");
   execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
   return origin;
@@ -256,6 +259,7 @@ async function startChain(options: {
   const created = service.create({
     account: "dev", title: "出口回归", ticket: TICKET, source: "dts",
     repoUrl: origin,
+    baseline: "br_V100R026C10_release",
   });
   const gate = await until(() => {
     const issue = service.get(created.id);
@@ -715,6 +719,7 @@ test("MR 验绿门·空=空合法通过:无码修改路径零 MR 进换库验证
     const created = service.create({
       account: "dev", title: "配置漂移", ticket: TICKET, source: "dts",
       repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     const gate = await until(() => {
       const issue = service.get(created.id);

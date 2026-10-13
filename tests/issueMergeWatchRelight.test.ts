@@ -83,6 +83,8 @@ function seedOrigin(
   execFileSync("git", ["init", "-q", "-b", "master", sourceDir]);
   execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
     "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441)。
+  execFileSync("git", ["-C", sourceDir, "branch", "br_V100R026C10_release"]);
   return platform.initBare(sourceDir, dataDir);
 }
 
@@ -155,6 +157,7 @@ test("返工第二轮进 mr_green:推送分支即带上合入状态循环,合入
     const created = service.create({
       account: "dev", title: "登录超时", ticket: TICKET,
       source: "dts", repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     await answerGate(service, created.id,
       "analysis_confirm", "confirm", "第一轮分析确认");
@@ -239,6 +242,7 @@ test("尚无 MR 的会话:推送不启动合入状态循环(有 MR 才监看)", 
     const created = service.create({
       account: "dev", title: "登录超时", ticket: TICKET,
       source: "dts", repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     await answerGate(service, created.id,
       "analysis_confirm", "confirm", "分析确认");

@@ -59,6 +59,9 @@ async function greenFixture() {
   execFileSync("git", ["init", "-q", "-b", "master", sourceDir]);
   execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
     "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441),MR 目标
+  // 缺省=基线,合入事实也盯这条 ref。
+  execFileSync("git", ["-C", sourceDir, "branch", "br_V100R026C10_release"]);
   const origin = platform.initBare(sourceDir, dataDir);
   await platform.start();
   const commit = (message: string) =>
@@ -103,6 +106,7 @@ async function greenFixture() {
   const created = service.create({
     account: "dev", title: "登录超时", ticket: TICKET,
     source: "dts", repoUrl: origin,
+    baseline: "br_V100R026C10_release",
   });
   await until(() => {
     const snapshot = service.get(created.id);

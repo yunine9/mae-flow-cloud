@@ -61,6 +61,10 @@ export function bareOrigin(root: string): string {
   execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
   execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
+  // 登记必选产品版本(2026-09-18)后 pull_repo 按会话基线克隆(#441):
+  // 裸仓得真有这个分支,镜像生产「版本映射的分支在远端在架」。
+  execFileSync("git", ["-C", seed, "branch", "br_V100R026C10_release"],
+    { env: GIT_ENV });
   const origin = join(root, "origin.git");
   execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
   return origin;
@@ -295,6 +299,7 @@ export function seedMrGreenWatch(
     title: "红灯分诊夹具", description: "", source: "dts",
     ticket: "DTS-2026-1002",
     repo_url: repo, repo_urls: [repo],
+    baseline: "br_V100R026C10_release",
     scenario: "ticket", round: 1,
     stage_states: [
       "done", "done", "done", "done", "done", "in_progress", "pending",

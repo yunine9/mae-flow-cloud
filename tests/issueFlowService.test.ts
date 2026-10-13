@@ -336,6 +336,9 @@ function bareOrigin(root: string): string {
   execFileSync("git", ["init", "-q", "-b", "master", seed], { env: GIT_ENV });
   execFileSync("git", ["-C", seed, "commit", "-q", "--allow-empty",
     "-m", "init"], { env: GIT_ENV });
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441,同 helpers)。
+  execFileSync("git", ["-C", seed, "branch", "br_V100R026C10_release"],
+    { env: GIT_ENV });
   const origin = join(root, "origin.git");
   execFileSync("git", ["clone", "-q", "--bare", seed, origin], { env: GIT_ENV });
   return origin;
@@ -584,6 +587,7 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
   seedRecoverableIssue(dataDir, "issue-1", {
     title: "无单号问题",
     repo_url: origin, repo_urls: [origin],
+    baseline: "br_V100R026C10_release",
     scenario: "ticket", round: 1,
     stage: "mr_green", stage_states: ["done", "done", "done", "done", "done"],
     status: "running",
@@ -669,6 +673,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     ticket: "DTS2026082001317",
     source: "dts",
     repo_url: origin, repo_urls: [origin],
+    baseline: "br_V100R026C10_release",
     scenario: "ticket", round: 1,
     stage: "mr_green",
     stage_states: ["done", "done", "done", "done", "done"],
@@ -713,7 +718,8 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     const mrCalls = seen.filter((call) => call.body?.source_branch !== undefined);
     assert.equal(mrCalls.length, 1);
     assert.equal(mrCalls[0].body.source_branch, branch);
-    assert.equal(mrCalls[0].body.target_branch, "master");
+    // 目标分支缺省=会话基线(#441):登记产品版本映射的分支,不再打 master。
+    assert.equal(mrCalls[0].body.target_branch, "br_V100R026C10_release");
     assert.equal(mrCalls[0].body.dts_no, "DTS2026082001317", "单号要走 dts_no 关联");
     // MR 标题平台代笔(2026-09-07):标题=DTS 单据标题,精确相等、
     // 无 [单号] 前缀——登记标题("登录超时")不许顶替。
