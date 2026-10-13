@@ -223,6 +223,7 @@ test("不存在的引句只允许一次全新回答修复，不把错误输出�
   assert.equal(f.requests[1].user, f.requests[2].user);
   assert.doesNotMatch(f.requests[2].user + f.requests[2].system, /BAD_OUTPUT_POISON|ACTUAL_SOURCE_DOES_NOT_CONTAIN_THIS|PLAN_POISON|RESEARCH_SUMMARY/);
   assert.match(f.requests[2].system, /格式或引用校验/);
+  assert.match(f.requests[2].system, /具体原因：引用的原句不在本次实际证据中/);
   assert.deepEqual(JSON.parse(f.requests[2].user).received_evidence, JSON.parse(f.requests[1].user).received_evidence);
   assert.doesNotMatch(result.markdown, /BAD_OUTPUT_POISON/);
   assert.equal(f.input.record.evidence.length, 1);

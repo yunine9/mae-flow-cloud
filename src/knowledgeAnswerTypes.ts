@@ -74,4 +74,6 @@ export interface KnowledgeAnswerExecution {
   warn(message: string): void;
 }
 
+export type KnowledgeAnswerSummary = Pick<KnowledgeAnswerRecord, "id" | "question" | "status" | "stage" | "created_at" | "updated_at">;
+
 export type KnowledgeAnswerRunner = (input: KnowledgeAnswerExecution) => Promise<KnowledgeAnswerResult>;

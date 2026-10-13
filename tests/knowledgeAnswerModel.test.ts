@@ -70,6 +70,31 @@ test("研究后的两次回答都重建消息，不载入编码工具，临时�
   assert.equal(seen[0].options.signal.aborted, true);
 });
 
+test("同轮只读查询并行但最多三项，乱序完成仍按调用顺序返回且不超工具预算", async () => {
+  const signal = new AbortController().signal, started: string[] = [], seen: any[] = [];
+  const releases = new Map<string, () => void>();
+  const calls = Array.from({ length: 5 }, (_, index) => ({ type: "toolCall", id: `c${index}`, name: "read_source", arguments: {} }));
+  const model = await createKnowledgeAnswerModel({ choice: { provider: "test", model: "m", json: {} }, signal,
+    runtimeFactory: async () => ({ getModel: () => ({ id: "m", api: "openai-completions", maxTokens: 4096, contextWindow: 128_000 } as any),
+      streamSimple: (_model, context) => { seen.push(structuredClone(context)); return stream(seen.length % 2 === 1 ? response(calls, "toolUse") : response([{ type: "text", text: "资料查阅结束" }])); } }),
+  });
+  const tools = [{ name: "read_source", label: "读取资料", description: "只读", parameters: Type.Object({}),
+    execute: async (id: string) => { started.push(id); await new Promise<void>(resolve => releases.set(id, resolve)); return { content: [{ type: "text" as const, text: id }], details: {} }; } }];
+  const waitFor = async (count: number) => { for (let n = 0; n < 100 && started.length < count; n++) await new Promise(resolve => setTimeout(resolve, 1)); assert.equal(started.length, count); };
+  try {
+    const pending = model.run(request(signal, { stage: "researching", tools, maxRounds: 2, maxToolCalls: 5 }));
+    await waitFor(3); releases.get("c2")!(); releases.get("c1")!(); releases.get("c0")!();
+    await waitFor(5); releases.get("c4")!(); releases.get("c3")!();
+    assert.equal((await pending).complete, true);
+    assert.deepEqual(seen[1].messages.filter((message: any) => message.role === "toolResult").map((message: any) => message.toolCallId), calls.map(call => call.id));
+    started.length = 0; releases.clear();
+    const limited = model.run(request(signal, { stage: "researching", tools, maxRounds: 2, maxToolCalls: 2 }));
+    await waitFor(2); releases.get("c1")!(); releases.get("c0")!();
+    assert.equal((await limited).reason, "tool_limit");
+    assert.deepEqual(started, ["c0", "c1"]);
+  } finally { for (const resolve of releases.values()) resolve(); await model.dispose(); }
+});
+
 test("研究用原生low、回答用原生medium，GLM5.3兼容路径回答用high且保留思考", async () => {
   const glm = { api: "anthropic-messages", id: "glm-5.3", reasoning: false } as const;
   for (const stage of ["researching", "answering"] as const) {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "../src/knowledgeAnswers.ts";
@@ -14,6 +14,48 @@ async function finished(service: KnowledgeAnswers, id: string, owner = "alice"):
   throw new Error("问答未结束");
 }
 const fixture = () => mkdtempSync(join(tmpdir(), "knowledge-answers-"));
+
+test("删除本人问答会停止执行并移除历史，排队及迟到结果不重建文件，其他资料保留", async () => {
+  const dir = fixture(), started: string[] = [];
+  let release!: () => void, runningSignal: AbortSignal | undefined;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const shared = join(dir, "original.md"); writeFileSync(shared, "共享原件");
+  const service = new KnowledgeAnswers(dir, async input => {
+    started.push(input.record.question);
+    if (input.record.question === "运行中") {
+      runningSignal = input.signal; await pending;
+      assert.throws(() => input.progress("answering", "迟到进度"));
+      assert.throws(() => input.addEvidence({ kind: "material", title: "迟到来源", content: "正文" }));
+    }
+    if (input.record.question === "失败") throw new Error("测试失败");
+    return { markdown: "未取得资料", evidence_ids: [], unknowns: ["资料待补充"] };
+  }, { concurrency: 1 });
+  try {
+    const running = service.create({ question: "运行中" }, "alice").record;
+    const queued = service.create({ question: "排队中" }, "alice").record;
+    const other = service.create({ question: "其他人" }, "bob").record;
+    for (let n = 0; n < 100 && !runningSignal; n++) await pause();
+    assert.throws(() => service.remove(running.id, "bob"), (error: KnowledgeAnswerError) => error.status === 404);
+    assert.equal(runningSignal?.aborted, false);
+    service.remove(queued.id, "alice"); service.remove(running.id, "alice");
+    assert.equal(runningSignal?.aborted, true);
+    assert.deepEqual(service.list("alice"), []);
+    assert.throws(() => service.get(running.id, "alice"), (error: KnowledgeAnswerError) => error.status === 404);
+    assert.equal((await finished(service, other.id, "bob")).status, "done", "删除运行问答后及时释放并发位置");
+    release(); await pause();
+    assert.equal(existsSync(join(dir, "knowledge-answers", running.id)), false);
+    assert.equal(existsSync(join(dir, "knowledge-answers", queued.id)), false);
+    assert.deepEqual(started, ["运行中", "其他人"]);
+    const failed = service.create({ question: "失败" }, "alice").record;
+    assert.equal((await finished(service, failed.id)).status, "failed");
+    service.remove(failed.id, "alice"); service.remove(other.id, "bob");
+    await service.shutdown();
+    const restored = new KnowledgeAnswers(dir, async () => { throw new Error("删除记录不能恢复"); });
+    assert.deepEqual(restored.list("alice"), []); assert.deepEqual(restored.list("bob"), []);
+    await restored.shutdown();
+    assert.equal(readFileSync(shared, "utf8"), "共享原件");
+  } finally { release(); await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("#471 长引用答案完成并落盘，重启后可读取完整原文和行范围链接", async () => {
   const dir = fixture(), original = "实际规则。".repeat(600) + "\n末尾例外不得省略。";
@@ -32,6 +74,10 @@ test("#471 长引用答案完成并落盘，重启后可读取完整原文和行
     assert.equal(done.status, "done", done.error);
     assert.ok(JSON.stringify(done.answer).length <= 24_000);
     assert.equal(done.answer!.evidence_ids.length, 8);
+    const summary = service.list("alice")[0];
+    assert.deepEqual(Object.keys(summary).sort(), ["created_at", "id", "question", "stage", "status", "updated_at"]);
+    assert.ok(JSON.stringify(summary).length < 500);
+    assert.ok(JSON.stringify(done).length > 20_000);
     assert.match(done.answer!.markdown, /第 1–2 行/);
     await service.shutdown();
     service = new KnowledgeAnswers(dir, run);

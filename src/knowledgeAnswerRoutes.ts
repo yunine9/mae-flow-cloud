@@ -15,7 +15,7 @@ export async function knowledgeAnswerRoute(request: IncomingMessage, response: S
   response.setHeader("cache-control", "no-store");
   try {
     if (request.method === "GET" && parts.length === 2 && parts[1] === "catalog") return json(response, 200, knowledgeAnswerSourceCatalog(dataDir, search));
-    if (request.method === "GET" && parts.length === 1) return json(response, 200, { answers: answers.list(owner).map(record => ({ ...record, evidence: [], activity: record.activity.slice(-3) })) });
+    if (request.method === "GET" && parts.length === 1) return json(response, 200, { answers: answers.list(owner) });
     if (request.method === "POST" && parts.length === 1) return json(response, 202, answers.create(await readBody(request, 64 * 1024), owner).record);
     const id = decodeURIComponent(parts[1] ?? "");
     if (request.method === "GET" && parts.length === 5 && parts[2] === "evidence" && parts[4] === "image") {
@@ -32,6 +32,10 @@ export async function knowledgeAnswerRoute(request: IncomingMessage, response: S
       return response.end(content);
     }
     if (request.method === "GET" && parts.length === 2) return json(response, 200, answers.get(id, owner));
+    if (request.method === "DELETE" && parts.length === 2) {
+      answers.remove(id, owner);
+      return json(response, 200, { deleted: true });
+    }
     if (request.method === "POST" && parts.length === 3 && parts[2] === "cancel") return json(response, 200, answers.cancel(id, owner));
     if (request.method === "POST" && parts.length === 3 && parts[2] === "feedback") return json(response, 200, answers.feedback(id, owner, await readBody(request, 8192)));
     return json(response, 404, { error: "未知知识问答接口" });

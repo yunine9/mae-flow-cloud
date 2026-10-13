@@ -285,35 +285,42 @@ export async function createKnowledgeAnswerModel(options: KnowledgeAnswerModelOp
               return { text, complete: true };
             }
             messages.push(response);
-            for (const call of calls) {
+            const allowed = calls.slice(0, Math.max(0, request.maxToolCalls - toolCalls));
+            toolCalls += allowed.length;
+            // 同一轮提交的只读查询没有结果依赖，最多三项并行，按原调用顺序交回模型。
+            for (let offset = 0; offset < allowed.length; offset += 3) {
               throwIfAnswerStopped(signal, request.deadlineAt);
-              if (++toolCalls > request.maxToolCalls) return { text: "", complete: false, reason: "tool_limit" };
-              const tool = tools.get(call.name);
-              if (!tool) throw new KnowledgeAnswerError("模型请求了本次问答未提供的工具");
-              request.onTool(tool.name);
-              let result: { content: any[]; isError?: boolean };
-              try {
-                const args = tool.prepareArguments ? tool.prepareArguments(call.arguments) : call.arguments;
-                if (!Check(tool.parameters, args)) throw new KnowledgeAnswerError("工具参数不符合定义");
-                const value = await waitForAnswerOperation(Promise.resolve(tool.execute(call.id, args, signal, undefined, { hasUI: false, model } as any)), signal);
+              const results = await Promise.all(allowed.slice(offset, offset + 3).map(async (call): Promise<Message> => {
                 throwIfAnswerStopped(signal, request.deadlineAt);
-                if (!Array.isArray(value?.content) || value.content.some(block => block.type !== "text" && block.type !== "image")) throw new KnowledgeAnswerError("问答工具只能返回文本或原始图片");
-                if (value.content.some(block => block.type === "image") && !model.input?.includes("image")) throw new KnowledgeAnswerError("当前问答模型不支持图片，尚未读取图中内容");
-                result = value;
-                if ((value as any).isError) request.warn("来源工具未完成一次查询，不能据此认定相关知识不存在");
-              } catch (error) {
-                throwIfAnswerStopped(signal, request.deadlineAt);
-                request.warn("来源工具查询失败，已保留未确认状态");
-                result = { isError: true, content: [{ type: "text", text: "此次查询未完成或参数无效，没有取得可确认的新证据。请检查参数或使用其他适用来源，不能据此断言知识不存在。" }] };
-              }
-              // 超长工具回复不进入历史；来源保存的原文仍受 runner 的独立证据预算保护。
-              if (contextCharacters(result.content) > contextBudget / 2) {
-                request.warn("一次工具返回超过研究上下文预算，请使用较小范围或分页读取");
-                result = { isError: true, content: [{ type: "text", text: "返回内容超过上下文预算，本条未展开。请缩小读取范围或分页；未展开的内容不代表不存在。" }] };
-              }
-              messages.push({ role: "toolResult", toolCallId: call.id, toolName: call.name,
-                content: result.content, isError: Boolean(result.isError), timestamp: Date.now() });
+                const tool = tools.get(call.name);
+                if (!tool) throw new KnowledgeAnswerError("模型请求了本次问答未提供的工具");
+                request.onTool(tool.name);
+                let result: { content: any[]; isError?: boolean };
+                try {
+                  const args = tool.prepareArguments ? tool.prepareArguments(call.arguments) : call.arguments;
+                  if (!Check(tool.parameters, args)) throw new KnowledgeAnswerError("工具参数不符合定义");
+                  const value = await waitForAnswerOperation(Promise.resolve(tool.execute(call.id, args, signal, undefined, { hasUI: false, model } as any)), signal);
+                  throwIfAnswerStopped(signal, request.deadlineAt);
+                  if (!Array.isArray(value?.content) || value.content.some(block => block.type !== "text" && block.type !== "image")) throw new KnowledgeAnswerError("问答工具只能返回文本或原始图片");
+                  if (value.content.some(block => block.type === "image") && !model.input?.includes("image")) throw new KnowledgeAnswerError("当前问答模型不支持图片，尚未读取图中内容");
+                  result = value;
+                  if ((value as any).isError) request.warn("来源工具未完成一次查询，不能据此认定相关知识不存在");
+                } catch (error) {
+                  throwIfAnswerStopped(signal, request.deadlineAt);
+                  request.warn("来源工具查询失败，已保留未确认状态");
+                  result = { isError: true, content: [{ type: "text", text: "此次查询未完成或参数无效，没有取得可确认的新证据。请检查参数或使用其他适用来源，不能据此断言知识不存在。" }] };
+                }
+                // 超长工具回复不进入历史；来源保存的原文仍受 runner 的独立证据预算保护。
+                if (contextCharacters(result.content) > contextBudget / 2) {
+                  request.warn("一次工具返回超过研究上下文预算，请使用较小范围或分页读取");
+                  result = { isError: true, content: [{ type: "text", text: "返回内容超过上下文预算，本条未展开。请缩小读取范围或分页；未展开的内容不代表不存在。" }] };
+                }
+                return { role: "toolResult", toolCallId: call.id, toolName: call.name,
+                  content: result.content, isError: Boolean(result.isError), timestamp: Date.now() };
+              }));
+              messages.push(...results);
             }
+            if (allowed.length < calls.length) return { text: "", complete: false, reason: "tool_limit" };
           }
           return { text: "", complete: false, reason: "round_limit" };
         } catch (error) {

@@ -22,7 +22,7 @@ answer和recommendation的body最多4000字符，完整说明这一事项，不�
 const RESEARCH_PROMPT = `你负责只读查证用户的问题，目标是为后续独立回答取得足够的原始材料，不负责提交最终答案。
 先在本会话内拆出原问题需要判断的事项、适用条件和未知项，再选择查询；拆题不能替用户增加要求或认定题设成立。复杂问题逐项查证，可用中文、英文及同义表达补查，不只依赖一次搜索或第一条结果。
 按所需判断选择来源，不固定来源先后：查写法和真实调用、测试可直接用 Every Code，判断当前实现需读取固定版本源码，查正式规则可读取知识文档或业务原件，无线通用背景可查无线豆包。搜索只用于定位，还要读取正文。组件问题要连同公共配置、所选完整用法、依赖、生命周期、失败处理和例外一起核实；业务问题要覆盖对象、触发条件、状态、例外及生效范围。资料缺失或矛盾时按缺口补查，不要求每题查询所有来源。
-来源工具允许分页，不能只看摘要就结束。已有足够材料时停止；预算或来源限制尚未解决的部分保持未知，不凭常识补全。研究总结不作为证据。
+来源工具允许分页，不能只看摘要就结束。已有足够材料时立即停止，只回复“资料查阅结束”，不用再生成答案或研究报告；预算或来源限制尚未解决的部分保持未知，不凭常识补全。彼此独立的查询在同一轮发出；需要前一步结果的查询继续按顺序进行。
 ${SOURCE_RULES}`;
 const ANSWER_PROMPT = `你是基于原文的知识问答助手。按以下原则逐项回答原问题：
 1. 原问题和明确上下文是唯一用户要求，题设中的判断也要核实。直接使用用户给定的值与条件，先给本场景的判断，不添加无关规则或重复总结。
@@ -140,7 +140,7 @@ export function createKnowledgeAnswerRunner(options: KnowledgeAnswerRunnerOption
           maxRounds: stage === "researching" ? limits.researchRounds : 1,
           maxToolCalls: stage === "researching" ? limits.toolCalls : 0,
           maxContextChars: contextChars, maxOutputTokens: limits.outputTokens,
-          onTool: () => { check(); input.progress("researching", "正在补查来源并保存实际读取的原文"); },
+          onTool: name => { check(); input.progress("researching", `正在查询：${sources.tools.find(tool => tool.name === name)?.label || name}`); },
           warn: message => { check(); input.warn(message); },
         }), signal);
       const research = await request("researching", `${RESEARCH_PROMPT}\n\n${sources.description}`, JSON.stringify(userContext), sources.tools);
@@ -175,12 +175,15 @@ export function createKnowledgeAnswerRunner(options: KnowledgeAnswerRunnerOption
       }) };
       const answerChars = maximumAnswerChars;
       const user = JSON.stringify(answerInput);
+      let repairReason = "";
       for (let attempt = 0; attempt < 2; attempt++) {
         input.progress("answering", attempt ? "正在重新生成符合格式和引用要求的回答" : "正在依据实际读取的资料回答问题");
         let response;
-        try { response = await request("answering", knowledgeAnswerStructuredPrompt("answering", answerChars, !!attempt), user, [], images); }
+        try { response = await request("answering", knowledgeAnswerStructuredPrompt("answering", answerChars, !!attempt)
+          + (repairReason ? `\n上次未通过的具体原因：${repairReason}。请据此修正，不重复同一错误。` : ""), user, [], images); }
         catch (error) {
           if (!(error instanceof KnowledgeAnswerSubmissionError) || formatRepairs >= 1) throw error;
+          repairReason = error.message;
           formatRepairs++;
           continue;
         }
@@ -193,6 +196,7 @@ export function createKnowledgeAnswerRunner(options: KnowledgeAnswerRunnerOption
         try { return parseKnowledgeAnswerComposition(response.text, evidence, answerChars); }
         catch (error) {
           if (!(error instanceof KnowledgeAnswerCompositionError) || formatRepairs >= 1) throw error;
+          repairReason = error.message;
           formatRepairs++;
         }
       }

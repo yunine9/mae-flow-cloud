@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { KnowledgeAnswerContext, KnowledgeAnswerEvidence, KnowledgeAnswerInput, KnowledgeAnswerRecord, KnowledgeAnswerRunner } from "./knowledgeAnswerTypes.ts";
+import type { KnowledgeAnswerContext, KnowledgeAnswerEvidence, KnowledgeAnswerInput, KnowledgeAnswerRecord, KnowledgeAnswerRunner, KnowledgeAnswerSummary } from "./knowledgeAnswerTypes.ts";
 import { knowledgeAnswerCitations } from "./knowledgeAnswerCitations.ts";
 
 const ID = /^qa-[a-f0-9-]{36}$/;
@@ -108,9 +108,10 @@ export class KnowledgeAnswers {
     }
   }
 
-  list(owner: string): KnowledgeAnswerRecord[] {
+  list(owner: string): KnowledgeAnswerSummary[] {
     return [...this.records.values()].filter(record => record.owner === owner)
-      .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100).map(copy);
+      .sort((a, b) => b.created_at.localeCompare(a.created_at)).slice(0, 100)
+      .map(({ id, question, status, stage, created_at, updated_at }) => ({ id, question, status, stage, created_at, updated_at }));
   }
 
   get(id: string, owner: string): KnowledgeAnswerRecord { return copy(this.owned(id, owner)); }
@@ -156,6 +157,14 @@ export class KnowledgeAnswers {
     record.feedback = { useful: input.useful, comment: String(input.comment ?? "").trim(), at: new Date().toISOString() };
     this.persist(record);
     return copy(record);
+  }
+
+  remove(id: string, owner: string): void {
+    const record = this.owned(id, owner);
+    // 先停止写入，迟到的模型结果不能重新创建已删除的问答。
+    if (!terminal(record)) this.cancel(id, owner);
+    rmSync(join(this.root, id), { recursive: true, force: true });
+    this.records.delete(id);
   }
 
   async shutdown(): Promise<void> {

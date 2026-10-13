@@ -13,6 +13,7 @@ let copied = "", failCopy = false;
 if (!previewRecord) Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { if (failCopy) throw new Error("clipboard blocked"); copied = text; } } });
 let role = "developer";
 let account = "alice", serial = 0, rejectStart = false, materialSerial = 0, holdUpload = false, releaseUpload: (() => void) | undefined;
+let failRead = false, failDelete = false;
 let holdHistory = false, releaseHistory: (() => void) | undefined;
 const timestamp = (increment = 0) => new Date(Date.parse("2026-10-10T08:00:00Z") + increment).toISOString();
 const quotedText = String.raw`thread_local <Task> & Pool.submit() \path [literal](#evidence-other)`;
@@ -41,7 +42,7 @@ window.fetch = async (url, options) => {
     sources: [{ kind: "knowledge", label: "知识文档", available: true, detail: "正式知识与组件指南" }, { kind: "everycode", label: "Every Code", available: true, detail: "已配置，实际可用性以查询为准" }],
   };
   else if (path === "/knowledge-answers" && method === "GET") {
-    const snapshot = structuredClone(records.filter(item => item.owner === account));
+    const snapshot = records.filter(item => item.owner === account).map(({ id, question, status, stage, created_at, updated_at }) => ({ id, question, status, stage, created_at, updated_at }));
     if (holdHistory) await new Promise<void>(resolve => { releaseHistory = resolve; });
     result = { answers: snapshot };
   }
@@ -59,8 +60,13 @@ window.fetch = async (url, options) => {
   }
   else if (path.startsWith("/knowledge-answers/")) {
     const [id, action] = path.slice("/knowledge-answers/".length).split("/");
+    if (failRead && method === "GET") { failRead = false; return new Response(JSON.stringify({ error: "临时网络异常" }), { status: 503 }); }
     const record = records.find(item => item.id === id && item.owner === account);
     check(record, "only the current account can read its answers");
+    if (method === "DELETE") {
+      if (failDelete) return new Response(JSON.stringify({ error: "暂时无法删除，请重试" }), { status: 503 });
+      records.splice(records.indexOf(record!), 1); return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+    }
     if (action === "cancel") { record!.status = "cancelled"; record!.updated_at = timestamp(20000); }
     if (action === "feedback") record!.feedback = { useful: input.useful, comment: input.comment, at: timestamp(21000) };
     result = record;
@@ -244,6 +250,33 @@ async function run() {
   check(selectedHistory()?.includes("回答完成"), "selected answer updates history to completed even when timestamps are equal");
   holdHistory = false; releaseHistory!(); await pause();
   check(selectedHistory()?.includes("回答完成") && !selectedHistory()?.includes("查阅资料"), "late history snapshot cannot replace a completed answer with its previous running status");
+  failRead = true; await remount();
+  await waitFor('[role="alert"]');
+  check(document.querySelector('[role="alert"]')?.textContent?.includes("正在自动重连"), "transient read failure explains automatic recovery");
+  await waitFor('[aria-label="知识回答"]');
+  check(!document.querySelector('[role="alert"]'), "polling recovers after one transient failure without user reload");
+  for (const id of ["qa-2", "qa-3", "qa-4", "qa-1"]) {
+    const target = records.find(item => item.id === id)!;
+    navigateAnswer(id); await pause(); await waitFor('.ka-question');
+    if (id === "qa-4") { holdHistory = true; releaseHistory = undefined; await remount(); await waitFor('[aria-label="回答进度"]'); }
+    await click("删除问题"); await waitFor('[role="dialog"]');
+    check(document.querySelector('[role="dialog"]')?.textContent?.includes("上传原件仍保留"), "delete dialog states which data is retained");
+    if (id === "qa-4") check(document.querySelector('[role="dialog"]')?.textContent?.includes("问答也会停止"), "running deletion also explains cancellation");
+    if (id === "qa-2") {
+      await click("取消"); check(records.includes(target), "canceling deletion keeps the question"); await click("删除问题");
+    }
+    if (id === "qa-3") {
+      failDelete = true; await click("确认删除");
+      check(document.querySelector('[role="dialog"] [role="alert"]')?.textContent?.includes("暂时无法删除") && records.includes(target), "failed deletion keeps the question and offers retry");
+      failDelete = false;
+    }
+    await click("确认删除"); await waitFor('[aria-label="知识问答问题"]');
+    check(!records.includes(target), "delete supports completed, failed, cancelled, and running questions");
+    if (id === "qa-4") { holdHistory = false; releaseHistory!(); await pause(); }
+    check(document.querySelectorAll(".ka-history-item").length === records.filter(item => item.owner === account).length, "late list responses cannot restore deleted history");
+  }
+  await remount(); await waitFor('[aria-label="知识问答问题"]');
+  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "Alice 的私人草稿", "deletion preserves the unsent question draft");
   account = "alice"; navigateAnswer("qa-existing"); await remount(); await waitFor('[aria-label="知识回答"]'); await click("查看来源：实现依据 C++ [固定版]");
   check(document.querySelector('[aria-label="本段引用原句"]')?.textContent?.includes(quotedText), "clicked paragraph exposes its exact literal quotation in the side panel");
   document.querySelector('[aria-label="本次引用原文"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); await pause();
