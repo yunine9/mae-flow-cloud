@@ -16,8 +16,7 @@ export function DomainKnowledgePublicationStatus({ job, disabled, onConfigure, o
     {view.publications.map(item => <div key={item.key} className="text-sm"><span>{item.target} · {item.status_label}</span>
       {item.url && <a className="ml-3 text-primary underline" href={item.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
       {item.error && <p className="mt-1 whitespace-pre-wrap break-words text-danger">{item.error}</p>}
-      {item.mr_participants && <p role={item.mr_participants.status === "failed" ? "alert" : "status"}
-        className={`mt-1 whitespace-pre-wrap break-words ${item.mr_participants.status === "failed" ? "text-attention" : "text-muted-foreground"}`}>
+      {mrParticipantsMessage(item.mr_participants) && <p role="status" className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">
         {mrParticipantsMessage(item.mr_participants)}</p>}
     </div>)}
   </section>;

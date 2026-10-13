@@ -21,7 +21,7 @@ async function until(check: () => boolean) {
   throw new Error("任务未完成");
 }
 
-test("归档人员失败保持已归档，重启后按仓补设；异常保留 MR，成功后不重复同步", async () => {
+test("归档人员失败不生成提示或重试入口，内部仍支持重启后按原名单补设", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-people-")), calls: string[] = [];
   let retryFails = true, service: DomainKnowledgeExtraction;
   const publish: NonNullable<ConstructorParameters<typeof DomainKnowledgeExtraction>[2]>["publish"] = async (_job, target, previous) => {
@@ -51,7 +51,10 @@ test("归档人员失败保持已归档，重启后按仓补设；异常保留 M
     const preview = service.previewArchive(job.id);
     assert.equal(preview.status_label, "已归档");
     assert.deepEqual(preview.targets[0].mr_participants, failed);
-    assert.equal(preview.targets[0].actions[0].label, "重试设置人员");
+    assert.equal(preview.targets[0].actions.length, 0);
+    assert.equal(preview.targets[0].error, undefined);
+    assert.doesNotMatch(preview.targets[0].message ?? "", /人员|重试/);
+    assert.equal(service.get(job.id).production!.archive.actions[0].label, "归档");
     assert.equal(preview.targets[1].actions.length, 0);
     await service.shutdown(); service = new DomainKnowledgeExtraction(dir, async () => { throw new Error("补人员不能执行研究"); }, { publish });
     assert.deepEqual(service.get(job.id).publications[0].mr_participants, failed);

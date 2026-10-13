@@ -7,7 +7,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("知识归档与清理 MR 人员设置失败保留链接，独立重试且不阻塞知识流程", {
+test("知识归档与清理 MR 人员设置失败静默，保留正常归档入口、链接和开始萃取", {
   skip: !existsSync(chrome) && "需要真实 Chrome；设置 MFC_TEST_CHROME 后运行",
 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-knowledge-mr-participants-"));

@@ -13590,7 +13590,6 @@ export class TaskService {
       kernel: this.options.host, platformUrl: this.effectivePlatformUrl(),
       credential: this.options.gitCredential?.(task.summary.luban_account),
       mrParticipants: () => this.taskMrParticipants(task),
-      retryMrParticipants: async () => { await this.retryMrParticipants(task.summary.id); },
       assertActive: () => {
         if (!this.current(task, actionEpoch) || task.pauseRequested
             || ["paused", "pausing", "completed"].includes(task.summary.status)) {

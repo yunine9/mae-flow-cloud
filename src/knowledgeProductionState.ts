@@ -70,9 +70,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   })));
   const archiveState = archiveRunning ? "running" : archiveFailed ? "failed" : archiveOpened ? "opened" : "done";
   const archiveLabel = archiveRunning ? "归档中" : archiveFailed ? "归档失败" : archiveOpened ? "已归档" : "已发布（未归档）";
-  const participantsFailed = current.some(publication => publication.url && publication.mr_participants?.status === "failed");
-  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive",
-    label: participantsFailed && !archiveFailed && !archiveRunning ? "重试设置人员" : "归档", view: "archive" })] : [];
+  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: "归档", view: "archive" })] : [];
   let status_label: string, group: KnowledgeTaskGroup, next_action: KnowledgeProductionAction;
   if (archiveFailed) {
     status_label = "归档失败"; group = "attention"; next_action = archiveActions[0] ?? { id: "review", label: "审查成果", view: "review" };
