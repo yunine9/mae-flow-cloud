@@ -497,12 +497,7 @@ export function IssueMetaPane({ detail, canOperate }: {
                   {row.push && <span>
                     已推送 {row.push.branch}@{row.push.sha.slice(0, 10)}</span>}
                 </div>}
-                {mrRecord?.participants && <MrParticipantsNotice
-                  key={mrRecord.url ?? mrRecord.iid}
-                  result={mrRecord.participants}
-                  endpoint={`/issues/${encodeURIComponent(detail.id)}/mr-participants`}
-                  body={{ repo: mrRecord.repo }}
-                  canRetry={canOperate && !mrRecord.merged_at && !mrRecord.closed_at} />}
+                <MrParticipantsNotice result={mrRecord?.participants} />
                 {/* 转正前账(只读引用,旧会话数据):与本会话事实分区
                     陈列,弱化样式 + 「转正前」前缀,不冒充本会话的交付。 */}
                 {row.inherited && <div

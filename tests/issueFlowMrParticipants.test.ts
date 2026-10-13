@@ -99,27 +99,23 @@ test("问题 MR：模块全部关联仓共用名单，追加的其他仓和无�
   }
 });
 
-test("问题 MR：人员失败保留链接和交付结果，重试只补原名单且不重启流水线", async () => {
-  let updates = 0;
-  const service = await platform(({ path }) => {
-    if (path === "/mr") return { body: {
+test("问题 MR：人员失败静默保留链接和内部结果，再次创建正常复用且不自动补设", async () => {
+  let calls = 0;
+  const service = await platform(() => ({ body: {
       url: "https://codehub.example/team/front/merge_requests/9", id: 9,
-      participants: { status: "failed", message: "无人员配置权限" },
-    } };
-    updates++;
-    return updates === 1
-      ? { status: 503, body: { error: "平台暂不可用" } }
-      : { body: { status: "applied" } };
-  });
+      participants: calls++ === 0 ? { status: "failed", message: "无人员配置权限" }
+        : { status: "skipped", message: "已有 MR 保留原人员设置" },
+  } }));
   try {
     const testCase = fixture(service.url);
     const first = await testCase.run();
     const original = testCase.saved().mrs![0];
     assert.equal(original.url, "https://codehub.example/team/front/merge_requests/9");
     assert.equal(original.participants?.status, "failed");
-    assert.match(JSON.stringify(first), /无人员配置权限/);
-    assert.match(JSON.stringify(first), /只补设人员/);
-    assert.match(testCase.state.transitions!.at(-1)!.note, /无人员配置权限/);
+    assert.equal(original.participants?.message, "无人员配置权限");
+    assert.match(JSON.stringify(first), /MR 已创建/);
+    assert.doesNotMatch(JSON.stringify(first), /无人员配置权限|人员|补设|重试/);
+    assert.equal(testCase.state.transitions!.at(-1)!.note, `MR 已创建: ${original.url}`);
     assert.equal(testCase.state.stage, "mr_green");
     assert.equal(testCase.state.gate, undefined);
     assert.deepEqual(testCase.watches, [REPOS[0]]);
@@ -127,15 +123,13 @@ test("问题 MR：人员失败保留链接和交付结果，重试只补原名�
     updateBusinessModule(testCase.dir, "module-a", {
       mr_participants: { reviewers: ["new-person"], approval_approvers: [] },
     }, "owner1");
-    await testCase.run();
-    assert.equal(testCase.saved().mrs![0].participants?.status, "failed");
+    const reused = await testCase.run();
+    assert.deepEqual(testCase.saved().mrs![0].participants, original.participants, "复用未改人员，保留原失败事实和名单");
     assert.equal(testCase.saved().mrs![0].url, original.url);
-    await testCase.run();
-    assert.equal(testCase.saved().mrs![0].participants?.status, "applied");
-    assert.deepEqual(service.seen.map(entry => entry.path), ["/mr", "/mr/participants", "/mr/participants"]);
-    assert.deepEqual(service.seen[1].body, { repo: REPOS[0], mr: "9", participants: PEOPLE });
-    assert.deepEqual(service.seen[2].body, service.seen[1].body);
-    assert.deepEqual(testCase.watches, [REPOS[0]], "补人员不重跑已启动的流水线");
+    assert.doesNotMatch(JSON.stringify(reused), /无人员配置权限|人员|补设|重试/);
+    assert.equal(testCase.state.transitions!.at(-1)!.note, `MR 已创建: ${original.url}`);
+    assert.deepEqual(service.seen.map(entry => entry.path), ["/mr", "/mr"]);
+    assert.deepEqual(service.seen[1].body.participants, { reviewers: ["new-person"], approval_approvers: [] }, "正常创建携带当前配置，是否复用由适配层判断");
   } finally {
     await service.stop();
   }
@@ -199,8 +193,9 @@ function retryRoute(service: IssueFlowService, viewer?: IssueViewer, repo = REPO
   });
 }
 
-test("问题 MR 补设接口：仅责任人可操作，归档后仍可独立补设且不唤醒 Agent", async () => {
-  const remote = await platform(() => ({ body: { status: "applied" } }));
+test("问题 MR 补设接口：仅责任人可操作，失败静默保存，归档后仍可独立补设且不唤醒 Agent", async () => {
+  let attempts = 0;
+  const remote = await platform(() => ({ body: attempts++ === 0 ? { status: "failed", message: "无人员配置权限" } : { status: "applied" } }));
   const testCase = fixture(remote.url);
   const state = testCase.state;
   state.status = "archived";
@@ -237,11 +232,17 @@ test("问题 MR 补设接口：仅责任人可操作，归档后仍可独立补�
     updateBusinessModule(testCase.dir, "module-a", {
       mr_participants: { reviewers: ["new-person"], approval_approvers: [] },
     }, "owner1");
+    const transitions = structuredClone(service.session(state.id).state.transitions ?? []);
+    const failed = await retryRoute(service, owner);
+    assert.equal(failed.status, 200);
+    assert.equal(failed.body.mrs[0].participants.status, "failed");
+    assert.equal(failed.body.mrs[0].participants.message, "无人员配置权限");
+    assert.deepEqual(service.session(state.id).state.transitions ?? [], transitions, "失败不新增时间线或给 Agent 的提示");
     const result = await retryRoute(service, owner, REPOS[0].replace(/\.git$/, ""));
     assert.equal(result.status, 200);
     assert.equal(result.body.status, "archived");
     assert.equal(result.body.mrs[0].participants.status, "applied");
-    assert.deepEqual(remote.seen.map(entry => entry.path), ["/mr/participants"]);
+    assert.deepEqual(remote.seen.map(entry => entry.path), ["/mr/participants", "/mr/participants"]);
     assert.deepEqual(remote.seen[0].body, { repo: REPOS[0], mr: "9", participants: PEOPLE });
     assert.equal(identity, "owner1");
     const saved = JSON.parse(readFileSync(join(workspace, "issue.json"), "utf-8"));
@@ -252,7 +253,7 @@ test("问题 MR 补设接口：仅责任人可操作，归档后仍可独立补�
     assert.equal(saved.pipelines, undefined);
     assert.equal(service.hasRunningContainer(state.id), false);
     assert.equal((await retryRoute(service, owner)).status, 409, "成功后不再次同步人员");
-    assert.equal(remote.seen.length, 1);
+    assert.equal(remote.seen.length, 2);
   } finally {
     await service.shutdown();
     await remote.stop();

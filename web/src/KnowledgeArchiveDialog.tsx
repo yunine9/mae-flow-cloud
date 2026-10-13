@@ -68,8 +68,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             {target.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>}
             {target.error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{target.error}</p>}
             {target.url && <a className="text-sm font-medium text-primary underline" href={target.url} target="_blank" rel="noreferrer">打开 MR ↗</a>}
-            {target.mr_participants && <p role={target.mr_participants.status === "failed" ? "alert" : "status"}
-              className={`whitespace-pre-wrap break-words text-sm ${target.mr_participants.status === "failed" ? "text-attention" : "text-muted-foreground"}`}>
+            {mrParticipantsMessage(target.mr_participants) && <p role="status" className="whitespace-pre-wrap break-words text-sm text-muted-foreground">
               {mrParticipantsMessage(target.mr_participants)}</p>}
             <ul className="m-0 list-none space-y-2 p-0">{target.files.map(file => <li key={file.id} className="rounded border border-line bg-surface-2 px-3 py-2 text-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2"><code className="break-all">{file.path}</code><span className="text-xs text-muted-foreground" title={`${file.knowledge_document_id}@${file.knowledge_revision}`}>{file.knowledge_revision.slice(0, 12)}</span></div>

@@ -11,6 +11,7 @@ import { createMergeRequest, updateMergeRequestParticipants } from "../src/mrCli
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
+import { finishTaskHostOperation, TaskHostLedger } from "../src/taskHostTools.ts";
 
 const people = { reviewers: ["alice"], approval_approvers: ["carol"] };
 const repo = "https://git.example/team/a.git", repo2 = "https://git.example/team/b.git";
@@ -61,6 +62,49 @@ test("MR 已创建但人员失败仍保留链接；旧适配器不回结果不�
   assert.equal(calls[1].path, "/mr/participants");
   legacy = true;
   assert.equal((await createMergeRequest(call)).participants?.status, "failed");
+});
+
+test("宿主创建及复用 MR 时人员失败保持静默，继续流程且不自动补设", async t => {
+  const calls: string[] = [];
+  const failure = { status: "failed" as const, requested: people, message: "无人员配置权限" };
+  const platform = createServer((req, res) => {
+    calls.push(req.url!);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ id: 8, url: "https://code.example/merge_requests/8", participants: failure }));
+  });
+  await new Promise<void>(resolve => platform.listen(0, "127.0.0.1", resolve));
+  const dir = mkdtempSync(join(tmpdir(), "mfc-host-mr-silent-"));
+  const service = new TaskService({ dataDir: dir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
+  t.after(async () => {
+    await service.shutdown(); platform.close(); platform.closeAllConnections();
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const task = service.create("需求", { account: "owner", deferQueue: true });
+  const state = (service as any).tasks.get(task.id);
+  state.summary.repo_url = repo;
+  state.summary.delivery = { git_push: { sha: "head", ref: "refs/heads/feature" } };
+  const messages: string[] = [];
+  let watches = 0;
+  const host = { ...(service as any).taskHostRuntime(state),
+    platformUrl: `http://127.0.0.1:${(platform.address() as { port: number }).port}`,
+    release: async () => {}, watch: () => { watches++; }, resume: (message: string) => messages.push(message),
+    mrTitle: () => "需求", mrParticipants: () => people,
+  };
+  const ledger = new TaskHostLedger(state.summary);
+  for (const id of ["create", "reuse"]) {
+    ledger.update({ id, state: "queued", at: new Date().toISOString(), input: { action: "create_mr", reason: "交付" },
+      branch: "feature", target_branch: "main", sha: "head" });
+    assert.equal(await finishTaskHostOperation(host), true);
+    const operation = ledger.read().operations.at(-1)!;
+    assert.equal(operation.state, "succeeded");
+    assert.match(operation.result!, /https:\/\/code.example\/merge_requests\/8/);
+    assert.doesNotMatch(operation.result!, /无人员配置权限|人员设置|补充人员|重试/);
+    assert.deepEqual(state.summary.delivery.mr_participants, failure);
+  }
+  assert.deepEqual(calls, ["/mr"], "复用 MR 不自动重试人员设置");
+  assert.equal(watches, 2);
+  assert.equal(messages.length, 2);
+  for (const message of messages) assert.doesNotMatch(message, /无人员配置权限|人员设置|补充人员/);
 });
 
 test("需求子任务继承主模块；人员失败重试只更新同一 MR，普通成员无权代重试", async t => {

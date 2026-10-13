@@ -1635,9 +1635,8 @@ export class IssueFlowService {
       credential: this.options.gitCredential?.(live.state.account),
     });
     mr.participants = result;
-    recordTransition(live.state, {
-      source: "platform", note: `MR ${mr.url}：${mrParticipantsMessage(result)}`,
-    });
+    const note = mrParticipantsMessage(result);
+    if (note) recordTransition(live.state, { source: "platform", note: `MR ${mr.url}：${note}` });
     saveState(live.root, live.state);
     return this.project(live);
   }

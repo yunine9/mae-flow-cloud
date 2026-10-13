@@ -407,8 +407,7 @@ export class DomainKnowledgeExtraction {
       const configured = !!target.repository.trim() && !problem;
       const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
       const actions: KnowledgeProductionAction[] = !configured ? perTarget ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
-        : publication?.state === "opened" && publication.mr_participants?.status === "failed" ? [action({ id: "retry-archive", label: "重试设置人员", view: "archive", target_id: target.id, batch_id: batch!.id })]
-          : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
+        : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
         message: problem ? `归档仓设置不能用于创建 MR：${problem}。请在 Git 归档设置中修改。` : !configured ? "未配置 Git 归档仓，请联系管理员在知识仓设置中配置。" : status_label === "归档失败" ? "此仓归档失败，原因见下方；处理后重试此仓，重试复用同一分支。"
