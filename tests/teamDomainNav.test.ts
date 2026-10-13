@@ -94,8 +94,9 @@ test("团队问题页:概览+现场在当前面板,队列空态与需求侧同�
   assert.match(issueWorld, /<Empty[^>]*role="status"/);
   assert.match(issueWorld, /<EmptyTitle>/);
   assert.doesNotMatch(issueWorld, /review-clear/);
-  // 档案措辞:概览说明句与需求侧同构(已取消…仅保留在成果档案)。
-  assert.match(issueWorld, /已取消会话仅保留在成果档案/);
+  // 档案措辞:概览说明句不再提已取消(2026-10-13 拍板:已取消在团队
+  // DTS 整页不展示,概览说明与档案同步收口)。
+  assert.doesNotMatch(issueWorld, /已取消会话仅保留在成果档案/);
 });
 
 test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", () => {
@@ -106,13 +107,17 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
     /flex items-center justify-between gap-6 rounded-xl border border-line\s*\n\s*bg-surface px-6 py-\[22px\] shadow-xs/,
     "档案头卡与 HistoryBoard 同配方");
   assert.match(issueWorld, /<h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环<\/h2>/);
-  // 结论词表收敛后五格(全部闭环/已交付/问题成立/非问题/已取消,
-  // ADR-0037),宽屏一行排下。
-  assert.match(issueWorld, /grid grid-cols-2 gap-2\.5 min-\[1081px\]:grid-cols-5/);
+  // 结论词表收敛后四格(全部闭环/已交付/问题成立/非问题,ADR-0037
+  // 三档;已取消格 2026-10-13 退役——档案只收已归档会话),宽屏一行排下。
+  assert.match(issueWorld, /grid grid-cols-2 gap-2\.5 min-\[1081px\]:grid-cols-4/);
   assert.match(issueWorld, /flex min-h-\[94px\] flex-col justify-between rounded-lg border border-line bg-surface px-\[15px\] py-3\.5 shadow-xs/,
     "结论指标瓦片与 HistoryBoard 指标瓦片同配方");
   assert.match(issueWorld, /<EmptyTitle>还没有闭环的问题会话<\/EmptyTitle>/);
   assert.match(issueWorld, /conclusion\?\.kind === kind/);
+  // 档案段不再引用 canceled:只收已归档会话,已取消整页不展示(2026-10-13)。
+  const archiveBody = issueWorld.split("/** 成果档案·问题闭环")[1] ?? "";
+  assert.notEqual(archiveBody, "", "档案面板注释锚点在,分段断言才成立");
+  assert.doesNotMatch(archiveBody, /canceled/);
   // 档案列表仍用会话卡(内容差异),不再与现场平铺在同一页。
   const worldBody = issueWorld.split("/** 成果档案·问题闭环")[0];
   assert.doesNotMatch(worldBody, /history-board/,

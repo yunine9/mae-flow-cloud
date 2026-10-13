@@ -63,13 +63,13 @@ function inScope(issue: IssueSummary, scope: IssueScope, now: number): boolean {
 }
 
 /** 档案结论词表(镜像 IssueBoard 的 issueConclusionText 词汇,档案格
- * 只按 conclusion.kind 分桶——词表收敛后只有三档,ADR-0037)。 */
+ * 只按 conclusion.kind 分桶——词表收敛后只有三档,ADR-0037)。已取消
+ * 不设格(2026-10-13):档案只收已归档会话,已取消整页不展示。 */
 const CONCLUSION_TILES = [
   { kind: "", label: "全部闭环", tone: "neutral" },
   { kind: "delivered", label: "已交付", tone: "success" },
   { kind: "issue", label: "问题成立", tone: "attention" },
   { kind: "non_issue", label: "非问题", tone: "neutral" },
-  { kind: "canceled", label: "已取消", tone: "danger" },
 ] as const;
 
 /** 概览格按钮配方(原 .delivery-breakdown-cells button 家族)。 */
@@ -174,9 +174,10 @@ export function TeamIssueWorld({ issues }: {
 
   const stats = useMemo(() => issueDeliveryBreakdown(issues), [issues]);
   const featureRows = useMemo(() => issueFeatureRows(issues), [issues]);
-  // 现场队列只收处理中的会话:已闭环/已取消都只进档案(与需求侧
-  // isCurrentTeamTask 的现场口径同构)——概览格计数(active)与队列行数
-  // 因此严格一致,点格见几行就是几行。
+  // 现场队列只收处理中的会话:已闭环/已取消都不进现场(已取消在团队
+  // 页整页不展示,2026-10-13;与需求侧 isCurrentTeamTask 的现场口径
+  // 同构)——概览格计数(active)与队列行数因此严格一致,点格见几行
+  // 就是几行。
   const active = useMemo(() => issues.filter((issue) =>
     issue.status !== "canceled" && issue.status !== "archived"), [issues]);
   const owners = useMemo(() =>
@@ -253,11 +254,11 @@ export function TeamIssueWorld({ issues }: {
             <a href="/deliveryAnalysis" className="text-[13px] font-normal text-primary underline-offset-2 hover:underline"
               title="一次定位率/一次验证率/一次解决率/首次生成占比/90%AI生成达标率等交付统计已移至交付分析「问题处理」页签">交付统计 →</a>
           </h2>
-          <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场；已取消会话仅保留在成果档案。</p>
+          <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
           aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
-          <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
+          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
@@ -349,31 +350,30 @@ export function TeamIssueWorld({ issues }: {
 export function TeamIssueArchive({ issues }: {
   issues: IssueSummary[];
 }) {
-  // 成果档案·问题闭环:conclusion 维度归档统计(已闭环 + 已取消)。
+  // 成果档案·问题闭环:conclusion 维度归档统计,只收已归档会话
+  // (已取消整页不展示,2026-10-13)。
   const closed = useMemo(() => issues.filter((issue) =>
-    issue.status === "archived" || issue.status === "canceled"), [issues]);
+    issue.status === "archived"), [issues]);
   const conclusionCount = (kind: string) => kind === ""
     ? closed.length
-    : kind === "canceled"
-      ? closed.filter((issue) => issue.status === "canceled").length
-      : closed.filter((issue) => issue.conclusion?.kind === kind).length;
+    : closed.filter((issue) => issue.conclusion?.kind === kind).length;
 
   return <section className="grid gap-4" aria-label="成果档案·问题闭环">
     <div className="flex items-center justify-between gap-6 rounded-xl border border-line
       bg-surface px-6 py-[22px] shadow-xs">
       <div>
         <h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环</h2>
-        <p className="mt-[7px] text-sm text-muted-foreground">这里保存已闭环与已取消的问题会话；处理中的回到「当前现场」查看。</p>
+        <p className="mt-[7px] text-sm text-muted-foreground">这里保存已闭环的问题会话；处理中的回到「当前现场」查看。</p>
       </div>
     </div>
     {closed.length === 0
       ? <Empty className="min-h-[360px] border" role="status">
           <EmptyMedia variant="icon"><Database aria-hidden /></EmptyMedia>
           <EmptyTitle>还没有闭环的问题会话</EmptyTitle>
-          <EmptyDescription>非问题结论、修复交付与转正的会话，收口后都会归档到这里。</EmptyDescription>
+          <EmptyDescription>非问题结论、修复交付的会话，收口后都会归档到这里。</EmptyDescription>
         </Empty>
       : <>
-        <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-5" aria-label="问题闭环结论统计">
+        <div className="mb-4 grid grid-cols-2 gap-2.5 min-[1081px]:grid-cols-4" aria-label="问题闭环结论统计">
           {CONCLUSION_TILES.map((tile) => (
             <div key={tile.kind || "all"}
               className={`flex min-h-[94px] flex-col justify-between rounded-lg border border-line bg-surface px-[15px] py-3.5 shadow-xs ${METRIC_TONE[tile.tone]}`}>
