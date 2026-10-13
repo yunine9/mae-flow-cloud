@@ -62,6 +62,8 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
   execFileSync("git", ["init", "-q", sourceDir]);
   execFileSync("git", ["-C", sourceDir, "-c", "user.name=t", "-c",
     "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "seed"]);
+  // 会话基线分支要在远端在架:pull_repo 按基线克隆(#441)。
+  execFileSync("git", ["-C", sourceDir, "branch", "br_V100R026C10_release"]);
   const origin = platform.initBare(sourceDir, dataDir);
   await platform.start();
   // 开演前就种下第一条意见:申报即监看,首轮拉取就该落账。
@@ -113,6 +115,7 @@ test("检视意见发现与落账:mr_green 期内新意见进反馈账,增量不
     const created = service.create({
       account: "dev", title: "登录超时", ticket: TICKET,
       source: "dts", repoUrl: origin,
+      baseline: "br_V100R026C10_release",
     });
     // 推进到分析确认闸并确认,让剧本继续走到申报。等待条件必须是
     // "已收口到 waiting_user"——闸对象在 submit_analysis 当下就进状态,
