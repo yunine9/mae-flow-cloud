@@ -32,7 +32,7 @@ export function PlatformSkillPane({ kind }: {
       <h2 className="text-lg font-semibold">{skill?.name ?? platformSkillLabels[kind]}</h2>
       <p className="mt-2 text-sm text-muted-foreground">方法随平台版本更新，无需上传；已开始的研究继续使用固定版本。</p>
     </div>{studio && skill && <Button onClick={() => studio.openExecution(kind === "component-analysis" ? "component" : kind)}>使用此 Skill</Button>}</header>
-    {kind === "domain" && <p className="text-sm text-muted-foreground">上传资料与无线豆包的用法由平台提供；本 Skill 决定研究方法、步骤安排和文档组织。</p>}
+    {kind === "domain" && <p className="text-sm text-muted-foreground">本 Skill 包含源码、上传资料与无线豆包的研究方法，以及规划、写作和评审要求。</p>}
     {error && <p role="alert" className="text-danger">{error}</p>}
     {files ? <ComponentDocumentReader allowRaw collapseFolders height="max(500px, calc(100dvh - 290px))" treeLabel="平台 Skill 文件" contentLabel="Skill 文件正文"
       files={Object.keys(files).sort((a, b) => a === "SKILL.md" ? -1 : b === "SKILL.md" ? 1 : a.localeCompare(b)).map(name => ({ id: name, path: name.split("/"), content: files[name] }))}

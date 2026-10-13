@@ -2,7 +2,7 @@
 
 ## 一、目标
 
-在用户本次范围内，**穷举**上下文 repositories 中的所有来源仓、业务域、外部系统和业务功能，生成完整、详尽的文档规划。工具映射与路径约定见 [平台执行约定](../references/platform-execution.md)。
+在用户本次范围内，**穷举**上下文 repositories 中的所有来源仓、业务域、外部系统和业务功能，生成完整、详尽的文档规划。工具映射与路径约定见 [平台执行约定](../references/platform-execution.md)。调查与规划核查涉及上传资料或无线概念时，先读 [来源方法](../references/business-sources.md)，按其建立索引并回读原文。
 
 ## 二、执行步骤
 
@@ -10,6 +10,7 @@
    - 用 knowledge_structure 列仓，逐仓 component_source list 并继续分页；工具默认过滤的依赖与生成目录不当作自有业务模块。不要把已有知识文稿当作源码实现；构建、部署和业务配置仍在调查范围
    - **不可遗漏任何代码仓**。即使某仓只有部分目录与本项目相关（如仅一个子模块），也必须列出
    - 对每个仓读取构建文件（`pom.xml` / `package.json` / `CMakeLists.txt` / `app_define.json` 等），识别技术栈
+   - 查看 context.materials 的资料状态、版本/digest 与范围摘要；需要目录时 knowledge_material({}) 取得章节、包内文档、图片和警告，分配相关资料编号及待核对问题，不在主会话展开全部正文
 
 2. **分配独立调查，再深入源码**：
    主会话先依据仓列表、构建文件和目录入口划分调查单元，不先把全部业务实现读入自己的上下文。按仓与业务入口划分，再按完整业务场景细分；同一场景的关键调用链保持完整，不按任意行数截断。每个单元说明仓编号、源码范围、具体待回答问题、依赖单元和对应产物。调查步骤通过 knowledge_work schedule 登记 readonly=true，互不依赖的单元可用 run 的 concurrency=1～4 并行执行，本方法默认 3。可执行的参数与结果示例见 [独立调查](../references/platform-execution.md#独立调查)。
@@ -22,7 +23,7 @@
    - 对于前端仓：从实际路由/页面/状态入口识别业务，`src/containers/`、`src/components/`、`src/store/` 仅为常见示例
    - 其他语言同样按构建、入口和调用实现调查；记录真实核心类/函数及关键文件，不套用固定目录或分层
 
-   instructions 只传本单元范围、方法入口、证据索引和问题。单元启动时按 id 回读必要结果并重新打开原始源码，knowledge_work_result 的 summary 只写主要发现，data 保存关键路径/行范围、跨仓调用与待核实问题，document_ids=[]。结果由平台持久保存，只读单元不调用 save_document。主会话按编号读取必要结果，维护短摘要与编号引用；发现尚未调查的范围时继续登记具体单元，不集中展开全部源码。
+   instructions 只传本单元范围、方法入口、证据索引和问题。单元启动时按 id 回读必要结果并重新打开原始源码与相关资料；不熟悉的无线概念先查已有证据，再按具体问题补查背景。knowledge_work_result 的 summary 只写主要发现，data 保存关键路径/行范围、跨仓调用与待核实问题，业务来源按来源方法保存 source_index、source_gaps 和 source_conflicts，document_ids=[]。结果由平台持久保存，只读单元不调用 save_document。主会话按编号读取必要结果，维护短摘要与编号引用；发现尚未调查的范围时继续登记具体单元，不集中展开全部源码或资料。
 
    每个范围内目录和业务入口应归入已调查功能，或说明不相关/生成内容的依据。尚未调查、无法读取和来源失败单独列为待解决范围，不计作已穷尽。调查不要求机械逐行扫描几十万行源码，但必须沿完整入口清单追踪有关实现，不能用若干代表性入口替代全部功能覆盖。
 
@@ -65,7 +66,7 @@
 
 6. **保存并登记完整规划**：按 `prompts/plan-template.md` 保存 Markdown，使用 knowledge_work save_document，id=current-plan。正文保留全部产物条目、范围边界和调查结果编号，不复制源码或全部调查报告。填写稳定 document_id、实际 target_id、仓内 path、模板及写作步骤；instructions 带本条目必要字段和证据索引，不要求每个 writer 加载整份规划。用 knowledge_diagram_check({work_document_id:"current-plan"}) 查图，按 next_start 读完报告；invalid 修正正文再查，unavailable 保留规划与依赖问题。图通过后用 action=plan、work_document_id=current-plan 登记全部 document_ids，宿主登记前也会校验。规划不进入知识发布；已登记产物是否齐全由宿主检查，业务完整性仍需独立核查。
 
-7. **独立核查**：由主会话安排 readonly=true 的独立步骤，读取本提示词、规划模板、current-plan 和 read_plan 全部清单/排除说明分页，用 knowledge_diagram_check 的 work_document_id=current-plan 读取当前图表报告，按调查索引回查各仓业务入口。核对清单与正文一一对应、入口到功能/场景有对应、适用文档类型齐全。大范围可分仓或业务域核查，主会话汇总各范围结论。用 knowledge_work_result 返回 review: {pass, feedback} 和 document_ids=[]；invalid/unavailable 不能通过。普通只读步骤的 done 只表示返回结果，主会话须检查 review.pass；有明确修订后再用新编号核查，没有新证据的相同失败不反复重建步骤。新发现先补正文和 plan；旧排除项保留原因。
+7. **独立核查**：由主会话安排 readonly=true 的独立步骤，读取本提示词、规划模板、current-plan 和 read_plan 全部清单/排除说明分页，用 knowledge_diagram_check 的 work_document_id=current-plan 读取当前图表报告，按调查索引回查各仓业务入口和相关资料中的业务范围。核对清单与正文一一对应、入口到功能/场景有对应、适用文档类型齐全；不能把未读资料、来源失败或无线通用背景当成已经确认的系统范围。大范围可分仓或业务域核查，主会话汇总各范围结论。用 knowledge_work_result 返回 review: {pass, feedback} 和 document_ids=[]；invalid/unavailable 不能通过。普通只读步骤的 done 只表示返回结果，主会话须检查 review.pass；有明确修订后再用新编号核查，没有新证据的相同失败不反复重建步骤。新发现先补正文和 plan；旧排除项保留原因。
 
 ## 三、规划输出格式
 

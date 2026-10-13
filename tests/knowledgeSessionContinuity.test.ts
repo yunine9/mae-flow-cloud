@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { runGenericDomainKnowledge as runDomainKnowledge } from "./helpers/extractionSkillFixture.ts";
+import { genericDomainSkillFixture, runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
+import { bundledExtractionSkill } from "../src/knowledgeExtractionSkills.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { runComponentResearch } from "../src/componentResearchAgent.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
@@ -27,11 +28,25 @@ function fixture() {
 }
 const document = { id: "rules", title: "规则", target_id: "domain", path: "docs/knowledge/rules.md", layer: "domain", content: "规则正文", sources: "repo-1 code.ts" };
 
-test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不重复保存草稿", async () => {
+test("领域萃取重启沿用原轮次、Pi 上下文和固定来源方法，不重复保存草稿", async () => {
   const f = fixture(); let paused = false, release!: () => void;
   const hold = new Promise<void>(resolve => release = resolve);
   const material = await businessMaterial(f.dir);
+  const sourcePath = "references/business-sources.md", sourceMethod = bundledExtractionSkill("domain").files[sourcePath];
+  assert.ok(sourceMethod?.trim(), "内置方法应提供来源研究文件");
+  const method = { ...genericDomainSkillFixture,
+    "SKILL.md": `${genericDomainSkillFixture["SKILL.md"]}\n每个会话通过 [来源研究](${sourcePath}) 读取本轮固定的方法。`,
+    [sourcePath]: sourceMethod };
+  const sourceResults = (request: Record<string, unknown>) => {
+    const blocks = ((request.messages ?? []) as any[]).flatMap(message => Array.isArray(message.content) ? message.content : []);
+    const ids = new Set(blocks.filter(block => block.type === "tool_use" && block.name === "extraction_skill" && block.input?.path === sourcePath).map(block => block.id));
+    return blocks.filter(block => block.type === "tool_result" && ids.has(block.tool_use_id)).map(block => {
+      assert.ok(!block.is_error, "来源方法回读必须实际成功");
+      return typeof block.content === "string" ? block.content : (block.content ?? []).filter((item: any) => item.type === "text").map((item: any) => item.text).join("\n");
+    });
+  };
   const model = new ScriptedModelServer([
+    { tool: { name: "extraction_skill", input: { path: sourcePath } } },
     { tool: { name: "knowledge_material", input: { id: material.id } } },
     { tool: { name: "component_source", input: { action: "read", component_id: "repo-1", path: "code.ts" } } },
     { tool: { name: "knowledge_draft", input: { action: "save", document } } },
@@ -40,21 +55,25 @@ test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不�
     { tool: { name: "knowledge_work", input: { action: "list" } } },
     { tool: { name: "knowledge_work", input: { action: "list" } } },
     { text: "等待证据核对" },
+    { tool: { name: "extraction_skill", input: { path: sourcePath } } },
     { tool: { name: "knowledge_draft", input: { action: "read", id: "rules" } } },
     { tool: { name: "knowledge_work", input: { action: "list" } } },
     { tool: { name: "knowledge_work_result", input: { summary: "沿用原研究结果完成", document_ids: ["rules"] } } },
     { text: "完成" },
-  ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => { if (index === 3 && !paused) { paused = true; await hold; } } });
+  ], "scripted-v1", { linear: true, beforeScene: async ({ index }) => { if (index === 4 && !paused) { paused = true; await hold; } } });
   await model.start();
   const options = { dataDir: f.dir, model: () => ({ provider: "maeflow", model: "scripted-v1", json: model.modelsJson() }), source: async () => ({ root: f.source, revision: f.revision }) };
-  let service = new DomainKnowledgeExtraction(f.dir, input => runDomainKnowledge(input, options));
+  let service = new DomainKnowledgeExtraction(f.dir, input => runDomainKnowledgeFixture(method, input, options));
   try {
     const job = service.create({ issue_no: "REQ1", title: "业务", scope: "提取业务规则", material_ids: [material.id], repositories: [{ name: "业务", repository: "https://example.test/business.git", branch: "master" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "master", docs_path: "docs/knowledge" } }, "expert");
     await until(() => paused);
     const turnId = service.get(job.id).turns[0].id;
+    const pinnedDigest = service.get(job.id).turns[0].skill?.digest;
+    assert.ok(pinnedDigest); assert.deepEqual(sourceResults(model.requests.at(-1)!), [sourceMethod]);
     await service.shutdown(); release();
     assert.equal(service.get(job.id).status, "queued");
-    service = new DomainKnowledgeExtraction(f.dir, input => runDomainKnowledge(input, options));
+    method[sourcePath] = "NEW_SOURCE_METHOD_MUST_NOT_REPLACE_RUNNING_TASK";
+    service = new DomainKnowledgeExtraction(f.dir, input => runDomainKnowledgeFixture(method, input, options));
     await until(() => ["done", "failed"].includes(service.get(job.id).status));
     const result = service.get(job.id);
     assert.equal(result.status, "done", result.error);
@@ -62,8 +81,15 @@ test("领域萃取重启沿用原轮次和 Pi 上下文，不重读源码、不�
     assert.equal(result.documents.length, 1); assert.equal(result.documents[0].revision, 1);
     assert.equal(result.evidence.filter(e => e.tool === "component_source" && e.action === "read").length, 1);
     assert.match(JSON.stringify(model.requests.at(-1)), /ORIGINAL_CONTEXT/);
-    // 资料与无线豆包的用法走系统提示词（不在 Skill 包里），重启接续后的会话也带着。
-    for (const request of [model.requests[0], model.requests.at(-1)]) assert.match(JSON.stringify((request as any).system), /平台说明，适用于本任务的每个会话/);
+    // 重启后工具继续可用，脚本再次读取固定包；实际结果而非提示词措辞证明方法可回读。
+    for (const request of [model.requests[0], model.requests.at(-1)!]) {
+      const tools = (request.tools as Array<{ name: string }>).map(tool => tool.name);
+      for (const name of ["extraction_skill", "knowledge_material", "business_knowledge", "knowledge_evidence"]) assert.ok(tools.includes(name), name);
+    }
+    assert.deepEqual(sourceResults(model.requests.at(-1)!), [sourceMethod, sourceMethod]);
+    assert.equal(result.turns[0].skill?.digest, pinnedDigest);
+    const pinned = JSON.parse(readFileSync(join(f.dir, "domain-extraction", job.id, "skill.json"), "utf8"));
+    assert.equal(pinned.digest, pinnedDigest); assert.equal(pinned.files[sourcePath], sourceMethod);
     assert.match(readFileSync(join(f.dir, "domain-extraction", job.id, "skill-runs", turnId, "coordinator", "events.jsonl"), "utf8"), /"context_restored":true/);
   } finally { release(); await service.shutdown(); await model.stop(); rmSync(f.dir, { recursive: true, force: true }); }
 });
