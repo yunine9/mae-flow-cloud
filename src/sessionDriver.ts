@@ -575,7 +575,7 @@ export class CloudSession {
     await this.reconcileInterruptedWork();
     if (this.checkpoint?.restored) {
       restorePendingToolResults(this.checkpoint.manager, this.options.eventLog.replay(), this.sessionId);
-      this.session.agent.state.messages = this.checkpoint.manager.buildSessionContext().messages;
+      this.session.refreshContext();
     }
     this.emit("session_started", this.sessionId, { resume: true,
       context_restored: Boolean(this.checkpoint?.restored),

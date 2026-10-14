@@ -187,18 +187,19 @@ test("非零退出、Abort 与执行器异常都把可读路径作为最终错�
       },
     );
     let output = "";
-    await assert.rejects(
-      () => (definition.execute as any)(
-        `call-${scenario}`, { command: "fixture" }, undefined,
-        undefined,
-        undefined,
-      ),
-      (error: unknown) => {
+    const execute = () => (definition.execute as any)(`call-${scenario}`, { command: "fixture" }, undefined, undefined, undefined);
+    if (scenario === "nonzero") {
+      const result = await execute();
+      assert.equal(result.isError, true);
+      assert.equal(result.structuredContent.exit_code, 17);
+      output = result.content.map((block: any) => block.text ?? "").join("\n");
+    } else {
+      await assert.rejects(execute, (error: unknown) => {
         assert.ok(error instanceof Error);
         output = error.message;
         return true;
-      },
-    );
+      });
+    }
     const relativePath = hintedPath(output);
     assert.equal(readFileSync(join(workspace, relativePath), "utf-8"),
       `${scenario}-diagnostic\n`);
@@ -243,7 +244,8 @@ async function runSession(
   taskId: string,
   script: Scene[],
   allowHumanQuestions = true,
-): Promise<{ workspace: string; transcript: string; commands: string[] }> {
+  exitCode = 0,
+): Promise<{ workspace: string; transcript: string; commands: string[]; requests: unknown[] }> {
   const workspace = mkdtempSync(join(tmpdir(), "mfc-bash-log-session-"));
   const agentDir = join(workspace, "pi-agent");
   mkdirSync(agentDir, { recursive: true });
@@ -254,7 +256,7 @@ async function runSession(
     exec: async (command, _cwd, options) => {
       commands.push(command);
       options.onData(Buffer.from(`ran:${command}\n`));
-      return { exitCode: 0 };
+      return { exitCode };
     },
   };
   const transcript = join(workspace, "transcript.jsonl");
@@ -282,7 +284,7 @@ async function runSession(
     session?.dispose();
     await model.stop();
   }
-  return { workspace, transcript, commands };
+  return { workspace, transcript, commands, requests: model.requests };
 }
 
 test("CloudSession 给普通、子 Agent 与 prepush 三类 Bash 会话统一装配日志", async () => {
@@ -330,4 +332,20 @@ test("CloudSession 给普通、子 Agent 与 prepush 三类 Bash 会话统一装
   assert.equal((readFileSync(prepush.transcript, "utf-8")
     .match(/ran:prepush-command/g) ?? []).length, 1,
   "tool_output 只服务可观测性，不能重复灌进模型 transcript");
+});
+
+test("Pi 1.x Bash 非零退出在宿主事件和模型历史中都记为失败", async () => {
+  const run = await runSession("REQ-LOG-ERROR", [
+    { tool: { name: "bash", input: { command: "failing-command" } } },
+    { text: "命令失败，保留日志。" },
+  ], true, 17);
+  const events = new EventLog(join(run.workspace, "events.jsonl")).replay();
+  const finished = events.find(event => event.kind === "tool_finished" && event.payload.name === "Bash");
+  assert.ok(finished);
+  assert.equal(finished.payload.is_error, true);
+  const toolResult = (run.requests.at(-1) as any).messages.flatMap((message: any) =>
+    Array.isArray(message.content) ? message.content : []).find((block: any) => block.type === "tool_result");
+  assert.equal(toolResult?.is_error, true, "模型必须收到失败标记，不能当成成功执行");
+  assert.match(String(finished.payload.result), /exited with code 17/);
+  assert.match(String(finished.payload.result).trimEnd(), /完整命令输出：.*（可用 Read 打开）\]$/);
 });

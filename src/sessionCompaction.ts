@@ -118,7 +118,6 @@ export class SessionCompaction {
         projected = transform ? await transform(messages, signal) : messages;
       }
       signal?.throwIfAborted();
-      this.session.agent.state.messages = messages;
       this.lastEstimate = this.size(projected) / this.ratio;
       return projected;
     };
@@ -156,7 +155,12 @@ export class SessionCompaction {
       }
       if (epoch !== this.abortEpoch) return;
       this.lastError = "";
-      this.session.agent.state.messages = this.messages();
+      // 新版 Pi 以持久会话生成请求。只从模型上下文移除失败回复，原始失败记录仍保留。
+      for (const entry of this.session.sessionManager.buildSessionProjection().entries) {
+        if (entry.sourceEntry.type === "message" && entry.messages.some(message => !usable(message)))
+          this.session.sessionManager.appendContextEdit(entry.sourceEntry.id, null);
+      }
+      this.session.refreshContext();
       await this.session.agent.continue();
     };
     const abort = this.session.abort.bind(this.session);
@@ -217,7 +221,7 @@ export class SessionCompaction {
       const firstKeptId = replaceTail ? this.session.sessionManager.appendMessage(continuation) : entries[cut].id;
       this.session.sessionManager.appendCompaction(summary, firstKeptId, before,
         { strategy: "mae-budget-v1", reason, estimatedAfter: after, contextWindow: this.window }, true);
-      this.session.agent.state.messages = this.messages();
+      this.session.refreshContext();
       this.failedAt = 0;
       this.options.log(`会话主动压缩完成：约 ${before} → ${after} tokens（容量 ${this.window}）`);
       return true;

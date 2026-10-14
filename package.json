@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@ast-grep/cli": "0.45.3",
-    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-coding-agent": "1.2.0",
     "@sylphx/anymd": "8.5.3",
     "elkjs": "^0.12.0",
     "pg": "^8.23.0",

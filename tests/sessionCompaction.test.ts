@@ -163,6 +163,12 @@ test("网关容量比配置小：校正并持久化容量，不再追加原用�
     const users = h.manager.getBranch().filter((e) => e.type === "message" && e.message.role === "user"
       && JSON.stringify(e.message).includes("UNIQUE-USER-REQUEST"));
     assert.equal(users.length, 1);
+    const failure = h.manager.getBranch().find(e => e.type === "message" && e.message.role === "assistant" && e.message.stopReason === "error");
+    assert.ok(failure, "保留原始失败记录");
+    assert.ok(h.manager.getBranch().some(e => e.type === "context_edit" && e.targetId === failure.id && e.replacement === null));
+    const reopened = SessionManager.open(h.manager.getSessionFile()!);
+    assert.equal(reopened.buildSessionContext().messages.some(m => m.role === "assistant" && m.stopReason === "error"), false,
+      "重启后失败回复也不能重新进入模型上下文");
     assert.ok(h.logs.some((s) => s.includes("校正上下文容量为 16000")));
     assert.ok(h.manager.getBranch().some((e) => e.type === "custom" && e.customType === "mae-context-capacity"));
     assert.equal(h.session.agent.state.messages.at(-1)?.role, "assistant");

@@ -425,7 +425,10 @@ export function createWorkspaceBashToolDefinition(
       + "preview and always saves the complete output under .mae-flow-work/bash-logs.",
     execute: async (...args: any[]) => {
       try {
-        return await execute(...args);
+        const result = await execute(...args);
+        // Pi 1.x 的非零退出通过 isError 返回；保留结构化退出码，并让日志路径仍在最后。
+        return { ...result, content: result.content.map((block: any) =>
+          block.type === "text" ? { ...block, text: moveHintToEnd(block.text) } : block) };
       } catch (error) {
         if (error instanceof Error) error.message = moveHintToEnd(error.message);
         throw error;
