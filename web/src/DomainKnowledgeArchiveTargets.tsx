@@ -65,8 +65,8 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange }: {
     finally { setBusy(false); }
   }
   return <section className="space-y-4 rounded-lg border border-line p-4" aria-label="领域知识归档位置">
-    {job.module_id && !moduleLayout && <div className="space-y-2"><p className="text-sm text-muted-foreground">共享仓可按业务模块分目录保存。整理时复用现有文稿，同步更新相对链接，保留调查和历史版本，不重新萃取。下方可检查并调整整理后的路径，保存后生效。</p><Button variant="outline" disabled={busy || disabled} onClick={organizeByModule}>按业务模块整理目录</Button></div>}
-    {moduleLayout && <div className="space-y-2 text-sm text-muted-foreground"><p>每仓以根 AGENTS.md 作为统一入口，保留原有内容，归档时补充模块索引。业务文稿分别保存在带模块标识的目录内，以 README.md 和普通索引说明范围，不生成子目录 AGENTS.md。</p>{job.documents.some(document => document.knowledge_document_id) && <p>保存目录调整后，回到「文稿」确认并发布本次变化，再创建归档 MR；这些操作不重新调用模型研究。旧仓中的公共文件保留。</p>}</div>}
+    {job.module_id && !moduleLayout && <div className="space-y-2"><p className="text-sm text-muted-foreground">旧任务新建归档前，先按业务模块整理目录。整理复用现有文稿，把原 AGENTS.md 的模块内容移入 README.md 或 index.md，同步更新相对链接，保留调查和历史版本，不重新萃取。下方可检查并调整路径，保存后生效。</p><Button variant="outline" disabled={busy || disabled} onClick={organizeByModule}>按业务模块整理目录</Button></div>}
+    {moduleLayout && <div className="space-y-2 text-sm text-muted-foreground"><p>归档时，平台用统一入口完整替换每个目标仓根 AGENTS.md，旧正文保留在 Git 历史中。业务文稿分别保存在带模块标识的目录内，以 README.md 和普通索引说明范围，不生成子目录 AGENTS.md。</p><p>保存目录调整后，回到「文稿」确认并发布本次变化，再创建归档 MR；这些操作不重新调用模型研究。其他模块的文稿保持原样。</p></div>}
     {usedTargets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled}>
       <legend className="px-1 font-medium">{target.name}</legend>
       <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label={`${target.id} 归档仓地址`} value={target.repository} onChange={event => change(target.id, { repository: event.target.value })} placeholder="https://…/knowledge.git" /></label>

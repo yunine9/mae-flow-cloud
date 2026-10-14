@@ -60,6 +60,10 @@ function archiveRepositoryGroups(targets: KnowledgeRepository[]) {
   }
   return groups;
 }
+const LEGACY_MODULE_ARCHIVE_MESSAGE = "此任务沿用旧归档目录。请先在 Git 归档设置中按业务模块整理已有文稿，再确认并发布这些变化后新建归档；文稿、调查和历史版本保留，不重新研究。已有归档批次仍可按原版本重试。";
+function needsModuleArchiveLayout(job: DomainKnowledgeJob) {
+  return !!job.module_id && !job.component_research_id && job.knowledge_layout !== "module-v1";
+}
 
 /** 改目录只重算 Markdown 链接目的地，不替换代码、来源文字或外部网址。 */
 function relocateMarkdownLinks(content: string, oldPath: string, newPath: string, paths: Map<string, string>): string {
@@ -476,6 +480,7 @@ export class DomainKnowledgeExtraction {
   private archivePreview(job: DomainKnowledgeJob, documents: DomainDocument[]): KnowledgeArchivePreview {
     const id = job.id;
     const batch = this.matchingManualBatch(job, documents);
+    const needsModuleLayout = needsModuleArchiveLayout(job);
     const action = (value: KnowledgeProductionAction) => ({ ...value, href: value.id === "configure" ? job.component_research_id ? "/configuration?tab=knowledge" : undefined
       : `?kbPage=task&kbKind=${job.component_research_id ? "component" : "domain"}&kbTask=${encodeURIComponent(job.component_research_id ?? id)}&kbStage=publish` });
     const groups = archiveRepositoryGroups([job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id)));
@@ -488,7 +493,7 @@ export class DomainKnowledgeExtraction {
       const problem = target.repository.trim() ? (() => { try { repository(target, target.id); return ""; } catch (error) { return (error as Error).message; } })() : "";
       const configured = !!target.repository.trim() && !problem;
       const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
-      const actions: KnowledgeProductionAction[] = !configured ? perTarget ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
+      const actions: KnowledgeProductionAction[] = !configured ? perTarget && !needsModuleLayout ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
         : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
@@ -503,10 +508,18 @@ export class DomainKnowledgeExtraction {
     });
     const status_label = targets.some(target => target.status_label === "归档失败") || batch?.state === "failed" ? "归档失败"
       : batch?.state === "running" ? "归档中" : targets.length && targets.every(target => target.status_label === "已归档") ? "已归档" : "已发布（未归档）";
-    const actions: KnowledgeProductionAction[] = status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
+    const actions: KnowledgeProductionAction[] = needsModuleLayout && !batch ? [] : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
       : status_label === "已发布（未归档）" && targets.length && targets.every(target => target.configured) ? [action({ id: "create-archive", label: "创建归档 MR", view: "archive" })]
         : perTarget || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
-    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。",
+    if (needsModuleLayout) {
+      const configure = actions.find(item => item.id === "configure");
+      if (configure) configure.label = "按模块整理归档";
+      else actions.push(action({ id: "configure", label: "按模块整理归档", view: "archive" }));
+    }
+    const statusMessage = status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。";
+    const layoutMessage = needsModuleLayout ? LEGACY_MODULE_ARCHIVE_MESSAGE : job.knowledge_layout === "module-v1"
+      ? "本次归档将完整替换各目标仓根目录的 AGENTS.md，旧正文保留在 Git 历史中；模块正文保存在本模块独占目录。" : "";
+    return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: [layoutMessage, statusMessage].filter(Boolean).join("\n"),
       issue_no: batch?.issue_no ?? job.issue_no, issue_description: batch?.issue_description ?? job.issue_description, expected_revisions: Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), actions, targets })) as KnowledgeArchivePreview;
   }
   async createArchive(id: string, input: { issue_no: string; issue_description?: string; expected_revisions: Record<string, string> }, operator: string) {
@@ -532,6 +545,7 @@ export class DomainKnowledgeExtraction {
       }
       let batch = this.matchingManualBatch(job, documents);
       if (batch) return this.previewArchive(id);
+      if (needsModuleArchiveLayout(job)) throw new Error(LEGACY_MODULE_ARCHIVE_MESSAGE);
       batch = { id: randomUUID(), created_at: new Date().toISOString(), operator, state: "pending", knowledge_layout: job.knowledge_layout,
         documents: structuredClone(documents), targets: structuredClone(targets), issue_no, issue_description, publications: [] };
       (job.archive_batches ??= []).push(batch); this.persist(job); this.live(id).archive_batches = structuredClone(job.archive_batches);
@@ -840,11 +854,11 @@ export class DomainKnowledgeExtraction {
       }
     }
     const paths = new Set<string>();
-    for (const doc of candidate.documents.filter(d => d.selected && !confirmedDeletions.has(d.id))) {
+    for (const doc of candidate.documents.filter(d => (candidate.knowledge_layout === "module-v1" || d.selected) && !confirmedDeletions.has(d.id))) {
       const target = targets.find(t => t.id === doc.target_id)!;
-      repository(target, target.id);
+      if (doc.selected) repository(target, target.id);
       const key = JSON.stringify([target.repository, target.branch, doc.path]);
-      if (paths.has(key)) throw new Error("多个知识文档指向同一个目标文件，请调整归档目录");
+      if (paths.has(key)) throw new Error(`多个知识文档指向同一个目标文件 ${doc.path}，请在 Git 归档设置中调整文件路径`);
       paths.add(key);
     }
     this.assertModuleDirectories(candidate);

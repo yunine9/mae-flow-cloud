@@ -170,6 +170,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
       actions: archiveActions, publications: job ? [...job.publications, ...job.publication_history ?? []].map(publication => publicationState(job, publication)) : [],
       batches: (job?.archive_batches ?? []).filter(batch => !!batch.issue_no).map((batch, index) => ({ id: batch.id, title: `第 ${index + 1} 批 · ${batch.issue_no} · ${batch.documents.length} 份`,
         status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已发布（未归档）" }[batch.state],
+        actions: batch.state === "failed" ? [{ id: "retry-archive", label: "重试原批次", view: "archive" as const, batch_id: batch.id }] : [],
         publications: job ? batch.publications.map(publication => publicationState(job, publication)) : [], superseded: [] })),
     } };
   if (input.kind === "component" && input.archive?.production) {
