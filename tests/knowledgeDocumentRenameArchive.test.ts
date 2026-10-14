@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -490,7 +490,7 @@ function moduleJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string, bas
   const targets = bases.map((base, index) => ({ ...f.target, id: index ? `repo-${index}` : "domain", docs_path: `${base}/${moduleId}` }));
   const documents = targets.map(target => {
     const path = `${target.docs_path}/README.md`;
-    const formal = saveKnowledgeDocument(f.dir, { title: `${moduleId} 的模块入口`, content: `# ${moduleId}\n\n本模块已经核对的业务范围与文稿索引。\n`, scope: "platform",
+    const formal = saveKnowledgeDocument(f.dir, { title: `${moduleId} 的模块入口`, content: `# ${moduleId}\n\n本模块已经核对的业务范围与文稿索引。\n`, scope: "module", module_ids: [moduleId],
       archive_target: { repository: target.repository, branch: target.branch, path } }, "alice");
     return { id: `readme-${target.id}`, title: formal.title, target_id: target.id, layer: target.id === "domain" ? "domain" as const : "repository" as const, path,
       content: formal.content, sources: "已确认的业务范围与源码", selected: true, revision: 1, base_content: null, base_revision: f.baseline, history: [],
@@ -500,31 +500,117 @@ function moduleJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string, bas
     publications: [], archive_batches: [], publication_history: [] };
 }
 
-test("共享仓模块导航：两个模块独立归档保留根规范，同一目录入口只安装一次且保留人工调整", { timeout: 20_000 }, async () => {
+test("共享仓模块导航：归档覆盖旧根正文，同目录的两个模块共享完整通用导航", { timeout: 20_000 }, async () => {
   const manual = "# 仓库维护规范\r\n\r\n构建命令和审阅要求由仓库维护人管理。\r\n";
   const f = await fixture({ "AGENTS.md": manual });
   try {
     const a = moduleJob(f, "orders"), first = await f.publisher.publish(a, a.knowledge_target, undefined, "alice", f.save);
     const firstRoot = f.content(first.revision!, "AGENTS.md");
-    assert.ok(firstRoot.startsWith(manual), "不改动任何原有字节");
-    assert.equal((firstRoot.match(/:start -->/g) ?? []).length, 1);
+    assert.match(firstRoot, /^# AGENTS\.md — 仓库知识导航\n/);
+    assert.doesNotMatch(firstRoot, /仓库维护规范|构建命令和审阅要求由仓库维护人管理/);
+    assert.doesNotMatch(firstRoot, /<!--|mae-flow:module-knowledge/);
     assert.match(firstRoot, /docs\/knowledge\//);
+    assert.match(firstRoot, /只读相关模块.*按需读取/s);
+    assert.match(firstRoot, /不全量加载知识目录/);
+    assert.match(firstRoot, /范围、版本与来源/);
+    assert.match(firstRoot, /当前行为查源码和配置，业务目标及约束查资料/);
+    assert.match(firstRoot, /不推广全仓/);
+    assert.ok(firstRoot.length < 1000, "通用指引保持简短，不随模块数量堆叠规则");
     assert.doesNotMatch(firstRoot, /orders/, "共享入口不包含当前任务的模块名或编号");
+    assert.equal(f.content(`${first.revision}^`, "AGENTS.md"), manual, "旧根正文仍可从 Git 历史找回");
     assert.equal(first.documents.length, 1, "派生根入口不作为模块的正式知识");
     f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
     f.git("-C", f.source, "fetch", f.remote, "main"); f.git("-C", f.source, "reset", "--hard", "FETCH_HEAD");
-    const adjusted = firstRoot.replace("处理业务需求前", "遵守团队审阅规范，处理业务需求前") + "\n人工补充：共享代码改动需要跨模块核对。\n";
+    const adjusted = firstRoot.replace("只读相关模块", "每次加载所有模块") + "\n人工补充：共享代码改动需要跨模块核对。\n";
     f.write("AGENTS.md", adjusted); f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "maintainer adjusts navigation"); f.git("-C", f.source, "push", f.remote, "main");
     const b = moduleJob(f, "billing"), second = await f.publisher.publish(b, b.knowledge_target, undefined, "alice", f.save);
-    assert.equal(f.content(second.revision!, "AGENTS.md"), adjusted, "另一个模块不会重写人工调整过的导航块或其他内容");
+    assert.equal(f.content(second.revision!, "AGENTS.md"), firstRoot, "新归档按统一格式重建根导航，不保留旧根的人工补充");
+    assert.equal(f.content(`${second.revision}^`, "AGENTS.md"), adjusted);
     assert.equal(f.content(second.revision!, a.documents[0].path), a.documents[0].content);
     assert.equal(f.content(second.revision!, b.documents[0].path), b.documents[0].content);
-    assert.equal(f.git("-C", f.remote, "diff", "--name-only", `${second.revision}^`, second.revision!), b.documents[0].path, "第二个模块仅增加自己的文稿");
+    assert.deepEqual(f.git("-C", f.remote, "diff", "--name-only", `${second.revision}^`, second.revision!).split("\n"), ["AGENTS.md", b.documents[0].path], "根覆盖在 MR 差异中可见");
+    assert.equal(f.content(second.revision!, "code.ts"), "export const untouched = true;\n");
   } finally { await f.close(); }
 });
 
-test("共享仓模块导航：同仓两种知识目录各有一个入口，推送后保存中断恢复不重复追加", { timeout: 20_000 }, async () => {
-  const f = await fixture();
+test("共享仓模块导航：正式模块位置补全自定义目录，后续从可读索引继续发现", { timeout: 30_000 }, async () => {
+  const sourceReadme = "源码模块说明，不是归档知识入口。\n";
+  const f = await fixture({ "src/orders/README.md": sourceReadme });
+  try {
+    const base = "handbook/业务`knowledge", a = moduleJob(f, "orders", [base]);
+    const first = await f.publisher.publish(a, a.knowledge_target, undefined, "alice", f.save);
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
+    f.git("-C", f.source, "fetch", f.remote, "main"); f.git("-C", f.source, "reset", "--hard", "FETCH_HEAD");
+    f.write("AGENTS.md", "# 原有仓库说明\n这是没有平台目录标记的旧根。\n");
+    f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "unmanaged root"); f.git("-C", f.source, "push", f.remote, "main");
+    const b = moduleJob(f, "billing"), second = await f.publisher.publish(b, b.knowledge_target, undefined, "alice", f.save);
+    const secondRoot = f.content(second.revision!, "AGENTS.md");
+    assert.ok(secondRoot.includes(`${base}/`), "当前任务之外已归档模块的正式位置提供自定义目录");
+    assert.match(secondRoot, /docs\/knowledge\//);
+    assert.doesNotMatch(secondRoot, /<!--|mae-flow:module-knowledge/);
+    assert.doesNotMatch(secondRoot, /src\/|原有仓库说明|没有平台目录标记/);
+    assert.equal(f.content(second.revision!, "src/orders/README.md"), sourceReadme, "不扫描或改写源码目录");
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", second.revision!);
+    const previous = readKnowledgeDocument(f.dir, a.documents[0].knowledge_document_id!);
+    saveKnowledgeDocument(f.dir, { ...previous, archive_target: { repository: f.target.repository, branch: "main", path: "relocated/knowledge/orders/README.md" } }, "alice", previous.id, { expectedRevision: previous.revision });
+    const c = moduleJob(f, "reporting"), third = await f.publisher.publish(c, c.knowledge_target, undefined, "alice", f.save);
+    assert.equal(f.content(third.revision!, "AGENTS.md"), secondRoot, "正式位置变更尚未归档时，可读索引仍能发现 Git 中现有模块入口，包括含反引号的目录");
+    assert.equal(f.content(third.revision!, a.documents[0].path), a.documents[0].content);
+  } finally { await f.close(); }
+});
+
+test("共享仓模块导航：已归档的避让入口在其他目录归档后仍可发现，正式位置也能恢复入口", { timeout: 30_000 }, async () => {
+  const f = await fixture({ "src/orders/README-source-2.md": "源码目录中的同名文件。\n" });
+  try {
+    const base = "handbook/archived", a = moduleJob(f, "orders", [base]), document = a.documents[0];
+    const previous = readKnowledgeDocument(f.dir, document.knowledge_document_id!);
+    document.path = `${base}/orders/README-${document.id}-2.md`;
+    const formal = saveKnowledgeDocument(f.dir, { ...previous, archive_target: { repository: f.target.repository, branch: "main", path: document.path } }, "alice", previous.id, { expectedRevision: previous.revision });
+    document.published_revision = formal.revision;
+    const first = await f.publisher.publish(a, a.knowledge_target, undefined, "alice", f.save);
+    assert.equal(f.tree(first.revision!, `${base}/orders/README.md`), "", "只归档避让后的入口，不新建或覆盖 canonical README");
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
+    const b = moduleJob(f, "billing"), second = await f.publisher.publish(b, b.knowledge_target, undefined, "alice", f.save);
+    const root = f.content(second.revision!, "AGENTS.md");
+    assert.ok(root.includes(`${base}/`), "已知旧目录只含 README-id-2.md 时也继续保留入口");
+    assert.match(root, /docs\/knowledge\//);
+    assert.ok(root.includes("`README-*.md` 时一并核对入口"));
+    assert.doesNotMatch(root, /src\//, "不会扫描源码里的同名 README 推断归档目录");
+    assert.equal(f.content(second.revision!, document.path), document.content);
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", second.revision!);
+    f.git("-C", f.source, "fetch", f.remote, "main"); f.git("-C", f.source, "reset", "--hard", "FETCH_HEAD");
+    f.write("AGENTS.md", "# 未管理的旧根\n");
+    f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "remove root directory index"); f.git("-C", f.source, "push", f.remote, "main");
+    const c = moduleJob(f, "reporting", ["guides/knowledge"]), third = await f.publisher.publish(c, c.knowledge_target, undefined, "alice", f.save);
+    assert.ok(f.content(third.revision!, "AGENTS.md").includes(`${base}/`), "正式模块位置中的避让入口也能补回缺失的根目录记录");
+    assert.equal(f.content(third.revision!, document.path), document.content);
+  } finally { await f.close(); }
+});
+
+test("共享仓模块导航：旧平台块只恢复校验过的目录，空目录与软链接入口不进入新根", { timeout: 20_000 }, async () => {
+  const base = "handbook/legacy", hash = createHash("sha256").update(base).digest("hex").slice(0, 16);
+  const oldRoot = "# 旧规范\n旧命令：never-run-this\n\n"
+    + `<!-- mae-flow:module-knowledge:${hash}:start -->\n业务模块知识保存在 \` ${base}/ \` 的各子目录。\n旧平台正文不得沿用。\n<!-- mae-flow:module-knowledge:${hash}:end -->\n`
+    + `<!-- mae-flow:module-knowledge:${hash}:start -->\n业务模块知识保存在 \` src/ \` 的各子目录。\n<!-- mae-flow:module-knowledge:${hash}:end -->\n`
+    + '<!-- mae-flow:module-knowledge-bases:v1 ["removed/knowledge","links","nested"] -->\n';
+  const f = await fixture({ "AGENTS.md": oldRoot, [`${base}/archived/README.md`]: "已有归档知识入口。\n",
+    "src/orders/README.md": "源码说明。\n", "nested/group/old/README.md": "不是 base 直属模块入口。\n" });
+  try {
+    mkdirSync(join(f.source, "links", "orders"), { recursive: true });
+    symlinkSync("../../code.ts", join(f.source, "links", "orders", "README.md"));
+    f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "symlink readme"); f.git("-C", f.source, "push", f.remote, "main");
+    const job = moduleJob(f, "billing"), result = await f.publisher.publish(job, job.knowledge_target, undefined, "alice", f.save);
+    const root = f.content(result.revision!, "AGENTS.md");
+    assert.match(root, /handbook\/legacy\//);
+    assert.match(root, /docs\/knowledge\//);
+    assert.doesNotMatch(root, /<!--|mae-flow:module-knowledge|旧规范|never-run-this|旧平台正文|:start|src\/|removed\/|links|nested/);
+    assert.equal(f.content(`${result.revision}^`, "AGENTS.md"), oldRoot, "旧正文仅留在 Git 历史中");
+    assert.equal(f.content(result.revision!, `${base}/archived/README.md`), "已有归档知识入口。\n");
+  } finally { await f.close(); }
+});
+
+test("共享仓模块导航：完整导航列出同仓两种知识目录，推送后保存中断恢复不改写提交", { timeout: 20_000 }, async () => {
+  const f = await fixture({ "other/knowledge/catalog/README.md": "已有 Git 文件，尚无正式模块位置。\n" });
   try {
     const job = moduleJob(f, "orders", ["domain-docs", "docs/knowledge"]);
     await assert.rejects(f.publisher.publish(job, job.knowledge_target, undefined, "alice", publication => {
@@ -533,12 +619,15 @@ test("共享仓模块导航：同仓两种知识目录各有一个入口，推�
     }), /模拟推送后记录写失败/);
     const attempted = f.last();
     const root = f.content(attempted.revision!, "AGENTS.md");
-    assert.equal((root.match(/:start -->/g) ?? []).length, 2);
+    assert.doesNotMatch(root, /<!--|mae-flow:module-knowledge/);
+    assert.equal((root.match(/## 模块索引/g) ?? []).length, 1);
     assert.match(root, /domain-docs\//); assert.match(root, /docs\/knowledge\//);
     assert.doesNotMatch(root, /orders/);
+    moduleJob(f, "catalog", ["other/knowledge"]);
     const recovered = await f.publisher.publish(job, job.knowledge_target, { ...attempted, state: "failed" }, "alice", f.save);
     assert.equal(recovered.branch, attempted.branch); assert.equal(recovered.revision, attempted.revision);
     assert.equal(f.content(recovered.revision!, "AGENTS.md"), root);
+    assert.doesNotMatch(root, /other\/knowledge/, "已推送恢复不因后来新增的正式模块位置改写原 SHA");
     assert.equal(recovered.documents.length, 2);
     assert.equal(listKnowledgeDocuments(f.dir).filter(document => document.archive_target?.path === "AGENTS.md").length, 0);
     assert.equal(f.mrs.length, 1);
@@ -567,17 +656,18 @@ test("共享仓模块导航：根入口为符号链接或目录时拒绝归档�
 test("共享仓模块导航：自定义目录含反引号时仍生成完整的 Markdown 代码路径", { timeout: 20_000 }, async () => {
   const f = await fixture();
   try {
-    const job = moduleJob(f, "orders", ["docs/know`ledge"]);
+    const base = "docs/know`ledge-->目录", job = moduleJob(f, "orders", [base]);
     const result = await f.publisher.publish(job, job.knowledge_target, undefined, "alice", f.save);
     const root = f.content(result.revision!, "AGENTS.md");
-    assert.ok(root.includes("`` docs/know`ledge/ ``"), "围栏不能被路径中的反引号提前结束");
+    assert.ok(root.includes(`\`\` ${base}/ \`\``), "围栏不能被路径中的反引号提前结束");
+    assert.doesNotMatch(root, /<!--|mae-flow:module-knowledge/, "路径仅出现在可读索引，不再写入隐藏标记");
     assert.ok(root.includes("## 模块索引\n"), "自定义路径不作为 Markdown 标题源码");
     assert.ok(root.includes("## 阅读与维护约定\n"));
     assert.equal(f.content(result.revision!, job.documents[0].path), job.documents[0].content);
   } finally { await f.close(); }
 });
 
-test("共享仓目录整理：已完成旧任务保留历史归档，同一文稿迁移时不删除公共根和公共文稿", { timeout: 30_000 }, async () => {
+test("共享仓目录整理：已完成旧任务保留历史归档，迁移归档重写公共根并保留公共文稿", { timeout: 30_000 }, async () => {
   const manual = "# 仓库公共规范\n保持人工维护的构建约定。\n";
   const f = await fixture({ "AGENTS.md": manual, [oldPath]: original });
   try {
@@ -603,14 +693,52 @@ test("共享仓目录整理：已完成旧任务保留历史归档，同一文�
     }
     const migrated = await f.publisher.publish(f.job, f.job.knowledge_target, undefined, "alice", f.save);
     assert.deepEqual(migrated.documents.map(document => document.knowledge_document_id), formalIds, "迁移保留正式知识身份");
-    assert.ok(f.content(migrated.revision!, "AGENTS.md").startsWith(currentRoot), "旧共享根不作为改名原文件删除，也不覆盖其后续人工修改");
+    assert.match(f.content(migrated.revision!, "AGENTS.md"), /^# AGENTS\.md — 仓库知识导航\n/);
+    assert.doesNotMatch(f.content(migrated.revision!, "AGENTS.md"), /人工维护的构建约定|另一业务模块补充的公共规则/);
+    assert.equal(f.content(`${migrated.revision}^`, "AGENTS.md"), currentRoot, "根覆盖保留在 Git 历史中，不再沿用旧正文");
     assert.equal(f.content(migrated.revision!, oldPath), currentPublic, "公共 docs 文件保留其他模块及人工内容");
     for (const document of f.job.documents) assert.equal(f.content(migrated.revision!, document.path), document.content);
     assert.equal(f.job.archive_batches?.[0].publications[0].revision, legacy.revision, "历史归档继续可追溯");
   } finally { await f.close(); }
 });
 
-test("共享仓目录整理：冻结的本模块旧目录可以安全改名，公共导航继续保留", { timeout: 20_000 }, async () => {
+test("共享仓目录整理：已归档的旧父 AGENTS 随入口迁移，人工修改或其他知识占用时拒绝删除", { timeout: 50_000 }, async t => {
+  for (const state of ["unchanged", "modified", "other-owner"]) await t.test(state, async () => {
+    const parentAgent = "domain-docs/AGENTS.md", f = await fixture({ [parentAgent]: original });
+    try {
+      const document = f.job.documents[0];
+      const firstFormal = saveKnowledgeDocument(f.dir, { ...f.formal, archive_target: { repository: f.target.repository, branch: "main", path: parentAgent } }, "alice", f.formal.id, { expectedRevision: f.formal.revision });
+      Object.assign(document, { path: parentAgent, base_content: original, published_revision: firstFormal.revision });
+      const legacy = await f.publish(); f.freeze(legacy); f.git("-C", f.remote, "update-ref", "refs/heads/main", legacy.revision!);
+      if (state === "modified") {
+        f.git("-C", f.source, "fetch", f.remote, "main"); f.git("-C", f.source, "reset", "--hard", "FETCH_HEAD");
+        f.write(parentAgent, original + "\n其他模块后来补充的规则。\n");
+        f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "shared parent rules advance"); f.git("-C", f.source, "push", f.remote, "main");
+      }
+      createBusinessModule(f.dir, { id: "orders", name: "订单模块", description: "订单业务范围", owner: "alice", repositories: ["https://example.test/shared.git"] }, "alice");
+      f.job.module_id = "orders"; f.job.knowledge_layout = "module-v1";
+      f.job.knowledge_target = { ...f.target, docs_path: "domain-docs/orders" };
+      const path = "domain-docs/orders/index.md";
+      const relocated = saveKnowledgeDocument(f.dir, { ...firstFormal, scope: "module", module_ids: ["orders"], archive_target: { repository: f.target.repository, branch: "main", path } }, "alice", firstFormal.id, { expectedRevision: firstFormal.revision });
+      Object.assign(document, { path, base_content: null, base_revision: "", published_revision: relocated.revision }); delete document.base_path;
+      if (state === "other-owner") saveKnowledgeDocument(f.dir, { title: "仍使用旧父入口的其他知识", content: original, scope: "platform", archive_target: { repository: f.target.repository, branch: "main", path: parentAgent } }, "alice");
+      const before = f.git("-C", f.remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads");
+      if (state !== "unchanged") {
+        await assert.rejects(f.publisher.publish(f.job, f.job.knowledge_target, undefined, "alice", f.save), state === "modified" ? /原文件.*已被修改/ : /原路径.*已被其他正式知识使用/);
+        assert.equal(f.git("-C", f.remote, "for-each-ref", "--format=%(refname):%(objectname)", "refs/heads"), before);
+        assert.notEqual(f.tree("main", parentAgent), "", "未确认内容或归属时不删除旧入口");
+      } else {
+        const result = await f.publisher.publish(f.job, f.job.knowledge_target, undefined, "alice", f.save);
+        assert.equal(f.tree(result.revision!, parentAgent), "", "移除会继续作用于新模块目录的已归档旧父入口");
+        assert.equal(f.content(result.revision!, path), original);
+        assert.match(f.content(result.revision!, "AGENTS.md"), /^# AGENTS\.md — 仓库知识导航\n/);
+        assert.equal(f.content(`${result.revision}^`, parentAgent), original);
+      }
+    } finally { await f.close(); }
+  });
+});
+
+test("共享仓目录整理：冻结的本模块旧目录可以安全改名，根导航移除已空目录", { timeout: 20_000 }, async () => {
   const f = await fixture();
   try {
     const job = moduleJob(f, "orders"), first = await f.publisher.publish(job, job.knowledge_target, undefined, "alice", f.save);
@@ -626,6 +754,9 @@ test("共享仓目录整理：冻结的本模块旧目录可以安全改名，�
     const moved = await f.publisher.publish(job, job.knowledge_target, undefined, "alice", f.save);
     assert.equal(f.tree(moved.revision!, beforePath), "", "冻结目录证明这是本模块自己的旧文稿");
     assert.equal(f.content(moved.revision!, document.path), document.content);
-    assert.ok(f.content(moved.revision!, "AGENTS.md").startsWith(f.content(first.revision!, "AGENTS.md")), "旧根入口不被整篇改写");
+    const root = f.content(moved.revision!, "AGENTS.md");
+    assert.match(root, /guides\/knowledge\//);
+    assert.doesNotMatch(root, /docs\/knowledge/);
+    assert.equal(f.content(`${moved.revision}^`, "AGENTS.md"), f.content(first.revision!, "AGENTS.md"));
   } finally { await f.close(); }
 });

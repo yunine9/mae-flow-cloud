@@ -18,6 +18,34 @@ test("36 篇文稿只发布勾选的变化稿，随请求固定每篇当前版�
   assert.deepEqual(domainPublicationInput(project(job)), { document_ids: [], expected_revisions: {} });
 });
 
+test("旧模块已发布文稿可直接确认发布，由后端自动整理，无需先发归档设置请求", async () => {
+  const job = { module_id: "orders", status: "done", publications: [], documents: [
+    { id: "entry", path: "AGENTS.md", revision: 1, published_document_revision: 1, knowledge_document_id: "kd-entry", selected: true },
+    { id: "unselected", path: "docs/README.md", revision: 2, published_document_revision: 2, knowledge_document_id: "kd-unselected", selected: false },
+    { id: "deleted", path: "docs/deleted.md", revision: 2, published_document_revision: 2, knowledge_document_id: "kd-deleted", selected: true, deleted: true },
+  ] } as unknown as DomainKnowledgeJob;
+  project(job);
+  assert.equal(job.production?.documents[0].status_label, "待整理发布");
+  assert.ok(job.production?.research_actions.some(action => action.id === "publish"));
+  assert.match(job.production?.platform_message ?? "", /自动整理模块目录和相对链接/);
+  assert.deepEqual(domainPublicationInput(job), { document_ids: ["entry"], expected_revisions: { entry: 1 } });
+  const requests: Array<{ action: string; input: unknown }> = [];
+  await confirmDomainPublication(job, async (action, input) => { requests.push({ action, input }); return job; });
+  assert.deepEqual(requests, [{ action: "publish", input: { document_ids: ["entry"], expected_revisions: { entry: 1 } } }]);
+});
+
+test("新布局已发布文稿不重复整理，不把无模块或组件任务标记为待整理", () => {
+  const job = { module_id: "orders", knowledge_layout: "module-v1", status: "done", publications: [], documents: [
+    { id: "entry", path: "docs/orders/README.md", revision: 1, published_document_revision: 1, knowledge_document_id: "kd-entry", selected: true },
+  ] } as unknown as DomainKnowledgeJob;
+  assert.deepEqual(domainPublicationInput(project(job)).document_ids, []);
+  assert.doesNotMatch(job.production?.platform_message ?? "", /自动整理/);
+  delete job.knowledge_layout; job.component_research_id = "component";
+  assert.deepEqual(domainPublicationInput(project(job)).document_ids, []);
+  delete job.component_research_id; delete job.module_id;
+  assert.deepEqual(domainPublicationInput(project(job)).document_ids, []);
+});
+
 test("生产线验收8：缺平台入库版本不从当前或历史归档MR猜版本", () => {
   const job = { publications: [{ state: "opened", documents: [{ id: "doc", revision: 3 }] }], publication_history: [{ state: "opened", documents: [{ id: "doc", revision: 2 }] }], documents: [{ id: "doc", revision: 3, knowledge_document_id: "kd-1", selected: true }] } as unknown as DomainKnowledgeJob;
   assert.equal(project(job).production?.documents[0].published_revision, undefined);

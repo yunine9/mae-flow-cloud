@@ -3,7 +3,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { DomainKnowledgeJob, KnowledgeRepository } from "../../src/domainKnowledgeTypes";
-import { moduleKnowledgeDirectory, moduleKnowledgePath } from "../../src/domainKnowledgeLayout";
+import { moduleKnowledgeDirectory, moduleKnowledgePath, moduleKnowledgePaths } from "../../src/domainKnowledgeLayout";
+import { repositoryIdentity } from "../../src/knowledgeAssetModel";
 
 const targetsOf = (job: DomainKnowledgeJob) => [job.knowledge_target, ...job.repositories];
 const pathsOf = (job: DomainKnowledgeJob) => Object.fromEntries(job.documents.map(document => [document.id, document.archive_path ?? document.path]));
@@ -36,11 +37,14 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange }: {
     if (!job.module_id) return;
     try {
       const nextTargets = targets.map(target => ({ ...target, docs_path: moduleKnowledgeDirectory(target.docs_path, job.module_id!) }));
-      setPaths(previous => Object.fromEntries(job.documents.map(document => {
+      const layout = moduleKnowledgePaths(job.documents.filter(document => !confirmedDeletion(document)).map(document => ({
+        id: document.id, target_id: document.target_id, path: document.path, desired_path: paths[document.id],
+      })), nextTargets.map(target => ({ id: target.id, old_directory: targets.find(previous => previous.id === target.id)!.docs_path,
+        new_directory: target.docs_path, collision_group: JSON.stringify([target.repository ? repositoryIdentity(target.repository) : target.id, target.branch]),
+      })));
+      setPaths(Object.fromEntries(job.documents.map(document => {
         if (confirmedDeletion(document)) return [document.id, document.archive_path ?? document.path];
-        const before = targets.find(target => target.id === document.target_id)!;
-        const after = nextTargets.find(target => target.id === document.target_id)!;
-        return [document.id, moduleKnowledgePath(before.docs_path, after.docs_path, previous[document.id] ?? document.path)];
+        return [document.id, layout.paths.get(document.id)!];
       })));
       setTargets(nextTargets); setCustomPaths([]); setModuleLayout(true); setError("");
     } catch (reason) { setError((reason as Error).message); }
@@ -65,8 +69,8 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange }: {
     finally { setBusy(false); }
   }
   return <section className="space-y-4 rounded-lg border border-line p-4" aria-label="领域知识归档位置">
-    {job.module_id && !moduleLayout && <div className="space-y-2"><p className="text-sm text-muted-foreground">共享仓可按业务模块分目录保存。整理时复用现有文稿，同步更新相对链接，保留调查和历史版本，不重新萃取。下方可检查并调整整理后的路径，保存后生效。</p><Button variant="outline" disabled={busy || disabled} onClick={organizeByModule}>按业务模块整理目录</Button></div>}
-    {moduleLayout && <div className="space-y-2 text-sm text-muted-foreground"><p>每仓以根 AGENTS.md 作为统一入口，保留原有内容，归档时补充模块索引。业务文稿分别保存在带模块标识的目录内，以 README.md 和普通索引说明范围，不生成子目录 AGENTS.md。</p>{job.documents.some(document => document.knowledge_document_id) && <p>保存目录调整后，回到「文稿」确认并发布本次变化，再创建归档 MR；这些操作不重新调用模型研究。旧仓中的公共文件保留。</p>}</div>}
+    {job.module_id && !moduleLayout && <div className="space-y-2"><p className="text-sm text-muted-foreground">确认并发布时，平台会自动按业务模块整理目录：原 AGENTS.md 内容移入 README.md 或 index.md；重名时自动分配文件名、更新链接和索引，保留每篇文稿。只发布本次勾选的文稿，不重新萃取，无需提前设置。这里可预览或自定义归档位置。</p><Button variant="outline" disabled={busy || disabled} onClick={organizeByModule}>预览模块目录</Button></div>}
+    {moduleLayout && <div className="space-y-2 text-sm text-muted-foreground"><p>归档时，平台用统一入口完整替换每个目标仓根 AGENTS.md，旧正文保留在 Git 历史中。业务文稿分别保存在带模块标识的目录内，以 README.md 和普通索引说明范围，不生成子目录 AGENTS.md。</p><p>保存目录调整后，回到「文稿」确认并发布本次变化，再创建归档 MR；这些操作不重新调用模型研究。其他模块的文稿保持原样。</p></div>}
     {usedTargets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled}>
       <legend className="px-1 font-medium">{target.name}</legend>
       <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label={`${target.id} 归档仓地址`} value={target.repository} onChange={event => change(target.id, { repository: event.target.value })} placeholder="https://…/knowledge.git" /></label>

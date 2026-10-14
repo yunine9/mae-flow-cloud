@@ -39,6 +39,6 @@ export interface KnowledgeProductionView {
     visible: boolean; state: "failed" | "running" | "opened" | "done"; group: "running" | "attention" | "completed";
     status_label: string; title: string; message: string; actions: KnowledgeProductionAction[];
     publications: KnowledgePublicationState[];
-    batches: Array<{ id: string; status_label: string; title: string; publications: KnowledgePublicationState[]; superseded: Array<{ id: string; label: string }> }>;
+    batches: Array<{ id: string; status_label: string; title: string; actions?: KnowledgeProductionAction[]; publications: KnowledgePublicationState[]; superseded: Array<{ id: string; label: string }> }>;
   };
 }
