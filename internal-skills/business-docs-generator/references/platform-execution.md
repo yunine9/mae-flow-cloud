@@ -46,7 +46,7 @@ knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系
 
 先核对 module_id、scope、knowledge_layout 与 archive_targets；关联仓是源码来源，不代表本任务拥有整个仓的业务或公共文档。浅层盘点定位本业务入口后，仅深入本业务及解释完整链路所需的共享实现。其他业务作为有依据的边界或依赖记录，不为它们生成整套知识。模板中的“模块文档”按本业务内部功能划分，与稳定的 module_id 不是同一层级。
 
-knowledge_layout 为 repository-v1 时，target_id 选择实际归档仓，document.path 是该仓根目录下的完整相对路径。target.docs_path 是用户配置的最终位置，`.` 表示仓根；路径中不写 `./`、工作区仓名前缀或 module_id。module_id 只标识业务归属，不能作为目录名，也不能代替业务名称。
+knowledge_layout 为 repository-v1 时，target_id 选择实际归档仓，document.path 是该仓根目录下的完整相对路径。target.docs_path 是用户配置的最终位置，`.` 表示仓根；路径中不写 `./`、工作区仓名前缀或 module_id。module_id 只用于工具元数据中的业务归属；标题、导航标签和范围说明使用平台提供的业务名称，目录采用平台保存的实际路径。名称缺失时说明“业务名称未提供”，不以内部编号代替名称或自造名称。源码、日志或接口证据中的真实 ID 保持原样，不对正文执行全局 ID 替换。
 
 - 领域文稿放在领域 target.docs_path 下；新任务的默认目录由平台根据业务名生成。按工具返回的实际目录写作，Agent 不自行重算目录名。
 - 仓级目标默认为仓根。首次生成采用 `docs/README.md`、`docs/module-map.md`、`docs/rules/`、`docs/modules/`；已有文稿保留仓根相对路径，例如 `docs/module-map.md` 仍是 `docs/module-map.md`。工作区的 `FMProductFrontendService/docs/module-map.md` 归入该仓目标时，path 是 `docs/module-map.md`。
@@ -67,7 +67,7 @@ knowledge_layout 为 repository-v1 时，target_id 选择实际归档仓，docum
 
 每仓只有根 AGENTS.md 作为统一 Agent 入口，由平台按实际知识入口生成并覆盖旧正文，旧内容留在 Git 历史中。根入口不进入模型的 plan、expected_document_ids 或草稿；它只提供可读路由、读取范围与维护约定，不写机器标记或某个业务的具体规则。模型维护普通 Markdown 文稿，root-agents.md、domain-agents.md、repo-agents.md 是模板标识，产物名按上表和保存路径确定，不生成嵌套 AGENTS.md。
 
-已有 module-v1 或 legacy 任务接续时沿用当前保存的文稿位置及固定 Skill，不由 Agent 自行迁移，也不重做已完成研究。平台整理路径时保留正文、编号、调查与历史，更新路径和相对链接；从旧 AGENTS.md 迁入的约定仅在文稿声明的业务范围内使用。发布仍只发布本次选中的文稿，路径整理不授权发布其他草稿，也不绕过正式版本及并发修改核对。历史 current-plan 和步骤结果保持原记录，后续研究以当前保存的文稿位置为准。
+已有 module-v1 或 legacy 任务接续时，Agent 使用当前保存的文稿位置及固定 Skill。发布时平台自动将旧模块编号目录整理为 repository-v1 的实际路径；对已经确认的成果发起归档时，也由平台自动整理路径和相对链接，无需先手工改目录或重新研究。整理保留正文、编号、调查与历史；未确认草稿和建议不会因归档自动发布。发布只处理本次选中文稿，仍核对正式版本及并发修改。从旧 AGENTS.md 迁入的约定仅在文稿声明的业务范围内使用。历史 current-plan 和步骤结果保持原记录，后续研究以当前保存位置为准，Agent 不自行迁移目录。
 
 Git 归档由维护人发起，发布到平台不会自动创建 MR。已有归档批次重试沿用冻结的文稿、目标路径与布局，module-v1 批次不因新规则改变路径；已推送且回执一致的提交及已创建 MR 按原记录恢复。调整路径后重新归档由平台处理，Agent 不自行关闭 MR、删分支或用草稿删除旧文件。
 

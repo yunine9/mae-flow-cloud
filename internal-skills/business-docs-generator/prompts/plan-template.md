@@ -2,7 +2,7 @@
 
 > 生成时间：<YYYY-MM-DD HH:MM>
 > 状态：<实际调查/规划核查/写作/完成/受阻状态>
-> 业务范围：<平台 module_id（旧任务无则注明）、模块名称、scope 及必要依赖边界>
+> 业务范围：<业务模块名称、适用业务范围及必要依赖边界>
 > 目录布局：<平台 knowledge_layout；缺失时注明沿用旧布局，不根据 module_id 推断>
 > 平台保存位置：knowledge_work 过程文稿 current-plan（不进入知识发布）
 > 图表校验：保存后 knowledge_diagram_check 使用 work_document_id=current-plan；invalid 修正，unavailable 保留规划并报告依赖阻碍

@@ -1,7 +1,19 @@
 import type { DomainKnowledgeJob, KnowledgeRepository } from "./domainKnowledgeTypes.ts";
 
-export function needsModuleKnowledgeLayout(job: Pick<DomainKnowledgeJob, "module_id" | "knowledge_layout" | "component_research_id">): boolean {
-  return !!job.module_id && !job.component_research_id && !job.knowledge_layout;
+const opaqueModuleId = /^module-[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
+
+export function hasOpaqueModuleDirectory(directory: string): boolean {
+  return directory.split("/").some(part => opaqueModuleId.test(part));
+}
+
+export function needsModuleKnowledgeLayout(job: Pick<DomainKnowledgeJob, "module_id" | "knowledge_layout" | "component_research_id">
+  & Partial<Pick<DomainKnowledgeJob, "knowledge_target" | "repositories" | "documents">>): boolean {
+  // 已确认删除须按原位置删除 Git 文件，不能迁往一个从未归档的新路径。
+  if (job.documents?.length && job.documents.every(document => document.deleted && document.knowledge_document_id
+    && document.published_document_revision === document.revision)) return false;
+  return !job.component_research_id && (!!job.module_id && job.knowledge_layout !== "repository-v1"
+    || [job.knowledge_target, ...job.repositories ?? []].some(target => target && hasOpaqueModuleDirectory(target.docs_path))
+    || job.documents?.some(document => !document.deleted && hasOpaqueModuleDirectory(document.archive_path ?? document.path)) === true);
 }
 
 
@@ -9,6 +21,22 @@ export function needsModuleKnowledgeLayout(job: Pick<DomainKnowledgeJob, "module
 export function repositoryKnowledgeDirectory(name: string): string {
   const value = name.trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, "-").replace(/^[. ]+|[. ]+$/g, "").slice(0, 160);
   return value && value.toLowerCase() !== ".git" ? value : "domain-docs";
+}
+
+/** 替换历史内部编号段；已经指定的其他目录段保持原样，不再追加名称。 */
+export function readableDomainKnowledgeDirectory(directory: string, moduleId: string | undefined, title: string): string {
+  const name = repositoryKnowledgeDirectory(title);
+  const readable = opaqueModuleId.test(name) ? "领域知识" : name;
+  const parts = directory.trim().replace(/\/$/, "").split("/");
+  return parts.map(part => part === moduleId || opaqueModuleId.test(part) ? readable : part).join("/");
+}
+
+/** 部分旧记录只改了目标配置；从文稿实际路径恢复旧包装，避免再次套目录。 */
+export function repairModuleKnowledgePath(oldDirectory: string, newDirectory: string, path: string,
+  repositoryNames: readonly string[] = [], stripOldDirectory = false): string {
+  const parts = path.split("/"), index = parts.reduce((last, part, index) => opaqueModuleId.test(part) ? index : last, -1);
+  return repositoryKnowledgePath(index >= 0 ? parts.slice(0, index + 1).join("/") : oldDirectory,
+    newDirectory, path, repositoryNames, index >= 0 || stripOldDirectory);
 }
 
 /** 只去掉已知旧目录及准确匹配的工作区仓名前缀，保留仓内相对结构。 */

@@ -77,7 +77,8 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   })));
   const archiveState = archiveRunning ? "running" : archiveFailed ? "failed" : archiveOpened ? "opened" : "done";
   const archiveLabel = archiveRunning ? "归档中" : archiveFailed ? "归档失败" : archiveOpened ? "已归档" : "已发布（未归档）";
-  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: input.kind === "domain" && !job?.component_research_id && archiveState === "done" ? "创建归档 MR" : "归档", view: "archive" })] : [];
+  const hasArchiveHistory = !!job?.archive_batches?.some(batch => !!batch.issue_no);
+  const archiveActions: KnowledgeProductionAction[] = published || hasArchiveHistory ? [actionLink({ id: "archive", label: !published ? "归档记录" : input.kind === "domain" && !job?.component_research_id && archiveState === "done" ? "创建归档 MR" : "归档", view: "archive" })] : [];
   let status_label: string, group: KnowledgeTaskGroup, next_action: KnowledgeProductionAction;
   if (archiveFailed) {
     status_label = "归档失败"; group = "attention"; next_action = archiveActions[0] ?? { id: "review", label: "审查成果", view: "review" };
@@ -176,7 +177,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     // 进行中的状态只在标题行的状态标签里说一次；页签并进标题行后，旁边再挂一个"研究中"就重复了。
     navigation: { ready_message,
       ready_action_label: readableCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },
-    archive: { visible: !!published, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
+    archive: { visible: !!published || hasArchiveHistory, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
       status_label: archiveLabel, title: onlyDeletions ? "文档删除已确认，可手工归档" : confirmedDeletions ? `${published} 份文稿变更已确认，可手工归档` : published ? `${published} 份知识已发布，平台立即可读` : "Git 归档记录",
       message: currentBatches.find(batch => batch.state === "failed")?.error || current.find(publication => publication.state === "failed")?.error
         || (archiveRunning ? "正在创建归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : `${onlyDeletions ? "文档删除已确认" : confirmedDeletions ? "文稿变更已确认" : "平台知识已发布"}。${archiveInstruction}`),

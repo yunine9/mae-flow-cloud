@@ -142,3 +142,24 @@ test("Issue489：旧MR撤销失败保留新旧链接及重试入口，已撤销�
   assert.equal(merged.archive.state, "opened");
   assert.equal(merged.archive.batches[0].publications[0].status_label, "已合入，保留原提交");
 });
+
+test("Issue489：全部文稿调整路径尚未重发，也能打开旧失败批次重试", () => {
+  const job = fixture(); job.knowledge_layout = "repository-v1";
+  job.archive_batches = [{ id: "old", issue_no: "DTS489", created_at: job.created_at, operator: "alice", state: "failed",
+    targets: [job.knowledge_target], documents: [], publications: [] }];
+  const view = projectKnowledgeProduction({ kind: "domain", record: job, current_revisions: {} });
+  assert.equal(view.archive.visible, true);
+  assert.equal(view.archive.actions[0].label, "归档记录");
+  assert.equal(view.archive.batches[0].actions![0].id, "retry-archive");
+});
+
+test("Issue489：配置已迁移但文稿残留UUID时预览仍修复，名称来自当前模块", () => {
+  const job = fixture(); job.knowledge_layout = "repository-v1"; job.module_name = "产品管理";
+  job.module_id = "module-5d312e96-7b1f-4a75-b3f4-ab4624a831ce"; job.title = job.module_id;
+  job.knowledge_target.docs_path = `domains/${job.module_id}`;
+  job.documents[0].path = `domains/${job.module_id}/rules.md`;
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
+  assert.match(html, /value="domains\/产品管理"/);
+  assert.match(html, /value="domains\/产品管理\/rules.md"/);
+  assert.doesNotMatch(html, /module-5d312e96/);
+});

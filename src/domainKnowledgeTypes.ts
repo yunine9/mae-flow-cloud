@@ -81,6 +81,8 @@ export interface KnowledgeSourceCleanupState {
   publications: KnowledgeCleanupPublication[]; started?: boolean;
 }
 export interface DomainKnowledgeJob {
+  /** 读取时从业务模块目录解析的名称，不作为路径或归属标识持久化。 */
+  module_name?: string;
   /** 重新萃取的原任务，用于重复请求时返回同一个新任务。 */
   reextract_of?: string;
   /** 创建请求的规范化键；后续归档、关联信息与资料维护不改变它。 */
