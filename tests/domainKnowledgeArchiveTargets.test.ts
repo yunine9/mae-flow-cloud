@@ -14,7 +14,7 @@ async function done(service: DomainKnowledgeExtraction, id: string) {
 test("生产线验收5/14：平台发布与人工归档分开，Skill默认值、归档路径重映射与研究范围保留", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-targets-"));
   const service = new DomainKnowledgeExtraction(root, async input => {
-    if (input.turn.mode === "extract") for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: target.name, target_id: target.id, path: `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: "# 规则\n人工内容", sources: "源码" });
+    if (input.turn.mode === "extract") for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: target.name, target_id: target.id, path: target.docs_path === "." ? "docs/rules.md" : `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: "# 规则\n人工内容", sources: "源码" });
     else {
       assert.equal(input.job.source_repositories?.[0].repository, source.repository);
       assert.equal(input.job.source_repositories?.[0].branch, "release/current");
@@ -37,8 +37,8 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
     assert.match(initial.scope, /交易业务/);
     let job = await done(service, initial.id);
     assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
-    assert.equal(job.knowledge_layout, "module-v1");
-    assert.deepEqual(job.documents.map(d => d.path), ["domain-docs/trade/rules.md", "docs/knowledge/trade/rules.md"]);
+    assert.equal(job.knowledge_layout, "repository-v1");
+    assert.deepEqual(job.documents.map(d => d.path), ["交易/rules.md", "docs/rules.md"]);
     await service.publish(job.id, "user");
     assert.ok(service.get(job.id).documents.every(d => d.knowledge_document_id), "没有Git配置也能发布正式知识");
     const unconfigured = service.previewArchive(job.id);
@@ -53,12 +53,12 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
     const targets = [{ ...job.knowledge_target, docs_path: "new/domain" }, { ...job.repositories[0], repository: "https://example.test/archive.git", branch: "docs", docs_path: "new/repo" }];
     const before = service.get(job.id);
     assert.throws(() => service.configureArchive(job.id, { targets, base_revision: 0 }), /已被修改/);
-    assert.throws(() => service.configureArchive(job.id, { targets: targets.map(t => ({ ...t, repository: "https://example.test/collision.git", branch: "main", docs_path: "same" })), base_revision: 1 }), /同一个目标文件/);
+    assert.throws(() => service.configureArchive(job.id, { targets: targets.map(t => ({ ...t, repository: "https://example.test/collision.git", branch: "main", docs_path: "same" })), documents: job.documents.map(d => ({ id: d.id, path: "same/rules.md" })), base_revision: 1 }), /同一个目标文件/);
     assert.deepEqual(service.get(job.id), before, "failed configuration is atomic");
     job = service.configureArchive(job.id, { targets, base_revision: 1 });
     assert.deepEqual(job.source_repositories, sources);
     assert.equal(job.documents[0].base_revision, "");
-    assert.deepEqual(job.documents.map(d => d.path), ["new/domain/trade/rules.md", "new/repo/trade/rules.md"]);
+    assert.deepEqual(job.documents.map(d => d.path), ["new/domain/rules.md", "new/repo/docs/rules.md"]);
     assert.deepEqual(job.turns.at(-1)!.proposals.map(p => p.document.path), job.documents.map(d => d.path));
     assert.deepEqual(job.turns.at(-1)!.proposals.map(p => p.base_revision), job.documents.map(d => d.revision), "目录调整后修订建议仍绑定对应文稿版本");
     assert.ok(job.documents.every(d => d.content.includes("人工内容")));
@@ -67,10 +67,10 @@ test("生产线验收5/14：平台发布与人工归档分开，Skill默认值�
     await service.createArchive(job.id, { issue_no: "REQ-1", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user");
     job = service.get(job.id);
     assert.equal(job.archive_batches!.find(batch => !!batch.issue_no)!.state, "done");
-    assert.equal(job.publications[1].documents[0].path, "new/repo/trade/rules.md");
+    assert.equal(job.publications[1].documents[0].path, "new/repo/docs/rules.md");
     const changed = service.configureArchive(job.id, { targets: [{ ...targets[0], docs_path: "other" }], base_revision: 2 });
-    assert.equal(changed.knowledge_target.docs_path, "other/trade");
-    assert.equal(changed.archive_batches!.find(batch => !!batch.issue_no)!.targets[0].docs_path, "new/domain/trade", "已创建人工MR目标保持原样");
+    assert.equal(changed.knowledge_target.docs_path, "other");
+    assert.equal(changed.archive_batches!.find(batch => !!batch.issue_no)!.targets[0].docs_path, "new/domain", "已创建人工MR目标保持原样");
     service.run(job.id, { mode: "update", document_ids: job.documents.map(d => d.id), message: "核对新版本" }, "user");
     await done(service, job.id);
     const restored = new DomainKnowledgeExtraction(root, async () => "unused");

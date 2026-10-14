@@ -313,7 +313,8 @@ body:has(.knowledge-hub.is-focused) .wish-quick-fab { display:none; }
 .knowledge-hub.is-focused > .knowledge-hub-task > * { width:100%; min-width:0; }
 .knowledge-hub.is-focused .knowledge-extraction-workspace { height:100%; min-height:0; padding:0; gap:0; border:0; border-radius:0; box-shadow:none; }
 .knowledge-hub.is-focused .knowledge-extraction-body { gap:0; }
-.knowledge-hub.is-focused .domain-focused-toolbar { min-height:56px; padding:8px 16px; margin:0; border-bottom:1px solid var(--line); flex-wrap:nowrap; gap:10px; }
+.knowledge-hub.is-focused .domain-focused-toolbar { min-height:56px; padding:8px 16px; margin:0; border-bottom:1px solid var(--line); flex-wrap:wrap; gap:10px; }
+.knowledge-hub.is-focused .domain-focused-toolbar .studio-result-actions { flex-shrink:0; flex-wrap:wrap; max-width:100%; }
 .knowledge-hub.is-focused .domain-focused-toolbar > strong { max-width:clamp(180px,25vw,420px); }
 .knowledge-hub.is-focused .domain-file-workspace { min-height:0; border:0; border-radius:0; }
 .knowledge-hub.is-focused .domain-file-workspace > .research-review-toolbar { min-height:48px; padding:6px 16px; flex-wrap:nowrap; }

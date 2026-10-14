@@ -44,13 +44,12 @@ test("模块目录和路径映射保持幂等，仓根导航移入模块说明�
   assertModuleKnowledgePath({ module_id: "orders" }, target, "AGENTS.md");
 });
 
-test("共享仓新任务按模块隔离，仓级正式知识也保留模块归属和研究来源", async () => {
+test("共享仓新任务使用仓根相对目录，仓级正式知识保留模块归属并避让同名文件", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-module-layout-"));
   const service = new DomainKnowledgeExtraction(root, async input => {
-    assert.throws(() => input.save({ id: "root", title: "旧入口", target_id: "repo-1", path: "AGENTS.md", layer: "repository", content: "规则", sources: "源码" }), /本模块文稿/);
-    assert.throws(() => input.save({ id: "nested", title: "多余入口", target_id: "repo-1", path: `${input.job.repositories[0].docs_path}/AGENTS.md`, layer: "repository", content: "规则", sources: "源码" }), /不生成 AGENTS/);
+    assert.throws(() => input.save({ id: "root", title: "旧入口", target_id: "repo-1", path: "AGENTS.md", layer: "repository", content: "规则", sources: "源码" }), /不生成 AGENTS/);
     for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id, title: "模块说明", target_id: target.id,
-      path: `${target.docs_path}/README.md`, layer: target.id === "domain" ? "domain" : "repository", content: `# ${input.job.module_id}`, sources: "源码" });
+      path: target.docs_path === "." ? "docs/README.md" : `${target.docs_path}/README.md`, layer: target.id === "domain" ? "domain" : "repository", content: `# ${input.job.module_id}`, sources: "源码" });
     return "done";
   });
   try {
@@ -58,10 +57,8 @@ test("共享仓新任务按模块隔离，仓级正式知识也保留模块归�
     const jobs: DomainKnowledgeJob[] = [];
     for (const id of ["orders", "shipping"]) {
       let job = await done(service, service.create({ module_id: id, issue_no: `REQ-${id}`, baseline_branch: "main", knowledge_target: knowledgeTarget }, "user").id);
-      assert.equal(job.knowledge_layout, "module-v1");
-      assert.equal(job.repositories[0].docs_path, `docs/knowledge/${id}`);
-      assert.equal(job.knowledge_target.docs_path, `domain-docs/${id}`);
-      assert.equal(job.source_repositories![0].docs_path, "docs/knowledge");
+      assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(job.repositories[0].docs_path, ".");
+      assert.equal(job.knowledge_target.docs_path, "domain-docs"); assert.equal(job.source_repositories![0].docs_path, ".");
       await service.publish(job.id, "user"); job = service.get(job.id); jobs.push(job);
       for (const document of job.documents) {
         const formal = readKnowledgeDocument(root, document.knowledge_document_id!);
@@ -71,17 +68,10 @@ test("共享仓新任务按模块隔离，仓级正式知识也保留模块归�
       }
     }
     assert.notEqual(jobs[0].documents.find(document => document.target_id === "repo-1")!.path, jobs[1].documents.find(document => document.target_id === "repo-1")!.path);
-    const before = service.get(jobs[1].id);
-    assert.throws(() => service.configureArchive(before.id, { base_revision: 0,
-      targets: [{ ...before.repositories[0], repository: "https://example.test/shared", docs_path: "docs/knowledge/orders" }] }), /重叠/);
-    assert.deepEqual(service.get(before.id), before, "拒绝与其他模块目录嵌套时不改任务");
-    // orders 的新目录将包含 shipping 已占的旧目录，不能反向吞并。
-    service.configureArchive(jobs[1].id, { base_revision: 0, targets: [{ ...before.repositories[0], docs_path: "custom/orders/shipping" }] });
-    const orders = service.get(jobs[0].id);
-    assert.throws(() => service.configureArchive(orders.id, { base_revision: 0,
-      targets: [{ ...orders.repositories[0], docs_path: "custom/orders" }] }), /重叠/);
-    assert.throws(() => service.create({ module_id: "shipping", issue_no: "REQ-new-overlap", baseline_branch: "main",
-      knowledge_target: { ...knowledgeTarget, docs_path: "domain-docs/orders" } }, "user"), /重叠/);
+    const before = jobs[1];
+    const changed = service.configureArchive(before.id, { base_revision: before.archive_revision, use_repository_layout: true,
+      targets: [{ ...before.repositories[0], docs_path: "." }] });
+    assert.equal(changed.repositories[0].docs_path, ".", "共享 docs 不按目录阻断其他模块，实际文件继续避让");
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -128,23 +118,23 @@ test("已完成旧模块任务显式整理目录不重新研究，保留文稿�
     assert.equal(restored.knowledge_layout, undefined); assert.deepEqual(restored.documents.map(document => document.path), ["AGENTS.md", "docs/knowledge/rules.md", "guides/nested.md", "docs/knowledge/topic/AGENTS.md"]);
     const oldPreview = service.previewArchive(job.id);
     assert.ok(oldPreview.actions.some(action => action.id === "retry-archive" && action.batch_id === "legacy-batch"));
-    assert.ok(oldPreview.actions.some(action => action.id === "review" && action.label === "去确认并发布"));
+    assert.match(oldPreview.message, /保留文稿编号、历史与已完成研究/);
     const sameBatch = await service.createArchive(job.id, { issue_no: "REQ-legacy", expected_revisions: oldPreview.expected_revisions }, "user");
-    assert.equal(sameBatch.status_label, "归档失败");
+    assert.equal(sameBatch.status_label, "已归档");
     assert.equal(service.get(job.id).archive_batches!.filter(batch => !!batch.issue_no).length, 1);
-    assert.equal(archiveInputs.length, 0, "重复创建请求复用旧批次，不新归档也不自动研究");
+    assert.equal(archiveInputs.length, 1, "重复创建请求精确接续旧批次，不另建批次或自动研究");
     // 普通换分支不替用户启动目录整理。
     job = service.configureArchive(job.id, { base_revision: 0, targets: [{ ...restored.repositories[0], branch: "release" }] });
     assert.equal(job.knowledge_layout, undefined); assert.equal(job.documents[0].path, "AGENTS.md");
     job = service.configureArchive(job.id, { base_revision: 1, targets: [job.knowledge_target, ...job.repositories], use_module_layout: true });
-    assert.equal(job.status, "done"); assert.equal(job.knowledge_layout, "module-v1"); assert.equal(executions, 1);
+    assert.equal(job.status, "done"); assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(executions, 1);
     assert.deepEqual(job.turns, originalTurns); assert.deepEqual(job.source_repositories, originalSources);
     assert.equal(readFileSync(workFile, "utf8"), workBytes);
     assert.deepEqual(job.documents.map(document => document.id), ["agents", "rules", "extra", "topic"]);
-    assert.deepEqual(job.documents.map(document => document.path), ["docs/knowledge/orders/README.md", "docs/knowledge/orders/rules.md", "docs/knowledge/orders/guides/nested.md", "docs/knowledge/orders/topic/index.md"]);
+    assert.deepEqual(job.documents.map(document => document.path), ["docs/knowledge/README.md", "docs/knowledge/rules.md", "docs/knowledge/guides/nested.md", "docs/knowledge/topic/index.md"]);
     const [agents, rules, extra] = job.documents;
     assert.match(agents.content, /\[规则\]\(rules\.md\)/);
-    assert.match(agents.content, /\[源码\]\(\.\.\/\.\.\/\.\.\/src\/order\.ts#cancel\)/);
+    assert.match(agents.content, /\[源码\]\(\.\.\/\.\.\/src\/order\.ts#cancel\)/);
     assert.match(agents.content, /\[外部\]\(https:\/\/example\.test\/x\)/);
     assert.ok(agents.content.includes("[复杂](docs/knowledge/a(b(c)).md)"), "不支持的嵌套目的地保持原样，不只改写路径前半截");
     assert.ok(agents.content.includes("`[示例](docs/knowledge/rules.md)`"));
@@ -153,11 +143,11 @@ test("已完成旧模块任务显式整理目录不重新研究，保留文稿�
     assert.match(extra.content, /\[入口\]\(\.\.\/README\.md\)/);
     assert.ok(job.documents.every(document => document.revision === 2 && document.history.length === 1 && document.base_content === null && !document.base_path));
     assert.deepEqual(job.documents.map(document => document.knowledge_document_id), identities);
-    assert.throws(() => service.previewArchive(job.id), /先发布这次修改/);
-    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ-new-archive", expected_revisions: {} }, "user"), /先发布这次修改/);
+    assert.deepEqual(service.previewArchive(job.id).targets, [], "已整理但尚未发布的旧正式位置不混进新归档");
+    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ-new-archive", expected_revisions: {} }, "user"), /没有已发布的正式知识/);
     const retried = await service.retryArchive(job.id, "user", { batch_id: "legacy-batch" });
     assert.equal(retried.status_label, "已归档"); assert.equal(archiveInputs.length, 1);
-    assert.ok(retried.actions.some(action => action.id === "review"));
+    assert.equal(retried.targets[0].files[0].path, "AGENTS.md", "重试返回旧批次文件；后续动作由当前稿件是否已确认决定");
     assert.equal(retried.targets[0].url, "https://example.test/mr/1");
     assert.equal(archiveInputs[0].knowledge_layout, undefined, "旧批次重试保留旧布局，不继承当前任务的新目录限制");
     assert.equal(archiveInputs[0].documents[0].path, "AGENTS.md");
@@ -176,10 +166,10 @@ test("已完成旧模块任务显式整理目录不重新研究，保留文稿�
     assert.match(preview.message, /完整替换各目标仓根目录的 AGENTS\.md/);
     assert.match(preview.message, /旧正文保留在 Git 历史中/);
     assert.deepEqual(preview.targets.flatMap(target => target.files).map(file => [file.path, file.content]), job.documents.map(document => [document.path, document.content]));
-    assert.ok(job.archive_batches!.some(batch => batch.knowledge_layout === "module-v1"), "新批次冻结模块布局");
+    assert.ok(job.archive_batches!.some(batch => batch.knowledge_layout === "repository-v1"), "新批次冻结仓内相对路径布局");
     await service.shutdown();
     service = new DomainKnowledgeExtraction(root, async () => { executions++; throw new Error("重启不能重新研究完成任务"); });
-    assert.equal(service.get(job.id).knowledge_layout, "module-v1"); assert.equal(service.get(job.id).status, "done"); assert.equal(executions, 1);
+    assert.equal(service.get(job.id).knowledge_layout, "repository-v1"); assert.equal(service.get(job.id).status, "done"); assert.equal(executions, 1);
     assert.equal(readFileSync(workFile, "utf8"), workBytes);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -188,7 +178,7 @@ test("旧模块已发布任务确认并发布时自动整理，归档请求仍�
   const root = mkdtempSync(join(tmpdir(), "knowledge-module-first-archive-"));
   let executions = 0;
   const archived: DomainKnowledgeJob[] = [];
-  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { publish: async (job, target) => {
+  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { closePublication: async () => {}, publish: async (job, target) => {
     archived.push(structuredClone(job));
     return { target_id: target.id, state: "opened", branch: "codex/module-archive", url: "https://example.test/mr/first",
       documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
@@ -211,9 +201,9 @@ test("旧模块已发布任务确认并发布时自动整理，归档请求仍�
     stored.module_id = "orders"; writeFileSync(file, JSON.stringify(stored));
     service = new DomainKnowledgeExtraction(root, async () => { executions++; throw new Error("整理与归档不能重新研究"); }, options);
     const draftBefore = service.get(job.id), draftPreview = service.previewArchive(job.id);
-    assert.deepEqual(draftPreview.actions.map(action => action.id), ["review"]);
-    assert.match(draftPreview.message, /确认并发布.*同时按业务模块整理/s);
-    assert.match(draftPreview.message, /不重新研究/);
+    assert.deepEqual(draftPreview.actions.map(action => action.id), ["create-archive"]);
+    assert.match(draftPreview.message, /归档时会把已发布文稿整理/);
+    assert.match(draftPreview.message, /不重新萃取/);
     assert.deepEqual(service.get(job.id), draftBefore, "预览不修改已完成草稿");
     job = service.edit(job.id, { document: { ...job.documents[0], content: "# 未发布人工修改" }, base_revision: job.documents[0].revision }, "user");
     const before = service.get(job.id), preview = service.previewArchive(job.id);
@@ -235,10 +225,10 @@ test("旧模块已发布任务确认并发布时自动整理，归档请求仍�
     assert.notEqual(readKnowledgeDocument(root, formalId).revision, formal.revision);
     const ready = service.previewArchive(job.id);
     assert.ok(ready.actions.some(action => action.id === "create-archive"));
-    assert.match(ready.message, /模块正文保存在本模块独占目录/);
+    assert.match(ready.message, /文稿保存在预览列出的仓根相对路径/);
     await service.createArchive(job.id, { issue_no: "REQ-first", expected_revisions: ready.expected_revisions }, "user");
-    assert.equal(archived.length, 1); assert.equal(archived[0].knowledge_layout, "module-v1");
-    assert.equal(archived[0].documents[0].path, "docs/knowledge/orders/README.md");
+    assert.equal(archived.length, 1); assert.equal(archived[0].knowledge_layout, "repository-v1");
+    assert.equal(archived[0].documents[0].path, "docs/README.md");
     assert.equal(archived[0].documents[0].content, "# 未发布人工修改");
     assert.equal(service.get(job.id).documents[0].knowledge_document_id, formalId);
     assert.equal(service.get(job.id).status, "done"); assert.equal(executions, 1);
@@ -266,9 +256,9 @@ test("旧模块待确认建议阻止自动发布，显式路径整理仍同步�
     await assert.rejects(service.publish(job.id, "user", { document_ids: ["agents"], expected_revisions: { agents: 1 } }), /确认|建议/);
     assert.deepEqual(service.get(job.id), before);
     job = service.configureArchive(job.id, { base_revision: 0, targets: [before.knowledge_target, ...before.repositories], use_module_layout: true,
-      documents: [{ id: "readme", path: "docs/knowledge/orders/legacy.md" }] });
+      documents: [{ id: "readme", path: "docs/knowledge/legacy.md" }] });
     const proposal = job.turns[0].proposals[0];
-    assert.equal(proposal.status, "pending"); assert.equal(proposal.document.path, "docs/knowledge/orders/README.md");
+    assert.equal(proposal.status, "pending"); assert.equal(proposal.document.path, "docs/knowledge/README.md");
     assert.equal(proposal.base_revision, job.documents[0].revision);
     assert.match(proposal.document.content, /\[旧说明\]\(legacy\.md\)/);
     assert.deepEqual(job.documents.map(document => [document.id, document.selected]), [["agents", true], ["readme", false]]);
@@ -325,7 +315,7 @@ test("旧模块无 Git 配置也能分批自动整理，撞名文稿和工作记
     await assert.rejects(service.publish(job.id, "user", { expected_revisions: { agents: 1, topic: 1 } }), /第二篇正式知识写入失败/);
     fs.renameSync = rename; syncBuiltinESMExports();
     job = service.get(job.id);
-    assert.equal(job.knowledge_layout, "module-v1"); assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
+    assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(job.archive_configured, false); assert.equal(job.knowledge_target.repository, "");
     assert.equal(job.knowledge_target.docs_path, "domain-docs/orders");
     assert.deepEqual(job.documents.map(document => document.id), ["agents", "readme", "topic", "index"]);
     assert.equal(new Set(job.documents.map(document => document.path)).size, 4);
@@ -357,7 +347,7 @@ test("旧模块无 Git 配置也能分批自动整理，撞名文稿和工作记
 test("旧模块分批发布避让未选及外部正式稿位置，只归档已转换的正式版本并保留他人修改", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-module-partial-layout-"));
   const archived: DomainKnowledgeJob[] = [];
-  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { publish: async (job, target) => {
+  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { closePublication: async () => {}, publish: async (job, target) => {
     archived.push(structuredClone(job));
     return { target_id: target.id, state: "opened", branch: "codex/partial-layout", url: "https://example.test/mr/partial",
       documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
@@ -370,7 +360,7 @@ test("旧模块分批发布避让未选及外部正式稿位置，只归档已�
   }, options);
   try {
     module(root, "orders");
-    let job = await done(service, service.create({ issue_no: "REQ-partial", title: "旧研究", scope: "业务规则", repositories: [], knowledge_target: knowledgeTarget }, "user").id);
+    let job = await done(service, service.create({ issue_no: "REQ-partial", title: "orders", scope: "业务规则", repositories: [], knowledge_target: knowledgeTarget }, "user").id);
     await service.publish(job.id, "user"); job = service.get(job.id);
     const [originalAgents, originalReadme] = job.documents.map(document => readKnowledgeDocument(root, document.knowledge_document_id!));
     job = service.edit(job.id, { document: { ...job.documents[1], content: "# 尚未发布的人工说明" }, base_revision: 1 }, "user");
@@ -378,7 +368,7 @@ test("旧模块分批发布避让未选及外部正式稿位置，只归档已�
     const occupied = saveKnowledgeDocument(root, { title: "独立正式文稿", content: "# 独立正式文稿", archive_target: { repository: knowledgeTarget.repository, branch: "main", path: "domain-docs/orders/README-agents.md" } }, "other");
     await service.shutdown();
     const file = join(root, "domain-extraction", job.id, "job.json"), stored: DomainKnowledgeJob = JSON.parse(readFileSync(file, "utf8"));
-    stored.module_id = "orders"; writeFileSync(file, JSON.stringify(stored));
+    stored.module_id = "orders"; stored.knowledge_target.docs_path = "domain-docs/orders"; writeFileSync(file, JSON.stringify(stored));
     service = new DomainKnowledgeExtraction(root, async () => { throw new Error("发布不能重新研究"); }, options);
     const before = service.get(job.id), diskBefore = readFileSync(file, "utf8"), formalBefore = listKnowledgeDocuments(root);
     await assert.rejects(service.publish(job.id, "user", { document_ids: ["agents", "readme"], expected_revisions: { agents: 1, readme: 2 } }), /正式知识已有新版本/);
@@ -402,13 +392,13 @@ test("旧模块分批发布避让未选及外部正式稿位置，只归档已�
     await service.createArchive(job.id, { issue_no: "REQ-partial", expected_revisions: preview.expected_revisions }, "user");
     assert.deepEqual(archived[0].documents.map(document => document.id), ["agents"]);
     const changed = service.configureArchive(job.id, { base_revision: job.archive_revision, targets: [{ ...job.knowledge_target, docs_path: "other-domain" }] });
-    assert.equal(changed.knowledge_target.docs_path, "other-domain/orders");
+    assert.equal(changed.knowledge_target.docs_path, "other-domain");
     assert.throws(() => service.previewArchive(job.id), /先发布这次修改/, "新布局的普通手工路径修改仍需先发布");
     assert.deepEqual(readKnowledgeDocument(root, originalReadme.id), externalReadme);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("旧模块自动整理避让其他模块目录，跨归档目标链接和入口索引仍可达", async () => {
+test("旧模块自动整理保留仓内结构，共享目录与跨目标链接仍可达", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-module-auto-directory-"));
   let executions = 0;
   let service = new DomainKnowledgeExtraction(root, async input => {
@@ -437,12 +427,12 @@ test("旧模块自动整理避让其他模块目录，跨归档目标链接和�
     service = new DomainKnowledgeExtraction(root, async () => { executions++; throw new Error("发布不能重新研究"); });
     await service.publish(job.id, "user", { expected_revisions: { domain: 1, repo: 1, rules: 1 } });
     job = service.get(job.id);
-    assert.equal(job.knowledge_target.docs_path, `knowledge-${job.id}-1/orders`);
-    // 仓级默认目录可用，因此只有领域目录需要任务专属的备用位置。
-    assert.equal(job.repositories[0].docs_path, "docs/knowledge/orders");
+    assert.equal(job.knowledge_target.docs_path, "legacy/shipping/orders");
+    // 仓级使用仓根相对路径，共享目录不会强制追加其他层。
+    assert.equal(job.repositories[0].docs_path, ".");
     const [domain, repo, rules] = job.documents;
     assert.ok(domain.content.includes(rules.path), "跨目标唯一旧路径同步指向整理后的仓级规则");
-    assert.equal(repo.path, "docs/knowledge/orders/README.md");
+    assert.equal(repo.path, "docs/README.md");
     assert.equal(executions, 4);
     assert.deepEqual(job.source_repositories, stored.source_repositories);
     assert.equal(job.turns.length, stored.turns.length);
@@ -466,7 +456,7 @@ test("旧文稿已经位于模块目录时，显式整理仍登记作用范围�
     job = service.configureArchive(job.id, { base_revision: 0, targets: [job.knowledge_target, ...job.repositories], use_module_layout: true });
     assert.equal(job.documents[0].path, "docs/knowledge/orders/README.md"); assert.equal(job.documents[0].content, "# 已完成规则");
     assert.equal(job.documents[0].revision, 2); assert.equal(job.documents[0].published_document_revision, 1);
-    assert.throws(() => service.previewArchive(job.id), /先发布这次修改/);
+    assert.deepEqual(service.previewArchive(job.id).targets, [], "尚未发布的旧范围不进入新布局归档");
     job = service.configureArchive(job.id, { base_revision: 1, targets: [job.knowledge_target, ...job.repositories], use_module_layout: true });
     assert.equal(job.documents[0].revision, 2, "新布局重复保存不重复增加版本");
     await service.publish(job.id, "user");
@@ -489,7 +479,7 @@ test("目录迁移保留已确认删除的历史，旧公共删除只留旧批�
     return "done";
   };
   const archived: DomainKnowledgeJob[] = [];
-  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { publish: async (job, target) => {
+  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { closePublication: async () => {}, publish: async (job, target) => {
     archived.push(structuredClone(job));
     return { target_id: target.id, state: "opened", branch: "codex/deleted-archive", url: `https://example.test/mr/${archived.length}`,
       documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
@@ -529,16 +519,16 @@ test("目录迁移保留已确认删除的历史，旧公共删除只留旧批�
     const preview = service.previewArchive(job.id);
     assert.deepEqual(preview.targets.flatMap(target => target.files).map(file => file.id), ["current"]);
     await service.createArchive(job.id, { issue_no: "REQ-current-delete", expected_revisions: preview.expected_revisions }, "user");
-    assert.equal(archived.at(-1)!.knowledge_layout, "module-v1");
+    assert.equal(archived.at(-1)!.knowledge_layout, "repository-v1");
     assert.equal(archived.at(-1)!.documents[0].deleted, true);
-    assert.equal(archived.at(-1)!.documents[0].path, "docs/knowledge/orders/current.md");
+    assert.equal(archived.at(-1)!.documents[0].path, "docs/knowledge/current.md");
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("只改变目录布局且正式版本未变时，旧归档批次不能代替新模块导航归档", async () => {
   const root = mkdtempSync(join(tmpdir(), "knowledge-module-same-version-"));
   const archived: DomainKnowledgeJob[] = [];
-  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { publish: async (job, target) => {
+  const options: ConstructorParameters<typeof DomainKnowledgeExtraction>[2] = { closePublication: async () => {}, publish: async (job, target) => {
     archived.push(structuredClone(job));
     return { target_id: target.id, state: "opened", branch: `codex/layout-${archived.length}`, url: `https://example.test/mr/${archived.length}`,
       documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
@@ -550,27 +540,28 @@ test("只改变目录布局且正式版本未变时，旧归档批次不能代�
   }, options);
   try {
     module(root, "orders");
-    let job = await done(service, service.create({ module_id: "orders", issue_no: "REQ-same-version", knowledge_target: knowledgeTarget }, "user").id);
+    let job = await done(service, service.create({ module_id: "orders", issue_no: "REQ-same-version", knowledge_target: { ...knowledgeTarget, docs_path: "domain-docs/orders" } }, "user").id);
     await service.publish(job.id, "user");
     await service.createArchive(job.id, { issue_no: "REQ-same-version", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user");
     job = service.get(job.id);
     const revision = job.documents[0].published_revision;
     await service.shutdown();
     const file = join(root, "domain-extraction", job.id, "job.json"), stored: DomainKnowledgeJob = JSON.parse(readFileSync(file, "utf8"));
-    delete stored.knowledge_layout;
+    delete stored.knowledge_layout; stored.repositories[0].docs_path = "docs/knowledge/orders";
     for (const batch of stored.archive_batches!) delete batch.knowledge_layout;
     writeFileSync(file, JSON.stringify(stored));
     service = new DomainKnowledgeExtraction(root, async () => { throw new Error("仅切布局不能重新研究"); }, options);
-    job = service.configureArchive(job.id, { base_revision: 0, use_module_layout: true, targets: [job.knowledge_target, ...job.repositories] });
+    job = service.get(job.id);
+    job = service.configureArchive(job.id, { base_revision: job.archive_revision ?? 0, use_module_layout: true, targets: [job.knowledge_target, ...job.repositories] });
     await service.publish(job.id, "user"); job = service.get(job.id);
     assert.equal(job.documents[0].published_revision, revision, "正文、位置、适用范围均未变，正式版本号可复用");
-    assert.ok(job.archive_batches!.some(batch => batch.knowledge_layout === "module-v1" && !batch.issue_no), "发布恢复快照不能复用旧布局批次");
+    assert.ok(job.archive_batches!.some(batch => batch.knowledge_layout === "repository-v1" && !batch.issue_no), "发布恢复快照不能复用旧布局批次");
     const preview = service.previewArchive(job.id);
     assert.equal(preview.status_label, "已发布（未归档）");
     assert.notEqual(job.production!.archive.state, "opened", "状态投影也不能把旧布局当作已完成的新导航归档");
     await service.createArchive(job.id, { issue_no: "REQ-module-navigation", expected_revisions: preview.expected_revisions }, "user");
     const batches = service.get(job.id).archive_batches!.filter(batch => batch.issue_no);
-    assert.equal(batches.length, 2); assert.equal(batches[0].knowledge_layout, undefined); assert.equal(batches[1].knowledge_layout, "module-v1");
-    assert.equal(archived.length, 2); assert.equal(archived.at(-1)!.knowledge_layout, "module-v1");
+    assert.equal(batches.length, 2); assert.equal(batches[0].knowledge_layout, undefined); assert.equal(batches[1].knowledge_layout, "repository-v1");
+    assert.equal(archived.length, 2); assert.equal(archived.at(-1)!.knowledge_layout, "repository-v1");
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });

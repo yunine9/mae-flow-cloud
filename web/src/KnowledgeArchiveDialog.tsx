@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction, KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import { mrParticipantsMessage } from "../../src/mrParticipants";
+import { archiveRequest } from "./knowledgeArchiveAction";
 
 export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   batches: KnowledgeProductionView["archive"]["batches"]; disabled?: boolean;
@@ -21,33 +22,65 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
         {publication.url && <a className="ml-3 text-primary underline" href={publication.url} target="_blank" rel="noreferrer">打开原 MR ↗</a>}
         {publication.error && <p className="whitespace-pre-wrap break-words text-danger">{publication.error}</p>}
       </div>)}
+      {batch.replacements?.map(replacement => <div key={replacement.key}><span>{replacement.target} · {replacement.status_label}</span>
+        {replacement.url && <a className="ml-3 text-primary underline" href={replacement.url} target="_blank" rel="noreferrer">查看被替换的 MR ↗</a>}
+        {replacement.error && <p className="whitespace-pre-wrap break-words text-danger">{replacement.error}</p>}
+      </div>)}
       {batch.actions?.map(action => <Button key={action.id} variant="outline" disabled={disabled} onClick={() => onRetry(action)}>{action.label}</Button>)}
     </section>)}
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onReview, onChanged, openRequest = 0 }: {
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
-  onReview?: () => void; onChanged?: () => void; openRequest?: number;
+  onBeforeOpen?: (replaceExisting?: boolean) => void;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const submitting = useRef(false), generation = useRef(0);
-  useEffect(() => { if (openRequest && production?.archive.visible) setOpen(true); }, [openRequest, production?.archive.visible]);
+  const archiveOnOpen = useRef(false);
+  const consumedOpenRequest = useRef<{ endpoint: string; request: number } | undefined>(undefined);
+  function openArchive(confirmed = false) {
+    if (!confirmed && onBeforeOpen && production?.archive.state === "done" && production.archive.actions.some(action => action.id === "archive" && action.label !== "归档记录")) {
+      onBeforeOpen(false); return;
+    }
+    archiveOnOpen.current = directArchive && (confirmed || !onBeforeOpen); setOpen(true);
+  }
+  useEffect(() => {
+    const consumed = consumedOpenRequest.current;
+    if (!openRequest || !production?.archive.visible || consumed?.endpoint === endpoint && consumed.request === openRequest) return;
+    consumedOpenRequest.current = { endpoint, request: openRequest }; openArchive(true);
+  }, [endpoint, openRequest, production?.archive.visible]);
   useEffect(() => {
     if (!open || !production?.archive.visible) return;
     const owner = ++generation.current, controller = new AbortController();
     submitting.current = false; setBusy(false);
     setLoading(true); setError(""); setPreview(undefined);
     void componentRequest<KnowledgeArchivePreview>(`${endpoint}/preview`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
-      .then(result => { if (generation.current === owner) { setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? ""); } })
-      .catch(reason => { if (generation.current === owner) setError((reason as Error).name === "TimeoutError" ? "读取归档预览超过 30 秒，请重新打开归档后重试。" : (reason as Error).message); })
-      .finally(() => { if (generation.current === owner) setLoading(false); });
+      .then(async result => {
+        if (generation.current !== owner) return;
+        setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
+        const request = archiveOnOpen.current && !disabled
+          ? replaceExistingOnOpen && result.issue_no?.trim() && result.actions.some(action => action.id === "replace-archive")
+            ? { action: "create" as const, input: { issue_no: result.issue_no.trim(), issue_description: result.issue_description?.trim() || undefined,
+              expected_revisions: result.expected_revisions, replace_existing: true } }
+            : archiveRequest(result) : undefined;
+        archiveOnOpen.current = false;
+        if (!request) return;
+        submitting.current = true; setBusy(true); setLoading(false);
+        const archived = await componentRequest<KnowledgeArchivePreview>(`${endpoint}/${request.action}`, request.input,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(5 * 60_000)]));
+        if (generation.current === owner) { setPreview(archived); onChanged?.(); }
+      })
+      .catch(reason => { if (generation.current === owner) setError((reason as Error).name === "TimeoutError"
+        ? submitting.current ? "归档请求超时，请重新打开归档查看实际结果；已创建的 MR 会继续复用。" : "读取归档信息超过 30 秒，请重新打开归档后重试。" : (reason as Error).message); })
+      .finally(() => { if (generation.current === owner) { setLoading(false); setBusy(false); submitting.current = false; } });
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
-    if (!["create-archive", "retry-archive"].includes(action.id)) return;
+    if (!["create-archive", "retry-archive", "replace-archive"].includes(action.id)) return;
     const retry = action.id === "retry-archive";
     if ((!preview && !retry) || disabled || loading || submitting.current) return;
     submitting.current = true; setBusy(true); setError("");
@@ -55,7 +88,8 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     try {
       const result = await componentRequest<KnowledgeArchivePreview>(`${endpoint}/${retry ? "retry" : "create"}`, retry
         ? { batch_id: action.batch_id, target_id: action.target_id ?? targetId }
-        : { issue_no: issue.trim(), issue_description: description.trim() || undefined, expected_revisions: preview!.expected_revisions }, AbortSignal.timeout(5 * 60_000));
+        : { issue_no: issue.trim(), issue_description: description.trim() || undefined, expected_revisions: preview!.expected_revisions,
+          ...(action.id === "replace-archive" ? { replace_existing: true } : {}) }, AbortSignal.timeout(5 * 60_000));
       if (generation.current === owner) { setPreview(result); onChanged?.(); }
     } catch (reason) { if (generation.current === owner) setError((reason as Error).name === "TimeoutError" ? "归档请求超过 5 分钟，请重新打开归档查看实际结果后重试。" : (reason as Error).message); }
     finally { if (generation.current === owner) { submitting.current = false; setBusy(false); } }
@@ -67,17 +101,20 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
       : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
+    if (["create-archive", "replace-archive"].includes(action.id) && onBeforeOpen) return <Button key={`${action.id}:${targetId ?? "all"}`}
+      disabled={disabled || busy || loading} onClick={() => { setOpen(false); onBeforeOpen(action.id === "replace-archive"); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
-      disabled={disabled || busy || loading || action.id === "create-archive" && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
+      disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
   }
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;
   return <>
-    <Button size="sm" variant="outline" disabled={disabled} onClick={() => setOpen(true)}><GitBranch size={16} />{action.label}</Button>
+    <Button size="sm" variant="outline" disabled={disabled || busy || loading} onClick={() => openArchive()}><GitBranch size={16} />{action.label}</Button>
     <Dialog open={open} onOpenChange={next => { if (!busy) setOpen(next); }}>
       <DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle>{preview?.title ?? action.label}</DialogTitle></DialogHeader>
         {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" />正在读取正式版本…</p>}
+        {busy && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" />正在归档并创建 MR…</p>}
         {error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{error}</p>}
         <KnowledgeArchiveHistory batches={production.archive.batches} disabled={disabled || busy || loading} onRetry={item => void execute(item)} />
         {preview && <div className="space-y-4">

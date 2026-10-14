@@ -6,10 +6,10 @@ import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { deliveryBranchName } from "./deliveryBranchName.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
-import { createMergeRequest, updateMergeRequestParticipants, type MergeRequestCredential } from "./mrClient.ts";
+import { closeMergeRequest, createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { readModuleMrParticipants } from "./moduleMrParticipants.ts";
 import { hasMrParticipants } from "./mrParticipants.ts";
-import { readMrFailureBody } from "./mrGateClient.ts";
+import { fetchMrGates, readMrFailureBody } from "./mrGateClient.ts";
 import { classifyKnowledgeGitFailure, knowledgeGitFailure, knowledgeHttpFailure, knowledgeMrFailure } from "./knowledgeProductionErrors.ts";
 import { listKnowledgeDocuments, readKnowledgeArchiveVersion } from "./knowledgeDocuments.ts";
 import { readKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
@@ -19,21 +19,26 @@ import type { DomainDocument, KnowledgeCleanupPlan, KnowledgeCleanupPublication 
 import { assertModuleKnowledgePath } from "./domainKnowledgeLayout.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 
-/** 从可读索引恢复目录；旧版标记仅用于读取，重建后不再输出。 */
+/** 只读取可读索引中的路径，不继承旧根正文。 */
+function readableKnowledgeIndex(content: string): string[] {
+  const paths: string[] = [];
+  let inIndex = false;
+  for (const line of content.split(/\r?\n/)) {
+    if (/^#{1,2}(?:\s|$)/.test(line)) { inIndex = line.trim() === "## 模块索引"; continue; }
+    if (!inIndex) continue;
+    const entry = /^-[ \t]+(`+)[ \t]*(.*?)[ \t]*\1[ \t]*$/.exec(line);
+    if (entry?.[2].trim()) paths.push(entry[2].trim());
+  }
+  return paths;
+}
+
 function rememberedModuleKnowledgeBases(content: string): string[] {
   const bases = new Set<string>();
   const remember = (value: unknown) => {
     if (typeof value !== "string") return;
     try { bases.add(knowledgeRelativePath(value)); } catch { /* 无效元数据不作为知识目录。 */ }
   };
-  let inIndex = false;
-  for (const line of content.split(/\r?\n/)) {
-    if (/^#{1,2}(?:\s|$)/.test(line)) { inIndex = line.trim() === "## 模块索引"; continue; }
-    if (!inIndex) continue;
-    const entry = /^-[ \t]+(`+)[ \t]*(.*?)[ \t]*\1[ \t]*$/.exec(line);
-    const path = entry?.[2].trim();
-    if (path?.endsWith("/")) remember(path.slice(0, -1));
-  }
+  for (const path of readableKnowledgeIndex(content)) if (path.endsWith("/")) remember(path.slice(0, -1));
   for (const match of content.matchAll(/<!-- mae-flow:module-knowledge-bases:v1 ([^\r\n]*?) -->/g)) {
     try {
       const values: unknown = JSON.parse(match[1]);
@@ -49,20 +54,70 @@ function rememberedModuleKnowledgeBases(content: string): string[] {
   return [...bases];
 }
 
+function rememberedKnowledgeFiles(content: string): string[] {
+  return readableKnowledgeIndex(content).flatMap(path => {
+    try { return /(?:^|\/)AGENTS\.md$/i.test(path) ? [] : [knowledgeRelativePath(path, true)]; }
+    catch { return []; }
+  });
+}
+
 function moduleReadmeName(name: string): boolean {
   return /^README(?:-[A-Za-z0-9_-]+)?\.md$/i.test(name);
 }
 
-function moduleKnowledgeRoot(bases: string[]): string {
-  const directory = (base: string) => {
-    const fence = "`".repeat(Math.max(0, ...(base.match(/`+/g) ?? []).map(run => run.length)) + 1);
-    return `${fence} ${base}/ ${fence}`;
-  };
+function markdownPath(path: string): string {
+  const fence = "`".repeat(Math.max(0, ...(path.match(/`+/g) ?? []).map(run => run.length)) + 1);
+  return `${fence} ${path} ${fence}`;
+}
+
+/** 每个目录优先保留导航文件；没有导航时以一篇实际文稿作为入口。 */
+function knowledgeEntryPaths(paths: string[]): string[] {
+  const directories = new Map<string, string[]>();
+  for (const path of new Set(paths)) {
+    const directory = path.slice(0, path.lastIndexOf("/") + 1);
+    directories.set(directory, [...(directories.get(directory) ?? []), path]);
+  }
+  return [...directories.values()].flatMap(values => {
+    const navigation = values.filter(path => /^(?:README|index|module-map)(?:-[A-Za-z0-9_-]+)?\.md$/i.test(path.split("/").at(-1)!));
+    return navigation.length ? navigation : values.sort((a, b) => a.length - b.length || a.localeCompare(b)).slice(0, 1);
+  });
+}
+
+function repositoryKnowledgeRoot(entries: string[]): string {
   return `# AGENTS.md — 仓库知识导航\n\n`
     + `## 项目概述\n\n按任务涉及的源码路径、接口或业务术语定位模块；无法定位时查源码与资料，不按仓名推断归属。\n\n`
     + `## 模块索引\n\n`
-    + (bases.length ? "以下目录的直接子目录存放模块入口：\n\n" + bases.map(base => `- ${directory(base)}`).join("\n")
+    + (entries.length ? "以下入口使用仓根相对路径，按任务范围选择：\n\n" + entries.map(path => `- ${markdownPath(path)}`).join("\n")
+      : "暂无可识别的知识入口，按任务范围核对源码与资料。")
+    + `\n\n## 阅读与维护约定\n\n`
+    + `- 先读相关入口，再沿索引按需读取同目录文稿、规则和契约。核对各文稿声明的业务范围，避免全量加载知识目录。\n`
+    + `- 使用结论前核对版本与来源。当前行为查源码和配置，业务目标及约束查资料；冲突保留双方依据与差异，缺失信息明确未知。\n`
+    + `- 模块规则只适用于声明范围；跨模块任务分别核对调用边界与契约。\n`
+    + `- 构建、测试和运行命令取自实际脚本或配置，确认工作目录及前置条件。\n`
+    + `- 修改行为、接口或路径时，同步受影响文稿与索引。业务规则放在对应文稿，本文件保留导航；各目录使用普通 Markdown 索引。\n`;
+}
+
+/** 领域知识的入口位于所选目录，索引路径相对于该目录。 */
+function directoryKnowledgeRoot(entries: string[]): string {
+  return `# AGENTS.md — 领域知识导航\n\n`
+    + `## 项目概述\n\n本目录保存领域知识。按任务涉及的业务术语选择入口，核对文稿声明的业务范围。\n\n`
+    + `## 模块索引\n\n`
+    + (entries.length ? "以下入口使用本目录相对路径，按任务范围选择：\n\n" + entries.map(path => `- ${markdownPath(path)}`).join("\n")
+      : "暂无可识别的知识入口，按任务范围核对资料与源码。")
+    + `\n\n## 阅读与维护约定\n\n`
+    + `- 先读相关入口，再沿索引按需读取规则、流程与契约，避免全量加载本目录。\n`
+    + `- 使用结论前核对业务范围、版本与来源。业务目标及约束查资料，当前实现查源码和配置；冲突保留双方依据与差异，缺失信息明确未知。\n`
+    + `- 规则只适用于文稿声明的范围；跨模块任务分别核对调用边界与契约。\n`
+    + `- 修改规则、接口或文稿路径时，同步相关文稿与索引。本文件只保留阅读导航，研究正文保存在普通 Markdown 文稿中。\n`;
+}
+
+function moduleKnowledgeRoot(bases: string[], files: string[] = []): string {
+  return `# AGENTS.md — 仓库知识导航\n\n`
+    + `## 项目概述\n\n按任务涉及的源码路径、接口或业务术语定位模块；无法定位时查源码与资料，不按仓名推断归属。\n\n`
+    + `## 模块索引\n\n`
+    + (bases.length ? "以下目录的直接子目录存放模块入口：\n\n" + bases.map(base => `- ${markdownPath(`${base}/`)}`).join("\n")
       : "暂无可识别的模块入口，按任务范围核对源码与资料。")
+    + (files.length ? "\n\n其他已归档的直接文稿入口：\n\n" + files.map(path => `- ${markdownPath(path)}`).join("\n") : "")
     + `\n\n## 阅读与维护约定\n\n`
     + `- 只读相关模块的 \`README.md\`；同目录存在 \`README-*.md\` 时一并核对入口，再沿索引按需读取规则、流程与契约，不全量加载知识目录。\n`
     + `- 使用结论前核对范围、版本与来源。当前行为查源码和配置，业务目标及约束查资料；冲突保留双方依据与差异，缺失信息明确未知。\n`
@@ -226,30 +281,12 @@ export class KnowledgeMrPublisher {
       || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
     return body.mrs[0];
   }
-  private async retryMrParticipants<T extends DomainPublication>(target: KnowledgeRepository, publication: T, operator: string,
-    save: (publication: T) => void, signal?: AbortSignal): Promise<T> {
-    this.assertActive(signal);
-    if (!publication.url || publication.mr_participants?.status !== "failed") return publication;
-    const identity = this.identity(operator), controller = new AbortController();
-    const operationSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const operation = (async () => {
-      const result = await updateMergeRequestParticipants({ platformUrl: identity.platformUrl, repo: target.repository,
-        mr: publication.mr_id ?? publication.url!, participants: publication.mr_participants!.requested,
-        credential: identity.credential, signal: operationSignal });
-      this.assertActive(operationSignal);
-      publication.mr_participants = result;
-      save(publication); return publication;
-    })();
-    this.active.set(controller, operation);
-    try { return await operation; }
-    finally { this.active.delete(controller); }
-  }
   private async openMr<T extends DomainPublication>(job: Pick<DomainKnowledgeJob, "title" | "issue_no" | "issue_description" | "module_id">,
     target: KnowledgeRepository, publication: T, operator: string, save: (publication: T) => void, signal: AbortSignal): Promise<T> {
     this.assertActive(signal);
     const identity = this.identity(operator), issue = knowledgeIssueNumber(job.issue_no);
     const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
-    // 先保存这一次的名单。创建回执丢失或模块配置变化后，仍能按原请求单独补设。
+    // 保存本次创建使用的名单；回执丢失后保留原请求事实，已存在的 MR 不再追加人员。
     const participants = publication.mr_participants?.requested ?? readModuleMrParticipants(this.options.dataDir, job.module_id);
     if (hasMrParticipants(participants)) publication.mr_participants = { status: "failed", requested: structuredClone(participants), message: "MR 人员设置结果尚未确认" };
     publication.mr_attempted = true; save(publication);
@@ -276,10 +313,10 @@ export class KnowledgeMrPublisher {
     let publication: KnowledgeCleanupPublication = continuing ? { ...structuredClone(previous!), state: "pending", error: undefined }
       : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch };
     const saveLive = (value: KnowledgeCleanupPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+    if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
     if (publication.mr_attempted) {
       const found = await this.discoverMr(target, publication, operator, signal);
-      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return publication; }
     }
     saveLive(publication);
     return this.withGit(operator, async (git, root, operationSignal) => {
@@ -311,7 +348,8 @@ export class KnowledgeMrPublisher {
   async publish(job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string,
     save: (publication: DomainPublication) => void, signal?: AbortSignal): Promise<DomainPublication> {
     this.assertActive(signal);
-    const issue = knowledgeIssueNumber(job.issue_no); this.identity(operator);
+    const issue = knowledgeIssueNumber(job.issue_no);
+    const branch = deliveryBranchName(target.branch, this.identity(operator).credential.username, issue);
     const logicalTargets = new Map([job.knowledge_target, ...job.repositories].filter(candidate => candidate.repository === target.repository
       && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
     const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
@@ -321,7 +359,13 @@ export class KnowledgeMrPublisher {
       if (!doc.deleted && deletion) throw new Error("知识已删除，旧归档操作不能重新写入文档");
       const formal = readKnowledgeArchiveVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
       const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
-      assertModuleKnowledgePath(job, logicalTargets.get(doc.target_id)!, outgoing.path);
+      if (doc.deleted && job.knowledge_layout === "directory-v1") {
+        // 同批次其他文稿可以迁入新目录，已确认删除仍须作用于该正式版本的原位置。
+        const location = formal.archive_target ?? formal.research_source;
+        if (!location || location.repository !== target.repository || location.branch !== target.branch || location.path !== outgoing.path) {
+          throw new Error("删除文稿的归档位置与已确认正式版本不一致，请重新预览");
+        }
+      } else assertModuleKnowledgePath(job, logicalTargets.get(doc.target_id)!, outgoing.path);
       if (!job.component_research_id) {
         if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
         return [outgoing];
@@ -357,16 +401,17 @@ export class KnowledgeMrPublisher {
     const continuing = !!previous && previous.target_id === target.id
       && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
     // 同一精确版本的失败恢复沿用已落盘分支；新版本独立建MR，不受旧MR的合入或关闭影响。
-    let publication: DomainPublication = { target_id: target.id, branch: continuing ? previous!.branch : `codex/knowledge-${job.id}-${target.id}-${randomUUID().slice(0, 8)}`,
+    let publication: DomainPublication = { target_id: target.id, branch: continuing ? previous!.branch : branch,
       state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id,
-        mr_attempted: previous!.mr_attempted, mr_participants: structuredClone(previous!.mr_participants) } : {}) };
+        mr_attempted: previous!.mr_attempted, mr_participants: structuredClone(previous!.mr_participants),
+        navigation_files: structuredClone(previous!.navigation_files) } : {}) };
     const saveLive = (value: DomainPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
     if (continuing && publication.mr_attempted) {
       const found = await this.discoverMr(target, publication, operator, signal);
       if (found) {
         publication = { ...publication, state: "opened", url: found.url, mr_id: found.id };
-        saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal);
+        saveLive(publication); return publication;
       }
     }
     const saveAttempt = () => saveLive({ ...publication, documents: continuing ? previous!.documents : [], attempted_documents: documents });
@@ -374,7 +419,28 @@ export class KnowledgeMrPublisher {
     return this.withGit(operator, async (git, root, operationSignal) => {
       await git(["fetch", "--no-tags", target.repository, `refs/heads/${target.branch}`]);
       const targetRevision = (await git(["rev-parse", "FETCH_HEAD^{commit}"])).trim();
-      const remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      let remote: string | undefined;
+      if (!continuing || !publication.revision && !publication.mr_attempted) {
+        const heads = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${branch}*`])).trim().split(/\r?\n/)
+          .map(line => line.split(/\s+/)[1]?.replace(/^refs\/heads\//, "")).filter((name): name is string => !!name);
+        const occupied = new Set(heads);
+        // 新版本另建 MR；已删除远端分支的历史 MR 也不复用其分支名。
+        for (const batch of job.archive_batches ?? []) for (const entry of batch.publications) {
+          const location = batch.targets.find(value => value.id === entry.target_id);
+          if (location?.repository === target.repository && location.branch === target.branch
+            && (entry.revision || entry.mr_attempted || entry.url)) occupied.add(entry.branch);
+        }
+        for (const entry of [...job.publications, ...job.publication_history ?? [], ...(previous ? [previous] : [])]) {
+          if (logicalTargets.has(entry.target_id) && (entry.revision || entry.mr_attempted || entry.url)) occupied.add(entry.branch);
+        }
+        const unavailable = (candidate: string) => [...occupied].some(name => name === candidate || name.startsWith(`${candidate}/`) || candidate.startsWith(`${name}/`));
+        let candidate = branch;
+        for (let attempt = 2; unavailable(candidate); attempt++) candidate = `${branch}_${attempt}`;
+        publication.branch = candidate;
+        saveAttempt();
+      } else {
+        remote = (await git(["ls-remote", "--heads", target.repository, `refs/heads/${publication.branch}`])).trim().split(/\s/)[0];
+      }
       let parent = targetRevision;
       if (remote) {
         if (!continuing || !publication.revision || remote !== publication.revision) throw knowledgeGitFailure("non_fast_forward", "归档分支已有人工修改");
@@ -405,7 +471,8 @@ export class KnowledgeMrPublisher {
           throw new Error(`改名目标 ${doc.path} 已有其他文件或内容已变化，未覆盖；请调整文件路径或先核对冲突`);
         }
         const oldPaths = [...known.map(file => file.path), ...(doc.base_path ? [knowledgeRelativePath(doc.base_path, true)] : []), ...(doc.deleted ? [doc.path] : [])]
-          .filter(path => (doc.deleted || path !== doc.path) && (!moduleDirectories || moduleDirectories.some(directory => path.startsWith(`${directory}/`))
+          .filter(path => (doc.deleted || path !== doc.path) && !(["repository-v1", "directory-v1"].includes(job.knowledge_layout ?? "") && /^AGENTS\.md$/i.test(path))
+            && (!moduleDirectories || moduleDirectories.some(directory => path.startsWith(`${directory}/`))
             || /\/AGENTS\.md$/i.test(path) && known.some(file => file.path === path)
               && [...logicalTargets.values()].some(value => value.docs_path.startsWith(`${path.slice(0, path.lastIndexOf("/"))}/`))));
         // 公共文稿保留；已知归属的旧父 AGENTS 随模块入口迁移，避免继续影响新目录。
@@ -441,6 +508,7 @@ export class KnowledgeMrPublisher {
           return directory.slice(0, -(`/${job.module_id}`).length);
         }));
         const original = await this.content(git, parent, "AGENTS.md");
+        const remembered = new Set(rememberedKnowledgeFiles(original ?? "")), directEntries = new Set<string>();
         const candidates = new Set([...currentBases, ...rememberedModuleKnowledgeBases(original ?? "")]);
         for (const formal of listKnowledgeDocuments(this.options.dataDir)) {
           if (formal.scope !== "module") continue;
@@ -460,15 +528,17 @@ export class KnowledgeMrPublisher {
         }
         const bases = new Set(currentBases);
         // 仅检查已知知识目录的索引；源码目录里同名 README 不能成为模块知识入口。
-        if (candidates.size) for (const entry of (await git(["ls-files", "--stage", "-z", "--", ...[...candidates].map(base => `:(literal)${base}`)])).split("\0")) {
+        const indexedPaths = [...new Set([...candidates, ...remembered])];
+        if (indexedPaths.length) for (const entry of (await git(["ls-files", "--stage", "-z", "--", ...indexedPaths.map(path => `:(literal)${path}`)])).split("\0")) {
           const match = /^100(?:644|755) [a-f0-9]+ 0\t([^\r\n]+)$/.exec(entry);
           if (!match) continue;
+          if (remembered.has(match[1])) directEntries.add(match[1]);
           const parts = match[1].split("/");
           if (parts.length < 3 || !moduleReadmeName(parts.at(-1)!)) continue;
           const base = parts.slice(0, -2).join("/");
           if (candidates.has(base)) bases.add(base);
         }
-        const content = moduleKnowledgeRoot([...bases].sort());
+        const content = moduleKnowledgeRoot([...bases].sort(), [...directEntries].sort());
         if (content !== original) {
           const entry = await git(["--literal-pathspecs", "ls-tree", parent, "--", "AGENTS.md"]);
           const mode = entry.startsWith("100755 ") ? "100755" : "100644";
@@ -477,13 +547,168 @@ export class KnowledgeMrPublisher {
           await git(["update-index", "--add", "--cacheinfo", mode, blob, "AGENTS.md"]);
         }
       }
+      if (job.knowledge_layout === "repository-v1" && !(remote && continuing)) {
+        const original = await this.content(git, parent, "AGENTS.md");
+        const remembered = new Set(rememberedKnowledgeFiles(original ?? "")), candidates = new Set(docs.filter(doc => !doc.deleted).map(doc => doc.path));
+        for (const path of remembered) candidates.add(path);
+        for (const formal of listKnowledgeDocuments(this.options.dataDir)) {
+          const location = formal.archive_target;
+          if (!location || repositoryIdentity(location.repository) !== repositoryIdentity(target.repository) || location.branch !== target.branch) continue;
+          try { candidates.add(knowledgeRelativePath(location.path, true)); } catch { /* 无效正式位置不作为入口。 */ }
+        }
+        const bases = rememberedModuleKnowledgeBases(original ?? "");
+        const paths = [...new Set([...candidates, ...bases])];
+        const indexed = paths.length ? await git(["ls-files", "--stage", "-z", "--", ...paths.map(path => `:(literal)${path}`)]) : "";
+        const available = new Set<string>(), legacyEntries = new Set<string>();
+        for (const line of indexed.split("\0").filter(Boolean)) {
+          const match = /^100(?:644|755) [a-f0-9]+ 0\t([\s\S]+)$/.exec(line);
+          const path = match?.[1];
+          if (!path || /(?:^|\/)AGENTS\.md$/i.test(path)) continue;
+          if (candidates.has(path)) available.add(path);
+          if (bases.some(base => {
+            if (!path.startsWith(`${base}/`)) return false;
+            const parts = path.slice(base.length + 1).split("/");
+            return parts.length === 2 && moduleReadmeName(parts[1]);
+          })) legacyEntries.add(path);
+        }
+        const entries = new Set([...legacyEntries, ...[...remembered].filter(path => available.has(path)), ...knowledgeEntryPaths([...available])]);
+        // 同目录可承载多个模块；各本次目标至少保留自己的入口，不能被别人的 README 抢占。
+        for (const logical of logicalTargets.keys()) {
+          for (const path of knowledgeEntryPaths(docs.filter(doc => doc.target_id === logical && !doc.deleted && available.has(doc.path)).map(doc => doc.path))) entries.add(path);
+        }
+        const content = repositoryKnowledgeRoot([...entries].sort());
+        if (content !== original) {
+          const entry = await git(["--literal-pathspecs", "ls-tree", parent, "--", "AGENTS.md"]);
+          const mode = entry.startsWith("100755 ") ? "100755" : "100644";
+          const file = join(root, "knowledge-navigation.tmp"); writeFileSync(file, content, { mode: 0o600 });
+          const blob = (await git(["hash-object", "-w", file])).trim();
+          await git(["update-index", "--add", "--cacheinfo", mode, blob, "AGENTS.md"]);
+        }
+      }
+      if (job.knowledge_layout === "directory-v1" && !(remote && continuing)) {
+        const sameRepository = (location: { repository: string; branch: string } | undefined) => !!location
+          && repositoryIdentity(location.repository) === repositoryIdentity(target.repository) && location.branch === target.branch;
+        const formal = listKnowledgeDocuments(this.options.dataDir).filter(document => sameRepository(document.archive_target));
+        const role = (document: (typeof formal)[number]) => document.research_source?.layer
+          ?? job.documents.find(draft => draft.knowledge_document_id === document.id)?.layer
+          ?? (document.scope === "repository" ? "repository" : undefined);
+        const domainFiles = new Set(formal.filter(document => role(document) === "domain").map(document => document.archive_target!.path));
+        for (const doc of docs) if (doc.layer === "domain") domainFiles.add(doc.path);
+        const availableFiles = async (paths: Iterable<string>) => {
+          const candidates = [...new Set(paths)];
+          const indexed = candidates.length ? await git(["ls-files", "--stage", "-z", "--", ...candidates.map(path => `:(literal)${path}`)]) : "";
+          const available = new Set<string>();
+          for (const line of indexed.split("\0").filter(Boolean)) {
+            const match = /^100(?:644|755) [a-f0-9]+ 0\t([\s\S]+)$/.exec(line);
+            if (match && candidates.includes(match[1]) && !/(?:^|\/)AGENTS\.md$/i.test(match[1])) available.add(match[1]);
+          }
+          return available;
+        };
+        const navigationFiles: NonNullable<DomainPublication["navigation_files"]> = [];
+        const writeNavigation = async (path: string, content: string, original: string | null) => {
+          navigationFiles.push({ path, content });
+          if (content === original) return;
+          const entry = await git(["--literal-pathspecs", "ls-tree", parent, "--", path]);
+          const mode = entry.startsWith("100755 ") ? "100755" : "100644";
+          const file = join(root, "knowledge-navigation.tmp"); writeFileSync(file, content, { mode: 0o600 });
+          const blob = (await git(["hash-object", "-w", file])).trim();
+          await git(["update-index", "--add", "--cacheinfo", mode, blob, path]);
+        };
+        const currentDomainEntry = `${job.knowledge_target.docs_path.replace(/\/$/, "")}/AGENTS.md`;
+        // 只有已推送快照能证明派生入口的身份；完整迁移其文稿后才移除旧入口。
+        for (const batch of job.archive_batches ?? []) for (const archivedPublication of batch.publications) {
+          if (!archivedPublication.revision || !sameRepository(batch.targets.find(logical => logical.id === archivedPublication.target_id))) continue;
+          for (const navigation of archivedPublication.navigation_files ?? []) {
+            if (navigation.path === "AGENTS.md" || navigation.path === currentDomainEntry || !navigation.path.endsWith("/AGENTS.md")) continue;
+            const directory = navigation.path.slice(0, -"/AGENTS.md".length);
+            const domainDocuments = archivedPublication.documents.filter(document => batch.documents.some(frozen => frozen.id === document.id
+              && frozen.layer === "domain" && frozen.target_id === job.knowledge_target.id) && document.path.startsWith(`${directory}/`));
+            if (!domainDocuments.length || !domainDocuments.every(document => docs.some(current => current.layer === "domain"
+              && current.id === document.id && (!document.knowledge_document_id || current.knowledge_document_id === document.knowledge_document_id)))) continue;
+            if (documents.some(document => document.path === navigation.path)) continue;
+            const otherOwner = formal.some(document => document.archive_target!.path.startsWith(`${directory}/`)
+              && !docs.some(current => current.knowledge_document_id === document.id));
+            if (otherOwner) continue;
+            if (await this.content(git, parent, navigation.path) !== navigation.content) continue;
+            await git(["--work-tree", root, "--literal-pathspecs", "update-index", "--force-remove", "--", navigation.path]);
+          }
+        }
+        // 同一物理仓可以同时承担两种角色；领域入口始终留在领域目标目录。
+        const domainTargets = [...logicalTargets.values()].filter(logical => logical.id === job.knowledge_target.id
+          && docs.some(doc => doc.target_id === logical.id));
+        for (const logical of domainTargets) {
+          const directory = logical.docs_path.replace(/\/$/, ""), path = `${directory}/AGENTS.md`;
+          const original = await this.content(git, parent, path);
+          const candidates = new Set(docs.filter(doc => doc.target_id === logical.id && !doc.deleted).map(doc => doc.path));
+          for (const document of formal) if (role(document) === "domain" && document.archive_target!.path.startsWith(`${directory}/`)) candidates.add(document.archive_target!.path);
+          for (const relative of rememberedKnowledgeFiles(original ?? "")) candidates.add(`${directory}/${relative}`);
+          const available = await availableFiles(candidates);
+          if (!available.size && original === null) continue;
+          const entries = knowledgeEntryPaths([...available]).map(value => value.slice(directory.length + 1));
+          await writeNavigation(path, directoryKnowledgeRoot(entries.sort()), original);
+        }
+        const codeTargets = [...logicalTargets.values()].filter(logical => logical.id !== job.knowledge_target.id
+          && docs.some(doc => doc.target_id === logical.id));
+        if (codeTargets.length) {
+          const original = await this.content(git, parent, "AGENTS.md"), remembered = rememberedKnowledgeFiles(original ?? "");
+          const codeTargetIds = new Set(codeTargets.map(logical => logical.id));
+          const candidates = new Set(docs.filter(doc => codeTargetIds.has(doc.target_id) && !doc.deleted).map(doc => doc.path));
+          for (const path of remembered) if (!domainFiles.has(path)) candidates.add(path);
+          for (const document of formal) if (role(document) === "repository") candidates.add(document.archive_target!.path);
+          const bases = rememberedModuleKnowledgeBases(original ?? ""), legacyEntries = new Set<string>();
+          // 旧根索引只记模块父目录；仅从这些已知目录恢复仍在 Git 中的入口。
+          if (bases.length) for (const line of (await git(["ls-files", "--stage", "-z", "--", ...bases.map(path => `:(literal)${path}`)])).split("\0")) {
+            const match = /^100(?:644|755) [a-f0-9]+ 0\t([\s\S]+)$/.exec(line), path = match?.[1];
+            if (!path || domainFiles.has(path)) continue;
+            if (bases.some(base => {
+              if (!path.startsWith(`${base}/`)) return false;
+              const parts = path.slice(base.length + 1).split("/");
+              return parts.length === 2 && moduleReadmeName(parts[1]);
+            })) { candidates.add(path); legacyEntries.add(path); }
+          }
+          const available = await availableFiles(candidates);
+          const entries = new Set([...legacyEntries, ...remembered].filter(path => available.has(path)));
+          for (const path of knowledgeEntryPaths([...available])) entries.add(path);
+          // 每个代码目标保留自己的入口；其他模块的同目录 README 不能隐藏本模块知识。
+          for (const logical of codeTargets) for (const path of knowledgeEntryPaths(docs.filter(doc => doc.target_id === logical.id
+            && !doc.deleted && available.has(doc.path)).map(doc => doc.path))) entries.add(path);
+          await writeNavigation("AGENTS.md", repositoryKnowledgeRoot([...entries].sort()), original);
+        }
+        publication.navigation_files = navigationFiles;
+      }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
       // 纯适用范围新版本也独立尝试建MR；平台拒绝无差异时如实返回原文，不虚写成功。
       const revision = remote && tree === before ? parent : (await git(["commit-tree", tree, "-p", parent, "-m", cloudCommitSubject(issue, "feat", `更新${job.title}知识`)])).trim();
       publication.revision = revision; saveAttempt();
-      if (revision !== remote) await git(["push", target.repository, `${revision}:refs/heads/${publication.branch}`]);
+      // 空期望值只允许创建尚不存在的分支，防止并行归档在查名后占用同名分支。
+      if (revision !== remote) await git(["push", ...(!remote ? [`--force-with-lease=refs/heads/${publication.branch}:`] : []),
+        target.repository, `${revision}:refs/heads/${publication.branch}`]);
       saveLive(publication);
       return this.openMr(job, target, publication, operator, saveLive, operationSignal);
     }, signal);
+  }
+  async closePublication(job: DomainKnowledgeJob, target: KnowledgeRepository, publication: DomainPublication, operator = job.operator): Promise<"closed" | "merged"> {
+    this.assertActive();
+    let mr = publication.mr_id ?? publication.url;
+    if (publication.url) {
+      try { mr = new URL(publication.url).pathname.match(/\/merge_requests\/(\d+)\/?$/)?.[1] ?? mr; }
+      catch { /* 非标准链接使用已保存的 MR 标识。 */ }
+    }
+    if (mr === undefined || mr === "") throw new Error("旧归档缺少 MR 标识，无法撤销");
+    const identity = this.identity(operator);
+    const readState = () => fetchMrGates({ platformUrl: identity.platformUrl, repo: target.repository, headers: identity.headers, requireExisting: true,
+      delivery: { source_branch: publication.branch, target_branch: target.branch, mr_id: publication.mr_id, mr_url: publication.url } });
+    const before = await readState();
+    if (before?.mrState === "closed" || before?.mrState === "merged") return before.mrState;
+    this.assertActive();
+    try {
+      await closeMergeRequest({ platformUrl: identity.platformUrl, repo: target.repository, mr, credential: identity.credential });
+    } catch (error) {
+      // 关闭成功后的回执可能丢失；只凭同一个 MR 的确定状态恢复，不关闭其他分支。
+      const state = await readState();
+      if (state?.mrState === "merged") return "merged";
+      if (state?.mrState !== "closed") throw error;
+    }
+    return "closed";
   }
 }

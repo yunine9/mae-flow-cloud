@@ -9,7 +9,7 @@
  * - CLI 失败带 stderr 原文上浮,不吞。
  */
 
-import { test } from "node:test";
+import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -24,58 +24,195 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PlatformAdapter } from "../src/platformAdapter.ts";
 
-test("MR 人员独立更新：创建失败信息不丢 MR，复用不覆盖，补设不重建", async t => {
+function participantFixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "mfc-adapter-participants-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const cli = join(directory, "cli.mjs"), calls = join(directory, "calls.jsonl");
+  const marker = join(directory, "created");
   const configPath = join(directory, "adapter.json");
-  writeFileSync(cli, `import { appendFileSync } from 'node:fs';
+  writeFileSync(cli, `import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 const [mode, ...args] = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify({mode,args})+'\\n');
-if(mode === 'create') console.log(JSON.stringify({url:'https://codehub.test/g/r/merge_requests/7',iid:7}));
-else if(mode === 'lookup') console.log(JSON.stringify({url:'https://codehub.test/g/r/merge_requests/7',iid:7}));
-else if(mode === 'invalid') console.log('{}');
-else if(mode === 'crash') { console.error('fixture-secret'); process.exit(2); }
-else console.log(JSON.stringify({status:mode,requested:JSON.parse(args[2]),message:mode==='failed'?'人员读取字段尚未配置':undefined}));`);
-  const requested = { reviewers: ["alice"], approval_approvers: ["bob"] };
+const mr = {url:'https://codehub.test/g/r/merge_requests/7',iid:7};
+if(mode.startsWith('create')) writeFileSync(${JSON.stringify(marker)}, 'created');
+if(mode === 'create') console.log(JSON.stringify(mr));
+else if(mode === 'members') console.log(args[2]);
+else if(mode === 'members-by-repo') console.log(JSON.stringify(JSON.parse(args[2])[args[0]]));
+else if(mode === 'members-crash') { console.error(args.join(' ')); process.exit(2); }
+else if(mode === 'members-slow') setTimeout(() => console.log(args[2]), 1000);
+else if(mode === 'create-invalid') console.log('{invalid-json');
+else if(mode === 'create-missing-url') console.log(JSON.stringify({iid:7}));
+else if(mode === 'create-empty-url') console.log(JSON.stringify({...mr,url:''}));
+else if(mode === 'create-crash') { console.error(args.join(' ')); process.exit(2); }
+else if(mode === 'lookup' || mode === 'lookup-after-create' && existsSync(${JSON.stringify(marker)})) console.log(JSON.stringify(mr));
+else if(mode === 'legacy-update') { console.error('must not update participants'); process.exit(2); }
+else console.log('{}');`);
+  const requested = { reviewers: ["l00899311", "l00900222"], approval_approvers: ["l00777123"] };
   const base = {
-    token: "fixture-secret", mr_create: { command: [process.execPath, cli, "create"], url: { json: "url" }, id: { json: "iid" } },
+    token: "fixture-secret", mr_create: { command: [process.execPath, cli, "create", "--token", "{token}"],
+      participant_flags: { reviewers: "--review-people", approval_approvers: "--approve-people" }, url: { json: "url" }, id: { json: "iid" } },
+    mr_approver_members: { command: [process.execPath, cli, "members", "{repo}", "{token}",
+      JSON.stringify([{ username: "l00777123", access_level: 35 }])],
+      fields: { username: { json: "username" }, access_level: { json: "access_level" } } },
     pipeline_trigger: { observe_only: true }, pipeline_status: { command: [process.execPath, cli, "invalid"] },
-    mr_participants: { command: [process.execPath, cli, "failed", "{repo_path}", "{mr}", "{participants}", "{token}"], contract: true },
+    // 升级前残留的更新配置也不能让创建流程另发 update。
+    mr_participants: { command: [process.execPath, cli, "legacy-update"], contract: true },
   };
   const adapter = (patch: Record<string, unknown> = {}) => {
     writeFileSync(configPath, JSON.stringify({ ...base, ...patch }));
     return new PlatformAdapter(configPath, () => {});
   };
   const input = { repo: "https://codehub.test/g/r.git", source_branch: "s", target_branch: "main", title: "t", participants: requested };
+  const history = () => existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line)) : [];
+  const lookup = (mode: string) => ({ command: [process.execPath, cli, mode], url: { json: "url" }, id: { json: "iid" } });
+  return { requested, base, adapter, input, history, lookup };
+}
+
+test("创建 MR 直接传两类账号，接受参数即记录成功，之后不调用 update", async t => {
+  const { requested, adapter, input, history } = participantFixture(t);
   const created = await adapter().handle("POST", "/mr", new URLSearchParams(), input, { "x-mfc-git-token": "personal-token" });
   assert.equal(created.status, 201);
   assert.deepEqual(created.payload, { url: "https://codehub.test/g/r/merge_requests/7", id: "7", participants: {
-    status: "failed", requested, message: "人员读取字段尚未配置" } });
-  let history = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
-  assert.deepEqual(history.map(row => row.mode), ["create", "failed"]);
-  assert.deepEqual(history[1].args, ["g%2Fr", "7", JSON.stringify(requested), "personal-token"]);
-  const applied = await adapter({ mr_participants: { ...base.mr_participants,
-    command: base.mr_participants.command.map(part => part === "failed" ? "applied" : part) } })
-    .handle("POST", "/mr/participants", new URLSearchParams(), { repo: input.repo, mr: "7", participants: requested }, {});
-  assert.deepEqual(applied, { status: 200, payload: { status: "applied", requested } });
-  const reused = await adapter({ mr_lookup: { command: [process.execPath, cli, "lookup"], url: { json: "url" }, id: { json: "iid" } } })
+    status: "applied", requested } });
+  assert.deepEqual(history().map(row => row.mode), ["members", "create"]);
+  assert.deepEqual(history()[0].args.slice(0, 2), [input.repo, "personal-token"]);
+  assert.deepEqual(history().filter(row => row.mode !== "members"), [{ mode: "create", args: ["--token", "personal-token",
+    "--review-people", "l00899311,l00900222", "--approve-people", "l00777123"] }]);
+});
+
+test("创建 MR 仅追加非空角色，未配人员保持原命令且不返回人员状态", async t => {
+  const { base, adapter, input, history } = participantFixture(t);
+  const instance = adapter({ mr_participants: undefined });
+  for (const participants of [{ reviewers: ["l00899311"], approval_approvers: [] },
+    { reviewers: [], approval_approvers: ["l00777123"] }, { reviewers: [], approval_approvers: [] }, undefined]) {
+    const result = await instance.handle("POST", "/mr", new URLSearchParams(), { ...input, participants }, {});
+    assert.equal(result.status, 201);
+    assert.equal((result.payload as any).participants?.status, participants?.reviewers.length || participants?.approval_approvers.length ? "applied" : undefined);
+  }
+  assert.equal(history().filter(row => row.mode === "members").length, 1, "空审批人不查成员");
+  assert.deepEqual(history().filter(row => row.mode !== "members"), [
+    { mode: "create", args: ["--token", "fixture-secret", "--review-people", "l00899311"] },
+    { mode: "create", args: ["--token", "fixture-secret", "--approve-people", "l00777123"] },
+    { mode: "create", args: ["--token", "fixture-secret"] },
+    { mode: "create", args: ["--token", "fixture-secret"] },
+  ]);
+  const knowledge = adapter({ mr_create_knowledge: { ...base.mr_create,
+    command: [...base.mr_create.command, "--associated-issue", "{dts_no}"],
+    participant_flags: { reviewers: "--knowledge-reviewers", approval_approvers: "--knowledge-approvers" } } });
+  await knowledge.handle("POST", "/mr", new URLSearchParams(), { ...input, purpose: "knowledge", dts_no: "REQ479" }, {});
+  assert.deepEqual(history().at(-1)?.args, ["--token", "fixture-secret", "--associated-issue", "REQ479",
+    "--knowledge-reviewers", "l00899311,l00900222", "--knowledge-approvers", "l00777123"]);
+  const report = await knowledge.selftest({ repo: input.repo, sha: "fixture-sha" });
+  assert.match(report, /mr_create\.participant_flags:.*--review-people.*--approve-people/);
+  assert.match(report, /mr_create_knowledge\(只印不执行\):.*--associated-issue/);
+  assert.match(report, /mr_create_knowledge\.participant_flags:.*--knowledge-reviewers.*--knowledge-approvers/);
+  assert.match(report, /mr_approver_members/);
+  assert.doesNotMatch(report, /fixture-secret|mr_participants/);
+  assert.equal(history().filter(row => row.mode === "create").length, 5, "自检不能执行创建命令");
+  assert.ok(!history().some(row => row.mode === "legacy-update"), "自检不能执行旧人员更新命令");
+});
+
+test("创建 MR 缺少人员参数映射时保留链接并记录失败，只传已映射角色", async t => {
+  const { requested, base, adapter, input, history } = participantFixture(t);
+  for (const participant_flags of [undefined, { reviewers: "--review-people" }, { reviewers: "--bad flag" }]) {
+    const result = await adapter({ mr_create: { ...base.mr_create, participant_flags } })
+      .handle("POST", "/mr", new URLSearchParams(), input, {});
+    assert.equal(result.status, 201);
+    assert.equal((result.payload as any).url, "https://codehub.test/g/r/merge_requests/7");
+    assert.equal((result.payload as any).participants.status, "failed");
+    assert.deepEqual((result.payload as any).participants.requested, requested);
+    assert.match((result.payload as any).participants.message, /未配置有效的人员参数/);
+  }
+  assert.deepEqual(history(), [
+    { mode: "create", args: ["--token", "fixture-secret"] },
+    { mode: "create", args: ["--token", "fixture-secret", "--review-people", "l00899311,l00900222"] },
+    { mode: "create", args: ["--token", "fixture-secret"] },
+  ]);
+});
+
+test("已有 MR 直接复用，保留人工名单，不创建也不更新人员", async t => {
+  const { requested, adapter, input, history, lookup } = participantFixture(t);
+  const reused = await adapter({ mr_lookup: lookup("lookup") })
     .handle("POST", "/mr", new URLSearchParams(), input, {});
   assert.equal((reused.payload as any).participants.status, "skipped");
-  history = readFileSync(calls, "utf8").trim().split("\n").map(line => JSON.parse(line));
-  assert.deepEqual(history.map(row => row.mode), ["create", "failed", "applied", "lookup"]);
-  const absent = await adapter({ mr_participants: undefined }).handle("POST", "/mr", new URLSearchParams(), input, {});
-  assert.equal((absent.payload as any).participants.status, "failed");
-  assert.equal((absent.payload as any).id, "7");
-  const malformed = await adapter({ mr_participants: { command: [process.execPath, cli, "invalid"], contract: true } })
-    .handle("POST", "/mr/participants", new URLSearchParams(), { repo: input.repo, mr: 7, participants: requested }, {});
-  assert.equal((malformed.payload as any).status, "failed");
-  const crashed = await adapter({ mr_participants: { command: [process.execPath, cli, "crash"], contract: true } })
-    .handle("POST", "/mr", new URLSearchParams(), input, {});
-  assert.equal(crashed.status, 201);
-  assert.equal((crashed.payload as any).id, "7");
-  assert.equal((crashed.payload as any).participants.status, "failed");
-  assert.doesNotMatch(JSON.stringify(crashed.payload), /fixture-secret/);
+  assert.deepEqual((reused.payload as any).participants.requested, requested);
+  assert.equal((reused.payload as any).id, "7");
+  assert.deepEqual(history(), [{ mode: "lookup", args: [] }]);
+});
+
+test("创建异常或输出不可解析只查询恢复 MR，不去掉人员参数重复创建", async t => {
+  for (const mode of ["create-crash", "create-invalid", "create-missing-url", "create-empty-url"]) {
+    const { base, adapter, input, history, lookup } = participantFixture(t);
+    const result = await adapter({ mr_lookup: lookup("lookup-after-create"),
+      mr_create: { ...base.mr_create, command: base.mr_create.command.map(arg => arg === "create" ? mode : arg) } })
+      .handle("POST", "/mr", new URLSearchParams(), input, {});
+    assert.equal(result.status, 201);
+    assert.equal((result.payload as any).id, "7");
+    assert.equal((result.payload as any).participants.status, "skipped");
+    assert.deepEqual(history().map(row => row.mode), ["lookup-after-create", "members", mode, "lookup-after-create"]);
+    assert.deepEqual(history()[2].args, ["--token", "fixture-secret",
+      "--review-people", "l00899311,l00900222", "--approve-people", "l00777123"]);
+  }
+});
+
+test("创建失败且查不到 MR 如实失败，令牌脱敏，不重试创建或调用旧补设端点", async t => {
+  const { base, adapter, input, history, lookup } = participantFixture(t);
+  const instance = adapter({ mr_lookup: lookup("lookup-missing"),
+    mr_create: { ...base.mr_create, command: base.mr_create.command.map(arg => arg === "create" ? "create-crash" : arg) } });
+  await assert.rejects(instance.handle("POST", "/mr", new URLSearchParams(), input, { "x-mfc-git-token": "personal-secret" }), (error: Error) => {
+    assert.match(error.message, /CLI 失败/);
+    assert.doesNotMatch(error.message, /fixture-secret|personal-secret/);
+    return true;
+  });
+  assert.deepEqual(history().map(row => row.mode), ["lookup-missing", "members", "create-crash", "lookup-missing"]);
+  const retired = await instance.handle("POST", "/mr/participants", new URLSearchParams(), { repo: input.repo, mr: "7", participants: input.participants }, {});
+  assert.equal(retired.status, 404);
+  assert.equal(history().length, 4);
+});
+
+test("审批人按仓过滤 Committer 权限，排除作者，原配置保留且不跨仓缓存", async t => {
+  const { base, adapter, input, history } = participantFixture(t);
+  const people = { reviewers: ["l00899311"], approval_approvers: ["low", "committer", "maintainer", "author", "outsider"] };
+  const rows = [{ username: "low", access_level: 30 }, { username: "committer", access_level: 35 },
+    { username: "maintainer", access_level: "40" }, { username: "author", access_level: 50 }];
+  const otherRepo = "https://codehub.test/g/other.git";
+  const byRepo = { [input.repo]: rows, [otherRepo]: rows.map(row => row.username === "committer" ? { ...row, access_level: 30 } : row) };
+  const members = { ...base.mr_approver_members, command: [...base.mr_approver_members.command.slice(0, -1)
+    .map(arg => arg === "members" ? "members-by-repo" : arg), JSON.stringify(byRepo)] };
+  const instance = adapter({ mr_approver_members: members });
+  for (const repo of [input.repo, otherRepo]) {
+    const response = await instance.handle("POST", "/mr", new URLSearchParams(), { ...input, repo, participants: people },
+      { "x-mfc-git-user": "author", "x-mfc-git-token": "personal-secret" });
+    assert.equal(response.status, 201);
+    assert.equal((response.payload as any).participants.status, "failed", "部分跳过不冒充全员设置成功");
+    assert.deepEqual((response.payload as any).participants.requested, people);
+    assert.match((response.payload as any).participants.message, repo === input.repo ? /low, author, outsider/ : /low, committer, author, outsider/);
+  }
+  assert.deepEqual(history().map(row => row.mode), ["members-by-repo", "create", "members-by-repo", "create"]);
+  assert.deepEqual(history().filter(row => row.mode === "members-by-repo").map(row => row.args.slice(0, 2)),
+    [[input.repo, "personal-secret"], [otherRepo, "personal-secret"]]);
+  assert.deepEqual(history().filter(row => row.mode === "create").map(row => row.args),
+    ["committer,maintainer", "maintainer"].map(names => ["--token", "personal-secret", "--review-people", "l00899311", "--approve-people", names]));
+});
+
+test("成员查询缺席、失败、超时或无合法审批人时省略审批参数，检视人和 MR 创建保留", async t => {
+  for (const mode of ["absent", "members-crash", "members-slow", "invalid-json", "missing-field", "empty", "low"]) {
+    const { base, adapter, input, history } = participantFixture(t);
+    const raw = mode === "invalid-json" ? "not-json" : mode === "missing-field" ? '[{"username":"l00777123"}]'
+      : mode === "low" ? '[{"username":"l00777123","access_level":30}]' : '[]';
+    const spec = mode === "absent" ? undefined : { ...base.mr_approver_members, timeout_s: 0.02,
+      command: [...base.mr_approver_members.command.slice(0, 2),
+        mode === "members-crash" || mode === "members-slow" ? mode : "members", "{repo}", "{token}", raw] };
+    if (spec && mode !== "members-slow") spec.timeout_s = 5;
+    const response = await adapter({ mr_approver_members: spec }).handle("POST", "/mr", new URLSearchParams(), input,
+      { "x-mfc-git-token": "personal-secret" });
+    assert.equal(response.status, 201, mode);
+    assert.equal((response.payload as any).participants.status, "failed", mode);
+    assert.deepEqual((response.payload as any).participants.requested, input.participants);
+    assert.doesNotMatch(JSON.stringify(response.payload), /personal-secret|fixture-secret/);
+    assert.deepEqual(history().filter(row => row.mode === "create"), [{ mode: "create",
+      args: ["--token", "personal-secret", "--review-people", "l00899311,l00900222"] }]);
+  }
 });
 
 test("只观察自动流水线不需要触发命令，自检和调用都保留真实查询失败", async t => {

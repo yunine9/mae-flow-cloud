@@ -87,7 +87,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:http";
 import { appendAudit } from "./issueFlow/audit.ts";
-import { hasMrParticipants, normalizeMrParticipants, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
+import { hasMrParticipants, MR_PARTICIPANT_ROLES, normalizeMrParticipants, type MrParticipants, type MrParticipantsResult } from "./mrParticipants.ts";
 import {
   PIPELINE_DIMENSIONS,
   parsePipelineDefects,
@@ -99,6 +99,9 @@ type Extract = { json?: string; regex?: string; const?: string };
 
 interface CommandSpec {
   command: string[];
+  /** 创建 MR 时把非空名单作为 flag 与逗号分隔账号两个 argv 追加。
+   * 平台参数由部署配置提供；未映射的角色不冒充设置成功。 */
+  participant_flags?: Partial<Record<keyof MrParticipants, string>>;
   timeout_s?: number;
   /** 命令输出**就是宿主契约 JSON**(pipeline_status: {runs:[...]})——
    * 仓内自带的编排脚本(deploy/adapter-tools/)用这个形态,免去逐字段
@@ -204,6 +207,8 @@ interface AdapterConfig {
   mr_create: CommandSpec;
   /** 知识归档独立模板，使用任务填写的关联单号。 */
   mr_create_knowledge?: CommandSpec;
+  /** 创建前按目标仓成员权限筛选审批人，输出 username/access_level。 */
+  mr_approver_members?: ListSpec;
   /** 先查后建(可选):建 MR 前先查同分支对有没有已开的 MR,查到了
    * 直接复用。CodeHub 的建 MR 幂等语义不统一(CLI 报 stderr、REST
    * 静默回 200 空 body——能力核对报告 A2 实测),查询是唯一稳的路。
@@ -213,8 +218,6 @@ interface AdapterConfig {
   mr_discover?: CommandSpec;
   /** 单号纠正成功后关闭旧 MR。未配置时保留旧 MR 并明确报告清理失败。 */
   mr_close?: CommandSpec;
-  /** 独立设置 MR 人员；命令必须返回 MrParticipantsResult JSON。 */
-  mr_participants?: CommandSpec;
   pipeline_trigger: PipelineTriggerSpec;
   pipeline_status: Degradable<CommandSpec>;
   /** MR 闭环的四个可选端点(docs/mr-loop-adaptation.md §3):
@@ -549,7 +552,6 @@ export class PlatformAdapter {
       dts_no: String(body.dts_no ?? ""),
       sha: String(body.sha ?? ""),
       mr: String(body.mr ?? ""),
-      participants: body.participants === undefined ? "" : JSON.stringify(body.participants),
       id: String(body.id ?? ""),
       body: String(body.body ?? ""),
       resolve: String(body.resolve ?? ""),
@@ -688,6 +690,30 @@ export class PlatformAdapter {
     return { stdout, parsed, items };
   }
 
+  private async eligibleApprovers(requested: string[], values: Record<string, string>): Promise<{ accounts: string[]; message?: string }> {
+    const spec = this.config.mr_approver_members;
+    if (!spec) return { accounts: [], message: "未配置仓库成员查询，本次未添加审批人" };
+    try {
+      // 不缓存跨仓或跨身份的权限快照；查询有界，不能挡住 MR 创建。
+      const { items } = await this.runList({ ...spec, timeout_s: Math.min(spec.timeout_s ?? 15, 15) }, values);
+      const allowed = new Set<string>();
+      for (const row of items) {
+        const level = typeof row.access_level === "string" && /^\d+$/.test(row.access_level)
+          ? Number(row.access_level) : row.access_level;
+        if (typeof row.username !== "string" || !row.username.trim() || typeof level !== "number" || !Number.isInteger(level)) {
+          throw new AdapterError("仓库成员缺少有效账号或权限等级");
+        }
+        if (level >= 35 && row.username !== values.git_username) allowed.add(row.username);
+      }
+      const accounts = requested.filter(account => allowed.has(account));
+      const omitted = requested.filter(account => !allowed.has(account));
+      return { accounts, ...(omitted.length ? { message: `本次未添加未确认审批资格的账号：${omitted.join(", ")}` } : {}) };
+    } catch {
+      // 上游错误可能包含凭据；后台保留未确认事实，不把原始响应带给用户。
+      return { accounts: [], message: "仓库成员查询失败或响应无效，本次未添加审批人" };
+    }
+  }
+
   /** 查同分支对已开的 MR(mr_lookup 配了才查)。查询失败/抽不到 url
    * 一律回 undefined——查不到不是错,走创建;真正的诚实失败留给
    * 创建那一步报。 */
@@ -707,28 +733,6 @@ export class PlatformAdapter {
       return { url, ...(id !== undefined ? { id: String(id) } : {}) };
     } catch {
       return undefined;
-    }
-  }
-
-  /** 人员设置失败独立返回，不能抹掉已经创建成功的 MR。 */
-  private async setMrParticipants(
-    values: Record<string, string>, requested: MrParticipants,
-  ): Promise<MrParticipantsResult> {
-    if (!hasMrParticipants(requested)) return { status: "skipped", requested, message: "未配置 MR 人员，无需更新" };
-    const spec = this.config.mr_participants;
-    if (!spec?.contract) return { status: "failed", requested, message: "平台未配置 MR 人员更新能力，请更新 adapter 配置" };
-    const redact = (message: string) => [values.token, this.serviceToken].filter(Boolean)
-      .reduce((text, secret) => text.split(secret).join("<token>"), message).slice(0, 1000);
-    try {
-      const result = JSON.parse(await this.run(spec, { ...values, participants: JSON.stringify(requested) }));
-      if (!result || !["applied", "failed", "skipped"].includes(result.status)
-          || JSON.stringify(normalizeMrParticipants(result.requested)) !== JSON.stringify(requested)) {
-        throw new AdapterError("人员更新命令未返回匹配的结果与请求名单");
-      }
-      return { status: result.status, requested,
-        ...(typeof result.message === "string" ? { message: redact(result.message) } : {}) };
-    } catch (error) {
-      return { status: "failed", requested, message: redact(error instanceof Error ? error.message : String(error)) };
     }
   }
 
@@ -824,34 +828,49 @@ export class PlatformAdapter {
       if (found) return reused(found);
       const spec = body.purpose === "knowledge" ? this.config.mr_create_knowledge ?? this.config.mr_create : this.config.mr_create;
       if (body.purpose === "knowledge" && !spec.command.some(arg => arg.includes("{dts_no}"))) throw new AdapterError("知识归档命令未配置单号关联，请在 mr_create_knowledge 中配置 {dts_no}");
-      let stdout: string;
+      const command = [...spec.command];
+      let participants: MrParticipantsResult | undefined;
+      if (hasMrParticipants(requested)) {
+        const messages: string[] = [];
+        for (const role of MR_PARTICIPANT_ROLES) {
+          if (!requested[role].length) continue;
+          const flag = spec.participant_flags?.[role];
+          if (typeof flag !== "string" || !/^--?[A-Za-z][A-Za-z0-9-]*$/.test(flag)) {
+            messages.push(`创建 MR 命令未配置有效的人员参数: ${role}`);
+          } else {
+            let accounts = requested[role];
+            if (role === "approval_approvers") {
+              const eligible = await this.eligibleApprovers(accounts, values);
+              accounts = eligible.accounts;
+              if (eligible.message) messages.push(eligible.message);
+            }
+            if (accounts.length) command.push(flag, accounts.join(","));
+          }
+        }
+        // applied 表示创建命令成功接受了名单，不表示另行回读核验。
+        participants = { status: messages.length ? "failed" : "applied", requested,
+          ...(messages.length ? { message: messages.join("；") } : {}) };
+      }
       try {
-        stdout = await this.run(spec, values);
+        const stdout = await this.run({ ...spec, command }, values);
+        let parsedCache: unknown;
+        const parsed = () => parsedCache ??= JSON.parse(stdout);
+        const url = extract(spec.url, "MR 链接", stdout, parsed);
+        if (typeof url !== "string" || !url.trim()) throw new AdapterError("创建 MR 命令未返回有效的 MR 链接");
+        const id = spec.id
+          ? extractOptional(spec.id, stdout, parsed) : undefined;
+        return { status: 201, payload: {
+          url,
+          ...(id !== undefined ? { id: String(id) } : {}),
+          ...(participants ? { participants } : {}),
+        } };
       } catch (error) {
-        // 创建失败再查一次兜竞态(查后建之间别人建了同分支对的 MR,
-        // 平台会拒绝):查到了就复用,查不到才把创建的报错如实抛出。
+        // 退出异常或输出不完整也可能已经创建成功，只查询恢复链接。
+        // 不去掉人员参数重新创建，避免同一请求造成重复 MR。
         const retried = await this.lookupMr(values);
         if (retried) return reused(retried);
         throw error;
       }
-      let parsedCache: unknown;
-      const parsed = () => parsedCache ??= JSON.parse(stdout);
-      const url = extract(spec.url, "MR 链接", stdout, parsed);
-      const id = spec.id
-        ? extractOptional(spec.id, stdout, parsed) : undefined;
-      return { status: 201, payload: {
-        url: String(url ?? ""),
-        ...(id !== undefined ? { id: String(id) } : {}),
-        ...(hasMrParticipants(requested) ? { participants: await this.setMrParticipants({ ...values,
-          mr: String(id ?? url ?? "") }, requested) } : {}),
-      } };
-    }
-    if (method === "POST" && path === "/mr/participants") {
-      const requested = normalizeMrParticipants(body.participants);
-      if (!String(body.repo ?? "").trim() || !String(body.mr ?? "").trim()) {
-        return { status: 400, payload: { error: "人员设置必须指定仓库和 MR" } };
-      }
-      return { status: 200, payload: await this.setMrParticipants(this.values(body, headers), requested) };
     }
     if (method === "POST" && path === "/pipeline/trigger") {
       const spec = this.config.pipeline_trigger;
@@ -1134,7 +1153,6 @@ export class PlatformAdapter {
     const sections: Array<[string, CommandSpec | undefined]> = [
       ["mr_create(只印不执行)", this.config.mr_create],
       ["mr_close(只印不执行)", this.config.mr_close],
-      ["mr_participants(只印不执行)", this.config.mr_participants],
       ["mr_lookup(先查后建的查询)", this.config.mr_lookup],
       ["mr_discover(全生命周期查找)", this.config.mr_discover],
       ["mr_gates", this.config.mr_gates],
@@ -1146,6 +1164,18 @@ export class PlatformAdapter {
       lines.push(spec
         ? `[配置] ${name}: ${mask(spec.command)}`
         : `[缺席] ${name}: 未配置(对应端点 404,宿主按旧语义 fail-open)`);
+    }
+    const knowledgeCreate = this.config.mr_create_knowledge;
+    const members = this.config.mr_approver_members;
+    lines.push(members
+      ? `[配置] mr_approver_members(创建前筛选审批人): ${mask(members.command)}`
+      : "[缺席] mr_approver_members: 未配置，创建时将省略审批人");
+    lines.push(knowledgeCreate
+      ? `[配置] mr_create_knowledge(只印不执行): ${mask(knowledgeCreate.command)}`
+      : "[配置] mr_create_knowledge: 未配置，复用 mr_create");
+    for (const [name, spec] of [["mr_create", this.config.mr_create],
+      ["mr_create_knowledge", knowledgeCreate ?? this.config.mr_create]] as const) {
+      lines.push(`[配置] ${name}.participant_flags: ${JSON.stringify(spec.participant_flags ?? {})}`);
     }
     if (this.config.discussion_reply
         && !this.config.discussion_reply.command.some((part) =>

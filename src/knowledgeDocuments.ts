@@ -17,7 +17,7 @@ export interface KnowledgeDocument {
   technology_assignment_required?: true;
   source?: { repository: string; branch: string; path: string; revision: string };
   archive_target?: { repository: string; branch: string; path: string };
-  research_source?: { job_id:string; document_id?: string; repository:string; branch:string; path:string; revision?:string; source_revisions?: Record<string, string>; material_ids?: string[]; skill?: { name: string; digest: string }; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
+  research_source?: { job_id:string; document_id?: string; layer?: "domain" | "repository"; repository:string; branch:string; path:string; revision?:string; source_revisions?: Record<string, string>; material_ids?: string[]; skill?: { name: string; digest: string }; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
   history: Array<{ at: string; operator: string; action: string; revision?: string }>;
 }
 const root = (dir: string) => join(dir, "knowledge-documents");
@@ -44,6 +44,7 @@ function storedDocument(value: unknown, id: string): KnowledgeDocument {
     || !location(record.source, ["repository", "branch", "path", "revision"])
     || !location(record.archive_target, ["repository", "branch", "path"])
     || !location(research, ["job_id"])
+    || research?.layer !== undefined && !["domain", "repository"].includes(research.layer)
     || research && ["repository", "branch", "path"].some(key => research[key as keyof typeof research] !== undefined
       && !text(research[key as keyof typeof research]))) throw new Error("知识记录形状不正确");
   return record;

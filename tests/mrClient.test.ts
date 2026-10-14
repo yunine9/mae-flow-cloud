@@ -10,24 +10,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server } from "node:http";
-import { createMergeRequest, updateMergeRequestParticipants } from "../src/mrClient.ts";
+import { createMergeRequest } from "../src/mrClient.ts";
 
-test("MR 人员补设遵守外部取消，迟到响应不能覆盖取消状态", async t => {
-  const controller = new AbortController();
-  let calls = 0;
-  const call = { platformUrl: "http://adapter", repo: "repo", mr: 1,
-    participants: { reviewers: ["alice"], approval_approvers: [] }, signal: controller.signal };
-  t.mock.method(globalThis, "fetch", async () => {
-    calls++;
-    controller.abort(new Error("知识归档已取消"));
-    return new Response(JSON.stringify({ status: "applied" }));
-  });
-  await assert.rejects(updateMergeRequestParticipants(call), /知识归档已取消/);
-  await assert.rejects(updateMergeRequestParticipants(call), /知识归档已取消/);
-  assert.equal(calls, 1, "已取消请求不得发起第二次人员设置");
-});
-
-test("MR 客户端:慢平台完成创建和人员设置后仍能收到回执，显式超时继续生效", async t => {
+test("MR 客户端:慢平台携带人员创建后仍能收到回执，显式超时继续生效", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let reply!: () => void;
   let requestSignal!: AbortSignal;
@@ -40,7 +25,7 @@ test("MR 客户端:慢平台完成创建和人员设置后仍能收到回执，�
   const call = { platformUrl: "http://adapter", sourceBranch: "feature", targetBranch: "main", title: "test",
     participants: { reviewers: ["alice"], approval_approvers: [] } };
   const creating = createMergeRequest(call);
-  // 模拟查找 50 秒、创建 55 秒、人员更新与回读 25 秒。
+  // 模拟前置查找与携带人员创建共耗时 130 秒。
   t.mock.timers.tick(130_000);
   assert.equal(requestSignal.aborted, false);
   reply();

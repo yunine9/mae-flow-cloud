@@ -4,7 +4,7 @@ import { listKnowledgeDocuments, readKnowledgeDocument, readKnowledgeDocumentFac
 import { knowledgeDeleted, readKnowledgeDeletion, writeKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
 import { KnowledgeExtractionSkills } from "./knowledgeExtractionSkills.ts";
 import { knowledgeArchiveDefaults } from "./knowledgeArchiveDefaults.ts";
-import { assertModuleKnowledgePath, moduleKnowledgeDirectory, moduleKnowledgePath, moduleKnowledgePaths, needsModuleKnowledgeLayout } from "./domainKnowledgeLayout.ts";
+import { assertModuleKnowledgePath, moduleKnowledgeDirectory, moduleKnowledgePaths, needsModuleKnowledgeLayout, directoryKnowledgeDirectory, directoryKnowledgePath, readableDomainKnowledgeDirectory, hasOpaqueModuleDirectory } from "./domainKnowledgeLayout.ts";
 import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
@@ -23,7 +23,7 @@ import { continuingReviewProposal, assertLatestReviewProposal, assertReviewRevis
 import type { KnowledgeSourceCleanup } from "./knowledgeSourceCleanup.ts";
 import { MR_PARTICIPANT_ROLES, normalizeMrParticipants } from "./mrParticipants.ts";
 
-import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
+import type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainArchiveBatch, DomainKnowledgeJob, DomainExecution, DomainArchiveTargetsPreview } from "./domainKnowledgeTypes.ts";
 export type { KnowledgeRepository, DomainDocumentContent, DomainDocument, DomainTurn, DomainPublication, DomainKnowledgeJob, DomainExecution } from "./domainKnowledgeTypes.ts";
 export function knowledgeIssueNumber(value: unknown): string {
   const issue = typeof value === "string" ? value.trim() : "";
@@ -50,7 +50,7 @@ function repository(input: any, id: string): KnowledgeRepository {
   assertRepositoryCloneAddress(url);
   if (!branch || branch.length > 255 || branch.startsWith("-") || /[\s\\~^:?*\[\x00-\x1f]|\.\.|@\{|\/\/|\.$|\/$|\.lock(?:\/|$)/.test(branch)) throw new Error("请填写有效的目标分支");
   return { id, name: String(input.name ?? "").trim().slice(0, 100) || id, repository: url, branch,
-    path: input.path ? knowledgeRelativePath(input.path) : "", docs_path: knowledgeRelativePath(input.docs_path || "docs/knowledge") };
+    path: input.path ? knowledgeRelativePath(input.path) : "", docs_path: input.docs_path === "." ? "." : knowledgeRelativePath(input.docs_path || "docs/knowledge") };
 }
 function archiveRepositoryGroups(targets: KnowledgeRepository[]) {
   const groups: Array<{ target: KnowledgeRepository; ids: string[] }> = [];
@@ -67,8 +67,12 @@ function overlappingKnowledgeDirectory(first: string, second: string) {
   first = first.toLowerCase(); second = second.toLowerCase();
   return first === second || first.startsWith(`${second}/`) || second.startsWith(`${first}/`);
 }
-const LEGACY_MODULE_ARCHIVE_MESSAGE = "此任务沿用旧归档目录。请先确认并发布本次文稿，平台会同时按业务模块整理目录和相对链接，再新建归档；文稿、调查和历史版本保留，不重新研究。已有归档批次仍可按原版本重试。";
+const LEGACY_MODULE_ARCHIVE_MESSAGE = "此任务沿用旧归档目录。请先确认并发布本次文稿，平台会同时整理仓内相对路径和文稿链接，再新建归档；文稿、调查和历史版本保留，不重新研究。已有归档批次仍可按原版本重试。";
 const MODULE_LAYOUT_PUBLICATION = "发布时整理旧模块目录";
+const REPOSITORY_LAYOUT_MIGRATION = "整理仓内路径";
+const CONFIRMED_ARCHIVE_DIRECTORY_CHANGE = "调整已确认知识的归档目录";
+const ARCHIVE_PATH_OPERATORS = [MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION, CONFIRMED_ARCHIVE_DIRECTORY_CHANGE, "归档设置"];
+type ArchiveDirectoryInput = { targets: unknown; documents?: unknown; base_revision?: number; use_module_layout?: boolean; use_repository_layout?: boolean; use_directory_layout?: boolean };
 
 /** 改目录只重算 Markdown 链接目的地，不替换代码、来源文字或外部网址。 */
 function relocateMarkdownLinks(content: string, oldPath: string, newPath: string, paths: Map<string, string>): string {
@@ -127,6 +131,8 @@ function validPublication(value: any): value is DomainPublication {
   };
   return isRecord(value) && typeof value.target_id === "string" && typeof value.branch === "string" && ["pending", "opened", "failed"].includes(value.state)
     && documents(value.documents) && (value.attempted_documents === undefined || documents(value.attempted_documents))
+    && (value.navigation_files === undefined || Array.isArray(value.navigation_files) && value.navigation_files.every((file: unknown) => isRecord(file)
+      && typeof file.path === "string" && typeof file.content === "string"))
     && (value.url === undefined || validMrUrl(value.url)) && (value.state !== "opened" || validMrUrl(value.url))
     && (value.mr_attempted === undefined || typeof value.mr_attempted === "boolean")
     && (value.mr_participants === undefined || participants(value.mr_participants))
@@ -155,7 +161,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
   return isRecord(value) && value.id === id && ["title", "scope", "operator", "created_at", "stage"].every(key => typeof value[key] === "string")
     && (value.key === undefined || typeof value.key === "string")
     && (value.reextract_of === undefined || typeof value.reextract_of === "string")
-    && (value.knowledge_layout === undefined || value.knowledge_layout === "module-v1" && typeof value.module_id === "string")
+    && (value.knowledge_layout === undefined || value.knowledge_layout === "directory-v1" || value.knowledge_layout === "repository-v1" || value.knowledge_layout === "module-v1" && typeof value.module_id === "string")
     && ["idle", "queued", "running", "paused", "done", "failed", "cancelled"].includes(value.status) && target(value.knowledge_target)
     && Array.isArray(value.repositories) && value.repositories.every(target) && strings(value.material_ids)
     && revisionMap(value.revisions) && Array.isArray(value.evidence) && value.evidence.every(isRecord)
@@ -188,13 +194,16 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
     && (value.publication_history === undefined || Array.isArray(value.publication_history) && value.publication_history.every(validPublication))
     && (value.archive_batches === undefined || Array.isArray(value.archive_batches) && value.archive_batches.every((batch: any) => isRecord(batch)
       && fields(batch, ["id", "created_at", "operator"]) && ["pending", "running", "done", "failed", "superseded"].includes(batch.state)
-      && (batch.knowledge_layout === undefined || batch.knowledge_layout === "module-v1")
+      && (batch.knowledge_layout === undefined || ["module-v1", "repository-v1", "directory-v1"].includes(batch.knowledge_layout))
       && (batch.issue_no === undefined || typeof batch.issue_no === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(batch.issue_no))
       && (batch.issue_description === undefined || typeof batch.issue_description === "string" && !!batch.issue_description.trim()
         && batch.issue_description.length <= 2000 && !/[\x00-\x1f\x7f\u2028\u2029]/.test(batch.issue_description))
       && Array.isArray(batch.documents) && batch.documents.every(document) && Array.isArray(batch.targets) && batch.targets.every(target)
       && batch.documents.every((doc: any) => batch.targets.some((target: any) => target.id === doc.target_id))
-      && Array.isArray(batch.publications) && batch.publications.every(validPublication)));
+      && Array.isArray(batch.publications) && batch.publications.every(validPublication)
+      && (batch.replacements === undefined || Array.isArray(batch.replacements) && batch.replacements.every((replacement: any) => isRecord(replacement)
+        && target(replacement.target) && validPublication(replacement.publication) && ["pending", "closed", "merged", "failed"].includes(replacement.state)
+        && ["batch_id", "error", "closed_at", "merged_at"].every(key => replacement[key] === undefined || typeof replacement[key] === "string")))));
 }
 
 interface DomainRunning {
@@ -216,6 +225,7 @@ export class DomainKnowledgeExtraction {
   private capacity: KnowledgeTaskCapacity;
   constructor(readonly dataDir: string, private execute: (input: DomainExecution) => Promise<string | SkillWorkResult>, private options: {
     publish?: (job: DomainKnowledgeJob, target: KnowledgeRepository, previous: DomainPublication | undefined, operator: string, save: (publication: DomainPublication) => void, signal?: AbortSignal) => Promise<DomainPublication>;
+    closePublication?: (job: DomainKnowledgeJob, target: KnowledgeRepository, publication: DomainPublication, operator: string) => Promise<void | "closed" | "merged">;
     onIndexed?: () => void;
     shutdown?: () => Promise<void>;
     sourceCleanup?: KnowledgeSourceCleanup;
@@ -330,31 +340,36 @@ export class DomainKnowledgeExtraction {
       && !!document.knowledge_document_id && knowledgeDeleted(this.dataDir, document.knowledge_document_id);
   }
   private legacyModuleDeletion(job: DomainKnowledgeJob, document: DomainDocument, formal: ReturnType<typeof readKnowledgeDocument>) {
-    if (job.knowledge_layout !== "module-v1" || !this.confirmedDocumentDeletion(document)) return false;
-    if (formal.scope !== "module" || !formal.module_ids.includes(job.module_id!)) return true;
+    if (!job.knowledge_layout || !this.confirmedDocumentDeletion(document)) return false;
+    if (job.module_id && (formal.scope !== "module" || !formal.module_ids.includes(job.module_id))) return true;
     const target = [job.knowledge_target, ...job.repositories].find(target => target.id === document.target_id)!;
+    if (job.knowledge_layout === "directory-v1") {
+      const location = formal.archive_target ?? formal.research_source;
+      return !location || location.path !== (document.archive_path ?? document.path)
+        || repositoryIdentity(location.repository) !== repositoryIdentity(target.repository) || location.branch !== target.branch;
+    }
     try { assertModuleKnowledgePath(job, target, document.archive_path ?? document.path); return false; }
     catch { return true; }
   }
   private pendingModuleLayoutPublication(job: DomainKnowledgeJob, document: DomainDocument, formal: ReturnType<typeof readKnowledgeDocument>) {
-    if (job.knowledge_layout !== "module-v1" || !document.history.some(history => history.operator === MODULE_LAYOUT_PUBLICATION
+    if (!job.knowledge_layout || !document.history.some(history => [MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION].includes(history.operator)
       && history.revision >= (document.published_document_revision ?? 0))) return false;
     return (formal.archive_target?.path ?? formal.research_source?.path) !== (document.archive_path ?? document.path)
-      || formal.scope !== "module" || !formal.module_ids.includes(job.module_id!) || formal.content !== document.content.replace(/\r\n/g, "\n");
+      || !!job.module_id && (formal.scope !== "module" || !formal.module_ids.includes(job.module_id)) || formal.content !== document.content.replace(/\r\n/g, "\n");
   }
   private currentFormalRevisions(job: DomainKnowledgeJob) {
     const current: Record<string, string> = {};
     for (const document of job.documents) {
       if (!document.knowledge_document_id) continue;
       try {
-        if (job.knowledge_layout === "module-v1" && !this.confirmedDocumentDeletion(document)
-          && document.history.some(history => history.operator === MODULE_LAYOUT_PUBLICATION && history.revision >= (document.published_document_revision ?? 0))) {
+        if (job.knowledge_layout && !this.confirmedDocumentDeletion(document)
+          && document.history.some(history => [MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION].includes(history.operator) && history.revision >= (document.published_document_revision ?? 0))) {
           const formal = readKnowledgeDocument(this.dataDir, document.knowledge_document_id);
-          if (!this.pendingModuleLayoutPublication(job, document, formal)) current[formal.id] = formal.revision;
+          if (this.canArchiveWithLayoutMigration(job) || !this.pendingModuleLayoutPublication(job, document, formal)) current[formal.id] = formal.revision;
           continue;
         }
         // 只有模块迁移涉及的删除记录需要旧范围信息；正常列表仍使用轻量版本摘要。
-        if (job.knowledge_layout === "module-v1" && this.confirmedDocumentDeletion(document) && document.published_revision) {
+        if (job.knowledge_layout && this.confirmedDocumentDeletion(document) && document.published_revision) {
           const formal = readKnowledgeArchiveVersion(this.dataDir, document.knowledge_document_id, document.published_revision).document;
           if (!this.legacyModuleDeletion(job, document, formal)) current[formal.id] = formal.revision;
           continue;
@@ -389,7 +404,7 @@ export class DomainKnowledgeExtraction {
     });
     const current_revisions = summaryOnly ? this.currentFormalRevisions(job)
       : Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
-    const record = { ...job, work_documents };
+    const record = { ...job, module_name: job.module_id ? this.moduleDirectoryName(job) : undefined, work_documents };
     return { ...record, production: projectKnowledgeProduction({ kind: "domain", record, current_revisions }), deletion: this.deletionView(job.id) };
   }
   get(id: string): DomainKnowledgeJob { return structuredClone(this.view(this.live(id))); }
@@ -429,24 +444,25 @@ export class DomainKnowledgeExtraction {
         return [];
       }
       if (this.legacyModuleDeletion(job, document, formal)) return [];
-      if (this.pendingModuleLayoutPublication(job, document, formal)) return [];
-      if (strict && job.knowledge_layout === "module-v1" && !job.component_research_id) {
+      const confirmedPathChange = this.canArchiveWithLayoutMigration(job) && document.published_document_revision !== document.revision;
+      if (!confirmedPathChange && this.pendingModuleLayoutPublication(job, document, formal)) return [];
+      if (strict && job.knowledge_layout && !job.component_research_id && !confirmedPathChange) {
         const formalPath = formal.archive_target?.path ?? formal.research_source?.path;
-        const changedLayout = document.history.some(history => ["归档设置", MODULE_LAYOUT_PUBLICATION].includes(history.operator) && history.revision >= (document.published_document_revision ?? 0));
-        if (formalPath !== (document.archive_path ?? document.path) || !formal.module_ids.includes(job.module_id!)
+        const changedLayout = document.history.some(history => ["归档设置", MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION].includes(history.operator) && history.revision >= (document.published_document_revision ?? 0));
+        if (formalPath !== (document.archive_path ?? document.path) || !!job.module_id && !formal.module_ids.includes(job.module_id)
             || changedLayout && document.content.replace(/\r\n/g, "\n") !== formal.content) {
           throw new Error("模块目录或文稿链接已调整，请先发布这次修改，再创建 Git 归档；已完成的研究和旧正式知识均保留");
         }
       }
       let parts;
-      try { parts = { content: job.component_research_id ? componentArchiveParts(formal.content).content : formal.content }; }
+      try { parts = { content: confirmedPathChange ? document.content : job.component_research_id ? componentArchiveParts(formal.content).content : formal.content }; }
       catch {
         const warning = `请检查损坏的组件知识结构：knowledge-documents/${document.knowledge_document_id}.json；其余任务照常可用`;
         if (!this.readWarnings.includes(warning)) this.readWarnings.push(warning);
         if (strict) throw new Error(warning);
         return [];
       }
-      return [{ ...structuredClone({ ...document, ...parts, history: [] }), title: formal.title, selected: true,
+      return [{ ...structuredClone({ ...document, ...parts, history: [] }), title: confirmedPathChange ? document.title : formal.title, selected: true,
         knowledge_document_id: formal.id, published_revision: formal.revision,
         published_document_revision: document.revision, published_at: formal.history.at(-1)?.at }];
     });
@@ -488,6 +504,22 @@ export class DomainKnowledgeExtraction {
     }
     return this.previewArchive(job.id);
   }
+  private moduleDirectoryName(job: Pick<DomainKnowledgeJob, "module_id" | "title">) {
+    if (job.module_id) try { return readBusinessModule(this.dataDir, job.module_id).name; } catch { /* 旧模块已移除时保留任务名称。 */ }
+    return job.title;
+  }
+  private hasConfirmedArchiveLayoutChanges(job: DomainKnowledgeJob) {
+    return job.documents.some(document => !this.confirmedDocumentDeletion(document) && document.published_document_revision !== document.revision
+      && document.history.some(history => ARCHIVE_PATH_OPERATORS.includes(history.operator) && history.revision >= (document.published_document_revision ?? 0)));
+  }
+  private canArchiveWithLayoutMigration(job: DomainKnowledgeJob) {
+    return !["queued", "running"].includes(job.status) && job.documents.some(document => !this.confirmedDocumentDeletion(document))
+      && job.documents.every(document => this.confirmedDocumentDeletion(document) || !!document.knowledge_document_id && !!document.published_revision && (
+        document.published_document_revision === document.revision || document.published_document_revision !== undefined
+        && document.history.filter(history => history.revision >= document.published_document_revision!).length === document.revision - document.published_document_revision
+        && document.history.filter(history => history.revision >= document.published_document_revision!).every(history => ARCHIVE_PATH_OPERATORS.includes(history.operator))))
+      && !job.turns.some(turn => turn.proposals.some(proposal => proposal.status === "pending"));
+  }
   private matchingManualBatch(job: DomainKnowledgeJob, documents: DomainDocument[]) {
     return currentKnowledgeArchiveBatches(job, Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), documents).at(-1);
   }
@@ -498,7 +530,7 @@ export class DomainKnowledgeExtraction {
   private archivePreview(job: DomainKnowledgeJob, documents: DomainDocument[]): KnowledgeArchivePreview {
     const id = job.id;
     const batch = this.matchingManualBatch(job, documents);
-    const needsModuleLayout = needsModuleKnowledgeLayout(job);
+    const needsModuleLayout = needsModuleKnowledgeLayout(job) || this.hasConfirmedArchiveLayoutChanges(job), autoLayout = needsModuleLayout && this.canArchiveWithLayoutMigration(job);
     const action = (value: KnowledgeProductionAction) => ({ ...value, href: value.id === "configure" ? job.component_research_id ? "/configuration?tab=knowledge" : undefined
       : `?kbPage=task&kbKind=${job.component_research_id ? "component" : "domain"}&kbTask=${encodeURIComponent(job.component_research_id ?? id)}${value.view === "review" ? "&kbReview=1" : "&kbStage=publish"}` });
     const groups = archiveRepositoryGroups([job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id)));
@@ -510,8 +542,8 @@ export class DomainKnowledgeExtraction {
       // 人要点了「创建归档 MR」才看到报错（2026-10-08 走查实测）。量不过就按未配置处理并说出原因。
       const problem = target.repository.trim() ? (() => { try { repository(target, target.id); return ""; } catch (error) { return (error as Error).message; } })() : "";
       const configured = !!target.repository.trim() && !problem;
-      const status_label = publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
-      const actions: KnowledgeProductionAction[] = !configured ? perTarget && !needsModuleLayout ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
+      const status_label = batch?.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state) && ids.includes(item.publication.target_id)) && batch.state === "failed" ? "归档失败" : publication?.state === "opened" ? "已归档" : publication?.state === "failed" || batch?.state === "failed" ? "归档失败" : batch?.state === "running" ? "归档中" : "已发布（未归档）";
+      const actions: KnowledgeProductionAction[] = !configured ? perTarget && (!needsModuleLayout || autoLayout) ? [action({ id: "configure", label: "Git 归档设置", view: "archive", target_id: target.id })] : []
         : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试此仓归档", view: "archive", target_id: target.id, batch_id: batch!.id })] : [];
       return { id: target.id, name: target.name, repository: target.repository, branch: target.branch, docs_path: target.docs_path, configured, status_label,
         // 失败原因只放 error（红字）一处；message 说出路。两处都放原因，弹窗里同一句话会叠着出现。
@@ -526,28 +558,45 @@ export class DomainKnowledgeExtraction {
     });
     const status_label = targets.some(target => target.status_label === "归档失败") || batch?.state === "failed" ? "归档失败"
       : batch?.state === "running" ? "归档中" : targets.length && targets.every(target => target.status_label === "已归档") ? "已归档" : "已发布（未归档）";
-    const actions: KnowledgeProductionAction[] = needsModuleLayout && !batch ? [] : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
+    const actions: KnowledgeProductionAction[] = needsModuleLayout && !autoLayout && !batch ? [] : status_label === "归档失败" ? [action({ id: "retry-archive", label: "重试失败归档", view: "archive", batch_id: batch!.id })]
       : status_label === "已发布（未归档）" && targets.length && targets.every(target => target.configured) ? [action({ id: "create-archive", label: "创建归档 MR", view: "archive" })]
         : perTarget || targets.every(target => target.configured) ? [] : [action({ id: "configure", label: "Git 归档设置", view: "archive" })];
-    if (needsModuleLayout) {
+    if (!job.component_research_id && batch?.state === "done" && batch.publications.some(publication => publication.state === "opened") && !this.publishing.has(id)) {
+      actions.push(action(autoLayout ? { id: "create-archive", label: "整理路径并重新归档", view: "archive" }
+        : { id: "replace-archive", label: "重新创建并撤销旧 MR", view: "archive" }));
+    }
+    if (needsModuleLayout && !autoLayout) {
       actions.push(action({ id: "review", label: "去确认并发布", view: "review" }));
     }
-    const statusMessage = status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。";
-    const layoutMessage = needsModuleLayout ? LEGACY_MODULE_ARCHIVE_MESSAGE : job.knowledge_layout === "module-v1"
-      ? "本次归档将完整替换各目标仓根目录的 AGENTS.md，旧正文保留在 Git 历史中；模块正文保存在本模块独占目录。" : "";
+    const statusMessage = status_label === "归档失败" ? (batch?.error ?? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : "归档失败，请重试。")) : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : job.component_research_id ? "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。" : "只归档已发布的正式知识；使用任务已有单号直接创建 MR，缺少必要信息时请补充。";
+    const layoutMessage = autoLayout ? "归档时自动整理已确认成果的目录和链接，保留文稿编号、历史与研究记录；未确认正文或建议须先确认并发布。领域入口写入所选领域目录，代码仓文稿集中在 docs 下的业务目录。" : needsModuleLayout ? LEGACY_MODULE_ARCHIVE_MESSAGE : job.knowledge_layout
+      ? "领域知识及其 AGENTS.md 入口放在所选领域相对目录；代码仓文稿放在 docs 下的业务目录，代码仓根 AGENTS.md 统一导航。旧正文保留在 Git 历史中。" : "";
     return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: [layoutMessage, statusMessage].filter(Boolean).join("\n"),
       issue_no: batch?.issue_no ?? job.issue_no, issue_description: batch?.issue_description ?? job.issue_description, expected_revisions: Object.fromEntries(documents.map(document => [document.knowledge_document_id!, document.published_revision!])), actions, targets })) as KnowledgeArchivePreview;
   }
-  async createArchive(id: string, input: { issue_no: string; issue_description?: string; expected_revisions: Record<string, string> }, operator: string) {
-    const job = structuredClone(this.live(id)), owner = this.acquirePublication(id);
+  async createArchive(id: string, input: { issue_no: string; issue_description?: string; expected_revisions: Record<string, string>; replace_existing?: boolean }, operator: string) {
+    let job = structuredClone(this.live(id)); const owner = this.acquirePublication(id);
     try {
       const issue_no = knowledgeIssueNumber(input.issue_no), issue_description = knowledgeIssueDescription(input.issue_description);
       if (!this.options.publish) throw new Error("未配置 Git 归档发布器");
-      const documents = this.formalArchiveDocuments(job, true);
+      let documents = this.formalArchiveDocuments(job, true);
       if (!documents.length) throw new Error("没有已发布的正式知识可归档");
       if (!isRecord(input.expected_revisions) || documents.some(document => input.expected_revisions[document.knowledge_document_id!] !== document.published_revision)
         || Object.keys(input.expected_revisions).length !== new Set(documents.map(document => document.knowledge_document_id)).size) throw new Error("正式知识版本已变化，请刷新归档预览");
+      if (input.replace_existing !== undefined && typeof input.replace_existing !== "boolean") throw new Error("替换旧 MR 须为布尔值");
+      if (input.replace_existing && job.component_research_id) throw new Error("组件归档不支持替换领域 MR");
       if ("target_ids" in input) throw new Error("首次人工归档包含全部目标；失败后可以按目标重试");
+      for (const target of [job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id))) {
+        if (!target.repository.trim()) throw new Error("未配置 Git 归档仓，请联系管理员在知识仓设置中配置");
+        repository(target, target.id);
+      }
+      const oldBatch = this.matchingManualBatch(job, documents);
+      if ((needsModuleKnowledgeLayout(job) || this.hasConfirmedArchiveLayoutChanges(job)) && (!oldBatch || oldBatch.state === "done")) {
+        if (!this.canArchiveWithLayoutMigration(job)) throw new Error("有未确认文稿或修改建议，请先确认并发布；已完成研究和旧正式知识保留，归档不会自动发布这些修改");
+        const documentIds = job.documents.filter(document => !this.confirmedDocumentDeletion(document)).map(document => document.id);
+        await this.publishWithOwner(id, operator, { document_ids: documentIds, expected_revisions: Object.fromEntries(job.documents.map(document => [document.id, document.revision])) }, owner);
+        job = structuredClone(this.live(id)); documents = this.formalArchiveDocuments(job, true);
+      }
       const targetIds = [...new Set(documents.map(document => document.target_id))];
       const targets = [job.knowledge_target, ...job.repositories].filter(target => targetIds.includes(target.id));
       const paths = new Set<string>();
@@ -560,10 +609,33 @@ export class DomainKnowledgeExtraction {
         }
       }
       let batch = this.matchingManualBatch(job, documents);
-      if (batch) return this.previewArchive(id);
+      if (batch && (!input.replace_existing || batch.state !== "done")) {
+        const existingPublications = batch.publications;
+        const unfinished = archiveRepositoryGroups(batch.targets).filter(group => !existingPublications.some(publication =>
+          group.ids.includes(publication.target_id) && publication.state === "opened" && validMrUrl(publication.url)));
+        if (unfinished.length || batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state))) await this.runManualArchive(job, batch, unfinished.flatMap(group => group.ids), operator, owner);
+        return this.previewArchive(id);
+      }
       if (needsModuleKnowledgeLayout(job)) throw new Error(LEGACY_MODULE_ARCHIVE_MESSAGE);
+      const closedUrls = new Set((job.archive_batches ?? []).flatMap(batch => batch.replacements?.filter(item => (["closed", "merged"] as string[]).includes(item.state)).map(item => item.publication.url) ?? []));
+      const covered = (previous: Array<{ id: string; knowledge_document_id?: string }>) => previous.every(old => documents.some(document =>
+        old.knowledge_document_id ? old.knowledge_document_id === document.knowledge_document_id : old.id === document.id));
+      const previousBatches = (job.component_research_id ? [] : job.archive_batches ?? []).filter(batch => !!batch.issue_no && batch.state !== "superseded"
+        && batch.targets.some(old => targetIds.includes(old.id)));
+      if (previousBatches.some(batch => covered(batch.documents) && (batch.state !== "done" || batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state))))) {
+        throw new Error("还有未完成的归档批次，请先重试该批次；已有文稿和 MR 均保留");
+      }
+      const replacements: NonNullable<DomainArchiveBatch["replacements"]> = [];
+      const addReplacement = (publication: DomainPublication, target: KnowledgeRepository | undefined, batch_id?: string) => {
+        if (!target || !covered(publication.documents) || publication.state !== "opened" || !validMrUrl(publication.url) || closedUrls.has(publication.url)
+          || replacements.some(item => item.publication.url === publication.url) || !targetIds.includes(target.id)) return;
+        replacements.push({ batch_id, target: structuredClone(target), publication: structuredClone(publication), state: "pending" });
+      };
+      for (const previous of previousBatches) for (const publication of previous.publications) addReplacement(publication, previous.targets.find(target => target.id === publication.target_id), previous.id);
+      for (const publication of job.component_research_id ? [] : job.publications) addReplacement(publication, [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id));
+      if (replacements.length && !this.options.closePublication) throw new Error("尚未配置旧 MR 撤销能力，未创建替换 MR");
       batch = { id: randomUUID(), created_at: new Date().toISOString(), operator, state: "pending", knowledge_layout: job.knowledge_layout,
-        documents: structuredClone(documents), targets: structuredClone(targets), issue_no, issue_description, publications: [] };
+        documents: structuredClone(documents), targets: structuredClone(targets), issue_no, issue_description, publications: [], ...(replacements.length ? { replacements } : {}) };
       (job.archive_batches ??= []).push(batch); this.persist(job); this.live(id).archive_batches = structuredClone(job.archive_batches);
       await this.runManualArchive(job, batch, targetIds, operator, owner);
       return this.previewArchive(id);
@@ -577,9 +649,9 @@ export class DomainKnowledgeExtraction {
       if (input.target_id && !batch.targets.some(target => target.id === input.target_id)) throw new Error("归档目标不存在");
       const targets = archiveRepositoryGroups(batch.targets).filter(group => {
         const publication = batch.publications.find(publication => group.ids.includes(publication.target_id));
-        return (!input.target_id || group.ids.includes(input.target_id)) && (publication?.state !== "opened" || publication.mr_participants?.status === "failed");
+        return (!input.target_id || group.ids.includes(input.target_id)) && publication?.state !== "opened";
       });
-      if (targets.length) await this.runManualArchive(job, batch, targets.flatMap(group => group.ids), operator, owner);
+      if (targets.length || batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state))) await this.runManualArchive(job, batch, targets.flatMap(group => group.ids), operator, owner);
       else if (batch.state !== "done" && batch.targets.length && archiveRepositoryGroups(batch.targets).every(group =>
         batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened" && validMrUrl(publication.url)))) {
         // MR 回执已耐久，人工重试只补最终状态；不重复 Git 或创建 MR。
@@ -611,15 +683,15 @@ export class DomainKnowledgeExtraction {
       const update = (candidate: DomainKnowledgeJob, batch: DomainArchiveBatch) => {
         if (targetId) {
           const saved = batch.publications.find(publication => publication.target_id === targetId) ?? previous;
-          // 已保存的 MR 创建事实不因后续人员补设异常而变成归档失败。
+          // 已保存的 MR 创建事实不因后续操作异常而变成归档失败。
           const publication: DomainPublication = saved?.state === "opened" && validMrUrl(saved.url)
-            ? { ...saved, ...(saved.mr_participants?.status === "failed" ? { mr_participants: { ...saved.mr_participants, message: reason } } : {}) }
+            ? saved
             : { ...(saved ?? { target_id: targetId, branch: "", documents: [] }), state: "failed", error: reason };
           batch.publications = [...batch.publications.filter(publication => publication.target_id !== targetId),
             publication];
           candidate.publications = structuredClone(batch.publications);
         }
-        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) ? "done" : "failed";
+        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) && !batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state)) ? "done" : "failed";
         batch.error = batch.state === "failed" ? reason : undefined;
       };
       try { commit(update); }
@@ -632,14 +704,14 @@ export class DomainKnowledgeExtraction {
     };
     const work = (async () => {
       try { commit((_, batch) => {
-        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) ? "done" : "running";
+        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) && !batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state)) ? "done" : "running";
         batch.error = undefined;
       }); }
       catch (error) { fail(error instanceof Error ? error.message : String(error)); return; }
       for (const { target, ids } of archiveRepositoryGroups(original.targets).filter(group => group.ids.some(id => targetIds.includes(id)))) {
         this.assertPublicationOwner(job.id, owner);
         const previous = currentBatch().publications.find(publication => ids.includes(publication.target_id));
-        if (previous?.state === "opened" && previous.mr_participants?.status !== "failed") continue;
+        if (previous?.state === "opened") continue;
         const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, accepting = true;
         const save = (publication: DomainPublication) => {
           if (!accepting || controller.signal.aborted) return;
@@ -663,9 +735,36 @@ export class DomainKnowledgeExtraction {
           this.assertPublicationOwner(job.id, owner); fail(error instanceof Error ? error.message : String(error), target.id, previous);
         } finally { accepting = false; clearTimeout(timer); controller.abort(); }
       }
+      const opened = archiveRepositoryGroups(currentBatch().targets).every(group => currentBatch().publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened"));
+      if (opened) for (const replacement of currentBatch().replacements ?? []) {
+        if (replacement.state === "closed" || replacement.state === "merged") continue;
+        const url = replacement.publication.url!;
+        try {
+          if (currentBatch().publications.some(publication => publication.url === url)) throw new Error("新旧 MR 链接相同，未撤销；请核对归档发布器");
+          if (!this.options.closePublication) throw new Error("未配置旧 MR 撤销能力");
+          commit((candidate, batch) => {
+            for (const item of batch.replacements ?? []) if (item.batch_id) {
+              const previous = candidate.archive_batches!.find(old => old.id === item.batch_id);
+              const replacedUrls = new Set([...batch.replacements!.map(item => item.publication.url),
+                ...candidate.archive_batches!.flatMap(old => old.replacements?.filter(item => item.state === "closed" || item.state === "merged").map(item => item.publication.url) ?? [])]);
+              if (previous?.state === "done" && previous.publications.every(publication => replacedUrls.has(publication.url))) previous.state = "superseded";
+            }
+          });
+          const outcome = await this.options.closePublication(structuredClone(snapshot), structuredClone(replacement.target), structuredClone(replacement.publication), operator);
+          commit((_, batch) => {
+            const current = batch.replacements!.find(item => item.publication.url === url)!;
+            current.state = outcome === "merged" ? "merged" : "closed"; current.error = undefined;
+            if (current.state === "merged") current.merged_at = new Date().toISOString(); else current.closed_at = new Date().toISOString();
+          });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          try { commit((_, batch) => { const current = batch.replacements!.find(item => item.publication.url === url)!; current.state = "failed"; current.error = reason; }); }
+          catch (failure) { fail(failure instanceof Error ? failure.message : String(failure)); }
+        }
+      }
       try { commit((_, batch) => {
-        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) ? "done" : "failed";
-        batch.error = batch.publications.find(publication => publication.state === "failed")?.error;
+        batch.state = archiveRepositoryGroups(batch.targets).every(group => batch.publications.some(publication => group.ids.includes(publication.target_id) && publication.state === "opened")) && !batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state)) ? "done" : "failed";
+        batch.error = batch.publications.find(publication => publication.state === "failed")?.error ?? batch.replacements?.find(item => item.state === "failed")?.error;
       }); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }
     })();
     this.archiving.set(job.id, work);
@@ -734,19 +833,26 @@ export class DomainKnowledgeExtraction {
     if (!title || title.length > 160 || !scope || scope.length > 10000) throw new Error("请填写业务域名称及本次研究范围");
     if (!Array.isArray(input.repositories) || input.repositories.length > 30) throw new Error("业务仓须为数组，最多 30 个；无源码时可传空数组");
     const defaults = knowledgeArchiveDefaults(new KnowledgeExtractionSkills(this.dataDir).current("domain").files, "domain");
-    const moduleTarget = (target: KnowledgeRepository): KnowledgeRepository => module_id
-      ? { ...target, docs_path: moduleKnowledgeDirectory(target.docs_path, module_id) } : target;
-    const repositories = input.repositories.map((r: any, i: number) => repository({ ...r, docs_path: r.docs_path || defaults.repository_directory }, `repo-${i + 1}`));
+    const name = this.moduleDirectoryName({ module_id, title });
+    const repositories = input.repositories.map((r: any, i: number) => repository({ ...r,
+      docs_path: typeof r.docs_path === "string" && r.docs_path.startsWith("docs/") && !hasOpaqueModuleDirectory(r.docs_path) ? r.docs_path
+        : directoryKnowledgeDirectory(r.docs_path || defaults.repository_directory, name, module_id, false) }, `repo-${i + 1}`));
     const configured = readKnowledgeRepoConfig(this.dataDir);
-    const knowledge_target = moduleTarget(reextractSource ? structuredClone(reextractSource.knowledge_target) : input.knowledge_target ? repository(input.knowledge_target, "domain") : {
+    const knowledge_target = reextractSource ? structuredClone(reextractSource.knowledge_target) : input.knowledge_target ? repository(input.knowledge_target, "domain") : {
       id: "domain", name: "领域知识仓", repository: configured?.url || "", branch: configured?.branch || "master", path: "",
       docs_path: configured?.docs_path || defaults.domain_directory,
-    });
+    };
+    if (!input.knowledge_target && reextractSource?.knowledge_layout !== "directory-v1" || knowledge_target.docs_path === ".") {
+      knowledge_target.docs_path = directoryKnowledgeDirectory(knowledge_target.docs_path, name, module_id, true);
+    } else knowledge_target.docs_path = readableDomainKnowledgeDirectory(knowledge_target.docs_path, module_id, name);
+    const archiveRepositories = structuredClone(reextractSource?.repositories ?? repositories).map((target: KnowledgeRepository) => ({ ...target,
+      docs_path: (!reextractSource || reextractSource.knowledge_layout === "directory-v1") && target.docs_path.startsWith("docs/") && !hasOpaqueModuleDirectory(target.docs_path)
+        ? target.docs_path : directoryKnowledgeDirectory(target.docs_path, name, module_id, false) }));
     if (new Set(repositories.map(r => r.repository)).size !== repositories.length || (input.knowledge_target && repositories.some(r => r.repository === knowledge_target.repository))) throw new Error("业务仓不能重复，领域知识仓须独立指定");
     const material_ids = this.materialIds(input.material_ids ?? []);
     scanForSecrets("业务范围", Buffer.from(JSON.stringify({ title, scope, instructions })));
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, reextract_of: reextractSource?.id, title, scope, instructions, issue_no, issue_description, module_id,
-      knowledge_layout: module_id ? "module-v1" : undefined, operator, created_at: new Date().toISOString(), repositories: structuredClone(reextractSource?.repositories ?? repositories).map(moduleTarget), knowledge_target,
+      knowledge_layout: "directory-v1", operator, created_at: new Date().toISOString(), repositories: archiveRepositories, knowledge_target,
       source_repositories: structuredClone(repositories), archive_configured: !!knowledge_target.repository, archive_revision: 0,
       material_ids, status: "idle", stage: "准备研究", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
     if (input.prepare_cleanup) {
@@ -786,51 +892,51 @@ export class DomainKnowledgeExtraction {
       return this.get(id);
     } finally { this.releasePublication(id, owner); }
   }
-  configureArchive(id: string, input: { targets: unknown; documents?: unknown; base_revision?: number; use_module_layout?: boolean }) {
+  previewArchiveTargets(id: string, input: ArchiveDirectoryInput): DomainArchiveTargetsPreview {
+    const candidate = this.archiveTargetsCandidate(id, input);
+    return { targets: [candidate.knowledge_target, ...candidate.repositories],
+      documents: candidate.documents.map(({ id, title, target_id, path, archive_path }) => ({ id, title, target_id, path: archive_path ?? path })), archive_revision: candidate.archive_revision ?? 0 };
+  }
+  private archiveTargetsCandidate(id: string, input: ArchiveDirectoryInput): DomainKnowledgeJob {
     const job = this.live(id);
     if (job.component_research_id) throw new Error("请使用组件归档设置");
     if (this.publishing.has(id) || ["queued", "running"].includes(job.status)) throw new Error("请等待当前操作完成再设置归档位置");
     if (input.base_revision !== (job.archive_revision ?? 0)) throw new Error("归档位置已被修改，请刷新后重新设置");
     if (!Array.isArray(input.targets) || !input.targets.length) throw new Error("请提供归档目标");
-    const candidate = this.archiveLayoutCandidate(job, input, true);
+    if (job.documents.length && job.documents.every(document => this.confirmedDocumentDeletion(document))) return structuredClone(job);
+    return this.archiveLayoutCandidate(job, input, true);
+  }
+  configureArchive(id: string, input: ArchiveDirectoryInput) {
+    const job = this.live(id), candidate = this.archiveTargetsCandidate(id, input);
     this.persist(candidate); Object.assign(job, candidate); return this.get(id);
   }
-  private archiveLayoutCandidate(job: DomainKnowledgeJob, input: { targets?: unknown; documents?: unknown; use_module_layout?: boolean }, requireRepository: boolean) {
+  private archiveLayoutCandidate(job: DomainKnowledgeJob, input: { targets?: unknown; documents?: unknown; use_module_layout?: boolean; use_repository_layout?: boolean; use_directory_layout?: boolean }, requireRepository: boolean) {
     if (input.targets !== undefined && (!Array.isArray(input.targets) || !input.targets.length)) throw new Error("请提供归档目标");
-    if (input.use_module_layout !== undefined && typeof input.use_module_layout !== "boolean") throw new Error("按业务模块整理目录须为布尔值");
-    if (input.use_module_layout && !job.module_id) throw new Error("此任务没有关联业务模块，不能按模块整理目录");
+    for (const key of ["use_module_layout", "use_repository_layout", "use_directory_layout"] as const) {
+      if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error("整理归档目录须为布尔值");
+    }
     const previous = [job.knowledge_target, ...job.repositories], candidate = structuredClone(job);
-    if (input.use_module_layout) candidate.knowledge_layout = "module-v1";
-    const confirmedDeletions = new Set(candidate.knowledge_layout === "module-v1"
-      ? candidate.documents.filter(document => this.confirmedDocumentDeletion(document)).map(document => document.id) : []);
+    candidate.knowledge_layout = "directory-v1";
+    const organized = true, converting = true, name = this.moduleDirectoryName(job);
+    const confirmedDeletions = new Set(candidate.documents.filter(document => this.confirmedDocumentDeletion(document)).map(document => document.id));
     const ids = new Set<string>();
     for (const value of input.targets ?? []) {
       const old = previous.find(t => t.id === value?.id);
       if (!old || ids.has(old.id)) throw new Error("归档目标无效或重复");
       ids.add(old.id);
       const next = repository({ ...value, path: old.path, name: old.name }, old.id);
-      if (candidate.knowledge_layout === "module-v1") next.docs_path = moduleKnowledgeDirectory(next.docs_path, candidate.module_id!);
+      if (input.use_directory_layout && (next.docs_path === "." || next.id !== "domain" && !next.docs_path.startsWith("docs/"))) {
+        throw new Error(next.id === "domain" ? "领域知识请选择仓内相对目录，不能选择仓根" : "代码仓知识请选择 docs 下的业务目录，例如 docs/订单管理");
+      }
+      if (!input.use_directory_layout) next.docs_path = directoryKnowledgeDirectory(next.docs_path, name, candidate.module_id, next.id === "domain");
       if (next.id === "domain") candidate.knowledge_target = next;
       else candidate.repositories = candidate.repositories.map(t => t.id === next.id ? next : t);
     }
     const targets = [candidate.knowledge_target, ...candidate.repositories];
-    if (input.use_module_layout) for (const target of targets) target.docs_path = moduleKnowledgeDirectory(target.docs_path, candidate.module_id!);
-    if (!requireRepository && needsModuleKnowledgeLayout(job)) for (const target of targets.filter(target => !!target.repository)) {
-      const occupied = [...this.jobs.values()].filter(other => other.id !== job.id && other.module_id !== job.module_id && other.knowledge_layout === "module-v1")
-        .flatMap(other => [other.knowledge_target, ...other.repositories]).filter(other => other.repository && archiveCollisionGroup(other) === archiveCollisionGroup(target));
-      const available = (path: string) => occupied.every(other => !overlappingKnowledgeDirectory(other.docs_path, path));
-      if (available(target.docs_path)) continue;
-      const defaultPath = moduleKnowledgeDirectory(target.id === "domain" ? "domain-docs" : "docs/knowledge", candidate.module_id!);
-      if (available(defaultPath)) { target.docs_path = defaultPath; continue; }
-      for (let suffix = 0; suffix <= occupied.length; suffix++) {
-        const path = moduleKnowledgeDirectory(`knowledge-${job.id}${suffix ? `-${suffix}` : ""}`, candidate.module_id!);
-        if (available(path)) { target.docs_path = path; break; }
-      }
-    }
+    for (const target of targets) if (!ids.has(target.id) && job.knowledge_layout !== "directory-v1") target.docs_path = directoryKnowledgeDirectory(target.docs_path, name, job.module_id, target.id === "domain");
     const remap = (targetId: string, path: string) => {
       const old = previous.find(target => target.id === targetId)!, next = targets.find(target => target.id === targetId)!;
-      if (input.use_module_layout) return moduleKnowledgePath(old.docs_path, next.docs_path, path);
-      return path.startsWith(`${old.docs_path}/`) ? `${next.docs_path}/${path.slice(old.docs_path.length + 1)}` : path;
+      return directoryKnowledgePath(old.docs_path, next.docs_path, path, targetId === "domain" ? [] : [old.name, old.repository.split("/").at(-1)?.replace(/\.git$/, "") ?? ""]);
     };
     const requestedPaths = new Map<string, string>();
     if (input.documents !== undefined) {
@@ -842,20 +948,20 @@ export class DomainKnowledgeExtraction {
         documentIds.add(doc.id);
         if (confirmedDeletions.has(doc.id)) continue;
         let path = knowledgeRelativePath(value.path, true);
-        if (input.use_module_layout && path === (doc.archive_path ?? doc.path)) path = remap(doc.target_id, path);
+        if (converting && path === (doc.archive_path ?? doc.path)) path = remap(doc.target_id, path);
         requestedPaths.set(doc.id, path);
       }
     }
     const ownFormalIds = new Map(job.documents.filter(doc => !!doc.knowledge_document_id).map(doc => [doc.knowledge_document_id!, doc.id]));
     const groups = new Set(targets.filter(target => !!target.repository).map(archiveCollisionGroup));
-    const occupiedPaths = input.use_module_layout ? listKnowledgeDocuments(this.dataDir).flatMap(formal => {
+    const occupiedPaths = converting ? listKnowledgeDocuments(this.dataDir).flatMap(formal => {
       const location = formal.archive_target ?? formal.source ?? formal.research_source;
       if (!location?.repository || !location.path || !location.branch) return [];
       const collision_group = archiveCollisionGroup({ id: "", repository: location.repository, branch: location.branch });
       return groups.has(collision_group) ? [{ collision_group, path: location.path, document_id: ownFormalIds.get(formal.id) }] : [];
     }) : [];
-    const layout = input.use_module_layout ? moduleKnowledgePaths(job.documents.filter(doc => !confirmedDeletions.has(doc.id)).map(doc => ({
-      id: doc.id, target_id: doc.target_id, path: doc.path, desired_path: requestedPaths.get(doc.id),
+    const layout = converting ? moduleKnowledgePaths(job.documents.filter(doc => !confirmedDeletions.has(doc.id)).map(doc => ({
+      id: doc.id, target_id: doc.target_id, path: doc.path, desired_path: requestedPaths.get(doc.id) ?? remap(doc.target_id, doc.archive_path ?? doc.path),
     })), targets.map(target => ({ id: target.id, old_directory: previous.find(old => old.id === target.id)!.docs_path,
       new_directory: target.docs_path, collision_group: archiveCollisionGroup(target),
     })), occupiedPaths) : undefined;
@@ -863,8 +969,9 @@ export class DomainKnowledgeExtraction {
       if (confirmedDeletions.has(doc.id)) continue;
       const old = previous.find(target => target.id === doc.target_id)!, next = targets.find(target => target.id === doc.target_id)!;
       const oldPath = doc.path;
+      if (job.module_id && doc.title === job.module_id) doc.title = this.moduleDirectoryName(job);
       if (layout) doc.path = layout.paths.get(doc.id)!;
-      else if (!doc.archive_path || candidate.knowledge_layout === "module-v1") {
+      else if (!doc.archive_path || organized) {
         doc.path = remap(doc.target_id, doc.path);
       }
       if (!layout && requestedPaths.has(doc.id)) doc.path = requestedPaths.get(doc.id)!;
@@ -878,8 +985,8 @@ export class DomainKnowledgeExtraction {
       const renamed = layout?.renamed.filter(item => item.target_id === target.id).map(item => candidate.documents.find(doc => doc.id === item.id)!) ?? [];
       if (!renamed.length) continue;
       const group = archiveCollisionGroup(target), groupIds = new Set(targets.filter(other => archiveCollisionGroup(other) === group).map(other => other.id));
-      const documents = candidate.documents.filter(doc => groupIds.has(doc.target_id) && !doc.deleted && doc.path.startsWith(`${target.docs_path}/`));
-      const entry = documents.find(doc => doc.path === `${target.docs_path}/README.md`) ?? documents.find(doc => doc.path === `${target.docs_path}/index.md`)
+      const documents = candidate.documents.filter(doc => groupIds.has(doc.target_id) && !doc.deleted && (target.docs_path === "." || doc.path.startsWith(`${target.docs_path}/`)));
+      const entry = (target.docs_path === "." ? documents.find(doc => doc.path === "docs/README.md") : undefined) ?? documents.find(doc => doc.path === (target.docs_path === "." ? "README.md" : `${target.docs_path}/README.md`)) ?? documents.find(doc => doc.path === (target.docs_path === "." ? "index.md" : `${target.docs_path}/index.md`))
         ?? documents.find(doc => job.documents.find(old => old.id === doc.id)?.path.toLowerCase() === "agents.md")
         ?? documents.find(doc => /\/(?:README|index)\.md$/i.test(doc.path)) ?? documents[0];
       if (entry) navigation.set(entry.id, [...(navigation.get(entry.id) ?? []), ...renamed.filter(doc => doc.id !== entry.id && !doc.deleted)]);
@@ -897,21 +1004,21 @@ export class DomainKnowledgeExtraction {
       const old = job.documents.find(document => document.id === doc.id)!;
       assertModuleKnowledgePath(candidate, targets.find(target => target.id === doc.target_id)!, doc.path);
       const paths = pathMaps.get(doc.target_id)!;
-      if (candidate.knowledge_layout === "module-v1") {
+      if (organized) {
         doc.content = relocateMarkdownLinks(old.content, old.path, doc.path, paths);
         doc.sources = relocateMarkdownLinks(old.sources, old.path, doc.path, paths);
       }
       const links = navigation.get(doc.id)?.map(other => `- [${other.title.replace(/[\r\n]/g, " ").replace(/[\\[\]]/g, "\\$&")}](${encodeURI(posix.relative(posix.dirname(doc.path), other.path)).replace(/[?#()]/g, character => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)})`).join("\n");
       if (links) doc.content += `\n\n## 保留的相关文稿\n\n${links}\n`;
-      if (candidate.knowledge_layout === "module-v1" && (job.knowledge_layout !== "module-v1" || doc.path !== old.path || doc.content !== old.content || doc.sources !== old.sources)) {
+      if (organized && (job.knowledge_layout !== candidate.knowledge_layout || doc.title !== old.title || doc.path !== old.path || doc.content !== old.content || doc.sources !== old.sources)) {
         doc.history.push({ revision: old.revision, title: old.title, path: old.path, deleted: old.deleted, content: old.content, sources: old.sources,
-          operator: !requireRepository && job.knowledge_layout !== "module-v1" ? MODULE_LAYOUT_PUBLICATION : "归档设置", at: new Date().toISOString() });
+          operator: requireRepository && this.canArchiveWithLayoutMigration(job) ? CONFIRMED_ARCHIVE_DIRECTORY_CHANGE : REPOSITORY_LAYOUT_MIGRATION, at: new Date().toISOString() });
         doc.revision = old.revision + 1; doc.human_edited = true;
       }
       for (const turn of candidate.turns) for (const proposal of turn.proposals.filter(proposal => proposal.status === "pending" && proposal.document.id === doc.id)) {
         const oldPath = proposal.document.path;
         proposal.document.path = doc.path;
-        if (candidate.knowledge_layout === "module-v1") {
+        if (organized) {
           proposal.document.content = relocateMarkdownLinks(proposal.document.content, oldPath, doc.path, paths);
           proposal.document.sources = relocateMarkdownLinks(proposal.document.sources, oldPath, doc.path, paths);
         }
@@ -920,7 +1027,7 @@ export class DomainKnowledgeExtraction {
       }
     }
     const paths = new Set<string>();
-    for (const doc of candidate.documents.filter(d => (candidate.knowledge_layout === "module-v1" || d.selected) && !confirmedDeletions.has(d.id))) {
+    for (const doc of candidate.documents.filter(d => (organized || d.selected) && !confirmedDeletions.has(d.id))) {
       const target = targets.find(t => t.id === doc.target_id)!;
       if (requireRepository && doc.selected) repository(target, target.id);
       const key = JSON.stringify([archiveCollisionGroup(target), doc.path.toLowerCase()]);
@@ -930,7 +1037,7 @@ export class DomainKnowledgeExtraction {
     this.assertModuleDirectories(candidate);
     candidate.source_repositories ??= structuredClone(job.repositories);
     if (requireRepository) candidate.archive_configured = true;
-    candidate.archive_revision = (job.archive_revision ?? 0) + 1;
+    candidate.archive_revision = (job.archive_revision ?? 0) + (requireRepository || job.knowledge_layout !== candidate.knowledge_layout || JSON.stringify(job.documents) !== JSON.stringify(candidate.documents) ? 1 : 0);
     return candidate;
   }
   private materialIds(ids: unknown): string[] {
@@ -1241,12 +1348,16 @@ export class DomainKnowledgeExtraction {
     this.persist(job); return this.get(id);
   }
   async publish(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> } = {}) {
+    const owner = this.acquirePublication(id);
+    try { return await this.publishWithOwner(id, operator, input, owner); }
+    finally { this.releasePublication(id, owner); }
+  }
+  private async publishWithOwner(id: string, operator: string, input: { document_ids?: string[]; expected_revisions?: Record<string, number> }, owner: symbol) {
+    this.assertPublicationOwner(id, owner);
     const original = this.live(id);
     if (this.stopped) throw new Error("服务正在停止");
     // 组件归档任务只装一篇渲染后的正文，结构化字段留在正式库；从这里发布会丢掉它们。
     if (original.component_research_id) throw new Error("组件知识请在基础组件萃取任务中修改和发布");
-    const owner = this.acquirePublication(id);
-    try {
     if (["queued", "running"].includes(original.status)) throw new Error("请等待本轮研究完成或停止后发布");
     if (input.document_ids && (!Array.isArray(input.document_ids) || input.document_ids.some(id => !original.documents.some(d => d.id === id)))) throw new Error("请选择本次发布的知识文档");
     const selected = original.documents.filter(d => (input.document_ids ? input.document_ids.includes(d.id) : d.selected)
@@ -1257,7 +1368,8 @@ export class DomainKnowledgeExtraction {
     if (input.expected_revisions) for (const doc of selected) assertReviewRevision(doc.revision, input.expected_revisions[doc.id], "草稿已有新版本，请刷新后重新发布");
     // 先确认用户看到的原稿，再准备目录变化；任一预检失败都不修改公开记录或正式知识。
     const job = needsModuleKnowledgeLayout(original)
-      ? this.archiveLayoutCandidate(original, { use_module_layout: true }, false) : structuredClone(original);
+      ? this.archiveLayoutCandidate(original, { use_repository_layout: true }, false)
+      : original.knowledge_layout === "directory-v1" ? this.archiveLayoutCandidate(original, { use_directory_layout: true }, false) : structuredClone(original);
     // Check every baseline before writing any member of this publication.
     const existing = listKnowledgeDocuments(this.dataDir);
     const prepared = job.documents.filter(doc => selectedIds.has(doc.id)).map(doc => {
@@ -1281,7 +1393,7 @@ export class DomainKnowledgeExtraction {
         technologies: previous?.technologies ?? job.technologies, active: doc.deleted ? false : previous?.active ?? true,
         archive_target: target.repository ? { repository: target.repository, branch: target.branch, path: doc.path } : undefined,
         research_source: job.component_research_id && (job.component_source || previous?.research_source) ? job.component_source ?? previous?.research_source : { job_id: job.component_research_id ?? job.id, document_id: doc.id,
-          repository: target.repository, branch: target.branch, path: doc.path,
+          layer: doc.layer, repository: target.repository, branch: target.branch, path: doc.path,
           source_revisions: { ...job.revisions }, material_ids: [...job.material_ids], skill: job.skill },
       }, operator, previous?.id, { expectedRevision: previous?.revision, allowNewResearchDocument: true, maxContentBytes: job.component_research_id ? 16 * 1024 * 1024 : undefined });
       const archive = { content: formal.document.content };
@@ -1322,7 +1434,6 @@ export class DomainKnowledgeExtraction {
       this.indexPublished(id); this.persist(job);
     }
     return this.get(id);
-    } finally { this.releasePublication(id, owner); }
   }
   async shutdown() {
     this.stopped = true;

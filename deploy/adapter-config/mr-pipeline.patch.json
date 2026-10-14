@@ -1,5 +1,9 @@
 {
   "mr_create": {
+    "participant_flags": {
+      "reviewers": "--approval-reviewers",
+      "approval_approvers": "--approval-approvers"
+    },
     "command": [
       "codehub-cli",
       "mr",
@@ -311,6 +315,10 @@
     "timeout_s": 35
   },
   "mr_create_knowledge": {
+    "participant_flags": {
+      "reviewers": "--approval-reviewers",
+      "approval_approvers": "--approval-approvers"
+    },
     "command": [
       "codehub-cli",
       "mr",
@@ -342,16 +350,30 @@
       "json": "iid"
     }
   },
-  "mr_participants": {
+  "mr_approver_members": {
     "command": [
-      "python3",
-      "@REPO_DIR@/deploy/adapter-tools/mr-participants.py",
-      "{repo_path}",
-      "{mr}",
-      "{participants}",
-      "{token}"
+      "codehub-cli",
+      "project",
+      "member",
+      "list",
+      "--host",
+      "yellow",
+      "-p",
+      "{repo}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "-k"
     ],
-    "contract": true,
-    "timeout_s": 30
+    "fields": {
+      "username": {
+        "json": "username"
+      },
+      "access_level": {
+        "json": "access_level"
+      }
+    },
+    "timeout_s": 15
   }
 }

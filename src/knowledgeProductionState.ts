@@ -38,7 +38,10 @@ function documentState(job: DomainKnowledgeJob, document: DomainDocument): Knowl
 }
 function publicationState(job: DomainKnowledgeJob, publication: DomainPublication): KnowledgePublicationState {
   const target = [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id;
-  const status_label = { pending: "归档中", opened: "已归档", failed: "归档失败" }[publication.state];
+  const replacement = publication.url ? job.archive_batches?.flatMap(batch => batch.replacements ?? []).find(item =>
+    ["closed", "merged"].includes(item.state) && item.publication.url === publication.url) : undefined;
+  const status_label = replacement?.state === "closed" ? "旧 MR 已撤销" : replacement?.state === "merged" ? "已合入，保留原提交"
+    : { pending: "归档中", opened: "已归档", failed: "归档失败" }[publication.state];
   return { key: `${publication.target_id}:${publication.branch}`, target, status_label, url: publication.url, error: publication.error,
     mr_participants: publication.mr_participants };
 }
@@ -74,7 +77,8 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   })));
   const archiveState = archiveRunning ? "running" : archiveFailed ? "failed" : archiveOpened ? "opened" : "done";
   const archiveLabel = archiveRunning ? "归档中" : archiveFailed ? "归档失败" : archiveOpened ? "已归档" : "已发布（未归档）";
-  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: "归档", view: "archive" })] : [];
+  const hasArchiveHistory = !!job?.archive_batches?.some(batch => !!batch.issue_no);
+  const archiveActions: KnowledgeProductionAction[] = published || hasArchiveHistory ? [actionLink({ id: "archive", label: !published ? "归档记录" : input.kind === "domain" && !job?.component_research_id && archiveState === "done" ? "创建归档 MR" : "归档", view: "archive" })] : [];
   let status_label: string, group: KnowledgeTaskGroup, next_action: KnowledgeProductionAction;
   if (archiveFailed) {
     status_label = "归档失败"; group = "attention"; next_action = archiveActions[0] ?? { id: "review", label: "审查成果", view: "review" };
@@ -114,6 +118,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     status_label = draft ? makingSkill ? "待提交" : "待审查" : published ? archiveLabel : "已完成";
     group = draft ? "attention" : "completed";
     next_action = draft ? { id: "review", label: makingSkill ? "编辑并提交" : "审查成果", view: "review" } : { id: "knowledge", label: "查看知识", view: "review" };
+    if (!draft && input.kind === "domain" && !job?.component_research_id && published && archiveState === "done") next_action = archiveActions[0];
   }
   const documentCount = input.kind === "domain" ? input.record.documents.length + (input.record.work_documents?.length ?? 0) : input.kind === "component" ? input.record.document?.sections.length ?? Number(!!input.record.draft) : 0;
   const workDocumentCount = input.kind === "component" ? input.record.work_documents?.length ?? 0 : 0;
@@ -135,6 +140,9 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     { id: "reject", label: "需要调整", view: "review" }, { id: "publish", label: "发布 Skill", view: "review" });
   if (input.kind === "skill-submission" && input.record.status === "rejected") research_actions.push({ id: "resubmit", label: "修改后重新提交", view: "review" });
   if (input.kind === "skill-extraction" && input.record.status === "done" && input.record.draft && !input.record.submission_id) research_actions.push({ id: "review", label: "编辑并提交", view: "review" });
+  const archiveInstruction = input.kind === "domain" && !job?.component_research_id
+    ? "要交付到代码仓时，点「创建归档 MR」，平台使用任务已有单号直接归档。"
+    : "要交付到代码仓时，点「归档」填写单号创建 MR。";
   let ready_message: string | undefined;
   if (readableCount) {
     if (!documentCount && workDocumentCount) ready_message = working ? "已有过程文稿可以先阅读，组件用法仍在生成。" : "已生成的过程文稿已保留，可先阅读后继续研究。";
@@ -142,9 +150,9 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     else if (record.status === "paused") ready_message = "请先审阅当前文稿，再确认或提出调整意见。";
     else if (next_action.view === "archive") ready_message = `${status_label}；请打开归档查看记录。`;
     else ready_message = group === "attention" ? input.kind === "domain" && input.record.documents.some(document => document.deleted && documents.find(item => item.id === document.id)?.changed)
-      ? "请审查文稿：勾选要确认的变化，点「确认并发布」后发布正文或从正式知识库删除已标记的文稿；要交付到代码仓时，再点「归档」填写单号创建 MR。"
-      : "请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读；要交付到代码仓时，再点「归档」填写单号创建 MR。"
-      : onlyDeletions ? "文档删除已确认，可手工归档。" : confirmedDeletions ? "文稿变更已确认，可继续审阅；要交付到代码仓时点「归档」填写单号创建 MR。" : "知识已入库，可继续阅读文稿；要交付到代码仓时点「归档」填写单号创建 MR。";
+      ? `请审查文稿：勾选要确认的变化，点「确认并发布」后发布正文或从正式知识库删除已标记的文稿。${archiveInstruction}`
+      : `请审查文稿：勾选要发布的文稿，点「确认并发布」后平台上立即可读。${archiveInstruction}`
+      : onlyDeletions ? `文档删除已确认。${archiveInstruction}` : confirmedDeletions ? `文稿变更已确认，可继续审阅。${archiveInstruction}` : `知识已入库，可继续阅读文稿。${archiveInstruction}`;
   }
   const view: KnowledgeProductionView = { status_label, group, next_action, working, modifying, documents,
     research_actions,
@@ -169,15 +177,18 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     // 进行中的状态只在标题行的状态标签里说一次；页签并进标题行后，旁边再挂一个"研究中"就重复了。
     navigation: { ready_message,
       ready_action_label: readableCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },
-    archive: { visible: !!published, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
+    archive: { visible: !!published || hasArchiveHistory, state: archiveState, group: archiveFailed ? "attention" : archiveRunning ? "running" : "completed",
       status_label: archiveLabel, title: onlyDeletions ? "文档删除已确认，可手工归档" : confirmedDeletions ? `${published} 份文稿变更已确认，可手工归档` : published ? `${published} 份知识已发布，平台立即可读` : "Git 归档记录",
       message: currentBatches.find(batch => batch.state === "failed")?.error || current.find(publication => publication.state === "failed")?.error
-        || (archiveRunning ? "正在创建人工归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : onlyDeletions ? "文档删除已确认，可手工归档。" : confirmedDeletions ? "文稿变更已确认；如需 Git 归档，请手动填写关联单号并创建 MR。" : "平台知识已发布；如需 Git 归档，请手动填写关联单号并创建 MR。"),
+        || (archiveRunning ? "正在创建归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : `${onlyDeletions ? "文档删除已确认" : confirmedDeletions ? "文稿变更已确认" : "平台知识已发布"}。${archiveInstruction}`),
       actions: archiveActions, publications: job ? [...job.publications, ...job.publication_history ?? []].map(publication => publicationState(job, publication)) : [],
       batches: (job?.archive_batches ?? []).filter(batch => !!batch.issue_no).map((batch, index) => ({ id: batch.id, title: `第 ${index + 1} 批 · ${batch.issue_no} · ${batch.documents.length} 份`,
-        status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已发布（未归档）" }[batch.state],
+        status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已被新归档替换" }[batch.state],
         actions: batch.state === "failed" ? [{ id: "retry-archive", label: "重试原批次", view: "archive" as const, batch_id: batch.id }] : [],
-        publications: job ? batch.publications.map(publication => publicationState(job, publication)) : [], superseded: [] })),
+        publications: job ? batch.publications.map(publication => publicationState(job, publication)) : [],
+        replacements: batch.replacements?.map(replacement => ({ key: `${replacement.target.id}:${replacement.publication.branch}`,
+          target: replacement.target.name, url: replacement.publication.url, error: replacement.error,
+          status_label: { pending: "新 MR 创建后撤销旧 MR", closed: "旧 MR 已撤销", merged: "旧 MR 已合入，保留原提交，无需撤销", failed: "旧 MR 撤销失败，可重试" }[replacement.state] })), superseded: [] })),
     } };
   if (input.kind === "component" && input.archive?.production) {
     view.archive = { ...input.archive.production.archive, actions: archiveActions };

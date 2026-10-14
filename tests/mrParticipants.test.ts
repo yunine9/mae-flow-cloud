@@ -7,13 +7,13 @@ import { createServer } from "node:http";
 import { normalizeMrParticipants } from "../src/mrParticipants.ts";
 import { readModuleMrParticipants, resolveModuleMrParticipants } from "../src/moduleMrParticipants.ts";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
-import { createMergeRequest, updateMergeRequestParticipants } from "../src/mrClient.ts";
+import { createMergeRequest } from "../src/mrClient.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
 import { finishTaskHostOperation, TaskHostLedger } from "../src/taskHostTools.ts";
 
-const people = { reviewers: ["alice"], approval_approvers: ["carol"] };
+const people = { reviewers: ["l00899311"], approval_approvers: ["l00601498"] };
 const repo = "https://git.example/team/a.git", repo2 = "https://git.example/team/b.git";
 
 test("MR 人员按角色规范化，拒绝未知角色、null、分隔符和非账号值", () => {
@@ -45,8 +45,7 @@ test("MR 已创建但人员失败仍保留链接；旧适配器不回结果不�
     const body = JSON.parse(raw);
     calls.push({ path: req.url!, body, token: req.headers["x-mfc-git-token"] });
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/mr/participants" ? { status: "applied" }
-      : { id: 4, url: "https://code.example/merge_requests/4", ...(!legacy ? { participants: { status: "failed", message: "未配置读取字段" } } : {}) }));
+    res.end(JSON.stringify({ id: 4, url: "https://code.example/merge_requests/4", ...(!legacy ? { participants: { status: "failed", message: "未配置创建参数" } } : {}) }));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.close(); server.closeAllConnections(); });
@@ -58,8 +57,6 @@ test("MR 已创建但人员失败仍保留链接；旧适配器不回结果不�
   assert.deepEqual(calls[0].body.participants, people);
   assert.equal(calls[0].token, "private-token");
   assert.ok(!JSON.stringify(calls[0].body).includes("private-token"));
-  assert.equal((await updateMergeRequestParticipants({ ...call, mr: 4 })).status, "applied");
-  assert.equal(calls[1].path, "/mr/participants");
   legacy = true;
   assert.equal((await createMergeRequest(call)).participants?.status, "failed");
 });
@@ -107,14 +104,13 @@ test("宿主创建及复用 MR 时人员失败保持静默，继续流程且不�
   for (const message of messages) assert.doesNotMatch(message, /无人员配置权限|人员设置|补充人员/);
 });
 
-test("需求子任务继承主模块；人员失败重试只更新同一 MR，普通成员无权代重试", async t => {
+test("需求子任务创建 MR 直接传模块账号；旧人员补设入口已移除", async t => {
   const calls: Array<{ path: string; body: any }> = [];
   const platform = createServer(async (req, res) => {
     let raw = ""; for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw); calls.push({ path: req.url!, body });
     res.setHeader("content-type", "application/json");
-    res.end(JSON.stringify(req.url === "/mr/participants" ? { status: "applied" }
-      : { id: 5, url: "https://code.example/merge_requests/5", participants: { status: "failed", message: "test" } }));
+    res.end(JSON.stringify({ id: 5, url: "https://code.example/merge_requests/5", participants: { status: "applied" } }));
   });
   await new Promise<void>(resolve => platform.listen(0, "127.0.0.1", resolve));
   t.after(() => { platform.close(); platform.closeAllConnections(); });
@@ -142,10 +138,9 @@ test("需求子任务继承主模块；人员失败重试只更新同一 MR，�
     const login = await fetch(`${base}/auth/login`, { method: "POST", body: JSON.stringify({ username: account, password: "test-password" }) });
     const cookie = login.headers.get("set-cookie")!.split(";")[0];
     const response = await fetch(`${base}/tasks/${child.id}/mr-participants`, { method: "POST", headers: { cookie } });
-    assert.equal(response.status, account === "owner" ? 200 : 403);
+    assert.equal(response.status, 404);
   }
-  assert.deepEqual(calls.map(item => item.path), ["/mr", "/mr/participants"]);
-  assert.deepEqual(calls[1].body.participants, people, "重试沿用失败时名单，不改用后来配置");
+  assert.deepEqual(calls.map(item => item.path), ["/mr"]);
   assert.equal(service.get(child.id)?.delivery?.mr_participants?.status, "applied");
   const repeated = await (service as any).createDeliveryMr(state, { platformUrl, repo: repo2, sourceBranch: "feature", targetBranch: "main", title: "test" });
   assert.deepEqual(calls.at(-1)!.body.participants, { reviewers: ["later"], approval_approvers: [] });

@@ -28,6 +28,7 @@ test("生产线验收5/14：人工归档所选正式知识原样推根目录和�
     }
     const publication = await publisher.publish(job, target, undefined, "user", () => {});
     assert.equal(publication.state, "opened");
+    assert.equal(publication.branch, "master_fixture_REQ-files", "归档分支沿用基线、个人 Git 账号与单号，不能用平台用户代替 Git 账号");
     for (const doc of job.documents) assert.equal(git(remote, "show", `${publication.branch}:${doc.path}`), doc.content, "MR 原样保存 Skill 正文，不添加平台来源章节");
     assert.equal(git(remote, "show", `${publication.branch}:code.ts`), "源码");
     assert.equal(git(remote, "show", "master:AGENTS.md"), "旧规范");
@@ -58,6 +59,7 @@ test("生产线验收5/14：组件正式版本手动归档只提交一篇正文�
     const local = saveKnowledgeDocument(root, { title: job.title, content: formalContent, technologies: ["cpp"] }, "expert");
     Object.assign(job.documents[0], { knowledge_document_id: local.id, published_revision: local.revision, published_document_revision: 1 });
     const first = await publisher.publish(job, target, undefined, "expert", () => {});
+    assert.equal(first.branch, "main_Fixture_REQ-guide");
     const md = git(remote, "show", `${first.branch}:${path}`);
     assert.doesNotMatch(md, /everycode|repository_id|schema:|来源|a{40}/);
     assert.match(md, /Pool.submit/);

@@ -58,7 +58,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), observe);
   const createDocumentTool = (beforeWrite: () => void) => defineTool({
     name: "knowledge_draft", label: "管理领域知识文稿", executionMode: "sequential",
-    description: "read 按 start/limit 分页列出本任务文档（默认30、最多100），id 读取完整正文与来源；save 可新增文档、修改任意本任务文稿或沿用原 id 改目录及文件名；delete 用 id 标记文稿删除。重点文稿编号只说明本轮关注点，不限制关联文档修改。目标编号 domain 为知识仓，repo-* 为对应归档仓，支持仓内合法 Markdown 路径，包括 module-map.md、AGENTS.md。新增和删除进入待审阅草稿，已有文稿修改生成建议；用户确认并发布后正式知识才变化，Git 文件变更由人工归档统一提交。",
+    description: "read 按 start/limit 分页列出本任务文档（默认30、最多100），id 读取完整正文与来源；save 可新增文档、修改任意本任务文稿或沿用原 id 改目录及文件名；delete 用 id 标记文稿删除。重点文稿编号只说明本轮关注点，不限制关联文档修改。目标编号 domain 为知识仓，repo-* 为对应归档仓，保存目标最终 docs_path 内的完整仓根相对 Markdown 路径，例如 docs/产品管理/module-map.md；AGENTS.md 由平台归档器生成，模型保存普通 README.md、index.md 等文稿。新增和删除进入待审阅草稿，已有文稿修改生成建议；用户确认并发布后正式知识才变化，Git 文件变更由人工归档统一提交。",
     parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("save"), Type.Literal("delete")]), id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
       document: Type.Optional(Type.Object({ id: Type.String(), title: Type.String(), target_id: Type.String(), path: Type.String(), layer: Type.Union([Type.Literal("domain"), Type.Literal("repository")]), content: Type.String(), sources: Type.String() })) }),
     async execute(_id: string, params: { action: "read" | "save" | "delete"; id?: string; start?: number; limit?: number; document?: DomainDocumentContent }) {

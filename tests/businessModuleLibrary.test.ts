@@ -147,7 +147,7 @@ test("模块 MR 默认人员按模块保存，省略保留、显式空名单清�
   assert.match(catalog.warnings[0], /payments:.*MR/);
 });
 
-test("模块参考组件仓订阅:存登记表条目引用,悬空引用拒绝,失效后保存打回", () => {
+test("模块参考组件仓只校验显式修改，省略时保留引用和归档状态，不阻塞普通字段或 MR 人员保存", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-business-module-refcomp-"));
   writeComponentRepositories(dataDir, [
     { id: "comp-ui", name: "公共UI库",
@@ -183,35 +183,42 @@ test("模块参考组件仓订阅:存登记表条目引用,悬空引用拒绝,�
   }, "owner-a").reference_component_repos, []);
   updateBusinessModule(dataDir, created.id, {
     reference_component_repos: ["comp-ui"],
+    status: "archived",
   }, "owner-a");
-  // 登记表条目事后被删:存量订阅标失效由展示层处理,但任何再保存
-  // 都会打回,迫使先清理悬空引用(失效不静默滞留)。
+  // 组件条目删除后，隐藏的旧引用不能阻塞维护模块其他配置。
   writeComponentRepositories(dataDir, []);
+  const renamed = updateBusinessModule(dataDir, created.id, {
+    name: "支付模块新名称", description: "改说明保留旧引用",
+    repositories: ["https://code.example/pay-next.git"],
+  }, "owner-a");
+  assert.equal(renamed.name, "支付模块新名称");
+  assert.equal(renamed.description, "改说明保留旧引用");
+  assert.deepEqual(renamed.repositories, ["https://code.example/pay-next.git"]);
+  assert.deepEqual(renamed.reference_component_repos, ["comp-ui"]);
+  assert.equal(renamed.status, "archived");
+  const participants = { reviewers: ["l00899311"], approval_approvers: ["s00659404"] };
+  updateBusinessModule(dataDir, created.id, { mr_participants: participants }, "owner-a");
+  const saved = readBusinessModule(dataDir, created.id);
+  assert.deepEqual(saved.mr_participants, participants);
+  assert.deepEqual(saved.reference_component_repos, ["comp-ui"]);
+  assert.equal(saved.status, "archived");
   assert.throws(() => updateBusinessModule(dataDir, created.id, {
-    description: "顺手改说明",
+    reference_component_repos: ["comp-ui"], description: "非法修改不能保存",
   }, "owner-a"), /引用的组件仓条目不存在：comp-ui/);
-  assert.equal(updateBusinessModule(dataDir, created.id, {
+  assert.deepEqual(readBusinessModule(dataDir, created.id), saved, "显式无效引用不能覆盖已保存数据");
+  const cleared = updateBusinessModule(dataDir, created.id, {
     reference_component_repos: [],
     description: "清理订阅后正常保存",
-  }, "owner-a").description, "清理订阅后正常保存");
+  }, "owner-a");
+  assert.equal(cleared.description, "清理订阅后正常保存");
+  assert.deepEqual(cleared.reference_component_repos, []);
+  assert.equal(cleared.status, "archived");
 });
 
-test("模块编辑对话框:参考组件仓多选订阅,失效订阅提示,组件说明带填写指引", () => {
-  const dialog = readFileSync(
-    new URL("../web/src/ConfigurationCenter.tsx", import.meta.url), "utf-8");
-  // 多选选择器:选项来自公共组件仓登记表,勾选即订阅;停用条目可
-  // 订阅可取消(停用只是暂不注入,不是删除)。
-  assert.match(dialog, /参考组件仓（可选）/);
-  assert.match(dialog, /问题会话开场只注入这里勾选组件的「何时需要读取」描述/);
-  assert.match(dialog, /reference_component_repos: edit\.refs \?\? \[\]/);
-  assert.match(dialog, /components\.map\(c => <label key=\{c\.id\}/);
-  assert.match(dialog, /\(edit\.refs \?\? \[\]\)\.filter\(id => !components\.some\(c => c\.id === id\)\)\.length > 0/);
-  assert.match(dialog, /已失效订阅（条目已删除，保存前请取消勾选）/);
-  // 登记表页签:组件说明的填写指引面向问题会话的拉取决策。
+test("基础组件仓说明保留面向问题会话的填写指引", () => {
   const registry = readFileSync(
     new URL("../web/src/ComponentRepositories.tsx", import.meta.url), "utf-8");
   assert.match(registry, /写何时需要读取：问题会话的 AI 据此决定是否拉取源码/);
-  assert.match(registry, /业务模块也可在这里订阅「参考组件仓」/);
 });
 
 test("业务模块保存与更新强制至少绑定一个代码仓", () => {

@@ -1,9 +1,41 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertModuleKnowledgePath, moduleKnowledgePaths } from "../src/domainKnowledgeLayout.ts";
+import { assertModuleKnowledgePath, moduleKnowledgePaths, readableDomainKnowledgeDirectory, repairModuleKnowledgePath, needsModuleKnowledgeLayout, directoryKnowledgeDirectory, directoryKnowledgePath } from "../src/domainKnowledgeLayout.ts";
 
 const target = { id: "repo", old_directory: "docs", new_directory: "docs/orders", collision_group: "shared:main" };
 const document = (id: string, path: string, target_id = target.id) => ({ id, path, target_id });
+
+test("Issue489：领域目录替换内部编号段，不重复追加业务名，部分迁移也可恢复", () => {
+  const id = "module-5d312e96-7b1f-4a75-b3f4-ab4624a831ce";
+  assert.equal(readableDomainKnowledgeDirectory(`docs/${id}/domains`, id, "产品管理"), "docs/产品管理/domains");
+  assert.equal(readableDomainKnowledgeDirectory("docs/产品管理", id, "产品管理"), "docs/产品管理");
+  assert.equal(readableDomainKnowledgeDirectory(id, id, "产品管理"), "产品管理");
+  assert.equal(readableDomainKnowledgeDirectory(id, id, id), "领域知识");
+  assert.equal(repairModuleKnowledgePath("domains/产品管理", "domains/产品管理", `domains/${id}/rules.md`), "domains/产品管理/rules.md");
+  assert.equal(repairModuleKnowledgePath(".", ".", `docs/knowledge/${id}/FMProductFrontendService/docs/module-map.md`, ["FMProductFrontendService"]), "docs/module-map.md");
+  assert.equal(repairModuleKnowledgePath(".", ".", `docs/${id}/docs/${id}/FMProductFrontendService/docs/module-map.md`, ["FMProductFrontendService"]), "docs/module-map.md");
+  assert.equal(needsModuleKnowledgeLayout({ module_id: id, knowledge_layout: "module-v1" }), true);
+  assert.equal(needsModuleKnowledgeLayout({ module_id: id, knowledge_layout: "repository-v1" }), true);
+  assert.equal(needsModuleKnowledgeLayout({ module_id: id, knowledge_layout: "directory-v1" }), false);
+  const target = { id: "domain", name: "知识仓", repository: "https://example.test/repo.git", branch: "main", path: "", docs_path: `domains/${id}` };
+  assert.equal(needsModuleKnowledgeLayout({ knowledge_layout: "repository-v1", knowledge_target: target }), true, "没有模块关联的旧目录也不能漏掉");
+  assert.equal(needsModuleKnowledgeLayout({ component_research_id: "component", knowledge_target: target }), false);
+});
+
+test("Issue489：统一最终目录，保留真正的内部子目录且迁移幂等", () => {
+  const id = "module-5d312e96-7b1f-4a75-b3f4-ab4624a831ce", directory = "docs/产品管理";
+  assert.equal(directoryKnowledgeDirectory(".", "产品管理", id, false), directory);
+  assert.equal(directoryKnowledgeDirectory("domain-docs", "产品管理", id, true), directory);
+  assert.equal(directoryKnowledgeDirectory(`teams/${id}`, "产品管理", id, true), "teams/产品管理");
+  for (const path of ["index.md", "domain-docs/index.md", "docs/index.md"]) assert.equal(directoryKnowledgePath(".", directory, path), `${directory}/index.md`);
+  assert.equal(directoryKnowledgePath("domain-docs", directory, "domain-docs/domains/order.md"), `${directory}/domains/order.md`);
+  assert.equal(directoryKnowledgePath(`docs/knowledge/${id}`, directory, `docs/knowledge/${id}/domains/order.md`), `${directory}/domains/order.md`);
+  assert.equal(directoryKnowledgePath(".", directory, `docs/knowledge/${id}/FMProductFrontendService/docs/module-map.md`, ["FMProductFrontendService"]), `${directory}/module-map.md`);
+  assert.equal(directoryKnowledgePath(".", directory, "AGENTS.md"), `${directory}/README.md`);
+  assert.equal(directoryKnowledgePath(directory, directory, `${directory}/domains/order.md`), `${directory}/domains/order.md`);
+  assert.throws(() => assertModuleKnowledgePath({ knowledge_layout: "directory-v1" }, { docs_path: directory }, "index.md"), /归档目录/);
+  assert.throws(() => assertModuleKnowledgePath({ knowledge_layout: "directory-v1" }, { docs_path: directory }, `${directory}/AGENTS.md`), /不生成 AGENTS/);
+});
 
 test("批量整理优先保留根入口，README 与嵌套 index 重名时保留全部文稿", () => {
   const documents = [document("z-nav", "AGENTS.md"), document("a-notes", "docs/README.md"),

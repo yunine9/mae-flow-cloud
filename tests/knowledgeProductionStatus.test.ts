@@ -80,6 +80,11 @@ test("知识 MR 人员失败静默保留内部结果，不改变已归档状态�
 test("生产线验收8：旧平台恢复pending没有人工单号，不显示正在归档也不制造归档失败", () => {
   const job = domain(); job.archive_batches = [{ ...manualBatch(job, "running"), issue_no: undefined, state: "pending", publications: [] }];
   assert.equal(knowledgeArchiveState(job), "done"); assert.equal(domainKnowledgeTask(job).status_label, "已发布（未归档）");
+  const view = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(view.next_action.id, "archive");
+  assert.equal(view.next_action.label, "创建归档 MR");
+  assert.match(view.next_action.href!, /kbStage=publish/);
+  assert.equal(view.archive.actions[0].label, "创建归档 MR");
 });
 
 test("生产线验收5/8：增加新的正式文稿后，旧MR只保留历史链接，不能把未归档新篇显示为全任务已归档", () => {
@@ -158,7 +163,7 @@ test("生产线验收8：真实磁盘与TaskService启动后，任务中心、�
       const detail = await read(path), row = center.tasks.find((row: any) => row.id === identity.id);
       assert.ok(row, identity.case.name);
       assert.equal(row.status_label, identity.case.label); assert.equal(row.group, identity.case.group);
-      assert.equal(row.next_action.id, identity.case.action);
+      assert.equal(row.next_action.id, identity.kind === "domain" && identity.case.name === "未创建归档" ? "archive" : identity.case.action);
       assert.deepEqual(row.production, detail.production, `${identity.kind} ${identity.case.name} 的中心与详情必须来自同一投影`);
       assert.deepEqual(row.next_action, detail.production.next_action);
       const listed = (identity.kind === "domain" ? domains : components).records.find((record: any) => record.id === identity.id);

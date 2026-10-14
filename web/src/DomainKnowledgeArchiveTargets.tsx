@@ -2,85 +2,91 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
-import type { DomainKnowledgeJob, KnowledgeRepository } from "../../src/domainKnowledgeTypes";
-import { moduleKnowledgeDirectory, moduleKnowledgePath, moduleKnowledgePaths } from "../../src/domainKnowledgeLayout";
-import { repositoryIdentity } from "../../src/knowledgeAssetModel";
+import type { DomainKnowledgeJob, KnowledgeRepository, DomainArchiveTargetsPreview } from "../../src/domainKnowledgeTypes";
+import { directoryKnowledgeDirectory, hasOpaqueModuleDirectory } from "../../src/domainKnowledgeLayout";
 
 const targetsOf = (job: DomainKnowledgeJob) => [job.knowledge_target, ...job.repositories];
-const pathsOf = (job: DomainKnowledgeJob) => Object.fromEntries(job.documents.map(document => [document.id, document.archive_path ?? document.path]));
 const confirmedDeletion = (document: DomainKnowledgeJob["documents"][number]) => !!document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
-export function DomainKnowledgeArchiveTargets({ job, disabled, onChange }: {
-  job: DomainKnowledgeJob; disabled?: boolean; onChange: (job: DomainKnowledgeJob) => void;
+function initialTargets(job: DomainKnowledgeJob) {
+  const title = job.module_name || job.title;
+  return targetsOf(job).map(target => {
+    if (job.component_research_id || job.documents.length > 0 && job.documents.every(confirmedDeletion)) return { ...target };
+    const isDomain = target.id === job.knowledge_target.id;
+    if (job.knowledge_layout === "directory-v1" && target.docs_path && target.docs_path !== "." && !hasOpaqueModuleDirectory(target.docs_path)
+      && (isDomain || target.docs_path.startsWith("docs/"))) return { ...target };
+    return { ...target, docs_path: directoryKnowledgeDirectory(target.docs_path, title, job.module_id, isDomain) };
+  });
+}
+export function DomainKnowledgeArchivePathPreview({ preview, deletedDocumentIds = [] }: { preview: DomainArchiveTargetsPreview; deletedDocumentIds?: string[] }) {
+  const deletingOnly = preview.documents.length > 0 && preview.documents.every(document => deletedDocumentIds.includes(document.id));
+  return <section aria-label="文档路径预览" className="space-y-3">
+    <h3 className="text-sm font-semibold">文档路径预览</h3>
+    {preview.targets.filter(target => preview.documents.some(document => document.target_id === target.id)).map(target => <div key={target.id} className="space-y-2 rounded border border-line p-3">
+      <h4 className="text-sm font-medium">{target.id === "domain" ? "领域知识仓" : target.name}</h4>
+      {!deletingOnly && <p className="break-all text-xs text-muted-foreground">平台维护入口：<code>{target.id === "domain" ? `${target.docs_path}/AGENTS.md` : "AGENTS.md"}</code></p>}
+      <ul className="m-0 list-none space-y-2 p-0">{preview.documents.filter(document => document.target_id === target.id).map(document => <li key={document.id} className="text-sm">
+        <span className="text-muted-foreground">{document.title}{deletedDocumentIds.includes(document.id) ? " · 删除原文件" : ""}</span>
+        <code className="block break-all">{document.path}</code>
+      </li>)}</ul>
+    </div>)}
+  </section>;
+}
+export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy, onConfirmArchive, replaceExisting = false }: {
+  job: DomainKnowledgeJob; disabled?: boolean; onChange: (job: DomainKnowledgeJob) => void; onBusy?: (busy: boolean) => void;
+  onConfirmArchive?: (job: DomainKnowledgeJob) => void | Promise<void>; replaceExisting?: boolean;
 }) {
-  const [targets, setTargets] = useState(() => structuredClone(targetsOf(job))), [paths, setPaths] = useState(() => pathsOf(job));
-  const [customPaths, setCustomPaths] = useState<string[]>([]);
-  const [moduleLayout, setModuleLayout] = useState(job.knowledge_layout === "module-v1");
+  const [targets, setTargets] = useState(() => initialTargets(job));
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
-  useEffect(() => { setTargets(structuredClone(targetsOf(job))); setPaths(pathsOf(job)); setCustomPaths([]); setModuleLayout(job.knowledge_layout === "module-v1"); setError(""); }, [job.id, job.archive_revision]);
-  const usedTargets = targets.filter(target => job.documents.some(document => document.target_id === target.id));
-  const invalid = usedTargets.some(target => !target.repository.trim() || !target.branch.trim() || !target.docs_path.trim())
-    || job.documents.some(document => !paths[document.id]?.trim());
+  const [preview, setPreview] = useState<{ key: string; data: DomainArchiveTargetsPreview }>();
+  const [previewing, setPreviewing] = useState(true);
+  const [previewRetry, setPreviewRetry] = useState(0);
+  useEffect(() => { setTargets(initialTargets(job)); setError(""); }, [job.id, job.archive_revision]);
+  const deletingOnly = job.documents.length > 0 && job.documents.every(confirmedDeletion);
+  const invalid = targets.some(target => !target.branch.trim() || !target.docs_path.trim()
+    || job.documents.some(document => document.target_id === target.id) && !target.repository.trim());
+  const input = { targets: targets.filter(target => !!target.repository.trim() || job.documents.some(document => document.target_id === target.id)),
+    documents: [], use_directory_layout: !job.component_research_id, base_revision: job.archive_revision ?? 0 };
+  const previewKey = JSON.stringify({ input, revisions: job.documents.map(document => [document.id, document.revision, document.published_revision]),
+    proposals: job.turns.flatMap(turn => turn.proposals.map(proposal => [proposal.document.id, proposal.status, proposal.base_revision])) });
+  useEffect(() => {
+    const controller = new AbortController();
+    setPreview(undefined); setError(""); setPreviewing(!invalid && !disabled);
+    if (invalid || disabled) return () => controller.abort();
+    const timer = setTimeout(() => {
+      void componentRequest<DomainArchiveTargetsPreview>(`/domain-extraction/${job.id}/archive-targets/preview`, input,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
+        .then(candidate => { if (!controller.signal.aborted) setPreview({ key: previewKey, data: candidate }); })
+        .catch(reason => { if (!controller.signal.aborted) setError((reason as Error).name === "TimeoutError" ? "计算文档路径超时，请调整目录后重试。" : (reason as Error).message); })
+        .finally(() => { if (!controller.signal.aborted) setPreviewing(false); });
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [job.id, previewKey, invalid, disabled, previewRetry]);
   function change(id: string, patch: Partial<KnowledgeRepository>) { setTargets(previous => previous.map(target => target.id === id ? { ...target, ...patch } : target)); }
-  function changeDirectory(id: string, directory: string) {
-    change(id, { docs_path: directory });
-    const before = targets.find(target => target.id === id)!;
-    const previousDirectory = before.docs_path.replace(/\/$/, "");
-    setPaths(previous => ({ ...previous, ...Object.fromEntries(job.documents.filter(document => document.target_id === id && (!moduleLayout || !confirmedDeletion(document))
-      && !customPaths.includes(document.id) && (moduleLayout || !/^agents\.md$/i.test(document.path)))
-      .flatMap(document => {
-        const path = previous[document.id] ?? document.path;
-        if (!path.startsWith(`${previousDirectory}/`)) return [];
-        return [[document.id, `${directory.replace(/\/$/, "")}/${path.slice(previousDirectory.length + 1)}`]];
-      })) }));
-  }
-  function organizeByModule() {
-    if (!job.module_id) return;
+  async function confirm() {
+    if (preview?.key !== previewKey || previewing) return;
+    setBusy(true); onBusy?.(true); setError("");
     try {
-      const nextTargets = targets.map(target => ({ ...target, docs_path: moduleKnowledgeDirectory(target.docs_path, job.module_id!) }));
-      const layout = moduleKnowledgePaths(job.documents.filter(document => !confirmedDeletion(document)).map(document => ({
-        id: document.id, target_id: document.target_id, path: document.path, desired_path: paths[document.id],
-      })), nextTargets.map(target => ({ id: target.id, old_directory: targets.find(previous => previous.id === target.id)!.docs_path,
-        new_directory: target.docs_path, collision_group: JSON.stringify([target.repository ? repositoryIdentity(target.repository) : target.id, target.branch]),
-      })));
-      setPaths(Object.fromEntries(job.documents.map(document => {
-        if (confirmedDeletion(document)) return [document.id, document.archive_path ?? document.path];
-        return [document.id, layout.paths.get(document.id)!];
-      })));
-      setTargets(nextTargets); setCustomPaths([]); setModuleLayout(true); setError("");
+      const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}/archive-targets`, input, AbortSignal.timeout(30_000));
+      onChange(next);
+      await onConfirmArchive?.(next);
     } catch (reason) { setError((reason as Error).message); }
+    finally { setBusy(false); onBusy?.(false); }
   }
-  async function save() {
-    setBusy(true); setError("");
-    try {
-      const normalized = usedTargets.map(target => moduleLayout && job.module_id
-        ? { ...target, docs_path: moduleKnowledgeDirectory(target.docs_path, job.module_id) } : target);
-      const documents = job.documents.map(document => {
-        if (moduleLayout && confirmedDeletion(document)) return { id: document.id, path: document.archive_path ?? document.path };
-        const before = usedTargets.find(target => target.id === document.target_id)!;
-        const after = normalized.find(target => target.id === document.target_id)!;
-        const path = paths[document.id];
-        return { id: document.id, path: !path.startsWith(`${after.docs_path}/`) && path.startsWith(`${before.docs_path.replace(/\/$/, "")}/`) && after.docs_path !== before.docs_path
-          ? moduleKnowledgePath(before.docs_path, after.docs_path, path) : path };
-      });
-      onChange(await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}/archive-targets`, { targets: normalized,
-        documents, use_module_layout: moduleLayout && job.knowledge_layout !== "module-v1", base_revision: job.archive_revision ?? 0 }, AbortSignal.timeout(30_000)));
-    }
-    catch (reason) { setError((reason as Error).message); }
-    finally { setBusy(false); }
-  }
-  return <section className="space-y-4 rounded-lg border border-line p-4" aria-label="领域知识归档位置">
-    {job.module_id && !moduleLayout && <div className="space-y-2"><p className="text-sm text-muted-foreground">确认并发布时，平台会自动按业务模块整理目录：原 AGENTS.md 内容移入 README.md 或 index.md；重名时自动分配文件名、更新链接和索引，保留每篇文稿。只发布本次勾选的文稿，不重新萃取，无需提前设置。这里可预览或自定义归档位置。</p><Button variant="outline" disabled={busy || disabled} onClick={organizeByModule}>预览模块目录</Button></div>}
-    {moduleLayout && <div className="space-y-2 text-sm text-muted-foreground"><p>归档时，平台用统一入口完整替换每个目标仓根 AGENTS.md，旧正文保留在 Git 历史中。业务文稿分别保存在带模块标识的目录内，以 README.md 和普通索引说明范围，不生成子目录 AGENTS.md。</p><p>保存目录调整后，回到「文稿」确认并发布本次变化，再创建归档 MR；这些操作不重新调用模型研究。其他模块的文稿保持原样。</p></div>}
-    {usedTargets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled}>
-      <legend className="px-1 font-medium">{target.name}</legend>
+  return <section className="space-y-4" aria-label="确认 Git 归档路径">
+    <p className="text-sm text-muted-foreground">确认每个仓的相对目录，下方实时预览文档路径。代码仓知识统一放在 docs 下的业务目录；领域知识及其 AGENTS.md 放在选定的领域目录。确认后自动创建 MR。</p>
+    {deletingOnly && <p className="text-sm text-muted-foreground">删除沿用原归档位置。</p>}
+    {targets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled || deletingOnly}>
+      <legend className="px-1 font-medium">{target.id === job.knowledge_target.id ? "领域知识仓" : `代码仓 · ${target.name}`}</legend>
       <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label={`${target.id} 归档仓地址`} value={target.repository} onChange={event => change(target.id, { repository: event.target.value })} placeholder="https://…/knowledge.git" /></label>
       <label className="grid gap-1 text-sm">归档分支<Input aria-label={`${target.id} 归档分支`} value={target.branch} onChange={event => change(target.id, { branch: event.target.value })} /></label>
-      <label className="grid gap-1 text-sm">文档目录<Input aria-label={`${target.id} 归档文档目录`} value={target.docs_path} onChange={event => changeDirectory(target.id, event.target.value)} /></label>
-      <div className="col-span-2 space-y-2">{job.documents.filter(document => document.target_id === target.id).map(document => <label key={document.id} className="grid gap-1 text-sm">{document.title}{moduleLayout && confirmedDeletion(document) && <span className="text-muted-foreground">已发布删除，保留历史路径</span>}
-        <Input aria-label={`${document.id} 文件归档路径`} disabled={moduleLayout && confirmedDeletion(document)} value={paths[document.id] ?? document.path} onChange={event => { setCustomPaths(previous => [...new Set([...previous, document.id])]); setPaths(previous => ({ ...previous, [document.id]: event.target.value })); }} />
-      </label>)}</div>
+      <label className="grid gap-1 text-sm">仓内相对目录<Input aria-label={`${target.id} 归档文档目录`} value={target.docs_path} onChange={event => change(target.id, { docs_path: event.target.value })} placeholder="docs/业务目录" /></label>
     </fieldset>)}
+    {previewing && <p role="status" className="text-sm text-muted-foreground">正在计算各文档的最终路径…</p>}
+    {preview?.key === previewKey && <DomainKnowledgeArchivePathPreview preview={preview.data} deletedDocumentIds={job.documents.filter(confirmedDeletion).map(document => document.id)} />}
     {error && <p role="alert" className="whitespace-pre-wrap text-sm text-danger">{error}</p>}
-    <Button variant="outline" disabled={busy || disabled || invalid || !usedTargets.length} onClick={() => void save()}>{busy ? "正在保存…" : "保存 Git 归档设置"}</Button>
+    {error && !preview && <Button size="sm" variant="outline" disabled={busy || disabled} onClick={() => setPreviewRetry(value => value + 1)}>重新预览路径</Button>}
+    <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end border-t border-line bg-popover px-4 py-3">
+      <Button disabled={busy || disabled || invalid || previewing || preview?.key !== previewKey || !targets.length} onClick={() => void confirm()}>{busy ? "正在准备 MR…" : replaceExisting ? "确认并重新创建 MR" : "确认并创建 MR"}</Button>
+    </div>
   </section>;
 }

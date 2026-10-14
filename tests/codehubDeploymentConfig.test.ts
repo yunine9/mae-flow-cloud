@@ -104,6 +104,17 @@ test("portable patch matches full configuration and every script is in this repo
   const { port, ...endpoints } = config;
   assert.equal(port, 8790);
   assert.deepEqual(JSON.parse(JSON.stringify(patch).replaceAll("@REPO_DIR@", "/data/mae-flow-cloud/repo")), endpoints);
+  for (const name of ["mr_create", "mr_create_knowledge"]) {
+    assert.deepEqual(config[name].command.slice(0, 3), ["codehub-cli", "mr", "create"]);
+    assert.deepEqual(config[name].participant_flags, {
+      reviewers: "--approval-reviewers", approval_approvers: "--approval-approvers",
+    });
+  }
+  assert.equal(Object.hasOwn(config, "mr_participants"), false);
+  assert.deepEqual(config.mr_approver_members.command, ["codehub-cli", "project", "member", "list",
+    "--host", "yellow", "-p", "{repo}", "--token", "{token}", "--format", "json", "-k"]);
+  assert.deepEqual(config.mr_approver_members.fields, { username: { json: "username" }, access_level: { json: "access_level" } });
+  assert.equal(config.mr_approver_members.timeout_s, 15);
   for (const name of ["pipeline_status", "pipeline_artifacts", "mr_discover", "mr_gates"]) {
     const script = config[name].command[1].replace("/data/mae-flow-cloud/repo/", "");
     assert(readFileSync(script).length > 0);
@@ -170,7 +181,7 @@ for endpoint, spec in [('pipeline_trigger', {}), ('pipeline_trigger', {'observe_
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
-test("prod and test installations replace all old production script paths with their own repo", () => {
+test("prod and test upgrades replace script paths and retire the participant update endpoint", () => {
   const temp = mkdtempSync(join(tmpdir(), "adapter-env-paths-"));
   try {
     for (const environment of ["mae-flow-cloud", "mae-flow-cloud-test"]) {
@@ -180,12 +191,25 @@ test("prod and test installations replace all old production script paths with t
       const source = join(temp, `${environment}.json`);
       const destination = join(temp, `${environment}.candidate.json`);
       // 故意从包含生产绝对路径的旧配置升级，测试环境也必须全部改写。
-      writeFileSync(source, JSON.stringify({ ...config, port: 9988 }));
+      const oldSettings = { ...structuredClone(config), port: 9988,
+        mr_participants: { command: ["python3", "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-participants.py"], contract: true },
+      };
+      for (const name of ["mr_create", "mr_create_knowledge"]) delete oldSettings[name].participant_flags;
+      delete oldSettings.mr_approver_members;
+      writeFileSync(source, JSON.stringify(oldSettings));
       const result = spawnSync("python3", [join(root, "deploy/adapter-tools/merge-adapter-config.py"),
         source, destination, root], { encoding: "utf8" });
       assert.equal(result.status, 0, result.stderr || result.stdout);
       const candidate = JSON.parse(readFileSync(destination, "utf8"));
       assert.equal(candidate.port, 9988);
+      assert.equal(Object.hasOwn(candidate, "mr_participants"), false);
+      assert.deepEqual(candidate.mr_approver_members, config.mr_approver_members);
+      for (const name of ["mr_create", "mr_create_knowledge"]) {
+        assert.deepEqual(candidate[name].participant_flags, {
+          reviewers: "--approval-reviewers", approval_approvers: "--approval-approvers",
+        });
+      }
+      assert.deepEqual(JSON.parse(readFileSync(source, "utf8")), oldSettings, "候选生成不能改写现场配置");
       for (const name of ["pipeline_status", "pipeline_artifacts", "mr_discover", "mr_gates"]) {
         assert.equal(candidate[name].command[1], config[name].command[1].replace("/data/mae-flow-cloud/repo", realpathSync(root)));
       }

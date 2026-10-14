@@ -2,13 +2,13 @@
 
 > 生成时间：<YYYY-MM-DD HH:MM>
 > 状态：<实际调查/规划核查/写作/完成/受阻状态>
-> 业务范围：<平台 module_id（旧任务无则注明）、模块名称、scope 及必要依赖边界>
+> 业务范围：<业务模块名称、适用业务范围及必要依赖边界>
 > 目录布局：<平台 knowledge_layout；缺失时注明沿用旧布局，不根据 module_id 推断>
 > 平台保存位置：knowledge_work 过程文稿 current-plan（不进入知识发布）
 > 图表校验：保存后 knowledge_diagram_check 使用 work_document_id=current-plan；invalid 修正，unavailable 保留规划并报告依赖阻碍
 > 完整输出清单：保存正文后以 knowledge_work action=plan 登记全部 document_ids，work_document_id=current-plan
 > 下方仓A/B/C/D、接口和功能行仅示意格式，按实际清单展开或删除示例；不凑数量。调查未完成的区域和来源失败必须明确列出，不能统计为已穷尽。正文保留条目、范围与结果索引，不粘贴全部源码或调查报告。
-> 路径写法：以下表格采用 module-v1 布局。D 代表领域目标实际 docs_path，R_A 代表仓A目标实际 docs_path；保存规划时全部替换成完整仓内路径，不能保留这些符号。平台提供的独占目录已经包含 module_id，不再追加。knowledge_layout 不是 module-v1 或缺失时，按平台执行约定保留实际文稿位置及导航文件名。
+> 路径写法：D 代表领域 target.docs_path，R_A 代表代码仓A的 target.docs_path；directory-v1 两者默认均为 `docs/<业务名称>`，以平台保存值为准。保存规划时替换为完整仓根相对路径，既有文稿采用当前保存位置。AGENTS.md 由平台生成，不列为模型文稿；具体映射见平台执行约定。
 
 ## 一、仓清单
 
@@ -61,7 +61,7 @@ RepoB --> ExternalSystem : <实际交互>
 | 9 | `D/interfaces/<仓C-仓D>.md` | `domain/interface-contract.md` | <本业务调用端、实现端、异常处理与IDL> | 待生成 |
 | 10 | `D/external/<系统A>.md` | `domain/external-system.md` | <本业务实际对接入口/实现/编码/异常与协议配置> | 待生成 |
 
-### 2. 仓级文档（对应仓 target.docs_path）
+### 2. 仓级文档（对应仓内实际文稿目录）
 
 #### 2.1 基础文档
 

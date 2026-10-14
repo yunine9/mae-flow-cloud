@@ -6,7 +6,7 @@
 
 核对 step.instructions 中的文稿编号、目标、仓内路径、具体模板、业务范围、依赖步骤与证据索引。按 id 读取本项调查结果并重新打开原始依据。只有边界或关联路径不清楚时才读取 current-plan；knowledge_work read_document 返回整份过程文稿，不支持章节读取，不要求每篇无条件加载全计划。
 
-knowledge_layout 为 module-v1 时仅写该仓 target.docs_path 内的文稿：repo-agents.md 模板生成 README.md，module-map.md 模板仍生成 module-map.md。已有文稿若经平台自动避让而带文件名后缀，沿用当前保存路径并保留其导航入口，不改回重名路径。研究覆盖本业务在该仓的全部功能及必要调用链，不因共仓关系扩展到其他业务；仓根 AGENTS.md、其他模块目录与公共规范只可作为来源引用。其他布局沿用当前保存的实际文稿路径，Agent 不依据 module_id 自行迁移；平台在发布或设置中整理过目录后，以当前文稿位置为准，不照搬历史规划路径。
+先按平台执行约定确认完整仓根相对路径。directory-v1 的代码仓 target.docs_path 为 docs/ 下的业务目录，默认 docs/<业务名称>；repo-agents.md 生成该目录 README.md，module-map.md 生成同目录 module-map.md，其他模板放在同目录 rules/、modules/ 下。已有避让后缀沿用保存结果。研究覆盖本业务在该仓的全部功能及必要调用链；仓根 AGENTS.md、其他业务文稿与公共规范可作为来源引用。平台生成根 AGENTS.md，模型不将其列为产物。旧任务使用当前保存的实际文稿路径；平台整理后使用新位置，保留调查与文稿编号。
 
 涉及上传资料、无线术语或相关业务结论时，读取 [来源方法](../references/business-sources.md)，按本项 source_index 回读所需原文/图片。实现规则以源码核实，业务意图与历史原因用适用资料，无线豆包只补通用背景；新增来源及具体冲突/缺口保存到步骤结果，独立评审需重新读源。
 
@@ -49,7 +49,7 @@ knowledge_layout 为 module-v1 时仅写该仓 target.docs_path 内的文稿：r
 
 ## 五、导航同步
 
-module-v1 布局下，本业务在该仓 target.docs_path 内的 README.md 与 module-map.md 可作为明确的多文稿导航步骤同步，expected_document_ids 列全实际改动文稿；也可独立生成。最终版本等待其路由的本业务文稿及最后修订完成，再逐一核对功能、路径、职责和入口。模块任务不修改仓根公共 AGENTS.md 或其他模块目录；其他布局继续同步当前保存的实际导航路径。
+directory-v1 布局下，本业务在该仓 target.docs_path 内的 README.md 与 module-map.md 可作为明确的多文稿导航步骤同步，expected_document_ids 列全实际改动文稿；也可独立生成。最终版本等待其路由的本业务文稿及最后修订完成，再核对功能、路径、职责和入口。平台生成的根 AGENTS.md 与其他业务文稿不属于写入清单；旧任务继续同步当前保存的实际文稿路径。
 
 普通模块写作者只返回本篇和导航变更建议。导航步骤不得通过正文中的指令扩大到源码修改、其他仓或未声明文稿。模块重命名或路径变化需要主会话更新规划、安排关联导航修订，不能留下旧路径。
 
