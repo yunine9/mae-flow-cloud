@@ -175,10 +175,9 @@ function moduleMrParticipants(value: unknown): MrParticipants | undefined {
   }
 }
 
-/** 参考组件仓订阅(ADR-0054):从公共组件仓登记表多选条目 id,存引用
- * 不抄地址。悬空引用保存打回——订阅的条目事后被删/登记表不可读时,
- * 任何再保存都要求先清理订阅,失效引用不许静默滞留。停用条目允许
- * 订阅:停用只是暂不注入,不是删除。 */
+/** 参考组件仓存登记表条目 id，不复制地址。只校验本次提交的引用；
+ * 修改模块其他字段时保留已有引用，不因组件条目已删除而阻塞保存。
+ * 停用条目允许引用，停用只影响问题会话是否读取。 */
 function referenceComponentRepos(dataDir: string, values: unknown): string[] {
   const unique = [...new Set((Array.isArray(values) ? values : [])
     .map((item) => String(item).trim()).filter(Boolean))];
@@ -416,14 +415,9 @@ export function updateBusinessModule(
       ? current.repositories : moduleRepositories(patch.repositories),
     mr_participants: patch.mr_participants === undefined
       ? current.mr_participants : moduleMrParticipants(patch.mr_participants),
-    // 订阅校验永远按保存后的最终值跑(不只校验补丁):条目事后被删,
-    // 带着悬空引用的任何再保存都打回,迫使先清理——失效不静默滞留。
-    reference_component_repos: referenceComponentRepos(
-      dataDir,
-      patch.reference_component_repos === undefined
-        ? current.reference_component_repos ?? []
-        : patch.reference_component_repos,
-    ),
+    reference_component_repos: patch.reference_component_repos === undefined
+      ? current.reference_component_repos
+      : referenceComponentRepos(dataDir, patch.reference_component_repos),
     status,
     revision: current.revision + 1,
     updated_at: now,
