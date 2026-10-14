@@ -28,6 +28,27 @@ const deferred = () => {
   return { promise, resolve };
 };
 
+test("评审中断接续已落盘作者结果，只有明确退回才重新研究", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "component-review-resume-")), file = join(dir, "state.json");
+  const counts = new Map<string, number>();
+  const execute = async (t: ComponentWork) => { counts.set(t.id, (counts.get(t.id) ?? 0) + 1); return result(t); };
+  try {
+    const initial = new ComponentResearchPipeline(file, "skill1", ["base"]);
+    await assert.rejects(initial.run({ signal: new AbortController().signal, execute,
+      review: async t => { if (t.phase === "paradigm") throw new Error("评审连接中断"); return undefined; }, changed() {} }), /评审连接中断/);
+    const persisted = JSON.parse(readFileSync(file, "utf8"));
+    assert.equal(counts.get("paradigm-pool-submit"), 1);
+    assert.ok(persisted.tasks.find((t: ComponentWork) => t.phase === "paradigm").result);
+    const completed = persisted.tasks.filter((t: ComponentWork) => t.status === "done");
+    const resumed = new ComponentResearchPipeline(file, "skill1", ["base"]);
+    await resumed.run({ signal: new AbortController().signal, execute,
+      review: async t => t.phase === "paradigm" && t.attempts === 1 ? "需修正示例" : undefined, changed() {} });
+    assert.equal(counts.get("paradigm-pool-submit"), 2, "保存的结果先接续评审，明确退回后仅重做本项");
+    assert.deepEqual(resumed.state.tasks.filter(t => completed.some((c: ComponentWork) => c.id === t.id)), completed);
+    assert.ok(resumed.state.tasks.every(t => t.status === "done"));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("旧单方法状态只迁移对应固定萃取包，完成项不重跑且陌生版本仍拒绝", async () => {
   const dir = mkdtempSync(join(tmpdir(), "component-method-upgrade-")), file = join(dir, "state.json");
   try {

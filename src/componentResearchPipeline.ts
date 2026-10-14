@@ -80,22 +80,27 @@ export class ComponentResearchPipeline {
     const execute = async (t: ComponentWork) => {
       options.signal.throwIfAborted();
       t.status = "running"; t.attempts++; changed();
+      let awaitingReview = false;
       try {
         options.signal.throwIfAborted();
-        const result = await options.execute(structuredClone(t)); options.signal.throwIfAborted();
+        // 作者结果在评审前已落盘；评审中断时只续评审，避免重做数天的研究。
+        const result = t.result ?? await options.execute(structuredClone(t)); options.signal.throwIfAborted();
         if (!result.findings?.trim() || !Array.isArray(result.open_questions) || result.open_questions.some(q => typeof q !== "string")) throw new Error("任务必须保存具体结论和待确认问题");
         const additions = this.expand(t, result);
         additionsAvailable(additions);
         t.result = result; changed();
         options.signal.throwIfAborted();
+        awaitingReview = true;
         const feedback = await options.review(structuredClone(t), result); options.signal.throwIfAborted();
-        if (feedback) throw new Error(feedback);
+        awaitingReview = false;
+        if (feedback) { delete t.result; throw new Error(feedback); }
         // 评审期间其它模块可能已完成，提交前再次核对全局编号。
         additionsAvailable(additions);
         t.status = "done"; delete t.feedback;
         this.state.tasks.push(...additions); changed();
       } catch (error) {
         if (options.signal.aborted) return;
+        if (!awaitingReview) delete t.result;
         t.feedback = error instanceof Error ? error.message : String(error);
         t.status = t.attempts >= 3 ? "failed" : "pending"; changed();
       }

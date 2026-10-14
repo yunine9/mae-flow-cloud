@@ -14,7 +14,7 @@ import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { checkEc, languageComponentSourceTool, codeSearchTool, evidencePreview } from "./componentResearchTools.ts";
 import { scanKnowledgeCode, knowledgeStructure, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { KnowledgeExtractionSkills, extractionSkillMission, extractionSkillTool } from "./knowledgeExtractionSkills.ts";
-import { isWholeResearchReview, type ResearchSection } from "./componentResearchDocument.ts";
+import { isWholeResearchReview, sectionReady, validateComponentOverview, type ResearchSection } from "./componentResearchDocument.ts";
 import { ComponentResearchPipeline, type ComponentWork, type ComponentWorkResult } from "./componentResearchPipeline.ts";
 import { componentSources, excludedComponentSource, validateComponentParadigm, type ComponentParadigm } from "./componentParadigms.ts";
 import { researchDraftContext, researchSourceRepositories, type ResearchExecution } from "./componentResearch.ts";
@@ -134,7 +134,9 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               if (!s || !["contracts", "paradigm", "pitfalls", "index"].includes(s.paradigm?.kind)) throw new Error("补充只能保存新的能力项（契约、范式、陷阱或导航）");
               if (doc.sections.some(old => old.id === s.id) && !supplementAdded.has(s.id)) throw new Error("补充轮只能填写本轮新增的能力项，已有能力保持原样；需要改已有项请人在该项上返工");
             } else if (!wholeReview) {
-              if (args.action !== "section" || !s || s.id !== task.id || !["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) throw new Error("只能保存当前任务编号的章节");
+              if (args.action !== "section" || !s) throw new Error("保存章节需使用 action=section，并在 section 中填写完整章节");
+              if (s.id !== task.id) throw new Error(`只能保存当前任务编号的章节：当前 task.id=${task.id}，收到 section.id=${s.id}`);
+              if (!["contracts", "paradigm", "pitfalls", "index"].includes(task.phase)) throw new Error(`当前任务类型 ${task.phase} 不保存章节；inventory/plan 请提交研究结果，synthesis 请保存 overview`);
               if (s.paradigm?.kind !== task.phase || s.paradigm?.component !== task.component) throw new Error("产物类型和组件必须与当前任务一致");
             }
             if (input.review && draftReads.get(s.id) !== doc.sections.find(old => old.id === s.id)?.revision) throw new Error("修订前必须读取当前章节全文");
@@ -165,7 +167,17 @@ export async function runComponentResearch(input: ResearchExecution, options: {
               }
               verdict = { pass: params.pass, feedback: params.feedback };
             } else {
-              if (!discussing && !["inventory", "plan", "pitfalls"].includes(task.phase) && !saved) throw new Error("必须先保存本项产物");
+              if (!discussing && !["inventory", "plan", "pitfalls"].includes(task.phase) && !saved) {
+                // 重试会话可接着磁盘上的完整产物提交；回读和独立评审仍核对当前内容。
+                const doc = input.readDocument!(), section = doc.sections.find(s => s.id === task.id);
+                if (task.phase === "synthesis" && !wholeReview) {
+                  if (!overviewRead) throw new Error("已有概述请先 research_document read 回读，再提交结果；无需重复保存");
+                  validateComponentOverview(doc.overview);
+                } else if (!input.review && section && sectionReady(section) && section.paradigm?.kind === task.phase && section.paradigm.component === task.component) {
+                  if (draftReads.get(section.id) !== section.revision) throw new Error("已有完整章节请先 research_document read 回读当前版本，再提交结果；无需重复保存");
+                  await verifyMetadata(section.paradigm, true);
+                } else throw new Error("必须先保存本项产物；已有章节需完整且与当前任务类型、组件一致");
+              }
               if (((!discussing && ["inventory", "plan", "paradigm"].includes(task.phase)) || input.record.challenge) && !searched) throw new Error("必须通过 everycode 查找实际调用，并如实记录缺口");
               if (!discussing && task.phase === "paradigm" && !searchedTests) throw new Error("请通过 everycode 检索本用法的单元测试，purpose 使用 unit-test，并展开对应测试代码");
               if (!params.findings?.trim() || !Array.isArray(params.open_questions)) throw new Error("请保存具体结论与待确认问题");
@@ -210,6 +222,10 @@ export async function runComponentResearch(input: ResearchExecution, options: {
           technology_stack: { id: input.record.language, name: technologyStack?.name ?? input.record.language },
           topic: input.record.topic, scope: "按技术栈分析文件操作、数据库操作、P2P 等功能能力；参考仓提供代码线索，一个能力可跨仓实现，真实组件与场景由分析确定", source_repositories: components, revisions,
           module: pipeline?.state.tasks.find(t => t.id === "inventory")?.result?.components?.find(module => module.id === task.component),
+          continuation: !reviewing && !input.review ? {
+            section: input.readDocument!().sections.filter(s => s.id === task.id).map(s => ({ id: s.id, revision: s.revision, complete: sectionReady(s) }))[0],
+            instruction: "保留已完成任务和已有章节。已有完整章节先读取全文并核对其源码、调用和测试证据，内容无须修改时直接提交研究结果，不必重复保存；若 task.feedback 有修改要求则先处理。已有完整概述回读后可直接提交。",
+          } : undefined,
           structure: task.phase === "inventory" ? knowledgeStructure(snapshots) : undefined,
           feedback: input.review ? { message: input.review.message, previous_revisions: input.review.previous_revisions } : undefined });
       const driver = await CloudSession.create({ taskId: `${input.record.id}-${sessionId}`, workspace: dir, agentDir, resumeSession: false, excludeAgentFiles: true,
