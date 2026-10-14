@@ -603,7 +603,7 @@ import {
   deliveryStopped, projectRepairStopped, projectStatusLabel, projectTaskFocus, type TaskFocus,
 } from "./taskFocus.ts";
 import { NotFoundError, TaskControlError } from "./errors.ts";
-import { createMergeRequest, updateMergeRequestParticipants } from "./mrClient.ts";
+import { createMergeRequest } from "./mrClient.ts";
 import { resolveModuleMrParticipants } from "./moduleMrParticipants.ts";
 import type { MrParticipantsResult } from "./mrParticipants.ts";
 import { MR_DESCRIPTION_STEP, askMrDescription, savedMrDescription } from "./mrDescription.ts";
@@ -12284,37 +12284,6 @@ export class TaskService {
     const module = task.summary.business_module
       ?? this.tasks.get(task.summary.parent_task_id ?? "")?.summary.business_module;
     return resolveModuleMrParticipants(this.options.dataDir, module?.id, repository);
-  }
-
-  private mrParticipantUpdates = new Map<string, Promise<TaskSummary>>();
-
-  retryMrParticipants(id: string): Promise<TaskSummary> {
-    const active = this.mrParticipantUpdates.get(id);
-    if (active) return active;
-    const task = this.tasks.get(id);
-    if (!task) throw new NotFoundError(`任务 ${id} 不存在`);
-    const delivery = task.summary.delivery;
-    const repo = task.summary.repo_url;
-    const platformUrl = this.effectivePlatformUrl();
-    if (!delivery?.mr_url || !repo || !platformUrl || delivery.mr_participants?.status !== "failed") {
-      throw new TaskControlError("当前没有需要重试的 MR 人员设置");
-    }
-    if (["completed", "canceled"].includes(task.summary.status)
-        || ["merged", "closed", "已合入", "已关闭"].includes(delivery.mr_state ?? "")) {
-      throw new TaskControlError("交付已结束，不能重新设置 MR 人员");
-    }
-    const work = updateMergeRequestParticipants({ platformUrl, repo, mr: delivery.mr_id ?? delivery.mr_url,
-      participants: delivery.mr_participants.requested,
-      credential: this.options.gitCredential?.(task.summary.luban_account),
-    }).then(result => {
-      const current = task.summary.delivery;
-      if (!current || current.mr_url !== delivery.mr_url) throw new TaskControlError("MR 已变化，请刷新任务后重试");
-      current.mr_participants = result;
-      this.persist(task);
-      return this.get(id)!;
-    }).finally(() => this.mrParticipantUpdates.delete(id));
-    this.mrParticipantUpdates.set(id, work);
-    return work;
   }
 
   /** 用户主动纠正 AR：一次程序化迁移，不调用模型、不追加检视或验证。 */

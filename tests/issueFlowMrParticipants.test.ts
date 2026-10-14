@@ -1,15 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingHttpHeaders } from "node:http";
-import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
 import { createIssueTools } from "../src/issueFlow/tools.ts";
 import { MockDtsGateway } from "../src/issueFlow/gateways.ts";
 import { saveState, type IssueSessionState } from "../src/issueFlow/state.ts";
-import { IssueFlowService } from "../src/issueFlow/service.ts";
-import { handleIssueRoutes, type IssueViewer } from "../src/issueFlow/routes.ts";
 import type { MrParticipants } from "../src/mrParticipants.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
@@ -175,87 +172,3 @@ for (const finished of ["closed_at", "merged_at"] as const) {
     }
   });
 }
-
-function retryRoute(service: IssueFlowService, viewer?: IssueViewer, repo = REPOS[0]) {
-  return new Promise<{ status: number; body: any }>((resolve, reject) => {
-    const request = new EventEmitter() as any;
-    request.method = "POST";
-    request.url = "/issues/issue-mr/mr-participants";
-    let status = 0;
-    void handleIssueRoutes(request, {
-      writeHead: (value: number) => { status = value; },
-      end: (body: string) => resolve({ status, body: JSON.parse(body) }),
-    } as any, ["issues", "issue-mr", "mr-participants"], {
-      issueFlow: service, authEnabled: true, viewer,
-    }).catch(reject);
-    request.emit("data", Buffer.from(JSON.stringify({ repo })));
-    request.emit("end");
-  });
-}
-
-test("问题 MR 补设接口：仅责任人可操作，失败静默保存，归档后仍可独立补设且不唤醒 Agent", async () => {
-  let attempts = 0;
-  const remote = await platform(() => ({ body: attempts++ === 0 ? { status: "failed", message: "无人员配置权限" } : { status: "applied" } }));
-  const testCase = fixture(remote.url);
-  const state = testCase.state;
-  state.status = "archived";
-  state.conclusion = { kind: "delivered", summary: "修复已交付", at: state.updated_at };
-  state.mrs = [{ repo: REPOS[0], branch: state.pushes![0].branch, target: "master", title: "修复",
-    url: "https://codehub.example/team/front/merge_requests/9", iid: "9", at: state.updated_at,
-    participants: { status: "failed", requested: PEOPLE, message: "权限不足" } }];
-  const workspace = join(testCase.dir, "issues", state.id);
-  saveState(workspace, state);
-  let identity: string | undefined;
-  const service = new IssueFlowService({
-    dataDir: testCase.dir, provider: "test", model: "test", modelsJson: {}, platformUrl: remote.url,
-    gitCredential: account => {
-      identity = account;
-      return { username: account, password: "owner-token", email: "owner@example.com" };
-    },
-  });
-  try {
-    assert.equal((await retryRoute(service)).status, 401);
-    for (const viewer of [{ username: "reporter1" }, { username: "peer" }, { username: "owner1", role: "admin" }]) {
-      assert.equal((await retryRoute(service, viewer)).status, 403);
-    }
-    assert.equal(remote.seen.length, 0, "未授权请求不能触及 CodeHub");
-    const owner = { username: "owner1", role: "developer" };
-    assert.equal((await retryRoute(service, owner, REPOS[1])).status, 409);
-    assert.equal((await retryRoute(service, owner, "")).status, 409);
-    const mr = service.session(state.id).state.mrs![0];
-    for (const finished of ["merged_at", "closed_at"] as const) {
-      mr[finished] = state.updated_at;
-      assert.equal((await retryRoute(service, owner)).status, 409);
-      delete mr[finished];
-    }
-    assert.equal(remote.seen.length, 0);
-    updateBusinessModule(testCase.dir, "module-a", {
-      mr_participants: { reviewers: ["new-person"], approval_approvers: [] },
-    }, "owner1");
-    const transitions = structuredClone(service.session(state.id).state.transitions ?? []);
-    const failed = await retryRoute(service, owner);
-    assert.equal(failed.status, 200);
-    assert.equal(failed.body.mrs[0].participants.status, "failed");
-    assert.equal(failed.body.mrs[0].participants.message, "无人员配置权限");
-    assert.deepEqual(service.session(state.id).state.transitions ?? [], transitions, "失败不新增时间线或给 Agent 的提示");
-    const result = await retryRoute(service, owner, REPOS[0].replace(/\.git$/, ""));
-    assert.equal(result.status, 200);
-    assert.equal(result.body.status, "archived");
-    assert.equal(result.body.mrs[0].participants.status, "applied");
-    assert.deepEqual(remote.seen.map(entry => entry.path), ["/mr/participants", "/mr/participants"]);
-    assert.deepEqual(remote.seen[0].body, { repo: REPOS[0], mr: "9", participants: PEOPLE });
-    assert.equal(identity, "owner1");
-    const saved = JSON.parse(readFileSync(join(workspace, "issue.json"), "utf-8"));
-    assert.equal(saved.mrs[0].participants.status, "applied");
-    assert.equal(saved.status, "archived");
-    assert.equal(saved.stage, "mr_green");
-    assert.equal(saved.parked_notices, undefined);
-    assert.equal(saved.pipelines, undefined);
-    assert.equal(service.hasRunningContainer(state.id), false);
-    assert.equal((await retryRoute(service, owner)).status, 409, "成功后不再次同步人员");
-    assert.equal(remote.seen.length, 2);
-  } finally {
-    await service.shutdown();
-    await remote.stop();
-  }
-});

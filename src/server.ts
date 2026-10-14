@@ -2338,15 +2338,6 @@ export function createTaskServer(
           try { return json(response, 200, service.setBusinessModule(id, body.module_id, viewer?.username ?? "本地部署")); }
           catch (error) { return json(response, 400, { error: humanError(error) }); }
         }
-        if (request.method === "POST" && parts.length === 3 && parts[2] === "mr-participants") {
-          const task = service.get(id);
-          if (!task) return json(response, 404, { error: "任务不存在" });
-          if (options.auth && viewer?.username !== task.luban_account) {
-            return json(response, 403, { error: "只有任务责任人可以重试 MR 人员设置" });
-          }
-          try { return json(response, 200, await service.retryMrParticipants(id)); }
-          catch (error) { return json(response, 400, { error: humanError(error) }); }
-        }
         if (request.method === "GET" && parts.length === 2) {
           const task = service.getAsync ? await service.getAsync(id) : service.get(id);
           if (!task) return json(response, 404, { error: `任务 ${id} 不存在` });

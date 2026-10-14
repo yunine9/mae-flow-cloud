@@ -35,9 +35,8 @@ export class KnowledgeSourceCleanup {
       return;
     }
     if (action !== "publish") throw new Error("未知清理操作");
-    if (input.target_id !== undefined && (typeof input.target_id !== "string" || !state.repositories.some(target => target.id === input.target_id)
-      || !state.publications.some(publication => publication.target_id === input.target_id && publication.url && publication.mr_participants?.status === "failed"))) {
-      throw new Error("所选清理 MR 没有待重试的人员设置");
+    if (input.target_id !== undefined && (typeof input.target_id !== "string" || !state.repositories.some(target => target.id === input.target_id))) {
+      throw new Error("清理目标不存在");
     }
     // 先校验整批选择再进行外部操作，不能前一个仓推送后才发现后一个仓的输入无效。
     for (const target of state.repositories) {
@@ -52,7 +51,7 @@ export class KnowledgeSourceCleanup {
       signal.throwIfAborted();
       const plan = state.plans.find(plan => plan.target_id === target.id)!;
       const previous = state.publications.find(publication => publication.target_id === target.id);
-      if ((previous?.url && previous.mr_participants?.status !== "failed") || !plan.selected_paths!.length) continue;
+      if (previous?.url || !plan.selected_paths!.length) continue;
       const persist = (publication: KnowledgeCleanupPublication) => {
         signal.throwIfAborted();
         state.publications = [...state.publications.filter(item => item.target_id !== target.id), structuredClone(publication)]; save();
@@ -62,8 +61,7 @@ export class KnowledgeSourceCleanup {
         signal.throwIfAborted();
         const latest = state.publications.find(publication => publication.target_id === target.id);
         const message = error instanceof Error ? error.message : "清理 MR 创建失败";
-        persist(latest?.url && latest.state === "opened" ? { ...latest,
-          ...(latest.mr_participants?.status === "failed" ? { mr_participants: { ...latest.mr_participants, message } } : {}) }
+        persist(latest?.url && latest.state === "opened" ? latest
           : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: plan.selected_paths!, branch: "", documents: [], ...latest,
             state: "failed", error: message });
       }

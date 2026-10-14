@@ -55,7 +55,6 @@ import {
  *   POST /issues/:id/repos            → 调整会话仓清单(#241;只校验+
  *                                      留痕+发送通知,清单由 Agent 经
  *                                      pull_repo/remove_repo 执行后变化)
- *   POST /issues/:id/mr-participants → 重试已有 MR 的人员设置，不重跑交付
  *   POST /issues/:id/environment      → 网管环境配置(env_needed 闸的
  *                                      作答口;decline:true=拒绝,票 93;
  *                                      environment_id=台账快照,#150)
@@ -1111,14 +1110,6 @@ export async function handleIssueRoutes(
         ...(selection ? { selection } : {}),
         ...(body.notes !== undefined ? { notes: String(body.notes) } : {}),
       }));
-    }
-
-    if (method === "POST" && parts[2] === "mr-participants" && parts.length === 3) {
-      if (viewer?.role === "admin" || !brief || !own(brief.account)) {
-        return done(403, { error: "只有问题责任人能补设 MR 人员" });
-      }
-      const body = await readBody(request);
-      return done(200, await issueFlow.retryMrParticipants(id, String(body.repo ?? "")));
     }
 
     // 会话仓清单调整(#241,元信息页签的仓编辑器):设计裁定=端点不直

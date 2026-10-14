@@ -24,7 +24,6 @@ async function fixture() {
   git("-C", source, "init", "-b", "main"); git("-C", source, "config", "user.name", "Fixture"); git("-C", source, "config", "user.email", "alice@example.test");
   writeFileSync(join(source, "code.ts"), "原有代码\n"); git("-C", source, "add", "."); git("-C", source, "commit", "-m", "fixture"); git("clone", "--bare", source, remote);
   const requests: string[] = [], mrs: Array<{ id: number; url: string; source_branch: string; target_branch: string }> = [], inputs: Array<{ title: string; dts_no: string; participants?: MrParticipants }> = [];
-  const updates: Array<{ repo: string; mr: string | number; participants: MrParticipants; username: string; token: string }> = [];
   const saves: DomainPublication[] = [], createSnapshots: Array<DomainPublication | undefined> = [];
   const response = { disconnectCreate: false, gates: "opened", participantStatus: "applied" as "applied" | "failed" };
   const server = createServer(async (request, res) => {
@@ -33,11 +32,6 @@ async function fixture() {
       res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ mrs: mrs.filter(mr => mr.source_branch === url.searchParams.get("source_branch") && mr.target_branch === url.searchParams.get("target_branch")) })); return;
     }
     if (url.pathname === "/mr/gates") { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ mr_state: response.gates, gates: [] })); return; }
-    if (url.pathname === "/mr/participants") {
-      let text = ""; for await (const chunk of request) text += chunk;
-      const input = JSON.parse(text); updates.push({ ...input, username: String(request.headers["x-mfc-git-user"]), token: String(request.headers["x-mfc-git-token"]) });
-      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ status: response.participantStatus, requested: input.participants })); return;
-    }
     if (url.pathname !== "/mr") { res.writeHead(404); res.end("{}"); return; }
     let text = ""; for await (const chunk of request) text += chunk;
     const input = JSON.parse(text), mr = { id: mrs.length + 1, url: `https://example.test/mr/${mrs.length + 1}`, source_branch: input.source_branch, target_branch: input.target_branch };
@@ -59,7 +53,7 @@ async function fixture() {
   const publisher = new KnowledgeMrPublisher({ dataDir: dir, platformUrl: () => `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     credential: () => ({ username: "alice", password: "fixture-personal-token", email: "alice@example.test" }) });
   let saved: DomainPublication | undefined;
-  return { dir, job, target, formal, publisher, response, requests, mrs, inputs, updates, saves, createSnapshots, git, remote,
+  return { dir, job, target, formal, publisher, response, requests, mrs, inputs, saves, createSnapshots, git, remote,
     save: (publication: DomainPublication) => { saved = structuredClone(publication); saves.push(saved); }, last: () => saved!,
     async close() { await bounded(publisher.shutdown(), "手动归档发布器未停止"); server.closeAllConnections(); await bounded(new Promise<void>(resolve => server.close(() => resolve())), "手动归档HTTP夹具未关闭"); rmSync(dir, { recursive: true, force: true }); } };
 }
@@ -94,7 +88,7 @@ test("生产线验收6/14：人工重试MR回执丢失时discover原分支只取
     assert.equal(recovered.branch, attempted.branch); assert.equal(recovered.url, f.mrs[0].url); assert.equal(recovered.mr_id, f.mrs[0].id);
     assert.equal(f.requests.filter(path => path === "/mr").length, 1); assert.equal(f.requests.filter(path => path === "/mr/discover").length, 1);
     assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0, "旧MR即使已经关闭，人工失败恢复也只登记已创建的真实回执");
-    assert.equal(recovered.mr_participants, undefined); assert.equal(f.updates.length, 0);
+    assert.equal(recovered.mr_participants, undefined); assert.ok(!f.requests.includes("/mr/participants"));
     assert.equal(readFileSync(path, "utf8"), before);
   } finally { await f.close(); }
 });
@@ -144,7 +138,7 @@ test("生产线验收6/14：同一物理仓和分支的多个逻辑目标一次M
   } finally { await f.close(); }
 });
 
-const modulePeople: MrParticipants = { reviewers: ["reviewer"], approval_approvers: ["approver"] };
+const modulePeople: MrParticipants = { reviewers: ["l00899311"], approval_approvers: ["a00123456"] };
 function bindModule(f: Awaited<ReturnType<typeof fixture>>) {
   const module = createBusinessModule(f.dir, { id: "orders", name: "订单", description: "订单代码模块", owner: "alice",
     repositories: ["https://example.test/orders-code.git"], mr_participants: modulePeople }, "alice");
@@ -152,7 +146,7 @@ function bindModule(f: Awaited<ReturnType<typeof fixture>>) {
   return module;
 }
 
-test("知识归档沿用所属模块人员，人员失败保持opened，配置变化后仅按原名单补设", { timeout: 20_000 }, async () => {
+test("知识归档创建时传模块人员，失败保留opened，配置变化后已有MR不追补", { timeout: 20_000 }, async () => {
   const f = await fixture(); bindModule(f); f.response.participantStatus = "failed";
   try {
     const first = await bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "归档创建超时");
@@ -162,21 +156,20 @@ test("知识归档沿用所属模块人员，人员失败保持opened，配置�
     assert.equal(f.createSnapshots[0]?.mr_participants?.status, "failed", "发出创建请求前保存尚未确认状态");
     assert.deepEqual(f.createSnapshots[0]?.mr_participants?.requested, modulePeople);
     updateBusinessModule(f.dir, "orders", { mr_participants: { reviewers: ["new-reviewer"], approval_approvers: [] } }, "alice");
-    renameSync(f.remote, `${f.remote}.offline`); // 若补设仍进入 Git，已不可用的远端会使测试失败。
+    renameSync(f.remote, `${f.remote}.offline`); // 复用已有 MR 不应再操作 Git。
     f.response.participantStatus = "applied";
-    const next = await bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "人员补设超时");
+    const next = await bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "MR 复用超时");
     assert.equal(next.state, "opened"); assert.equal(next.url, first.url); assert.equal(next.revision, first.revision);
-    assert.equal(next.mr_participants?.status, "applied"); assert.deepEqual(next.mr_participants?.requested, modulePeople);
-    assert.deepEqual(f.updates, [{ repo: f.remote, mr: first.mr_id!, participants: modulePeople, username: "alice", token: "fixture-personal-token" }]);
+    assert.deepEqual(next.mr_participants, first.mr_participants);
     assert.equal(f.mrs.length, 1); assert.equal(f.requests.filter(path => path === "/mr").length, 1);
     await f.publisher.publish(f.job, f.target, next, "alice", f.save);
     const legacy = { ...next }; delete legacy.mr_participants;
     await f.publisher.publish(f.job, f.target, legacy, "alice", f.save);
-    assert.equal(f.updates.length, 1, "已成功或未记录人员的旧 MR 不重新套用模块配置");
+    assert.deepEqual(f.requests, ["/mr"], "失败或未记录人员的旧 MR 都不重新套用模块配置");
   } finally { await f.close(); }
 });
 
-test("知识归档回执丢失后保留冻结名单，discover保存链接再独立补设，不再操作Git", { timeout: 20_000 }, async () => {
+test("知识归档回执丢失后discover只恢复链接和原人员记录，不更新人员或操作Git", { timeout: 20_000 }, async () => {
   const f = await fixture(); bindModule(f); f.response.disconnectCreate = true;
   try {
     await assert.rejects(bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "归档失败未返回"), /MR.*尚未确认|暂时故障/);
@@ -185,14 +178,14 @@ test("知识归档回执丢失后保留冻结名单，discover保存链接再独
     updateBusinessModule(f.dir, "orders", { mr_participants: { reviewers: ["new-reviewer"], approval_approvers: [] } }, "alice");
     renameSync(f.remote, `${f.remote}.offline`); f.response.disconnectCreate = false;
     const result = await bounded(f.publisher.publish(f.job, f.target, previous, "alice", f.save), "归档恢复超时");
-    assert.equal(result.mr_participants?.status, "applied"); assert.deepEqual(result.mr_participants?.requested, modulePeople);
-    assert(f.saves.some(saved => saved.url === result.url && saved.mr_participants?.status === "failed"), "补设前先保存已经发现的MR和原失败快照");
-    assert.deepEqual(f.requests, ["/mr", "/mr/discover", "/mr/participants"]);
-    assert.equal(f.updates.length, 1); assert.equal(f.mrs.length, 1);
+    assert.equal(result.state, "opened"); assert.equal(result.url, f.mrs[0].url);
+    assert.deepEqual(result.mr_participants, previous.mr_participants);
+    assert.deepEqual(f.requests, ["/mr", "/mr/discover"]);
+    assert.equal(f.mrs.length, 1);
   } finally { await f.close(); }
 });
 
-test("知识清理MR使用模块人员，重试同计划只补设原名单，成功后不重复更新", { timeout: 20_000 }, async () => {
+test("知识清理MR创建时传模块人员，重试同计划只复用链接，不更新人员", { timeout: 20_000 }, async () => {
   const f = await fixture(); bindModule(f); f.response.participantStatus = "failed";
   try {
     const plan = await f.publisher.previewCleanup(f.target, ["code.ts"], "alice");
@@ -202,11 +195,28 @@ test("知识清理MR使用模块人员，重试同计划只补设原名单，成
     assert.deepEqual(f.createSnapshots[0]?.mr_participants?.requested, modulePeople);
     updateBusinessModule(f.dir, "orders", { mr_participants: { reviewers: ["new-reviewer"], approval_approvers: [] } }, "alice");
     renameSync(f.remote, `${f.remote}.offline`); f.response.participantStatus = "applied";
-    const next = await bounded(f.publisher.publishCleanup(f.job, f.target, plan, ["code.ts"], first, "alice", f.save), "清理人员补设超时");
+    const next = await bounded(f.publisher.publishCleanup(f.job, f.target, plan, ["code.ts"], first, "alice", f.save), "清理MR复用超时");
     assert.equal(next.state, "opened"); assert.equal(next.url, first.url); assert.equal(next.revision, first.revision);
-    assert.deepEqual(f.updates[0].participants, modulePeople); assert.equal(next.mr_participants?.status, "applied");
+    assert.deepEqual(next.mr_participants, first.mr_participants);
     await f.publisher.publishCleanup(f.job, f.target, plan, ["code.ts"], next, "alice", f.save);
-    assert.equal(f.updates.length, 1); assert.equal(f.mrs.length, 1);
+    assert.deepEqual(f.requests, ["/mr"]); assert.equal(f.mrs.length, 1);
+  } finally { await f.close(); }
+});
+
+test("知识清理MR回执丢失后discover只复用链接，不重删文件或更新人员", { timeout: 20_000 }, async () => {
+  const f = await fixture(); bindModule(f); f.response.disconnectCreate = true;
+  try {
+    const plan = await f.publisher.previewCleanup(f.target, ["code.ts"], "alice");
+    await assert.rejects(bounded(f.publisher.publishCleanup(f.job, f.target, plan, ["code.ts"], undefined, "alice", f.save), "清理失败未返回"), /MR.*尚未确认|暂时故障/);
+    const previous = f.last() as Awaited<ReturnType<KnowledgeMrPublisher["publishCleanup"]>>;
+    assert.equal(previous.mr_participants?.status, "failed");
+    renameSync(f.remote, `${f.remote}.offline`); f.response.disconnectCreate = false;
+    const original = structuredClone(previous);
+    const result = await bounded(f.publisher.publishCleanup(f.job, f.target, plan, ["code.ts"], previous, "alice", f.save), "清理恢复超时");
+    assert.equal(result.state, "opened"); assert.equal(result.url, f.mrs[0].url);
+    assert.equal(result.revision, original.revision); assert.deepEqual(result.removed_paths, original.removed_paths);
+    assert.deepEqual(result.mr_participants, original.mr_participants);
+    assert.deepEqual(f.requests, ["/mr", "/mr/discover"]); assert.equal(f.mrs.length, 1);
   } finally { await f.close(); }
 });
 
@@ -215,6 +225,6 @@ test("知识任务未绑定模块时不推断默认人员", { timeout: 20_000 },
   try {
     const result = await bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "未绑定模块归档超时");
     assert.equal(f.inputs[0].participants, undefined); assert.equal(result.mr_participants, undefined);
-    assert.equal(f.updates.length, 0);
+    assert.deepEqual(f.requests, ["/mr"]);
   } finally { await f.close(); }
 });
