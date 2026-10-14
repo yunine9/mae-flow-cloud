@@ -24,17 +24,19 @@ async function legacy(root: string, options: { batch?: "failed" | "done"; dirty?
   createBusinessModule(root, { id: moduleId, name: moduleName, description: "无线产品规则", owner: "user", repositories: [repo.repository] }, "user");
   const domainPath = `domains/${moduleId}/README.md`, repoPath = `docs/knowledge/${moduleId}/${repo.name}/docs/module-map.md`;
   const initial = new DomainKnowledgeExtraction(root, async input => {
-    input.save({ id: "domain", title: moduleId, target_id: "domain", path: domainPath, layer: "domain", content: "# 已完成领域研究", sources: "已确认资料" });
-    input.save({ id: "map", title: "模块索引", target_id: "repo-1", path: repoPath, layer: "repository", content: "# 已完成仓内研究", sources: "源码" });
+    const targets = [input.job.knowledge_target, ...input.job.repositories];
+    input.save({ id: "domain", title: moduleId, target_id: "domain", path: `${targets.find(target => target.id === "domain")!.docs_path}/README.md`, layer: "domain", content: "# 已完成领域研究", sources: "已确认资料" });
+    input.save({ id: "map", title: "模块索引", target_id: "repo-1", path: `${targets.find(target => target.id === "repo-1")!.docs_path}/module-map.md`, layer: "repository", content: "# 已完成仓内研究", sources: "源码" });
     return "完成";
   });
   const created = await done(initial, initial.create({ issue_no: "REQ-readable", title: "旧研究任务", scope: "业务规则", repositories: [repo], knowledge_target: domain }, "user").id);
   await initial.shutdown();
   const file = join(root, "domain-extraction", created.id, "job.json"), stored: DomainKnowledgeJob = JSON.parse(readFileSync(file, "utf8"));
   stored.module_id = moduleId; stored.knowledge_layout = options.dirty ? "repository-v1" : "module-v1";
-  stored.knowledge_target.docs_path = options.dirty ? `domains/${moduleName}` : `domains/${moduleId}`;
-  stored.repositories[0].docs_path = options.dirty ? "." : `docs/knowledge/${moduleId}`;
+  stored.knowledge_target.docs_path = options.dirty ? `docs/${moduleName}` : `domains/${moduleId}`;
+  stored.repositories[0].docs_path = options.dirty ? `docs/${moduleName}` : `docs/knowledge/${moduleId}`;
   for (const document of stored.documents) {
+    document.path = document.target_id === "domain" ? domainPath : repoPath;
     const target = document.target_id === "domain" ? stored.knowledge_target : stored.repositories[0];
     const formal = saveKnowledgeDocument(root, { title: document.title, content: document.content, scope: "module", module_ids: [moduleId],
       archive_target: { repository: target.repository, branch: target.branch, path: document.path },
@@ -61,8 +63,8 @@ test("旧 module-v1 发布自动按真实业务名整理，不重做研究且旧
     assert.equal(before.module_name, moduleName); assert.equal(JSON.parse(readFileSync(original.file, "utf8")).module_name, undefined);
     await service.publish(before.id, "user", { expected_revisions: { domain: 1, map: 1 } });
     const job = service.get(before.id);
-    assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(job.knowledge_target.docs_path, `domains/${moduleName}`); assert.equal(job.repositories[0].docs_path, ".");
-    assert.deepEqual(job.documents.map(document => document.path), [`domains/${moduleName}/README.md`, "docs/module-map.md"]);
+    assert.equal(job.knowledge_layout, "directory-v1"); assert.equal(job.knowledge_target.docs_path, `docs/${moduleName}`); assert.equal(job.repositories[0].docs_path, `docs/${moduleName}`);
+    assert.deepEqual(job.documents.map(document => document.path), [`docs/${moduleName}/README.md`, `docs/${moduleName}/module-map.md`]);
     assert.equal(job.documents[0].title, moduleName); assert.equal(job.documents[0].content, "# 已完成领域研究");
     assert.deepEqual(job.documents.map(document => document.knowledge_document_id), before.documents.map(document => document.knowledge_document_id));
     assert.deepEqual(job.turns, before.turns); assert.equal(job.status, "done");
@@ -84,15 +86,16 @@ for (const batch of [undefined, "done"] as const) test(`旧已发布任务直接
   try {
     const preview = service.previewArchive(original.stored.id), before = service.get(original.stored.id);
     assert.ok(preview.actions.some(action => action.id === "create-archive"));
-    assert.match(preview.message, /归档时会把已发布文稿整理/);
+    assert.match(preview.message, /归档时自动整理已确认成果的目录和链接/);
     assert.deepEqual(service.get(before.id), before, "预览不持久化迁移");
     await assert.rejects(service.createArchive(before.id, { issue_no: "REQ-readable", expected_revisions: {} }, "user"), /正式知识版本已变化/);
     assert.deepEqual(service.get(before.id), before);
     for (const document of before.documents) assert.equal(readKnowledgeDocument(root, document.knowledge_document_id!).revision, document.published_revision);
     await service.createArchive(before.id, { issue_no: "REQ-readable", expected_revisions: preview.expected_revisions }, "user");
     const job = service.get(before.id);
-    assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(archived.length, 2);
-    assert.ok(archived.every(snapshot => snapshot.knowledge_layout === "repository-v1"));
+    assert.equal(job.knowledge_layout, "directory-v1"); assert.equal(archived.length, 2);
+    assert.ok(archived.every(snapshot => snapshot.knowledge_layout === "directory-v1"));
+    assert.deepEqual(job.documents.map(document => document.path), [`docs/${moduleName}/README.md`, `docs/${moduleName}/module-map.md`]);
     assert.ok(job.documents.every(document => !document.path.includes(moduleId) && document.published_document_revision === document.revision));
     assert.deepEqual(job.turns, before.turns); assert.equal(readFileSync(original.workFile, "utf8"), original.work);
     assert.equal(closed.length, batch ? 2 : 0);
@@ -119,10 +122,10 @@ test("目标已可读但旧正文路径仍有编号时继续修复，二次发�
   const service = new DomainKnowledgeExtraction(root, async () => "重新萃取完成");
   try {
     await service.publish(original.stored.id, "user"); const job = service.get(original.stored.id);
-    assert.deepEqual(job.documents.map(document => document.path), [`domains/${moduleName}/README.md`, "docs/module-map.md"]);
+    assert.deepEqual(job.documents.map(document => document.path), [`docs/${moduleName}/README.md`, `docs/${moduleName}/module-map.md`]);
     await service.publish(job.id, "user"); assert.deepEqual(service.get(job.id).documents, job.documents);
     const next = await done(service, service.reextract(job.id, "user").id);
-    assert.equal(next.knowledge_layout, "repository-v1"); assert.equal(next.knowledge_target.docs_path, `domains/${moduleName}`); assert.equal(next.repositories[0].docs_path, ".");
+    assert.equal(next.knowledge_layout, "directory-v1"); assert.equal(next.knowledge_target.docs_path, `docs/${moduleName}`); assert.equal(next.repositories[0].docs_path, `docs/${moduleName}`);
     assert.deepEqual(next.source_repositories, original.stored.source_repositories);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
@@ -132,10 +135,10 @@ test("直接重新萃取旧 module-v1 及新任务继承的全局编号目录都
   const service = new DomainKnowledgeExtraction(root, async () => "完成");
   try {
     const next = await done(service, service.reextract(original.stored.id, "user").id);
-    assert.equal(next.knowledge_layout, "repository-v1"); assert.equal(next.knowledge_target.docs_path, `domains/${moduleName}`); assert.equal(next.repositories[0].docs_path, ".");
+    assert.equal(next.knowledge_layout, "directory-v1"); assert.equal(next.knowledge_target.docs_path, `docs/${moduleName}`); assert.equal(next.repositories[0].docs_path, `docs/${moduleName}`);
     saveKnowledgeRepoConfig(root, domain.repository, { branch: "master", docs_path: `domains/${moduleId}` });
     const global = service.create({ title: "全局知识", scope: "资料", repositories: [], issue_no: "REQ-global" }, "user");
-    assert.equal(global.knowledge_target.docs_path, "domains/全局知识"); assert.equal(global.knowledge_layout, "repository-v1");
+    assert.equal(global.knowledge_target.docs_path, "docs/全局知识"); assert.equal(global.knowledge_layout, "directory-v1");
     const explicit = service.create({ module_id: moduleId, knowledge_target: { ...domain, docs_path: `teams/${moduleId}` }, issue_no: "REQ-explicit" }, "user");
     assert.equal(explicit.knowledge_target.docs_path, `teams/${moduleName}`);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
@@ -148,10 +151,12 @@ for (const explicit of [false, true]) test(`旧页面${explicit ? "传模块整�
     let job = service.get(original.stored.id);
     job = service.configureArchive(job.id, { base_revision: job.archive_revision ?? 0, ...(explicit ? { use_module_layout: true } : {}),
       targets: explicit ? [job.knowledge_target, ...job.repositories] : [{ ...job.repositories[0], branch: "release" }] });
-    assert.equal(job.knowledge_layout, "repository-v1"); assert.equal(job.knowledge_target.docs_path, `domains/${moduleName}`);
-    assert.deepEqual(job.documents.map(document => document.path), [`domains/${moduleName}/README.md`, "docs/module-map.md"]);
+    assert.equal(job.knowledge_layout, "directory-v1"); assert.equal(job.knowledge_target.docs_path, `docs/${moduleName}`);
+    assert.deepEqual(job.documents.map(document => document.path), [`docs/${moduleName}/README.md`, `docs/${moduleName}/module-map.md`]);
+    assert.equal(job.production!.archive.visible, true, "仅调整已确认文稿的路径后仍可直接归档");
+    assert.ok(service.previewArchive(job.id).actions.some(action => action.id === "create-archive"));
     job = service.configureArchive(job.id, { base_revision: job.archive_revision, use_repository_layout: true, targets: [{ ...job.repositories[0], docs_path: "custom" }] });
     await service.publish(job.id, "user");
-    assert.equal(service.get(job.id).repositories[0].docs_path, "custom"); assert.equal(service.get(job.id).documents[1].path, "custom/docs/module-map.md");
+    assert.equal(service.get(job.id).repositories[0].docs_path, "docs/custom"); assert.equal(service.get(job.id).documents[1].path, "docs/custom/module-map.md");
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });

@@ -7,6 +7,11 @@ export interface DomainWorkDocument { id: string; title: string; content: string
 export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
+export interface DomainArchiveTargetsPreview {
+  targets: KnowledgeRepository[];
+  documents: Array<Pick<DomainDocumentContent, "id" | "title" | "target_id" | "path">>;
+  archive_revision: number;
+}
 export interface DomainDocument extends DomainDocumentContent {
   research_turn_id?: string;
   human_edited?: boolean;
@@ -54,12 +59,14 @@ export interface DomainPublication {
   mr_participants?: MrParticipantsResult;
   documents: Array<{ id: string; path: string; content: string; revision: number; deleted?: boolean; base_content?: string | null; knowledge_document_id?: string; knowledge_revision?: string }>;
   attempted_documents?: DomainPublication["documents"];
+  /** 平台生成的 Git 导航入口，用精确正文识别后续目录变更的旧文件。 */
+  navigation_files?: Array<{ path: string; content: string }>;
   updated_at?: string;
 }
 export interface DomainArchiveBatch {
   id: string; created_at: string; operator: string; state: "pending" | "running" | "done" | "failed" | "superseded";
   /** 批次按创建时的目录规则重试；历史批次缺省为旧布局。 */
-  knowledge_layout?: "module-v1" | "repository-v1";
+  knowledge_layout?: "module-v1" | "repository-v1" | "directory-v1";
   documents: DomainDocument[]; targets: KnowledgeRepository[]; issue_no?: string; issue_description?: string;
   publications: DomainPublication[]; error?: string;
   /** 新 MR 全部创建成功后撤销旧 MR；每份回执独立保存，重试不重复创建。 */
@@ -93,8 +100,8 @@ export interface DomainKnowledgeJob {
   work_documents?: Array<DomainWorkDocument & { turn_id: string }>;
   deletion?: import("./knowledgeProductionTypes").KnowledgeDomainDeletionView;
   id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
-  /** 归档路径规则随任务及批次固定；repository-v1 使用用户选择的仓根相对位置。 */
-  knowledge_layout?: "module-v1" | "repository-v1";
+  /** 归档路径规则随任务及批次固定；directory-v1 将文稿集中在各目标的最终目录内。 */
+  knowledge_layout?: "module-v1" | "repository-v1" | "directory-v1";
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
   instructions?: string;
   component_research_id?: string; technologies?: string[];

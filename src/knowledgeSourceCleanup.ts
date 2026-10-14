@@ -11,7 +11,7 @@ export class KnowledgeSourceCleanup {
     if (!state || state.started) throw new Error("当前任务不在萃取前清理阶段");
     const values = action === "preview" ? input.paths_by_target : input.selected_paths_by_target;
     if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("请提供各仓的清理路径");
-    if (job.knowledge_layout === "repository-v1") {
+    if (job.knowledge_layout === "repository-v1" || job.knowledge_layout === "directory-v1") {
       for (const target of state.repositories) {
         const paths = values[target.id] ?? (action === "preview" ? [] : undefined);
         if (!Array.isArray(paths)) throw new Error("请提供各仓的清理路径");
@@ -19,6 +19,7 @@ export class KnowledgeSourceCleanup {
         for (const value of [...paths, ...planned]) {
           const path = knowledgeRelativePath(value, true);
           if (/(^|\/)agents\.md$/i.test(path)) throw new Error("统一 AGENTS.md 入口由归档维护，请只选择要清理的知识文稿文件");
+          if (job.knowledge_layout === "directory-v1" && !path.startsWith(`${target.docs_path}/`)) throw new Error(`只能清理归档目录 ${target.docs_path}/ 内的知识文稿`);
         }
       }
     }
@@ -41,7 +42,7 @@ export class KnowledgeSourceCleanup {
       for (const target of state.repositories) {
         if (state.publications.some(publication => publication.target_id === target.id && (publication.url || publication.revision || publication.mr_attempted))) throw new Error("清理分支已经推送，请先完成原清理 MR");
         const plan = await this.publisher.previewCleanup(target, values[target.id] ?? [], operator, signal);
-        if (job.knowledge_layout === "repository-v1" && plan.entries.some(entry => !plan.paths.includes(entry.path))) {
+        if ((job.knowledge_layout === "repository-v1" || job.knowledge_layout === "directory-v1") && plan.entries.some(entry => !plan.paths.includes(entry.path))) {
           throw new Error("共享仓清理须逐项填写知识文稿文件路径，不能填写目录");
         }
         plans.push(plan);

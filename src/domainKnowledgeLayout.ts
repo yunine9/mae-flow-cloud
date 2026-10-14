@@ -11,9 +11,42 @@ export function needsModuleKnowledgeLayout(job: Pick<DomainKnowledgeJob, "module
   // 已确认删除须按原位置删除 Git 文件，不能迁往一个从未归档的新路径。
   if (job.documents?.length && job.documents.every(document => document.deleted && document.knowledge_document_id
     && document.published_document_revision === document.revision)) return false;
-  return !job.component_research_id && (!!job.module_id && job.knowledge_layout !== "repository-v1"
+  return !job.component_research_id && (job.knowledge_layout !== "directory-v1"
     || [job.knowledge_target, ...job.repositories ?? []].some(target => target && hasOpaqueModuleDirectory(target.docs_path))
-    || job.documents?.some(document => !document.deleted && hasOpaqueModuleDirectory(document.archive_path ?? document.path)) === true);
+    || job.repositories?.some(target => target.docs_path === "." || !target.docs_path.startsWith("docs/")) === true
+    || job.documents?.some(document => {
+      if (document.deleted) return false;
+      const target = [job.knowledge_target, ...job.repositories ?? []].find(target => target?.id === document.target_id);
+      const path = document.archive_path ?? document.path;
+      return hasOpaqueModuleDirectory(path) || !!target && !path.startsWith(`${target.docs_path}/`);
+    }) === true);
+}
+
+/** 最终目录：代码仓集中在 docs 的业务子目录，领域仓使用用户选择的相对目录。 */
+export function directoryKnowledgeDirectory(directory: string, title: string, moduleId: string | undefined, isDomain: boolean): string {
+  const name = repositoryKnowledgeDirectory(title), fallback = `docs/${opaqueModuleId.test(name) ? "领域知识" : name}`;
+  const cleaned = readableDomainKnowledgeDirectory(directory, moduleId, title).replace(/\/$/, "");
+  if (!cleaned || [".", "docs", "domain-docs", "domains", "docs/knowledge"].includes(cleaned)
+    || hasOpaqueModuleDirectory(directory) && (!isDomain || /^(?:domain-docs|domains|docs\/knowledge)\//.test(directory))) return fallback;
+  if (isDomain || cleaned.startsWith("docs/")) return cleaned;
+  return `docs/${cleaned}`;
+}
+
+/** 拆掉旧目录包装后，所有文稿统一进入最终目录，保持内部子目录结构。 */
+export function directoryKnowledgePath(oldDirectory: string, newDirectory: string, path: string, repositoryNames: readonly string[] = []): string {
+  if (path.startsWith(`${newDirectory}/`) && !hasOpaqueModuleDirectory(path)) return /\/agents\.md$/i.test(path) ? path.replace(/[^/]+$/, "README.md") : path;
+  const parts = path.split("/"), wrapper = parts.reduce((last, part, index) => opaqueModuleId.test(part) ? index : last, -1);
+  const old = oldDirectory.replace(/\/$/, ""), removedOld = old !== "." && path.startsWith(`${old}/`);
+  let relative = wrapper >= 0 ? parts.slice(wrapper + 1).join("/") : removedOld ? path.slice(old.length + 1) : path;
+  const repository = repositoryNames.find(name => name && relative.startsWith(`${name}/`));
+  if (repository) relative = relative.slice(repository.length + 1);
+  if (repository || wrapper < 0 && !removedOld) {
+    for (const prefix of ["docs/knowledge/", "domain-docs/", "domains/", "docs/"]) if (relative.startsWith(prefix)) { relative = relative.slice(prefix.length); break; }
+  } else if (wrapper >= 0 && repositoryNames.length) {
+    for (const prefix of ["docs/knowledge/", "docs/"]) if (relative.startsWith(prefix)) { relative = relative.slice(prefix.length); break; }
+  }
+  relative = relative.replace(/(^|\/)agents\.md$/i, "$1README.md");
+  return `${newDirectory}/${relative}`;
 }
 
 
@@ -142,7 +175,8 @@ export function assertModuleKnowledgePath(
   target: Pick<KnowledgeRepository, "docs_path">,
   path: string,
 ): void {
-  if (job.knowledge_layout === "repository-v1") {
+  if (job.knowledge_layout === "repository-v1" || job.knowledge_layout === "directory-v1") {
+    if (job.knowledge_layout === "directory-v1" && target.docs_path === ".") throw new Error("请选择保存知识文稿的相对目录");
     if ((target.docs_path !== "." && !path.startsWith(`${target.docs_path}/`)) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {
       throw new Error(`文稿须使用归档目录 ${target.docs_path} 内的仓根相对路径`);
     }

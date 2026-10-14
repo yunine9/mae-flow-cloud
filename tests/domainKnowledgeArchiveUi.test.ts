@@ -10,7 +10,7 @@ import type { KnowledgeArchivePreview } from "../src/knowledgeProductionTypes.ts
 
 const vite = await createServer({ root: "web", server: { middlewareMode: true }, appType: "custom", logLevel: "silent" });
 const { DomainKnowledgePublicationStatus } = await vite.ssrLoadModule("/src/DomainKnowledgePublicationStatus.tsx");
-const { DomainKnowledgeArchiveTargets } = await vite.ssrLoadModule("/src/DomainKnowledgeArchiveTargets.tsx");
+const { DomainKnowledgeArchiveTargets, DomainKnowledgeArchivePathPreview } = await vite.ssrLoadModule("/src/DomainKnowledgeArchiveTargets.tsx");
 const { KnowledgeArchiveHistory } = await vite.ssrLoadModule("/src/KnowledgeArchiveDialog.tsx");
 after(() => vite.close());
 
@@ -36,31 +36,33 @@ function fixture(): DomainKnowledgeJob {
       base_content: null, base_revision: "", history: [] }] };
 }
 
-test("仅有旧 AGENTS 草稿时可以进入归档设置，不要求先发布或重跑", () => {
+test("仅有未发布草稿时不显示创建 MR，也不增加独立设置入口", () => {
   const job = fixture(); job.production = projectKnowledgeProduction({ kind: "domain", record: job });
   assert.equal(job.production.archive.visible, false);
   const html = renderToStaticMarkup(React.createElement(DomainKnowledgePublicationStatus, { job, compact: true, onConfigure() {} }));
-  assert.match(html, />归档设置<\/button>/);
-  assert.doesNotMatch(html, /disabled/);
+  assert.equal(html, "");
 });
 
 test("Issue489：旧任务展示最终仓内目录，模块ID不进入归档目录", () => {
   const job = fixture();
   const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
-  assert.match(html, /不追加模块编号或仓库名/);
-  assert.match(html, /重名会自动分配文件名、更新链接和索引/);
-  assert.match(html, /不重新萃取/);
-  assert.match(html, /value="domains\/订单知识"/);
+  assert.match(html, /仓内相对目录/);
+  assert.match(html, /确认后自动创建 MR/);
+  assert.match(html, />确认并创建 MR<\/button>/);
+  assert.match(html, /value="docs\/订单知识"/);
   assert.doesNotMatch(html, /先按业务模块整理目录/);
 });
 
-test("已发布且配置完整的任务仍能打开归档设置；研究期间不允许改位置", () => {
+test("创建 MR 使用统一按钮，研究期间路径确认表单只读", () => {
   const job = fixture(); Object.assign(job.documents[0], { knowledge_document_id: "kd-order", published_revision: "formal", published_document_revision: 1 });
   job.production = projectKnowledgeProduction({ kind: "domain", record: job });
   const render = () => renderToStaticMarkup(React.createElement(DomainKnowledgePublicationStatus, { job, compact: true, onConfigure() {} }));
-  assert.match(render(), />归档设置<\/button>/);
+  assert.match(render(), /创建归档 MR<\/button>/);
   job.status = "running"; job.production = projectKnowledgeProduction({ kind: "domain", record: job });
-  assert.match(render(), /<button[^>]*disabled[^>]*>归档设置<\/button>/);
+  assert.match(render(), /创建归档 MR<\/button>/);
+  assert.doesNotMatch(render(), /归档路径设置/);
+  const settings = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, disabled: true, onChange() {} }));
+  assert.match(settings, /<fieldset[^>]*disabled/);
 });
 
 test("Issue488：65篇已发布且只有恢复占位批次时，详情和归档页明确显示创建MR入口", () => {
@@ -81,13 +83,20 @@ test("Issue488：65篇已发布且只有恢复占位批次时，详情和归档�
   assert.equal(job.archive_batches[0].issue_no, undefined, "展示入口不会自动创建MR或替人确认单号");
 });
 
-test("模块归档设置明确覆盖根 AGENTS，旧正文可从 Git 历史查阅", () => {
-  const job = fixture(); job.knowledge_layout = "module-v1";
-  job.knowledge_target.docs_path = "domains/orders"; job.documents[0].path = "domains/orders/README.md";
-  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
-  assert.match(html, /完整替换每个目标仓根 AGENTS.md/);
-  assert.match(html, /旧正文保留在 Git 历史中/);
-  assert.doesNotMatch(html, /保留原有内容/);
+test("路径预览明确领域入口位于选定目录、代码仓根入口负责导航", () => {
+  const preview = { archive_revision: 2, targets: [
+    { ...fixture().knowledge_target, docs_path: "teams/orders" },
+    { id: "repo-1", name: "订单服务", repository: "https://example.test/orders.git", branch: "main", path: "", docs_path: "docs/orders" },
+  ], documents: [
+    { id: "domain", title: "领域规则", target_id: "domain", path: "teams/orders/rules.md" },
+    { id: "map", title: "模块索引", target_id: "repo-1", path: "docs/orders/module-map.md" },
+  ] };
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchivePathPreview, { preview }));
+  assert.match(html, /teams\/orders\/AGENTS.md/);
+  assert.match(html, /docs\/orders\/module-map.md/);
+  assert.match(html, /<code>AGENTS.md<\/code>/);
+  assert.match(html, /aria-label="文档路径预览"/);
+  assert.doesNotMatch(html, /<details/);
 });
 
 test("整理目录后保留旧失败批次的重试入口和原 MR 链接", () => {
@@ -106,15 +115,16 @@ test("整理目录后保留旧失败批次的重试入口和原 MR 链接", () =
   assert.match(html, /不带入后续目录调整或未发布修改/);
 });
 
-test("Issue489：旧 UUID 和工作区仓名从预览去除，仓内 docs 路径保留", () => {
+test("Issue489：旧 UUID 和工作区仓名从预览去除，代码文稿统一进入 docs 业务目录", () => {
   const job = fixture();
   job.module_id = "module-5d312e96-7b1f-4a75-b3f4-ab4624a831ce"; job.knowledge_layout = "module-v1";
   const repo = { id: "repo-1", name: "FMProductFrontendService", repository: "https://example.test/FMProductFrontendService.git", branch: "master", path: "", docs_path: `docs/knowledge/${job.module_id}` };
   job.repositories = [repo];
   job.documents = [{ ...job.documents[0], target_id: repo.id, layer: "repository", path: `${repo.docs_path}/${repo.name}/docs/module-map.md` }];
   const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
-  assert.match(html, /value="\."/);
-  assert.match(html, /value="docs\/module-map.md"/);
+  assert.match(html, /value="docs\/订单知识"/);
+  assert.match(html, /正在计算各文档的最终路径/);
+  assert.doesNotMatch(html, /value="\."/);
   assert.doesNotMatch(html, /module-5d312e96/);
 });
 
@@ -159,7 +169,55 @@ test("Issue489：配置已迁移但文稿残留UUID时预览仍修复，名称�
   job.knowledge_target.docs_path = `domains/${job.module_id}`;
   job.documents[0].path = `domains/${job.module_id}/rules.md`;
   const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
-  assert.match(html, /value="domains\/产品管理"/);
-  assert.match(html, /value="domains\/产品管理\/rules.md"/);
+  assert.match(html, /value="docs\/产品管理"/);
+  assert.match(html, /正在计算各文档的最终路径/);
   assert.doesNotMatch(html, /module-5d312e96/);
+});
+
+test("Issue489 最新评论：创建 MR 路径确认中，即使暂无领域文稿也展示领域仓目录", () => {
+  const job = fixture(); job.knowledge_layout = "directory-v1";
+  job.module_name = "订单管理"; job.knowledge_target.docs_path = "business/orders";
+  job.repositories = [{ id: "repo-1", name: "订单服务", repository: "https://example.test/orders.git", branch: "main", path: "", docs_path: "docs/orders" }];
+  Object.assign(job.documents[0], { target_id: "repo-1", layer: "repository", path: "docs/orders/rules.md", knowledge_document_id: "kd-order", published_revision: "formal", published_document_revision: 1 });
+  job.production = projectKnowledgeProduction({ kind: "domain", record: job });
+  const action = renderToStaticMarkup(React.createElement(DomainKnowledgePublicationStatus, { job, compact: true, onConfigure() {} }));
+  assert.match(action, /创建归档 MR<\/button>/);
+  assert.doesNotMatch(action, /归档路径设置|修改归档路径/);
+  const confirmation = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {}, onConfirmArchive() {} }));
+  assert.match(confirmation, /aria-label="domain 归档文档目录"[^>]*value="business\/orders"/);
+  assert.match(confirmation, /确认后自动创建 MR/);
+  assert.match(confirmation, />确认并创建 MR<\/button>/);
+  assert.match(confirmation, /<button[^>]*disabled[^>]*>确认并创建 MR/, "精确路径预览完成前不允许确认");
+  assert.doesNotMatch(confirmation, /保存归档路径|关闭设置后/);
+});
+
+test("精确路径预览直接显示服务端避让重名后的结果", () => {
+  const job = fixture();
+  const preview = { archive_revision: 3, targets: [{ ...job.knowledge_target, docs_path: "docs/orders" }], documents: [
+    { id: "index-a", title: "规则入口", target_id: "domain", path: "docs/orders/index.md" },
+    { id: "index-b", title: "旧入口", target_id: "domain", path: "docs/orders/index-index-b.md" },
+  ] };
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchivePathPreview, { preview }));
+  assert.match(html, /docs\/orders\/index.md/);
+  assert.match(html, /docs\/orders\/index-index-b.md/);
+  assert.doesNotMatch(html, /<details/);
+});
+
+test("已确认删除的路径预览保留原文件，不生成新的入口", () => {
+  const preview = { archive_revision: 1, targets: [fixture().knowledge_target], documents: [
+    { id: "deleted", title: "旧知识", target_id: "domain", path: "domain-docs/old.md" },
+  ] };
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchivePathPreview, { preview, deletedDocumentIds: ["deleted"] }));
+  assert.match(html, /domain-docs\/old.md/); assert.match(html, /删除原文件/);
+  assert.doesNotMatch(html, /平台维护入口|AGENTS.md/);
+});
+
+test("新布局明确保存的领域目录不会再次被默认目录覆盖", () => {
+  const job = fixture(); job.knowledge_layout = "directory-v1";
+  for (const directory of ["domains", "domain-docs", "docs/knowledge"]) {
+    job.knowledge_target.docs_path = directory;
+    job.documents[0].path = `${directory}/rules.md`;
+    const confirmation = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
+    assert.match(confirmation, new RegExp(`aria-label="domain 归档文档目录"[^>]*value="${directory}"`));
+  }
 });

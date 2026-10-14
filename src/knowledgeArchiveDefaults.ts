@@ -5,7 +5,7 @@ export interface KnowledgeArchiveDefaults {
 }
 /** 领域方法包里的归档默认目录。组件知识的归档位置统一在配置中心设置，文件按知识标题命名，方法包不再配置。 */
 export function knowledgeArchiveDefaults(files: Record<string, string>, kind: ExtractionKind): KnowledgeArchiveDefaults {
-  const defaults = { domain_directory: "domains", repository_directory: "docs/knowledge" };
+  const defaults = { domain_directory: "docs", repository_directory: "docs" };
   const text = files["references/archive-defaults.md"];
   if (text === undefined) return defaults;
   const block = text.match(/```json\s*\n([\s\S]*?)\n```/);

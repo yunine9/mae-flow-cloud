@@ -54,11 +54,12 @@ test("内置业务方法保留全部 13 种文档模板，执行引用完整", (
       assert.ok(files[posix.normalize(posix.join(posix.dirname(path), match[1]))], `${path} 的方法引用缺失：${match[1]}`);
     }
   }
-  assert.deepEqual(knowledgeArchiveDefaults(files, "domain"), { domain_directory: "domain-docs", repository_directory: "." });
+  assert.deepEqual(knowledgeArchiveDefaults(files, "domain"), { domain_directory: "docs", repository_directory: "docs" });
+  assert.deepEqual(knowledgeArchiveDefaults({}, "domain"), { domain_directory: "docs", repository_directory: "docs" });
   assert.equal(domainExecutionContract(files), "reviewed-document-plan");
 });
 
-test("归档默认目录允许仓根但拒绝穿越及嵌入点目录", () => {
+test("旧方法的归档默认目录仍允许仓根，但拒绝穿越及嵌入点目录", () => {
   const files = (repository_directory: string) => ({ "references/archive-defaults.md": "```json\n" + JSON.stringify({ domain_directory: "domain-docs", repository_directory }) + "\n```" });
   assert.equal(knowledgeArchiveDefaults(files("."), "domain").repository_directory, ".");
   for (const path of ["../docs", "docs/../other", "./docs", "docs/./other", "/docs", "docs/.git"]) {

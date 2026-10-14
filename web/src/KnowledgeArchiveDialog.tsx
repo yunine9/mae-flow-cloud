@@ -31,17 +31,28 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onReview, onChanged, openRequest = 0, directArchive = false }: {
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
-  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean;
+  onBeforeOpen?: (replaceExisting?: boolean) => void;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const submitting = useRef(false), generation = useRef(0);
   const archiveOnOpen = useRef(false);
-  function openArchive() { archiveOnOpen.current = directArchive; setOpen(true); }
-  useEffect(() => { if (openRequest && production?.archive.visible) openArchive(); }, [openRequest, production?.archive.visible]);
+  const consumedOpenRequest = useRef<{ endpoint: string; request: number } | undefined>(undefined);
+  function openArchive(confirmed = false) {
+    if (!confirmed && onBeforeOpen && production?.archive.state === "done" && production.archive.actions.some(action => action.id === "archive" && action.label !== "归档记录")) {
+      onBeforeOpen(false); return;
+    }
+    archiveOnOpen.current = directArchive && (confirmed || !onBeforeOpen); setOpen(true);
+  }
+  useEffect(() => {
+    const consumed = consumedOpenRequest.current;
+    if (!openRequest || !production?.archive.visible || consumed?.endpoint === endpoint && consumed.request === openRequest) return;
+    consumedOpenRequest.current = { endpoint, request: openRequest }; openArchive(true);
+  }, [endpoint, openRequest, production?.archive.visible]);
   useEffect(() => {
     if (!open || !production?.archive.visible) return;
     const owner = ++generation.current, controller = new AbortController();
@@ -51,7 +62,11 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
       .then(async result => {
         if (generation.current !== owner) return;
         setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
-        const request = archiveOnOpen.current && !disabled ? archiveRequest(result) : undefined;
+        const request = archiveOnOpen.current && !disabled
+          ? replaceExistingOnOpen && result.issue_no?.trim() && result.actions.some(action => action.id === "replace-archive")
+            ? { action: "create" as const, input: { issue_no: result.issue_no.trim(), issue_description: result.issue_description?.trim() || undefined,
+              expected_revisions: result.expected_revisions, replace_existing: true } }
+            : archiveRequest(result) : undefined;
         archiveOnOpen.current = false;
         if (!request) return;
         submitting.current = true; setBusy(true); setLoading(false);
@@ -86,13 +101,15 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
       : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
+    if (["create-archive", "replace-archive"].includes(action.id) && onBeforeOpen) return <Button key={`${action.id}:${targetId ?? "all"}`}
+      disabled={disabled || busy || loading} onClick={() => { setOpen(false); onBeforeOpen(action.id === "replace-archive"); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
       disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
   }
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;
   return <>
-    <Button size="sm" variant="outline" disabled={disabled || busy || loading} onClick={openArchive}><GitBranch size={16} />{action.label}</Button>
+    <Button size="sm" variant="outline" disabled={disabled || busy || loading} onClick={() => openArchive()}><GitBranch size={16} />{action.label}</Button>
     <Dialog open={open} onOpenChange={next => { if (!busy) setOpen(next); }}>
       <DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle>{preview?.title ?? action.label}</DialogTitle></DialogHeader>

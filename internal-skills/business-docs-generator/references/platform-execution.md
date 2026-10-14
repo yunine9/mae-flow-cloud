@@ -46,30 +46,30 @@ knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系
 
 先核对 module_id、scope、knowledge_layout 与 archive_targets；关联仓是源码来源，不代表本任务拥有整个仓的业务或公共文档。浅层盘点定位本业务入口后，仅深入本业务及解释完整链路所需的共享实现。其他业务作为有依据的边界或依赖记录，不为它们生成整套知识。模板中的“模块文档”按本业务内部功能划分，与稳定的 module_id 不是同一层级。
 
-knowledge_layout 为 repository-v1 时，target_id 选择实际归档仓，document.path 是该仓根目录下的完整相对路径。target.docs_path 是用户配置的最终位置，`.` 表示仓根；路径中不写 `./`、工作区仓名前缀或 module_id。module_id 只用于工具元数据中的业务归属；标题、导航标签和范围说明使用平台提供的业务名称，目录采用平台保存的实际路径。名称缺失时说明“业务名称未提供”，不以内部编号代替名称或自造名称。源码、日志或接口证据中的真实 ID 保持原样，不对正文执行全局 ID 替换。
+knowledge_layout 为 directory-v1 时，每个目标的 target.docs_path 是最终仓根相对目录，默认 `docs/<业务名称>`。代码仓使用 `docs/` 下的业务目录；领域知识仓使用用户保存的非根目录。维护人点击「创建 MR」后，平台弹窗展示各目标目录和文档最终路径；可在窗口中修改目录，点击「确认并创建 MR」后直接执行归档。路径由平台解析业务名称并保存，Agent 直接使用返回值。
 
-- 领域文稿放在领域 target.docs_path 下；新任务的默认目录由平台根据业务名生成。按工具返回的实际目录写作，Agent 不自行重算目录名。
-- 仓级目标默认为仓根。首次生成采用 `docs/README.md`、`docs/module-map.md`、`docs/rules/`、`docs/modules/`；已有文稿保留仓根相对路径，例如 `docs/module-map.md` 仍是 `docs/module-map.md`。工作区的 `FMProductFrontendService/docs/module-map.md` 归入该仓目标时，path 是 `docs/module-map.md`。
-- 用户配置其他目标目录或逐篇路径后，沿用平台保存的实际位置，不重复拼接目录。已保存完整 path 优先于模板中的示例；同仓相对链接按最终文件位置计算。
+document.path 填目标仓根下的完整相对路径。例如 target.docs_path=`docs/产品管理` 时，入口是 `docs/产品管理/README.md`，索引是 `docs/产品管理/index.md`；代码仓的模块地图是 `docs/产品管理/module-map.md`。已包含该目录的 path 不再加一次 docs_path，工作区仓名不进入 path。领域与仓级知识分别保存到自己的 target_id，所有本任务文稿都收在各自的最终目录内。
 
-下表用 D 表示领域实际文稿目录、R 表示该仓实际文稿目录；repository-v1 新仓级文稿的 R 默认为 `docs`，不是值为 `.` 的 target.docs_path。保存时将 D、R 换成真实路径，不能将符号写入产物。
+module_id 只用于工具元数据中的业务归属；标题、导航标签和范围说明使用平台提供的业务名称。名称缺失时说明“业务名称未提供”，目录继续采用平台保存值。源码、日志或接口证据中的真实 ID 保持原样，不对正文执行全局 ID 替换。
 
-| 模板 | 目标与默认 path |
-|------|----------------|
+下表用 D 表示领域 target.docs_path、R 表示相应代码仓 target.docs_path。保存时换成完整实际路径；模板文件名只用于选择写作方法。
+
+| 模板 | 目标与 path |
+|------|-------------|
 | domain/root-agents.md | 领域目标，D/README.md：本业务领域入口 |
-| domain/domain-agents.md | 领域目标，D/index.md：本目录详细索引与维护说明 |
+| domain/domain-agents.md | 领域目标，D/index.md：详细索引与维护说明 |
 | 其他 domain/ 模板 | 领域目标，D/glossary.md、D/architecture.md、D/domains/、D/interfaces/、D/external/ 下实际文件 |
-| repo/repo-agents.md | 对应仓目标，R/README.md：本业务在该仓的职责、命令与路由 |
-| repo/module-map.md | 对应仓目标，R/module-map.md：本业务功能索引 |
-| 其他 repo/ 模板 | 对应仓目标，R/rules/、R/modules/ 下实际文件；真实经验在对应功能的 experience/ 下 |
+| repo/repo-agents.md | 对应代码仓目标，R/README.md：本业务在该仓的职责、命令与路由 |
+| repo/module-map.md | 对应代码仓目标，R/module-map.md：本业务功能索引 |
+| 其他 repo/ 模板 | 对应代码仓目标，R/rules/、R/modules/ 下实际文件；真实经验在对应功能的 experience/ 下 |
 
-目标文件已被其他文稿占用时，平台自动添加稳定文稿 ID 后缀，必要时再加序号，并修正文稿间链接；同仓多个业务可以共用目录。沿用避让后的实际 path 和入口，不改回重名文件，不通过追加 module_id 规避冲突，不覆盖其他文稿正文。平台在已有导航文稿中保留可读清单，没有 README.md/index.md 时使用现有文稿承载清单。
+目标文件已被其他文稿占用时，平台添加稳定文稿 ID 后缀，必要时再加序号，并修正文稿间链接。沿用保存返回的实际 path 和可读导航，不改回重名文件或覆盖其他文稿。不同业务默认使用各自的可读目录，共仓不扩大本任务范围。
 
-每仓只有根 AGENTS.md 作为统一 Agent 入口，由平台按实际知识入口生成并覆盖旧正文，旧内容留在 Git 历史中。根入口不进入模型的 plan、expected_document_ids 或草稿；它只提供可读路由、读取范围与维护约定，不写机器标记或某个业务的具体规则。模型维护普通 Markdown 文稿，root-agents.md、domain-agents.md、repo-agents.md 是模板标识，产物名按上表和保存路径确定，不生成嵌套 AGENTS.md。
+AGENTS.md 由归档器按正式知识生成，不属于模型的 plan、expected_document_ids 或草稿。代码仓保留唯一根 AGENTS.md，提供各业务目录的统一导航；领域知识仓在领域 target.docs_path 内生成 AGENTS.md，导航只覆盖该目录。模型生成同目录 README.md、index.md 等普通文稿。平台生成的入口只提供可读路由、读取范围与维护约定，不写机器标记或复制业务正文。
 
-已有 module-v1 或 legacy 任务接续时，Agent 使用当前保存的文稿位置及固定 Skill。发布时平台自动将旧模块编号目录整理为 repository-v1 的实际路径；对已经确认的成果发起归档时，也由平台自动整理路径和相对链接，无需先手工改目录或重新研究。整理保留正文、编号、调查与历史；未确认草稿和建议不会因归档自动发布。发布只处理本次选中文稿，仍核对正式版本及并发修改。从旧 AGENTS.md 迁入的约定仅在文稿声明的业务范围内使用。历史 current-plan 和步骤结果保持原记录，后续研究以当前保存位置为准，Agent 不自行迁移目录。
+已有 module-v1、repository-v1 或 legacy 任务接续时，Agent 使用当前保存的文稿位置及固定 Skill。确认发布或对已确认成果新建归档时，平台将散落路径整理到 directory-v1 的最终目录，同步相对链接；目录可在创建 MR 的确认窗口修改，默认值不要求人工补填。整理保留正文、编号、调查与历史，不调用模型重新研究。未确认草稿和建议不会因归档自动发布；正式版本及并发修改仍需核对。从旧 AGENTS.md 整理出的业务内容成为普通文稿，仅在其声明的业务范围内使用。历史 current-plan 和步骤结果保留原记录，后续研究以当前保存位置为准。
 
-Git 归档由维护人发起，发布到平台不会自动创建 MR。已有归档批次重试沿用冻结的文稿、目标路径与布局，module-v1 批次不因新规则改变路径；已推送且回执一致的提交及已创建 MR 按原记录恢复。调整路径后重新归档由平台处理，Agent 不自行关闭 MR、删分支或用草稿删除旧文件。
+Git 归档由维护人发起：点击「创建 MR」打开目录与文件预览窗口，点击「确认并创建 MR」后执行；发布到平台不会自动创建 MR。已有失败归档批次按冻结文稿、目标路径和布局恢复，包括 module-v1 与 repository-v1 的旧批次；已推送的提交及已创建 MR 使用原记录。新归档采用整理后的路径。调整路径后的新旧 MR 替换由平台处理，Agent 不自行关闭 MR、删分支或用草稿删除旧文件。
 
 同仓链接按文稿实际所在位置计算相对路径；跨仓引用明确写出仓名和包含 docs_path 的仓内路径，已知真实仓链接时可附链接。仓名只是跨仓定位，不是知识仓内真实存在的目录。全部路径占位符在产物中替换为实际值。
 
@@ -212,7 +212,7 @@ pass=false、图校验 invalid/unavailable 或来源缺口都是可以提交的�
 
 写作只修改 expected_document_ids 内的文稿。需要修改关联导航或发现新产物时交回主会话登记，不在本篇偷偷改写。需要读取其他步骤正在生成的文稿时等待其完成，并将对方写作步骤列入 depends_on；不能靠碰巧先执行来代替真实依赖。文档类型列表表示阅读层级，不要求把不相关文稿排成串行链。
 
-最终导航同步单独登记带 review 的步骤，也可在相关文稿完成后直接首次生成最终导航，不要求先生成空初稿。repository-v1 与 module-v1 布局下，领域 docs_path 内的 README.md 与 index.md 等待本业务全部实际路由目标；领域入口引用各仓模块 README.md 时也等待这些目标。某仓实际文稿目录内的 README.md 与 module-map.md 等待本业务在该仓的功能/规范文稿。仓根公共 AGENTS.md 不属于导航步骤的写入范围。其他布局按当前保存的实际导航路径同步。depends_on 使用外部前序文稿的写作及最后修订步骤；已有导航初稿时还需等待初稿。
+最终导航同步单独登记带 review 的步骤，也可在相关文稿完成后直接首次生成最终导航，不要求先生成空初稿。directory-v1 布局下，领域 target.docs_path 内的 README.md 与 index.md 等待本业务全部实际路由目标；领域入口引用各仓业务 README.md 时也等待这些目标。代码仓 target.docs_path 内的 README.md 与 module-map.md 等待本业务在该仓的功能/规范文稿。平台生成的 AGENTS.md 不属于导航步骤的写入范围。旧任务按当前保存的实际文稿路径同步。depends_on 使用外部前序文稿的写作及最后修订步骤；已有导航初稿时还需等待初稿。
 
 同一步同时写的导航文稿列入 expected_document_ids，不互相声明步骤依赖；相互引用的导航也不能排成循环，可合在一个明确写范围的同步步骤或由一次后续核查处理。只填导航的上次写作编号不足以保证路由目标完成。评审逐一回读全部改动导航及实际目标，核对路径、章节和覆盖。不同仓导航可并行；后续变化影响导航时再安排相关同步并复核。
 

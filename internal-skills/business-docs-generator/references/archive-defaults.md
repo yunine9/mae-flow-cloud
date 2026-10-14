@@ -1,9 +1,9 @@
 # 文稿默认目录
 
-knowledge_layout 为 repository-v1 的新任务，领域目录由平台按业务名生成可读默认值，用户配置值作为最终仓根相对目录；仓级目标默认为仓根，首次仓级文稿使用 docs/ 下的目录，已有 docs/x.md 保留原位。module_id 仅表示业务归属，不加入目录。目标为 `.` 时，文稿 path 直接使用仓根相对路径，不加 `./` 或工作区仓名。
-
-以工具返回的 target.docs_path 与当前文稿 path 为准。路径映射、碰撞避让、根 AGENTS.md 和旧批次重试规则统一见 [规划与路径](platform-execution.md#规划与路径)。
+directory-v1 的每个目标默认使用 `docs/<业务名称>`。平台按业务名称和配置生成最终 target.docs_path；代码仓使用 docs/ 下的业务目录，领域知识仓使用用户保存的非根目录。下面 JSON 仅保留兼容旧方法读取器所需的目录基准，模型产物路径以任务返回的 target.docs_path 为准。
 
 ```json
-{"domain_directory":"domain-docs","repository_directory":"."}
+{"domain_directory":"docs","repository_directory":"docs"}
 ```
+
+路径映射、避让、平台生成的 AGENTS.md 和旧批次重试见 [规划与路径](platform-execution.md#规划与路径)。

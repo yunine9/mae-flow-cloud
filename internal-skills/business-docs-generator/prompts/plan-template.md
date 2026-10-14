@@ -8,7 +8,7 @@
 > 图表校验：保存后 knowledge_diagram_check 使用 work_document_id=current-plan；invalid 修正，unavailable 保留规划并报告依赖阻碍
 > 完整输出清单：保存正文后以 knowledge_work action=plan 登记全部 document_ids，work_document_id=current-plan
 > 下方仓A/B/C/D、接口和功能行仅示意格式，按实际清单展开或删除示例；不凑数量。调查未完成的区域和来源失败必须明确列出，不能统计为已穷尽。正文保留条目、范围与结果索引，不粘贴全部源码或调查报告。
-> 路径写法：D 代表领域实际文稿目录，R_A 代表仓A实际文稿目录。repository-v1 新仓级目标 docs_path 为 `.` 时，R_A 默认为 `docs`；module-v1 沿用其保存目录。保存规划时替换为完整仓根相对路径，既有文稿沿用保存位置；不追加 module_id、工作区仓名或重复目录。具体映射见平台执行约定。
+> 路径写法：D 代表领域 target.docs_path，R_A 代表代码仓A的 target.docs_path；directory-v1 两者默认均为 `docs/<业务名称>`，以平台保存值为准。保存规划时替换为完整仓根相对路径，既有文稿采用当前保存位置。AGENTS.md 由平台生成，不列为模型文稿；具体映射见平台执行约定。
 
 ## 一、仓清单
 
