@@ -1,7 +1,6 @@
 import type { KnowledgeMrPublisher } from "./knowledgeMrPublisher.ts";
 import type { DomainKnowledgeJob, KnowledgeCleanupPlan, KnowledgeCleanupPublication } from "./domainKnowledgeTypes.ts";
 import { knowledgeRelativePath } from "./domainKnowledgeExtraction.ts";
-import { moduleKnowledgeDirectory } from "./domainKnowledgeLayout.ts";
 
 /** 清理只由人触发；预览和每仓结果留在原萃取任务中，不另起研究或跟踪 MR。 */
 export class KnowledgeSourceCleanup {
@@ -11,30 +10,16 @@ export class KnowledgeSourceCleanup {
     if (!state || state.started) throw new Error("当前任务不在萃取前清理阶段");
     const values = action === "preview" ? input.paths_by_target : input.selected_paths_by_target;
     if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("请提供各仓的清理路径");
-    if (job.knowledge_layout === "repository-v1" || job.knowledge_layout === "directory-v1") {
-      for (const target of state.repositories) {
-        const paths = values[target.id] ?? (action === "preview" ? [] : undefined);
-        if (!Array.isArray(paths)) throw new Error("请提供各仓的清理路径");
-        const planned = action === "publish" ? state.plans.find(plan => plan.target_id === target.id)?.paths ?? [] : [];
-        for (const value of [...paths, ...planned]) {
-          const path = knowledgeRelativePath(value, true);
-          if (/(^|\/)agents\.md$/i.test(path)) throw new Error("统一 AGENTS.md 入口由归档维护，请只选择要清理的知识文稿文件");
-          if (job.knowledge_layout === "directory-v1" && !path.startsWith(`${target.docs_path}/`)) throw new Error(`只能清理归档目录 ${target.docs_path}/ 内的知识文稿`);
-        }
-      }
-    }
-    if (job.knowledge_layout === "module-v1") {
-      for (const target of state.repositories) {
-        if (!job.module_id || moduleKnowledgeDirectory(target.docs_path, job.module_id) !== target.docs_path) throw new Error("清理目标缺少本业务模块的独立目录，请重新设置任务");
-        const paths = values[target.id] ?? (action === "preview" ? [] : undefined);
-        if (!Array.isArray(paths)) throw new Error("请提供各仓的清理路径");
-        const planned = action === "publish" ? state.plans.find(plan => plan.target_id === target.id)?.paths ?? [] : [];
-        for (const value of [...paths, ...planned]) {
-          const path = knowledgeRelativePath(value);
-          if (path !== target.docs_path && !path.startsWith(`${target.docs_path}/`)) {
-            throw new Error(`本模块只能清理 ${target.docs_path}/ 内的文件；仓根 AGENTS.md、公共目录和其他模块文档须保留`);
-          }
-        }
+    // 清理旧位置与新归档目录无关；整批检查仓内路径后，再预览或发布人工选择的文件。
+    for (const target of state.repositories) {
+      const paths = values[target.id] ?? (action === "preview" ? [] : undefined);
+      if (!Array.isArray(paths)) throw new Error("请提供各仓的清理路径");
+      const planned = action === "publish" ? state.plans.find(plan => plan.target_id === target.id)?.paths ?? [] : [];
+      for (const value of [...paths, ...planned]) {
+        try {
+          if (typeof value !== "string") throw new Error();
+          knowledgeRelativePath(value);
+        } catch { throw new Error("清理路径须为仓内相对目录或文件，不能使用仓根、绝对路径或上级目录"); }
       }
     }
     if (action === "preview") {
@@ -42,9 +27,6 @@ export class KnowledgeSourceCleanup {
       for (const target of state.repositories) {
         if (state.publications.some(publication => publication.target_id === target.id && (publication.url || publication.revision || publication.mr_attempted))) throw new Error("清理分支已经推送，请先完成原清理 MR");
         const plan = await this.publisher.previewCleanup(target, values[target.id] ?? [], operator, signal);
-        if ((job.knowledge_layout === "repository-v1" || job.knowledge_layout === "directory-v1") && plan.entries.some(entry => !plan.paths.includes(entry.path))) {
-          throw new Error("共享仓清理须逐项填写知识文稿文件路径，不能填写目录");
-        }
         plans.push(plan);
       }
       state.plans = plans; state.publications = []; save();
