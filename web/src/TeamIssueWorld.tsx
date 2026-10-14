@@ -16,8 +16,8 @@
  *
  * 队列筛选三件套与需求侧同款(搜索/现场范围/责任人),语义按问题域
  * 映射(f637a70 确认口径):需要处理=等你答复+异常;停滞中=推进中且
- * 超过 STALE_AFTER_MS 无进展;正在推进=排队+AI 处理中;等你答复含挂起。
- * 概览格筛选(阶段/状态)与之叠加生效。
+ * 超过 STALE_AFTER_MS 无进展;正在推进=排队+AI 处理中;等你答复不含
+ * 待验证(环境验证单列)。概览格筛选(阶段/状态)与之叠加生效。
  */
 import { cn } from "cn";
 import { useMemo, useRef, useState } from "react";
@@ -56,7 +56,7 @@ function inScope(issue: IssueSummary, scope: IssueScope, now: number): boolean {
     return isIssueVerifying(issue);
   }
   if (scope === "waiting") {
-    return ["waiting_user", "idle", "suspended"].includes(issue.status)
+    return ["waiting_user", "idle"].includes(issue.status)
       && !isIssueVerifying(issue);
   }
   return true;
@@ -90,7 +90,7 @@ const METRIC_TONE = {
  * 已排好)。首行任意处或箭头按钮切换展开;特性行点击=概览格筛选
  * (f:<module>,与阶段/状态格同一套单选格语义,联动下方现场)。
  * (2026-09-20 修订,ADR-0045):一次定位/一次验证/一次解决等交付质量
- * 比率撤到交付分析「问题处理」页签,这里只留过程计数——指挥页管推进,
+ * 比率撤到交付分析「DTS」页签,这里只留过程计数——指挥页管推进,
  * 复盘页管质量。 */
 function FeatureLedger({ rows, stats, cell, onSelectCell }: {
   rows: IssueFeatureRow[];
@@ -250,10 +250,7 @@ export function TeamIssueWorld({ issues }: {
     <section className="mb-[22px] overflow-hidden rounded-[14px] border border-line bg-surface shadow-xs" aria-label="问题处理概览">
       <header className="flex items-center justify-between gap-8 px-5 py-[18px]">
         <div className="grid min-w-0 gap-[3px]">
-          <h2 className="m-0 flex items-center gap-3 text-lg text-text-strong">问题处理概览
-            <a href="/deliveryAnalysis" className="text-[13px] font-normal text-primary underline-offset-2 hover:underline"
-              title="一次定位率/一次验证率/一次解决率/首次生成占比/90%AI生成达标率等交付统计已移至交付分析「问题处理」页签">交付统计 →</a>
-          </h2>
+          <h2 className="m-0 text-lg text-text-strong">问题处理概览</h2>
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
@@ -346,9 +343,14 @@ export function TeamIssueWorld({ issues }: {
 /** 成果档案·问题闭环(2026-09-11 排版对齐:骨架镜像需求侧 HistoryBoard
  * ——history-board + history-intro + history-metrics + 空态同款
  * board-empty;行仍用 TeamIssueCard,需求侧档案是逐任务表格行、问题侧
- * 是会话卡,内容差异,版式同构)。 */
-export function TeamIssueArchive({ issues }: {
+ * 是会话卡,内容差异,版式同构)。交付质量比率(一次定位/一次验证等,
+ * ADR-0045 撤出本域)经 onOpenDeliveryAnalytics 页内直切交付分析
+ * 「DTS」页签——团队页签没有独立 URL,不做 href 深链。 */
+export function TeamIssueArchive({ issues, onOpenDeliveryAnalytics }: {
   issues: IssueSummary[];
+  /** 交付统计跳转(App 层注入:切 deliveryAnalysis 视图并落「DTS」
+   * 页签);缺席不渲染入口。 */
+  onOpenDeliveryAnalytics?: () => void;
 }) {
   // 成果档案·问题闭环:conclusion 维度归档统计,只收已归档会话
   // (已取消整页不展示,2026-10-13)。
@@ -365,6 +367,9 @@ export function TeamIssueArchive({ issues }: {
         <h2 className="text-lg font-bold text-text-strong">成果档案·问题闭环</h2>
         <p className="mt-[7px] text-sm text-muted-foreground">这里保存已闭环的问题会话；处理中的回到「当前现场」查看。</p>
       </div>
+      {onOpenDeliveryAnalytics && <button type="button" onClick={onOpenDeliveryAnalytics}
+        className="flex-none text-[13px] font-normal text-primary underline-offset-2 hover:underline"
+        title="一次定位率/一次验证率/一次解决率等交付质量比率在交付分析「DTS」页签">交付统计 →</button>}
     </div>
     {closed.length === 0
       ? <Empty className="min-h-[360px] border" role="status">

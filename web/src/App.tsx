@@ -810,6 +810,10 @@ export function App() {
     return next;
   });
   const [teamTaskTab, setTeamTaskTab] = useState<TeamTaskTab>("current");
+  /** 交付分析入场页签:团队DTS档案的「交付统计」跳转指定落「DTS」,
+   * 侧栏与直连不经过它,恒为需求交付。 */
+  const [deliveryAnalyticsTab, setDeliveryAnalyticsTab] = useState<
+    "requirement" | "issue" | "registration" | "knowledge">("requirement");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [teamIssues, setTeamIssues] = useState<IssueSummary[]>([]);
   // 本人问题列表(GET /issues,服务端按「归属或登记人是自己」过滤,
@@ -1342,8 +1346,9 @@ export function App() {
     }
   };
   /** 页内切会话的唯一写入口(ADR-0040):应用内卡片一律新页签打开
-   * /issues/:id(链接自带 URL,不经这里),这里只服务工作台内的会话
-   * 内换题——挂起转正切到新会话,当前页签直切不新开。App 层快照与
+   * /issues/:id(链接自带 URL,不经这里),这里保留给工作台内的会话
+   * 内换题(历史触发者「挂起转正」已随 ADR-0048 退役),当前页签
+   * 直切不新开。App 层快照与
    * URL 一次写齐,守住不变量:issueRouteId 非空 ⇔ 当前 URL 是
    * /issues/:id。 */
   const openIssueSession = (id: string) => {
@@ -1679,7 +1684,11 @@ export function App() {
             {teamTaskTab === "current" ? <TabsContent value="current" className="contents">
               <TeamIssueWorld issues={teamIssues} />
             </TabsContent> : <TabsContent value="archive" className="contents">
-              <TeamIssueArchive issues={teamIssues} />
+              <TeamIssueArchive issues={teamIssues}
+                onOpenDeliveryAnalytics={() => {
+                  setDeliveryAnalyticsTab("issue");
+                  selectView("deliveryAnalysis");
+                }} />
             </TabsContent>}
           </TeamWorldTabs>
         </section>}
@@ -1751,7 +1760,7 @@ export function App() {
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
         {view === "environments" && <ConfigurationCenter admin={session.role === "admin"} />}
-        {view === "deliveryAnalysis" && <DeliveryAnalytics onOpenTask={(taskId) => {
+        {view === "deliveryAnalysis" && <DeliveryAnalytics initialTab={deliveryAnalyticsTab} onOpenTask={(taskId) => {
           const target = tasks.find((task) => task.id === taskId);
           if (target) openArtifacts(target);
           else location.assign(`/work/${encodeURIComponent(taskId)}`);
