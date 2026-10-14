@@ -840,8 +840,9 @@ function DtsRegister({
   // 发起备注列(2026-09-20;2026-09-24 重做):格子里是预览,点击弹
   // 多行弹窗编辑(用户可能长篇输入,单行输入框不够)。按人持久化在
   // localStorage(无过期,刷新/重开浏览器都在),发起成功即清该单
-  // 条目(已随会话落库,消费完毕)。上限 5000 字:备注直进 AI 开场
-  // 上下文,防长材料挤爆(长材料走登记附件/知识仓)。
+  // 条目(已随会话落库,消费完毕)。上限 10000 字(2026-10-14 拍板,
+  // 从 5000 放开):备注全额进 AI 开场与每次上下文重建的续聊词,不
+  // 截断;后端不设闸(仅前端约束),超长材料仍走登记附件/知识仓。
   const remarksKey = `mae-flow:dts-remarks:${viewer.username}`;
   const [remarks, setRemarks] = useState<Record<string, string>>(() => {
     try {
@@ -862,7 +863,7 @@ function DtsRegister({
   // 保存才落 remarks,取消/X/点外部一律丢弃。
   const [remarkEditing, setRemarkEditing] = useState<string | null>(null);
   const [remarkDraft, setRemarkDraft] = useState("");
-  const REMARK_MAX = 5000;
+  const REMARK_MAX = 10000;
   // 介入档位(ADR-0057):未发起行按单选初始档,存本地按人(同发起
   // 备注款,无过期);发起成功即清该单条目——已随会话定格落库,消费
   // 完毕。空(无条目)=跟随全局,发起请求不带字段。发起后不可改,
@@ -1923,8 +1924,8 @@ function DtsRegister({
         </div>}
     </>}
     {/* 发起备注编辑弹窗(2026-09-24):多行 Textarea,草稿保存才生效
-        (取消/X/点外部丢弃);上限 5000 字带计数——备注直进 AI 开场
-        上下文,防长材料挤爆(长材料走登记附件/知识仓)。 */}
+        (取消/X/点外部丢弃);上限 10000 字带计数——备注直进 AI 开场
+        与上下文重建的续聊词,长材料走登记附件/知识仓。 */}
     <Dialog open={remarkEditing !== null} onOpenChange={(open) => {
       if (!open) setRemarkEditing(null);
     }}>
