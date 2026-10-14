@@ -111,6 +111,10 @@ test("portable patch matches full configuration and every script is in this repo
     });
   }
   assert.equal(Object.hasOwn(config, "mr_participants"), false);
+  assert.deepEqual(config.mr_approver_members.command, ["codehub-cli", "project", "member", "list",
+    "--host", "yellow", "-p", "{repo}", "--token", "{token}", "--format", "json", "-k"]);
+  assert.deepEqual(config.mr_approver_members.fields, { username: { json: "username" }, access_level: { json: "access_level" } });
+  assert.equal(config.mr_approver_members.timeout_s, 15);
   for (const name of ["pipeline_status", "pipeline_artifacts", "mr_discover", "mr_gates"]) {
     const script = config[name].command[1].replace("/data/mae-flow-cloud/repo/", "");
     assert(readFileSync(script).length > 0);
@@ -191,6 +195,7 @@ test("prod and test upgrades replace script paths and retire the participant upd
         mr_participants: { command: ["python3", "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-participants.py"], contract: true },
       };
       for (const name of ["mr_create", "mr_create_knowledge"]) delete oldSettings[name].participant_flags;
+      delete oldSettings.mr_approver_members;
       writeFileSync(source, JSON.stringify(oldSettings));
       const result = spawnSync("python3", [join(root, "deploy/adapter-tools/merge-adapter-config.py"),
         source, destination, root], { encoding: "utf8" });
@@ -198,6 +203,7 @@ test("prod and test upgrades replace script paths and retire the participant upd
       const candidate = JSON.parse(readFileSync(destination, "utf8"));
       assert.equal(candidate.port, 9988);
       assert.equal(Object.hasOwn(candidate, "mr_participants"), false);
+      assert.deepEqual(candidate.mr_approver_members, config.mr_approver_members);
       for (const name of ["mr_create", "mr_create_knowledge"]) {
         assert.deepEqual(candidate[name].participant_flags, {
           reviewers: "--approval-reviewers", approval_approvers: "--approval-approvers",

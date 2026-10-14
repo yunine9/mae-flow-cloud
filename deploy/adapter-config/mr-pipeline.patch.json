@@ -349,5 +349,31 @@
     "id": {
       "json": "iid"
     }
+  },
+  "mr_approver_members": {
+    "command": [
+      "codehub-cli",
+      "project",
+      "member",
+      "list",
+      "--host",
+      "yellow",
+      "-p",
+      "{repo}",
+      "--token",
+      "{token}",
+      "--format",
+      "json",
+      "-k"
+    ],
+    "fields": {
+      "username": {
+        "json": "username"
+      },
+      "access_level": {
+        "json": "access_level"
+      }
+    },
+    "timeout_s": 15
   }
 }

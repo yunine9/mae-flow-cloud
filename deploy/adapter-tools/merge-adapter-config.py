@@ -9,6 +9,7 @@ from pathlib import Path
 
 REQUIRED_ENDPOINTS = (
     "mr_create",
+    "mr_approver_members",
     "pipeline_trigger",
     "pipeline_status",
     "pipeline_artifacts",
