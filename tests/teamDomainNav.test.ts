@@ -143,14 +143,17 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
   const stats = issueDeliveryBreakdown(rows);
   assert.deepEqual({
     total: stats.total,
-    active: stats.active,
+    advancing: stats.advancing,
     waiting: stats.waiting,
     failed: stats.failed,
     closed: stats.closed,
   }, {
-    // 已取消不进总数;active 再剔除已闭环;waiting 归一含 idle(含待验证)。
-    total: 7, active: 6, waiting: 3, failed: 1, closed: 1,
+    // 已取消不进总数;瓦片互斥四份(2026-10-14 拍板):推进中=排队+
+    // AI 处理中,待答复含 idle(含待验证),加和恒等于总数。
+    total: 7, advancing: 2, waiting: 3, failed: 1, closed: 1,
   });
+  assert.equal(stats.advancing + stats.waiting + stats.failed + stats.closed,
+    stats.total, "瓦片互斥四份加和必须等于问题总数,不许再有伞口径重复计数");
   // 阶段格=团队页合并/拆分口径(2026-09-20):拉单+拉仓合并「准备中」,
   // 「待验证」(卡在场)从「提交 MR·跑绿」拆出;固定顺序,0 计数
   // (conclude)也在场——渲染层置灰,口径层保留全集。
@@ -198,7 +201,7 @@ test("特性总账表(2026-09-18 拍板):首行总账默认收起,展开逐特�
     /onClick=\{\(\) => onSelectCell\(`f:\$\{row\.module\}`\)\}/,
     "特性行点击走概览格筛选(f:<module>),与阶段/状态格同语义");
   // 口径:按业务模块聚合复用 issueDeliveryBreakdown,canceled 不计,
-  // module 空白归「未分类」;排序=处理中降序→总数降序→名称。
+  // module 空白归「未分类」;排序=推进中降序→总数降序→名称。
   const rows = issueFeatureRows([
     { status: "running", module: "语音特性-降噪" },
     { status: "waiting_user", module: "语音特性-降噪" },
@@ -208,10 +211,14 @@ test("特性总账表(2026-09-18 拍板):首行总账默认收起,展开逐特�
     { status: "archived" },
   ]);
   assert.deepEqual(rows, [
-    { module: "语音特性-降噪", active: 2, waiting: 1, failed: 0, closed: 1, total: 3 },
-    { module: "无线特性-漫游切换", active: 1, waiting: 0, failed: 1, closed: 0, total: 1 },
-    { module: "未分类", active: 0, waiting: 0, failed: 0, closed: 1, total: 1 },
+    { module: "语音特性-降噪", advancing: 1, waiting: 1, failed: 0, closed: 1, total: 3 },
+    { module: "未分类", advancing: 0, waiting: 0, failed: 0, closed: 1, total: 1 },
+    { module: "无线特性-漫游切换", advancing: 0, waiting: 0, failed: 1, closed: 0, total: 1 },
   ]);
+  for (const row of rows) {
+    assert.equal(row.advancing + row.waiting + row.failed + row.closed,
+      row.total, `${row.module} 行四列加和恒等于合计`);
+  }
   // 一次定位/一次验证/一次解决等交付质量比率已撤到交付分析「问题处理」
   // 页签(ADR-0045):总账表只留过程计数,这里不再有 per_session 归聚合。
 });

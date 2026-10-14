@@ -16,7 +16,7 @@
  *
  * 队列筛选三件套与需求侧同款(搜索/现场范围/责任人),语义按问题域
  * 映射(f637a70 确认口径):需要处理=等你答复+异常;停滞中=推进中且
- * 超过 STALE_AFTER_MS 无进展;正在推进=排队+AI 处理中;等你答复不含
+ * 超过 STALE_AFTER_MS 无进展;推进中=排队+AI 处理中;等你答复不含
  * 待验证(环境验证单列)。概览格筛选(阶段/状态)与之叠加生效。
  */
 import { cn } from "cn";
@@ -86,7 +86,7 @@ const METRIC_TONE = {
 
 /** 一次率显示口径(瓦片与总账表列共用):null/缺席=分母 0,显示 —。 */
 /** 特性总账表(2026-09-18 原型四稿拍板折入):首行=全部特性总账,
- * 默认只显首行,展开逐特性一行横向对比(处理中降序,issueFeatureRows
+ * 默认只显首行,展开逐特性一行横向对比(推进中降序,issueFeatureRows
  * 已排好)。首行任意处或箭头按钮切换展开;特性行点击=概览格筛选
  * (f:<module>,与阶段/状态格同一套单选格语义,联动下方现场)。
  * (2026-09-20 修订,ADR-0045):一次定位/一次验证/一次解决等交付质量
@@ -104,7 +104,7 @@ function FeatureLedger({ rows, stats, cell, onSelectCell }: {
       <thead>
         <tr className="border-b border-line bg-surface-2/70 text-left text-[12.5px] text-muted-foreground">
           <th scope="col" className="px-3 py-1.5 font-semibold">特性</th>
-          <th scope="col" className="px-3 py-1.5 text-right font-semibold">处理中</th>
+          <th scope="col" className="px-3 py-1.5 text-right font-semibold">推进中</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">待答复</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">需介入</th>
           <th scope="col" className="px-3 py-1.5 text-right font-semibold">已闭环</th>
@@ -132,7 +132,7 @@ function FeatureLedger({ rows, stats, cell, onSelectCell }: {
               <span className="text-[12px] font-normal text-muted-foreground">{rows.length} 个特性</span>
             </span>
           </td>
-          <td className="px-3 py-2 text-right font-semibold tabular-nums">{stats.active}</td>
+          <td className="px-3 py-2 text-right font-semibold tabular-nums">{stats.advancing}</td>
           <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.waiting > 0 && "text-attention")}>{stats.waiting}</td>
           <td className={cn("px-3 py-2 text-right font-semibold tabular-nums", stats.failed > 0 && "text-danger")}>{stats.failed}</td>
           <td className="px-3 py-2 text-right font-semibold tabular-nums text-success">{stats.closed}</td>
@@ -147,7 +147,7 @@ function FeatureLedger({ rows, stats, cell, onSelectCell }: {
             onClick={() => onSelectCell(`f:${row.module}`)}>
             <td className={cn("max-w-[320px] truncate py-2 pl-10 pr-3",
               selected ? "font-semibold text-primary" : "text-text-strong")}>{row.module}</td>
-            <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.active}</td>
+            <td className="px-3 py-2 text-right font-semibold tabular-nums">{row.advancing}</td>
             <td className={cn("px-3 py-2 text-right tabular-nums", row.waiting > 0 && "font-semibold text-attention")}>{row.waiting}</td>
             <td className={cn("px-3 py-2 text-right tabular-nums", row.failed > 0 && "font-semibold text-danger")}>{row.failed}</td>
             <td className="px-3 py-2 text-right tabular-nums text-success">{row.closed}</td>
@@ -254,10 +254,10 @@ export function TeamIssueWorld({ issues }: {
           <p className="mt-0.5 text-[13px] leading-[1.45] text-muted-foreground">首行是全部特性的总账，展开逐特性对比；点击特性行或阶段/状态格可筛选下方现场。</p>
         </div>
         <div className="flex flex-none items-center gap-[18px]"
-          aria-label={`问题总数 ${stats.total} 项，处理中 ${stats.active} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
-          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
+          aria-label={`问题总数 ${stats.total} 项，推进中 ${stats.advancing} 项，待答复 ${stats.waiting} 项，需介入 ${stats.failed} 项，已闭环 ${stats.closed} 项`}>
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title="不含已取消会话"><strong>{stats.total}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">问题总数</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
-          <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.active}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">处理中</small></span>
+          <span className="grid min-w-[62px] justify-items-end gap-0.5" title="排队启动中 + AI 处理中"><strong className="text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active">{stats.advancing}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">推进中</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
           <span className="grid min-w-[62px] justify-items-end gap-0.5"><strong className={cn("text-[25px] leading-none tracking-[-0.035em] tabular-nums text-active", stats.waiting && "text-attention")}>{stats.waiting}</strong><small className="whitespace-nowrap text-xs font-semibold text-muted-foreground">待答复</small></span>
           <i aria-hidden className="h-[30px] w-px bg-line" />
@@ -298,7 +298,7 @@ export function TeamIssueWorld({ issues }: {
       <div className="my-[13px] mb-[11px] flex items-center gap-[7px] rounded-[11px] border border-line bg-surface/90 p-2" aria-label="筛选问题现场">
         <label className="flex min-w-[220px] flex-1 items-center gap-2 px-[9px]"><svg viewBox="0 0 18 18" aria-hidden className="size-[15px] fill-none stroke-faint stroke-[1.5]"><circle cx="8" cy="8" r="4.5" /><path d="m11.5 11.5 3 3" /></svg><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索问题、单号或负责人" className="min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0" /></label>
         <Select value={scope}
-          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "正在推进" }, { value: "waiting", label: "等你答复" }, { value: "verify", label: "待验证" }]}
+          items={[{ value: "all", label: "全部现场" }, { value: "action", label: "需要处理" }, { value: "stale", label: "停滞中" }, { value: "wip", label: "推进中" }, { value: "waiting", label: "等你答复" }, { value: "verify", label: "待验证" }]}
           onValueChange={(value) => setScope((value ?? "all") as IssueScope)}>
           <SelectTrigger className="min-w-28" aria-label="现场范围"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -306,7 +306,7 @@ export function TeamIssueWorld({ issues }: {
               <SelectItem value="all">全部现场</SelectItem>
               <SelectItem value="action">需要处理</SelectItem>
               <SelectItem value="stale">停滞中</SelectItem>
-              <SelectItem value="wip">正在推进</SelectItem>
+              <SelectItem value="wip">推进中</SelectItem>
               <SelectItem value="waiting">等你答复</SelectItem>
               <SelectItem value="verify">待验证</SelectItem>
             </SelectGroup>
