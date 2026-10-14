@@ -19,13 +19,21 @@ import type { DomainDocument, KnowledgeCleanupPlan, KnowledgeCleanupPublication 
 import { assertModuleKnowledgePath } from "./domainKnowledgeLayout.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 
-/** 只恢复平台保存的知识目录，不把旧根文件的正文带入新导航。 */
+/** 从可读索引恢复目录；旧版标记仅用于读取，重建后不再输出。 */
 function rememberedModuleKnowledgeBases(content: string): string[] {
   const bases = new Set<string>();
   const remember = (value: unknown) => {
     if (typeof value !== "string") return;
     try { bases.add(knowledgeRelativePath(value)); } catch { /* 无效元数据不作为知识目录。 */ }
   };
+  let inIndex = false;
+  for (const line of content.split(/\r?\n/)) {
+    if (/^#{1,2}(?:\s|$)/.test(line)) { inIndex = line.trim() === "## 模块索引"; continue; }
+    if (!inIndex) continue;
+    const entry = /^-[ \t]+(`+)[ \t]*(.*?)[ \t]*\1[ \t]*$/.exec(line);
+    const path = entry?.[2].trim();
+    if (path?.endsWith("/")) remember(path.slice(0, -1));
+  }
   for (const match of content.matchAll(/<!-- mae-flow:module-knowledge-bases:v1 ([^\r\n]*?) -->/g)) {
     try {
       const values: unknown = JSON.parse(match[1]);
@@ -42,12 +50,11 @@ function rememberedModuleKnowledgeBases(content: string): string[] {
 }
 
 function moduleKnowledgeRoot(bases: string[]): string {
-  const metadata = JSON.stringify(bases).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
   const directory = (base: string) => {
     const fence = "`".repeat(Math.max(0, ...(base.match(/`+/g) ?? []).map(run => run.length)) + 1);
     return `${fence} ${base}/ ${fence}`;
   };
-  return `# AGENTS.md — 仓库知识导航\n\n<!-- mae-flow:module-knowledge-bases:v1 ${metadata} -->\n\n`
+  return `# AGENTS.md — 仓库知识导航\n\n`
     + `## 项目概述\n\n按任务涉及的源码路径、接口或业务术语定位模块；无法定位时查源码与资料，不按仓名推断归属。\n\n`
     + `## 模块索引\n\n`
     + (bases.length ? "以下目录的直接子目录以 `README.md` 为模块入口：\n\n" + bases.map(base => `- ${directory(base)}`).join("\n")
