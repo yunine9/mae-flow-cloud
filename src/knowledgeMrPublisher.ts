@@ -1,7 +1,7 @@
 import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { deliveryBranchName } from "./deliveryBranchName.ts";
@@ -16,6 +16,7 @@ import { readKnowledgeDeletion } from "./knowledgeDeletionStore.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { knowledgeIssueDescription, knowledgeIssueNumber, knowledgeRelativePath, type DomainKnowledgeJob, type DomainPublication, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
 import type { DomainDocument, KnowledgeCleanupPlan, KnowledgeCleanupPublication } from "./domainKnowledgeTypes.ts";
+import { assertModuleKnowledgePath } from "./domainKnowledgeLayout.ts";
 
 export class KnowledgeMrPublisher {
   private stopped = false;
@@ -267,6 +268,7 @@ export class KnowledgeMrPublisher {
       if (!doc.deleted && deletion) throw new Error("知识已删除，旧归档操作不能重新写入文档");
       const formal = readKnowledgeArchiveVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
       const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
+      assertModuleKnowledgePath(job, logicalTargets.get(doc.target_id)!, outgoing.path);
       if (!job.component_research_id) {
         if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
         return [outgoing];
@@ -286,6 +288,10 @@ export class KnowledgeMrPublisher {
       scanForSecrets(doc.path, Buffer.from(doc.content));
     }
     const archived = this.archivedDocuments(job, target, previous);
+    const moduleDirectories = job.knowledge_layout === "module-v1"
+      ? [...new Set([...logicalTargets.values(), ...(job.archive_batches ?? []).flatMap(batch => batch.targets)]
+        .filter(value => value.repository === target.repository && value.branch === target.branch && value.docs_path.endsWith(`/${job.module_id}`))
+        .map(value => value.docs_path))] : undefined;
     const knownFiles = new Map(docs.map(doc => {
       const files = archived.filter(file => file.id === doc.id && (!file.knowledge_document_id || file.knowledge_document_id === doc.knowledge_document_id))
         .map(file => ({ path: knowledgeRelativePath(file.path, true), content: file.content }));
@@ -327,7 +333,17 @@ export class KnowledgeMrPublisher {
       for (const doc of docs) {
         const known = knownFiles.get(doc.id)!;
         const moving = !!doc.base_path && doc.base_path !== doc.path || known.some(file => file.path !== doc.path);
-        if (!moving && !doc.deleted) continue;
+        if (!moving && !doc.deleted) {
+          const current = await this.content(git, parent, doc.path);
+          const baselines = known.filter(file => file.path === doc.path);
+          // 同路径更新也要保护研究后发生的人工修改；正文已经相同时允许恢复原归档。
+          // 已推送的 MR 可能尚未合入；只有研究基线中已存在的文件消失才视为外部删除。
+          const removedSinceResearch = current === null && typeof doc.base_content === "string";
+          if (current !== doc.content && (current === null ? removedSinceResearch : !baselines.some(file => file.content === current))) {
+            throw new Error(`归档文件 ${doc.path} 已变化或缺少原始内容，未覆盖；请核对最新文件后继续归档，无需重新研究`);
+          }
+          continue;
+        }
         const action = doc.deleted ? "删除" : "改名";
         const destination = doc.deleted ? null : await this.content(git, parent, doc.path);
         // 精确分支恢复时，远端 SHA 已经核对为本次保存的版本；不能因落盘窗口再重复提交。
@@ -335,7 +351,9 @@ export class KnowledgeMrPublisher {
         if (destination !== null && !committedAttempt && !known.some(file => file.path === doc.path && file.content === destination)) {
           throw new Error(`改名目标 ${doc.path} 已有其他文件或内容已变化，未覆盖；请调整文件路径或先核对冲突`);
         }
-        const oldPaths = [...known.map(file => file.path), ...(doc.base_path ? [knowledgeRelativePath(doc.base_path, true)] : []), ...(doc.deleted ? [doc.path] : [])].filter(path => doc.deleted || path !== doc.path);
+        const oldPaths = [...known.map(file => file.path), ...(doc.base_path ? [knowledgeRelativePath(doc.base_path, true)] : []), ...(doc.deleted ? [doc.path] : [])]
+          .filter(path => (doc.deleted || path !== doc.path) && (!moduleDirectories || moduleDirectories.some(directory => path.startsWith(`${directory}/`))));
+        // 显式整理旧任务不能删除仓根和公共目录；冻结的模块目录仍可用于核对本模块旧文件。
         for (const path of new Set(oldPaths)) {
           if (documents.some(file => file.id !== doc.id && file.path === path)) throw new Error(`${action}原路径 ${path} 被其他文档使用，未删除；请先调整冲突路径`);
           const content = await this.content(git, parent, path);
@@ -360,6 +378,39 @@ export class KnowledgeMrPublisher {
         const file = join(root, "knowledge-content.tmp"); writeFileSync(file, doc.content, { mode: 0o600 });
         const blob = (await git(["hash-object", "-w", file])).trim();
         await git(["update-index", "--add", "--cacheinfo", "100644", blob, doc.path]);
+      }
+      if (job.knowledge_layout === "module-v1") {
+        const bases = [...new Set(docs.filter(doc => !doc.deleted).map(doc => {
+          const directory = logicalTargets.get(doc.target_id)!.docs_path;
+          return directory.slice(0, -(`/${job.module_id}`).length);
+        }))].sort();
+        if (bases.length) {
+          const original = await this.content(git, parent, "AGENTS.md");
+          let content = original ?? "";
+          for (const base of bases) {
+            const key = createHash("sha256").update(base).digest("hex").slice(0, 16);
+            const start = `<!-- mae-flow:module-knowledge:${key}:start -->`, end = `<!-- mae-flow:module-knowledge:${key}:end -->`;
+            // 根文件只安装一次通用入口；后续模块归档不改写已有说明，包括人工调整过的块。
+            if (content.includes(start) || content.includes(end)) continue;
+            const separator = !content || content.endsWith("\n\n") ? "" : content.endsWith("\n") ? "\n" : "\n\n";
+            const fence = "`".repeat(Math.max(0, ...(base.match(/`+/g) ?? []).map(run => run.length)) + 1);
+            const directory = `${fence} ${base}/ ${fence}`;
+            content += `${separator}${start}\n## 模块索引\n\n`;
+            content += `业务模块知识保存在 ${directory} 的各子目录。每个模块以 \`README.md\` 说明模块名称、适用范围、源码入口和文稿索引；模块目录内不另建 \`AGENTS.md\`。\n\n`;
+            content += `处理业务需求前，先按本次业务范围查阅相关模块的 \`README.md\`，再沿其索引阅读规则、流程和跨仓契约。找不到入口时继续核对当前源码，不假定文档已齐全。\n\n`;
+            content += `## 阅读与维护约定\n\n`;
+            content += `- 本文件已有的项目说明、常用命令和工程规范继续适用；执行命令前核对仓内脚本及配置，不从文档示例猜测可用命令。\n`;
+            content += `- 一个代码仓可以承载多个业务模块；某个模块的业务规则仅适用于其声明的范围，不能直接作为全仓规则。\n`;
+            content += `- 新增、调整或删除模块文稿时，同步维护该模块的 \`README.md\` 和相关链接；保留其他模块的文稿及仓库公共约定。\n${end}\n`;
+          }
+          if (content !== original) {
+            const entry = await git(["--literal-pathspecs", "ls-tree", parent, "--", "AGENTS.md"]);
+            const mode = entry.startsWith("100755 ") ? "100755" : "100644";
+            const file = join(root, "knowledge-navigation.tmp"); writeFileSync(file, content, { mode: 0o600 });
+            const blob = (await git(["hash-object", "-w", file])).trim();
+            await git(["update-index", "--add", "--cacheinfo", mode, blob, "AGENTS.md"]);
+          }
+        }
       }
       const tree = (await git(["write-tree"])).trim(), before = (await git(["rev-parse", `${parent}^{tree}`])).trim();
       // 纯适用范围新版本也独立尝试建MR；平台拒绝无差异时如实返回原文，不虚写成功。

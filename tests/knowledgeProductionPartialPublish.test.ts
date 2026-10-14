@@ -31,7 +31,7 @@ test("生产线验收4：跨文档发布遇到停用模块，预检失败且全�
   const service = new DomainKnowledgeExtraction(dir, async input => {
     const repo = input.job.repositories[0];
     input.save({ id: "repo-doc", title: "仓内", target_id: repo.id, path: `${repo.docs_path}/repo.md`, layer: "repository", content: "仓内规则", sources: "源码" }, { revision: "b".repeat(40), content: null });
-    input.save({ id: "domain-doc", title: "领域", target_id: "domain", path: "domains/domain.md", layer: "domain", content: "领域规则", sources: "源码" }, { revision: "b".repeat(40), content: null });
+    input.save({ id: "domain-doc", title: "领域", target_id: "domain", path: `${input.job.knowledge_target.docs_path}/domain.md`, layer: "domain", content: "领域规则", sources: "源码" }, { revision: "b".repeat(40), content: null });
     return "完成";
   }, { publish: async (_job, target) => { archiveCalls++; return { target_id: target.id, branch: "b", state: "opened", documents: [] }; } });
   try {

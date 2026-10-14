@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-for (const scenario of ["preview", "created", "partial", "start", "return"]) test(`萃取前清理桌面走查：${scenario}`, { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+for (const scenario of ["preview", "created", "partial", "start", "return", "module"]) test(`萃取前清理桌面走查：${scenario}`, { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-browser-"));
   try {
     const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeSourceCleanup.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", jsxImportSource: resolve("web/node_modules/react"), loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' } });

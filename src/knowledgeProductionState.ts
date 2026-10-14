@@ -15,6 +15,7 @@ export function currentKnowledgeArchiveBatches(job: DomainKnowledgeJob, current_
   const documents = currentDocuments.filter(document => !!document.knowledge_document_id && (!current_revisions || !!current_revisions[document.knowledge_document_id]));
   const targets = [job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id));
   return (job.archive_batches ?? []).filter(batch => !!batch.issue_no && batch.state !== "superseded" && batch.documents.length > 0
+    && batch.knowledge_layout === job.knowledge_layout
     && batch.documents.length === documents.length && documents.every(document => batch.documents.some(old => old.id === document.id
       && old.target_id === document.target_id && (old.archive_path ?? old.path) === (document.archive_path ?? document.path)
       && old.knowledge_document_id === document.knowledge_document_id && old.published_revision === (current_revisions

@@ -70,7 +70,7 @@ test("领域重新萃取保留原业务模块及分支，无归档仓也可直�
   createBusinessModule(dir, { id: "orders", name: "订单", owner: "alice", description: "状态规则", repositories: ["https://example.test/orders.git"] }, "alice");
   let first: DomainExecution | undefined, second: DomainExecution | undefined;
   const service = new DomainKnowledgeExtraction(dir, async input => {
-    if (!first) { first = input; input.save({ ...document, path: "domain/orders/states.md" }); }
+    if (!first) { first = input; input.save({ ...document, path: `${input.job.knowledge_target.docs_path}/states.md` }); }
     else second = input;
     await waitForStop(input.signal);
     assert.throws(() => input.save({ ...document, path: "domain/orders/late.md", content: "迟到结果" }), /停止/);
