@@ -28,6 +28,16 @@ test("仅有旧 AGENTS 草稿时可以进入归档设置，不要求先发布或
   assert.doesNotMatch(html, /disabled/);
 });
 
+test("旧任务设置说明确认发布会自动整理和处理重名，预览只作为可选入口", () => {
+  const job = fixture();
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
+  assert.match(html, /确认并发布时，平台会自动按业务模块整理目录/);
+  assert.match(html, /重名时自动分配文件名、更新链接和索引/);
+  assert.match(html, /无需提前设置/);
+  assert.match(html, />预览模块目录<\/button>/);
+  assert.doesNotMatch(html, /先按业务模块整理目录/);
+});
+
 test("已发布且配置完整的任务仍能打开归档设置；研究期间不允许改位置", () => {
   const job = fixture(); Object.assign(job.documents[0], { knowledge_document_id: "kd-order", published_revision: "formal", published_document_revision: 1 });
   job.production = projectKnowledgeProduction({ kind: "domain", record: job });

@@ -26,9 +26,9 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onChanged, openRequest = 0 }: {
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onReview, onChanged, openRequest = 0 }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
-  onChanged?: () => void; openRequest?: number;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
@@ -47,6 +47,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
+    if (!["create-archive", "retry-archive"].includes(action.id)) return;
     const retry = action.id === "retry-archive";
     if ((!preview && !retry) || disabled || loading || submitting.current) return;
     submitting.current = true; setBusy(true); setError("");
@@ -60,6 +61,9 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     finally { if (generation.current === owner) { submitting.current = false; setBusy(false); } }
   }
   function renderAction(action: KnowledgeProductionAction, targetId?: string) {
+    if (action.id === "review") return onReview
+      ? <Button key={action.id} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onReview(); }}>{action.label}</Button>
+      : action.href ? <a key={action.id} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a> : null;
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
       : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;

@@ -3,6 +3,7 @@ import type { ResearchRecord } from "./componentResearch.ts";
 import type { ExtractionJobRecord } from "./knowledgeExtraction.ts";
 import type { SkillSubmissionRecord } from "./hostSkillLibrary.ts";
 import type { KnowledgeTaskGroup } from "./knowledgeTaskCenterTypes.ts";
+import { needsModuleKnowledgeLayout } from "./domainKnowledgeLayout.ts";
 
 import type { KnowledgeProductionAction, KnowledgeDocumentState, KnowledgePublicationState, KnowledgeProductionView } from "./knowledgeProductionTypes.ts";
 export type { KnowledgeProductionAction, KnowledgeDocumentState, KnowledgePublicationState, KnowledgeProductionView } from "./knowledgeProductionTypes.ts";
@@ -26,12 +27,14 @@ export function currentKnowledgeArchiveBatches(job: DomainKnowledgeJob, current_
 function documentState(job: DomainKnowledgeJob, document: DomainDocument): KnowledgeDocumentState {
   const pending = [...job.turns].reverse().flatMap(turn => turn.proposals.map(proposal => ({ turn, proposal })))
     .find(({ proposal }) => proposal.document.id === document.id && proposal.status === "pending");
-  const changed = !!pending || document.published_document_revision !== document.revision;
+  const confirmedDeletion = document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
+  const needsLayout = needsModuleKnowledgeLayout(job) && !confirmedDeletion;
+  const changed = !!pending || document.published_document_revision !== document.revision || needsLayout;
   const name = document.path || document.title;
   const proposal_problem = !pending ? undefined : pending.turn.status !== "done" ? `${name} 的修改尚未完成，完成后才能确认发布。`
     : pending.proposal.base_revision !== document.revision ? `${name} 的正文已变化，请重新修改或放弃这份修改结果后再发布。` : undefined;
   return { id: document.id, changed, published_revision: document.published_document_revision, knowledge_document_id: document.knowledge_document_id,
-    status_label: document.deleted ? changed ? "待删除" : "已删除" : changed ? "待审查" : "已入库", proposal_problem };
+    status_label: document.deleted ? changed ? "待删除" : "已删除" : needsLayout && !pending && document.published_document_revision === document.revision ? "待整理发布" : changed ? "待审查" : "已入库", proposal_problem };
 }
 function publicationState(job: DomainKnowledgeJob, publication: DomainPublication): KnowledgePublicationState {
   const target = [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id;
@@ -159,7 +162,10 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
       capabilities: capabilities.map(capability => ({ id: capability.id, status_label: { pending: "待处理", researched: "已完成", blocked: "受阻" }[capability.state] })),
       progress_message: capabilities.length ? `研究步骤 · ${capabilities.filter(capability => capability.state === "researched").length} / ${capabilities.length} 步已完成` : undefined },
     knowledge_document_id: formalId,
-    platform_message: published && (working || documents.some(document => document.changed) || input.kind === "component" && !!input.record.update_document_id) ? "修改期间继续使用已入库知识，确认发布后再更新。" : undefined,
+    platform_message: [input.kind === "domain" && needsModuleKnowledgeLayout(input.record) && documents.some(document => document.changed)
+      ? "确认并发布时，平台自动整理模块目录和相对链接，只发布本次勾选的文稿，不重新萃取。" : "",
+      published && (working || documents.some(document => document.changed) || input.kind === "component" && !!input.record.update_document_id)
+        ? "修改期间继续使用已入库知识，确认发布后再更新。" : ""].filter(Boolean).join("\n") || undefined,
     // 进行中的状态只在标题行的状态标签里说一次；页签并进标题行后，旁边再挂一个"研究中"就重复了。
     navigation: { ready_message,
       ready_action_label: readableCount ? !working && next_action.view === "review" && next_action.id === "review" ? "审查成果" : "查看文稿" : undefined },

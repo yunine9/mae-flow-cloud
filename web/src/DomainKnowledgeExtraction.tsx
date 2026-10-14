@@ -179,7 +179,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
       <FileText size={21} /><strong title={job.title}>{job.title}</strong><span className={`studio-job-status ${active ? "is-active" : ""}`}>{lifecycle}</span>
       {!preparingCleanup && <KnowledgeTaskTabs value={currentStage} onChange={changeView} documentCount={job.documents.length + (job.work_documents?.length ?? 0)} view={job.production} disabled={!!edit} />}
       <div className="studio-result-actions">
-        <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onChanged={() => {
+        <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onReview={() => changeView("review")} onChanged={() => {
           void componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}`, undefined, AbortSignal.timeout(30_000))
             .then(next => { if (selectedRef.current === job.id) setJob(next); }).catch(reason => { if (selectedRef.current === job.id) setError(reason.message); });
         }} />

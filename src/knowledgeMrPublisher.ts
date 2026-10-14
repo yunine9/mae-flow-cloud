@@ -49,6 +49,10 @@ function rememberedModuleKnowledgeBases(content: string): string[] {
   return [...bases];
 }
 
+function moduleReadmeName(name: string): boolean {
+  return /^README(?:-[A-Za-z0-9_-]+)?\.md$/i.test(name);
+}
+
 function moduleKnowledgeRoot(bases: string[]): string {
   const directory = (base: string) => {
     const fence = "`".repeat(Math.max(0, ...(base.match(/`+/g) ?? []).map(run => run.length)) + 1);
@@ -57,10 +61,10 @@ function moduleKnowledgeRoot(bases: string[]): string {
   return `# AGENTS.md — 仓库知识导航\n\n`
     + `## 项目概述\n\n按任务涉及的源码路径、接口或业务术语定位模块；无法定位时查源码与资料，不按仓名推断归属。\n\n`
     + `## 模块索引\n\n`
-    + (bases.length ? "以下目录的直接子目录以 `README.md` 为模块入口：\n\n" + bases.map(base => `- ${directory(base)}`).join("\n")
+    + (bases.length ? "以下目录的直接子目录存放模块入口：\n\n" + bases.map(base => `- ${directory(base)}`).join("\n")
       : "暂无可识别的模块入口，按任务范围核对源码与资料。")
     + `\n\n## 阅读与维护约定\n\n`
-    + `- 只读相关模块的 \`README.md\`，再沿索引按需读取规则、流程与契约，不全量加载知识目录。\n`
+    + `- 只读相关模块的 \`README.md\`；同目录存在 \`README-*.md\` 时一并核对入口，再沿索引按需读取规则、流程与契约，不全量加载知识目录。\n`
     + `- 使用结论前核对范围、版本与来源。当前行为查源码和配置，业务目标及约束查资料；冲突保留双方依据与差异，缺失信息明确未知。\n`
     + `- 模块规则只适用于声明范围，不推广全仓；跨模块任务分别核对调用边界与契约。\n`
     + `- 构建、测试和运行命令取自实际脚本或配置，确认工作目录及前置条件，不推测可用命令。\n`
@@ -442,11 +446,14 @@ export class KnowledgeMrPublisher {
           if (formal.scope !== "module") continue;
           const location = formal.archive_target ?? formal.research_source ?? formal.source;
           if (!location || repositoryIdentity(location.repository) !== repositoryIdentity(target.repository) || location.branch !== target.branch) continue;
+          const parts = location.path.split("/");
+          if (!moduleReadmeName(parts.at(-1)!)) continue;
+          const directory = parts.slice(0, -1).join("/");
           for (const moduleId of formal.module_ids) {
             if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(moduleId)) continue;
-            const suffix = `/${moduleId}/README.md`;
-            if (location.path.endsWith(suffix)) {
-              try { candidates.add(knowledgeRelativePath(location.path.slice(0, -suffix.length))); }
+            const suffix = `/${moduleId}`;
+            if (directory.endsWith(suffix)) {
+              try { candidates.add(knowledgeRelativePath(directory.slice(0, -suffix.length))); }
               catch { /* 无效的历史位置不作为模块知识入口。 */ }
             }
           }
@@ -454,9 +461,11 @@ export class KnowledgeMrPublisher {
         const bases = new Set(currentBases);
         // 仅检查已知知识目录的索引；源码目录里同名 README 不能成为模块知识入口。
         if (candidates.size) for (const entry of (await git(["ls-files", "--stage", "-z", "--", ...[...candidates].map(base => `:(literal)${base}`)])).split("\0")) {
-          const match = /^100(?:644|755) [a-f0-9]+ 0\t([^\r\n]+\/[^/]+\/README\.md)$/.exec(entry);
+          const match = /^100(?:644|755) [a-f0-9]+ 0\t([^\r\n]+)$/.exec(entry);
           if (!match) continue;
-          const base = match[1].split("/").slice(0, -2).join("/");
+          const parts = match[1].split("/");
+          if (parts.length < 3 || !moduleReadmeName(parts.at(-1)!)) continue;
+          const base = parts.slice(0, -2).join("/");
           if (candidates.has(base)) bases.add(base);
         }
         const content = moduleKnowledgeRoot([...bases].sort());

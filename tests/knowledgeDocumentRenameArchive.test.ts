@@ -559,6 +559,34 @@ test("共享仓模块导航：正式模块位置补全自定义目录，后续�
   } finally { await f.close(); }
 });
 
+test("共享仓模块导航：已归档的避让入口在其他目录归档后仍可发现，正式位置也能恢复入口", { timeout: 30_000 }, async () => {
+  const f = await fixture({ "src/orders/README-source-2.md": "源码目录中的同名文件。\n" });
+  try {
+    const base = "handbook/archived", a = moduleJob(f, "orders", [base]), document = a.documents[0];
+    const previous = readKnowledgeDocument(f.dir, document.knowledge_document_id!);
+    document.path = `${base}/orders/README-${document.id}-2.md`;
+    const formal = saveKnowledgeDocument(f.dir, { ...previous, archive_target: { repository: f.target.repository, branch: "main", path: document.path } }, "alice", previous.id, { expectedRevision: previous.revision });
+    document.published_revision = formal.revision;
+    const first = await f.publisher.publish(a, a.knowledge_target, undefined, "alice", f.save);
+    assert.equal(f.tree(first.revision!, `${base}/orders/README.md`), "", "只归档避让后的入口，不新建或覆盖 canonical README");
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
+    const b = moduleJob(f, "billing"), second = await f.publisher.publish(b, b.knowledge_target, undefined, "alice", f.save);
+    const root = f.content(second.revision!, "AGENTS.md");
+    assert.ok(root.includes(`${base}/`), "已知旧目录只含 README-id-2.md 时也继续保留入口");
+    assert.match(root, /docs\/knowledge\//);
+    assert.ok(root.includes("`README-*.md` 时一并核对入口"));
+    assert.doesNotMatch(root, /src\//, "不会扫描源码里的同名 README 推断归档目录");
+    assert.equal(f.content(second.revision!, document.path), document.content);
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", second.revision!);
+    f.git("-C", f.source, "fetch", f.remote, "main"); f.git("-C", f.source, "reset", "--hard", "FETCH_HEAD");
+    f.write("AGENTS.md", "# 未管理的旧根\n");
+    f.git("-C", f.source, "add", "."); f.git("-C", f.source, "commit", "-m", "remove root directory index"); f.git("-C", f.source, "push", f.remote, "main");
+    const c = moduleJob(f, "reporting", ["guides/knowledge"]), third = await f.publisher.publish(c, c.knowledge_target, undefined, "alice", f.save);
+    assert.ok(f.content(third.revision!, "AGENTS.md").includes(`${base}/`), "正式模块位置中的避让入口也能补回缺失的根目录记录");
+    assert.equal(f.content(third.revision!, document.path), document.content);
+  } finally { await f.close(); }
+});
+
 test("共享仓模块导航：旧平台块只恢复校验过的目录，空目录与软链接入口不进入新根", { timeout: 20_000 }, async () => {
   const base = "handbook/legacy", hash = createHash("sha256").update(base).digest("hex").slice(0, 16);
   const oldRoot = "# 旧规范\n旧命令：never-run-this\n\n"

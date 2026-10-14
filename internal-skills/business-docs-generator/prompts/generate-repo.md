@@ -6,7 +6,7 @@
 
 核对 step.instructions 中的文稿编号、目标、仓内路径、具体模板、业务范围、依赖步骤与证据索引。按 id 读取本项调查结果并重新打开原始依据。只有边界或关联路径不清楚时才读取 current-plan；knowledge_work read_document 返回整份过程文稿，不支持章节读取，不要求每篇无条件加载全计划。
 
-knowledge_layout 为 module-v1 时仅写该仓 target.docs_path 内的文稿：repo-agents.md 模板生成 README.md，module-map.md 模板仍生成 module-map.md。研究覆盖本业务在该仓的全部功能及必要调用链，不因共仓关系扩展到其他业务；仓根 AGENTS.md、其他模块目录与公共规范只可作为来源引用。其他布局沿用当前保存的实际文稿路径，不依据 module_id 推断或迁移；归档整理过目录时不照搬历史规划中的旧路径。
+knowledge_layout 为 module-v1 时仅写该仓 target.docs_path 内的文稿：repo-agents.md 模板生成 README.md，module-map.md 模板仍生成 module-map.md。已有文稿若经平台自动避让而带文件名后缀，沿用当前保存路径并保留其导航入口，不改回重名路径。研究覆盖本业务在该仓的全部功能及必要调用链，不因共仓关系扩展到其他业务；仓根 AGENTS.md、其他模块目录与公共规范只可作为来源引用。其他布局沿用当前保存的实际文稿路径，Agent 不依据 module_id 自行迁移；平台在发布或设置中整理过目录后，以当前文稿位置为准，不照搬历史规划路径。
 
 涉及上传资料、无线术语或相关业务结论时，读取 [来源方法](../references/business-sources.md)，按本项 source_index 回读所需原文/图片。实现规则以源码核实，业务意图与历史原因用适用资料，无线豆包只补通用背景；新增来源及具体冲突/缺口保存到步骤结果，独立评审需重新读源。
 
