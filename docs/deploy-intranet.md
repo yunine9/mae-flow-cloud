@@ -14,12 +14,12 @@
 | Git | 任务克隆/推分支/ls-remote 都用它 |
 | Docker + 统一构建镜像 | 宿主运行 Docker；`deploy/build-image/` 镜像提供 JDK 21/Maven、Node/npm、GCC/G++/CMake/Ninja 等。项目 wrapper/脚本在容器内非交互执行 |
 | 最终质量环境 | CodeCheck 与最终编译/UT 结论仍由绑定提交 SHA 的权威流水线提供；流水线不是可选项 |
-| npm 依赖 | `npm ci`(pi 锁 0.84.1,升级必须重跑 probe+全套测试再拍板)。**进内网前先验这一步能不能过**,见下 |
+| npm 依赖 | `npm ci`(pi 锁 1.2.0，升级须通过 probe、会话及工具定向测试和类型检查)。**进内网前先验这一步能不能过**,见下 |
 
 #### 离线/内网装依赖:进场前先验,别到现场才发现
 
 代码可以靠 ZIP 带进去(内核快照在里面),但 `node_modules` **不在仓里**,
-必须能装出来。要装的东西:运行时 `@earendil-works/pi-coding-agent@0.84.1`、
+必须能装出来。要装的东西:运行时 `@earendil-works/pi-coding-agent@1.2.0`、
 `pg`、`typebox`、`@ast-grep/cli@0.45.3`、`@sylphx/anymd@8.5.3`;开发 `tsx`、`typescript`;前端 `web/` 那套(react+vite)。
 
 组件知识的新增代码检查在宿主使用随 npm 安装的 ast-grep，不依赖 Python 调度器。

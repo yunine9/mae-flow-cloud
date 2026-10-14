@@ -46,7 +46,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | 正式前端 | `web/src/`、Vite 配置、前端包清单与锁文件 | 对应平台 Node/npm、依赖包源 | 必须重新构建 `web/dist`；没有 dist 会回退简易页面，能打开网页不等于正式工作台恢复 |
 | Cloud API 与业务宿主 | `src/serve.ts`、`server.ts`、`taskService.ts`、各领域模块 | Node、npm 依赖、可写数据目录、实际启动配置 | 可以重建程序；旧任务和账号不会从源码长回来 |
-| Pi Agent SDK | 本仓有装配代码、`package.json` 固定 `@earendil-works/pi-coding-agent@0.84.1`、锁文件 | SDK 及传递依赖的 npm 包 | SDK 源码/已安装依赖不随仓收编；离线安装要准备完整依赖，不能搬 macOS 的 esbuild 到 Linux |
+| Pi Agent SDK | 本仓有装配代码、`package.json` 固定 `@earendil-works/pi-coding-agent@1.2.0`、锁文件 | SDK 及传递依赖的 npm 包 | SDK 源码/已安装依赖不随仓收编；离线安装要准备完整依赖，不能搬 macOS 的 esbuild 到 Linux |
 | 需求流程内核 | `kernel/` 是普通 Git 文件，含流程、Python 实现、标准、固定 vendor Skill；`kernel/VENDORED` 记录来源 | 宿主 Python、Git | 不需另找完整 mae-flow 仓；`MAE_FLOW_HOME` 若指向仓外，会覆盖仓内快照，不能照搬失效路径 |
 | 需求交付控制 | `kernelHost.ts`、`kernelDelivery.ts`、`prepushAgent.ts`、`mrGateClient.ts` 等 | 下列模型、容器、Git、交付平台 | 门禁/重试/状态对账代码可重建；不能用空任务文件伪造旧任务完成状态 |
 | 问题处理 | `src/issueFlow/`，问题阶段、闸、材料、DTS 客户端、提示词装配 | DTS/MCP、目标代码仓、日志环境凭据、容器、模型和交付平台 | 问题页出现不代表拉单/抓日志可用；需求链通过不能代替问题链验收 |
