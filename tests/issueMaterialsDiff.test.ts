@@ -90,7 +90,7 @@ function seedTwoRepoSession(dataDir: string): { id: string; service: IssueFlowSe
     created_at: "2026-08-30T08:00:00Z", updated_at: "2026-08-30T09:00:00Z",
     title: "t", description: "", source: "manual",
     scenario: "no_ticket",
-    status: "suspended", stage: "conclude", stage_note: "",
+    status: "idle", stage: "conclude", stage_note: "",
     stage_at: "2026-08-30T09:00:00Z",
     repo_urls: [originA, originB],
   }));

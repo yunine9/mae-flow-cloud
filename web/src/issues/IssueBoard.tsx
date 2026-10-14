@@ -51,7 +51,7 @@ import {
 type IssueListFilter = "active" | IssueStatus | "all";
 const ISSUE_FILTER_STORAGE_KEY = "mae-flow:issue-list-filter";
 const ISSUE_FILTER_STATUSES: IssueStatus[] = [
-  "waiting_user", "running", "queued", "suspended", "failed",
+  "waiting_user", "running", "queued", "failed",
   "archived", "canceled",
 ];
 
@@ -80,8 +80,9 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
    * openId 唯一来源,浏览器后退/前进时也同步过来。App 层按当前 URL
    * 对表后下发;列表点卡不再走这里——卡片是纯链接,新页签自己带 URL。 */
   initialOpenId?: string;
-  /** 页内切会话(挂起转正切新会话):App 层统一写 issueRouteId + URL,
-   * 本组件不直接操作 history。 */
+  /** 页内切会话(ADR-0040):App 层统一写 issueRouteId + URL,
+   * 本组件不直接操作 history。(历史触发者「挂起转正」已随 ADR-0048
+   * 退役,管道保留给会话内换题。) */
   onOpenIssue: (id: string) => void;
   /** 返回列表(Esc/返回钮):URL 归位交给 App 层统一写。 */
   onCloseIssue: () => void;
@@ -96,8 +97,8 @@ export function IssueBoard({ viewer, onNavigateProfile, initialOpenId = "",
    * 可点直达工作台。再发起一批整体顶掉,「知道了」撤下。 */
   const [launchedNotice, setLaunchedNotice] = useState<IssueSummary[]>([]);
   const [openId, setOpenId] = useState(initialOpenId);
-  // App 快照是工作台开关的唯一真相:URL 侧变化(挂起转正页内切会话、
-  // 浏览器后退/前进)同步过来,导航与右侧内容不错位。
+  // App 快照是工作台开关的唯一真相:URL 侧变化(浏览器后退/前进)
+  // 同步过来,导航与右侧内容不错位。
   useEffect(() => { setOpenId(initialOpenId); }, [initialOpenId]);
   const [detail, setDetail] = useState<IssueDetail | undefined>();
   /** 详情拉取是否失败过(当前 openId):失败页给重试入口,加载指示
@@ -400,15 +401,13 @@ function IssueCard({ issue, onSettled }: {
   }
 
   // 状态轨颜色:问题域状态 → 令牌工具类(旧 .status-* rail 规则随
-  // task-card 皮退役;suspended 收编为令牌 --suspended,替代旧内联
-  // #3b83d5;queued/archived/canceled 无轨,与旧规则一致)。
+  // task-card 皮退役;queued/archived/canceled 无轨,与旧规则一致)。
   const railClass = {
     running: "bg-active",
     waiting_user: "bg-attention",
     idle: "bg-ink",
-    suspended: "bg-suspended",
     failed: "bg-danger",
-  }[issue.status as "running" | "waiting_user" | "idle" | "suspended" | "failed"]
+  }[issue.status as "running" | "waiting_user" | "idle" | "failed"]
     ?? "bg-transparent";
 
   return <Card id={`issue-${issue.id}`}

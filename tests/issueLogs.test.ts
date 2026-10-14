@@ -259,7 +259,7 @@ function seedSessionWithLogs(dataDir: string): string {
     created_at: "2026-08-31T08:00:00Z", updated_at: "2026-08-31T09:00:00Z",
     title: "t", description: "", source: "manual",
     scenario: "no_ticket",
-    status: "suspended", stage: "conclude", stage_note: "",
+    status: "idle", stage: "conclude", stage_note: "",
     stage_at: "2026-08-31T09:00:00Z",
   }));
   return root;

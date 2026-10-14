@@ -9,7 +9,7 @@ import { IssueExternalReviewPanel, externalReviewDone, useIssueReviews } from ".
  * MaterialsPane.tsx、现场直播在 EventsPane.tsx、MR 检视批注在
  * IssueExternalReviewPanel.tsx(2026-09-17 收编第六签,ADR-0027 修订)。
  * 右栏旧 NEXT ACTION 侧栏已随 #127 整体拆除:归档/终止入头部控件区、
- * 挂起转正卡入协作流顶部、状态说明由头部徽标与协作流承载。
+ * 状态说明由头部徽标与协作流承载。
  *
  * 查看模式(docs/issue-session-view-mode.md):登录用户 ≠ 会话归属人
  * 即只读围观——四个信息面(概要+时间线、材料只读浏览、事件流直播、
@@ -42,7 +42,6 @@ import { confirmDialog } from "../ConfirmDialog";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
 import { IssueCodeOriginPanel } from "./CodeOriginPanel";
 import { IssueWarmupLive } from "./IssueWarmupLive";
-import { IssueSuspendedCard } from "./IssueSuspendedCard";
 import { TicketTemplateCard } from "./TicketTemplateCard";
 import { IssueDecisionCard } from "./IssueDecisionCard";
 import { IssueConversationStream } from "./IssueConversationStream";
@@ -104,8 +103,8 @@ export function IssueSessionView({
   onListRefresh: () => void;
   onError: (message: string) => void;
   onNavigateProfile?: () => void;
-  /** 页内切会话(ADR-0040):挂起转正切到新生的有单会话,当前页签
-   * 直切不新开。 */
+  /** 页内切会话(ADR-0040):会话内换题时当前页签直切不新开
+   * (历史触发者「挂起转正」已随 ADR-0048 退役)。 */
   onOpenIssue: (id: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -188,7 +187,7 @@ export function IssueSessionView({
   // 决策卡在卡在场时画。闸卡的分寸(2026-09-08):env_needed 在工具
   // 举起闸的瞬间就出卡,不等回合收口的状态翻转——模型收口后仍可继续
   // 不需要环境的工作,用户填卡/拒绝与它并行;其余闸都在阶段边界举起、
-  // 状态随即翻转,照旧只在 waiting_user 画。终态/挂起不出现卡。
+  // 状态随即翻转,照旧只在 waiting_user 画。终态不出现卡。
   // gate_kind/scope 随卡带给决策卡:env_needed 换专用环境表单,
   // skill_select 换多选圈选卡(ADR-0011),pipeline_unfixable/
   // pipeline_evidence 换流水线红灯人工卡(票 03),gate_pipeline 带
@@ -541,9 +540,8 @@ export function IssueSessionView({
             GET /issues/:id/conversation + 可见轮询)+ 输入区。当前等待卡
             由卡座钉在流末尾的 Agent 气泡内(waitingId 供流内同卡投影
             去重),提交区经 portal 挂进输入区 dock(dockRef→footerTarget);
-            查看模式渲染只读事实卡、不出 dock。存量挂起会话(ADR-0048
-            退役前的停泊态)在 suspendedCard 槽看说明卡,协作头之下、
-            流之上;确认是问题归档的会话同位挂提单模板卡。 */}
+            查看模式渲染只读事实卡、不出 dock。确认是问题归档的会话在
+            协作头之下、流之上挂提单模板卡。 */}
         {detail.status === "archived" && detail.conclusion?.kind === "issue" &&
           <div className="mb-3">
             <TicketTemplateCard issueId={detail.id} />
@@ -567,8 +565,6 @@ export function IssueSessionView({
                 onAnswer={answer} onEnvironment={attachEnvironment} />
             : <IssueWaitingFacts waiting={waiting} />)
             : undefined}
-          suspendedCard={detail.status === "suspended"
-            ? <IssueSuspendedCard /> : undefined}
           dockRef={setDecisionFooterTarget}
           onSteer={sendSteer}
           onReply={sendReply}

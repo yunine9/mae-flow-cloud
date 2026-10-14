@@ -133,6 +133,7 @@ test("不适用即不出章:无单/非问题/取消/失败/在途一律无字段
   const inFlight = seedSession(dataDir, { id: "issue-inflight",
     ticket: "DTS6", status: "waiting_user", stage: "mr_green" });
   seedReport(inFlight, 1);
+  // 盘面旧词 suspended:读盘归取消(ADR-0048/0057),同样不适用一次章。
   const suspended = seedSession(dataDir, { id: "issue-suspended",
     ticket: "DTS7", status: "suspended" });
   seedReport(suspended, 1);

@@ -36,7 +36,8 @@ const OWNER_VIEWER: IssueViewer = { username: OWNER, role: "developer" };
 const LIVE = "issue-101";
 const ARCHIVED = "issue-102";
 const CANCELED = "issue-103";
-const SUSPENDED = "issue-104";
+/** 盘面写旧词 suspended:存量挂起读盘归取消(ADR-0048/0057)的回归样。 */
+const LEGACY_SUSPENDED = "issue-104";
 
 interface RouteResult {
   status: number;
@@ -161,7 +162,7 @@ function makeFixture(): { dataDir: string; service: IssueFlowService } {
     ...base, id: CANCELED, status: "canceled", stage: "done",
   });
   writeSession(dataDir, {
-    ...base, id: SUSPENDED, status: "suspended", stage: "analyze",
+    ...base, id: LEGACY_SUSPENDED, status: "suspended", stage: "analyze",
     scenario: "no_ticket",
   });
   const service = new IssueFlowService({
@@ -264,13 +265,13 @@ test("查看模式:SSE 事件流登录即可订阅,不再提前 403;终态会话
   }
 });
 
-test("查看模式:终态(归档/取消)与挂起会话对非归属人可读", async () => {
+test("查看模式:终态(归档/取消)对非归属人可读;存量挂起读盘归取消", async () => {
   const { service } = makeFixture();
   try {
     for (const [id, expected] of [
       [ARCHIVED, "archived"],
       [CANCELED, "canceled"],
-      [SUSPENDED, "suspended"],
+      [LEGACY_SUSPENDED, "canceled"],
     ] as const) {
       const read = await callIssueRoute("GET", ["issues", id],
         { service, viewer: PEER });

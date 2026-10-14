@@ -224,8 +224,8 @@ export function IssueAnalyticsTab() {
   </div>;
 }
 /** 登记问题页签(ADR-0048):无单会话的结论漏斗与研究质量。只数
- *  结论已出的会话(非问题/确认是问题/取消),研究进行中与存量挂起
- *  一律不进;一次定位分母=非问题+确认是问题。纯呈现层,与登记问题
+ *  结论已出的会话(非问题/确认是问题/取消),研究进行中一律不进;
+ *  一次定位分母=非问题+确认是问题。纯呈现层,与登记问题
  *  统计端点同一数字;「确认是问题」行下钻报告版本账与提单模板卡。 */
 export function RegistrationAnalyticsTab() {
   const [stats, setStats] = useState<IssueRegistrationStats>();
@@ -276,7 +276,7 @@ export function RegistrationAnalyticsTab() {
       <CompletionDateFilter value={dates} onChange={setDates} />
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <BarChart3 size={15} />研究完成 {stats?.total ?? 0}
-        {help("结论已出的无单会话:非问题 + 确认是问题 + 取消。研究进行中与存量挂起一律不进任何数字。")}
+        {help("结论已出的无单会话:非问题 + 确认是问题 + 取消。研究进行中不进任何数字。")}
       </span>
     </div>
     <div className="grid grid-cols-[repeat(4,1fr)] gap-3.5">
@@ -285,7 +285,7 @@ export function RegistrationAnalyticsTab() {
         "结论已出的无单(自研)问题会话数:研究进行中的暂不进,结论落地后自动计入;有单会话在 DTS 页签,不在此处。")}
       {tile("非问题闭环率", pct(stats ? stats.total ? stats.non_issue / stats.total * 100 : null : null),
         `${stats?.non_issue ?? 0}/${stats?.total ?? 0} 研究完成`,
-        "研究结论为「非问题」的占比。分母=研究完成(非问题+确认是问题+取消);挂起与进行中不进。")}
+        "研究结论为「非问题」的占比。分母=研究完成(非问题+确认是问题+取消);进行中不进。")}
       {tile("确认是问题率", pct(stats ? stats.total ? stats.issue_confirmed / stats.total * 100 : null : null),
         `${stats?.issue_confirmed ?? 0}/${stats?.total ?? 0} 研究完成`,
         "研究结论为「确认是问题」的占比:会话闭环并产出提单模板,测试拿模板去 DTS 提单后,新单号从 DTS 列表发起有单会话。分母同左。")}
@@ -359,7 +359,7 @@ export function RegistrationAnalyticsTab() {
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有登记问题"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
-      <p>本页只数结论已出的无单(自研)会话:非问题闭环率与确认是问题率的分母=研究完成(非问题+确认是问题+取消);一次定位率分母=非问题+确认是问题(取消不构成一次研究);研究进行中与存量挂起一律不进。</p>
+      <p>本页只数结论已出的无单(自研)会话:非问题闭环率与确认是问题率的分母=研究完成(非问题+确认是问题+取消);一次定位率分母=非问题+确认是问题(取消不构成一次研究);研究进行中不进。</p>
       <p>一次定位率=分析报告一版过,检视提出修改会生成新版本。确认是问题即闭环归档并产出提单模板;提单在平台外完成(测试复制进 DTS 提单系统),新单号再从 DTS 列表发起有单会话完整重走。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
@@ -379,9 +379,15 @@ export function RegistrationAnalyticsTab() {
     </Sheet>
   </div>;
 }
-export function DeliveryAnalytics({ onOpenTask }: { onOpenTask: (taskId: string) => void }) {
+export function DeliveryAnalytics({ onOpenTask, initialTab }: {
+  onOpenTask: (taskId: string) => void;
+  /** 入场页签(页内跳转指定落点,如团队DTS档案的「交付统计」直达
+   * 「DTS」;缺席=需求交付)。本组件按视图条件挂载,每次进场重取。 */
+  initialTab?: "requirement" | "issue" | "registration" | "knowledge";
+}) {
   const detailTitle = useRef<HTMLHeadingElement>(null);
-  const [tab, setTab] = useState<"requirement" | "issue" | "registration" | "knowledge">("requirement");
+  const [tab, setTab] = useState<"requirement" | "issue" | "registration" | "knowledge">(
+    initialTab ?? "requirement");
   const [report, setReport] = useState<DeliveryAnalysisReport>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

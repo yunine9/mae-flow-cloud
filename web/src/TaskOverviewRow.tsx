@@ -17,7 +17,7 @@ export function TaskOverviewRow({ id, ticket, title, status, statusLabel, owner,
   childCount?: number; parentId?: string; parentLabel?: string; parentTitle?: string; onOpenParent?: () => void;
 }) {
   const tone = status === "failed" ? "danger"
-    : attention || ["waiting_for_human", "waiting_user", "idle", "paused", "suspended"].includes(status) ? "attention"
+    : attention || ["waiting_for_human", "waiting_user", "idle", "paused"].includes(status) ? "attention"
     : ["completed", "archived"].includes(status) ? "done"
     : status === "await_merge" ? "merge"
     : ["running", "verifying", "coordinating", "pausing"].includes(status) ? "active" : "quiet";

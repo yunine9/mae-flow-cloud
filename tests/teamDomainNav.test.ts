@@ -123,7 +123,7 @@ test("团队问题档案面板镜像 HistoryBoard 骨架,行仍用问题卡", ()
   assert.doesNotMatch(worldBody, /history-board/,
     "TeamIssueWorld 本体只出概览+现场;档案必须由页签面板 TeamIssueArchive 承载");
   assert.match(issueWorld, /<TeamIssueCard key=\{issue\.id\} issue=\{issue\} \/>/);
-  assert.match(app, /<TeamIssueArchive issues=\{teamIssues\} \/>/);
+  assert.match(app, /<TeamIssueArchive issues=\{teamIssues\}/);
 });
 
 test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格计数正确", () => {
@@ -135,7 +135,6 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
     issue("failed", "fix"),
     issue("waiting_user", "mr_green"),
     issue("idle", "prep_repo"),
-    issue("suspended", "analyze"),
     issue("archived", "mr_green"),
     issue("canceled", "analyze"),
     // 环境验证卡在场(ADR-0043):单列「待验证」,不重复计入 mr_green。
@@ -149,26 +148,26 @@ test("问题侧交付概览口径:给定会话集合,规模与阶段/状态格�
     failed: stats.failed,
     closed: stats.closed,
   }, {
-    // 已取消不进总数;active 再剔除已闭环;waiting 归一含 idle。
-    total: 8, active: 7, waiting: 3, failed: 1, closed: 1,
+    // 已取消不进总数;active 再剔除已闭环;waiting 归一含 idle(含待验证)。
+    total: 7, active: 6, waiting: 3, failed: 1, closed: 1,
   });
   // 阶段格=团队页合并/拆分口径(2026-09-20):拉单+拉仓合并「准备中」,
   // 「待验证」(卡在场)从「提交 MR·跑绿」拆出;固定顺序,0 计数
   // (conclude)也在场——渲染层置灰,口径层保留全集。
   assert.deepEqual(stats.stages, [
     { key: "prep", count: 2 },
-    { key: "analyze", count: 2 },
+    { key: "analyze", count: 1 },
     { key: "fix", count: 1 },
     { key: "mr_green", count: 1 },
     { key: "verifying", count: 1 },
     { key: "conclude", count: 0 },
   ]);
-  // 状态格=展示归一五状态(waiting_user 吸收 idle),各组加总=active。
+  // 状态格=展示归一四状态(waiting_user 吸收 idle;挂起已退役,
+  // ADR-0048/0057),各组加总=active。
   assert.deepEqual(stats.statuses, [
     { key: "queued", count: 1 },
     { key: "running", count: 1 },
     { key: "waiting_user", count: 3 },
-    { key: "suspended", count: 1 },
     { key: "failed", count: 1 },
   ]);
   assert.equal(stats.stages.reduce((sum, item) => sum + item.count, 0),

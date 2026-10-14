@@ -258,9 +258,10 @@ export function issueStageBucketMatch(
 
 /** 概览状态格全集(展示归一口径:idle 并入 waiting_user——2026-09-08
  * 拍板,卡片/计数/筛选同一归一;archived/canceled 是收口终态,只进
- * 档案不进概览格)。标签同样由渲染层取 ISSUE_STATUS_TEXT。 */
+ * 档案不进概览格;挂起已退役,ADR-0048/0057)。标签同样由渲染层取
+ * ISSUE_STATUS_TEXT。 */
 export const ISSUE_DELIVERY_STATUSES = [
-  "queued", "running", "waiting_user", "suspended", "failed",
+  "queued", "running", "waiting_user", "failed",
 ] as const;
 
 export interface IssueDeliveryBreakdown {

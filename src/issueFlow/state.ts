@@ -58,12 +58,11 @@ export type IssueStatus =
   | "running"        // Agent 回合进行中
   | "waiting_user"   // Agent 举了 AskUserQuestion(或平台闸门),等用户作答
   | "idle"           // 回合结束,等用户下一句话
-  | "suspended"      // 存量:无单结论曾挂起等关联转正(机制已退役,ADR-0048;手动归档亦退役,只能取消收口,ADR-0057)
   | "archived"       // 已收口归档(结论见 conclusion)
   | "canceled"
   | "failed";
 
-/** 固定流程的两大场景:有单走五阶段,无单走三节点(结论后可挂起)。 */
+/** 固定流程的两大场景:有单走五阶段,无单走三节点(结论即闭环归档)。 */
 export type IssueScenario = "ticket" | "no_ticket";
 
 /** 固定流程单个阶段的执行状态(inherited=转正继承,redo=回退待重做)。 */
@@ -158,7 +157,7 @@ export interface IssuePushRecord {
  * pull_repo/AskUserQuestion 自己闭环(模块发起即定局,ADR-0056)。 */
 export type IssueGateKind =
   | "analysis_confirm" // 报告确认:放行进入问题修改
-  | "conclude"         // 无单结论:是问题→挂起 / 非问题→闭环
+  | "conclude"         // 无单结论:是问题→闭环出提单模板 / 非问题→闭环
   | "env_verify"       // 环境验证:发现问题→回退问题分析;通过无需作答
                        // ——MR 全部合入即视为通过并自动归档(ADR-0034)
   | "env_needed"       // 网管环境:拉日志/换库缺地址与密码时现场补配(2026-08-28)
@@ -686,6 +685,12 @@ export function loadState(root: string): IssueSessionState | undefined {
     state.pipelines = { [state.repo_url ?? ""]: legacyPipeline };
   }
   delete (state as { pipeline?: unknown }).pipeline;
+  // 挂起状态退役(ADR-0048/0057):无单结论曾挂起等关联转正,机制拆除
+  // 后存量挂起读盘即按既定出口归为取消(不入结论统计),类型与消费方
+  // 都不再认旧词,盘面在下一次落盘时自然对齐。
+  if ((state.status as string) === "suspended") {
+    state.status = "canceled";
+  }
   // 结论词表收敛(ADR-0037):fixed 并入 delivered(修复完成即交付,
   // 合入与否看 mrs 账)、converted 并入 issue(转正=问题成立+开新会话,
   // 血缘 converted_from/to 保留)。读侧归一,统计与展示不认旧词。

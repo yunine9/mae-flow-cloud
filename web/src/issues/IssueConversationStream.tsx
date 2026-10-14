@@ -32,13 +32,9 @@
  * 运行中=插话(steerIssue,不打断当前步骤)、空闲=续聊(replyIssue);
  * 人工接管中(2026-09-07 走查拍板,takeover=true)=人工驾驶:记录进
  * 现场账(addIssueTakeoverNote,只记账不投喂)或交还给 AI
- * (resumeIssueTakeover,以当前输入作交还说明);等卡/挂起/未启动/
+ * (resumeIssueTakeover,以当前输入作交还说明);等卡/未启动/
  * 终态给原因说明,查看者(canOperate=false)只见只读提示——写口语义
  * 与拆栏前(#126 及更早)的 canOperate 门零变化。
- *
- * 存量挂起说明卡(ADR-0048):挂起会话由会话视图组装存量说明卡
- * 经 suspendedCard 槽下传,渲染在「与 Agent 协作」头之下、流之上
- * ——协作流区顶部,不随流滚动;转正与手动归档均已退役,存量只能终止收口。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
@@ -164,7 +160,6 @@ export function IssueConversationStream({
   viewerUsername,
   takeover,
   currentCard,
-  suspendedCard,
   dockRef,
   onSteer,
   onReply,
@@ -198,9 +193,6 @@ export function IssueConversationStream({
   /** 当前待处理卡(IssueDecisionCard / 查看模式 IssueWaitingFacts),
    * 会话视图组装;卡座把它钉在流末尾的 Agent 气泡内(#125)。 */
   currentCard?: ReactNode;
-  /** 存量挂起说明卡(ADR-0048):协作流区顶部(协作头之下、流之上)
-   * 渲染,会话视图按 status === "suspended" 组装,责任人/查看模式同卡。 */
-  suspendedCard?: ReactNode;
   /** 输入区 dock 容器的节点回调(#125):转交会话视图存为 footerTarget,
    * 当前卡的提交区经 portal 挂进 dock。 */
   dockRef?: (node: HTMLDivElement | null) => void;
@@ -548,10 +540,6 @@ export function IssueConversationStream({
         </Tabs>
         {view.truncated && <span>条目过多,只保留最近的;完整现场在左栏「对话现场」</span>}
       </header>
-      {/* 存量挂起说明卡(ADR-0048):协作流区顶部,协作头之下、流之上——不进
-          可滚流区,不会被贴底跟随滚出视野;原 .issue-conv-suspended 槽位
-          留白随 issue-workspace 家族退役,直译成槽位工具类。 */}
-      {suspendedCard && <div className="mx-3.5 mb-1.5 shrink-0">{suspendedCard}</div>}
       <div className="ws-stream" role="log" aria-live="polite" aria-relevant="additions"
         ref={box}
         onScroll={(event) => {
@@ -612,7 +600,7 @@ export function IssueConversationStream({
 /** 输入区(轻量仿制任务侧 ws-composer,类名同套):运行中=插话、空闲=
  * 续聊;人工接管中=人工驾驶(记录到现场/交还给 AI 两钮,2026-09-07
  * 走查拍板);等卡时让位给卡座 dock(卡的提交区经 portal 挂进
- * ws-reply-dock,附言与提交按钮就在输入区完成),挂起/未启动/终态给
+ * ws-reply-dock,附言与提交按钮就在输入区完成),未启动/终态给
  * 原因,查看者只读。发送走 SessionView 传入的 steerIssue/replyIssue
  * 通道,成功后立刻拉一次流让发言上屏。 */
 function IssueCollaborationComposer({
@@ -691,16 +679,12 @@ function IssueCollaborationComposer({
         kind: "blocked", title: "会话还没启动",
         hint: "Agent 启动后就能在这里插话或续聊。",
       }
-    : status === "suspended" ? {
-        kind: "blocked", title: "会话挂起中(存量)",
-        hint: "转正已退役:存量挂起只能终止会话收口。",
-      }
     : ended ? {
         kind: "blocked", title: "会话已结束",
         hint: "协作记录只读回放;结论与账单见左侧。",
       }
     // 人工驾驶(2026-09-07 走查拍板):接管在场即换模式,优先级压过
-    // 插话/续聊;但让位给终局/等卡/挂起——收了口的会话不再给驾驶舱。
+    // 插话/续聊;但让位给终局/等卡——收了口的会话不再给驾驶舱。
     : takeover === true ? { kind: "takeover" }
     : status === "running" ? { kind: "steer" }
     : { kind: "reply" };
@@ -813,7 +797,7 @@ function IssueCollaborationComposer({
         <span className="ws-composer-hint">{mode.hint}</span>
       </div>
       {/* 卡座 dock 位(#125):当前等待卡的提交区(附言+提交/拒绝按钮)
-          经 portal 挂在这里。只在归属人答卡时预留;无卡(挂起/未启动/
+          经 portal 挂在这里。只在归属人答卡时预留;无卡(未启动/
           终态)不出容器——输入区保持纯状态说明,不出现空 dock。 */}
       {dock && <div className="ws-reply-dock" ref={dockRef} role="region"
         aria-label="决定的附言与提交" />}
