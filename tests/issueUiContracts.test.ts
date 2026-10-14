@@ -751,17 +751,19 @@ test("单号处处可选中复制:DTS 表格单号独立成格,user-select 强�
   assert.match(css,
     /\.task-ticket,\s*\.issue-dts-ticket\s*\{[^}]*user-select:\s*text/);
   assert.match(sessionView, /select-text rounded-full bg-primary\/10 px-\[7px\]/);
-  // shadcn 表格化后:勾选 Checkbox 在首格,单号在第二个 TableCell——
-  // 单号独立成格,拖选复制不会误勾选。
+  // shadcn 表格化后(2026-10-14 迁 TanStack 引擎):勾选 Checkbox 在
+  // select 列的 cell,单号在 ticket 列的 cell——列定义分离即独立成格,
+  // 拖选复制不会误勾选。
   const rowTemplate = registration.slice(
-    registration.indexOf("display.map((ticket)"),
-    registration.indexOf("issue-dts-detail-html"));
+    registration.indexOf("id: \"select\""),
+    registration.indexOf("issue-dts-ticket")
+      + "issue-dts-ticket".length);
   const checkboxCell = rowTemplate.indexOf("<Checkbox");
   const ticketCell = rowTemplate.indexOf("issue-dts-ticket");
   assert.ok(checkboxCell > -1, "行模板应有勾选 Checkbox");
   assert.ok(ticketCell > checkboxCell, "勾选在前,单号在后");
-  assert.ok(rowTemplate.slice(checkboxCell, ticketCell).includes("</TableCell>"),
-    "单号必须独立成格(与勾选不同格)——拖选复制不误勾选");
+  assert.ok(rowTemplate.slice(checkboxCell, ticketCell).includes("id: \"ticket\""),
+    "单号必须独立列(与勾选不同列)——拖选复制不误勾选");
 });
 
 test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻判定", () => {
@@ -1884,35 +1886,57 @@ test("工作区变更聚合视图按仓分段:服务端标记切片,聚焦视图
     "常量定义+两处消费,空态文案不得再写第三份字面量");
 });
 
-test("DTS 列表列宽拖拽:table-fixed + colgroup 单一宽度源,把手拖动记忆在 localStorage(2026-09-17)", () => {
-  // 布局底盘:定宽布局 + colgroup(表头 w-* 退役,宽度只有一处来源);
-  // 标题列不进定宽表——唯一弹性列吃剩余宽,拖其他列都从它身上要地方。
-  // 表最小宽 = Σ可见定宽 + 标题下限(2026-09-24):定宽合计吃满表宽时
-  // 标题列被挤没、列头叠字,minWidth 兜底转横向滚动。
+test("DTS 列表列宽拖拽:TanStack 引擎,columnSizing 单一宽度源,记忆在 localStorage(2026-10-14 迁移)", () => {
+  // 布局底盘:定宽布局 + colgroup 不变,宽度来源=引擎 columnSizing
+  // 状态(拖动中逐帧落状态,轮询重渲染写的也是同一份——手写版直写
+  // DOM 被轮询打断的回弹就此消失);标题列状态缺席不出宽,弹性吃剩余
+  // 宽。表最小宽 = Σ可见定宽 + 标题下限(2026-09-24),空间不够横向滚动。
   assert.match(registration, /<Table aria-label="名下问题单" className="table-fixed"\s*\n\s*style=\{\{ minWidth: tableMinWidth \}\}>/);
-  for (const col of ["select", "ticket", "title", "launch", "remark",
-    "module", "tier"]) {
-    assert.match(registration, new RegExp(`renderCol\\("${col}"\\)`));
-  }
-  assert.match(registration, /\{colShown\("title"\) && renderCol\("title"\)\}/);
+  assert.match(registration, /columnResizeMode: "onChange"/);
+  // colgroup 从引擎可见列渲染;非标题列恒出宽读 getSize()(含默认宽
+  // 与 min/max 钳制),标题列状态缺席不出宽=弹性吃剩余宽。colgroup
+  // 有宽无宽必须与列语义一致,否则 fixed 布局均摊表宽,点把手种子
+  // 一列就全表重摊(2026-10-14 迁移首日的点击跳变即此)。
+  assert.match(registration, /table\.getVisibleLeafColumns\(\)\.map\(\(column\) => \{/);
+  assert.match(registration, /style=\{\{ width: column\.getSize\(\) \}\}/);
+  assert.match(registration, /column\.id === "title" && sized === undefined/);
+  assert.doesNotMatch(registration, /col\.style\.width/,
+    "宽度只走 columnSizing 状态,不许再直写 DOM(轮询打断回弹的根源)");
   assert.doesNotMatch(registration, /<TableHead className="w-\d+"/,
     "列宽收口 colgroup,表头不得再挂 w-* 定宽");
-  // 把手:role=separator 可聚焦,pointer capture 拖动,双击/Enter 回默认,
-  // 方向键微调;拖动中直写 <col> 免整表重渲,松手才 commit。
+  // 把手:role=separator 可聚焦,拖动交给 header.getResizeHandler(),
+  // 双击/Enter 回默认(resetSize=从 sizing 状态摘键,标题列回弹性),
+  // 方向键微调;上限 DTS_COL_MAX 封住单列拖飞。
   assert.match(registration, /function DtsColResizeHandle\(/);
   assert.match(registration, /role="separator"/);
-  assert.match(registration, /setPointerCapture\(event\.pointerId\)/);
-  assert.match(registration, /onDoubleClick=\{\(event\) => \{\s*event\.preventDefault\(\);\s*onReset\(colKey\);/);
-  assert.match(registration, /onPreview\(colKey, px\)/);
-  // 记忆:全用户共用一份(mae-flow:dts-col-widths),空表回删 key。
-  assert.match(registration, /mae-flow:dts-col-widths/);
+  assert.match(registration, /header\.getResizeHandler\(\)\(event\)/);
+  assert.match(registration, /column\.resetSize\(\)/);
+  // 上下限收口在 onColumnSizingChange 写边界(引擎拖动数学只收负值,
+  // min/max 在读侧 getSize() 才钳;渲染/持久化直读状态,写边界必须
+  // 自己收),状态里永远只有合法宽度。且必须先 min 后 max 两层钳——
+  // 三参一层的 Math.max(px, MIN, MAX) 会把上限当下限,任何宽度都钳
+  // 成最大值(2026-10-14 迁移首日「一拖就顶到最宽」即此)。
+  assert.match(registration,
+    /Math\.min\(Math\.max\(Math\.round\(px\),\s*DTS_COL_MIN\[key as DtsColKey\]\),\s*DTS_COL_MAX\[key as DtsColKey\]\)/);
+  // 弹性标题列的种子必须 table.setOptions 同步进引擎:受控列宽经
+  // React 异步回流,同一 tick 的 mousedown 读不到 setColWidths,
+  // 拖动起点会落到列默认 160 而非实测宽(点击跳变即此)。
+  assert.match(registration, /table\.setOptions\(\(old\) => \(\{/);
+  assert.match(registration,
+    /columnSizing: \{\s*\n?\s*\.\.\.old\.state\.columnSizing, \[column\.id\]: measured \}/);
+  // 记忆:全用户共用一份,新键 mae-flow:dts-col-widths:v2(2026-10-14
+  // 迁引擎拍板不继承旧键:旧值无上限口径,读盘即清),空表回删 key。
+  assert.match(registration, /mae-flow:dts-col-widths:v2/);
+  assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_LEGACY_KEY\)/);
   assert.match(registration, /localStorage\.setItem\(DTS_COL_WIDTHS_KEY/);
   assert.match(registration, /localStorage\.removeItem\(DTS_COL_WIDTHS_KEY\)/);
-  // 列存在性与默认/下限宽由 DTS_COL_DEFAULT/DTS_COL_MIN 收口:版本/
-  // 分支列随 ADR-0038 修订退役,介入档位列入列(ADR-0058,默认隐藏),
-  // 少一列或多一列即这里红。
+  // 列存在性与默认/下限/上限宽由 DTS_COL_DEFAULT/DTS_COL_MIN/
+  // DTS_COL_MAX 收口:版本/分支列随 ADR-0038 修订退役,介入档位列入
+  // 列(ADR-0058,默认隐藏),少一列或多一列即这里红。
   assert.match(registration,
-    /select: 64, ticket: 150,\s*\n\s*launch: 96, remark: 240, module: 160, tier: 116,/);
+    /select: 64, ticket: 150,\s*\n\s*launch: 96, remark: 180, module: 200, tier: 116,/);
   assert.match(registration,
     /select: 48, ticket: 120, title: 160,\s*\n\s*launch: 88, remark: 140, module: 120, tier: 96,/);
+  assert.match(registration,
+    /select: 96, ticket: 320, title: 1200,\s*\n\s*launch: 220, remark: 800, module: 400, tier: 240,/);
 });
