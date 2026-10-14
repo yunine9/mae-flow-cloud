@@ -17,41 +17,45 @@ const config = { issue_no: "REQ-cleanup", issue_description: "清理旧知识并
   repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/old" }] };
 const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
-test("模块清理：预览和执行仅允许独占目录，整批预检保护公共根及其他模块文件", async () => {
-  const targets = [1, 2].map(index => ({ id: `repo-${index}`, name: `业务仓${index}`, repository: `https://example.test/repo-${index}.git`, branch: "main", path: "", docs_path: "docs/knowledge/orders" }));
-  const calls: Array<{ action: string; paths: unknown }> = [];
-  const cleanup = new KnowledgeSourceCleanup({
-    async previewCleanup(target, paths) {
-      calls.push({ action: "preview", paths });
-      const entries = (paths as string[]).map(path => ({ path: path.endsWith(".puml") ? path : `${path}/old.json`, mode: "100644", oid: "a".repeat(40) }));
-      return { id: `plan-${target.id}`, target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40), entries };
-    },
-    async publishCleanup(_job, target, plan, paths) {
-      calls.push({ action: "publish", paths });
-      return { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: paths as string[], documents: [], branch: `cleanup-${target.id}`, state: "opened", url: `https://example.test/mr/${target.id}` };
-    },
+for (const layout of ["module-v1", "repository-v1", "directory-v1"] as const) {
+  test(`${layout} 清理：允许旧目录、非 Markdown 和 AGENTS.md，整批校验路径及预览选择`, async () => {
+    const targets = [1, 2].map(index => ({ id: `repo-${index}`, name: `业务仓${index}`, repository: `https://example.test/repo-${index}.git`, branch: "main", path: "", docs_path: "docs/new" }));
+    const calls: Array<{ action: string; paths: unknown }> = [];
+    const cleanup = new KnowledgeSourceCleanup({
+      async previewCleanup(target, paths) {
+        calls.push({ action: "preview", paths });
+        const entries = (paths as string[]).flatMap(path => path === "docs/old"
+          ? ["docs/old/old.json", "docs/old/readme.md"] : [path])
+          .map(path => ({ path, mode: "100644", oid: "a".repeat(40) }));
+        return { id: `plan-${target.id}`, target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40), entries };
+      },
+      async publishCleanup(_job, target, plan, paths) {
+        calls.push({ action: "publish", paths });
+        return { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: paths as string[], documents: [], branch: `cleanup-${target.id}`, state: "opened", url: `https://example.test/mr/${target.id}` };
+      },
+    });
+    const job: DomainKnowledgeJob = { id: "dkx-cleanup", ...config, module_id: "orders", knowledge_layout: layout, operator: "alice", created_at: "now", status: "idle", stage: "等待清理",
+      knowledge_target: { ...targets[0], id: "domain", repository: "" }, repositories: targets, material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [],
+      source_cleanup: { repositories: targets, plans: [], publications: [] } };
+    const signal = new AbortController().signal;
+    let saves = 0; const save = () => { saves++; };
+    for (const path of [".", "/docs/old", "../docs/old", "docs/../old", ".git/config"]) {
+      await assert.rejects(cleanup.action(job, "preview", { paths_by_target: { "repo-1": ["docs/old"], "repo-2": [path] } }, "alice", save, signal), /清理路径须为仓内相对/);
+    }
+    assert.equal(calls.length, 0, "第二仓路径无效时，第一仓也不能开始预览");
+    assert.equal(saves, 0);
+    await cleanup.action(job, "preview", { paths_by_target: { "repo-1": ["docs/old"], "repo-2": ["AGENTS.md", "legacy/diagram.puml"] } }, "alice", save, signal);
+    assert.equal(job.source_cleanup!.plans[0].entries.length, 2, "目录展开为文件清单");
+    const selected = { "repo-1": ["docs/old/old.json"], "repo-2": ["AGENTS.md", "legacy/diagram.puml"] };
+    await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: { ...selected, "repo-2": ["unpreviewed.txt"] } }, "alice", save, signal), /清理预览或文件选择无效/);
+    assert.equal(calls.filter(call => call.action === "publish").length, 0);
+    job.source_cleanup!.plans[1].paths = ["../outside"];
+    await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: selected }, "alice", save, signal), /清理路径须为仓内相对/);
+    job.source_cleanup!.plans[1].paths = ["AGENTS.md", "legacy/diagram.puml"];
+    await cleanup.action(job, "publish", { selected_paths_by_target: selected }, "alice", save, signal);
+    assert.deepEqual(calls.filter(call => call.action === "publish").map(call => call.paths), Object.values(selected));
   });
-  const job: DomainKnowledgeJob = { id: "dkx-module-cleanup", ...config, module_id: "orders", knowledge_layout: "module-v1", operator: "alice", created_at: "now", status: "idle", stage: "等待清理",
-    knowledge_target: { ...targets[0], id: "domain", repository: "" }, repositories: targets, material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [],
-    source_cleanup: { repositories: targets, plans: [], publications: [] } };
-  const signal = new AbortController().signal;
-  let saves = 0; const save = () => { saves++; };
-  for (const path of ["AGENTS.md", "docs", "docs/knowledge/billing", "docs/knowledge/orders-other", "docs/knowledge/orders/../billing"]) {
-    await assert.rejects(cleanup.action(job, "preview", { paths_by_target: { "repo-1": [targets[0].docs_path], "repo-2": [path] } }, "alice", save, signal), /本模块只能清理|相对路径/);
-  }
-  assert.equal(calls.length, 0, "第二仓范围无效时，第一仓也不发起预览或 Git 操作");
-  assert.equal(saves, 0);
-  await cleanup.action(job, "preview", { paths_by_target: { "repo-1": [targets[0].docs_path], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal);
-  assert.equal(calls.length, 2, "允许模块目录本身和非Markdown子文件");
-  job.source_cleanup!.plans[1].entries.push({ path: "AGENTS.md", mode: "100644", oid: "b".repeat(40) });
-  await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": ["AGENTS.md"] } }, "alice", save, signal), /本模块只能清理/);
-  assert.equal(calls.filter(call => call.action === "publish").length, 0, "持久化旧计划里的越界条目也不能绕过执行校验");
-  job.source_cleanup!.plans[1].paths = ["docs"];
-  await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal), /本模块只能清理/);
-  job.source_cleanup!.plans[1].paths = [`${targets[1].docs_path}/diagram.puml`];
-  await cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal);
-  assert.deepEqual(calls.filter(call => call.action === "publish").map(call => call.paths), [["docs/knowledge/orders/old.json"], ["docs/knowledge/orders/diagram.puml"]]);
-});
+}
 
 test("萃取前清理：勾选后先保存待清理任务，不执行研究；重启保留，人工开始后才执行", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-prepare-")); let executions = 0;
@@ -237,26 +241,4 @@ test("清理保存 EIO：选中文件保存失败不创建 MR、不污染原记�
     mock.mock.restore(); syncBuiltinESMExports();
     await manager.sourceCleanupAction(job.id, "publish", input, "alice"); assert.equal(calls.length, 1);
   } finally { mock?.mock.restore(); syncBuiltinESMExports(); await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
-});
-
-test("Issue489：仓根相对布局不把归档根当作清理范围", async () => {
-  const target = { id: "repo-1", name: "业务仓", repository: "https://example.test/repo.git", branch: "main", path: "", docs_path: "." };
-  const job: DomainKnowledgeJob = { id: "dkx-relative-cleanup", ...config, module_id: "orders", knowledge_layout: "repository-v1", operator: "alice", created_at: "now", status: "idle", stage: "等待清理",
-    knowledge_target: { ...target, id: "domain" }, repositories: [target], material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [],
-    source_cleanup: { repositories: [target], plans: [], publications: [] } };
-  const calls: unknown[] = [];
-  const cleanup = new KnowledgeSourceCleanup({
-    async previewCleanup(target, paths) {
-      calls.push(paths);
-      return { id: "plan", target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40),
-        entries: (paths as string[]).map(path => ({ path, mode: "100644", oid: "a".repeat(40) })) };
-    },
-    async publishCleanup() { throw new Error("不应执行发布"); },
-  });
-  for (const path of [".", "docs", "AGENTS.md", "docs/AGENTS.md", "../docs/old.md"]) {
-    await assert.rejects(cleanup.action(job, "preview", { paths_by_target: { "repo-1": [path] } }, "alice", () => {}, new AbortController().signal));
-  }
-  assert.equal(calls.length, 0);
-  await cleanup.action(job, "preview", { paths_by_target: { "repo-1": ["docs/old.md"] } }, "alice", () => {}, new AbortController().signal);
-  assert.deepEqual(calls, [["docs/old.md"]]);
 });
