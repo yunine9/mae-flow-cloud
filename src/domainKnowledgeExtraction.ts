@@ -532,7 +532,7 @@ export class DomainKnowledgeExtraction {
     if (needsModuleLayout) {
       actions.push(action({ id: "review", label: "去确认并发布", view: "review" }));
     }
-    const statusMessage = status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。";
+    const statusMessage = status_label === "归档失败" ? (targets.length ? "有仓归档失败，原因见对应仓；只需重试失败的仓。" : batch?.error ?? "归档失败，请重试。") : status_label === "已归档" ? "MR 已创建，后续合入由人处理。" : job.component_research_id ? "只导出已发布的正式知识；填写关联单号后手动创建 MR，创建后归档结束。" : "只归档已发布的正式知识；使用任务已有单号直接创建 MR，缺少必要信息时请补充。";
     const layoutMessage = needsModuleLayout ? LEGACY_MODULE_ARCHIVE_MESSAGE : job.knowledge_layout === "module-v1"
       ? "本次归档将完整替换各目标仓根目录的 AGENTS.md，旧正文保留在 Git 历史中；模块正文保存在本模块独占目录。" : "";
     return JSON.parse(JSON.stringify({ job_id: id, title: job.title, status_label, message: [layoutMessage, statusMessage].filter(Boolean).join("\n"),

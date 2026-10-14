@@ -5,12 +5,25 @@ import { renderToStaticMarkup } from "../web/node_modules/react-dom/server.js";
 import { createServer } from "../web/node_modules/vite/dist/node/index.js";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
+import { archiveRequest } from "../web/src/knowledgeArchiveAction.ts";
+import type { KnowledgeArchivePreview } from "../src/knowledgeProductionTypes.ts";
 
 const vite = await createServer({ root: "web", server: { middlewareMode: true }, appType: "custom", logLevel: "silent" });
 const { DomainKnowledgePublicationStatus } = await vite.ssrLoadModule("/src/DomainKnowledgePublicationStatus.tsx");
 const { DomainKnowledgeArchiveTargets } = await vite.ssrLoadModule("/src/DomainKnowledgeArchiveTargets.tsx");
 const { KnowledgeArchiveHistory } = await vite.ssrLoadModule("/src/KnowledgeArchiveDialog.tsx");
 after(() => vite.close());
+
+test("Issue488：一次归档动作使用已有单号和最新正式版本直接创建MR", () => {
+  const preview = { issue_no: "DTS-488", issue_description: "归档知识", expected_revisions: { "kd-1": "published-v2" },
+    actions: [{ id: "create-archive" }] } as KnowledgeArchivePreview;
+  assert.deepEqual(archiveRequest(preview), { action: "create", input: { issue_no: "DTS-488", issue_description: "归档知识", expected_revisions: { "kd-1": "published-v2" } } });
+  assert.equal(archiveRequest({ ...preview, issue_no: " " }), undefined);
+  for (const id of ["configure", "review"]) assert.equal(archiveRequest({ ...preview, actions: [{ id, label: id, view: "review" }] }), undefined);
+  assert.equal(archiveRequest({ ...preview, actions: [] }), undefined, "已有MR只展示记录，不重复创建");
+  assert.deepEqual(archiveRequest({ ...preview, actions: [{ id: "retry-archive", label: "重试", view: "archive", batch_id: "original" }] }),
+    { action: "retry", input: { batch_id: "original", target_id: undefined } });
+});
 
 function fixture(): DomainKnowledgeJob {
   return { id: "dkx-archive-ui", title: "订单知识", scope: "订单", module_id: "orders", operator: "alice", created_at: "2026-10-14T00:00:00Z",

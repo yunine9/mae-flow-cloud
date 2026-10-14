@@ -11,7 +11,7 @@ export function DomainKnowledgePublicationStatus({ job, disabled, onConfigure, o
     ? <Button size="sm" variant="outline" disabled={disabled || job.production?.working || view?.state === "running"} onClick={onConfigure}>归档设置</Button> : null;
   if (!view?.visible) return configure;
   const action = <>{configure}<KnowledgeArchiveDialog endpoint={`/domain-extraction/${encodeURIComponent(job.id)}/archive`}
-    production={job.production} disabled={disabled} onConfigure={onConfigure} onReview={onReview} onChanged={onChanged} openRequest={openRequest} /></>;
+    production={job.production} directArchive disabled={disabled} onConfigure={onConfigure} onReview={onReview} onChanged={onChanged} openRequest={openRequest} /></>;
   if (compact) return action;
   return <section className="space-y-3 rounded-lg border border-line p-4" aria-label="知识 Git 归档" data-status-group={view.group}>
     <div className="flex flex-wrap items-center justify-between gap-3"><strong className="text-sm">{view.status_label}</strong>{action}</div>

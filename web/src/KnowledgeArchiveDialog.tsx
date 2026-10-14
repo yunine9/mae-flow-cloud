@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction, KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import { mrParticipantsMessage } from "../../src/mrParticipants";
+import { archiveRequest } from "./knowledgeArchiveAction";
 
 export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   batches: KnowledgeProductionView["archive"]["batches"]; disabled?: boolean;
@@ -26,24 +27,37 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onReview, onChanged, openRequest = 0 }: {
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onReview, onChanged, openRequest = 0, directArchive = false }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
-  onReview?: () => void; onChanged?: () => void; openRequest?: number;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const submitting = useRef(false), generation = useRef(0);
-  useEffect(() => { if (openRequest && production?.archive.visible) setOpen(true); }, [openRequest, production?.archive.visible]);
+  const archiveOnOpen = useRef(false);
+  function openArchive() { archiveOnOpen.current = directArchive; setOpen(true); }
+  useEffect(() => { if (openRequest && production?.archive.visible) openArchive(); }, [openRequest, production?.archive.visible]);
   useEffect(() => {
     if (!open || !production?.archive.visible) return;
     const owner = ++generation.current, controller = new AbortController();
     submitting.current = false; setBusy(false);
     setLoading(true); setError(""); setPreview(undefined);
     void componentRequest<KnowledgeArchivePreview>(`${endpoint}/preview`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
-      .then(result => { if (generation.current === owner) { setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? ""); } })
-      .catch(reason => { if (generation.current === owner) setError((reason as Error).name === "TimeoutError" ? "读取归档预览超过 30 秒，请重新打开归档后重试。" : (reason as Error).message); })
-      .finally(() => { if (generation.current === owner) setLoading(false); });
+      .then(async result => {
+        if (generation.current !== owner) return;
+        setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
+        const request = archiveOnOpen.current && !disabled ? archiveRequest(result) : undefined;
+        archiveOnOpen.current = false;
+        if (!request) return;
+        submitting.current = true; setBusy(true); setLoading(false);
+        const archived = await componentRequest<KnowledgeArchivePreview>(`${endpoint}/${request.action}`, request.input,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(5 * 60_000)]));
+        if (generation.current === owner) { setPreview(archived); onChanged?.(); }
+      })
+      .catch(reason => { if (generation.current === owner) setError((reason as Error).name === "TimeoutError"
+        ? submitting.current ? "归档请求超时，请重新打开归档查看实际结果；已创建的 MR 会继续复用。" : "读取归档信息超过 30 秒，请重新打开归档后重试。" : (reason as Error).message); })
+      .finally(() => { if (generation.current === owner) { setLoading(false); setBusy(false); submitting.current = false; } });
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
@@ -73,11 +87,12 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;
   return <>
-    <Button size="sm" variant="outline" disabled={disabled} onClick={() => setOpen(true)}><GitBranch size={16} />{action.label}</Button>
+    <Button size="sm" variant="outline" disabled={disabled || busy || loading} onClick={openArchive}><GitBranch size={16} />{action.label}</Button>
     <Dialog open={open} onOpenChange={next => { if (!busy) setOpen(next); }}>
       <DialogContent className="tw-root max-h-[88dvh] overflow-auto sm:max-w-4xl">
         <DialogHeader><DialogTitle>{preview?.title ?? action.label}</DialogTitle></DialogHeader>
         {loading && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" />正在读取正式版本…</p>}
+        {busy && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle size={16} className="animate-spin motion-reduce:animate-none" />正在归档并创建 MR…</p>}
         {error && <p role="alert" className="whitespace-pre-wrap break-words text-sm text-danger">{error}</p>}
         <KnowledgeArchiveHistory batches={production.archive.batches} disabled={disabled || busy || loading} onRetry={item => void execute(item)} />
         {preview && <div className="space-y-4">
