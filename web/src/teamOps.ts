@@ -267,13 +267,17 @@ export const ISSUE_DELIVERY_STATUSES = [
 export interface IssueDeliveryBreakdown {
   /** 问题总数:不含已取消(已取消在团队DTS整页不展示,2026-10-13)。 */
   total: number;
-  /** 处理中:再剔除已闭环(archived)。 */
+  /** 在途(未收口):总数再剔除已闭环(archived);= 推进中+待答复+
+   * 需介入,只作状态格加总不变量的锚,不上瓦片。 */
   active: number;
-  /** 等你答复:waiting_user+idle 归一计数。 */
+  /** 推进中:排队+AI 处理中(机器侧),瓦片互斥四份之一。 */
+  advancing: number;
+  /** 待答复:waiting_user+idle 归一计数(含待验证——合入即通过,
+   * 但等待点仍是会话停着等人侧收口);互斥四份之一。 */
   waiting: number;
-  /** 异常(需介入)。 */
+  /** 异常(需介入);互斥四份之一。 */
   failed: number;
-  /** 已闭环(archived)。 */
+  /** 已闭环(archived);互斥四份之一。四份加和恒等于 total。 */
   closed: number;
   /** 阶段格:团队页合并/拆分口径全集(ISSUE_DELIVERY_STAGE_BUCKETS),
    * 0 计数也出(渲染层置灰禁用,与需求侧"阶段格全量出、0 禁用"同一
@@ -285,9 +289,10 @@ export interface IssueDeliveryBreakdown {
 
 /** 问题域交付概览口径:概览规模数字与阶段/状态格共用同一批会话,与
  * 需求侧 teamDeliveryBreakdown 同构(规模 × 阶段格 × 状态格,供概览格
- * 筛选联动)。输入是 IssueSummary 的稳定字段投影(自包含约束,根级
- * typecheck 不必拖进浏览器 fetch 客户端)——「待验证」格读 gate.kind,
- * 投影带上闸对象。 */
+ * 筛选联动)。瓦片是互斥划分(2026-10-14 拍板):推进中+待答复+
+ * 需介入+已闭环 = 问题总数,不再用「处理中」伞口径重复计数。输入是
+ * IssueSummary 的稳定字段投影(自包含约束,根级 typecheck 不必拖进
+ * 浏览器 fetch 客户端)——「待验证」格读 gate.kind,投影带上闸对象。 */
 export function issueDeliveryBreakdown(
   issues: ReadonlyArray<{
     status: string;
@@ -303,6 +308,8 @@ export function issueDeliveryBreakdown(
   return {
     total: live.length,
     active: active.length,
+    advancing: active.filter((issue) =>
+      issue.status === "queued" || issue.status === "running").length,
     waiting: waitingOf(active),
     failed: active.filter((issue) => issue.status === "failed").length,
     closed: live.filter((issue) => issue.status === "archived").length,
@@ -330,7 +337,7 @@ export function issueFeatureKey(issue: { module?: string }): string {
 export interface IssueFeatureRow {
   /** 特性名(业务模块标签;空白归「未分类」)。 */
   module: string;
-  active: number;
+  advancing: number;
   waiting: number;
   failed: number;
   closed: number;
@@ -338,8 +345,9 @@ export interface IssueFeatureRow {
 }
 
 /** 特性总账行(概览「特性总账表」,2026-09-18 原型拍板):按业务模块
- * 聚合,指标复用 issueDeliveryBreakdown(与概览总数同一口径)。排序:
- * 处理中降序 → 总数降序 → 名称,表格直接渲染不再排。 */
+ * 聚合,指标复用 issueDeliveryBreakdown(与概览瓦片同一互斥口径,
+ * 四列加和恒等于合计)。排序:推进中降序 → 总数降序 → 名称,
+ * 表格直接渲染不再排。 */
 export function issueFeatureRows(
   issues: ReadonlyArray<{ status: string; module?: string }>,
 ): IssueFeatureRow[] {
@@ -355,13 +363,13 @@ export function issueFeatureRows(
     const breakdown = issueDeliveryBreakdown(items);
     return {
       module,
-      active: breakdown.active,
+      advancing: breakdown.advancing,
       waiting: breakdown.waiting,
       failed: breakdown.failed,
       closed: breakdown.closed,
       total: breakdown.total,
     };
-  }).sort((a, b) => b.active - a.active || b.total - a.total
+  }).sort((a, b) => b.advancing - a.advancing || b.total - a.total
     || a.module.localeCompare(b.module, "zh-Hans-CN"));
 }
 
