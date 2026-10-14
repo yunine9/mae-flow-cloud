@@ -8,7 +8,6 @@ import { getBusinessModules, createBusinessModule, updateBusinessModule,
   type BusinessModule, type MrParticipants, type PersonIdentity, type ProductVersion, type KnowledgeRepoConfig } from "./api";
 import { UserPicker } from "./UserPicker";
 import { MR_PARTICIPANT_ACCOUNT_PATTERN } from "../../src/mrParticipants";
-import { componentRequest, type ComponentRepository } from "./componentResearchApi";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -93,15 +92,13 @@ function MappingList({ kind }: { kind: string }) {
   const modulesMode = kind === "modules";
   const [modules, setModules] = useState<BusinessModule[]>([]);
   const [versions, setVersions] = useState<ProductVersion[]>([]);
-  // 公共组件仓登记表(ADR-0054):模块「参考组件仓」多选的选项来源。
-  const [components, setComponents] = useState<ComponentRepository[]>([]);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; refs?: string[]; status?: "active" | "archived"; mrParticipants?: MrParticipantInputs }>();
+  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs }>();
   const [allRepos, setAllRepos] = useState<BusinessModule>();
   const [repoQuery, setRepoQuery] = useState("");
   const [people, setPeople] = useState<PersonIdentity[]>([]);
@@ -124,17 +121,14 @@ function MappingList({ kind }: { kind: string }) {
     try {
       if (modulesMode) {
         const catalog = await getBusinessModules(); setModules(catalog.modules); setWarnings(catalog.warnings);
-        // 选项缺席(登记表读取失败)不挡模块维护,只让多选空着。
-        await componentRequest<{ components: ComponentRepository[] }>("/component-repositories")
-          .then((r) => setComponents(r.components)).catch(() => setComponents([]));
       }
       else setVersions((await productVersionRequest()).versions);
     } catch (e) { setError(message(e)); } finally { setLoading(false); }
   }
   useEffect(() => { void refresh(); }, []);
   const rows = modulesMode
-    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, refs: m.reference_component_repos ?? [], status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants) }))
-    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", refs: [] as string[], status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs() }));
+    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants) }))
+    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs() }));
   const filtered = rows.filter(row => `${row.name} ${row.value}`.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -148,8 +142,7 @@ function MappingList({ kind }: { kind: string }) {
           mr_participants: {
             reviewers: participantAccounts(edit.mrParticipants?.reviewers),
             approval_approvers: participantAccounts(edit.mrParticipants?.approval_approvers),
-          },
-          reference_component_repos: edit.refs ?? [], status: edit.status };
+          } };
         if (edit.id) await updateBusinessModule(edit.id, input);
         else await createBusinessModule(input);
       } else await productVersionRequest(edit.id ? "PUT" : "POST", { id: edit.id, version: edit.name, branch: edit.value });
@@ -171,7 +164,7 @@ function MappingList({ kind }: { kind: string }) {
         value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} />
       <Button variant="outline" onClick={() => { setQuery(""); setPage(1); }}>重置</Button>
       <Button variant="outline" disabled={loading} onClick={() => void refresh()}>刷新</Button>
-      <Button className="ml-auto" onClick={() => { setError(""); setEdit({ name: "", value: "", status: "active", refs: [] }); }}>
+      <Button className="ml-auto" onClick={() => { setError(""); setEdit({ name: "", value: "" }); }}>
         ＋ 新建{modulesMode ? "模块" : "版本"}</Button>
     </div>
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
@@ -217,20 +210,22 @@ function MappingList({ kind }: { kind: string }) {
         <span>{current} / {pages}</span><Button variant="outline" size="sm" disabled={current >= pages} onClick={() => setPage(current + 1)}>下一页</Button></div>
     </footer>
     <Dialog open={!!edit} onOpenChange={open => { if (!open && !busy) setEdit(undefined); }}>
-      <DialogContent className="tw-root w-[620px] max-w-[90vw] sm:max-w-[620px] max-h-[85vh] overflow-y-auto">
+      <DialogContent className={`tw-root max-w-[90vw] max-h-[85vh] overflow-y-auto ${modulesMode ? "w-[960px] sm:max-w-[960px]" : "w-[620px] sm:max-w-[620px]"}`}>
         <DialogHeader><DialogTitle>{edit?.id ? "编辑" : "新建"}{modulesMode ? "模块" : "版本"}</DialogTitle></DialogHeader>
         {edit && <form className="grid gap-4 text-base" onSubmit={e => { e.preventDefault(); void save(); }}>
-          <label className="grid gap-2">{modulesMode ? "模块名称" : "版本名称"}<Input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
-          {modulesMode ? <label className="grid gap-2">关联代码仓<Textarea className="min-h-48" required value={edit.value}
+          <div className={modulesMode ? "grid grid-cols-2 gap-4" : "grid"}>
+            <label className="grid gap-2">{modulesMode ? "模块名称" : "版本名称"}<Input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
+            {modulesMode && <label className="grid gap-2">模块说明（可选）<Input value={edit.description ?? ""} onChange={e => setEdit({ ...edit, description: e.target.value })} /></label>}
+          </div>
+          {modulesMode ? <label className="grid gap-2">关联代码仓<Textarea className="min-h-32" required value={edit.value}
             placeholder="每行一个代码仓地址" onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>
             : <label className="grid gap-2">分支名称<Input required value={edit.value} onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>}
-          {modulesMode && <label className="grid gap-2">模块说明（可选）<Input value={edit.description ?? ""} onChange={e => setEdit({ ...edit, description: e.target.value })} /></label>}
           {modulesMode && <fieldset className="grid gap-3 rounded-md border border-line p-3">
             <legend className="px-1 font-medium">MR 默认人员（可选）</legend>
             <p className="text-sm text-muted-foreground">本模块全部代码仓共用。本模块的知识归档和清理 MR 同样使用这份名单。创建新 MR 时自动添加，已有 MR 不随配置修改。可多选平台账号，也可手动填写未注册平台的 CodeHub 账号。</p>
             {peopleLoading && <p role="status" className="text-sm text-muted-foreground">正在读取平台账号…</p>}
             {peopleError && <p role="status" className="text-sm text-attention">平台账号暂时无法加载，已配置人员仍保留，也可手动填写账号。</p>}
-            {MR_ROLES.map(([key, label]) => {
+            <div className="grid grid-cols-2 items-start gap-4">{MR_ROLES.map(([key, label]) => {
               const selected = participantAccounts(edit.mrParticipants?.[key]);
               // 外部账号或已删除的平台账号仍可查看和取消，不能因候选缺席丢失配置。
               const options = [...people.map(person => ({ ...person,
@@ -240,7 +235,7 @@ function MappingList({ kind }: { kind: string }) {
                 .map(username => ({ username, detail: "其他账号" }))];
               const change = (value: string) => setEdit({ ...edit,
                 mrParticipants: { ...participantInputs(), ...edit.mrParticipants, [key]: value } });
-              return <div key={key} className="grid gap-2 text-sm">
+              return <div key={key} className="grid min-w-0 gap-2 text-sm">
                 <span>{label}</span>
                 <UserPicker multiple wrapSelection ariaLabel={`选择${label}`} options={options} value={selected}
                   disabled={peopleLoading || busy} emptyLabel={`选择${label}（可多选）`}
@@ -251,28 +246,8 @@ function MappingList({ kind }: { kind: string }) {
                     placeholder="如 l00899311，多个账号用逗号或空格分隔" disabled={busy} onChange={e => change(e.target.value)} />
                 </details>
               </div>;
-            })}
+            })}</div>
           </fieldset>}
-          {modulesMode && <fieldset className="grid gap-2">
-            <legend className="text-sm text-muted-foreground">参考组件仓（可选）——问题会话开场只注入这里勾选组件的「何时需要读取」描述，AI 据此决定是否拉取源码研读</legend>
-            <div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border border-line p-2">
-              {components.map(c => <label key={c.id} className="flex items-start gap-2 text-sm">
-                <Checkbox className="mt-0.5" checked={(edit.refs ?? []).includes(c.id)}
-                  onCheckedChange={checked => setEdit({ ...edit, refs: checked
-                    ? [...(edit.refs ?? []), c.id]
-                    : (edit.refs ?? []).filter(id => id !== c.id) })} />
-                <span>{c.name}{!c.enabled && <span className="ml-1 text-muted-foreground">（已停用·暂不注入）</span>}
-                  <span className="ml-2 text-muted-foreground">{c.description}</span></span>
-              </label>)}
-              {!components.length && <p className="p-2 text-sm text-muted-foreground">基础组件仓页签还没有条目</p>}
-            </div>
-            {(edit.refs ?? []).filter(id => !components.some(c => c.id === id)).length > 0 && (
-              <p className="text-sm text-attention">已失效订阅（条目已删除，保存前请取消勾选）：
-                {(edit.refs ?? []).filter(id => !components.some(c => c.id === id)).join("、")}</p>
-            )}
-          </fieldset>}
-          {modulesMode && edit.id && <label className="flex items-center gap-2"><input type="checkbox" checked={edit.status === "archived"}
-            onChange={e => setEdit({ ...edit, status: e.target.checked ? "archived" : "active" })} />归档模块（已有任务和知识保留）</label>}
           {error && <p role="alert" className="text-danger">{error}</p>}
           <div className="flex justify-end gap-2"><Button variant="outline" type="button" disabled={busy} onClick={() => setEdit(undefined)}>取消</Button><Button type="submit" disabled={busy}>{busy ? "保存中…" : "保存"}</Button></div>
         </form>}

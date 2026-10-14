@@ -74,7 +74,6 @@ export function ComponentRepositories() {
       </div>
       <p className="mb-5 text-muted-foreground">
         维护组件研究的参考来源仓与技术栈。组件按文件操作、数据库操作等功能能力分析；一个仓可以提供多个组件的实现，同一组件也可以跨仓。所有团队成员均可维护。
-        业务模块也可在这里订阅「参考组件仓」：问题会话开场只注入订阅条目的说明，AI 据此决定是否拉取源码研读。
       </p>
       {error && (
         <p role="alert" className="mb-3 text-danger">
