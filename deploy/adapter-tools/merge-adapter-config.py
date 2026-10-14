@@ -16,7 +16,6 @@ REQUIRED_ENDPOINTS = (
     "mr_discover",
     "mr_discussions",
     "mr_gates",
-    "mr_participants",
 )
 
 REPOSITORY_SCRIPTS = {
@@ -24,7 +23,6 @@ REPOSITORY_SCRIPTS = {
     "pipeline_artifacts": "pipeline-artifacts.sh",
     "mr_discover": "mr-discover.py",
     "mr_gates": "mr-gates.py",
-    "mr_participants": "mr-participants.py",
 }
 
 
@@ -103,6 +101,7 @@ def merge(source, destination, root):
         patch[key] = spec
 
     config.update(patch)
+    config.pop("mr_participants", None)
     validate(config, root)
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as output:

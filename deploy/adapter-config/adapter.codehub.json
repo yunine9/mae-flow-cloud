@@ -1,6 +1,10 @@
 {
   "port": 8790,
   "mr_create": {
+    "participant_flags": {
+      "reviewers": "--approval-reviewers",
+      "approval_approvers": "--approval-approvers"
+    },
     "command": [
       "codehub-cli",
       "mr",
@@ -312,6 +316,10 @@
     "timeout_s": 35
   },
   "mr_create_knowledge": {
+    "participant_flags": {
+      "reviewers": "--approval-reviewers",
+      "approval_approvers": "--approval-approvers"
+    },
     "command": [
       "codehub-cli",
       "mr",
@@ -342,17 +350,5 @@
     "id": {
       "json": "iid"
     }
-  },
-  "mr_participants": {
-    "command": [
-      "python3",
-      "/data/mae-flow-cloud/repo/deploy/adapter-tools/mr-participants.py",
-      "{repo_path}",
-      "{mr}",
-      "{participants}",
-      "{token}"
-    ],
-    "contract": true,
-    "timeout_s": 30
   }
 }

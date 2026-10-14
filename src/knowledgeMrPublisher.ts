@@ -6,7 +6,7 @@ import { HostGitSandbox, runGitProcess } from "./hostGitSandbox.ts";
 import { gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { deliveryBranchName } from "./deliveryBranchName.ts";
 import { cloudCommitSubject, commitHookRejection, rejectedCommitSha } from "./commitPolicy.ts";
-import { createMergeRequest, updateMergeRequestParticipants, type MergeRequestCredential } from "./mrClient.ts";
+import { createMergeRequest, type MergeRequestCredential } from "./mrClient.ts";
 import { readModuleMrParticipants } from "./moduleMrParticipants.ts";
 import { hasMrParticipants } from "./mrParticipants.ts";
 import { readMrFailureBody } from "./mrGateClient.ts";
@@ -226,30 +226,12 @@ export class KnowledgeMrPublisher {
       || mr.target_branch !== target.branch || !/^https?:\/\//.test(mr.url) || mr.id === undefined)) throw new Error("原分支 MR 查询结果不明确，未重复创建");
     return body.mrs[0];
   }
-  private async retryMrParticipants<T extends DomainPublication>(target: KnowledgeRepository, publication: T, operator: string,
-    save: (publication: T) => void, signal?: AbortSignal): Promise<T> {
-    this.assertActive(signal);
-    if (!publication.url || publication.mr_participants?.status !== "failed") return publication;
-    const identity = this.identity(operator), controller = new AbortController();
-    const operationSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
-    const operation = (async () => {
-      const result = await updateMergeRequestParticipants({ platformUrl: identity.platformUrl, repo: target.repository,
-        mr: publication.mr_id ?? publication.url!, participants: publication.mr_participants!.requested,
-        credential: identity.credential, signal: operationSignal });
-      this.assertActive(operationSignal);
-      publication.mr_participants = result;
-      save(publication); return publication;
-    })();
-    this.active.set(controller, operation);
-    try { return await operation; }
-    finally { this.active.delete(controller); }
-  }
   private async openMr<T extends DomainPublication>(job: Pick<DomainKnowledgeJob, "title" | "issue_no" | "issue_description" | "module_id">,
     target: KnowledgeRepository, publication: T, operator: string, save: (publication: T) => void, signal: AbortSignal): Promise<T> {
     this.assertActive(signal);
     const identity = this.identity(operator), issue = knowledgeIssueNumber(job.issue_no);
     const title = knowledgeIssueDescription(job.issue_description?.trim() ? job.issue_description : undefined) ?? job.title;
-    // 先保存这一次的名单。创建回执丢失或模块配置变化后，仍能按原请求单独补设。
+    // 保存本次创建使用的名单；回执丢失后保留原请求事实，已存在的 MR 不再追加人员。
     const participants = publication.mr_participants?.requested ?? readModuleMrParticipants(this.options.dataDir, job.module_id);
     if (hasMrParticipants(participants)) publication.mr_participants = { status: "failed", requested: structuredClone(participants), message: "MR 人员设置结果尚未确认" };
     publication.mr_attempted = true; save(publication);
@@ -276,10 +258,10 @@ export class KnowledgeMrPublisher {
     let publication: KnowledgeCleanupPublication = continuing ? { ...structuredClone(previous!), state: "pending", error: undefined }
       : { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: selected, documents: [], state: "pending", branch };
     const saveLive = (value: KnowledgeCleanupPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+    if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
     if (publication.mr_attempted) {
       const found = await this.discoverMr(target, publication, operator, signal);
-      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+      if (found) { publication = { ...publication, state: "opened", url: found.url, mr_id: found.id }; saveLive(publication); return publication; }
     }
     saveLive(publication);
     return this.withGit(operator, async (git, root, operationSignal) => {
@@ -361,12 +343,12 @@ export class KnowledgeMrPublisher {
       state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id,
         mr_attempted: previous!.mr_attempted, mr_participants: structuredClone(previous!.mr_participants) } : {}) };
     const saveLive = (value: DomainPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal); }
+    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
     if (continuing && publication.mr_attempted) {
       const found = await this.discoverMr(target, publication, operator, signal);
       if (found) {
         publication = { ...publication, state: "opened", url: found.url, mr_id: found.id };
-        saveLive(publication); return this.retryMrParticipants(target, publication, operator, saveLive, signal);
+        saveLive(publication); return publication;
       }
     }
     const saveAttempt = () => saveLive({ ...publication, documents: continuing ? previous!.documents : [], attempted_documents: documents });

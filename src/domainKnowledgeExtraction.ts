@@ -577,7 +577,7 @@ export class DomainKnowledgeExtraction {
       if (input.target_id && !batch.targets.some(target => target.id === input.target_id)) throw new Error("归档目标不存在");
       const targets = archiveRepositoryGroups(batch.targets).filter(group => {
         const publication = batch.publications.find(publication => group.ids.includes(publication.target_id));
-        return (!input.target_id || group.ids.includes(input.target_id)) && (publication?.state !== "opened" || publication.mr_participants?.status === "failed");
+        return (!input.target_id || group.ids.includes(input.target_id)) && publication?.state !== "opened";
       });
       if (targets.length) await this.runManualArchive(job, batch, targets.flatMap(group => group.ids), operator, owner);
       else if (batch.state !== "done" && batch.targets.length && archiveRepositoryGroups(batch.targets).every(group =>
@@ -611,9 +611,9 @@ export class DomainKnowledgeExtraction {
       const update = (candidate: DomainKnowledgeJob, batch: DomainArchiveBatch) => {
         if (targetId) {
           const saved = batch.publications.find(publication => publication.target_id === targetId) ?? previous;
-          // 已保存的 MR 创建事实不因后续人员补设异常而变成归档失败。
+          // 已保存的 MR 创建事实不因后续操作异常而变成归档失败。
           const publication: DomainPublication = saved?.state === "opened" && validMrUrl(saved.url)
-            ? { ...saved, ...(saved.mr_participants?.status === "failed" ? { mr_participants: { ...saved.mr_participants, message: reason } } : {}) }
+            ? saved
             : { ...(saved ?? { target_id: targetId, branch: "", documents: [] }), state: "failed", error: reason };
           batch.publications = [...batch.publications.filter(publication => publication.target_id !== targetId),
             publication];
@@ -639,7 +639,7 @@ export class DomainKnowledgeExtraction {
       for (const { target, ids } of archiveRepositoryGroups(original.targets).filter(group => group.ids.some(id => targetIds.includes(id)))) {
         this.assertPublicationOwner(job.id, owner);
         const previous = currentBatch().publications.find(publication => ids.includes(publication.target_id));
-        if (previous?.state === "opened" && previous.mr_participants?.status !== "failed") continue;
+        if (previous?.state === "opened") continue;
         const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, accepting = true;
         const save = (publication: DomainPublication) => {
           if (!accepting || controller.signal.aborted) return;

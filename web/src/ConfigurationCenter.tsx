@@ -248,7 +248,7 @@ function MappingList({ kind }: { kind: string }) {
                 <details>
                   <summary className="cursor-pointer text-xs text-muted-foreground">手动填写 CodeHub 账号</summary>
                   <Input className="mt-2" aria-label={`${label} CodeHub 账号`} value={edit.mrParticipants?.[key] ?? ""}
-                    placeholder="多个账号用逗号或空格分隔" disabled={busy} onChange={e => change(e.target.value)} />
+                    placeholder="如 l00899311，多个账号用逗号或空格分隔" disabled={busy} onChange={e => change(e.target.value)} />
                 </details>
               </div>;
             })}
