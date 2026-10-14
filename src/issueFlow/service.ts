@@ -1192,7 +1192,9 @@ export class IssueFlowService {
    * 管理员视角,scope=all 同款)。 */
   list(account?: string): IssueSummary[] {
     const rows = [...this.live.values()].map((item) => this.project(item));
-    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    // 按最近更新倒序:列表顺序与卡片上显示的时间(updated_at)一致,
+    // 最近有动静的会话浮到最上面;创建时间只决定初始位置。
+    rows.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     return account
       ? rows.filter((row) =>
           row.account === account || row.reporter === account)
