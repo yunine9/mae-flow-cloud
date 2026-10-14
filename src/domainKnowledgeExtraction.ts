@@ -560,7 +560,12 @@ export class DomainKnowledgeExtraction {
         }
       }
       let batch = this.matchingManualBatch(job, documents);
-      if (batch) return this.previewArchive(id);
+      if (batch) {
+        const unfinished = archiveRepositoryGroups(batch.targets).filter(group => !batch.publications.some(publication =>
+          group.ids.includes(publication.target_id) && publication.state === "opened" && validMrUrl(publication.url)));
+        if (unfinished.length) await this.runManualArchive(job, batch, unfinished.flatMap(group => group.ids), operator, owner);
+        return this.previewArchive(id);
+      }
       if (needsModuleKnowledgeLayout(job)) throw new Error(LEGACY_MODULE_ARCHIVE_MESSAGE);
       batch = { id: randomUUID(), created_at: new Date().toISOString(), operator, state: "pending", knowledge_layout: job.knowledge_layout,
         documents: structuredClone(documents), targets: structuredClone(targets), issue_no, issue_description, publications: [] };

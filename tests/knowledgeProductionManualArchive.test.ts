@@ -69,6 +69,32 @@ function harness(dir: string, options: { noGit?: boolean; multiple?: boolean; fa
 async function close(manager: DomainKnowledgeExtraction) { await within(manager.shutdown(), "管理器关停超过5秒预算"); }
 const batchPath = (dir: string, id: string) => join(dir, "domain-extraction", id, "job.json");
 
+test("Issue488：已有归档批次但未创建MR时继续原批次与分支，完成后重复点击不再创建", { timeout: 15_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-missing-mr-"));
+  let state = harness(dir);
+  try {
+    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    await close(state.manager);
+    const file = batchPath(dir, id), stored = JSON.parse(readFileSync(file, "utf8")) as DomainKnowledgeJob;
+    const batch = stored.archive_batches![0];
+    batch.issue_no = "REQ-EXISTING"; batch.state = "done";
+    batch.publications = [{ target_id: "domain", state: "pending", branch: "codex/pushed-without-mr", documents: [] }];
+    writeFileSync(file, JSON.stringify(stored));
+    state = harness(dir);
+    const before = JSON.stringify(listKnowledgeDocuments(dir)), preview = state.manager.previewArchive(id);
+    assert.equal(preview.status_label, "已发布（未归档）");
+    const input = { issue_no: preview.issue_no!, expected_revisions: preview.expected_revisions };
+    const result = await state.manager.createArchive(id, input, "reviewer");
+    assert.equal(result.status_label, "已归档"); assert.ok(result.targets[0].url);
+    assert.equal(state.calls.length, 1); assert.equal(state.calls[0].previous?.branch, "codex/pushed-without-mr");
+    assert.equal(state.calls[0].job.issue_no, "REQ-EXISTING");
+    assert.deepEqual(state.manager.get(id).archive_batches!.map(item => item.id), [batch.id]);
+    await state.manager.createArchive(id, input, "reviewer");
+    assert.equal(state.calls.length, 1, "已有有效MR后不重复创建");
+    assert.equal(JSON.stringify(listKnowledgeDocuments(dir)), before, "补MR不重写已发布知识");
+  } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("生产线验收4/10/14：领域发布只写平台，无Git配置也可发布且不自动推送或创建MR", { timeout: 15_000 }, async () => {
   for (const noGit of [false, true]) {
     const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-platform-")), state = harness(dir, { noGit });
