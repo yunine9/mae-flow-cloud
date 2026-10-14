@@ -74,7 +74,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
   })));
   const archiveState = archiveRunning ? "running" : archiveFailed ? "failed" : archiveOpened ? "opened" : "done";
   const archiveLabel = archiveRunning ? "归档中" : archiveFailed ? "归档失败" : archiveOpened ? "已归档" : "已发布（未归档）";
-  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: "归档", view: "archive" })] : [];
+  const archiveActions: KnowledgeProductionAction[] = published ? [actionLink({ id: "archive", label: input.kind === "domain" && !job?.component_research_id && archiveState === "done" ? "创建归档 MR" : "归档", view: "archive" })] : [];
   let status_label: string, group: KnowledgeTaskGroup, next_action: KnowledgeProductionAction;
   if (archiveFailed) {
     status_label = "归档失败"; group = "attention"; next_action = archiveActions[0] ?? { id: "review", label: "审查成果", view: "review" };
@@ -114,6 +114,7 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
     status_label = draft ? makingSkill ? "待提交" : "待审查" : published ? archiveLabel : "已完成";
     group = draft ? "attention" : "completed";
     next_action = draft ? { id: "review", label: makingSkill ? "编辑并提交" : "审查成果", view: "review" } : { id: "knowledge", label: "查看知识", view: "review" };
+    if (!draft && input.kind === "domain" && !job?.component_research_id && published && archiveState === "done") next_action = archiveActions[0];
   }
   const documentCount = input.kind === "domain" ? input.record.documents.length + (input.record.work_documents?.length ?? 0) : input.kind === "component" ? input.record.document?.sections.length ?? Number(!!input.record.draft) : 0;
   const workDocumentCount = input.kind === "component" ? input.record.work_documents?.length ?? 0 : 0;

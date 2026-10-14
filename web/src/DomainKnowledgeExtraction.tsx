@@ -145,9 +145,14 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
         const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}/${name}`, input);
         setJob(next); return next;
       });
-      setJob(published); setStage("review"); setTab("content"); await refreshList();
+      setJob(published); setStage("publish"); setTab("content"); await refreshList();
     } catch (error) { setError((error as Error).message); }
     finally { setBusy(false); }
+  }
+  function refreshArchiveStatus() {
+    if (!job) return;
+    void componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}`, undefined, AbortSignal.timeout(30_000))
+      .then(next => { if (selectedRef.current === job.id) setJob(next); }).catch(reason => { if (selectedRef.current === job.id) setError(reason.message); });
   }
   async function remove() {
     if (!job) return;
@@ -179,10 +184,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
       <FileText size={21} /><strong title={job.title}>{job.title}</strong><span className={`studio-job-status ${active ? "is-active" : ""}`}>{lifecycle}</span>
       {!preparingCleanup && <KnowledgeTaskTabs value={currentStage} onChange={changeView} documentCount={job.documents.length + (job.work_documents?.length ?? 0)} view={job.production} disabled={!!edit} />}
       <div className="studio-result-actions">
-        <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onReview={() => changeView("review")} onChanged={() => {
-          void componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}`, undefined, AbortSignal.timeout(30_000))
-            .then(next => { if (selectedRef.current === job.id) setJob(next); }).catch(reason => { if (selectedRef.current === job.id) setError(reason.message); });
-        }} />
+        <DomainKnowledgePublicationStatus compact job={job} disabled={busy || !!edit} openRequest={archiveOpenRequest} onConfigure={() => setStage("publish")} onReview={() => changeView("review")} onChanged={refreshArchiveStatus} />
         {job.production?.research_actions.map(item => item.id === "stop" ? <Button key={item.id} variant="outline" disabled={busy} onClick={() => void action("stop")}>{item.label}</Button> : item.id === "resume" ? <Button key={item.id} disabled={busy} onClick={() => { void action("resume", { use_latest_skill: latest || !job.turns.at(-1)?.research }); changeView("progress"); }}>{item.label}</Button> : currentStage === "review" && (item.id === "update" ? <Button key={item.id} disabled={busy || !document} onClick={() => { setTab("content"); setNotesOpenRequest(value => value + 1); }}>{item.label}</Button> : <Button key={item.id} disabled={busy || !!edit || !publicationCount || !!publicationProblem} title={publicationProblem} onClick={() => void publishSelected()}><ArrowUpRight size={17} />{busy ? "正在发布…" : `${item.label}（${publicationCount}）`}</Button>))}
         <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="更多萃取操作" />}><MoreHorizontal size={20} /></DropdownMenuTrigger><DropdownMenuContent align="end">
           {!preparingCleanup && <DropdownMenuItem onClick={() => setStage("inputs")}>资料</DropdownMenuItem>}
@@ -223,7 +225,7 @@ export function DomainKnowledgeExtraction({ focusId, surface, onViewKnowledge, o
         <Textarea aria-label="快速修订知识" rows={1} value={message} onChange={event => setMessage(event.target.value)} placeholder="补充或修改这份知识…" />
         <Button type="submit" size="icon" aria-label="生成修订建议" disabled={busy || active || !message.trim()}><Send size={18} /></Button>
       </form>}</KnowledgeReadingFrame></div>
-      {currentStage === "publish" && <div className="knowledge-task-progress space-y-4"><div className="flex items-start justify-between gap-4"><h3 className="font-semibold">Git 归档设置</h3><KnowledgeBackButton onClick={() => changeView("review")} destination="文稿" /></div><DomainKnowledgeArchiveTargets job={job} disabled={busy || active || !!edit} onChange={setJob} />{edit && <p className="text-sm text-muted-foreground">请先保存或取消正文编辑，再调整归档位置。</p>}</div>}
+      {currentStage === "publish" && <div className="knowledge-task-progress space-y-4"><div className="flex items-start justify-between gap-4"><h3 className="font-semibold">Git 归档</h3><KnowledgeBackButton onClick={() => changeView("review")} destination="文稿" /></div><DomainKnowledgePublicationStatus job={job} disabled={busy || !!edit} onReview={() => changeView("review")} onChanged={refreshArchiveStatus} /><DomainKnowledgeArchiveTargets job={job} disabled={busy || active || !!edit} onChange={setJob} />{edit && <p className="text-sm text-muted-foreground">请先保存或取消正文编辑，再调整归档位置。</p>}</div>}
     </> : <p className="p-8 text-muted-foreground">{selected ? "正在加载任务…" : "选择历史任务，或新建领域萃取。"}</p>}
     <Dialog open={reextracting} onOpenChange={setReextracting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>重新萃取？</DialogTitle></DialogHeader><p>复用单号、上传资料和研究配置，使用最新 Skill 创建新任务。原任务会停止并移除，原文稿不带入新任务；已发布知识和 MR 保留。</p>{error && <p role="alert" className="text-danger">{error}</p>}<div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setReextracting(false)}>取消</Button><Button disabled={busy} onClick={() => void reextract()}>{busy ? "正在重新萃取…" : "确认重新萃取"}</Button></div></DialogContent></Dialog>
     <Dialog open={deleting} onOpenChange={setDeleting}><DialogContent className="tw-root sm:max-w-[480px]"><DialogHeader><DialogTitle>删除领域萃取任务？</DialogTitle></DialogHeader><p className="font-medium">{job?.title}</p><p className="text-sm text-muted-foreground">{job?.deletion?.message}</p>{job?.deletion?.archive_batches.map(batch => <div key={batch.id} className="rounded border border-line p-3 text-sm"><strong>{batch.id}</strong>{batch.error && <p className="text-danger">{batch.error}</p>}<ul>{batch.documents.map(document => <li key={document.id}>{document.title} · {document.path}</li>)}</ul>{batch.publications.map(publication => <p key={`${publication.target_id}:${publication.branch}`}>{publication.error}{publication.url && <a className="ml-2 text-primary underline" href={publication.url} target="_blank" rel="noreferrer">查看 MR</a>}</p>)}</div>)}{error && <p role="alert" className="text-danger">{error}</p>}<div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setDeleting(false)}>取消</Button><Button variant="destructive" disabled={busy} onClick={() => void remove()}>确认删除</Button></div></DialogContent></Dialog>

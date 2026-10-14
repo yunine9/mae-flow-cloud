@@ -47,6 +47,24 @@ test("已发布且配置完整的任务仍能打开归档设置；研究期间�
   assert.match(render(), /<button[^>]*disabled[^>]*>归档设置<\/button>/);
 });
 
+test("Issue488：65篇已发布且只有恢复占位批次时，详情和归档页明确显示创建MR入口", () => {
+  const job = fixture(); job.knowledge_layout = "module-v1";
+  job.documents = Array.from({ length: 65 }, (_, index) => ({ ...job.documents[0], id: `doc-${index}`,
+    path: `domains/orders/doc-${index}.md`, knowledge_document_id: `kd-${index}`, published_revision: `formal-${index}`, published_document_revision: 1 }));
+  job.archive_batches = [{ id: "recovery", created_at: job.created_at, operator: "alice", state: "pending", knowledge_layout: "module-v1",
+    documents: structuredClone(job.documents), targets: [job.knowledge_target], publications: [] }];
+  job.production = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(job.production.next_action.label, "创建归档 MR");
+  for (const compact of [true, false]) {
+    const html = renderToStaticMarkup(React.createElement(DomainKnowledgePublicationStatus, { job, compact }));
+    assert.match(html, /创建归档 MR<\/button>/);
+    assert.doesNotMatch(html, /disabled/);
+    if (!compact) assert.match(html, /平台知识已发布/);
+  }
+  assert.equal(job.archive_batches.length, 1);
+  assert.equal(job.archive_batches[0].issue_no, undefined, "展示入口不会自动创建MR或替人确认单号");
+});
+
 test("模块归档设置明确覆盖根 AGENTS，旧正文可从 Git 历史查阅", () => {
   const job = fixture(); job.knowledge_layout = "module-v1";
   job.knowledge_target.docs_path = "domains/orders"; job.documents[0].path = "domains/orders/README.md";
