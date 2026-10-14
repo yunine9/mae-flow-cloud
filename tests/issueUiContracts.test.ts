@@ -887,6 +887,19 @@ test("左栏六标签(#123):材料面板免壳直渲,页签一签一色走问题
   assert.doesNotMatch(css, /\.issue-workspace/);
 });
 
+test("DTS 单据单号直取会话账本:现场回收不挡外部查询,兜底三态诚实(2026-10-14)", () => {
+  // 归档单的代码现场被清扫器回收后材料清单不加载,DTS 详情若以清单
+  // 里的 ticket 为前提就永不发请求,页签永远停在"正在读取"。单号是
+  // 会话账本字段,直取 detail.ticket(外部单据系统查询,与本地现场
+  // 无关);读取失败给失败文案,不再拿加载态充数。
+  assert.match(materials, /getDtsTicketDetail\(detail\.ticket\)/);
+  assert.doesNotMatch(materials, /getDtsTicketDetail\(data/,
+    "单号不得再绕材料清单——现场回收后清单不加载,请求会永不发出");
+  assert.match(materials,
+    /dtsError \? "单据详情读取失败" : "正在读取单据详情…"/);
+  assert.match(materials, /"\(无关联 DTS 单\)"/);
+});
+
 // ---- 右栏协作对话框(#124):ws-side 从 IssueRail 占位换成「与 Agent
 // ---- 协作」——会话流接 GET /issues/:id/conversation 聚合接口(可见
 // ---- 轮询,任务侧同款节奏),当前等待卡钉在流末尾的 Agent 气泡内

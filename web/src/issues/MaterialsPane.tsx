@@ -655,6 +655,9 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
   const [repoDiff, setRepoDiff] = useState<string>();
   const [diffRepo, setDiffRepo] = useState("");
   const [dtsDetail, setDtsDetail] = useState<DtsTicketDetail>();
+  // DTS 详情读取失败:单据区给诚实文案,不再拿加载态充数(错误详情
+  // 照旧落在面板顶部 note)。
+  const [dtsError, setDtsError] = useState(false);
 
   async function load() {
     try {
@@ -679,8 +682,10 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
   }
 
   useEffect(() => {
-    // 现场已回收(磁盘治理):materials/diff 都以 repo 为源,取了必失败
-    // ——不再发请求,页签上给如实降级文案。
+    // 现场已回收(磁盘治理):变更视图按设计降级(见渲染处),材料清单
+    // 对本面板再无可消费数据——不发这发用不上的请求。清单本身是
+    // fail-open 的(回收后照常 200,元信息页签就靠它),此前注释称
+    // "必失败"不实;DTS 单号已改从会话账本直取(见下),同样不受此限。
     if (detail.repo_reclaimed_at) return;
     void load();
     // 会话状态一动(AI 可能改了工作区)就刷新;id 变化由父层换页签兜底。
@@ -707,15 +712,21 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
   }, [diffRepo, detail.updated_at]);
 
   useEffect(() => {
-    if (view === "dts" && data?.ticket && !dtsDetail) {
-      getDtsTicketDetail(data.ticket)
+    // DTS 详情是外部单据系统查询,与本地代码现场无关:单号从会话账本
+    // (detail.ticket)直取,不绕材料清单——归档单现场被回收后照样能看
+    // (此前以清单里的 ticket 为前提,回收单清单不加载,请求永不发出,
+    // 页签永远停在"正在读取")。
+    if (view === "dts" && detail.ticket && !dtsDetail) {
+      setDtsError(false);
+      getDtsTicketDetail(detail.ticket)
         .then(setDtsDetail)
         .catch((reason) => {
+          setDtsError(true);
           setNote(String(reason instanceof Error ? reason.message : reason));
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, data?.ticket]);
+  }, [view, detail.ticket]);
 
   const changes = data?.changes ?? [];
 
@@ -804,7 +815,11 @@ export function IssueMaterialsPane({ detail, view, canOperate }: {
               || "(无描述)",
           }}
         />
-      </> : <div className="utility-note">正在读取单据详情…</div>}
+      </> : <div className="utility-note">
+        {detail.ticket
+          ? dtsError ? "单据详情读取失败" : "正在读取单据详情…"
+          : "(无关联 DTS 单)"}
+      </div>}
     </div>}
     {view === "doc" && <>
       {/* 分析报告(#260 收敛:单报告直渲,检视内联)按 updated_at
