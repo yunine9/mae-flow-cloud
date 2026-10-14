@@ -54,7 +54,7 @@ test("内置业务方法保留全部 13 种文档模板，执行引用完整", (
       assert.ok(files[posix.normalize(posix.join(posix.dirname(path), match[1]))], `${path} 的方法引用缺失：${match[1]}`);
     }
   }
-  assert.deepEqual(knowledgeArchiveDefaults(files, "domain"), { domain_directory: "domain-docs", repository_directory: "docs" });
+  assert.deepEqual(knowledgeArchiveDefaults(files, "domain"), { domain_directory: "domain-docs", repository_directory: "docs/knowledge" });
   assert.equal(domainExecutionContract(files), "reviewed-document-plan");
 });
 

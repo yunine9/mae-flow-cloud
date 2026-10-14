@@ -6,8 +6,9 @@ import { projectKnowledgeProduction } from "../../src/knowledgeProductionState";
 import type { DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 
 const scenario = new URLSearchParams(location.search).get("scenario");
-const repositories = [1, 2].map(id => ({ id: `repo-${id}`, name: id === 1 ? "订单仓" : "交易仓", repository: `https://example.test/业务来源仓库-${id}.git`, branch: "main", path: "", docs_path: "docs/old" }));
+const repositories = [1, 2].map(id => ({ id: `repo-${id}`, name: id === 1 ? "订单仓" : "交易仓", repository: `https://example.test/业务来源仓库-${id}.git`, branch: "main", path: "", docs_path: scenario === "module" ? "docs/knowledge/orders" : "docs/old" }));
 let job: DomainKnowledgeJob = { id: "dkx-browser", title: "订单业务知识", scope: "订单规则", issue_no: "REQ-cleanup", issue_description: "清理旧知识并重新萃取",
+  ...(scenario === "module" ? { module_id: "orders", knowledge_layout: "module-v1" as const } : {}),
   operator: "alice", created_at: "2026-10-08T00:00:00Z", knowledge_target: repositories[0], repositories: [repositories[1]], status: "idle", stage: "等待人工清理旧知识",
   material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [], source_cleanup: { repositories, plans: [], publications: [] } };
 const calls: Array<{ path: string; body: any }> = [];
@@ -56,6 +57,14 @@ function desktop(label: string) {
 async function run() {
   for (let attempt = 0; attempt < 40 && !button("预览待删文件"); attempt++) await pause();
   desktop("预览待删文件"); check(!calls.some(call => call.path.includes("source-cleanup/start")), "清理前不能自动研究");
+  if (scenario === "module") {
+    for (const repo of repositories) {
+      const input = document.querySelector<HTMLTextAreaElement>(`[aria-label="${repo.name}清理路径"]`);
+      check(input?.value === repo.docs_path, "模块任务清理默认只包含自己的独占目录，不能包含根AGENTS");
+    }
+    check(document.body.textContent?.includes("仓根 AGENTS.md、公共目录和其他模块文档保留"), "明确说明共享仓清理边界");
+    root.unmount(); return { passed: true };
+  }
   await click("预览待删文件");
   const checkbox = document.querySelector<HTMLInputElement>('[aria-label="删除 订单仓 docs/old/业务规则-1/历史知识及关联接口说明.md"]')!;
   checkbox.click(); await pause(); check(!checkbox.checked, "取消勾选应保留文件");

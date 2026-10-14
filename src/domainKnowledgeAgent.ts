@@ -20,6 +20,7 @@ import { businessKnowledgeEvidenceId, knowledgeEvidenceTool } from "./domainRese
 import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.ts";
 import { domainDocumentFingerprint, domainExecutionContract, DOMAIN_EXECUTION_INSTRUCTIONS, workOverview, workStepSummary, pageRows, runnableWave } from "./domainKnowledgeExecution.ts";
 import { createKnowledgeDiagramChecker, knowledgeDiagramFeedback } from "./domainKnowledgeDiagrams.ts";
+import { assertModuleKnowledgePath } from "./domainKnowledgeLayout.ts";
 
 export interface DomainAgentOptions {
   dataDir: string;
@@ -78,11 +79,12 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         const doc = params.document;
         if (!doc) throw new Error("缺少草稿内容");
         doc.path = knowledgeRelativePath(doc.path, true);
+        const target = [input.job.knowledge_target, ...input.job.repositories].find(r => r.id === doc.target_id);
+        if (!target) throw new Error("归档仓不在本次任务范围");
+        assertModuleKnowledgePath(input.job, target, doc.path);
         const previous = input.read().find(d => d.id === doc.id);
         let baseline: { content: string | null; revision: string } | undefined;
         if (!previous && input.job.archive_configured !== false) {
-          const target = [input.job.knowledge_target, ...input.job.repositories].find(r => r.id === doc.target_id);
-          if (!target) throw new Error("归档仓不在本次任务范围");
           const prepared = await options.source(target, input.turn.operator, signal);
           const entry = await executeFile("git", ["--literal-pathspecs", "ls-tree", prepared.revision, "--", doc.path], prepared.root, signal);
           if (entry && !/^100644 blob |^100755 blob /.test(entry)) throw new Error("目标路径不是普通文档文件");
@@ -186,7 +188,8 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     phase: work.state.result?.status === "complete" ? "complete" : "research",
     capabilities: work.state.steps.map(s => ({ id: s.id, title: s.title, repository_ids: [], state: s.status === "done" || s.status === "discarded" ? "researched" : s.status === "failed" ? "blocked" : "pending",
       findings: s.result?.summary ?? s.error ?? "", sources: [], document_ids: s.result?.document_ids ?? [] })) } });
-  const context = { mode: input.turn.mode, title: input.job.title, scope: input.job.scope, instructions: input.job.instructions, repositories: researchRepositories,
+  const context = { mode: input.turn.mode, title: input.job.title, scope: input.job.scope, instructions: input.job.instructions,
+    module_id: input.job.module_id, knowledge_layout: input.job.knowledge_layout ?? "legacy", repositories: researchRepositories,
     archive_targets: [input.job.knowledge_target, ...input.job.repositories], archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
     revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
     // ZIP 目录与图片清单只在读取资料时返回，避免复制到每个子会话和压缩后的上下文。

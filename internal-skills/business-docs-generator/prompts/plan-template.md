@@ -2,14 +2,17 @@
 
 > 生成时间：<YYYY-MM-DD HH:MM>
 > 状态：<实际调查/规划核查/写作/完成/受阻状态>
+> 业务范围：<平台 module_id（旧任务无则注明）、模块名称、scope 及必要依赖边界>
+> 目录布局：<平台 knowledge_layout；缺失时注明沿用旧布局，不根据 module_id 推断>
 > 平台保存位置：knowledge_work 过程文稿 current-plan（不进入知识发布）
 > 图表校验：保存后 knowledge_diagram_check 使用 work_document_id=current-plan；invalid 修正，unavailable 保留规划并报告依赖阻碍
 > 完整输出清单：保存正文后以 knowledge_work action=plan 登记全部 document_ids，work_document_id=current-plan
 > 下方仓A/B/C/D、接口和功能行仅示意格式，按实际清单展开或删除示例；不凑数量。调查未完成的区域和来源失败必须明确列出，不能统计为已穷尽。正文保留条目、范围与结果索引，不粘贴全部源码或调查报告。
+> 路径写法：以下表格采用 module-v1 布局。D 代表领域目标实际 docs_path，R_A 代表仓A目标实际 docs_path；保存规划时全部替换成完整仓内路径，不能保留这些符号。平台提供的独占目录已经包含 module_id，不再追加。knowledge_layout 不是 module-v1 或缺失时，按平台执行约定保留实际文稿位置及导航文件名。
 
 ## 一、仓清单
 
-| 序号 | 仓名/编号 | 技术栈 | 职责 | 核心模块数 | 范围覆盖与待核实区域 |
+| 序号 | 仓名/编号 | 技术栈 | 本业务职责 | 本业务功能数 | 范围覆盖与待核实区域 |
 |------|-----------|--------|------|-----------|--------------------|
 | 1 | <仓A/实际编号> | <语言/框架> | <一句话> | <实际数量/未确认> | <已归类目录/入口、无关依据、调查结果编号及尚未完成范围> |
 | 2 | <仓B/实际编号> | <语言/框架> | <一句话> | <实际数量/未确认> | <实际覆盖> |
@@ -43,31 +46,31 @@ RepoB --> ExternalSystem : <实际交互>
 
 > 每条源码范围最终填写已确认的仓编号、入口/关键实现文件或符号与调查结果编号。下表中的“业务逻辑”“配置”等文字提示阅读范围，不足以作为调查已完成的证据；待展开目录另列未核实项。类型和路径随用户范围及真实业务清单展开。
 
-### 1. 领域层文档（domain-docs/）
+### 1. 领域层文档（领域 target.docs_path）
 
 | 序号 | 文档路径 | 模板 | 预估源码范围 | 状态 |
 |------|---------|------|------------|------|
-| 1 | `AGENTS.md`（根目录） | `domain/root-agents.md` | <全部范围内仓的职责/入口定位、规划与目标文稿索引> | 待生成 |
-| 2 | `domain-docs/AGENTS.md` | `domain/domain-agents.md` | <领域文稿清单与最终路由目标> | 待生成 |
-| 3 | `domain-docs/glossary.md` | `domain/glossary.md` | 全部仓核心业务实体、枚举、错误码与接口 | 待生成 |
-| 4 | `domain-docs/architecture.md` | `domain/architecture.md` | 全部仓构建配置、入口、调用实现与部署 | 待生成 |
-| 5 | `domain-docs/domains/<域1>.md` | `domain/domain.md` | <仓A业务逻辑层+数据模型+状态管理, 仓B业务逻辑层+数据模型, 仓C业务逻辑层> | 待生成 |
-| 6 | `domain-docs/domains/<域2>.md` | `domain/domain.md` | <仓B业务逻辑层+数据模型+状态管理, 仓C业务逻辑层> | 待生成 |
-| 7 | `domain-docs/interfaces/<仓A-仓B>.md` | `domain/interface-contract.md` | <仓A调用代码+异常处理, 仓B实现代码+异常处理, IDL定义> | 待生成 |
-| 8 | `domain-docs/interfaces/<仓B-仓C>.md` | `domain/interface-contract.md` | <仓B调用代码+异常处理, 仓C实现代码+异常处理, IDL定义> | 待生成 |
-| 9 | `domain-docs/interfaces/<仓C-仓D>.md` | `domain/interface-contract.md` | <仓C调用代码+异常处理, 仓D实现代码+异常处理, IDL定义> | 待生成 |
-| 10 | `domain-docs/external/<系统A>.md` | `domain/external-system.md` | <仓X实际对接入口/实现/编码/异常与协议配置的文件或符号> | 待生成 |
+| 1 | `D/README.md` | `domain/root-agents.md` | <本业务各仓职责/入口、规划与文稿索引> | 待生成 |
+| 2 | `D/index.md` | `domain/domain-agents.md` | <本业务领域文稿清单与最终路由目标> | 待生成 |
+| 3 | `D/glossary.md` | `domain/glossary.md` | 本业务实体、枚举、错误码与接口 | 待生成 |
+| 4 | `D/architecture.md` | `domain/architecture.md` | 本业务构建配置、入口、调用实现与适用部署 | 待生成 |
+| 5 | `D/domains/<域1>.md` | `domain/domain.md` | <本业务在仓A/B/C的入口、实现、数据与状态> | 待生成 |
+| 6 | `D/domains/<域2>.md` | `domain/domain.md` | <本业务在仓B/C的入口、实现、数据与状态> | 待生成 |
+| 7 | `D/interfaces/<仓A-仓B>.md` | `domain/interface-contract.md` | <本业务调用端、实现端、异常处理与IDL> | 待生成 |
+| 8 | `D/interfaces/<仓B-仓C>.md` | `domain/interface-contract.md` | <本业务调用端、实现端、异常处理与IDL> | 待生成 |
+| 9 | `D/interfaces/<仓C-仓D>.md` | `domain/interface-contract.md` | <本业务调用端、实现端、异常处理与IDL> | 待生成 |
+| 10 | `D/external/<系统A>.md` | `domain/external-system.md` | <本业务实际对接入口/实现/编码/异常与协议配置> | 待生成 |
 
-### 2. 仓级文档（<仓>/docs/）
+### 2. 仓级文档（对应仓 target.docs_path）
 
 #### 2.1 基础文档
 
 | 序号 | 文档路径 | 模板 | 预估源码范围 | 状态 |
 |------|---------|------|------------|------|
-| 11 | `<仓A>/AGENTS.md` | `repo/repo-agents.md` | <仓A实际构建/测试/运行配置、职责、模块/规范文稿索引> | 待生成 |
-| 12 | `<仓A>/docs/module-map.md` | `repo/module-map.md` | <仓A>源码目录 | 待生成 |
-| 13 | `<仓A>/docs/rules/coding-conventions.md` | `repo/coding-conventions.md` | <仓A> lint配置 | 待生成 |
-| 14 | `<仓A>/docs/rules/business-rules.md` | `repo/business-rules.md` | <仓A>跨模块 | 待生成 |
+| 11 | `R_A/README.md` | `repo/repo-agents.md` | <本业务在仓A的职责、适用命令与文稿索引> | 待生成 |
+| 12 | `R_A/module-map.md` | `repo/module-map.md` | <本业务在仓A的功能、入口与必要依赖> | 待生成 |
+| 13 | `R_A/rules/coding-conventions.md` | `repo/coding-conventions.md` | <仓A既有约定及配置对本业务的适用范围> | 待生成 |
+| 14 | `R_A/rules/business-rules.md` | `repo/business-rules.md` | <本业务内部跨功能约定> | 待生成 |
 
 #### 2.2 模块文档（按业务功能划分）
 
@@ -78,12 +81,12 @@ RepoB --> ExternalSystem : <实际交互>
 
 | 序号 | 业务功能名 | 功能介绍 | 文档路径 | 模板 | 涉及源码目录 | 状态 |
 |------|-----------|---------|---------|------|------------|------|
-| 15 | <业务功能1，如 trace-task-create> | <一句话说明该功能做什么，如"创建信令追踪任务，下发到采集器执行采集"> | `<仓A>/docs/modules/<业务功能1>/<业务功能1>.md` | `repo/module-doc.md` | `<源码目录1>`, `<源码目录2>` | 待生成 |
-| 16 | <业务功能2，如 trace-result-query> | <一句话说明该功能做什么> | `<仓A>/docs/modules/<业务功能2>/<业务功能2>.md` | `repo/module-doc.md` | `<源码目录1>`, `<源码目录2>` | 待生成 |
-| 17 | <业务功能3，如 ne-tree-management> | <一句话说明该功能做什么> | `<仓A>/docs/modules/<业务功能3>/<业务功能3>.md` | `repo/module-doc.md` | `<源码目录1>` | 待生成 |
+| 15 | <业务功能1，如 trace-task-create> | <一句话说明该功能做什么，如"创建信令追踪任务，下发到采集器执行采集"> | `R_A/modules/<业务功能1>/<业务功能1>.md` | `repo/module-doc.md` | `<源码目录1>`, `<源码目录2>` | 待生成 |
+| 16 | <业务功能2，如 trace-result-query> | <一句话说明该功能做什么> | `R_A/modules/<业务功能2>/<业务功能2>.md` | `repo/module-doc.md` | `<源码目录1>`, `<源码目录2>` | 待生成 |
+| 17 | <业务功能3，如 ne-tree-management> | <一句话说明该功能做什么> | `R_A/modules/<业务功能3>/<业务功能3>.md` | `repo/module-doc.md` | `<源码目录1>` | 待生成 |
 | ... | ... | ... | ... | ... | ... | ... |
 
-> 其余实际仓同理；每个模块填写业务功能名与介绍，已确认的入口/关键实现给文件或符号定位，待展开目录另列未核实范围。没有经验案例不生成经验文稿。
+> 其余关联仓按本业务实际范围展开；每个功能填写介绍和入口/关键实现定位，待展开目录另列未核实范围。同仓其他业务不自动成为文稿条目。没有经验案例不生成经验文稿。
 
 ### 3. 执行关联
 
@@ -91,7 +94,7 @@ RepoB --> ExternalSystem : <实际交互>
 
 | 清单序号 | document_id | target_id | 仓内 path | 写作步骤编号 | 真实依赖步骤 | 通过评审的写作步骤及正文版本 | 替代步骤或未完成原因 |
 |----------|-------------|-----------|-----------|-------------|-------------|----------------------------|------------------|
-| 1 | root-agents | domain | AGENTS.md | write-root-agents-1 | <相关调查步骤> | 未通过 | - |
+| 1 | domain-readme | domain | <实际领域 docs_path>/README.md | write-domain-readme-1 | <相关调查步骤> | 未通过 | - |
 | <序号> | <稳定编号> | <归档目标编号> | <仓内完整相对路径> | <唯一写作步骤编号> | <实际读取的调查或文稿步骤；无则无> | <实际写作步骤、revision 与该步骤的 review 结论> | <实际说明> |
 
 > 逐篇写作步骤均声明 expected_document_ids=[本篇编号] 和 step.review.instructions；这是知识文稿自动评审配置，不用于无知识文稿的规划核查。生成 instructions 时带上本项目标/路径/模板/范围及证据索引，不要求写作者每次回读整份规划。文档类型顺序不是串行依赖；只读取实际需要的前序结果。最终导航另列步骤，依赖相关目标的写作及最后修订；已有初稿时依赖初稿，没有则可直接生成最终版。改动多篇时列全编号并评审；不产生循环依赖。平台文稿版本核对为准，表中 revision 不替代它。新增业务先补清单，修订沿用文稿编号。

@@ -11,11 +11,47 @@ import { KnowledgeSourceCleanup } from "../src/knowledgeSourceCleanup.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import type { KnowledgeCleanupPublication } from "../src/domainKnowledgeTypes.ts";
+import type { DomainKnowledgeJob, KnowledgeCleanupPublication } from "../src/domainKnowledgeTypes.ts";
 
 const config = { issue_no: "REQ-cleanup", issue_description: "清理旧知识并重新萃取", title: "订单", scope: "订单业务规则",
   repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/old" }] };
 const git = (root: string, ...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+
+test("模块清理：预览和执行仅允许独占目录，整批预检保护公共根及其他模块文件", async () => {
+  const targets = [1, 2].map(index => ({ id: `repo-${index}`, name: `业务仓${index}`, repository: `https://example.test/repo-${index}.git`, branch: "main", path: "", docs_path: "docs/knowledge/orders" }));
+  const calls: Array<{ action: string; paths: unknown }> = [];
+  const cleanup = new KnowledgeSourceCleanup({
+    async previewCleanup(target, paths) {
+      calls.push({ action: "preview", paths });
+      const entries = (paths as string[]).map(path => ({ path: path.endsWith(".puml") ? path : `${path}/old.json`, mode: "100644", oid: "a".repeat(40) }));
+      return { id: `plan-${target.id}`, target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40), entries };
+    },
+    async publishCleanup(_job, target, plan, paths) {
+      calls.push({ action: "publish", paths });
+      return { target_id: target.id, cleanup_plan_id: plan.id, removed_paths: paths as string[], documents: [], branch: `cleanup-${target.id}`, state: "opened", url: `https://example.test/mr/${target.id}` };
+    },
+  });
+  const job: DomainKnowledgeJob = { id: "dkx-module-cleanup", ...config, module_id: "orders", knowledge_layout: "module-v1", operator: "alice", created_at: "now", status: "idle", stage: "等待清理",
+    knowledge_target: { ...targets[0], id: "domain", repository: "" }, repositories: targets, material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [],
+    source_cleanup: { repositories: targets, plans: [], publications: [] } };
+  const signal = new AbortController().signal;
+  let saves = 0; const save = () => { saves++; };
+  for (const path of ["AGENTS.md", "docs", "docs/knowledge/billing", "docs/knowledge/orders-other", "docs/knowledge/orders/../billing"]) {
+    await assert.rejects(cleanup.action(job, "preview", { paths_by_target: { "repo-1": [targets[0].docs_path], "repo-2": [path] } }, "alice", save, signal), /本模块只能清理|相对路径/);
+  }
+  assert.equal(calls.length, 0, "第二仓范围无效时，第一仓也不发起预览或 Git 操作");
+  assert.equal(saves, 0);
+  await cleanup.action(job, "preview", { paths_by_target: { "repo-1": [targets[0].docs_path], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal);
+  assert.equal(calls.length, 2, "允许模块目录本身和非Markdown子文件");
+  job.source_cleanup!.plans[1].entries.push({ path: "AGENTS.md", mode: "100644", oid: "b".repeat(40) });
+  await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": ["AGENTS.md"] } }, "alice", save, signal), /本模块只能清理/);
+  assert.equal(calls.filter(call => call.action === "publish").length, 0, "持久化旧计划里的越界条目也不能绕过执行校验");
+  job.source_cleanup!.plans[1].paths = ["docs"];
+  await assert.rejects(cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal), /本模块只能清理/);
+  job.source_cleanup!.plans[1].paths = [`${targets[1].docs_path}/diagram.puml`];
+  await cleanup.action(job, "publish", { selected_paths_by_target: { "repo-1": [`${targets[0].docs_path}/old.json`], "repo-2": [`${targets[1].docs_path}/diagram.puml`] } }, "alice", save, signal);
+  assert.deepEqual(calls.filter(call => call.action === "publish").map(call => call.paths), [["docs/knowledge/orders/old.json"], ["docs/knowledge/orders/diagram.puml"]]);
+});
 
 test("萃取前清理：勾选后先保存待清理任务，不执行研究；重启保留，人工开始后才执行", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-cleanup-prepare-")); let executions = 0;

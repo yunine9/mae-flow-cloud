@@ -44,14 +44,26 @@ knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系
 
 规划使用 prompts/plan-template.md 的完整结构。正文清单记录全部预期产物；执行关联表把每项绑定到稳定 document_id、目标仓、写作步骤及最近通过的评审版本。保存正文后用 plan 操作登记全部文稿编号，宿主据此核对漏排或漏生成的文稿。步骤状态以 knowledge_work 实际记录为准，不能只修改规划表就声称完成。
 
-用 archive_targets 的实际 id 选择目标：
+先核对 module_id、scope、knowledge_layout 与 archive_targets；关联仓是源码来源，不代表本任务拥有整个仓的业务或公共文档。浅层盘点定位本业务入口后，仅深入本业务及解释完整链路所需的共享实现。其他业务作为有依据的边界或依赖记录，不为它们生成整套知识。模板中的“模块文档”按本业务内部功能划分，与稳定的 module_id 不是同一层级。
 
-- 根 AGENTS.md：target_id=domain，path=AGENTS.md。
-- 领域层：target_id=domain，path=domain-docs/ 下的实际路径。
-- 仓级：target_id=该业务仓的 repo-*，path=AGENTS.md 或 docs/ 下路径；去掉逻辑工作区中的仓名前缀。
-- 用户本轮指定其他合法路径时按其要求记录，保持导航一致。归档尚未配置仍可保存逻辑目标的草稿。
+仅当 knowledge_layout 为 module-v1 时，使用以下布局；有 module_id 不代表已采用此布局。用 archive_targets 的实际 id 选择目标，document.path 为该目标 docs_path 加文稿相对路径。平台给出的 target.docs_path 已是本模块独占目录，不再追加 module_id，也不根据模块显示名重建目录。默认领域目录为 domain-docs/<module_id>，仓级为 docs/knowledge/<module_id>；以下用 D、R 分别代表实际领域、仓级 target.docs_path，只是说明用符号，不能写入产物：
 
-同仓链接使用相对路径；跨仓引用明确写出仓名和仓内路径，已知真实仓链接时可附链接。原模板的仓名/docs/ 是跨仓定位表达，不把它伪装成本归档仓内实际存在的目录。全部占位符在产物中替换为实际名称。
+| 模板 | module-v1 布局的目标与 path |
+|------|--------------------------|
+| domain/root-agents.md | 领域目标，D/README.md：本业务领域入口 |
+| domain/domain-agents.md | 领域目标，D/index.md：本目录详细索引与维护说明 |
+| 其他 domain/ 模板 | 领域目标，D/glossary.md、D/architecture.md、D/domains/、D/interfaces/、D/external/ 下实际文件 |
+| repo/repo-agents.md | 对应仓目标，R/README.md：本业务在该仓的职责、命令与路由 |
+| repo/module-map.md | 对应仓目标，R/module-map.md：本业务功能索引 |
+| 其他 repo/ 模板 | 对应仓目标，R/rules/、R/modules/ 下实际文件；真实经验在对应功能的 experience/ 下 |
+
+每仓只以根 AGENTS.md 作为统一 Agent 入口，不在模块目录再生成 AGENTS.md。根文件是共享公共文件，不纳入模块任务的 plan、expected_document_ids 或草稿；平台归档时保留已有项目说明、常用命令、规范及其他正文，只追加一次通用的模块知识查找说明。任务不生成这段公共说明，也不改写其他模块的目录。root-agents.md、domain-agents.md、repo-agents.md 保留为模板标识，文件名不规定产物必须叫 AGENTS.md；module-v1 布局的产物路径按上表执行。
+
+knowledge_layout 缺失或不是 module-v1 的旧任务保留原包及已有路径，包括已有 module_id 的旧任务。domain/root-agents.md 可仍对应领域仓根 AGENTS.md，领域正文仍在原领域 docs_path；repo/repo-agents.md 可仍对应业务仓根 AGENTS.md，其余仓级文稿仍在原仓级 docs_path。不要因 module_id 存在或本方法默认值变化而迁移。模板中的目录树、标题和链接按该任务实际位置调整。
+
+已完成的旧任务可由维护人在 Git 归档设置中选择“按业务模块整理目录”。平台只调整路径、相对链接与导航，保留文稿编号、调查和版本；整理本身不调用研究，也不要求更换 Skill、重写文稿或重新评审。既有 current-plan 和步骤结果作为历史记录保留，后续研究须回读当前文稿位置与目标目录，不能照搬历史路径。Agent 不通过草稿自行删除旧目录或执行迁移。归档尚未配置仍可保存逻辑目标的草稿。
+
+同仓链接按文稿实际所在位置计算相对路径；跨仓引用明确写出仓名和包含 docs_path 的仓内路径，已知真实仓链接时可附链接。仓名只是跨仓定位，不是知识仓内真实存在的目录。全部路径占位符在产物中替换为实际值。
 
 完整 current-plan 保存格式：
 
@@ -64,7 +76,7 @@ knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系
 登记前以 knowledge_diagram_check({work_document_id:"current-plan"}) 读取当前规划的全部图表报告；invalid 修正后保存/重查，unavailable 保留已保存规划并报告依赖问题。plan 登记和最终 complete 时宿主还会核对该过程稿，不需要另建知识文稿来校验。
 
 ```json
-{"action":"plan","work_document_id":"current-plan","document_ids":["root-agents","domain-agents","glossary","architecture","import-domain"]}
+{"action":"plan","work_document_id":"current-plan","document_ids":["domain-readme","domain-index","glossary","architecture","import-domain"]}
 ```
 
 新增文稿时先更新规划正文，再用 plan 提交包含原清单与新增编号的完整集合。确实不适用的原条目，通过 exclusions: [{document_id, reason}] 说明源码证据或用户范围变更，正文同步保留排除理由；不得以困难、失败或篇幅为由删掉必需产物。discard 只处理不再执行的步骤，不替代计划排除说明。
@@ -173,7 +185,7 @@ pass=false、图校验 invalid/unavailable 或来源缺口都是可以提交的�
   "steps": [{
     "id": "write-import-domain-1",
     "title": "生成数据导入业务域文稿",
-    "instructions": "本规划条目 import-domain：目标 domain，路径 domain-docs/domains/import.md，layer=domain，范围为 repo-api 与 repo-worker 的数据导入业务。按 prompts/generate-domain.md 和 templates/domain/domain.md 处理，读取 research-import-api、research-import-worker 的结果索引，重新打开两端真实入口、实现和配置，逐实际场景写作并保存完整候选。需要核对其他规划条目时再读 current-plan。",
+    "instructions": "本规划条目 import-domain：目标 domain，路径为该目标实际 docs_path 下的 domains/import.md（登记时替换为完整仓内路径），layer=domain，范围为本次 module_id 在 repo-api 与 repo-worker 的数据导入业务。按 prompts/generate-domain.md 和 templates/domain/domain.md 处理，读取 research-import-api、research-import-worker 的结果索引，重新打开两端真实入口、实现和配置，逐实际场景写作并保存完整候选。需要核对其他规划条目时再读 current-plan。",
     "depends_on": ["research-import-api", "research-import-worker"],
     "readonly": false,
     "expected_document_ids": ["import-domain"],
@@ -192,7 +204,7 @@ pass=false、图校验 invalid/unavailable 或来源缺口都是可以提交的�
 
 写作只修改 expected_document_ids 内的文稿。需要修改关联导航或发现新产物时交回主会话登记，不在本篇偷偷改写。需要读取其他步骤正在生成的文稿时等待其完成，并将对方写作步骤列入 depends_on；不能靠碰巧先执行来代替真实依赖。文档类型列表表示阅读层级，不要求把不相关文稿排成串行链。
 
-最终导航同步单独登记带 review 的步骤，也可在相关文稿完成后直接首次生成最终导航，不要求先生成空初稿。根 AGENTS.md 与 domain-docs/AGENTS.md 等待全部实际路由目标；根路由含各仓 AGENTS.md 时也等待这些目标。某仓 AGENTS.md 与 docs/module-map.md 等待其模块/规范文稿。depends_on 使用外部前序文稿的写作及最后修订步骤；已有导航初稿时还需等待初稿。
+最终导航同步单独登记带 review 的步骤，也可在相关文稿完成后直接首次生成最终导航，不要求先生成空初稿。module-v1 布局下，领域 docs_path 内的 README.md 与 index.md 等待本业务全部实际路由目标；领域入口引用各仓模块 README.md 时也等待这些目标。某仓 docs_path 内的 README.md 与 module-map.md 等待本业务在该仓的功能/规范文稿。仓根公共 AGENTS.md 不属于导航步骤的写入范围。其他布局按当前保存的实际导航路径同步。depends_on 使用外部前序文稿的写作及最后修订步骤；已有导航初稿时还需等待初稿。
 
 同一步同时写的导航文稿列入 expected_document_ids，不互相声明步骤依赖；相互引用的导航也不能排成循环，可合在一个明确写范围的同步步骤或由一次后续核查处理。只填导航的上次写作编号不足以保证路由目标完成。评审逐一回读全部改动导航及实际目标，核对路径、章节和覆盖。不同仓导航可并行；后续变化影响导航时再安排相关同步并复核。
 
