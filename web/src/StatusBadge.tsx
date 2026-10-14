@@ -4,7 +4,7 @@
  * 统一为 shadcn Badge。状态→variant 词典只写这一份,状态语义一眼可辨:
  * 进行中=info(蓝)、等你/警示=warning(琥珀)、成功/归档=success(绿)、
  * 危险=destructive(红)、待合并=merge(紫)、闲置/已采纳=brand(主动作
- * 紫,存量 --accent 原色)、挂起=suspended、排队/暂停/取消=neutral(灰)。
+ * 紫,存量 --accent 原色)、排队/暂停/取消=neutral(灰)。
  * 闪点沿用原 statusBlink 的"运行类状态呼吸"语义(animate-pulse,
  * prefers-reduced-motion 由 motion-reduce:animate-none 关掉)。
  */
@@ -58,7 +58,6 @@ const ISSUE_STATUS_VARIANT: Record<IssueStatus, StatusVariant> = {
   running: "info",
   waiting_user: "warning",
   idle: "brand",
-  suspended: "suspended",
   archived: "success",
   canceled: "neutral",
   failed: "destructive",

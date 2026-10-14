@@ -994,7 +994,7 @@ export class IssueFlowService {
    * 由并发额度泵逐个自动续跑(现场 driver 不在就重建,续聊提示词交给
    * 重建的上下文);排队中的保持 queued 原样开跑;旧版本盖在盘上的
    * interrupted 戳(词表已退役)按 running 同一条路处理。
-   * waiting_user/suspended 照旧等家人,终态不动。恢复完成补一脚泵——
+   * waiting_user 照旧等家人,终态不动。恢复完成补一脚泵——
    * 泵原本只在回合启动/收口被调,启动期没有调用点,不补则重新入队的
    * 会话永远坐着。
    *
@@ -1451,10 +1451,11 @@ export class IssueFlowService {
 
   /** 登记问题统计读侧(ADR-0048,#362):无单会话的结论漏斗与研究
    *  质量,days 为时间过滤(按结论时刻,近 N 天;缺省=全部)。只数
-   *  结论已出:非问题/确认是问题归档 + 取消;研究进行中与存量挂起
-   *  一律不进,不给挂起设统计口径。一次定位分母=非问题+确认是问题
-   *  (取消不构成一次研究);版本数从分析版本账现读(取消会话没有
-   *  终态冻结,同账同源不漂移),登记人缺席按归属兜底(CONTEXT 口径)。 */
+   *  结论已出:非问题/确认是问题归档 + 取消;研究进行中一律不进
+   *  (挂起已退役,ADR-0048/0057,存量读盘即按取消退场)。一次定位
+   *  分母=非问题+确认是问题(取消不构成一次研究);版本数从分析版本
+   *  账现读(取消会话没有终态冻结,同账同源不漂移),登记人缺席按归属
+   *  兜底(CONTEXT 口径)。 */
   registrationStats(days?: number, range: CompletionRange = {}): IssueRegistrationStats {
     validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
@@ -2107,14 +2108,10 @@ export class IssueFlowService {
   ): IssueSummary {
     const live = this.require(id);
     const { state } = live;
-    // 状态守卫(体检 C-H3):挂起(等关联转正)与终态会话不接受补配
-    // 环境——补配会开平台回合,把挂起/已收口的会话悄悄复活成 running。
+    // 状态守卫(体检 C-H3):终态会话不接受补配环境——补配会开平台
+    // 回合,把已收口的会话悄悄复活成 running。
     if (isTerminal(state.status)) {
       throw new IssueControlError(`会话已处于终态 ${state.status},不能补配环境`);
-    }
-    if (state.status === "suspended") {
-      throw new IssueControlError(
-        "会话已挂起(存量),不能补配环境——挂起存量只能取消收口");
     }
     const { resolved, sourceIp } = this.resolveEnvironmentInput(input);
     if (options?.saveToRegistry) {
@@ -2523,7 +2520,7 @@ export class IssueFlowService {
     }
   }
 
-  /** 并发额度:同时进行的回合数(等待用户/闲置/挂起的会话不占额度)。
+  /** 并发额度:同时进行的回合数(等待用户/闲置/终态的会话不占额度)。
    *  现读现判:管理页「问题单并发数」旋钮(issue_max_turns)每次开泵
    *  都读,改完即生效;缺席退回部署旗 --issue-max-turns,再退缺省 10。 */
   private async pump(): Promise<void> {
@@ -2835,8 +2832,8 @@ export class IssueFlowService {
    *  "收口停"与续跑 ensureContainer 的重建竞态。容器自身故障有自愈
    *  闭环:exec 超时/中止由 TaskContainer 销毁自身,外部死亡(OOM)被
    *  exec 前的 assertRunning 探活标 failed——下回合 ensureContainer
-   *  检 isAlive 重建。真正的停点只在终态:取消/归档(control)、非问题
-   *  归档、挂起、转正收口、服务关停。 */
+   *  检 isAlive 重建。真正的停点只在终态:取消/归档(control)、结论
+   *  闭环归档、服务关停。 */
   private async runTurn(
     live: LiveIssue,
     body: () => Promise<Outcome>,
@@ -3014,7 +3011,7 @@ export class IssueFlowService {
     if (state.status === "failed") {
       this.freezeMetricsSnapshot(live);
     }
-    // AI 要人拍板才通知(对齐需求侧公共能力);suspended/idle/终态是
+    // AI 要人拍板才通知(对齐需求侧公共能力);idle/终态是
     // 结论后的动作与正常交还,不催人。
     if (state.status === "waiting_user") {
       // 代答在即的卡不发可行动卡通知(判据与代答同尺,见 willAutoAnswer)
@@ -3126,8 +3123,8 @@ export class IssueFlowService {
    * ——编排技能先列 .cac/skills 索引(name+description)再按相关性读
    * 正文;描述没命中是维护者该修的描述,不拿运行时人工圈选来补。
    * 本方法降级为 analyze 入口的扫描留痕:发现清单/同名告警进转移账,
-   **永不举卡、永不写 skill_selection 台账**。存量挂起的圈选卡仍可
-   * 作答(resolveSkillSelection),旧台账的必读清单照旧注入简报。 */
+   **永不举卡、永不写 skill_selection 台账**。旧台账的必读清单照旧
+   * 注入简报(挂起退役后不再有存量圈选卡可作答,ADR-0048)。 */
   private raiseSkillSelectionGate(live: LiveIssue): boolean {
     const { state } = live;
     if (state.stage !== "analyze") return false;
@@ -4730,10 +4727,6 @@ export class IssueFlowService {
     if (status === "waiting_user") {
       throw new IssueControlError("会话在等你对问题卡的答复,请回答问题卡而不是发消息");
     }
-    if (status === "suspended") {
-      throw new IssueControlError(
-        "会话挂起中(结论已是问题):请在右侧关联 DTS 单号转正,或直接归档收口");
-    }
     if (status === "queued") {
       throw new IssueControlError("首轮研究还在排队启动,请稍候再发消息");
     }
@@ -4796,7 +4789,7 @@ export class IssueFlowService {
    * 交还后续聊免重建),状态定格 idle、现场交由人工。takeover 标记
    * **必须在 abort 之前落盘**——被捏死的回合稍后走到 settle/catch,
    * 两处的让路守卫靠它在场识别"这是接管,不是失败"。等待中的问题卡
-   * (waiting_user)与挂起(suspended)不是 AI 在干活,先答卡/先转正。 */
+   * (waiting_user)不是 AI 在干活,先答卡。 */
   takeover(id: string): IssueSummary {
     const live = this.require(id);
     const { state } = live;
@@ -4808,9 +4801,6 @@ export class IssueFlowService {
     }
     if (state.status === "waiting_user") {
       throw new IssueControlError("先作答当前问题卡再接管");
-    }
-    if (state.status === "suspended") {
-      throw new IssueControlError("存量挂起会话只能取消收口");
     }
     const previous = state.status;
     const wasRunning = previous === "running";
@@ -5141,11 +5131,12 @@ export class IssueFlowService {
     if (!TICKET_PATTERN.test(value)) {
       throw new IssueControlError("单号只能是字母数字下划线连字符");
     }
-    // 固定流程的会话不直接绑定单号(无单场景结论后挂起,经「关联单号」
-    // 校验 DTS 存在后转正为新会话):端点保留报错口径,兜住存量调用方。
+    // 固定流程的会话不直接绑定单号(ADR-0048:有单会话发起即带单号,
+    // 无单会话确认是问题即闭环归档出提单模板,关联/绑定不复存在):
+    // 端点保留报错口径,兜住存量调用方。
     throw new IssueControlError(
-      "固定流程的会话不直接绑定单号:无单场景结论后挂起,经「关联单号」校验 DTS "
-        + "存在后转正为新会话(带分析报告进入问题修改)");
+      "固定流程的会话不直接绑定单号:有单会话发起即带单号;无单会话确认是"
+        + "问题即闭环归档并产出提单模板(研究成果带到下一个有单会话)");
   }
 
   async control(id: string, input: {
@@ -5327,10 +5318,9 @@ export class IssueFlowService {
   }
 
   /** 每日清扫(serve 启动后首跑 + 每 24h 一轮):终态(canceled/archived)
-   *  整仓回收 + idle 单构建产物冷却清理。failed/suspended 不在范围
-   *  (failed 可恢复,用户拍板全豁免;suspended 等转正,保守不碰);
-   *  running/queued/waiting_user 被状态守卫挡住。双旋钮各自独立:
-   *  issue_repo_reclaim 管整仓,冷却时长管产物,互不连带。 */
+   *  整仓回收 + idle 单构建产物冷却清理。failed 不在范围(可恢复,用户
+   *  拍板全豁免);running/queued/waiting_user 被状态守卫挡住。双旋钮
+   *  各自独立:issue_repo_reclaim 管整仓,冷却时长管产物,互不连带。 */
   async sweepTerminalRepos(): Promise<{ reclaimed: number; bytes: number;
     productBytes: number }> {
     const productsCooldownMs = this.buildProductsCooldownMs();

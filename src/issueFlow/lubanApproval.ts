@@ -45,7 +45,6 @@ const STATUS_ALIASES: Record<string, TaskSummary["status"]> = {
   running: "running",
   waiting_user: "waiting_for_human",
   idle: "running",
-  suspended: "waiting_for_human",
   archived: "completed",
   canceled: "canceled",
   failed: "failed",

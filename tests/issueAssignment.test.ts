@@ -462,8 +462,8 @@ test("登记指派:单一列表——存量回填与挂起转正都认登记人"
     assert.deepEqual(
       (devList.body.issues as Array<{ id: string }>).map((row) => row.id),
       ["issue-1"], "dev 只看归属是自己或自己登记的");
-    // 存量挂起会话(转正与手动归档双退役,ADR-0048/0057)重启后唯一
-    // 出口是取消:登记人留痕不丢。
+    // 盘面旧词 suspended(转正与手动归档双退役,ADR-0048/0057):重启
+    // 装载读盘即归取消,登记人留痕不丢。
     writeSession(dataDir, {
       ...base, id: "issue-3", account: "dev", reporter: "tester",
       status: "suspended", stage: "analyze", scenario: "no_ticket",
@@ -473,8 +473,8 @@ test("登记指派:单一列表——存量回填与挂起转正都认登记人"
       dts: new MockDtsGateway(),
     });
     try {
-      const closed = await revived.control("issue-3", { action: "cancel" });
-      assert.equal(closed.status, "canceled", "挂起存量只能取消收口");
+      const closed = revived.get("issue-3");
+      assert.equal(closed.status, "canceled", "存量挂起读盘归取消");
       assert.equal(closed.reporter, "tester", "登记人留痕不丢");
     } finally {
       await revived.shutdown().catch(() => undefined);

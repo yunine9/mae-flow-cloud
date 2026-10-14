@@ -126,22 +126,22 @@ function issueCall(
   });
 }
 
-/** 盘上摆一个无单固定流程的挂起会话(关联转正的前置状态)。 */
-function seedSuspendedSession(dataDir: string): void {
+/** 盘上摆一个无单固定流程的会话(DTS 路由的前置现场,状态不参与断言)。 */
+function seedSession(dataDir: string): void {
   mkdirSync(join(dataDir, "issues", "issue-1"), { recursive: true });
   writeFileSync(join(dataDir, "issues", "issue-1", "issue.json"), JSON.stringify({
     id: "issue-1", account: "dev",
     created_at: "2026-08-28T08:00:00Z", updated_at: "2026-08-28T09:00:00Z",
     title: "t", description: "", source: "manual",
     scenario: "no_ticket",
-    status: "suspended", stage: "conclude", stage_note: "",
+    status: "idle", stage: "conclude", stage_note: "",
     stage_at: "2026-08-28T09:00:00Z",
   }));
 }
 
 test("DTS 网关查询失败:拉单/详情/图代理三条路同码 502", async () => {
   const dataDir = mfcTemp("mfc-issue-err-502-");
-  seedSuspendedSession(dataDir);
+  seedSession(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
     dts: unreachableGateway,
@@ -167,7 +167,7 @@ test("DTS 网关查询失败:拉单/详情/图代理三条路同码 502", async 
 
 test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功)", async () => {
   const dataDir = mfcTemp("mfc-issue-err-409-");
-  seedSuspendedSession(dataDir);
+  seedSession(dataDir);
   // 服务与路由都不给网关:路由走 requireDts 守卫,必须是
   // DtsGatewayUnconfiguredError(409)。关联转正已退役(5c34dd51,恒 410,
   // 退役契约见 issueTicketTemplate.test.ts)。
@@ -192,7 +192,7 @@ test("DTS 网关未配置:同一批路径归一 409(环境档,补配置即成功
 
 test("既有族不漂移:404/409/材料层 400 逐分支保持", async () => {
   const dataDir = mfcTemp("mfc-issue-err-keep-");
-  seedSuspendedSession(dataDir);
+  seedSession(dataDir);
   const service = new IssueFlowService({
     dataDir, provider: "p", model: "m", modelsJson: {},
   });

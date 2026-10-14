@@ -3613,7 +3613,6 @@ export type IssueStatus =
   | "running"
   | "waiting_user"
   | "idle"
-  | "suspended"
   | "archived"
   | "canceled"
   | "failed";
@@ -3629,7 +3628,6 @@ export const ISSUE_STATUS_TEXT: Record<IssueStatus, string> = {
   running: "AI 处理中",
   waiting_user: "等你答复",
   idle: "等你答复",
-  suspended: "挂起(待关联单号)",
   archived: "已归档",
   canceled: "已取消",
   failed: "异常",
@@ -4169,7 +4167,8 @@ export function getIssueOnceGenerated(days?: number, range?: CompletionRange): P
 }
 
 /** 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
- *  结论已出的会话(研究进行中与存量挂起一律不进)。 */
+ *  结论已出的会话(研究进行中一律不进;挂起已退役,存量读盘即按
+ *  取消退场)。 */
 export interface IssueRegistrationSessionRow {
   id: string;
   title: string;

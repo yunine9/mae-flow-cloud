@@ -413,7 +413,7 @@ export function issueFixedOpeningPrompt(
           + "压缩包先解压再读)"]
       : []),
     moduleLine(meta),
-    `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,结论后由用户决定挂起提单或闭环)"}`,
+    `- 单号: ${state.ticket ?? "(无单号场景:测试/开发自行定位,确认是问题即闭环归档并产出提单模板)"}`,
     `- 工号: ${state.account}`,
     ...(meta.reporter
       ? [`- 登记人: ${meta.reporter}(问题由登记人登记并指派,现象描述出自其视角,` +

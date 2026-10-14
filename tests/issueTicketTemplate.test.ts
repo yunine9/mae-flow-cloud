@@ -76,7 +76,7 @@ test("提单模板读路由与转正退役 410(ADR-0048)", async () => {
     const retired = await issueCall("POST",
       ["issues", "issue-ok", "associate"], service);
     assert.equal(retired.status, 410, "关联转正显式退役");
-    assert.match(retired.text, /取消收口/, "410 文案指向取消收口(归档已退役)");
+    assert.match(retired.text, /闭环归档/, "410 文案指向现行为(确认即归档出模板)");
   } finally {
     await service.shutdown().catch(() => undefined);
     rmSync(dataDir, { recursive: true, force: true });

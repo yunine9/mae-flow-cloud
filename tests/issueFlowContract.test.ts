@@ -675,7 +675,7 @@ test("契约快照:无单结论闸带机器可读提案(conclude 卡的 proposal
       question: { questions: [{
         question: "分析结论:是问题——是问题:索引缺失",
         options: [
-          { code: "issue", label: "确认是问题,挂起等提单" },
+          { code: "issue", label: "确认是问题,闭环归档出提单模板" },
           { code: "non_issue", label: "确认非问题,闭环归档" },
           { code: "supplement", label: "有补充意见(填写补充说明)" },
         ],

@@ -127,7 +127,7 @@ export interface IssueToolContext {
   interventionTier?: () => IssueInterventionTier;
   /** skill 圈选闸已封存(ADR-0014):complete_stage 推进进 analyze 时
    * 调用,现在只做扫描留痕(发现清单进转移账),恒返回 false。回调
-   * 名保留——存量挂起的圈选卡作答口径不变。 */
+   * 名保留——旧台账的必读清单注入口径不变。 */
   raiseSkillSelection?: () => boolean;
   /** 业务知识资产定格(ADR-0012):推进进 analyze 时调用,按绑定模块
    * 从资产库定格并落台账;不分介入档,缺席/失败静默。返回是否定格到

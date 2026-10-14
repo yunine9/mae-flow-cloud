@@ -1162,7 +1162,7 @@ test("异常重跑:失败前的 MR/流水线监看账随复活续挂与补挂,�
   }
 });
 
-test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting/suspended 不动", async () => {
+test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued 原样开跑,waiting 不动;存量挂起读盘归取消", async () => {
   const dataDir = mfcTemp("mfc-issue-recover2-");
   // 五个现场直接落盘(状态各一,不跑全链,聚焦恢复语义)。旧版
   // interrupted 已不在词表里,夹具按盘上原样写(旧版本盖的戳)。
@@ -1177,6 +1177,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
     stage_note: "问题分析讨论中",
   });
   seedRecoverableIssue(dataDir, "issue-4", { status: "waiting_user" });
+  // 盘面写旧词 suspended:读盘归取消(ADR-0048/0057),终态不进恢复泵。
   seedRecoverableIssue(dataDir, "issue-5", { status: "suspended" });
   const script: Scene[] = [{ text: "收到,继续推进。" }];
   const model = new ScriptedModelServer(script, "scripted-v1", { linear: true });
@@ -1191,13 +1192,14 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
   });
   try {
     // 构造即恢复:重排队的在部署额度(2)内启动,剩下的坐额度队列;
-    // 等家人与挂起的原样不动。目录遍历序不定,按集合断言。
+    // 等家人的原样不动,存量挂起读盘即归取消。目录遍历序不定,按集合断言。
     const active = ["issue-1", "issue-2", "issue-3"]
       .map((id) => service.get(id).status).sort();
     assert.deepEqual(active, ["queued", "running", "running"],
       "running/旧 interrupted/queued 都进泵,但受并发额度约束");
     assert.equal(service.get("issue-4").status, "waiting_user");
-    assert.equal(service.get("issue-5").status, "suspended");
+    assert.equal(service.get("issue-5").status, "canceled",
+      "存量挂起读盘归取消(ADR-0048/0057)");
     assert.ok(logs.some((line) => /重启恢复: 续跑 2 个、排队 1 个/.test(line)),
       "恢复台账行要报续跑/排队数");
     await until(() => {
@@ -1210,7 +1212,7 @@ test("重启恢复翻转:running/旧 interrupted 重新入队自动续跑,queued
       return statuses.every((s) => s === "idle") ? statuses : undefined;
     }, "重排队的会话逐个续跑收口");
     assert.equal(service.get("issue-4").status, "waiting_user", "全程未动");
-    assert.equal(service.get("issue-5").status, "suspended", "全程未动");
+    assert.equal(service.get("issue-5").status, "canceled", "全程未动");
     // 按标题认领各会话的请求:重启续跑的收到平台通知开场;原样排队
     // 的是登记首轮,仍走开场词——两条入口不混。
     const requests = model.requests.map((request) => JSON.stringify(request));

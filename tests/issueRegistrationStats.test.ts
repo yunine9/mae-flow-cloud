@@ -5,7 +5,8 @@
  *    构成一次研究);按模块/按登记人分组与合计一致。
  * 2. 真路由直调:GET /issues/registration-stats 从服务台账聚合同一
  *    口径(手搓响应对象,与 issueOnceRates 同一 seam 评审口径);
- *    进行中/存量挂起/有单会话不进任何数字,days 过滤按结论时刻。
+ *    进行中/有单会话不进任何数字(存量挂起读盘归取消,按取消入账),
+ *    days 过滤按结论时刻。
  */
 
 import { test } from "node:test";
@@ -85,7 +86,7 @@ function issueGet(
 
 const DAY = 86400000;
 
-test("路由:只数结论已出;进行中/挂起/有单不进;days 按结论时刻过滤", async () => {
+test("路由:只数结论已出;进行中/有单不进,存量挂起读盘归取消;days 按结论时刻过滤", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-regstats-"));
   const now = Date.now();
   const iso = (ms: number) => new Date(ms).toISOString();
@@ -114,7 +115,7 @@ test("路由:只数结论已出;进行中/挂起/有单不进;days 按结论时�
   // 供 days 过滤断言用。
   seed("issue-c", { module: "告警", status: "canceled",
     updated_at: iso(now - 40 * DAY) });
-  // 存量挂起:不进任何数字(ADR-0048,不给挂起设口径)。
+  // 盘面旧词挂起:读盘归取消,按取消入账(ADR-0048/0057)。
   seed("issue-hold", { module: "告警", status: "suspended" });
   // 研究进行中:不进。
   seed("issue-wip", { module: "性能", status: "idle", stage: "analyze" });
@@ -132,17 +133,19 @@ test("路由:只数结论已出;进行中/挂起/有单不进;days 按结论时�
   });
   try {
     const { body } = await issueGet(["issues", "registration-stats"], service);
-    assert.equal(body.total, 3, "分母=研究完成(取消计入;挂起/进行中/有单不进)");
+    assert.equal(body.total, 4,
+      "分母=研究完成(取消计入,含读盘归取消的存量挂起;进行中/有单不进)");
     const ranged = service.registrationStats(undefined, { from: iso(now - 2 * DAY), before: iso(now - DAY) });
     assert.deepEqual(ranged.per_session.map(row => row.id), ["issue-a"], "#457 按完成日期区间包含起点，排除区间外及创建时间");
     assert.equal(ranged.total, 1); assert.equal(ranged.by_module[0].total, 1);
     assert.equal(body.non_issue, 1);
     assert.equal(body.issue_confirmed, 1);
-    assert.equal(body.canceled, 1);
+    assert.equal(body.canceled, 2, "取消=显式取消 + 存量挂起读盘归取消");
     assert.deepEqual(body.localization, { passed: 1, total: 2, rate: 50 });
     const rows = body.per_session as Array<Record<string, any>>;
-    assert.deepEqual(rows.map((entry) => entry.id), ["issue-a", "issue-b", "issue-c"],
-      "明细按结论时刻降序");
+    assert.deepEqual(rows.map((entry) => entry.id),
+      ["issue-hold", "issue-a", "issue-b", "issue-c"],
+      "明细按结论时刻降序(挂起存量按 updated_at 收口,落在最前)");
     assert.equal(rows.find((entry) => entry.id === "issue-b")
       ?.report_version_count, 2, "版本账=初版+修订快照");
     assert.equal(rows.find((entry) => entry.id === "issue-c")
@@ -174,9 +177,9 @@ test("路由:只数结论已出;进行中/挂起/有单不进;days 按结论时�
         ).catch(reject);
       });
     assert.equal(filtered.status, 200);
-    assert.equal(filtered.body.total, 2, "取消的 c 在 40 天前,出窗");
+    assert.equal(filtered.body.total, 3, "取消的 c 在 40 天前,出窗");
     assert.equal((filtered.body.per_session as Array<Record<string, any>>)
-      .map((entry) => entry.id).join(","), "issue-a,issue-b");
+      .map((entry) => entry.id).join(","), "issue-hold,issue-a,issue-b");
   } finally {
     await service.shutdown().catch(() => undefined);
     rmSync(dataDir, { recursive: true, force: true });

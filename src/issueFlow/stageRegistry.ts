@@ -35,11 +35,11 @@ export const FIXED_TICKET_STAGES = [
   "mr_green",      // 提交 MR+流水线跑绿(建齐 MR 后 complete_stage 申报清单,平台验绿收口)
 ] as const;
 
-/** 无单场景三节点:测试/开发自行定位用,结论"是问题"→挂起待关联。 */
+/** 无单场景三节点:测试/开发自行定位用,结论"是问题"即闭环归档出提单模板。 */
 export const FIXED_NO_TICKET_STAGES = [
   "prep_repo",     // 拉取代码仓(无单不建分支——分支名规范需要单号)
   "analyze",       // 问题分析(同有单,产出报告)
-  "conclude",      // 确定结论(平台闸:是问题→挂起 / 非问题→闭环)
+  "conclude",      // 确定结论(平台闸:是问题→闭环出提单模板 / 非问题→闭环)
 ] as const;
 
 /** 固定流程的阶段键(问题域唯一的阶段词表)。 */
@@ -144,7 +144,8 @@ export const FIXED_STAGE_SPECS: Record<FixedStage, IssueStageSpec> = {
   exitAction: "submit_analysis",
   // 入口闸已拆除(ADR-0014,2026-09-03):skill 是渐进式发现(编排
   // 技能先列索引再按需读),描述没命中是维护者该修的描述,不该用运行
-  // 时人工圈选来补。skill_select 闸封存:存量挂起卡仍可作答,新卡永不举。
+  // 时人工圈选来补。skill_select 闸封存:新卡永不举(存量随挂起退役
+  // 消失,ADR-0048)。
   tools: [
     { name: "request_env" },
     { name: "get_issue_meta" },
@@ -351,7 +352,7 @@ export const GATE_OPTIONS: Record<IssueGateKind, GateOptionTable> = {
   conclude: {
     // 结论推荐跟 AI 提案走(提案是问题→推荐「是问题」码),不在此定死。
     options: [
-      { code: "issue", label: "确认是问题,挂起等提单" },
+      { code: "issue", label: "确认是问题,闭环归档出提单模板" },
       { code: "non_issue", label: "确认非问题,闭环归档" },
       { code: "supplement", label: "有补充意见(填写补充说明)" },
     ],

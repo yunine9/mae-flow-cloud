@@ -500,8 +500,6 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const stream = readFileSync(
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
-  const suspended = readFileSync(
-    resolve("web/src/issues/IssueSuspendedCard.tsx"), "utf-8");
   // 工作台头部:「无单场景」是状态说明不是控件,查看模式照常示人。
   // #98 单路径化后一切会话都是固定流程,自由分支的绑单输入已整体删除,
   // 不得再以任何形式回流。
@@ -533,11 +531,10 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   // 无作答控件的事实卡(题面/选项/背景照看,替归属人判断卡在哪)。
   assert.match(sessionView,
     /currentCard=\{waiting \? \(canOperate\s*\n\s*\? <IssueDecisionCard[\s\S]*?: <IssueWaitingFacts waiting=\{waiting\} \/>\)\s*\n\s*: undefined\}/);
-  // 挂起槽位(#434 起转正退役):不再组两段式,存量挂起统一一张只读
-  // 说明卡(归属人与查看模式同卡),零写口。
-  assert.match(sessionView,
-    /suspendedCard=\{detail\.status === "suspended"\s*\n\s*\? <IssueSuspendedCard \/>\s*: undefined\}/);
-  assert.doesNotMatch(suspended, /<input|<button/, "挂起说明卡零写口");
+  // 挂起槽位与说明卡整体退役(ADR-0048/0057 收尾,2026-10-13):存量
+  // 挂起读盘归取消,会话视图与协作流不得再挂任何挂起卡/槽位。
+  assert.doesNotMatch(sessionView, /suspendedCard|IssueSuspendedCard/);
+  assert.doesNotMatch(stream, /suspendedCard|IssueSuspendedCard/);
   // 输入区(#127 起发言唯一入口):查看者整段只读,插话/续聊收进归属分支。
   assert.match(stream, /!canOperate \? \{ kind: "readonly" \}/);
   // 头部控件区:终止(归档已退役,ADR-0057)整组收进归属分支
@@ -957,8 +954,8 @@ test("右栏协作对话框(#124):协作头/聚合接口接线/轮询/当前卡�
 });
 
 // ---- 右栏侧栏拆除(#127,#120 收尾):IssueRail 六态侧栏整体退场——
-// ---- 状态说明由头部徽标/阶段行与协作流承载,归档/终止入头部控件区,
-// ---- 挂起转正卡入协作流顶部;拆除项引用清零、死样式清理。
+// ---- 状态说明由头部徽标/阶段行与协作流承载,归档/终止入头部控件区;
+// ---- 拆除项引用清零、死样式清理(挂起转正卡及其后继说明卡亦整体退役)。
 
 test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,状态说明不丢", () => {
   const sessionView = readFileSync(
@@ -996,29 +993,19 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
     "终局说明由输入区承载(终局无侧栏卡后不断档)");
 });
 
-test("挂起说明卡入流(#127 槽位;#434 起转正退役,只剩只读说明)", () => {
+test("挂起说明卡整体退役(ADR-0048/0057 收尾):槽位与组件不得回流", () => {
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
   const stream = readFileSync(
     resolve("web/src/issues/IssueConversationStream.tsx"), "utf-8");
-  const suspended = readFileSync(
-    resolve("web/src/issues/IssueSuspendedCard.tsx"), "utf-8");
-  // #434 手动归档/转正退役:挂起不再是可转正的停泊态——现在确认是
-  // 问题直接闭环归档并产出提单模板,存量挂起只能终止收口。协作流
-  // 顶部的槽位保留,但只承载一张只读说明卡(归属人与查看模式同卡),
-  // 两段式转正卡不得回流。
-  assert.match(sessionView,
-    /suspendedCard=\{detail\.status === "suspended"\s*\n\s*\? <IssueSuspendedCard \/>\s*: undefined\}/);
+  // 挂起状态已从词表摘除,存量读盘归取消:协作流顶部不再有挂起槽位,
+  // 说明卡组件已删;两段式转正卡同样不得回流(#434 起退役)。
+  assert.doesNotMatch(sessionView, /suspendedCard|IssueSuspendedCard/);
+  assert.doesNotMatch(stream, /suspendedCard|IssueSuspendedCard/);
   assert.doesNotMatch(sessionView, /IssueAssociateCard|IssueAssociateFacts/,
     "转正卡已退役(#434),会话视图不得再引用");
-  // 挂载点:协作流区顶部——「与 Agent 协作」头之下、可滚流区之上
-  // (不进流,不会被贴底跟随滚出视野)。
-  assert.match(stream,
-    /<header className="ws-collaboration-head">[\s\S]*?\{suspendedCard && <div className="mx-3\.5 mb-1\.5 shrink-0">\{suspendedCard\}<\/div>\}[\s\S]*?<div className="ws-stream"/);
-  // 说明卡点名牌指示牌:转正与手动归档均已退役,出路只有终止。
-  assert.match(suspended, /转正与手动归档机制均已退役/);
-  assert.match(suspended, /终止会话/);
-  assert.doesNotMatch(suspended, /<input|<button/, "说明卡零写口");
+  assert.equal(existsSync(resolve("web/src/issues/IssueSuspendedCard.tsx")),
+    false, "说明卡组件文件已删,不得还魂");
 });
 
 // ---- 举卡入流(#125,ADR-0018 决策三):当前等待卡钉在协作流末尾的
@@ -1419,10 +1406,11 @@ test("问题列表卡:整卡新页签直达工作台(ADR-0040),展开态与逐�
   // 详情跟随保留;除此之外没有别的循环请求。
   assert.match(issueBoard, /startVisiblePolling\(refreshList, 5000, document\)/);
   assert.match(issueBoard, /if \(!openId\) return;/);
-  // 状态轨走令牌工具类;suspended 旧内联色收编为令牌 --suspended
-  // (#233 改锚:令牌定义并入 tailwind.css)。卡片轨道与状态胶囊不得
-  // 再写裸色值(工作台页签等处的同名存量字面量另有专项,不在本契约)。
-  assert.match(issueBoard, /suspended: "bg-suspended"/);
+  // 状态轨走令牌工具类(挂起状态已退役,轨映射不再有 suspended 键;
+  // 令牌 --suspended 留给工作流归档弱底等色板消费,#233 改锚:令牌
+  // 定义并入 tailwind.css)。卡片轨道与状态胶囊不得再写裸色值(工作台
+  // 页签等处的同名存量字面量另有专项,不在本契约)。
+  assert.doesNotMatch(issueBoard, /suspended: "bg-suspended"/);
   const tokens = readFileSync(resolve("web/src/tailwind.css"), "utf-8");
   assert.match(tokens, /--suspended: #3b83d5/);
   assert.doesNotMatch(css, /status-suspended \.task-status-rail/);
@@ -1453,7 +1441,8 @@ test("问题工作台独立页签(ADR-0040):入口一律新页签,页内 overlay
   // 页签可辨识。
   assert.doesNotMatch(sessionView, /role="dialog"|aria-modal/);
   assert.match(sessionView, /document\.title = detail\.title;/);
-  // App 层:openIssueSession 收窄为页内切会话(挂起转正),closeIssueSession
+  // App 层:openIssueSession 是页内切会话的写入口(历史触发者「挂起
+  // 转正」已退役,管道保留),closeIssueSession
   // pushState 裸 /issues 留历史(浏览器后退回工作台),不依赖 window.close。
   assert.match(appSource,
     /const closeIssueSession = \(\) => \{\s*\r?\n\s*history\.pushState\(appHistoryState\("issues", undefined, "sessions"\),\s*\r?\n\s*"", "\/issues"\);/);

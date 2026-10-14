@@ -140,8 +140,8 @@ test("过期终态会话:重货被清,台账一个字节不少", () => {
   assert.ok(existsSync(join(root, "skills", "java", "SKILL.md")));
 });
 
-test("非终态一概不碰:running/waiting_user/idle/suspended/queued 全样", () => {
-  for (const status of ["running", "waiting_user", "idle", "suspended",
+test("非终态一概不碰:running/waiting_user/idle/queued 全样", () => {
+  for (const status of ["running", "waiting_user", "idle",
                         "queued", "failed"]) {
     const dataDir = newDataDir();
     const root = sessionRoot(dataDir, "issue-1", { status });
@@ -154,6 +154,22 @@ test("非终态一概不碰:running/waiting_user/idle/suspended/queued 全样", 
       `${status} 的会话目录必须原样`);
     assert.ok(existsSync(join(root, "repo", "order-service", "pom.xml")));
   }
+});
+
+test("盘面旧词 suspended:读盘归取消(ADR-0048/0057),按终态计过期可回收", () => {
+  const dataDir = newDataDir();
+  const root = sessionRoot(dataDir, "issue-1", {
+    status: "suspended", stage: "conclude",
+  });
+  const summary = reclaimIssueWorkspaces({
+    dataDir, retentionDays: 14, now: NOW,
+  });
+  assert.equal(summary.reclaimed, 1,
+    "挂起已退役,盘面旧词读盘即归取消,与其他终态同一条回收路");
+  assert.equal(existsSync(join(root, "pi-agent", "models.json")), false,
+    "重货照清");
+  assert.match(readFileSync(join(root, "issue.json"), "utf-8"), /订单模块 500/,
+    "台账一个字节不少");
 });
 
 test("终态但未过保留期:原样(给查看模式/复盘留窗口)", () => {
