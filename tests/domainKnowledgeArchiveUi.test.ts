@@ -15,8 +15,9 @@ const { KnowledgeArchiveHistory } = await vite.ssrLoadModule("/src/KnowledgeArch
 after(() => vite.close());
 
 test("Issue488：一次归档动作使用已有单号和最新正式版本直接创建MR", () => {
-  const preview = { issue_no: "DTS-488", issue_description: "归档知识", expected_revisions: { "kd-1": "published-v2" },
-    actions: [{ id: "create-archive" }] } as KnowledgeArchivePreview;
+  const preview: KnowledgeArchivePreview = { job_id: "dkx-488", title: "归档知识", status_label: "已发布（未归档）", message: "", targets: [],
+    issue_no: "DTS-488", issue_description: "归档知识", expected_revisions: { "kd-1": "published-v2" },
+    actions: [{ id: "create-archive", label: "创建归档 MR", view: "archive" }] };
   assert.deepEqual(archiveRequest(preview), { action: "create", input: { issue_no: "DTS-488", issue_description: "归档知识", expected_revisions: { "kd-1": "published-v2" } } });
   assert.equal(archiveRequest({ ...preview, issue_no: " " }), undefined);
   for (const id of ["configure", "review"]) assert.equal(archiveRequest({ ...preview, actions: [{ id, label: id, view: "review" }] }), undefined);

@@ -571,7 +571,8 @@ export class DomainKnowledgeExtraction {
       }
       let batch = this.matchingManualBatch(job, documents);
       if (batch && (!input.replace_existing || batch.state !== "done")) {
-        const unfinished = archiveRepositoryGroups(batch.targets).filter(group => !batch.publications.some(publication =>
+        const existingPublications = batch.publications;
+        const unfinished = archiveRepositoryGroups(batch.targets).filter(group => !existingPublications.some(publication =>
           group.ids.includes(publication.target_id) && publication.state === "opened" && validMrUrl(publication.url)));
         if (unfinished.length || batch.replacements?.some(item => !(["closed", "merged"] as string[]).includes(item.state))) await this.runManualArchive(job, batch, unfinished.flatMap(group => group.ids), operator, owner);
         return this.previewArchive(id);
