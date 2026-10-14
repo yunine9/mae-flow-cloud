@@ -35,8 +35,21 @@ async function fixture(files: Record<string, string> = {}) {
   const baseline = git("-C", source, "rev-parse", "HEAD");
   git("clone", "--bare", source, remote);
   const requests: string[] = [], mrs: Array<{ id: number; url: string; source_branch: string; target_branch: string }> = [];
+  const lifecycle = { state: "opened", failClose: false, loseCloseResponse: false, mergeBeforeClose: false };
+  const closeRequests: Array<{ repo: string; mr: string | number; username?: string; token?: string }> = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url!, "http://fixture"); requests.push(url.pathname);
+    if (url.pathname === "/mr/gates") {
+      response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ mr_state: lifecycle.state, gates: [] })); return;
+    }
+    if (url.pathname === "/mr/close") {
+      let body = ""; for await (const chunk of request) body += chunk;
+      closeRequests.push({ ...JSON.parse(body), username: request.headers["x-mfc-git-user"] as string | undefined, token: request.headers["x-mfc-git-token"] as string | undefined });
+      if (lifecycle.mergeBeforeClose) lifecycle.state = "merged";
+      else if (!lifecycle.failClose) lifecycle.state = "closed";
+      response.statusCode = lifecycle.failClose || lifecycle.loseCloseResponse ? 502 : 200;
+      response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ mr_state: lifecycle.state })); return;
+    }
     if (url.pathname === "/mr/discover") {
       response.setHeader("content-type", "application/json");
       response.end(JSON.stringify({ mrs: mrs.filter(mr => mr.source_branch === url.searchParams.get("source_branch") && mr.target_branch === url.searchParams.get("target_branch")) }));
@@ -84,10 +97,125 @@ async function fixture(files: Record<string, string> = {}) {
   };
   const tree = (revision: string, path: string) => git("-C", remote, "--literal-pathspecs", "ls-tree", revision, "--", path);
   const content = (revision: string, path: string) => gitRaw("-C", remote, "show", `${revision}:${path}`);
-  return { dir, source, remote, target, job, formal, publisher, requests, mrs, git, gitRaw, write, baseline, save, publish, rename, freeze, remove, tree, content,
+  return { dir, source, remote, target, job, formal, publisher, requests, mrs, lifecycle, closeRequests, git, gitRaw, write, baseline, save, publish, rename, freeze, remove, tree, content,
     last: () => last!,
     async close() { await publisher.shutdown(); server.closeAllConnections(); await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done())); rmSync(dir, { recursive: true, force: true }); } };
 }
+
+test("Issue489：归档分支沿用需求命名并避让已有同名分支，不接管其他提交", { timeout: 20_000 }, async () => {
+  const f = await fixture();
+  try {
+    for (const branch of ["main_alice_REQ-466", "main_alice_REQ-466_2"]) f.git("-C", f.remote, "update-ref", `refs/heads/${branch}`, f.baseline);
+    const publication = await f.publish();
+    assert.equal(publication.branch, "main_alice_REQ-466_3");
+    for (const branch of ["main_alice_REQ-466", "main_alice_REQ-466_2"]) assert.equal(f.git("-C", f.remote, "rev-parse", branch), f.baseline);
+    assert.equal(f.mrs[0].source_branch, publication.branch);
+    assert.equal(f.mrs[0].target_branch, "main");
+  } finally { await f.close(); }
+});
+
+test("Issue489：新版本不复用已删除远端的旧 MR 分支名，已推送旧格式分支仍精确恢复", { timeout: 20_000 }, async () => {
+  const f = await fixture();
+  try {
+    const first = await f.publish(); f.freeze(first);
+    assert.equal(first.branch, "main_alice_REQ-466");
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
+    f.git("-C", f.remote, "update-ref", "-d", `refs/heads/${first.branch}`);
+    f.rename();
+    const next = await f.publish();
+    assert.equal(next.branch, "main_alice_REQ-466_2");
+    const oldBranch = "codex/knowledge-existing-attempt";
+    f.git("-C", f.remote, "update-ref", `refs/heads/${oldBranch}`, next.revision!);
+    const recovered = await f.publish({ ...next, branch: oldBranch, state: "failed", url: undefined, mr_id: undefined, mr_attempted: undefined });
+    assert.equal(recovered.branch, oldBranch);
+    assert.equal(recovered.revision, next.revision);
+  } finally { await f.close(); }
+});
+
+test("Issue489：撤销旧 MR 使用个人凭据及项目 MR 编号，已合入与已关闭返回不同终态", { timeout: 20_000 }, async () => {
+  const f = await fixture();
+  try {
+    const publication = await f.publish();
+    const old = { ...publication, mr_id: 987654, url: "https://codehub.example.test/group/repo/merge_requests/47" };
+    f.lifecycle.loseCloseResponse = true;
+    assert.equal(await f.publisher.closePublication(f.job, f.target, old, "alice"), "closed");
+    assert.deepEqual(f.closeRequests, [{ repo: f.remote, mr: "47", username: "alice", token: "fixture-token" }]);
+    assert.equal(await f.publisher.closePublication(f.job, f.target, old, "alice"), "closed");
+    assert.equal(f.closeRequests.length, 1, "回执丢失后已关闭的 MR 不再次发送关闭操作");
+    f.lifecycle.state = "merged";
+    assert.equal(await f.publisher.closePublication(f.job, f.target, old, "alice"), "merged");
+    assert.equal(f.closeRequests.length, 1, "已合入保留真实状态，不声称撤销成功");
+    f.lifecycle.state = "opened"; f.lifecycle.failClose = true; f.lifecycle.mergeBeforeClose = true;
+    assert.equal(await f.publisher.closePublication(f.job, f.target, old, "alice"), "merged", "查询后并发合入时，关闭失败后的复查仍记录真实合入状态");
+    f.lifecycle.mergeBeforeClose = false;
+    f.lifecycle.state = "opened"; f.lifecycle.failClose = true;
+    await assert.rejects(f.publisher.closePublication(f.job, f.target, old, "alice"), /关闭失败 HTTP 502/);
+  } finally { await f.close(); }
+});
+
+function repositoryJob(f: Awaited<ReturnType<typeof fixture>>, moduleId: string, directory: string, files: Record<string, string>): DomainKnowledgeJob {
+  const target = { ...f.target, docs_path: directory };
+  const documents = Object.entries(files).map(([path, content], index) => {
+    const formal = saveKnowledgeDocument(f.dir, { title: `${moduleId} 的知识`, content, scope: "module", module_ids: [moduleId],
+      archive_target: { repository: target.repository, branch: target.branch, path } }, "alice");
+    return { id: `${moduleId}-${index}`, title: formal.title, target_id: target.id, layer: "domain" as const, path, content, sources: "已核对源码",
+      selected: true, revision: 1, base_content: null, base_revision: f.baseline, history: [], knowledge_document_id: formal.id,
+      published_revision: formal.revision, published_document_revision: 1 };
+  });
+  return { ...f.job, id: `dkx-${randomUUID()}`, module_id: moduleId, knowledge_layout: "repository-v1", knowledge_target: target, repositories: [], documents,
+    publications: [], archive_batches: [], publication_history: [] };
+}
+
+test("Issue489：按仓根相对路径归档，根导航兼容旧模块入口并保留其他自定义目录", { timeout: 30_000 }, async () => {
+  const oldRoot = "# 旧根说明\n\n## 模块索引\n\n- ` docs/knowledge/ `\n\n## 阅读与维护约定\n旧业务规则。\n";
+  const f = await fixture({ "AGENTS.md": oldRoot, "docs/knowledge/existing/README.md": "# 已有模块\n", "src/example/README.md": "源码说明。\n" });
+  try {
+    const a = repositoryJob(f, "orders", ".", { "docs/module-map.md": "# 仓库模块地图\n", "docs/rules.md": "# 业务规则\n" });
+    const first = await f.publisher.publish(a, a.knowledge_target, undefined, "alice", f.save);
+    assert.equal(f.content(first.revision!, "docs/module-map.md"), a.documents[0].content);
+    assert.equal(f.tree(first.revision!, "docs/knowledge/orders/docs/module-map.md"), "", "publisher 不增加默认目录、模块 ID 或仓名");
+    const root = f.content(first.revision!, "AGENTS.md");
+    assert.match(root, /docs\/module-map\.md/);
+    assert.match(root, /docs\/knowledge\/existing\/README\.md/);
+    assert.doesNotMatch(root, /旧业务规则|src\/example/);
+    assert.equal(first.documents.some(document => document.path === "AGENTS.md"), false, "根导航不是正式知识文稿");
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", first.revision!);
+    const b = repositoryJob(f, "billing", "handbook`rules", { "handbook`rules/README.md": "# 账单模块入口\n" });
+    const second = await f.publisher.publish(b, b.knowledge_target, undefined, "alice", f.save);
+    const secondRoot = f.content(second.revision!, "AGENTS.md");
+    assert.match(secondRoot, /docs\/module-map\.md/);
+    assert.match(secondRoot, /docs\/knowledge\/existing\/README\.md/);
+    assert.ok(secondRoot.includes("`` handbook`rules/README.md ``"), "实际路径含反引号时使用完整 code span");
+    assert.equal(f.content(second.revision!, "code.ts"), "export const untouched = true;\n");
+    assert.equal(f.content(`${first.revision}^`, "AGENTS.md"), oldRoot);
+    f.git("-C", f.remote, "update-ref", "refs/heads/main", second.revision!);
+    const legacy = moduleJob(f, "legacy"), legacyPublication = await f.publisher.publish(legacy, legacy.knowledge_target, undefined, "alice", f.save);
+    const legacyRoot = f.content(legacyPublication.revision!, "AGENTS.md");
+    assert.match(legacyRoot, /docs\/module-map\.md/, "旧冻结布局继续归档时保留新布局的实际入口");
+    assert.ok(legacyRoot.includes("`` handbook`rules/README.md ``"));
+  } finally { await f.close(); }
+});
+
+test("Issue489：旧归档目录迁移至仓根相对路径只移除已核对原文稿，重试保留精确 SHA", { timeout: 20_000 }, async () => {
+  const f = await fixture({ [oldPath]: original, "AGENTS.md": "旧的共享根说明。\n", "docs/unrelated.md": "其他模块文稿。\n" });
+  try {
+    f.job.knowledge_layout = "repository-v1"; f.job.module_id = "orders"; f.target.docs_path = ".";
+    f.job.documents[0].base_content = original;
+    f.rename("docs/module-map.md");
+    await assert.rejects(f.publish(undefined, publication => {
+      if (publication.documents.length) throw new Error("模拟新目录推送后回执保存失败");
+      f.save(publication);
+    }), /模拟新目录推送后回执保存失败/);
+    const attempted = f.last();
+    assert.equal(f.tree(attempted.revision!, oldPath), "");
+    assert.equal(f.content(attempted.revision!, "docs/module-map.md"), updated);
+    assert.equal(f.content(attempted.revision!, "docs/unrelated.md"), "其他模块文稿。\n");
+    const recovered = await f.publish({ ...attempted, state: "failed" });
+    assert.equal(recovered.branch, attempted.branch);
+    assert.equal(recovered.revision, attempted.revision);
+    assert.match(f.content(recovered.revision!, "AGENTS.md"), /docs\/module-map\.md/);
+  } finally { await f.close(); }
+});
 
 test("Issue466：未归档草稿的原路径在 Git 不存在，不凭修订历史删除其他 Git 文件", { timeout: 20_000 }, async () => {
   const unrelated = "docs/knowledge/unrelated.md";

@@ -16,7 +16,7 @@ export function knowledgeArchiveDefaults(files: Record<string, string>, kind: Ex
   if (!value || Array.isArray(value) || Object.keys(value).some(key => !keys.includes(key))) throw new Error("归档默认位置包含未知字段");
   for (const key of keys) {
     const path = value[key];
-    if (typeof path !== "string" || !path || path !== path.trim() || path.length > 1000 || path.split("/").some(p => !p || p === "." || p === ".." || p.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(p)) ) throw new Error(`归档默认位置无效：${key}`);
+    if (typeof path !== "string" || !path || path !== path.trim() || path.length > 1000 || (path !== "." && path.split("/").some(p => !p || p === "." || p === ".." || p.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(p))) ) throw new Error(`归档默认位置无效：${key}`);
   }
   return { ...defaults, ...value };
 }

@@ -238,3 +238,25 @@ test("清理保存 EIO：选中文件保存失败不创建 MR、不污染原记�
     await manager.sourceCleanupAction(job.id, "publish", input, "alice"); assert.equal(calls.length, 1);
   } finally { mock?.mock.restore(); syncBuiltinESMExports(); await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("Issue489：仓根相对布局不把归档根当作清理范围", async () => {
+  const target = { id: "repo-1", name: "业务仓", repository: "https://example.test/repo.git", branch: "main", path: "", docs_path: "." };
+  const job: DomainKnowledgeJob = { id: "dkx-relative-cleanup", ...config, module_id: "orders", knowledge_layout: "repository-v1", operator: "alice", created_at: "now", status: "idle", stage: "等待清理",
+    knowledge_target: { ...target, id: "domain" }, repositories: [target], material_ids: [], revisions: {}, documents: [], turns: [], evidence: [], publications: [],
+    source_cleanup: { repositories: [target], plans: [], publications: [] } };
+  const calls: unknown[] = [];
+  const cleanup = new KnowledgeSourceCleanup({
+    async previewCleanup(target, paths) {
+      calls.push(paths);
+      return { id: "plan", target_id: target.id, paths: paths as string[], target_revision: "a".repeat(40),
+        entries: (paths as string[]).map(path => ({ path, mode: "100644", oid: "a".repeat(40) })) };
+    },
+    async publishCleanup() { throw new Error("不应执行发布"); },
+  });
+  for (const path of [".", "docs", "AGENTS.md", "docs/AGENTS.md", "../docs/old.md"]) {
+    await assert.rejects(cleanup.action(job, "preview", { paths_by_target: { "repo-1": [path] } }, "alice", () => {}, new AbortController().signal));
+  }
+  assert.equal(calls.length, 0);
+  await cleanup.action(job, "preview", { paths_by_target: { "repo-1": ["docs/old.md"] } }, "alice", () => {}, new AbortController().signal);
+  assert.deepEqual(calls, [["docs/old.md"]]);
+});

@@ -6,7 +6,7 @@
 
 先核对本项的文稿编号、target_id、仓内 path、具体模板、业务范围、依赖步骤及证据索引。主会话应已把这些规划字段放入 step.instructions；按 id 读取本项调查结果，重新打开原始依据。只有边界、路径或关联项需要核实时才用 knowledge_work read_document 读取 current-plan；该工具返回整份规划，不支持按章节读取，不要每篇都无条件重读全计划。
 
-knowledge_layout 为 module-v1 时，按对应 target.docs_path 保存本业务知识；root-agents.md 模板生成该目录 README.md，domain-agents.md 生成同目录 index.md。已有文稿若经平台自动避让而带文件名后缀，沿用当前保存路径并保留其导航入口，不改回重名路径。模板文件名不是产物文件名，不生成模块目录内的 AGENTS.md；每仓的统一 Agent 入口是根 AGENTS.md，由平台维护，不属于本步骤产物。共享仓中的其他业务仅按当前链路需要核实边界，不扩展研究。其他布局沿用当前保存的实际文稿路径，Agent 不依据 module_id 自行迁移；平台在发布或设置中整理过目录后，以当前文稿位置为准，不照搬历史规划路径。
+knowledge_layout 为 repository-v1 或 module-v1 时，按对应 target.docs_path 保存本业务知识；root-agents.md 模板生成该目录 README.md，domain-agents.md 生成同目录 index.md。已有文稿若经平台自动避让而带文件名后缀，沿用当前保存路径并保留其导航入口，不改回重名路径。模板文件名不是产物文件名，不生成模块目录内的 AGENTS.md；每仓的统一 Agent 入口是根 AGENTS.md，由平台维护，不属于本步骤产物。共享仓中的其他业务仅按当前链路需要核实边界，不扩展研究。其他布局沿用当前保存的实际文稿路径，Agent 不依据 module_id 自行迁移；平台在发布或设置中整理过目录后，以当前文稿位置为准，不照搬历史规划路径。
 
 涉及上传资料、无线术语或相关业务结论时，读取 [来源方法](../references/business-sources.md)，根据本项 source_index 回读资料原文/图片与必要的无线检索正文。资料所述意图要核对版本和适用范围，无线背景只用于解释概念；新增依据、冲突和缺口保存到步骤结果供独立评审接续，不把主会话摘要当成已读资料。
 
@@ -54,11 +54,11 @@ knowledge_layout 为 module-v1 时，按对应 target.docs_path 保存本业务�
 
 ## 四、导航与关联文稿
 
-module-v1 布局下，本模块领域 README.md 与同目录 index.md 按 step.instructions 区分初稿和最终同步。初稿只引用规划确定的路径并标明待生成；最终同步必须读取本业务相关文稿并核对实际路径、关键词、职责和章节。各仓入口指向该仓 target.docs_path/README.md，不改写仓根公共 AGENTS.md。其他布局继续使用当前保存的实际导航路径。
+repository-v1 与 module-v1 布局下，本模块领域 README.md 与同目录 index.md 按 step.instructions 区分初稿和最终同步。初稿只引用规划确定的路径并标明待生成；最终同步必须读取本业务相关文稿并核对实际路径、关键词、职责和章节。各仓入口指向其实际保存的 README.md 路径（repository-v1 新仓级默认 docs/README.md），不改写仓根公共 AGENTS.md。其他布局继续使用当前保存的实际导航路径。
 
 同仓使用相对链接；跨仓写实际仓名和仓内路径，已知真实 URL 才链接。知识仓没有业务源码目录时，不能把逻辑多仓布局当作真实目录树。current-plan 是过程记录，不列为待归档文件。引用的章节名称以当前模板及实际目标为准，不能引导读者查找不存在的章节或表。
 
-只有主会话登记最终导航同步及其真实依赖。普通领域写作者不自行改动其他入口；模块导航步骤只在本次各目标独占目录内修改 expected_document_ids 所列文稿，并在候选结果中列全。
+只有主会话登记最终导航同步及其真实依赖。普通领域写作者不自行改动其他入口；模块导航步骤只修改 expected_document_ids 所列文稿，并在候选结果中列全。
 
 ## 五、保存、自检与退回处理
 

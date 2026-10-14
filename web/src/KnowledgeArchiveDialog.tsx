@@ -22,6 +22,10 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
         {publication.url && <a className="ml-3 text-primary underline" href={publication.url} target="_blank" rel="noreferrer">打开原 MR ↗</a>}
         {publication.error && <p className="whitespace-pre-wrap break-words text-danger">{publication.error}</p>}
       </div>)}
+      {batch.replacements?.map(replacement => <div key={replacement.key}><span>{replacement.target} · {replacement.status_label}</span>
+        {replacement.url && <a className="ml-3 text-primary underline" href={replacement.url} target="_blank" rel="noreferrer">查看被替换的 MR ↗</a>}
+        {replacement.error && <p className="whitespace-pre-wrap break-words text-danger">{replacement.error}</p>}
+      </div>)}
       {batch.actions?.map(action => <Button key={action.id} variant="outline" disabled={disabled} onClick={() => onRetry(action)}>{action.label}</Button>)}
     </section>)}
   </details>;
@@ -61,7 +65,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
-    if (!["create-archive", "retry-archive"].includes(action.id)) return;
+    if (!["create-archive", "retry-archive", "replace-archive"].includes(action.id)) return;
     const retry = action.id === "retry-archive";
     if ((!preview && !retry) || disabled || loading || submitting.current) return;
     submitting.current = true; setBusy(true); setError("");
@@ -69,7 +73,8 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     try {
       const result = await componentRequest<KnowledgeArchivePreview>(`${endpoint}/${retry ? "retry" : "create"}`, retry
         ? { batch_id: action.batch_id, target_id: action.target_id ?? targetId }
-        : { issue_no: issue.trim(), issue_description: description.trim() || undefined, expected_revisions: preview!.expected_revisions }, AbortSignal.timeout(5 * 60_000));
+        : { issue_no: issue.trim(), issue_description: description.trim() || undefined, expected_revisions: preview!.expected_revisions,
+          ...(action.id === "replace-archive" ? { replace_existing: true } : {}) }, AbortSignal.timeout(5 * 60_000));
       if (generation.current === owner) { setPreview(result); onChanged?.(); }
     } catch (reason) { if (generation.current === owner) setError((reason as Error).name === "TimeoutError" ? "归档请求超过 5 分钟，请重新打开归档查看实际结果后重试。" : (reason as Error).message); }
     finally { if (generation.current === owner) { submitting.current = false; setBusy(false); } }
@@ -82,7 +87,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
       : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
-      disabled={disabled || busy || loading || action.id === "create-archive" && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
+      disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
   }
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;

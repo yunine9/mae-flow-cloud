@@ -6,12 +6,12 @@
 
 本文的命令、阅读路径和维护约定仅适用于本业务，包括从旧 AGENTS.md 整理来的内容；执行命令或采纳规则前，按下方来源核对当前源码与配置及其适用条件。
 
-<!-- knowledge_layout 为 module-v1 时本模板生成该仓 target.docs_path/README.md，不生成仓根 AGENTS.md。其他布局沿用当前保存的实际入口路径并调整链接，不根据 module_id 推断布局。以下命令、规范和路由仅覆盖本业务，不存在的目录、运行方式或文稿不补造。 -->
+<!-- knowledge_layout 为 repository-v1 时本模板首次生成 docs/README.md；module-v1 与已有文稿沿用保存路径，不生成仓根 AGENTS.md。其他布局沿用当前保存的实际入口路径并调整链接，不根据 module_id 推断布局。以下命令、规范和路由仅覆盖本业务，不存在的目录、运行方式或文稿不补造。 -->
 
 ## 本业务知识目录
 
 ```
-<该仓实际 target.docs_path>/
+<该仓实际文稿目录，新仓级默认 docs>/
 ├── README.md                         # 本文件：本业务职责、命令与知识入口
 ├── module-map.md                     # 本业务功能关键词、入口及文稿
 ├── rules/

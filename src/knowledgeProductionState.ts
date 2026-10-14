@@ -38,7 +38,10 @@ function documentState(job: DomainKnowledgeJob, document: DomainDocument): Knowl
 }
 function publicationState(job: DomainKnowledgeJob, publication: DomainPublication): KnowledgePublicationState {
   const target = [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id;
-  const status_label = { pending: "归档中", opened: "已归档", failed: "归档失败" }[publication.state];
+  const replacement = publication.url ? job.archive_batches?.flatMap(batch => batch.replacements ?? []).find(item =>
+    ["closed", "merged"].includes(item.state) && item.publication.url === publication.url) : undefined;
+  const status_label = replacement?.state === "closed" ? "旧 MR 已撤销" : replacement?.state === "merged" ? "已合入，保留原提交"
+    : { pending: "归档中", opened: "已归档", failed: "归档失败" }[publication.state];
   return { key: `${publication.target_id}:${publication.branch}`, target, status_label, url: publication.url, error: publication.error,
     mr_participants: publication.mr_participants };
 }
@@ -179,9 +182,12 @@ export function projectKnowledgeProduction(input: Input): KnowledgeProductionVie
         || (archiveRunning ? "正在创建归档 MR" : archiveOpened ? "MR 已创建，后续合入由人处理。" : `${onlyDeletions ? "文档删除已确认" : confirmedDeletions ? "文稿变更已确认" : "平台知识已发布"}。${archiveInstruction}`),
       actions: archiveActions, publications: job ? [...job.publications, ...job.publication_history ?? []].map(publication => publicationState(job, publication)) : [],
       batches: (job?.archive_batches ?? []).filter(batch => !!batch.issue_no).map((batch, index) => ({ id: batch.id, title: `第 ${index + 1} 批 · ${batch.issue_no} · ${batch.documents.length} 份`,
-        status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已发布（未归档）" }[batch.state],
+        status_label: { pending: "归档中", running: "归档中", done: "已归档", failed: "归档失败", superseded: "已被新归档替换" }[batch.state],
         actions: batch.state === "failed" ? [{ id: "retry-archive", label: "重试原批次", view: "archive" as const, batch_id: batch.id }] : [],
-        publications: job ? batch.publications.map(publication => publicationState(job, publication)) : [], superseded: [] })),
+        publications: job ? batch.publications.map(publication => publicationState(job, publication)) : [],
+        replacements: batch.replacements?.map(replacement => ({ key: `${replacement.target.id}:${replacement.publication.branch}`,
+          target: replacement.target.name, url: replacement.publication.url, error: replacement.error,
+          status_label: { pending: "新 MR 创建后撤销旧 MR", closed: "旧 MR 已撤销", merged: "旧 MR 已合入，保留原提交，无需撤销", failed: "旧 MR 撤销失败，可重试" }[replacement.state] })), superseded: [] })),
     } };
   if (input.kind === "component" && input.archive?.production) {
     view.archive = { ...input.archive.production.archive, actions: archiveActions };

@@ -21,6 +21,8 @@ test("Issue488：一次归档动作使用已有单号和最新正式版本直接
   assert.equal(archiveRequest({ ...preview, issue_no: " " }), undefined);
   for (const id of ["configure", "review"]) assert.equal(archiveRequest({ ...preview, actions: [{ id, label: id, view: "review" }] }), undefined);
   assert.equal(archiveRequest({ ...preview, actions: [] }), undefined, "已有MR只展示记录，不重复创建");
+  assert.equal(archiveRequest({ ...preview, actions: [{ id: "replace-archive", label: "重新归档", view: "archive" }] }), undefined,
+    "查看已有MR不会自动撤销，替换须点击明确动作");
   assert.deepEqual(archiveRequest({ ...preview, actions: [{ id: "retry-archive", label: "重试", view: "archive", batch_id: "original" }] }),
     { action: "retry", input: { batch_id: "original", target_id: undefined } });
 });
@@ -41,13 +43,13 @@ test("仅有旧 AGENTS 草稿时可以进入归档设置，不要求先发布或
   assert.doesNotMatch(html, /disabled/);
 });
 
-test("旧任务设置说明确认发布会自动整理和处理重名，预览只作为可选入口", () => {
+test("Issue489：旧任务展示最终仓内目录，模块ID不进入归档目录", () => {
   const job = fixture();
   const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
-  assert.match(html, /确认并发布时，平台会自动按业务模块整理目录/);
-  assert.match(html, /重名时自动分配文件名、更新链接和索引/);
-  assert.match(html, /无需提前设置/);
-  assert.match(html, />预览模块目录<\/button>/);
+  assert.match(html, /不追加模块编号或仓库名/);
+  assert.match(html, /重名会自动分配文件名、更新链接和索引/);
+  assert.match(html, /不重新萃取/);
+  assert.match(html, /value="domains\/订单知识"/);
   assert.doesNotMatch(html, /先按业务模块整理目录/);
 });
 
@@ -101,4 +103,41 @@ test("整理目录后保留旧失败批次的重试入口和原 MR 链接", () =
   assert.match(html, /REQ-OLD/); assert.match(html, />重试原批次<\/button>/);
   assert.match(html, /href="https:\/\/example.test\/mr\/old"/);
   assert.match(html, /不带入后续目录调整或未发布修改/);
+});
+
+test("Issue489：旧 UUID 和工作区仓名从预览去除，仓内 docs 路径保留", () => {
+  const job = fixture();
+  job.module_id = "module-5d312e96-7b1f-4a75-b3f4-ab4624a831ce"; job.knowledge_layout = "module-v1";
+  const repo = { id: "repo-1", name: "FMProductFrontendService", repository: "https://example.test/FMProductFrontendService.git", branch: "master", path: "", docs_path: `docs/knowledge/${job.module_id}` };
+  job.repositories = [repo];
+  job.documents = [{ ...job.documents[0], target_id: repo.id, layer: "repository", path: `${repo.docs_path}/${repo.name}/docs/module-map.md` }];
+  const html = renderToStaticMarkup(React.createElement(DomainKnowledgeArchiveTargets, { job, onChange() {} }));
+  assert.match(html, /value="\."/);
+  assert.match(html, /value="docs\/module-map.md"/);
+  assert.doesNotMatch(html, /module-5d312e96/);
+});
+
+test("Issue489：旧MR撤销失败保留新旧链接及重试入口，已撤销不误报已归档", () => {
+  const job = fixture(); job.knowledge_layout = "repository-v1";
+  Object.assign(job.documents[0], { path: "domains/README.md", knowledge_document_id: "kd", published_revision: "v1", published_document_revision: 1 });
+  const old = { target_id: "domain", branch: "old", state: "opened" as const, url: "https://example.test/mr/old", documents: [] };
+  const current = { ...old, branch: "new", url: "https://example.test/mr/new" };
+  job.archive_batches = [
+    { id: "old", created_at: job.created_at, operator: "alice", issue_no: "DTS489", state: "superseded", knowledge_layout: "repository-v1", documents: job.documents, targets: [job.knowledge_target], publications: [old] },
+    { id: "new", created_at: job.created_at, operator: "alice", issue_no: "DTS489", state: "failed", knowledge_layout: "repository-v1", documents: job.documents, targets: [job.knowledge_target], publications: [current],
+      replacements: [{ batch_id: "old", target: job.knowledge_target, publication: old, state: "failed", error: "旧 MR 关闭失败" }] },
+  ];
+  const view = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(view.archive.state, "failed");
+  const html = renderToStaticMarkup(React.createElement(KnowledgeArchiveHistory, { batches: view.archive.batches, onRetry() {} }));
+  assert.match(html, /已被新归档替换/); assert.match(html, /旧 MR 撤销失败，可重试/);
+  assert.match(html, /href="https:\/\/example.test\/mr\/new"/); assert.match(html, /href="https:\/\/example.test\/mr\/old"/);
+  job.archive_batches[1].replacements![0].state = "closed"; job.archive_batches[1].state = "done";
+  const recovered = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(recovered.archive.state, "opened");
+  assert.equal(recovered.archive.batches[0].publications[0].status_label, "旧 MR 已撤销");
+  job.archive_batches[1].replacements![0].state = "merged";
+  const merged = projectKnowledgeProduction({ kind: "domain", record: job });
+  assert.equal(merged.archive.state, "opened");
+  assert.equal(merged.archive.batches[0].publications[0].status_label, "已合入，保留原提交");
 });

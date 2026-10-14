@@ -1,7 +1,32 @@
 import type { DomainKnowledgeJob, KnowledgeRepository } from "./domainKnowledgeTypes.ts";
 
 export function needsModuleKnowledgeLayout(job: Pick<DomainKnowledgeJob, "module_id" | "knowledge_layout" | "component_research_id">): boolean {
-  return !!job.module_id && !job.component_research_id && job.knowledge_layout !== "module-v1";
+  return !!job.module_id && !job.component_research_id && !job.knowledge_layout;
+}
+
+
+/** 默认领域目录使用创建时的业务名称；不把内部编号写进目录。 */
+export function repositoryKnowledgeDirectory(name: string): string {
+  const value = name.trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, "-").replace(/^[. ]+|[. ]+$/g, "").slice(0, 160);
+  return value && value.toLowerCase() !== ".git" ? value : "domain-docs";
+}
+
+/** 只去掉已知旧目录及准确匹配的工作区仓名前缀，保留仓内相对结构。 */
+export function repositoryKnowledgePath(oldDirectory: string, newDirectory: string, path: string, repositoryNames: readonly string[] = [], stripOldDirectory = false): string {
+  const old = oldDirectory.replace(/\/$/, ""), directory = newDirectory.replace(/\/$/, "");
+  let relative = path;
+  const removedOldPrefix = stripOldDirectory && old !== "." && relative.startsWith(`${old}/`);
+  if (removedOldPrefix) relative = relative.slice(old.length + 1);
+  const name = repositoryNames.find(name => name && relative.startsWith(`${name}/`));
+  if (name) {
+    relative = relative.slice(name.length + 1);
+    // 工作区前缀后的 docs/x 已是仓内路径；指定 docs 时只保留一层。
+    if (removedOldPrefix && directory !== "." && relative.startsWith(`${directory}/`)) relative = relative.slice(directory.length + 1);
+  }
+  if (/^agents\.md$/i.test(relative)) relative = directory === "." ? "docs/README.md" : "README.md";
+  else if (/\/agents\.md$/i.test(relative)) relative = relative.replace(/[^/]+$/, "index.md");
+  if (directory === ".") return relative;
+  return !removedOldPrefix && relative.startsWith(`${directory}/`) ? relative : `${directory}/${relative}`;
 }
 
 /** 模块目录由平台确定；已经带模块编号的目录不会重复追加。 */
@@ -37,13 +62,13 @@ export function moduleKnowledgePaths(
     const target = targetById.get(document.target_id);
     if (!target) throw new Error("文稿的归档目标不存在");
     const directory = target.new_directory.replace(/\/$/, "");
-    const desired = moduleKnowledgePath(target.old_directory, directory, document.desired_path ?? document.path);
-    if (!desired.startsWith(`${directory}/`) || !desired.endsWith(".md") || desired.length > 1000
+    const desired = directory === "." ? document.desired_path ?? repositoryKnowledgePath(target.old_directory, directory, document.path) : moduleKnowledgePath(target.old_directory, directory, document.desired_path ?? document.path);
+    if (directory !== "." && !desired.startsWith(`${directory}/`) || !desired.endsWith(".md") || desired.length > 1000
       || desired.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {
-      throw new Error("文稿整理后的路径须为模块目录内的 Markdown 文件");
+      throw new Error("文稿整理后的路径须为归档目录内的 Markdown 文件");
     }
     // 原根入口优先占用 README；其他碰撞先保留已经位于目标路径的文稿。
-    const priority = document.path.toLowerCase() === "agents.md" && desired === `${directory}/README.md` ? 0 : document.path === desired ? 1 : 2;
+    const priority = document.path.toLowerCase() === "agents.md" && desired === (directory === "." ? "README.md" : `${directory}/README.md`) ? 0 : document.path === desired ? 1 : 2;
     return { document, target, desired, priority };
   }).sort((a, b) => a.priority - b.priority || compare(a.document.id, b.document.id));
   if (new Set(entries.map(entry => entry.document.id)).size !== entries.length) throw new Error("文稿编号不能重复");
@@ -83,12 +108,19 @@ export function moduleKnowledgePaths(
   return { paths: new Map([...result].sort(([a], [b]) => compare(a, b))), renamed: renamed.sort((a, b) => compare(a.id, b.id)) };
 }
 
-/** 历史任务沿用原布局；新模块任务只能维护本模块目录里的文稿。 */
+/** 按任务固定的目录规则校验文稿，旧批次不继承新任务布局。 */
 export function assertModuleKnowledgePath(
   job: Pick<DomainKnowledgeJob, "module_id" | "knowledge_layout">,
   target: Pick<KnowledgeRepository, "docs_path">,
   path: string,
 ): void {
+  if (job.knowledge_layout === "repository-v1") {
+    if ((target.docs_path !== "." && !path.startsWith(`${target.docs_path}/`)) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {
+      throw new Error(`文稿须使用归档目录 ${target.docs_path} 内的仓根相对路径`);
+    }
+    if (/(^|\/)agents\.md$/i.test(path)) throw new Error("文稿不生成 AGENTS.md；请使用 README.md 或 index.md，仓根入口由平台维护");
+    return;
+  }
   if (job.knowledge_layout !== "module-v1") return;
   if (!job.module_id || moduleKnowledgeDirectory(target.docs_path, job.module_id) !== target.docs_path) throw new Error("模块知识目录缺少业务模块编号，请重新设置归档位置");
   if (!path.startsWith(`${target.docs_path}/`) || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {

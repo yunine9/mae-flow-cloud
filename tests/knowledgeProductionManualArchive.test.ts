@@ -53,7 +53,7 @@ function harness(dir: string, options: { noGit?: boolean; multiple?: boolean; fa
         content: `# ${target.id}\n\n只归档已发布的正式规则。`, sources: "固定源码和业务资料" }, { content: null, revision: "a".repeat(40) });
     }
     return "草稿完成";
-  }, { publish: async (job, target, previous, operator, save) => {
+  }, { closePublication: async () => {}, publish: async (job, target, previous, operator, save) => {
     calls.push({ target: target.id, previous: previous && structuredClone(previous), job: structuredClone(job), operator });
     const documents = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
       knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision }));

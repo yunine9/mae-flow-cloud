@@ -59,9 +59,12 @@ export interface DomainPublication {
 export interface DomainArchiveBatch {
   id: string; created_at: string; operator: string; state: "pending" | "running" | "done" | "failed" | "superseded";
   /** 批次按创建时的目录规则重试；历史批次缺省为旧布局。 */
-  knowledge_layout?: "module-v1";
+  knowledge_layout?: "module-v1" | "repository-v1";
   documents: DomainDocument[]; targets: KnowledgeRepository[]; issue_no?: string; issue_description?: string;
   publications: DomainPublication[]; error?: string;
+  /** 新 MR 全部创建成功后撤销旧 MR；每份回执独立保存，重试不重复创建。 */
+  replacements?: Array<{ batch_id?: string; target: KnowledgeRepository; publication: DomainPublication;
+    state: "pending" | "closed" | "merged" | "failed"; error?: string; closed_at?: string; merged_at?: string }>;
   superseded_documents?: Array<{ document_id: string; knowledge_document_id: string; published_revision: string;
     current_revision?: string; reason: "newer_version" | "deleted" }>;
 }
@@ -88,8 +91,8 @@ export interface DomainKnowledgeJob {
   work_documents?: Array<DomainWorkDocument & { turn_id: string }>;
   deletion?: import("./knowledgeProductionTypes").KnowledgeDomainDeletionView;
   id: string; title: string; scope: string; issue_no?: string; issue_description?: string; module_id?: string; operator: string; created_at: string;
-  /** 新模块任务的文稿独占各目标仓的模块目录；无此字段的历史任务保留原布局。 */
-  knowledge_layout?: "module-v1";
+  /** 归档路径规则随任务及批次固定；repository-v1 使用用户选择的仓根相对位置。 */
+  knowledge_layout?: "module-v1" | "repository-v1";
   /** 用户为本次萃取补充的范围、文件使用限制和输出要求。 */
   instructions?: string;
   component_research_id?: string; technologies?: string[];

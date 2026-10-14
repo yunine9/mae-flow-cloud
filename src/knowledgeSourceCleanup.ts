@@ -11,6 +11,17 @@ export class KnowledgeSourceCleanup {
     if (!state || state.started) throw new Error("当前任务不在萃取前清理阶段");
     const values = action === "preview" ? input.paths_by_target : input.selected_paths_by_target;
     if (!values || typeof values !== "object" || Array.isArray(values)) throw new Error("请提供各仓的清理路径");
+    if (job.knowledge_layout === "repository-v1") {
+      for (const target of state.repositories) {
+        const paths = values[target.id] ?? (action === "preview" ? [] : undefined);
+        if (!Array.isArray(paths)) throw new Error("请提供各仓的清理路径");
+        const planned = action === "publish" ? state.plans.find(plan => plan.target_id === target.id)?.paths ?? [] : [];
+        for (const value of [...paths, ...planned]) {
+          const path = knowledgeRelativePath(value, true);
+          if (/(^|\/)agents\.md$/i.test(path)) throw new Error("统一 AGENTS.md 入口由归档维护，请只选择要清理的知识文稿文件");
+        }
+      }
+    }
     if (job.knowledge_layout === "module-v1") {
       for (const target of state.repositories) {
         if (!job.module_id || moduleKnowledgeDirectory(target.docs_path, job.module_id) !== target.docs_path) throw new Error("清理目标缺少本业务模块的独立目录，请重新设置任务");
@@ -29,7 +40,11 @@ export class KnowledgeSourceCleanup {
       const plans: KnowledgeCleanupPlan[] = [];
       for (const target of state.repositories) {
         if (state.publications.some(publication => publication.target_id === target.id && (publication.url || publication.revision || publication.mr_attempted))) throw new Error("清理分支已经推送，请先完成原清理 MR");
-        plans.push(await this.publisher.previewCleanup(target, values[target.id] ?? [], operator, signal));
+        const plan = await this.publisher.previewCleanup(target, values[target.id] ?? [], operator, signal);
+        if (job.knowledge_layout === "repository-v1" && plan.entries.some(entry => !plan.paths.includes(entry.path))) {
+          throw new Error("共享仓清理须逐项填写知识文稿文件路径，不能填写目录");
+        }
+        plans.push(plan);
       }
       state.plans = plans; state.publications = []; save();
       return;
