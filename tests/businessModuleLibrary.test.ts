@@ -265,6 +265,8 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     dataDir: join(root, "data"), provider: "test", model: "test",
     modelsJson: {}, maxConcurrent: 0,
   });
+  let indexPreparations = 0;
+  service.prepareKnowledgeIndex = () => { indexPreparations++; };
   const server = createTaskServer(service, { auth });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -352,6 +354,7 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
       }),
     });
     assert.equal(memberAsset.status, 200);
+    const beforePublish = indexPreparations;
     const published = await fetch(`${base}/business-modules/pay/assets/rules`, {
       method: "PUT", headers: { cookie: owner }, body: JSON.stringify({
         title: "规则", summary: "摘要", when_to_use: "改支付时",
@@ -359,6 +362,7 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
       }),
     });
     assert.equal(published.status, 200);
+    assert.equal(indexPreparations, beforePublish + 1, "发布业务知识后提前准备检索索引");
     const publishedView = await published.json() as {
       assets: Array<{ id: string; form: string; repositories: string[] }> };
     assert.equal(publishedView.assets.find(a => a.id === "rules")!.form, "rule");

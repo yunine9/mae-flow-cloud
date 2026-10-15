@@ -5,17 +5,15 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { Check } from "typebox/value";
 import { saveKnowledgeMaterial } from "../src/knowledgeMaterials.ts";
 import { visionProbePng } from "../src/visionCapability.ts";
-import { createKnowledgeAnswerRunner } from "../src/knowledgeAnswerRunner.ts";
 import { KnowledgeAnswers } from "../src/knowledgeAnswers.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 import { LocalAuth } from "../src/auth.ts";
 import { parseKnowledgeAnswerComposition } from "../src/knowledgeAnswerComposition.ts";
 
-test("图片问答：独立回答会话收到实际原图，图片引用可核对且只允许提问者查看", async t => {
+test("历史图片问答：取消新附件后仍保留历史来源核对与本人访问权限", async t => {
   const dir = mkdtempSync(join(tmpdir(), "mfc-answer-images-"));
   const materialRoot = join(dir, "knowledge-materials"), png = visionProbePng();
   const digest = createHash("sha256").update(png).digest("hex");
@@ -24,29 +22,14 @@ test("图片问答：独立回答会话收到实际原图，图片引用可核�
   mkdirSync(join(materialRoot, material.id, "images"));
   writeFileSync(join(materialRoot, material.id, "images", digest), png);
   writeFileSync(join(materialRoot, material.id, "material.json"), JSON.stringify(material));
-  let answerReceivedImage = false;
-  const runner = createKnowledgeAnswerRunner({ dataDir: dir, search: () => ({} as any),
-    model: () => ({ provider: "test", model: "vision", json: {} }),
-    createModel: async () => ({ dispose() {}, async run(request) {
-      if (request.stage === "researching") {
-        const tool = request.tools.find(tool => tool.name === "knowledge_material")!;
-        const response = await tool.execute("image", { id: material.id, image_path: "blocks.png" }, request.signal, undefined, { model: { input: ["text", "image"] } } as any);
-        assert.deepEqual(Buffer.from((response.content.find(block => block.type === "image") as any).data, "base64"), png);
-        return { text: "图片已读取", complete: true };
-      }
-      const sources = JSON.parse(request.user).received_evidence;
-      assert.equal(sources.length, 1);
-      assert.equal(sources[0].image.digest, digest);
-      assert.equal(request.images?.length, 1);
-      assert.deepEqual(Buffer.from(request.images![0].data, "base64"), png);
-      assert.match(request.images![0].label, new RegExp(sources[0].id));
-      answerReceivedImage = true;
-      const result = { points: [{ kind: "answer", body: "图中从左到右有红、绿、蓝色块。", basis: [{ evidence_id: sources[0].id }] }] };
-      assert.ok(Check(request.outputTool!.parameters, result));
-      return { text: JSON.stringify(result), complete: true };
-    } }),
-  });
-  const answers = new KnowledgeAnswers(dir, runner);
+  const record = { id: "qa-00000000-0000-0000-0000-000000000001", owner: "alice", question: "图中有哪几个色块？",
+    context: { material_ids: [material.id] }, status: "done", stage: "done", created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    activity: [], warnings: [], evidence: [{ id: "ev-1", kind: "material", title: "历史图片", content: "历史图片原件", source_id: material.id,
+      digest: createHash("sha256").update("历史图片原件").digest("hex"), retrieved_at: new Date().toISOString(), image: { path: "blocks.png", digest, mime_type: "image/png" } }],
+    answer: { markdown: "图中有色块。[图片](#evidence-ev-1)", evidence_ids: ["ev-1"], unknowns: [] } };
+  mkdirSync(join(dir, "knowledge-answers", record.id), { recursive: true });
+  writeFileSync(join(dir, "knowledge-answers", record.id, "record.json"), JSON.stringify(record));
+  const answers = new KnowledgeAnswers(dir, async () => { throw new Error("不能重新运行历史问答"); });
   const service = new TaskService({ dataDir: dir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const auth = new LocalAuth(join(dir, "auth.json"));
   auth.bootstrapAdmin("admin", "fixture-admin-password");
@@ -58,13 +41,9 @@ test("图片问答：独立回答会话收到实际原图，图片引用可核�
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const login = async (name: string) => (await fetch(`${base}/auth/login`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username: name, password: `fixture-${name}-password` }) })).headers.get("set-cookie")!.split(";")[0];
   const alice = await login("alice"), bob = await login("bob");
-  const record = answers.create({ question: "图中有哪几个色块？", context: { material_ids: [material.id] } }, "alice").record;
-  for (let n = 0; n < 200 && ["queued", "running"].includes(answers.get(record.id, "alice").status); n++) await new Promise(resolve => setTimeout(resolve, 5));
   const saved = answers.get(record.id, "alice");
   assert.equal(saved.status, "done", saved.error);
-  assert.ok(answerReceivedImage);
-  assert.match(saved.answer!.markdown, /图片：/);
-  assert.doesNotMatch(saved.answer!.markdown, /来源原句/);
+  assert.throws(() => answers.create({ question: "新的图片问题", context: { material_ids: [material.id] } }, "alice"), /不再接受临时附件/);
   const endpoint = `${base}/knowledge-answers/${record.id}/evidence/${saved.evidence[0].id}/image`;
   const own = await fetch(endpoint, { headers: { cookie: alice } });
   assert.equal(own.status, 200);

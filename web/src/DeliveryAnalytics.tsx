@@ -179,7 +179,7 @@ export function IssueAnalyticsTab() {
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
       {help("点行查看该会话的行归属证据;一次定位括号为报告版本数,一次验证✗为验证失败次数")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>会话</th><th>特性</th><th>一次解决</th><th>90%AI生成达标</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th><th>收口时间</th>
+        <th>会话</th><th>特性</th><th>一次解决</th><th>90%AI生成达标</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th><th>发起人</th><th>收口时间</th>
       </tr></thead>
         <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id} style={{ cursor: "pointer" }}
           title="查看行归属证据" onClick={() => setSelected(row.id)}>
@@ -191,6 +191,7 @@ export function IssueAnalyticsTab() {
           <td>{row.verify_pass ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}</td>
           <td className="delivery-accent pct">{pct(row.share)}</td>
           <td className="pct">{num(row.lines?.first ?? 0)} / {num(row.lines?.rework ?? 0)} / {num(row.lines?.external ?? 0)}</td>
+          <td>{row.reporter ?? "—"}</td>
           <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
         </tr>)}</tbody></table></div>
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有会话"}</p>}

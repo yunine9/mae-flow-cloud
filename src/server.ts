@@ -2719,6 +2719,13 @@ export function createTaskServer(
               id, decodeURIComponent(parts[3]), viewer?.username ?? "本地用户"));
           }
         }
+        if (request.method === "POST" && parts[2] === "delivery-report" && parts.length === 3) {
+          const target = storedTask(service, id);
+          if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });
+          if (!canOperate(viewer, target.luban_account, !!options.auth))
+            return json(response, 403, { error: "只有任务责任人或管理员可以生成或更新交付报告" });
+          return json(response, 202, service.generateDeliveryReport(id));
+        }
         if (parts[2] === "overall-story") {
           const target = storedTask(service, id);
           if (!target) return json(response, 404, { error: `任务 ${id} 不存在` });

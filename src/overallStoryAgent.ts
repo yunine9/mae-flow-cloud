@@ -39,6 +39,7 @@ export function overallStoryMission(job: StoryRun): string {
     STORY_ARCHITECTURE_GUIDANCE,
     SEMANTIC_ARCHITECTURE_GUIDANCE,
     "按模板把跨模块用户流程、接口依赖、异常边界和整体验收贯通；不能只是串接子任务全文。保留来源任务编号，便于人核对。",
+    "MST 就是模块 UT。Story 现有测试设计表用“用例级别”区分函数 UT 与模块 UT（MST），不新增章节；按模块保留可检视的用例编号、入口、条件、操作、预期及外部替身边界。不要改写成后续预留或只写子任务待细化。已有用例不因汇总而删掉；设计与实际执行结果分开写。",
     "缺失的 Story、来源冲突、尚未确认的设计必须明确列为待补充；绝不补造实现、测试结论或替用户确认。子任务 Story 存在不代表设计已确认或代码已完成。",
     "正文只写 story.md；架构语义只写 architecture.semantic.json。首次生成用 Write；后续优先 Edit，保留已经检视过的内容与稳定段落。子任务本轮无关部分不要重排。",
     job.before ? "已有 story.md 是前一版。将来源变化和本轮意见合入它，保留人工修改意图。" : "当前尚无整体 Story，请创建 story.md。",

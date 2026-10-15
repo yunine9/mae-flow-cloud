@@ -1,5 +1,4 @@
 import { resourceBlocked } from "../repositoryResourcePolicy.ts";
-import { deliveryBranchName } from "../deliveryBranchName.ts";
 /**
  * 问题会话的首轮提示词与 playbook 改编技能。
  *
@@ -239,7 +238,9 @@ export function issueRegistrationMeta(
     ...(state.baseline ? { baseline: state.baseline } : {}),
     ...(state.ticket
       ? { ticket: state.ticket,
-        repair_branch: deliveryBranchName("master", state.account, state.ticket) }
+        // 修复分支定名(ADR-0063)在首次拉仓时生成并持久化;未定名时
+        // 缺席,如实让 AI 以拉仓回执为准,不预写一个算不出的名字。
+        ...(state.fix_branch ? { repair_branch: state.fix_branch } : {}) }
       : {}),
     ...(knowledgeReady(state)
       ? { knowledge_repo: {
@@ -436,7 +437,10 @@ export function issueFixedOpeningPrompt(
     knowledgeRepoLine(state),
     knowledgeToolLine(state),
     ...(scenario === "ticket" && state.ticket
-      ? [`- 修复分支 ${deliveryBranchName("master", state.account, state.ticket)}`]
+      ? [state.fix_branch
+        ? `- 修复分支 ${state.fix_branch}(平台生成并全程固定,推送与 MR 源分支都用它)`
+        : "- 修复分支:首次拉仓时由平台生成并固定"
+          + "(命名 基线_工号_单号_时间戳),以 pull_repo 回执为准"]
       : []),
     ...environmentLines(meta),
     inheritedNote,

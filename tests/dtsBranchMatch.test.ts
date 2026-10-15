@@ -192,7 +192,6 @@ const GIT_ENV = {
 };
 
 const TICKET = "DTS-2026-1038";
-const BRANCH = `master_dev_${TICKET}`;
 
 /** 造一个只有默认分支 master 的裸仓远端——配置的基线分支在它身上必然缺席。 */
 function bareOrigin(root: string): string {
@@ -260,7 +259,7 @@ test("拉仓硬失败:基线分支在远端不存在,整次失败且不落默认
   }
 });
 
-test("无基线的会话不受影响:仍按默认分支克隆并切修复分支", async () => {
+test("无基线的有单会话:修复分支无从命名,克隆之前就报错点名基线(ADR-0063)", async () => {
   const dataDir = mfcTemp("mfc-branch-pull-nobaseline-");
   const origin = bareOrigin(dataDir);
   const service = new IssueFlowService({
@@ -269,9 +268,14 @@ test("无基线的会话不受影响:仍按默认分支克隆并切修复分支"
   try {
     const live = handcraftLive(service, join(dataDir, "issues", "issue-1"),
       origin);
-    const receipt = await pullRepoFor(service)(live, origin);
-    assert.equal(receipt.cloned, true);
-    assert.equal(receipt.branch, BRANCH);
+    await assert.rejects(
+      pullRepoFor(service)(live, origin),
+      /会话没有基线分支,无法命名修复分支/,
+      "人话点名缺基线:修复分支以基线为前缀,不回退默认分支",
+    );
+    assert.equal(existsSync(join(live.root, "repo", "origin", ".git")), false,
+      "命名先行:克隆都不该发生,不留默认分支克隆");
+    assert.equal(live.state.fix_branch, undefined, "不落分支名");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

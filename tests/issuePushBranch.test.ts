@@ -29,7 +29,9 @@ import { createIssueTools, type IssueToolContext } from "../src/issueFlow/tools.
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS2026082001317";
-const BRANCH = `master_dev_${TICKET}`;
+/** 会话修复分支(ADR-0063):基线_工号_单号_时间戳;夹具用定死的假
+ * 时间戳代表"会话已定名",推送机制测试不关心时间戳本身。 */
+const BRANCH = `master_dev_${TICKET}_20261015090000`;
 
 const GIT_ENV = {
   ...process.env,
@@ -84,6 +86,7 @@ function seedFixedIssue(dataDir: string, repoUrl: string): { id: string } {
     title: "登录超时", description: "", source: "dts",
     ticket: TICKET,
     repo_url: repoUrl, repo_urls: [repoUrl],
+    baseline: "master", fix_branch: BRANCH,
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "pending"],
     status: "running",
@@ -213,6 +216,7 @@ function raceState(alpha: string, beta: string, now: string): IssueSessionState 
     id: "issue-race", account: "dev", created_at: now, updated_at: now,
     title: "推送竞态", description: "", source: "dts", ticket: TICKET,
     repo_url: alpha, repo_urls: [alpha, beta],
+    baseline: "master", fix_branch: BRANCH,
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "done", "done", "pending"],
     status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
@@ -243,10 +247,11 @@ test("issue-14 收口:同毫秒双 push_branch——恰一个推送成功一个�
   assert.equal(state.gate ?? undefined, undefined, "直推不举卡");
 });
 
-// ---- 强制覆盖(同单重跑):force 与普通推送同权直推 ----
+// ---- 强制覆盖(ADR-0063 后的兜底能力):force 与普通推送同权直推 ----
 
-/** 同单重跑现场:远端已有上次运行推过的同名分支(与本次重跑历史
- * 分叉,普通推送必被 non-fast-forward 拒)。 */
+/** 异动现场:远端已有与会话分支同名的分支(与本地历史分叉,普通推送
+ * 必被 non-fast-forward 拒)。新命名下正常流程不会撞名,force 保留防
+ * 平台侧罕见异动。 */
 function seedLeftoverBranch(
   root: string,
   origin: string,
@@ -270,7 +275,7 @@ function remoteBranchSha(origin: string): string {
     { encoding: "utf-8", env: GIT_ENV }).trim();
 }
 
-test("强制覆盖直推(三档):force=true 直接覆盖远端遗留分支,不举卡", async () => {
+test("强制覆盖直推(三档):force=true 直接覆盖远端同名分支,不举卡", async () => {
   const dataDir = mfcTemp("mfc-issue-pushforce-");
   const origin = bareOrigin(dataDir);
   const leftover = seedLeftoverBranch(dataDir, origin);

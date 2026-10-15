@@ -6,13 +6,13 @@ import type { KnowledgeAnswerRecord } from "../../src/knowledgeAnswerTypes";
 
 const pause = (ms = 80) => new Promise(resolve => setTimeout(resolve, ms));
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message); };
-const materialPreview = new URLSearchParams(location.search).get("preview") === "materials";
+const composePreview = new URLSearchParams(location.search).get("preview") === "compose";
 const errors: string[] = [], calls: Array<{ path: string; method: string; input?: any }> = [];
 const previewRecord = (window as typeof window & { __knowledgeAnswerPreview?: KnowledgeAnswerRecord }).__knowledgeAnswerPreview;
 let copied = "", failCopy = false;
 if (!previewRecord) Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (text: string) => { if (failCopy) throw new Error("clipboard blocked"); copied = text; } } });
 let role = "developer";
-let account = "alice", serial = 0, rejectStart = false, materialSerial = 0, holdUpload = false, releaseUpload: (() => void) | undefined;
+let account = "alice", serial = 0, rejectStart = false;
 let failRead = false, failDelete = false;
 let holdHistory = false, releaseHistory: (() => void) | undefined;
 const timestamp = (increment = 0) => new Date(Date.parse("2026-10-10T08:00:00Z") + increment).toISOString();
@@ -37,19 +37,14 @@ window.fetch = async (url, options) => {
   else if (path === "/knowledge-tasks") result = { summary: { running: 0, attention: 0, total: 0 }, module_activity: [] };
   else if (path === "/memory-insights") result = { memories: [] };
   else if (path === "/knowledge-answers/catalog") result = {
-    modules: [{ id: "trade", name: "交易业务" }], repositories: [{ id: "tasks", name: "任务服务", repository: evidence.repository }],
+    modules: [{ id: "trade", name: "交易业务" }],
     documents: [{ id: "kd-pool", title: "任务池组件指南", module_ids: [], revision: "pool-v1" }],
-    sources: [{ kind: "knowledge", label: "知识文档", available: true, detail: "正式知识与组件指南" }, { kind: "everycode", label: "Every Code", available: true, detail: "已配置，实际可用性以查询为准" }],
+    sources: [{ kind: "knowledge", label: "知识文档", available: true, detail: "正式知识与组件指南" }],
   };
   else if (path === "/knowledge-answers" && method === "GET") {
     const snapshot = records.filter(item => item.owner === account).map(({ id, question, status, stage, created_at, updated_at }) => ({ id, question, status, stage, created_at, updated_at }));
     if (holdHistory) await new Promise<void>(resolve => { releaseHistory = resolve; });
     result = { answers: snapshot };
-  }
-  else if (path === "/knowledge-materials" && method === "POST") {
-    if (holdUpload) await new Promise<void>(resolve => { releaseUpload = resolve; });
-    materialSerial += 1;
-    result = { id: `material-00000000-0000-0000-0000-${String(materialSerial).padStart(12, "0")}`, name: input.name, version: input.version, scope: input.scope, state: "ready", sections: 2, images: [{ path: "figure.png" }], warnings: ["图片仅保留，尚未核验图中文字。"] };
   }
   else if (path === "/knowledge-answers" && method === "POST") {
     if (previewRecord) return new Response(JSON.stringify({ error: "这是本地阅读示例。新问题请到正式服务中提交。" }), { status: 400 });
@@ -104,12 +99,6 @@ async function choose(label: string, value: string) {
   const select = document.querySelector<HTMLSelectElement>(`[aria-label="${label}"]`)!;
   select.value = value; select.dispatchEvent(new Event("change", { bubbles: true })); await pause();
 }
-async function pick(files: File[]) {
-  const input = document.querySelector<HTMLInputElement>('[aria-label="上传问答资料"]')!;
-  check(input, "question attachment upload input is available");
-  Object.defineProperty(input, "files", { configurable: true, value: files });
-  input.dispatchEvent(new Event("change", { bubbles: true })); await pause();
-}
 async function remount() { root.unmount(); await pause(); root = createRoot(document.getElementById("app")!); render(); await waitFor('[aria-label="知识问答工作区"]'); await pause(); }
 function navigateAnswer(id = "") {
   const url = new URL(location.href); url.search = new URLSearchParams({ kbPage: "ask", ...(id ? { kbAsk: id } : {}) }).toString();
@@ -128,40 +117,23 @@ async function run() {
   openKnowledgeAnswer("", "business:trade", "kd-pool"); await remount();
   check(document.querySelector<HTMLSelectElement>('[aria-label="问答相关模块"]')?.value === "trade" && document.querySelector<HTMLSelectElement>('[aria-label="问答参考文档"]')?.value === "kd-pool", "document question scope survives direct entry and reload");
   await click("补充范围与参考文档（已补充）");
-  check(document.body.textContent?.includes("根据实际查阅的资料回答") && !document.body.textContent?.includes("核对依据后"), "composer describes source-based answering without claiming semantic approval");
+  check(document.body.textContent?.includes("根据相关章节原文回答") && !document.body.textContent?.includes("核对依据后"), "composer describes source-based answering without claiming semantic approval");
   await fill("知识问答问题", "异步任务重试的 UT 怎么写？");
   await click("补充范围与参考文档（已补充）"); await choose("问答相关模块", "trade"); await choose("问答参考文档", "kd-pool");
-  await click("补充原始资料（可选）");
+  check(!document.querySelector('[aria-label="上传问答资料"]') && !document.querySelector('[aria-label="问答相关仓库"]'), "composer only offers knowledge documents and modules");
+  check(!document.querySelector(".ka-compose")?.textContent?.includes("Every Code") && !document.querySelector(".ka-compose")?.textContent?.includes("无线豆包"), "external sources are absent from the new question page");
   const submitBox = button("提问")!.getBoundingClientRect(), mainBox = document.querySelector(".ka-main")!.getBoundingClientRect();
-  check(submitBox.top >= mainBox.top && submitBox.bottom <= mainBox.bottom, "question action remains visible when attachments expand on desktop");
-  check(document.body.textContent?.includes("按问题核对文字与相关图片") && !document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("自动用于本次萃取"), "question attachment copy describes image reading without extraction claims");
-  const versionDetails = document.querySelector('[aria-label="知识问答资料上传"] details') as HTMLDetailsElement;
-  versionDetails.open = true; await fill("资料版本（可选）", "v2.1");
-  holdUpload = true;
-  await pick([new File(["条件成立时才重试"], "规则说明.md", { type: "text/markdown" }), new File(["不需要的参考资料"], "旧规则.txt", { type: "text/plain" })]);
-  check(button("提问")?.disabled, "question cannot start before material parsing finishes");
-  for (let index = 0; index < 35 && !releaseUpload; index += 1) await pause();
-  check(releaseUpload, "attachment request reaches upload endpoint"); holdUpload = false; releaseUpload!();
-  await waitFor('[aria-label="移除 旧规则.txt"]');
-  check(document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("1 条解析提醒"), "parser warnings are described as reminders rather than unparsed attachment counts");
-  const uploaded = calls.find(call => call.path === "/knowledge-materials")!;
-  const decoded = new TextDecoder().decode(Uint8Array.from(atob(uploaded.input.content_base64), character => character.charCodeAt(0)));
-  check(uploaded.input.scope === "本次知识问答" && uploaded.input.version === "v2.1" && decoded === "条件成立时才重试", "upload preserves UTF-8 content, version, and question-specific scope");
-  const uploadCount = calls.filter(call => call.path === "/knowledge-materials").length;
-  await pick(Array.from({ length: 9 }, (_, index) => new File(["extra"], `extra-${index}.txt`)));
-  check(calls.filter(call => call.path === "/knowledge-materials").length === uploadCount && document.querySelector('[aria-label="知识问答资料上传"] [role="alert"]')?.textContent?.includes("最多关联 10"), "more than ten selected attachments are rejected before uploading");
-  await click("移除 旧规则.txt");
-  check(!calls.some(call => call.method === "DELETE" || call.path.includes("/knowledge-materials/")), "removing an attachment only detaches it from the draft");
-  await click("知识库"); await waitFor('[aria-label="知识目录"]'); navigateAnswer(); await waitFor('[aria-label="移除 规则说明.md"]');
+  check(submitBox.top >= mainBox.top && submitBox.bottom <= mainBox.bottom, "question action remains visible with document scope expanded on desktop");
+  const oldDraft = JSON.parse(sessionStorage.getItem("mae-flow:knowledge-answer:draft:alice")!);
+  oldDraft.context.material_ids = ["material-removed"]; oldDraft.context.repository_ids = ["repo-removed"];
+  oldDraft.materials = [{ id: "material-removed", name: "旧附件" }];
+  sessionStorage.setItem("mae-flow:knowledge-answer:draft:alice", JSON.stringify(oldDraft));
   await remount();
-  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "异步任务重试的 UT 怎么写？", "question draft survives page remount");
-  if (!document.querySelector('[aria-label="问答相关模块"]')) await click("补充范围与参考文档（已补充）");
-  check(document.querySelector<HTMLSelectElement>('[aria-label="问答相关模块"]')?.value === "trade", "draft scope survives remount");
-  check(document.querySelector('[aria-label="知识问答资料上传"]')?.textContent?.includes("规则说明.md · v2.1 · 2 个文本片段") && !document.querySelector('[aria-label="移除 旧规则.txt"]'), "material identifiers and summaries survive navigation and refresh without reattaching a removed file");
+  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "异步任务重试的 UT 怎么写？", "question text survives draft restoration");
   await click("提问"); await waitFor('[aria-label="回答进度"]');
   const creation = calls.find(call => call.path === "/knowledge-answers" && call.method === "POST")!;
   check(creation.input.context.module_ids[0] === "trade" && creation.input.context.document_id === "kd-pool", "request preserves optional module and reference document");
-  check(creation.input.context.material_ids.length === 1 && creation.input.context.material_ids[0] === "material-00000000-0000-0000-0000-000000000001" && !creation.input.materials, "question request sends only associated material IDs, without browser summaries or file bodies");
+  check(!creation.input.context.material_ids && !creation.input.context.repository_ids && !creation.input.materials, "retired scopes in old drafts are removed before submission");
   check(new URLSearchParams(location.search).get("kbAsk") === "qa-1", "created record has a refreshable URL");
   check(document.body.textContent?.includes("检查引用") && !document.body.textContent?.includes("尚未完成的中间回答不能展示"), "checking stage shows real progress and hides draft answers");
   check(document.querySelector('[aria-label="本次已等待时长"]')?.textContent?.startsWith("已等待 "), "running answer reports elapsed time without promising a completion estimate");
@@ -223,22 +195,20 @@ async function run() {
   await openReadEvidence();
   check(document.querySelector('[aria-label="本次已查阅资料"]') && document.querySelector('[aria-label="本次引用原文"]')?.textContent?.includes("本次固定版本原文"), "failed answers preserve access to already-read original evidence after refresh");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "还没提交的另一份问题");
-  if (!document.querySelector('[aria-label="上传问答资料"]')) await click("补充原始资料（可选）");
-  await pick([new File(["另一份问题的参考资料"], "未提交资料.md")]); await waitFor('[aria-label="移除 未提交资料.md"]');
+  records.find(item => item.id === "qa-3")!.context = { material_ids: ["old-attachment"], repository_ids: ["old-repo"] };
   navigateAnswer("qa-3"); await waitFor('[aria-label="问答未完成"]');
   await click("重新提问"); await waitFor('[aria-label="回答进度"]');
+  check(!records.find(item => item.id === "qa-4")?.context?.material_ids && !records.find(item => item.id === "qa-4")?.context?.repository_ids, "retrying historical questions drops retired source scopes");
   check(records.find(item => item.id === "qa-4")?.question === "不能丢掉的新问题", "failed execution can be retried as a new answer");
-  await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await remount(); await waitFor('[aria-label="移除 未提交资料.md"]');
-  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "还没提交的另一份问题", "retrying an older answer preserves a separate unsent question and its attachments across refresh");
+  await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await remount(); await waitFor('[aria-label="知识问答问题"]');
+  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "还没提交的另一份问题", "retrying an older answer preserves a separate unsent question across refresh");
   await click("新问题"); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "Alice 的私人草稿");
-  if (!document.querySelector('[aria-label="上传问答资料"]')) await click("补充原始资料（可选）");
-  await pick([new File(["Alice 的资料"], "私人参考.md")]); await waitFor('[aria-label="移除 私人参考.md"]');
   account = "bob"; await remount();
   check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "", "draft storage is isolated by logged-in account");
   check(!document.querySelector(".ka-history-item"), "history only contains the current account's records");
   check(!document.querySelector('[aria-label="移除 私人参考.md"]'), "attachments are not restored into another account's question draft");
-  account = "alice"; await remount(); await waitFor('[aria-label="移除 私人参考.md"]');
-  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "Alice 的私人草稿", "returning to the original account restores its question and attachments");
+  account = "alice"; await remount(); await waitFor('[aria-label="知识问答问题"]');
+  check(document.querySelector<HTMLTextAreaElement>('[aria-label="知识问答问题"]')?.value === "Alice 的私人草稿", "returning to the original account restores its question");
   const existing = records.find(item => item.id === "qa-existing")!, completed = structuredClone(existing);
   Object.assign(existing, { status: "running", stage: "researching", updated_at: timestamp(40000), answer: undefined });
   holdHistory = true; releaseHistory = undefined;
@@ -287,8 +257,11 @@ async function run() {
   check(!document.querySelector(".ka-history-item") && document.body.textContent?.includes("没有找到相关问题"), "history can be filtered without changing the draft");
   await fill("搜索历史问题", "");
   navigateAnswer("qa-existing"); await waitFor('[aria-label="知识回答"]'); await click("查看来源：实现依据 C++ [固定版]");
-  if (materialPreview) { navigateAnswer(); await waitFor('[aria-label="移除 私人参考.md"]'); }
   check(!errors.length, errors.join("; "));
+  if (composePreview) {
+    navigateAnswer(); await waitFor('[aria-label="知识问答问题"]'); await fill("知识问答问题", "");
+    if (!document.querySelector('[aria-label="问答相关模块"]')) await click("补充范围与参考文档（已补充）");
+  }
   return { passed: true, width: innerWidth, created: serial, references: records[0].answer?.evidence_ids.length };
 }
 

@@ -5,8 +5,10 @@ export type KnowledgeAnswerSourceKind = "knowledge" | "code" | "everycode" | "wi
 
 export interface KnowledgeAnswerContext {
   module_ids?: string[];
+  /** 仅用于读取历史问答；新问题不接受代码仓范围。 */
   repository_ids?: string[];
   document_id?: string;
+  /** 仅用于读取历史附件引用；新问题不接受临时附件。 */
   material_ids?: string[];
   product_version?: string;
 }

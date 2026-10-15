@@ -6,12 +6,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { getSession } from "./api";
 import { answerParts } from "./knowledgeAnswerPresentation";
 import { KnowledgeAnswerMarkdown } from "./KnowledgeAnswerMarkdown";
-import { KnowledgeMaterialUpload, type MaterialSummary } from "./KnowledgeMaterialUpload";
 import { deleteKnowledgeAnswer, KnowledgeAnswerRequestError, cancelKnowledgeAnswer, getKnowledgeAnswer, getKnowledgeAnswerCatalog, getKnowledgeAnswers, knowledgeAnswerRunning, newerKnowledgeAnswer, questionContext, sendKnowledgeAnswerFeedback, startKnowledgeAnswer, type KnowledgeAnswerCatalog, type KnowledgeAnswerContext, type KnowledgeAnswerEvidence, type KnowledgeAnswerInput, type KnowledgeAnswerRecord, type KnowledgeAnswerSummary } from "./knowledgeAnswersApi";
 import "./KnowledgeAnswers.css";
 
 const sourceLabels = { knowledge: "知识文档", code: "仓库代码", everycode: "Every Code", wireless: "无线豆包", material: "原始资料" };
-const stages = { queued: "等待开始", researching: "查阅资料", answering: "整理回答", checking: "检查引用", done: "回答完成" };
+const stages = { queued: "等待开始", researching: "检索文档", answering: "整理回答", checking: "检查引用", done: "回答完成" };
 const statusLabel = (record: KnowledgeAnswerSummary) => record.status === "failed" ? "回答失败" : record.status === "cancelled" ? "已停止" : stages[record.stage];
 const messageOf = (error: unknown) => error instanceof Error ? error.message : "请求失败，请稍后重试。";
 const draftKey = (account: string) => `mae-flow:knowledge-answer:draft:${account}`;
@@ -21,7 +20,7 @@ const elapsed = (created: string, now: number) => {
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 };
 
-interface QuestionDraft { question: string; context: KnowledgeAnswerContext; materials: MaterialSummary[] }
+interface QuestionDraft { question: string; context: KnowledgeAnswerContext }
 interface Props {
   answerId?: string;
   moduleKey?: string;
@@ -35,24 +34,11 @@ function readDraft(account: string): QuestionDraft | undefined {
     if (!value || typeof value !== "object") return;
     const draft = value as QuestionDraft;
     if (typeof draft.question !== "string" || !draft.context || typeof draft.context !== "object") return;
-    const materials = Array.isArray(draft.materials) ? [...new Map(draft.materials.filter(material => material && typeof material === "object"
-      && typeof material.id === "string" && (/^material-[a-f0-9-]{36}$/.test(material.id)
-        || (material.state === "failed" && /^upload-failed-[a-f0-9-]{36}$/.test(material.id)))
-      && typeof material.name === "string" && typeof material.version === "string" && typeof material.scope === "string"
-      && ["ready", "failed"].includes(material.state) && Number.isInteger(material.sections) && material.sections >= 0)
-      .map(material => [material.id, {
-        id: material.id, name: material.name, version: material.version, scope: material.scope, state: material.state, sections: material.sections,
-        ...(typeof material.error === "string" ? { error: material.error } : {}),
-        ...(Array.isArray(material.images) ? { images: material.images.filter(image => image && typeof image.path === "string").map(image => ({ path: image.path })) } : {}),
-        ...(Array.isArray(material.warnings) ? { warnings: material.warnings.filter(warning => typeof warning === "string") } : {}),
-      } as MaterialSummary])).values()].slice(0, 10) : [];
     return { question: draft.question, context: {
       ...(Array.isArray(draft.context.module_ids) ? { module_ids: draft.context.module_ids.filter(id => typeof id === "string") } : {}),
-      ...(Array.isArray(draft.context.repository_ids) ? { repository_ids: draft.context.repository_ids.filter(id => typeof id === "string") } : {}),
       ...(typeof draft.context.document_id === "string" ? { document_id: draft.context.document_id } : {}),
       ...(typeof draft.context.product_version === "string" ? { product_version: draft.context.product_version } : {}),
-      ...(materials.length ? { material_ids: materials.map(material => material.id) } : {}),
-    }, materials };
+    } };
   } catch { /* 浏览器禁用存储时，仍可在本页提问。 */ }
 }
 
@@ -91,12 +77,11 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   const [history, setHistory] = useState<KnowledgeAnswerSummary[]>([]), [historyError, setHistoryError] = useState("");
   const [catalog, setCatalog] = useState<KnowledgeAnswerCatalog>(), [catalogError, setCatalogError] = useState("");
   const [record, setRecord] = useState<KnowledgeAnswerRecord>(), [loadError, setLoadError] = useState("");
-  const [draft, setDraft] = useState<QuestionDraft>({ question: "", context: questionContext(moduleKey, documentId), materials: [] });
+  const [draft, setDraft] = useState<QuestionDraft>({ question: "", context: questionContext(moduleKey, documentId) });
   const [account, setAccount] = useState(""), [draftReady, setDraftReady] = useState(false);
   const [busy, setBusy] = useState(false), [actionError, setActionError] = useState(""), [refresh, setRefresh] = useState(0);
   const [selectedEvidence, setSelectedEvidence] = useState(""), [showContext, setShowContext] = useState(!!moduleKey || !!documentId);
   const [feedbackChoice, setFeedbackChoice] = useState<boolean>(), [feedbackComment, setFeedbackComment] = useState("");
-  const [showMaterials, setShowMaterials] = useState(false), [uploading, setUploading] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [historyQuery, setHistoryQuery] = useState("");
   const [selectedQuote, setSelectedQuote] = useState<string>();
@@ -134,7 +119,6 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
         setAccount(session.username);
         if (saved) {
           setDraft({ ...saved, context: { ...saved.context, ...context } });
-          setShowMaterials(saved.materials.length > 0);
         }
       }
       setDraftReady(true);
@@ -194,14 +178,15 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
   }, [answerId, refresh]);
 
   async function submit(input: KnowledgeAnswerInput, clearDraft = false) {
-    if (busy || uploading || !input.question.trim()
-        || (clearDraft && draft.materials.some(material => material.state !== "ready"))) return;
+    if (busy || !input.question.trim()) return;
     setBusy(true); setActionError("");
     try {
-      const next = await startKnowledgeAnswer({ question: input.question.trim(), context: input.context });
+      const next = await startKnowledgeAnswer({ question: input.question.trim(), context: input.context ? {
+        module_ids: input.context.module_ids, document_id: input.context.document_id, product_version: input.context.product_version,
+      } : undefined });
       if (!mounted.current) return;
       receive(next);
-      if (clearDraft) setDraft(current => ({ ...current, question: "", context: { ...current.context, material_ids: undefined }, materials: [] }));
+      if (clearDraft) setDraft(current => ({ ...current, question: "", context: current.context }));
       onSelect(next.id);
     } catch (error) { if (mounted.current) setActionError(messageOf(error)); }
     finally { if (mounted.current) setBusy(false); }
@@ -236,7 +221,6 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
     finally { if (mounted.current) setBusy(false); }
   }
   function changeContext(value: Partial<KnowledgeAnswerContext>) { setDraft(current => ({ ...current, context: { ...current.context, ...value } })); }
-  function changeMaterials(materials: MaterialSummary[]) { setDraft(current => ({ ...current, materials, context: { ...current.context, material_ids: materials.map(material => material.id) } })); }
   const evidence = record?.evidence.find(item => item.id === selectedEvidence);
   const cited = record?.status === "done" && record.answer ? record.answer.evidence_ids.map(id => record.evidence.find(item => item.id === id)).filter((item): item is KnowledgeAnswerEvidence => !!item) : [];
   const moduleNames = record?.context?.module_ids?.map(id => catalog?.modules.find(item => item.id === id)?.name || id) || [];
@@ -265,27 +249,24 @@ export function KnowledgeAnswers({ answerId = "", moduleKey, documentId, onSelec
     </aside>
     <main className="ka-main" ref={main}>
       {!answerId ? <div className="ka-compose">
-        <div className="ka-compose-title"><span className="ka-eyebrow"><BookOpen size={15} />团队知识 · 随问随查</span><h2>从一个问题，找到有依据的答案。</h2><p>业务规则、组件用法、代码与测试，根据实际查阅的资料回答。</p></div>
+        <div className="ka-compose-title"><span className="ka-eyebrow"><BookOpen size={15} />团队知识 · 随问随查</span><h2>从一个问题，找到有依据的答案。</h2><p>查询知识库中已发布的文档，根据相关章节原文回答业务规则和组件用法。</p></div>
         <form className="ka-question-form" onSubmit={event => { event.preventDefault(); void submit(draft, true); }}>
           <label className="ka-input-label" htmlFor="knowledge-answer-question">描述你的问题</label>
           <Textarea id="knowledge-answer-question" aria-label="知识问答问题" placeholder="描述你想了解的问题，也可以补充场景和遇到的困难…" value={draft.question} onChange={event => setDraft(current => ({ ...current, question: event.target.value }))} disabled={!draftReady || busy} maxLength={12000} />
-          <Button type="button" variant="ghost" size="sm" className="ka-context-toggle" aria-expanded={showContext} onClick={() => setShowContext(value => !value)}>{showContext ? <ChevronUp size={14} /> : <ChevronDown size={14} />}补充范围与参考文档{(draft.context.module_ids?.length || draft.context.repository_ids?.length || draft.context.document_id || draft.context.product_version) ? "（已补充）" : "（可选）"}</Button>
+          <Button type="button" variant="ghost" size="sm" className="ka-context-toggle" aria-expanded={showContext} onClick={() => setShowContext(value => !value)}>{showContext ? <ChevronUp size={14} /> : <ChevronDown size={14} />}补充范围与参考文档{(draft.context.module_ids?.length || draft.context.document_id || draft.context.product_version) ? "（已补充）" : "（可选）"}</Button>
           {showContext && <div className="ka-context">
             <label>相关模块<select aria-label="问答相关模块" value={draft.context.module_ids?.[0] || ""} onChange={event => changeContext({ module_ids: event.target.value ? [event.target.value] : [] })}><option value="">所有模块</option>{catalog?.modules.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label>相关仓库<select aria-label="问答相关仓库" value={draft.context.repository_ids?.[0] || ""} onChange={event => changeContext({ repository_ids: event.target.value ? [event.target.value] : [] })}><option value="">按问题查找</option>{catalog?.repositories.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-            <label className="ka-context-document">参考文档<select aria-label="问答参考文档" value={draft.context.document_id || ""} onChange={event => changeContext({ document_id: event.target.value || undefined })}><option value="">不指定</option>{catalog?.documents?.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}{draft.context.document_id && !contextDocument && <option value={draft.context.document_id}>{draft.context.document_id}</option>}</select><small>指定文档作为参考，仍会按问题补查其他依据。</small></label>
+            <label className="ka-context-document">参考文档<select aria-label="问答参考文档" value={draft.context.document_id || ""} onChange={event => changeContext({ document_id: event.target.value || undefined })}><option value="">不指定</option>{catalog?.documents?.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}{draft.context.document_id && !contextDocument && <option value={draft.context.document_id}>{draft.context.document_id}</option>}</select><small>选择后只在这份文档中查找依据。</small></label>
             <label>适用版本<input aria-label="问答适用版本" value={draft.context.product_version || ""} onChange={event => changeContext({ product_version: event.target.value || undefined })} placeholder="可填写产品或组件版本" /></label>
           </div>}
-          <Button type="button" variant="ghost" size="sm" className="ka-context-toggle" aria-expanded={showMaterials} onClick={() => setShowMaterials(value => !value)}>{showMaterials ? <ChevronUp size={14} /> : <ChevronDown size={14} />}补充原始资料{draft.materials.length ? `（${draft.materials.length} 份）` : "（可选）"}</Button>
-          {showMaterials && <div className="ka-material-upload"><KnowledgeMaterialUpload purpose="question" materials={draft.materials} onChange={changeMaterials} onBusy={setUploading} disabled={!draftReady || busy} /></div>}
           {catalogError && <p className="ka-notice">范围选项加载失败，仍可直接提问。<button type="button" onClick={() => setRefresh(value => value + 1)}>重试</button></p>}
           {actionError && <p role="alert" className="ka-error">{actionError}</p>}
-          <div className="ka-submit"><small>{uploading ? "资料正在上传并解析，请稍候" : draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "默认查阅所有可用的正式知识"}</small><Button type="submit" disabled={!draftReady || busy || uploading || draft.materials.some(material => material.state !== "ready") || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
+          <div className="ka-submit"><small>{draft.context.module_ids?.length ? "结合所选模块查阅相关知识" : "仅查询知识库已发布文档"}</small><Button type="submit" disabled={!draftReady || busy || !draft.question.trim()}>{busy ? <LoaderCircle className="ka-spinner" size={16} /> : <Send size={16} />}{busy ? "正在发起" : "提问"}</Button></div>
         </form>
         {!draft.question && <div className="ka-examples" aria-label="提问示例">{[
-          { icon: BookOpen, title: "理解业务规则", text: "这条业务规则有哪些适用条件？在哪里实现？" },
+          { icon: BookOpen, title: "理解业务规则", text: "这条业务规则有哪些适用条件和例外？" },
           { icon: Code2, title: "使用组件", text: "这个组件怎么接入？有哪些配置和使用限制？" },
-          { icon: FileText, title: "寻找测试写法", text: "类似异步任务的 UT 怎么写？有没有可参考的代码？" },
+          { icon: FileText, title: "了解操作步骤", text: "文档中规定的操作步骤是什么？有哪些注意事项？" },
         ].map(example => <button type="button" key={example.title} disabled={!draftReady || busy} onClick={() => { setDraft(current => ({ ...current, question: example.text })); document.getElementById("knowledge-answer-question")?.focus(); }}><example.icon size={18} /><strong>{example.title}</strong><span>{example.text}</span><ArrowUpRight size={14} /></button>)}</div>}
         {catalog?.sources.length ? <details className="ka-sources"><summary>可查阅的来源</summary>{catalog.sources.map(source => <div key={source.kind}><strong>{source.label}</strong><span>{source.detail || (source.available ? "已配置" : "暂未配置")}</span></div>)}</details> : null}
       </div> : <div className="ka-answer-view">

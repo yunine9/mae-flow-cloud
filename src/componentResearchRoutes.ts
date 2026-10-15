@@ -39,6 +39,16 @@ export async function componentResearchRoute(
           if (!record.document_id && !record.update_document_id) throw new Error("请先发布组件知识，再归档当前正式版本");
           return record;
         };
+        if (parts[3] === "targets") {
+          const record = current();
+          const preview = manager.previewComponentArchive({ research_id: record.id,
+            knowledge_document_id: record.document_id ?? record.update_document_id! }, operator);
+          if (request.method === "GET" && !parts[4]) return json(response, 200, manager.componentArchive(record.id));
+          if (request.method === "POST" && (!parts[4] || parts[4] === "preview") && !parts[5]) {
+            const body = await readBody(request, 1024 * 1024);
+            return json(response, 200, parts[4] === "preview" ? manager.previewArchiveTargets(preview.job_id, body) : manager.configureArchive(preview.job_id, body));
+          }
+        }
         if (request.method === "GET" && parts[3] === "preview" && !parts[4]) {
           const record = current();
           return json(response, 200, manager.previewComponentArchive({ research_id: record.id,

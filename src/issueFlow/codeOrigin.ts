@@ -181,6 +181,9 @@ export interface IssueOnceGeneratedSession {
   verify_pass: boolean;
   /** 一次解决:定位与验证双一次。 */
   solved_pass: boolean;
+  /** 发起人:发起登记的登录账号(DTS 发起不带指派,归属=发起人),
+   *  登记人缺席按归属兜底;可选(#353 字段纪律,老前端按缺省处理)。 */
+  reporter?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(分母=各自口径的会话数;一次定位

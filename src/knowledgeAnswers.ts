@@ -37,7 +37,7 @@ function selection(value: unknown, label: string, max = 20): string[] | undefine
   return [...new Set(value.map(id => id.trim()))].sort();
 }
 
-export function knowledgeAnswerInput(value: unknown): KnowledgeAnswerInput {
+export function knowledgeAnswerInput(value: unknown, historical = false): KnowledgeAnswerInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new KnowledgeAnswerError(400, "请提供问题");
   const input = value as Record<string, unknown>;
   if (typeof input.question !== "string" || !input.question.trim() || input.question.length > 12_000)
@@ -47,6 +47,8 @@ export function knowledgeAnswerInput(value: unknown): KnowledgeAnswerInput {
     if (!input.context || typeof input.context !== "object" || Array.isArray(input.context)) throw new KnowledgeAnswerError(400, "问题范围须为对象");
     const raw = input.context as Record<string, unknown>;
     context = {};
+    if (!historical && (raw.material_ids !== undefined || raw.repository_ids !== undefined))
+      throw new KnowledgeAnswerError(400, "知识问答只查询已发布文档，不再接受临时附件或代码仓范围；可选择业务模块或文档");
     for (const [key, label] of [["module_ids", "业务模块"], ["repository_ids", "代码仓"], ["material_ids", "原始资料"]] as const) {
       const ids = selection(raw[key], label, key === "material_ids" ? 10 : 20);
       if (ids?.length) context[key] = ids;
@@ -91,7 +93,7 @@ export class KnowledgeAnswers {
             || createHash("sha256").update(evidence.content).digest("hex") !== evidence.digest)
           || !Array.isArray(record.activity) || record.activity.some(activity => !activity || !stages.has(activity.stage) || typeof activity.message !== "string" || !validTime(activity.at))
           || !Array.isArray(record.warnings) || record.warnings.some(warning => typeof warning !== "string")) continue;
-        knowledgeAnswerInput(record);
+        knowledgeAnswerInput(record, true);
         if (record.status !== "done") delete record.answer;
         else if (!validAnswer(record)) {
           record.status = "failed"; record.error = "保存的回答或引用不完整，请重新提问"; delete record.answer;
@@ -123,7 +125,7 @@ export class KnowledgeAnswers {
       if (!integration.message_id || integration.message_id.length > 200) throw new KnowledgeAnswerError(400, "请提供有效的消息编号");
       const previous = [...this.records.values()].find(record => record.owner === owner && record.integration?.kind === integration.kind && record.integration.message_id === integration.message_id);
       if (previous) {
-        if (JSON.stringify(knowledgeAnswerInput(previous)) !== JSON.stringify(input)) throw new KnowledgeAnswerError(409, "同一消息编号已用于另一条问题");
+        if (JSON.stringify(knowledgeAnswerInput(previous, true)) !== JSON.stringify(input)) throw new KnowledgeAnswerError(409, "同一消息编号已用于另一条问题");
         return { record: copy(previous), replayed: true };
       }
     }

@@ -26,7 +26,9 @@ import { fixedStages, stageAllowsTool } from "../src/issueFlow/stageRegistry.ts"
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS2026091300240";
-const BRANCH = `master_dev_${TICKET}`;
+/** 会话修复分支(ADR-0063):基线_工号_单号_时间戳;夹具用定死的假
+ * 时间戳代表"会话已定名",门禁测试不关心时间戳本身。 */
+const BRANCH = `master_dev_${TICKET}_20260913120000`;
 
 const GIT_ENV = {
   ...process.env,
@@ -65,13 +67,15 @@ function pushFixBranch(cloneDir: string, origin: string): void {
     `HEAD:refs/heads/${BRANCH}`], { env: GIT_ENV });
 }
 
-/** 活状态:固定流程 analyze 阶段(remove_repo 注册表全程放行)。 */
+/** 活状态:固定流程 analyze 阶段(remove_repo 注册表全程放行)。
+ * 基线与修复分支定名在场(会话已拉过仓的常态形态)。 */
 function freshState(dataDir: string, repoUrls: string[]): IssueSessionState {
   const now = new Date().toISOString();
   return {
     id: "issue-rm", account: "dev", created_at: now, updated_at: now,
     title: "移除仓门禁", description: "", source: "dts", ticket: TICKET,
     repo_url: repoUrls[0], repo_urls: repoUrls,
+    baseline: "master", fix_branch: BRANCH,
     scenario: "ticket", round: 1,
     stage_states: ["done", "done", "in_progress", "pending", "pending"],
     status: "idle", stage: "analyze", stage_note: "", stage_at: now,

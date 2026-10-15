@@ -88,6 +88,7 @@ import {
   type ContainerOwnershipRuntime,
 } from "../containerOwnership.ts";
 import {
+  resolveFixBranch,
   fixedAdvance,
   fixedComplete,
   fixedRollback,
@@ -170,7 +171,6 @@ function recentHumanDecisionNotes(root: string, limit = 3): string {
 import {
   cloneRepository,
   currentHead,
-  divergedRemoteBranch,
   ensureBranch,
   validateRepoUrl,
   type GitCredential,
@@ -208,7 +208,6 @@ import {
   ANALYSIS_REPORT_FILENAME,
   analysisSectionOf,
   createIssueTools,
-  expectedBranch,
   type IssueMrRecheck,
   type IssueToolContext,
 } from "./tools.ts";
@@ -2653,6 +2652,20 @@ export class IssueFlowService {
     state.repo_url ??= merged[0];
     const repo = issueRepoWorkspaces(state, live.root)
       .find((item) => item.url === url)!;
+    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名)。
+    // 命名先行(ADR-0063):分支名在克隆之前解出——基线缺席在克隆前就
+    // 打回,不留停在默认分支上的半截克隆。拉仓路是定名唯一的持久化点:
+    // 首次解出即显式写 state.fix_branch 并保存(生成即持久化),时间戳
+    // 是首次建分支时刻,中断重试不重算,同会话所有仓全程同名。
+    let branch: string | undefined;
+    if (state.scenario === "ticket" && state.ticket) {
+      const known = state.fix_branch;
+      branch = resolveFixBranch(state);
+      if (!known) {
+        state.fix_branch = branch;
+        saveState(live.root, state);
+      }
+    }
     const cloned = !existsSync(join(repo.dir, ".git"));
     if (cloned) {
       this.log(`[issue-flow] ${live.id} 拉仓: ${url}`);
@@ -2683,24 +2696,13 @@ export class IssueFlowService {
       if (live.container?.isAlive) await live.container.exec(MAE_CONTAINER_BOOTSTRAP, live.root,
         { onData: () => {}, timeout: 30 });
     }
-    // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名)。
-    let branch: string | undefined;
-    if (state.scenario === "ticket" && state.ticket) {
-      branch = expectedBranch(state);
+    if (branch) {
       await ensureBranch({
         dataDir: this.options.dataDir,
         repoDir: repo.dir,
         branch,
       });
     }
-    // 同单重跑的遗留检测(2026-08-28 事故):上次运行停止/取消前可能
-    // 已把同名修复分支推上远端,克隆把它带成 origin/<branch>,而本地
-    // 从基线另起——分叉一路憋到 push 才炸。这里把事实带进回执,让
-    // Agent 拉仓当下就向用户报告处置,而不是中途回一句"分支已存在"
-    // 让人摸不着头脑。
-    const remoteBranch = branch
-      ? await divergedRemoteBranch(repo.dir, branch)
-      : undefined;
     const head = await currentHead(repo.dir);
     // 克隆与切分支都以宿主身份落盘,而容器已经在跑:不把整棵仓交回容器
     // 用户,容器内 git add/commit 就是 Permission denied。收口必须压在
@@ -2719,7 +2721,6 @@ export class IssueFlowService {
       cloned,
       ...(branch ? { branch } : {}),
       head,
-      ...(remoteBranch ? { remoteBranch } : {}),
     };
   }
 

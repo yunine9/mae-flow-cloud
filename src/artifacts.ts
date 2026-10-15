@@ -336,7 +336,7 @@ function collectTaskMaterialDocs(taskMaterialRoot?: string): DocEntry[] {
     },
   ];
   definitions.push({ file: "交付经验复盘.md", name: "task-materials/交付经验复盘.md", label: "交付经验复盘.md", purpose: undefined });
-  definitions.push({ file: "交付摘要.md", name: "task-materials/交付摘要.md", label: "交付摘要.md", purpose: undefined });
+  definitions.push({ file: "交付报告.md", name: "task-materials/交付报告.md", label: "交付报告.md", purpose: undefined });
   try {
     const overall = currentStoryFile(taskMaterialRoot);
     if (overall) definitions.push({ file: overall, name: OVERALL_STORY_ARTIFACT,

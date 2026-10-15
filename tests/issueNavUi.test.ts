@@ -189,6 +189,6 @@ test("父行徽章:开发侧挂名下进行中的问题数,与页内「进行中
   // 数据同源:徽章列表走 GET /issues(归属或登记人是自己,ADR-0031),
   // 不许前端从 scope=all 里自筛(服务端收窄规则一变两处就漂)。
   // a874049c 起旁栏各路各自 then 落状态(慢请求不拖任务列表)。
-  assert.match(app, /session\?\.role === "admin" \? Promise\.resolve\(\)\s*\n?\s*: listIssues\(\)\.then\(setMyIssues\)/,
+  assert.match(app, /session\?\.role === "admin" \? Promise\.resolve\(\)\s*\n?\s*: listIssues\(\)\.then\(\(rows\) => \{ if \(currentSession\(\)\) setMyIssues\(rows\); \}\)/,
     "本人问题列表走 listIssues,admin 不拉(其 GET /issues 是全量)");
 });
