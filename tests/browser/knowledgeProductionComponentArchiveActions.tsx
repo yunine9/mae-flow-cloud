@@ -2,6 +2,7 @@ import React from "../../web/node_modules/react";
 import { createRoot } from "../../web/node_modules/react-dom/client";
 import { ComponentKnowledgeArchive } from "../../web/src/ComponentKnowledgeArchive";
 import { DomainKnowledgePublicationStatus } from "../../web/src/DomainKnowledgePublicationStatus";
+import { DomainKnowledgeExtraction } from "../../web/src/DomainKnowledgeExtraction";
 import { ComponentResearch } from "../../web/src/ComponentResearch";
 import type { knowledgeManualArchiveFixtures } from "../fixtures/knowledgeManualArchiveFixture";
 
@@ -30,7 +31,7 @@ const pause = () => new Promise(done => setTimeout(done, 90));
 const check = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
 const buttons = () => [...document.querySelectorAll<HTMLButtonElement>("button")];
 const named = (name: string) => buttons().filter(button => button.textContent?.trim() === name);
-const root = createRoot(document.getElementById("app")!);
+let root = createRoot(document.getElementById("app")!);
 const phase = (value: string) => { document.getElementById("phase")!.textContent = value; };
 async function run() {
   phase("component archive button");
@@ -207,6 +208,54 @@ async function componentPaths() {
   check(document.documentElement.scrollWidth <= innerWidth + 2, "桌面窗口无横向溢出");
   check(!errors.length, errors.join("；")); root.unmount(); return { passed: true, width: innerWidth };
 }
+async function domainIssueInput() {
+  for (const [issue, description] of [["REQ-NEW-ARCHIVE", "本次重新归档的新描述"], [fixture.completed.job.issue_no!, "同一单号的新描述"], ["REQ-CLEAR-DESCRIPTION", ""]]) {
+    phase(`domain recreate ${issue}`);
+    let current = structuredClone(fixture.completed.job), created = 0;
+    const oldPreview = fixture.completed.preview;
+    window.fetch = async (input, init) => {
+      const path = String(input), method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      if (path === `/domain-extraction/${current.id}`) return new Response(JSON.stringify(current));
+      if (path.startsWith("/knowledge-review/")) return new Response(JSON.stringify({ notes: [] }));
+      if (path.endsWith("/archive/preview")) return new Response(JSON.stringify(oldPreview));
+      if (path.endsWith("/archive-targets/preview")) return new Response(JSON.stringify({ targets: body.targets, archive_revision: 1,
+        documents: current.documents.map(document => ({ ...document, path: `${body.targets.find((target: any) => target.id === document.target_id).docs_path}/${document.id}.md` })) }));
+      if (path.endsWith("/archive-targets")) {
+        current = { ...current, archive_revision: 1, knowledge_layout: "directory-v1", knowledge_target: body.targets[0], repositories: body.targets.slice(1) };
+        return new Response(JSON.stringify(current));
+      }
+      if (path.endsWith("/archive/create")) {
+        check(body.issue_no === issue, "最终创建MR使用本次填写的单号");
+        check((body.issue_description ?? "") === description, "最终创建MR使用本次描述，留空不恢复旧描述");
+        check(body.replace_existing === true, "保留重新创建并撤销旧MR的决定");
+        created++;
+        return new Response(JSON.stringify({ ...oldPreview, issue_no: issue, issue_description: description }));
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    };
+    history.replaceState({}, "", "?domainIssueInput=1");
+    root.render(<DomainKnowledgeExtraction focusId={current.id} surface="knowledge" focused />);
+    for (let i = 0; i < 30 && !named("归档").length; i++) await pause();
+    check(named("归档")[0], "领域任务已有归档可打开"); named("归档")[0].click();
+    for (let i = 0; i < 30 && !document.querySelector('[aria-label="归档关联单号"]'); i++) await pause();
+    const fill = async (label: string, value: string) => {
+      const field = document.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!; check(field, `missing ${label}`);
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value); field.dispatchEvent(new Event("input", { bubbles: true })); await pause();
+    };
+    await fill("归档关联单号", issue); await fill("归档单号描述", description);
+    const replace = oldPreview.actions.find(action => action.id === "replace-archive")!;
+    check(named(replace.label)[0], "已有MR可重新创建"); named(replace.label)[0].click();
+    for (let i = 0; i < 30 && !document.querySelector('[aria-label="本次归档单号"]'); i++) await pause();
+    check(document.querySelector<HTMLInputElement>('[aria-label="本次归档单号"]')?.value === issue, "切换路径确认窗口保留新单号");
+    check(document.querySelector<HTMLInputElement>('[aria-label="本次归档单号描述"]')?.value === description, "路径确认窗口显示新描述");
+    for (let i = 0; i < 30 && named("确认并重新创建 MR")[0]?.disabled !== false; i++) await pause();
+    check(named("确认并重新创建 MR")[0]?.disabled === false, "路径预览完成可确认"); named("确认并重新创建 MR")[0].click();
+    for (let i = 0; i < 30 && !created; i++) await pause();
+    check(created === 1, "路径确认后只创建一次，旧预览没有覆盖本次输入");
+    root.unmount(); root = createRoot(document.getElementById("app")!); await pause();
+  }
+  check(!errors.length, errors.join("；")); return { passed: true, width: innerWidth };
+}
 const scenario = new URLSearchParams(location.search);
-const operation = scenario.has("componentPaths") ? componentPaths() : scenario.has("unpublishedArchive") ? unpublishedArchive() : scenario.has("endpointSwitch") ? endpointSwitch() : run();
+const operation = scenario.has("domainIssueInput") ? domainIssueInput() : scenario.has("componentPaths") ? componentPaths() : scenario.has("unpublishedArchive") ? unpublishedArchive() : scenario.has("endpointSwitch") ? endpointSwitch() : run();
 operation.then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
