@@ -4110,6 +4110,8 @@ export interface IssueOnceGeneratedSessionRow {
   verify_pass: boolean;
   /** 一次解决:定位与验证双一次。 */
   solved_pass: boolean;
+  /** 发起人(发起登记的登录账号;缺席按缺省处理,#353 字段纪律)。 */
+  reporter?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(一次定位剔除转正会话后,分母可
