@@ -123,8 +123,8 @@ export function migrateContinuousReviewTask(input: {
   }
   assertEqual(archived?.config?.["单号"], input.ticket, "任务单号");
   assertEqual(archived?.config?.["基线分支"], input.baseline, "基线分支");
-  const expectedBranch = input.sourceBranch || currentBranch(input.cwd);
-  assertEqual(archived?.config?.["分支名"], expectedBranch || undefined, "工作分支");
+  const workspaceBranch = input.sourceBranch || currentBranch(input.cwd);
+  assertEqual(archived?.config?.["分支名"], workspaceBranch || undefined, "工作分支");
   const sha = lastVerifiedSha(archived);
   if (!sha || !isAncestor(input.cwd, sha)) {
     throw new ContinuousReviewMigrationError(

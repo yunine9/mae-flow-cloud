@@ -811,9 +811,14 @@ test("push_branch 阶段性交付:未提交改动保留并明确告知，提交�
   const origin = bareOrigin(dataDir);
   const repoDir = join(dataDir, "repo", "origin");
   execFileSync("git", ["clone", "-q", origin, repoDir], { env: GIT_ENV });
-  execFileSync("git", ["-C", repoDir, "checkout", "-q", "-b",
-    `master_dev_${TICKET}`], { env: GIT_ENV });
+  // 会话修复分支(ADR-0063):基线_工号_单号_时间戳;夹具用定死的假
+  // 时间戳代表"会话已定名"。
+  const branch = `master_dev_${TICKET}_20261015090000`;
+  execFileSync("git", ["-C", repoDir, "checkout", "-q", "-b", branch],
+    { env: GIT_ENV });
   const state = directState(dataDir, "ticket", "mr_green");
+  state.baseline = "master";
+  state.fix_branch = branch;
   state.repo_urls = [origin];
   state.repo_url = origin;
   const { byName, textOf } = directTools(state, dataDir);

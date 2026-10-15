@@ -82,6 +82,9 @@ function seedIssue(dataDir: string, options: SeedOptions): string {
     title: "仓清单调整", description: "", source: "dts",
     ticket: TICKET,
     repo_url: options.repoUrls[0], repo_urls: options.repoUrls,
+    // 修复分支以基线为前缀(ADR-0063):有单会话拉仓的硬前提;夹具用
+    // 定死的假时间戳代表"会话已定名"。
+    baseline: "master", fix_branch: `master_dev_${TICKET}_20261015090000`,
     ...(options.moduleId ? { module_id: options.moduleId } : {}),
     ...(options.moduleName ? { module: options.moduleName } : {}),
     scenario: "ticket", round: 1,

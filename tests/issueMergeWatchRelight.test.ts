@@ -24,7 +24,6 @@ import { FakeGitPlatform } from "../src/gitPlatform.ts";
 import { mfcTemp } from "./mfcTmp.ts";
 
 const TICKET = "DTS-2026-1001";
-const BRANCH = `master_dev_${TICKET}`;
 
 const fastPoll = {
   models: () => ({}),
@@ -187,7 +186,8 @@ test("返工第二轮进 mr_green:推送分支即带上合入状态循环,合入
     }, "第二轮推送回合收口");
     assert.equal(pushed.mrs?.length, 1, "第二轮仍延用同一 MR");
     // 人在平台上把 MR 合了:循环在跑,事实当轮入账(全程未重启进程)。
-    platform.settleMr(BRANCH, "merged");
+    // 按会话真实分支名结算(ADR-0063:分支名是时间戳新名,不再有常量)。
+    platform.settleMr(pushed.pushes![0].branch, "merged");
     const merged = await until(() => {
       const snapshot = service.get(created.id);
       return snapshot.mrs?.[0]?.merged_at ? snapshot : undefined;
@@ -266,8 +266,9 @@ test("尚无 MR 的会话:推送不启动合入状态循环(有 MR 才监看)", 
 });
 
 test("循环已在跑时再挂流水线监看:不出现第二条并行循环", async () => {
-  // 单据号与分支名自洽(push_branch 的机械门禁按 master_<工号>_<单号>
-  // 核对,与文件顶部的 DTS-2026-1001 各记各的)。
+  // 单据号与分支名自洽(push_branch 的机械门禁按会话定名的修复分支
+  // 核对;此现场是老会话升级形态——推送账记着旧格式名,门禁沿用旧名,
+  // 与文件顶部的 DTS-2026-1001 各记各的)。
   const ticket = "DTS-2026-1002";
   const branch = `master_dev_${ticket}`;
   const dataDir = mfcTemp("mfc-issue-merge-single-");

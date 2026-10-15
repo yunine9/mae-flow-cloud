@@ -624,7 +624,9 @@ test("单号门禁:未绑定单号时 push_branch 被机械拒绝", async () => 
 test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付同格式)", async () => {
   const dataDir = mfcTemp("mfc-issue-push-");
   const origin = bareOrigin(dataDir);
-  const branch = "master_dev_DTS2026082001317";
+  // 会话修复分支(ADR-0063):基线_工号_单号_时间戳;夹具用定死的假
+  // 时间戳代表"会话已定名",推送/MR 管道测试不关心时间戳本身。
+  const branch = "br_V100R026C10_release_dev_DTS2026082001317_20261015090000";
   // 假交付平台:记录请求形状,回 MR 链接——与适配层 POST /mr 同构。
   const seen: Array<{ headers: Record<string, string>; body: any }> = [];
   const platform = createServer((request, response) => {
@@ -674,6 +676,7 @@ test("宿主推送与提 MR:门禁、真推送、公共 mrClient(与需求交付
     source: "dts",
     repo_url: origin, repo_urls: [origin],
     baseline: "br_V100R026C10_release",
+    fix_branch: branch,
     scenario: "ticket", round: 1,
     stage: "mr_green",
     stage_states: ["done", "done", "done", "done", "done"],

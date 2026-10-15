@@ -17,10 +17,6 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 拉仓指引——
 {{stage_brief}}
 
-## pull.remote_branch_warn
-
-遗留警报: 远端已存在同名修复分支 {{branch}}@{{remote}},与本地(从基线另起)分叉——疑似上次运行停止/取消前推送的遗留,普通推送会被拒(非快进)。后续 push_branch 首次即带 force=true 覆盖即可(租赁式核对远端旧 tip;该分支已有 MR 时覆盖后原 MR 随之更新,不要重复创建),不必请用户去平台删远端分支。
-
 ## dts.briefing
 
 单据详情已获取——通读单据后调 complete_stage 申报完成(材料到位不会自动推进)。
@@ -51,7 +47,7 @@ skill 圈选卡正等用户作答(圈选必读的仓内排障知识)。请立即
 
 ## push.branch_mismatch
 
-分支名不符合交付规则: 应为 {{expected}},实际 {{branch}}。修复分支命名固定为 master_<工号>_<单号>
+分支名不符合交付规则: 应为 {{expected}},实际 {{branch}}。修复分支名由平台生成并全程固定(基线_工号_单号_时间戳),以 pull_repo 回执为准;不确定时省略 branch 参数,直接推送当前分支
 
 ## push.dirty
 
