@@ -113,6 +113,7 @@ async function runToAnalysisConfirm(origin: string, tier: "1" | "3") {
   const created = service.create({
     account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
     repoUrl: origin,
+    baseline: "master",
   });
   const confirmed = await until(() => {
     const issue = service.get(created.id);

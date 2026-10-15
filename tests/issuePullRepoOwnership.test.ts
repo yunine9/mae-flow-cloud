@@ -35,7 +35,9 @@ const GIT_ENV = {
 };
 
 const TICKET = "DTS-2026-1025";
-const BRANCH = `master_dev_${TICKET}`;
+/** 会话修复分支(ADR-0063):基线_工号_单号_时间戳;夹具用定死的假
+ * 时间戳代表"会话已定名",属主交接测试不关心时间戳本身。 */
+const BRANCH = `master_dev_${TICKET}_20261015090000`;
 
 /** 造一个带初始提交的裸仓远端(克隆源)。 */
 function bareOrigin(root: string): string {
@@ -68,6 +70,7 @@ function handcraftLive(service: IssueFlowService, root: string, origin: string):
     updated_at: new Date().toISOString(),
     title: "属主交接回归", description: "", source: "dts",
     ticket: TICKET, repo_url: origin, repo_urls: [origin],
+    baseline: "master", fix_branch: BRANCH,
     scenario: "ticket", round: 1,
     stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
     status: "idle", stage: "prep_repo", stage_note: "",

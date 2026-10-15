@@ -433,6 +433,12 @@ export interface IssueSessionState {
    * 登记自带仓区分开;摘除仓不销痕(指派史是审计事实)。 */
   assigned_repos?: string[];
   baseline?: string;
+  /** 会话修复分支的定名(ADR-0063):首次建分支时按
+   * `<基线>_<工号>_<单号>_<yyyymmddhhmmss>` 生成(宿主本地时间)并
+   * 即刻落盘,此后是会话级常量——所有仓、推送、MR 全程同名,绝不
+   * 重算。老会话升级:推送账/MR 账挂着旧格式分支名的沿用账里的名字。
+   * 不上 wire(工作台无消费面,分支名经推送/MR 账与回执可见)。 */
+  fix_branch?: string;
   product_version?: string;
   /** 业务模块:module_id 是登记时选定的一等实体(带出 repo_urls 的
    * 来源留痕);module 是展示/报告用的名称标签,由模块名派生。
@@ -615,6 +621,53 @@ export function issueRepoWorkspaces(
   });
 }
 
+/** 宿主本地时间的分支时间戳(yyyymmddhhmmss,ADR-0063):取时刻由
+ * 调用方保证是首次建分支时刻,生成后持久化,不再重算。 */
+function fixBranchStamp(at: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}`
+    + `${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`;
+}
+
+/** 已定名的修复分支(纯读):state.fix_branch 在场直接用;否则看推送
+ * 账/MR 账挂着的分支名(老会话升级兼容——换名会让在途推送与 MR 对
+ * 不上)。都没有 = 本会话从未定过名,返回 undefined,调用方据此区分
+ * "沿用已定名"与"要生成新名"。 */
+export function fixedFixBranch(state: IssueSessionState): string | undefined {
+  return state.fix_branch
+    ?? state.pushes?.find((item) => item.branch)?.branch
+    ?? state.mrs?.find((item) => item.branch)?.branch;
+}
+
+/** 会话修复分支的权威定名(ADR-0063),三步解出、定后不变:
+ * 1. state.fix_branch 在场直接用(已定名的会话);
+ * 2. 老会话升级兼容:推送账/MR 账挂着旧格式(`master_<工号>_<单号>`)
+ *    分支名的在途会话沿用账里的名字——换名会让在途推送与 MR 对不上;
+ * 3. 新会话按 `<基线>_<工号>_<单号>_<yyyymmddhhmmss>` 生成(宿主本地
+ *    时间,首次建分支时刻)。基线缺席直接报错,不回退 master——基线
+ *    在有单会话必在(手工登记缺版本 409、DTS 无映射不发车、自动接单
+ *    带匹配版本),缺席只可能来自绕过路由直调服务。
+ *
+ * 纯读契约:本函数不写状态、不落盘。持久化只由拉仓路显式负责
+ * (pullRepoFor 在首次解出后写 state.fix_branch 并 saveState——生成
+ * 即持久化,时间戳就此定死,中断不重算)。推送门禁纯读比对;remove_repo
+ * 门禁纯读,解不出已定名(fixedFixBranch 返回 undefined)就跳过远端
+ * 同名探测——从未拉仓的会话不可能推过本会话分支,探测无意义。 */
+export function resolveFixBranch(state: IssueSessionState): string {
+  const fixed = fixedFixBranch(state);
+  if (fixed) return fixed;
+  const baseline = state.baseline?.trim();
+  if (!baseline) {
+    throw new Error("会话没有基线分支,无法命名修复分支:"
+      + "修复分支以拉仓基线为前缀(基线_工号_单号_时间戳),"
+      + "请先补登记产品版本或为会话配置基线,再重新拉仓");
+  }
+  if (!state.ticket) {
+    throw new Error("会话没有绑定单号,不需要也不会创建修复分支");
+  }
+  return `${baseline}_${state.account}_${state.ticket}_${fixBranchStamp(new Date())}`;
+}
+
 export function summarize(state: IssueSessionState): IssueSummary {
   // mr_gate 是 MR 验绿门的内部受理账(流程机制状态):不上 wire——
   // 服务端投影多出前端镜像没有的字段会让契约对账当场红;要上前端
@@ -630,6 +683,10 @@ export function summarize(state: IssueSessionState): IssueSummary {
     // reference_repos(参考组件仓目录快照,ADR-0054)不上 wire:它是
     // 开场词的注入源,工作台无消费面;要上前端先补镜像与样例,不白送。
     reference_repos: _referenceRepos,
+    // fix_branch(修复分支定名,ADR-0063)不上 wire:会话内部机制账,
+    // 工作台的分支名事实都来自推送/MR 账与回执;要上前端先补镜像与
+    // 样例,不白送。
+    fix_branch: _fixBranch,
     ...rest } = state;
   return {
     ...rest,

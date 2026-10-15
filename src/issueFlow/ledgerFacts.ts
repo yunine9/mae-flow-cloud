@@ -1,6 +1,7 @@
 /**
  * 转移账与检视账的事实投影(ADR-0044,首次生成归属的共享地基):
- * 推送账逐笔、红灯三种处置结局、外部头观测、回退轮、验证失败、检视
+ * 推送账(同提交回放去重,#506)、红灯三种处置结局、外部头观测、回退
+ * 轮、验证失败、检视
  * 批次送出、反馈事件归并——判定键与解析集中在此单一来源,写账文案
  * 要改就连这里一起改(归档冻结快照 metricsSnapshot、一次率 onceRates
  * 与首次生成归属层都消费这一份,不许各写一份漂移)。纯投影:只读
@@ -29,7 +30,10 @@ export const EXTERNAL_HEAD_COMMIT =
 /** 回退轮次(fixedRollback 的「第 N 轮:原因」)。 */
 export const ROLLBACK_NOTE = /^第 \d+ 轮:(.*)$/s;
 
-/** 转移账逐笔推送(仓、分支、提交号、时刻),账面顺序即推送顺序。 */
+/** 转移账推送投影(仓、分支、提交号、时刻),账面顺序即推送顺序。
+ *  同 (仓,分支,提交号) 的重推只留首笔(#506):重启续跑等触发的同
+ *  提交回放不携带任何新提交,不是新推送——推送计数、逐笔差异、
+ *  返工归属三个消费方按唯一提交口径,不再被回放翻转归类。 */
 export interface LedgerPush {
   repo: string;
   branch: string;
@@ -42,13 +46,17 @@ export function ledgerPushes(
   transitions: ReadonlyArray<{ note: string; at: string }>,
 ): LedgerPush[] {
   const pushes: LedgerPush[] = [];
+  const seen = new Set<string>();
   for (const transition of transitions) {
     const match = PUSH_NOTE.exec(transition.note);
-    if (match) {
-      pushes.push({
-        repo: match[1]!, branch: match[2]!, sha: match[3]!, at: transition.at,
-      });
-    }
+    if (!match) continue;
+    const push: LedgerPush = {
+      repo: match[1]!, branch: match[2]!, sha: match[3]!, at: transition.at,
+    };
+    const key = `${push.repo}\u0000${push.branch}\u0000${push.sha}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pushes.push(push);
   }
   return pushes;
 }
