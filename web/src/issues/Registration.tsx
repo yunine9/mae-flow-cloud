@@ -61,6 +61,7 @@ import {
   type PersonIdentity,
 } from "../api";
 import { userLabel, UserPicker, type UserOption } from "../UserPicker";
+import { confirmDialog } from "../ConfirmDialog";
 import { EnvironmentPicker } from "../EnvironmentPicker";
 import { HeaderFilter } from "../HeaderFilter";
 import { DescriptionEditor } from "./DescriptionEditor";
@@ -440,6 +441,32 @@ function ManualRegister({
     setPickedEnv(null);
   }
 
+  // 发起即终止草稿(2026-10-15 拍板):草稿是未兑现的登记意图,发起成功
+  // 或主动清空后意图已了——显式删本地草稿并整表重置(含产品版本),
+  // 不再靠重置后的防抖写间接刷新:那笔写 400ms 内被刷新/关页取消时,
+  // 旧草稿会原地存活到下次打开,整份旧内容回魂。
+  function resetRegistration() {
+    setTitle("");
+    setDescription(ISSUE_DESCRIPTION_TEMPLATE);
+    setModuleId("");
+    setProductVersion("");
+    setAssigneeManual("");
+    clearPickedEnv();
+    try { localStorage.removeItem(draftKey); } catch { /* 草稿是旁路,坏了就坏了吧 */ }
+  }
+
+  // 清空重填:填了一半想放弃重来的确定出口,不再逐栏手删。破坏性动作
+  // 走全站 confirmDialog 二次确认(spec #52),不用裸 window.confirm。
+  async function clearRegistration() {
+    if (!await confirmDialog({
+      title: "清空登记表单",
+      message: "标题、描述、模块、版本、环境与责任人会一并清空,本地草稿同时删掉。",
+      confirmLabel: "清空重填",
+      danger: true,
+    })) return;
+    resetRegistration();
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (busy || submitDisabled) return;
@@ -488,10 +515,8 @@ function ManualRegister({
         assignee,
       });
       // 重置回模板而非空串(#273):下一条登记仍从标准格式起步,两套
-      // 空态不并存。
-      setTitle(""); setDescription(ISSUE_DESCRIPTION_TEMPLATE); setModuleId("");
-      setAssigneeManual("");
-      clearPickedEnv();
+      // 空态不并存;发起即终止草稿,显式删本地存档(2026-10-15 拍板)。
+      resetRegistration();
       setLastCreated(created);
       onRegistered();
     } catch (reason) {
@@ -531,6 +556,11 @@ function ManualRegister({
       {/* 上传进行态指示住编辑器内右上角(DescriptionEditor 自持),
           页脚不再重复一份。 */}
       <div className="issue-desc-foot flex min-h-6 items-center justify-end gap-2.5">
+        {/* 清空重填(2026-10-15 拍板):填一半放弃重来的确定出口,二次
+            确认后整表+本地草稿一并清掉;置于页脚不显眼处防误触。 */}
+        <Button type="button" variant="ghost" size="xs" onClick={() => void clearRegistration()}>
+          清空重填
+        </Button>
         {/* 一键复制:描述写完想带走(贴工单/飞书)都不用手选全选;
             空描述不可点。 */}
         <CopyDescriptionButton markdown={description}

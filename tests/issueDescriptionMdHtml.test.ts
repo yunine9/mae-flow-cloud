@@ -13,8 +13,12 @@ const strip = (html: string) => html.replace(/<[^>]+>/g, "");
 
 test("模板逐字保留:转换只加壳不动字(原样拦截依赖)", () => {
   const html = markdownToEditorHtml(ISSUE_DESCRIPTION_TEMPLATE);
-  for (const fragment of ["基本信息", "发生时间", "复现概率：必现 / 偶现",
-    "触发步骤：", "1.", "2.", "实际现象：", "预期结果："]) {
+  // 片段清单从常量逐行派生,不重述模板文案:模板再改本测试零维护,
+  // 「转换不丢字」的保证照旧(空行转分段,有字行为最小断言单元)。
+  const fragments = ISSUE_DESCRIPTION_TEMPLATE.split("\n")
+    .map((line) => line.trim()).filter(Boolean);
+  assert.ok(fragments.length >= 3, "模板至少三栏,派生片段不应为空");
+  for (const fragment of fragments) {
     assert.ok(strip(html).includes(fragment), `模板片段丢失: ${fragment}`);
   }
   assert.match(html, /<p>/);
