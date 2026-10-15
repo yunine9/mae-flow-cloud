@@ -42,7 +42,8 @@ import {
   MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
   issueRepoWorkspaces,
-  expectedBranch,
+  fixedFixBranch,
+  resolveFixBranch,
   raiseGate,
   recordTransition,
   ENV_SCOPE_LABELS,
@@ -520,26 +521,30 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
           }));
         }
       }
-      // 门禁②/③(现场现查,不信缓存):远端不可判定=保守拒;同名
-      // 修复分支在=拒并指路(先删远端分支)。与单号门禁同一哲学:
-      // 宁误拦不误放。无单(manual)会话没有修复分支可言——探测会拿
-      // 拼出来的假分支名空转,直接跳过这道门。
+      // 门禁②/③(现场现查,不信缓存):远端不可判定=保守拒;已定名
+      // 的修复分支还在远端=拒并指路(先删远端分支)。与单号门禁同一
+      // 哲学:宁误拦不误放。纯读(ADR-0063 读写分离):只认已定名
+      // (fix_branch 或推送/MR 账挂名);无单(manual)会话没有修复分支
+      // 可言,解不出已定名的会话从未拉仓——没拉过仓就不可能推过本
+      // 会话分支,远端同名探测无意义,直接跳过这道门。
       if (state.ticket) {
-        const branch = expectedBranch(state);
-        const probe = await remoteBranchState({
-          dataDir: ctx.dataRoot,
-          repoUrl: target.url,
-          branch,
-          credential: ctx.gitCredential?.(),
-        });
-        if (!probe.reachable) {
-          fail(promptCopy("receipts", "remove.remote_unreachable",
-            { url: target.url }));
-        }
-        if (probe.tip) {
-          fail(promptCopy("receipts", "remove.remote_branch_left", {
-            branch, url: target.url, tip: probe.tip.slice(0, 12),
-          }));
+        const fixed = fixedFixBranch(state);
+        if (fixed) {
+          const probe = await remoteBranchState({
+            dataDir: ctx.dataRoot,
+            repoUrl: target.url,
+            branch: fixed,
+            credential: ctx.gitCredential?.(),
+          });
+          if (!probe.reachable) {
+            fail(promptCopy("receipts", "remove.remote_unreachable",
+              { url: target.url }));
+          }
+          if (probe.tip) {
+            fail(promptCopy("receipts", "remove.remote_branch_left", {
+              branch: fixed, url: target.url, tip: probe.tip.slice(0, 12),
+            }));
+          }
         }
       }
       // 双保险:映射目录解析后必须严格落在会话工作区内(映射已锚死,
@@ -867,14 +872,14 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     const branch = String(params.branch ?? "").trim()
       || await currentBranch(repo.dir);
     if (!branch) fail("没有可推送的分支(缺 branch 参数且当前不在分支上)");
-    const expected = expectedBranch(state);
+    const expected = resolveFixBranch(state);
     if (branch !== expected) {
       fail(promptCopy("receipts", "push.branch_mismatch",
         { expected, branch }));
     }
     // 强制覆盖意图(ADR-0063 修订):新命名下正常流程不会再撞远端同名
-    // 分支,force 保留防平台侧罕见异动。覆盖按租赁式核对远端同名分支
-    // tip(issueGit 侧),对不上即拒——不盲盖。
+    // 分支,force 保留防平台侧罕见异动。覆盖前先现查远端同名分支当前
+    // 位置(issueGit 侧),对不上即拒推——不盲盖。
     const force = params.force === true;
     // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
     // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
@@ -917,7 +922,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       + "(<基线>_<工号>_<单号>_<时间戳>,平台生成并全程固定,以拉仓回执"
       + "为准);多仓交付逐仓串行推送,推送后返回 SHA。"
       + "force=true 强制覆盖远端同名分支:新命名下正常流程不会撞名,"
-      + "只防平台侧罕见异动——覆盖按租赁式核对远端旧 tip,不盲盖。",
+      + "只防平台侧罕见异动——覆盖前先现查远端同名分支当前位置,对不上"
+      + "即拒推,不盲盖。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -930,7 +936,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       force: Type.Optional(Type.Boolean({
         description:
           "强制推送:覆盖远端同名分支(新命名下正常流程不会撞名,"
-          + "只防平台侧罕见异动;覆盖前按租赁式核对远端旧 tip)",
+          + "只防平台侧罕见异动;覆盖前先现查远端旧位置,对不上即拒推)",
       })),
     }),
     async execute(_toolCallId: string, params: any) {

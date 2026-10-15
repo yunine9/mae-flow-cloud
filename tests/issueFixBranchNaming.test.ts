@@ -224,7 +224,7 @@ function seedLegacySession(dataDir: string, origin: string): void {
     "-m", `[${TICKET}][fix] 升级前的修复提交`], { env: GIT_ENV });
 }
 
-test("老会话沿用旧名:推送账记着旧格式分支时,推送门禁认旧名并回写 fix_branch", async () => {
+test("老会话沿用旧名:推送账记着旧格式分支时,推送门禁纯读认旧名,不回写 fix_branch", async () => {
   const dataDir = mfcTemp("mfc-fixbranch-legacy-");
   const origin = bareOriginAt(dataDir, "origin.git");
   seedLegacySession(dataDir, origin);
@@ -244,8 +244,9 @@ test("老会话沿用旧名:推送账记着旧格式分支时,推送门禁认旧
       return issue.status === "idle" ? issue : undefined;
     }, "老会话推送回合收口");
     const state = loadState(join(dataDir, "issues", "issue-1"));
-    assert.equal(state?.fix_branch, LEGACY_BRANCH,
-      "升级兼容:沿用推送账里的旧格式分支名,不换新名");
+    assert.equal(state?.fix_branch, undefined,
+      "推送门禁纯读(ADR-0063 读写分离):沿用账里的旧名做比对,不回写落盘;"
+      + "旧名要固化进 fix_branch 只发生在拉仓路");
     assert.equal(service.get("issue-1").pushes?.[0]?.branch, LEGACY_BRANCH,
       "推送账继续记旧名");
     const remoteTip = spawnSync("git",
@@ -383,6 +384,44 @@ test("推送门禁收:会话持久化的分支名推送成功,远端真实到位
     { encoding: "utf-8" });
   assert.equal(remoteTip.status, 0, "远端真实到位");
   assert.equal(remoteTip.stdout.trim(), record?.sha);
+});
+
+test("remove_repo 门禁纯读:解不出已定名(无 fix_branch 且账里没有)跳过远端探测", async () => {
+  const dataDir = mfcTemp("mfc-fixbranch-rmread-");
+  // 立即拒连地址:门禁若发起探测必以「远端状态查不到」保守拒。
+  // 会话从未拉仓(无 fix_branch、推送/MR 账皆空)不可能推过本会话
+  // 分支,远端同名探测无意义——放行即证明探测被跳过。
+  const unreachable = "https://127.0.0.1:9/never-pulled.git";
+  const now = new Date().toISOString();
+  const state: IssueSessionState = {
+    id: "issue-rmread", account: "dev", created_at: now, updated_at: now,
+    title: "移除纯读", description: "", source: "dts", ticket: TICKET,
+    repo_url: unreachable, repo_urls: [unreachable],
+    baseline: BASELINE,
+    scenario: "ticket", round: 1,
+    stage_states: ["done", "done", "done", "done", "pending"],
+    status: "idle", stage: "mr_green", stage_note: "", stage_at: now,
+  };
+  const ctx: IssueToolContext = {
+    state,
+    workspace: dataDir,
+    dataRoot: dataDir,
+    persist: () => undefined,
+    pullRepo: async (url) => ({
+      dir: `repo/${url.split("/").at(-1)}`, cloned: true, head: "a".repeat(40),
+    }),
+  };
+  const tools = createIssueTools(ctx) as Array<{
+    name: string;
+    execute: (id: string, params: any) => Promise<unknown>;
+  }>;
+  const remove = tools.find((tool) => tool.name === "remove_repo");
+  assert.ok(remove, "应注册 remove_repo");
+  const receipt = await remove!.execute("x", { repo: unreachable }) as {
+    content: Array<{ text: string }>;
+  };
+  assert.match(receipt.content[0].text, /已移除代码仓/,
+    "纯读门禁不放探测:从未拉仓的会话直接放行移除");
 });
 
 // ---- 遗留警报退役:远端挂着旧运行分支,拉仓回执不再报警 ----

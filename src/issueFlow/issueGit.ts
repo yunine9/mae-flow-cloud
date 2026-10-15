@@ -454,8 +454,8 @@ export async function pushFromIssueWorkspace(options: {
       const raw = stderrText || stdoutText;
       // 非快进(ADR-0063 后的罕见异动:新命名让正常流程不再撞远端
       // 同名分支,force 是兜底能力):光透 git 原文等于让 AI 猜——
-      // 点名原因与处置(租赁式核对保证不盲盖;强制尝试被拒则提示
-      // 核对远端,不教盲目重试)。
+      // 点名原因与处置(覆盖前现查远端同名分支当前位置,对不上即拒推,
+      // 不盲盖;强制尝试被拒则提示核对远端,不教盲目重试)。
       const rejected = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
         .test(`${stderrText}\n${stdoutText}`);
       const staleBranch = !rejected ? "" : options.force === true

@@ -88,7 +88,7 @@ import {
   type ContainerOwnershipRuntime,
 } from "../containerOwnership.ts";
 import {
-  expectedBranch,
+  resolveFixBranch,
   fixedAdvance,
   fixedComplete,
   fixedRollback,
@@ -2643,14 +2643,17 @@ export class IssueFlowService {
       .find((item) => item.url === url)!;
     // 有单场景:修复分支统一由宿主切好(分支名烧着单号,不交给起名)。
     // 命名先行(ADR-0063):分支名在克隆之前解出——基线缺席在克隆前就
-    // 打回,不留停在默认分支上的半截克隆。首次定名即刻落盘(生成即
-    // 持久化):时间戳是首次建分支时刻,中断重试不重算,同会话所有仓
-    // 全程同名。
+    // 打回,不留停在默认分支上的半截克隆。拉仓路是定名唯一的持久化点:
+    // 首次解出即显式写 state.fix_branch 并保存(生成即持久化),时间戳
+    // 是首次建分支时刻,中断重试不重算,同会话所有仓全程同名。
     let branch: string | undefined;
     if (state.scenario === "ticket" && state.ticket) {
       const known = state.fix_branch;
-      branch = expectedBranch(state);
-      if (!known) saveState(live.root, state);
+      branch = resolveFixBranch(state);
+      if (!known) {
+        state.fix_branch = branch;
+        saveState(live.root, state);
+      }
     }
     const cloned = !existsSync(join(repo.dir, ".git"));
     if (cloned) {
