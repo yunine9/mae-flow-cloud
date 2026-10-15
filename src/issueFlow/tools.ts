@@ -24,7 +24,6 @@
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
-import { deliveryBranchName } from "../deliveryBranchName.ts";
 import { Type } from "typebox";
 import { dirname, join, resolve, sep } from "node:path";
 import {
@@ -43,6 +42,7 @@ import {
   MR_GREEN_ENV_VERIFY_NOTE,
   fixedStages,
   issueRepoWorkspaces,
+  expectedBranch,
   raiseGate,
   recordTransition,
   ENV_SCOPE_LABELS,
@@ -141,15 +141,13 @@ export interface IssueToolContext {
   startWarmup?: () => void;
   /** 拉仓(2026-08-28 拍板:克隆是 Agent 的工具,不是平台自动动作)。
    * 宿主实现:登记合并 → 带凭据克隆到 repo/<仓名>/ →(有单场景)
-   * 建修复分支。回执只含事实,凭据永不进结果。remoteBranch 非空
-   * = 远端已有同名修复分支且与本地分叉(同单重跑的上次遗留)。
-   * 基线分支在远端缺失时整次失败抛错(ADR-0038),不降级默认分支。 */
+   * 建修复分支。回执只含事实,凭据永不进结果。基线分支在远端缺失时
+   * 整次失败抛错(ADR-0038),不降级默认分支。 */
   pullRepo(url: string): Promise<{
     dir: string;
     cloned: boolean;
     branch?: string;
     head: string;
-    remoteBranch?: string;
     /** 命中公共组件仓目录(ADR-0054):只读参考件,不进登记清单。 */
     reference?: boolean;
   }>;
@@ -180,10 +178,6 @@ function ok(text: string) {
 
 function fail(text: string): never {
   throw new Error(text);
-}
-
-export function expectedBranch(state: IssueSessionState): string {
-  return deliveryBranchName("master", state.account, state.ticket!);
 }
 
 /** 缺网管环境时的平台闸(拉日志/换库现场补配,2026-08-28):举闸后
@@ -399,7 +393,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     description:
       "把一个代码仓加入会话并克隆到 repo/<仓名>/(宿主带凭据执行,你只见"
       + "结果事实)。幂等:已克隆的仓直接回报。有单场景顺带创建修复分支 "
-      + "master_<工号>_<单号>;基线分支在远端不存在时拉仓整次失败,如实"
+      + "<基线>_<工号>_<单号>_<时间戳>(平台生成并全程固定,以回执为准);"
+      + "基线分支在远端不存在时拉仓整次失败,如实"
       + "向用户报告,不要在别的分支上继续。"
       + "发现缺仓就调它:登记清单里的仓、用户给的地址都经它落地。"
       + "命中公共组件仓目录(组件仓库表)的地址落成参考仓——只读参考件,"
@@ -418,10 +413,7 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
         source: "platform",
         note: `代码仓已拉取: ${facts.dir}${facts.cloned ? "(新克隆)" : "(已在场)"}`
           + `${facts.branch ? `,分支 ${facts.branch}` : ""}`
-          + `${facts.reference ? "·参考仓(只读)" : ""}`
-          + `${facts.remoteBranch
-          ? `——⚠ 远端同名修复分支遗留@${facts.remoteBranch}(与本地分叉)`
-          : ""}`,
+          + `${facts.reference ? "·参考仓(只读)" : ""}`,
       });
       ctx.persist();
       // 拉仓只落地,不再机械推进(2026-08-28 拍板:出口=complete_stage
@@ -441,12 +433,6 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
             + "推送/交付工具对它不可达;需要修改时请用户在元信息页签按"
             + "普通地址指派;指派后重新拉取,即转为平等关联仓)"
           : ""}`
-        + `${facts.remoteBranch
-          ? `\n- ` + promptCopy("receipts", "pull.remote_branch_warn", {
-            branch: facts.branch ?? "",
-            remote: facts.remoteBranch,
-          })
-          : ""}`
         + `${guide}`);
     },
   }));
@@ -463,8 +449,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       "把一个仓从本会话移除(仅限用户指派时调用):移除=确认该仓与本"
       + "问题无关,若已有与该仓相关的分析思路或结论,应先重新审视、必要"
       + "时修订后再移除。平台机械门禁:①业务模块的绑定仓不可移除;"
-      + "②远端同名修复分支(master_<工号>_<单号>)还在时不可移除,"
-      + "要请用户先在代码平台删除远端分支;③远端状态查不到(网络/凭据)"
+      + "②本会话的修复分支(<基线>_<工号>_<单号>_<时间戳>)还在远端时"
+      + "不可移除,要请用户先在代码平台删除远端分支;③远端状态查不到(网络/凭据)"
       + "时保守拒绝,稍后重试。通过后宿主物理删除工作区仓目录,并把该仓"
       + "从会话关联仓清单摘除(首位仓被删时兼容首位字段自动接替新首位),"
       + "删除事实入转移账。repo 必填,必须是会话登记过的仓。参考仓(拉取"
@@ -886,9 +872,9 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       fail(promptCopy("receipts", "push.branch_mismatch",
         { expected, branch }));
     }
-    // 强制覆盖意图(2026-09-11 增补):同单重跑撞远端遗留分支时 AI
-    // 主动申报。覆盖按租赁式核对远端同名分支 tip(issueGit 侧),
-    // 对不上即拒——不盲盖。
+    // 强制覆盖意图(ADR-0063 修订):新命名下正常流程不会再撞远端同名
+    // 分支,force 保留防平台侧罕见异动。覆盖按租赁式核对远端同名分支
+    // tip(issueGit 侧),对不上即拒——不盲盖。
     const force = params.force === true;
     // 脏工作区熔断(2026-08-28 真实环境事故):AI 改了文件没 commit,
     // push 推的是 clone 时的旧 HEAD,MR 没有 diff。与其让空 MR 静默
@@ -927,12 +913,11 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
     label: "Push Branch (Host)",
     description:
       "把当前修复分支经宿主推送到远端(容器里 git push 被禁用,推送一律"
-      + "走本工具)。平台机械校验:会话已绑定单号、分支名为 "
-      + "master_<工号>_<单号>;多仓交付逐仓串行推送,推送后返回 SHA。"
-      + "force=true 强制覆盖远端同名分支:同单重跑、远端旧分支是本单上"
-      + "次运行遗留的场景(pull_repo 回执的「遗留警报」就是它)——首次"
-      + "推送即带上,不必先被 non-fast-forward 拒绝再补;覆盖按租赁式"
-      + "核对远端旧 tip,不盲盖。",
+      + "走本工具)。平台机械校验:会话已绑定单号、分支名为会话修复分支"
+      + "(<基线>_<工号>_<单号>_<时间戳>,平台生成并全程固定,以拉仓回执"
+      + "为准);多仓交付逐仓串行推送,推送后返回 SHA。"
+      + "force=true 强制覆盖远端同名分支:新命名下正常流程不会撞名,"
+      + "只防平台侧罕见异动——覆盖按租赁式核对远端旧 tip,不盲盖。",
     parameters: Type.Object({
       branch: Type.Optional(Type.String({
         description: "要推送的分支;缺省取代码仓当前分支",
@@ -944,8 +929,8 @@ export function createIssueTools(ctx: IssueToolContext): unknown[] {
       })),
       force: Type.Optional(Type.Boolean({
         description:
-          "强制推送:覆盖远端同名分支——同单重跑撞远端遗留分支时首次"
-          + "推送即带上,不必先被拒再补(覆盖前按租赁式核对远端旧 tip)",
+          "强制推送:覆盖远端同名分支(新命名下正常流程不会撞名,"
+          + "只防平台侧罕见异动;覆盖前按租赁式核对远端旧 tip)",
       })),
     }),
     async execute(_toolCallId: string, params: any) {

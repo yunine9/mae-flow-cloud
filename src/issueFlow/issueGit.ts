@@ -233,30 +233,6 @@ export async function cloneRepository(options: {
   }
 }
 
-/** 远端是否已有同名修复分支且与本地分叉(同单重跑的上次遗留)。
- * 分支名烧死 master_工号_单号:上次运行(停止/取消)推过的话,新克隆
- * 会把它带成 origin/<branch>,而本地从基线另起同名分支——分叉要一路
- * 跑到 push 才以非快进炸掉。这里提前把事实挖出来:分叉返回远端短
- * SHA;远端没有、或远端是本地祖先(正常推进)返回 undefined。 */
-export async function divergedRemoteBranch(
-  repoDir: string,
-  branch: string,
-): Promise<string | undefined> {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
-  const remote = await runGit(
-    ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`],
-    { cwd: repoDir, env, timeoutMs: 10_000 });
-  if (remote.code !== 0) return undefined;
-  const remoteSha = remote.stdout.trim();
-  if (!remoteSha) return undefined;
-  const ancestor = await runGit(
-    ["merge-base", "--is-ancestor", remoteSha, "HEAD"],
-    { cwd: repoDir, env, timeoutMs: 10_000 });
-  // 远端是本地祖先 = 同会话已推送后的正常再确认,不是遗留。
-  if (ancestor.code === 0) return undefined;
-  return remoteSha.slice(0, 12);
-}
-
 export async function hardenCloneAsync(repoDir: string): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const configArgs = (...args: string[]) =>
@@ -329,12 +305,14 @@ export async function dirtyWorktree(repoDir: string): Promise<string[]> {
   }
 }
 
-/** 宿主侧确定性建分支(固定流程阶段2/转正时用)。分支名规范
- * master_工号_单号 由调用方拼好;这里只负责"分支已在且已检出"这个
+/** 宿主侧确定性建分支(固定流程阶段2/转正时用)。分支名由调用方拼好
+ * (ADR-0063:基线_工号_单号_时间戳,会话级常量);这里只负责"分支已
+ * 在且已检出"这个
  * 终态:已检出=幂等通过;分支存在未检出=切过去;不存在=从起点建。
  * 绝不 reset 已有分支——已有提交意味着有轮次在现场,覆盖是事故。
- * 隐式续跑陷阱(2026-08-28 事故):本地分支不存在而 origin/<branch>
- * 存在(同单重跑,上次运行推过)时,`git checkout <branch>` 会 DWIM
+ * 隐式续跑陷阱(2026-08-28 事故,遗留警报随其退役,ADR-0063):本地
+ * 分支不存在而 origin/<branch> 存在(老命名时代的同单重跑)时,
+ * `git checkout <branch>` 会 DWIM
  * 成"从远端分支顶上建本地分支"——静默续跑被停掉的半成品。所以
  * 建分支必须先验本地引用,不存在就走显式 -b(起点明确,无 DWIM)。 */
 export async function ensureBranch(options: {
@@ -474,19 +452,19 @@ export async function pushFromIssueWorkspace(options: {
       const stderrText = pushed.stderr.trim();
       const stdoutText = pushed.stdout.trim();
       const raw = stderrText || stdoutText;
-      // 同单重跑撞远端遗留分支(2026-08-28 事故):分支名带单号,上次
-      // 停止的运行推过同名分支,本地从基线另起必然非快进。光透 git
-      // 原文等于让 AI 猜——点名原因与处置(2026-09-11 增补:处置从
-      // "请用户去平台删远端分支"改为指路 force=true 重推,租赁式核对
-      // 保证不盲盖;强制尝试被拒则提示核对远端,不教盲目重试)。
+      // 非快进(ADR-0063 后的罕见异动:新命名让正常流程不再撞远端
+      // 同名分支,force 是兜底能力):光透 git 原文等于让 AI 猜——
+      // 点名原因与处置(租赁式核对保证不盲盖;强制尝试被拒则提示
+      // 核对远端,不教盲目重试)。
       const rejected = /non-fast-forward|fetch first|stale info|already exists|\[rejected\]|behind its remote counterpart/i
         .test(`${stderrText}\n${stdoutText}`);
       const staleBranch = !rejected ? "" : options.force === true
         ? " 强制覆盖被拒:远端分支状态与推送时不一致,或受平台分支保护"
           + "限制——先与用户核对远端分支状态再决定,不要盲目重试。"
-        : " 远端同名分支已存在且非快进(常见于同单重跑:上次运行推过"
-          + "该分支)——确认是本单遗留后带 force=true 重推即可覆盖"
-          + "(该分支已有 MR 时覆盖后原 MR 随之更新,不要重复创建)。";
+        : " 远端同名分支已存在且非快进(新命名下正常流程不会撞名,"
+          + "这通常是平台侧罕见异动)——与用户核对后带 force=true 重推"
+          + "即可覆盖(该分支已有 MR 时覆盖后原 MR 随之更新,不要重复"
+          + "创建)。";
       throw new Error(authFailureHint("推送代码", options.credential, raw)
         ?? `宿主推送失败: ${raw.slice(0, 500)}${staleBranch}`);
     }
