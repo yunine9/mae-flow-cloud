@@ -66,7 +66,7 @@ async function fixture(t: { after(fn: () => unknown): void }) {
   writeFileSync(join(cwd, ".mae-flow-work", "REQ-1", "story.md"), "原交付设计");
   writeFileSync(join(cwd, "main.cpp"), "unimportant leftovers\n");
   writeFileSync(join(created.workspace, "annotations.jsonl"), "old feedback\n");
-  writeFileSync(join(created.workspace, "交付摘要.md"), "first MR summary");
+  writeFileSync(join(created.workspace, "交付报告.md"), "first MR summary");
   t.after(async () => { await service.shutdown(); rmSync(root, { recursive: true, force: true }); });
   return { service, task, created, root, source, cwd, branch, latest, options, host };
 }
@@ -87,7 +87,7 @@ test("合入后原任务继续：更新基准、丢弃残留修改、保留缓�
   assert.equal(state.current, "config_confirm");
   assert.equal(JSON.parse(readFileSync(join(f.cwd, ".mae-flow.json.last"), "utf8")).current, "end");
   assert.equal(existsSync(join(f.created.workspace, "annotations.jsonl")), false);
-  assert.equal(existsSync(join(f.created.workspace, "交付摘要.md")), false);
+  assert.equal(existsSync(join(f.created.workspace, "交付报告.md")), false);
   assert.ok(continuationHistoryZip(f.created.workspace, "continue-request-1").length > 0);
   assert.match(continuationInstructions(next), /修复空行/);
   const repeat = await f.service.continueDelivery(f.created.id, "修复空行，并更新说明", "continue-request-1", "alice");

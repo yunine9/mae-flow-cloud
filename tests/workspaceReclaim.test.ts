@@ -225,7 +225,7 @@ test("回收是幂等的:再来一次不炸,也没什么可删了", () => {
   assert.ok(existsSync(join(workspace, "annotations.jsonl")));
 });
 
-test("回收代码后需求与新增文档、修订历史、图片、Story 和交付摘要原样保留，原入口可阅读和下载过程文档", () => {
+test("回收代码后需求与新增文档、修订历史、图片、Story 和交付报告原样保留，原入口可阅读和下载过程文档", () => {
   const { workspace, dataDir } = fullWorkspace(), cwd = join(workspace, "notify-service");
   const files = {
     "requirement-input.md": "完整需求正文",
@@ -233,7 +233,7 @@ test("回收代码后需求与新增文档、修订历史、图片、Story 和�
     "requirement-history/revision.diff": "需求修改差异",
     "overall-story/state.json": JSON.stringify({ current: "00000000-0000-0000-0000-000000000001", revisions: [{ id: "00000000-0000-0000-0000-000000000001" }] }),
     "overall-story/revisions/00000000-0000-0000-0000-000000000001/story.md": "全局 Story 正文",
-    "交付摘要.md": "这次交付的摘要",
+    "交付报告.md": "这次交付的摘要",
     "交付经验复盘.md": "这次交付的复盘",
     "delivery-summary/state.json": "摘要生成记录",
     "delivery-experience/state.json": "经验整理记录",
@@ -261,7 +261,7 @@ test("回收代码后需求与新增文档、修订历史、图片、Story 和�
   assert.equal(root, join(workspace, ARCHIVED_DOCUMENTS_DIR));
   assert.deepEqual(readFileSync(join(root!, ".mae-flow-work", "REQ1", "diagram.png")), Buffer.from([0, 1, 2, 255]));
   const sources = { taskMaterialRoot: workspace };
-  for (const name of ["REQ1/spec.md", "REQ1/story.md", "task-materials/交付摘要.md", "task-materials/交付经验复盘.md", "task-materials/overall-story.md"]) {
+  for (const name of ["REQ1/spec.md", "REQ1/story.md", "task-materials/交付报告.md", "task-materials/交付经验复盘.md", "task-materials/overall-story.md"]) {
     assert.ok(listArtifacts(root, sources).some(item => item.name === name), name);
     assert.ok(readArtifact(root, name, sources)?.content, name);
   }

@@ -63,7 +63,7 @@ export function archiveContinuationRuntime(workspace: string, id: string, hostLe
   for (const name of ["waiting.json", "annotations.jsonl", "reviews", "review_replies.md",
     "feedback", "kernel-delivery", "pipeline", "pipeline-facts.json", "prepush",
     "developer-assistant.json", "pi-agent", "transcript", "transcript.jsonl",
-    "delivery-summary", "交付摘要.md", "delivery-experience", "交付经验复盘.md"]) {
+    "delivery-summary", "交付报告.md", "delivery-experience", "交付经验复盘.md"]) {
     const source = join(workspace, name), target = join(archive, name);
     if (existsSync(source) && !existsSync(target)) renameSync(source, target);
   }
@@ -104,6 +104,8 @@ export function continuationInstructions(summary: TaskSummary): string {
   if (summary.continuation?.state !== "active") return "";
   return `本次继续修改要求：\n${summary.continuation.text}\n\n`
     + "本次要求是当前目标。原需求、Spec、Story 和此前交付记录供按需参考，已有实现不重新做一遍。"
+    + "本次有行为变化时，编码前在现有 Spec/Story 补充受影响的函数 UT 与模块 UT（MST）用例，写清条件、操作和预期；MST 就是模块 UT。"
+    + "已有用例按需修订，历史用例可能在 implementation.md，不另开设计流程或重复确认；纯文档等不涉及模块行为的修改说明不适用原因。"
     + "按需调整文档、代码和测试；只有实质歧义才询问。代码已从最新基准重新建立同名工作分支，"
     + "上一次 MR 已合入；本次必须创建新的 MR，旧验证结果不能作为本次通过依据。";
 }
@@ -126,6 +128,6 @@ export function continuationHistoryZip(workspace: string, id: string): Buffer {
       entries.push({ name, content: readFileSync(path) });
     }
   };
-  for (const name of ["summary.json", "materials", "annotations.jsonl", "reviews", "review_replies.md", "交付摘要.md", "交付经验复盘.md"]) visit(name);
+  for (const name of ["summary.json", "materials", "annotations.jsonl", "reviews", "review_replies.md", "交付报告.md", "交付经验复盘.md"]) visit(name);
   return createZipArchive(entries);
 }

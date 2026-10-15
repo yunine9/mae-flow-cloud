@@ -13,7 +13,7 @@ import { annotationSubmissionView, type AnnotationSubmissionView } from "./annot
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { applyGitCommitIdentity, gitCommitIdentityConfigs } from "./gitCommitIdentity.ts";
 import { DeliveryExperiences } from "./deliveryExperience.ts";
-import { DeliverySummaries } from "./deliverySummary.ts";
+import { DeliverySummaries, deliveryReportView, type DeliveryReportView } from "./deliverySummary.ts";
 import { progressAdvanced, taskProgressTimestamp } from "./taskProgressTime.ts";
 import type { ComponentRepository } from "./componentRepositories.ts";
 import { importExternalReviews, importStoredExternalReviews, notifyExternalReviews } from "./externalReviewInbox.ts";
@@ -936,6 +936,7 @@ export interface SplitEscalation {
 
 export interface TaskSummary {
   id: string;
+  delivery_report?: DeliveryReportView;
   continuation?: TaskContinuation;
   delivery_history?: TaskDeliveryHistory[];
   delivery_generation?: string;
@@ -2399,7 +2400,7 @@ export class TaskService {
         taskId: string;
         role: string;
         work: Promise<unknown>;
-      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付摘要", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
+      }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付报告", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() },
         { taskId: "knowledge-answers", role: "知识问答", work: this.knowledgeAnswers?.shutdown() ?? Promise.resolve() }];
@@ -2648,6 +2649,19 @@ export class TaskService {
       this.persist(task);
     }
     return this.get(id)!;
+  }
+
+  generateDeliveryReport(id: string): TaskSummary {
+    const task = this.tasks.get(id);
+    if (!task) throw new TaskControlError("任务不存在");
+    if (!task.cwd || task.summary.workspace_reclaimed_at || !existsSync(task.cwd))
+      throw new TaskControlError("代码现场已回收或不可用，无法补全实际改动报告");
+    if (task.summary.status === "canceled" || continuationPending(task.summary))
+      throw new TaskControlError("任务已取消或正在准备继续修改，暂时不能生成报告");
+    if (!task.summary.delivery?.git_push?.sha || !task.summary.delivery.mr_url || !task.summary.delivery.target_branch)
+      throw new TaskControlError("请在代码已推送且 MR 创建成功后生成报告");
+    this.deliverySummaries.start(task, false, true);
+    return this.project(task);
   }
 
   deliveryAnalysis(retry = false) {
@@ -3700,6 +3714,7 @@ export class TaskService {
         status: parent.summary.status,
       } : undefined,
       delivery: projectedDelivery,
+      delivery_report: deliveryReportView(summary.workspace),
       // 开发助手占场时,"从当前现场恢复"是条死路(resume 会 409 让人
       // 去交还)——focus 必须知道占场事实才能指对路(MFC-029)。
       ...(task.assistantActive ? { assistant_engaged: true } : {}),
@@ -8208,6 +8223,7 @@ export class TaskService {
     task.lastPersistedStatus = task.summary.status;
     this.writeTaskState(task, strict);
     this.deliveryExperiences.start(task);
+    this.deliverySummaries.start(task);
     if (task.summary.status === "canceled") this.reviews.cancelTask(task.summary.id);
     // 文件先落袋(它才是真相),投影旁路跟进;失败由投影自己 fail-open。
     this.bypass(task, "投影 upsert",
@@ -8395,6 +8411,7 @@ export class TaskService {
         }
         this.deliveryExperiences.start(task);
         if (recoverHostPushProjection(summary)) this.writeTaskState(task);
+        this.deliverySummaries.start(task, true);
         if (!["completed", "canceled"].includes(summary.status) && validPushReceipt(summary.delivery?.git_push))
           this.recordPublishedPush(task, summary.delivery.git_push);
         if (recoveredCwd !== savedCwd) {
@@ -8909,7 +8926,7 @@ export class TaskService {
         now,
         retentionDays,
         // 状态是收口那一刻写的,清理和收尾可能正擦肩而过:句柄还在就不碰。
-        busy: !!task.driver || !!task.container || !!task.containerReopen,
+        busy: !!task.driver || !!task.container || !!task.containerReopen || this.deliverySummaries.isRunning(summary.id),
       });
       if (!verdict.reclaim) continue;
       try {
@@ -16862,7 +16879,6 @@ export class TaskService {
       this.persist(task);
       this.ensureMergeWatch(task);
       this.deliveryExperiences.capture(task);
-      if (!previous?.mr_url) this.deliverySummaries.start(task);
       const runKey = `pipeline:${sha}`;
       if (existingPushReceipt && !manualPipelineRetry) {
         const observed = await getPipelineStatus({ platformUrl, sha, repo: mrRequest.repo,
@@ -20017,8 +20033,9 @@ export class TaskService {
       "4+1 是主任务分析的核心：客户场景与验收贯通全需求；逻辑模型含功能模块、关键类图和仓库/组件映射；"
         + "接口与数据模型明确跨模块契约；运行视图包含关键时序、异常/并发协作及部署关系。"
         + "关键类、接口、模块职责和场景必须相互对应，足以指导公共骨架及后续实现；不要求画完所有私有细节，"
-        + "沿用架构说明依据，不以图数凑完整。图使用 PlantUML。测试设计在主任务层明确整体与跨模块场景及验证分工，"
-        + "具体函数 UT 和模块测试由子任务 Spec 细化，不新增全局 Spec。尚未执行的自检项如实保留。",
+        + "沿用架构说明依据，不以图数凑完整。图使用 PlantUML。MST 就是模块 UT，不是额外测试层级。"
+        + "主任务 Story 在现有测试设计表中用“用例级别”区分函数 UT 与模块 UT（MST），不新增章节；按模块列出可检视的用例编号、被测入口、条件、操作、预期，以及内部真实执行和外部替身边界；"
+        + "不能只写后续由子任务补充。子任务 Spec 承接这些场景并细化函数 UT，不新增全局 Spec。尚未执行的自检项如实保留。",
       STORY_ARCHITECTURE_GUIDANCE,
       SEMANTIC_ARCHITECTURE_GUIDANCE.replace("architecture.semantic.json",
         join(artifactDir, "architecture.semantic.json")),
