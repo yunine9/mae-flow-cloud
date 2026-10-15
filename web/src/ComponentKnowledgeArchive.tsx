@@ -5,5 +5,5 @@ export function ComponentKnowledgeArchive({ record, openRequest = 0, onArchiveAc
   record: ComponentResearchRecord; openRequest?: number; onArchiveAction?: () => void;
 }) {
   return <KnowledgeArchiveDialog endpoint={`/component-research/${encodeURIComponent(record.id)}/archive`}
-    production={record.production} openRequest={openRequest} onChanged={onArchiveAction} />;
+    production={record.production} openRequest={openRequest} onChanged={onArchiveAction} editTargets />;
 }

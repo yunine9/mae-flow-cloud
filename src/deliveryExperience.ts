@@ -46,7 +46,7 @@ export class DeliveryExperiences<T extends Owner> {
       mkdirSync(root, { recursive: true });
       // 兼容已有首次交付摘要，绝不以最后一次推送冒充首次交付。
       const previous = read(join(task.summary.workspace, "delivery-summary/state.json"));
-      writeFileSync(join(root, "first.json"), JSON.stringify({ head: previous?.head ?? d.git_push.sha, mr: d.mr_url }), { flag: "wx", mode: 0o600 });
+      writeFileSync(join(root, "first.json"), JSON.stringify({ head: previous?.first_head ?? previous?.head ?? d.git_push.sha, mr: d.mr_url }), { flag: "wx", mode: 0o600 });
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") console.warn(`首次交付经验快照未保存：${String(error)}`); }
   }
   start(task: T): void {
@@ -73,7 +73,7 @@ export class DeliveryExperiences<T extends Owner> {
       }
       const timer = setTimeout(() => abort.abort(new Error("经验整理超过10分钟")), 600_000); timer.unref();
       try {
-        const base = first.head;
+        const base = first.first_head ?? first.head;
         // squash 的目标提交会混入目标分支变化；优先使用合入时已核对的源分支最终版本。
         let head = snapshot.delivery!.git_push?.sha;
         const merged = snapshot.delivery!.merged_sha;

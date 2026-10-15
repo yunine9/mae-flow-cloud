@@ -8,6 +8,7 @@ export interface DomainDocumentContent {
   id: string; title: string; target_id: string; path: string; layer: "domain" | "repository"; content: string; sources: string;
 }
 export interface DomainArchiveTargetsPreview {
+  archive_preview?: import("./knowledgeProductionTypes").KnowledgeArchivePreview;
   targets: KnowledgeRepository[];
   documents: Array<Pick<DomainDocumentContent, "id" | "title" | "target_id" | "path">>;
   archive_revision: number;

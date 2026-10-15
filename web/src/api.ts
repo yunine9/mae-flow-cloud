@@ -911,6 +911,7 @@ export interface RequirementSourceMeta {
 }
 
 export interface TaskSummary {
+  delivery_report?: { status: "running" | "completed" | "failed"; available: boolean; message: string; head: string };
   continuation?: { id: string; text: string; actor: string; at: string; state: "preparing" | "failed" | "active"; error?: string; branch: string; baseline: string };
   delivery_history?: Array<{ id: string; started_at: string; completed_at: string; delivery: TaskSummary["delivery"]; request?: string; archive: string }>;
   delivery_generation?: string;
@@ -1110,6 +1111,7 @@ export interface TaskSummary {
     last_error?: string;
   };
   delivery?: {
+    git_push?: { sha: string };
     component_knowledge?: ComponentKnowledgeCheckReport;
     mr_participants?: MrParticipantsResult;
     /** 最近一次推送的起点，仅用于代码增量展示。 */
@@ -4110,6 +4112,8 @@ export interface IssueOnceGeneratedSessionRow {
   verify_pass: boolean;
   /** 一次解决:定位与验证双一次。 */
   solved_pass: boolean;
+  /** 发起人(发起登记的登录账号;缺席按缺省处理,#353 字段纪律)。 */
+  reporter?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(一次定位剔除转正会话后,分母可
@@ -5271,6 +5275,12 @@ export async function continueTaskDelivery(taskId: string, text: string, request
   const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/continue-delivery`, {
     method: "POST", body: JSON.stringify({ text, request_id: requestId }),
   });
+  if (!response.ok) throw new Error(await errorText(response));
+  return parseJson(response);
+}
+
+export async function generateDeliveryReport(taskId: string): Promise<TaskSummary> {
+  const response = await fetch(`/tasks/${encodeURIComponent(taskId)}/delivery-report`, { method: "POST" });
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

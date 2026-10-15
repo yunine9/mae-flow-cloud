@@ -1,3 +1,4 @@
+@layer legacy {
 .ka-history,.ka-main,.ka-evidence { min-width:0; min-height:0; overflow:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
 .ka-history > p { margin:12px 4px 20px; font-size:12px; line-height:1.6; color:var(--muted); }
 .ka-history nav { display:grid; align-content:start; gap:5px; }
@@ -160,3 +161,4 @@
 .ka-question h2.is-collapsed { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .ka-question-expand { color:var(--muted); font-size:11px; margin-top:10px; cursor:pointer; }
 .ka-question-expand:hover { color:var(--text-strong); text-decoration:underline; }
+}

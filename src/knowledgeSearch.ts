@@ -151,9 +151,17 @@ export class KnowledgeSearch {
   documentStatus(asset: SearchableKnowledge) {
     if (isComponentKnowledge(asset)) {
       const result = componentCards([asset]);
-      return result.warnings.length ? { state: "failed", error: result.warnings.join("；") } : { state: "ready", sections: result.cards.length };
+      if (result.warnings.length) return { state: "failed", error: result.warnings.join("；") };
+      const states = result.cards.map(card => this.indexStatus(card.asset));
+      return states.find(state => state.state === "failed") ?? states.find(state => state.state === "indexing")
+        ?? states.find(state => state.state === "queued") ?? { state: "ready", sections: result.cards.length };
     }
-    const path = this.mirror(asset), key = this.indexKey(path);
+    return this.indexStatus(asset);
+  }
+
+  private indexStatus(asset: SearchableKnowledge) {
+    const path = asset.path ?? this.mirrorPath(asset.id);
+    const key = asset.path ? this.indexKey(path) : path + ":" + createHash("sha256").update(this.mirrorText(asset)).digest("hex");
     if (this.indexed.get(path) === key) return { state: "ready", sections: this.sidecar?.indexedSections?.(path) };
     if (!this.sidecar) return { state: "failed", error: "知识检索服务未配置，原文已保存。" };
     const state = this.states.get(path);
@@ -208,11 +216,24 @@ export class KnowledgeSearch {
   }
 
   async search(context: KnowledgeContext, query: string, limit = 5, componentsOnly = false, all = false): Promise<KnowledgeSearchResult> {
+    return this.query(context, query, { limit, componentsOnly, all });
+  }
+
+  /** 问答只查预先准备好的正式文档索引，不在提问时生成向量或等待入库。 */
+  async searchDocuments(context: KnowledgeContext, query: string, options: { limit?: number; all?: boolean; documentId?: string } = {}): Promise<KnowledgeSearchResult> {
+    return this.query(context, query, { ...options, limit: options.limit ?? 8, preparedOnly: true });
+  }
+
+  private async query(context: KnowledgeContext, query: string, options: {
+    limit: number; componentsOnly?: boolean; all?: boolean; preparedOnly?: boolean; documentId?: string;
+  }): Promise<KnowledgeSearchResult> {
+    const { limit, componentsOnly, all = false, preparedOnly = false, documentId } = options;
     const readCatalog = () => {
       const value = this.catalog(context, all);
-      return { ...value, assets: value.assets.filter(a => !componentsOnly || isComponentKnowledge(a)) };
+      return { ...value, assets: value.assets.filter(a => (!componentsOnly || isComponentKnowledge(a))
+        && (!preparedOnly || a.kind !== "experience") && (!documentId || a.id === documentId)) };
     };
-    const catalog = readCatalog(), derived = this.sidecar ? this.registerCards(catalog.assets) : componentCards(catalog.assets);
+    const catalog = readCatalog(), derived = this.sidecar && !preparedOnly ? this.registerCards(catalog.assets) : componentCards(catalog.assets);
     const language = componentQueryLanguage(query);
     if (language) derived.cards = derived.cards.filter(c => c.paradigm.language === language);
     const ordinary = catalog.assets.filter(a => !isComponentKnowledge(a));
@@ -221,20 +242,21 @@ export class KnowledgeSearch {
       const current = new Map(readCatalog().assets.map(a => [a.id, a]));
       return hits.filter(h => current.get(h.id)?.revision === h.revision);
     };
-    const fallback = (extra: string[]): KnowledgeSearchResult => ({ available: derived.cards.length > 0 || !ordinary.length,
-      hits: fresh(localComponentCards(derived.cards, query, limit)), warnings: [...warnings, ...extra] });
-    if (!this.sidecar) return fallback(["memsearch 暂不可用；组件改用本地正式用法检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
+    const fallback = (extra: string[]): KnowledgeSearchResult => ({ available: !preparedOnly && (derived.cards.length > 0 || !ordinary.length),
+      hits: preparedOnly ? [] : fresh(localComponentCards(derived.cards, query, limit)), warnings: [...warnings, ...extra] });
+    if (!this.sidecar) return fallback([preparedOnly ? "知识检索服务未配置，暂时无法搜索文档。" : "memsearch 暂不可用；组件改用本地正式用法检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
     const inputs = [...ordinary, ...derived.cards.map(c => c.asset)];
     if (!inputs.length) return { available: true, hits: [], warnings };
-    const sources = inputs.map(a => ({ id: a.id, path: this.mirror(a) }));
-    const jobs = sources.map(source => this.ensureIndexed(source.path));
-    const ready = await within(Promise.all(jobs).then(values => values.every(Boolean)), 1200);
-    const searchable = sources.filter(source => this.indexed.get(source.path) === this.indexKey(source.path));
-    if (!searchable.length) return fallback(["索引尚未就绪，组件使用本地正式用法检索。"]);
+    const sources = inputs.map(a => ({ id: a.id, path: preparedOnly ? this.mirrorPath(a.id) : this.mirror(a),
+      expectedKey: preparedOnly ? this.mirrorPath(a.id) + ":" + createHash("sha256").update(this.mirrorText(a)).digest("hex") : undefined }));
+    const ready = preparedOnly ? true : await within(Promise.all(sources.map(source => this.ensureIndexed(source.path))).then(values => values.every(Boolean)), 1200);
+    const searchable = sources.filter(source => this.indexed.get(source.path) === (source.expectedKey ?? this.indexKey(source.path)));
+    if (!searchable.length) return fallback([preparedOnly ? "文档索引尚未就绪，请在知识库查看索引状态或重试索引后再提问。" : "索引尚未就绪，组件使用本地正式用法检索。"]);
     const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000).catch(() => undefined);
-    if (!hits) return fallback(["memsearch 查询未完成，组件使用本地正式用法检索。"]);
+    if (!hits) return fallback([preparedOnly ? "文档检索暂时不可用，请稍后重试。" : "memsearch 查询未完成，组件使用本地正式用法检索。"]);
     const byCard = new Map(derived.cards.map(c => [c.asset.id, c]));
     const found: KnowledgeHit[] = hits.flatMap(hit => {
+      if (!searchable.some(source => source.id === hit.id)) return [];
       const card = byCard.get(hit.id);
       if (card) return [componentCardHit(card, "memsearch")];
       const asset = ordinary.find(a => a.id === hit.id);
@@ -250,9 +272,9 @@ export class KnowledgeSearch {
         productVersions: asset.productVersions, whenToUse: asset.whenToUse, summary: asset.kind === "experience" ? asset.summary : hit.snippet,
         versionNote: asset.productVersions.length ? `适用产品版本：${asset.productVersions.join("、")}` : "未单独声明产品版本；使用前核对正文中的适用条件与例外。" }];
     });
-    if (!ready || hits.pendingSources) {
-      warnings.push("部分索引尚未就绪，组件补充本地卡片结果，当前结果不是完整知识范围。");
-      found.push(...localComponentCards(derived.cards, query, limit).filter(local => !found.some(hit => hit.id === local.id && hit.paradigm_id === local.paradigm_id)));
+    if (!ready || hits.pendingSources || preparedOnly && searchable.length < sources.length) {
+      warnings.push(preparedOnly ? "部分文档的当前版本尚未完成索引，本次只检索已就绪文档。" : "部分索引尚未就绪，组件补充本地卡片结果，当前结果不是完整知识范围。");
+      if (!preparedOnly) found.push(...localComponentCards(derived.cards, query, limit).filter(local => !found.some(hit => hit.id === local.id && hit.paradigm_id === local.paradigm_id)));
     }
     const unique = [...new Map(found.map(hit => [`${hit.id}:${hit.paradigm_id ?? hit.start_line ?? ""}`, hit])).values()];
     return { available: true, hits: fresh(unique).slice(0, limit), warnings };
@@ -284,12 +306,7 @@ export class KnowledgeSearch {
   private mirror(asset: SearchableKnowledge): string {
     // Memory already has its authoritative Markdown; don't duplicate it.
     if (asset.path) return asset.path;
-    // Metadata is already represented above the body. Blank its original lines
-    // in the disposable mirror so YAML separators cannot become Setext headings.
-    const body = asset.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,
-      block => block.replace(/[^\n]/g, ""));
-    const text = asset.id.startsWith("component-card:") ? `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n${asset.content}` : `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n`
-      + `# ${asset.title}\n\n适用范围：${asset.scope}\n适用条件：${asset.whenToUse}\n${asset.summary}\n\n${body}`;
+    const text = this.mirrorText(asset);
     const root = join(this.dataDir, "corpus", "_knowledge");
     const path = this.mirrorPath(asset.id);
     if (!existsSync(path) || readFileSync(path, "utf8") !== text) {
@@ -299,6 +316,15 @@ export class KnowledgeSearch {
       renameSync(temporary, path);
     }
     return path;
+  }
+
+  private mirrorText(asset: SearchableKnowledge): string {
+    // Metadata is already represented above the body. Blank its original lines
+    // in the disposable mirror so YAML separators cannot become Setext headings.
+    const body = asset.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,
+      block => block.replace(/[^\n]/g, ""));
+    return asset.id.startsWith("component-card:") ? `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n${asset.content}` : `---\nknowledge_id: ${JSON.stringify(asset.id)}\nasset_status: published\n---\n`
+      + `# ${asset.title}\n\n适用范围：${asset.scope}\n适用条件：${asset.whenToUse}\n${asset.summary}\n\n${body}`;
   }
 
   private indexKey(path: string): string {

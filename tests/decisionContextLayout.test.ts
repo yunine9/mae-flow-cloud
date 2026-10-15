@@ -321,10 +321,11 @@ test("持续检视意见:进度条下不再有摘要条,入口只留角标,正�
   assert.doesNotMatch(workspace, /feedbackDigest/,
     "入口不应再堆一行解释性文案");
   assert.match(workspace, /function FeedbackList/);
-  assert.doesNotMatch(workspace, /title="来自 CodeHub 的检视意见"/, "同一意见不重复展成长列表");
-  assert.match(workspace, /title="来自流水线与机器门禁的告警"/);
-  // 三节同一口径:来自 Cloud 工作台 / 来自 CodeHub / 来自流水线与机器门禁
-  // (用户实锤:第一节只叫"批注"时读不出它就是 Cloud 平台上的检视意见)。
+  assert.match(workspace, /title="CodeHub 代码检视"/);
+  assert.match(workspace, /title="流水线与交付反馈"/);
+  // 三节同一族:检视批注(弹层面板)/ CodeHub 代码检视 / 流水线与交付反馈
+  // (用户实锤:第一节只叫"批注"时读不出它就是 Cloud 平台上的检视意见;
+  // 后两节标题 2026-10-10 #464 改名,断言跟文案走,防再漂移)。
   const panelSource = readFileSync(
     join(process.cwd(), "web/src/AnnotationPanel.tsx"), "utf8");
   assert.match(panelSource, /<strong>检视批注<\/strong>/);

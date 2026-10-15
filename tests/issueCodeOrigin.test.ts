@@ -24,6 +24,7 @@
  *     overwritten(#377,ADR-0051);
  * 11. 中间推送对象缺失:分类按各自推送时刻取,不错位(#377);
  * 12. 读侧版本混读:v2..v4 同度量可读,v1/未来版本拒收(ADR-0051)。
+ * 13. 同提交回放推送:重启重推同 SHA 不翻转首轮归类(#506)。
  *
  * 范式:issueMetricsAttribution 的假远端(bareOrigin)+ 种子现场直写
  * issue.json;归属层纯构建函数直测(async)。
@@ -346,6 +347,38 @@ test("force push 覆盖首轮:被覆盖提交按原分类补计,明细带 overwr
   const aggregate = aggregateCodeOrigin(snapshot, 90);
   assert.equal(aggregate.share, 45.5);
   assert.equal(aggregate.pass, false);
+});
+
+test("同提交回放推送不计返工:重启重推同 SHA 不翻转首轮归类(#506)", async () => {
+  const tmp = mfcTemp("mfc-codeorigin-");
+  const root = join(tmp, "issues", "issue-1");
+  const origin = bareOrigin(tmp);
+  const dir = seedWorkspace(root, origin);
+  const first = pushPlatformAfter(dir, { "src/a.ts": lines(10) }, "首轮实现");
+  // 流水线失败(issue-176 里是平台侧基线不一致,与代码无关)后服务
+  // 重启续跑,AI 同 SHA 强推回放——回放不携带新提交,推送投影去重
+  // 后只剩首笔,提交不因回放晚于边界被翻成返工。
+  const pipelineFail = `流水线失败(web)@ ${first.slice(0, 12)}`;
+  git(dir, "push", "-q", "--force", "origin", BRANCH);
+  assert.equal(git(dir, "rev-parse", "HEAD"), first, "回放强推不产生新提交");
+  const state = seedState(root, origin, {
+    events: [
+      { at: "2026-09-20T02:00:00.000Z", note: pushNote(origin, first) },
+      { at: "2026-09-20T02:30:00.000Z", note: pipelineFail },
+      { at: "2026-09-20T03:00:00.000Z", note: pushNote(origin, first) },
+    ],
+  });
+  const snapshot = await buildCodeOriginSnapshot(root, state);
+  const repo = repoOk(snapshot);
+  assert.ok(repo.boundary);
+  assert.equal(repo.boundary!.kind, "pipeline_repaired");
+  assert.equal(repo.boundary!.push_sha, first.slice(0, 12));
+  assert.deepEqual(repo.lines, { first: 10, rework: 0, external: 0 });
+  assert.equal(repo.commits.length, 1);
+  assert.equal(repo.commits[0]!.origin, "first");
+  const aggregate = aggregateCodeOrigin(snapshot, 90);
+  assert.equal(aggregate.share, 100);
+  assert.equal(aggregate.pass, true);
 });
 
 test("中间推送对象缺失:分类按各自推送时刻取,不错位(#377)", async () => {

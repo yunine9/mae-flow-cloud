@@ -1374,6 +1374,7 @@ export class IssueFlowService {
         id: live.id,
         title: live.state.title,
         module: live.state.module?.trim() || "未分类",
+        reporter: live.state.reporter?.trim() || live.state.account,
         concluded_at: concludedAt,
         reviews: axes?.reviews ?? 0,
         localization_pass: axes?.localization_pass ?? false,

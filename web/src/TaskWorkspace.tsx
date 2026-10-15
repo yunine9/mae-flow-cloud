@@ -1,3 +1,4 @@
+import { DeliveryReportMenu } from "./DeliveryReportMenu";
 import { LatestRead } from "./latestRead";
 import type { AnnotationSubmissionView } from "./api";
 import { RequirementBusinessModule } from "./RequirementBusinessModule";
@@ -1137,8 +1138,8 @@ export function TaskWorkspace({
           && result.items?.find(item => item.name === current)?.kind !== "diff") current = "";
       const summaryLink = new URLSearchParams(window.location.search).get("deliverySummary") === "1"
         && openedDeliverySummary.current !== task.id
-        && result.items?.some(item => item.name === "task-materials/交付摘要.md");
-      const next = summaryLink ? "task-materials/交付摘要.md" : preferredWorkspaceArtifact(
+        && result.items?.some(item => item.name === "task-materials/交付报告.md");
+      const next = summaryLink ? "task-materials/交付报告.md" : preferredWorkspaceArtifact(
         result.items ?? [], current, materialViewRef.current === "diff" ? "diff" : recommendedMaterialView,
         pipelineEvidenceNeedsHuman(task));
       artifactTask.current = task.id;
@@ -1978,15 +1979,6 @@ export function TaskWorkspace({
         <WarmupPanel task={task} />
       </OverlayDialog>}
 
-      {artifactTask.current === task.id && items?.some(item => item.name === "task-materials/交付摘要.md") && (
-        <section role="status" className="flex flex-none items-center justify-between gap-3 border-b border-line bg-accent-soft px-(--ws-gutter) py-2.5" aria-label="交付摘要提醒">
-          <span className="text-sm font-medium">首次交付摘要已生成 · 含改动图与测试情况</span>
-          <Button type="button" variant="outline" size="sm" onClick={() => {
-            openMaterial("doc"); setActive("task-materials/交付摘要.md");
-          }}>查看交付摘要</Button>
-        </section>
-      )}
-
       {task.feedback_error && (
         <section role="alert" className="flex-none border-b border-line bg-surface-2 px-(--ws-gutter) py-2.5">
           <h3 className="m-0 text-sm font-semibold">持续检视明细暂不可用</h3>
@@ -2069,6 +2061,9 @@ export function TaskWorkspace({
                 </TabsList>
               </Tabs>
               <div className="ws-material-tools" role="group" aria-label="阅读与检视工具">
+                {materialTabOn("doc") && <DeliveryReportMenu key={task.id} task={task} canOperate={canOperate} onChanged={onChanged}
+                  available={artifactTask.current === task.id && !!items?.some(item => item.name === "task-materials/交付报告.md")}
+                  onOpen={() => { openMaterial("doc"); setActive("task-materials/交付报告.md"); }} />}
                 {materialView === "diff" && <a className="materials-fullscreen-toggle" href={`/?deliveryAnalysis=1&deliveryTask=${encodeURIComponent(task.id)}`} target="_blank" rel="noreferrer">交付分析 ↗</a>}
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
