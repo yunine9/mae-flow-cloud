@@ -1,8 +1,8 @@
 /**
- * 登记附件(2026-09-19 拍板,先做无单手工登记):上传流式落 staging、
- * 扩展名净化、引用扫描、工作区同步,以及 POST /issues/issue-attachment
- * 的路由边界(管理员 403 同截图)。与 issueImageProxy 同款 harness:
- * 直调 handleIssueRoutes,不起真服务。
+ * 登记附件(2026-09-19 拍板;2026-10-15 #502 起 DTS 发起随单上传同链路):
+ * 上传流式落 staging、扩展名净化、引用扫描(描述/附加信息两源)、工作区
+ * 同步,以及 POST /issues/issue-attachment 的路由边界(管理员 403 同截图)。
+ * 与 issueImageProxy 同款 harness:直调 handleIssueRoutes,不起真服务。
  */
 
 import { test } from "node:test";
@@ -142,6 +142,35 @@ test("引用扫描与工作区同步:去重按出现序,staging 缺席 fail-open
     assert.equal(
       readFileSync(join(workspace, "attachments", stagedName)).toString(),
       "hello log");
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("附加信息两源同步(#502):DTS 发起随单附件拼在 remark 尾部,与描述同规则提取", () => {
+  const dataDir = mfcTemp("mfc-issue-attach-remark-");
+  try {
+    // 只有 remark 带引用(描述是单据标题,没附件):照样同步。
+    const stagedName = "1111222233334444.log";
+    mkdirSyncStaging(dataDir, stagedName, "dts log");
+    const workspace = join(dataDir, "issues", "issue-2");
+    const result = syncIssueAttachmentsToWorkspace({
+      description: "播放器升级后黑屏",
+      remark: "先复现黑屏再查日志\n随单附件: attachments/1111222233334444.log",
+      dataDir, workspace,
+    });
+    assert.deepEqual(result, { copied: 1, missing: 0 });
+    assert.equal(
+      readFileSync(join(workspace, "attachments", stagedName)).toString(),
+      "dts log");
+
+    // 两源同引用:合并去重,只复制一份。
+    const both = syncIssueAttachmentsToWorkspace({
+      description: "日志见 attachments/1111222233334444.log",
+      remark: "随单附件: attachments/1111222233334444.log",
+      dataDir, workspace: join(dataDir, "issues", "issue-3"),
+    });
+    assert.deepEqual(both, { copied: 1, missing: 0 });
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

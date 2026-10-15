@@ -3790,8 +3790,9 @@ export interface IssueSummary {
   updated_at: string;
   title: string;
   description: string;
-  /** 发起备注(DTS 列表随单填写):登记元信息的一部分,AI 开场被要求
-   * 优先读;缺席=发起时没填(含机制加入前的老会话)。 */
+  /** 附加信息(原发起备注,DTS 列表随单填写,#502 更名):登记元信息
+   * 的一部分,AI 开场被要求优先读;尾部可带随单附件路径引用。缺席=
+   * 发起时没填(含机制加入前的老会话)。 */
   remark?: string;
   /** 会话级介入档位(ADR-0057):发起前按单选定并定格,发起后不可改;
    * 缺席=跟随全局。列表据此显示「特例档名 / 跟随全局」。 */
@@ -4285,8 +4286,9 @@ export type IssueRegistrationEnvironment =
 export function createIssue(input: {
   title: string;
   description?: string;
-  /** 发起备注(DTS 列表随单填写的文本输入):进登记元信息,AI 开场
-   * 被要求重点优先读;不传=没填。 */
+  /** 附加信息(原发起备注,DTS 列表随单填写,#502 更名):进登记元
+   * 信息,AI 开场被要求重点优先读;尾部可带随单附件路径引用(服务端
+   * 与描述同规则提取同步)。不传=没填。 */
   remark?: string;
   source?: "manual" | "dts";
   ticket?: string;

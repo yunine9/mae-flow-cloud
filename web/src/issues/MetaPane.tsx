@@ -340,10 +340,11 @@ export function IssueMetaPane({ detail, canOperate }: {
         </span>
       </MetaField>
     </>}
-    {/* 发起备注(2026-09-20):DTS 列表随单填写、进了登记元信息的
-        指示,不是单据字段——有才渲染(老会话/没填的会话不出空行),
-        有单无单都显示(标题/描述的单据门对它不适用)。 */}
-    {detail.remark && <MetaField label="发起备注">
+    {/* 附加信息(原发起备注,2026-09-20;2026-10-15 #502 扩随单附件
+        并更名):DTS 列表随单填写、进了登记元信息的指示,不是单据字段
+        ——有才渲染(老会话/没填的会话不出空行),有单无单都显示(标题/
+        描述的单据门对它不适用);尾部可能带随单附件的路径引用行。 */}
+    {detail.remark && <MetaField label="附加信息">
       <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
         {detail.remark}
       </span>

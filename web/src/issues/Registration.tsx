@@ -482,7 +482,7 @@ function ManualRegister({
     // 登记后白跑一轮首轮会话;字段缺内容不灰按钮的口径同样适用——提交
     // 时给指路文案,不靠灰化猜。
     if (isUntouchedTemplate(description)) {
-      onError("描述还是模板原样——把发生时间、触发步骤、实际现象填一填再发起;不想用模板就整段删掉自己写");
+      onError("描述还是模板原样——把问题描述、触发步骤、预期结果填一填再发起;不想用模板就整段删掉自己写");
       return;
     }
     if (!productVersion) {
@@ -709,7 +709,7 @@ const DTS_COL_MAX: Record<DtsColKey, number> = {
 /** 列头人话(把手 aria 用;列设置 popover 的可显隐清单另含业务释义)。 */
 const DTS_COL_LABEL: Record<DtsColKey, string> = {
   select: "勾选", ticket: "单号", title: "标题",
-  launch: "发起状态", remark: "发起备注", module: "所属模块", tier: "介入档位",
+  launch: "发起状态", remark: "附加信息", module: "所属模块", tier: "介入档位",
 };
 /** 单元格排版(表定宽后格内的裁剪策略,随列走不随格写)。 */
 const DTS_CELL_CLASS: Partial<Record<DtsColKey, string>> = {
@@ -730,7 +730,7 @@ const DTS_HIDEABLE_COLS: Array<{ key: DtsColKey; label: string }> = [
   { key: "title", label: "标题" },
   { key: "module", label: "所属模块" },
   { key: "launch", label: "发起状态" },
-  { key: "remark", label: "发起备注" },
+  { key: "remark", label: "附加信息" },
   // 介入档位默认隐藏(2026-09-24 用户拍板):会话级特例是少数人的
   // 进阶需求,不占默认视野;要在列设置里自己打开。显隐极性与其余
   // 数据列相反(默认关,点名才开),单独存一份按人记忆。
@@ -748,6 +748,10 @@ type DtsTierPref = (typeof TIER_OPTIONS)[number]["value"];
 const TIER_LABEL = new Map<string, string>(TIER_OPTIONS.map((tier) =>
   [tier.value, tier.label]));
 const TIER_FOLLOW = "__follow";
+
+/** 随单附件条目(#502):显示名留原始文件名给人看,path 是暂存引用
+ * (attachments/<hash>.<ext>),发起时拼进附加信息文本随单落库。 */
+type RemarkFileEntry = { name: string; path: string };
 
 function loadDtsColWidths(): ColumnSizingState {
   try {
@@ -903,12 +907,13 @@ function DtsRegister({
   const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
-  // 发起备注列(2026-09-20;2026-09-24 重做):格子里是预览,点击弹
-  // 多行弹窗编辑(用户可能长篇输入,单行输入框不够)。按人持久化在
-  // localStorage(无过期,刷新/重开浏览器都在),发起成功即清该单
-  // 条目(已随会话落库,消费完毕)。上限 10000 字(2026-10-14 拍板,
-  // 从 5000 放开):备注全额进 AI 开场与每次上下文重建的续聊词,不
-  // 截断;后端不设闸(仅前端约束),超长材料仍走登记附件/知识仓。
+  // 附加信息列(原发起备注,2026-09-20 立;2026-09-24 弹窗化;2026-10-15
+  // #502 扩随单附件并更名):格子里是预览,点击弹多行弹窗编辑(用户可能
+  // 长篇输入,单行输入框不够)。按人持久化在 localStorage(无过期,刷新/
+  // 重开浏览器都在),发起成功即清该单条目(已随会话落库,消费完毕)。
+  // 上限 10000 字(2026-10-14 拍板,从 5000 放开):文本全额进 AI 开场
+  // 与每次上下文重建的续聊词,不截断;后端不设闸(仅前端约束),超长
+  // 材料仍走附件/知识仓。
   const remarksKey = `mae-flow:dts-remarks:${viewer.username}`;
   const [remarks, setRemarks] = useState<Record<string, string>>(() => {
     try {
@@ -925,13 +930,40 @@ function DtsRegister({
       localStorage.setItem(remarksKey, JSON.stringify(remarks));
     } catch { /* 旁路:存不下就本次会话内有效 */ }
   }, [remarks, remarksKey]);
+  // 随单附件(#502):单号→已传文件列表(显示名+暂存路径引用),与
+  // 文本同款按人持久化。上传即落暂存、进列表——取消弹窗不清(文件已
+  // 是暂存事实,清了也是孤儿),列表里可移除;发起成功即清该单条目
+  // ——路径行已拼进附加信息随会话落库,消费完毕。
+  const remarkFilesKey = `mae-flow:dts-remark-files:${viewer.username}`;
+  const [remarkFiles, setRemarkFiles] =
+    useState<Record<string, RemarkFileEntry[]>>(() => {
+      try {
+        const parsed: unknown = JSON.parse(
+          localStorage.getItem(remarkFilesKey) ?? "{}");
+        if (typeof parsed !== "object" || parsed === null) return {};
+        return Object.fromEntries(Object.entries(parsed)
+          .filter((entry): entry is [string, RemarkFileEntry[]] =>
+            Array.isArray(entry[1]) && entry[1].every((file) =>
+              typeof file?.name === "string"
+              && typeof file?.path === "string")));
+      } catch { return {}; }
+    });
+  useEffect(() => {
+    try {
+      localStorage.setItem(remarkFilesKey, JSON.stringify(remarkFiles));
+    } catch { /* 旁路:存不下就本次会话内有效 */ }
+  }, [remarkFiles, remarkFilesKey]);
   // 弹窗编辑态:remarkEditing=正在编辑的单号(null=关);草稿独立,
-  // 保存才落 remarks,取消/X/点外部一律丢弃。
+  // 保存才落 remarks,取消/X/点外部一律丢弃(附件不在此列,见上)。
   const [remarkEditing, setRemarkEditing] = useState<string | null>(null);
   const [remarkDraft, setRemarkDraft] = useState("");
   const REMARK_MAX = 10000;
-  // 介入档位(ADR-0057):未发起行按单选初始档,存本地按人(同发起
-  // 备注款,无过期);发起成功即清该单条目——已随会话定格落库,消费
+  // 正在编辑的单的附件列表(弹窗与格子预览共用;关弹窗时空数组)。
+  const editingFiles = remarkEditing !== null
+    ? remarkFiles[remarkEditing] ?? [] : [];
+  const [remarkDragActive, setRemarkDragActive] = useState(false);
+  // 介入档位(ADR-0057):未发起行按单选初始档,存本地按人(同附加
+  // 信息款,无过期);发起成功即清该单条目——已随会话定格落库,消费
   // 完毕。空(无条目)=跟随全局,发起请求不带字段。发起后不可改,
   // 进行中行只读显示,协助视角不显示(偏好只影响自己的发起)。
   const tiersKey = `mae-flow:dts-tiers:${viewer.username}`;
@@ -954,7 +986,7 @@ function DtsRegister({
   // 带出,发起必带。选即存,PUT 失败回滚并把原因落在那一行。
   const [bindings, setBindings] = useState<Record<string, DtsModuleBindingEntry>>({});
   // 列显隐(ADR-0056):数据列(标题/版本/分支/所属模块/发起状态/
-  // 发起备注)可按人显隐,勾选与单号常驻;隐藏不消失义务——发起闸
+  // 附加信息)可按人显隐,勾选与单号常驻;隐藏不消失义务——发起闸
   // 仍在勾选列禁用态上可见。localStorage 按用户记忆。
   const hiddenColsKey = `mae-flow:dts-hidden-cols:${viewer.username}`;
   const [hiddenCols, setHiddenCols] = useState<Set<DtsColKey>>(() => {
@@ -1408,36 +1440,43 @@ function DtsRegister({
       },
     },
     {
-      // 发起备注列(2026-09-20):随单文本输入,发起时进登记元信息并
-      // 要求 AI 重点优先读——发起人指路的最短通道。
+      // 附加信息列(原发起备注,2026-09-20;2026-10-15 #502 扩随单附件
+      // 并更名):随单文本 + 附件,发起时进登记元信息并要求 AI 重点
+      // 优先读——发起人指路的最短通道。
       id: "remark",
       size: DTS_COL_DEFAULT.remark,
       minSize: DTS_COL_MIN.remark, maxSize: DTS_COL_MAX.remark,
       header: () => (
-        <span className="inline-flex items-center gap-1" title="发起时随单告知 AI 的备注:AI 开场会重点优先读这段话">
-          发起备注
+        <span className="inline-flex items-center gap-1" title="发起时随单告知 AI 的文字与附件:AI 开场会重点优先读">
+          附加信息
         </span>
       ),
       cell: ({ row }) => {
         const ticketNo = row.original.ticket;
+        const fileCount = remarkFiles[ticketNo]?.length ?? 0;
+        const preview = remarks[ticketNo];
         return (
-          // 预览钮(2026-09-24 重做):空时弱化「点击填写备注」,已填
-          // 显示截断预览(悬停 title 全文),点击弹多行弹窗编辑。点击
-          // 不触发行选中,勾选仍走首格 checkbox。
+          // 预览钮(2026-09-24 弹窗化):空时弱化「点击填写」,已填
+          // 显示截断预览(悬停 title 全文),有附件追加 📎N 角标(路径
+          // 不上格子,折叠成计数)。点击弹多行弹窗编辑。点击不触发行
+          // 选中,勾选仍走首格 checkbox。
           <button type="button"
             className={`h-8 w-full truncate rounded-md border
               px-2 text-left text-xs transition-colors
-              ${remarks[ticketNo]
+              ${preview || fileCount
                 ? "border-input bg-surface hover:bg-accent/40"
                 : "border-dashed border-input bg-transparent text-muted-foreground hover:bg-accent/40"}`}
-            title={remarks[ticketNo] || undefined}
-            aria-label={`${ticketNo} 发起备注${
-              remarks[ticketNo] ? "(已填写,点击编辑)" : "(空,点击填写)"}`}
+            title={[preview,
+              fileCount ? `📎 ${fileCount} 个附件` : ""]
+              .filter(Boolean).join("\n") || undefined}
+            aria-label={`${ticketNo} 附加信息${
+              preview || fileCount ? "(已填写,点击编辑)" : "(空,点击填写)"}`}
             onClick={() => {
               setRemarkDraft(remarks[ticketNo] ?? "");
               setRemarkEditing(ticketNo);
             }}>
-            {remarks[ticketNo] || "点击填写备注"}
+            {preview || "点击填写"}
+            {fileCount > 0 && ` 📎${fileCount}`}
           </button>);
       },
     },
@@ -1723,6 +1762,33 @@ function DtsRegister({
     setRemarkEditing(null);
   }
 
+  /** 随单附件上传(#502):弹窗点选/拖入即传暂存,成功进该单列表,
+   * 同路径去重;单个失败 onError 提示不拖垮其余。FileList 先收进局部
+   * 数组再逐个传——异步循环不能直接踩视图所有物。 */
+  async function uploadRemarkFiles(list: FileList | File[]): Promise<void> {
+    const ticketNo = remarkEditing;
+    if (ticketNo === null) return;
+    const files = Array.from(list);
+    for (const file of files) {
+      try {
+        const result = await uploadIssueAttachment(file);
+        setRemarkFiles((current) => {
+          const existing = current[ticketNo] ?? [];
+          if (existing.some((entry) => entry.path === result.path)) {
+            return current;
+          }
+          return {
+            ...current,
+            [ticketNo]: [...existing, { name: file.name, path: result.path }],
+          };
+        });
+      } catch (reason) {
+        onError(`附件上传失败:${
+          String(reason instanceof Error ? reason.message : reason)}`);
+      }
+    }
+  }
+
   /** 批量发起(2026-08-28):每单一个独立工作流;逐张串行 create,
    * 单张失败不拖垮整批。已有进行中会话的单跳过并计入失败(服务端
    * create 的同单查重也会兜一道)。有成功的把新会话交父级:切「问题
@@ -1755,6 +1821,16 @@ function DtsRegister({
           continue;
         }
         try {
+          // 附加信息随单(#502):文本 + 随单附件路径行。路径行是给
+          // 服务端提取附件引用的机器形态(与描述内引用同款正则),
+          // 人读语义由「随单附件:」前缀承担。
+          const files = remarkFiles[ticketNo] ?? [];
+          const remark = [
+            remarks[ticketNo]?.trim() ?? "",
+            ...(files.length
+              ? [`随单附件: ${files.map((file) => file.path).join("、")}`]
+              : []),
+          ].filter(Boolean).join("\n");
           const created = await createIssue({
             title: ticket?.title || ticketNo,
             source: "dts",
@@ -1762,10 +1838,9 @@ function DtsRegister({
             // 配置中心,未配置直接 400——前端勾选闸只是第一道。
             ticket: ticketNo,
             description: ticket?.title || undefined,
-            // 发起备注:备注列的输入原样随单,进登记元信息(AI 开场
-            // 重点优先读);空串不算填了。
-            ...(remarks[ticketNo]?.trim()
-              ? { remark: remarks[ticketNo].trim() } : {}),
+            // 附加信息(原发起备注):文本与附件路径行随单,进登记元
+            // 信息(AI 开场重点优先读);全空不带字段。
+            ...(remark ? { remark } : {}),
             // 介入档位(ADR-0057):发起前选了档才带,创建即定格,
             // 发起后不可改;没选=跟随全局,不带字段。
             ...(tiers[ticketNo]
@@ -1773,8 +1848,15 @@ function DtsRegister({
             module_id: moduleId,
           });
           launched.push(created);
-          // 备注已随会话落库,清掉这一单的输入——已消费的指示不残留。
+          // 附加信息已随会话落库,清掉这一单的输入——已消费的指示
+          // 不残留(文本与随单附件同清)。
           setRemarks((current) => {
+            const next = { ...current };
+            delete next[ticketNo];
+            return next;
+          });
+          setRemarkFiles((current) => {
+            if (!current[ticketNo]) return current;
             const next = { ...current };
             delete next[ticketNo];
             return next;
@@ -2044,31 +2126,90 @@ function DtsRegister({
           </Table>
         </div>}
     </>}
-    {/* 发起备注编辑弹窗(2026-09-24):多行 Textarea,草稿保存才生效
-        (取消/X/点外部丢弃);上限 10000 字带计数——备注直进 AI 开场
-        与上下文重建的续聊词,长材料走登记附件/知识仓。 */}
+    {/* 附加信息编辑弹窗(2026-09-24 弹窗化;2026-10-15 #502 扩随单
+        附件并更名):多行 Textarea + 附件上传区。文本草稿保存才生效
+        (取消/X/点外部丢弃);附件上传即落暂存进列表、可移除,取消不
+        清(已是暂存事实)。文本上限 10000 字带计数——直进 AI 开场与
+        上下文重建的续聊词;日志等大文件走附件,发起时以路径引用随单。 */}
     <Dialog open={remarkEditing !== null} onOpenChange={(open) => {
       if (!open) setRemarkEditing(null);
     }}>
       <DialogContent className="tw-root sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>发起备注{remarkEditing ? ` · ${remarkEditing}` : ""}</DialogTitle>
-          <DialogDescription>开始时 AI 会重点读这段话。</DialogDescription>
+          <DialogTitle>附加信息{remarkEditing ? ` · ${remarkEditing}` : ""}</DialogTitle>
+          <DialogDescription>开始时 AI 会重点读这段话;日志等附件随单一并交给 AI。</DialogDescription>
         </DialogHeader>
         <Textarea value={remarkDraft} autoFocus
           maxLength={REMARK_MAX}
-          aria-label="发起备注内容"
+          aria-label="附加信息内容"
           placeholder="给 AI 的重点提示信息:已排除的方向、已明确的方案、清晰的问题描述等"
           className="h-64 [field-sizing:fixed] text-sm"
           onChange={(event) => setRemarkDraft(event.target.value)} />
+        {/* 随单附件(#502):点击选或拖入,多文件,类型不限单个 500MB;
+           不做粘贴分路——这里粘贴就是普通文本。 */}
+        <label
+          className={`flex h-9 shrink-0 cursor-pointer items-center justify-center
+            gap-2 rounded-md border border-dashed text-xs text-muted-foreground
+            transition-colors hover:bg-accent/40
+            ${remarkDragActive ? "border-primary bg-accent/40" : "border-input"}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setRemarkDragActive(true);
+          }}
+          onDragLeave={() => setRemarkDragActive(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setRemarkDragActive(false);
+            if (event.dataTransfer.files.length) {
+              void uploadRemarkFiles(event.dataTransfer.files);
+            }
+          }}>
+          <input type="file" multiple className="hidden"
+            aria-label="选择要随单上传的附件"
+            onChange={(event) => {
+              const selection = event.target.files;
+              if (selection?.length) {
+                void uploadRemarkFiles(selection);
+              }
+              // 同名文件改内容重选:清 value 让 onChange 能再触发。
+              event.target.value = "";
+            }} />
+          点击选择或拖入日志等附件(可多选,单个 ≤500MB)
+        </label>
+        {editingFiles.length > 0 && <ul className="flex flex-col gap-1">
+          {editingFiles.map((file) => (
+            <li key={file.path}
+              className="flex items-center justify-between gap-2 rounded-md
+                border border-input bg-surface px-2 py-1 text-xs">
+              <span className="truncate" title={file.path}>{file.name}</span>
+              <button type="button"
+                className="shrink-0 text-muted-foreground hover:text-foreground"
+                aria-label={`移除附件 ${file.name}`}
+                onClick={() => {
+                  if (remarkEditing === null) return;
+                  const ticketNo = remarkEditing;
+                  setRemarkFiles((current) => {
+                    const remaining = (current[ticketNo] ?? [])
+                      .filter((entry) => entry.path !== file.path);
+                    const next = { ...current };
+                    // 清空即删键:不留空数组条目(存了也是垃圾)。
+                    if (remaining.length) next[ticketNo] = remaining;
+                    else delete next[ticketNo];
+                    return next;
+                  });
+                }}>移除</button>
+            </li>
+          ))}
+        </ul>}
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs text-muted-foreground">
             {remarkDraft.length} / {REMARK_MAX} 字
+            {editingFiles.length > 0 && ` · 📎 ${editingFiles.length}`}
           </span>
           <div className="flex items-center gap-2">
             <Button type="button" variant="outline"
               onClick={() => setRemarkEditing(null)}>取消</Button>
-            <Button type="button" onClick={saveRemarkDraft}>保存备注</Button>
+            <Button type="button" onClick={saveRemarkDraft}>保存</Button>
           </div>
         </div>
       </DialogContent>

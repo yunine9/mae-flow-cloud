@@ -2186,6 +2186,19 @@ test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附
   assert.deepEqual(meta.attachments, ["attachments/aaaaaaaaaaaaaaaa.log"]);
   assert.equal(meta.remark, "先复现黑屏再查日志,别先动版本配置");
 
+  // 附件两源(2026-10-15 #502):DTS 发起随单上传的路径拼在附加信息
+  // 尾部,同样进 meta.attachments;两源同引用去重,不重复列。
+  const fromRemark = issueRegistrationMeta(metaState({
+    description: "播放器升级后黑屏",
+    remark: "先复现黑屏再查日志\n随单附件: attachments/bbbbbbbbbbbbbbbb.log",
+  }), {});
+  assert.deepEqual(fromRemark.attachments, ["attachments/bbbbbbbbbbbbbbbb.log"]);
+  const deduped = issueRegistrationMeta(metaState({
+    description: "日志见 attachments/bbbbbbbbbbbbbbbb.log",
+    remark: "随单附件: attachments/bbbbbbbbbbbbbbbb.log",
+  }), {});
+  assert.deepEqual(deduped.attachments, ["attachments/bbbbbbbbbbbbbbbb.log"]);
+
   // skipped 的知识仓不在场:不指一个不存在的路径。
   const skipped = issueRegistrationMeta(metaState({
     knowledge_repo: {
@@ -2195,7 +2208,7 @@ test("登记元信息扩展(2026-09-19):版本/基线/知识仓/转正来源/附
   }), {});
   assert.equal("knowledge_repo" in skipped, false);
   assert.equal("attachments" in skipped, false);
-  // 发起备注:没填整键缺席,不造空壳(2026-09-20)。
+  // 附加信息:没填整键缺席,不造空壳(2026-09-20)。
   assert.equal("remark" in skipped, false);
 });
 
@@ -2209,13 +2222,14 @@ test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本�
   assert.match(withAll, /优先查看附件再下结论/);
   assert.match(withAll, /产品版本: V5R1\(拉仓基线分支: master_v5r1\)/);
 
-  // 发起备注单列一行(2026-09-20):要求重点优先读;没填整行缺席。
+  // 附加信息单列一行(2026-09-20 拍板,2026-10-15 #502 更名):要求
+  // 重点优先读;没填整行缺席。
   const withRemark = issueFixedOpeningPrompt(metaState({
     remark: "先复现黑屏再查日志",
   }));
-  assert.match(withRemark, /发起备注: 先复现黑屏再查日志/);
+  assert.match(withRemark, /附加信息: 先复现黑屏再查日志/);
   assert.match(withRemark, /重点优先读/);
-  assert.doesNotMatch(issueFixedOpeningPrompt(metaState()), /发起备注/);
+  assert.doesNotMatch(issueFixedOpeningPrompt(metaState()), /附加信息/);
 
   // 无附件无版本:两行整段缺席,不渲染空壳。
   const plain = issueFixedOpeningPrompt(metaState());
@@ -2230,10 +2244,10 @@ test("开场词/续聊词:登记附件单列一行(优先查看)与产品版本�
   }), "继续");
   assert.match(resume, /登记附件: attachments\/aaaaaaaaaaaaaaaa\.log/);
   assert.match(resume, /产品版本: V5R1/);
-  assert.match(resume, /发起备注: 先复现黑屏再查日志/);
+  assert.match(resume, /附加信息: 先复现黑屏再查日志/);
   const plainResume = issueResumePrompt(metaState(), "继续");
   assert.doesNotMatch(plainResume, /登记附件/);
-  assert.doesNotMatch(plainResume, /发起备注/);
+  assert.doesNotMatch(plainResume, /附加信息/);
 });
 
 
@@ -2267,8 +2281,8 @@ test("登记元信息进开场上下文(service 接线):vault 解出的凭据明
     const opening = JSON.stringify(model.requests[0]);
     assert.match(opening, /env-shared-secret/);
     assert.match(opening, /业务模块: 支付核心\(id: pay-core\)/);
-    // 发起备注随登记进开场词(service 接线),要求 AI 重点优先读。
-    assert.match(opening, /发起备注: 先复现黑屏再查日志,别先动版本配置/);
+    // 附加信息随登记进开场词(service 接线),要求 AI 重点优先读。
+    assert.match(opening, /附加信息: 先复现黑屏再查日志,别先动版本配置/);
     assert.match(opening, /重点优先读/);
     // get_issue_meta 的回执进了第二个请求(工具结果回模型),密码在场。
     const followup = JSON.stringify(model.requests[1]);

@@ -479,8 +479,8 @@ export async function handleIssueRoutes(
         title: String(body.title ?? ""),
         description: body.description === undefined
           ? undefined : String(body.description),
-        // 发起备注(DTS 列表随单填写):原样进登记元信息,开场词要求
-        // AI 优先读;没填不带,不造空串。
+        // 附加信息(原发起备注,DTS 列表随单填写,#502 更名):原样进
+        // 登记元信息,开场词要求 AI 优先读;没填不带,不造空串。
         ...(body.remark ? { remark: String(body.remark) } : {}),
         source,
         ...(ticket ? { ticket } : {}),

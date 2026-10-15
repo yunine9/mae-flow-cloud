@@ -1,6 +1,7 @@
 /**
- * 登记附件上传落盘与工作区同步:手工登记(无单)时随现象描述上传的
- * 日志、压缩包等文件。
+ * 登记附件上传落盘与工作区同步:登记时随单上传的日志、压缩包等文件
+ * ——无单登记嵌在现象描述里,DTS 发起(2026-10-15,#502)随单上传的
+ * 拼在附加信息(remark)尾部,同一套路径引用纪律。
  *
  * 与 issueImages.ts(现象描述内嵌截图)同款架构红线:附件本体绝不进
  * 主模型上下文,进上下文的只有描述文本里的工作区相对路径引用;AI 拿
@@ -11,10 +12,11 @@
  *     (raw binary 流式落 staging:边写边算哈希,超上限中途掐断,不整包
  *     进内存)→ <dataDir>/issue-attachment-staging/<sha256前16>.<ext>
  *     → 返回 path = "attachments/<hash>.<ext>"
- *     → textarea 光标处插入纯文本路径引用
+ *     → textarea 光标处插入纯文本路径引用(发起弹窗则进文件列表,
+ *     发起时拼到附加信息尾部)
  *   提交登记 → create() 调 syncIssueAttachmentsToWorkspace
  *     → 从 staging 复制到 <issue-root>/attachments/<hash>.<ext>
- *     → description 不改写(保持工作区相对路径,AI 直接读)
+ *     → 文本不改写(保持工作区相对路径,AI 直接读)
  *
  * staging 全局共享(content-addressed,哈希去重);无主文件不做 GC
  * (与截图 staging 同现状,已知欠账)。工作区副本按会话隔离。
@@ -132,9 +134,21 @@ export function extractIssueAttachmentPaths(description: string | undefined): st
   return paths;
 }
 
+/** 附件引用扫描的两源合并(#502):无单嵌在 description,DTS 发起
+ * 随单上传的拼在 remark 尾部——提取与工作区同步都吃这一份合并文本,
+ * 两处不各写各的。 */
+export function attachmentSourceText(
+  description: string | undefined,
+  remark: string | undefined,
+): string {
+  return [description, remark].filter(Boolean).join("\n");
+}
+
 /**
- * 登记 create() 时调用:把 description 引用的附件从 staging 复制到
- * 会话工作区 attachments/ 目录。description 不改写——引用已是工作区
+ * 登记 create() 时调用:把描述/附加信息引用的附件从 staging 复制到
+ * 会话工作区 attachments/ 目录。两源(2026-10-15,#502):无单登记的
+ * 附件引用嵌在 description,DTS 发起随单上传的嵌在 remark(附加信息)
+ * 尾部——正则提取不分场景,合并去重。文本不改写——引用已是工作区
  * 相对路径,AI 直接读文件。
  *
  * fail-open:单个附件复制失败只跳过(可能 staging 已被清理),不阻断
@@ -142,11 +156,15 @@ export function extractIssueAttachmentPaths(description: string | undefined): st
  */
 export function syncIssueAttachmentsToWorkspace(input: {
   description: string;
+  /** 附加信息(DTS 发起随单填写,#502):尾部可带随单上传的附件
+   * 路径引用,与 description 同规则提取;缺席=无单场景没这字段。 */
+  remark?: string;
   dataDir: string;
   workspace: string;
   log?: (message: string) => void;
 }): { copied: number; missing: number } {
-  const paths = extractIssueAttachmentPaths(input.description);
+  const paths = extractIssueAttachmentPaths(
+    attachmentSourceText(input.description, input.remark));
   if (!paths.length) return { copied: 0, missing: 0 };
 
   const workspaceRoot = resolve(input.workspace);
