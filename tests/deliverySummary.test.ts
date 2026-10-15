@@ -16,7 +16,48 @@ import { listArtifactDocuments, readArtifact } from "../src/artifacts.ts";
 import { scopePipelineArtifacts } from "../src/pipelineArtifactScope.ts";
 
 // 脚本模型仅验证整份报告的传递与渲染，内容质量仍需真实模型验收。
-const diagram = `## 测试报告
+const diagram = `## 改动点 4+1
+原来查询直接取配置 → 现在查询入口统一处理空结果。
+### 逻辑视图
+查询入口复用配置组件，空结果统一为空数组。
+\`\`\`plantuml
+@startuml
+class "查询服务（修改）" as Query #LightBlue
+interface "配置来源（既有）" as Config #LightGray
+Query --> Config : 获取记录
+@enduml
+\`\`\`
+依据：service.cpp 的查询入口。
+### 开发视图
+新增转换模块，查询模块调用后输出统一结果。
+\`\`\`plantuml
+@startuml
+component "查询模块（修改）" as query #LightBlue
+component "结果转换（新增）" as convert #LightGreen
+component "配置组件（既有）" as config #LightGray
+query --> config : 获取记录
+query --> convert : 转换空结果
+@enduml
+\`\`\`
+依据：service.cpp 的模块依赖。
+### 进程视图
+空记录在返回前转换，时序依据源码，尚无运行结果。
+\`\`\`plantuml
+@startuml
+actor "调用者" as user
+participant "查询入口（修改）" as query #LightBlue
+participant "配置组件（既有）" as config #LightGray
+user -> query : 查询
+query -> config : 读取配置
+config --> query : 空记录
+query --> user : 空数组（修改）
+@enduml
+\`\`\`
+### 物理视图
+沿用既有服务进程，本次差异无部署配置变更。
+### 场景视图（+1）
+见进程视图的查询流程；空结果关联 TC-01（函数 UT）、TC-02（模块 UT），执行结果未确认。
+## 测试报告
 ### 验证范围与结论
 查询行为，执行证据不足，当前版本的逐项结果未确认。
 ### 设计用例与执行结果
@@ -26,32 +67,8 @@ const diagram = `## 测试报告
 | TC-02 查询入口 | 模块 UT（MST） | 配置组件返回空记录，调用查询入口，预期返回空数组 | 未找到 | 未确认 | 未取得逐项结果 |
 ### 失败、遗漏与待确认项
 需核对对应测试代码与真实执行证据，不能凭整体绿灯确认这两条用例通过。
-## 改动点 4+1
-| 视角 | 状态 | 主要变化 |
-|---|---|---|
-| 逻辑 | 变化 | 查询与配置职责关系 |
-| 开发 | 变化 | 查询模块依赖 |
-| 进程 | 待确认 | 缺少执行过程证据 |
-| 物理 | 不涉及 | 无部署配置变更 |
-| 场景 | 变化 | 空查询结果 |
-### 逻辑视图
-查询入口复用既有配置组件。
-\`\`\`plantuml
-@startuml
-component "查询接口\\n修改" as api #LightBlue
-component "配置组件\\n既有" as config
-api --> config : 查询网元配置
-@enduml
-\`\`\`
-### 开发视图
-复用逻辑视图的组件依赖图，改动文件为 service.cpp。
-### 进程视图
-调用顺序与异常路径的运行证据不足，需进一步核对。
-### 物理视图
-本次差异不包含部署配置变更，未进行部署验证。
-### 场景视图（+1）
-空结果场景关联 TC-01、TC-02，测试证据尚待补齐。
 `;
+const misplacedDiagram = "## 测试报告\n```plantuml\n@startuml\nA -> B: 测试\n@enduml\n```\n## 改动点 4+1\n### 逻辑视图\n只分析 diff，没有图。";
 function fixture() {
   const repo = mkdtempSync(join(tmpdir(), "delivery-summary-"));
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
@@ -142,10 +159,14 @@ test("shutdown 取消独立子会话，不留下后台发布", async () => {
   } finally { f.dispose(); }
 });
 
-test("交付报告 PlantUML 使用真实渲染器校验", async () => {
+test("4+1 的图真实渲染，其他章节或代码示例中的图不能代替", async () => {
   assert.equal(await validateSummaryDiagrams(diagram), undefined);
+  assert.equal(await validateSummaryDiagrams(diagram.replace("## 改动点 4+1\n", "").replaceAll("###", "##")), undefined, "允许直接排列五个视角，不强制总章节标题");
   assert.match((await validateSummaryDiagrams("no diagram"))!, /缺少/);
-  assert.match((await validateSummaryDiagrams("```plantuml\n@startuml\nthis is invalid ???\n@enduml\n```"))!, /语法错误/);
+  assert.match((await validateSummaryDiagrams(misplacedDiagram))!, /4\+1.*缺少/);
+  assert.match((await validateSummaryDiagrams("````markdown\n" + diagram + "\n````"))!, /缺少/);
+  assert.equal(await validateSummaryDiagrams("## 改动点 4+1\n~~~PlantUML\n@startuml\nA -> B: 查询\n@enduml\n~~~"), undefined);
+  assert.match((await validateSummaryDiagrams("## 改动点 4+1\n```plantuml\n@startuml\nthis is invalid ???\n@enduml\n```"))!, /语法错误/);
 });
 
 for (const failed of [false, true]) {
@@ -181,7 +202,7 @@ test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后�
     { tool: { name: "delivery_source", input: { action: "read", path: "service.cpp" } } },
     { tool: { name: "delivery_evidence", input: { action: "list" } } },
     { tool: { name: "delivery_evidence", input: { action: "read", id: "design:1" } } },
-    { text: "暂缺图" },
+    { text: misplacedDiagram },
     { text: diagram },
   ], "scripted-v1", { linear: true });
   try {
@@ -210,6 +231,7 @@ test("真实 Pi 子会话只读固定 diff/源码及执行证据，修正图后�
       assert.ok(published.includes(part), part);
     const names = (model.requests[0].tools as Array<{ name: string }>).map(tool => tool.name);
     assert.deepEqual(names, ["delivery_source", "delivery_evidence"]);
+    assert.match(JSON.stringify(model.requests.at(-1)), /其他章节的图不能代替/);
     assert.equal(f.git("rev-parse", "HEAD"), f.head);
   } finally { await model.stop(); f.dispose(); }
 });
