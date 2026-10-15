@@ -33,10 +33,10 @@ test("文案目录挂载:三个文件全部加载,锚点按域分布", () => {
 
 test("{{var}} 替换:数字自动转串,文本原样保序", () => {
   const text = promptCopy("receipts", "push.branch_mismatch", {
-    expected: "master_dev_D1", branch: "main",
+    expected: "master_dev_D1_20261015090000", branch: "main",
   });
-  assert.match(text, /应为 master_dev_D1,实际 main/);
-  assert.match(text, /master_<工号>_<单号>/, "静态部分不能丢");
+  assert.match(text, /应为 master_dev_D1_20261015090000,实际 main/);
+  assert.match(text, /基线_工号_单号_时间戳/, "静态部分不能丢(ADR-0063 命名口径)");
   const nudge = promptCopy("notices", "nudge.body", {
     attempt: 1, budget: 2,
     stage_brief: "当前阶段「问题分析」: X。出口: Y。可用工具: Z。",

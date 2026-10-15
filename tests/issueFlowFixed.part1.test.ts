@@ -211,7 +211,12 @@ test("固定流程有单全链:拉单→分析闸→修改→UT→MR 红转绿�
     const branchNow = spawnSync("git",
       ["-C", join(dataDir, "issues", created.id, "repo", "origin"), "branch", "--show-current"],
       { encoding: "utf-8" });
-    assert.equal(branchNow.stdout.trim(), BRANCH, "pull_repo 时宿主切的修复分支名=master_工号_单号");
+    const fixBranch = loadState(join(dataDir, "issues", created.id))?.fix_branch;
+    assert.match(fixBranch ?? "",
+      new RegExp(`^br_V100R026C10_release_dev_${TICKET}_\\d{14}$`),
+      "修复分支命名=基线_工号_单号_时间戳(ADR-0063)");
+    assert.equal(branchNow.stdout.trim(), fixBranch,
+      "pull_repo 时宿主切的就是会话定名的修复分支");
 
     // ③ 流水线红→AI 修→再推→绿:全由宿主监看驱动,绿了自动收口
     // (ADR-0013:流程终点=MR 跑绿,收口后等用户归档)。
@@ -1266,8 +1271,10 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
   });
   try {
     // ① 无仓登记放行(repo_needed 闸已退役,缺仓不再举平台卡)。
+    // 基线必填(ADR-0063 后修复分支以它为前缀;生产路由已硬保)。
     const created = service.create({
       account: "dev", title: "登录超时", ticket: TICKET, source: "dts",
+      baseline: "br_V100R026C10_release",
     });
     assert.equal(created.repo_url, undefined);
     assert.equal(created.stage, "dts_info");
@@ -1298,7 +1305,11 @@ test("拉仓工具化(2026-08-28 v2):fixed DTS 无仓发起,AI 拉单后自己�
       "克隆平铺在 repo/<仓名>/");
     const branch = spawnSync("git", ["-C", join(root, "repo", "origin"),
       "branch", "--show-current"], { encoding: "utf-8" });
-    assert.equal(branch.stdout.trim(), BRANCH, "拉仓时宿主切好修复分支");
+    assert.equal(branch.stdout.trim(),
+      loadState(root)?.fix_branch, "拉仓时宿主切好会话定名的修复分支");
+    assert.match(loadState(root)?.fix_branch ?? "",
+      new RegExp(`^br_V100R026C10_release_dev_${TICKET}_\\d{14}$`),
+      "修复分支命名=基线_工号_单号_时间戳(ADR-0063)");
     assert.ok(analyzed.transitions?.some((entry) =>
       /代码仓已拉取/.test(entry.note)), "拉仓留转移账");
     // 会话 A 停在分析闸即可(拉仓路已证明);不再作答,把线性剧本让给会话 B。
@@ -2084,7 +2095,10 @@ test("登记元信息块(ADR-0003):开场/续聊词渲染环境明文与模块/�
 
 
 test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、密码在返回值里;无环境缺省形", async () => {
-  const state = metaState();
+  // 修复分支定名(ADR-0063)在场=会话已拉过仓的常态;repair_branch 渲染
+  // 定名,未定名时整键缺席(不预写一个算不出的名字)。
+  const FIX_BRANCH = "master_dev_DTS-2026-1001_20261015090000";
+  const state = metaState({ fix_branch: FIX_BRANCH });
   const tools = createIssueTools({
     state, workspace: "/tmp/ws", dataRoot: "/tmp/data",
     persist: () => undefined,
@@ -2118,7 +2132,7 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
       { url: "/tmp/y.git", dir: "repo/y" },
     ],
     ticket: "DTS-2026-1001",
-    repair_branch: "master_dev_DTS-2026-1001",
+    repair_branch: FIX_BRANCH,
     environment: {
       name: "10.0.0.8",
       hosts: ["10.0.0.8", "10.0.0.9"],
@@ -2146,6 +2160,8 @@ test("get_issue_meta 工具(ADR-0003):元信息完整 JSON 与提示词同源、
   assert.equal("product_version" in bare, false);
   assert.equal("baseline" in bare, false);
   assert.equal("knowledge_repo" in bare, false);
+  assert.equal("repair_branch" in bare, false,
+    "修复分支未定名(还没拉过仓)时整键缺席,不预写算不出的名字");
   assert.deepEqual(bare.repos, [{ url: "/tmp/x.git", dir: "repo/x" }]);
 });
 

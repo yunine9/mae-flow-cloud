@@ -144,6 +144,8 @@ function handcraftLive(
     title: "知识仓装载回归", description: "", source: "dts",
     ticket: "DTS-2026-1025",
     ...(repoUrls.length ? { repo_url: repoUrls[0], repo_urls: repoUrls } : {}),
+    // 修复分支以基线为前缀(ADR-0063):有单会话拉仓的硬前提。
+    baseline: "master",
     scenario: "ticket", round: 1,
     stage_states: FIXED_TICKET_STAGES.map(() => "pending"),
     status: "idle", stage: "prep_repo", stage_note: "",
