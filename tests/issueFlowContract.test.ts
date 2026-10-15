@@ -378,7 +378,7 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       updated_at: "2026-08-28T00:00:00Z",
       title: "登录超时",
       description: "压测环境登录超时,疑似连接池耗尽",
-      // 发起备注(DTS 列表随单填写):本会话没带,可选不设限。
+      // 附加信息(DTS 列表随单填写):本会话没带,可选不设限。
       remark: undefined,
       source: "dts",
       ticket: TICKET,
@@ -929,7 +929,7 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       updated_at: "2026-08-28T00:00:00Z",
       title: "偶发黑屏",
       description: "",
-      // 发起备注(DTS 列表随单填写):发起时不带即缺席,可选不设限。
+      // 附加信息(DTS 列表随单填写):发起时不带即缺席,可选不设限。
       remark: undefined,
       source: "manual",
       ticket: undefined,

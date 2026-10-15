@@ -33,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import type { IssueSessionState } from "./state.ts";
 import type { IssueInterventionTier } from "../auth.ts";
 import { issueRepoWorkspaces } from "./state.ts";
-import { extractIssueAttachmentPaths } from "./issueAttachments.ts";
+import { attachmentSourceText, extractIssueAttachmentPaths } from "./issueAttachments.ts";
 import { REVIEWS_DIR, REVIEW_NOTES_SNAPSHOT } from "./reviews.ts";
 import {
   FIXED_STAGE_LABELS,
@@ -160,7 +160,8 @@ export interface IssueRegistrationMeta {
   scenario: "ticket" | "no_ticket";
   title: string;
   description: string;
-  /** 发起备注:DTS 列表勾选发起时人随单填写的补充说明(要求 AI 重点
+  /** 附加信息(原发起备注,2026-10-15 #502 更名):DTS 列表发起时
+   * 人随单填写的文字,尾部可带随单上传的附件路径引用(要求 AI 重点
    * 优先读);缺席=发起时没填。 */
   remark?: string;
   /** 登记人(ADR-0031):通常是测试,问题由其登记提交;缺席=自登记。 */
@@ -169,7 +170,8 @@ export interface IssueRegistrationMeta {
    * 本就包含它,此前实现漏了,2026-09-19 补齐)。 */
   account: string;
   /** 登记附件(attachments/<hash>.<ext>,工作区相对路径):人随描述
-   * 上传的日志等分析材料,开场词单列一行引导优先查看;缺席=没传。 */
+   * 或 DTS 发起附加信息上传的日志等分析材料,开场词单列一行引导优先
+   * 查看;缺席=没传。 */
   attachments?: string[];
   module?: { id: string; name: string };
   /** 登记仓全量:url 是克隆源,dir 是会话工作区内的落位(AI 按工作区
@@ -212,7 +214,10 @@ export function issueRegistrationMeta(
   const repos = issueRepoWorkspaces(state, "").map(({ url, dir }) => ({
     url, dir: dir.replace(/^[\\/]/, ""),
   }));
-  const attachments = extractIssueAttachmentPaths(state.description);
+  // 附件两源(#502):无单嵌在描述,DTS 发起随单上传的拼在附加信息
+  // 尾部——合并提取去重,开场词/续聊词/元信息工具同一份。
+  const attachments = extractIssueAttachmentPaths(
+    attachmentSourceText(state.description, state.remark));
   return {
     scenario: state.scenario ?? "ticket",
     title: state.title,
@@ -399,10 +404,11 @@ export function issueFixedOpeningPrompt(
   const facts = [
     `- 标题: ${meta.title}`,
     `- 描述: ${meta.description || "(无补充描述)"}`,
-    // 发起备注单列一行(2026-09-20 拍板):发起人随单填写的指示,埋在
-    // 描述里会被略读——单列并明确"重点优先读、遵照执行"。
+    // 附加信息单列一行(2026-09-20 拍板,2026-10-15 #502 更名):发起
+    // 人随单填写的指示与随单附件,埋在描述里会被略读——单列并明确
+    // "重点优先读、遵照执行"。附件行已单列,这里不重复引导。
     ...(meta.remark
-      ? [`- 发起备注: ${meta.remark}(发起人在 DTS 列表随单填写,`
+      ? [`- 附加信息: ${meta.remark}(发起人在 DTS 列表随单填写,`
           + "重点优先读:开工前先完整读一遍并遵照其中的指示处理)"]
       : []),
     // 登记附件单列一行(2026-09-19 拍板):日志是核心分析材料,埋在
@@ -547,10 +553,10 @@ export function issueResumePrompt(
       ? [`- 登记人: ${meta.reporter}(问题由其登记提交)`]
       : []),
     `- 单号: ${state.ticket ?? "(未绑定)"}`,
-    // 发起备注与附件随续聊词重给(与开场词同一事实源):重启后模型
+    // 附加信息与附件随续聊词重给(与开场词同一事实源):重启后模型
     // 上下文是重建的,登记材料不随对话流失。
     ...(meta.remark
-      ? [`- 发起备注: ${meta.remark}(发起人随单填写,重点优先读并遵照执行)`]
+      ? [`- 附加信息: ${meta.remark}(发起人随单填写,重点优先读并遵照执行)`]
       : []),
     // 附件与产品版本随续聊词重给(与开场词同一事实源):重启后模型
     // 上下文是重建的,登记材料不随对话流失。

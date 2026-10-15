@@ -551,8 +551,10 @@ export interface IssueCreateInput {
   reporter?: string;
   title: string;
   description?: string;
-  /** 发起备注(DTS 列表随单填写):原样进登记元信息,AI 开场被要求
-   * 优先读;手工登记不带。trim 后为空 = 没填,不落字段。 */
+  /** 附加信息(原发起备注,DTS 列表随单填写,#502 更名):原样进
+   * 登记元信息,AI 开场被要求优先读;尾部可带随单上传的附件路径
+   * 引用(与 description 同规则提取同步)。trim 后为空 = 没填,不落
+   * 字段。手工登记不带。 */
   remark?: string;
   source?: IssueSource;
   ticket?: string;
@@ -1375,6 +1377,7 @@ export class IssueFlowService {
         id: live.id,
         title: live.state.title,
         module: live.state.module?.trim() || "未分类",
+        reporter: live.state.reporter?.trim() || live.state.account,
         concluded_at: concludedAt,
         reviews: axes?.reviews ?? 0,
         localization_pass: axes?.localization_pass ?? false,
@@ -1813,16 +1816,24 @@ export class IssueFlowService {
     // description 里的相对路径引用原样保留——AI 侧 inspect_image 直接可用。
     // 同步在状态落盘前:失败只跳过(fail-open),不阻断登记。
     const descriptionText = input.description?.trim() ?? "";
-    if (descriptionText) {
-      syncIssueImagesToWorkspace({
-        description: descriptionText,
-        dataDir: this.options.dataDir,
-        workspace: root,
-        log: (message) => this.log(message),
-      });
+    const remarkText = input.remark?.trim() ?? "";
+    if (descriptionText || remarkText) {
+      // 现象描述内嵌截图:把 staging 里的图片复制到会话工作区 issue-images/,
+      // description 里的相对路径引用原样保留——AI 侧 inspect_image 直接可用。
+      // 同步在状态落盘前:失败只跳过(fail-open),不阻断登记。
+      if (descriptionText) {
+        syncIssueImagesToWorkspace({
+          description: descriptionText,
+          dataDir: this.options.dataDir,
+          workspace: root,
+          log: (message) => this.log(message),
+        });
+      }
       // 登记附件(日志等):同一纪律,从 staging 复制到工作区 attachments/。
+      // 两源(#502):无单嵌在描述,DTS 发起随单上传的拼在附加信息尾部。
       syncIssueAttachmentsToWorkspace({
         description: descriptionText,
+        remark: remarkText,
         dataDir: this.options.dataDir,
         workspace: root,
         log: (message) => this.log(message),
@@ -1842,7 +1853,7 @@ export class IssueFlowService {
       updated_at: now,
       title,
       description: input.description?.trim() ?? "",
-      ...(input.remark?.trim() ? { remark: input.remark.trim() } : {}),
+      ...(remarkText ? { remark: remarkText } : {}),
       ...(input.interventionTier
         ? { intervention_tier: input.interventionTier } : {}),
       ...(input.autoClaim ? { auto_claim: true as const } : {}),

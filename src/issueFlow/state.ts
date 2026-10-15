@@ -371,7 +371,8 @@ export interface IssueSessionState {
   updated_at: string;
   title: string;
   description: string;
-  /** 发起备注:DTS 列表勾选发起时人随单填写的文本输入,原样进登记
+  /** 附加信息(原发起备注,2026-10-15 #502 更名):DTS 列表发起时
+   * 人随单填写的文字,尾部可带随单上传的附件路径引用;原样进登记
    * 元信息(IssueRegistrationMeta)——开场词/续聊词与 get_issue_meta
    * 都要求 AI 优先读它。缺席=发起时没填(手工登记不带这列)。 */
   remark?: string;
