@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction, KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
+import type { DomainArchiveTargetsPreview, DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 import { mrParticipantsMessage } from "../../src/mrParticipants";
 import { archiveRequest } from "./knowledgeArchiveAction";
 
@@ -31,14 +32,20 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false }: {
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false, editTargets = false }: {
   endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
   onBeforeOpen?: (replaceExisting?: boolean) => void;
-  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean; editTargets?: boolean;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [targets, setTargets] = useState<KnowledgeArchivePreview["targets"]>([]);
+  const [layout, setLayout] = useState<{ key: string; data: DomainArchiveTargetsPreview }>();
+  const [layoutError, setLayoutError] = useState("");
+  const targetInput = { base_revision: preview?.archive_revision ?? 0, targets: targets.map(({ id, name, repository, branch, docs_path }) => ({ id, name, repository, branch, docs_path })), documents: [] };
+  const targetKey = JSON.stringify({ endpoint, targetInput });
+  const displayPreview = editTargets && layout?.key === targetKey ? layout.data.archive_preview ?? preview : preview;
   const submitting = useRef(false), generation = useRef(0);
   const archiveOnOpen = useRef(false);
   const consumedOpenRequest = useRef<{ endpoint: string; request: number } | undefined>(undefined);
@@ -61,7 +68,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     void componentRequest<KnowledgeArchivePreview>(`${endpoint}/preview`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
       .then(async result => {
         if (generation.current !== owner) return;
-        setPreview(result); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
+        setPreview(result); setTargets(result.targets); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
         const request = archiveOnOpen.current && !disabled
           ? replaceExistingOnOpen && result.issue_no?.trim() && result.actions.some(action => action.id === "replace-archive")
             ? { action: "create" as const, input: { issue_no: result.issue_no.trim(), issue_description: result.issue_description?.trim() || undefined,
@@ -79,18 +86,33 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
       .finally(() => { if (generation.current === owner) { setLoading(false); setBusy(false); submitting.current = false; } });
     return () => { generation.current++; controller.abort(); };
   }, [open, endpoint, production?.archive.visible]);
+  useEffect(() => {
+    setLayout(undefined); setLayoutError("");
+    if (!editTargets || !open || !preview || !targets.length || busy) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void componentRequest<DomainArchiveTargetsPreview>(`${endpoint}/targets/preview`, targetInput,
+        AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
+        .then(data => { if (!controller.signal.aborted) setLayout({ key: targetKey, data }); })
+        .catch(reason => { if (!controller.signal.aborted) setLayoutError((reason as Error).message); });
+    }, 300);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [editTargets, open, preview?.job_id, preview?.archive_revision, targetKey, busy]);
   async function execute(action: KnowledgeProductionAction, targetId?: string) {
     if (!["create-archive", "retry-archive", "replace-archive"].includes(action.id)) return;
     const retry = action.id === "retry-archive";
-    if ((!preview && !retry) || disabled || loading || submitting.current) return;
+    if ((!preview && !retry) || disabled || loading || submitting.current || !retry && editTargets && layout?.key !== targetKey) return;
     submitting.current = true; setBusy(true); setError("");
     const owner = generation.current;
     try {
+      const configured = !retry && editTargets ? await componentRequest<DomainKnowledgeJob>(`${endpoint}/targets`, targetInput, AbortSignal.timeout(30_000)) : undefined;
+      if (configured && generation.current === owner) setPreview(current => current ? { ...current, archive_revision: configured.archive_revision } : current);
       const result = await componentRequest<KnowledgeArchivePreview>(`${endpoint}/${retry ? "retry" : "create"}`, retry
         ? { batch_id: action.batch_id, target_id: action.target_id ?? targetId }
         : { issue_no: issue.trim(), issue_description: description.trim() || undefined, expected_revisions: preview!.expected_revisions,
+          ...(configured ? { expected_archive_revision: configured.archive_revision } : {}),
           ...(action.id === "replace-archive" ? { replace_existing: true } : {}) }, AbortSignal.timeout(5 * 60_000));
-      if (generation.current === owner) { setPreview(result); onChanged?.(); }
+      if (generation.current === owner) { setPreview(result); setTargets(result.targets); onChanged?.(); }
     } catch (reason) { if (generation.current === owner) setError((reason as Error).name === "TimeoutError" ? "归档请求超过 5 分钟，请重新打开归档查看实际结果后重试。" : (reason as Error).message); }
     finally { if (generation.current === owner) { submitting.current = false; setBusy(false); } }
   }
@@ -98,13 +120,14 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     if (action.id === "review") return onReview
       ? <Button key={action.id} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onReview(); }}>{action.label}</Button>
       : action.href ? <a key={action.id} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a> : null;
+    if (action.id === "configure" && editTargets) return null;
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
       : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
     if (["create-archive", "replace-archive"].includes(action.id) && onBeforeOpen) return <Button key={`${action.id}:${targetId ?? "all"}`}
       disabled={disabled || busy || loading} onClick={() => { setOpen(false); onBeforeOpen(action.id === "replace-archive"); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
-      disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && !issue.trim()} onClick={() => void execute(action, targetId)}>{action.label}</Button>;
+      disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && (!issue.trim() || editTargets && layout?.key !== targetKey)} onClick={() => void execute(action, targetId)}>{editTargets && action.id === "create-archive" ? "确认路径并创建 MR" : action.label}</Button>;
   }
   const action = production?.archive.actions.find(item => item.id === "archive");
   if (!production?.archive.visible || !action) return null;
@@ -123,7 +146,16 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             <label className="grid gap-1 text-sm">关联单号（必填）<Input aria-label="归档关联单号" required maxLength={120} disabled={busy} value={issue} onChange={event => setIssue(event.target.value)} /></label>
             <label className="grid gap-1 text-sm">单号描述<Input aria-label="归档单号描述" maxLength={2000} disabled={busy} value={description} onChange={event => setDescription(event.target.value)} /></label>
           </div>
-          {preview.targets.map(target => <section key={target.id} className="space-y-3 rounded-lg border border-line p-4" aria-label={`${target.name}归档`}>
+          {editTargets && <section className="space-y-3" aria-label="组件知识归档路径">
+            <p className="text-sm text-muted-foreground">指定目标仓、分支和仓内相对目录。能力文档、总目录及导航入口全部归档到该目录下；原萃取成果保持原样。</p>
+            {targets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy}>
+              <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label="组件归档仓地址" value={target.repository} onChange={event => setTargets(values => values.map(value => value.id === target.id ? { ...value, repository: event.target.value } : value))} /></label>
+              <label className="grid gap-1 text-sm">目标分支<Input aria-label="组件归档分支" value={target.branch} onChange={event => setTargets(values => values.map(value => value.id === target.id ? { ...value, branch: event.target.value } : value))} /></label>
+              <label className="grid gap-1 text-sm">仓内相对目录<Input aria-label="组件归档相对目录" value={target.docs_path} placeholder="docs/components" onChange={event => setTargets(values => values.map(value => value.id === target.id ? { ...value, docs_path: event.target.value } : value))} /></label>
+            </fieldset>)}
+            {layoutError ? <p role="alert" className="text-sm text-danger">{layoutError}</p> : layout?.key !== targetKey && <p role="status" className="text-sm text-muted-foreground">正在计算能力文件的归档路径…</p>}
+          </section>}
+          {displayPreview?.targets.map(target => <section key={target.id} className="space-y-3 rounded-lg border border-line p-4" aria-label={`${target.name}归档`}>
             <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{target.name}</h3>{target.status_label !== preview.status_label && <span className="text-sm">{target.status_label}</span>}</div>
             <p className="break-all text-sm text-muted-foreground">{[target.repository, target.branch, target.docs_path].filter(Boolean).join(" · ")}</p>
             {target.message && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{target.message}</p>}
@@ -138,7 +170,7 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
             {!!target.actions.length && <div className="flex flex-wrap items-center gap-3">{target.actions.map(item => renderAction(item, target.id))}</div>}
           </section>)}
           {/* 主动作贴底：多仓时文件清单很长，1366×768 下按钮曾落在首屏之外要滚动才能找到。 */}
-          {!!preview.actions.length && <div className="sticky -bottom-4 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-3 border-t border-line bg-popover px-4 py-3">{preview.actions.map(item => renderAction(item))}</div>}
+          {!!displayPreview?.actions.length && <div className="sticky -bottom-4 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-3 border-t border-line bg-popover px-4 py-3">{displayPreview.actions.map(item => renderAction(item))}</div>}
         </div>}
       </DialogContent>
     </Dialog>

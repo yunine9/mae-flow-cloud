@@ -6,7 +6,7 @@ export interface KnowledgeProductionAction {
 }
 export interface KnowledgeArchivePreview {
   job_id: string; title: string; status_label: string; message: string; actions: KnowledgeProductionAction[];
-  issue_no?: string; issue_description?: string; expected_revisions: Record<string, string>;
+  issue_no?: string; issue_description?: string; expected_revisions: Record<string, string>; archive_revision?: number;
   targets: Array<{ id: string; name: string; repository: string; branch: string; docs_path: string; configured: boolean;
     status_label: string; message: string; error?: string; url?: string; mr_participants?: MrParticipantsResult; actions: KnowledgeProductionAction[];
     files: Array<{ id: string; title: string; path: string; content: string; knowledge_document_id: string; knowledge_revision: string }> }>;

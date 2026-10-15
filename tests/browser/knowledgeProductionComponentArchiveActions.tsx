@@ -8,11 +8,20 @@ import type { knowledgeManualArchiveFixtures } from "../fixtures/knowledgeManual
 const fixture = JSON.parse(document.getElementById("fixture")!.textContent!) as Awaited<ReturnType<typeof knowledgeManualArchiveFixtures>>;
 const requests: Array<{ path: string; method: string; body?: any }> = [], errors: string[] = [];
 let preview = fixture.componentReady.preview;
+function targetPreview(body: any, current = preview) {
+  const targets = current.targets.map(target => {
+    const next = body.targets.find((value: any) => value.id === target.id) ?? target;
+    return { ...target, ...next, files: target.files.map(file => ({ ...file, path: file.path.replace(`${target.docs_path}/`, `${next.docs_path}/`) })) };
+  });
+  return { targets, documents: targets.flatMap(target => target.files.map(file => ({ ...file, target_id: target.id }))), archive_revision: 1,
+    archive_preview: { ...current, targets } };
+}
 window.addEventListener("error", event => errors.push(event.message)); window.addEventListener("unhandledrejection", event => errors.push(String(event.reason)));
 window.fetch = async (input, init) => {
   const path = String(input), method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) : undefined;
   requests.push({ path, method, body });
   if (method === "GET" && path.endsWith("/archive/preview")) return new Response(JSON.stringify(preview));
+  if (method === "POST" && path.endsWith("/archive/targets/preview")) return new Response(JSON.stringify(targetPreview(body)));
   if (method === "POST" && path.endsWith("/archive/create")) { preview = fixture.partial.preview; return new Response(JSON.stringify(preview)); }
   if (method === "POST" && path.endsWith("/archive/retry")) { preview = fixture.completed.preview; return new Response(JSON.stringify(preview)); }
   return new Response(JSON.stringify({ error: `不应调用已退役链：${method} ${path}` }), { status: 400 });
@@ -72,7 +81,7 @@ async function run() {
   root.render(<ComponentKnowledgeArchive key="unconfigured" record={fixture.unconfigured.record} />); await pause();
   named("归档")[0].click(); await pause();
   const settings = fixture.unconfigured.preview.targets.flatMap(target => target.actions).find(action => action.id === "configure") ?? fixture.unconfigured.preview.actions.find(action => action.id === "configure");
-  check(settings, "未配置目标由后端给出设置入口"); check(document.body.textContent?.includes(settings!.label), "未配置必须指向设置");
+  check(settings, "未配置目标由后端给出设置入口"); check(document.querySelector('[aria-label="组件归档相对目录"]'), "未配置可直接在归档弹窗设置相对目录");
   check(!buttons().some(button => button.textContent?.trim() === create.label && !button.disabled), "未配置不能盲目创建MR");
   check(!errors.length, errors.join(";")); check(document.documentElement.scrollWidth <= innerWidth + 2, "桌面没有横向溢出");
   return { passed: true, width: innerWidth };
@@ -126,6 +135,7 @@ async function unpublishedArchive() {
     else if (path === `/component-research/${taskA}`) response = fixture.componentReady.record;
     else if (path === `/component-research/${taskB}`) response = nextRecord;
     else if (path.startsWith("/knowledge-review/component/")) response = { notes: [] };
+    else if (path.endsWith("/archive/targets/preview")) response = targetPreview(body, path.includes(taskA) ? fixture.componentReady.preview : fixture.componentNextReady.preview);
     else if (path === `/component-research/${taskA}/archive/preview`) response = fixture.componentReady.preview;
     else if (path === `/component-research/${taskB}/archive/preview`) {
       if (!nextRecord.document_id) return new Response(JSON.stringify({ error: "尚无已发布的正式知识" }), { status: 400 });
@@ -161,6 +171,42 @@ async function unpublishedArchive() {
   check(!document.querySelector('[role="dialog"]')?.textContent?.includes("尚无已发布的正式知识"), "旧无正式知识错误不能遗留");
   check(!errors.length, errors.join("；")); root.unmount(); return { passed: true, width: innerWidth };
 }
+async function componentPaths() {
+  phase("component chosen archive path");
+  const initial = structuredClone(fixture.componentReady.preview);
+  initial.targets[0].files = Array.from({ length: 110 }, (_, index) => ({ ...initial.targets[0].files[0], id: `ability-${index}`, title: `能力 ${index}`, path: `${initial.targets[0].docs_path}/cpp/capabilities/ability-${index}.md` }));
+  let saved = false;
+  window.fetch = async (input, init) => {
+    const path = String(input), method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push({ path, method, body });
+    if (path.endsWith("/archive/preview")) return new Response(JSON.stringify(initial));
+    if (path.endsWith("/archive/targets/preview")) return new Response(JSON.stringify(targetPreview(body, initial)));
+    if (path.endsWith("/archive/targets")) { saved = true; return new Response(JSON.stringify({ archive_revision: 1 })); }
+    if (path.endsWith("/archive/create")) {
+      check(saved && body.expected_archive_revision === 1, "创建MR绑定已确认的归档目录版本");
+      check(JSON.stringify(body.expected_revisions) === JSON.stringify(initial.expected_revisions), "仍归档原正式知识版本");
+      return new Response(JSON.stringify({ ...initial, status_label: "已归档", archive_revision: 1, actions: [], targets: initial.targets.map(target => ({ ...target, status_label: "已归档", url: "https://example.test/mr/chosen" })) }));
+    }
+    throw new Error(`意外请求 ${path}`);
+  };
+  root.render(<ComponentKnowledgeArchive record={fixture.componentReady.record} />); await pause(); named("归档")[0].click();
+  for (let i = 0; i < 20 && !document.querySelector('[aria-label="组件归档相对目录"]'); i++) await pause();
+  const field = document.querySelector<HTMLInputElement>('[aria-label="组件归档相对目录"]')!;
+  check(field, "归档弹窗直接显示仓内相对目录输入框");
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "docs/my-team/chosen");
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  for (let i = 0; i < 30 && (named("确认路径并创建 MR")[0]?.disabled !== false || !document.body.textContent?.includes("docs/my-team/chosen/cpp/capabilities/ability-109.md")); i++) await pause();
+  check(document.body.textContent?.includes("docs/my-team/chosen/cpp/capabilities/ability-109.md"), "110项能力均预览到用户所选目录");
+  check(!requests.some(request => request.path.endsWith("/archive/targets") || request.path.endsWith("/archive/create")), "预览不保存设置或创建MR");
+  const confirm = named("确认路径并创建 MR")[0]; check(confirm && !confirm.disabled, "路径与版本预览完成后才能创建"); confirm.click(); confirm.click();
+  for (let i = 0; i < 20 && !document.querySelector('a[href="https://example.test/mr/chosen"]'); i++) await pause();
+  check(requests.filter(request => request.path.endsWith("/archive/create")).length === 1, "重复点击只创建一次MR");
+  const settings = requests.find(request => request.path.endsWith("/archive/targets"))!;
+  check(settings.body.targets[0].docs_path === "docs/my-team/chosen", "保存用户指定目录");
+  check(document.querySelector('a[href="https://example.test/mr/chosen"]'), "成功显示MR链接");
+  check(document.documentElement.scrollWidth <= innerWidth + 2, "桌面窗口无横向溢出");
+  check(!errors.length, errors.join("；")); root.unmount(); return { passed: true, width: innerWidth };
+}
 const scenario = new URLSearchParams(location.search);
-const operation = scenario.has("unpublishedArchive") ? unpublishedArchive() : scenario.has("endpointSwitch") ? endpointSwitch() : run();
+const operation = scenario.has("componentPaths") ? componentPaths() : scenario.has("unpublishedArchive") ? unpublishedArchive() : scenario.has("endpointSwitch") ? endpointSwitch() : run();
 operation.then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); }).catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error) }); });
