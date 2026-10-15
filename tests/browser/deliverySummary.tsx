@@ -4,9 +4,11 @@ import { TaskWorkspace } from "../../web/src/TaskWorkspace";
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const linked = new URL(location.href).searchParams.has("deliverySummary");
 const manual = new URL(location.href).searchParams.has("manual");
+const unavailable = new URL(location.href).searchParams.has("unavailable");
 const name = "task-materials/交付报告.md";
 let published = linked;
 let requests = 0, revision = 0;
+let serverRejection = "";
 const errors: string[] = [];
 window.addEventListener("error", e => errors.push(e.message));
 window.addEventListener("unhandledrejection", e => errors.push(String(e.reason)));
@@ -15,6 +17,7 @@ window.fetch = async input => {
   let value: unknown;
   if (path.endsWith("/delivery-report")) {
     requests++;
+    if (serverRejection) return new Response(JSON.stringify({ error: serverRejection }), { status: 409 });
     if (requests === 1) return new Response(JSON.stringify({ error: "暂不可用，请重试" }), { status: 409 });
     task.delivery_report = { status: "running", message: "交付报告正在生成", available: published };
     value = task;
@@ -29,15 +32,15 @@ window.fetch = async input => {
   return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
 };
 const task: any = { id: "task-summary", requirement: "查询需求", title: "交付报告验收", status: "verifying", created_at: "2026-09-19", updated_at: "1", delivery: { mr_url: "https://example.com/mr/1" } };
+if (manual) {
+  task.status = "await_merge";
+  task.luban_account = "owner";
+  task.delivery.pipeline = "success";
+  task.delivery.git_push = { sha: "a".repeat(40) };
+}
 const root = createRoot(document.getElementById("app")!);
 function render() {
   task.updated_at = String(++revision);
-  if (manual) {
-    task.status = "await_merge";
-    task.luban_account = "owner";
-    task.delivery.pipeline = "success";
-    task.delivery.git_push = { sha: "a".repeat(40) };
-  }
   root.render(<TaskWorkspace task={{ ...task }} viewerUsername="owner" canOperate={manual} canOverride={false} canCollaborate={false} canRequestReview={false} onChanged={render} onClose={() => {}} />);
 }
 async function run() {
@@ -55,6 +58,29 @@ async function run() {
   };
   const isDisabled = (text: string) => action(text)?.getAttribute("aria-disabled") === "true";
   if (document.querySelector('[aria-label="交付报告提醒"]')) throw new Error("报告仍单独占据顶部提示条");
+  if (unavailable) {
+    const delivery = task.delivery;
+    for (const scenario of [
+      { patch: { workspace_reclaimed_at: "2026-10-15" }, message: "代码现场已回收或不可用，无法补全实际改动报告" },
+      { patch: { delivery: { ...delivery, git_push: undefined } }, message: "请在代码已推送且 MR 创建成功后生成报告" },
+      { patch: { status: "canceled" }, message: "任务已取消或正在准备继续修改，暂时不能生成报告" },
+      { patch: { continuation: { id: "next", text: "继续修改", actor: "owner", at: "2026-10-15", state: "preparing", branch: "next", baseline: "a".repeat(40) } }, message: "任务已取消或正在准备继续修改，暂时不能生成报告" },
+    ]) {
+      Object.assign(task, { status: "completed", workspace_reclaimed_at: undefined, continuation: undefined, delivery,
+        delivery_report: { status: "completed", available: true } }, scenario.patch);
+      serverRejection = scenario.message;
+      render(); await pause(100); await openMenu();
+      if (!action("查看交付报告") || !action("更新报告") || isDisabled("更新报告")) throw new Error("旧任务更新入口被隐藏或提前拦截");
+      const before = requests;
+      action("更新报告")!.click(); await pause(100);
+      if (requests !== before + 1 || ![...document.querySelectorAll('[role="alert"]')].some(row => row.textContent === scenario.message)) throw new Error("未由接口核对并展示具体原因");
+      if (!action("查看交付报告")) throw new Error("更新被拒绝后旧报告入口丢失");
+    }
+    action("查看交付报告")!.click(); await pause(100);
+    if (!document.querySelector(".ws-doc")?.textContent?.includes("本次版本的交付报告")) throw new Error("更新被拒绝后旧报告不可读");
+    if (errors.length) throw new Error(errors.join(";"));
+    return { passed: true };
+  }
   if (manual) {
     if (action("生成报告")) throw new Error("报告操作在菜单外展开");
     await openMenu();
@@ -83,7 +109,9 @@ async function run() {
   if (!linked) {
     if (document.querySelector(".ws-doc")?.textContent?.includes("本次版本的交付报告")) throw new Error("抢占了阅读页面");
     await openMenu();
-    if (action("生成报告") || action("更新报告")) throw new Error("只读用户出现生成操作");
+    if (!isDisabled("更新报告") || !document.body.textContent?.includes("只有任务责任人或管理员可以生成或更新交付报告")) throw new Error("只读用户未显示禁用操作与权限原因");
+    action("更新报告")!.click(); await pause(50);
+    if (requests) throw new Error("只读用户发起了生成请求");
     action("查看交付报告")!.click();
   }
   for (let i = 0; i < 40 && !document.querySelector(".plantuml-viewport img"); i++) await pause(50);
