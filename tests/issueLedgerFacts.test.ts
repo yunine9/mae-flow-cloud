@@ -32,6 +32,27 @@ test("ledgerPushes:逐笔解析仓/分支/提交号/时刻,跳过非推送条目
   ]);
 });
 
+test("ledgerPushes:同(仓,分支,提交号)回放推送只留首笔(#506);换分支/换仓不去重", () => {
+  const pushes = ledgerPushes([
+    { note: "分支已推送 https://git/web.git fix/101 @ abc123def456", at: "2026-09-20T01:01:00.000Z" },
+    // 重启续跑回放:同仓同分支同提交强推,只留首笔(issue-176 场景)。
+    { note: "分支已推送 https://git/web.git fix/101 @ abc123def456(强制覆盖远端同名分支)", at: "2026-09-20T02:00:00.000Z" },
+    // 中间隔一笔新提交后再回放旧头:同样不进投影(不携带新提交)。
+    { note: "分支已推送 https://git/web.git fix/101 @ 789abcdef012", at: "2026-09-20T02:30:00.000Z" },
+    { note: "分支已推送 https://git/web.git fix/101 @ abc123def456", at: "2026-09-20T03:00:00.000Z" },
+    // 同提交换分支是不同推送事实,照记。
+    { note: "分支已推送 https://git/web.git fix/102 @ abc123def456", at: "2026-09-20T03:10:00.000Z" },
+    // 同提交不同仓是不同推送事实,照记。
+    { note: "分支已推送 https://git/api.git fix/101 @ abc123def456", at: "2026-09-20T03:20:00.000Z" },
+  ]);
+  assert.deepEqual(pushes, [
+    { repo: "https://git/web.git", branch: "fix/101", sha: "abc123def456", at: "2026-09-20T01:01:00.000Z" },
+    { repo: "https://git/web.git", branch: "fix/101", sha: "789abcdef012", at: "2026-09-20T02:30:00.000Z" },
+    { repo: "https://git/web.git", branch: "fix/102", sha: "abc123def456", at: "2026-09-20T03:10:00.000Z" },
+    { repo: "https://git/api.git", branch: "fix/101", sha: "abc123def456", at: "2026-09-20T03:20:00.000Z" },
+  ]);
+});
+
 test("红灯三结局互斥:各文案只命中自己的档", () => {
   const repaired = "流水线失败(web)@ abc123def456";
   const canceled = "MR 已合入,旧提交 abc123def456 的红灯随合入取消,不作失败处理";
