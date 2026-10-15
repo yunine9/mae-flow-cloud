@@ -1,4 +1,4 @@
-import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
+import { componentArchiveFiles, componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -352,12 +352,16 @@ export class KnowledgeMrPublisher {
     const branch = deliveryBranchName(target.branch, this.identity(operator).credential.username, issue);
     const logicalTargets = new Map([job.knowledge_target, ...job.repositories].filter(candidate => candidate.repository === target.repository
       && candidate.branch === target.branch).map(candidate => [candidate.id, candidate]));
+    const formalVersions = new Map<string, ReturnType<typeof readKnowledgeArchiveVersion>["document"]>();
+    const componentFiles = new Map<string, ReturnType<typeof componentArchiveFiles>>();
     const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
       if (!doc.knowledge_document_id || !doc.published_revision) throw new Error("请先发布所选知识，再手动归档正式版本");
       const deletion = readKnowledgeDeletion(this.options.dataDir, doc.knowledge_document_id);
       if (doc.deleted && (!deletion || deletion.revision !== doc.published_revision || doc.published_document_revision !== doc.revision)) throw new Error("请先确认发布当前删除文稿，再归档 Git 删除操作");
       if (!doc.deleted && deletion) throw new Error("知识已删除，旧归档操作不能重新写入文档");
-      const formal = readKnowledgeArchiveVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document;
+      const versionKey = JSON.stringify([doc.knowledge_document_id, doc.published_revision]);
+      let formal = formalVersions.get(versionKey);
+      if (!formal) { formal = readKnowledgeArchiveVersion(this.options.dataDir, doc.knowledge_document_id, doc.published_revision).document; formalVersions.set(versionKey, formal); }
       const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
       if (doc.deleted && job.knowledge_layout === "directory-v1") {
         // 同批次其他文稿可以迁入新目录，已确认删除仍须作用于该正式版本的原位置。
@@ -370,10 +374,20 @@ export class KnowledgeMrPublisher {
         if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
         return [outgoing];
       }
-      // 平台不读回 Git 里的组件知识，结构化字段只留在正式库；仓里只放给人读的一篇正文（2026-10-08 用户）。
+      // 历史失败批次仍可按原整篇快照重试；新批次逐项比对同一正式版本的能力文件。
       const parts = componentArchiveParts(formal.content), requested = componentArchiveParts(doc.content);
-      if (parts.content !== requested.content) throw new Error("组件归档正文与所选正式版本不一致，请重新预览");
-      return [{ ...outgoing, content: parts.content }];
+      if (parts.content === requested.content) return [{ ...outgoing, content: parts.content }];
+      let files = componentFiles.get(versionKey);
+      if (!files) {
+        const index = job.documents.find(item => item.knowledge_document_id === doc.knowledge_document_id && item.published_revision === doc.published_revision
+          && (item.archive_path ?? item.path).endsWith("/README.md"));
+        if (!index) throw new Error("组件能力归档缺少对应目录，请重新预览");
+        files = componentArchiveFiles(formal.content, (index.archive_path ?? index.path).replace(/\/README\.md$/, ".md"), index.id);
+        componentFiles.set(versionKey, files);
+      }
+      const file = files.find(file => file.id === doc.id && file.path === outgoing.path);
+      if (!file || file.content !== doc.content) throw new Error("组件归档正文与所选正式版本不一致，请重新预览");
+      return [{ ...outgoing, content: file.content }];
     });
     if (!docs.length) throw new Error("请选择至少一篇已发布知识进行归档");
     const documents: DomainPublication["documents"] = docs.map(doc => ({ id: doc.id, path: doc.path,

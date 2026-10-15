@@ -349,7 +349,7 @@ test("B5已发布小改/生产线验收5/8/14：HTTP编辑仅生成平台新版�
   }
 });
 
-test("一个组件一篇：组件归档只列一篇正文，按语言分目录、按知识标题（组件功能）命名，改名随新版本生效", { timeout: 10_000 }, async () => {
+test("旧组件无结构化能力时保留整篇归档，改名随新正式版本生效", { timeout: 10_000 }, async () => {
   const { componentArchivePath } = await import("../src/componentKnowledgeArchiveFormat.ts");
   const { saveKnowledgeRepoConfig } = await import("../src/knowledgeRepoConfig.ts");
   assert.equal(componentArchivePath("docs/components", { title: "文件操作", technologies: ["cpp"] }), "docs/components/cpp/文件操作.md");
