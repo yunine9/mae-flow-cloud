@@ -37,6 +37,7 @@ export const DELIVERY_SUMMARY_MISSION = `你是代码交付报告助手。交付
 每张图先给一句变化结论，再给可渲染的 plantuml 代码块（@startuml 到 @enduml），图后最多两条短说明，每条尽量不超过 40 字：代码依据、确有证据的设计偏离。主要改动必须落在节点或连线上，不能只列文件名、行数或把 diff 换成大段文字。
 同一张图聚焦一个问题，通常 5～9 个关键节点，标签尽量一行；复杂改动拆图。新增用浅绿并标“新增”，修改用浅蓝并标“修改”，删除用虚线并标“删除”，必要的既有部分用灰色。标签与颜色同时表达，避免只靠颜色区分。
 图内用短语，调用参数和分支顺序以源码为准；路径和证据编号放图下，代码依据优先用“路径 + 符号”，行号只引用 read 核对过的源码行，不能用 diff 输出行号。使用简单 PlantUML 语法，不使用 include、远程图片或自定义宏。
+活动图的配色写在动作分号之后，例如 :返回结果（修改）; <<#LightBlue>>，避免旧式配色在图上产生黄色弃用警告。
 聚焦已确认的改动，不额外展开代码审查。设计偏离只写设计与实现直接冲突的事实；边界风险需沿数据读写核实，未证实的推测标待确认，不断言故障。
 4+1 的图外说明合计以 600 字以内为目标；逐文件解读和重复的五视角覆盖表省去，把篇幅留给图。重要设计偏离用短句写在相关图下。
 
@@ -129,6 +130,7 @@ export async function validateSummaryDiagrams(markdown: string): Promise<string 
     const result = await renderPlantUml(diagram);
     if (result.syntax_error) return "PlantUML 语法错误，请只简化修正图源，保留其他文字，不重新分析代码。";
     if (result.error) throw new Error(result.error);
+    if (/This\s+syntax\s+is\s+deprecated/.test(result.svg ?? "")) return "活动图使用了旧配色语法，渲染结果含黄色警告。请将颜色放在动作分号之后，例如 :返回结果（修改）; <<#LightBlue>>，或去掉颜色并保留新增/修改标签；只修图源，保留其他内容。";
   }
 }
 

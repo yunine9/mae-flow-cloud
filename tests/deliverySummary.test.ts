@@ -166,6 +166,9 @@ test("4+1 的图真实渲染，其他章节或代码示例中的图不能代替"
   assert.match((await validateSummaryDiagrams(misplacedDiagram))!, /4\+1.*缺少/);
   assert.match((await validateSummaryDiagrams("````markdown\n" + diagram + "\n````"))!, /缺少/);
   assert.equal(await validateSummaryDiagrams("## 改动点 4+1\n~~~PlantUML\n@startuml\nA -> B: 查询\n@enduml\n~~~"), undefined);
+  const activity = "## 场景视图（+1）\n```plantuml\n@startuml\nstart\nif (有结果?) then (是)\n:返回结果（修改）; <<#LightBlue>>\nelse (否)\n:返回空结果;\nendif\nstop\n@enduml\n```";
+  assert.equal(await validateSummaryDiagrams(activity), undefined);
+  assert.match((await validateSummaryDiagrams(activity.replace(":返回结果（修改）; <<#LightBlue>>", "#LightBlue:返回结果（修改）;")))!, /黄色警告/);
   assert.match((await validateSummaryDiagrams("## 改动点 4+1\n```plantuml\n@startuml\nthis is invalid ???\n@enduml\n```"))!, /语法错误/);
 });
 
