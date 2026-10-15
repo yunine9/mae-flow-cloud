@@ -1867,6 +1867,19 @@ test("描述预填模板:打开即模板,原样拦截,提交后回模板(#273,AD
   assert.doesNotMatch(registration, /setDescription\(""\)/);
 });
 
+test("发起即终止草稿+清空重填(2026-10-15 拍板)", () => {
+  // 草稿=未兑现的登记意图:发起成功显式删本地草稿并整表重置(含产品
+  // 版本),不靠 400ms 防抖写间接刷新——那笔写被刷新/关页取消时旧草稿
+  // 原地存活,下次打开整份旧内容回魂。清空重填是填一半放弃重来的确定
+  // 出口,破坏性动作走全站 confirmDialog 二次确认(spec #52)。
+  assert.match(registration, /function resetRegistration/);
+  assert.match(registration, /localStorage\.removeItem\(draftKey\)/);
+  assert.match(registration, /setProductVersion\(""\)/);
+  assert.match(registration, /resetRegistration\(\);/);
+  assert.match(registration, /清空重填/);
+  assert.match(registration, /confirmDialog\(\{/);
+});
+
 test("AI 润色退役反钉(#272,ADR-0030):入口与通路不回潮", () => {
   assert.doesNotMatch(registration, /润色|polish/i);
   assert.doesNotMatch(issueFlow, /AI 润色|polish-description/);

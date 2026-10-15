@@ -24,18 +24,18 @@ test("真实填写与清空都判已填", () => {
   assert.equal(isUntouchedTemplate(""), false);
   assert.equal(isUntouchedTemplate("   \n  "), false);
   assert.equal(isUntouchedTemplate(
-    ISSUE_DESCRIPTION_TEMPLATE.replace("实际现象：", "实际现象：服务重启后持续 500")),
+    ISSUE_DESCRIPTION_TEMPLATE.replace("问题描述：", "问题描述：服务重启后持续 500")),
   false);
   assert.equal(isUntouchedTemplate(
     "## 现象\n\n服务重启后持续 500,截图如下。\n"), false);
 });
 
-test("模板含全部引导槽位:基本信息/触发步骤/现象/预期结果", () => {
-  for (const slot of ["基本信息", "问题描述", "发生时间", "版本", "复现概率",
-    "触发步骤", "实际现象", "预期结果"]) {
+test("模板只含三栏引导槽位:问题描述/触发步骤/预期结果", () => {
+  for (const slot of ["问题描述", "触发步骤", "预期结果"]) {
     assert.match(ISSUE_DESCRIPTION_TEMPLATE, new RegExp(slot),
       `模板缺引导槽位: ${slot}`);
   }
-  // 业务模块与网管环境登记表单单独采集,不重复进模板(#273 拍板)。
-  assert.doesNotMatch(ISSUE_DESCRIPTION_TEMPLATE, /业务模块|网管环境/);
+  // 表单已采集与拍板删去的栏目不再进模板(#273 拍板 + 2026-10-15 精简)。
+  assert.doesNotMatch(ISSUE_DESCRIPTION_TEMPLATE,
+    /业务模块|网管环境|基本信息|发生时间|版本|复现概率|实际现象/);
 });
