@@ -43,7 +43,7 @@ test("归档需求回收代码后及服务重启后，原任务仍可列出、�
   writeFileSync(join(materials, ".ticket-id"), "REQ1");
   writeFileSync(join(materials, "spec.md"), "# 约束\n不能丢掉的原文");
   writeFileSync(join(materials, "story.md"), "# Story\n交付故事");
-  writeFileSync(join(workspace, "交付摘要.md"), "交付摘要全文");
+  writeFileSync(join(workspace, "交付报告.md"), "交付报告全文");
   writeFileSync(join(cwd, "main.cpp"), "代码可以回收");
   writeFileSync(join(workspace, "task.json"), JSON.stringify({ cwd, summary: {
     id: "task-1", ticket: "REQ1", requirement: "完整需求原文", status: "completed", workspace,
@@ -65,7 +65,7 @@ test("归档需求回收代码后及服务重启后，原任务仍可列出、�
       const documents = await listArtifactsAsync(root, sources, "doc");
       assert.ok(documents.some(document => document.name === "REQ1/spec.md"));
       assert.ok(documents.some(document => document.name === "REQ1/story.md"));
-      assert.ok(documents.some(document => document.name === "task-materials/交付摘要.md"));
+      assert.ok(documents.some(document => document.name === "task-materials/交付报告.md"));
       assert.equal((await readArtifactAsync(root, "REQ1/spec.md", sources))?.content, "# 约束\n不能丢掉的原文");
       assert.ok(bundleArtifactDocuments(root, sources));
       assert.equal(readFileSync(join(workspace, "requirement-input.md"), "utf8"), "完整需求原文");

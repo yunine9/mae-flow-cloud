@@ -8,7 +8,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("知识问答桌面：资料上传与草稿恢复、账号隔离、后台继续、引用快照、停止重问及反馈", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("知识问答桌面：文档范围与旧草稿恢复、账号隔离、后台继续、引用快照、停止重问及反馈", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const directory = mkdtempSync(join(tmpdir(), "knowledge-answer-browser-"));
   const server = createServer((_req, res) => { res.setHeader("content-type", "text/html; charset=utf-8"); res.end(readFileSync(join(directory, "check.html"))); });
   try {
@@ -21,7 +21,7 @@ test("知识问答桌面：资料上传与草稿恢复、账号隔离、后台�
     const address = server.address() as { port: number };
     for (const [width, height] of [[1920, 1080], [1366, 768]]) {
       const output = join(directory, `${width}.html`);
-      const result = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(directory, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=25000", "--dump-dom", ...(process.env.MFC_KNOWLEDGE_ANSWER_SCREENSHOT_DIR ? [`--screenshot=${join(process.env.MFC_KNOWLEDGE_ANSWER_SCREENSHOT_DIR, `knowledge-answer-${width}.png`)}`] : []), `http://127.0.0.1:${address.port}/?kbPage=ask${process.env.MFC_KNOWLEDGE_ANSWER_PREVIEW === "materials" ? "&preview=materials" : ""}`], output);
+      const result = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(directory, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=25000", "--dump-dom", ...(process.env.MFC_KNOWLEDGE_ANSWER_SCREENSHOT_DIR ? [`--screenshot=${join(process.env.MFC_KNOWLEDGE_ANSWER_SCREENSHOT_DIR, `knowledge-answer-${width}.png`)}`] : []), `http://127.0.0.1:${address.port}/?kbPage=ask${process.env.MFC_KNOWLEDGE_ANSWER_PREVIEW === "compose" ? "&preview=compose" : ""}`], output);
       const content = result.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
       assert.ok(content, `${width}: browser did not finish`);
       const value = JSON.parse(content); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true);

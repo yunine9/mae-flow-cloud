@@ -33,6 +33,17 @@ test("首次交付冻结；合入完成才旁路整理，重复回调/重启不�
  }finally{f.cleanup();}
 });
 test("缺首次快照、取消、仅完成未合入不启动",async()=>{const f=fixture();let calls=0;const service=new DeliveryExperiences(f.options,async()=>{calls++;return '{"drafts":[]}';});try{f.merge();service.start(f.task);service.capture(f.task);f.task.summary.status="canceled";service.start(f.task);f.task.summary.status="completed";f.task.summary.delivery.mr_state="closed";service.start(f.task);await service.flush();assert.equal(calls,0);}finally{f.cleanup();}});
+test("交付报告已更新到最终版本时，经验复盘仍使用首次交付版本", async () => {
+  const f = fixture(); let base: string | undefined;
+  try {
+    f.merge();
+    mkdirSync(join(f.workspace, "delivery-summary"));
+    writeFileSync(join(f.workspace, "delivery-summary/state.json"), JSON.stringify({ first_head: f.first, head: f.task.summary.delivery.git_push.sha }));
+    const service = new DeliveryExperiences(f.options, async input => { base = input.base; return '{"drafts":[]}'; });
+    service.start(f.task); await service.flush();
+    assert.equal(base, f.first);
+  } finally { f.cleanup(); }
+});
 test("空结果是成功，不凑草稿；模型失败不阻断完成也不反复重试",async()=>{for(const fail of [false,true]){const f=fixture();let calls=0;const service=new DeliveryExperiences(f.options,async()=>{calls++;if(fail)throw Error("unavailable");return '{"drafts":[]}';});try{service.capture(f.task);f.merge();service.start(f.task);await service.flush();service.start(f.task);await service.flush();assert.equal(calls,1);assert.equal(f.store.list().length,0);assert.equal(f.task.summary.status,"completed");assert.equal(JSON.parse(readFileSync(join(f.workspace,"delivery-experience/state.json"),"utf8")).status,fail?"failed":"completed");}finally{f.cleanup();}}});
 test("已保存模型结果但发布中断，重启复用结果并补齐草稿不重复模型调用",async()=>{const f=fixture();try{const service=new DeliveryExperiences(f.options,async()=>{throw Error("不应重新调用");});service.capture(f.task);f.merge();const root=join(f.workspace,"delivery-experience");writeFileSync(join(root,"state.json"),'{"status":"running"}');writeFileSync(join(root,"output.json"),JSON.stringify([draft]));f.store.record({...draft,source:"delivery_review",judged_by:"agent",repo:"repo",task:"task-1",evidence:"delivery:task-1:0"} as any);service.start(f.task);await service.flush();assert.equal(f.store.list().length,1);assert.equal(JSON.parse(readFileSync(join(root,"state.json"),"utf8")).status,"completed");}finally{f.cleanup();}});
 test("最终版本包含责任人直接提交的修正",async()=>{const f=fixture();try{let final="";const service=new DeliveryExperiences(f.options,async input=>{final=input.head;return '{"drafts":[]}';});service.capture(f.task);f.merge();const platformPush=f.task.summary.delivery.git_push.sha;writeFileSync(join(f.task.cwd,"file.cpp"),"ScopedFile file;\ncheck(file);\n");f.git("add",".");f.git("commit","-m","owner correction");f.task.summary.delivery.merged_sha=f.git("rev-parse","HEAD");service.start(f.task);await service.flush();assert.notEqual(final,platformPush);assert.equal(final,f.task.summary.delivery.merged_sha);}finally{f.cleanup();}});

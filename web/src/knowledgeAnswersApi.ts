@@ -4,7 +4,6 @@ export type { KnowledgeAnswerContext, KnowledgeAnswerInput, KnowledgeAnswerRecor
 
 export interface KnowledgeAnswerCatalog {
   modules: Array<{ id: string; name: string }>;
-  repositories: Array<{ id: string; name: string; repository: string }>;
   documents: Array<{ id: string; title: string; module_ids: string[]; revision: string }>;
   sources: Array<{ kind: KnowledgeAnswerSourceKind; label: string; available: boolean; detail?: string }>;
 }
