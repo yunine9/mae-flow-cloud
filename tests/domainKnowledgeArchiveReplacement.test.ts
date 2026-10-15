@@ -52,6 +52,28 @@ test("替换先创建新MR，撤销失败重启后只重试撤销并保留新旧
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
+test("重新创建采用本次单号和描述，失败批次重试保留本次输入而非下单信息", async () => {
+  const root = mkdtempSync(join(tmpdir(), "archive-current-issue-"));
+  const calls: Array<{ issue_no?: string; issue_description?: string }> = [];
+  const service = new DomainKnowledgeExtraction(root, execute, {
+    publish: async (job, target) => {
+      calls.push({ issue_no: job.issue_no, issue_description: job.issue_description });
+      if (calls.length === 2) throw new Error("临时连接故障");
+      return receipt(job, target.id, calls.length);
+    }, closePublication: async () => {},
+  });
+  try {
+    const job = await initial(service);
+    const preview = service.previewArchive(job.id);
+    await service.createArchive(job.id, { issue_no: "REQ-NOW", issue_description: "新归档描述", replace_existing: true, expected_revisions: preview.expected_revisions }, "reviewer");
+    const batch = service.get(job.id).archive_batches!.at(-1)!;
+    assert.equal(service.get(job.id).issue_no, "REQ-489", "研究下单信息保持原样");
+    service.setIssueNumber(job.id, "REQ-LATER", "下一次描述");
+    await service.retryArchive(job.id, "reviewer", { batch_id: batch.id });
+    assert.deepEqual(calls, [{ issue_no: "REQ-489", issue_description: undefined }, { issue_no: "REQ-NOW", issue_description: "新归档描述" }, { issue_no: "REQ-NOW", issue_description: "新归档描述" }]);
+  } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("修正目标仓和分支后普通新归档自动撤销旧目标MR，失败新MR不撤销旧MR", async () => {
   const root = mkdtempSync(join(tmpdir(), "archive-replacement-location-"));
   let calls = 0, fail = false; const closed: string[] = [];

@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
 import type { DomainKnowledgeJob, KnowledgeRepository, DomainArchiveTargetsPreview } from "../../src/domainKnowledgeTypes";
 import { directoryKnowledgeDirectory, hasOpaqueModuleDirectory } from "../../src/domainKnowledgeLayout";
+import type { ArchiveIssueInput } from "./knowledgeArchiveAction";
 
 const targetsOf = (job: DomainKnowledgeJob) => [job.knowledge_target, ...job.repositories];
 const confirmedDeletion = (document: DomainKnowledgeJob["documents"][number]) => !!document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
@@ -31,16 +32,18 @@ export function DomainKnowledgeArchivePathPreview({ preview, deletedDocumentIds 
     </div>)}
   </section>;
 }
-export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy, onConfirmArchive, replaceExisting = false }: {
+export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy, onConfirmArchive, replaceExisting = false, initialIssue }: {
   job: DomainKnowledgeJob; disabled?: boolean; onChange: (job: DomainKnowledgeJob) => void; onBusy?: (busy: boolean) => void;
-  onConfirmArchive?: (job: DomainKnowledgeJob) => void | Promise<void>; replaceExisting?: boolean;
+  onConfirmArchive?: (job: DomainKnowledgeJob, issue: ArchiveIssueInput) => void | Promise<void>; replaceExisting?: boolean; initialIssue?: ArchiveIssueInput;
 }) {
   const [targets, setTargets] = useState(() => initialTargets(job));
+  const [issue, setIssue] = useState(initialIssue?.issue_no ?? job.issue_no ?? ""), [description, setDescription] = useState(initialIssue?.issue_description ?? job.issue_description ?? "");
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [preview, setPreview] = useState<{ key: string; data: DomainArchiveTargetsPreview }>();
   const [previewing, setPreviewing] = useState(true);
   const [previewRetry, setPreviewRetry] = useState(0);
   useEffect(() => { setTargets(initialTargets(job)); setError(""); }, [job.id, job.archive_revision]);
+  useEffect(() => { setIssue(initialIssue?.issue_no ?? job.issue_no ?? ""); setDescription(initialIssue?.issue_description ?? job.issue_description ?? ""); }, [job.id, initialIssue?.issue_no, initialIssue?.issue_description]);
   const deletingOnly = job.documents.length > 0 && job.documents.every(confirmedDeletion);
   const invalid = targets.some(target => !target.branch.trim() || !target.docs_path.trim()
     || job.documents.some(document => document.target_id === target.id) && !target.repository.trim());
@@ -68,12 +71,16 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy,
     try {
       const next = await componentRequest<DomainKnowledgeJob>(`/domain-extraction/${job.id}/archive-targets`, input, AbortSignal.timeout(30_000));
       onChange(next);
-      await onConfirmArchive?.(next);
+      await onConfirmArchive?.(next, { issue_no: issue.trim(), issue_description: description.trim() });
     } catch (reason) { setError((reason as Error).message); }
     finally { setBusy(false); onBusy?.(false); }
   }
   return <section className="space-y-4" aria-label="确认 Git 归档路径">
     <p className="text-sm text-muted-foreground">确认每个仓的相对目录，下方实时预览文档路径。代码仓知识统一放在 docs 下的业务目录；领域知识及其 AGENTS.md 放在选定的领域目录。确认后自动创建 MR。</p>
+    {onConfirmArchive && <div className="grid grid-cols-2 gap-3">
+      <label className="grid gap-1 text-sm">本次归档单号（必填）<Input aria-label="本次归档单号" maxLength={120} disabled={busy || disabled} value={issue} onChange={event => setIssue(event.target.value)} /></label>
+      <label className="grid gap-1 text-sm">本次归档单号描述<Input aria-label="本次归档单号描述" maxLength={2000} disabled={busy || disabled} value={description} onChange={event => setDescription(event.target.value)} /></label>
+    </div>}
     {deletingOnly && <p className="text-sm text-muted-foreground">删除沿用原归档位置。</p>}
     {targets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled || deletingOnly}>
       <legend className="px-1 font-medium">{target.id === job.knowledge_target.id ? "领域知识仓" : `代码仓 · ${target.name}`}</legend>
@@ -86,7 +93,7 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy,
     {error && <p role="alert" className="whitespace-pre-wrap text-sm text-danger">{error}</p>}
     {error && !preview && <Button size="sm" variant="outline" disabled={busy || disabled} onClick={() => setPreviewRetry(value => value + 1)}>重新预览路径</Button>}
     <div className="sticky -bottom-4 -mx-4 -mb-4 flex justify-end border-t border-line bg-popover px-4 py-3">
-      <Button disabled={busy || disabled || invalid || previewing || preview?.key !== previewKey || !targets.length} onClick={() => void confirm()}>{busy ? "正在准备 MR…" : replaceExisting ? "确认并重新创建 MR" : "确认并创建 MR"}</Button>
+      <Button disabled={busy || disabled || invalid || previewing || preview?.key !== previewKey || !targets.length || !!onConfirmArchive && !issue.trim()} onClick={() => void confirm()}>{busy ? "正在准备 MR…" : replaceExisting ? "确认并重新创建 MR" : "确认并创建 MR"}</Button>
     </div>
   </section>;
 }

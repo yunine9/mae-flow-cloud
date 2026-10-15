@@ -13,7 +13,7 @@ async function within<T>(work: Promise<T>, ms: number, reason: string): Promise<
   try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(reason)), ms); })]); }
   finally { clearTimeout(timer); }
 }
-async function archiveBrowserContract(scenario: "manual" | "switch" | "unpublished" | "paths" = "manual") {
+async function archiveBrowserContract(scenario: "manual" | "switch" | "unpublished" | "paths" | "issue" = "manual") {
   const dir = fs.mkdtempSync(join(tmpdir(), "knowledge-manual-archive-browser-"));
   let lastOutput = "";
   try {
@@ -31,7 +31,7 @@ async function archiveBrowserContract(scenario: "manual" | "switch" | "unpublish
     for (const [width, height] of [[1920, 1080], [1366, 768]]) {
       const output = join(dir, `dom-${width}.html`); lastOutput = output;
       const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", "--force-device-scale-factor=1", `--user-data-dir=${join(dir, `profile-${width}`)}`,
-        `--window-size=${width},${height}`, `--virtual-time-budget=${scenario === "manual" ? 700000 : 12000}`, "--timeout=15000", "--dump-dom", `file://${html}${scenario === "paths" ? "?componentPaths=1" : scenario === "switch" ? "?endpointSwitch=1" : scenario === "unpublished" ? "?unpublishedArchive=1" : ""}`], output);
+        `--window-size=${width},${height}`, `--virtual-time-budget=${scenario === "manual" ? 700000 : 12000}`, "--timeout=15000", "--dump-dom", `file://${html}${scenario === "issue" ? "?domainIssueInput=1" : scenario === "paths" ? "?componentPaths=1" : scenario === "switch" ? "?endpointSwitch=1" : scenario === "unpublished" ? "?unpublishedArchive=1" : ""}`], output);
       const result = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1]; assert.ok(result, `${width}: 浏览器没有结果`);
       const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true); assert.equal(value.width, width);
     }
@@ -48,3 +48,4 @@ test("生产线验收5/8/10/14：桌面手动归档只导出正式版本，创�
 test("生产线验收2/5/10：归档等待中换任务不继承busy，迟到旧结果不覆盖或释放新操作", { timeout: 70_000, skip: !fs.existsSync(chrome) && "需要 Chrome" }, () => archiveBrowserContract("switch"));
 test("生产线验收5/10/14：无正式知识不请求归档预览，平台发布后只在用户点击时读取新事实", { timeout: 70_000, skip: !fs.existsSync(chrome) && "需要 Chrome" }, () => archiveBrowserContract("unpublished"));
 test("组件110项能力归档：桌面直接指定仓内相对目录，预览完成后确认并创建MR", { timeout: 70_000, skip: !fs.existsSync(chrome) && "需要 Chrome" }, () => archiveBrowserContract("paths"));
+test("领域重新创建MR：跨路径确认窗口保留本次单号和描述，旧预览不覆盖新输入", { timeout: 70_000, skip: !fs.existsSync(chrome) && "需要 Chrome" }, () => archiveBrowserContract("issue"));

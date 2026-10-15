@@ -7,7 +7,7 @@ import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction, KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
 import type { DomainArchiveTargetsPreview, DomainKnowledgeJob } from "../../src/domainKnowledgeTypes";
 import { mrParticipantsMessage } from "../../src/mrParticipants";
-import { archiveRequest } from "./knowledgeArchiveAction";
+import { archiveRequest, type ArchiveIssueInput } from "./knowledgeArchiveAction";
 
 export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   batches: KnowledgeProductionView["archive"]["batches"]; disabled?: boolean;
@@ -32,10 +32,10 @@ export function KnowledgeArchiveHistory({ batches, disabled, onRetry }: {
   </details>;
 }
 
-export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false, editTargets = false }: {
-  endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: () => void;
-  onBeforeOpen?: (replaceExisting?: boolean) => void;
-  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean; editTargets?: boolean;
+export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfigure, onBeforeOpen, onReview, onChanged, openRequest = 0, directArchive = false, replaceExistingOnOpen = false, editTargets = false, confirmedIssue }: {
+  endpoint: string; production?: KnowledgeProductionView; disabled?: boolean; onConfigure?: (replaceExisting?: boolean, issue?: ArchiveIssueInput) => void;
+  onBeforeOpen?: (replaceExisting?: boolean, issue?: ArchiveIssueInput) => void;
+  onReview?: () => void; onChanged?: () => void; openRequest?: number; directArchive?: boolean; replaceExistingOnOpen?: boolean; editTargets?: boolean; confirmedIssue?: ArchiveIssueInput;
 }) {
   const [open, setOpen] = useState(false), [preview, setPreview] = useState<KnowledgeArchivePreview>();
   const [issue, setIssue] = useState(""), [description, setDescription] = useState("");
@@ -68,12 +68,14 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     void componentRequest<KnowledgeArchivePreview>(`${endpoint}/preview`, undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]))
       .then(async result => {
         if (generation.current !== owner) return;
-        setPreview(result); setTargets(result.targets); setIssue(result.issue_no ?? ""); setDescription(result.issue_description ?? "");
+        // 路径窗口确认的本次输入优先；旧批次预览只提供版本和历史，不能覆盖人的新输入。
+        const current = archiveOnOpen.current && confirmedIssue ? { ...result, ...confirmedIssue } : result;
+        setPreview(result); setTargets(result.targets); setIssue(current.issue_no ?? ""); setDescription(current.issue_description ?? "");
         const request = archiveOnOpen.current && !disabled
-          ? replaceExistingOnOpen && result.issue_no?.trim() && result.actions.some(action => action.id === "replace-archive")
-            ? { action: "create" as const, input: { issue_no: result.issue_no.trim(), issue_description: result.issue_description?.trim() || undefined,
+          ? replaceExistingOnOpen && current.issue_no?.trim() && result.actions.some(action => action.id === "replace-archive")
+            ? { action: "create" as const, input: { issue_no: current.issue_no.trim(), issue_description: current.issue_description?.trim() || undefined,
               expected_revisions: result.expected_revisions, replace_existing: true } }
-            : archiveRequest(result) : undefined;
+            : archiveRequest(current) : undefined;
         archiveOnOpen.current = false;
         if (!request) return;
         submitting.current = true; setBusy(true); setLoading(false);
@@ -123,9 +125,9 @@ export function KnowledgeArchiveDialog({ endpoint, production, disabled, onConfi
     if (action.id === "configure" && editTargets) return null;
     if (action.id === "configure") return action.href
       ? <a key={`${action.id}:${targetId ?? "all"}`} className="text-sm font-medium text-primary underline" href={action.href}>{action.label} ↗</a>
-      : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(); }}>{action.label}</Button>;
+      : <Button key={`${action.id}:${targetId ?? "all"}`} variant="outline" disabled={disabled || busy} onClick={() => { setOpen(false); onConfigure?.(false, { issue_no: issue.trim(), issue_description: description.trim() }); }}>{action.label}</Button>;
     if (["create-archive", "replace-archive"].includes(action.id) && onBeforeOpen) return <Button key={`${action.id}:${targetId ?? "all"}`}
-      disabled={disabled || busy || loading} onClick={() => { setOpen(false); onBeforeOpen(action.id === "replace-archive"); }}>{action.label}</Button>;
+      disabled={disabled || busy || loading || !issue.trim()} onClick={() => { setOpen(false); onBeforeOpen(action.id === "replace-archive", { issue_no: issue.trim(), issue_description: description.trim() }); }}>{action.label}</Button>;
     return <Button key={`${action.id}:${targetId ?? "all"}`} variant={action.id === "retry-archive" ? "outline" : "default"}
       disabled={disabled || busy || loading || ["create-archive", "replace-archive"].includes(action.id) && (!issue.trim() || editTargets && layout?.key !== targetKey)} onClick={() => void execute(action, targetId)}>{editTargets && action.id === "create-archive" ? "确认路径并创建 MR" : action.label}</Button>;
   }
