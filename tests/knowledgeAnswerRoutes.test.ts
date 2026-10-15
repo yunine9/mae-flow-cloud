@@ -40,7 +40,12 @@ test("正式问答与插件共用服务：登录、归属、真实引用、持�
     const login = async (name: string) => (await request("/auth/login", { username: name, password: `fixture-${name}-password` })).headers.get("set-cookie")!.split(";")[0];
     const alice = await login("alice"), bob = await login("bob");
     const catalog = await (await request("/knowledge-answers/catalog", undefined, alice)).json() as { documents: Array<{ id: string }>; sources: unknown[] };
-    assert.ok(catalog.documents.some(value => value.id === document.id)); assert.equal(catalog.sources.length, 5);
+    assert.ok(catalog.documents.some(value => value.id === document.id)); assert.equal(catalog.sources.length, 1);
+    for (const context of [{ material_ids: ["material-old"] }, { repository_ids: ["repo-old"] }]) {
+      assert.equal((await request("/knowledge-answers", { question: "查询文档", context }, alice)).status, 400);
+      assert.equal((await request("/integrations/luban/knowledge", { action: "start", sender: "alice", message_id: "removed-source", question: "查询文档", context }, "", token)).status, 400);
+    }
+    assert.equal(executions, 0);
     const response = await request("/knowledge-answers", { question: "最多尝试几次？", owner: "bob" }, alice);
     assert.equal(response.status, 202); assert.equal(response.headers.get("cache-control"), "no-store");
     const record = await response.json() as KnowledgeAnswerRecord; assert.equal(record.owner, "alice");

@@ -5637,7 +5637,6 @@ export class TaskService {
       dataDir: this.options.dataDir,
       model: owner => { const active = this.activeModelChoice(); return active ? { ...active, json: this.resolvedModels(owner).json } : undefined; },
       search: () => this.getKnowledgeSearch(),
-      source: (repository, operator, signal) => this.componentResearchSource({ ...repository, languages: ["agnostic"], description: "问答来源", enabled: true }, operator, signal),
     }));
   }
 
