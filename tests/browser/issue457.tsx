@@ -19,7 +19,7 @@ window.fetch = async url => {
   const path = String(url); calls.push(path); let data: unknown;
   if (path === "/delivery-analytics") data = { rows, generated_at: new Date().toISOString() };
   else if (path.startsWith("/issues/once-generated")) data = { threshold_percent: 90, supported_since: "2026-01-01", total: 0, delivered: 0, passed: 0, rate: null, pending: 0, unsupported: 0, no_code: 0, by_repo: [], per_session: [], localization: { total: 0, passed: 0, rate: null }, verify: { total: 0, passed: 0, rate: null }, solved: { total: 0, passed: 0, rate: null } };
-  else if (path.startsWith("/issues/registration-stats")) data = { total: 0, non_issue: 0, issue_confirmed: 0, canceled: 0, localization: { passed: 0, total: 0, rate: null }, per_session: [], by_module: [], by_reporter: [] };
+  else if (path.startsWith("/issues/registration-stats")) data = { total: 0, non_issue: 0, issue_confirmed: 0, localization: { passed: 0, total: 0, rate: null }, per_session: [], by_module: [], by_reporter: [] };
   else if (path === "/knowledge-documents") data = { documents: [] };
   else if (path === "/business-modules") data = { modules: [{ id: "orders", name: "订单业务", status: "active", description: "订单生命周期", repositories: [], assets: [] }], warnings: [], operations: [] };
   else if (path === "/component-repositories") data = { components: [] };
