@@ -32,6 +32,8 @@ test("检索进程重启较慢时，不把启动耗时算进查询预算而丢�
     const search = new KnowledgeSearch(dir, sidecar);
     await search.prepare();
     children[0].kill(); await exits[0];
+    assert.equal(await sidecar.start(), false, "异常退出后先退避，不立即重启");
+    await new Promise(resolve => setTimeout(resolve, 120));
     const result = await search.searchDocuments(context, "数据库插入数据", { all: true });
     assert.equal(children.length, 2);
     assert.equal(result.available, true, "进程正常启动后返回的查询结果不能变成不可用");

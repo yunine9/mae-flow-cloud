@@ -803,7 +803,7 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | luban-plugin-replies | false | 真实小鲁班插件/入站桥端到端验收通过后才设 true；控制通知是否承诺 `/mfc` 激活后可回复 |
 | luban-template-waiting / -outcome / -review | 内置默认文案 | 通知正文模板，`{占位符}` 按类别白名单，词汇表与用法见 [`docs/luban-notification-templates.md`](./luban-notification-templates.md)；配错占位符拒绝启动 |
 | pg | 无 | 投影(纯旁路) |
-| memsearch | 无 | 任务记忆检索旁路:memsearch venv 的 python 路径。不配则没有语义检索与 corpus_search,只剩索引级开局推送;宿主进程拉子进程,任务容器不需要 python/memsearch(设计稿 `docs/knowledge-memory-design.md` §7/§11,预留 RSS 2.5 GB) |
+| memsearch | 无 | 任务记忆检索旁路:memsearch venv 的 python 路径。不配则没有语义检索与 corpus_search,只剩索引级开局推送;宿主进程拉子进程,任务容器不需要 python/memsearch(资源限制与预算见下方任务记忆部署说明) |
 | memory-draft-provider / memory-draft-model | 已废弃 | 兼容旧启动命令但忽略；经验整理自动使用任务当前主模型，无需另配 |
 | data / port / web | .tasks / 8787 / web-dist | 现场目录、端口、前端 |
 | isolate-image | 无(内核模式必填) | 统一任务构建镜像 |
@@ -939,9 +939,19 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   上的 `docs/memsearch-deploy.md`(2026-09-02 实装记录,尚未回灌本仓)为准。
   `--memsearch` 给的是 venv 里的 python,环境变量(HF_HOME/OFFLINE/TMPDIR)
   写在包装脚本里,不靠人 export。
-- **资源**:sidecar 常驻 RSS 内网实测 1.2 GB(macOS 本机 2.0 GB),预留 2.5 GB;
-  模型冷加载内网 2.8 s,ready 预算 60 s。索引 `milvus.db` 与语料 `corpus/`
-  都在 `--data` 目录下,受同一备份与回收纪律;索引删了可从 md 重建。
+- **资源**：历史小语料实测的 1.2 GB 常驻内存不能作为长文索引的上限（#523）。
+  本地 ONNX 每次只处理一个不超过 1024 token 的片段，使用 2 个计算线程，
+  关闭会长期保留内存峰值的 CPU 内存池。长代码块和单行也分段，原文完整保留。
+  Linux 子进程限制虚拟地址空间为 8 GiB，每 250 ms 检查常驻内存与 swap，
+  合计超过 4 GiB 即退出；macOS 本机验证按历史峰值检查。
+  正在执行的请求到预算后再给最多 5 秒退出宽限，后台单次作业最多 60 秒；
+  排队但未开始的请求过期不杀进程。索引超时前已写入的片段在重试时复用。
+  子进程异常退出累计 5 次后停止自动重启，需处理原因并重启服务恢复检索。
+  启动预算仍为 60 秒；停止进程后 1 秒未退出会强制清理其进程组。
+  `memory_request` 日志包含内存字节数、实际模型输入 token 数和批大小。
+  索引 `milvus.db` 与语料 `corpus/` 都在 `--data` 目录；无需删除它们来升级。
+  这些限制只保护检索子进程。多个任务容器的内存限额会相加，仍需按宿主总量
+  配置并发及 `--isolate-memory` / `--isolate-cpus`，并为服务与系统保留余量。
 - **经验整理**：自动使用任务当前主模型；任务未单独指定时使用平台主模型，无需额外配置。
   每条符合条件的闭环候选只发一次独立短请求，无工具、90 s 预算，不带主会话历史；
   失败保留候选，不重试、不阻塞任务。旧 memory-draft 参数被忽略，不会切到另一模型。

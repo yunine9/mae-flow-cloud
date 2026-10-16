@@ -31,6 +31,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from knowledge_retrieval import retrieve, index_document
 from memory_runtime import Scheduler, local_client_options, phase, check_deadline
+from memory_embedding import onnx_options, BoundedEmbedding, EMBEDDING_BATCH_SIZE
+from memory_limits import ResourceGuard, limit_address_space, resident_bytes
 
 
 def log(message: str) -> None:
@@ -89,23 +91,26 @@ class Sidecar:
         self.corpus = Path(args.corpus).expanduser().resolve()
         self.corpus.mkdir(parents=True, exist_ok=True)
         Path(args.milvus).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
-        with local_client_options():
+        with local_client_options(), onnx_options(args.provider):
             self.ms = MemSearch(
                 [str(self.corpus)],
                 embedding_provider=args.provider,
                 embedding_model=args.model or None,
+                embedding_batch_size=EMBEDDING_BATCH_SIZE,
                 milvus_uri=args.milvus,
                 reranker_model="",
                 # 台账与目录摘要不是记忆,归档的不再命中(reindex 时生效)。
                 exclude=["index.jsonl", "ledger.jsonl", "_archive/**", "_digests/**"],
             )
+        if args.provider == 'onnx':
+            self.ms._embedder = BoundedEmbedding(self.ms._embedder)
 
         self.schedule_index = None
         self.yield_reads = None
 
     async def health(self, _req: dict) -> dict:
         self.ms._store._client.get_collection_stats(self.ms._store._collection)
-        return {"ok": True, "corpus": str(self.corpus)}
+        return {"ok": True, "corpus": str(self.corpus), "rss_bytes": resident_bytes()}
 
     async def ingest(self, req: dict) -> dict:
         path = Path(str(req.get("path", ""))).expanduser().resolve()
@@ -260,17 +265,28 @@ async def main() -> None:
     parser.add_argument("--provider", default="onnx")
     parser.add_argument("--model", default="")
     args = parser.parse_args()
+    limit_address_space()
+    # 必须先于 NumPy/ONNX 导入生效，避免每个库各建一组大线程池。
+    for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS'):
+        os.environ[name] = '2'
+    guard = ResourceGuard(log)
+    guard.start()
     try:
-        sidecar = Sidecar(args)
+        with guard.active(60):
+            sidecar = Sidecar(args)
     except Exception as error:  # noqa: BLE001 - 起不来就说清楚再退
         reply({"id": 0, "error": f"sidecar 启动失败: {error!r}"})
         log(f"启动失败: {error!r}")
         sys.exit(2)
     reply({"id": 0, "ok": True, "ready": True})
     try:
-        await Scheduler(sidecar, reply, log).run(sys.stdin)
+        await Scheduler(sidecar, reply, log, guard=guard).run(sys.stdin)
     finally:
-        sidecar.ms.close()
+        try:
+            with guard.active(5):
+                sidecar.ms.close()
+        finally:
+            guard.close()
 
 
 if __name__ == "__main__":

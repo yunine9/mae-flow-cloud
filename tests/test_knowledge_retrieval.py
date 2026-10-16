@@ -64,6 +64,36 @@ class RetrievalTests(unittest.IsolatedAsyncioTestCase):
 
 
 class IndexReplacementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interrupted_long_index_reuses_completed_chunks_and_keeps_old_until_done(self):
+        import tempfile
+        if importlib.util.find_spec('memsearch') is None:
+            self.skipTest('requires memsearch environment')
+        from memsearch.chunker import compute_chunk_id
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'guide.md'
+            path.write_text('# 规则\n```cpp\n' + ''.join(f'int value_{i} = {i};\n' for i in range(300)) + '```\n尾部例外必须保留。')
+            stored, calls, deleted = {'legacy'}, [], []
+            interrupted = True
+            async def embed(chunks):
+                if interrupted and calls:
+                    raise TimeoutError('本次预算用完')
+                for chunk in chunks:
+                    key = compute_chunk_id(chunk.source, chunk.start_line, chunk.end_line, chunk.content_hash, 'test')
+                    calls.append(key)
+                    stored.add(key)
+                return len(chunks)
+            store = SimpleNamespace(hashes_by_source=lambda _: set(stored), delete_by_hashes=lambda keys: deleted.extend(keys))
+            ms = SimpleNamespace(_embedder=SimpleNamespace(model_name='test'), _store=store, _embed_and_store=embed)
+            with self.assertRaises(TimeoutError):
+                await m.index_document(ms, path)
+            self.assertEqual(deleted, [])
+            completed = calls[0]
+            interrupted = False
+            await m.index_document(ms, path)
+            self.assertEqual(calls.count(completed), 1, '完成的片段不重复推理')
+            self.assertGreater(len(calls), 1)
+            self.assertEqual(deleted, ['legacy'])
+
     async def test_reindex_drops_stale_titles_only_after_success(self):
         import tempfile
         if importlib.util.find_spec('memsearch') is None:

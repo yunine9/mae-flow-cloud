@@ -7,7 +7,7 @@ import json
 import queue
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 CURRENT = contextvars.ContextVar("memory_request", default=None)
 
@@ -87,8 +87,9 @@ def local_client_options():
 
 
 class Scheduler:
-    def __init__(self, sidecar, reply, log, capacity=128):
+    def __init__(self, sidecar, reply, log, capacity=128, guard=None):
         self.sidecar, self.reply, self.log = sidecar, reply, log
+        self.guard = guard
         self.queue = queue.PriorityQueue(maxsize=capacity)
         self.sequence = itertools.count()
         self.indexing = set()
@@ -141,7 +142,8 @@ class Scheduler:
             op = req.get("op")
             if op not in ("search", "ingest", "reindex", "health", "expand", "remove"):
                 raise ValueError("unknown operation")
-            result = await getattr(self.sidecar, op)(req)
+            with self.guard.active(request.remaining()) if self.guard else nullcontext():
+                result = await getattr(self.sidecar, op)(req)
             check_deadline()
             if result.get("pending_sources"):
                 request.timings["pending_sources"] = result["pending_sources"]
@@ -157,6 +159,11 @@ class Scheduler:
                 self.indexing.discard(req["path"])
             # No query, content, source path or credentials in timing logs.
             work_ms = round((time.monotonic() - request.started) * 1000, 2)
+            if self.guard:
+                try:
+                    request.timings['rss_bytes'] = self.guard.sample()
+                except OSError:
+                    pass
             self.log(json.dumps({"event": "memory_request", "id": req.get("id"), "op": req.get("op"),
                                  "outcome": outcome, "work_ms": work_ms,
                                  "total_ms": round(work_ms + request.timings["queue_ms"], 2),
