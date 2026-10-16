@@ -5,23 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { knowledgeFileName, loadKnowledgeModules, type KnowledgeModule, type KnowledgeModuleCategory, type KnowledgeModuleData } from "./knowledgeModules";
-import type { KnowledgeTaskCenterData } from "../../src/knowledgeTaskCenterTypes";
+import { compareKnowledgeModuleGovernance, knowledgeFileName, knowledgeModuleDocumentCount, knowledgeModuleGovernance, loadKnowledgeModules, type KnowledgeModuleCategory, type KnowledgeModuleData } from "./knowledgeModules";
+import type { KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
+import { latestModuleKnowledgeTasks } from "../../src/knowledgeTaskModules";
 
 export interface KnowledgeModuleHomeProps {
   onOpenModule: (key: string) => void;
   onOpenDocument?: (id: string, moduleKey: string) => void;
-  moduleActivity?: KnowledgeTaskCenterData["module_activity"];
   onOpenResearch?: (id: string) => void;
+  researchTasks?: KnowledgeTaskRow[];
 }
 
-function maintenance(module: KnowledgeModule) {
-  if (!module.documentCount && !module.skillCount) return { label: "待建设", color: "bg-muted-foreground", note: "暂无启用的知识；数量不代表质量。" };
-  if (module.recentlyMaintained) return { label: "近期维护", color: "bg-success", note: `近 30 天维护 ${module.recentlyMaintained} 份。仅反映维护记录，不代表内容已核对。` };
-  return { label: "已有积累", color: "bg-primary", note: "已有启用的知识。维护时间缺失时不推断内容新旧。" };
-}
-
-export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivity = [], onOpenResearch }: KnowledgeModuleHomeProps) {
+export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, onOpenResearch, researchTasks = [] }: KnowledgeModuleHomeProps) {
   const { stacks } = useTechnologyStacks();
   const [filterOpen,setFilterOpen] = useState(false);
   const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState("");
@@ -32,8 +27,10 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivi
     return () => { live = false; };
   }, [reload, stacks]);
   const needle = query.trim().toLocaleLowerCase();
+  const latest = latestModuleKnowledgeTasks(researchTasks);
   const visible = (data?.modules ?? []).filter(m => (category === "all" || m.category === category)
-    && (!needle || `${m.name} ${m.description}`.toLocaleLowerCase().includes(needle) || m.documents.some(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle))));
+    && (!needle || `${m.name} ${m.description}`.toLocaleLowerCase().includes(needle) || m.documents.some(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle))))
+    .sort((a, b) => compareKnowledgeModuleGovernance(a, b, latest));
   return <section className="tw-root km-home grid gap-6" aria-label="知识目录">
     <label className="km-home-search"><Search size={20} /><Input type="search" aria-label="搜索目录或文稿" placeholder="搜索目录、知识名称或文件名" value={query} onChange={e => setQuery(e.target.value)} /></label>
     <header className="km-home-heading">
@@ -55,16 +52,23 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument, moduleActivi
       return <section key={group} className="grid gap-3" aria-label={label}>
         <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">{group === "business" ? <BookOpen size={16} /> : group === "engineering" ? <Code2 size={16} /> : <FolderOpen size={16} />}{label}<span className="ml-1 tabular-nums">{modules.length}</span></h3>
         <div className="km-module-grid">{modules.map(module => {
-          const activity = module.category === "business" ? moduleActivity.find(item => `business:${item.module_id}` === module.key) : undefined;
-          const state = activity ? { label: activity.status_label, color: "bg-primary animate-pulse", note: "该模块有任务正在执行，点击查看任务详情。" } : maintenance(module), hits = needle ? module.documents.filter(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle)).slice(0, 3) : [];
-          return <Card key={module.key} className="group border-line transition-colors hover:border-line-strong">
-            <Button variant="ghost" className="h-auto w-full items-start justify-start whitespace-normal p-5 text-left" onClick={() => activity && onOpenResearch ? onOpenResearch(activity.task_id) : onOpenModule(module.key)} aria-label={activity ? `查看${module.name}建设任务` : `打开${module.name}知识目录`}>
+          const task = module.category === "business" ? latest.get(module.id) : undefined;
+          const state = knowledgeModuleGovernance(module, task);
+          const hits = needle ? module.documents.map(d => ({ id: d.id, name: knowledgeFileName(d) })).filter(d => d.name.toLocaleLowerCase().includes(needle)).slice(0, 3) : [];
+          const formalId = task?.module_entry?.kind === "document" ? task.module_entry.document_id : undefined;
+          const open = () => {
+            if (formalId && onOpenDocument) onOpenDocument(formalId, module.key);
+            else if (task && onOpenResearch) onOpenResearch(task.id);
+            else onOpenModule(module.key);
+          };
+          return <Card key={module.key} data-governance={state.tone} className="km-module-card group border-line transition-colors hover:border-line-strong">
+            <Button variant="ghost" className="km-module-open h-auto w-full items-start justify-start whitespace-normal p-5 text-left" onClick={open} aria-label={formalId ? `阅读${module.name}正式文档` : task ? `查看${module.name}最新萃取任务` : `打开${module.name}知识目录`}>
               <div className="grid min-w-0 flex-1 gap-4"><div className="flex min-w-0 items-start justify-between gap-3"><div className="min-w-0"><h3 className="text-lg font-semibold leading-snug">{module.name}</h3><p className="mt-1 line-clamp-2 text-sm font-normal text-muted-foreground">{module.description || (module.category === "business" ? "模块整体规则、关联仓知识与 Skill" : "基础组件知识与 Skill")}</p></div><ChevronRight size={18} className="mt-1 text-muted-foreground" /></div>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-normal"><span>文档 <strong className="font-medium tabular-nums">{module.documentCount}</strong></span><span>Skill <strong className="font-medium tabular-nums">{module.skillCount}</strong></span>{module.inactiveCount > 0 && <span className="text-muted-foreground">已停用 {module.inactiveCount}</span>}</div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs font-normal text-muted-foreground"><span className="inline-flex items-center gap-1.5" title={state.note}><span className={`size-2 rounded-full ${state.color}`} />{state.label}</span><span>{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "维护时间未知"}</span></div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-normal"><span>文档：<strong className="font-medium tabular-nums">{knowledgeModuleDocumentCount(module, task)}</strong></span><span>Skill <strong className="font-medium tabular-nums">{module.skillCount}</strong></span>{module.inactiveCount > 0 && <span className="text-muted-foreground">已停用 {module.inactiveCount}</span>}</div>
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs font-normal text-muted-foreground"><span className="km-governance-label" title={state.note}><span className="size-2 rounded-full bg-current" />{state.label}</span><span>{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "维护时间未知"}</span></div>
               </div>
             </Button>
-            {hits.length > 0 && onOpenDocument && <div className="grid gap-1 border-t border-line px-4 py-2">{hits.map(doc => <Button key={doc.id} variant="ghost" size="sm" className="justify-start" onClick={() => onOpenDocument(doc.id, module.key)}><ArrowUpRight size={14} /><span className="truncate">{knowledgeFileName(doc)}</span></Button>)}</div>}
+            {hits.length > 0 && onOpenDocument && <div className="grid gap-1 border-t border-line px-4 py-2">{hits.map(doc => <Button key={doc.id} variant="ghost" size="sm" className="justify-start" onClick={() => onOpenDocument(doc.id, module.key)}><ArrowUpRight size={14} /><span className="truncate">{doc.name}</span></Button>)}</div>}
           </Card>;
         })}</div>
       </section>;

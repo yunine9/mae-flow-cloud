@@ -20,7 +20,7 @@ import { MemoryBoard } from "./MemoryBoard";
 import { getMemoryInsights } from "./api";
 import { memoryCounts } from "./memoryPresentation";
 import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
-import type { KnowledgeTaskCenterData } from "../../src/knowledgeTaskCenterTypes";
+import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
 
 type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "experience";
 type Kind = ExtractionKind | "skill-extraction" | "skill-submission";
@@ -38,7 +38,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   const [researchDraft, setResearchDraft] = useState<KnowledgeResearchDraft>();
   const [cleanupDrafts, setCleanupDrafts] = useState<Record<string, KnowledgeCleanupDraft>>({});
   const [summary, setSummary] = useState<KnowledgeTaskCenterData["summary"] | null>(null);
-  const [moduleActivity, setModuleActivity] = useState<KnowledgeTaskCenterData["module_activity"]>([]);
+  const [researchTasks, setResearchTasks] = useState<KnowledgeTaskRow[]>([]);
   useEffect(() => { const sync = () => setRoute(readRoute()); addEventListener("popstate", sync); return () => removeEventListener("popstate", sync); }, []);
   // 阅读当前任务时不扫描所有研究记录；任务中心回报数量，其余目录页再刷新。
   const onTasksPage = route.page === "tasks";
@@ -46,7 +46,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   useEffect(() => {
     if (onTasksPage || onTaskPage) return;
     let live = true;
-    const refresh = async () => { try { const r = await fetch("/knowledge-tasks"); if (!r.ok) return; const data: KnowledgeTaskCenterData = await r.json(); if (live && data.summary) { setSummary(data.summary); setModuleActivity(data.module_activity); } } catch { /* 任务中心提供重试及错误信息。 */ } };
+    const refresh = async () => { try { const r = await fetch("/knowledge-tasks"); if (!r.ok) return; const data: KnowledgeTaskCenterData = await r.json(); if (live && data.summary) { setSummary(data.summary); setResearchTasks(data.tasks); } } catch { /* 任务中心提供重试及错误信息。 */ } };
     void refresh(); const timer = setInterval(refresh, 5000); return () => { live = false; clearInterval(timer); };
   }, [onTasksPage, onTaskPage]);
   // 经验变化慢，不轮询：进出页面时各读一次，从经验页审完回来就是新数。读失败卡片只显示入口说明（旁路 fail-open）。
@@ -97,7 +97,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
           <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label="管理知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => setDeletingComponents(true)}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
         </div>
       </header>
-      {route.page === "home" && <KnowledgeModuleHome key={catalogVersion} moduleActivity={moduleActivity} onOpenResearch={id => openTask("domain", id)} onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
+      {route.page === "home" && <KnowledgeModuleHome key={catalogVersion} researchTasks={researchTasks} onOpenResearch={id => openTask("domain", id)} onOpenModule={key => navigate("module", { kbModule: key })} onOpenDocument={(id, key) => navigate("module", { kbModule: key ?? "unassigned", knowledgeDocument: id })} />}
       {route.page === "module" && (platformSkill
         ? <div className="knowledge-hub-task"><KnowledgeBackButton destination={returnSearch ? "研究知识" : "知识库"} onClick={() => returnSearch ? returnToResearch() : navigate("home")} /><PlatformSkillPane key={route.document} kind={route.document.slice(15) as PlatformSkillKind} /></div>
         : <KnowledgeModuleReader moduleKey={route.module} selectedDocumentId={route.document} onBack={() => navigate("home")} onAsk={(moduleKey, documentId) => openKnowledgeAnswer("", moduleKey, documentId)} onResearch={(id, documentId) => documentId ? openTask(id.startsWith("dkx-") ? "domain" : "component", id, true) : navigate("tasks")} />)}

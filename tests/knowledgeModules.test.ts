@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { projectKnowledgeModules, knowledgeFileName, knowledgeFilePath } from "../web/src/knowledgeModules.ts";
+import { projectKnowledgeModules, knowledgeFileName, knowledgeFilePath, knowledgeModuleDocumentCount, compareKnowledgeModuleGovernance } from "../web/src/knowledgeModules.ts";
+import { latestModuleKnowledgeTasks } from "../src/knowledgeTaskModules.ts";
+import type { KnowledgeTaskRow } from "../src/knowledgeTaskCenterTypes.ts";
 import type { KnowledgeDocument } from "../web/src/knowledgeDocumentsApi.ts";
 import type { BusinessModule, HostSkillShelfEntry } from "../web/src/api.ts";
 import type { ComponentRepository } from "../web/src/componentResearchApi.ts";
@@ -99,4 +101,29 @@ test("工程目录使用配置名称，改名不改变引用，删除后的知�
   assert.equal(removed.modules[0].key, "unassigned");
   assert.equal(removed.modules[0].documents[0].id, "custom-guide");
   assert.equal(removed.modules[0].inactiveCount, 1);
+});
+
+test("#517 多次萃取只展示最新任务的文档数，新任务空稿也不能沿用旧数量", () => {
+  const result = projectKnowledgeModules({ documents: [document("formal", { module_ids: ["alarm"] })], businessModules: [module("alarm")], components: [] });
+  const row = (id: string, created_at: string, total: number) => ({ id, module_id: "alarm", kind: "domain", created_at, document_summary: { total, published: 0, drafts: total, process: 0 } } as KnowledgeTaskRow);
+  const tasks = [row("old", "2026-10-01", 20), row("latest", "2026-10-16", 10)];
+  const latest = latestModuleKnowledgeTasks(tasks).get("alarm")!;
+  assert.equal(latest.id, "latest");
+  assert.equal(knowledgeModuleDocumentCount(result.modules[0], latest), 10);
+  latest.document_summary!.total = 0;
+  assert.equal(knowledgeModuleDocumentCount(result.modules[0], latest), 0);
+  assert.equal(knowledgeModuleDocumentCount(result.modules[0]), 1, "没有萃取任务时仍展示正式知识数量");
+  assert.equal(result.documents.length, 1, "过程文稿不加入正式知识清单");
+});
+
+test("#517 治理排序只分已归档、建设中、未建设三档", () => {
+  const data = projectKnowledgeModules({ documents: [], businessModules: ["empty", "research", "draft", "published", "archived"].map(id => module(id)), components: [] });
+  const tasks = [
+    { id: "r", module_id: "research", document_summary: { total: 1, published: 0, drafts: 0, process: 1 } },
+    { id: "d", module_id: "draft", document_summary: { total: 10, published: 0, drafts: 10, process: 0 } },
+    { id: "p", module_id: "published", document_summary: { total: 2, published: 2, drafts: 0, process: 0 } },
+    { id: "a", module_id: "archived", module_entry: { kind: "document", document_id: "formal" } },
+  ].map(task => ({ ...task, kind: "domain", created_at: "2026-10-16" } as KnowledgeTaskRow));
+  const latest = latestModuleKnowledgeTasks(tasks);
+  assert.deepEqual(data.modules.sort((a, b) => compareKnowledgeModuleGovernance(a, b, latest)).map(module => module.id), ["archived", "draft", "published", "research", "empty"]);
 });

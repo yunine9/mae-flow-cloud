@@ -66,6 +66,7 @@ create table if not exists tasks (
   created_at    timestamptz not null,
   last_progress_at timestamptz,
   completed_at  timestamptz,
+  parent_task_id text,
   waiting       jsonb,
   delivery      jsonb,
   updated_at    timestamptz not null default now()
@@ -73,6 +74,7 @@ create table if not exists tasks (
 alter table tasks add column if not exists title text;
 alter table tasks add column if not exists last_progress_at timestamptz;
 alter table tasks add column if not exists completed_at timestamptz;
+alter table tasks add column if not exists parent_task_id text;
 create table if not exists task_events (
   task_id    text not null,
   event_id   bigint not null,
@@ -135,15 +137,16 @@ export class PgProjection {
       await this.pool.query(
         `insert into tasks (task_id, title, requirement, status, detail,
            luban_account, workspace, created_at, last_progress_at,
-           completed_at, waiting, delivery, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+           completed_at, waiting, delivery, parent_task_id, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now())
          on conflict (task_id) do update set
            title = excluded.title, status = excluded.status,
            detail = excluded.detail,
            waiting = excluded.waiting, delivery = excluded.delivery,
            luban_account = excluded.luban_account,
            last_progress_at = excluded.last_progress_at,
-           completed_at = excluded.completed_at, updated_at = now()`,
+           completed_at = excluded.completed_at,
+           parent_task_id = excluded.parent_task_id, updated_at = now()`,
         [
           summary.id, summary.title ?? null, summary.requirement, summary.status,
           summary.detail ?? null, summary.luban_account ?? null,
@@ -152,6 +155,7 @@ export class PgProjection {
           summary.completed_at ?? null,
           summary.waiting ? JSON.stringify(summary.waiting) : null,
           summary.delivery ? JSON.stringify(summary.delivery) : null,
+          summary.parent_task_id ?? null,
         ]);
     } catch (error) {
       this.fail(`upsertTask ${summary.id}`, error);
@@ -250,7 +254,7 @@ export class PgProjection {
       `select t.task_id, t.title, t.requirement, t.status, t.detail,
               t.luban_account, t.workspace, t.created_at, t.updated_at,
               t.last_progress_at, t.completed_at,
-              t.waiting, t.delivery, coalesce(e.n, 0) as event_count
+              t.waiting, t.delivery, t.parent_task_id, coalesce(e.n, 0) as event_count
          from tasks t
          left join (select task_id, count(*)::int as n
                       from task_events group by task_id) e
@@ -273,6 +277,7 @@ export class PgProjection {
         ? new Date(row.completed_at).toISOString() : undefined,
       waiting: row.waiting ?? undefined,
       delivery: row.delivery ?? undefined,
+      parent_task_id: row.parent_task_id ?? undefined,
       event_count: row.event_count,
     }));
   }
