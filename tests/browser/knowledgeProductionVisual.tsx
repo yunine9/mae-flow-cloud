@@ -13,7 +13,7 @@ window.fetch = async input => {
     if (path === "/component-research") response = { records: [fixture.response] };
     else if (path === "/component-repositories") response = { components: fixture.response.components ?? [fixture.response.component] };
     else if (path === "/business-modules") response = { modules: [] };
-    else if (path === `/component-research/${fixture.id}`) response = fixture.response;
+    else if (path === `/component-research/${fixture.id}/reader`) response = fixture.response;
     else if (path === `/component-research/${fixture.id}/archive/preview`) response = fixture.archive_preview;
     else if (path.startsWith("/knowledge-review/component/")) response = { notes: [] };
     else throw new Error(`未配置的组件截图请求：${path}`);

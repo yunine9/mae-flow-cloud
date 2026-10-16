@@ -1,3 +1,4 @@
+import { VisitedKnowledgePanel } from "./VisitedKnowledgePanel";
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { useKnowledgeStudio } from "./KnowledgeStudioContext";
 import { MoreHorizontal, FileText, History, Settings2 } from "lucide-react";
@@ -156,7 +157,7 @@ export function ComponentResearch({
       loading = true;
       try {
         const result = await componentRequest<ComponentResearchRecord>(
-          `/component-research/${encodeURIComponent(selected)}`,
+          `/component-research/${encodeURIComponent(selected)}/reader`,
           undefined, AbortSignal.any([controller.signal, AbortSignal.timeout(30_000)]),
         );
         if (active) setDetail(result);
@@ -233,7 +234,7 @@ export function ComponentResearch({
     } catch (e) {
       setError((e as Error).message);
       try {
-        setDetail(await componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}`, undefined, AbortSignal.timeout(30_000)));
+        setDetail(await componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}/reader`, undefined, AbortSignal.timeout(30_000)));
       } catch { /* 保留发布错误；下一次任务刷新仍会读取后台事实。 */ }
     }
     finally { publishing.current = false; setBusy(false); }
@@ -260,7 +261,7 @@ export function ComponentResearch({
         <span className={`shrink-0 text-sm ${current.production?.group === "attention" ? "text-amber-700" : "text-muted-foreground"}`}>{current.production?.status_label}</span>
         <KnowledgeTaskTabs value={stage} onChange={switchTaskView} documentCount={(current.document?.sections.length || current.draft ? 1 : 0) + (current.work_documents?.length ?? 0)} view={current.production} disabled={busy} /></div>
       <ComponentKnowledgeArchive key={`archive:${current.id}`} record={current} openRequest={archiveOpenRequest} onArchiveAction={() => {
-        void componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}`, undefined, AbortSignal.timeout(30_000))
+        void componentRequest<ComponentResearchRecord>(`/component-research/${encodeURIComponent(current.id)}/reader`, undefined, AbortSignal.timeout(30_000))
           .then(next => setDetail(previous => previous?.id === current.id ? next : previous)).catch(reason => setError(reason.message));
       }} />
       <div hidden={stage !== "review"} className="flex shrink-0 items-center gap-2">
@@ -285,13 +286,13 @@ export function ComponentResearch({
       </div>
       <Button className="justify-self-end" onClick={() => setPublishSettingsOpen(false)}>完成</Button>
     </DialogContent></Dialog>
-    <div hidden={stage !== "review"} className="min-h-0 flex-1" style={{ display: stage === "review" ? "flex" : "none", flexDirection: "column" }}>
+    <VisitedKnowledgePanel key={`reader:${current.id}`} active={stage === "review"} className="min-h-0 flex-1" style={{ display: stage === "review" ? "flex" : "none", flexDirection: "column" }}>
       {current.production?.platform_message && <p className="shrink-0 border-b border-line px-4 py-1.5 text-sm text-muted-foreground">{current.production.platform_message}</p>}
       {current.document || current.work_documents?.length ? <ComponentResearchReview key={`review:${current.id}`} record={current} workDocumentId={workDocumentId} onWorkDocumentSelect={setWorkDocumentId} unified onBlockedChange={setReviewBlocked} onChanged={record => { setDetail(record); void load(); }} readerHeight="100%" />
         : current.draft ? <section className="min-h-0 flex-1 overflow-auto p-6"><div className="mb-3 flex justify-between"><strong>{current.production?.status_label}</strong>{!current.document_id && <Button variant="outline" onClick={() => setEditing(!editing)}>{editing ? "预览文稿" : "编辑文稿"}</Button>}</div>{editing ? <Textarea aria-label="知识文稿" rows={16} value={draft} onChange={e => setDraft(e.target.value)} /> : <Markdown text={draft} />}</section>
         : <p className="p-6 text-muted-foreground">文稿生成后可在这里检视。</p>}
-    </div>
-    <div hidden={stage !== "progress"} className="min-h-0 flex-1 overflow-auto p-5">
+    </VisitedKnowledgePanel>
+    {stage === "progress" && <div className="min-h-0 flex-1 overflow-auto p-5">
       <div className="mb-4 flex items-center gap-3 text-sm"><span className="mr-auto text-muted-foreground">{componentResearchSources(current).length} 个来源仓 · {knowledgeLanguageLabel(current.language)} · {current.operator}</span>
         {current.production?.research_actions.filter(action => ["stop", "resume"].includes(action.id)).map(action => <Button key={action.id} variant="outline" disabled={busy} onClick={() => void manage(action.id === "resume" ? "retry" : "stop")}>{action.label}</Button>)}
         <details className="relative"><summary className="cursor-pointer text-muted-foreground">来源范围</summary><div className="absolute right-0 z-10 mt-2 w-[480px] max-w-[80vw] rounded-lg border border-line bg-surface p-4 shadow-lg">{componentResearchSources(current).map(source => <p key={source.id} className="mb-2 break-all">{source.name} · {source.repository} · {source.branch} · {source.path || "根目录"}<br />读取版本：{current.revisions?.[source.id] ?? (!current.source_repositories && !current.components ? current.revision : undefined) ?? "尚未读取"}</p>)}</div></details>
@@ -299,8 +300,8 @@ export function ComponentResearch({
       {current.error && <p role="alert" className="mb-4 text-danger">{current.error}</p>}
       {current.pipeline && <p className="mb-4 text-sm text-muted-foreground">分项研究与独立评审：{current.pipeline.tasks.filter(task => task.status === "done").length}/{current.pipeline.tasks.length} 项通过</p>}
       {workDocumentLinks()}
-      <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} />
-    </div>
+      <KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} endpoint={current.deferred_details ? `/component-research/${current.id}/evidence` : undefined} />
+    </div>}
   </section>;
   if (compact && current && (current.document || current.work_documents?.length) && stage === "review") return <section className="tw-root space-y-3" aria-label="萃取结果阅读页">
     <header className="flex items-center gap-3 pr-8">
@@ -387,7 +388,7 @@ export function ComponentResearch({
                   )}
                 </header>
                 {surface === "workbench" ? <nav className="mb-4 flex gap-2" aria-label="组件研究详情">{([['progress','研究过程'],['inputs','来源范围']] as const).map(([value,label]) => <Button key={value} size="sm" variant={stage === value ? "secondary" : "ghost"} onClick={() => setStage(value)}>{label}</Button>)}<Button size="sm" variant="outline" disabled={!current.draft && !current.document && !current.work_documents?.length} onClick={() => studio ? studio.openResult("component", current.id) : setStage("review")}>文稿审查</Button></nav> : compact ? <label className="mb-4 flex items-center gap-3">查看<select className="rounded-md border border-line bg-surface px-3 py-2" aria-label="查看萃取内容" value={stage} onChange={e => setStage(e.target.value)}><option value="review">萃取结果</option><option value="progress">执行详情</option><option value="inputs">来源范围</option><option value="publish">采纳知识</option></select></label> : <KnowledgeExtractionStages codeOnly value={stage} onChange={setStage} label="组件萃取阶段" />}</div>}
-                {(current.document || current.work_documents?.length) && <div hidden={stage !== "review"}><ComponentResearchReview key={`review:${current.id}`} record={current} workDocumentId={workDocumentId} onWorkDocumentSelect={setWorkDocumentId} onChanged={record => { setDetail(record); void load(); }} /></div>}
+                {(current.document || current.work_documents?.length) && <VisitedKnowledgePanel key={`reader:${current.id}`} active={stage === "review"}><ComponentResearchReview key={`review:${current.id}`} record={current} workDocumentId={workDocumentId} onWorkDocumentSelect={setWorkDocumentId} onChanged={record => { setDetail(record); void load(); }} /></VisitedKnowledgePanel>}
                 {stage === "inputs" && <details open className="mb-5 rounded-lg border border-line p-4">
                   <summary className="cursor-pointer font-medium">
                     源码范围与调用来源
@@ -395,7 +396,7 @@ export function ComponentResearch({
                   {stage === "inputs" && componentResearchSources(current).map(c => <p key={c.id} className="mt-3 break-all text-sm">{c.name} · {c.repository} · {c.branch} · {c.path || "根目录"}<br/>读取版本：{current.revisions?.[c.id] ?? (!current.source_repositories && !current.components ? current.revision : undefined) ?? "尚未读取"}</p>)}
                   {stage === "inputs" && <p className="mt-3 text-sm">来源限定为基础仓固定版本代码与 everycode 真实调用。{current.material_ids?.length ? "此历史记录曾关联上传资料，重新研究须新建任务。" : ""}</p>}
                 </details>}
-                {stage === "progress" && <>{workDocumentLinks()}<KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} /></>}
+                {stage === "progress" && <>{workDocumentLinks()}<KnowledgeResearchProgress key={`progress:${current.id}`} evidence={current.evidence} endpoint={current.deferred_details ? `/component-research/${current.id}/evidence` : undefined} /></>}
                 {current.draft && ["review", "publish"].includes(stage) && (
                   <>
                     {stage === "review" && !current.document && <><div className="mb-3 flex items-center justify-between">

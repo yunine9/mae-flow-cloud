@@ -89,6 +89,8 @@ export interface KnowledgeSourceCleanupState {
   publications: KnowledgeCleanupPublication[]; started?: boolean;
 }
 export interface DomainKnowledgeJob {
+  /** 阅读响应已拆分过程记录和历史；不写入任务状态。 */
+  deferred_details?: boolean;
   /** 读取时从业务模块目录解析的名称，不作为路径或归属标识持久化。 */
   module_name?: string;
   /** 重新萃取的原任务，用于重复请求时返回同一个新任务。 */

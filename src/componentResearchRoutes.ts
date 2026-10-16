@@ -31,6 +31,14 @@ export async function componentResearchRoute(
         );
     } else {
       const research = service.getComponentResearch();
+      if (request.method === "GET" && parts[1]) {
+        if (parts[2] === "reader" && !parts[3]) return json(response, 200, research.reader(parts[1]));
+        if (parts[2] === "evidence" && !parts[4]) return json(response, 200, parts[3] === undefined
+          ? research.evidencePage(parts[1], new URL(request.url!, "http://localhost").searchParams.get("before") ?? undefined)
+          : research.evidenceEntry(parts[1], parts[3]));
+        if (parts[2] === "history" && parts[3] && !parts[4]) return json(response, 200, research.sectionHistory(parts[1], parts[3]));
+        if (parts[2] === "work-document" && parts[3] && !parts[4]) return json(response, 200, research.workDocument(parts[1], parts[3]));
+      }
       if (parts[1] && parts[2] === "archive") {
         const manager = service.getDomainKnowledgeExtraction();
         const current = () => {
