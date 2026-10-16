@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">需求交付中的「人 × 代码 × AI」</title><desc id="desc">人决定目标与取舍 · AI 完成理解、设计和实现 · 代码维护执行边界与真实结果。依据 Mae-Flow Cloud main 81edf20d，2026-10-16。需求交付职责示意，不代表固定并发数量。</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#4B56C7" stroke-width="1.5"/></marker><marker id="teal-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#087E83" stroke-width="1.5"/></marker></defs>
+<style>text{font-family:'PingFang SC','Microsoft YaHei',sans-serif} .mono{font-family:'SFMono-Regular',Consolas,monospace}</style>
+<rect x="0" y="0" width="1920" height="1080" rx="0" fill="#F7F9FC"/>
+<rect x="56" y="48" width="5" height="30" rx="2" fill="#4B56C7"/>
+<text x="76" y="71" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="2">MAE-FLOW  /  ENGINEERING WORKFLOW</text>
+<text x="1864" y="71" font-size="18" fill="#5F7083" font-weight="500" text-anchor="end" letter-spacing="0">ISSUE 527   ·   01 / 02</text>
+<text x="56" y="137" font-size="44" fill="#142B45" font-weight="650" text-anchor="start" letter-spacing="0">需求交付中的「人 × 代码 × AI」</text>
+<text x="58" y="181" font-size="23" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">人决定目标与取舍 · AI 完成理解、设计和实现 · 代码维护执行边界与真实结果</text>
+<text x="220" y="237" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">01</text>
+<text x="263" y="239" font-size="27" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">受理与准备</text>
+<line x1="486" y1="229" x2="533" y2="229" stroke="#AAB4D9" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="550" y="237" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">02</text>
+<text x="593" y="239" font-size="27" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">澄清与设计</text>
+<line x1="816" y1="229" x2="863" y2="229" stroke="#AAB4D9" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="880" y="237" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">03</text>
+<text x="923" y="239" font-size="27" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">实现与自检</text>
+<line x1="1146" y1="229" x2="1193" y2="229" stroke="#AAB4D9" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="1210" y="237" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">04</text>
+<text x="1253" y="239" font-size="27" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">交付与反馈</text>
+<line x1="1476" y1="229" x2="1523" y2="229" stroke="#AAB4D9" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="1540" y="237" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">05</text>
+<text x="1583" y="239" font-size="27" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">合入与沉淀</text>
+<text x="56" y="298" font-size="26" fill="#AC681C" font-weight="650" text-anchor="start" letter-spacing="0">人</text>
+<text x="56" y="329" font-size="18" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">决定与检视</text>
+<rect x="220" y="265" width="312" height="88" rx="12" fill="#FFF5E5"/>
+<text x="240" y="299" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">提交原始需求</text>
+<text x="240" y="330" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">指定业务模块与仓库</text>
+<rect x="550" y="265" width="312" height="88" rx="12" fill="#FFF5E5"/>
+<text x="570" y="299" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">回答关键问题</text>
+<text x="570" y="330" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">确认范围与方案</text>
+<rect x="880" y="265" width="312" height="88" rx="12" fill="#FFF5E5"/>
+<text x="900" y="299" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">随时批注、调整或接管</text>
+<text x="900" y="330" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">新要求沿当前任务落实</text>
+<rect x="1210" y="265" width="312" height="88" rx="12" fill="#FFF5E5"/>
+<text x="1230" y="299" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">确定交付内容</text>
+<text x="1230" y="330" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">决定检视意见如何处理</text>
+<rect x="1540" y="265" width="312" height="88" rx="12" fill="#FFF5E5"/>
+<text x="1560" y="299" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">在代码平台审批合入</text>
+<text x="1560" y="330" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">审核可复用的经验</text>
+<text x="56" y="418" font-size="25" fill="#4B56C7" font-weight="650" text-anchor="start" letter-spacing="0">主 Agent</text>
+<text x="56" y="449" font-size="18" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">贯穿任务执行</text>
+<g data-card="读取并理解" data-bounds="220,382,312,134">
+<rect x="220" y="382" width="312" height="134" rx="14" fill="#FFFFFF"/>
+<text x="240" y="417" font-size="24" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">读取并理解</text>
+<text x="240" y="452" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">读需求、代码与相关知识</text>
+<text x="240" y="482" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">核实事实，准备执行现场</text>
+</g>
+<line x1="534" y1="448" x2="547" y2="448" stroke="#4B56C7" stroke-width="2" marker-end="url(#arrow)"/>
+<g data-card="形成可实施方案" data-bounds="550,382,312,134">
+<rect x="550" y="382" width="312" height="134" rx="14" fill="#FFFFFF"/>
+<text x="570" y="417" font-size="24" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">形成可实施方案</text>
+<text x="570" y="452" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">澄清边界，编写规格与设计</text>
+<text x="570" y="482" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">需要时分析交付单元拆分</text>
+</g>
+<line x1="864" y1="448" x2="877" y2="448" stroke="#4B56C7" stroke-width="2" marker-end="url(#arrow)"/>
+<g data-card="完成代码与测试" data-bounds="880,382,312,134">
+<rect x="880" y="382" width="312" height="134" rx="14" fill="#FFFFFF"/>
+<text x="900" y="417" font-size="24" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">完成代码与测试</text>
+<text x="900" y="452" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">主写关键实现，整合子报告</text>
+<text x="900" y="482" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">执行自检，修正真实问题</text>
+</g>
+<line x1="1194" y1="448" x2="1207" y2="448" stroke="#4B56C7" stroke-width="2" marker-end="url(#arrow)"/>
+<g data-card="准备交付并处理反馈" data-bounds="1210,382,312,134">
+<rect x="1210" y="382" width="312" height="134" rx="14" fill="#FFFFFF"/>
+<text x="1230" y="417" font-size="24" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">准备交付并处理反馈</text>
+<text x="1230" y="452" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">整理交付文件，申请推送</text>
+<text x="1230" y="482" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">按失败材料或意见继续修改</text>
+</g>
+<line x1="1524" y1="448" x2="1537" y2="448" stroke="#4B56C7" stroke-width="2" marker-end="url(#arrow)"/>
+<g data-card="结束本轮执行" data-bounds="1540,382,312,134">
+<rect x="1540" y="382" width="312" height="134" rx="14" fill="#FFFFFF"/>
+<text x="1560" y="417" font-size="24" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">结束本轮执行</text>
+<text x="1560" y="452" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">代码与领域文档形成成果</text>
+<text x="1560" y="482" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">平台确认合入后停止执行</text>
+</g>
+<text x="56" y="577" font-size="22" fill="#4B56C7" font-weight="600" text-anchor="start" letter-spacing="0">专项 Agent</text>
+<text x="56" y="607" font-size="17" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">按阶段与条件参与</text>
+<line x1="376.0" y1="518" x2="376.0" y2="541" stroke="#4B56C7" stroke-width="1.5" stroke-dasharray="4 5"/>
+<rect x="220" y="546" width="312" height="89" rx="12" fill="#EEF0FC"/>
+<text x="238" y="580" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">环境预热（平台启动）</text>
+<text x="238" y="611" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">需求批注修改（按需）</text>
+<line x1="706.0" y1="518" x2="706.0" y2="541" stroke="#4B56C7" stroke-width="1.5" stroke-dasharray="4 5"/>
+<rect x="550" y="546" width="312" height="89" rx="12" fill="#EEF0FC"/>
+<text x="568" y="580" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">需求核查 · Story 生成</text>
+<text x="568" y="611" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">设计检视</text>
+<line x1="1036.0" y1="518" x2="1036.0" y2="541" stroke="#4B56C7" stroke-width="1.5" stroke-dasharray="4 5"/>
+<rect x="880" y="546" width="312" height="89" rx="12" fill="#EEF0FC"/>
+<text x="898" y="580" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">组件分析 · 编译验证</text>
+<text x="898" y="611" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">测试生成等（按需）</text>
+<line x1="1366.0" y1="518" x2="1366.0" y2="541" stroke="#4B56C7" stroke-width="1.5" stroke-dasharray="4 5"/>
+<rect x="1210" y="546" width="312" height="89" rx="12" fill="#EEF0FC"/>
+<text x="1228" y="580" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">流水线 / 检视修复</text>
+<text x="1228" y="611" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">交付报告（后台更新）</text>
+<line x1="1696.0" y1="518" x2="1696.0" y2="541" stroke="#4B56C7" stroke-width="1.5" stroke-dasharray="4 5"/>
+<rect x="1540" y="546" width="312" height="89" rx="12" fill="#EEF0FC"/>
+<text x="1558" y="580" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">交付报告更新</text>
+<text x="1558" y="611" font-size="20" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">经验整理（合入后）</text>
+<text x="56" y="683" font-size="22" fill="#142B45" font-weight="600" text-anchor="start" letter-spacing="0">产出</text>
+<text x="222" y="683" font-size="19" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">需求材料 · 任务工作区</text>
+<text x="552" y="683" font-size="19" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">规格 · Story · 实施附录</text>
+<text x="882" y="683" font-size="19" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">代码 · 测试 · 执行记录</text>
+<text x="1212" y="683" font-size="19" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">提交 · MR · 流水线结果</text>
+<text x="1542" y="683" font-size="19" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">合入版本 · 报告 · 经验草稿</text>
+<rect x="56" y="729" width="1808" height="235" rx="20" fill="#142B45"/>
+<text x="82" y="773" font-size="28" fill="#FFFFFF" font-weight="650" text-anchor="start" letter-spacing="0">交付成果</text>
+<text x="250" y="772" font-size="22" fill="#BBD6E3" font-weight="500" text-anchor="start" letter-spacing="0">一次需求交付，留下四类成果</text>
+<text x="1836" y="772" font-size="20" fill="#C7E8E5" font-weight="500" text-anchor="end" letter-spacing="0">有需求依据 · 有实现结果 · 有验证记录 · 有知识积累</text>
+<line x1="82" y1="797" x2="1838" y2="797" stroke="#36516A" stroke-width="1"/>
+<g data-card="需求与设计" data-bounds="70,804,424,142">
+<text x="82" y="841" font-size="27" fill="#FFFFFF" font-weight="600" text-anchor="start" letter-spacing="0">需求与设计</text>
+<text x="82" y="883" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">需求原文与确认决定</text>
+<text x="82" y="918" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">规格、Story、实施附录</text>
+</g>
+<line x1="511" y1="821" x2="511" y2="937" stroke="#36516A" stroke-width="1"/>
+<g data-card="代码与变更" data-bounds="515,804,424,142">
+<text x="527" y="841" font-size="27" fill="#FFFFFF" font-weight="600" text-anchor="start" letter-spacing="0">代码与变更</text>
+<text x="527" y="883" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">实现代码、变更提交</text>
+<text x="527" y="918" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">关联 MR 与实际合入版本</text>
+</g>
+<line x1="956" y1="821" x2="956" y2="937" stroke="#36516A" stroke-width="1"/>
+<g data-card="测试与验证" data-bounds="960,804,424,142">
+<text x="972" y="841" font-size="27" fill="#FFFFFF" font-weight="600" text-anchor="start" letter-spacing="0">测试与验证</text>
+<text x="972" y="883" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">函数 UT、模块 UT（MST）</text>
+<text x="972" y="918" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">真实执行结果与未验证项</text>
+</g>
+<line x1="1401" y1="821" x2="1401" y2="937" stroke="#36516A" stroke-width="1"/>
+<g data-card="知识与经验" data-bounds="1405,804,424,142">
+<text x="1417" y="841" font-size="27" fill="#FFFFFF" font-weight="600" text-anchor="start" letter-spacing="0">知识与经验</text>
+<text x="1417" y="883" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">领域文档与交付报告</text>
+<text x="1417" y="918" font-size="22" fill="#C8D7E4" font-weight="400" text-anchor="start" letter-spacing="0">供人审核、后续复用的经验</text>
+</g>
+<text x="56" y="1004" font-size="20" fill="#087E83" font-weight="600" text-anchor="start" letter-spacing="0">反馈闭环</text>
+<text x="170" y="1004" font-size="21" fill="#20364D" font-weight="400" text-anchor="start" letter-spacing="0">流水线失败 / 已确认检视意见  →  同一任务修复  →  原分支与 MR 更新  →  新提交重新验证</text>
+<line x1="56" y1="1028" x2="1864" y2="1028" stroke="#DCE4ED" stroke-width="1.5"/>
+<text x="56" y="1057" font-size="17" fill="#5F7083" font-weight="400" text-anchor="start" letter-spacing="0">完整开发的职责示意；阶段组织工作，通用宿主能力可按授权提前使用。</text>
+<text x="1864" y="1057" font-size="17" fill="#5F7083" font-weight="400" text-anchor="end" letter-spacing="0">代码依据  main · 81edf20d   |   2026.10.16</text>
+</svg>
