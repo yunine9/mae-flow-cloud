@@ -227,7 +227,11 @@ at: 2026-09-01
   `expand {id}`。
 - 预算:search 1.5 s、expand 1 s、ingest 5 s、health 500 ms。超时返回空结果加
   一句「检索暂不可用」,绝不卡 Agent。
-- 单 writer:ingest 宿主侧串行。资源:常驻 1.2 GB,部署预留 2 GB,写进 preflight。
+- 单个索引写入进程，ingest 串行。2026-10-16 勘误（#523）：小语料的历史
+  常驻内存不能证明长文索引安全。本地模型单批 1 段、每段最多 1024 token，
+  长段继续拆分并保留原文行号，不截断知识原件。Linux 有 8 GiB 地址空间硬限制、
+  4 GiB 常驻内存与 swap 检查及执行期限保护；异常退出累计 5 次停止自动重启。
+  资源参数、日志及部署验收边界见 `docs/deploy-intranet.md` 的任务记忆说明。
 - 索引与正本分离:`milvus.db` 可删,`corpus/` 是正本;preflight 含「删索引→
   重建→对拍」演练。
 

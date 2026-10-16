@@ -111,6 +111,57 @@ test("停止旁路立即结束在途长预算请求，不遗留等待或重拉�
   } finally { clearTimeout(timeout); sidecar.stop(); }
 });
 
+test("已 ready 的进程连续退出也累计失败，五次后停止重启", async () => {
+  const { dataDir } = corpusWith(0);
+  let starts = 0;
+  const closed: Promise<void>[] = [];
+  const sidecar = new MemorySidecar({ python: process.execPath, script: STUB,
+    corpusDir: join(dataDir, "corpus"), milvusPath: join(dataDir, "index.db"),
+    env: { STUB_DIE_AFTER: "1" },
+    spawnProcess(command, args, env) {
+      starts++;
+      const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      closed.push(new Promise(resolve => child.once("close", () => resolve())));
+      return child;
+    },
+  });
+  try {
+    for (let index = 0; index < 5; index++) {
+      assert.equal(await sidecar.health(), true);
+      await closed[index];
+      assert.equal(await sidecar.start(), false, "退出后立即查询不能绕过退避");
+      if (index < 4) await new Promise(resolve => setTimeout(resolve, 120 * 2 ** index));
+    }
+    await new Promise(resolve => setTimeout(resolve, 1700));
+    assert.equal(await sidecar.start(), false);
+    assert.equal(starts, 5, "ready 不能清零异常退出次数");
+  } finally { sidecar.stop(); await Promise.all(closed); }
+});
+
+test("启动超时强制结束忽略 TERM 的进程，退出前不创建第二个索引写入者", async () => {
+  const { dataDir } = corpusWith(0);
+  let starts = 0;
+  let closed: Promise<void> | undefined;
+  const sidecar = new MemorySidecar({ python: process.execPath, script: STUB,
+    corpusDir: join(dataDir, "corpus"), milvusPath: join(dataDir, "index.db"),
+    budgets: { bootMs: 250 }, env: { STUB_IGNORE_TERM: "1", STUB_BOOT_DELAY_MS: "5000" },
+    spawnProcess(command, args, env) {
+      starts++;
+      const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      closed = new Promise(resolve => child.once("close", () => resolve()));
+      return child;
+    },
+  });
+  try {
+    assert.equal(await sidecar.start(), false);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(await sidecar.start(), false);
+    assert.equal(starts, 1);
+    await closed;
+    assert.equal(sidecar.available, false);
+  } finally { sidecar.stop(); await closed; }
+});
+
 test("工具:corpus_search 结果封顶带 id/判定者/位置;expand 形状校验;足迹回调", async () => {
   const { dataDir, ids } = corpusWith(2);
   const sidecar = stub(dataDir);

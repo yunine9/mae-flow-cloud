@@ -79,6 +79,9 @@ export class MemorySidecar {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
   private restarts = 0;
+  private retryAt = 0;
+  private readonly failedChildren = new WeakSet<ChildProcessWithoutNullStreams>();
+  private readonly terminating = new WeakSet<ChildProcessWithoutNullStreams>();
   private stopped = false;
   private sectionCounts = new Map<string, number>();
   indexedSections(path: string): number | undefined { return this.sectionCounts.get(path); }
@@ -98,7 +101,8 @@ export class MemorySidecar {
   start(): Promise<boolean> {
     if (this.available) return Promise.resolve(true);
     if (this.booting) return this.booting;
-    if (this.stopped || this.restarts > MAX_RESTARTS) return Promise.resolve(false);
+    if (this.stopped || this.restarts >= MAX_RESTARTS || Date.now() < this.retryAt
+      || (this.child && this.terminating.has(this.child))) return Promise.resolve(false);
     this.booting = this.boot().finally(() => { this.booting = undefined; });
     return this.booting;
   }
@@ -120,10 +124,10 @@ export class MemorySidecar {
     try {
       child = options.spawnProcess
         ? options.spawnProcess(options.python, args, env)
-        : spawn(options.python, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+        : spawn(options.python, args, { env, stdio: ["pipe", "pipe", "pipe"], detached: process.platform !== "win32" });
     } catch (error) {
       options.log?.(`记忆检索旁路拉不起来: ${String(error)}`);
-      this.restarts += 1;
+      this.recordFailure();
       return false;
     }
     this.child = child;
@@ -139,6 +143,7 @@ export class MemorySidecar {
           return;                         // 非协议行(依赖库偶尔往 stdout 吐)只丢它自己
         }
         if (message.id === 0) {
+          if (this.child !== child || this.stopped || this.terminating.has(child)) return;
           if (message.ready === true) {
             clearTimeout(timer);
             this.ready = true;
@@ -157,13 +162,16 @@ export class MemorySidecar {
         clearTimeout(waiter.timer);
         waiter.resolve(message);
       });
-      child.stderr.on("data", (chunk: Buffer) => {
-        const text = chunk.toString("utf-8").trim();
-        if (text) options.log?.(`[memsearch-sidecar] ${text.slice(0, 400)}`);
+      const diagnostics = createInterface({ input: child.stderr });
+      diagnostics.on("line", (line) => {
+        // 一次 data 可以带多条日志；按行保留资源指标，避免截掉后续请求。
+        const text = line.trim();
+        if (text) options.log?.(`[memsearch-sidecar] ${text.slice(0, 1024)}`);
       });
       child.on("error", (error) => {
         options.log?.(`记忆检索旁路进程错误: ${String(error)}`);
         clearTimeout(timer);
+        this.failChild(child);
         resolve(false);
       });
       child.on("exit", (code, signal) => {
@@ -171,18 +179,53 @@ export class MemorySidecar {
         this.onExit(child, code, signal);
         resolve(false);
       });
+      child.on("close", (code, signal) => {
+        // spawn 失败可能只有 error/close，没有 exit。
+        clearTimeout(timer);
+        this.onExit(child, code, signal);
+        resolve(false);
+      });
     });
     const ok = await readyPromise;
     if (!ok) {
-      this.restarts += 1;
-      if (this.child === child) {
-        this.ready = false;
-        try { child.kill(); } catch { /* 已死 */ }
-      }
-    } else {
-      this.restarts = 0;
+      this.failChild(child);
     }
     return ok;
+  }
+
+  private recordFailure(): void {
+    this.restarts += 1;
+    this.retryAt = Date.now() + Math.min(100 * 2 ** (this.restarts - 1), 30_000);
+  }
+
+  private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    // 独立进程组也包含旧版 Milvus 的子进程，不能只留下退出的 Python。
+    if (process.platform !== "win32" && child.pid) {
+      try { process.kill(-child.pid, signal); return; } catch { /* 测试或 Windows 使用单进程 */ }
+    }
+    try { child.kill(signal); } catch { /* 已退出 */ }
+  }
+
+  private terminateChild(child: ChildProcessWithoutNullStreams): void {
+    if (this.terminating.has(child)) return;
+    this.terminating.add(child);
+    child.once("exit", () => this.signalChild(child, "SIGKILL"));
+    this.signalChild(child, "SIGTERM");
+    const timer = setTimeout(() => this.signalChild(child, "SIGKILL"), 1000);
+    timer.unref();
+    child.once("close", () => clearTimeout(timer));
+  }
+
+  private failChild(child: ChildProcessWithoutNullStreams): void {
+    if (!this.failedChildren.has(child) && !this.stopped) {
+      this.failedChildren.add(child);
+      this.recordFailure();
+    }
+    if (this.child === child) {
+      this.ready = false;
+      this.finishPending();
+      this.terminateChild(child);
+    }
   }
 
   private onExit(
@@ -191,13 +234,15 @@ export class MemorySidecar {
     signal: NodeJS.Signals | null,
   ): void {
     if (this.child !== child) return;
+    this.signalChild(child, "SIGKILL");
+    this.failChild(child);
     this.child = undefined;
     this.ready = false;
     this.finishPending();
     if (this.stopped) return;
     this.options.log?.(
       `记忆检索旁路退出(code=${code ?? "-"} signal=${signal ?? "-"}),`
-      + (this.restarts < MAX_RESTARTS ? "将按需重拉" : "重拉次数用尽,检索停用"));
+      + (this.restarts < MAX_RESTARTS ? `退避后按需重拉(失败 ${this.restarts}/${MAX_RESTARTS})` : "重拉次数用尽,检索停用"));
   }
 
   private finishPending(): void {
@@ -296,6 +341,9 @@ export class MemorySidecar {
     this.child = undefined;
     this.ready = false;
     this.finishPending();
-    try { child?.stdin.end(); child?.kill(); } catch { /* 已死 */ }
+    if (child) {
+      try { child.stdin.end(); } catch { /* 已死 */ }
+      this.terminateChild(child);
+    }
   }
 }

@@ -8,6 +8,7 @@ import json
 import math
 import re
 from memory_runtime import phase, check_deadline
+from memory_embedding import bounded_chunks
 
 # Conservative noise floor for the locally evaluated model only; not confidence.
 # Other models retain candidates until calibrated instead of borrowing this scale.
@@ -114,36 +115,37 @@ async def index_document(ms, path, checkpoint=None):
     'check validity'. Keep short experiences whole, and prefix document chunks
     with their subject. Original Markdown stays untouched.
     """
-    from memsearch.chunker import Chunk, compute_chunk_id
-    from knowledge_chunks import index_sections
+    from memsearch.chunker import compute_chunk_id
+    from knowledge_chunks import index_sections, Section
     text = path.read_text(encoding="utf-8")
     body = re.sub(r"\A---\r?\n.*?\r?\n---(?:\r?\n|$)", "", text, count=1, flags=re.S)
     title_match = re.search(r"^#\s+(.+)$", body, re.M)
     title = title_match.group(1) if title_match else path.stem
     source = str(path)
     if re.fullmatch(r"c-[a-z0-9]+-[a-f0-9]+\.md", path.name):
-        chunks = [Chunk(content=f"适用场景：{title}\n{body}", source=source,
-                        heading=title, heading_level=1, start_line=1, end_line=len(text.splitlines()))]
+        start = text[:len(text) - len(body)].count('\n') + 1
+        sections = [Section(start, len(text.splitlines()), title, body)]
     else:
-        chunks = [Chunk(content=f"资料主题：{title}\n章节：{c.heading}\n{c.content}", source=source,
-                        heading=c.heading or title, heading_level=1,
-                        start_line=c.start_line, end_line=c.end_line)
-                  for c in index_sections(text)]
+        sections = index_sections(text)
+    chunks = bounded_chunks(sections, source=source, title=title,
+                            token_count=getattr(ms._embedder, 'token_count', len))
     model = ms._embedder.model_name
     old = ms._store.hashes_by_source(source)
     def ident(chunk):
         return compute_chunk_id(chunk.source, chunk.start_line, chunk.end_line, chunk.content_hash, model)
-    current = {ident(c) for c in chunks}
-    # Similar lengths share a model batch, avoiding padding every short rule to
-    # the longest example in its original document order. IDs/order are stable.
-    pending = sorted((c for c in chunks if ident(c) not in old), key=lambda c: len(c.content))
+    current = set()
     count = 0
-    for offset in range(0, len(pending), 8):
+    # 边分段边索引；超时前已经完成的片段可复用，不先展开整本手册。
+    for chunk in chunks:
         check_deadline()
+        key = ident(chunk)
+        current.add(key)
+        if key in old:
+            continue
         if checkpoint:
             await checkpoint()
         with phase("index_batch_ms"):
-            count += await ms._embed_and_store(pending[offset:offset + 8])
+            count += await ms._embed_and_store([chunk])
     check_deadline()
     # Only remove old chunks after replacement has been successfully indexed.
     stale = old - current

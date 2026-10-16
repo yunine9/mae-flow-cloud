@@ -12,6 +12,7 @@ import { join } from "node:path";
 const args = process.argv.slice(2);
 const corpus = args[args.indexOf("--corpus") + 1];
 const out = (payload) => process.stdout.write(JSON.stringify(payload) + "\n");
+if (process.env.STUB_IGNORE_TERM) process.on("SIGTERM", () => {});
 
 if (process.env.STUB_BOOT_FAIL) {
   out({ id: 0, error: "sidecar 启动失败: stub" });
