@@ -8,6 +8,10 @@ node_modules/
 .agents/
 .ui-fixtures/
 .knowledge-preview-*/
+# 原型稿与截图(设计过程中的临时产物,不进仓)
+.prototype/
+# 本机 ZCode 配置
+.zcodeignore
 web/dist/
 web/*.tsbuildinfo
 /*.tsbuildinfo
