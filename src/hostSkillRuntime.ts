@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 /**
  * Materialize deployment-wide Skills into the current task repository.
  *
@@ -284,6 +285,7 @@ function existingSnapshot(
 }
 
 export function materializeHostSkills(options: {
+  moduleDataDir?: string;
   sourceRoot?: string;
   workspaceRoot: string;
   snapshotRoot: string;
@@ -353,9 +355,11 @@ export function materializeHostSkills(options: {
       if (options.context) {
         const metadata = readSkillKnowledgeMetadata(
           readFileSync(sourceFile, "utf-8"));
+        const context = options.moduleDataDir ? { ...options.context, businessModuleIds: resolveBusinessModuleIds(options.moduleDataDir, options.context.businessModuleIds) } : options.context;
+        if (options.moduleDataDir) metadata.business_module_ids = resolveBusinessModuleIds(options.moduleDataDir, metadata.business_module_ids);
         const matches = options.knowledgeScope === "issue"
-          ? knowledgeMatchesIssueSession(metadata, options.context)
-          : knowledgeMatchesTask(metadata, options.context);
+          ? knowledgeMatchesIssueSession(metadata, context)
+          : knowledgeMatchesTask(metadata, context);
         if (!matches) {
           continue;
         }

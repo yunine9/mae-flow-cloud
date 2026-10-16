@@ -5,6 +5,7 @@
  * 按版本保存；更新只切换当前元数据，历史任务自己的快照不受影响。
  */
 
+import { businessModuleMigrations, commitBusinessModuleMigration, resolveBusinessModuleId } from "./businessModuleIdentity.ts";
 import { createHash } from "node:crypto";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { componentRepositories } from "./componentRepositories.ts";
@@ -90,7 +91,7 @@ export interface BusinessModuleOperation {
   at: string;
   operator: string;
   action: "create" | "update" | "archive" | "publish_asset"
-    | "archive_asset";
+    | "archive_asset" | "migrate";
   module_id: string;
   asset_id?: string;
   version?: number;
@@ -286,7 +287,7 @@ function operations(dataDir: string): BusinessModuleOperation[] {
   } catch { return []; }
 }
 
-export function readBusinessModule(dataDir: string, value: string): BusinessModule {
+function readStoredBusinessModule(dataDir: string, value: string): BusinessModule {
   const id = assertId(value, "模块 ID");
   const home = moduleRoot(dataDir, id);
   const file = moduleFile(dataDir, id);
@@ -304,6 +305,63 @@ export function readBusinessModule(dataDir: string, value: string): BusinessModu
   }
 }
 
+// 迁入资产保留原版本文件和发布指纹。独立编号避免目标模块的同名资产被覆盖。
+function migratedAssetId(moduleId: string, assetId: string): string {
+  return `migrated-${digest(`${moduleId}:${assetId}`).slice(0, 32)}`;
+}
+function moduleSources(dataDir: string, targetId: string): string[] {
+  return businessModuleMigrations(dataDir).map(row => row.source.id)
+    .filter(id => resolveBusinessModuleId(dataDir, id) === targetId);
+}
+export function readBusinessModule(dataDir: string, value: string): BusinessModule {
+  const id = resolveBusinessModuleId(dataDir, assertId(value, "模块 ID"));
+  const module = readStoredBusinessModule(dataDir, id);
+  const sources = moduleSources(dataDir, id);
+  if (!sources.length) return module;
+  return { ...module, assets: [...module.assets, ...sources.flatMap(sourceId =>
+    readStoredBusinessModule(dataDir, sourceId).assets.map(asset => ({ ...asset, id: migratedAssetId(sourceId, asset.id) }))) ] };
+}
+function assetLocation(dataDir: string, moduleId: string, assetId: string) {
+  const targetId = resolveBusinessModuleId(dataDir, moduleId);
+  const original = readStoredBusinessModule(dataDir, moduleId);
+  if (original.assets.some(asset => asset.id === assetId)) return { module: original, assetId, targetId };
+  for (const source of moduleSources(dataDir, targetId)) {
+    const module = readStoredBusinessModule(dataDir, source);
+    const asset = module.assets.find(asset => migratedAssetId(source, asset.id) === assetId);
+    if (asset) return { module, assetId: asset.id, targetId };
+  }
+  return { module: readStoredBusinessModule(dataDir, targetId), assetId, targetId };
+}
+export function resolveBusinessKnowledgeAssetReference(dataDir: string, moduleId: string, assetId: string) {
+  const location = assetLocation(dataDir, moduleId, assetId);
+  return { moduleId: location.targetId, assetId: location.module.id === location.targetId
+    ? location.assetId : migratedAssetId(location.module.id, location.assetId) };
+}
+export function migrateBusinessModule(dataDir: string, sourceId: string, targetId: string, operator: string) {
+  sourceId = assertId(sourceId, "原模块 ID"); targetId = assertId(targetId, "目标模块 ID");
+  if (sourceId === targetId) throw new BusinessModuleError("请选择另一个业务模块");
+  const resolvedSource = resolveBusinessModuleId(dataDir, sourceId);
+  if (resolvedSource !== sourceId) {
+    if (resolvedSource === targetId) return readBusinessModule(dataDir, targetId);
+    throw new BusinessModuleError("原模块已迁移，请刷新列表");
+  }
+  if (resolveBusinessModuleId(dataDir, targetId) !== targetId) throw new BusinessModuleError("目标模块已迁移，请刷新列表");
+  const source = readBusinessModule(dataDir, sourceId), target = readBusinessModule(dataDir, targetId);
+  if (target.status !== "active") throw new BusinessModuleError("请选择正常使用的目标模块");
+  const incoming = [sourceId, ...moduleSources(dataDir, sourceId)].flatMap(id =>
+    readStoredBusinessModule(dataDir, id).assets.map(asset => ({ moduleId: id, asset })));
+  const ids = new Set(target.assets.map(asset => asset.id));
+  for (const { moduleId, asset } of incoming) {
+    const id = migratedAssetId(moduleId, asset.id);
+    if (ids.has(id)) throw new BusinessModuleError("迁入的知识编号与目标模块冲突，请先调整目标模块的知识编号");
+    ids.add(id);
+    for (let version = 1; version <= asset.version; version++) readBusinessKnowledgeAsset(dataDir, moduleId, asset.id, version);
+  }
+  commitBusinessModuleMigration(dataDir, { source: { id: source.id, name: source.name },
+    target: { id: target.id, name: target.name }, at: new Date().toISOString(), operator });
+  return readBusinessModule(dataDir, targetId);
+}
+
 export function listBusinessModules(dataDir: string): BusinessModuleCatalog {
   const home = root(dataDir);
   if (!existsSync(home)) return { modules: [], warnings: [], operations: [] };
@@ -315,13 +373,13 @@ export function listBusinessModules(dataDir: string): BusinessModuleCatalog {
       continue;
     }
     try {
-      modules.push(readBusinessModule(dataDir, entry.name));
+      if (resolveBusinessModuleId(dataDir, entry.name) === entry.name) modules.push(readBusinessModule(dataDir, entry.name));
     } catch (error) {
       warnings.push(`${entry.name}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   modules.sort((left, right) => left.name.localeCompare(right.name));
-  return { modules, warnings, operations: operations(dataDir) };
+  return { modules, warnings, operations: [...operations(dataDir), ...businessModuleMigrations(dataDir).map(row => ({ at: row.at, operator: row.operator, action: "migrate" as const, module_id: row.source.id, detail: `${row.source.name} → ${row.target.name}` }))].sort((a, b) => b.at.localeCompare(a.at)) };
 }
 
 export function canManageBusinessModule(
@@ -392,7 +450,8 @@ export function updateBusinessModule(
   },
   operator: string,
 ): BusinessModule {
-  const current = readBusinessModule(dataDir, id);
+  if (resolveBusinessModuleId(dataDir, id) !== id) throw new BusinessModuleError("模块已迁移，请刷新列表");
+  const current = readStoredBusinessModule(dataDir, id);
   const owner = patch.owner === undefined ? current.owner
     : required(patch.owner, "Owner", 48);
   if (!USERNAME.test(owner)) throw new BusinessModuleError("Owner 账号格式不合法");
@@ -430,7 +489,7 @@ export function updateBusinessModule(
       ? "archive" : "update",
     module_id: current.id,
   });
-  return updated;
+  return readBusinessModule(dataDir, updated.id);
 }
 
 function assetVersionFile(
@@ -504,11 +563,13 @@ export function publishBusinessKnowledgeAsset(
   },
   operator: string,
 ): BusinessModule {
-  const module = readBusinessModule(dataDir, moduleId);
-  if (module.status !== "active") {
+  const location = assetLocation(dataDir, moduleId, assertId(input.id, "资产 ID"));
+  const module = location.module;
+  const target = readBusinessModule(dataDir, location.targetId);
+  if (target.status !== "active") {
     throw new BusinessModuleError("已归档模块不能发布知识");
   }
-  const assetId = assertId(input.id, "资产 ID");
+  const assetId = location.assetId;
   const content = input.content.replace(/\r\n/g, "\n");
   if (!content.trim()) throw new BusinessModuleError("知识正文不能为空");
   if (content.includes("\0")) throw new BusinessModuleError("知识正文包含二进制内容");
@@ -527,7 +588,7 @@ export function publishBusinessKnowledgeAsset(
   }
   const applicableRepositories = input.repositories === undefined
     ? previous?.repositories ?? [] : repositories(input.repositories);
-  const moduleRepositories = new Set(module.repositories.map(repositoryIdentity));
+  const moduleRepositories = new Set([...target.repositories, ...(previous?.repositories ?? [])].map(repositoryIdentity));
   for (const repository of applicableRepositories) {
     if (!moduleRepositories.has(repositoryIdentity(repository))) {
       throw new BusinessModuleError(
@@ -589,7 +650,7 @@ export function publishBusinessKnowledgeAsset(
     at: now, operator, action: "publish_asset", module_id: module.id,
     asset_id: asset.id, version: asset.version,
   });
-  return updated;
+  return readBusinessModule(dataDir, updated.id);
 }
 
 export function readBusinessKnowledgeAsset(
@@ -598,8 +659,9 @@ export function readBusinessKnowledgeAsset(
   assetIdValue: string,
   version?: number,
 ): BusinessKnowledgeAssetDocument {
-  const module = readBusinessModule(dataDir, moduleId);
-  const assetId = assertId(assetIdValue, "资产 ID");
+  const location = assetLocation(dataDir, moduleId, assertId(assetIdValue, "资产 ID"));
+  const module = location.module;
+  const assetId = location.assetId;
   const current = module.assets.find((item) => item.id === assetId);
   if (!current) throw new BusinessModuleError(`模块 ${module.id} 没有知识 ${assetId}`);
   const wanted = version ?? current.version;
@@ -646,7 +708,9 @@ export function readBusinessKnowledgeAsset(
   const asset = wanted === current.version
     ? { ...published, status: current.status }
     : published;
-  return { module_id: module.id, module_name: module.name, asset, content };
+  const target = readStoredBusinessModule(dataDir, location.targetId);
+  return { module_id: target.id, module_name: target.name,
+    asset: { ...asset, id: module.id === target.id ? asset.id : migratedAssetId(module.id, asset.id) }, content };
 }
 
 export function archiveBusinessKnowledgeAsset(
@@ -655,11 +719,12 @@ export function archiveBusinessKnowledgeAsset(
   assetIdValue: string,
   operator: string,
 ): BusinessModule {
-  const module = readBusinessModule(dataDir, moduleId);
-  const assetId = assertId(assetIdValue, "资产 ID");
+  const location = assetLocation(dataDir, moduleId, assertId(assetIdValue, "资产 ID"));
+  const module = location.module;
+  const assetId = location.assetId;
   const current = module.assets.find((item) => item.id === assetId);
   if (!current) throw new BusinessModuleError(`模块 ${module.id} 没有知识 ${assetId}`);
-  if (current.status === "archived") return module;
+  if (current.status === "archived") return readBusinessModule(dataDir, moduleId);
   const now = new Date().toISOString();
   const updated: BusinessModule = {
     ...module,
@@ -676,5 +741,5 @@ export function archiveBusinessKnowledgeAsset(
     at: now, operator, action: "archive_asset", module_id: module.id,
     asset_id: assetId, version: current.version,
   });
-  return updated;
+  return readBusinessModule(dataDir, updated.id);
 }

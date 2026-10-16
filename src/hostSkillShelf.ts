@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 /**
  * 团队 Skill 货架(只读):部署数据目录 skills/ 的资产清单。
  *
@@ -202,5 +203,6 @@ export function listHostSkillShelfRoot(inputRoot: string): HostSkillShelf {
 }
 
 export function listHostSkillShelf(dataDir: string): HostSkillShelf {
-  return listHostSkillShelfRoot(resolve(dataDir, "skills"));
+  const shelf = listHostSkillShelfRoot(resolve(dataDir, "skills"));
+  return { ...shelf, skills: shelf.skills.map(skill => ({ ...skill, business_module_ids: resolveBusinessModuleIds(dataDir, skill.business_module_ids) })) };
 }

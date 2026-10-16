@@ -197,9 +197,16 @@ export function BusinessModuleLibrary({ initialAsset }: {
     const module = catalog.modules.find((item) => item.id === initialAsset.moduleId);
     const asset = module?.assets.find((item) => item.id === initialAsset.assetId);
     if (!module || !asset) {
-      setDocument(undefined);
-      setError("要核对的模块知识已不存在，无法把管理页当前内容当作清单版本；请返回发起页重新核对。");
-      return;
+      let active = true;
+      void getBusinessKnowledgeAsset(initialAsset.moduleId, initialAsset.assetId, initialAsset.version).then(value => {
+        if (!active) return;
+        const target = catalog.modules.find(item => item.id === value.module_id);
+        const current = target?.assets.find(item => item.id === value.asset.id);
+        if (!target || !current) throw new Error("要核对的模块知识已不存在，请返回发起页重新核对。");
+        setExpanded(target.id);
+        void openAsset(target, current, false, initialAsset);
+      }).catch(error => { if (active) setError(error.message); });
+      return () => { active = false; };
     }
     setExpanded(module.id);
     setDocument(undefined);
@@ -335,9 +342,10 @@ export function BusinessModuleLibrary({ initialAsset }: {
 export function BusinessAssetEditor({moduleId,assetId,onDone}:{moduleId:string;assetId:string;onDone:()=>void}) {
   const [module,setModule]=useState<BusinessModule>();
   const [content,setContent]=useState<string>();
+  const [currentAssetId,setCurrentAssetId]=useState(assetId);
   const [error,setError]=useState("");
-  useEffect(()=>{let live=true;void Promise.all([getBusinessModules(),getBusinessKnowledgeAsset(moduleId,assetId)]).then(([catalog,doc])=>{if(live){const target=catalog.modules.find(m=>m.id===moduleId);if(!target?.assets.some(a=>a.id===assetId)){setError("资料已不存在，请刷新列表");return;}setModule(target);setContent(doc.content);}}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[moduleId,assetId]);
+  useEffect(()=>{let live=true;void Promise.all([getBusinessModules(),getBusinessKnowledgeAsset(moduleId,assetId)]).then(([catalog,doc])=>{if(live){const target=catalog.modules.find(m=>m.id===doc.module_id);if(!target?.assets.some(a=>a.id===doc.asset.id)){setError("资料已不存在，请刷新列表");return;}setModule(target);setCurrentAssetId(doc.asset.id);setContent(doc.content);}}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[moduleId,assetId]);
   if(error)return <Alert variant="destructive">{error}</Alert>;
-  const asset=module?.assets.find(a=>a.id===assetId);
+  const asset=module?.assets.find(a=>a.id===currentAssetId);
   return module && asset && content !== undefined ? <AssetEditor module={module} asset={asset} initialContent={content} onSaved={onDone} onCancel={onDone}/> : <p>正在读取资料…</p>;
 }

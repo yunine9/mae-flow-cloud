@@ -3,7 +3,7 @@ import { ComponentRepositories } from "./ComponentRepositories";
 import { TechnologyStacks } from "./TechnologyStackSettings";
 import { useEffect, useState } from "react";
 import { EnvironmentRegistry } from "./EnvironmentRegistry";
-import { getBusinessModules, createBusinessModule, updateBusinessModule,
+import { getBusinessModules, createBusinessModule, updateBusinessModule, previewBusinessModuleMigration, migrateBusinessModule, type BusinessModuleMigrationPreview,
   productVersionRequest, knowledgeRepoRequest, listPeople,
   type BusinessModule, type MrParticipants, type PersonIdentity, type ProductVersion, type KnowledgeRepoConfig } from "./api";
 import { UserPicker } from "./UserPicker";
@@ -99,6 +99,25 @@ function MappingList({ kind }: { kind: string }) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs }>();
+  const [migration, setMigration] = useState<{ source: BusinessModule; targetId: string; preview?: BusinessModuleMigrationPreview; error?: string }>();
+  const [notice, setNotice] = useState("");
+  async function openMigration(id: string) {
+    const source = modules.find(module => module.id === id)!;
+    setMigration({ source, targetId: "" });
+    try {
+      const preview = await previewBusinessModuleMigration(id);
+      setMigration(current => current?.source.id === id ? { ...current, preview } : current);
+    } catch (error) { setMigration(current => current?.source.id === id ? { ...current, error: message(error) } : current); }
+  }
+  async function migrate() {
+    if (!migration?.targetId || !migration.preview) return;
+    setBusy(true);
+    try {
+      const target = await migrateBusinessModule(migration.source.id, migration.targetId);
+      setMigration(undefined); setNotice(`已迁移到「${target.name}」`); await refresh();
+    } catch (error) { setMigration(current => current && { ...current, error: message(error) }); }
+    finally { setBusy(false); }
+  }
   const [allRepos, setAllRepos] = useState<BusinessModule>();
   const [repoQuery, setRepoQuery] = useState("");
   const [people, setPeople] = useState<PersonIdentity[]>([]);
@@ -168,6 +187,7 @@ function MappingList({ kind }: { kind: string }) {
         ＋ 新建{modulesMode ? "模块" : "版本"}</Button>
     </div>
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
+    {notice && <p role="status" className="mb-3 text-sm text-muted-foreground">{notice}</p>}
     {!!warnings.length && <p role="alert" className="mb-3 text-attention">{warnings.join("；")}</p>}
     <p className="mb-4 text-sm text-muted-foreground">{modulesMode
       ? "维护模块与代码仓的映射。知识请在团队资产上传，并选择这里的模块。所有成员均可维护。"
@@ -197,6 +217,7 @@ function MappingList({ kind }: { kind: string }) {
             {row.auto ? "参与" : "不参与"}
           </label></td>}
         <td className="p-4"><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => { setError(""); setEdit(row); }}>编辑</Button>
+          {modulesMode && <Button variant="ghost" size="sm" aria-label={`迁移 ${row.name}`} onClick={() => void openMigration(row.id)}>迁移</Button>}
           {!modulesMode && <Button variant="ghost" size="sm" onClick={async () => {
             if (!await confirmDialog({ title: `删除版本「${row.name}」？`, message: "已有任务保留原分支。", confirmLabel: "删除" })) return;
             try { await productVersionRequest("DELETE", { id: row.id }); await refresh(); }
@@ -209,6 +230,27 @@ function MappingList({ kind }: { kind: string }) {
       <div className="flex items-center gap-3"><Button variant="outline" size="sm" disabled={current <= 1} onClick={() => setPage(current - 1)}>上一页</Button>
         <span>{current} / {pages}</span><Button variant="outline" size="sm" disabled={current >= pages} onClick={() => setPage(current + 1)}>下一页</Button></div>
     </footer>
+    <Dialog open={!!migration} onOpenChange={open => { if (!open && !busy) setMigration(undefined); }}>
+      <DialogContent className="tw-root w-[560px] sm:max-w-[560px]">
+        <DialogHeader><DialogTitle>迁移到其他模块</DialogTitle></DialogHeader>
+        {migration && <div className="grid gap-5 text-base">
+          <p>将「{migration.source.name}」的全部关联迁入目标模块。</p>
+          <label className="grid gap-2">目标模块
+            <select aria-label="目标模块" className="h-10 w-full rounded-md border border-line bg-surface px-3" disabled={busy}
+              value={migration.targetId} onChange={event => setMigration({ ...migration, targetId: event.target.value })}>
+              <option value="">请选择已新建的模块</option>
+              {modules.filter(module => module.id !== migration.source.id && module.status === "active").map(module => <option key={module.id} value={module.id}>{module.name}</option>)}
+            </select>
+          </label>
+          {migration.preview ? <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm text-muted-foreground"><span>文档：{migration.preview.documents}</span><span>萃取任务：{migration.preview.extraction_tasks}</span><span>交付任务：{migration.preview.delivery_tasks}</span><span>问题会话：{migration.preview.issue_sessions}</span></div>
+            : !migration.error && <p role="status" className="text-sm text-muted-foreground">正在读取关联信息…</p>}
+          <p className="text-sm text-muted-foreground">迁移后旧模块不再显示。已有成果和任务进度保留，目标模块的配置保持不变。</p>
+          {migration.error && <p role="alert" className="text-sm text-danger">{migration.error}</p>}
+          <div className="flex justify-end gap-3"><Button variant="outline" disabled={busy} onClick={() => setMigration(undefined)}>取消</Button>
+            <Button disabled={busy || !migration.targetId || !migration.preview} onClick={() => void migrate()}>{busy ? "正在迁移…" : "确认迁移"}</Button></div>
+        </div>}
+      </DialogContent>
+    </Dialog>
     <Dialog open={!!edit} onOpenChange={open => { if (!open && !busy) setEdit(undefined); }}>
       <DialogContent className={`tw-root max-w-[90vw] max-h-[85vh] overflow-y-auto ${modulesMode ? "w-[960px] sm:max-w-[960px]" : "w-[620px] sm:max-w-[620px]"}`}>
         <DialogHeader><DialogTitle>{edit?.id ? "编辑" : "新建"}{modulesMode ? "模块" : "版本"}</DialogTitle></DialogHeader>

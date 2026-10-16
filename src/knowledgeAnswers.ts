@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -73,7 +74,7 @@ export class KnowledgeAnswers {
   private readonly concurrency: number;
   private readonly timeoutMs: number;
 
-  constructor(dataDir: string, private readonly run: KnowledgeAnswerRunner, options: { concurrency?: number; timeoutMs?: number } = {}) {
+  constructor(private readonly dataDir: string, private readonly run: KnowledgeAnswerRunner, options: { concurrency?: number; timeoutMs?: number } = {}) {
     this.root = join(dataDir, "knowledge-answers");
     this.concurrency = options.concurrency ?? 2;
     this.timeoutMs = options.timeoutMs ?? 480_000;
@@ -116,7 +117,11 @@ export class KnowledgeAnswers {
       .map(({ id, question, status, stage, created_at, updated_at }) => ({ id, question, status, stage, created_at, updated_at }));
   }
 
-  get(id: string, owner: string): KnowledgeAnswerRecord { return copy(this.owned(id, owner)); }
+  get(id: string, owner: string): KnowledgeAnswerRecord {
+    const record = copy(this.owned(id, owner));
+    if (record.context?.module_ids) record.context.module_ids = resolveBusinessModuleIds(this.dataDir, record.context.module_ids);
+    return record;
+  }
 
   create(value: unknown, owner: string, integration?: { kind: "luban"; message_id: string }): { record: KnowledgeAnswerRecord; replayed: boolean } {
     if (this.closed) throw new KnowledgeAnswerError(503, "问答服务正在停止，请稍后重试");

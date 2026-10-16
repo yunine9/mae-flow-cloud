@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 /**
  * 文件存储型工作流资产库(HANDOFF-workflow-assets-cc 第一批)。
  *
@@ -420,7 +421,7 @@ export class WorkflowAssetLibrary {
       selectable_for_tasks:
         record.status === "published" && record.latest_version > 0,
       ...(record.applicability
-        ? { applicability: record.applicability } : {}),
+        ? { applicability: { ...record.applicability, business_module_ids: resolveBusinessModuleIds(this.dataDir, record.applicability.business_module_ids) } } : {}),
       ...(record.technology_assignment_required
         ? { technology_assignment_required: true as const } : {}),
       updated_at: record.updated_at,

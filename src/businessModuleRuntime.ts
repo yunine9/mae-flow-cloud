@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 /**
  * 业务模块知识的任务快照与按需读取运行时。
  *
@@ -125,8 +126,7 @@ function assertNoSymlinkPath(root: string, target: string): void {
 export function selectBusinessModules(
   options: BusinessModuleSelectionOptions,
 ): SelectedBusinessModule[] {
-  const ids = [...new Set((options.moduleIds ?? [])
-    .map((item) => item.trim()).filter(Boolean))];
+  const ids = resolveBusinessModuleIds(options.dataDir, (options.moduleIds ?? []).map(item => item.trim()).filter(Boolean));
   if (ids.length > MAX_MODULES) {
     throw new BusinessModuleError(`每个任务最多选择 ${MAX_MODULES} 个业务模块`);
   }

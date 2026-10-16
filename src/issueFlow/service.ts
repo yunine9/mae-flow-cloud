@@ -1,3 +1,4 @@
+import { resolveBusinessModuleRef } from "../businessModuleIdentity.ts";
 import { completedInRange, validateCompletionRange, type CompletionRange } from "../completionRange.ts";
 import { applyGitCommitIdentity } from "../gitCommitIdentity.ts";
 import { importExternalReviews, notifyExternalReviews } from "../externalReviewInbox.ts";
@@ -1375,7 +1376,7 @@ export class IssueFlowService {
       sessions.push({
         id: live.id,
         title: live.state.title,
-        module: live.state.module?.trim() || "未分类",
+        module: this.currentModule(live.state)?.name || live.state.module?.trim() || "未分类",
         reporter: live.state.reporter?.trim() || live.state.account,
         concluded_at: concludedAt,
         reviews: axes?.reviews ?? 0,
@@ -1477,7 +1478,7 @@ export class IssueFlowService {
       rows.push({
         id: live.id,
         title: state.title,
-        module: state.module?.trim() || "未分类",
+        module: this.currentModule(state)?.name || state.module?.trim() || "未分类",
         reporter: state.reporter?.trim() || state.account,
         account: state.account,
         concluded_at: concludedAt,
@@ -1508,10 +1509,17 @@ export class IssueFlowService {
     return new FeedbackStore(join(live.root, "feedback", "index.jsonl"));
   }
 
+  private currentModule(state: IssueSessionState) {
+    return state.module_id ? resolveBusinessModuleRef(this.options.dataDir, { id: state.module_id, name: state.module ?? state.module_id }) : undefined;
+  }
+  private summarize(state: IssueSessionState): IssueSummary {
+    const module = this.currentModule(state);
+    return { ...summarize(state), ...(module ? { module_id: module.id, module: module.name } : {}) };
+  }
   private project(live: LiveIssue): IssueSummary {
     const feedback = this.feedbackStore(live).list();
     return {
-      ...summarize(live.state),
+      ...this.summarize(live.state),
       ...(feedback.length ? { feedback } : {}),
     };
   }
@@ -1916,7 +1924,7 @@ export class IssueFlowService {
           + String(error)));
     }
     void this.pump();
-    return summarize(state);
+    return this.summarize(state);
   }
 
   private nextId(): string {
@@ -2133,7 +2141,7 @@ export class IssueFlowService {
     saveState(live.root, state);
     this.log(`[issue-flow] ${id} 网管环境已配置(${environment.name})`);
     this.startPlatformTurn(live, promptCopy("notices", "env.configured"));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 网管环境拒绝(问题卡 env_needed 闸的拒绝口,POST
@@ -2170,7 +2178,7 @@ export class IssueFlowService {
       scope: ENV_SCOPE_LABELS[scope],
       note: note ? `\n用户理由: ${note}` : "",
     }));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 会话仓清单的用户调整口(#241,POST /issues/:id/repos):端点只做
@@ -2320,7 +2328,7 @@ export class IssueFlowService {
         { repos: removed.join("、") }).trim());
     }
     this.startPlatformTurn(live, sections.join("\n\n"));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 主动拉取日志的意图递交口(#268,POST /issues/:id/logs/fetch;
@@ -2358,7 +2366,7 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${id} 用户请求拉取日志`);
     // 段文先 trim:park 便签只取首行,不 trim 就把锚点段的空行当首行。
     this.startPlatformTurn(live, promptCopy("notices", "logs.fetch").trim());
-    return summarize(state);
+    return this.summarize(state);
   }
 
   // ---- 会话驱动 ----
@@ -3866,6 +3874,7 @@ export class IssueFlowService {
         readResourceBlocks(this.options.dataDir),
       knowledgeContext: issueKnowledgeContext(live.state),
       hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeModuleDataDir: this.options.dataDir,
       knowledgeScope: "issue",
       workspace: live.root,
       agentDir,
@@ -4077,6 +4086,7 @@ export class IssueFlowService {
       repositorySkillPaths: skillPaths,
       // 团队货架 skill(通用定位类知识的问题会话供给线,ADR-0005)。
       hostSkillsDir: join(this.options.dataDir, "skills"),
+      knowledgeModuleDataDir: this.options.dataDir,
       knowledgeContext,
       knowledgeScope: "issue",
       provider: model.provider,
@@ -4232,7 +4242,7 @@ export class IssueFlowService {
           this.environmentCredentials(live), this.resumePromptOptions(live)));
       });
     });
-    return summarize(live.state);
+    return this.summarize(live.state);
   }
 
   /** 会话消息内嵌截图(2026-09-10 验证闸配套):消息文本里的
@@ -4374,7 +4384,7 @@ export class IssueFlowService {
       this.continueTurn(live, promptCopy("notices", "gate.verify.note", {
         text: [rawDecision, notes].filter(Boolean).join("\n"),
       }));
-      return summarize(state);
+      return this.summarize(state);
     }
     delete state.gate;
     recordTransition(state, {
@@ -4422,7 +4432,7 @@ export class IssueFlowService {
           report_path: pointer.path,
           plan: pointer.plan,
         })));
-      return summarize(state);
+      return this.summarize(state);
     }
 
     if (verdict === "archive") {
@@ -4455,7 +4465,7 @@ export class IssueFlowService {
       this.stopContainerInBackground(live, isIssue ? "问题归档" : "非问题归档");
       this.finishTerminalHygiene(live);
       this.log(`[issue-flow] ${live.id} 结论${isIssue ? "是问题(提单模板已出)" : "非问题"},已闭环归档`);
-      return summarize(state);
+      return this.summarize(state);
     }
 
     if (verdict === "fail") {
@@ -4473,7 +4483,7 @@ export class IssueFlowService {
           round: state.round ?? 1,
           reason: supplement || `\n用户描述: ${reason}`,
         })));
-      return summarize(state);
+      return this.summarize(state);
     }
 
     if (verdict === "resume_watch") {
@@ -4502,7 +4512,7 @@ export class IssueFlowService {
       const mrs = state.mrs ?? [];
       if (mrs.length && mrs.every((mr) => Boolean(mr.merged_at))) {
         this.autoArchiveDelivered(live);
-        if (isTerminal(state.status)) return summarize(state);
+        if (isTerminal(state.status)) return this.summarize(state);
       }
       const now = Date.now();
       const { budgetMs } = this.pipelineKnobs();
@@ -4537,7 +4547,7 @@ export class IssueFlowService {
           sha: target.sha.slice(0, 12),
           notes: supplement,
         }));
-        return summarize(state);
+        return this.summarize(state);
       }
       state.status = "idle";
       state.stage_note = `已按人工答复重新监看流水线(${target.repo})`
@@ -4546,7 +4556,7 @@ export class IssueFlowService {
       this.log(`[issue-flow] ${live.id} 不可修闸已答,重置监看账`
         + `(${target.repo}) @ ${target.sha.slice(0, 12)}`);
       void this.watchPipeline(live, target.repo, target.sha);
-      return summarize(state);
+      return this.summarize(state);
     }
 
     if (verdict === "human_evidence") {
@@ -4597,7 +4607,7 @@ export class IssueFlowService {
           .flatMap((line, index) => index === 0 ? ["", line] : [line]), ""),
         promptCopy("notices", "gate.evidence.tail"),
       ].join("\n"));
-      return summarize(state);
+      return this.summarize(state);
     }
 
     // verdict === "rework":补充意见/自由作答。两类闸的去向不同——
@@ -4620,7 +4630,7 @@ export class IssueFlowService {
       this.continueTurn(live,
         promptCopy("notices", "gate.conclude.rework",
           { stage: stageName(rework), decision, supplement }));
-      return summarize(state);
+      return this.summarize(state);
     }
     // analysis_confirm 的补充意见:留在分析阶段继续完善,改完重新提交。
     state.stage_note = "用户对分析报告有补充意见,继续分析";
@@ -4629,7 +4639,7 @@ export class IssueFlowService {
       promptCopy("notices", "gate.analysis_confirm.supplement", {
         stage: stageName(state.stage as FixedStage), decision, supplement,
       }));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** skill 圈选闸的裁决(ADR-0011):selection 必须是闸上 skills path
@@ -4704,7 +4714,7 @@ export class IssueFlowService {
           state.scenario ?? "ticket", state.stage as FixedStage)}」阶段。`
         + (notes ? `\n用户补充说明: ${notes}` : "")),
     ].join("\n"));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   reply(id: string, text: string): IssueSummary {
@@ -4753,7 +4763,7 @@ export class IssueFlowService {
       saveState(live.root, live.state);
     }
     this.continueTurn(live, content);
-    return summarize(live.state);
+    return this.summarize(live.state);
   }
 
   steer(id: string, text: string): IssueSummary {
@@ -4766,7 +4776,7 @@ export class IssueFlowService {
     }
     void live.driver.steer(`${content}\n\n${concurrentWorkPrompt()}`, { display: content }).catch(() =>
       this.parkPlatformNotice(live, `${content}\n\n${concurrentWorkPrompt()}`));
-    return summarize(live.state);
+    return this.summarize(live.state);
   }
 
   // ---- 人工接管(2026-09-07 走查拍板):打断 AI/期间人工记录/交还继续 ----
@@ -4808,7 +4818,7 @@ export class IssueFlowService {
         saveState(live.root, state);
       })();
     }
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 接管期间的人工操作记录:只记账不投喂 AI——事件账本追加一条
@@ -4824,7 +4834,7 @@ export class IssueFlowService {
     if (!content) throw new IssueControlError("记录内容不能为空");
     this.appendSessionEvent(live, "user_message",
       { text: content, via: "takeover" });
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 交还:AI 带着人工记录继续。从事件账本收齐接管期(via=takeover
@@ -4861,7 +4871,7 @@ export class IssueFlowService {
     // 与 reply() 同一条续聊咽喉(ensureContainer + 回合前压缩 + 直递/
     // 重建):交还正是"话递进在场会话"的新回合入口,不该绕开压缩节奏。
     this.continueTurn(live, message);
-    return summarize(state);
+    return this.summarize(state);
   }
 
   // ---- 人工检视：批量交办，结合当前工作处理 ----
@@ -5049,7 +5059,7 @@ export class IssueFlowService {
     }
     state.stage_note = receipt;
     saveState(live.root, state);
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 意见处就地回复(检视回复环,ADR-0035 的下半圈):用户对 AI 的
@@ -5106,7 +5116,7 @@ export class IssueFlowService {
     }
     state.stage_note = receipt;
     saveState(live.root, state);
-    return summarize(state);
+    return this.summarize(state);
   }
 
   // ---- 台面动作 ----
@@ -5186,7 +5196,7 @@ export class IssueFlowService {
     }
     this.finishTerminalHygiene(live);
     this.log(`[issue-flow] ${id} 取消`);
-    return summarize(live.state);
+    return this.summarize(live.state);
   }
 
   /** 异常重跑(ADR-0055):failed 的第二出口。不取消、不动问题单目录
@@ -5242,7 +5252,7 @@ export class IssueFlowService {
     this.log(`[issue-flow] ${live.id} 异常重跑:恢复回合启动`);
     this.continueTurn(live, reviveResumeNotice(operatorNote)
       + recentHumanDecisionNotes(live.root));
-    return summarize(state);
+    return this.summarize(state);
   }
 
   /** 终态现场回收(磁盘治理票 01):canceled/archived 的 repo/ 无消费方

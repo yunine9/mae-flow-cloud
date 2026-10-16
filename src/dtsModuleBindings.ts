@@ -1,3 +1,4 @@
+import { resolveBusinessModuleId } from "./businessModuleIdentity.ts";
 /**
  * DTS 单号→业务模块的人工改选映射(spec #57 起;ADR-0056 后只存人工
  * 改选:规则带出值不落账,发起时的解析=改选优先于带出)。
@@ -49,7 +50,7 @@ export function readDtsModuleBindings(
     const parsed = JSON.parse(readFileSync(path, "utf-8"));
     if (parsed?.version !== 1 || typeof parsed.bindings !== "object"
         || parsed.bindings === null) return {};
-    return parsed.bindings as Record<string, DtsModuleBindingEntry>;
+    return Object.fromEntries(Object.entries(parsed.bindings as Record<string, DtsModuleBindingEntry>).map(([ticket, entry]) => [ticket, { ...entry, module_id: resolveBusinessModuleId(dataDir, entry.module_id) }]));
   } catch {
     return {};
   }

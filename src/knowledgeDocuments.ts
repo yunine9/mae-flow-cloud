@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 /** Human-maintained manuals. One atomic record holds original text and its audit trail. */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -49,7 +50,7 @@ function storedDocument(value: unknown, id: string): KnowledgeDocument {
       && !text(research[key as keyof typeof research]))) throw new Error("知识记录形状不正确");
   return record;
 }
-export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocument {
+function readStoredKnowledgeDocument(dir: string, id: string): KnowledgeDocument {
   if (knowledgeDeleted(dir, id)) throw new Error("知识已删除");
   const path = file(dir, id);
   try { return storedDocument(JSON.parse(readFileSync(path, "utf8")), id); }
@@ -57,6 +58,10 @@ export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocumen
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw error;
     throw new Error(`记录损坏：knowledge-documents/${id}.json`);
   }
+}
+export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocument {
+  const doc = readStoredKnowledgeDocument(dir, id);
+  return { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) };
 }
 export type KnowledgeDocumentFacts = Pick<KnowledgeDocument, "id" | "revision"> & { component_archive_valid?: false };
 const documentFacts = new FileProjectionCache<KnowledgeDocumentFacts>();
@@ -115,7 +120,7 @@ function retainVersion(dir: string, document: KnowledgeDocument) {
 }
 export function listKnowledgeDocumentVersions(dir: string, id: string) {
   // Existing records acquire a recoverable baseline without inventing older text.
-  const current = readKnowledgeDocument(dir, id);
+  const current = readStoredKnowledgeDocument(dir, id);
   retainVersion(dir, current);
   const committed = new Set([current.revision, ...current.history.map(h => h.revision)]);
   return readdirSync(versionRoot(dir, id)).filter(name => /^[a-f0-9]{64}\.json$/.test(name) && committed.has(name.slice(0, -5)))
@@ -124,7 +129,7 @@ export function listKnowledgeDocumentVersions(dir: string, id: string) {
 }
 export function readKnowledgeDocumentVersion(dir: string, id: string, revision: string): KnowledgeDocumentVersion {
   if (!/^[a-f0-9]{64}$/.test(revision)) throw new Error("知识版本无效");
-  const current = readKnowledgeDocument(dir, id);
+  const current = readStoredKnowledgeDocument(dir, id);
   if (current.revision !== revision && !current.history.some(h => h.revision === revision)) throw new Error("该版本尚未发布或不存在");
   if (current.revision === revision) retainVersion(dir, current);
   return JSON.parse(readFileSync(join(versionRoot(dir, id), `${revision}.json`), "utf8"));
@@ -172,7 +177,7 @@ export interface PreparedKnowledgeDocument {
 /** 预检只读磁盘，并确定精确的正式版本，供发布器先保存归档批次。 */
 export function prepareKnowledgeDocument(dir: string, input: Record<string, unknown>, operator: string, id?: string,
   options: { maxContentBytes?: number; expectedRevision?: string; technologyAssignmentRequired?: true; allowNewResearchDocument?: true } = {}): PreparedKnowledgeDocument {
-  const previous = id ? readKnowledgeDocument(dir, id) : undefined;
+  const previous = id ? readStoredKnowledgeDocument(dir, id) : undefined;
   if (options.expectedRevision !== undefined && previous?.revision !== options.expectedRevision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const merged = { ...previous, ...input };
   const research = merged.research_source as KnowledgeDocument["research_source"];
@@ -224,7 +229,7 @@ export function writePreparedKnowledgeDocument(dir: string, prepared: PreparedKn
   const document = storedDocument(prepared.document, prepared.document.id);
   if (knowledgeDeleted(dir, document.id)) throw new Error("知识已删除");
   const target = file(dir, document.id);
-  const previous = existsSync(target) ? readKnowledgeDocument(dir, document.id) : undefined;
+  const previous = existsSync(target) ? readStoredKnowledgeDocument(dir, document.id) : undefined;
   if ((previous?.revision ?? null) !== prepared.previous_revision) throw new Error("正式知识已有新版本，请比较最新内容后重新发布，未覆盖他人修改");
   const verified = prepareKnowledgeDocument(dir, { ...document }, document.history.at(-1)!.operator, previous?.id,
     { expectedRevision: previous?.revision, maxContentBytes: Math.max(2 * 1024 * 1024, Buffer.byteLength(document.content)),

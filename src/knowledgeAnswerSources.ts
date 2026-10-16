@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { listBusinessModules } from "./businessModuleLibrary.ts";
 import { componentUsageDocument } from "./componentKnowledgeCards.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
@@ -82,7 +83,7 @@ function excerpt(asset: SearchableKnowledge, hit: Pick<KnowledgeHit, "start_line
 
 /** 固定检索已发布文档并读取原文；整个过程不调用模型、代码仓或外部知识服务。 */
 export async function retrieveKnowledgeAnswerEvidence(input: KnowledgeAnswerExecution, options: SourceOptions): Promise<void> {
-  const selected = input.record.context ?? {}, moduleIds = selected.module_ids ?? [];
+  const selected = input.record.context ?? {}, moduleIds = resolveBusinessModuleIds(options.dataDir, selected.module_ids ?? []);
   const modules = listBusinessModules(options.dataDir).modules.filter(m => m.status === "active" && moduleIds.includes(m.id));
   const context: KnowledgeContext = { repo: "", repositories: modules.flatMap(m => m.repositories), moduleIds, productVersion: selected.product_version };
   const all = !moduleIds.length;

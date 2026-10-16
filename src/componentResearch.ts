@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { componentKnowledgeTask } from "./knowledgeTaskCenter.ts";
@@ -396,7 +397,7 @@ export class ComponentResearch {
     const production = projectKnowledgeProduction({ kind: "component", record: { ...record, work_documents }, archive: this.archiveFor(id, summaryOnly), current_revisions });
     if (needsGuideCompletion) production.platform_message = [production.platform_message,
       "旧版组件草稿保留原始内容和状态，仅供研究参考；请补齐单元测试示例与测试证据，并按当前指南格式修订后再发布。"].filter(Boolean).join("\n");
-    return { ...record, work_documents, production };
+    return { ...record, ...(record.update_metadata ? { update_metadata: { ...record.update_metadata, module_ids: resolveBusinessModuleIds(this.dir, record.update_metadata.module_ids) } } : {}), work_documents, production };
   }
   taskRows() {
     return [...this.records.values()].filter(record => !record.deleted_at).map(record => componentKnowledgeTask(this.view(record.id, true)));
