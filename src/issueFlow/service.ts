@@ -1451,13 +1451,13 @@ export class IssueFlowService {
     return existsSync(file) ? readFileSync(file, "utf8") : undefined;
   }
 
-  /** 登记问题统计读侧(ADR-0048,#362):无单会话的结论漏斗与研究
-   *  质量,days 为时间过滤(按结论时刻,近 N 天;缺省=全部)。只数
-   *  结论已出:非问题/确认是问题归档 + 取消;研究进行中一律不进
-   *  (挂起已退役,ADR-0048/0057,存量读盘即按取消退场)。一次定位
-   *  分母=非问题+确认是问题(取消不构成一次研究);版本数从分析版本
-   *  账现读(取消会话没有终态冻结,同账同源不漂移),登记人缺席按归属
-   *  兜底(CONTEXT 口径)。 */
+  /** 登记问题统计读侧(ADR-0048,#362;口径 2026-10-16 由 ADR-0064
+   *  收紧):无单会话的结论漏斗与研究质量,days 为时间过滤(按结论
+   *  时刻,近 N 天;缺省=全部)。人群=研究结论已出:非问题/确认是
+   *  问题归档;取消是退场、不算研究结论,不进本页任何数字——
+   *  与一次定位率既有口径对齐(研究进行中、存量挂起读盘按取消退场,
+   *  同不入统计,ADR-0048/0057/0064)。版本数从分析版本账现读(同账
+   *  同源不漂移),登记人缺席按归属兜底(CONTEXT 口径)。 */
   registrationStats(days?: number, range: CompletionRange = {}): IssueRegistrationStats {
     validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
@@ -1465,14 +1465,12 @@ export class IssueFlowService {
     for (const live of this.live.values()) {
       const state = live.state;
       if (state.scenario !== "no_ticket") continue;
-      const canceled = state.status === "canceled";
-      const concluded = state.status === "archived"
-        && (state.conclusion?.kind === "issue"
-          || state.conclusion?.kind === "non_issue");
-      if (!canceled && !concluded) continue;
+      if (state.status !== "archived"
+        || (state.conclusion?.kind !== "issue"
+          && state.conclusion?.kind !== "non_issue")) continue;
       const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
       const atMs = Date.parse(concludedAt);
-      if (!completedInRange(state.conclusion?.at ?? (canceled ? state.updated_at : undefined), range)) continue;
+      if (!completedInRange(state.conclusion?.at, range)) continue;
       if (cutoff !== undefined
         && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       const versionCount = listAnalysisVersions(live.root).length;
@@ -1483,10 +1481,9 @@ export class IssueFlowService {
         reporter: state.reporter?.trim() || state.account,
         account: state.account,
         concluded_at: concludedAt,
-        conclusion: canceled ? "canceled"
-          : state.conclusion!.kind as "issue" | "non_issue",
+        conclusion: state.conclusion!.kind as "issue" | "non_issue",
         report_version_count: versionCount,
-        ...(canceled ? {} : { localization_pass: versionCount <= 1 }),
+        localization_pass: versionCount <= 1,
       });
     }
     rows.sort((a, b) => b.concluded_at.localeCompare(a.concluded_at));

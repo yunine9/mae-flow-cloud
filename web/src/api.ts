@@ -4171,9 +4171,10 @@ export function getIssueOnceGenerated(days?: number, range?: CompletionRange): P
   return issueFetch(`/issues/once-generated${completionStatsQuery(days, range)}`);
 }
 
-/** 登记问题统计(ADR-0048):无单会话的结论漏斗与研究质量,只数
- *  结论已出的会话(研究进行中一律不进;挂起已退役,存量读盘即按
- *  取消退场)。 */
+/** 登记问题统计(ADR-0048,口径 2026-10-16 由 ADR-0064 收紧):无单
+ *  会话的结论漏斗与研究质量,人群=研究结论已出(非问题/确认是问题;
+ *  取消是退场、不算研究结论,不进任何数字;研究进行中一律不进,
+ *  挂起已退役,存量读盘即按取消退场同不入统计)。 */
 export interface IssueRegistrationSessionRow {
   id: string;
   title: string;
@@ -4181,9 +4182,10 @@ export interface IssueRegistrationSessionRow {
   reporter: string;
   account: string;
   concluded_at: string;
-  conclusion: "non_issue" | "issue" | "canceled";
+  conclusion: "non_issue" | "issue";
   report_version_count: number;
-  localization_pass?: boolean;
+  /** 一次定位(报告一版过)。 */
+  localization_pass: boolean;
 }
 
 export interface IssueRegistrationGroupRow {
@@ -4191,17 +4193,17 @@ export interface IssueRegistrationGroupRow {
   total: number;
   non_issue: number;
   issue_confirmed: number;
-  canceled: number;
   localization_passed: number;
   localization_total: number;
   localization_rate: number | null;
 }
 
 export interface IssueRegistrationStats {
+  /** 研究结论已出 = 非问题 + 确认是问题(本页唯一分母全集)。 */
   total: number;
   non_issue: number;
   issue_confirmed: number;
-  canceled: number;
+  /** 一次定位,分母同 total。 */
   localization: { passed: number; total: number; rate: number | null };
   per_session: IssueRegistrationSessionRow[];
   by_module: IssueRegistrationGroupRow[];

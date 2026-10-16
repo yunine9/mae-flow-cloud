@@ -224,10 +224,11 @@ export function IssueAnalyticsTab() {
     </Sheet>
   </div>;
 }
-/** 登记问题页签(ADR-0048):无单会话的结论漏斗与研究质量。只数
- *  结论已出的会话(非问题/确认是问题/取消),研究进行中一律不进;
- *  一次定位分母=非问题+确认是问题。纯呈现层,与登记问题
- *  统计端点同一数字;「确认是问题」行下钻报告版本账与提单模板卡。 */
+/** 登记问题页签(ADR-0048;口径 2026-10-16 由 ADR-0064 收紧):无单
+ *  会话的结论漏斗与研究质量。人群=研究结论已出(非问题/确认是问题);
+ *  取消是退场、不算研究结论,与研究进行中一样不进任何数字。
+ *  纯呈现层,与登记问题统计端点同一数字;「确认是问题」行下钻
+ *  报告版本账与提单模板卡。 */
 export function RegistrationAnalyticsTab() {
   const [stats, setStats] = useState<IssueRegistrationStats>();
   const [error, setError] = useState("");
@@ -268,31 +269,29 @@ export function RegistrationAnalyticsTab() {
   const badge = (conclusion: IssueRegistrationSessionRow["conclusion"]) =>
     conclusion === "issue"
       ? <span className="inline-flex items-center rounded-full bg-active-soft px-2 py-0.5 text-xs font-medium text-active">确认是问题</span>
-      : conclusion === "non_issue"
-        ? <span className="inline-flex items-center rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">非问题</span>
-        : <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs text-faint">取消</span>;
+      : <span className="inline-flex items-center rounded-full bg-surface-2 px-2 py-0.5 text-xs text-muted-foreground">非问题</span>;
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="flex flex-wrap items-center gap-3">
       <CompletionDateFilter value={dates} onChange={setDates} />
       <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
         <BarChart3 size={15} />研究完成 {stats?.total ?? 0}
-        {help("结论已出的无单会话:非问题 + 确认是问题 + 取消。研究进行中不进任何数字。")}
+        {help("研究结论已出的无单会话:非问题 + 确认是问题。取消是退场不算研究结论,与研究进行中一样不进任何数字。")}
       </span>
     </div>
     <div className="grid grid-cols-[repeat(4,1fr)] gap-3.5">
       {tile("登记总数", String(stats?.total ?? 0),
-        `非问题 ${stats?.non_issue ?? 0} · 确认是问题 ${stats?.issue_confirmed ?? 0} · 取消 ${stats?.canceled ?? 0}`,
-        "结论已出的无单(自研)问题会话数:研究进行中的暂不进,结论落地后自动计入;有单会话在 DTS 页签,不在此处。")}
+        `非问题 ${stats?.non_issue ?? 0} · 确认是问题 ${stats?.issue_confirmed ?? 0}`,
+        "研究结论已出的无单(自研)问题会话数:取消视为退场不计入;研究进行中的暂不进,结论落地后自动计入;有单会话在 DTS 页签,不在此处。")}
       {tile("非问题闭环率", pct(stats ? stats.total ? stats.non_issue / stats.total * 100 : null : null),
         `${stats?.non_issue ?? 0}/${stats?.total ?? 0} 研究完成`,
-        "研究结论为「非问题」的占比。分母=研究完成(非问题+确认是问题+取消);进行中不进。")}
+        "研究结论为「非问题」的占比。分母=研究完成(非问题+确认是问题);取消是退场不算研究结论,不进分母;进行中不进。")}
       {tile("确认是问题率", pct(stats ? stats.total ? stats.issue_confirmed / stats.total * 100 : null : null),
         `${stats?.issue_confirmed ?? 0}/${stats?.total ?? 0} 研究完成`,
         "研究结论为「确认是问题」的占比:会话闭环并产出提单模板,测试拿模板去 DTS 提单后,新单号从 DTS 列表发起有单会话。分母同左。")}
       {tile("一次定位率", pct(stats?.localization.rate),
         `${stats?.localization.passed ?? 0}/${stats?.localization.total ?? 0} 会话`,
-        "分析报告一版就收口即一次定位;检视提出修改会生成新版本。分母=非问题+确认是问题,取消不构成一次研究。")}
+        "分析报告一版就收口即一次定位;检视提出修改会生成新版本。分母=非问题+确认是问题。")}
     </div>
     <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
       {([["module", "按模块"], ["reporter", "按登记人"], ["session", "按会话"]] as const).map(([key, label]) =>
@@ -305,7 +304,7 @@ export function RegistrationAnalyticsTab() {
       {help("无单会话按登记时所选业务模块聚合;点模块名可筛选按会话明细")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>模块</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>取消</th><th>一次定位率</th>
+        <th>模块</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>一次定位率</th>
       </tr></thead>
         <tbody>{modules.map((entry) => <tr key={entry.key}>
           <td><button className="delivery-task-link" aria-pressed={module === entry.key}
@@ -313,7 +312,6 @@ export function RegistrationAnalyticsTab() {
           <td>{entry.total}</td>
           <td>{entry.non_issue}</td>
           <td>{entry.issue_confirmed}</td>
-          <td className="text-muted-foreground">{entry.canceled}</td>
           <td className="delivery-accent pct">{pct(entry.localization_rate)}</td>
         </tr>)}</tbody></table></div>
       {!modules.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有登记问题"}</p>}
@@ -322,14 +320,13 @@ export function RegistrationAnalyticsTab() {
       {help("按登记时指派的登记人聚合;登记人缺席的老会话按归属兜底")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>登记人</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>取消</th><th>一次定位率</th>
+        <th>登记人</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>一次定位率</th>
       </tr></thead>
         <tbody>{reporters.map((entry) => <tr key={entry.key}>
           <td className="wrap"><b>{entry.key}</b></td>
           <td>{entry.total}</td>
           <td>{entry.non_issue}</td>
           <td>{entry.issue_confirmed}</td>
-          <td className="text-muted-foreground">{entry.canceled}</td>
           <td className="delivery-accent pct">{pct(entry.localization_rate)}</td>
         </tr>)}</tbody></table></div>
       {!reporters.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有登记问题"}</p>}
@@ -349,18 +346,16 @@ export function RegistrationAnalyticsTab() {
           <td>{row.reporter}</td>
           <td>{row.account}</td>
           <td>{badge(row.conclusion)}</td>
-          <td className="pct">{row.conclusion === "canceled" ? "—" : `${row.report_version_count} 版`}</td>
-          <td>{row.localization_pass === undefined
-            ? <span className="text-muted-foreground">—</span>
-            : row.localization_pass
-              ? <span className="font-semibold text-success">✓ 一版</span>
-              : <span className="font-semibold text-danger">✗ 多版</span>}</td>
+          <td className="pct">{row.report_version_count} 版</td>
+          <td>{row.localization_pass
+            ? <span className="font-semibold text-success">✓ 一版</span>
+            : <span className="font-semibold text-danger">✗ 多版</span>}</td>
           <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
         </tr>)}</tbody></table></div>
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有登记问题"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
-      <p>本页只数结论已出的无单(自研)会话:非问题闭环率与确认是问题率的分母=研究完成(非问题+确认是问题+取消);一次定位率分母=非问题+确认是问题(取消不构成一次研究);研究进行中不进。</p>
+      <p>本页只数研究结论已出的无单(自研)会话,人群=非问题+确认是问题:三块比率的分母都是它;取消是退场、不算研究结论,与研究进行中一样不进任何数字(ADR-0064)。</p>
       <p>一次定位率=分析报告一版过,检视提出修改会生成新版本。确认是问题即闭环归档并产出提单模板;提单在平台外完成(测试复制进 DTS 提单系统),新单号再从 DTS 列表发起有单会话完整重走。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
@@ -372,7 +367,7 @@ export function RegistrationAnalyticsTab() {
             <span>{selected.localization_pass
               ? "分析报告一版过,一次定位 ✓"
               : "检视提出修改生成新版本,一次定位 ✗"}</span></h2>
-            <p className="delivery-muted">结论「{selected.conclusion === "issue" ? "确认是问题" : selected.conclusion === "non_issue" ? "非问题" : "取消"}」· 报告共 {selected.report_version_count} 版 · {new Date(selected.concluded_at).toLocaleDateString("zh-CN")} 收口</p>
+            <p className="delivery-muted">结论「{selected.conclusion === "issue" ? "确认是问题" : "非问题"}」· 报告共 {selected.report_version_count} 版 · {new Date(selected.concluded_at).toLocaleDateString("zh-CN")} 收口</p>
           </section>
           {selected.conclusion === "issue" && <TicketTemplateCard issueId={selected.id} />}
         </>}</div>
