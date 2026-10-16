@@ -59,7 +59,7 @@ test("只列已发布文档；提问不建索引，准备完成后读取真实�
   assert.deepEqual(catalog.documents.map(row => row.id), [doc.id]);
   assert.deepEqual(catalog.sources.map(row => row.kind), ["knowledge"]);
   assert.equal("repositories" in catalog, false);
-  const waiting = execution(); await retrieve(waiting, dir, f.search);
+  const waiting = execution(); await assert.rejects(retrieve(waiting, dir, f.search), /索引尚未就绪/);
   assert.equal(f.ingested.length, 0); assert.equal(f.queried.length, 0);
   assert.equal(waiting.record.evidence.length, 0);
   assert.match(waiting.record.warnings.join(), /索引尚未就绪/);
@@ -77,7 +77,7 @@ test("文档编辑后旧索引立即排除；后台准备新版后重新可查�
   const doc = saveKnowledgeDocument(dir, { title: "规则", content: "原规则" }, "owner");
   await f.search.prepare();
   const newer = saveKnowledgeDocument(dir, { content: "新规则" }, "owner", doc.id);
-  const stale = execution(); await retrieve(stale, dir, f.search);
+  const stale = execution(); await assert.rejects(retrieve(stale, dir, f.search), /索引尚未就绪/);
   assert.equal(stale.record.evidence.length, 0); assert.equal(f.ingested.length, 1);
   await f.search.prepare();
   const fresh = execution(); await retrieve(fresh, dir, f.search);
@@ -151,12 +151,58 @@ test("组件命中读取已发布的公共配置与完整用法，不调用源�
   } finally { f.cleanup(); }
 });
 
+test("语义检索失败仍从正式组件用法取得原文，已停用文档不进入降级结果", async () => {
+  const f = consumptionFixture();
+  try {
+    const doc = f.publish();
+    let disable = false, calls = 0;
+    const search = new KnowledgeSearch(f.data, { ingest: async () => true, remove: async () => true,
+      search: async () => {
+        calls++;
+        if (disable) saveKnowledgeDocument(f.data, { active: false }, "expert", doc.id);
+        return undefined;
+      },
+    } as unknown as MemorySidecar);
+    await search.prepare();
+    const q = execution(); q.record.question = "这个组件怎么接入？有哪些配置和使用限制？后台任务退出";
+    await retrieve(q, f.data, search);
+    assert.equal(calls, 1);
+    assert.equal(q.record.evidence.length, 1);
+    assert.equal(q.record.evidence[0].source_id, doc.id);
+    assert.match(q.record.evidence[0].content, /pool v2/);
+    assert.match(q.record.evidence[0].content, /退出前等待任务完成/);
+    assert.match(q.record.warnings.join(), /本地关键词检索/);
+    disable = true;
+    const removed = execution(); removed.record.question = q.record.question;
+    await assert.rejects(retrieve(removed, f.data, search), /检索暂时不可用/);
+    assert.equal(removed.record.evidence.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test("组件索引尚未就绪也能检索已发布用法，正常零命中不替换为本地结果", async () => {
+  const f = consumptionFixture();
+  try {
+    f.publish(); let ingests = 0, queries = 0;
+    const search = new KnowledgeSearch(f.data, { ingest: async () => { ingests++; return true; }, remove: async () => true,
+      search: async () => { queries++; return []; } } as unknown as MemorySidecar);
+    const waiting = execution(); waiting.record.question = "后台任务退出";
+    await retrieve(waiting, f.data, search);
+    assert.equal(waiting.record.evidence.length, 1);
+    assert.equal(ingests, 0); assert.equal(queries, 0, "提问不启动索引或等待向量服务");
+    await search.prepare();
+    const empty = execution(); empty.record.question = waiting.record.question;
+    await retrieve(empty, f.data, search);
+    assert.equal(queries, 1);
+    assert.equal(empty.record.evidence.length, 0, "正常无命中不被故障降级掩盖");
+  } finally { f.cleanup(); }
+});
+
 test("检索取消后不保存证据；服务缺失不生成无依据的原文", async t => {
   const dir = fixture(t), doc = saveKnowledgeDocument(dir, { title: "规则", content: "真实原文" }, "owner");
   const q = execution({ document_id: doc.id }); q.controller.abort();
   await assert.rejects(retrieve(q, dir, new KnowledgeSearch(dir)), /取消/);
   assert.equal(q.record.evidence.length, 0);
-  const unavailable = execution(); await retrieve(unavailable, dir, new KnowledgeSearch(dir));
+  const unavailable = execution(); await assert.rejects(retrieve(unavailable, dir, new KnowledgeSearch(dir)), /检索服务未配置/);
   assert.equal(unavailable.record.evidence.length, 0); assert.match(unavailable.record.warnings.join(), /检索服务未配置/);
 });
 

@@ -4,6 +4,7 @@
 //   STUB_DIE_AFTER=<n>   应答 n 条后自杀(测重拉)
 //   STUB_SLOW_SEARCH=1   search 睡 3 秒(测预算)
 //   STUB_BOOT_FAIL=1     启动即报错(测起不来)
+//   STUB_BOOT_DELAY_MS=n 延后 ready(测启动与查询预算分别计时)
 import { createInterface } from "node:readline";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ if (process.env.STUB_BOOT_FAIL) {
   out({ id: 0, error: "sidecar 启动失败: stub" });
   process.exit(2);
 }
+if (process.env.STUB_BOOT_DELAY_MS) await new Promise(resolve => setTimeout(resolve, Number(process.env.STUB_BOOT_DELAY_MS)));
 out({ id: 0, ok: true, ready: true });
 
 let answered = 0;

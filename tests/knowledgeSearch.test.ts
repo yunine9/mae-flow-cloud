@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,30 @@ import { MemoryStore } from "../src/taskMemory.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 const context = { repo: "a", repositories: ["https://code.example/a.git"], moduleIds: [], productVersion: "2.7B" };
+
+test("检索进程重启较慢时，不把启动耗时算进查询预算而丢弃正常结果", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-cold-search-"));
+  const children: Array<ReturnType<typeof spawn>> = [], exits: Promise<void>[] = [];
+  const sidecar = new MemorySidecar({ python: process.execPath, script: join(process.cwd(), "tests/fixtures/memsearch-sidecar-stub.mjs"),
+    corpusDir: join(dir, "corpus"), milvusPath: join(dir, "index.db"), env: { STUB_BOOT_DELAY_MS: "150" },
+    budgets: { searchMs: 75, bootMs: 3000 },
+    spawnProcess(command, args, env) {
+      const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      children.push(child); exits.push(new Promise(resolve => child.once("close", () => resolve())));
+      return child;
+    },
+  });
+  try {
+    saveKnowledgeDocument(dir, { title: "数据库", content: "数据库插入数据" }, "owner");
+    const search = new KnowledgeSearch(dir, sidecar);
+    await search.prepare();
+    children[0].kill(); await exits[0];
+    const result = await search.searchDocuments(context, "数据库插入数据", { all: true });
+    assert.equal(children.length, 2);
+    assert.equal(result.available, true, "进程正常启动后返回的查询结果不能变成不可用");
+    assert.deepEqual(result.warnings, []);
+  } finally { sidecar.stop(); await Promise.all(exits); rmSync(dir, { recursive: true, force: true }); }
+});
 function seed(dir: string) {
   seedTechnologyStacks(dir, ["cpp"]);
   createBusinessModule(dir, { id: "alarm", name: "告警模块", description: "跨仓告警", owner: "owner",

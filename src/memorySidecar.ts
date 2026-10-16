@@ -274,6 +274,7 @@ export class MemorySidecar {
       ...(input.sources ? { sources: input.sources } : {}),
       path_prefix: input.pathPrefix ?? "", limit: Math.min(input.limit ?? 8, 20),
     }, this.budgets.searchMs);
+    if (reply?.error) this.options.log?.(`知识检索查询失败：${String(reply.error).slice(0, 400)}`);
     if (!reply || reply.error || !Array.isArray(reply.hits)) return undefined;
     const hits: MemorySearchResults = (reply.hits as MemorySearchHit[]).filter((hit) => typeof hit.id === "string");
     if (typeof reply.pending_sources === "number" && reply.pending_sources > 0) {

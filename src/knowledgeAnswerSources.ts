@@ -3,6 +3,7 @@ import { componentUsageDocument } from "./componentKnowledgeCards.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import type { KnowledgeSearch, KnowledgeContext, KnowledgeHit, SearchableKnowledge } from "./knowledgeSearch.ts";
 import type { KnowledgeAnswerExecution, KnowledgeAnswerEvidence } from "./knowledgeAnswerTypes.ts";
+import { KnowledgeAnswerError } from "./knowledgeAnswerModel.ts";
 
 type SourceOptions = { dataDir: string; search: KnowledgeSearch; maxChars: number };
 const DOCUMENT_CHARS = 16_000;
@@ -73,6 +74,7 @@ export async function retrieveKnowledgeAnswerEvidence(input: KnowledgeAnswerExec
     const result = await options.search.searchDocuments(context, input.record.question, { all, documentId: selected.document_id, limit: 8 });
     check();
     for (const warning of result.warnings) input.warn(warning);
+    if (!result.available) throw new KnowledgeAnswerError(result.warnings.at(-1) ?? "文档检索暂时不可用，请稍后重试。");
     hits = result.hits;
   }
   let used = 0;

@@ -219,7 +219,7 @@ export class KnowledgeSearch {
     return this.query(context, query, { limit, componentsOnly, all });
   }
 
-  /** 问答只查预先准备好的正式文档索引，不在提问时生成向量或等待入库。 */
+  /** 问答不在提问时生成向量；索引不可用时仍可从正式组件用法中检索原文。 */
   async searchDocuments(context: KnowledgeContext, query: string, options: { limit?: number; all?: boolean; documentId?: string } = {}): Promise<KnowledgeSearchResult> {
     return this.query(context, query, { ...options, limit: options.limit ?? 8, preparedOnly: true });
   }
@@ -242,17 +242,22 @@ export class KnowledgeSearch {
       const current = new Map(readCatalog().assets.map(a => [a.id, a]));
       return hits.filter(h => current.get(h.id)?.revision === h.revision);
     };
-    const fallback = (extra: string[]): KnowledgeSearchResult => ({ available: !preparedOnly && (derived.cards.length > 0 || !ordinary.length),
-      hits: preparedOnly ? [] : fresh(localComponentCards(derived.cards, query, limit)), warnings: [...warnings, ...extra] });
-    if (!this.sidecar) return fallback([preparedOnly ? "知识检索服务未配置，暂时无法搜索文档。" : "memsearch 暂不可用；组件改用本地正式用法检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
     const inputs = [...ordinary, ...derived.cards.map(c => c.asset)];
     if (!inputs.length) return { available: true, hits: [], warnings };
+    const fallback = (extra: string[]): KnowledgeSearchResult => {
+      const hits = fresh(localComponentCards(derived.cards, query, limit));
+      return { available: preparedOnly ? hits.length > 0 : derived.cards.length > 0 || !ordinary.length,
+        hits, warnings: [...warnings, ...extra, ...(preparedOnly && hits.length
+          ? ["本次改用已发布组件用法的本地关键词检索，并读取正式原文；普通文档和不同说法的相关内容可能遗漏。"] : [])] };
+    };
+    if (!this.sidecar) return fallback([preparedOnly ? "知识检索服务未配置，暂时无法搜索文档。" : "memsearch 暂不可用；组件改用本地正式用法检索，普通文档仍可按 ID 读取。继续当前任务，不反复等待。"]);
     const sources = inputs.map(a => ({ id: a.id, path: preparedOnly ? this.mirrorPath(a.id) : this.mirror(a),
       expectedKey: preparedOnly ? this.mirrorPath(a.id) + ":" + createHash("sha256").update(this.mirrorText(a)).digest("hex") : undefined }));
     const ready = preparedOnly ? true : await within(Promise.all(sources.map(source => this.ensureIndexed(source.path))).then(values => values.every(Boolean)), 1200);
     const searchable = sources.filter(source => this.indexed.get(source.path) === (source.expectedKey ?? this.indexKey(source.path)));
     if (!searchable.length) return fallback([preparedOnly ? "文档索引尚未就绪，请在知识库查看索引状态或重试索引后再提问。" : "索引尚未就绪，组件使用本地正式用法检索。"]);
-    const hits = await within(this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }), this.sidecar.searchBudgetMs ?? 3000).catch(() => undefined);
+    // 侧车分别限制启动与查询时间，外层再用查询预算计时会把正常冷启动的结果提前丢掉。
+    const hits = await this.sidecar.search({ query, repo: context.repo, limit, sources: searchable }).catch(() => undefined);
     if (!hits) return fallback([preparedOnly ? "文档检索暂时不可用，请稍后重试。" : "memsearch 查询未完成，组件使用本地正式用法检索。"]);
     const byCard = new Map(derived.cards.map(c => [c.asset.id, c]));
     const found: KnowledgeHit[] = hits.flatMap(hit => {

@@ -1,11 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
 import { Check } from "typebox/value";
 import { createKnowledgeAnswerRunner } from "../src/knowledgeAnswerRunner.ts";
 import { parseKnowledgeAnswerComposition } from "../src/knowledgeAnswerComposition.ts";
 import type { KnowledgeAnswerContext, KnowledgeAnswerEvidence, KnowledgeAnswerExecution } from "../src/knowledgeAnswerTypes.ts";
 import { KnowledgeAnswerSubmissionError, type KnowledgeAnswerModelRequest, type KnowledgeAnswerModelOutput } from "../src/knowledgeAnswerModel.ts";
+import { KnowledgeAnswers } from "../src/knowledgeAnswers.ts";
+import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
+import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import type { MemorySidecar } from "../src/memorySidecar.ts";
 
 const SOURCE = "只有条件满足时才允许使用；其他情况未规定。";
 const composition = (body = "本资料所述的场景，且条件满足时允许使用；其他情况尚未核实。", quote = SOURCE) => ({
@@ -14,6 +22,37 @@ const composition = (body = "本资料所述的场景，且条件满足时允许
 const output = (value: unknown): KnowledgeAnswerModelOutput => ({ text: typeof value === "string" ? value : JSON.stringify(value), complete: true });
 const evidence = (content = SOURCE): KnowledgeAnswerEvidence[] => [{ id: "e1", kind: "knowledge", title: "原文", content, revision: "r1",
   digest: createHash("sha256").update(content).digest("hex"), retrieved_at: "now" }];
+
+for (const unavailable of [true, false]) test(`真实问答流程区分检索故障与正常无命中（故障=${unavailable}）`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "qa-search-state-"));
+  const search = new KnowledgeSearch(dir, { ingest: async () => true, remove: async () => true,
+    search: async () => unavailable ? undefined : [] } as unknown as MemorySidecar);
+  let modelCalls = 0;
+  const answers = new KnowledgeAnswers(dir, createKnowledgeAnswerRunner({ dataDir: dir, search: () => search,
+    model: () => ({ provider: "test", model: "test", json: {} }),
+    createModel: async () => ({ dispose() {}, async run() { modelCalls++; throw new Error("没有原文不得生成答案"); } }),
+  }));
+  try {
+    saveKnowledgeDocument(dir, { title: "数据库插入数据", content: "调用数据库组件插入接口，并提交事务。" }, "owner");
+    await search.prepare();
+    const { record } = answers.create({ question: "这个组件怎么接入？有哪些配置和使用限制？数据库 插入数据" }, "owner");
+    const deadline = Date.now() + 2000;
+    let result = answers.get(record.id, "owner");
+    while (["queued", "running"].includes(result.status) && Date.now() < deadline) {
+      await pause(10); result = answers.get(record.id, "owner");
+    }
+    assert.equal(result.status, unavailable ? "failed" : "done");
+    assert.equal(modelCalls, 0);
+    if (unavailable) {
+      assert.match(result.error!, /文档检索暂时不可用/);
+      assert.equal(result.answer, undefined);
+      assert.ok(!result.activity.some(row => row.stage === "done" || row.stage === "checking"));
+    } else {
+      assert.match(result.answer!.markdown, /未在本次可检索/);
+      assert.deepEqual(result.answer!.evidence_ids, []);
+    }
+  } finally { await answers.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
 // 模型输出均为 mock，只证明原句、引用、容量与执行边界，不证明模型能正确理解原文。
 function fixture(options: {
   run?: (request: KnowledgeAnswerModelRequest, index: number) => Promise<KnowledgeAnswerModelOutput>;
