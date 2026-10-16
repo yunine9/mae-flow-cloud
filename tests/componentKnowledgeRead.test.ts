@@ -116,3 +116,19 @@ test("组件连续阅读要求修订与合法偏移，修订变化、停用和�
     assert.match((await tool.execute("withdrawn", { ...input, revision: updated.revision })).content[0].text, /取不到/);
   } finally { f.cleanup(); }
 });
+
+test("接入配置保留公共与共享分组，排除其他用法专属配置，围栏中的分组文字保持原样", () => {
+  const f = consumptionFixture();
+  try {
+    const target = componentSection(), shared = componentSection("cpp", "shared"), other = componentSection("cpp", "other");
+    target.title = "目标*用法、配置"; shared.title = "共享用法"; other.title = "其他用法";
+    target.integration = shared.integration = "SHARED_CONFIGURATION\n```text\n**其他用法**\nCODE_FENCE_CONFIG\n```";
+    other.integration = "UNRELATED_CONFIGURATION";
+    const doc = f.publish([target, shared, other]), search = new KnowledgeSearch(f.data);
+    const usage = componentUsageDocument(search.read(f.context, doc.id)!, target.id)!;
+    assert.match(usage.text, /使用 pool v2/);
+    assert.match(usage.text, /SHARED_CONFIGURATION/);
+    assert.match(usage.text, /CODE_FENCE_CONFIG/);
+    assert.doesNotMatch(usage.text, /UNRELATED_CONFIGURATION/);
+  } finally { f.cleanup(); }
+});

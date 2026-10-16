@@ -1,16 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
-import type { MemorySidecar } from "../src/memorySidecar.ts";
+import { MemorySidecar } from "../src/memorySidecar.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import { retrieveKnowledgeAnswerEvidence, knowledgeAnswerSourceCatalog } from "../src/knowledgeAnswerSources.ts";
 import type { KnowledgeAnswerExecution, KnowledgeAnswerContext, KnowledgeAnswerRecord } from "../src/knowledgeAnswerTypes.ts";
-import { consumptionFixture } from "./componentConsumptionFixture.ts";
+import { componentSection, consumptionFixture } from "./componentConsumptionFixture.ts";
+import { componentCards, componentUsageDocument } from "../src/componentKnowledgeCards.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
 
 function execution(context?: KnowledgeAnswerContext) {
@@ -130,8 +132,104 @@ test("长文档读取完整命中章节并保留原文行号，围栏中的标�
   assert.equal(q.record.evidence[0].content, section.trimEnd());
   assert.equal(q.record.evidence[0].start_line, first.split("\n").length);
   assert.equal(q.record.evidence[0].end_line, first.split("\n").length + section.trimEnd().split("\n").length - 1);
-  const limited = execution(); await retrieve(limited, dir, f.search, 100);
+  const limited = execution(); await assert.rejects(retrieve(limited, dir, f.search, 100), /已找到相关文档.*读取容量/);
   assert.equal(limited.record.evidence.length, 0); assert.match(limited.record.warnings.join(), /完整章节超出/);
+});
+
+test("#516 联合指南不把其他用法的长配置带入当前用法的索引及问答", async () => {
+  const f = consumptionFixture();
+  try {
+    const target = componentSection(), siblings = Array.from({ length: 12 }, (_, i) => {
+      const part = componentSection("cpp", `sibling-${i}`);
+      part.title = `其他组件${i}`; part.paradigm!.component = `other${i}`;
+      part.integration = `OTHER_CONFIG_${i}\n` + "其他组件专用配置。".repeat(400);
+      return part;
+    });
+    target.integration = "配置 pool_threads=4。";
+    const doc = f.publish([target, ...siblings]), search = new KnowledgeSearch(f.data);
+    const asset = search.read(f.context, doc.id)!;
+    const card = componentCards([asset]).cards.find(c => c.paradigm.id === target.id)!;
+    assert.ok(doc.content.length > 40_000);
+    assert.match(card.asset.content, /pool_threads=4/);
+    assert.doesNotMatch(card.asset.content, /OTHER_CONFIG_/);
+    const usage = componentUsageDocument(asset, target.id)!;
+    assert.match(usage.text, /使用 pool v2/);
+    assert.doesNotMatch(usage.text, /OTHER_CONFIG_/);
+    for (const section of usage.sections) assert.ok(usage.text.includes(asset.content.split("\n").slice(section.start_line - 1, section.end_line).join("\n")));
+    const q = execution(); q.record.question = "pool_threads";
+    await retrieve(q, f.data, search);
+    assert.ok(q.record.evidence.length > 0);
+    assert.match(q.record.evidence.map(e => e.content).join("\n"), /pool_threads=4/);
+    assert.doesNotMatch(q.record.evidence.map(e => e.content).join("\n"), /OTHER_CONFIG_/);
+    assert.doesNotMatch(q.record.warnings.join(), /超出/);
+  } finally { f.cleanup(); }
+});
+
+for (const mode of ["offline", "indexed"] as const) test(`#516 长用法保留接入、步骤及尾部约束，完整代码块不截断（检索=${mode}）`, async () => {
+  const f = consumptionFixture();
+  try {
+    const target = componentSection();
+    target.example = '```cpp\n// ## 使用约束是代码示例内部文本\nconst char* payload = "' + "z".repeat(30_000) + '";\n```';
+    target.content += "\n\n### 常见误用\nTAIL_CONSTRAINT：所有回调结束后才允许释放资源。";
+    const doc = f.publish([target]), fake = indexedSearch(f.data);
+    const search = mode === "indexed" ? fake.search : new KnowledgeSearch(f.data);
+    if (mode !== "offline") await search.prepare();
+    const q = execution(); q.record.question = "这个组件怎么接入？有哪些配置和使用限制？后台任务退出";
+    await retrieve(q, f.data, search);
+    const body = q.record.evidence.map(e => e.content).join("\n");
+    assert.match(body, /使用 pool v2/); assert.match(body, /链接已发布的 pool target/);
+    assert.match(body, /退出前等待任务完成/); assert.match(body, /TAIL_CONSTRAINT/);
+    assert.match(body, /TEST\(Pool, ExecutesTask\)/);
+    assert.doesNotMatch(body, /const char\* payload|代码示例内部文本/);
+    assert.match(q.record.warnings.join(), /1 个完整章节超出/);
+    assert.ok(q.record.evidence.every(e => e.content.length <= 24_000 && e.truncated));
+    assert.ok(q.record.evidence.reduce((sum, { id, digest, retrieved_at, ...e }) => sum + JSON.stringify(e).length + 200, 0) <= 48_000);
+    for (const e of q.record.evidence.filter(e => e.start_line)) {
+      assert.equal(e.content, doc.content.split("\n").slice(e.start_line! - 1, e.end_line).join("\n"));
+    }
+    const tight = execution(); tight.record.question = q.record.question;
+    await retrieve(tight, f.data, search, 7_000);
+    assert.match(tight.record.evidence.map(e => e.content).join("\n"), /TAIL_CONSTRAINT/);
+  } finally { f.cleanup(); }
+});
+
+test("#516 真实向量索引联合长指南，命中用法读取配置与约束而不携带其他用法配置", { timeout: 60_000 }, async t => {
+  const python = process.env.MFC_MEMSEARCH_PYTHON;
+  if (!python) return t.skip("设置 MFC_MEMSEARCH_PYTHON 运行真实向量检索");
+  const f = consumptionFixture(), exits: Promise<void>[] = [], logs: string[] = [];
+  const sidecar = new MemorySidecar({ python, script: join(process.cwd(), "harness/memsearch-sidecar.py"),
+    corpusDir: join(f.data, "corpus"), milvusPath: join(f.data, "index.db"),
+    env: { HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" }, log: line => logs.push(line),
+    spawnProcess(command, args, env) {
+      const child = spawn(command, args, { env, stdio: ["pipe", "pipe", "pipe"] });
+      exits.push(new Promise(resolve => child.once("close", () => resolve()))); return child;
+    },
+  });
+  try {
+    const target = componentSection(); target.integration = "配置 target_pool_threads=4，退出前等待任务完成。";
+    const others = Array.from({ length: 40 }, (_, i) => {
+      const item = componentSection("cpp", `other-${i}`); item.title = `文件处理${i}`;
+      item.paradigm!.component = `file${i}`; item.paradigm!.need = `文件读取${i}`;
+      item.integration = `OTHER_CONFIG_${i}：` + "文件模式和编码由调用方显式指定；资源关闭后不能继续读取。".repeat(24);
+      return item;
+    });
+    const doc = f.publish([target, ...others]), search = new KnowledgeSearch(f.data, sidecar);
+    assert.ok(doc.content.length > 40_000);
+    await search.prepare();
+    const q = execution(); q.record.question = "target_pool_threads 怎么配置，后台任务退出有什么限制？";
+    await retrieve(q, f.data, search);
+    assert.ok(q.record.evidence.length > 0, logs.slice(-5).join("\n"));
+    const selected = q.record.evidence.find(e => e.location === "完整用法 pool-submit（含公共配置）");
+    assert.ok(selected, "真实检索须命中目标用法");
+    assert.match(selected.content, /target_pool_threads=4/); assert.match(selected.content, /退出前等待任务完成/);
+    assert.doesNotMatch(selected.content, /OTHER_CONFIG_/);
+    // 多个用法可能同时相关；每份依据只能带入它自己的配置，不能混成同一用法。
+    for (const e of q.record.evidence) {
+      const otherId = /完整用法 other-(\d+)/.exec(e.location ?? "")?.[1];
+      if (otherId) assert.ok([...e.content.matchAll(/OTHER_CONFIG_(\d+)/g)].every(match => match[1] === otherId));
+    }
+    assert.doesNotMatch(q.record.warnings.join(), /本地关键词|索引尚未就绪|检索暂时不可用|超出/);
+  } finally { sidecar.stop(); await Promise.all(exits); f.cleanup(); }
 });
 
 test("组件命中读取已发布的公共配置与完整用法，不调用源码或外部服务", async () => {

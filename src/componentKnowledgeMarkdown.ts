@@ -99,7 +99,8 @@ const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 export function compareComponentSections(a: ComponentGuideSection, b: ComponentGuideSection) {
   return compareText(a.paradigm?.component ?? "", b.paradigm?.component ?? "") || compareText(a.title, b.title) || compareText(a.id, b.id);
 }
-const inlineText = (text: string) => text.replace(/[\r\n]+/g, " ").replace(/([\\`*_\[\]<>])/g, "\\$1");
+export const componentGuideInlineText = (text: string) => text.replace(/[\r\n]+/g, " ").replace(/([\\`*_\[\]<>])/g, "\\$1");
+const inlineText = componentGuideInlineText;
 export function componentGuideMarkdown(title: string, overview: string, sections: ComponentGuideSection[], strict = false): string {
   const usages = sections.filter(section => section.paradigm?.kind === "paradigm" && section.paradigm.status === "recommended").sort(compareComponentSections);
   const summary = overview.trim() || strict ? componentGuideOverview(overview) : undefined;

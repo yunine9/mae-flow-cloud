@@ -1,6 +1,7 @@
 import { publishedComponentParadigms, type PublishedComponentParadigm } from "./componentKnowledgeDocument.ts";
 import type { ComponentParadigm } from "./componentParadigms.ts";
 import type { SearchableKnowledge, KnowledgeHit } from "./knowledgeSearch.ts";
+import { componentGuideInlineText } from "./componentKnowledgeMarkdown.ts";
 
 export const isComponentKnowledge = (asset: SearchableKnowledge) => /^---\r?\n[\s\S]*?^schema:\s*"mfc\.component-[^"\r\n]+"/m.test(asset.content);
 export const componentCardId = (p: ComponentParadigm & { id: string }) => `${p.language}/${p.component}/${p.id}`;
@@ -31,13 +32,42 @@ function componentGuideIntroductionRange(content: string) {
   return { start_line: start + 1, end_line: end };
 }
 
+/** 联合指南的接入配置按用法标题分组；只携带公共说明和当前用法的配置。 */
+function componentIntroductionRanges(content: string, usages: PublishedComponentParadigm[]) {
+  const range = componentGuideIntroductionRange(content), lines = content.split(/\r?\n/);
+  const titles = new Set(usages.map(p => componentGuideInlineText(p.title)));
+  return (selected: PublishedComponentParadigm) => {
+    const title = componentGuideInlineText(selected.title);
+    const ranges: Array<{ start_line: number; end_line: number }> = [];
+    let include = true, fence = "";
+    for (let line = range.start_line; line <= range.end_line; line++) {
+      const text = lines[line - 1], marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = "";
+      } else if (marker) fence = marker[1];
+      else {
+        // 无法识别的正文不改变所属分组，不能猜测它是另一用法的配置。
+        const group = /^\*\*(.+)\*\*$/.exec(text)?.[1];
+        const members = group?.split("、");
+        if (group && `、${group}、`.includes(`、${title}、`)) include = true;
+        else if (members?.every(name => titles.has(name))) include = members.includes(title);
+      }
+      if (!include) continue;
+      const last = ranges.at(-1);
+      if (last?.end_line === line - 1) last.end_line = line;
+      else ranges.push({ start_line: line, end_line: line });
+    }
+    return ranges;
+  };
+}
+
 /** 从同一正式修订读取公共配置与所选用法；不携带其他用法正文或巨大的全库元数据。 */
 export function componentUsageDocument(source: SearchableKnowledge, paradigmId: string) {
-  const p = publishedComponentParadigms(source).find(p => p.id === paradigmId);
+  const usages = publishedComponentParadigms(source), p = usages.find(p => p.id === paradigmId);
   if (!p) return;
-  const lines = source.content.split(/\r?\n/), introduction = componentGuideIntroductionRange(source.content);
+  const lines = source.content.split(/\r?\n/);
   const ranges = [
-    { heading: "公共用途与接入配置", ...introduction },
+    ...componentIntroductionRanges(source.content, usages)(p).map(range => ({ heading: "公共用途与接入配置", ...range })),
     { heading: p.title.length <= 160 ? p.title : p.title.slice(0, 159).replace(/[\uD800-\uDBFF]$/, "") + "…", start_line: p.start_line, end_line: p.end_line },
   ];
   let text = `选定用法：${p.id}\n组件：${p.component}；语言：${p.language}\n要做的事：${p.need}\n`
@@ -60,10 +90,12 @@ export function componentCards(assets: SearchableKnowledge[]) {
   const cards: ComponentCard[] = [], warnings: string[] = [];
   for (const source of assets.filter(isComponentKnowledge)) {
     try {
-      const range = componentGuideIntroductionRange(source.content), lines = source.content.split(/\r?\n/);
-      const introduction = lines.slice(range.start_line - 1, range.end_line).join("\n").trim();
-      for (const p of publishedComponentParadigms(source)) {
+      const lines = source.content.split(/\r?\n/), usages = publishedComponentParadigms(source);
+      const introductionRanges = componentIntroductionRanges(source.content, usages);
+      for (const p of usages) {
         if (p.kind !== "paradigm" || p.status !== "recommended") continue;
+        const introduction = introductionRanges(p)
+          .map(range => lines.slice(range.start_line - 1, range.end_line).join("\n")).join("\n\n").trim();
         const usage = lines.slice(p.start_line - 1, p.end_line).join("\n");
         cards.push({ source, paradigm: p, asset: { ...source,
           id: `component-card:${source.id}:${p.id}`, title: `${p.component} · ${p.title}`, summary: p.need, whenToUse: p.applicability,

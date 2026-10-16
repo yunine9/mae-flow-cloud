@@ -8,6 +8,36 @@ import { KnowledgeAnswerError } from "./knowledgeAnswerModel.ts";
 type SourceOptions = { dataDir: string; search: KnowledgeSearch; maxChars: number };
 const DOCUMENT_CHARS = 16_000;
 const SECTION_CHARS = 24_000;
+type EvidenceSection = Pick<KnowledgeAnswerEvidence, "content" | "location" | "start_line" | "end_line" | "truncated">;
+
+/** 长用法按完整小节读取；代码围栏内的标题不切分，约束和配置优先于长示例。 */
+function componentSections(asset: SearchableKnowledge, usage: NonNullable<ReturnType<typeof componentUsageDocument>>, id: string): EvidenceSection[] {
+  const lines = asset.content.split(/\r?\n/), parts: Array<EvidenceSection & { priority: number }> = [];
+  const metadata = usage.text.slice(0, usage.sections[0].start_offset).trim();
+  parts.push({ content: metadata, location: `用法 ${id} 的适用范围与来源（正式文档元数据）`, truncated: true, priority: 0 });
+  for (const range of usage.sections) {
+    let start = range.start_line, heading = range.heading, fence = "";
+    const append = (end: number) => {
+      const content = lines.slice(start - 1, end).join("\n");
+      if (!content.replace(/^ {0,3}#{1,3}\s+.*$/gm, "").replace(/^<a id="component-[a-z0-9-]+"><\/a>$/gm, "").trim()) return;
+      parts.push({ content, start_line: start, end_line: end, truncated: true,
+        location: `用法 ${id} · ${heading}（分节读取，仅以已读原文为依据）`,
+        priority: /适用场景|使用约束|常见误用|接入配置/.test(heading) ? 1 : /示例/.test(heading) ? 3 : 2 });
+    };
+    for (let line = start; line <= range.end_line; line++) {
+      const text = lines[line - 1], marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+      if (fence) {
+        if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = "";
+      } else if (marker) fence = marker[1];
+      else {
+        const title = /^ {0,3}#{1,3}\s+(.+?)\s*#*\s*$/.exec(text)?.[1];
+        if (title) { append(line - 1); start = line; heading = title; }
+      }
+    }
+    append(range.end_line);
+  }
+  return parts.sort((a, b) => a.priority - b.priority).map(({ priority: _priority, ...part }) => part);
+}
 
 export function knowledgeAnswerSourceCatalog(dataDir: string, search?: KnowledgeSearch) {
   const modules = listBusinessModules(dataDir);
@@ -77,7 +107,7 @@ export async function retrieveKnowledgeAnswerEvidence(input: KnowledgeAnswerExec
     if (!result.available) throw new KnowledgeAnswerError(result.warnings.at(-1) ?? "文档检索暂时不可用，请稍后重试。");
     hits = result.hits;
   }
-  let used = 0;
+  let used = 0, omittedForSize = false;
   const seen = new Set<string>();
   for (const hit of hits) {
     check();
@@ -89,21 +119,24 @@ export async function retrieveKnowledgeAnswerEvidence(input: KnowledgeAnswerExec
     const usage = hit.paradigm_id ? componentUsageDocument(asset, hit.paradigm_id) : undefined;
     const section = hit.paradigm_id ? usage && { content: usage.text, location: `完整用法 ${hit.paradigm_id}（含公共配置）` } : excerpt(asset, hit);
     if (!section?.content.trim()) { input.warn(`未取得「${asset.title}」的完整原文章节，请缩小问题或指定文档`); continue; }
-    const key = `${asset.id}:${hit.paradigm_id ?? ("start_line" in section ? section.start_line : "full")}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const evidence: Omit<KnowledgeAnswerEvidence, "id" | "digest" | "retrieved_at"> = {
-      kind: "knowledge", title: asset.title, ...section, source_id: asset.id, revision: asset.revision,
+    const evidenceFor = (part: EvidenceSection): Omit<KnowledgeAnswerEvidence, "id" | "digest" | "retrieved_at"> => ({
+      kind: "knowledge", title: asset.title, ...part, source_id: asset.id, revision: asset.revision,
       scope: `${asset.scope}；适用产品版本：${asset.productVersions.join("、") || "未声明，需核对正文"}；适用条件：${asset.whenToUse}`,
-    };
-    const chars = JSON.stringify(evidence).length + 200;
-    if (section.content.length > SECTION_CHARS || used + chars > options.maxChars) {
-      input.warn(`「${asset.title}」的完整章节超出本次原文预算，未作为依据；请缩小问题范围`);
-      continue;
+    });
+    const completeFits = section.content.length <= SECTION_CHARS && used + JSON.stringify(evidenceFor(section)).length + 200 <= options.maxChars;
+    const parts: EvidenceSection[] = usage && hit.paradigm_id && !completeFits ? componentSections(asset, usage, hit.paradigm_id) : [section];
+    let omitted = 0;
+    for (const part of parts) {
+      const key = `${asset.id}:${part.start_line === undefined ? `${hit.paradigm_id ?? "full"}:${part.location ?? ""}` : `${part.start_line}-${part.end_line}`}`;
+      if (seen.has(key)) continue;
+      const evidence = evidenceFor(part), chars = JSON.stringify(evidence).length + 200;
+      if (seen.size >= 80 || part.content.length > SECTION_CHARS || used + chars > options.maxChars) { omitted++; omittedForSize = true; continue; }
+      try { scanForSecrets("知识问答依据", Buffer.from(part.content)); }
+      catch { input.warn(`「${asset.title}」的章节含疑似敏感字段，未用于回答，请先检查知识文档`); continue; }
+      input.addEvidence(evidence);
+      seen.add(key); used += chars;
     }
-    try { scanForSecrets("知识问答依据", Buffer.from(section.content)); }
-    catch { input.warn(`「${asset.title}」的章节含疑似敏感字段，未用于回答，请先检查知识文档`); continue; }
-    input.addEvidence(evidence);
-    used += chars;
+    if (omitted) input.warn(`「${asset.title}」有 ${omitted} 个完整章节超出本次原文预算；其余可容纳章节已读取，未读内容不作为依据。可指定文档并缩小问题范围继续查询。`);
   }
+  if (!used && omittedForSize) throw new KnowledgeAnswerError("已找到相关文档，但相关原文章节超过本次读取容量；请指定文档并缩小问题范围后重试。");
 }
