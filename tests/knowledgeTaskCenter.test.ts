@@ -145,3 +145,37 @@ test("#457 模块建设状态来自进行中任务，选最新任务，已完成
     assert.deepEqual(listKnowledgeTasks(source).module_activity, []);
   } finally { rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test("#517 文档数量包含已保存的过程记录，不计空占位或删除稿，不返回全文", () => {
+  const job = domain(); job.module_id = "trade";
+  job.documents.push({ ...job.documents[0], id: "empty", content: "  " }, { ...job.documents[0], id: "deleted", deleted: true });
+  job.work_documents = [{ id: "inventory", title: "能力盘点", content: "过程正文", turn_id: "turn-1" }];
+  const row = domainKnowledgeTask(job);
+  assert.equal(row.module_id, "trade");
+  assert.deepEqual(row.document_summary, { total: 2, published: 0, drafts: 1, process: 1 });
+  assert.ok(!JSON.stringify(row).includes("过程正文"));
+  assert.equal("documents" in row, false);
+  assert.deepEqual(row.module_entry, { kind: "task" });
+});
+
+test("#517 已发布未归档仍进入任务，当前版本归档成功后进入正式文档", () => {
+  const job = domain(); job.knowledge_layout = "directory-v1";
+  Object.assign(job.documents[0], { knowledge_document_id: "kd-1", published_document_revision: 2, published_revision: "formal" });
+  assert.deepEqual(domainKnowledgeTask(job).module_entry, { kind: "task" });
+  job.archive_batches = [{ id: "archive", knowledge_layout: job.knowledge_layout, created_at: job.created_at, operator: "alice", state: "done", issue_no: "REQ-1", documents: structuredClone(job.documents), targets: [job.knowledge_target], publications: [{ target_id: "domain", state: "opened", branch: "archive", documents: [], url: "https://example.test/mr/1" }] }];
+  assert.deepEqual(domainKnowledgeTask(job).module_entry, { kind: "document", document_id: "kd-1" });
+  job.documents[0].revision++;
+  assert.deepEqual(domainKnowledgeTask(job).module_entry, { kind: "task" }, "未归档的新稿不能跳到旧正式版本");
+  job.archive_batches[0].state = "failed";
+  assert.deepEqual(domainKnowledgeTask(job).module_entry, { kind: "task" });
+});
+
+test("#517 最新任务结束后，旧的运行任务不能重新覆盖模块入口", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "knowledge-latest-module-"));
+  try {
+    const jobs = [{ ...domain(), id: "old", module_id: "trade", status: "running" as const }, { ...domain(), id: "new", module_id: "trade", created_at: "2026-10-16T00:00:00Z" }];
+    const result = listKnowledgeTasks({ dataDir, domain: { list: () => jobs, get: id => jobs.find(job => job.id === id)! }, component: { list: () => [], get: () => { throw new Error("unused"); } }, skillExtractionJob: () => undefined });
+    assert.deepEqual(result.module_activity, []);
+    assert.equal(result.tasks.length, 2, "旧任务仍保留在任务中心");
+  } finally { rmSync(dataDir, { recursive: true, force: true }); }
+});

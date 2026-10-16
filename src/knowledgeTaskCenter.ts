@@ -7,6 +7,7 @@ import { listSkillSubmissions, type SkillSubmissionRecord } from "./hostSkillLib
 import type { KnowledgeTaskCenterData, KnowledgeTaskRow } from "./knowledgeTaskCenterTypes.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { listKnowledgeDocumentFacts } from "./knowledgeDocuments.ts";
+import { latestModuleKnowledgeTasks } from "./knowledgeTaskModules.ts";
 
 function validTime(value: unknown): string | undefined {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -30,8 +31,17 @@ function projection(input: Parameters<typeof projectKnowledgeProduction>[0]) {
 export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
   // 只看最近一轮：新一轮还在排队时显示「—」，不把上一轮的历时当成这一轮的。
   const ran = job.turns.at(-1);
+  const state = projection({ kind: "domain", record: job });
+  const formalId = job.documents.find(document => !document.deleted && document.knowledge_document_id)?.knowledge_document_id;
+  const archived = state.production.archive.state === "opened" && !state.production.working && !state.production.documents.some(document => document.changed);
+  const saved = job.documents.filter(document => !document.deleted && document.content.trim());
+  const published = saved.filter(document => !!document.knowledge_document_id && document.published_document_revision === document.revision).length;
+  const process = job.work_documents?.length ?? 0;
   return { id: job.id, kind: "domain", title: job.title, scope: job.scope, operator: job.operator,
-    created_at: validTime(job.created_at), started_at: validTime(ran?.started_at), finished_at: validTime(ran?.finished_at), status: job.status, ...projection({ kind: "domain", record: job }),
+    module_id: job.module_id,
+    module_entry: archived && formalId ? { kind: "document", document_id: formalId } : { kind: "task" },
+    document_summary: { total: saved.length + process, published, drafts: saved.length - published, process },
+    created_at: validTime(job.created_at), started_at: validTime(ran?.started_at), finished_at: validTime(ran?.finished_at), status: job.status, ...state,
     stage: job.stage, error: job.error, latest_note: latestKnowledgeResearchNote(job.evidence) };
 }
 export function componentKnowledgeTask(record: ResearchRecord, archive?: DomainKnowledgeJob): KnowledgeTaskRow {
@@ -63,7 +73,6 @@ export interface KnowledgeTaskSources {
 /** 只读投影：各自的研究记录仍是状态来源，中心不保存第二份任务。 */
 export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTaskCenterData {
   const tasks: KnowledgeTaskRow[] = [], warnings: string[] = [];
-  const modules = new Map<string, string>();
   warnings.push(...sources.warnings?.() ?? []);
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   listKnowledgeDocumentFacts(sources.dataDir, warnings);
@@ -72,15 +81,14 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   };
   collect("领域萃取", () => {
     if (sources.domain.taskRows) {
-      for (const { module_id, ...task } of sources.domain.taskRows()) {
-        tasks.push(task); if (module_id) modules.set(task.id, module_id);
+      for (const task of sources.domain.taskRows()) {
+        tasks.push(task);
       }
       return;
     }
     for (const job of sources.domain.list()) {
       const record = sources.domain.get(job.id);
       tasks.push(domainKnowledgeTask(record));
-      if (record.module_id) modules.set(record.id, record.module_id);
     }
   });
   collect("基础组件萃取", () => {
@@ -104,11 +112,10 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   warnings.splice(0, warnings.length, ...new Set(warnings));
   tasks.sort((a, b) => Date.parse(b.created_at ?? b.started_at ?? "") - Date.parse(a.created_at ?? a.started_at ?? "") || a.id.localeCompare(b.id));
-  // 同模块有多个进行中任务时，目录入口指向列表中最新的一项。
+  // 文稿与建设状态必须来自同一次萃取，不能被更早的在途任务覆盖。
   const moduleActivity = new Map<string, { module_id: string; status_label: string; task_id: string }>();
-  for (const task of tasks) {
-    const moduleId = modules.get(task.id);
-    if (moduleId && task.group === "running" && !moduleActivity.has(moduleId)) {
+  for (const [moduleId, task] of latestModuleKnowledgeTasks(tasks)) {
+    if (task.group === "running") {
       moduleActivity.set(moduleId, { module_id: moduleId, status_label: "建设中", task_id: task.id });
     }
   }

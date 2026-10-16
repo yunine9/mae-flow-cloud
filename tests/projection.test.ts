@@ -30,3 +30,26 @@ test("fail-open:数据库不可达,写入不抛错,失败可观测", async () =>
     await projection.close();
   }
 });
+
+test("#517 历史投影写入与读取父任务 ID，不依赖本机仍保存任务", async () => {
+  const projection = new PgProjection("postgresql://postgres@127.0.0.1:1/postgres");
+  let storedParent: unknown;
+  const pool = (projection as any).pool;
+  pool.query = async (sql: string, values?: unknown[]) => {
+    if (sql.includes("insert into tasks")) {
+      const columns = sql.match(/insert into tasks \(([^)]+)\)/s)![1].split(",").map(column => column.trim());
+      storedParent = values![columns.indexOf("parent_task_id")];
+      assert.match(sql, /parent_task_id = excluded.parent_task_id/);
+    }
+    if (sql.includes("select t.task_id")) {
+      assert.match(sql, /t.parent_task_id/);
+      return { rows: [{ task_id: "child", requirement: "子需求", status: "completed", workspace: "/w/child", created_at: "2026-10-16", updated_at: "2026-10-16", event_count: 0, parent_task_id: storedParent }] };
+    }
+    return { rows: [] };
+  };
+  try {
+    await projection.upsertTask({ ...summaryOf("child", "completed"), parent_task_id: "parent" });
+    assert.equal(projection.lastError, undefined);
+    assert.equal((await projection.listTaskHistory())[0].parent_task_id, "parent");
+  } finally { await projection.close(); }
+});

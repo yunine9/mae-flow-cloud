@@ -6,6 +6,10 @@ export interface KnowledgeTaskRow {
   kind: KnowledgeTaskKind;
   title: string;
   scope?: string;
+  module_id?: string;
+  /** 只统计实际已保存的文稿，列表不传正文或历史。 */
+  document_summary?: { total: number; published: number; drafts: number; process: number };
+  module_entry?: { kind: "task" | "document"; document_id?: string };
   operator?: string;
   created_at?: string;
   started_at?: string;

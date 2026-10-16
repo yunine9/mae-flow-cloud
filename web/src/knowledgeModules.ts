@@ -6,6 +6,7 @@ import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { documentRequest } from "./knowledgeDocumentsApi";
 import type { ComponentGovernanceItem, ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
+import type { KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
 
 export type KnowledgeModuleCategory = "business" | "engineering" | "unassigned";
 export interface ModuleDocument extends KnowledgeDocument {
@@ -115,6 +116,30 @@ export function projectKnowledgeModules(input: {
     module.recentlyMaintained = module.documents.filter(d => d.maintainedAt && now - Date.parse(d.maintainedAt) >= 0 && now - Date.parse(d.maintainedAt) <= 30 * 86400000).length;
   }
   return { modules, documents, warnings: [] };
+}
+
+/** 卡片只展示最新任务已保存的文档数，不把旧任务累加进来。 */
+export function knowledgeModuleDocumentCount(module: KnowledgeModule, task?: KnowledgeTaskRow): number {
+  return task ? task.document_summary?.total ?? 0 : module.documentCount;
+}
+
+export function knowledgeModuleGovernance(module: KnowledgeModule, task?: KnowledgeTaskRow) {
+  if (task?.module_entry?.kind === "document") return { rank: 4, tone: "archived", label: "已归档", note: "最新任务已归档，点击阅读正式文档。" };
+  if (task) {
+    if (task.document_summary?.published) return { rank: 3, tone: "published", label: "建设中", note: "点击查看萃取任务。" };
+    if (task.document_summary?.drafts) return { rank: 2, tone: "review", label: "建设中", note: "点击查看萃取任务。" };
+    return { rank: 1, tone: "research", label: "建设中", note: "点击查看萃取任务。" };
+  }
+  if (module.documentCount || module.skillCount) return { rank: 3, tone: "published", label: "已发布", note: "已有可复用的正式知识。" };
+  return { rank: 0, tone: "empty", label: "待建设", note: "还没有已保存的知识或过程文稿。" };
+}
+
+export function compareKnowledgeModuleGovernance(a: KnowledgeModule, b: KnowledgeModule, latest: Map<string, KnowledgeTaskRow>) {
+  const task = (module: KnowledgeModule) => module.category === "business" ? latest.get(module.id) : undefined;
+  return knowledgeModuleGovernance(b, task(b)).rank - knowledgeModuleGovernance(a, task(a)).rank
+    || b.recentlyMaintained - a.recentlyMaintained
+    || (Date.parse(b.maintainedAt ?? "") || 0) - (Date.parse(a.maintainedAt ?? "") || 0)
+    || a.name.localeCompare(b.name, "zh-CN");
 }
 
 export async function loadKnowledgeModules(): Promise<KnowledgeModuleData> {
