@@ -131,7 +131,7 @@ async function run() {
   await waitFor('[aria-label="交易业务知识阅读器"] .knowledge-markdown');
   check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("当前正式知识仍可使用"), "module/file deep link loads the formal document");
   checkFocusedReader('[aria-label="交易业务知识阅读器"]', "published module");
-  await click("返回知识库"); await waitFor('[aria-label="打开交易业务知识目录"]');
+  await click("返回知识库"); await waitFor('[aria-label="查看交易业务最新萃取任务"]');
   checkLibraryNavigationRestored();
   check(document.querySelector('[aria-label="业务模块"]') && document.querySelector('[aria-label="技术栈"]'), "home groups modules and languages");
   check(button("新增") && !button("研究知识") && !button("导入 Skill"), "home exposes one new menu without duplicate research or import buttons");
@@ -183,10 +183,14 @@ async function run() {
   await fill('input[aria-label="搜索组件或 Skill"]', "");
   check(document.querySelectorAll('[aria-label="基础组件"] button').length === 1 && !document.querySelector('[aria-label="基础组件"]')?.textContent?.includes("日期组件指南"), "deleted component disappears without a page reload");
   check(document.querySelector('[aria-label="知识正文"]')?.textContent?.includes("打开文件后必须关闭句柄"), "reader moves to a remaining component instead of showing deleted content");
-  await click("返回知识库"); await waitFor('[aria-label="打开交易业务知识目录"]');
-  await clickSelector('[aria-label="打开交易业务知识目录"]'); await waitFor('[aria-label="模块知识目录"]');
+  await click("返回知识库"); await waitFor('[aria-label="查看交易业务最新萃取任务"]');
+  await clickSelector('[aria-label="查看交易业务最新萃取任务"]'); await waitFor('[aria-label="研究过程与文稿"]');
+  check(new URLSearchParams(location.search).get("kbTask") === job.id, "未归档模块卡片进入最新任务");
+  const moduleUrl = new URL(location.href); moduleUrl.search = new URLSearchParams({ kbPage: "module", kbModule: "business:trade", knowledgeDocument: documents[0].id }).toString();
+  history.pushState({}, "", moduleUrl); dispatchEvent(new PopStateEvent("popstate"));
+  await waitFor('[aria-label="模块知识目录"]');
   check(["领域模块知识", "仓内知识", "Skill"].every(label => document.querySelector(`[aria-label="模块知识目录"] [aria-label="${label}"]`)), "business reader has the three agreed groups");
-  checkFocusedReader('[aria-label="交易业务知识阅读器"]', "module opened from home");
+  checkFocusedReader('[aria-label="交易业务知识阅读器"]', "formal module remains available by document link");
   await click("返回知识库"); await waitFor('[aria-label="知识目录"]');
   checkLibraryNavigationRestored();
   await clickSelector('.knowledge-task-capsule[aria-label^="知识任务中心"]'); await waitFor('[aria-label$="打开领域萃取：支付规则研究中"]');

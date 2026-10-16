@@ -12,6 +12,7 @@ import {
 } from "./api";
 import {
   historyTaskTitle,
+  historyTaskHierarchy,
   isDeliveryArchiveStatus,
   workspaceHistoryEntries,
 } from "./historyModel";
@@ -25,6 +26,7 @@ import { Database, MoreHorizontal } from "lucide-react";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/Empty";
 import { formatLocalDate, instantMs } from "./time";
 import { TokenUsage } from "./TokenUsage";
+import { taskOverviewRelationship } from "./taskHierarchy";
 
 function timeAgo(iso: string): string {
   const minutes = Math.max(0,
@@ -102,9 +104,10 @@ export function HistoryBoard({
   const workspaceEntries = workspaceHistoryEntries(tasks);
   const usingWorkspace = Boolean(unavailable);
   const allEntries = usingWorkspace ? workspaceEntries : (entries ?? []);
-  const visibleEntries = allEntries.filter((entry) =>
-    isDeliveryArchiveStatus(entry.status));
+  const visibleEntries = historyTaskHierarchy(allEntries.filter((entry) =>
+    isDeliveryArchiveStatus(entry.status)), tasks);
   const currentTasks = new Map(tasks.map((task) => [task.id, task]));
+  const relatedTasks = [...new Map([...tasks, ...allEntries, ...visibleEntries].map(task => [task.id, task])).values()];
 
   return (
     <section className="grid gap-4">
@@ -173,6 +176,8 @@ export function HistoryBoard({
             <div>
               {visibleEntries.map((entry) => {
                 const currentTask = currentTasks.get(entry.id);
+                const relationship = taskOverviewRelationship(entry, relatedTasks);
+                const parentTask = entry.parent_task_id ? currentTasks.get(entry.parent_task_id) : undefined;
                 const title = historyTaskTitle(entry);
                 const terminal = ["completed", "failed", "canceled"]
                   .includes(entry.status);
@@ -181,10 +186,12 @@ export function HistoryBoard({
                 const canDelete = terminal && (viewer.role === "admin"
                   || entry.luban_account === viewer.username);
                 return (
-                  <div key={entry.id} className="grid min-h-[104px] items-center gap-4 border-b border-line
+                  <div key={entry.id} data-task-id={entry.id} data-parent-task-id={entry.parent_task_id} className={`grid min-h-[104px] items-center gap-4 border-b border-line
                     px-5 py-5 transition-colors last:border-b-0 hover:bg-surface-2
-                    [grid-template-columns:minmax(220px,2fr)_110px_minmax(100px,1fr)_100px_100px_160px]">
+                    [grid-template-columns:minmax(220px,2fr)_110px_minmax(100px,1fr)_100px_100px_160px]${entry.parent_task_id ? " ml-7 border-l-2 border-l-primary/30 bg-primary/3" : ""}`}>
                     <div className="flex min-w-0 flex-col gap-1">
+                      {entry.parent_task_id ? <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><span className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-primary">子任务</span><button type="button" className="truncate text-left hover:text-primary disabled:cursor-default" disabled={!parentTask || !onOpenTask} onClick={() => parentTask && onOpenTask?.(parentTask)} title={`主任务：${relationship.parent ? historyTaskTitle(relationship.parent) : entry.parent_task_id}`} aria-label={`返回主任务：${entry.parent_task_id}`}>↳ {relationship.parent ? historyTaskTitle(relationship.parent) : entry.parent_task_id}</button></div>
+                        : relationship.childCount > 0 && <span className="w-fit rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary">主任务 · {relationship.childCount} 个子任务</span>}
                       <span className="w-fit rounded bg-surface-3 px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{entry.id}</span>
                       {currentTask && onOpenTask ? (
                         <button

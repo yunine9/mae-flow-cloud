@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   historyTaskTitle,
+  historyTaskHierarchy,
   isDeliveryArchiveStatus,
   workspaceHistoryEntries,
 } from "../web/src/historyModel.ts";
@@ -52,4 +53,12 @@ test("交付档案不再混入排队、运行和等待决策", () => {
   assert.equal(isDeliveryArchiveStatus("completed"), true);
   assert.equal(isDeliveryArchiveStatus("failed"), true);
   assert.equal(isDeliveryArchiveStatus("canceled"), true);
+});
+
+test("#517 档案按主子关系排序，数据库旧条目可从当前现场补齐关系", () => {
+  const entries = [{ id: "child-2" }, { id: "other" }, { id: "parent" }, { id: "child-1", parent_task_id: "parent" }];
+  const ordered = historyTaskHierarchy(entries, [{ id: "child-2", parent_task_id: "parent" }]);
+  assert.deepEqual(ordered.map(entry => entry.id), ["other", "parent", "child-2", "child-1"]);
+  assert.equal(ordered.find(entry => entry.id === "child-2")?.parent_task_id, "parent");
+  assert.deepEqual(historyTaskHierarchy([{ id: "orphan", parent_task_id: "outside" }], []), [{ id: "orphan", parent_task_id: "outside" }]);
 });

@@ -1,4 +1,5 @@
 import { instantMs } from "./time";
+import { orderTaskHierarchy } from "./taskHierarchy";
 
 interface HistoryTaskFields {
   id: string;
@@ -41,4 +42,14 @@ export function historyTaskTitle(task: Pick<HistoryTaskFields, "id" | "title" | 
   if (title) return title;
   const firstLine = task.requirement.split(/\r?\n/, 1)[0]?.trim();
   return firstLine || task.id;
+}
+
+/** 本机仍有现场时补齐历史投影的关系；主任务缺席时也保留子任务来源。 */
+export function historyTaskHierarchy<T extends { id: string; parent_task_id?: string }>(
+  entries: T[], tasks: Array<{ id: string; parent_task_id?: string }>,
+): T[] {
+  const current = new Map(tasks.map(task => [task.id, task]));
+  return orderTaskHierarchy(entries.map(entry => ({ ...entry,
+    parent_task_id: entry.parent_task_id ?? current.get(entry.id)?.parent_task_id,
+  })));
 }
