@@ -10,6 +10,7 @@ import { readBusinessModule } from "./businessModuleLibrary.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { researchEvidencePage, researchEvidenceEntry } from "./knowledgeResearchEvidence.ts";
 import { join, posix } from "node:path";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
@@ -408,6 +409,25 @@ export class DomainKnowledgeExtraction {
     return { ...record, production: projectKnowledgeProduction({ kind: "domain", record, current_revisions }), deletion: this.deletionView(job.id) };
   }
   get(id: string): DomainKnowledgeJob { return structuredClone(this.view(this.live(id))); }
+  reader(id: string): DomainKnowledgeJob {
+    const { documents, evidence, publications, publication_history, archive_batches, ...current } = this.view(this.live(id), true);
+    return structuredClone({ ...current, deferred_details: true, evidence: [], publications: [],
+      documents: documents.map(({ history, base_content, ...document }) => ({ ...document, history: [], base_content: null })),
+    });
+  }
+  evidencePage(id: string, before?: string) { return researchEvidencePage(this.live(id).evidence, before); }
+  evidenceEntry(id: string, index: string) { return researchEvidenceEntry(this.live(id).evidence, index); }
+  documentHistory(id: string, documentId: string) {
+    const document = this.live(id).documents.find(document => document.id === documentId);
+    if (!document) throw new Error("知识文稿不存在");
+    return structuredClone(document.history);
+  }
+  workDocument(id: string, turnId: string, documentId: string) {
+    if (!this.live(id).turns.some(turn => turn.id === turnId) || !/^[a-f0-9-]{36}$/.test(turnId)) throw new Error("研究轮次不存在");
+    const document = readSkillWorkDocuments(join(this.root(id), "skill-runs", turnId, "work.json")).find(document => document.id === documentId);
+    if (!document) throw new Error("过程文稿不存在");
+    return { ...document, turn_id: turnId };
+  }
   taskRows() {
     return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).map(job => ({
       ...domainKnowledgeTask(this.view(job, true)), module_id: job.module_id,

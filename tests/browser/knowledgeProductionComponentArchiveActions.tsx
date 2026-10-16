@@ -133,8 +133,8 @@ async function unpublishedArchive() {
     if (path === "/component-research") response = { records: [fixture.componentReady.record, nextRecord] };
     else if (path === "/component-repositories") response = { components: [fixture.componentReady.record.component] };
     else if (path === "/business-modules") response = { modules: [] };
-    else if (path === `/component-research/${taskA}`) response = fixture.componentReady.record;
-    else if (path === `/component-research/${taskB}`) response = nextRecord;
+    else if (path === `/component-research/${taskA}/reader`) response = fixture.componentReady.record;
+    else if (path === `/component-research/${taskB}/reader`) response = nextRecord;
     else if (path.startsWith("/knowledge-review/component/")) response = { notes: [] };
     else if (path.endsWith("/archive/targets/preview")) response = targetPreview(body, path.includes(taskA) ? fixture.componentReady.preview : fixture.componentNextReady.preview);
     else if (path === `/component-research/${taskA}/archive/preview`) response = fixture.componentReady.preview;
@@ -215,7 +215,7 @@ async function domainIssueInput() {
     const oldPreview = fixture.completed.preview;
     window.fetch = async (input, init) => {
       const path = String(input), method = init?.method ?? "GET", body = init?.body ? JSON.parse(String(init.body)) : undefined;
-      if (path === `/domain-extraction/${current.id}`) return new Response(JSON.stringify(current));
+      if (path === `/domain-extraction/${current.id}/reader`) return new Response(JSON.stringify(current));
       if (path.startsWith("/knowledge-review/")) return new Response(JSON.stringify({ notes: [] }));
       if (path.endsWith("/archive/preview")) return new Response(JSON.stringify(oldPreview));
       if (path.endsWith("/archive-targets/preview")) return new Response(JSON.stringify({ targets: body.targets, archive_revision: 1,

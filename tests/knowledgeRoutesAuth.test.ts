@@ -40,6 +40,11 @@ test("知识任务与审阅接口要求登录，匿名读取和提交不能触�
     for (const anonymousPath of ["/knowledge-tasks", path, "/knowledge-review/component/cr-missing", "/skills/example/package", "/skills/example/submissions/example"]) {
       assert.equal((await request(anonymousPath)).status, 401, `匿名读取 ${anonymousPath} 必须拒绝`);
     }
+    for (const base of [`/domain-extraction/${job.id}`, "/component-research/cr-missing"]) {
+      for (const suffix of ["reader", "evidence", "evidence/0", "history/rules", "work-document/plan"]) {
+        assert.equal((await request(`${base}/${suffix}`)).status, 401, "拆分后的只读详情沿用任务权限");
+      }
+    }
     for (const anonymousPath of [path, "/knowledge-review/component/cr-missing", "/knowledge-review/published/kd-missing", "/knowledge-review/skill/example"]) {
       assert.equal((await request(anonymousPath, "", noteInput)).status, 401);
       assert.equal((await request(`${anonymousPath}/apply`, "", { note_ids: ["unknown"] })).status, 401);

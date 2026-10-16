@@ -9,6 +9,7 @@ export interface ComponentRepository {
   enabled: boolean;
 }
 export interface ComponentResearchRecord {
+  deferred_details?: boolean;
   production?: import("../../src/knowledgeProductionTypes").KnowledgeProductionView;
   pipeline?: { tasks: Array<{ id: string; title: string; status: string; feedback?: string }> };
   material_ids?: string[];

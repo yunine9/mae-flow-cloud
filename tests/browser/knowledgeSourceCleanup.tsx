@@ -21,7 +21,7 @@ window.fetch = async (url, options) => {
   else if (path === "/knowledge-tasks") value = { summary: { running: 0, attention: 1, total: 1 }, tasks: [], warnings: [] };
   else if (path === "/memory-insights") value = { memories: [] };
   else if (path === "/domain-extraction") value = { records: [projected()] };
-  else if (path === `/domain-extraction/${job.id}`) value = projected();
+  else if (path === `/domain-extraction/${job.id}/reader`) value = projected();
   else if (path.endsWith("/source-cleanup/preview")) {
     job.source_cleanup!.plans = repositories.map(repo => {
       const entries = Array.from({ length: 28 }, (_, index) => ({ path: `docs/old/业务规则-${index + 1}/历史知识及关联接口说明.md`, mode: "100644", oid: "a".repeat(40) }));

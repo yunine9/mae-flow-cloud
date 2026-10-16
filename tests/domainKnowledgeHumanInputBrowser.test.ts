@@ -25,6 +25,7 @@ test("#451 桌面页面在没有知识草稿时审阅完整过程文稿，审阅
     await wait(); const first = service.get(created.id);
     service.resume(first.id, "reviewer", false, { request_id: first.turns[0].waiting!.id, message: "只生成一个模块，先给我审阅。" });
     await wait(); const second = service.get(created.id), running = structuredClone(second);
+    assert.equal(second.status, "paused", `第二次确认的服务端夹具没有准备好：${second.error ?? second.stage}`);
     running.status = "running"; running.turns[0].status = "running"; delete running.turns[0].waiting;
     running.production = projectKnowledgeProduction({ kind: "domain", record: running });
     const fixture = { first, second, running };

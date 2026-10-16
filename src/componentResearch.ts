@@ -5,6 +5,7 @@ import { componentKnowledgeMarkdown } from "./componentKnowledgeMarkdown.ts";
 import { exportComponentArtifacts, validateComponentParadigm } from "./componentParadigms.ts";
 import type { ComponentPipelineState } from "./componentResearchPipeline.ts";
 import { componentWorkDocuments, type ComponentWorkDocument } from "./componentResearchPreview.ts";
+import { researchEvidencePage, researchEvidenceEntry } from "./knowledgeResearchEvidence.ts";
 /** Background research is an inspectable draft, not a task or a delivery gate. */
 import { randomUUID } from "node:crypto";
 import {
@@ -40,6 +41,8 @@ export interface ComponentChallenge {
   item_id: string; source_digest: string; language: string; repository_ids: string[]; claim: string;
 }
 export interface ResearchRecord {
+  /** 阅读响应已拆分过程记录和历史；不写入任务状态。 */
+  deferred_details?: boolean;
   /** 重新萃取的原任务，用于重复请求时返回同一个新任务。 */
   reextract_of?: string;
   /** 服务端读取时计算，不写入 record.json。 */
@@ -408,6 +411,36 @@ export class ComponentResearch {
     record = structuredClone(record);
     fillReadableResearchFields(record);
     return record;
+  }
+  reader(id: string): ResearchRecord {
+    const record = this.view(id, true);
+    const { evidence, section_history, publication_intent, pipeline, draft, ...current } = record;
+    // 必须在复制前排除重复全文；执行器与发布仍使用原始记录。
+    const result = structuredClone({ ...current, deferred_details: true, evidence: [], section_history: [],
+      draft: record.document ? undefined : draft,
+      pipeline: pipeline && { version: pipeline.version, skill: pipeline.skill,
+        tasks: pipeline.tasks.map(({ id, title, status, phase, attempts, feedback }) => ({ id, title, status, phase, attempts, feedback, spec: "", dependencies: [] })) },
+    });
+    fillReadableResearchFields(result);
+    return result;
+  }
+  evidencePage(id: string, before?: string) { return researchEvidencePage(this.records.get(id)?.evidence ?? this.missingRecord(), before); }
+  evidenceEntry(id: string, index: string) { return researchEvidenceEntry(this.records.get(id)?.evidence ?? this.missingRecord(), index); }
+  private missingRecord(): never { throw new Error("萃取记录不存在"); }
+  sectionHistory(id: string, sectionId: string) {
+    const record = this.records.get(id) ?? this.missingRecord();
+    if (!record.document?.sections.some(section => section.id === sectionId)) throw new Error("组件章节不存在");
+    const result = structuredClone({ ...record, section_history: record.section_history?.filter(item => item.section.id === sectionId) ?? [],
+      document: undefined, review_turns: undefined, publication_intent: undefined, pipeline: undefined, draft: undefined, evidence: [] });
+    fillReadableResearchFields(result);
+    return result.section_history!;
+  }
+  workDocument(id: string, documentId: string) {
+    const record = this.records.get(id) ?? this.missingRecord();
+    const pipeline = record.pipeline;
+    const document = pipeline && componentWorkDocuments({ ...pipeline, tasks: pipeline.tasks.filter(task => task.id === documentId) })[0];
+    if (!document) throw new Error("过程文稿不存在");
+    return document;
   }
   private assertPublicationComplete(record?: ResearchRecord) {
     if (record?.publication_intent) throw new Error("发布还未完成，请重试发布，或显式开始新修订");

@@ -18,6 +18,14 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
       if (request.method === "GET" && parts[1]) return json(response, 200, readKnowledgeMaterial(materialRoot, parts[1]));
     } else {
       const manager = service.getDomainKnowledgeExtraction();
+      if (request.method === "GET" && parts[1]) {
+        if (parts[2] === "reader" && !parts[3]) return json(response, 200, manager.reader(parts[1]));
+        if (parts[2] === "evidence" && !parts[4]) return json(response, 200, parts[3] === undefined
+          ? manager.evidencePage(parts[1], new URL(request.url!, "http://localhost").searchParams.get("before") ?? undefined)
+          : manager.evidenceEntry(parts[1], parts[3]));
+        if (parts[2] === "history" && parts[3] && !parts[4]) return json(response, 200, manager.documentHistory(parts[1], parts[3]));
+        if (parts[2] === "work-document" && parts[3] && parts[4] && !parts[5]) return json(response, 200, manager.workDocument(parts[1], parts[3], parts[4]));
+      }
       if (request.method === "GET" && parts[1] && parts[2] === "archive" && parts[3] === "preview") return json(response, 200, manager.previewArchive(parts[1]));
       if (request.method === "GET" && !parts[2]) return json(response, 200, parts[1] ? manager.get(parts[1]) : { records: manager.list(), knowledge_target: readKnowledgeRepoConfig(service.options.dataDir) ?? null });
       if (request.method === "POST") {

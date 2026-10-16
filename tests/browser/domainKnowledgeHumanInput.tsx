@@ -19,7 +19,7 @@ window.fetch = async (url, options) => {
   let result: unknown;
   if (path === "/business-modules") result = { modules: [] };
   else if (path === "/domain-extraction") result = { records: [current] };
-  else if (path === `/domain-extraction/${current.id}`) result = current;
+  else if (path === `/domain-extraction/${current.id}/reader`) result = current;
   else if (path.startsWith("/knowledge-review/")) result = { notes: [] };
   else if (path === `/domain-extraction/${current.id}/resume`) {
     calls.push(input);
