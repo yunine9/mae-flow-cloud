@@ -1,0 +1,214 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+<title id="title">Mae-Flow：把需求交付的每一步展开</title><desc id="desc">从需求澄清、确认说明、Story 设计、架构设计与任务拆分编码，到编译、CodeCheck、UT、需求实现对照，再到 MR 推送、独立 Agent 检视、意见修复和再次推送。底部展示需求、代码、测试与知识四类成果。</desc>
+<defs><marker id="blue" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#4B56C7" stroke-width="1.5"/></marker><marker id="teal" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="none" stroke="#087E83" stroke-width="1.5"/></marker></defs><style>text{font-family:'PingFang SC','Microsoft YaHei',sans-serif}</style>
+<rect x="0" y="0" width="1920" height="1080" rx="0" fill="#F7F9FC"/>
+<rect x="56" y="40" width="5" height="27" rx="2" fill="#4B56C7"/>
+<text x="76" y="61" font-size="18" fill="#4B56C7" font-weight="600" text-anchor="start">MAE-FLOW  /  ENGINEERING WORKFLOW</text>
+<text x="1864" y="61" font-size="18" fill="#607286" font-weight="500" text-anchor="end">ISSUE 527  ·  需求交付实战流程</text>
+<text x="56" y="125" font-size="44" fill="#142B45" font-weight="650" text-anchor="start">把需求交付的每一步展开</text>
+<text x="58" y="168" font-size="23" fill="#607286" font-weight="400" text-anchor="start">从澄清需求到修复检视意见：看清每一步做什么、谁来做、留下什么。</text>
+<rect x="58" y="196" width="9" height="9" rx="3" fill="#4B56C7"/>
+<text x="76" y="207" font-size="17" fill="#607286" font-weight="400" text-anchor="start">Agent 理解、设计与执行</text>
+<rect x="400" y="196" width="9" height="9" rx="3" fill="#AC681C"/>
+<text x="418" y="207" font-size="17" fill="#607286" font-weight="400" text-anchor="start">人确认需求与关键取舍</text>
+<rect x="760" y="196" width="9" height="9" rx="3" fill="#087E83"/>
+<text x="778" y="207" font-size="17" fill="#607286" font-weight="400" text-anchor="start">平台执行推送、记录结果</text>
+<text x="1864" y="207" font-size="18" fill="#4B56C7" font-weight="500" text-anchor="end">基于代码澄清  ·  专项验证  ·  独立检视  ·  原 MR 持续修复</text>
+<g data-card="需求到实现" data-bounds="56,234,168,184">
+<rect x="56" y="234" width="168" height="184" rx="14" fill="#EDEFF7"/>
+<text x="76" y="269" font-size="21" fill="#4B56C7" font-weight="600" text-anchor="start">01</text>
+<text x="76" y="306" font-size="24" fill="#142B45" font-weight="600" text-anchor="start">需求到实现</text>
+<text x="76" y="349" font-size="16" fill="#607286" font-weight="400" text-anchor="start">先澄清，再做设计</text>
+<text x="76" y="377" font-size="16" fill="#607286" font-weight="400" text-anchor="start">把方案落实为代码</text>
+</g>
+<g data-card="验证工作" data-bounds="56,455,168,184">
+<rect x="56" y="455" width="168" height="184" rx="14" fill="#EDEFF7"/>
+<text x="76" y="490" font-size="21" fill="#4B56C7" font-weight="600" text-anchor="start">02</text>
+<text x="76" y="527" font-size="24" fill="#142B45" font-weight="600" text-anchor="start">验证工作</text>
+<text x="76" y="570" font-size="16" fill="#607286" font-weight="400" text-anchor="start">本地自查与流水线</text>
+<text x="76" y="598" font-size="16" fill="#607286" font-weight="400" text-anchor="start">验证内容逐项展开</text>
+</g>
+<g data-card="检视与修复" data-bounds="56,676,168,184">
+<rect x="56" y="676" width="168" height="184" rx="14" fill="#EDEFF7"/>
+<text x="76" y="711" font-size="21" fill="#4B56C7" font-weight="600" text-anchor="start">03</text>
+<text x="76" y="748" font-size="24" fill="#142B45" font-weight="600" text-anchor="start">检视与修复</text>
+<text x="76" y="791" font-size="16" fill="#607286" font-weight="400" text-anchor="start">独立检视逐条处理</text>
+<text x="76" y="819" font-size="16" fill="#607286" font-weight="400" text-anchor="start">沿原任务持续推进</text>
+</g>
+<g data-card="需求澄清 · Grill me" data-bounds="252,234,385,184">
+<rect x="252" y="234" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="269" y="251" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="285" y="274" font-size="17" fill="white" font-weight="600" text-anchor="middle">01</text>
+<text x="312" y="275" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">需求澄清 · Grill me</text>
+<text x="272" y="306" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">主 Agent · 需求核查 Agent</text>
+<text x="272" y="340" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">读代码与知识，追问业务场景</text>
+<text x="272" y="369" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">厘清边界、异常和验收标准</text>
+<path d="M272,382 H617" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="272" y="407" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：问答与关键决定</text>
+</g>
+<path d="M641,325 H654" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="确认需求说明" data-bounds="661,234,385,184">
+<rect x="661" y="234" width="385" height="184" rx="14" fill="#FFF6E9" stroke="#DCE4ED"/>
+<rect x="678" y="251" width="32" height="32" rx="9" fill="#AC681C"/>
+<text x="694" y="274" font-size="17" fill="white" font-weight="600" text-anchor="middle">02</text>
+<text x="721" y="275" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">确认需求说明</text>
+<text x="681" y="306" font-size="17" fill="#AC681C" font-weight="500" text-anchor="start">责任人确认 · 主 Agent 整理</text>
+<text x="681" y="340" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">将原始回答整理成需求说明</text>
+<text x="681" y="369" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">确认范围与取舍，保留依据</text>
+<path d="M681,382 H1026" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="681" y="407" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：确认后的需求说明</text>
+</g>
+<path d="M1050,325 H1063" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="Story 设计" data-bounds="1070,234,385,184">
+<rect x="1070" y="234" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="1087" y="251" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="1103" y="274" font-size="17" fill="white" font-weight="600" text-anchor="middle">03</text>
+<text x="1130" y="275" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">Story 设计</text>
+<text x="1090" y="306" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">Story 生成 / 设计检视 Agent</text>
+<text x="1090" y="340" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">拆出用户行为与验收场景</text>
+<text x="1090" y="369" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">独立检视，责任人确认设计</text>
+<path d="M1090,382 H1435" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1090" y="407" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：Story 与实施附录</text>
+</g>
+<path d="M1459,325 H1472" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="架构、拆分与编码" data-bounds="1479,234,385,184">
+<rect x="1479" y="234" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="1496" y="251" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="1512" y="274" font-size="17" fill="white" font-weight="600" text-anchor="middle">04</text>
+<text x="1539" y="275" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">架构、拆分与编码</text>
+<text x="1499" y="306" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">主 Agent · 组件分析 Agent</text>
+<text x="1499" y="340" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">明确接口、分工和组件复用</text>
+<text x="1499" y="369" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">拆解工作项，完成关键实现</text>
+<path d="M1499,382 H1844" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1499" y="407" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：架构方案与实现代码</text>
+</g>
+<g data-card="专项编译" data-bounds="252,455,385,184">
+<rect x="252" y="455" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="269" y="472" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="285" y="495" font-size="17" fill="white" font-weight="600" text-anchor="middle">05</text>
+<text x="312" y="496" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">专项编译</text>
+<text x="272" y="527" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">编译验证 Agent · 主 Agent 修复</text>
+<text x="272" y="561" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">在任务环境执行真实构建</text>
+<text x="272" y="590" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">定位编译错误，修改后复验</text>
+<path d="M272,603 H617" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="272" y="628" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：构建结果与错误记录</text>
+</g>
+<path d="M641,546 H654" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="CodeCheck" data-bounds="661,455,385,184">
+<rect x="661" y="455" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="678" y="472" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="694" y="495" font-size="17" fill="white" font-weight="600" text-anchor="middle">06</text>
+<text x="721" y="496" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">CodeCheck</text>
+<rect x="928" y="476" width="98" height="28" rx="7" fill="#EDF7F5"/>
+<text x="977" y="496" font-size="16" fill="#087E83" font-weight="600" text-anchor="middle">推送后</text>
+<text x="681" y="527" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">流水线检查 · Agent 修复</text>
+<text x="681" y="561" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">定位本次变更的真实代码告警</text>
+<text x="681" y="590" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">修复本次问题，再次检查</text>
+<path d="M681,603 H1026" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="681" y="628" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：检查结果与处理记录</text>
+</g>
+<path d="M1050,546 H1063" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="UT · 单元测试" data-bounds="1070,455,385,184">
+<rect x="1070" y="455" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="1087" y="472" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="1103" y="495" font-size="17" fill="white" font-weight="600" text-anchor="middle">07</text>
+<text x="1130" y="496" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">UT · 单元测试</text>
+<text x="1090" y="527" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">主 Agent / 测试生成 Agent</text>
+<text x="1090" y="561" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">编写、执行函数 UT 与模块 UT</text>
+<text x="1090" y="590" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">覆盖正常、边界和异常路径</text>
+<path d="M1090,603 H1435" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1090" y="628" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：测试代码与执行结果</text>
+</g>
+<path d="M1459,546 H1472" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="需求实现对照" data-bounds="1479,455,385,184">
+<rect x="1479" y="455" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="1496" y="472" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="1512" y="495" font-size="17" fill="white" font-weight="600" text-anchor="middle">08</text>
+<text x="1539" y="496" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">需求实现对照</text>
+<text x="1499" y="527" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">主 Agent 对照已确认需求</text>
+<text x="1499" y="561" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">逐项核对：需求 → 实现 → 测试</text>
+<text x="1499" y="590" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">补齐遗漏，列明未验证部分</text>
+<path d="M1499,603 H1844" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1499" y="628" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：实现对照与验证结论</text>
+</g>
+<g data-card="MR 推送" data-bounds="252,676,385,184">
+<rect x="252" y="676" width="385" height="184" rx="14" fill="#EDF7F5" stroke="#DCE4ED"/>
+<rect x="269" y="693" width="32" height="32" rx="9" fill="#087E83"/>
+<text x="285" y="716" font-size="17" fill="white" font-weight="600" text-anchor="middle">09</text>
+<text x="312" y="717" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">MR 推送</text>
+<text x="272" y="748" font-size="17" fill="#087E83" font-weight="500" text-anchor="start">主 Agent 准备 · 平台执行</text>
+<text x="272" y="782" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">按确认范围提交、推送代码</text>
+<text x="272" y="811" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">创建 MR，触发流水线验证</text>
+<path d="M272,824 H617" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="272" y="849" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：提交版本与 MR</text>
+</g>
+<path d="M641,767 H654" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)" stroke-dasharray="4 4"/>
+<g data-card="自动检视" data-bounds="661,676,385,184">
+<rect x="661" y="676" width="385" height="184" rx="14" fill="#F0F1FC" stroke="#DCE4ED"/>
+<rect x="678" y="693" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="694" y="716" font-size="17" fill="white" font-weight="600" text-anchor="middle">10</text>
+<text x="721" y="717" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">自动检视</text>
+<rect x="928" y="697" width="98" height="28" rx="7" fill="#FFF6E9"/>
+<text x="977" y="717" font-size="16" fill="#AC681C" font-weight="600" text-anchor="middle">待接入</text>
+<text x="681" y="748" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">Mae-Flow 独立检视 Agent</text>
+<text x="681" y="782" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">核对需求符合性与工程质量</text>
+<text x="681" y="811" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">列出问题位置、依据及修改建议</text>
+<path d="M681,824 H1026" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="681" y="849" font-size="17" fill="#607286" font-weight="400" text-anchor="start">目标：生成可逐条处理的意见</text>
+</g>
+<path d="M1050,767 H1063" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)" stroke-dasharray="4 4"/>
+<g data-card="检视意见自动修复" data-bounds="1070,676,385,184">
+<rect x="1070" y="676" width="385" height="184" rx="14" fill="#FFFFFF" stroke="#DCE4ED"/>
+<rect x="1087" y="693" width="32" height="32" rx="9" fill="#4B56C7"/>
+<text x="1103" y="716" font-size="17" fill="white" font-weight="600" text-anchor="middle">11</text>
+<text x="1130" y="717" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">检视意见自动修复</text>
+<text x="1090" y="748" font-size="17" fill="#4B56C7" font-weight="500" text-anchor="start">执行 Agent · 必要时人裁决</text>
+<text x="1090" y="782" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">修复明确问题，验证并逐条回复</text>
+<text x="1090" y="811" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">涉及范围或取舍时，请人决定</text>
+<path d="M1090,824 H1435" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1090" y="849" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：修复代码与处理说明</text>
+</g>
+<path d="M1459,767 H1472" fill="none" stroke="#4B56C7" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<g data-card="再次推送 MR" data-bounds="1479,676,385,184">
+<rect x="1479" y="676" width="385" height="184" rx="14" fill="#EDF7F5" stroke="#DCE4ED"/>
+<rect x="1496" y="693" width="32" height="32" rx="9" fill="#087E83"/>
+<text x="1512" y="716" font-size="17" fill="white" font-weight="600" text-anchor="middle">12</text>
+<text x="1539" y="717" font-size="25" fill="#142B45" font-weight="600" text-anchor="start">再次推送 MR</text>
+<text x="1499" y="748" font-size="17" fill="#087E83" font-weight="500" text-anchor="start">平台推送 · Agent 接续</text>
+<text x="1499" y="782" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">更新原分支与 MR，保留上下文</text>
+<text x="1499" y="811" font-size="21" fill="#20364D" font-weight="400" text-anchor="start">新提交重新运行流水线验证</text>
+<path d="M1499,824 H1844" fill="none" stroke="#DCE4ED" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="1499" y="849" font-size="17" fill="#607286" font-weight="400" text-anchor="start">留下：更新版本与新的验证结果</text>
+</g>
+<path d="M1671.5,421 V436 H444.5 V449" fill="none" stroke="#4B56C7" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<path d="M1671.5,642 V657 H444.5 V670" fill="none" stroke="#4B56C7" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#blue)"/>
+<path d="M1671.5,863 V887 H853.5 V865" fill="none" stroke="#087E83" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" marker-end="url(#teal)" stroke-dasharray="5 5"/>
+<rect x="1050" y="874" width="426" height="28" rx="4" fill="#F7F9FC"/>
+<text x="1263" y="895" font-size="19" fill="#087E83" font-weight="600" text-anchor="middle">目标：新提交再次独立检视</text>
+<text x="56" y="896" font-size="19" fill="#087E83" font-weight="600" text-anchor="start">同一任务 · 原分支 · 原 MR</text>
+<rect x="56" y="920" width="1808" height="111" rx="17" fill="#142B45"/>
+<text x="80" y="953" font-size="22" fill="#FFFFFF" font-weight="600" text-anchor="start">交付成果</text>
+<text x="80" y="987" font-size="16" fill="#BED1E1" font-weight="400" text-anchor="start">过程与结果可追溯</text>
+<path d="M268,943 V1007" fill="none" stroke="#36516A" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<g data-card="需求成果" data-bounds="274,925,385,95">
+<text x="286" y="959" font-size="25" fill="#FFFFFF" font-weight="600" text-anchor="start">需求</text>
+<text x="286" y="996" font-size="19" fill="#C8D7E4" font-weight="400" text-anchor="start">确认说明 · Story · 架构方案</text>
+</g>
+<path d="M657,943 V1007" fill="none" stroke="#36516A" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<g data-card="代码成果" data-bounds="663,925,385,95">
+<text x="675" y="959" font-size="25" fill="#FFFFFF" font-weight="600" text-anchor="start">代码</text>
+<text x="675" y="996" font-size="19" fill="#C8D7E4" font-weight="400" text-anchor="start">实现代码 · 变更提交 · MR</text>
+</g>
+<path d="M1046,943 V1007" fill="none" stroke="#36516A" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<g data-card="测试成果" data-bounds="1052,925,385,95">
+<text x="1064" y="959" font-size="25" fill="#FFFFFF" font-weight="600" text-anchor="start">测试</text>
+<text x="1064" y="996" font-size="19" fill="#C8D7E4" font-weight="400" text-anchor="start">UT / 模块 UT · 真实验证记录</text>
+</g>
+<path d="M1435,943 V1007" fill="none" stroke="#36516A" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/>
+<g data-card="知识成果" data-bounds="1441,925,385,95">
+<text x="1453" y="959" font-size="25" fill="#FFFFFF" font-weight="600" text-anchor="start">知识</text>
+<text x="1453" y="996" font-size="19" fill="#C8D7E4" font-weight="400" text-anchor="start">领域文档 · 交付报告 · 经验</text>
+</g>
+<text x="56" y="1058" font-size="16" fill="#607286" font-weight="400" text-anchor="start">按工作内容展开：本地编译、UT 用于自查，CodeCheck 与最终验证由推送后流水线完成；第 10 步待接入；合入由人审批。</text>
+<text x="1864" y="1058" font-size="16" fill="#607286" font-weight="400" text-anchor="end">Issue 527 · 2026.10.16</text>
+</svg>
