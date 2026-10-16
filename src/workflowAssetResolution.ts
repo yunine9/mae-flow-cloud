@@ -1,3 +1,5 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
+import { resolveBusinessKnowledgeAssetReference } from "./businessModuleLibrary.ts";
 /** Resolve workflow asset identities against task-pinned knowledge/Skill facts. */
 
 import { knowledgeMatchesTask } from "./knowledgeAssetModel.ts";
@@ -102,7 +104,11 @@ export function resolveWorkflowAssets(options: {
       return { ...ref, state: "available" };
     }
     if (ref.registry === "business_knowledge") {
-      return businessAsset(ref, options.businessModules);
+      const original = businessAsset(ref, options.businessModules);
+      if (original.state === "available" || !ref.business_module_id) return original;
+      const current = resolveBusinessKnowledgeAssetReference(options.dataDir, ref.business_module_id, ref.id);
+      const resolved = businessAsset({ ...ref, business_module_id: current.moduleId, id: current.assetId }, options.businessModules);
+      return { ...resolved, ...ref };
     }
     if (ref.registry === "repository_skill") {
       return repositorySkill(ref, options.repositorySkills ?? []);
@@ -117,10 +123,10 @@ export function resolveWorkflowAssets(options: {
       return unavailable(ref,
         `团队 Skill ${ref.id} 的固定版本当前不可装载或摘要已变化`);
     }
-    if (!knowledgeMatchesTask(skill, {
+    if (!knowledgeMatchesTask({ ...skill, business_module_ids: resolveBusinessModuleIds(options.dataDir, skill.business_module_ids) }, {
       repositories: options.repositories,
       technologies: options.technologies,
-      businessModuleIds: options.businessModules.map((item) => item.id),
+      businessModuleIds: resolveBusinessModuleIds(options.dataDir, options.businessModules.map((item) => item.id)),
     })) {
       return incompatible(ref, `团队 Skill ${ref.id} 不适用于本任务范围`);
     }

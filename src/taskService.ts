@@ -1,3 +1,4 @@
+import { resolveBusinessModuleId, resolveBusinessModuleRef } from "./businessModuleIdentity.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "./knowledgeAnswers.ts";
@@ -2623,6 +2624,18 @@ export class TaskService {
     this.prePushBuildQueue = kept;
   }
 
+  businessModuleTaskCount(moduleId: string): number {
+    return [...this.tasks.values()].filter(task => !task.summary.parent_task_id && task.summary.origin !== "issue"
+      && task.summary.business_module && resolveBusinessModuleId(this.options.dataDir, task.summary.business_module.id) === moduleId).length;
+  }
+
+  private moduleOwnership(summary: TaskSummary): TaskSummary {
+    return { ...summary,
+      ...(summary.business_module ? { business_module: resolveBusinessModuleRef(this.options.dataDir, summary.business_module) } : {}),
+      ...(summary.business_modules ? { business_modules: summary.business_modules.map(module => resolveBusinessModuleRef(this.options.dataDir, module)) } : {}),
+    };
+  }
+
   list(): TaskSummary[] {
     return [...this.tasks.values()]
       .map((task) => this.project(task))
@@ -2630,7 +2643,7 @@ export class TaskService {
   }
 
   private requireBusinessModule(id: string): { id: string; name: string } {
-    const module = listBusinessModules(this.options.dataDir).modules.find(m => m.id === id && m.status === "active");
+    const module = listBusinessModules(this.options.dataDir).modules.find(m => m.id === resolveBusinessModuleId(this.options.dataDir, id) && m.status === "active");
     if (!module) throw new TaskControlError("请选择配置中心中有效的业务模块");
     return { id: module.id, name: module.name };
   }
@@ -2669,7 +2682,7 @@ export class TaskService {
       observeDeliveryCode(task.summary, task.cwd, task.summary.delivery.git_push.sha, retry);
     const summaries = [...this.tasks.values()].map(task => ({ ...task.summary, token_usage: tokenUsageSnapshot(task.tokenUsage) }));
     const profiles = resolveRepositoryProfiles(this.options.dataDir, [...new Set(summaries.map(t => t.repo_url).filter((r): r is string => !!r))]).flatMap(r => r.profile ? [r.profile] : []);
-    return buildDeliveryAnalysis(summaries, listBusinessModules(this.options.dataDir).modules, profiles);
+    return buildDeliveryAnalysis(summaries.map(summary => this.moduleOwnership(summary)), listBusinessModules(this.options.dataDir).modules, profiles);
   }
 
   /** 团队知识运营读模型。独立接口按需计算，避免把所有任务足迹塞进
@@ -3573,7 +3586,7 @@ export class TaskService {
   private project(task: TaskState, includeKnowledgeUsage = false, preparedPlan?: ExecutionPlanReading): TaskSummary {
     this.refreshRequirementGraph(task);
     const record = task.notifyRecord;
-    const summary = task.summary;
+    const summary = this.moduleOwnership(task.summary);
     let feedback: FeedbackRecord[] = [];
     let feedbackError: string | undefined;
     try {
@@ -4431,6 +4444,7 @@ export class TaskService {
       repositoryResourceBlocks: () =>
         readResourceBlocks(this.options.dataDir),
       hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+      knowledgeModuleDataDir: this.options.dataDir,
       knowledgeContext: task.summary.host_skills_pinned ? undefined : {
         repositories: task.summary.repositories ?? [],
         technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -7714,7 +7728,7 @@ export class TaskService {
             `[host-skill-snapshot] 工作流团队 Skill 目录解析失败(fail-open): ${String(error)}`);
         }
       }
-      const hostSkillSnapshot = materializeHostSkills({
+      const hostSkillSnapshot = materializeHostSkills({ moduleDataDir: this.options.dataDir,
         sourceRoot: hostSkillSourceRoot,
         workspaceRoot: workspace,
         snapshotRoot: hostSkillSnapshotRoot,
@@ -11358,7 +11372,7 @@ export class TaskService {
     const existing = listHostSkillShelfRoot(root).skills;
     const names = new Set(existing.map((skill) => skill.name));
     const shelf = listHostSkillShelf(this.options.dataDir);
-    const snapshot = materializeHostSkills({
+    const snapshot = materializeHostSkills({ moduleDataDir: this.options.dataDir,
       sourceRoot: join(this.options.dataDir, "skills"), workspaceRoot: task.summary.workspace,
       snapshotRoot: root, selectedSourcePaths: shelf.skills.filter((skill) => !names.has(skill.name)).map((skill) => skill.path),
       context: { repositories: task.summary.repositories ?? [],
@@ -11390,7 +11404,7 @@ export class TaskService {
       writeFileSync(pendingFile, JSON.stringify(added));
       this.persist(task);
       const cwd = task.cwd ?? task.summary.workspace;
-      const runtime = materializeHostSkills({ sourceRoot: root, workspaceRoot: cwd,
+      const runtime = materializeHostSkills({ moduleDataDir: this.options.dataDir, sourceRoot: root, workspaceRoot: cwd,
         snapshotRoot: join(cwd, ".mae-flow-work", "host-skills") });
       warnings.push(...runtime.warnings);
       const entries = runtime.paths.map((path, index) => ({ path, name: runtime.names[index] })).filter((entry) => added.includes(entry.name));
@@ -12003,6 +12017,7 @@ export class TaskService {
         componentAnalysisContext: () => this.componentAnalysisContext(task),
         memoryContext: () => this.taskMemoryContext(task),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        knowledgeModuleDataDir: this.options.dataDir,
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -14391,6 +14406,7 @@ export class TaskService {
         // 宿主级 skill:<数据目录>/skills 放一次,每个任务都带
         // (团队的 UT 写法指南在内网,老宿主靠手动集成进子 agent)。
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        knowledgeModuleDataDir: this.options.dataDir,
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])
@@ -15559,6 +15575,7 @@ export class TaskService {
         repositoryResourceBlocks: () =>
           readResourceBlocks(this.options.dataDir),
         hostSkillsDir: taskHostSkillsDir(this.options.dataDir, task.summary),
+        knowledgeModuleDataDir: this.options.dataDir,
         knowledgeContext: task.summary.host_skills_pinned ? undefined : {
           repositories: task.summary.repositories ?? [],
           technologies: [...new Set((task.summary.repository_profiles ?? [])

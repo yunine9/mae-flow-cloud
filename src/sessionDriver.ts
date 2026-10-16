@@ -390,6 +390,7 @@ export interface CloudSessionOptions {
    * 子 agent";云端子 Agent 照样有(Task 工具),缺的是自动装载——
    * pi 的 includeDefaults=false,不喂路径就一个 skill 都不装。 */
   hostSkillsDir?: string;
+  knowledgeModuleDataDir?: string;
   /** 认证失败(401)重试的退避间隔表,预算=表长;缺省 10s/30s。测试
    *  注快值,生产不传。 */
   authRetryDelaysMs?: number[];
@@ -1051,6 +1052,7 @@ export class CloudSession {
     // = false,不喂就一个 skill 都不装(读 SDK 才发现,不是放进去就生效)。
     const hostSkills = materializeHostSkills({
       sourceRoot: this.options.hostSkillsDir,
+      moduleDataDir: this.options.knowledgeModuleDataDir,
       workspaceRoot: workspace,
       snapshotRoot: join(workspace, ".mae-flow-work", "host-skills"),
       context: this.options.knowledgeContext,

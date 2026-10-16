@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { DomainKnowledgeJob } from "./domainKnowledgeTypes.ts";
@@ -107,7 +108,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
       if (record) tasks.push(skillExtractionTask(record));
     }
   });
-  collect("Skill 导入", () => tasks.push(...listSkillSubmissions(sources.dataDir, warnings).map(skillSubmissionTask)));
+  collect("Skill 导入", () => tasks.push(...listSkillSubmissions(sources.dataDir, warnings).map(record => skillSubmissionTask({ ...record, business_module_ids: resolveBusinessModuleIds(sources.dataDir, record.business_module_ids) }))));
   // get() 可能在读取精确正式ID时发现坏文件，中心须在本次响应就给出告警。
   warnings.push(...sources.domain.warnings?.() ?? [], ...sources.component.warnings?.() ?? []);
   warnings.splice(0, warnings.length, ...new Set(warnings));

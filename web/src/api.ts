@@ -1505,7 +1505,7 @@ export interface SelectedBusinessModule {
 export interface BusinessModuleOperation {
   at: string;
   operator: string;
-  action: "create" | "update" | "archive" | "publish_asset" | "archive_asset";
+  action: "create" | "update" | "archive" | "publish_asset" | "archive_asset" | "migrate";
   module_id: string;
   asset_id?: string;
   version?: number;
@@ -1516,6 +1516,24 @@ export interface BusinessModuleCatalog {
   modules: BusinessModule[];
   warnings: string[];
   operations: BusinessModuleOperation[];
+}
+
+export interface BusinessModuleMigrationPreview {
+  documents: number; extraction_tasks: number; delivery_tasks: number; issue_sessions: number;
+}
+export async function previewBusinessModuleMigration(id: string): Promise<BusinessModuleMigrationPreview> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(id)}/migration`);
+  const result = await response.json() as BusinessModuleMigrationPreview & { error?: string };
+  if (!response.ok) throw new Error(result.error || "无法读取迁移范围");
+  return result;
+}
+export async function migrateBusinessModule(id: string, targetId: string): Promise<BusinessModule> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(id)}/migration`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target_id: targetId }),
+  });
+  const result = await response.json() as BusinessModule & { error?: string };
+  if (!response.ok) throw new Error(result.error || "迁移失败");
+  return result;
 }
 
 export async function getBusinessModules(): Promise<BusinessModuleCatalog> {

@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { isComponentKnowledge, componentCards, componentCardHit, localComponentCards, componentQueryLanguage } from "./componentKnowledgeCards.ts";
 import { componentIndexDocuments, componentIndexSources, saveComponentIndexSources, removeComponentIndexSources } from "./componentCardIndex.ts";
 /** Unified read-only retrieval over published assets and adopted experiences.
@@ -8,7 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { retryKnowledgeDeletions } from "./componentKnowledgeDeletion.ts";
 import { join } from "node:path";
-import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
+import { listBusinessModules, readBusinessKnowledgeAsset, resolveBusinessKnowledgeAssetReference } from "./businessModuleLibrary.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
@@ -63,7 +64,7 @@ export function resolveKnowledgeModules(dataDir: string, context: Pick<Knowledge
   warnings.push(...catalog.warnings);
   const activeModules = catalog.modules.filter(m => m.status === "active");
   const mapped = activeModules.filter(m => m.repositories.some(r => repos.has(repositoryIdentity(r))));
-  const explicit = new Set(context.moduleIds);
+  const explicit = new Set(resolveBusinessModuleIds(dataDir, context.moduleIds));
   // A shared repository is not evidence that two business modules share rules.
   const modules = all ? activeModules : explicit.size
     ? activeModules.filter(m => explicit.has(m.id)) : mapped.length === 1 ? mapped : [];
@@ -286,6 +287,13 @@ export class KnowledgeSearch {
   }
 
   read(context: KnowledgeContext, id: string, all = false) {
+    if (id.startsWith("module:")) {
+      const [, moduleId, assetId] = id.split(":");
+      try {
+        const current = resolveBusinessKnowledgeAssetReference(this.dataDir, moduleId, assetId);
+        id = `module:${current.moduleId}:${current.assetId}`;
+      } catch { return undefined; }
+    }
     return this.catalog(context, all).assets.find(a => a.id === id);
   }
 

@@ -1,3 +1,4 @@
+import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
@@ -27,7 +28,10 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
     }
     if (request.method === "GET" && id && parts[2] === "versions") {
       readKnowledgeDocument(dir, id);
-      if (parts[3]) return json(response, 200, readKnowledgeDocumentVersion(dir, id, parts[3]));
+      if (parts[3]) {
+        const version = readKnowledgeDocumentVersion(dir, id, parts[3]);
+        return json(response, 200, { ...version, document: { ...version.document, module_ids: resolveBusinessModuleIds(dir, version.document.module_ids) } });
+      }
       return json(response, 200, { versions: listKnowledgeDocumentVersions(dir, id).map(v => ({ revision: v.document.revision,
         title: v.document.title, published_at: v.published_at, operator: v.operator })) });
     }
@@ -41,12 +45,12 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       if (typeof body.expected_revision !== "string") throw new Error("请提供当前知识版本");
       const old = readKnowledgeDocumentVersion(dir, id, String(body.revision));
       const doc = saveKnowledgeDocument(dir, { ...old.document }, operator, id, { expectedRevision: body.expected_revision, maxContentBytes: 16 * 1024 * 1024 });
-      service.prepareKnowledgeIndex(); return json(response, 200, doc);
+      service.prepareKnowledgeIndex(); return json(response, 200, { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) });
     }
     if (request.method === "GET" && id && parts.length === 2) {
       const doc = knowledgeDocumentCatalog(dir).documents.find(d => d.id === id);
       if (!doc) return json(response, 404, { error: "知识已停用或不存在" });
-      return json(response, 200, doc);
+      return json(response, 200, { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) });
     }
     if (request.method === "POST" && id && parts[2] === "retry") {
       const document = knowledgeDocumentCatalog(dir).documents.find(d => d.id === id);
@@ -63,7 +67,7 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       const input = { ...body, source: body.content !== undefined ? undefined : previous?.source };
       const doc = saveKnowledgeDocument(dir, input, operator, id, { expectedRevision: body.expected_revision });
       service.prepareKnowledgeIndex();
-      return json(response, 200, doc);
+      return json(response, 200, { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) });
     }
     return json(response, 404, { error: "未知知识文档操作" });
   } catch (error) {

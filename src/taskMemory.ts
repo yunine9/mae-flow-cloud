@@ -1,3 +1,4 @@
+import { resolveBusinessModuleId } from "./businessModuleIdentity.ts";
 /**
  * 经验候选与人工采纳。闭环或主动记录先留档，只有明确采纳后才参与复用。
  * 原始依据和每次修订保留在追加索引中，Markdown 是当前全文与向量重建来源。
@@ -294,7 +295,7 @@ export class MemoryStore {
     const stats = this.ledger.stats();
     return rows
       .map((row) => {
-        const derived: MemoryRecord = { ...row };
+        const derived: MemoryRecord = { ...row, ...(row.module ? { module: resolveBusinessModuleId(this.dataDir, row.module) } : {}) };
         if (supersededBy.has(row.id)) derived.superseded_by = supersededBy.get(row.id);
         const own = stats.get(row.id);
         if (own?.archived_at) {

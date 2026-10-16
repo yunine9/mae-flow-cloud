@@ -1,3 +1,4 @@
+import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 import { readHostSkillPackage, readSkillSubmissionPackage } from "./hostSkillLibrary.ts";
 import { readKnowledgeSkillContext, saveKnowledgeSkillContext } from "./knowledgeSkillContext.ts";
 import { listKnowledgeTasks } from "./knowledgeTaskCenter.ts";
@@ -175,6 +176,7 @@ import {
   canManageBusinessModule,
   createBusinessModule,
   listBusinessModules,
+  migrateBusinessModule,
   publishBusinessKnowledgeAsset,
   readBusinessKnowledgeAsset,
   readBusinessModule,
@@ -1551,6 +1553,24 @@ export function createTaskServer(
                 ? body.reference_component_repos.map(String) : [],
             }, operator)));
           }
+          if (parts.length === 3 && parts[2] === "migration") {
+            const sourceId = decodeURIComponent(parts[1]);
+            const source = readBusinessModule(dataDir, sourceId);
+            if (request.method === "POST") {
+              const body = await readBody(request);
+              if (typeof body.target_id !== "string") throw new BusinessModuleError("请选择目标模块");
+              return json(response, 200, view(migrateBusinessModule(dataDir, sourceId, body.target_id, operator)));
+            }
+            if (request.method === "GET") {
+              if (source.id !== sourceId) throw new BusinessModuleError("模块已迁移，请刷新列表");
+              return json(response, 200, {
+                documents: source.assets.length + listKnowledgeDocuments(dataDir).filter(doc => doc.module_ids.includes(sourceId)).length,
+                extraction_tasks: service.getDomainKnowledgeExtraction().taskRows().filter(job => job.module_id === sourceId).length,
+                delivery_tasks: service.businessModuleTaskCount(sourceId),
+                issue_sessions: options.issueFlow?.list().filter(issue => issue.module_id === sourceId).length ?? 0,
+              });
+            }
+          }
           if (request.method === "GET" && parts.length === 2) {
             return json(response, 200,
               view(readBusinessModule(dataDir, decodeURIComponent(parts[1]))));
@@ -1572,7 +1592,7 @@ export function createTaskServer(
                 ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
             return json(response, 200, view(updateBusinessModule(
-              dataDir, current.id, {
+              dataDir, decodeURIComponent(parts[1]), {
                 name: body.name === undefined ? undefined : String(body.name),
                 description: body.description === undefined
                   ? undefined : String(body.description),
@@ -1613,7 +1633,7 @@ export function createTaskServer(
             }
             const body = await readBody(request);
             return json(response, 200, view(publishBusinessKnowledgeAsset(
-              dataDir, current.id, {
+              dataDir, decodeURIComponent(parts[1]), {
                 id: decodeURIComponent(parts[3]),
                 title: String(body.title ?? ""),
                 summary: String(body.summary ?? ""),
@@ -1636,7 +1656,7 @@ export function createTaskServer(
                 { error: "请登录后归档知识" });
             }
             return json(response, 200, view(archiveBusinessKnowledgeAsset(
-              dataDir, current.id, decodeURIComponent(parts[3]), operator)));
+              dataDir, decodeURIComponent(parts[1]), decodeURIComponent(parts[3]), operator)));
           }
         } catch (error) {
           if (error instanceof BusinessModuleError) {

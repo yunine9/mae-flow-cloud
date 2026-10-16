@@ -1,3 +1,4 @@
+import { resolveBusinessModuleId, resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { componentArchiveFiles, componentArchiveParts, componentArchivePath } from "./componentKnowledgeArchiveFormat.ts";
 import { listKnowledgeDocuments, readKnowledgeDocument, readKnowledgeDocumentFacts, readKnowledgeArchiveVersion, readKnowledgeArchiveVersionFacts, eraseKnowledgeDocument, prepareKnowledgeDocument, writePreparedKnowledgeDocument } from "./knowledgeDocuments.ts";
@@ -295,7 +296,7 @@ export class DomainKnowledgeExtraction {
     if (job.knowledge_layout !== "module-v1") return;
     for (const target of [job.knowledge_target, ...job.repositories].filter(target => target.repository)) {
       for (const other of this.jobs.values()) {
-        if (other.id === job.id || other.module_id === job.module_id || other.knowledge_layout !== "module-v1") continue;
+        if (other.id === job.id || resolveBusinessModuleId(this.dataDir, other.module_id ?? "") === resolveBusinessModuleId(this.dataDir, job.module_id ?? "") || other.knowledge_layout !== "module-v1") continue;
         const occupied = [other.knowledge_target, ...other.repositories].find(candidate => candidate.repository
           && repositoryIdentity(candidate.repository) === repositoryIdentity(target.repository) && candidate.branch === target.branch
           && overlappingKnowledgeDirectory(candidate.docs_path, target.docs_path));
@@ -342,7 +343,7 @@ export class DomainKnowledgeExtraction {
   }
   private legacyModuleDeletion(job: DomainKnowledgeJob, document: DomainDocument, formal: ReturnType<typeof readKnowledgeDocument>) {
     if (!job.knowledge_layout || !this.confirmedDocumentDeletion(document)) return false;
-    if (job.module_id && (formal.scope !== "module" || !formal.module_ids.includes(job.module_id))) return true;
+    if (job.module_id && (formal.scope !== "module" || !resolveBusinessModuleIds(this.dataDir, formal.module_ids).includes(resolveBusinessModuleId(this.dataDir, job.module_id)))) return true;
     const target = [job.knowledge_target, ...job.repositories].find(target => target.id === document.target_id)!;
     if (job.knowledge_layout === "directory-v1") {
       const location = formal.archive_target ?? formal.research_source;
@@ -356,7 +357,7 @@ export class DomainKnowledgeExtraction {
     if (!job.knowledge_layout || !document.history.some(history => [MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION].includes(history.operator)
       && history.revision >= (document.published_document_revision ?? 0))) return false;
     return (formal.archive_target?.path ?? formal.research_source?.path) !== (document.archive_path ?? document.path)
-      || !!job.module_id && (formal.scope !== "module" || !formal.module_ids.includes(job.module_id)) || formal.content !== document.content.replace(/\r\n/g, "\n");
+      || !!job.module_id && (formal.scope !== "module" || !resolveBusinessModuleIds(this.dataDir, formal.module_ids).includes(resolveBusinessModuleId(this.dataDir, job.module_id))) || formal.content !== document.content.replace(/\r\n/g, "\n");
   }
   private currentFormalRevisions(job: DomainKnowledgeJob) {
     const current: Record<string, string> = {};
@@ -405,7 +406,7 @@ export class DomainKnowledgeExtraction {
     });
     const current_revisions = summaryOnly ? this.currentFormalRevisions(job)
       : Object.fromEntries(this.formalArchiveDocuments(job).map(document => [document.knowledge_document_id!, document.published_revision!]));
-    const record = { ...job, module_name: job.module_id ? this.moduleDirectoryName(job) : undefined, work_documents };
+    const record = { ...job, ...(job.module_id ? { module_id: resolveBusinessModuleId(this.dataDir, job.module_id), module_name: this.moduleDirectoryName(job) } : {}), work_documents };
     return { ...record, production: projectKnowledgeProduction({ kind: "domain", record, current_revisions }), deletion: this.deletionView(job.id) };
   }
   get(id: string): DomainKnowledgeJob { return structuredClone(this.view(this.live(id))); }
@@ -430,7 +431,7 @@ export class DomainKnowledgeExtraction {
   }
   taskRows() {
     return [...this.jobs.values()].filter(job => !job.component_research_id && !job.deleted_at).map(job => ({
-      ...domainKnowledgeTask(this.view(job, true)), module_id: job.module_id,
+      ...domainKnowledgeTask(this.view(job, true)),
     }));
   }
   list() {
@@ -439,7 +440,7 @@ export class DomainKnowledgeExtraction {
         // 列表只读元数据，先排除全文和历史，再复制；不能先加载整份详情再丢弃。
         const { documents, turns, evidence, publications, publication_history, archive_batches, work_documents, ...metadata } = job;
         const current_revisions = this.currentFormalRevisions(job);
-        return structuredClone({ ...metadata, documents: documents.map(({ content, history, base_content, ...document }) => document),
+        return structuredClone({ ...metadata, ...(job.module_id ? { module_id: resolveBusinessModuleId(this.dataDir, job.module_id), module_name: this.moduleDirectoryName(job) } : {}), documents: documents.map(({ content, history, base_content, ...document }) => document),
           work_documents: [], evidence: [], turns: [], publications: [], publication_history: [],
           production: projectKnowledgeProduction({ kind: "domain", record: job, current_revisions }), deletion: this.deletionView(job.id) });
       });
@@ -469,7 +470,7 @@ export class DomainKnowledgeExtraction {
       if (strict && job.knowledge_layout && !job.component_research_id && !confirmedPathChange) {
         const formalPath = formal.archive_target?.path ?? formal.research_source?.path;
         const changedLayout = document.history.some(history => ["归档设置", MODULE_LAYOUT_PUBLICATION, REPOSITORY_LAYOUT_MIGRATION].includes(history.operator) && history.revision >= (document.published_document_revision ?? 0));
-        if (formalPath !== (document.archive_path ?? document.path) || !!job.module_id && !formal.module_ids.includes(job.module_id)
+        if (formalPath !== (document.archive_path ?? document.path) || !!job.module_id && !resolveBusinessModuleIds(this.dataDir, formal.module_ids).includes(resolveBusinessModuleId(this.dataDir, job.module_id))
             || changedLayout && document.content.replace(/\r\n/g, "\n") !== formal.content) {
           throw new Error("模块目录或文稿链接已调整，请先发布这次修改，再创建 Git 归档；已完成的研究和旧正式知识均保留");
         }
