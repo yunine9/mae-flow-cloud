@@ -7,6 +7,7 @@ import { readHostSkillPackage, scanForSecrets } from "./hostSkillLibrary.ts";
 import { readKnowledgeDocument } from "./knowledgeDocuments.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { domainReviewBatchMessage } from "./domainKnowledgeReviewNotes.ts";
 
 import type { KnowledgeReviewKind, KnowledgeReviewNote, KnowledgeReviewNoteInput, KnowledgeReviewNotesResult } from "./knowledgeReviewNoteTypes.ts";
 export type { KnowledgeReviewKind, KnowledgeReviewNote, KnowledgeReviewNoteInput } from "./knowledgeReviewNoteTypes.ts";
@@ -122,9 +123,10 @@ export function saveKnowledgeReviewNote(sources: KnowledgeReviewSources, kind: K
 }
 
 function reviewMessage(notes: KnowledgeReviewNote[]): string {
-  return ["请根据以下人工审阅意见提出文稿修订建议。先核对最新正文、涉及的来源与上下文；引用的位置可能已变化，已经解决的意见不必重复修改。保留没有被要求修改的内容。",
+  return ["请根据以下人工审阅意见提出文稿修订建议。沿用意见编号逐条记录结论。先核对最新正文、涉及的来源与上下文；行号是批注时的位置，结合引用原文和前后文定位，已经解决的意见不必重复修改。保留未受影响的内容，必要时同步相关文稿。",
     ...notes.map((note, index) => [
       `\n${index + 1}. ${note.document_title}（${note.document_id}）`,
+      `意见编号：${note.id}`,
       `范围：${note.scope === "line" ? `第 ${note.line}${note.line_end !== note.line ? `–${note.line_end}` : ""} 行` : note.scope === "study" ? "本次任务的全部文稿" : "整篇文稿"}`,
       note.anchor ? `位置：${note.anchor}` : "", note.quote ? `引用正文：\n${note.quote}` : "",
       note.context_before ? `前文：\n${note.context_before}` : "", note.context_after ? `后文：\n${note.context_after}` : "",
@@ -134,7 +136,7 @@ function reviewMessage(notes: KnowledgeReviewNote[]): string {
 }
 
 export function applyKnowledgeReviewNotes(sources: KnowledgeReviewSources, kind: KnowledgeReviewKind, jobId: string, input: { note_ids: string[] }, operator: string): KnowledgeReviewNotesResult {
-  documents(sources, kind, jobId);
+  const availableDocuments = documents(sources, kind, jobId), availableIds = new Set(availableDocuments.map(document => document.id));
   if (kind === "published" || kind === "skill") throw new Error("请先更新文档，修改完成后将意见标为已处理");
   if (!Array.isArray(input.note_ids) || !input.note_ids.length || input.note_ids.some(id => typeof id !== "string")) throw new Error("请选择未处理的审阅意见");
   const notes = read(sources, kind, jobId), ids = [...new Set(input.note_ids)];
@@ -142,18 +144,18 @@ export function applyKnowledgeReviewNotes(sources: KnowledgeReviewSources, kind:
     const note = notes.find(note => note.id === id);
     if (!note) throw new Error("所选批注已不存在，请刷新");
     if (note.status !== "open") throw new Error("所选意见已经提交修订或标为已处理，请刷新查看");
-    currentDocument(sources, kind, jobId, note);
+    if (note.scope !== "study" && !availableIds.has(note.document_id)) throw new Error("批注对应的文稿已不存在，请刷新后重新选择");
     return note;
   });
   const documentIds = [...new Set(selected.map(note => note.document_id))];
   const wholeStudy = selected.some(note => note.scope === "study");
   if (kind === "component" && !wholeStudy && documentIds.length !== 1) throw new Error("组件研究每轮修订一个章节，请按章节分别提交意见");
-  const message = reviewMessage(selected);
+  const message = kind === "domain" ? domainReviewBatchMessage(selected) : reviewMessage(selected);
   if (message.length > 20_000) throw new Error("本批意见与引用超过 20000 字，请减少本次选中的意见");
   let turnId: string | undefined;
   if (kind === "domain") {
     const job = sources.domain.run(jobId, { mode: "revise", document_ids: selected.some(note => note.scope === "study")
-      ? documents(sources, kind, jobId).map(doc => doc.id) : documentIds, message }, operator);
+      ? availableDocuments.map(doc => doc.id) : documentIds, message, review_note_ids: ids }, operator);
     turnId = job.turns.at(-1)?.id;
   } else {
     const job = sources.component.review(jobId, { mode: "rework", section_id: wholeStudy ? "" : documentIds[0], message }, operator);

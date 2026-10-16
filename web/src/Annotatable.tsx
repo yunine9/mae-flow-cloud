@@ -47,6 +47,7 @@ export function Annotatable({
   addDraft,
   allowImages = true,
   savedMessage = "已记下，可在批注与检视中统一处理。",
+  onDraftOpenChange,
   children,
 }: {
   taskId: string;
@@ -60,6 +61,8 @@ export function Annotatable({
   enabled?: boolean;
   allowImages?: boolean;
   savedMessage?: string;
+  /** 领域检视结束前，需要先保存或取消尚在编辑的行意见。 */
+  onDraftOpenChange?: (open: boolean) => void;
   onAdded: () => void;
   /** 已圈过的行通过图标查看意见；正文仍然只用于阅读。 */
   onOpenAnnotations?: (ids: string[]) => void;
@@ -80,6 +83,7 @@ export function Annotatable({
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState<Draft>();
+  useEffect(() => { onDraftOpenChange?.(!!draft); return () => onDraftOpenChange?.(false); }, [!!draft, onDraftOpenChange]);
   const [thread, setThread] = useState<{ ids: string[]; host: HTMLElement }>();
   const [receipt, setReceipt] = useState("");
   useEffect(() => {

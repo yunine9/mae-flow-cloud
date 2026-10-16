@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { FileText, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { useKnowledgeReader } from "./useKnowledgeReader";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export function KnowledgeReadingFrame({ children, actions, documentActions, title, focused = false, sidePanelOpen = false }: { children: ReactNode; actions?: ReactNode; documentActions?: ReactNode; title: string; focused?: boolean; sidePanelOpen?: boolean }) {
+export function KnowledgeReadingFrame({ children, actions, documentActions, title, focused = false, sidePanelOpen = false, inspectionMode = false }: { children: ReactNode; actions?: ReactNode; documentActions?: ReactNode; title: string; focused?: boolean; sidePanelOpen?: boolean; inspectionMode?: boolean }) {
   const { fullscreen, setFullscreen, showTree, toggleTree, frameRef, yieldTree } = useKnowledgeReader();
+  const wasInspecting = useRef(false);
+  useEffect(() => {
+    if (inspectionMode) setFullscreen(true);
+    else if (wasInspecting.current) setFullscreen(false);
+    wasInspecting.current = inspectionMode;
+  }, [inspectionMode]);
   useEffect(() => { yieldTree(sidePanelOpen); }, [sidePanelOpen, yieldTree]);
   const [host] = useState(() => { const node = document.createElement("div"); node.className = "knowledge-reading-host"; return node; });
   const mountReader = useCallback((node: HTMLDivElement | null) => { if (node) node.appendChild(host); }, [host]);

@@ -2,6 +2,8 @@
 
 本包是随平台代码发版的内置领域萃取方法，在方法阅读页查看；维护本方法时修改仓库中的本包并随代码交付，不通过任务会话上传或替换方法。任务仍执行其固定版本，运行中任务不会因仓库文件修改而切换。业务资料上传属于来源输入，和方法维护不同。
 
+本页的工具、来源、路径、版本和权限约定适用于所有模式。完整 current-plan、全量文稿清单、规划核查与全套产物验收用于首次 extract；mode=revise 时按本轮 business-docs-reviser 方法维护意见台账和受影响清单，新增或移除关联文稿也不要求重建原全量生成规划。
+
 原模板中的多仓图用于说明逻辑关系；源码只读，文稿由平台保存到各自目标仓。包内文件用 extraction_skill 读取，工具参数以本轮实际定义为准。写作与评审均读取 [共同质量要求](document-quality.md)。
 
 ## 工具与原工作方式的对应
@@ -10,8 +12,9 @@
 |------|----------|---------------|
 | 读取提示词和模板 | extraction_skill，指定包内 path | 本次固定版本的完整 Markdown |
 | 识别仓 | 上下文 repositories；knowledge_structure 不填 repository_id | 本次来源仓与用户限定范围 |
-| 扫描目录与构建候选 | knowledge_structure 指定 repository_id；component_source list | 候选结构，仍需逐仓读源码核实 |
-| 查看跨仓构建候选 | knowledge_structure 同时填 repository_id 与 include_dependencies=true | 显式扫描配置的各仓，返回所选仓的依赖候选 |
+| 定位本业务目录与入口 | component_source list/search/read | 从浅层目录和业务线索定位，再读取相关入口及必要依赖 |
+| 查看全仓构建候选 | knowledge_structure 指定 repository_id | 会解析该仓完整构建结构，不按业务目录限制；仅在确需全仓构建信息时使用 |
+| 查看跨仓构建候选 | knowledge_structure 同时填 repository_id 与 include_dependencies=true | 会扫描全部关联仓；适用条件按源码研究范围方法，公共仓优先追踪具体调用 |
 | 搜索和通读源码 | component_source search/read，指定 repository_id | 固定版本文件、实际返回的行号 |
 | 保存 current-plan.md | knowledge_work save_document，id=current-plan | 完整规划过程文稿，不进入知识发布 |
 | 登记完整输出清单 | knowledge_work plan，document_ids 与 work_document_id | 全部预期文稿编号，关联已保存规划正文 |
@@ -19,8 +22,10 @@
 | 读取规划 | knowledge_work read_document，id=current-plan | 完整规划正文；不支持章节读取，本项必要字段由 step.instructions 提供 |
 | 保存知识文稿 | knowledge_draft save | 指定目标中的草稿或修订建议 |
 | 读已生成的文稿 | knowledge_draft read，指定 id | 当前正文、sources 与 revision |
+| 定位检视意见涉及的文稿 | knowledge_draft search，query 或 keywords，start/limit | 本任务当前候选的匹配编号与有界摘录；按编号回读相关正文 |
+| 读取集中提交的检视意见 | 本轮提供时用 knowledge_review_notes list/read | list 默认20条、最多50条，沿 next_start 读完本批摘要；read 按原意见 id 取完整意见、引用和上下文 |
 | 独立分析、写作和核查 | 主会话 knowledge_work schedule/run | 独立上下文与持久结果 |
-| 校验源码引用 | knowledge_source_check | 路径、行号、符号存在性；结论仍需阅读源码核实 |
+| 校验源码引用 | component_source read；全仓场景按研究范围方法使用 knowledge_source_check | 核对相关路径、行号与符号，结论仍需阅读源码；后者会扫描全部关联仓 |
 | 校验 PlantUML | knowledge_diagram_check，document_id 或 work_document_id 二选一，可选 start/limit | 知识文稿或过程稿当前正文的真实渲染报告、图位置及错误；不判定业务语义 |
 | 取得业务依据 | knowledge_material、business_knowledge、knowledge_evidence | 按 [来源方法](business-sources.md) 读取上传资料和无线背景，保存可回读的位置及适用范围 |
 
@@ -36,7 +41,9 @@ knowledge_work read 不带 id 只返回进度摘要与 plan 数量，不返回�
 
 component_source list/read 的 start/end 从 1 开始：list 默认当前目录层，recursive=true 才递归；read 用实际完整文件路径及行范围。收到续读或截断提示时从实际返回位置继续读取相关范围，默认首段不是全文。search 按每个仓执行，keywords 是多个字面词的任意命中，query 是完整字面短语，二者不作正则；搜索截断时缩小到具体目录或关键词，不假定 search 有列表分页参数。完整路径来自 list/search，不能只凭文件名猜测。沿每个功能入口读到实际处理终点，再核对定时任务、事件和配置分支。
 
-knowledge_structure 指定 repository_id 时用 start 从 0 开始，按返回的 next_start 继续；目录、构建文件、构建单元和依赖候选各有数量及分页信息。带 *_preview 的字段只是预览，preview_complete=false 或 dependency_truncated=true 时按 source/from 读取完整构建文件，不把预览当作全部依赖。需要跨仓候选时显式 include_dependencies=true，默认单仓读取不能证明没有跨仓关系。
+公共仓或业务仅在部分目录时，按 [研究范围与范围纠正](research-scope.md) 用 component_source list/search/read 定位和核实相关代码。knowledge_structure 的 start/limit 只控制结果分页，不能限制其解析的源码范围；公共仓的目录调查不以该工具枚举全仓构建单元。
+
+按研究范围方法确需 knowledge_structure 时，指定 repository_id，start 从 0 开始，按返回的 next_start 继续；目录、构建文件、构建单元和依赖候选各有数量及分页信息。带 *_preview 的字段只是预览，preview_complete=false 或 dependency_truncated=true 时按 source/from 读取与本业务相关的构建文件，不把预览当作全部依赖。include_dependencies=true 会扫描全部关联仓；默认单仓读取不能证明没有跨仓关系，公共仓可通过具体接口与调用双方核实关系。
 
 knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系。接口与调用双方、数据模型、状态变化和关键配置要回到源码确认。首次阅读记录文件与行范围；独立评审打开这些原文件，不能只看作者的摘要或路径清单。
 
@@ -91,7 +98,7 @@ Git 归档由维护人发起：点击「创建 MR」打开目录与文件预览�
 
 ## 独立调查
 
-主会话先看仓列表、构建文件和目录入口以划分工作，不在分工前通读全仓业务实现。多仓与大规模源码按仓、业务入口和完整场景拆成只读调查单元；每个单元有独立 instructions、实际源码范围、相关资料编号/来源索引与具体问题。调查按来源方法回读相关资料，需要理解无线概念时先复用已有背景原文再补查。以下示例中的仓编号、路径及方法名应先用本次浅层盘点结果替换，不能把示例当成真实来源：
+主会话先看仓列表、浅层目录及与业务线索相关的入口、构建文件以划分工作，不在分工前通读全仓业务实现。公共仓调查按本业务目录/入口拆分，不能把“负责该仓”解释为调查该仓全部业务。多仓与大规模源码按业务入口和完整场景拆成只读调查单元；每个单元有独立 instructions、实际源码范围、相关资料编号/来源索引与具体问题。调查按来源方法回读相关资料，需要理解无线概念时先复用已有背景原文再补查。以下示例中的仓编号、路径及方法名应先用本次浅层盘点结果替换，不能把示例当成真实来源：
 
 ```json
 {
@@ -210,7 +217,7 @@ pass=false、图校验 invalid/unavailable 或来源缺口都是可以提交的�
 
 登记完整清单后 knowledge_work 的 run 操作省略 id，本方法默认 concurrency=3，也可指定 1～4；填 id 则只运行该步骤。只有依赖满足且 expected_document_ids 写入集合不交叉的步骤才能并行，未声明写入范围的可写步骤串行执行。每篇候选保存后，宿主先做真实图表校验，再按 step.review.instructions 开只读会话；具体错误携带反馈修订，最多自动三轮。图校验 unavailable 保留候选、中断本项且不消耗修订次数，主会话继续其他独立工作后报告阻碍。
 
-写作只修改 expected_document_ids 内的文稿。需要修改关联导航或发现新产物时交回主会话登记，不在本篇偷偷改写。需要读取其他步骤正在生成的文稿时等待其完成，并将对方写作步骤列入 depends_on；不能靠碰巧先执行来代替真实依赖。文档类型列表表示阅读层级，不要求把不相关文稿排成串行链。
+首次 extract 写作只修改 expected_document_ids 内的文稿。需要修改关联导航或发现新产物时交回主会话登记。revise 中该清单是初始分工，实际关联修改按修订方法协调，平台记录实际写入并全部交独立评审。需要读取其他步骤正在生成的文稿时等待其完成，并将对方写作步骤列入 depends_on；不能靠碰巧先执行来代替真实依赖。文档类型列表表示阅读层级，不要求把不相关文稿排成串行链。
 
 最终导航同步单独登记带 review 的步骤，也可在相关文稿完成后直接首次生成最终导航，不要求先生成空初稿。directory-v1 布局下，领域 target.docs_path 内的 README.md 与 index.md 等待本业务全部实际路由目标；领域入口引用各仓业务 README.md 时也等待这些目标。代码仓 target.docs_path 内的 README.md 与 module-map.md 等待本业务在该仓的功能/规范文稿。平台生成的 AGENTS.md 不属于导航步骤的写入范围。旧任务按当前保存的实际文稿路径同步。depends_on 使用外部前序文稿的写作及最后修订步骤；已有导航初稿时还需等待初稿。
 
@@ -239,7 +246,9 @@ knowledge_draft save 的 document 包含 id、title、target_id、path、layer�
 
 正文按原模板保留必要的代码位置。提交 knowledge_source_check 时使用工具支持的 `仓编号:文件路径:起始行-末行` 或 `仓编号:文件路径#符号`，通过不代表结论正确。业务意图缺证据时明确未知，不把行业背景或代码推断写成历史决策。
 
-修订保持稳定文稿编号。重读人工修改及已有建议，按平台反馈产生可比较的建议，不绕过采纳流程。仅记录可证实的排查经验。
+修订保持稳定文稿编号。重读人工修改、最新用户检视意见及已有建议，按平台反馈产生可比较的建议，不绕过采纳流程。仅记录可证实的排查经验。
+
+用户通过检视意见纠正公共仓范围时，按 [研究范围与范围纠正](research-scope.md) 在原任务处理受影响文稿：先复用已有正文和证据，只补查有争议的入口/调用；删除或收紧无关业务描述，保留真实共享依赖，并同步受影响的导航。当前用户要求优先于历史规划；必要时以范围变更理由调整对应规划条目，不重新执行整套调查、未受影响文稿或全套规划核查。仅因范围纠正不更换固定 Skill 版本、不重建任务；本轮通过标准只适用于实际修订范围。
 
 ## 恢复与完成
 

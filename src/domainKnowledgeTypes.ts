@@ -37,6 +37,8 @@ export interface DomainTurn {
   /** 本轮实际开跑与收口时间；任务中心的「开始时间 / 运行时长」取最近一轮，不含排队和审查等待。 */
   started_at?: string; finished_at?: string;
   skill?: { name: string; digest: string };
+  /** 本轮提交的原检视意见编号；正文通过只读工具按需读取，避免全部注入上下文。 */
+  review_note_ids?: string[];
   use_latest_skill?: boolean; previous_revisions?: Record<string, string>;
   revisions?: Record<string, string>;
   document_revisions?: Record<string, number>;

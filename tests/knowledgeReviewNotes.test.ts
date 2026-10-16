@@ -19,7 +19,7 @@ function fixture() {
   const sources: KnowledgeReviewSources = { dataDir,
     domain: { get: () => structuredClone(domainJob), run: (_id, input, operator) => {
       calls.push({ kind: "domain", input, operator });
-      domainJob.turns.push({ id: "turn-domain", mode: "revise", document_ids: input.document_ids!, message: input.message!, operator, created_at: new Date().toISOString(), status: "queued", proposals: [] });
+      domainJob.turns.push({ id: "turn-domain", mode: "revise", document_ids: input.document_ids!, message: input.message!, review_note_ids: input.review_note_ids, operator, created_at: new Date().toISOString(), status: "queued", proposals: [] });
       return structuredClone(domainJob);
     } },
     component: { get: () => structuredClone(componentJob), review: (_id, input, operator) => {
@@ -55,15 +55,67 @@ test("文稿更新后仍把所选意见交给原领域修订入口，并记录�
     assert.equal(result.notes[1].status, "open");
     assert.equal(result.turn_id, "turn-domain");
     assert.equal(result.notes[0].submitted_by, "reviewer");
-    const input = f.calls[0].input as { mode: string; document_ids: string[]; message: string };
+    const input = f.calls[0].input as { mode: string; document_ids: string[]; message: string; review_note_ids: string[] };
     assert.equal(input.mode, "revise");
     assert.deepEqual(input.document_ids, ["rules"]);
+    assert.deepEqual(input.review_note_ids, [notes[0].id]);
     assert.match(input.message, /补充失败处理/);
     assert.match(input.message, /核对最新正文/);
     assert.doesNotMatch(input.message, /草稿版本/);
     assert.doesNotMatch(input.message, /增加示例/);
     assert.throws(() => applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [notes[0].id] }, "reviewer"), /已经提交/);
     assert.equal(f.calls.length, 1);
+  } finally { f.cleanup(); }
+});
+
+test("跨文稿行、整篇和全局意见超过 20000 字仍可一次提交领域修订，未选意见保留", () => {
+  const f = fixture();
+  try {
+    for (let index = 0; index < 65; index++) saveKnowledgeReviewNote(f.sources, "domain", "dkx-1", index % 3 === 0
+      ? { document_id: "rules", scope: "line", line: 2, quote: "原行引用".repeat(600), context_before: "保存时的前文", context_after: "保存时的后文", note: `行意见 ${index}：${"补充业务边界和失败条件。".repeat(160)}` }
+      : index % 3 === 1 ? { document_id: "api", scope: "document", note: `整篇意见 ${index}：${"补充接口返回条件。".repeat(160)}` }
+        : { document_id: "", scope: "study", note: `全局意见 ${index}：${"统一业务术语和必要关联。".repeat(160)}` }, "alice");
+    const before = listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes;
+    const ids = before.slice(0, 64).map(note => note.id);
+    assert.ok(JSON.stringify(before).length > 20_000);
+    let taskReads = 0;
+    const get = f.sources.domain.get;
+    f.sources.domain.get = id => { taskReads++; return get(id); };
+    const result = applyKnowledgeReviewNotes(f.sources, "domain", "dkx-1", { note_ids: [...ids, ids[0]] }, "reviewer");
+    assert.ok(taskReads <= 3, "批量校验不能按意见条数重复读取大型任务及全部文稿");
+    assert.equal(f.calls.length, 1);
+    const input = f.calls[0].input as { mode: string; document_ids: string[]; message: string; review_note_ids: string[] };
+    assert.equal(input.mode, "revise");
+    assert.deepEqual(input.document_ids, ["rules", "api"]);
+    assert.deepEqual(input.review_note_ids, ids);
+    assert.equal(input.message.length < 20_000, true);
+    assert.match(input.message, /共 64 条意见/);
+    assert.match(input.message, /knowledge_review_notes/);
+    assert.doesNotMatch(input.message, /原行引用/);
+    assert.ok(!input.message.includes(before[0].note), "只提供有界摘要，不把完整意见重新注入每个会话");
+    assert.deepEqual(result.notes.filter(note => note.status === "submitted").map(note => note.id), ids);
+    assert.equal(result.notes[64].status, "open");
+    for (let index = 0; index < before.length; index++) {
+      assert.equal(result.notes[index].note, before[index].note);
+      assert.equal(result.notes[index].quote, before[index].quote);
+      assert.equal(result.notes[index].context_before, before[index].context_before);
+      assert.equal(result.notes[index].context_after, before[index].context_after);
+    }
+    assert.deepEqual(listKnowledgeReviewNotes(f.sources, "domain", "dkx-1").notes, result.notes);
+    assert.deepEqual(f.domainJob.turns[0].review_note_ids, ids);
+  } finally { f.cleanup(); }
+});
+
+test("组件批量意见仍沿用 20000 字限制，拒绝时全部保留为未提交", () => {
+  const f = fixture();
+  try {
+    for (let index = 0; index < 3; index++) saveKnowledgeReviewNote(f.sources, "component", "cr-1", {
+      document_id: "pool", scope: "document", note: `意见 ${index}：${"补充连接回收条件。".repeat(900)}`,
+    }, "alice");
+    const notes = listKnowledgeReviewNotes(f.sources, "component", "cr-1").notes;
+    assert.throws(() => applyKnowledgeReviewNotes(f.sources, "component", "cr-1", { note_ids: notes.map(note => note.id) }, "alice"), /超过 20000 字/);
+    assert.equal(f.calls.length, 0);
+    assert.equal(listKnowledgeReviewNotes(f.sources, "component", "cr-1").notes.every(note => note.status === "open"), true);
   } finally { f.cleanup(); }
 });
 

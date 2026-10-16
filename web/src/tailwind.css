@@ -8266,3 +8266,20 @@ body:has(.workspace-studio) .wish-quick-fab {
 
 /* 阅读与修订已有明确入口，浮动提问按钮不能遮住正文或提交按钮。 */
 body:has(.knowledge-studio) .wish-quick-fab { display:none; }
+
+/* 检视作为阅读器的一条轻量状态栏，正文与目录继续使用原来的空间。 */
+.domain-inspection-bar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px 20px; flex-shrink:0; padding:12px 18px; margin:0; border-bottom:1px solid color-mix(in srgb, var(--primary) 16%, var(--line)); background:color-mix(in srgb, var(--primary) 3.5%, var(--surface)); }
+.domain-inspection-label { display:flex; align-items:center; gap:10px; min-width:0; }
+.domain-inspection-icon { display:grid; place-items:center; flex-shrink:0; width:32px; height:32px; color:var(--primary); background:color-mix(in srgb, var(--primary) 9%, transparent); border-radius:9px; }
+.domain-inspection-label strong { font-size:13px; font-weight:600; display:block; line-height:1.5; }
+.domain-inspection-label div > span { display:block; font-size:12px; line-height:1.5; color:var(--muted); }
+.domain-inspection-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.domain-inspection-bar > p { flex-basis:100%; margin:0; font-size:12px; line-height:1.5; }
+.domain-inspection-count { display:inline-flex; align-items:center; justify-content:center; min-width:19px; height:19px; padding:0 5px; border-radius:6px; font-size:11px; color:var(--primary); background:color-mix(in srgb, var(--primary) 9%, transparent); }
+.knowledge-inline-review-host { list-style:none; margin:0; padding:0; }
+.knowledge-inline-review-list { display:grid; gap:7px; margin:8px 0 18px; user-select:none; }
+.knowledge-review-notes .knowledge-inline-review-note { border:1px solid #ddd9ed; border-left:3px solid #a79acb; border-radius:8px; background:#f7f5fb; padding:10px 13px; font-size:13px; line-height:1.65; color:#4f465f; }
+.knowledge-inline-review-note header { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:11px; color:#81738f; }
+.knowledge-inline-review-note header span:first-child { display:inline-flex; align-items:center; gap:5px; }
+.knowledge-review-notes .knowledge-inline-review-note p { margin:5px 0 0; white-space:pre-wrap; font:inherit; line-height:1.65; color:inherit; }
+.knowledge-review-notes .knowledge-inline-review-note.is-resolved { background:#f7f8fa; border-color:#e2e5ea; border-left-color:#b5bec9; color:#6d7682; }

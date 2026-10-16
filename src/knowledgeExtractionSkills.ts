@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { domainExecutionContract } from "./domainKnowledgeExecution.ts";
+import type { DomainTurn } from "./domainKnowledgeTypes.ts";
 
 export type ExtractionKind = "component" | "component-analysis" | "domain";
 export interface ExtractionSkillSnapshot {
@@ -49,6 +50,12 @@ export function bundledExtractionSkill(kind: ExtractionKind) {
   return snapshot(name, files, kind);
 }
 
+export function bundledDomainRevisionSkill() {
+  const files = { ...bundledExtractionSkill("domain").files, ...readPackage(join(defaults, "business-docs-reviser")) };
+  domainExecutionContract(files);
+  return snapshot("business-docs-reviser", files, "domain");
+}
+
 /** 平台萃取方法随代码发布；历史上传数据留存，但不覆盖当前内置方法。 */
 export class KnowledgeExtractionSkills {
   readonly root: string;
@@ -56,6 +63,7 @@ export class KnowledgeExtractionSkills {
   current(kind: ExtractionKind) {
     return { ...bundledExtractionSkill(kind), versions: [] };
   }
+  currentDomainRevision() { return bundledDomainRevisionSkill(); }
   async save(_kind: ExtractionKind, _files: Record<string, string>, _expectedDigest: string, _operator: string): Promise<never> {
     throw new Error("萃取 Skill 由平台版本维护，仅供查看；请在代码仓修改后发布");
   }
@@ -63,6 +71,22 @@ export class KnowledgeExtractionSkills {
     throw new Error("萃取 Skill 由平台版本维护，仅供查看；请通过代码版本回退");
   }
   pin(kind: ExtractionKind, path: string, useLatest = false): ExtractionSkillSnapshot {
+    return this.pinSnapshot(kind, path, () => {
+      const { versions: _, ...value } = this.current(kind);
+      return value;
+    }, useLatest);
+  }
+  pinDomainRevision(path: string): ExtractionSkillSnapshot {
+    return this.pinSnapshot("domain", path, () => this.currentDomainRevision(), false, "business-docs-reviser");
+  }
+  pinDomainTurn(root: string, turn: Pick<DomainTurn, "id" | "mode" | "skill" | "use_latest_skill">): ExtractionSkillSnapshot {
+    const revisionPath = join(root, "skill-runs", turn.id, "skill.json");
+    // 已开始的旧修订继续原方法；新的修订独立固定方法，不改动原萃取快照。
+    if (turn.mode === "revise" && (existsSync(revisionPath) || !turn.skill)) return this.pinDomainRevision(revisionPath);
+    return this.pin("domain", join(root, "skill.json"), turn.use_latest_skill && !turn.skill);
+  }
+  private pinSnapshot(kind: ExtractionKind, path: string, current: () => ExtractionSkillSnapshot, useLatest: boolean,
+    requiredName?: string): ExtractionSkillSnapshot {
     const retain = (value: ExtractionSkillSnapshot) => {
       const archive = join(dirname(path), "skill-packages", `${value.digest}.json`);
       mkdirSync(dirname(archive), { recursive: true });
@@ -70,11 +94,12 @@ export class KnowledgeExtractionSkills {
     };
     if (existsSync(path)) {
       const saved: ExtractionSkillSnapshot = JSON.parse(readFileSync(path, "utf8"));
-      if ((saved.kind ? saved.kind !== kind : saved.name !== skillName(kind)) || snapshot(saved.name, saved.files).digest !== saved.digest) throw new Error("固定的 Skill 包校验失败");
+      if ((saved.kind ? saved.kind !== kind : saved.name !== skillName(kind)) || requiredName && saved.name !== requiredName
+        || snapshot(saved.name, saved.files).digest !== saved.digest) throw new Error("固定的 Skill 包校验失败");
       retain(saved);
       if (!useLatest) return saved;
     }
-    const { versions: _, ...value } = this.current(kind);
+    const value = current();
     retain(value);
     writeFileSync(`${path}.tmp`, JSON.stringify(value), { mode: 0o600 }); renameSync(`${path}.tmp`, path);
     return value;

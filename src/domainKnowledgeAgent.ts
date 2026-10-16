@@ -13,7 +13,7 @@ import { extractionSkillTool, KnowledgeExtractionSkills, type ExtractionSkillSna
 import { knowledgeMaterialTool, readKnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { wxdoubaoTool } from "./wxdoubao.ts";
 import { knowledgeRelativePath, type DomainDocumentContent, type DomainExecution, type KnowledgeRepository } from "./domainKnowledgeExtraction.ts";
-import { DomainSkillWork, IncompleteDomainResearch, type SkillWorkResult, type SkillWorkStep } from "./domainSkillWork.ts";
+import { DomainSkillWork, IncompleteDomainResearch, skillWorkDocumentIds, type SkillWorkResult, type SkillWorkStep } from "./domainSkillWork.ts";
 import { scanKnowledgeCode, knowledgeStructurePage, validateKnowledgeReferences, type KnowledgeCodeSnapshot } from "./domainKnowledgeCode.ts";
 import { scanForSecrets } from "./hostSkillLibrary.ts";
 import { businessKnowledgeEvidenceId, knowledgeEvidenceTool } from "./domainResearchEvidence.ts";
@@ -21,6 +21,8 @@ import { KNOWLEDGE_RESEARCH_BUDGET_MESSAGE } from "./knowledgeProductionErrors.t
 import { domainDocumentFingerprint, domainExecutionContract, DOMAIN_EXECUTION_INSTRUCTIONS, workOverview, workStepSummary, pageRows, runnableWave } from "./domainKnowledgeExecution.ts";
 import { createKnowledgeDiagramChecker, knowledgeDiagramFeedback } from "./domainKnowledgeDiagrams.ts";
 import { assertModuleKnowledgePath } from "./domainKnowledgeLayout.ts";
+import { searchDomainKnowledgeDocuments } from "./domainKnowledgeDocumentSearch.ts";
+import { domainKnowledgeReviewNotesTool } from "./domainKnowledgeReviewNotes.ts";
 
 export interface DomainAgentOptions {
   dataDir: string;
@@ -32,7 +34,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   if (!model) throw new Error("请在模型网关配置主模型");
   const savedDocumentIds = new Set<string>();
   const runController = new AbortController(), signal = AbortSignal.any([input.signal, runController.signal]);
-  const skill = new KnowledgeExtractionSkills(options.dataDir).pin("domain", join(input.root, "skill.json"), input.turn.use_latest_skill && !input.turn.skill);
+  const skill = new KnowledgeExtractionSkills(options.dataDir).pinDomainTurn(input.root, input.turn);
   const executionContract = domainExecutionContract(skill.files);
   input.update({ skill: { name: skill.name, digest: skill.digest } });
   const sources = new Map<string, Promise<{ root: string; revision: string }>>(), revisions: Record<string, string> = { ...input.turn.revisions };
@@ -56,24 +58,28 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     return evidenceId;
   };
   const sourceTool = languageComponentSourceTool(repositories, row => source(researchRepositories.find(r => r.id === row.id)!), observe);
-  const createDocumentTool = (beforeWrite: () => void) => defineTool({
+  const createDocumentTool = (beforeWrite: (id: string) => void, afterWrite: (id: string, action: "save" | "delete") => void,
+    afterRead: (document: ReturnType<DomainExecution["read"]>[number]) => void) => defineTool({
     name: "knowledge_draft", label: "管理领域知识文稿", executionMode: "sequential",
-    description: "read 按 start/limit 分页列出本任务文档（默认30、最多100），id 读取完整正文与来源；save 可新增文档、修改任意本任务文稿或沿用原 id 改目录及文件名；delete 用 id 标记文稿删除。重点文稿编号只说明本轮关注点，不限制关联文档修改。目标编号 domain 为知识仓，repo-* 为对应归档仓，保存目标最终 docs_path 内的完整仓根相对 Markdown 路径，例如 docs/产品管理/module-map.md；AGENTS.md 由平台归档器生成，模型保存普通 README.md、index.md 等文稿。新增和删除进入待审阅草稿，已有文稿修改生成建议；用户确认并发布后正式知识才变化，Git 文件变更由人工归档统一提交。",
-    parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("save"), Type.Literal("delete")]), id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    description: "read 按 start/limit 分页列出本任务文档（默认30、最多100），id 读取完整正文与来源。search 用 query 完整字面短语或 keywords 数组任一词命中，搜索本任务当前候选的标题、路径、正文与来源，分页返回文稿编号和少量匹配行，按 id 再读正文。save 可新增文档、修改本任务文稿或沿用原 id 改目录及文件名；delete 用 id 标记文稿删除。revise 时重点编号与步骤预定编号只是关注点，可以修改关联文稿，实际写入自动登记并纳入评审；并发冲突先回读当前版本，仍冲突则先完成其他工作，交主会话批次结束后串行处理。目标编号 domain 为知识仓，repo-* 为对应归档仓，保存目标最终 docs_path 内的完整仓根相对 Markdown 路径，例如 docs/产品管理/module-map.md；AGENTS.md 由平台归档器生成，模型保存普通 README.md、index.md 等文稿。新增和删除进入待审阅草稿，已有文稿修改生成建议；用户确认并发布后正式知识才变化，Git 文件变更由人工归档统一提交。",
+    parameters: Type.Object({ action: Type.Union([Type.Literal("read"), Type.Literal("search"), Type.Literal("save"), Type.Literal("delete")]), id: Type.Optional(Type.String()), start: Type.Optional(Type.Integer({ minimum: 0 })), limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })), query: Type.Optional(Type.String()), keywords: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 20 })),
       document: Type.Optional(Type.Object({ id: Type.String(), title: Type.String(), target_id: Type.String(), path: Type.String(), layer: Type.Union([Type.Literal("domain"), Type.Literal("repository")]), content: Type.String(), sources: Type.String() })) }),
-    async execute(_id: string, params: { action: "read" | "save" | "delete"; id?: string; start?: number; limit?: number; document?: DomainDocumentContent }) {
+    async execute(_id: string, params: { action: "read" | "search" | "save" | "delete"; id?: string; start?: number; limit?: number; query?: string; keywords?: string[]; document?: DomainDocumentContent }) {
       try {
+        if (params.action === "search") return reply(searchDomainKnowledgeDocuments(input.read(), params));
         if (params.action === "read") {
           const docs = input.read();
           const found = params.id ? docs.find(d => d.id === params.id) : undefined;
           const data = params.id ? found && { ...documentSummary(found), content: found.content, sources: found.sources } : pageRows(docs.map(documentSummary), params.start, params.limit, "documents");
           if (!data) throw new Error("文档不在本次研究范围");
+          if (found) afterRead(found);
           return { content: [{ type: "text" as const, text: JSON.stringify(data) }], details: {} };
         }
         if (params.action === "delete") {
           if (!params.id || !input.remove) throw new Error("请填写本任务中要删除的文稿编号");
-          beforeWrite();
+          beforeWrite(params.id);
           const removed = input.remove(params.id);
+          afterWrite(removed.id, "delete");
           return reply({ id: removed.id, deleted: true, state: "draft", revision: removed.revision });
         }
         const doc = params.document;
@@ -91,9 +97,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           const content = entry ? await executeFile("git", ["show", `${prepared.revision}:${doc.path}`], prepared.root, signal) : null;
           baseline = { content, revision: prepared.revision };
         }
-        beforeWrite();
+        beforeWrite(doc.id);
         const saved = input.save(doc, baseline);
-        savedDocumentIds.add(saved.id);
+        afterWrite(saved.id, "save");
         const proposal = previous && (input.turn.mode !== "extract" || previous.human_edited || previous.knowledge_document_id
           || previous.research_turn_id && previous.research_turn_id !== input.turn.id);
         return { content: [{ type: "text" as const, text: JSON.stringify({ id: saved.id, saved: true, state: proposal ? "proposal" : "draft" }) }], details: {} };
@@ -142,15 +148,22 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     },
   });
   const baseTools = [structureTool, referencesTool, extractionSkillTool(skill), sourceTool, knowledgeMaterialTool(materials, join(options.dataDir, "knowledge-materials"), observe), changesTool,
-    wxdoubaoTool(signal, observe, { evidencePaging: true }), knowledgeEvidenceTool(() => input.job.evidence, observe)];
+    wxdoubaoTool(signal, observe, { evidencePaging: true }), knowledgeEvidenceTool(() => input.job.evidence, observe),
+    ...(input.turn.review_note_ids?.length ? [domainKnowledgeReviewNotesTool(options.dataDir, input.job.id, input.turn.review_note_ids)] : [])];
   const runRoot = join(input.root, "skill-runs", input.turn.id);
   const work = new DomainSkillWork(join(runRoot, "work.json"), skill.digest, input.turn.pipeline_continue);
   let runningBatch = false;
-  const fingerprint = (ids: string[]) => domainDocumentFingerprint(input.read(), ids);
+  const fingerprint = (ids: string[]) => {
+    const documents = input.read();
+    // 修订可评审删除建议；首次萃取的必交文稿仍须存在，移除要先更新规划。
+    const deleted = input.turn.mode === "extract" && documents.find(document => document.deleted && ids.includes(document.id));
+    if (deleted) throw new Error(`计划文稿 ${deleted.id} 已标记删除，请说明排除原因并更新完整规划`);
+    return domainDocumentFingerprint(documents, ids);
+  };
   const checkDiagrams = createKnowledgeDiagramChecker({ signal, cacheDir: join(options.dataDir, "cache", "knowledge-plantuml") });
   const checkDocumentDiagrams = async (id: string) => {
-    const documents = input.read(), version = domainDocumentFingerprint(documents, [id]), document = documents.find(item => item.id === id && !item.deleted)!;
-    const report = await checkDiagrams(document.content);
+    const documents = input.read(), version = domainDocumentFingerprint(documents, [id]), document = documents.find(item => item.id === id)!;
+    const report = await checkDiagrams(document.deleted ? "" : document.content);
     if (fingerprint([id]) !== version) throw new Error(`文稿 ${id} 在图校验期间变化，请重新校验当前正文`);
     return { document_id: id, fingerprint: version, ...report };
   };
@@ -159,7 +172,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     const documents = input.read(), version = domainDocumentFingerprint(documents, ids);
     const selected = new Map(documents.map(document => [document.id, document]));
     for (const id of new Set(ids)) {
-      const report = await checkDiagrams(selected.get(id)!.content);
+      const document = selected.get(id)!;
+      if (document.deleted) continue;
+      const report = await checkDiagrams(document.content);
       if (report.status === "unavailable") throw new IncompleteDomainResearch(knowledgeDiagramFeedback(id, report) + "\n图语法尚未验证；保留候选文稿，恢复渲染条件后接续，无需因运行环境问题重写。");
       if (report.status === "invalid") return { pass: false, feedback: knowledgeDiagramFeedback(id, report) + "\n按错误位置修正并重新校验；保留真实业务节点、条件和异常分支。" };
     }
@@ -168,8 +183,16 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const completionDocumentIds = (result: SkillWorkResult) => {
     const proposed = new Set(input.turn.proposals.filter(item => item.status !== "discarded").map(item => item.document.id));
     const returned = new Set(result.document_ids);
-    return input.read().filter(document => !document.deleted && (input.turn.mode === "extract" || savedDocumentIds.has(document.id)
+    return input.read().filter(document => (input.turn.mode === "extract" && !document.deleted || savedDocumentIds.has(document.id)
+      || work.state.modified_document_ids?.includes(document.id)
       || document.research_turn_id === input.turn.id || proposed.has(document.id) || returned.has(document.id))).map(document => document.id);
+  };
+  const requireRevisionReviews = () => {
+    if (input.turn.mode !== "revise" || executionContract !== "reviewed-document-plan") return;
+    const covered = new Set(work.state.steps.filter(item => item.status === "done" && item.review && item.result?.review?.pass)
+      .flatMap(item => skillWorkDocumentIds(item, item.result)));
+    const missing = (work.state.modified_document_ids ?? []).filter(id => !covered.has(id));
+    if (missing.length) throw new Error(`本轮实际修改的文稿尚未全部独立评审：${missing.join("、")}；请安排核查当前候选，不需要重写已保存文稿`);
   };
   const checkWorkDiagrams = async (id: string) => {
     const document = work.state.documents?.find(item => item.id === id);
@@ -192,6 +215,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     module_id: input.job.module_id, knowledge_layout: input.job.knowledge_layout ?? "legacy", repositories: researchRepositories,
     archive_targets: [input.job.knowledge_target, ...input.job.repositories], archive_configured: input.job.archive_configured, knowledge_target: input.job.knowledge_target,
     revisions, previous_revisions: input.turn.previous_revisions, selected_document_ids: input.turn.document_ids, message: input.turn.message,
+    ...(input.turn.review_note_ids?.length ? { review_notes: { total: input.turn.review_note_ids.length, tool: "knowledge_review_notes", instructions: "主会话先分页读完本批摘要；按 id 读取所处理意见的完整原文、引用和上下文，并逐编号记录结论。" } } : {}),
     // ZIP 目录与图片清单只在读取资料时返回，避免复制到每个子会话和压缩后的上下文。
     materials: materials.map(m => ({ id: m.id, name: m.name, scope: m.scope, version: m.version, bytes: m.bytes,
       digest: m.digest, state: m.state, error: m.error?.slice(0, 1200), uploaded_at: m.uploaded_at,
@@ -199,6 +223,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     continued: input.turn.pipeline_continue ?? 0, human_replies: input.turn.human_replies ?? [] };
   const execute = async (step?: SkillWorkStep, reviewing = false): Promise<SkillWorkResult> => {
     const readonly = input.turn.mode === "discuss" || step?.readonly === true;
+    // 恢复的对话可能携带旧正文，只信任本次执行实际回读或成功写入的版本。
+    const readVersions = input.turn.mode === "revise" && !readonly
+      ? new Map<string, string>() : undefined;
     // 写作重试恢复同一会话；每次评审独立读取当前文稿，不继承作者的判断。
     const sessionRoot = step ? join(runRoot, "steps", step.id, reviewing ? `review-${step.review_attempts}` : "writer") : join(runRoot, "coordinator");
     const agentDir = join(sessionRoot, "agent"); mkdirSync(agentDir, { recursive: true });
@@ -237,11 +264,12 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           if (args.work_document_ids?.some(id => !work.state.documents?.some(document => document.id === id))) throw new Error("请引用已经保存的过程文稿");
           scanForSecrets("Skill 执行结果", Buffer.from(JSON.stringify(args)));
           if (step && args.status === "paused") throw new Error("子步骤请省略 status 或填写 complete，将待处理问题写入 summary/data；核查未通过时用 review:{pass:false,feedback} 返回结论，由主会话决定后续处理");
-          const next = { ...args, status: args.status ?? "complete" };
+          let next: SkillWorkResult = { ...args, status: args.status ?? "complete" };
+          if (!step && input.turn.mode === "revise") next.document_ids = [...new Set([...next.document_ids, ...(work.state.modified_document_ids ?? [])])];
           if (!step && input.turn.mode === "extract" && next.status === "complete" && !input.read().length) throw new Error("尚未保存任何知识文档，请保存产物或说明暂停原因");
           if (reviewing) {
             if (!next.review || !next.review.feedback.trim()) throw new Error("独立评审必须提交 review.pass 和具体 feedback");
-            const ids = [...new Set([...(step?.expected_document_ids ?? []), ...(step?.candidate?.document_ids ?? [])])];
+            const ids = skillWorkDocumentIds(step!, step?.candidate);
             for (const id of ids) {
               if (reviewedDocuments.get(id) !== fingerprint([id])) throw new Error(`请先用 knowledge_draft read 读取 ${id} 的当前完整正文，再提交评审`);
               if (!next.document_ids.includes(id)) throw new Error(`评审结果缺少文稿 ${id}`);
@@ -252,9 +280,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
               }
             }
           } else if (step) {
-            if (step.expected_document_ids && next.document_ids.some(id => !step.expected_document_ids!.includes(id))) throw new Error("步骤结果只能引用本步骤预定文稿，新增范围请交回主会话登记");
-            const ids = [...new Set([...(step.expected_document_ids ?? []), ...next.document_ids])];
-            work.recordCandidate(step.id, next, step.review ? fingerprint(ids) : undefined);
+            if (input.turn.mode !== "revise" && step.expected_document_ids && next.document_ids.some(id => !step.expected_document_ids!.includes(id))) throw new Error("步骤结果只能引用本步骤预定文稿，新增范围请交回主会话登记");
+            const liveStep = work.state.steps.find(item => item.id === step.id)!;
+            const ids = skillWorkDocumentIds(liveStep, next);
+            next = work.recordCandidate(step.id, next, step.review ? fingerprint(ids) : undefined);
           } else if (input.turn.mode === "extract" && executionContract === "reviewed-document-plan" && next.status === "complete") {
             const plan = work.state.plan;
             if (!plan?.document_ids.length) throw new Error("本方法需要先登记完整文稿计划，再完成每篇的写作与独立评审");
@@ -269,6 +298,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
             const validation = await validateDiagrams(completionDocumentIds(next));
             if (validation) throw new Error(validation.feedback);
             await requireWorkDiagrams(work.state.plan?.work_document_id);
+            requireRevisionReviews();
           }
           result = step ? next : work.finish(next, fingerprint);
           progress(); return reply({ saved: true });
@@ -298,7 +328,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           if (args.action === "save_document") {
             if (readonly || result || (!step && runningBatch)) throw new Error("当前会话不能保存过程文稿；若有子任务执行中，请等待返回");
             if (step && executionContract && !args.document?.id?.startsWith(`${step.id}--`)) throw new Error(`本步骤过程文稿编号必须以 ${step.id}-- 开头，避免覆盖其他步骤的证据或完整规划`);
-            work.saveDocument(args.document); return reply({ saved: true, id: args.document.id });
+            work.saveDocument(args.document);
+            if (input.turn.mode === "revise") observe({ tool: "research_note", step_id: step?.id, work_document_id: args.document.id,
+              preview: `已更新过程文稿：${args.document.title}。可在研究过程的“已生成的过程文稿”中查看。` });
+            return reply({ saved: true, id: args.document.id });
           }
           if (step || result) throw new Error("当前会话不能安排或执行其他步骤");
           if (runningBatch) throw new Error("已有执行批次正在运行，请等待返回后再修改计划或执行其他工作");
@@ -312,14 +345,14 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           const runStep = (id: string) => work.run(id, async child => { progress(); return execute(child); }, signal, {
             fingerprint,
             validate: (child, candidate) => child.readonly || input.turn.mode === "discuss" ? Promise.resolve(undefined)
-              : validateDiagrams([...new Set([...(child.expected_document_ids ?? []), ...candidate.document_ids])]),
+              : validateDiagrams(skillWorkDocumentIds(child, candidate)),
             review: async (child, candidate) => {
               progress();
               const reviewed = await execute({ ...child, readonly: true, candidate,
-                instructions: `${child.review!.instructions}\n本次为独立评审：读取预定文稿的当前正文与原始依据，使用 knowledge_work_result 的 review:{pass,feedback} 提交判断。作者结论仅供定位，不是证据。` }, true);
+                instructions: `${child.review!.instructions}\n本次为独立评审：读取全部预定及实际改动文稿的当前正文与原始依据，使用 knowledge_work_result 的 review:{pass,feedback} 提交判断。作者结论仅供定位，不是证据。` }, true);
               return reviewed.review!;
             },
-          });
+          }).finally(progress);
           runningBatch = true;
           try {
             if (args.id) return reply(await runStep(args.id));
@@ -342,19 +375,37 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
         } catch (error) { return failure(error); }
       },
     });
-    const documentTool = createDocumentTool(() => {
+    const documentTool = createDocumentTool(id => {
       signal.throwIfAborted();
       if (result || readonly || (!step && runningBatch)) throw new Error("当前会话已结束、只读或正在执行子任务，不能保存文稿");
+      if (input.turn.mode === "revise") {
+        work.assertDocumentWrite(step?.id, id);
+        const current = input.read().find(document => document.id === id);
+        if (readVersions?.get(id) !== (current ? domainDocumentFingerprint([current], [id]) : undefined)) throw new Error(`文稿 ${id} 尚未读取当前完整正文，或已在上次读取后变化，请先用 knowledge_draft read 回读当前完整正文，再整合修改保存；已有其他文稿修改仍保留。`);
+      }
+    }, (id, action) => {
+      savedDocumentIds.add(id);
+      if (input.turn.mode === "revise") {
+        work.recordDocumentWrite(step?.id, id);
+        readVersions?.set(id, fingerprint([id]));
+        const document = input.read().find(document => document.id === id)!;
+        observe({ tool: "research_note", step_id: step?.id, document_id: id,
+          preview: `${action === "delete" ? "已标记待确认删除" : "已保存修订候选"}：${document.title}（${document.path}）。等待独立评审与人工确认。` });
+      }
+    }, document => {
+      // 绑定实际返回的正文，不能在 await 之后把他人的新版本误登记为已读。
+      const version = domainDocumentFingerprint([document], [document.id]);
+      readVersions?.set(document.id, version);
+      if (reviewing) reviewedDocuments.set(document.id, version);
     });
     const guardedDraft = { ...documentTool, execute: async (...args: Parameters<typeof documentTool.execute>) => {
       signal.throwIfAborted();
-      if (result || ((!step && runningBatch || readonly) && (args[1] as any).action !== "read")) return failure(new Error("当前会话只读，不能保存草稿"));
+      const isRead = ["read", "search"].includes((args[1] as any).action);
+      if (result || ((!step && runningBatch || readonly) && !isRead)) return failure(new Error("当前会话只读，不能保存草稿"));
       const params = args[1] as { action: string; id?: string; document?: DomainDocumentContent };
-      if (step?.expected_document_ids && params.action !== "read" && !step.expected_document_ids.includes(params.document?.id ?? params.id ?? "")) return failure(new Error("只能修改本步骤 expected_document_ids 中的文稿；新发现或关联修改请交回主会话登记"));
-      if (params.action === "read" && params.id && work.state.steps.some(other => other.id !== step?.id && other.status === "running" && !other.readonly && other.expected_document_ids?.includes(params.id!))) return failure(new Error("该文稿正在其他步骤中修改，请在完成后读取，并将需要它的步骤声明为依赖"));
-      const response = await documentTool.execute(...args);
-      if (reviewing && !(response as { isError?: boolean }).isError && params.action === "read" && params.id) reviewedDocuments.set(params.id, fingerprint([params.id]));
-      return response;
+      if (input.turn.mode !== "revise" && step?.expected_document_ids && !isRead && !step.expected_document_ids.includes(params.document?.id ?? params.id ?? "")) return failure(new Error("只能修改本步骤 expected_document_ids 中的文稿；新发现或关联修改请交回主会话登记"));
+      if (input.turn.mode !== "revise" && params.action === "read" && params.id && work.state.steps.some(other => other.id !== step?.id && other.status === "running" && !other.readonly && skillWorkDocumentIds(other).includes(params.id!))) return failure(new Error("该文稿正在其他步骤中修改，请在完成后读取，并将需要它的步骤声明为依赖"));
+      return documentTool.execute(...args);
     } };
     let activity = 0;
     const tools = [...baseTools, guardedDraft, diagramTool, workTool, resultTool].map(tool => ({ ...tool,
@@ -396,7 +447,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     const abort = () => { void session!.abort().catch(() => undefined); };
     signal.addEventListener("abort", abort, { once: true });
     try {
-      signal.throwIfAborted(); input.update({ stage: step?.title ?? "执行领域知识 Skill" });
+      signal.throwIfAborted(); input.update({ stage: step ? `${reviewing ? "独立评审：" : ""}${step.title}` : "执行领域知识 Skill" });
+      if (input.turn.mode === "revise" && step) observe({ tool: "research_note", step_id: step.id, review: reviewing,
+        preview: `${reviewing ? "开始独立评审" : step.readonly ? "开始定位与核实" : "开始修订"}：${step.title}。` });
       let outcome = await session.start(instruction + "\n" + domainSkillMission(skill, { ...context, documents: pageRows(input.read().filter(document => !step || step.expected_document_ids?.includes(document.id) || step.candidate?.document_ids.includes(document.id)).map(documentSummary), 0, 30, "items"), step: step && { ...workStepSummary(step), instructions: step.instructions, review: step.review }, readonly, reviewing, work: workOverview(work.state) }));
       let idle = 0, observed = 0;
       while (!result && !submissionFailure && outcome.status === "turn_finished") {
@@ -424,6 +477,8 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       const validation = await validateDiagrams(completionDocumentIds(result));
       if (validation) throw new IncompleteDomainResearch(validation.feedback);
       await requireWorkDiagrams(work.state.plan?.work_document_id);
+      requireRevisionReviews();
+      if (input.turn.mode === "revise" && executionContract === "reviewed-document-plan") work.finish(result, fingerprint);
     }
     return result;
   } catch (error) {

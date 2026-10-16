@@ -35,6 +35,8 @@ export function readSkillWorkDocumentSummaries(file: string): SkillWorkDocument[
 export interface SkillWorkStep {
   id: string; title: string; instructions: string; depends_on: string[]; readonly: boolean;
   expected_document_ids?: string[]; review?: { instructions: string };
+  /** 修订时实际写入的文稿，可超出最初关注清单；独立评审始终覆盖这个集合。 */
+  written_document_ids?: string[];
   status: "pending" | "running" | "done" | "failed" | "discarded";
   result?: SkillWorkResult; error?: string; attempts: number;
   candidate?: SkillWorkResult; candidate_fingerprint?: string; reviewed_fingerprint?: string;
@@ -47,7 +49,8 @@ export interface SkillWorkCallbacks {
   fingerprint(ids: string[]): string;
 }
 const REVIEW_ATTEMPTS = 3;
-const documentIds = (step: SkillWorkStep, result: SkillWorkResult) => [...new Set([...(step.expected_document_ids ?? []), ...result.document_ids])].sort();
+export const skillWorkDocumentIds = (step: SkillWorkStep, result?: SkillWorkResult) => [...new Set([...(step.expected_document_ids ?? []), ...(step.written_document_ids ?? []), ...(result?.document_ids ?? [])])].sort();
+const documentIds = skillWorkDocumentIds;
 function normalizeReadonlyReview(step: Pick<SkillWorkStep, "instructions" | "readonly" | "expected_document_ids" | "review">) {
   // 未指定待评知识文稿的只读核查直接返回结论，不再启动一层文稿评审；结果中的 review 仍保留。
   if (step.readonly === true && !step.expected_document_ids?.length && step.review) {
@@ -57,7 +60,7 @@ function normalizeReadonlyReview(step: Pick<SkillWorkStep, "instructions" | "rea
 }
 /** 只保存 Skill 自己安排的工作；不解释模块、阶段或文档类型。 */
 export class DomainSkillWork {
-  readonly state: { version: 1; skill: string; steps: SkillWorkStep[]; documents?: SkillWorkDocument[]; plan?: SkillDocumentPlan; result?: SkillWorkResult; previous_results?: SkillWorkResult[]; continued?: number };
+  readonly state: { version: 1; skill: string; steps: SkillWorkStep[]; documents?: SkillWorkDocument[]; plan?: SkillDocumentPlan; result?: SkillWorkResult; previous_results?: SkillWorkResult[]; continued?: number; modified_document_ids?: string[] };
   private executions = new Map<string, { signal: AbortSignal; writing: boolean; callbacks?: SkillWorkCallbacks }>();
   constructor(private file: string, skill: string, continued = 0) {
     this.state = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { version: 1, skill, steps: [] };
@@ -138,6 +141,20 @@ export class DomainSkillWork {
     if (!step || step.status === "running" || !reason.trim()) throw new Error("请选择未在执行的步骤并说明不再执行的原因");
     step.status = "discarded"; step.error = reason; this.persist();
   }
+  assertDocumentWrite(stepId: string | undefined, documentId: string) {
+    if (!stepId) return;
+    if (!this.executions.get(stepId)?.writing) throw new Error("当前步骤不是文稿写作会话");
+    const other = this.state.steps.find(step => step.id !== stepId && !step.readonly && this.executions.has(step.id)
+      && skillWorkDocumentIds(step).includes(documentId));
+    if (other) throw new Error(`文稿 ${documentId} 正在步骤 ${other.id} 中处理，不能覆盖并发修改。先完成不冲突的文稿，将关联修改及具体位置写入 summary/data，交主会话在该批次结束后串行处理；再次修改前回读当前正文。`);
+  }
+  recordDocumentWrite(stepId: string | undefined, documentId: string) {
+    this.assertDocumentWrite(stepId, documentId);
+    this.state.modified_document_ids = [...new Set([...(this.state.modified_document_ids ?? []), documentId])];
+    const step = this.state.steps.find(step => step.id === stepId);
+    if (step) step.written_document_ids = [...new Set([...(step.written_document_ids ?? []), documentId])];
+    delete this.state.result; this.persist();
+  }
   recordCandidate(id: string, result: SkillWorkResult, fingerprint?: string) {
     const step = this.state.steps.find(s => s.id === id), execution = this.executions.get(id);
     if (!step || step.status !== "running" || !execution?.writing) throw new Error("当前步骤不在保存研究结果");
@@ -147,11 +164,11 @@ export class DomainSkillWork {
     if (step.expected_document_ids?.some(id => !result.document_ids.includes(id))) throw new Error("尚未提交全部预定文稿，请继续研究并保存缺少的文稿");
     if (step.review && !documentIds(step, result).length) throw new Error("独立评审需要至少一份待评审文稿");
     scanForSecrets("Skill 步骤结果", Buffer.from(JSON.stringify(result)));
-    step.candidate = structuredClone(result);
+    step.candidate = structuredClone({ ...result, document_ids: [...new Set([...result.document_ids, ...(step.written_document_ids ?? [])])] });
     if (step.review) delete step.candidate.review; // 写作者不能替独立评审保存通过结论。
     step.candidate_fingerprint = fingerprint ?? execution.callbacks?.fingerprint(documentIds(step, result));
     delete step.result; delete step.reviewed_fingerprint; delete this.state.result;
-    this.persist();
+    this.persist(); return structuredClone(step.candidate);
   }
   async run(id: string, execute: (step: SkillWorkStep) => Promise<SkillWorkResult>, signal: AbortSignal, callbacks?: SkillWorkCallbacks) {
     const step = this.state.steps.find(s => s.id === id);

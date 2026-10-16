@@ -19,6 +19,7 @@ import { readKnowledgeMaterial } from "./knowledgeMaterials.ts";
 import { IncompleteDomainResearch, readSkillWorkDocuments, readSkillWorkDocumentSummaries, type SkillWorkResult } from "./domainSkillWork.ts";
 import { domainKnowledgeTask } from "./knowledgeTaskCenter.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
+import { readDomainReviewNoteBatch } from "./domainKnowledgeReviewNotes.ts";
 import { currentKnowledgeArchiveBatches, projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import type { KnowledgeArchivePreview, KnowledgeProductionAction } from "./knowledgeProductionTypes.ts";
 import { continuingReviewProposal, assertLatestReviewProposal, assertReviewRevision, assertNoPendingReviewProposals, type ReviewProposal } from "./knowledgeReviewCore.ts";
@@ -183,6 +184,7 @@ function validStoredJob(value: any, id: string): value is DomainKnowledgeJob {
     && Array.isArray(value.turns) && value.turns.every((turn: any) => isRecord(turn)
       && fields(turn, ["id", "message", "operator", "created_at"]) && ["extract", "discuss", "revise", "update"].includes(turn.mode) && strings(turn.document_ids)
       && ["queued", "running", "paused", "done", "failed", "cancelled"].includes(turn.status) && Array.isArray(turn.proposals)
+      && (turn.review_note_ids === undefined || turn.mode === "revise" && strings(turn.review_note_ids))
       && (turn.waiting === undefined || fields(turn.waiting, ["id", "summary"]) && strings(turn.waiting.document_ids) && strings(turn.waiting.work_document_ids))
       && (turn.status !== "paused" || !!turn.waiting)
       && (turn.human_replies === undefined || Array.isArray(turn.human_replies) && turn.human_replies.every((reply: any) => fields(reply, ["request_id", "message", "operator", "at"])))
@@ -1097,7 +1099,7 @@ export class DomainKnowledgeExtraction {
     if (bytes > 100 * 1024 * 1024) throw new Error("本次资料总容量不能超过 100 MiB");
     return unique;
   }
-  run(id: string, input: { mode: DomainTurn["mode"]; document_ids?: string[]; message?: string; use_latest_skill?: boolean; material_ids?: string[] }, operator: string) {
+  run(id: string, input: { mode: DomainTurn["mode"]; document_ids?: string[]; message?: string; use_latest_skill?: boolean; material_ids?: string[]; review_note_ids?: string[] }, operator: string) {
     if (this.stopped) throw new Error("服务正在停止");
     const job = this.live(id);
     if (job.component_research_id) throw new Error("请在基础组件萃取任务中生成修订建议");
@@ -1107,10 +1109,13 @@ export class DomainKnowledgeExtraction {
     const ids = [...new Set(input.document_ids ?? [])], message = String(input.message ?? "").trim();
     if (input.mode !== "extract" && (!ids.length || ids.some(docId => !job.documents.some(doc => doc.id === docId)))) throw new Error("请选择本轮处理的文档");
     if (!message || message.length > 20000) throw new Error("请填写本轮问题或修订要求，最多 20000 字");
+    const reviewNoteIds = input.review_note_ids === undefined ? undefined : [...new Set(readDomainReviewNoteBatch(this.dataDir, id, input.review_note_ids).map(note => note.id))];
+    if (reviewNoteIds && input.mode !== "revise") throw new Error("检视意见只用于文稿修订");
     scanForSecrets("研究意见", Buffer.from(message));
     if (input.material_ids) job.material_ids = this.materialIds(input.material_ids);
     if (input.mode === "extract" && job.source_cleanup) job.source_cleanup.started = true;
     const turn: DomainTurn = { id: randomUUID(), mode: input.mode, document_ids: ids, message, operator, status: "queued", created_at: new Date().toISOString(), proposals: [], use_latest_skill: input.use_latest_skill === true };
+    if (reviewNoteIds) turn.review_note_ids = reviewNoteIds;
     if (input.mode === "update") { turn.previous_revisions = { ...job.revisions }; job.revisions = {}; }
     job.turns.push(turn); job.status = "queued"; job.stage = "等待研究"; job.error = undefined;
     this.persist(job); this.pump(); return this.get(id);
@@ -1191,11 +1196,12 @@ export class DomainKnowledgeExtraction {
               if (turn.mode === "discuss") throw new Error("讨论不修改文档");
               const document = job.documents.find(document => document.id === documentId);
               if (!document) throw new Error("文稿不存在或不在本次任务范围");
-              if (document.deleted) return structuredClone(document);
-              document.history.push({ revision: document.revision, title: document.title, path: document.path, content: document.content,
-                sources: document.sources, deleted: document.deleted, operator: "领域研究 Agent", at: new Date().toISOString() });
-              document.deleted = true; document.selected = true; document.revision++;
-              turn.document_revisions![documentId] = document.revision;
+              if (!document.deleted) {
+                document.history.push({ revision: document.revision, title: document.title, path: document.path, content: document.content,
+                  sources: document.sources, deleted: document.deleted, operator: "领域研究 Agent", at: new Date().toISOString() });
+                document.deleted = true; document.selected = true; document.revision++;
+                turn.document_revisions![documentId] = document.revision;
+              }
               for (const proposal of job.turns.flatMap(turn => turn.proposals)) if (proposal.document.id === documentId && proposal.status === "pending") proposal.status = "discarded";
               const working = workingDocuments.find(current => current.id === documentId);
               if (working) Object.assign(working, structuredClone(document));
