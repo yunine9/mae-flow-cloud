@@ -124,14 +124,9 @@ export function knowledgeModuleDocumentCount(module: KnowledgeModule, task?: Kno
 }
 
 export function knowledgeModuleGovernance(module: KnowledgeModule, task?: KnowledgeTaskRow) {
-  if (task?.module_entry?.kind === "document") return { rank: 4, tone: "archived", label: "已归档", note: "最新任务已归档，点击阅读正式文档。" };
-  if (task) {
-    if (task.document_summary?.published) return { rank: 3, tone: "published", label: "建设中", note: "点击查看萃取任务。" };
-    if (task.document_summary?.drafts) return { rank: 2, tone: "review", label: "建设中", note: "点击查看萃取任务。" };
-    return { rank: 1, tone: "research", label: "建设中", note: "点击查看萃取任务。" };
-  }
-  if (module.documentCount || module.skillCount) return { rank: 3, tone: "published", label: "已发布", note: "已有可复用的正式知识。" };
-  return { rank: 0, tone: "empty", label: "待建设", note: "还没有已保存的知识或过程文稿。" };
+  if (task?.module_entry?.kind === "document") return { rank: 2, tone: "archived", label: "已归档", note: "点击阅读正式文档。" };
+  if (task || module.documentCount || module.skillCount) return { rank: 1, tone: "research", label: "建设中", note: task ? "点击查看萃取任务。" : "点击阅读已有知识。" };
+  return { rank: 0, tone: "empty", label: "未建设", note: "还没有已保存的知识或过程文稿。" };
 }
 
 export function compareKnowledgeModuleGovernance(a: KnowledgeModule, b: KnowledgeModule, latest: Map<string, KnowledgeTaskRow>) {

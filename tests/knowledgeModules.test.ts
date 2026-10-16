@@ -116,7 +116,7 @@ test("#517 多次萃取只展示最新任务的文档数，新任务空稿也不
   assert.equal(result.documents.length, 1, "过程文稿不加入正式知识清单");
 });
 
-test("#517 治理排序按归档、发布、已有文稿、萃取、待建设排列", () => {
+test("#517 治理排序只分已归档、建设中、未建设三档", () => {
   const data = projectKnowledgeModules({ documents: [], businessModules: ["empty", "research", "draft", "published", "archived"].map(id => module(id)), components: [] });
   const tasks = [
     { id: "r", module_id: "research", document_summary: { total: 1, published: 0, drafts: 0, process: 1 } },
@@ -125,5 +125,5 @@ test("#517 治理排序按归档、发布、已有文稿、萃取、待建设排
     { id: "a", module_id: "archived", module_entry: { kind: "document", document_id: "formal" } },
   ].map(task => ({ ...task, kind: "domain", created_at: "2026-10-16" } as KnowledgeTaskRow));
   const latest = latestModuleKnowledgeTasks(tasks);
-  assert.deepEqual(data.modules.sort((a, b) => compareKnowledgeModuleGovernance(a, b, latest)).map(module => module.id), ["archived", "published", "draft", "research", "empty"]);
+  assert.deepEqual(data.modules.sort((a, b) => compareKnowledgeModuleGovernance(a, b, latest)).map(module => module.id), ["archived", "draft", "published", "research", "empty"]);
 });

@@ -53,13 +53,14 @@ async function run() {
     mountHome();
     await until(() => document.querySelectorAll(".km-module-card").length === 5, "模块卡片加载");
     const cards = [...document.querySelectorAll<HTMLElement>(".km-module-card")];
-    check(cards.map(card => card.querySelector("h3")!.textContent).join(",") === "告警管理,设备管理,交易业务,数据采集,待建模块", "按最新任务治理状态排序");
+    check(cards[0].textContent?.includes("告警管理") && cards[0].textContent?.includes("已归档"), "已归档排最前");
+    check(cards.slice(1, -1).every(card => card.textContent?.includes("建设中")) && cards.at(-1)?.textContent?.includes("未建设"), "建设中排中间，未建设排最后");
     const trade = cards.find(card => card.textContent?.includes("交易业务"))!;
     check(/文档：10/.test(trade.textContent!) && !/文档：100/.test(trade.textContent!), "最新任务显示10篇，不与旧任务90篇累加");
     check(trade.textContent?.includes("建设中") && !/最新一次|待审文稿|过程记录|统计口径/.test(document.querySelector(".km-home")!.textContent!), "卡片保持文档数量与建设中简洁展示");
     trade.querySelector<HTMLButtonElement>("button")!.click();
     cards[0].querySelector<HTMLButtonElement>("button")!.click();
-    cards[1].querySelector<HTMLButtonElement>("button")!.click();
+    cards.find(card => card.textContent?.includes("设备管理"))!.querySelector<HTMLButtonElement>("button")!.click();
     check(opened.join(",") === "task:new-trade,document:kd-alarm,task:published-task", "未归档进最新任务，已归档进对应正式文档，已发布未归档仍进任务");
     check(new Set(cards.map(card => getComputedStyle(card).borderTopColor)).size >= 3, "卡片有可辨认的状态色块");
     tasks = [...tasks, task("newest-empty", "trade", 0, { created_at: "2026-10-17" })]; mountHome(); await pause();
