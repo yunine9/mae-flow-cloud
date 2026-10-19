@@ -748,6 +748,12 @@ type DtsTierPref = (typeof TIER_OPTIONS)[number]["value"];
 const TIER_LABEL = new Map<string, string>(TIER_OPTIONS.map((tier) =>
   [tier.value, tier.label]));
 const TIER_FOLLOW = "__follow";
+// 介入档位下拉的 items 模块级常量(2026-10-16):与 moduleSelectItems
+// 同理——内联数组每次渲染新标识,弹层开着撞上轮询重渲染就被收掉。
+const TIER_SELECT_ITEMS = [
+  { value: TIER_FOLLOW, label: "跟随全局" },
+  ...TIER_OPTIONS,
+] as const;
 
 /** 随单附件条目(#502):显示名留原始文件名给人看,path 是暂存引用
  * (attachments/<hash>.<ext>),发起时拼进附加信息文本随单落库。 */
@@ -1042,6 +1048,17 @@ function DtsRegister({
     .filter((module) => module.status === "active"
       && module.repositories.length > 0),
   [modules]);
+  // 模块下拉 items 必须单源 memo(2026-10-16):内联重建的数组每次
+  // 渲染都是新标识,弹层开着撞上轮询重渲染(任务同步 1.5s/会话列表
+  // 5s)就被 Base UI 收掉——表现是「下拉一闪而过,要点两次」。占位
+  // 项恒在(2026-09-24 弹回条款:值不在 items 里会触发空提交清绑定),
+  // 渲染侧仍按带出态条件显示。
+  const moduleSelectItems = useMemo(() => [
+    { value: "__none", label: "未匹配,发起前必选" },
+    ...moduleCatalog.map((module) => ({
+      value: module.id, label: module.name,
+    })),
+  ], [moduleCatalog]);
 
   // 列宽拖拽(2026-09-17 手写;2026-10-14 迁 TanStack Table 引擎):
   // 宽度真相源=引擎内部 columnSizing 状态(非受控,见下方表实例),
@@ -1496,22 +1513,16 @@ function DtsRegister({
           <Select
             value={resolvedModule ?? "__none"}
             disabled={bindingTicket === ticket.ticket}
-            // 占位项只给「规则没带出」的行,且恒在(2026-09-24):选中
-            // 模块后乐观更新会改写行的匹配态,若此时把占位项从清单里
-            // 动态摘除,Base UI 会在弹层收起的重渲染中对「当前值不在
-            // items」补一次空提交,把刚选的绑定清掉——表现就是「选了
-            // 又弹回未匹配」。判据用服务端带出值(静态)而非改选态(会
-            // 翻转)。规则带出行不设占位项:人工改选是粘性的,想回带出
-            // 值就像选普通模块一样重选它,没有「切回自动」的特权入口
-            //(自动匹配一词随启发式退役,见 CONTEXT.md)。
-            items={[
-              ...(ticket.module_id ? [] : [
-                { value: "__none", label: "未匹配,发起前必选" },
-              ]),
-              ...moduleCatalog.map((module) => ({
-                value: module.id, label: module.name,
-              })),
-            ]}
+            // 占位项恒在(2026-09-24):选中模块后乐观更新会改写行的
+            // 匹配态,若此时把占位项从清单里动态摘除,Base UI 会在弹层
+            // 收起的重渲染中对「当前值不在 items」补一次空提交,把刚选
+            // 的绑定清掉——表现就是「选了又弹回未匹配」。判据用服务端
+            // 带出值(静态)而非改选态(会翻转)。规则带出行不设占位项:
+            // 人工改选是粘性的,想回带出值就像选普通模块一样重选它,
+            // 没有「切回自动」的特权入口(自动匹配一词随启发式退役,
+            // 见 CONTEXT.md)。items 标识稳定化见 moduleSelectItems
+            //(2026-10-16:轮询重渲染收弹层的「一闪而过」)。
+            items={moduleSelectItems}
             onValueChange={(value) =>
               void bindModule(ticket.ticket,
                 value === "__none" || value == null ? "" : value)}>
@@ -1577,8 +1588,7 @@ function DtsRegister({
                 aria-label="协助视角不设置介入档位">—</span>
             : <Select
                 value={tiers[ticket.ticket] ?? TIER_FOLLOW}
-                items={[{ value: TIER_FOLLOW, label: "跟随全局" },
-                  ...TIER_OPTIONS]}
+                items={TIER_SELECT_ITEMS}
                 onValueChange={(value) => {
                   const tier = value === TIER_FOLLOW || value == null
                     ? undefined : value as DtsTierPref;
@@ -2116,8 +2126,18 @@ function DtsRegister({
                     <TableCell key={cell.id}
                       className={DTS_CELL_CLASS[cell.column.id as DtsColKey]
                         ?? ""}>
-                      {flexRender(
-                        cell.column.columnDef.cell, cell.getContext())}
+                      {/* 单元格不走 flexRender 而是直接调 cell 函数
+                        (2026-10-16):columns 内联重建让 cell 函数每次
+                        渲染都是新标识,flexRender 会把它当组件类型交给
+                        React——类型一变整个格子子树重挂,格子里的 Select
+                        弹层跟着被收(模块下拉「一闪而过,要点两次」)。
+                        直接调用返回的是结构稳定的 JSX(Select 恒是
+                        Select),React 按位调和不再重挂;闭包也因此每轮
+                        都是新鲜的,无陈旧态风险。表头是纯文本,仍走
+                        flexRender 无妨。 */}
+                      {typeof cell.column.columnDef.cell === "function"
+                        ? cell.column.columnDef.cell(cell.getContext())
+                        : cell.column.columnDef.cell}
                     </TableCell>
                   ))}
                 </TableRow>
