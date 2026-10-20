@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
 import { listFormalKnowledgeDocuments, listFormalKnowledgeDocumentMetadata, readKnowledgeDocument, type KnowledgeDocument, type KnowledgeDocumentMetadata } from "./knowledgeDocuments.ts";
 import { withoutBoundModuleDrafts } from "./knowledgeRepositorySnapshots.ts";
+import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 
 const allKnowledge = { repo: "", repositories: [], moduleIds: [] };
 function externalDocuments(dir: string, assets: SearchableKnowledge[], manualIds: Set<string>) {
@@ -59,6 +60,24 @@ export function knowledgeDocumentDirectory(dir: string) {
     new Set(manuals.map(document => document.id)));
   return [...manuals.map(manualView), ...external.map(({ content, ...document }) =>
     ({ ...document, lines: content.split("\n").length }))];
+}
+
+/** 阅读版本只取正式文稿摘要和模块配置，不读正文、查 Git 或计算任务效果。 */
+export function knowledgeDocumentReadRevision(dir: string, documents = listFormalKnowledgeDocumentMetadata(dir)) {
+  const rows = documents.filter(document => /^(kg|kd)-/.test(document.id)).map(document => ({
+    id: document.id, title: document.title, revision: document.revision, source: document.source,
+    scope: document.scope, module_ids: [...document.module_ids].sort(), repositories: [...document.repositories].sort(),
+    technologies: [...document.technologies].sort(), product_versions: [...document.product_versions].sort(),
+    when_to_use: document.when_to_use, active: document.active,
+    technology_assignment_required: document.technology_assignment_required,
+    archive_target: document.archive_target, research_source: document.research_source,
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  const modules = listBusinessModules(dir).modules.map(module => ({
+    id: module.id, name: module.name, description: module.description, status: module.status,
+    repositories: [...module.repositories].sort(), knowledge_path: module.knowledge_path,
+  })).sort((a, b) => a.id.localeCompare(b.id));
+  // Git 提交必须参与：只改图片时正文 revision 不变；同步时间则不能造成反复刷新。
+  return createHash("sha256").update(JSON.stringify({ documents: rows, modules, repository: readKnowledgeRepoConfig(dir) })).digest("hex");
 }
 
 /** 按文件编号读取，避免打开一篇正文时重新装配所有模块、Skill 和经验。 */

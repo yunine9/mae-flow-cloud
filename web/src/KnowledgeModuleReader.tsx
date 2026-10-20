@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
-import { documentRequest, readKnowledgeDocument, type KnowledgeDocument } from "./knowledgeDocumentsApi";
+import { documentRequest, knowledgeDocumentResourceUrl, readKnowledgeDocument, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { KnowledgeVersions } from "./KnowledgeVersions";
 import { ComponentKnowledgeWorkspace } from "./ComponentKnowledgeWorkspace";
 import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
@@ -23,6 +23,7 @@ import { cachedKnowledgeModules, knowledgeFilePath, knowledgeModuleNames, loadCo
 import { invalidateKnowledgeReads, knowledgeReadGeneration, subscribeKnowledgeReads } from "./knowledgeReadCache";
 import { KnowledgeModuleLocation } from "./KnowledgeModuleLocation";
 import { resolveKnowledgeReference } from "./knowledgeStructure";
+import { startKnowledgeDocumentRead } from "./knowledgeDocumentRetry";
 
 export interface KnowledgeModuleReaderProps {
   moduleKey: string;
@@ -70,6 +71,9 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const [expandedSkills, setExpandedSkills] = useState(new Set<string>()), [focus, setFocus] = useState<KnowledgeFocus>();
   const [packages, setPackages] = useState<Record<string, SkillPackage>>({}), [packageErrors, setPackageErrors] = useState<Record<string, string>>({});
   const packageRequests = useRef(new Map<string, Promise<SkillPackage>>());
+  const selectedModule = useRef<string | undefined>(undefined);
+  const selectedRequest = useRef<string | undefined>(undefined);
+  const displayedDocument = useRef<string | undefined>(undefined);
   const article = useRef<HTMLDivElement>(null);
   const searchableContent = useRef<HTMLDivElement>(null);
   const [notesToolbar, setNotesToolbar] = useState<HTMLSpanElement | null>(null);
@@ -89,8 +93,10 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
     let request = packageRequests.current.get(key);
     if (!request) {
       request = componentRequest<SkillPackage>(`/skills/${encodeURIComponent(doc.skillDirectory!)}/package`).then(value => {
-        setPackages(old => ({ ...old, [doc.id]: value }));
-        setPackageErrors(old => ({ ...old, [doc.id]: "" }));
+        if (generation === knowledgeReadGeneration()) {
+          setPackages(old => ({ ...old, [doc.id]: value }));
+          setPackageErrors(old => ({ ...old, [doc.id]: "" }));
+        }
         return value;
       }).catch(error => { packageRequests.current.delete(key); setPackageErrors(old => ({ ...old, [doc.id]: (error as Error).message })); throw error; });
       packageRequests.current.set(key, request);
@@ -101,26 +107,37 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   useEffect(() => { let live = true; setError(""); void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); }); return () => { live = false; }; }, [moduleKey, generation]);
   useEffect(() => {
     if (!module) return;
-    const id = selectedDocumentId && module.documents.some(d => d.id === selectedDocumentId) ? selectedDocumentId : module.documents.some(d => d.id === selected) ? selected : module.documents.find(d => d.form !== "skill" && !/(?:^|\/)AGENTS\.md$/i.test(knowledgeFilePath(d)) && !module.repositories.some(r => r.documents.some(item => item.id === d.id)))?.id || module.documents[0]?.id || "";
+    const changedModule = selectedModule.current !== moduleKey;
+    const requested = changedModule || selectedRequest.current !== selectedDocumentId ? selectedDocumentId : undefined;
+    const id = requested && module.documents.some(d => d.id === requested) ? requested : module.documents.some(d => d.id === selected) ? selected : module.documents.find(d => d.form !== "skill" && !/(?:^|\/)AGENTS\.md$/i.test(knowledgeFilePath(d)) && !module.repositories.some(r => r.documents.some(item => item.id === d.id)))?.id || module.documents[0]?.id || "";
+    selectedModule.current = moduleKey;
+    selectedRequest.current = selectedDocumentId;
+    if (!changedModule && selected === id) return;
     setSelected(id); setSkillPath("SKILL.md");
     setExpandedRepository(module.repositories.find(r => r.documents.some(d => d.id === id))?.id || "");
     setExpandedSkills(new Set(module.documents.find(d => d.id === id)?.form === "skill" ? [id] : []));
   }, [moduleKey, data, selectedDocumentId]);
   useEffect(() => {
-    let live = true; setDetail(undefined); setSkillFiles(undefined); setDetailError("");
+    const switched = displayedDocument.current !== current?.id;
+    displayedDocument.current = current?.id;
+    // 同一文稿后台更新时保留正文及滚动；只有用户换文稿才清空并回到顶部。
+    if (switched) { setDetail(undefined); setSkillFiles(undefined); article.current?.scrollTo({ top: 0 }); }
+    setDetailError("");
     if (!current) return;
     const doc = current;
-    async function read() {
-      try {
+    return startKnowledgeDocumentRead<{ detail: KnowledgeDocument; files?: SkillFile[] }>({
+      visibility: document,
+      read: async () => {
         if (doc.skillDirectory) {
           const result = await readPackage(doc);
-          if (live) { setDetail({ ...doc, content: result.content, revision: result.digest }); setSkillFiles(result.files); }
-        } else { const result = await readKnowledgeDocument(doc.id, doc.revision); if (live) setDetail(result); }
-      } catch (e) { if (live) setDetailError((e as Error).message); }
-    }
-    void read(); article.current?.scrollTo({ top: 0 });
-    return () => { live = false; };
-  }, [current?.id, current?.revision, generation]);
+          return { detail: { ...doc, content: result.content, revision: result.digest }, files: result.files };
+        }
+        return { detail: await readKnowledgeDocument(doc.id, doc.revision, false, doc.source?.revision) };
+      },
+      receive: result => { setDetail(result.detail); setSkillFiles(result.files); setDetailError(""); },
+      failed: error => setDetailError((error as Error).message),
+    });
+  }, [current?.id, current?.revision, current?.source?.revision, current?.source?.path, reload]);
   const engineering = module?.category === "engineering";
   useEffect(() => {
     // 规则数与规则页签是旁路：读取失败只在组件处提示，不挡正文阅读。
@@ -180,7 +197,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const packageAnnotations = current?.form === "skill" && !!current.skillDirectory;
   const shownBody = useMemo(() => body === undefined ? undefined : blankKnowledgeMetadata(body), [body]);
   const usage = !currentComponent || componentTab === "usage";
-  const markdownBody = useMemo(() => current && body !== undefined && <KnowledgeMarkdown hideMetadata text={body} focus={focus} resolveImage={gitKnowledge ? href => `/knowledge-documents/${encodeURIComponent(current.id)}/resources?path=${encodeURIComponent(href)}` : undefined} onReference={href => {
+  const markdownBody = useMemo(() => current && body !== undefined && <KnowledgeMarkdown hideMetadata text={body} focus={focus} resolveImage={gitKnowledge ? href => knowledgeDocumentResourceUrl(detail ?? current, href) : undefined} onReference={href => {
     if (current.form === "skill") { const [path, anchor] = href.split("#"), parts = skillPath.split("/").slice(0, -1); for (const segment of path.split("/")) { if (segment === "..") parts.pop(); else if (segment && segment !== ".") parts.push(segment); } const target = parts.join("/"); if (skillFiles?.some(file => file.path === target)) { setSkillPath(target); setFocus({ anchor, token: Date.now() }); return true; } }
     if (current.source) {
       const candidates = (module?.documents ?? []).filter(doc => doc.source?.repository === current.source!.repository && doc.source.branch === current.source!.branch).map(doc => ({ ...doc, path: knowledgeFilePath(doc), target_id: current.source!.repository }));
@@ -189,7 +206,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       if (target) { choose(target.item); setFocus({ anchor: target.anchor, token: Date.now() }); return true; }
     }
     return false;
-  }} />, [current, body, focus, gitKnowledge, skillPath, skillFiles, module]);
+  }} />, [current, body, focus, gitKnowledge, skillPath, skillFiles, module, detail?.revision, detail?.source?.revision]);
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>

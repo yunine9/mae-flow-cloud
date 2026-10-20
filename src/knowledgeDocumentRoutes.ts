@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
 import { readGitKnowledgeResource } from "./knowledgeRepositorySnapshots.ts";
-import { knowledgeDocumentCatalog, knowledgeDocumentDirectory, readCatalogKnowledgeDocument } from "./knowledgeDocumentCatalog.ts";
+import { knowledgeDocumentCatalog, knowledgeDocumentDirectory, knowledgeDocumentReadRevision, readCatalogKnowledgeDocument } from "./knowledgeDocumentCatalog.ts";
 
 function assertNotResearching(service: TaskService, documentId: string) {
   const domain = service.getDomainKnowledgeExtraction(), component = service.getComponentResearch();
@@ -19,8 +19,12 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
     if (request.method === "GET" && !id) {
-      if (new URL(request.url!, "http://localhost").searchParams.get("view") === "directory") {
-        return json(response, 200, { documents: knowledgeDocumentDirectory(dir) });
+      const view = new URL(request.url!, "http://localhost").searchParams.get("view");
+      if (view === "revision" || view === "directory") {
+        response.setHeader("Cache-Control", "no-store");
+        if (view === "revision") return json(response, 200, { revision: knowledgeDocumentReadRevision(dir) });
+        const documents = knowledgeDocumentDirectory(dir);
+        return json(response, 200, { documents, revision: knowledgeDocumentReadRevision(dir, documents) });
       }
       const catalog = knowledgeDocumentCatalog(dir);
       const assets = new Map(catalog.assets.map(asset => [asset.id, asset]));

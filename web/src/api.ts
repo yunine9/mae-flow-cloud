@@ -1555,8 +1555,8 @@ export async function migrateBusinessModule(id: string, targetId: string): Promi
   return result;
 }
 
-export async function getBusinessModules(): Promise<BusinessModuleCatalog> {
-  const response = await fetch("/business-modules");
+export async function getBusinessModules(signal?: AbortSignal): Promise<BusinessModuleCatalog> {
+  const response = await fetch("/business-modules", signal ? { signal, cache: "no-store" } : undefined);
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }

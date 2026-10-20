@@ -16,13 +16,16 @@ const documentCache = createKnowledgeReadCache<KnowledgeDocument>({
   maxEntries: 24, maxWeight: 16 * 1024 * 1024, ttl: 30_000,
   weight: document => JSON.stringify(document).length * 2,
 });
-export function readKnowledgeDocument(id: string, revision: string, refresh = false) {
-  return documentCache.read(JSON.stringify([id, revision]),
+export function readKnowledgeDocument(id: string, revision: string, refresh = false, sourceRevision?: string) {
+  return documentCache.read(JSON.stringify([id, revision, sourceRevision]),
     () => documentRequest<KnowledgeDocument>(`/${encodeURIComponent(id)}`), refresh,
-    document => document.revision === revision);
+    document => document.revision === revision && (sourceRevision === undefined || document.source?.revision === sourceRevision));
+}
+export function knowledgeDocumentResourceUrl(document: KnowledgeDocument, path: string) {
+  return `/knowledge-documents/${encodeURIComponent(document.id)}/resources?path=${encodeURIComponent(path)}&revision=${encodeURIComponent(document.source?.revision ?? document.revision)}`;
 }
 export async function documentRequest<T>(path = "", body?: unknown): Promise<T> {
-  const response = await fetch(`/knowledge-documents${path}`, body === undefined ? undefined : {
+  const response = await fetch(`/knowledge-documents${path}`, body === undefined ? { signal: AbortSignal.timeout(30_000), cache: "no-store" } : {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const data = await response.json() as T & { error?: string };

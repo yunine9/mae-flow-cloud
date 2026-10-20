@@ -3,6 +3,7 @@ import { ArrowUpRight, FolderGit2, GitBranch, LoaderCircle, RefreshCw, Settings2
 import { Button } from "@/components/ui/button";
 import { businessModuleKnowledgeRequest, type BusinessModuleKnowledgeLocationResult } from "./api";
 import { componentRequest } from "./componentResearchApi";
+import { checkKnowledgeRevision, subscribeKnowledgeRevisionChecks } from "./knowledgeRevision";
 
 export function knowledgeLocationSettingsUrl(moduleId: string) {
   return `/configuration?tab=modules&module=${encodeURIComponent(moduleId)}&section=knowledge`;
@@ -12,23 +13,41 @@ const repositoryLabel = (value: string) => value.replace(/\.git$/, "").split(/[/
 /** 正式阅读页只展示来源，长期绑定统一在配置中心维护。 */
 export function KnowledgeModuleLocation({ moduleId, onSynced }: { moduleId: string; onSynced: () => void }) {
   const [value, setValue] = useState<BusinessModuleKnowledgeLocationResult>(), [error, setError] = useState("");
-  const [busy, setBusy] = useState(false), [reload, setReload] = useState(0);
+  const [busy, setBusy] = useState(false);
   const owner = useRef(moduleId); owner.current = moduleId;
-  const synchronized = useRef(onSynced); synchronized.current = onSynced;
+  const refreshStatus = useRef<() => void>(() => {});
   useEffect(() => {
-    let live = true; setValue(undefined); setError(""); setBusy(false);
-    void businessModuleKnowledgeRequest(moduleId).then(next => { if (live) setValue(next); }).catch(reason => { if (live) setError(reason.message); });
-    return () => { live = false; };
-  }, [moduleId, reload]);
-  useEffect(() => {
-    if (value?.sync?.state !== "syncing") return;
-    let live = true, reading = false;
-    const timer = setInterval(() => {
-      if (reading) return; reading = true;
-      void businessModuleKnowledgeRequest(moduleId).then(next => { if (live) { setValue(next); if (next.sync?.state !== "syncing") synchronized.current(); } }).catch(reason => { if (live) setError(reason.message); }).finally(() => { reading = false; });
-    }, 2000);
-    return () => { live = false; clearInterval(timer); };
-  }, [moduleId, value?.sync?.state]);
+    let live = true, reading = false, syncing = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setValue(undefined); setError(""); setBusy(false);
+    const refresh = async () => {
+      clearTimeout(timer);
+      if (!live || reading || document.visibilityState !== "visible") return;
+      reading = true;
+      try {
+        const next = await businessModuleKnowledgeRequest(moduleId);
+        if (!live) return;
+        const finished = syncing && next.sync?.state !== "syncing";
+        syncing = next.sync?.state === "syncing";
+        setValue(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+        setError("");
+        if (finished) checkKnowledgeRevision();
+      } catch (reason) { if (live) setError((reason as Error).message); }
+      finally {
+        reading = false;
+        if (live && syncing && document.visibilityState === "visible") timer = setTimeout(refresh, 2000);
+      }
+    };
+    refreshStatus.current = () => { void refresh(); };
+    const visibilityChanged = () => {
+      if (document.visibilityState === "visible") void refresh();
+      else clearTimeout(timer);
+    };
+    const unsubscribe = subscribeKnowledgeRevisionChecks(() => { void refresh(); });
+    document.addEventListener("visibilitychange", visibilityChanged);
+    void refresh();
+    return () => { live = false; clearTimeout(timer); unsubscribe(); document.removeEventListener("visibilitychange", visibilityChanged); };
+  }, [moduleId]);
   const location = value?.location, sync = value?.sync;
   async function synchronize() {
     if (busy) return;
@@ -36,8 +55,8 @@ export function KnowledgeModuleLocation({ moduleId, onSynced }: { moduleId: stri
     try {
       await componentRequest(`/business-modules/${encodeURIComponent(moduleId)}/knowledge-sync`, {}, AbortSignal.timeout(190_000));
       if (owner.current !== moduleId) return;
-      setReload(n => n + 1); onSynced();
-    } catch (reason) { if (owner.current === moduleId) { setError((reason as Error).message); setReload(n => n + 1); } }
+      refreshStatus.current(); onSynced();
+    } catch (reason) { if (owner.current === moduleId) { setError((reason as Error).message); refreshStatus.current(); } }
     finally { if (owner.current === moduleId) setBusy(false); }
   }
   return <section className={`km-source-location ${value && !location ? "is-unconfigured" : ""}`} aria-label="领域知识来源">

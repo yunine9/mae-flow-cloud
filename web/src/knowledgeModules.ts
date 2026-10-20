@@ -6,7 +6,8 @@ import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { documentRequest } from "./knowledgeDocumentsApi";
 import type { ComponentGovernanceItem, ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
-import { createKnowledgeReadCache } from "./knowledgeReadCache";
+import { createKnowledgeReadCache, knowledgeReadGeneration } from "./knowledgeReadCache";
+import { markKnowledgeDirectoryReadFailed, recordKnowledgeDirectoryRevision } from "./knowledgeRevision";
 
 export type KnowledgeModuleCategory = "business" | "engineering" | "unassigned";
 export interface ModuleDocument extends KnowledgeDocument {
@@ -141,22 +142,27 @@ export function knowledgeModuleNames(data: KnowledgeModuleData | undefined, stac
     ? { ...module, name: technologyStackLabel(module.id, stacks) } : module) };
 }
 async function readKnowledgeModules(): Promise<KnowledgeModuleData> {
+  const generation = knowledgeReadGeneration();
+  const directory = documentRequest<{ documents: KnowledgeDocument[]; revision?: string }>("?view=directory");
   const [documents, modules, components, skills, technologies] = await Promise.allSettled([
-    documentRequest<{ documents: KnowledgeDocument[] }>("?view=directory"), getBusinessModules(),
+    directory, directory.then(() => getBusinessModules(AbortSignal.timeout(30_000))),
     componentRequest<{ components: ComponentRepository[] }>("/component-repositories"), getSkillLibrary({ directoryOnly: true }), loadTechnologyStacks(),
   ]);
-  if (documents.status === "rejected") throw documents.reason;
+  if (documents.status === "rejected" || modules.status === "rejected") {
+    if (generation === knowledgeReadGeneration()) markKnowledgeDirectoryReadFailed();
+    throw documents.status === "rejected" ? documents.reason : modules.status === "rejected" ? modules.reason : new Error("知识目录读取失败");
+  }
   const result = projectKnowledgeModules({ documents: documents.value.documents,
     technologyStacks: technologies.status === "fulfilled" ? technologies.value : [],
-    businessModules: modules.status === "fulfilled" ? modules.value.modules : [],
+    businessModules: modules.value.modules,
     components: components.status === "fulfilled" ? components.value.components : [],
     skills: skills.status === "fulfilled" ? skills.value.skills : [],
     skillOperations: skills.status === "fulfilled" ? skills.value.operations : [],
   });
-  if (modules.status === "rejected") result.warnings.push("业务模块读取失败，部分知识暂列待整理。");
   if (components.status === "rejected") result.warnings.push("基础组件配置读取失败，组件归属暂不可用。");
   if (skills.status === "rejected") result.warnings.push("Skill 归属读取失败，部分 Skill 暂列待整理。");
   if (technologies.status === "rejected") result.warnings.push("技术栈清单读取失败，暂时显示原始标识。");
+  if (generation === knowledgeReadGeneration()) recordKnowledgeDirectoryRevision(documents.value.revision);
   return result;
 }
 

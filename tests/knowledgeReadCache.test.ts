@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { cachedKnowledgeModules, knowledgeModuleNames, loadKnowledgeModules } from "../web/src/knowledgeModules.ts";
 import { createKnowledgeReadCache, invalidateKnowledgeReads } from "../web/src/knowledgeReadCache.ts";
-import { readKnowledgeDocument, type KnowledgeDocument } from "../web/src/knowledgeDocumentsApi.ts";
+import { knowledgeDocumentResourceUrl, readKnowledgeDocument, type KnowledgeDocument } from "../web/src/knowledgeDocumentsApi.ts";
 import { updateBusinessModule } from "../web/src/api.ts";
 
 const document = (revision = "r1"): KnowledgeDocument => ({
@@ -77,6 +77,64 @@ test("正文同版本合并请求，切换版本与失效后重新读取，不�
   await readKnowledgeDocument("kg-example", "r2", true);
   await readKnowledgeDocument("kg-example", "r2");
   assert.equal(calls, 5, "响应版本不一致时不能留在旧版本键下");
+});
+
+test("仅图片提交变化也刷新正文来源并更换资源地址，不复用同正文revision的旧提交", async t => {
+  invalidateKnowledgeReads();
+  let commit = "commit-a", reads = 0;
+  t.mock.method(globalThis, "fetch", async (_input: string, options: { cache: string; signal: AbortSignal }) => {
+    assert.equal(options.cache, "no-store");
+    assert.ok(options.signal instanceof AbortSignal);
+    reads++;
+    return json({ ...document("same-body"), source: { repository: "https://git.example/knowledge", branch: "main", path: "模块/说明.md", revision: commit } });
+  });
+  const before = await readKnowledgeDocument("kg-example", "same-body", false, commit);
+  commit = "commit-b";
+  const after = await readKnowledgeDocument("kg-example", "same-body", false, commit);
+  assert.equal(reads, 2);
+  assert.equal(before.content, after.content);
+  assert.equal(after.source?.revision, "commit-b");
+  assert.match(knowledgeDocumentResourceUrl(before, "图片/流程.svg"), /revision=commit-a$/);
+  assert.match(knowledgeDocumentResourceUrl(after, "图片/流程.svg"), /revision=commit-b$/);
+});
+
+test("必要模块配置读取失败不会发布空模块目录，也不会缓存失败结果", async t => {
+  invalidateKnowledgeReads();
+  let unavailable = true;
+  t.mock.method(globalThis, "fetch", async (input: string) => {
+    if (input === "/knowledge-documents?view=directory") return json({ documents: [document()] });
+    if (input === "/business-modules") return unavailable ? json({ error: "temporarily unavailable" }, 503) : json({ modules: [module] });
+    if (input === "/component-repositories") return json({ components: [] });
+    if (input === "/skills?view=directory") return json({ skills: [], operations: [] });
+    if (input === "/technology-stacks") return json({ stacks: [] });
+    throw new Error(input);
+  });
+  await assert.rejects(loadKnowledgeModules(), /temporarily unavailable/);
+  assert.equal(cachedKnowledgeModules(), undefined);
+  unavailable = false;
+  assert.equal((await loadKnowledgeModules()).modules[0].id, "example");
+});
+
+test("模块配置在目录返回后读取，避免把旧配置与新目录版本拼接", async t => {
+  invalidateKnowledgeReads();
+  let release!: (value: Response) => void, moduleReads = 0;
+  t.mock.method(globalThis, "fetch", async (input: string, options?: { signal?: AbortSignal }) => {
+    if (input === "/knowledge-documents?view=directory") return new Promise<Response>(resolve => { release = resolve; });
+    if (input === "/business-modules") {
+      moduleReads++; assert.ok(options?.signal);
+      return json({ modules: [{ ...module, name: "配置更新后的模块" }] });
+    }
+    if (input === "/component-repositories") return json({ components: [] });
+    if (input === "/skills?view=directory") return json({ skills: [], operations: [] });
+    if (input === "/technology-stacks") return json({ stacks: [] });
+    throw new Error(input);
+  });
+  const loading = loadKnowledgeModules();
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(moduleReads, 0);
+  release(json({ documents: [document()] }));
+  assert.equal((await loading).modules[0].name, "配置更新后的模块");
+  assert.equal(moduleReads, 1);
 });
 
 test("失效前的慢请求不会覆盖刷新结果，失败允许重试", async () => {
