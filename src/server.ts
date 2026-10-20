@@ -154,6 +154,7 @@ import { DEFAULT_ISSUE_AUTO_CLAIM_INTERVAL_S } from "./issueFlow/autoClaim.ts";
 import {
   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
   ISSUE_REPO_RECLAIM_DEFAULT,
+  ISSUE_WARMUP_ENABLED_DEFAULT,
   ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT,
 } from "./issueFlow/service.ts";
 import { EnvironmentRegistry } from "./environmentRegistry.ts";
@@ -845,9 +846,10 @@ export function createTaskServer(
                   ?? 10,
                 issue_compact_every_events: 0, // 旧客户端兼容，容量管理已自动化
                 // 终态现场回收缺省开(磁盘治理票 01),管理页旋钮
-                // issue_repo_reclaim 可关;构建产物冷却期缺省 48h(票 03)。
+                // issue_repo_reclaim 可关;可再生编译产物默认闲置 24h 后清理。
                 // 缺省值从 service 导入,两处不许漂移。
                 issue_repo_reclaim: ISSUE_REPO_RECLAIM_DEFAULT,
+                issue_warmup_enabled: ISSUE_WARMUP_ENABLED_DEFAULT,
                 issue_build_products_cooldown_hours:
                   ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT,
                 // 守闸器阈值缺省(#248):与 service 旋钮同源,两处不漂移。

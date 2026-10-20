@@ -33,7 +33,7 @@ review.triage.mr / pipeline.green.others_red 与 receipts 的 mrgate.red
 
 ## rework.products_reclaimed
 
-平台通知: 该单的构建产物(target/build/node_modules 等编译中间物)已按磁盘纪律回收,源码与依赖缓存完好。本次返工的首次编译是全量编译(依赖缓存热,无需重新下载),耗时会长于增量——按正常流程编译验证即可,不要把编译变慢当作环境故障排查。
+平台通知: 该单部分编译中间产物已释放,源码与工作成果保留。接着当前任务继续,答卡或继续分析无需立即编译。真正需要编译时检查现有准备情况,按仓库构建 Skill 重新准备相关仓并编译;依赖缓存可能命中,缺少的依赖仍需下载。具体方法与超时、失败处理见 skills/issue-delivery/SKILL.md 的「按需本地验证」。
 
 ## gate.analysis_confirm.confirm
 

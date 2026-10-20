@@ -36,6 +36,9 @@ export interface RuntimeKnobs {
   /** 问题流回合并发额度:同时推进的问题会话回合上限(等待用户/闲置/
    *  挂起的会话不占额度)。泵每次开泵现读,改完即生效,无需重启。 */
   issue_max_turns?: number;
+  /** 问题单环境预热开关:1=后台首编;0=由 Agent 按需编译(默认)。
+   * 改动只影响后续预热,不中断已经执行的任务。 */
+  issue_warmup_enabled?: number;
   /** [已退役]问题会话事件量压缩阈值:2026-09-21 起容量管理自动化
    *  (每会话每请求前按窗口容量压缩,SessionCompaction 统一管理),
    *  服务端固定写 0,字段仅旧客户端兼容保留。 */
@@ -43,9 +46,8 @@ export interface RuntimeKnobs {
   /** 终态(取消/归档)问题单的代码现场回收开关:1=开(缺省,repo/ 由
    *  每日清扫器回收,过程记录保留);0=关(行为与现状全等)。 */
   issue_repo_reclaim?: number;
-  /** 问题单构建产物冷却期(小时):状态不在运行/排队/等人的单子,产物
-   *  mtime 冷却超过该值即删 target/build/node_modules/depend。缺省 48;
-   *  0=关闭。 */
+  /** 问题单可再生编译中间产物的闲置清理时长(小时),默认 24。
+   * 闲置或等待的会话满足清理条件后回收,源码、依赖与报告保留;0=关闭。 */
   issue_build_products_cooldown_hours?: number;
   repair_rounds?: number;
   /** 环境验证卡守闸阈值(分钟,#248):mr_green 收口后超过该值仍无
@@ -130,6 +132,13 @@ function knob(value: unknown, name: string, min = 0): number | undefined {
     throw new SettingsError(`${name} 必须是 ≥${min} 的数字`);
   }
   return parsed;
+}
+
+function switchKnob(value: unknown, name: string): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (value === 0 || value === "0") return 0;
+  if (value === 1 || value === "1") return 1;
+  throw new SettingsError(`${name}只能是 0 或 1`);
 }
 
 function upsertModel(
@@ -283,6 +292,10 @@ export class RuntimeSettings {
       issue_max_turns: knob(patch.issue_max_turns, "问题单并发", 1)
         ?? (("issue_max_turns" in patch)
           ? undefined : this.runtime().issue_max_turns),
+      issue_warmup_enabled:
+        switchKnob(patch.issue_warmup_enabled, "问题单环境预热开关")
+        ?? (("issue_warmup_enabled" in patch)
+          ? undefined : this.runtime().issue_warmup_enabled),
       issue_compact_every_events:
         knob(patch.issue_compact_every_events, "问题单压缩事件阈值")
         ?? (("issue_compact_every_events" in patch)

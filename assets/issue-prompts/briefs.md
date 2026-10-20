@@ -25,7 +25,7 @@
 
 ## stage.fix
 
-要求按 implement 技能的方法实施修复(读 `skills/implement/SKILL.md` 取实现骨架)。本阶段不推送、不建 MR——交付动作全部属于下一阶段「提交 MR·跑绿」,推进后才可交付,平台到那时才启动流水线监看。开改前可读 .mae-flow-work/build-notes.md(预热沉淀的构建入口,缺席忽略)。每轮 UT 结果如实上报;验证聚焦:先跑与本修改直接相关的函数/模块级测试,通过即收——全量回归交给平台流水线,不要每轮手跑全套。完成后自检,再按 code-review 双轴(Standards=仓规,Spec=分析报告的修改方案)过一遍自己的 diff,测试可接受就调 complete_stage 推进。
+按 implement 技能的方法实施修复(读 `skills/implement/SKILL.md`),本地编译与测试按 `skills/issue-delivery/SKILL.md` 的「按需本地验证」自行判断;简单明确的修改可直接提交推送,复杂修改按需验证相关仓。完成后自检,再按 code-review 双轴(Standards=仓规,Spec=分析报告的修改方案)检查自己的 diff,如实说明验证范围后调 complete_stage 推进,继续完成 MR 和流水线流程。
 
 ## stage.mr_green
 

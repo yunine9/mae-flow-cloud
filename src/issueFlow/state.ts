@@ -526,10 +526,8 @@ export interface IssueSessionState {
    * repo/ 子树被清扫器删除后落此标记——工作区变更签据此如实降级,
    * 恢复/续跑路径据此不再触碰已回收现场。上 wire(前端降级文案)。 */
   repo_reclaimed_at?: string;
-  /** 构建产物已回收的时刻(磁盘治理票 03):冷却期清理删掉
-   * repo/<仓>/{target,build,node_modules,depend} 后落此标记——返工
-   * 重开阶段的回合提示词据此带"首次编译为全量"通知,防模型把慢编译
-   * 误诊为环境故障。上 wire。 */
+  /** 已知编译中间目录回收的时刻；续跑通知提醒 Agent 按需重新准备。
+   * 源码、依赖与报告仍保留，历史编译结果不因回收而改变。上 wire。 */
   build_products_reclaimed_at?: string;
   error?: string;
   last_reply?: string;

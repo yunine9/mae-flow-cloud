@@ -147,6 +147,33 @@ test("数值校验:无限等待没有语法;models 必须真实存在才能选",
   }), /没有模型 no-such/);
 });
 
+test("问题单环境预热开关只接受 0/1，支持持久保存和恢复默认", () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-set-warmup-"));
+  const settings = new RuntimeSettings(dataDir);
+  assert.equal(settings.runtime().issue_warmup_enabled, undefined);
+
+  settings.updateRuntime({ issue_warmup_enabled: 1 });
+  settings.updateRuntime({ issue_max_turns: 3 });
+  assert.equal(settings.runtime().issue_warmup_enabled, 1,
+    "更新其他参数不能覆盖预热开关");
+  assert.equal(new RuntimeSettings(dataDir).runtime().issue_warmup_enabled, 1,
+    "重启后保留管理员设置");
+
+  for (const invalid of [-1, 2, 0.5, "true", "2", true, false, [], {}]) {
+    assert.throws(() => settings.updateRuntime({ issue_warmup_enabled: invalid }),
+      /问题单环境预热开关只能是 0 或 1/);
+    assert.equal(settings.runtime().issue_warmup_enabled, 1,
+      "非法更新不能改写已有设置");
+  }
+  settings.updateRuntime({ issue_warmup_enabled: "0" });
+  assert.equal(settings.runtime().issue_warmup_enabled, 0);
+  settings.updateRuntime({ issue_warmup_enabled: "1" });
+  assert.equal(settings.runtime().issue_warmup_enabled, 1);
+  settings.updateRuntime({ issue_warmup_enabled: "" });
+  assert.equal(new RuntimeSettings(dataDir).runtime().issue_warmup_enabled,
+    undefined, "留空清除覆盖，使用服务默认值");
+});
+
 test("团队执行约定只影响新任务，并与任务补充按层固定", () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-set-policy-"));
   const settings = new RuntimeSettings(dataDir);
@@ -271,6 +298,37 @@ test("路由权限:admin 可读改,开发成员 403,密钥不出网", async () =
     const deniedCheck = await fetch(`${base}/settings/check`, {
       headers: { cookie: dev } });
     assert.equal(deniedCheck.status, 403, "部署自检也只允许管理员查看");
+
+    const initialSettings = await fetch(`${base}/settings`, {
+      headers: { cookie: admin },
+    }).then((response) => response.json()) as {
+      defaults: { runtime: { issue_warmup_enabled: number;
+        issue_build_products_cooldown_hours: number } };
+    };
+    assert.equal(initialSettings.defaults.runtime.issue_warmup_enabled, 0,
+      "管理页默认关闭问题单环境预热");
+    assert.equal(initialSettings.defaults.runtime.issue_build_products_cooldown_hours,
+      24, "管理页与实际清理策略采用同一个 24 小时默认值");
+    const deniedWarmup = await fetch(`${base}/settings/runtime`, {
+      method: "PUT", headers: { cookie: dev },
+      body: JSON.stringify({ issue_warmup_enabled: 1 }),
+    });
+    assert.equal(deniedWarmup.status, 403);
+    const enabledWarmup = await fetch(`${base}/settings/runtime`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ issue_warmup_enabled: 1 }),
+    });
+    assert.equal(enabledWarmup.status, 200);
+    const enabledView = await enabledWarmup.json() as {
+      runtime: { issue_warmup_enabled: number };
+    };
+    assert.equal(enabledView.runtime.issue_warmup_enabled, 1);
+    const invalidWarmup = await fetch(`${base}/settings/runtime`, {
+      method: "PUT", headers: { cookie: admin },
+      body: JSON.stringify({ issue_warmup_enabled: 2 }),
+    });
+    assert.equal(invalidWarmup.status, 400);
+    assert.equal(settings.runtime().issue_warmup_enabled, 1);
 
     const checked = await fetch(`${base}/settings/check`, {
       headers: { cookie: admin },

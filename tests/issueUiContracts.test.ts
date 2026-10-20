@@ -777,31 +777,20 @@ test("现场页签挂载与切回时贴底:程序滚动回声不参与人上翻�
   assert.match(sticky, /setTop\.current = node\.scrollHeight/);
 });
 
-test("推送前 UT 纪律:本体住 fix 简报,push_branch 只管平台机械(#83)", () => {
-  // 纯文案纪律(用户拍板:不加台账闸、不做宿主拦截)。2026-09-11 减负
-  // 收口:UT 口径曾双写——push_branch 描述"时间允许就跑全量回归"与 fix
-  // 阶段简报"全量回归交给平台流水线,不要每轮手跑全套"直接矛盾。现单源
-  // 住 fix 简报(briefs.md stage.fix);push_branch 描述只写平台机械校验
-  // (单号/分支名/串行),不再教测试——工具描述教了就会和简报漂移。
+test("按需本地验证由技能统一指导,push_branch 只管平台事实校验", () => {
+  // 简报只指路,验证范围交给主 Agent 按修改风险判断,不另加编译前置。
   const briefs = readFileSync(resolve("assets/issue-prompts/briefs.md"), "utf-8");
-  assert.match(briefs, /每轮 UT 结果如实上报/, "fix 简报缺 UT 上报口径");
-  assert.match(briefs, /先跑与本修改直接相关的函数\/模块级测试,通过即收/,
-    "fix 简报缺验证聚焦口径");
-  assert.match(briefs, /全量回归交给平台流水线,不要每轮手跑全套/,
-    "fix 简报缺全量回归口径");
   const pushBranchDesc = issueTools.match(
     /name: "push_branch"[\s\S]*?parameters: Type\.Object/)?.[0] ?? "";
   assert.ok(pushBranchDesc, "push_branch 工具定义必须存在");
   assert.doesNotMatch(pushBranchDesc, /UT|全量回归|测试/,
-    "push_branch 描述不得再教 UT——单源在 fix 简报,双写必漂移");
-  // 交付动作收敛(#373,ADR-0050):交付教学整体迁到 mr_green 简报;
-  // fix 简报只声明本阶段不推送,不再引用交付技能、不再劝阻式教学。
+    "push_branch 描述不得重复验证方法");
   const fixBrief = briefs.match(/## stage\.fix\n([\s\S]*?)\n## stage\.mr_green/)?.[1] ?? "";
   assert.ok(fixBrief, "briefs.md 缺 stage.fix 锚点");
-  assert.match(fixBrief, /本阶段不推送、不建 MR/, "fix 简报应声明本阶段不推送");
-  assert.doesNotMatch(fixBrief, /issue-delivery/, "交付技能引用应住 mr_green 简报");
-  assert.doesNotMatch(fixBrief, /不要推完代码停在原地等绿/,
-    "「别推完等绿」的劝阻随门禁收敛退役——本阶段根本推不了");
+  assert.match(fixBrief, /issue-delivery.*按需本地验证/);
+  assert.match(fixBrief, /简单明确的修改可直接提交推送/);
+  assert.match(fixBrief, /如实说明验证范围/);
+  assert.doesNotMatch(fixBrief, /本阶段不推送、不建 MR/);
   const mrGreenBrief = briefs.match(/## stage\.mr_green\n([\s\S]*?)\n## stage\.conclude/)?.[1] ?? "";
   assert.match(mrGreenBrief, /issue-delivery/, "mr_green 简报应接住交付教学");
 });

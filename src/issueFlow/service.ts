@@ -6,7 +6,9 @@ import { postMrDiscussionReply, postMrDiscussionResolve } from "../mrDiscussionR
 import { concurrentWorkPrompt } from "../concurrentWorkPrompt.ts";
 import { resolveProductBranch } from "../configurationCenter.ts";
 import { readResourceBlocks, resourceBlocked } from "../repositoryResourcePolicy.ts";
-import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt } from "../auxiliarySessions.ts";
+import { auxiliarySessionEpoch, trackAuxiliarySession, untrackAuxiliarySession, abortAuxiliarySessions, interruptWarmupReceipt, hasAuxiliarySessions } from "../auxiliarySessions.ts";
+import { reclaimBuildProducts } from "./buildProducts.ts";
+import { withinDataDir } from "../workspaceReclaim.ts";
 import { prepareMaeBuildSupport, isMaeRepository, MAE_BUILD_ASSETS, MAE_BUILD_MOUNT, MAE_CONTAINER_BOOTSTRAP } from "../maeBuildSupport.ts";
 /**
  * 问题流服务:与需求任务并行的独立会话域。
@@ -28,7 +30,6 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -647,9 +648,10 @@ export interface IssueFlowOptions {
       /** 终态现场回收(磁盘治理票 01):canceled/archived 单的 repo/ 子树
        *  由清扫器回收。缺省 1=开;0=关(行为与现状全等,现场保留)。 */
       issue_repo_reclaim?: number;
-      /** 构建产物冷却期(磁盘治理票 03,小时):状态不在运行/排队/等人
-       *  且产物 mtime 冷却超过该值,删 repo/<仓>/{target,build,
-       *  node_modules,depend}。缺省 48;0=关闭。允许小数(测试用)。 */
+      /** 管理员开启后，后续分析回合可以自动预热；缺省关闭。 */
+      issue_warmup_enabled?: number;
+      /** 闲置或等待中的会话，无工作活动超过此小时数后回收可再生中间文件。
+       *  源码、依赖和报告保留；缺省 24，0 关闭。 */
       issue_build_products_cooldown_hours?: number;
     };
   };
@@ -812,11 +814,12 @@ function treeStats(dir: string): { bytes: number; newestMtime: number } {
 
 /** 终态现场回收开关的部署缺省(server.ts 缺省快照同用,勿两处漂移)。 */
 export const ISSUE_REPO_RECLAIM_DEFAULT = 1;
+export const ISSUE_WARMUP_ENABLED_DEFAULT = 0;
 /** 守闸器阈值缺省(分钟,#248):两小时——留足「用户验证要时间」的量,
  *  又不至于漏卡隔夜才被发现;server defaults 与旋钮两处同源。 */
 export const ENV_VERIFY_WATCHDOG_MINUTES_DEFAULT = 120;
 /** 构建产物冷却期的部署缺省(小时)。 */
-export const ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT = 48;
+export const ISSUE_BUILD_PRODUCTS_COOLDOWN_HOURS_DEFAULT = 24;
 
 function issueInfraFailure(cause: unknown): IssueInfraError {
   const detail = cause instanceof Error ? cause.message : String(cause);
@@ -959,6 +962,7 @@ export class IssueFlowService {
   private readonly issuesRoot: string;
   private readonly live = new Map<string, LiveIssue>();
   private readonly turning = new Set<string>();
+  private storageSweepActive = false;
   /** 回合代币发放器:每次启动回合/接棒发新号,收口方凭号判断自己还是不是
    *  槽位主人。纯内存计数,进程内唯一即可。 */
   private turnSeq = 0;
@@ -3761,6 +3765,8 @@ export class IssueFlowService {
     if (this.shuttingDown || isTerminal(live.state.status)) return;
     const configured = this.options.warmup;
     if (!configured || configured.enabled === false) return;
+    if ((this.options.settings?.runtime?.().issue_warmup_enabled
+      ?? ISSUE_WARMUP_ENABLED_DEFAULT) !== 1) return;
     // 原生路径要真容器;测试注入 runner 时放行。
     if (!configured.runner && !this.options.isolation) return;
     if (live.warmupActive) return;
@@ -4752,16 +4758,6 @@ export class IssueFlowService {
         saveState(live.root, live.state);
       }
     }
-    // 构建产物已按冷却期回收过的单子(磁盘治理票 03):返工首编是全量
-    // 编译(依赖缓存热,不走出网下载)——提前说破,防模型把慢编译误诊
-    // 成环境故障去瞎排查。通知送达即清标记:预告说一次就够,不随每条
-    // 续聊重复。
-    if (live.state.build_products_reclaimed_at) {
-      content = `${content}\n\n`
-        + promptCopy("notices", "rework.products_reclaimed");
-      delete live.state.build_products_reclaimed_at;
-      saveState(live.root, live.state);
-    }
     this.continueTurn(live, content);
     return this.summarize(live.state);
   }
@@ -5313,12 +5309,19 @@ export class IssueFlowService {
     return Math.max(0, hours) * 3_600_000;
   }
 
-  /** 每日清扫(serve 启动后首跑 + 每 24h 一轮):终态(canceled/archived)
-   *  整仓回收 + idle 单构建产物冷却清理。failed 不在范围(可恢复,用户
-   *  拍板全豁免);running/queued/waiting_user 被状态守卫挡住。双旋钮
-   *  各自独立:issue_repo_reclaim 管整仓,冷却时长管产物,互不连带。 */
+  /** 终态整仓回收和闲置中间文件清理分别受各自配置控制；同一实例不重叠扫描。 */
   async sweepTerminalRepos(): Promise<{ reclaimed: number; bytes: number;
     productBytes: number }> {
+    if (this.storageSweepActive) return { reclaimed: 0, bytes: 0, productBytes: 0 };
+    this.storageSweepActive = true;
+    try {
+      return await this.sweepRepos();
+    } finally {
+      this.storageSweepActive = false;
+    }
+  }
+
+  private async sweepRepos(): Promise<{ reclaimed: number; bytes: number; productBytes: number }> {
     const productsCooldownMs = this.buildProductsCooldownMs();
     const reclaimOn = this.repoReclaimOn();
     if (!reclaimOn && productsCooldownMs <= 0) {
@@ -5342,15 +5345,7 @@ export class IssueFlowService {
         }
       }
       if (!state) continue;
-      // 守卫与安全性(删除路径的论证,改动前先读):
-      // - turning 守卫恒在:正回合(含催办/补发延续)的单子绝不碰;
-      // - 终态整仓回收:本实例内存里有活容器则让路(当前实例的正常
-      //   流程里终态单容器已停,活着=control 的后台回收正在跑,让位);
-      // - idle 产物清理**不看容器**:idle 单的容器是刻意长存的(停点
-      //   只在终态),按它守卫清理在长驻服务上永无机会。安全性靠三件
-      //   事:状态守卫(idle 时容器内无活动回合)、清扫全程同步执行
-      //   (Node 单线程,期间不可能插入 beginTurn,竞态在构造上不存在)、
-      //   冷却 mtime(编译在持续 touch 产物,活跃单的冷却期走不完)。
+      // 等待中的容器会长期保留，是否正在工作须看回合、辅助会话和命令。
       const terminal = state.status === "canceled" || state.status === "archived";
       if (this.turning.has(name)) continue;
       if (terminal && live?.container?.isAlive) continue;
@@ -5375,9 +5370,25 @@ export class IssueFlowService {
             this.log(`[issue-flow] ${name} 清扫回收终态现场 `
               + `(${(size / 1024 ** 3).toFixed(2)} GB)`);
           }
-        } else if (state.status === "idle" && productsCooldownMs > 0) {
-          const size = this.reclaimBuildProducts(
-            root, name, state, productsCooldownMs);
+        } else if (productsCooldownMs > 0 && withinDataDir(root, this.options.dataDir)) {
+          const cutoff = Date.now() - productsCooldownMs;
+          if (!["idle", "waiting_user"].includes(state.status)
+              || state.takeover || live?.warmupActive
+              || (live && hasAuxiliarySessions(live))
+              || live?.container?.hasActiveProcesses
+              || !(Date.parse(state.updated_at) <= cutoff)
+              || (state.warmup?.finished_at && !(Date.parse(state.warmup.finished_at) <= cutoff))) continue;
+          // 从检查到删除完成不 await，新回合只能在删除结束后启动。
+          const { bytes: size, directories: removed } = reclaimBuildProducts(join(root, "repo"), cutoff);
+          if (removed > 0) {
+            state.build_products_reclaimed_at = new Date().toISOString();
+            const notice = promptCopy("notices", "rework.products_reclaimed");
+            const queue = state.parked_notices ?? (state.parked_notices = []);
+            if (!queue.includes(notice)) queue.push(notice);
+            saveState(root, state);
+            this.appendSessionEvent({ root, id: name }, "workspace_reclaimed",
+              { bytes: size, scope: "products", directories: removed });
+          }
           if (size > 0) {
             productBytes += size;
             this.log(`[issue-flow] ${name} 清扫回收构建产物 `
@@ -5403,50 +5414,6 @@ export class IssueFlowService {
     saveState(root, state);
     this.appendSessionEvent({ root, id }, "workspace_reclaimed",
       { bytes, scope: "repo" });
-    return bytes;
-  }
-
-  /** 构建产物冷却清理:repo/<仓>/ 下的 target/build/node_modules/depend,
-   *  最新 mtime 冷却超过 cooldownMs 才删。源码与 .git 保留;落
-   *  build_products_reclaimed_at(返工通知的依据,票 03)。返回字节数。
-   *  仓目录与产物目录一律 lstat:软链不跟随,绝不删到工作区外。 */
-  private reclaimBuildProducts(
-    root: string,
-    id: string,
-    state: IssueSessionState,
-    cooldownMs: number,
-  ): number {
-    const repoRoot = join(root, "repo");
-    if (!existsSync(repoRoot)) return 0;
-    const products = ["target", "build", "node_modules", "depend"];
-    const cutoff = Date.now() - cooldownMs;
-    let bytes = 0;
-    let removed = 0;
-    for (const entry of readdirSync(repoRoot, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue; // Dirent 不跟软链,链即跳过
-      const repoDir = join(repoRoot, entry.name);
-      for (const product of products) {
-        const dir = join(repoDir, product);
-        let productStat;
-        try {
-          productStat = lstatSync(dir);
-        } catch {
-          continue; // 不在场
-        }
-        if (!productStat.isDirectory()) continue; // 软链/文件:不碰
-        const stats = treeStats(dir);
-        if (stats.newestMtime > cutoff) continue;
-        bytes += stats.bytes;
-        rmSync(dir, { recursive: true, force: true });
-        removed += 1;
-      }
-    }
-    if (removed > 0) {
-      state.build_products_reclaimed_at = new Date().toISOString();
-      saveState(root, state);
-      this.appendSessionEvent({ root, id }, "workspace_reclaimed",
-        { bytes, scope: "products" });
-    }
     return bytes;
   }
 
