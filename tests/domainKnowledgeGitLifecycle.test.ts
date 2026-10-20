@@ -136,7 +136,8 @@ test("正式检视纳入模块允许的所有目录，公共仓排除文稿不�
     title: path, scope: "repository", module_ids: [], repositories: [code.repository], source: { ...code, path } });
   const selected = codeDocument("docs/shared/selected.md"), related = codeDocument("docs/订单/config.md"), additional = codeDocument("docs/common/integration.md");
   const unrelated = codeDocument("docs/库存/rules.md"), excluded = codeDocument("docs/订单/private/secret.md"), agents = codeDocument("AGENTS.md");
-  const documents = [domain, selected, related, additional, unrelated, excluded, agents];
+  const nestedAgents = codeDocument("docs/订单/agents.MD");
+  const documents = [domain, selected, related, additional, unrelated, excluded, agents, nestedAgents];
   const now = new Date().toISOString(), repositories = [{ repository: location.repository, branch: location.branch, revision: "a".repeat(40) }, code];
   writeGitKnowledgeSnapshot(dir, { module_id: "orders", location, synced_at: now, documents, resources: {}, repositories });
   writeModuleKnowledgeSync(dir, { module_id: "orders", location, state: "ready", synced_at: now, attempted_at: now, document_count: documents.length, repositories });
@@ -147,7 +148,12 @@ test("正式检视纳入模块允许的所有目录，公共仓排除文稿不�
       assert.deepEqual(readKnowledgeDocument(dir, document.id).module_ids, ["inventory"], "公共仓文稿仍可由未排除它的模块阅读");
       assert.throws(() => manager.beginInspection(document.id, { module_id: "orders", issue_no: "REQ-EXCLUDED" }, "alice"), /知识范围/);
     }
-    assert.throws(() => manager.beginInspection(agents.id, { module_id: "orders", issue_no: "REQ-AGENTS" }, "alice"), /AGENTS\.md.*平台维护/);
+    for (const navigation of [agents, nestedAgents]) {
+      const inspection = manager.beginInspection(navigation.id, { module_id: "orders", issue_no: "REQ-AGENTS", expected_revision: navigation.revision }, "alice");
+      assert.deepEqual(new Set(inspection.documents.map(document => document.id)), new Set([domain.id, selected.id, related.id, additional.id]));
+      assert.ok(inspection.documents.some(document => document.id === inspection.inspection_source?.document_id), "检视入口定位正文，不能定位已排除的导航");
+      assert.throws(() => manager.beginInspection(navigation.id, { module_id: "orders", issue_no: "REQ-STALE", expected_revision: "旧版本" }, "alice"), /知识已有新版本/);
+    }
     const job = manager.beginInspection(selected.id, { module_id: "orders", issue_no: "REQ-REPO" }, "alice");
     assert.deepEqual(new Set(job.documents.map(document => document.id)), new Set([domain.id, selected.id, related.id, additional.id]));
     assert.equal(job.source_repositories?.length, 1); assert.equal(job.source_repositories?.[0].repository, code.repository);
@@ -160,6 +166,19 @@ test("正式检视纳入模块允许的所有目录，公共仓排除文稿不�
     saveKnowledgeReviewNote(notes, "domain", job.id, { document_id: selected.id, scope: "document", note: "检查选中仓的调用条件" }, "alice");
     assert.throws(() => manager.finishInspection(job.id), /仍有未提交/);
     assert.equal(manager.get(job.id).status, "idle");
+  } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("模块只有导航或已停用正文时不创建空检视任务", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-inspection-no-body-")); module(dir);
+  const domain = official(dir), agents = { ...domain, id: `kg-${createHash("sha256").update("navigation").digest("hex")}`, source: { ...domain.source!, path: `${location.docs_path}/AGENTS.md` } };
+  writeGitKnowledgeSnapshot(dir, { module_id: "orders", location, synced_at: new Date().toISOString(), resources: {},
+    documents: [agents, { ...domain, active: false }],
+    repositories: [{ repository: location.repository, branch: location.branch, revision: domain.source!.revision }] });
+  const manager = new DomainKnowledgeExtraction(dir, async () => { throw new Error("不能运行研究"); });
+  try {
+    assert.throws(() => manager.beginInspection(agents.id, { module_id: "orders", issue_no: "REQ-EMPTY" }, "alice"), /尚无可检视正文/);
+    assert.equal(manager.list().length, 0);
   } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -9,7 +9,7 @@ import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("领域检视：全屏连续跨篇批注、恢复待提交输入、结束统一处理及失败保留重试", { skip: !existsSync(chrome) && "需要真实 Chrome", timeout: 90_000 }, async () => {
+test("领域检视：跨篇批注、读取失败重试、任务切换隔离、后台慢请求与统一提交", { skip: !existsSync(chrome) && "需要真实 Chrome", timeout: 180_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-inspection-browser-"));
   try {
     const repository = { id: "source", name: "业务代码仓", repository: "https://example.test/source.git", branch: "main", path: "src", docs_path: "docs" };
@@ -22,10 +22,19 @@ test("领域检视：全屏连续跨篇批注、恢复待提交输入、结束�
     const css = readdirSync(resolve("web/dist/assets")).filter(name => name.endsWith(".css")).map(name => readFileSync(resolve("web/dist/assets", name), "utf8")).join("\n");
     const html = join(dir, "check.html");
     writeFileSync(html, '<!doctype html><meta charset="utf-8"><style>body{margin:0}' + css + '</style><div id="app"></div><pre id="result" style="display:none"></pre><script>window.__INSPECTION__=' + JSON.stringify(job).replaceAll("</script", "<\\/script") + ';</script><script>' + bundle.outputFiles[0].text.replaceAll("</script", "<\\/script") + '</script>');
-    for (const [width, height] of [[1920, 1080], [1366, 768]]) {
-      const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=15000", "--dump-dom", `file://${html}`], join(dir, `${width}.html`));
-      const result = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1]; assert.ok(result, `${width}: browser did not finish`);
-      const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true); assert.equal(value.notes, 5); assert.equal(value.independentFinished, true);
+    const screenshots = process.env.MFC_INSPECTION_SCREENSHOT_DIR;
+    if (screenshots) mkdirSync(screenshots, { recursive: true });
+    const cases = [1920, 1366].flatMap(width => ["workflow", "recovery"].map(scenario => ({ width, height: width === 1920 ? 1080 : 768, scenario, visual: "" })));
+    if (screenshots) for (const visual of ["initial-error", "started-error"]) cases.push({ width: 1920, height: 1080, scenario: "recovery", visual });
+    for (const { width, height, scenario, visual } of cases) {
+      const name = `${scenario}-${visual || "checks"}-${width}`, image = screenshots && visual ? join(resolve(screenshots), `inspection-${visual}-${width}.png`) : undefined;
+      const query = new URLSearchParams({ scenario, ...(visual ? { visual } : {}) });
+      const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, `profile-${name}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=15000", ...(image ? [`--screenshot=${image}`] : []), "--dump-dom", `file://${html}?${query}`], join(dir, `${name}.html`));
+      const result = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1]; assert.ok(result, `${name}: browser did not finish`);
+      const value = JSON.parse(result); assert.equal(value.error, undefined, `${name}: ${value.error}`); assert.equal(value.passed, true);
+      if (visual) { assert.equal(value.visual, visual); assert.ok(image && existsSync(image), `${name}: missing screenshot`); }
+      else if (scenario === "recovery") { assert.equal(value.recovery, true); assert.equal(value.requestIsolation, true); }
+      else { assert.equal(value.notes, 5); assert.equal(value.independentFinished, true); }
     }
 
   } finally { stop(); rmSync(dir, { recursive: true, force: true }); }

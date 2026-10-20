@@ -8298,6 +8298,14 @@ body:has(.knowledge-studio) .wish-quick-fab { display:none; }
 .domain-inspection-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
 .domain-inspection-bar > p { flex-basis:100%; margin:0; font-size:12px; line-height:1.5; }
 .domain-inspection-count { display:inline-flex; align-items:center; justify-content:center; min-width:19px; height:19px; padding:0 5px; border-radius:6px; font-size:11px; color:var(--primary); background:color-mix(in srgb, var(--primary) 9%, transparent); }
+.domain-inspection-entry { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; min-width:0; max-width:100%; }
+.domain-inspection-read-status { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; min-width:0; margin:0; color:var(--muted); font-size:12px; line-height:1.5; }
+.domain-inspection-read-status > svg { flex-shrink:0; }
+.domain-inspection-read-status > span { overflow-wrap:anywhere; }
+.domain-inspection-read-status.is-error { color:var(--danger); }
+.domain-inspection-read-status.is-error > button { flex-shrink:0; color:var(--danger); }
+.domain-inspection-entry .domain-inspection-read-status { max-width:420px; }
+.domain-inspection-bar > .domain-inspection-read-status { flex-basis:100%; }
 .knowledge-inline-review-host { list-style:none; margin:0; padding:0; }
 .knowledge-inline-review-list { display:grid; gap:7px; margin:8px 0 18px; user-select:none; }
 .knowledge-review-notes .knowledge-inline-review-note { border:1px solid #ddd9ed; border-left:3px solid #a79acb; border-radius:8px; background:#f7f5fb; padding:10px 13px; font-size:13px; line-height:1.65; color:#4f465f; }

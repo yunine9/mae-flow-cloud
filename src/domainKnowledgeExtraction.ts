@@ -990,7 +990,6 @@ export class DomainKnowledgeExtraction {
     if (module.status !== "active") throw new Error("业务模块已停用");
     if (!location) throw new Error("平台领域知识仓尚未配置，请联系管理员");
     if (!published.module_ids.includes(module_id)) throw new Error("文档不在所选业务模块的知识范围内");
-    if (/(?:^|\/)agents\.md$/i.test(published.source.path)) throw new Error("AGENTS.md 导航入口由平台维护，请选择正文开始检视");
     const knowledge_target = repository(location, "domain");
     const allFormal = listFormalKnowledgeDocuments(this.dataDir).filter(document => document.active && document.source && document.module_ids.includes(module_id));
     const synchronized = readModuleKnowledgeSync(this.dataDir, module_id)?.repositories ?? [];
@@ -1028,7 +1027,7 @@ export class DomainKnowledgeExtraction {
     if (!documents.length) throw new Error("此模块尚无可检视正文，请先同步正式知识");
     const job: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, task_kind: "inspection", title: module.name, scope: `检视业务模块：${module.name}。${module.description}`,
       module_id, issue_no: knowledgeIssueNumber(input.issue_no), issue_description: knowledgeIssueDescription(input.issue_description), operator,
-      created_at: new Date().toISOString(), inspection_source: { document_id: documentId, started_at: new Date().toISOString() },
+      created_at: new Date().toISOString(), inspection_source: { document_id: formal.find(document => document.id === documentId)?.id ?? formal[0].id, started_at: new Date().toISOString() },
       git_resources: freezeGitKnowledgeResources(this.dataDir, formal),
       knowledge_layout: "directory-v1", repositories, knowledge_target, source_repositories, archive_configured: true, archive_revision: 0,
       material_ids: [], status: "idle", stage: "检视中", revisions, documents, turns: [], evidence: [], publications: [], archive_batches: [] };

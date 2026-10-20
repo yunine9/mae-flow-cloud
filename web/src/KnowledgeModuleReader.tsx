@@ -61,6 +61,7 @@ function readablePath(doc: ModuleDocument): string[] {
 export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, onResearch, onAsk }: KnowledgeModuleReaderProps) {
   const { stacks } = useTechnologyStacks();
   const [updating, setUpdating] = useState(false), [updateMessage, setUpdateMessage] = useState(""), [updateBusy, setUpdateBusy] = useState(false), [updateError, setUpdateError] = useState("");
+  const [inspectionMode, setInspectionMode] = useState(false);
   const [inspectionIssue, setInspectionIssue] = useState(""), [inspectionDescription, setInspectionDescription] = useState("");
   const [loaded, setData] = useState(cachedKnowledgeModules), [error, setError] = useState(""), [reload, setReload] = useState(0);
   const data = useMemo(() => knowledgeModuleNames(loaded, stacks), [loaded, stacks]);
@@ -85,8 +86,11 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const module = requestedModule ?? (selectedDocumentId ? data?.modules.find(m => m.documents.some(d => d.id === selectedDocumentId)) : undefined);
   const current = module?.documents.find(d => d.id === selected);
   const gitKnowledge = current?.id.startsWith("kg-") === true;
-  const canInspect = module?.category === "business" && gitKnowledge && current?.form !== "skill";
-  const navigationFile = /(?:^|\/)AGENTS\.md$/i.test(current ? knowledgeFilePath(current) : "");
+  const canInspect = module?.category === "business";
+  const inspectionDocuments = canInspect ? module.documents.filter(document => document.active && document.id.startsWith("kg-")
+    && document.source && document.form !== "skill" && !/(?:^|\/)AGENTS\.md$/i.test(knowledgeFilePath(document))) : [];
+  const inspectionDocument = inspectionDocuments.find(document => document.id === current?.id) ?? inspectionDocuments[0];
+  function openUpdate() { setInspectionMode(false); setUpdating(true); setUpdateError(""); }
   function readPackage(doc: ModuleDocument) {
     const key = `${generation}:${doc.skillDirectory}:${doc.revision}`;
     let request = packageRequests.current.get(key);
@@ -209,7 +213,10 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
-      <div className="flex shrink-0 items-center gap-2">{onAsk && <Button variant="outline" size="sm" onClick={() => onAsk(moduleKey, current?.form === "skill" ? undefined : current?.id)}><MessageSquare size={15} />提问</Button>}<Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{canInspect ? <Button size="sm" variant="outline" disabled={navigationFile} onClick={() => { setUpdating(true); setUpdateError(""); }} title={navigationFile ? "导航入口由平台维护，请选择正文开始检视" : "基于正式版本创建新的检视任务"}><ClipboardCheck size={15} />开始检视</Button> : current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
+      <div className="flex shrink-0 items-center gap-2">{onAsk && <Button variant="outline" size="sm" onClick={() => onAsk(moduleKey, current?.form === "skill" ? undefined : current?.id)}><MessageSquare size={15} />提问</Button>}<Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>
+        {canInspect && <Button size="sm" variant="outline" disabled={!inspectionDocument} onClick={() => { setInspectionMode(true); setUpdating(true); setUpdateError(""); }} title="检视本模块的正式正文，自动排除 AGENTS.md"><ClipboardCheck size={15} />{inspectionDocument ? "开始检视" : "暂无可检视正文"}</Button>}
+        {(!canInspect || !gitKnowledge) && current?.research_source && <Button variant="outline" size="sm" onClick={openUpdate}><RefreshCw />更新知识</Button>}
+        <KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
         {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
         {module?.category === "business" && <KnowledgeModuleScope key={module.id} moduleId={module.id} moduleName={module.name} />}
       </div>
@@ -239,7 +246,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
             if (!facts.length && current.active && !title) return null;
             return <header className="mb-3 border-b border-line pb-2">{(facts.length || !current.active) && <div className="flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={14} /> : <FileText size={14} />}<span className="break-all">{facts.join(" · ")}</span>{!current.active && <Badge variant="secondary">{current.technology_assignment_required ? "待补技术栈关联" : "已停用"}</Badge>}</div>}{title && <h2 className="mt-1 text-xl font-semibold leading-snug">{current.title}</h2>}</header>;
           })()}
-          <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={refreshKnowledge}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : gitKnowledge ? markdownBody : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); setUpdating(true); setUpdateError(""); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
+          <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={refreshKnowledge}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : gitKnowledge ? markdownBody : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); openUpdate(); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
           {current.form === "skill" && detail && !skillFiles && <p className="mt-6 text-xs text-muted-foreground">已读取 SKILL.md；当前接口未提供包内附件清单。</p>}
           {detail && !current.external && !gitKnowledge && <KnowledgeVersions key={`${detail.id}:${detail.revision}`} document={detail} onRestored={refreshKnowledge} />}
           {detail && <details className="mt-8 border-t border-line pt-3 text-sm"><summary className="text-muted-foreground">版本与来源</summary><div className="mt-3 grid gap-2 text-sm text-muted-foreground"><p className="break-all">版本：{detail.revision || "未记录"}</p>{current.maintainedAt && <p>最近维护：{new Date(current.maintainedAt).toLocaleString("zh-CN")}</p>}{detail.source && <p className="break-all">{detail.source.repository} · {detail.source.branch} · {detail.source.path}</p>}{detail.research_source && <Button variant="link" className="justify-start px-0" onClick={() => onResearch(detail.research_source!.job_id, detail.id)}>查看研究与归档记录</Button>}{detail.history?.map((entry, index) => <p key={`${entry.at}:${index}`}>{new Date(entry.at).toLocaleString("zh-CN")} · {entry.operator} · {entry.action}</p>)}</div></details>}
@@ -247,23 +254,23 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         </div>}
       </div>
     </ResizableKnowledgePanes>
-    <Dialog open={updating} onOpenChange={next => { if (!updateBusy) setUpdating(next); }}><DialogContent className="tw-root max-w-xl"><DialogHeader><DialogTitle>{canInspect ? "开始检视正式知识" : "基于正式版本更新"}</DialogTitle></DialogHeader>
-      <p className="text-sm leading-relaxed text-muted-foreground">{canInspect ? "创建独立检视任务，冻结本模块当前正式正文版本并进入全屏。AGENTS.md 导航入口由平台维护，不纳入人工改稿。可连续提出行、整篇和整体意见，结束检视后才由 Agent 修改；MR 合入前知识库保持原内容。" : `${detail?.title} · 当前版本 ${detail?.revision.slice(0, 10)}。创建更新任务后修改文稿，再提交 MR。`}</p>
-      {canInspect ? <><label className="grid gap-2 text-sm">关联单号（必填）<Input aria-label="检视关联单号" maxLength={120} value={inspectionIssue} onChange={event => setInspectionIssue(event.target.value)} placeholder="本次修订 MR 关联的需求或问题单号" /></label><label className="grid gap-2 text-sm">单号描述（必填）<Input aria-label="检视单号描述" maxLength={2000} value={inspectionDescription} onChange={event => setInspectionDescription(event.target.value)} placeholder="将原样用于 MR 标题" /></label></> : detail?.research_source?.job_id.startsWith("dkx-") ? <Textarea aria-label="本次更新要求" rows={3} value={updateMessage} onChange={e => setUpdateMessage(e.target.value)} placeholder="需要关注哪些变化？留空则核对来源并生成增量建议。" /> : <p className="text-sm text-muted-foreground">创建后按能力核对来源、修改文稿，再提交 MR。</p>}
+    <Dialog open={updating} onOpenChange={next => { if (!updateBusy) setUpdating(next); }}><DialogContent className="tw-root max-w-xl"><DialogHeader><DialogTitle>{inspectionMode ? "开始检视正式知识" : "基于正式版本更新"}</DialogTitle></DialogHeader>
+      <p className="text-sm leading-relaxed text-muted-foreground">{inspectionMode ? "创建独立检视任务，冻结本模块当前筛选范围内的正式正文并进入全屏，自动排除 AGENTS.md。可连续提出行、整篇和整体意见，结束检视后才由 Agent 修改；MR 合入前知识库保持原内容。" : `${detail?.title} · 当前版本 ${detail?.revision.slice(0, 10)}。创建更新任务后修改文稿，再提交 MR。`}</p>
+      {inspectionMode ? <><label className="grid gap-2 text-sm">关联单号（必填）<Input aria-label="检视关联单号" maxLength={120} value={inspectionIssue} onChange={event => setInspectionIssue(event.target.value)} placeholder="本次修订 MR 关联的需求或问题单号" /></label><label className="grid gap-2 text-sm">单号描述（必填）<Input aria-label="检视单号描述" maxLength={2000} value={inspectionDescription} onChange={event => setInspectionDescription(event.target.value)} placeholder="将原样用于 MR 标题" /></label></> : detail?.research_source?.job_id.startsWith("dkx-") ? <Textarea aria-label="本次更新要求" rows={3} value={updateMessage} onChange={e => setUpdateMessage(e.target.value)} placeholder="需要关注哪些变化？留空则核对来源并生成增量建议。" /> : <p className="text-sm text-muted-foreground">创建后按能力核对来源、修改文稿，再提交 MR。</p>}
       {updateError && <p role="alert" className="text-danger text-sm">{updateError}</p>}
-      <div className="flex justify-end gap-2"><Button variant="outline" disabled={updateBusy} onClick={() => setUpdating(false)}>取消</Button><Button disabled={updateBusy || !detail || canInspect && (!inspectionIssue.trim() || !inspectionDescription.trim())} onClick={async () => {
-        if (!detail) return; setUpdateBusy(true); setUpdateError("");
+      <div className="flex justify-end gap-2"><Button variant="outline" disabled={updateBusy} onClick={() => setUpdating(false)}>取消</Button><Button disabled={updateBusy || (inspectionMode ? !inspectionDocument || !inspectionIssue.trim() || !inspectionDescription.trim() : !detail)} onClick={async () => {
+        if (inspectionMode ? !inspectionDocument : !detail) return; setUpdateBusy(true); setUpdateError("");
         try {
-          if (canInspect) {
-            const result = await documentRequest<{ id: string }>(`/${encodeURIComponent(detail.id)}/inspection`, { expected_revision: detail.revision, module_id: module?.id, issue_no: inspectionIssue.trim(), issue_description: inspectionDescription.trim() });
-            setUpdating(false); onResearch(result.id, detail.id);
-          } else if (detail.research_source) {
+          if (inspectionMode && inspectionDocument) {
+            const result = await documentRequest<{ id: string; inspection_source?: { document_id: string } }>(`/${encodeURIComponent(inspectionDocument.id)}/inspection`, { expected_revision: inspectionDocument.revision, module_id: module?.id, issue_no: inspectionIssue.trim(), issue_description: inspectionDescription.trim() });
+            setUpdating(false); onResearch(result.id, result.inspection_source?.document_id ?? inspectionDocument.id);
+          } else if (detail?.research_source) {
             const source = detail.research_source.job_id;
             const result = source.startsWith("dkx-") ? await documentRequest<{ id: string }>(`/${detail.id}/update-research`, { expected_revision: detail.revision, message: updateMessage || undefined }) : await componentRequest<{ id: string }>(`/component-research/${source}/begin-update`, {});
             setUpdating(false); onResearch(result.id, detail.id);
           }
         } catch (e) { setUpdateError((e as Error).message); } finally { setUpdateBusy(false); }
-      }}>{updateBusy ? "正在创建…" : canInspect ? "创建任务并开始检视" : "创建更新任务"}</Button></div>
+      }}>{updateBusy ? "正在创建…" : inspectionMode ? "创建任务并开始检视" : "创建更新任务"}</Button></div>
     </DialogContent></Dialog>
     <ComponentKnowledgeDelete open={deleting} initialDocumentId={deleteDocumentId} onClose={() => setDeleting(false)} onChanged={() => { refreshKnowledge(); setGovernanceReload(n => n + 1); }} />
   </section>;
