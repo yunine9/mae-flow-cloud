@@ -26,7 +26,7 @@ executionRuntime.ts：原业务 API、鉴权、TaskService、IssueFlowService
 首次切换需要停止旧单进程服务一次。同一数据目录不能同时运行旧服务与新执行服务。保留原数据，不使用 `--fresh`。
 
 1. 将原完整服务配置复制到部署侧的 `runtime.json`，保留 `data`、鉴权、模型、内核、隔离镜像、平台适配器、回调与所有业务参数。执行服务的监听改为 `127.0.0.1:8786`。对外的 `public-url` 仍指向原入口地址。
-2. 独立启动执行服务：`node --import tsx src/executionRuntime.ts --config /etc/mae-flow-cloud/runtime.json`。也提供 `npm run runtime -- --config ...` 供手工启动。
+2. 独立启动执行服务：`node --max-old-space-size=32768 --import tsx src/executionRuntime.ts --config /etc/mae-flow-cloud/runtime.json`。也提供 `npm run runtime -- --config ...` 供手工启动，默认使用相同的 32 GiB 老生代堆上限。
 3. Web 入口配置只需要下面这些值，使用原端口：
 
 ```json
@@ -44,6 +44,14 @@ executionRuntime.ts：原业务 API、鉴权、TaskService、IssueFlowService
 **发布目录也要独立且不可变。** 执行服务运行在它自己的固定 release 目录里，更新页面入口不能原地覆盖该目录、其依赖、内核或脚本。否则长会话可能执行到一半新一半旧的文件。更新执行逻辑时另外准备新 release，再计划重启执行服务；本次不热替换运行中的 Pi 代码。
 
 没有配置 `runtime-url` 时，`npm run serve` 保持单进程模式并打印提示：重启仍会中断执行，只能利用原生会话恢复。仅拉代码、不调整部署方式，不会自动获得不中断执行的能力。
+
+### 执行服务内存与问题单并发
+
+`npm run serve` 和 `npm run runtime` 都显式设置 `--max-old-space-size=32768`，按约 60 GiB 内存的部署机器给执行进程留出 32 GiB 老生代堆空间，避免多会话在同一 Node 进程里运行时仍使用 Node 的默认堆上限。此值不是预分配内存，也不是进程总内存上限；应给原生内存、缓冲区、子进程和任务容器留出空间。机器或容器可用内存较小时，直接使用 Node 启动并按实际预算调整该参数。命令行 Node 参数优先于 `NODE_OPTIONS`，不能靠后者覆盖 npm 脚本里的值。
+
+systemd 直接运行 Node 的部署不会读取 npm 脚本，必须同步修改承载 Pi 会话的执行服务 `ExecStart`。拆分部署时是 `executionRuntime.ts`；单进程部署时是 `serve.ts`。修改后执行 `systemctl daemon-reload` 并重启该服务，保留原数据目录，不使用 `--fresh`；只重启 Web 入口不会改变执行服务的堆上限。
+
+问题单保持原有默认并发 10，不随本次堆上限调整而降低。新建与重启恢复的队列调度按该额度启动会话；它不是对作答、续聊等所有入口的全局硬上限。实际优先级是管理页「问题单并发数」（数据目录下 `settings.json` 的 `runtime.issue_max_turns`）> 执行服务命令行 `--issue-max-turns` > 执行服务配置文件的 `issue-max-turns` > 默认 10。管理页修改在后续队列调度时生效，已开始的回合不会被中断。`max-concurrent` 只控制需求任务，不能用于降低问题单并发。
 
 ## 会话保存与恢复
 
