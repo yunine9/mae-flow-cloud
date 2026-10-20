@@ -22,6 +22,7 @@ import { blankKnowledgeMetadata, KnowledgeMarkdown, type KnowledgeFocus } from "
 import { cachedKnowledgeModules, knowledgeFilePath, knowledgeModuleNames, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type ModuleDocument } from "./knowledgeModules";
 import { invalidateKnowledgeReads, knowledgeReadGeneration, subscribeKnowledgeReads } from "./knowledgeReadCache";
 import { KnowledgeModuleLocation } from "./KnowledgeModuleLocation";
+import { KnowledgeModuleScope } from "./KnowledgeModuleScope";
 import { resolveKnowledgeReference } from "./knowledgeStructure";
 import { startKnowledgeDocumentRead } from "./knowledgeDocumentRetry";
 
@@ -81,9 +82,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const [componentTab, setComponentTab] = useState<"usage" | "rules">("usage");
   const [deleting, setDeleting] = useState(false), [deleteDocumentId, setDeleteDocumentId] = useState<string>();
   const requestedModule = data?.modules.find(m => m.key === moduleKey);
-  const module = selectedDocumentId && !requestedModule?.documents.some(d => d.id === selectedDocumentId)
-    ? data?.modules.find(m => m.documents.some(d => d.id === selectedDocumentId)) ?? requestedModule
-    : requestedModule;
+  const module = requestedModule ?? (selectedDocumentId ? data?.modules.find(m => m.documents.some(d => d.id === selectedDocumentId)) : undefined);
   const current = module?.documents.find(d => d.id === selected);
   const gitKnowledge = current?.id.startsWith("kg-") === true;
   const canInspect = module?.category === "business" && gitKnowledge && current?.form !== "skill";
@@ -212,6 +211,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
       <div className="flex shrink-0 items-center gap-2">{onAsk && <Button variant="outline" size="sm" onClick={() => onAsk(moduleKey, current?.form === "skill" ? undefined : current?.id)}><MessageSquare size={15} />提问</Button>}<Button variant="ghost" size="sm" aria-expanded={showTree} onClick={() => setShowTree(v => !v)}>{showTree ? <PanelLeftClose /> : <PanelLeftOpen />}{showTree ? "收起目录" : "展开目录"}</Button>{canInspect ? <Button size="sm" variant="outline" disabled={navigationFile} onClick={() => { setUpdating(true); setUpdateError(""); }} title={navigationFile ? "导航入口由平台维护，请选择正文开始检视" : "基于正式版本创建新的检视任务"}><ClipboardCheck size={15} />开始检视</Button> : current?.research_source && <Button variant="outline" size="sm" onClick={() => { setUpdating(true); setUpdateError(""); }}><RefreshCw />更新知识</Button>}<KnowledgeContentSearch contentRef={searchableContent} contentKey={`${currentKey}:${detail?.revision || ""}`} disabled={body === undefined || !usage} /><span ref={setNotesToolbar} className="flex items-center" />
         {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+        {module?.category === "business" && <KnowledgeModuleScope key={module.id} moduleId={module.id} moduleName={module.name} />}
       </div>
     </header>
     {module?.category === "business" && <KnowledgeModuleLocation key={module.id} moduleId={module.id} onSynced={refreshKnowledge} />}

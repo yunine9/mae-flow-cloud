@@ -86,3 +86,28 @@ test("全局仓未配置仍可保存模块路径，读视图明确未配置且�
   assert.equal((await (await request(path)).json() as any).configured, false);
   assert.equal(readBusinessModule(dir, "orders").knowledge_path, "custom/交易");
 });
+
+test("目录筛选保存和恢复立即生效，旧版本不能覆盖新选择，暂时缺席的目录仍可恢复", async t => {
+  const { dir, syncs, request } = await setup(t), path = "/business-modules/orders/knowledge-scope";
+  const firstResponse = await request(path);
+  assert.equal(firstResponse.headers.get("cache-control"), "no-store");
+  const first = await firstResponse.json() as any;
+  assert.deepEqual(first.repositories, [{ repository: "https://git.example/code.git", directories: ["docs"], excluded_paths: [] }]);
+  assert.equal((await request(path, "PUT", null as any)).status, 400);
+  const savedResponse = await request(path, "PUT", { expected_revision: first.module_revision,
+    repositories: [{ repository: "https://git.example/code.git", excluded_paths: ["docs/other"] }] });
+  assert.equal(savedResponse.status, 200);
+  const saved = await savedResponse.json() as any;
+  assert.deepEqual(saved.repositories[0].excluded_paths, ["docs/other"]);
+  assert.deepEqual(saved.repositories[0].directories, ["docs"], "实际目录与已排除目录分别返回，界面可标出暂时缺席的目录并恢复");
+  assert.deepEqual(readBusinessModule(dir, "orders").repository_knowledge_exclusions,
+    [{ repository: "https://git.example/code.git", paths: ["docs/other"] }]);
+  assert.equal((await request(path, "PUT", { expected_revision: first.module_revision, repositories: [] })).status, 409);
+  assert.equal((await request(path, "PUT", { expected_revision: saved.module_revision,
+    repositories: [{ repository: "https://git.example/code.git", excluded_paths: ["../escape"] }] })).status, 400);
+  const restored = await request(path, "PUT", { expected_revision: saved.module_revision, repositories: [] });
+  assert.equal(restored.status, 200);
+  assert.deepEqual((await restored.json() as any).repositories[0].excluded_paths, []);
+  assert.deepEqual(readBusinessModule(dir, "orders").repository_knowledge_exclusions, []);
+  assert.deepEqual(syncs, [], "筛选只调整阅读范围，不触发拉仓或重新萃取");
+});

@@ -1478,6 +1478,25 @@ export async function businessModuleKnowledgeRequest(moduleId: string, input?: {
   return result;
 }
 
+export interface BusinessModuleKnowledgeScope {
+  module_revision: number;
+  repositories: Array<{ repository: string; directories: string[]; excluded_paths: string[] }>;
+}
+export async function businessModuleKnowledgeScopeRequest(
+  moduleId: string,
+  input?: { expected_revision: number; repositories: Array<{ repository: string; excluded_paths: string[] }> },
+  signal?: AbortSignal,
+): Promise<BusinessModuleKnowledgeScope> {
+  const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}/knowledge-scope`, {
+    cache: "no-store", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+    ...(input ? { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(input) } : {}),
+  });
+  const result = await response.json() as BusinessModuleKnowledgeScope & { error?: string };
+  if (!response.ok) throw new Error(result.error || (input ? "目录筛选保存失败" : "目录筛选读取失败"));
+  if (input) invalidateKnowledgeReads();
+  return result;
+}
+
 export interface BusinessModule {
   id: string;
   name: string;

@@ -127,28 +127,63 @@ test("候选直接提交 MR，修改原任务复用原 MR，不写正式库；�
   } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("代码仓正式正文可创建模块检视，源码仓使用真实分支与版本，公共仓其他模块文档不被全量纳入", async () => {
+test("正式检视纳入模块允许的所有目录，公共仓排除文稿不能靠仓地址重新纳入或发起检视", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-inspection-repository-")); module(dir);
   const domain = official(dir), code = { repository: "https://example.test/orders.git", branch: "release", revision: "c".repeat(40) };
+  createBusinessModule(dir, { id: "inventory", name: "库存", description: "库存领域", owner: "bob", repositories: [code.repository] }, "bob");
+  updateBusinessModule(dir, "orders", { repository_knowledge_exclusions: [{ repository: code.repository, paths: ["docs/库存", "docs/订单/private"] }] }, "alice");
   const codeDocument = (path: string): KnowledgeDocument => ({ ...domain, id: `kg-${createHash("sha256").update(path).digest("hex")}`,
     title: path, scope: "repository", module_ids: [], repositories: [code.repository], source: { ...code, path } });
-  const selected = codeDocument("docs/shared/selected.md"), related = codeDocument("docs/订单/config.md"), unrelated = codeDocument("docs/库存/rules.md");
+  const selected = codeDocument("docs/shared/selected.md"), related = codeDocument("docs/订单/config.md"), additional = codeDocument("docs/common/integration.md");
+  const unrelated = codeDocument("docs/库存/rules.md"), excluded = codeDocument("docs/订单/private/secret.md"), agents = codeDocument("AGENTS.md");
+  const documents = [domain, selected, related, additional, unrelated, excluded, agents];
   const now = new Date().toISOString(), repositories = [{ repository: location.repository, branch: location.branch, revision: "a".repeat(40) }, code];
-  writeGitKnowledgeSnapshot(dir, { module_id: "orders", location, synced_at: now, documents: [domain, selected, related, unrelated], resources: {}, repositories });
-  writeModuleKnowledgeSync(dir, { module_id: "orders", location, state: "ready", synced_at: now, attempted_at: now, document_count: 4, repositories });
+  writeGitKnowledgeSnapshot(dir, { module_id: "orders", location, synced_at: now, documents, resources: {}, repositories });
+  writeModuleKnowledgeSync(dir, { module_id: "orders", location, state: "ready", synced_at: now, attempted_at: now, document_count: documents.length, repositories });
   let calls = 0;
   const manager = new DomainKnowledgeExtraction(dir, async () => { calls++; return "不应运行"; });
   try {
+    for (const document of [unrelated, excluded]) {
+      assert.deepEqual(readKnowledgeDocument(dir, document.id).module_ids, ["inventory"], "公共仓文稿仍可由未排除它的模块阅读");
+      assert.throws(() => manager.beginInspection(document.id, { module_id: "orders", issue_no: "REQ-EXCLUDED" }, "alice"), /知识范围/);
+    }
+    assert.throws(() => manager.beginInspection(agents.id, { module_id: "orders", issue_no: "REQ-AGENTS" }, "alice"), /AGENTS\.md.*平台维护/);
     const job = manager.beginInspection(selected.id, { module_id: "orders", issue_no: "REQ-REPO" }, "alice");
-    assert.deepEqual(new Set(job.documents.map(document => document.id)), new Set([domain.id, selected.id, related.id]));
+    assert.deepEqual(new Set(job.documents.map(document => document.id)), new Set([domain.id, selected.id, related.id, additional.id]));
     assert.equal(job.source_repositories?.length, 1); assert.equal(job.source_repositories?.[0].repository, code.repository);
     assert.equal(job.source_repositories?.[0].branch, "release"); assert.equal(job.revisions["repo-1"], code.revision);
     assert.equal(job.documents.find(document => document.id === selected.id)?.target_id, "repo-1");
+    assert.equal(job.documents.find(document => document.id === selected.id)?.path, selected.source!.path);
+    assert.equal(job.documents.find(document => document.id === selected.id)?.base_path, selected.source!.path);
     assert.equal(calls, 0);
     const notes = { dataDir: dir, domain: manager, component: {} as never };
     saveKnowledgeReviewNote(notes, "domain", job.id, { document_id: selected.id, scope: "document", note: "检查选中仓的调用条件" }, "alice");
     assert.throws(() => manager.finishInspection(job.id), /仍有未提交/);
     assert.equal(manager.get(job.id).status, "idle");
+  } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("修改阅读目录范围只影响新检视，已有检视保留文稿与归档路径，取消排除无需同步即可恢复", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "domain-inspection-scope-change-")); module(dir);
+  const domain = official(dir), code = { repository: "https://example.test/orders.git", branch: "release", revision: "c".repeat(40) };
+  const selected: KnowledgeDocument = { ...domain, id: `kg-${createHash("sha256").update("legacy-review").digest("hex")}`,
+    scope: "repository", module_ids: [], repositories: [code.repository], source: { ...code, path: "docs/legacy/rules.md" } };
+  writeGitKnowledgeSnapshot(dir, { module_id: "orders", location, synced_at: new Date().toISOString(), documents: [domain, selected], resources: {},
+    repositories: [{ repository: location.repository, branch: location.branch, revision: "a".repeat(40) }, code] });
+  let calls = 0;
+  const manager = new DomainKnowledgeExtraction(dir, async () => { calls++; return "不应运行"; });
+  try {
+    const original = manager.beginInspection(selected.id, { module_id: "orders", issue_no: "REQ-SCOPE" }, "alice");
+    updateBusinessModule(dir, "orders", { repository_knowledge_exclusions: [{ repository: code.repository, paths: ["docs/legacy"] }] }, "alice");
+    const filtered = manager.beginInspection(domain.id, { module_id: "orders", issue_no: "REQ-SCOPE-FILTERED" }, "alice");
+    assert.deepEqual(filtered.documents.map(document => document.id), [domain.id]);
+    assert.deepEqual(manager.get(original.id).documents, original.documents);
+    assert.deepEqual(manager.get(original.id).repositories, original.repositories);
+    updateBusinessModule(dir, "orders", { repository_knowledge_exclusions: [] }, "alice");
+    const restored = manager.beginInspection(selected.id, { module_id: "orders", issue_no: "REQ-SCOPE-RESTORED" }, "alice");
+    assert.deepEqual(new Set(restored.documents.map(document => document.id)), new Set([domain.id, selected.id]));
+    assert.equal(restored.documents.find(document => document.id === selected.id)?.path, selected.source!.path);
+    assert.equal(calls, 0);
   } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 

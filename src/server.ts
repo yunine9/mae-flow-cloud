@@ -22,6 +22,7 @@ import { deleteTechnologyStack } from "./technologyStackDeletion.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { resolveModuleKnowledgeLocation, saveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
 import { readModuleKnowledgeSync } from "./knowledgeRepositorySync.ts";
+import { listModuleRepositoryKnowledgeDirectories } from "./knowledgeRepositorySnapshots.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
@@ -1569,6 +1570,39 @@ export function createTaskServer(
             }, operator);
             if (resolveModuleKnowledgeLocation(dataDir, created.id)) service.startModuleKnowledgeSync(created.id, operator);
             return json(response, 201, view(created));
+          }
+          if (parts.length === 3 && parts[2] === "knowledge-scope") {
+            const moduleId = decodeURIComponent(parts[1]);
+            const scopeView = () => {
+              const module = readBusinessModule(dataDir, moduleId);
+              if (module.id !== moduleId || module.status !== "active") throw new BusinessModuleError("模块已迁移或停用，请刷新列表");
+              return { module_revision: module.revision,
+                repositories: listModuleRepositoryKnowledgeDirectories(dataDir, moduleId).map(entry => {
+                  const excluded_paths = module.repository_knowledge_exclusions?.find(item =>
+                    repositoryIdentity(item.repository) === repositoryIdentity(entry.repository))?.paths ?? [];
+                  return { ...entry, excluded_paths };
+                }) };
+            };
+            response.setHeader("Cache-Control", "no-store");
+            if (request.method === "GET") return json(response, 200, scopeView());
+            if (request.method === "PUT") {
+              const body = await readBody(request, 512 * 1024);
+              if (!body || typeof body !== "object" || Array.isArray(body)) throw new BusinessModuleError("目录筛选格式不正确");
+              const current = readBusinessModule(dataDir, moduleId);
+              if (!canManageBusinessModule(current, viewer?.username, admin)) return json(response, 403, { error: "请登录后修改知识目录筛选" });
+              if (current.id !== moduleId || current.status !== "active") throw new BusinessModuleError("模块已迁移或停用，请刷新列表");
+              if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision !== current.revision) {
+                return json(response, 409, { error: "模块配置已变化，请重新打开筛选后保存" });
+              }
+              if (!Array.isArray(body.repositories) || body.repositories.some((entry: any) =>
+                !entry || typeof entry.repository !== "string" || !Array.isArray(entry.excluded_paths))) {
+                throw new BusinessModuleError("请按关联代码仓保存目录筛选");
+              }
+              updateBusinessModule(dataDir, moduleId, { repository_knowledge_exclusions: body.repositories.map((entry: any) =>
+                ({ repository: entry.repository, paths: entry.excluded_paths })) }, operator);
+              service.prepareKnowledgeIndex();
+              return json(response, 200, scopeView());
+            }
           }
           if (parts.length === 3 && ["knowledge-location", "knowledge-sync"].includes(parts[2])) {
             const moduleId = decodeURIComponent(parts[1]);

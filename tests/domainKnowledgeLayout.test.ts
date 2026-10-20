@@ -38,12 +38,18 @@ test("共享代码仓只保留一个根 AGENTS，多模块导航并存，正式�
       assert.equal(job.knowledge_layout, "directory-v1"); assert.equal(job.repositories[0].docs_path, `docs/${id}`);
       assert.equal(job.knowledge_target.docs_path, `domains/${id}`);
       await submit(service, job.id); const submitted = service.get(job.id); jobs.push(submitted);
-      assert.equal(listKnowledgeDocuments(f.dataDir).length, 0); assert.equal(listFormalKnowledgeDocuments(f.dataDir).filter(document => document.module_ids.includes(id)).length, 0);
+      const beforeMerge = listFormalKnowledgeDocuments(f.dataDir);
+      assert.equal(listKnowledgeDocuments(f.dataDir).length, 0);
+      assert.equal(beforeMerge.filter(document => document.scope === "module" && document.module_ids.includes(id)).length, 0);
+      assert.equal(beforeMerge.some(document => document.scope === "repository" && document.source?.path === `docs/${id}/README.md`), false);
       f.merge(publicationFor(submitted), f.knowledge); f.merge(publicationFor(submitted, "repo-1"), f.code);
       assert.equal((await f.sync(id)).state, "ready");
       const formal = listFormalKnowledgeDocuments(f.dataDir);
       assert.ok(formal.some(document => document.scope === "module" && document.module_ids.includes(id) && document.source?.path === `domains/${id}/README.md`));
-      assert.ok(formal.some(document => document.scope === "repository" && !document.module_ids.length && document.source?.path === `docs/${id}/README.md`));
+      const expectedModules = jobs.map(job => job.module_id!).sort();
+      assert.deepEqual(formal.filter(document => document.scope === "repository" && document.source?.path === `docs/${id}/README.md`)
+        .map(document => document.module_ids), [expectedModules]);
+      for (const document of formal.filter(document => document.scope === "repository")) assert.deepEqual(document.module_ids, expectedModules);
     }
     const root = f.content(f.code, "main", "AGENTS.md");
     assert.ok(root.includes("docs/orders/README.md")); assert.ok(root.includes("docs/shipping/README.md"));

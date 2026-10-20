@@ -989,12 +989,10 @@ export class DomainKnowledgeExtraction {
     const module = readBusinessModule(this.dataDir, module_id), location = resolveModuleKnowledgeLocation(this.dataDir, module_id);
     if (module.status !== "active") throw new Error("业务模块已停用");
     if (!location) throw new Error("平台领域知识仓尚未配置，请联系管理员");
-    const moduleRepos = new Set(module.repositories.map(repositoryIdentity));
-    const isModuleRepository = (source: { repository: string }) => moduleRepos.has(repositoryIdentity(source.repository));
-    if (!published.module_ids.includes(module_id) && !(published.scope === "repository" && isModuleRepository(published.source))) throw new Error("文档不属于所选业务模块或其绑定代码仓");
+    if (!published.module_ids.includes(module_id)) throw new Error("文档不在所选业务模块的知识范围内");
     if (/(?:^|\/)agents\.md$/i.test(published.source.path)) throw new Error("AGENTS.md 导航入口由平台维护，请选择正文开始检视");
     const knowledge_target = repository(location, "domain");
-    const allFormal = listFormalKnowledgeDocuments(this.dataDir).filter(document => document.active && document.source);
+    const allFormal = listFormalKnowledgeDocuments(this.dataDir).filter(document => document.active && document.source && document.module_ids.includes(module_id));
     const synchronized = readModuleKnowledgeSync(this.dataDir, module_id)?.repositories ?? [];
     const revisions: Record<string, string> = {};
     // 源码工具覆盖模块绑定仓；没有文档的代码仓也能按实际远端 HEAD 读取，不能因正文缺失丢失源码能力。
@@ -1008,13 +1006,7 @@ export class DomainKnowledgeExtraction {
         docs_path: `docs/${repositoryKnowledgeDirectory(module.name)}` };
     });
     const repositories = structuredClone(source_repositories);
-    const moduleDirectories = new Set([`docs/${repositoryKnowledgeDirectory(module.name)}/`]);
-    for (const previous of this.jobs.values()) if (!previous.deleted_at && previous.module_id === module_id) {
-      for (const target of previous.repositories) if (target.docs_path.startsWith("docs/") && target.docs_path !== "docs/knowledge") moduleDirectories.add(`${target.docs_path.replace(/\/$/, "")}/`);
-    }
-    const formal = allFormal.filter(document => !/(?:^|\/)agents\.md$/i.test(document.source!.path) && (document.module_ids.includes(module_id)
-      || document.id === documentId || document.scope === "repository" && isModuleRepository(document.source!)
-        && [...moduleDirectories].some(directory => document.source!.path.startsWith(directory))));
+    const formal = allFormal.filter(document => !/(?:^|\/)agents\.md$/i.test(document.source!.path));
     const documents: DomainDocument[] = formal.map(document => {
       const source = document.source!;
       const domain = document.scope !== "repository" && repositoryIdentity(source.repository) === repositoryIdentity(location.repository) && source.branch === location.branch

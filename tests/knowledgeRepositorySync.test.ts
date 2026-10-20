@@ -54,7 +54,7 @@ test("Git 正式分支独立建库，限定领域目录，公共仓文档保留�
     assert.equal(readGitKnowledgeResource(f.dataDir, domain.id, "../../../../etc/passwd"), undefined);
     assert.equal(readGitKnowledgeResource(f.dataDir, domain.id, "%2Fetc/passwd"), undefined);
     for (const document of documents.filter(document => document.scope === "repository")) {
-      assert.deepEqual(document.module_ids, []); assert.deepEqual(document.repositories, [f.code]);
+      assert.deepEqual(document.module_ids, ["orders", "stock"]); assert.deepEqual(document.repositories, [f.code]);
       assert.ok(["AGENTS.md", "docs/architecture.md"].includes(document.source!.path));
       assert.equal(document.source!.branch, "main");
     }

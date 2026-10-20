@@ -75,6 +75,9 @@ export function knowledgeDocumentReadRevision(dir: string, documents = listForma
   const modules = listBusinessModules(dir).modules.map(module => ({
     id: module.id, name: module.name, description: module.description, status: module.status,
     repositories: [...module.repositories].sort(), knowledge_path: module.knowledge_path,
+    repository_knowledge_exclusions: [...module.repository_knowledge_exclusions ?? []]
+      .map(value => ({ repository: value.repository, paths: [...value.paths].sort() }))
+      .sort((a, b) => a.repository.localeCompare(b.repository)),
   })).sort((a, b) => a.id.localeCompare(b.id));
   // Git 提交必须参与：只改图片时正文 revision 不变；同步时间则不能造成反复刷新。
   return createHash("sha256").update(JSON.stringify({ documents: rows, modules, repository: readKnowledgeRepoConfig(dir) })).digest("hex");

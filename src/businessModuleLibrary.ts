@@ -11,6 +11,7 @@ import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { componentRepositories } from "./componentRepositories.ts";
 import { normalizeMrParticipants, type MrParticipants } from "./mrParticipants.ts";
+import { normalizeRepositoryKnowledgeExclusions, type RepositoryKnowledgeExclusion } from "./businessModuleKnowledgeScope.ts";
 import { validateRepoUrl } from "./issueFlow/issueGit.ts";
 import {
   appendFileSync,
@@ -76,6 +77,8 @@ export interface BusinessModule {
   repositories: string[];
   /** 模块唯一保存的领域目录；仓库与分支统一取全局知识仓配置。 */
   knowledge_path?: string;
+  /** 当前模块不使用的代码仓知识目录；不删除远端文件或同步快照。 */
+  repository_knowledge_exclusions?: RepositoryKnowledgeExclusion[];
   /** HTTP 视图派生的只读位置，不写入模块记录。 */
   knowledge_location?: BusinessModuleKnowledgeLocation;
   /** 本模块全部关联代码仓共用的新 MR 默认人员。 */
@@ -187,6 +190,11 @@ function moduleMrParticipants(value: unknown): MrParticipants | undefined {
   } catch (error) {
     throw new BusinessModuleError(error instanceof Error ? error.message : "MR 默认人员配置不合法");
   }
+}
+
+function moduleKnowledgeExclusions(value: unknown, repositories: readonly string[]) {
+  try { return normalizeRepositoryKnowledgeExclusions(value, repositories); }
+  catch (error) { throw new BusinessModuleError(error instanceof Error ? error.message : "知识目录筛选格式不正确"); }
 }
 
 export function normalizeModuleKnowledgeLocation(value: unknown): BusinessModuleKnowledgeLocation | undefined {
@@ -315,6 +323,7 @@ function parseModule(value: unknown): BusinessModule {
   return {
     ...record,
     knowledge_path: normalizeModuleKnowledgePath(path),
+    repository_knowledge_exclusions: moduleKnowledgeExclusions(module.repository_knowledge_exclusions, module.repositories),
     mr_participants: moduleMrParticipants(module.mr_participants),
     reference_component_repos: Array.isArray(module.reference_component_repos)
       ? module.reference_component_repos.map(String) : [],
@@ -487,6 +496,7 @@ export function createBusinessModule(
     maintainers?: string[];
     repositories?: string[];
     knowledge_path?: unknown;
+    repository_knowledge_exclusions?: unknown;
     knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
@@ -500,14 +510,16 @@ export function createBusinessModule(
   const owner = required(input.owner, "Owner", 48);
   if (!USERNAME.test(owner)) throw new BusinessModuleError("Owner 账号格式不合法");
   const now = new Date().toISOString();
+  const linkedRepositories = moduleRepositories(input.repositories ?? []);
   const module: BusinessModule = {
     id,
     name: required(input.name, "模块名称", 80),
     description: required(input.description, "模块说明", 500),
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
-    repositories: moduleRepositories(input.repositories ?? []),
+    repositories: linkedRepositories,
     knowledge_path: moduleKnowledgePathInput(dataDir, input, defaultModuleKnowledgePath(String(input.name ?? ""))),
+    repository_knowledge_exclusions: moduleKnowledgeExclusions(input.repository_knowledge_exclusions, linkedRepositories),
     mr_participants: moduleMrParticipants(input.mr_participants),
     reference_component_repos: referenceComponentRepos(
       dataDir, input.reference_component_repos ?? []),
@@ -535,6 +547,7 @@ export function updateBusinessModule(
     maintainers?: string[];
     repositories?: string[];
     knowledge_path?: unknown;
+    repository_knowledge_exclusions?: unknown;
     knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
@@ -552,6 +565,9 @@ export function updateBusinessModule(
     throw new BusinessModuleError("模块状态只能是 active 或 archived");
   }
   const now = new Date().toISOString();
+  const nextRepositories = patch.repositories === undefined ? current.repositories : moduleRepositories(patch.repositories);
+  const retainedExclusions = (current.repository_knowledge_exclusions ?? []).filter(entry =>
+    nextRepositories.some(repository => repositoryIdentity(repository) === repositoryIdentity(entry.repository)));
   const updated: BusinessModule = {
     ...current,
     name: patch.name === undefined ? current.name
@@ -562,9 +578,10 @@ export function updateBusinessModule(
     maintainers: patch.maintainers === undefined
       ? current.maintainers.filter((item) => item !== owner)
       : usernames(patch.maintainers, owner),
-    repositories: patch.repositories === undefined
-      ? current.repositories : moduleRepositories(patch.repositories),
+    repositories: nextRepositories,
     knowledge_path: moduleKnowledgePathInput(dataDir, patch, current.knowledge_path),
+    repository_knowledge_exclusions: moduleKnowledgeExclusions(
+      patch.repository_knowledge_exclusions === undefined ? retainedExclusions : patch.repository_knowledge_exclusions, nextRepositories),
     mr_participants: patch.mr_participants === undefined
       ? current.mr_participants : moduleMrParticipants(patch.mr_participants),
     reference_component_repos: patch.reference_component_repos === undefined
