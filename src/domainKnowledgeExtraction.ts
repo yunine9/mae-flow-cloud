@@ -988,7 +988,7 @@ export class DomainKnowledgeExtraction {
     if (!module_id) throw new Error("请选择文档所属业务模块后开始检视");
     const module = readBusinessModule(this.dataDir, module_id), location = resolveModuleKnowledgeLocation(this.dataDir, module_id);
     if (module.status !== "active") throw new Error("业务模块已停用");
-    if (!location) throw new Error("请先设置业务模块的领域知识目录");
+    if (!location) throw new Error("平台领域知识仓尚未配置，请联系管理员");
     const moduleRepos = new Set(module.repositories.map(repositoryIdentity));
     const isModuleRepository = (source: { repository: string }) => moduleRepos.has(repositoryIdentity(source.repository));
     if (!published.module_ids.includes(module_id) && !(published.scope === "repository" && isModuleRepository(published.source))) throw new Error("文档不属于所选业务模块或其绑定代码仓");

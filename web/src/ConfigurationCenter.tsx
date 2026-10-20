@@ -14,9 +14,12 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { confirmDialog } from "./ConfirmDialog";
-import { businessModuleKnowledgeRequest, type BusinessModuleKnowledgeLocation } from "./api";
 
 const PAGE_SIZE = 10;
+const defaultKnowledgePath = (name: string) => {
+  const readable = name.trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, "-").replace(/^[. ]+|[. ]+$/g, "") || "领域知识";
+  return `Function_Knowledge/Access Function/${readable}`;
+};
 const MR_ROLES: Array<[keyof MrParticipants, string]> = [
   ["reviewers", "默认检视人"], ["approval_approvers", "审批人"],
 ];
@@ -99,10 +102,9 @@ function MappingList({ kind }: { kind: string }) {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs; knowledgeLocation?: BusinessModuleKnowledgeLocation }>();
+  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs; knowledgePath?: string; knowledgePathEdited?: boolean }>();
   const [migration, setMigration] = useState<{ source: BusinessModule; targetId: string; preview?: BusinessModuleMigrationPreview; error?: string }>();
   const [notice, setNotice] = useState("");
-  const [knowledgeSuggestion, setKnowledgeSuggestion] = useState<BusinessModuleKnowledgeLocation>();
   async function openMigration(id: string) {
     const source = modules.find(module => module.id === id)!;
     setMigration({ source, targetId: "" });
@@ -152,16 +154,9 @@ function MappingList({ kind }: { kind: string }) {
     const params = new URLSearchParams(location.search), selected = params.get("module");
     if (params.get("section") === "knowledge" && selected) {
       const module = modules.find(item => item.id === selected);
-      if (module) setEdit({ id: module.id, name: module.name, value: module.repositories.join("\n"), description: module.description, mrParticipants: participantInputs(module.mr_participants), knowledgeLocation: module.knowledge_location });
+      if (module) setEdit({ id: module.id, name: module.name, value: module.repositories.join("\n"), description: module.description, mrParticipants: participantInputs(module.mr_participants), knowledgePath: module.knowledge_path ?? module.knowledge_location?.docs_path ?? defaultKnowledgePath(module.name), knowledgePathEdited: true });
     }
   }, [modulesMode, modules]);
-  useEffect(() => {
-    setKnowledgeSuggestion(undefined);
-    if (!edit?.id || !modulesMode) return;
-    let live = true;
-    void businessModuleKnowledgeRequest(edit.id).then(value => { if (live) setKnowledgeSuggestion(value.suggestion); }).catch(() => {});
-    return () => { live = false; };
-  }, [edit?.id, modulesMode]);
   useEffect(() => {
     if (!edit || new URLSearchParams(location.search).get("section") !== "knowledge") return;
     const timer = setTimeout(() => document.getElementById("module-knowledge-location")?.scrollIntoView({ block: "nearest" }), 100);
@@ -172,8 +167,8 @@ function MappingList({ kind }: { kind: string }) {
     const url = new URL(location.href); url.searchParams.delete("module"); url.searchParams.delete("section"); history.replaceState(history.state, "", url);
   }
   const rows = modulesMode
-    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants), knowledgeLocation: m.knowledge_location }))
-    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs(), knowledgeLocation: undefined }));
+    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants), knowledgePath: m.knowledge_path ?? m.knowledge_location?.docs_path ?? defaultKnowledgePath(m.name), knowledgePathEdited: true }))
+    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs(), knowledgePath: undefined, knowledgePathEdited: undefined }));
   const filtered = rows.filter(row => `${row.name} ${row.value}`.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -182,13 +177,11 @@ function MappingList({ kind }: { kind: string }) {
     setBusy(true); setError("");
     try {
       if (modulesMode) {
-        const location = edit.knowledgeLocation;
-        const locationEntered = !!location && !!(location.repository.trim() || location.docs_path.trim());
-        if (!locationEntered && modules.find(module => module.id === edit.id)?.knowledge_location) throw new Error("当前模块已有领域知识目录，修改时请完整填写仓库、分支和目录。");
-        if (locationEntered && (!location.repository.trim() || !location.branch.trim() || !location.docs_path.trim())) throw new Error("请完整填写领域知识仓、正式分支和相对目录，或留空暂不配置。");
+        const knowledgePath = edit.knowledgePath ?? defaultKnowledgePath(edit.name);
+        if (!knowledgePath.trim()) throw new Error("请填写领域知识的仓内相对目录。");
         const input = { name: edit.name, description: edit.description?.trim() || edit.name,
           repositories: edit.value.split("\n").map(v => v.trim()).filter(Boolean),
-          ...(locationEntered ? { knowledge_location: location } : {}),
+          knowledge_path: knowledgePath.trim(),
           mr_participants: {
             reviewers: participantAccounts(edit.mrParticipants?.reviewers),
             approval_approvers: participantAccounts(edit.mrParticipants?.approval_approvers),
@@ -214,7 +207,7 @@ function MappingList({ kind }: { kind: string }) {
         value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} />
       <Button variant="outline" onClick={() => { setQuery(""); setPage(1); }}>重置</Button>
       <Button variant="outline" disabled={loading} onClick={() => void refresh()}>刷新</Button>
-      <Button className="ml-auto" onClick={() => { setError(""); setEdit({ name: "", value: "" }); }}>
+      <Button className="ml-auto" onClick={() => { setError(""); setEdit({ name: "", value: "", knowledgePathEdited: false }); }}>
         ＋ 新建{modulesMode ? "模块" : "版本"}</Button>
     </div>
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
@@ -287,18 +280,16 @@ function MappingList({ kind }: { kind: string }) {
         <DialogHeader><DialogTitle>{edit?.id ? "编辑" : "新建"}{modulesMode ? "模块" : "版本"}</DialogTitle></DialogHeader>
         {edit && <form className="grid gap-4 text-base" onSubmit={e => { e.preventDefault(); void save(); }}>
           <div className={modulesMode ? "grid grid-cols-2 gap-4" : "grid"}>
-            <label className="grid gap-2">{modulesMode ? "模块名称" : "版本名称"}<Input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></label>
+            <label className="grid gap-2">{modulesMode ? "模块名称" : "版本名称"}<Input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value, ...(!edit.id && !edit.knowledgePathEdited ? { knowledgePath: defaultKnowledgePath(e.target.value) } : {}) })} /></label>
             {modulesMode && <label className="grid gap-2">模块说明（可选）<Input value={edit.description ?? ""} onChange={e => setEdit({ ...edit, description: e.target.value })} /></label>}
           </div>
           {modulesMode ? <label className="grid gap-2">关联代码仓<Textarea className="min-h-32" required value={edit.value}
             placeholder="每行一个代码仓地址" onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>
             : <label className="grid gap-2">分支名称<Input required value={edit.value} onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>}
-          {modulesMode && <fieldset id="module-knowledge-location" className="grid gap-3 rounded-md border border-line p-3">
-            <legend className="px-1 text-sm font-medium">领域知识目录（可选）</legend>
-            <p className="text-xs text-muted-foreground">知识库读取与后续 MR 共用此目录；进行中的任务保留原目录。</p>
-            {!edit.knowledgeLocation && knowledgeSuggestion && <button type="button" className="justify-self-start text-xs text-primary hover:underline" onClick={() => setEdit({ ...edit, knowledgeLocation: knowledgeSuggestion })}>填入团队知识仓建议值</button>}
-            <label className="grid gap-1 text-sm">领域知识仓<Input aria-label="领域知识仓地址" value={edit.knowledgeLocation?.repository ?? ""} placeholder="https://…/knowledge.git" onChange={event => setEdit({ ...edit, knowledgeLocation: { ...(edit.knowledgeLocation ?? { repository: "", branch: "main", docs_path: "" }), repository: event.target.value } })} /></label>
-            <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3"><label className="grid gap-1 text-sm">正式分支<Input aria-label="领域知识正式分支" value={edit.knowledgeLocation?.branch ?? "main"} onChange={event => setEdit({ ...edit, knowledgeLocation: { repository: "", docs_path: "", ...edit.knowledgeLocation, branch: event.target.value } })} /></label><label className="grid gap-1 text-sm">仓内相对目录<Input aria-label="领域知识相对目录" value={edit.knowledgeLocation?.docs_path ?? ""} placeholder="docs/交易业务" onChange={event => setEdit({ ...edit, knowledgeLocation: { repository: "", branch: "main", ...edit.knowledgeLocation, docs_path: event.target.value } })} /></label></div>
+          {modulesMode && <fieldset id="module-knowledge-location" className="grid gap-2 rounded-md border border-line p-3">
+            <legend className="px-1 text-sm font-medium">领域知识目录</legend>
+            <Input aria-label="领域知识相对目录" required value={edit.knowledgePath ?? defaultKnowledgePath(edit.name)} placeholder="Function_Knowledge/Access Function/模块名" onChange={event => setEdit({ ...edit, knowledgePath: event.target.value, knowledgePathEdited: true })} />
+            <p className="text-xs text-muted-foreground">仓库和正式分支使用平台配置；知识读取与后续 MR 共用此目录。</p>
           </fieldset>}
           {modulesMode && <fieldset className="grid gap-3 rounded-md border border-line p-3">
             <legend className="px-1 font-medium">MR 默认人员（可选）</legend>

@@ -1,4 +1,5 @@
 import { resolveBusinessModuleId, resolveBusinessModuleRef } from "./businessModuleIdentity.ts";
+import { resolveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "./knowledgeAnswers.ts";
@@ -5688,7 +5689,7 @@ export class TaskService {
   startModuleKnowledgeSync(moduleId: string, operator: string): void {
     if (this.shuttingDown) throw new TaskControlError("服务正在停止，请稍后重试知识同步");
     const module = readBusinessModule(this.options.dataDir, moduleId);
-    if (!module.knowledge_location) throw new TaskControlError("请先在配置中心设置本模块的领域知识目录");
+    if (!resolveModuleKnowledgeLocation(this.options.dataDir, module.id)) throw new TaskControlError("请先由管理员配置平台领域知识仓库，并设置本模块的领域知识目录");
     if (this.knowledgeRepositorySyncs.has(module.id)) return;
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(new Error("本次知识同步超时，保留上次成功版本，可重试")), 200_000);
@@ -5714,7 +5715,7 @@ export class TaskService {
     try {
       for (const module of listBusinessModules(this.options.dataDir).modules) {
         if (this.knowledgeRepositorySyncs.size >= 2) break;
-        if (module.status !== "active" || !module.knowledge_location || this.knowledgeRepositorySyncs.has(module.id)) continue;
+        if (module.status !== "active" || !resolveModuleKnowledgeLocation(this.options.dataDir, module.id) || this.knowledgeRepositorySyncs.has(module.id)) continue;
         try {
           const sync = readModuleKnowledgeSync(this.options.dataDir, module.id);
           if (sync?.attempted_at && Date.now() - Date.parse(sync.attempted_at) < 60_000) continue;

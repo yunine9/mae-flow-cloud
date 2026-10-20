@@ -2,14 +2,17 @@ import { createHash } from "node:crypto";
 import { readBusinessModule, updateBusinessModule } from "../../src/businessModuleLibrary.ts";
 import type { KnowledgeDocument } from "../../src/knowledgeDocuments.ts";
 import { readGitKnowledgeSnapshot, writeGitKnowledgeSnapshot } from "../../src/knowledgeRepositorySnapshots.ts";
+import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig } from "../../src/knowledgeRepoConfig.ts";
+import { resolveModuleKnowledgeLocation } from "../../src/businessModuleKnowledge.ts";
 
 /** 检索单测直接装入已同步的正式快照；网络与 Git 行为由 knowledgeRepositorySync 的真 Git 测试覆盖。 */
 export function gitKnowledgeDocument(dataDir: string, moduleId: string, input: Pick<KnowledgeDocument, "title" | "content"> & {
   path?: string; technologies?: string[]; product_versions?: string[]; when_to_use?: string;
 }): KnowledgeDocument {
   const module = readBusinessModule(dataDir, moduleId);
-  const location = module.knowledge_location ?? { repository: "https://knowledge.example.test/team/domain.git", branch: "main", docs_path: `domains/${moduleId}` };
-  if (!module.knowledge_location) updateBusinessModule(dataDir, moduleId, { knowledge_location: location }, "fixture");
+  if (!readKnowledgeRepoConfig(dataDir)) saveKnowledgeRepoConfig(dataDir, "https://knowledge.example.test/team/domain.git", { branch: "main" });
+  if (!module.knowledge_path) updateBusinessModule(dataDir, moduleId, { knowledge_path: `domains/${moduleId}` }, "fixture");
+  const location = resolveModuleKnowledgeLocation(dataDir, moduleId)!;
   const previous = readGitKnowledgeSnapshot(dataDir, moduleId);
   const path = input.path ?? `${location.docs_path}/${input.title.replace(/[\\/:*?"<>|]/g, "-").replace(/\.md$/i, "")}.md`;
   const fields = { title: input.title, content: input.content, scope: "module" as const, module_ids: [moduleId], repositories: [], technologies: input.technologies ?? [],

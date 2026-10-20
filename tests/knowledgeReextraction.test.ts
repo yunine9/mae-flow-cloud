@@ -17,6 +17,7 @@ import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
 import { componentGuideSection } from "./fixtures/componentGuide.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
 import { componentResearchRoute } from "../src/componentResearchRoutes.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 const config = { issue_no: "REQ-REEXTRACT", issue_description: "重新核对订单状态", title: "订单", scope: "状态与取消规则", instructions: "保留接口和 UT 示例",
   repositories: [{ name: "交易仓", repository: "https://example.test/orders.git", branch: "release/1", path: "src", docs_path: "docs/business" }],
@@ -35,7 +36,8 @@ test("领域重新萃取复用单号、上传资料、源码和归档配置，�
   const material = await businessMaterial(dir), skills = new KnowledgeExtractionSkills(dir);
   let methodFiles = skills.current("domain").files;
   const location = config.knowledge_target;
-  createBusinessModule(dir, { id: "formal-orders", name: "既有订单正式知识", owner: "alice", description: "正式库独立于重新萃取任务", repositories: [config.repositories[0].repository], knowledge_location: location }, "alice");
+  saveKnowledgeRepoConfig(dir, location.repository, { branch: location.branch });
+  createBusinessModule(dir, { id: "formal-orders", name: "既有订单正式知识", owner: "alice", description: "正式库独立于重新萃取任务", repositories: [config.repositories[0].repository], knowledge_path: location.docs_path }, "alice");
   const formal: KnowledgeDocument = { id: `kg-${createHash("sha256").update("formal-orders").digest("hex")}`, title: "已合入订单规则", content: "# 远端正式订单规则", scope: "module", module_ids: ["formal-orders"], repositories: [], technologies: [], product_versions: [], when_to_use: "", active: true, revision: "formal-content-sha", source: { ...location, path: `${location.docs_path}/states.md`, revision: "b".repeat(40) }, history: [] };
   writeGitKnowledgeSnapshot(dir, { module_id: "formal-orders", location, synced_at: new Date().toISOString(), documents: [formal], resources: {}, repositories: [{ repository: location.repository, branch: location.branch, revision: "b".repeat(40) }] });
   let latestDigest = "", replacementRun: DomainExecution | undefined;

@@ -284,7 +284,7 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     const viewer = await login("viewer", "developer-pass-3");
     const memberCreate = await fetch(`${base}/business-modules`, {
       method: "POST", headers: { cookie: owner },
-      body: JSON.stringify({ id: "member-pay", name: "支付", description: "支付域",
+      body: JSON.stringify({ id: "member-pay", name: "成员支付", description: "支付域",
         repositories: ["https://code.example/pay.git"] }),
     });
     assert.equal(memberCreate.status, 201);
@@ -328,7 +328,7 @@ test("HTTP 权限：所有登录成员维护模块映射与知识；匿名不可
     for (let i = 0; i < 2; i++) {
       const generated = await fetch(`${base}/business-modules`, {
         method: "POST", headers: { cookie: owner },
-        body: JSON.stringify({ name: "配置中心模块", description: "HTTP 创建",
+        body: JSON.stringify({ name: `配置中心模块${i}`, description: "HTTP 创建",
           repositories: ["https://code.example/pay.git"] }),
       });
       assert.equal(generated.status, 201);

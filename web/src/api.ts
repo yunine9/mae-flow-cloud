@@ -1463,11 +1463,11 @@ export interface BusinessKnowledgeAsset {
 export type MrParticipants = import("../../src/mrParticipants").MrParticipants;
 export interface BusinessModuleKnowledgeLocation { repository: string; branch: string; docs_path: string }
 export interface BusinessModuleKnowledgeLocationResult {
-  configured: boolean; location?: BusinessModuleKnowledgeLocation; suggestion?: BusinessModuleKnowledgeLocation;
+  configured: boolean; knowledge_path?: string; location?: BusinessModuleKnowledgeLocation;
   module_revision?: number;
   sync?: { state: "syncing" | "ready" | "partial" | "failed"; synced_at?: string; attempted_at?: string; commit?: string; document_count: number; error?: string; warnings?: string[] };
 }
-export async function businessModuleKnowledgeRequest(moduleId: string, input?: BusinessModuleKnowledgeLocation & { expected_revision?: number }): Promise<BusinessModuleKnowledgeLocationResult> {
+export async function businessModuleKnowledgeRequest(moduleId: string, input?: { knowledge_path: string; expected_revision?: number }): Promise<BusinessModuleKnowledgeLocationResult> {
   const response = await fetch(`/business-modules/${encodeURIComponent(moduleId)}/knowledge-location`, input ? {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(input), signal: AbortSignal.timeout(30_000),
   } : { signal: AbortSignal.timeout(30_000) });
@@ -1483,6 +1483,7 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  knowledge_path?: string;
   knowledge_location?: BusinessModuleKnowledgeLocation;
   mr_participants?: MrParticipants;
   /** 参考组件仓订阅(ADR-0054):公共组件仓登记表条目 id 引用。 */
@@ -1564,7 +1565,7 @@ export async function createBusinessModule(input: {
   owner?: string;
   maintainers?: string[];
   repositories: string[];
-  knowledge_location?: BusinessModuleKnowledgeLocation;
+  knowledge_path?: string;
   reference_component_repos?: string[];
   mr_participants?: MrParticipants;
 }): Promise<BusinessModule> {
@@ -1580,7 +1581,7 @@ export async function updateBusinessModule(
   id: string,
   patch: Partial<Pick<BusinessModule,
     "name" | "description" | "owner" | "maintainers" | "repositories"
-    | "reference_component_repos" | "mr_participants" | "status" | "knowledge_location">>,
+    | "reference_component_repos" | "mr_participants" | "status" | "knowledge_path">>,
 ): Promise<BusinessModule> {
   const response = await fetch(`/business-modules/${encodeURIComponent(id)}`, {
     method: "PUT",

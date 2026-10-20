@@ -11,6 +11,7 @@ import { collectSearchableKnowledge } from "../src/knowledgeSearch.ts";
 import { knowledgeDocumentCatalog } from "../src/knowledgeDocumentCatalog.ts";
 import { syncModuleKnowledge, readModuleKnowledgeSync, readGitKnowledgeResource } from "../src/knowledgeRepositorySync.ts";
 import { readGitKnowledgeSnapshot, writeModuleKnowledgeSync, freezeGitKnowledgeResources, readFrozenGitKnowledgeResource, type FrozenGitKnowledgeResources } from "../src/knowledgeRepositorySnapshots.ts";
+import { saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "knowledge-git-"));
@@ -29,8 +30,9 @@ function fixture() {
   put(code, "src/hidden.md", "# 代码内容不作为正式知识\n");
   const revision = commit(knowledge); commit(code);
   const location = (path: string) => ({ repository: knowledge, branch: "main", docs_path: path });
+  saveKnowledgeRepoConfig(dataDir, knowledge, { branch: "main" });
   for (const [id, path] of [["orders", "domains/orders"], ["stock", "domains/stock"]]) createBusinessModule(dataDir, {
-    id, name: id, description: `${id} module`, owner: "owner", repositories: [code], knowledge_location: location(path),
+    id, name: id, description: `${id} module`, owner: "owner", repositories: [code], knowledge_path: path,
   }, "owner");
   return { root, dataDir, knowledge, code, git, put, commit, image, revision, location, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
@@ -119,6 +121,7 @@ test("关联公共仓不可达不阻塞领域目录；保留该仓上次文档�
 test("未配置领域目录也不退回本地业务正文；原记录保留，Skill 原生目录不受影响", () => {
   const f = fixture();
   try {
+    clearKnowledgeRepoConfig(f.dataDir);
     createBusinessModule(f.dataDir, { id: "unconfigured", name: "未配置", description: "未绑定来源", owner: "owner", repositories: [f.code] }, "owner");
     const candidate = saveKnowledgeDocument(f.dataDir, { title: "旧萃取文稿", content: "尚未合入", scope: "module", module_ids: ["unconfigured"],
       research_source: { job_id: "dkx-old" } }, "owner");
@@ -145,7 +148,7 @@ test("目录绑定修改后不显示旧目录；取消同步不会清空已有�
     const abort = new AbortController(); abort.abort();
     assert.equal((await syncModuleKnowledge(f.dataDir, "orders", "owner", { signal: abort.signal })).state, "failed");
     assert.deepEqual(listFormalKnowledgeDocuments(f.dataDir).map(document => document.id), before);
-    updateBusinessModule(f.dataDir, "orders", { knowledge_location: f.location("new/orders") }, "owner");
+    updateBusinessModule(f.dataDir, "orders", { knowledge_path: "new/orders" }, "owner");
     assert.equal(listFormalKnowledgeDocuments(f.dataDir).length, 0);
     assert.equal(readModuleKnowledgeSync(f.dataDir, "orders"), undefined);
     assert.equal((await syncModuleKnowledge(f.dataDir, "orders", "owner")).state, "ready");
@@ -186,7 +189,8 @@ test("领域目录与代码仓在同一物理仓的不同分支时，各自读�
     const knowledgeRevision = f.commit(f.code);
     f.git(f.code, "checkout", "-q", "main");
     const codeRevision = f.git(f.code, "rev-parse", "HEAD");
-    updateBusinessModule(f.dataDir, "orders", { knowledge_location: { repository: f.code, branch: "knowledge", docs_path: "domains/orders" } }, "owner");
+    saveKnowledgeRepoConfig(f.dataDir, f.code, { branch: "knowledge" });
+    updateBusinessModule(f.dataDir, "orders", { knowledge_path: "domains/orders" }, "owner");
     const result = await syncModuleKnowledge(f.dataDir, "orders", "owner");
     assert.equal(result.state, "ready", result.error); assert.equal(result.commit, knowledgeRevision);
     const documents = listFormalKnowledgeDocuments(f.dataDir);

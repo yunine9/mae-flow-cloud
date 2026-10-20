@@ -12,6 +12,7 @@ import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowled
 import { listKnowledgeDocuments, readKnowledgeDocument, type KnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { KnowledgeMrPublisher } from "../src/knowledgeMrPublisher.ts";
 import { writeGitKnowledgeSnapshot, writeModuleKnowledgeSync } from "../src/knowledgeRepositorySnapshots.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 import { applyKnowledgeReviewNotes, saveKnowledgeReviewNote } from "../src/knowledgeReviewNotes.ts";
 import { knowledgeDocumentRoute } from "../src/knowledgeDocumentRoutes.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
@@ -36,7 +37,8 @@ function official(dir: string, text = "# 订单规则\n\n取消前检查是否�
   return document;
 }
 function module(dir: string) {
-  return createBusinessModule(dir, { id: "orders", name: "订单", description: "订单领域", owner: "alice", repositories: ["https://example.test/orders.git"], knowledge_location: location }, "alice");
+  saveKnowledgeRepoConfig(dir, location.repository, { branch: location.branch });
+  return createBusinessModule(dir, { id: "orders", name: "订单", description: "订单领域", owner: "alice", repositories: ["https://example.test/orders.git"], knowledge_path: location.docs_path }, "alice");
 }
 
 test("正式知识检视创建独立任务并冻结模块全文，不依赖原萃取任务；结束检视前不运行模型", async () => {
@@ -117,7 +119,7 @@ test("候选直接提交 MR，修改原任务复用原 MR，不写正式库；�
     assert.throws(() => manager.edit(job.id, { document: { ...doc, content: "覆盖" }, base_revision: 2 }, "alice"), /已合入/);
     assert.equal(listKnowledgeDocuments(dir).length, 0);
     const newer = { ...location, docs_path: "business/orders-v2" };
-    updateBusinessModule(dir, "orders", { knowledge_location: newer }, "alice");
+    updateBusinessModule(dir, "orders", { knowledge_path: newer.docs_path }, "alice");
     assert.equal(manager.get(job.id).knowledge_target.docs_path, location.docs_path, "既有任务使用创建时配置快照");
     const next = manager.create({ module_id: "orders", issue_no: "REQ-12" }, "alice");
     assert.notEqual(next.id, job.id); assert.equal(next.knowledge_target.docs_path, newer.docs_path);
@@ -153,7 +155,8 @@ test("代码仓正式正文可创建模块检视，源码仓使用真实分支�
 test("六仓任务部分合入仍显示失败仓，原批次可补齐 MR，已合入目标不再续推", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-partial-mr-merge-"));
   const repos = Array.from({ length: 5 }, (_, index) => `https://example.test/code-${index + 1}.git`);
-  createBusinessModule(dir, { id: "orders", name: "订单", description: "多仓订单", owner: "alice", repositories: repos, knowledge_location: location }, "alice");
+  saveKnowledgeRepoConfig(dir, location.repository, { branch: location.branch });
+  createBusinessModule(dir, { id: "orders", name: "订单", description: "多仓订单", owner: "alice", repositories: repos, knowledge_path: location.docs_path }, "alice");
   const calls = new Map<string, number>(); let failures = 2, allMerged = false;
   const manager = new DomainKnowledgeExtraction(dir, async input => {
     for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: `${target.id}-rules`, target_id: target.id,

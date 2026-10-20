@@ -5,9 +5,32 @@ import { join } from "node:path";
 import { DomainKnowledgeExtraction, type DomainKnowledgeJob } from "../src/domainKnowledgeExtraction.ts";
 import { listFormalKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { completedDomainTask as done, domainArchiveFixture, publicationFor, submitDomainCandidates as submit } from "./fixtures/domainKnowledgeArchive.ts";
 
 const moduleId = "module-12345678-1234-1234-1234-123456789abc", moduleName = "无线产品管理";
+
+test("未填写模块路径时默认目录贯穿新任务、预览、真实 Git MR 与合入后正式快照，空格不丢失且不重复拼接", async () => {
+  const f = await domainArchiveFixture("readable-default-path-");
+  const name = "Access Core 业务", id = "module-default-path", expected = `Function_Knowledge/Access Function/${name}`;
+  const module = createBusinessModule(f.dataDir, { id, name, description: "默认领域知识目录", owner: "user", repositories: [f.code] }, "user");
+  const service = f.manager(async input => { input.save({ id: "readme", title: "领域入口", target_id: "domain", layer: "domain", path: `${input.job.knowledge_target.docs_path}/README.md`, content: "# 默认目录中的正式规则", sources: "资料" }); return "完成"; });
+  try {
+    assert.equal(module.knowledge_path, expected);
+    const job = await done(service, service.create({ module_id: id, issue_no: "REQ-DEFAULT-PATH", baseline_branch: "main" }, "user").id);
+    assert.equal(job.knowledge_target.repository, f.knowledge); assert.equal(job.knowledge_target.branch, "main"); assert.equal(job.knowledge_target.docs_path, expected);
+    const preview = service.previewArchive(job.id);
+    assert.deepEqual(preview.targets.find(target => target.id === "domain")!.files.map(file => file.path), [`${expected}/README.md`]);
+    await submit(service, job.id); const publication = publicationFor(service.get(job.id));
+    assert.equal(f.content(f.knowledge, publication.branch, `${expected}/README.md`), "# 默认目录中的正式规则");
+    assert.equal(f.exists(f.knowledge, publication.branch, `${expected}/${name}/README.md`), false);
+    assert.equal(listFormalKnowledgeDocuments(f.dataDir).length, 0);
+    f.merge(publication, f.knowledge); await f.sync(id);
+    const formal = listFormalKnowledgeDocuments(f.dataDir).find(document => document.source?.path === `${expected}/README.md`)!;
+    assert.ok(formal); assert.equal(formal.source!.repository, f.knowledge); assert.equal(formal.source!.branch, "main"); assert.equal(formal.content, "# 默认目录中的正式规则");
+    assert.deepEqual(formal.module_ids, [id]);
+  } finally { await service.shutdown(); await f.cleanup(); }
+});
 async function legacy(f: Awaited<ReturnType<typeof domainArchiveFixture>>, pending = false) {
   f.module(moduleId, moduleName, `团队知识/${moduleName}`);
   const initial = f.manager(async input => { for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id === "domain" ? "domain" : "map", title: target.id === "domain" ? moduleId : "模块索引", target_id: target.id,

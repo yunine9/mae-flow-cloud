@@ -7,6 +7,7 @@
 
 import { businessModuleMigrations, commitBusinessModuleMigration, resolveBusinessModuleId } from "./businessModuleIdentity.ts";
 import { createHash } from "node:crypto";
+import { readKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { componentRepositories } from "./componentRepositories.ts";
 import { normalizeMrParticipants, type MrParticipants } from "./mrParticipants.ts";
@@ -73,6 +74,9 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  /** 模块唯一保存的领域目录；仓库与分支统一取全局知识仓配置。 */
+  knowledge_path?: string;
+  /** HTTP 视图派生的只读位置，不写入模块记录。 */
   knowledge_location?: BusinessModuleKnowledgeLocation;
   /** 本模块全部关联代码仓共用的新 MR 默认人员。 */
   mr_participants?: MrParticipants;
@@ -204,19 +208,49 @@ export function normalizeModuleKnowledgeLocation(value: unknown): BusinessModule
   if (!branch || branch.length > 255 || branch === "@" || branch.startsWith("-") || branch.startsWith("/")
       || /[\s\\~^:?*\[\x00-\x1f]|\.\.|@\{|\/\/|\.$|\/$|\.lock(?:\/|$)/.test(branch)
       || branch.split("/").some(part => part.startsWith("."))) throw new BusinessModuleError("领域知识分支格式无效");
-  const docs_path = String(input.docs_path).trim().replace(/\/+$/, "");
-  if (!docs_path || docs_path.length > 1000 || docs_path.startsWith("/") || /^[a-z]:/i.test(docs_path)
-      || docs_path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) throw new BusinessModuleError("领域知识目录必须是仓库根目录下的相对目录，例如 domains/交易业务");
+  const docs_path = normalizeModuleKnowledgePath(input.docs_path);
   return { repository: validateRepoUrl(repository), branch, docs_path };
 }
 
-function assertKnowledgeLocationAvailable(dataDir: string, id: string, location?: BusinessModuleKnowledgeLocation) {
-  if (!location) return;
+export function normalizeModuleKnowledgePath(value: unknown): string {
+  if (typeof value !== "string") throw new BusinessModuleError("领域知识目录必须是仓库根目录下的相对目录");
+  const path = value.trim().replace(/\/+$/, "");
+  if (!path || path.length > 1000 || path.startsWith("/") || /^[a-z]:/i.test(path)
+      || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {
+    throw new BusinessModuleError("领域知识目录必须是仓库根目录下的相对目录，例如 Function_Knowledge/Access Function/交易业务");
+  }
+  return path;
+}
+
+export function defaultModuleKnowledgePath(name: string): string {
+  const readable = name.trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, "-").replace(/^[. ]+|[. ]+$/g, "") || "领域知识";
+  return normalizeModuleKnowledgePath(`Function_Knowledge/Access Function/${readable}`);
+}
+
+function moduleKnowledgePathInput(dataDir: string, input: { knowledge_path?: unknown; knowledge_location?: unknown }, fallback?: string): string | undefined {
+  let legacyPath: string | undefined;
+  if (input.knowledge_location !== undefined) {
+    const location = normalizeModuleKnowledgeLocation(input.knowledge_location), global = readKnowledgeRepoConfig(dataDir);
+    if (!location || !global || repositoryIdentity(location.repository) !== repositoryIdentity(global.url) || location.branch !== (global.branch || "master")) {
+      throw new BusinessModuleError("领域知识仓库和分支由平台统一配置，模块只能设置仓内相对目录");
+    }
+    legacyPath = location.docs_path;
+  }
+  if (input.knowledge_path !== undefined) {
+    const path = normalizeModuleKnowledgePath(input.knowledge_path);
+    if (legacyPath && legacyPath !== path) throw new BusinessModuleError("领域知识目录参数不一致，请只提交 knowledge_path");
+    return path;
+  }
+  return legacyPath ?? fallback;
+}
+
+function assertKnowledgeLocationAvailable(dataDir: string, id: string, path?: string) {
+  if (!path) return;
+  const normalized = path.normalize("NFC").toLowerCase();
   const conflict = listBusinessModules(dataDir).modules.find(module => {
-    const other = module.knowledge_location;
+    const other = module.knowledge_path?.normalize("NFC").toLowerCase();
     return module.id !== id && module.status === "active" && other
-      && repositoryIdentity(other.repository) === repositoryIdentity(location.repository) && other.branch === location.branch
-      && (other.docs_path === location.docs_path || other.docs_path.startsWith(`${location.docs_path}/`) || location.docs_path.startsWith(`${other.docs_path}/`));
+      && (other === normalized || other.startsWith(`${normalized}/`) || normalized.startsWith(`${other}/`));
   });
   if (conflict) throw new BusinessModuleError(`领域知识目录与“${conflict.name}”重叠，请为每个模块设置独立目录`);
 }
@@ -272,9 +306,15 @@ function parseModule(value: unknown): BusinessModule {
       || !["active", "archived"].includes(module.status)) {
     throw new BusinessModuleError("业务模块元数据损坏");
   }
+  const { knowledge_location: legacy, ...record } = module;
+  if (module.knowledge_path === undefined && legacy !== undefined && legacy !== null
+      && (typeof legacy !== "object" || Array.isArray(legacy) || typeof legacy.docs_path !== "string")) {
+    throw new BusinessModuleError("业务模块领域知识目录损坏");
+  }
+  const path = module.knowledge_path ?? legacy?.docs_path ?? defaultModuleKnowledgePath(module.name);
   return {
-    ...module,
-    knowledge_location: normalizeModuleKnowledgeLocation(module.knowledge_location),
+    ...record,
+    knowledge_path: normalizeModuleKnowledgePath(path),
     mr_participants: moduleMrParticipants(module.mr_participants),
     reference_component_repos: Array.isArray(module.reference_component_repos)
       ? module.reference_component_repos.map(String) : [],
@@ -446,6 +486,7 @@ export function createBusinessModule(
     owner: string;
     maintainers?: string[];
     repositories?: string[];
+    knowledge_path?: unknown;
     knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
@@ -466,7 +507,7 @@ export function createBusinessModule(
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
     repositories: moduleRepositories(input.repositories ?? []),
-    knowledge_location: normalizeModuleKnowledgeLocation(input.knowledge_location),
+    knowledge_path: moduleKnowledgePathInput(dataDir, input, defaultModuleKnowledgePath(String(input.name ?? ""))),
     mr_participants: moduleMrParticipants(input.mr_participants),
     reference_component_repos: referenceComponentRepos(
       dataDir, input.reference_component_repos ?? []),
@@ -478,7 +519,7 @@ export function createBusinessModule(
     updated_at: now,
     updated_by: operator,
   };
-  assertKnowledgeLocationAvailable(dataDir, id, module.knowledge_location);
+  assertKnowledgeLocationAvailable(dataDir, id, module.knowledge_path);
   writeModule(dataDir, module);
   operation(dataDir, { at: now, operator, action: "create", module_id: id });
   return module;
@@ -493,6 +534,7 @@ export function updateBusinessModule(
     owner?: string;
     maintainers?: string[];
     repositories?: string[];
+    knowledge_path?: unknown;
     knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
@@ -522,8 +564,7 @@ export function updateBusinessModule(
       : usernames(patch.maintainers, owner),
     repositories: patch.repositories === undefined
       ? current.repositories : moduleRepositories(patch.repositories),
-    knowledge_location: patch.knowledge_location === undefined
-      ? current.knowledge_location : normalizeModuleKnowledgeLocation(patch.knowledge_location),
+    knowledge_path: moduleKnowledgePathInput(dataDir, patch, current.knowledge_path),
     mr_participants: patch.mr_participants === undefined
       ? current.mr_participants : moduleMrParticipants(patch.mr_participants),
     reference_component_repos: patch.reference_component_repos === undefined
@@ -534,7 +575,7 @@ export function updateBusinessModule(
     updated_at: now,
     updated_by: operator,
   };
-  assertKnowledgeLocationAvailable(dataDir, id, updated.knowledge_location);
+  assertKnowledgeLocationAvailable(dataDir, id, updated.knowledge_path);
   writeModule(dataDir, updated);
   operation(dataDir, {
     at: now, operator,

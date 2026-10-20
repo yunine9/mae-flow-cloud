@@ -8,6 +8,7 @@ import { listKnowledgeDocuments, readKnowledgeDocument, type KnowledgeDocument }
 import { createHash } from "node:crypto";
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { writeGitKnowledgeSnapshot, writeModuleKnowledgeSync } from "../src/knowledgeRepositorySnapshots.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 const config = { title: "订单", scope: "订单规则", issue_no: "REQ-update", repositories: [{ repository: "https://example.test/orders.git", branch: "main" }],
   knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } };
@@ -53,7 +54,8 @@ test("候选 MR 失败与重试保持正文和批次版本，只有明确提交�
 test("正式知识检视固定文稿和源码基线，后来同步与人工编辑均不能被旧建议覆盖", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-incremental-"));
   const location = { repository: config.knowledge_target.repository, branch: "main", docs_path: "domains" };
-  createBusinessModule(dir, { id: "orders", name: "订单", description: "订单规则", owner: "author", repositories: [config.repositories[0].repository], knowledge_location: location }, "author");
+  saveKnowledgeRepoConfig(dir, location.repository, { branch: location.branch });
+  createBusinessModule(dir, { id: "orders", name: "订单", description: "订单规则", owner: "author", repositories: [config.repositories[0].repository], knowledge_path: location.docs_path }, "author");
   const official = (content: string, revision: string) => {
     const document: KnowledgeDocument = { id: `kg-${createHash("sha256").update("orders/rules").digest("hex")}`, title: "订单规则", content, active: true, scope: "module",
       module_ids: ["orders"], repositories: [], technologies: [], product_versions: [], when_to_use: "", revision: createHash("sha256").update(content).digest("hex"),

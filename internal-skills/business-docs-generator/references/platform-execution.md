@@ -53,7 +53,7 @@ knowledge_structure 只提供静态候选，不能据此断言没有跨仓关系
 
 先核对 module_id、scope、knowledge_layout 与 archive_targets；关联仓是源码来源，不代表本任务拥有整个仓的业务或公共文档。浅层盘点定位本业务入口后，仅深入本业务及解释完整链路所需的共享实现。其他业务作为有依据的边界或依赖记录，不为它们生成整套知识。模板中的“模块文档”按本业务内部功能划分，与稳定的 module_id 不是同一层级。
 
-knowledge_layout 为 directory-v1 时，每个目标的 target.docs_path 是最终仓根相对目录。领域知识仓使用配置中心业务模块中长期保存的仓库、分支及相对目录，读取和后续 MR 写入共用此绑定；新任务固定创建时的位置，运行中修改模块配置不改写已有任务。代码仓使用 `docs/` 下的业务目录。创建 MR 时平台展示目录和文件预览，Agent 直接使用平台当前返回的实际路径，不重新拼接模块名称或编号。
+knowledge_layout 为 directory-v1 时，每个目标的 target.docs_path 是最终仓根相对目录。领域知识仓及正式分支由平台统一提供，业务模块只保存仓内路径，默认 `Function_Knowledge/Access Function/<模块名>`；读取和后续 MR 写入使用同一路径。新任务固定创建时的位置，运行中修改模块配置不改写已有任务。代码仓使用 `docs/` 下的业务目录。创建 MR 时平台展示目录和文件预览，Agent 直接使用平台当前返回的实际路径，不重新拼接模块名称或编号。
 
 document.path 填目标仓根下的完整相对路径。例如 target.docs_path=`docs/产品管理` 时，入口是 `docs/产品管理/README.md`，索引是 `docs/产品管理/index.md`；代码仓的模块地图是 `docs/产品管理/module-map.md`。已包含该目录的 path 不再加一次 docs_path，工作区仓名不进入 path。领域与仓级知识分别保存到自己的 target_id，所有本任务文稿都收在各自的最终目录内。
 

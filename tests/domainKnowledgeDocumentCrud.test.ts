@@ -10,6 +10,7 @@ import { DomainKnowledgeExtraction, type DomainDocumentContent, type DomainKnowl
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { syncModuleKnowledge } from "../src/knowledgeRepositorySync.ts";
 import { listFormalKnowledgeDocuments, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 async function finished(service: DomainKnowledgeExtraction, id: string) {
   for (let i = 0; i < 600; i++) {
@@ -103,7 +104,8 @@ test("#466 真实 knowledge_draft 可新增和删除未选文档，删除直接�
     },
   });
   try {
-    createBusinessModule(root, { id: "transfer", name: "传输正式知识", description: "Git 正式版本", owner: "expert", repositories: [repo], knowledge_location: { repository: repo, branch: "main", docs_path: "docs/business" } }, "expert");
+    saveKnowledgeRepoConfig(root, repo, { branch: "main" });
+    createBusinessModule(root, { id: "transfer", name: "传输正式知识", description: "Git 正式版本", owner: "expert", repositories: [repo], knowledge_path: "docs/business" }, "expert");
     assert.equal((await syncModuleKnowledge(root, "transfer", "expert")).state, "ready");
     const originalFormal = listFormalKnowledgeDocuments(root).find(document => document.source?.path === unselected.path)!;
     assert.ok(originalFormal);

@@ -19,7 +19,7 @@ import { listProductVersions, saveProductVersion, deleteProductVersion } from ".
 import { listTechnologyStacks, createTechnologyStack, updateTechnologyStack, requireTechnologyStacks, TechnologyStackError } from "./technologyStacks.ts";
 import { deleteTechnologyStack } from "./technologyStackDeletion.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
-import { resolveModuleKnowledgeLocation, saveModuleKnowledgeLocation, suggestModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
+import { resolveModuleKnowledgeLocation, saveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
 import { readModuleKnowledgeSync } from "./knowledgeRepositorySync.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
@@ -1526,6 +1526,7 @@ export function createTaskServer(
         };
         const view = (module: ReturnType<typeof readBusinessModule>) => ({
           ...module,
+          knowledge_location: resolveModuleKnowledgeLocation(dataDir, module.id),
           can_manage: canManageBusinessModule(
             module, viewer?.username, admin),
         });
@@ -1552,20 +1553,20 @@ export function createTaskServer(
               repositories: Array.isArray(body.repositories)
                 ? body.repositories.map(String) : [],
               mr_participants: body.mr_participants,
+              knowledge_path: body.knowledge_path,
               knowledge_location: body.knowledge_location,
               reference_component_repos: Array.isArray(
                 body.reference_component_repos)
                 ? body.reference_component_repos.map(String) : [],
             }, operator);
-            if (created.knowledge_location) service.startModuleKnowledgeSync(created.id, operator);
+            if (resolveModuleKnowledgeLocation(dataDir, created.id)) service.startModuleKnowledgeSync(created.id, operator);
             return json(response, 201, view(created));
           }
           if (parts.length === 3 && ["knowledge-location", "knowledge-sync"].includes(parts[2])) {
             const moduleId = decodeURIComponent(parts[1]);
             const current = readBusinessModule(dataDir, moduleId);
-            const locationView = () => ({ location: resolveModuleKnowledgeLocation(dataDir, moduleId),
+            const locationView = () => ({ knowledge_path: readBusinessModule(dataDir, moduleId).knowledge_path, location: resolveModuleKnowledgeLocation(dataDir, moduleId),
               configured: !!resolveModuleKnowledgeLocation(dataDir, moduleId),
-              suggestion: suggestModuleKnowledgeLocation(dataDir, moduleId),
               module_revision: readBusinessModule(dataDir, moduleId).revision,
               sync: readModuleKnowledgeSync(dataDir, moduleId) });
             if (request.method === "GET" && parts[2] === "knowledge-location") return json(response, 200, locationView());
@@ -1574,9 +1575,10 @@ export function createTaskServer(
               const body = await readBody(request, 8192);
               if (parts[2] === "knowledge-location") {
                 if (body.expected_revision !== undefined && !Number.isSafeInteger(body.expected_revision)) throw new BusinessModuleError("模块配置版本无效，请刷新后重试");
-                saveModuleKnowledgeLocation(dataDir, moduleId, body.location ?? body, operator, body.expected_revision);
+                saveModuleKnowledgeLocation(dataDir, moduleId, body, operator, body.expected_revision);
               }
-              service.startModuleKnowledgeSync(moduleId, operator);
+              if (resolveModuleKnowledgeLocation(dataDir, moduleId)) service.startModuleKnowledgeSync(moduleId, operator);
+              else if (parts[2] === "knowledge-sync") throw new BusinessModuleError("请先由管理员配置平台领域知识仓库");
               return json(response, 202, parts[2] === "knowledge-location" ? locationView() : readModuleKnowledgeSync(dataDir, moduleId));
             }
           }
@@ -1629,6 +1631,7 @@ export function createTaskServer(
                   ? undefined : Array.isArray(body.repositories)
                     ? body.repositories.map(String) : [],
                 mr_participants: body.mr_participants,
+                knowledge_path: body.knowledge_path,
                 knowledge_location: body.knowledge_location,
                 reference_component_repos:
                   body.reference_component_repos === undefined
@@ -1637,7 +1640,7 @@ export function createTaskServer(
                 status: body.status === undefined
                   ? undefined : String(body.status) as "active" | "archived",
               }, operator);
-            if (body.knowledge_location && updated.status === "active") service.startModuleKnowledgeSync(updated.id, operator);
+            if ((body.knowledge_path !== undefined || body.knowledge_location !== undefined) && updated.status === "active" && resolveModuleKnowledgeLocation(dataDir, updated.id)) service.startModuleKnowledgeSync(updated.id, operator);
             return json(response, 200, view(updated));
           }
           if (request.method === "GET" && parts.length === 4

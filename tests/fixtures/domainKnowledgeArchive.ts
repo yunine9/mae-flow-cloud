@@ -10,6 +10,8 @@ import { KnowledgeMrPublisher } from "../../src/knowledgeMrPublisher.ts";
 import { createBusinessModule, readBusinessModule } from "../../src/businessModuleLibrary.ts";
 import type { KnowledgeDocument } from "../../src/knowledgeDocuments.ts";
 import { writeGitKnowledgeSnapshot, writeModuleKnowledgeSync } from "../../src/knowledgeRepositorySnapshots.ts";
+import { saveKnowledgeRepoConfig } from "../../src/knowledgeRepoConfig.ts";
+import { resolveModuleKnowledgeLocation } from "../../src/businessModuleKnowledge.ts";
 
 export async function completedDomainTask(service: DomainKnowledgeExtraction, id: string) {
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -35,6 +37,7 @@ export async function domainArchiveFixture(prefix: string) {
   git("-C", source, "config", "user.name", "fixture"); git("-C", source, "config", "user.email", "fixture@example.test");
   writeFileSync(join(source, "README.md"), "# Fixture repository\n"); git("-C", source, "add", "."); git("-C", source, "commit", "-qm", "fixture");
   git("clone", "--bare", source, code); git("clone", "--bare", source, knowledge);
+  saveKnowledgeRepoConfig(dataDir, knowledge, { branch: "main" });
   let creates = 0, state: "opened" | "closed" | "merged" = "opened", closed = 0;
   const requests: Array<Record<string, unknown>> = [];
   const server = createServer(async (request, response) => {
@@ -58,7 +61,7 @@ export async function domainArchiveFixture(prefix: string) {
     closePublication: async () => { closed++; throw new Error("候选续推不应关闭原 MR"); },
   };
   const module = (id: string, name = id, docs_path = `domains/${name}`) => createBusinessModule(dataDir, { id, name, description: `${name}业务规则`, owner: "user", repositories: [code],
-    knowledge_location: { repository: knowledge, branch: "main", docs_path } }, "user");
+    knowledge_path: docs_path }, "user");
   const merge = (publication: DomainPublication, repository: string) => {
     assert.ok(publication.revision); git("-C", repository, "update-ref", "refs/heads/main", publication.revision!);
   };
@@ -68,7 +71,7 @@ export async function domainArchiveFixture(prefix: string) {
   };
   // 本组核对候选 MR 与目录合同；正式视图装入真实 Git main 的正文，网络同步另有真 Git 回归。
   const sync = async (moduleId: string) => {
-    const module = readBusinessModule(dataDir, moduleId), location = module.knowledge_location!, at = new Date().toISOString();
+    const module = readBusinessModule(dataDir, moduleId), location = resolveModuleKnowledgeLocation(dataDir, moduleId)!, at = new Date().toISOString();
     const documents: KnowledgeDocument[] = [], repositories: Array<{ repository: string; branch: string; revision: string; scope: "module" | "repository" }> = [];
     for (const [repository, domain] of [[location.repository, true], ...module.repositories.map(repository => [repository, false])] as Array<[string, boolean]>) {
       const revision = git("-C", repository, "rev-parse", "main"); repositories.push({ repository, branch: "main", revision, scope: domain ? "module" : "repository" });

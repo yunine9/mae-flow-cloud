@@ -43,12 +43,12 @@ export function KnowledgeModuleLocation({ moduleId, onSynced }: { moduleId: stri
   return <section className={`km-source-location ${value && !location ? "is-unconfigured" : ""}`} aria-label="领域知识来源">
     <FolderGit2 size={20} className="shrink-0 text-primary" />
     <div className="min-w-0 flex-1">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm"><strong className="font-medium">领域知识目录</strong>{location ? <><span className="truncate" title={location.repository}>{repositoryLabel(location.repository)}</span><span className="inline-flex items-center gap-1 text-muted-foreground"><GitBranch size={13} />{location.branch}</span><code className="break-all text-primary">{location.docs_path}/</code></> : <span className="text-muted-foreground">{value ? "尚未设置正式知识的读取与提交目录" : error ? "来源读取失败" : "正在读取来源…"}</span>}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm"><strong className="font-medium">领域知识目录</strong>{location ? <><span className="truncate" title={location.repository}>{repositoryLabel(location.repository)}</span><span className="inline-flex items-center gap-1 text-muted-foreground"><GitBranch size={13} />{location.branch}</span><code className="break-all text-primary">{location.docs_path}/</code></> : <span className="text-muted-foreground">{value ? "平台领域知识仓尚未配置，请联系管理员" : error ? "来源读取失败" : "正在读取来源…"}</span>}</div>
       {location && <p className="mt-1 text-xs text-muted-foreground">{busy || sync?.state === "syncing" ? "正在同步远端正式文件…" : sync?.state === "failed" ? `同步失败${sync.synced_at ? "，当前保留上次成功内容" : "，尚无可用内容"}：${sync.error || "请重试"}` : sync?.synced_at ? `上次同步 ${new Date(sync.synced_at).toLocaleString("zh-CN")}${sync.commit ? ` · ${sync.commit.slice(0, 8)}` : ""}` : "保存目录后，点击同步读取远端文件。后续 MR 使用同一目录。"}</p>}
       {sync?.state === "partial" && <p role="status" className="mt-1 text-xs text-attention">部分同步：{sync.warnings?.join("；") || "部分关联代码仓暂未更新，已保留上次成功内容。"}</p>}
       {error && <p role="alert" className="mt-1 text-xs text-danger">{error}</p>}
     </div>
     {location && <Button size="sm" variant="ghost" disabled={busy || sync?.state === "syncing"} onClick={() => void synchronize()}>{busy ? <LoaderCircle size={14} className="animate-spin" /> : <RefreshCw size={14} />}同步</Button>}
-    <a href={knowledgeLocationSettingsUrl(moduleId)} className={`km-location-settings ${value && !location ? "is-primary" : ""}`}><Settings2 size={14} />{location ? "配置目录" : "设置领域知识目录"}<ArrowUpRight size={13} /></a>
+    <a href={knowledgeLocationSettingsUrl(moduleId)} className="km-location-settings"><Settings2 size={14} />调整路径<ArrowUpRight size={13} /></a>
   </section>;
 }

@@ -1,41 +1,88 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { test, type TestContext } from "node:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createBusinessModule, readBusinessModule } from "../src/businessModuleLibrary.ts";
+import { clearKnowledgeRepoConfig, readKnowledgeRepoConfig, saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 import { TaskService } from "../src/taskService.ts";
 import { createTaskServer } from "../src/server.ts";
 
-test("编辑模块一次保存领域目录并启动后台同步，普通编辑保留目录，知识页读取同一绑定", async () => {
+async function setup(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), "mfc-module-knowledge-api-"));
   createBusinessModule(dir, { id: "orders", name: "交易业务", description: "交易业务", owner: "owner", repositories: ["https://git.example/code.git"] }, "owner");
   const service = new TaskService({ dataDir: dir, provider: "test", model: "test", modelsJson: {}, maxConcurrent: 0 });
   const syncs: string[] = [];
-  const sync = (moduleId: string) => { syncs.push(moduleId); };
-  const mocked = Object.assign(service, { startModuleKnowledgeSync: sync });
-  const server = createTaskServer(mocked);
-  try {
-    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/business-modules/orders`;
-    const location = { repository: "https://git.example/knowledge.git", branch: "release/2026", docs_path: "domains/交易业务" };
-    const update = async (body: object) => fetch(base, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-    const saved = await update({ knowledge_location: location });
-    assert.equal(saved.status, 200); assert.deepEqual((await saved.json() as any).knowledge_location, location);
-    assert.deepEqual(syncs, ["orders"], "保存即启动后台同步，不要求用户再点一次发布");
-    const renamed = await update({ name: "交易中心" });
-    assert.equal(renamed.status, 200);
-    assert.deepEqual(readBusinessModule(dir, "orders").knowledge_location, location);
-    const view = await (await fetch(`${base}/knowledge-location`)).json() as any;
-    assert.equal(view.configured, true); assert.deepEqual(view.location, location);
-    const stale = await fetch(`${base}/knowledge-location`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...location, docs_path: "wrong", expected_revision: 1 }) });
-    assert.equal(stale.status, 400);
-    assert.deepEqual(readBusinessModule(dir, "orders").knowledge_location, location);
-    const invalid = await update({ knowledge_location: { ...location, docs_path: "../other" } });
-    assert.equal(invalid.status, 400); assert.deepEqual(syncs, ["orders"]);
-  } finally {
-    await service.shutdown(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+  Object.assign(service, { startModuleKnowledgeSync: (moduleId: string) => { syncs.push(moduleId); } });
+  const server = createTaskServer(service);
+  t.after(async () => {
+    await service.shutdown(); server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(dir, { recursive: true, force: true });
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (path: string, method = "GET", body?: object) => fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return { dir, syncs, request };
+}
+
+test("模块API只写长期目录并派生全局仓位置，普通改名保留目录，旧客户端不能绕过全局配置", async t => {
+  const { dir, syncs, request } = await setup(t);
+  const global = { repository: "https://git.example/knowledge.git", branch: "release/2026" };
+  saveKnowledgeRepoConfig(dir, global.repository, { branch: global.branch });
+  const path = "/business-modules/orders", docs_path = "domains/交易业务";
+  const saved = await request(path, "PUT", { knowledge_path: docs_path });
+  assert.equal(saved.status, 200);
+  const savedBody = await saved.json() as any;
+  assert.equal(savedBody.knowledge_path, docs_path);
+  assert.deepEqual(savedBody.knowledge_location, { ...global, docs_path });
+  assert.deepEqual(syncs, ["orders"]);
+  const renamed = await request(path, "PUT", { name: "交易中心" });
+  assert.equal(renamed.status, 200);
+  assert.equal(readBusinessModule(dir, "orders").knowledge_path, docs_path);
+  assert.deepEqual(syncs, ["orders"], "普通编辑不会重复触发配置同步");
+  const view = await (await request(`${path}/knowledge-location`)).json() as any;
+  assert.equal(view.configured, true); assert.equal(view.knowledge_path, docs_path);
+  assert.deepEqual(view.location, { ...global, docs_path }); assert.equal("suggestion" in view, false);
+  const change = await request(`${path}/knowledge-location`, "POST", { knowledge_path: "domains/交易中心", expected_revision: view.module_revision });
+  assert.equal(change.status, 202); assert.deepEqual(syncs, ["orders", "orders"]);
+  const stale = await request(`${path}/knowledge-location`, "POST", { knowledge_path: "wrong", expected_revision: view.module_revision });
+  assert.equal(stale.status, 400);
+  assert.equal(readBusinessModule(dir, "orders").knowledge_path, "domains/交易中心");
+  for (const wrong of [{ ...global, repository: "https://other.example/knowledge.git", docs_path }, { ...global, branch: "other-branch", docs_path }]) {
+    assert.equal((await request(path, "PUT", { knowledge_location: wrong })).status, 400);
+    assert.equal((await request(`${path}/knowledge-location`, "POST", { location: wrong, knowledge_path: "bypass" })).status, 400);
+    assert.equal((await request("/business-modules", "POST", { id: "bad", name: "坏模块", description: "坏模块", owner: "owner", repositories: ["https://git.example/code.git"], knowledge_location: wrong })).status, 400);
   }
+  assert.deepEqual(readKnowledgeRepoConfig(dir), { url: global.repository, branch: global.branch });
+  assert.equal((await request(path, "PUT", { knowledge_path: "../other" })).status, 400);
+  assert.deepEqual(syncs, ["orders", "orders"]);
+  const raw = JSON.parse(readFileSync(join(dir, "business-modules/orders/module.json"), "utf8"));
+  assert.equal(raw.knowledge_path, "domains/交易中心"); assert.equal(raw.knowledge_location, undefined);
+  const created = await request("/business-modules", "POST", { id: "refunds", name: "退款业务", description: "退款业务", owner: "owner", repositories: ["https://git.example/code.git"] });
+  assert.equal(created.status, 201);
+  const createdBody = await created.json() as any;
+  assert.equal(createdBody.knowledge_path, "Function_Knowledge/Access Function/退款业务");
+  assert.deepEqual(createdBody.knowledge_location, { ...global, docs_path: createdBody.knowledge_path });
+  assert.deepEqual(syncs, ["orders", "orders", "refunds"]);
+});
+
+test("全局仓未配置仍可保存模块路径，读视图明确未配置且不启动同步", async t => {
+  const { dir, syncs, request } = await setup(t), path = "/business-modules/orders/knowledge-location";
+  const first = await (await request(path)).json() as any;
+  assert.equal(first.configured, false); assert.equal(first.location, undefined);
+  assert.equal(first.knowledge_path, "Function_Knowledge/Access Function/交易业务");
+  const saved = await request(path, "POST", { knowledge_path: "custom/交易", expected_revision: first.module_revision });
+  assert.equal(saved.status, 202);
+  assert.equal((await saved.json() as any).configured, false);
+  assert.equal(readBusinessModule(dir, "orders").knowledge_path, "custom/交易");
+  assert.deepEqual(syncs, []);
+  const denied = await request("/business-modules/orders/knowledge-sync", "POST", {});
+  assert.equal(denied.status, 400); assert.match((await denied.json() as any).error, /管理员配置平台领域知识仓库/);
+  saveKnowledgeRepoConfig(dir, "https://git.example/knowledge.git");
+  assert.deepEqual((await (await request(path)).json() as any).location, { repository: "https://git.example/knowledge.git", branch: "master", docs_path: "custom/交易" });
+  clearKnowledgeRepoConfig(dir);
+  assert.equal((await (await request(path)).json() as any).configured, false);
+  assert.equal(readBusinessModule(dir, "orders").knowledge_path, "custom/交易");
 });

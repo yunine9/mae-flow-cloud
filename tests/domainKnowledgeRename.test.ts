@@ -14,6 +14,7 @@ import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { writeGitKnowledgeSnapshot } from "../src/knowledgeRepositorySnapshots.ts";
 import { syncModuleKnowledge } from "../src/knowledgeRepositorySync.ts";
 import { listFormalKnowledgeDocuments, readKnowledgeDocument, type KnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 
 async function finished(service: DomainKnowledgeExtraction, id: string) {
   for (let i = 0; i < 600; i++) {
@@ -232,7 +233,8 @@ test("#466 Agent 可新增文档及修改未选文档，改名保留首次基线
 test("#466 候选改名自动避让其他正式文档，提交 MR 不覆盖正式路径及正文", async () => {
   const root = mkdtempSync(join(tmpdir(), "domain-rename-formal-collision-"));
   const location = { ...knowledgeTarget, docs_path: "docs/business" }, revision = "a".repeat(40);
-  createBusinessModule(root, { id: "transport", name: "传输", owner: "expert", description: "正式知识", repositories: [businessRepository(1).repository], knowledge_location: location }, "expert");
+  saveKnowledgeRepoConfig(root, location.repository, { branch: location.branch });
+  createBusinessModule(root, { id: "transport", name: "传输", owner: "expert", description: "正式知识", repositories: [businessRepository(1).repository], knowledge_path: location.docs_path }, "expert");
   const formal = (path: string, content: string, moduleId: string): KnowledgeDocument => ({ id: `kg-${createHash("sha256").update(path).digest("hex")}`, title: path, content, scope: "module", module_ids: [moduleId], repositories: [], technologies: [], product_versions: [], when_to_use: "", active: true, revision: createHash("sha256").update(content).digest("hex"), source: { repository: location.repository, branch: location.branch, path, revision }, archive_target: { repository: location.repository, branch: location.branch, path }, history: [] });
   const original = formal(originalPath, originalBody, "transport"), occupied = formal(renamedPath, "# 独立业务规则\n\n其他模块已经维护的正式内容。", "other-module");
   writeGitKnowledgeSnapshot(root, { module_id: "transport", location, synced_at: new Date().toISOString(), documents: [original, occupied], resources: {}, repositories: [{ repository: location.repository, branch: location.branch, revision }] });
@@ -307,7 +309,8 @@ test("#466 合入同步后从正式 Git 版本独立检视，改名保留原任�
   const prepare = HostGitSandbox.prototype.prepare;
   // 保持真实 Git 提交、分支和同步；仅将测试 HTTPS 地址映射到本地临时仓，避免外网依赖。
   t.mock.method(HostGitSandbox.prototype, "prepare", function(this: HostGitSandbox, credential: Parameters<HostGitSandbox["prepare"]>[0]) { const result = prepare.call(this, credential); result.args.push("-c", `url.${repo}.insteadOf=${location.repository}`); return result; });
-  createBusinessModule(root, { id: "transport", name: "传输", owner: "expert", description: "传输规则", repositories: [location.repository], knowledge_location: location }, "expert");
+  saveKnowledgeRepoConfig(root, location.repository, { branch: location.branch });
+  createBusinessModule(root, { id: "transport", name: "传输", owner: "expert", description: "传输规则", repositories: [location.repository], knowledge_path: location.docs_path }, "expert");
   await syncModuleKnowledge(root, "transport", "expert");
   const firstFormal = listFormalKnowledgeDocuments(root)[0]; assert.equal(firstFormal.content, sourceBaseline);
   let archiveCalls = 0, mergedRevision = "";
