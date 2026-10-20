@@ -123,7 +123,7 @@ export function listKnowledgeTasks(sources: KnowledgeTaskSources): KnowledgeTask
   }
   return { tasks, warnings, module_activity: [...moduleActivity.values()], summary: {
     running: tasks.filter(task => task.group === "running").length,
-    attention: tasks.filter(task => task.group === "attention").length + warnings.length,
+    attention: tasks.filter(task => task.group === "attention").length,
     total: tasks.length,
   } };
 }

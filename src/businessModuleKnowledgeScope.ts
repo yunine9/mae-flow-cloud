@@ -8,21 +8,21 @@ interface RepositoryScope {
 
 export function normalizeRepositoryKnowledgeExclusions(value: unknown, repositories: readonly string[]): RepositoryKnowledgeExclusion[] {
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > repositories.length) throw new Error("知识目录筛选格式不正确");
+  if (!Array.isArray(value) || value.length > repositories.length) throw new Error("知识文档筛选格式不正确");
   const bound = new Map(repositories.map(repository => [repositoryIdentity(repository), repository]));
   const seen = new Set<string>();
   return value.flatMap(entry => {
     if (!entry || typeof entry !== "object" || typeof entry.repository !== "string" || !Array.isArray(entry.paths)
-        || entry.paths.length > 1000) throw new Error("请按关联代码仓设置需要排除的目录");
+        || entry.paths.length > 1000) throw new Error("请按关联代码仓设置需要排除的目录或文件");
     const identity = repositoryIdentity(entry.repository), repository = bound.get(identity);
     if (!repository || seen.has(identity)) throw new Error("筛选只能设置当前模块的关联代码仓，每个仓填写一次");
     seen.add(identity);
     const paths: string[] = entry.paths.map((raw: unknown) => {
-      if (typeof raw !== "string") throw new Error("筛选目录必须是 docs 下的相对目录");
+      if (typeof raw !== "string") throw new Error("筛选路径必须是 docs 下的相对目录或文件");
       const path = raw.trim().replace(/\/+$/, "");
       if (path.length > 1000 || (path !== "docs" && !path.startsWith("docs/"))
           || path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) {
-        throw new Error("筛选目录必须是 docs 下的相对目录，不能包含上级路径");
+        throw new Error("筛选路径必须是 docs 下的相对目录或文件，不能包含上级路径");
       }
       return path;
     });

@@ -215,6 +215,7 @@
 .knowledge-task-columns, .knowledge-task-row { display: grid; grid-template-columns: minmax(175px, 1.15fr) 130px 105px 130px 102px minmax(190px, 1.4fr) 104px; align-items: center; gap: 14px; min-width: 1078px; padding: 13px 18px; }
 .knowledge-task-columns { color:var(--muted); background:var(--surface-2); font-size:13px; font-weight:500; }
 .knowledge-task-row { width:100%; min-height:104px; padding-block:17px; text-align:left; cursor:pointer; border-top:1px solid var(--line); background:var(--surface); }
+.knowledge-task-columns > *, .knowledge-task-row > * { min-width:0; }
 .knowledge-task-row:hover { background: var(--surface-2); }
 .knowledge-task-row:focus-visible, .knowledge-task-capsule:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 .knowledge-task-main, .knowledge-task-note { min-width: 0; }
@@ -222,17 +223,19 @@
 .knowledge-task-meta { display:flex; min-width:0; gap:8px; color:var(--muted); font-size:13px; margin-top:7px; }
 .knowledge-task-meta span:first-child { flex-shrink: 0; }
 .knowledge-task-meta span + span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-left: 1px solid var(--line); padding-left: 8px; }
-.knowledge-task-status { display:inline-block; font-size:13px; border-radius:6px; padding:4px 7px; white-space:nowrap; background:var(--surface-2); color:var(--muted); }
+.knowledge-task-status { display:inline-block; max-width:100%; font-size:13px; line-height:1.5; border-radius:6px; padding:4px 7px; white-space:normal; overflow-wrap:anywhere; background:var(--surface-2); color:var(--muted); }
 .knowledge-task-status.is-running { color: #4668ba; background: #edf2fd; }
 .knowledge-task-status.is-attention { color: #946517; background: #fbf3df; }
 .knowledge-task-status.is-failed { color: #b14642; background: #fbecea; }
 .knowledge-task-person, .knowledge-task-time, .knowledge-task-duration { font-size:14px; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; }
+.knowledge-task-person { white-space:nowrap; }
 .knowledge-task-time small { display:block; color:var(--muted); margin-top:6px; font-size:12px; white-space:nowrap; }
 .knowledge-task-note p { margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; font-size:14px; line-height:1.65; }
 .knowledge-task-note small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:12px; margin-top:6px; }
 .knowledge-task-note .is-muted { color: var(--muted); }
 /* 任务行最右是动词（审查成果 / 查看进展 / 查看知识），说清点进去做什么，不只放一个箭头。 */
-.knowledge-task-open { display:inline-flex; align-items:center; justify-self:end; gap:2px; padding:5px 8px 5px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px; font-weight:500; color:var(--text-strong); white-space:nowrap; }
+.knowledge-task-open { display:inline-flex; align-items:center; justify-self:end; max-width:100%; gap:2px; padding:5px 8px 5px 10px; border:1px solid var(--line); border-radius:7px; font-size:13px; font-weight:500; color:var(--text-strong); white-space:normal; overflow-wrap:anywhere; }
+.knowledge-task-open > svg { flex-shrink:0; }
 .knowledge-task-row:hover .knowledge-task-open { border-color: var(--line-strong); }
 .knowledge-task-note .knowledge-task-error { color: #b14642; }
 .knowledge-task-empty { padding:60px 24px; text-align:center; color:var(--muted); font-size:14px; }

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -12,6 +11,7 @@ import { componentKnowledgeTask, domainKnowledgeTask, listKnowledgeTasks } from 
 import { projectKnowledgeProduction } from "../src/knowledgeProductionState.ts";
 import type { KnowledgeTaskCenterData } from "../src/knowledgeTaskCenterTypes.ts";
 import type { DomainKnowledgeJob } from "../src/domainKnowledgeTypes.ts";
+import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const repository = { id: "domain", name: "知识仓", repository: "https://example.test/knowledge.git", branch: "main", path: "", docs_path: "domains" };
@@ -35,26 +35,45 @@ function productionMatrix(): KnowledgeTaskCenterData {
     if (kind === "component") job.component_research_id = record.id;
     const expected = kind === "domain" ? projectKnowledgeProduction({ kind, record: job }) : projectKnowledgeProduction({ kind, record, archive: job });
     const task = kind === "domain" ? domainKnowledgeTask(job) : componentKnowledgeTask(record, job);
-    assert.equal(task.group, state === "failed" ? "attention" : state === "running" ? "running" : "completed");
-    assert.equal(expected.archive.status_label, { ready: "已发布（未归档）", running: "归档中", opened: "已归档", failed: "归档失败" }[state]);
-    if (state === "failed") assert.equal(task.status_label, "归档失败", "失败归档的动作优先于同任务的研究失败");
+    assert.equal(task.group, state === "failed" || kind === "domain" && state === "ready" ? "attention" : state === "running" ? "running" : "completed");
+    assert.equal(expected.archive.status_label, (kind === "domain"
+      ? { ready: "待创建 MR", running: "正在创建 MR", opened: "MR 待合入", failed: "MR 创建失败" }
+      : { ready: "已发布（未归档）", running: "归档中", opened: "已归档", failed: "归档失败" })[state]);
+    if (state === "failed") assert.equal(task.status_label, kind === "domain" ? "MR 创建失败" : "归档失败", "失败归档的状态仍保留");
     assert.deepEqual(task.production, expected, "任务行和详情使用同一后端投影");
     assert.deepEqual(task.next_action, expected.next_action);
     assert.ok(task.next_action.href?.includes("kbPage=task"));
     tasks.push(task);
+    if (kind === "domain" && state === "failed") {
+      const partial = structuredClone(job), merged = { ...partial.publications[0], state: "opened" as const, mr_state: "merged" as const, url: "https://example.test/mr/merged", error: undefined };
+      partial.id = "dkx-partial-merge"; partial.title = "订单领域多仓知识归档";
+      partial.operator = "陈晓明（基础平台及订单业务协同负责人）"; partial.status = "done"; partial.error = undefined;
+      partial.repositories = [{ ...repository, id: "repo-1", name: "代码仓", repository: "https://example.test/orders.git" }];
+      partial.publications = [merged, { ...job.publications[0], target_id: "repo-1" }];
+      partial.archive_batches![0].targets = [partial.knowledge_target, ...partial.repositories];
+      partial.archive_batches![0].publications = partial.publications;
+      const longStatus = domainKnowledgeTask(partial);
+      assert.equal(longStatus.status_label, "部分 MR 已合入，剩余 MR 创建失败");
+      tasks.unshift(longStatus);
+    }
   }
   return { module_activity: [], tasks, warnings: [], summary: { running: tasks.filter(task => task.group === "running").length, attention: tasks.filter(task => task.group === "attention").length, total: tasks.length } };
 }
 
-test("生产线验收3/F5 与生产线验收8/F10–F12：桌面任务中心保留坏文件告警，组合状态和完整动作沿用后端真实投影",
-  { timeout: 40_000, skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("桌面任务中心不显示后台 warning，真实失败可操作，长状态与发起人不重叠",
+  { timeout: 60_000, skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
     const dir = mkdtempSync(join(tmpdir(), "mfc-production-warnings-browser-"));
     const dataDir = join(dir, "data"), warningsDir = join(dir, "warnings-only");
     const badPaths = [`domain-extraction/dkx-${randomUUID()}/job.json`, `component-research/cr-${randomUUID()}/record.json`, `knowledge-documents/kd-${randomUUID()}.json`];
     for (const data of [dataDir, warningsDir]) for (const path of badPaths) write(data, path, "{");
     const completed: DomainKnowledgeJob = { id: `dkx-${randomUUID()}`, title: "已完成的正常领域研究", scope: "订单规则", operator: "alice", created_at: "2026-10-02T00:00:00Z",
       repositories: [], knowledge_target: repository, material_ids: [],
-      status: "done", stage: "已完成", revisions: {}, documents: [], turns: [], evidence: [], publications: [] };
+      status: "done", stage: "已完成", revisions: {}, documents: [{ id: "rules", title: "订单规则", target_id: "domain", path: "domains/orders.md", layer: "domain",
+        content: "# 订单规则", sources: "源码", revision: 1, selected: true, base_content: null, base_revision: "a".repeat(40), history: [] }], turns: [], evidence: [], publications: [] };
+    completed.publications = [{ target_id: "domain", branch: "codex/completed", state: "opened", mr_state: "merged", url: "https://example.test/mr/completed",
+      documents: [{ id: "rules", path: "domains/orders.md", content: "# 订单规则", revision: 1 }] }];
+    completed.archive_batches = [{ id: "batch-completed", state: "done", issue_no: "REQ-COMPLETED", created_at: completed.created_at, operator: "alice",
+      documents: structuredClone(completed.documents), targets: [repository], publications: completed.publications }];
     const attention: ResearchRecord = { id: `cr-${randomUUID()}`, component: { id: "files", name: "文件组件", repository: "https://example.test/files.git", branch: "main", path: "src", languages: ["cpp"], description: "文件处理", enabled: true },
       language: "cpp", topic: "可以继续的正常组件研究", operator: "bob", key: "warnings-browser", status: "failed", error: "来源当前不可用，可重试研究", stage: "萃取失败", created_at: "2026-10-02T00:00:00Z", evidence: [] };
     write(dataDir, `domain-extraction/${completed.id}/job.json`, JSON.stringify(completed));
@@ -71,69 +90,36 @@ test("生产线验收3/F5 与生产线验收8/F10–F12：桌面任务中心保�
       const warningsOnly = listKnowledgeTasks({ dataDir: warningsDir, domain: emptyDomain, component: emptyComponent, skillExtractionJob: () => undefined });
       assert.equal(populated.warnings.length, 3);
       assert.equal(populated.summary.running, 1);
-      assert.equal(populated.summary.attention, 4);
+      assert.equal(populated.summary.attention, 1);
       assert.equal(warningsOnly.tasks.length, 0);
-      assert.equal(warningsOnly.summary.attention, 3);
+      assert.equal(warningsOnly.summary.attention, 0);
       const fixture = { populated, warningsOnly, matrix: productionMatrix(), badPaths, runningId: running.id, completedId: completed.id, attentionId: attention.id };
       let buildTimer: ReturnType<typeof setTimeout> | undefined;
       const bundled = await Promise.race([
         build({ entryPoints: [resolve("tests/browser/knowledgeProductionWarnings.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } }),
         new Promise<never>((_, reject) => { buildTimer = setTimeout(() => reject(new Error("浏览器夹具构建超过5秒预算")), 5_000); }),
       ]).finally(() => clearTimeout(buildTimer));
-      const html = join(dir, "check.html"), output = join(dir, "dom.html");
+      const html = join(dir, "check.html"), screenshots = process.env.MFC_TASK_CENTER_SCREENSHOT_DIR;
+      if (screenshots) mkdirSync(screenshots, { recursive: true });
       const json = JSON.stringify(fixture).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026");
       const assets = resolve("web/dist/assets");
       const css = readdirSync(assets).filter(name => name.endsWith(".css")).map(name => readFileSync(join(assets, name), "utf8")).join("\n");
-      writeFileSync(html, '<!doctype html><meta charset="utf-8"><style>' + css + '</style><div id="app" style="padding:24px"></div><pre id="result"></pre><script id="fixture" type="application/json">' + json + '</script><script>' + bundled.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script>");
-      const fd = openSync(output, "w");
-      let pid: number | undefined;
-      let closePromise: Promise<void> | undefined;
-      try {
-        const child = spawn(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", "--force-device-scale-factor=1", `--user-data-dir=${join(dir, "profile")}`,
-          "--window-size=1366,768", "--virtual-time-budget=6000", "--dump-dom", `file://${html}`], { detached: true, stdio: ["ignore", fd, "ignore"] });
-        pid = child.pid;
-        let childError: Error | undefined;
-        child.once("error", error => { childError = error; });
-        closePromise = new Promise(resolve => { child.once("close", () => resolve()); });
-        let browserTimer: ReturnType<typeof setTimeout> | undefined;
-        await Promise.race([
-          closePromise,
-          (async () => {
-            // dump-dom 可先打印完整页面而进程尚未退出；以真实断言结果完成验收，再清理浏览器。
-            const deadline = Date.now() + 25_000;
-            while (Date.now() < deadline) {
-              if (/<pre id="result">[^<]+<\/pre>/.test(readFileSync(output, "utf8"))) return;
-              await new Promise(resolve => setTimeout(resolve, 25));
-            }
-            throw new Error("桌面浏览器未在25秒内输出验收结果");
-          })(),
-          new Promise<never>((_, reject) => { browserTimer = setTimeout(() => reject(new Error("桌面浏览器超过25秒执行预算")), 25_000); }),
-        ]).finally(() => clearTimeout(browserTimer));
-        if (childError) throw childError;
-      } finally {
-        try {
-          if (pid) {
-            try { process.kill(-pid, "SIGKILL"); }
-            catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
-          }
-        } finally {
-          try {
-            if (closePromise) {
-              let exitTimer: ReturnType<typeof setTimeout> | undefined;
-              await Promise.race([
-                closePromise,
-                new Promise<never>((_, reject) => { exitTimer = setTimeout(() => reject(new Error("桌面浏览器终止后超过5秒退出预算")), 5_000); }),
-              ]).finally(() => clearTimeout(exitTimer));
-            }
-          } finally { closeSync(fd); }
-        }
+      writeFileSync(html, '<!doctype html><html data-theme="light" data-density="comfortable"><meta charset="utf-8"><style>' + css
+        + '#result,#only-warnings,#production-matrix{display:none}</style><div id="app" style="padding:24px"></div><pre id="result"></pre><script id="fixture" type="application/json">'
+        + json + '</script><script>' + bundled.outputFiles[0].text.replaceAll("</script", "<\\/script") + "</script></html>");
+      for (const [width, height] of [[1920, 1080], [1366, 768]]) {
+        const screenshot = screenshots && join(screenshots, `knowledge-task-center-${width}.png`);
+        const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", "--force-device-scale-factor=1",
+          `--user-data-dir=${join(dir, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=6000", "--dump-dom",
+          ...(screenshot ? [`--screenshot=${screenshot}`] : []), `file://${html}${screenshot ? "?screenshot" : ""}`], join(dir, `dom-${width}.html`));
+        const result = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
+        assert.ok(result, "桌面浏览器未在预算内完成任务中心验收");
+        const value = JSON.parse(result);
+        assert.equal(value.error, undefined, value.error);
+        assert.equal(value.passed, true);
+        assert.equal(value.width, width);
+        if (screenshot) assert.ok(existsSync(screenshot), "桌面截图须在浏览器退出前保存");
       }
-      const result = readFileSync(output, "utf8").match(/<pre id="result">([^<]+)<\/pre>/)?.[1];
-      assert.ok(result, "桌面浏览器未在预算内完成告警验收");
-      const value = JSON.parse(result);
-      assert.equal(value.error, undefined, value.error);
-      assert.equal(value.passed, true);
-      assert.equal(value.width, 1366);
     } finally {
       release();
       await Promise.all([domain.shutdown(), component.shutdown(), emptyDomain.shutdown(), emptyComponent.shutdown()]);

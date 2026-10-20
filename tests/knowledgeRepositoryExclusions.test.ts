@@ -11,7 +11,7 @@ import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 import { collectSearchableKnowledge, KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import {
   freezeGitKnowledgeResources, gitKnowledgeResourceKey, listGitKnowledgeDocumentMetadata, listGitKnowledgeDocuments,
-  listModuleRepositoryKnowledgeDirectories, readFrozenGitKnowledgeResource, readGitKnowledgeDocument, readGitKnowledgeResource,
+  listModuleRepositoryKnowledgePaths, readFrozenGitKnowledgeResource, readGitKnowledgeDocument, readGitKnowledgeResource,
   readModuleKnowledgeContentRevision, writeGitKnowledgeSnapshot, type GitKnowledgeSnapshot,
 } from "../src/knowledgeRepositorySnapshots.ts";
 
@@ -19,11 +19,11 @@ const repository = "https://example.test/shared.git", domain = "https://example.
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const at = "2026-10-22T01:00:00.000Z", revision = "a".repeat(40);
 const id = (path: string) => `kg-${hash(path)}`;
-function setup(t: TestContext) {
+function setup(t: TestContext, additionalPaths: string[] = []) {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-exclusions-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   saveKnowledgeRepoConfig(dir, domain, { branch: "main" });
-  const paths = ["AGENTS.md", "docs/A/guide.md", "docs/B/guide.md", "docs/AB/deep/guide.md"];
+  const paths = ["AGENTS.md", "docs/A/guide.md", "docs/B/guide.md", "docs/AB/deep/guide.md", ...additionalPaths];
   for (const moduleId of ["alpha", "beta"]) createBusinessModule(dir, {
     id: moduleId, name: moduleId, owner: "fixture", description: moduleId, repositories: [repository], knowledge_path: `domains/${moduleId}`,
   }, "fixture");
@@ -116,8 +116,8 @@ test("全部模块排除时不再提供该正式文稿及资源，已冻结任�
   assert.deepEqual(readGitKnowledgeResource(f.dir, document.id, "image.png")?.content, f.image);
 });
 
-test("可选目录来自未排除的最新轻量索引，已排除目录仍能恢复，空仓保留 docs 根且不读取整库正文", t => {
-  const f = setup(t), empty = "https://example.test/empty.git";
+test("筛选包含 docs 根下和嵌套文档，使用未排除的轻量索引，空仓保留 docs 根且不读取整库正文", t => {
+  const f = setup(t, ["docs/README.md"]), empty = "https://example.test/empty.git";
   updateBusinessModule(f.dir, "alpha", { repositories: [repository, empty] }, "fixture");
   f.exclude("alpha", ["docs"]); f.exclude("beta", ["docs"]);
   const original = fs.readFileSync;
@@ -127,11 +127,35 @@ test("可选目录来自未排除的最新轻量索引，已排除目录仍能�
   }) as typeof fs.readFileSync;
   syncBuiltinESMExports();
   try {
-    assert.deepEqual(listModuleRepositoryKnowledgeDirectories(f.dir, "alpha"), [
-      { repository, directories: ["docs", "docs/A", "docs/AB", "docs/AB/deep", "docs/B"] },
-      { repository: empty, directories: ["docs"] },
+    assert.deepEqual(listModuleRepositoryKnowledgePaths(f.dir, "alpha"), [
+      { repository, directories: ["docs", "docs/A", "docs/AB", "docs/AB/deep", "docs/B"],
+        files: ["docs/A/guide.md", "docs/AB/deep/guide.md", "docs/B/guide.md", "docs/README.md"] },
+      { repository: empty, directories: ["docs"], files: [] },
     ]);
   } finally { fs.readFileSync = original; syncBuiltinESMExports(); }
+});
+
+test("单篇文件可排除和恢复，正文列表、计数与问答一致，同目录其他文件和其他模块不受影响", t => {
+  const f = setup(t, ["docs/README.md", "docs/README.md.backup.md", "docs/B/second.md"]);
+  const count = (moduleId: string) => listGitKnowledgeDocumentMetadata(f.dir).filter(document => document.module_ids.includes(moduleId)).length;
+  const search = new KnowledgeSearch(f.dir), rootFile = id("docs/README.md"), nestedFile = id("docs/B/guide.md");
+  const options = listModuleRepositoryKnowledgePaths(f.dir, "alpha");
+  f.exclude("alpha", ["docs/README.md", "docs/B/guide.md"]);
+  assert.equal(count("alpha"), f.paths.length - 2);
+  assert.equal(count("beta"), f.paths.length);
+  for (const documentId of [rootFile, nestedFile]) {
+    assert.deepEqual(readGitKnowledgeDocument(f.dir, documentId).module_ids, ["beta"]);
+    assert.equal(search.read(f.context("alpha"), documentId), undefined);
+    assert.ok(search.read(f.context("beta"), documentId));
+  }
+  for (const path of ["docs/README.md.backup.md", "docs/B/second.md", "AGENTS.md"]) {
+    assert.ok(search.read(f.context("alpha"), id(path)), `${path} 仍在当前模块范围内`);
+  }
+  assert.deepEqual(listModuleRepositoryKnowledgePaths(f.dir, "alpha"), options, "排除后仍保留所有候选文件供恢复");
+  f.exclude("alpha", []);
+  assert.equal(count("alpha"), f.paths.length);
+  assert.ok(search.read(f.context("alpha"), rootFile));
+  assert.ok(search.read(f.context("alpha"), nestedFile));
 });
 
 test("已有向量索引不需重建即可按当前模块排除旧命中，取消排除立即恢复检索", async t => {

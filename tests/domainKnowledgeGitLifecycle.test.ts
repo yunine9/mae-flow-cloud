@@ -163,7 +163,7 @@ test("正式检视纳入模块允许的所有目录，公共仓排除文稿不�
   } finally { await manager.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("修改阅读目录范围只影响新检视，已有检视保留文稿与归档路径，取消排除无需同步即可恢复", async () => {
+test("排除单篇文稿只影响新检视，已有检视保留文稿与归档路径，取消排除无需同步即可恢复", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-inspection-scope-change-")); module(dir);
   const domain = official(dir), code = { repository: "https://example.test/orders.git", branch: "release", revision: "c".repeat(40) };
   const selected: KnowledgeDocument = { ...domain, id: `kg-${createHash("sha256").update("legacy-review").digest("hex")}`,
@@ -174,7 +174,7 @@ test("修改阅读目录范围只影响新检视，已有检视保留文稿与�
   const manager = new DomainKnowledgeExtraction(dir, async () => { calls++; return "不应运行"; });
   try {
     const original = manager.beginInspection(selected.id, { module_id: "orders", issue_no: "REQ-SCOPE" }, "alice");
-    updateBusinessModule(dir, "orders", { repository_knowledge_exclusions: [{ repository: code.repository, paths: ["docs/legacy"] }] }, "alice");
+    updateBusinessModule(dir, "orders", { repository_knowledge_exclusions: [{ repository: code.repository, paths: ["docs/legacy/rules.md"] }] }, "alice");
     const filtered = manager.beginInspection(domain.id, { module_id: "orders", issue_no: "REQ-SCOPE-FILTERED" }, "alice");
     assert.deepEqual(filtered.documents.map(document => document.id), [domain.id]);
     assert.deepEqual(manager.get(original.id).documents, original.documents);

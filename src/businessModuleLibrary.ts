@@ -77,7 +77,7 @@ export interface BusinessModule {
   repositories: string[];
   /** 模块唯一保存的领域目录；仓库与分支统一取全局知识仓配置。 */
   knowledge_path?: string;
-  /** 当前模块不使用的代码仓知识目录；不删除远端文件或同步快照。 */
+  /** 当前模块不使用的代码仓知识目录或文件；不删除远端文件或同步快照。 */
   repository_knowledge_exclusions?: RepositoryKnowledgeExclusion[];
   /** HTTP 视图派生的只读位置，不写入模块记录。 */
   knowledge_location?: BusinessModuleKnowledgeLocation;
@@ -194,7 +194,7 @@ function moduleMrParticipants(value: unknown): MrParticipants | undefined {
 
 function moduleKnowledgeExclusions(value: unknown, repositories: readonly string[]) {
   try { return normalizeRepositoryKnowledgeExclusions(value, repositories); }
-  catch (error) { throw new BusinessModuleError(error instanceof Error ? error.message : "知识目录筛选格式不正确"); }
+  catch (error) { throw new BusinessModuleError(error instanceof Error ? error.message : "知识文档筛选格式不正确"); }
 }
 
 export function normalizeModuleKnowledgeLocation(value: unknown): BusinessModuleKnowledgeLocation | undefined {

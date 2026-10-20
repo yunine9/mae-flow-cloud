@@ -365,17 +365,18 @@ function indexedDocuments(dataDir: string, projectModules = true) {
 export function listGitKnowledgeDocumentMetadata(dataDir: string): GitKnowledgeDocumentMetadata[] {
   return [...indexedDocuments(dataDir).values()].map(value => value.document);
 }
-/** 文件夹筛选使用未排除的正式目录摘要，排除后仍能找到原文件夹并恢复选择。 */
-export function listModuleRepositoryKnowledgeDirectories(dataDir: string, moduleId: string): Array<{ repository: string; directories: string[] }> {
+/** 筛选使用未排除的正式文档摘要，目录和单篇文档都能单独选择并恢复。 */
+export function listModuleRepositoryKnowledgePaths(dataDir: string, moduleId: string): Array<{ repository: string; directories: string[]; files: string[] }> {
   const module = readBusinessModule(dataDir, moduleId);
-  const sources = new Map(module.repositories.map(repository => [repositoryIdentity(repository), { repository, directories: new Set(["docs"]) }]));
+  const sources = new Map(module.repositories.map(repository => [repositoryIdentity(repository), { repository, directories: new Set(["docs"]), files: new Set<string>() }]));
   for (const { document } of indexedDocuments(dataDir, false).values()) {
     if (document.scope !== "repository" || !document.source) continue;
     const source = sources.get(repositoryIdentity(document.source.repository)), parts = document.source.path.split("/");
-    if (!source || parts[0] !== "docs") continue;
+    if (!source || parts[0] !== "docs" || parts.length < 2) continue;
+    source.files.add(document.source.path);
     for (let depth = 1; depth < parts.length; depth++) source.directories.add(parts.slice(0, depth).join("/"));
   }
-  return [...sources.values()].map(source => ({ repository: source.repository, directories: [...source.directories].sort() }));
+  return [...sources.values()].map(source => ({ repository: source.repository, directories: [...source.directories].sort(), files: [...source.files].sort() }));
 }
 /** 源码的无关提交与同步时间变化不应触发知识正文重新索引。 */
 export function readModuleKnowledgeContentRevision(dataDir: string, moduleId: string): string | undefined {

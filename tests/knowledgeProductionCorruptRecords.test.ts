@@ -322,7 +322,7 @@ test("生产线验收3：正式库隔离坏 JSON 与坏形状文档，列表和�
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收3：知识任务需要处理计数包含领域、组件和正式库坏记录告警", async () => {
+test("领域、组件和正式库坏记录保留后台诊断，不增加知识任务待处理数量", async () => {
   const dir = mkdtempSync(join(tmpdir(), "production-corrupt-center-"));
   const goodDomain = domainRecord(), goodComponent = componentRecord();
   const bad = [`domain-extraction/dkx-${randomUUID()}/job.json`, `component-research/cr-${randomUUID()}/record.json`, `knowledge-documents/kd-${randomUUID()}.json`];
@@ -335,7 +335,7 @@ test("生产线验收3：知识任务需要处理计数包含领域、组件和�
     const center = listKnowledgeTasks({ dataDir: dir, domain, component, skillExtractionJob: () => undefined });
     assert.deepEqual(new Set(center.tasks.map(task => task.id)), new Set([goodDomain.id, goodComponent.id]));
     assertWarnings(center.warnings, bad);
-    assert.equal(center.summary.attention, center.tasks.filter(task => task.group === "attention").length + center.warnings.length);
+    assert.equal(center.summary.attention, center.tasks.filter(task => task.group === "attention").length, "后台诊断不计入待处理任务");
     for (const path of bad) assert.equal(readFileSync(join(dir, path), "utf8"), "{");
   } finally { await domain?.shutdown(); await component?.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

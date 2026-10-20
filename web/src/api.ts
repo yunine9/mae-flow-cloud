@@ -1480,7 +1480,7 @@ export async function businessModuleKnowledgeRequest(moduleId: string, input?: {
 
 export interface BusinessModuleKnowledgeScope {
   module_revision: number;
-  repositories: Array<{ repository: string; directories: string[]; excluded_paths: string[] }>;
+  repositories: Array<{ repository: string; directories: string[]; files: string[]; excluded_paths: string[] }>;
 }
 export async function businessModuleKnowledgeScopeRequest(
   moduleId: string,
@@ -1492,7 +1492,7 @@ export async function businessModuleKnowledgeScopeRequest(
     ...(input ? { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(input) } : {}),
   });
   const result = await response.json() as BusinessModuleKnowledgeScope & { error?: string };
-  if (!response.ok) throw new Error(result.error || (input ? "目录筛选保存失败" : "目录筛选读取失败"));
+  if (!response.ok) throw new Error(result.error || (input ? "文档筛选保存失败" : "文档筛选读取失败"));
   if (input) invalidateKnowledgeReads();
   return result;
 }

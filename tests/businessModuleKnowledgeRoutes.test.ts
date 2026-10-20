@@ -92,16 +92,16 @@ test("目录筛选保存和恢复立即生效，旧版本不能覆盖新选择�
   const firstResponse = await request(path);
   assert.equal(firstResponse.headers.get("cache-control"), "no-store");
   const first = await firstResponse.json() as any;
-  assert.deepEqual(first.repositories, [{ repository: "https://git.example/code.git", directories: ["docs"], excluded_paths: [] }]);
+  assert.deepEqual(first.repositories, [{ repository: "https://git.example/code.git", directories: ["docs"], files: [], excluded_paths: [] }]);
   assert.equal((await request(path, "PUT", null as any)).status, 400);
   const savedResponse = await request(path, "PUT", { expected_revision: first.module_revision,
-    repositories: [{ repository: "https://git.example/code.git", excluded_paths: ["docs/other"] }] });
+    repositories: [{ repository: "https://git.example/code.git", excluded_paths: ["docs/other", "docs/README.md"] }] });
   assert.equal(savedResponse.status, 200);
   const saved = await savedResponse.json() as any;
-  assert.deepEqual(saved.repositories[0].excluded_paths, ["docs/other"]);
+  assert.deepEqual(saved.repositories[0].excluded_paths, ["docs/README.md", "docs/other"]);
   assert.deepEqual(saved.repositories[0].directories, ["docs"], "实际目录与已排除目录分别返回，界面可标出暂时缺席的目录并恢复");
   assert.deepEqual(readBusinessModule(dir, "orders").repository_knowledge_exclusions,
-    [{ repository: "https://git.example/code.git", paths: ["docs/other"] }]);
+    [{ repository: "https://git.example/code.git", paths: ["docs/README.md", "docs/other"] }]);
   assert.equal((await request(path, "PUT", { expected_revision: first.module_revision, repositories: [] })).status, 409);
   assert.equal((await request(path, "PUT", { expected_revision: saved.module_revision,
     repositories: [{ repository: "https://git.example/code.git", excluded_paths: ["../escape"] }] })).status, 400);

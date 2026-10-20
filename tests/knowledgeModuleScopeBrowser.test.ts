@@ -7,7 +7,7 @@ import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("正式知识目录筛选：多仓滚动、保存及恢复、冲突恢复、首页计数与模块隔离", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("正式知识文档筛选：单文件与目录、多仓滚动、恢复、冲突、首页计数与模块隔离", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-scope-browser-"));
   try {
     const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeModuleScope.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", jsxImportSource: resolve("web/node_modules/react"), loader: { ".css": "empty" }, define: { "process.env.NODE_ENV": '"production"' } });

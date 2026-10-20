@@ -8,6 +8,7 @@ import type { BusinessModuleKnowledgeScope } from "../../web/src/api";
 const repositories = Array.from({ length: 6 }, (_, index) => `https://git.example.test/platform/${["shared-service", "order-service", "payment-service", "inventory-service", "gateway-service", "notification-service"][index]}.git`);
 let scope: BusinessModuleKnowledgeScope = { module_revision: 1, repositories: repositories.map((repository, index) => ({
   repository, directories: ["docs", "docs/交易", "docs/交易/接口说明", ...Array.from({ length: 16 }, (_, item) => `docs/公共能力-${String(item + 1).padStart(2, "0")}`)],
+  files: ["docs/README.md", "docs/FAQ.md", "docs/交易.md", "docs/交易/规则.md", "docs/交易/接口说明/查询接口.md"],
   excluded_paths: index === 1 ? ["docs/历史目录"] : [],
 })) };
 const shared = (id: string, path: string): KnowledgeDocument => ({
@@ -15,7 +16,7 @@ const shared = (id: string, path: string): KnowledgeDocument => ({
   module_ids: ["trade", "inventory"], repositories: [repositories[0]], technologies: [], product_versions: [], active: true,
   when_to_use: "", revision: "body-1", history: [], source: { repository: repositories[0], branch: "main", path, revision: "commit-1" },
 });
-const documents = [shared("kg-trade", "docs/交易/规则.md"), shared("kg-agents", "AGENTS.md"),
+const documents = [shared("kg-trade", "docs/交易/规则.md"), shared("kg-agents", "AGENTS.md"), shared("kg-readme", "docs/README.md"), shared("kg-faq", "docs/FAQ.md"),
   ...["trade", "inventory"].map(id => ({ ...shared(`kg-${id}-domain`, `Function_Knowledge/Access Function/${id}/README.md`), title: "领域概览", content: "# 领域概览\n\n正式领域文档。", scope: "module" as const, module_ids: [id], repositories: [] }))];
 let conflict = false, saves = 0;
 const errors: string[] = [];
@@ -35,7 +36,7 @@ window.fetch = async (url, options) => {
     }
     result ??= scope;
   } else if (path === "/knowledge-documents?view=directory") result = { revision: String(scope.module_revision), documents: documents.map(doc => {
-    const excluded = doc.id === "kg-trade" && scope.repositories[0].excluded_paths.some(parent => doc.source!.path.startsWith(`${parent}/`));
+    const excluded = doc.repositories.includes(repositories[0]) && scope.repositories[0].excluded_paths.some(parent => doc.source!.path === parent || doc.source!.path.startsWith(`${parent}/`));
     return { ...doc, module_ids: excluded ? ["inventory"] : doc.module_ids };
   }) };
   else if (path.startsWith("/knowledge-documents/")) result = documents.find(doc => doc.id === path.split("/")[2]);
@@ -63,24 +64,29 @@ async function click(label: string) { const node = button(label); check(node && 
 function checkbox(repository: string, path: string) { return document.querySelector<HTMLElement>(`[role="checkbox"][aria-label="${repository} ${path}"]`)!; }
 function counts(trade: number) {
   const card = (name: string) => document.querySelector(`[aria-label="打开${name}知识目录"]`)?.textContent;
-  return card("交易业务")?.includes(`文档：${trade}`) && card("库存业务")?.includes("文档：3");
+  return card("交易业务")?.includes(`文档：${trade}`) && card("库存业务")?.includes("文档：5");
 }
 async function openReader() {
   const entry = document.querySelector<HTMLElement>('[aria-label="打开交易业务知识目录"]'); check(entry, "交易模块入口"); entry!.click();
-  await until(() => button("筛选目录"), "正式阅读页提供筛选入口");
+  await until(() => button("筛选文档"), "正式阅读页提供筛选入口");
 }
-async function openFilter() { await click("筛选目录"); await until(() => checkbox(repositories[0], "docs"), "读取未过滤目录"); }
+async function openFilter() { await click("筛选文档"); await until(() => checkbox(repositories[0], "docs"), "读取未过滤目录与文件"); }
 async function run() {
-  await until(() => counts(3), "初始两个模块文档数量各为 3，不使用同步状态的原始计数");
+  await until(() => counts(5), "初始两个模块文档数量各为 5，不使用同步状态的原始计数");
   await openReader(); await openFilter();
-  check(document.querySelectorAll('[aria-label="代码仓目录筛选"] section').length === 6, "6 个关联仓全部可编辑");
+  check(document.querySelectorAll('[aria-label="代码仓文档筛选"] section').length === 6, "6 个关联仓全部可编辑");
+  check(checkbox(repositories[0], "docs/README.md").closest("label")?.querySelector('svg[aria-label="文件"]'), "docs 根下独立文件可选且显示文件图标");
+  check(checkbox(repositories[0], "docs/交易").closest("label")?.querySelector('svg[aria-label="目录"]'), "目录显示目录图标");
+  check(checkbox(repositories[0], "docs/交易/规则.md").compareDocumentPosition(checkbox(repositories[0], "docs/交易.md")) & Node.DOCUMENT_POSITION_FOLLOWING, "同级文件不能插入目录子树中间");
+  check(!checkbox(repositories[0], "AGENTS.md"), "仓根 AGENTS.md 不可排除");
   checkbox(repositories[0], "docs/交易").click(); await pause();
   check(checkbox(repositories[0], "docs/交易/接口说明").getAttribute("aria-disabled") === "true" || checkbox(repositories[0], "docs/交易/接口说明").hasAttribute("disabled"), "排除父目录后子目录禁用");
+  check(checkbox(repositories[0], "docs/交易/接口说明/查询接口.md").getAttribute("aria-disabled") === "true" || checkbox(repositories[0], "docs/交易/接口说明/查询接口.md").hasAttribute("disabled"), "排除父目录同时排除并禁用嵌套文件");
   check(checkbox(repositories[0], "docs").getAttribute("aria-checked") === "mixed", "父目录显示部分选择");
   await click("保存"); await until(() => !document.querySelector('[role="dialog"][data-open]'), "保存自动关闭弹窗");
   await until(() => document.querySelector('[aria-label="交易业务知识阅读器"] .knowledge-markdown')?.textContent?.includes("正式领域文档"), "排除当前共享文稿后仍在当前模块，自动阅读保留的文稿");
   check(!document.querySelector('[aria-label="库存业务知识阅读器"]'), "不能因为共享文稿被排除而切到其他模块");
-  await click("返回知识库"); await until(() => counts(2), "筛选保存后首页计数减少且另一模块不变");
+  await click("返回知识库"); await until(() => counts(4), "目录筛选保存后首页计数减少且另一模块不变");
   await openReader(); await openFilter();
   check(checkbox(repositories[0], "docs/交易").getAttribute("aria-checked") === "false", "再次打开仍能看到被排除目录");
   check(checkbox(repositories[1], "docs/历史目录"), "已存但当前快照不存在的排除项也可恢复");
@@ -89,7 +95,20 @@ async function run() {
   check(checkbox(repositories[0], "docs/交易").getAttribute("aria-checked") === "false", "取消不持久化恢复全部");
   await click("恢复全部"); await click("保存"); await until(() => saves === 2 && !document.querySelector('[role="dialog"][data-open]'), "恢复全部已保存");
   check(scope.repositories.every(repo => !repo.excluded_paths.length), "恢复全部清空本模块各仓排除项");
-  await click("返回知识库"); await until(() => counts(3), "恢复后首页文档数量恢复，另一模块不变");
+  await click("返回知识库"); await until(() => counts(5), "恢复后首页文档数量恢复，另一模块不变");
+  await openReader(); await openFilter();
+  checkbox(repositories[0], "docs/README.md").click(); await pause();
+  check(checkbox(repositories[0], "docs/FAQ.md").getAttribute("aria-checked") === "true", "单文件排除不影响相邻文件");
+  check(checkbox(repositories[0], "docs/交易/规则.md").getAttribute("aria-checked") === "true", "单文件排除不影响其他目录文件");
+  await click("保存"); await until(() => saves === 3 && !document.querySelector('[role="dialog"][data-open]'), "单文件排除已保存");
+  check(scope.repositories[0].excluded_paths.length === 1 && scope.repositories[0].excluded_paths[0] === "docs/README.md", "仅保存被排除的文件路径");
+  await click("返回知识库"); await until(() => counts(4), "单文件排除后首页计数减少，另一模块不变");
+  await openReader(); await openFilter();
+  check(checkbox(repositories[0], "docs/README.md").getAttribute("aria-checked") === "false", "已排除文件仍可见并可恢复");
+  check(checkbox(repositories[0], "docs/FAQ.md").getAttribute("aria-checked") === "true", "重新打开相邻文件仍保持勾选");
+  checkbox(repositories[0], "docs/README.md").click(); await pause();
+  await click("保存"); await until(() => saves === 4 && !document.querySelector('[role="dialog"][data-open]'), "单文件重新勾选已保存");
+  await click("返回知识库"); await until(() => counts(5), "恢复单文件后首页计数恢复，另一模块不变");
   await openReader(); await openFilter();
   checkbox(repositories[0], "docs/交易").click(); await pause(); conflict = true;
   await click("保存");
@@ -97,7 +116,8 @@ async function run() {
   check(checkbox(repositories[0], "docs/交易").getAttribute("aria-checked") === "false", "失败保留待保存选择");
   conflict = false; await click("重新读取"); await until(() => checkbox(repositories[0], "docs/交易")?.getAttribute("aria-checked") === "true", "重新读取取得已保存状态");
   checkbox(repositories[0], "docs/交易").click(); await pause();
-  const panel = document.querySelector<HTMLElement>('[aria-label="代码仓目录筛选"]')!;
+  checkbox(repositories[0], "docs/README.md").click(); await pause();
+  const panel = document.querySelector<HTMLElement>('[aria-label="代码仓文档筛选"]')!;
   check(panel.scrollHeight > panel.clientHeight, "长目录在弹窗内滚动");
   const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-open]')!.getBoundingClientRect();
   check(dialog.top >= 0 && dialog.bottom <= innerHeight, "弹窗处于桌面视区内");
