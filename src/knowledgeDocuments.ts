@@ -10,7 +10,7 @@ import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { FileProjectionCache } from "./fileProjectionCache.ts";
 import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
-import { listGitKnowledgeDocuments, readGitKnowledgeDocument, withoutBoundModuleDrafts } from "./knowledgeRepositorySnapshots.ts";
+import { listGitKnowledgeDocuments, listGitKnowledgeDocumentMetadata, readGitKnowledgeDocument, withoutBoundModuleDrafts } from "./knowledgeRepositorySnapshots.ts";
 export interface KnowledgeDocument {
   id: string; title: string; content: string; scope: "platform" | "module" | "repository";
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
@@ -21,6 +21,12 @@ export interface KnowledgeDocument {
   archive_target?: { repository: string; branch: string; path: string };
   research_source?: { job_id:string; document_id?: string; layer?: "domain" | "repository"; repository:string; branch:string; path:string; revision?:string; source_revisions?: Record<string, string>; material_ids?: string[]; skill?: { name: string; digest: string }; components?: Array<{id:string; repository:string; branch:string; path:string; revision?:string}> };
   history: Array<{ at: string; operator: string; action: string; revision?: string }>;
+}
+export type KnowledgeDocumentMetadata = Omit<KnowledgeDocument, "content"> & { lines: number };
+const documentMetadata = new FileProjectionCache<KnowledgeDocumentMetadata>();
+function metadataOf(document: KnowledgeDocument): KnowledgeDocumentMetadata {
+  const { content, ...metadata } = document;
+  return { ...metadata, lines: content.split("\n").length };
 }
 const root = (dir: string) => join(dir, "knowledge-documents");
 function file(dir: string, id: string) {
@@ -111,6 +117,23 @@ export function listKnowledgeDocuments(dir: string, warnings?: string[]): Knowle
 /** 正式阅读和问答只消费绑定来源的 Git 快照；旧任务记录仍可单独追溯。 */
 export function listFormalKnowledgeDocuments(dir: string, warnings?: string[]): KnowledgeDocument[] {
   return [...withoutBoundModuleDrafts(dir, listKnowledgeDocuments(dir, warnings)), ...listGitKnowledgeDocuments(dir)];
+}
+/** 阅读目录只需要名称、来源和版本，旧文稿正文也只在文件变化时读取。 */
+export function listFormalKnowledgeDocumentMetadata(dir: string): KnowledgeDocumentMetadata[] {
+  const documents: KnowledgeDocumentMetadata[] = [];
+  if (existsSync(root(dir))) {
+    for (const name of readdirSync(root(dir)).filter(name => /^kd-[a-f0-9-]{36}\.json$/.test(name))) {
+      const id = name.slice(0, -5);
+      if (knowledgeDeleted(dir, id)) continue;
+      try {
+        const metadata = documentMetadata.read(file(dir, id), () => metadataOf(readStoredKnowledgeDocument(dir, id)));
+        const resolved = { ...metadata, module_ids: resolveBusinessModuleIds(dir, metadata.module_ids) };
+        if (withoutBoundModuleDrafts(dir, [{ ...resolved, content: "" }]).length) documents.push(resolved);
+      } catch { /* 与正文目录一致：坏记录由任务中心报告，其余知识继续可读。 */ }
+    }
+  }
+  documents.sort((a, b) => b.history.at(-1)!.at.localeCompare(a.history.at(-1)!.at));
+  return [...documents, ...listGitKnowledgeDocumentMetadata(dir)];
 }
 export interface KnowledgeDocumentVersion { document: KnowledgeDocument; published_at: string; operator: string }
 function versionRoot(dir: string, id: string) {

@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { durableWriteFileSync } from "./durableWrite.ts";
-import { listBusinessModules } from "./businessModuleLibrary.ts";
+import { listBusinessModules, readBusinessModule } from "./businessModuleLibrary.ts";
 import { resolveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import type { KnowledgeDocument } from "./knowledgeDocuments.ts";
@@ -31,6 +31,15 @@ export interface GitKnowledgeSnapshot {
   resources: Record<string, { digest: string; content_type: string }>;
   repositories: NonNullable<ModuleKnowledgeSync["repositories"]>;
 }
+export type GitKnowledgeDocumentMetadata = Omit<KnowledgeDocument, "content"> & { lines: number };
+interface SnapshotReadIndex extends Omit<GitKnowledgeSnapshot, "documents"> {
+  format: 1;
+  memory_only?: true;
+  snapshot_signature: string;
+  content_bytes: number;
+  documents: GitKnowledgeDocumentMetadata[];
+  contents: Record<string, { offset: number; bytes: number; digest: string; resource_paths: string[] }>;
+}
 export const gitKnowledgeRoot = (dataDir: string) => join(dataDir, "knowledge-git");
 const moduleKey = (id: string) => createHash("sha256").update(id).digest("hex");
 const snapshotPath = (dataDir: string, moduleId: string) => join(gitKnowledgeRoot(dataDir), "modules", `${moduleKey(moduleId)}.json`);
@@ -38,6 +47,14 @@ const statusPath = (dataDir: string, moduleId: string) => join(gitKnowledgeRoot(
 const snapshotCache = new Map<string, { signature: string; bytes: number; value: GitKnowledgeSnapshot }>();
 const corruptFiles = new Set<string>();
 const MAX_CACHE_BYTES = 32 * 1024 * 1024;
+const readIndexCache = new Map<string, { signature: string; bytes: number; value: SnapshotReadIndex }>();
+const MAX_INDEX_CACHE_BYTES = 8 * 1024 * 1024;
+const fileSignature = (path: string) => {
+  const stat = statSync(path);
+  return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
+};
+const readIndexRoot = (dataDir: string, moduleId: string) => join(gitKnowledgeRoot(dataDir), "read-cache", moduleKey(moduleId));
+const readIndexDirectory = (dataDir: string, moduleId: string, signature: string) => join(readIndexRoot(dataDir, moduleId), moduleKey(signature));
 const text = (value: unknown): value is string => typeof value === "string";
 const record = (value: unknown): value is Record<string, any> => !!value && typeof value === "object" && !Array.isArray(value);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every(text);
@@ -79,6 +96,125 @@ function cachedSnapshot(path: string): GitKnowledgeSnapshot {
   }
   return value;
 }
+function cacheReadIndex(path: string, signature: string, bytes: number, value: SnapshotReadIndex) {
+  readIndexCache.delete(path);
+  if (bytes > MAX_INDEX_CACHE_BYTES) return;
+  readIndexCache.set(path, { signature, bytes, value });
+  let total = [...readIndexCache.values()].reduce((sum, cached) => sum + cached.bytes, 0);
+  for (const [key, cached] of readIndexCache) {
+    if (total <= MAX_INDEX_CACHE_BYTES) break;
+    readIndexCache.delete(key); total -= cached.bytes;
+  }
+}
+function validReadIndex(value: unknown, moduleId: string, signature: string): value is SnapshotReadIndex {
+  if (!record(value) || value.format !== 1 || value.snapshot_signature !== signature
+    || !Number.isSafeInteger(value.content_bytes) || value.content_bytes < 0 || !record(value.contents)
+    || !Array.isArray(value.documents)) return false;
+  // 索引沿用正式快照的字段校验；正文只在单篇读取时按长度和摘要核对。
+  return validSnapshot({ ...value, documents: value.documents.map(document => ({ ...document, content: "" })) }, moduleId)
+    && value.documents.every(document => {
+      const body = value.contents[document.id];
+      return !("content" in document) && Number.isSafeInteger(document.lines) && document.lines >= 1 && record(body)
+        && Number.isSafeInteger(body.offset) && body.offset >= 0 && Number.isSafeInteger(body.bytes) && body.bytes >= 0
+        && body.offset + body.bytes <= value.content_bytes && /^[a-f0-9]{64}$/.test(body.digest) && strings(body.resource_paths);
+    });
+}
+/** 仅用于加速阅读，可由正式快照随时重建；打包正文避免产生数千个小文件。 */
+function buildReadIndex(dataDir: string, snapshot: GitKnowledgeSnapshot, signature: string): SnapshotReadIndex {
+  const root = readIndexRoot(dataDir, snapshot.module_id);
+  const directory = readIndexDirectory(dataDir, snapshot.module_id, signature), temporary = join(root, `building-${randomUUID()}`);
+  const contents: SnapshotReadIndex["contents"] = {}, buffers: Buffer[] = [];
+  let offset = 0;
+  const documents = snapshot.documents.map(({ content, ...document }) => {
+    const buffer = Buffer.from(content, "utf8");
+    contents[document.id] = { offset, bytes: buffer.length, digest: createHash("sha256").update(buffer).digest("hex"),
+      resource_paths: document.source ? referencedGitResourcePaths(content, document.source.path) : [] };
+    offset += buffer.length; buffers.push(buffer);
+    let lines = 1;
+    for (let cursor = content.indexOf("\n"); cursor !== -1; cursor = content.indexOf("\n", cursor + 1)) lines++;
+    return { ...document, lines };
+  });
+  const value: SnapshotReadIndex = { ...snapshot, format: 1, snapshot_signature: signature, documents, contents, content_bytes: offset };
+  const serialized = JSON.stringify(value);
+  try {
+    mkdirSync(root, { recursive: true });
+    mkdirSync(temporary, { mode: 0o750 });
+    writeFileSync(join(temporary, "contents.bin"), Buffer.concat(buffers, offset), { mode: 0o640 });
+    writeFileSync(join(temporary, "index.json"), serialized, { mode: 0o640 });
+    // 缓存无需逐篇 fsync；异常中断后，长度/摘要检查会从原快照恢复。
+    rmSync(directory, { recursive: true, force: true });
+    renameSync(temporary, directory);
+    const indexPath = join(directory, "index.json");
+    cacheReadIndex(indexPath, fileSignature(indexPath), Buffer.byteLength(serialized), value);
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.name !== moduleKey(signature) && entry.isDirectory() && /^(?:[a-f0-9]{64}|building-[a-f0-9-]+)$/.test(entry.name)) {
+        readIndexCache.delete(join(root, entry.name, "index.json"));
+        rmSync(join(root, entry.name), { recursive: true, force: true });
+      }
+    }
+    return value;
+  } catch {
+    // 阅读缓存写不了时仍使用已成功保存的正式快照，不能把模块隐藏或把同步误报为失败。
+    return { ...value, memory_only: true };
+  } finally {
+    try { rmSync(temporary, { recursive: true, force: true }); } catch { /* 缓存清理失败不改变正式快照的保存结果。 */ }
+  }
+}
+function readSnapshotIndex(dataDir: string, moduleId: string): SnapshotReadIndex | undefined {
+  const source = snapshotPath(dataDir, moduleId);
+  if (!existsSync(source)) return undefined;
+  const signature = fileSignature(source), indexPath = join(readIndexDirectory(dataDir, moduleId, signature), "index.json");
+  let value: SnapshotReadIndex | undefined;
+  try {
+    const stamp = fileSignature(indexPath), cached = readIndexCache.get(indexPath);
+    if (cached?.signature === stamp) {
+      readIndexCache.delete(indexPath); readIndexCache.set(indexPath, cached); value = cached.value;
+    } else {
+      const serialized = readFileSync(indexPath, "utf8"), parsed: unknown = JSON.parse(serialized);
+      if (!validReadIndex(parsed, moduleId, signature)) throw new Error("阅读索引损坏");
+      value = parsed;
+      cacheReadIndex(indexPath, stamp, Buffer.byteLength(serialized), value);
+    }
+  } catch {
+    const snapshot = readGitKnowledgeSnapshot(dataDir, moduleId);
+    if (!snapshot) return undefined;
+    value = buildReadIndex(dataDir, snapshot, signature);
+  }
+  const binding = resolveModuleKnowledgeLocation(dataDir, moduleId);
+  return binding && sameLocation(value.location, binding) ? value : undefined;
+}
+function readIndexedDocument(dataDir: string, index: SnapshotReadIndex, document: GitKnowledgeDocumentMetadata, retry = true): KnowledgeDocument {
+  if (index.memory_only) {
+    const original = readGitKnowledgeSnapshot(dataDir, index.module_id)?.documents.find(row => row.id === document.id);
+    if (!original) throw new Error("仓库知识不存在或正式快照损坏");
+    const { lines: _lines, ...metadata } = document;
+    return { ...metadata, content: original.content };
+  }
+  const body = index.contents[document.id];
+  try {
+    const buffer = Buffer.alloc(body.bytes), path = join(readIndexDirectory(dataDir, index.module_id, index.snapshot_signature), "contents.bin");
+    const fd = openSync(path, "r");
+    try {
+      let count = 0;
+      while (count < buffer.length) {
+        const read = readSync(fd, buffer, count, buffer.length - count, body.offset + count);
+        if (!read) throw new Error("文档阅读缓存不完整");
+        count += read;
+      }
+    } finally { closeSync(fd); }
+    if (createHash("sha256").update(buffer).digest("hex") !== body.digest) throw new Error("文档阅读缓存损坏");
+    const { lines: _lines, ...metadata } = document;
+    return { ...metadata, content: buffer.toString("utf8") };
+  } catch (error) {
+    if (!retry) throw error;
+    const snapshot = readGitKnowledgeSnapshot(dataDir, index.module_id);
+    if (!snapshot) throw new Error("仓库知识不存在或正式快照损坏");
+    const rebuilt = buildReadIndex(dataDir, snapshot, fileSignature(snapshotPath(dataDir, index.module_id)));
+    const current = rebuilt.documents.find(row => row.id === document.id);
+    if (!current) throw new Error("仓库知识不存在或已从正式分支删除");
+    return readIndexedDocument(dataDir, rebuilt, current, false);
+  }
+}
 const runningSyncs = new Set<string>();
 export function setModuleKnowledgeSyncActive(dataDir: string, moduleId: string, active: boolean) {
   const key = JSON.stringify([dataDir, moduleId]);
@@ -104,14 +240,14 @@ export function readModuleKnowledgeSync(dataDir: string, moduleId: string): Modu
     corruptFiles.delete(path);
   } catch {
     corruptFiles.add(path);
-    const snapshot = readGitKnowledgeSnapshot(dataDir, moduleId);
+    const snapshot = readSnapshotIndex(dataDir, moduleId);
     return { module_id: moduleId, state: "failed", location: binding, attempted_at: statSync(path).mtime.toISOString(),
       document_count: snapshot?.documents.length ?? 0, ...(snapshot ? { synced_at: snapshot.synced_at, repositories: snapshot.repositories,
         commit: snapshot.repositories.find(source => source.repository === binding.repository && source.branch === binding.branch)?.revision } : {}),
       error: "本地同步记录损坏，原文件将保留备份；重新同步可从正式 Git 重建" };
   }
   if (!sameLocation(value.location, binding)) return undefined;
-  if (value.synced_at && value.state !== "syncing" && !readGitKnowledgeSnapshot(dataDir, moduleId)) {
+  if (value.synced_at && value.state !== "syncing" && !readSnapshotIndex(dataDir, moduleId)) {
     return { ...value, state: "failed", error: "本地正式知识快照缺失或损坏，原文件将保留备份；重新同步可从正式 Git 重建" };
   }
   return value.state === "syncing" && !runningSyncs.has(JSON.stringify([dataDir, moduleId]))
@@ -126,6 +262,7 @@ export function writeGitKnowledgeSnapshot(dataDir: string, snapshot: GitKnowledg
   mkdirSync(join(gitKnowledgeRoot(dataDir), "modules"), { recursive: true });
   preserveCorruptFile(snapshotPath(dataDir, snapshot.module_id));
   durableWriteFileSync(snapshotPath(dataDir, snapshot.module_id), JSON.stringify(snapshot), { mode: 0o640 });
+  buildReadIndex(dataDir, snapshot, fileSignature(snapshotPath(dataDir, snapshot.module_id)));
 }
 export function readGitKnowledgeSnapshot(dataDir: string, moduleId: string): GitKnowledgeSnapshot | undefined {
   const path = snapshotPath(dataDir, moduleId);
@@ -175,11 +312,57 @@ export function listGitKnowledgeDocuments(dataDir: string): KnowledgeDocument[] 
   }
   return [...documents.values()];
 }
+function liveReadIndexes(dataDir: string): SnapshotReadIndex[] {
+  const indexes: SnapshotReadIndex[] = [];
+  for (const module of listBusinessModules(dataDir).modules.filter(module => module.status === "active")) {
+    try {
+      const index = readSnapshotIndex(dataDir, module.id), repositories = new Set(module.repositories.map(repositoryIdentity));
+      if (index) indexes.push({ ...index, documents: index.documents.filter(document => document.scope !== "repository"
+        || document.repositories.some(repository => repositories.has(repositoryIdentity(repository)))) });
+    } catch { /* 正式快照损坏的模块由同步状态报告，其余模块仍可阅读。 */ }
+  }
+  return indexes.sort((a, b) => b.synced_at.localeCompare(a.synced_at));
+}
+function indexedDocuments(dataDir: string) {
+  const indexes = liveReadIndexes(dataDir);
+  const latestSources = new Map<string, { revision: string; at: string }>();
+  for (const index of indexes) for (const repository of index.repositories) {
+    if (repository.scope === "module") continue;
+    const key = JSON.stringify([repositoryIdentity(repository.repository), repository.branch]);
+    const at = repository.synced_at ?? index.synced_at, previous = latestSources.get(key);
+    if (!previous || at > previous.at) latestSources.set(key, { revision: repository.revision, at });
+  }
+  const documents = new Map<string, { document: GitKnowledgeDocumentMetadata; index: SnapshotReadIndex }>();
+  for (const index of indexes) for (const document of index.documents) {
+    if (document.scope === "repository" && document.source) {
+      const latest = latestSources.get(JSON.stringify([repositoryIdentity(document.source.repository), document.source.branch]));
+      if (latest && latest.revision !== document.source.revision) continue;
+    }
+    const previous = documents.get(document.id);
+    if (!previous) documents.set(document.id, { index, document: { ...document, module_ids: [...document.module_ids],
+      repositories: [...document.repositories], source: document.source ? { ...document.source } : undefined } });
+    else if (document.scope === "module") previous.document.module_ids = [...new Set([...previous.document.module_ids, ...document.module_ids])];
+  }
+  return documents;
+}
+/** 目录与卡片仅消费持久摘要，不解析其他模块的 Markdown 正文。 */
+export function listGitKnowledgeDocumentMetadata(dataDir: string): GitKnowledgeDocumentMetadata[] {
+  return [...indexedDocuments(dataDir).values()].map(value => value.document);
+}
+/** 源码的无关提交与同步时间变化不应触发知识正文重新索引。 */
+export function readModuleKnowledgeContentRevision(dataDir: string, moduleId: string): string | undefined {
+  const module = readBusinessModule(dataDir, moduleId), index = readSnapshotIndex(dataDir, module.id);
+  if (!index || module.status !== "active") return undefined;
+  const repositories = new Set(module.repositories.map(repositoryIdentity));
+  return createHash("sha256").update(JSON.stringify(index.documents.filter(document => document.active
+    && (document.scope !== "repository" || document.repositories.some(repository => repositories.has(repositoryIdentity(repository)))))
+    .map(document => [document.id, document.revision]).sort((a, b) => a[0].localeCompare(b[0])))).digest("hex");
+}
 export function readGitKnowledgeDocument(dataDir: string, id: string): KnowledgeDocument {
   if (!/^kg-[a-f0-9]{64}$/.test(id)) throw new Error("仓库知识文档编号无效");
-  const document = listGitKnowledgeDocuments(dataDir).find(document => document.id === id);
-  if (!document) throw new Error("仓库知识不存在或已从正式分支删除");
-  return document;
+  const selected = indexedDocuments(dataDir).get(id);
+  if (!selected) throw new Error("仓库知识不存在或已从正式分支删除");
+  return readIndexedDocument(dataDir, selected.index, selected.document);
 }
 /** 旧业务正文保留在原记录中；正式消费只使用 Git，不因模块尚未配置而退回本地。 */
 export function withoutBoundModuleDrafts(_dataDir: string, documents: KnowledgeDocument[]): KnowledgeDocument[] {
@@ -210,11 +393,11 @@ function readResource(dataDir: string, resource: { digest: string; content_type:
 }
 /** 检视任务只保存原图摘要与来源位置；二进制文件按摘要共享，不随正式快照切换而改变。 */
 export function freezeGitKnowledgeResources(dataDir: string, documents: Array<Pick<KnowledgeDocument, "id" | "source">>): FrozenGitKnowledgeResources {
-  const frozen: FrozenGitKnowledgeResources = {}, originals = new Map<string, KnowledgeDocument>();
+  const frozen: FrozenGitKnowledgeResources = {}, originals = new Map<string, { resource_paths: string[] }>();
   const resourcesByLocation = new Map<string, { digest: string; content_type: string }>();
   const documentKey = (id: string, source: NonNullable<KnowledgeDocument["source"]>) => JSON.stringify([id, repositoryIdentity(source.repository), source.branch, source.path, source.revision]);
-  for (const snapshot of liveSnapshots(dataDir)) {
-    for (const document of snapshot.documents) if (document.source) originals.set(documentKey(document.id, document.source), document);
+  for (const snapshot of liveReadIndexes(dataDir)) {
+    for (const document of snapshot.documents) if (document.source) originals.set(documentKey(document.id, document.source), snapshot.contents[document.id]);
     for (const [key, resource] of Object.entries(snapshot.resources)) resourcesByLocation.set(key, resource);
   }
   for (const document of documents) {
@@ -223,7 +406,7 @@ export function freezeGitKnowledgeResources(dataDir: string, documents: Array<Pi
     const original = originals.get(documentKey(document.id, source));
     if (!original) throw new Error("正式文档版本已变化，请刷新文稿后开始检视，未混用新版本图片");
     const resources: FrozenGitKnowledgeDocumentResources["resources"] = {};
-    for (const path of referencedGitResourcePaths(original.content, source.path)) {
+    for (const path of original.resource_paths) {
       const resource = resourcesByLocation.get(gitKnowledgeResourceKey(source.repository, source.branch, path, source.revision));
       if (resource) resources[path] = { ...resource };
     }
@@ -238,15 +421,17 @@ export function readFrozenGitKnowledgeResource(dataDir: string, refs: FrozenGitK
 }
 export function readGitKnowledgeResource(dataDir: string, id: string, href: string): { content: Buffer; content_type: string } | undefined {
   if (!/^kg-[a-f0-9]{64}$/.test(id)) return undefined;
-  let current: KnowledgeDocument;
-  try { current = readGitKnowledgeDocument(dataDir, id); } catch { return undefined; }
-  for (const snapshot of liveSnapshots(dataDir)) {
-    const document = snapshot.documents.find(document => document.id === id);
-    if (!document?.source || document.source.revision !== current.source?.revision) continue;
-    const path = gitResourcePath(document.source.path, href);
-    if (!path) return undefined;
-    const resource = snapshot.resources[gitKnowledgeResourceKey(document.source.repository, document.source.branch, path, document.source.revision)];
-    if (resource) return readResource(dataDir, resource);
+  const current = indexedDocuments(dataDir).get(id), source = current?.document.source;
+  if (!current || !source) return undefined;
+  const path = gitResourcePath(source.path, href);
+  if (!path) return undefined;
+  const key = gitKnowledgeResourceKey(source.repository, source.branch, path, source.revision);
+  const resource = current.index.resources[key];
+  if (resource) return readResource(dataDir, resource);
+  // 同一公共仓被多个模块引用时，可复用同一提交已成功同步的资源。
+  for (const index of liveReadIndexes(dataDir)) {
+    if (index.documents.some(document => document.id === id && document.source?.revision === source.revision)
+      && index.resources[key]) return readResource(dataDir, index.resources[key]);
   }
   return undefined;
 }

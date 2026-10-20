@@ -2,6 +2,7 @@ import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
 import { readHostSkillPackage, readSkillSubmissionPackage } from "./hostSkillLibrary.ts";
 import { readKnowledgeSkillContext, saveKnowledgeSkillContext } from "./knowledgeSkillContext.ts";
 import { listKnowledgeTasks } from "./knowledgeTaskCenter.ts";
+import { listHostSkillShelf } from "./hostSkillShelf.ts";
 import { projectKnowledgeProduction } from "./knowledgeProductionState.ts";
 import { listKnowledgeReviewNotes, saveKnowledgeReviewNote, applyKnowledgeReviewNotes, resolveKnowledgeReviewNotes, type KnowledgeReviewKind, type KnowledgeReviewNoteInput } from "./knowledgeReviewNotes.ts";
 import { componentKnowledgeRoute } from "./componentKnowledgeRoutes.ts";
@@ -405,6 +406,7 @@ export function createTaskServer(
   const workflowKernelRoot = service.options?.host?.kernelRoot
     ?? service.options?.workflowCatalogRoot;
   const browserTimingLast = new Map<string, number>();
+  let knowledgeTaskSummary: { at: number; summary: ReturnType<typeof listKnowledgeTasks>["summary"] } | undefined;
   return createServer(async (request, response) => {
     traceHttpRequest(request, response, options.log ?? service.options?.log);
     const url = new URL(request.url ?? "/", "http://localhost");
@@ -1326,9 +1328,15 @@ export function createTaskServer(
         return json(response, 404, { error: "未知仓库技术画像接口" });
       }
       if (parts[0] === "knowledge-tasks" && request.method === "GET" && parts.length === 1) {
-        return json(response, 200, listKnowledgeTasks({ dataDir: service.options.dataDir,
+        const summaryOnly = url.searchParams.get("summary") === "1";
+        if (summaryOnly && knowledgeTaskSummary && Date.now() - knowledgeTaskSummary.at < 10_000) {
+          return json(response, 200, { summary: knowledgeTaskSummary.summary });
+        }
+        const data = listKnowledgeTasks({ dataDir: service.options.dataDir,
           domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch(),
-          skillExtractionJob: id => service.skillExtractionJob(id), warnings: () => service.knowledgeRecordWarnings() }));
+          skillExtractionJob: id => service.skillExtractionJob(id), warnings: () => service.knowledgeRecordWarnings() });
+        knowledgeTaskSummary = { at: Date.now(), summary: data.summary };
+        return json(response, 200, summaryOnly ? { summary: data.summary } : data);
       }
       if (parts[0] === "knowledge-review") {
         const sources = { dataDir: service.options.dataDir, domain: service.getDomainKnowledgeExtraction(), component: service.getComponentResearch() };
@@ -1754,7 +1762,7 @@ export function createTaskServer(
         const dataDir = service.options.dataDir;
         if (request.method === "GET" && parts.length === 1) {
           return json(response, 200, {
-            ...service.hostSkillShelf(),
+            ...(url.searchParams.get("view") === "directory" ? listHostSkillShelf(dataDir) : service.hostSkillShelf()),
             operations: listSkillOperations(dataDir),
           });
         }

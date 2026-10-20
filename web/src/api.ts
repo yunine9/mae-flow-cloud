@@ -1,4 +1,5 @@
 import type { CompletionRange } from "../../src/completionRange";
+import { invalidateKnowledgeReads } from "./knowledgeReadCache";
 import type { MrParticipantsResult } from "../../src/mrParticipants";
 import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
 import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
@@ -1473,6 +1474,7 @@ export async function businessModuleKnowledgeRequest(moduleId: string, input?: {
   } : { signal: AbortSignal.timeout(30_000) });
   const result = await response.json() as BusinessModuleKnowledgeLocationResult & { error?: string };
   if (!response.ok) throw new Error(result.error || "领域知识目录读取失败");
+  if (input) invalidateKnowledgeReads();
   return result;
 }
 
@@ -1549,6 +1551,7 @@ export async function migrateBusinessModule(id: string, targetId: string): Promi
   });
   const result = await response.json() as BusinessModule & { error?: string };
   if (!response.ok) throw new Error(result.error || "迁移失败");
+  invalidateKnowledgeReads();
   return result;
 }
 
@@ -1574,6 +1577,7 @@ export async function createBusinessModule(input: {
     body: JSON.stringify(input),
   });
   if (!response.ok) throw new Error(await errorText(response));
+  invalidateKnowledgeReads();
   return parseJson(response);
 }
 
@@ -1588,6 +1592,7 @@ export async function updateBusinessModule(
     body: JSON.stringify(patch),
   });
   if (!response.ok) throw new Error(await errorText(response));
+  invalidateKnowledgeReads();
   return parseJson(response);
 }
 
@@ -1978,10 +1983,10 @@ export interface HostSkillDocument {
 }
 
 /** 货架 + 留痕一次取齐(管理面自刷新用,与 knowledge-insights 解耦)。 */
-export async function getSkillLibrary(): Promise<
+export async function getSkillLibrary(options: { directoryOnly?: boolean } = {}): Promise<
   HostSkillShelf & { operations: SkillOperationRecord[] }
 > {
-  const response = await fetch("/skills");
+  const response = await fetch(options.directoryOnly ? "/skills?view=directory" : "/skills");
   if (!response.ok) throw new Error(await errorText(response));
   return parseJson(response);
 }
@@ -5282,6 +5287,7 @@ export async function knowledgeRepoRequest(method = "GET", row?: KnowledgeRepoCo
     ...(method === "PUT" ? { body: JSON.stringify(row) } : {}),
   });
   if (!response.ok) throw new Error(await errorText(response));
+  if (method !== "GET") invalidateKnowledgeReads();
   return response.json();
 }
 

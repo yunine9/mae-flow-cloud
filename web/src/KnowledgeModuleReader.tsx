@@ -1,13 +1,13 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ResizableKnowledgePanes } from "./ResizableKnowledgePanes";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { BookOpen, ChevronDown, ChevronRight, ClipboardCheck, FileText, Folder, GitBranch, Lightbulb, MessageSquare, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Puzzle, RefreshCw, Trash2 } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { componentRequest } from "./componentResearchApi";
-import { documentRequest, type KnowledgeDocument } from "./knowledgeDocumentsApi";
+import { documentRequest, readKnowledgeDocument, type KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { KnowledgeVersions } from "./KnowledgeVersions";
 import { ComponentKnowledgeWorkspace } from "./ComponentKnowledgeWorkspace";
 import { ComponentKnowledgeDelete } from "./ComponentKnowledgeDelete";
@@ -19,7 +19,8 @@ import { KnowledgeReviewNotes } from "./KnowledgeReviewNotes";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { blankKnowledgeMetadata, KnowledgeMarkdown, type KnowledgeFocus } from "./KnowledgeMarkdown";
-import { knowledgeFilePath, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type KnowledgeModuleData, type ModuleDocument } from "./knowledgeModules";
+import { cachedKnowledgeModules, knowledgeFilePath, knowledgeModuleNames, loadComponentGovernance, loadKnowledgeModules, rulesForComponent, type ModuleDocument } from "./knowledgeModules";
+import { invalidateKnowledgeReads, knowledgeReadGeneration, subscribeKnowledgeReads } from "./knowledgeReadCache";
 import { KnowledgeModuleLocation } from "./KnowledgeModuleLocation";
 import { resolveKnowledgeReference } from "./knowledgeStructure";
 
@@ -59,7 +60,10 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const { stacks } = useTechnologyStacks();
   const [updating, setUpdating] = useState(false), [updateMessage, setUpdateMessage] = useState(""), [updateBusy, setUpdateBusy] = useState(false), [updateError, setUpdateError] = useState("");
   const [inspectionIssue, setInspectionIssue] = useState(""), [inspectionDescription, setInspectionDescription] = useState("");
-  const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState(""), [reload, setReload] = useState(0);
+  const [loaded, setData] = useState(cachedKnowledgeModules), [error, setError] = useState(""), [reload, setReload] = useState(0);
+  const data = useMemo(() => knowledgeModuleNames(loaded, stacks), [loaded, stacks]);
+  const generation = useSyncExternalStore(subscribeKnowledgeReads, knowledgeReadGeneration, knowledgeReadGeneration);
+  function refreshKnowledge() { invalidateKnowledgeReads(); setReload(n => n + 1); }
   const [selected, setSelected] = useState(selectedDocumentId || ""), [skillPath, setSkillPath] = useState("SKILL.md");
   const [detail, setDetail] = useState<KnowledgeDocument>(), [skillFiles, setSkillFiles] = useState<SkillFile[]>(), [detailError, setDetailError] = useState("");
   const [query, setQuery] = useState(""), [showTree, setShowTree] = useState(true), [expandedRepository, setExpandedRepository] = useState("");
@@ -81,7 +85,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const canInspect = module?.category === "business" && gitKnowledge && current?.form !== "skill";
   const navigationFile = /(?:^|\/)AGENTS\.md$/i.test(current ? knowledgeFilePath(current) : "");
   function readPackage(doc: ModuleDocument) {
-    const key = `${doc.skillDirectory}:${doc.revision}`;
+    const key = `${generation}:${doc.skillDirectory}:${doc.revision}`;
     let request = packageRequests.current.get(key);
     if (!request) {
       request = componentRequest<SkillPackage>(`/skills/${encodeURIComponent(doc.skillDirectory!)}/package`).then(value => {
@@ -90,10 +94,11 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         return value;
       }).catch(error => { packageRequests.current.delete(key); setPackageErrors(old => ({ ...old, [doc.id]: (error as Error).message })); throw error; });
       packageRequests.current.set(key, request);
+      if (packageRequests.current.size > 24) packageRequests.current.delete(packageRequests.current.keys().next().value!);
     }
     return request;
   }
-  useEffect(() => { let live = true; setError(""); void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); }); return () => { live = false; }; }, [moduleKey, reload, stacks]);
+  useEffect(() => { let live = true; setError(""); void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); }); return () => { live = false; }; }, [moduleKey, generation]);
   useEffect(() => {
     if (!module) return;
     const id = selectedDocumentId && module.documents.some(d => d.id === selectedDocumentId) ? selectedDocumentId : module.documents.some(d => d.id === selected) ? selected : module.documents.find(d => d.form !== "skill" && !/(?:^|\/)AGENTS\.md$/i.test(knowledgeFilePath(d)) && !module.repositories.some(r => r.documents.some(item => item.id === d.id)))?.id || module.documents[0]?.id || "";
@@ -110,12 +115,12 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         if (doc.skillDirectory) {
           const result = await readPackage(doc);
           if (live) { setDetail({ ...doc, content: result.content, revision: result.digest }); setSkillFiles(result.files); }
-        } else { const result = await documentRequest<KnowledgeDocument>(`/${encodeURIComponent(doc.id)}`); if (live) setDetail(result); }
+        } else { const result = await readKnowledgeDocument(doc.id, doc.revision); if (live) setDetail(result); }
       } catch (e) { if (live) setDetailError((e as Error).message); }
     }
     void read(); article.current?.scrollTo({ top: 0 });
     return () => { live = false; };
-  }, [current?.id, current?.revision, reload]);
+  }, [current?.id, current?.revision, generation]);
   const engineering = module?.category === "engineering";
   useEffect(() => {
     // 规则数与规则页签是旁路：读取失败只在组件处提示，不挡正文阅读。
@@ -173,9 +178,9 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
   const file = skillPath === "SKILL.md" ? detail?.content : skillFiles?.find(f => f.path === skillPath)?.content;
   const body = current?.form === "skill" ? file : detail?.content;
   const packageAnnotations = current?.form === "skill" && !!current.skillDirectory;
-  const shownBody = body === undefined ? undefined : blankKnowledgeMetadata(body);
+  const shownBody = useMemo(() => body === undefined ? undefined : blankKnowledgeMetadata(body), [body]);
   const usage = !currentComponent || componentTab === "usage";
-  const markdownBody = current && body !== undefined && <KnowledgeMarkdown hideMetadata text={body} focus={focus} resolveImage={gitKnowledge ? href => `/knowledge-documents/${encodeURIComponent(current.id)}/resources?path=${encodeURIComponent(href)}` : undefined} onReference={href => {
+  const markdownBody = useMemo(() => current && body !== undefined && <KnowledgeMarkdown hideMetadata text={body} focus={focus} resolveImage={gitKnowledge ? href => `/knowledge-documents/${encodeURIComponent(current.id)}/resources?path=${encodeURIComponent(href)}` : undefined} onReference={href => {
     if (current.form === "skill") { const [path, anchor] = href.split("#"), parts = skillPath.split("/").slice(0, -1); for (const segment of path.split("/")) { if (segment === "..") parts.pop(); else if (segment && segment !== ".") parts.push(segment); } const target = parts.join("/"); if (skillFiles?.some(file => file.path === target)) { setSkillPath(target); setFocus({ anchor, token: Date.now() }); return true; } }
     if (current.source) {
       const candidates = (module?.documents ?? []).filter(doc => doc.source?.repository === current.source!.repository && doc.source.branch === current.source!.branch).map(doc => ({ ...doc, path: knowledgeFilePath(doc), target_id: current.source!.repository }));
@@ -184,7 +189,7 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
       if (target) { choose(target.item); setFocus({ anchor: target.anchor, token: Date.now() }); return true; }
     }
     return false;
-  }} />;
+  }} />, [current, body, focus, gitKnowledge, skillPath, skillFiles, module]);
   return <section className="tw-root km-reader rounded-lg border border-line bg-surface" aria-label={`${module?.name || "模块"}知识阅读器`}>
     <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-4 py-3">
       <div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2 className="truncate text-base font-semibold">{module?.name || "知识目录"}</h2></div>
@@ -192,8 +197,8 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         {engineering && <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="管理组件知识" />}><MoreHorizontal size={18} /></DropdownMenuTrigger><DropdownMenuContent align="end" className="tw-root"><DropdownMenuItem onClick={() => { setDeleteDocumentId(current?.form !== "skill" ? current?.id : undefined); setDeleting(true); }}><Trash2 size={16} />删除组件知识</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
       </div>
     </header>
-    {module?.category === "business" && <KnowledgeModuleLocation key={module.id} moduleId={module.id} onSynced={() => setReload(n => n + 1)} />}
-    {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
+    {module?.category === "business" && <KnowledgeModuleLocation key={module.id} moduleId={module.id} onSynced={refreshKnowledge} />}
+    {error && <div role="alert" className="flex items-center gap-3 p-4 text-sm text-danger">{error}<Button variant="outline" onClick={refreshKnowledge}>重试</Button></div>}
     <ResizableKnowledgePanes className="km-reader-panes" treeHidden={!showTree}>
       {showTree && <aside className="km-tree grid content-start gap-5 border-r border-line bg-muted/30 p-3" aria-label="模块知识目录"><Input aria-label={engineering ? "搜索组件或 Skill" : "搜索模块内文件"} placeholder={engineering ? "查找组件或 Skill…" : "查找文件…"} value={query} onChange={e => setQuery(e.target.value)} />
         {module?.category === "engineering" ? <>{componentList()}{skillList()}</> : <><section aria-label={module?.category === "business" ? "领域模块知识" : "文档"}><h3 className="mb-2 text-xs font-medium text-muted-foreground">{module?.category === "business" ? "领域模块知识" : "文档"}</h3>{rootDocuments.length ? <FileTree files={files(rootDocuments)} selected={currentKey} onSelect={chooseFile} /> : <p className="px-2 py-2 text-xs text-muted-foreground">暂无文档</p>}</section>{module?.category === "business" && repositoryList()}{skillList()}</>}
@@ -217,9 +222,9 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
             if (!facts.length && current.active && !title) return null;
             return <header className="mb-3 border-b border-line pb-2">{(facts.length || !current.active) && <div className="flex items-center gap-2 text-xs text-muted-foreground">{current.form === "skill" ? <Puzzle size={14} /> : <FileText size={14} />}<span className="break-all">{facts.join(" · ")}</span>{!current.active && <Badge variant="secondary">{current.technology_assignment_required ? "待补技术栈关联" : "已停用"}</Badge>}</div>}{title && <h2 className="mt-1 text-xl font-semibold leading-snug">{current.title}</h2>}</header>;
           })()}
-          <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={() => setReload(n => n + 1)}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : gitKnowledge ? markdownBody : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); setUpdating(true); setUpdateError(""); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
+          <div ref={searchableContent}>{detailError ? <div role="alert" className="grid justify-items-start gap-3 text-sm text-danger"><p>正文读取失败：{detailError}</p><Button variant="outline" onClick={refreshKnowledge}>重试读取</Button></div> : !detail ? <p role="status" className="text-muted-foreground">正在读取正文…</p> : body === undefined ? <p className="text-sm text-muted-foreground">此文件暂不支持在线预览。</p> : current.form === "skill" && !/\.md$/i.test(skillPath) ? <pre className="whitespace-pre-wrap break-words rounded-lg bg-muted p-4 font-mono text-sm">{body}</pre> : gitKnowledge ? markdownBody : <KnowledgeReviewNotes key={`${current.id}:${current.form === "skill" ? skillPath : "document"}`} kind={packageAnnotations ? "skill" : "published"} jobId={packageAnnotations ? current.skillDirectory! : detail.id} documentId={packageAnnotations ? skillPath : detail.id} toolbarTarget={notesToolbar} onEdit={detail.research_source ? (message) => { setUpdateMessage(message); setUpdating(true); setUpdateError(""); } : undefined}>{markdownBody}</KnowledgeReviewNotes>}</div>
           {current.form === "skill" && detail && !skillFiles && <p className="mt-6 text-xs text-muted-foreground">已读取 SKILL.md；当前接口未提供包内附件清单。</p>}
-          {detail && !current.external && !gitKnowledge && <KnowledgeVersions key={`${detail.id}:${detail.revision}`} document={detail} onRestored={() => setReload(n => n + 1)} />}
+          {detail && !current.external && !gitKnowledge && <KnowledgeVersions key={`${detail.id}:${detail.revision}`} document={detail} onRestored={refreshKnowledge} />}
           {detail && <details className="mt-8 border-t border-line pt-3 text-sm"><summary className="text-muted-foreground">版本与来源</summary><div className="mt-3 grid gap-2 text-sm text-muted-foreground"><p className="break-all">版本：{detail.revision || "未记录"}</p>{current.maintainedAt && <p>最近维护：{new Date(current.maintainedAt).toLocaleString("zh-CN")}</p>}{detail.source && <p className="break-all">{detail.source.repository} · {detail.source.branch} · {detail.source.path}</p>}{detail.research_source && <Button variant="link" className="justify-start px-0" onClick={() => onResearch(detail.research_source!.job_id, detail.id)}>查看研究与归档记录</Button>}{detail.history?.map((entry, index) => <p key={`${entry.at}:${index}`}>{new Date(entry.at).toLocaleString("zh-CN")} · {entry.operator} · {entry.action}</p>)}</div></details>}
           </>}
         </div>}
@@ -243,6 +248,6 @@ export function KnowledgeModuleReader({ moduleKey, selectedDocumentId, onBack, o
         } catch (e) { setUpdateError((e as Error).message); } finally { setUpdateBusy(false); }
       }}>{updateBusy ? "正在创建…" : canInspect ? "创建任务并开始检视" : "创建更新任务"}</Button></div>
     </DialogContent></Dialog>
-    <ComponentKnowledgeDelete open={deleting} initialDocumentId={deleteDocumentId} onClose={() => setDeleting(false)} onChanged={() => { setReload(n => n + 1); setGovernanceReload(n => n + 1); }} />
+    <ComponentKnowledgeDelete open={deleting} initialDocumentId={deleteDocumentId} onClose={() => setDeleting(false)} onChanged={() => { refreshKnowledge(); setGovernanceReload(n => n + 1); }} />
   </section>;
 }

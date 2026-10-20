@@ -6,6 +6,7 @@ import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { documentRequest } from "./knowledgeDocumentsApi";
 import type { ComponentGovernanceItem, ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
+import { createKnowledgeReadCache } from "./knowledgeReadCache";
 
 export type KnowledgeModuleCategory = "business" | "engineering" | "unassigned";
 export interface ModuleDocument extends KnowledgeDocument {
@@ -125,10 +126,24 @@ export function compareKnowledgeModules(a: KnowledgeModule, b: KnowledgeModule) 
     || a.name.localeCompare(b.name, "zh-CN");
 }
 
-export async function loadKnowledgeModules(): Promise<KnowledgeModuleData> {
+const moduleCache = createKnowledgeReadCache<KnowledgeModuleData>({
+  maxEntries: 1, maxWeight: 32 * 1024 * 1024, ttl: 30_000,
+  weight: value => JSON.stringify(value).length * 2,
+});
+export const cachedKnowledgeModules = () => moduleCache.peek("catalog");
+export function loadKnowledgeModules(refresh = false): Promise<KnowledgeModuleData> {
+  return moduleCache.read("catalog", readKnowledgeModules, refresh);
+}
+/** 技术栈改名只影响显示名称，不再次读取全部知识。 */
+export function knowledgeModuleNames(data: KnowledgeModuleData | undefined, stacks: TechnologyStack[]) {
+  if (!data) return data;
+  return { ...data, modules: data.modules.map(module => module.category === "engineering"
+    ? { ...module, name: technologyStackLabel(module.id, stacks) } : module) };
+}
+async function readKnowledgeModules(): Promise<KnowledgeModuleData> {
   const [documents, modules, components, skills, technologies] = await Promise.allSettled([
-    documentRequest<{ documents: KnowledgeDocument[] }>(), getBusinessModules(),
-    componentRequest<{ components: ComponentRepository[] }>("/component-repositories"), getSkillLibrary(), loadTechnologyStacks(),
+    documentRequest<{ documents: KnowledgeDocument[] }>("?view=directory"), getBusinessModules(),
+    componentRequest<{ components: ComponentRepository[] }>("/component-repositories"), getSkillLibrary({ directoryOnly: true }), loadTechnologyStacks(),
   ]);
   if (documents.status === "rejected") throw documents.reason;
   const result = projectKnowledgeModules({ documents: documents.value.documents,

@@ -13,7 +13,7 @@ import { listBusinessModules } from "./businessModuleLibrary.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
-import { listFormalKnowledgeDocuments } from "./knowledgeDocuments.ts";
+import { listFormalKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 
 export interface KnowledgeApplicability {
   modules: string[];
@@ -72,7 +72,8 @@ export function resolveKnowledgeModules(dataDir: string, context: Pick<Knowledge
   return { modules, warnings };
 }
 
-export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false): {
+export function collectSearchableKnowledge(dataDir: string, context: KnowledgeContext, all = false,
+  documents?: KnowledgeDocument[]): {
   assets: SearchableKnowledge[]; warnings: string[];
 } {
   const assets: SearchableKnowledge[] = [];
@@ -83,7 +84,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const modules = selection.modules;
   warnings.push(...selection.warnings);
   const moduleIds = new Set(modules.map(m => m.id));
-  for (const doc of listFormalKnowledgeDocuments(dataDir, warnings)) {
+  for (const doc of documents ?? listFormalKnowledgeDocuments(dataDir, warnings)) {
     if (!doc.active || !matchesRepos(doc.repositories)
         || (doc.module_ids.length && !doc.module_ids.some(id => moduleIds.has(id)))) continue;
     assets.push({ id: doc.id, title: doc.title, kind: "document", scope: doc.scope === "platform" ? "平台通用"

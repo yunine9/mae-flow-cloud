@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, MoreHorizontal, Plus, Trash2, Upload, Sparkles } from "lucide-react";
 import { KnowledgeBackButton } from "./KnowledgeBackButton";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { getMemoryInsights } from "./api";
 import { memoryCounts } from "./memoryPresentation";
 import type { KnowledgeProductionAction } from "../../src/knowledgeProductionTypes";
 import type { KnowledgeTaskCenterData } from "../../src/knowledgeTaskCenterTypes";
+import { invalidateKnowledgeReads } from "./knowledgeReadCache";
 
 type Page = "home" | "module" | "tasks" | "research" | "import" | "task" | "experience";
 type Kind = ExtractionKind | "skill-extraction" | "skill-submission";
@@ -38,15 +39,33 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
   const [researchDraft, setResearchDraft] = useState<KnowledgeResearchDraft>();
   const [cleanupDrafts, setCleanupDrafts] = useState<Record<string, KnowledgeCleanupDraft>>({});
   const [summary, setSummary] = useState<KnowledgeTaskCenterData["summary"] | null>(null);
+  const previousPage = useRef(route.page);
+  useEffect(() => {
+    if (["task", "import", "experience"].includes(previousPage.current) && ["home", "module", "research"].includes(route.page)) invalidateKnowledgeReads();
+    previousPage.current = route.page;
+  }, [route.page]);
+  // 离开知识库后可能修改配置或切换账号，下一次进入重新读取。
+  useEffect(() => () => invalidateKnowledgeReads(), []);
   useEffect(() => { const sync = () => setRoute(readRoute()); addEventListener("popstate", sync); return () => removeEventListener("popstate", sync); }, []);
-  // 阅读当前任务时不扫描所有研究记录；任务中心回报数量，其余目录页再刷新。
+  // 目录只读取任务数量；等待上一轮结束再调度，后台标签不重复扫描。
   const onTasksPage = route.page === "tasks";
   const onTaskPage = route.page === "task";
   useEffect(() => {
     if (onTasksPage || onTaskPage) return;
-    let live = true;
-    const refresh = async () => { try { const r = await fetch("/knowledge-tasks"); if (!r.ok) return; const data: KnowledgeTaskCenterData = await r.json(); if (live && data.summary) { setSummary(data.summary); } } catch { /* 任务中心提供重试及错误信息。 */ } };
-    void refresh(); const timer = setInterval(refresh, 5000); return () => { live = false; clearInterval(timer); };
+    let live = true, timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const refresh = async () => {
+      try {
+        if (document.visibilityState === "hidden") return;
+        const r = await fetch("/knowledge-tasks?summary=1", { signal: controller.signal });
+        if (!r.ok) return;
+        const data: Pick<KnowledgeTaskCenterData, "summary"> = await r.json();
+        if (live && data.summary) setSummary(current => current?.running === data.summary.running
+          && current.attention === data.summary.attention && current.total === data.summary.total ? current : data.summary);
+      } catch { /* 任务中心提供重试及错误信息。 */ }
+      finally { if (live) timer = setTimeout(refresh, 30_000); }
+    };
+    void refresh(); return () => { live = false; clearTimeout(timer); controller.abort(); };
   }, [onTasksPage, onTaskPage]);
   // 经验变化慢，不轮询：进出页面时各读一次，从经验页审完回来就是新数。读失败卡片只显示入口说明（旁路 fail-open）。
   const [experience, setExperience] = useState<{ pending: number; accepted: number } | null>(null);
@@ -55,7 +74,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
     let live = true;
     getMemoryInsights().then(value => { if (live) setExperience(memoryCounts(value.memories)); }).catch(() => { if (live) setExperience(null); });
     return () => { live = false; };
-  }, [route.page, onTaskPage, onTasksPage]);
+  }, [route.page === "experience", onTaskPage, onTasksPage]);
   function navigate(page: Page, values: Record<string, string> = {}) {
     const url = new URL(location.href);
     for (const key of ["kbPage", "kbModule", "kbKind", "kbTask", "kbAsk", "kbReview", "kbStage", "kbInspection", "knowledgeDocument", "domainExtraction", "componentResearch", "knowledgeView", "knowledgePage", "platformSkill", "source_task", "memory_id"]) url.searchParams.delete(key);
@@ -109,7 +128,7 @@ export function KnowledgeLibrary({ onOpenTask }: { onOpenTask: (id: string) => v
         {route.kind === "component" && <ComponentResearch key={route.id} open focused focusId={route.id} surface={route.review ? "knowledge" : "workbench"} onClose={() => navigate("tasks")} backLabel="任务中心" onAdopt={id => navigate("module", { kbModule: "unassigned", knowledgeDocument: id })} />}
         {(route.kind === "skill-extraction" || route.kind === "skill-submission") && <KnowledgeSkillTask kind={route.kind} id={route.id} onBack={() => navigate("tasks")} onSubmitted={id => openTask("skill-submission", id, true)} />}
       </div>}
-      <ComponentKnowledgeDelete open={deletingComponents} onClose={() => setDeletingComponents(false)} onChanged={() => setCatalogVersion(n => n + 1)} />
+      <ComponentKnowledgeDelete open={deletingComponents} onClose={() => setDeletingComponents(false)} onChanged={() => { invalidateKnowledgeReads(); setCatalogVersion(n => n + 1); }} />
     </section>
   </KnowledgeStudioContext.Provider>;
 }

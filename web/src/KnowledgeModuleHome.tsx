@@ -1,11 +1,12 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Building2, SlidersHorizontal, ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Code2, FolderOpen, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { compareKnowledgeModules, knowledgeFileName, loadKnowledgeModules, type KnowledgeModuleCategory, type KnowledgeModuleData } from "./knowledgeModules";
+import { cachedKnowledgeModules, compareKnowledgeModules, knowledgeFileName, knowledgeModuleNames, loadKnowledgeModules, type KnowledgeModuleCategory } from "./knowledgeModules";
+import { invalidateKnowledgeReads, knowledgeReadGeneration, subscribeKnowledgeReads } from "./knowledgeReadCache";
 
 export interface KnowledgeModuleHomeProps {
   onOpenModule: (key: string) => void;
@@ -15,13 +16,15 @@ export interface KnowledgeModuleHomeProps {
 export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeModuleHomeProps) {
   const { stacks } = useTechnologyStacks();
   const [filterOpen,setFilterOpen] = useState(false);
-  const [data, setData] = useState<KnowledgeModuleData>(), [error, setError] = useState("");
-  const [category, setCategory] = useState<"all" | KnowledgeModuleCategory>("all"), [query, setQuery] = useState(""), [reload, setReload] = useState(0);
+  const [loaded, setData] = useState(cachedKnowledgeModules), [error, setError] = useState("");
+  const data = useMemo(() => knowledgeModuleNames(loaded, stacks), [loaded, stacks]);
+  const generation = useSyncExternalStore(subscribeKnowledgeReads, knowledgeReadGeneration, knowledgeReadGeneration);
+  const [category, setCategory] = useState<"all" | KnowledgeModuleCategory>("all"), [query, setQuery] = useState("");
   useEffect(() => {
     let live = true; setError("");
     void loadKnowledgeModules().then(value => { if (live) setData(value); }).catch(e => { if (live) setError((e as Error).message); });
     return () => { live = false; };
-  }, [reload, stacks]);
+  }, [generation]);
   const needle = query.trim().toLocaleLowerCase();
   const visible = (data?.modules ?? []).filter(m => (category === "all" || m.category === category)
     && (!needle || `${m.name} ${m.description}`.toLocaleLowerCase().includes(needle) || m.documents.some(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle))))
@@ -38,7 +41,7 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
         </Popover>
       </div>
     </header>
-    {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm"><span>知识目录读取失败：{error}</span><Button variant="outline" onClick={() => setReload(n => n + 1)}>重试</Button></div>}
+    {error && <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger-soft p-4 text-sm"><span>知识目录读取失败：{error}</span><Button variant="outline" onClick={invalidateKnowledgeReads}>重试</Button></div>}
     {!data && !error && <p role="status" className="py-12 text-center text-muted-foreground">正在读取知识目录…</p>}
     {data?.warnings.map(warning => <p key={warning} role="status" className="text-sm text-attention">{warning}</p>)}
     {([['business', '业务模块'], ['engineering', '技术栈'], ['unassigned', '待整理']] as const).map(([group, label]) => {

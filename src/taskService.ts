@@ -4,6 +4,7 @@ import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "./knowledgeAnswers.ts";
 import { syncModuleKnowledge, readModuleKnowledgeSync } from "./knowledgeRepositorySync.ts";
+import { readModuleKnowledgeContentRevision } from "./knowledgeRepositorySnapshots.ts";
 import { createKnowledgeAnswerRunner } from "./knowledgeAnswerRunner.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
 import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
@@ -5684,6 +5685,7 @@ export class TaskService {
   private knowledgeRepositoryTimer?: ReturnType<typeof setTimeout>;
   private knowledgePublicationCheckedAt = 0;
   private knowledgeRepositorySyncs = new Map<string, { abort: AbortController; work: Promise<unknown> }>();
+  private knowledgeRepositoryCompletedAt = new Map<string, number>();
 
   /** 同步在后台进行；目录阅读与长程萃取不等待 Git 网络请求。 */
   startModuleKnowledgeSync(moduleId: string, operator: string): void {
@@ -5691,16 +5693,21 @@ export class TaskService {
     const module = readBusinessModule(this.options.dataDir, moduleId);
     if (!resolveModuleKnowledgeLocation(this.options.dataDir, module.id)) throw new TaskControlError("请先由管理员配置平台领域知识仓库，并设置本模块的领域知识目录");
     if (this.knowledgeRepositorySyncs.has(module.id)) return;
+    const previousContent = readModuleKnowledgeContentRevision(this.options.dataDir, module.id);
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(new Error("本次知识同步超时，保留上次成功版本，可重试")), 200_000);
     timeout.unref?.();
     const work = syncModuleKnowledge(this.options.dataDir, module.id, operator, {
       signal: abort.signal,
       credential: this.options.platformGitCredential?.() ?? this.options.gitCredential?.(operator),
-    }).then(() => this.prepareKnowledgeIndex()).catch(error => {
+    }).then(() => {
+      if (readModuleKnowledgeContentRevision(this.options.dataDir, module.id) !== previousContent) this.prepareKnowledgeIndex();
+    }).catch(error => {
       this.options.log?.(`模块 ${module.name} 知识同步失败：${String(error)}`);
     }).finally(() => {
-      clearTimeout(timeout); this.knowledgeRepositorySyncs.delete(module.id);
+      clearTimeout(timeout);
+      this.knowledgeRepositoryCompletedAt.set(module.id, Date.now());
+      this.knowledgeRepositorySyncs.delete(module.id);
       this.refreshKnowledgeRepositories();
     });
     this.knowledgeRepositorySyncs.set(module.id, { abort, work });
@@ -5712,13 +5719,25 @@ export class TaskService {
       this.knowledgePublicationCheckedAt = Date.now();
       void this.domainKnowledgeExtraction?.refreshPublicationStatus().catch(error => this.options.log?.(`知识 MR 状态刷新失败：${String(error)}`));
     }
+    if (this.knowledgeRepositorySyncs.size >= 2) return;
     try {
-      for (const module of listBusinessModules(this.options.dataDir).modules) {
-        if (this.knowledgeRepositorySyncs.size >= 2) break;
-        if (module.status !== "active" || !resolveModuleKnowledgeLocation(this.options.dataDir, module.id) || this.knowledgeRepositorySyncs.has(module.id)) continue;
+      const now = Date.now();
+      const candidates = listBusinessModules(this.options.dataDir).modules.flatMap(module => {
+        if (module.status !== "active" || this.knowledgeRepositorySyncs.has(module.id)
+          || now - (this.knowledgeRepositoryCompletedAt.get(module.id) ?? 0) < 60_000) return [];
         try {
-          const sync = readModuleKnowledgeSync(this.options.dataDir, module.id);
-          if (sync?.attempted_at && Date.now() - Date.parse(sync.attempted_at) < 60_000) continue;
+          if (!resolveModuleKnowledgeLocation(this.options.dataDir, module.id)) return [];
+          const attemptedAt = Date.parse(readModuleKnowledgeSync(this.options.dataDir, module.id)?.attempted_at ?? "") || 0;
+          return now - attemptedAt < 60_000 ? [] : [{ module, attemptedAt }];
+        } catch (error) {
+          this.options.log?.(`模块 ${module.name} 知识同步调度失败：${String(error)}`);
+          return [];
+        }
+      }).sort((a, b) => a.attemptedAt - b.attemptedAt || a.module.id.localeCompare(b.module.id));
+      // 先处理等待最久的模块；慢同步完成后也须冷却，不能反复占满两个后台名额。
+      for (const { module } of candidates) {
+        if (this.knowledgeRepositorySyncs.size >= 2) break;
+        try {
           this.startModuleKnowledgeSync(module.id, module.updated_by);
         } catch (error) { this.options.log?.(`模块 ${module.name} 知识同步调度失败：${String(error)}`); }
       }

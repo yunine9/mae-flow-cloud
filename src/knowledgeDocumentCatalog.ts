@@ -6,11 +6,11 @@ import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModul
 import { type SearchableKnowledge, knowledgeProductVersions } from "./knowledgeSearch.ts";
 import { createHash } from "node:crypto";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
-import { listFormalKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
-export function knowledgeDocumentCatalog(dir: string) {
-  const catalog = collectSearchableKnowledge(dir, { repo: "", repositories: [], moduleIds: [] }, true);
-  const manuals = listFormalKnowledgeDocuments(dir);
-  const manualIds = new Set(manuals.map(d => d.id));
+import { listFormalKnowledgeDocuments, listFormalKnowledgeDocumentMetadata, readKnowledgeDocument, type KnowledgeDocument, type KnowledgeDocumentMetadata } from "./knowledgeDocuments.ts";
+import { withoutBoundModuleDrafts } from "./knowledgeRepositorySnapshots.ts";
+
+const allKnowledge = { repo: "", repositories: [], moduleIds: [] };
+function externalDocuments(dir: string, assets: SearchableKnowledge[], manualIds: Set<string>) {
   // 技能仅在管理界面展示，消费仍走原生发现/加载；不进入语义索引。
   const skills: SearchableKnowledge[] = [];
   for (const skill of listHostSkillShelf(dir).skills) {
@@ -30,7 +30,7 @@ export function knowledgeDocumentCatalog(dir: string) {
       } catch { /* 由原模块管理入口展示读取错误。 */ }
     }
   }
-  const external = [...new Map([...catalog.assets,...skills].map(a=>[a.id,a])).values()].filter(a => !manualIds.has(a.id)).map(asset => {
+  return [...new Map([...assets,...skills].map(a=>[a.id,a])).values()].filter(a => !manualIds.has(a.id)).map(asset => {
     const digest = createHash("sha256").update(asset.content).digest("hex");
     const [origin, first, second] = asset.id.split(":");
     const focus = origin === "module" ? { kind: "business", moduleId: first, assetId: second, version: Number(asset.revision), digest }
@@ -41,5 +41,34 @@ export function knowledgeDocumentCatalog(dir: string) {
       scope_label: asset.scope, module_ids: asset.applicability?.modules ?? [], repositories: asset.applicability?.repositories ?? [], technologies: asset.applicability?.languages ?? [], product_versions: asset.productVersions,
       when_to_use: asset.whenToUse, active: true, history: [], form: asset.kind, external: true, focus };
   });
-  return { assets: catalog.assets, documents: [...manuals.map(d => ({ ...d, form: "document", external: false, focus: undefined, scope_label: undefined })), ...external] };
+}
+const manualView = <T extends KnowledgeDocument | KnowledgeDocumentMetadata>(document: T) =>
+  ({ ...document, form: "document", external: false, focus: undefined, scope_label: undefined });
+
+export function knowledgeDocumentCatalog(dir: string) {
+  const manuals = listFormalKnowledgeDocuments(dir);
+  const catalog = collectSearchableKnowledge(dir, allKnowledge, true, manuals);
+  return { assets: catalog.assets, documents: [...manuals.map(manualView),
+    ...externalDocuments(dir, catalog.assets, new Set(manuals.map(document => document.id)))] };
+}
+
+/** 目录与索引准备分开：展示文件树不读取所有正文，也不计算全文索引状态。 */
+export function knowledgeDocumentDirectory(dir: string) {
+  const manuals = listFormalKnowledgeDocumentMetadata(dir);
+  const external = externalDocuments(dir, collectSearchableKnowledge(dir, allKnowledge, true, []).assets,
+    new Set(manuals.map(document => document.id)));
+  return [...manuals.map(manualView), ...external.map(({ content, ...document }) =>
+    ({ ...document, lines: content.split("\n").length }))];
+}
+
+/** 按文件编号读取，避免打开一篇正文时重新装配所有模块、Skill 和经验。 */
+export function readCatalogKnowledgeDocument(dir: string, id: string) {
+  if (id.startsWith("kg-") || id.startsWith("kd-")) {
+    let document: KnowledgeDocument;
+    try { document = readKnowledgeDocument(dir, id); } catch { return undefined; }
+    if (id.startsWith("kd-") && !withoutBoundModuleDrafts(dir, [document]).length) return undefined;
+    return manualView(document);
+  }
+  return externalDocuments(dir, collectSearchableKnowledge(dir, allKnowledge, true, []).assets, new Set())
+    .find(document => document.id === id);
 }

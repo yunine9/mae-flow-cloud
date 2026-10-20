@@ -1,3 +1,4 @@
+import { invalidateKnowledgeReads } from "./knowledgeReadCache";
 export interface TechnologyStack { id: string; name: string; enabled: boolean }
 export interface CatalogState { stacks: TechnologyStack[]; loading: boolean; loaded: boolean; error: string; deletedIds: string[] }
 let state: CatalogState = { stacks: [], loading: true, loaded: false, error: "", deletedIds: [] };
@@ -47,6 +48,7 @@ export async function saveTechnologyStack(input: { id?: string; name: string; en
   const stacks = state.stacks.some(item => item.id === saved.id)
     ? state.stacks.map(item => item.id === saved.id ? saved : item) : [...state.stacks, saved];
   update({ stacks, loading: false, loaded: true, error: "", deletedIds: state.deletedIds.filter(id => id !== saved.id) });
+  invalidateKnowledgeReads();
   return saved;
 }
 
@@ -55,6 +57,7 @@ export async function deleteTechnologyStack(id: string): Promise<void> {
   revision++;
   update({ ...state, stacks: state.stacks.filter(item => item.id !== id),
     deletedIds: [...new Set([...state.deletedIds, id])], loading: false, error: "" });
+  invalidateKnowledgeReads();
 }
 
 export function technologyStackLabel(id: string, stacks: readonly TechnologyStack[] = state.stacks): string {

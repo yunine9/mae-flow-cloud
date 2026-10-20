@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
 import { readGitKnowledgeResource } from "./knowledgeRepositorySnapshots.ts";
-import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
+import { knowledgeDocumentCatalog, knowledgeDocumentDirectory, readCatalogKnowledgeDocument } from "./knowledgeDocumentCatalog.ts";
 
 function assertNotResearching(service: TaskService, documentId: string) {
   const domain = service.getDomainKnowledgeExtraction(), component = service.getComponentResearch();
@@ -19,9 +19,13 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
   const dir = service.options.dataDir, id = parts[1] ? decodeURIComponent(parts[1]) : undefined;
   try {
     if (request.method === "GET" && !id) {
+      if (new URL(request.url!, "http://localhost").searchParams.get("view") === "directory") {
+        return json(response, 200, { documents: knowledgeDocumentDirectory(dir) });
+      }
       const catalog = knowledgeDocumentCatalog(dir);
+      const assets = new Map(catalog.assets.map(asset => [asset.id, asset]));
       const documents = catalog.documents.map(({ content, ...doc }) => {
-        const asset = catalog.assets.find(a => a.id === doc.id);
+        const asset = assets.get(doc.id);
         return { ...doc, lines: content.split("\n").length, indexing: doc.form === "skill" ? { state: "native" } : !doc.active ? { state: "disabled" }
           : asset ? service.getKnowledgeSearch().documentStatus(asset) : { state: "failed", error: "适用模块已停用，请调整范围。" } };
       });
@@ -70,12 +74,12 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       service.prepareKnowledgeIndex(); return json(response, 200, { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) });
     }
     if (request.method === "GET" && id && parts.length === 2) {
-      const doc = knowledgeDocumentCatalog(dir).documents.find(d => d.id === id);
+      const doc = readCatalogKnowledgeDocument(dir, id);
       if (!doc) return json(response, 404, { error: "知识已停用或不存在" });
       return json(response, 200, { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) });
     }
     if (request.method === "POST" && id && parts[2] === "retry") {
-      const document = knowledgeDocumentCatalog(dir).documents.find(d => d.id === id);
+      const document = readCatalogKnowledgeDocument(dir, id);
       if (!document) return json(response, 404, { error: "知识已停用或不存在" });
       if (!document.active || document.form === "skill") throw new Error("知识已停用或不存在");
       service.prepareKnowledgeIndex();

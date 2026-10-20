@@ -1,3 +1,4 @@
+import { invalidateKnowledgeReads } from "./knowledgeReadCache";
 export interface ComponentRepository {
   id: string;
   name: string;
@@ -97,5 +98,6 @@ export async function componentRequest<T>(
   );
   const result: unknown = await response.json();
   if (!response.ok) throw new Error(result && typeof result === "object" && "error" in result && typeof result.error === "string" ? result.error : "请求失败");
+  if (body !== undefined && /^\/(?:component-repositories|component-research|business-modules|domain-extraction|skills)(?:\/|$)/.test(path)) invalidateKnowledgeReads();
   return result as T;
 }
