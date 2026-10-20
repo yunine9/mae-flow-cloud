@@ -29,12 +29,14 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
   const visible = (data?.modules ?? []).filter(m => (category === "all" || m.category === category)
     && (!needle || `${m.name} ${m.description}`.toLocaleLowerCase().includes(needle) || m.documents.some(d => `${d.title} ${knowledgeFileName(d)}`.toLocaleLowerCase().includes(needle))))
     .sort(compareKnowledgeModules);
-  return <section className="tw-root km-home grid gap-6" aria-label="知识目录">
-    <label className="km-home-search"><Search size={20} /><Input type="search" aria-label="搜索目录或文稿" placeholder="搜索目录、知识名称或文件名" value={query} onChange={e => setQuery(e.target.value)} /></label>
+  return <section className="tw-root km-home" aria-label="知识目录">
     <header className="km-home-heading">
-      <h2>{{all:"知识目录",business:"业务知识",engineering:"工程知识",unassigned:"待整理"}[category]}</h2>
-      <div className="km-home-filterbar">
+      <div className="km-home-title">
+        <h2>{{all:"知识目录",business:"业务知识",engineering:"工程知识",unassigned:"待整理"}[category]}</h2>
         {data && <span className="km-home-count">{visible.length} {category === "business" ? "个模块" : category === "engineering" ? "个技术栈目录" : "个目录"}</span>}
+      </div>
+      <div className="km-home-filterbar">
+        <label className="km-home-search"><Search size={18} /><Input type="search" aria-label="搜索目录或文稿" placeholder="搜索目录、知识名称或文件名" value={query} onChange={e => setQuery(e.target.value)} /></label>
         <Popover open={filterOpen} onOpenChange={setFilterOpen}>
           <PopoverTrigger render={<Button variant="outline" className="km-category-trigger" />}><SlidersHorizontal size={18}/><span>知识分类</span><strong>{{all:"全部",business:"业务",engineering:"工程",unassigned:"待整理"}[category]}</strong><ChevronDown size={15}/></PopoverTrigger>
           <PopoverContent align="end" sideOffset={10} className="tw-root km-category-panel" aria-label="按知识分类筛选"><div className="km-category-disc" role="group" aria-label="知识分类">{([["business","业务",Building2],["engineering","工程",Code2],["all","全部",null]] as const).map(([value,label,Icon])=><button type="button" key={value} data-category={value} aria-pressed={category===value} onClick={()=>{setCategory(value);}}>{Icon&&<Icon size={21}/>}<span>{label}</span></button>)}<div className="km-category-indicator" style={{transform:`rotate(${category==="business"?-90:category==="engineering"?90:0}deg)`}}/></div><p className="text-center text-xs text-muted-foreground">业务按模块，工程按技术栈</p><Button size="sm" variant="ghost" className="text-primary" onClick={()=>setFilterOpen(false)}>收起</Button></PopoverContent>
@@ -47,15 +49,26 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
     {([['business', '业务模块'], ['engineering', '技术栈'], ['unassigned', '待整理']] as const).map(([group, label]) => {
       const modules = visible.filter(m => m.category === group);
       if (!modules.length) return null;
-      return <section key={group} className="grid gap-3" aria-label={label}>
-        <h3 className="flex items-center gap-2 text-sm font-medium text-muted-foreground">{group === "business" ? <BookOpen size={16} /> : group === "engineering" ? <Code2 size={16} /> : <FolderOpen size={16} />}{label}<span className="ml-1 tabular-nums">{modules.length}</span></h3>
+      const Icon = group === "business" ? BookOpen : group === "engineering" ? Code2 : FolderOpen;
+      return <section key={group} className="km-home-group" aria-label={label}>
+        <h3 className="km-home-group-heading"><Icon size={18} />{label}<span>{modules.length}</span></h3>
         <div className="km-module-grid">{modules.map(module => {
           const hits = needle ? module.documents.map(d => ({ id: d.id, name: knowledgeFileName(d) })).filter(d => d.name.toLocaleLowerCase().includes(needle)).slice(0, 3) : [];
-          return <Card key={module.key} className="km-module-card group border-line transition-colors hover:border-line-strong">
-            <Button variant="ghost" className="km-module-open h-auto w-full items-start justify-start whitespace-normal p-5 text-left" onClick={() => onOpenModule(module.key)} aria-label={`打开${module.name}知识目录`}>
-              <div className="grid min-w-0 flex-1 gap-4"><div className="flex min-w-0 items-start justify-between gap-3"><div className="min-w-0"><h3 className="text-lg font-semibold leading-snug">{module.name}</h3><p className="mt-1 line-clamp-2 text-sm font-normal text-muted-foreground">{module.description || (module.category === "business" ? "远端正式文档与关联仓知识" : "基础组件知识与 Skill")}</p></div><ChevronRight size={18} className="mt-1 text-muted-foreground" /></div>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm font-normal"><span>文档：<strong className="font-medium tabular-nums">{module.documentCount}</strong></span><span>Skill <strong className="font-medium tabular-nums">{module.skillCount}</strong></span>{module.inactiveCount > 0 && <span className="text-muted-foreground">已停用 {module.inactiveCount}</span>}</div>
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3 text-xs font-normal text-muted-foreground"><span>{module.category === "business" ? module.knowledgeLocation ? module.knowledgeLocation.docs_path : "尚未设置领域知识目录" : "正式知识目录"}</span><span>{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "维护时间未知"}</span></div>
+          return <Card key={module.key} className="km-module-card" data-category={group}>
+            <Button variant="ghost" className="km-module-open" onClick={() => onOpenModule(module.key)} aria-label={`打开${module.name}知识目录`}>
+              <div className="km-module-content">
+                <div className="km-module-title">
+                  <span className="km-module-icon" aria-hidden="true"><Icon size={21} /></span>
+                  <h3 title={module.name}>{module.name}</h3>
+                  <ChevronRight size={18} className="km-module-arrow" aria-hidden="true" />
+                </div>
+                <p className="km-module-description">{module.description || (module.category === "business" ? "远端正式文档与关联仓知识" : "基础组件知识与 Skill")}</p>
+                <div className="km-module-stats">
+                  <span aria-label={`文档数量：${module.documentCount}`}>文档：<strong>{module.documentCount}</strong></span>
+                  {module.skillCount > 0 && <span>Skill <strong>{module.skillCount}</strong></span>}
+                  {module.inactiveCount > 0 && <span className="km-module-inactive">已停用 {module.inactiveCount}</span>}
+                </div>
+                <div className="km-module-footer">{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "暂无维护记录"}</div>
               </div>
             </Button>
             {hits.length > 0 && onOpenDocument && <div className="grid gap-1 border-t border-line px-4 py-2">{hits.map(doc => <Button key={doc.id} variant="ghost" size="sm" className="justify-start" onClick={() => onOpenDocument(doc.id, module.key)}><ArrowUpRight size={14} /><span className="truncate">{doc.name}</span></Button>)}</div>}
