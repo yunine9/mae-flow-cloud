@@ -22,7 +22,7 @@ test("生产线验收4/5/14：全部MR链接已耐久而最终done写EIO，手�
   } });
   try {
     const job = manager.create({ title: "订单", scope: "订单规则", issue_no: "REQ-TERMINAL", repositories: [], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } }, "alice");
-    await until(() => manager.get(job.id).status === "done"); await manager.publish(job.id, "alice");
+    await until(() => manager.get(job.id).status === "done");
     const path = join(dir, "domain-extraction", job.id, "job.json"), rename = fs.renameSync; let failed = false;
     const interception = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
       if (!failed && String(args[1]) === path) {
@@ -36,9 +36,9 @@ test("生产线验收4/5/14：全部MR链接已耐久而最终done写EIO，手�
       assert.equal(failed, true);
     } finally { interception.mock.restore(); syncBuiltinESMExports(); }
     const batch = manager.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
-    assert.equal(batch.state, "failed"); assert.equal(batch.publications[0].state, "opened"); assert.equal(batch.publications[0].url, "https://example.test/mr/terminal");
+    assert.equal(batch.state, "done", "单次 EIO 后按已耐久 MR 事实补齐完成状态"); assert.equal(batch.publications[0].state, "opened"); assert.equal(batch.publications[0].url, "https://example.test/mr/terminal");
     const repaired = await manager.retryArchive(job.id, "alice", { batch_id: batch.id });
-    assert.equal(repaired.status_label, "已归档"); assert.equal(calls, 1, "已保存MR链接不能再次启动Git/MR");
+    assert.equal(repaired.status_label, "MR 待合入"); assert.equal(calls, 1, "已保存MR链接不能再次启动Git/MR");
     const disk = JSON.parse(fs.readFileSync(path, "utf8")) as DomainKnowledgeJob;
     assert.equal(disk.archive_batches!.find(row => row.id === batch.id)!.state, "done");
   } finally { await manager.shutdown(); fs.rmSync(dir, { recursive: true, force: true }); }
@@ -57,7 +57,7 @@ test("生产线验收1/4/5/14：重启发现running批次已保存全部MR，人
   try {
     const job = first.create({ title: "订单", scope: "订单规则", issue_no: "REQ-RESTART", repositories: [],
       knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } }, "alice");
-    await until(() => first.get(job.id).status === "done"); await first.publish(job.id, "alice");
+    await until(() => first.get(job.id).status === "done");
     await first.createArchive(job.id, { issue_no: "REQ-RESTART", expected_revisions: first.previewArchive(job.id).expected_revisions }, "alice");
     await first.shutdown();
     const path = join(dir, "domain-extraction", job.id, "job.json"), disk = JSON.parse(fs.readFileSync(path, "utf8")) as DomainKnowledgeJob;
@@ -68,7 +68,7 @@ test("生产线验收1/4/5/14：重启发现running批次已保存全部MR，人
     } });
     assert.equal(restarted.get(job.id).archive_batches!.find(row => row.id === batch.id)!.state, "failed");
     const repaired = await restarted.retryArchive(job.id, "alice", { batch_id: batch.id });
-    assert.equal(repaired.status_label, "已归档"); assert.equal(calls, 1);
+    assert.equal(repaired.status_label, "MR 待合入"); assert.equal(calls, 1);
     const repairedDisk = JSON.parse(fs.readFileSync(path, "utf8")) as DomainKnowledgeJob;
     const repairedBatch = repairedDisk.archive_batches!.find(row => row.id === batch.id)!;
     assert.equal(repairedBatch.state, "done"); assert.equal(repairedBatch.publications[0].branch, "codex/restart-terminal");

@@ -9,11 +9,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
 import { retryKnowledgeDeletions } from "./componentKnowledgeDeletion.ts";
 import { join } from "node:path";
-import { listBusinessModules, readBusinessKnowledgeAsset, resolveBusinessKnowledgeAssetReference } from "./businessModuleLibrary.ts";
+import { listBusinessModules } from "./businessModuleLibrary.ts";
 import { repositoryIdentity } from "./knowledgeAssetModel.ts";
 import { MemoryStore, memoryAccessible, repoSlug } from "./taskMemory.ts";
 import { MemorySidecar } from "./memorySidecar.ts";
-import { listKnowledgeDocuments } from "./knowledgeDocuments.ts";
+import { listFormalKnowledgeDocuments } from "./knowledgeDocuments.ts";
 
 export interface KnowledgeApplicability {
   modules: string[];
@@ -83,7 +83,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
   const modules = selection.modules;
   warnings.push(...selection.warnings);
   const moduleIds = new Set(modules.map(m => m.id));
-  for (const doc of listKnowledgeDocuments(dataDir)) {
+  for (const doc of listFormalKnowledgeDocuments(dataDir, warnings)) {
     if (!doc.active || !matchesRepos(doc.repositories)
         || (doc.module_ids.length && !doc.module_ids.some(id => moduleIds.has(id)))) continue;
     assets.push({ id: doc.id, title: doc.title, kind: "document", scope: doc.scope === "platform" ? "平台通用"
@@ -92,17 +92,7 @@ export function collectSearchableKnowledge(dataDir: string, context: KnowledgeCo
       content: doc.content, revision: doc.revision, productVersions: doc.product_versions,
       applicability: {modules:doc.module_ids,repositories:doc.repositories,languages:doc.technologies,versions:doc.product_versions} });
   }
-  for (const module of modules) for (const asset of module.assets) {
-    if (asset.status !== "published" || asset.form === "skill" || !matchesRepos(asset.repositories)) continue;
-    // 模块库是业务资产的正文来源，检索只读取已发布的当前版本。
-    try {
-      const doc = readBusinessKnowledgeAsset(dataDir, module.id, asset.id);
-      assets.push({ id: `module:${module.id}:${asset.id}`, title: asset.title, kind: asset.form,
-        scope: `业务模块：${module.name}`, summary: asset.summary, whenToUse: asset.when_to_use,
-        content: doc.content, revision: String(asset.version), productVersions: knowledgeProductVersions(doc.content),
-        applicability:{modules:[module.id],repositories:asset.repositories,languages:[],versions:knowledgeProductVersions(doc.content)} });
-    } catch (error) { warnings.push(`模块资料 ${module.name}/${asset.title} 暂不可读：${String(error)}`); }
-  }
+  // 业务正文统一从正式 Git 快照读取，未配置来源时也不退回旧模块资产。
   const store = new MemoryStore(dataDir);
   for (const row of store.list()) {
     if (all ? !memoryAccessible(row, row.repo, row.module ? [row.module] : []) : ![context.repo, ...context.repositories.map(repoSlug)].some(repo => memoryAccessible(row, repo, [...moduleIds], context.productVersion))) continue;
@@ -287,13 +277,6 @@ export class KnowledgeSearch {
   }
 
   read(context: KnowledgeContext, id: string, all = false) {
-    if (id.startsWith("module:")) {
-      const [, moduleId, assetId] = id.split(":");
-      try {
-        const current = resolveBusinessKnowledgeAssetReference(this.dataDir, moduleId, assetId);
-        id = `module:${current.moduleId}:${current.assetId}`;
-      } catch { return undefined; }
-    }
     return this.catalog(context, all).assets.find(a => a.id === id);
   }
 

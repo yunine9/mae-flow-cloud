@@ -355,6 +355,11 @@ export class KnowledgeMrPublisher {
     const formalVersions = new Map<string, ReturnType<typeof readKnowledgeArchiveVersion>["document"]>();
     const componentFiles = new Map<string, ReturnType<typeof componentArchiveFiles>>();
     const docs: DomainDocument[] = job.documents.filter(doc => doc.selected && logicalTargets.has(doc.target_id)).flatMap(doc => {
+      if (!job.component_research_id) {
+        const outgoing = { ...doc, path: doc.archive_path ?? doc.path };
+        assertModuleKnowledgePath(job, logicalTargets.get(doc.target_id)!, outgoing.path);
+        return [outgoing];
+      }
       if (!doc.knowledge_document_id || !doc.published_revision) throw new Error("请先发布所选知识，再手动归档正式版本");
       const deletion = readKnowledgeDeletion(this.options.dataDir, doc.knowledge_document_id);
       if (doc.deleted && (!deletion || deletion.revision !== doc.published_revision || doc.published_document_revision !== doc.revision)) throw new Error("请先确认发布当前删除文稿，再归档 Git 删除操作");
@@ -370,10 +375,6 @@ export class KnowledgeMrPublisher {
           throw new Error("删除文稿的归档位置与已确认正式版本不一致，请重新预览");
         }
       } else assertModuleKnowledgePath(job, logicalTargets.get(doc.target_id)!, outgoing.path);
-      if (!job.component_research_id) {
-        if (formal.content !== doc.content) throw new Error("归档正文与所选正式版本不一致，请重新预览");
-        return [outgoing];
-      }
       // 历史失败批次仍可按原整篇快照重试；新批次逐项比对同一正式版本的能力文件。
       const parts = componentArchiveParts(formal.content), requested = componentArchiveParts(doc.content);
       if (parts.content === requested.content) return [{ ...outgoing, content: parts.content }];
@@ -412,20 +413,33 @@ export class KnowledgeMrPublisher {
     }));
     const documentKey = (values: DomainPublication["documents"]) => JSON.stringify(values.map(doc => [doc.id, doc.path, doc.content, doc.revision,
       doc.knowledge_document_id, doc.knowledge_revision, doc.deleted === true]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
-    const continuing = !!previous && previous.target_id === target.id
-      && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
-    // 同一精确版本的失败恢复沿用已落盘分支；新版本独立建MR，不受旧MR的合入或关闭影响。
+    const samePlan = !!previous && documentKey(previous.attempted_documents ?? previous.documents) === documentKey(documents);
+    if (!job.component_research_id && previous?.mr_attempted && !previous.url) {
+      const found = await this.discoverMr(target, previous, operator, signal);
+      if (found) {
+        previous = { ...previous, url: found.url, mr_id: found.id };
+        // 先保存真实 MR 身份；即使随后查询或续推失败，也不能丢失链接后再创建一个。
+        save(structuredClone({ ...previous, state: "pending" }));
+      }
+    }
+    if (!job.component_research_id && previous?.url) {
+      previous = await this.refreshPublication(target, previous, operator);
+      if (previous.mr_state === "merged") throw new Error("此任务 MR 已合入，请从正式知识库开始新的检视");
+      if (previous.mr_state === "closed") throw new Error("此任务 MR 已关闭，请重新打开原 MR 后继续修改");
+    }
+    const continuing = !!previous && previous.target_id === target.id && (samePlan || !job.component_research_id && !!previous.branch && !!(previous.url || previous.revision || previous.mr_attempted));
+    // 同一任务尚未合入时继续原分支；正式库发起的新检视使用独立任务与 MR。
     let publication: DomainPublication = { target_id: target.id, branch: continuing ? previous!.branch : branch,
       state: "pending", documents, ...(continuing ? { revision: previous!.revision, url: previous!.url, mr_id: previous!.mr_id,
         mr_attempted: previous!.mr_attempted, mr_participants: structuredClone(previous!.mr_participants),
-        navigation_files: structuredClone(previous!.navigation_files) } : {}) };
+        navigation_files: structuredClone(previous!.navigation_files), mr_state: previous!.mr_state, checked_at: previous!.checked_at } : {}) };
     const saveLive = (value: DomainPublication) => { this.assertActive(signal); save(structuredClone(value)); };
-    if (continuing && publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
-    if (continuing && publication.mr_attempted) {
+    if (continuing && publication.url && samePlan) { publication.state = "opened"; saveLive(publication); return publication; }
+    if (continuing && publication.mr_attempted && !publication.url) {
       const found = await this.discoverMr(target, publication, operator, signal);
       if (found) {
         publication = { ...publication, state: "opened", url: found.url, mr_id: found.id };
-        saveLive(publication); return publication;
+        if (samePlan) { saveLive(publication); return publication; }
       }
     }
     const saveAttempt = () => saveLive({ ...publication, documents: continuing ? previous!.documents : [], attempted_documents: documents });
@@ -599,7 +613,7 @@ export class KnowledgeMrPublisher {
           await git(["update-index", "--add", "--cacheinfo", mode, blob, "AGENTS.md"]);
         }
       }
-      if (job.knowledge_layout === "directory-v1" && !(remote && continuing)) {
+      if (job.knowledge_layout === "directory-v1" && !(remote && continuing && samePlan)) {
         const sameRepository = (location: { repository: string; branch: string } | undefined) => !!location
           && repositoryIdentity(location.repository) === repositoryIdentity(target.repository) && location.branch === target.branch;
         const formal = listKnowledgeDocuments(this.options.dataDir).filter(document => sameRepository(document.archive_target));
@@ -698,8 +712,18 @@ export class KnowledgeMrPublisher {
       if (revision !== remote) await git(["push", ...(!remote ? [`--force-with-lease=refs/heads/${publication.branch}:`] : []),
         target.repository, `${revision}:refs/heads/${publication.branch}`]);
       saveLive(publication);
+      if (publication.url) { publication.state = "opened"; saveLive(publication); return publication; }
       return this.openMr(job, target, publication, operator, saveLive, operationSignal);
     }, signal);
+  }
+  async refreshPublication(target: KnowledgeRepository, publication: DomainPublication, operator: string): Promise<DomainPublication> {
+    this.assertActive();
+    if (!publication.url && publication.mr_id === undefined) return structuredClone(publication);
+    const identity = this.identity(operator); let failure = "MR 状态查询未返回有效结果";
+    const state = await fetchMrGates({ platformUrl: identity.platformUrl, repo: target.repository, headers: identity.headers, requireExisting: true,
+      delivery: { source_branch: publication.branch, target_branch: target.branch, mr_id: publication.mr_id, mr_url: publication.url }, onFailure: reason => { failure = reason; } });
+    if (!state) throw new Error(`无法确认原 MR 状态：${failure}；文稿已保留，可稍后重试`);
+    return { ...structuredClone(publication), mr_state: state.mrState, checked_at: new Date().toISOString() };
   }
   async closePublication(job: DomainKnowledgeJob, target: KnowledgeRepository, publication: DomainPublication, operator = job.operator): Promise<"closed" | "merged"> {
     this.assertActive();

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBusinessModule, publishBusinessKnowledgeAsset, archiveBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
+import { createBusinessModule, updateBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { collectSearchableKnowledge, KnowledgeSearch, knowledgeProductVersions } from "../src/knowledgeSearch.ts";
 import { createKnowledgeTool } from "../src/knowledgeTools.ts";
@@ -12,6 +12,7 @@ import { knowledgeDocumentCatalog } from "../src/knowledgeDocumentCatalog.ts";
 import { MemorySidecar } from "../src/memorySidecar.ts";
 import { MemoryStore } from "../src/taskMemory.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
+import { gitKnowledgeDocument, removeGitKnowledgeDocument } from "./fixtures/gitKnowledge.ts";
 
 const context = { repo: "a", repositories: ["https://code.example/a.git"], moduleIds: [], productVersion: "2.7B" };
 
@@ -44,8 +45,7 @@ function seed(dir: string) {
   seedTechnologyStacks(dir, ["cpp"]);
   createBusinessModule(dir, { id: "alarm", name: "告警模块", description: "跨仓告警", owner: "owner",
     repositories: [context.repositories[0], "https://code.example/b.git"] }, "owner");
-  publishBusinessKnowledgeAsset(dir, "alarm", { id: "dedup", title: "告警重复事件", summary: "事件去重",
-    when_to_use: "处理告警重复上报时", content: "# 重复告警\n按事件 ID 和网元 ID 去重。" }, "owner");
+  const dedup = gitKnowledgeDocument(dir, "alarm", { title: "告警重复事件", when_to_use: "处理告警重复上报时", content: "# 重复告警\n按事件 ID 和网元 ID 去重。" });
   function document(title: string, body: string, published = true) {
     const row = saveKnowledgeDocument(dir, { title, when_to_use: "修改超时配置时", technologies: ["cpp"],
       content: body, active: published, product_versions: knowledgeProductVersions(body) }, "owner");
@@ -54,7 +54,7 @@ function seed(dir: string) {
   const old = document("2.6B 超时配置", '---\nproduct_versions: ["2.6B"]\n---\n配置 request_timeout_ms，单位毫秒。');
   const current = document("2.7B 超时配置", '---\nproduct_versions: ["2.7B"]\n---\n配置 request_timeout_seconds，单位秒。');
   const pending = document("未经确认的规范", "不要使用", false);
-  return { old, current, pending };
+  return { old, current, pending, dedup: dedup.id };
 }
 
 test("当前模块映射可发现跨仓知识；明确产品版本先筛选；草稿不参与；无元数据不猜版本", () => {
@@ -62,27 +62,27 @@ test("当前模块映射可发现跨仓知识；明确产品版本先筛选；�
   try {
     const ids = seed(dir);
     const catalog = collectSearchableKnowledge(dir, context);
-    assert.ok(catalog.assets.some(a => a.id === "module:alarm:dedup"), "无需开局先选中模块");
+    assert.ok(catalog.assets.some(a => a.id === ids.dedup), "无需开局先选中模块");
     assert.ok(catalog.assets.some(a => a.id === ids.current));
     assert.ok(!catalog.assets.some(a => a.id === ids.old || a.id === ids.pending));
     assert.deepEqual(knowledgeProductVersions("文档修订 2.6B；不适用于 2.7B"), []);
     assert.ok(collectSearchableKnowledge(dir, { ...context, productVersion: undefined }).assets.some(a => a.id === ids.old));
-    archiveBusinessKnowledgeAsset(dir, "alarm", "dedup", "owner");
-    assert.ok(!collectSearchableKnowledge(dir, context).assets.some(a => a.id === "module:alarm:dedup"));
+    removeGitKnowledgeDocument(dir, "alarm", ids.dedup);
+    assert.ok(!collectSearchableKnowledge(dir, context).assets.some(a => a.id === ids.dedup));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("等待索引期间被停用的模块不返回；工具只回当前来源，不信旧索引正文", async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-race-"));
   try {
-    seed(dir);
+    const ids = seed(dir);
     const fake = { ingest: async () => true, search: async () => {
-      archiveBusinessKnowledgeAsset(dir, "alarm", "dedup", "owner");
-      return [{ id: "module:alarm:dedup", snippet: "过期正文", score: 1 }];
+      updateBusinessModule(dir, "alarm", { status: "archived" }, "owner");
+      return [{ id: ids.dedup, snippet: "过期正文", score: 1 }];
     } } as unknown as MemorySidecar;
     const service = new KnowledgeSearch(dir, fake);
     assert.deepEqual((await service.search(context, "告警去重")).hits, []);
-    assert.equal(service.read(context, "module:alarm:dedup"), undefined);
+    assert.equal(service.read(context, ids.dedup), undefined);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -121,7 +121,7 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     await service.prepare();
     const tool: any = createKnowledgeTool({ service: () => service, context: () => context });
     const module = await tool.execute("module", { action: "search", query: "告警重复事件如何去重" });
-    assert.ok((module.details as any).hits?.some((h: any) => h.id === "module:alarm:dedup"), JSON.stringify(module));
+    assert.ok((module.details as any).hits?.some((h: any) => h.id === ids.dedup), JSON.stringify(module));
     const version = await service.search(context, "2.7B 超时参数的配置单位");
     assert.ok(version.hits.some(h => h.id === ids.current));
     assert.ok(!version.hits.some(h => h.id === ids.old));
@@ -139,9 +139,9 @@ test("真实统一工具串行索引、模块召回、版本筛选、经验搜�
     assert.equal(service.read(context, row.id), undefined);
 
     assert.deepEqual((await service.search(context, "办公室盆栽多久浇一次水")).hits, []);
-    archiveBusinessKnowledgeAsset(dir, "alarm", "dedup", "owner");
-    assert.ok(!(await service.search(context, "告警重复事件如何去重")).hits.some(h => h.id === "module:alarm:dedup"));
-    const read = await tool.execute("read-old", { action: "read", id: "module:alarm:dedup" });
+    removeGitKnowledgeDocument(dir, "alarm", ids.dedup);
+    assert.ok(!(await service.search(context, "告警重复事件如何去重")).hits.some(h => h.id === ids.dedup));
+    const read = await tool.execute("read-old", { action: "read", id: ids.dedup });
     assert.match(read.content[0].text, /已停用/);
   } finally { sidecar.stop(); rmSync(dir, { recursive: true, force: true }); }
 });

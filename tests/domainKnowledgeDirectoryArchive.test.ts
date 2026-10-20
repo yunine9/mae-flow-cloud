@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction, type DomainKnowledgeJob, type DomainPublication } from "../src/domainKnowledgeExtraction.ts";
-import { readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 
 const title = "订单管理";
 const repository = { name: "orders", repository: "https://example.test/orders.git", branch: "main", docs_path: "." };
@@ -31,17 +31,16 @@ async function fixture(root: string, archived: DomainKnowledgeJob[]) {
     return "研究完成";
   }, { publish: async (job, target) => { archived.push(structuredClone(job)); return receipt(job, target.id); } });
   const job = await done(service, service.create({ title, scope: "订单业务", repositories: [repository], knowledge_target: domain, issue_no: "REQ489" }, "user").id);
-  await service.publish(job.id, "user");
   return { service, job: service.get(job.id) };
 }
 
-test("Issue489：目录设置保存后直接归档，正式版本在归档时更新，重启仍保留入口", async () => {
+test("Issue489：目录设置保存后候选直接创建 MR，正式库保持不变，重启保留目录与批次", async () => {
   const root = mkdtempSync(join(tmpdir(), "directory-archive-")), archived: DomainKnowledgeJob[] = [];
   let { service, job } = await fixture(root, archived);
   try {
     assert.equal(job.knowledge_layout, "directory-v1");
     assert.equal(job.repositories[0].docs_path, `docs/${title}`);
-    const original = structuredClone(job), formal = readKnowledgeDocument(root, job.documents[0].knowledge_document_id!);
+    const original = structuredClone(job);
     const settings = { base_revision: job.archive_revision, use_directory_layout: true,
       targets: [{ ...job.knowledge_target, docs_path: "domains" }, { ...job.repositories[0], docs_path: "docs/knowledge" }] };
     const candidate = service.previewArchiveTargets(job.id, settings);
@@ -51,7 +50,7 @@ test("Issue489：目录设置保存后直接归档，正式版本在归档时更
     assert.equal(job.knowledge_target.docs_path, "domains", "用户明确选择的最终目录不按默认规则改写");
     assert.equal(job.repositories[0].docs_path, "docs/knowledge");
     assert.equal(job.production!.archive.visible, true);
-    assert.deepEqual(readKnowledgeDocument(root, formal.id), formal, "设置目录尚未改写正式知识正文");
+    assert.deepEqual(listKnowledgeDocuments(root), [], "设置目录不提前写正式知识");
     assert.deepEqual(job.turns, original.turns);
     await service.shutdown();
     service = new DomainKnowledgeExtraction(root, async () => { throw new Error("不能重做研究"); }, {
@@ -61,34 +60,37 @@ test("Issue489：目录设置保存后直接归档，正式版本在归档时更
     const preview = service.previewArchive(job.id);
     assert.ok(preview.actions.some(action => action.id === "create-archive"));
     assert.deepEqual(preview.targets.flatMap(target => target.files.map(file => file.path)).sort(), ["domains/README.md", "domains/flows/order.md", "docs/knowledge/index.md"].sort());
-    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: {} }, "user"), /正式知识版本已变化/);
-    assert.deepEqual(readKnowledgeDocument(root, formal.id), formal);
+    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: {} }, "user"), /文稿已有新版本/);
+    assert.deepEqual(listKnowledgeDocuments(root), []);
     await service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: preview.expected_revisions }, "user");
     job = service.get(job.id);
     assert.equal(archived.length, 2);
-    assert.ok(job.documents.every(document => document.published_document_revision === document.revision));
+    assert.ok(job.documents.every(document => !document.knowledge_document_id), "MR 创建也不伪造正式知识身份");
     assert.equal(job.documents[0].content, original.documents[0].content);
-    assert.equal(readKnowledgeDocument(root, formal.id).archive_target!.path, "domains/README.md");
-    assert.equal(readKnowledgeDocument(root, formal.id).research_source!.layer, "domain");
+    assert.equal(archived[0].documents[0].path, "domains/README.md");
+    assert.equal(archived[0].documents[0].layer, "domain");
     await service.shutdown();
     service = new DomainKnowledgeExtraction(root, async () => "不应调用");
     assert.equal(service.get(job.id).archive_batches!.at(-1)!.state, "done");
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("Issue489：归档目录设置不会自动发布已有未确认正文，代码路径不能越出 docs", async () => {
+test("Issue489：目录设置保留人工候选，创建 MR 才提交，代码路径不能越出 docs", async () => {
   const root = mkdtempSync(join(tmpdir(), "directory-unconfirmed-")), archived: DomainKnowledgeJob[] = [];
   const { service, job: initial } = await fixture(root, archived);
   try {
     let job = service.edit(initial.id, { document: { ...initial.documents[0], content: "# 尚未确认的新规则" }, base_revision: initial.documents[0].revision }, "user");
-    const formal = readKnowledgeDocument(root, job.documents[0].knowledge_document_id!);
+    const before = service.previewArchive(job.id).expected_revisions;
     assert.throws(() => service.configureArchive(job.id, { base_revision: job.archive_revision, use_directory_layout: true,
       targets: [{ ...job.repositories[0], docs_path: "domain-docs" }] }), /docs 下的业务目录/);
     job = service.configureArchive(job.id, { base_revision: job.archive_revision, use_directory_layout: true,
       targets: [{ ...job.knowledge_target, docs_path: "docs/新目录" }] });
-    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: { [formal.id]: formal.revision } }, "user"), /正式知识|确认|发布/);
-    assert.deepEqual(readKnowledgeDocument(root, formal.id), formal);
+    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: before }, "user"), /文稿已有新版本/);
+    assert.deepEqual(listKnowledgeDocuments(root), []);
     assert.equal(service.get(job.id).documents[0].content, "# 尚未确认的新规则");
     assert.equal(archived.length, 0);
+    await service.createArchive(job.id, { issue_no: "REQ489", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user");
+    assert.equal(archived[0].documents[0].content, "# 尚未确认的新规则");
+    assert.deepEqual(listKnowledgeDocuments(root), []);
   } finally { await service.shutdown(); rmSync(root, { recursive: true, force: true }); }
 });

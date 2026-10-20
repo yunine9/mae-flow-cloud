@@ -58,7 +58,7 @@ async function fixture() {
     async close() { await bounded(publisher.shutdown(), "手动归档发布器未停止"); server.closeAllConnections(); await bounded(new Promise<void>(resolve => server.close(() => resolve())), "手动归档HTTP夹具未关闭"); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-test("生产线验收5/9/14：人工归档每个已发布新版本创建新MR，旧MR状态不查询，创建后不改变正式版本", { timeout: 20_000 }, async () => {
+test("任务修订先查询真实 MR 状态，未合入时续推同分支，不改正式知识快照", { timeout: 20_000 }, async () => {
   const f = await fixture();
   try {
     const first = await bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "第一版人工归档超过5秒");
@@ -67,15 +67,15 @@ test("生产线验收5/9/14：人工归档每个已发布新版本创建新MR，
     f.job.documents[0] = { ...f.job.documents[0], content: second.content, revision: 2, published_revision: second.revision, published_document_revision: 2 };
     const formalPath = join(f.dir, "knowledge-documents", `${f.formal.id}.json`), before = readFileSync(formalPath, "utf8");
     const next = await bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "第二版人工归档超过5秒");
-    assert.notEqual(next.branch, first.branch, "新平台版本使用独立归档MR，不续推旧MR"); assert.notEqual(next.url, first.url); assert.equal(f.mrs.length, 2);
-    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0, "创建前后都不查询合入、关闭或门禁状态");
-    assert.equal(f.git("-C", f.remote, "show", `${first.branch}:domains/orders.md`), "# 订单\n已发布第一版");
+    assert.equal(next.branch, first.branch, "同一未合入任务继续使用原分支"); assert.equal(next.url, first.url); assert.equal(f.mrs.length, 1);
+    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 1, "续推前必须确认原 MR 尚未合入");
+    assert.equal(f.git("-C", f.remote, "show", `${first.branch}:domains/orders.md`), "# 订单\n已发布第二版");
     assert.equal(f.git("-C", f.remote, "show", `${next.branch}:domains/orders.md`), "# 订单\n已发布第二版");
     assert.equal(next.documents[0].knowledge_revision, second.revision); assert.equal(readFileSync(formalPath, "utf8"), before, "归档仅推精确正式快照，不回写正式内容、版本或历史");
   } finally { await f.close(); }
 });
 
-test("生产线验收6/14：人工重试MR回执丢失时discover原分支只取回链接，不查MR状态、不重复创建", { timeout: 20_000 }, async () => {
+test("MR 回执丢失后先找回原链接并核对生命周期，恢复时不重复创建", { timeout: 20_000 }, async () => {
   const f = await fixture();
   try {
     const path = join(f.dir, "knowledge-documents", `${f.formal.id}.json`), before = readFileSync(path, "utf8");
@@ -83,11 +83,11 @@ test("生产线验收6/14：人工重试MR回执丢失时discover原分支只取
     await assert.rejects(bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "首次归档失败未返回"), /MR.*尚未确认|暂时故障/);
     const attempted = f.last(); assert.equal(attempted.mr_attempted, true); assert.equal(attempted.url, undefined); assert.equal(f.mrs.length, 1);
     bindModule(f); // 原请求无人员配置；后来绑定模块也不能给已存在的 MR 猜一份新名单。
-    f.response.disconnectCreate = false; f.response.gates = "closed";
+    f.response.disconnectCreate = false; f.response.gates = "opened";
     const recovered = await bounded(f.publisher.publish(f.job, f.target, { ...attempted, state: "failed" }, "alice", f.save), "人工重试未取回原MR");
     assert.equal(recovered.branch, attempted.branch); assert.equal(recovered.url, f.mrs[0].url); assert.equal(recovered.mr_id, f.mrs[0].id);
     assert.equal(f.requests.filter(path => path === "/mr").length, 1); assert.equal(f.requests.filter(path => path === "/mr/discover").length, 1);
-    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0, "旧MR即使已经关闭，人工失败恢复也只登记已创建的真实回执");
+    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 1, "回执恢复后核对真实生命周期");
     assert.equal(recovered.mr_participants, undefined); assert.ok(!f.requests.includes("/mr/participants"));
     assert.equal(readFileSync(path, "utf8"), before);
   } finally { await f.close(); }
@@ -101,7 +101,23 @@ test("生产线验收5：人工归档仅填写单号即可创建MR，未填描�
   } finally { await f.close(); }
 });
 
-test("生产线验收5/14：正文相同的元数据新版本仍独立创建MR，不复用旧版本分支", { timeout: 20_000 }, async () => {
+test("MR 创建回执丢失后又修订文稿，先找回原 MR 再续推，不能创建重复 MR", { timeout: 20_000 }, async () => {
+  const f = await fixture();
+  try {
+    f.response.disconnectCreate = true;
+    await assert.rejects(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), /MR.*尚未确认|暂时故障/);
+    const previous = f.last();
+    assert.equal(previous.url, undefined); assert.equal(previous.mr_attempted, true); assert.equal(f.mrs.length, 1);
+    f.job.documents[0] = { ...f.job.documents[0], revision: 2, content: "# 回执丢失后的修订" };
+    f.response.disconnectCreate = false;
+    const updated = await f.publisher.publish(f.job, f.target, previous, "alice", f.save);
+    assert.equal(updated.branch, previous.branch); assert.equal(updated.url, f.mrs[0].url); assert.equal(f.mrs.length, 1);
+    assert.equal(f.requests.filter(path => path === "/mr/discover").length, 1);
+    assert.equal(f.git("-C", f.remote, "show", `${updated.branch}:domains/orders.md`), "# 回执丢失后的修订");
+  } finally { await f.close(); }
+});
+
+test("任务 MR 已关闭时保留正文并拒绝另建 MR，需要恢复原 MR 后继续", { timeout: 20_000 }, async () => {
   const f = await fixture();
   try {
     const first = await bounded(f.publisher.publish(f.job, f.target, undefined, "alice", f.save), "第一版归档超过5秒");
@@ -110,12 +126,14 @@ test("生产线验收5/14：正文相同的元数据新版本仍独立创建MR�
     assert.notEqual(second.revision, f.formal.revision); assert.equal(second.content, f.formal.content);
     f.job.documents[0] = { ...f.job.documents[0], revision: 2, published_revision: second.revision, published_document_revision: 2 };
     f.response.gates = "closed";
-    const next = await bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "元数据新版本归档超过5秒");
-    assert.notEqual(next.branch, first.branch); assert.equal(f.mrs.length, 2);
-    assert.equal(f.git("-C", f.remote, "show", `${next.branch}:domains/orders.md`), f.formal.content.trim());
-    assert.notEqual(next.revision, first.revision, "即使Git正文树不变也创建当前平台版本的独立提交");
+    await assert.rejects(bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "已关闭 MR 查询超过5秒"), /MR 已关闭/);
+    assert.equal(f.mrs.length, 1);
+    assert.equal(f.git("-C", f.remote, "show", `${first.branch}:domains/orders.md`), f.formal.content.trim());
+    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 1);
+    f.response.gates = "opened";
+    const next = await bounded(f.publisher.publish(f.job, f.target, first, "alice", f.save), "恢复原 MR 超过5秒");
+    assert.equal(next.branch, first.branch); assert.equal(next.url, first.url); assert.equal(f.mrs.length, 1);
     assert.equal(next.documents[0].knowledge_revision, second.revision);
-    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 0);
   } finally { await f.close(); }
 });
 
@@ -165,7 +183,8 @@ test("知识归档创建时传模块人员，失败保留opened，配置变化�
     await f.publisher.publish(f.job, f.target, next, "alice", f.save);
     const legacy = { ...next }; delete legacy.mr_participants;
     await f.publisher.publish(f.job, f.target, legacy, "alice", f.save);
-    assert.deepEqual(f.requests, ["/mr"], "失败或未记录人员的旧 MR 都不重新套用模块配置");
+    assert.deepEqual(f.requests.filter(path => path !== "/mr/gates"), ["/mr"], "失败或未记录人员的旧 MR 都不重新套用模块配置");
+    assert.equal(f.requests.filter(path => path === "/mr/gates").length, 3, "已有 MR 只补查询生命周期，不更新人员");
   } finally { await f.close(); }
 });
 
@@ -180,7 +199,7 @@ test("知识归档回执丢失后discover只恢复链接和原人员记录，不
     const result = await bounded(f.publisher.publish(f.job, f.target, previous, "alice", f.save), "归档恢复超时");
     assert.equal(result.state, "opened"); assert.equal(result.url, f.mrs[0].url);
     assert.deepEqual(result.mr_participants, previous.mr_participants);
-    assert.deepEqual(f.requests, ["/mr", "/mr/discover"]);
+    assert.deepEqual(f.requests, ["/mr", "/mr/discover", "/mr/gates"]);
     assert.equal(f.mrs.length, 1);
   } finally { await f.close(); }
 });

@@ -34,7 +34,7 @@ async function until(check: () => boolean, message: string) {
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
-/** B5：修改意见与发布的关系（领域、组件同一口径）。 */
+/** B5：修改意见与发布的关系（领域提交 MR、组件发布均保留意见）。 */
 async function fixture(kind: Kind) {
   const dataDir = mkdtempSync(join(tmpdir(), "knowledge-opinion-barrier-"));
   const domain = new DomainKnowledgeExtraction(dataDir, async input => {
@@ -46,7 +46,8 @@ async function fixture(kind: Kind) {
         content: `${document.content}\n已核对意见：${input.turn.message}` });
     }
     return "文稿已保存";
-  });
+  }, { publish: async (job, target) => ({ target_id: target.id, branch: "codex/review-notes", state: "opened", url: "https://example.test/mr/review-notes",
+    documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision })) }) });
   const component = new ComponentResearch(dataDir, componentPublicationExecute);
   const sources: KnowledgeReviewSources = { dataDir, domain, component };
   const cleanup = async () => {
@@ -85,9 +86,9 @@ async function fixture(kind: Kind) {
     };
     const publish = async () => {
       if (kind === "domain") {
-        const current = domain.get(jobId), selected = current.documents.filter(document => document.selected);
-        await domain.publish(jobId, "reviewer", { document_ids: selected.map(document => document.id),
-          expected_revisions: Object.fromEntries(selected.map(document => [document.id, document.revision])) });
+        await domain.createArchive(jobId, { issue_no: "REQ-opinion", expected_revisions: domain.previewArchive(jobId).expected_revisions }, "reviewer");
+        assert.deepEqual(listKnowledgeDocuments(dataDir), [], "领域任务提交 MR 不提前写正式知识");
+        return domain.get(jobId).publications.flatMap(publication => publication.documents);
       } else component.publish(jobId, componentPublishInput(component.get(jobId), { scope: "platform" }), "reviewer");
       return listKnowledgeDocuments(dataDir);
     };
@@ -99,14 +100,15 @@ async function fixture(kind: Kind) {
 // 不是发布闸门。未处理意见不拦发布，发布也不替人处理、吞掉意见。
 for (const kind of ["domain", "component"] as const) {
   for (const status of ["open", "submitted"] as const) {
-    test(`B5验收3/生产线验收11/14：${kind} 选中稿有 ${status} 意见时照常发布，意见保持原状`, { timeout: 15_000 }, async () => {
+    test(`B5验收3/生产线验收11/14：${kind} 选中稿有 ${status} 意见时照常交付候选，意见保持原状`, { timeout: 15_000 }, async () => {
       const f = await fixture(kind);
       try {
         const note = f.saveNote(f.selectedId);
         if (status === "submitted") await f.submitAndConfirm(note.id, f.selectedId);
         const formal = await f.publish();
         assert.equal(formal.length, 1);
-        assert.equal(readKnowledgeDocument(f.dataDir, formal[0].id).revision, formal[0].revision);
+        if (kind === "component") assert.equal(readKnowledgeDocument(f.dataDir, formal[0].id).revision, formal[0].revision);
+        else assert.deepEqual(listKnowledgeDocuments(f.dataDir), []);
         assert.match(formal[0].content, kind === "domain" ? /当前规则与失败边界/ : /能力 0 的边界与失败处理/);
         if (status === "submitted") assert.match(formal[0].content, kind === "domain" ? /已核对意见：/ : /本轮修订：/,
           "已明确确认的修订确实进入正式正文");

@@ -39,6 +39,7 @@ export function domainKnowledgeTask(job: DomainKnowledgeJob): KnowledgeTaskRow {
   const published = saved.filter(document => !!document.knowledge_document_id && document.published_document_revision === document.revision).length;
   const process = job.work_documents?.length ?? 0;
   return { id: job.id, kind: "domain", title: job.title, scope: job.scope, operator: job.operator,
+    task_kind: job.task_kind ?? "extraction",
     module_id: job.module_id,
     module_entry: archived && formalId ? { kind: "document", document_id: formalId } : { kind: "task" },
     document_summary: { total: saved.length + process, published, drafts: saved.length - published, process },

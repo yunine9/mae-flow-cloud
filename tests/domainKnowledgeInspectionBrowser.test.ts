@@ -25,7 +25,7 @@ test("领域检视：全屏连续跨篇批注、恢复待提交输入、结束�
     for (const [width, height] of [[1920, 1080], [1366, 768]]) {
       const dom = await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=15000", "--dump-dom", `file://${html}`], join(dir, `${width}.html`));
       const result = dom.match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1]; assert.ok(result, `${width}: browser did not finish`);
-      const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true); assert.equal(value.notes, 5);
+      const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true); assert.equal(value.notes, 5); assert.equal(value.independentFinished, true);
     }
 
   } finally { stop(); rmSync(dir, { recursive: true, force: true }); }

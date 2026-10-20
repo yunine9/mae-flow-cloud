@@ -19,6 +19,8 @@ import { listProductVersions, saveProductVersion, deleteProductVersion } from ".
 import { listTechnologyStacks, createTechnologyStack, updateTechnologyStack, requireTechnologyStacks, TechnologyStackError } from "./technologyStacks.ts";
 import { deleteTechnologyStack } from "./technologyStackDeletion.ts";
 import { readKnowledgeRepoConfig, saveKnowledgeRepoConfig, clearKnowledgeRepoConfig } from "./knowledgeRepoConfig.ts";
+import { resolveModuleKnowledgeLocation, saveModuleKnowledgeLocation, suggestModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
+import { readModuleKnowledgeSync } from "./knowledgeRepositorySync.ts";
 import { readResourceBlocks } from "./repositoryResourcePolicy.ts";
 /**
  * 任务 API(主 spec §5.1/§5.2):REST 命令 + SSE 事件流,零框架依赖。
@@ -1503,7 +1505,7 @@ export function createTaskServer(
         } catch (error) { return json(response, 400, { error: humanError(error) }); }
       }
 
-      // 业务模块是配置中心的统一目录；全员维护映射及团队资产中的知识。
+      // 业务模块统一保存仓库映射和领域知识读写目录；知识页不另存一份设置。
       // 旧 Owner 字段仅保留历史元数据，不承担权限判定。
       if (parts[0] === "business-modules") {
         const dataDir = service.options.dataDir;
@@ -1539,7 +1541,7 @@ export function createTaskServer(
             const maintainers = Array.isArray(body.maintainers)
               ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
-            return json(response, 201, view(createBusinessModule(dataDir, {
+            const created = createBusinessModule(dataDir, {
               id: String(body.id ?? `module-${randomUUID()}`),
               name: String(body.name ?? ""),
               description: String(body.description ?? ""),
@@ -1548,10 +1550,33 @@ export function createTaskServer(
               repositories: Array.isArray(body.repositories)
                 ? body.repositories.map(String) : [],
               mr_participants: body.mr_participants,
+              knowledge_location: body.knowledge_location,
               reference_component_repos: Array.isArray(
                 body.reference_component_repos)
                 ? body.reference_component_repos.map(String) : [],
-            }, operator)));
+            }, operator);
+            if (created.knowledge_location) service.startModuleKnowledgeSync(created.id, operator);
+            return json(response, 201, view(created));
+          }
+          if (parts.length === 3 && ["knowledge-location", "knowledge-sync"].includes(parts[2])) {
+            const moduleId = decodeURIComponent(parts[1]);
+            const current = readBusinessModule(dataDir, moduleId);
+            const locationView = () => ({ location: resolveModuleKnowledgeLocation(dataDir, moduleId),
+              configured: !!resolveModuleKnowledgeLocation(dataDir, moduleId),
+              suggestion: suggestModuleKnowledgeLocation(dataDir, moduleId),
+              module_revision: readBusinessModule(dataDir, moduleId).revision,
+              sync: readModuleKnowledgeSync(dataDir, moduleId) });
+            if (request.method === "GET" && parts[2] === "knowledge-location") return json(response, 200, locationView());
+            if (request.method === "POST") {
+              if (!canManageBusinessModule(current, viewer?.username, admin)) return json(response, 403, { error: "请登录后修改领域知识配置" });
+              const body = await readBody(request, 8192);
+              if (parts[2] === "knowledge-location") {
+                if (body.expected_revision !== undefined && !Number.isSafeInteger(body.expected_revision)) throw new BusinessModuleError("模块配置版本无效，请刷新后重试");
+                saveModuleKnowledgeLocation(dataDir, moduleId, body.location ?? body, operator, body.expected_revision);
+              }
+              service.startModuleKnowledgeSync(moduleId, operator);
+              return json(response, 202, parts[2] === "knowledge-location" ? locationView() : readModuleKnowledgeSync(dataDir, moduleId));
+            }
           }
           if (parts.length === 3 && parts[2] === "migration") {
             const sourceId = decodeURIComponent(parts[1]);
@@ -1591,7 +1616,7 @@ export function createTaskServer(
               : Array.isArray(body.maintainers)
                 ? body.maintainers.map(String) : [];
             assertMembers(owner, maintainers);
-            return json(response, 200, view(updateBusinessModule(
+            const updated = updateBusinessModule(
               dataDir, decodeURIComponent(parts[1]), {
                 name: body.name === undefined ? undefined : String(body.name),
                 description: body.description === undefined
@@ -1602,13 +1627,16 @@ export function createTaskServer(
                   ? undefined : Array.isArray(body.repositories)
                     ? body.repositories.map(String) : [],
                 mr_participants: body.mr_participants,
+                knowledge_location: body.knowledge_location,
                 reference_component_repos:
                   body.reference_component_repos === undefined
                     ? undefined : Array.isArray(body.reference_component_repos)
                       ? body.reference_component_repos.map(String) : [],
                 status: body.status === undefined
                   ? undefined : String(body.status) as "active" | "archived",
-              }, operator)));
+              }, operator);
+            if (body.knowledge_location && updated.status === "active") service.startModuleKnowledgeSync(updated.id, operator);
+            return json(response, 200, view(updated));
           }
           if (request.method === "GET" && parts.length === 4
               && parts[2] === "assets") {

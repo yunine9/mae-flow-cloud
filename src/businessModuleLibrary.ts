@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { assertRepositoryCloneAddress } from "./repositoryAddress.ts";
 import { componentRepositories } from "./componentRepositories.ts";
 import { normalizeMrParticipants, type MrParticipants } from "./mrParticipants.ts";
+import { validateRepoUrl } from "./issueFlow/issueGit.ts";
 import {
   appendFileSync,
   chmodSync,
@@ -58,6 +59,13 @@ export interface BusinessKnowledgeAsset {
   updated_by: string;
 }
 
+export interface BusinessModuleKnowledgeLocation {
+  repository: string;
+  branch: string;
+  /** 仓库根目录下的完整相对目录；读取和 MR 写入使用同一位置。 */
+  docs_path: string;
+}
+
 export interface BusinessModule {
   id: string;
   name: string;
@@ -65,6 +73,7 @@ export interface BusinessModule {
   owner: string;
   maintainers: string[];
   repositories: string[];
+  knowledge_location?: BusinessModuleKnowledgeLocation;
   /** 本模块全部关联代码仓共用的新 MR 默认人员。 */
   mr_participants?: MrParticipants;
   /** 参考组件仓订阅(2026-09-23,ADR-0054):公共组件仓登记表条目的
@@ -176,6 +185,42 @@ function moduleMrParticipants(value: unknown): MrParticipants | undefined {
   }
 }
 
+export function normalizeModuleKnowledgeLocation(value: unknown): BusinessModuleKnowledgeLocation | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new BusinessModuleError("请填写领域知识仓库、分支和相对目录");
+  const input = value as Record<string, unknown>;
+  if (["repository", "branch", "docs_path"].some(key => typeof input[key] !== "string")) throw new BusinessModuleError("请填写领域知识仓库、分支和相对目录");
+  const repository = String(input.repository).trim();
+  if (!repository || repository.length > 1024 || /[\x00-\x1f]/.test(repository) || /^git@/.test(repository)) throw new BusinessModuleError("领域知识仓库地址无效，请填写 HTTPS 克隆地址");
+  try {
+    validateRepoUrl(repository);
+    assertRepositoryCloneAddress(repository);
+    if (/^https?:\/\//i.test(repository)) {
+      const url = new URL(repository);
+      if (url.username || url.password || url.search || url.hash) throw new Error("仓库地址不能包含凭据、查询参数或片段");
+    }
+  } catch (error) { throw new BusinessModuleError(error instanceof Error ? error.message : "领域知识仓库地址无效"); }
+  const branch = String(input.branch).trim();
+  if (!branch || branch.length > 255 || branch === "@" || branch.startsWith("-") || branch.startsWith("/")
+      || /[\s\\~^:?*\[\x00-\x1f]|\.\.|@\{|\/\/|\.$|\/$|\.lock(?:\/|$)/.test(branch)
+      || branch.split("/").some(part => part.startsWith("."))) throw new BusinessModuleError("领域知识分支格式无效");
+  const docs_path = String(input.docs_path).trim().replace(/\/+$/, "");
+  if (!docs_path || docs_path.length > 1000 || docs_path.startsWith("/") || /^[a-z]:/i.test(docs_path)
+      || docs_path.split("/").some(part => !part || part === "." || part === ".." || part.toLowerCase() === ".git" || /[\\\x00-\x1f]/.test(part))) throw new BusinessModuleError("领域知识目录必须是仓库根目录下的相对目录，例如 domains/交易业务");
+  return { repository: validateRepoUrl(repository), branch, docs_path };
+}
+
+function assertKnowledgeLocationAvailable(dataDir: string, id: string, location?: BusinessModuleKnowledgeLocation) {
+  if (!location) return;
+  const conflict = listBusinessModules(dataDir).modules.find(module => {
+    const other = module.knowledge_location;
+    return module.id !== id && module.status === "active" && other
+      && repositoryIdentity(other.repository) === repositoryIdentity(location.repository) && other.branch === location.branch
+      && (other.docs_path === location.docs_path || other.docs_path.startsWith(`${location.docs_path}/`) || location.docs_path.startsWith(`${other.docs_path}/`));
+  });
+  if (conflict) throw new BusinessModuleError(`领域知识目录与“${conflict.name}”重叠，请为每个模块设置独立目录`);
+}
+
 /** 参考组件仓存登记表条目 id，不复制地址。只校验本次提交的引用；
  * 修改模块其他字段时保留已有引用，不因组件条目已删除而阻塞保存。
  * 停用条目允许引用，停用只影响问题会话是否读取。 */
@@ -229,6 +274,7 @@ function parseModule(value: unknown): BusinessModule {
   }
   return {
     ...module,
+    knowledge_location: normalizeModuleKnowledgeLocation(module.knowledge_location),
     mr_participants: moduleMrParticipants(module.mr_participants),
     reference_component_repos: Array.isArray(module.reference_component_repos)
       ? module.reference_component_repos.map(String) : [],
@@ -400,6 +446,7 @@ export function createBusinessModule(
     owner: string;
     maintainers?: string[];
     repositories?: string[];
+    knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
   },
@@ -419,6 +466,7 @@ export function createBusinessModule(
     owner,
     maintainers: usernames(input.maintainers ?? [], owner),
     repositories: moduleRepositories(input.repositories ?? []),
+    knowledge_location: normalizeModuleKnowledgeLocation(input.knowledge_location),
     mr_participants: moduleMrParticipants(input.mr_participants),
     reference_component_repos: referenceComponentRepos(
       dataDir, input.reference_component_repos ?? []),
@@ -430,6 +478,7 @@ export function createBusinessModule(
     updated_at: now,
     updated_by: operator,
   };
+  assertKnowledgeLocationAvailable(dataDir, id, module.knowledge_location);
   writeModule(dataDir, module);
   operation(dataDir, { at: now, operator, action: "create", module_id: id });
   return module;
@@ -444,6 +493,7 @@ export function updateBusinessModule(
     owner?: string;
     maintainers?: string[];
     repositories?: string[];
+    knowledge_location?: unknown;
     mr_participants?: unknown;
     reference_component_repos?: string[];
     status?: BusinessModuleStatus;
@@ -472,6 +522,8 @@ export function updateBusinessModule(
       : usernames(patch.maintainers, owner),
     repositories: patch.repositories === undefined
       ? current.repositories : moduleRepositories(patch.repositories),
+    knowledge_location: patch.knowledge_location === undefined
+      ? current.knowledge_location : normalizeModuleKnowledgeLocation(patch.knowledge_location),
     mr_participants: patch.mr_participants === undefined
       ? current.mr_participants : moduleMrParticipants(patch.mr_participants),
     reference_component_repos: patch.reference_component_repos === undefined
@@ -482,6 +534,7 @@ export function updateBusinessModule(
     updated_at: now,
     updated_by: operator,
   };
+  assertKnowledgeLocationAvailable(dataDir, id, updated.knowledge_location);
   writeModule(dataDir, updated);
   operation(dataDir, {
     at: now, operator,

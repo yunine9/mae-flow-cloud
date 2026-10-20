@@ -1,22 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
-import { knowledgeDocumentRoute } from "../src/knowledgeDocumentRoutes.ts";
-import { ComponentResearch } from "../src/componentResearch.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 import type { TaskService } from "../src/taskService.ts";
-import { listKnowledgeDocuments, readKnowledgeDocument, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments, saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { domainKnowledgeTask } from "../src/knowledgeTaskCenter.ts";
 import { saveKnowledgeRepoConfig } from "../src/knowledgeRepoConfig.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
-// Public contract is named locally for the initial RED run; production will
-// expose this same readonly HTTP shape from knowledgeProductionTypes.ts.
+// HTTP 断言只读取公开预览字段，不依赖管理器内部对象。
 interface Preview {
   job_id: string; title: string; status_label: string; message: string; issue_no?: string;
   expected_revisions: Record<string, string>;
@@ -50,17 +48,17 @@ function harness(dir: string, options: { noGit?: boolean; multiple?: boolean; fa
     for (const target of [input.job.knowledge_target, ...(options.multiple ? input.job.repositories : [])]) {
       input.save({ id: target.id === "domain" ? "rules" : "source-rules", target_id: target.id, title: `${target.id} 规则`,
         layer: target.id === "domain" ? "domain" : "repository", path: `${target.docs_path}/rules.md`,
-        content: `# ${target.id}\n\n只归档已发布的正式规则。`, sources: "固定源码和业务资料" }, { content: null, revision: "a".repeat(40) });
+        content: `# ${target.id}\n\n任务候选规则，MR 合入后更新正式知识库。`, sources: "固定源码和业务资料" }, { content: null, revision: "a".repeat(40) });
     }
     return "草稿完成";
   }, { closePublication: async () => {}, publish: async (job, target, previous, operator, save) => {
     calls.push({ target: target.id, previous: previous && structuredClone(previous), job: structuredClone(job), operator });
     const documents = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision,
-      knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision }));
-    const branch = previous?.branch ?? `codex/manual-${target.id}-${documents[0].knowledge_revision!.slice(0, 12)}`;
+      knowledge_document_id: document.knowledge_document_id, knowledge_revision: String(document.revision) }));
+    const branch = previous?.branch || `codex/manual-${target.id}-${documents[0].knowledge_revision!.slice(0, 12)}`;
     save({ target_id: target.id, branch, state: "pending", documents: [], attempted_documents: documents, mr_attempted: true });
     if (!failed && target.id === options.failTarget) { failed = true; throw new Error("HTTP 503：测试平台暂时不可用"); }
-    return { target_id: target.id, branch, state: "opened", url: `https://example.test/mr/${calls.length}`, mr_id: calls.length, documents };
+    return { target_id: target.id, branch, state: "opened", url: previous?.url ?? `https://example.test/mr/${calls.length}`, mr_id: calls.length, documents };
   } });
   const input = options.noGit ? { ...config, knowledge_target: undefined } : options.multiple ? { ...config,
     repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/source" }] } : config;
@@ -73,19 +71,21 @@ test("Issue488：已有归档批次但未创建MR时继续原批次与分支，�
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-missing-mr-"));
   let state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const id = await state.seed();
     await close(state.manager);
     const file = batchPath(dir, id), stored = JSON.parse(readFileSync(file, "utf8")) as DomainKnowledgeJob;
-    const batch = stored.archive_batches![0];
+    const batch: NonNullable<DomainKnowledgeJob["archive_batches"]>[number] = { id: randomUUID(), created_at: new Date().toISOString(), operator: "reviewer", state: "done",
+      knowledge_layout: stored.knowledge_layout, documents: structuredClone(stored.documents), targets: [structuredClone(stored.knowledge_target)], publications: [] };
+    stored.archive_batches = [batch];
     batch.issue_no = "REQ-EXISTING"; batch.state = "done";
     batch.publications = [{ target_id: "domain", state: "pending", branch: "codex/pushed-without-mr", documents: [] }];
     writeFileSync(file, JSON.stringify(stored));
     state = harness(dir);
     const before = JSON.stringify(listKnowledgeDocuments(dir)), preview = state.manager.previewArchive(id);
-    assert.equal(preview.status_label, "已发布（未归档）");
+    assert.equal(preview.status_label, "待创建 MR");
     const input = { issue_no: preview.issue_no!, expected_revisions: preview.expected_revisions };
     const result = await state.manager.createArchive(id, input, "reviewer");
-    assert.equal(result.status_label, "已归档"); assert.ok(result.targets[0].url);
+    assert.equal(result.status_label, "MR 待合入"); assert.ok(result.targets[0].url);
     assert.equal(state.calls.length, 1); assert.equal(state.calls[0].previous?.branch, "codex/pushed-without-mr");
     assert.equal(state.calls[0].job.issue_no, "REQ-EXISTING");
     assert.deepEqual(state.manager.get(id).archive_batches!.map(item => item.id), [batch.id]);
@@ -95,33 +95,34 @@ test("Issue488：已有归档批次但未创建MR时继续原批次与分支，�
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收4/10/14：领域发布只写平台，无Git配置也可发布且不自动推送或创建MR", { timeout: 15_000 }, async () => {
+test("领域候选不提前进入正式库，旧发布入口拒绝且不会自动推送或创建 MR", { timeout: 15_000 }, async () => {
   for (const noGit of [false, true]) {
     const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-platform-")), state = harness(dir, { noGit });
     try {
-      const id = await state.seed(); await state.manager.publish(id, "reviewer"); await settle();
-      assert.equal(listKnowledgeDocuments(dir).length, 1, "发布应立即写入正式库");
-      assert.equal(state.calls.length, 0, "平台发布不能自动调用Git/MR发布器");
+      const id = await state.seed();
+      await assert.rejects(state.manager.publish(id, "reviewer"), /直接创建 MR/);
+      assert.equal(listKnowledgeDocuments(dir).length, 0);
+      assert.equal(state.calls.length, 0);
       const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
-      assert.ok((stored.archive_batches ?? []).every(batch => batch.state === "pending" && !batch.publications.length && !batch.issue_no), "F6恢复快照不能冒充人工归档或保存未填写的归档单号");
-      assert.equal(state.manager.get(id).production?.archive.status_label, "已发布（未归档）");
+      assert.equal(stored.documents.length, 1); assert.equal(stored.archive_batches?.length ?? 0, 0);
+      assert.equal(state.manager.get(id).production?.archive.status_label, "待创建 MR");
     } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
   }
 });
 
-test("生产线验收5/8/14：归档预览读取当前正式版本、预填任务单号且不修改正文或自动创建MR", { timeout: 10_000 }, async () => {
+test("MR 预览读取任务最新候选，预填单号且不修改正文或自动创建 MR", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-preview-")), state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
-    const formal = listKnowledgeDocuments(dir)[0], next = saveKnowledgeDocument(dir, { ...formal, content: "# 人工正式新版\n\n平台阅读页已经发布的规则。" }, "editor", formal.id, { expectedRevision: formal.revision });
-    const snapshot = JSON.stringify(listKnowledgeDocuments(dir)), beforeCalls = state.calls.length;
-    assert.equal(typeof manual(state.manager).previewArchive, "function", "必须有公开只读归档预览接口");
+    const id = await state.seed(), draft = state.manager.get(id).documents[0];
+    const next = state.manager.edit(id, { document: { ...draft, content: "# 人工核对新版候选" }, base_revision: draft.revision }, "editor").documents[0];
+    const before = state.manager.get(id), beforeCalls = state.calls.length;
     const preview = manual(state.manager).previewArchive(id);
-    assert.equal(preview.issue_no, "REQ-PREFILL"); assert.equal(preview.status_label, "已发布（未归档）");
-    assert.equal(preview.targets[0].files[0].content, next.content, "不能导出旧pending草稿或研究基线");
-    assert.equal(preview.targets[0].files[0].knowledge_revision, next.revision);
-    assert.equal(preview.expected_revisions[next.id], next.revision);
-    assert.equal(JSON.stringify(listKnowledgeDocuments(dir)), snapshot); assert.equal(state.calls.length, beforeCalls);
+    assert.equal(preview.issue_no, "REQ-PREFILL"); assert.equal(preview.status_label, "待创建 MR");
+    assert.equal(preview.targets[0].files[0].content, next.content);
+    assert.equal(preview.targets[0].files[0].knowledge_revision, String(next.revision));
+    assert.equal(preview.expected_revisions[next.id], String(next.revision));
+    assert.deepEqual(state.manager.get(id), before); assert.equal(state.calls.length, beforeCalls);
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -130,7 +131,7 @@ test("知识仓配置成本地路径时，归档预览就说明不能建 MR 并�
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-local-")), state = harness(dir, { noGit: true });
   try {
     saveKnowledgeRepoConfig(dir, join(dir, "knowledge.git"), { branch: "main", docs_path: "domains" });
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const id = await state.seed();
     const preview = manual(state.manager).previewArchive(id);
     assert.equal(preview.targets[0].configured, false);
     assert.match(preview.targets[0].message, /不能用于创建 MR：仓库地址须为不带凭据的 HTTP\/HTTPS 地址/);
@@ -143,12 +144,12 @@ test("知识仓配置成本地路径时，归档预览就说明不能建 MR 并�
 test("生产线验收5/6/14：手动创建归档要求用户单号及预览版本，拒绝缺单号和过期预览且不启动外部操作", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-guard-")), state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const id = await state.seed();
     assert.equal(typeof manual(state.manager).createArchive, "function", "必须有人工归档创建接口");
     const preview = manual(state.manager).previewArchive(id), before = state.calls.length;
     await assert.rejects(manual(state.manager).createArchive(id, { issue_no: "", expected_revisions: preview.expected_revisions }, "exporter"), /关联单号/);
-    const formal = listKnowledgeDocuments(dir)[0]; saveKnowledgeDocument(dir, { ...formal, content: formal.content + "\n正式新版本" }, "editor", formal.id, { expectedRevision: formal.revision });
-    await assert.rejects(manual(state.manager).createArchive(id, { issue_no: "REQ-MANUAL", expected_revisions: preview.expected_revisions }, "exporter"), /正式知识.*(?:版本|变化)|预览.*(?:版本|变化)/);
+    const draft = state.manager.get(id).documents[0]; state.manager.edit(id, { document: { ...draft, content: draft.content + "\n候选新版本" }, base_revision: draft.revision }, "editor");
+    await assert.rejects(manual(state.manager).createArchive(id, { issue_no: "REQ-MANUAL", expected_revisions: preview.expected_revisions }, "exporter"), /文稿已有新版本/);
     assert.equal(state.calls.length, before, "预检失败不得产生Git/MR事实");
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -156,11 +157,11 @@ test("生产线验收5/6/14：手动创建归档要求用户单号及预览版�
 test("生产线验收5/6/8/14：多目标手动归档保存部分成功，失败target仅人工同分支重试且已成功MR不重复创建", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-target-")), state = harness(dir, { multiple: true, failTarget: "repo-1" });
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const id = await state.seed();
     const api = manual(state.manager); assert.equal(typeof api.createArchive, "function");
     const preview = api.previewArchive(id);
     const created = await api.createArchive(id, { issue_no: "REQ-EXPORT", expected_revisions: preview.expected_revisions }, "exporter");
-    assert.equal(created.status_label, "归档失败"); assert.equal(created.targets.find(target => target.id === "domain")?.status_label, "已归档");
+    assert.equal(created.status_label, "MR 创建失败"); assert.equal(created.targets.find(target => target.id === "domain")?.status_label, "MR 待合入");
     // 弹窗把顶部说明、仓说明、仓红字都渲染出来：原因只许落在红字一处（曾三处同句叠着显示）。
     const reason = created.targets.find(target => target.id === "repo-1")?.error ?? "";
     assert.ok(reason, "失败仓带原因");
@@ -172,7 +173,7 @@ test("生产线验收5/6/8/14：多目标手动归档保存部分成功，失败
     const failedBranch = failed.publications.find(publication => publication.target_id === "repo-1")!.branch;
     assert.ok(failedBranch); const before = state.calls.length; await settle(); assert.equal(state.calls.length, before, "失败不得后台重试");
     const retried = await api.retryArchive(id, "retryer", { batch_id: failed.id, target_id: "repo-1" });
-    assert.equal(retried.status_label, "已归档"); assert.ok(retried.targets.every(target => target.url));
+    assert.equal(retried.status_label, "MR 待合入"); assert.ok(retried.targets.every(target => target.url));
     assert.equal(state.calls.filter(call => call.target === "domain").length, 1); assert.equal(state.calls.filter(call => call.target === "repo-1").length, 2);
     assert.equal(state.calls.at(-1)!.previous?.branch, failedBranch); assert.equal(state.calls.at(-1)!.job.issue_no, "REQ-EXPORT");
     await api.retryArchive(id, "retryer", { batch_id: failed.id, target_id: "repo-1" });
@@ -180,11 +181,11 @@ test("生产线验收5/6/8/14：多目标手动归档保存部分成功，失败
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收1/5/14：宕机中的人工归档重启记失败，保留已发生分支和正式版本且不自动接续外部操作", { timeout: 10_000 }, async () => {
+test("生产线验收1/5/14：MR 提交中断后重启记失败，保留已发生分支和候选版本且不自动续推", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-restart-")), state = harness(dir);
   let restarted: DomainKnowledgeExtraction | undefined;
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer"); const api = manual(state.manager);
+    const id = await state.seed(); const api = manual(state.manager);
     assert.equal(typeof api.createArchive, "function"); const preview = api.previewArchive(id);
     await api.createArchive(id, { issue_no: "REQ-RESTART", expected_revisions: preview.expected_revisions }, "exporter"); await close(state.manager);
     const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob, batch = stored.archive_batches!.find(batch => batch.state === "done")!;
@@ -199,23 +200,24 @@ test("生产线验收1/5/14：宕机中的人工归档重启记失败，保留�
   } finally { if (restarted) await close(restarted); await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收5/8/14：归档新版正式知识创建新MR并保留旧链接，不读取旧MR状态或复用旧版本receipt", { timeout: 10_000 }, async () => {
+test("任务新版候选继续原 MR，保留旧批次快照且不提前更新正式库", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-new-version-")), state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer"); const api = manual(state.manager);
-    assert.equal(typeof api.createArchive, "function"); const initial = api.previewArchive(id);
+    const id = await state.seed(), api = manual(state.manager), initial = api.previewArchive(id);
     const first = await api.createArchive(id, { issue_no: "REQ-FIRST", expected_revisions: initial.expected_revisions }, "exporter");
-    const oldUrl = first.targets[0].url, formal = readKnowledgeDocument(dir, Object.keys(initial.expected_revisions)[0]);
-    const current = saveKnowledgeDocument(dir, { ...formal, content: formal.content + "\n新的正式规则。" }, "editor", formal.id, { expectedRevision: formal.revision });
-    const next = api.previewArchive(id); assert.equal(next.status_label, "已发布（未归档）"); assert.equal(next.expected_revisions[current.id], current.revision);
+    const oldUrl = first.targets[0].url, original = state.manager.get(id).documents[0];
+    const current = state.manager.edit(id, { document: { ...original, content: original.content + "\n新的候选规则。" }, base_revision: original.revision }, "editor").documents[0];
+    const next = api.previewArchive(id); assert.equal(next.status_label, "待创建 MR"); assert.equal(next.expected_revisions[current.id], String(current.revision));
     assert.equal(state.manager.get(id).production?.archive.status_label, next.status_label);
     assert.equal(domainKnowledgeTask(state.manager.get(id)).production?.archive.status_label, next.status_label);
     const second = await api.createArchive(id, { issue_no: "REQ-SECOND", expected_revisions: next.expected_revisions }, "exporter");
-    assert.equal(second.status_label, "已归档"); assert.notEqual(second.targets[0].url, oldUrl);
-    assert.notEqual(state.calls[0].job.documents[0].published_revision, state.calls[1].job.documents[0].published_revision);
-    assert.equal(state.calls[1].previous, undefined, "新精确版本不得把旧MR作为待续推对象");
+    assert.equal(second.status_label, "MR 待合入"); assert.equal(second.targets[0].url, oldUrl);
+    assert.notEqual(state.calls[0].job.documents[0].revision, state.calls[1].job.documents[0].revision);
+    assert.equal(state.calls[1].previous?.url, oldUrl);
     const stored = JSON.parse(readFileSync(batchPath(dir, id), "utf8")) as DomainKnowledgeJob;
-    assert.ok(stored.archive_batches!.some(batch => batch.publications.some(publication => publication.url === oldUrl)), "旧人工归档链接必须保留");
+    assert.equal(stored.archive_batches!.length, 2);
+    assert.equal(stored.archive_batches![0].documents[0].content, original.content);
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -223,7 +225,7 @@ test("生产线验收4/5/14：人工批次首次耐久写EIO不调用MR、不污
   const fs = (await import("node:fs")).default, { syncBuiltinESMExports } = await import("node:module");
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-batch-eio-")), state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer"); const before = state.manager.get(id), raw = readFileSync(batchPath(dir, id), "utf8");
+    const id = await state.seed(); const before = state.manager.get(id), raw = readFileSync(batchPath(dir, id), "utf8");
     const preview = state.manager.previewArchive(id), rename = fs.renameSync;
     const interception = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
       if (String(args[1]) === batchPath(dir, id)) throw Object.assign(new Error("测试批次耐久写 EIO"), { code: "EIO" });
@@ -233,7 +235,7 @@ test("生产线验收4/5/14：人工批次首次耐久写EIO不调用MR、不污
       await assert.rejects(state.manager.createArchive(id, { issue_no: "REQ-EIO", expected_revisions: preview.expected_revisions }, "exporter"), /EIO/);
       assert.equal(state.calls.length, 0); assert.deepEqual(state.manager.get(id), before); assert.equal(readFileSync(batchPath(dir, id), "utf8"), raw);
     } finally { interception.mock.restore(); syncBuiltinESMExports(); }
-    assert.equal((await state.manager.createArchive(id, { issue_no: "REQ-EIO", expected_revisions: preview.expected_revisions }, "exporter")).status_label, "已归档");
+    assert.equal((await state.manager.createArchive(id, { issue_no: "REQ-EIO", expected_revisions: preview.expected_revisions }, "exporter")).status_label, "MR 待合入");
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -241,7 +243,7 @@ test("生产线验收4/5/14：MR成功回执耐久写EIO保留已保存分支，
   const fs = (await import("node:fs")).default, { syncBuiltinESMExports } = await import("node:module");
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-receipt-eio-")), state = harness(dir);
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer"); const preview = state.manager.previewArchive(id), formal = JSON.stringify(listKnowledgeDocuments(dir)), rename = fs.renameSync;
+    const id = await state.seed(); const preview = state.manager.previewArchive(id), formal = JSON.stringify(listKnowledgeDocuments(dir)), rename = fs.renameSync;
     let failed = false;
     const interception = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
       if (!failed && String(args[1]) === batchPath(dir, id)) {
@@ -254,19 +256,19 @@ test("生产线验收4/5/14：MR成功回执耐久写EIO保留已保存分支，
     }); syncBuiltinESMExports();
     try {
       const result = await state.manager.createArchive(id, { issue_no: "REQ-RECEIPT", expected_revisions: preview.expected_revisions }, "exporter");
-      assert.equal(failed, true); assert.equal(result.status_label, "归档失败"); assert.match(result.targets[0].error ?? "", /EIO/);
+      assert.equal(failed, true); assert.equal(result.status_label, "MR 创建失败"); assert.match(result.targets[0].error ?? "", /EIO/);
     } finally { interception.mock.restore(); syncBuiltinESMExports(); }
     const batch = state.manager.get(id).archive_batches!.find(batch => batch.state === "failed")!, branch = batch.publications[0].branch;
-    assert.ok(branch); assert.equal((await state.manager.retryArchive(id, "exporter", { batch_id: batch.id })).status_label, "已归档");
+    assert.ok(branch); assert.equal((await state.manager.retryArchive(id, "exporter", { batch_id: batch.id })).status_label, "MR 待合入");
     assert.equal(state.calls.at(-1)?.previous?.branch, branch); assert.equal(JSON.stringify(listKnowledgeDocuments(dir)), formal);
   } finally { await close(state.manager); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收5/14：领域手动归档HTTP公开preview/create/retry，退役远端刷新和核对入口返回404", { timeout: 10_000 }, async () => {
+test("生产线验收5/14：领域候选 HTTP 公开 preview/create/retry 与 MR 状态刷新，退役旧路径返回404", { timeout: 10_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-http-")), state = harness(dir);
   let server: ReturnType<typeof createServer> | undefined;
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
+    const id = await state.seed();
     const service = { options: { dataDir: dir }, getDomainKnowledgeExtraction: () => state.manager, prepareKnowledgeIndex() {} } as unknown as TaskService;
     const readBody = async (request: IncomingMessage) => { const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk)); return JSON.parse(Buffer.concat(chunks).toString() || "{}"); };
     server = createServer((request, response) => { void domainKnowledgeRoute(request, response, request.url!.slice(1).split("/"), service, "exporter", readBody,
@@ -276,7 +278,9 @@ test("生产线验收5/14：领域手动归档HTTP公开preview/create/retry，�
     const previewResponse = await fetch(`${base}/archive/preview`, { signal: AbortSignal.timeout(5_000) }); assert.equal(previewResponse.status, 200);
     const preview = await previewResponse.json() as Preview;
     const created = await fetch(`${base}/archive/create`, { method: "POST", body: JSON.stringify({ issue_no: "REQ-HTTP", expected_revisions: preview.expected_revisions }), signal: AbortSignal.timeout(5_000) });
-    assert.equal(created.status, 200); assert.equal((await created.json() as Preview).status_label, "已归档");
+    assert.equal(created.status, 200); assert.equal((await created.json() as Preview).status_label, "MR 待合入");
+    const refreshed = await fetch(`${base}/archive/refresh`, { method: "POST", body: "{}", signal: AbortSignal.timeout(5_000) });
+    assert.equal(refreshed.status, 200); assert.equal((await refreshed.json() as DomainKnowledgeJob).production?.status_label, "MR 待合入");
     for (const retired of ["refresh", "remote", "reconcile", "archive-retry"]) {
       const response = await fetch(`${base}/${retired}`, { method: "POST", body: "{}", signal: AbortSignal.timeout(5_000) }); assert.equal(response.status, 404, `${retired} 不留旧兼容入口`);
     }
@@ -286,66 +290,51 @@ test("生产线验收5/14：领域手动归档HTTP公开preview/create/retry，�
   }
 });
 
-test("B5已发布小改/生产线验收5/8/14：HTTP编辑仅生成平台新版本，人工归档才新建MR并保留旧版本和旧MR", { timeout: 15_000 }, async () => {
+test("HTTP 修改任务候选保留历史与已提交快照，再次提交更新原分支和 MR", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-manual-http-edit-")), state = harness(dir);
-  const component = new ComponentResearch(dir, async () => { throw new Error("编辑领域知识不应启动组件研究"); });
   let server: ReturnType<typeof createServer> | undefined;
   try {
-    const id = await state.seed(); await state.manager.publish(id, "reviewer");
-    const initial = state.manager.previewArchive(id);
+    const id = await state.seed(), initial = state.manager.previewArchive(id);
     const archived = await state.manager.createArchive(id, { issue_no: "REQ-FIRST", expected_revisions: initial.expected_revisions }, "exporter");
-    const formal = readKnowledgeDocument(dir, Object.keys(initial.expected_revisions)[0]);
-    const firstBatch = structuredClone(state.manager.get(id).archive_batches!.find(batch => batch.state === "done")!);
-    const recordBeforeEdit = readFileSync(batchPath(dir, id), "utf8");
-    const service = { options: { dataDir: dir }, getDomainKnowledgeExtraction: () => state.manager,
-      getComponentResearch: () => component, prepareKnowledgeIndex() {} } as unknown as TaskService;
+    const draft = state.manager.get(id).documents[0], firstBatch = structuredClone(state.manager.get(id).archive_batches![0]);
+    const service = { options: { dataDir: dir }, getDomainKnowledgeExtraction: () => state.manager, prepareKnowledgeIndex() {} } as unknown as TaskService;
     const readBody = async (request: IncomingMessage) => {
       const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
       return JSON.parse(Buffer.concat(chunks).toString() || "{}");
     };
-    server = createServer((request, response) => {
-      const parts = request.url!.slice(1).split("/"), route = parts[0] === "knowledge-documents" ? knowledgeDocumentRoute : domainKnowledgeRoute;
-      void route(request, response, parts, service, "editor", readBody,
-        (out, status, value) => { out.writeHead(status, { "content-type": "application/json" }); out.end(JSON.stringify(value)); });
-    });
+    server = createServer((request, response) => { void domainKnowledgeRoute(request, response, request.url!.slice(1).split("/"), service, "editor", readBody,
+      (out, status, value) => { out.writeHead(status, { "content-type": "application/json" }); out.end(JSON.stringify(value)); }); });
     server.requestTimeout = 5_000;
     await within(new Promise<void>((done, reject) => { server!.once("error", reject); server!.listen(0, "127.0.0.1", done); }), "HTTP启动超过5秒预算");
-    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(5_000) });
-    const content = formal.content + "\n人工核对：取消订单后保留原始支付凭证。";
-    const editedResponse = await post(`/knowledge-documents/${formal.id}`, { content, expected_revision: formal.revision });
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/domain-extraction/${id}`;
+    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(5_000) });
+    const content = draft.content + "\n人工核对：取消订单后保留原始支付凭证。";
+    const editedResponse = await post("/edit", { document: { ...draft, content }, base_revision: draft.revision });
     assert.equal(editedResponse.status, 200);
-    const edited = await editedResponse.json() as typeof formal;
-    assert.equal(edited.id, formal.id); assert.notEqual(edited.revision, formal.revision); assert.equal(edited.content, content);
-    assert.equal(readKnowledgeDocument(dir, formal.id).content, content);
-    await settle(); assert.equal(state.calls.length, 1, "直接编辑不能触发Git或追加旧MR");
-    assert.equal(readFileSync(batchPath(dir, id), "utf8"), recordBeforeEdit, "平台小改不能修改原归档记录");
-
-    const oldVersionResponse = await fetch(`${base}/knowledge-documents/${formal.id}/versions/${formal.revision}`, { signal: AbortSignal.timeout(5_000) });
+    const edited = (await editedResponse.json() as DomainKnowledgeJob).documents[0];
+    assert.equal(edited.id, draft.id); assert.equal(edited.revision, draft.revision + 1); assert.equal(edited.content, content);
+    assert.equal(state.calls.length, 1, "编辑不会自动提交 MR");
+    assert.deepEqual(state.manager.get(id).archive_batches![0], firstBatch, "旧 MR 批次快照保持原样");
+    const oldVersionResponse = await fetch(`${base}/history/${draft.id}`, { signal: AbortSignal.timeout(5_000) });
     assert.equal(oldVersionResponse.status, 200);
-    assert.equal((await oldVersionResponse.json() as { document: typeof formal }).document.content, formal.content);
-    const stale = await post(`/knowledge-documents/${formal.id}`, { content: "过期页面不能覆盖新正文", expected_revision: formal.revision });
+    assert.equal((await oldVersionResponse.json() as typeof draft.history)[0].content, draft.content);
+    const stale = await post("/edit", { document: { ...draft, content: "过期页面不能覆盖新正文" }, base_revision: draft.revision });
     assert.equal(stale.status, 400); assert.match((await stale.json() as { error: string }).error, /已有新版本/);
-    assert.equal(readKnowledgeDocument(dir, formal.id).content, content); assert.equal(state.calls.length, 1);
-
-    const previewResponse = await fetch(`${base}/domain-extraction/${id}/archive/preview`, { signal: AbortSignal.timeout(5_000) });
+    assert.equal(state.manager.get(id).documents[0].content, content); assert.equal(state.calls.length, 1);
+    const previewResponse = await fetch(`${base}/archive/preview`, { signal: AbortSignal.timeout(5_000) });
     assert.equal(previewResponse.status, 200); const preview = await previewResponse.json() as Preview;
-    assert.equal(preview.status_label, "已发布（未归档）");
-    assert.equal(preview.expected_revisions[formal.id], edited.revision); assert.equal(preview.targets[0].files[0].content, content);
-    const secondResponse = await post(`/domain-extraction/${id}/archive/create`, { issue_no: "REQ-SECOND", expected_revisions: preview.expected_revisions });
+    assert.equal(preview.status_label, "待创建 MR"); assert.equal(preview.expected_revisions[draft.id], String(edited.revision));
+    const secondResponse = await post("/archive/create", { issue_no: "REQ-SECOND", expected_revisions: preview.expected_revisions });
     assert.equal(secondResponse.status, 200); const second = await secondResponse.json() as Preview;
-    assert.equal(second.status_label, "已归档"); assert.notEqual(second.targets[0].url, archived.targets[0].url);
-    assert.equal(state.calls.length, 2); assert.equal(state.calls[1].previous, undefined);
+    assert.equal(second.status_label, "MR 待合入"); assert.equal(second.targets[0].url, archived.targets[0].url);
+    assert.equal(state.calls.length, 2); assert.equal(state.calls[1].previous?.url, archived.targets[0].url);
     const batches = state.manager.get(id).archive_batches!;
-    assert.deepEqual(batches.find(batch => batch.id === firstBatch.id), firstBatch);
-    const latest = batches.find(batch => batch.id !== firstBatch.id && batch.state === "done")!;
-    assert.notEqual(latest.publications[0].branch, firstBatch.publications[0].branch);
-    assert.equal(latest.issue_no, "REQ-SECOND"); assert.equal(latest.publications[0].documents[0].knowledge_revision, edited.revision);
+    assert.deepEqual(batches[0], firstBatch); assert.equal(batches[1].publications[0].branch, firstBatch.publications[0].branch);
+    assert.equal(batches[1].issue_no, "REQ-SECOND"); assert.equal(batches[1].publications[0].documents[0].content, content);
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
   } finally {
     if (server) await within(new Promise<void>((done, reject) => { server!.close(error => error ? reject(error) : done()); server!.closeAllConnections(); }), "HTTP关停超过5秒预算");
-    await within(component.shutdown(), "组件管理器关停超过5秒预算"); await close(state.manager);
-    rmSync(dir, { recursive: true, force: true });
+    await close(state.manager); rmSync(dir, { recursive: true, force: true });
   }
 });
 

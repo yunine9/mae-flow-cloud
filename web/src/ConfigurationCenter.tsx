@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { confirmDialog } from "./ConfirmDialog";
+import { businessModuleKnowledgeRequest, type BusinessModuleKnowledgeLocation } from "./api";
 
 const PAGE_SIZE = 10;
 const MR_ROLES: Array<[keyof MrParticipants, string]> = [
@@ -98,9 +99,10 @@ function MappingList({ kind }: { kind: string }) {
   const [error, setError] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs }>();
+  const [edit, setEdit] = useState<{ id?: string; name: string; value: string; description?: string; mrParticipants?: MrParticipantInputs; knowledgeLocation?: BusinessModuleKnowledgeLocation }>();
   const [migration, setMigration] = useState<{ source: BusinessModule; targetId: string; preview?: BusinessModuleMigrationPreview; error?: string }>();
   const [notice, setNotice] = useState("");
+  const [knowledgeSuggestion, setKnowledgeSuggestion] = useState<BusinessModuleKnowledgeLocation>();
   async function openMigration(id: string) {
     const source = modules.find(module => module.id === id)!;
     setMigration({ source, targetId: "" });
@@ -145,9 +147,33 @@ function MappingList({ kind }: { kind: string }) {
     } catch (e) { setError(message(e)); } finally { setLoading(false); }
   }
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!modulesMode || !modules.length) return;
+    const params = new URLSearchParams(location.search), selected = params.get("module");
+    if (params.get("section") === "knowledge" && selected) {
+      const module = modules.find(item => item.id === selected);
+      if (module) setEdit({ id: module.id, name: module.name, value: module.repositories.join("\n"), description: module.description, mrParticipants: participantInputs(module.mr_participants), knowledgeLocation: module.knowledge_location });
+    }
+  }, [modulesMode, modules]);
+  useEffect(() => {
+    setKnowledgeSuggestion(undefined);
+    if (!edit?.id || !modulesMode) return;
+    let live = true;
+    void businessModuleKnowledgeRequest(edit.id).then(value => { if (live) setKnowledgeSuggestion(value.suggestion); }).catch(() => {});
+    return () => { live = false; };
+  }, [edit?.id, modulesMode]);
+  useEffect(() => {
+    if (!edit || new URLSearchParams(location.search).get("section") !== "knowledge") return;
+    const timer = setTimeout(() => document.getElementById("module-knowledge-location")?.scrollIntoView({ block: "nearest" }), 100);
+    return () => clearTimeout(timer);
+  }, [edit?.id]);
+  function closeEdit() {
+    setEdit(undefined);
+    const url = new URL(location.href); url.searchParams.delete("module"); url.searchParams.delete("section"); history.replaceState(history.state, "", url);
+  }
   const rows = modulesMode
-    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants) }))
-    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs() }));
+    ? modules.map(m => ({ id: m.id, name: m.name, value: m.repositories.join("\n"), description: m.description, status: m.status, auto: false, mrParticipants: participantInputs(m.mr_participants), knowledgeLocation: m.knowledge_location }))
+    : versions.map(v => ({ id: v.id, name: v.version, value: v.branch, description: "", status: "active" as const, auto: v.auto_claim === true, mrParticipants: participantInputs(), knowledgeLocation: undefined }));
   const filtered = rows.filter(row => `${row.name} ${row.value}`.toLowerCase().includes(query.toLowerCase()));
   const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pages);
@@ -156,8 +182,13 @@ function MappingList({ kind }: { kind: string }) {
     setBusy(true); setError("");
     try {
       if (modulesMode) {
+        const location = edit.knowledgeLocation;
+        const locationEntered = !!location && !!(location.repository.trim() || location.docs_path.trim());
+        if (!locationEntered && modules.find(module => module.id === edit.id)?.knowledge_location) throw new Error("当前模块已有领域知识目录，修改时请完整填写仓库、分支和目录。");
+        if (locationEntered && (!location.repository.trim() || !location.branch.trim() || !location.docs_path.trim())) throw new Error("请完整填写领域知识仓、正式分支和相对目录，或留空暂不配置。");
         const input = { name: edit.name, description: edit.description?.trim() || edit.name,
           repositories: edit.value.split("\n").map(v => v.trim()).filter(Boolean),
+          ...(locationEntered ? { knowledge_location: location } : {}),
           mr_participants: {
             reviewers: participantAccounts(edit.mrParticipants?.reviewers),
             approval_approvers: participantAccounts(edit.mrParticipants?.approval_approvers),
@@ -165,7 +196,7 @@ function MappingList({ kind }: { kind: string }) {
         if (edit.id) await updateBusinessModule(edit.id, input);
         else await createBusinessModule(input);
       } else await productVersionRequest(edit.id ? "PUT" : "POST", { id: edit.id, version: edit.name, branch: edit.value });
-      setEdit(undefined); await refresh();
+      closeEdit(); await refresh();
     } catch (e) { setError(message(e)); } finally { setBusy(false); }
   }
   // 参与自动接单(ADR-0061):勾一组=组内全部 B 版单进入自动接单扫描;
@@ -190,7 +221,7 @@ function MappingList({ kind }: { kind: string }) {
     {notice && <p role="status" className="mb-3 text-sm text-muted-foreground">{notice}</p>}
     {!!warnings.length && <p role="alert" className="mb-3 text-attention">{warnings.join("；")}</p>}
     <p className="mb-4 text-sm text-muted-foreground">{modulesMode
-      ? "维护模块与代码仓的映射。知识请在团队资产上传，并选择这里的模块。所有成员均可维护。"
+      ? "维护模块与代码仓的映射。领域知识目录可在编辑模块时设置，知识库读取和后续 MR 共用；所有成员均可维护。"
       : "一个版本对应一个固定分支。需求与问题单选择版本后自动带出分支；已有任务不受后续修改影响。勾选「自动接单」的版本组,组内新问题单才会被平台自动发起(老版本不勾即静默忽略)。"}</p>
     <table className="w-full table-fixed text-left text-base">
       <thead className="border-y border-line bg-surface-2"><tr>
@@ -251,7 +282,7 @@ function MappingList({ kind }: { kind: string }) {
         </div>}
       </DialogContent>
     </Dialog>
-    <Dialog open={!!edit} onOpenChange={open => { if (!open && !busy) setEdit(undefined); }}>
+    <Dialog open={!!edit} onOpenChange={open => { if (!open && !busy) closeEdit(); }}>
       <DialogContent className={`tw-root max-w-[90vw] max-h-[85vh] overflow-y-auto ${modulesMode ? "w-[960px] sm:max-w-[960px]" : "w-[620px] sm:max-w-[620px]"}`}>
         <DialogHeader><DialogTitle>{edit?.id ? "编辑" : "新建"}{modulesMode ? "模块" : "版本"}</DialogTitle></DialogHeader>
         {edit && <form className="grid gap-4 text-base" onSubmit={e => { e.preventDefault(); void save(); }}>
@@ -262,6 +293,13 @@ function MappingList({ kind }: { kind: string }) {
           {modulesMode ? <label className="grid gap-2">关联代码仓<Textarea className="min-h-32" required value={edit.value}
             placeholder="每行一个代码仓地址" onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>
             : <label className="grid gap-2">分支名称<Input required value={edit.value} onChange={e => setEdit({ ...edit, value: e.target.value })} /></label>}
+          {modulesMode && <fieldset id="module-knowledge-location" className="grid gap-3 rounded-md border border-line p-3">
+            <legend className="px-1 text-sm font-medium">领域知识目录（可选）</legend>
+            <p className="text-xs text-muted-foreground">知识库读取与后续 MR 共用此目录；进行中的任务保留原目录。</p>
+            {!edit.knowledgeLocation && knowledgeSuggestion && <button type="button" className="justify-self-start text-xs text-primary hover:underline" onClick={() => setEdit({ ...edit, knowledgeLocation: knowledgeSuggestion })}>填入团队知识仓建议值</button>}
+            <label className="grid gap-1 text-sm">领域知识仓<Input aria-label="领域知识仓地址" value={edit.knowledgeLocation?.repository ?? ""} placeholder="https://…/knowledge.git" onChange={event => setEdit({ ...edit, knowledgeLocation: { ...(edit.knowledgeLocation ?? { repository: "", branch: "main", docs_path: "" }), repository: event.target.value } })} /></label>
+            <div className="grid grid-cols-[180px_minmax(0,1fr)] gap-3"><label className="grid gap-1 text-sm">正式分支<Input aria-label="领域知识正式分支" value={edit.knowledgeLocation?.branch ?? "main"} onChange={event => setEdit({ ...edit, knowledgeLocation: { repository: "", docs_path: "", ...edit.knowledgeLocation, branch: event.target.value } })} /></label><label className="grid gap-1 text-sm">仓内相对目录<Input aria-label="领域知识相对目录" value={edit.knowledgeLocation?.docs_path ?? ""} placeholder="docs/交易业务" onChange={event => setEdit({ ...edit, knowledgeLocation: { repository: "", branch: "main", ...edit.knowledgeLocation, docs_path: event.target.value } })} /></label></div>
+          </fieldset>}
           {modulesMode && <fieldset className="grid gap-3 rounded-md border border-line p-3">
             <legend className="px-1 font-medium">MR 默认人员（可选）</legend>
             <p className="text-sm text-muted-foreground">本模块全部代码仓共用。本模块的知识归档和清理 MR 同样使用这份名单。创建新 MR 时自动添加，已有 MR 不随配置修改。可多选平台账号，也可手动填写未注册平台的 CodeHub 账号。</p>
@@ -291,7 +329,7 @@ function MappingList({ kind }: { kind: string }) {
             })}</div>
           </fieldset>}
           {error && <p role="alert" className="text-danger">{error}</p>}
-          <div className="flex justify-end gap-2"><Button variant="outline" type="button" disabled={busy} onClick={() => setEdit(undefined)}>取消</Button><Button type="submit" disabled={busy}>{busy ? "保存中…" : "保存"}</Button></div>
+          <div className="flex justify-end gap-2"><Button variant="outline" type="button" disabled={busy} onClick={closeEdit}>取消</Button><Button type="submit" disabled={busy}>{busy ? "保存中…" : "保存"}</Button></div>
         </form>}
       </DialogContent>
     </Dialog>

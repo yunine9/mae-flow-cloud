@@ -12,6 +12,7 @@ export type { KnowledgeTaskCenterData, KnowledgeTaskKind, KnowledgeTaskSummary }
 const kindLabels: Record<KnowledgeTaskKind, string> = {
   domain: "领域萃取", component: "组件萃取", "skill-extraction": "Skill 制作", "skill-submission": "Skill 导入",
 };
+const taskKindLabel = (task: KnowledgeTaskRow) => task.kind === "domain" && task.task_kind === "inspection" ? "知识检视" : kindLabels[task.kind];
 const tabs: Array<{ key: KnowledgeTaskGroup | "current"; label: string }> = [
   { key: "current", label: "当前任务" }, { key: "running", label: "进行中" },
   { key: "attention", label: "待处理" }, { key: "completed", label: "已完成" },
@@ -41,10 +42,10 @@ export function KnowledgeExperienceCapsule({ counts, onClick, active = false }: 
 function TaskRow({ task, now, onOpen }: { task: KnowledgeTaskRow; now: number; onOpen: (kind: KnowledgeTaskKind, id: string, action: KnowledgeProductionAction) => void }) {
   const elapsed = knowledgeTaskElapsed(task, now);
   const time = task.started_at;
-  return <button type="button" className="knowledge-task-row" onClick={() => onOpen(task.kind, task.id, knowledgeTaskAction(task))} title={task.next_action.label} aria-label={`${task.next_action.label}，打开${kindLabels[task.kind]}：${task.title}`}>
+  return <button type="button" className="knowledge-task-row" onClick={() => onOpen(task.kind, task.id, knowledgeTaskAction(task))} title={task.next_action.label} aria-label={`${task.next_action.label}，打开${taskKindLabel(task)}：${task.title}`}>
     <div className="knowledge-task-main">
       <div className="knowledge-task-title" title={task.title}>{task.title}</div>
-      <div className="knowledge-task-meta"><span>{kindLabels[task.kind]}</span>{task.scope && <span title={task.scope}>{task.scope}</span>}</div>
+      <div className="knowledge-task-meta"><span>{taskKindLabel(task)}</span>{task.scope && <span title={task.scope}>{task.scope}</span>}</div>
     </div>
     <div><span className={`knowledge-task-status is-${task.group}`}>{task.status_label}</span></div>
     <div className="knowledge-task-person"><PersonName account={task.operator} fallback="—" /></div>
@@ -107,7 +108,7 @@ export function KnowledgeTaskCenter({ onOpen, onBack, data, onSummaryChange }: {
   useEffect(() => { if (current) summaryCallback.current?.(current.summary); }, [current]);
   const needle = query.trim().toLocaleLowerCase();
   const visible = current?.tasks.filter(task => (filter === "current" ? task.group !== "completed" : task.group === filter)
-    && (!needle || [task.title, task.operator, task.scope, kindLabels[task.kind]].some(value => value?.toLocaleLowerCase().includes(needle)))) ?? [];
+    && (!needle || [task.title, task.operator, task.scope, taskKindLabel(task)].some(value => value?.toLocaleLowerCase().includes(needle)))) ?? [];
   const visibleWarnings = filter === "current" || filter === "attention" ? current?.warnings.filter(warning => !needle || warning.toLocaleLowerCase().includes(needle)) ?? [] : [];
   const counts = { current: current ? current.summary.running + current.summary.attention : 0, running: current?.summary.running ?? 0,
     attention: current?.summary.attention ?? 0, completed: current?.tasks.filter(task => task.group === "completed").length ?? 0 };
@@ -115,7 +116,7 @@ export function KnowledgeTaskCenter({ onOpen, onBack, data, onSummaryChange }: {
   const shownPage = Math.min(pageIndex, pageCount - 1), pageTasks = visible.slice(shownPage * pageSize, (shownPage + 1) * pageSize);
 
   return <section className="knowledge-task-center" aria-label="知识任务中心">
-    <header className="knowledge-task-heading"><div><div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2>知识任务中心</h2></div><p>跟进萃取、Skill 制作和导入，打开任务继续研究或审阅。</p></div>
+    <header className="knowledge-task-heading"><div><div className="knowledge-page-title"><KnowledgeBackButton onClick={onBack} /><h2>知识任务中心</h2></div><p>跟进萃取、知识检视、Skill 制作和导入，打开任务继续研究或修改文稿。</p></div>
       <div className="knowledge-task-totals" aria-label="知识任务统计"><span className="is-running"><CircleDotIcon size={18} /><span>进行中</span><strong>{counts.running}</strong></span><span className="is-attention"><Clock3Icon size={18} /><span>待处理</span><strong>{counts.attention}</strong></span><span className="is-completed"><CheckCircle2Icon size={18} /><span>已完成</span><strong>{counts.completed}</strong></span></div>
     </header>
     <div className="knowledge-task-toolbar"><div className="knowledge-task-tabs" role="group" aria-label="按任务状态筛选">{tabs.map(tab => <button type="button" key={tab.key} onClick={() => { setFilter(tab.key); setPageIndex(0); }} className={filter === tab.key ? "is-active" : ""} aria-pressed={filter === tab.key}>{tab.label}<span>{counts[tab.key]}</span></button>)}</div>

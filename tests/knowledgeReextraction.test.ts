@@ -11,7 +11,8 @@ import { domainSkillFixture, pinDomainSkillFixture } from "./helpers/extractionS
 import { createBusinessModule } from "../src/businessModuleLibrary.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
 import { createTechnologyStack } from "../src/technologyStacks.ts";
-import { readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { readKnowledgeDocument, type KnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { writeGitKnowledgeSnapshot } from "../src/knowledgeRepositorySnapshots.ts";
 import { businessMaterial } from "./domainKnowledgeEvidenceFixture.ts";
 import { componentGuideSection } from "./fixtures/componentGuide.ts";
 import { domainKnowledgeRoute } from "../src/domainKnowledgeRoutes.ts";
@@ -33,6 +34,10 @@ test("领域重新萃取复用单号、上传资料、源码和归档配置，�
   const dir = mkdtempSync(join(tmpdir(), "mfc-domain-reextract-"));
   const material = await businessMaterial(dir), skills = new KnowledgeExtractionSkills(dir);
   let methodFiles = skills.current("domain").files;
+  const location = config.knowledge_target;
+  createBusinessModule(dir, { id: "formal-orders", name: "既有订单正式知识", owner: "alice", description: "正式库独立于重新萃取任务", repositories: [config.repositories[0].repository], knowledge_location: location }, "alice");
+  const formal: KnowledgeDocument = { id: `kg-${createHash("sha256").update("formal-orders").digest("hex")}`, title: "已合入订单规则", content: "# 远端正式订单规则", scope: "module", module_ids: ["formal-orders"], repositories: [], technologies: [], product_versions: [], when_to_use: "", active: true, revision: "formal-content-sha", source: { ...location, path: `${location.docs_path}/states.md`, revision: "b".repeat(40) }, history: [] };
+  writeGitKnowledgeSnapshot(dir, { module_id: "formal-orders", location, synced_at: new Date().toISOString(), documents: [formal], resources: {}, repositories: [{ repository: location.repository, branch: location.branch, revision: "b".repeat(40) }] });
   let latestDigest = "", replacementRun: DomainExecution | undefined;
   const service = new DomainKnowledgeExtraction(dir, async input => {
     pinDomainSkillFixture(input.root, methodFiles);
@@ -40,24 +45,28 @@ test("领域重新萃取复用单号、上传资料、源码和归档配置，�
     if (input.job.reextract_of) { latestDigest = digest; replacementRun = input; await waitForStop(input.signal); }
     else input.save(document, { content: null, revision: "a".repeat(40) });
     return "完成";
-  });
+  }, { publish: async (job, target) => ({ target_id: target.id, branch: "codex/knowledge-reextract", state: "opened", url: "https://example.test/mr/reextract", documents: job.documents.filter(document => document.target_id === target.id).map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision })) }) });
   try {
     const original = service.create({ ...config, material_ids: [material.id] }, "alice");
     await until(() => service.get(original.id).status === "done");
-    const published = await service.publish(original.id, "alice"), formal = readKnowledgeDocument(dir, published.documents[0].knowledge_document_id!);
+    await assert.rejects(service.publish(original.id, "alice"), /直接创建 MR/);
+    await service.createArchive(original.id, { issue_no: config.issue_no, expected_revisions: service.previewArchive(original.id).expected_revisions }, "alice");
+    const completed = service.get(original.id);
+    assert.equal(completed.publications[0].url, "https://example.test/mr/reextract");
     const current = skills.current("domain");
     // 模拟平台发布新的方法，只为新测试任务固定新包，已有任务不变。
     methodFiles = { ...current.files, "SKILL.md": current.files["SKILL.md"] + "\n重新萃取验收：检查最新方法。\n" };
     const latest = domainSkillFixture(methodFiles);
     const next = service.reextract(original.id, "bob");
     assert.notEqual(next.id, original.id); assert.equal(next.reextract_of, original.id); assert.equal(next.operator, "bob");
-    for (const key of ["title", "scope", "instructions", "issue_no", "issue_description", "module_id", "material_ids", "repositories", "source_repositories", "knowledge_target"] as const) assert.deepEqual(next[key], published[key], key);
+    for (const key of ["title", "scope", "instructions", "issue_no", "issue_description", "module_id", "material_ids", "repositories", "source_repositories", "knowledge_target"] as const) assert.deepEqual(next[key], completed[key], key);
     assert.deepEqual(next.documents, []); assert.deepEqual(next.revisions, {}); assert.deepEqual(next.evidence, []); assert.deepEqual(next.publications, []);
     assert.equal(next.turns.length, 1); assert.notEqual(next.turns[0].id, original.turns[0].id); assert.equal(next.skill, undefined);
     assert.throws(() => service.get(original.id), /已删除/); assert.equal(service.reextract(original.id, "bob").id, next.id);
     await until(() => !!replacementRun); assert.equal(latestDigest, latest.digest); assert.notEqual(latestDigest, current.digest);
     assert.equal(replacementRun!.turn.research, undefined); assert.equal(replacementRun!.job.documents.length, 0);
     assert.deepEqual(readKnowledgeDocument(dir, formal.id), formal);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "domain-extraction", original.id, "job.json"), "utf8")).publications, completed.publications, "重新萃取不会删除原任务的 MR 证据");
     await service.shutdown();
     const restarted = new DomainKnowledgeExtraction(dir, async () => "不应执行");
     try { assert.equal(restarted.reextract(original.id, "bob").id, next.id); assert.equal(restarted.list().length, 1); }

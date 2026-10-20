@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { KnowledgeTaskCapacity } from "../src/knowledgeTaskCapacity.ts";
 import { DomainKnowledgeExtraction, type DomainExecution } from "../src/domainKnowledgeExtraction.ts";
 
 const config = { title: "交易", scope: "交易规则", issue_no: "REQ-delete", repositories: [{ repository: "https://example.test/business.git", branch: "master", docs_path: "docs/knowledge" }], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "master", docs_path: "domains" } };
@@ -18,7 +19,7 @@ test("删除运行与排队任务：中止执行、拒绝迟到写入、重启�
     input.update({ stage: "迟到的状态" }); input.evidence({ tool: "late" });
     assert.throws(() => input.save(document), /已停止/);
     return "迟到的回复";
-  });
+  }, { capacity: new KnowledgeTaskCapacity(2) });
   try {
     const first = service.create({ ...config, title: "运行任务一" }, "user"), second = service.create({ ...config, title: "运行任务二" }, "user"), queued = service.create({ ...config, title: "排队任务" }, "user");
     await wait(() => executions.length === 2);
@@ -55,7 +56,7 @@ test("归档中拒绝删除，完成后删除保留 MR 和草稿来源", async (
   });
   try {
     const job = service.create(config, "user"); await wait(() => service.get(job.id).status === "done");
-    await service.publish(job.id, "user");
+    await assert.rejects(service.publish(job.id, "user"), /直接创建 MR/);
     const publication = service.createArchive(job.id, { issue_no: "REQ-delete", expected_revisions: service.previewArchive(job.id).expected_revisions }, "user"); await wait(() => started);
     assert.throws(() => service.remove(job.id, "user"), /正在发布或归档/); assert.equal(service.list().length, 1);
     finish(); await publication;

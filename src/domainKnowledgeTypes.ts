@@ -16,7 +16,7 @@ export interface DomainArchiveTargetsPreview {
 export interface DomainDocument extends DomainDocumentContent {
   research_turn_id?: string;
   human_edited?: boolean;
-  /** 文稿删除也先审阅，确认发布后移出正式库，再通过人工归档删除 Git 文件。 */
+  /** 文稿删除先进入任务候选，通过 MR 删除 Git 文件，合入后同步正式库。 */
   deleted?: boolean;
   /** 用户在归档设置中指定的完整相对路径；模型输出不能设置此字段。 */
   archive_path?: string;
@@ -57,6 +57,9 @@ export interface DomainResearch {
 }
 export interface DomainPublication {
   target_id: string; state: "pending" | "opened" | "failed";
+  /** 只由远端 MR 查询写入，不用本地推送结果推测合入。 */
+  mr_state?: "opened" | "closed" | "merged";
+  checked_at?: string;
   branch: string; mr_attempted?: boolean; url?: string; mr_id?: string | number; error?: string; revision?: string;
   /** 人员设置独立于 MR 创建结果；失败时仍保留已创建的 MR。 */
   mr_participants?: MrParticipantsResult;
@@ -91,6 +94,10 @@ export interface KnowledgeSourceCleanupState {
   publications: KnowledgeCleanupPublication[]; started?: boolean;
 }
 export interface DomainKnowledgeJob {
+  task_kind?: "extraction" | "inspection";
+  inspection_source?: { document_id: string; started_at: string; finished_at?: string };
+  /** 与检视正文一同固定的资源引用；后续同步不会替换任务中的图片。 */
+  git_resources?: import("./knowledgeRepositoryTypes").FrozenGitKnowledgeResources;
   /** 阅读响应已拆分过程记录和历史；不写入任务状态。 */
   deferred_details?: boolean;
   /** 读取时从业务模块目录解析的名称，不作为路径或归属标识持久化。 */

@@ -19,6 +19,14 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
     } else {
       const manager = service.getDomainKnowledgeExtraction();
       if (request.method === "GET" && parts[1]) {
+        if (parts[2] === "resources" && parts[3] && !parts[4]) {
+          const path = new URL(request.url!, "http://localhost").searchParams.get("path");
+          const resource = path ? manager.inspectionResource(parts[1], decodeURIComponent(parts[3]), path) : undefined;
+          if (!resource) return json(response, 404, { error: "本次检视的文档资源不存在" });
+          response.writeHead(200, { "Content-Type": resource.content_type, "Content-Length": resource.content.length,
+            "Content-Security-Policy": "default-src 'none'; sandbox", "X-Content-Type-Options": "nosniff" });
+          return response.end(resource.content);
+        }
         if (parts[2] === "reader" && !parts[3]) return json(response, 200, manager.reader(parts[1]));
         if (parts[2] === "evidence" && !parts[4]) return json(response, 200, parts[3] === undefined
           ? manager.evidencePage(parts[1], new URL(request.url!, "http://localhost").searchParams.get("before") ?? undefined)
@@ -32,6 +40,8 @@ export async function domainKnowledgeRoute(request: IncomingMessage, response: S
         const body = await readBody(request, 3 * 1024 * 1024);
         if (!parts[1]) return json(response, 202, manager.create(body, operator));
         const id = parts[1];
+        if (parts[2] === "inspection" && parts[3] === "finish") return json(response, 200, manager.finishInspection(id));
+        if (parts[2] === "archive" && parts[3] === "refresh") return json(response, 200, await manager.refreshPublications(id, operator));
         if (parts[2] === "source-cleanup") return json(response, 200, await manager.sourceCleanupAction(id, parts[3], body, operator));
         if (parts[2] === "issue") return json(response, 200, manager.setIssueNumber(id, body.issue_no, body.issue_description));
         if (parts[2] === "archive-targets") return json(response, 200, parts[3] === "preview" ? manager.previewArchiveTargets(id, body) : manager.configureArchive(id, body));

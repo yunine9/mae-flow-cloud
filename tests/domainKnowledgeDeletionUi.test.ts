@@ -32,42 +32,42 @@ function tree(job: DomainKnowledgeJob) {
     onNavigate() {}, onSelection() {}, onSelections() {} }));
 }
 
-test("待删除文稿仍计入现有确认发布，目录明确标记并保留原正文", () => {
+test("待删除文稿直接进入 MR，目录明确标记并保留原正文", () => {
   const job = fixture();
   assert.equal(job.production!.documents[0].changed, true);
   assert.equal(job.production!.documents[0].status_label, "待删除");
-  assert.ok(job.production!.research_actions.some(action => action.id === "publish"));
+  assert.ok(job.production!.archive.actions.some(action => action.id === "archive"));
+  assert.ok(!job.production!.research_actions.some(action => action.id === "publish"));
   assert.deepEqual(domainPublicationInput(job), { document_ids: ["old-rules"], expected_revisions: { "old-rules": 2 } });
   assert.match(tree(job), /待删除/);
   assert.match(tree(job), /aria-label="确认删除 domains\/old-rules\.md"/);
   const notice = renderToStaticMarkup(React.createElement(DomainKnowledgeDeletionNotice, { deleted: true, pending: true }));
   assert.match(notice, /知识文稿待删除/);
-  assert.match(notice, /确认并发布后从正式知识库移除/);
-  assert.match(notice, /保留原正文供审查/);
+  assert.match(notice, /MR 合入并同步后从正式知识库移除/);
+  assert.match(notice, /保留原正文供检视/);
   assert.doesNotMatch(notice, /<button|<input|删除任务/);
   assert.equal(job.documents[0].content, "# 旧规则\n\n原正文继续保留用于删除审查。");
 });
 
-test("删除确认后按原版本投影结束待发布状态，保留手工归档入口", () => {
+test("旧平台发布标记不代表远端删除已合入，仍保留任务修改和 MR 入口", () => {
   const job = fixture(true);
-  assert.equal(job.production!.documents[0].changed, false);
-  assert.equal(job.production!.documents[0].status_label, "已删除");
-  assert.deepEqual(domainPublicationInput(job).document_ids, []);
-  assert.match(tree(job), /已删除/);
-  assert.equal(job.production!.archive.visible, true);
+  assert.equal(job.production!.documents[0].changed, true);
+  assert.equal(job.production!.documents[0].status_label, "待删除");
+  assert.deepEqual(domainPublicationInput(job).document_ids, ["old-rules"]);
+  assert.match(tree(job), /待删除/);
+  assert.equal(job.production!.review.readonly, false);
   assert.ok(job.production!.archive.actions.some(action => action.id === "archive"));
-  assert.equal(job.production!.archive.title, "文档删除已确认，可手工归档");
   assert.doesNotMatch(job.production!.archive.message, /平台立即可读|知识已发布/);
   const notice = renderToStaticMarkup(React.createElement(DomainKnowledgeDeletionNotice, { deleted: true, pending: false }));
   assert.match(notice, /知识文稿已删除/);
-  assert.match(notice, /历史恢复/);
+  assert.match(notice, /保留原正文供追溯/);
   assert.doesNotMatch(notice, /<button|<input|删除任务/);
 });
 
-test("混合确认的正文与删除统一显示已确认变更，普通文稿不加删除提示", () => {
+test("正文与删除都保留在任务中，MR 合入前正式知识不改变", () => {
   const job = fixture(true, true);
-  assert.match(job.production!.archive.title, /2 份文稿变更已确认/);
-  assert.match(job.production!.archive.message, /文稿变更已确认/);
+  assert.match(job.production!.archive.title, /2 份任务文稿/);
+  assert.match(job.production!.archive.message, /创建 MR 后仍可在原任务修改/);
   assert.doesNotMatch(job.production!.archive.title, /平台立即可读/);
   assert.equal(renderToStaticMarkup(React.createElement(DomainKnowledgeDeletionNotice, { pending: false })), "");
 });

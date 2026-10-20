@@ -6,10 +6,10 @@ import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModul
 import { type SearchableKnowledge, knowledgeProductVersions } from "./knowledgeSearch.ts";
 import { createHash } from "node:crypto";
 import { collectSearchableKnowledge } from "./knowledgeSearch.ts";
-import { listKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
+import { listFormalKnowledgeDocuments, type KnowledgeDocument } from "./knowledgeDocuments.ts";
 export function knowledgeDocumentCatalog(dir: string) {
   const catalog = collectSearchableKnowledge(dir, { repo: "", repositories: [], moduleIds: [] }, true);
-  const manuals = listKnowledgeDocuments(dir);
+  const manuals = listFormalKnowledgeDocuments(dir);
   const manualIds = new Set(manuals.map(d => d.id));
   // 技能仅在管理界面展示，消费仍走原生发现/加载；不进入语义索引。
   const skills: SearchableKnowledge[] = [];

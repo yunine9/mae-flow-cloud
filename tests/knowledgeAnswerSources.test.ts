@@ -8,7 +8,8 @@ import { join } from "node:path";
 import { KnowledgeSearch } from "../src/knowledgeSearch.ts";
 import { MemorySidecar } from "../src/memorySidecar.ts";
 import { saveKnowledgeDocument } from "../src/knowledgeDocuments.ts";
-import { createBusinessModule, publishBusinessKnowledgeAsset } from "../src/businessModuleLibrary.ts";
+import { createBusinessModule } from "../src/businessModuleLibrary.ts";
+import { gitKnowledgeDocument } from "./fixtures/gitKnowledge.ts";
 import { retrieveKnowledgeAnswerEvidence, knowledgeAnswerSourceCatalog } from "../src/knowledgeAnswerSources.ts";
 import type { KnowledgeAnswerExecution, KnowledgeAnswerContext, KnowledgeAnswerRecord } from "../src/knowledgeAnswerTypes.ts";
 import { componentSection, consumptionFixture } from "./componentConsumptionFixture.ts";
@@ -107,13 +108,14 @@ test("部分索引就绪只返回当前已就绪文档，查询期间改变修�
 
 test("选择模块、版本和文档均限制来源；指定小文档无向量服务也可直接读取", async t => {
   const dir = fixture(t), search = new KnowledgeSearch(dir);
+  const documents = new Map<string, string>();
   for (const id of ["alpha", "beta"]) {
     createBusinessModule(dir, { id, name: id, owner: "owner", description: "规则", repositories: [`https://example.test/${id}.git`] }, "owner");
-    publishBusinessKnowledgeAsset(dir, id, { id: "rule", title: `${id}规则`, summary: "条件", when_to_use: "查询规则", content: `# ${id}\n${id}条件` }, "owner");
+    documents.set(id, gitKnowledgeDocument(dir, id, { title: `${id}规则`, when_to_use: "查询规则", content: `# ${id}\n${id}条件` }).id);
   }
-  const allowed = execution({ module_ids: ["alpha"], document_id: "module:alpha:rule" }); await retrieve(allowed, dir, search);
+  const allowed = execution({ module_ids: ["alpha"], document_id: documents.get("alpha") }); await retrieve(allowed, dir, search);
   assert.match(allowed.record.evidence[0].content, /alpha条件/);
-  const denied = execution({ module_ids: ["alpha"], document_id: "module:beta:rule" }); await retrieve(denied, dir, search);
+  const denied = execution({ module_ids: ["alpha"], document_id: documents.get("beta") }); await retrieve(denied, dir, search);
   assert.equal(denied.record.evidence.length, 0); assert.match(denied.record.warnings.join(), /所选模块与版本/);
   const doc = saveKnowledgeDocument(dir, { title: "V1规则", content: "仅适用V1", product_versions: ["v1"] }, "owner");
   const wrongVersion = execution({ product_version: "v2", document_id: doc.id }); await retrieve(wrongVersion, dir, search);

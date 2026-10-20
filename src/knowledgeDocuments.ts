@@ -10,6 +10,7 @@ import { requireTechnologyStackChanges } from "./technologyStacks.ts";
 import { durableWriteFileSync } from "./durableWrite.ts";
 import { FileProjectionCache } from "./fileProjectionCache.ts";
 import { componentArchiveParts } from "./componentKnowledgeArchiveFormat.ts";
+import { listGitKnowledgeDocuments, readGitKnowledgeDocument, withoutBoundModuleDrafts } from "./knowledgeRepositorySnapshots.ts";
 export interface KnowledgeDocument {
   id: string; title: string; content: string; scope: "platform" | "module" | "repository";
   module_ids: string[]; repositories: string[]; technologies: string[]; product_versions: string[];
@@ -60,6 +61,7 @@ function readStoredKnowledgeDocument(dir: string, id: string): KnowledgeDocument
   }
 }
 export function readKnowledgeDocument(dir: string, id: string): KnowledgeDocument {
+  if (id.startsWith("kg-")) return readGitKnowledgeDocument(dir, id);
   const doc = readStoredKnowledgeDocument(dir, id);
   return { ...doc, module_ids: resolveBusinessModuleIds(dir, doc.module_ids) };
 }
@@ -73,6 +75,7 @@ function knowledgeDocumentFacts(document: KnowledgeDocument): KnowledgeDocumentF
   return { id: document.id, revision: document.revision, ...(component_archive_valid === false ? { component_archive_valid } : {}) };
 }
 export function readKnowledgeDocumentFacts(dir: string, id: string): KnowledgeDocumentFacts {
+  if (id.startsWith("kg-")) return knowledgeDocumentFacts(readGitKnowledgeDocument(dir, id));
   if (knowledgeDeleted(dir, id)) throw new Error("知识已删除");
   return { ...documentFacts.read(file(dir, id), () => knowledgeDocumentFacts(readKnowledgeDocument(dir, id))) };
 }
@@ -104,6 +107,10 @@ export function listKnowledgeDocuments(dir: string, warnings?: string[]): Knowle
     }
   }
   return documents.sort((a, b) => b.history.at(-1)!.at.localeCompare(a.history.at(-1)!.at));
+}
+/** 正式阅读和问答只消费绑定来源的 Git 快照；旧任务记录仍可单独追溯。 */
+export function listFormalKnowledgeDocuments(dir: string, warnings?: string[]): KnowledgeDocument[] {
+  return [...withoutBoundModuleDrafts(dir, listKnowledgeDocuments(dir, warnings)), ...listGitKnowledgeDocuments(dir)];
 }
 export interface KnowledgeDocumentVersion { document: KnowledgeDocument; published_at: string; operator: string }
 function versionRoot(dir: string, id: string) {

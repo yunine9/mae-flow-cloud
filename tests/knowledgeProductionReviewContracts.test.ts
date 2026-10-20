@@ -7,12 +7,12 @@ import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { ComponentResearch } from "../src/componentResearch.ts";
 import { saveComponentRepository } from "../src/componentRepositories.ts";
-import { readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
 import { seedTechnologyStacks } from "./fixtures/technologyStacks.ts";
 
 type Item = { id: string; content: string; revision: number; selected: boolean };
 type Suggestion = { turn_id: string; document_id: string; status: "pending" | "accepted" | "discarded"; base_revision: number; content: string };
-type Snapshot = { status: string; documents: Item[]; suggestions: Suggestion[]; formal_id?: string };
+type Snapshot = { status: string; documents: Item[]; suggestions: Suggestion[]; submitted_id?: string };
 interface ReviewAdapter {
   read(): Snapshot;
   revise(message: string, documentId?: string): Promise<string>;
@@ -20,8 +20,8 @@ interface ReviewAdapter {
   edit(content: string, expectedRevision: number, documentId?: string): void;
   restore(revision: number, expectedRevision: number, documentId?: string): void;
   select(documentId: string, selected: boolean): void;
-  publish(input?: { confirmations?: Record<string, string>; revisions?: Record<string, number> }): Promise<void>;
-  formal(): string | undefined;
+  submit(input?: { confirmations?: Record<string, string>; revisions?: Record<string, number> }): Promise<void>;
+  delivered(): string | undefined;
   seen: Array<{ message: string; content: string }>;
   close(): Promise<void>;
 }
@@ -57,7 +57,8 @@ async function domainAdapter(): Promise<ReviewAdapter> {
       if (input.turn.message === "核对失败") throw new Error("来源核对未完成");
     }
     return "研究完成";
-  });
+  }, { publish: async (job, target, previous) => ({ target_id: target.id, branch: previous?.branch || "codex/review-contract", state: "opened", url: previous?.url || "https://example.test/mr/review-contract",
+    documents: job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision })) }) });
   let jobId = "";
   const adapter: ReviewAdapter = {
     seen,
@@ -65,7 +66,7 @@ async function domainAdapter(): Promise<ReviewAdapter> {
       const job = manager.get(jobId);
       return { status: job.status, documents: job.documents.map(({ id, content, revision, selected }) => ({ id, content, revision, selected })),
         suggestions: job.turns.flatMap(turn => turn.proposals.map(proposal => ({ turn_id: turn.id, document_id: proposal.document.id, status: proposal.status,
-          base_revision: proposal.base_revision, content: proposal.document.content }))), formal_id: job.documents.find(document => !!document.knowledge_document_id)?.knowledge_document_id };
+          base_revision: proposal.base_revision, content: proposal.document.content }))), submitted_id: job.publications.find(publication => publication.state === "opened")?.url };
     },
     async revise(message, documentId = "rules") {
       const job = manager.run(jobId, { mode: "revise", document_ids: [documentId], message }, "reviewer"), turnId = job.turns.at(-1)!.id;
@@ -79,13 +80,14 @@ async function domainAdapter(): Promise<ReviewAdapter> {
     },
     restore(revision, expectedRevision, documentId = "rules") { manager.restore(jobId, documentId, revision, expectedRevision, "editor"); },
     select(documentId, selected) { manager.select(jobId, [documentId], selected); },
-    async publish(input = {}) {
+    async submit(input = {}) {
       for (const [documentId, turnId] of Object.entries(input.confirmations ?? {})) manager.decide(jobId, turnId, documentId, "accept", "publisher");
-      const selected = manager.get(jobId).documents.filter(document => document.selected);
-      await manager.publish(jobId, "publisher", { document_ids: selected.map(document => document.id),
-        expected_revisions: Object.fromEntries(selected.map(document => [document.id, input.revisions?.[document.id] ?? document.revision])) });
+      const preview = manager.previewArchive(jobId);
+      await manager.createArchive(jobId, { issue_no: "REQ-REVIEW-CONTRACT", expected_revisions: { ...preview.expected_revisions,
+        ...Object.fromEntries(Object.entries(input.revisions ?? {}).map(([id, revision]) => [id, String(revision)])) } }, "publisher");
+      assert.deepEqual(listKnowledgeDocuments(dir), [], "领域 MR 提交不提前更新正式知识库");
     },
-    formal() { const id = adapter.read().formal_id; return id ? readKnowledgeDocument(dir, id).content : undefined; },
+    delivered() { const publications = manager.get(jobId).publications.filter(publication => publication.state === "opened"); return publications.length ? publications.flatMap(publication => publication.documents.map(document => document.content)).join("\n") : undefined; },
     async close() { await bounded(manager.shutdown(), "领域管理器关停"); rmSync(dir, { recursive: true, force: true }); },
   };
   try {
@@ -121,7 +123,7 @@ async function componentAdapter(): Promise<ReviewAdapter> {
       const record = manager.get(jobId);
       return { status: record.status, documents: record.document!.sections.map(({ id, content, revision, selected }) => ({ id, content: componentGuideText(content), revision, selected })),
         suggestions: (record.review_turns ?? []).flatMap(turn => turn.proposal ? [{ turn_id: turn.id, document_id: turn.section_id, status: turn.proposal.status,
-          base_revision: turn.proposal.base_revision, content: componentGuideText(turn.proposal.section.content) }] : []), formal_id: record.document_id };
+          base_revision: turn.proposal.base_revision, content: componentGuideText(turn.proposal.section.content) }] : []), submitted_id: record.document_id };
     },
     async revise(message, documentId = "rules") {
       const record = manager.review(jobId, { section_id: documentId, mode: "rework", message }, "reviewer"), turnId = record.review_turns!.at(-1)!.id;
@@ -135,14 +137,14 @@ async function componentAdapter(): Promise<ReviewAdapter> {
     },
     restore(revision, expectedRevision, documentId = "rules") { manager.restoreSection(jobId, documentId, revision, expectedRevision, "editor"); },
     select(documentId, selected) { manager.selectSections(jobId, [documentId], selected); },
-    async publish(input = {}) {
+    async submit(input = {}) {
       const record = manager.get(jobId);
       manager.publish(jobId, { title: record.topic, document_id: record.document_id ?? null, update_document_id: record.update_document_id ?? null,
         update_document_revision: record.update_document_revision,
         sections: record.document!.sections.filter(section => section.selected).map(section => ({ id: section.id,
           revision: input.revisions?.[section.id] ?? section.revision, proposal_id: input.confirmations?.[section.id] ?? null })) }, "publisher");
     },
-    formal() { const id = adapter.read().formal_id; return id ? readKnowledgeDocument(dir, id).content : undefined; },
+    delivered() { const id = adapter.read().submitted_id; return id ? readKnowledgeDocument(dir, id).content : undefined; },
     async close() { await bounded(manager.shutdown(), "组件管理器关停"); rmSync(dir, { recursive: true, force: true }); },
   };
   try {
@@ -157,15 +159,15 @@ for (const factory of factories) {
     const adapter = await factory.create(); try { await run(adapter); } finally { await adapter.close(); }
   });
 
-  contract("只接受最新建议，旧建议确认失败不改正文；明确确认最新建议后canonical发布", async adapter => {
+  contract("只接受最新建议，旧建议确认失败不改正文；明确确认最新建议后提交对应版本", async adapter => {
     const old = await adapter.revise("第一份建议"), latest = await adapter.revise("最新建议");
     const before = adapter.read();
     assert.throws(() => adapter.decide(old, "accept"), /更新的修改建议/);
     assert.deepEqual(adapter.read(), before, "拒绝旧建议必须保留正文与所有待确认建议");
-    await assert.rejects(adapter.publish({ confirmations: { rules: old } }), /更新的修改建议|建议已有变化/);
-    assert.deepEqual(adapter.read(), before); assert.equal(adapter.formal(), undefined);
-    await adapter.publish({ confirmations: { rules: latest } });
-    assert.ok(adapter.read().formal_id); assert.match(adapter.formal()!, /原始规则\n第一份建议\n最新建议/);
+    await assert.rejects(adapter.submit({ confirmations: { rules: old } }), /更新的修改建议|建议已有变化/);
+    assert.deepEqual(adapter.read(), before); assert.equal(adapter.delivered(), undefined);
+    await adapter.submit({ confirmations: { rules: latest } });
+    assert.ok(adapter.read().submitted_id); assert.match(adapter.delivered()!, /原始规则\n第一份建议\n最新建议/);
     assert.deepEqual(adapter.read().suggestions.map(suggestion => suggestion.status), ["discarded", "accepted"]);
   });
 
@@ -173,17 +175,19 @@ for (const factory of factories) {
     const turn = await adapter.revise("旧基线建议");
     adapter.edit("人工最新正文", 1); const before = adapter.read();
     assert.throws(() => adapter.decide(turn, "accept"), /新版本/);
-    await assert.rejects(adapter.publish({ confirmations: { rules: turn } }), /新版本|基线冲突/);
-    assert.deepEqual(adapter.read(), before); assert.equal(adapter.formal(), undefined);
+    await assert.rejects(adapter.submit({ confirmations: { rules: turn } }), /新版本|基线冲突/);
+    assert.deepEqual(adapter.read(), before); assert.equal(adapter.delivered(), undefined);
     assert.equal(before.documents[0].content, "人工最新正文"); assert.equal(before.suggestions[0].status, "pending");
   });
 
-  contract("没有明确确认修改时禁止发布，未选文稿的建议不阻塞其他文稿", async adapter => {
+  contract("未选文稿的建议不阻塞其他文稿，组件选中修改仍需明确确认", async adapter => {
     await adapter.revise("尚未确认的修改"); const before = adapter.read();
-    await assert.rejects(adapter.publish(), /尚未确认的修改|建议已有变化/);
-    assert.deepEqual(adapter.read(), before); assert.equal(adapter.formal(), undefined);
-    adapter.select("rules", false); await adapter.publish();
-    assert.ok(adapter.read().formal_id); assert.match(adapter.formal()!, /未选正文/); assert.doesNotMatch(adapter.formal()!, /尚未确认的修改/);
+    if (factory.name === "组件") {
+      await assert.rejects(adapter.submit(), /尚未确认的修改|建议已有变化/);
+      assert.deepEqual(adapter.read(), before); assert.equal(adapter.delivered(), undefined);
+    }
+    adapter.select("rules", false); await adapter.submit();
+    assert.ok(adapter.read().submitted_id); assert.match(adapter.delivered()!, /未选正文/); assert.doesNotMatch(adapter.delivered()!, /尚未确认的修改/);
     assert.equal(adapter.read().suggestions[0].status, "pending", "其他文稿发布不能替人解决未选文稿的建议");
   });
 
@@ -193,7 +197,7 @@ for (const factory of factories) {
     assert.deepEqual(adapter.seen, [{ message: "第一轮边界", content: original }, { message: "第二轮示例", content: "原始规则\n第一轮边界" }]);
     assert.deepEqual(adapter.read().documents, before);
     assert.equal(adapter.read().suggestions.at(-1)!.base_revision, 1);
-    await adapter.publish({ confirmations: { rules: latest } });
+    await adapter.submit({ confirmations: { rules: latest } });
     assert.equal(adapter.read().documents[0].content, "原始规则\n第一轮边界\n第二轮示例"); assert.equal(adapter.read().documents[0].revision, 2);
   });
 
@@ -202,28 +206,28 @@ for (const factory of factories) {
     const latest = await adapter.revise("核对最新正文");
     assert.deepEqual(adapter.seen.at(-1), { message: "核对最新正文", content: "人工最新正文" });
     assert.equal(adapter.read().suggestions.at(-1)!.base_revision, 2); assert.equal(adapter.read().documents[0].content, "人工最新正文");
-    await adapter.publish({ confirmations: { rules: latest } });
+    await adapter.submit({ confirmations: { rules: latest } });
     assert.equal(adapter.read().documents[0].content, "人工最新正文\n核对最新正文"); assert.equal(adapter.read().documents[0].revision, 3);
   });
 
-  contract("编辑恢复和发布均受乐观版本锁保护，冲突不改正文或创建正式知识", async adapter => {
+  contract("编辑恢复和提交均受乐观版本锁保护，冲突不改正文或生成交付记录", async adapter => {
     adapter.edit("人工保存", 1); const edited = adapter.read();
     assert.throws(() => adapter.edit("旧页面覆盖", 1), /新版本/); assert.deepEqual(adapter.read(), edited);
     assert.throws(() => adapter.restore(1, 1), /新版本/); assert.deepEqual(adapter.read(), edited);
     adapter.restore(1, 2); assert.equal(adapter.read().documents[0].content, original); assert.equal(adapter.read().documents[0].revision, 3);
     const restored = adapter.read();
-    await assert.rejects(adapter.publish({ revisions: { rules: 2 } }), /版本/);
-    assert.deepEqual(adapter.read(), restored); assert.equal(adapter.formal(), undefined);
-    await adapter.publish(); assert.ok(adapter.read().formal_id);
+    await assert.rejects(adapter.submit({ revisions: { rules: 2 } }), /版本/);
+    assert.deepEqual(adapter.read(), restored); assert.equal(adapter.delivered(), undefined);
+    await adapter.submit(); assert.ok(adapter.read().submitted_id);
   });
 
   contract("失败回合的部分建议不能采纳，后续完整修订不会接续失败的半稿", async adapter => {
     const failed = await adapter.revise("核对失败"); assert.equal(adapter.read().status, "failed");
     assert.throws(() => adapter.decide(failed, "accept"), /尚未完成|尚未完成独立评审/);
-    assert.equal(adapter.read().documents[0].content, original); assert.equal(adapter.formal(), undefined);
+    assert.equal(adapter.read().documents[0].content, original); assert.equal(adapter.delivered(), undefined);
     const latest = await adapter.revise("完整核对");
     assert.deepEqual(adapter.seen.at(-1), { message: "完整核对", content: original });
-    await adapter.publish({ confirmations: { rules: latest } });
-    assert.match(adapter.formal()!, /原始规则\n完整核对/); assert.doesNotMatch(adapter.formal()!, /核对失败/);
+    await adapter.submit({ confirmations: { rules: latest } });
+    assert.match(adapter.delivered()!, /原始规则\n完整核对/); assert.doesNotMatch(adapter.delivered()!, /核对失败/);
   });
 }

@@ -114,7 +114,6 @@ test("生产线验收14：MR 部分失败保存已经发生的分支事实，重
   });
   try {
     const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
-    await service.publish(job.id, "expert");
     const preview = service.previewArchive(job.id);
     await service.createArchive(job.id, { issue_no: config.issue_no, expected_revisions: preview.expected_revisions }, "expert");
     assert.equal(service.get(job.id).publications[0].state, "failed");
@@ -136,12 +135,13 @@ test("领域 Skill 在真实 Pi 会话中读取固定源码和引用，保存两
   writeFileSync(join(source, "state.ts"), "export const initial = 'latest-ready';\n"); git("add", "."); git("commit", "-m", "latest business change");
   const revision = git("rev-parse", "HEAD");
   const material = await businessMaterial(dir);
+  const draft = { ...document, path: "docs/订单/states.md" };
   const model = new ScriptedModelServer([
     { tool: { name: "knowledge_material", input: { id: material.id } } },
     { tool: { name: "extraction_skill", input: { path: "references/domain.md" } } },
     { tool: { name: "component_source", input: { component_id: "repo-1", action: "read", path: "state.ts" } } },
-    { tool: { name: "knowledge_draft", input: { action: "save", document } } },
-    { tool: { name: "knowledge_draft", input: { action: "save", document: { ...document, id: "implementation", target_id: "repo-1", path: "docs/business/states.md", layer: "repository" } } } },
+    { tool: { name: "knowledge_draft", input: { action: "save", document: draft } } },
+    { tool: { name: "knowledge_draft", input: { action: "save", document: { ...draft, id: "implementation", target_id: "repo-1", path: "docs/business/states.md", layer: "repository" } } } },
     { text: "这里只完成了初步草稿。" },
     { tool: { name: "knowledge_work", input: { action: "list" } } },
     { tool: { name: "knowledge_work", input: { action: "list" } } },
@@ -220,8 +220,8 @@ test("旧草稿可补填单号，创建 MR 前拦截缺失单号且重启保留�
     const path = join(dir, "domain-extraction", job.id, "job.json"), stored = JSON.parse(readFileSync(path, "utf8"));
     delete stored.issue_no; writeFileSync(path, JSON.stringify(stored));
     service = new DomainKnowledgeExtraction(dir, async () => "unused", { publish: async () => { throw new Error("不应执行发布"); } });
-    const published = await service.publish(job.id, "expert");
-    assert.ok(published.documents[0].knowledge_document_id, "缺少单号不阻止平台发布");
+    assert.ok(service.get(job.id).documents[0].content, "缺少单号也保留已完成候选");
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
     await assert.rejects(service.createArchive(job.id, { issue_no: "", expected_revisions: service.previewArchive(job.id).expected_revisions }, "expert"), /关联单号/);
     assert.equal(service.setIssueNumber(job.id, "  REQ-legacy  ").issue_no, "REQ-legacy");
     assert.equal(JSON.parse(readFileSync(path, "utf8")).issue_no, "REQ-legacy");
@@ -236,23 +236,24 @@ test("生产线验收5/14：人工归档原样保存单号描述，后续预填�
     return { target_id: target.id, branch: "codex/description", state: "opened", url: "https://example.test/mr/description", documents: [] };
   } });
   try {
-    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done"); await service.publish(job.id, "expert");
+    const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
     service.setIssueNumber(job.id, config.issue_no, `  ${description}  `);
     await service.createArchive(job.id, { issue_no: config.issue_no, issue_description: description, expected_revisions: service.previewArchive(job.id).expected_revisions }, "expert");
     assert.deepEqual(createdTitles, [description]);
     const batch = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
     service.setIssueNumber(job.id, config.issue_no, "后续预填描述");
     assert.equal(service.get(job.id).archive_batches!.find(row => row.id === batch.id)!.issue_description, description);
-    const published = service.get(job.id).documents[0].knowledge_document_id!;
+    const documentId = service.get(job.id).documents[0].id;
     await service.shutdown(); service = new DomainKnowledgeExtraction(dir, async () => "已核对");
     assert.equal(service.get(job.id).issue_description, "后续预填描述");
     assert.equal(service.get(job.id).archive_batches!.find(row => row.id === batch.id)!.issue_description, description);
-    const update = service.beginUpdate(published, {}, "expert"); assert.equal(update.issue_description, "后续预填描述");
+    const update = service.run(job.id, { mode: "update", document_ids: [documentId], message: "核对来源的新版本" }, "expert");
+    assert.equal(update.issue_description, "后续预填描述"); assert.equal(update.id, job.id, "未合入产物继续原任务维护");
     await until(() => service.get(update.id).status === "done");
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("领域确认修改后才发布，采用最新建议清理同文档旧建议且未选文档不阻塞", async () => {
+test("领域 MR 预览只读最新候选，明确采纳清理旧建议，未选文稿建议保持原样", async () => {
   const dir = mkdtempSync(join(tmpdir(), "domain-confirm-publish-"));
   const service = new DomainKnowledgeExtraction(dir, async input => {
     if (input.turn.mode === "extract") {
@@ -263,22 +264,26 @@ test("领域确认修改后才发布，采用最新建议清理同文档旧建�
       input.save({ ...current, content: input.turn.message });
     }
     return "已完成";
-  });
+  }, { publish: async (snapshot, target) => ({ target_id: target.id, branch: "codex/latest-review", state: "opened", url: "https://example.test/mr/latest-review",
+    documents: snapshot.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision })) }) });
   try {
     const job = service.create(config, "expert"); await until(() => service.get(job.id).status === "done");
     for (const message of ["旧修改", "最新修改"]) {
       service.run(job.id, { mode: "revise", document_ids: [document.id], message }, "expert");
       await until(() => service.get(job.id).status === "done");
     }
-    await assert.rejects(service.publish(job.id, "expert", { document_ids: [document.id] }), /尚未确认的修改/);
+    assert.equal(service.previewArchive(job.id).targets[0].files.find(file => file.id === document.id)?.content, "最新修改");
+    assert.equal(service.get(job.id).documents[0].content, document.content, "MR 预览不提前采纳或修改原稿");
     assert.equal(listKnowledgeDocuments(dir).length, 0);
     const latest = service.get(job.id).turns.at(-1)!;
     const accepted = service.decide(job.id, latest.id, document.id, "accept", "expert");
     assert.deepEqual(accepted.turns.slice(1).map(turn => turn.proposals[0].status), ["discarded", "accepted"]);
     service.run(job.id, { mode: "revise", document_ids: ["other"], message: "未选文档的建议" }, "expert");
     await until(() => service.get(job.id).status === "done");
-    await service.publish(job.id, "expert", { document_ids: [document.id], expected_revisions: { [document.id]: 2 } });
-    assert.equal(listKnowledgeDocuments(dir)[0].content, "最新修改");
+    service.select(job.id, ["other"], false);
+    await service.createArchive(job.id, { issue_no: config.issue_no, expected_revisions: service.previewArchive(job.id).expected_revisions }, "expert");
+    assert.equal(service.get(job.id).publications[0].documents[0].content, "最新修改");
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
     assert.equal(service.get(job.id).turns.at(-1)!.proposals[0].status, "pending");
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
@@ -302,7 +307,7 @@ test("领域失败回合不能采纳部分建议，并发正文修改不清理�
     service.edit(job.id, { document: { ...current.documents[0], content: "其他人刚保存的正文" }, base_revision: current.documents[0].revision }, "other");
     assert.throws(() => service.decide(job.id, latest.id, document.id, "accept", "expert"), /新版本/);
     assert.deepEqual(service.get(job.id).turns.slice(1).map(turn => turn.proposals[0].status), ["pending", "pending"]);
-    await assert.rejects(service.publish(job.id, "expert"), /尚未确认的修改/);
+    assert.throws(() => service.previewArchive(job.id), /正文已变化/);
     assert.equal(listKnowledgeDocuments(dir).length, 0);
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -2,6 +2,7 @@ import { resolveBusinessModuleId, resolveBusinessModuleRef } from "./businessMod
 import { KnowledgeTaskCapacity } from "./knowledgeTaskCapacity.ts";
 import { createDomainKnowledgeExtraction, createComponentKnowledgeExtraction, syncKnowledgeSource, type DomainKnowledgeExtraction, type ComponentResearch } from "./knowledgeExtractionFactory.ts";
 import { KnowledgeAnswers, KnowledgeAnswerError } from "./knowledgeAnswers.ts";
+import { syncModuleKnowledge, readModuleKnowledgeSync } from "./knowledgeRepositorySync.ts";
 import { createKnowledgeAnswerRunner } from "./knowledgeAnswerRunner.ts";
 import { COMMIT_CONTENT_GUIDANCE } from "./ownerDecisionContext.ts";
 import { deliveryFileList, pendingPushFiles, type PushFileList } from "./deliveryFileList.ts";
@@ -399,7 +400,7 @@ import {
   type SelectedRepositorySkill,
   validRepositorySkillPath,
 } from "./repositorySkillRuntime.ts";
-import { listBusinessModules, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
+import { listBusinessModules, readBusinessModule, readBusinessKnowledgeAsset } from "./businessModuleLibrary.ts";
 import {
   materializeBusinessModuleKnowledge,
   copyBusinessModuleSnapshots,
@@ -2040,6 +2041,12 @@ export class TaskService {
     this.getDomainKnowledgeExtraction();
     this.getComponentResearch().recoverPublications();
     this.bypass(undefined, "Skill 审核恢复", recoverSkillSubmissions(options.dataDir, this.skillRecoveryWarnings));
+    this.knowledgeRepositoryTimer = setTimeout(() => {
+      this.refreshKnowledgeRepositories();
+      this.knowledgeRepositoryTimer = setInterval(() => this.refreshKnowledgeRepositories(), 60_000);
+      this.knowledgeRepositoryTimer.unref?.();
+    }, 5_000);
+    this.knowledgeRepositoryTimer.unref?.();
   }
 
   async refreshDeliveryPlatformCheck(): Promise<DeliveryPlatformCheck | undefined> {
@@ -2387,10 +2394,12 @@ export class TaskService {
    */
   async shutdown(): Promise<void> {
     clearTimeout(this.knowledgePrepareTimer);
+    clearTimeout(this.knowledgeRepositoryTimer);
     this.memorySidecar?.stop();
     if (this.memorySweepTimer) clearTimeout(this.memorySweepTimer);
     if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
+    for (const sync of this.knowledgeRepositorySyncs.values()) sync.abort.abort(new Error("服务正在停止，知识同步可在重启后接续"));
     this.shutdownPromise = (async () => {
       this.queue = [];
       const waiters = this.prePushBuildQueue.splice(0);
@@ -2404,7 +2413,8 @@ export class TaskService {
       }> = [{ taskId: "delivery-experience", role: "交付经验", work: this.deliveryExperiences.shutdown() }, { taskId: "delivery-summary", role: "交付报告", work: this.deliverySummaries.shutdown() }, { taskId: "overall-story", role: "整体 Story", work: this.overallStories.shutdown() },
         { taskId: "domain-extraction", role: "领域知识萃取", work: this.domainKnowledgeExtraction?.shutdown() ?? Promise.resolve() },
         { taskId: "component-research", role: "组件知识萃取", work: this.componentResearch?.shutdown() ?? Promise.resolve() },
-        { taskId: "knowledge-answers", role: "知识问答", work: this.knowledgeAnswers?.shutdown() ?? Promise.resolve() }];
+        { taskId: "knowledge-answers", role: "知识问答", work: this.knowledgeAnswers?.shutdown() ?? Promise.resolve() },
+        ...[...this.knowledgeRepositorySyncs].map(([id, sync]) => ({ taskId: id, role: "知识仓同步", work: sync.work }))];
       for (const task of this.tasks.values()) {
         discardRetainedSession(task);
         // 旧回调即使稍后返回，也不能在关机窗口改写业务状态。
@@ -5670,6 +5680,49 @@ export class TaskService {
   }
 
   private knowledgePrepareTimer?: ReturnType<typeof setTimeout>;
+  private knowledgeRepositoryTimer?: ReturnType<typeof setTimeout>;
+  private knowledgePublicationCheckedAt = 0;
+  private knowledgeRepositorySyncs = new Map<string, { abort: AbortController; work: Promise<unknown> }>();
+
+  /** 同步在后台进行；目录阅读与长程萃取不等待 Git 网络请求。 */
+  startModuleKnowledgeSync(moduleId: string, operator: string): void {
+    if (this.shuttingDown) throw new TaskControlError("服务正在停止，请稍后重试知识同步");
+    const module = readBusinessModule(this.options.dataDir, moduleId);
+    if (!module.knowledge_location) throw new TaskControlError("请先在配置中心设置本模块的领域知识目录");
+    if (this.knowledgeRepositorySyncs.has(module.id)) return;
+    const abort = new AbortController();
+    const timeout = setTimeout(() => abort.abort(new Error("本次知识同步超时，保留上次成功版本，可重试")), 200_000);
+    timeout.unref?.();
+    const work = syncModuleKnowledge(this.options.dataDir, module.id, operator, {
+      signal: abort.signal,
+      credential: this.options.platformGitCredential?.() ?? this.options.gitCredential?.(operator),
+    }).then(() => this.prepareKnowledgeIndex()).catch(error => {
+      this.options.log?.(`模块 ${module.name} 知识同步失败：${String(error)}`);
+    }).finally(() => {
+      clearTimeout(timeout); this.knowledgeRepositorySyncs.delete(module.id);
+      this.refreshKnowledgeRepositories();
+    });
+    this.knowledgeRepositorySyncs.set(module.id, { abort, work });
+  }
+
+  private refreshKnowledgeRepositories(): void {
+    if (this.shuttingDown) return;
+    if (Date.now() - this.knowledgePublicationCheckedAt >= 60_000) {
+      this.knowledgePublicationCheckedAt = Date.now();
+      void this.domainKnowledgeExtraction?.refreshPublicationStatus().catch(error => this.options.log?.(`知识 MR 状态刷新失败：${String(error)}`));
+    }
+    try {
+      for (const module of listBusinessModules(this.options.dataDir).modules) {
+        if (this.knowledgeRepositorySyncs.size >= 2) break;
+        if (module.status !== "active" || !module.knowledge_location || this.knowledgeRepositorySyncs.has(module.id)) continue;
+        try {
+          const sync = readModuleKnowledgeSync(this.options.dataDir, module.id);
+          if (sync?.attempted_at && Date.now() - Date.parse(sync.attempted_at) < 60_000) continue;
+          this.startModuleKnowledgeSync(module.id, module.updated_by);
+        } catch (error) { this.options.log?.(`模块 ${module.name} 知识同步调度失败：${String(error)}`); }
+      }
+    } catch (error) { this.options.log?.(`知识仓同步调度失败：${String(error)}`); }
+  }
 
   prepareKnowledgeIndex(): void {
     if (!this.memorySidecar || this.shuttingDown) return;

@@ -13,6 +13,16 @@ type Input = { kind: "domain"; record: DomainKnowledgeJob; current_revisions?: R
   | { kind: "skill-submission"; record: SkillSubmissionRecord };
 
 export function currentKnowledgeArchiveBatches(job: DomainKnowledgeJob, current_revisions?: Record<string, string>, currentDocuments = job.documents) {
+  if (!job.component_research_id) {
+    const documents = currentDocuments.filter(document => document.selected && (!document.deleted || document.base_content !== null));
+    return (job.archive_batches ?? []).filter(batch => !!batch.issue_no && batch.state !== "superseded"
+      && documents.length === batch.documents.length && documents.every(document => batch.documents.some(old => old.id === document.id
+        && old.revision === document.revision && old.content === document.content && !!old.deleted === !!document.deleted
+        && (old.archive_path ?? old.path) === (document.archive_path ?? document.path)))
+      && batch.targets.every(target => [job.knowledge_target, ...job.repositories].some(current => current.id === target.id
+        && current.repository === target.repository && current.branch === target.branch && current.docs_path === target.docs_path)));
+  }
+
   const documents = currentDocuments.filter(document => !!document.knowledge_document_id && (!current_revisions || !!current_revisions[document.knowledge_document_id]));
   const targets = [job.knowledge_target, ...job.repositories].filter(target => documents.some(document => document.target_id === target.id));
   return (job.archive_batches ?? []).filter(batch => !!batch.issue_no && batch.state !== "superseded" && batch.documents.length > 0
@@ -46,8 +56,74 @@ function publicationState(job: DomainKnowledgeJob, publication: DomainPublicatio
     mr_participants: publication.mr_participants };
 }
 
+function projectDomainCandidates(job: DomainKnowledgeJob): KnowledgeProductionView {
+  const link = (action: KnowledgeProductionAction): KnowledgeProductionAction => ({ ...action,
+    href: action.href ?? `?kbPage=task&kbKind=domain&kbTask=${encodeURIComponent(job.id)}${action.view === "progress" ? "" : "&kbReview=1"}${action.view === "archive" ? "&kbStage=publish" : ""}` });
+  const working = ["queued", "running"].includes(job.status), modifying = ["revise", "update"].includes(job.turns.at(-1)?.mode ?? "");
+  const current = currentKnowledgeArchiveBatches(job);
+  const anyMerged = job.publications.some(publication => publication.mr_state === "merged");
+  const allCurrentMerged = current.some(batch => batch.targets.length > 0 && batch.targets.every(target => batch.publications.some(publication => {
+    const archived = batch.targets.find(candidate => candidate.id === publication.target_id);
+    return archived?.repository === target.repository && archived.branch === target.branch && publication.mr_state === "merged";
+  })));
+  const failed = !allCurrentMerged && current.some(batch => batch.state === "failed"), archiving = current.some(batch => batch.state === "running");
+  const opened = current.some(batch => batch.state === "done" && batch.targets.every(target => batch.publications.some(publication => {
+    const archived = batch.targets.find(candidate => candidate.id === publication.target_id);
+    return archived?.repository === target.repository && archived.branch === target.branch && publication.state === "opened";
+  })));
+  const inspecting = job.task_kind === "inspection" && job.status === "idle" && !job.turns.length;
+  const noChanges = job.task_kind === "inspection" && job.status === "done" && !job.turns.length
+    && job.documents.every(document => document.content === document.base_content && !document.deleted && document.path === (document.base_path ?? document.path));
+  const status_label = working ? job.status === "queued" ? "排队中" : modifying ? "修改中" : "研究中"
+    : archiving ? "正在创建 MR" : failed ? anyMerged ? "部分 MR 已合入，剩余 MR 创建失败" : "MR 创建失败" : allCurrentMerged ? "MR 已合入" : anyMerged ? "部分 MR 已合入" : job.status === "paused" ? "等待你确认"
+    : job.status === "failed" ? "执行失败" : job.status === "cancelled" ? "已停止" : inspecting ? "检视中" : noChanges ? "检视完成，无需修改" : opened ? "MR 待合入" : job.documents.length ? "文稿已就绪" : "待开始";
+  const archiveAction = link({ id: "archive", label: failed ? "重试失败仓 MR" : opened || anyMerged ? "查看 MR" : "创建 MR", view: "archive" });
+  const next = link(working || archiving || ["failed", "cancelled", "paused"].includes(job.status) ? { id: "progress", label: "查看进展", view: "progress" }
+    : allCurrentMerged ? { id: "knowledge", label: "查看正式知识", view: "review", href: `?kbPage=module&kbModule=${encodeURIComponent(`business:${job.module_id ?? ""}`)}` }
+    : inspecting ? { id: "review", label: "继续检视", view: "review" } : archiveAction);
+  const capabilities = job.turns.at(-1)?.research?.capabilities ?? [];
+  const group = working || archiving ? "running" : failed || anyMerged && !allCurrentMerged ? "attention" : allCurrentMerged || opened || noChanges ? "completed" : "attention";
+  const docs = job.documents.map(document => {
+    const target = [job.knowledge_target, ...job.repositories].find(target => target.id === document.target_id);
+    const publication = job.publications.find(publication => {
+      const archived = [job.knowledge_target, ...job.repositories].find(candidate => candidate.id === publication.target_id);
+      return target && archived?.repository === target.repository && archived.branch === target.branch;
+    });
+    const submitted = publication?.state === "opened" && publication.documents.some(old => old.id === document.id && old.revision === document.revision
+      && old.content === document.content && old.path === (document.archive_path ?? document.path) && !!old.deleted === !!document.deleted);
+    return { id: document.id, changed: publication?.mr_state !== "merged" && !submitted, status_label: publication?.mr_state === "merged" ? "已合入"
+      : submitted ? "MR 已提交" : publication?.state === "failed" ? "MR 创建失败" : document.deleted ? "待删除" : "任务文稿", knowledge_document_id: document.knowledge_document_id };
+  });
+  const statePublication = (publication: DomainPublication): KnowledgePublicationState => ({ key: `${publication.target_id}:${publication.branch}`,
+    target: [job.knowledge_target, ...job.repositories].find(target => target.id === publication.target_id)?.name ?? publication.target_id,
+    status_label: publication.mr_state === "merged" ? "已合入" : publication.mr_state === "closed" ? "MR 已关闭" : publication.state === "opened" ? "MR 待合入" : publication.state === "failed" ? "MR 创建失败" : "正在创建 MR",
+    url: publication.url, error: publication.error, mr_participants: publication.mr_participants });
+  return JSON.parse(JSON.stringify({ status_label, group, next_action: next, working, modifying, documents: docs,
+    research_actions: allCurrentMerged ? [next] : anyMerged ? [archiveAction] : working ? [link({ id: "stop", label: "停止本轮", view: "progress" })]
+      : inspecting ? [link({ id: "review", label: "继续检视", view: "review" })]
+      : ["failed", "cancelled"].includes(job.status) ? [link({ id: "resume", label: "接续原任务", view: "progress" })]
+      : job.documents.length && !noChanges ? [link({ id: "review", label: "开始检视", view: "review" }), archiveAction] : [],
+    knowledge_document_id: job.documents.find(document => document.knowledge_document_id)?.knowledge_document_id,
+    platform_message: "任务文稿保留在当前任务中；MR 合入并同步后，正式知识库才会更新。",
+    navigation: { ready_message: inspecting ? "连续记录意见，结束检视后再统一修改。" : anyMerged ? allCurrentMerged ? "后续修改请从正式知识库开始新的检视。" : "已有 MR 合入；剩余失败仓可继续重试原批次，正文修改请从正式知识库开始新的检视。" : job.documents.length ? "可直接创建 MR，也可先检视文稿并继续修改。" : undefined,
+      ready_action_label: job.documents.length ? "查看文稿" : undefined },
+    review: { readonly: anyMerged, active_message: working ? "本轮正在执行，已有文稿与意见均保留。" : undefined, sections: [],
+      turns: job.turns.map(turn => ({ id: turn.id, status_label: { queued: "等待处理", running: "正在处理", paused: "等待你的答复", done: "本轮已完成", failed: "本轮失败，文稿保留", cancelled: "本轮已停止，文稿保留" }[turn.status] })),
+      capabilities: capabilities.map(capability => ({ id: capability.id, status_label: { pending: "待处理", researched: "已完成", blocked: "受阻" }[capability.state] })),
+      progress_message: capabilities.length ? `研究步骤 · ${capabilities.filter(capability => capability.state === "researched").length} / ${capabilities.length} 步已完成` : undefined },
+    archive: { visible: !!job.documents.length || !!job.archive_batches?.length, state: failed ? "failed" : archiving ? "running" : opened ? "opened" : "done",
+      group: failed || anyMerged && !allCurrentMerged ? "attention" : archiving ? "running" : "completed", status_label: failed ? anyMerged ? "部分 MR 已合入，剩余 MR 创建失败" : "MR 创建失败" : allCurrentMerged ? "MR 已合入" : anyMerged ? "部分 MR 已合入" : opened ? "MR 待合入" : archiving ? "正在创建 MR" : "待创建 MR",
+      title: `${job.documents.length} 份任务文稿`, message: allCurrentMerged ? "已确认全部目标 MR 合入；正式知识库以同步结果为准。" : anyMerged ? "已合入目标不会再次提交；剩余失败仓可以重试原批次。正文修改请从正式知识库开始新的检视。" : "创建 MR 后仍可在原任务修改，更新同一个 MR。",
+      actions: allCurrentMerged || noChanges ? [] : [archiveAction], publications: job.publications.map(statePublication),
+      batches: (job.archive_batches ?? []).filter(batch => !!batch.issue_no).map((batch, index) => ({ id: batch.id, title: `第 ${index + 1} 次提交 · ${batch.issue_no}`,
+        actions: batch.state === "failed" ? [{ id: "retry-archive", label: "重试原批次", view: "archive" as const, batch_id: batch.id }] : [],
+        status_label: batch.state === "failed" ? "MR 提交失败" : batch.state === "done" ? "MR 已提交" : "正在提交 MR", publications: batch.publications.map(statePublication), superseded: [] })) },
+  })) as KnowledgeProductionView;
+}
+
 /** 唯一的生产状态投影。先看需要人处理的归档事实，再看研究结果；不从旧记录补猜入库版本。 */
 export function projectKnowledgeProduction(input: Input): KnowledgeProductionView {
+  if (input.kind === "domain" && !input.record.component_research_id) return projectDomainCandidates(input.record);
   const record = input.record;
   const job = input.kind === "domain" ? input.record : input.kind === "component" ? input.archive : undefined;
   const ownerKind = input.kind === "domain" && job?.component_research_id ? "component" : input.kind;

@@ -9,7 +9,7 @@ export function blankKnowledgeMetadata(text: string): string {
   if (!match || !/^schema:\s*["']?mfc\./m.test(match[1])) return text;
   return match[0].replace(/[^\n]/g, "") + text.slice(match[0].length);
 }
-export function KnowledgeMarkdown({ text: original, focus, onReference, hideMetadata = false }: { text: string; focus?: KnowledgeFocus; onReference?: (href: string) => boolean; hideMetadata?: boolean }) {
+export function KnowledgeMarkdown({ text: original, focus, onReference, hideMetadata = false, resolveImage }: { text: string; focus?: KnowledgeFocus; onReference?: (href: string) => boolean; hideMetadata?: boolean; resolveImage?: (path: string) => string | undefined }) {
   const text = hideMetadata ? blankKnowledgeMetadata(original) : original;
   const root = useRef<HTMLDivElement>(null), [notice, setNotice] = useState("");
   function navigate(line?: number, anchor?: string) {
@@ -25,9 +25,9 @@ export function KnowledgeMarkdown({ text: original, focus, onReference, hideMeta
   useEffect(() => { setNotice(""); if (focus) navigate(focus.line, focus.anchor); }, [focus?.token]);
   return <div ref={root} className="knowledge-markdown">
     {notice && <p role="status" className="mb-3 text-sm text-muted-foreground">{notice}</p>}
-    <Markdown text={text} onOpenKnowledgeLink={href => {
+    <Markdown text={text} resolveImage={resolveImage} onOpenKnowledgeLink={href => {
       if (href.startsWith("#")) { try { navigate(undefined, decodeURIComponent(href.slice(1))); } catch { setNotice("章节链接格式无效。"); } }
-      else if (!onReference?.(href)) setNotice("这个链接对应的内容尚未包含在本次萃取成果中。");
+      else if (!onReference?.(href)) setNotice("当前知识目录中未找到这个链接对应的文件。");
     }} />
   </div>;
 }

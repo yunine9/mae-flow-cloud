@@ -26,6 +26,10 @@ window.fetch = async (input, init) => {
     for (const note of notes) if (body.note_ids.includes(note.id)) { note.status = "submitted"; note.turn_id = "revise-1"; }
     submissions["revise-1"] = { working: true, status_label: "Agent 正在修改文稿" };
     value = { notes, submissions, turn_id: "revise-1" };
+  } else if (path === `/domain-extraction/${job.id}/inspection/finish`) {
+    job.status = "done"; job.stage = "检视完成，无需修改";
+    job.inspection_source!.finished_at = "2026-10-20T00:10:00Z";
+    value = job;
   } else throw new Error(`unexpected request ${path}`);
   return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
 };
@@ -90,6 +94,17 @@ async function hoverLine() { const row = document.querySelector<HTMLElement>('.k
   check(document.querySelector('[data-l="5"]')?.textContent === "取消订单之前先核对发货状态。", "inline notes must not alter original text or source row textContent");
   root.render(<KnowledgeInlineReviewNotes notes={[line]}><KnowledgeMarkdown text={"# 重复规则\n\n取消订单之前先核对发货状态。\n\n取消订单之前先核对发货状态。"} /></KnowledgeInlineReviewNotes>);
   await pause(); check(!document.querySelector(".knowledge-inline-review-note"), "ambiguous quote with mismatching context must not guess the old line");
+  const reviewedCount = notes.length;
+  notes.splice(0); for (const key of Object.keys(submissions)) delete submissions[key];
+  Object.assign(job, { id: "dkx-independent-empty-inspection", task_kind: "inspection", status: "idle", stage: "检视中", inspection_source: { document_id: "orders", started_at: "2026-10-20T00:00:00Z" } });
+  mount();
+  await until(() => !!document.querySelector('.knowledge-reader-dialog[data-open] .domain-inspection-bar'), "new independent inspection enters fullscreen automatically");
+  await until(() => !!button("结束检视") && !button("结束检视")?.disabled, "independent empty inspection can finish after notes load");
+  await click("结束检视");
+  await until(() => calls.some(item => item.path === `/domain-extraction/${job.id}/inspection/finish`), "empty inspection must call the registered domain-extraction finish route");
+  await until(() => !document.querySelector('.knowledge-reader-dialog[data-open]') && !!document.querySelector('[aria-label="研究过程记录"]'), "empty inspection finishes without remaining in fullscreen");
+  check(!calls.some(item => item.path.includes(job.id) && /\/(?:apply|run)$/.test(item.path)), "empty inspection must not launch model revision");
+  check(!errors.length, errors.join("; "));
   root.unmount();
-  document.getElementById("result")!.textContent = JSON.stringify({ passed: true, notes: notes.length, attempts });
+  document.getElementById("result")!.textContent = JSON.stringify({ passed: true, notes: reviewedCount, attempts, independentFinished: true });
 })().catch(error => { document.getElementById("result")!.textContent = JSON.stringify({ error: String(error), stack: error.stack, calls }); });

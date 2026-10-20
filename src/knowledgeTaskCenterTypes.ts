@@ -4,6 +4,7 @@ export type KnowledgeTaskGroup = "running" | "attention" | "completed";
 export interface KnowledgeTaskRow {
   id: string;
   kind: KnowledgeTaskKind;
+  task_kind?: "extraction" | "inspection";
   title: string;
   scope?: string;
   module_id?: string;

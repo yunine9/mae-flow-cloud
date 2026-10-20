@@ -11,21 +11,26 @@ import { createBusinessModule } from '../src/businessModuleLibrary.ts';
 import { TaskService } from '../src/taskService.ts';
 import { createTaskServer } from '../src/server.ts';
 import { createTechnologyStack } from '../src/technologyStacks.ts';
+import { gitKnowledgeDocument, removeGitKnowledgeDocument } from './fixtures/gitKnowledge.ts';
 const context={repo:'repo',repositories:['https://code.example/team/repo.git'],moduleIds:[],productVersion:'2.7B'};
-test('手册发布进入统一知识检索；模块、仓库、版本范围生效；修改和停用留痕',()=>{
+test('正式 Git 业务文稿按模块、仓库、版本隔离；工程手册修改和停用留痕',()=>{
  const dir=mkdtempSync(join(tmpdir(),'knowledge-documents-'));
  try {
   createBusinessModule(dir,{id:'module',name:'模块',description:'示例模块',owner:'owner',repositories:context.repositories},'owner');
   createTechnologyStack(dir,{name:'C++'},'fixture');
-  const doc=saveKnowledgeDocument(dir,{title:'规范.md',content:'# 规范\n## 文件\n释放资源',scope:'module',module_ids:['module'],technologies:['cpp'],product_versions:['2.7B']},'member');
+  const doc=gitKnowledgeDocument(dir,'module',{title:'规范.md',content:'# 规范\n## 文件\n释放资源',technologies:['cpp'],product_versions:['2.7B']});
   assert.ok(collectSearchableKnowledge(dir,context).assets.some(a=>a.id===doc.id));
   assert.equal(collectSearchableKnowledge(dir,{...context,productVersion:'2.6B'}).assets.length,0);
   assert.equal(collectSearchableKnowledge(dir,{...context,repositories:[]}).assets.length,0);
-  const updated=saveKnowledgeDocument(dir,{content:'# 修订\n借用句柄不释放'},'another',doc.id);
-  assert.notEqual(updated.revision,doc.revision);assert.equal(updated.history.at(-1)?.action,'替换文档');
-  saveKnowledgeDocument(dir,{active:false},'member',doc.id);
+  const updated=gitKnowledgeDocument(dir,'module',{title:'规范.md',content:'# 修订\n借用句柄不释放',technologies:['cpp'],product_versions:['2.7B']});
+  assert.equal(updated.id,doc.id);assert.notEqual(updated.revision,doc.revision);assert.match(readKnowledgeDocument(dir,doc.id).content,/借用句柄不释放/);
+  removeGitKnowledgeDocument(dir,'module',doc.id);
   assert.equal(collectSearchableKnowledge(dir,context).assets.length,0);
-  assert.equal(readKnowledgeDocument(dir,doc.id).history.length,3);
+  const manual=saveKnowledgeDocument(dir,{title:'工程规范',content:'核对句柄'},'member');
+  const revised=saveKnowledgeDocument(dir,{content:'借用句柄不释放'},'another',manual.id);
+  assert.equal(revised.history.at(-1)?.action,'替换文档');
+  saveKnowledgeDocument(dir,{active:false},'member',manual.id);
+  assert.equal(readKnowledgeDocument(dir,manual.id).history.length,3);
   assert.throws(()=>saveKnowledgeDocument(dir,{title:'坏文档',content:'x\0'},'member'));
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
@@ -97,8 +102,8 @@ test('同仓相似模块知识不串台：明确模块优先，歧义不猜；�
  const dir=mkdtempSync(join(tmpdir(),'knowledge-isolation-'));
  try {
   for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
-  const a=saveKnowledgeDocument(dir,{title:'规范.md',content:'创建者释放句柄',scope:'module',module_ids:['a']},'owner');
-  const b=saveKnowledgeDocument(dir,{title:'规范.md',content:'借用者不能释放句柄',scope:'module',module_ids:['b']},'owner');
+  const a=gitKnowledgeDocument(dir,'a',{title:'规范.md',content:'创建者释放句柄'});
+  const b=gitKnowledgeDocument(dir,'b',{title:'规范.md',content:'借用者不能释放句柄'});
   const global=saveKnowledgeDocument(dir,{title:'通用规范',content:'检查错误码'},'owner');
   const selected={...context,moduleIds:['a']};
   assert.deepEqual(new Set(collectSearchableKnowledge(dir,selected).assets.map(a=>a.id)),new Set([a.id,global.id]));
@@ -115,8 +120,8 @@ test('任务知识工具使用需求所属模块，子任务继承父任务，�
  const service=new TaskService({dataDir:dir,provider:'test',model:'test',modelsJson:{},maxConcurrent:0});
  try {
   for(const id of ['a','b'])createBusinessModule(dir,{id,name:id,description:id,owner:'owner',repositories:context.repositories},'owner');
-  const a=saveKnowledgeDocument(dir,{title:'a',content:'a规则',scope:'module',module_ids:['a']},'owner');
-  const b=saveKnowledgeDocument(dir,{title:'b',content:'b规则',scope:'module',module_ids:['b']},'owner');
+  const a=gitKnowledgeDocument(dir,'a',{title:'a',content:'a规则'});
+  const b=gitKnowledgeDocument(dir,'b',{title:'b',content:'b规则'});
   const api=service as any,parent=api.tasks.get(service.create('主需求').id),child=api.tasks.get(service.create('子任务').id);
   parent.summary.business_module={id:'a',name:'a'};child.summary.parent_task_id=parent.summary.id;
   child.summary.business_modules=[{id:'a'},{id:'b'}];

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveKnowledgeDocument, readKnowledgeDocument } from "../src/knowledgeDocuments.ts";
+import { saveKnowledgeDocument, readKnowledgeDocument, listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
 import { componentDeletionView, deleteComponentDocuments } from "../src/componentKnowledgeDeletion.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
@@ -26,7 +26,7 @@ async function until(check: () => boolean, message: string): Promise<void> {
 }
 const domainRequest = { title: "订单域", scope: "核对订单规则", issue_no: "REQ-WRITE", issue_description: "订单领域知识研究", repositories: [], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } };
 
-test("生产线验收13/F21：领域创建相同规范化请求复用活动及已完成任务，重启仍复用而不同人或要求独立", { timeout: 20_000 }, async () => {
+test("领域重复点击复用在途任务，已完成后及重启后显式创建均生成新任务", { timeout: 20_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-create-contract-"));
   let calls = 0, restarted: DomainKnowledgeExtraction | undefined;
   const execute: ConstructorParameters<typeof DomainKnowledgeExtraction>[1] = async input => {
@@ -41,17 +41,20 @@ test("生产线验收13/F21：领域创建相同规范化请求复用活动及�
     assert.equal(repeated.id, first.id, "重复点击不得生成第二个研究实体");
     await until(() => manager.get(first.id).status === "done", "领域研究未在5秒内完成");
     assert.equal(calls, 1, "重复请求不得重复调用研究执行体");
-    assert.equal(manager.create(domainRequest, "alice").id, first.id, "已完成的同请求也复用已有任务");
+    const next = manager.create(domainRequest, "alice");
+    assert.notEqual(next.id, first.id, "完成后主动发起研究不能永久返回旧任务");
     const changed = manager.create({ ...domainRequest, instructions: "只研究退款规则" }, "alice");
     const anotherPerson = manager.create(domainRequest, "bob");
     assert.notEqual(changed.id, first.id); assert.notEqual(anotherPerson.id, first.id);
     await until(() => manager.list().every(job => !["queued", "running"].includes(job.status)), "独立领域研究未在5秒内完成");
-    assert.equal(manager.list().length, 3); assert.equal(calls, 3);
+    assert.equal(manager.list().length, 4); assert.equal(calls, 4);
     await within(manager.shutdown(), "原领域管理器未在5秒内关停");
     restarted = new DomainKnowledgeExtraction(dir, execute);
-    assert.equal(restarted.create(domainRequest, "alice").id, first.id, "请求键应从持久记录恢复");
-    await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(calls, 3); assert.equal(restarted.list().length, 3);
+    const afterRestart = restarted.create(domainRequest, "alice");
+    assert.notEqual(afterRestart.id, first.id);
+    await until(() => restarted!.get(afterRestart.id).status === "done", "重启后新任务未完成");
+    assert.equal(calls, 5); assert.equal(restarted.list().length, 5);
+    assert.equal(restarted.get(first.id).documents.length, 1, "旧任务仍独立保留");
   } finally {
     await within(manager.shutdown(), "测试原领域管理器未关停");
     if (restarted) await within(restarted.shutdown(), "测试重启领域管理器未关停");
@@ -59,7 +62,7 @@ test("生产线验收13/F21：领域创建相同规范化请求复用活动及�
   }
 });
 
-test("生产线验收13/F21：归档、关联信息与补充资料变更后原创建请求仍复用，重启保留创建键", { timeout: 20_000 }, async () => {
+test("归档与资料维护保留旧任务及创建键，新研究不会覆盖其人工信息", { timeout: 20_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-create-key-drift-"));
   let calls = 0, restarted: DomainKnowledgeExtraction | undefined;
   const execute: ConstructorParameters<typeof DomainKnowledgeExtraction>[1] = async input => {
@@ -78,15 +81,18 @@ test("生产线验收13/F21：归档、关联信息与补充资料变更后原�
     writeFileSync(join(dir, "knowledge-materials", materialId, "material.json"), JSON.stringify({ id: materialId, name: "订单补充.txt", scope: "本次萃取任务", version: "", bytes: Buffer.byteLength(material), digest: createHash("sha256").update(material).digest("hex"), state: "ready", sections: [{ location: "全文", text: material }] }));
     manager.run(first.id, { mode: "update", document_ids: ["orders"], message: "核对补充订单资料", material_ids: [materialId] }, "alice");
     await until(() => manager.get(first.id).status === "done", "补充资料研究未在5秒内完成");
-    assert.equal(manager.create(domainRequest, "alice").id, first.id, "后续维护不得改掉原创建请求的身份");
-    assert.equal(calls, 2); assert.equal(manager.list().length, 1);
+    const another = manager.create(domainRequest, "alice");
+    assert.notEqual(another.id, first.id);
+    await until(() => manager.get(another.id).status === "done", "新研究未完成");
+    assert.equal(calls, 3); assert.equal(manager.list().length, 2);
     await within(manager.shutdown(), "领域管理器未在5秒内关停");
     const stored = JSON.parse(readFileSync(join(dir, "domain-extraction", first.id, "job.json"), "utf8"));
     assert.equal(typeof stored.key, "string", "创建键必须耐久保存，不能按已变化的任务重新计算");
     restarted = new DomainKnowledgeExtraction(dir, execute);
-    assert.equal(restarted.create(domainRequest, "alice").id, first.id, "重启后仍按原创建键复用");
-    await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(calls, 2); assert.equal(restarted.list().length, 1);
+    const latest = restarted.create(domainRequest, "alice");
+    assert.notEqual(latest.id, first.id);
+    await until(() => restarted!.get(latest.id).status === "done", "重启后新研究未完成");
+    assert.equal(calls, 4); assert.equal(restarted.list().length, 3);
     assert.equal(restarted.get(first.id).issue_no, "REQ-EDITED", "重击原请求不得覆盖后续人工维护信息");
     assert.deepEqual(restarted.get(first.id).material_ids, [materialId]);
   } finally {
@@ -110,7 +116,7 @@ test("生产线验收13/F21：领域失败后重新创建同请求可发起新�
   } finally { await within(manager.shutdown(), "失败研究管理器未在5秒内关停"); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收5/F24：未配置 Git 仍能创建研究，发布不受Git限制，手动预览明确指出未配置并提供任务设置动作", { timeout: 15_000 }, async () => {
+test("未配置 Git 时研究成果保留在任务，预览明确配置缺失且旧发布入口不能写正式库", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-archive-config-"));
   const manager = new DomainKnowledgeExtraction(dir, async input => {
     input.save({ id: "orders", title: "订单规则", target_id: "domain", path: `${input.job.knowledge_target.docs_path}/orders.md`, layer: "domain", content: "有效规则正文", sources: "固定版本源码" });
@@ -121,10 +127,12 @@ test("生产线验收5/F24：未配置 Git 仍能创建研究，发布不受Git�
     const job = manager.create(request, "alice");
     await until(() => manager.get(job.id).status === "done", "无归档配置的研究未在5秒内完成");
     assert.equal(manager.get(job.id).archive_configured, false);
-    await manager.publish(job.id, "alice");
-    assert.ok(manager.get(job.id).documents[0].published_revision, "未配置归档也能正式发布");
+    await assert.rejects(manager.publish(job.id, "alice"), /直接创建 MR/);
+    assert.equal(manager.get(job.id).documents[0].published_revision, undefined);
+    assert.equal(listKnowledgeDocuments(dir).length, 0);
     const preview = manager.previewArchive(job.id);
-    assert.equal(preview.status_label, "已发布（未归档）");
+    assert.notEqual(preview.status_label, "已发布（未归档）");
+    assert.deepEqual(preview.expected_revisions, { orders: "1" });
     assert.match(preview.targets[0].message, /未配置 Git 归档仓/);
     assert.equal(preview.actions[0].id, "configure");
     assert.equal([...preview.actions, ...preview.targets.flatMap(target => target.actions)].filter(action => action.label === "Git 归档设置").length, 1, "设置入口只出现一次");

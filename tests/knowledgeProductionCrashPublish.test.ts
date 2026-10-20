@@ -6,7 +6,7 @@ import { constants, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { listKnowledgeDocuments, listKnowledgeDocumentVersions } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 
 async function within<T>(work: Promise<T>, timeoutMs: number, message: string): Promise<T> {
@@ -23,11 +23,11 @@ async function until(check: () => boolean, message: string) {
   }
 }
 
-test("生产线验收4/F6：第一篇正式记录 rename 后真 kill -9，重启只归档已生效版本", {
+test("生产线验收4/F6：首个目标 MR 回执耐久保存后真 kill -9，重启只补未提交目标", {
   timeout: 35_000,
   skip: !constants.signals.SIGSTOP || !constants.signals.SIGKILL ? "当前系统不支持 POSIX SIGSTOP/SIGKILL，不能执行真 kill -9" : false,
 }, async () => {
-  const dir = mkdtempSync(join(tmpdir(), "knowledge-crash-publish-")), marker = join(dir, "formal-renamed.json");
+  const dir = mkdtempSync(join(tmpdir(), "knowledge-crash-publish-")), marker = join(dir, "mr-receipt-renamed.json");
   const entry = pathToFileURL(fileURLToPath(new URL("../src/domainKnowledgeExtraction.ts", import.meta.url))).href;
   const cwd = fileURLToPath(new URL("..", import.meta.url));
   // 只在测试子进程替换 Node 的文件系统边界，不给生产发布流程增加测试开关。
@@ -39,31 +39,35 @@ let jobId,stopped=false;
 const rename=fs.renameSync;
 fs.renameSync=function(from,to){
   const result=rename.apply(this,arguments);
-  if(!stopped&&/[\\/]knowledge-documents[\\/]kd-[a-f0-9-]{36}\\.json$/.test(String(to))){
-    stopped=true;
-    const formal=JSON.parse(fs.readFileSync(to,'utf8'));
-    fs.writeFileSync(marker,JSON.stringify({job_id:jobId,id:formal.id,revision:formal.revision}));
-    process.kill(process.pid,'SIGSTOP');
+  if(!stopped&&String(to).endsWith('/job.json')){
+    const record=JSON.parse(fs.readFileSync(to,'utf8'));
+    const batch=record.archive_batches?.find(batch=>batch.publications.some(publication=>publication.state==='opened'));
+    if(batch){
+      stopped=true;
+      const receipt=batch.publications.find(publication=>publication.state==='opened');
+      fs.writeFileSync(marker,JSON.stringify({job_id:jobId,batch_id:batch.id,receipt}));
+      process.kill(process.pid,'SIGSTOP');
+    }
   }
   return result;
 };
 syncBuiltinESMExports();
-const startup=setTimeout(()=>{console.error('子进程发布超过10秒预算');process.exit(9)},10000);
+const startup=setTimeout(()=>{console.error('子进程提交超过10秒预算');process.exit(9)},10000);
 try{
   const {DomainKnowledgeExtraction}=await import(${JSON.stringify(entry)});
   const service=new DomainKnowledgeExtraction(dir,async input=>{
-    for(const id of ['one','two'])input.save({id,title:id==='one'?'第一篇领域规则':'第二篇领域规则',target_id:'domain',path:'domains/'+id+'.md',layer:'domain',content:'# '+id+'\\n有效规则正文',sources:'固定版本源码'}, {revision:'a'.repeat(40),content:null});
+    for(const target of [input.job.knowledge_target,...input.job.repositories])input.save({id:target.id==='domain'?'one':'two',title:target.name,target_id:target.id,path:target.docs_path+'/rules.md',layer:target.id==='domain'?'domain':'repository',content:'# '+target.id+'\\n有效规则正文',sources:'固定版本源码'},{revision:'a'.repeat(40),content:null});
     return '研究完成';
-  },{publish:async()=>{throw new Error('硬崩溃前不应开始归档')}});
-  const job=service.create({title:'订单域',scope:'核对订单规则',issue_no:'REQ-CRASH',issue_description:'订单领域知识归档',repositories:[],knowledge_target:{repository:'https://example.test/knowledge.git',branch:'main',docs_path:'domains'}},'alice');
+  },{publish:async(job,target)=>({target_id:target.id,state:'opened',branch:'codex/'+target.id,url:'https://example.test/mr/'+target.id,documents:job.documents.map(document=>({id:document.id,path:document.path,content:document.content,revision:document.revision}))})});
+  const job=service.create({title:'订单域',scope:'核对订单规则',issue_no:'REQ-CRASH',repositories:[{repository:'https://example.test/orders.git',branch:'main',docs_path:'docs/orders'}],knowledge_target:{repository:'https://example.test/knowledge.git',branch:'main',docs_path:'domains'}},'alice');
   jobId=job.id;
   const deadline=Date.now()+5000;
   while(service.get(job.id).status!=='done'){
     if(Date.now()>=deadline)throw new Error('测试研究未在5秒内完成');
     await new Promise(resolve=>setTimeout(resolve,10));
   }
-  await service.publish(job.id,'alice');
-  throw new Error('未在第一篇正式记录写成后暂停');
+  await service.createArchive(job.id,{issue_no:'REQ-CRASH',expected_revisions:service.previewArchive(job.id).expected_revisions},'alice');
+  throw new Error('未在首个 MR 回执写成后暂停');
 }catch(error){console.error(error instanceof Error?error.message:String(error));process.exitCode=1}
 finally{clearTimeout(startup)}
 `;
@@ -79,47 +83,44 @@ finally{clearTimeout(startup)}
   try {
     await until(() => {
       if (existsSync(marker)) return true;
-      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`子进程未到达正式写入暂停点：${output}`);
+      if (child.exitCode !== null || child.signalCode !== null) throw new Error(`子进程未到达 MR 回执保存暂停点：${output}`);
       return false;
-    }, `未在10秒内达到正式记录 rename 后的暂停点：${output}`);
+    }, `未在10秒内达到 MR 回执 rename 后的暂停点：${output}`);
     assert.ok(child.pid);
     assert.equal(child.kill("SIGKILL"), true);
     assert.equal((await within(closed, 5000, "SIGKILL 后子进程未退出")).signal, "SIGKILL");
 
-    const checkpoint = JSON.parse(readFileSync(marker, "utf8")) as { job_id: string; id: string; revision: string };
-    const formal = listKnowledgeDocuments(dir);
-    assert.equal(formal.length, 1, "必须真正杀在两篇之间，仅第一篇已生效");
-    assert.equal(formal[0].id, checkpoint.id); assert.equal(formal[0].revision, checkpoint.revision);
-    assert.equal(formal[0].research_source?.document_id, "one");
+    const checkpoint = JSON.parse(readFileSync(marker, "utf8")) as { job_id: string; batch_id: string; receipt: DomainPublication };
+    assert.deepEqual(listKnowledgeDocuments(dir), [], "MR 回执写成也不提前写正式知识库");
     const path = join(dir, "domain-extraction", checkpoint.job_id, "job.json"), disk = JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob;
-    for (const document of formal) {
-      const exact = (row: { knowledge_document_id?: string; published_revision?: string }) => row.knowledge_document_id === document.id && row.published_revision === document.revision;
-      const pending = disk.archive_batches?.filter(batch => ["pending", "running"].includes(batch.state)) ?? [];
-      assert.ok(disk.documents.some(exact) || pending.some(batch => batch.documents.some(exact)), `${document.id}@${document.revision} 已生效却没有磁盘发布记录`);
-      assert.ok(pending.some(batch => batch.documents.some(row => exact(row) && row.content === document.content)), "每篇已生效正式知识必须有精确版本的可恢复归档批次");
-    }
-    const versionsBefore = listKnowledgeDocumentVersions(dir, checkpoint.id).map(version => version.document.revision);
-    assert.deepEqual(versionsBefore, [checkpoint.revision]);
-    const seen: DomainPublication["documents"][] = [];
+    const original = disk.archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
+    assert.equal(original.state, "running");
+    assert.deepEqual(original.publications, [checkpoint.receipt], "必须真正杀在两个目标之间，仅首个 MR 回执已生效");
+    assert.equal(checkpoint.receipt.target_id, "domain"); assert.equal(checkpoint.receipt.documents[0].id, "one");
+    assert.deepEqual(disk.documents.map(document => document.id), ["one", "two"], "两份候选均保留");
+    assert.ok(disk.documents.every(document => !document.knowledge_document_id));
+    const seen: Array<{ target: string; documents: DomainPublication["documents"] }> = [];
     let researchCalls = 0;
     service = new DomainKnowledgeExtraction(dir, async () => { researchCalls++; throw new Error("重启不应重新研究"); }, {
       publish: async (job, target) => {
-        const documents: DomainPublication["documents"] = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision, knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision }));
-        seen.push(documents);
-        return { target_id: target.id, branch: "codex/recovered-crash", state: "opened", url: "https://example.test/mr/1", mr_id: 1, documents };
+        const documents = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision }));
+        seen.push({ target: target.id, documents });
+        return { target_id: target.id, branch: "codex/recovered-crash", state: "opened", url: "https://example.test/mr/2", documents };
       },
     });
     await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(seen.length, 0, "重启不能自动启动Git/MR");
-    const recovered = service.get(checkpoint.job_id);
-    assert.equal(recovered.documents.find(document => document.id === "one")?.published_revision, checkpoint.revision);
-    assert.equal(recovered.documents.find(document => document.id === "two")?.published_revision, undefined);
-    await service.createArchive(checkpoint.job_id, { issue_no: "REQ-CRASH", expected_revisions: service.previewArchive(checkpoint.job_id).expected_revisions }, "alice");
-    assert.equal(researchCalls, 0);
-    assert.equal(seen.length, 1, "同一已生效版本只归档一次");
-    assert.deepEqual(seen[0].map(document => [document.id, document.knowledge_document_id, document.knowledge_revision, document.content]), [["one", checkpoint.id, checkpoint.revision, formal[0].content]], "未写成的第二篇不得在重启后自动入库或归档");
-    assert.deepEqual(listKnowledgeDocuments(dir), formal, "重启恢复发布记录，人工归档不重写或丢失正式知识");
-    assert.deepEqual(listKnowledgeDocumentVersions(dir, checkpoint.id).map(version => version.document.revision), versionsBefore, "重启不能重复生成正式版本");
+    assert.equal(seen.length, 0, "重启不能自动启动 Git/MR");
+    const recovered = service.get(checkpoint.job_id), batch = recovered.archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
+    assert.equal(batch.state, "failed"); assert.deepEqual(batch.publications[0], checkpoint.receipt);
+    assert.deepEqual(recovered.documents, disk.documents, "恢复不会重新生成或覆盖候选");
+    await service.retryArchive(checkpoint.job_id, "alice", { batch_id: checkpoint.batch_id });
+    assert.equal(researchCalls, 0); assert.equal(seen.length, 1);
+    assert.equal(seen[0].target, "repo-1"); assert.deepEqual(seen[0].documents.map(document => document.id), ["two"]);
+    const completed = service.get(checkpoint.job_id).archive_batches!.find(batch => batch.id === checkpoint.batch_id)!;
+    assert.equal(completed.state, "done"); assert.deepEqual(completed.publications.find(publication => publication.target_id === "domain"), checkpoint.receipt);
+    await service.retryArchive(checkpoint.job_id, "alice", { batch_id: checkpoint.batch_id });
+    assert.equal(seen.length, 1, "重试成功批次不能重复创建 MR");
+    assert.deepEqual(listKnowledgeDocuments(dir), [], "恢复及补齐 MR 均不提前写入正式知识库");
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await within(closed, 5000, "测试清理期间子进程未退出");

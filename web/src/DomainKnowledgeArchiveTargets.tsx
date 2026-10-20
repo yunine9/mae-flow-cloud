@@ -5,6 +5,8 @@ import { componentRequest } from "./componentResearchApi";
 import type { DomainKnowledgeJob, KnowledgeRepository, DomainArchiveTargetsPreview } from "../../src/domainKnowledgeTypes";
 import { directoryKnowledgeDirectory, hasOpaqueModuleDirectory } from "../../src/domainKnowledgeLayout";
 import type { ArchiveIssueInput } from "./knowledgeArchiveAction";
+import { knowledgeLocationSettingsUrl } from "./KnowledgeModuleLocation";
+import { businessModuleKnowledgeRequest, type BusinessModuleKnowledgeLocation } from "./api";
 
 const targetsOf = (job: DomainKnowledgeJob) => [job.knowledge_target, ...job.repositories];
 const confirmedDeletion = (document: DomainKnowledgeJob["documents"][number]) => !!document.deleted && !!document.knowledge_document_id && document.published_document_revision === document.revision;
@@ -13,6 +15,7 @@ function initialTargets(job: DomainKnowledgeJob) {
   return targetsOf(job).map(target => {
     if (job.component_research_id || job.documents.length > 0 && job.documents.every(confirmedDeletion)) return { ...target };
     const isDomain = target.id === job.knowledge_target.id;
+    if (isDomain && job.module_id && !job.component_research_id) return { ...target };
     if (job.knowledge_layout === "directory-v1" && target.docs_path && target.docs_path !== "." && !hasOpaqueModuleDirectory(target.docs_path)
       && (isDomain || target.docs_path.startsWith("docs/"))) return { ...target };
     return { ...target, docs_path: directoryKnowledgeDirectory(target.docs_path, title, job.module_id, isDomain) };
@@ -42,6 +45,12 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy,
   const [preview, setPreview] = useState<{ key: string; data: DomainArchiveTargetsPreview }>();
   const [previewing, setPreviewing] = useState(true);
   const [previewRetry, setPreviewRetry] = useState(0);
+  const [moduleLocation, setModuleLocation] = useState<BusinessModuleKnowledgeLocation>();
+  useEffect(() => {
+    let live = true; setModuleLocation(undefined);
+    if (job.module_id && !job.component_research_id) void businessModuleKnowledgeRequest(job.module_id).then(value => { if (live) setModuleLocation(value.location); }).catch(reason => { if (live) setError((reason as Error).message); });
+    return () => { live = false; };
+  }, [job.id, job.module_id]);
   useEffect(() => { setTargets(initialTargets(job)); setError(""); }, [job.id, job.archive_revision]);
   useEffect(() => { setIssue(initialIssue?.issue_no ?? job.issue_no ?? ""); setDescription(initialIssue?.issue_description ?? job.issue_description ?? ""); }, [job.id, initialIssue?.issue_no, initialIssue?.issue_description]);
   const deletingOnly = job.documents.length > 0 && job.documents.every(confirmedDeletion);
@@ -51,6 +60,9 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy,
     documents: [], use_directory_layout: !job.component_research_id, base_revision: job.archive_revision ?? 0 };
   const previewKey = JSON.stringify({ input, revisions: job.documents.map(document => [document.id, document.revision, document.published_revision]),
     proposals: job.turns.flatMap(turn => turn.proposals.map(proposal => [proposal.document.id, proposal.status, proposal.base_revision])) });
+  const domainTarget = targets.find(target => target.id === job.knowledge_target.id);
+  const canAdoptModuleLocation = moduleLocation && domainTarget && !job.publications.length && !(job.archive_batches ?? []).some(batch => batch.publications.some(publication => !!publication.url))
+    && (moduleLocation.repository !== domainTarget.repository || moduleLocation.branch !== domainTarget.branch || moduleLocation.docs_path !== domainTarget.docs_path);
   useEffect(() => {
     const controller = new AbortController();
     setPreview(undefined); setError(""); setPreviewing(!invalid && !disabled);
@@ -76,13 +88,15 @@ export function DomainKnowledgeArchiveTargets({ job, disabled, onChange, onBusy,
     finally { setBusy(false); onBusy?.(false); }
   }
   return <section className="space-y-4" aria-label="确认 Git 归档路径">
-    <p className="text-sm text-muted-foreground">确认每个仓的相对目录，下方实时预览文档路径。代码仓知识统一放在 docs 下的业务目录；领域知识及其 AGENTS.md 放在选定的领域目录。确认后自动创建 MR。</p>
+    <p className="text-sm text-muted-foreground">下方预览本次 MR 的文档路径。领域知识使用任务创建时保存的模块目录；代码仓知识放在 docs 下的业务目录。确认后自动创建或更新 MR。</p>
+    {job.module_id && !job.component_research_id && <p className="text-xs text-muted-foreground">本模块后续任务的默认目录在<a className="mx-1 text-primary underline" href={knowledgeLocationSettingsUrl(job.module_id)}>配置中心 · 领域知识目录</a>维护；当前任务保留原目录。</p>}
+    {canAdoptModuleLocation && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm"><div><strong className="font-medium">模块已保存新的领域目录</strong><p className="mt-1 break-all text-muted-foreground">{moduleLocation.docs_path}/ · {moduleLocation.branch}</p><p className="mt-1 text-xs text-muted-foreground">当前任务尚未创建 MR，可直接沿用新目录，已有文稿会自动调整路径。</p></div><Button variant="outline" size="sm" disabled={busy || disabled || deletingOnly} onClick={() => change(job.knowledge_target.id, moduleLocation)}>本次使用模块目录</Button></div>}
     {onConfirmArchive && <div className="grid grid-cols-2 gap-3">
       <label className="grid gap-1 text-sm">本次归档单号（必填）<Input aria-label="本次归档单号" maxLength={120} disabled={busy || disabled} value={issue} onChange={event => setIssue(event.target.value)} /></label>
       <label className="grid gap-1 text-sm">本次归档单号描述<Input aria-label="本次归档单号描述" maxLength={2000} disabled={busy || disabled} value={description} onChange={event => setDescription(event.target.value)} /></label>
     </div>}
     {deletingOnly && <p className="text-sm text-muted-foreground">删除沿用原归档位置。</p>}
-    {targets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled || deletingOnly}>
+    {targets.map(target => <fieldset key={target.id} className="grid grid-cols-2 gap-3 rounded border border-line p-3" disabled={busy || disabled || deletingOnly || target.id === job.knowledge_target.id && !!job.module_id && !job.component_research_id}>
       <legend className="px-1 font-medium">{target.id === job.knowledge_target.id ? "领域知识仓" : `代码仓 · ${target.name}`}</legend>
       <label className="col-span-2 grid gap-1 text-sm">归档仓地址<Input aria-label={`${target.id} 归档仓地址`} value={target.repository} onChange={event => change(target.id, { repository: event.target.value })} placeholder="https://…/knowledge.git" /></label>
       <label className="grid gap-1 text-sm">归档分支<Input aria-label={`${target.id} 归档分支`} value={target.branch} onChange={event => change(target.id, { branch: event.target.value })} /></label>

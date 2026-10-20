@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import fs, { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import fs, { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DomainKnowledgeExtraction } from "../src/domainKnowledgeExtraction.ts";
-import { listKnowledgeDocuments, listKnowledgeDocumentVersions } from "../src/knowledgeDocuments.ts";
+import { listKnowledgeDocuments } from "../src/knowledgeDocuments.ts";
 import { createBusinessModule, updateBusinessModule } from "../src/businessModuleLibrary.ts";
 import type { DomainKnowledgeJob, DomainPublication } from "../src/domainKnowledgeTypes.ts";
 
@@ -23,8 +23,8 @@ async function until(check: () => boolean, message: string) {
   }
 }
 
-// repros/r2 实测：模块状态须在首篇写入前统一校验，不能先写仓内篇再拒绝领域篇。
-test("生产线验收4：跨文档发布遇到停用模块，预检失败且全部正式知识不生效", { timeout: 15_000 }, async () => {
+// 模块停用必须在任何目标 MR 创建前统一检查，候选仍保留。
+test("生产线验收4：跨仓 MR 提交遇到停用模块，预检失败且无外部操作或正式知识生效", { timeout: 15_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-publish-precheck-"));
   createBusinessModule(dir, { id: "orders", name: "订单", description: "订单域", owner: "alice", repositories: ["https://example.test/orders.git"] }, "admin");
   let archiveCalls = 0;
@@ -40,7 +40,7 @@ test("生产线验收4：跨文档发布遇到停用模块，预检失败且全�
     assert.deepEqual(service.get(job.id).documents.map(doc => doc.id), ["repo-doc", "domain-doc"]);
     updateBusinessModule(dir, "orders", { status: "archived" }, "admin");
     const path = join(dir, "domain-extraction", job.id, "job.json"), before = readFileSync(path, "utf8");
-    await assert.rejects(service.publish(job.id, "alice"), /所选业务模块已停用/);
+    await assert.rejects(service.createArchive(job.id, { issue_no: "REQ-1", expected_revisions: service.previewArchive(job.id).expected_revisions }, "alice"), /所选业务模块已停用/);
     assert.deepEqual(listKnowledgeDocuments(dir), []);
     assert.equal(readFileSync(path, "utf8"), before);
     assert.ok(service.get(job.id).documents.every(doc => doc.knowledge_document_id === undefined));
@@ -49,78 +49,69 @@ test("生产线验收4：跨文档发布遇到停用模块，预检失败且全�
   } finally { await service.shutdown(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("生产线验收4/F6：全部预检通过后第二篇正式 rename 遇到 EIO，已生效第一篇落盘且仅可人工归档", { timeout: 20_000 }, async t => {
+test("第二个目标 MR 回执耐久写 EIO 时保留首仓成功与失败仓分支，重启只重试失败目标", { timeout: 20_000 }, async t => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-partial-publish-"));
-  const seen: DomainPublication["documents"][] = [];
-  let indexed = 0;
-  let release!: () => void, restarted: DomainKnowledgeExtraction | undefined;
-  const gate = new Promise<void>(resolve => { release = resolve; });
+  const seen: Array<{ target: string; documents: DomainPublication["documents"] }> = [];
+  let indexed = 0, restarted: DomainKnowledgeExtraction | undefined;
   const service = new DomainKnowledgeExtraction(dir, async input => {
-    for (const id of ["one", "two"]) input.save({ id, title: id === "one" ? "第一篇领域规则" : "第二篇领域规则", target_id: "domain", path: `domains/${id}.md`, layer: "domain", content: `# ${id}\r\n有效规则正文`, sources: "固定版本源码" }, { revision: "a".repeat(40), content: null });
+    for (const target of [input.job.knowledge_target, ...input.job.repositories]) input.save({ id: target.id === "domain" ? "one" : "two", title: target.name,
+      target_id: target.id, path: `${target.docs_path}/rules.md`, layer: target.id === "domain" ? "domain" : "repository", content: `# ${target.id}\r\n有效规则正文`, sources: "固定版本源码" }, { revision: "a".repeat(40), content: null });
     return "研究完成";
   }, {
     onIndexed: () => { indexed++; },
-    publish: async (job, target) => {
-      const documents: DomainPublication["documents"] = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision, knowledge_document_id: document.knowledge_document_id, knowledge_revision: document.published_revision }));
-      seen.push(documents);
-      await within(gate, 5000, "测试归档阻塞超过5秒预算");
-      return { target_id: target.id, branch: "codex/partial-io", state: "opened", url: "https://example.test/mr/1", mr_id: 1, documents };
+    publish: async (job, target, previous, _operator, save) => {
+      const documents = job.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision }));
+      seen.push({ target: target.id, documents });
+      const branch = previous?.branch || `codex/partial-${target.id}`;
+      save({ target_id: target.id, branch, state: "pending", documents: [], attempted_documents: documents, mr_attempted: true });
+      return { target_id: target.id, branch, state: "opened", url: `https://example.test/mr/${target.id}`, documents };
     },
   });
   try {
-    const job = service.create({ title: "订单域", scope: "核对订单规则", issue_no: "REQ-PARTIAL", issue_description: "订单领域知识归档", repositories: [], knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } }, "alice");
+    const job = service.create({ title: "订单域", scope: "核对订单规则", issue_no: "REQ-PARTIAL", repositories: [{ repository: "https://example.test/orders.git", branch: "main", docs_path: "docs/orders" }],
+      knowledge_target: { repository: "https://example.test/knowledge.git", branch: "main", docs_path: "domains" } }, "alice");
     await until(() => service.get(job.id).status === "done", "测试研究未在5秒内完成");
-    const rename = fs.renameSync;
-    let formalRenames = 0;
-    // 只在真正写正式主记录时注入故障，版本文件与 job.json 都照常耐久写。
+    const originals = structuredClone(service.get(job.id).documents), path = join(dir, "domain-extraction", job.id, "job.json"), rename = fs.renameSync;
+    let failed = false;
     const intercepted = t.mock.method(fs, "renameSync", (...args: Parameters<typeof fs.renameSync>) => {
-      if (/[\\/]knowledge-documents[\\/]kd-[a-f0-9-]{36}\.json$/.test(String(args[1])) && ++formalRenames === 2) {
-        throw Object.assign(new Error("测试磁盘 EIO：第二篇正式记录未写成"), { code: "EIO" });
+      if (!failed && String(args[1]) === path) {
+        const record = JSON.parse(readFileSync(String(args[0]), "utf8")) as DomainKnowledgeJob;
+        if (record.archive_batches?.some(batch => batch.publications.filter(publication => publication.state === "opened").length === 2)) {
+          failed = true; throw Object.assign(new Error("测试磁盘 EIO：第二个 MR 回执未写成"), { code: "EIO" });
+        }
       }
       return rename(...args);
     });
     syncBuiltinESMExports();
     try {
-      await assert.rejects(service.publish(job.id, "alice"), (error: any) => error?.code === "EIO");
+      await service.createArchive(job.id, { issue_no: "REQ-PARTIAL", expected_revisions: service.previewArchive(job.id).expected_revisions }, "alice");
     } finally { intercepted.mock.restore(); syncBuiltinESMExports(); }
-    assert.equal(formalRenames, 2, "故障必须发生在预检已通过后的第二次正式写入");
-    assert.equal(indexed, 1, "部分发布成功的第一篇也必须更新既有知识索引");
-    const formal = listKnowledgeDocuments(dir);
-    assert.equal(formal.length, 1); assert.equal(formal[0].research_source?.document_id, "one");
-    const disk = JSON.parse(readFileSync(join(dir, "domain-extraction", job.id, "job.json"), "utf8")) as DomainKnowledgeJob;
-    const first = disk.documents.find(document => document.id === "one")!, second = disk.documents.find(document => document.id === "two")!;
-    assert.equal(first.knowledge_document_id, formal[0].id, "第一篇已生效的正式编号必须落盘");
-    assert.equal(first.published_revision, formal[0].revision, "第一篇已生效的正式版本必须落盘");
-    assert.equal(first.content, formal[0].content, "换行归一化后研究、正式库与归档必须保持同一正文");
-    assert.ok(!formal[0].content.includes("\r"));
-    assert.equal(second.knowledge_document_id, undefined, "第二篇未写成，不能显示已发布");
-    assert.equal(second.published_revision, undefined);
-    const pending = disk.archive_batches?.filter(batch => ["pending", "running"].includes(batch.state)) ?? [];
-    assert.ok(pending.some(batch => batch.documents.some(document => document.knowledge_document_id === formal[0].id && document.published_revision === formal[0].revision)), "第一篇必须关联精确版本的待归档批次");
-    const failed = disk.archive_batches?.flatMap(batch => batch.documents).find(document => document.id === "two");
-    if (failed?.knowledge_document_id) assert.equal(existsSync(join(dir, "knowledge-documents", `${failed.knowledge_document_id}.json`)), false);
-    assert.equal(seen.length, 0, "部分平台发布失败也不能自动归档");
-    const preview = service.previewArchive(job.id);
-    const archiving = service.createArchive(job.id, { issue_no: "REQ-PARTIAL", expected_revisions: preview.expected_revisions }, "alice");
-    await until(() => seen.length === 1, "人工归档没有在5秒预算内开始");
-    assert.deepEqual(seen[0].map(document => [document.id, document.knowledge_document_id, document.knowledge_revision, document.content]), [["one", formal[0].id, formal[0].revision, formal[0].content]], "归档只能使用实际写成的第一篇");
-    const versions = listKnowledgeDocumentVersions(dir, formal[0].id).map(version => version.document.revision);
-    assert.deepEqual(versions, [formal[0].revision]);
-
-    release();
-    await within(archiving, 5000, "人工归档未在5秒预算内完成");
-    const manual = service.get(job.id).archive_batches!.find(batch => !!batch.issue_no)!;
-    await assert.doesNotReject(service.retryArchive(job.id, "alice", { batch_id: manual.id }), "归档完成后必须释放本任务的操作锁");
+    assert.equal(failed, true); assert.equal(seen.length, 2); assert.equal(indexed, 0, "候选提交不提前更新正式索引");
+    assert.deepEqual(listKnowledgeDocuments(dir), []);
+    const disk = JSON.parse(readFileSync(path, "utf8")) as DomainKnowledgeJob, batch = disk.archive_batches![0];
+    const first = batch.publications.find(publication => publication.target_id === "domain")!, second = batch.publications.find(publication => publication.target_id === "repo-1")!;
+    assert.equal(batch.state, "failed"); assert.equal(first.state, "opened"); assert.equal(first.url, "https://example.test/mr/domain");
+    assert.equal(second.state, "failed"); assert.match(second.error ?? "", /EIO/); assert.equal(second.branch, "codex/partial-repo-1");
+    assert.equal(second.mr_attempted, true, "失败目标保留真实 MR 请求事实供恢复查询");
+    assert.deepEqual(disk.documents, originals, "失败不会污染任意候选正文、版本或来源");
+    assert.deepEqual(first.documents[0].content, originals[0].content, "已提交快照与候选保持相同字节");
     await within(service.shutdown(), 5000, "原管理器未在5秒内关停");
-    let repeated = 0;
-    restarted = new DomainKnowledgeExtraction(dir, async () => { repeated++; throw new Error("重启不应重新研究"); }, { publish: async () => { repeated++; throw new Error("已归档版本不应重复归档"); } });
+    let researchCalls = 0, retries = 0;
+    restarted = new DomainKnowledgeExtraction(dir, async () => { researchCalls++; throw new Error("重启不应重新研究"); }, {
+      publish: async (snapshot, target, previous) => {
+        retries++; assert.equal(target.id, "repo-1"); assert.equal(previous?.branch, second.branch);
+        return { target_id: target.id, branch: previous!.branch, state: "opened", url: "https://example.test/mr/recovered",
+          documents: snapshot.documents.map(document => ({ id: document.id, path: document.path, content: document.content, revision: document.revision })) };
+      },
+    });
     await new Promise<void>(resolve => setImmediate(resolve));
-    assert.equal(repeated, 0);
-    assert.equal(restarted.get(job.id).documents.find(document => document.id === "two")!.published_revision, undefined);
-    assert.deepEqual(listKnowledgeDocuments(dir), formal, "重启不能自动补写第二篇或丢失第一篇");
-    assert.deepEqual(listKnowledgeDocumentVersions(dir, formal[0].id).map(version => version.document.revision), versions, "重启不能生成重复正式版本");
+    assert.equal(researchCalls, 0); assert.equal(retries, 0, "重启不自动进行外部提交");
+    await restarted.retryArchive(job.id, "alice", { batch_id: batch.id });
+    const completed = restarted.get(job.id).archive_batches![0];
+    assert.equal(completed.state, "done"); assert.equal(retries, 1); assert.deepEqual(completed.publications.find(publication => publication.target_id === "domain"), first);
+    await restarted.retryArchive(job.id, "alice", { batch_id: batch.id });
+    assert.equal(retries, 1); assert.deepEqual(restarted.get(job.id).documents, originals); assert.deepEqual(listKnowledgeDocuments(dir), []);
   } finally {
-    release();
     await within(service.shutdown(), 5000, "测试清理期间原管理器未关停");
     if (restarted) await within(restarted.shutdown(), 5000, "测试清理期间重启管理器未关停");
     rmSync(dir, { recursive: true, force: true });

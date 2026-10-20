@@ -17,6 +17,7 @@ export function createDomainKnowledgeExtraction(options: DomainAgentOptions & Co
   return new DomainKnowledgeExtraction(options.dataDir, input => runDomainKnowledge(input, options), {
     publish: (...args) => publisher.publish(...args),
     closePublication: (...args) => publisher.closePublication(...args),
+    refreshPublication: (...args) => publisher.refreshPublication(...args),
     sourceCleanup: new KnowledgeSourceCleanup(publisher),
     onIndexed: options.onIndexed,
     capacity: options.capacity,

@@ -2,6 +2,7 @@ import { resolveBusinessModuleIds } from "./businessModuleIdentity.ts";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { TaskService } from "./taskService.ts";
 import { readKnowledgeDocument, saveKnowledgeDocument, listKnowledgeDocumentVersions, readKnowledgeDocumentVersion } from "./knowledgeDocuments.ts";
+import { readGitKnowledgeResource } from "./knowledgeRepositorySnapshots.ts";
 import { knowledgeDocumentCatalog } from "./knowledgeDocumentCatalog.ts";
 
 function assertNotResearching(service: TaskService, documentId: string) {
@@ -26,14 +27,35 @@ export async function knowledgeDocumentRoute(request: IncomingMessage, response:
       });
       return json(response, 200, { documents });
     }
+    if (request.method === "GET" && id && parts[2] === "resources") {
+      const path = new URL(request.url!, "http://localhost").searchParams.get("path");
+      if (!path) throw new Error("请提供文档内的资源相对路径");
+      const resource = readGitKnowledgeResource(dir, id, path);
+      if (!resource) return json(response, 404, { error: "文档资源不存在或尚未同步" });
+      response.writeHead(200, { "Content-Type": resource.content_type, "Content-Length": resource.content.length,
+        "Content-Security-Policy": "default-src 'none'; sandbox", "X-Content-Type-Options": "nosniff" });
+      return response.end(resource.content);
+    }
+    if (request.method === "POST" && id?.startsWith("kg-") && (parts.length === 2 || parts[2] === "restore")) {
+      throw new Error("仓库正式知识请通过开始检视修改，MR 合入后自动同步");
+    }
     if (request.method === "GET" && id && parts[2] === "versions") {
-      readKnowledgeDocument(dir, id);
+      const current = readKnowledgeDocument(dir, id);
+      if (id.startsWith("kg-")) {
+        if (parts[3] && parts[3] !== current.revision) throw new Error("正式仓库已有新版本，请刷新阅读");
+        return json(response, 200, parts[3] ? { document: current, published_at: current.history.at(-1)?.at, operator: current.history.at(-1)?.operator }
+          : { versions: [{ revision: current.revision, title: current.title, published_at: current.history.at(-1)?.at, operator: current.history.at(-1)?.operator }] });
+      }
       if (parts[3]) {
         const version = readKnowledgeDocumentVersion(dir, id, parts[3]);
         return json(response, 200, { ...version, document: { ...version.document, module_ids: resolveBusinessModuleIds(dir, version.document.module_ids) } });
       }
       return json(response, 200, { versions: listKnowledgeDocumentVersions(dir, id).map(v => ({ revision: v.document.revision,
         title: v.document.title, published_at: v.published_at, operator: v.operator })) });
+    }
+    if (request.method === "POST" && id && parts[2] === "inspection") {
+      const body = await readBody(request, 256 * 1024);
+      return json(response, 201, service.getDomainKnowledgeExtraction().beginInspection(id, body, operator));
     }
     if (request.method === "POST" && id && parts[2] === "update-research") {
       const body = await readBody(request, 256 * 1024);

@@ -16,7 +16,7 @@ function restore(jobId: string): InspectionState {
   return { started: false, drafts: [] };
 }
 
-export function useDomainKnowledgeInspection({ jobId, refreshToken, working, blockedReason, onSubmitted, onStarted, onEnded }: { jobId?: string; refreshToken?: unknown; working: boolean; blockedReason?: string; onSubmitted: () => void; onStarted?: () => void; onEnded?: () => void }) {
+export function useDomainKnowledgeInspection({ jobId, refreshToken, working, blockedReason, initiallyStarted = false, independent = false, onSubmitted, onStarted, onEnded }: { jobId?: string; refreshToken?: unknown; working: boolean; blockedReason?: string; initiallyStarted?: boolean; independent?: boolean; onSubmitted: () => void; onStarted?: () => void; onEnded?: () => void }) {
   const [state, setState] = useState<InspectionState>(() => jobId ? restore(jobId) : { started: false, drafts: [] });
   const [stateJob, setStateJob] = useState(jobId);
   const [result, setResult] = useState(emptyResult);
@@ -27,6 +27,9 @@ export function useDomainKnowledgeInspection({ jobId, refreshToken, working, blo
   useEffect(() => {
     owner.current = jobId; setStateJob(jobId); requestVersion.current++; setState(jobId ? restore(jobId) : { started: false, drafts: [] }); setResult(emptyResult()); setLoaded(false); setError(""); setBusy(false); setInlineEditing(false);
   }, [jobId]);
+  useEffect(() => {
+    if (jobId && initiallyStarted) setState(current => ({ ...current, started: true }));
+  }, [jobId, initiallyStarted]);
   useEffect(() => {
     if (!jobId) return;
     // 先恢复对应任务再写回，避免任务切换时把前一个任务的检视状态写入新任务。
@@ -74,7 +77,11 @@ export function useDomainKnowledgeInspection({ jobId, refreshToken, working, blo
         const next = await componentRequest<KnowledgeReviewNotesResult>(`${path}/apply`, { note_ids: noteIds });
         if (owner.current !== jobId) return;
         requestVersion.current++; setResult(next); setState({ started: false, drafts: [] }); onEnded?.(); onSubmitted();
-      } else { setResult(latest); setState({ started: false, drafts: [] }); onEnded?.(); }
+      } else {
+        if (independent) await componentRequest(`/domain-extraction/${encodeURIComponent(jobId)}/inspection/finish`, {});
+        if (owner.current !== jobId) return;
+        setResult(latest); setState({ started: false, drafts: [] }); onEnded?.(); onSubmitted();
+      }
     } catch (reason) { if (owner.current === jobId) setError((reason as Error).message); }
     finally { operation.current = false; if (owner.current === jobId) setBusy(false); }
   }

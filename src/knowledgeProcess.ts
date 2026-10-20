@@ -6,6 +6,10 @@ export class KnowledgeProcessError extends Error {
 }
 /** Bounded CLI execution; abort also terminates document-parser child processes. */
 export function runKnowledgeCommand(file: string, args: string[], options: { signal?: AbortSignal; timeoutMs: number; maxBytes: number; env?: NodeJS.ProcessEnv; cwd?: string }): Promise<string> {
+  return runKnowledgeBufferCommand(file, args, options).then(buffer => buffer.toString("utf8"));
+}
+/** 图片等仓库资源必须保留原始字节，不能先按 UTF-8 解码再存回。 */
+export function runKnowledgeBufferCommand(file: string, args: string[], options: { signal?: AbortSignal; timeoutMs: number; maxBytes: number; env?: NodeJS.ProcessEnv; cwd?: string }): Promise<Buffer> {
   if (options.signal?.aborted) return Promise.reject(new KnowledgeProcessError("cancelled", true));
   return new Promise((resolve, reject) => {
     const detached = process.platform !== "win32";
@@ -30,7 +34,7 @@ export function runKnowledgeCommand(file: string, args: string[], options: { sig
       clearTimeout(timer); options.signal?.removeEventListener("abort", abort);
       if (failure) reject(failure);
       else if (code !== 0) reject(new KnowledgeProcessError(code ?? "execution", false, file === "git" ? classifyKnowledgeGitFailure(diagnostics) : undefined));
-      else resolve(Buffer.concat(chunks).toString("utf8"));
+      else resolve(Buffer.concat(chunks));
     });
   });
 }

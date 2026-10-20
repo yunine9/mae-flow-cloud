@@ -1,12 +1,11 @@
 import { loadTechnologyStacks, technologyStackLabel, type TechnologyStack } from "./technologyStacks";
-import type { BusinessModule, HostSkillShelfEntry, SkillOperationRecord } from "./api";
+import type { BusinessModule, BusinessModuleKnowledgeLocation, HostSkillShelfEntry, SkillOperationRecord } from "./api";
 import { getBusinessModules, getSkillLibrary } from "./api";
 import type { ComponentRepository } from "./componentResearchApi";
 import { componentRequest } from "./componentResearchApi";
 import type { KnowledgeDocument } from "./knowledgeDocumentsApi";
 import { documentRequest } from "./knowledgeDocumentsApi";
 import type { ComponentGovernanceItem, ComponentGovernanceSnapshot } from "../../src/componentKnowledgeTypes";
-import type { KnowledgeTaskRow } from "../../src/knowledgeTaskCenterTypes";
 
 export type KnowledgeModuleCategory = "business" | "engineering" | "unassigned";
 export interface ModuleDocument extends KnowledgeDocument {
@@ -18,6 +17,7 @@ export interface KnowledgeModuleGroup { id: string; name: string; documents: Mod
 export interface KnowledgeModule {
   key: string; id: string; name: string; description: string;
   category: KnowledgeModuleCategory;
+  knowledgeLocation?: BusinessModuleKnowledgeLocation;
   documents: ModuleDocument[];
   repositories: KnowledgeModuleGroup[];
   documentCount: number; skillCount: number; inactiveCount: number;
@@ -82,7 +82,7 @@ export function projectKnowledgeModules(input: {
     when_to_use: skill.description, technology_assignment_required: skill.nature === "engineering" && !skill.technologies.length ? true : undefined, active: skill.loadable && !(skill.nature === "engineering" && !skill.technologies.length), revision: skill.digest, history: [],
     maintainedAt: skillMaintenance(input.skillOperations ?? [], directory),
   });
-  const modules: KnowledgeModule[] = business.map(m => ({ key: `business:${m.id}`, id: m.id, name: m.name, description: m.description, category: "business", documents: [], repositories: m.repositories.map(r => ({ id: repositoryKey(r), name: repositoryName(r), documents: [] })), documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }));
+  const modules: KnowledgeModule[] = business.map(m => ({ key: `business:${m.id}`, id: m.id, name: m.name, description: m.description, category: "business", knowledgeLocation: m.knowledge_location, documents: [], repositories: m.repositories.map(r => ({ id: repositoryKey(r), name: repositoryName(r), documents: [] })), documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }));
   function language(id: string) {
     let module = modules.find(m => m.key === `engineering:${id}`);
     if (!module) { module = { key: `engineering:${id}`, id, name: technologyStackLabel(id, input.technologyStacks ?? []), description: "基础组件知识与团队 Skill", category: "engineering", documents: [], repositories: [], documentCount: 0, skillCount: 0, inactiveCount: 0, recentlyMaintained: 0 }; modules.push(module); }
@@ -118,21 +118,9 @@ export function projectKnowledgeModules(input: {
   return { modules, documents, warnings: [] };
 }
 
-/** 卡片只展示最新任务已保存的文档数，不把旧任务累加进来。 */
-export function knowledgeModuleDocumentCount(module: KnowledgeModule, task?: KnowledgeTaskRow): number {
-  return task ? task.document_summary?.total ?? 0 : module.documentCount;
-}
-
-export function knowledgeModuleGovernance(module: KnowledgeModule, task?: KnowledgeTaskRow) {
-  if (task?.module_entry?.kind === "document") return { rank: 2, tone: "archived", label: "已归档", note: "点击阅读正式文档。" };
-  if (task || module.documentCount || module.skillCount) return { rank: 1, tone: "research", label: "建设中", note: task ? "点击查看萃取任务。" : "点击阅读已有知识。" };
-  return { rank: 0, tone: "empty", label: "未建设", note: "还没有已保存的知识或过程文稿。" };
-}
-
-export function compareKnowledgeModuleGovernance(a: KnowledgeModule, b: KnowledgeModule, latest: Map<string, KnowledgeTaskRow>) {
-  const task = (module: KnowledgeModule) => module.category === "business" ? latest.get(module.id) : undefined;
-  return knowledgeModuleGovernance(b, task(b)).rank - knowledgeModuleGovernance(a, task(a)).rank
-    || b.recentlyMaintained - a.recentlyMaintained
+/** 正式目录按维护时间与名称排列，不受萃取任务或未合入产物影响。 */
+export function compareKnowledgeModules(a: KnowledgeModule, b: KnowledgeModule) {
+  return b.recentlyMaintained - a.recentlyMaintained
     || (Date.parse(b.maintainedAt ?? "") || 0) - (Date.parse(a.maintainedAt ?? "") || 0)
     || a.name.localeCompare(b.name, "zh-CN");
 }
