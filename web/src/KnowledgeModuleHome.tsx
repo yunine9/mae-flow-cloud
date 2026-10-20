@@ -63,11 +63,6 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
                   <ChevronRight size={18} className="km-module-arrow" aria-hidden="true" />
                 </div>
                 <p className="km-module-description">{module.description || (module.category === "business" ? "远端正式文档与关联仓知识" : "基础组件知识与 Skill")}</p>
-                <div className="km-module-stats">
-                  <span aria-label={`文档数量：${module.documentCount}`}>文档：<strong>{module.documentCount}</strong></span>
-                  {module.skillCount > 0 && <span>Skill <strong>{module.skillCount}</strong></span>}
-                  {module.inactiveCount > 0 && <span className="km-module-inactive">已停用 {module.inactiveCount}</span>}
-                </div>
                 <div className="km-module-footer">{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "暂无维护记录"}</div>
               </div>
             </Button>

@@ -7,7 +7,7 @@ import type { KnowledgeDocument } from "../../web/src/knowledgeDocumentsApi";
 const moduleFixtures = [
   ["trade", "交易订单与支付", "订单生命周期、支付状态与退款边界，帮助研发和测试快速核对业务规则。", 200],
   ["new", "企业账户与客户服务", "账户体系与企业客户服务知识。", 0],
-  ["inventory", "跨区域供应链库存协同与售后履约规则管理", "覆盖多区域库存调度、仓间流转、售后逆向物流、补偿策略及异常场景；描述较长时保持卡片整齐，不挤压文档数量和打开入口。", 32],
+  ["inventory", "跨区域供应链库存协同与售后履约规则管理", "覆盖多区域库存调度、仓间流转、售后逆向物流、补偿策略及异常场景；描述较长时保持卡片整齐，不挤压打开入口。", 32],
   ["member", "会员与权益", "会员等级、积分、优惠券及权益的适用范围。", 18],
   ["billing", "结算与对账", "账单、资金清分、差异核对与财务结算。", 9],
   ["notification", "消息与通知", "站内信、邮件和推送通知的触发条件与送达规则。", 5],
@@ -88,8 +88,7 @@ function desktop() {
 async function run() {
   await until(() => cards().length === 11, "加载 8 个业务模块和 3 个技术栈");
   check(!document.querySelector('[aria-label="知识目录"]')?.textContent?.includes("Function_Knowledge"), "首页不显示已配置的领域知识相对路径");
-  check(card("交易订单与支付")?.querySelector('[aria-label="文档数量：200"]'), "保留 200 文档数量");
-  check(card("企业账户与客户服务")?.querySelector('[aria-label="文档数量：0"]'), "空模块保持 0 文档与可打开入口");
+  check(cards().every(entry => !entry.textContent?.includes("文档：") && !entry.querySelector('[aria-label^="文档数量"]')), "模块卡片不展示文档数量");
   const longTitle = moduleFixtures[2][1], longCard = card(longTitle);
   check(longCard?.title === longTitle || longCard?.querySelector(`[title="${longTitle}"]`), "截断的长标题可通过悬停查看完整名称");
   desktop();

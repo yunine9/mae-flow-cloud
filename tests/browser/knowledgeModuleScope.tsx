@@ -2,6 +2,7 @@ import React, { useState } from "../../web/node_modules/react";
 import { createRoot } from "../../web/node_modules/react-dom/client";
 import { KnowledgeModuleReader } from "../../web/src/KnowledgeModuleReader";
 import { KnowledgeModuleHome } from "../../web/src/KnowledgeModuleHome";
+import { cachedKnowledgeModules } from "../../web/src/knowledgeModules";
 import type { KnowledgeDocument } from "../../web/src/knowledgeDocumentsApi";
 import type { BusinessModuleKnowledgeScope } from "../../web/src/api";
 
@@ -63,8 +64,11 @@ const button = (label: string) => [...document.querySelectorAll<HTMLButtonElemen
 async function click(label: string) { const node = button(label); check(node && !node.disabled, `按钮不可用：${label}`); node!.click(); await pause(); }
 function checkbox(repository: string, path: string) { return document.querySelector<HTMLElement>(`[role="checkbox"][aria-label="${repository} ${path}"]`)!; }
 function counts(trade: number) {
-  const card = (name: string) => document.querySelector(`[aria-label="打开${name}知识目录"]`)?.textContent;
-  return card("交易业务")?.includes(`文档：${trade}`) && card("库存业务")?.includes("文档：5");
+  const card = (name: string) => document.querySelector(`[aria-label="打开${name}知识目录"]`);
+  const modules = cachedKnowledgeModules()?.modules;
+  return card("交易业务") && card("库存业务")
+    && modules?.find(module => module.id === "trade")?.documentCount === trade
+    && modules?.find(module => module.id === "inventory")?.documentCount === 5;
 }
 async function openReader() {
   const entry = document.querySelector<HTMLElement>('[aria-label="打开交易业务知识目录"]'); check(entry, "交易模块入口"); entry!.click();
@@ -86,7 +90,7 @@ async function run() {
   await click("保存"); await until(() => !document.querySelector('[role="dialog"][data-open]'), "保存自动关闭弹窗");
   await until(() => document.querySelector('[aria-label="交易业务知识阅读器"] .knowledge-markdown')?.textContent?.includes("正式领域文档"), "排除当前共享文稿后仍在当前模块，自动阅读保留的文稿");
   check(!document.querySelector('[aria-label="库存业务知识阅读器"]'), "不能因为共享文稿被排除而切到其他模块");
-  await click("返回知识库"); await until(() => counts(4), "目录筛选保存后首页计数减少且另一模块不变");
+  await click("返回知识库"); await until(() => counts(4), "目录筛选保存后目录数据减少且另一模块不变");
   await openReader(); await openFilter();
   check(checkbox(repositories[0], "docs/交易").getAttribute("aria-checked") === "false", "再次打开仍能看到被排除目录");
   check(checkbox(repositories[1], "docs/历史目录"), "已存但当前快照不存在的排除项也可恢复");
@@ -95,20 +99,20 @@ async function run() {
   check(checkbox(repositories[0], "docs/交易").getAttribute("aria-checked") === "false", "取消不持久化恢复全部");
   await click("恢复全部"); await click("保存"); await until(() => saves === 2 && !document.querySelector('[role="dialog"][data-open]'), "恢复全部已保存");
   check(scope.repositories.every(repo => !repo.excluded_paths.length), "恢复全部清空本模块各仓排除项");
-  await click("返回知识库"); await until(() => counts(5), "恢复后首页文档数量恢复，另一模块不变");
+  await click("返回知识库"); await until(() => counts(5), "恢复后目录数据恢复，另一模块不变");
   await openReader(); await openFilter();
   checkbox(repositories[0], "docs/README.md").click(); await pause();
   check(checkbox(repositories[0], "docs/FAQ.md").getAttribute("aria-checked") === "true", "单文件排除不影响相邻文件");
   check(checkbox(repositories[0], "docs/交易/规则.md").getAttribute("aria-checked") === "true", "单文件排除不影响其他目录文件");
   await click("保存"); await until(() => saves === 3 && !document.querySelector('[role="dialog"][data-open]'), "单文件排除已保存");
   check(scope.repositories[0].excluded_paths.length === 1 && scope.repositories[0].excluded_paths[0] === "docs/README.md", "仅保存被排除的文件路径");
-  await click("返回知识库"); await until(() => counts(4), "单文件排除后首页计数减少，另一模块不变");
+  await click("返回知识库"); await until(() => counts(4), "单文件排除后目录数据减少，另一模块不变");
   await openReader(); await openFilter();
   check(checkbox(repositories[0], "docs/README.md").getAttribute("aria-checked") === "false", "已排除文件仍可见并可恢复");
   check(checkbox(repositories[0], "docs/FAQ.md").getAttribute("aria-checked") === "true", "重新打开相邻文件仍保持勾选");
   checkbox(repositories[0], "docs/README.md").click(); await pause();
   await click("保存"); await until(() => saves === 4 && !document.querySelector('[role="dialog"][data-open]'), "单文件重新勾选已保存");
-  await click("返回知识库"); await until(() => counts(5), "恢复单文件后首页计数恢复，另一模块不变");
+  await click("返回知识库"); await until(() => counts(5), "恢复单文件后目录数据恢复，另一模块不变");
   await openReader(); await openFilter();
   checkbox(repositories[0], "docs/交易").click(); await pause(); conflict = true;
   await click("保存");
