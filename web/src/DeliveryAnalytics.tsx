@@ -19,10 +19,19 @@ import { TicketTemplateCard } from "./issues/TicketTemplateCard";
 import { onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
 
+/** 首做/返工/平台外工作行三分类的贯穿色:需求交付(交付代码来源)与
+ *  DTS(生成工作行来源)两环同色系,调色单点在这里。 */
+const donutColors = { first: "#0d9488", rework: "#8b5cf6", external: "#d97706" } as const;
 const categories: Array<{ key: CodeOrigin; label: string; color: string }> = [
-  { key: "first", label: "首次实现", color: "#0d9488" },
-  { key: "pipeline", label: "流水线修复", color: "#8b5cf6" },
-  { key: "review", label: "检视意见修改", color: "#d97706" },
+  { key: "first", label: "首次实现", color: donutColors.first },
+  { key: "pipeline", label: "流水线修复", color: donutColors.rework },
+  { key: "review", label: "检视意见修改", color: donutColors.external },
+];
+/** DTS 生成工作行三分类环的切片(2026-10-20 指标收敛,见 IssueAnalyticsTab 注)。 */
+const worklineSlices = (lines: { first: number; rework: number; external: number }) => [
+  { label: "首轮", color: donutColors.first, value: lines.first },
+  { label: "返工", color: donutColors.rework, value: lines.rework },
+  { label: "平台外", color: donutColors.external, value: lines.external },
 ];
 const num = (value: number) => value.toLocaleString("zh-CN");
 const percent = (value: number | null) => value === null ? "—" : `${value.toFixed(1)}%`;
@@ -38,31 +47,42 @@ function AnalysisFilter({ label, value, onChange, items }: {
   </div>;
 }
 
-function sumLines(stats: IssueOnceGenerated | undefined): { first: number; total: number } {
-  let first = 0; let total = 0;
+function sumLineKinds(stats: IssueOnceGenerated | undefined): { first: number; rework: number; external: number; total: number } {
+  let first = 0, rework = 0, external = 0;
   for (const row of stats?.per_session ?? []) {
     first += row.lines?.first ?? 0;
-    total += (row.lines?.first ?? 0) + (row.lines?.rework ?? 0)
-      + (row.lines?.external ?? 0);
+    rework += row.lines?.rework ?? 0;
+    external += row.lines?.external ?? 0;
   }
-  return { first, total };
+  return { first, rework, external, total: first + rework + external };
 }
 function weightedShare(stats: IssueOnceGenerated | undefined): number | null {
-  const { first, total } = sumLines(stats);
+  const { first, total } = sumLineKinds(stats);
   return total ? Math.round((first / total) * 1000) / 10 : null;
 }
 
-function Donut({ counts }: { counts: OriginCounts }) {
-  const total = sumOrigins(counts);
+function Donut({ slices, unit, centerValue, centerLabel, ariaLabel }: {
+  slices: Array<{ label: string; color: string; value: number }>;
+  unit: string; centerValue: string; centerLabel: string; ariaLabel: string;
+}) {
+  const total = slices.reduce((sum, s) => sum + s.value, 0);
   let offset = 0;
   return <div className="delivery-donut-wrap"><div className="delivery-donut">
-    <svg viewBox="0 0 200 200" role="img" aria-label={`交付代码行数 ${total} 行，首次实现占比 ${percent(total ? counts.first / total * 100 : null)}`}>
+    <svg viewBox="0 0 200 200" role="img" aria-label={ariaLabel}>
       <circle cx="100" cy="100" r="78" fill="none" stroke="var(--line)" strokeWidth="22" />
-      {categories.map(c => { const size = total ? counts[c.key] / total * 100 : 0, start = offset; offset += size;
-        return <circle key={c.key} cx="100" cy="100" r="78" fill="none" stroke={c.color} strokeWidth="22" pathLength="100"
-          style={{ strokeLinecap: "butt" }} strokeDasharray={`${size} ${100 - size}`} strokeDashoffset={-start} transform="rotate(-90 100 100)"><title>{c.label}：{num(counts[c.key])} 行</title></circle>; })}
-    </svg><div className="delivery-donut-center"><strong>{percent(total ? counts.first / total * 100 : null)}</strong><span>首次实现占比</span></div>
-  </div><div className="delivery-legend">{categories.map(c => <div key={c.key}><i style={{ background: c.color }} /><span>{c.label}</span><b>{num(counts[c.key])} 行</b><small>{percent(total ? counts[c.key] / total * 100 : null)}</small></div>)}</div></div>;
+      {slices.map(s => { const size = total ? s.value / total * 100 : 0, start = offset; offset += size;
+        return <circle key={s.label} cx="100" cy="100" r="78" fill="none" stroke={s.color} strokeWidth="22" pathLength="100"
+          style={{ strokeLinecap: "butt" }} strokeDasharray={`${size} ${100 - size}`} strokeDashoffset={-start} transform="rotate(-90 100 100)"><title>{s.label}：{num(s.value)} {unit}</title></circle>; })}
+    </svg><div className="delivery-donut-center"><strong>{centerValue}</strong><span>{centerLabel}</span></div>
+  </div><div className="delivery-legend">{slices.map(s => <div key={s.label}><i style={{ background: s.color }} /><span>{s.label}</span><b>{num(s.value)} {unit}</b><small>{percent(total ? s.value / total * 100 : null)}</small></div>)}</div></div>;
+}
+/** 需求交付的交付代码来源环:工作行三分类(首次实现/流水线修复/检视意见修改)。 */
+function OriginDonut({ counts }: { counts: OriginCounts }) {
+  const total = sumOrigins(counts);
+  const share = percent(total ? counts.first / total * 100 : null);
+  return <Donut unit="行" centerValue={share} centerLabel="首次实现占比"
+    ariaLabel={`交付代码行数 ${total} 行，首次实现占比 ${share}`}
+    slices={categories.map(c => ({ label: c.label, color: c.color, value: counts[c.key] }))} />;
 }
 function TaskLanguages({ tasks }: { tasks: DeliveryAnalysisRow[] }) {
   useTechnologyStacks();
@@ -80,6 +100,9 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
  *  每会话明细与特性聚合——读侧与团队问题页统计瓦片同一端点、同一
  *  数字;行点击下钻行归属证据(伴生快照原样)。人群=有单交付会话;
  *  无单会话在「登记问题」页签(ADR-0048)。纯呈现层,不建第二套口径。
+ *  2026-10-20 指标收敛(领导拍板):概览只留两图——一次解决率与首次
+ *  生成占比(双环,样式与需求交付概览同款);90%AI生成达标率整档退场,
+ *  一次定位/一次验证只在按会话表留 ✓/✗ 诊断列;后端端点零改动。
  *  导出仅供视觉走查场景脚本挂载(与需求侧同款做法)。 */
 export function IssueAnalyticsTab() {
   const [stats, setStats] = useState<IssueOnceGenerated>();
@@ -112,15 +135,9 @@ export function IssueAnalyticsTab() {
   const pct = (value: number | null | undefined) =>
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
   const delivered = stats?.delivered ?? 0;
-  const tile = (label: string, rate: number | null | undefined, sub: string, tip: string) =>
-    <div className="rounded-[14px] border border-line bg-surface px-5 py-4">
-      <small className="mb-1.5 flex items-center gap-1.5 text-[13px] text-muted-foreground">
-        {label}{help(tip)}
-      </small>
-      <strong className="block text-[32px] leading-none tracking-[-0.02em] tabular-nums text-text-strong">
-        {pct(rate)}</strong>
-      <span className="mt-2 block text-xs text-muted-foreground">{sub}</span>
-    </div>;
+  const lines = sumLineKinds(stats);
+  const solvedRate = pct(stats?.solved.rate);
+  const shareRate = pct(weightedShare(stats));
   const help = (tip: string) =>
     <span className="help-tip" data-tip={tip}>
       <HelpCircle size={14} className="text-muted-foreground" />
@@ -135,22 +152,20 @@ export function IssueAnalyticsTab() {
           <span className="help-tip" data-tip={`待算 ${stats.pending} · 无源码交付 ${stats.no_code} · 早于 ${stats.supported_since} 起算日 ${stats.unsupported} 个,均不进统计`}><HelpCircle size={14} className="text-muted-foreground" /></span>}
       </span>
     </div>
-    <div className="grid grid-cols-[repeat(5,1fr)] gap-3.5">
-      {tile("一次解决率", stats?.solved.rate,
-        `${stats?.solved.passed ?? 0}/${delivered} 会话`,
-        "报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话。")}
-      {tile("90%AI生成达标率", stats?.rate,
-        `${stats?.passed ?? 0}/${stats?.total ?? 0} 会话 ≥ 90%`,
-        "单会话首次生成占比 ≥ 达标线(参数,当前 90%)判达标;多仓会话按工作行加权合成。分母=有统计数据的完成交付会话。")}
-      {tile("一次定位率", stats?.localization.rate,
-        `${stats?.localization.passed ?? 0}/${stats?.localization.total ?? delivered} 会话`,
-        "分析报告一版过即一次定位;检视提出修改会生成新版本。")}
-      {tile("一次验证率", stats?.verify.rate,
-        `${stats?.verify.passed ?? 0}/${delivered} 会话`,
-        "验证不通过次数=0 即一次验证;未答卡=通过(合入即通过)。")}
-      {tile("首次生成占比", weightedShare(stats),
-        `首轮 ${num(sumLines(stats).first)} / 全部 ${num(sumLines(stats).total)} 行`,
-        "首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}
+    <div className="delivery-overview-grid">
+      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话;按会话表的定位/验证✓✗是它的两个因子。")}</h2>
+        <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
+          ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
+          slices={[
+            { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
+            { label: "未一次解决", color: "var(--line-strong)", value: (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) },
+          ]} />
+      </section>
+      <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
+        <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
+          ariaLabel={`生成工作行 ${num(lines.total)} 行，首次生成占比 ${shareRate}`}
+          slices={worklineSlices(lines)} />
+      </section>
     </div>
     <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
       {([["feature", "按特性"], ["session", "按会话"], ["repo", "按代码仓"]] as const).map(([key, label]) =>
@@ -160,18 +175,15 @@ export function IssueAnalyticsTab() {
           onClick={() => setDim(key)}>{label}</button>)}
     </div>
     {dim === "feature" && <section className="delivery-card"><h2 className="flex items-center gap-2">按特性
-      {help("点特性名可筛选;定位/验证/解决按会话归属特性计,占比按工作行加权")}</h2>
+      {help("点特性名可筛选;一次解决按会话归属特性计,占比按工作行加权")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>特性</th><th>会话数</th><th>一次解决率</th><th>90%AI生成达标率</th><th>一次定位率</th><th>一次验证率</th><th>首次生成占比</th>
+        <th>特性</th><th>会话数</th><th>一次解决率</th><th>首次生成占比</th>
       </tr></thead>
         <tbody>{features.map((feature: OnceGeneratedFeatureRow) => <tr key={feature.module}>
           <td><button className="delivery-task-link" aria-pressed={module === feature.module}
             onClick={() => setModule(module === feature.module ? "*" : feature.module)}><b>{feature.module}</b></button></td>
           <td>{feature.sessions}</td>
           <td className="pct">{pct(feature.solved_rate)}</td>
-          <td className="pct">{pct(feature.pass_rate)}</td>
-          <td className="pct">{pct(feature.localization_rate)}</td>
-          <td className="pct">{pct(feature.verify_rate)}</td>
           <td className="delivery-accent pct">{pct(feature.share)}</td>
         </tr>)}</tbody></table></div>
       {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有完成交付的会话"}</p>}
@@ -179,14 +191,13 @@ export function IssueAnalyticsTab() {
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
       {help("点行查看该会话的行归属证据;一次定位括号为报告版本数,一次验证✗为验证失败次数")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>会话</th><th>特性</th><th>一次解决</th><th>90%AI生成达标</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th><th>发起人</th><th>收口时间</th>
+        <th>会话</th><th>特性</th><th>一次解决</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th><th>发起人</th><th>收口时间</th>
       </tr></thead>
         <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id} style={{ cursor: "pointer" }}
           title="查看行归属证据" onClick={() => setSelected(row.id)}>
           <td><span className="delivery-task-link" style={{ cursor: "pointer" }}><b>{row.id}</b><span>{row.title}</span></span></td>
           <td>{row.module}</td>
           <td>{row.solved_pass ? <span className="font-semibold text-success">✓</span> : <span className="font-semibold text-danger">✗</span>}</td>
-          <td>{row.pass ? <span className="font-semibold text-success">达标</span> : <span className="font-semibold text-danger">未达标</span>}</td>
           <td>{row.localization_pass ? <span className="text-success">✓ 一版</span> : <span className="text-danger">✗ 多版</span>}</td>
           <td>{row.verify_pass ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}</td>
           <td className="delivery-accent pct">{pct(row.share)}</td>
@@ -211,8 +222,8 @@ export function IssueAnalyticsTab() {
       {!repos.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有代码仓数据"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
-      <p>一次定位率=分析报告一版过;一次验证率=验证不通过 0 次(未答卡=通过);一次解决率=两者同时;分母均为完成交付会话。</p>
-      <p>首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内);返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;被强制覆盖(force push)的平台推送按原分类计入,证据表里标「已覆盖」;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
+      <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话,按会话表的定位/验证✓✗是它的两个因子;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
+      <p>首次生成占比的返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;被强制覆盖(force push)的平台推送按原分类计入,证据表里标「已覆盖」;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
       <SheetContent className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]">
@@ -429,7 +440,7 @@ export function DeliveryAnalytics({ onOpenTask, initialTab }: {
     </div>
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="delivery-scope"><BarChart3 size={18} /><span>团队汇总仅计已合入交付 · {summary.available} / {merged.length} 次交付有统计证据 · 按任务完成时间筛选，同一任务可多次交付，主任务不重复计数</span></div>
-    <div className="delivery-overview-grid"><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(summary.total)} 行</span></h2><Donut counts={summary.retained} /></section>
+    <div className="delivery-overview-grid"><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(summary.total)} 行</span></h2><OriginDonut counts={summary.retained} /></section>
     <section className="delivery-card"><h2>业务模块交付占比 <span>已合入需求的交付代码行数</span></h2>
       <div className="delivery-module-bars">{moduleGroups.map(group => <button key={group.id} className="delivery-module-row" aria-pressed={module === group.id}
         onClick={() => { setModule(module === group.id ? "*" : group.id); setPage(0); }}>
@@ -443,7 +454,7 @@ export function DeliveryAnalytics({ onOpenTask, initialTab }: {
       return <Fragment key={id}>{parent && <TaskMetricRow id={id} title={`${tasks[0].parent_title ?? "主任务"} · 主任务汇总`} tasks={tasks} ledger={report?.task_tokens} parent onSelect={setSelected} />}{[...new Set(tasks.map(row => row.id))].map(taskId => <TaskMetricRow key={taskId} id={taskId} title={tasks.find(row => row.id === taskId)!.title} tasks={tasks.filter(row => row.id === taskId)} ledger={report?.task_tokens} onSelect={setSelected} child={parent} />)}</Fragment>;
     })}</tbody></table></div>{groupRows.length > 10 && <div className="delivery-pagination"><span>第 {currentPage + 1} / {Math.ceil(groupRows.length / 10)} 页</span><Button variant="outline" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>上一页</Button><Button variant="outline" disabled={(currentPage + 1) * 10 >= groupRows.length} onClick={() => setPage(currentPage + 1)}>下一页</Button></div>}{!rows.length && <p className="delivery-empty">{busy ? "正在读取交付记录…" : "当前条件下没有需求任务"}</p>}</section>
     <details className="delivery-method"><summary>统计口径与数据边界</summary><p>以最终交付差异中的新增/修改行为分母，追溯最后修改它的提交。最终差异删除行另计 {num(summary.deleted)} 行。</p><p>首次实现包含首次实际修复之前的多个提交；缺少记录时以第一条明确修复提交为界，没有修复迹象时暂按首轮实现统计。统计源码、测试、脚本及配置等交付文本；Markdown、二进制、依赖目录、构建产物和平台运行文件不计入。配置先提交也属于首轮实现。</p><p>流水线 / 检视归因来自宿主实际修复轮次及前后提交范围。能明确识别为流水线修复的归流水线，其余后续提交归检视修改；缺少记录时结合提交说明推断，并在分类依据中标明；已有明确分类不被推断覆盖。历史改写或缺少合入前快照时，该任务暂不纳入汇总。</p><p>Token 使用已有模型用量台账，输入与输出相加；主任务汇总包含自身分析及当前筛选范围的子任务，每个任务只计一次。不要求已推送或已有代码统计；没有上报的历史消耗显示暂无记录。</p><p>这不是代码质量评分；不同任务规模与范围不同。覆盖不足时请结合任务明细解读统计。采集在推送后后台进行，稍后刷新可查看结果，不阻塞开发交付。</p></details>
-    <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}><SheetContent initialFocus={detailTitle} className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]"><SheetHeader><SheetTitle ref={detailTitle} tabIndex={-1}>{selected} · {selectedParent ? "主任务汇总" : "交付分析"}</SheetTitle><SheetDescription>{selectedParent ? `${detailRows[0]?.parent_title ?? "主任务"} · 当前筛选范围内 ${new Set(detailRows.map(row => row.id)).size} 个子任务` : detailRows[0]?.title ?? "交付记录"}</SheetDescription></SheetHeader><div className="delivery-detail-body">{!detailRows.length ? <p>未找到该任务的交付记录。</p> : <><TaskLanguages tasks={detailRows} /><p className="delivery-scope">{selectedParent ? `已合入交付 ${detailRows.filter(r => r.merged).length}/${detailRows.length}${detailRows.some(r => !r.merged) ? " · 含未合入暂计" : ""}` : detailRows.every(r => r.merged) ? "已合入" : "进行中，以下为最近推送版本的暂计数据"} · 证据覆盖 {detail.available}/{detail.tasks}</p><section className="delivery-card"><h2>Token 消耗 <span>{selectedParent ? "含主任务自身及当前范围子任务" : "本任务累计用量"}</span></h2><div className="grid grid-cols-3 gap-4 py-4"><div>总计<strong className="block text-xl">{detailTokens.available ? num(detailTokens.total) : "—"}</strong></div><div>输入<strong className="block text-xl">{detailTokens.available ? num(detailTokens.input) : "—"}</strong></div><div>输出<strong className="block text-xl">{detailTokens.available ? num(detailTokens.output) : "—"}</strong></div></div>{detailTokens.available < detailTokens.tasks && <p className="delivery-muted">{detailTokens.available}/{detailTokens.tasks} 个任务有用量记录；未记录的历史消耗不估算。</p>}</section><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(detail.total)} 行</span></h2><Donut counts={detail.retained} /></section>{detailRows.map(row => <section className="delivery-card" key={`${row.id}:${row.delivery_id ?? "initial"}`}><div className="delivery-detail-heading"><h2>{row.id} · {new Date(row.at).toLocaleString("zh-CN")} · 提交记录</h2><a href={`/work/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer">工作台 <ExternalLink size={14} /></a>{row.mr_url && <a href={row.mr_url} target="_blank" rel="noreferrer">MR <ExternalLink size={14} /></a>}</div>{row.unavailable && <p className="delivery-note">{row.unavailable}</p>}{row.metric && <><p className="delivery-muted">比较 {row.metric.base.slice(0, 8)} → {row.metric.head.slice(0, 8)} · 排除 {row.metric.excluded_files} 个非代码文本文件</p><ol className="delivery-timeline">{row.metric.commits.map(c => <li key={c.sha}><i style={{ background: categories.find(k => k.key === c.origin)?.color }} /><div><strong>{categories.find(k => k.key === c.origin)?.label}</strong><span className="delivery-commit-size">+{num(c.additions)} / −{num(c.deletions)}</span><p>{c.subject}</p>{c.origin_evidence?.length ? <details><summary>分类依据</summary>{c.origin_evidence.map((text, index) => <p key={index}>{text}</p>)}</details> : null}<small>{c.sha.slice(0, 10)} · {new Date(c.at).toLocaleString("zh-CN")}</small></div></li>)}</ol></>}</section>)}</>}</div></SheetContent></Sheet>
+    <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}><SheetContent initialFocus={detailTitle} className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]"><SheetHeader><SheetTitle ref={detailTitle} tabIndex={-1}>{selected} · {selectedParent ? "主任务汇总" : "交付分析"}</SheetTitle><SheetDescription>{selectedParent ? `${detailRows[0]?.parent_title ?? "主任务"} · 当前筛选范围内 ${new Set(detailRows.map(row => row.id)).size} 个子任务` : detailRows[0]?.title ?? "交付记录"}</SheetDescription></SheetHeader><div className="delivery-detail-body">{!detailRows.length ? <p>未找到该任务的交付记录。</p> : <><TaskLanguages tasks={detailRows} /><p className="delivery-scope">{selectedParent ? `已合入交付 ${detailRows.filter(r => r.merged).length}/${detailRows.length}${detailRows.some(r => !r.merged) ? " · 含未合入暂计" : ""}` : detailRows.every(r => r.merged) ? "已合入" : "进行中，以下为最近推送版本的暂计数据"} · 证据覆盖 {detail.available}/{detail.tasks}</p><section className="delivery-card"><h2>Token 消耗 <span>{selectedParent ? "含主任务自身及当前范围子任务" : "本任务累计用量"}</span></h2><div className="grid grid-cols-3 gap-4 py-4"><div>总计<strong className="block text-xl">{detailTokens.available ? num(detailTokens.total) : "—"}</strong></div><div>输入<strong className="block text-xl">{detailTokens.available ? num(detailTokens.input) : "—"}</strong></div><div>输出<strong className="block text-xl">{detailTokens.available ? num(detailTokens.output) : "—"}</strong></div></div>{detailTokens.available < detailTokens.tasks && <p className="delivery-muted">{detailTokens.available}/{detailTokens.tasks} 个任务有用量记录；未记录的历史消耗不估算。</p>}</section><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(detail.total)} 行</span></h2><OriginDonut counts={detail.retained} /></section>{detailRows.map(row => <section className="delivery-card" key={`${row.id}:${row.delivery_id ?? "initial"}`}><div className="delivery-detail-heading"><h2>{row.id} · {new Date(row.at).toLocaleString("zh-CN")} · 提交记录</h2><a href={`/work/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer">工作台 <ExternalLink size={14} /></a>{row.mr_url && <a href={row.mr_url} target="_blank" rel="noreferrer">MR <ExternalLink size={14} /></a>}</div>{row.unavailable && <p className="delivery-note">{row.unavailable}</p>}{row.metric && <><p className="delivery-muted">比较 {row.metric.base.slice(0, 8)} → {row.metric.head.slice(0, 8)} · 排除 {row.metric.excluded_files} 个非代码文本文件</p><ol className="delivery-timeline">{row.metric.commits.map(c => <li key={c.sha}><i style={{ background: categories.find(k => k.key === c.origin)?.color }} /><div><strong>{categories.find(k => k.key === c.origin)?.label}</strong><span className="delivery-commit-size">+{num(c.additions)} / −{num(c.deletions)}</span><p>{c.subject}</p>{c.origin_evidence?.length ? <details><summary>分类依据</summary>{c.origin_evidence.map((text, index) => <p key={index}>{text}</p>)}</details> : null}<small>{c.sha.slice(0, 10)} · {new Date(c.at).toLocaleString("zh-CN")}</small></div></li>)}</ol></>}</section>)}</>}</div></SheetContent></Sheet>
     </>}
     {tab === "issue" && <IssueAnalyticsTab />}
     {tab === "registration" && <RegistrationAnalyticsTab />}
