@@ -820,7 +820,8 @@ install -m 600 /dev/null /etc/mae-flow-cloud/mcp-token
 | build-fix-command-timeout-minutes | 普通仓 20 / C++ 仓 45 | Maven/CMake/Make/Gradle/npm 等单条重构建预算；Agent 填得更短时由平台自动提升，总预算仍是硬上限 |
 | repair-rounds | 不限 | 修复环手刹:数字=上限,0=关;不配=修到绿/出诊断为止 |
 | poll-interval / poll-timeout | 10 / 1800(秒) | 流水线轮询节奏与预算 |
-| max-concurrent | 2 | 并发任务数 |
+| max-concurrent | 2 | 需求任务并发数；不控制问题单 |
+| issue-max-turns | 10 | 问题单新建与重启恢复的调度并发数；管理页「问题单并发数」优先于此值 |
 | workspace-retention-days | 14 | 现场保留期(天)。终态任务过期后回收**代码克隆等编译环境**,交付账本/事件/transcript/prepush 收据/流水线证据/批注一律保留;`0`=永不回收。只碰 completed/failed/canceled,`await_merge` 与 `verifying` 不碰 |
 | compact-every | 已废弃 | 旧配置兼容；主、子、专项会话统一在模型请求前按容量主动整理，无需配置事件数 |
 | desktop-notify | false | 单机手感的桌面弹窗 |
@@ -1082,7 +1083,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   Environment=MAE_FLOW_HOME=/srv/mae-flow
   Environment=MAE_FLOW_ADMIN_USER=admin
   EnvironmentFile=/etc/mae-flow-cloud/secrets.env
-  ExecStart=/usr/bin/npm run serve -- \
+  ExecStart=/usr/bin/node --max-old-space-size=32768 --import tsx src/serve.ts \
     --models /etc/mae-flow-cloud/models.json \
     --provider <网关名> --model glm-5.1 \
     --kernel-mode --platform <MR/流水线网关地址> \
@@ -1104,6 +1105,13 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
   不要把密码直接写进单元文件或仓库。账号库已存在后不会重复创建管理员。
   必须以 root 运行的部署(极少数,如需要读受限 CA):去掉 `User=` 并在
   ExecStart 追加 `--isolate-user <业务uid>:<业务gid>`——0:0 会被拒绝启动。
+- **明确执行进程的堆上限与问题单并发**：`npm run serve`、`npm run runtime`
+  默认按约 60 GiB 内存的部署机器设置 32 GiB 老生代堆上限；直接运行 Node 的 systemd 单元也要像上例一样
+  显式传入 `--max-old-space-size=32768`。这不是进程总内存限制，部署时须给
+  原生内存和任务容器留出空间。配置方式、优先级和重启范围见
+  [执行服务内存与问题单并发](execution-continuity.md#执行服务内存与问题单并发)。
+  问题单默认并发仍为 10；若需调整，应使用管理页「问题单并发数」或
+  执行服务的 `issue-max-turns`，仅修改 `max-concurrent` 对问题单无效。
 - 环回代理教训(外部踩过三次):如果服务器有全局代理,
   确认 `NO_PROXY=127.0.0.1,localhost`(代码里 `ensureLoopbackDirect()`
   已兜底,但 curl 排障时记得 `--noproxy '*'`)。
@@ -1138,7 +1146,7 @@ npm run serve -- --models /etc/mae-flow-cloud/models.json \
    (429/网关错误会如实落 failed + detail,不会假 completed);
 4. 适配层自检通过，管理员「部署自检」确认「Linux 部署」与 MR/流水线
    能力均为 ok；容器部署时服务必须直接接收停止信号（PID 1），建议用
-   `exec node --import tsx src/serve.ts …` 或直接运行编译后的 JS，不要让
+   `exec node --max-old-space-size=32768 --import tsx src/serve.ts …` 或直接运行编译后的 JS，不要让
    npm / tsx 启动器隔一层；「统一任务容器」也必须为 ok，并显示不可变镜像 digest，
    该项会在 bind-mounted 工作区真实写文件并编译 Java/C++，逐项写读删
    Maven/npm/ccache/XDG 缓存，检查 Node/Maven 后确认容器销毁;

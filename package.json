@@ -16,10 +16,10 @@
     "ui:fixtures": "tsx scripts/seed-ui-workbench-fixtures.ts",
     "ui:fixtures:reset": "tsx scripts/seed-ui-workbench-fixtures.ts --force",
     "ui:preview": "MAE_FLOW_UI_FIXTURE_MODE=1 tsx src/serve.ts --data .ui-fixtures --port 8838",
-    "serve": "tsx src/serve.ts",
+    "serve": "node --max-old-space-size=32768 --import tsx src/serve.ts",
     "adapter": "tsx src/platformAdapter.ts",
     "pilot": "tsx src/pilot.ts",
-    "runtime": "tsx src/executionRuntime.ts",
+    "runtime": "node --max-old-space-size=32768 --import tsx src/executionRuntime.ts",
     "test:affected": "tsx scripts/affected-tests.ts",
     "benchmark:knowledge": "tsx harness/knowledge-benchmark/run.ts",
     "benchmark:knowledge:feedback": "tsx harness/knowledge-benchmark/feedback.ts"
