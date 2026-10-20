@@ -156,7 +156,7 @@
 .km-home-group-heading > svg { color:var(--primary); }
 .km-home-group-heading > span { color:var(--muted); font-size:13px; font-weight:400; font-variant-numeric:tabular-nums; }
 .km-home-group-heading::after { content:""; flex:1; height:1px; margin-left:5px; background:color-mix(in srgb,var(--primary) 12%,var(--line)); }
-.km-module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:16px; }
+.km-module-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
 .km-reader { display: flex; flex-direction: column; height: calc(100dvh - 175px); min-height: 470px; min-width: 0; overflow: hidden; margin: 20px 28px; }
 .km-reader-panes { display: grid; grid-template-columns: var(--knowledge-tree-width, 250px) minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
 .km-reader-panes[data-tree-hidden="true"] { grid-template-columns: minmax(0, 1fr); }
@@ -181,16 +181,15 @@
 .km-module-card:has(.km-module-open:hover),.km-module-card:focus-within { border-color:color-mix(in srgb,var(--primary) 55%,var(--line)); }
 .km-module-card .km-module-open { display:flex; align-self:stretch; flex:1; width:100%; height:auto; min-width:0; padding:0; border:0; border-radius:0; white-space:normal; text-align:left; background:transparent; }
 .km-module-open:focus-visible { outline:2px solid var(--primary); outline-offset:-3px; box-shadow:none; border-radius:var(--radius-lg); }
-.km-module-content { display:flex; flex-direction:column; width:100%; min-width:0; height:100%; }
-.km-module-title { display:flex; align-items:center; gap:12px; padding:20px 20px 0; min-height:64px; }
+.km-module-content { display:flex; flex-direction:column; gap:8px; width:100%; min-width:0; height:100%; padding:16px; }
+.km-module-title { display:flex; align-items:center; gap:10px; min-height:32px; }
 .km-module-title h3 { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; flex:1; min-width:0; margin:0; color:var(--text-strong); font-size:17px; font-weight:600; line-height:1.45; }
-.km-module-icon { display:grid; place-items:center; flex-shrink:0; width:40px; height:40px; border:1px solid color-mix(in srgb,var(--primary) 20%,var(--line)); border-radius:var(--radius); background:color-mix(in srgb,var(--primary) 12%,var(--surface)); color:var(--primary); }
-.km-module-icon > svg { width:21px; height:21px; }
+.km-module-icon { display:grid; place-items:center; flex-shrink:0; width:32px; height:32px; border:1px solid color-mix(in srgb,var(--primary) 20%,var(--line)); border-radius:var(--radius); background:color-mix(in srgb,var(--primary) 12%,var(--surface)); color:var(--primary); }
+.km-module-icon > svg { width:18px; height:18px; }
 .km-module-card[data-category=engineering] .km-module-icon { background:var(--primary); color:var(--primary-foreground); border-color:var(--primary); }
 .km-module-title .km-module-arrow { flex-shrink:0; color:var(--faint); }
 .km-module-open:hover .km-module-arrow { color:var(--primary); }
-.km-module-description { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; min-height:42px; margin:12px 20px 16px; color:var(--muted); font-size:13px; font-weight:400; line-height:21px; }
-.km-module-footer { margin-top:auto; padding:9px 20px; border-top:1px solid color-mix(in srgb,var(--primary) 10%,var(--line)); background:color-mix(in srgb,var(--primary) 5%,var(--surface)); color:var(--muted); font-size:12px; font-weight:400; line-height:18px; }
+.km-module-description { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; overflow-wrap:anywhere; min-height:42px; margin:0; color:var(--muted); font-size:13px; font-weight:400; line-height:21px; }
 .km-source-location { display:flex;align-items:center;gap:12px;flex-shrink:0;padding:13px 18px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--primary) 3%,var(--surface)); }
 .km-source-location.is-unconfigured { background:color-mix(in srgb,var(--primary) 6%,var(--surface)); }
 .km-location-settings { display:inline-flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0;padding:7px 10px;border-radius:7px;color:var(--primary);font-size:12px;font-weight:500;text-decoration:none; }

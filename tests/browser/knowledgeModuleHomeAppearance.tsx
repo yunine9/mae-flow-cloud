@@ -88,7 +88,7 @@ function desktop() {
 async function run() {
   await until(() => cards().length === 11, "加载 8 个业务模块和 3 个技术栈");
   check(!document.querySelector('[aria-label="知识目录"]')?.textContent?.includes("Function_Knowledge"), "首页不显示已配置的领域知识相对路径");
-  check(cards().every(entry => !entry.textContent?.includes("文档：") && !entry.querySelector('[aria-label^="文档数量"]')), "模块卡片不展示文档数量");
+  check(cards().every(entry => !/文档：|最近维护|暂无维护记录/.test(entry.textContent ?? "") && !entry.querySelector('[aria-label^="文档数量"]')), "模块卡片不展示文档数量和维护时间");
   const longTitle = moduleFixtures[2][1], longCard = card(longTitle);
   check(longCard?.title === longTitle || longCard?.querySelector(`[title="${longTitle}"]`), "截断的长标题可通过悬停查看完整名称");
   desktop();

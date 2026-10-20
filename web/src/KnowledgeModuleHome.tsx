@@ -63,7 +63,6 @@ export function KnowledgeModuleHome({ onOpenModule, onOpenDocument }: KnowledgeM
                   <ChevronRight size={18} className="km-module-arrow" aria-hidden="true" />
                 </div>
                 <p className="km-module-description">{module.description || (module.category === "business" ? "远端正式文档与关联仓知识" : "基础组件知识与 Skill")}</p>
-                <div className="km-module-footer">{module.maintainedAt ? `最近维护 ${new Date(module.maintainedAt).toLocaleDateString("zh-CN")}` : "暂无维护记录"}</div>
               </div>
             </Button>
             {hits.length > 0 && onOpenDocument && <div className="grid gap-1 border-t border-line px-4 py-2">{hits.map(doc => <Button key={doc.id} variant="ghost" size="sm" className="justify-start" onClick={() => onOpenDocument(doc.id, module.key)}><ArrowUpRight size={14} /><span className="truncate">{doc.name}</span></Button>)}</div>}
