@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   mountedPromptAnchors,
   promptCopy,
@@ -61,4 +62,30 @@ test("fail-loud:锚点缺失、变量缺失、替换后残留占位符都当场�
     () => promptCopy("receipts", "mrgate.awaiting", {}),
     /变量缺失/,
   );
+});
+
+test("编译产物回收通知:继续原任务,按需重建且不保证依赖无需下载", () => {
+  const notice = promptCopy("notices", "rework.products_reclaimed");
+  assert.match(notice, /部分编译中间产物已释放/);
+  assert.match(notice, /接着当前任务继续/);
+  assert.match(notice, /答卡或继续分析无需立即编译/);
+  assert.match(notice, /真正需要编译时检查现有准备情况/);
+  assert.match(notice, /重新准备相关仓并编译/);
+  assert.match(notice, /缺少的依赖仍需下载/);
+  assert.doesNotMatch(notice, /node_modules|无需重新下载|首次编译是全量编译/);
+});
+
+test("本地验证按改动风险选择,如实报告并保留当前提交流水线验收", () => {
+  const delivery = readFileSync(
+    new URL("../assets/issue-skills/issue-delivery/SKILL.md", import.meta.url),
+    "utf-8");
+  assert.match(delivery, /可以直接提交推送,无需专门启动本地编译/);
+  assert.match(delivery, /判断依据是风险,不是文件数量/);
+  assert.match(delivery, /环境准备、首次构建和 UT 要求/);
+  assert.match(delivery, /准备、下载和编译命令设合理超时/);
+  assert.match(delivery, /同一错误先查原因再重试/);
+  assert.match(delivery, /未做本地编译或测试就在交付说明中写明范围与原因/);
+  assert.match(delivery, /当前提交真实流水线结果/);
+  assert.doesNotMatch(delivery, /先写能复现问题的单测再改码转绿/,
+    "简单修改无需为了启动验证专门编译,也不强制增加复现单测");
 });

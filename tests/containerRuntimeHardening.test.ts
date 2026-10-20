@@ -190,6 +190,20 @@ function container(
   );
 }
 
+test("命令检查及运行期间标记活动，成功和失败后都释放", async () => {
+  const runner = new FakeDockerRunner(workspace());
+  const subject = container(runner);
+  assert.equal(subject.hasActiveProcesses, false);
+  await subject.start();
+  const pending = subject.exec("true", runner.workspace, { onData() {} });
+  assert.equal(subject.hasActiveProcesses, true, "异步容器检查前就已标记");
+  await pending;
+  assert.equal(subject.hasActiveProcesses, false);
+  await subject.stop();
+  await assert.rejects(subject.exec("true", runner.workspace, { onData() {} }));
+  assert.equal(subject.hasActiveProcesses, false);
+});
+
 test("标准镜像原生 HOME 同步用户配置、tmpfs，镜像旧 Maven 目录被明确覆盖", async () => {
   const runner = new FakeDockerRunner(workspace());
   const subject = container(runner, { environment: { HOME: "/home/huawei" } });

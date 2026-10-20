@@ -33,6 +33,7 @@ import { cn } from "cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { UserPicker, userLabel } from "./UserPicker";
 import {
@@ -140,6 +141,8 @@ function RuntimeCard({ view, onSaved }: {
   const text = (value?: number) => value === undefined ? "" : String(value);
   const [concurrent, setConcurrent] = useState(text(runtime.max_concurrent));
   const [issueTurns, setIssueTurns] = useState(text(runtime.issue_max_turns));
+  const [issueWarmup, setIssueWarmup] = useState(
+    (runtime.issue_warmup_enabled ?? defaults.issue_warmup_enabled) === 1);
   const [repoReclaim, setRepoReclaim] = useState(text(runtime.issue_repo_reclaim));
   const [productsCooldown, setProductsCooldown] = useState(
     text(runtime.issue_build_products_cooldown_hours));
@@ -166,6 +169,7 @@ function RuntimeCard({ view, onSaved }: {
       onSaved(await putRuntimeSettings({
         max_concurrent: concurrent.trim(),
         issue_max_turns: issueTurns.trim(),
+        issue_warmup_enabled: issueWarmup ? 1 : 0,
         issue_repo_reclaim: repoReclaim.trim(),
         issue_build_products_cooldown_hours: productsCooldown.trim(),
         repair_rounds: repair.trim(),
@@ -184,8 +188,8 @@ function RuntimeCard({ view, onSaved }: {
   return <div id="settings-runtime" className="grid overflow-hidden rounded-xl border border-line bg-surface shadow-sm lg:grid-cols-[minmax(220px,0.75fr)_minmax(0,1.4fr)]">
     <div className="bg-surface-2 p-7 text-muted-foreground">
       <h2 className="mb-2 text-[17px] font-bold text-text-strong">运行参数</h2>
-      <p className="m-0 text-sm leading-[1.7]">这里调整全团队需求任务的默认运行节奏。每项都明确显示当前服务默认值；
-        留空即可恢复默认，无需了解部署命令。</p>
+      <p className="m-0 text-sm leading-[1.7]">这里调整全团队需求任务与问题单的运行节奏。每项都明确显示当前服务默认值；
+        数值项留空即可恢复默认，无需了解部署命令。</p>
     </div>
     <form className="grid content-start gap-[15px] p-[26px] sm:grid-cols-2" onSubmit={submit}>
       <KnobField label="并发任务数" defaultText={`${defaults.max_concurrent} 个`}
@@ -194,14 +198,27 @@ function RuntimeCard({ view, onSaved }: {
       <KnobField label="问题单并发数" defaultText={`${defaults.issue_max_turns} 个`}
         note="同时推进的问题会话回合上限，改完即生效"
         value={issueTurns} onChange={setIssueTurns} />
+      <div className="col-span-full rounded-lg border border-line bg-surface-2 p-4">
+        <div className="flex items-center justify-between gap-4">
+          <label htmlFor="issue-warmup-enabled" className="font-medium text-text-strong">问题单环境预热
+            <span className="ml-2 text-[13px] font-normal text-muted-foreground">默认{defaults.issue_warmup_enabled === 1 ? "开启" : "关闭"}</span>
+          </label>
+          <div className="flex shrink-0 items-center gap-2 text-sm">
+            <span>{issueWarmup ? "已开启" : "已关闭"}</span>
+            <Switch id="issue-warmup-enabled" checked={issueWarmup} disabled={busy}
+              aria-describedby="issue-warmup-note" onCheckedChange={setIssueWarmup} />
+          </div>
+        </div>
+        <p id="issue-warmup-note" className="mb-0 mt-2 text-[13px] leading-normal text-muted-foreground">关闭时由 Agent 按需编译；开启后，进入分析阶段会在后台执行首次编译。保存后影响后续预热，正在执行的任务继续运行。</p>
+      </div>
       <KnobField label="问题单现场回收"
         defaultText={defaults.issue_repo_reclaim === 0 ? "保留现场" : "开启"}
         note="取消/归档的问题单立即回收代码现场（repo），分析报告与过程记录保留；0 表示保留现场不回收"
         value={repoReclaim} onChange={setRepoReclaim} />
-      <KnobField label="构建产物冷却期（小时）"
+      <KnobField label="编译产物保留时间（小时）"
         defaultText={defaults.issue_build_products_cooldown_hours === 0
           ? "关闭" : `${defaults.issue_build_products_cooldown_hours} 小时`}
-        note="不在运行中的问题单，编译产物闲置超过该时长即回收（源码保留，返工时全量重编）；0 表示关闭"
+        note="从最后一次使用结束开始计算；闲置或等待的会话超过该时长后清理编译产物，源码、依赖与报告保留。下一轮清理生效；0 表示关闭"
         value={productsCooldown} onChange={setProductsCooldown} />
       <KnobField label="自动修复轮数上限"
         defaultText={defaults.repair_rounds === null ? "不限轮" : `${defaults.repair_rounds} 轮`}

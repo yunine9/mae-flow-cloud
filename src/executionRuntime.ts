@@ -1192,8 +1192,8 @@ async function main(): Promise<void> {
   });
 
   // 问题流磁盘清扫(磁盘治理票 01/03):启动 1 分钟后首跑(让恢复先
-  // 落定)回收存量,此后每 24h 一轮。终态(canceled/archived)回收
-  // repo/,idle 单按冷却期回收构建产物;旋钮关则空转。定时器只接在
+  // 落定)回收存量,此后每小时一轮。终态(canceled/archived)回收
+  // repo/,idle/waiting_user 按冷却期回收构建产物;旋钮关则空转。定时器只接在
   // 正式入口 serve.ts——测试/旁路直连形态不起定时器,要清扫直接调
   // issueFlow.sweepTerminalRepos()。
   const issueDiskSweep = () => {
@@ -1208,7 +1208,7 @@ async function main(): Promise<void> {
     });
   };
   const issueDiskSweepTimer = setTimeout(issueDiskSweep, 60_000);
-  const issueDiskSweepInterval = setInterval(issueDiskSweep, 24 * 3_600_000);
+  const issueDiskSweepInterval = setInterval(issueDiskSweep, 3_600_000);
   issueDiskSweepTimer.unref?.();
   issueDiskSweepInterval.unref?.();
 

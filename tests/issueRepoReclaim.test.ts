@@ -9,7 +9,7 @@
  * - idle 单构建产物:mtime 冷却过期才删(源码保留),没冷却的不动,
  *   build_products_reclaimed_at + 事件(scope=products)落账;
  * - 旋钮 issue_repo_reclaim=0 时一切不动(行为与现状全等);
- * - running/waiting_user 的状态守卫:在途单子绝不清理。
+ * - waiting_user 与 idle 都按冷却期清理，在途单子绝不清理。
  *
  * 清扫是纯盘面操作(不跑会话),issue 目录直接伪造,服务只当扫描器。
  */
@@ -20,14 +20,15 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { reclaimIssueWorkspaces } from "../src/issueFlowWorkspaceReclaim.ts";
 import { mfcTemp } from "./mfcTmp.ts";
+import { auxiliarySessionEpoch, trackAuxiliarySession } from "../src/auxiliarySessions.ts";
 
 /** 伪造一个 issue 目录:issue.json + repo/ 树(源码/产物可各自带
  * mtime),返回其根路径。 */
@@ -38,7 +39,7 @@ function fabricateIssue(
   opts?: { oldProducts?: boolean },
 ): string {
   const dir = join(root, id);
-  mkdirSync(join(dir, "repo", "demo", "target"), { recursive: true });
+  mkdirSync(join(dir, "repo", "demo", "target", "build"), { recursive: true });
   mkdirSync(join(dir, "repo", "demo", "src"), { recursive: true });
   writeFileSync(join(dir, "issue.json"), JSON.stringify({
     id, account: "dev",
@@ -46,12 +47,12 @@ function fabricateIssue(
     title: `t-${id}`, description: "d", source: "manual", status,
   }));
   writeFileSync(join(dir, "repo", "demo", "src", "a.ts"), "export {}");
-  writeFileSync(join(dir, "repo", "demo", "target", "x.o"), "binary");
+  writeFileSync(join(dir, "repo", "demo", "target", "build", "x.o"), "binary");
   writeFileSync(join(dir, "report.md"), "分析报告(必须保留)");
   if (opts?.oldProducts) {
-    const old = new Date(Date.now() - 72 * 3_600_000);
-    utimesSync(join(dir, "repo", "demo", "target"), old, old);
-    utimesSync(join(dir, "repo", "demo", "target", "x.o"), old, old);
+    const old = new Date(Date.now() - 30 * 3_600_000);
+    utimesSync(join(dir, "repo", "demo", "target", "build"), old, old);
+    utimesSync(join(dir, "repo", "demo", "target", "build", "x.o"), old, old);
   }
   return dir;
 }
@@ -106,8 +107,8 @@ test("构建产物冷却:idle 单过期产物删、新鲜不动、源码保留�
   const result = await service.sweepTerminalRepos();
   assert.ok(result.productBytes > 0, "有产物被回收");
 
-  assert.ok(!existsSync(join(stale, "repo", "demo", "target")),
-    "冷却过期的 target 已删");
+  assert.ok(!existsSync(join(stale, "repo", "demo", "target", "build")),
+    "冷却过期的 target/build 已删");
   assert.ok(existsSync(join(stale, "repo", "demo", "src", "a.ts")),
     "源码保留");
   assert.ok(existsSync(join(stale, "report.md")), "报告保留");
@@ -135,12 +136,12 @@ test("旋钮解耦:issue_repo_reclaim=0 只关整仓回收,产物清理按自己
   reclaimIssueWorkspaces({ dataDir, retentionDays: 14, now: Date.parse("2027-01-01T00:00:00Z") });
   assert.equal(result.reclaimed, 0, "整仓回收被旋钮关掉");
   assert.ok(existsSync(join(canceled, "repo")), "终态现场保留");
-  assert.ok(!existsSync(join(idleStale, "repo", "demo", "target")),
+  assert.ok(!existsSync(join(idleStale, "repo", "demo", "target", "build")),
     "产物清理独立生效(自己的冷却旋钮,不被整仓旋钮连带)");
   assert.equal(result.productBytes > 0, true, "产物回收字节照记");
 });
 
-test("状态守卫:running 与 waiting_user 的单子即使产物冷却也不清理", async () => {
+test("部署后扫描存量:waiting_user 冷却后释放编译目录，running 保留", async () => {
   const { service, issuesRoot } = makeService();
   const running = fabricateIssue(issuesRoot, "issue-1", "running",
     { oldProducts: true });
@@ -149,7 +150,106 @@ test("状态守卫:running 与 waiting_user 的单子即使产物冷却也不清
 
   await service.sweepTerminalRepos();
   assert.ok(existsSync(join(running, "repo", "demo", "target")));
-  assert.ok(existsSync(join(waiting, "repo", "demo", "target")));
+  assert.ok(!existsSync(join(waiting, "repo", "demo", "target", "build")));
+});
+
+test("启动恢复旧等待单后立即按原闲置时间清理，不重新计算24小时", async () => {
+  const dataDir = mfcTemp("mfc-stored-issue-reclaim-");
+  const root = fabricateIssue(join(dataDir, "issues"), "issue-1", "waiting_user", { oldProducts: true });
+  const before = JSON.parse(readFileSync(join(root, "issue.json"), "utf8")).updated_at;
+  const service = new IssueFlowService({ dataDir, provider: "maeflow", model: "scripted-v1", modelsJson: {} });
+  try {
+    assert.equal(service.get("issue-1").status, "waiting_user");
+    assert.equal(JSON.parse(readFileSync(join(root, "issue.json"), "utf8")).updated_at, before);
+    assert.ok((await service.sweepTerminalRepos()).productBytes > 0);
+    assert.ok(!existsSync(join(root, "repo/demo/target/build")));
+    assert.equal(service.get("issue-1").status, "waiting_user");
+  } finally { await service.shutdown(); }
+});
+
+test("只删编译目录，保留构建脚本、依赖、报告、库；首编记录失效且通知可重启续用", async () => {
+  const { service, issuesRoot } = makeService();
+  const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+  const repo = join(root, "repo", "demo");
+  const kept = ["build/build.sh", "depend/dep.a", "node_modules/module/index.js",
+    "target/gtest_ut_report/report.xml", "target/surefire-reports/test.xml", "target/lib/libdemo.so"];
+  for (const path of [...kept, ".mae-flow-work/mae-first-build.json"]) {
+    const absolute = join(repo, path);
+    mkdirSync(join(absolute, ".."), { recursive: true });
+    writeFileSync(absolute, "keep");
+  }
+  await service.sweepTerminalRepos();
+  for (const path of kept) assert.ok(existsSync(join(repo, path)), path);
+  assert.ok(!existsSync(join(repo, ".mae-flow-work/mae-first-build.json")));
+  const state = JSON.parse(readFileSync(join(root, "issue.json"), "utf8"));
+  assert.ok(state.build_products_reclaimed_at);
+  assert.equal(state.parked_notices.length, 1);
+  const restarted = makeService().service;
+  let replay = "";
+  await (restarted as any).withParkedNotices({ root, state }, async (message: string) => { replay = message; });
+  assert.match(replay, /编译|构建/);
+  assert.equal(JSON.parse(readFileSync(join(root, "issue.json"), "utf8")).parked_notices, undefined);
+});
+
+test("问题单预热默认关闭，具备预热执行器也不会自行启动", () => {
+  for (const runtime of [{}, { issue_warmup_enabled: 0 }]) {
+    const service = new IssueFlowService({
+      dataDir: mfcTemp("mfc-warmup-disabled-"), provider: "maeflow", model: "scripted-v1", modelsJson: {},
+      settings: { models: () => ({}), runtime: () => runtime },
+      warmup: { enabled: true, runner: async () => { throw new Error("不应调用"); } },
+    });
+    const live: any = { state: { status: "idle" } };
+    (service as any).startBaselineWarmup(live);
+    assert.equal(live.warmupActive, undefined);
+    assert.equal(live.state.warmup, undefined);
+  }
+});
+
+test("24小时默认值与动态配置：近期交互不删，0关闭，调小后下一轮生效", async () => {
+  const runtime = { issue_build_products_cooldown_hours: 24 };
+  const { service, issuesRoot } = makeService(runtime);
+  const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+  const file = join(root, "issue.json");
+  const state = JSON.parse(readFileSync(file, "utf8"));
+  state.updated_at = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  writeFileSync(file, JSON.stringify(state));
+  const product = join(root, "repo/demo/target/build");
+  await service.sweepTerminalRepos();
+  assert.ok(existsSync(product));
+  runtime.issue_build_products_cooldown_hours = 0;
+  await service.sweepTerminalRepos();
+  assert.ok(existsSync(product));
+  runtime.issue_build_products_cooldown_hours = 1;
+  await service.sweepTerminalRepos();
+  assert.ok(!existsSync(product));
+});
+
+test("主回合、预热、辅助会话、容器命令、人工接管期间均不清理", async () => {
+  for (const busy of ["turn", "warmup", "auxiliary", "exec", "takeover"]) {
+    const { service, issuesRoot } = makeService();
+    const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+    const state = JSON.parse(readFileSync(join(root, "issue.json"), "utf8"));
+    const live: any = { root, id: state.id, state };
+    (service as any).live.set(state.id, live);
+    if (busy === "turn") (service as any).turning.add(state.id);
+    if (busy === "warmup") live.warmupActive = true;
+    if (busy === "exec") live.container = { hasActiveProcesses: true };
+    if (busy === "takeover") state.takeover = {};
+    if (busy === "auxiliary") trackAuxiliarySession(live, {} as any, auxiliarySessionEpoch(live));
+    await service.sweepTerminalRepos();
+    assert.ok(existsSync(join(root, "repo/demo/target/build")), busy);
+  }
+});
+
+test("不沿符号链接删除工作区外内容", async () => {
+  const { service, issuesRoot } = makeService();
+  const root = fabricateIssue(issuesRoot, "issue-1", "waiting_user", { oldProducts: true });
+  const external = mfcTemp("mfc-build-outside-");
+  writeFileSync(join(external, "keep"), "external");
+  symlinkSync(external, join(root, "repo/demo/target/obj"));
+  await service.sweepTerminalRepos();
+  assert.ok(existsSync(join(external, "keep")));
+  assert.ok(existsSync(join(root, "repo/demo/target/obj")));
 });
 
 test("幂等:已回收(repo/ 不在场)的单子重扫不炸、不重复记账", async () => {

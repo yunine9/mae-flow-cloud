@@ -570,12 +570,18 @@ export class TaskContainer {
   private readonly baseEnvironment: Record<string, string>;
   private readonly forwardedEnvironment: Set<string>;
   private readonly activeProcesses = new Set<DockerStreamProcess>();
+  private pendingExecutions = 0;
   private startupDiagnostic: { containerId?: string; phase: string } = { phase: "not-started" };
   get diagnostics() { return { ...this.startupDiagnostic }; }
 
   /** 当前生命周期状态(供宿主检查容器是否还在场)。 */
   get isAlive(): boolean {
     return this.lifecycle === "running";
+  }
+
+  /** 包括命令启动前后的容器检查，清理工作区时必须避让。 */
+  get hasActiveProcesses(): boolean {
+    return this.pendingExecutions > 0;
   }
 
   constructor(
@@ -750,6 +756,19 @@ export class TaskContainer {
        */
       privilegedEnv?: NodeJS.ProcessEnv;
     },
+  ): Promise<{ exitCode: number | null }> {
+    this.pendingExecutions += 1;
+    try {
+      return await this.executeCommand(command, cwd, options);
+    } finally {
+      this.pendingExecutions -= 1;
+    }
+  }
+
+  private async executeCommand(
+    command: string,
+    cwd: string,
+    options: Parameters<TaskContainer["exec"]>[2],
   ): Promise<{ exitCode: number | null }> {
     if (this.lifecycle !== "running" || !this.containerId) {
       // 这里发生在 assertRunning() 之前，也必须使用同一份结构化错误契约。

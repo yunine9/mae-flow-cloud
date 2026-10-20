@@ -261,6 +261,7 @@ test("环境预热:拉仓收口进 analyze 时后台启动,收据落台账不上
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    settings: { models: () => ({}), runtime: () => ({ issue_warmup_enabled: 1 }) },
     warmup: {
       enabled: true,
       runner: async (request) => {
@@ -334,6 +335,7 @@ test("环境预热 fail-open:执行器异常落基建收据,主流程照走", as
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    settings: { models: () => ({}), runtime: () => ({ issue_warmup_enabled: 1 }) },
     warmup: {
       enabled: true,
       runner: async () => { throw new Error("预热容器炸了"); },
@@ -387,6 +389,7 @@ test("环境预热补跑(#358):基建失败收据不算终局,analyze 续聊回�
   const service = new IssueFlowService({
     dataDir, provider: "maeflow", model: "scripted-v1",
     modelsJson: model.modelsJson(),
+    settings: { models: () => ({}), runtime: () => ({ issue_warmup_enabled: 1 }) },
     warmup: {
       enabled: true,
       runner: async (request) => {
