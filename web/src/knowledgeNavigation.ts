@@ -19,6 +19,12 @@ function digest(value: string | null): string {
  */
 export function knowledgeAssetPath(target: KnowledgeAssetFocus): string {
   const query = new URLSearchParams();
+  if (target.kind === "business" && /^kg-[a-f0-9]{64}$/.test(target.assetId)) {
+    query.set("kbPage", "module");
+    query.set("kbModule", `business:${target.moduleId}`);
+    query.set("knowledgeDocument", target.assetId);
+    return `/?${query.toString()}`;
+  }
   query.set("knowledge", target.kind);
   if (target.kind === "business") {
     query.set("module", target.moduleId);

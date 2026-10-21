@@ -2007,8 +2007,8 @@ test("DTS 按会话表纳入负面终止行:照单渲染 canceled,不复判原�
   // (issueOnceGenerated 服务层测试钉住,#542);前端把 canceled 行纳入
   // 渲染即可,行过滤里不得再读 cancel_reason 复判(第二套口径即漂移)。
   const rowsMemo = deliveryAnalytics.slice(
-    deliveryAnalytics.indexOf("const rows = useMemo"),
-    deliveryAnalytics.indexOf("const features = useMemo"));
+    deliveryAnalytics.indexOf("const tableRows = useMemo"),
+    deliveryAnalytics.indexOf("const moduleOptions = useMemo"));
   assert.match(rowsMemo, /row\.state === "ok" \|\| row\.state === "canceled"/);
   assert.doesNotMatch(rowsMemo, /cancel_reason/, "行过滤不得复判终止原因");
   // 数据侧镜像(#542 已带):canceled 是行状态的合法值,原因字段随行可选。
@@ -2021,9 +2021,10 @@ test("DTS 按会话表纳入负面终止行:照单渲染 canceled,不复判原�
 test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位、末列徽标或 —(#543)", () => {
   const table = deliveryAnalytics.slice(
     deliveryAnalytics.indexOf('dim === "session"'),
-    deliveryAnalytics.indexOf('dim === "repo"'));
-  // 表头末列新增「终止原因」;原 9 列语义与顺序不动。
-  assert.match(table, /<th>发起人<\/th><th>收口时间<\/th><th>终止原因<\/th>/);
+    deliveryAnalytics.indexOf('details className="delivery-method"'));
+  // 表头末列新增「终止原因」;ADR-0065 列头漏斗改造后会话/特性/发起人
+  // 三列带漏斗组件,列顺序不变,终止原因仍收尾。
+  assert.match(table, /<th>收口时间<\/th><th>终止原因<\/th>/);
   // 一次解决列:终止行显式红 ✗(#540 复审——终止行 solved_pass 已缺席,
   // 不再靠假值隐式落 ✗);交付行按 solved_pass ✓/✗。
   assert.match(table,

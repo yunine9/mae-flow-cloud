@@ -282,6 +282,39 @@ test("正文变化不能复用旧评审，完成前也必须核对实际正文�
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+for (const reference of ["result", "written"] as const) test(`完成时旧步骤的 ${reference} 文稿也须有当前评审，混合步骤不能互相担保`, async () => {
+  const dir = mkdtempSync(join(tmpdir(), "skill-excluded-review-")), file = join(dir, "state.json");
+  const signal = new AbortController().signal;
+  let deleted = false, version = "current";
+  const fingerprint = (ids: string[]) => {
+    if (deleted && ids.includes("removed")) throw new Error("旧文稿已标记删除");
+    return `${ids.join(",")}:${version}`;
+  };
+  const callbacks = { fingerprint, review: async () => ({ pass: true, feedback: "独立回读当前正文通过" }) };
+  const result = { summary: "完成当前文稿", document_ids: ["active"] };
+  try {
+    let work = new DomainSkillWork(file, "skill");
+    work.schedule(["old-a", "old-b"].map(id => ({ ...reviewedStep(id), expected_document_ids: ["removed"] })));
+    for (const id of ["old-a", "old-b"]) await work.run(id, async () => {
+      if (reference === "written") work.recordDocumentWrite(id, "active");
+      return { summary: "旧范围文稿已评审", document_ids: reference === "result" ? ["removed", "active"] : ["removed"] };
+    }, signal, callbacks);
+    const historical = structuredClone(work.state.steps);
+    deleted = true;
+    const excluded = new Set(["removed"]);
+    assert.throws(() => work.finish(result, fingerprint), /已标记删除/, "没有显式排除范围时保持原检查");
+    assert.throws(() => work.finish(result, fingerprint, excluded), /仍有效文稿.*独立评审.*active/, "两个混合步骤不能相互证明有效正文已评审");
+    assert.equal(work.state.result, undefined); assert.deepEqual(work.state.steps, historical);
+    work.schedule([{ ...reviewedStep("current-review"), expected_document_ids: ["active"], readonly: true }]);
+    await work.run("current-review", async () => ({ summary: "只核对有效正文，不重写", document_ids: ["active"] }), signal, callbacks);
+    work = new DomainSkillWork(file, "skill");
+    work.finish(result, fingerprint, excluded);
+    assert.deepEqual(work.state.steps.slice(0, 2), historical, "接续完成保留所有旧步骤，不修改其候选和结论");
+    version = "changed-after-review";
+    assert.throws(() => work.finish(result, fingerprint, excluded), /文稿已变化/, "排除旧文稿不能放过有效正文后来变化");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("评审期间正文变化时旧通过结论无效，只重评当前正文", async () => {
   const f = reviewedFixture(); let version = "version-1", reviews = 0, writes = 0;
   try {

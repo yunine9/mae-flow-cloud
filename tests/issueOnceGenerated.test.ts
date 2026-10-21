@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { IssueFlowService } from "../src/issueFlow/service.ts";
 import { handleIssueRoutes } from "../src/issueFlow/routes.ts";
-import { onceGeneratedFeatureRows } from "../web/src/teamOps.ts";
+import { featureRepoTree, onceGeneratedFeatureRows } from "../web/src/teamOps.ts";
 
 const BASE_STATE = {
   account: "dev", created_at: "2026-09-20T08:00:00Z",
@@ -294,6 +294,89 @@ test("onceGeneratedFeatureRows:share/lines 缺失的行不崩不进聚合(#353)"
     localization_rate: 100, verify_rate: 100,
     share: 90, total_lines: 100,
   }], "只聚合 share 与 lines 都在场的行;share 由工作行重算(90/100),不取入参");
+});
+
+test("per_session ok 行携带按仓明细:跳过不可得仓与零行仓,非 ok 行不带(ADR-0065)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-oncegen-repo-"));
+  seedSession(dataDir, { id: "issue-multi", ...DELIVERED_SINCE });
+  writeFileSync(join(dataDir, "issues", "issue-multi", "code-origin.json"),
+    JSON.stringify({
+      schema_version: 4,
+      generated_at: "2026-09-20T11:00:00.000Z",
+      session_id: "issue-multi",
+      by_repo: [
+        { repo: "https://git/one.git", branch: "b1", head: "a".repeat(40),
+          head_basis: "merged_sha", base: "b".repeat(40), boundary: null,
+          lines: { first: 60, rework: 20, external: 10 }, commits: [] },
+        { repo: "https://git/two.git", branch: "b2", head: "c".repeat(40),
+          head_basis: "merged_sha", base: "d".repeat(40), boundary: null,
+          lines: { first: 30, rework: 0, external: 0 }, commits: [] },
+        { repo: "https://git/lost.git", branch: "b3", head: "e".repeat(40),
+          head_basis: "merged_sha", base: "f".repeat(40),
+          unavailable: "不可得:现场已回收" },
+        { repo: "https://git/zero.git", branch: "b4", head: "1".repeat(40),
+          head_basis: "merged_sha", base: "2".repeat(40), boundary: null,
+          lines: { first: 0, rework: 0, external: 0 }, commits: [] },
+      ],
+    }, null, 1));
+  // 待算行(伴生缺席)不带 by_repo;与 ok 行同页对照。
+  seedSession(dataDir, { id: "issue-pending", ...DELIVERED_SINCE });
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const { status, body } = await callRoute(service,
+      "/issues/once-generated", ["issues", "once-generated"]);
+    assert.equal(status, 200);
+    const rows = body.per_session as Array<{
+      id: string; state: string; by_repo?: Array<{
+        repo: string; first: number; rework: number; external: number;
+      }>;
+    }>;
+    const multi = rows.find((row) => row.id === "issue-multi")!;
+    assert.equal(multi.state, "ok");
+    assert.deepEqual(multi.by_repo, [
+      { repo: "https://git/one.git", first: 60, rework: 20, external: 10 },
+      { repo: "https://git/two.git", first: 30, rework: 0, external: 0 },
+    ], "只带可得且有工作行的仓,字段为最小形状(不落占比)");
+    const pending = rows.find((row) => row.id === "issue-pending")!;
+    assert.equal(pending.state, "pending");
+    assert.equal(pending.by_repo, undefined, "非 ok 行不带仓明细");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("featureRepoTree:特性→仓归组/加权占比/排序/by_repo 缺席不崩(ADR-0065)", () => {
+  const { repos, lines } = featureRepoTree([
+    { module: "网关", share: 80,
+      lines: { first: 60, rework: 20, external: 10 },
+      by_repo: [
+        { repo: "https://git/two.git", first: 30, rework: 0, external: 0 },
+        { repo: "https://git/one.git", first: 30, rework: 20, external: 10 },
+      ] },
+    { module: "网关", share: 100,
+      lines: { first: 40, rework: 0, external: 0 },
+      by_repo: [{ repo: "https://git/one.git", first: 40, rework: 0, external: 0 }] },
+    { module: "计费", share: 90,
+      lines: { first: 90, rework: 0, external: 0 },
+      by_repo: [] },
+    // 降级形状:share 在场但 by_repo 缺席——只不贡献仓行,不崩。
+    { module: "计费", share: 50, lines: { first: 10, rework: 5, external: 5 } },
+    // 非 ok 行:share 缺失整行跳过。
+    { module: "网关" },
+  ]);
+  assert.deepEqual(repos.get("网关"), [
+    { repo: "https://git/one.git", sessions: 2, first: 70, rework: 20,
+      external: 10, total: 100, share: 70 },
+    { repo: "https://git/two.git", sessions: 1, first: 30, rework: 0,
+      external: 0, total: 30, share: 100 },
+  ], "跨会话按仓归组求和;仓行按工作行合计降序;占比=首轮÷全部(一位小数)");
+  assert.deepEqual(repos.get("计费"), [],
+    "by_repo 缺席/空数组的行不贡献仓行(降级响应不崩)");
+  assert.deepEqual(lines.get("网关"), { rework: 20, external: 10 },
+    "特性层返工/平台外=跨会话求和,供外层行对账");
+  assert.equal(repos.get("未分类"), undefined, "全空输入不出组");
 });
 
 test("#457 DTS 完成日期按结论时刻过滤，结束边界不计入，聚合与明细范围一致", async () => {

@@ -442,3 +442,67 @@ export function onceGeneratedFeatureRows(
   })).sort((a, b) => b.sessions - a.sessions || b.total_lines - a.total_lines
     || a.module.localeCompare(b.module, "zh-Hans-CN"));
 }
+
+/** 特性树内层的一行:某特性的会话在某仓的工作行合计(ADR-0065;
+ *  占比与全局 by_repo 同式,行数加权现算)。 */
+export interface FeatureRepoRow {
+  repo: string;
+  sessions: number;
+  first: number;
+  rework: number;
+  external: number;
+  total: number;
+  share: number | null;
+}
+
+/** 特性→仓 工作行树(ADR-0065):输入是 once-generated 端点的 ok 行,
+ *  只吃 share/lines 都在场的行(与 onceGeneratedFeatureRows 同一守卫);
+ *  by_repo 缺席(降级响应/旧端点)时该行只不贡献仓行,不崩。仓行按
+ *  工作行合计降序——原按代码仓页签的排序。 */
+export function featureRepoTree(
+  rows: ReadonlyArray<{
+    module: string;
+    share?: number;
+    lines?: { first: number; rework: number; external: number };
+    by_repo?: ReadonlyArray<{
+      repo: string; first: number; rework: number; external: number;
+    }>;
+  }>,
+): {
+  repos: Map<string, FeatureRepoRow[]>;
+  lines: Map<string, { rework: number; external: number }>;
+} {
+  const repoBuckets = new Map<string, Map<string, FeatureRepoRow>>();
+  const lineTotals = new Map<string, { rework: number; external: number }>();
+  for (const row of rows) {
+    if (row.share === undefined || !row.lines) continue; // 非 ok 行不进聚合
+    const feature = row.module?.trim() || "未分类";
+    const buckets = repoBuckets.get(feature) ?? new Map<string, FeatureRepoRow>();
+    for (const entry of row.by_repo ?? []) {
+      const bucket = buckets.get(entry.repo) ?? {
+        repo: entry.repo, sessions: 0,
+        first: 0, rework: 0, external: 0, total: 0, share: null,
+      };
+      bucket.sessions += 1;
+      bucket.first += entry.first;
+      bucket.rework += entry.rework;
+      bucket.external += entry.external;
+      bucket.total = bucket.first + bucket.rework + bucket.external;
+      bucket.share = bucket.total
+        ? Math.round((bucket.first / bucket.total) * 1000) / 10
+        : null;
+      buckets.set(entry.repo, bucket);
+    }
+    repoBuckets.set(feature, buckets);
+    const totals = lineTotals.get(feature) ?? { rework: 0, external: 0 };
+    totals.rework += row.lines.rework;
+    totals.external += row.lines.external;
+    lineTotals.set(feature, totals);
+  }
+  const repos = new Map<string, FeatureRepoRow[]>();
+  for (const [feature, buckets] of repoBuckets) {
+    repos.set(feature, [...buckets.values()].sort((a, b) =>
+      b.total - a.total || a.repo.localeCompare(b.repo, "zh-Hans-CN")));
+  }
+  return { repos, lines: lineTotals };
+}

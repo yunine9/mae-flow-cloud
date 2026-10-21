@@ -36,6 +36,16 @@ test("残缺或未知知识深链不会误导航", () => {
   assert.equal(readKnowledgeAssetFocus("?knowledge=skill"), undefined);
 });
 
+test("下单预览的正式仓库文档直接进入对应模块阅读页", () => {
+  const id = `kg-${"a".repeat(64)}`;
+  const url = new URL(knowledgeAssetPath({ kind: "business", moduleId: "orders", assetId: id,
+    version: 1, digest: "b".repeat(64) }), "http://local");
+  assert.equal(url.searchParams.get("kbPage"), "module");
+  assert.equal(url.searchParams.get("kbModule"), "business:orders");
+  assert.equal(url.searchParams.get("knowledgeDocument"), id);
+  assert.equal(readKnowledgeAssetFocus(url.search), undefined);
+});
+
 
 test("B6验收：管理员和开发者均有独立的一级知识库入口，团队资产视图已拆散", () => {
   const app = readFileSync(new URL("../web/src/App.tsx", import.meta.url), "utf8");

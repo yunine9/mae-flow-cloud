@@ -8250,7 +8250,9 @@ body:has(.workspace-studio) .wish-quick-fab {
 .reader-file-tools>svg { flex-shrink:0; color:var(--muted); }
 .reader-file-tools>strong { font-weight:550; font-size:14px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .reader-file-actions { margin-left:auto; display:flex; align-items:center; gap:4px; flex-shrink:0; }
-:is(.knowledge-studio, .knowledge-reader-dialog) .domain-file-workspace .research-document-content { padding:36px 48px; }
+/* 领域检视正文使用目录右侧的全部宽度，全屏弹层也不恢复窄版纸张限制。 */
+:is(.knowledge-studio, .knowledge-reader-dialog) .domain-file-workspace .research-document-content { padding:24px 32px; }
+:is(.knowledge-studio, .knowledge-reader-dialog) .domain-file-workspace .studio-paper .md { width:100%; max-width:none; }
 .knowledge-reader-dialog .domain-file-workspace { container-type:inline-size; container-name:reader; padding:16px; background:var(--canvas); }
 .knowledge-reader-dialog .domain-file-workspace .research-review-panes { gap:16px; position:relative; }
 .knowledge-reader-dialog .component-document-reader { padding:16px; gap:12px; }

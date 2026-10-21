@@ -13,9 +13,11 @@ const uploadNames: string[] = [];
 const saved = new Map<string, any>();
 let omitSource = false, created: any, previewCount = 0, currentPreview: any;
 let closeCount = 0, researchCreates = 0, releaseUpload: (() => void) | undefined;
+let knowledgeModules: string[] = [];
 const draftKey = "mae-flow:launch:draft:alice";
 localStorage.setItem(draftKey, JSON.stringify({ version: 1, title: "多份需求资料", requirement: "必须保留的补充说明",
-  businessModuleId: "module", repos: [], updatedAt: new Date().toISOString() }));
+  businessModuleId: "module", selectedBusinessModuleIds: ["other"], moduleSelectionTouched: true,
+  repos: [], updatedAt: new Date().toISOString() }));
 window.fetch = async (input, init) => {
   const path = String(input), body = init?.body ? JSON.parse(String(init.body)) : undefined;
   let result: unknown;
@@ -27,8 +29,11 @@ window.fetch = async (input, init) => {
   else if (path === "/technology-stacks") result = { stacks: [] };
   else if (["/auth/collaboration-assignees", "/auth/people", "/auth/users"].includes(path)) result = [];
   else if (path === "/workflow-assets") result = { items: [], warnings: [] };
-  else if (path === "/launch-options") result = { repo: { enabled: false, required: false }, ticket: { enabled: false, required: false }, baseline: { enabled: false, default: "" }, blockers: [], workflows: [], execution_playbooks: [], team_skills: [], business_modules: [{ id: "module", name: "测试模块", repositories: [], entries: [], knowledge: [], version: 1 }] };
-  else if (path === "/launch-knowledge-preview") result = { complete: true, degraded: false, scope: { repositories: [], technologies: [], business_module_ids: [], workflow_business_module_ids: [], workflow_team_skill_ids: [] }, business_knowledge: [], team_skills: [], selection_digest: "fixed", warnings: [], errors: [] };
+  else if (path === "/launch-options") result = { repo: { enabled: false, required: false }, ticket: { enabled: false, required: false }, baseline: { enabled: false, default: "" }, blockers: [], workflows: [], execution_playbooks: [], team_skills: [], business_modules: ["module", "other"].map(id => ({ id, name: id === "module" ? "测试模块" : "另一个模块", repositories: [], entries: [], knowledge: [], version: 1 })) };
+  else if (path === "/launch-knowledge-preview") {
+    knowledgeModules = body.selected_business_module_ids;
+    result = { complete: true, degraded: false, scope: { repositories: [], technologies: [], business_module_ids: knowledgeModules, workflow_business_module_ids: [], workflow_team_skill_ids: [] }, business_knowledge: knowledgeModules.map(id => ({ module_id: id, module_name: id === "module" ? "测试模块" : "另一个模块", module_revision: 1, id: `kg-${(id === "module" ? "a" : "b").repeat(64)}`, title: `${id} 正式文档`, summary: "docs/业务规则.md", when_to_use: "修改业务规则时", form: "document", repositories: [], version: 1, digest: "c".repeat(64), bytes: 100, matched_business_module_ids: [id], matched_repositories: [], matched_technologies: [] })), team_skills: [], selection_digest: knowledgeModules.join(","), warnings: [], errors: [] };
+  }
   else if (path === "/knowledge-materials") {
     uploadNames.push(body.name);
     if (body.name === "延迟.docx") await new Promise<void>(resolve => { releaseUpload = resolve; });
@@ -78,6 +83,15 @@ async function fill(value: string) {
 }
 async function run() {
   render(); await until(() => document.querySelector('[aria-label="上传需求资料"]') && !submit().disabled, "发起页未就绪");
+  check(!document.body.textContent?.includes("模块知识范围"), "下单不能再要求重复选择模块知识范围");
+  check(JSON.stringify(knowledgeModules) === '["module"]', "旧草稿的独立知识选择覆盖了所属模块");
+  check(document.body.textContent?.includes("module 正式文档"), "预览未显示服务端返回的正式文档");
+  const moduleSelect = [...document.querySelectorAll<HTMLSelectElement>("select")].find(item => item.closest("label")?.textContent?.includes("所属业务模块"))!;
+  moduleSelect.value = "other";
+  moduleSelect.dispatchEvent(new Event("change", { bubbles: true }));
+  await pause();
+  check(submit().disabled, "模块切换后不能沿用旧知识预览提交");
+  await until(() => knowledgeModules[0] === "other" && !submit().disabled, "切换所属模块未同步刷新知识预览");
   await upload(["需求.md", "失败.pdf", "规则.xlsx"]);
   await until(() => button("移除 规则.xlsx"), "失败文件之后的资料未上传");
   check(uploadNames.length === 3 && submit().disabled, "单份失败不能丢失后续资料或允许遗漏发起");
@@ -92,6 +106,7 @@ async function run() {
   window.dispatchEvent(new Event("pagehide"));
   const stored = JSON.parse(localStorage.getItem(draftKey)!);
   check(stored.requirementMaterials.length === 2 && stored.requirement === "后补说明", "草稿没有保留资料和补充正文");
+  check(stored.businessModuleId === "other" && !("selectedBusinessModuleIds" in stored), "草稿应只保存所属业务模块");
   const countBeforeRestore = previewCount;
   root.unmount(); root = createRoot(document.getElementById("app")!); render();
   await until(() => previewCount > countBeforeRestore && !submit().disabled, "恢复草稿未重新预览资料");
@@ -101,7 +116,17 @@ async function run() {
   document.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   await until(() => created, "创建请求未发出");
   check(created.requirement === "后补说明", "创建重复发送合成正文");
+  check(created.business_module_id === "other" && JSON.stringify(created.selected_business_module_ids) === '["other"]'
+    && created.knowledge_preview_digest === "other", "提交的归属模块、知识范围与预览不一致");
   check(JSON.stringify(created.requirement_material_ids) === JSON.stringify(["material-3", "material-4"]), "创建没有保留全部剩余资料或排序");
+  if (new URLSearchParams(location.search).get("scenario") === "module") {
+    await until(() => !button("清空草稿")?.disabled, "创建提交未结束");
+    button("清空草稿")!.click();
+    await until(() => knowledgeModules.length === 0, "清空草稿未同步清空模块知识范围");
+    check([...document.querySelectorAll<HTMLSelectElement>("select")].find(item => item.closest("label")?.textContent?.includes("所属业务模块"))?.value === "", "清空草稿仍保留所属模块");
+    check(!errors.length, errors.join(";"));
+    return { moduleFollowsSelection: true, restoredDraft: true, submittedScope: true, clearedScope: true, width: innerWidth };
+  }
   root.unmount(); root = createRoot(document.getElementById("app")!);
   root.render(<TaskWorkspace task={{ id: "task", title: "已创建的多份需求", requirement: currentPreview.requirement, status: "completed", created_at: "2026-10-13", updated_at: "2026-10-13", luban_account: "alice",
     requirement_document: { name: "需求资料汇编.md", bytes: 100, context_mode: "inline", sources: currentPreview.sources } } as any}

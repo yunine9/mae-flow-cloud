@@ -365,6 +365,12 @@ function indexedDocuments(dataDir: string, projectModules = true) {
 export function listGitKnowledgeDocumentMetadata(dataDir: string): GitKnowledgeDocumentMetadata[] {
   return [...indexedDocuments(dataDir).values()].map(value => value.document);
 }
+/** 下单预览与任务快照共用正文摘要；已有阅读索引不会重复加载整篇正文。 */
+export function listGitKnowledgeDocumentManifest(dataDir: string): Array<GitKnowledgeDocumentMetadata & { bytes: number; digest: string }> {
+  return [...indexedDocuments(dataDir).values()].map(({ document, index }) => ({
+    ...document, bytes: index.contents[document.id].bytes, digest: index.contents[document.id].digest,
+  }));
+}
 /** 筛选使用未排除的正式文档摘要，目录和单篇文档都能单独选择并恢复。 */
 export function listModuleRepositoryKnowledgePaths(dataDir: string, moduleId: string): Array<{ repository: string; directories: string[]; files: string[] }> {
   const module = readBusinessModule(dataDir, moduleId);
@@ -388,11 +394,18 @@ export function readModuleKnowledgeContentRevision(dataDir: string, moduleId: st
   return createHash("sha256").update(JSON.stringify(documents
     .map(document => [document.id, document.revision]).sort((a, b) => a[0].localeCompare(b[0])))).digest("hex");
 }
+/** 一次任务固定多篇正文时只投影一次目录，正文仍逐篇读取和校验。 */
+export function createGitKnowledgeDocumentReader(dataDir: string): (id: string) => KnowledgeDocument {
+  const documents = indexedDocuments(dataDir);
+  return id => {
+    if (!/^kg-[a-f0-9]{64}$/.test(id)) throw new Error("仓库知识文档编号无效");
+    const selected = documents.get(id);
+    if (!selected) throw new Error("仓库知识不存在或已从正式分支删除");
+    return readIndexedDocument(dataDir, selected.index, selected.document);
+  };
+}
 export function readGitKnowledgeDocument(dataDir: string, id: string): KnowledgeDocument {
-  if (!/^kg-[a-f0-9]{64}$/.test(id)) throw new Error("仓库知识文档编号无效");
-  const selected = indexedDocuments(dataDir).get(id);
-  if (!selected) throw new Error("仓库知识不存在或已从正式分支删除");
-  return readIndexedDocument(dataDir, selected.index, selected.document);
+  return createGitKnowledgeDocumentReader(dataDir)(id);
 }
 /** 旧业务正文保留在原记录中；正式消费只使用 Git，不因模块尚未配置而退回本地。 */
 export function withoutBoundModuleDrafts(_dataDir: string, documents: KnowledgeDocument[]): KnowledgeDocument[] {

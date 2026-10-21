@@ -4170,6 +4170,15 @@ export function listAllIssues(): Promise<IssueSummary[]> {
  *  (前端显示 —);pending/unsupported 是口径透明度的伴随计数。字段
  *  纪律(#353):页面常驻旧版前端,后端先行更新时本端点的响应仍会被
  *  旧代码消费——字段加减保持可选,消费方按缺省处理,不得假设总在场。 */
+/** per_session ok 行携带的单仓工作行(与服务端 IssueOnceGeneratedSessionRepo
+ *  同源镜像;ADR-0065)。 */
+export interface IssueOnceGeneratedSessionRepoRow {
+  repo: string;
+  first: number;
+  rework: number;
+  external: number;
+}
+
 export interface IssueOnceGeneratedSessionRow {
   id: string;
   title: string;
@@ -4184,6 +4193,9 @@ export interface IssueOnceGeneratedSessionRow {
   share?: number;
   pass?: boolean;
   lines?: { first: number; rework: number; external: number };
+  /** 各仓工作行明细(仅 ok 行;ADR-0065 特性树仓行与按会话仓过滤
+   *  的数据源,老前端按缺省处理)。 */
+  by_repo?: IssueOnceGeneratedSessionRepoRow[];
   /** 以下工作机器事实仅 ok 行有;canceled 行缺席不设键(#540 复审),
    *  消费方按缺省处理,不得把 false/0 假值当事实。 */
   /** 检视批次数(先行能力,呈现用)。 */
