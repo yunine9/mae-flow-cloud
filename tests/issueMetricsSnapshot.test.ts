@@ -614,13 +614,15 @@ test("一次率两轴:快照接入不改变既有统计输出", async () => {
     service.start();
     assert.deepEqual(service.onceRates(), {
       total: 2,
+      delivered: 2,
+      terminated: 0,
       localization: { passed: 1, total: 2, rate: 50 },
       repair: { passed: 1, total: 2, rate: 50 },
       per_session: [
         { id: "issue-1", reviews: 2, localization_pass: false, repair_pass: false },
         { id: "issue-2", reviews: 2, localization_pass: true, repair_pass: true },
       ],
-    }, "两轴口径与统计输出和接入前一致(版本数/验证失败/检视批次取数不变)");
+    }, "两轴口径与统计输出和接入前一致(版本数/验证失败/检视批次取数不变;#542 分母三分解 delivered/terminated 在无终止时与 total 同值)");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

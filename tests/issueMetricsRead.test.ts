@@ -58,6 +58,8 @@ interface SeedSpec {
   status: string;
   ticket?: string;
   conclusionKind?: string;
+  /** 终止原因(#542):canceled 终态伴生(种子原样落状态文件)。 */
+  cancelReason?: string;
   /** 分析报告版本数(live 文件=初版,reviews/ 里再冻结若干版)。 */
   versions?: number;
   /** 转移账里「用户环境验证发现问题」前缀的条数。 */
@@ -92,6 +94,7 @@ function seedSession(dataDir: string, spec: SeedSpec): string {
         },
       }
       : {}),
+    ...(spec.cancelReason ? { cancel_reason: spec.cancelReason } : {}),
     ...(transitions.length ? { transitions } : {}),
   }, null, 1));
   if (spec.versions) {
@@ -198,6 +201,17 @@ test("纯提取:判定字段从快照取出;不认的形状一律不采用", () 
   assert.equal(
     onceRateFactsFromSnapshot(shape({ terminal_status: "waiting_user" })),
     null, "终态字段不是终态词");
+  // 终止原因(#542):canceled 快照伴生冻结,读侧原样透传交分类裁决。
+  assert.deepEqual(onceRateFactsFromSnapshot(shape({
+    terminal_status: "canceled", cancel_reason: "inaccurate",
+  })), {
+    id: "issue-1", ticket: "DTS-1", status: "canceled",
+    conclusion_kind: "delivered",
+    verify_fail_count: 1, report_version_count: 2, review_count: 2,
+    cancel_reason: "inaccurate",
+  }, "终止原因随快照原样透传,分类裁决在 issueOnceRates");
+  assert.equal(onceRateFactsFromSnapshot(shape())?.cancel_reason,
+    undefined, "缺席键=无原因取消,不虚构原因");
 });
 
 // ---- 2. 终态会话走快照 ----
@@ -439,6 +453,37 @@ test("等价回归:混合现场纯现算与读快照两遍,两轴与明细逐位
     assert.deepEqual(logs, [], "终态会话全部读到快照,一次回退都没有");
     assert.deepEqual(switched, baseline,
       "两轴与逐会话明细,切换读快照前后逐位相等");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+// ---- 6. 终止原因随终态快照进分母(#542) ----
+
+test("终止原因随终态快照进分母:读快照与回退现算同判(#542)", async () => {
+  const dataDir = mfcTemp("mfc-issue-metrics-read-cancel-");
+  const root = seedSession(dataDir, {
+    id: "issue-cancel", status: "canceled", ticket: "DTS-3",
+    cancelReason: "inaccurate",
+  });
+  const { service } = makeService(dataDir);
+  try {
+    // 快照路径:生产写路冻结的 canceled 快照带 cancel_reason,读侧
+    // 透传进分类,负面终止进一次解决率分母记失败。
+    freezeSnapshot(root);
+    const frozen = service.onceRates();
+    assert.equal(frozen.terminated, 1);
+    assert.equal(frozen.delivered, 0);
+    assert.equal(frozen.total, 1, "分母=完成交付 0 + 负面终止 1");
+    assert.deepEqual(frozen.localization,
+      { passed: 0, total: 0, rate: null }, "两轴分母仍只含完成交付");
+    assert.deepEqual(rowOf(frozen, "issue-cancel"),
+      { id: "issue-cancel", reviews: 0, localization_pass: false,
+        repair_pass: false }, "明细行机器事实缺省");
+
+    // 现算路径:删掉快照回退,同判(口径不分家)。
+    rmSync(join(root, ISSUE_METRICS_FILE));
+    assert.deepEqual(service.onceRates(), frozen);
   } finally {
     await service.shutdown().catch(() => undefined);
   }

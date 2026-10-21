@@ -370,6 +370,14 @@ export const ISSUE_CANCEL_REASONS: readonly IssueCancelReason[] = [
   "resolved", "inaccurate", "slow", "disobedient", "other",
 ];
 
+/** 负面原因(#542):这些原因终止的有单会话进一次解决率分母记失败;
+ *  resolved(问题已处理)与无原因取消(历史数据)待遇相同,不进任何
+ *  统计。显式列举词表——将来新增中性/负面原因时各自显式表态,不靠
+ *  「非 resolved 即负面」的隐式推导漂移。 */
+export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
+  "inaccurate", "slow", "disobedient", "other",
+];
+
 export interface IssueSessionState {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作的唯一闸口,闸口通知、

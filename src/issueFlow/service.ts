@@ -100,6 +100,7 @@ import {
   initStageStates,
   isTerminal,
   ISSUE_CANCEL_REASONS,
+  ISSUE_NEGATIVE_CANCEL_REASONS,
   issueRepoWorkspaces,
   loadState,
   normalizeIssueRepos,
@@ -1301,6 +1302,8 @@ export class IssueFlowService {
       ticket: live.state.ticket,
       status: live.state.status,
       conclusion_kind: live.state.conclusion?.kind,
+      // 终止原因(#542):canceled 终态伴生,与快照冻结字段同源。
+      cancel_reason: live.state.cancel_reason,
       // 判定收在 onceRates.ts 的共享函数,与快照投影同一份(口径
       // 注释见彼处):这里不各写各的判定。
       verify_fail_count: countVerifyFailures(live.state.transitions ?? []),
@@ -1315,8 +1318,9 @@ export class IssueFlowService {
    *  伴生缺席按结论时刻分「待算」(支持期内:通道在途或曾丢失,清扫器兜底)
    *  与「不支持期」(起算日期前终态,永不回填)。达标线是参数(settings
    *  runtime 的 issue_once_generated_threshold_percent,缺省 90)。
-   *  一次定位/验证/解决三根过程率轴与 /issues/stats 同源(this.onceRates
-   *  的既有判定),分母=范围内完成交付全集——不随伴生在缺漂移。 */
+   *  一次定位/验证两根过程率轴与 /issues/stats 同源(this.onceRates
+   *  的既有判定),分母=范围内完成交付全集——不随伴生在缺漂移;
+   *  一次解决率分母(#542)=完成交付全集+负面原因终止会话(记失败)。 */
   onceGeneratedStats(days?: number, range: CompletionRange = {}): IssueOnceGeneratedStats {
     const runtime = this.options.settings?.runtime?.();
     const configured = Number(
@@ -1327,16 +1331,30 @@ export class IssueFlowService {
       : ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT;
     validateCompletionRange(range);
     const cutoff = days && days > 0 ? Date.now() - days * 86400000 : undefined;
-    // 收集范围内全部完成交付会话(判定事实 + 结论时刻)。
+    // 收集范围内全部完成交付会话与负面原因终止会话(#542,判定事实
+    // + 结论时刻;取消的结论时刻=取消时刻,saveState 落盘时写 updated_at)。
     const collected: Array<{ live: LiveIssue; concludedAt: string }> = [];
     for (const live of this.live.values()) {
       const state = live.state;
-      if (state.status !== "archived") continue;
-      if (state.conclusion?.kind !== "delivered") continue;
-      if (!state.ticket?.trim()) continue;
-      const concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
+      let concludedAt: string;
+      if (state.status === "archived") {
+        if (state.conclusion?.kind !== "delivered") continue;
+        if (!state.ticket?.trim()) continue;
+        concludedAt = state.conclusion?.at ?? state.updated_at ?? "";
+      } else if (state.status === "canceled") {
+        // 负面原因终止进统计(#542);resolved 与无原因取消(历史
+        // 路径)维持排除,口径裁决与纯函数 issueOnceRates 同源。
+        if (!state.ticket?.trim()) continue;
+        if (!state.cancel_reason
+          || !ISSUE_NEGATIVE_CANCEL_REASONS.includes(state.cancel_reason)) {
+          continue;
+        }
+        concludedAt = state.updated_at ?? "";
+      } else {
+        continue;
+      }
       const atMs = Date.parse(concludedAt);
-      if (!completedInRange(state.conclusion?.at, range)) continue;
+      if (!completedInRange(concludedAt, range)) continue;
       if (cutoff !== undefined && (!Number.isFinite(atMs) || atMs < cutoff)) continue;
       collected.push({ live, concludedAt });
     }
@@ -1366,6 +1384,27 @@ export class IssueFlowService {
     let noCode = 0;
     const repoMap = new Map<string, IssueOnceGeneratedRepoRow>();
     for (const { live, concludedAt, ...rowFacts } of collected) {
+      // 负面终止行(#542):工作机器事实(定位/验证/占比/检视)全部
+      // 缺省,带终止原因与说明文本;不进 by_repo、不进达标分母。
+      if (live.state.status === "canceled") {
+        sessions.push({
+          id: live.id,
+          title: live.state.title,
+          module: this.currentModule(live.state)?.name || live.state.module?.trim() || "未分类",
+          reporter: live.state.reporter?.trim() || live.state.account,
+          concluded_at: concludedAt,
+          reviews: 0,
+          localization_pass: false,
+          verify_pass: false,
+          solved_pass: false,
+          state: "canceled",
+          ...(live.state.cancel_reason
+            ? { cancel_reason: live.state.cancel_reason } : {}),
+          ...(live.state.cancel_reason_text
+            ? { cancel_reason_text: live.state.cancel_reason_text } : {}),
+        });
+        continue;
+      }
       const axes = axesById.get(live.id);
       const supported = concludedAt.slice(0, 10) >= ISSUE_CODE_ORIGIN_SINCE;
       const snapshot = supported
@@ -1426,7 +1465,8 @@ export class IssueFlowService {
     return {
       threshold_percent: threshold,
       supported_since: ISSUE_CODE_ORIGIN_SINCE,
-      delivered: once.total,
+      delivered: once.delivered,
+      terminated: once.terminated,
       total,
       passed,
       rate: total ? Math.round((passed / total) * 1000) / 10 : null,

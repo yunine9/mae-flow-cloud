@@ -96,11 +96,53 @@ test("纯函数:逐会话明细携带检视批次与两轴判定;空集比率 nu
     row.id, row.reviews, row.localization_pass, row.repair_pass,
   ]), [["a", 2, false, false], ["b", 0, true, true]]);
   assert.deepEqual(issueOnceRates([]), {
-    total: 0,
+    total: 0, delivered: 0, terminated: 0,
     localization: { passed: 0, total: 0, rate: null },
     repair: { passed: 0, total: 0, rate: null },
     per_session: [],
   });
+});
+
+// ---- 负面原因终止进一次解决率分母(#542) ----
+
+test("纯函数:负面原因终止进一次解决率分母记失败;一次定位/验证两轴口径不动", () => {
+  const summary = issueOnceRates([
+    facts({ id: "ok" }),
+    facts({ id: "term-a", status: "canceled", cancel_reason: "inaccurate" }),
+    facts({ id: "term-b", status: "canceled", cancel_reason: "slow" }),
+    facts({ id: "term-c", status: "canceled", cancel_reason: "disobedient" }),
+    facts({ id: "term-d", status: "canceled", cancel_reason: "other" }),
+  ]);
+  assert.equal(summary.total, 5, "一次解决率分母=完成交付 1 + 负面终止 4");
+  assert.equal(summary.delivered, 1);
+  assert.equal(summary.terminated, 4, "负面终止记失败,不进两轴分子");
+  assert.deepEqual(summary.localization, { passed: 1, total: 1, rate: 100 },
+    "定位轴分母仍只含完成交付(负面终止无法判轴)");
+  assert.deepEqual(summary.repair, { passed: 1, total: 1, rate: 100 },
+    "验证轴分母仍只含完成交付");
+  // 逐会话明细含负面终止行,工作机器事实缺省(未判轴、无检视记账)。
+  assert.deepEqual(summary.per_session.map((row) => row.id),
+    ["ok", "term-a", "term-b", "term-c", "term-d"]);
+  assert.deepEqual(
+    summary.per_session.find((row) => row.id === "term-a"),
+    { id: "term-a", reviews: 0, localization_pass: false, repair_pass: false });
+});
+
+test("纯函数:resolved 取消与无原因取消(历史)维持排除;无单负面终止也不进", () => {
+  const summary = issueOnceRates([
+    facts({ id: "ok" }),
+    facts({ id: "resolved-cancel", status: "canceled",
+      cancel_reason: "resolved" }),
+    facts({ id: "legacy-cancel", status: "canceled",
+      cancel_reason: undefined }),
+    facts({ id: "no-ticket", status: "canceled", ticket: undefined,
+      cancel_reason: "inaccurate" }),
+    facts({ id: "blank-ticket", status: "canceled", ticket: "  ",
+      cancel_reason: "other" }),
+  ]);
+  assert.equal(summary.total, 1);
+  assert.equal(summary.terminated, 0);
+  assert.deepEqual(summary.per_session.map((row) => row.id), ["ok"]);
 });
 
 // ---- 真路由:GET /issues/stats 从服务台账聚合 ----
