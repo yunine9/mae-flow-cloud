@@ -1958,10 +1958,15 @@ const deliveryAnalytics = readFileSync(
   resolve("web/src/DeliveryAnalytics.tsx"), "utf-8");
 
 test("DTS 概览一次解决率环图第三片「用户终止(负面原因)」琥珀色,两图格局不动(#542)", () => {
-  // 第三片:琥珀 #d97706(原型②部分),与工作行环的「平台外」同源色。
+  // 第三片:琥珀 CSS 变量(#540 复审收口 var(--attention-strong),亮暗
+  // 同值 #d97706),与工作行环的「平台外」同源色;不再内联裸 hex。
   assert.match(deliveryAnalytics, /label: "用户终止（负面原因）"/);
   assert.match(deliveryAnalytics,
-    /\{ label: "用户终止（负面原因）", color: "#d97706", value: terminated \}/);
+    /\{ label: "用户终止（负面原因）", color: "var\(--attention-strong\)", value: terminated \}/);
+  assert.match(
+    readFileSync(resolve("web/src/tailwind.css"), "utf-8"),
+    /--attention-strong: #d97706;/,
+    "变量在主题里落值,亮暗同值");
   // 「未一次解决」片只数完成交付里的失败:分母减去一次解决与终止。
   assert.match(deliveryAnalytics,
     /value: Math\.max\(0, \(stats\?\.solved\.total \?\? 0\) - \(stats\?\.solved\.passed \?\? 0\) - terminated\)/);
@@ -1977,13 +1982,16 @@ test("DTS 概览一次解决率环图第三片「用户终止(负面原因)」�
     deliveryAnalytics.match(/delivery-overview-grid/g)?.length, 2);
 });
 
-test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,自上线日起(#542)", () => {
-  // 卡片口径标注一行。
+test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,绝对日起算(#542,#540 复审)", () => {
+  // 卡片口径标注一行:起算日写绝对日期(与 ADR-0066 的 2026-10-21 一致),
+  // 相对措辞「上线起」不许回潮。
   assert.match(deliveryAnalytics, /分母 = 完成交付会话 \+ 主动终止会话/);
-  assert.match(deliveryAnalytics, /自终止原因收集上线起/);
+  assert.match(deliveryAnalytics, /自 2026-10-21 口径切换起/);
+  assert.doesNotMatch(deliveryAnalytics, /自终止原因收集上线起/);
   assert.match(deliveryAnalytics, /选「问题已处理」的会话不参与统计/);
-  // help tooltip 同步:主动终止记一次失败,两轴分母仍只含完成交付。
-  assert.match(deliveryAnalytics, /主动终止\(负面原因\)会话,主动终止记一次失败/);
+  // help tooltip 同步:绝对日 + 主动终止记一次失败,两轴分母仍只含完成交付。
+  assert.match(deliveryAnalytics,
+    /主动终止\(负面原因\)会话\(自 2026-10-21 口径切换起\),主动终止记一次失败/);
   assert.match(deliveryAnalytics, /两轴分母仍只含完成交付/);
   // 页底「统计口径」details 同步改写。
   assert.match(deliveryAnalytics,
@@ -2016,9 +2024,10 @@ test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位�
     deliveryAnalytics.indexOf('dim === "repo"'));
   // 表头末列新增「终止原因」;原 9 列语义与顺序不动。
   assert.match(table, /<th>发起人<\/th><th>收口时间<\/th><th>终止原因<\/th>/);
-  // 一次解决列保持无条件 ✓/✗:终止行 solved_pass=false 自然落红 ✗。
+  // 一次解决列:终止行显式红 ✗(#540 复审——终止行 solved_pass 已缺席,
+  // 不再靠假值隐式落 ✗);交付行按 solved_pass ✓/✗。
   assert.match(table,
-    /<td>\{row\.solved_pass \? <span className="font-semibold text-success">✓<\/span> : <span className="font-semibold text-danger">✗<\/span>\}<\/td>/);
+    /\{canceledRow\s+\? <span className="font-semibold text-danger">✗<\/span>\s+: row\.solved_pass\s+\? <span className="font-semibold text-success">✓<\/span>\s+: <span className="font-semibold text-danger">✗<\/span>\}/);
   // 终止行 — 占位恰好四处:一次定位/一次验证/首次生成占比/工作行
   // (终止会话没有工作行事实,两轴不可判)。
   assert.equal((table.match(/canceledRow \? "—" :/g) ?? []).length, 4,
@@ -2031,18 +2040,25 @@ test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位�
 });
 
 test("DTS 按会话表终止原因徽标:已定类红色系,其他琥珀系截断悬停全文(#543)", () => {
-  // 词表:稳定英文值→界面中文,与 CancelSessionDialog 下拉同义。
+  // 词表(#540 复审)唯一份在 issues/cancelReasons.ts:稳定英文值→界面
+  // 中文,与 CancelSessionDialog 下拉同源;页面只 import,不再各抄一份。
+  const cancelReasons = readFileSync(
+    resolve("web/src/issues/cancelReasons.ts"), "utf-8");
+  const labels = cancelReasons.slice(
+    cancelReasons.indexOf("CANCEL_REASON_LABELS"),
+    cancelReasons.indexOf("};"));
   for (const label of ["分析不准确", "速度太慢", "指令不遵从", "其他原因"]) {
-    assert.ok(deliveryAnalytics.includes(label), `词表缺「${label}」`);
+    assert.ok(labels.includes(label), `词表缺「${label}」`);
   }
+  assert.match(deliveryAnalytics, /from "\.\/issues\/cancelReasons"/);
   const badge = deliveryAnalytics.slice(
     deliveryAnalytics.indexOf("function TerminateReasonBadge"),
     deliveryAnalytics.indexOf("function TerminateReasonDetail"));
-  // 已定类(inaccurate/slow/disobedient)红色系「终止 · <中文原因>」。
-  assert.match(badge,
-    /row\.cancel_reason !== "inaccurate" && row\.cancel_reason !== "slow"/);
+  // 负面判定走共享集合(镜像服务端语义),不前端复判枚举值;未知值
+  // label 走安全回退,不渲染 undefined。
+  assert.match(badge, /!isNegativeCancelReason\(row\.cancel_reason\)/);
   assert.match(badge, /bg-danger-soft[^"]*text-danger/);
-  assert.match(badge, /终止 · \{TERMINATE_REASON_LABELS\[row\.cancel_reason\]\}/);
+  assert.match(badge, /终止 · \{cancelReasonLabel\(row\.cancel_reason\)\}/);
   // other 与缺席/未知(字段纪律缺省处理)琥珀色系:「其他 · <说明>」,
   // max-width+truncate 省略号截断,title 悬停看全文。
   assert.match(badge, /bg-attention-soft[^"]*text-attention/);

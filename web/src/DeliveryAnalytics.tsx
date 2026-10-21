@@ -13,7 +13,8 @@ import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryT
 import { KnowledgeInsightsPanel } from "./KnowledgeFlywheel";
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
 import { cn } from "cn";
-import { getIssueOnceGenerated, listPeople, type IssueCancelReason, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow, type PersonIdentity } from "./api";
+import { getIssueOnceGenerated, listPeople, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow, type PersonIdentity } from "./api";
+import { cancelReasonLabel, isNegativeCancelReason } from "./issues/cancelReasons";
 import { getIssueRegistrationStats, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
 import { TicketTemplateCard } from "./issues/TicketTemplateCard";
 import { onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
@@ -97,28 +98,19 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
   return <tr className={child ? "delivery-child-row" : undefined}><td><button className="delivery-task-link" onClick={() => onSelect(id)}><b>{id}</b><span>{title}</span></button></td><td><TaskLanguages tasks={tasks} /></td><td>{parent ? <>已合入交付 {tasks.filter(t => t.merged).length}/{tasks.length}{tasks.some(t => !t.merged) && <small>含未合入暂计</small>}</> : tasks.every(t => t.merged) ? "已合入" : "进行中 · 暂计"}</td><td>{values.available ? `${num(values.total)} 行` : "—"}</td><td className="delivery-accent">{percent(values.firstPercent)}</td><td title={tokens.available ? `已记录输入 ${num(tokens.input)} · 输出 ${num(tokens.output)}` : "没有模型用量记录"}><strong>{tokens.available ? num(tokens.total) : "—"}</strong>{tokens.available < tokens.tasks && <small>{tokens.available ? "部分用量已记录" : "暂无用量记录"}</small>}</td><td>{values.available}/{tasks.length}{!values.available && <small>待取证</small>}</td></tr>;
 }
 
-/** 终止原因中文词表(#543):稳定英文值是协议(服务端 state.ts 码表),
- *  界面渲染中文;与终止确认框(CancelSessionDialog 下拉)同一份语义。
- *  resolved=问题已处理不会出现在终止行(服务端不下发),入表只为词表
- *  完整、键型对齐。 */
-const TERMINATE_REASON_LABELS: Record<IssueCancelReason, string> = {
-  resolved: "问题已处理", inaccurate: "分析不准确", slow: "速度太慢",
-  disobedient: "指令不遵从", other: "其他原因",
-};
-/** 终止原因徽标(#543):已定类原因(inaccurate/slow/disobedient)红色系
- *  「终止 · <中文原因>」;other 与缺席/未知(字段纪律缺省处理,#353)
- *  琥珀色系「其他 · <说明>」,超长 CSS 截断省略号,title 悬停看全文。 */
+/** 终止原因中文词表与负面判定(#540 复审)收口到 issues/cancelReasons:
+ *  与终止确认框(CancelSessionDialog 下拉)同一份映射、同一个负面
+ *  集合,不再各抄一份漂移;未知值 label 走安全回退。 */
 function TerminateReasonBadge({ row }: { row: IssueOnceGeneratedSessionRow }) {
   const text = (row.cancel_reason_text ?? "").trim();
-  if (row.cancel_reason !== "inaccurate" && row.cancel_reason !== "slow"
-    && row.cancel_reason !== "disobedient") {
+  if (!isNegativeCancelReason(row.cancel_reason)) {
     const label = text ? `其他 · ${text}` : "其他";
     return <span
       className="inline-block max-w-[240px] truncate align-bottom rounded-full bg-attention-soft px-2 py-0.5 text-xs font-medium text-attention"
       title={text || undefined}>{label}</span>;
   }
   return <span className="inline-block rounded-full bg-danger-soft px-2 py-0.5 text-xs font-medium text-danger">
-    终止 · {TERMINATE_REASON_LABELS[row.cancel_reason]}</span>;
+    终止 · {cancelReasonLabel(row.cancel_reason)}</span>;
 }
 /** 终止行详情(#543):终止原因中文文案、「其他原因」完整原文与终止
  *  时刻的只读陈列。终止会话没有工作行事实,行归属证据面板不适用。 */
@@ -128,7 +120,7 @@ function TerminateReasonDetail({ row }: { row: IssueOnceGeneratedSessionRow }) {
     <span>{new Date(row.concluded_at).toLocaleString("zh-CN")} 终止</span></h2>
     <p className="mt-3 text-sm">该会话由发起人主动终止,原因:
       <b className={row.cancel_reason === "other" ? "text-attention" : "text-danger"}>
-        {TERMINATE_REASON_LABELS[row.cancel_reason ?? "other"]}</b></p>
+        {cancelReasonLabel(row.cancel_reason)}</b></p>
     {row.cancel_reason === "other" && text
       ? <p className="delivery-muted">说明:{text}</p> : null}
     <p className="delivery-muted">终止会话没有工作行与定位/验证两轴事实,表中相关列以 — 占位;一次解决率分母计入并记未解决。</p>
@@ -206,15 +198,15 @@ export function IssueAnalyticsTab() {
       </span>
     </div>
     <div className="delivery-overview-grid">
-      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话,主动终止记一次失败;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
+      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话(自 2026-10-21 口径切换起),主动终止记一次失败;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
         <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
           ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
           slices={[
             { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
             { label: "未一次解决", color: "var(--line-strong)", value: Math.max(0, (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) - terminated) },
-            { label: "用户终止（负面原因）", color: "#d97706", value: terminated },
+            { label: "用户终止（负面原因）", color: "var(--attention-strong)", value: terminated },
           ]} />
-        <p className="mt-3 text-xs text-muted-foreground">口径标注：分母 = 完成交付会话 + 主动终止会话（自终止原因收集上线起）；终止时选「问题已处理」的会话不参与统计。</p>
+        <p className="mt-3 text-xs text-muted-foreground">口径标注：分母 = 完成交付会话 + 主动终止会话（自 2026-10-21 口径切换起）；终止时选「问题已处理」的会话不参与统计。</p>
       </section>
       <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
         <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
@@ -254,7 +246,11 @@ export function IssueAnalyticsTab() {
             title={canceledRow ? "查看终止原因" : "查看行归属证据"} onClick={() => setSelected(row.id)}>
           <td><span className="delivery-task-link" style={{ cursor: "pointer" }}><b>{row.id}</b><span>{row.title}</span></span></td>
           <td>{row.module}</td>
-          <td>{row.solved_pass ? <span className="font-semibold text-success">✓</span> : <span className="font-semibold text-danger">✗</span>}</td>
+          <td>{canceledRow
+            ? <span className="font-semibold text-danger">✗</span>
+            : row.solved_pass
+              ? <span className="font-semibold text-success">✓</span>
+              : <span className="font-semibold text-danger">✗</span>}</td>
           <td>{canceledRow ? "—" : row.localization_pass ? <span className="text-success">✓ 一版</span> : <span className="text-danger">✗ 多版</span>}</td>
           <td>{canceledRow ? "—" : row.verify_pass ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}</td>
           <td className="delivery-accent pct">{canceledRow ? "—" : pct(row.share)}</td>

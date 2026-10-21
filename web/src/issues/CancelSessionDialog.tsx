@@ -24,19 +24,8 @@ import {
   Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { CANCEL_REASON_OPTIONS } from "./cancelReasons";
 import type { IssueCancelReason } from "../api";
-
-/** 下拉五项:value=稳定英文值(协议,#541),label=界面中文。顺序即
- * 下拉顺序,与服务端 state.ts 的 ISSUE_CANCEL_REASONS 同源同序。 */
-const CANCEL_REASON_OPTIONS: Array<{
-  value: IssueCancelReason; label: string;
-}> = [
-  { value: "resolved", label: "问题已处理" },
-  { value: "inaccurate", label: "分析不准确" },
-  { value: "slow", label: "速度太慢" },
-  { value: "disobedient", label: "指令不遵从" },
-  { value: "other", label: "其他原因" },
-];
 
 export interface CancelSessionInput {
   reason: IssueCancelReason;

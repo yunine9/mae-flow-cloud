@@ -400,9 +400,11 @@ export function onceGeneratedFeatureRows(
     module: string;
     share?: number;
     pass?: boolean;
-    localization_pass: boolean;
-    verify_pass: boolean;
-    solved_pass: boolean;
+    /** 工作机器事实仅 ok 行有(#540 复审可选化:canceled 行缺席);
+     *  缺 share/lines 的行在读侧整行跳过,不会读到缺席布尔。 */
+    localization_pass?: boolean;
+    verify_pass?: boolean;
+    solved_pass?: boolean;
     lines?: { first: number; rework: number; external: number };
   }>,
 ): OnceGeneratedFeatureRow[] {

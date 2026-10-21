@@ -4184,14 +4184,16 @@ export interface IssueOnceGeneratedSessionRow {
   share?: number;
   pass?: boolean;
   lines?: { first: number; rework: number; external: number };
+  /** 以下工作机器事实仅 ok 行有;canceled 行缺席不设键(#540 复审),
+   *  消费方按缺省处理,不得把 false/0 假值当事实。 */
   /** 检视批次数(先行能力,呈现用)。 */
-  reviews: number;
+  reviews?: number;
   /** 一次定位:分析报告一版过(与一次定位率同源判定)。 */
-  localization_pass: boolean;
+  localization_pass?: boolean;
   /** 一次验证:验证不通过次数=0(未答卡=通过)。 */
-  verify_pass: boolean;
+  verify_pass?: boolean;
   /** 一次解决:定位与验证双一次。 */
-  solved_pass: boolean;
+  solved_pass?: boolean;
   /** 发起人(发起登记的登录账号;缺席按缺省处理,#353 字段纪律)。 */
   reporter?: string;
   /** 终止原因(#542):仅 canceled 行有。 */

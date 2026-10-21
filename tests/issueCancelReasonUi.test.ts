@@ -47,18 +47,26 @@ test("两个终止入口弹同一份确认框:工作台与列表卡片都渲染 
 });
 
 test("原因下拉五项必选:默认「问题已处理」,稳定英文值与界面中文成对", () => {
-  const options = dialogSource.slice(
-    dialogSource.indexOf("CANCEL_REASON_OPTIONS"),
-    dialogSource.indexOf("];"));
-  // 五项,顺序即下拉顺序,与服务端词表(ISSUE_CANCEL_REASONS)同源同序。
+  // 词表唯一份(#540 复审)在 issues/cancelReasons.ts:五项,顺序即
+  // 下拉顺序(Record 键序),与服务端词表(ISSUE_CANCEL_REASONS)同源
+  // 同序;确认框只 import 共享选项,不再自抄一份。
+  const cancelReasons = readFileSync(
+    resolve("web/src/issues/cancelReasons.ts"), "utf-8");
+  const labels = cancelReasons.slice(
+    cancelReasons.indexOf("CANCEL_REASON_LABELS"),
+    cancelReasons.indexOf("};"));
   assert.deepEqual(
-    [...options.matchAll(/value: "(resolved|inaccurate|slow|disobedient|other)"/g)]
+    [...labels.matchAll(/(resolved|inaccurate|slow|disobedient|other):/g)]
       .map((match) => match[1]),
     ["resolved", "inaccurate", "slow", "disobedient", "other"],
     "五个稳定英文值必须齐且按词表顺序");
   for (const label of ["问题已处理", "分析不准确", "速度太慢", "指令不遵从", "其他原因"]) {
-    assert.ok(options.includes(label), `下拉必须有中文项「${label}」`);
+    assert.ok(labels.includes(label), `下拉必须有中文项「${label}」`);
   }
+  assert.match(dialogSource,
+    /import \{ CANCEL_REASON_OPTIONS \} from "\.\/cancelReasons";/,
+    "确认框下拉必须消费共享词表");
+  assert.match(dialogSource, /items=\{CANCEL_REASON_OPTIONS\}/);
   // 必选不可跳过:状态初值就是默认档,每次打开重置(没有"不选"的路)。
   assert.match(dialogSource,
     /const \[reason, setReason\] = useState<IssueCancelReason>\("resolved"\)/,
