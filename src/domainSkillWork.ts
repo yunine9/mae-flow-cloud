@@ -258,11 +258,23 @@ export class DomainSkillWork {
     } catch (error) { step.status = "failed"; step.error = error instanceof Error ? error.message : String(error); this.persist(); throw error; }
     finally { this.executions.delete(id); }
   }
-  finish(result: SkillWorkResult, fingerprint?: (ids: string[]) => string) {
+  finish(result: SkillWorkResult, fingerprint?: (ids: string[]) => string, excludedDocumentIds: ReadonlySet<string> = new Set()) {
     if (result.status !== "paused" && this.state.steps.some(s => !["done", "discarded"].includes(s.status))) throw new Error("还有未完成的步骤，请继续处理、说明放弃原因或保存暂停结果");
-    if (result.status !== "paused") for (const step of this.state.steps.filter(s => s.status === "done" && s.review)) {
-      if (!fingerprint) throw new Error("完成前需要核对独立评审对应的文稿版本");
-      if (!step.result?.review?.pass || step.reviewed_fingerprint !== fingerprint(documentIds(step, step.result))) throw new Error(`文稿已变化或尚未通过独立评审，请重新执行步骤 ${step.id}`);
+    if (result.status !== "paused") {
+      const reviewed = new Set<string>(), remaining = new Set<string>();
+      for (const step of this.state.steps.filter(s => s.status === "done" && s.review)) {
+        const ids = documentIds(step, step.result);
+        if (ids.some(id => excludedDocumentIds.has(id))) {
+          // 整组旧指纹不能证明其中一部分正文的当前版本；保留历史，余下文稿由有效评审覆盖。
+          ids.filter(id => !excludedDocumentIds.has(id)).forEach(id => remaining.add(id));
+          continue;
+        }
+        if (!fingerprint) throw new Error("完成前需要核对独立评审对应的文稿版本");
+        if (!step.result?.review?.pass || step.reviewed_fingerprint !== fingerprint(ids)) throw new Error(`文稿已变化或尚未通过独立评审，请重新执行步骤 ${step.id}`);
+        ids.forEach(id => reviewed.add(id));
+      }
+      const missing = [...remaining].filter(id => !reviewed.has(id));
+      if (missing.length) throw new Error(`旧步骤包含已排除文稿，其余 ${missing.length} 篇仍有效文稿缺少当前版本的独立评审：${missing.slice(0, 30).join("、")}；请为这些文稿安排新的只读评审步骤，无需重写或改动旧步骤`);
     }
     // 没有另存文稿的简单方法也能让人阅读全文，不把等待说明仅留在错误栏。
     if (result.status === "paused" && !result.work_document_ids?.length) {
