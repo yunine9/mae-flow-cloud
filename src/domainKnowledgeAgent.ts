@@ -180,15 +180,18 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
     }
     if (fingerprint(ids) !== version) throw new Error("文稿在图校验期间变化，请重新校验当前正文");
   };
-  const completionDocumentIds = (result: SkillWorkResult) => {
-    const proposed = new Set(input.turn.proposals.filter(item => item.status !== "discarded").map(item => item.document.id));
-    const returned = new Set(result.document_ids);
+  const completionExclusions = (documents = input.read()) => {
+    if (input.turn.mode !== "extract") return new Set<string>();
     const required = new Set(work.state.plan?.document_ids);
     const excluded = new Set(work.state.plan?.exclusions?.filter(item => item.reason.trim()).map(item => item.document_id));
-    return input.read().filter(document => {
-      // 删除和旧轮次记录会继续保留；已明确移出规划的删除项不应被历史写入记录重新纳入完成校验。
-      // 仍在必交清单或未说明排除原因的删除项继续校验，修订模式也仍须评审删除建议。
-      if (input.turn.mode === "extract" && document.deleted && excluded.has(document.id) && !required.has(document.id)) return false;
+    return new Set(documents.filter(document => document.deleted && excluded.has(document.id) && !required.has(document.id)).map(document => document.id));
+  };
+  const completionDocumentIds = (result: SkillWorkResult) => {
+    const proposed = new Set(input.turn.proposals.filter(item => item.status !== "discarded").map(item => item.document.id));
+    const returned = new Set(result.document_ids), documents = input.read(), excluded = completionExclusions(documents);
+    return documents.filter(document => {
+      // 文稿清单和历史步骤共用排除范围；未说明原因或仍必交的删除项继续校验，修订删除仍须评审。
+      if (excluded.has(document.id)) return false;
       return input.turn.mode === "extract" && !document.deleted || savedDocumentIds.has(document.id)
         || work.state.modified_document_ids?.includes(document.id)
         || document.research_turn_id === input.turn.id || proposed.has(document.id) || returned.has(document.id);
@@ -312,7 +315,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
             await requireWorkDiagrams(work.state.plan?.work_document_id);
             requireRevisionReviews();
           }
-          result = step ? next : work.finish(next, fingerprint);
+          result = step ? next : work.finish(next, fingerprint, completionExclusions());
           progress(); return reply({ saved: true });
         } catch (error) { return failure(error); }
       },
@@ -492,7 +495,7 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       if (validation) throw new IncompleteDomainResearch(validation.feedback);
       await requireWorkDiagrams(work.state.plan?.work_document_id);
       requireRevisionReviews();
-      if (cachedResult && executionContract === "reviewed-document-plan") work.finish(result, fingerprint);
+      if (cachedResult && executionContract === "reviewed-document-plan") work.finish(result, fingerprint, completionExclusions());
     }
     return result;
   } catch (error) {
