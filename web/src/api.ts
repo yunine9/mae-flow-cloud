@@ -3838,6 +3838,16 @@ export interface IssueGateCard {
   created_at: string;
 }
 
+/** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
+ * 处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令不
+ * 遵从/other=其他(附选填说明)。与服务端 state.ts 的词表同一份语义。 */
+export type IssueCancelReason =
+  | "resolved"
+  | "inaccurate"
+  | "slow"
+  | "disobedient"
+  | "other";
+
 export interface IssueSummary {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
@@ -4008,6 +4018,12 @@ export interface IssueSummary {
   repo_reclaimed_at?: string;
   /** 构建产物已回收的时刻(磁盘治理):返工首编为全量(依赖缓存热)。 */
   build_products_reclaimed_at?: string;
+  /** 终止原因(#541):canceled 终态伴生,稳定英文值——resolved=问题已
+   *  处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令
+   *  不遵从/other=其他;缺席=无原因取消(历史路径)。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 cancel_reason="other" 带,选填人话。 */
+  cancel_reason_text?: string;
 }
 
 export interface IssueWaitingCard {
@@ -4564,6 +4580,11 @@ export function controlIssue(id: string, input: {
   action: "cancel" | "revive";
   /** revive 专用(ADR-0055):操作者一句话说明,随恢复回合送达 AI。 */
   note?: string;
+  /** 终止原因(#541):cancel 动作的独立入参(不复用 revive 的 note),
+   *  界面下拉必选;缺席=无原因取消(历史路径)。revive 不收。 */
+  reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 reason="other" 有意义,选填。 */
+  reason_text?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
     method: "POST",

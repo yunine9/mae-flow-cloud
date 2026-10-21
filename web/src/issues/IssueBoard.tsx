@@ -26,7 +26,7 @@ import {
   type IssueStatus,
   type IssueSummary,
 } from "../api";
-import { confirmDialog } from "../ConfirmDialog";
+import { CancelSessionDialog, type CancelSessionInput } from "./CancelSessionDialog";
 import { Spinner } from "@/components/Spinner";
 import { startVisiblePolling } from "../visiblePolling";
 import { formatLocalDateTime } from "../time";
@@ -375,6 +375,9 @@ function IssueCard({ issue, onSettled }: {
 }) {
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState("");
+  // 终止确认框(#541):与工作台头部同一份 CancelSessionDialog(下拉式
+  // 原因必选);「返回」无副作用,确认才发 cancel 并带原因。
+  const [stopOpen, setStopOpen] = useState(false);
   const stageLine = [
     issueStageText(issue),
     issue.round && issue.round > 1 ? ` · 第 ${issue.round} 轮` : "",
@@ -384,16 +387,19 @@ function IssueCard({ issue, onSettled }: {
   // 清理——与工作台头部「终止会话」同一口径。
   const terminatable = issue.status !== "archived" && issue.status !== "canceled";
 
-  async function terminate() {
-    if (!await confirmDialog({
-      title: "终止会话",
-      message: `将终止 ${issue.id} 并清理现场，此操作不可撤销。`,
-      confirmLabel: "终止会话",
-      danger: true,
-    })) return;
+  function terminate() {
+    setStopOpen(true);
+  }
+
+  async function terminateWithReason(input: CancelSessionInput) {
+    setStopOpen(false);
     setStopping(true); setStopError("");
     try {
-      await controlIssue(issue.id, { action: "cancel" });
+      await controlIssue(issue.id, {
+        action: "cancel",
+        reason: input.reason,
+        ...(input.reasonText ? { reason_text: input.reasonText } : {}),
+      });
       onSettled?.();
     } catch (cause) {
       setStopError(String((cause as Error).message ?? cause));
@@ -472,8 +478,8 @@ function IssueCard({ issue, onSettled }: {
     {/* meta 行整体浮在拉伸锚点上方:终止钮与 MR 链接可点,信息文字
         吞掉点击(与旧形态一致——点 meta 文字不开工作台)。 */}
     <div className="task-meta relative z-10">
-      {/* 列表直达终止(2026-09-08):不必进工作台再点;确认话术与
-          工作台头部「终止会话」同款。终态卡不渲染。 */}
+      {/* 列表直达终止(2026-09-08):不必进工作台再点;确认框(#541)与
+          工作台头部同用一份 CancelSessionDialog。终态卡不渲染。 */}
       {terminatable && <Button type="button" variant="ghost" size="sm"
         className="h-auto px-0 font-semibold text-destructive underline-offset-2 hover:bg-transparent hover:underline"
         disabled={stopping} onClick={() => void terminate()}>
@@ -500,6 +506,11 @@ function IssueCard({ issue, onSettled }: {
           : `已推送 · ${issue.pushes!.length} 个仓`}</span>}
       {issue.error && <span className="meta-fact">{issue.error.slice(0, 80)}</span>}
     </div>
+
+    {/* 终止会话确认框(#541):与工作台头部同一份下拉式弹窗;终止发起中
+        禁开合防重。 */}
+    <CancelSessionDialog open={stopOpen} busy={stopping}
+      onOpenChange={setStopOpen} onConfirm={(input) => void terminateWithReason(input)} />
   </Card>;
 }
 
