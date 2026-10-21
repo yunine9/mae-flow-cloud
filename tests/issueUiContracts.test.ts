@@ -1966,7 +1966,12 @@ test("DTS 概览一次解决率环图第三片「用户终止(负面原因)」�
   assert.match(deliveryAnalytics,
     /value: Math\.max\(0, \(stats\?\.solved\.total \?\? 0\) - \(stats\?\.solved\.passed \?\? 0\) - terminated\)/);
   // 概览不显示原因分布明细:原因词表不进概览(按会话页签的事,不越界)。
-  assert.doesNotMatch(deliveryAnalytics, /分析不准确|速度太慢|指令不遵从/);
+  // (#543 起「终止原因」词表住按会话表,本断言收窄到概览区段;全文件
+  // 匹配会误伤按会话页签的正当用词。)
+  const overview = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf('className="delivery-overview-grid"'),
+    deliveryAnalytics.indexOf('role="tablist" aria-label="观察维度"'));
+  assert.doesNotMatch(overview, /分析不准确|速度太慢|指令不遵从/);
   // 2026-10-20 拍板的两图格局:概览网格两处(需求交付+DTS),不加第三张卡。
   assert.equal(
     deliveryAnalytics.match(/delivery-overview-grid/g)?.length, 2);
@@ -1985,4 +1990,91 @@ test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,�
     /分母=完成交付会话\+主动终止\(负面原因\)会话,主动终止记一次失败/);
   assert.match(deliveryAnalytics,
     /终止时选「问题已处理」的会话与无原因取消\(历史数据\)不参与统计/);
+});
+
+// ---- DTS 按会话表:负面终止行进表与终止原因列(#543) ----
+
+test("DTS 按会话表纳入负面终止行:照单渲染 canceled,不复判原因(#543)", () => {
+  // 「问题已处理」取消与无原因取消不产生行是服务端唯一口径
+  // (issueOnceGenerated 服务层测试钉住,#542);前端把 canceled 行纳入
+  // 渲染即可,行过滤里不得再读 cancel_reason 复判(第二套口径即漂移)。
+  const rowsMemo = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("const rows = useMemo"),
+    deliveryAnalytics.indexOf("const features = useMemo"));
+  assert.match(rowsMemo, /row\.state === "ok" \|\| row\.state === "canceled"/);
+  assert.doesNotMatch(rowsMemo, /cancel_reason/, "行过滤不得复判终止原因");
+  // 数据侧镜像(#542 已带):canceled 是行状态的合法值,原因字段随行可选。
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.match(apiTypes,
+    /"ok" \| "no_code" \| "pending" \| "unsupported" \| "canceled"/);
+  assert.match(apiTypes, /cancel_reason\?: IssueCancelReason;/);
+});
+
+test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位、末列徽标或 —(#543)", () => {
+  const table = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf('dim === "session"'),
+    deliveryAnalytics.indexOf('dim === "repo"'));
+  // 表头末列新增「终止原因」;原 9 列语义与顺序不动。
+  assert.match(table, /<th>发起人<\/th><th>收口时间<\/th><th>终止原因<\/th>/);
+  // 一次解决列保持无条件 ✓/✗:终止行 solved_pass=false 自然落红 ✗。
+  assert.match(table,
+    /<td>\{row\.solved_pass \? <span className="font-semibold text-success">✓<\/span> : <span className="font-semibold text-danger">✗<\/span>\}<\/td>/);
+  // 终止行 — 占位恰好四处:一次定位/一次验证/首次生成占比/工作行
+  // (终止会话没有工作行事实,两轴不可判)。
+  assert.equal((table.match(/canceledRow \? "—" :/g) ?? []).length, 4,
+    "终止行的 — 占位应恰好四处");
+  // 交付行的终止原因格 — 占位(没有终止这回事);终止行悬停即点行看原因。
+  assert.match(table, /\{canceledRow \? <TerminateReasonBadge row=\{row\} \/> : "—"\}/);
+  assert.match(table, /title=\{canceledRow \? "查看终止原因" : "查看行归属证据"\}/);
+  // 时间列复用 concluded_at 同一格式:终止行即取消时刻,交付行即收口时刻。
+  assert.match(table, /new Date\(row\.concluded_at\)\.toLocaleDateString\("zh-CN"\)/);
+});
+
+test("DTS 按会话表终止原因徽标:已定类红色系,其他琥珀系截断悬停全文(#543)", () => {
+  // 词表:稳定英文值→界面中文,与 CancelSessionDialog 下拉同义。
+  for (const label of ["分析不准确", "速度太慢", "指令不遵从", "其他原因"]) {
+    assert.ok(deliveryAnalytics.includes(label), `词表缺「${label}」`);
+  }
+  const badge = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("function TerminateReasonBadge"),
+    deliveryAnalytics.indexOf("function TerminateReasonDetail"));
+  // 已定类(inaccurate/slow/disobedient)红色系「终止 · <中文原因>」。
+  assert.match(badge,
+    /row\.cancel_reason !== "inaccurate" && row\.cancel_reason !== "slow"/);
+  assert.match(badge, /bg-danger-soft[^"]*text-danger/);
+  assert.match(badge, /终止 · \{TERMINATE_REASON_LABELS\[row\.cancel_reason\]\}/);
+  // other 与缺席/未知(字段纪律缺省处理)琥珀色系:「其他 · <说明>」,
+  // max-width+truncate 省略号截断,title 悬停看全文。
+  assert.match(badge, /bg-attention-soft[^"]*text-attention/);
+  assert.match(badge, /max-w-\[\d+px\] truncate/);
+  assert.match(badge, /title=\{text \|\| undefined\}/);
+  assert.match(badge, /const label = text \? `其他 · \$\{text\}` : "其他";/);
+});
+
+test("DTS 按会话表点行:终止行开原因详情,交付行维持行归属证据(#543)", () => {
+  // Sheet 壳分叉:标题按行状态换面。
+  assert.match(deliveryAnalytics,
+    /selectedRow\?\.state === "canceled" \? "终止详情" : "首次生成归属"/);
+  // 内容分叉:交付行原样(行归属证据面板),终止行原因详情。
+  assert.match(deliveryAnalytics,
+    /<IssueCodeOriginPanel id=\{selected\} threshold=\{stats\?\.threshold_percent\} \/>/);
+  const detail = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("function TerminateReasonDetail"),
+    deliveryAnalytics.indexOf("/** 登记问题页签"));
+  assert.match(detail, /<h2>终止原因/);
+  assert.match(detail, /说明:\{text\}/, "其他原因完整原文要在详情侧栏可读");
+  assert.match(detail, /toLocaleString\("zh-CN"\)/, "终止时刻带时分");
+});
+
+test("DTS 按会话表发起人列显示姓名:映射增强,失败退回工号不阻塞(#543)", () => {
+  assert.match(deliveryAnalytics, /displayPersonName\(row\.reporter, people\)/);
+  assert.match(deliveryAnalytics, /listPeople\(\)/);
+  // 姓名只是显示增强(先例 TaskWorkspace):读取失败静默退回工号,
+  // 不 setError、不 busy,不挡表格首屏。(切片到本 effect 为止,
+  // 紧随其后的统计加载 effect 里有正当的 setError,别捞进来。)
+  const load = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("const [people, setPeople]"),
+    deliveryAnalytics.indexOf("}, []);"));
+  assert.match(load, /\.catch\(\(\) => \{\s*\}\)/);
+  assert.doesNotMatch(load, /setError/);
 });
