@@ -10,7 +10,7 @@ import { type DomainAgentOptions } from "../src/domainKnowledgeAgent.ts";
 import { runDomainKnowledgeFixture } from "./helpers/extractionSkillFixture.ts";
 import { domainExecutionContract, workOverview, pageRows, runnableWave } from "../src/domainKnowledgeExecution.ts";
 
-const document = (id: string, content = "# 规则\n未结算取消才释放库存。") => ({ id, title: id, target_id: "domain", path: `domain-docs/${id}.md`, layer: "domain" as const, content, sources: "本次资料中的取消规则" });
+const document = (id: string, content = "# 规则\n未结算取消才释放库存。") => ({ id, title: id, target_id: "domain", path: `docs/业务知识/${id}.md`, layer: "domain" as const, content, sources: "本次资料中的取消规则" });
 const step = (id: string, depends_on: string[] = []) => ({ id, title: id, instructions: "按模板生成并核对取消规则", depends_on, readonly: false,
   expected_document_ids: [id], review: { instructions: "独立核对当前文稿的条件与依据" } });
 type Call = (name: string, args: any, expectedError?: boolean) => Promise<any>;

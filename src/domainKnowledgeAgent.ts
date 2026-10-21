@@ -183,9 +183,29 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const completionDocumentIds = (result: SkillWorkResult) => {
     const proposed = new Set(input.turn.proposals.filter(item => item.status !== "discarded").map(item => item.document.id));
     const returned = new Set(result.document_ids);
-    return input.read().filter(document => (input.turn.mode === "extract" && !document.deleted || savedDocumentIds.has(document.id)
-      || work.state.modified_document_ids?.includes(document.id)
-      || document.research_turn_id === input.turn.id || proposed.has(document.id) || returned.has(document.id))).map(document => document.id);
+    const required = new Set(work.state.plan?.document_ids);
+    const excluded = new Set(work.state.plan?.exclusions?.filter(item => item.reason.trim()).map(item => item.document_id));
+    return input.read().filter(document => {
+      // 删除和旧轮次记录会继续保留；已明确移出规划的删除项不应被历史写入记录重新纳入完成校验。
+      // 仍在必交清单或未说明排除原因的删除项继续校验，修订模式也仍须评审删除建议。
+      if (input.turn.mode === "extract" && document.deleted && excluded.has(document.id) && !required.has(document.id)) return false;
+      return input.turn.mode === "extract" && !document.deleted || savedDocumentIds.has(document.id)
+        || work.state.modified_document_ids?.includes(document.id)
+        || document.research_turn_id === input.turn.id || proposed.has(document.id) || returned.has(document.id);
+    }).map(document => document.id);
+  };
+  const requireExtractionReviews = () => {
+    if (input.turn.mode !== "extract" || executionContract !== "reviewed-document-plan") return;
+    const plan = work.state.plan;
+    if (!plan?.document_ids.length) throw new Error("本方法需要先登记完整文稿计划，再完成每篇的写作与独立评审");
+    const covered = new Set(work.state.steps.filter(item => item.status === "done" && item.review && item.result?.review?.pass).flatMap(item => item.expected_document_ids ?? []));
+    const missing = plan.document_ids.filter(id => !covered.has(id));
+    if (missing.length) throw new Error(`完整文稿计划还有 ${missing.length} 篇未完成写作与独立评审：${missing.slice(0, 30).join("、")}；请继续处理或明确暂停`);
+    // 历史通过记录不能代替当前正文；恢复已保存的完成结果时也要检查必交文稿。
+    fingerprint(plan.document_ids);
+    const excluded = new Set(plan.exclusions?.filter(item => item.reason.trim()).map(item => item.document_id));
+    const unreviewed = input.read().filter(document => !document.deleted && !covered.has(document.id) && !excluded.has(document.id));
+    if (unreviewed.length) throw new Error(`还有 ${unreviewed.length} 篇文稿尚未纳入独立评审计划：${unreviewed.slice(0, 30).map(document => document.id).join("、")}`);
   };
   const requireRevisionReviews = () => {
     if (input.turn.mode !== "revise" || executionContract !== "reviewed-document-plan") return;
@@ -284,17 +304,9 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
             const liveStep = work.state.steps.find(item => item.id === step.id)!;
             const ids = skillWorkDocumentIds(liveStep, next);
             next = work.recordCandidate(step.id, next, step.review ? fingerprint(ids) : undefined);
-          } else if (input.turn.mode === "extract" && executionContract === "reviewed-document-plan" && next.status === "complete") {
-            const plan = work.state.plan;
-            if (!plan?.document_ids.length) throw new Error("本方法需要先登记完整文稿计划，再完成每篇的写作与独立评审");
-            const covered = new Set(work.state.steps.filter(item => item.status === "done" && item.review && item.result?.review?.pass).flatMap(item => item.expected_document_ids ?? []));
-            const missing = plan.document_ids.filter(id => !covered.has(id));
-            if (missing.length) throw new Error(`完整文稿计划还有 ${missing.length} 篇未完成写作与独立评审：${missing.slice(0, 30).join("、")}；请继续处理或明确暂停`);
-            const excluded = new Set(plan.exclusions?.map(item => item.document_id));
-            const unreviewed = input.read().filter(document => !document.deleted && !covered.has(document.id) && !excluded.has(document.id));
-            if (unreviewed.length) throw new Error(`还有 ${unreviewed.length} 篇文稿尚未纳入独立评审计划：${unreviewed.slice(0, 30).map(document => document.id).join("、")}`);
           }
           if (!step && input.turn.mode !== "discuss" && next.status === "complete") {
+            requireExtractionReviews();
             const validation = await validateDiagrams(completionDocumentIds(next));
             if (validation) throw new Error(validation.feedback);
             await requireWorkDiagrams(work.state.plan?.work_document_id);
@@ -471,14 +483,16 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
   const timer = setTimeout(() => { totalExpired = true; runController.abort(new Error(KNOWLEDGE_RESEARCH_BUDGET_MESSAGE)); }, 48 * 60 * 60_000); timer.unref();
   try {
     signal.throwIfAborted(); progress();
-    const result = work.state.result ?? await execute();
-    // 包括重启后直接读取的历史完成结果，避免旧缓存绕过当前图校验。
+    const cachedResult = work.state.result;
+    const result = cachedResult ?? await execute();
+    // 包括重启后直接读取的历史完成结果，避免旧缓存绕过当前规划、正文与评审校验。
     if (input.turn.mode !== "discuss" && result.status !== "paused") {
+      requireExtractionReviews();
       const validation = await validateDiagrams(completionDocumentIds(result));
       if (validation) throw new IncompleteDomainResearch(validation.feedback);
       await requireWorkDiagrams(work.state.plan?.work_document_id);
       requireRevisionReviews();
-      if (input.turn.mode === "revise" && executionContract === "reviewed-document-plan") work.finish(result, fingerprint);
+      if (cachedResult && executionContract === "reviewed-document-plan") work.finish(result, fingerprint);
     }
     return result;
   } catch (error) {

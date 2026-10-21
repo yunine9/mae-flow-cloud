@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSy
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { build } from "../web/node_modules/esbuild/lib/main.js";
+import { build, stop } from "../web/node_modules/esbuild/lib/main.js";
 import { browserResultDump } from "./fixtures/browserResultDump.ts";
 
 const chrome = process.env.MFC_TEST_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-test("知识整体意见：保存与处理、文档及 Skill 文件隔离、一键交给 Agent 修改", { skip: !existsSync(chrome) && "需要 Chrome" }, async () => {
+test("知识检视：正式快照新建任务、未合入文稿沿原任务检视、Skill 文件意见隔离与处理", { skip: !existsSync(chrome) && "需要 Chrome", timeout: 90_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), "knowledge-module-feedback-"));
   try {
     const bundle = await build({ entryPoints: [resolve("tests/browser/knowledgeModuleFeedback.tsx")], bundle: true, write: false, format: "iife", jsx: "automatic", loader: { ".css": "empty" }, jsxImportSource: resolve("web/node_modules/react"), define: { "process.env.NODE_ENV": '"production"' } });
@@ -19,6 +19,8 @@ test("知识整体意见：保存与处理、文档及 Skill 文件隔离、一�
       await browserResultDump(chrome, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", `--user-data-dir=${join(dir, `profile-${width}`)}`, `--window-size=${width},${height}`, "--virtual-time-budget=15000", "--dump-dom", `file://${html}`], output);
       const result = readFileSync(output, "utf8").match(/<pre[^>]*id="result"[^>]*>([^<]+)<\/pre>/)?.[1];
       assert.ok(result, `${width}: browser did not finish`); const value = JSON.parse(result); assert.equal(value.error, undefined, `${width}: ${value.error}`); assert.equal(value.passed, true);
+      assert.equal(value.inspectionTasks, 2); assert.equal(value.domainSubmissions, 1); assert.equal(value.publishedWrites, 0);
+      assert.equal(value.skillNotes, 2); assert.equal(value.agentRequests, 4);
     }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally { stop(); rmSync(dir, { recursive: true, force: true }); }
 });

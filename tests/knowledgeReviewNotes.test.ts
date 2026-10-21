@@ -214,28 +214,31 @@ test("组件章节的意见可在人工修改后标为已处理，不触发新�
   } finally { f.cleanup(); }
 });
 
-test("目录里的业务模块资料沿用稳定 ID 保存批注，文件名安全且与其他资料隔离", () => {
+test("本地模块资料不再作为正式文稿，模块 Skill 批注仍持久化、隔离并安全存储", () => {
   const f = fixture();
   try {
     createBusinessModule(f.dataDir, { id: "orders", name: "订单", description: "订单模块", owner: "alice", repositories: ["https://example.test/orders.git"] }, "alice");
     const asset = { id: "rules", title: "订单规则", summary: "订单规则摘要", when_to_use: "研究订单时", content: "# 规则\n原有业务资料" };
     publishBusinessKnowledgeAsset(f.dataDir, "orders", asset, "alice");
-    publishBusinessKnowledgeAsset(f.dataDir, "orders", { ...asset, id: "other", title: "其他规则" }, "alice");
     publishBusinessKnowledgeAsset(f.dataDir, "orders", { ...asset, id: "legacy-skill", form: "skill", title: "模块 Skill" }, "alice");
-    const id = "module:orders:rules", otherId = "module:orders:other";
+    publishBusinessKnowledgeAsset(f.dataDir, "orders", { ...asset, id: "other-skill", form: "skill", title: "其他模块 Skill" }, "alice");
+    const localId = "module:orders:rules";
+    assert.throws(() => listKnowledgeReviewNotes(f.sources, "published", localId), /文档已不存在/);
+    assert.throws(() => saveKnowledgeReviewNote(f.sources, "published", localId, { document_id: localId, scope: "document", note: "不能把本地资料当作已合入知识" }, "alice"), /文档已不存在/);
+    const id = "module:orders:legacy-skill", otherId = "module:orders:other-skill";
     const result = saveKnowledgeReviewNote(f.sources, "published", id, { document_id: id, scope: "line", line: 2, note: "补充失败条件" }, "alice");
-    assert.equal(result.notes[0].document_id, id); assert.equal(result.notes[0].document_title, "订单规则");
+    assert.equal(result.notes[0].document_id, id); assert.equal(result.notes[0].document_title, "模块 Skill");
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", id), JSON.parse(JSON.stringify(result)));
     assert.deepEqual(listKnowledgeReviewNotes(f.sources, "published", otherId), { notes: [], submissions: {} });
     assert.throws(() => resolveKnowledgeReviewNotes(f.sources, "published", otherId, { note_ids: [result.notes[0].id] }, "alice"), /不存在/);
     assert.match(readdirSync(join(f.dataDir, "knowledge-review", "published"))[0], /^asset-[a-f0-9]{64}\.json$/);
     for (const bad of ["module:orders:../rules", "module:orders:rules\0", "module:orders:" + "a".repeat(512)]) assert.throws(() => listKnowledgeReviewNotes(f.sources, "published", bad), /编号无效/);
-    publishBusinessKnowledgeAsset(f.dataDir, "orders", { ...asset, content: "# 规则\n已补充失败条件" }, "bob");
+    publishBusinessKnowledgeAsset(f.dataDir, "orders", { ...asset, id: "legacy-skill", form: "skill", title: "模块 Skill", content: "# 规则\n已补充失败条件" }, "bob");
     const resolved = resolveKnowledgeReviewNotes(f.sources, "published", id, { note_ids: [result.notes[0].id] }, "bob");
     assert.equal(resolved.notes[0].status, "resolved");
     assert.deepEqual(listKnowledgeReviewNotes({ ...f.sources }, "published", id), resolved);
-    const skillId = "module:orders:legacy-skill";
-    assert.equal(saveKnowledgeReviewNote(f.sources, "published", skillId, { document_id: skillId, scope: "document", note: "补充模块 Skill 示例" }, "alice").notes[0].document_title, "模块 Skill");
+    assert.equal(saveKnowledgeReviewNote(f.sources, "published", id, { document_id: id, scope: "document", note: "补充模块 Skill 示例" }, "alice").notes.length, 2);
+    assert.equal(f.calls.length, 0, "保存和处理 Skill 意见不触发研究任务");
   } finally { f.cleanup(); }
 });
 

@@ -40,11 +40,12 @@ const legacyMethod = {
   "SKILL.md": "---\nname: legacy-planning-review\ndescription: 保留旧任务的方法与规划。\nexecution: reviewed-document-plan\n---\n规划核查按 [原方法](references/plan.md) 返回结论，主会话读取结论后决定是否继续。",
   "references/plan.md": "LEGACY_PINNED_METHOD：核对完整规划和已保存调查，返回 document_ids=[] 与 review:{pass,feedback}。",
 };
-const existingDocument = { id: "cancel-rules", title: "取消规则", target_id: "domain", path: "domain-docs/cancel-rules.md", layer: "domain" as const,
-  content: "# 取消规则\n\n未结算订单取消才释放库存。", sources: "原调查已读取的取消入口和业务资料" };
+const documentForTask = (title: string) => ({ id: "cancel-rules", title: "取消规则", target_id: "domain", path: `docs/${title}/cancel-rules.md`, layer: "domain" as const,
+  content: "# 取消规则\n\n未结算订单取消才释放库存。", sources: "原调查已读取的取消入口和业务资料" });
 const currentPlan = { id: "current-plan", title: "原完整规划", content: "# 原完整规划\n\n- cancel-rules：已完成未结算取消规则的写作与独立评审。\n- review-plan：独立核对调查覆盖与规划，保留原步骤编号。" };
 
 for (const pass of [true, false]) test(`旧规划核查误配文稿评审后沿原任务恢复，核查 ${pass ? "通过" : "不通过"} 不重做已有调查与文稿`, async () => {
+  const existingDocument = documentForTask("原业务知识任务");
   const root = mkdtempSync(join(tmpdir(), "domain-planning-recovery-"));
   let workFile = "", skillFile = "", initialState: any, initialSkill = "", initialExecutions = 0;
   // 通过真实服务保存任务、文稿和方法，再写入修复前已经存在的工作记录。
@@ -150,6 +151,7 @@ for (const pass of [true, false]) test(`旧规划核查误配文稿评审后沿�
 });
 
 for (const failureMode of ["paused", "missing-document", "schema-paused"] as const) test(`只读子会话反复提交 ${failureMode} 三次后交回主会话，成功读取不清零且保留已有成果`, async () => {
+  const existingDocument = documentForTask("核查提交失败处理");
   const root = mkdtempSync(join(tmpdir(), "domain-planning-submit-limit-"));
   const sessions: string[] = [], aborted: string[] = [];
   let rejectedSubmissions = 0, independentRuns = 0;

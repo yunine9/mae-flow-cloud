@@ -12,7 +12,7 @@ import type { SkillDocumentPlan, SkillWorkStep } from "../src/domainSkillWork.ts
 const tool = (name: string, input: Record<string, unknown>, text?: string): Scene => ({ tool: { name, input }, ...(text ? { text } : {}) });
 const step = { id: "cancel", title: "取消规则", instructions: "按输入中的业务条件保存取消规则", depends_on: [], readonly: false,
   expected_document_ids: ["cancel"], review: { instructions: "独立回读文稿，核对已结算订单的取消前提和处理方式" } };
-const document = (content: string) => ({ id: "cancel", title: "取消规则", target_id: "domain", path: "domains/cancel.md", layer: "domain",
+const document = (content: string) => ({ id: "cancel", title: "取消规则", target_id: "domain", path: "docs/取消规则/cancel.md", layer: "domain",
   content, sources: "本次研究范围原话：已结算订单取消须冲正，失败时人工核对" });
 const save = (content: string, text?: string) => tool("knowledge_draft", { action: "save", document: document(content) }, text);
 const read = () => tool("knowledge_draft", { action: "read", id: "cancel" });
