@@ -120,12 +120,14 @@ test("纯函数:负面原因终止进一次解决率分母记失败;一次定位
     "定位轴分母仍只含完成交付(负面终止无法判轴)");
   assert.deepEqual(summary.repair, { passed: 1, total: 1, rate: 100 },
     "验证轴分母仍只含完成交付");
-  // 逐会话明细含负面终止行,工作机器事实缺省(未判轴、无检视记账)。
+  // 逐会话明细含负面终止行:只带身份与终止原因,工作机器事实缺席
+  // (未判轴、无检视记账,#540 复审——硬编码 false/0 会被第三方误读
+  // 成「验证失败」),cancel_reason 供第三方区分终止行。
   assert.deepEqual(summary.per_session.map((row) => row.id),
     ["ok", "term-a", "term-b", "term-c", "term-d"]);
   assert.deepEqual(
     summary.per_session.find((row) => row.id === "term-a"),
-    { id: "term-a", reviews: 0, localization_pass: false, repair_pass: false });
+    { id: "term-a", cancel_reason: "inaccurate" });
 });
 
 test("纯函数:resolved 取消与无原因取消(历史)维持排除;无单负面终止也不进", () => {
@@ -206,6 +208,11 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
   seedReport(dataDir, "issue-c", 3);
   seedSession(dataDir, { id: "issue-d", ticket: "DTS202609000004",
     status: "canceled" });
+  // 负面原因终止(#540 复审):进分母记失败,明细行只带身份与原因。
+  seedSession(dataDir, { id: "issue-t", ticket: "DTS202609000007",
+    status: "canceled", cancel_reason: "other",
+    cancel_reason_text: "等了二十分钟没有反应",
+    updated_at: "2026-09-01T09:30:00Z" });
   seedSession(dataDir, { id: "issue-e", ticket: "DTS202609000005",
     status: "archived",
     conclusion: { kind: "non_issue", summary: "误报",
@@ -238,18 +245,23 @@ test("路由 GET /issues/stats:二轴聚合,分母只认完成交付", async () 
       { issueFlow: service, authEnabled: false },
     );
     assert.equal(status, 200);
-    assert.equal(body.total, 4,
-      "分母=a/b/c/g;g 的存量 fixed 旧账读侧归一为 delivered,取消 d、"
-      + "误报 e、无单 f 不进");
+    assert.equal(body.total, 5,
+      "分母=a/b/c/g+t;t 为负面终止记失败;g 的存量 fixed 旧账读侧归一为"
+      + " delivered,无原因取消 d、误报 e、无单 f 不进");
+    assert.equal(body.terminated, 1, "负面终止单独计数");
     assert.deepEqual(body.localization, { passed: 2, total: 4, rate: 50 },
-      "一版报告的 issue-a/g 一次定位;b 两版、c 三版不是");
+      "一版报告的 issue-a/g 一次定位;b 两版、c 三版不是(终止不进两轴)");
     assert.deepEqual(body.repair, { passed: 3, total: 4, rate: 75 },
       "a/c/g 零验证失败;b 答过一次验证未通过");
     const rows = body.per_session as Array<
-      { id: string; reviews: number }>;
+      { id: string; reviews?: number }>;
     assert.equal(rows.find((row) => row.id === "issue-b")?.reviews, 2,
       "检视批次从 reviews 账本 sent/issue_review 计,能力不回退");
-    assert.equal(rows.length, 4, "逐会话明细只含分母会话");
+    assert.equal(rows.length, 5, "逐会话明细含分母全集(含负面终止行)");
+    assert.deepEqual(rows.find((row) => row.id === "issue-t"),
+      { id: "issue-t", cancel_reason: "other" },
+      "终止行只带身份与原因(#540 复审):工作机器事实缺席不设键,"
+      + "cancel_reason 供第三方区分");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

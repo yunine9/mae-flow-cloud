@@ -164,7 +164,8 @@ export interface CodeOriginJobLimits {
 
 /** 达标率分母里的一行(per_session 覆盖范围内全部完成交付会话,
  *  state 区分有无统计数据:只有 ok 行带占比与工作行;#542 起负面
- *  原因终止的会话也产生一行,工作机器事实全部缺省)。 */
+ *  原因终止的会话也产生一行,只带终止原因,工作机器事实缺席不设
+ *  键(#540 复审)——false/0 假值会被第三方误读成「验证失败」)。 */
 export interface IssueOnceGeneratedSession {
   id: string;
   title: string;
@@ -179,14 +180,15 @@ export interface IssueOnceGeneratedSession {
   share?: number;
   pass?: boolean;
   lines?: { first: number; rework: number; external: number };
+  /** 以下工作机器事实仅 ok 行有;canceled 行缺席(#540 复审)。 */
   /** 检视批次数(先行能力,呈现用)。 */
-  reviews: number;
+  reviews?: number;
   /** 一次定位:分析报告一版过(与 /issues/stats 同源判定)。 */
-  localization_pass: boolean;
+  localization_pass?: boolean;
   /** 一次验证:验证不通过次数=0(未答卡=通过)。 */
-  verify_pass: boolean;
+  verify_pass?: boolean;
   /** 一次解决:定位与验证双一次。 */
-  solved_pass: boolean;
+  solved_pass?: boolean;
   /** 发起人:发起登记的登录账号(DTS 发起不带指派,归属=发起人),
    *  登记人缺席按归属兜底;可选(#353 字段纪律,老前端按缺省处理)。 */
   reporter?: string;

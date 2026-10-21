@@ -104,6 +104,7 @@ import {
 import type { DtsGateway } from "./gateways.ts";
 import { DTS_FILE_ORIGIN } from "./gateways.ts";
 import {
+  ISSUE_CANCEL_REASON_UNKNOWN_ERROR,
   ISSUE_CANCEL_REASONS,
   isTerminal,
   type IssueCancelReason,
@@ -1293,11 +1294,17 @@ export async function handleIssueRoutes(
         && (ISSUE_CANCEL_REASONS as readonly string[]).includes(body.reason)
         ? body.reason as IssueCancelReason : undefined;
       if (body.reason !== undefined && !reason) {
-        return done(400, { error: "未知终止原因:"
-          + "只支持 resolved/inaccurate/slow/disobedient/other" });
+        return done(400, { error: ISSUE_CANCEL_REASON_UNKNOWN_ERROR });
       }
       const reasonText = typeof body.reason_text === "string"
         && body.reason_text.trim() ? body.reason_text : undefined;
+      // 说明与原因的组合也 fail-loud(#540 复审):说明只跟「其他原因」
+      // 有意义,缺席原因或搭配其他原因递说明,与词表外原因同款 400——
+      // 不静默丢弃(服务端「非 other 不落说明」的兜底语义不变)。
+      if (reasonText && reason !== "other") {
+        return done(400, { error: "终止说明只搭配「其他原因」有效:"
+          + "请把 reason 设为 other,或去掉 reason_text" });
+      }
       return done(200, await issueFlow.control(id, {
         action,
         ...(body.note !== undefined ? { note: String(body.note) } : {}),

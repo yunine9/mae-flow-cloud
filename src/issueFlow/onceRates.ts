@@ -109,9 +109,15 @@ export function onceRateFactsFromSnapshot(
 
 export interface IssueOnceRateRow {
   id: string;
-  reviews: number;
-  localization_pass: boolean;
-  repair_pass: boolean;
+  /** 终止原因(#540 复审):仅负面终止行有——第三方据它区分「用户终止」
+   *  与完成交付行,与 once-generated 明细行形状对齐。 */
+  cancel_reason?: IssueCancelReason;
+  /** 以下工作机器事实只在完成交付行出现;负面终止行不设键(#540 复审:
+   *  两轴未判、检视未记账,缺席=无从判定,不硬编码假值——false/0 会被
+   *  第三方误读成「验证失败」)。 */
+  reviews?: number;
+  localization_pass?: boolean;
+  repair_pass?: boolean;
 }
 
 /** 单会话的一次结果章(会话卡片呈现):与团队页两轴同一判定,
@@ -154,7 +160,7 @@ export interface IssueOnceRateSummary {
   /** 一次修复成功率:从未验证未通过(分母=完成交付)。 */
   repair: IssueOnceRateAxis;
   /** 分母会话逐条(检视次数是先行能力,呈现后议)。#542 起含负面
-   *  终止行:两轴未判,工作机器事实缺省。 */
+   *  终止行:两轴未判,工作机器事实缺席、只带终止原因(#540 复审)。 */
   per_session: IssueOnceRateRow[];
 }
 
@@ -174,15 +180,13 @@ export function issueOnceRates(
     if (!row.ticket?.trim()) continue;
     if (row.status === "canceled") {
       // 负面原因终止(#542):进一次解决率分母记失败;终止时刻两轴
-      // 无法判轴(两轴口径不动),整条不进定位/验证轴,明细行的工作
-      // 机器事实落缺省。resolved 与无原因取消(缺席)维持排除。
+      // 无法判轴(两轴口径不动),整条不进定位/验证轴,明细行不带
+      // 工作机器事实(缺席,不硬编码假值),只带终止原因供第三方
+      // 区分(#540 复审)。resolved 与无原因取消(缺席)维持排除。
       if (row.cancel_reason
         && ISSUE_NEGATIVE_CANCEL_REASONS.includes(row.cancel_reason)) {
         terminated += 1;
-        per_session.push({
-          id: row.id, reviews: 0,
-          localization_pass: false, repair_pass: false,
-        });
+        per_session.push({ id: row.id, cancel_reason: row.cancel_reason });
       }
       continue;
     }

@@ -137,7 +137,7 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(repoRow.share, 70);
     const rows = body.per_session as Array<{
       id: string; state: string; module: string; share?: number; pass?: boolean;
-      localization_pass: boolean; verify_pass: boolean; solved_pass: boolean;
+      localization_pass?: boolean; verify_pass?: boolean; solved_pass?: boolean;
     }>;
     assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a", "issue-c", "issue-e", "issue-d"],
       "per_session 覆盖范围内全部完成交付会话,按收口时刻倒序");
@@ -192,14 +192,13 @@ test("路由 once-generated:负面原因终止进按会话明细与一次解决�
       ["issue-neg", "issue-ok", "issue-other"],
       "负面终止按取消时刻参与收口倒序;resolved 与无原因取消不产生行");
     const neg = rows.find((row) => row.id === "issue-neg")!;
-    assert.equal(neg.state, "canceled");
-    assert.equal(neg.cancel_reason, "inaccurate");
-    assert.equal(neg.concluded_at, "2026-09-23T12:00:00Z", "终止时间=取消时刻");
-    assert.equal(neg.reviews, 0);
-    assert.equal(neg.localization_pass, false);
-    assert.equal(neg.verify_pass, false);
-    assert.equal(neg.solved_pass, false);
-    assert.equal(neg.share, undefined, "工作行机器事实为空");
+    // 整行钉形(#540 复审):终止行只带身份与原因,工作机器事实缺席
+    // 不设键——硬编码 false/0 假值会被第三方误读成「验证失败」。
+    assert.deepEqual(neg, {
+      id: "issue-neg", title: "分析不准", module: "未分类",
+      reporter: "dev", concluded_at: "2026-09-23T12:00:00Z",
+      state: "canceled", cancel_reason: "inaccurate",
+    }, "终止时间=取消时刻;机器事实缺席,cancel_reason 在场");
     const other = rows.find((row) => row.id === "issue-other")!;
     assert.equal(other.cancel_reason, "other");
     assert.equal(other.cancel_reason_text, "等了二十分钟没有反应",

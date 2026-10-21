@@ -378,6 +378,11 @@ export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
   "inaccurate", "slow", "disobedient", "other",
 ];
 
+/** 词表外终止原因的统一报错(#540 复审):路由白名单与服务的 fail-loud
+ *  各拒各的,但对外必须是同一句话——常量收口,不许各写一份漂移。 */
+export const ISSUE_CANCEL_REASON_UNKNOWN_ERROR =
+  "未知终止原因:只支持 resolved/inaccurate/slow/disobedient/other";
+
 export interface IssueSessionState {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作的唯一闸口,闸口通知、

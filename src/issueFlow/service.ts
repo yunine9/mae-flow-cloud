@@ -99,6 +99,7 @@ import {
   fixedStages,
   initStageStates,
   isTerminal,
+  ISSUE_CANCEL_REASON_UNKNOWN_ERROR,
   ISSUE_CANCEL_REASONS,
   ISSUE_NEGATIVE_CANCEL_REASONS,
   issueRepoWorkspaces,
@@ -1384,8 +1385,9 @@ export class IssueFlowService {
     let noCode = 0;
     const repoMap = new Map<string, IssueOnceGeneratedRepoRow>();
     for (const { live, concludedAt, ...rowFacts } of collected) {
-      // 负面终止行(#542):工作机器事实(定位/验证/占比/检视)全部
-      // 缺省,带终止原因与说明文本;不进 by_repo、不进达标分母。
+      // 负面终止行(#542):工作机器事实(定位/验证/占比/检视)缺席不设
+      // 键(#540 复审——false/0 假值会被第三方误读成「验证失败」),
+      // 带终止原因与说明文本;不进 by_repo、不进达标分母。
       if (live.state.status === "canceled") {
         sessions.push({
           id: live.id,
@@ -1393,10 +1395,6 @@ export class IssueFlowService {
           module: this.currentModule(live.state)?.name || live.state.module?.trim() || "未分类",
           reporter: live.state.reporter?.trim() || live.state.account,
           concluded_at: concludedAt,
-          reviews: 0,
-          localization_pass: false,
-          verify_pass: false,
-          solved_pass: false,
           state: "canceled",
           ...(live.state.cancel_reason
             ? { cancel_reason: live.state.cancel_reason } : {}),
@@ -5187,11 +5185,11 @@ export class IssueFlowService {
     const live = this.require(id);
     if (input.action === "revive") return this.reviveIssue(live, input.note);
     // 终止原因 fail-loud(#541):词表外的值直接拒绝,不静默吞成无原因
-    // 取消——落盘前就挡住,脏数据到不了状态文件。
+    // 取消——落盘前就挡住,脏数据到不了状态文件。报错话术与路由同源
+    // (state.ts 常量,#540 复审)。
     if (input.reason !== undefined
       && !ISSUE_CANCEL_REASONS.includes(input.reason)) {
-      throw new IssueControlError("未知终止原因:"
-        + "只支持 resolved/inaccurate/slow/disobedient/other");
+      throw new IssueControlError(ISSUE_CANCEL_REASON_UNKNOWN_ERROR);
     }
     if (isTerminal(live.state.status)
       && live.state.status !== "failed") {

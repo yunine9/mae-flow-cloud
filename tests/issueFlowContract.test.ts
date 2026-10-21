@@ -873,6 +873,18 @@ test("契约快照:取消带终止原因过线,镜像同字段(#541)", async () 
       { action: "cancel", reason: "bogus" }, service);
     assert.equal(bad.status, 400);
 
+    // 说明与原因的组合同样 fail-loud(#540 复审):说明只跟「其他原因」
+    // 有意义,缺席原因或搭配其他原因递说明与词表外原因同款 400——
+    // 不静默丢弃,组合错误与单词表错误一个待遇。
+    const textAlone = await issuePost(["issues", "issue-1", "control"],
+      { action: "cancel", reason_text: "等了二十分钟没有反应" }, service);
+    assert.equal(textAlone.status, 400,
+      "只递说明不选原因:400 打回");
+    const textWithResolved = await issuePost(["issues", "issue-1", "control"],
+      { action: "cancel", reason: "resolved", reason_text: "说明" }, service);
+    assert.equal(textWithResolved.status, 400,
+      "「问题已处理」搭配说明:同样 400,不静默丢说明");
+
     const canceled = await issuePost(["issues", "issue-1", "control"],
       { action: "cancel", reason: "other", reason_text: "等了二十分钟没有反应" },
       service);
