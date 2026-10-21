@@ -354,6 +354,35 @@ export interface IssueMrGateRecord {
   at: string;
 }
 
+/** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
+ * 处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令不
+ * 遵从/other=其他(附选填说明)。统计侧只有负面原因计一次解决率失败;
+ * resolved 与无原因取消待遇相同(不进统计)。 */
+export type IssueCancelReason =
+  | "resolved"
+  | "inaccurate"
+  | "slow"
+  | "disobedient"
+  | "other";
+
+/** 码表单一事实:路由白名单与 UI 下拉共用这一份,顺序即下拉顺序。 */
+export const ISSUE_CANCEL_REASONS: readonly IssueCancelReason[] = [
+  "resolved", "inaccurate", "slow", "disobedient", "other",
+];
+
+/** 负面原因(#542):这些原因终止的有单会话进一次解决率分母记失败;
+ *  resolved(问题已处理)与无原因取消(历史数据)待遇相同,不进任何
+ *  统计。显式列举词表——将来新增中性/负面原因时各自显式表态,不靠
+ *  「非 resolved 即负面」的隐式推导漂移。 */
+export const ISSUE_NEGATIVE_CANCEL_REASONS: readonly IssueCancelReason[] = [
+  "inaccurate", "slow", "disobedient", "other",
+];
+
+/** 词表外终止原因的统一报错(#540 复审):路由白名单与服务的 fail-loud
+ *  各拒各的,但对外必须是同一句话——常量收口,不许各写一份漂移。 */
+export const ISSUE_CANCEL_REASON_UNKNOWN_ERROR =
+  "未知终止原因:只支持 resolved/inaccurate/slow/disobedient/other";
+
 export interface IssueSessionState {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作的唯一闸口,闸口通知、
@@ -531,6 +560,12 @@ export interface IssueSessionState {
   build_products_reclaimed_at?: string;
   error?: string;
   last_reply?: string;
+  /** 终止原因(#541):cancel 终态伴生,稳定英文值(词表见
+   * IssueCancelReason);缺席=无原因取消(历史路径),行为与现状一致。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 cancel_reason="other" 有意义,选填人话,
+   * 留存备分析;不复用 revive 专用的 note(ADR-0055 语义不动)。 */
+  cancel_reason_text?: string;
 }
 
 export interface IssueSummary extends IssueSessionState {

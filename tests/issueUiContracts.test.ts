@@ -318,6 +318,8 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
     resolve("web/src/ConfirmDialog.tsx"), "utf-8");
   const sessionView = readFileSync(
     resolve("web/src/issues/SessionView.tsx"), "utf-8");
+  const cancelDialog = readFileSync(
+    resolve("web/src/issues/CancelSessionDialog.tsx"), "utf-8");
   const materialsPane = readFileSync(
     resolve("web/src/issues/MaterialsPane.tsx"), "utf-8");
   const app = readFileSync(resolve("web/src/App.tsx"), "utf-8");
@@ -336,15 +338,21 @@ test("页内确认弹框:共享 confirmDialog 取代原生框,键盘与危险档
   assert.match(confirmDialog,
     /initialFocus=\{current\.options\.danger \? cancelRef : confirmRef\}/,
     "首卡打开由 initialFocus 落位危险档口径");
-  // 问题流两处接入:取消会话(危险档)/提交检视意见(归档会话随
-    // 手动归档退役,ADR-0057)。
+  // 问题流接入:终止会话确认框(#541)改走下拉式 CancelSessionDialog
+  // (原因五选一必选,confirmDialog 没有选择位),SessionView 不再经
+  // 共享 confirmDialog 发取消;原生框清零纪律照旧。
   for (const [name, source] of [["SessionView", sessionView],
     ["MaterialsPane", materialsPane]] as const) {
     assert.doesNotMatch(source, /window\.confirm\(/,
       `${name} 不得再用浏览器原生确认框`);
-    if (name === "SessionView") assert.match(source, /import \{ confirmDialog \} from "\.\.\/ConfirmDialog"/);
   }
-  assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
+  assert.match(sessionView,
+    /import \{ CancelSessionDialog, type CancelSessionInput \} from "\.\/CancelSessionDialog"/,
+    "终止确认框必须走下拉式共享组件(#541)");
+  assert.match(sessionView, /<CancelSessionDialog open=\{cancelOpen\}/,
+    "终止入口要渲染下拉式确认框");
+  assert.match(cancelDialog, /variant="destructive"\s+ref=\{confirmRef\}/,
+    "确认框的终止钮必须是 destructive 危险档(红色 affordance 不丢)");
   assert.doesNotMatch(materialsPane, /条检视意见并重跑分析|disabled=\{busy \|\| !reviewEnabled \|\| detail.status === "running"\}/);
   // 宿主挂在 App 根部;App 自己的月光调用点允许暂时保留原生框
   // (T3 换双语义按钮),故这里只查宿主不查 App 的 confirm。
@@ -539,7 +547,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.match(stream, /!canOperate \? \{ kind: "readonly" \}/);
   // 头部控件区:终止(归档已退役,ADR-0057)整组收进归属分支
   // (#127 自侧栏栏脚迁入),与「导出现场记录」并列;确认语义由
-  // confirmDialog 断言钉住。
+  // 下拉式 CancelSessionDialog(#541)的断言钉住。
   const headControls = sessionView.slice(
     sessionView.indexOf('className="ws-head-controls"'),
     sessionView.indexOf("</header>"));
@@ -547,7 +555,7 @@ test("问题会话查看模式:操作控件逐处收进归属分支,信息面不
   assert.ok(headControls.includes("终止会话"), "头部控件区缺终止");
   assert.doesNotMatch(headControls, /归档收口|onClick=\{archive\}/,
     "手动归档已退役,头部不得再有归档入口(ADR-0057)");
-  assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(confirmDialog)");
+  assert.ok(headControls.includes('onClick={cancelSession}'), "终止必须接 cancelSession(开下拉确认框)");
   // 材料页签:人工修改整链(快速修改编辑器、请 AI 复核、人工修改记录)
   // 已整体退役(ADR-0028)——问题流的人工写口清零,代码层面意见走右栏
   // 插话/续聊;检视(行尾圈注写口与正文下方的检视区)照旧收闸。
@@ -975,14 +983,15 @@ test("侧栏拆除(#127):rail 源码删除引用清零,归档/终止入头部,�
   assert.doesNotMatch(stream, /IssueRail|issue-side-more/);
   assert.doesNotMatch(css, /issue-side-more|issue-rail-input|issue-rail-foot|issue-rail-actions|issue-analysis-cta/);
   // 终止入头部控件区(与导出并列;归档已退役 ADR-0057),确认语义
-  // 保留:confirmDialog 的接入(终止)在 SessionView 原样。
+  // 升级(#541):下拉式 CancelSessionDialog 接入在 SessionView。
   const headControls = sessionView.slice(
     sessionView.indexOf('className="ws-head-controls"'),
     sessionView.indexOf("</header>"));
   assert.ok(headControls.includes("导出现场记录"));
   assert.ok(headControls.includes("终止会话"));
   assert.doesNotMatch(headControls, /归档收口/, "归档入口已退役(ADR-0057)");
-  assert.match(sessionView, /title: "终止会话",[\s\S]*?danger: true/);
+  assert.match(sessionView, /<CancelSessionDialog open=\{cancelOpen\}/,
+    "终止确认框是下拉式共享组件(#541)");
   // 头部危险档(#231 改锚):终止钮换 Button destructive 软皮,红色
   // 危险 affordance 保留(手搓 .danger 皮随 issue-workspace 家族退役)。
   assert.ok(headControls.includes('variant="destructive"'), "终止会话必须走 destructive 档");
@@ -1941,4 +1950,148 @@ test("DTS 列表列宽拖拽:TanStack 引擎,columnSizing 单一宽度源,记忆
     /select: 48, ticket: 120, title: 160,\s*\n\s*launch: 88, remark: 140, module: 120, tier: 96,/);
   assert.match(registration,
     /select: 96, ticket: 320, title: 1200,\s*\n\s*launch: 220, remark: 800, module: 400, tier: 240,/);
+});
+
+// ---- DTS 概览:一次解决率环图第三片与口径标注(#542) ----
+
+const deliveryAnalytics = readFileSync(
+  resolve("web/src/DeliveryAnalytics.tsx"), "utf-8");
+
+test("DTS 概览一次解决率环图第三片「用户终止(负面原因)」琥珀色,两图格局不动(#542)", () => {
+  // 第三片:琥珀 CSS 变量(#540 复审收口 var(--attention-strong),亮暗
+  // 同值 #d97706),与工作行环的「平台外」同源色;不再内联裸 hex。
+  assert.match(deliveryAnalytics, /label: "用户终止（负面原因）"/);
+  assert.match(deliveryAnalytics,
+    /\{ label: "用户终止（负面原因）", color: "var\(--attention-strong\)", value: terminated \}/);
+  assert.match(
+    readFileSync(resolve("web/src/tailwind.css"), "utf-8"),
+    /--attention-strong: #d97706;/,
+    "变量在主题里落值,亮暗同值");
+  // 「未一次解决」片只数完成交付里的失败:分母减去一次解决与终止。
+  assert.match(deliveryAnalytics,
+    /value: Math\.max\(0, \(stats\?\.solved\.total \?\? 0\) - \(stats\?\.solved\.passed \?\? 0\) - terminated\)/);
+  // 概览不显示原因分布明细:原因词表不进概览(按会话页签的事,不越界)。
+  // (#543 起「终止原因」词表住按会话表,本断言收窄到概览区段;全文件
+  // 匹配会误伤按会话页签的正当用词。)
+  const overview = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf('className="delivery-overview-grid"'),
+    deliveryAnalytics.indexOf('role="tablist" aria-label="观察维度"'));
+  assert.doesNotMatch(overview, /分析不准确|速度太慢|指令不遵从/);
+  // 2026-10-20 拍板的两图格局:概览网格两处(需求交付+DTS),不加第三张卡。
+  assert.equal(
+    deliveryAnalytics.match(/delivery-overview-grid/g)?.length, 2);
+});
+
+test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,绝对日起算(#542,#540 复审)", () => {
+  // 卡片口径标注一行:起算日写绝对日期(与 ADR-0066 的 2026-10-21 一致),
+  // 相对措辞「上线起」不许回潮。
+  assert.match(deliveryAnalytics, /分母 = 完成交付会话 \+ 主动终止会话/);
+  assert.match(deliveryAnalytics, /自 2026-10-21 口径切换起/);
+  assert.doesNotMatch(deliveryAnalytics, /自终止原因收集上线起/);
+  assert.match(deliveryAnalytics, /选「问题已处理」的会话不参与统计/);
+  // help tooltip 同步:绝对日 + 主动终止记一次失败,两轴分母仍只含完成交付。
+  assert.match(deliveryAnalytics,
+    /主动终止\(负面原因\)会话\(自 2026-10-21 口径切换起\),主动终止记一次失败/);
+  assert.match(deliveryAnalytics, /两轴分母仍只含完成交付/);
+  // 页底「统计口径」details 同步改写。
+  assert.match(deliveryAnalytics,
+    /分母=完成交付会话\+主动终止\(负面原因\)会话,主动终止记一次失败/);
+  assert.match(deliveryAnalytics,
+    /终止时选「问题已处理」的会话与无原因取消\(历史数据\)不参与统计/);
+});
+
+// ---- DTS 按会话表:负面终止行进表与终止原因列(#543) ----
+
+test("DTS 按会话表纳入负面终止行:照单渲染 canceled,不复判原因(#543)", () => {
+  // 「问题已处理」取消与无原因取消不产生行是服务端唯一口径
+  // (issueOnceGenerated 服务层测试钉住,#542);前端把 canceled 行纳入
+  // 渲染即可,行过滤里不得再读 cancel_reason 复判(第二套口径即漂移)。
+  const rowsMemo = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("const tableRows = useMemo"),
+    deliveryAnalytics.indexOf("const moduleOptions = useMemo"));
+  assert.match(rowsMemo, /row\.state === "ok" \|\| row\.state === "canceled"/);
+  assert.doesNotMatch(rowsMemo, /cancel_reason/, "行过滤不得复判终止原因");
+  // 数据侧镜像(#542 已带):canceled 是行状态的合法值,原因字段随行可选。
+  const apiTypes = readFileSync(resolve("web/src/api.ts"), "utf-8");
+  assert.match(apiTypes,
+    /"ok" \| "no_code" \| "pending" \| "unsupported" \| "canceled"/);
+  assert.match(apiTypes, /cancel_reason\?: IssueCancelReason;/);
+});
+
+test("DTS 按会话表终止行语义:一次解决✗照旧、四列 — 占位、末列徽标或 —(#543)", () => {
+  const table = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf('dim === "session"'),
+    deliveryAnalytics.indexOf('details className="delivery-method"'));
+  // 表头末列新增「终止原因」;ADR-0065 列头漏斗改造后会话/特性/发起人
+  // 三列带漏斗组件,列顺序不变,终止原因仍收尾。
+  assert.match(table, /<th>收口时间<\/th><th>终止原因<\/th>/);
+  // 一次解决列:终止行显式红 ✗(#540 复审——终止行 solved_pass 已缺席,
+  // 不再靠假值隐式落 ✗);交付行按 solved_pass ✓/✗。
+  assert.match(table,
+    /\{canceledRow\s+\? <span className="font-semibold text-danger">✗<\/span>\s+: row\.solved_pass\s+\? <span className="font-semibold text-success">✓<\/span>\s+: <span className="font-semibold text-danger">✗<\/span>\}/);
+  // 终止行 — 占位恰好四处:一次定位/一次验证/首次生成占比/工作行
+  // (终止会话没有工作行事实,两轴不可判)。
+  assert.equal((table.match(/canceledRow \? "—" :/g) ?? []).length, 4,
+    "终止行的 — 占位应恰好四处");
+  // 交付行的终止原因格 — 占位(没有终止这回事);终止行悬停即点行看原因。
+  assert.match(table, /\{canceledRow \? <TerminateReasonBadge row=\{row\} \/> : "—"\}/);
+  assert.match(table, /title=\{canceledRow \? "查看终止原因" : "查看行归属证据"\}/);
+  // 时间列复用 concluded_at 同一格式:终止行即取消时刻,交付行即收口时刻。
+  assert.match(table, /new Date\(row\.concluded_at\)\.toLocaleDateString\("zh-CN"\)/);
+});
+
+test("DTS 按会话表终止原因徽标:已定类红色系,其他琥珀系截断悬停全文(#543)", () => {
+  // 词表(#540 复审)唯一份在 issues/cancelReasons.ts:稳定英文值→界面
+  // 中文,与 CancelSessionDialog 下拉同源;页面只 import,不再各抄一份。
+  const cancelReasons = readFileSync(
+    resolve("web/src/issues/cancelReasons.ts"), "utf-8");
+  const labels = cancelReasons.slice(
+    cancelReasons.indexOf("CANCEL_REASON_LABELS"),
+    cancelReasons.indexOf("};"));
+  for (const label of ["分析不准确", "速度太慢", "指令不遵从", "其他原因"]) {
+    assert.ok(labels.includes(label), `词表缺「${label}」`);
+  }
+  assert.match(deliveryAnalytics, /from "\.\/issues\/cancelReasons"/);
+  const badge = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("function TerminateReasonBadge"),
+    deliveryAnalytics.indexOf("function TerminateReasonDetail"));
+  // 负面判定走共享集合(镜像服务端语义),不前端复判枚举值;未知值
+  // label 走安全回退,不渲染 undefined。
+  assert.match(badge, /!isNegativeCancelReason\(row\.cancel_reason\)/);
+  assert.match(badge, /bg-danger-soft[^"]*text-danger/);
+  assert.match(badge, /终止 · \{cancelReasonLabel\(row\.cancel_reason\)\}/);
+  // other 与缺席/未知(字段纪律缺省处理)琥珀色系:「其他 · <说明>」,
+  // max-width+truncate 省略号截断,title 悬停看全文。
+  assert.match(badge, /bg-attention-soft[^"]*text-attention/);
+  assert.match(badge, /max-w-\[\d+px\] truncate/);
+  assert.match(badge, /title=\{text \|\| undefined\}/);
+  assert.match(badge, /const label = text \? `其他 · \$\{text\}` : "其他";/);
+});
+
+test("DTS 按会话表点行:终止行开原因详情,交付行维持行归属证据(#543)", () => {
+  // Sheet 壳分叉:标题按行状态换面。
+  assert.match(deliveryAnalytics,
+    /selectedRow\?\.state === "canceled" \? "终止详情" : "首次生成归属"/);
+  // 内容分叉:交付行原样(行归属证据面板),终止行原因详情。
+  assert.match(deliveryAnalytics,
+    /<IssueCodeOriginPanel id=\{selected\} threshold=\{stats\?\.threshold_percent\} \/>/);
+  const detail = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("function TerminateReasonDetail"),
+    deliveryAnalytics.indexOf("/** 登记问题页签"));
+  assert.match(detail, /<h2>终止原因/);
+  assert.match(detail, /说明:\{text\}/, "其他原因完整原文要在详情侧栏可读");
+  assert.match(detail, /toLocaleString\("zh-CN"\)/, "终止时刻带时分");
+});
+
+test("DTS 按会话表发起人列显示姓名:映射增强,失败退回工号不阻塞(#543)", () => {
+  assert.match(deliveryAnalytics, /displayPersonName\(row\.reporter, people\)/);
+  assert.match(deliveryAnalytics, /listPeople\(\)/);
+  // 姓名只是显示增强(先例 TaskWorkspace):读取失败静默退回工号,
+  // 不 setError、不 busy,不挡表格首屏。(切片到本 effect 为止,
+  // 紧随其后的统计加载 effect 里有正当的 setError,别捞进来。)
+  const load = deliveryAnalytics.slice(
+    deliveryAnalytics.indexOf("const [people, setPeople]"),
+    deliveryAnalytics.indexOf("}, []);"));
+  assert.match(load, /\.catch\(\(\) => \{\s*\}\)/);
+  assert.doesNotMatch(load, /setError/);
 });

@@ -137,7 +137,7 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(repoRow.share, 70);
     const rows = body.per_session as Array<{
       id: string; state: string; module: string; share?: number; pass?: boolean;
-      localization_pass: boolean; verify_pass: boolean; solved_pass: boolean;
+      localization_pass?: boolean; verify_pass?: boolean; solved_pass?: boolean;
     }>;
     assert.deepEqual(rows.map((row) => row.id), ["issue-b", "issue-a", "issue-c", "issue-e", "issue-d"],
       "per_session 覆盖范围内全部完成交付会话,按收口时刻倒序");
@@ -148,6 +148,70 @@ test("路由 once-generated:分母三态与达标判定,非完成交付不进", 
     assert.equal(rows.find((row) => row.id === "issue-a")?.pass, true);
     assert.equal(rows.find((row) => row.id === "issue-a")?.solved_pass, true);
     assert.equal(rows.find((row) => row.id === "issue-b")?.solved_pass, true);
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
+test("路由 once-generated:负面原因终止进按会话明细与一次解决率分母(#542)", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-oncegen-"));
+  // 完成交付且一次:一次解决分子 1。
+  seedSession(dataDir, { id: "issue-ok", ...DELIVERED_SINCE });
+  seedCompanion(dataDir, "issue-ok", { first: 90, rework: 5, external: 5 });
+  // 负面终止×2:取消时刻落在 09-22/09-23,参与收口倒序与完成时间筛选。
+  seedSession(dataDir, { id: "issue-neg", title: "分析不准",
+    status: "canceled", cancel_reason: "inaccurate",
+    updated_at: "2026-09-23T12:00:00Z" });
+  seedSession(dataDir, { id: "issue-other", title: "其他",
+    status: "canceled", cancel_reason: "other",
+    cancel_reason_text: "等了二十分钟没有反应",
+    updated_at: "2026-09-22T08:00:00Z" });
+  // 「问题已处理」取消与无原因取消(历史)不产生行。
+  seedSession(dataDir, { id: "issue-resolved", status: "canceled",
+    cancel_reason: "resolved", updated_at: "2026-09-23T13:00:00Z" });
+  seedSession(dataDir, { id: "issue-legacy", status: "canceled",
+    updated_at: "2026-09-23T14:00:00Z" });
+
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    const { status, body } = await callRoute(service,
+      "/issues/once-generated", ["issues", "once-generated"]);
+    assert.equal(status, 200);
+    assert.equal(body.delivered, 1, "delivered 只数完成交付");
+    assert.equal(body.terminated, 2, "负面终止单独计数");
+    assert.deepEqual(body.solved, { passed: 1, total: 3, rate: 33.3 },
+      "一次解决率分母=完成交付+负面终止,终止记失败");
+    assert.deepEqual(body.localization, { passed: 1, total: 1, rate: 100 },
+      "一次定位率口径不动(分母只含完成交付)");
+    assert.deepEqual(body.verify, { passed: 1, total: 1, rate: 100 },
+      "一次验证率口径不动(分母只含完成交付)");
+    const rows = body.per_session as Array<Record<string, unknown>>;
+    assert.deepEqual(rows.map((row) => row.id),
+      ["issue-neg", "issue-ok", "issue-other"],
+      "负面终止按取消时刻参与收口倒序;resolved 与无原因取消不产生行");
+    const neg = rows.find((row) => row.id === "issue-neg")!;
+    // 整行钉形(#540 复审):终止行只带身份与原因,工作机器事实缺席
+    // 不设键——硬编码 false/0 假值会被第三方误读成「验证失败」。
+    assert.deepEqual(neg, {
+      id: "issue-neg", title: "分析不准", module: "未分类",
+      reporter: "dev", concluded_at: "2026-09-23T12:00:00Z",
+      state: "canceled", cancel_reason: "inaccurate",
+    }, "终止时间=取消时刻;机器事实缺席,cancel_reason 在场");
+    const other = rows.find((row) => row.id === "issue-other")!;
+    assert.equal(other.cancel_reason, "other");
+    assert.equal(other.cancel_reason_text, "等了二十分钟没有反应",
+      "other 原因带说明文本");
+
+    // 完成时间筛选按取消时刻裁负面终止行:09-23 之后只剩 issue-neg。
+    const ranged = await callRoute(service,
+      "/issues/once-generated?completed_from=2026-09-23T00:00:00.000Z",
+      ["issues", "once-generated"]);
+    assert.equal(ranged.status, 200);
+    assert.equal(ranged.body.delivered, 0);
+    assert.equal(ranged.body.terminated, 1);
+    assert.equal(ranged.body.total, 0, "一次解决率分母随范围只剩负面终止");
   } finally {
     await service.shutdown().catch(() => undefined);
   }

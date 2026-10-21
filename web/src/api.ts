@@ -3838,6 +3838,16 @@ export interface IssueGateCard {
   created_at: string;
 }
 
+/** 终止原因(#541):稳定英文值是协议,界面渲染中文——resolved=问题已
+ * 处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令不
+ * 遵从/other=其他(附选填说明)。与服务端 state.ts 的词表同一份语义。 */
+export type IssueCancelReason =
+  | "resolved"
+  | "inaccurate"
+  | "slow"
+  | "disobedient"
+  | "other";
+
 export interface IssueSummary {
   id: string;
   /** 归属账号=问题责任人(ADR-0031):写操作与闸口通知的唯一对象。 */
@@ -4008,6 +4018,12 @@ export interface IssueSummary {
   repo_reclaimed_at?: string;
   /** 构建产物已回收的时刻(磁盘治理):返工首编为全量(依赖缓存热)。 */
   build_products_reclaimed_at?: string;
+  /** 终止原因(#541):canceled 终态伴生,稳定英文值——resolved=问题已
+   *  处理(默认)/inaccurate=分析不准确/slow=速度太慢/disobedient=指令
+   *  不遵从/other=其他;缺席=无原因取消(历史路径)。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 cancel_reason="other" 带,选填人话。 */
+  cancel_reason_text?: string;
 }
 
 export interface IssueWaitingCard {
@@ -4170,8 +4186,9 @@ export interface IssueOnceGeneratedSessionRow {
   module: string;
   concluded_at: string;
   /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
-   *  待算;unsupported=早于起算日期(不进统计)。 */
-  state: "ok" | "no_code" | "pending" | "unsupported";
+   *  待算;unsupported=早于起算日期(不进统计);canceled=负面原因
+   *  主动终止(#542,不进两轴与占比,concluded_at=取消时刻)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported" | "canceled";
   /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
   share?: number;
   pass?: boolean;
@@ -4179,16 +4196,22 @@ export interface IssueOnceGeneratedSessionRow {
   /** 各仓工作行明细(仅 ok 行;ADR-0065 特性树仓行与按会话仓过滤
    *  的数据源,老前端按缺省处理)。 */
   by_repo?: IssueOnceGeneratedSessionRepoRow[];
+  /** 以下工作机器事实仅 ok 行有;canceled 行缺席不设键(#540 复审),
+   *  消费方按缺省处理,不得把 false/0 假值当事实。 */
   /** 检视批次数(先行能力,呈现用)。 */
-  reviews: number;
+  reviews?: number;
   /** 一次定位:分析报告一版过(与一次定位率同源判定)。 */
-  localization_pass: boolean;
+  localization_pass?: boolean;
   /** 一次验证:验证不通过次数=0(未答卡=通过)。 */
-  verify_pass: boolean;
+  verify_pass?: boolean;
   /** 一次解决:定位与验证双一次。 */
-  solved_pass: boolean;
+  solved_pass?: boolean;
   /** 发起人(发起登记的登录账号;缺席按缺省处理,#353 字段纪律)。 */
   reporter?: string;
+  /** 终止原因(#542):仅 canceled 行有。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#542):仅 canceled 行且原因=other 时可能在场。 */
+  cancel_reason_text?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(一次定位剔除转正会话后,分母可
@@ -4219,13 +4242,15 @@ export interface IssueOnceGenerated {
   total: number;
   passed: number;
   rate: number | null;
-  /** 完成交付会话总数(三根过程率轴的分母)。 */
+  /** 完成交付会话总数(一次定位/一次验证两轴的分母)。 */
   delivered: number;
+  /** 负面原因主动终止的会话数(#542,一次解决率分母中记失败的部分)。 */
+  terminated: number;
   /** 一次定位率(报告一版过;分母剔除转正会话后可与 delivered 不同)。 */
   localization: IssueOnceGeneratedAxis;
   /** 一次验证率(验证不通过次数=0)。 */
   verify: IssueOnceGeneratedAxis;
-  /** 一次解决率(定位与验证双一次)。 */
+  /** 一次解决率(定位与验证双一次;分母=完成交付+负面终止,#542)。 */
   solved: IssueOnceGeneratedAxis;
   by_repo: IssueOnceGeneratedRepoRow[];
   pending: number;
@@ -4576,6 +4601,11 @@ export function controlIssue(id: string, input: {
   action: "cancel" | "revive";
   /** revive 专用(ADR-0055):操作者一句话说明,随恢复回合送达 AI。 */
   note?: string;
+  /** 终止原因(#541):cancel 动作的独立入参(不复用 revive 的 note),
+   *  界面下拉必选;缺席=无原因取消(历史路径)。revive 不收。 */
+  reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 reason="other" 有意义,选填。 */
+  reason_text?: string;
 }): Promise<IssueSummary> {
   return issueFetch(`/issues/${encodeURIComponent(id)}/control`, {
     method: "POST",

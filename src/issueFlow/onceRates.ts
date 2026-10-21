@@ -10,7 +10,8 @@
  * onceRateFactsFromSnapshot),盘上读写仍归调用方。
  */
 
-import type { IssueConclusionKind, IssueStatus } from "./state.ts";
+import type { IssueCancelReason, IssueConclusionKind, IssueStatus } from "./state.ts";
+import { ISSUE_NEGATIVE_CANCEL_REASONS } from "./state.ts";
 import { sentReviewOperations } from "./ledgerFacts.ts";
 import {
   ISSUE_METRICS_SCHEMA_VERSION,
@@ -49,6 +50,11 @@ export interface IssueOnceRateFacts {
    *  而来,自身没有分析阶段——一次定位轴剔出分子分母(研究在前身
    *  会话做的,版本数 0 是「没做过」不是「一版过」);验证轴照常计。 */
   converted_from?: string;
+  /** 终止原因(#542):仅 status="canceled" 时有意义。负面原因
+   *  (ISSUE_NEGATIVE_CANCEL_REASONS)进一次解决率分母记失败;
+   *  resolved 与缺席(历史无原因取消)维持排除。词表外的脏值按
+   *  「非负面」处理——坏账不虚构失败,与快照读侧宁缺勿假同纪律。 */
+  cancel_reason?: IssueCancelReason;
 }
 
 /** 从终态冻结快照(metrics.json,ADR-0042)提取一次率判定事实。
@@ -94,14 +100,24 @@ export function onceRateFactsFromSnapshot(
     verify_fail_count: verifyFail,
     report_version_count: reportVersions,
     review_count: reviewBatches,
+    // 终止原因(#542):canceled 终态伴生冻结,原样透传交分类裁决;
+    // 缺席键=无原因取消(历史路径),分类按排除处理。
+    ...(snapshot.cancel_reason
+      ? { cancel_reason: snapshot.cancel_reason } : {}),
   };
 }
 
 export interface IssueOnceRateRow {
   id: string;
-  reviews: number;
-  localization_pass: boolean;
-  repair_pass: boolean;
+  /** 终止原因(#540 复审):仅负面终止行有——第三方据它区分「用户终止」
+   *  与完成交付行,与 once-generated 明细行形状对齐。 */
+  cancel_reason?: IssueCancelReason;
+  /** 以下工作机器事实只在完成交付行出现;负面终止行不设键(#540 复审:
+   *  两轴未判、检视未记账,缺席=无从判定,不硬编码假值——false/0 会被
+   *  第三方误读成「验证失败」)。 */
+  reviews?: number;
+  localization_pass?: boolean;
+  repair_pass?: boolean;
 }
 
 /** 单会话的一次结果章(会话卡片呈现):与团队页两轴同一判定,
@@ -131,13 +147,20 @@ export interface IssueOnceRateAxis {
 }
 
 export interface IssueOnceRateSummary {
-  /** 分母:完成交付的会话数。 */
+  /** 分母:完成交付 + 负面原因主动终止(#542)的会话数(一次解决率
+   *  口径,主动终止记失败)。 */
   total: number;
-  /** 一次定位成功率:分析报告版本数 ≤1。 */
+  /** 完成交付会话数(一次定位/一次验证两轴的分母基数;#542 起与
+   *  total 分家——主动终止只进一次解决率分母,不进两轴)。 */
+  delivered: number;
+  /** 负面原因主动终止的会话数(total 中记失败的部分)。 */
+  terminated: number;
+  /** 一次定位成功率:分析报告版本数 ≤1(分母=完成交付,转正剔除)。 */
   localization: IssueOnceRateAxis;
-  /** 一次修复成功率:从未验证未通过。 */
+  /** 一次修复成功率:从未验证未通过(分母=完成交付)。 */
   repair: IssueOnceRateAxis;
-  /** 分母会话逐条(检视次数是先行能力,呈现后议)。 */
+  /** 分母会话逐条(检视次数是先行能力,呈现后议)。#542 起含负面
+   *  终止行:两轴未判,工作机器事实缺席、只带终止原因(#540 复审)。 */
   per_session: IssueOnceRateRow[];
 }
 
@@ -151,10 +174,25 @@ export function issueOnceRates(
   let localizationPassed = 0;
   let localizationTotal = 0;
   let repairPassed = 0;
+  let delivered = 0;
+  let terminated = 0;
   for (const row of rows) {
     if (!row.ticket?.trim()) continue;
+    if (row.status === "canceled") {
+      // 负面原因终止(#542):进一次解决率分母记失败;终止时刻两轴
+      // 无法判轴(两轴口径不动),整条不进定位/验证轴,明细行不带
+      // 工作机器事实(缺席,不硬编码假值),只带终止原因供第三方
+      // 区分(#540 复审)。resolved 与无原因取消(缺席)维持排除。
+      if (row.cancel_reason
+        && ISSUE_NEGATIVE_CANCEL_REASONS.includes(row.cancel_reason)) {
+        terminated += 1;
+        per_session.push({ id: row.id, cancel_reason: row.cancel_reason });
+      }
+      continue;
+    }
     if (row.status !== "archived") continue;
     if (row.conclusion_kind !== "delivered") continue;
+    delivered += 1;
     // 两轴各测一个裁决点:定位=报告一版过(版本账);修复=环境验证
     // 一次过(验证卡零 fail;自动归档未答卡=验证通过,不进失败计数)。
     const { localization_pass, repair_pass } = issueOnceOutcome(row);
@@ -170,14 +208,15 @@ export function issueOnceRates(
       localization_pass, repair_pass,
     });
   }
-  const total = per_session.length;
   return {
-    total,
+    total: delivered + terminated,
+    delivered,
+    terminated,
     localization: {
       passed: localizationPassed, total: localizationTotal,
       rate: percent(localizationPassed, localizationTotal),
     },
-    repair: { passed: repairPassed, total, rate: percent(repairPassed, total) },
+    repair: { passed: repairPassed, total: delivered, rate: percent(repairPassed, delivered) },
     per_session,
   };
 }

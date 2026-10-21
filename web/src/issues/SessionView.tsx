@@ -38,7 +38,6 @@ import {
   type IssueStageState,
   type IssueSummary,
 } from "../api";
-import { confirmDialog } from "../ConfirmDialog";
 import { IssueWaitingFacts } from "./IssueWaitingFacts";
 import { IssueCodeOriginPanel } from "./CodeOriginPanel";
 import { IssueWarmupLive } from "./IssueWarmupLive";
@@ -57,6 +56,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { IssueStatusBadge } from "../StatusBadge";
+import { CancelSessionDialog, type CancelSessionInput } from "./CancelSessionDialog";
 import { cn } from "cn";
 
 /** 左栏六个一级标签(ADR-0027 五签定局,2026-09-17 修订增第六签):
@@ -245,14 +245,22 @@ export function IssueSessionView({
     addIssueTakeoverNote(detail.id, text).then(() => undefined);
   const resumeTakeover = (note?: string) =>
     perform(() => resumeIssueTakeover(detail.id, note));
-  async function cancelSession() {
-    if (!await confirmDialog({
-      title: "终止会话",
-      message: "将终止会话并清理现场，此操作不可撤销。",
-      confirmLabel: "终止会话",
-      danger: true,
-    })) return;
-    void perform(() => controlIssue(detail.id, { action: "cancel" }));
+  // 终止会话(#541):确认框改下拉式(原因五选一必选,选「其他原因」
+  // 展开选填说明),不再用 confirmDialog(它没有选择位)。弹窗本体是
+  // CancelSessionDialog,与列表卡片入口共用同一份;「返回」无副作用,
+  // 确认才发 cancel 并带原因。防重沿用既有 busy 闸;后端拒绝经
+  // perform 落 onError 既有通道。
+  const [cancelOpen, setCancelOpen] = useState(false);
+  function cancelSession() {
+    setCancelOpen(true);
+  }
+  function cancelWithReason(input: CancelSessionInput) {
+    setCancelOpen(false);
+    void perform(() => controlIssue(detail.id, {
+      action: "cancel",
+      reason: input.reason,
+      ...(input.reasonText ? { reason_text: input.reasonText } : {}),
+    }));
   }
 
   // 异常重跑(ADR-0055,#430):failed 会话的第二出口——原地复活续跑,
@@ -367,10 +375,10 @@ export function IssueSessionView({
             anchor.click();
             anchor.remove();
           }}>导出现场记录</Button>
-        {/* 终止/异常重跑(#127 自右栏侧栏栏脚迁入,与导出并列):confirmDialog
-            确认语义;手动归档已退役(ADR-0034/0057)——交付出口是合入自动
-            归档,无单结论在 conclude 卡当场闭环;终止都是写操作,查看模式
-            整组不渲染。 */}
+        {/* 终止/异常重跑(#127 自右栏侧栏栏脚迁入,与导出并列):确认弹窗
+            语义(#541 起终止走下拉式 CancelSessionDialog);手动归档已退役
+            (ADR-0034/0057)——交付出口是合入自动归档,无单结论在 conclude
+            卡当场闭环;终止都是写操作,查看模式整组不渲染。 */}
         {canOperate && <>
           {/* 异常重跑(#430,ADR-0055):仅异常(失败)会话出现,与终止
               并排——failed 状态下的两个出口:原地续跑 or 放弃终止。
@@ -385,6 +393,11 @@ export function IssueSessionView({
         </>}
       </div>
     </header>
+
+    {/* 终止会话确认框(#541):下拉式原因必选,与列表卡片入口同一份
+        CancelSessionDialog;「返回」无副作用,确认才发 cancel。 */}
+    <CancelSessionDialog open={cancelOpen} busy={busy}
+      onOpenChange={setCancelOpen} onConfirm={cancelWithReason} />
 
     {/* 异常重跑确认框(#430,ADR-0055):一句话说明可留空;确认即调
         control revive。正文讲清与「重新发起」的差别(原地续跑全现场

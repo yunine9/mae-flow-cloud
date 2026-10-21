@@ -50,7 +50,11 @@ import {
 } from "./ledgerFacts.ts";
 import { isSourcePath, type IssueMetricsUnavailable } from "./metricsSnapshot.ts";
 import { reviewStore } from "./reviews.ts";
-import { issueRepoWorkspaces, type IssueSessionState } from "./state.ts";
+import {
+  issueRepoWorkspaces,
+  type IssueCancelReason,
+  type IssueSessionState,
+} from "./state.ts";
 
 /** 伴生文件名(会话目录根,与 issue.json/metrics.json 同层)。 */
 export const ISSUE_CODE_ORIGIN_FILE = "code-origin.json";
@@ -169,7 +173,9 @@ export interface IssueOnceGeneratedSessionRepo {
 }
 
 /** 达标率分母里的一行(per_session 覆盖范围内全部完成交付会话,
- *  state 区分有无统计数据:只有 ok 行带占比与工作行)。 */
+ *  state 区分有无统计数据:只有 ok 行带占比与工作行;#542 起负面
+ *  原因终止的会话也产生一行,只带终止原因,工作机器事实缺席不设
+ *  键(#540 复审)——false/0 假值会被第三方误读成「验证失败」)。 */
 export interface IssueOnceGeneratedSession {
   id: string;
   title: string;
@@ -177,8 +183,9 @@ export interface IssueOnceGeneratedSession {
   module: string;
   concluded_at: string;
   /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
-   *  待算;unsupported=早于起算日期(不进统计)。 */
-  state: "ok" | "no_code" | "pending" | "unsupported";
+   *  待算;unsupported=早于起算日期(不进统计);canceled=负面原因
+   *  主动终止(#542,不进两轴与占比,concluded_at=取消时刻)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported" | "canceled";
   /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
   share?: number;
   pass?: boolean;
@@ -186,17 +193,22 @@ export interface IssueOnceGeneratedSession {
   /** 各仓工作行明细(仅 ok 行;跳过不可得仓与零行仓;可选=#353
    *  字段纪律,老前端按缺省处理)。 */
   by_repo?: IssueOnceGeneratedSessionRepo[];
+  /** 以下工作机器事实仅 ok 行有;canceled 行缺席(#540 复审)。 */
   /** 检视批次数(先行能力,呈现用)。 */
-  reviews: number;
+  reviews?: number;
   /** 一次定位:分析报告一版过(与 /issues/stats 同源判定)。 */
-  localization_pass: boolean;
-  /** 一次验证:环境验证零失败(未答卡=通过)。 */
-  verify_pass: boolean;
+  localization_pass?: boolean;
+  /** 一次验证:验证不通过次数=0(未答卡=通过)。 */
+  verify_pass?: boolean;
   /** 一次解决:定位与验证双一次。 */
-  solved_pass: boolean;
+  solved_pass?: boolean;
   /** 发起人:发起登记的登录账号(DTS 发起不带指派,归属=发起人),
    *  登记人缺席按归属兜底;可选(#353 字段纪律,老前端按缺省处理)。 */
   reporter?: string;
+  /** 终止原因(#542):仅 canceled 行有;负面词表见 IssueCancelReason。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#542):仅 canceled 行且原因=other 时可能在场。 */
+  cancel_reason_text?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(分母=各自口径的会话数;一次定位
@@ -235,13 +247,16 @@ export interface IssueOnceGeneratedStats {
   passed: number;
   /** 达标会话占比;分母 0 = null(前端显示 —)。 */
   rate: number | null;
-  /** 完成交付会话总数(三根过程率轴的分母,与 /issues/stats 同口径)。 */
+  /** 完成交付会话总数(一次定位/一次验证两轴的分母,与 /issues/stats
+   *  同口径)。 */
   delivered: number;
+  /** 负面原因主动终止的会话数(#542,一次解决率分母中记失败的部分)。 */
+  terminated: number;
   /** 一次定位率(报告一版过):分母=完成交付会话,与 /issues/stats 同源。 */
   localization: IssueOnceGeneratedAxis;
   /** 一次验证率(验证不通过次数=0;未答卡=通过)。 */
   verify: IssueOnceGeneratedAxis;
-  /** 一次解决率(定位与验证双一次)。 */
+  /** 一次解决率(定位与验证双一次;分母=完成交付+负面终止,#542)。 */
   solved: IssueOnceGeneratedAxis;
   /** 按代码仓跨会话聚合,工作行降序。 */
   by_repo: IssueOnceGeneratedRepoRow[];

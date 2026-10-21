@@ -13,11 +13,13 @@ import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryT
 import { KnowledgeInsightsPanel } from "./KnowledgeFlywheel";
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
 import { cn } from "cn";
-import { getBusinessModules, getIssueOnceGenerated, type BusinessModuleCatalog, type IssueOnceGenerated, type IssueOnceGeneratedSessionRow } from "./api";
+import { getBusinessModules, getIssueOnceGenerated, listPeople, type BusinessModuleCatalog, type IssueOnceGenerated, type IssueOnceGeneratedSessionRow, type PersonIdentity } from "./api";
+import { cancelReasonLabel, isNegativeCancelReason } from "./issues/cancelReasons";
 import { getIssueRegistrationStats, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
 import { TicketTemplateCard } from "./issues/TicketTemplateCard";
 import { featureRepoTree, onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
+import { displayPersonName } from "./AnnotationPanel";
 import { HeaderEnumFilter, HeaderFilter } from "./HeaderFilter";
 import { repoIdentity } from "./repoIdentity";
 
@@ -115,6 +117,35 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
   return <tr className={child ? "delivery-child-row" : undefined}><td><button className="delivery-task-link" onClick={() => onSelect(id)}><b>{id}</b><span>{title}</span></button></td><td><TaskLanguages tasks={tasks} /></td><td>{parent ? <>已合入交付 {tasks.filter(t => t.merged).length}/{tasks.length}{tasks.some(t => !t.merged) && <small>含未合入暂计</small>}</> : tasks.every(t => t.merged) ? "已合入" : "进行中 · 暂计"}</td><td>{values.available ? `${num(values.total)} 行` : "—"}</td><td className="delivery-accent">{percent(values.firstPercent)}</td><td title={tokens.available ? `已记录输入 ${num(tokens.input)} · 输出 ${num(tokens.output)}` : "没有模型用量记录"}><strong>{tokens.available ? num(tokens.total) : "—"}</strong>{tokens.available < tokens.tasks && <small>{tokens.available ? "部分用量已记录" : "暂无用量记录"}</small>}</td><td>{values.available}/{tasks.length}{!values.available && <small>待取证</small>}</td></tr>;
 }
 
+/** 终止原因中文词表与负面判定(#540 复审)收口到 issues/cancelReasons:
+ *  与终止确认框(CancelSessionDialog 下拉)同一份映射、同一个负面
+ *  集合,不再各抄一份漂移;未知值 label 走安全回退。 */
+function TerminateReasonBadge({ row }: { row: IssueOnceGeneratedSessionRow }) {
+  const text = (row.cancel_reason_text ?? "").trim();
+  if (!isNegativeCancelReason(row.cancel_reason)) {
+    const label = text ? `其他 · ${text}` : "其他";
+    return <span
+      className="inline-block max-w-[240px] truncate align-bottom rounded-full bg-attention-soft px-2 py-0.5 text-xs font-medium text-attention"
+      title={text || undefined}>{label}</span>;
+  }
+  return <span className="inline-block rounded-full bg-danger-soft px-2 py-0.5 text-xs font-medium text-danger">
+    终止 · {cancelReasonLabel(row.cancel_reason)}</span>;
+}
+/** 终止行详情(#543):终止原因中文文案、「其他原因」完整原文与终止
+ *  时刻的只读陈列。终止会话没有工作行事实,行归属证据面板不适用。 */
+function TerminateReasonDetail({ row }: { row: IssueOnceGeneratedSessionRow }) {
+  const text = (row.cancel_reason_text ?? "").trim();
+  return <section className="delivery-card"><h2>终止原因
+    <span>{new Date(row.concluded_at).toLocaleString("zh-CN")} 终止</span></h2>
+    <p className="mt-3 text-sm">该会话由发起人主动终止,原因:
+      <b className={row.cancel_reason === "other" ? "text-attention" : "text-danger"}>
+        {cancelReasonLabel(row.cancel_reason)}</b></p>
+    {row.cancel_reason === "other" && text
+      ? <p className="delivery-muted">说明:{text}</p> : null}
+    <p className="delivery-muted">终止会话没有工作行与定位/验证两轴事实,表中相关列以 — 占位;一次解决率分母计入并记未解决。</p>
+  </section>;
+}
+
 /** DTS 页签(原「问题处理」,ADR-0044,工单 #340):首次生成占比的
  *  每会话明细与特性聚合——读侧与团队问题页统计瓦片同一端点、同一
  *  数字;行点击下钻行归属证据(伴生快照原样)。人群=有单交付会话;
@@ -127,6 +158,8 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
  *  (per_session.by_repo 前端聚合,绑定外仓标「绑定外」);点特性/
  *  仓名跳按会话并带上对应过滤,跳转所见=刚才所看数字的构成会话;
  *  按会话列头过滤:会话关键字/特性与发起人枚举。
+ *  #543:负面原因终止的会话以行进按会话表(一次解决 ✗、无事实列 —、
+ *  末列终止原因徽标,点行看原因详情),发起人列显示姓名。
  *  导出仅供视觉走查场景脚本挂载(与需求侧同款做法)。 */
 
 export function IssueAnalyticsTab() {
@@ -144,6 +177,15 @@ export function IssueAnalyticsTab() {
   /** 特性树展开状态:特性名集合,默认全折叠,不记忆。 */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
+  // 发起人姓名映射(#543):只是显示增强;读取失败静默退回工号显示,
+  // 不 setError、不 busy,不挡表格首屏(先例 TaskWorkspace 同纪律)。
+  const [people, setPeople] = useState<PersonIdentity[]>([]);
+  useEffect(() => {
+    let live = true;
+    void listPeople().then((roster) => { if (live) setPeople(roster); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
   /** 模块目录只喂「绑定外」标记:取不到就不标,不影响任何数字。 */
   const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
   useEffect(() => {
@@ -171,23 +213,30 @@ export function IssueAnalyticsTab() {
   const tree = useMemo(() => featureRepoTree(shareRows), [shareRows]);
   const bindings = useMemo(() => new Map((catalog?.modules ?? [])
     .map((entry) => [entry.name, entry.repositories])), [catalog]);
+  // 表格呈现完成交付会话与负面终止会话(#543);「问题已处理」取消与
+  // 无原因历史取消服务端本就不下发行,前端不复判 cancel_reason(唯一
+  // 口径在服务端);pending/unsupported/no_code 只计入范围计数,不进表。
+  // 特性树/占比只认 ok 行(shareRows),终止行只进按会话表。
+  const tableRows = useMemo(() => (stats?.per_session ?? [])
+    .filter((row) => row.state === "ok" || row.state === "canceled"), [stats]);
   const rows = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    return okRows.filter((row) =>
+    return tableRows.filter((row) =>
       (module === "*" || row.module === module)
       && (!repo || row.by_repo?.some((entry) => entry.repo === repo))
       && (!reporter || row.reporter === reporter)
       && (!keyword || `${row.id} ${row.title}`.toLowerCase().includes(keyword)));
-  }, [okRows, module, repo, reporter, query]);
-  const moduleOptions = useMemo(() => enumOptions(okRows.map((row) => row.module)), [okRows]);
-  const reporterOptions = useMemo(() => enumOptions(okRows
+  }, [tableRows, module, repo, reporter, query]);
+  const moduleOptions = useMemo(() => enumOptions(tableRows.map((row) => row.module)), [tableRows]);
+  const reporterOptions = useMemo(() => enumOptions(tableRows
     .map((row) => row.reporter)
-    .filter((name): name is string => !!name)), [okRows]);
+    .filter((name): name is string => !!name)), [tableRows]);
   const selectedRow = rows.find((row) => row.id === selected);
   const pct = (value: number | null | undefined) =>
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
   const delivered = stats?.delivered ?? 0;
   const lines = sumLineKinds(stats);
+  const terminated = stats?.terminated ?? 0;
   const solvedRate = pct(stats?.solved.rate);
   const shareRate = pct(weightedShare(stats));
   const help = (tip: string) =>
@@ -216,13 +265,15 @@ export function IssueAnalyticsTab() {
       </span>
     </div>
     <div className="delivery-overview-grid">
-      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话;按会话表的定位/验证✓✗是它的两个因子。")}</h2>
+      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话(自 2026-10-21 口径切换起),主动终止记一次失败;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
         <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
           ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
           slices={[
             { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
-            { label: "未一次解决", color: "var(--line-strong)", value: (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) },
+            { label: "未一次解决", color: "var(--line-strong)", value: Math.max(0, (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) - terminated) },
+            { label: "用户终止（负面原因）", color: "var(--attention-strong)", value: terminated },
           ]} />
+        <p className="mt-3 text-xs text-muted-foreground">口径标注：分母 = 完成交付会话 + 主动终止会话（自 2026-10-21 口径切换起）；终止时选「问题已处理」的会话不参与统计。</p>
       </section>
       <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
         <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
@@ -286,7 +337,7 @@ export function IssueAnalyticsTab() {
       {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有完成交付的会话"}</p>}
     </section>}
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
-      {help("列头漏斗按会话关键字/特性/发起人过滤;点行查看该会话的行归属证据;一次定位括号为报告版本数,一次验证✗为验证失败次数")}</h2>
+      {help("列头漏斗按会话关键字/特性/发起人过滤;点行查看该会话的行归属证据,终止行点行看终止原因与说明;一次定位/一次验证✓✗只对完成交付会话判轴,终止行相关列以 — 占位")}</h2>
       {(module !== "*" || repo) && <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted-foreground">筛选</span>
         {module !== "*" && <button type="button" title="清除特性过滤"
@@ -307,32 +358,44 @@ export function IssueAnalyticsTab() {
         <th><span className="inline-flex items-center gap-1">发起人
           <HeaderEnumFilter label="发起人" value={reporter}
             options={reporterOptions} onPick={setReporter} /></span></th>
-        <th>收口时间</th>
+        <th>收口时间</th><th>终止原因</th>
       </tr></thead>
-        <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id} style={{ cursor: "pointer" }}
-          title="查看行归属证据" onClick={() => setSelected(row.id)}>
+        <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => {
+          const canceledRow = row.state === "canceled";
+          return <tr key={row.id} style={{ cursor: "pointer" }}
+            title={canceledRow ? "查看终止原因" : "查看行归属证据"} onClick={() => setSelected(row.id)}>
           <td><span className="delivery-task-link" style={{ cursor: "pointer" }}><b>{row.id}</b><span>{row.title}</span></span></td>
           <td>{row.module}</td>
-          <td>{row.solved_pass ? <span className="font-semibold text-success">✓</span> : <span className="font-semibold text-danger">✗</span>}</td>
-          <td>{row.localization_pass ? <span className="text-success">✓ 一版</span> : <span className="text-danger">✗ 多版</span>}</td>
-          <td>{row.verify_pass ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}</td>
-          <td className="delivery-accent pct">{pct(row.share)}</td>
-          <td className="pct">{num(row.lines?.first ?? 0)} / {num(row.lines?.rework ?? 0)} / {num(row.lines?.external ?? 0)}</td>
-          <td>{row.reporter ?? "—"}</td>
+          <td>{canceledRow
+            ? <span className="font-semibold text-danger">✗</span>
+            : row.solved_pass
+              ? <span className="font-semibold text-success">✓</span>
+              : <span className="font-semibold text-danger">✗</span>}</td>
+          <td>{canceledRow ? "—" : row.localization_pass ? <span className="text-success">✓ 一版</span> : <span className="text-danger">✗ 多版</span>}</td>
+          <td>{canceledRow ? "—" : row.verify_pass ? <span className="text-success">✓</span> : <span className="text-danger">✗</span>}</td>
+          <td className="delivery-accent pct">{canceledRow ? "—" : pct(row.share)}</td>
+          <td className="pct">{canceledRow ? "—" : `${num(row.lines?.first ?? 0)} / ${num(row.lines?.rework ?? 0)} / ${num(row.lines?.external ?? 0)}`}</td>
+          <td>{row.reporter ? displayPersonName(row.reporter, people) : "—"}</td>
           <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
-        </tr>)}</tbody></table></div>
+          <td>{canceledRow ? <TerminateReasonBadge row={row} /> : "—"}</td>
+        </tr>;
+        })}</tbody></table></div>
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有会话"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
-      <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话,按会话表的定位/验证✓✗是它的两个因子;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
+      <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话+主动终止(负面原因)会话,主动终止记一次失败,一次定位/一次验证两轴的分母仍只含完成交付(负面终止无法判轴);终止时选「问题已处理」的会话与无原因取消(历史数据)不参与统计,无单会话不进任何率;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
       <p>首次生成占比的返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;被强制覆盖(force push)的平台推送按原分类计入,证据表里标「已覆盖」;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
       <SheetContent className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]">
-        <SheetHeader><SheetTitle>{selected} · 首次生成归属</SheetTitle>
-          <SheetDescription>{selectedRow ? `${selectedRow.title} · 占比 ${pct(selectedRow.share)}` : "行归属证据"}</SheetDescription></SheetHeader>
+        <SheetHeader><SheetTitle>{selected} · {selectedRow?.state === "canceled" ? "终止详情" : "首次生成归属"}</SheetTitle>
+          <SheetDescription>{selectedRow ? selectedRow.state === "canceled"
+            ? `${selectedRow.title} · ${new Date(selectedRow.concluded_at).toLocaleDateString("zh-CN")} 终止`
+            : `${selectedRow.title} · 占比 ${pct(selectedRow.share)}` : "行归属证据"}</SheetDescription></SheetHeader>
         <div className="delivery-detail-body">{selected
-          && <IssueCodeOriginPanel id={selected} threshold={stats?.threshold_percent} />}</div>
+          && (selectedRow?.state === "canceled"
+            ? <TerminateReasonDetail row={selectedRow} />
+            : <IssueCodeOriginPanel id={selected} threshold={stats?.threshold_percent} />)}</div>
       </SheetContent>
     </Sheet>
   </div>;

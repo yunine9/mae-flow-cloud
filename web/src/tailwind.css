@@ -487,6 +487,9 @@ body:has(.knowledge-hub.is-focused) .wish-quick-fab { display:none; }
   --active-soft: #eaf0fb;
   --attention: #b0680d;
   --attention-soft: #fbf1df;
+  /* 图表琥珀(一次解决率环图「用户终止」片,#540 复审):亮暗同值,
+     与需求交付环「平台外」片同源色。 */
+  --attention-strong: #d97706;
   --success: #1e7a4e;
   --success-soft: #e5f3eb;
   --danger: #c23d38;
@@ -629,6 +632,7 @@ body:has(.knowledge-hub.is-focused) .wish-quick-fab { display:none; }
   --active-soft: rgba(126, 167, 255, .13);
   --attention: #e4a34c;
   --attention-soft: rgba(228, 163, 76, .13);
+  --attention-strong: #d97706;
   --success: #63c48f;
   --success-soft: rgba(99, 196, 143, .13);
   --danger: #f27b73;

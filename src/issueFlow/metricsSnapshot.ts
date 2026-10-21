@@ -48,6 +48,7 @@ import {
   isTerminal,
   issueRepoWorkspaces,
   type IssueMrRecord,
+  type IssueCancelReason,
   type IssueSessionState,
 } from "./state.ts";
 
@@ -76,6 +77,11 @@ export interface IssueMetricsSnapshot {
   generated_at: string;
   session_id: string;
   terminal_status: "archived" | "canceled" | "failed";
+  /** 终止原因(#541):canceled 终态伴生冻结,稳定英文值(词表见
+   *  state.ts 的 IssueCancelReason);缺席=无原因取消(历史路径)。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#541):仅 other 原因带,选填人话,留存备分析。 */
+  cancel_reason_text?: string;
   ticket?: string;
   conclusion_kind?: string;
   created_at: string;
@@ -919,6 +925,12 @@ export function buildIssueMetricsSnapshot(
     // 词表收窄:落盘口(writeIssueMetricsSnapshot)只放行终态,非终态
     // 现场到不了盘上(防线在写口,这里只对齐类型)。
     terminal_status: state.status as IssueMetricsSnapshot["terminal_status"],
+    // 终止原因(#541):canceled 终态伴生,在场即随终态冻结;缺席键=
+    // 无原因取消(历史路径),统计侧按缺席兼容。
+    ...(state.cancel_reason
+      ? { cancel_reason: state.cancel_reason } : {}),
+    ...(state.cancel_reason_text
+      ? { cancel_reason_text: state.cancel_reason_text } : {}),
     ...(state.ticket ? { ticket: state.ticket } : {}),
     ...(state.conclusion?.kind
       ? { conclusion_kind: state.conclusion.kind } : {}),
