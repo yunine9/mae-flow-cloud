@@ -4177,8 +4177,9 @@ export interface IssueOnceGeneratedSessionRow {
   module: string;
   concluded_at: string;
   /** ok=有统计数据;no_code=伴生在场但无源码工作行;pending=支持期内
-   *  待算;unsupported=早于起算日期(不进统计)。 */
-  state: "ok" | "no_code" | "pending" | "unsupported";
+   *  待算;unsupported=早于起算日期(不进统计);canceled=负面原因
+   *  主动终止(#542,不进两轴与占比,concluded_at=取消时刻)。 */
+  state: "ok" | "no_code" | "pending" | "unsupported" | "canceled";
   /** 首次生成占比(百分数一位小数);仅 ok 行有。 */
   share?: number;
   pass?: boolean;
@@ -4193,6 +4194,10 @@ export interface IssueOnceGeneratedSessionRow {
   solved_pass: boolean;
   /** 发起人(发起登记的登录账号;缺席按缺省处理,#353 字段纪律)。 */
   reporter?: string;
+  /** 终止原因(#542):仅 canceled 行有。 */
+  cancel_reason?: IssueCancelReason;
+  /** 终止补充说明(#542):仅 canceled 行且原因=other 时可能在场。 */
+  cancel_reason_text?: string;
 }
 
 /** 一根比率轴:分子、分母与占比(一次定位剔除转正会话后,分母可
@@ -4223,13 +4228,15 @@ export interface IssueOnceGenerated {
   total: number;
   passed: number;
   rate: number | null;
-  /** 完成交付会话总数(三根过程率轴的分母)。 */
+  /** 完成交付会话总数(一次定位/一次验证两轴的分母)。 */
   delivered: number;
+  /** 负面原因主动终止的会话数(#542,一次解决率分母中记失败的部分)。 */
+  terminated: number;
   /** 一次定位率(报告一版过;分母剔除转正会话后可与 delivered 不同)。 */
   localization: IssueOnceGeneratedAxis;
   /** 一次验证率(验证不通过次数=0)。 */
   verify: IssueOnceGeneratedAxis;
-  /** 一次解决率(定位与验证双一次)。 */
+  /** 一次解决率(定位与验证双一次;分母=完成交付+负面终止,#542)。 */
   solved: IssueOnceGeneratedAxis;
   by_repo: IssueOnceGeneratedRepoRow[];
   pending: number;

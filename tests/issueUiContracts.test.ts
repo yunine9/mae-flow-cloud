@@ -1951,3 +1951,38 @@ test("DTS 列表列宽拖拽:TanStack 引擎,columnSizing 单一宽度源,记忆
   assert.match(registration,
     /select: 96, ticket: 320, title: 1200,\s*\n\s*launch: 220, remark: 800, module: 400, tier: 240,/);
 });
+
+// ---- DTS 概览:一次解决率环图第三片与口径标注(#542) ----
+
+const deliveryAnalytics = readFileSync(
+  resolve("web/src/DeliveryAnalytics.tsx"), "utf-8");
+
+test("DTS 概览一次解决率环图第三片「用户终止(负面原因)」琥珀色,两图格局不动(#542)", () => {
+  // 第三片:琥珀 #d97706(原型②部分),与工作行环的「平台外」同源色。
+  assert.match(deliveryAnalytics, /label: "用户终止（负面原因）"/);
+  assert.match(deliveryAnalytics,
+    /\{ label: "用户终止（负面原因）", color: "#d97706", value: terminated \}/);
+  // 「未一次解决」片只数完成交付里的失败:分母减去一次解决与终止。
+  assert.match(deliveryAnalytics,
+    /value: Math\.max\(0, \(stats\?\.solved\.total \?\? 0\) - \(stats\?\.solved\.passed \?\? 0\) - terminated\)/);
+  // 概览不显示原因分布明细:原因词表不进概览(按会话页签的事,不越界)。
+  assert.doesNotMatch(deliveryAnalytics, /分析不准确|速度太慢|指令不遵从/);
+  // 2026-10-20 拍板的两图格局:概览网格两处(需求交付+DTS),不加第三张卡。
+  assert.equal(
+    deliveryAnalytics.match(/delivery-overview-grid/g)?.length, 2);
+});
+
+test("DTS 概览口径标注与页底统计口径文案:分母含主动终止,自上线日起(#542)", () => {
+  // 卡片口径标注一行。
+  assert.match(deliveryAnalytics, /分母 = 完成交付会话 \+ 主动终止会话/);
+  assert.match(deliveryAnalytics, /自终止原因收集上线起/);
+  assert.match(deliveryAnalytics, /选「问题已处理」的会话不参与统计/);
+  // help tooltip 同步:主动终止记一次失败,两轴分母仍只含完成交付。
+  assert.match(deliveryAnalytics, /主动终止\(负面原因\)会话,主动终止记一次失败/);
+  assert.match(deliveryAnalytics, /两轴分母仍只含完成交付/);
+  // 页底「统计口径」details 同步改写。
+  assert.match(deliveryAnalytics,
+    /分母=完成交付会话\+主动终止\(负面原因\)会话,主动终止记一次失败/);
+  assert.match(deliveryAnalytics,
+    /终止时选「问题已处理」的会话与无原因取消\(历史数据\)不参与统计/);
+});

@@ -136,6 +136,7 @@ export function IssueAnalyticsTab() {
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
   const delivered = stats?.delivered ?? 0;
   const lines = sumLineKinds(stats);
+  const terminated = stats?.terminated ?? 0;
   const solvedRate = pct(stats?.solved.rate);
   const shareRate = pct(weightedShare(stats));
   const help = (tip: string) =>
@@ -153,13 +154,15 @@ export function IssueAnalyticsTab() {
       </span>
     </div>
     <div className="delivery-overview-grid">
-      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话;按会话表的定位/验证✓✗是它的两个因子。")}</h2>
+      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话,主动终止记一次失败;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
         <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
           ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
           slices={[
             { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
-            { label: "未一次解决", color: "var(--line-strong)", value: (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) },
+            { label: "未一次解决", color: "var(--line-strong)", value: Math.max(0, (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) - terminated) },
+            { label: "用户终止（负面原因）", color: "#d97706", value: terminated },
           ]} />
+        <p className="mt-3 text-xs text-muted-foreground">口径标注：分母 = 完成交付会话 + 主动终止会话（自终止原因收集上线起）；终止时选「问题已处理」的会话不参与统计。</p>
       </section>
       <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
         <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
@@ -222,7 +225,7 @@ export function IssueAnalyticsTab() {
       {!repos.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有代码仓数据"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
-      <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话,按会话表的定位/验证✓✗是它的两个因子;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
+      <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话+主动终止(负面原因)会话,主动终止记一次失败,一次定位/一次验证两轴的分母仍只含完成交付(负面终止无法判轴);终止时选「问题已处理」的会话与无原因取消(历史数据)不参与统计,无单会话不进任何率;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
       <p>首次生成占比的返工边界=首个反馈事件(检视/红灯/验证失败)回应的推送;平台外改动计入分母;被强制覆盖(force push)的平台推送按原分类计入,证据表里标「已覆盖」;现场取不到标「不可得」。收口后后台计算,稍后刷新可见。</p>
     </details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
