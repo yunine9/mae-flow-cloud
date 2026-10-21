@@ -478,8 +478,8 @@ test("终止原因随终态快照进分母:读快照与回退现算同判(#542)"
     assert.deepEqual(frozen.localization,
       { passed: 0, total: 0, rate: null }, "两轴分母仍只含完成交付");
     assert.deepEqual(rowOf(frozen, "issue-cancel"),
-      { id: "issue-cancel", reviews: 0, localization_pass: false,
-        repair_pass: false }, "明细行机器事实缺省");
+      { id: "issue-cancel", cancel_reason: "inaccurate" },
+      "明细行机器事实缺席不设键(#540 复审),仅身份与终止原因");
 
     // 现算路径:删掉快照回退,同判(口径不分家)。
     rmSync(join(root, ISSUE_METRICS_FILE));
