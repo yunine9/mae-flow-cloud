@@ -26,7 +26,7 @@ test("自动匹配知识必须展示逐项清单和匹配依据，不能退回�
     "知识名单只用于核对，不能偷偷恢复手工勾选");
 });
 
-test("发起页只展示 Mae-Flow 平台管理的知识，不把仓库内容列成知识条目", () => {
+test("发起页展示知识库已同步保留的模块文档，仓内运行规则仍由 Agent 按需读取", () => {
   assert.match(source, /平台管理的本任务知识/);
   assert.match(source,
     /仅展示业务知识与平台团队 Skill/);
@@ -36,9 +36,9 @@ test("发起页只展示 Mae-Flow 平台管理的知识，不把仓库内容列�
 
   // 边界注记的排版随 #229 工具类化,消费其文案锚即可(下方已有)。
   assert.match(source,
-    /下单页只展示 Mae-Flow 平台管理的业务知识和 Skill/);
+    /下单页自动带入知识库已同步并保留的模块文档与平台 Skill/);
   assert.match(source,
-    /AGENTS\.md[\s\S]*仓内文档、项目规则[\s\S]*Agent 运行时自行读取[\s\S]*不在下单界面列出或包装成“本任务知识”/);
+    /AGENTS\.md[\s\S]*其他未纳入知识库的项目规则[\s\S]*Agent 运行时自行读取/);
   assert.equal(source.match(/AGENTS\.md/g)?.length, 1,
     "AGENTS.md 只能出现在低强调边界说明中，不能成为清单项或独立卡片");
   assert.doesNotMatch(source, /仓库原生能力/);

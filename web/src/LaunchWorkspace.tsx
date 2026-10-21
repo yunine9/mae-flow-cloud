@@ -1,7 +1,6 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { ProductVersionPicker } from "./ProductVersionPicker";
 import { RepositoryResourceNotice } from "./RepositoryResourceNotice";
-import { PersonName } from "./People";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createTask,
@@ -68,9 +67,7 @@ type LaunchDraft = {
   lane: string;
   repairRounds: string;
   taskInstructions?: string;
-  selectedBusinessModuleIds?: string[];
   businessModuleId?: string;
-  moduleSelectionTouched?: boolean;
   workflowSelection?: WorkflowSchemeSelection;
   repositoryTechnologies?: RepositoryTechnologyDraft[];
 };
@@ -379,16 +376,14 @@ export function LaunchWorkspace({
     validDraft?.repairRounds ?? "");
   const [taskInstructions, setTaskInstructions] = useState(
     validDraft?.taskInstructions ?? "");
-  const [selectedBusinessModuleIds, setSelectedBusinessModuleIds] = useState(
-    validDraft?.selectedBusinessModuleIds ?? []);
-  const [moduleSelectionNotice, setModuleSelectionNotice] = useState("");
+  // 预览与提交共用所属模块，不再按公共仓推断其他模块或恢复旧的独立选择。
+  const selectedBusinessModuleIds = useMemo(
+    () => businessModuleId ? [businessModuleId] : [], [businessModuleId]);
   const [draftSavedAt, setDraftSavedAt] = useState(
     validDraft?.updatedAt ?? "");
   const [repositoryTechnologies, setRepositoryTechnologies] =
     useState<RepositoryTechnologyDraft[]>(() =>
       restoredRepositoryTechnologies(validDraft?.repositoryTechnologies));
-  const [moduleSelectionTouched, setModuleSelectionTouched] = useState(
-    validDraft?.moduleSelectionTouched === true);
   const [workflowAssets, setWorkflowAssets] = useState<WorkflowAssetSummary[]>([]);
   const [workflowAssetsLoaded, setWorkflowAssetsLoaded] = useState(false);
   const [workflowSelection, setWorkflowSelection] = useState<WorkflowSchemeSelection | undefined>(
@@ -702,8 +697,7 @@ export function LaunchWorkspace({
     lane,
     repairRounds,
     taskInstructions,
-    selectedBusinessModuleIds, businessModuleId,
-    moduleSelectionTouched,
+    businessModuleId,
     workflowSelection,
     repositoryTechnologies: repositoryTechnologies.map((item) => ({
       ...item, technologies: [...item.technologies],
@@ -728,7 +722,7 @@ export function LaunchWorkspace({
   }, [title, requirement, requirementMaterials, repos, repositoryTickets,
     collaborators, ticket,
     baseline, productVersion, lane, repairRounds, taskInstructions,
-    selectedBusinessModuleIds, businessModuleId, moduleSelectionTouched,
+    businessModuleId,
     workflowSelection, repositoryTechnologies,
     session.username]);
 
@@ -751,33 +745,6 @@ export function LaunchWorkspace({
         "草稿中选择的工作流已归档、未发布或不可见，已明确回退到 Mae-Flow 标准方案。");
     }
   }, [workflowAssets, workflowAssetsLoaded, workflowSelection]);
-
-  useEffect(() => {
-    if (!options) return;
-    const available = new Set(options.business_modules.map((item) => item.id));
-    setSelectedBusinessModuleIds((current) => {
-      const removed = current.filter((id) => !available.has(id));
-      if (removed.length) {
-        setModuleSelectionNotice(
-          `草稿中的 ${removed.length} 个业务模块已归档或不可用，已从本次任务移除。`);
-      }
-      return current.filter((id) => available.has(id)).slice(0, 4);
-    });
-  }, [options]);
-
-  // 关联仓库能够说明业务范围时直接替用户勾好匹配模块；这是推荐默认值，
-  // 用户一旦手动调整就不再追着仓库输入改选择。模块只带出平台管理的
-  // 模块知识，绝不扫描或收编 Git 仓库里的文档与 Skill。
-  useEffect(() => {
-    if (!options || moduleSelectionTouched) return;
-    const wantedRepos = new Set(repos.map(repositoryIdentity).filter(Boolean));
-    const matched = businessModules.filter((module) =>
-      module.repositories.some((repository) =>
-        wantedRepos.has(repositoryIdentity(repository))))
-      .map((module) => module.id)
-      .slice(0, 4);
-    setSelectedBusinessModuleIds(matched);
-  }, [options, businessModules, repos, moduleSelectionTouched]);
 
   useEffect(() => {
     const previous = document.body.style.overflow;
@@ -942,7 +909,7 @@ export function LaunchWorkspace({
               <div className="grid gap-0.5">
                 <span className="font-mono text-xs font-bold text-primary">发起任务</span>
                 <strong id="launch-title" className="text-xl text-text-strong">说清任务，确认交付位置</strong>
-                <p className="mt-0.5 text-[13px] leading-normal text-muted-foreground">必填信息都在当前页面；工作流与知识清单仅在需要时调整。</p>
+                <p className="mt-0.5 text-[13px] leading-normal text-muted-foreground">必填信息都在当前页面；模块知识随所属业务模块自动带入。</p>
               </div>
               <small className="inline-flex items-center gap-1.5 text-sm text-muted-foreground max-[760px]:hidden">
                 <i aria-hidden className="size-1.5 rounded-full bg-primary" /> 必填项始终可见</small>
@@ -961,8 +928,7 @@ export function LaunchWorkspace({
                   setRepositoryTickets([""]);
                   setCollaborators([]);
                   setTicket("");
-                  setSelectedBusinessModuleIds([]);
-                  setModuleSelectionTouched(false);
+                  setBusinessModuleId("");
                   setRepositoryTechnologies([]);
                   // 清空必须清干净:执行补充/交付方式/基线/修复轮/工作流
                   // 选择原来被留着,上一单的指示会悄悄跟进下一单,而且
@@ -1203,62 +1169,6 @@ export function LaunchWorkspace({
                     <span className="text-muted-foreground">原页草稿保留，返回后自动刷新</span>
                   </div>
                   {moduleRefreshError && <p role="status" className="mt-1 text-sm text-danger">{moduleRefreshError}</p>}
-                  {businessModules.length > 0 && <details
-                    className="group mt-3 overflow-hidden rounded-lg border border-line bg-surface">
-                    <summary className="grid min-h-[50px] grid-cols-[minmax(0,1fr)_auto_17px] cursor-pointer list-none items-center gap-[9px] px-[11px] py-[9px] [&::-webkit-details-marker]:hidden">
-                      <span className="grid min-w-0 gap-0.5"><strong className="text-xs text-text-strong">模块知识范围</strong><small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-muted-foreground">
-                        {selectedBusinessModuleIds.length
-                          ? selectedBusinessModuleIds.map((id) =>
-                              businessModules.find((item) => item.id === id)?.name)
-                            .filter(Boolean).join("、")
-                          : "尚未关联；可选择本任务涉及的业务抽屉"}
-                      </small></span>
-                      <Badge variant="secondary">{selectedBusinessModuleIds.length
-                        ? `${selectedBusinessModuleIds.length} 个已关联` : "选择"}</Badge>
-                      <svg viewBox="0 0 20 20" aria-hidden className="size-4 fill-none stroke-muted-foreground stroke-[1.6] transition-transform group-open:rotate-180"><path d="m6 8 4 4 4-4" /></svg>
-                    </summary>
-                    <div className="grid grid-cols-1 gap-2 border-t border-line bg-surface-2 p-2.5">
-                      {businessModules.map((module) => {
-                        const selectedIndex = selectedBusinessModuleIds.indexOf(module.id);
-                        const selected = selectedIndex >= 0;
-                        const recommended = module.repositories.some((repo) =>
-                          repos.some((item) => repositoryIdentity(item)
-                            === repositoryIdentity(repo)));
-                        const disabled = !selected && selectedBusinessModuleIds.length >= 4;
-                        return <label key={module.id}
-                          className={cn("grid min-w-0 cursor-pointer grid-cols-[18px_minmax(0,1fr)] items-start gap-[9px] rounded-[10px] border border-line bg-surface px-3 py-[11px] transition-[border-color,background,box-shadow] hover:border-line-strong",
-                            selected
-                              ? "border-primary bg-(--accent-soft) shadow-[0_0_0_2px_color-mix(in_srgb,var(--accent)_8%,transparent)]"
-                              : undefined,
-                            disabled && "cursor-not-allowed opacity-[.52]")}>
-                          {/* 勾选态:Checkbox 自带 data-checked 皮;卡片选中
-                              高亮由上面的条件工具类驱动(原 selected 类退役)。 */}
-                          <Checkbox className="mt-1" checked={selected} disabled={disabled}
-                            onCheckedChange={() => {
-                              setModuleSelectionTouched(true);
-                              setSelectedBusinessModuleIds((current) => selected
-                                ? current.filter((id) => id !== module.id)
-                                : [...current, module.id]);
-                            }} />
-                          <span className="grid min-w-0 gap-1">
-                            <span className="flex min-w-0 flex-wrap items-center gap-1.5"><strong className="text-[13.5px] text-text-strong">{module.name}</strong>
-                              {selectedIndex === 0 && <em className="rounded bg-surface px-[5px] py-px text-xs font-bold not-italic text-primary">主模块</em>}
-                              {recommended && <em className="rounded bg-(--success-soft) px-[5px] py-px text-xs font-bold not-italic text-success">仓库匹配</em>}
-                            </span>
-                            <small className="line-clamp-2 text-[13px] leading-snug text-muted-foreground">{module.description}</small>
-                            <span className="text-xs leading-snug text-faint">
-                              {module.assets} 项模块知识 · <PersonName account={module.owner} /> 维护
-                            </span>
-                          </span>
-                        </label>;
-                      })}
-                    </div>
-                    {moduleSelectionNotice && <p className="mb-0 rounded-lg bg-(--attention-soft) px-2.5 py-2 text-[13px] leading-snug text-attention"
-                      role="status">{moduleSelectionNotice}</p>}
-                    <p className="mb-0 px-2.5 py-2 text-[13px] leading-normal text-faint">
-                      仓库匹配项会默认勾选；你手动调整后系统不再改动。这里只带出 Mae-Flow 平台管理的业务知识。
-                    </p>
-                  </details>}
                 </section>
               )}
               {options && options.workflows.length > 0 &&
@@ -1309,7 +1219,7 @@ export function LaunchWorkspace({
                         : `${selectedKnowledgeCount} 项`}</em>
                 </header>
                 <p className="mt-2.5 mb-0 text-[13px] leading-normal text-faint">
-                  下单页只展示 Mae-Flow 平台管理的业务知识和 Skill；仓库里的 <code>AGENTS.md</code>、仓内文档、项目规则等仍由 Agent 运行时自行读取，但不在下单界面列出或包装成“本任务知识”。
+                  下单页自动带入知识库已同步并保留的模块文档与平台 Skill；仓库里的 <code>AGENTS.md</code> 和其他未纳入知识库的项目规则，仍由 Agent 运行时自行读取。
                 </p>
                 {knowledgePreviewLoading || !previewSettled ? (
                   <div className="mt-2.5 rounded-lg bg-surface px-[11px] py-2.5 text-xs text-muted-foreground">正在核对知识名称、版本与作用域…</div>
@@ -1467,7 +1377,7 @@ export function LaunchWorkspace({
                   <p className="mb-0 truncate text-right text-xs leading-normal text-muted-foreground max-[680px]:col-span-full max-[680px]:mt-[9px] max-[680px]:border-t max-[680px]:pt-[9px] max-[680px]:text-left max-[680px]:[text-overflow:clip] max-[680px]:whitespace-normal max-[680px]:[overflow-wrap:anywhere]">{previewBusinessModuleIds.length
                     ? `来自 ${previewBusinessModuleIds.map((id) =>
                         businessModules.find((item) => item.id === id)?.name)
-                      .filter(Boolean).join("、")} 等已关联抽屉${
+                      .filter(Boolean).join("、")} 模块${
                         knowledgePreview?.scope.workflow_business_module_ids.length
                           ? "（含工作流带入）" : ""}`
                     : "尚未关联业务模块；仍会使用匹配的工程知识和平台团队 Skill"}</p>

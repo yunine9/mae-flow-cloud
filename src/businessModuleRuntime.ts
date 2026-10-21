@@ -27,12 +27,13 @@ import {
   repositoryIdentity,
   type KnowledgeForm,
 } from "./knowledgeAssetModel.ts";
+import { createGitKnowledgeDocumentReader, listGitKnowledgeDocumentManifest, readGitKnowledgeDocument } from "./knowledgeRepositorySnapshots.ts";
 
 const SNAPSHOT_DIR = "business-module-snapshot";
 const RUNTIME_DIR = ".mae-flow-work/business-modules";
 const MAX_MODULES = 4;
-const MAX_ASSETS = 60;
-const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const MAX_ASSETS = 5000;
+const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 
 export interface SelectedBusinessKnowledgeAsset {
   id: string;
@@ -135,26 +136,39 @@ export function selectBusinessModules(
   let totalBytes = 0;
   const taskRepositories = new Set((options.repositories ?? [])
     .map(repositoryIdentity));
+  const formalDocuments = ids.length ? listGitKnowledgeDocumentManifest(options.dataDir) : [];
   for (const id of ids) {
     const module = readBusinessModule(options.dataDir, id);
     if (module.status !== "active") {
       throw new BusinessModuleError(`业务模块 ${module.name} 已归档，请重新选择`);
     }
     const assets: SelectedBusinessKnowledgeAsset[] = [];
-    for (const asset of module.assets.filter((item) =>
-      item.status === "published" && (!item.repositories.length
+    const candidates = [
+      ...module.assets.filter(item => item.status === "published"),
+      ...formalDocuments.filter(document => document.active && document.module_ids.includes(module.id)
+        && !/(?:^|\/)AGENTS\.md$/i.test(document.source?.path ?? ""))
+        .map(document => ({
+          id: document.id, title: document.title,
+          summary: document.source?.path ?? document.title,
+          when_to_use: document.when_to_use || `涉及${module.name}的业务规则、实现与接口时按需读取`,
+          form: "document" as const, repositories: document.repositories,
+          version: 1, digest: document.digest, bytes: document.bytes,
+        })),
+    ];
+    for (const asset of candidates.filter((item) =>
+      !item.repositories.length
         || item.repositories.some((repository) =>
-          taskRepositories.has(repositoryIdentity(repository)))))) {
+          taskRepositories.has(repositoryIdentity(repository))))) {
       assetCount += 1;
       totalBytes += asset.bytes;
       if (assetCount > MAX_ASSETS || totalBytes > MAX_TOTAL_BYTES) {
         throw new BusinessModuleError(
-          `所选模块知识超过 ${MAX_ASSETS} 项或 8 MiB，请减少关联模块`,
+          `所选模块知识超过 ${MAX_ASSETS} 项或 64 MiB，请缩小模块知识范围`,
         );
       }
       const snapshotPath = join(
         SNAPSHOT_DIR, module.id, `r${module.revision}`,
-        `${asset.id}-v${asset.version}.md`,
+        /^kg-[a-f0-9]{64}$/.test(asset.id) ? `${asset.id}-${asset.digest}.md` : `${asset.id}-v${asset.version}.md`,
       ).split(sep).join("/");
       assets.push({
         id: asset.id,
@@ -181,6 +195,22 @@ export function selectBusinessModules(
   return selected;
 }
 
+/** 读取已选版本；正式仓库在预览后变化时拒绝混入另一版正文。 */
+export function readSelectedBusinessKnowledge(dataDir: string, moduleId: string, asset: SelectedBusinessKnowledgeAsset,
+  readFormalDocument?: ReturnType<typeof createGitKnowledgeDocumentReader>): { content: string } {
+  const document = /^kg-[a-f0-9]{64}$/.test(asset.id)
+    ? (readFormalDocument ? readFormalDocument(asset.id) : readGitKnowledgeDocument(dataDir, asset.id))
+    : readBusinessKnowledgeAsset(dataDir, moduleId, asset.id, asset.version);
+  if ("module_ids" in document && (!document.active || !document.module_ids.includes(moduleId)
+      || /(?:^|\/)AGENTS\.md$/i.test(document.source?.path ?? ""))) {
+    throw new BusinessModuleError("所选正式知识已不在该模块的范围内，请刷新清单");
+  }
+  if (Buffer.byteLength(document.content) !== asset.bytes || sha256(document.content) !== asset.digest) {
+    throw new BusinessModuleError(`知识 ${asset.title} 已更新，请刷新清单后重试`);
+  }
+  return { content: document.content };
+}
+
 export function snapshotBusinessModules(options: {
   dataDir: string;
   taskWorkspace: string;
@@ -188,10 +218,11 @@ export function snapshotBusinessModules(options: {
   repositories?: string[];
 }): SelectedBusinessModule[] {
   const selected = selectBusinessModules(options);
+  const readFormalDocument = selected.some(module => module.assets.some(asset => /^kg-[a-f0-9]{64}$/.test(asset.id)))
+    ? createGitKnowledgeDocumentReader(options.dataDir) : undefined;
   for (const module of selected) {
     for (const asset of module.assets) {
-      const document = readBusinessKnowledgeAsset(
-        options.dataDir, module.id, asset.id);
+      const document = readSelectedBusinessKnowledge(options.dataDir, module.id, asset, readFormalDocument);
       const destination = safeSnapshotPath(
         options.taskWorkspace, asset.snapshot_path);
       assertNoSymlinkPath(options.taskWorkspace, destination);
@@ -230,7 +261,7 @@ export function copyBusinessModuleSnapshots(options: {
       totalBytes += asset.bytes;
       if (assetCount > MAX_ASSETS || totalBytes > MAX_TOTAL_BYTES) {
         throw new BusinessModuleError(
-          `所选模块知识超过 ${MAX_ASSETS} 项或 8 MiB，请减少关联模块`,
+          `所选模块知识超过 ${MAX_ASSETS} 项或 64 MiB，请缩小模块知识范围`,
         );
       }
       const source = safeSnapshotPath(

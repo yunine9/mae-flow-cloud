@@ -29,6 +29,8 @@ import {
 } from "./repositoryProfiles.ts";
 import { workflowKnowledgeSelections } from "./workflowAssetResolution.ts";
 import { normalizeWorkflowDefinition } from "./workflowDefinition.ts";
+import { resolveModuleKnowledgeLocation } from "./businessModuleKnowledge.ts";
+import { readModuleKnowledgeSync } from "./knowledgeRepositorySnapshots.ts";
 
 export type LaunchKnowledgePreviewSource =
   | "business_modules"
@@ -289,11 +291,21 @@ export function previewLaunchKnowledge(
       moduleIds: selections.businessModuleIds,
       repositories,
     });
-    // 选择器不把正文带出服务端，但预览仍要验证真正创建时会读取的固定
-    // 版本，避免“目录有标题、正文已坏”直到点击创建才暴露。
+    // 正式 Git 知识使用本地阅读索引的摘要和长度；只有创建快照才读取
+    // 正文。旧发布资产继续验证固定版本，避免标题存在而正文损坏。
     for (const module of businessModules) {
       for (const asset of module.assets) {
-        readBusinessKnowledgeAsset(dataDir, module.id, asset.id, asset.version);
+        if (!/^kg-[a-f0-9]{64}$/.test(asset.id)) readBusinessKnowledgeAsset(dataDir, module.id, asset.id, asset.version);
+      }
+      if (!module.assets.some(asset => /^kg-[a-f0-9]{64}$/.test(asset.id))
+          && resolveModuleKnowledgeLocation(dataDir, module.id)) {
+        const sync = readModuleKnowledgeSync(dataDir, module.id);
+        if (!sync?.synced_at || sync.state === "failed") {
+          degraded = true;
+          warnings.push({ source: "business_modules", code: "catalog_unavailable",
+            message: `${module.name}的正式知识${sync?.error ? `暂不可用：${sync.error}`
+              : sync?.state === "syncing" ? "正在首次同步，完成后刷新清单" : "尚未完成同步，请在知识库完成同步后刷新清单"}` });
+        }
       }
     }
   } catch (error) {

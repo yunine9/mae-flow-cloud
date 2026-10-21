@@ -1789,6 +1789,12 @@ export function App() {
           view === "knowledge" ? teamAssetTab : undefined), "",
           location.pathname + location.search);
         setLaunchOpen(false);
+        if (target.kind === "business" && /^kg-[a-f0-9]{64}$/.test(target.assetId)) {
+          setKnowledgeFocus(undefined);
+          history.pushState(appHistoryState("library"), "", knowledgeAssetPath(target));
+          setView("library");
+          return;
+        }
         setKnowledgeFocus(target);
         setTeamAssetTab(target.kind === "business" ? "modules" : "knowledge");
         setView("knowledge");
