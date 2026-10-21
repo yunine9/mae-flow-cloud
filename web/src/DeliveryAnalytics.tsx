@@ -2,7 +2,7 @@ import { useTechnologyStacks } from "./useTechnologyStacks";
 import { CompletionDateFilter, completionDateRange, type CompletionDates } from "./CompletionDateFilter";
 import { completedInRange } from "../../src/completionRange";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, ExternalLink, HelpCircle, RefreshCw } from "lucide-react";
+import { BarChart3, ChevronDown, ChevronRight, ExternalLink, HelpCircle, RefreshCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
@@ -13,11 +13,30 @@ import type { CodeOrigin, DeliveryAnalysisReport, DeliveryAnalysisRow, DeliveryT
 import { KnowledgeInsightsPanel } from "./KnowledgeFlywheel";
 import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, sumOrigins } from "../../src/deliveryAnalyticsSummary";
 import { cn } from "cn";
-import { getIssueOnceGenerated, type IssueOnceGenerated, type IssueOnceGeneratedRepoRow, type IssueOnceGeneratedSessionRow } from "./api";
+import { getBusinessModules, getIssueOnceGenerated, type BusinessModuleCatalog, type IssueOnceGenerated, type IssueOnceGeneratedSessionRow } from "./api";
 import { getIssueRegistrationStats, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
 import { TicketTemplateCard } from "./issues/TicketTemplateCard";
-import { onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
+import { featureRepoTree, onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
+import { HeaderEnumFilter, HeaderFilter } from "./HeaderFilter";
+import { repoIdentity } from "./repoIdentity";
+
+/** 列头枚举漏斗的选项:去重 → 中文排序 → {value,label} 同形。 */
+const enumOptions = (values: Iterable<string>) => [...new Set(values)]
+  .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+  .map((name) => ({ value: name, label: name }));
+
+/** 会话列头的关键字漏斗(两页签同款;激活与过滤同用 trim 值,纯空格
+ *  不算激活也不吞行)。 */
+function KeywordHeaderFilter({ label, placeholder, value, onChange }: {
+  label: string; placeholder: string; value: string; onChange: (value: string) => void;
+}) {
+  return <HeaderFilter label={label} active={!!value.trim()} onClear={() => onChange("")}>
+    {() => <Input autoFocus className="h-8 w-full rounded-md px-2 text-sm"
+      placeholder={placeholder} aria-label={`按${label}过滤`} value={value}
+      onChange={(event) => onChange(event.target.value)} />}
+  </HeaderFilter>;
+}
 
 /** 首做/返工/平台外工作行三分类的贯穿色:需求交付(交付代码来源)与
  *  DTS(生成工作行来源)两环同色系,调色单点在这里。 */
@@ -103,15 +122,36 @@ function TaskMetricRow({ id, title, tasks, child, parent, onSelect, ledger }: { 
  *  2026-10-20 指标收敛(领导拍板):概览只留两图——一次解决率与首次
  *  生成占比(双环,样式与需求交付概览同款);90%AI生成达标率整档退场,
  *  一次定位/一次验证只在按会话表留 ✓/✗ 诊断列;后端端点零改动。
+ *  2026-10-21 仓维度并入特性树(ADR-0065):观察维度剩 按特性/按会话
+ *  两维,按特性是树状表格——外层特性,展开是该特性会话实际改过的仓
+ *  (per_session.by_repo 前端聚合,绑定外仓标「绑定外」);点特性/
+ *  仓名跳按会话并带上对应过滤,跳转所见=刚才所看数字的构成会话;
+ *  按会话列头过滤:会话关键字/特性与发起人枚举。
  *  导出仅供视觉走查场景脚本挂载(与需求侧同款做法)。 */
+
 export function IssueAnalyticsTab() {
   const [stats, setStats] = useState<IssueOnceGenerated>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [dates, setDates] = useState<CompletionDates>({ from: "", to: "" });
+  const [dim, setDim] = useState<"feature" | "session">("feature");
+  /** 按会话的过滤组:特性(module,"*"=全部)、代码仓(树点击落下,
+   *  不设列头漏斗,以筛选条呈现)、会话关键字、发起人枚举。 */
   const [module, setModule] = useState("*");
-  const [dim, setDim] = useState<"feature" | "session" | "repo">("feature");
+  const [repo, setRepo] = useState("");
+  const [query, setQuery] = useState("");
+  const [reporter, setReporter] = useState("");
+  /** 特性树展开状态:特性名集合,默认全折叠,不记忆。 */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
+  /** 模块目录只喂「绑定外」标记:取不到就不标,不影响任何数字。 */
+  const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
+  useEffect(() => {
+    let live = true;
+    getBusinessModules().then((value) => { if (live) setCatalog(value); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, []);
   useEffect(() => {
     let live = true;
     setStats(undefined); setError("");
@@ -122,15 +162,27 @@ export function IssueAnalyticsTab() {
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [dates]);
-  // 表格只呈现有统计数据的会话;pending/unsupported/no_code 计入范围计数。
-  const rows = useMemo(() => (stats?.per_session ?? [])
-    .filter((row) => row.state === "ok")
-    .filter((row) => module === "*" || row.module === module),
-    [stats, module]);
-  const features = useMemo(() => onceGeneratedFeatureRows(
-    rows.filter((row) => row.share !== undefined) as IssueOnceGeneratedSessionRow[]),
-    [rows]);
-  const repos = stats?.by_repo ?? [];
+  // 特性树永远展示全部特性(module 过滤只管按会话表):点特性行的
+  // 语义是「跳过去看会话」,不是原地收窄树。
+  const okRows = useMemo(() => (stats?.per_session ?? [])
+    .filter((row) => row.state === "ok"), [stats]);
+  const shareRows = useMemo(() => okRows.filter((row) => row.share !== undefined) as IssueOnceGeneratedSessionRow[], [okRows]);
+  const features = useMemo(() => onceGeneratedFeatureRows(shareRows), [shareRows]);
+  const tree = useMemo(() => featureRepoTree(shareRows), [shareRows]);
+  const bindings = useMemo(() => new Map((catalog?.modules ?? [])
+    .map((entry) => [entry.name, entry.repositories])), [catalog]);
+  const rows = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    return okRows.filter((row) =>
+      (module === "*" || row.module === module)
+      && (!repo || row.by_repo?.some((entry) => entry.repo === repo))
+      && (!reporter || row.reporter === reporter)
+      && (!keyword || `${row.id} ${row.title}`.toLowerCase().includes(keyword)));
+  }, [okRows, module, repo, reporter, query]);
+  const moduleOptions = useMemo(() => enumOptions(okRows.map((row) => row.module)), [okRows]);
+  const reporterOptions = useMemo(() => enumOptions(okRows
+    .map((row) => row.reporter)
+    .filter((name): name is string => !!name)), [okRows]);
   const selectedRow = rows.find((row) => row.id === selected);
   const pct = (value: number | null | undefined) =>
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
@@ -142,6 +194,17 @@ export function IssueAnalyticsTab() {
     <span className="help-tip" data-tip={tip}>
       <HelpCircle size={14} className="text-muted-foreground" />
     </span>;
+  /** 树点击的统一落点:跳按会话、带上对应过滤、清掉其余过滤——
+   *  跳转后看到的会话集=刚才所看数字的构成会话(ADR-0065 决定3)。 */
+  const openSessions = (nextModule: string, nextRepo = "") => {
+    setModule(nextModule); setRepo(nextRepo);
+    setReporter(""); setQuery("");
+    setDim("session");
+  };  const toggleExpand = (feature: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(feature)) next.delete(feature); else next.add(feature);
+    return next;
+  });
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="flex flex-wrap items-center gap-3">
@@ -168,30 +231,83 @@ export function IssueAnalyticsTab() {
       </section>
     </div>
     <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
-      {([["feature", "按特性"], ["session", "按会话"], ["repo", "按代码仓"]] as const).map(([key, label]) =>
+      {([["feature", "按特性"], ["session", "按会话"]] as const).map(([key, label]) =>
         <button key={key} type="button" aria-pressed={dim === key}
           className={cn("border-r border-line px-5 py-2 text-sm last:border-r-0",
             dim === key ? "bg-canvas font-semibold text-text-strong" : "text-muted-foreground hover:text-text-strong")}
           onClick={() => setDim(key)}>{label}</button>)}
     </div>
     {dim === "feature" && <section className="delivery-card"><h2 className="flex items-center gap-2">按特性
-      {help("点特性名可筛选;一次解决按会话归属特性计,占比按工作行加权")}</h2>
+      {help("展开看该特性交付落到的各仓;点特性名/仓名跳按会话并带上过滤;一次解决按会话归属特性计,占比按工作行加权;仓行标「绑定外」=改了该特性绑定列表之外的仓")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>特性</th><th>会话数</th><th>一次解决率</th><th>首次生成占比</th>
+        <th>特性 / 代码仓</th><th>会话数</th><th>一次解决率</th><th>首次生成占比</th><th>返工工作行</th><th>平台外工作行</th>
       </tr></thead>
-        <tbody>{features.map((feature: OnceGeneratedFeatureRow) => <tr key={feature.module}>
-          <td><button className="delivery-task-link" aria-pressed={module === feature.module}
-            onClick={() => setModule(module === feature.module ? "*" : feature.module)}><b>{feature.module}</b></button></td>
-          <td>{feature.sessions}</td>
-          <td className="pct">{pct(feature.solved_rate)}</td>
-          <td className="delivery-accent pct">{pct(feature.share)}</td>
-        </tr>)}</tbody></table></div>
+        <tbody>{features.map((feature: OnceGeneratedFeatureRow) => {
+          const name = feature.module;
+          const open = expanded.has(name);
+          const inner = tree.repos.get(name) ?? [];
+          const totals = tree.lines.get(name) ?? { rework: 0, external: 0 };
+          const bound = bindings.get(name);
+          // 归一后比对(去 .git 尾缀/大小写差异),原样比对会误标绑定外。
+          const boundIds = bound ? new Set(bound.map(repoIdentity)) : undefined;
+          return <Fragment key={name}>
+            <tr>
+              <td><span className="flex items-center gap-1">
+                <button type="button" aria-expanded={open}
+                  aria-label={`${open ? "收起" : "展开"}${name}的代码仓`}
+                  className="rounded-sm p-0.5 text-muted-foreground hover:text-text-strong"
+                  onClick={() => toggleExpand(name)}>
+                  {open ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}
+                </button>
+                <button className="delivery-task-link" title="查看该特性的会话明细"
+                  onClick={() => openSessions(name)}><b>{name}</b></button>
+              </span></td>
+              <td>{feature.sessions}</td>
+              <td className="pct">{pct(feature.solved_rate)}</td>
+              <td className="delivery-accent pct">{pct(feature.share)}</td>
+              <td>{num(totals.rework)}</td>
+              <td className="text-muted-foreground">{num(totals.external)}</td>
+            </tr>
+            {open && inner.map((entry) => <tr key={entry.repo} className="delivery-child-row">
+              <td className="wrap"><button className="delivery-task-link"
+                title="查看改过该仓的该特性会话" onClick={() => openSessions(name, entry.repo)}>
+                <b>{entry.repo}</b>
+                {boundIds && !boundIds.has(repoIdentity(entry.repo)) &&
+                  <Badge variant="outline" className="w-fit">绑定外</Badge>}
+              </button></td>
+              <td>{entry.sessions}</td>
+              <td className="pct text-muted-foreground">—</td>
+              <td className="delivery-accent pct">{pct(entry.share)}</td>
+              <td>{num(entry.rework)}</td>
+              <td className="text-muted-foreground">{num(entry.external)}</td>
+            </tr>)}
+          </Fragment>;
+        })}</tbody></table></div>
       {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有完成交付的会话"}</p>}
     </section>}
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
-      {help("点行查看该会话的行归属证据;一次定位括号为报告版本数,一次验证✗为验证失败次数")}</h2>
+      {help("列头漏斗按会话关键字/特性/发起人过滤;点行查看该会话的行归属证据;一次定位括号为报告版本数,一次验证✗为验证失败次数")}</h2>
+      {(module !== "*" || repo) && <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-muted-foreground">筛选</span>
+        {module !== "*" && <button type="button" title="清除特性过滤"
+          className="inline-flex max-w-[320px] items-center gap-1 rounded-full bg-active-soft px-2.5 py-1 text-xs font-medium text-active"
+          onClick={() => setModule("*")}>特性:{module}<X aria-hidden size={12} /></button>}
+        {repo && <button type="button" title="清除代码仓过滤"
+          className="inline-flex max-w-[320px] items-center gap-1 rounded-full bg-active-soft px-2.5 py-1 text-xs font-medium text-active"
+          onClick={() => setRepo("")}><span className="truncate">代码仓:{repo}</span><X aria-hidden size={12} /></button>}
+      </div>}
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>会话</th><th>特性</th><th>一次解决</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th><th>发起人</th><th>收口时间</th>
+        <th><span className="inline-flex items-center gap-1">会话
+          <KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
+            value={query} onChange={setQuery} /></span></th>
+        <th><span className="inline-flex items-center gap-1">特性
+          <HeaderEnumFilter label="特性" value={module === "*" ? "" : module}
+            options={moduleOptions} onPick={(value) => setModule(value || "*")} /></span></th>
+        <th>一次解决</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th>
+        <th><span className="inline-flex items-center gap-1">发起人
+          <HeaderEnumFilter label="发起人" value={reporter}
+            options={reporterOptions} onPick={setReporter} /></span></th>
+        <th>收口时间</th>
       </tr></thead>
         <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => <tr key={row.id} style={{ cursor: "pointer" }}
           title="查看行归属证据" onClick={() => setSelected(row.id)}>
@@ -206,20 +322,6 @@ export function IssueAnalyticsTab() {
           <td className="text-muted-foreground">{new Date(row.concluded_at).toLocaleDateString("zh-CN")}</td>
         </tr>)}</tbody></table></div>
       {!rows.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有会话"}</p>}
-    </section>}
-    {dim === "repo" && <section className="delivery-card"><h2 className="flex items-center gap-2">按代码仓
-      {help("过程率是会话级裁决,不设仓维度;多仓会话按仓各计一次;纯删除交付正常计分")}</h2>
-      <div className="delivery-table-scroll"><table><thead><tr>
-        <th>代码仓</th><th>涉及会话</th><th>首次生成占比</th><th>返工工作行</th><th>平台外工作行</th>
-      </tr></thead>
-        <tbody>{repos.map((repo: IssueOnceGeneratedRepoRow) => <tr key={repo.repo}>
-          <td className="wrap"><b>{repo.repo}</b></td>
-          <td>{repo.sessions}</td>
-          <td className="delivery-accent pct">{pct(repo.share)}</td>
-          <td>{num(repo.rework)}</td>
-          <td className="text-muted-foreground">{num(repo.external)}</td>
-        </tr>)}</tbody></table></div>
-      {!repos.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内没有代码仓数据"}</p>}
     </section>}
     <details className="delivery-method" style={{ marginTop: 4 }}><summary style={{ cursor: "pointer" }}>统计口径</summary>
       <p>概览只看两个指标:一次解决率=一次定位(分析报告一版过)且一次验证(验证不通过 0 次,未答卡=通过),分母=完成交付会话,按会话表的定位/验证✓✗是它的两个因子;首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计,源码白名单内)。</p>
@@ -247,6 +349,11 @@ export function RegistrationAnalyticsTab() {
   const [dates, setDates] = useState<CompletionDates>({ from: "", to: "" });
   const [dim, setDim] = useState<"module" | "reporter" | "session">("module");
   const [module, setModule] = useState("*");
+  /** 按会话列头过滤(ADR-0065 与 DTS 按会话同款):会话关键字、
+   *  模块/登记人/责任人枚举;时间沿用页签顶部日期范围,不设列头。 */
+  const [query, setQuery] = useState("");
+  const [reporter, setReporter] = useState("");
+  const [account, setAccount] = useState("");
   const [selected, setSelected] = useState<IssueRegistrationSessionRow | null>(null);
   useEffect(() => {
     let live = true;
@@ -258,8 +365,19 @@ export function RegistrationAnalyticsTab() {
       .finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
   }, [dates]);
-  const rows = useMemo(() => (stats?.per_session ?? [])
-    .filter((row) => module === "*" || row.module === module), [stats, module]);
+  const rows = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    return (stats?.per_session ?? [])
+      .filter((row) => module === "*" || row.module === module)
+      .filter((row) => !reporter || row.reporter === reporter)
+      .filter((row) => !account || row.account === account)
+      .filter((row) => !keyword || `${row.id} ${row.title}`.toLowerCase().includes(keyword));
+  }, [stats, module, reporter, account, query]);
+  const moduleOptions = useMemo(() => enumOptions((stats?.per_session ?? []).map((row) => row.module)), [stats]);
+  const reporterOptions = useMemo(() => enumOptions((stats?.per_session ?? [])
+    .map((row) => row.reporter).filter(Boolean)), [stats]);
+  const accountOptions = useMemo(() => enumOptions((stats?.per_session ?? [])
+    .map((row) => row.account).filter(Boolean)), [stats]);
   const modules = stats?.by_module ?? [];
   const reporters = stats?.by_reporter ?? [];
   const pct = (value: number | null | undefined) =>
@@ -343,10 +461,22 @@ export function RegistrationAnalyticsTab() {
       {!reporters.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有登记问题"}</p>}
     </section>}
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
-      {help("点「确认是问题」行查看报告版本账与提单模板卡")}
+      {help("列头漏斗按会话关键字/模块/登记人/责任人过滤;点「确认是问题」行查看报告版本账与提单模板卡")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>会话</th><th>模块</th><th>登记人</th><th>责任人</th><th>结论</th><th>报告版本</th><th>一次定位</th><th>收口时间</th>
+        <th><span className="inline-flex items-center gap-1">会话
+          <KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
+            value={query} onChange={setQuery} /></span></th>
+        <th><span className="inline-flex items-center gap-1">模块
+          <HeaderEnumFilter label="模块" value={module === "*" ? "" : module}
+            options={moduleOptions} onPick={(value) => setModule(value || "*")} /></span></th>
+        <th><span className="inline-flex items-center gap-1">登记人
+          <HeaderEnumFilter label="登记人" value={reporter}
+            options={reporterOptions} onPick={setReporter} /></span></th>
+        <th><span className="inline-flex items-center gap-1">责任人
+          <HeaderEnumFilter label="责任人" value={account}
+            options={accountOptions} onPick={setAccount} /></span></th>
+        <th>结论</th><th>报告版本</th><th>一次定位</th><th>收口时间</th>
       </tr></thead>
         <tbody>{rows.map((row) => <tr key={row.id}
           style={{ cursor: row.conclusion === "issue" ? "pointer" : undefined }}
