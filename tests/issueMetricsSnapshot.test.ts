@@ -468,6 +468,33 @@ test("取消:control 落终态后快照生成", async () => {
   }
 });
 
+test("取消带终止原因:原因与说明随终态冻结进快照,无原因取消快照不带(#541)", async () => {
+  // 快照是终态时刻的冻结投影(#325,ADR-0042):取消原因与说明在场就
+  // 一起冻进去,统计侧(#542/#543)只读快照不再回翻状态文件。无原因
+  // 取消(历史路径)的快照不带这两个键——"缺席"本身就是兼容语义。
+  const dataDir = mfcTemp("mfc-issue-metrics-cancel-reason-");
+  const withReason = seedFacts(dataDir, { status: "idle", id: "issue-1" });
+  const legacy = seedFacts(dataDir, { status: "idle", id: "issue-2" });
+  const service = makeService(dataDir);
+  try {
+    await service.control("issue-1", {
+      action: "cancel", reason: "other", reasonText: "等了二十分钟没有反应",
+    });
+    const snapA = readSnapshot(withReason.root);
+    assert.equal(snapA.terminal_status, "canceled");
+    assert.equal(snapA.cancel_reason, "other", "原因随终态冻结进快照");
+    assert.equal(snapA.cancel_reason_text, "等了二十分钟没有反应",
+      "说明随终态冻结进快照");
+    await service.control("issue-2", { action: "cancel" });
+    const snapB = readSnapshot(legacy.root);
+    assert.equal(snapB.terminal_status, "canceled");
+    assert.equal(snapB.cancel_reason, undefined, "无原因取消的快照不带原因键");
+    assert.equal(snapB.cancel_reason_text, undefined, "无原因取消的快照不带有说明键");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("失败:模型回合失败落终态后快照生成", async () => {
   const dataDir = mfcTemp("mfc-issue-metrics-failed-");
   const model = new ScriptedModelServer([{ text: "(被故障顶掉)" }],

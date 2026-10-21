@@ -2192,4 +2192,58 @@ test("限流/额度不判死:429 落 idle 留话,额度恢复后发「继续」�
     await service.shutdown().catch(() => undefined);
     await model.stop();
   }
+});
+
+test("取消带终止原因:原因与说明落会话状态,无原因取消向后兼容(#541)", async () => {
+  // 终止原因(#540/#541):cancel 动作的独立入参(不复用 revive 的
+  // note,ADR-0055 语义不动)。带原因取消落进状态文件并随回执过线;
+  // 说明文本只跟 other 有意义;无原因取消(历史路径/脚本调用)与
+  // 现状完全一致,状态不带原因字段。
+  const dataDir = mfcTemp("mfc-issue-cancel-reason-");
+  seedRecoverableIssue(dataDir, "issue-1", { status: "idle" });
+  seedRecoverableIssue(dataDir, "issue-2", { status: "idle" });
+  seedRecoverableIssue(dataDir, "issue-3", { status: "idle" });
+  seedRecoverableIssue(dataDir, "issue-4", { status: "idle" });
+  const service = new IssueFlowService({
+    dataDir, provider: "unused", model: "unused", modelsJson: {},
+  });
+  try {
+    // other + 说明:原因与说明落盘,回执同带(工作台/列表展示读这)。
+    const withReason = await service.control("issue-1", {
+      action: "cancel", reason: "other", reasonText: "等了二十分钟没有反应",
+    });
+    assert.equal(withReason.status, "canceled");
+    assert.equal(withReason.cancel_reason, "other");
+    assert.equal(withReason.cancel_reason_text, "等了二十分钟没有反应");
+    const persisted = loadState(join(dataDir, "issues", "issue-1"))!;
+    assert.equal(persisted.cancel_reason, "other", "原因随终态落状态文件");
+    assert.equal(persisted.cancel_reason_text, "等了二十分钟没有反应",
+      "说明随终态落状态文件");
+
+    // 默认档(问题已处理):只有原因,不落说明。
+    await service.control("issue-2", { action: "cancel", reason: "resolved" });
+    const resolved = loadState(join(dataDir, "issues", "issue-2"))!;
+    assert.equal(resolved.cancel_reason, "resolved");
+    assert.equal(resolved.cancel_reason_text, undefined,
+      "非 other 原因不落说明文本(说明只跟 other 有意义)");
+
+    // 无原因取消(历史路径):行为与现状一致,状态不带原因字段。
+    const plain = await service.control("issue-3", { action: "cancel" });
+    assert.equal(plain.status, "canceled");
+    const legacy = loadState(join(dataDir, "issues", "issue-3"))!;
+    assert.equal(legacy.cancel_reason, undefined, "无原因取消不落原因");
+    assert.equal(legacy.cancel_reason_text, undefined);
+
+    // 非法原因 fail-loud:不静默吞成无原因取消。
+    await assert.rejects(
+      service.control("issue-4", {
+        action: "cancel", reason: "bogus" as never,
+      }),
+      /未知终止原因/,
+      "原因枚举外的值直接拒绝,落盘前就挡住");
+    assert.equal(loadState(join(dataDir, "issues", "issue-4"))!.status,
+      "idle", "被拒绝的取消不产生任何写入");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
 });;

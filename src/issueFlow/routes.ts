@@ -103,7 +103,12 @@ import {
 } from "./analysisVersions.ts";
 import type { DtsGateway } from "./gateways.ts";
 import { DTS_FILE_ORIGIN } from "./gateways.ts";
-import { isTerminal, type IssueEnvType } from "./state.ts";
+import {
+  ISSUE_CANCEL_REASONS,
+  isTerminal,
+  type IssueCancelReason,
+  type IssueEnvType,
+} from "./state.ts";
 import {
   ISSUE_IMAGE_MAX_BYTES,
   readStagedImage,
@@ -1281,9 +1286,23 @@ export async function handleIssueRoutes(
       if (!action) {
         return done(400, { error: "未知 control 动作,只支持重跑/取消" });
       }
+      // 终止原因(#541):cancel 动作的独立入参(不复用 revive 的 note),
+      // 词表白名单与动作同款 fail-loud;缺席=无原因取消(历史路径),
+      // 行为不变。revive 不收原因,递了也不透传。
+      const reason = typeof body.reason === "string"
+        && (ISSUE_CANCEL_REASONS as readonly string[]).includes(body.reason)
+        ? body.reason as IssueCancelReason : undefined;
+      if (body.reason !== undefined && !reason) {
+        return done(400, { error: "未知终止原因:"
+          + "只支持 resolved/inaccurate/slow/disobedient/other" });
+      }
+      const reasonText = typeof body.reason_text === "string"
+        && body.reason_text.trim() ? body.reason_text : undefined;
       return done(200, await issueFlow.control(id, {
         action,
         ...(body.note !== undefined ? { note: String(body.note) } : {}),
+        ...(reason ? { reason } : {}),
+        ...(reason && reasonText ? { reasonText } : {}),
       }));
     }
 

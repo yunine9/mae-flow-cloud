@@ -99,6 +99,7 @@ import {
   fixedStages,
   initStageStates,
   isTerminal,
+  ISSUE_CANCEL_REASONS,
   issueRepoWorkspaces,
   loadState,
   normalizeIssueRepos,
@@ -112,6 +113,7 @@ import {
   type FixedStage,
   type IssueBusinessKnowledge,
   type IssueBusinessKnowledgeEntry,
+  type IssueCancelReason,
   type IssueEnvironmentConfig,
   type IssueGate,
   type IssueGateScope,
@@ -5135,9 +5137,22 @@ export class IssueFlowService {
     action: "cancel" | "revive";
     /** 异常重跑(ADR-0055)可附的操作者说明,随恢复回合必达送达 AI。 */
     note?: string;
+    /** 终止原因(#541):cancel 动作伴生的独立入参(不复用 revive 的
+     * note);缺席=无原因取消(历史路径),行为与现状一致。 */
+    reason?: IssueCancelReason;
+    /** 终止补充说明(#541):仅 reason="other" 有意义,选填,落状态文件
+     * 备分析;非 other 原因递了也不落。 */
+    reasonText?: string;
   }): Promise<IssueSummary> {
     const live = this.require(id);
     if (input.action === "revive") return this.reviveIssue(live, input.note);
+    // 终止原因 fail-loud(#541):词表外的值直接拒绝,不静默吞成无原因
+    // 取消——落盘前就挡住,脏数据到不了状态文件。
+    if (input.reason !== undefined
+      && !ISSUE_CANCEL_REASONS.includes(input.reason)) {
+      throw new IssueControlError("未知终止原因:"
+        + "只支持 resolved/inaccurate/slow/disobedient/other");
+    }
     if (isTerminal(live.state.status)
       && live.state.status !== "failed") {
       throw new IssueControlError(`会话已处于终态 ${live.state.status}`);
@@ -5171,6 +5186,12 @@ export class IssueFlowService {
         `容器未能确认回收，取消尚未完成，请重试：${String(error)}`);
     }
     live.state.status = "canceled";
+    // 终止原因(#541):cancel 终态伴生落账,与状态同一笔落盘;说明只跟
+    // other 有意义(非 other 递了也不落),trim 由这里兜底。
+    if (input.reason) live.state.cancel_reason = input.reason;
+    if (input.reason === "other" && input.reasonText?.trim()) {
+      live.state.cancel_reason_text = input.reasonText.trim();
+    }
     saveState(live.root, live.state);
     // 收口清面(体检 C-H6):闸与未决 Agent 卡不随终态残留——不然
     // 已取消的会话还投影着一张永远答不了的卡。平台闸直接删;

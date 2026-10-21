@@ -470,6 +470,9 @@ test("契约快照:固定流程全链的 IssueSummary/IssueDetail(终点=MR 跑�
       }],
       error: undefined,
       last_reply: undefined,
+      // 终止原因(#541):非取消会话不出场,可选键钉镜像字段在位。
+      cancel_reason: undefined,
+      cancel_reason_text: undefined,
     };
 
     const list = await issueGet(["issues"], service);
@@ -844,6 +847,106 @@ test("契约快照:流水线不可修闸卡(pipeline_unfixable,带 pipeline 定�
   }
 });
 
+test("契约快照:取消带终止原因过线,镜像同字段(#541)", async () => {
+  // 终止原因(#541)走 control cancel 的独立入参(reason/reason_text,
+  // 不复用 revive 的 note):路由白名单 fail-loud,过线投影随终态带
+  // 原因与说明,前端 IssueSummary 镜像必须有同名字段(样例带类型注解,
+  // 镜像缺字段 tsc 红)。
+  const dataDir = mfcTemp("mfc-issue-contract-cancel-reason-");
+  const root = join(dataDir, "issues", "issue-1");
+  mkdirSync(root, { recursive: true });
+  const now = "2026-08-28T00:00:00Z";
+  writeFileSync(join(root, "issue.json"), JSON.stringify({
+    id: "issue-1", account: "dev", reporter: "dev",
+    created_at: now, updated_at: now,
+    title: "取消原因契约夹具", description: "", source: "manual",
+    scenario: "no_ticket", round: 1,
+    stage_states: ["done", "done", "done"],
+    status: "idle", stage: "analyze", stage_note: "", stage_at: now,
+  }));
+  const service = new IssueFlowService({
+    dataDir, provider: "p", model: "m", modelsJson: {},
+  });
+  try {
+    // 非法原因 fail-loud:400 打回,不静默落成无原因取消。
+    const bad = await issuePost(["issues", "issue-1", "control"],
+      { action: "cancel", reason: "bogus" }, service);
+    assert.equal(bad.status, 400);
+
+    const canceled = await issuePost(["issues", "issue-1", "control"],
+      { action: "cancel", reason: "other", reason_text: "等了二十分钟没有反应" },
+      service);
+    assert.equal(canceled.status, 200);
+    assert.equal(canceled.body.status, "canceled");
+    assert.equal(canceled.body.cancel_reason, "other", "原因随回执过线");
+    assert.equal(canceled.body.cancel_reason_text, "等了二十分钟没有反应",
+      "说明随回执过线");
+
+    const detail = await issueGet(["issues", "issue-1"], service);
+    assert.equal(detail.status, 200);
+    // 期望侧按 web/src/api.ts 的 IssueDetail 手写(canceled 无单三节点
+    // 的过线实况):undefined 键=可选可缺席;cancel_reason 在场必须过线。
+    const summarySample: IssueSummary = {
+      id: "issue-1",
+      account: "dev",
+      model_lane: undefined,
+      reporter: "dev",
+      created_at: now,
+      updated_at: now,
+      title: "取消原因契约夹具",
+      description: "",
+      remark: undefined,
+      auto_claim: undefined,
+      intervention_tier: undefined,
+      source: "manual",
+      ticket: undefined,
+      repo_url: undefined,
+      repo_urls: undefined,
+      public_repos: undefined,
+      knowledge_repo: undefined,
+      assigned_repos: undefined,
+      module: undefined,
+      module_id: undefined,
+      baseline: undefined,
+      environment: undefined,
+      scenario: "no_ticket",
+      stage_states: ["done", "done", "done"],
+      round: 1,
+      review_active: undefined,
+      skill_selection: undefined,
+      gate: undefined,
+      ut: undefined,
+      pipelines: undefined,
+      feedback: undefined,
+      converted_from: undefined,
+      converted_to: undefined,
+      inherited_accounts: undefined,
+      status: "canceled",
+      stage: "analyze",
+      stage_note: "",
+      stage_at: now,
+      has_environment: false,
+      nudges: undefined,
+      conclusion: undefined,
+      pushes: undefined,
+      mrs: undefined,
+      transitions: undefined,
+      error: undefined,
+      last_reply: undefined,
+      repo_reclaimed_at: undefined,
+      build_products_reclaimed_at: undefined,
+      cancel_reason: "other",
+      cancel_reason_text: "等了二十分钟没有反应",
+    };
+    const detailSample: IssueDetail = {
+      ...summarySample, waiting: undefined, has_analysis: false,
+    };
+    assertWireShape(detailSample, detail.body, "GET /issues/:id 取消终态");
+  } finally {
+    await service.shutdown().catch(() => undefined);
+  }
+});
+
 test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推荐码)", async () => {
   const dataDir = mfcTemp("mfc-issue-contract3-");
   const script: Scene[] = [
@@ -965,6 +1068,9 @@ test("契约快照:Agent 问题卡 waiting 投影(整卡形状+机械派码+推�
       }],
       error: undefined,
       last_reply: undefined,
+      // 终止原因(#541):非取消会话不出场,可选键钉镜像字段在位。
+      cancel_reason: undefined,
+      cancel_reason_text: undefined,
     };
     const detailSample: IssueDetail = { ...summarySample, waiting: waitingSample, has_analysis: false };
     assertWireShape(detailSample, detail.body, "固定流程 GET /issues/:id");
