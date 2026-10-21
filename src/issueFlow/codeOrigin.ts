@@ -158,6 +158,16 @@ export interface CodeOriginJobLimits {
 
 // ---- 读侧聚合形状(统计端点与详情端点;web/src/api.ts 有同源镜像) ----
 
+/** per_session ok 行携带的单仓工作行(会话×仓交叉的最小形状;占比
+ *  读侧行数加权现算,不落占比)。ADR-0065:特性树的仓行与按会话
+ *  仓过滤都从它前端聚合。 */
+export interface IssueOnceGeneratedSessionRepo {
+  repo: string;
+  first: number;
+  rework: number;
+  external: number;
+}
+
 /** 达标率分母里的一行(per_session 覆盖范围内全部完成交付会话,
  *  state 区分有无统计数据:只有 ok 行带占比与工作行)。 */
 export interface IssueOnceGeneratedSession {
@@ -173,6 +183,9 @@ export interface IssueOnceGeneratedSession {
   share?: number;
   pass?: boolean;
   lines?: { first: number; rework: number; external: number };
+  /** 各仓工作行明细(仅 ok 行;跳过不可得仓与零行仓;可选=#353
+   *  字段纪律,老前端按缺省处理)。 */
+  by_repo?: IssueOnceGeneratedSessionRepo[];
   /** 检视批次数(先行能力,呈现用)。 */
   reviews: number;
   /** 一次定位:分析报告一版过(与 /issues/stats 同源判定)。 */

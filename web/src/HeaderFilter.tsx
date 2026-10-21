@@ -6,13 +6,14 @@
  * 选项类选完即关,文本输入类忽略。
  */
 import { useState, type ReactNode } from "react";
-import { Filter } from "lucide-react";
+import { Check, Filter } from "lucide-react";
 import { cn } from "cn";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
 
 export function HeaderFilter({ label, active, onClear, clearLabel, contentClassName, children }: {
   label: string;
@@ -50,4 +51,42 @@ export function HeaderFilter({ label, active, onClear, clearLabel, contentClassN
       </div>}
     </PopoverContent>
   </Popover>;
+}
+
+/**
+ * 列头筛选的单选枚举:搜索框 + 选项清单(选中打勾,选完即关;
+ * 壳在 HeaderFilter)。选项由调用方给全量,搜索只做前端过滤;
+ * value="" 视为未筛(清除走壳的 onClear)。交付统计两个页签
+ * (ADR-0065)与 DTS 列表的关键字漏斗同一套壳。
+ */
+export function HeaderEnumFilter({ label, value, options, onPick }: {
+  label: string;
+  value: string;
+  options: Array<{ value: string; label: string }>;
+  onPick: (value: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const keyword = query.trim().toLowerCase();
+  const hit = keyword
+    ? options.filter((option) => option.label.toLowerCase().includes(keyword))
+    : options;
+  return <HeaderFilter label={label} active={value !== ""} onClear={() => onPick("")}>
+    {(close) => <div className="flex flex-col">
+      <Input autoFocus className="h-8 w-full rounded-md px-2 text-sm"
+        placeholder={`搜索${label}…`} aria-label={`搜索${label}筛选`}
+        value={query} onChange={(event) => setQuery(event.target.value)} />
+      <div role="listbox" aria-label={`按${label}筛选`}
+        className="mt-1 flex max-h-64 flex-col overflow-y-auto">
+        {hit.map((option) => <button type="button" key={option.value}
+          role="option" aria-selected={option.value === value}
+          className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => { onPick(option.value); close(); }}>
+          <span className="min-w-0 truncate">{option.label}</span>
+          {option.value === value && <Check aria-hidden className="size-3.5 shrink-0 text-ink" />}
+        </button>)}
+        {!hit.length && <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的选项</p>}
+      </div>
+    </div>}
+  </HeaderFilter>;
 }

@@ -10,7 +10,8 @@
  *   npx tsx scripts/visual-scenes.ts --compare <目录A> <目录B>
  * 先 `cd web && npm run build`,截的是构建产物里的 CSS(和线上同一份)。
  * 边界:静态标记,没有 hover/弹层/滚动状态;字体退回系统字体(file:// 下
- * 取不到 woff2)——前后一致,比对仍成立。
+ * 取不到 woff2)——前后一致,比对仍成立。要登录态/点击交互的页面走查
+ * (登录墙、页签切换、展开/弹层),用 scripts/ui-walkthrough.ts。
  */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";

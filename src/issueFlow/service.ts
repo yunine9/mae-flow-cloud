@@ -250,6 +250,7 @@ import {
   ISSUE_CODE_ORIGIN_SINCE,
   ISSUE_CODE_ORIGIN_THRESHOLD_DEFAULT,
   readCodeOriginSnapshot,
+  type IssueCodeOriginRepoOk,
   type IssueCodeOriginSnapshot,
   type IssueOnceGeneratedRepoRow,
   type IssueOnceGeneratedSession,
@@ -1377,6 +1378,26 @@ export class IssueFlowService {
       if (state === "pending") pending += 1;
       if (state === "unsupported") unsupported += 1;
       if (state === "no_code") noCode += 1;
+      if (state !== "ok" || !snapshot) {
+        sessions.push({
+          id: live.id,
+          title: live.state.title,
+          module: this.currentModule(live.state)?.name || live.state.module?.trim() || "未分类",
+          reporter: live.state.reporter?.trim() || live.state.account,
+          concluded_at: concludedAt,
+          reviews: axes?.reviews ?? 0,
+          localization_pass: axes?.localization_pass ?? false,
+          verify_pass: axes?.repair_pass ?? false,
+          solved_pass: axes ? axes.localization_pass && axes.repair_pass : false,
+          state,
+        });
+        continue;
+      }
+      // 可得且有工作行的仓,单趟筛出供两处消费:per_session 明细与
+      // 全局 by_repo 聚合——同一把守卫,不会各漂各的。
+      const repoLines = snapshot.by_repo.filter((repo): repo is IssueCodeOriginRepoOk =>
+        !("unavailable" in repo)
+        && repo.lines.first + repo.lines.rework + repo.lines.external > 0);
       sessions.push({
         id: live.id,
         title: live.state.title,
@@ -1388,7 +1409,7 @@ export class IssueFlowService {
         verify_pass: axes?.repair_pass ?? false,
         solved_pass: axes ? axes.localization_pass && axes.repair_pass : false,
         state,
-        ...(state === "ok" && aggregate ? {
+        ...(aggregate ? {
           share: aggregate.share!,
           pass: aggregate.pass === true,
           lines: {
@@ -1396,12 +1417,13 @@ export class IssueFlowService {
             rework: aggregate.rework,
             external: aggregate.external,
           },
+          by_repo: repoLines.map((repo) => ({
+            repo: repo.repo, first: repo.lines.first,
+            rework: repo.lines.rework, external: repo.lines.external,
+          })),
         } : {}),
       });
-      if (state !== "ok" || !snapshot) continue;
-      for (const repo of snapshot.by_repo) {
-        if ("unavailable" in repo) continue;
-        if (repo.lines.first + repo.lines.rework + repo.lines.external <= 0) continue;
+      for (const repo of repoLines) {
         const bucket = repoMap.get(repo.repo) ?? {
           repo: repo.repo, sessions: 0,
           first: 0, rework: 0, external: 0, total: 0, share: null,
