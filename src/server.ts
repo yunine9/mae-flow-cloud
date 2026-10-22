@@ -124,6 +124,7 @@ import {
   readArtifactFileDiffAsync,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
+import { readTaskDemoSnapshot } from "./taskDemoSnapshot.ts";
 import {
   cookieValue,
   type AuthUser,
@@ -2417,6 +2418,16 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
+        if (parts.length === 3 && parts[2] === "demo-snapshot") {
+          if (!viewer) return json(response, 401, { error: "请先以管理员身份登录" });
+          if (viewer.role !== "admin") return json(response, 403, { error: "只有管理员可以创建演示副本" });
+          if (request.method !== "GET") {
+            response.setHeader("allow", "GET");
+            return json(response, 405, { error: "演示来源只接受读取" });
+          }
+          response.setHeader("cache-control", "no-store");
+          return json(response, 200, await readTaskDemoSnapshot(service, id));
+        }
         const correction = request.method !== "GET" ? storedTask(service, id)?.ticket_correction : undefined;
         if (request.method !== "GET" && parts[2] !== "correct-ticket"
             && correction && correction.state !== "completed" && !correction.cleanup_only) {

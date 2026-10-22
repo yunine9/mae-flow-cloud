@@ -306,6 +306,8 @@ export function ConversationStream({
   onLocateAnnotation,
   onOpenReview,
   onOpenSteps,
+  highlightId,
+  highlightCaption,
 }: {
   task: TaskSummary;
   items: readonly ConversationItem[];
@@ -339,6 +341,9 @@ export function ConversationStream({
   onLocateAnnotation: (id: string) => void;
   onOpenReview: (ids: string[]) => void;
   onOpenSteps: () => void;
+  /** 只读演示定位，不改变会话内容或真实状态。 */
+  highlightId?: string;
+  highlightCaption?: string;
 }) {
   const [limit, setLimit] = useState(INITIAL_LIMIT);
   const [hasNew, setHasNew] = useState(false);
@@ -373,7 +378,9 @@ export function ConversationStream({
   const chronological = pinnedCard
     ? visible.filter((item) => !(item.kind === "card" && item.waiting_id === waiting.waiting_id))
     : visible;
-  const hidden = Math.max(0, chronological.length - limit);
+  const highlightedIndex = highlightId ? chronological.findIndex(item => item.id === highlightId) : -1;
+  const hidden = Math.max(0, Math.min(chronological.length - limit,
+    highlightedIndex >= 0 ? highlightedIndex : Infinity));
   const shown = hidden ? chronological.slice(hidden) : chronological;
 
   // 新条目到达:贴底就跟着滚,离开底部就亮"有新消息",不抢人正在读的位置。
@@ -392,6 +399,18 @@ export function ConversationStream({
     }
     lastKey.current = streamKey;
   }, [streamKey, loaded]);
+
+  useEffect(() => {
+    if (!highlightId || !loaded) return;
+    pinned.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      const target = document.getElementById(`conv-${highlightId}`);
+      const container = box.current;
+      if (target && container) container.scrollTo({ top: container.scrollTop
+        + target.getBoundingClientRect().top - container.getBoundingClientRect().top - 14, behavior: "instant" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [highlightId, loaded, highlightedIndex]);
 
   function scrollToEnd() {
     const node = box.current;
@@ -472,13 +491,14 @@ export function ConversationStream({
       : options.who === "system" ? "⚙"
       : options.who === "you" ? "你" : initial(options.name);
     return (
-      <article className={CONV.msg} key={options.key}
+      <article className={cn(CONV.msg, options.key === highlightId && "task-demo-message-highlight")} key={options.key}
         id={`conv-${options.key}`}
         data-annotation-ids={options.ids?.join(" ") || undefined}>
         <Avatar size="sm" aria-hidden className="after:hidden">
           <AvatarFallback className={`rounded-[7px] text-[11px] font-bold text-white ${CONV_AVATAR_TONE[options.who]}`}>{avatar}</AvatarFallback>
         </Avatar>
         <div className={CONV.body}>
+          {options.key === highlightId && highlightCaption && <strong className="task-demo-message-tag">{highlightCaption}</strong>}
           <div className={CONV.who}>
             <b className={CONV.whoName}>{options.name}</b>
             {options.tag}
@@ -505,7 +525,7 @@ export function ConversationStream({
       case "turn": {
         // 交接语摊开(最后一段全文,此前的折叠);过程话默认折成一行;举卡前那段
         // 与当前卡的决策背景重复的不再渲。回合全是过程话时把最后一段当交接语。
-        const cardContext = pinnedCard ? (waiting?.context ?? "") : "";
+        const cardContext = pinnedCard && item.id !== highlightId ? (waiting?.context ?? "") : "";
         const handoffs = item.texts.filter((text) => text.role !== "narration"
           && !(cardContext && sameSpeech(text.text, cardContext)));
         const echoedByCard = item.texts.some((text) => text.role !== "narration"
