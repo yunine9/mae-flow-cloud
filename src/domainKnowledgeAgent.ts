@@ -251,11 +251,10 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       ? new Map<string, string>() : undefined;
     // 写作重试恢复同一会话；每次评审独立读取当前文稿，不继承作者的判断。
     const sessionRoot = step ? join(runRoot, "steps", step.id, reviewing ? `review-${step.review_attempts}` : "writer") : join(runRoot, "coordinator");
-    const agentDir = join(sessionRoot, "agent"); mkdirSync(agentDir, { recursive: true });
-    writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
     let result: SkillWorkResult | undefined;
     let session: CloudSession | undefined;
-    let rejectedResults = 0;
+    const rejectedResults = new Map<string, number>();
+    let lastToolError: { tool: string; detail: string } | undefined;
     let submissionFailure: IncompleteDomainResearch | undefined;
     const reviewedDocuments = new Map<string, string>();
     const reviewedDiagrams = new Map<string, string>();
@@ -293,15 +292,23 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
           if (reviewing) {
             if (!next.review || !next.review.feedback.trim()) throw new Error("独立评审必须提交 review.pass 和具体 feedback");
             const ids = skillWorkDocumentIds(step!, step?.candidate);
+            const missingReads = ids.filter(id => reviewedDocuments.get(id) !== fingerprint([id]));
+            const missingIds = ids.filter(id => !next.document_ids.includes(id));
+            const describe = (ids: string[]) => `共 ${ids.length} 篇：${ids.slice(0, 30).join("、")}${ids.length > 30 ? "；处理后再提交可查看剩余编号" : ""}`;
+            const gaps: string[] = [];
+            if (missingReads.length) gaps.push(`请先用 knowledge_draft read 读取当前完整正文（${describe(missingReads)}）`);
+            if (missingIds.length) gaps.push(`评审结果缺少文稿编号（${describe(missingIds)}）`);
+            if (gaps.length) throw new Error(gaps.join("\n"));
+            const diagramGaps: string[] = [];
             for (const id of ids) {
-              if (reviewedDocuments.get(id) !== fingerprint([id])) throw new Error(`请先用 knowledge_draft read 读取 ${id} 的当前完整正文，再提交评审`);
-              if (!next.document_ids.includes(id)) throw new Error(`评审结果缺少文稿 ${id}`);
               if (next.review.pass && input.turn.mode !== "discuss" && !work.state.steps.find(item => item.id === step!.id)?.readonly) {
                 const report = await checkDocumentDiagrams(id);
-                if (report.status !== "valid") throw new Error(knowledgeDiagramFeedback(id, report));
-                if (report.total && reviewedDiagrams.get(id) !== report.fingerprint) throw new Error(`请先用 knowledge_diagram_check 查看 ${id} 当前版本的实际图校验结果，再提交通过评审`);
+                if (report.status !== "valid") diagramGaps.push(knowledgeDiagramFeedback(id, report));
+                else if (report.total && reviewedDiagrams.get(id) !== report.fingerprint) diagramGaps.push(`请先用 knowledge_diagram_check 查看 ${id} 当前版本的实际图校验结果，再提交通过评审`);
               }
             }
+            if (diagramGaps.length) throw new Error(`还有 ${diagramGaps.length} 篇文稿缺少有效图校验：\n${diagramGaps.slice(0, 30).join("\n")}`);
+            next = work.recordReview(step!.id, next, fingerprint(ids));
           } else if (step) {
             if (input.turn.mode !== "revise" && step.expected_document_ids && next.document_ids.some(id => !step.expected_document_ids!.includes(id))) throw new Error("步骤结果只能引用本步骤预定文稿，新增范围请交回主会话登记");
             const liveStep = work.state.steps.find(item => item.id === step.id)!;
@@ -423,62 +430,111 @@ export async function runDomainKnowledge(input: DomainExecution, options: Domain
       return documentTool.execute(...args);
     } };
     let activity = 0;
+    const seenResults = new Set<string>();
+    const rememberToolError = (name: string, text: string, isError: boolean) => {
+      let detail: string | undefined;
+      try { const value = JSON.parse(text); if (typeof value?.error === "string") detail = value.error; } catch { /* 参数校验拒绝可能是纯文本。 */ }
+      if (!detail && isError) detail = text || "工具执行失败";
+      if (detail) lastToolError = { tool: name, detail: detail.slice(0, 4000) };
+      return detail;
+    };
     const tools = [...baseTools, guardedDraft, diagramTool, workTool, resultTool].map(tool => ({ ...tool,
-      execute: async (...args: Parameters<typeof tool.execute>) => { signal.throwIfAborted(); if (submissionFailure) return failure(submissionFailure); const response = await (tool.execute as Function)(...args); if (!response.isError) activity++; return response; },
+      execute: async (...args: Parameters<typeof tool.execute>) => {
+        signal.throwIfAborted(); if (submissionFailure) return failure(submissionFailure);
+        const response = await (tool.execute as Function)(...args);
+        const text = response.content?.filter((item: { type: string }) => item.type === "text").map((item: { text: string }) => item.text).join("\n") ?? "";
+        if (!rememberToolError(tool.name, text, response.isError === true)) {
+          // 重复回读同一内容不是新进展，不能靠它无限延长漏交结果的会话。
+          const key = createHash("sha256").update(JSON.stringify([tool.name, args[1], response.content])).digest("hex");
+          if (!seenResults.has(key)) { seenResults.add(key); activity++; }
+        }
+        return response;
+      },
     }));
     const instruction = "按本轮 Skill 执行工作，方法、步骤与文档组织由 Skill 决定。通过提供的工具读取输入、展示过程并保存结果；用 knowledge_work_result 提交本会话结果，只有主会话可以暂停整项研究。现有记录可通过 knowledge_work 读取。工具权限和参数以实际工具定义为准。需要用户审阅的规划、清单和中间文稿，由有写入权限的会话用 knowledge_work 的 save_document 保存完整 Markdown 正文，不能只说文稿已生成或把全文仅放在普通回复、data 里。需要用户确认或补充时，主会话保存 status=paused，summary 说明需要回答什么、答复后做什么，并通过 work_document_ids 或 document_ids 引用待审阅内容。收到答复后读取 human_replies 原话；continued 只是接续次数，是否确认以 human_replies 原话为准，不能把修改意见当成批准。";
-    session = await CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}-${step?.id ?? "main"}${reviewing ? `-review-${step!.review_attempts}` : ""}`, workspace: sessionRoot, agentDir,
-      resumeSession: true, excludeAgentFiles: true, provider: model.provider, model: model.model,
-      // 来源研究方法随固定 Skill 包读取；系统提示只保留平台执行约定。
-      additionalSystemInstructions: [DOMAIN_EXECUTION_INSTRUCTIONS],
-      allowedTools: tools.map(t => t.name), extraTools: tools, allowHumanQuestions: false, allowSubagents: false,
-      eventLog: new EventLog(join(sessionRoot, "events.jsonl"), event => {
-        // 参数校验可能在工具 execute 前拒绝调用，因此从驱动结果统一计数。
-        // 只限制反复提交被拒的子会话；研究耗时、正常读取不影响这个计数。
-        if (step && !result && !submissionFailure && !signal.aborted && event.kind === "tool_finished"
-            && event.payload.name === "knowledge_work_result") {
-          let rejected = event.payload.is_error === true;
-          // Pi 将正常返回的工具调用记为非异常；本工具的业务拒绝仍在 JSON.error 中。
-          if (!rejected) {
-            try { rejected = typeof JSON.parse(String(event.payload.result))?.error === "string"; }
-            catch { /* 非 JSON 的参数校验错误由 is_error 表示。 */ }
+    const currentContext = () => {
+      const currentStep = step && work.state.steps.find(item => item.id === step.id);
+      return { ...context, documents: pageRows(input.read().filter(document => !step || skillWorkDocumentIds(currentStep ?? step, currentStep?.candidate).includes(document.id)).map(documentSummary), 0, 30, "items"),
+        step: step && { ...workStepSummary(currentStep ?? step), readonly: step.readonly, instructions: step.instructions, review: step.review },
+        readonly, reviewing, work: workOverview(work.state),
+        modified_documents: pageRows(work.state.modified_document_ids ?? [], 0, 30, "ids"),
+        work_documents: pageRows((work.state.documents ?? []).map(({ id, title }) => ({ id, title })), 0, 30, "items") };
+    };
+    const recoveryPrompt = () => [
+      "本会话尚未收到 knowledge_work_result 的 saved:true。普通文字结束只表示本轮回复结束；请按已保存事实继续，不重建任务或重写已保存正文。",
+      reviewing ? "你是独立评审：读取本步骤全部预定及实际改动文稿当前正文，核对意见与依据；按图检查的具体反馈补缺。提交 summary、document_ids 和顶层 review:{pass,feedback}，不通过也保存明确反馈。"
+        : step ? "你是子步骤：工作完成后用 knowledge_work_result 提交 summary、document_ids（只读定位无文稿时为 []）及必要 data，省略 status；待处理问题交主会话，不提交 paused。"
+          : input.turn.mode === "discuss" ? "你是只读讨论主会话：按本轮问题读取已有证据，完成后用 knowledge_work_result 提交 summary、所引用的 document_ids；不修改正文或安排写作。"
+            : "你是主协调：先读取工作摘要与本轮台账，只接续未完成步骤；已保存候选按本轮方法安排独立评审，已通过且正文未变的步骤复用。本轮要求落实并通过检查后，用 knowledge_work_result 提交 summary、document_ids、work_document_ids 和 status=complete。",
+      "提交被拒时先补齐反馈中列出的缺项，再提交；确认返回 saved:true 后结束回复。漏交结果、工具参数错误和重复回复不是需要用户确认的问题，不用 paused 隐藏故障。确需外部补充来源、权限、运行条件或用户判断时，仅主会话可按真实缺口提交 paused。",
+      lastToolError ? `最近一次工具拒绝（先核对是否已解决）：${lastToolError.tool}\n${lastToolError.detail}` : "最近没有工具拒绝记录；请检查是否遗漏了结果工具调用。",
+      `当前已保存进度（完整单项与分页索引通过工具读取）：\n${JSON.stringify(currentContext())}`,
+    ].join("\n\n");
+    const createSession = async (fresh = false) => {
+      mkdirSync(sessionRoot, { recursive: true });
+      // resumeSession=false 会创建新原生记录并更新 current.json；下次服务重启继续这份新上下文。
+      const agentDir = join(sessionRoot, "agent");
+      mkdirSync(agentDir, { recursive: true });
+      writeFileSync(join(agentDir, "models.json"), JSON.stringify(model.json), { mode: 0o600 });
+      return CloudSession.create({ taskId: `${input.job.id}-${input.turn.id}-${step?.id ?? "main"}${reviewing ? `-review-${step!.review_attempts}` : ""}`, workspace: sessionRoot, agentDir,
+        resumeSession: !fresh, excludeAgentFiles: true, provider: model.provider, model: model.model,
+        // 来源研究方法随固定 Skill 包读取；系统提示只保留平台执行约定。
+        additionalSystemInstructions: [DOMAIN_EXECUTION_INSTRUCTIONS],
+        allowedTools: tools.map(t => t.name), extraTools: tools, allowHumanQuestions: false, allowSubagents: false,
+        eventLog: new EventLog(join(sessionRoot, "events.jsonl"), event => {
+          // 参数校验可能发生在 execute 前；保留真实拒绝原因，只限制同一错误的重复提交。
+          if (!result && !submissionFailure && !signal.aborted && event.kind === "tool_finished") {
+            const detail = rememberToolError(String(event.payload.name), String(event.payload.result ?? ""), event.payload.is_error === true);
+            if (step && detail && event.payload.name === "knowledge_work_result") {
+              const key = createHash("sha256").update(detail).digest("hex");
+              const count = (rejectedResults.get(key) ?? 0) + 1; rejectedResults.set(key, count);
+              if (count >= 3) {
+                submissionFailure = new IncompleteDomainResearch(`步骤 ${step.id} 因同一原因 3 次提交结果被拒绝，已停止重复提交并交回主会话；已有过程和草稿保留。最后原因：${detail.slice(0, 2000)}`);
+                // abort 等待当前工具返回；此处不能 await，防止等待自身结束。
+                void session?.abort().catch(() => undefined);
+              }
+            }
           }
-          if (rejected && ++rejectedResults >= 3) {
-            submissionFailure = new IncompleteDomainResearch(`步骤 ${step.id} 连续 3 次提交结果被拒绝，已停止重复提交并交回主会话；已有过程和草稿保留。最后原因：${String(event.payload.result ?? "结果未被接受").slice(0, 2000)}`);
-            // abort 等待当前工具返回；此处不能 await，防止等待自身结束。
-            void session?.abort().catch(() => undefined);
-          }
-        }
-        if (event.kind === "assistant_message") observe({ tool: "research_note", step_id: step?.id, review: reviewing, preview: evidencePreview(String(event.payload.text ?? "")) });
-        if (event.kind === "session_ended" && event.payload.reason === "failed") observe({ tool: "research_error", step_id: step?.id, review: reviewing,
-          preview: evidencePreview(String(event.payload.detail ?? "会话失败")) });
-      }),
-      transcript: new TranscriptStore(join(sessionRoot, "transcript.jsonl"), "main"),
-      gate: new GateService({ workspace: sessionRoot, cwd: sessionRoot, failClosed: true }), humanGate: new HumanGate(join(sessionRoot, "waiting.json")),
-      currentStep: () => step?.title ?? "执行领域知识 Skill", compactAnchor: () => JSON.stringify({ ...context, documents: pageRows(input.read().filter(document => !step || step.expected_document_ids?.includes(document.id) || step.candidate?.document_ids.includes(document.id)).map(documentSummary), 0, 30, "items"),
-        skill: { name: skill.name, digest: skill.digest, execution: executionContract, instruction: "通过 extraction_skill 先回读 SKILL.md，再按当前职责读取本步骤所需的方法、来源规则和模板" }, step: step && { ...workStepSummary(step), instructions: step.instructions, review: step.review }, reviewing,
-        readonly, work: workOverview(work.state) }),
-    });
+          if (event.kind === "assistant_message") observe({ tool: "research_note", step_id: step?.id, review: reviewing, preview: evidencePreview(String(event.payload.text ?? "")) });
+          if (event.kind === "session_ended" && event.payload.reason === "failed") observe({ tool: "research_error", step_id: step?.id, review: reviewing,
+            preview: evidencePreview(String(event.payload.detail ?? "会话失败")) });
+        }),
+        transcript: new TranscriptStore(join(sessionRoot, "transcript.jsonl"), "main"),
+        gate: new GateService({ workspace: sessionRoot, cwd: sessionRoot, failClosed: true }), humanGate: new HumanGate(join(sessionRoot, "waiting.json")),
+        currentStep: () => step?.title ?? "执行领域知识 Skill", compactAnchor: () => JSON.stringify({ ...currentContext(),
+          skill: { name: skill.name, digest: skill.digest, execution: executionContract, instruction: "通过 extraction_skill 先回读 SKILL.md，再按当前职责读取本步骤所需的方法、来源规则和模板" } }),
+      });
+    };
+    session = await createSession();
     const abort = () => { void session!.abort().catch(() => undefined); };
     signal.addEventListener("abort", abort, { once: true });
     try {
       signal.throwIfAborted(); input.update({ stage: step ? `${reviewing ? "独立评审：" : ""}${step.title}` : "执行领域知识 Skill" });
       if (input.turn.mode === "revise" && step) observe({ tool: "research_note", step_id: step.id, review: reviewing,
         preview: `${reviewing ? "开始独立评审" : step.readonly ? "开始定位与核实" : "开始修订"}：${step.title}。` });
-      let outcome = await session.start(instruction + "\n" + domainSkillMission(skill, { ...context, documents: pageRows(input.read().filter(document => !step || step.expected_document_ids?.includes(document.id) || step.candidate?.document_ids.includes(document.id)).map(documentSummary), 0, 30, "items"), step: step && { ...workStepSummary(step), instructions: step.instructions, review: step.review }, readonly, reviewing, work: workOverview(work.state) }));
-      let idle = 0, observed = 0;
+      let outcome = await session.start(instruction + "\n" + domainSkillMission(skill, currentContext()));
+      let idle = 0, observed = 0, recovered = false;
       while (!result && !submissionFailure && outcome.status === "turn_finished") {
         signal.throwIfAborted(); idle = activity === observed ? idle + 1 : 0; observed = activity;
-        if (idle >= 3) break;
-        outcome = await session.startResume(step
-          ? "本步骤结果尚未保存。请继续按 Skill 处理并调用 knowledge_work_result，省略 status 或填写 complete。只读核查无知识文稿时 document_ids 填 []；核查未通过也应保存 review:{pass:false,feedback}。需要补充或调整的内容写入结论交回主会话，不要提交 paused 或用普通回复代替保存。"
-          : "执行结果尚未保存。请继续按 Skill 处理；完成后调用 knowledge_work_result，需要用户接续时保存 paused 结果。不要把普通回复当作已完成。");
+        if (idle >= 3) {
+          if (recovered) break;
+          recovered = true; idle = 0;
+          // 仅重建对话上下文；同一任务、方法、候选与步骤记录全部保留。
+          session.dispose(); readVersions?.clear(); reviewedDocuments.clear(); reviewedDiagrams.clear(); seenResults.clear();
+          observe({ tool: "research_note", step_id: step?.id, review: reviewing, preview: "结果尚未提交，正在依据已保存进度恢复会话；已有文稿和完成步骤保留。" });
+          session = await createSession(true);
+          signal.throwIfAborted();
+          outcome = await session.start(instruction + "\n" + recoveryPrompt() + "\n" + domainSkillMission(skill, currentContext()));
+        } else outcome = await session.startResume(recoveryPrompt());
       }
       signal.throwIfAborted();
       if (submissionFailure) throw submissionFailure;
-      if (!result) throw new IncompleteDomainResearch(`Skill 未保存执行结果，过程和草稿已保留：${outcome.detail ?? outcome.reason ?? outcome.status}`);
+      if (!result) throw new IncompleteDomainResearch(`执行结果尚未提交，已有过程和草稿已保留，可从原任务接续。${outcome.status === "turn_finished" ? "已根据保存进度补交并恢复一次会话，仍未收到有效结果。" : `会话中断：${outcome.detail ?? outcome.reason ?? outcome.status}。`}${lastToolError ? `最后工具反馈（${lastToolError.tool}）：${lastToolError.detail}` : "模型结束了回复，但未调用 knowledge_work_result 保存结果。"}`);
       writeFileSync(join(sessionRoot, "result.json"), JSON.stringify(result), { mode: 0o600 }); return result;
     } catch (error) {
+      signal.throwIfAborted();
+      // 结构化提交已持久化，最后的普通文字回复掉线不应撤销已接受的结果。
+      if (result) return result;
       throw submissionFailure ?? error;
     } finally { signal.removeEventListener("abort", abort); session.dispose(); }
   };

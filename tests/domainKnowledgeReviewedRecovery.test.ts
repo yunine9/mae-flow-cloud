@@ -143,3 +143,114 @@ test("真实 Pi：三次评审退回后再次执行也不补预算，任务明�
     assert.equal(f.model.requests.length, script.length, "再次run不会触发第四轮写作或评审");
   } finally { await f.close(); }
 });
+
+test("真实 Pi：作者、独立评审和主协调仅文字结束后，按当前进度补交结果且正文只保存一次", { timeout: 30_000 }, async () => {
+  const content = "# 取消规则\n已结算订单取消须冲正，失败时人工核对。";
+  const script: Scene[] = [...setupPlan(), plan(), run(), save(content), text("作者已写好文稿，但忘记提交候选")];
+  const writerResume = script.length;
+  script.push(submit(), text(), read(), text("已独立核对正文，但忘记保存评审判断"));
+  const reviewResume = script.length;
+  script.push(verdict(true, "已回读正文，结算前提和失败处理与来源一致"), text(), text("所有文稿已完成，但主协调尚未提交结果"));
+  const coordinatorResume = script.length;
+  script.push(finish(), text());
+  const f = await fixture(script);
+  try {
+    await f.settled(); const done = f.service().get(f.job.id);
+    assert.equal(done.status, "done", done.error);
+    assert.equal(done.turns.length, 1); assert.equal(done.turns[0].id, f.job.turns[0].id);
+    assert.equal(done.documents.length, 1); assert.equal(done.documents[0].content, content); assert.equal(done.documents[0].revision, 1);
+    assert.equal(f.work().steps[0].attempts, 1); assert.equal(f.work().steps[0].review_attempts, 1);
+    assert.equal(f.work().steps[0].result?.review?.pass, true);
+    for (const [index, role] of [[writerResume, "子步骤"], [reviewResume, "独立评审"], [coordinatorResume, "主协调"]] as const) {
+      const request = raw(f.model.requests[index]);
+      assert.match(request, new RegExp(`你是${role}`));
+      assert.match(request, /当前已保存进度/); assert.match(request, /knowledge_work_result/);
+      assert.match(request, /cancel/);
+    }
+    for (const path of ["steps/cancel/writer", "steps/cancel/review-1", "coordinator"]) {
+      const recorded = events(join(f.root, path, "events.jsonl"));
+      assert.equal(recorded.filter(event => event.kind === "session_started").length, 2, `${path} 只补交一次`);
+      assert.ok(recorded.some(event => event.kind === "turn_finished" && event.payload.reason === "end_turn"));
+    }
+    const writer = events(join(f.root, "steps", "cancel", "writer", "events.jsonl"));
+    assert.equal(writer.filter(event => event.kind === "tool_requested" && event.payload.name === "knowledge_draft" && event.payload.input?.action === "save").length, 1);
+    assert.equal(f.model.requests.length, script.length);
+  } finally { await f.close(); }
+});
+
+test("真实 Pi：连续无进展后重建一次干净对话，从持久记录补交而不重做任务", { timeout: 30_000 }, async () => {
+  let held = false, release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const content = "# 取消规则\n已结算订单取消须冲正，失败时人工核对。";
+  const script: Scene[] = [...setupPlan(), plan(), run(), save(content, "AUTHOR_PRIVATE_NOTE"), submit(), text(),
+    read(), verdict(true, "已回读正文与来源，通过"), text(), text("COORDINATOR_STALLED_PRIVATE_NOTE")];
+  // 第一次正常结束前已有工具进展；其后三次只重复回复才重建对话。
+  script.push(text("重复结束一"), text("重复结束二"), text("重复结束三"));
+  const freshRequest = script.length;
+  script.push(tool("knowledge_work", { action: "read", id: "cancel" }, "FRESH_COORDINATOR_PRIVATE_NOTE"),
+    tool("knowledge_work", { action: "read_document", id: "full-plan" }), read());
+  const interruptedFreshReply = script.length;
+  script.push(text("干净会话已回读原记录，最后回复尚未返回"));
+  const restoredRequest = script.length;
+  script.push(finish(), text());
+  const f = await fixture(script, { beforeScene: async ({ index }) => { if (index === interruptedFreshReply) { held = true; await hold; } } });
+  try {
+    await until(() => held, () => raw({ status: f.service().get(f.job.id).status, requests: f.model.requests.length }));
+    await f.service().shutdown(); release();
+    assert.equal(f.service().get(f.job.id).status, "queued");
+    f.restart(); await f.settled(); const done = f.service().get(f.job.id);
+    assert.equal(done.status, "done", done.error); assert.equal(done.turns.length, 1); assert.equal(done.turns[0].id, f.job.turns[0].id);
+    assert.equal(done.documents.length, 1); assert.equal(done.documents[0].revision, 1); assert.equal(done.documents[0].content, content);
+    assert.equal(f.work().steps[0].attempts, 1); assert.equal(f.work().steps[0].review_attempts, 1);
+    assert.deepEqual(f.work().plan, { document_ids: ["cancel"], work_document_id: "full-plan" });
+    assert.match(raw(f.model.requests[freshRequest - 1]), /COORDINATOR_STALLED_PRIVATE_NOTE/, "重建前原对话仍有私有回复");
+    const fresh = raw(f.model.requests[freshRequest]);
+    assert.doesNotMatch(fresh, /COORDINATOR_PRIVATE_NOTE|COORDINATOR_STALLED_PRIVATE_NOTE|AUTHOR_PRIVATE_NOTE/, "新对话不继承旧对话私有内容");
+    assert.match(fresh, /当前已保存进度/); assert.match(fresh, /full-plan/);
+    const restored = raw(f.model.requests[restoredRequest]);
+    assert.match(restored, /FRESH_COORDINATOR_PRIVATE_NOTE/, "重启恢复已经重建的干净会话及其新进度");
+    assert.doesNotMatch(restored, /COORDINATOR_STALLED_PRIVATE_NOTE|AUTHOR_PRIVATE_NOTE|"COORDINATOR_PRIVATE_NOTE"/, "重启不能倒回重建前的旧会话");
+    const originalDigest = raw(f.model.requests[0]).match(/方法版本：reviewed-recovery@([a-f0-9]+)/)?.[1];
+    assert.ok(originalDigest); assert.match(fresh, new RegExp(`方法版本：reviewed-recovery@${originalDigest}`));
+    assert.equal(done.turns[0].skill?.digest, originalDigest);
+    const coordinator = events(join(f.root, "coordinator", "events.jsonl"));
+    assert.equal(coordinator.filter(event => event.kind === "session_started" && event.payload.resume === false).length, 2, "只有原开局和一次干净重建");
+    assert.equal(coordinator.filter(event => event.kind === "tool_requested" && event.payload.name === "knowledge_work" && event.payload.input?.action === "schedule").length, 1);
+    assert.ok(coordinator.some(event => event.kind === "tool_requested" && event.payload.name === "knowledge_work" && event.payload.input?.action === "read" && event.payload.input?.id === "cancel"));
+    const writer = events(join(f.root, "steps", "cancel", "writer", "events.jsonl"));
+    assert.equal(writer.filter(event => event.kind === "tool_requested" && event.payload.name === "knowledge_draft" && event.payload.input?.action === "save").length, 1);
+    assert.equal(events(join(f.root, "steps", "cancel", "review-1", "events.jsonl")).filter(event => event.kind === "session_started").length, 1);
+    assert.equal(done.evidence.filter(event => String(event.preview).includes("正在依据已保存进度恢复会话")).length, 1);
+    assert.equal(f.model.requests.length, script.length);
+  } finally { release(); await f.close(); }
+});
+
+test("真实 Pi：独立评审已提交后服务重启，直接复用评审而不重复写作或核查", { timeout: 30_000 }, async () => {
+  let held = false, release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const script: Scene[] = [...setupPlan(), plan(), run(), save("# 取消规则\n已结算订单取消须冲正，失败时人工核对。"), submit(), text(),
+    read(), verdict(true, "已回读当前正文及来源，通过")];
+  const interruptedReply = script.length;
+  script.push(text("评审结果已提交，但最终回复尚未返回"), run(), finish(), text());
+  const f = await fixture(script, { beforeScene: async ({ index }) => { if (index === interruptedReply) { held = true; await hold; } } });
+  try {
+    await until(() => held, () => raw({ status: f.service().get(f.job.id).status, requests: f.model.requests.length }));
+    const submitted = f.work().steps[0];
+    assert.equal(submitted.review_submission?.result.review?.pass, true);
+    assert.equal(submitted.review_attempts, 1); assert.equal(submitted.status, "running"); assert.equal(submitted.result, undefined);
+    assert.equal(existsSync(join(f.root, "steps", "cancel", "review-1", "result.json")), false, "评审结果先于最后回复持久化");
+    const skill = f.service().get(f.job.id).turns[0].skill;
+    await f.service().shutdown(); release();
+    assert.equal(f.service().get(f.job.id).status, "queued");
+    f.restart(); await f.settled();
+    const done = f.service().get(f.job.id), step = f.work().steps[0];
+    assert.equal(done.status, "done", done.error); assert.equal(done.turns.length, 1); assert.equal(done.turns[0].id, f.job.turns[0].id);
+    assert.deepEqual(done.turns[0].skill, skill); assert.equal(done.documents[0].revision, 1);
+    assert.equal(step.attempts, 1); assert.equal(step.review_attempts, 1); assert.equal(step.result?.review?.pass, true);
+    assert.equal(step.reviewed_fingerprint, submitted.review_submission?.fingerprint);
+    assert.equal(events(join(f.root, "steps", "cancel", "writer", "events.jsonl")).filter(event => event.kind === "session_started").length, 1);
+    assert.equal(events(join(f.root, "steps", "cancel", "review-1", "events.jsonl")).filter(event => event.kind === "session_started").length, 1);
+    assert.equal(existsSync(join(f.root, "steps", "cancel", "review-2")), false);
+    assert.equal(f.model.requests.length, script.length);
+  } finally { release(); await f.close(); }
+});

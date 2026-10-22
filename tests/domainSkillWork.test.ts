@@ -248,6 +248,141 @@ test("提交工具已保存候选后结束回复失败，不重复写作，仍�
   } finally { rmSync(f.dir, { recursive: true, force: true }); }
 });
 
+test("独立评审提交成功后结束回复失败，复用已落盘结论且不重复评审", async () => {
+  const f = reviewedFixture(); let reviews = 0;
+  const result: SkillWorkResult = { summary: "已核对本组正文及来源", document_ids: ["guide"],
+    review: { pass: true, feedback: "适用条件与来源一致" }, data: { evidence: "original-source" } };
+  try {
+    const completed = await f.work.run("guide", async () => candidate(), f.signal, {
+      fingerprint: () => "version-1", review: async () => {
+        reviews++;
+        f.work.recordReview("guide", result, "version-1");
+        assert.deepEqual(JSON.parse(readFileSync(f.file, "utf8")).steps[0].review_submission, { result, fingerprint: "version-1" });
+        throw new Error("最终回复连接中断");
+      },
+    });
+    assert.equal(reviews, 1); assert.deepEqual(completed.review, result.review);
+    assert.deepEqual(completed.data, candidate().data, "独立评审另存完整结果，不覆盖写作者的证据索引");
+    assert.equal(f.work.state.steps[0].review_attempts, 1); assert.equal(f.work.state.steps[0].status, "done");
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("第三次独立评审提交通过后重启，恢复当前版本结果且不补预算", async () => {
+  const f = reviewedFixture(), controller = new AbortController(); let reviews = 0, writes = 0;
+  try {
+    await assert.rejects(f.work.run("guide", async () => { writes++; return candidate(); }, controller.signal, {
+      fingerprint: () => "version-1", review: async () => {
+        reviews++;
+        if (reviews < 3) throw new Error("模型连接中断，尚未提交评审");
+        f.work.recordReview("guide", { ...candidate(), review: { pass: true, feedback: "第三次已读取并核对当前正文" } }, "version-1");
+        controller.abort(); throw new Error("服务停止");
+      },
+    }));
+    const state = JSON.parse(readFileSync(f.file, "utf8")); state.steps[0].status = "running";
+    writeFileSync(f.file, JSON.stringify(state));
+    const restored = new DomainSkillWork(f.file, "skill");
+    const completed = await restored.run("guide", async () => assert.fail("不能重复写作"), f.signal, {
+      fingerprint: () => "version-1", validate: async () => undefined,
+      review: async () => assert.fail("已提交通过结果，不能重复评审"),
+    });
+    assert.equal(completed.review?.pass, true); assert.equal(writes, 1); assert.equal(reviews, 3);
+    assert.equal(restored.state.steps[0].review_attempts, 3); assert.equal(restored.state.steps[0].review_budget_start ?? 0, 0);
+    restored.finish({ summary: "当前版本完成", document_ids: ["guide"] }, () => "version-1");
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("评审退回提交后重启，把已保存反馈交作者修订而不重复评审旧稿", async () => {
+  const f = reviewedFixture(), controller = new AbortController(); let version = "version-1", reviews = 0;
+  const feedback = "R1：取消规则缺少结算状态前提";
+  try {
+    await assert.rejects(f.work.run("guide", async () => candidate(), controller.signal, {
+      fingerprint: () => version, review: async () => {
+        reviews++;
+        f.work.recordReview("guide", { ...candidate(), review: { pass: false, feedback } }, version);
+        controller.abort(); throw new Error("服务停止");
+      },
+    }));
+    const restored = new DomainSkillWork(f.file, "skill");
+    const completed = await restored.run("guide", async current => {
+      assert.equal(current.error, feedback); assert.equal(current.candidate?.review?.feedback, feedback);
+      version = "version-2"; return candidate();
+    }, f.signal, { fingerprint: () => version, review: async current => {
+      reviews++; assert.equal(current.review_submission, undefined, "新候选不继承旧评审结果");
+      return { pass: true, feedback: "已核对补充的结算前提" };
+    } });
+    assert.equal(completed.review?.pass, true); assert.equal(reviews, 2);
+    assert.equal(restored.state.steps[0].attempts, 2); assert.equal(restored.state.steps[0].review_attempts, 2);
+    assert.equal(restored.state.steps[0].reviewed_fingerprint, "version-2");
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+for (const pass of [true, false]) test(`已提交的${pass ? "通过" : "退回"}评审重启后正文变化，只核对新版本且不采用旧判断`, async () => {
+  const f = reviewedFixture(), controller = new AbortController(); let version = "version-1";
+  try {
+    await assert.rejects(f.work.run("guide", async () => candidate(), controller.signal, {
+      fingerprint: () => version, review: async () => {
+        f.work.recordReview("guide", { ...candidate(), review: { pass, feedback: "旧正文的评审判断" } }, version);
+        controller.abort(); throw new Error("服务停止");
+      },
+    }));
+    version = "version-2";
+    const restored = new DomainSkillWork(f.file, "skill");
+    const completed = await restored.run("guide", async () => assert.fail("新正文已经保存，不能依据旧评审覆盖"), f.signal, {
+      fingerprint: () => version, review: async current => {
+        assert.equal(current.review_submission, undefined);
+        return { pass: true, feedback: "独立核对新版本" };
+      },
+    });
+    assert.equal(completed.review?.feedback, "独立核对新版本"); assert.equal(restored.state.steps[0].review_attempts, 2);
+    assert.equal(restored.state.steps[0].attempts, 1); assert.equal(restored.state.steps[0].reviewed_fingerprint, version);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("独立评审提交必须覆盖实际写入、匹配评审版本并处于有效评审会话", async () => {
+  const f = reviewedFixture(), controller = new AbortController(); let version = "version-1";
+  const result = { ...candidate(), review: { pass: true, feedback: "已核对当前正文" } };
+  try {
+    assert.throws(() => f.work.recordReview("guide", result, version), /不在提交独立评审/);
+    await assert.rejects(f.work.run("guide", async () => {
+      assert.throws(() => f.work.recordReview("guide", result, version), /不在提交独立评审/);
+      f.work.recordDocumentWrite("guide", "related"); return candidate();
+    }, controller.signal, { fingerprint: () => version, review: async () => {
+      assert.throws(() => f.work.recordReview("guide", result, version), /全部预定及实际改动/);
+      const complete = { ...result, document_ids: ["guide", "related"] };
+      assert.throws(() => f.work.recordReview("guide", complete, "old-version"), /文稿已变化/);
+      version = "version-2";
+      assert.throws(() => f.work.recordReview("guide", complete, "version-1"), /文稿已变化/);
+      assert.throws(() => f.work.recordReview("guide", complete, "version-2"), /文稿已变化/, "不能用最新指纹冒充已经读取了新版本");
+      controller.abort(); assert.throws(() => f.work.recordReview("guide", complete, version));
+      throw new Error("停止本用例");
+    } }));
+    assert.equal(f.work.state.steps[0].review_submission, undefined); assert.equal(f.work.state.steps[0].result, undefined);
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
+test("恢复已提交评审时校验期间正文变化，不把旧结论绑定到新版本", async () => {
+  const f = reviewedFixture(), controller = new AbortController(); let version = "version-1";
+  try {
+    await assert.rejects(f.work.run("guide", async () => candidate(), controller.signal, {
+      fingerprint: () => version, review: async () => {
+        f.work.recordReview("guide", { ...candidate(), review: { pass: true, feedback: "旧版本核对通过" } }, version);
+        controller.abort(); throw new Error("服务停止");
+      },
+    }));
+    const restored = new DomainSkillWork(f.file, "skill"); let reviews = 0;
+    const result = await restored.run("guide", async () => assert.fail("不重写已有正文"), f.signal, {
+      fingerprint: () => version,
+      validate: async () => { version = "version-2"; return undefined; },
+      review: async current => {
+        reviews++; assert.equal(current.review_submission, undefined);
+        return { pass: true, feedback: "新版本重新核对通过" };
+      },
+    });
+    assert.equal(reviews, 1); assert.equal(result.review?.feedback, "新版本重新核对通过");
+    assert.equal(restored.state.steps[0].reviewed_fingerprint, "version-2");
+  } finally { rmSync(f.dir, { recursive: true, force: true }); }
+});
+
 test("评审中断后重启复用候选文稿，预算和成功结果都保留", async () => {
   const f = reviewedFixture(), controller = new AbortController(); let writes = 0, reviews = 0;
   try {
