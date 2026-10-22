@@ -34,6 +34,8 @@ export interface TaskDemoControls {
   onExit: () => void;
   backLabel?: string;
   suggestedMessageId?: string;
+  suggestedCardId?: string;
+  focusKey?: number;
 }
 
 export interface TaskDemoPreviewInput {

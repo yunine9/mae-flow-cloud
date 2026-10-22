@@ -12,7 +12,7 @@ import { DeliveryFileList } from "./DeliveryFileList";
  * 所有事实来自 /conversation 投影:这里不推断状态,只排版。
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ClampedText } from "./ClampedText";
 import { Markdown } from "./markdown";
 import { atBottom } from "./follow";
@@ -308,6 +308,8 @@ export function ConversationStream({
   onOpenSteps,
   highlightId,
   highlightCaption,
+  highlightCardId,
+  highlightFocusKey,
 }: {
   task: TaskSummary;
   items: readonly ConversationItem[];
@@ -344,6 +346,9 @@ export function ConversationStream({
   /** 只读演示定位，不改变会话内容或真实状态。 */
   highlightId?: string;
   highlightCaption?: string;
+  /** 演示中把互动副本放回原确认卡的位置，与当时回复同时定位。 */
+  highlightCardId?: string;
+  highlightFocusKey?: number;
 }) {
   const [limit, setLimit] = useState(INITIAL_LIMIT);
   const [hasNew, setHasNew] = useState(false);
@@ -369,18 +374,24 @@ export function ConversationStream({
     return map;
   }, [items]);
   const waiting = task.status === "waiting_for_human" ? task.waiting : undefined;
-  // 当前这张卡永远钉在流的末尾:它举卡之后人还会提批注、插话,按时间排它会
+  // 普通工作台把当前卡钉在流末尾:它举卡之后人还会提批注、插话,按时间排它会
   // 被埋在这些条目上面,人得往回翻才找得到选项(fixture 实测)。时间线上
   // 它原来的位置不重复渲。线程视图也钉:卡的提交区经 portal 挂在输入框里,
   // 卡不渲输入框就只剩一句"等你在上面点一个选项"——用户 2026-09-05 点了
   // 「看处理记录」后实锤"说给 Agent 栏没了"。
-  const pinnedCard = !!waiting && !!currentCard;
-  const chronological = pinnedCard
-    ? visible.filter((item) => !(item.kind === "card" && item.waiting_id === waiting.waiting_id))
+  // 演示例外：互动卡放回被选中的真实卡位置，避免原回复和卡相隔整段历史。
+  const inlineDemoCard = !!currentCard && !!highlightCardId
+    && visible.some(item => item.kind === "card" && item.id === highlightCardId);
+  const pinnedCard = !!waiting && !!currentCard && !inlineDemoCard;
+  const chronological = waiting && currentCard
+    ? visible.filter((item) => !(item.kind === "card" && item.waiting_id === waiting.waiting_id && item.id !== highlightCardId))
     : visible;
   const highlightedIndex = highlightId ? chronological.findIndex(item => item.id === highlightId) : -1;
+  const highlightedCardIndex = highlightCardId ? chronological.findIndex(item => item.id === highlightCardId) : -1;
+  const demoFocus = Boolean(highlightId || highlightCardId);
   const hidden = Math.max(0, Math.min(chronological.length - limit,
-    highlightedIndex >= 0 ? highlightedIndex : Infinity));
+    highlightedIndex >= 0 ? highlightedIndex : Infinity,
+    highlightedCardIndex >= 0 ? highlightedCardIndex : Infinity));
   const shown = hidden ? chronological.slice(hidden) : chronological;
 
   // 新条目到达:贴底就跟着滚,离开底部就亮"有新消息",不抢人正在读的位置。
@@ -388,6 +399,7 @@ export function ConversationStream({
   useEffect(() => {
     const node = box.current;
     if (!node) return;
+    if (demoFocus) { pinned.current = false; lastKey.current = streamKey; setHasNew(false); return; }
     if (pinned.current || !lastKey.current) {
       node.scrollTop = node.scrollHeight;
       const frame = window.requestAnimationFrame(() => { node.scrollTop = node.scrollHeight; });
@@ -398,19 +410,46 @@ export function ConversationStream({
       setHasNew(true);
     }
     lastKey.current = streamKey;
-  }, [streamKey, loaded]);
+  }, [streamKey, loaded, demoFocus]);
 
-  useEffect(() => {
-    if (!highlightId || !loaded) return;
+  useLayoutEffect(() => {
+    const container = box.current;
+    if (!demoFocus || !loaded || !container) return;
     pinned.current = false;
-    const frame = window.requestAnimationFrame(() => {
-      const target = document.getElementById(`conv-${highlightId}`);
-      const container = box.current;
-      if (target && container) container.scrollTo({ top: container.scrollTop
+    let active = true;
+    let frame = 0;
+    const align = () => {
+      if (!active) return;
+      const target = (highlightId && document.getElementById(`conv-${highlightId}`))
+        || (highlightCardId && document.getElementById(`conv-${highlightCardId}`));
+      if (target && container.contains(target)) container.scrollTo({ top: container.scrollTop
         + target.getBoundingClientRect().top - container.getBoundingClientRect().top - 14, behavior: "instant" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [highlightId, loaded, highlightedIndex]);
+    };
+    const schedule = () => { align(); window.cancelAnimationFrame(frame); frame = window.requestAnimationFrame(align); };
+    // Markdown、图片和确认卡异步展开时保持这一轮的位置；用户开始操作后就停止跟随。
+    const release = () => { active = false; window.cancelAnimationFrame(frame); };
+    const releaseOnKey = (event: KeyboardEvent) => {
+      if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) release();
+    };
+    container.addEventListener("wheel", release, { passive: true });
+    container.addEventListener("touchstart", release, { passive: true });
+    container.addEventListener("pointerdown", release, { passive: true });
+    container.addEventListener("keydown", releaseOnKey);
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
+    observer?.observe(container);
+    for (const child of container.children) observer?.observe(child);
+    const mutations = new MutationObserver(schedule);
+    mutations.observe(container, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ["style", "class", "src"], characterData: true });
+    schedule();
+    return () => {
+      release(); observer?.disconnect(); mutations.disconnect();
+      container.removeEventListener("wheel", release);
+      container.removeEventListener("touchstart", release);
+      container.removeEventListener("pointerdown", release);
+      container.removeEventListener("keydown", releaseOnKey);
+    };
+  }, [task.id, demoFocus, highlightId, highlightCardId, highlightFocusKey, loaded, highlightedIndex, highlightedCardIndex, hidden]);
 
   function scrollToEnd() {
     const node = box.current;
@@ -435,7 +474,12 @@ export function ConversationStream({
         text: clarification ? "Agent 在追问，等你补充信息"
           : "等你决定",
         detail: join(waitedFor(waiting.created_at), actor),
-        action: { label: "跳到卡片", onClick: scrollToEnd },
+        action: { label: "跳到卡片", onClick: () => {
+          const card = highlightCardId && document.getElementById(`conv-${highlightCardId}`);
+          if (card && box.current) box.current.scrollTo({ top: box.current.scrollTop
+            + card.getBoundingClientRect().top - box.current.getBoundingClientRect().top - 14, behavior: "instant" });
+          else scrollToEnd();
+        } },
       };
     }
     if (awaitingYou > 0) {
@@ -491,7 +535,8 @@ export function ConversationStream({
       : options.who === "system" ? "⚙"
       : options.who === "you" ? "你" : initial(options.name);
     return (
-      <article className={cn(CONV.msg, options.key === highlightId && "task-demo-message-highlight")} key={options.key}
+      <article className={cn(CONV.msg, (options.key === highlightId || options.key === highlightCardId) && "task-demo-message-highlight",
+        options.key === highlightId && options.key !== highlightCardId && "task-demo-reply-highlight")} key={options.key}
         id={`conv-${options.key}`}
         data-annotation-ids={options.ids?.join(" ") || undefined}>
         <Avatar size="sm" aria-hidden className="after:hidden">
@@ -572,7 +617,7 @@ export function ConversationStream({
       }
       case "card": {
         const isCurrent = !!waiting && waiting.waiting_id === item.waiting_id;
-        if (isCurrent && currentCard && !pinnedCard) {
+        if (currentCard && ((isCurrent && !pinnedCard) || (inlineDemoCard && item.id === highlightCardId))) {
           return message({
             key: item.id, who: "agent", name: "Agent", ts: item.ts, ids: item.annotation_ids,
             tag: <em className={cn(CONV.tag, CONV.tagTone.att)}>{item.purpose === "clarification" ? "在追问" : "等你决定"}</em>,

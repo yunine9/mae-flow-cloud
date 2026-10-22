@@ -814,6 +814,11 @@ export function TaskWorkspace({
     demo.onSelectPhase(TASK_DEMO_ANALYSIS_PHASE);
   }
   useEffect(() => {
+    if (!demo) return;
+    setStreamFilter("all"); setStreamThread(undefined);
+    setDemoMessages(current => { const next = { ...current }; delete next[demo.phase]; return next; });
+  }, [demo?.phase, demo?.focusKey]);
+  useEffect(() => {
     if (!demo || !items || demoPhaseOpened.current === demo.phase) return;
     demoPhaseOpened.current = demo.phase;
     setStreamFilter("all"); setStreamThread(undefined);
@@ -2616,6 +2621,8 @@ export function TaskWorkspace({
               标签是内核的,前端改写会让记账对不上(2026-08-09 实战事故)。 */}
           <ConversationStream
             highlightId={demoMessageId}
+            highlightCardId={demo ? demo.suggestedCardId ?? (waiting ? `card-${waiting.waiting_id}` : undefined) : undefined}
+            highlightFocusKey={demo?.focusKey}
             task={task}
             items={conversation.items}
             problems={conversation.problems}

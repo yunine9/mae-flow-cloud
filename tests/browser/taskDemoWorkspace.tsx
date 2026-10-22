@@ -37,6 +37,12 @@ for (const snapshot of [preview.snapshot, ...(preview.relatedSnapshots ?? [])]) 
       preface: previous?.kind === "turn" ? previous.texts.map(text => text.text).join("\n\n") : undefined,
     };
   });
+  // 真实完成任务可能有很长的后续记录。确认卡必须从首屏之外定位，不能只在短样例里碰巧可见。
+  for (let index = 0; index < 75; index++) snapshot.conversation.items.push({
+    kind: "turn", id: `late-history-${index}`, ts: "2026-10-22T09:00:00.000Z", end_ts: "2026-10-22T09:00:00.000Z",
+    open: false, texts: [{ ts: "2026-10-22T09:00:00.000Z", truncated: false, role: "handoff", text: `后续检视记录 ${index + 1}：记录实际反馈和处理结果。` }],
+    steps: { calls: 0, agents: 0, edits: 0, errors: 0, reads: 0, bash: 0, sample: [] },
+  });
   if (snapshot.task.waiting?.step !== undefined) {
     snapshot.task.waiting.step = mainAnalysis && snapshot.task.waiting.step === "requirement_analysis"
       ? "" : stepTitles[snapshot.task.waiting.step] ?? snapshot.task.waiting.step;
@@ -79,6 +85,25 @@ async function selectPhase(phase: string, mainTask = false) {
   target!.click();
   await until(() => document.querySelector(".task-demo-guide")?.getAttribute("data-demo-phase") === phase,
     `stage guide not selected: ${phase}`);
+}
+
+async function assertFocusedRound(cardId: string, replyId: string, label: string) {
+  let bounds = "";
+  try { await until(() => {
+    const container = document.querySelector<HTMLElement>(".ws-stream");
+    const reply = document.getElementById(`conv-${replyId}`);
+    const card = document.getElementById(`conv-${cardId}`);
+    if (!container || !reply || !card || !card.querySelector(".conv-card.current")) return false;
+    const viewport = container.getBoundingClientRect();
+    const replyRect = reply.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    bounds = JSON.stringify({ viewport: [viewport.top, viewport.bottom], reply: [replyRect.top, replyRect.bottom], card: [cardRect.top, cardRect.bottom], scroll: container.scrollTop });
+    return reply.classList.contains("task-demo-message-highlight") && card.classList.contains("task-demo-message-highlight")
+      && replyRect.top >= viewport.top - 1 && replyRect.top < viewport.top + 35
+      && cardRect.top >= replyRect.bottom - 1 && cardRect.top < viewport.bottom - 45;
+  }, `${label}: historical reply and interactive confirmation card did not enter the conversation viewport together`);
+  } catch (error) { throw new Error(`${String(error)} ${bounds}`); }
+  check(document.querySelectorAll(".conv-card.current").length === 1, `${label}: rendered duplicate interactive cards`);
 }
 
 async function checkDeliveryKnowledgePanels(sourceTaskId: string) {
@@ -314,6 +339,29 @@ async function run() {
         `${phase} replaced the real confirmation question`);
       check(document.querySelector(".decision-card .waiting-context")?.textContent?.includes(expected!.preface!),
         `${phase} dropped the Agent original explanation`);
+      await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, phase);
+      const stream = document.querySelector<HTMLElement>(".ws-stream")!;
+      check(stream.scrollHeight > stream.clientHeight * 4, `${phase}: fixture did not cover long history`);
+      // 模拟演示者翻看后续记录，再点击当前阶段也应回到原确认轮次。
+      stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 500, bubbles: true }));
+      stream.scrollTop = stream.scrollHeight;
+      await pause();
+      await selectPhase(phase);
+      await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, `${phase} repeated selection`);
+      if (phase === "写设计") {
+        await click("需要我的");
+        await selectPhase(phase);
+        await assertFocusedRound(originalCard.id, `example-turn-${phases.indexOf(phase)}`, `${phase} after filter`);
+        const reply = document.getElementById(`conv-example-turn-${phases.indexOf(phase)}`)!;
+        const earlier = reply.previousElementSibling as HTMLElement;
+        const previousHeight = earlier.style.minHeight;
+        earlier.style.minHeight = "240px";
+        await pause(150);
+        await assertFocusedRound(originalCard.id, reply.id.slice(5), `${phase} after delayed layout`);
+        earlier.style.minHeight = previousHeight;
+        await pause(150);
+        await assertFocusedRound(originalCard.id, reply.id.slice(5), `${phase} after layout recovery`);
+      }
     }
     check(!button("需求拆分"), `${phase} exposed the main task decomposition tab inside the child`);
     if (phase === "已合入") checkDeliveryAnalysisLink(childSourceId!);
@@ -514,7 +562,7 @@ async function run() {
   await checkDeliveryKnowledgePanels(childSourceId!);
   await checkProductionDemoFrame(childSourceId!);
   check(errors.length === 0, errors.join("\n"));
-  return { passed: true, historicalCards: true, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
+  return { passed: true, historicalCards: true, historicalRoundFocus: true, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
 }
 
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); })

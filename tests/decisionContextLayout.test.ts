@@ -78,11 +78,11 @@ test("待闭环检视通过常驻按钮提示，但不自动接管当前工作�
 
 test("批注弹层与 Agent 决定卡互不接管，也绝不自动代选", () => {
   // 2026-09-04 起闸门是 decides(责任人,或受邀参与人答非拍板卡)。
-  // 2026-09-05 起决定卡钉在对话流顶部(ConversationStream.pinnedCard),
+  // 普通工作台决定卡钉在流末尾；演示模式可放回原历史位置，
   // 工作台只负责按 decides 造卡;有 waiting 就一直有卡,和检视画布无关。
   assert.match(workspace, /currentCard=\{waiting \? \(decides \? \(/,
     "Grill、方案确认和 push 确认都必须持续渲染决定卡");
-  assert.match(stream, /const pinnedCard = !!waiting && !!currentCard;/);
+  assert.match(stream, /const pinnedCard = !!waiting && !!currentCard && !inlineDemoCard;/);
   assert.doesNotMatch(workspace, /finalDecisionDeferred|reviewTakesFocus/,
     "打开批注不能卸载或改写当前决定卡");
   assert.match(workspace, /aria-label="收起检视意见"/);

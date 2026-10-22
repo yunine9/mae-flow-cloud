@@ -4,9 +4,8 @@ import { TaskWorkspace } from "./TaskWorkspace";
 import { MemoryBoard } from "./MemoryBoard";
 import { ConfirmDialogHost } from "./ConfirmDialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { prepareTaskDemoCards } from "./taskDemoCards";
 import { createTaskDemoSandbox } from "./taskDemoSandbox";
-import { suggestedDemoMessage, TASK_DEMO_ANALYSIS_PHASE, type TaskDemoPreviewInput, type TaskDemoSnapshot } from "./taskDemoTypes";
+import { suggestedDemoMessage, taskDemoPhaseCard, TASK_DEMO_ANALYSIS_PHASE, type TaskDemoPreviewInput, type TaskDemoSnapshot } from "./taskDemoTypes";
 import "./TaskDemo.css";
 
 type Sandbox = ReturnType<typeof createTaskDemoSandbox>;
@@ -60,7 +59,7 @@ export default function TaskDemoWorkspace({ sourceTaskId, preview }: {
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [notice, setNotice] = useState("");
-  const [preparation, setPreparation] = useState("读取任务资料与历史回复…");
+  const [stageFocus, setStageFocus] = useState(0);
   const [retryTask, setRetryTask] = useState<string>();
   const [memoryOpen, setMemoryOpen] = useState(false);
   const initial = useRef({ sourceTaskId, preview });
@@ -167,15 +166,7 @@ export default function TaskDemoWorkspace({ sourceTaskId, preview }: {
         if (snapshot.schema !== "mae-flow-demo-snapshot/1" || snapshot.source_task_id !== taskId || snapshot.task.id !== taskId) {
           throw new Error("演示资料与所选任务不一致，请重试。");
         }
-        if (!input.preview) {
-          snapshot = await prepareTaskDemoCards(snapshot, originalFetch, controller.signal, phase => {
-            if (!alive) return;
-            const message = `正在根据原任务资料补充“${phase}”卡片…`;
-            setPreparation(message);
-            if (current) setNotice(message);
-          });
-          if (!alive) throw new Error("演示已退出。");
-        }
+        // 读取真实记录即可打开；模型生成不属于进入或切换演示的前置条件。
         const sandbox = createTaskDemoSandbox({ task: snapshot.task, actor: actor.username,
           conversation: snapshot.conversation.items, annotations: snapshot.annotations.items,
           artifacts: snapshot.artifacts, reviews: snapshot.reviews, phaseSteps: snapshot.phase_steps,
@@ -305,7 +296,7 @@ export default function TaskDemoWorkspace({ sourceTaskId, preview }: {
   }, []);
 
   if (error && !session) return <main className="task-demo-loading"><h1>无法打开演示副本</h1><p role="alert">{error}</p><button onClick={() => retryInitial.current()}>重试</button><button onClick={exitDemo}>返回工作台</button></main>;
-  if (!session) return <main className="task-demo-loading"><h1>正在准备演示副本</h1><p>{preparation}</p></main>;
+  if (!session) return <main className="task-demo-loading"><h1>正在准备演示副本</h1><p>读取任务资料与历史回复…</p></main>;
   const { sandbox, snapshot, actor, actorName } = session;
   const task = taskWithDemoNavigation(session);
   const phase = task.progress?.current_phase ?? "";
@@ -316,9 +307,10 @@ export default function TaskDemoWorkspace({ sourceTaskId, preview }: {
       onOpenTask={taskId => navigate.current(taskId)}
       demo={{ phase, backLabel: session.backLabel, sourceTaskId: snapshot.source_task_id, sourceLabel: snapshot.task.title ?? snapshot.task.requirement,
         sourceStatus: statusText(snapshot.task), preview: Boolean(preview),
-        onSelectPhase: selected => { sandbox.selectPhase(selected); setNotice(""); setRetryTask(undefined); },
-        onReset: () => { sandbox.reset(); if (phase && sandbox.getTask().progress?.phases.includes(phase)) sandbox.selectPhase(phase); setNotice("已重置演示副本，原任务没有变化。"); setRetryTask(undefined); },
-        onExit: exitDemo, suggestedMessageId: suggestedDemoMessage(snapshot, phase) }}
+        onSelectPhase: selected => { setStageFocus(value => value + 1); sandbox.selectPhase(selected); setNotice(""); setRetryTask(undefined); },
+        onReset: () => { setStageFocus(value => value + 1); sandbox.reset(); if (phase && sandbox.getTask().progress?.phases.includes(phase)) sandbox.selectPhase(phase); setNotice("已重置演示副本，原任务没有变化。"); setRetryTask(undefined); },
+        onExit: exitDemo, suggestedMessageId: suggestedDemoMessage(snapshot, phase),
+        suggestedCardId: taskDemoPhaseCard(snapshot, phase)?.id, focusKey: stageFocus }}
       demoRevision={revision} />
     <ConfirmDialogHost />
     <Dialog open={memoryOpen} onOpenChange={open => {
