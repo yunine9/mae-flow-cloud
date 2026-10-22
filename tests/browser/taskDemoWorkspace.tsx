@@ -6,6 +6,7 @@ import { TaskDemoFrame } from "../../web/src/TaskDemoFrame";
 import { createTaskDemoPreviewInput } from "../../web/src/TaskDemoPreview";
 import type { Annotation, MemoryInsights, MemoryRecord } from "../../web/src/api";
 import type { TaskDemoSnapshot } from "../../web/src/taskDemoTypes";
+import kernelFlow from "../../kernel/flow/flow.json";
 
 const errors: string[] = [];
 const realRequests: string[] = [];
@@ -21,6 +22,26 @@ window.fetch = async (input, init) => {
 };
 
 const preview = createTaskDemoPreviewInput();
+// 生产历史记录保存中文步骤标题；主分析确认没有内核步骤。复现该形态，避免只用步骤 ID 的样例漏检。
+const stepTitles = Object.fromEntries(Object.entries(kernelFlow.steps).map(([id, step]) => [id, step.title]));
+for (const snapshot of [preview.snapshot, ...(preview.relatedSnapshots ?? [])]) {
+  snapshot.step_titles = { ...stepTitles };
+  snapshot.card_contexts = {};
+  const mainAnalysis = !snapshot.task.parent_task_id && Boolean(snapshot.task.requirement_graph);
+  snapshot.conversation.items.forEach((item, index) => {
+    if (item.kind !== "card") return;
+    item.step = mainAnalysis && item.step === "requirement_analysis" ? "" : stepTitles[item.step] ?? item.step;
+    const previous = snapshot.conversation.items[index - 1];
+    snapshot.card_contexts![item.waiting_id] = {
+      context: `原确认背景：${snapshot.task.title}，${item.step || "需求拆分"}阶段确认。`,
+      preface: previous?.kind === "turn" ? previous.texts.map(text => text.text).join("\n\n") : undefined,
+    };
+  });
+  if (snapshot.task.waiting?.step !== undefined) {
+    snapshot.task.waiting.step = mainAnalysis && snapshot.task.waiting.step === "requirement_analysis"
+      ? "" : stepTitles[snapshot.task.waiting.step] ?? snapshot.task.waiting.step;
+  }
+}
 const sourceBefore = JSON.stringify(preview.snapshot);
 const sourceReader = preview.fetchRead;
 preview.fetchRead = async (input, init) => {
@@ -261,6 +282,8 @@ async function run() {
   }
   await until(() => (document.querySelector('[aria-label="选择本阶段展示回复"]') as HTMLSelectElement | null)?.value === "example-turn-decomposition",
     "main task clarification did not select its decomposition confirmation reply");
+  const splitCard = preview.snapshot.conversation.items.find(item => item.id === "example-card-decomposition");
+  check(splitCard?.kind === "card" && splitCard.step === "", "main-task fixture did not exercise an empty historical step");
   // Fault injection stays inside the test fixture. A failed associated-task load
   // must leave the current task intact and allow the real retry action to recover.
   const liveChildSnapshot = preview.relatedSnapshots?.find(item => item.source_task_id === childSourceId);
@@ -280,6 +303,18 @@ async function run() {
   for (const phase of phases) {
     await selectPhase(phase);
     checkStageDirectory();
+    const originalCard = childSnapshot.conversation.items.find(item => item.kind === "card" && item.id === `example-card-${phases.indexOf(phase)}`);
+    check(originalCard?.kind === "card", `${phase} fixture has no original confirmation card`);
+    if (originalCard?.kind === "card") {
+      check(Object.values(stepTitles).includes(originalCard.step), `${phase} fixture retained an internal step ID`);
+      const expected = childSnapshot.card_contexts?.[originalCard.waiting_id];
+      await until(() => document.querySelector(".decision-card .waiting-context")?.textContent?.includes(expected!.context!),
+        `${phase} did not restore the real card context from its Chinese step title`);
+      check(document.querySelector(".decision-card .question-list")?.textContent?.includes(originalCard.questions[0].question),
+        `${phase} replaced the real confirmation question`);
+      check(document.querySelector(".decision-card .waiting-context")?.textContent?.includes(expected!.preface!),
+        `${phase} dropped the Agent original explanation`);
+    }
     check(!button("需求拆分"), `${phase} exposed the main task decomposition tab inside the child`);
     if (phase === "已合入") checkDeliveryAnalysisLink(childSourceId!);
     else check(!document.querySelector(".task-demo-delivery-analysis"), `${phase} showed the completed-phase analysis link too early`);
@@ -479,7 +514,7 @@ async function run() {
   await checkDeliveryKnowledgePanels(childSourceId!);
   await checkProductionDemoFrame(childSourceId!);
   check(errors.length === 0, errors.join("\n"));
-  return { passed: true, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
+  return { passed: true, historicalCards: true, width: window.innerWidth, phases: phases.length, parentChildRoundTrip: true, navigationRetry: true, materialAlwaysVisible: true, directDocumentAnnotations: true, knowledgeAnalytics: true, productionFrame: true, localWrites: localWrites.length, memoryDecisions: memoryWrites.length, sourceWrites: 0, realRequests: 0 };
 }
 
 run().then(result => { document.getElementById("result")!.textContent = JSON.stringify(result); })

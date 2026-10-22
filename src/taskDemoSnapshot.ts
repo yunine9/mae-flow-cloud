@@ -24,6 +24,10 @@ export interface TaskDemoSnapshot {
   source_task_id: string;
   /** 与进度条使用同一内核文件，仅供演示定位已有记录。 */
   phase_steps?: Record<string, string[]>;
+  /** 历史确认卡使用步骤标题，按内核目录关联到原步骤。 */
+  step_titles?: Record<string, string>;
+  /** 当时确认卡的原始上下文，按 waiting_id 与会话记录对应。 */
+  card_contexts?: Record<string, { context?: string; preface?: string }>;
   task: TaskSummary;
   /** 仅文档元信息；正文和代码差异由原有只读接口按需读取。 */
   artifacts: ArtifactMeta[];
@@ -79,6 +83,18 @@ function readPhaseSteps(root: string | undefined): Record<string, string[]> | un
       vocabulary.names.includes(phase.name ?? "") && Array.isArray(phase.steps))
       .map((phase: { name: string; steps: unknown[] }) =>
         [phase.name, phase.steps.filter((step): step is string => typeof step === "string")]));
+  } catch { return undefined; }
+}
+
+function readStepTitles(root: string | undefined): Record<string, string> | undefined {
+  if (!root) return undefined;
+  try {
+    const document = JSON.parse(readFileSync(join(root, "flow", "flow.json"), "utf-8"));
+    if (!document.steps || typeof document.steps !== "object" || Array.isArray(document.steps)) return undefined;
+    return Object.fromEntries(Object.entries(document.steps).flatMap(([id, step]) => {
+      const title = (step as { title?: unknown } | null)?.title;
+      return typeof title === "string" && title.trim() ? [[id, title]] : [];
+    }));
   } catch { return undefined; }
 }
 
@@ -165,6 +181,7 @@ export async function readTaskDemoSnapshot(service: SnapshotSource, id: string):
   const task = structuredClone(stored) as TaskSummary;
   const kernelRoot = service.options.host?.kernelRoot ?? discoverKernelRoot(resolve(process.cwd()));
   const phaseSteps = readPhaseSteps(kernelRoot);
+  const stepTitles = readStepTitles(kernelRoot);
   const problems: string[] = [];
   task.progress = readPresentationProgress(service, task, kernelRoot, problems);
   const capture = async <T>(label: string, read: () => T | Promise<T>, fallback: T): Promise<T> => {
@@ -202,7 +219,13 @@ export async function readTaskDemoSnapshot(service: SnapshotSource, id: string):
   // 返回值与服务内存及各读取结果断开引用，副本不能反向修改来源。
   return structuredClone({
     schema: "mae-flow-demo-snapshot/1", captured_at: new Date().toISOString(),
-    source_task_id: id, ...(phaseSteps ? { phase_steps: phaseSteps } : {}), task, artifacts, conversation,
+    source_task_id: id, ...(phaseSteps ? { phase_steps: phaseSteps } : {}),
+    ...(stepTitles ? { step_titles: stepTitles } : {}),
+    card_contexts: Object.fromEntries(waiting.map(record => [record.waiting_id, {
+      ...(typeof record.context === "string" ? { context: record.context } : {}),
+      ...(typeof record.preface === "string" ? { preface: record.preface } : {}),
+    }])),
+    task, artifacts, conversation,
     annotations: { items: annotationSnapshot.items.filter(item => item.status !== "dropped") },
     reviews, ...memory, problems,
   });

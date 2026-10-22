@@ -13,6 +13,8 @@ export interface TaskDemoSandboxInput {
   artifacts?: ArtifactMeta[];
   reviews?: ReviewRequest[];
   phaseSteps?: Record<string, string[]>;
+  stepTitles?: Record<string, string>;
+  cardContexts?: Record<string, { context?: string; preface?: string }>;
   memories?: Array<{ record: MemoryRecord; content: string }>;
   memoryUsage?: MemoryUsageRow[];
   businessModules?: BusinessModule[];
@@ -50,17 +52,6 @@ const json = (value: unknown, status = 200) => new Response(JSON.stringify(value
 const error = (message: string, status = 400) => json({ error: message }, status);
 const feedback = (text: string) => `演示反馈：${text}。仅更新当前演示副本，没有执行真实 Agent 或通知参与者。`;
 
-/** These are explicitly labelled examples, never a source of production phase state. */
-const EXAMPLE_CARDS: Record<string, { question: string; options: string[] }> = {
-  "启动": { question: "确认本次任务的目标和范围？", options: ["确认，开始分析", "补充要求"] },
-  "澄清需求": { question: "现有行为已经查清，本次需求希望如何调整？", options: ["采用建议", "补充业务要求"] },
-  "定规格": { question: "规格文档中的验收条件是否符合预期？", options: ["确认", "需要调整"] },
-  "写设计": { question: "关键方案的影响和维护成本是否可以接受？", options: ["确认方案", "需要调整"] },
-  "写代码": { question: "检视关键改动和已有验证结果。", options: ["确认", "需要调整"] },
-  "检视与验证": { question: "交付结果是否满足验收要求？", options: ["确认通过", "需要调整"] },
-  "已合入": { question: "确认本次交付经验的适用范围。", options: ["采纳经验", "补充说明"] },
-};
-
 /**
  * Browser-only, disposable copy. It has no persistence and no write transport.
  * An unsupported operation fails closed instead of returning a pretend success.
@@ -75,6 +66,8 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
   const sourceArtifacts = copy(input.artifacts ?? []);
   const sourceReviews = copy(input.reviews ?? []);
   const phaseSteps = copy(input.phaseSteps ?? {});
+  const stepTitles = copy(input.stepTitles ?? {});
+  const cardContexts = copy(input.cardContexts ?? {});
   const phases = [...(original.progress?.phases ?? [])];
   const sourceMemories = copy(input.memories ?? []);
   const sourceMemoryUsage = copy(input.memoryUsage ?? []);
@@ -221,31 +214,38 @@ export function createTaskDemoSandbox(input: TaskDemoSandboxInput): TaskDemoSand
     if (disposed) throw new Error("演示已退出。");
     const index = phases.indexOf(phase);
     if (index < 0) throw new Error("该阶段不在当前演示的进度条中。");
-    const example = EXAMPLE_CARDS[phase];
-    const steps = taskDemoPhaseSteps(original, phase, phaseSteps);
+    const steps = taskDemoPhaseSteps(original, phase, phaseSteps, stepTitles);
     const card = [...sourceConversation].reverse().find((row): row is Extract<ConversationItem, { kind: "card" }> =>
       row.kind === "card" && steps.includes(row.step));
-    const sourceWaiting = (original.waiting?.step ? steps.includes(original.waiting.step)
+    const sourceWaiting = (original.waiting?.step !== undefined ? steps.includes(original.waiting.step)
       : original.progress?.current_phase === phase) ? original.waiting : undefined;
-    const sample = !card && !sourceWaiting;
+    // 切换阶段撤下上一张互动副本，真实历史卡和实际回答保持原位。
+    conversation = conversation.filter(row => !(row.kind === "card" && row.id.startsWith(`${taskId}-card-`)));
     const step = card?.step ?? sourceWaiting?.step ?? steps[0] ?? "demo_confirmation";
     task.progress = { phases: copy(phases), current_index: index, current_phase: phase,
-      step_id: step, step: sample ? `${phase}（演示示例）` : phase };
+      step_id: step, step: phase };
     task.status = "waiting_for_human";
-    task.status_label = sample ? "演示示例 · 等待确认" : "原任务问题 · 演示确认";
+    task.status_label = card?.id.startsWith("demo-supplement-") ? "依据原任务资料补充" : "原任务问题 · 演示确认";
     task.focus = { kind: "human_action", headline: `演示：${phase}`, next_action: "在副本中体验批注、回复或确认。",
       owner: "responsible", needs_attention: true, priority: 1 };
     delete task.completed_at;
     delete task.execution_plan;
     if (original.execution_plan?.step.phase === phase) task.execution_plan = copy(original.execution_plan);
-    const questions = copy(card?.questions ?? sourceWaiting?.question?.questions ?? [{
-      question: `【演示示例】${example?.question ?? "确认当前阶段的处理意见？"}`,
-      options: example?.options ?? ["确认", "需要调整"],
-    }]);
+    if (!card && !sourceWaiting) {
+      delete task.waiting;
+      delete task.focus;
+      task.status = "paused";
+      task.status_label = "原任务历史";
+      notify();
+      return getTask();
+    }
+    const questions = copy(card?.questions ?? sourceWaiting?.question?.questions ?? []);
+    const originalContext = card ? cardContexts[card.waiting_id] : sourceWaiting;
     task.waiting = { waiting_id: id("waiting"), state_version: sequence, step,
+      created_at: card?.ts ?? sourceWaiting?.created_at,
       question: { questions, purpose: card?.purpose ?? sourceWaiting?.question?.purpose ?? "confirmation" },
-      context: sample ? "演示示例：原任务没有这个阶段的历史问题，以下只展示交互。"
-        : "原任务问题的演示副本：回答不会发送到原任务。",
+      context: originalContext?.context,
+      preface: originalContext?.preface,
       recommended_view: sourceWaiting?.recommended_view,
       choice_effects: [{ key: "demo-adjust", answers: ["需要调整", "需要调整代码"], allows_source_edit: true,
         handles_feedback: true, closes_feedback: false }] };

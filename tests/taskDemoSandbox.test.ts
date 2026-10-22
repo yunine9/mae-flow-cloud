@@ -50,14 +50,14 @@ test("副本深拷贝材料、人物和任务关系，阶段历史问题保留�
   const view = f.sandbox.selectPhase("写设计");
   assert.equal(view.waiting?.step, "custom_design_confirm");
   assert.equal(view.waiting?.question?.questions?.[0].question, "是否接受幂等方案？");
-  assert.match(view.waiting?.context ?? "", /原任务问题/);
+  assert.equal(view.waiting?.context, undefined);
   view.requirement = "读取结果被修改";
   assert.equal(f.sandbox.task.requirement, "订单同步");
   const history = await f.data("/conversation");
   assert.ok(history.items.some((row: any) => row.id === "real-turn"));
   await f.request("/annotations", "POST", { artifact: "story.md", file: "story.md", line: 1, anchor: "订单", note: "本地新意见", kind: "doc" });
   f.sandbox.selectPhase("定规格");
-  assert.match(f.sandbox.task.waiting?.question?.questions?.[0].question ?? "", /演示示例/);
+  assert.equal(f.sandbox.task.waiting, undefined);
   assert.equal((await f.data("/annotations")).items.length, 2);
   assert.deepEqual({ ...f.task, requirement: original.requirement }, original);
   f.sandbox.reset();
@@ -122,7 +122,7 @@ test("拆分确认属于澄清需求，定制内核流程合并宿主分析步�
   const withHistory = createTaskDemoSandbox({ ...source, conversation: snapshot.conversation.items });
   assert.deepEqual(withHistory.selectPhase(phase).waiting?.question?.questions, card.questions);
   assert.equal(suggestedDemoMessage(snapshot, phase), "split-turn");
-  assert.match(withHistory.task.waiting?.context ?? "", /原任务问题/);
+  assert.equal(withHistory.task.waiting?.context, undefined);
   assert.equal(withHistory.selectPhase("写设计").waiting?.step, "custom_design_confirm");
 
   const waitingSource = structuredClone(original);
@@ -137,7 +137,7 @@ test("拆分确认属于澄清需求，定制内核流程合并宿主分析步�
 
   waitingSource.waiting!.step = entry.step;
   const withEntry = createTaskDemoSandbox({ ...source, task: waitingSource, conversation: [entry] });
-  assert.match(withEntry.selectPhase(phase).waiting?.question?.questions?.[0].question ?? "", /演示示例/);
+  assert.equal(withEntry.selectPhase(phase).waiting, undefined);
   assert.equal(suggestedDemoMessage({ ...snapshot, conversation: { items: [turn, entry] } }, phase), undefined);
   withEntry.dispose(); withWaiting.dispose(); withHistory.dispose(); f.sandbox.dispose();
 });
@@ -172,7 +172,7 @@ test("admin 以责任人完整体验批注的编辑、答复、闭环、重新�
 });
 
 test("决定、插话、邀请和完成检视只影响演示状态，来源 review id 无权操作", async () => {
-  const f = fixture(); f.sandbox.selectPhase("澄清需求");
+  const f = fixture(); f.sandbox.selectPhase("写设计");
   const waiting = f.sandbox.task.waiting!;
   const stale = await f.request("/decision", "POST", { waiting_id: "real-wait", state_version: waiting.state_version });
   assert.equal(stale.status, 409);

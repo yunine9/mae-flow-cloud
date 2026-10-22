@@ -53,6 +53,7 @@ test("演示副本真实工作台：主子任务、阶段材料、批注闭环�
     const result = JSON.parse(raw);
     assert.equal(result.error, undefined, JSON.stringify(result));
     assert.equal(result.passed, true);
+    assert.equal(result.historicalCards, true);
     assert.equal(result.phases, 7);
     assert.equal(result.parentChildRoundTrip, true);
     assert.equal(result.navigationRetry, true);

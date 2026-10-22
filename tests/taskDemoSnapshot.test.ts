@@ -4,8 +4,10 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, wr
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AddressInfo } from "node:net";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { AnnotationStore, TASK_REQUIREMENT_ARTIFACT, type Annotation } from "../src/annotations.ts";
 import { LocalAuth } from "../src/auth.ts";
+import { HumanGate } from "../src/humanGate.ts";
 import { PIPELINE_EVIDENCE_GAP_FILE } from "../src/artifacts.ts";
 import { createTaskServer } from "../src/server.ts";
 import { readTaskDemoSnapshot, type TaskDemoSnapshot } from "../src/taskDemoSnapshot.ts";
@@ -54,6 +56,15 @@ test("演示来源快照保留真实材料和会话，读取不修复、不推�
   const event = { eventId: 1, taskId: task.id, sessionId: "main", ts: "2026-10-22T01:00:00Z",
     kind: "assistant_message", payload: { text: "已核对现有实现，请确认兼容范围。" } };
   writeFileSync(service.eventLogPath(task.id), JSON.stringify(event) + '\n{"eventId":');
+  const gate = new HumanGate(join(task.workspace, "waiting.json"));
+  const historicalCard = gate.createWaiting({ taskId: task.id, step: "本地 Spec 确认",
+    callId: "historical-spec-confirmation",
+    questionInput: { questions: [{ question: "是否确认兼容旧接口？", options: ["确认", "补充要求"] }] },
+    context: "已核对旧接口，原有调用方式保持兼容。\n请确认验收条件。",
+    preface: "| 场景 | 预期 |\n| --- | --- |\n| 旧接口 | 保持兼容 |",
+  });
+  gate.resolve(historicalCard.waiting_id, { stateVersion: historicalCard.state_version,
+    decision: "确认", notes: "保留旧接口" });
   mkdirSync(join(task.workspace, "pipeline"), { recursive: true });
   writeFileSync(join(task.workspace, "pipeline", PIPELINE_EVIDENCE_GAP_FILE), "# 待补验证\n实际文档正文");
   const memory: MemoryRecord = { id: "c-demo-candidate", task: task.id, file: "candidate.md",
@@ -97,6 +108,15 @@ test("演示来源快照保留真实材料和会话，读取不修复、不推�
   assert.ok(snapshot.artifacts.every(item => !("content" in item)), "正文留给按需读取");
   assert.ok(snapshot.conversation.items.some(item => item.kind === "turn"
     && item.texts.some(text => text.text === event.payload.text)));
+  const sourceCard = snapshot.conversation.items.find(item => item.kind === "card"
+    && item.waiting_id === historicalCard.waiting_id);
+  assert.ok(sourceCard?.kind === "card");
+  assert.equal(sourceCard.step, "本地 Spec 确认");
+  assert.equal(sourceCard.status, "resolved");
+  assert.deepEqual(sourceCard.questions, historicalCard.question.questions);
+  assert.deepEqual(snapshot.card_contexts?.[historicalCard.waiting_id], {
+    context: historicalCard.context, preface: historicalCard.preface,
+  });
   assert.ok(snapshot.problems.some(problem => problem.includes("批注中有 1 行")));
   assert.ok(snapshot.problems.some(problem => problem.includes("检视邀请中有 1 行")));
   assert.ok(snapshot.problems.some(problem => problem.includes("经验候选中有 1 行")));
@@ -117,6 +137,16 @@ test("演示来源快照保留真实材料和会话，读取不修复、不推�
   const vocabulary = JSON.parse(readFileSync(resolve("kernel/flow/phases.json"), "utf-8"));
   assert.deepEqual(withPhases.phase_steps,
     Object.fromEntries(vocabulary.phases.map((phase: { name: string; steps: string[] }) => [phase.name, phase.steps])));
+
+  const flow = JSON.parse(readFileSync(resolve("kernel/flow/flow.json"), "utf-8"));
+  assert.deepEqual(withPhases.step_titles, Object.fromEntries(Object.entries(flow.steps)
+    .map(([id, step]) => [id, (step as { title: string }).title])));
+  assert.equal(withPhases.step_titles?.open, historicalCard.step);
+  assert.deepEqual(withPhases.card_contexts?.[historicalCard.waiting_id], {
+    context: historicalCard.context, preface: historicalCard.preface,
+  });
+  withPhases.card_contexts![historicalCard.waiting_id].context = "副本修改";
+  assert.deepEqual(contents(root), before, "历史卡正文读取和副本修改均不影响来源文件");
 
   const pulsePath = join(task.workspace, "demo-source-panel-pulse.js");
   const sourcePhase = vocabulary.phases[3];
@@ -172,6 +202,31 @@ test("演示来源端点仅允许登录 admin，未启用认证也不提供入�
   assert.equal(allowed.status, 200);
   assert.equal(allowed.headers.get("cache-control"), "no-store");
   assert.equal((await allowed.json() as TaskDemoSnapshot).source_task_id, task.id);
+  const cardPath = `/tasks/${task.id}/demo-card`;
+  for (const [base, cookie, expected] of [[bases[0], "", 401], [bases[0], developerCookie, 403], [bases[1], adminCookie, 401]] as const) {
+    const rejected = await fetch(base + cardPath, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ phase: "启动" }) });
+    assert.equal(rejected.status, expected); await rejected.text();
+  }
+  const wrongMethod = await fetch(bases[0] + cardPath, { headers: { cookie: adminCookie } });
+  assert.equal(wrongMethod.status, 405); assert.equal(wrongMethod.headers.get("allow"), "POST"); await wrongMethod.text();
+  const invalidCard = await fetch(bases[0] + cardPath, { method: "POST", headers: { cookie: adminCookie, "content-type": "application/json" }, body: JSON.stringify({ phase: "不存在的阶段" }) });
+  assert.equal(invalidCard.status, 400); await invalidCard.text();
+  const beforeCard = contents(service.options.dataDir);
+  t.mock.method(ModelRuntime, "create", async () => ({
+    getModel: () => ({ id: "fixture", api: "openai-completions", maxTokens: 4096, contextWindow: 128_000 }),
+    streamSimple: () => ({ async *[Symbol.asyncIterator]() {}, result: async () => ({
+      role: "assistant", content: [{ type: "text", text: JSON.stringify({
+        context: "当前仅有需求原文，设计方案和验证资料尚未提供。",
+        questions: [{ question: "需要补充哪些设计材料？", options: ["补充方案"] }], source_ids: [`task:${task.id}`],
+      }) }], stopReason: "stop", usage: {},
+    }) }),
+  }) as any);
+  const generated = await fetch(bases[0] + cardPath, { method: "POST", headers: { cookie: adminCookie, "content-type": "application/json" }, body: JSON.stringify({ phase: "写设计" }) });
+  assert.equal(generated.status, 200); assert.equal(generated.headers.get("cache-control"), "no-store");
+  const generatedCard = await generated.json() as { source_task_id: string; phase: string; context: string };
+  assert.equal(generatedCard.source_task_id, task.id); assert.equal(generatedCard.phase, "写设计");
+  assert.match(generatedCard.context, /尚未提供/);
+  assert.deepEqual(contents(service.options.dataDir), beforeCard, "管理员生成补卡也不改源任务");
   const post = await fetch(bases[0] + path, { method: "POST", headers: { cookie: adminCookie } });
   assert.equal(post.status, 405); assert.equal(post.headers.get("allow"), "GET"); await post.text();
   const absent = await fetch(bases[0] + "/tasks/missing/demo-snapshot", { headers: { cookie: adminCookie } });
