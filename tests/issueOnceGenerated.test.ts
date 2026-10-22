@@ -217,9 +217,13 @@ test("路由 once-generated:负面原因终止进按会话明细与一次解决�
   }
 });
 
-test("路由 code-origin:伴生原样返回;缺席如实 404", async () => {
+test("路由 code-origin:伴生原样返回;缺席如实 404;读侧 join 出 MR 链接", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "mfc-issue-oncegen-"));
-  seedSession(dataDir, { id: "issue-a", ...DELIVERED_SINCE });
+  seedSession(dataDir, { id: "issue-a", ...DELIVERED_SINCE,
+    // mrs 账按 仓+分支 对上伴生仓:读侧响应带 mr_url(冻结文件不动)。
+    mrs: [{ repo: "https://git/example.git", branch: "master_dev_DTS1",
+      title: "示例 MR", url: "https://git/example/-/merge_requests/7",
+      at: "2026-09-20T10:00:00Z" }] });
   seedCompanion(dataDir, "issue-a", { first: 90, rework: 5, external: 5 });
   seedSession(dataDir, { id: "issue-c", ...DELIVERED_SINCE });
   const service = new IssueFlowService({
@@ -230,8 +234,10 @@ test("路由 code-origin:伴生原样返回;缺席如实 404", async () => {
       ["issues", "issue-a", "code-origin"]);
     assert.equal(ok.status, 200);
     assert.equal(ok.body.session_id, "issue-a");
-    const byRepo = ok.body.by_repo as Array<{ lines: { first: number } }>;
+    const byRepo = ok.body.by_repo as Array<{ lines: { first: number }; mr_url?: string }>;
     assert.equal(byRepo[0]!.lines.first, 90);
+    assert.equal(byRepo[0]!.mr_url, "https://git/example/-/merge_requests/7",
+      "仓+分支对上 mrs 账 → 响应带 MR 链接");
 
     const missing = await callRoute(service, "/issues/issue-c/code-origin",
       ["issues", "issue-c", "code-origin"]);
@@ -276,24 +282,35 @@ test("onceGeneratedFeatureRows:归组/加权占比/达标率/排序/空白归未
   assert.deepEqual(onceGeneratedFeatureRows([]), []);
 });
 
-test("onceGeneratedFeatureRows:share/lines 缺失的行不崩不进聚合(#353)", () => {
-  // 真实形状:state 非 ok 的行(pending/no_code/unsupported)不带
-  // share/lines;旧前端把它们喂进聚合曾是白屏崩溃点。两个守卫分支
-  // (share 缺席、lines 缺席)都必须整行跳过,不计会话数。
+test("onceGeneratedFeatureRows:交付尝试口径——终止/无事实行进三率分母记失败,行数仍只认 ok(#353 形状安全)", () => {
+  // 真实形状:pending/no_code/unsupported 行不带 share/lines;负面终止
+  // 行连三率键都缺席(#540)。都不崩:进会话数与三率分母记失败;定位/
+  // 验证分子只在键为 true 时累计。行数/占比/pass_rate 仍只认 share+lines
+  // 在场的 ok 行。
   const rows = onceGeneratedFeatureRows([
     { module: "网关", share: 95, pass: true, localization_pass: true,
       verify_pass: true, solved_pass: true,
       lines: { first: 90, rework: 5, external: 5 } },
+    // 交付了但伴生在途:无 share/lines,判定事实未过。
     { module: "网关", localization_pass: false, verify_pass: false,
       solved_pass: false },
+    // 负面终止:三率键全缺席,记未解决/未定位/未验证。
+    { module: "网关" },
     { module: "计费", share: 40, pass: false, localization_pass: true,
       verify_pass: false, solved_pass: false },
   ]);
-  assert.deepEqual(rows, [{
-    module: "网关", sessions: 1, solved_rate: 100, pass_rate: 100,
-    localization_rate: 100, verify_rate: 100,
-    share: 90, total_lines: 100,
-  }], "只聚合 share 与 lines 都在场的行;share 由工作行重算(90/100),不取入参");
+  assert.deepEqual(rows, [
+    {
+      module: "网关", sessions: 3, solved_rate: 33.3,
+      pass_rate: 100, localization_rate: 33.3, verify_rate: 33.3,
+      share: 90, total_lines: 100,
+    },
+    {
+      module: "计费", sessions: 1, solved_rate: 0,
+      pass_rate: null, localization_rate: 100, verify_rate: 0,
+      share: null, total_lines: 0,
+    },
+  ], "三率同分母=交付尝试(终止记失败);pass_rate 与行数/占比仅 ok 行(计费无 ok 行 → null)");
 });
 
 test("per_session ok 行携带按仓明细:跳过不可得仓与零行仓,非 ok 行不带(ADR-0065)", async () => {
@@ -347,18 +364,21 @@ test("per_session ok 行携带按仓明细:跳过不可得仓与零行仓,非 ok
   }
 });
 
-test("featureRepoTree:特性→仓归组/加权占比/排序/by_repo 缺席不崩(ADR-0065)", () => {
+test("featureRepoTree:特性→仓归组/三率/加权占比/排序/by_repo 缺席不崩(ADR-0065)", () => {
   const { repos, lines } = featureRepoTree([
-    { module: "网关", share: 80,
+    { module: "网关", share: 80, solved_pass: true,
+      localization_pass: true, verify_pass: false,
       lines: { first: 60, rework: 20, external: 10 },
       by_repo: [
         { repo: "https://git/two.git", first: 30, rework: 0, external: 0 },
         { repo: "https://git/one.git", first: 30, rework: 20, external: 10 },
       ] },
-    { module: "网关", share: 100,
+    { module: "网关", share: 100, solved_pass: false,
+      localization_pass: false, verify_pass: true,
       lines: { first: 40, rework: 0, external: 0 },
       by_repo: [{ repo: "https://git/one.git", first: 40, rework: 0, external: 0 }] },
-    { module: "计费", share: 90,
+    { module: "计费", share: 90, solved_pass: true,
+      localization_pass: true, verify_pass: true,
       lines: { first: 90, rework: 0, external: 0 },
       by_repo: [] },
     // 降级形状:share 在场但 by_repo 缺席——只不贡献仓行,不崩。
@@ -367,16 +387,38 @@ test("featureRepoTree:特性→仓归组/加权占比/排序/by_repo 缺席不�
     { module: "网关" },
   ]);
   assert.deepEqual(repos.get("网关"), [
-    { repo: "https://git/one.git", sessions: 2, first: 70, rework: 20,
-      external: 10, total: 100, share: 70 },
-    { repo: "https://git/two.git", sessions: 1, first: 30, rework: 0,
-      external: 0, total: 30, share: 100 },
-  ], "跨会话按仓归组求和;仓行按工作行合计降序;占比=首轮÷全部(一位小数)");
+    { repo: "https://git/one.git", sessions: 2, solved: 1,
+      localization_passed: 1, verify_passed: 1,
+      first: 70, rework: 20, external: 10, total: 100, share: 70 },
+    { repo: "https://git/two.git", sessions: 1, solved: 1,
+      localization_passed: 1, verify_passed: 0,
+      first: 30, rework: 0, external: 0, total: 30, share: 100 },
+  ], "跨会话按仓归组求和;仓行按工作行合计降序;占比=首轮÷全部(一位小数);三率分子随行累计");
   assert.deepEqual(repos.get("计费"), [],
     "by_repo 缺席/空数组的行不贡献仓行(降级响应不崩)");
-  assert.deepEqual(lines.get("网关"), { rework: 20, external: 10 },
-    "特性层返工/平台外=跨会话求和,供外层行对账");
+  assert.deepEqual(lines.get("网关"), { first: 100, rework: 20, external: 10 },
+    "特性层首轮/返工/平台外=跨会话求和,供外层合并列对账");
   assert.equal(repos.get("未分类"), undefined, "全空输入不出组");
+});
+
+test("featureRepoTree:isBound 绑定外仓沉底,各自再按行数降序(ADR-0065 修订)", () => {
+  const rows = [
+    { module: "网关", share: 80,
+      lines: { first: 100, rework: 0, external: 0 },
+      by_repo: [
+        // 绑定外仓行数反而更大:仍要排在绑内仓之后。
+        { repo: "https://git/wild.git", first: 90, rework: 0, external: 0 },
+        { repo: "https://git/one.git", first: 10, rework: 0, external: 0 },
+      ] },
+  ];
+  const isBound = (feature: string, repo: string) =>
+    feature === "网关" && repo === "https://git/one.git";
+  assert.deepEqual(featureRepoTree(rows, isBound).repos.get("网关")!.map((row) => row.repo),
+    ["https://git/one.git", "https://git/wild.git"], "绑内在前,绑定外沉底");
+  // 归一由调用方做:isBound 收到的就是 by_repo 原样值。
+  assert.deepEqual(featureRepoTree(rows).repos.get("网关")!.map((row) => row.repo),
+    ["https://git/wild.git", "https://git/one.git"],
+    "isBound 缺席=全部视为绑内,退回纯行数降序");
 });
 
 test("#457 DTS 完成日期按结论时刻过滤，结束边界不计入，聚合与明细范围一致", async () => {
@@ -393,4 +435,12 @@ test("#457 DTS 完成日期按结论时刻过滤，结束边界不计入，聚�
     assert.deepEqual((body.per_session as Array<{id: string}>).map(row => row.id), ["issue-end", "issue-start"]);
     assert.equal((body.localization as {total: number}).total, 2);
   } finally { await service.shutdown(); (await import("node:fs")).rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test("repoShortName:去协议/域名/.git,取路径末两段", async () => {
+  const { repoShortName } = await import("../web/src/repoIdentity.ts");
+  assert.equal(repoShortName("https://git.example.com/team/alarm.git"), "team/alarm");
+  assert.equal(repoShortName("https://git.example.com/alarm"), "alarm");
+  assert.equal(repoShortName("https://git.example.com/team/alarm/"), "team/alarm");
+  assert.equal(repoShortName("ssh://git@host:2222/team/platform.GIT"), "team/platform");
 });

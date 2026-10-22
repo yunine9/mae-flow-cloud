@@ -6,6 +6,7 @@
  * 缺席(未归档/未算完/早于起算日期)如实说明,不猜不补。
  */
 import { useEffect, useState } from "react";
+import { ExternalLink } from "lucide-react";
 import {
   getIssueCodeOrigin,
   type IssueCodeOriginDetail,
@@ -118,6 +119,9 @@ export function IssueCodeOriginPanel({ id, threshold }: {
       <div key={`${repo.repo} ${repo.branch}`}
         className="rounded-lg border border-line bg-surface px-4 py-3 text-sm text-muted-foreground">
         {repo.repo} · {repo.branch}:不可得——{repo.unavailable.replace(/^不可得[:：]?/, "")}
+        {repo.mr_url && <a href={repo.mr_url} target="_blank" rel="noreferrer"
+          className="ml-2 inline-flex items-center gap-0.5 text-primary underline-offset-2 hover:underline">
+          MR<ExternalLink aria-hidden size={12} /></a>}
       </div>
     ) : (
       <div key={`${repo.repo} ${repo.branch}`}
@@ -126,6 +130,9 @@ export function IssueCodeOriginPanel({ id, threshold }: {
           <strong className="min-w-0 truncate text-sm text-text-strong">
             {repo.repo} · {repo.branch}
           </strong>
+          {repo.mr_url && <a href={repo.mr_url} target="_blank" rel="noreferrer"
+            className="inline-flex shrink-0 items-center gap-0.5 self-center text-xs font-medium text-primary underline-offset-2 hover:underline">
+            打开 MR<ExternalLink aria-hidden size={12} /></a>}
           <span className="help-tip text-xs text-muted-foreground" data-tip="统计头与区间的取得口径(ADR-0044 的 head 四级优先级)">口径:{HEAD_BASIS_TEXT[repo.head_basis]}</span>
           <span className="ml-auto text-sm tabular-nums">
             <span className="text-success">首轮 {num(repo.lines.first)}</span>

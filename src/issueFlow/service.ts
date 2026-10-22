@@ -1504,9 +1504,21 @@ export class IssueFlowService {
 
   /** 单会话首次生成明细(伴生文件原样读;统计与详情同一份事实,
    *  缺席返回 undefined 由路由 404)。 */
+  /** 单会话首次生成明细(伴生文件原样读 + 读侧按 仓+分支 join 会话
+   *  mrs 账补 MR 链接:对上就带 mr_url,对不上缺席——冻结文件不动,
+   *  只在响应加可选键(#353)。统计与详情同一份事实。 */
   codeOriginDetail(id: string): IssueCodeOriginSnapshot | undefined {
     const live = this.live.get(id);
-    return live ? readCodeOriginSnapshot(live.root, live.id) : undefined;
+    const snapshot = live ? readCodeOriginSnapshot(live.root, live.id) : undefined;
+    if (!live || !snapshot) return undefined;
+    return {
+      ...snapshot,
+      by_repo: snapshot.by_repo.map((repo) => {
+        const url = live.state.mrs?.find((mr) =>
+          mr.repo === repo.repo && mr.branch === repo.branch)?.url;
+        return { ...repo, ...(url ? { mr_url: url } : {}) };
+      }),
+    };
   }
 
   /** 提单模板读侧(ADR-0048):确认是问题闭环的会话在场;缺席返回
