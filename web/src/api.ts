@@ -4340,12 +4340,16 @@ export interface IssueCodeOriginRepoOk {
   boundary: { kind: string; at: string; push_sha: string } | null;
   lines: { first: number; rework: number; external: number };
   commits: IssueCodeOriginCommitRow[];
+  /** 读侧响应可带:会话 mrs 账按 仓+分支 join 出的 MR 链接(可选)。 */
+  mr_url?: string;
 }
 
 export interface IssueCodeOriginRepoUnavailable {
   repo: string;
   branch: string;
   unavailable: string;
+  /** 同 RepoOk(读侧 join,缺席=该仓没有 MR 记录)。 */
+  mr_url?: string;
 }
 
 export interface IssueCodeOriginDetail {

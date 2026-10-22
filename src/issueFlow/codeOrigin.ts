@@ -134,12 +134,16 @@ export interface IssueCodeOriginRepoOk {
   /** 拥有工作行的提交(证据面:每行数从哪来;含被覆盖提交,见
    *  overwritten)。 */
   commits: IssueCodeOriginCommit[];
+  /** 读侧响应可带:会话 mrs 账按 仓+分支 join 出的 MR 链接(冻结
+   *  文件不含此键,#353 可选)。 */
+  mr_url?: string;
 }
 
-/** 单仓段:降级时 unavailable 说明原因,repo/branch 仍在。 */
+/** 单仓段:降级时 unavailable 说明原因,repo/branch 仍在;mr_url 同
+ *  RepoOk(读侧 join,冻结文件不含)。 */
 export type IssueCodeOriginRepo =
   | IssueCodeOriginRepoOk
-  | (IssueMetricsUnavailable & { repo: string; branch: string });
+  | (IssueMetricsUnavailable & { repo: string; branch: string; mr_url?: string });
 
 export interface IssueCodeOriginSnapshot {
   schema_version: number;
