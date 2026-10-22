@@ -124,6 +124,8 @@ import {
   readArtifactFileDiffAsync,
 } from "./artifacts.ts";
 import { WEB_PAGE } from "./webPage.ts";
+import { readTaskDemoSnapshot } from "./taskDemoSnapshot.ts";
+import { generateTaskDemoCard, TaskDemoCardError } from "./taskDemoCard.ts";
 import {
   cookieValue,
   type AuthUser,
@@ -2417,6 +2419,38 @@ export function createTaskServer(
       }
       if (parts[0] === "tasks" && parts.length >= 2) {
         const id = parts[1];
+        if (parts.length === 3 && parts[2] === "demo-snapshot") {
+          if (!viewer) return json(response, 401, { error: "请先以管理员身份登录" });
+          if (viewer.role !== "admin") return json(response, 403, { error: "只有管理员可以创建演示副本" });
+          if (request.method !== "GET") {
+            response.setHeader("allow", "GET");
+            return json(response, 405, { error: "演示来源只接受读取" });
+          }
+          response.setHeader("cache-control", "no-store");
+          return json(response, 200, await readTaskDemoSnapshot(service, id));
+        }
+        if (parts.length === 3 && parts[2] === "demo-card") {
+          if (!viewer) return json(response, 401, { error: "请先以管理员身份登录" });
+          if (viewer.role !== "admin") return json(response, 403, { error: "只有管理员可以补充演示卡片" });
+          if (request.method !== "POST") {
+            response.setHeader("allow", "POST");
+            return json(response, 405, { error: "演示补卡只接受 POST" });
+          }
+          const body = await readBody(request);
+          if (typeof body.phase !== "string" || !body.phase.trim() || body.phase.length > 80) {
+            return json(response, 400, { error: "请选择要补充的阶段" });
+          }
+          response.setHeader("cache-control", "no-store");
+          const controller = new AbortController();
+          const cancel = () => controller.abort();
+          response.once("close", cancel);
+          try {
+            return json(response, 200, await generateTaskDemoCard(service, id, body.phase, { signal: controller.signal }));
+          } catch (error) {
+            if (error instanceof TaskDemoCardError) return json(response, error.status, { error: error.message });
+            throw error;
+          } finally { response.off("close", cancel); }
+        }
         const correction = request.method !== "GET" ? storedTask(service, id)?.ticket_correction : undefined;
         if (request.method !== "GET" && parts[2] !== "correct-ticket"
             && correction && correction.state !== "completed" && !correction.cleanup_only) {

@@ -40,6 +40,8 @@ export interface SkillWorkStep {
   status: "pending" | "running" | "done" | "failed" | "discarded";
   result?: SkillWorkResult; error?: string; attempts: number;
   candidate?: SkillWorkResult; candidate_fingerprint?: string; reviewed_fingerprint?: string;
+  /** 独立评审工具已接受的结果，先于会话最后一段回复持久化。 */
+  review_submission?: { result: SkillWorkResult; fingerprint: string };
   review_attempts?: number; budget_start?: number; review_budget_start?: number;
 }
 export interface SkillWorkCallbacks {
@@ -61,7 +63,7 @@ function normalizeReadonlyReview(step: Pick<SkillWorkStep, "instructions" | "rea
 /** 只保存 Skill 自己安排的工作；不解释模块、阶段或文档类型。 */
 export class DomainSkillWork {
   readonly state: { version: 1; skill: string; steps: SkillWorkStep[]; documents?: SkillWorkDocument[]; plan?: SkillDocumentPlan; result?: SkillWorkResult; previous_results?: SkillWorkResult[]; continued?: number; modified_document_ids?: string[] };
-  private executions = new Map<string, { signal: AbortSignal; writing: boolean; callbacks?: SkillWorkCallbacks }>();
+  private executions = new Map<string, { signal: AbortSignal; writing: boolean; reviewing?: string; callbacks?: SkillWorkCallbacks }>();
   constructor(private file: string, skill: string, continued = 0) {
     this.state = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : { version: 1, skill, steps: [] };
     if (this.state.version !== 1) throw new Error("不支持的 Skill 执行记录版本");
@@ -167,8 +169,21 @@ export class DomainSkillWork {
     step.candidate = structuredClone({ ...result, document_ids: [...new Set([...result.document_ids, ...(step.written_document_ids ?? [])])] });
     if (step.review) delete step.candidate.review; // 写作者不能替独立评审保存通过结论。
     step.candidate_fingerprint = fingerprint ?? execution.callbacks?.fingerprint(documentIds(step, result));
-    delete step.result; delete step.reviewed_fingerprint; delete this.state.result;
+    delete step.result; delete step.reviewed_fingerprint; delete step.review_submission; delete this.state.result;
     this.persist(); return structuredClone(step.candidate);
+  }
+  recordReview(id: string, result: SkillWorkResult, fingerprint: string) {
+    const step = this.state.steps.find(item => item.id === id), execution = this.executions.get(id);
+    if (!step?.review || step.status !== "running" || !step.candidate || !execution?.reviewing || execution.writing) throw new Error("当前步骤不在提交独立评审");
+    execution.signal.throwIfAborted();
+    if (!result.summary?.trim() || result.status === "paused" || typeof result.review?.pass !== "boolean" || !result.review.feedback?.trim()) throw new Error("独立评审必须明确是否通过，并说明依据或具体修改意见");
+    const ids = documentIds(step, step.candidate);
+    if (!Array.isArray(result.document_ids) || ids.some(id => !result.document_ids.includes(id))) throw new Error("独立评审结果需要包含全部预定及实际改动文稿");
+    if (execution.reviewing !== fingerprint || execution.callbacks?.fingerprint(ids) !== fingerprint) throw new Error("评审期间文稿已变化，请重新读取并评审当前正文");
+    scanForSecrets("Skill 独立评审", Buffer.from(JSON.stringify(result)));
+    step.review_submission = structuredClone({ result, fingerprint });
+    delete this.state.result; this.persist();
+    return structuredClone(result);
   }
   async run(id: string, execute: (step: SkillWorkStep) => Promise<SkillWorkResult>, signal: AbortSignal, callbacks?: SkillWorkCallbacks) {
     const step = this.state.steps.find(s => s.id === id);
@@ -199,17 +214,28 @@ export class DomainSkillWork {
       step.candidate ??= structuredClone(step.result!);
       if (step.candidate) delete step.candidate.review;
       if (validation && !validation.pass) step.candidate!.review = validation;
-      delete step.result; delete step.reviewed_fingerprint; delete this.state.result;
+      delete step.result; delete step.reviewed_fingerprint; delete step.review_submission; delete this.state.result;
       step.status = "pending"; step.error = validation?.feedback ?? "文稿已变化，需要重新读取并评审当前正文"; this.persist();
     }
     if (step.depends_on.some(id => this.state.steps.find(s => s.id === id)?.status !== "done")) throw new Error("依赖步骤尚未完成");
-    const execution = { signal, writing: false, callbacks };
+    const execution: { signal: AbortSignal; writing: boolean; reviewing?: string; callbacks?: SkillWorkCallbacks } = { signal, writing: false, callbacks };
     this.executions.set(id, execution);
     step.status = "running"; delete this.state.result; this.persist();
     try {
       for (;;) {
         signal.throwIfAborted();
-        if (step.review && (step.review_attempts ?? 0) - (step.review_budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`独立评审已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未通过；${step.error ?? "请检查文稿和评审记录后接续"}`);
+        const submitted = step.review_submission && step.review && step.candidate && step.review_submission.fingerprint === callbacks!.fingerprint(documentIds(step, step.candidate)) ? step.review_submission : undefined;
+        if (step.review_submission && !submitted) {
+          delete step.review_submission;
+          if (step.candidate) delete step.candidate.review;
+          this.persist();
+        }
+        if (submitted) {
+          step.candidate!.review = structuredClone(submitted.result.review!);
+          if (!submitted.result.review!.pass) step.error = submitted.result.review!.feedback;
+        }
+        // 第三次评审已成功提交后发生中断，恢复时仍须接纳该结果，不能再消耗一次预算。
+        if (step.review && !submitted?.result.review?.pass && (step.review_attempts ?? 0) - (step.review_budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`独立评审已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未通过；${step.error ?? "请检查文稿和评审记录后接续"}`);
         if (!step.candidate || revisesDocuments && step.candidate.review?.pass === false) {
           if (revisesDocuments && step.attempts - (step.budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`研究与修订已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未完成；${step.error ?? "请检查已保存的草稿后接续"}`);
           step.attempts++; execution.writing = true;
@@ -232,19 +258,33 @@ export class DomainSkillWork {
         const validation = validatesDocuments ? await callbacks?.validate?.(structuredClone(step), structuredClone(candidate)) : undefined;
         signal.throwIfAborted();
         if (validation && !validation.pass) {
-          candidate.review = validation; step.error = validation.feedback; this.persist(); continue;
+          candidate.review = validation; delete step.review_submission; step.error = validation.feedback; this.persist(); continue;
         }
         if (!step.review) {
           step.result = structuredClone(candidate); step.status = "done"; delete step.error; this.persist(); return step.result;
         }
         const ids = documentIds(step, candidate), fingerprint = callbacks!.fingerprint(ids);
         step.candidate_fingerprint = fingerprint;
-        step.review_attempts = (step.review_attempts ?? 0) + 1; this.persist();
+        const savedReview = step.review_submission?.fingerprint === fingerprint ? step.review_submission.result.review : undefined;
+        if (!savedReview) {
+          delete step.review_submission;
+          if ((step.review_attempts ?? 0) - (step.review_budget_start ?? 0) >= REVIEW_ATTEMPTS) throw new Error(`独立评审已尝试 ${REVIEW_ATTEMPTS} 次，本项尚未通过；${step.error ?? "请检查文稿和评审记录后接续"}`);
+          step.review_attempts = (step.review_attempts ?? 0) + 1; this.persist();
+        }
         try {
-          const review = await callbacks!.review(structuredClone(step), structuredClone(candidate)); signal.throwIfAborted();
-          if (typeof review?.pass !== "boolean" || !review.feedback?.trim()) throw new Error("独立评审必须明确是否通过，并说明依据或具体修改意见");
-          scanForSecrets("Skill 独立评审", Buffer.from(JSON.stringify(review)));
+          if (!savedReview) {
+            execution.reviewing = fingerprint;
+            try {
+              const review = await callbacks!.review(structuredClone(step), structuredClone(candidate)); signal.throwIfAborted();
+              // 工具提交优先于最后回复；旧调用方仍可通过返回值提交评审。
+              if (!step.review_submission) this.recordReview(id, { summary: review?.feedback, document_ids: ids, review }, fingerprint);
+            } catch (error) {
+              signal.throwIfAborted();
+              if (!step.review_submission) throw error;
+            } finally { delete execution.reviewing; }
+          }
           if (callbacks!.fingerprint(ids) !== fingerprint) throw new Error("评审期间文稿已变化，请重新读取并评审当前正文");
+          const review = step.review_submission!.result.review!;
           candidate.review = structuredClone(review);
           if (!review.pass) { step.error = review.feedback; this.persist(); continue; }
           step.result = structuredClone(candidate); step.reviewed_fingerprint = fingerprint;

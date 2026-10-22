@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { lazy, Suspense } from "react";
 import { App } from "./App";
 import { RootErrorBoundary } from "./RootErrorBoundary";
 import { startBrowserDiagnostics } from "./browserDiagnostics";
@@ -24,6 +25,16 @@ document.documentElement.dataset.density = savedDensity === "compact" ? "compact
 
 // 兜住整棵树:渲染异常显示可读的错误页,而不是把页面清空(见
 // RootErrorBoundary 头注释里那次"点一行就白屏"的实测)。
-try { startBrowserDiagnostics(); } catch { /* 诊断不可用不能影响页面启动。 */ }
+const taskDemoId = new URLSearchParams(location.search).get("taskDemo");
+const taskDemoPreview = import.meta.env.DEV && new URLSearchParams(location.search).get("taskDemoPreview") === "1";
+const TaskDemoWorkspace = lazy(() => import("./TaskDemoWorkspace"));
+const TaskDemoPreview = import.meta.env.DEV ? lazy(() => import("./TaskDemoPreview")) : null;
+if (!taskDemoId && !taskDemoPreview) {
+  try { startBrowserDiagnostics(); } catch { /* 诊断不可用不能影响页面启动。 */ }
+}
 createRoot(document.getElementById("root")!).render(
-  <RootErrorBoundary><App /></RootErrorBoundary>);
+  <RootErrorBoundary>{taskDemoPreview && TaskDemoPreview
+    ? <Suspense fallback={<div style={{ padding: 32 }}>正在打开演示效果…</div>}><TaskDemoPreview /></Suspense>
+    : taskDemoId
+    ? <Suspense fallback={<div style={{ padding: 32 }}>正在打开演示副本…</div>}><TaskDemoWorkspace sourceTaskId={taskDemoId} /></Suspense>
+    : <App />}</RootErrorBoundary>);

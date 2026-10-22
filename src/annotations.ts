@@ -278,9 +278,30 @@ export class AnnotationStore {
  *  记账);断写尾巴由读口自愈——崩溃半行不再吞掉下一次追加的账。 */
   list(): Annotation[] {
     if (!existsSync(this.path)) return [];
+    return this.replay(readAppendOnlyJsonl<Operation>(this.path,
+      { middleCorrupt: "skip" }));
+  }
+
+  /** 演示副本只读取当前字节，不能修复原账本的坏尾或缺失换行。 */
+  snapshot(): { items: Annotation[]; history: AnnotationOperation[]; skipped: number } {
+    if (!existsSync(this.path)) return { items: [], history: [], skipped: 0 };
+    const history: AnnotationOperation[] = [];
+    let skipped = 0;
+    for (const line of readFileSync(this.path, "utf-8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const operation = JSON.parse(line) as AnnotationOperation;
+        if (!operation || typeof operation !== "object" || !("op" in operation)) {
+          skipped += 1;
+        } else history.push(operation);
+      } catch { skipped += 1; }
+    }
+    return { items: this.replay(structuredClone(history)), history, skipped };
+  }
+
+  private replay(operations: readonly Operation[]): Annotation[] {
     const byId = new Map<string, Annotation>();
-    for (const operation of readAppendOnlyJsonl<Operation>(this.path,
-      { middleCorrupt: "skip" })) {
+    for (const operation of operations) {
       if (operation.op === "add" && operation.record?.id) {
         byId.set(operation.record.id, operation.record);
         continue;

@@ -20,6 +20,7 @@ import {
 import { ChevronDown } from "lucide-react";
 import { cn } from "cn";
 import { Spinner } from "@/components/Spinner";
+import { BrandMark } from "./BrandMark";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyTitle, EmptyDescription } from "@/components/Empty";
@@ -653,13 +654,6 @@ export function PersonalSettingsPage({
       </div>
     </section>
   </div>;
-}
-
-/** 品牌首字方块(#228 工具类化,侧栏/登录/加载屏三处共用):墨底反白。 */
-function BrandMark({ className }: { className?: string }) {
-  return <span aria-hidden className={cn("grid size-[26px] shrink-0 place-items-center rounded-[8px] bg-(--ink) text-(--ink-fg) shadow-[var(--shadow-primary)] [&_svg]:size-3.5 [&_svg]:[stroke-width:2.4]", className)}>
-    <svg viewBox="0 0 28 28"><path d="M5.5 20.5 10.7 7l3.3 7.15L17.3 7l5.2 13.5" /><path d="M8.1 16.1h11.8" /></svg>
-  </span>;
 }
 
 function NavIcon({ name }: { name: View }) {
@@ -1831,6 +1825,7 @@ export function App() {
       viewerUsername={session.username}
       viewerDisplayName={session.display_name}
       canOverride={session.role === "admin"}
+      canPresent={session.role === "admin"}
       canOperate={canOperate(artifactTask)}
       canCollaborate={canCollaborate(artifactTask)}
       canRequestReview={responsibleOf(artifactTask) === session.username

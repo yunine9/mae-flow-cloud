@@ -1,5 +1,6 @@
 import type { CompletionRange } from "../../src/completionRange";
 import { invalidateKnowledgeReads } from "./knowledgeReadCache";
+import { resolveTaskDemoAsset } from "./taskDemoSandbox";
 import type { MrParticipantsResult } from "../../src/mrParticipants";
 import type { ComponentKnowledgeCheckReport } from "../../src/componentKnowledgeTypes";
 import type { KnowledgeProductionView } from "../../src/knowledgeProductionTypes";
@@ -2619,7 +2620,8 @@ export const REQUIREMENT_GRAPH_ARTIFACT = "__requirement_graph__";
 export interface AnnotationImage { path: string; label?: string }
 
 export function annotationAssetUrl(taskId: string, path: string): string {
-  return `/tasks/${encodeURIComponent(taskId)}/annotation-asset?path=${encodeURIComponent(path)}`;
+  return resolveTaskDemoAsset(taskId, path)
+    ?? `/tasks/${encodeURIComponent(taskId)}/annotation-asset?path=${encodeURIComponent(path)}`;
 }
 
 /** 把一张图先存成检视图片资产,拿到 Agent 能读的路径;随后随批注引用。 */

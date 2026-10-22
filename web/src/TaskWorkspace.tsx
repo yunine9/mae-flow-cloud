@@ -43,8 +43,15 @@ import { Annotatable } from "./Annotatable";
 import { annotationLocationRow, graphAnnotationLocationKey, resolvedAnnotationRange } from "./annotateTargets";
 import { AnnotationPanel, type ReviewFilter } from "./AnnotationPanel";
 import { requirementGraphVisible } from "./taskHierarchy";
+import { RequirementGraph } from "./RequirementGraph";
 import { PrepushBadge } from "./PrepushStatus";
 import { StagePlanDialog } from "./StagePlanDialog";
+import { TaskDemoFrame } from "./TaskDemoFrame";
+import { TaskDemoGuide } from "./TaskDemoGuide";
+import { getTaskDemoGuideContent, taskDemoPhaseTitle } from "./taskDemoGuideContent";
+import { TASK_DEMO_ANALYSIS_PHASE } from "./taskDemoTypes";
+import type { TaskDemoControls } from "./taskDemoTypes";
+import { resolveTaskDemoAsset } from "./taskDemoSandbox";
 import { OverlayDialog, WarmupBadge, WarmupPanel } from "./WarmupPanel";
 import { TaskStatusBadge } from "./StatusBadge";
 import { Badge } from "@/components/ui/badge";
@@ -73,7 +80,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { XIcon } from "lucide-react";
+import { ArrowUpRightIcon, BarChart3Icon, XIcon } from "lucide-react";
 import {
   completeReview,
   controlTask,
@@ -125,6 +132,7 @@ type WorkspaceView = "focus" | "materials" | "execution" | "knowledge";
 /** 右栏宽度:人拖过就记住(浏览器本地),没拖过走样式表的默认档。 */
 const SIDE_WIDTH_KEY = "mae-flow:ws-side-w";
 const SIDE_WIDTH_MIN = 360;
+const DEMO_DELIVERY_REPORT = "task-materials/交付报告.md";
 type MaterialView = "source" | "doc" | "chain" | "diff";
 
 const WORKSPACE_VIEW_SHORTCUTS: Partial<Record<string, WorkspaceView>> = {
@@ -513,6 +521,9 @@ export function TaskWorkspace({
   onOpenTask,
   onExecutionPlanFeedback,
   onOpenFeedbackWall,
+  canPresent = false,
+  demo,
+  demoRevision = 0,
 }: {
   task: TaskSummary;
   viewerUsername: string;
@@ -529,6 +540,9 @@ export function TaskWorkspace({
   onOpenFeedbackWall?: () => void;
   onOpenTask?: (taskId: string) => void;
   onExecutionPlanFeedback?: (draft: { title: string; detail: string }) => void;
+  canPresent?: boolean;
+  demo?: TaskDemoControls;
+  demoRevision?: number;
 }) {
   // 旧任务、纯会话和非内核提问没有 approval_subject 元数据；此时需求
   // 原文是唯一保证存在的证据，不能默认打开一个空的产出文档面板。
@@ -616,6 +630,29 @@ export function TaskWorkspace({
   const [diffReviewRequest, setDiffReviewRequest] = useState(0);
   /** 点进度条阶段名弹该阶段执行方案;空串=不显示。 */
   const [planPhase, setPlanPhase] = useState("");
+  const [demoOpen, setDemoOpen] = useState(false);
+  const [demoDiagram, setDemoDiagram] = useState<"decomposition" | "architecture">("architecture");
+  const [demoMessages, setDemoMessages] = useState<Record<string, string>>({});
+  const demoPhaseOpened = useRef("");
+  const demoHasDecomposition = Boolean(demo && requirementGraphVisible(task));
+  const demoAnalysis = demoHasDecomposition && demo?.phase === TASK_DEMO_ANALYSIS_PHASE;
+  const demoShowsDecomposition = demoHasDecomposition && demoDiagram === "decomposition";
+  const demoPhaseTitle = (phase: string) => demoHasDecomposition && phase === TASK_DEMO_ANALYSIS_PHASE
+    ? "需求拆分" : taskDemoPhaseTitle(phase);
+  const demoContent = demo ? getTaskDemoGuideContent(demo.phase) : undefined;
+  const demoCompleted = demo?.phase === "已合入";
+  const demoReviewReport = demo?.phase === "检视与验证"
+    ? items?.find(item => item.kind === "doc" && item.name === DEMO_DELIVERY_REPORT) : undefined;
+  const demoReportOpen = Boolean(demoReviewReport && materialView === "doc" && active === demoReviewReport.name);
+  const deliveryAnalysisQuery = new URLSearchParams({ deliveryAnalysis: "1", deliveryTask: demo?.sourceTaskId ?? task.id });
+  if (demo?.preview) {
+    deliveryAnalysisQuery.set("taskDemoPreview", "1");
+    deliveryAnalysisQuery.set("taskDemoCopy", task.id);
+  }
+  const displayTheme = document.documentElement.dataset.theme;
+  if (displayTheme === "light" || displayTheme === "dark") deliveryAnalysisQuery.set("theme", displayTheme);
+  const deliveryAnalysisHref = `/?${deliveryAnalysisQuery}`;
+  const demoMessageId = demo ? demoMessages[demo.phase] ?? demo.suggestedMessageId : undefined;
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>(
     defaultWorkspaceView(task),
   );
@@ -766,7 +803,8 @@ export function TaskWorkspace({
   }
 
   // 工作区内切换材料、检视和运行记录；右栏只承接决定与回复。
-  function openMaterial(view: MaterialView) {
+  function openMaterial(view: MaterialView, diagram: "decomposition" | "architecture" = "architecture") {
+    if (view === "chain") setDemoDiagram(diagram);
     if (view !== "doc") {
       setModuleLocation(undefined); setModuleLocationRetry(undefined);
       setLocationNotice("");
@@ -774,6 +812,37 @@ export function TaskWorkspace({
     if (workspaceView === "execution" || workspaceView === "knowledge") selectWorkspaceView("materials");
     setMaterialView(view);
   }
+  function openDemoDecomposition() {
+    if (!demoHasDecomposition || !demo) return;
+    openMaterial("chain", "decomposition");
+    demo.onSelectPhase(TASK_DEMO_ANALYSIS_PHASE);
+  }
+  useEffect(() => {
+    if (!demo) return;
+    setStreamFilter("all"); setStreamThread(undefined);
+    setDemoMessages(current => { const next = { ...current }; delete next[demo.phase]; return next; });
+  }, [demo?.phase, demo?.focusKey]);
+  useEffect(() => {
+    if (!demo || !items) return;
+    const selectionKey = `${demo.phase}:${demo.focusKey ?? 0}:${demoReviewReport?.name ?? ""}`;
+    if (demoPhaseOpened.current === selectionKey) return;
+    demoPhaseOpened.current = selectionKey;
+    setStreamFilter("all"); setStreamThread(undefined);
+    const document = demoReviewReport ?? items.find(item => item.kind === "doc"
+      && demoContent?.artifactPatterns.some(pattern => pattern.test(item.name)));
+    const code = demo.phase === "写代码" ? items.find(item => item.kind === "diff") : undefined;
+    setWorkspaceView(demoCompleted && !document ? "knowledge" : "materials");
+    setDemoDiagram(demoAnalysis ? "decomposition" : "architecture");
+    setMaterialView(demoAnalysis ? "chain" : code ? "diff" : document ? "doc" : "source");
+    const selected = code ?? document;
+    if (selected) { activeRef.current = selected.name; setActive(selected.name); }
+  }, [demo?.phase, demo?.focusKey, items, demoContent, demoAnalysis, demoCompleted, demoReviewReport]);
+  useEffect(() => {
+    if (!demo) return;
+    setNotesPulse(value => value + 1);
+    setLivePulse(value => value + 1);
+    void loadConversation(task.id);
+  }, [demoRevision]);
   // 架构图和“阅读 Story”必须回到同一份设计来源：主任务用整体 Story，
   // 子任务用自己的模块 story.md。子任务没有 requirement graph 页签，不能
   // 再借 requirementGraphVisible 决定是否显示架构入口。
@@ -867,6 +936,7 @@ export function TaskWorkspace({
   }, [task.id, task.waiting?.waiting_id]);
 
   useEffect(() => {
+    if (demo) return;
     const waitingId = task.waiting?.waiting_id;
     if (!waitingId || task.status === "paused") return;
 
@@ -885,6 +955,7 @@ export function TaskWorkspace({
   }, [task.status, task.waiting?.waiting_id, task.waiting?.recommended_view]);
 
   useEffect(() => {
+    if (demo) return;
     setWorkspaceView("focus");
   }, [task.status, task.waiting?.waiting_id,
     task.delivery?.evidence_gap?.state,
@@ -1313,6 +1384,7 @@ export function TaskWorkspace({
     if (!source && !graph && targetArtifact && targetArtifact !== active) setActive(targetArtifact);
     const targetView = materialViewForAnnotation(item.artifact, items);
     setMaterialView(targetView);
+    if (graph && demoHasDecomposition) openDemoDecomposition();
     if (targetView === "diff" && item.file) setSelectedDiffPath(item.file);
     setLocationNotice("正在核对批注的当前位置…");
     let fresh;
@@ -1487,7 +1559,7 @@ export function TaskWorkspace({
   const materialHeading = materialView === "source"
     ? { kicker: "REQUEST SOURCE", title: "当前需求" }
     : materialView === "chain"
-    ? { kicker: "ARCHITECTURE", title: "架构图" }
+    ? { kicker: "ARCHITECTURE", title: demoShowsDecomposition ? "需求拆分" : "架构图" }
     : materialView === "diff"
       ? pushReview
         ? { kicker: "PUSH REVIEW", title: diffScope === "changes"
@@ -1834,18 +1906,25 @@ export function TaskWorkspace({
 
   return (
     <main
-      className={`workspace-overlay task-workspace-v2 workspace-studio${materialsFullscreen
+      className={`workspace-overlay task-workspace-v2 workspace-studio${demo ? " task-demo-mode" : ""}${materialsFullscreen
         ? " materials-fullscreen" : ""}`}
       ref={workspaceRoot}
       aria-label={`任务工作台：${task.title ?? task.requirement}`}
       style={sideWidth ? { ["--ws-side-w" as string]: `${sideWidth}px` } as CSSProperties : undefined}
     >
+      {demoOpen && canPresent && !demo && <TaskDemoFrame taskId={task.id} onClose={() => setDemoOpen(false)} />}
+      {demo && <div className="task-demo-bar">
+        <div><strong>{demo.preview ? "演示预览 · 示例数据" : "演示副本"}</strong><span>以需求 owner 身份体验 · 操作仅保留在本次演示</span></div>
+        <div><span title={demo.sourceLabel}>原任务 {demo.sourceTaskId} · {demo.sourceStatus}</span>
+          <Button variant="ghost" size="sm" onClick={() => { demoPhaseOpened.current = ""; demo.onReset(); }}>重置演示</Button>
+          <Button variant="outline" size="sm" onClick={demo.onExit}>退出演示</Button></div>
+      </div>}
       <header className="ws-head" ref={headRef}>
         <Button type="button" variant="outline" size="sm"
           className="ws-back-button gap-1 bg-surface-2 hover:border-ink hover:bg-surface-2 hover:text-ink"
-          aria-label="返回列表" onClick={onClose} autoFocus>
+          aria-label={demo?.backLabel ?? "返回列表"} onClick={onClose} autoFocus>
           <svg viewBox="0 0 20 20" aria-hidden className="size-3.5"><path d="m12.5 5-5 5 5 5" /></svg>
-          <span>返回列表</span>
+          <span>{demo?.backLabel ?? "返回列表"}</span>
         </Button>
         <div className="ws-identity">
           {task.ticket && <Badge variant="outline" className="font-mono tracking-wide">{task.ticket}</Badge>}
@@ -1854,7 +1933,7 @@ export function TaskWorkspace({
             {task.title ?? task.requirement}
           </strong>
           <div className="ws-identity-line">
-            <code title="平台内部编号">{task.id}</code>
+            <code title={demo ? "演示阶段与原任务实际进度分开" : "平台内部编号"}>{demo ? `正在讲解：${demoPhaseTitle(demo.phase)}` : task.id}</code>
             {!task.parent_task_id && <RequirementBusinessModule task={task} onChanged={onChanged} />}
             {/* 身份行徽标:#216 收编为 Badge;≤640px 沿用原 .pill 窄屏
                 行为(收成一颗放大的点,文字隐藏)。 */}
@@ -1891,17 +1970,18 @@ export function TaskWorkspace({
               ——这些任务不提供弹层。 */}
           {/* 刻度旁只放阶段名:步骤说明已经是主画布的标题,这里再写一遍
               会把 44px 的视图条撑成一行长文。 */}
-          <TaskProgress progress={visibleProgress} showDetailedStep={false} status={task.status}
-            preparation={<WarmupBadge task={task} onOpen={() => setWarmupOpen(true)} />}
-            onPhaseClick={task.execution_plan || task.workflow_profile
-              ? setPlanPhase : undefined}
-            context={health && <>
+          <TaskProgress progress={demo ? { ...visibleProgress,
+            phases: visibleProgress.phases.map(demoPhaseTitle), current_phase: demoPhaseTitle(visibleProgress.current_phase) } : visibleProgress} showDetailedStep={false} status={task.status}
+            preparation={!demo && <WarmupBadge task={task} onOpen={() => setWarmupOpen(true)} />}
+            onPhaseClick={demo ? (phase) => { demoPhaseOpened.current = ""; demo.onSelectPhase(visibleProgress.phases.find(item => demoPhaseTitle(item) === phase) ?? phase); }
+              : task.execution_plan || task.workflow_profile ? setPlanPhase : undefined}
+            context={demo ? <span><i>正在讲解</i>{demoPhaseTitle(demo.phase)} · 点击阶段切换</span> : health && <>
             <span title={health.next}><i>下一步</i>{health.next}</span>
             <span><i>责任</i>{health.actor}</span>
             <span title={health.last_progress_at}><i>更新</i>
               {relativeTime(health.last_progress_at) || "暂无记录"}</span>
           </>} />
-          {planPhase && <StagePlanDialog
+          {!demo && planPhase && <StagePlanDialog
             phase={planPhase}
             currentPhase={visibleProgress.current_phase}
             plan={task.execution_plan}
@@ -1910,8 +1990,14 @@ export function TaskWorkspace({
             onSuggest={onExecutionPlanFeedback}
             onClose={() => setPlanPhase("")} />}
         </div>
-        {(controllable || deletable || canRequestReview || onOpenFeedbackWall) && (
+        {(controllable || deletable || canRequestReview || onOpenFeedbackWall || canPresent || demoCompleted) && (
           <div className="ws-head-controls" aria-label="任务控制">
+            {demoCompleted && <a className="task-demo-delivery-analysis" href={deliveryAnalysisHref}
+              target="_blank" rel="noopener noreferrer" title="查看本次交付分析，复盘返工并改进流程与知识（新窗口）">
+              <BarChart3Icon aria-hidden /><span>交付分析</span><ArrowUpRightIcon aria-hidden />
+            </a>}
+            {canPresent && !demo && <Button type="button" variant="outline" size="sm"
+              onClick={() => setDemoOpen(true)}>演示模式</Button>}
             {/* #227 换装:头部控制钮换 shadcn Button(恢复/暂停=outline、
                 取消=ghost、删除=destructive、邀请=outline sm),确认态
                 是一枚危险软底胶囊;原 .ws-head-controls 按钮皮不再依赖。 */}
@@ -1971,6 +2057,7 @@ export function TaskWorkspace({
           </div>
         )}
       </header>
+      {demo && <TaskDemoGuide phase={demo.phase} decomposition={demoAnalysis} />}
       <TaskContinueDelivery key={task.id} task={task} canOperate={canOperate} onChanged={onChanged} />
 
       {taskInspector && <TaskInspector task={task} canOperate={canOperate} onChanged={onChanged} kind={taskInspector} onClose={() => setTaskInspector(undefined)}
@@ -2006,10 +2093,12 @@ export function TaskWorkspace({
                   渲染块(挂载/卸载语义原样)。 */}
               <Tabs className="contents"
                   value={workspaceView === "knowledge" ? "knowledge"
-                    : workspaceView === "execution" ? "execution" : materialView}
+                    : workspaceView === "execution" ? "execution"
+                    : materialView === "chain" && demoShowsDecomposition ? "demo-decomposition" : materialView}
                   onValueChange={(value) => {
                     if (value === "doc") { openMaterial("doc"); if (primaryDocument) setActive(primaryDocument.name); }
                     else if (value === "source") openMaterial("source");
+                    else if (value === "demo-decomposition") openDemoDecomposition();
                     else if (value === "chain") openMaterial("chain");
                     else if (value === "diff") { openMaterial("diff"); if (changes[0]) setActive(changes[0].name); }
                     else if (value === "knowledge") selectWorkspaceView("knowledge");
@@ -2035,12 +2124,16 @@ export function TaskWorkspace({
                       <span>产出文档</span><i>{documents.length}</i>
                     </TabsTrigger>
                   </>}
+                  {demoHasDecomposition && <TabsTrigger value="demo-decomposition"
+                    className={`h-auto flex-none task-demo-artifact${materialTabOn("chain") && demoShowsDecomposition ? " on" : ""}`}>
+                    <span>需求拆分</span>
+                  </TabsTrigger>}
                   {(hasRequirementGraph || hasArchitectureStory) && <TabsTrigger value="chain"
-                    className={`h-auto flex-none${materialTabOn("chain") ? " on" : ""}`}>
+                    className={`h-auto flex-none${materialTabOn("chain") && !demoShowsDecomposition ? " on" : ""}${demo?.phase === "写设计" ? " task-demo-artifact" : ""}`}>
                     <span>架构图</span>
                   </TabsTrigger>}
                   <TabsTrigger value="diff"
-                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}`}
+                    className={`h-auto flex-none${materialTabOn("diff") ? " on" : ""}${demo?.phase === "写代码" ? " task-demo-artifact" : ""}`}
                     title={untrackedDirectoryCount
                       ? `${changeFileCount} 个文件，另有 ${untrackedDirectoryCount} 个未跟踪目录`
                       : `${changeFileCount} 个文件`}
@@ -2049,7 +2142,7 @@ export function TaskWorkspace({
                       ? ` + ${untrackedDirectoryCount}目录` : ""}</i>}
                   </TabsTrigger>
                   <TabsTrigger value="knowledge"
-                    className={`h-auto flex-none${workspaceView === "knowledge" ? " on" : ""}`}>
+                    className={`h-auto flex-none${workspaceView === "knowledge" ? " on" : ""}${demoCompleted ? " task-demo-artifact" : ""}`}>
                     <span>用到的知识</span>{Boolean(task.knowledge_usage?.resources.length) && <i>{task.knowledge_usage!.resources.length}</i>}
                   </TabsTrigger>
                   <TabsTrigger value="execution"
@@ -2064,7 +2157,7 @@ export function TaskWorkspace({
                 {materialTabOn("doc") && <DeliveryReportMenu key={task.id} task={task} canOperate={canOperate} onChanged={onChanged}
                   available={artifactTask.current === task.id && !!items?.some(item => item.name === "task-materials/交付报告.md")}
                   onOpen={() => { openMaterial("doc"); setActive("task-materials/交付报告.md"); }} />}
-                {materialView === "diff" && <a className="materials-fullscreen-toggle" href={`/?deliveryAnalysis=1&deliveryTask=${encodeURIComponent(task.id)}`} target="_blank" rel="noreferrer">交付分析 ↗</a>}
+                {materialView === "diff" && <a className="materials-fullscreen-toggle" href={deliveryAnalysisHref} target="_blank" rel="noopener noreferrer">交付分析 ↗</a>}
                 <button type="button"
                   className={`ws-review-launch${reviewPanelOpen ? " on" : ""}`}
                   aria-label="检视意见" aria-expanded={reviewPanelOpen} aria-controls="ws-review-canvas"
@@ -2185,7 +2278,9 @@ export function TaskWorkspace({
           {materialView === "doc" && documents.length > 0 && (
             <div className="ws-tabs ws-document-tabs">
               {documents.map((item) => (
-                <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")} onClick={() => setActive(item.name)}>
+                <button key={item.name} className={"ws-tab" + (item.name === active ? " on" : "")
+                  + (demo && demoContent?.artifactPatterns.some(pattern => pattern.test(item.name)) ? " task-demo-artifact" : "")}
+                  onClick={() => setActive(item.name)}>
                   <span>{item.label}</span><i>{item.purpose === "delivery_unit_brief"
                     ? "主任务书" : item.purpose === "delivery_plan"
                       ? "参考" : sizeText(item.bytes)}</i>
@@ -2203,7 +2298,7 @@ export function TaskWorkspace({
           {documentsDownloadError && <div className="utility-note" role="alert">
             打包下载失败：{documentsDownloadError}
           </div>}
-          <div className={`ws-doc${materialView === "diff" ? " is-diff" : materialView === "chain" ? " is-chain" : ""}`}
+          <div className={`ws-doc${materialView === "diff" ? " is-diff" : materialView === "chain" ? " is-chain" : ""}${demoReportOpen ? " task-demo-report-highlight" : ""}`}
             data-artifact={materialView === "source" ? TASK_REQUIREMENT_ARTIFACT
               : materialView === "chain" ? REQUIREMENT_GRAPH_ARTIFACT : active}
             data-loading={materialView !== "source" && loading ? "true" : "false"}>
@@ -2306,13 +2401,20 @@ export function TaskWorkspace({
                     <Markdown showLineNumbers text={task.requirement} resolveImage={(path) =>
                       task.requirement_document?.assets?.some(
                         (asset) => asset.path === path)
-                        ? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
+                        ? resolveTaskDemoAsset(task.id, path) ?? `/tasks/${encodeURIComponent(task.id)}/requirement-asset?path=${encodeURIComponent(path)}`
                         : undefined} />
                   )}
                 </article>
               </Annotatable>
               </>
             ) : materialView === "chain" ? (
+              demoShowsDecomposition ? (
+                <section className="task-demo-decomposition" aria-label="需求拆分关系">
+                  <RequirementGraph task={task} onOpenTask={onOpenTask} annotations={notes}
+                    annotationEnabled={canContributeReview && canCreateAnnotation}
+                    onAnnotationAdded={() => setNotesPulse(tick => tick + 1)} />
+                </section>
+              ) :
               // flush:chain 态贴边豁免——去 padding、交出滚动,ws-doc 唯一滚动层(#253)。
               <StoryArchitecture key={task.id} taskId={task.id} canUpdate={canOperate} flush requestedLine={architectureLine}
                 onAnnotate={canContributeReview && canCreateAnnotation && architectureStoryName ? async (note) => {
@@ -2445,6 +2547,15 @@ export function TaskWorkspace({
           </div>
         </section>
         <section className="ws-side" aria-label="与 Agent 协作">
+          {demo && <div className="task-demo-message-caption">
+            <select aria-label="选择本阶段展示回复" value={demoMessageId ?? ""}
+              onChange={event => { setStreamFilter("all"); setStreamThread(undefined);
+                setDemoMessages(current => ({ ...current, [demo.phase]: event.target.value })); }}>
+              <option value="">选择本阶段的关键回复</option>
+              {conversation.items.filter((item): item is Extract<ConversationItem, { kind: "turn" }> => item.kind === "turn").map(item =>
+                <option key={item.id} value={item.id}>{item.texts.at(-1)?.text.replace(/[#*\n]/g, " ").slice(0, 65) || "Agent 回复"}</option>)}
+            </select>
+          </div>}
           {/* 栏宽可拖(双击复位),记在浏览器里:默认 36vw 封顶 640px 仍嫌窄的话
               人自己拉(用户 2026-09-05:"占据的面积太小了")。 */}
           <div className="ws-side-resizer" role="separator" aria-orientation="vertical"
@@ -2515,6 +2626,9 @@ export function TaskWorkspace({
               回合。批注挂在提交按钮正上方(WaitingCard 内部)的原则不变——选项
               标签是内核的,前端改写会让记账对不上(2026-08-09 实战事故)。 */}
           <ConversationStream
+            highlightId={demoMessageId}
+            highlightCardId={demo ? demo.suggestedCardId ?? (waiting ? `card-${waiting.waiting_id}` : undefined) : undefined}
+            highlightFocusKey={demo?.focusKey}
             task={task}
             items={conversation.items}
             problems={conversation.problems}

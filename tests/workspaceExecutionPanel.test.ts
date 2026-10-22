@@ -42,7 +42,8 @@ test("低频资料集中在任务详情，暂停成功不重复占据通栏", ()
   assert.doesNotMatch(workspace, /ws-task-facts/);
   const inspector = readFileSync(resolve("web/src/TaskInspector.tsx"), "utf8");
   for (const kind of ["usage", "workflow"]) assert.ok(inspector.includes(`onInspect("${kind}")`));
-  assert.match(workspace, /preparation=\{<WarmupBadge task=\{task\}/);
+  assert.match(workspace, /preparation=\{!demo && <WarmupBadge task=\{task\}/,
+    "正常工作台保留准备信息，演示模式收起次要控件");
   assert.doesNotMatch(inspector, /WarmupPanel|环境与执行配置/);
   for (const fact of ["luban_account", "mr_url", "pipeline", "milestone", "workspace_reclaimed_at"]) assert.ok(inspector.includes(fact));
   assert.match(workspace, /selectWorkspaceView\("knowledge"\)/);
