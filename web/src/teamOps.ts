@@ -375,33 +375,36 @@ export function issueFeatureRows(
 
 export interface OnceGeneratedFeatureRow {
   module: string;
-  /** 会话数(分母=该特性有数据的完成交付会话)。 */
+  /** 交付尝试数:完成交付(含待算/无源码/起算日前)+ 负面原因终止,
+   *  与一次解决率环同口径;终止记未解决。 */
   sessions: number;
-  /** 一次解决率(定位与验证双一次的会话占比)。 */
+  /** 一次解决率(定位与验证双一次才算解决;分母=交付尝试)。 */
   solved_rate: number | null;
-  /** 会话级达标率(占比 ≥ 达标线的会话占比)。 */
+  /** 会话级达标率(占比 ≥ 达标线的会话占比;仅 ok 行,先行能力字段)。 */
   pass_rate: number | null;
-  /** 一次定位率(报告一版过)。 */
+  /** 一次定位率(报告一版过;分母=交付尝试,终止记未定位)。 */
   localization_rate: number | null;
-  /** 一次验证率(验证不通过次数=0)。 */
+  /** 一次验证率(验证不通过次数=0;分母=交付尝试,终止记未验证)。 */
   verify_rate: number | null;
   /** 行数加权的特性首次生成占比(首轮工作行 ÷ 全部工作行,跨会话
-   *  求和后相除)。分母 0 → null。 */
+   *  求和后相除;仅 ok 行)。分母 0 → null。 */
   share: number | null;
   total_lines: number;
 }
 
-/** 按特性(业务模块标签,空白归「未分类」)聚合首次生成明细:输入是
- *  once-generated 端点的 per_session(服务端已滤成分母全集)。排序:
- *  会话数降序 → 行数降序 → 名称(与 issueFeatureRows 的排序精神
- *  同构:处理多的特性先看)。 */
+/** 按特性(业务模块标签,空白归「未分类」)聚合:三率(一次解决/
+ *  定位/验证)同用交付尝试口径——输入=once-generated 端点的 per_session
+ *  全部行(含待算/无源码/起算日前/负面终止),与一次解决率环同分母;
+ *  终止行只带特性标签,三率记失败;工作机器事实(ok 行)作分子,键
+ *  缺席不作分母豁免。行数/占比仅 ok 行。排序:会话数降序 → 行数降序
+ *  → 名称。 */
 export function onceGeneratedFeatureRows(
   rows: ReadonlyArray<{
     module: string;
     share?: number;
     pass?: boolean;
     /** 工作机器事实仅 ok 行有(#540 复审可选化:canceled 行缺席);
-     *  缺 share/lines 的行在读侧整行跳过,不会读到缺席布尔。 */
+     *  缺席只影响分子(记失败),分母照进(展示口径,用户拍板)。 */
     localization_pass?: boolean;
     verify_pass?: boolean;
     solved_pass?: boolean;
@@ -409,23 +412,25 @@ export function onceGeneratedFeatureRows(
   }>,
 ): OnceGeneratedFeatureRow[] {
   const groups = new Map<string, {
-    sessions: number; passed: number;
-    localization: number; verify: number; solved: number;
+    sessions: number; solved: number;
+    passed: number; ok: number; localization: number; verify: number;
     first: number; total: number;
   }>();
   for (const row of rows) {
-    if (row.share === undefined || !row.lines) continue; // 非 ok 行(待算/无源码)不进聚合
     const key = row.module?.trim() || "未分类";
     const bucket = groups.get(key)
-      ?? { sessions: 0, passed: 0, localization: 0, verify: 0, solved: 0,
-        first: 0, total: 0 };
+      ?? { sessions: 0, solved: 0, passed: 0, ok: 0,
+        localization: 0, verify: 0, first: 0, total: 0 };
     bucket.sessions += 1;
-    if (row.pass) bucket.passed += 1;
+    if (row.solved_pass) bucket.solved += 1;
     if (row.localization_pass) bucket.localization += 1;
     if (row.verify_pass) bucket.verify += 1;
-    if (row.solved_pass) bucket.solved += 1;
-    bucket.first += row.lines.first;
-    bucket.total += row.lines.first + row.lines.rework + row.lines.external;
+    if (row.share !== undefined && row.lines) {
+      bucket.ok += 1;
+      if (row.pass) bucket.passed += 1;
+      bucket.first += row.lines.first;
+      bucket.total += row.lines.first + row.lines.rework + row.lines.external;
+    }
     groups.set(key, bucket);
   }
   const percent = (value: number, total: number): number | null =>
@@ -434,7 +439,7 @@ export function onceGeneratedFeatureRows(
     module,
     sessions: bucket.sessions,
     solved_rate: percent(bucket.solved, bucket.sessions),
-    pass_rate: percent(bucket.passed, bucket.sessions),
+    pass_rate: percent(bucket.passed, bucket.ok),
     localization_rate: percent(bucket.localization, bucket.sessions),
     verify_rate: percent(bucket.verify, bucket.sessions),
     share: percent(bucket.first, bucket.total),
@@ -444,10 +449,17 @@ export function onceGeneratedFeatureRows(
 }
 
 /** 特性树内层的一行:某特性的会话在某仓的工作行合计(ADR-0065;
- *  占比与全局 by_repo 同式,行数加权现算)。 */
+ *  占比与全局 by_repo 同式,行数加权现算)。三率分子随 ok 行累计,
+ *  分母=sessions(仓行只含有交付事实的会话)。 */
 export interface FeatureRepoRow {
   repo: string;
   sessions: number;
+  /** 一次解决的会话数(定位与验证双一次)。 */
+  solved: number;
+  /** 一次定位过(报告一版过)的会话数。 */
+  localization_passed: number;
+  /** 一次验证过(验证零失败)的会话数。 */
+  verify_passed: number;
   first: number;
   rework: number;
   external: number;
@@ -456,34 +468,45 @@ export interface FeatureRepoRow {
 }
 
 /** 特性→仓 工作行树(ADR-0065):输入是 once-generated 端点的 ok 行,
- *  只吃 share/lines 都在场的行(与 onceGeneratedFeatureRows 同一守卫);
- *  by_repo 缺席(降级响应/旧端点)时该行只不贡献仓行,不崩。仓行按
- *  工作行合计降序——原按代码仓页签的排序。 */
+ *  只吃 share/lines 都在场的行(与 onceGeneratedFeatureRows 的行数
+ *  口径同一守卫);by_repo 缺席(降级响应/旧端点)时该行只不贡献仓行,
+ *  不崩。仓行排序:绑定内的在前、绑定外的沉底(2026-10-21 修订,取代
+ *  「绑定外」徽标),各自再按工作行合计降序——原按代码仓页签的排序;
+ *  isBound 缺席(模块目录取不到)视为全部绑内,退回纯行数降序。
+ *  lines 返回特性层的 首轮/返工/平台外 合计(供合并单列)。 */
 export function featureRepoTree(
   rows: ReadonlyArray<{
     module: string;
     share?: number;
+    localization_pass?: boolean;
+    verify_pass?: boolean;
+    solved_pass?: boolean;
     lines?: { first: number; rework: number; external: number };
     by_repo?: ReadonlyArray<{
       repo: string; first: number; rework: number; external: number;
     }>;
   }>,
+  isBound?: (feature: string, repo: string) => boolean,
 ): {
   repos: Map<string, FeatureRepoRow[]>;
-  lines: Map<string, { rework: number; external: number }>;
+  lines: Map<string, { first: number; rework: number; external: number }>;
 } {
   const repoBuckets = new Map<string, Map<string, FeatureRepoRow>>();
-  const lineTotals = new Map<string, { rework: number; external: number }>();
+  const lineTotals = new Map<string, { first: number; rework: number; external: number }>();
   for (const row of rows) {
     if (row.share === undefined || !row.lines) continue; // 非 ok 行不进聚合
     const feature = row.module?.trim() || "未分类";
     const buckets = repoBuckets.get(feature) ?? new Map<string, FeatureRepoRow>();
     for (const entry of row.by_repo ?? []) {
       const bucket = buckets.get(entry.repo) ?? {
-        repo: entry.repo, sessions: 0,
+        repo: entry.repo, sessions: 0, solved: 0,
+        localization_passed: 0, verify_passed: 0,
         first: 0, rework: 0, external: 0, total: 0, share: null,
       };
       bucket.sessions += 1;
+      if (row.solved_pass) bucket.solved += 1;
+      if (row.localization_pass) bucket.localization_passed += 1;
+      if (row.verify_pass) bucket.verify_passed += 1;
       bucket.first += entry.first;
       bucket.rework += entry.rework;
       bucket.external += entry.external;
@@ -494,15 +517,20 @@ export function featureRepoTree(
       buckets.set(entry.repo, bucket);
     }
     repoBuckets.set(feature, buckets);
-    const totals = lineTotals.get(feature) ?? { rework: 0, external: 0 };
+    const totals = lineTotals.get(feature)
+      ?? { first: 0, rework: 0, external: 0 };
+    totals.first += row.lines.first;
     totals.rework += row.lines.rework;
     totals.external += row.lines.external;
     lineTotals.set(feature, totals);
   }
   const repos = new Map<string, FeatureRepoRow[]>();
   for (const [feature, buckets] of repoBuckets) {
+    const unbound = (row: FeatureRepoRow) => !(isBound?.(feature, row.repo) ?? true);
     repos.set(feature, [...buckets.values()].sort((a, b) =>
-      b.total - a.total || a.repo.localeCompare(b.repo, "zh-Hans-CN")));
+      Number(unbound(a)) - Number(unbound(b))
+      || b.total - a.total
+      || a.repo.localeCompare(b.repo, "zh-Hans-CN")));
   }
   return { repos, lines: lineTotals };
 }

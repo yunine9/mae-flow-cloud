@@ -1760,7 +1760,7 @@ export function App() {
           && <UsersBoard me={session.username} />}
         {view === "settings" && session.role === "admin" && <SettingsBoard />}
         {view === "environments" && <ConfigurationCenter admin={session.role === "admin"} />}
-        {view === "deliveryAnalysis" && <DeliveryAnalytics initialTab={deliveryAnalyticsTab} onOpenTask={(taskId) => {
+        {view === "deliveryAnalysis" && <DeliveryAnalytics initialTab={deliveryAnalyticsTab} role={session?.role} onOpenTask={(taskId) => {
           const target = tasks.find((task) => task.id === taskId);
           if (target) openArtifacts(target);
           else location.assign(`/work/${encodeURIComponent(taskId)}`);

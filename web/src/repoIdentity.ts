@@ -7,3 +7,15 @@
 export function repoIdentity(value: string): string {
   return value.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
 }
+
+/** 仓地址的展示简写:去协议/域名/`.git`,取路径末两段——
+ *  `https://git.example.com/team/alarm.git` → `team/alarm`,单段路径
+ *  只取段名。域名和协议一般不是关注点,完整地址留在悬停(title)里;
+ *  筛选值与绑定比对仍用全址(repoIdentity),本函数只管显示。 */
+export function repoShortName(value: string): string {
+  const withoutGit = value.trim().replace(/\/+$/, "").replace(/\.git$/i, "");
+  const path = withoutGit.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .replace(/^[^/]+/, "");
+  const segments = path.split("/").filter(Boolean);
+  return segments.slice(-2).join("/");
+}

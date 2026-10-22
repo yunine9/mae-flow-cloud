@@ -1,8 +1,8 @@
 import { useTechnologyStacks } from "./useTechnologyStacks";
 import { CompletionDateFilter, completionDateRange, type CompletionDates } from "./CompletionDateFilter";
 import { completedInRange } from "../../src/completionRange";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { BarChart3, ChevronDown, ChevronRight, ExternalLink, HelpCircle, RefreshCw, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { BarChart3, ChevronDown, ChevronRight, ExternalLink, HelpCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { knowledgeLanguageLabel } from "./KnowledgeLanguages";
@@ -15,13 +15,122 @@ import { aggregateDelivery, aggregateDeliveryModules, aggregateDeliveryTokens, s
 import { cn } from "cn";
 import { getBusinessModules, getIssueOnceGenerated, listPeople, type BusinessModuleCatalog, type IssueOnceGenerated, type IssueOnceGeneratedSessionRow, type PersonIdentity } from "./api";
 import { cancelReasonLabel, isNegativeCancelReason } from "./issues/cancelReasons";
-import { getIssueRegistrationStats, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
+import { getIssueRegistrationStats, type IssueRegistrationGroupRow, type IssueRegistrationSessionRow, type IssueRegistrationStats } from "./api";
 import { TicketTemplateCard } from "./issues/TicketTemplateCard";
-import { featureRepoTree, onceGeneratedFeatureRows, type OnceGeneratedFeatureRow } from "./teamOps";
+import { featureRepoTree, onceGeneratedFeatureRows, type FeatureRepoRow, type OnceGeneratedFeatureRow } from "./teamOps";
 import { IssueCodeOriginPanel } from "./issues/CodeOriginPanel";
 import { displayPersonName } from "./AnnotationPanel";
-import { HeaderEnumFilter, HeaderFilter } from "./HeaderFilter";
-import { repoIdentity } from "./repoIdentity";
+import { HeaderEnumFilter, HeaderFilter, SortMark } from "./HeaderFilter";
+import { repoIdentity, repoShortName } from "./repoIdentity";
+
+/** 表头排序状态:key=列键,dir=-1 降序优先(统计直觉:先看最大)。 */
+type SortState = { key: string; dir: 1 | -1 } | null;
+
+/** 三态循环:换列→降序;同列 降→升→取消(回到该表默认排序)。 */
+const cycleSort = (current: SortState, key: string): SortState =>
+  current?.key !== key ? { key, dir: -1 }
+    : current.dir === -1 ? { key, dir: 1 }
+      : null;
+
+/** 通用比较:null(—)恒沉底;字符串按中文序;数值乘方向。 */
+const compareBy = <T,>(value: (row: T) => string | number | null, dir: 1 | -1) =>
+  (a: T, b: T): number => {
+    const va = value(a);
+    const vb = value(b);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    if (typeof va === "string" || typeof vb === "string") {
+      return String(va).localeCompare(String(vb), "zh-Hans-CN") * dir;
+    }
+    return (Number(va) - Number(vb)) * dir;
+  };
+
+/** 可排序表头:文字+箭头可点(三态循环),filter 槽放列头漏斗;
+ *  className 透传给 th(如给首列托底最小宽,防止被挤到一字一行)。 */
+function SortableTh({ label, sortKey, sort, onCycle, filter, className }: {
+  label: string;
+  sortKey: string;
+  sort: SortState;
+  onCycle: (key: string) => void;
+  filter?: ReactNode;
+  className?: string;
+}) {
+  const active = sort?.key === sortKey;
+  return <th className={className}><span className="inline-flex items-center gap-1">
+    <button type="button" title="点击排序(降→升→默认)"
+      className="inline-flex items-center gap-1 hover:text-text-strong"
+      onClick={() => onCycle(sortKey)}>
+      {label}
+      <SortMark active={active} dir={active ? sort!.dir : undefined} />
+    </button>
+    {filter}
+  </span></th>;
+}
+
+/** 特性行排序取值:键=列键;率列空值(—)沉底。 */
+const featureSortValue = (row: OnceGeneratedFeatureRow, key: string): string | number | null =>
+  key === "name" ? row.module
+  : key === "sessions" ? row.sessions
+  : key === "lines" ? row.total_lines
+  : key === "solved" ? row.solved_rate
+  : key === "localization" ? row.localization_rate
+  : key === "verify" ? row.verify_rate
+  : row.share;
+
+/** 仓行排序取值:三率的分母=该仓 ok 会话数(sessions)。 */
+const repoSortValue = (entry: FeatureRepoRow, key: string): string | number | null =>
+  key === "name" ? entry.repo
+  : key === "sessions" ? entry.sessions
+  : key === "lines" ? entry.total
+  : key === "solved" || key === "localization" || key === "verify"
+    ? (entry.sessions
+      ? (key === "solved" ? entry.solved
+        : key === "localization" ? entry.localization_passed
+        : entry.verify_passed) / entry.sessions
+      : null)
+  : entry.share;
+
+/** 按会话行排序取值:终止行无判定事实(定位/验证/占比/行数)以 — 沉底,
+ *  一次解决照展示口径记失败(0)。 */
+const sessionSortValue = (row: IssueOnceGeneratedSessionRow, key: string): string | number | null => {
+  const canceled = row.state === "canceled";
+  switch (key) {
+    case "name": return row.id;
+    case "module": return row.module;
+    case "repo": return row.by_repo?.[0]?.repo ?? null;
+    case "solved": return canceled || !row.solved_pass ? 0 : 1;
+    case "localization": return canceled ? null : row.localization_pass ? 1 : 0;
+    case "verify": return canceled ? null : row.verify_pass ? 1 : 0;
+    case "share": return row.share ?? null;
+    case "lines": return row.lines
+      ? row.lines.first + row.lines.rework + row.lines.external
+      : null;
+    case "reporter": return row.reporter ?? null;
+    case "concluded": return row.concluded_at;
+    case "terminate": return row.cancel_reason ?? null;
+    default: return null;
+  }
+};
+
+/** 登记问题聚合行(按模块/按登记人同构)排序取值。 */
+const regGroupSortValue = (row: IssueRegistrationGroupRow, key: string): string | number | null =>
+  key === "name" ? row.key
+  : key === "total" ? row.total
+  : key === "non_issue" ? row.non_issue
+  : key === "issue_confirmed" ? row.issue_confirmed
+  : row.localization_rate;
+
+/** 登记问题按会话行排序取值。 */
+const regSessionSortValue = (row: IssueRegistrationSessionRow, key: string): string | number | null =>
+  key === "name" ? row.id
+  : key === "module" ? row.module
+  : key === "reporter" ? row.reporter
+  : key === "account" ? row.account
+  : key === "conclusion" ? (row.conclusion === "issue" ? "确认是问题" : "非问题")
+  : key === "versions" ? row.report_version_count
+  : key === "localization" ? (row.localization_pass ? 1 : 0)
+  : row.concluded_at;
 
 /** 列头枚举漏斗的选项:去重 → 中文排序 → {value,label} 同形。 */
 const enumOptions = (values: Iterable<string>) => [...new Set(values)]
@@ -155,14 +264,24 @@ function TerminateReasonDetail({ row }: { row: IssueOnceGeneratedSessionRow }) {
  *  一次定位/一次验证只在按会话表留 ✓/✗ 诊断列;后端端点零改动。
  *  2026-10-21 仓维度并入特性树(ADR-0065):观察维度剩 按特性/按会话
  *  两维,按特性是树状表格——外层特性,展开是该特性会话实际改过的仓
- *  (per_session.by_repo 前端聚合,绑定外仓标「绑定外」);点特性/
+ *  (per_session.by_repo 前端聚合,绑定列表外的仓排序沉底);点特性/
  *  仓名跳按会话并带上对应过滤,跳转所见=刚才所看数字的构成会话;
  *  按会话列头过滤:会话关键字/特性与发起人枚举。
  *  #543:负面原因终止的会话以行进按会话表(一次解决 ✗、无事实列 —、
  *  末列终止原因徽标,点行看原因详情),发起人列显示姓名。
+ *  2026-10-21 口径与角色粒度(ADR-0065 修订):特性行会话数/一次解决
+ *  率改交付尝试口径(per_session 全部行,与一次解决率环同分母,终止
+ *  记未解决);仓行与特性行新增一次定位/验证率(完成交付分母,仓行为
+ *  特性∩仓 ok 会话);首轮/返工/平台外合并单列;普通用户=一次解决率
+ *  单环 + 树表 3 列,admin=双环 + 7 列(前端按 session.role 判定,
+ *  按会话视图不分角色)。
  *  导出仅供视觉走查场景脚本挂载(与需求侧同款做法)。 */
 
-export function IssueAnalyticsTab() {
+export function IssueAnalyticsTab({ role }: { role?: string }) {
+  /** 角色粒度(ADR-0065 修订):普通用户=一次解决率单环 + 树表 3 列;
+   *  admin=双环 + 7 列(多定位/验证两率与行数合并列)。按会话视图与
+   *  行归属证据不分角色。 */
+  const isAdmin = role === "admin";
   const [stats, setStats] = useState<IssueOnceGenerated>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -176,6 +295,10 @@ export function IssueAnalyticsTab() {
   const [reporter, setReporter] = useState("");
   /** 特性树展开状态:特性名集合,默认全折叠,不记忆。 */
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  /** 表头排序(ADR-0065 修订):三态 降→升→默认;树表内外两层同列
+   *  各自排序,取消回到默认序(会话数降序+绑定外沉底/收口时间倒序)。 */
+  const [featureSort, setFeatureSort] = useState<SortState>(null);
+  const [sessionSort, setSessionSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<string | null>(null);
   // 发起人姓名映射(#543):只是显示增强;读取失败静默退回工号显示,
   // 不 setError、不 busy,不挡表格首屏(先例 TaskWorkspace 同纪律)。
@@ -186,7 +309,8 @@ export function IssueAnalyticsTab() {
       .catch(() => {});
     return () => { live = false; };
   }, []);
-  /** 模块目录只喂「绑定外」标记:取不到就不标,不影响任何数字。 */
+  /** 模块目录只喂仓行排序(绑定外沉底):取不到就当全部绑内,
+   *  不影响任何数字。 */
   const [catalog, setCatalog] = useState<BusinessModuleCatalog>();
   useEffect(() => {
     let live = true;
@@ -206,19 +330,27 @@ export function IssueAnalyticsTab() {
   }, [dates]);
   // 特性树永远展示全部特性(module 过滤只管按会话表):点特性行的
   // 语义是「跳过去看会话」,不是原地收窄树。
-  const okRows = useMemo(() => (stats?.per_session ?? [])
-    .filter((row) => row.state === "ok"), [stats]);
+  const allRows = stats?.per_session ?? [];
+  const okRows = useMemo(() => allRows
+    .filter((row) => row.state === "ok"), [allRows]);
   const shareRows = useMemo(() => okRows.filter((row) => row.share !== undefined) as IssueOnceGeneratedSessionRow[], [okRows]);
-  const features = useMemo(() => onceGeneratedFeatureRows(shareRows), [shareRows]);
-  const tree = useMemo(() => featureRepoTree(shareRows), [shareRows]);
+  // 特性行=交付尝试口径(per_session 全部行,与一次解决率环同分母);
+  // 仓行/行数/占比=ok 事实口径(shareRows)。
+  // 「未分类」=ADR-0056 前发起的存量未标注会话,不进树面(按会话的
+  // 特性漏斗仍可筛到);环分母含它们,存量流出前树加权与环略有出入。
+  const features = useMemo(() => onceGeneratedFeatureRows(allRows)
+    .filter((row) => row.module !== "未分类"), [allRows]);
+  // 归一后比对(去 .git 尾缀/大小写差异),原样比对会误判绑定外。
   const bindings = useMemo(() => new Map((catalog?.modules ?? [])
-    .map((entry) => [entry.name, entry.repositories])), [catalog]);
+    .map((entry) => [entry.name, new Set(entry.repositories.map(repoIdentity))])), [catalog]);
+  const tree = useMemo(() => featureRepoTree(shareRows, (feature, repo) =>
+    bindings.get(feature)?.has(repoIdentity(repo)) ?? true), [shareRows, bindings]);
   // 表格呈现完成交付会话与负面终止会话(#543);「问题已处理」取消与
   // 无原因历史取消服务端本就不下发行,前端不复判 cancel_reason(唯一
   // 口径在服务端);pending/unsupported/no_code 只计入范围计数,不进表。
   // 特性树/占比只认 ok 行(shareRows),终止行只进按会话表。
-  const tableRows = useMemo(() => (stats?.per_session ?? [])
-    .filter((row) => row.state === "ok" || row.state === "canceled"), [stats]);
+  const tableRows = useMemo(() => allRows
+    .filter((row) => row.state === "ok" || row.state === "canceled"), [allRows]);
   const rows = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     return tableRows.filter((row) =>
@@ -228,15 +360,28 @@ export function IssueAnalyticsTab() {
       && (!keyword || `${row.id} ${row.title}`.toLowerCase().includes(keyword)));
   }, [tableRows, module, repo, reporter, query]);
   const moduleOptions = useMemo(() => enumOptions(tableRows.map((row) => row.module)), [tableRows]);
+  const repoOptions = useMemo(() => enumOptions(tableRows
+    .flatMap((row) => row.by_repo?.map((entry) => entry.repo) ?? []))
+    .map((option) => ({ value: option.value, label: repoShortName(option.value) })), [tableRows]);
   const reporterOptions = useMemo(() => enumOptions(tableRows
     .map((row) => row.reporter)
     .filter((name): name is string => !!name)), [tableRows]);
   const selectedRow = rows.find((row) => row.id === selected);
+  const sortedFeatures = useMemo(() => featureSort
+    ? [...features].sort(compareBy((row) => featureSortValue(row, featureSort.key), featureSort.dir))
+    : features, [features, featureSort]);
+  const sortedRows = useMemo(() => sessionSort
+    ? [...rows].sort(compareBy((row) => sessionSortValue(row, sessionSort.key), sessionSort.dir))
+    : rows, [rows, sessionSort]);
+  const cycleFeature = (key: string) => setFeatureSort((prev) => cycleSort(prev, key));
+  const cycleSession = (key: string) => setSessionSort((prev) => cycleSort(prev, key));
   const pct = (value: number | null | undefined) =>
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
+  /** 计数比(分子/分母现算,一位小数);分母 0 → —。 */
+  const countRate = (part: number, total: number) =>
+    pct(total ? Math.round((part / total) * 1000) / 10 : null);
   const delivered = stats?.delivered ?? 0;
   const lines = sumLineKinds(stats);
-  const terminated = stats?.terminated ?? 0;
   const solvedRate = pct(stats?.solved.rate);
   const shareRate = pct(weightedShare(stats));
   const help = (tip: string) =>
@@ -254,6 +399,19 @@ export function IssueAnalyticsTab() {
     if (next.has(feature)) next.delete(feature); else next.add(feature);
     return next;
   });
+  const solvedCard = <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话(自 2026-10-21 口径切换起),主动终止记一次失败;「问题已处理」的终止不参与统计;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
+    <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
+      ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
+      slices={[
+        { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
+        { label: "未一次解决", color: "var(--line-strong)", value: Math.max(0, (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0)) },
+      ]} />
+  </section>;
+  const shareCard = <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
+    <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
+      ariaLabel={`生成工作行 ${num(lines.total)} 行，首次生成占比 ${shareRate}`}
+      slices={worklineSlices(lines)} />
+  </section>;
   return <div className="grid gap-4">
     {error && <p role="alert" className="delivery-error">{error}</p>}
     <div className="flex flex-wrap items-center gap-3">
@@ -264,49 +422,43 @@ export function IssueAnalyticsTab() {
           <span className="help-tip" data-tip={`待算 ${stats.pending} · 无源码交付 ${stats.no_code} · 早于 ${stats.supported_since} 起算日 ${stats.unsupported} 个,均不进统计`}><HelpCircle size={14} className="text-muted-foreground" /></span>}
       </span>
     </div>
-    <div className="delivery-overview-grid">
-      <section className="delivery-card"><h2>一次解决率 <span>{stats?.solved.passed ?? 0} / {stats?.solved.total ?? 0} 会话</span>{help("报告一版过 且 验证不通过=0,两轴同时一次的会话占比。分母=完成交付会话+主动终止(负面原因)会话(自 2026-10-21 口径切换起),主动终止记一次失败;按会话表的定位/验证✓✗是它的两个因子,两轴分母仍只含完成交付。")}</h2>
-        <Donut unit="会话" centerValue={solvedRate} centerLabel="一次解决率"
-          ariaLabel={`一次解决 ${stats?.solved.passed ?? 0} / ${stats?.solved.total ?? 0} 会话，占比 ${solvedRate}`}
-          slices={[
-            { label: "一次解决", color: "var(--success)", value: stats?.solved.passed ?? 0 },
-            { label: "未一次解决", color: "var(--line-strong)", value: Math.max(0, (stats?.solved.total ?? 0) - (stats?.solved.passed ?? 0) - terminated) },
-            { label: "用户终止（负面原因）", color: "var(--attention-strong)", value: terminated },
-          ]} />
-        <p className="mt-3 text-xs text-muted-foreground">口径标注：分母 = 完成交付会话 + 主动终止会话（自 2026-10-21 口径切换起）；终止时选「问题已处理」的会话不参与统计。</p>
-      </section>
-      <section className="delivery-card"><h2>首次生成占比 <span>交付代码行数：{num(lines.total)} 行</span>{help("首次生成占比=首轮提交变更行 ÷ 全部提交变更行(增删行均计为正向工作量,源码白名单内);平台外(人工)改动计入分母;被强制覆盖(force push)的平台推送按原分类计入。跨会话按工作行加权。")}</h2>
-        <Donut unit="行" centerValue={shareRate} centerLabel="首次生成占比"
-          ariaLabel={`生成工作行 ${num(lines.total)} 行，首次生成占比 ${shareRate}`}
-          slices={worklineSlices(lines)} />
-      </section>
-    </div>
-    <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
+    {isAdmin
+      ? <div className="delivery-overview-grid">{solvedCard}{shareCard}</div>
+      : solvedCard}
+    <div className="inline-flex w-fit items-center gap-1 rounded-full border border-line bg-surface-2 p-1" role="tablist" aria-label="观察维度">
       {([["feature", "按特性"], ["session", "按会话"]] as const).map(([key, label]) =>
         <button key={key} type="button" aria-pressed={dim === key}
-          className={cn("border-r border-line px-5 py-2 text-sm last:border-r-0",
-            dim === key ? "bg-canvas font-semibold text-text-strong" : "text-muted-foreground hover:text-text-strong")}
+          className={cn("rounded-full px-4 py-1.5 text-sm transition-colors",
+            dim === key ? "bg-canvas font-semibold text-text-strong shadow-sm" : "text-muted-foreground hover:text-text-strong")}
           onClick={() => setDim(key)}>{label}</button>)}
     </div>
     {dim === "feature" && <section className="delivery-card"><h2 className="flex items-center gap-2">按特性
-      {help("展开看该特性交付落到的各仓;点特性名/仓名跳按会话并带上过滤;一次解决按会话归属特性计,占比按工作行加权;仓行标「绑定外」=改了该特性绑定列表之外的仓")}</h2>
+      {help(isAdmin
+        ? "三率同分母=交付尝试(完成交付+负面终止;终止记未解决/未定位/未验证);行数与占比只含有交付事实的会话;展开看该特性交付落到的各仓,点特性名/仓名跳按会话并带上过滤;绑定列表外的仓排在同特性仓行的末尾;仓行三率只含有交付事实的会话"
+        : "会话数与一次解决率=交付尝试口径(完成交付+负面终止,终止记未解决,与一次解决率环同分母);展开看该特性交付落到的各仓,点特性名/仓名跳按会话并带上过滤;绑定列表外的仓排在同特性仓行的末尾")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>特性 / 代码仓</th><th>会话数</th><th>一次解决率</th><th>首次生成占比</th><th>返工工作行</th><th>平台外工作行</th>
+        <SortableTh label="特性 / 代码仓" sortKey="name" sort={featureSort} onCycle={cycleFeature} />
+        <SortableTh label="会话数" sortKey="sessions" sort={featureSort} onCycle={cycleFeature} />
+        <SortableTh label="一次解决率" sortKey="solved" sort={featureSort} onCycle={cycleFeature} />
+        {isAdmin && <SortableTh label="一次定位率" sortKey="localization" sort={featureSort} onCycle={cycleFeature} />}
+        {isAdmin && <SortableTh label="一次验证率" sortKey="verify" sort={featureSort} onCycle={cycleFeature} />}
+        {isAdmin && <SortableTh label="首次生成占比" sortKey="share" sort={featureSort} onCycle={cycleFeature} />}
+        {isAdmin && <SortableTh label="首轮/返工/平台外(行)" sortKey="lines" sort={featureSort} onCycle={cycleFeature} />}
       </tr></thead>
-        <tbody>{features.map((feature: OnceGeneratedFeatureRow) => {
+        <tbody>{sortedFeatures.map((feature: OnceGeneratedFeatureRow) => {
           const name = feature.module;
           const open = expanded.has(name);
-          const inner = tree.repos.get(name) ?? [];
-          const totals = tree.lines.get(name) ?? { rework: 0, external: 0 };
-          const bound = bindings.get(name);
-          // 归一后比对(去 .git 尾缀/大小写差异),原样比对会误标绑定外。
-          const boundIds = bound ? new Set(bound.map(repoIdentity)) : undefined;
+          const inner = featureSort
+            ? [...(tree.repos.get(name) ?? [])]
+              .sort(compareBy((entry: FeatureRepoRow) => repoSortValue(entry, featureSort.key), featureSort.dir))
+            : tree.repos.get(name) ?? [];
+          const totals = tree.lines.get(name) ?? { first: 0, rework: 0, external: 0 };
           return <Fragment key={name}>
             <tr>
               <td><span className="flex items-center gap-1">
                 <button type="button" aria-expanded={open}
-                  aria-label={`${open ? "收起" : "展开"}${name}的代码仓`}
-                  className="rounded-sm p-0.5 text-muted-foreground hover:text-text-strong"
+                  aria-label={`${open ? "收起" : "展开"}${name}的代码仓`} disabled={!inner.length}
+                  className="rounded-sm p-0.5 text-muted-foreground hover:text-text-strong disabled:opacity-40"
                   onClick={() => toggleExpand(name)}>
                   {open ? <ChevronDown aria-hidden size={14} /> : <ChevronRight aria-hidden size={14} />}
                 </button>
@@ -315,57 +467,63 @@ export function IssueAnalyticsTab() {
               </span></td>
               <td>{feature.sessions}</td>
               <td className="pct">{pct(feature.solved_rate)}</td>
-              <td className="delivery-accent pct">{pct(feature.share)}</td>
-              <td>{num(totals.rework)}</td>
-              <td className="text-muted-foreground">{num(totals.external)}</td>
+              {isAdmin && <td className="pct">{pct(feature.localization_rate)}</td>}
+              {isAdmin && <td className="pct">{pct(feature.verify_rate)}</td>}
+              {isAdmin && <td className="delivery-accent pct">{pct(feature.share)}</td>}
+              {isAdmin && <td className="pct">{num(totals.first)} / {num(totals.rework)} / {num(totals.external)}</td>}
             </tr>
             {open && inner.map((entry) => <tr key={entry.repo} className="delivery-child-row">
               <td className="wrap"><button className="delivery-task-link"
-                title="查看改过该仓的该特性会话" onClick={() => openSessions(name, entry.repo)}>
-                <b>{entry.repo}</b>
-                {boundIds && !boundIds.has(repoIdentity(entry.repo)) &&
-                  <Badge variant="outline" className="w-fit">绑定外</Badge>}
+                title={`查看改过该仓(${entry.repo})的该特性会话`} onClick={() => openSessions(name, entry.repo)}>
+                <b title={entry.repo}>{repoShortName(entry.repo)}</b>
               </button></td>
               <td>{entry.sessions}</td>
-              <td className="pct text-muted-foreground">—</td>
-              <td className="delivery-accent pct">{pct(entry.share)}</td>
-              <td>{num(entry.rework)}</td>
-              <td className="text-muted-foreground">{num(entry.external)}</td>
+              <td className="pct">{countRate(entry.solved, entry.sessions)}</td>
+              {isAdmin && <td className="pct">{countRate(entry.localization_passed, entry.sessions)}</td>}
+              {isAdmin && <td className="pct">{countRate(entry.verify_passed, entry.sessions)}</td>}
+              {isAdmin && <td className="delivery-accent pct">{pct(entry.share)}</td>}
+              {isAdmin && <td className="pct">{num(entry.first)} / {num(entry.rework)} / {num(entry.external)}</td>}
             </tr>)}
           </Fragment>;
         })}</tbody></table></div>
-      {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有完成交付的会话"}</p>}
+      {!features.length && <p className="delivery-empty">{busy ? "正在读取统计…" : "范围内还没有会话"}</p>}
     </section>}
     {dim === "session" && <section className="delivery-card"><h2 className="flex items-center gap-2">按会话
-      {help("列头漏斗按会话关键字/特性/发起人过滤;点行查看该会话的行归属证据,终止行点行看终止原因与说明;一次定位/一次验证✓✗只对完成交付会话判轴,终止行相关列以 — 占位")}</h2>
-      {(module !== "*" || repo) && <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-muted-foreground">筛选</span>
-        {module !== "*" && <button type="button" title="清除特性过滤"
-          className="inline-flex max-w-[320px] items-center gap-1 rounded-full bg-active-soft px-2.5 py-1 text-xs font-medium text-active"
-          onClick={() => setModule("*")}>特性:{module}<X aria-hidden size={12} /></button>}
-        {repo && <button type="button" title="清除代码仓过滤"
-          className="inline-flex max-w-[320px] items-center gap-1 rounded-full bg-active-soft px-2.5 py-1 text-xs font-medium text-active"
-          onClick={() => setRepo("")}><span className="truncate">代码仓:{repo}</span><X aria-hidden size={12} /></button>}
-      </div>}
+      {help("列头漏斗按会话关键字/特性/代码仓/发起人过滤,激活的漏斗带底色,点开可清除;点行查看该会话的行归属证据,终止行点行看终止原因与说明;一次定位/一次验证✓✗只对完成交付会话判轴,终止行相关列以 — 占位")}</h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th><span className="inline-flex items-center gap-1">会话
-          <KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
-            value={query} onChange={setQuery} /></span></th>
-        <th><span className="inline-flex items-center gap-1">特性
-          <HeaderEnumFilter label="特性" value={module === "*" ? "" : module}
-            options={moduleOptions} onPick={(value) => setModule(value || "*")} /></span></th>
-        <th>一次解决</th><th>一次定位</th><th>一次验证</th><th>首次生成占比</th><th>首轮/返工/平台外(行)</th>
-        <th><span className="inline-flex items-center gap-1">发起人
-          <HeaderEnumFilter label="发起人" value={reporter}
-            options={reporterOptions} onPick={setReporter} /></span></th>
-        <th>收口时间</th><th>终止原因</th>
+        <SortableTh label="会话" sortKey="name" sort={sessionSort} onCycle={cycleSession} className="min-w-[240px]"
+          filter={<KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
+            value={query} onChange={setQuery} />} />
+        <SortableTh label="特性" sortKey="module" sort={sessionSort} onCycle={cycleSession}
+          filter={<HeaderEnumFilter label="特性" value={module === "*" ? "" : module}
+            options={moduleOptions} onPick={(value) => setModule(value || "*")} />} />
+        <SortableTh label="代码仓" sortKey="repo" sort={sessionSort} onCycle={cycleSession}
+          filter={<HeaderEnumFilter label="代码仓" value={repo}
+            options={repoOptions} onPick={setRepo} />} />
+        <SortableTh label="一次解决" sortKey="solved" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="一次定位" sortKey="localization" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="一次验证" sortKey="verify" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="首次生成占比" sortKey="share" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="首轮/返工/平台外(行)" sortKey="lines" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="发起人" sortKey="reporter" sort={sessionSort} onCycle={cycleSession}
+          filter={<HeaderEnumFilter label="发起人" value={reporter}
+            options={reporterOptions} onPick={setReporter} />} />
+        <SortableTh label="收口时间" sortKey="concluded" sort={sessionSort} onCycle={cycleSession} />
+        <SortableTh label="终止原因" sortKey="terminate" sort={sessionSort} onCycle={cycleSession} />
       </tr></thead>
-        <tbody>{rows.map((row: IssueOnceGeneratedSessionRow) => {
+        <tbody>{sortedRows.map((row: IssueOnceGeneratedSessionRow) => {
           const canceledRow = row.state === "canceled";
           return <tr key={row.id} style={{ cursor: "pointer" }}
             title={canceledRow ? "查看终止原因" : "查看行归属证据"} onClick={() => setSelected(row.id)}>
-          <td><span className="delivery-task-link" style={{ cursor: "pointer" }}><b>{row.id}</b><span>{row.title}</span></span></td>
+          <td><a className="delivery-task-link" style={{ cursor: "pointer" }}
+            href={`/issues/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer"
+            title="打开会话控制台"
+            onClick={(event) => event.stopPropagation()}><b>{row.id}</b><span>{row.title}</span></a></td>
           <td>{row.module}</td>
+          <td className="wrap">{row.by_repo?.length
+            ? <span className="flex flex-col gap-0.5 text-xs">{[...new Set(row.by_repo.map((entry) => entry.repo))]
+              .map((repo) => <span key={repo} className="max-w-[160px] truncate" title={repo}>{repoShortName(repo)}</span>)}</span>
+            : "—"}</td>
           <td>{canceledRow
             ? <span className="font-semibold text-danger">✗</span>
             : row.solved_pass
@@ -417,6 +575,10 @@ export function RegistrationAnalyticsTab() {
   const [query, setQuery] = useState("");
   const [reporter, setReporter] = useState("");
   const [account, setAccount] = useState("");
+  /** 表头排序(ADR-0065 修订,与 DTS 同款三态)。聚合小表两视图列结构
+   *  对齐,共用一个排序状态;按会话独立。 */
+  const [groupSort, setGroupSort] = useState<SortState>(null);
+  const [regSessionSort, setRegSessionSort] = useState<SortState>(null);
   const [selected, setSelected] = useState<IssueRegistrationSessionRow | null>(null);
   useEffect(() => {
     let live = true;
@@ -443,6 +605,17 @@ export function RegistrationAnalyticsTab() {
     .map((row) => row.account).filter(Boolean)), [stats]);
   const modules = stats?.by_module ?? [];
   const reporters = stats?.by_reporter ?? [];
+  const sortedModules = useMemo(() => groupSort
+    ? [...modules].sort(compareBy((row) => regGroupSortValue(row, groupSort.key), groupSort.dir))
+    : modules, [modules, groupSort]);
+  const sortedReporters = useMemo(() => groupSort
+    ? [...reporters].sort(compareBy((row) => regGroupSortValue(row, groupSort.key), groupSort.dir))
+    : reporters, [reporters, groupSort]);
+  const sortedRegRows = useMemo(() => regSessionSort
+    ? [...rows].sort(compareBy((row) => regSessionSortValue(row, regSessionSort.key), regSessionSort.dir))
+    : rows, [rows, regSessionSort]);
+  const cycleGroup = (key: string) => setGroupSort((prev) => cycleSort(prev, key));
+  const cycleRegSession = (key: string) => setRegSessionSort((prev) => cycleSort(prev, key));
   const pct = (value: number | null | undefined) =>
     value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
   const help = (tip: string) =>
@@ -485,20 +658,24 @@ export function RegistrationAnalyticsTab() {
         `${stats?.localization.passed ?? 0}/${stats?.localization.total ?? 0} 会话`,
         "分析报告一版就收口即一次定位;检视提出修改会生成新版本。分母=非问题+确认是问题。")}
     </div>
-    <div className="inline-flex overflow-hidden rounded-[10px] border border-line" role="tablist" aria-label="观察维度">
+    <div className="inline-flex w-fit items-center gap-1 rounded-full border border-line bg-surface-2 p-1" role="tablist" aria-label="观察维度">
       {([["module", "按模块"], ["reporter", "按登记人"], ["session", "按会话"]] as const).map(([key, label]) =>
         <button key={key} type="button" aria-pressed={dim === key}
-          className={cn("border-r border-line px-5 py-2 text-sm last:border-r-0",
-            dim === key ? "bg-canvas font-semibold text-text-strong" : "text-muted-foreground hover:text-text-strong")}
+          className={cn("rounded-full px-4 py-1.5 text-sm transition-colors",
+            dim === key ? "bg-canvas font-semibold text-text-strong shadow-sm" : "text-muted-foreground hover:text-text-strong")}
           onClick={() => setDim(key)}>{label}</button>)}
     </div>
     {dim === "module" && <section className="delivery-card"><h2 className="flex items-center gap-2">按模块
       {help("无单会话按登记时所选业务模块聚合;点模块名可筛选按会话明细")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>模块</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>一次定位率</th>
+        <SortableTh label="模块" sortKey="name" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="登记数" sortKey="total" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="非问题" sortKey="non_issue" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="确认是问题" sortKey="issue_confirmed" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="一次定位率" sortKey="localization" sort={groupSort} onCycle={cycleGroup} />
       </tr></thead>
-        <tbody>{modules.map((entry) => <tr key={entry.key}>
+        <tbody>{sortedModules.map((entry) => <tr key={entry.key}>
           <td><button className="delivery-task-link" aria-pressed={module === entry.key}
             onClick={() => setModule(module === entry.key ? "*" : entry.key)}><b>{entry.key}</b></button></td>
           <td>{entry.total}</td>
@@ -512,9 +689,13 @@ export function RegistrationAnalyticsTab() {
       {help("按登记时指派的登记人聚合;登记人缺席的老会话按归属兜底")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th>登记人</th><th>登记数</th><th>非问题</th><th>确认是问题</th><th>一次定位率</th>
+        <SortableTh label="登记人" sortKey="name" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="登记数" sortKey="total" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="非问题" sortKey="non_issue" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="确认是问题" sortKey="issue_confirmed" sort={groupSort} onCycle={cycleGroup} />
+        <SortableTh label="一次定位率" sortKey="localization" sort={groupSort} onCycle={cycleGroup} />
       </tr></thead>
-        <tbody>{reporters.map((entry) => <tr key={entry.key}>
+        <tbody>{sortedReporters.map((entry) => <tr key={entry.key}>
           <td className="wrap"><b>{entry.key}</b></td>
           <td>{entry.total}</td>
           <td>{entry.non_issue}</td>
@@ -527,25 +708,31 @@ export function RegistrationAnalyticsTab() {
       {help("列头漏斗按会话关键字/模块/登记人/责任人过滤;点「确认是问题」行查看报告版本账与提单模板卡")}
     </h2>
       <div className="delivery-table-scroll"><table><thead><tr>
-        <th><span className="inline-flex items-center gap-1">会话
-          <KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
-            value={query} onChange={setQuery} /></span></th>
-        <th><span className="inline-flex items-center gap-1">模块
-          <HeaderEnumFilter label="模块" value={module === "*" ? "" : module}
-            options={moduleOptions} onPick={(value) => setModule(value || "*")} /></span></th>
-        <th><span className="inline-flex items-center gap-1">登记人
-          <HeaderEnumFilter label="登记人" value={reporter}
-            options={reporterOptions} onPick={setReporter} /></span></th>
-        <th><span className="inline-flex items-center gap-1">责任人
-          <HeaderEnumFilter label="责任人" value={account}
-            options={accountOptions} onPick={setAccount} /></span></th>
-        <th>结论</th><th>报告版本</th><th>一次定位</th><th>收口时间</th>
+        <SortableTh label="会话" sortKey="name" sort={regSessionSort} onCycle={cycleRegSession}
+          filter={<KeywordHeaderFilter label="会话" placeholder="包含 ID 或标题片段…"
+            value={query} onChange={setQuery} />} />
+        <SortableTh label="模块" sortKey="module" sort={regSessionSort} onCycle={cycleRegSession}
+          filter={<HeaderEnumFilter label="模块" value={module === "*" ? "" : module}
+            options={moduleOptions} onPick={(value) => setModule(value || "*")} />} />
+        <SortableTh label="登记人" sortKey="reporter" sort={regSessionSort} onCycle={cycleRegSession}
+          filter={<HeaderEnumFilter label="登记人" value={reporter}
+            options={reporterOptions} onPick={setReporter} />} />
+        <SortableTh label="责任人" sortKey="account" sort={regSessionSort} onCycle={cycleRegSession}
+          filter={<HeaderEnumFilter label="责任人" value={account}
+            options={accountOptions} onPick={setAccount} />} />
+        <SortableTh label="结论" sortKey="conclusion" sort={regSessionSort} onCycle={cycleRegSession} />
+        <SortableTh label="报告版本" sortKey="versions" sort={regSessionSort} onCycle={cycleRegSession} />
+        <SortableTh label="一次定位" sortKey="localization" sort={regSessionSort} onCycle={cycleRegSession} />
+        <SortableTh label="收口时间" sortKey="concluded" sort={regSessionSort} onCycle={cycleRegSession} />
       </tr></thead>
-        <tbody>{rows.map((row) => <tr key={row.id}
+        <tbody>{sortedRegRows.map((row) => <tr key={row.id}
           style={{ cursor: row.conclusion === "issue" ? "pointer" : undefined }}
           title={row.conclusion === "issue" ? "查看报告版本账与提单模板" : undefined}
           onClick={row.conclusion === "issue" ? () => setSelected(row) : undefined}>
-          <td><span className="delivery-task-link"><b>{row.id}</b><span>{row.title}</span></span></td>
+          <td><a className="delivery-task-link"
+            href={`/issues/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer"
+            title="打开会话控制台"
+            onClick={(event) => event.stopPropagation()}><b>{row.id}</b><span>{row.title}</span></a></td>
           <td>{row.module}</td>
           <td>{row.reporter}</td>
           <td>{row.account}</td>
@@ -579,8 +766,10 @@ export function RegistrationAnalyticsTab() {
     </Sheet>
   </div>;
 }
-export function DeliveryAnalytics({ onOpenTask, initialTab }: {
+export function DeliveryAnalytics({ onOpenTask, initialTab, role }: {
   onOpenTask: (taskId: string) => void;
+  /** 登录角色:喂给 DTS 页签的角色粒度("admin"=双环+7 列)。 */
+  role?: string;
   /** 入场页签(页内跳转指定落点,如团队DTS档案的「交付统计」直达
    * 「DTS」;缺席=需求交付)。本组件按视图条件挂载,每次进场重取。 */
   initialTab?: "requirement" | "issue" | "registration" | "knowledge";
@@ -649,7 +838,7 @@ export function DeliveryAnalytics({ onOpenTask, initialTab }: {
     <details className="delivery-method"><summary>统计口径与数据边界</summary><p>以最终交付差异中的新增/修改行为分母，追溯最后修改它的提交。最终差异删除行另计 {num(summary.deleted)} 行。</p><p>首次实现包含首次实际修复之前的多个提交；缺少记录时以第一条明确修复提交为界，没有修复迹象时暂按首轮实现统计。统计源码、测试、脚本及配置等交付文本；Markdown、二进制、依赖目录、构建产物和平台运行文件不计入。配置先提交也属于首轮实现。</p><p>流水线 / 检视归因来自宿主实际修复轮次及前后提交范围。能明确识别为流水线修复的归流水线，其余后续提交归检视修改；缺少记录时结合提交说明推断，并在分类依据中标明；已有明确分类不被推断覆盖。历史改写或缺少合入前快照时，该任务暂不纳入汇总。</p><p>Token 使用已有模型用量台账，输入与输出相加；主任务汇总包含自身分析及当前筛选范围的子任务，每个任务只计一次。不要求已推送或已有代码统计；没有上报的历史消耗显示暂无记录。</p><p>这不是代码质量评分；不同任务规模与范围不同。覆盖不足时请结合任务明细解读统计。采集在推送后后台进行，稍后刷新可查看结果，不阻塞开发交付。</p></details>
     <Sheet open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}><SheetContent initialFocus={detailTitle} className="delivery-detail-sheet bg-(--surface) gap-0 data-[side=right]:w-[min(760px,58vw)] data-[side=right]:sm:max-w-[min(760px,58vw)]"><SheetHeader><SheetTitle ref={detailTitle} tabIndex={-1}>{selected} · {selectedParent ? "主任务汇总" : "交付分析"}</SheetTitle><SheetDescription>{selectedParent ? `${detailRows[0]?.parent_title ?? "主任务"} · 当前筛选范围内 ${new Set(detailRows.map(row => row.id)).size} 个子任务` : detailRows[0]?.title ?? "交付记录"}</SheetDescription></SheetHeader><div className="delivery-detail-body">{!detailRows.length ? <p>未找到该任务的交付记录。</p> : <><TaskLanguages tasks={detailRows} /><p className="delivery-scope">{selectedParent ? `已合入交付 ${detailRows.filter(r => r.merged).length}/${detailRows.length}${detailRows.some(r => !r.merged) ? " · 含未合入暂计" : ""}` : detailRows.every(r => r.merged) ? "已合入" : "进行中，以下为最近推送版本的暂计数据"} · 证据覆盖 {detail.available}/{detail.tasks}</p><section className="delivery-card"><h2>Token 消耗 <span>{selectedParent ? "含主任务自身及当前范围子任务" : "本任务累计用量"}</span></h2><div className="grid grid-cols-3 gap-4 py-4"><div>总计<strong className="block text-xl">{detailTokens.available ? num(detailTokens.total) : "—"}</strong></div><div>输入<strong className="block text-xl">{detailTokens.available ? num(detailTokens.input) : "—"}</strong></div><div>输出<strong className="block text-xl">{detailTokens.available ? num(detailTokens.output) : "—"}</strong></div></div>{detailTokens.available < detailTokens.tasks && <p className="delivery-muted">{detailTokens.available}/{detailTokens.tasks} 个任务有用量记录；未记录的历史消耗不估算。</p>}</section><section className="delivery-card"><h2>交付代码来源 <span>交付代码行数：{num(detail.total)} 行</span></h2><OriginDonut counts={detail.retained} /></section>{detailRows.map(row => <section className="delivery-card" key={`${row.id}:${row.delivery_id ?? "initial"}`}><div className="delivery-detail-heading"><h2>{row.id} · {new Date(row.at).toLocaleString("zh-CN")} · 提交记录</h2><a href={`/work/${encodeURIComponent(row.id)}`} target="_blank" rel="noreferrer">工作台 <ExternalLink size={14} /></a>{row.mr_url && <a href={row.mr_url} target="_blank" rel="noreferrer">MR <ExternalLink size={14} /></a>}</div>{row.unavailable && <p className="delivery-note">{row.unavailable}</p>}{row.metric && <><p className="delivery-muted">比较 {row.metric.base.slice(0, 8)} → {row.metric.head.slice(0, 8)} · 排除 {row.metric.excluded_files} 个非代码文本文件</p><ol className="delivery-timeline">{row.metric.commits.map(c => <li key={c.sha}><i style={{ background: categories.find(k => k.key === c.origin)?.color }} /><div><strong>{categories.find(k => k.key === c.origin)?.label}</strong><span className="delivery-commit-size">+{num(c.additions)} / −{num(c.deletions)}</span><p>{c.subject}</p>{c.origin_evidence?.length ? <details><summary>分类依据</summary>{c.origin_evidence.map((text, index) => <p key={index}>{text}</p>)}</details> : null}<small>{c.sha.slice(0, 10)} · {new Date(c.at).toLocaleString("zh-CN")}</small></div></li>)}</ol></>}</section>)}</>}</div></SheetContent></Sheet>
     </>}
-    {tab === "issue" && <IssueAnalyticsTab />}
+    {tab === "issue" && <IssueAnalyticsTab role={role} />}
     {tab === "registration" && <RegistrationAnalyticsTab />}
     {tab === "knowledge" && <KnowledgeInsightsPanel onOpenTask={onOpenTask} />}
   </div>;
