@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getIssueReviews, sendIssueReviews, updateIssueReview, dropIssueReview, type IssueReview } from "../api";
+import { confirmDialog } from "../ConfirmDialog";
 import { ReviewBody } from "../ReviewBody";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -152,7 +153,18 @@ export function IssueExternalReviewPanel({ issueId, items, pollError, refresh, c
                   onClick={() => setEditing({ id: item.id, mode: "reply", text: "", resolveRemote: false })}>自行答复</Button>
                 <Button size="sm" variant="ghost" className={REVIEW_ACTION} disabled={busy}
                   title="本地忽略并留痕，同时在 CodeHub 把这条讨论标记为已解决"
-                  onClick={() => void run(() => dropIssueReview(issueId, item.id))}>忽略</Button>
+                  onClick={async () => {
+                    // 忽略带外向副作用(dropReview 会代点 CodeHub 已解决,
+                    // 收不回),且与相邻小按钮易误触(有用户误点反馈)——
+                    // 走全站 confirmDialog 二次确认(spec #52)。
+                    if (!await confirmDialog({
+                      title: "忽略这条检视批注？",
+                      message: "忽略会在本地留痕，并同时在 CodeHub 把这条讨论标记为已解决；误点后需到 CodeHub 重新打开讨论才能恢复。",
+                      confirmLabel: "忽略",
+                      danger: true,
+                    })) return;
+                    await run(() => dropIssueReview(issueId, item.id));
+                  }}>忽略</Button>
               </>}
             </div>
             {editing?.id === item.id && <div className="grid gap-1.5">
