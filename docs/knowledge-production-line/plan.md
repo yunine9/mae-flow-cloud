@@ -30,7 +30,7 @@
 
 - **共享工作副本**：
   - 不用 `git stash`、`git checkout -- <file>`、`git reset`。
-  - 工作区里有别人的未提交文件（`docs/mae-flow-external-sharing*.md`、`scripts/benchmark-*tps.mjs`、`.claude/` 等），一律不碰、不提交。暂存只加自己改的路径，必要时按 hunk 选择。
+  - 工作区里有别人的未提交文件（如临时性能测试脚本和本地配置目录），一律不碰、不提交。暂存只加自己改的路径，必要时按 hunk 选择。
   - 推送前 `git fetch`。如果 origin/main 已经前进，先 rebase；冲突解不干净时推到 topic 分支，不动 main。
 - **测试串行**：同一时间只允许一个测试进程，跑之前先 `pgrep -fl "tsx --test"`。两个进程会互删临时现场，症状是全量测试无输出地卡住。
 - 不 `colima start/stop`，不起真模型，不改 `.pilot/`。
