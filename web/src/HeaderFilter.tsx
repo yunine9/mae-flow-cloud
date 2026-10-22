@@ -6,7 +6,7 @@
  * 选项类选完即关,文本输入类忽略。
  */
 import { useState, type ReactNode } from "react";
-import { Check, Filter } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Filter } from "lucide-react";
 import { cn } from "cn";
 import {
   Popover,
@@ -14,6 +14,17 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
+
+/** 表头排序标记(先住 EnvironmentRegistry,交付统计四张表加入后提为
+ *  共用):未排序给双箭头提示可点,激活后给方向单箭头。 */
+export function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
+  if (!active) {
+    return <ChevronsUpDown aria-hidden className="size-3 text-muted-foreground" />;
+  }
+  return dir === 1
+    ? <ArrowUp aria-hidden className="size-3" />
+    : <ArrowDown aria-hidden className="size-3" />;
+}
 
 export function HeaderFilter({ label, active, onClear, clearLabel, contentClassName, children }: {
   label: string;
@@ -82,7 +93,7 @@ export function HeaderEnumFilter({ label, value, options, onPick }: {
           className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent"
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => { onPick(option.value); close(); }}>
-          <span className="min-w-0 truncate">{option.label}</span>
+          <span className="min-w-0 truncate" title={option.label}>{option.label}</span>
           {option.value === value && <Check aria-hidden className="size-3.5 shrink-0 text-ink" />}
         </button>)}
         {!hit.length && <p className="px-2 py-1.5 text-sm text-muted-foreground">没有匹配的选项</p>}

@@ -20,17 +20,14 @@ import {
 } from "./api";
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
   Check,
-  ChevronsUpDown,
   Loader2,
   Pencil,
   Trash2,
 } from "lucide-react";
 import { PersonName, usePersonName } from "./People";
 import { confirmDialog } from "./ConfirmDialog";
-import { HeaderFilter } from "./HeaderFilter";
+import { HeaderFilter, SortMark } from "./HeaderFilter";
 import { formatLocalDateTime, relativeTime } from "./time";
 import {
   ENVIRONMENT_FORM_TEXT,
@@ -113,16 +110,6 @@ function compareIp(a: string, b: string): number {
     return 0;
   }
   return a.localeCompare(b);
-}
-
-/** 表头排序标记:未排序给双箭头提示可点,激活后给方向单箭头。 */
-function SortMark({ active, dir }: { active: boolean; dir?: 1 | -1 }) {
-  if (!active) {
-    return <ChevronsUpDown aria-hidden className="size-3 text-muted-foreground" />;
-  }
-  return dir === 1
-    ? <ArrowUp aria-hidden className="size-3" />
-    : <ArrowDown aria-hidden className="size-3" />;
 }
 
 /** 列头筛选的单选选项清单:选中行打勾。(壳在 HeaderFilter,两页共用) */
